@@ -80,7 +80,7 @@ fn list_json_reports_queue_counts_and_contract() {
     let (_, value) = list_json(&temp, &[]);
 
     assert_eq!(value["ok"], true);
-    assert_eq!(value["schema_version"], 7);
+    assert_eq!(value["schema_version"], 8);
     assert_eq!(value["date"], NOW);
     assert_eq!(value["config"]["interval"], 7);
     assert_eq!(value["config"]["pending_interval"], 1);
@@ -548,7 +548,7 @@ fn seed_dry_run_writes_nothing_and_reports_buckets() {
     let (output, value) = seed_json(&temp, &["--dry-run"]);
     assert_success(&output);
     assert_eq!(value["ok"], true);
-    assert_eq!(value["schema_version"], 7);
+    assert_eq!(value["schema_version"], 8);
     assert_eq!(value["dry_run"], true);
     assert_eq!(value["stamped"]["ready"], 3);
     assert_eq!(value["stamped"]["other"], 1);
@@ -652,7 +652,7 @@ fn list_lane_rows_cover_pending_and_next() {
         - [*] #task Fresh next [fresh:: 2026-10-08]\n",
     );
     let (_, value) = list_json(&temp, &[]);
-    assert_eq!(value["schema_version"], 7);
+    assert_eq!(value["schema_version"], 8);
     let counts = &value["counts"];
     assert_eq!(counts["pending_due"], 1);
     assert_eq!(counts["next_due"], 1);
@@ -855,17 +855,18 @@ fn keeps_list_json(temp: &TempDir, now: &str, extra: &[&str]) -> Value {
 }
 
 #[test]
-fn list_reports_keeps_and_decide_per_schema_5() {
-    // After activation (2026-10-19), the at-limit rotten row decides.
+fn list_reports_keeps_and_decide_per_schema_8() {
     let temp = keeps_vault("bob-cli-freshness-keeps");
     let value = keeps_list_json(&temp, "2026-10-20", &[]);
     assert_eq!(value["ok"], true);
-    assert_eq!(value["schema_version"], 7);
+    assert_eq!(value["schema_version"], 8);
     assert_eq!(value["config"]["decay"]["enabled"], true);
     assert_eq!(value["config"]["decay"]["keeps"], 3);
     assert!(value["config"]["decay"]["enter"].is_null());
-    assert_eq!(value["config"]["decay"]["active_from"], "2026-10-19");
-    assert_eq!(value["config"]["decay"]["active"], true);
+    let decay = value["config"]["decay"].as_object().expect("decay object");
+    assert_eq!(decay.len(), 3, "decay has exactly enabled/keeps/enter");
+    assert!(!decay.contains_key("active_from"));
+    assert!(!decay.contains_key("active"));
 
     let queue = value["queue"].as_array().expect("queue array");
     let at_limit = queue
@@ -902,40 +903,48 @@ fn list_reports_keeps_and_decide_per_schema_5() {
     assert_success(&output);
     let human = stdout(&output);
     assert!(human.contains("keeps 3"), "threshold header:\n{human}");
+    assert!(!human.contains("asks from"), "no activation date:\n{human}");
     assert!(human.contains("kept 3×"), "kept row:\n{human}");
     assert!(human.contains("decide"), "decide marker:\n{human}");
 }
 
 #[test]
-fn list_pre_activation_counts_but_never_decides() {
-    let temp = keeps_vault("bob-cli-freshness-keeps-trial");
-    let value = keeps_list_json(&temp, NOW, &[]);
-    assert_eq!(value["schema_version"], 7);
-    assert_eq!(value["config"]["decay"]["active"], false);
-    assert_eq!(value["counts"]["decide"], 0);
-    let queue = value["queue"].as_array().expect("queue array");
-    assert!(queue.iter().all(|entry| entry["decide"] == false));
-    // The streak still reads: counting works before activation.
-    let at_limit = queue
-        .iter()
-        .find(|entry| entry["text"] == "At limit")
-        .expect("at-limit row");
-    assert_eq!(at_limit["keeps"], 3);
+fn list_decides_on_early_dates() {
+    let temp = keeps_vault("bob-cli-freshness-keeps-early");
+    for now in ["2026-10-04", NOW, "2026-10-18", "2026-10-19", "2026-10-20"] {
+        let value = keeps_list_json(&temp, now, &[]);
+        assert_eq!(value["schema_version"], 8, "{now}");
+        assert_eq!(value["counts"]["decide"], 1, "{now}");
+        let queue = value["queue"].as_array().expect("queue array");
+        let at_limit = queue
+            .iter()
+            .find(|entry| entry["text"] == "At limit")
+            .expect("at-limit row");
+        assert_eq!(at_limit["keeps"], 3, "{now}");
+        assert_eq!(at_limit["decide"], true, "{now}");
 
-    let output = bob_command()
-        .arg("freshness")
-        .arg("list")
-        .env("BOB_DIR", vault_dir(&temp))
-        .env("BOB_NOW", NOW)
-        .output()
-        .expect("run trial list human");
-    assert_success(&output);
-    let human = stdout(&output);
-    assert!(
-        human.contains("asks from 2026-10-19"),
-        "pre-activation header:\n{human}"
-    );
-    assert!(!human.contains("decide"), "no decision promise:\n{human}");
+        let output = bob_command()
+            .arg("freshness")
+            .arg("list")
+            .env("BOB_DIR", vault_dir(&temp))
+            .env("BOB_NOW", now)
+            .output()
+            .expect("run early list human");
+        assert_success(&output);
+        let human = stdout(&output);
+        assert!(
+            human.contains("keeps 3"),
+            "threshold header on {now}:\n{human}"
+        );
+        assert!(
+            !human.contains("asks from"),
+            "no activation date on {now}:\n{human}"
+        );
+        assert!(
+            human.contains("decide"),
+            "decision marker on {now}:\n{human}"
+        );
+    }
 }
 
 #[test]
@@ -1011,7 +1020,7 @@ fn seed_preserves_existing_keeps() {
     write_file(&vault.join("a.md"), "- [ ] #task Kept before [keeps:: 2]\n");
     let (output, value) = seed_json(&temp, &[]);
     assert_success(&output);
-    assert_eq!(value["schema_version"], 7);
+    assert_eq!(value["schema_version"], 8);
     assert_eq!(value["stamped"]["ready"], 1);
     let contents =
         fs::read_to_string(vault.join("a.md")).expect("read seeded line");
@@ -1088,7 +1097,7 @@ fn list_tracker_intervals_and_hide_gate() {
     assert_success(&output);
     let value: Value =
         serde_json::from_str(stdout(&output).trim()).expect("list JSON");
-    assert_eq!(value["schema_version"], 7);
+    assert_eq!(value["schema_version"], 8);
     assert_eq!(value["config"]["project_interval"], 1);
     assert_eq!(value["config"]["reference_interval"], 3);
     // Both visible projects walk, whatever their notes hold; the
@@ -1185,7 +1194,7 @@ fn list_walks_projects_after_new_with_decoupled_counts() {
         "---\nscheduled: someday\n---\n- [ ] #task Broken project ^prj\n",
     );
     let (_, value) = list_json(&temp, &[]);
-    assert_eq!(value["schema_version"], 7);
+    assert_eq!(value["schema_version"], 8);
     let tiers: Vec<&str> = value["queue"]
         .as_array()
         .expect("queue array")

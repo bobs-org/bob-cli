@@ -7,7 +7,7 @@
 use chrono::NaiveDate;
 
 use super::placement::read_freshness;
-use crate::native::config::freshness::{decay_active, FreshnessConfig};
+use crate::native::config::freshness::FreshnessConfig;
 
 /// A task's freshness state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -232,24 +232,21 @@ pub(crate) struct Evaluated {
     /// The valid `[keeps:: N]` semantic count (0 when absent).
     pub(crate) keeps: u32,
     /// A choice is due — not permission to execute an action:
-    /// `active && enabled && lane ready && tier rotten/returned &&
-    /// keeps >= limit`.
+    /// `enabled && lane ready && tier rotten/returned && keeps >= limit`.
     pub(crate) decide: bool,
     pub(crate) lints: Vec<String>,
 }
 
 /// Whether a decision is due for a Ready-lane row in `tier` with
-/// `keeps` counted keeps under `config` on `today`.
+/// `keeps` counted keeps under `config`.
 pub(crate) fn decide_for(
     lane: Option<Lane>,
     tier: Option<Tier>,
     keeps: u32,
-    today: NaiveDate,
     config: &FreshnessConfig,
 ) -> bool {
     let due_tier = matches!(tier, Some(Tier::Rotten) | Some(Tier::Returned));
-    decay_active(today)
-        && config.decay.enabled
+    config.decay.enabled
         && lane == Some(Lane::Ready)
         && due_tier
         && keeps >= u32::from(config.decay.keeps)
@@ -473,9 +470,9 @@ pub(crate) fn evaluate(
     };
 
     // A choice is due — never permission to act — for Ready due
-    // rows at or over the keep limit once the rollout is active.
+    // rows at or over the keep limit.
     let keeps = read.keeps;
-    let decide = decide_for(lane, tier, keeps, today, config);
+    let decide = decide_for(lane, tier, keeps, config);
 
     // Per-row dates: lane rows use the lane due date; Ready rows use
     // the state due date. Lane tracker rows keep their actual lane
@@ -822,7 +819,7 @@ pub(crate) struct Counts {
     /// Full queue length, before any `--limit` (`walk = sum(by_tier)`).
     pub(crate) walk: u32,
     /// Queue rows with a decision due (Ready rotten/returned at or
-    /// over the keep limit while the rollout is active and enabled).
+    /// over the keep limit while decay is enabled).
     pub(crate) decide: u32,
     /// Tasks of any status outside `_templates` / `_conflicts` whose
     /// `fresh` equals today.

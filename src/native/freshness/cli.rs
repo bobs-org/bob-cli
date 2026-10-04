@@ -14,7 +14,6 @@ use clap::{
 use serde_json::json;
 
 use super::super::{
-    config::freshness::{decay_active, decay_active_from},
     env as bob_env,
     style::{pad_right, Styler},
 };
@@ -35,11 +34,14 @@ const COMMAND_NAME: &str = "bob freshness";
 /// Bump only for a breaking change to the JSON objects below; new
 /// optional fields keep the current version.
 ///
-/// Schema 7 adds the `references` walk tier (between `returned` and
-/// `rotten`), the seven-key `by_tier` histogram, `references_due` in
-/// counts, and the `^prj` hide gate: visible `^prj` rows are reviewed
-/// on sync's `#hide` alone, so the `project_scheduled_invalid` lint
-/// is gone. Schema 6 adds the tracker cadence contract:
+/// Schema 8 drops `config.decay.active_from` / `active`: decay
+/// decisions are available as soon as decay is enabled, with no
+/// calendar gate. Schema 7 adds the `references` walk tier (between
+/// `returned` and `rotten`), the seven-key `by_tier` histogram,
+/// `references_due` in counts, and the `^prj` hide gate: visible
+/// `^prj` rows are reviewed on sync's `#hide` alone, so the
+/// `project_scheduled_invalid` lint is gone. Schema 6 adds the tracker
+/// cadence contract:
 /// `project_interval` and `reference_interval` in `config` (number or
 /// null, null means inherit) plus the `project` and `reference`
 /// interval sources. Schema 5 added project/reference tracking
@@ -49,7 +51,7 @@ const COMMAND_NAME: &str = "bob freshness";
 /// Ready states, including eligible Ready trackers). Schema 4 added
 /// the keep-streak contract. The seed envelope shares this constant;
 /// seed contents are otherwise unchanged.
-const SCHEMA_VERSION: u32 = 7;
+const SCHEMA_VERSION: u32 = 8;
 
 pub(crate) fn run(args: Vec<OsString>) -> i32 {
     let argv: Vec<OsString> = iter::once(OsString::from(COMMAND_NAME))
@@ -325,8 +327,6 @@ struct ListReport {
     decay_enabled: bool,
     decay_keeps: u16,
     decay_enter: Option<String>,
-    decay_active: bool,
-    decay_active_from: String,
     counts: Counts,
     rows: Vec<ListedRow>,
     warnings: Vec<Warning>,
@@ -464,8 +464,6 @@ fn collect_list(snapshot: &Snapshot) -> ListReport {
         decay_enabled: config.decay.enabled,
         decay_keeps: config.decay.keeps,
         decay_enter: config.decay.enter.clone(),
-        decay_active: decay_active(today),
-        decay_active_from: decay_active_from().format("%Y-%m-%d").to_string(),
         counts,
         rows,
         warnings,
@@ -516,16 +514,11 @@ fn lane_meter(interval: Option<u16>) -> String {
 }
 
 /// The keep-streak threshold segment of the human header: the
-/// threshold always shows; the off state and the pre-activation date
-/// say so explicitly instead of promising a decision.
+/// threshold always shows; the off state says so explicitly instead
+/// of promising a decision.
 fn decay_meter(report: &ListReport) -> String {
     if !report.decay_enabled {
         format!("keeps {} · decay off", report.decay_keeps)
-    } else if !report.decay_active {
-        format!(
-            "keeps {} · asks from {}",
-            report.decay_keeps, report.decay_active_from
-        )
     } else if report.decay_keeps == 0 {
         "keeps 0 · asks every review".to_string()
     } else {
@@ -714,7 +707,7 @@ fn human_row(row: &ListedRow, styler: &Styler) -> String {
         }
     };
     // CLI human rows show `kept N×` and `· decide` where true; the
-    // header carries the threshold, off state, or pre-activation date.
+    // header carries the threshold or the off state.
     let mut detail = detail;
     if row.keeps > 0 {
         detail.push_str(&format!(" {sep} kept {}×", row.keeps));
@@ -760,8 +753,6 @@ fn json_list(report: &ListReport) -> serde_json::Value {
                 "enabled": report.decay_enabled,
                 "keeps": report.decay_keeps,
                 "enter": report.decay_enter,
-                "active_from": report.decay_active_from,
-                "active": report.decay_active,
             },
         },
         "counts": {

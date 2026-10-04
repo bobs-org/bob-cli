@@ -754,8 +754,7 @@ fn b1_upkeep_counts_outside_the_lanes() {
     assert_eq!(report.upkeep_today, 7);
 }
 
-/// A post-activation date: the trial ends 2026-10-18, so 2026-10-20
-/// is active (`docs/freshness.md` §2a).
+/// A worked-example date after the former 2026-10-19 boundary.
 fn active_day() -> NaiveDate {
     NaiveDate::from_ymd_opt(2026, 10, 20).expect("valid active day")
 }
@@ -784,18 +783,28 @@ fn kept_row(keeps: u32) -> FreshnessRow {
     ))
 }
 
-/// D1: before activation there is no decision — count and show pips
-/// only — even at the limit.
+/// D1: an at-limit Ready due row decides on every local day,
+/// including dates before the former 2026-10-19 boundary.
+/// Fresh 2026-09-20 is old enough that interval 7 is expired on 2026-10-04.
 #[test]
-fn decide_silent_before_activation() {
-    let evaluated = evaluate(&kept_row(3), today(), &decay_config(3, true));
-    assert_eq!(evaluated.tier, Some(Tier::Rotten));
-    assert_eq!(evaluated.keeps, 3);
-    assert!(!evaluated.decide);
+fn decide_on_early_dates() {
+    let config = decay_config(3, true);
+    let due = row("- [ ] #task Kept [fresh:: 2026-09-20] [keeps:: 3]");
+    for day in [
+        date(2026, 10, 4),
+        today(),
+        date(2026, 10, 18),
+        date(2026, 10, 19),
+        active_day(),
+    ] {
+        let evaluated = evaluate(&due, day, &config);
+        assert_eq!(evaluated.tier, Some(Tier::Rotten), "{day}");
+        assert_eq!(evaluated.keeps, 3, "{day}");
+        assert!(evaluated.decide, "{day}");
+    }
 }
 
-/// D2/D3: after activation a due Ready row at the limit decides;
-/// below it only stamps.
+/// D2/D3: a due Ready row at the limit decides; below it only stamps.
 #[test]
 fn decide_at_limit_but_not_below() {
     let config = decay_config(3, true);
@@ -934,8 +943,8 @@ fn counts_carry_decide() {
     assert_eq!(report.walk, 2);
     assert_eq!(report.decide, 1);
     assert_eq!(report.rotten, 2);
-    let silent = counts(&[kept_row(3)], today(), &config);
-    assert_eq!(silent.decide, 0);
+    let early = counts(&[kept_row(3)], today(), &config);
+    assert_eq!(early.decide, 1);
 }
 
 fn config_with_trackers(
@@ -1101,7 +1110,7 @@ fn reference_interval_boundary() {
 }
 
 /// A RESURFACED Ready `^ref` walks in REFERENCES and never decides,
-/// even at the keep limit after activation.
+/// even at the keep limit.
 #[test]
 fn resurfaced_reference_walks_references_without_decide() {
     let mut config = decay_config(3, true);

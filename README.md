@@ -561,7 +561,7 @@ bob freshness seed [-b|--bob-dir DIR] [-d|--dry-run] [-F|--force] [-f|--format h
 
 Running `bob freshness` with no subcommand runs read-only `list`: the queue
 in order NEW → PROJECTS → PENDING → NEXT → RETURNED → REFERENCES → ROTTEN.
-Both `list` and `seed` use JSON schema 7. Counts cover the whole vault even
+Both `list` and `seed` use JSON schema 8. Counts cover the whole vault even
 with `--limit`; `counts.walk` sums the seven `counts.by_tier` values. Ready
 state totals and walk-tier totals have different scopes.
 
@@ -577,7 +577,7 @@ future-scheduled tasks stay outside the review queue.
 On the dashboard, NEW holds unconfirmed tasks, READY holds confirmed/exempt
 backlog, and `rotten.md` holds returned deferrals plus expired tasks. Repeated
 due-Ready confirmations accumulate `[keeps:: N]`; the approved-decay decision
-card activates on 2026-10-19, subject to config and plugin capability.
+card is available immediately, subject to config and plugin capability.
 
 `seed` is a one-time migration, not daily maintenance. For tasks lacking a
 valid freshness date, it staggers Ready candidates across seven date buckets

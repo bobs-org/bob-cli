@@ -1,28 +1,45 @@
 {
- "active_from": "2026-10-19",
  "boundary": [
   {
-   "active": false,
+   "date": "2026-10-04",
+   "decide": true,
+   "id": "B1-oct-04",
+   "runners": [
+    "rust",
+    "js"
+   ]
+  },
+  {
+   "date": "2026-10-08",
+   "decide": true,
+   "id": "B2-oct-08",
+   "runners": [
+    "rust",
+    "js"
+   ]
+  },
+  {
    "date": "2026-10-18",
-   "id": "B1-day-before",
+   "decide": true,
+   "id": "B3-oct-18",
    "runners": [
     "rust",
     "js"
    ]
   },
   {
-   "active": true,
    "date": "2026-10-19",
-   "id": "B2-activation-day",
+   "decide": true,
+   "id": "B4-oct-19",
    "runners": [
     "rust",
     "js"
    ]
   },
   {
-   "active": true,
    "date": "2026-10-20",
-   "id": "B3-day-after",
+   "decide": true,
+   "id": "B5-oct-20",
    "runners": [
     "rust",
     "js"
@@ -180,8 +197,8 @@
   {
    "config": "C1-absent",
    "date": "2026-10-08",
-   "decide": false,
-   "id": "D1-pre-activation",
+   "decide": true,
+   "id": "D1-early-date",
    "keeps": 3,
    "lane": "ready",
    "runners": [
@@ -189,7 +206,7 @@
     "js"
    ],
    "tier": "rotten",
-   "why": "count and show pips only before 2026-10-19"
+   "why": "an at-limit Ready due row decides on every local day"
   },
   {
    "config": "C1-absent",
@@ -203,7 +220,7 @@
     "js"
    ],
    "tier": "rotten",
-   "why": "keeps >= limit on a due Ready task after activation"
+   "why": "keeps >= limit on a due Ready task"
   },
   {
    "config": "C1-absent",
@@ -291,7 +308,7 @@
   }
  ],
  "doc": "docs/freshness.md",
- "notes": "Keep-streak parity vectors. Rust runs the read/reset/placement cases and has no production increment API; the sole increment helper is JS api.freshness.keepLine. Vectors tagged js-only need the ledger-tools namespace v5 (a later phase). today is the shared worked example date D.",
+ "notes": "Keep-streak parity vectors. Rust runs the read/reset/placement cases and has no production increment API; the sole increment helper is JS api.freshness.keepLine. Vectors tagged js-only need the ledger-tools namespace v5 (counting) or v6 (date-independent decide/config). today is the shared worked example date D. Decay decisions have no calendar gate.",
  "placement": [
   {
    "changed": false,

@@ -1,25 +1,6 @@
 use std::path::Path;
 
-use chrono::NaiveDate;
-
 use super::ConfigError;
-
-/// The day the keep-streak decision card may start asking, in the
-/// vault's local calendar (`docs/freshness.md`).
-///
-/// This is rollout policy, not an editable config knob: before this
-/// day agents count and show pips only — no cards, leaf, decision
-/// skip, or "next review asks" promise. There is one documented
-/// constant per language; the shared boundary vectors pin it.
-pub(crate) fn decay_active_from() -> NaiveDate {
-    NaiveDate::from_ymd_opt(2026, 10, 19).expect("valid activation date")
-}
-
-/// Whether the keep-streak decision machinery is active for `today`:
-/// `today` is on or after the activation date.
-pub(crate) fn decay_active(today: NaiveDate) -> bool {
-    today >= decay_active_from()
-}
 
 /// Normalized `freshness.decay` configuration (`docs/freshness.md`).
 ///
@@ -639,19 +620,6 @@ mod tests {
         .expect("fixed entry parses");
         assert_eq!(config.decay.keeps, 2);
         assert_eq!(config.decay.enter, Some("P1".to_string()));
-    }
-
-    #[test]
-    fn decay_activation_boundary_is_october_19() {
-        assert_eq!(
-            decay_active_from(),
-            chrono::NaiveDate::from_ymd_opt(2026, 10, 19).expect("date")
-        );
-        let before =
-            chrono::NaiveDate::from_ymd_opt(2026, 10, 18).expect("date");
-        let day = chrono::NaiveDate::from_ymd_opt(2026, 10, 19).expect("date");
-        assert!(!decay_active(before));
-        assert!(decay_active(day));
     }
 
     #[test]

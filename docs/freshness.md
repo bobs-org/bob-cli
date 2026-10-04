@@ -19,7 +19,7 @@ This file is the contract both implementations cite. The Rust side is
 `src/native/freshness/` (`placement.rs`, `state.rs`) with the
 `freshness:` config block in `src/native/config/freshness.rs`; the
 JavaScript mirror is `api.freshness` in bob-ledger-tools (top-level
-api v3, freshness namespace v5). The bob-ledger-tools JavaScript
+api v3, freshness namespace v6). The bob-ledger-tools JavaScript
 tests use the conformance vectors below verbatim.
 
 The keep-streak contract (`keeps`, `decay`, introduced in schema 4) is specified
@@ -29,15 +29,17 @@ machine-readable parity vectors live in
 cite: Rust runs the read/reset/placement cases (it has no production
 increment API); the sole increment helper is JavaScript
 `api.freshness.keepLine`, which landed with the ledger-marks phase
-alongside the freshness namespace v5, folded pips, and count-truthful
-tooltips. The decision card landed with the decision-card phase
-(bob-navigation-hotkeys 1.69.0, bob-ledger-tools 1.24.0): single
-Alt+F/Alt+Shift+F presses on exact, due, at-limit tasks open the
-consent card and write nothing, counted and Task Link sessions skip
-those targets without changing fresh/count, and marks show the leaf
-with `Alt+F to decide` only when the card capability is present, the
-rollout is active, and decay is on. Mixed-version sessions keep
-counting pips with counting-only wording and no leaf.
+alongside freshness namespace v5 counting, folded pips, and
+count-truthful tooltips. The decision card landed with the
+decision-card phase (bob-navigation-hotkeys 1.69.0, bob-ledger-tools
+1.24.0) and is available immediately on compatible plugins
+(freshness namespace v6, card capability v2): single Alt+F/Alt+Shift+F
+presses on exact, due, at-limit tasks open the consent card and write
+nothing, counted and Task Link sessions skip those targets without
+changing fresh/count, and marks show the leaf with `Alt+F to decide`
+only when the card capability is present and decay is on.
+Mixed-version sessions keep counting pips with counting-only wording
+and no leaf.
 
 ## 1. Definition
 
@@ -226,26 +228,21 @@ defaults with `invalid` diagnostics. Priority config validity is
 resolved against the existing priority loader, not a second
 hard-coded P1–P4 table.
 
-**Trial protection.** The keep-streak decision machinery activates on
-**2026-10-19 in the vault's local calendar**, after the accepted
-trial (October 5–18). Before that day, agents count and show pips
-only: no cards, leaf, decision skip, or "next review asks" promise.
-That counting was the first usable milestone and trial-neutral
-instrumentation. The decision card is live as of
-bob-navigation-hotkeys 1.69.0: a single Alt+F/Alt+Shift+F press on an
-exact, due, at-limit source task opens the consent card and writes
-nothing, while counted and Task Link sessions skip those targets
-(`N needs a decision`) without changing fresh/count. Below threshold
-they keep counting normally through exact pre-write matching into
-`keepLine`, with `kept N×` tails on the Fresh notice.
-This is one documented activation constant per language (Rust:
-`decay_active_from`), covered by the shared boundary vectors — it is
-rollout policy, not a new editable config knob. After that date a
-card still requires an explicit gesture, never a timer write. If
-implementation finds the documented trial was extended, the boundary
-moves to the day after its recorded end consistently before release.
+**Availability.** Decay decisions are available as soon as decay is
+enabled and compatible plugins are loaded. There is no calendar gate,
+replacement date, or counting-only period. On an exact, due Ready
+ROTTEN/RETURNED task at the keep limit, a single Alt+F/Alt+Shift+F
+press opens the consent card and writes nothing, while counted and
+Task Link sessions skip those targets (`N needs a decision`) without
+changing fresh/count. Below threshold they keep counting normally
+through exact pre-write matching into `keepLine`, with `kept N×`
+tails on the Fresh notice. A card still requires an explicit gesture,
+never a timer write. `freshness.decay: false` remains the off-switch:
+count and show pips, without cards or decision skips. New navigation
+with an older ledger falls back to counted keeps; new ledger with
+older or missing navigation shows pips without a card promise.
 
-**Read-time decision flag.** `decide = active && enabled && lane
+**Read-time decision flag.** `decide = enabled && lane
 ready && tier rotten/returned && keeps >= limit`. The annotation
 means a choice is due, not permission to execute an action. The shared
 approved-decay action planner (`planFreshnessDecayCard` in
@@ -254,7 +251,7 @@ P0 entry, a non-cancelling Not now, Less often steps, and dated
 review-decision entries with `· kept N×` tails — as specified in
 `docs/projects.md` ("Approved-decay decision planner"); the card interaction
 itself (`FreshnessDecayCardModal` plus guarded commit adapters, batch
-skipping, the leaf, and the activation guard) landed with the
+skipping, the leaf, and the capability guard) landed with the
 decision-card phase.
 
 ## 3. Placement rule
@@ -523,12 +520,14 @@ header and status bar reading tier counts; hidden `^ref` rows join
 full review while the visible pool, lane, and capacity counts stay
 unchanged; neither tracker tier ever decays.
 
-**Machine vocabulary (schema 7).** Human output, help, and docs
+**Machine vocabulary (schema 8).** Human output, help, and docs
 say `rotten`, and so does the machine contract since the vocab-rotten
 migration published JSON schema 2: `state: "rotten"`,
 `counts.rotten`, and `freshness.rotten_daily_budget`. Each JSON queue
 row still carries the `bucket` field (`"new"`, `"rotten"`, or null).
-Schema 7 adds the `references` walk tier between `returned` and
+Schema 8 drops `config.decay.active_from` / `active`: decay
+decisions are available as soon as decay is enabled, with no calendar
+gate. Schema 7 adds the `references` walk tier between `returned` and
 `rotten`, the seven-key `counts.by_tier` histogram,
 `counts.references_due`, and the `^prj` hide gate (visible `^prj`
 rows review on sync's `#hide` alone; the `project_scheduled_invalid`
@@ -540,10 +539,12 @@ the `project` / `reference` interval sources. Schema 5 added the
 totals from tier totals as above; the shared seed envelope version
 advances with each, seed behavior unchanged.
 Likewise bob-ledger-tools uses the `"rotten"` state string under
-freshness namespace v5 (`api.freshness.version === 5` with the
+freshness namespace v6 (`api.freshness.version === 6` with the
 explicit `trackerReview` capability plus the explicit
 `referenceReview` capability, which tells consumers the queue may
-carry `references` entries; top-level api stays v3).
+carry `references` entries; top-level api stays v3). Date-independent
+decide/config landed in v6; counting through `keepLine` remains
+available from v5.
 Dashboard `freshness.reviewModel()` NEW/ROTTEN chips project the
 same memoized evaluated states onto the existing visible Ready
 pool — hidden review-only rows never feed a badge for a section
@@ -666,10 +667,11 @@ itself): still right (Alt+Shift+F or Alt+F); see it less often
 (Ctrl+Shift+M); drop (Ctrl+Shift+P `x`); sequence (Ctrl+Shift+P `b`);
 wording wrong (edit, then Alt+F).
 
-From 2026-10-19, a due at-limit task's Alt+F opens the decision card
-(Not now / Less often / Reword / Drop / Keep). Counted and Task Link
-sessions skip such tasks with `N needs a decision`. See
-`docs/projects.md` "Approved-decay decision planner".
+A due at-limit task's Alt+F opens the decision card (Not now / Less
+often / Reword / Drop / Keep) as soon as compatible plugins are
+loaded. Counted and Task Link sessions skip such tasks with
+`N needs a decision`. See `docs/projects.md` "Approved-decay
+decision planner".
 
 ## 7. `bob freshness`
 
@@ -691,7 +693,7 @@ bob freshness seed [-b|--bob-dir DIR] [-d|--dry-run] [-F|--force] [-f|--format h
 vault). Human output is colored only on a TTY:
 
 ```text
-bob freshness · Thu 2026-10-08 · every 7d · pending 1d · next 1d · keeps 3 · asks from 2026-10-19
+bob freshness · Thu 2026-10-08 · every 7d · pending 1d · next 1d · keeps 3
 
   REVIEW 68 due · 1 new · 2 projects · 10 pending · 15 next · 14 returned · 3 references · 26 rotten · ✓ 12 today
 
@@ -719,11 +721,10 @@ bob freshness · Thu 2026-10-08 · every 7d · pending 1d · next 1d · keeps 3 
 - Human vocabulary says "returned"; the machine `state` stays
   `resurfaced`.
 - A disabled lane shows `pending off` in the header.
-- The header always shows the keep threshold: `keeps 3` once active
-  and enabled, `keeps 3 · decay off` with decay off, `keeps 3 · asks
-  from 2026-10-19` before activation, and `keeps 0 · asks every
-  review` for a zero threshold. Only active capabilities promise
-  `next review asks`.
+- The header always shows the keep threshold: `keeps 3` when enabled,
+  `keeps 3 · decay off` with decay off, and `keeps 0 · asks every
+  review` for a zero threshold. Only a capable installed card
+  promises `next review asks`.
 - Human rows show `kept N×` when the streak is nonzero and
   `· decide` where the read-time choice is due.
 - Each tier heading carries its count and is omitted when empty.
@@ -743,12 +744,11 @@ render empty, and NEW/ROTTEN badges show `–` (never zero). Native
 and READY is ungated there; `bob freshness list` is the headless
 review interface.
 
-The JSON contract is `schema_version: 7` with `ok`, `date`,
+The JSON contract is `schema_version: 8` with `ok`, `date`,
 `config` (`interval`, `pending_interval` / `next_interval` as a number
 or `false`, `project_interval` / `reference_interval` as a number or
 null (null means inherit), `rotten_daily_budget`, plus normalized
-`decay` with `enabled`, `keeps`, `enter` (label or null), and
-read-only `active_from` / `active` rollout metadata),
+`decay` with `enabled`, `keeps`, `enter` (label or null)),
 `counts` (`due`, `new`,
 `resurfaced`, `rotten`, `fresh`, `pending_due`, `next_due`,
 `projects_due`, `references_due`, `by_tier` (all seven tier keys),
@@ -799,11 +799,11 @@ differently under either Rust parser. A writing run then re-reads all touched
 files before the first write and refuses if one changed; `--dry-run` stops
 after planning and parse validation, without that file recheck. Each file is
 written through a temp file plus rename. The JSON contract is
-`schema_version: 7` with `ok`, `date`, `dry_run`,
+`schema_version: 8` with `ok`, `date`, `dry_run`,
 `stamped` (`ready`, `other`), `buckets` (`fresh`, `due_on`, `count`,
 `notes`), `skipped` (`already_stamped`, `recurring`,
 `out_of_scope`), `files`, and `warnings`. The shared schema constant
-also moves the `seed` envelope to 7, with seed content unchanged. Seed
+also moves the `seed` envelope to 8, with seed content unchanged. Seed
 candidate selection is unchanged, and list stays read-only. The `buckets`
 dates describe the initial distribution: `fresh` is the unadjusted bucket
 date, and `due_on` adds the global interval. Per-task adjustments described
@@ -824,9 +824,9 @@ an invalid `freshness:` block or a non-Dataview task format.
 
 | Surface | Phase |
 | ------- | ----- |
-| `bob freshness` | fresh-cli (landed: `list` and `seed` in `src/native/freshness/`); tiered walk (schema 7: `list` walks NEW → PROJECTS → PENDING → NEXT → RETURNED → REFERENCES → ROTTEN with lane intervals for ordinary tasks and tracker cadences for `^prj`/`^ref`) |
+| `bob freshness` | fresh-cli (landed: `list` and `seed` in `src/native/freshness/`); tiered walk (schema 8: `list` walks NEW → PROJECTS → PENDING → NEXT → RETURNED → REFERENCES → ROTTEN with lane intervals for ordinary tasks and tracker cadences for `^prj`/`^ref`; decay config is `{enabled, keeps, enter}` with no calendar gate) |
 | `bob capture` | capture-stamps (landed: plan_task_link + `=x` close stamp via `stamp_fresh`; existing-dependent `&` dependency stamp via the same helper; capture never stamps trackers) |
-| bob-ledger-tools | ledger-freshness (landed: api v3 `api.freshness` + status bar in 1.8.0; tracking review under namespace v5 with the `trackerReview` capability; persistent review footer with additive `reviewEntryView`) |
+| bob-ledger-tools | ledger-freshness (landed: api v3 `api.freshness` + status bar in 1.8.0; tracking review under namespace v6 with the `trackerReview` capability; persistent review footer with additive `reviewEntryView`) |
 | bob-navigation-hotkeys | nav-review, nav-stamps (landed: Alt+N + Ctrl+Shift+P/Ctrl+Shift+M/! stamping + refresh row in 1.44.0; PROJECTS/REFERENCES tier walk with `trackerReview`/`referenceReview` capabilities and legacy v3/v4 fallback; notices feature-detect `reviewEntryView`) |
 | task-status-cycler | cycler-link-stamps (landed: Alt+[/Alt+] + Ctrl+Enter reopen stamping in 1.18.0) |
 | block-id-prompt | cycler-link-stamps (landed: Ctrl+Shift+Enter + ^^ stamping in 1.16.0) |
@@ -1023,17 +1023,17 @@ increment API; the JS side runs the increment vectors through
 
 Config vectors C1–C13 pin `decay` normalization (absent, null,
 `true`, `{}`, `false`, `keeps: 0`, fixed `enter`, and each invalid
-shape). Decide vectors D1–D8 pin `decide`: pre-activation silence,
-at-limit and below-limit Ready rows, RETURNED coverage, NEW never,
-`keeps: 0` asking on every due Ready re-confirmation, `decay: false`
-never asking, and lane rows never deciding. Boundary vectors B1–B3
-pin the 2026-10-19 activation day from both sides. Rows have carried
-`keeps`/`decide` since schema 4, and the current schema is 7; counts carry `decide`; `config.decay`
-reports normalized `enabled`, `keeps`, `enter`, and read-only
-`active_from` / `active`. CLI human rows show `kept N×` and
-`· decide` where true; the header explains the threshold, the off
-state, or the pre-activation date. Counts cover the full queue
-regardless of `--limit`.
+shape). Decide vectors D1–D8 pin `decide`: at-limit Ready due rows
+on every local day, below-limit Ready rows, RETURNED coverage, NEW
+never, `keeps: 0` asking on every due Ready re-confirmation,
+`decay: false` never asking, and lane rows never deciding. Boundary
+vectors B1–B5 pin immediate availability on 2026-10-04, 2026-10-08,
+2026-10-18, 2026-10-19, and 2026-10-20. Rows have carried
+`keeps`/`decide` since schema 4, and the current schema is 8; counts
+carry `decide`; `config.decay` reports normalized `enabled`,
+`keeps`, and `enter`. CLI human rows show `kept N×` and `· decide`
+where true; the header explains the threshold or the off state.
+Counts cover the full queue regardless of `--limit`.
 
 ## 11. Display: the freshness mark
 
@@ -1180,7 +1180,7 @@ builder near the `Alt+F to decide` string (tests
 - Dot cap: 3 by default; the threshold itself for thresholds 1–2;
   overflow `+N`; the exact count in the accessible text.
 - The leaf replaces `⟳` with `data-decide="true"` only when the nav card
-  capability is present, the rollout is active, and decay is on.
+  capability is present and decay is on.
 - Folding: exactly one valid square-bracket `[keeps:: N]` one space after
   the folded fresh/refresh run is folded. Noncanonical fields keep the
   dashed repair pill.
@@ -1189,9 +1189,9 @@ builder near the `Alt+F to decide` string (tests
   dots quietly without a leaf.
 - Tooltip wording: `Kept N reviews in a row · Bob asks at L`, the
   `Alt+F to decide` hint, and counting-only/off wording otherwise
-  (`Kept N reviews in a row` alone before activation or without the card
-  capability, `· decay off` with decay off, `· Bob asks every review`
-  for a zero threshold).
+  (`Kept N reviews in a row` alone without the card capability,
+  `· decay off` with decay off, `· Bob asks every review` for a zero
+  threshold).
 
 **Live verification (Bryan, in Obsidian).**
 
@@ -1328,12 +1328,12 @@ these vectors verbatim.
 - **MK1 no count:** `[fresh:: 2026-10-05]` with no `keeps` → `keeps 0`,
   dots null, tooltip as M2 with no keeps line.
 - **MK2 aging with 2:** `[fresh:: 2026-10-05] [keeps:: 2]` (FRESH) →
-  dots `••`, tone `aging`; on 2026-10-08 (pre-activation) the keeps line
+  dots `••`, tone `aging`; without the card capability the keeps line
   is counting-only (`Kept 2 reviews in a row`).
 - **MK3 due below threshold:** ROTTEN `[fresh:: 2026-09-30] [keeps:: 2]`
   → dots `••`, glyph `refresh` (not a leaf), line 3 `Alt+F to confirm`.
 - **MK4 at-limit leaf:** ROTTEN `[fresh:: 2026-09-30] [keeps:: 3]` with
-  `decide`, the nav card capability, active rollout, and decay on →
+  `decide`, the nav card capability, and decay on →
   glyph `leaf`, `data-decide="true"`, dots `•••`, keeps line
   `Kept 3 reviews in a row · Bob asks at 3`, line 3 `Alt+F to decide`.
 - **MK5 overflow:** `keeps 4` at limit 3 → dots `•••`, overflow `+1`
@@ -1374,21 +1374,28 @@ dim-not-hide; never adopt a stored rotten tag.
 Deployed 2026-10-03: bob-navigation-hotkeys 1.69.0 plus bob-ledger-tools
 1.24.0 synced byte-identical from the linked source, and `bob`
 reinstalled from this checkout (schema 5, capture resets). Counting and
-folded pips are live; cards, the leaf, decision skip, and the 'next
-review asks' promise stay gated behind the 2026-10-19 activation date.
-The accepted trial runs 2026-10-05 through 2026-10-18 as recorded in §13
-— the rollout landed before the start, so no date shift was needed.
+folded pips went live then; cards, the leaf, decision skip, and the
+'next review asks' promise were still gated behind 2026-10-19 at that
+release. The accepted Ready trial in §13 ran 2026-10-05 through
+2026-10-18 independently of this decay gate.
+
+This release removes that calendar gate: bob-navigation-hotkeys 2.2.0
+plus bob-ledger-tools 1.28.0, freshness JSON schema 8, freshness
+namespace v6, and card capability v2. Decisions are available
+immediately after installing compatible plugins. Mixed-version
+sessions fall back: new nav + old ledger counts; new ledger +
+old/missing nav shows pips without a card promise.
 
 Rollback is config-only and never touches task lines: set
 `freshness.decay: false` to disable card interception while preserving
 counting and pips; the session mark toggle restores raw pills. This
 rollout changed no global config, note intervals, or inbox residence.
 
-Calibration is a lightweight human tally one month after activation:
-decision count, Keep/Drop outcomes, and RETURNED load for two weeks
-after the first card wave, from counts, decision logs, and git history
-— no telemetry service or automatic tuning. If most cards (>50%) are
-Keep, consider limit 4; if most are Drop, consider limit 2.
+Calibration is a lightweight human tally one month after this ungated
+rollout: decision count, Keep/Drop outcomes, and RETURNED load for two
+weeks after the first card wave, from counts, decision logs, and git
+history — no telemetry service or automatic tuning. If most cards
+(>50%) are Keep, consider limit 4; if most are Drop, consider limit 2.
 
 Human smoke checklist (no Obsidian UI was available in this headless
 rollout, so visual verification is still open; automated mark-surface

@@ -123,6 +123,9 @@ fn run_stubbed(
     let output = Command::new("zsh")
         .arg("-f")
         .arg(&driver_path)
+        // The host may export NO_COLOR; the adapter then uses the plain
+        // header. Tests that want that path export it in `pre`.
+        .env_remove("NO_COLOR")
         .output()
         .expect("run stubbed zsh driver");
     let read_lines = |name: &str| {
