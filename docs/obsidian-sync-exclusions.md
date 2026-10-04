@@ -52,7 +52,7 @@ Do not write `/old_lib`, `old_lib/`, or `Old_lib`.
    athena, the `com.bbugyi.bob-vault-sync` LaunchAgent on the MacBook, the 03:30
    `bob nightly` crontab line, and `ob-sync-bob.service` if it has been re-enabled.
    `bob nightly` no longer gates on `ob sync`; it runs `vault-sync`,
-   `move-done-tasks`, `vault-sync`.
+   `task archive`, `vault-sync`.
 3. Move the target folder out of the sync client's view without copying bytes,
    for example by staging it under a dot-prefixed vault directory:
 
