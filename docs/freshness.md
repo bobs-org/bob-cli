@@ -653,28 +653,32 @@ task stays due and Alt+Shift+F does not advance.
 
 ## 6. Review ritual
 
-**Morning, about 10 minutes once the lanes are at their caps:**
+**Morning:**
 
-1. Run `bob gkeep pull`.
-2. Use `]s` / Alt+Shift+F through NEW → PROJECTS → PENDING → NEXT →
-   RETURNED → REFERENCES until the notice says **Commitments done**.
-   `N]s` / `N[s` move N entries along that same queue and wrap with
-   the existing notice, while `[S` / `]S` stay the first and last
-   entries. NEW is never
-   capped or skipped. In PROJECTS, replenish the empty project with
-   Alt+Shift+F; stamping a project advances to the correct next entry
-   with the block ID and `#hide` preserved. In REFERENCES, confirm
-   the reference still needs reading. In the lanes, ask "still in this
-   lane?": keep with Alt+Shift+F (Pending asks for an optional Work Log
-   summary; blank Enter still keeps, while Escape leaves the task due),
-   do it today with Ctrl+Shift+Enter,
-   release with Alt+N. For a returned deferral, "not now" is a
-   priority roll, not Alt+F.
-3. Start the highlight.
-4. Clear CROWDED to 0 (split, sequence, defer, drop via `bob ready`).
-   This does not depend on how far ROTTEN review got.
-5. Then, or later, do ROTTEN upkeep until 0 or the budget. It is fine
-   to stop partway.
+1. `[S`, or `]s` from outside the queue, starts at PRE.
+2. Complete each PRE chore with Alt+Shift+F, or skip it with `]s`.
+   Alt+F completes a chore in place. Checklist rows never stamp.
+   Keep import is the PRE chore "Import inbox tasks from Google Keep".
+3. Walk the commitments (NEW → PROJECTS → PENDING → NEXT → RETURNED →
+   REFERENCES) with `]s` / Alt+Shift+F until the notice says
+   **Commitments done**. `N]s` / `N[s` move N entries along that same
+   queue and wrap with the existing notice, while `[S` / `]S` stay the
+   first and last entries. NEW is never capped or skipped. In PROJECTS,
+   replenish the empty project with Alt+Shift+F; stamping a project
+   advances to the correct next entry with the block ID and `#hide`
+   preserved. In REFERENCES, confirm the reference still needs reading.
+   In the lanes, ask "still in this lane?": keep with Alt+Shift+F
+   (Pending asks for an optional Work Log summary; blank Enter still
+   keeps, while Escape leaves the task due), do it today with
+   Ctrl+Shift+Enter, release with Alt+N. For a returned deferral, "not
+   now" is a priority roll, not Alt+F. Clear CROWDED to 0 (split,
+   sequence, defer, drop via `bob ready`) and choose a highlight (≤3
+   themes, highlight first). CROWDED does not depend on how far ROTTEN
+   review got.
+4. ROTTEN is optional upkeep until 0, the budget, or you stop. The
+   commitments → ROTTEN boundary notice includes `]S closes the review`
+   when POST remains.
+5. `]S` jumps to POST; complete Morning review last with Alt+F.
 
 The Obsidian footer keeps a condensed version of that `]s` notice
 visible while the cursor is on a review task, and the `]s next` hint
@@ -1422,6 +1426,7 @@ There is no freshness trial: no ritual change, release, or tuning waits on a tri
 
 - 2026-10-01: per-note CROWDED surfaces (`bob ready`, the dash chip, crowded.md, the heading chips) went live; gesture notices are a separate follow-up.
 - 2026-10-01: the tiered morning review walk went live (schema 3, lane intervals, tier notices, walk anchor).
+- 2026-10-04: PRE/POST checklist tiers went live (schema 9, ledger 1.29.0 / namespace v7, nav 2.3.0, cycler API v2).
 
 ## 14. Keep-streak rollout, rollback, and calibration
 

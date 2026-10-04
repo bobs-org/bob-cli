@@ -173,10 +173,14 @@ except PRE/POST `#gtd` checklist rows.
 Use `bob ready NOTE` for one note's
 worklist, or `bob ready --check` to exit 3 when notes are crowded.
 
-With the review plugins enabled in Obsidian, Ctrl+Alt+J/K walks due tasks and
-Alt+F confirms the task under the cursor. `]s` / `[s` are the equivalent
-configured Vim bindings, not shortcuts installed by the CLI. Alt+Shift+F
-confirms and advances. Hand edits alone do not stamp freshness.
+With the review plugins enabled in Obsidian, `[S` or `]s` from outside the
+queue starts at PRE. Complete each PRE chore with Alt+Shift+F (or Alt+F in
+place); `]s` skips a checklist row. Walk commitments with `]s` / Alt+Shift+F
+until **Commitments done**. `]S` jumps to POST; complete Morning review last.
+Ctrl+Alt+J/K also walks due tasks. Alt+F confirms a non-checklist task under
+the cursor. `]s` / `[s` are the equivalent configured Vim bindings, not
+shortcuts installed by the CLI. Alt+Shift+F confirms and advances. Hand edits
+alone do not stamp freshness.
 `bob freshness list` only reports the queue; it does not confirm tasks.
 `bob freshness seed` is a one-time migration for an
 existing backlog; it is not the command to confirm today's new captures.
