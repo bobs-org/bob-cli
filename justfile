@@ -60,7 +60,7 @@ install *shells: (_banner "35" "📦" "INSTALL")
         exit 1
     fi
 
-# Missing sibling checkouts are skipped.
+# Offers to clone missing sibling checkouts over SSH; otherwise they are skipped.
 # Pull + install bob-cli, bob-plugins, and bob-mac-capture; restart Obsidian if plugins changed.
 install-all:
     @scripts/install_all

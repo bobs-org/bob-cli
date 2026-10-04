@@ -71,9 +71,14 @@ Run `just install-all` to pull this checkout with `--ff-only`, install bob-cli,
 then pull and deploy the sibling `../bob-plugins` checkout with
 `bob plugins sync --no-pull --repo`. On macOS it also pulls and installs the
 sibling `../bob-mac-capture` checkout with `just install`, honoring
-`CODESIGN_IDENTITY`. Missing siblings, a missing Obsidian vault, and the
-macOS-only app on other hosts are skipped. Pull failures warn and use the local
-checkout. A failed step makes the command exit 1.
+`CODESIGN_IDENTITY`. When a sibling it would install is missing and the command
+runs in a terminal, it asks `[y/N]` whether to clone it over SSH from
+`git@github.com:bobs-org/<repo>.git` into that sibling path. It asks before the
+bob-cli build starts. bob-plugins is offered only when the Obsidian vault exists,
+and bob-mac-capture only on macOS. A declined clone, a non-interactive run, a
+missing Obsidian vault, and the macOS-only app on other hosts are skipped. A
+failed clone is a failed step. Pull failures warn and use the local checkout. A
+failed step makes the command exit 1.
 
 Keep the checkouts together, for example:
 
