@@ -27,7 +27,7 @@ the source of truth — those files are overwritten on the next sync.
 ```bash
 bob plugins [-b|--bob-dir DIR] [-f|--format table|json] [-n|--no-pull] [-r|--repo DIR]
 bob plugins list [-b|--bob-dir DIR] [-f|--format table|json] [-n|--no-pull] [-r|--repo DIR]
-bob plugins sync [-B|--backup-dir DIR] [-b|--bob-dir DIR] [-d|--dry-run] [-F|--force] [-n|--no-pull] [-p|--plugin ID] [-r|--repo DIR]
+bob plugins sync [-B|--backup-dir DIR] [-b|--bob-dir DIR] [-d|--dry-run] [-F|--force] [-f|--format table|json] [-n|--no-pull] [-p|--plugin ID] [-r|--repo DIR]
 ```
 
 `list` is read-only. Running `bob plugins` with no subcommand runs `list` with
@@ -151,7 +151,9 @@ from `<repo>/plugins/<id>/` into `<bob-dir>/.obsidian/plugins/<id>/`. Runtime
 files such as `data.json` are never read or written, so plugin settings survive
 a sync. The repo and vault roots resolve exactly as they do for `list`.
 The bob-cli `just install-all` command runs this sync against the sibling
-`bob-plugins` checkout after pulling it.
+`bob-plugins` checkout after pulling it. It previews the sync with
+`bob plugins sync --dry-run --format json` to decide whether to restart
+Obsidian.
 
 Before any existing vault file is overwritten, `sync` copies the current vault
 file to a timestamped backup directory. Backups default to
@@ -185,6 +187,7 @@ For every managed file, `sync` reports one of:
 - `-d, --dry-run` previews every action, including diffs and backup paths,
   without writing vault files or backups.
 - `-F, --force` overwrites a vault file even when it has uncommitted Git changes.
+- `-f, --format <FORMAT>` is `table` (default) or `json`.
 - `-n, --no-pull` skips the default `git pull` before analyzing the plugins
   repo.
 - `-p, --plugin <ID>` syncs a single plugin instead of all of them. An id that
@@ -211,6 +214,42 @@ warning, not a failure, matching how `list` treats drift. It exits `1` only on a
 real error such as an unreadable repo, an unknown `--plugin` id, or a failed
 copy, and writes the cause to stderr.
 
+### JSON output
+
+`-f json` prints a single object and no table or diffs. Pull diagnostics stay
+on stderr.
+
+```json
+{
+  "ok": true,
+  "dry_run": false,
+  "repo": "/home/bryan/projects/github/bobs-org/bob-plugins",
+  "bob_dir": "/home/bryan/bob",
+  "copied": 1,
+  "skipped": 0,
+  "unchanged": 5,
+  "plugins": [
+    {
+      "id": "bob-project-tasks",
+      "files": [
+        { "name": "manifest.json", "action": "unchanged", "backup": null },
+        {
+          "name": "main.js",
+          "action": "updated",
+          "backup": "/home/bryan/.local/state/bob-cli/plugin-backups/20261004-120000/bob-project-tasks/main.js"
+        }
+      ]
+    }
+  ]
+}
+```
+
+`action` is `created`, `updated`, `forced`, `unchanged`, `skipped_dirty`, or
+`failed`. `backup` is the backup path when the file is backed up (or, in a dry
+run, would be), otherwise `null`. In a dry run, `copied` counts the files that
+would be copied. On error, JSON mode prints `{"ok": false, "error": "..."}`
+instead of echoing issues to stderr.
+
 ## Examples
 
 ```bash
@@ -219,6 +258,7 @@ bob plugins list
 bob plugins list -f json
 bob plugins list -b ~/bob -r ~/projects/github/bobs-org/bob-plugins
 bob plugins sync --dry-run
+bob plugins sync -d -f json
 bob plugins sync --no-pull --dry-run
 bob plugins sync -p bob-project-tasks
 bob plugins sync -F -b ~/bob -r ~/projects/github/bobs-org/bob-plugins

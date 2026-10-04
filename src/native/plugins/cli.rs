@@ -15,7 +15,9 @@ use crate::native::{env as bob_env, style::Styler};
 use super::{
     git::{print_pull_outcome, pull_repo},
     model::{SyncOptions, COMMAND_NAME},
-    render::{print_plugins_table, print_sync_report, success_json},
+    render::{
+        print_plugins_table, print_sync_report, success_json, sync_success_json,
+    },
     scan::scan_plugins,
     sync::sync_plugins,
 };
@@ -109,15 +111,17 @@ clobbered silently. Files that would change are shown as unified diffs; \
 overwritten vault files are copied to a timestamped backup directory first. \
 Files that already match the repo are reported as unchanged. The plugins repo \
 is refreshed with a non-interactive `git pull` before analysis unless \
---no-pull is given.",
+--no-pull is given. Pass `-f json` to print a single machine-readable object \
+instead of the table and diffs.",
         )
         .after_help(
-            "Examples:\n  bob plugins sync --dry-run\n  bob plugins sync --no-pull --dry-run\n  bob plugins sync -p bob-project-tasks\n  bob plugins sync -F -b ~/bob -r ~/projects/github/bobs-org/bob-plugins",
+            "Examples:\n  bob plugins sync --dry-run\n  bob plugins sync --dry-run -f json\n  bob plugins sync --no-pull --dry-run\n  bob plugins sync -p bob-project-tasks\n  bob plugins sync -F -b ~/bob -r ~/projects/github/bobs-org/bob-plugins",
         )
         .arg(backup_dir_arg())
         .arg(bob_dir_arg())
         .arg(dry_run_arg())
         .arg(force_arg())
+        .arg(format_arg())
         .arg(no_pull_arg())
         .arg(plugin_arg())
         .arg(repo_arg())
@@ -291,10 +295,27 @@ fn run_sync(matches: &ArgMatches) -> i32 {
     };
 
     let report = sync_plugins(&options);
-    let styler = Styler::detect();
-    print_sync_report(&report, options.dry_run, &styler);
-    for issue in &report.issues {
-        eprintln!("{COMMAND_NAME}: {issue}");
+    match OutputFormat::from_matches(matches) {
+        OutputFormat::Table => {
+            let styler = Styler::detect();
+            print_sync_report(&report, options.dry_run, &styler);
+            for issue in &report.issues {
+                eprintln!("{COMMAND_NAME}: {issue}");
+            }
+        }
+        OutputFormat::Json => {
+            if report.issues.is_empty() {
+                println!(
+                    "{}",
+                    sync_success_json(&report.result(options.dry_run))
+                );
+            } else {
+                println!(
+                    "{}",
+                    json!({ "ok": false, "error": report.issue_summary() })
+                );
+            }
+        }
     }
 
     // A refused dirty file is a deliberate warning, not a failure; only a real

@@ -60,14 +60,10 @@ install *shells: (_banner "35" "📦" "INSTALL")
         exit 1
     fi
 
-# Pull + install bob-cli, then pull + deploy the sibling bob-plugins and
-# bob-mac-capture checkouts (missing siblings are skipped).
+# Missing sibling checkouts are skipped.
+# Pull + install bob-cli, bob-plugins, and bob-mac-capture; restart Obsidian if plugins changed.
 install-all:
     @scripts/install_all
-
-# install-all, then restart Obsidian (if it is running) so it loads the new plugins.
-install-all-and-restart:
-    @scripts/install_all --restart-obsidian
 
 install-smoke:
     #!/usr/bin/env bash

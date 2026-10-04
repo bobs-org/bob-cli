@@ -366,6 +366,170 @@ fn plugins_sync_dry_run_reports_without_writing() {
 }
 
 #[test]
+fn plugins_sync_json_reports_file_actions() {
+    let temp = TempDir::new("bob-cli-plugins-sync-json");
+    let repo = temp.path().join("repo");
+    let vault = temp.path().join("vault");
+    let backups = temp.path().join("backups");
+    write_plugins_fixture(&repo, &vault);
+    let beta_backup = backups.join("20260626-143000/beta/main.js");
+
+    let output = bob_command()
+        .arg("plugins")
+        .arg("sync")
+        .arg("-f")
+        .arg("json")
+        .arg("-B")
+        .arg(&backups)
+        .arg("-r")
+        .arg(&repo)
+        .arg("-b")
+        .arg(&vault)
+        .env("BOB_NOW", "2026-06-26 14:30:00")
+        .output()
+        .expect("run bob plugins sync -f json");
+
+    assert_success(&output);
+    assert_stdout_has_no_ansi(&output);
+    let out = stdout(&output);
+    assert!(
+        !out.contains("Bob Plugins"),
+        "json stdout must not include the table header:\n{out}"
+    );
+    let value: serde_json::Value =
+        serde_json::from_str(&out).expect("parse plugins sync json");
+    assert_eq!(value["ok"], true);
+    assert_eq!(value["dry_run"], false);
+    assert_eq!(value["copied"], 3);
+    assert_eq!(value["skipped"], 0);
+    assert_eq!(value["unchanged"], 3);
+
+    let beta_main = plugin_file(&value, "beta", "main.js");
+    assert_eq!(beta_main["action"], "updated");
+    assert_eq!(beta_main["backup"], beta_backup.to_string_lossy().as_ref());
+
+    let gamma_manifest = plugin_file(&value, "gamma", "manifest.json");
+    assert_eq!(gamma_manifest["action"], "created");
+    assert_eq!(gamma_manifest["backup"], serde_json::Value::Null);
+    let gamma_main = plugin_file(&value, "gamma", "main.js");
+    assert_eq!(gamma_main["action"], "created");
+    assert_eq!(gamma_main["backup"], serde_json::Value::Null);
+
+    assert_eq!(
+        plugin_file(&value, "alpha", "manifest.json")["action"],
+        "unchanged"
+    );
+    assert_eq!(
+        plugin_file(&value, "alpha", "main.js")["action"],
+        "unchanged"
+    );
+    assert_eq!(
+        plugin_file(&value, "beta", "manifest.json")["action"],
+        "unchanged"
+    );
+
+    assert_eq!(
+        fs::read_to_string(vault.join(".obsidian/plugins/beta/main.js"))
+            .expect("read beta main.js"),
+        "// beta\n",
+        "beta should be synced from the repo"
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join(".obsidian/plugins/gamma/main.js"))
+            .expect("read gamma main.js"),
+        "// gamma\n",
+        "gamma should be created from the repo"
+    );
+    assert_eq!(
+        fs::read_to_string(&beta_backup).expect("read beta backup"),
+        "// beta-stale\n",
+        "backup should contain the overwritten vault contents"
+    );
+}
+
+#[test]
+fn plugins_sync_dry_run_json_writes_nothing() {
+    let temp = TempDir::new("bob-cli-plugins-sync-dry-json");
+    let repo = temp.path().join("repo");
+    let vault = temp.path().join("vault");
+    let backups = temp.path().join("backups");
+    write_plugins_fixture(&repo, &vault);
+    let beta_main = vault.join(".obsidian/plugins/beta/main.js");
+
+    let output = bob_command()
+        .arg("plugins")
+        .arg("sync")
+        .arg("-d")
+        .arg("-f")
+        .arg("json")
+        .arg("-B")
+        .arg(&backups)
+        .arg("-r")
+        .arg(&repo)
+        .arg("-b")
+        .arg(&vault)
+        .env("BOB_NOW", "2026-06-26 14:30:00")
+        .output()
+        .expect("run bob plugins sync -d -f json");
+
+    assert_success(&output);
+    assert_stdout_has_no_ansi(&output);
+    let value: serde_json::Value = serde_json::from_str(&stdout(&output))
+        .expect("parse plugins sync json");
+    assert_eq!(value["ok"], true);
+    assert_eq!(value["dry_run"], true);
+    assert_eq!(value["copied"], 3);
+    assert_eq!(
+        fs::read_to_string(&beta_main).expect("read beta main.js"),
+        "// beta-stale\n",
+        "dry-run must not modify the vault"
+    );
+    assert!(
+        !vault.join(".obsidian/plugins/gamma").exists(),
+        "dry-run must not create the missing gamma plugin"
+    );
+    assert!(!backups.exists(), "dry-run must not create backup files");
+}
+
+#[test]
+fn plugins_sync_json_reports_errors_as_object() {
+    let temp = TempDir::new("bob-cli-plugins-sync-json-error");
+    let repo = temp.path().join("repo");
+    let vault = temp.path().join("vault");
+    write_plugins_fixture(&repo, &vault);
+
+    let output = bob_command()
+        .arg("plugins")
+        .arg("sync")
+        .arg("-p")
+        .arg("nope")
+        .arg("-f")
+        .arg("json")
+        .arg("-r")
+        .arg(&repo)
+        .arg("-b")
+        .arg(&vault)
+        .output()
+        .expect("run bob plugins sync -p nope -f json");
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "an unknown plugin should exit 1:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        stderr(&output).is_empty(),
+        "json errors must not also echo to stderr:\n{}",
+        stderr(&output)
+    );
+    let value: serde_json::Value = serde_json::from_str(&stdout(&output))
+        .expect("parse plugins sync json");
+    assert_eq!(value["ok"], false);
+    assert_eq!(value["error"], "plugin not found in repo: nope");
+}
+
+#[test]
 fn plugins_sync_backs_up_overwritten_file() {
     let temp = TempDir::new("bob-cli-plugins-sync-backup");
     let repo = temp.path().join("repo");
@@ -596,6 +760,24 @@ fn write_plugins_fixture(repo: &Path, vault: &Path) {
         &vault.join(".obsidian/community-plugins.json"),
         "[\"alpha\"]\n",
     );
+}
+
+fn plugin_file<'a>(
+    value: &'a serde_json::Value,
+    id: &str,
+    name: &str,
+) -> &'a serde_json::Value {
+    value["plugins"]
+        .as_array()
+        .expect("plugins array")
+        .iter()
+        .find(|plugin| plugin["id"] == id)
+        .unwrap_or_else(|| panic!("missing plugin {id}"))["files"]
+        .as_array()
+        .expect("files array")
+        .iter()
+        .find(|file| file["name"] == name)
+        .unwrap_or_else(|| panic!("missing file {id}/{name}"))
 }
 
 fn write_plugin(dir: &Path, id: &str, version: &str, body: &str) {

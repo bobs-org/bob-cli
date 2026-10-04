@@ -61,6 +61,65 @@ impl SyncReport {
             file.backup.as_ref().is_some_and(|backup| backup.written)
         })
     }
+
+    pub(super) fn result(&self, dry_run: bool) -> SyncResult {
+        SyncResult {
+            ok: true,
+            dry_run,
+            repo: self.repo.display().to_string(),
+            bob_dir: self.bob_dir.display().to_string(),
+            copied: self.copied(),
+            skipped: self.skipped(),
+            unchanged: self.unchanged(),
+            plugins: self
+                .plugins
+                .iter()
+                .map(|plugin| PluginSyncResult {
+                    id: plugin.id.clone(),
+                    files: plugin
+                        .files
+                        .iter()
+                        .map(|file| FileSyncResult {
+                            name: file.name.clone(),
+                            action: file.action,
+                            backup: file.backup.as_ref().map(|backup| {
+                                backup.path.display().to_string()
+                            }),
+                        })
+                        .collect(),
+                })
+                .collect(),
+        }
+    }
+
+    pub(super) fn issue_summary(&self) -> String {
+        self.issues.join("; ")
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct SyncResult {
+    pub(super) ok: bool,
+    pub(super) dry_run: bool,
+    pub(super) repo: String,
+    pub(super) bob_dir: String,
+    pub(super) copied: usize,
+    pub(super) skipped: usize,
+    pub(super) unchanged: usize,
+    pub(super) plugins: Vec<PluginSyncResult>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct PluginSyncResult {
+    pub(super) id: String,
+    pub(super) files: Vec<FileSyncResult>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct FileSyncResult {
+    pub(super) name: String,
+    pub(super) action: FileAction,
+    pub(super) backup: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -115,7 +174,8 @@ pub(super) struct BackupOutcome {
     pub(super) written: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub(super) enum FileAction {
     /// The vault had no copy of the file; it was created.
     Created,

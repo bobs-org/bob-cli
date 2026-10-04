@@ -3,28 +3,23 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: scripts/install_all [-h] [-r]
+Usage: scripts/install_all [-h]
 
 Pull and install bob-cli from this checkout, then pull and deploy the sibling
 bob-plugins and bob-mac-capture checkouts that live next to it. Missing siblings
-are skipped. Usually run through `just install-all` or
-`just install-all-and-restart`.
+are skipped. When the plugin sync changes the vault, a running Obsidian is then
+restarted so it loads the new plugins. Usually run through `just install-all`.
 
 Options:
-  -h, --help              Show this help and exit.
-  -r, --restart-obsidian  After a clean install, restart Obsidian if it is running.
+  -h, --help  Show this help and exit.
 EOF
 }
 
-restart_obsidian=0
 for arg in "$@"; do
   case "$arg" in
     -h|--help)
       usage
       exit 0
-      ;;
-    -r|--restart-obsidian)
-      restart_obsidian=1
       ;;
     *)
       usage >&2
@@ -65,6 +60,11 @@ PULL_DETAIL=""
 PULL_OUTPUT=""
 FAILURES=0
 WARNINGS=0
+PLUGINS_CHANGED=0
+# Remembers a restart still owed after a sync that copied files but then
+# skipped or failed the Obsidian restart, so a later run retries even when
+# the vault is already in sync.
+restart_marker="${XDG_STATE_HOME:-$HOME/.local/state}/bob-cli/install-all/obsidian-restart-pending"
 declare -a summary_names=()
 declare -a summary_glyphs=()
 declare -a summary_details=()
@@ -261,9 +261,19 @@ extract_json_integer() {
     "s/.*\"$key\"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p" | head -n 1
 }
 
+mark_restart_pending() {
+  mkdir -p "$(dirname "$restart_marker")" || true
+  : >"$restart_marker" || true
+}
+
+clear_restart_pending() {
+  rm -f "$restart_marker"
+}
+
 plugin_step() {
   local step_start duration pull_detail step_warning=0
   local obsidian_dir bob_root bob_bin output count synced drift plugin_detail
+  local preview pending copied_clause
   banner 34 '🧩' 'BOB-PLUGINS  2/3'
   step_start="$SECONDS"
   if [[ ! -d "$plugins_dir" ]]; then
@@ -306,6 +316,33 @@ plugin_step() {
     add_summary 'bob-plugins' fail "$plugin_detail" "$(format_duration "$((SECONDS - step_start))")"
     return 0
   fi
+  command_line "bob plugins sync --dry-run --format json --no-pull --repo $(display_path "$plugins_dir")"
+  if ! preview="$("$bob_bin" plugins sync --dry-run --format json --no-pull --repo "$plugins_dir")"; then
+    plugin_detail="$pull_detail · could not preview plugin sync"
+    glyph_line 31 '  ' '✗' "$plugin_detail"
+    FAILURES=$((FAILURES + 1))
+    add_summary 'bob-plugins' fail "$plugin_detail" "$(format_duration "$((SECONDS - step_start))")"
+    return 0
+  fi
+  pending="$(extract_json_integer copied "$preview")"
+  if [[ -z "$pending" ]]; then
+    plugin_detail="$pull_detail · could not read plugin sync preview"
+    glyph_line 31 '  ' '✗' "$plugin_detail"
+    FAILURES=$((FAILURES + 1))
+    add_summary 'bob-plugins' fail "$plugin_detail" "$(format_duration "$((SECONDS - step_start))")"
+    return 0
+  fi
+  if (( pending > 0 )); then
+    PLUGINS_CHANGED=1
+    mark_restart_pending
+  fi
+  if (( pending == 1 )); then
+    copied_clause=' · 1 file copied'
+  elif (( pending > 1 )); then
+    copied_clause=" · $pending files copied"
+  else
+    copied_clause=''
+  fi
   command_line "bob plugins sync --no-pull --repo $(display_path "$plugins_dir")"
   if "$bob_bin" plugins sync --no-pull --repo "$plugins_dir"; then
     output=''
@@ -335,7 +372,7 @@ plugin_step() {
     return 0
   fi
   if (( drift == 0 )); then
-    plugin_detail="$pull_detail · $synced/$count plugins in sync"
+    plugin_detail="$pull_detail$copied_clause · $synced/$count plugins in sync"
     if (( step_warning > 0 )); then
       glyph_line 33 '  ' '⚠' "$plugin_detail"
       add_summary 'bob-plugins' warn "$plugin_detail" "$(format_duration "$((SECONDS - step_start))")"
@@ -346,7 +383,7 @@ plugin_step() {
     fi
   else
     step_warning=$((step_warning + 1))
-    plugin_detail="$pull_detail · $synced/$count plugins in sync; $drift drifted (dirty in vault — review, then bob plugins sync -F)"
+    plugin_detail="$pull_detail$copied_clause · $synced/$count plugins in sync; $drift drifted (dirty in vault — review, then bob plugins sync -F)"
     glyph_line 33 '  ' '⚠' "$plugin_detail"
     add_summary 'bob-plugins' warn "$plugin_detail" "$(format_duration "$((SECONDS - step_start))")"
     WARNINGS=$((WARNINGS + step_warning))
@@ -422,11 +459,26 @@ mac_capture_step() {
 }
 
 obsidian_step() {
-  local step_start detail running i cli
+  local step_start detail running i cli reason pending_suffix
   banner 36 '🔄' 'OBSIDIAN'
   step_start="$SECONDS"
+  if (( PLUGINS_CHANGED == 1 )); then
+    reason='plugins changed'
+  elif [[ -f "$restart_marker" ]]; then
+    reason='restart pending from an earlier run'
+  else
+    detail='plugins unchanged · restart not needed'
+    glyph_line 2 '  ' '–' "$detail"
+    add_summary obsidian skip "$detail" ''
+    return 0
+  fi
+  if (( PLUGINS_CHANGED == 0 )); then
+    pending_suffix=' · pending from an earlier run'
+  else
+    pending_suffix=''
+  fi
   if (( FAILURES > 0 )); then
-    detail='not restarted: a step failed — fix it and rerun just install-all-and-restart'
+    detail="$reason; not restarted: a step failed — fix it and rerun just install-all"
     glyph_line 2 '  ' '–' "$detail"
     add_summary obsidian skip "$detail" ''
     return 0
@@ -441,9 +493,10 @@ obsidian_step() {
         return 0
       fi
       if [[ "$running" != true ]]; then
-        detail='not running · nothing to restart'
+        detail='not running · plugins load on next launch'
         glyph_line 2 '  ' '–' "$detail"
         add_summary obsidian skip "$detail" ''
+        clear_restart_pending
         return 0
       fi
       command_line "osascript -e 'tell application id \"md.obsidian\" to quit'"
@@ -487,9 +540,10 @@ obsidian_step() {
       i=0
       while (( i < 30 )); do
         if running="$(osascript -e 'application id "md.obsidian" is running' 2>/dev/null)" && [[ "$running" == true ]]; then
-          detail='restarted'
+          detail="restarted${pending_suffix}"
           glyph_line 36 '  ' '↻' "$detail"
           add_summary obsidian restart "$detail" "$(format_duration "$((SECONDS - step_start))")"
+          clear_restart_pending
           return 0
         fi
         sleep 0.5
@@ -499,12 +553,14 @@ obsidian_step() {
       glyph_line 33 '  ' '⚠' "$detail"
       WARNINGS=$((WARNINGS + 1))
       add_summary obsidian warn "$detail" "$(format_duration "$((SECONDS - step_start))")"
+      clear_restart_pending
       ;;
     Linux)
       if ! pgrep -x obsidian >/dev/null 2>&1; then
-        detail='not running'
+        detail='not running · plugins load on next launch'
         glyph_line 2 '  ' '–' "$detail"
         add_summary obsidian skip "$detail" ''
+        clear_restart_pending
         return 0
       fi
       cli="$HOME/.local/bin/obsidian"
@@ -513,13 +569,15 @@ obsidian_step() {
         glyph_line 33 '  ' '⚠' "$detail"
         WARNINGS=$((WARNINGS + 1))
         add_summary obsidian warn "$detail" "$(format_duration "$((SECONDS - step_start))")"
+        clear_restart_pending
         return 0
       fi
       command_line "$(display_path "$cli") restart"
       if "$cli" restart; then
-        detail='restart requested'
+        detail="restart requested${pending_suffix}"
         glyph_line 36 '  ' '↻' "$detail"
         add_summary obsidian restart "$detail" "$(format_duration "$((SECONDS - step_start))")"
+        clear_restart_pending
       else
         detail='Obsidian CLI restart failed'
         glyph_line 31 '  ' '✗' "$detail"
@@ -539,9 +597,7 @@ obsidian_step() {
 if [[ "$header_done" != 1 ]]; then
   banner 36 '🚀' 'INSTALL ALL'
   printf '  from     %s\n' "$(display_path "$parent")"
-  if (( restart_obsidian )); then
-    printf '  then     restart Obsidian if running\n'
-  fi
+  printf '  then     restart Obsidian if the plugin sync changes the vault\n'
   banner 35 '🦀' 'BOB-CLI  1/3'
 fi
 
@@ -589,9 +645,7 @@ fi
 
 plugin_step
 mac_capture_step
-if (( restart_obsidian )); then
-  obsidian_step
-fi
+obsidian_step
 
 banner 1 '✨' 'SUMMARY'
 print_summary

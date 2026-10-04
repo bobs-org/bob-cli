@@ -16,7 +16,7 @@ use super::{
         BackupOutcome, DiffKind, FileAction, FileDiff, FileSync, SyncOptions,
         SyncReport, SyncState, VaultState,
     },
-    render::success_json,
+    render::{success_json, sync_success_json},
     scan::{scan_plugins, sync_state, vault_state},
     sync::sync_plugins,
 };
@@ -206,6 +206,68 @@ fn json_shape_is_stable() {
     assert_eq!(value["plugins"][0]["version"], "1.0.0");
     assert_eq!(value["plugins"][0]["sync"], "synced");
     assert_eq!(value["plugins"][0]["vault"], "enabled");
+}
+
+#[test]
+fn sync_json_shape_is_stable() {
+    let temp = TempDir::new("bob-cli-plugins-sync-json");
+    let repo = temp.path().join("repo");
+    let vault = temp.path().join("vault");
+    write_plugin(&repo, "alpha", "1.0.0", "Alpha plugin", "alpha");
+    write_plugin(&repo, "beta", "2.0.0", "Beta plugin", "beta");
+    write_plugin(&repo, "gamma", "1.0.0", "Gamma plugin", "gamma");
+    write_vault_plugin(&vault, "alpha", "1.0.0", "Alpha plugin", "alpha");
+    write_vault_plugin(&vault, "beta", "2.0.0", "Beta plugin", "stale");
+
+    let result = sync_plugins(&options(&repo, &vault)).result(false);
+    let value: serde_json::Value =
+        serde_json::from_str(&sync_success_json(&result)).expect("json");
+    let mut keys: Vec<&str> = value
+        .as_object()
+        .expect("object")
+        .keys()
+        .map(String::as_str)
+        .collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        [
+            "bob_dir",
+            "copied",
+            "dry_run",
+            "ok",
+            "plugins",
+            "repo",
+            "skipped",
+            "unchanged",
+        ]
+    );
+    assert_eq!(value["ok"], true);
+    assert_eq!(value["dry_run"], false);
+    assert_eq!(value["copied"], 3);
+    assert_eq!(value["skipped"], 0);
+    assert_eq!(value["unchanged"], 3);
+    assert_eq!(value["plugins"][1]["id"], "beta");
+    assert_eq!(value["plugins"][1]["files"][1]["name"], "main.js");
+    assert_eq!(value["plugins"][1]["files"][1]["action"], "updated");
+    assert_eq!(
+        serde_json::to_value(FileAction::Created).unwrap(),
+        "created"
+    );
+    assert_eq!(
+        serde_json::to_value(FileAction::Updated).unwrap(),
+        "updated"
+    );
+    assert_eq!(serde_json::to_value(FileAction::Forced).unwrap(), "forced");
+    assert_eq!(
+        serde_json::to_value(FileAction::Unchanged).unwrap(),
+        "unchanged"
+    );
+    assert_eq!(
+        serde_json::to_value(FileAction::SkippedDirty).unwrap(),
+        "skipped_dirty"
+    );
+    assert_eq!(serde_json::to_value(FileAction::Failed).unwrap(), "failed");
 }
 
 #[test]

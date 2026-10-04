@@ -638,6 +638,7 @@ fn plugins_sync_help_lists_options_alphabetically() {
             && help.contains("-b, --bob-dir")
             && help.contains("-d, --dry-run")
             && help.contains("-F, --force")
+            && help.contains("-f, --format")
             && help.contains("-n, --no-pull")
             && help.contains("-p, --plugin")
             && help.contains("-r, --repo"),
@@ -650,6 +651,7 @@ fn plugins_sync_help_lists_options_alphabetically() {
             "-b, --bob-dir",
             "-d, --dry-run",
             "-F, --force",
+            "-f, --format",
             "-n, --no-pull",
             "-p, --plugin",
             "-r, --repo",

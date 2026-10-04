@@ -4,7 +4,7 @@ use crate::native::style::{
 
 use super::model::{
     DiffKind, FileAction, FileDiff, FileSync, PluginsReport, PluginsResult,
-    SyncReport, SyncState, VaultState,
+    SyncReport, SyncResult, SyncState, VaultState,
 };
 
 const DETAIL_INDENT: &str = "             ";
@@ -363,4 +363,8 @@ fn max_width<'a>(values: impl Iterator<Item = &'a str>) -> usize {
 
 pub(super) fn success_json(result: &PluginsResult) -> String {
     serde_json::to_string(result).expect("serialize plugins result")
+}
+
+pub(super) fn sync_success_json(result: &SyncResult) -> String {
+    serde_json::to_string(result).expect("serialize plugins sync result")
 }
