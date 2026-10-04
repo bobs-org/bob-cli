@@ -153,7 +153,7 @@ a sync. The repo and vault roots resolve exactly as they do for `list`.
 The bob-cli `just install-all` command runs this sync against the sibling
 `bob-plugins` checkout after pulling it. It previews the sync with
 `bob plugins sync --dry-run --format json` to decide whether to restart
-Obsidian.
+Obsidian and, on macOS, posts a notification before restarting Obsidian.
 
 Before any existing vault file is overwritten, `sync` copies the current vault
 file to a timestamped backup directory. Backups default to

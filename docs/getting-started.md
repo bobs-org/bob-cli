@@ -11,7 +11,8 @@ name for In Progress (`[/]`), not a waiting or Blocked state.
 
 From a checkout, run `just install`. Run `just install-all` to also deploy the
 Bob plugins (and, on macOS, Bob Mac Capture) from sibling checkouts, restarting
-a running Obsidian when the plugins change. With Cargo alone, run:
+a running Obsidian when the plugins change (on macOS that restart posts a
+notification first). With Cargo alone, run:
 
 ```bash
 cargo install --path . --locked

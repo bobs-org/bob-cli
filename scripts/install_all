@@ -8,7 +8,8 @@ Usage: scripts/install_all [-h]
 Pull and install bob-cli from this checkout, then pull and deploy the sibling
 bob-plugins and bob-mac-capture checkouts that live next to it. Missing siblings
 are skipped. When the plugin sync changes the vault, a running Obsidian is then
-restarted so it loads the new plugins. Usually run through `just install-all`.
+restarted so it loads the new plugins. On macOS it posts a Notification Center
+banner before that restart. Usually run through `just install-all`.
 
 Options:
   -h, --help  Show this help and exit.
@@ -125,6 +126,19 @@ command_line() {
   else
     printf '  $ %s\n' "$1"
   fi
+}
+
+# delay keeps osascript alive long enough for Notification Center to accept the banner.
+# || true: a missing permission or a failed osascript must not change the restart or exit.
+notify_mac() {
+  local title="$1" body="$2"
+  command_line "osascript display notification \"$body\" with title \"$title\" subtitle \"bob install-all\" sound name \"default\""
+  osascript - "$title" "$body" <<'APPLESCRIPT' || true
+on run argv
+  display notification (item 2 of argv) with title (item 1 of argv) subtitle "bob install-all" sound name "default"
+  delay 0.5
+end run
+APPLESCRIPT
 }
 
 glyph_line() {
@@ -478,6 +492,15 @@ obsidian_step() {
     pending_suffix=''
   fi
   if (( FAILURES > 0 )); then
+    if [[ "$(uname -s)" == Darwin ]]; then
+      if (( PLUGINS_CHANGED == 1 )); then
+        notify_mac 'Obsidian needs a restart' \
+          'Plugins changed, but a step failed. Fix it and rerun just install-all.'
+      else
+        notify_mac 'Obsidian needs a restart' \
+          'An earlier plugin update still needs a restart, but a step failed. Fix it and rerun just install-all.'
+      fi
+    fi
     detail="$reason; not restarted: a step failed — fix it and rerun just install-all"
     glyph_line 2 '  ' '–' "$detail"
     add_summary obsidian skip "$detail" ''
@@ -499,8 +522,17 @@ obsidian_step() {
         clear_restart_pending
         return 0
       fi
+      if (( PLUGINS_CHANGED == 1 )); then
+        notify_mac 'Restarting Obsidian' \
+          'Plugins changed. It will reopen in a moment.'
+      else
+        notify_mac 'Restarting Obsidian' \
+          'Finishing an earlier plugin update. It will reopen in a moment.'
+      fi
       command_line "osascript -e 'tell application id \"md.obsidian\" to quit'"
       if ! osascript -e 'tell application id "md.obsidian" to quit'; then
+        notify_mac 'Obsidian needs a restart' \
+          'Quit failed. Allow Terminal in Automation, then rerun just install-all.'
         detail='quit failed · allow Terminal in System Settings → Privacy & Security → Automation'
         glyph_line 31 '  ' '✗' "$detail"
         FAILURES=$((FAILURES + 1))
@@ -523,6 +555,8 @@ obsidian_step() {
         i=$((i + 1))
       done
       if (( i >= 60 )); then
+        notify_mac 'Obsidian needs a restart' \
+          'Obsidian did not quit. Close any open dialog, then restart it to load the new plugins.'
         detail='Obsidian did not quit within 30s (an open dialog?) — not relaunching'
         glyph_line 31 '  ' '✗' "$detail"
         FAILURES=$((FAILURES + 1))
@@ -531,6 +565,8 @@ obsidian_step() {
       fi
       command_line 'open -b md.obsidian'
       if ! open -b md.obsidian; then
+        notify_mac 'Obsidian needs a restart' \
+          'Obsidian quit but did not reopen. Open it to load the new plugins.'
         detail='relaunch failed'
         glyph_line 31 '  ' '✗' "$detail"
         FAILURES=$((FAILURES + 1))
