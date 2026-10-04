@@ -39,8 +39,7 @@ source lines. Rejected alternatives:
 - **Duplicate inline evaluators in dash queries.** Dash and rotten share one
   snapshot-backed bucket predicate and `reviewModel()`.
 - **Dim-not-hide as the initial policy.** Review buckets stay out of READY;
-  dimming is reconsidered only if the trial fails, after interval/budget
-  tuning.
+  dimming is reconsidered only if gating hides needed work after interval/budget tuning.
 - **Filtering READY with `state === "fresh"`.** That would lose exempt tasks;
   READY uses `bucket !== "new" && bucket !== "rotten"` on the visible pool.
 
@@ -58,10 +57,8 @@ stays ungated; `bob freshness list` is the headless review interface. Two
 implementations (Rust bucket plus JavaScript bucket/model) stay in sync under
 schema 1 until the vocab-rotten migration.
 
-**Reopens when.** A required plugin-free surface needs gating, or the
-2026-10-05 through 2026-10-18 trial fails under its keep rule (red on no more
-than 3 mornings, about 30 confirmed tasks on most mornings, no lost-needed-task
-case).
+**Reopens when.** A required plugin-free surface needs gating, or gating hides
+needed work (a lost-needed-task case) after interval/budget tuning.
 
 Supersedes in part [[decisions/today-is-read-from-the-ledger]] for the dash
 section list only.
@@ -69,6 +66,8 @@ section list only.
 Superseded in part: chip list only — see [[decisions/note-ready-cap-counts-the-lane]].
 
 Superseded in part: review ritual order only — see [[decisions/review-walk-is-tiered]].
+
+Amended in place 2026-10-04 at Bryan's request: the freshness trial was removed; nothing waits on it.
 
 Superseded in part: 'stamps remain the only write' only — the approved
 decision card invokes separate existing writers on explicit approval, see

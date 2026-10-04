@@ -1342,32 +1342,12 @@ these vectors verbatim.
   `(keeps:: 2)` never folds (`keeps` null); the fields stay visible
   Dataview pills with the dashed repair styling.
 
-## 13. Two-week trial (2026-10-05 through 2026-10-18)
+## 13. Rollout log
 
-The accepted trial runs 2026-10-05 through 2026-10-18 (if rollout
-misses the start, record the actual dates for a full 14-day trial).
-The walk changes the ritual the trial measures. If the walk has not
-shipped by Mon 2026-10-05, record that the 14-day trial starts the day
-it lands. The rollout phase records the actual dates. Don't change the
-ritual mid-trial. Completion means the trial is ready to run, not that
-an agent waits two weeks or claims its outcome.
+There is no freshness trial: no ritual change, release, or tuning waits on a trial window or keep rule; tune intervals or the budget whenever the walk needs it.
 
-- 2026-10-01: per-note CROWDED surfaces (`bob ready`, the dash chip,
-  crowded.md, the heading chips) went live; gesture notices are
-  deferred until after the trial.
-- 2026-10-01: the tiered morning review walk went live (schema 3, lane
-  intervals, tier notices, walk anchor). The trial window
-  2026-10-05 through 2026-10-18 stands.
-
-Keep a lightweight daily tally on the rotten page: NEW, RETURNED,
-expired ROTTEN, confirmed FRESH, READY, lanes kept/released, minutes to
-Commitments done, and whether the chip was red.
-Track confirmed FRESH separately from exempt READY for the rule below.
-
-Keep if red on no more than 3 mornings, at least about 30 confirmed
-tasks on most mornings, and no lost-needed-task case. If it fails,
-Bryan can first adjust intervals or budget, then reconsider
-dim-not-hide; never adopt a stored rotten tag.
+- 2026-10-01: per-note CROWDED surfaces (`bob ready`, the dash chip, crowded.md, the heading chips) went live; gesture notices are a separate follow-up.
+- 2026-10-01: the tiered morning review walk went live (schema 3, lane intervals, tier notices, walk anchor).
 
 ## 14. Keep-streak rollout, rollback, and calibration
 
@@ -1376,8 +1356,7 @@ Deployed 2026-10-03: bob-navigation-hotkeys 1.69.0 plus bob-ledger-tools
 reinstalled from this checkout (schema 5, capture resets). Counting and
 folded pips went live then; cards, the leaf, decision skip, and the
 'next review asks' promise were still gated behind 2026-10-19 at that
-release. The accepted Ready trial in §13 ran 2026-10-05 through
-2026-10-18 independently of this decay gate.
+release.
 
 This release removes that calendar gate: bob-navigation-hotkeys 2.2.0
 plus bob-ledger-tools 1.28.0, freshness JSON schema 8, freshness

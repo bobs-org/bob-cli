@@ -50,5 +50,7 @@ Evidence:
 (Rust plus JavaScript) stay in sync under vectors R1–R14; the mobile
 default cap applies where `config.yml` is unreadable.
 
-**Reopens when.** The post-trial keep rule fails after tuning N and
-the notice scope.
+**Reopens when.** Bryan finds the cap unhelpful after tuning N and the
+notice scope.
+
+Amended in place 2026-10-04 at Bryan's request: the freshness trial was removed; nothing waits on it.

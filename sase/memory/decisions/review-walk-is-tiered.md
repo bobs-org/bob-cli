@@ -72,8 +72,9 @@ bob-navigation-hotkeys 1.50.0.
 kept in sync under the Q/L/R/S/B vectors.
 
 **Reopens when.** The lane keep rate stays above 90% after lengthening
-`next_interval`, long-interval tasks starve past the weekly prune, or the
-2026-10-05 through 2026-10-18 trial fails under its keep rule.
+`next_interval`, or long-interval tasks starve past the weekly prune.
+
+Amended in place 2026-10-04 at Bryan's request: the freshness trial was removed; nothing waits on it.
 
 Links [[decisions/task-lanes-are-sticky]] (its "daily review with release"
 cost) and [[decisions/ready-is-freshness-gated]] (its partition, chips, and

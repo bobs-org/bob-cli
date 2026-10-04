@@ -47,7 +47,7 @@ capture's `queued > in_progress > next`. Rejected alternatives:
 - **Keep `#now` with a derived `[*]`.** It repeats Today.
 - **A Submitted/Waiting status.** Bryan cancelled it; WIP fills the role.
 - **No promotion on link.** That is the status-lock trap.
-- **Age-based Next decay.** Only if the trial fails, never for Pending.
+- **Age-based Next decay.** Not adopted, and never for Pending.
 - **A hidden pre-block status.** No hidden previous-status field is stored.
 
 Evidence:
@@ -61,5 +61,6 @@ weekly prune are required. `[/]` no longer means "worked recently". Lanes
 don't survive Blocked. Dependency-promoted Next is sticky too. About 80 legacy
 statuses need one-time triage.
 
-**Reopens when.** The two-week trial from `dash-lanes` fails its keep rule;
-lanes must survive Blocked (then Blocked becomes an overlay).
+**Reopens when.** Lanes must survive Blocked (then Blocked becomes an overlay).
+
+Amended in place 2026-10-04 at Bryan's request: the freshness trial was removed; nothing waits on it.
