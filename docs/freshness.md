@@ -33,7 +33,7 @@ alongside freshness namespace v5 counting, folded pips, and
 count-truthful tooltips. The decision card landed with the
 decision-card phase (bob-navigation-hotkeys 1.69.0, bob-ledger-tools
 1.24.0) and is available immediately on compatible plugins
-(freshness namespace v6, card capability v2): single Alt+F/Alt+Shift+F
+(freshness namespace v6, card capability v2): single Alt+F/Ctrl+Alt+F
 presses on exact, due, at-limit tasks open the consent card and write
 nothing, counted and Task Link sessions skip those targets without
 changing fresh/count, and marks show the leaf with `Alt+F to decide`
@@ -173,7 +173,7 @@ exactly one row with `entry.path === path`, `entry.line === editorLine + 1`,
 throwing `keepLine` fails without writing, while pre-v5 falls back to the
 uncounted old stamper. The event table:
 
-- Alt+F / Alt+Shift+F on an exact due Ready target in `rotten`/`returned`
+- Alt+F / Ctrl+Alt+F on an exact due Ready target in `rotten`/`returned`
   stamps and increments once in the same write, unless an active decision
   is required.
 - NEW, FRESH/early, Pending, Next, Blocked, Today-linked, tracker-tier
@@ -231,7 +231,7 @@ hard-coded P1–P4 table.
 **Availability.** Decay decisions are available as soon as decay is
 enabled and compatible plugins are loaded. There is no calendar gate,
 replacement date, or counting-only period. On an exact, due Ready
-ROTTEN/RETURNED task at the keep limit, a single Alt+F/Alt+Shift+F
+ROTTEN/RETURNED task at the keep limit, a single Alt+F/Ctrl+Alt+F
 press opens the consent card and writes nothing, while counted and
 Task Link sessions skip those targets (`N needs a decision`) without
 changing fresh/count. Below threshold they keep counting normally
@@ -466,7 +466,7 @@ null.
 **Tracking review (projects and references).** The freshness walk
 also reminds Bryan to replenish surfaced projects and to review
 unfinished reading references, in one consistent contract on both
-sides including the `]s` / Alt+Shift+F walk: PRE → NEW → PROJECTS →
+sides including the `]s` / Ctrl+Alt+F walk: PRE → NEW → PROJECTS →
 PENDING → NEXT → RETURNED → REFERENCES → ROTTEN → POST.
 
 - Identity is the parsed, exact trailing block ID `prj` or `ref` on
@@ -621,7 +621,7 @@ today on a canonical line is a no-op.
 
 | Surface                | Stamps | Never stamps |
 | ---------------------- | ------ | ------------ |
-| bob-navigation-hotkeys | Alt+F and Alt+Shift+F stamp through `api.freshness.keepLine` (counted only under exact eligibility); Alt+N commit and release; the Ctrl+Shift+P Task Card (`1`–`4`, `0`, Enter/Schedule, `b`, `f`, `x`, Ctrl+D) and the stages its actions open, in single, counted and Task Link mode; each open task moved by Ctrl+Shift+M; the Ctrl+Enter recommended roll and decay; decision-card outcomes write through the existing writers (Not now and levels through the priority writer, Less often through set-refresh, Reword through the generic stamp, Drop through the cancel row, which never stamps) | the cancel row (including the decay cancel), project-frontmatter edits, create-project-note-from-task, the `!` transclusion toggle (a pure toggle that never rewrites a task line) |
+| bob-navigation-hotkeys | Alt+F and Ctrl+Alt+F stamp through `api.freshness.keepLine` (counted only under exact eligibility); Alt+N commit and release; the Ctrl+Shift+P Task Card (`1`–`4`, `0`, Enter/Schedule, `b`, `f`, `x`, Ctrl+D) and the stages its actions open, in single, counted and Task Link mode; each open task moved by Ctrl+Shift+M; the Ctrl+Enter recommended roll and decay; decision-card outcomes write through the existing writers (Not now and levels through the priority writer, Less often through set-refresh, Reword through the generic stamp, Drop through the cancel row, which never stamps) | the cancel row (including the decay cancel), project-frontmatter edits, create-project-note-from-task, the `!` transclusion toggle (a pure toggle that never rewrites a task line) |
 | task-status-cycler     | Alt+[ / Alt+] (including counted and transcluded targets) when the result is an open status, including leaving Blocked by hand; Ctrl+Enter reopening a done task | closing (done or cancelled), Ctrl+Shift+] bullet → `#task` (that is creation), the dependency-ID normalizer, `recoverBlockedDependents` |
 | block-id-prompt        | Ctrl+Shift+Enter and `^^` when they rewrite the task line (Ready/Blocked → Next, a new block ID) | unlink, Task Link removal, Ctrl+6 rename |
 | `bob capture`          | `plan_task_link` (the link direction of `@route+id!`, Ensure Next, solo `@route:id` / `^route:id`, link-then-close), the `=x` rows that set `[/]`, and an `&note:id` dependency capture that edits an existing open dependent (its Depends-On line, derived fields, or Blocked status) | new tasks on any route (including new tasks with `&` prerequisites), `=x` complete, unlink, start rows, sub-bullets, prerequisite target-ID and lane promotion edits, an unchanged repeat `&` |
@@ -644,30 +644,30 @@ place, and when ledger-tools is absent or old the gesture simply
 doesn't stamp. Clicking a freshness mark only reveals the raw field
 for editing and never stamps.
 
-Before Alt+F or Alt+Shift+F stamps a validated Pending (`[/]`) target,
+Before Alt+F or Ctrl+Alt+F stamps a validated Pending (`[/]`) target,
 it asks once for an optional Work Log summary. In a counted or Task Link
 batch, only the Pending targets receive the shared summary; every other
 accepted target still refreshes. Enter on an empty summary still keeps
 the task and writes no Work Log entry. Escape cancels the refresh, so the
-task stays due and Alt+Shift+F does not advance.
+task stays due and Ctrl+Alt+F does not advance.
 
 ## 6. Review ritual
 
 **Morning:**
 
 1. `[S`, or `]s` from outside the queue, starts at PRE.
-2. Complete each PRE chore with Alt+Shift+F, or skip it with `]s`.
+2. Complete each PRE chore with Ctrl+Alt+F, or skip it with `]s`.
    Alt+F completes a chore in place. Checklist rows never stamp.
    Keep import is the PRE chore "Import inbox tasks from Google Keep".
 3. Walk the commitments (NEW → PROJECTS → PENDING → NEXT → RETURNED →
-   REFERENCES) with `]s` / Alt+Shift+F until the notice says
+   REFERENCES) with `]s` / Ctrl+Alt+F until the notice says
    **Commitments done**. `N]s` / `N[s` move N entries along that same
    queue and wrap with the existing notice, while `[S` / `]S` stay the
    first and last entries. NEW is never capped or skipped. In PROJECTS,
-   replenish the empty project with Alt+Shift+F; stamping a project
+   replenish the empty project with Ctrl+Alt+F; stamping a project
    advances to the correct next entry with the block ID and `#hide`
    preserved. In REFERENCES, confirm the reference still needs reading.
-   In the lanes, ask "still in this lane?": keep with Alt+Shift+F
+   In the lanes, ask "still in this lane?": keep with Ctrl+Alt+F
    (Pending asks for an optional Work Log summary; blank Enter still
    keeps, while Escape leaves the task due), do it today with
    Ctrl+Shift+Enter, release with Alt+N. For a returned deferral, "not
@@ -690,7 +690,7 @@ otherwise. Wrap and boundary preambles stay transient in the notice.
 lengthen `next_interval` to 2–3 and leave Pending at 1.
 
 Review outcomes, one key each (every row except "edit" stamps by
-itself): still right (Alt+Shift+F or Alt+F); see it less often
+itself): still right (Ctrl+Alt+F or Alt+F); see it less often
 (Ctrl+Shift+P `f`, then 14 / 30 / 90); not now (Ctrl+Shift+P
 `1`–`4`); do today (Ctrl+Shift+Enter / Alt+N); route to a project
 (Ctrl+Shift+M); drop (Ctrl+Shift+P `x`); sequence (Ctrl+Shift+P `b`);
