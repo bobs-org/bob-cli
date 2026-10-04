@@ -267,8 +267,15 @@ fn overview_human_has_sections_order_and_no_ansi() {
         "expected the quickest win:\n{human}"
     );
     assert!(
-        human.contains("sequence / defer / drop Ctrl+Shift+P"),
-        "expected the pre-activation ready hint:\n{human}"
+        human.contains("defer Ctrl+Shift+P 1\u{2013}4")
+            && human.contains("drop Ctrl+Shift+P x")
+            && human.contains("sequence Ctrl+Shift+P b"),
+        "expected the Task Card ready hint:\n{human}"
+    );
+    assert!(
+        !human.contains("sequence / defer / drop Ctrl+Shift+P")
+            && !human.contains("type to search"),
+        "the classic ready hint must not appear:\n{human}"
     );
     assert!(
         human.contains("not capped: eps 2 (ready_cap: off)"),
@@ -446,32 +453,37 @@ fn worklist_lists_file_order_with_also_here() {
     );
     assert!(
         human.contains("Make room for 4:")
-            && human.contains("sequence / defer / drop Ctrl+Shift+P"),
+            && human.contains("sequence Ctrl+Shift+P b"),
         "expected the make-room footer:\n{human}"
     );
     assert_stdout_has_no_ansi(&output);
 }
 
 #[test]
-fn overview_human_advertises_task_card_keys_from_october_19() {
+fn overview_human_always_advertises_task_card_keys() {
     let temp = ready_vault("bob-cli-ready-task-card-hint");
-    let output = ready_command(&temp, &[])
-        .env("BOB_NOW", "2026-10-19")
-        .output()
-        .expect("run bob ready on Task Card default day");
-    assert_success(&output);
-    let human = stdout(&output);
-    assert!(
-        human.contains("defer Ctrl+Shift+P 1\u{2013}4")
-            && human.contains("drop Ctrl+Shift+P x")
-            && human.contains("sequence Ctrl+Shift+P b")
-            && human.contains("type to search"),
-        "expected Task Card ready hints:\n{human}"
-    );
-    assert!(
-        !human.contains("sequence / defer / drop Ctrl+Shift+P"),
-        "pre-activation wording must not remain:\n{human}"
-    );
+    for day in ["2026-10-01", "2026-10-18", "2026-10-19"] {
+        let output = ready_command(&temp, &[])
+            .env("BOB_NOW", day)
+            .output()
+            .expect("run bob ready on a Task Card day");
+        assert_success(&output);
+        let human = stdout(&output);
+        assert!(
+            human.contains("defer Ctrl+Shift+P 1\u{2013}4")
+                && human.contains("drop Ctrl+Shift+P x")
+                && human.contains("sequence Ctrl+Shift+P b"),
+            "{day}: expected Task Card ready hints:\n{human}"
+        );
+        assert!(
+            !human.contains("sequence / defer / drop Ctrl+Shift+P"),
+            "{day}: the classic wording must not appear:\n{human}"
+        );
+        assert!(
+            !human.contains("type to search"),
+            "{day}: the card hint never mentions search:\n{human}"
+        );
+    }
 }
 
 #[test]

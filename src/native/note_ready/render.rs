@@ -401,24 +401,14 @@ fn render_overview_sized(
             note.name
         ));
     }
-    output.push_str(&format!("  {}\n", ready_gesture_hint(scan.today)));
+    output.push_str(&format!("  {}\n", ready_gesture_hint()));
     output
 }
 
-/// Local calendar day the Task Card becomes the default first screen.
-fn task_card_default_from() -> chrono::NaiveDate {
-    chrono::NaiveDate::from_ymd_opt(2026, 10, 19)
-        .expect("valid Task Card default date")
-}
-
-/// Date-aware crowded-note remedies. `today` is the already-resolved
-/// scan day so tests can inject it; this never reads plugin data.json.
-fn ready_gesture_hint(today: chrono::NaiveDate) -> &'static str {
-    if today < task_card_default_from() {
-        "split Ctrl+Shift+N \u{b7} sequence / defer / drop Ctrl+Shift+P"
-    } else {
-        "split Ctrl+Shift+N \u{b7} defer Ctrl+Shift+P 1\u{2013}4 \u{b7} drop Ctrl+Shift+P x \u{b7} sequence Ctrl+Shift+P b \u{b7} type to search"
-    }
+/// Crowded-note remedies. The Task Card is the only `Ctrl+Shift+P`
+/// surface, so the hint always names the card's keys.
+fn ready_gesture_hint() -> &'static str {
+    "split Ctrl+Shift+N \u{b7} defer Ctrl+Shift+P 1\u{2013}4 \u{b7} drop Ctrl+Shift+P x \u{b7} sequence Ctrl+Shift+P b"
 }
 
 /// Freshness label for one worklist row: `new`, `rotten Nd`,
@@ -554,7 +544,7 @@ pub(crate) fn render_worklist(
                 output,
                 "  Make room for {}: {}",
                 entry.over_by,
-                ready_gesture_hint(scan.today),
+                ready_gesture_hint(),
             );
         }
         NoteState::Full => {
@@ -696,7 +686,7 @@ mod tests {
         );
         assert!(
             output.contains(
-                "split Ctrl+Shift+N \u{b7} sequence / defer / drop Ctrl+Shift+P"
+                "split Ctrl+Shift+N \u{b7} defer Ctrl+Shift+P 1\u{2013}4 \u{b7} drop Ctrl+Shift+P x \u{b7} sequence Ctrl+Shift+P b"
             ),
             "{output}"
         );
@@ -704,38 +694,50 @@ mod tests {
     }
 
     #[test]
-    fn ready_gesture_hint_switches_on_october_19() {
-        let before = chrono::NaiveDate::from_ymd_opt(2026, 10, 18).unwrap();
-        let on = chrono::NaiveDate::from_ymd_opt(2026, 10, 19).unwrap();
+    fn ready_gesture_hint_is_always_the_task_card_keys() {
+        let hint = ready_gesture_hint();
         assert_eq!(
-            ready_gesture_hint(before),
-            "split Ctrl+Shift+N \u{b7} sequence / defer / drop Ctrl+Shift+P"
+            hint,
+            "split Ctrl+Shift+N \u{b7} defer Ctrl+Shift+P 1\u{2013}4 \u{b7} drop Ctrl+Shift+P x \u{b7} sequence Ctrl+Shift+P b"
         );
-        assert_eq!(
-            ready_gesture_hint(on),
-            "split Ctrl+Shift+N \u{b7} defer Ctrl+Shift+P 1\u{2013}4 \u{b7} drop Ctrl+Shift+P x \u{b7} sequence Ctrl+Shift+P b \u{b7} type to search"
+        assert!(!hint.contains("type to search"), "{hint}");
+        assert!(
+            !hint.contains("sequence / defer / drop Ctrl+Shift+P"),
+            "{hint}"
         );
     }
 
     #[test]
-    fn overview_advertises_task_card_keys_from_october_19() {
-        let mut scan = overview_scan(vec![entry(
-            "sase",
-            "project",
-            7,
-            Some(5),
-            NoteState::Crowded,
-        )]);
-        scan.today = chrono::NaiveDate::from_ymd_opt(2026, 10, 19).unwrap();
-        let output = render_overview(&scan, false, &Styler::plain());
-        assert!(output.contains("defer Ctrl+Shift+P 1\u{2013}4"), "{output}");
-        assert!(output.contains("drop Ctrl+Shift+P x"), "{output}");
-        assert!(output.contains("sequence Ctrl+Shift+P b"), "{output}");
-        assert!(output.contains("type to search"), "{output}");
-        assert!(
-            !output.contains("sequence / defer / drop Ctrl+Shift+P"),
-            "{output}"
-        );
+    fn overview_advertises_task_card_keys_on_any_day() {
+        for day in [
+            chrono::NaiveDate::from_ymd_opt(2026, 10, 1).unwrap(),
+            chrono::NaiveDate::from_ymd_opt(2026, 10, 18).unwrap(),
+            chrono::NaiveDate::from_ymd_opt(2026, 10, 19).unwrap(),
+        ] {
+            let mut scan = overview_scan(vec![entry(
+                "sase",
+                "project",
+                7,
+                Some(5),
+                NoteState::Crowded,
+            )]);
+            scan.today = day;
+            let output = render_overview(&scan, false, &Styler::plain());
+            assert!(
+                output.contains("defer Ctrl+Shift+P 1\u{2013}4"),
+                "{day}: {output}"
+            );
+            assert!(output.contains("drop Ctrl+Shift+P x"), "{day}: {output}");
+            assert!(
+                output.contains("sequence Ctrl+Shift+P b"),
+                "{day}: {output}"
+            );
+            assert!(!output.contains("type to search"), "{day}: {output}");
+            assert!(
+                !output.contains("sequence / defer / drop Ctrl+Shift+P"),
+                "{day}: {output}"
+            );
+        }
     }
 
     #[test]
@@ -815,7 +817,7 @@ mod tests {
     }
 
     #[test]
-    fn crowded_worklist_uses_the_scan_day_for_task_card_hints() {
+    fn crowded_worklist_always_advertises_task_card_hints() {
         let mut scan = overview_scan(vec![entry(
             "sase",
             "project",
@@ -830,22 +832,14 @@ mod tests {
             blocked: 0,
             recurring: 0,
         };
+        let expected = "Make room for 2: split Ctrl+Shift+N \u{b7} defer Ctrl+Shift+P 1\u{2013}4 \u{b7} drop Ctrl+Shift+P x \u{b7} sequence Ctrl+Shift+P b";
         let before =
             render_worklist(&scan, &scan.report.notes[0], &also, &plain);
-        assert!(
-            before.contains(
-                "Make room for 2: split Ctrl+Shift+N \u{b7} sequence / defer / drop Ctrl+Shift+P"
-            ),
-            "{before}"
-        );
+        assert!(before.contains(expected), "{before}");
+        assert!(!before.contains("type to search"), "{before}");
         scan.today = chrono::NaiveDate::from_ymd_opt(2026, 10, 19).unwrap();
         let after =
             render_worklist(&scan, &scan.report.notes[0], &also, &plain);
-        assert!(
-            after.contains(
-                "Make room for 2: split Ctrl+Shift+N \u{b7} defer Ctrl+Shift+P 1\u{2013}4 \u{b7} drop Ctrl+Shift+P x \u{b7} sequence Ctrl+Shift+P b \u{b7} type to search"
-            ),
-            "{after}"
-        );
+        assert!(after.contains(expected), "{after}");
     }
 }

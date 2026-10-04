@@ -595,7 +595,7 @@ today on a canonical line is a no-op.
 
 | Surface                | Stamps | Never stamps |
 | ---------------------- | ------ | ------------ |
-| bob-navigation-hotkeys | Alt+F and Alt+Shift+F stamp through `api.freshness.keepLine` (counted only under exact eligibility); Alt+N commit and release; the Ctrl+Shift+P Task Card (`1`–`4`, `0`, Enter/Schedule, `b`, `f`, `x`, Ctrl+D) and the matching classic-search rows in single, counted and Task Link mode; each open task moved by Ctrl+Shift+M; the Ctrl+Enter recommended roll and decay; decision-card outcomes write through the existing writers (Not now and levels through the priority writer, Less often through set-refresh, Reword through the generic stamp, Drop through the cancel row, which never stamps) | the cancel row (including the decay cancel), project-frontmatter edits, create-project-note-from-task, the `!` transclusion toggle (a pure toggle that never rewrites a task line) |
+| bob-navigation-hotkeys | Alt+F and Alt+Shift+F stamp through `api.freshness.keepLine` (counted only under exact eligibility); Alt+N commit and release; the Ctrl+Shift+P Task Card (`1`–`4`, `0`, Enter/Schedule, `b`, `f`, `x`, Ctrl+D) and the stages its actions open, in single, counted and Task Link mode; each open task moved by Ctrl+Shift+M; the Ctrl+Enter recommended roll and decay; decision-card outcomes write through the existing writers (Not now and levels through the priority writer, Less often through set-refresh, Reword through the generic stamp, Drop through the cancel row, which never stamps) | the cancel row (including the decay cancel), project-frontmatter edits, create-project-note-from-task, the `!` transclusion toggle (a pure toggle that never rewrites a task line) |
 | task-status-cycler     | Alt+[ / Alt+] (including counted and transcluded targets) when the result is an open status, including leaving Blocked by hand; Ctrl+Enter reopening a done task | closing (done or cancelled), Ctrl+Shift+] bullet → `#task` (that is creation), the dependency-ID normalizer, `recoverBlockedDependents` |
 | block-id-prompt        | Ctrl+Shift+Enter and `^^` when they rewrite the task line (Ready/Blocked → Next, a new block ID) | unlink, Task Link removal, Ctrl+6 rename |
 | `bob capture`          | `plan_task_link` (the link direction of `@route+id!`, Ensure Next, solo `@route:id` / `^route:id`, link-then-close), the `=x` rows that set `[/]`, and an `&note:id` dependency capture that edits an existing open dependent (its Depends-On line, derived fields, or Blocked status) | new tasks on any route (including new tasks with `&` prerequisites), `=x` complete, unlink, start rows, sub-bullets, prerequisite target-ID and lane promotion edits, an unchanged repeat `&` |
@@ -664,9 +664,7 @@ itself): still right (Alt+Shift+F or Alt+F); see it less often
 (Ctrl+Shift+P `f`, then 14 / 30 / 90); not now (Ctrl+Shift+P
 `1`–`4`); do today (Ctrl+Shift+Enter / Alt+N); route to a project
 (Ctrl+Shift+M); drop (Ctrl+Shift+P `x`); sequence (Ctrl+Shift+P `b`);
-wording wrong (edit, then Alt+F). Classic search (`/` or type to
-filter) remains the compatibility path when the Task Card is off or
-when Automatic is still before 2026-10-19.
+wording wrong (edit, then Alt+F).
 
 From 2026-10-19, a due at-limit task's Alt+F opens the decision card
 (Not now / Less often / Reword / Drop / Keep). Counted and Task Link
@@ -1203,7 +1201,7 @@ builder near the `Alt+F to decide` string (tests
 - Moving the cursor into a mark, or clicking it, reveals
   `[fresh:: …]` for editing.
 - Alt+F on a `⟳` task flips it to `✓ today` within about a second.
-- Ctrl+Shift+P `f` → 14 (or classic refresh 14) shows `/14d` from the next day.
+- Ctrl+Shift+P `f` → 14 shows `/14d` from the next day.
 - `dash.md` and `freshness.md` Tasks results and reading view show
   marks; the freshness.md DUE group shows `⟳`.
 - A hand-broken stamp (`[fresh:: 2026-13-01]`) shows the dashed

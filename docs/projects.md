@@ -277,11 +277,11 @@ appending to the matching log.
 ### Task Card
 
 `Ctrl+Shift+P` (`bob-navigation-hotkeys:set-bullet-property`, palette
-**Task card (set properties)**) opens the Task Card as its first screen when
-the plugin setting allows it. Classic filtered properties remain permanently
-available as search mode (`/` or any unbound printable character). Direct
-Depends-On-line, chip, palette dependency, and decay Less often entries still
-skip the card and open their stage.
+**Task card (set properties)**) always opens the Task Card. There is no plugin
+setting, no activation date, and no filtered property list: the card is the
+only surface. A `taskCard` value left in the plugin's saved data by the old
+setting is ignored. Direct Depends-On-line, chip, palette dependency, and
+decay Less often entries still skip the card and open their stage.
 
 | Gesture on the card | Outcome |
 | --- | --- |
@@ -295,32 +295,25 @@ skip the card and open their stage.
 | `x` | Open the cancel-reason stage; never cancel on the key alone |
 | `Alt+N` | Commit to Next or release to Ready |
 | `Ctrl+D` | Delete the selected property (default selection is Schedule) |
-| `/` or type | Classic search |
 | Backspace on empty / Back | Return to the card without writing |
-| Escape | Close and discard uncommitted state |
+| Escape, `q`, `Q` | Close and discard uncommitted state; `q` never closes while a text field is focused |
+| `Ctrl+]` | Close from the card or any stage it opened, even from a focused date, reason, or Work summary field; nothing is written |
 
 Same-level `2` on P2 is a deliberate re-pick that resets the roll streak.
 `Ctrl+Enter` remains a roll that can advance the decay ladder. Custom list
-properties stay in More and in search. Counted sessions name the N+1 scope
-and mixed values; Task Links say `via Task Link` and name target notes.
-Cross-note Task Link writes do not undo from the daily note with one Ctrl+Z.
+properties stay in the More section; a More row opens that property's value
+stage. Counted sessions name the N+1 scope and mixed values; Task Links say
+`via Task Link` and name target notes. Cross-note Task Link writes do not undo
+from the daily note with one Ctrl+Z.
 
 Two visible differences from the old first screen: bare Enter on an
 unprioritized task opens Schedule instead of committing the lane, and
 `Ctrl+D` with default focus clears Schedule. Alt+N remains the fastest lane
-gesture. Keep `p`, `s`, `d`, `c`, `r`, `l`, `n`, and `o` unbound on the card
-so existing filter habits stay safe; after the first unbound character every
-character belongs to search.
+gesture. Unbound keys do nothing: letters, `/`, and digits that do not map to
+a configured P-level never open a list and never write.
 
-The plugin setting **Ctrl+Shift+P Task Card** offers Automatic, Task Card,
-and Classic list. Automatic is classic through local 2026-10-18 and the Task
-Card from 2026-10-19, evaluated only when a new panel opens. Explicit Task
-Card is the pilot opt-in; explicit Classic always uses the documented search
-path. Absent/null follows the date and is not persisted as false. The
-rollback setting stays.
-
-**Scheduling input.** In Task Card flows and in search reached from an enabled
-card, the date field accepts a bare `N` days (`0` today, `1` tomorrow);
+**Scheduling input.** On the card's Schedule stage the date field accepts a
+bare `N` days (`0` today, `1` tomorrow);
 unsigned `Nd`, `Nw`, and `Nm`; weekday names `mon`…`sun` (the next occurrence
 strictly after today); and the existing ISO, `M/D`, `M-D`, `+Nd/w/m`, and preset
 forms. The preview row shows the weekday, ISO date, relative distance, and the
@@ -329,13 +322,13 @@ is an inline reason (`3 waiting on API`). `Shift+Enter` skips the reason via
 the blank-reason rule without skipping an applicable Work summary; otherwise
 one combined Reason/Work summary review opens (see
 [Schedule-log reason prompt](#schedule-log-reason-prompt)). Invalid, negative,
-overflow, or ambiguous input never writes. Classic list keeps the old parser
-and serial prompts.
+overflow, or ambiguous input never writes. Other date properties reached from
+More use the strict parser: ISO, `M/D`, `M-D`, `+Nd/w/m`, and preset forms.
 
 ### Scheduling from the `^prj` task
 
 With the cursor on a valid `#task ... ^prj` lifecycle task, Bob Navigation
-Hotkeys' `Ctrl+Shift+P` Task Card (or classic search **scheduled**) treats
+Hotkeys' `Ctrl+Shift+P` Task Card **Schedule** action treats
 `scheduled` as a project-note property. Choosing a date writes canonical `scheduled: YYYY-MM-DD`
 YAML, removes any stale inline `[scheduled:: ...]` field from `^prj`, and
 immediately propagates task-level schedules. It also applies the derived status
@@ -384,8 +377,7 @@ of a task would also hide earlier `[scheduled:: ...]`, `[id:: ...]`, or
 
 A task with no priority field is implicit P0, the highest priority: do it now,
 with no rolled date. The Task Card's `0` key clears the field and keeps the
-scheduled date. In classic search there is no P0 row; press `Ctrl+D` on the
-`priority` row. Clearing priority does not remove or re-roll `scheduled`,
+scheduled date; there is no P0 row. Clearing priority does not remove or re-roll `scheduled`,
 because the rolled date is treated as an explicit commitment once written.
 
 Choosing P1, P2, P3, or P4 writes the priority and rolls a `scheduled` date
@@ -415,9 +407,9 @@ deterministic-reason rules.
 
 `bob capture <text> p:<N>` writes the same `[priority:: ...]` field and rolls
 a date from the same configured window from the command line, reading the
-same `~/.config/bob/config.yml` levels as the picker. `N` is the picker row
+same `~/.config/bob/config.yml` levels as the picker. `N` is the P-level key
 (1-4 today), so `p:2` matches pressing `Ctrl+Shift+P` then `2` on the Task
-Card (or choosing the `P2` row in classic search). Capture leaves the task's `[ ]` marker as written; `bob task-status-hooks`
+Card. Capture leaves the task's `[ ]` marker as written; `bob task-status-hooks`
 is what later marks a future-scheduled task Blocked, not capture itself. A
 rolled `p:<N>` also writes the same `🗓️ **SCHEDULE LOG**` entry the picker
 would, always as a `P0 → <to>` transition since a brand-new capture
@@ -445,24 +437,22 @@ immediately with its own deterministic reason instead of prompting; see
 
 ### Recommended roll and priority decay
 
-When the `scheduled` row is selected, `Ctrl+Enter` (`Cmd+Enter` on macOS)
-takes the recommended roll in one keypress, and the date it will write is
-shown on the `scheduled` row. On a task with a priority field, that row opens
-first and already selected, so `Ctrl+Shift+P` followed by `Ctrl+Enter` takes
-the previewed recommendation with no navigation. On the Task Card the same
-chord applies the cached recommendation from the first screen. Tasks without priority and
-plain bullets keep the existing menu order. The roll follows a configurable
+`Ctrl+Enter` (`Cmd+Enter` on macOS) takes the recommended roll in one
+keypress, and the date it will write is shown in the Task Card's
+recommendation banner. `Ctrl+Shift+P` followed by `Ctrl+Enter` applies the
+cached recommendation from the card's first screen with no navigation; the
+same chord also works inside the Schedule stage. The roll follows a configurable
 decay ladder read from the task's Schedule Log. A level is re-rolled `rolls` times
 (default 1), the next recommended roll moves the task one level down
 (P2 → P3), and past the last level it cancels the task.
 
 | Gesture | Behavior |
 | --- | --- |
-| `Ctrl+Enter` on `scheduled` (either picker stage) | Takes the recommended roll and closes the picker |
-| `↵` on `scheduled` | Opens the date list as before; never decays or cancels |
+| `Ctrl+Enter` on the Task Card or in the Schedule stage | Takes the recommended roll and closes the picker |
+| `↵` on the Schedule row | Opens the date stage as before; never decays or cancels |
 | `↵` on the pinned `🎲 P2 roll` row | Explicit same-level roll; counts toward the streak |
-| `Ctrl+Enter` on any other row, or with no recommendation | Behaves exactly like `↵` |
-| `Ctrl+R` in stage one | Re-rolls the recommendation's date when it has one |
+| `Ctrl+Enter` with no recommendation | On the card, a notice and no write; in the Schedule stage, behaves exactly like `↵` |
+| `Ctrl+R` on the Task Card | Re-rolls the recommendation's date when it has one; no write |
 
 A recommendation exists only for an open task whose priority value is one of
 the configured levels. There is none for implicit P0 (no priority field), an
@@ -486,7 +476,7 @@ Lifecycle with the default config (P1–P4 with windows 2–7, 8–30, 31–90,
 
 | # | Gesture | Entry written | Next `Ctrl+Enter` recommends |
 | --- | --- | --- | --- |
-| 0 | Priority row → P2 | `🎲 P0 → P2 · in **12** (8–30) days` | P2 roll (1/1) |
+| 0 | Task Card `2` (P2) | `🎲 P0 → P2 · in **12** (8–30) days` | P2 roll (1/1) |
 | 1 | `Ctrl+Enter` | `🎲 P2 roll · in **20** (8–30) days` | P2 → P3 |
 | 2 | `Ctrl+Enter` | `🎲 P2 → P3 decay · in **45** (31–90) days` | P3 roll (1/1) |
 | 3 | `Ctrl+Enter` | `🎲 P3 roll · in **60** (31–90) days` | P3 → P4 |
@@ -503,7 +493,7 @@ classified:
 | `🎲 <L> roll` where `<L>` is the current level, with no `→` | roll | counts; keep walking |
 | `🎲 <anything> randomize` (from `bob randomize`) | randomize | transparent: skip it and keep walking |
 | `🎲 <from> → <to> decay` | decay | stops |
-| `🎲 <from> → <to>` or `🎲 <L>` (a priority row pick) | other | stops |
+| `🎲 <from> → <to>` or `🎲 <L>` (a priority-level pick) | other | stops |
 | `🎲 <other label> roll` (the priority was hand-edited since) | other | stops |
 | a typed reason, `🤷 no reason given`, or any unparseable bullet | other | stops |
 
@@ -619,30 +609,26 @@ retains the anchor; stale inputs rebuild for a fresh choice.
 
 ### Schedule-log reason prompt
 
-The log records every scheduled change the `Ctrl+Shift+P` picker makes; the
+The log records every scheduled change the `Ctrl+Shift+P` Task Card makes; the
 prompt appears only when the reason is not already known. After choosing a
-`scheduled` date from a typed date or a preset in the `scheduled` value stage,
-Bob Navigation Hotkeys prompts for an optional reason before writing anything.
-Pressing `↵` with text logs the reason as a dated entry under a managed
-`🗓️ **SCHEDULE LOG**` child bullet on the task. Pressing `↵` on an empty input
-depends on whether the task already has that marker: on a task with no log yet
-it still writes the date only, with no entry and no marker created; on a task
-that already has a `🗓️ **SCHEDULE LOG**` it records `🤷 no reason given` as a
-dated entry, so the history the task is already keeping has no gaps. The
-marker is the opt-in — once a task has one, its log is complete, and a task
-without one is never given one by a skipped prompt. Pressing `Esc` in the
-reason prompt cancels the whole picker, including the date itself, so nothing
-is written.
+`scheduled` date from a typed date or a preset in the Schedule stage, one
+review opens before anything is written: Reason focused, plus optional Work
+summary when any explicitly targeted Next/Pending task qualifies. Pressing `↵`
+with text in Reason logs it as a dated entry under a managed
+`🗓️ **SCHEDULE LOG**` child bullet on the task. Pressing `↵` on an empty
+Reason depends on whether the task already has that marker: on a task with no
+log yet it still writes the date only, with no entry and no marker created; on
+a task that already has a `🗓️ **SCHEDULE LOG**` it records
+`🤷 no reason given` as a dated entry, so the history the task is already
+keeping has no gaps. The marker is the opt-in — once a task has one, its log is
+complete, and a task without one is never given one by a skipped review.
+Pressing `Esc` or `Ctrl+]` in the review cancels the whole modal, including the
+date itself, so nothing is written.
 
-With the Task Card enabled, choosing a date or preset with Enter and no
-inline reason opens one review: Reason focused, plus optional Work summary
-when any explicitly targeted Next/Pending task qualifies. Empty fields plus
-Enter skip both. An inline reason (`3 waiting on API`) skips the reason
-field; Shift+Enter skips the reason by the blank-reason rule without skipping
-an applicable Work Log. Blank Work summary still writes no Work Log. When
-the Task Card is off (Classic list, or Automatic before 2026-10-19), the
-serial date then reason then Work Log prompts remain. Search reached from an
-enabled card uses the new scheduling affordances.
+An inline reason (`3 waiting on API`) skips the Reason field; Shift+Enter skips
+the reason by the blank-reason rule without skipping an applicable Work Log.
+Empty fields plus Enter skip both optional logs, and a blank Work summary still
+writes no Work Log.
 
 ```markdown
 - [?] #task Ship the thing [priority:: medium] [scheduled:: 2026-08-20] ^ship
@@ -816,8 +802,7 @@ offers **Cancel** as `x`. It appears only when at least one target is an open
 `#task` (`" "`, `*`, `/`, or `?`); it is hidden on closed tasks, plain
 bullets, and anywhere the cursor is not on a task or Task Link. The key opens
 a reason stage — nothing is written yet. Type an optional reason and press
-`↵` to cancel; `Esc` at either stage writes nothing. Classic search still
-reaches the same row by filtering `can`, `drop`, or `obsolete`. The decay
+`↵` to cancel; `Esc` or `Ctrl+]` at either stage writes nothing. The decay
 card accepts `x` as an alias for existing `d` Drop.
 
 The row supports the picker's three target modes: the `#task` line under the
