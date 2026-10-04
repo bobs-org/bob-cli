@@ -285,7 +285,7 @@ skip the card and open their stage.
 
 | Gesture on the card | Outcome |
 | --- | --- |
-| `1`–`4` | Set that configured P-level and its frozen displayed date |
+| `1`–`4` | Set that configured P-level and its frozen displayed date; extra configured levels get unique digits up to `9` |
 | `0` | Clear priority to implicit P0; keep the scheduled date |
 | `Ctrl+Enter` | Apply the cached recommendation (`Cmd+Enter` alias) |
 | `Ctrl+R` | Regenerate recommendation and priority previews; no write |
@@ -318,6 +318,19 @@ Card from 2026-10-19, evaluated only when a new panel opens. Explicit Task
 Card is the pilot opt-in; explicit Classic always uses the documented search
 path. Absent/null follows the date and is not persisted as false. The
 rollback setting stays.
+
+**Scheduling input.** In Task Card flows and in search reached from an enabled
+card, the date field accepts a bare `N` days (`0` today, `1` tomorrow);
+unsigned `Nd`, `Nw`, and `Nm`; weekday names `mon`…`sun` (the next occurrence
+strictly after today); and the existing ISO, `M/D`, `M-D`, `+Nd/w/m`, and preset
+forms. The preview row shows the weekday, ISO date, relative distance, and the
+year at a year rollover. A complete date token followed by whitespace and text
+is an inline reason (`3 waiting on API`). `Shift+Enter` skips the reason via
+the blank-reason rule without skipping an applicable Work summary; otherwise
+one combined Reason/Work summary review opens (see
+[Schedule-log reason prompt](#schedule-log-reason-prompt)). Invalid, negative,
+overflow, or ambiguous input never writes. Classic list keeps the old parser
+and serial prompts.
 
 ### Scheduling from the `^prj` task
 
