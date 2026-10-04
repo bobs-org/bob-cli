@@ -298,7 +298,7 @@ decay Less often entries still skip the card and open their stage.
 | `Ctrl+D` | Delete the selected property (default selection is Schedule) |
 | Backspace on empty / Back | Return to the card without writing |
 | Escape, `q`, `Q` | Close and discard uncommitted state; `q` never closes while a text field is focused |
-| `Ctrl+]` | Close from the card or any stage it opened, even from a focused date, reason, or Work summary field; nothing is written |
+| `Ctrl+[` | Close from the card or any stage it opened, even from a focused date, reason, or Work summary field; nothing is written |
 
 Any card gesture that writes closes the card. On a Next or Pending task, a
 P-level or recommendation gesture first opens the Work summary stage (see
@@ -627,7 +627,7 @@ a task that already has a `🗓️ **SCHEDULE LOG**` it records
 `🤷 no reason given` as a dated entry, so the history the task is already
 keeping has no gaps. The marker is the opt-in — once a task has one, its log is
 complete, and a task without one is never given one by a skipped review.
-Pressing `Esc` or `Ctrl+]` in the review cancels the whole modal, including the
+Pressing `Esc` or `Ctrl+[` in the review cancels the whole modal, including the
 date itself, so nothing is written.
 
 An inline reason (`3 waiting on API`) skips the Reason field; Shift+Enter skips
@@ -807,7 +807,7 @@ offers **Cancel** as `x`. It appears only when at least one target is an open
 `#task` (`" "`, `*`, `/`, or `?`); it is hidden on closed tasks, plain
 bullets, and anywhere the cursor is not on a task or Task Link. The key opens
 a reason stage — nothing is written yet. Type an optional reason and press
-`↵` to cancel; `Esc` or `Ctrl+]` at either stage writes nothing. The decay
+`↵` to cancel; `Esc` or `Ctrl+[` at either stage writes nothing. The decay
 card accepts `x` as an alias for existing `d` Drop.
 
 The row supports the picker's three target modes: the `#task` line under the
