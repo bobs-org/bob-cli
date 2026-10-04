@@ -310,6 +310,10 @@ exits 2 for `bob plan`/`bob ready` (with a JSON error envelope under
 `-f json`); every other caller falls back to defaults. An invalid
 per-note `ready_cap` produces a lint and falls back to the default.
 A vault I/O failure exits 1. A non-Dataview task format exits 2.
+The native `bob ready` scan also reads `freshness:` config to report the
+NEW/ROTTEN make-up; invalid freshness config exits 2 rather than showing a
+count-only report. The plugin can still show counts with `make_up: null` when
+freshness is unavailable.
 Crowded notes never fail the report. Only `--check` maps them to
 exit 3 (in `bob ready`). A missing Tasks plugin or a non-`Warm`
 Tasks cache gives `available: false` in the plugin, and every

@@ -793,8 +793,11 @@ BUGS; no ledger change.`), and the existing start phrasing.
 
 ### Picking any open task with ':'
 
-Type `:` at the very start of an input to fuzzy-search any open task in any
-area or project note. Accepting a row replaces the `:` query with the
+Type `:` at the very start of an input to fuzzy-search open tasks in the
+routable inbox, area, and non-terminal project notes listed by
+`bob capture-targets`. Nested notes, reference notes, untyped notes other than
+the inbox, and terminal projects are outside this catalog. Accepting a row
+replaces the `:` query with the
 canonical `@route:block-id` link, which captures exactly like a typed link:
 as-is it links the task, and with a trailing `=` it also starts that
 session. A `:` query is only ever a picker query — it is never executable
@@ -3578,13 +3581,13 @@ this context). The `replacement` covers the whole `:` token, sigil included,
 because accepting rewrites the query into the canonical `@route:block-id`
 link, and `query` is the token text between the sigil and the cursor (empty
 at or just after the sigil). For example `bob capture-complete -c 1 -- ':'`
-lists the whole vault, and `-c 4 -- ':dee'` narrows to the matching rows with
-`replacement` `{0, 4}`.
+lists the full routable task catalog, and `-c 4 -- ':dee'` narrows to matching
+rows with `replacement` `{0, 4}`.
 The analogous parent-task picker accepts a terminal `+query` on an item's
 parent line or an eligible authored child line. It uses context `task_parent`,
 strips `+` from the top-level `query`, and replaces the full selector token.
-It lists linkable open tasks across the vault, including ID-less tasks whose
-empty `replacement` must not be inserted; those rows include block-ID
+It lists linkable open tasks in that same routable catalog, including ID-less
+tasks whose empty `replacement` must not be inserted; those rows include block-ID
 suggestions for the Add block ID action. A lone `+` keeps its Pomodoro
 adjustment meaning in parsing but completion returns this picker with
 `action_continuation_keys` (`0`–`9` and `+`). Scoped `@route+id` completion

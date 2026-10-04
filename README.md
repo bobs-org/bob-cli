@@ -11,6 +11,10 @@ implementations remain embedded as a targeted rollback path; see
 [Compatibility shims](#compatibility-shims) for the exact mappings and fallback
 behavior.
 
+New to Bob? Follow [Getting started](docs/getting-started.md) for vault
+settings, a first capture and Pomodoro session, and the commands that write or
+sync files. The [guide index](docs/README.md) points to the detailed contracts.
+
 ## Contents
 
 - [Installation](#installation)
@@ -21,6 +25,9 @@ behavior.
 - [Capture](#capture)
 - [Query](#query)
 - [Task status hooks](#task-status-hooks)
+- [Plan budget](#plan-budget)
+- [Task freshness](#task-freshness)
+- [Ready cap](#ready-cap)
 - [Projects](#projects)
 - [Randomize](#randomize)
 - [Plugins](#plugins)
@@ -106,10 +113,13 @@ separate `bob` subcommands.
 | Term | Meaning |
 | --- | --- |
 | Vault | The Obsidian folder Bob operates on (`~/bob` by default; `BOB_DIR` to override) |
-| Route | The lowercase name of a top-level note; `@groceries` writes `groceries.md` |
+| Route | A name using letters, digits, `_`, or `-`, lowercased to select a top-level note; `@groceries` writes `groceries.md` |
 | Pomodoro | A checkbox in the daily note's `Pomodoros` section for one work session |
 | Block ID | The trailing `^id` on a task line, used to link or nest under that task |
 | Task link | A `[[note#^id]]` (or embed) pointing at a task. When that is the only content of a Pomodoro child bullet, it is that session's planned work |
+| Task dependency link | A plain task block link on the dependent's managed `⛓️ **DEPENDS ON:**` child line; it names a prerequisite |
+| Project / reference task | The `^prj` / `^ref` task tracking a project's outcome or progress through reference material |
+| Freshness | The `[fresh:: YYYY-MM-DD]` date when a human last confirmed an open task; it drives review, separately from its status |
 | Schedule Log | A managed `🗓️ **SCHEDULE LOG**` child that records each schedule change |
 | Work Log | A managed `🛠️ **WORK LOG**` child that records work summaries |
 | Cancel Log | A managed ❌ **CANCEL LOG** child (placed first) that records why a task was cancelled |
@@ -131,8 +141,10 @@ separate steps:
    `bob pomodoro`,
    `bob tmux-pomodoro`, and `bob notify` only *read* that ledger; they do not
    create links.
-3. **Reconcile statuses** with `bob task-status-hooks` so Next, In Progress, and
-   Blocked markers follow the ledger and any schedules changed outside capture.
+3. **Review and reconcile** with `bob plan`, `bob freshness`, and `bob ready`.
+   Next and In Progress are sticky lanes: unlinking work does not release it.
+   Run `bob task-status-hooks` to promote linked work, derive Blocked from
+   dependencies and future schedules, and clean up the ledger.
    After time away, preview the overdue backlog with
    `bob randomize --dry-run`, then `bob randomize --seed <seed>` to re-roll it.
 4. **Nightly**, run `bob nightly` to reconcile the vault through Git, archive
@@ -171,7 +183,7 @@ Bob's workflow commands are:
 | Command | Purpose |
 | --- | --- |
 | [`capture`](#capture) | Capture a task or section bullet, optionally with clipboard content |
-| `capture-complete` | Complete capture marker or wikilink syntax at the cursor |
+| `capture-complete` | Complete capture markers, task/dependency pickers, or wikilinks at the cursor |
 | `capture-parse` | Preview what in-progress capture text and wikilinks mean |
 | `capture-pomodoro-name` | Assign a canonical name to an unnamed Pomodoro |
 | `capture-pomodoros` | List today's Pomodoro ledger entries |
@@ -235,13 +247,17 @@ typed on that same item. The whole batch is planned before anything is written.
 | `@route:id#pomodoro=<X>` | Same under the named Pomodoro, starting that session |
 | `@route:id[#pomodoro][=<X>]` with no other text | Link the existing task into today's ledger (no new task); `=<X>` starts the resolved session |
 | `^route:id[#pomodoro][=<X>]` with no other text | Identical execution; `^` completes only In Progress and Next tasks |
-| `:<query>` with no other text | Task-link picker query over every open task; accepting inserts `@route:id` (never captured) |
+| `:<query>` with no other text | Task-link picker over open tasks in routable inbox, area, and non-terminal project notes; accepting inserts `@route:id` (never captured) |
+| `+query` or terminal prose `+` | Parent-task picker over the same task catalog; accepting inserts `@route+id` |
+| `&note:id` | Add a prerequisite to the captured task; `&projects/foo:bar` supports nested notes, and `&"Shopping List":bar` supports spaces |
+| `&note:id @route+id` with no body text | Add a prerequisite to an existing dependent task |
 | `+[N]` / `-[N]` | Adjust today's current timed Pomodoro by N five-minute units (`+5` extends 25m, `-` shortens 5m; the count defaults to 1); the item must contain only the signed count |
 | `++[N]` / `--[N]` | Shift today's running timed Pomodoro N five-minute units later/earlier, keeping its duration (`++3` moves 15m later, `--` moves 5m earlier; the count defaults to 1); the item must contain only the operator |
 | `=` / `=<X>` | Start today's next future Pomodoro now with `se<X>` timing (`=` is 25 minutes, `=3` is 15 minutes); the item must contain only the start token (quote in zsh) |
 | `=<X>#pomodoro` | Start the named Pomodoro now with `se<X>` timing (`=#deep-work` is 25 minutes, `=3#bugs` is 15 minutes); an open match (whole slug, else prefix) starts in place, a completed match starts a new session with that name, otherwise a new named session is created and started; the item must contain only the start token (quote in zsh) |
 | `=[<X>][#<name>]~<K>` | Start without the queued Task Links in `<K>` (`=~2`, `=3~2,4`, `=#bugs~2`); `~` drops, the drop part always comes last (quote in zsh) |
-| `=x[<N>][!<M>][~<K>]` | Close today's running timed Pomodoro (case-insensitive `=X`, `!`/`~` in either order); `<N>` keeps only those numbered Task Links in progress, `!<M>` completes those links, `~<K>` drops those links (removed, not carried, not started), a lone `0` means none; one Work Log entry may sit on the close line, several use child bullets (unnumbered bullets log in order to the worked tasks; quote in zsh, since `!` history expansion also applies) |
+| `=x[<N>][*<P>][!<M>][~<K>]` | Close today's running timed Pomodoro (case-insensitive `=X`, `*`/`!`/`~` in any order); `<N>` keeps links in progress, `*<P>` parks them without carrying forward, `!<M>` completes them, `~<K>` drops them while keeping their lane; a lone `0` in `<N>` means none; one Work Log entry may sit on the close line, several use child bullets (quote in zsh) |
+| `=*` / `=!` (also `=x*` / `=x!`) | Close parking/completing every numbered Task Link; an empty `*` or `!` selects the remainder after explicit assignments (`=*!2` parks all except task 2 and completes task 2) |
 | `=x [<n>] <entry>` | One Work Log entry on the close line (`=x wired the lexer` logs to task 1, `=x1,3 3 fixed the flake` logs to task 3) |
 | `+2 =x`, `=x =`, `=x =#bugs`, `=x =~2`, `=x wired the lexer =` | Same-line session-operator chain: whitespace-separated session tokens on one line run left to right like blank-line items (`=x =~2` closes then starts without link 2; `=x wired the lexer =` closes with the entry then starts) |
 | `@route:id=x…` / `^route:id=x…` with no other text | Put that existing task into the running session, then close it; numbers refer to the post-link lineup |
@@ -335,13 +351,15 @@ quote in zsh, which expands a leading `=word`). A trailing `~<K>` drop list
 Task Links: `~` drops, so `=~2` drops task 2 from the session you start the
 way `=x~2` drops task 2 from the session you stop.
 
-Capture a whole item `=x[<N>][!<M>][~<K>]` to close today's running timed
+Capture a whole item `=x[<N>][*<P>][!<M>][~<K>]` to close today's running timed
 Pomodoro the way Obsidian's Ctrl+Enter completion does, plus an
 auto-decrement that shortens an early-stopped session to the earliest
 five-minute step at or after now: `bob capture '=x'` closes the session,
 `bob capture '=x wired the lexer'` logs one entry to task 1,
 `bob capture '=x2'` keeps only task 2 in progress, `bob capture '=x1!2'`
 keeps task 1 in progress and completes task 2, `bob capture '=x0'` defers everything,
+`bob capture '=*'` parks every numbered Task Link without carrying it forward,
+`bob capture '=!'` completes every numbered Task Link,
 `bob capture '=x1~2'` keeps task 1 in progress and drops task 2,
 `bob capture '^bob:capture-stop=x'` puts that task into the running session
 then closes it, and `printf -- '-2\n\n=x\n' | bob capture` adjusts then
@@ -349,6 +367,20 @@ closes atomically (or `bob capture '-2 =x'` on one line). Numbers count the sess
 from 1; on link forms they refer to the post-link lineup. See
 `docs/capture.md` for the numbering, outcomes, classification, carry, Work
 Log, link-form, diagnostic, JSON, and batch rules.
+
+In an editor, `+query` or a trailing `+` after prose opens the parent-task
+picker. A lone `+` opens that picker too; dismissing it leaves a valid
+five-minute Pomodoro adjustment. Numeric `+5`, doubled `++`, and completed
+`@route+id` markers keep their existing meanings.
+
+Add prerequisites with `bob capture 'Ship report @work^report &work:outline'`,
+or edit an existing dependent with `bob capture '&work:outline @work+report'`.
+The prerequisite must resolve to a unique task with a block ID. Open
+prerequisites make the dependent Blocked. The `&` picker searches task-bearing
+notes across the vault, including nested notes and completed history;
+incomplete `&` and `+query` selectors must be resolved before capture. See
+[dependency capture](docs/capture.md#adding-prerequisites-with-) and
+[task dependencies](docs/task-dependencies.md).
 
 ```bash
 bob capture buy milk @groceries
@@ -494,10 +526,10 @@ examples live in [`docs/plan.md`](docs/plan.md).
 
 ## Task freshness
 
-Every visible, non-recurring Ready task carries a human-confirmed
-`[fresh:: YYYY-MM-DD]`: the date a human last confirmed it still needs
-doing as written. Tasks never confirmed, or confirmed longer ago than
-their refresh interval (7 days by default, overridable per task, per
+Task freshness is the human-confirmed `[fresh:: YYYY-MM-DD]` date when a
+task was last confirmed to still need doing as written. Visible, non-recurring
+Ready tasks never confirmed, or whose review interval expired (7 days by
+default, overridable per task, per
 note, and in config), are due for review. Supported keymaps and
 `bob capture` edits stamp the tasks they rewrite; creation and
 automation never do. The definition, placement and state rules, and
@@ -510,17 +542,30 @@ bob freshness list [-b|--bob-dir DIR] [-f|--format human|json] [-l|--limit N]
 bob freshness seed [-b|--bob-dir DIR] [-d|--dry-run] [-F|--force] [-f|--format human|json]
 ```
 
-Running `bob freshness` with no subcommand runs `list`: the tiered
-walk queue in order NEW → PENDING → NEXT → RETURNED → ROTTEN (schema
-3), with whole-vault counts and an additive `bucket`
-(`new`/`rotten`/null) per queue row. Pending and Next tasks come due
-for a daily review set by `pending_interval` / `next_interval`. On the
-dashboard, NEW holds unconfirmed tasks, READY holds only
-confirmed/exempt tasks, and `rotten.md` holds RETURNED plus expired
-ROTTEN. `seed` stamps the one-time cutover: Ready tasks staggered
-across the last 7 days by note, every other open task today. The seed
-refuses a second run, aborts on any parse change, and `--dry-run`
-previews without writing.
+Running `bob freshness` with no subcommand runs read-only `list`: the queue
+in order NEW → PROJECTS → PENDING → NEXT → RETURNED → REFERENCES → ROTTEN.
+Both `list` and `seed` use JSON schema 7. Counts cover the whole vault even
+with `--limit`; `counts.walk` sums the seven `counts.by_tier` values. Ready
+state totals and walk-tier totals have different scopes.
+
+Ordinary Pending and Next tasks use `freshness.pending_interval` /
+`next_interval` (default 1 day; `false` disables that lane's walk). Visible
+`^prj` and `^ref` trackers walk in PROJECTS and REFERENCES; tracker intervals
+override the task/note/global cadence when configured, otherwise trackers
+inherit that cadence even in Pending or Next. Project review follows the
+`#hide` written by `bob projects sync`.
+
+On the dashboard, NEW holds unconfirmed tasks, READY holds confirmed/exempt
+backlog, and `rotten.md` holds returned deferrals plus expired tasks. Repeated
+due-Ready confirmations accumulate `[keeps:: N]`; the approved-decay decision
+card activates on 2026-10-19, subject to config and plugin capability.
+
+`seed` is a one-time migration, not daily maintenance. It stamps unstamped
+Ready candidates across seven date buckets and other eligible open tasks
+today. Existing older stamps plus new candidates cause a refusal unless
+`--force`; a run with no candidates is a no-op. Parse and concurrent-change
+guards apply, and `--dry-run` previews without writing. Do not seed later
+captures merely to clear their NEW review state.
 
 ## Ready cap
 
@@ -532,7 +577,11 @@ Every area/project note has a soft cap on its Ready lane
 (`plan.max_ready_per_note`, default 5, per-note `ready_cap`
 override). `bob ready` is read-only: it shows crowded notes with red
 overflow bars, full notes at the cap, room notes as a compact list,
-and the single-note worklist with `path:line` references. `--check`
+and the single-note worklist with `path:line` references. The cap counts NEW
+and ROTTEN tasks too, and includes Today-linked Ready tasks; recurring tasks
+and the `^prj` tracker are excluded. This differs from the dashboard's
+freshness-gated READY backlog. `--all` expands room notes and includes empty,
+exempt, and terminal notes. `--check`
 exits 3 when any note is crowded; `--cap N` previews a different
 default for one run. The full definition, JSON contract, and
 conformance vectors live in [`docs/plan.md`](docs/plan.md).
@@ -678,7 +727,9 @@ Highlights annotations into Obsidian reference notes.
 
 Generated notes live under `ref/`. Nested library PDFs such as
 `lib/books/foo.pdf` write `ref/books/foo.md` with `type: "[[ref]]"` and
-`ref_type: books`. The generated `^ref` task is the visible lifecycle control.
+`ref_type: books`. New notes also get a local `created` timestamp; later syncs
+preserve it and do not backfill older notes. The generated `^ref` task is the
+visible lifecycle control.
 Marker `status` values are `ready`, `next`, `wip`, `read`, `abandoned`, and
 `legacy`.
 
@@ -933,10 +984,13 @@ clipboard source alone.
 file holds the priority windows for `p:<N>` and `bob randomize`,
 `highlights.pre_scan_hook` for `bob highlights scan` and
 `bob highlights doctor`, the `gkeep:` section for `bob gkeep`, and the
-optional `plan:` block for `bob plan` (caps default to 3 themes, 10
-links, 15 NEXT tasks, and 10 PENDING tasks; `bob plan` exits 2 on
-invalid values while every other surface falls back to the
-defaults).
+optional `plan:` and `freshness:` blocks. Plan caps default to 3 themes,
+10 links, 15 NEXT tasks, 10 PENDING tasks, 100 dashboard READY tasks, and
+5 Ready-lane tasks per area/project note. `bob plan` and `bob ready` exit 2
+for invalid plan config; embedded budget surfaces fall back to defaults.
+`bob freshness` exits 2 for invalid freshness config. See
+[plan configuration](docs/plan.md#config) and
+[freshness configuration](docs/freshness.md#2-fields-overrides-and-config).
 
 `COLUMNS`, when set to a positive integer, is the width `bob plugins list`
 and `bob gkeep` use when they shorten human table text so each row fits.
@@ -952,7 +1006,8 @@ a fixed 100 columns.
 `BOB_DAY_FILE` sets the exact daily note path used by `bob pomodoro`,
 `bob tmux-pomodoro`, `bob notify` (via the same status reader), Pomodoro-linked
 and Pomodoro-note `bob capture` requests, `bob task-status-hooks`, and
-`bob randomize`.
+`bob randomize`. It also selects the ledger read by `bob plan`, `bob freshness`,
+and `bob ready` when they evaluate Today-linked work.
 
 `BOB_DIR` sets the Bob vault directory. It defaults to `~/bob`.
 
@@ -988,7 +1043,8 @@ daily-note selection by `bob pomodoro`, Pomodoro-linked capture, and
 `bob task-status-hooks`. It also controls capture created/scheduled dates and
 clipboard-snippet names, native Tasks-query date calculations, the default
 `bob move-done-tasks YYYY-MM-DD` commit-message date, scheduled-project
-visibility, and the timestamped directory name for plugin backups. Supported
+visibility, plan/freshness/Ready evaluation, and the timestamped directory name
+for plugin backups. Supported
 formats are `YYYY-MM-DD`, `YYYY-MM-DD HH:MM`, and `YYYY-MM-DD HH:MM:SS`; `T`
 may replace the space. Timezone names and UTC-offset suffixes are not accepted.
 An unsupported value is ignored, after which Bob tries `DATE` and then the
@@ -1104,9 +1160,12 @@ blocks point at `done/..._done#^block-id`, and the vault Git commit was pushed.
 | Topic | Document |
 | --- | --- |
 | Capture grammar, JSON, and picker protocol | [`docs/capture.md`](docs/capture.md) |
+| First capture, vault settings, command effects, and troubleshooting | [`docs/getting-started.md`](docs/getting-started.md) |
+| Dashboard navigation and collection pages | [`docs/dashboard.md`](docs/dashboard.md) |
 | Shell completion: runtime model, protocol 1, lifecycle, and troubleshooting | [`docs/completion.md`](docs/completion.md) |
 | `bob query` Dataview and Tasks | [`docs/dataview.md`](docs/dataview.md) |
 | Task freshness review lease, placement, evaluation, and display | [`docs/freshness.md`](docs/freshness.md) |
+| Today's plan, sticky lanes, dashboard READY, and per-note Ready caps | [`docs/plan.md`](docs/plan.md) |
 | Highlights PDF intake and reference notes | [`docs/highlights-ref-sync.md`](docs/highlights-ref-sync.md) |
 | Web article capture into Highlights intake PDFs | [`docs/highlights-clip.md`](docs/highlights-clip.md) |
 | Obsidian Sync folder exclusion runbook (historical) | [`docs/obsidian-sync-exclusions.md`](docs/obsidian-sync-exclusions.md) |

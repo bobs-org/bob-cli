@@ -1,10 +1,9 @@
 # Task freshness
 
-Every visible, non-recurring Ready task carries a human-confirmed
-`[fresh:: YYYY-MM-DD]`: the local calendar date a human last confirmed
-that the task still needs doing as written — its wording, priority,
-project, schedule, and dependencies. A task that was never confirmed,
-or was confirmed longer ago than its refresh interval, is due for
+Confirmed tasks carry `[fresh:: YYYY-MM-DD]`: the local calendar date a human
+last confirmed that the task still needs doing as written — its wording,
+priority, project, schedule, and dependencies. A visible, non-recurring Ready
+task that was never confirmed, or whose review interval expired, is due for
 review. The morning review then costs roughly "pool ÷ interval +
 arrivals" glances instead of the whole pool.
 
@@ -21,7 +20,7 @@ JavaScript mirror is `api.freshness` in bob-ledger-tools (top-level
 api v3, freshness namespace v5). The bob-ledger-tools JavaScript
 tests use the conformance vectors below verbatim.
 
-The keep-streak contract (`keeps`, `decay`, schema 5) is specified
+The keep-streak contract (`keeps`, `decay`, introduced in schema 4) is specified
 here and implemented in Rust in the contract-rust phase. Its
 machine-readable parity vectors live in
 `tests/fixtures/freshness_keeps/vectors.json`, which both languages
@@ -680,6 +679,13 @@ that aborts on any parse change.
 
 Running `bob freshness` with no subcommand runs `list`.
 
+```bash
+bob freshness [-b|--bob-dir DIR] [-f|--format human|json] [-l|--limit N]
+bob freshness list [-b|--bob-dir DIR] [-f|--format human|json] [-l|--limit N]
+bob freshness seed [-b|--bob-dir DIR] [-d|--dry-run] [-F|--force] [-f|--format human|json]
+```
+
+`-b/--bob-dir` selects the vault (default `BOB_DIR`, then `~/bob`).
 `list` options: `-f/--format human|json` (default `human`) and
 `-l/--limit N` (queue rows only; counts always cover the whole
 vault). Human output is colored only on a TTY:
@@ -777,18 +783,26 @@ break by path, then bucket index. Bucket `k` (1–7) lands on `today −
 1, scheduled(t) when due)` so nothing is due on cutover day and
 nothing arrives RESURFACED, and clamped to today. Every other open,
 non-recurring task outside `#hide`, `_templates`, `_conflicts`, and
-daily notes gets today. The seed refuses when any such task already
-carries a `fresh` dated before today (unless `--force`), aborts the
-whole run with no writes when any changed line parses differently
-under either Rust parser, re-reads each file just before writing and
-refuses when one changed, and writes through a temp file plus rename.
-A same-day rerun finds nothing to stamp and reports zeros. The JSON
-contract is `schema_version: 6` with `ok`, `date`, `dry_run`,
+daily notes gets today. If unstamped candidates remain, the seed refuses when
+any eligible task already carries a `fresh` dated before today (unless
+`--force`), aborts the whole run with no writes when any changed line parses differently
+under either Rust parser, re-reads all touched files before the first write and
+refuses when one changed, and writes each file through a temp file plus rename.
+A rerun with no unstamped candidates reports zeros, even if bucket stamps
+are older than today. Later captures remain unconfirmed and should be reviewed
+normally. The JSON contract is `schema_version: 7` with `ok`, `date`, `dry_run`,
 `stamped` (`ready`, `other`), `buckets` (`fresh`, `due_on`, `count`,
 `notes`), `skipped` (`already_stamped`, `recurring`,
 `out_of_scope`), `files`, and `warnings`. The shared schema constant
-also moves the `seed` envelope to 6, with seed content unchanged. Seed
+also moves the `seed` envelope to 7, with seed content unchanged. Seed
 candidate selection is unchanged, and list stays read-only.
+
+The pre-write guards abort without note changes, but a filesystem failure
+during the multi-file write can leave earlier files stamped. The error reports
+the files already written; use the vault's Git history to recover them before
+retrying. This seed does not use capture's batch rollback mechanism.
+It does not lock the vault or recheck files between that pre-write validation
+and their replacement; avoid editing the affected notes during the seed.
 
 Exit codes: 0 on success; 1 for I/O errors and seed refusals; 2 for
 an invalid `freshness:` block or a non-Dataview task format.
@@ -1001,7 +1015,7 @@ at-limit and below-limit Ready rows, RETURNED coverage, NEW never,
 `keeps: 0` asking on every due Ready re-confirmation, `decay: false`
 never asking, and lane rows never deciding. Boundary vectors B1–B3
 pin the 2026-10-19 activation day from both sides. Rows have carried
-`keeps`/`decide` since schema 4, and the current schema is 5; counts carry `decide`; `config.decay`
+`keeps`/`decide` since schema 4, and the current schema is 7; counts carry `decide`; `config.decay`
 reports normalized `enabled`, `keeps`, `enter`, and read-only
 `active_from` / `active`. CLI human rows show `kept N×` and
 `· decide` where true; the header explains the threshold, the off
