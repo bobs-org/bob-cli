@@ -1,0 +1,622 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: scripts/install_all [-h] [-r]
+
+Pull and install bob-cli from this checkout, then pull and deploy the sibling
+bob-plugins and bob-mac-capture checkouts that live next to it. Missing siblings
+are skipped. Usually run through `just install-all` or
+`just install-all-and-restart`.
+
+Options:
+  -h, --help              Show this help and exit.
+  -r, --restart-obsidian  After a clean install, restart Obsidian if it is running.
+EOF
+}
+
+restart_obsidian=0
+for arg in "$@"; do
+  case "$arg" in
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    -r|--restart-obsidian)
+      restart_obsidian=1
+      ;;
+    *)
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+if ! command -v git >/dev/null 2>&1; then
+  printf 'scripts/install_all: git is required on PATH\n' >&2
+  exit 1
+fi
+if ! command -v just >/dev/null 2>&1; then
+  printf 'scripts/install_all: just is required on PATH\n' >&2
+  exit 1
+fi
+
+if [[ -n "${BOB_INSTALL_ALL_ELAPSED:-}" ]]; then
+  SECONDS="$BOB_INSTALL_ALL_ELAPSED"
+else
+  SECONDS=0
+fi
+self_pull_state="${BOB_INSTALL_ALL_SELF_PULL:-}"
+self_pull_detail="${BOB_INSTALL_ALL_SELF_PULL_DETAIL:-}"
+header_done="${BOB_INSTALL_ALL_HEADER_DONE:-}"
+unset BOB_INSTALL_ALL_ELAPSED BOB_INSTALL_ALL_SELF_PULL \
+  BOB_INSTALL_ALL_SELF_PULL_DETAIL BOB_INSTALL_ALL_HEADER_DONE
+
+script_dir="$(cd "$(dirname "$0")" && pwd)"
+root="$(cd "$script_dir/.." && pwd)"
+parent="$(dirname "$root")"
+plugins_dir="$parent/bob-plugins"
+mac_capture_dir="$parent/bob-mac-capture"
+total_start=0
+pull_tmp_file=""
+PULL_STATE=""
+PULL_DETAIL=""
+PULL_OUTPUT=""
+FAILURES=0
+WARNINGS=0
+declare -a summary_names=()
+declare -a summary_glyphs=()
+declare -a summary_details=()
+declare -a summary_durations=()
+declare -a summary_colors=()
+
+cleanup() {
+  if [[ -n "$pull_tmp_file" ]]; then
+    rm -f "$pull_tmp_file"
+  fi
+}
+trap cleanup EXIT
+
+if [[ -t 1 && -z "${NO_COLOR+x}" ]]; then
+  use_color=1
+else
+  use_color=0
+fi
+
+display_path() {
+  local path="$1"
+  if [[ "$path" == "$HOME" ]]; then
+    printf '%s' '~'
+  elif [[ "$path" == "$HOME/"* ]]; then
+    printf '%s/%s' '~' "${path#"$HOME"/}"
+  else
+    printf '%s' "$path"
+  fi
+}
+
+paint() {
+  local color="$1"
+  local value="$2"
+  if [[ "$use_color" -eq 1 ]]; then
+    printf '\033[%sm%s\033[0m' "$color" "$value"
+  else
+    printf '%s' "$value"
+  fi
+}
+
+banner() {
+  local color="$1"
+  local icon="$2"
+  local title="$3"
+  # Keep this 48-character rule in sync with the justfile's _banner recipe.
+  local rule='────────────────────────────────────────────────'
+  if [[ "$use_color" -eq 1 ]]; then
+    printf '\n%s  \033[1;%sm%s\033[0m\n\033[%sm%s\033[0m\n' \
+      "$icon" "$color" "$title" "$color" "$rule"
+  else
+    printf '\n%s  %s\n%s\n' "$icon" "$title" "$rule"
+  fi
+}
+
+command_line() {
+  if [[ "$use_color" -eq 1 ]]; then
+    printf '  \033[2m$ %s\033[0m\n' "$1"
+  else
+    printf '  $ %s\n' "$1"
+  fi
+}
+
+glyph_line() {
+  local color="$1"
+  local prefix="$2"
+  local glyph="$3"
+  local detail="$4"
+  printf '%s' "$prefix"
+  paint "$color" "$glyph"
+  printf ' %s\n' "$detail"
+}
+
+dim_diagnostics() {
+  local output="$1"
+  [[ -n "$output" ]] || return 0
+  printf '%s\n' "$output" | while IFS= read -r line; do
+    if [[ "$use_color" -eq 1 ]]; then
+      printf '  \033[2m    %s\033[0m\n' "$line"
+    else
+      printf '      %s\n' "$line"
+    fi
+  done
+}
+
+format_duration() {
+  local seconds="$1"
+  if (( seconds < 60 )); then
+    printf '%ss' "$seconds"
+  else
+    printf '%dm %02ds' "$((seconds / 60))" "$((seconds % 60))"
+  fi
+}
+
+add_summary() {
+  local name="$1"
+  local status="$2"
+  local detail="$3"
+  local duration="$4"
+  local glyph color
+  case "$status" in
+    ok) glyph='✓'; color=32 ;;
+    warn) glyph='⚠'; color=33 ;;
+    fail) glyph='✗'; color=31 ;;
+    restart) glyph='↻'; color=36 ;;
+    *) glyph='–'; color=2 ;;
+  esac
+  summary_names[${#summary_names[@]}]="$name"
+  summary_glyphs[${#summary_glyphs[@]}]="$glyph"
+  summary_details[${#summary_details[@]}]="$detail"
+  summary_durations[${#summary_durations[@]}]="$duration"
+  summary_colors[${#summary_colors[@]}]="$color"
+}
+
+print_summary() {
+  local i
+  for i in "${!summary_names[@]}"; do
+    printf '  '
+    paint "${summary_colors[$i]}" "${summary_glyphs[$i]}"
+    printf '  %-16s %s' "${summary_names[$i]}" "${summary_details[$i]}"
+    if [[ -n "${summary_durations[$i]}" ]]; then
+      printf '  %s' "${summary_durations[$i]}"
+    fi
+    printf '\n'
+  done
+}
+
+pull_repo() {
+  local dir="$1"
+  local old_sha new_sha count pull_status
+  PULL_OUTPUT=""
+  if ! git -C "$dir" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    PULL_STATE=none
+    PULL_DETAIL='not a git checkout'
+    return 0
+  fi
+  if ! old_sha="$(git -C "$dir" rev-parse --short HEAD 2>/dev/null)"; then
+    PULL_STATE=none
+    PULL_DETAIL='not a git checkout'
+    return 0
+  fi
+  pull_tmp_file="$(mktemp "${TMPDIR:-/tmp}/bob-install-all.XXXXXX")"
+  command_line "git -C $(display_path "$dir") pull --ff-only --no-rebase"
+  if git -C "$dir" pull --ff-only --no-rebase >"$pull_tmp_file" 2>&1; then
+    pull_status=0
+  else
+    pull_status=$?
+  fi
+  if (( pull_status != 0 )); then
+    PULL_STATE=warn
+    PULL_DETAIL='pull failed — using local checkout'
+    PULL_OUTPUT="$(cat "$pull_tmp_file")"
+  else
+    new_sha="$(git -C "$dir" rev-parse --short HEAD 2>/dev/null || printf '%s' "$old_sha")"
+    if [[ "$old_sha" != "$new_sha" ]]; then
+      count="$(git -C "$dir" rev-list --count "$old_sha..$new_sha" 2>/dev/null || printf '0')"
+      PULL_STATE=updated
+      if [[ "$count" == 1 ]]; then
+        PULL_DETAIL="1 new commit · $old_sha → $new_sha"
+      else
+        PULL_DETAIL="$count new commits · $old_sha → $new_sha"
+      fi
+    else
+      PULL_STATE=current
+      PULL_DETAIL="up to date · $new_sha"
+    fi
+  fi
+  rm -f "$pull_tmp_file"
+  pull_tmp_file=""
+}
+
+show_pull_result() {
+  case "$PULL_STATE" in
+    updated|current)
+      glyph_line 32 '  ⇣  pull   ' '✓' "$PULL_DETAIL"
+      ;;
+    warn)
+      glyph_line 33 '  ⇣  pull   ' '⚠' "$PULL_DETAIL"
+      dim_diagnostics "$PULL_OUTPUT"
+      ;;
+    *)
+      glyph_line 2 '  ⇣  pull   ' '–' "$PULL_DETAIL"
+      ;;
+  esac
+}
+
+pull_detail_for_summary() {
+  printf '%s' "$PULL_DETAIL"
+}
+
+extract_json_integer() {
+  local key="$1"
+  local json="$2"
+  printf '%s\n' "$json" | sed -n \
+    "s/.*\"$key\"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p" | head -n 1
+}
+
+plugin_step() {
+  local step_start duration pull_detail step_warning=0
+  local obsidian_dir bob_root bob_bin output count synced drift plugin_detail
+  banner 34 '🧩' 'BOB-PLUGINS  2/3'
+  step_start="$SECONDS"
+  if [[ ! -d "$plugins_dir" ]]; then
+    plugin_detail="skipped · missing checkout · git clone git@github.com:bobs-org/bob-plugins.git $(display_path "$plugins_dir")"
+    glyph_line 2 '  ' '–' "$plugin_detail"
+    add_summary 'bob-plugins' skip "$plugin_detail" ''
+    return 0
+  fi
+  if [[ ! -d "$plugins_dir/plugins" ]]; then
+    plugin_detail="doesn't look like bob-plugins"
+    glyph_line 31 '  ' '✗' "$plugin_detail"
+    FAILURES=$((FAILURES + 1))
+    add_summary 'bob-plugins' fail "$plugin_detail" "$(format_duration "$((SECONDS - step_start))")"
+    return 0
+  fi
+  bob_root="${BOB_DIR:-$HOME/bob}"
+  obsidian_dir="$bob_root/.obsidian"
+  if [[ ! -d "$obsidian_dir" ]]; then
+    plugin_detail="skipped · no Obsidian vault at $(display_path "$obsidian_dir")"
+    glyph_line 2 '  ' '–' "$plugin_detail"
+    add_summary 'bob-plugins' skip "$plugin_detail" ''
+    return 0
+  fi
+
+  pull_repo "$plugins_dir"
+  show_pull_result
+  pull_detail="$(pull_detail_for_summary)"
+  if [[ "$PULL_STATE" == warn ]]; then
+    step_warning=$((step_warning + 1))
+  fi
+  if [[ -x "${CARGO_INSTALL_ROOT:-${CARGO_HOME:-$HOME/.cargo}}/bin/bob" ]]; then
+    bob_bin="${CARGO_INSTALL_ROOT:-${CARGO_HOME:-$HOME/.cargo}}/bin/bob"
+  else
+    bob_bin="$(command -v bob || true)"
+  fi
+  if [[ -z "$bob_bin" ]]; then
+    plugin_detail="$pull_detail · bob binary not found in the install root or on PATH"
+    glyph_line 31 '  ' '✗' "$plugin_detail"
+    FAILURES=$((FAILURES + 1))
+    add_summary 'bob-plugins' fail "$plugin_detail" "$(format_duration "$((SECONDS - step_start))")"
+    return 0
+  fi
+  command_line "bob plugins sync --no-pull --repo $(display_path "$plugins_dir")"
+  if "$bob_bin" plugins sync --no-pull --repo "$plugins_dir"; then
+    output=''
+  else
+    plugin_detail="$pull_detail · sync failed"
+    glyph_line 31 '  ' '✗' "$plugin_detail"
+    FAILURES=$((FAILURES + 1))
+    add_summary 'bob-plugins' fail "$plugin_detail" "$(format_duration "$((SECONDS - step_start))")"
+    return 0
+  fi
+  command_line "bob plugins list --no-pull --repo $(display_path "$plugins_dir") --format json"
+  if ! output="$("$bob_bin" plugins list --no-pull --repo "$plugins_dir" --format json)"; then
+    plugin_detail="$pull_detail · could not verify plugin sync"
+    glyph_line 31 '  ' '✗' "$plugin_detail"
+    FAILURES=$((FAILURES + 1))
+    add_summary 'bob-plugins' fail "$plugin_detail" "$(format_duration "$((SECONDS - step_start))")"
+    return 0
+  fi
+  count="$(extract_json_integer count "$output")"
+  synced="$(extract_json_integer synced "$output")"
+  drift="$(extract_json_integer drift "$output")"
+  if [[ -z "$count" || -z "$synced" || -z "$drift" ]]; then
+    plugin_detail="$pull_detail · could not read plugin sync counts"
+    glyph_line 31 '  ' '✗' "$plugin_detail"
+    FAILURES=$((FAILURES + 1))
+    add_summary 'bob-plugins' fail "$plugin_detail" "$(format_duration "$((SECONDS - step_start))")"
+    return 0
+  fi
+  if (( drift == 0 )); then
+    plugin_detail="$pull_detail · $synced/$count plugins in sync"
+    if (( step_warning > 0 )); then
+      glyph_line 33 '  ' '⚠' "$plugin_detail"
+      add_summary 'bob-plugins' warn "$plugin_detail" "$(format_duration "$((SECONDS - step_start))")"
+      WARNINGS=$((WARNINGS + step_warning))
+    else
+      glyph_line 32 '  ' '✓' "$plugin_detail"
+      add_summary 'bob-plugins' ok "$plugin_detail" "$(format_duration "$((SECONDS - step_start))")"
+    fi
+  else
+    step_warning=$((step_warning + 1))
+    plugin_detail="$pull_detail · $synced/$count plugins in sync; $drift drifted (dirty in vault — review, then bob plugins sync -F)"
+    glyph_line 33 '  ' '⚠' "$plugin_detail"
+    add_summary 'bob-plugins' warn "$plugin_detail" "$(format_duration "$((SECONDS - step_start))")"
+    WARNINGS=$((WARNINGS + step_warning))
+  fi
+}
+
+mac_capture_step() {
+  local step_start pull_detail step_warning=0 status detail install_status
+  banner 32 '🍎' 'BOB-MAC-CAPTURE  3/3'
+  step_start="$SECONDS"
+  if [[ "$(uname -s)" != Darwin ]]; then
+    detail='skipped · macOS only'
+    glyph_line 2 '  ' '–' "$detail"
+    add_summary 'bob-mac-capture' skip "$detail" ''
+    return 0
+  fi
+  if [[ ! -d "$mac_capture_dir" ]]; then
+    detail="skipped · missing checkout · git clone git@github.com:bobs-org/bob-mac-capture.git $(display_path "$mac_capture_dir")"
+    glyph_line 2 '  ' '–' "$detail"
+    add_summary 'bob-mac-capture' skip "$detail" ''
+    return 0
+  fi
+  if [[ ! -f "$mac_capture_dir/Scripts/install.sh" ]]; then
+    detail="doesn't look like bob-mac-capture (missing Scripts/install.sh)"
+    glyph_line 31 '  ' '✗' "$detail"
+    FAILURES=$((FAILURES + 1))
+    add_summary 'bob-mac-capture' fail "$detail" "$(format_duration "$((SECONDS - step_start))")"
+    return 0
+  fi
+  pull_repo "$mac_capture_dir"
+  show_pull_result
+  pull_detail="$(pull_detail_for_summary)"
+  if [[ "$PULL_STATE" == warn ]]; then
+    step_warning=$((step_warning + 1))
+  fi
+  command_line "just --justfile $(display_path "$mac_capture_dir/justfile") install $(display_path "$HOME/Applications") ${CODESIGN_IDENTITY:--}"
+  if (cd "$mac_capture_dir" && just --justfile "$mac_capture_dir/justfile" install "$HOME/Applications" "${CODESIGN_IDENTITY:--}"); then
+    status=ok
+    detail="$pull_detail · installed $(display_path "$HOME/Applications/Bob Mac Capture.app")"
+  else
+    install_status=$?
+    if (( install_status == 72 )); then
+      status=warn
+      step_warning=$((step_warning + 1))
+      detail="$pull_detail · installed; restart it via Bob → Restart Bob Mac Capture"
+    else
+      status=fail
+      detail="$pull_detail · install failed (exit $install_status)"
+    fi
+  fi
+  case "$status" in
+    ok)
+      if (( step_warning > 0 )); then
+        glyph_line 33 '  ' '⚠' "$detail"
+        add_summary 'bob-mac-capture' warn "$detail" "$(format_duration "$((SECONDS - step_start))")"
+        WARNINGS=$((WARNINGS + step_warning))
+      else
+        glyph_line 32 '  ' '✓' "$detail"
+        add_summary 'bob-mac-capture' ok "$detail" "$(format_duration "$((SECONDS - step_start))")"
+      fi
+      ;;
+    warn)
+      glyph_line 33 '  ' '⚠' "$detail"
+      add_summary 'bob-mac-capture' warn "$detail" "$(format_duration "$((SECONDS - step_start))")"
+      WARNINGS=$((WARNINGS + step_warning))
+      ;;
+    *)
+      glyph_line 31 '  ' '✗' "$detail"
+      FAILURES=$((FAILURES + 1))
+      add_summary 'bob-mac-capture' fail "$detail" "$(format_duration "$((SECONDS - step_start))")"
+      ;;
+  esac
+}
+
+obsidian_step() {
+  local step_start detail running i cli
+  banner 36 '🔄' 'OBSIDIAN'
+  step_start="$SECONDS"
+  if (( FAILURES > 0 )); then
+    detail='not restarted: a step failed — fix it and rerun just install-all-and-restart'
+    glyph_line 2 '  ' '–' "$detail"
+    add_summary obsidian skip "$detail" ''
+    return 0
+  fi
+  case "$(uname -s)" in
+    Darwin)
+      if ! running="$(osascript -e 'application id "md.obsidian" is running' 2>/dev/null)"; then
+        detail='could not check whether Obsidian is running'
+        glyph_line 31 '  ' '✗' "$detail"
+        FAILURES=$((FAILURES + 1))
+        add_summary obsidian fail "$detail" "$(format_duration "$((SECONDS - step_start))")"
+        return 0
+      fi
+      if [[ "$running" != true ]]; then
+        detail='not running · nothing to restart'
+        glyph_line 2 '  ' '–' "$detail"
+        add_summary obsidian skip "$detail" ''
+        return 0
+      fi
+      command_line "osascript -e 'tell application id \"md.obsidian\" to quit'"
+      if ! osascript -e 'tell application id "md.obsidian" to quit'; then
+        detail='quit failed · allow Terminal in System Settings → Privacy & Security → Automation'
+        glyph_line 31 '  ' '✗' "$detail"
+        FAILURES=$((FAILURES + 1))
+        add_summary obsidian fail "$detail" "$(format_duration "$((SECONDS - step_start))")"
+        return 0
+      fi
+      i=0
+      while (( i < 60 )); do
+        if ! running="$(osascript -e 'application id "md.obsidian" is running' 2>/dev/null)"; then
+          detail='could not check whether Obsidian quit'
+          glyph_line 31 '  ' '✗' "$detail"
+          FAILURES=$((FAILURES + 1))
+          add_summary obsidian fail "$detail" "$(format_duration "$((SECONDS - step_start))")"
+          return 0
+        fi
+        if [[ "$running" != true ]] && ! pgrep -x Obsidian >/dev/null 2>&1; then
+          break
+        fi
+        sleep 0.5
+        i=$((i + 1))
+      done
+      if (( i >= 60 )); then
+        detail='Obsidian did not quit within 30s (an open dialog?) — not relaunching'
+        glyph_line 31 '  ' '✗' "$detail"
+        FAILURES=$((FAILURES + 1))
+        add_summary obsidian fail "$detail" "$(format_duration "$((SECONDS - step_start))")"
+        return 0
+      fi
+      command_line 'open -b md.obsidian'
+      if ! open -b md.obsidian; then
+        detail='relaunch failed'
+        glyph_line 31 '  ' '✗' "$detail"
+        FAILURES=$((FAILURES + 1))
+        add_summary obsidian fail "$detail" "$(format_duration "$((SECONDS - step_start))")"
+        return 0
+      fi
+      i=0
+      while (( i < 30 )); do
+        if running="$(osascript -e 'application id "md.obsidian" is running' 2>/dev/null)" && [[ "$running" == true ]]; then
+          detail='restarted'
+          glyph_line 36 '  ' '↻' "$detail"
+          add_summary obsidian restart "$detail" "$(format_duration "$((SECONDS - step_start))")"
+          return 0
+        fi
+        sleep 0.5
+        i=$((i + 1))
+      done
+      detail='relaunch requested; not confirmed yet'
+      glyph_line 33 '  ' '⚠' "$detail"
+      WARNINGS=$((WARNINGS + 1))
+      add_summary obsidian warn "$detail" "$(format_duration "$((SECONDS - step_start))")"
+      ;;
+    Linux)
+      if ! pgrep -x obsidian >/dev/null 2>&1; then
+        detail='not running'
+        glyph_line 2 '  ' '–' "$detail"
+        add_summary obsidian skip "$detail" ''
+        return 0
+      fi
+      cli="$HOME/.local/bin/obsidian"
+      if [[ ! -x "$cli" ]]; then
+        detail='running; restart it manually to load the new plugins'
+        glyph_line 33 '  ' '⚠' "$detail"
+        WARNINGS=$((WARNINGS + 1))
+        add_summary obsidian warn "$detail" "$(format_duration "$((SECONDS - step_start))")"
+        return 0
+      fi
+      command_line "$(display_path "$cli") restart"
+      if "$cli" restart; then
+        detail='restart requested'
+        glyph_line 36 '  ' '↻' "$detail"
+        add_summary obsidian restart "$detail" "$(format_duration "$((SECONDS - step_start))")"
+      else
+        detail='Obsidian CLI restart failed'
+        glyph_line 31 '  ' '✗' "$detail"
+        FAILURES=$((FAILURES + 1))
+        add_summary obsidian fail "$detail" "$(format_duration "$((SECONDS - step_start))")"
+      fi
+      ;;
+    *)
+      detail="unsupported OS: $(uname -s)"
+      glyph_line 31 '  ' '✗' "$detail"
+      FAILURES=$((FAILURES + 1))
+      add_summary obsidian fail "$detail" "$(format_duration "$((SECONDS - step_start))")"
+      ;;
+  esac
+}
+
+if [[ "$header_done" != 1 ]]; then
+  banner 36 '🚀' 'INSTALL ALL'
+  printf '  from     %s\n' "$(display_path "$parent")"
+  if (( restart_obsidian )); then
+    printf '  then     restart Obsidian if running\n'
+  fi
+  banner 35 '🦀' 'BOB-CLI  1/3'
+fi
+
+cli_start=0
+if [[ -n "$self_pull_state" ]]; then
+  PULL_STATE="$self_pull_state"
+  PULL_DETAIL="$self_pull_detail"
+else
+  pull_repo "$root"
+  show_pull_result
+fi
+cli_pull_detail="$PULL_DETAIL"
+cli_warning=0
+if [[ "$PULL_STATE" == warn ]]; then
+  cli_warning=1
+fi
+
+if [[ "$PULL_STATE" == updated && -z "$self_pull_state" ]]; then
+  export BOB_INSTALL_ALL_SELF_PULL="$PULL_STATE"
+  export BOB_INSTALL_ALL_SELF_PULL_DETAIL="$PULL_DETAIL"
+  export BOB_INSTALL_ALL_ELAPSED="$SECONDS"
+  export BOB_INSTALL_ALL_HEADER_DONE=1
+  exec "$root/scripts/install_all" "$@"
+fi
+
+command_line "just --justfile $(display_path "$root/justfile") install"
+if (cd "$root" && just --justfile "$root/justfile" install); then
+  cli_sha="$(git -C "$root" rev-parse --short HEAD 2>/dev/null || printf 'unknown')"
+  cli_detail="$cli_pull_detail · installed @ $cli_sha"
+  if (( cli_warning )); then
+    glyph_line 33 '  ' '⚠' "$cli_detail"
+    add_summary bob-cli warn "$cli_detail" "$(format_duration "$((SECONDS - cli_start))")"
+    WARNINGS=$((WARNINGS + cli_warning))
+  else
+    glyph_line 32 '  ' '✓' "$cli_detail"
+    add_summary bob-cli ok "$cli_detail" "$(format_duration "$((SECONDS - cli_start))")"
+  fi
+else
+  cli_status=$?
+  cli_detail="$cli_pull_detail · install failed (exit $cli_status)"
+  glyph_line 31 '  ' '✗' "$cli_detail"
+  FAILURES=$((FAILURES + 1))
+  add_summary bob-cli fail "$cli_detail" "$(format_duration "$((SECONDS - cli_start))")"
+fi
+
+plugin_step
+mac_capture_step
+if (( restart_obsidian )); then
+  obsidian_step
+fi
+
+banner 1 '✨' 'SUMMARY'
+print_summary
+total_duration="$(format_duration "$((SECONDS - total_start))")"
+if (( FAILURES > 0 )); then
+  if (( use_color )); then
+    printf '\n  \033[31m✗  %s STEP%s FAILED · %s\033[0m\n' \
+      "$FAILURES" "$([[ "$FAILURES" -eq 1 ]] && printf '' || printf 'S')" "$total_duration"
+  else
+    printf '\n  ✗  %s STEP%s FAILED · %s\n' \
+      "$FAILURES" "$([[ "$FAILURES" -eq 1 ]] && printf '' || printf 'S')" "$total_duration"
+  fi
+  exit 1
+elif (( WARNINGS > 0 )); then
+  if (( use_color )); then
+    printf '\n  \033[33m⚠  INSTALLED WITH %s WARNING%s · %s\033[0m\n' \
+      "$WARNINGS" "$([[ "$WARNINGS" -eq 1 ]] && printf '' || printf 'S')" "$total_duration"
+  else
+    printf '\n  ⚠  INSTALLED WITH %s WARNING%s · %s\n' \
+      "$WARNINGS" "$([[ "$WARNINGS" -eq 1 ]] && printf '' || printf 'S')" "$total_duration"
+  fi
+else
+  if (( use_color )); then
+    printf '\n  \033[32m✓  ALL INSTALLED · %s\033[0m\n' "$total_duration"
+  else
+    printf '\n  ✓  ALL INSTALLED · %s\n' "$total_duration"
+  fi
+fi

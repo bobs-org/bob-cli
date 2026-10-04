@@ -150,6 +150,8 @@ files — `manifest.json`, `main.js`, and `styles.css` when the repo has one —
 from `<repo>/plugins/<id>/` into `<bob-dir>/.obsidian/plugins/<id>/`. Runtime
 files such as `data.json` are never read or written, so plugin settings survive
 a sync. The repo and vault roots resolve exactly as they do for `list`.
+The bob-cli `just install-all` command runs this sync against the sibling
+`bob-plugins` checkout after pulling it.
 
 Before any existing vault file is overwritten, `sync` copies the current vault
 file to a timestamped backup directory. Backups default to

@@ -29,7 +29,7 @@ _banner color icon label:
     fi
 
 check-scripts:
-    bash -n scripts/bob_notify scripts/bob_pomodoro scripts/tmux_bob_pomodoro scripts/lib/bob_shell.sh
+    bash -n scripts/bob_notify scripts/bob_pomodoro scripts/tmux_bob_pomodoro scripts/lib/bob_shell.sh scripts/install_all
 
 # Type-check the pinned Keep adapter and run its offline self-test.
 # Not part of `all`: the first run fetches the pinned Python deps.
@@ -59,6 +59,15 @@ install *shells: (_banner "35" "📦" "INSTALL")
             "$root/bin/bob" >&2
         exit 1
     fi
+
+# Pull + install bob-cli, then pull + deploy the sibling bob-plugins and
+# bob-mac-capture checkouts (missing siblings are skipped).
+install-all:
+    @scripts/install_all
+
+# install-all, then restart Obsidian (if it is running) so it loads the new plugins.
+install-all-and-restart:
+    @scripts/install_all --restart-obsidian
 
 install-smoke:
     #!/usr/bin/env bash

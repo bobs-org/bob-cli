@@ -65,6 +65,30 @@ so and exits 1 while leaving the installed binary in place. Never pass `--force`
 installs: cargo already replaces the same package from any checkout, and
 `--force` would only let it overwrite a different crate's `bob`.
 
+### Install everything
+
+Run `just install-all` to pull this checkout with `--ff-only`, install bob-cli,
+then pull and deploy the sibling `../bob-plugins` checkout with
+`bob plugins sync --no-pull --repo`. On macOS it also pulls and installs the
+sibling `../bob-mac-capture` checkout with `just install`, honoring
+`CODESIGN_IDENTITY`. Missing siblings, a missing Obsidian vault, and the
+macOS-only app on other hosts are skipped. Pull failures warn and use the local
+checkout. A failed step makes the command exit 1.
+
+Keep the checkouts together, for example:
+
+```text
+~/projects/github/bobs-org/
+├── bob-cli/
+├── bob-plugins/
+└── bob-mac-capture/
+```
+
+`just install-all-and-restart` also restarts a running Obsidian after a clean
+install. On macOS it gracefully quits and relaunches Obsidian; the first run
+may ask for Automation permission. On Linux it uses the Obsidian CLI `restart`
+command when registered at `~/.local/bin/obsidian`.
+
 For installation from the Git remote:
 
 ```bash

@@ -9,7 +9,9 @@ name for In Progress (`[/]`), not a waiting or Blocked state.
 
 ## Install and select a vault
 
-From a checkout, run `just install`. With Cargo alone, run:
+From a checkout, run `just install`. Run `just install-all` to also deploy the
+Bob plugins (and, on macOS, Bob Mac Capture) from sibling checkouts. With Cargo
+alone, run:
 
 ```bash
 cargo install --path . --locked
