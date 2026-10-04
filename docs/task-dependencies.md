@@ -385,18 +385,19 @@ chips. The ⚠ chip is the signal for those; the summary tracks blocking.
 | Ctrl+Shift+M, `task archive` | The line moves with its task. Same-note links inside a moved block whose target stayed behind gain the source note path. |
 | "Rewrite dependency navigation links" command, `migrate-dependency-bullets.mjs` | Deleted. They emit embeds. |
 
-## 9. Plugin api v1 (navigation-hotkeys)
+## 9. Plugin api v2 (navigation-hotkeys)
 
 ```js
 app.plugins.plugins["bob-navigation-hotkeys"].api = Object.freeze({
-  version: 1,
+  version: 2,
   openDependencyStage(ref),            // ref: { path, line } — any line of the task block or its Depends-On line
   removeDependency(parentRef, target), // target: { path, blockId }
+  claimReviewWalkCompletion(editor),   // task-status-cycler's landed checklist Ctrl+Enter hook
 });
 ```
 
-- Both members return Promises resolving to `{ ok, reason? }` and
-  never throw.
+- `openDependencyStage` and `removeDependency` return Promises resolving
+  to `{ ok, reason? }` and never throw.
 - `ref.line` and `parentRef.line` are 0-based line indexes into the
   note's lines (the same indexing the editor and `findOwningTaskLine`
   use): the Depends-On line itself, or any line of the owning task
@@ -405,6 +406,10 @@ app.plugins.plugins["bob-navigation-hotkeys"].api = Object.freeze({
 - `removeDependency` re-reads the dependent and refuses with a notice
   when it is stale, and refuses with `not-on-line` (never a silent `ok`)
   when the target is not on the dependent's line.
+- `claimReviewWalkCompletion(editor)` is task-status-cycler's Ctrl+Enter
+  hook. It synchronously returns `null` unless the cursor is on the PRE/POST
+  row the review walk just landed on; otherwise it returns a Promise of
+  `{ ok, reason? }` and never throws. See [freshness.md §6](freshness.md#6-review-ritual).
 - Plugins never import each other's `main.js`. bob-ledger-tools
   feature-detects `api?.version >= 1`.
 

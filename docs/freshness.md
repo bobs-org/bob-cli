@@ -656,8 +656,14 @@ task stays due and Ctrl+Alt+F does not advance.
 **Morning:**
 
 1. `[S`, or `]s` from outside the queue, starts at PRE.
-2. Complete each PRE chore with Ctrl+Alt+F, or skip it with `]s`.
-   Alt+F completes a chore in place. Checklist rows never stamp.
+2. Complete each PRE chore with Ctrl+Enter or Ctrl+Alt+F, or skip it with
+   `]s`. On the PRE/POST row the walk just landed on, Ctrl+Enter completes
+   it through Tasks (including a still-`[?]` chore) and moves to the next
+   live row of that group with a completion and landing toast. It never
+   leaves PRE: the final chore stays put with `PRE done` and a `]s → …`
+   hint. Ctrl+Alt+F also completes and advances, crossing from PRE into the
+   next tier; Alt+F completes in place. Checklist rows never stamp, and
+   elsewhere Ctrl+Enter is unchanged.
    Keep import is the PRE chore "Import inbox tasks from Google Keep".
 3. Walk the commitments (NEW → PROJECTS → PENDING → NEXT → RETURNED →
    REFERENCES) with `]s` / Ctrl+Alt+F until the notice says
@@ -678,7 +684,10 @@ task stays due and Ctrl+Alt+F does not advance.
 4. ROTTEN is optional upkeep until 0, the budget, or you stop. The
    commitments → ROTTEN boundary notice includes `]S closes the review`
    when POST remains.
-5. `]S` jumps to POST; complete Morning review last with Alt+F.
+5. `]S` jumps to POST; complete Morning review last with Ctrl+Enter or
+   Alt+F. On a multi-row POST checklist, Ctrl+Enter and Ctrl+Alt+F move to
+   the next row, Alt+F stays and counts remaining rows, and the review
+   closes on the last row.
 
 The Obsidian footer keeps a condensed version of that `]s` notice
 visible while the cursor is on a review task, and the `]s next` hint
@@ -1427,6 +1436,7 @@ There is no freshness trial: no ritual change, release, or tuning waits on a tri
 - 2026-10-01: per-note CROWDED surfaces (`bob ready`, the dash chip, crowded.md, the heading chips) went live; gesture notices are a separate follow-up.
 - 2026-10-01: the tiered morning review walk went live (schema 3, lane intervals, tier notices, walk anchor).
 - 2026-10-04: PRE/POST checklist tiers went live (schema 9, ledger 1.29.0 / namespace v7, nav 2.3.0, cycler API v2).
+- 2026-10-04: Ctrl+Enter walks the PRE/POST checklist (nav 2.4.0 / nav api v2, cycler 1.25.0).
 
 ## 14. Keep-streak rollout, rollback, and calibration
 
