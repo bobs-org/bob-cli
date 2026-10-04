@@ -267,6 +267,10 @@ fn overview_human_has_sections_order_and_no_ansi() {
         "expected the quickest win:\n{human}"
     );
     assert!(
+        human.contains("sequence / defer / drop Ctrl+Shift+P"),
+        "expected the pre-activation ready hint:\n{human}"
+    );
+    assert!(
         human.contains("not capped: eps 2 (ready_cap: off)"),
         "expected the exempt footer:\n{human}"
     );
@@ -441,10 +445,33 @@ fn worklist_lists_file_order_with_also_here() {
         "expected the also-here line:\n{human}"
     );
     assert!(
-        human.contains("Make room for 4:"),
+        human.contains("Make room for 4:")
+            && human.contains("sequence / defer / drop Ctrl+Shift+P"),
         "expected the make-room footer:\n{human}"
     );
     assert_stdout_has_no_ansi(&output);
+}
+
+#[test]
+fn overview_human_advertises_task_card_keys_from_october_19() {
+    let temp = ready_vault("bob-cli-ready-task-card-hint");
+    let output = ready_command(&temp, &[])
+        .env("BOB_NOW", "2026-10-19")
+        .output()
+        .expect("run bob ready on Task Card default day");
+    assert_success(&output);
+    let human = stdout(&output);
+    assert!(
+        human.contains("defer Ctrl+Shift+P 1\u{2013}4")
+            && human.contains("drop Ctrl+Shift+P x")
+            && human.contains("sequence Ctrl+Shift+P b")
+            && human.contains("type to search"),
+        "expected Task Card ready hints:\n{human}"
+    );
+    assert!(
+        !human.contains("sequence / defer / drop Ctrl+Shift+P"),
+        "pre-activation wording must not remain:\n{human}"
+    );
 }
 
 #[test]

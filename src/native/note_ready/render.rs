@@ -401,10 +401,24 @@ fn render_overview_sized(
             note.name
         ));
     }
-    output.push_str(
-        "  split Ctrl+Shift+N \u{b7} sequence / defer / drop Ctrl+Shift+P\n",
-    );
+    output.push_str(&format!("  {}\n", ready_gesture_hint(scan.today)));
     output
+}
+
+/// Local calendar day the Task Card becomes the default first screen.
+fn task_card_default_from() -> chrono::NaiveDate {
+    chrono::NaiveDate::from_ymd_opt(2026, 10, 19)
+        .expect("valid Task Card default date")
+}
+
+/// Date-aware crowded-note remedies. `today` is the already-resolved
+/// scan day so tests can inject it; this never reads plugin data.json.
+fn ready_gesture_hint(today: chrono::NaiveDate) -> &'static str {
+    if today < task_card_default_from() {
+        "split Ctrl+Shift+N \u{b7} sequence / defer / drop Ctrl+Shift+P"
+    } else {
+        "split Ctrl+Shift+N \u{b7} defer Ctrl+Shift+P 1\u{2013}4 \u{b7} drop Ctrl+Shift+P x \u{b7} sequence Ctrl+Shift+P b \u{b7} type to search"
+    }
 }
 
 /// Freshness label for one worklist row: `new`, `rotten Nd`,
@@ -538,8 +552,9 @@ pub(crate) fn render_worklist(
         NoteState::Crowded => {
             let _ = writeln!(
                 output,
-                "  Make room for {}: split Ctrl+Shift+N \u{b7} sequence / defer / drop Ctrl+Shift+P",
+                "  Make room for {}: {}",
                 entry.over_by,
+                ready_gesture_hint(scan.today),
             );
         }
         NoteState::Full => {
@@ -679,7 +694,48 @@ mod tests {
             output.contains("Make room \u{2192} bob ready sase"),
             "{output}"
         );
+        assert!(
+            output.contains(
+                "split Ctrl+Shift+N \u{b7} sequence / defer / drop Ctrl+Shift+P"
+            ),
+            "{output}"
+        );
         assert!(!output.contains('\u{1b}'), "{output}");
+    }
+
+    #[test]
+    fn ready_gesture_hint_switches_on_october_19() {
+        let before = chrono::NaiveDate::from_ymd_opt(2026, 10, 18).unwrap();
+        let on = chrono::NaiveDate::from_ymd_opt(2026, 10, 19).unwrap();
+        assert_eq!(
+            ready_gesture_hint(before),
+            "split Ctrl+Shift+N \u{b7} sequence / defer / drop Ctrl+Shift+P"
+        );
+        assert_eq!(
+            ready_gesture_hint(on),
+            "split Ctrl+Shift+N \u{b7} defer Ctrl+Shift+P 1\u{2013}4 \u{b7} drop Ctrl+Shift+P x \u{b7} sequence Ctrl+Shift+P b \u{b7} type to search"
+        );
+    }
+
+    #[test]
+    fn overview_advertises_task_card_keys_from_october_19() {
+        let mut scan = overview_scan(vec![entry(
+            "sase",
+            "project",
+            7,
+            Some(5),
+            NoteState::Crowded,
+        )]);
+        scan.today = chrono::NaiveDate::from_ymd_opt(2026, 10, 19).unwrap();
+        let output = render_overview(&scan, false, &Styler::plain());
+        assert!(output.contains("defer Ctrl+Shift+P 1\u{2013}4"), "{output}");
+        assert!(output.contains("drop Ctrl+Shift+P x"), "{output}");
+        assert!(output.contains("sequence Ctrl+Shift+P b"), "{output}");
+        assert!(output.contains("type to search"), "{output}");
+        assert!(
+            !output.contains("sequence / defer / drop Ctrl+Shift+P"),
+            "{output}"
+        );
     }
 
     #[test]
@@ -756,5 +812,40 @@ mod tests {
         assert!(output.contains("fresh 1d"), "{output}");
         assert!(output.contains("also here: 1 next"), "{output}");
         assert!(output.contains("room for 3 more"), "{output}");
+    }
+
+    #[test]
+    fn crowded_worklist_uses_the_scan_day_for_task_card_hints() {
+        let mut scan = overview_scan(vec![entry(
+            "sase",
+            "project",
+            7,
+            Some(5),
+            NoteState::Crowded,
+        )]);
+        let plain = Styler::plain();
+        let also = AlsoHere {
+            next: 0,
+            pending: 0,
+            blocked: 0,
+            recurring: 0,
+        };
+        let before =
+            render_worklist(&scan, &scan.report.notes[0], &also, &plain);
+        assert!(
+            before.contains(
+                "Make room for 2: split Ctrl+Shift+N \u{b7} sequence / defer / drop Ctrl+Shift+P"
+            ),
+            "{before}"
+        );
+        scan.today = chrono::NaiveDate::from_ymd_opt(2026, 10, 19).unwrap();
+        let after =
+            render_worklist(&scan, &scan.report.notes[0], &also, &plain);
+        assert!(
+            after.contains(
+                "Make room for 2: split Ctrl+Shift+N \u{b7} defer Ctrl+Shift+P 1\u{2013}4 \u{b7} drop Ctrl+Shift+P x \u{b7} sequence Ctrl+Shift+P b \u{b7} type to search"
+            ),
+            "{after}"
+        );
     }
 }

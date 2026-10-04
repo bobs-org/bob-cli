@@ -522,6 +522,14 @@ bob ready · Thu 2026-10-01 · cap 5 per note
   split Ctrl+Shift+N · sequence / defer / drop Ctrl+Shift+P
 ```
 
+The last hint line uses the scan's local day (`BOB_NOW` when set).
+Through 2026-10-18 it stays `sequence / defer / drop Ctrl+Shift+P`.
+From 2026-10-19 it advertises `defer Ctrl+Shift+P 1–4`,
+`drop Ctrl+Shift+P x`, `sequence Ctrl+Shift+P b`, and `type to search`.
+Explicit Classic list in the plugin setting still uses the documented
+search path (`/` or type to filter). Headless `bob ready` does not read
+plugin `data.json`.
+
 Exit codes: 0 for a report (even when notes are crowded), 1 for a
 vault I/O failure, 2 for an invalid `plan.max_ready_per_note`, a
 non-Dataview task format, or an unresolvable note, and 3 with

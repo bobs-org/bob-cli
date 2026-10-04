@@ -198,10 +198,10 @@ block id).
 
 | Cursor | Gesture | Edits |
 | --- | --- | --- |
-| A `#task` line | Ctrl+Shift+P → **Depends on** row (pill `⛓ 2 · 1 open` / `⛓ none` replaces the raw ids) | this task |
-| Anywhere on a Depends-On line, including inside a link | Ctrl+Shift+P (skips the property step) | the **owning** task, never the link under the cursor |
-| A dedicated Task Link | Ctrl+Shift+P → Depends on | the **linked** task in its own note, named in the title |
-| A task line, counted | `N<Ctrl+Shift+P>` → Depends on | this task plus the next N (existing add-to-all/remove-from-all, `k/n` badges, no Tab marks) |
+| A `#task` line | Ctrl+Shift+P then `b` on the Task Card (Blocked by), or **Depends on** in classic search (pill `⛓ 2 · 1 open` / `⛓ none` replaces the raw ids) | this task |
+| Anywhere on a Depends-On line, including inside a link | Ctrl+Shift+P (skips the card and the property step) | the **owning** task, never the link under the cursor |
+| A dedicated Task Link | Ctrl+Shift+P then `b`, or Depends on in search | the **linked** task in its own note, named in the title |
+| A task line, counted | `N<Ctrl+Shift+P>` then `b`, or Depends on in search | this task plus the next N (existing add-to-all/remove-from-all, `k/n` badges, no Tab marks) |
 | A chip | `＋` / hover `×` | opens the stage / removes that prerequisite |
 | Anywhere | palette command **Edit task dependencies** (`edit-task-dependencies`, no default hotkey) | the task under the cursor |
 | Prose with several links, or a selection spanning tasks | any | refused with a short reason |

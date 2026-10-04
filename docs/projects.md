@@ -11,9 +11,10 @@ anchored with `^prj`. Typical CLI order:
 
 `sync` writes frontmatter, `#hide`, Sub-projects lines, and inline
 `[scheduled::]` fields. It does not change checkboxes. The Bob Navigation
-Hotkeys picker in Obsidian can write schedules or priorities and reconcile
+Hotkeys Task Card in Obsidian can write schedules or priorities and reconcile
 Blocked in one editor transaction; those gestures are not part of the CLI
-command. See [Scheduling from the `^prj` task](#scheduling-from-the-prj-task).
+command. See [Task Card](#task-card) and
+[Scheduling from the `^prj` task](#scheduling-from-the-prj-task).
 
 This mirrors the `bob highlights` `^ref` convention for `[[ref]]` notes: the
 task line is the interaction point, and the command reconciles frontmatter from
@@ -25,6 +26,7 @@ that task instead of asking users to edit machine-facing metadata directly.
 - [Project notes](#project-notes)
 - [The `^prj` task](#the-prj-task)
 - [Sync rules](#sync-rules)
+- [Task Card](#task-card)
 - [Scheduling from the `^prj` task](#scheduling-from-the-prj-task)
 - [Priority property and scheduled rolls](#priority-property-and-scheduled-rolls)
 - [Recommended roll and priority decay](#recommended-roll-and-priority-decay)
@@ -272,11 +274,56 @@ entries, and keeping source order when both kinds are present. Later
 `Ctrl+Shift+P` and `Ctrl+Shift+Enter` edits on the `^prj` task continue
 appending to the matching log.
 
+### Task Card
+
+`Ctrl+Shift+P` (`bob-navigation-hotkeys:set-bullet-property`, palette
+**Task card (set properties)**) opens the Task Card as its first screen when
+the plugin setting allows it. Classic filtered properties remain permanently
+available as search mode (`/` or any unbound printable character). Direct
+Depends-On-line, chip, palette dependency, and decay Less often entries still
+skip the card and open their stage.
+
+| Gesture on the card | Outcome |
+| --- | --- |
+| `1`–`4` | Set that configured P-level and its frozen displayed date |
+| `0` | Clear priority to implicit P0; keep the scheduled date |
+| `Ctrl+Enter` | Apply the cached recommendation (`Cmd+Enter` alias) |
+| `Ctrl+R` | Regenerate recommendation and priority previews; no write |
+| `Enter` | Open the selected action; Schedule is the default |
+| `b` | Blocked by (the existing Depends on stage) |
+| `f` | Review every (the existing Refresh stage) |
+| `x` | Open the cancel-reason stage; never cancel on the key alone |
+| `Alt+N` | Commit to Next or release to Ready |
+| `Ctrl+D` | Delete the selected property (default selection is Schedule) |
+| `/` or type | Classic search |
+| Backspace on empty / Back | Return to the card without writing |
+| Escape | Close and discard uncommitted state |
+
+Same-level `2` on P2 is a deliberate re-pick that resets the roll streak.
+`Ctrl+Enter` remains a roll that can advance the decay ladder. Custom list
+properties stay in More and in search. Counted sessions name the N+1 scope
+and mixed values; Task Links say `via Task Link` and name target notes.
+Cross-note Task Link writes do not undo from the daily note with one Ctrl+Z.
+
+Two visible differences from the old first screen: bare Enter on an
+unprioritized task opens Schedule instead of committing the lane, and
+`Ctrl+D` with default focus clears Schedule. Alt+N remains the fastest lane
+gesture. Keep `p`, `s`, `d`, `c`, `r`, `l`, `n`, and `o` unbound on the card
+so existing filter habits stay safe; after the first unbound character every
+character belongs to search.
+
+The plugin setting **Ctrl+Shift+P Task Card** offers Automatic, Task Card,
+and Classic list. Automatic is classic through local 2026-10-18 and the Task
+Card from 2026-10-19, evaluated only when a new panel opens. Explicit Task
+Card is the pilot opt-in; explicit Classic always uses the documented search
+path. Absent/null follows the date and is not persisted as false. The
+rollback setting stays.
+
 ### Scheduling from the `^prj` task
 
 With the cursor on a valid `#task ... ^prj` lifecycle task, Bob Navigation
-Hotkeys' `Ctrl+Shift+P` **Set bullet property** picker treats `scheduled` as a
-project-note property. Choosing a date writes canonical `scheduled: YYYY-MM-DD`
+Hotkeys' `Ctrl+Shift+P` Task Card (or classic search **scheduled**) treats
+`scheduled` as a project-note property. Choosing a date writes canonical `scheduled: YYYY-MM-DD`
 YAML, removes any stale inline `[scheduled:: ...]` field from `^prj`, and
 immediately propagates task-level schedules. It also applies the derived status
 decision in the same guarded editor transaction: future-scheduled tasks become
@@ -323,10 +370,10 @@ of a task would also hide earlier `[scheduled:: ...]`, `[id:: ...]`, or
 `[dependsOn:: ...]` fields from task queries and dependency handling.
 
 A task with no priority field is implicit P0, the highest priority: do it now,
-with no rolled date. The picker therefore has no P0 row; press `Ctrl+D` on the
-`priority` row to clear the field. Clearing priority does not remove or re-roll
-`scheduled`, because the rolled date is treated as an explicit commitment once
-written.
+with no rolled date. The Task Card's `0` key clears the field and keeps the
+scheduled date. In classic search there is no P0 row; press `Ctrl+D` on the
+`priority` row. Clearing priority does not remove or re-roll `scheduled`,
+because the rolled date is treated as an explicit commitment once written.
 
 Choosing P1, P2, P3, or P4 writes the priority and rolls a `scheduled` date
 inside that level's configured window in one guarded edit. Counted sessions
@@ -356,8 +403,8 @@ deterministic-reason rules.
 `bob capture <text> p:<N>` writes the same `[priority:: ...]` field and rolls
 a date from the same configured window from the command line, reading the
 same `~/.config/bob/config.yml` levels as the picker. `N` is the picker row
-(1-4 today), so `p:2` matches pressing `Ctrl+Shift+P` and choosing the `P2`
-row. Capture leaves the task's `[ ]` marker as written; `bob task-status-hooks`
+(1-4 today), so `p:2` matches pressing `Ctrl+Shift+P` then `2` on the Task
+Card (or choosing the `P2` row in classic search). Capture leaves the task's `[ ]` marker as written; `bob task-status-hooks`
 is what later marks a future-scheduled task Blocked, not capture itself. A
 rolled `p:<N>` also writes the same `🗓️ **SCHEDULE LOG**` entry the picker
 would, always as a `P0 → <to>` transition since a brand-new capture
@@ -389,7 +436,8 @@ When the `scheduled` row is selected, `Ctrl+Enter` (`Cmd+Enter` on macOS)
 takes the recommended roll in one keypress, and the date it will write is
 shown on the `scheduled` row. On a task with a priority field, that row opens
 first and already selected, so `Ctrl+Shift+P` followed by `Ctrl+Enter` takes
-the previewed recommendation with no navigation. Tasks without priority and
+the previewed recommendation with no navigation. On the Task Card the same
+chord applies the cached recommendation from the first screen. Tasks without priority and
 plain bullets keep the existing menu order. The roll follows a configurable
 decay ladder read from the task's Schedule Log. A level is re-rolled `rolls` times
 (default 1), the next recommended roll moves the task one level down
@@ -573,6 +621,16 @@ without one is never given one by a skipped prompt. Pressing `Esc` in the
 reason prompt cancels the whole picker, including the date itself, so nothing
 is written.
 
+With the Task Card enabled, choosing a date or preset with Enter and no
+inline reason opens one review: Reason focused, plus optional Work summary
+when any explicitly targeted Next/Pending task qualifies. Empty fields plus
+Enter skip both. An inline reason (`3 waiting on API`) skips the reason
+field; Shift+Enter skips the reason by the blank-reason rule without skipping
+an applicable Work Log. Blank Work summary still writes no Work Log. When
+the Task Card is off (Classic list, or Automatic before 2026-10-19), the
+serial date then reason then Work Log prompts remain. Search reached from an
+enabled card uses the new scheduling affordances.
+
 ```markdown
 - [?] #task Ship the thing [priority:: medium] [scheduled:: 2026-08-20] ^ship
   - ⛓️ **DEPENDS ON:** [[#^blocked-by-this]]
@@ -740,13 +798,14 @@ a `not removed` chip — the write is never retried automatically.
 
 ### Cancelling a task
 
-The `Ctrl+Shift+P` picker (`bob-navigation-hotkeys:set-bullet-property`)
-offers a pinned **Cancel** row as its last row. It appears only when at least
-one target is an open `#task` (`" "`, `*`, `/`, or `?`); it is hidden on
-closed tasks, plain bullets, and anywhere the cursor is not on a task or Task
-Link. Choosing the row (arrow to it or filter with `can`, `drop`, or
-`obsolete`, then `↵`) opens a reason stage — nothing is written yet. Type an
-optional reason and press `↵` to cancel; `Esc` at either stage writes nothing.
+The `Ctrl+Shift+P` Task Card (`bob-navigation-hotkeys:set-bullet-property`)
+offers **Cancel** as `x`. It appears only when at least one target is an open
+`#task` (`" "`, `*`, `/`, or `?`); it is hidden on closed tasks, plain
+bullets, and anywhere the cursor is not on a task or Task Link. The key opens
+a reason stage — nothing is written yet. Type an optional reason and press
+`↵` to cancel; `Esc` at either stage writes nothing. Classic search still
+reaches the same row by filtering `can`, `drop`, or `obsolete`. The decay
+card accepts `x` as an alias for existing `d` Drop.
 
 The row supports the picker's three target modes: the `#task` line under the
 cursor, a counted session (`N<Ctrl+Shift+P>` cancels the current task plus
