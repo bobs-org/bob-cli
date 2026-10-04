@@ -70,7 +70,9 @@ failure, which yields empty output.
   - An empty `group` means `values`.
   - `nospace` means the user is expected to keep typing.
 - **Order is display order.** Groups display in order of first
-  appearance, and adapters never re-sort.
+  appearance, and adapters never re-sort. Root commands use `daily
+  workflow`, `tasks and projects`, `vault`, `integrations`, `setup`, and
+  `capture protocol`, in that order. Members stay under `commands`.
 - **Version skew.** The binary supports protocol 1 only.
   - An older adapter gets
     `!message bob shell completion is out of date — run: bob completion install`.
@@ -85,9 +87,9 @@ failure, which yields empty output.
 
 ## What completes
 
-- **Commands.** Every `bob` subcommand under the `commands` group,
-  then the ten `capture-*` frontend endpoints under
-  `capture protocol`. Hidden aliases and the auto `help` command never
+- **Commands.** Root commands use the same six workflow sections as
+  `bob -h`, in help order. Members under any command stay in `commands`.
+  Hidden aliases, hidden `freshness seed`, and the `help` route never
   appear.
 - **Options.** A lone `-` offers short and long forms adjacent with
   identical descriptions; `--` offers long forms only. Options already
@@ -152,10 +154,12 @@ vault content lands in docs. Each candidate line is
 
 ```text
 $ bob __complete zsh --protocol 1 -- bob ""
-capture<TAB>Capture a task or bullet into the Bob vault<TAB>commands<TAB>space
-completion<TAB>Install and inspect shell completion for bob<TAB>commands<TAB>space
-freshness<TAB>Walk the tiered freshness review queue and seed the cutover<TAB>commands<TAB>space
-… (every subcommand, in help order)
+capture<TAB>Capture tasks, bullets, and Pomodoro commands into the vault<TAB>daily workflow<TAB>space
+freshness<TAB>Walk the tiered freshness review queue<TAB>daily workflow<TAB>space
+notify<TAB>Notify when the current Pomodoro is complete<TAB>daily workflow<TAB>space
+… (remaining daily workflow commands)
+move-done-tasks<TAB>Move done and canceled tasks into done/ archives and repair links<TAB>tasks and projects<TAB>space
+… (tasks and projects, vault, integrations, and setup sections)
 capture-complete<TAB>Complete the capture marker at the cursor<TAB>capture protocol<TAB>space
 … (all ten capture-* endpoints, grouped last)
 ```

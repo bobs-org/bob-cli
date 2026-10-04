@@ -244,7 +244,7 @@ fn capture_tasks_help_lists_options_alphabetically() {
 }
 
 #[test]
-fn freshness_help_lists_subcommands_alphabetically() {
+fn freshness_help_hides_the_seed_subcommand() {
     let output = bob_command()
         .arg("freshness")
         .arg("--help")
@@ -255,11 +255,42 @@ fn freshness_help_lists_subcommands_alphabetically() {
     let help = stdout(&output);
     assert!(
         help.contains("Walk the tiered freshness review queue")
-            && help.contains("bob freshness seed --dry-run"),
+            && help.contains(
+                "hidden `seed` subcommand stamped the one-time cutover"
+            )
+            && !help.lines().any(|line| line.starts_with("  seed ")),
         "expected freshness long help:\n{help}"
     );
-    assert_text_order(&help, &["\n  list ", "\n  seed "]);
+    assert!(help.lines().any(|line| line.starts_with("  list ")));
     assert_stdout_has_no_ansi(&output);
+}
+
+#[test]
+fn default_subcommands_are_labeled_in_help() {
+    let cases: &[(&[&str], &str)] = &[
+        (&["completion", "--help"], "status"),
+        (&["freshness", "--help"], "list"),
+        (&["gkeep", "--help"], "list"),
+        (&["plugins", "--help"], "list"),
+        (&["vault-sync", "--help"], "run"),
+    ];
+
+    for (args, default_member) in cases {
+        let output = bob_command()
+            .args(*args)
+            .output()
+            .unwrap_or_else(|error| panic!("run bob {args:?}: {error}"));
+        assert_success(&output);
+        let labeled = stdout(&output).lines().any(|line| {
+            line.split_whitespace().next() == Some(default_member)
+                && line.contains("(default)")
+        });
+        assert!(
+            labeled,
+            "default member `{default_member}` is not labeled for {args:?}:\n{}",
+            format_output(&output)
+        );
+    }
 }
 
 #[test]

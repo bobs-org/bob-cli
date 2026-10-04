@@ -85,7 +85,7 @@ every overwritten vault file is backed up before it is replaced.",
 
 fn list_command() -> ClapCommand {
     ClapCommand::new("list")
-        .about("List Bob plugins with repo version and vault sync state")
+        .about("List Bob plugins with repo version and vault sync state (default)")
         .after_help(
             "Examples:\n  bob plugins list\n  bob plugins list -f json\n  bob plugins list --no-pull\n  bob plugins list -b ~/bob -r ~/projects/github/bobs-org/bob-plugins",
         )

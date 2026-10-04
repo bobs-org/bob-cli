@@ -356,6 +356,9 @@ usage: {COMMAND_NAME} [-t|--threshold N]
 Move done and canceled Bob task blocks into archive notes, link sources,
 repair archive metadata, and repair Obsidian links to moved block ids.
 
+example:
+  bob move-done-tasks --threshold 10
+
 options:
   -h, --help       show this help message and exit
   -t, --threshold N

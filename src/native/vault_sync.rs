@@ -99,7 +99,7 @@ Legacy BOB_BULK_GIT_COMMIT_* and BOB_SYNC_* environment variables are no longer 
 
 fn run_command() -> ClapCommand {
     ClapCommand::new("run")
-        .about("Run one reconcile cycle")
+        .about("Run one reconcile cycle (default)")
         .arg(dry_run_arg())
         .arg(message_arg())
         .arg(quiet_arg())

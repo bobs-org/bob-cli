@@ -188,7 +188,7 @@ fn install_command() -> ClapCommand {
 
 fn status_command() -> ClapCommand {
     ClapCommand::new("status")
-        .about("Show installed adapters and the bob they call")
+        .about("Show installed adapters and the bob they call (default)")
         .long_about(
             "Show installed adapters and the bob they call.\n\n\
              Without --verify, registration is the result recorded at \

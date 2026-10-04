@@ -60,7 +60,7 @@ bullet capture can target, in document order. Missing notes are not errors; \
 they return an empty list so picker callers can skip the section chooser.",
         )
         .after_help(
-            "Examples:\n  bob capture-sections --route cash\n  bob capture-sections -r cash -f json\n  bob capture-sections -b ~/bob -r project-alpha",
+            "Examples:\n  bob capture-sections --route cash --format json\n  bob capture-sections --route cash\n  bob capture-sections -r cash -f json\n  bob capture-sections -b ~/bob -r project-alpha",
         )
         .disable_help_flag(true)
         .arg(bob_dir_arg())

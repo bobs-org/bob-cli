@@ -924,106 +924,204 @@ fn vault_sync_help_is_native_only_and_defaults_to_run() {
 }
 
 #[test]
-fn top_level_help_lists_commands_alphabetically_with_examples() {
-    let output = bob_command().arg("-h").output().expect("run bob -h");
+fn root_help_matches_sectioned_short_and_long_snapshots() {
+    let short = bob_command()
+        .arg("-h")
+        .env("NO_COLOR", "1")
+        .output()
+        .expect("run bob -h");
+    let long = bob_command()
+        .arg("--help")
+        .env("NO_COLOR", "1")
+        .output()
+        .expect("run bob --help");
 
-    assert_success(&output);
-    let help = stdout(&output);
+    assert_success(&short);
+    assert_success(&long);
+    assert_eq!(
+        stdout(&short),
+        include_str!("../fixtures/help/root-short.txt"),
+        "short root help snapshot changed"
+    );
+    assert_eq!(
+        stdout(&long),
+        include_str!("../fixtures/help/root-long.txt"),
+        "long root help snapshot changed"
+    );
+    assert_stdout_has_no_ansi(&short);
+    assert_stdout_has_no_ansi(&long);
+    for output in [&short, &long] {
+        let help = stdout(output);
+        let listing = help
+            .split_once("Daily workflow:\n")
+            .expect("workflow listing starts")
+            .1
+            .split_once("\nOptions:\n")
+            .expect("workflow listing ends")
+            .0;
+        for line in listing.lines() {
+            assert!(
+                line.chars().count() <= 80,
+                "root help line exceeds 80 columns ({}): {line}",
+                line.chars().count()
+            );
+        }
+    }
+    assert!(!stdout(&short).contains("capture-complete  Complete"));
+    assert!(!stdout(&long).contains("task-status-setter"));
+    assert!(!stdout(&long).contains("mark-next-tasks"));
+    assert!(!stdout(&long)
+        .lines()
+        .any(|line| line.starts_with("  seed ")));
+}
 
-    let order = [
+#[test]
+fn help_routes_match_direct_help_for_root_and_nested_commands() {
+    let roots = [
         "capture",
+        "freshness",
+        "notify",
+        "plan",
+        "pomodoro",
+        "ready",
+        "tmux-pomodoro",
+        "move-done-tasks",
+        "projects",
+        "randomize",
+        "task-status-hooks",
+        "nightly",
+        "query",
+        "vault-sync",
+        "gkeep",
+        "highlights",
+        "completion",
+        "plugins",
+        "capture-complete",
+        "capture-parse",
         "capture-pomodoro-name",
         "capture-pomodoros",
+        "capture-rewrite",
         "capture-sections",
         "capture-targets",
         "capture-task-id",
         "capture-task-sections",
         "capture-tasks",
-        "freshness",
-        "highlights",
-        "move-done-tasks",
-        "nightly",
-        "notify",
-        "plan",
-        "plugins",
-        "pomodoro",
-        "projects",
-        "query",
-        "randomize",
-        "ready",
-        "task-status-hooks",
-        "tmux-pomodoro",
-        "vault-sync",
     ];
-    let mut last = 0;
-    for command in order {
-        let needle = format!("\n  {command} ");
-        let position = help.find(&needle).unwrap_or_else(|| {
-            panic!("expected command `{command}` in help:\n{help}")
-        });
-        assert!(
-            position >= last,
-            "command `{command}` is out of alphabetical order:\n{help}"
+    for command in roots {
+        let direct = bob_command()
+            .args([command, "--help"])
+            .output()
+            .unwrap_or_else(|error| {
+                panic!("run bob {command} --help: {error}")
+            });
+        let routed = bob_command()
+            .args(["help", command])
+            .output()
+            .unwrap_or_else(|error| panic!("run bob help {command}: {error}"));
+        assert_eq!(
+            routed.status.code(),
+            direct.status.code(),
+            "exit code differs for bob help {command}"
         );
-        last = position;
+        assert_eq!(
+            routed.stdout, direct.stdout,
+            "stdout differs for bob help {command}"
+        );
+        assert_eq!(
+            routed.stderr, direct.stderr,
+            "stderr differs for bob help {command}"
+        );
     }
 
-    assert!(
-        help.contains("Examples:")
-            && help.contains(
-                "bob capture-pomodoro-name -p 38:0b1c2d3e -n 'deep work'"
-            )
-            && help.contains("bob capture-pomodoros --format json")
-            && help.contains("bob capture-sections --route cash --format json")
-            && help.contains("bob capture-targets --format json")
-            && help.contains(
-                "bob capture-task-id -r file -t 3:1f3a9c2b -i report-id"
-            )
-            && help.contains("bob capture-task-sections -r foo -i bar")
-            && help.contains("bob capture-tasks --route cash --format json")
-            && help.contains("bob query --source '#project'")
-            && help.contains("bob highlights create report.md")
-            && help.contains("bob highlights scan --dry-run")
-            && help.contains("bob task-status-hooks --dry-run")
-            && help.contains("bob move-done-tasks --threshold 10")
-            && help.contains("bob nightly")
-            && help.contains("bob pomodoro")
-            && help.contains("bob vault-sync status --json"),
-        "expected an Examples section:\n{help}"
-    );
-    assert!(
-        !help.contains("bulk-git-commit"),
-        "top-level help should not advertise retired bulk-git-commit:\n{help}"
-    );
-    assert!(
-        !help.contains("bob dataview"),
-        "top-level help should not advertise the old dataview spelling:\n{help}"
-    );
-    assert!(
-        !help.contains("cronjob"),
-        "top-level help should not list the old cronjob spelling:\n{help}"
-    );
-    assert!(
-        !help.contains("highlights-ref"),
-        "top-level help should not list the old highlights-ref spelling:\n{help}"
-    );
-    assert!(
-        !help.contains("mark-next-tasks"),
-        "top-level help should hide the compatibility alias:\n{help}"
-    );
-    assert!(
-        !help.contains("task-status-setter"),
-        "top-level help should hide the former canonical spelling:\n{help}"
-    );
-    assert!(
-        help.contains("Run 'bob <command> --help' for more information"),
-        "expected a per-command help footer:\n{help}"
-    );
+    for (path, direct) in [
+        (
+            &["vault-sync", "status"][..],
+            &["vault-sync", "status", "--help"][..],
+        ),
+        (
+            &["freshness", "seed"][..],
+            &["freshness", "seed", "--help"][..],
+        ),
+        (
+            &["task-status-setter"][..],
+            &["task-status-hooks", "--help"][..],
+        ),
+    ] {
+        let expected =
+            bob_command().args(direct).output().expect("direct help");
+        let mut routed_args = vec!["help"];
+        routed_args.extend_from_slice(path);
+        let routed = bob_command()
+            .args(routed_args)
+            .output()
+            .expect("routed help");
+        assert_eq!(routed.status.code(), expected.status.code());
+        assert_eq!(routed.stdout, expected.stdout, "path: {path:?}");
+        assert_eq!(routed.stderr, expected.stderr, "path: {path:?}");
+    }
 
-    assert!(
-        !output.stdout.contains(&0x1b),
-        "piped help output must not contain ANSI escape codes:\n{help}"
-    );
+    let bare = bob_command().arg("help").output().expect("run bob help");
+    let root = bob_command()
+        .arg("--help")
+        .output()
+        .expect("run bob --help");
+    assert_eq!(bare.status.code(), root.status.code());
+    assert_eq!(bare.stdout, root.stdout);
+    assert_eq!(bare.stderr, root.stderr);
+}
+
+#[test]
+fn help_routes_reject_non_command_paths_before_dispatch() {
+    let unknown = bob_command()
+        .args(["help", "nosuch"])
+        .output()
+        .expect("run invalid help route");
+    assert_eq!(unknown.status.code(), Some(2));
+    assert!(stderr(&unknown).contains("unrecognized subcommand 'nosuch'"));
+
+    let capture_text = bob_command()
+        .args(["help", "capture", "buy", "milk"])
+        .output()
+        .expect("run invalid capture help route");
+    assert_eq!(capture_text.status.code(), Some(2));
+    assert!(stdout(&capture_text).is_empty());
+    assert!(stderr(&capture_text).contains("unrecognized subcommand 'buy'"));
+}
+
+#[test]
+fn freshness_seed_stays_callable_but_hidden_from_help_and_completion() {
+    let help = bob_command()
+        .args(["freshness", "--help"])
+        .output()
+        .expect("run freshness help");
+    assert_success(&help);
+    assert!(!stdout(&help)
+        .lines()
+        .any(|line| line.starts_with("  seed ")));
+
+    let seed_help = bob_command()
+        .args(["freshness", "seed", "--help"])
+        .output()
+        .expect("run hidden seed help");
+    assert_success(&seed_help);
+
+    let complete = bob_command()
+        .args([
+            "__complete",
+            "zsh",
+            "--protocol",
+            "1",
+            "--",
+            "bob",
+            "freshness",
+            "",
+        ])
+        .output()
+        .expect("complete freshness subcommands");
+    assert_success(&complete);
+    assert!(!stdout(&complete)
+        .lines()
+        .any(|line| line.starts_with("seed\t")));
 }
 
 fn bob_notify_command() -> Command {

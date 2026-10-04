@@ -190,9 +190,56 @@ Daily-note selection uses `BOB_DAY_FILE` when set, otherwise
 
 Bob's workflow commands are:
 
+### Daily workflow
+
 | Command | Purpose |
 | --- | --- |
 | [`capture`](#capture) | Capture a task or section bullet, optionally with clipboard content |
+| [`freshness`](#task-freshness) | Walk the tiered freshness review queue |
+| `notify` | Notify when the current Pomodoro is complete |
+| [`plan`](#plan-budget) | Show today's plan budget, Today's tasks, and the NEXT/PENDING lanes |
+| [`pomodoro`](#pomodoro-status) | Show Pomodoro status, print the tmux line, or notify on completion |
+| [`ready`](#ready-cap) | Show each area/project note's Ready lane against the per-note cap |
+| `tmux-pomodoro` | Print the Pomodoro status and plan meter for tmux |
+
+### Tasks and projects
+
+| Command | Purpose |
+| --- | --- |
+| [`move-done-tasks`](#move-done-tasks) | Archive done and canceled task blocks and repair their links |
+| [`projects`](#projects) | Inspect and synchronize project lifecycle tasks |
+| [`randomize`](#randomize) | Re-roll due prioritized tasks within their priority windows |
+| [`task-status-hooks`](#task-status-hooks) | Reconcile Pomodoro links, task ranks, and derived Blocked state |
+
+### Vault
+
+| Command | Purpose |
+| --- | --- |
+| [`nightly`](#nightly-maintenance) | Run nightly maintenance: vault-sync, move-done-tasks, vault-sync |
+| [`query`](#query) | Run Dataview or Tasks queries against the vault |
+| [`vault-sync`](#vault-sync) | Reconcile the vault through Git (default: run) or show status |
+
+### Integrations
+
+| Command | Purpose |
+| --- | --- |
+| [`gkeep`](#gkeep) | Drain the Google Keep inbox into Obsidian tasks |
+| [`highlights`](#highlights) | Sync Highlights PDF annotations into reference notes |
+
+### Setup
+
+| Command | Purpose |
+| --- | --- |
+| `completion` | Install and inspect shell completion for bob |
+| [`plugins`](#plugins) | List and deploy Bob's custom Obsidian plugins |
+
+### Capture protocol
+
+The ten `capture-*` rows form the Capture protocol section. Bob Mac Capture
+uses these JSON endpoints as a separate integration protocol.
+
+| Command | Purpose |
+| --- | --- |
 | `capture-complete` | Complete capture markers, task/dependency pickers, or wikilinks at the cursor |
 | `capture-parse` | Preview what in-progress capture text and wikilinks mean |
 | `capture-pomodoro-name` | Assign a canonical name to an unnamed Pomodoro |
@@ -203,30 +250,13 @@ Bob's workflow commands are:
 | `capture-task-id` | Assign a user-authored block ID to an open capture task |
 | `capture-task-sections` | List the ALL-CAPS child sections of a capture task |
 | `capture-tasks` | List the open tasks in a routed note |
-| `completion` | Install and inspect shell completion for bob |
-| [`freshness`](#task-freshness) | List the tasks due for freshness review and seed the cutover |
-| [`gkeep`](#gkeep) | Drain the Google Keep inbox into Obsidian tasks |
-| [`highlights`](#highlights) | Synchronize Highlights PDF annotations with reference notes |
-| [`move-done-tasks`](#move-done-tasks) | Archive done and canceled task blocks and repair their links |
-| [`nightly`](#nightly-maintenance) | Run the Git sync and maintenance workflow |
-| [`notify`](#pomodoro-status) | Notify when the current Pomodoro finishes |
-| [`plan`](#plan-budget) | Show today's plan budget, Today's tasks, and the NEXT/PENDING lanes |
-| [`plugins`](#plugins) | List and deploy Bob's custom Obsidian plugins |
-| [`pomodoro`](#pomodoro-status) | Print the current Pomodoro status |
-| [`projects`](#projects) | Inspect and synchronize project lifecycle tasks |
-| [`query`](#query) | Run headless Dataview or Tasks queries, or live Dataview queries |
-| [`randomize`](#randomize) | Re-roll due prioritized tasks within their priority windows |
-| [`ready`](#ready-cap) | Show each area/project note's Ready lane against the per-note cap |
-| [`task-status-hooks`](#task-status-hooks) | Reconcile Pomodoro links, task ranks, and derived Blocked state |
-| [`tmux-pomodoro`](#pomodoro-status) | Print Pomodoro status for a tmux status line |
-| [`vault-sync`](#vault-sync) | Reconcile the Bob vault through Git |
 
 Use `bob <command> --help` for concise usage. The sections below summarize each
 workflow and link to the detailed command contract where one exists.
 
-The hidden `task-status-setter` and `mark-next-tasks` spellings remain
-compatibility-only aliases for `task-status-hooks` and are not listed in
-top-level help.
+The alias table rewrites `task-status-setter` and `mark-next-tasks` to
+`task-status-hooks` before parsing. The old spellings remain silent
+compatibility aliases and never appear in help or completion.
 
 ## Capture
 

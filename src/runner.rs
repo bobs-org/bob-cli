@@ -3,15 +3,17 @@ use std::{
     error::Error,
     ffi::{OsStr, OsString},
     fmt, fs, io,
+    io::IsTerminal,
     path::{Path, PathBuf},
     process::{self, Command as ProcessCommand, ExitStatus, Stdio},
 };
 
 use clap::{
     builder::{
-        styling::{AnsiColor, Styles},
-        OsStringValueParser,
+        styling::{AnsiColor, Style, Styles},
+        OsStringValueParser, StyledStr,
     },
+    error::ErrorKind,
     Arg, Command as ClapCommand,
 };
 
@@ -24,241 +26,298 @@ pub(crate) struct Subcommand {
     pub(crate) script_command: Option<&'static str>,
     pub(crate) about: &'static str,
     pub(crate) native_command: NativeCommand,
-    pub(crate) tier: CompletionTier,
+    pub(crate) section: Section,
 }
 
-/// Shell-completion grouping for a top-level subcommand.
-///
-/// Porcelain commands render under the `commands` group; the ten
-/// `capture-*` frontend endpoints render last under `capture protocol`.
-/// The metadata lives here, with the table, so grouping can never drift
-/// from the command list.
+/// Workflow section shared by root help and root completion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum CompletionTier {
-    Porcelain,
-    Plumbing,
+pub(crate) enum Section {
+    DailyWorkflow,
+    TasksAndProjects,
+    Vault,
+    Integrations,
+    Setup,
+    CaptureProtocol,
+}
+
+impl Section {
+    pub(crate) const fn title(self) -> &'static str {
+        match self {
+            Self::DailyWorkflow => "Daily workflow",
+            Self::TasksAndProjects => "Tasks and projects",
+            Self::Vault => "Vault",
+            Self::Integrations => "Integrations",
+            Self::Setup => "Setup",
+            Self::CaptureProtocol => "Capture protocol",
+        }
+    }
+
+    pub(crate) const fn completion_group(self) -> &'static str {
+        match self {
+            Self::DailyWorkflow => "daily workflow",
+            Self::TasksAndProjects => "tasks and projects",
+            Self::Vault => "vault",
+            Self::Integrations => "integrations",
+            Self::Setup => "setup",
+            Self::CaptureProtocol => "capture protocol",
+        }
+    }
+}
+
+pub(crate) const SECTIONS: &[Section] = &[
+    Section::DailyWorkflow,
+    Section::TasksAndProjects,
+    Section::Vault,
+    Section::Integrations,
+    Section::Setup,
+    Section::CaptureProtocol,
+];
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Alias {
+    pub(crate) from: &'static str,
+    pub(crate) to: &'static [&'static str],
+}
+
+pub(crate) const ALIASES: &[Alias] = &[
+    Alias {
+        from: "mark-next-tasks",
+        to: &["task-status-hooks"],
+    },
+    Alias {
+        from: "task-status-setter",
+        to: &["task-status-hooks"],
+    },
+];
+
+/// Rewrite an exact root alias while retaining every remaining OsString.
+/// Runtime dispatch and completion share this argv-prefix table.
+pub(crate) fn rewrite_alias_args(args: &[OsString]) -> Vec<OsString> {
+    let Some(first) = args.first() else {
+        return args.to_vec();
+    };
+    let Some(alias) =
+        ALIASES.iter().find(|alias| first == OsStr::new(alias.from))
+    else {
+        return args.to_vec();
+    };
+
+    alias
+        .to
+        .iter()
+        .map(OsString::from)
+        .chain(args.iter().skip(1).cloned())
+        .collect()
 }
 
 pub(crate) fn subcommands() -> &'static [Subcommand] {
     SUBCOMMANDS
 }
 
-// Keep this table sorted alphabetically by command name; the top-level help
-// renders subcommands in declaration order, and `subcommands_are_sorted` guards
-// the invariant.
+// Keep this table sorted by section and then command name. Root help and
+// completion both render in declaration order.
 const SUBCOMMANDS: &[Subcommand] = &[
     Subcommand {
         name: "capture",
         script_command: None,
-        about: "Capture a task or bullet into the Bob vault",
+        about: "Capture tasks, bullets, and Pomodoro commands into the vault",
         native_command: NativeCommand::Capture,
-        tier: CompletionTier::Porcelain,
-    },
-    Subcommand {
-        name: "capture-complete",
-        script_command: None,
-        about: "Complete the capture marker at the cursor",
-        native_command: NativeCommand::CaptureComplete,
-        tier: CompletionTier::Plumbing,
-    },
-    Subcommand {
-        name: "capture-parse",
-        script_command: None,
-        about: "Explain what in-progress capture text currently means",
-        native_command: NativeCommand::CaptureParse,
-        tier: CompletionTier::Plumbing,
-    },
-    Subcommand {
-        name: "capture-pomodoro-name",
-        script_command: None,
-        about: "Assign a name to an open unnamed Pomodoro",
-        native_command: NativeCommand::CapturePomodoroName,
-        tier: CompletionTier::Plumbing,
-    },
-    Subcommand {
-        name: "capture-pomodoros",
-        script_command: None,
-        about: "List today's Pomodoro ledger entries",
-        native_command: NativeCommand::CapturePomodoros,
-        tier: CompletionTier::Plumbing,
-    },
-    Subcommand {
-        name: "capture-rewrite",
-        script_command: None,
-        about: "Apply the capture grammar's automatic draft rewrites",
-        native_command: NativeCommand::CaptureRewrite,
-        tier: CompletionTier::Plumbing,
-    },
-    Subcommand {
-        name: "capture-sections",
-        script_command: None,
-        about: "List the non-Tasks sections of a capture note",
-        native_command: NativeCommand::CaptureSections,
-        tier: CompletionTier::Plumbing,
-    },
-    Subcommand {
-        name: "capture-targets",
-        script_command: None,
-        about: "List capture routes for inbox, area, and active project notes",
-        native_command: NativeCommand::CaptureTargets,
-        tier: CompletionTier::Plumbing,
-    },
-    Subcommand {
-        name: "capture-task-id",
-        script_command: None,
-        about: "Assign a block ID to an open capture task",
-        native_command: NativeCommand::CaptureTaskId,
-        tier: CompletionTier::Plumbing,
-    },
-    Subcommand {
-        name: "capture-task-sections",
-        script_command: None,
-        about: "List the ALL-CAPS child sections of a capture task",
-        native_command: NativeCommand::CaptureTaskSections,
-        tier: CompletionTier::Plumbing,
-    },
-    Subcommand {
-        name: "capture-tasks",
-        script_command: None,
-        about: "List the open tasks of a capture note",
-        native_command: NativeCommand::CaptureTasks,
-        tier: CompletionTier::Plumbing,
-    },
-    Subcommand {
-        name: "completion",
-        script_command: None,
-        about: "Install and inspect shell completion for bob",
-        native_command: NativeCommand::Completion,
-        tier: CompletionTier::Porcelain,
+        section: Section::DailyWorkflow,
     },
     Subcommand {
         name: "freshness",
         script_command: None,
-        about: "Walk the tiered freshness review queue and seed the cutover",
+        about: "Walk the tiered freshness review queue",
         native_command: NativeCommand::Freshness,
-        tier: CompletionTier::Porcelain,
-    },
-    Subcommand {
-        name: "gkeep",
-        script_command: None,
-        about: "Drain the Google Keep inbox into Obsidian tasks",
-        native_command: NativeCommand::Gkeep,
-        tier: CompletionTier::Porcelain,
-    },
-    Subcommand {
-        name: "highlights",
-        script_command: None,
-        about: "Sync Highlights PDF annotations into reference notes",
-        native_command: NativeCommand::Highlights,
-        tier: CompletionTier::Porcelain,
-    },
-    Subcommand {
-        name: "move-done-tasks",
-        script_command: None,
-        about: "Move done and canceled tasks and maintain done links",
-        native_command: NativeCommand::MoveDoneTasks,
-        tier: CompletionTier::Porcelain,
-    },
-    Subcommand {
-        name: "nightly",
-        script_command: None,
-        about: "Run the nightly Obsidian sync and maintenance steps",
-        native_command: NativeCommand::Nightly,
-        tier: CompletionTier::Porcelain,
+        section: Section::DailyWorkflow,
     },
     Subcommand {
         name: "notify",
         script_command: Some("bob_notify"),
         about: "Notify when the current Pomodoro is complete",
         native_command: NativeCommand::Notify,
-        tier: CompletionTier::Porcelain,
+        section: Section::DailyWorkflow,
     },
     Subcommand {
         name: "plan",
         script_command: None,
-        about: "Show today's plan budget, Today's tasks, and the NEXT/PENDING lanes",
+        about:
+            "Show today's plan budget, Today's tasks, and NEXT/PENDING lanes",
         native_command: NativeCommand::Plan,
-        tier: CompletionTier::Porcelain,
-    },
-    Subcommand {
-        name: "plugins",
-        script_command: None,
-        about: "Manage Bob Obsidian plugins (list and sync to the vault)",
-        native_command: NativeCommand::Plugins,
-        tier: CompletionTier::Porcelain,
+        section: Section::DailyWorkflow,
     },
     Subcommand {
         name: "pomodoro",
         script_command: Some("bob_pomodoro"),
-        about: "Show the current Pomodoro status",
+        about:
+            "Show Pomodoro status, print the tmux line, or notify on completion",
         native_command: NativeCommand::Pomodoro,
-        tier: CompletionTier::Porcelain,
+        section: Section::DailyWorkflow,
+    },
+    Subcommand {
+        name: "ready",
+        script_command: None,
+        about:
+            "Show each area/project note's Ready lane against the per-note cap",
+        native_command: NativeCommand::NoteReady,
+        section: Section::DailyWorkflow,
+    },
+    Subcommand {
+        name: "tmux-pomodoro",
+        script_command: Some("tmux_bob_pomodoro"),
+        about: "Print the Pomodoro status and plan meter for tmux",
+        native_command: NativeCommand::TmuxPomodoro,
+        section: Section::DailyWorkflow,
+    },
+    Subcommand {
+        name: "move-done-tasks",
+        script_command: None,
+        about:
+            "Move done and canceled tasks into done/ archives and repair links",
+        native_command: NativeCommand::MoveDoneTasks,
+        section: Section::TasksAndProjects,
     },
     Subcommand {
         name: "projects",
         script_command: None,
-        about: "Manage project notes via their ^prj tasks",
+        about: "List and sync project notes via their ^prj tasks",
         native_command: NativeCommand::Projects,
-        tier: CompletionTier::Porcelain,
-    },
-    Subcommand {
-        name: "query",
-        script_command: None,
-        about: "Run Dataview queries against the Bob vault",
-        native_command: NativeCommand::Query,
-        tier: CompletionTier::Porcelain,
+        section: Section::TasksAndProjects,
     },
     Subcommand {
         name: "randomize",
         script_command: None,
         about: "Re-roll due prioritized tasks within their priority windows",
         native_command: NativeCommand::Randomize,
-        tier: CompletionTier::Porcelain,
-    },
-    Subcommand {
-        name: "ready",
-        script_command: None,
-        about: "Show ready tasks per area/project note against the per-note cap",
-        native_command: NativeCommand::NoteReady,
-        tier: CompletionTier::Porcelain,
+        section: Section::TasksAndProjects,
     },
     Subcommand {
         name: "task-status-hooks",
         script_command: None,
-        about: "Sync active task dependencies and Pomodoro links",
+        about:
+            "Reconcile task statuses from the Pomodoro ledger and dependencies",
         native_command: NativeCommand::TaskStatusHooks,
-        tier: CompletionTier::Porcelain,
+        section: Section::TasksAndProjects,
     },
     Subcommand {
-        name: "tmux-pomodoro",
-        script_command: Some("tmux_bob_pomodoro"),
-        about: "Print Pomodoro status for tmux",
-        native_command: NativeCommand::TmuxPomodoro,
-        tier: CompletionTier::Porcelain,
+        name: "nightly",
+        script_command: None,
+        about:
+            "Run nightly maintenance: vault-sync, move-done-tasks, vault-sync",
+        native_command: NativeCommand::Nightly,
+        section: Section::Vault,
+    },
+    Subcommand {
+        name: "query",
+        script_command: None,
+        about: "Run Dataview or Tasks queries against the vault",
+        native_command: NativeCommand::Query,
+        section: Section::Vault,
     },
     Subcommand {
         name: "vault-sync",
         script_command: None,
-        about: "Reconcile the Bob vault through Git",
+        about: "Reconcile the vault through Git (default: run) or show status",
         native_command: NativeCommand::VaultSync,
-        tier: CompletionTier::Porcelain,
-    },
-];
-
-const HIDDEN_SUBCOMMAND_ALIASES: &[Subcommand] = &[
-    Subcommand {
-        name: "mark-next-tasks",
-        script_command: None,
-        about: "Compatibility alias for task-status-hooks",
-        native_command: NativeCommand::TaskStatusHooks,
-        tier: CompletionTier::Porcelain,
+        section: Section::Vault,
     },
     Subcommand {
-        name: "task-status-setter",
+        name: "gkeep",
         script_command: None,
-        about: "Compatibility alias for task-status-hooks",
-        native_command: NativeCommand::TaskStatusHooks,
-        tier: CompletionTier::Porcelain,
+        about: "Drain the Google Keep inbox into Obsidian tasks",
+        native_command: NativeCommand::Gkeep,
+        section: Section::Integrations,
+    },
+    Subcommand {
+        name: "highlights",
+        script_command: None,
+        about: "Sync Highlights PDF annotations into reference notes",
+        native_command: NativeCommand::Highlights,
+        section: Section::Integrations,
+    },
+    Subcommand {
+        name: "completion",
+        script_command: None,
+        about: "Install and inspect shell completion for bob",
+        native_command: NativeCommand::Completion,
+        section: Section::Setup,
+    },
+    Subcommand {
+        name: "plugins",
+        script_command: None,
+        about: "List and deploy Bob's custom Obsidian plugins",
+        native_command: NativeCommand::Plugins,
+        section: Section::Setup,
+    },
+    Subcommand {
+        name: "capture-complete",
+        script_command: None,
+        about: "Complete the capture marker at the cursor",
+        native_command: NativeCommand::CaptureComplete,
+        section: Section::CaptureProtocol,
+    },
+    Subcommand {
+        name: "capture-parse",
+        script_command: None,
+        about: "Explain what in-progress capture text currently means",
+        native_command: NativeCommand::CaptureParse,
+        section: Section::CaptureProtocol,
+    },
+    Subcommand {
+        name: "capture-pomodoro-name",
+        script_command: None,
+        about: "Write a name onto an open unnamed Pomodoro",
+        native_command: NativeCommand::CapturePomodoroName,
+        section: Section::CaptureProtocol,
+    },
+    Subcommand {
+        name: "capture-pomodoros",
+        script_command: None,
+        about: "List today's Pomodoro ledger entries",
+        native_command: NativeCommand::CapturePomodoros,
+        section: Section::CaptureProtocol,
+    },
+    Subcommand {
+        name: "capture-rewrite",
+        script_command: None,
+        about: "Apply the capture grammar's automatic draft rewrites",
+        native_command: NativeCommand::CaptureRewrite,
+        section: Section::CaptureProtocol,
+    },
+    Subcommand {
+        name: "capture-sections",
+        script_command: None,
+        about: "List the non-Tasks sections of a capture note",
+        native_command: NativeCommand::CaptureSections,
+        section: Section::CaptureProtocol,
+    },
+    Subcommand {
+        name: "capture-targets",
+        script_command: None,
+        about: "List inbox, area, and active project capture routes",
+        native_command: NativeCommand::CaptureTargets,
+        section: Section::CaptureProtocol,
+    },
+    Subcommand {
+        name: "capture-task-id",
+        script_command: None,
+        about: "Write a block ID onto an open capture task",
+        native_command: NativeCommand::CaptureTaskId,
+        section: Section::CaptureProtocol,
+    },
+    Subcommand {
+        name: "capture-task-sections",
+        script_command: None,
+        about: "List the ALL-CAPS child sections of a capture task",
+        native_command: NativeCommand::CaptureTaskSections,
+        section: Section::CaptureProtocol,
+    },
+    Subcommand {
+        name: "capture-tasks",
+        script_command: None,
+        about: "List the open tasks of a capture note",
+        native_command: NativeCommand::CaptureTasks,
+        section: Section::CaptureProtocol,
     },
 ];
 
@@ -291,6 +350,65 @@ pub fn run_bob() -> i32 {
     if argv.get(1).is_some_and(|first| first == "__complete") {
         return crate::native::completion::run_complete(&argv[2..]);
     }
+
+    let mut args = rewrite_alias_args(&argv[1..]);
+    if args.first().is_some_and(|first| first == "help") {
+        args = match route_help(&args[1..]) {
+            Ok(args) => args,
+            Err(exit_code) => return exit_code,
+        };
+    }
+    run_bob_with_args(
+        std::iter::once(OsString::from("bob")).chain(args).collect(),
+    )
+}
+
+fn route_help(path: &[OsString]) -> Result<Vec<OsString>, i32> {
+    if path.is_empty() || (path.len() == 1 && path[0] == "--help") {
+        return Ok(vec![OsString::from("--help")]);
+    }
+
+    // `bob help <path>` shares the alias table with dispatch. Aliases may
+    // expand to a multi-token canonical path in a later command-tree phase.
+    let path = rewrite_alias_args(path);
+    if let Some(invalid) = invalid_help_path(&path) {
+        let mut command = build_cli();
+        let error = command.error(
+            ErrorKind::InvalidSubcommand,
+            format!("unrecognized subcommand '{invalid}'"),
+        );
+        let exit_code = error.exit_code();
+        if let Err(print_error) = error.print() {
+            eprintln!("bob: failed to print command-line error: {print_error}");
+        }
+        return Err(exit_code);
+    }
+
+    Ok(path
+        .into_iter()
+        .chain(std::iter::once(OsString::from("--help")))
+        .collect())
+}
+
+fn invalid_help_path(path: &[OsString]) -> Option<String> {
+    let root = crate::native::completion::tree();
+    let mut command = &root;
+    for token in path {
+        let Some(name) = token.to_str() else {
+            return Some(token.to_string_lossy().into_owned());
+        };
+        let Some(next) = command
+            .get_subcommands()
+            .find(|subcommand| subcommand.get_name() == name)
+        else {
+            return Some(name.to_owned());
+        };
+        command = next;
+    }
+    None
+}
+
+fn run_bob_with_args(argv: Vec<OsString>) -> i32 {
     let matches = match build_cli().try_get_matches_from(argv) {
         Ok(matches) => matches,
         Err(error) => {
@@ -388,71 +506,169 @@ const ABOUT: &str =
      Pomodoro workflow";
 
 const LONG_ABOUT: &str =
-    "Bob \u{2014} command-line tools for the Bob Obsidian \
-vault and Pomodoro workflow.\n\n\
-Bob tracks a daily Pomodoro ledger inside an Obsidian vault and keeps that \
-vault synced through Git. Run a task with `bob <command>`; pass `--help` to a \
-command for its own options.";
+    "Bob tracks a daily Pomodoro ledger inside an Obsidian vault and keeps that\n\
+vault synced through Git. Commands follow the daily workflow: capture, review\n\
+(plan, freshness, ready), run Pomodoros, reconcile tasks, and nightly\n\
+maintenance. Pass `--help` to any command, or run `bob help <command>`, for\n\
+its own options.";
 
 const HELP_TEMPLATE: &str = "\
 {about-with-newline}
 {usage-heading} {usage}
 
-{all-args}{after-help}";
+{before-help}{all-args}{after-help}";
 
 const AFTER_HELP: &str = "\
 Examples:
-  bob capture buy milk @groceries
-                                 Capture a task into groceries.md
-  bob capture '@dev:foobar' 'Some foobar task.'
-                                 Capture and link a next Pomodoro task
-  bob capture-complete --cursor 1 --format json -- '@'
-                                 Complete the capture marker at the cursor
-  bob capture-parse --format json -- 'Call bank @cash+'
-                                 Explain in-progress capture text
-  bob capture-pomodoro-name -p 38:0b1c2d3e -n 'deep work'
-                                 Name an unnamed Pomodoro in today's daily note
-  bob capture-pomodoros --format json
-                                 List today's Pomodoro picker entries
-  bob capture-sections --route cash --format json
-                                 List picker sections for one capture target
-  bob capture-targets --format json
-                                 List picker targets for task capture
-  bob capture-task-id -r file -t 3:1f3a9c2b -i report-id
-                                 Assign a block ID to an open capture task
-  bob capture-task-sections -r foo -i bar
-                                 List picker sections for one parent task
-  bob capture-tasks --route cash --format json
-                                 List picker tasks for one capture target
-  bob completion install
-                                 Install or refresh shell completion
-  bob query --source '#project'
-                                 Print matching note paths
-  bob freshness list -f json
-                                 List the tiered freshness review queue
-  bob gkeep
-                                 Show the Keep inbox and gkeep_inbox.md side by side
-  bob gkeep pull --dry-run
-                                 Preview the exact Markdown a pull would write
-  bob randomize --dry-run
-                                 Preview bulk re-roll of due prioritized tasks
-  bob ready -a                   Show ready tasks per area/project note
-  bob highlights create report.md
-                                 Render a Highlights-ready PDF
-  bob highlights scan --dry-run
-                                 Preview Highlights reference note sync
-  bob task-status-hooks --dry-run
-                                 Preview dependency status synchronization
-  bob move-done-tasks --threshold 10
-                                 Move tasks and maintain done links
-  bob nightly                    Run the nightly sync and maintenance steps
-  bob plan -f json               Show today's plan budget, Today, and lanes
-  bob plugins list               List Bob plugins and their vault sync state
-  bob pomodoro                   Show today's Pomodoro status
-  bob projects list              List project notes and ^prj task states
-  bob vault-sync status --json   Print the last vault Git sync status
+  bob capture buy milk @groceries   Capture a task into groceries.md
+  bob capture '='                   Start the queued Pomodoro
+  bob plan                          Show today's plan budget and lanes
+  bob freshness                     List the review queue
+  bob ready                         Show Ready lanes against the per-note cap
+  bob task-status-hooks --dry-run   Preview task status reconciliation
+  bob query --source '#project'     Print matching note paths
+  bob vault-sync status --json      Print the last vault Git sync status
 
-Run 'bob <command> --help' for more information on a command.";
+Run 'bob <command> --help' or 'bob help <command>' for more on a command.";
+
+fn sectioned_help(long: bool) -> StyledStr {
+    let mut help = StyledStr::new();
+    let color = io::stdout().is_terminal() && env::var_os("NO_COLOR").is_none();
+    let styles = cli_styles();
+    let name_width = SUBCOMMANDS
+        .iter()
+        .map(|entry| entry.name.chars().count())
+        .max()
+        .unwrap_or(0);
+
+    let mut first_section = true;
+    for section in SECTIONS {
+        let entries: Vec<&Subcommand> = SUBCOMMANDS
+            .iter()
+            .filter(|entry| entry.section == *section)
+            .collect();
+        if entries.is_empty() {
+            continue;
+        }
+        if !first_section {
+            help.push_str("\n");
+        }
+        first_section = false;
+        let title = if *section == Section::CaptureProtocol && !long {
+            "Capture protocol (Bob Mac Capture JSON endpoints; `bob --help` lists them)"
+        } else {
+            section.title()
+        };
+        push_help_styled(&mut help, title, styles.get_header(), color);
+        help.push_str(":\n");
+
+        if *section == Section::CaptureProtocol && !long {
+            append_wrapped_names(&mut help, &entries);
+        } else {
+            for entry in entries {
+                append_help_row(
+                    &mut help,
+                    entry,
+                    name_width,
+                    long || *section != Section::CaptureProtocol,
+                    styles.get_literal(),
+                    color,
+                );
+            }
+        }
+    }
+    StyledStr::from(format!("{help}").trim_end().to_owned())
+}
+
+fn push_help_styled(
+    output: &mut StyledStr,
+    text: &str,
+    style: &Style,
+    color: bool,
+) {
+    if color {
+        output.push_str(&format!(
+            "{}{}{}",
+            style.render(),
+            text,
+            style.render_reset()
+        ));
+    } else {
+        output.push_str(text);
+    }
+}
+
+fn append_help_row(
+    output: &mut StyledStr,
+    entry: &Subcommand,
+    name_width: usize,
+    show_about: bool,
+    literal_style: &Style,
+    color: bool,
+) {
+    let prefix = format!("  {:<name_width$}  ", entry.name);
+    let desc = if show_about { entry.about } else { "" };
+    let available = 80usize.saturating_sub(prefix.chars().count());
+    let mut lines = Vec::new();
+    let mut line = String::new();
+    for word in desc.split_whitespace() {
+        let next_width = line.chars().count()
+            + usize::from(!line.is_empty())
+            + word.chars().count();
+        if next_width > available && !line.is_empty() {
+            lines.push(std::mem::take(&mut line));
+        }
+        if !line.is_empty() {
+            line.push(' ');
+        }
+        line.push_str(word);
+    }
+    if !line.is_empty() {
+        lines.push(line);
+    }
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+    output.push_str("  ");
+    push_help_styled(output, entry.name, literal_style, color);
+    output.push_str(&format!(
+        "{}{}\n",
+        " ".repeat(name_width - entry.name.len() + 2),
+        lines[0]
+    ));
+    let continuation = " ".repeat(prefix.chars().count());
+    for line in lines.iter().skip(1) {
+        output.push_str(&continuation);
+        output.push_str(line);
+        output.push_str("\n");
+    }
+}
+
+fn append_wrapped_names(output: &mut StyledStr, entries: &[&Subcommand]) {
+    let mut line = String::from("  ");
+    for entry in entries {
+        let addition = if line.len() == 2 {
+            entry.name.to_owned()
+        } else {
+            format!("  {}", entry.name)
+        };
+        if line.chars().count() + addition.chars().count() > 80
+            && line.len() > 2
+        {
+            output.push_str(&line);
+            output.push_str("\n");
+            line.clear();
+            line.push_str("  ");
+            line.push_str(entry.name);
+        } else {
+            line.push_str(&addition);
+        }
+    }
+    if line.len() > 2 {
+        output.push_str(&line);
+        output.push_str("\n");
+    }
+}
 
 fn cli_styles() -> Styles {
     Styles::styled()
@@ -469,17 +685,17 @@ fn build_cli() -> ClapCommand {
         .long_about(LONG_ABOUT)
         .styles(cli_styles())
         .help_template(HELP_TEMPLATE)
+        .override_usage("bob <COMMAND>")
         .after_help(AFTER_HELP)
+        .before_help(sectioned_help(false))
+        .before_long_help(sectioned_help(true))
+        .disable_help_subcommand(true)
         .subcommand_required(true)
         .arg_required_else_help(true);
 
     for subcommand in SUBCOMMANDS {
-        command = command
-            .subcommand(delegate_subcommand(subcommand.name, subcommand.about));
-    }
-    for alias in HIDDEN_SUBCOMMAND_ALIASES {
         command = command.subcommand(
-            delegate_subcommand(alias.name, alias.about).hide(true),
+            delegate_subcommand(subcommand.name, subcommand.about).hide(true),
         );
     }
 
@@ -502,13 +718,10 @@ fn delegate_subcommand(name: &'static str, about: &'static str) -> ClapCommand {
 fn command_for_subcommand(
     subcommand: &str,
 ) -> Option<(Option<&'static str>, NativeCommand)> {
-    SUBCOMMANDS
-        .iter()
-        .chain(HIDDEN_SUBCOMMAND_ALIASES)
-        .find_map(|command| {
-            (command.name == subcommand)
-                .then_some((command.script_command, command.native_command))
-        })
+    SUBCOMMANDS.iter().find_map(|command| {
+        (command.name == subcommand)
+            .then_some((command.script_command, command.native_command))
+    })
 }
 
 fn run_command_or_report(
@@ -694,18 +907,54 @@ fn set_asset_permissions(_path: &Path, _executable: bool) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::SUBCOMMANDS;
+    use std::ffi::OsString;
+
+    use super::{rewrite_alias_args, Section, SECTIONS, SUBCOMMANDS};
 
     #[test]
-    fn subcommands_are_sorted_alphabetically() {
-        let names: Vec<&str> =
-            SUBCOMMANDS.iter().map(|command| command.name).collect();
-        let mut sorted = names.clone();
-        sorted.sort_unstable();
+    fn subcommands_are_contiguous_in_section_order_and_alphabetical() {
+        let mut last_section = None;
+        let mut last_name = "";
+        let mut seen_sections = Vec::new();
+        for command in SUBCOMMANDS {
+            if last_section != Some(command.section) {
+                if let Some(previous) = last_section {
+                    assert!(
+                        !seen_sections.contains(&command.section),
+                        "section {:?} is not contiguous",
+                        command.section
+                    );
+                    let previous_index = SECTIONS
+                        .iter()
+                        .position(|section| *section == previous)
+                        .unwrap();
+                    let current_index = SECTIONS
+                        .iter()
+                        .position(|section| *section == command.section)
+                        .unwrap();
+                    assert!(current_index > previous_index);
+                }
+                seen_sections.push(command.section);
+                last_section = Some(command.section);
+                last_name = "";
+            }
+            assert!(
+                command.name > last_name,
+                "{} is out of alphabetical order in {:?}",
+                command.name,
+                command.section
+            );
+            last_name = command.name;
+        }
         assert_eq!(
-            names, sorted,
-            "SUBCOMMANDS must stay sorted by command name so top-level help \
-             renders alphabetically"
+            seen_sections,
+            SECTIONS
+                .iter()
+                .copied()
+                .filter(|section| SUBCOMMANDS
+                    .iter()
+                    .any(|entry| entry.section == *section))
+                .collect::<Vec<Section>>()
         );
     }
 
@@ -714,5 +963,21 @@ mod tests {
         // `debug_assert`s inside clap fire during help rendering; exercise the
         // full build so a malformed template or style is caught in tests.
         super::build_cli().debug_assert();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn alias_rewrite_preserves_separator_and_non_utf8_tail() {
+        use std::os::unix::ffi::{OsStrExt, OsStringExt};
+
+        let args = vec![
+            OsString::from("task-status-setter"),
+            OsString::from("--"),
+            OsString::from_vec(vec![0xff, b'x']),
+        ];
+        let rewritten = rewrite_alias_args(&args);
+        assert_eq!(rewritten[0], "task-status-hooks");
+        assert_eq!(rewritten[1], "--");
+        assert_eq!(rewritten[2].as_os_str().as_bytes(), [0xff, b'x']);
     }
 }

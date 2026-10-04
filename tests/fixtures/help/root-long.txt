@@ -1,0 +1,75 @@
+Bob tracks a daily Pomodoro ledger inside an Obsidian vault and keeps that
+vault synced through Git. Commands follow the daily workflow: capture, review
+(plan, freshness, ready), run Pomodoros, reconcile tasks, and nightly
+maintenance. Pass `--help` to any command, or run `bob help <command>`, for
+its own options.
+
+Usage: bob <COMMAND>
+
+Daily workflow:
+  capture                Capture tasks, bullets, and Pomodoro commands into the
+                         vault
+  freshness              Walk the tiered freshness review queue
+  notify                 Notify when the current Pomodoro is complete
+  plan                   Show today's plan budget, Today's tasks, and
+                         NEXT/PENDING lanes
+  pomodoro               Show Pomodoro status, print the tmux line, or notify on
+                         completion
+  ready                  Show each area/project note's Ready lane against the
+                         per-note cap
+  tmux-pomodoro          Print the Pomodoro status and plan meter for tmux
+
+Tasks and projects:
+  move-done-tasks        Move done and canceled tasks into done/ archives and
+                         repair links
+  projects               List and sync project notes via their ^prj tasks
+  randomize              Re-roll due prioritized tasks within their priority
+                         windows
+  task-status-hooks      Reconcile task statuses from the Pomodoro ledger and
+                         dependencies
+
+Vault:
+  nightly                Run nightly maintenance: vault-sync, move-done-tasks,
+                         vault-sync
+  query                  Run Dataview or Tasks queries against the vault
+  vault-sync             Reconcile the vault through Git (default: run) or show
+                         status
+
+Integrations:
+  gkeep                  Drain the Google Keep inbox into Obsidian tasks
+  highlights             Sync Highlights PDF annotations into reference notes
+
+Setup:
+  completion             Install and inspect shell completion for bob
+  plugins                List and deploy Bob's custom Obsidian plugins
+
+Capture protocol:
+  capture-complete       Complete the capture marker at the cursor
+  capture-parse          Explain what in-progress capture text currently means
+  capture-pomodoro-name  Write a name onto an open unnamed Pomodoro
+  capture-pomodoros      List today's Pomodoro ledger entries
+  capture-rewrite        Apply the capture grammar's automatic draft rewrites
+  capture-sections       List the non-Tasks sections of a capture note
+  capture-targets        List inbox, area, and active project capture routes
+  capture-task-id        Write a block ID onto an open capture task
+  capture-task-sections  List the ALL-CAPS child sections of a capture task
+  capture-tasks          List the open tasks of a capture note
+
+Options:
+  -h, --help
+          Print help (see a summary with '-h')
+
+  -V, --version
+          Print version
+
+Examples:
+  bob capture buy milk @groceries   Capture a task into groceries.md
+  bob capture '='                   Start the queued Pomodoro
+  bob plan                          Show today's plan budget and lanes
+  bob freshness                     List the review queue
+  bob ready                         Show Ready lanes against the per-note cap
+  bob task-status-hooks --dry-run   Preview task status reconciliation
+  bob query --source '#project'     Print matching note paths
+  bob vault-sync status --json      Print the last vault Git sync status
+
+Run 'bob <command> --help' or 'bob help <command>' for more on a command.

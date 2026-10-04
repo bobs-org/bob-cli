@@ -116,24 +116,21 @@ fn print_clap_error(error: clap::Error) -> i32 {
 
 pub(crate) fn build_cli() -> ClapCommand {
     ClapCommand::new(COMMAND_NAME)
-        .about("Walk the tiered freshness review queue and seed the cutover")
+        .about("Walk the tiered freshness review queue")
         .long_about(
             "Walk the tiered freshness review queue: list the tasks due \
             for review in tier order NEW → PROJECTS → PENDING → NEXT → \
-            RETURNED → REFERENCES → ROTTEN and stamp the one-time cutover seed.\n\n\
+            RETURNED → REFERENCES → ROTTEN.\n\n\
             The list subcommand is read-only: it evaluates every visible, \
             non-recurring Ready, Pending, and Next task at read time — \
             never stored — and shows the tiered walk queue with counts. \
             Pending and Next tasks come due for a daily review set by \
-            freshness.pending_interval / next_interval. The seed \
-            subcommand stamps every unstamped open task once: Ready tasks \
-            staggered across the last 7 days by note, everything else \
-            today. The seed refuses a second run, aborts on any parse \
-            change, and refuses when a file changed since the scan. See \
+            freshness.pending_interval / next_interval. The hidden `seed` \
+            subcommand stamped the one-time cutover. Do not re-run it. See \
             docs/freshness.md for the full definition.",
         )
         .after_help(
-            "Examples:\n  bob freshness\n  bob freshness list -f json\n  bob freshness list --limit 10\n  bob freshness seed --dry-run\n  bob freshness seed --dry-run -f json",
+            "Examples:\n  bob freshness\n  bob freshness list -f json\n  bob freshness list --limit 10",
         )
         .subcommand_required(false)
         .arg_required_else_help(false)
@@ -151,7 +148,7 @@ fn list_command() -> ClapCommand {
 
 fn list_command_inner() -> ClapCommand {
     ClapCommand::new("list")
-        .about("List the tiered freshness review queue")
+        .about("List the tiered freshness review queue (default)")
         .long_about(
             "List the tiered freshness review queue: every task with a \
             walk tier, ordered NEW → PROJECTS → PENDING → NEXT → \
@@ -173,6 +170,7 @@ fn list_command_inner() -> ClapCommand {
 fn seed_command() -> ClapCommand {
     ClapCommand::new("seed")
         .about("Stamp the one-time freshness cutover seed")
+        .hide(true)
         .long_about(
             "Stamp the one-time freshness cutover seed: in-scope Ready \
             tasks without a valid fresh are bin-packed by note into 7 \

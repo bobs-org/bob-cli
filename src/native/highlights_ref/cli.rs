@@ -47,7 +47,7 @@ pub(crate) fn build_cli() -> ClapCommand {
                 ClapCommand::new("scan")
                     .about("Scan the configured Highlights library"),
             )
-            .after_help("Scans PDFs recursively, preflights collisions and dirty targets, then syncs each PDF."),
+            .after_help("Examples:\n  bob highlights scan --dry-run\n\nScans PDFs recursively, preflights collisions and dirty targets, then syncs each PDF."),
         )
         .subcommand(with_sync_args(ClapCommand::new("sync")))
 }

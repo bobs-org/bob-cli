@@ -71,7 +71,7 @@ notes and non-terminal project notes, and always pins mac_inbox first as the \
 default. It is read-only.",
         )
         .after_help(
-            "Examples:\n  bob capture-targets\n  bob capture-targets -f json\n  bob capture-targets -b ~/bob",
+            "Examples:\n  bob capture-targets --format json\n  bob capture-targets\n  bob capture-targets -f json\n  bob capture-targets -b ~/bob",
         )
         .disable_help_flag(true)
         .arg(bob_dir_arg())

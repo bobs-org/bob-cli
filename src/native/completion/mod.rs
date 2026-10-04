@@ -2,7 +2,8 @@
 //!
 //! Every TAB runs a hidden `bob __complete` request against one
 //! composed clap tree plus bob's own read-only value providers, so
-//! completion can never drift from the CLI. See `docs/completion.md`
+//! completion can never drift from the CLI. Root candidates share the
+//! workflow sections and order used by `bob -h`. See `docs/completion.md`
 //! for the protocol and the runtime model.
 
 mod adapters;

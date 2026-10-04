@@ -64,7 +64,7 @@ Done and canceled tasks are omitted. Missing notes are not errors; they return \
 an empty list.",
         )
         .after_help(
-            "Examples:\n  bob capture-tasks --route cash\n  bob capture-tasks -r cash -f json\n  bob capture-tasks -b ~/bob -r project-alpha",
+            "Examples:\n  bob capture-tasks --route cash --format json\n  bob capture-tasks --route cash\n  bob capture-tasks -r cash -f json\n  bob capture-tasks -b ~/bob -r project-alpha",
         )
         .disable_help_flag(true)
         .arg(bob_dir_arg())

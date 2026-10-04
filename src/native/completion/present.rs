@@ -13,11 +13,12 @@
 //! 3. Options already present (unless `Append`/`Count`), options that
 //!    conflict with present ones, and `-h/--help`/`-V/--version` once
 //!    other arguments exist are dropped.
-//! 4. Nothing is re-sorted: subcommands follow `SUBCOMMANDS` order,
-//!    options follow help order.
+//! 4. Nothing is re-sorted: root subcommands follow workflow sections
+//!    and table order, options follow help order.
 //! 5. Descriptions add information and never repeat the value.
-//! 6. Group headers are human words (`commands`, `capture protocol`,
-//!    `options`, per-slot value groups).
+//! 6. Group headers are workflow names (`daily workflow`, `tasks and
+//!    projects`, `vault`, `integrations`, `setup`, `capture protocol`),
+//!    `commands` below the root, `options`, and per-slot value groups.
 //! 7. Once a trailing var-arg `TEXT` has started, or after `--`, no
 //!    options or subcommands are offered.
 
@@ -30,13 +31,19 @@ use super::kinds::{self, Kind};
 use super::protocol::{self, Request};
 use super::tree;
 use super::{context, providers};
-use crate::runner::{subcommands, CompletionTier};
+use crate::runner::{rewrite_alias_args, subcommands, SECTIONS};
 
 /// Answer one parsed request with protocol 1 response lines.
 pub(crate) fn complete_request(request: &Request) -> Vec<String> {
     let mut root = tree();
     root.build();
-    let words = &request.words;
+    let mut rewritten_words = request.words.clone();
+    if rewritten_words.len() > 1 {
+        let rewritten = rewrite_alias_args(&rewritten_words[1..]);
+        rewritten_words.truncate(1);
+        rewritten_words.extend(rewritten);
+    }
+    let words = &rewritten_words;
     // Words after the ignored command word, excluding the cursor word.
     let before: &[OsString] = if words.len() > 2 {
         &words[1..words.len() - 1]
@@ -389,17 +396,10 @@ impl<'a> Walk<'a> {
         }
         let mut lines = Vec::new();
         if self.path.is_empty() {
-            // Rule 4: SUBCOMMANDS order; rule 6: porcelain first under
-            // `commands`, the ten frontend endpoints under
-            // `capture protocol` last.
-            for tier in [CompletionTier::Porcelain, CompletionTier::Plumbing] {
-                let group = if tier == CompletionTier::Porcelain {
-                    "commands"
-                } else {
-                    "capture protocol"
-                };
+            // The table and section constant are shared with root help.
+            for section in SECTIONS {
                 for entry in subcommands() {
-                    if entry.tier != tier {
+                    if entry.section != *section {
                         continue;
                     }
                     let Some(candidate) = subs.iter().find(|candidate| {
@@ -411,7 +411,7 @@ impl<'a> Walk<'a> {
                     if let Some(line) = protocol::candidate_line(
                         &candidate.value,
                         help,
-                        group,
+                        section.completion_group(),
                         false,
                     ) {
                         lines.push(line);
@@ -790,7 +790,7 @@ mod tests {
     }
 
     #[test]
-    fn root_empty_offers_commands_then_capture_protocol() {
+    fn root_empty_offers_sectioned_commands_in_help_order() {
         let output = lines(&["bob", ""]);
         assert!(!output.is_empty());
         let values = values_of(&output);
@@ -799,16 +799,24 @@ mod tests {
         assert!(values.contains(&"vault-sync"));
         assert!(values.contains(&"capture-complete"));
         assert!(!values.iter().any(|value| value.starts_with('-')));
-        let first_plumbing = values
-            .iter()
-            .position(|value| *value == "capture-complete")
-            .expect("plumbing present");
-        let last_porcelain = values
-            .iter()
-            .position(|value| *value == "vault-sync")
-            .expect("porcelain present");
-        assert!(last_porcelain < first_plumbing);
-        assert!(groups_of(&output).contains(&"capture protocol"));
+        let mut sections = Vec::new();
+        for group in groups_of(&output) {
+            if sections.last() != Some(&group) {
+                sections.push(group);
+            }
+        }
+        assert_eq!(
+            sections,
+            [
+                "daily workflow",
+                "tasks and projects",
+                "vault",
+                "integrations",
+                "setup",
+                "capture protocol",
+            ]
+        );
+        assert!(!values.contains(&"seed"));
         assert!(!values.contains(&"mark-next-tasks"));
     }
 

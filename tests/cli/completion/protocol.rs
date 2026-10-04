@@ -78,24 +78,40 @@ fn empty_root_offers_commands_then_capture_protocol_without_options() {
         !names.iter().any(|name| name.starts_with('-')),
         "empty root must not offer options: {names:?}"
     );
-    let order: Vec<String> = names;
-    let last_porcelain = order
-        .iter()
-        .position(|name| name == "vault-sync")
-        .expect("vault-sync present");
-    let first_plumbing = order
-        .iter()
-        .position(|name| name == "capture-complete")
-        .expect("capture-complete present");
-    assert!(
-        last_porcelain < first_plumbing,
-        "capture protocol renders last: {order:?}"
-    );
     let group_list = groups(&output);
-    assert!(group_list.contains(&"commands".to_string()));
-    assert!(group_list.contains(&"capture protocol".to_string()));
+    let mut section_order = Vec::new();
+    for group in &group_list {
+        if section_order.last() != Some(group) {
+            section_order.push(group.clone());
+        }
+    }
+    assert_eq!(
+        section_order,
+        vec![
+            "daily workflow".to_string(),
+            "tasks and projects".to_string(),
+            "vault".to_string(),
+            "integrations".to_string(),
+            "setup".to_string(),
+            "capture protocol".to_string(),
+        ]
+    );
     assert!(!group_list.contains(&"options".to_string()));
     assert_stdout_has_no_ansi(&output);
+}
+
+#[test]
+fn alias_completion_uses_canonical_path_and_freshness_seed_is_hidden() {
+    let alias = complete(&["bob", "task-status-setter", "--"]);
+    assert_success(&alias);
+    let options = values(&alias);
+    assert!(options.contains(&"--retry-timeout".to_string()));
+    assert!(!stdout(&alias).contains("task-status-setter"));
+    assert!(!stdout(&alias).contains("mark-next-tasks"));
+
+    let freshness = complete(&["bob", "freshness", ""]);
+    assert_success(&freshness);
+    assert!(!values(&freshness).contains(&"seed".to_string()));
 }
 
 #[test]

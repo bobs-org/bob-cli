@@ -1,0 +1,61 @@
+Bob — command-line tools for the Bob Obsidian vault and Pomodoro workflow
+
+Usage: bob <COMMAND>
+
+Daily workflow:
+  capture                Capture tasks, bullets, and Pomodoro commands into the
+                         vault
+  freshness              Walk the tiered freshness review queue
+  notify                 Notify when the current Pomodoro is complete
+  plan                   Show today's plan budget, Today's tasks, and
+                         NEXT/PENDING lanes
+  pomodoro               Show Pomodoro status, print the tmux line, or notify on
+                         completion
+  ready                  Show each area/project note's Ready lane against the
+                         per-note cap
+  tmux-pomodoro          Print the Pomodoro status and plan meter for tmux
+
+Tasks and projects:
+  move-done-tasks        Move done and canceled tasks into done/ archives and
+                         repair links
+  projects               List and sync project notes via their ^prj tasks
+  randomize              Re-roll due prioritized tasks within their priority
+                         windows
+  task-status-hooks      Reconcile task statuses from the Pomodoro ledger and
+                         dependencies
+
+Vault:
+  nightly                Run nightly maintenance: vault-sync, move-done-tasks,
+                         vault-sync
+  query                  Run Dataview or Tasks queries against the vault
+  vault-sync             Reconcile the vault through Git (default: run) or show
+                         status
+
+Integrations:
+  gkeep                  Drain the Google Keep inbox into Obsidian tasks
+  highlights             Sync Highlights PDF annotations into reference notes
+
+Setup:
+  completion             Install and inspect shell completion for bob
+  plugins                List and deploy Bob's custom Obsidian plugins
+
+Capture protocol (Bob Mac Capture JSON endpoints; `bob --help` lists them):
+  capture-complete  capture-parse  capture-pomodoro-name  capture-pomodoros
+  capture-rewrite  capture-sections  capture-targets  capture-task-id
+  capture-task-sections  capture-tasks
+
+Options:
+  -h, --help     Print help (see more with '--help')
+  -V, --version  Print version
+
+Examples:
+  bob capture buy milk @groceries   Capture a task into groceries.md
+  bob capture '='                   Start the queued Pomodoro
+  bob plan                          Show today's plan budget and lanes
+  bob freshness                     List the review queue
+  bob ready                         Show Ready lanes against the per-note cap
+  bob task-status-hooks --dry-run   Preview task status reconciliation
+  bob query --source '#project'     Print matching note paths
+  bob vault-sync status --json      Print the last vault Git sync status
+
+Run 'bob <command> --help' or 'bob help <command>' for more on a command.
