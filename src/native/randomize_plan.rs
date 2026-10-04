@@ -1,4 +1,4 @@
-//! Pure `bob randomize` planner: note snapshots in, per-note postimages out.
+//! Pure `bob task reroll` planner: note snapshots in, per-note postimages out.
 //!
 //! The planner turns note snapshots into per-note postimages, a reroll list,
 //! skip reasons, and load data. It performs no I/O, takes no lock, and

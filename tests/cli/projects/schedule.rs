@@ -112,7 +112,7 @@ fn projects_sync_then_task_status_hooks_blocks_and_recovers_propagated_tasks() {
     assert!(!propagated.contains("milestone #hide"));
 
     let blocked = bob_command()
-        .args(["task-status-hooks", "--bob-dir"])
+        .args(["task", "reconcile", "--bob-dir"])
         .arg(&vault)
         .env("BOB_DAY_FILE", &before_daily)
         .env("BOB_NOW", "2026-07-16")
@@ -132,7 +132,7 @@ fn projects_sync_then_task_status_hooks_blocks_and_recovers_propagated_tasks() {
     assert_success(&mature_sync);
 
     let recovered = bob_command()
-        .args(["task-status-hooks", "--bob-dir"])
+        .args(["task", "reconcile", "--bob-dir"])
         .arg(&vault)
         .env("BOB_DAY_FILE", &due_daily)
         .env("BOB_NOW", "2026-07-17")
@@ -175,7 +175,7 @@ fn project_schedule_tasks_flip_between_dash_and_blocked_queries_when_due() {
         .expect("propagate project schedule before query verification");
     assert_success(&sync);
     let hooks = bob_command()
-        .args(["task-status-hooks", "--bob-dir"])
+        .args(["task", "reconcile", "--bob-dir"])
         .arg(&vault)
         .env("BOB_DAY_FILE", &before_daily)
         .env("BOB_NOW", "2026-07-16")
@@ -234,7 +234,7 @@ fn project_schedule_tasks_flip_between_dash_and_blocked_queries_when_due() {
         .expect("reconcile due project before query verification");
     assert_success(&mature_sync);
     let mature_hooks = bob_command()
-        .args(["task-status-hooks", "--bob-dir"])
+        .args(["task", "reconcile", "--bob-dir"])
         .arg(&vault)
         .env("BOB_DAY_FILE", &due_daily)
         .env("BOB_NOW", "2026-07-17")

@@ -234,7 +234,8 @@ to `<route>.md` at the vault root. Existing target files, including
 `mac_inbox.md`, prefer a Markdown `Tasks` section: new captures insert after
 the last top-level `#task` block in that section, or after one blank line below
 the `Tasks` heading when the section has no tasks yet. When
-`bob task-status-hooks` has generated a status-count badge row directly below
+`bob task reconcile` (formerly `bob task-status-hooks`, still accepted)
+has generated a status-count badge row directly below
 the heading, the empty-section insertion point is below that row. Files without
 a `Tasks` section keep the older fallback of inserting after the last top-level
 `#task` block and its indented continuation lines, or appending at EOF.
@@ -382,7 +383,7 @@ and no roll happened. A `p:<N>` past the configured level count is a usage
 error (exit 2). The message is
 `p:<N> is not a configured priority level; use p:1 through p:<count> (<labels>)`.
 Any resolved scheduled property makes a checkbox-bearing capture start Blocked
-(`[?]`); `bob task-status-hooks` still reconciles tasks whose schedules are
+(`[?]`); `bob task reconcile` still reconciles tasks whose schedules are
 edited later.
 
 ### Multi-item capture
@@ -1507,7 +1508,7 @@ a `\t- ` stub. Direct-child qualifying links with descendants write dated
 Work Log entries under a `🛠️ **WORK LOG**` marker (newest on top) or append
 one after the task's child block. Notes stay in the ledger (copied, not
 moved). Vault-wide Blocked recovery and completed-reference retirement
-outside the session stay in `bob task-status-hooks`, which already owns
+outside the session stay in `bob task reconcile`, which already owns
 both.
 
 Diagnostics (all write nothing): a missing day file, a missing Pomodoros
@@ -2193,7 +2194,7 @@ capture date.
 The `^prj` line is `- [ ] #task #prj <body> #hide ^prj`, where `<body>` is
 the item's normalized parent text, never truncated. It is `[ ]` normally and
 `[?]` when a scheduled property was resolved; it is never `[*]` and never
-linked. `bob task-status-hooks` reconciles derived Blocked state later, as it
+linked. `bob task reconcile` reconciles derived Blocked state later, as it
 does for every other capture.
 
 `p:<N>` writes `[priority::<value>]` inline on the `^prj` line, before
@@ -2744,7 +2745,7 @@ sections <titles>` line, then — when links were written — `✓ linked
 <day_file>` (dry-run: `would link`), an `under <NAME>` line with
 ` (created)` when a named Pomodoro was created, one dim `- [[stem#^id]]`
 line per link, and the hint that `bob projects sync` adds the parent's
-Sub-projects line and `bob task-status-hooks` reconciles Blocked state, since
+Sub-projects line and `bob task reconcile` reconciles Blocked state, since
 neither is written here. When links were written, their Pomodoro also appears
 in the batch-level `pomodoro_blocks` array; see
 [Pomodoro blocks](#pomodoro-blocks).

@@ -28,7 +28,7 @@ fn task_status_hooks_dry_run_creates_no_lock_or_recovery() {
     write_file(&tasks, "- [*] #task Stale next ^stale\n");
 
     let output = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--dry-run")
         .arg("--format")
         .arg("json")
@@ -71,7 +71,7 @@ fn task_status_hooks_live_noop_may_lock_but_creates_no_recovery() {
     write_file(&tasks, "- [ ] #task Ready intake ^ready\n");
 
     let output = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
@@ -112,7 +112,7 @@ fn task_status_hooks_defers_when_maintenance_lock_is_held() {
     lock.try_lock_exclusive().expect("hold lock");
 
     let output = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--format")
         .arg("json")
         .arg("--bob-dir")
@@ -125,7 +125,7 @@ fn task_status_hooks_defers_when_maintenance_lock_is_held() {
         .env("BOB_VAULT_SYNC_LOCK_FILE", &lock_path)
         .env("XDG_STATE_HOME", temp.path().join("state"))
         .output()
-        .expect("run contended task-status-hooks");
+        .expect("run contended bob task reconcile");
     assert_eq!(output.status.code(), Some(1));
     let json: serde_json::Value =
         serde_json::from_str(stdout(&output).trim()).expect("lock JSON");
@@ -170,7 +170,7 @@ fn task_status_hooks_human_retry_progress_goes_to_stdout() {
     lock.try_lock_exclusive().expect("hold lock");
 
     let mut child = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--bob-dir")
         .arg(&vault)
         .arg("-r")
@@ -181,7 +181,7 @@ fn task_status_hooks_human_retry_progress_goes_to_stdout() {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("spawn contended task-status-hooks");
+        .expect("spawn contended bob task reconcile");
 
     let stdout_pipe = child.stdout.take().expect("stdout pipe");
     let (tx, rx) = mpsc::channel();
@@ -239,7 +239,7 @@ fn task_status_hooks_human_retry_progress_goes_to_stdout() {
 
     let output = child
         .wait_with_output()
-        .expect("wait for retrying task-status-hooks");
+        .expect("wait for retrying bob task reconcile");
     assert!(
         output.status.success(),
         "retry must eventually succeed once the lock is free:\n{}\nstderr:\n{}",
@@ -300,7 +300,7 @@ fn task_status_hooks_json_retry_progress_stays_off_stdout() {
     lock.try_lock_exclusive().expect("hold lock");
 
     let mut child = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--format")
         .arg("json")
         .arg("--bob-dir")
@@ -313,7 +313,7 @@ fn task_status_hooks_json_retry_progress_stays_off_stdout() {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("spawn contended JSON task-status-hooks");
+        .expect("spawn contended JSON bob task reconcile");
 
     let stderr_pipe = child.stderr.take().expect("stderr pipe");
     let (tx, rx) = mpsc::channel();
@@ -356,7 +356,7 @@ fn task_status_hooks_json_retry_progress_stays_off_stdout() {
 
     let output = child
         .wait_with_output()
-        .expect("wait for retrying JSON task-status-hooks");
+        .expect("wait for retrying JSON bob task reconcile");
     assert!(
         output.status.success(),
         "retry must eventually succeed once the lock is free:\n{}",
@@ -408,7 +408,7 @@ fn task_status_hooks_exhausts_retry_budget_and_still_fails() {
     lock.try_lock_exclusive().expect("hold lock");
 
     let output = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--format")
         .arg("json")
         .arg("--bob-dir")
@@ -419,7 +419,7 @@ fn task_status_hooks_exhausts_retry_budget_and_still_fails() {
         .env("BOB_VAULT_SYNC_LOCK_FILE", &lock_path)
         .env("XDG_STATE_HOME", temp.path().join("state"))
         .output()
-        .expect("run exhausted-retry task-status-hooks");
+        .expect("run exhausted-retry bob task reconcile");
     drop(lock);
 
     assert_eq!(output.status.code(), Some(1));
@@ -456,7 +456,7 @@ fn task_status_hooks_dry_run_ignores_retry_timeout() {
 
     let start = Instant::now();
     let output = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--dry-run")
         .arg("--retry-timeout")
         .arg("300")
@@ -492,12 +492,12 @@ fn task_status_hooks_dry_run_ignores_retry_timeout() {
 fn task_status_hooks_rejects_invalid_retry_timeout() {
     for value in ["-1", "abc", "99999999999999999999"] {
         let output = bob_command()
-            .arg("task-status-hooks")
+            .args(["task", "reconcile"])
             // `=` keeps clap from treating a leading `-` as a new flag.
             .arg(format!("--retry-timeout={value}"))
             .arg("--dry-run")
             .output()
-            .expect("run task-status-hooks with an invalid --retry-timeout");
+            .expect("run bob task reconcile with an invalid --retry-timeout");
         assert!(
             !output.status.success(),
             "--retry-timeout {value} must be rejected"
@@ -536,7 +536,7 @@ fn task_status_hooks_cron_redirection_captures_retry_and_final_result() {
 
     let mut child = Command::new("sh")
         .arg("-c")
-        .arg(r#"exec "$0" task-status-hooks --bob-dir "$1" -r 30 >> "$2""#)
+        .arg(r#"exec "$0" task reconcile --bob-dir "$1" -r 30 >> "$2""#)
         .arg(BOB_BIN)
         .arg(&vault)
         .arg(&log_path)
@@ -549,7 +549,7 @@ fn task_status_hooks_cron_redirection_captures_retry_and_final_result() {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("spawn cron-style task-status-hooks");
+        .expect("spawn cron-style bob task reconcile");
 
     let log_during_contention = poll_log_until_contains(
         &log_path,
@@ -569,7 +569,7 @@ fn task_status_hooks_cron_redirection_captures_retry_and_final_result() {
 
     let output = child
         .wait_with_output()
-        .expect("wait for cron-style task-status-hooks");
+        .expect("wait for cron-style bob task reconcile");
     assert_eq!(output.status.code(), Some(0));
     assert!(
         stdout(&output).is_empty(),
@@ -627,7 +627,7 @@ fn task_status_hooks_cron_redirection_captures_terminal_failure_and_exit_status(
 
     let output = Command::new("sh")
         .arg("-c")
-        .arg(r#"exec "$0" task-status-hooks --bob-dir "$1" -r 30 >> "$2""#)
+        .arg(r#"exec "$0" task reconcile --bob-dir "$1" -r 30 >> "$2""#)
         .arg(BOB_BIN)
         .arg(&vault)
         .arg(&log_path)
@@ -640,7 +640,7 @@ fn task_status_hooks_cron_redirection_captures_terminal_failure_and_exit_status(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
-        .expect("run terminal-failure task-status-hooks under sh redirection");
+        .expect("run terminal-failure bob task reconcile under sh redirection");
 
     assert_eq!(output.status.code(), Some(1));
     assert!(

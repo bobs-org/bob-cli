@@ -631,7 +631,7 @@ pub(crate) struct SyncError {
 }
 
 impl SyncError {
-    // Read by `bob randomize` when the Blocked registry check fails.
+    // Read by `bob task reroll` when the Blocked registry check fails.
     pub(crate) fn message(&self) -> &str {
         &self.message
     }

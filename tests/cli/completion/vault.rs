@@ -302,7 +302,7 @@ fn plugins_come_from_the_repo_checkout() {
 #[test]
 fn levels_come_from_config_in_order() {
     let fixture = fixture();
-    let output = complete(&fixture, &["bob", "randomize", "--level", ""]);
+    let output = complete(&fixture, &["bob", "task", "reroll", "--level", ""]);
 
     assert_success(&output);
     assert!(stderr(&output).is_empty());
@@ -465,7 +465,7 @@ fn completion_is_read_only() {
             "--plugin",
             "",
         ],
-        vec!["bob", "randomize", "--level", ""],
+        vec!["bob", "task", "reroll", "--level", ""],
         vec!["bob", "query", "--tasks-note", ""],
         vec!["bob", "query", "--origin", ""],
         vec!["bob", "capture", "--route=cash", "--task", ""],

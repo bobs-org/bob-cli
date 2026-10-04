@@ -94,7 +94,7 @@ pub(crate) fn plan(
     }
 }
 
-/// The Schedule Log reason head a `bob randomize` re-roll writes:
+/// The Schedule Log reason head a `bob task reroll` re-roll writes:
 /// `🎲 P2 randomize · in **21** (8–30) days`, with an optional
 /// ` from <until>` suffix when the roll base is after today. The head names
 /// the tool (unlike the picker's `🎲 P2 roll`) while keeping the picker

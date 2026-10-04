@@ -52,7 +52,8 @@ The CLI reads settings from
 `.obsidian/plugins/obsidian-tasks-plugin/data.json`. Without that file, native
 Tasks queries use the default emoji format; `bob freshness` and `bob ready`
 refuse a non-Dataview format. Blocked transitions also require the compatible
-`?` definition described in [task status hooks](task-status-hooks.md#derived-blocked-status).
+`?` definition described in [task status hooks](task-status-hooks.md#derived-blocked-status)
+(`bob task reconcile`; formerly `bob task-status-hooks`, still accepted).
 
 Capture routes select root-level notes: `@work` writes `work.md`. Route names
 are lowercased and accept ASCII letters, digits, `_`, and `-`; picker-discovered
@@ -148,7 +149,7 @@ embed (`![[note#^id]]`) requests completion. Unresolved or ineligible targets
 can be skipped with warnings; check the capture report. See
 [close outcomes](capture.md#closing-the-running-pomodoro) for the full rules.
 
-Inspect `bob task-status-hooks --dry-run`, then run `bob task-status-hooks` to
+Inspect `bob task reconcile --dry-run`, then run `bob task reconcile` to
 reconcile statuses and clean up links. Next and Pending are sticky: unlinking
 a task keeps its lane. The explicit release gesture in Obsidian is Alt+N.
 Blocked is derived from open prerequisites and future task schedules.
@@ -183,7 +184,7 @@ See [Freshness](freshness.md) for review gestures and tracker cadence.
 Optional config lives at `~/.config/bob/config.yml`, selected by
 `BOB_CONFIG_FILE` or `XDG_CONFIG_HOME`. [Plan](plan.md#config) documents caps;
 [Freshness](freshness.md#2-fields-overrides-and-config) documents review
-intervals. `p:1`–`p:4` capture and `bob randomize` also require the
+intervals. `p:1`–`p:4` capture and `bob task reroll` also require the
 [priority configuration](projects.md#priority-property-and-scheduled-rolls).
 
 ## What commands change
@@ -191,10 +192,10 @@ intervals. `p:1`–`p:4` capture and `bob randomize` also require the
 | Commands | Effects |
 | --- | --- |
 | `query`, `plan`, `ready`, `freshness list`, capture discovery/parse/complete, `projects list` | Read local vault state |
-| `capture`, `capture-task-id`, `capture-pomodoro-name`, `projects sync`, `task-status-hooks`, `freshness seed` | Write vault notes; preview with `--dry-run` where offered |
+| `capture`, `capture-task-id`, `capture-pomodoro-name`, `projects sync`, `task reconcile`, `freshness seed` | Write vault notes; preview with `--dry-run` where offered |
 | `vault-sync`, `nightly` | Reconcile the vault with Git, including commits, merges, and pushes |
-| `move-done-tasks` | Archive task blocks and repair links; in a Git vault, commit touched files and push |
-| `randomize` | Re-roll schedules; in a Git worktree, sync before/after and commit rewritten notes; `--offline` skips sync but still commits locally |
+| `task archive` | Archive task blocks and repair links; in a Git vault, commit touched files and push |
+| `task reroll` | Re-roll schedules; in a Git worktree, sync before/after and commit rewritten notes; `--offline` skips sync but still commits locally |
 | `plugins list`, `plugins sync` | Pull the plugin source repo by default, including for `sync --dry-run` (`--no-pull` skips); `sync` deploys plugin assets with backups |
 | `gkeep list`, `gkeep pull` | Contact Keep; `pull` writes tasks, commits in a Git worktree unless `--no-commit`, then archives verified Keep notes unless `--no-archive` |
 | `highlights create`, `highlights clip`, `highlights scan`, `highlights sync` | Write PDFs/reference notes; writing scans can run a configured pre-scan hook |

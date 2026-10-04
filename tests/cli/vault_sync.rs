@@ -446,14 +446,14 @@ fn conflict_directory_is_skipped_by_vault_walkers() {
     );
 
     let output = bob_command()
-        .arg("move-done-tasks")
+        .args(["task", "archive"])
         .arg("--threshold")
         .arg("10")
         .env("BOB_DIR", &vault)
         .env("HOME", temp.path().join("home"))
         .env("XDG_CACHE_HOME", temp.path().join("cache"))
         .output()
-        .expect("run move-done-tasks against conflict-only vault");
+        .expect("run bob task archive against conflict-only vault");
 
     assert_success(&output);
     assert!(
@@ -579,7 +579,7 @@ fn nightly_runs_vault_sync_move_done_tasks_vault_sync_in_order() {
     assert_eq!(
         lines.first().copied(),
         Some("bob task archive 2026-06-02"),
-        "move-done-tasks should be the newest commit:\n{subjects}"
+        "bob task archive should be the newest commit:\n{subjects}"
     );
     assert!(
         lines
@@ -689,7 +689,7 @@ fn nightly_failed_step_still_runs_later_steps_and_exits_nonzero() {
     let out = stdout(&output);
     assert!(
         out.contains("\u{2717} task archive"),
-        "expected a failed move-done-tasks marker:\n{}",
+        "expected a failed task archive marker:\n{}",
         format_output(&output)
     );
     assert!(

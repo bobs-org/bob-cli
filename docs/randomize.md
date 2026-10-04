@@ -1,12 +1,14 @@
 # Randomize
 
-`bob randomize` re-rolls every due prioritized Obsidian task to its own
-random date inside that task's configured priority window. After days or
-weeks without reviewing tasks, the vault fills with overdue P1–P4 tasks that
-bury the P0 work needing full attention. This command is the headless,
-vault-wide version of the Obsidian `Ctrl+Shift+P` picker's same-level 🎲
-"roll": it re-schedules the whole backlog at once, then publishes the change
-as a single Git commit that cooperates with `bob vault-sync`.
+`bob task reroll` (formerly `bob randomize`, still accepted) re-rolls every
+due prioritized Obsidian task to its own random date inside that task's
+configured priority window. After days or weeks without reviewing tasks, the
+vault fills with overdue P1–P4 tasks that bury the P0 work needing full
+attention. This command is the headless, vault-wide version of the Obsidian
+`Ctrl+Shift+P` picker's same-level 🎲 "roll": it re-schedules the whole
+backlog at once, then publishes the change as a single Git commit that
+cooperates with `bob vault-sync`. The Schedule Log reason token stays
+`randomize`.
 
 ## Contents
 
@@ -23,9 +25,9 @@ as a single Git commit that cooperates with `bob vault-sync`.
 ## Usage
 
 ```bash
-bob randomize [-d|--dry-run] [-f|--format human|json] [-l|--level LABEL]...
-              [-o|--offline] [-r|--retry-timeout SECONDS] [-s|--seed SEED]
-              [-u|--until DATE|+N]
+bob task reroll [-d|--dry-run] [-f|--format human|json] [-l|--level LABEL]...
+                [-o|--offline] [-r|--retry-timeout SECONDS] [-s|--seed SEED]
+                [-u|--until DATE|+N]
 ```
 
 | Option | Behavior |
@@ -36,7 +38,7 @@ bob randomize [-d|--dry-run] [-f|--format human|json] [-l|--level LABEL]...
 | `-o, --offline` | Skip both vault-sync cycles; commit locally without pushing |
 | `-r, --retry-timeout SECONDS` | Budget for waiting on the maintenance lock and for re-planning after concurrent-edit races (default `60`; `0` = fail fast) |
 | `-s, --seed SEED` | Base seed (decimal or `0x` hex). A dry run prints the seed that reproduces its dates |
-| `-u, --until DATE\|+N` | Treat tasks scheduled through DATE (or N days from today) as due and roll their windows from that date. Must be today or later. An offset that cannot be represented on the calendar, including a day count that does not fit in a signed duration, exits 2 with stderr `bob randomize: invalid --until "…": date out of range` |
+| `-u, --until DATE\|+N` | Treat tasks scheduled through DATE (or N days from today) as due and roll their windows from that date. Must be today or later. An offset that cannot be represented on the calendar, including a day count that does not fit in a signed duration, exits 2 with stderr `bob task reroll: invalid --until "…": date out of range` |
 
 There is no `--bob-dir`. The in-process vault-sync cycle is bound to
 `BOB_DIR`, and a flag would let edits and sync target different vaults;
@@ -47,17 +49,17 @@ make it safe.
 Examples:
 
 ```bash
-bob randomize --dry-run                 # Preview what would move and where
-bob randomize --seed 0x7f3a91c2         # Apply the dates a dry run showed
-bob randomize --level P2 --level P3     # Leave P1 tasks for hand triage
-bob randomize --until +7                # Clear a week for P0 work
-bob randomize --dry-run --format json   # Machine-readable preview
+bob task reroll --dry-run                 # Preview what would move and where
+bob task reroll --seed 0x7f3a91c2         # Apply the dates a dry run showed
+bob task reroll --level P2 --level P3     # Leave P1 tasks for hand triage
+bob task reroll --until +7                # Clear a week for P0 work
+bob task reroll --dry-run --format json   # Machine-readable preview
 ```
 
 ## What qualifies
 
 The scan covers every Markdown note the vault walkers already scan, using
-the same walker as `bob task-status-hooks`. That walker skips `done/`, dot
+the same walker as `bob task reconcile`. That walker skips `done/`, dot
 directories, `_conflicts`, `_generated`, and `_templates`. Task lines come
 from the same scanner the `<ctrl+shift+enter>` toggle, `bob projects sync`,
 and the picker use: the Tasks global filter (`#task` by default) applies,
@@ -176,7 +178,7 @@ Blocked-status validation. Otherwise the run fails before any write.
 
 ## Seeds and previews
 
-**today** is the same effective day `task-status-hooks` uses: the date in
+**today** is the same effective day `bob task reconcile` uses: the date in
 the `BOB_DAY_FILE` filename when it parses, otherwise the current date
 (`BOB_NOW` overrides the clock). **until** is `--until DATE|+N`,
 defaulting to today; it must be today or later. It is both the cutoff and
@@ -185,7 +187,7 @@ level.roll_offset(task_seed)`.
 
 `--until +N` that cannot be added to today is a usage error (exit 2).
 Stdout stays empty under `--format json` as well; the stderr line is
-`bob randomize: invalid --until "…": date out of range`. A priority window
+`bob task reroll: invalid --until "…": date out of range`. A priority window
 whose rolled date (`until` plus the level's offset) cannot be represented,
 or a today so close to the end of the calendar that the 35-day load horizon
 cannot be represented, fails the plan before any write (exit 1). The message
@@ -207,8 +209,8 @@ after the pre-sync pulls in unrelated edits.
 `BOB_PRIORITY_ROLL_SEED`, else a generated seed printed as 8 hex digits.
 The seed is always printed as `0x…` hex.
 
-The loop is: run `bob randomize --dry-run`, inspect the preview, then apply
-exactly those dates with `bob randomize --seed <seed>` (repeating the same
+The loop is: run `bob task reroll --dry-run`, inspect the preview, then apply
+exactly those dates with `bob task reroll --seed <seed>` (repeating the same
 `--level` and `--until` flags). If the new date equals the old date
 (possible only with `min_days: 0`), the task is counted as `unchanged` and
 nothing is written for it.
@@ -218,22 +220,22 @@ nothing is written for it.
 **Backlog after time away.** Preview first, then apply:
 
 ```bash
-bob randomize --dry-run
-bob randomize --seed 0x7f3a91c2
+bob task reroll --dry-run
+bob task reroll --seed 0x7f3a91c2
 ```
 
 **Keep P1s for hand triage.** Re-roll only the lower levels:
 
 ```bash
-bob randomize --level P2 --level P3 --dry-run
-bob randomize --level P2 --level P3 --seed 0x7f3a91c2
+bob task reroll --level P2 --level P3 --dry-run
+bob task reroll --level P2 --level P3 --seed 0x7f3a91c2
 ```
 
 **Clear N days for P0 work.** Roll every window from a week out instead of
 today:
 
 ```bash
-bob randomize --until +7 --dry-run
+bob task reroll --until +7 --dry-run
 ```
 
 The **Next 5 weeks** sparkline in the human output (a `▁▂▃▄▅▆▇█` histogram
@@ -267,13 +269,15 @@ release lock
 randomize never runs `add -A`, merges, rebases, amends, force-pushes, or
 pushes on its own; vault-sync remains the only code that does those. After
 a run, `master` holds, in order: an optional `vault(<host>)` commit from
-the pre-sync, exactly one `bob randomize …` commit containing only the
+the pre-sync, exactly one `bob task reroll …` commit containing only the
 rewritten notes, and an optional merge commit if the remote moved.
 
-Commit message (follows the `bob move-done-tasks <date>` precedent):
+Commit message (follows the `bob task archive <date>` precedent). Older
+history records `bob randomize YYYY-MM-DD: …` subjects; find those with
+`git log --grep='bob randomize'`.
 
 ```text
-bob randomize 2026-09-28: 222 tasks in 28 notes
+bob task reroll 2026-09-28: 222 tasks in 28 notes
 
 P1 85 · P2 132 · P3 5
 until 2026-09-28 · seed 0x7f3a91c2
@@ -326,7 +330,7 @@ truncated with `…` so each line fits in 100 columns.
 Live run:
 
 ```text
-🎲 bob randomize · Mon Sep 28 · ~/bob
+🎲 bob task reroll · Mon Sep 28 · ~/bob
 
  ✓ Synced vault            committed 2 pending notes separately
  ✓ Re-rolled 222 tasks in 28 notes
@@ -344,7 +348,7 @@ Live run:
      sase.md:212   duplicate field
      bob.md:40     unknown priority "highest"
 
- ✓ Committed 4e5f6a7        bob randomize 2026-09-28: 222 tasks in 28 notes
+ ✓ Committed 4e5f6a7        bob task reroll 2026-09-28: 222 tasks in 28 notes
  ✓ Pushed to origin/master
 
    seed 0x7f3a91c2 · undo: git -C ~/bob revert 4e5f6a7 && bob vault-sync
@@ -364,7 +368,7 @@ first (notes ordered by count descending then path; each note shows as
 no git lines, and ends with:
 
 ```text
-Nothing was written. Apply these dates with: bob randomize --seed 0x7f3a91c2
+Nothing was written. Apply these dates with: bob task reroll --seed 0x7f3a91c2
 ```
 
 adding the same `--level` and `--until` flags when given.
@@ -446,7 +450,7 @@ position. `schedule_log` is `prepended` or `created`. `git.mode` is `sync`,
     "pre_sync": { "ok": true, "files_committed": 2, "error": null },
     "commit": {
       "sha": "4e5f6a7…",
-      "subject": "bob randomize 2026-09-28: 222 tasks in 28 notes",
+      "subject": "bob task reroll 2026-09-28: 222 tasks in 28 notes",
       "paths": ["bob.md", "cash.md", "sase.md"]
     },
     "post_sync": { "ok": true, "pushed": true, "conflicts": [], "error": null }
@@ -479,7 +483,7 @@ position. `schedule_log` is `prepended` or `created`. `git.mode` is `sync`,
 
 Environment: `BOB_DIR`, `BOB_NOW`, `BOB_DAY_FILE`, `BOB_CONFIG_FILE`,
 `XDG_CONFIG_HOME`, `BOB_PRIORITY_ROLL_SEED`, `BOB_VAULT_SYNC_LOCK_FILE`,
-`BOB_VAULT_SYNC_STATE_FILE`, `NO_COLOR`. See `bob randomize --help` for the
+`BOB_VAULT_SYNC_STATE_FILE`, `NO_COLOR`. See `bob task reroll --help` for the
 one-line role of each.
 
 Exit codes: `0` is success, including "nothing to re-roll". `1` is runtime

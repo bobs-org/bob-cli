@@ -29,14 +29,14 @@ fn move_done_tasks_commits_and_pushes_collection_changes_only() {
     write_file(&unrelated, "- [ ] unrelated #task\nlocal edit\n");
 
     let output = bob_command()
-        .arg("move-done-tasks")
+        .args(["task", "archive"])
         .arg("--threshold=1")
         .env("BOB_DIR", &vault)
         .env("BOB_NOW", "2026-06-02")
         .env("PATH", path_with_prefix(&stub_bin))
         .env("XDG_CACHE_HOME", temp.path().join("cache"))
         .output()
-        .expect("run bob move-done-tasks in git repo");
+        .expect("run bob task archive in git repo");
 
     assert_success(&output);
     let output_text = stdout(&output);
@@ -71,7 +71,7 @@ done_tasks: \"[[done/obsidian_done]]\"
     ));
     assert!(
         show.starts_with("bob task archive 2026-06-02\n"),
-        "expected move-done-tasks commit subject:\n{show}"
+        "expected bob task archive commit subject:\n{show}"
     );
     assert!(
         show.contains("\nobsidian.md\n"),
@@ -129,14 +129,14 @@ fn move_done_tasks_commits_link_repairs_with_collection_changes() {
     git_in(&vault, ["push", "-q", "-u", "origin", "HEAD"]);
 
     let output = bob_command()
-        .arg("move-done-tasks")
+        .args(["task", "archive"])
         .arg("--threshold=1")
         .env("BOB_DIR", &vault)
         .env("BOB_NOW", "2026-06-02")
         .env("PATH", path_with_prefix(&stub_bin))
         .env("XDG_CACHE_HOME", temp.path().join("cache"))
         .output()
-        .expect("run bob move-done-tasks with link repair");
+        .expect("run bob task archive with link repair");
 
     assert_success(&output);
     let output_text = stdout(&output);
@@ -209,14 +209,14 @@ type: \"[[done]]\"
     git_in(&vault, ["push", "-q", "-u", "origin", "HEAD"]);
 
     let output = bob_command()
-        .arg("move-done-tasks")
+        .args(["task", "archive"])
         .arg("--threshold=1")
         .env("BOB_DIR", &vault)
         .env("BOB_NOW", "2026-06-02")
         .env("PATH", path_with_prefix(&stub_bin))
         .env("XDG_CACHE_HOME", temp.path().join("cache"))
         .output()
-        .expect("run bob move-done-tasks with block id collision");
+        .expect("run bob task archive with block id collision");
 
     assert_success(&output);
     let output_text = stdout(&output);
@@ -292,14 +292,14 @@ type: \"[[done]]\"
     git_in(&vault, ["push", "-q", "-u", "origin", "HEAD"]);
 
     let output = bob_command()
-        .arg("move-done-tasks")
+        .args(["task", "archive"])
         .arg("--threshold=10")
         .env("BOB_DIR", &vault)
         .env("BOB_NOW", "2026-06-02")
         .env("PATH", path_with_prefix(&stub_bin))
         .env("XDG_CACHE_HOME", temp.path().join("cache"))
         .output()
-        .expect("run bob move-done-tasks metadata-only in git repo");
+        .expect("run bob task archive metadata-only in git repo");
 
     assert_success(&output);
     let output_text = stdout(&output);
@@ -338,7 +338,7 @@ type: \"[[done]]\"
     ));
     assert!(
         show.starts_with("bob task archive 2026-06-02\n"),
-        "expected move-done-tasks commit subject:\n{show}"
+        "expected bob task archive commit subject:\n{show}"
     );
     assert!(
         show.contains("\nobsidian.md\n"),
@@ -389,14 +389,14 @@ parent: \"[[done]]\"
     git_in(&vault, ["push", "-q", "-u", "origin", "HEAD"]);
 
     let output = bob_command()
-        .arg("move-done-tasks")
+        .args(["task", "archive"])
         .arg("--threshold=10")
         .env("BOB_DIR", &vault)
         .env("BOB_NOW", "2026-06-02")
         .env("PATH", path_with_prefix(&stub_bin))
         .env("XDG_CACHE_HOME", temp.path().join("cache"))
         .output()
-        .expect("run bob move-done-tasks archive metadata-only in git repo");
+        .expect("run bob task archive archive metadata-only in git repo");
 
     assert_success(&output);
     let output_text = stdout(&output);
@@ -435,7 +435,7 @@ type: \"[[done]]\"
     ));
     assert!(
         show.starts_with("bob task archive 2026-06-02\n"),
-        "expected move-done-tasks commit subject:\n{show}"
+        "expected bob task archive commit subject:\n{show}"
     );
     assert!(
         !show.contains("\nobsidian.md\n"),
@@ -469,13 +469,13 @@ fn move_done_tasks_warns_and_skips_git_for_non_repo_vault() {
     );
 
     let output = bob_command()
-        .arg("move-done-tasks")
+        .args(["task", "archive"])
         .arg("-t1")
         .env("BOB_DIR", &vault)
         .env("PATH", path_with_prefix(&stub_bin))
         .env("XDG_CACHE_HOME", temp.path().join("cache"))
         .output()
-        .expect("run bob move-done-tasks outside git repo");
+        .expect("run bob task archive outside git repo");
 
     assert_success(&output);
     assert!(
@@ -487,7 +487,7 @@ fn move_done_tasks_warns_and_skips_git_for_non_repo_vault() {
     );
     assert!(
         !vault.join(".git").exists(),
-        "move-done-tasks must not initialize git"
+        "bob task archive must not initialize git"
     );
     assert_eq!(
         fs::read_to_string(&source).expect("read source"),
@@ -517,12 +517,12 @@ fn move_done_tasks_moves_canceled_tasks_in_non_repo_vault() {
     );
 
     let output = bob_command()
-        .arg("move-done-tasks")
+        .args(["task", "archive"])
         .arg("--threshold=2")
         .env("BOB_DIR", &vault)
         .env("XDG_CACHE_HOME", temp.path().join("cache"))
         .output()
-        .expect("run bob move-done-tasks with canceled tasks");
+        .expect("run bob task archive with canceled tasks");
 
     assert_success(&output);
     let output_text = stdout(&output);
@@ -582,14 +582,14 @@ fn move_done_tasks_rewrites_dirty_link_repair_files() {
     write_file(&daily, dirty_daily);
 
     let output = bob_command()
-        .arg("move-done-tasks")
+        .args(["task", "archive"])
         .arg("--threshold=1")
         .env("BOB_DIR", &vault)
         .env("BOB_NOW", "2026-06-02")
         .env("PATH", path_with_prefix(&stub_bin))
         .env("XDG_CACHE_HOME", temp.path().join("cache"))
         .output()
-        .expect("run bob move-done-tasks with dirty link repair candidate");
+        .expect("run bob task archive with dirty link repair candidate");
 
     assert_success(&output);
     assert!(
@@ -664,14 +664,14 @@ local edit
     write_file(&source, dirty_source);
 
     let output = bob_command()
-        .arg("move-done-tasks")
+        .args(["task", "archive"])
         .arg("--threshold=1")
         .env("BOB_DIR", &vault)
         .env("BOB_NOW", "2026-06-02")
         .env("PATH", path_with_prefix(&stub_bin))
         .env("XDG_CACHE_HOME", temp.path().join("cache"))
         .output()
-        .expect("run bob move-done-tasks with dirty candidate");
+        .expect("run bob task archive with dirty candidate");
 
     assert_success(&output);
     assert!(
@@ -743,14 +743,14 @@ type: \"[[done]]\"
     write_file(&source, dirty_source);
 
     let output = bob_command()
-        .arg("move-done-tasks")
+        .args(["task", "archive"])
         .arg("--threshold=10")
         .env("BOB_DIR", &vault)
         .env("BOB_NOW", "2026-06-02")
         .env("PATH", path_with_prefix(&stub_bin))
         .env("XDG_CACHE_HOME", temp.path().join("cache"))
         .output()
-        .expect("run bob move-done-tasks with dirty metadata candidate");
+        .expect("run bob task archive with dirty metadata candidate");
 
     assert_success(&output);
     assert!(
@@ -842,16 +842,14 @@ local edit
     write_file(&archive, dirty_archive);
 
     let output = bob_command()
-        .arg("move-done-tasks")
+        .args(["task", "archive"])
         .arg("--threshold=10")
         .env("BOB_DIR", &vault)
         .env("BOB_NOW", "2026-06-02")
         .env("PATH", path_with_prefix(&stub_bin))
         .env("XDG_CACHE_HOME", temp.path().join("cache"))
         .output()
-        .expect(
-            "run bob move-done-tasks with dirty archive metadata candidate",
-        );
+        .expect("run bob task archive with dirty archive metadata candidate");
 
     assert_success(&output);
     assert!(
@@ -919,13 +917,13 @@ fn move_done_tasks_rewrites_stayed_pathless_links_in_archive() {
     );
 
     let output = bob_command()
-        .arg("move-done-tasks")
+        .args(["task", "archive"])
         .arg("-t1")
         .env("BOB_DIR", &vault)
         .env("PATH", path_with_prefix(&stub_bin))
         .env("XDG_CACHE_HOME", temp.path().join("cache"))
         .output()
-        .expect("run bob move-done-tasks with stayed pathless link");
+        .expect("run bob task archive with stayed pathless link");
 
     assert_success(&output);
     let archive_contents = fs::read_to_string(&archive).expect("read archive");

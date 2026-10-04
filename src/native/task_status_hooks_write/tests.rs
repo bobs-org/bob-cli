@@ -265,7 +265,7 @@ fn equal_length_change_with_restored_mtime_prevents_write() {
 
 #[test]
 fn fresh_attempt_after_vault_changed_replans_from_intervening_edit() {
-    // Models what the `task-status-hooks` retry controller does across
+    // Models what the `bob task reconcile` retry controller does across
     // two independent attempts: attempt 1 sees an editor's intervening
     // save and stops without writing; attempt 2 is a wholly fresh
     // snapshot/plan/apply, not a replay of attempt 1's stale plan, so it

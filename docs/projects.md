@@ -6,8 +6,8 @@ anchored with `^prj`. Typical CLI order:
 1. `bob projects list` — inspect the vault
 2. `bob projects sync --dry-run` — preview reconciliation
 3. `bob projects sync` — apply it
-4. `bob task-status-hooks` — derive `[?]` Blocked markers for any schedules
-   just written
+4. `bob task reconcile` (formerly `bob task-status-hooks`, still accepted)
+   — derive `[?]` Blocked markers for any schedules just written
 
 `sync` writes frontmatter, `#hide`, Sub-projects lines, and inline
 `[scheduled::]` fields. It does not change checkboxes. The Bob Navigation
@@ -189,7 +189,7 @@ For a valid project date `P`, the ordinary-task contract is:
   `#hide`, and Sub-projects rules above apply from the reopened `wip` status.
 
 `bob projects sync` writes task schedules but does not write checkbox markers.
-`bob task-status-hooks` remains the single CLI owner of derived `[?]` Blocked
+`bob task reconcile` remains the single CLI owner of derived `[?]` Blocked
 state: run it after `projects sync` to block future-scheduled tasks or recover
 matured ones once no dependency or schedule reason remains. The dashboard
 already excludes future schedules and Blocked tasks, so `dash.md` needs no
@@ -340,7 +340,7 @@ decision in the same guarded editor transaction: future-scheduled tasks become
 Blocked, while due tasks recover to a safely proven Ready, Next, or In Progress
 rank. A later task-owned schedule is preserved and remains Blocked. When the
 vault snapshot cannot prove recovery, the property edit proceeds and `[?]` is
-left for `bob task-status-hooks`. Other picker properties remain inline Dataview fields on the task.
+left for `bob task reconcile`. Other picker properties remain inline Dataview fields on the task.
 `dependsOn` is not one of them: it is derived from the task's Depends-On
 line (`docs/task-dependencies.md`), never written by hand.
 
@@ -413,7 +413,7 @@ deterministic-reason rules.
 a date from the same configured window from the command line, reading the
 same `~/.config/bob/config.yml` levels as the picker. `N` is the P-level key
 (1-4 today), so `p:2` matches pressing `Ctrl+Shift+P` then `2` on the Task
-Card. Capture leaves the task's `[ ]` marker as written; `bob task-status-hooks`
+Card. Capture leaves the task's `[ ]` marker as written; `bob task reconcile`
 is what later marks a future-scheduled task Blocked, not capture itself. A
 rolled `p:<N>` also writes the same `🗓️ **SCHEDULE LOG**` entry the picker
 would, always as a `P0 → <to>` transition since a brand-new capture
@@ -495,7 +495,7 @@ classified:
 | Entry (head or reason) | Class | Effect on the streak |
 | --- | --- | --- |
 | `🎲 <L> roll` where `<L>` is the current level, with no `→` | roll | counts; keep walking |
-| `🎲 <anything> randomize` (from `bob randomize`) | randomize | transparent: skip it and keep walking |
+| `🎲 <anything> randomize` (from `bob task reroll`) | randomize | transparent: skip it and keep walking |
 | `🎲 <from> → <to> decay` | decay | stops |
 | `🎲 <from> → <to>` or `🎲 <L>` (a priority-level pick) | other | stops |
 | `🎲 <other label> roll` (the priority was hand-edited since) | other | stops |
@@ -560,7 +560,7 @@ link sessions. If any cancel target is recurring, the whole batch is refused
 and nothing is written.
 
 To keep a task at its level, re-pick its priority level or reschedule it with
-a typed reason — both reset the streak. `bob randomize` entries never count
+a typed reason — both reset the streak. `bob task reroll` entries never count
 for or against it.
 
 ### Approved-decay decision planner
@@ -668,14 +668,14 @@ they read as machine-written months later — 🎲 for a date the software rolle
 | `Ctrl+Enter` recommended decay on the `scheduled` row          | `🎲 <from> → <to> decay · in **<chosen>** (<min>–<max>) days` |
 | Reason prompt skipped on a task that already has a log         | `🤷 no reason given` |
 | `bob capture <text> p:<N>` rolls the scheduled date            | `🎲 P0 → <to> · in **<chosen>** (<min>–<max>) days` |
-| `bob randomize` re-rolls a due task                             | `🎲 <level> randomize · in **<chosen>** (<min>–<max>) days` |
+| `bob task reroll` re-rolls a due task                             | `🎲 <level> randomize · in **<chosen>** (<min>–<max>) days` |
 
 `bob capture` has no interactive stage, so it never prompts for a reason and
 never writes the `🤷 no reason given` fallback: a captured task is always a
 brand-new line, so it can never already keep a log for that fallback to
 append to.
 
-`bob randomize` rolls the same configured windows vault-wide for every due
+`bob task reroll` rolls the same configured windows vault-wide for every due
 prioritized task and records the `🎲 <level> randomize` reason above; see
 [randomize.md](randomize.md).
 
@@ -758,7 +758,7 @@ Pomodoro entry:
 An "open" Pomodoro entry is a top-level (`- [c] ...`) checkbox line in the
 daily note's `## Pomodoros` section whose status is anything other than `x`,
 `X`, or `-` — the same rule
-[`bob task-status-hooks`](task-status-hooks.md) uses to decide which entries
+[`bob task reconcile`](task-status-hooks.md) uses to decide which entries
 seed its promotion graph (see `pomodoro::open_ledger_task` in `bob-cli`).
 Leaving a deferred task's link under one of these entries would otherwise
 keep promoting its whole dependency chain and keep it registering as recent
@@ -850,7 +850,7 @@ Side effects apply immediately, for feedback. Every live link to a cancelled
 task with a block ID is removed from today's open Pomodoros with the same
 dedicated-bullet/token semantics as the deferral prune above (a dedicated
 link bullet goes with its subtree; otherwise only the link token goes), and
-[`bob task-status-hooks`](task-status-hooks.md) stays authoritative for the
+[`bob task reconcile`](task-status-hooks.md) stays authoritative for the
 same rule. After the writes land, the picker reuses the Task Status Cycler
 `api.recoverBlockedDependents` recovery: a Blocked dependent with no
 remaining open dependency and no future `scheduled` date becomes Ready. The
@@ -873,7 +873,7 @@ Warnings do not make the command fail and are not auto-fixed:
 - An ordinary task has multiple inline `scheduled` fields. That line is left
   unchanged until it contains exactly one.
 
-Terminal projects are allowed to be missing `^prj`; `bob move-done-tasks` may
+Terminal projects are allowed to be missing `^prj`; `bob task archive` may
 archive the checked or canceled task later.
 
 ## Examples
@@ -906,7 +906,7 @@ Typical action output:
   ok athena     updated sub-projects on ^prj  canonical format
   ok roadmap    scheduled 4 tasks 2026-07-16  frontmatter scheduled is future
   ok roadmap    removed #hide from 4 tasks  task schedules replace #hide
-  hint: run `bob task-status-hooks` to reconcile derived [?] Blocked markers
+  hint: run `bob task reconcile` to reconcile derived [?] Blocked markers
   warning outlive  active project has no ^prj task  add `- [ ] #task #prj <completion criteria> #hide ^prj`
 
 11 projects - 1 status updated - 9 ^prj edited - 4 task schedules updated - 1 warnings

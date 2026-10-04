@@ -29,7 +29,7 @@ fn task_status_hooks_syncs_fixture_and_is_idempotent() {
     let original_daily = fs::read(&daily).expect("read daily before dry-run");
 
     let dry_run = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--dry-run")
         .arg("--format")
         .arg("json")
@@ -37,7 +37,7 @@ fn task_status_hooks_syncs_fixture_and_is_idempotent() {
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
         .output()
-        .expect("dry-run task-status-hooks fixture");
+        .expect("dry-run bob task reconcile fixture");
     assert_success(&dry_run);
     assert_eq!(
         fs::read(&dev).expect("read dev after dry-run"),
@@ -151,12 +151,12 @@ fn task_status_hooks_syncs_fixture_and_is_idempotent() {
     }));
 
     let applied = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
         .output()
-        .expect("apply task-status-hooks fixture");
+        .expect("apply bob task reconcile fixture");
     assert_success(&applied);
     let report = stdout(&applied);
     assert!(
@@ -168,7 +168,7 @@ fn task_status_hooks_syncs_fixture_and_is_idempotent() {
             && report.contains(
                 "Summary: 1 marked next, 0 marked in progress, 0 cleared"
             ),
-        "unexpected task-status-hooks report:\n{}",
+        "unexpected bob task reconcile report:\n{}",
         format_output(&applied)
     );
     let dev_contents = fs::read_to_string(&dev).expect("read updated dev");
@@ -219,12 +219,12 @@ fn task_status_hooks_syncs_fixture_and_is_idempotent() {
     ));
 
     let second = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
         .output()
-        .expect("rerun task-status-hooks fixture");
+        .expect("rerun bob task reconcile fixture");
     assert_success(&second);
     assert!(
         stdout(&second).contains("already in sync, no changes"),
@@ -233,7 +233,7 @@ fn task_status_hooks_syncs_fixture_and_is_idempotent() {
     );
 
     let canonical_json = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--format")
         .arg("json")
         .arg("--bob-dir")
@@ -242,7 +242,7 @@ fn task_status_hooks_syncs_fixture_and_is_idempotent() {
         .env("BOB_CLI_USE_SCRIPT", "1")
         .env("XDG_CACHE_HOME", temp.path().join("alias-cache"))
         .output()
-        .expect("run canonical task-status-hooks JSON no-op");
+        .expect("run canonical bob task reconcile JSON no-op");
     assert_success(&canonical_json);
     for alias in ["task-status-setter", "mark-next-tasks"] {
         let alias_json = bob_command()
@@ -271,7 +271,7 @@ fn task_status_hooks_syncs_fixture_and_is_idempotent() {
         .replace("[[dev#^promote]]", "[[dev]]");
     write_file(&daily, &without_root);
     let stale_chain = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
@@ -378,7 +378,7 @@ fn task_status_hooks_groups_area_project_tasks_after_final_statuses() {
     }
 
     let dry_run = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--dry-run")
         .arg("--format")
         .arg("json")
@@ -388,7 +388,7 @@ fn task_status_hooks_groups_area_project_tasks_after_final_statuses() {
         .env("BOB_VAULT_SYNC_LOCK_FILE", &lock)
         .env("XDG_STATE_HOME", &state)
         .output()
-        .expect("dry-run grouped task-status-hooks");
+        .expect("dry-run grouped bob task reconcile");
     assert_success(&dry_run);
     assert!(
         stderr(&dry_run).is_empty(),
@@ -444,7 +444,7 @@ fn task_status_hooks_groups_area_project_tasks_after_final_statuses() {
         .contains("Next & In Progress"));
 
     let human_dry_run = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--dry-run")
         .arg("--bob-dir")
         .arg(&vault)
@@ -452,7 +452,7 @@ fn task_status_hooks_groups_area_project_tasks_after_final_statuses() {
         .env("BOB_VAULT_SYNC_LOCK_FILE", &lock)
         .env("XDG_STATE_HOME", &state)
         .output()
-        .expect("human dry-run grouped task-status-hooks");
+        .expect("human dry-run grouped bob task reconcile");
     assert_success(&human_dry_run);
     let human = stdout(&human_dry_run);
     assert!(
@@ -466,7 +466,7 @@ fn task_status_hooks_groups_area_project_tasks_after_final_statuses() {
     );
 
     let applied = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--format")
         .arg("json")
         .arg("--bob-dir")
@@ -475,7 +475,7 @@ fn task_status_hooks_groups_area_project_tasks_after_final_statuses() {
         .env("BOB_VAULT_SYNC_LOCK_FILE", &lock)
         .env("XDG_STATE_HOME", &state)
         .output()
-        .expect("apply grouped task-status-hooks");
+        .expect("apply grouped bob task reconcile");
     assert_success(&applied);
     let applied_json: serde_json::Value =
         serde_json::from_str(stdout(&applied).trim())
@@ -537,14 +537,14 @@ fn task_status_hooks_groups_area_project_tasks_after_final_statuses() {
 
     let project_mtime = fs::metadata(&project).unwrap().modified().unwrap();
     let second = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
         .env("BOB_VAULT_SYNC_LOCK_FILE", &lock)
         .env("XDG_STATE_HOME", &state)
         .output()
-        .expect("rerun grouped task-status-hooks");
+        .expect("rerun grouped bob task reconcile");
     assert_success(&second);
     assert!(
         stdout(&second).contains("already in sync, no changes"),
@@ -576,7 +576,7 @@ fn task_status_hooks_groups_area_project_tasks_after_final_statuses() {
     );
 
     let after_ready_capture = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
@@ -600,7 +600,7 @@ fn task_status_hooks_groups_area_project_tasks_after_final_statuses() {
     );
     write_file(&daily, &daily_with_captured);
     let promoted_capture = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
@@ -660,7 +660,7 @@ fn task_status_hooks_reports_grouping_warnings_without_noop_text() {
     write_file(&duplicate_badges, duplicate_badges_original);
 
     let json_output = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--dry-run")
         .arg("--format")
         .arg("json")
@@ -699,7 +699,7 @@ fn task_status_hooks_reports_grouping_warnings_without_noop_text() {
     );
 
     let human_output = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--dry-run")
         .arg("--bob-dir")
         .arg(&vault)
@@ -812,7 +812,7 @@ fn task_status_hooks_uses_latest_previous_daily_for_scoped_in_progress_tasks() {
     write_file(&tasks, tasks_before);
 
     let human_dry_run = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--dry-run")
         .arg("--bob-dir")
         .arg(&vault)
@@ -824,7 +824,7 @@ fn task_status_hooks_uses_latest_previous_daily_for_scoped_in_progress_tasks() {
     assert!(stdout(&human_dry_run).contains("previous 2026/20260710.md"));
 
     let dry_run = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--dry-run")
         .arg("--format")
         .arg("json")
@@ -851,7 +851,7 @@ fn task_status_hooks_uses_latest_previous_daily_for_scoped_in_progress_tasks() {
     assert_eq!(json["cleared_in_progress"].as_array().unwrap().len(), 0);
 
     let applied = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &current)
@@ -873,7 +873,7 @@ fn task_status_hooks_uses_latest_previous_daily_for_scoped_in_progress_tasks() {
         .contains("- [*] #task Current root ^current-root\n"));
 
     let second = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &current)
@@ -886,7 +886,7 @@ fn task_status_hooks_uses_latest_previous_daily_for_scoped_in_progress_tasks() {
     let sectionless_before = "# A real daily note with no Pomodoros section\n";
     write_file(&sectionless, sectionless_before);
     let empty_previous = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--format")
         .arg("json")
         .arg("--bob-dir")
@@ -951,7 +951,7 @@ fn task_status_hooks_propagates_strongest_rank_and_reports_in_progress_promotion
     write_file(&tasks, tasks_before);
 
     let dry_run = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--dry-run")
         .arg("--format")
         .arg("json")
@@ -983,7 +983,7 @@ fn task_status_hooks_propagates_strongest_rank_and_reports_in_progress_promotion
             && item["dependency"] == true));
 
     let applied = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
@@ -1021,7 +1021,7 @@ fn task_status_hooks_propagates_strongest_rank_and_reports_in_progress_promotion
     }
 
     let second = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
@@ -1035,7 +1035,7 @@ fn task_status_hooks_propagates_strongest_rank_and_reports_in_progress_promotion
         "# Daily\n\n## Pomodoros\n\n- [ ] Current (0900-0930)\n",
     );
     let without_active_path = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
@@ -1080,7 +1080,7 @@ fn task_status_hooks_prunes_duplicate_lines_before_dependency_sync() {
     write_file(&tasks, tasks_before);
 
     let dry_run = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--dry-run")
         .arg("--format")
         .arg("json")
@@ -1106,7 +1106,7 @@ fn task_status_hooks_prunes_duplicate_lines_before_dependency_sync() {
     );
 
     let human_dry_run = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--dry-run")
         .arg("--bob-dir")
         .arg(&vault)
@@ -1124,7 +1124,7 @@ fn task_status_hooks_prunes_duplicate_lines_before_dependency_sync() {
     assert_eq!(fs::read_to_string(&tasks).unwrap(), tasks_before);
 
     let applied = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
@@ -1161,7 +1161,7 @@ fn task_status_hooks_prunes_duplicate_lines_before_dependency_sync() {
     );
 
     let second = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
@@ -1202,7 +1202,7 @@ fn task_status_hooks_reports_plan_budget_in_json_and_human() {
     );
 
     let dry_run = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--dry-run")
         .arg("--format")
         .arg("json")
@@ -1252,7 +1252,7 @@ fn task_status_hooks_reports_plan_budget_in_json_and_human() {
     assert_eq!(json["plan_budget"]["status"], "ok");
 
     let human = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--dry-run")
         .arg("--bob-dir")
         .arg(&vault)
@@ -1288,7 +1288,7 @@ fn task_status_hooks_nulls_plan_budget_on_invalid_config() {
     write_file(&config, "plan:\n  max_themes: 0\n");
 
     let dry_run = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--dry-run")
         .arg("--format")
         .arg("json")

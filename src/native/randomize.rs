@@ -4,7 +4,7 @@
 //! inside that task's priority window, then publishes the whole change as a
 //! single scoped commit between two vault-sync cycles under the shared
 //! maintenance lock. Status and grouping are composed in the same write so
-//! `task-status-hooks` has nothing left to do in the touched notes.
+//! `bob task reconcile` has nothing left to do in the touched notes.
 
 use std::{
     ffi::OsString,

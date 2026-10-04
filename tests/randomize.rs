@@ -1,6 +1,6 @@
-//! Integration coverage for `bob randomize`: CLI registration, dry-run
+//! Integration coverage for `bob task reroll`: CLI registration, dry-run
 //! previews, live rewrites, git cooperation, failure modes, the JSON
-//! contract, and `task-status-hooks` parity.
+//! contract, and `bob task reconcile` parity.
 //!
 //! The few helpers below are copied from `tests/cli/support.rs` on purpose so
 //! this file stays self-contained instead of growing that file.
@@ -365,10 +365,10 @@ fn commit_all(vault: &Path, message: &str) {
 #[test]
 fn randomize_help_lists_options_alphabetically() {
     let output = bob_command()
-        .arg("randomize")
+        .args(["task", "reroll"])
         .arg("--help")
         .output()
-        .expect("run bob randomize --help");
+        .expect("run bob task reroll --help");
     assert_success(&output);
     let help = stdout(&output);
     for marker in [
@@ -464,13 +464,13 @@ fn randomize_dry_run_writes_nothing_and_prints_replay() {
 
     let mut command = bob_command();
     command
-        .arg("randomize")
+        .args(["task", "reroll"])
         .arg("--dry-run")
         .arg("--seed")
         .arg(SEED);
     vault_env(&mut command, &temp, &vault, &config);
     command.env("BOB_VAULT_SYNC_LOCK_FILE", &lock_path);
-    let output = command.output().expect("run bob randomize --dry-run");
+    let output = command.output().expect("run bob task reroll --dry-run");
     drop(lock);
     assert_success(&output);
 
@@ -540,14 +540,14 @@ fn randomize_live_offline_rewrites_notes_with_status_log_and_grouping() {
 
     let mut command = bob_command();
     command
-        .arg("randomize")
+        .args(["task", "reroll"])
         .arg("--offline")
         .arg("--format")
         .arg("json")
         .arg("--seed")
         .arg(SEED);
     vault_env(&mut command, &temp, &vault, &config);
-    let output = command.output().expect("run bob randomize live");
+    let output = command.output().expect("run bob task reroll live");
     assert_success(&output);
     let json = parse_json(&output);
     assert_eq!(json["ok"], true);
@@ -699,14 +699,14 @@ fn randomize_needs_a_look_skips_are_reported() {
 
     let mut command = bob_command();
     command
-        .arg("randomize")
+        .args(["task", "reroll"])
         .arg("--dry-run")
         .arg("--format")
         .arg("json")
         .arg("--seed")
         .arg(SEED);
     vault_env(&mut command, &temp, &vault, &config);
-    let output = command.output().expect("run bob randomize skips");
+    let output = command.output().expect("run bob task reroll skips");
     assert_success(&output);
     let json = parse_json(&output);
     let skipped: Vec<(String, u64, String, Option<String>)> = json["skipped"]
@@ -772,12 +772,12 @@ fn run_randomize(
     args: &[&str],
 ) -> Output {
     let mut command = bob_command();
-    command.arg("randomize");
+    command.args(["task", "reroll"]);
     for arg in args {
         command.arg(arg);
     }
     vault_env(&mut command, temp, vault, config);
-    command.output().expect("run bob randomize")
+    command.output().expect("run bob task reroll")
 }
 
 #[test]
@@ -1101,7 +1101,7 @@ fn randomize_bare_remote_syncs_scoped_commit_and_push() {
     assert_eq!(
         randomize.len(),
         1,
-        "expected exactly one bob randomize commit:\n{subjects:?}"
+        "expected exactly one bob task reroll commit:\n{subjects:?}"
     );
     assert!(
         subjects.iter().any(|line| line.contains("vault(")),
@@ -1212,7 +1212,7 @@ fn randomize_held_lock_fails_fast_with_no_writes() {
 
     let mut command = bob_command();
     command
-        .arg("randomize")
+        .args(["task", "reroll"])
         .arg("-r")
         .arg("1")
         .arg("--seed")
@@ -1480,7 +1480,7 @@ fn randomize_hooks_parity_after_live_run() {
 
     let mut hooks = bob_command();
     hooks
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--dry-run")
         .arg("--format")
         .arg("json")
@@ -1490,7 +1490,7 @@ fn randomize_hooks_parity_after_live_run() {
         .env("BOB_NOW", BOB_NOW)
         .env("BOB_CONFIG_FILE", &config)
         .env("NO_COLOR", "1");
-    let output = hooks.output().expect("run task-status-hooks");
+    let output = hooks.output().expect("run bob task reconcile");
     assert_success(&output);
     let text = stdout(&output);
     for touched in ["projects/alpha.md", "notes/plain.md"] {
@@ -1549,7 +1549,7 @@ fn randomize_nothing_due_missing_config() {
 
     // A missing config is fatal before any write.
     let mut missing = bob_command();
-    missing.arg("randomize").arg("--dry-run");
+    missing.args(["task", "reroll", "--dry-run"]);
     vault_env(
         &mut missing,
         &temp,
@@ -1567,7 +1567,7 @@ fn randomize_nothing_due_missing_config() {
     let json_missing = {
         let mut command = bob_command();
         command
-            .arg("randomize")
+            .args(["task", "reroll"])
             .arg("--dry-run")
             .arg("--format")
             .arg("json");
@@ -1641,7 +1641,7 @@ fn randomize_post_sync_conflict_keeps_local_commit_and_warns() {
         vault.join("_conflicts").is_dir(),
         "expected _conflicts/ copy"
     );
-    // The local commit stands: exactly one bob randomize commit exists.
+    // The local commit stands: exactly one bob task reroll commit exists.
     let log = git_capture(&vault, ["log", "--format=%s"]);
     assert_eq!(
         stdout(&log)

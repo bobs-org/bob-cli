@@ -1,10 +1,11 @@
 # Task Status Hooks
 
-`bob task-status-hooks` makes the current Pomodoro ledger the source of truth
-for active Obsidian Tasks promotions and structural cleanup. Run it after
-capturing or closing Pomodoro-linked work, after `bob projects sync` writes
-schedules, and as part of any vault maintenance that should leave Next, In
-Progress, and Blocked markers consistent with today's ledger.
+`bob task reconcile` (formerly `bob task-status-hooks`, still accepted)
+makes the current Pomodoro ledger the source of truth for active Obsidian
+Tasks promotions and structural cleanup. Run it after capturing or closing
+Pomodoro-linked work, after `bob projects sync` writes schedules, and as
+part of any vault maintenance that should leave Next, In Progress, and
+Blocked markers consistent with today's ledger.
 
 In practice it:
 
@@ -52,7 +53,7 @@ subtree from an open Pomodoro without changing the canceled task itself.
 ## Usage
 
 ```bash
-bob task-status-hooks [-b|--bob-dir DIR] [-d|--dry-run] [-f|--format human|json] [-r|--retry-timeout SECONDS]
+bob task reconcile [-b|--bob-dir DIR] [-d|--dry-run] [-f|--format human|json] [-r|--retry-timeout SECONDS]
 ```
 
 The vault root comes from `--bob-dir`, then `BOB_DIR`, then `~/bob`. The current
@@ -74,10 +75,9 @@ Repeated successful runs are idempotent. Live runs retry certain transient
 failures with jittered backoff, controlled by `-r, --retry-timeout SECONDS`
 (default `120`); see [Retries](#retries).
 
-`task-status-hooks` is the canonical and documented command name. The hidden
-`task-status-setter` and `mark-next-tasks` spellings remain compatibility-only
-dispatch aliases and show canonical usage when asked for help, including the
-same retry behavior.
+The hidden `task-status-hooks`, `task-status-setter`, and `mark-next-tasks`
+spellings remain compatibility-only dispatch aliases and show canonical
+usage when asked for help, including the same retry behavior.
 
 ## Sync Rules
 
@@ -407,7 +407,7 @@ snapshot. The immediate target is always Ready (`[ ]`): the plugin does not
 guess the final Pomodoro rank. It reads unsaved open Markdown buffers, preserves
 the active cursor, skips stale or failed notes without rolling back completed
 tasks, and serializes recovery with closed-reference retirement. A later
-`bob task-status-hooks` run remains authoritative across the whole vault and
+`bob task reconcile` run remains authoritative across the whole vault and
 may promote the recovered task to Next or In Progress. Closing a dependency
 never reopens a Done, canceled, non-task, unknown, unrelated, or already-active
 dependent, and Ctrl+Enter does not clean unrelated Blocked tasks with no
@@ -553,8 +553,8 @@ comments fail closed with `malformed_badge_marker`; the affected container's
 bytes are left unchanged.
 
 Badge counts are a written snapshot, not a live Obsidian view. `bob capture`,
-manual checkbox edits, and `bob move-done-tasks` can make them stale; the next
-`bob task-status-hooks` run reconciles the row idempotently.
+manual checkbox edits, and `bob task archive` can make them stale; the next
+`bob task reconcile` run reconciles the row idempotently.
 
 The command preserves authored topic headings under a `Tasks` section. Direct
 task blocks are grouped locally inside the container where they already live,
@@ -579,11 +579,11 @@ outside the vault, the selected previous daily, ordinary notes, read-only
 archive references, hidden directories, `done/`, `_generated/`, and
 `_templates/`.
 
-`bob randomize` composes derived Blocked status and this same grouping into
+`bob task reroll` composes derived Blocked status and this same grouping into
 its own write (see [randomize.md](randomize.md#what-a-re-roll-writes)), so
 after a randomize run this command has nothing left to change in those
 notes. `bob capture` keeps adding Ready tasks to the intake before
-generated group headings; a later `bob task-status-hooks` run moves that task
+generated group headings; a later `bob task reconcile` run moves that task
 only if its final status becomes Next, In Progress, Blocked, Done, or Canceled.
 
 For each bullet beneath an open or completed Pomodoro that contains a block

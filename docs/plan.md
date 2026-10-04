@@ -9,10 +9,11 @@ and 10). Removing a Task Link never changes a task's lane: only an
 explicit release (Alt+N) returns Next or Pending work to Ready.
 
 For a typical day, capture or link work into the daily Pomodoro ledger,
-inspect it with read-only `bob plan`, then run `bob task-status-hooks`
-after capture or session close to reconcile task statuses and clean up
-links. Run `bob plan` again for counts after that cleanup: the budget
-included in a hooks run describes the ledger as it was before the run.
+inspect it with read-only `bob plan`, then run `bob task reconcile`
+(formerly `bob task-status-hooks`, still accepted) after capture or
+session close to reconcile task statuses and clean up links. Run
+`bob plan` again for counts after that cleanup: the budget included in a
+reconcile run describes the ledger as it was before the run.
 
 This page is the authoritative definition. The Rust engine
 (`src/native/plan_budget/`) implements it; `bob-ledger-tools` mirrors
@@ -552,8 +553,8 @@ non-Dataview task format, or an unresolvable note, and 3 with
 | `crowded.md` | The Crowded Notes page (`parent: "[[gtd]]"`, aliases Crowded Notes and Crowded): a `bob-ready-notes` block with the ranked CROWDED/FULL bar rows plus a `### CROWDED Tasks` query grouped by the noteReady group label. |
 | `bob-ready-notes` code block | The same model as the `bob ready` overview: a CROWDED summary line, CROWDED and FULL ranked-bar rows, compressed ROOM pills, dimmed exempt notes, and a remedies footer; `–` when unavailable. |
 | Note `## Tasks` heading chip | A live per-note chip on the first `## Tasks` heading of eligible and exempt notes (Live Preview widget plus Reading-view post-processor): `ready n/cap`, `· full`, `· +k`, `· no cap`, or `–`. It opens crowded and never edits the note. |
-| `bob tmux-pomodoro` | Appends `plan T/Tc · L/Lc` to an available Pomodoro status (or shows the meter alone). It requires a daily note with a Pomodoros section; an over-cap meter uses tmux reverse video. |
-| `bob task-status-hooks` | A `plan_budget` object in JSON and a human meter line such as `plan 3/3 themes · 7/10 links · TODAY 7 · PENDING 8/10 · NEXT 12/15`, when the daily note has a Pomodoros section and the plan config is valid. The meter describes the ledger before sync cleanup. |
+| `bob pomodoro tmux` | Appends `plan T/Tc · L/Lc` to an available Pomodoro status (or shows the meter alone). It requires a daily note with a Pomodoros section; an over-cap meter uses tmux reverse video. |
+| `bob task reconcile` | A `plan_budget` object in JSON and a human meter line such as `plan 3/3 themes · 7/10 links · TODAY 7 · PENDING 8/10 · NEXT 12/15`, when the daily note has a Pomodoros section and the plan config is valid. The meter describes the ledger before sync cleanup. |
 | `bob capture` | When a capture changes today's Pomodoros section, a before/after theme and link budget, cap warnings if the count grows over a cap, and the Task Link destination (for example `→ under GOALS (next up)`). Strict mode can refuse a new over-cap theme. |
 | Bob Mac Capture | The same budget in Themes and Links capsules, warning captions, and shorter destination rows such as `→ GOALS · next up` or `→ running GOALS 0945–1015`. |
 | Obsidian Notices | A lane-aware suffix on Task Link changes. Ctrl+Shift+Enter link and unlink Notices append the plan meter, for example `Linked · Next · plan 1/3 · 2/10` (🔴 when over a plan cap); Alt+N lane Notices report the lanes, for example `→ Ready · 2 tasks · unlinked 1 from today · NEXT 11/15 · PENDING 7/10`, with 🔴 plus a prune hint when over a lane cap. |

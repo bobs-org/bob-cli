@@ -822,7 +822,8 @@ The `[h:: ...]` processed ID is computed from the source reference note path,
 source annotation block, and normalized task identity. Duplicate identical
 `#task` bullets in the same annotation still create only one task. The property
 is the durable processed marker that moves with the task when it is completed,
-cancelled, edited, or archived by `bob move-done-tasks`, so later syncs do not
+cancelled, edited, or archived by `bob task archive` (formerly
+`bob move-done-tasks`, still accepted), so later syncs do not
 recreate it and do not write any processed state back into the PDF or sidecar.
 Older tasks that already have `[highlight_task:: ...]` are still recognized for
 compatibility, and tasks created by the old `^ht` implementation are recognized

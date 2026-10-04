@@ -8,7 +8,7 @@ use std::path::Path;
 
 pub(super) fn dry_run_json(vault: &Path, daily: &Path) -> Value {
     let output = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--dry-run")
         .arg("--format")
         .arg("json")
@@ -16,7 +16,7 @@ pub(super) fn dry_run_json(vault: &Path, daily: &Path) -> Value {
         .arg(vault)
         .env("BOB_DAY_FILE", daily)
         .output()
-        .expect("dry-run task-status-hooks");
+        .expect("dry-run bob task reconcile");
     assert_success(&output);
     serde_json::from_str(stdout(&output).trim()).expect("dry-run JSON")
 }
@@ -104,7 +104,7 @@ fn task_status_hooks_promotes_prerequisite_through_depends_on_line() {
     let before = fs::read_to_string(&tasks).unwrap();
 
     let dry_run = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--dry-run")
         .arg("--format")
         .arg("json")
@@ -184,7 +184,7 @@ fn reconcile_projects_line_into_field_and_stamps_target_id() {
     assert!(warning_kinds(&json).is_empty());
 
     let applied = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
@@ -241,7 +241,7 @@ fn reconcile_drops_stale_field_id() {
     );
 
     let applied = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
@@ -285,7 +285,7 @@ fn reconcile_adopts_field_ids_into_canonical_line() {
     assert_eq!(json["legacy_dependency_children"], 1);
 
     let applied = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
@@ -328,7 +328,7 @@ fn reconcile_warns_unadoptable_id_and_keeps_field() {
     assert!(json["marked_blocked"].as_array().unwrap().is_empty());
 
     let applied = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
@@ -367,7 +367,7 @@ fn reconcile_heals_moved_link() {
         .contains("[[b#^moved]]"));
 
     let applied = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
@@ -403,7 +403,7 @@ fn reconcile_keeps_unresolved_link_and_breadcrumbs() {
     assert!(json["marked_blocked"].as_array().unwrap().is_empty());
 
     let applied = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
@@ -444,7 +444,7 @@ fn reconcile_warns_non_task_and_self_links_without_projecting() {
     assert!(json["marked_blocked"].as_array().unwrap().is_empty());
 
     let applied = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
@@ -519,7 +519,7 @@ fn reconcile_removes_empty_line_and_leaves_malformed_alone() {
     assert!(updates.iter().any(|item| item["kind"] == "line_removed"));
 
     let applied = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
@@ -556,7 +556,7 @@ fn reconcile_skips_closed_dependents() {
     assert!(warning_kinds(&json).is_empty());
 
     let applied = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
@@ -594,7 +594,7 @@ fn reconcile_canonicalizes_legacy_line_variants() {
     );
 
     let applied = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
@@ -638,7 +638,7 @@ fn reconcile_keeps_archive_prerequisite_silently() {
     }));
 
     let applied = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
@@ -684,7 +684,7 @@ fn reconcile_same_index_insert_does_not_clobber_replace() {
     assert!(warning_kinds(&json).is_empty());
 
     let applied = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
@@ -733,7 +733,7 @@ fn reconcile_dependency_chain_settles_in_one_run() {
     assert!(warning_kinds(&json).is_empty());
 
     let applied = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
@@ -796,7 +796,7 @@ fn reconcile_daily_note_keeps_adoption_and_stamp() {
     assert!(warning_kinds(&json).is_empty());
 
     let applied = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
@@ -846,7 +846,7 @@ fn reconcile_never_writes_previous_daily_target() {
     assert!(json["marked_blocked"].as_array().unwrap().is_empty());
 
     let applied = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
@@ -893,7 +893,7 @@ fn reconcile_field_writer_handles_trailing_tags() {
     );
 
     let applied = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
@@ -960,7 +960,7 @@ fn reconcile_archive_legacy_children_follow_archive_rule() {
     );
 
     let applied = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
@@ -1003,7 +1003,7 @@ fn reconcile_warns_unencodable_target_without_projecting() {
     assert!(json["marked_blocked"].as_array().unwrap().is_empty());
 
     let applied = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
@@ -1051,7 +1051,7 @@ fn reconcile_unblocks_when_last_open_prerequisite_leaves() {
     assert_eq!(json["unblocked"].as_array().unwrap().len(), 1);
 
     let applied = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
@@ -1093,7 +1093,7 @@ fn reconcile_breadcrumb_heals_when_target_returns() {
     assert_eq!(warning_kinds(&json), ["unresolved_dependency_link"]);
 
     let applied = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
@@ -1119,7 +1119,7 @@ fn reconcile_breadcrumb_heals_when_target_returns() {
     );
 
     let applied = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
@@ -1167,7 +1167,7 @@ fn reconcile_projection_only_write_defers_in_quiet_interval() {
     touch("+1 hour");
 
     let output = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--format")
         .arg("json")
         .arg("--bob-dir")
@@ -1196,7 +1196,7 @@ fn reconcile_projection_only_write_defers_in_quiet_interval() {
 
     touch("-1 hour");
     let applied = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
@@ -1240,7 +1240,7 @@ fn reconcile_stamps_cross_note_target_id() {
         .any(|item| item["kind"] == "target_id" && item["path"] == "b.md"));
 
     let applied = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
@@ -1284,7 +1284,7 @@ fn reconcile_legacy_window_with_line_and_children() {
     assert!(warning_kinds(&json).is_empty());
 
     let applied = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)

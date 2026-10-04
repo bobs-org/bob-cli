@@ -600,7 +600,7 @@ today on a canonical line is a no-op.
 | task-status-cycler     | Alt+[ / Alt+] (including counted and transcluded targets) when the result is an open status, including leaving Blocked by hand; Ctrl+Enter reopening a done task | closing (done or cancelled), Ctrl+Shift+] bullet → `#task` (that is creation), the dependency-ID normalizer, `recoverBlockedDependents` |
 | block-id-prompt        | Ctrl+Shift+Enter and `^^` when they rewrite the task line (Ready/Blocked → Next, a new block ID) | unlink, Task Link removal, Ctrl+6 rename |
 | `bob capture`          | `plan_task_link` (the link direction of `@route+id!`, Ensure Next, solo `@route:id` / `^route:id`, link-then-close), the `=x` rows that set `[/]`, and an `&note:id` dependency capture that edits an existing open dependent (its Depends-On line, derived fields, or Blocked status) | new tasks on any route (including new tasks with `&` prerequisites), `=x` complete, unlink, start rows, sub-bullets, prerequisite target-ID and lane promotion edits, an unchanged repeat `&` |
-| Automation             | — | hooks, `projects sync`, `randomize`, `gkeep pull`, `highlights`, `move-done-tasks`, `nightly`, `vault-sync`, `capture-task-id` |
+| Automation             | — | hooks, `projects sync`, `task reroll`, `gkeep pull`, `highlights`, `task archive`, `nightly`, `vault-sync`, `capture-task-id` |
 | `bob freshness seed`   | the one-time cutover (a documented exception) | — |
 | Hand editing           | — | not monitored; edit, then press Alt+F |
 
@@ -677,7 +677,9 @@ decision planner".
 
 Headless review queue (`bob freshness list`, human and JSON) and a
 guarded, idempotent, staggered cutover seed (`bob freshness seed`)
-that aborts on any parse change.
+that aborts on any parse change. `seed` is hidden from `bob freshness`
+help and completion; it stays callable with all its guards and must
+not be re-run.
 
 Running `bob freshness` with no subcommand runs `list`.
 

@@ -42,7 +42,7 @@ fn reconcile_dw1_inserts_adopted_line_before_schedule_log() {
     assert!(warning_kinds(&json).is_empty());
 
     let applied = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
@@ -95,7 +95,7 @@ fn reconcile_dw2_inserts_adopted_line_after_cancel_log() {
     assert!(warning_kinds(&json).is_empty());
 
     let applied = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
@@ -148,7 +148,7 @@ fn reconcile_dw5_label_only_line_deletes_line_and_field() {
     assert_eq!(warning_kinds(&json), ["dependency_field_ids_dropped"]);
 
     let applied = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
@@ -200,7 +200,7 @@ fn reconcile_dw5_label_only_line_with_adoptable_id_deletes_line_and_field() {
         .is_empty());
 
     let applied = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
@@ -252,7 +252,7 @@ fn reconcile_dw3_dw6_rewrite_keeps_link_order() {
     assert!(warning_kinds(&json).is_empty());
 
     let applied = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
@@ -318,7 +318,7 @@ fn summary_reports_dependency_counts() {
     assert!(warning_kinds(&json).is_empty());
 
     let applied = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)

@@ -24,19 +24,17 @@ sync files. The [guide index](docs/README.md) points to the detailed contracts.
 - [Commands](#commands)
 - [Capture](#capture)
 - [Query](#query)
-- [Task status hooks](#task-status-hooks)
+- [Task maintenance](#task-maintenance)
 - [Plan budget](#plan-budget)
 - [Task freshness](#task-freshness)
 - [Ready cap](#ready-cap)
 - [Projects](#projects)
-- [Randomize](#randomize)
 - [Plugins](#plugins)
 - [Gkeep](#gkeep)
 - [Highlights](#highlights)
 - [Nightly maintenance](#nightly-maintenance)
 - [Vault sync](#vault-sync)
-- [Move done tasks](#move-done-tasks)
-- [Pomodoro status](#pomodoro-status)
+- [Pomodoro](#pomodoro)
 - [Compatibility shims](#compatibility-shims)
 - [Runtime dependencies](#runtime-dependencies)
 - [Environment](#environment)
@@ -100,7 +98,7 @@ bob capture-targets
 bob projects list
 ```
 
-Priority rolls (`p:<N>`), `bob randomize`, Highlights pre-scan hooks,
+Priority rolls (`p:<N>`), `bob task reroll`, Highlights pre-scan hooks,
 `bob gkeep`, and `bob plan` read `~/.config/bob/config.yml`. Override
 that path with `BOB_CONFIG_FILE` or `XDG_CONFIG_HOME`; see
 [Environment](#environment).
@@ -142,7 +140,7 @@ separate steps:
 2. **Review and choose work** with the read-only reports `bob plan`,
    `bob freshness`, and `bob ready`; confirm or revise due tasks in Obsidian.
    After time away, preview the overdue backlog with
-   `bob randomize --dry-run`, then `bob randomize --seed <seed>` to re-roll it.
+   `bob task reroll --dry-run`, then `bob task reroll --seed <seed>` to re-roll it.
 3. **Link and run today's work** on a Pomodoro in the daily note. Link with
    a marker-only `@route:id` capture (which raises Ready to Next), ensure an
    already-planned task with a bare `@route+id` capture, explicitly toggle a
@@ -151,14 +149,15 @@ separate steps:
    outcome such as `bob capture '=x'` or `bob capture '=!'` (see
    [Capture](#capture)). Starting the timer leaves task statuses unchanged;
    closing records worked tasks as In Progress and completed tasks as Done.
-   `bob pomodoro`, `bob tmux-pomodoro`, and `bob notify` read the ledger to
-   report timing; they do not create links or start sessions.
-4. **Reconcile** with `bob task-status-hooks` after manual ledger or task edits.
+   `bob pomodoro`, `bob pomodoro tmux`, and `bob pomodoro notify` read the
+   ledger to report timing; they do not create links or start sessions.
+4. **Reconcile** with `bob task reconcile` after manual ledger or task edits.
    Next and In Progress are sticky lanes: unlinking work does not release it.
-   The hooks promote linked work, derive Blocked from
-   dependencies and future schedules, and clean up the ledger.
+   The command promotes linked work, derives Blocked from
+   dependencies and future schedules, and cleans up the ledger.
 5. **Nightly**, run `bob nightly` to reconcile the vault through Git, archive
-   done and canceled tasks, and reconcile the vault again.
+   done and canceled tasks with `bob task archive`, and reconcile the vault
+   again.
 
 Read-only inspection (`bob query`, `bob projects list`, `bob plugins list --no-pull`,
 `bob highlights doctor`) can run at any time.
@@ -174,7 +173,7 @@ Paths below are relative to `BOB_DIR` (`~/bob` by default):
 | `<route>.md` | Area or project note selected by an `@route` token |
 | `<route>_<id>.md` | Project note created by `@route^id+`; hyphens in the block ID become underscores |
 | `YYYY/YYYYMMDD.md` | Daily note; the `Pomodoros` section is the session ledger |
-| `done/` | Archive notes written by `bob move-done-tasks` |
+| `done/` | Archive notes written by `bob task archive` |
 | `img/`, `file/` | Images and saved clipboard snippets written by `bob capture` |
 | `_conflicts/` | Local copies of vault files `bob vault-sync` could not merge |
 | `.obsidian/plugins/` | Installed community plugins, including Bob's custom plugins |
@@ -196,26 +195,22 @@ Bob's workflow commands are:
 | --- | --- |
 | [`capture`](#capture) | Capture a task or section bullet, optionally with clipboard content |
 | [`freshness`](#task-freshness) | Walk the tiered freshness review queue |
-| `notify` | Notify when the current Pomodoro is complete |
 | [`plan`](#plan-budget) | Show today's plan budget, Today's tasks, and the NEXT/PENDING lanes |
-| [`pomodoro`](#pomodoro-status) | Show Pomodoro status, print the tmux line, or notify on completion |
+| [`pomodoro`](#pomodoro) | Show Pomodoro status, print the tmux line, or notify on completion |
 | [`ready`](#ready-cap) | Show each area/project note's Ready lane against the per-note cap |
-| `tmux-pomodoro` | Print the Pomodoro status and plan meter for tmux |
 
 ### Tasks and projects
 
 | Command | Purpose |
 | --- | --- |
-| [`move-done-tasks`](#move-done-tasks) | Archive done and canceled task blocks and repair their links |
 | [`projects`](#projects) | Inspect and synchronize project lifecycle tasks |
-| [`randomize`](#randomize) | Re-roll due prioritized tasks within their priority windows |
-| [`task-status-hooks`](#task-status-hooks) | Reconcile Pomodoro links, task ranks, and derived Blocked state |
+| [`task`](#task-maintenance) | Vault-wide task maintenance: reconcile, reroll, archive |
 
 ### Vault
 
 | Command | Purpose |
 | --- | --- |
-| [`nightly`](#nightly-maintenance) | Run nightly maintenance: vault-sync, move-done-tasks, vault-sync |
+| [`nightly`](#nightly-maintenance) | Run nightly maintenance: vault-sync, task archive, vault-sync |
 | [`query`](#query) | Run Dataview or Tasks queries against the vault |
 | [`vault-sync`](#vault-sync) | Reconcile the vault through Git (default: run) or show status |
 
@@ -254,9 +249,8 @@ uses these JSON endpoints as a separate integration protocol.
 Use `bob <command> --help` for concise usage. The sections below summarize each
 workflow and link to the detailed command contract where one exists.
 
-The alias table rewrites `task-status-setter` and `mark-next-tasks` to
-`task-status-hooks` before parsing. The old spellings remain silent
-compatibility aliases and never appear in help or completion.
+Old top-level spellings remain permanent silent aliases; see
+[Migration notes](#migration-notes).
 
 ## Capture
 
@@ -503,10 +497,15 @@ remain native-only, with an env-gated live renderer harness for parity checks.
 The full command contract and live smoke-test steps live in
 [`docs/dataview.md`](docs/dataview.md).
 
-## Task status hooks
+## Task maintenance
+
+Every `bob task` command rewrites task lines across the whole vault.
+Read-only reports (`plan`, `ready`, `freshness`) stay top-level.
+
+### bob task reconcile
 
 ```bash
-bob task-status-hooks [-b|--bob-dir DIR] [-d|--dry-run] [-f|--format human|json] [-r|--retry-timeout SECONDS]
+bob task reconcile [-b|--bob-dir DIR] [-d|--dry-run] [-f|--format human|json] [-r|--retry-timeout SECONDS]
 ```
 
 Run this after capturing or closing Pomodoro-linked work, and after
@@ -539,7 +538,7 @@ dependency projection counts (`Dependencies:` plus the trailing `Summary:`
 counts).
 
 ```bash
-bob task-status-hooks --dry-run
+bob task reconcile --dry-run
 ```
 
 The command refuses to change files if the current daily note is missing, lacks
@@ -551,6 +550,86 @@ transient failures with jittered backoff, bounded by `--retry-timeout`
 (default 120s; `0` fails fast on the first attempt). The full sync, grouping,
 link-resolution, exclusion, retry, output, and JSON contract lives in
 [`docs/task-status-hooks.md`](docs/task-status-hooks.md).
+
+### bob task reroll
+
+```bash
+bob task reroll [-d|--dry-run] [-f|--format human|json] [-l|--level LABEL]...
+                [-o|--offline] [-r|--retry-timeout SECONDS] [-s|--seed SEED]
+                [-u|--until DATE|+N]
+```
+
+Re-rolls every due prioritized task to its own random date inside that
+task's configured priority window (P1 2–7 days through P4 91–365 days).
+Each re-roll replaces the `scheduled` date, flips a future-dated Ready task
+to Blocked, writes a 🎲 Schedule Log entry, and regroups eligible project
+notes in the same write. P0 tasks, Next and In Progress tasks, tasks linked
+from today's open Pomodoros, `^prj` lifecycle tasks, and `due`/`repeat`
+tasks are always left alone. `--level` limits the roll to those labels.
+`--until` treats tasks scheduled through that date as due and rolls windows
+from it. An offset that cannot be represented on the calendar is a usage
+error (exit 2): `bob task reroll: invalid --until "…": date out of range`.
+
+Always preview first with `--dry-run`, then apply those exact dates with
+the printed `--seed`, repeating `--level` and `--until` when you used them.
+Omit `--seed` to use `BOB_PRIORITY_ROLL_SEED` or a generated seed. A live
+run holds the shared vault-maintenance lock while it syncs, plans, writes,
+commits exactly the rewritten notes as one `bob task reroll` commit, and
+syncs again. `--offline` skips both sync cycles and still commits locally.
+Undo with `git -C ~/bob revert <sha> && bob vault-sync`. The full contract
+lives in [`docs/randomize.md`](docs/randomize.md).
+
+### bob task archive
+
+```bash
+bob task archive [-t|--threshold N]
+```
+
+Scans the Bob vault for completed (`[x]`) and canceled (`[-]`) Markdown task
+blocks containing `#task`, then moves blocks from notes that meet the threshold
+into matching archive notes under `done/`. The default threshold is `10`; use a
+smaller value for a targeted collection pass, such as `-t 1` in a
+fixture vault.
+
+Archive paths mirror the source note path and add `_done` to the file stem. For
+example, `projects/foo.md` archives to `done/projects/foo_done.md`. Archive
+notes are created with `parent` pointing at the original source note plus
+`type: "[[done]]"`, such as `parent: "[[projects/foo]]"` and
+`type: "[[done]]"`. Existing archive notes have `parent` and `type` frontmatter
+inserted or repaired before new blocks are appended. Source notes that have a
+matching archive note are linked back to it with `done_tasks`, such as
+`done_tasks: "[[done/projects/foo_done]]"`. Existing archive notes under `done/`
+are backfilled into source note frontmatter and archive metadata on future runs
+even when no task blocks meet the threshold.
+
+When task blocks with explicit Obsidian block ids are moved, links to those
+blocks are repaired across vault Markdown notes. For example,
+`[[projects/foo#^abc123]]`, `![[projects/foo#^abc123]]`, and aliases such as
+`[[projects/foo#^abc123|follow-up]]` are rewritten to
+`[[done/projects/foo_done#^abc123]]`. Moved block ids are de-duplicated within
+their destination archive note before link repair. If `^abc123` already exists
+in `done/projects/foo_done.md`, the moved id becomes the smallest available
+suffix such as `^abc123-1`, and repaired links point at that final id. If
+multiple moved blocks originally share the same id, their archived ids are still
+made unique, but existing links to the original duplicate id are left unchanged
+because the intended block is ambiguous. Only explicit `^block-id` targets can
+be rewritten; heading links and tasks without block ids do not have a stable
+target to repair.
+
+Task dependency metadata has a separate vault-wide identity from its Obsidian
+block link. A task at `projects/foo.md#^abc123` uses
+`[id:: projects__foo__abc123]`, and dependents use the same value in
+`[dependsOn:: projects__foo__abc123]`; the trailing block token remains
+`^abc123`. When a task moves, the command rewrites its `[id::]` to the archive
+path/final block ID and repairs exact dependency tokens across all planned
+files. Metadata and link repair share the same atomic preview/write plan.
+
+The command itself does not reconcile the full vault; `bob nightly` runs
+`vault-sync` before and after invoking it. In a Git worktree, the command stages
+only the files it touches, commits with a `bob task archive YYYY-MM-DD`
+message, and pushes. Existing uncommitted changes in touched source, archive,
+or link-repair files are included in that scoped commit after the command
+rewrites those files. Non-Git vaults are left uncommitted.
 
 ## Plan budget
 
@@ -653,39 +732,11 @@ maintains the machine-owned Sub-projects ledger, and propagates optional
 `scheduled: YYYY-MM-DD` frontmatter onto ordinary open tasks.
 
 `sync` writes frontmatter, `#hide`, Sub-projects lines, and inline schedules;
-it does not change checkboxes. Run `bob task-status-hooks` afterward to derive
+it does not change checkboxes. Run `bob task reconcile` afterward to derive
 or recover `[?]` Blocked markers. The property picker in Bob Navigation
 Hotkeys can propagate schedules and reconcile Blocked in the same editor
 transaction. The full project task contract lives in
 [`docs/projects.md`](docs/projects.md).
-
-## Randomize
-
-```bash
-bob randomize [-d|--dry-run] [-f|--format human|json] [-l|--level LABEL]...
-              [-o|--offline] [-r|--retry-timeout SECONDS] [-s|--seed SEED]
-              [-u|--until DATE|+N]
-```
-
-Re-rolls every due prioritized task to its own random date inside that
-task's configured priority window (P1 2–7 days through P4 91–365 days).
-Each re-roll replaces the `scheduled` date, flips a future-dated Ready task
-to Blocked, writes a 🎲 Schedule Log entry, and regroups eligible project
-notes in the same write. P0 tasks, Next and In Progress tasks, tasks linked
-from today's open Pomodoros, `^prj` lifecycle tasks, and `due`/`repeat`
-tasks are always left alone. `--level` limits the roll to those labels.
-`--until` treats tasks scheduled through that date as due and rolls windows
-from it. An offset that cannot be represented on the calendar is a usage
-error (exit 2): `bob randomize: invalid --until "…": date out of range`.
-
-Always preview first with `--dry-run`, then apply those exact dates with
-the printed `--seed`, repeating `--level` and `--until` when you used them.
-Omit `--seed` to use `BOB_PRIORITY_ROLL_SEED` or a generated seed. A live
-run holds the shared vault-maintenance lock while it syncs, plans, writes,
-commits exactly the rewritten notes as one `bob randomize` commit, and
-syncs again. `--offline` skips both sync cycles and still commits locally.
-Undo with `git -C ~/bob revert <sha> && bob vault-sync`. The full contract
-lives in [`docs/randomize.md`](docs/randomize.md).
 
 ## Plugins
 
@@ -800,7 +851,7 @@ Runs the nightly Bob maintenance path. It acquires the shared vault-sync lock
 directory, otherwise `/tmp/bob_sync.lock`), then:
 
 1. Runs `bob vault-sync` against the vault.
-2. Runs `bob move-done-tasks` against the vault.
+2. Runs `bob task archive` against the vault.
 3. Runs `bob vault-sync` against the vault again.
 
 A failed step is reported but does not prevent later steps from running. If
@@ -835,62 +886,13 @@ exits 0 silently.
 The operational runbook for the two-machine Bob vault sync channel lives in
 [`docs/vault-git-sync.md`](docs/vault-git-sync.md).
 
-## Move done tasks
+## Pomodoro
+
+Bare `bob pomodoro` runs `bob pomodoro status`. `-h`/`--help` as the first
+token shows the group help; `bob pomodoro status --help` shows the leaf help.
 
 ```bash
-bob move-done-tasks [-t|--threshold N]
-```
-
-Scans the Bob vault for completed (`[x]`) and canceled (`[-]`) Markdown task
-blocks containing `#task`, then moves blocks from notes that meet the threshold
-into matching archive notes under `done/`. The default threshold is `10`; use a
-smaller value for a targeted collection pass, such as `-t 1` in a
-fixture vault.
-
-Archive paths mirror the source note path and add `_done` to the file stem. For
-example, `projects/foo.md` archives to `done/projects/foo_done.md`. Archive
-notes are created with `parent` pointing at the original source note plus
-`type: "[[done]]"`, such as `parent: "[[projects/foo]]"` and
-`type: "[[done]]"`. Existing archive notes have `parent` and `type` frontmatter
-inserted or repaired before new blocks are appended. Source notes that have a
-matching archive note are linked back to it with `done_tasks`, such as
-`done_tasks: "[[done/projects/foo_done]]"`. Existing archive notes under `done/`
-are backfilled into source note frontmatter and archive metadata on future runs
-even when no task blocks meet the threshold.
-
-When task blocks with explicit Obsidian block ids are moved, links to those
-blocks are repaired across vault Markdown notes. For example,
-`[[projects/foo#^abc123]]`, `![[projects/foo#^abc123]]`, and aliases such as
-`[[projects/foo#^abc123|follow-up]]` are rewritten to
-`[[done/projects/foo_done#^abc123]]`. Moved block ids are de-duplicated within
-their destination archive note before link repair. If `^abc123` already exists
-in `done/projects/foo_done.md`, the moved id becomes the smallest available
-suffix such as `^abc123-1`, and repaired links point at that final id. If
-multiple moved blocks originally share the same id, their archived ids are still
-made unique, but existing links to the original duplicate id are left unchanged
-because the intended block is ambiguous. Only explicit `^block-id` targets can
-be rewritten; heading links and tasks without block ids do not have a stable
-target to repair.
-
-Task dependency metadata has a separate vault-wide identity from its Obsidian
-block link. A task at `projects/foo.md#^abc123` uses
-`[id:: projects__foo__abc123]`, and dependents use the same value in
-`[dependsOn:: projects__foo__abc123]`; the trailing block token remains
-`^abc123`. When a task moves, the command rewrites its `[id::]` to the archive
-path/final block ID and repairs exact dependency tokens across all planned
-files. Metadata and link repair share the same atomic preview/write plan.
-
-The command itself does not reconcile the full vault; `bob nightly` runs
-`vault-sync` before and after invoking it. In a Git worktree, the command stages
-only the files it touches, commits with a `bob move-done-tasks YYYY-MM-DD`
-message, and pushes. Existing uncommitted changes in touched source, archive,
-or link-repair files are included in that scoped commit after the command
-rewrites those files. Non-Git vaults are left uncommitted.
-
-## Pomodoro status
-
-```bash
-bob pomodoro [-d|--debug] [-s|--show-stale] [-v|--verbose]
+bob pomodoro [status] [-d|--debug] [-s|--show-stale] [-v|--verbose]
 ```
 
 Prints the current Pomodoro ledger entry from today's Bob daily note, including
@@ -909,7 +911,7 @@ entry from no open entry; stale open Pomodoros keep the same normalized
 Pomodoros. `-d, --debug` and `-v, --verbose` enable debug tracing on stderr.
 
 ```bash
-bob notify [-v] PRE_CHECK_SLEEP POST_NOTIFY_SLEEP
+bob pomodoro notify [-v] PRE_CHECK_SLEEP POST_NOTIFY_SLEEP
 ```
 
 Polls Pomodoro status until the current entry is overdue, then sends a desktop
@@ -918,13 +920,12 @@ times. `PRE_CHECK_SLEEP` is the seconds to wait between status checks;
 `POST_NOTIFY_SLEEP` is the seconds to wait after a notification before polling
 again. Polling uses the same default status as `bob pomodoro` without
 `--show-stale`: an entry more than nine minutes overdue looks like no open
-Pomodoro, so start `bob notify` while the session is still running or only
-recently overdue. Loop status messages always go to stderr. `-v` / `--verbose`
-may be repeated; extra debug tracing is emitted at `-vv`. Help text still uses
-the legacy binary name `bob_notify`.
+Pomodoro, so start `bob pomodoro notify` while the session is still running or
+only recently overdue. Loop status messages always go to stderr. `-v` /
+`--verbose` may be repeated; extra debug tracing is emitted at `-vv`.
 
 ```bash
-bob tmux-pomodoro
+bob pomodoro tmux
 ```
 
 Prints Pomodoro status in tmux status-line format: the regular status followed
@@ -940,9 +941,9 @@ The installed legacy binaries map to the preferred interface as follows:
 
 | Compatibility binary | Preferred command |
 | --- | --- |
-| `bob_notify` | `bob notify` |
+| `bob_notify` | `bob pomodoro notify` |
 | `bob_pomodoro` | `bob pomodoro` |
-| `tmux_bob_pomodoro` | `bob tmux-pomodoro` |
+| `tmux_bob_pomodoro` | `bob pomodoro tmux` |
 
 By default they call the same native Rust implementations as the preferred
 commands. With `BOB_CLI_USE_SCRIPT=1`, the notification and Pomodoro commands
@@ -962,11 +963,11 @@ The documented workflows use these external-tool integrations:
 
 - `obsidian` CLI plus a running desktop Obsidian vault with the Dataview plugin
   only when using `bob query --engine obsidian`
-- `git` for `bob vault-sync`, Git-backed `bob move-done-tasks`, plugin dirty-file
+- `git` for `bob vault-sync`, Git-backed `bob task archive`, plugin dirty-file
   checks, and the default `bob plugins` repository refresh; remote operations
   also need the credentials required by the configured remote
-- `notify-send` for desktop notifications from `bob notify`; Bob also rings the
-  terminal bell whether or not `notify-send` is available
+- `notify-send` for desktop notifications from `bob pomodoro notify`; Bob also
+  rings the terminal bell whether or not `notify-send` is available
 - platform clipboard tools for `bob capture` clipboard input: `pbpaste` on
   macOS; `wl-paste`, `xclip`, or `xsel` on Linux; or `tmux show-buffer` in a
   display-less tmux session (see `BOB_CLIPBOARD_CMD` below for the exact
@@ -991,7 +992,7 @@ Rust binaries, and the binaries carry the script assets they need.
 ## Environment
 
 `BOB_VAULT_SYNC_LOCK_FILE` overrides the lock path used by `bob vault-sync`,
-`bob nightly`, live `bob task-status-hooks` runs, and `bob randomize`.
+`bob nightly`, live `bob task reconcile` runs, and `bob task reroll`.
 The default path is the same shared `bob_sync.lock` path used by nightly
 maintenance.
 
@@ -1033,7 +1034,7 @@ clipboard source alone.
 
 `BOB_CONFIG_FILE` sets the exact Bob config file. When unset, Bob uses
 `$XDG_CONFIG_HOME/bob/config.yml`, then `~/.config/bob/config.yml`. That
-file holds the priority windows for `p:<N>` and `bob randomize`,
+file holds the priority windows for `p:<N>` and `bob task reroll`,
 `highlights.pre_scan_hook` for `bob highlights scan` and
 `bob highlights doctor`, the `gkeep:` section for `bob gkeep`, and the
 optional `plan:` and `freshness:` blocks. Plan caps default to 3 themes,
@@ -1047,7 +1048,7 @@ config makes both `bob freshness` and `bob ready` exit 2. See
 
 `COLUMNS`, when set to a positive integer, is the width `bob plugins list`
 and `bob gkeep` use when they shorten human table text so each row fits.
-Otherwise Bob uses 100 columns. `bob randomize` lays its task lines out for
+Otherwise Bob uses 100 columns. `bob task reroll` lays its task lines out for
 a fixed 100 columns.
 
 `BOB_DATAVIEW_OBSIDIAN_COMMAND` overrides the executable used by
@@ -1057,10 +1058,11 @@ a fixed 100 columns.
 `obsidian eval` by `bob query --engine obsidian`.
 
 `BOB_DAY_FILE` sets the exact daily note path used by `bob pomodoro`,
-`bob tmux-pomodoro`, `bob notify` (via the same status reader), Pomodoro-linked
-and Pomodoro-note `bob capture` requests, `bob task-status-hooks`, and
-`bob randomize`. It also selects the ledger read by `bob plan`, `bob freshness`,
-and `bob ready` when they evaluate Today-linked work.
+`bob pomodoro tmux`, `bob pomodoro notify` (via the same status reader),
+Pomodoro-linked and Pomodoro-note `bob capture` requests,
+`bob task reconcile`, and `bob task reroll`. It also selects the ledger
+read by `bob plan`, `bob freshness`, and `bob ready` when they evaluate
+Today-linked work.
 For `bob plan`, a dated daily-note filename also sets the report's evaluation
 date; freshness and Ready use the current clock for their review date.
 
@@ -1095,9 +1097,9 @@ being scanned.
 
 `BOB_NOW` overrides the local date and time used for Pomodoro status and default
 daily-note selection by `bob pomodoro`, Pomodoro-linked capture, and
-`bob task-status-hooks`. It also controls capture created/scheduled dates and
+`bob task reconcile`. It also controls capture created/scheduled dates and
 clipboard-snippet names, native Tasks-query date calculations, the default
-`bob move-done-tasks YYYY-MM-DD` commit-message date, scheduled-project
+`bob task archive YYYY-MM-DD` commit-message date, scheduled-project
 visibility, plan/freshness/Ready evaluation, and the timestamped directory name
 for plugin backups. Supported
 formats are `YYYY-MM-DD`, `YYYY-MM-DD HH:MM`, and `YYYY-MM-DD HH:MM:SS`; `T`
@@ -1117,8 +1119,8 @@ to `~/projects/github/bobs-org/bob-plugins`.
 
 `BOB_PRIORITY_ROLL_SEED` pins the `p:<N>` scheduled-date roll to a decimal
 integer seed so a `--dry-run` preview matches a real capture. Unset means each
-capture rolls independently. `bob randomize` also reads it as the default base
-seed when `--seed` is omitted.
+capture rolls independently. `bob task reroll` also reads it as the default
+base seed when `--seed` is omitted.
 
 `BOB_WEB_CLIP_ADAPTER` is the path of an executable that speaks the web-clip
 adapter protocol and replaces `uv run --script …` for `bob highlights clip`
@@ -1149,16 +1151,29 @@ otherwise be styled when stdout is a terminal.
 
 ## Migration notes
 
-Use `bob pomodoro`, `bob notify`, `bob vault-sync`, and
-`bob tmux-pomodoro` for new integrations, and run
-`bob move-done-tasks` when done and canceled task blocks should be archived
-from the vault.
+| Old spelling | Canonical path |
+| --- | --- |
+| `bob mark-next-tasks` | `bob task reconcile` |
+| `bob move-done-tasks` | `bob task archive` |
+| `bob notify` | `bob pomodoro notify` |
+| `bob randomize` | `bob task reroll` |
+| `bob task-status-hooks` | `bob task reconcile` |
+| `bob task-status-setter` | `bob task reconcile` |
+| `bob tmux-pomodoro` | `bob pomodoro tmux` |
+| `bob_pomodoro`, `bob_notify`, `tmux_bob_pomodoro` binaries | unchanged, same leaves |
+
+Old spellings are permanent hidden aliases with byte-identical behavior and
+no deprecation notices. New integrations should use the canonical names.
+
+Reroll and archive commits are now labeled `bob task reroll` and
+`bob task archive`; older history says `bob randomize` and
+`bob move-done-tasks`.
 
 The old top-level commands were renamed: `bob collect-done` is now
-`bob move-done-tasks`, `bob dataview` is now `bob query`, `bob highlights-ref`
+`bob task archive`, `bob dataview` is now `bob query`, `bob highlights-ref`
 is now `bob highlights`. `bob sync`, `bob bulk-git-commit`, and the `bob_sync`
-binary have been retired in favor of `bob vault-sync`. The old top-level names
-are no longer registered.
+binary have been retired in favor of `bob vault-sync`. Those retired
+top-level names are no longer registered.
 
 The original script implementations remain embedded only as a rollback path.
 New integrations should rely on the native Rust command behavior.
@@ -1188,12 +1203,12 @@ just install-smoke
 Run a tmux status smoke test after installing locally:
 
 ```bash
-tmux display-message -p '#(bob tmux-pomodoro)'
+tmux display-message -p '#(bob pomodoro tmux)'
 ```
 
 Before running `bob vault-sync` in a release smoke test, verify that `BOB_DIR`
 points at the intended vault and that its Git remote can be pushed without
-prompts. Before running `bob move-done-tasks` against the real vault,
+prompts. Before running `bob task archive` against the real vault,
 verify that `~/bob` is the intended vault, inspect `git -C ~/bob status --short`,
 and review any local edits that may be included when touched candidate files are
 rewritten.
@@ -1204,7 +1219,7 @@ Dataview, and use the explicit `--engine obsidian` examples in
 [`docs/dataview.md`](docs/dataview.md).
 
 For an end-to-end collection smoke test, install the local binary, run
-`bob move-done-tasks` against `~/bob`, then verify that archive notes under
+`bob task archive` against `~/bob`, then verify that archive notes under
 `~/bob/done` include `parent: "[[source]]"` for the original note and
 `type: "[[done]]"`, source notes include matching `done_tasks` links and no
 longer contain the collected blocks, Obsidian links to moved `^block-id` task

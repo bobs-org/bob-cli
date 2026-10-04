@@ -6,7 +6,8 @@ of truth; the `[dependsOn::]` / `[id::]` fields are derived from it.
 
 This file is the contract every implementation cites. The Rust side is
 `src/native/task_dependencies/` (parser, formatter, link form, legacy
-children) plus the reconciliation step in `bob task-status-hooks`; the
+children) plus the reconciliation step in `bob task reconcile`
+(formerly `bob task-status-hooks`, still accepted); the
 JavaScript mirrors are the Depends-On grammar in bob-navigation-hotkeys,
 the chip model in bob-ledger-tools, and the small recognisers in
 task-status-cycler and block-id-prompt. Each implementation copies the
@@ -381,7 +382,7 @@ chips. The ⚠ chip is the signal for those; the summary tracks blocking.
 | Ctrl+D on the Depends on row | Deletes the line, the field, and any legacy children, with immediate recovery. |
 | Hand edits in Obsidian | Once the cursor leaves the edited line (short debounce), nav applies R1/R9 to that task. Deleting the whole line clears the field. Malformed lines are left alone. |
 | `bob capture` `&note:id` (and the Bob Mac Capture `&` picker) | Adds prerequisites to a new task or an explicit `@note+id` dependent through the staged capture writer: new links append in typed order (repeats are no-ops), legacy children fold and field-only dependencies are adopted, fields are derived, and §5 Blocked/promotion applies in the same batch. It never removes or reorders links; removal stays with Ctrl+Shift+P and Ctrl+D. See `docs/capture.md`. |
-| Ctrl+Shift+M, `move-done-tasks` | The line moves with its task. Same-note links inside a moved block whose target stayed behind gain the source note path. |
+| Ctrl+Shift+M, `task archive` | The line moves with its task. Same-note links inside a moved block whose target stayed behind gain the source note path. |
 | "Rewrite dependency navigation links" command, `migrate-dependency-bullets.mjs` | Deleted. They emit embeds. |
 
 ## 9. Plugin api v1 (navigation-hotkeys)

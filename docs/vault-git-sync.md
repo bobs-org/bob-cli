@@ -19,12 +19,12 @@ default):
 7. Write the status record used by `bob vault-sync status`.
 
 The command shares the `bob_sync.lock` maintenance lock with `bob nightly`, live
-`bob task-status-hooks` runs, and `bob randomize`, so background sync, nightly maintenance,
-task-status writes, and randomize re-rolls do not mutate the vault concurrently.
-`bob randomize` holds that lock across a sync-sandwiched scoped commit: it runs a
-vault-sync cycle, writes only the re-rolled notes, commits exactly those notes as one
-`bob randomize` commit, then runs a second vault-sync cycle. See
-[randomize.md](randomize.md#git-and-vault-sync).
+`bob task reconcile` runs, and `bob task reroll`, so background sync, nightly
+maintenance, task-status writes, and reroll re-rolls do not mutate the vault
+concurrently. `bob task reroll` holds that lock across a sync-sandwiched scoped
+commit: it runs a vault-sync cycle, writes only the re-rolled notes, commits
+exactly those notes as one `bob task reroll` commit, then runs a second
+vault-sync cycle. See [randomize.md](randomize.md#git-and-vault-sync).
 
 ## Conflict policy
 
@@ -119,13 +119,16 @@ apart so their writes do not collide with each other or with the 15-second
 ```cron
 0,15,30,45 * * * * ~/bin/maybe_bob_highlights_sync -w >> /var/tmp/maybe_bob_highlights_sync.log 2>&1
 5,20,35,50 * * * * ~/.cargo/bin/bob projects sync >> /var/tmp/bob_projects.log 2>&1
-10,25,40,55 * * * * ~/.cargo/bin/bob task-status-hooks --retry-timeout 120 >> /var/tmp/bob_task_status_hooks.log
+10,25,40,55 * * * * ~/.cargo/bin/bob task reconcile --retry-timeout 120 >> /var/tmp/bob_task_status_hooks.log
 ```
 
+An installed old line `bob task-status-hooks --retry-timeout 120` keeps working
+as a permanent silent alias.
+
 Highlights intake precedes project reconciliation, which precedes task-status
-reconciliation. The 2-minute `--retry-timeout` on `task-status-hooks` fits comfortably
-inside the 15-minute cadence and absorbs transient maintenance-lock contention and
-concurrent-save races against the 15-second sync LaunchAgent; see
+reconciliation. The 2-minute `--retry-timeout` on `bob task reconcile` fits
+comfortably inside the 15-minute cadence and absorbs transient maintenance-lock
+contention and concurrent-save races against the 15-second sync LaunchAgent; see
 [Retries](task-status-hooks.md#retries) for the backoff policy and its allowed failure
 reasons. Offsetting the three jobs by minutes reduces collisions between them, but
 cannot guarantee exclusion from an open editor, a slow job, or the sync LaunchAgent —
@@ -134,7 +137,7 @@ retry behavior, not from the schedule alone.
 
 This crontab is not chezmoi-managed; it is installed by hand with `crontab` directly on
 the Mac. The highlights and projects jobs redirect both stdout and stderr with
-`>> logfile 2>&1` (in that order). The `task-status-hooks` job redirects stdout only:
+`>> logfile 2>&1` (in that order). The reconcile job redirects stdout only:
 routine retry progress and the final human result land in
 `/var/tmp/bob_task_status_hooks.log`, while warnings and real terminal failures remain
 on stderr so cron mail is still actionable.
@@ -142,7 +145,7 @@ on stderr so cron mail is still actionable.
 ```bash
 ssh mac crontab -l
 ssh mac 'tail -n 80 /var/tmp/bob_task_status_hooks.log'
-ssh mac '~/.cargo/bin/bob task-status-hooks --help' # confirm --retry-timeout is listed before installing a crontab that uses it
+ssh mac '~/.cargo/bin/bob task reconcile --help' # confirm --retry-timeout is listed before installing a crontab that uses it
 ```
 
 To change this schedule: re-read the live crontab, save a timestamped backup outside the
@@ -164,7 +167,7 @@ unrelated edits.
 athena's cron entry runs `bob nightly` at 03:30. `bob nightly` now runs:
 
 1. `bob vault-sync`
-2. `bob move-done-tasks`
+2. `bob task archive`
 3. `bob vault-sync`
 
 That ordering pulls the MacBook's latest notes before maintenance rewrites task blocks

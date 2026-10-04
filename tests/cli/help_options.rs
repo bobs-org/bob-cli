@@ -83,10 +83,10 @@ fn capture_help_lists_options_alphabetically() {
 #[test]
 fn task_status_hooks_help_lists_options_alphabetically() {
     let output = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--help")
         .output()
-        .expect("run bob task-status-hooks --help");
+        .expect("run bob task reconcile --help");
 
     assert_success(&output);
     let help = stdout(&output);
@@ -94,7 +94,7 @@ fn task_status_hooks_help_lists_options_alphabetically() {
         help.contains("Make the current Pomodoro ledger the source of truth")
             && help.contains("BOB_DAY_FILE")
             && help.contains("bob task reconcile --dry-run"),
-        "expected task-status-hooks long help:\n{help}"
+        "expected bob task reconcile long help:\n{help}"
     );
     assert_text_order(
         &help,

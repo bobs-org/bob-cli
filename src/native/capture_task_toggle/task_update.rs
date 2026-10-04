@@ -271,7 +271,7 @@ pub(crate) fn set_task_line_status(
     Some(result)
 }
 
-/// Recognizes the same task-level `scheduled` forms as `bob task-status-hooks`
+/// Recognizes the same task-level `scheduled` forms as `bob task reconcile`
 /// and `plugins/block-id-prompt/main.js`'s `SCHEDULED_FIELD_RE`, shared with
 /// the other task-field consumers through `task_fields`.
 pub(crate) struct ScheduledFieldMatch {

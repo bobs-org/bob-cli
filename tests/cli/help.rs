@@ -54,22 +54,22 @@ fn cache_extraction_writes_expected_files_and_modes() {
 fn move_done_tasks_help_is_native_only() {
     let temp = TempDir::new("bob-cli-move-done-tasks-native-help");
     let output = bob_command()
-        .arg("move-done-tasks")
+        .args(["task", "archive"])
         .arg("--help")
         .env("BOB_CLI_USE_SCRIPT", "1")
         .env("XDG_CACHE_HOME", temp.path())
         .output()
-        .expect("run native-only bob move-done-tasks --help");
+        .expect("run native-only bob task archive --help");
 
     assert_success(&output);
     assert!(
         stdout(&output).contains("usage: bob task archive"),
-        "expected move-done-tasks help text:\n{}",
+        "expected bob task archive help text:\n{}",
         format_output(&output)
     );
     assert!(
         !temp.path().join("bob-cli/scripts").exists(),
-        "native-only move-done-tasks should not extract script assets"
+        "native-only bob task archive should not extract script assets"
     );
 }
 
@@ -486,17 +486,18 @@ fn all_top_level_subcommand_help_is_safe_and_plain() {
         (&["query", "--help"], "bob query"),
         (&["highlights", "--help"], "Usage: bob highlights"),
         (
-            &["task-status-hooks", "--help"],
+            &["task", "reconcile", "--help"],
             "Usage: bob task reconcile",
         ),
-        (&["move-done-tasks", "--help"], "usage: bob task archive"),
+        (&["task", "archive", "--help"], "usage: bob task archive"),
+        (&["task", "reroll", "--help"], "Usage: bob task reroll"),
         (&["nightly", "--help"], "usage: bob nightly"),
-        (&["notify", "--help"], "Notify me when"),
+        (&["pomodoro", "notify", "--help"], "Notify me when"),
         (&["plugins", "--help"], "bob plugins"),
         (&["pomodoro", "--help"], "Usage: bob pomodoro"),
         (&["projects", "--help"], "bob projects"),
         (&["ready", "--help"], "Usage: bob ready"),
-        (&["tmux-pomodoro", "--help"], "usage: bob pomodoro tmux"),
+        (&["pomodoro", "tmux", "--help"], "usage: bob pomodoro tmux"),
     ];
 
     for (args, marker) in cases {
@@ -632,9 +633,11 @@ fn public_help_surfaces_do_not_list_long_only_options() {
         (&["query", "--help"], "bob query --help"),
         (&["highlights", "--help"], "bob highlights --help"),
         (
-            &["task-status-hooks", "--help"],
-            "bob task-status-hooks --help",
+            &["task", "reconcile", "--help"],
+            "bob task reconcile --help",
         ),
+        (&["task", "archive", "--help"], "bob task archive --help"),
+        (&["task", "reroll", "--help"], "bob task reroll --help"),
         (
             &["highlights", "create", "--help"],
             "bob highlights create --help",
@@ -655,9 +658,11 @@ fn public_help_surfaces_do_not_list_long_only_options() {
             &["highlights", "sync", "--help"],
             "bob highlights sync --help",
         ),
-        (&["move-done-tasks", "--help"], "bob move-done-tasks --help"),
         (&["nightly", "--help"], "bob nightly --help"),
-        (&["notify", "--help"], "bob notify --help"),
+        (
+            &["pomodoro", "notify", "--help"],
+            "bob pomodoro notify --help",
+        ),
         (&["plugins", "--help"], "bob plugins --help"),
         (&["plugins", "list", "--help"], "bob plugins list --help"),
         (&["plugins", "sync", "--help"], "bob plugins sync --help"),
@@ -665,7 +670,7 @@ fn public_help_surfaces_do_not_list_long_only_options() {
         (&["projects", "--help"], "bob projects --help"),
         (&["projects", "list", "--help"], "bob projects list --help"),
         (&["projects", "sync", "--help"], "bob projects sync --help"),
-        (&["tmux-pomodoro", "--help"], "bob tmux-pomodoro --help"),
+        (&["pomodoro", "tmux", "--help"], "bob pomodoro tmux --help"),
     ];
 
     for (args, label) in bob_cases {
@@ -985,15 +990,11 @@ fn help_routes_match_direct_help_for_root_and_nested_commands() {
     let roots = [
         "capture",
         "freshness",
-        "notify",
         "plan",
         "pomodoro",
         "ready",
-        "tmux-pomodoro",
-        "move-done-tasks",
+        "task",
         "projects",
-        "randomize",
-        "task-status-hooks",
         "nightly",
         "query",
         "vault-sync",
@@ -1049,7 +1050,7 @@ fn help_routes_match_direct_help_for_root_and_nested_commands() {
         ),
         (
             &["task-status-setter"][..],
-            &["task-status-hooks", "--help"][..],
+            &["task", "reconcile", "--help"][..],
         ),
         (&["task", "reroll"][..], &["task", "reroll", "--help"][..]),
         (&["randomize"][..], &["task", "reroll", "--help"][..]),

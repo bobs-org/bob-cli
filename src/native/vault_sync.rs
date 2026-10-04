@@ -213,14 +213,14 @@ pub(crate) fn run_cycle_with_existing_lock(child_env: &ChildEnv) -> i32 {
 pub(crate) struct CycleReport {
     pub ok: bool,
     // Reserved for programmatic callers that need the raw process
-    // outcome; `bob randomize` renders `ok`/`error` instead.
+    // outcome; `bob task reroll` renders `ok`/`error` instead.
     #[allow(dead_code)]
     pub exit_code: i32,
     pub error: Option<String>,
     pub files_committed: usize,
     pub conflicts: Vec<String>,
     pub pushed: bool,
-    // Reserved for programmatic callers; `bob randomize` reads the
+    // Reserved for programmatic callers; `bob task reroll` reads the
     // commit it creates via `git rev-parse` in its own scoped step.
     #[allow(dead_code)]
     pub local_sha: Option<String>,

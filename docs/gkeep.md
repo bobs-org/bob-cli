@@ -257,7 +257,8 @@ a note look revised.
 skipping the always-excluded note directories. A cheap
 `contents.contains("%%gkeep:")` pre-filter skips files without markers; each
 hit records `{id, fp, path, line}`. Tasks keep their `Source:` child through
-triage and `move-done-tasks`, so re-runs are idempotent across hosts with no
+triage and `task archive` (formerly `move-done-tasks`, still accepted), so
+re-runs are idempotent across hosts with no
 local state. More than one ledger entry with the same `(id, fp)` warns,
 naming each `path:line`.
 

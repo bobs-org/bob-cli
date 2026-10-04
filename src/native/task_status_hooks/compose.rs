@@ -176,7 +176,7 @@ pub(super) fn task_grouping_eligible(
 
 /// Whether a note's contents are grouping-eligible: `[[area]]` or
 /// `[[project]]` frontmatter, not a canonical `YYYY/YYYYMMDD.md` daily note,
-/// and not today's day file. Shared with `bob randomize`, which composes
+/// and not today's day file. Shared with `bob task reroll`, which composes
 /// status and grouping in the same write so hooks have nothing left to do.
 pub(crate) fn grouping_eligible_note(
     relative_path: &Path,

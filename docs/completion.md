@@ -138,7 +138,7 @@ failure, which yields empty output.
   - `plugins sync --plugin`: directory names under
     `<--repo or BOB_PLUGINS_DIR>/plugins/*/`, grouped `plugins`. Never
     git.
-  - `randomize --level`: configured priority labels in config order;
+  - `task reroll --level`: configured priority labels in config order;
     the description is the roll window (for example `2–7 days`).
   - `query --tasks-note`, `query --origin`, `ready NOTE`,
     `capture-task-id --note-path`: vault notes
@@ -156,9 +156,9 @@ vault content lands in docs. Each candidate line is
 $ bob __complete zsh --protocol 1 -- bob ""
 capture<TAB>Capture tasks, bullets, and Pomodoro commands into the vault<TAB>daily workflow<TAB>space
 freshness<TAB>Walk the tiered freshness review queue<TAB>daily workflow<TAB>space
-notify<TAB>Notify when the current Pomodoro is complete<TAB>daily workflow<TAB>space
+plan<TAB>Show today's plan budget, Today's tasks, and NEXT/PENDING lanes<TAB>daily workflow<TAB>space
 … (remaining daily workflow commands)
-move-done-tasks<TAB>Move done and canceled tasks into done/ archives and repair links<TAB>tasks and projects<TAB>space
+task<TAB>Vault-wide task maintenance: reconcile, reroll, archive<TAB>tasks and projects<TAB>space
 … (tasks and projects, vault, integrations, and setup sections)
 capture-complete<TAB>Complete the capture marker at the cursor<TAB>capture protocol<TAB>space
 … (all ten capture-* endpoints, grouped last)

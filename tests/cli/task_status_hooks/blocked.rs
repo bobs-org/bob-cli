@@ -36,7 +36,7 @@ fn task_status_hooks_reconciles_blocked_status_from_dataview_dependencies() {
     let before = fs::read_to_string(&tasks).unwrap();
 
     let dry_run = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--dry-run")
         .arg("--format")
         .arg("json")
@@ -71,7 +71,7 @@ fn task_status_hooks_reconciles_blocked_status_from_dataview_dependencies() {
         }));
 
     let applied = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
@@ -108,7 +108,7 @@ fn task_status_hooks_reconciles_blocked_status_from_dataview_dependencies() {
     }
 
     let second = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
@@ -156,7 +156,7 @@ fn task_status_hooks_reconciles_future_schedules_and_combined_blocking_reasons()
     let before = fs::read_to_string(&tasks).unwrap();
 
     let dry_run = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--dry-run")
         .arg("--format")
         .arg("json")
@@ -199,7 +199,7 @@ fn task_status_hooks_reconciles_future_schedules_and_combined_blocking_reasons()
     assert_eq!(json["unblocked"][0]["block_id"], "recover");
 
     let applied = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
@@ -248,7 +248,7 @@ fn task_status_hooks_reconciles_future_schedules_and_combined_blocking_reasons()
     }
 
     let second = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
@@ -292,7 +292,7 @@ fn task_status_hooks_unblocks_to_final_pomodoro_rank_and_ready() {
     write_blocked_tasks_settings(&vault);
 
     let output = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--format")
         .arg("json")
         .arg("--bob-dir")
@@ -373,7 +373,7 @@ fn task_status_hooks_uses_recent_ledgers_only_for_blocked_recovery() {
     let before = fs::read_to_string(&tasks).unwrap();
 
     let dry_run = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--dry-run")
         .arg("--format")
         .arg("json")
@@ -392,7 +392,7 @@ fn task_status_hooks_uses_recent_ledgers_only_for_blocked_recovery() {
     assert!(json["marked_in_progress"].as_array().unwrap().is_empty());
 
     let applied = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
@@ -411,7 +411,7 @@ fn task_status_hooks_uses_recent_ledgers_only_for_blocked_recovery() {
     assert!(contents.contains("- [?] #task Dependency still blocks"));
 
     let second = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
@@ -462,7 +462,7 @@ fn task_status_hooks_blocked_status_guard_writes_nothing() {
         }
 
         let output = bob_command()
-            .arg("task-status-hooks")
+            .args(["task", "reconcile"])
             .arg("--bob-dir")
             .arg(&vault)
             .env("BOB_DAY_FILE", &daily)

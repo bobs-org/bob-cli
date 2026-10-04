@@ -1,4 +1,4 @@
-//! Guarded note writes for `bob task-status-hooks`.
+//! Guarded note writes for `bob task reconcile`.
 //!
 //! Snapshot the planning read-set, stage replacements as uniquely created
 //! temporaries, retain recoverable originals, and refuse to overwrite a vault

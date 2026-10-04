@@ -24,9 +24,9 @@ For daily work, read [Capture](capture.md), [Plan and Ready caps](plan.md), and
 | [plan.md](plan.md) | Plan budget, Today, and lanes definition, `bob plan` JSON, lints, and conformance examples |
 | [plugins.md](plugins.md) | `bob plugins` list and vault deploy |
 | [projects.md](projects.md) | `bob projects` `^prj` lifecycle and schedules |
-| [randomize.md](randomize.md) | `bob randomize` bulk re-roll of due prioritized tasks |
+| [randomize.md](randomize.md) | `bob task reroll` bulk re-roll of due prioritized tasks |
 | [task-dependencies.md](task-dependencies.md) | Task dependency links: Depends-On line contract and conformance vectors |
-| [task-status-hooks.md](task-status-hooks.md) | `bob task-status-hooks` Pomodoro-driven task status |
+| [task-status-hooks.md](task-status-hooks.md) | `bob task reconcile` Pomodoro-driven task status |
 | [vault-git-sync.md](vault-git-sync.md) | Git-only Bob vault sync operations, triggers, conflict copies, and bridge policy |
 
 `bob <command> --help` is the concise usage source for that command, and

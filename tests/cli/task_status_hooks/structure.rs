@@ -34,7 +34,7 @@ fn task_status_hooks_removes_empty_pomodoros_and_reports_them() {
     write_file(&tasks, "- [*] #task Keep ^keep\n");
 
     let dry_run = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--dry-run")
         .arg("--format")
         .arg("json")
@@ -57,7 +57,7 @@ fn task_status_hooks_removes_empty_pomodoros_and_reports_them() {
     );
 
     let human_dry_run = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--dry-run")
         .arg("--bob-dir")
         .arg(&vault)
@@ -73,7 +73,7 @@ fn task_status_hooks_removes_empty_pomodoros_and_reports_them() {
     assert_eq!(fs::read_to_string(&daily).unwrap(), daily_before);
 
     let applied = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
@@ -90,7 +90,7 @@ fn task_status_hooks_removes_empty_pomodoros_and_reports_them() {
     assert_eq!(fs::read_to_string(&daily).unwrap(), daily_after);
 
     let second = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
@@ -126,7 +126,7 @@ fn task_status_hooks_resolves_duplicate_fragments_by_explicit_note_path() {
     write_file(&vault.join("Beta.md"), "- [ ] #task Beta ^dep\n");
 
     let output = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
@@ -155,7 +155,7 @@ fn task_status_hooks_guard_rails_leave_tasks_unchanged() {
     write_file(&task_file, "- [*] #task Must remain next ^keep\n");
 
     let missing = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &missing_daily)
@@ -171,7 +171,7 @@ fn task_status_hooks_guard_rails_leave_tasks_unchanged() {
     let malformed_daily = vault.join("malformed.md");
     write_file(&malformed_daily, "# Daily note\n\nNo ledger here.\n");
     let malformed = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--format")
         .arg("json")
         .arg("--bob-dir")
@@ -206,7 +206,7 @@ fn task_status_hooks_guard_rails_leave_tasks_unchanged() {
         ),
     );
     let multiple = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &multiple_current)
@@ -242,7 +242,7 @@ fn task_status_hooks_guard_rails_leave_tasks_unchanged() {
         ),
     );
     let empty_timed_output = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--format")
         .arg("json")
         .arg("--bob-dir")
@@ -297,7 +297,7 @@ fn task_status_hooks_uses_custom_done_status_and_completed_fallback() {
     );
 
     let output = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--format")
         .arg("json")
         .arg("--bob-dir")
@@ -392,7 +392,7 @@ fn task_status_hooks_removes_canceled_open_pomodoro_references() {
     );
 
     let dry_run = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--dry-run")
         .arg("--format")
         .arg("json")
@@ -405,7 +405,7 @@ fn task_status_hooks_removes_canceled_open_pomodoro_references() {
     assert_eq!(fs::read_to_string(&daily).unwrap(), daily_before);
     assert_eq!(fs::read_to_string(&tasks).unwrap(), tasks_before);
     let repeated_dry_run = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--dry-run")
         .arg("--format")
         .arg("json")
@@ -463,7 +463,7 @@ fn task_status_hooks_removes_canceled_open_pomodoro_references() {
                 .contains("canceled-reference list-item removal was skipped")));
 
     let human_dry_run = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--dry-run")
         .arg("--bob-dir")
         .arg(&vault)
@@ -482,7 +482,7 @@ fn task_status_hooks_removes_canceled_open_pomodoro_references() {
     assert_eq!(fs::read_to_string(&tasks).unwrap(), tasks_before);
 
     let applied = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
@@ -534,7 +534,7 @@ fn task_status_hooks_removes_canceled_open_pomodoro_references() {
     let daily_after = fs::read_to_string(&daily).unwrap();
     let tasks_after = fs::read_to_string(&tasks).unwrap();
     let second = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--format")
         .arg("json")
         .arg("--bob-dir")
@@ -580,7 +580,7 @@ fn task_status_hooks_resolves_archive_references_read_only() {
     write_file(&archive, archive_before);
 
     let dry_run = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--dry-run")
         .arg("--format")
         .arg("json")
@@ -623,7 +623,7 @@ fn task_status_hooks_resolves_archive_references_read_only() {
     );
 
     let human = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--dry-run")
         .arg("--bob-dir")
         .arg(&vault)
@@ -638,7 +638,7 @@ fn task_status_hooks_resolves_archive_references_read_only() {
     );
 
     let applied = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
@@ -655,7 +655,7 @@ fn task_status_hooks_resolves_archive_references_read_only() {
     assert_eq!(fs::read_to_string(&archive).unwrap(), archive_before);
 
     let second = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--format")
         .arg("json")
         .arg("--bob-dir")
@@ -700,7 +700,7 @@ fn task_status_hooks_normalizes_live_archive_terminal_references() {
     write_file(&archive, archive_before);
 
     let dry_run = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--dry-run")
         .arg("--format")
         .arg("json")
@@ -747,7 +747,7 @@ fn task_status_hooks_normalizes_live_archive_terminal_references() {
     );
 
     let applied = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
@@ -770,7 +770,7 @@ fn task_status_hooks_normalizes_live_archive_terminal_references() {
     assert_eq!(fs::read_to_string(&archive).unwrap(), archive_before);
 
     let second = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--format")
         .arg("json")
         .arg("--bob-dir")
@@ -820,7 +820,7 @@ fn task_status_hooks_keeps_archive_out_of_active_dependency_sync() {
     write_file(&archive, archive_before);
 
     let dry_run = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--dry-run")
         .arg("--format")
         .arg("json")
@@ -859,7 +859,7 @@ fn task_status_hooks_keeps_archive_out_of_active_dependency_sync() {
     }));
 
     let applied = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
@@ -890,7 +890,7 @@ fn task_status_hooks_strikes_in_place_when_no_relocation_target_exists() {
     write_file(&tasks, "- [X] #task Finished ^done\n");
 
     let output = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
@@ -929,7 +929,7 @@ fn task_status_hooks_composes_daily_status_and_structural_edits() {
     write_file(&tasks, "- [x] #task Finished ^done\n");
 
     let output = bob_command()
-        .arg("task-status-hooks")
+        .args(["task", "reconcile"])
         .arg("--bob-dir")
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
