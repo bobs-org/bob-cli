@@ -3,8 +3,10 @@
 Confirmed tasks carry `[fresh:: YYYY-MM-DD]`: the local calendar date a human
 last confirmed that the task still needs doing as written — its wording,
 priority, project, schedule, and dependencies. A visible, non-recurring Ready
-task that was never confirmed, or whose review interval expired, is due for
-review. The morning review then costs roughly "pool ÷ interval +
+task that was never confirmed, whose scheduled deferral returned after its
+last confirmation, or whose review interval expired is due for review.
+Today-linked tasks and canonical daily-note tasks are outside this review
+scope. The morning review then costs roughly "pool ÷ interval +
 arrivals" glances instead of the whole pool.
 
 The daily lane review reuses the same `[fresh::]` stamp for Pending
@@ -781,21 +783,34 @@ and bin-packed largest-note-first into 7 buckets; a note bigger than
 break by path, then bucket index. Bucket `k` (1–7) lands on `today −
 7 + k`, raised per task to `max(bucket date, today − interval(t) +
 1, scheduled(t) when due)` so nothing is due on cutover day and
-nothing arrives RESURFACED, and clamped to today. Every other open,
-non-recurring task outside `#hide`, `_templates`, `_conflicts`, and
-daily notes gets today. If unstamped candidates remain, the seed refuses when
-any eligible task already carries a `fresh` dated before today (unless
-`--force`), aborts the whole run with no writes when any changed line parses differently
-under either Rust parser, re-reads all touched files before the first write and
-refuses when one changed, and writes each file through a temp file plus rename.
-A rerun with no unstamped candidates reports zeros, even if bucket stamps
+nothing arrives RESURFACED, and clamped to today. Every other eligible open,
+non-recurring task without a valid stamp gets today, including Today-linked
+tasks. Tasks tagged `#hide` and tasks in daily notes, `_templates`,
+`_conflicts`, or dot-directories are excluded. "Without a valid stamp"
+includes missing, malformed, and future-dated `fresh` values.
+
+If candidates remain, the seed refuses when any eligible task already
+carries a valid `fresh` dated before today (unless `--force`). `--force`
+bypasses that refusal; it does not rewrite existing valid stamps. A rerun
+with no candidates reports zero newly stamped tasks, even if bucket stamps
 are older than today. Later captures remain unconfirmed and should be reviewed
-normally. The JSON contract is `schema_version: 7` with `ok`, `date`, `dry_run`,
+normally.
+
+The seed aborts without writing notes when any changed task line would parse
+differently under either Rust parser. A writing run then re-reads all touched
+files before the first write and refuses if one changed; `--dry-run` stops
+after planning and parse validation, without that file recheck. Each file is
+written through a temp file plus rename. The JSON contract is
+`schema_version: 7` with `ok`, `date`, `dry_run`,
 `stamped` (`ready`, `other`), `buckets` (`fresh`, `due_on`, `count`,
 `notes`), `skipped` (`already_stamped`, `recurring`,
 `out_of_scope`), `files`, and `warnings`. The shared schema constant
 also moves the `seed` envelope to 7, with seed content unchanged. Seed
-candidate selection is unchanged, and list stays read-only.
+candidate selection is unchanged, and list stays read-only. The `buckets`
+dates describe the initial distribution: `fresh` is the unadjusted bucket
+date, and `due_on` adds the global interval. Per-task adjustments described
+above can make the written stamps and actual due dates differ from these
+summary dates; the report does not list each task's final stamp.
 
 The pre-write guards abort without note changes, but a filesystem failure
 during the multi-file write can leave earlier files stamped. The error reports

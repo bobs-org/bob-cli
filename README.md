@@ -113,7 +113,7 @@ separate `bob` subcommands.
 | Term | Meaning |
 | --- | --- |
 | Vault | The Obsidian folder Bob operates on (`~/bob` by default; `BOB_DIR` to override) |
-| Route | A name using letters, digits, `_`, or `-`, lowercased to select a top-level note; `@groceries` writes `groceries.md` |
+| Route | A name using ASCII letters, digits, `_`, or `-`, lowercased to select a top-level note; `@groceries` writes `groceries.md` |
 | Pomodoro | A checkbox in the daily note's `Pomodoros` section for one work session |
 | Block ID | The trailing `^id` on a task line, used to link or nest under that task |
 | Task link | A `[[note#^id]]` (or embed) pointing at a task. When that is the only content of a Pomodoro child bullet, it is that session's planned work |
@@ -123,6 +123,11 @@ separate `bob` subcommands.
 | Schedule Log | A managed `🗓️ **SCHEDULE LOG**` child that records each schedule change |
 | Work Log | A managed `🛠️ **WORK LOG**` child that records work summaries |
 | Cancel Log | A managed ❌ **CANCEL LOG** child (placed first) that records why a task was cancelled |
+
+Ready, Next, and In Progress are task statuses, also called **lanes**. Pending
+is the UI/report name for In Progress (`[/]`); it does not mean Blocked. The
+dashboard's uppercase READY is a filtered backlog within the Ready lane,
+excluding tasks awaiting NEW or ROTTEN review and work linked for Today.
 
 ## Daily workflow
 
@@ -134,23 +139,28 @@ separate steps:
    calls the same commands). Tasks land in `mac_inbox.md` unless an `@route`
    token sends them to another note; scheduled checkbox-bearing captures start
    Blocked (`[?]`).
-2. **Link today's work** onto a Pomodoro in the daily note. That happens when
-   you capture with `@route:id` (which also marks the task Next), ensure an
-   already-planned task with a bare `@route+id` capture, explicitly toggle a
-   task with `@route+id!`, or add a task link under a Pomodoro in Obsidian.
-   `bob pomodoro`,
-   `bob tmux-pomodoro`, and `bob notify` only *read* that ledger; they do not
-   create links.
-3. **Review and reconcile** with `bob plan`, `bob freshness`, and `bob ready`.
-   Next and In Progress are sticky lanes: unlinking work does not release it.
-   Run `bob task-status-hooks` to promote linked work, derive Blocked from
-   dependencies and future schedules, and clean up the ledger.
+2. **Review and choose work** with the read-only reports `bob plan`,
+   `bob freshness`, and `bob ready`; confirm or revise due tasks in Obsidian.
    After time away, preview the overdue backlog with
    `bob randomize --dry-run`, then `bob randomize --seed <seed>` to re-roll it.
-4. **Nightly**, run `bob nightly` to reconcile the vault through Git, archive
+3. **Link and run today's work** on a Pomodoro in the daily note. Link with
+   a marker-only `@route:id` capture (which raises Ready to Next), ensure an
+   already-planned task with a bare `@route+id` capture, explicitly toggle a
+   task with `@route+id!`, or add a task link under a Pomodoro in Obsidian.
+   Start the queued session with `bob capture '='`, then close it with an
+   outcome such as `bob capture '=x'` or `bob capture '=!'` (see
+   [Capture](#capture)). Starting the timer leaves task statuses unchanged;
+   closing records worked tasks as In Progress and completed tasks as Done.
+   `bob pomodoro`, `bob tmux-pomodoro`, and `bob notify` read the ledger to
+   report timing; they do not create links or start sessions.
+4. **Reconcile** with `bob task-status-hooks` after manual ledger or task edits.
+   Next and In Progress are sticky lanes: unlinking work does not release it.
+   The hooks promote linked work, derive Blocked from
+   dependencies and future schedules, and clean up the ledger.
+5. **Nightly**, run `bob nightly` to reconcile the vault through Git, archive
    done and canceled tasks, and reconcile the vault again.
 
-Read-only inspection (`bob query`, `bob projects list`, `bob plugins list`,
+Read-only inspection (`bob query`, `bob projects list`, `bob plugins list --no-pull`,
 `bob highlights doctor`) can run at any time.
 
 ## Vault layout
@@ -247,7 +257,7 @@ typed on that same item. The whole batch is planned before anything is written.
 | `@route:id#pomodoro=<X>` | Same under the named Pomodoro, starting that session |
 | `@route:id[#pomodoro][=<X>]` with no other text | Link the existing task into today's ledger (no new task); `=<X>` starts the resolved session |
 | `^route:id[#pomodoro][=<X>]` with no other text | Identical execution; `^` completes only In Progress and Next tasks |
-| `:<query>` with no other text | Task-link picker over open tasks in routable inbox, area, and non-terminal project notes; accepting inserts `@route:id` (never captured) |
+| `:<query>` with no other text | Task-link picker over Ready, Blocked, Next, and In Progress tasks in routable inbox, area, and non-terminal project notes; accepting an identified task inserts `@route:id`; the query itself cannot be captured |
 | `+query` or terminal prose `+` | Parent-task picker over the same task catalog; accepting inserts `@route+id` |
 | `&note:id` | Add a prerequisite to the captured task; `&projects/foo:bar` supports nested notes, and `&"Shopping List":bar` supports spaces |
 | `&note:id @route+id` with no body text | Add a prerequisite to an existing dependent task |
@@ -372,13 +382,19 @@ In an editor, `+query` or a trailing `+` after prose opens the parent-task
 picker. A lone `+` opens that picker too; dismissing it leaves a valid
 five-minute Pomodoro adjustment. Numeric `+5`, doubled `++`, and completed
 `@route+id` markers keep their existing meanings.
+With prose, the accepted `@route+id` appends a child bullet to that task;
+alone it ensures Next instead. Accepting a picker row only edits the draft;
+submitting the draft runs capture.
 
 Add prerequisites with `bob capture 'Ship report @work^report &work:outline'`,
 or edit an existing dependent with `bob capture '&work:outline @work+report'`.
 The prerequisite must resolve to a unique task with a block ID. Open
 prerequisites make the dependent Blocked. The `&` picker searches task-bearing
 notes across the vault, including nested notes and completed history;
-incomplete `&` and `+query` selectors must be resolved before capture. See
+closed prerequisites do not block, and adding a dependency does not link the
+dependent into a Pomodoro.
+
+Incomplete `&` and `+query` selectors must be resolved before capture. See
 [dependency capture](docs/capture.md#adding-prerequisites-with-) and
 [task dependencies](docs/task-dependencies.md).
 
@@ -528,7 +544,8 @@ examples live in [`docs/plan.md`](docs/plan.md).
 
 Task freshness is the human-confirmed `[fresh:: YYYY-MM-DD]` date when a
 task was last confirmed to still need doing as written. Visible, non-recurring
-Ready tasks never confirmed, or whose review interval expired (7 days by
+Ready tasks never confirmed, returned from a scheduled deferral after their
+last confirmation, or whose review interval expired (7 days by
 default, overridable per task, per
 note, and in config), are due for review. Supported keymaps and
 `bob capture` edits stamp the tasks they rewrite; creation and
@@ -549,22 +566,27 @@ with `--limit`; `counts.walk` sums the seven `counts.by_tier` values. Ready
 state totals and walk-tier totals have different scopes.
 
 Ordinary Pending and Next tasks use `freshness.pending_interval` /
-`next_interval` (default 1 day; `false` disables that lane's walk). Visible
-`^prj` and `^ref` trackers walk in PROJECTS and REFERENCES; tracker intervals
+`next_interval` (default 1 day; `false` disables that ordinary lane's walk).
+Due `^prj` and `^ref` trackers walk in PROJECTS and REFERENCES; tracker intervals
 override the task/note/global cadence when configured, otherwise trackers
 inherit that cadence even in Pending or Next. Project review follows the
-`#hide` written by `bob projects sync`.
+`#hide` written by `bob projects sync`; reference review allows `#hide` on
+exact `^ref` tasks. Today-linked, recurring, daily-note, blocked, and
+future-scheduled tasks stay outside the review queue.
 
 On the dashboard, NEW holds unconfirmed tasks, READY holds confirmed/exempt
 backlog, and `rotten.md` holds returned deferrals plus expired tasks. Repeated
 due-Ready confirmations accumulate `[keeps:: N]`; the approved-decay decision
 card activates on 2026-10-19, subject to config and plugin capability.
 
-`seed` is a one-time migration, not daily maintenance. It stamps unstamped
-Ready candidates across seven date buckets and other eligible open tasks
-today. Existing older stamps plus new candidates cause a refusal unless
-`--force`; a run with no candidates is a no-op. Parse and concurrent-change
-guards apply, and `--dry-run` previews without writing. Do not seed later
+`seed` is a one-time migration, not daily maintenance. For tasks lacking a
+valid freshness date, it staggers Ready candidates across seven date buckets
+and stamps other eligible open tasks today. Existing older stamps plus new
+candidates cause a refusal unless `--force`; valid stamps remain unchanged,
+and a run with no candidates is a
+no-op. `--dry-run` previews without writing; a writing run rechecks touched
+files before the first write. See [seed guards and recovery](docs/freshness.md#7-bob-freshness)
+for the limits of that check and partial-write recovery. Do not seed later
 captures merely to clear their NEW review state.
 
 ## Ready cap
@@ -987,8 +1009,9 @@ file holds the priority windows for `p:<N>` and `bob randomize`,
 optional `plan:` and `freshness:` blocks. Plan caps default to 3 themes,
 10 links, 15 NEXT tasks, 10 PENDING tasks, 100 dashboard READY tasks, and
 5 Ready-lane tasks per area/project note. `bob plan` and `bob ready` exit 2
-for invalid plan config; embedded budget surfaces fall back to defaults.
-`bob freshness` exits 2 for invalid freshness config. See
+for invalid plan config. Capture and hooks warn and omit their budget report;
+the tmux meter and Obsidian budget surfaces use defaults. Invalid freshness
+config makes both `bob freshness` and `bob ready` exit 2. See
 [plan configuration](docs/plan.md#config) and
 [freshness configuration](docs/freshness.md#2-fields-overrides-and-config).
 
@@ -1008,6 +1031,8 @@ a fixed 100 columns.
 and Pomodoro-note `bob capture` requests, `bob task-status-hooks`, and
 `bob randomize`. It also selects the ledger read by `bob plan`, `bob freshness`,
 and `bob ready` when they evaluate Today-linked work.
+For `bob plan`, a dated daily-note filename also sets the report's evaluation
+date; freshness and Ready use the current clock for their review date.
 
 `BOB_DIR` sets the Bob vault directory. It defaults to `~/bob`.
 

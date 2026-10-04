@@ -793,14 +793,17 @@ BUGS; no ledger change.`), and the existing start phrasing.
 
 ### Picking any open task with ':'
 
-Type `:` at the very start of an input to fuzzy-search open tasks in the
+Type `:` at the very start of an input to fuzzy-search linkable open tasks
+(Ready `[ ]`, Blocked `[?]`, Next `[*]`, or In Progress `[/]`) in the
 routable inbox, area, and non-terminal project notes listed by
 `bob capture-targets`. Nested notes, reference notes, untyped notes other than
-the inbox, and terminal projects are outside this catalog. Accepting a row
-replaces the `:` query with the
+the inbox, and terminal projects are outside this catalog. An ID-less row
+requires the explicit Add block ID action before it can be accepted.
+Accepting an identified row replaces the `:` query with the
 canonical `@route:block-id` link, which captures exactly like a typed link:
 as-is it links the task, and with a trailing `=` it also starts that
-session. A `:` query is only ever a picker query — it is never executable
+session. Acceptance edits the draft; submitting it performs the vault write.
+A `:` query is only ever a picker query — it is never executable
 and never a third spelling of the link.
 
 An item is a task-link query exactly when it has one physical line and that

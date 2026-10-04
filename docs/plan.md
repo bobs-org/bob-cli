@@ -307,7 +307,8 @@ default.
 
 **Failure behavior:** an invalid global `plan.max_ready_per_note`
 exits 2 for `bob plan`/`bob ready` (with a JSON error envelope under
-`-f json`); every other caller falls back to defaults. An invalid
+`-f json`); other callers continue with defaults or an unavailable budget
+as described under [Config](#config). An invalid
 per-note `ready_cap` produces a lint and falls back to the default.
 A vault I/O failure exits 1. A non-Dataview task format exits 2.
 The native `bob ready` scan also reads `freshness:` config to report the
@@ -368,10 +369,14 @@ ignored.
 
 **Invalid values:**
 
-- `bob plan` exits 2 with a clear message.
-- Every other surface falls back to the defaults and says so once:
-  as a warning string, a stderr line, or a Notice. An invalid plan
-  config must never break capture, hooks, tmux, or a keymap.
+- `bob plan` and `bob ready` exit 2 with a clear message.
+- Capture skips its `plan_budget` report and adds a warning string; hooks
+  return `plan_budget: null` with a stderr warning. Their vault writes
+  continue, and capture's strict plan enforcement is unavailable.
+- Capture completion omits the plan-creation hint.
+- The native tmux meter silently uses defaults. Obsidian budget surfaces
+  use defaults and flag invalid config in their feedback. Invalid plan config
+  does not stop these workflows.
 
 ## `bob plan`
 

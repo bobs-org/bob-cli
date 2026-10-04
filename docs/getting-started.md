@@ -4,6 +4,8 @@ Bob is a CLI for an Obsidian vault that uses `#task` checkboxes and a daily
 Pomodoro ledger. Basic capture and native queries run without desktop Obsidian.
 Dashboard badges, review keymaps, and the Task Card are provided by the custom
 Bob plugins; installing the CLI alone does not install that interface.
+Ready, Next, and Pending name task statuses ("lanes"). Pending is another
+name for In Progress (`[/]`), not a waiting or Blocked state.
 
 ## Install and select a vault
 
@@ -53,13 +55,22 @@ refuse a non-Dataview format. Blocked transitions also require the compatible
 `?` definition described in [task status hooks](task-status-hooks.md#derived-blocked-status).
 
 Capture routes select root-level notes: `@work` writes `work.md`. Route names
-are lowercased and accept letters, digits, `_`, and `-`. A missing target note
+are lowercased and accept ASCII letters, digits, `_`, and `-`; picker-discovered
+filenames must already have lowercase stems. A missing target note
 is created when needed, and an existing `## Tasks` section is the preferred
-insertion point. Pickers discover the inbox, area notes, and non-terminal
-project notes. Give area/project notes the appropriate frontmatter `type`
+insertion point. Ordinary capture does not create that heading or give the
+note an area/project type. The `:` task-link and `+` parent-task pickers
+discover the inbox, area notes, and non-terminal project notes.
+Give area/project notes the appropriate frontmatter `type`
 (`"[[area]]"` or `"[[project]]"`) to include them in those catalogs and in
 per-note Ready reports. Nested prerequisites use a separate path-aware `&`
 syntax; see [dependency capture](capture.md#adding-prerequisites-with-).
+
+For the desktop interface, use the [plugin deployment guide](plugins.md):
+select a local `bob-plugins` source checkout, deploy with `bob plugins sync`,
+then enable the installed plugins in Obsidian's Community plugins settings.
+Review requires Bob Ledger Tools and Bob Navigation Hotkeys. Sync copies
+plugin assets; it does not enable plugins or create dashboard notes.
 
 ## Capture a first task
 
@@ -84,9 +95,11 @@ scheduling, prerequisites, and JSON interfaces.
 
 ## Plan and run a session
 
-Create today's daily note at `YYYY/YYYYMMDD.md` inside the vault, or point
-`BOB_DAY_FILE` at the daily note you want to use. It needs a Pomodoros section
-with a column-zero open entry, for example:
+Use today's daily note at `YYYY/YYYYMMDD.md` inside the vault (for example,
+`2026/20261004.md` on October 4), or set `BOB_DAY_FILE` to its full path.
+Create the note if needed. Add a Pomodoros section with an unindented open
+entry like the one below; linking needs an open entry, and the bare `=3`
+start needs an untimed `()` placeholder with no other timed session open.
 
 ```markdown
 ---
@@ -109,18 +122,31 @@ bob pomodoro
 ```
 
 The marker-only `@mac_inbox:outline` links the existing task and raises Ready
-to Next. `=3` starts the queued session; units are five minutes, and bare `=`
-means 25 minutes. Quote session tokens in Zsh. Linking and starting can also
+to Next. A Task Link is the dedicated `[[mac_inbox#^outline]]` child bullet
+in the daily note; the task itself stays in `mac_inbox.md`. `=3` starts the
+queued session's timer and leaves the task Next; the close records its work
+outcome. Units are five minutes, and bare `=` means 25 minutes.
+Quote session tokens in Zsh. Linking and starting can also
 be one transaction: `bob capture '@mac_inbox:outline=3'`.
 
-When finished, choose an outcome for the session's numbered Task Links:
+When finished, preview `bob capture --dry-run '=x'` to see the session's
+numbered Task Links and proposed outcomes, then submit one close command:
 
 | Command | Outcome |
 | --- | --- |
-| `bob capture '=x'` | Close using the ledger's existing worked/deferred classifications |
-| `bob capture '=*'` | Close and park every numbered Task Link as In Progress without carrying it into the next session |
+| `bob capture '=x'` | Close; ordinary plain links count as worked, eligible tasks become Pending, and their links carry to the next session |
+| `bob capture '=*'` | Close; park all numbered links, eligible tasks become Pending, and none of those links carry to the next session |
 | `bob capture '=!'` | Close and complete every numbered Task Link |
 | `bob capture '=x1!2'` | Keep task 1 in progress, complete task 2, and defer the remaining links |
+
+For this one-task example, use `=!` if the outline is done, or `=*` if it
+still needs work but should leave today's queue. The numbered `=x1!2`
+example requires at least two links. "Deferred" means carry the link to the
+next session without changing the task's lane or scheduled date. Plain `=x`
+also respects existing link markers: a trailing `#` defers a link, while an
+embed (`![[note#^id]]`) requests completion. Unresolved or ineligible targets
+can be skipped with warnings; check the capture report. See
+[close outcomes](capture.md#closing-the-running-pomodoro) for the full rules.
 
 Inspect `bob task-status-hooks --dry-run`, then run `bob task-status-hooks` to
 reconcile statuses and clean up links. Next and Pending are sticky: unlinking
@@ -139,11 +165,18 @@ bob ready
 `bob freshness` shows the due review queue in NEW → PROJECTS → PENDING → NEXT
 → RETURNED → REFERENCES → ROTTEN order. `bob ready` reports each area's or
 project's whole Ready lane, including NEW and ROTTEN; the dashboard READY
-backlog filters out those review buckets. Use `bob ready NOTE` for one note's
+backlog filters out those review buckets and Today-linked work. Today means
+linked under an open Pomodoro in the selected daily note; it is not a task
+status. Today-linked tasks are also excluded from the freshness review queue.
+Use `bob ready NOTE` for one note's
 worklist, or `bob ready --check` to exit 3 when notes are crowded.
 
-In Obsidian, `]s` walks review tasks and Alt+F confirms a task. Hand edits alone
-do not stamp freshness. `bob freshness seed` is a one-time migration for an
+With the review plugins enabled in Obsidian, Ctrl+Alt+J/K walks due tasks and
+Alt+F confirms the task under the cursor. `]s` / `[s` are the equivalent
+configured Vim bindings, not shortcuts installed by the CLI. Alt+Shift+F
+confirms and advances. Hand edits alone do not stamp freshness.
+`bob freshness list` only reports the queue; it does not confirm tasks.
+`bob freshness seed` is a one-time migration for an
 existing backlog; it is not the command to confirm today's new captures.
 See [Freshness](freshness.md) for review gestures and tracker cadence.
 
@@ -161,9 +194,9 @@ intervals. `p:1`–`p:4` capture and `bob randomize` also require the
 | `capture`, `capture-task-id`, `capture-pomodoro-name`, `projects sync`, `task-status-hooks`, `freshness seed` | Write vault notes; preview with `--dry-run` where offered |
 | `vault-sync`, `nightly` | Reconcile the vault with Git, including commits, merges, and pushes |
 | `move-done-tasks` | Archive task blocks and repair links; in a Git vault, commit touched files and push |
-| `randomize` | Re-roll schedules, commit rewritten notes, and sync; `--offline` still commits locally |
-| `plugins list`, `plugins sync` | Pull the plugin source repo by default (`--no-pull` skips); `sync` deploys plugin assets with backups |
-| `gkeep list`, `gkeep pull` | Contact Keep; `pull` writes and commits tasks, then archives verified Keep notes by default |
+| `randomize` | Re-roll schedules; in a Git worktree, sync before/after and commit rewritten notes; `--offline` skips sync but still commits locally |
+| `plugins list`, `plugins sync` | Pull the plugin source repo by default, including for `sync --dry-run` (`--no-pull` skips); `sync` deploys plugin assets with backups |
+| `gkeep list`, `gkeep pull` | Contact Keep; `pull` writes tasks, commits in a Git worktree unless `--no-commit`, then archives verified Keep notes unless `--no-archive` |
 | `highlights create`, `highlights clip`, `highlights scan`, `highlights sync` | Write PDFs/reference notes; writing scans can run a configured pre-scan hook |
 | `completion install`, `completion uninstall` | Change shell adapter files and the completion manifest |
 
@@ -181,7 +214,7 @@ Follow the [Git sync runbook](vault-git-sync.md) before enabling maintenance.
 | Linking fails | Daily note, Pomodoros heading, open entry, and a unique task block ID |
 | Start says to finish the current Pomodoro | Close the running timed entry first; `bob capture '=x =3'` closes and starts atomically |
 | Hooks refuse a Blocked transition | The Tasks registry's `?` status must match the required definition |
-| Native dashboard queries omit NEW/ROTTEN | Plugin-dependent freshness gating needs Obsidian; use `bob freshness` for the headless review queue |
+| A native query using plugin-dependent dashboard filters omits tasks | Native queries do not load desktop Bob plugins; use `bob freshness` for the headless review queue |
 
 Use `bob <command> --help` for accepted options and the [guide index](README.md)
 for detailed behavior, output formats, and recovery steps.
