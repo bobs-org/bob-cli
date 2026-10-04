@@ -80,7 +80,7 @@ fn list_json_reports_queue_counts_and_contract() {
     let (_, value) = list_json(&temp, &[]);
 
     assert_eq!(value["ok"], true);
-    assert_eq!(value["schema_version"], 8);
+    assert_eq!(value["schema_version"], 9);
     assert_eq!(value["date"], NOW);
     assert_eq!(value["config"]["interval"], 7);
     assert_eq!(value["config"]["pending_interval"], 1);
@@ -548,7 +548,7 @@ fn seed_dry_run_writes_nothing_and_reports_buckets() {
     let (output, value) = seed_json(&temp, &["--dry-run"]);
     assert_success(&output);
     assert_eq!(value["ok"], true);
-    assert_eq!(value["schema_version"], 8);
+    assert_eq!(value["schema_version"], 9);
     assert_eq!(value["dry_run"], true);
     assert_eq!(value["stamped"]["ready"], 3);
     assert_eq!(value["stamped"]["other"], 1);
@@ -652,7 +652,7 @@ fn list_lane_rows_cover_pending_and_next() {
         - [*] #task Fresh next [fresh:: 2026-10-08]\n",
     );
     let (_, value) = list_json(&temp, &[]);
-    assert_eq!(value["schema_version"], 8);
+    assert_eq!(value["schema_version"], 9);
     let counts = &value["counts"];
     assert_eq!(counts["pending_due"], 1);
     assert_eq!(counts["next_due"], 1);
@@ -855,11 +855,11 @@ fn keeps_list_json(temp: &TempDir, now: &str, extra: &[&str]) -> Value {
 }
 
 #[test]
-fn list_reports_keeps_and_decide_per_schema_8() {
+fn list_reports_keeps_and_decide_per_schema_9() {
     let temp = keeps_vault("bob-cli-freshness-keeps");
     let value = keeps_list_json(&temp, "2026-10-20", &[]);
     assert_eq!(value["ok"], true);
-    assert_eq!(value["schema_version"], 8);
+    assert_eq!(value["schema_version"], 9);
     assert_eq!(value["config"]["decay"]["enabled"], true);
     assert_eq!(value["config"]["decay"]["keeps"], 3);
     assert!(value["config"]["decay"]["enter"].is_null());
@@ -913,7 +913,7 @@ fn list_decides_on_early_dates() {
     let temp = keeps_vault("bob-cli-freshness-keeps-early");
     for now in ["2026-10-04", NOW, "2026-10-18", "2026-10-19", "2026-10-20"] {
         let value = keeps_list_json(&temp, now, &[]);
-        assert_eq!(value["schema_version"], 8, "{now}");
+        assert_eq!(value["schema_version"], 9, "{now}");
         assert_eq!(value["counts"]["decide"], 1, "{now}");
         let queue = value["queue"].as_array().expect("queue array");
         let at_limit = queue
@@ -1020,7 +1020,7 @@ fn seed_preserves_existing_keeps() {
     write_file(&vault.join("a.md"), "- [ ] #task Kept before [keeps:: 2]\n");
     let (output, value) = seed_json(&temp, &[]);
     assert_success(&output);
-    assert_eq!(value["schema_version"], 8);
+    assert_eq!(value["schema_version"], 9);
     assert_eq!(value["stamped"]["ready"], 1);
     let contents =
         fs::read_to_string(vault.join("a.md")).expect("read seeded line");
@@ -1097,7 +1097,7 @@ fn list_tracker_intervals_and_hide_gate() {
     assert_success(&output);
     let value: Value =
         serde_json::from_str(stdout(&output).trim()).expect("list JSON");
-    assert_eq!(value["schema_version"], 8);
+    assert_eq!(value["schema_version"], 9);
     assert_eq!(value["config"]["project_interval"], 1);
     assert_eq!(value["config"]["reference_interval"], 3);
     // Both visible projects walk, whatever their notes hold; the
@@ -1194,7 +1194,7 @@ fn list_walks_projects_after_new_with_decoupled_counts() {
         "---\nscheduled: someday\n---\n- [ ] #task Broken project ^prj\n",
     );
     let (_, value) = list_json(&temp, &[]);
-    assert_eq!(value["schema_version"], 8);
+    assert_eq!(value["schema_version"], 9);
     let tiers: Vec<&str> = value["queue"]
         .as_array()
         .expect("queue array")
@@ -1253,13 +1253,15 @@ fn list_walks_projects_after_new_with_decoupled_counts() {
     assert_eq!(counts["by_tier"]["references"], 1);
     assert_eq!(counts["walk"], 6);
     // The header tier numbers sum to the walk.
-    let header_sum = counts["by_tier"]["new"].as_u64().unwrap_or(99)
+    let header_sum = counts["by_tier"]["pre"].as_u64().unwrap_or(99)
+        + counts["by_tier"]["new"].as_u64().unwrap_or(99)
         + counts["by_tier"]["projects"].as_u64().unwrap_or(99)
         + counts["by_tier"]["pending"].as_u64().unwrap_or(99)
         + counts["by_tier"]["next"].as_u64().unwrap_or(99)
         + counts["by_tier"]["returned"].as_u64().unwrap_or(99)
         + counts["by_tier"]["references"].as_u64().unwrap_or(99)
-        + counts["by_tier"]["rotten"].as_u64().unwrap_or(99);
+        + counts["by_tier"]["rotten"].as_u64().unwrap_or(99)
+        + counts["by_tier"]["post"].as_u64().unwrap_or(99);
     assert_eq!(header_sum, counts["walk"].as_u64().expect("walk number"));
     // No project-schedule lint survives the gate removal.
     let codes: Vec<&str> = value["warnings"]
@@ -1307,4 +1309,156 @@ fn list_human_shows_references_before_rotten_divider() {
         &human,
         &["REVIEW", "REFERENCES", "commitments done", "ROTTEN"],
     );
+}
+
+fn checklist_vault(prefix: &str) -> TempDir {
+    let temp = TempDir::new(prefix);
+    let vault = vault_dir(&temp);
+    write_blocked_tasks_settings(&vault);
+    write_file(
+        &vault.join("gtd_daily.md"),
+        "\
+- [ ] #task #gtd #pre Check weather [repeat:: every day when done] [scheduled:: 2026-10-01]\n\
+- [?] #task #gtd #pre Brush teeth [repeat:: every day when done] [scheduled:: 2026-10-08]\n\
+- [?] #task #gtd #pre Future stretch [repeat:: every day when done] [scheduled:: 2026-10-09]\n\
+- [ ] #task #gtd #pre Today linked [repeat:: every day when done] [scheduled:: 2026-10-01] ^today-chore\n\
+- [ ] #task #gtd #post Morning review [repeat:: every day when done] [scheduled:: 2026-10-01]\n\
+- [ ] #task #pre Incomplete tags [repeat:: every week]\n\
+- [ ] #task #gtd #pre #post Triple tagged [repeat:: every day]\n",
+    );
+    write_file(
+        &vault.join("2026/20261008.md"),
+        "\
+- [ ] #task #gtd #pre Daily note chore [repeat:: every day when done] [scheduled:: 2026-10-01]\n\
+\n\
+## Pomodoros\n\
+\n\
+- [ ] (0900-0930) — REVIEW\n\
+\x20  - [[gtd_daily#^today-chore]]\n",
+    );
+    temp
+}
+
+#[test]
+fn list_json_and_human_cover_checklist_tiers() {
+    let temp = checklist_vault("bob-cli-freshness-checklist");
+    let (_, value) = list_json(&temp, &[]);
+    assert_eq!(value["ok"], true);
+    assert_eq!(value["schema_version"], 9);
+
+    let queue = value["queue"].as_array().expect("queue array");
+    let texts: Vec<&str> = queue
+        .iter()
+        .map(|entry| entry["text"].as_str().unwrap_or("?"))
+        .collect();
+    assert!(
+        texts.iter().any(|text| text.contains("Check weather")),
+        "past-scheduled PRE chore missing:\n{value}"
+    );
+    assert!(
+        texts.iter().any(|text| text.contains("Brush teeth")),
+        "[?] PRE chore missing:\n{value}"
+    );
+    assert!(
+        texts.iter().any(|text| text.contains("Today linked")),
+        "Today-linked PRE chore missing:\n{value}"
+    );
+    assert!(
+        texts.iter().any(|text| text.contains("Daily note chore")),
+        "daily-note PRE chore missing:\n{value}"
+    );
+    assert!(
+        texts.iter().any(|text| text.contains("Morning review")),
+        "POST closeout missing:\n{value}"
+    );
+    assert!(
+        texts.iter().any(|text| text.contains("Triple tagged")),
+        "conflict PRE row missing:\n{value}"
+    );
+    assert!(
+        !texts.iter().any(|text| text.contains("Future stretch")),
+        "future-scheduled chore queued:\n{value}"
+    );
+    assert!(
+        !texts.iter().any(|text| text.contains("Incomplete tags")),
+        "incomplete-tag row queued:\n{value}"
+    );
+
+    let tiers: Vec<&str> = queue
+        .iter()
+        .map(|entry| entry["tier"].as_str().unwrap())
+        .collect();
+    assert_eq!(tiers.first().copied(), Some("pre"));
+    assert_eq!(tiers.last().copied(), Some("post"));
+    assert!(tiers.iter().all(|tier| *tier == "pre" || *tier == "post"));
+
+    let brush = queue
+        .iter()
+        .find(|entry| {
+            entry["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("Brush teeth"))
+        })
+        .expect("brush row");
+    assert_eq!(brush["tier"], "pre");
+    assert!(brush["lane"].is_null(), "null lane for [?]:\n{brush}");
+    assert!(brush["state"].is_null());
+    assert!(brush["due_on"].is_null());
+
+    let weather = queue
+        .iter()
+        .find(|entry| {
+            entry["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("Check weather"))
+        })
+        .expect("weather row");
+    assert_eq!(weather["lane"], "ready");
+
+    let counts = &value["counts"];
+    assert_eq!(counts["pre_due"], counts["by_tier"]["pre"]);
+    assert_eq!(counts["post_due"], counts["by_tier"]["post"]);
+    assert_eq!(counts["by_tier"]["post"], 1);
+    assert_eq!(
+        counts["walk"],
+        counts["by_tier"]["pre"].as_u64().unwrap() + 1
+    );
+
+    let codes: Vec<&str> = value["warnings"]
+        .as_array()
+        .expect("warnings array")
+        .iter()
+        .filter_map(|warning| warning["code"].as_str())
+        .collect();
+    assert!(
+        codes.contains(&"checklist_tag_incomplete"),
+        "missing incomplete lint:\n{value}"
+    );
+    assert!(
+        codes.contains(&"checklist_tag_conflict"),
+        "missing conflict lint:\n{value}"
+    );
+    assert!(
+        codes.contains(&"checklist_repeat_not_when_done"),
+        "missing when-done lint:\n{value}"
+    );
+
+    let output = bob_command()
+        .arg("freshness")
+        .arg("list")
+        .env("BOB_DIR", vault_dir(&temp))
+        .env("BOB_NOW", NOW)
+        .output()
+        .expect("run bob freshness list");
+    assert_success(&output);
+    let human = stdout(&output);
+    assert!(
+        human.contains("PRE")
+            && human.contains("POST")
+            && human.contains("review closeout")
+            && human.contains("Checklist · complete to resolve")
+            && human.contains("Closeout · complete last"),
+        "expected PRE-first / POST-last human sections:\n{human}"
+    );
+    assert_text_order(&human, &["REVIEW", "PRE", "review closeout", "POST"]);
 }

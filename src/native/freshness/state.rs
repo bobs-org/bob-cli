@@ -67,10 +67,19 @@ impl Lane {
     }
 }
 
+/// PRE/POST membership from exact `#gtd` + `#pre`/`#post` tags.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ChecklistKind {
+    Pre,
+    Post,
+}
+
 /// Walk tier, in walk order (`docs/freshness.md` §4):
-/// NEW → PROJECTS → PENDING → NEXT → RETURNED → REFERENCES → ROTTEN.
+/// PRE → NEW → PROJECTS → PENDING → NEXT → RETURNED → REFERENCES →
+/// ROTTEN → POST.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Tier {
+    Pre,
     New,
     Projects,
     Pending,
@@ -78,11 +87,13 @@ pub(crate) enum Tier {
     Returned,
     References,
     Rotten,
+    Post,
 }
 
 impl Tier {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
+            Self::Pre => "pre",
             Self::New => "new",
             Self::Projects => "projects",
             Self::Pending => "pending",
@@ -90,7 +101,12 @@ impl Tier {
             Self::Returned => "returned",
             Self::References => "references",
             Self::Rotten => "rotten",
+            Self::Post => "post",
         }
+    }
+
+    fn is_checklist(self) -> bool {
+        matches!(self, Self::Pre | Self::Post)
     }
 }
 
@@ -194,6 +210,8 @@ pub(crate) struct FreshnessRow {
     pub(crate) note_refresh_raw: Option<String>,
     /// Exact trailing `^prj` / `^ref` identity, if any.
     pub(crate) tracker: Option<TrackerKind>,
+    /// Exact `#gtd` + `#pre`/`#post` membership, if any.
+    pub(crate) checklist: Option<ChecklistKind>,
 }
 
 /// Per-note Ready-lane counting predicate shared with `note_ready`:
@@ -252,8 +270,56 @@ pub(crate) fn decide_for(
         && keeps >= u32::from(config.decay.keeps)
 }
 
+/// Exact whole-token tag match, case-insensitive. `#gtd/pre` is not
+/// `#gtd`, and `#pressed_juice` is not `#pre`.
+pub(crate) fn checklist_from_tags(tags: &[String]) -> Option<ChecklistKind> {
+    let has =
+        |needle: &str| tags.iter().any(|tag| tag.eq_ignore_ascii_case(needle));
+    if has("#gtd") && has("#pre") {
+        Some(ChecklistKind::Pre)
+    } else if has("#gtd") && has("#post") {
+        Some(ChecklistKind::Post)
+    } else {
+        None
+    }
+}
+
+fn checklist_in_scope(row: &FreshnessRow) -> bool {
+    row.checklist.is_some()
+        && matches!(row.status, ' ' | '*' | '/' | '?')
+        && row.lane_visible
+}
+
+fn overlay_checklist(
+    row: &FreshnessRow,
+    mut evaluated: Evaluated,
+) -> Evaluated {
+    let Some(kind) = row.checklist else {
+        return evaluated;
+    };
+    if !checklist_in_scope(row) {
+        return evaluated;
+    }
+    evaluated.tier = Some(match kind {
+        ChecklistKind::Pre => Tier::Pre,
+        ChecklistKind::Post => Tier::Post,
+    });
+    evaluated.due_on = None;
+    evaluated.days_overdue = None;
+    evaluated.decide = false;
+    evaluated
+}
+
 /// Evaluate one row for `today` under `config`.
 pub(crate) fn evaluate(
+    row: &FreshnessRow,
+    today: NaiveDate,
+    config: &FreshnessConfig,
+) -> Evaluated {
+    overlay_checklist(row, evaluate_without_checklist(row, today, config))
+}
+
+fn evaluate_without_checklist(
     row: &FreshnessRow,
     today: NaiveDate,
     config: &FreshnessConfig,
@@ -666,7 +732,9 @@ fn parse_note_refresh(raw: Option<&str>) -> (Option<u16>, Option<String>) {
 pub(crate) struct QueueEntry {
     pub(crate) rank: u32,
     pub(crate) tier: Tier,
-    pub(crate) lane: Lane,
+    /// `None` for `[?]` checklist rows (and any other null-lane
+    /// checklist member). Ordinary walk rows always carry a lane.
+    pub(crate) lane: Option<Lane>,
     /// `None` for lane `pending`/`next` rows (S13).
     pub(crate) state: Option<FreshState>,
     pub(crate) path: String,
@@ -697,9 +765,9 @@ fn compare_created(
     }
 }
 
-/// The review queue in tier order NEW → PROJECTS → PENDING → NEXT →
-/// RETURNED → REFERENCES → ROTTEN, with each tier's comparator from
-/// `docs/freshness.md` §4.
+/// The review queue in tier order PRE → NEW → PROJECTS → PENDING →
+/// NEXT → RETURNED → REFERENCES → ROTTEN → POST, with each tier's
+/// comparator from `docs/freshness.md` §4.
 pub(crate) fn queue(
     rows: &[FreshnessRow],
     today: NaiveDate,
@@ -712,13 +780,13 @@ pub(crate) fn queue(
         let Some(tier) = evaluated.tier else {
             continue;
         };
-        let Some(lane) = evaluated.lane else {
+        if evaluated.lane.is_none() && !tier.is_checklist() {
             continue;
-        };
+        }
         entries.push(QueueEntry {
             rank: 0,
             tier,
-            lane,
+            lane: evaluated.lane,
             state: evaluated.state,
             path: row.path.clone(),
             line: row.line,
@@ -737,7 +805,9 @@ pub(crate) fn queue(
             return tier_order;
         }
         match a.tier {
-            Tier::New => a.path.cmp(&b.path).then(a.line.cmp(&b.line)),
+            Tier::Pre | Tier::Post | Tier::New => {
+                a.path.cmp(&b.path).then(a.line.cmp(&b.line))
+            }
             Tier::Projects | Tier::Pending | Tier::Next | Tier::References => {
                 // Never-stamped (`due_on` none) first, then due_on,
                 // created, path, line.
@@ -773,6 +843,7 @@ pub(crate) fn queue(
 /// and `walk` is their sum.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) struct ByTier {
+    pub(crate) pre: u32,
     pub(crate) new: u32,
     pub(crate) projects: u32,
     pub(crate) pending: u32,
@@ -780,17 +851,20 @@ pub(crate) struct ByTier {
     pub(crate) returned: u32,
     pub(crate) references: u32,
     pub(crate) rotten: u32,
+    pub(crate) post: u32,
 }
 
 impl ByTier {
     pub(crate) fn sum(self) -> u32 {
-        self.new
+        self.pre
+            + self.new
             + self.projects
             + self.pending
             + self.next
             + self.returned
             + self.references
             + self.rotten
+            + self.post
     }
 }
 
@@ -814,6 +888,10 @@ pub(crate) struct Counts {
     pub(crate) projects_due: u32,
     /// Due `REFERENCES` rows (equals its tier count).
     pub(crate) references_due: u32,
+    /// Due `PRE` checklist rows (equals its tier count).
+    pub(crate) pre_due: u32,
+    /// Due `POST` checklist rows (equals its tier count).
+    pub(crate) post_due: u32,
     /// Tier histogram for the actual full queue.
     pub(crate) by_tier: ByTier,
     /// Full queue length, before any `--limit` (`walk = sum(by_tier)`).
@@ -885,6 +963,7 @@ pub(crate) fn counts(
             None => {}
         }
         match evaluated.tier {
+            Some(Tier::Pre) => by_tier.pre += 1,
             Some(Tier::New) => by_tier.new += 1,
             Some(Tier::Projects) => by_tier.projects += 1,
             Some(Tier::Pending) => by_tier.pending += 1,
@@ -892,6 +971,7 @@ pub(crate) fn counts(
             Some(Tier::Returned) => by_tier.returned += 1,
             Some(Tier::References) => by_tier.references += 1,
             Some(Tier::Rotten) => by_tier.rotten += 1,
+            Some(Tier::Post) => by_tier.post += 1,
             None => {}
         }
     }
@@ -910,6 +990,8 @@ pub(crate) fn counts(
         next_due: by_tier.next,
         projects_due: by_tier.projects,
         references_due: by_tier.references,
+        pre_due: by_tier.pre,
+        post_due: by_tier.post,
         by_tier,
         walk: by_tier.sum(),
         decide,

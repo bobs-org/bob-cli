@@ -4,10 +4,12 @@
 use chrono::NaiveDate;
 
 use super::{
-    bucket_for_state, counts, evaluate, queue, Counts, FreshState,
-    FreshnessRow, IntervalSource, Lane, Tier, TrackerKind,
+    bucket_for_state, checklist_from_tags, counts, evaluate, queue,
+    ChecklistKind, Counts, FreshState, FreshnessRow, IntervalSource, Lane,
+    Tier, TrackerKind,
 };
 use crate::native::config::freshness::{DecayConfig, FreshnessConfig};
+use crate::native::freshness::placement::{stamp_fresh, Refusal};
 
 fn today() -> NaiveDate {
     NaiveDate::from_ymd_opt(2026, 10, 8).expect("valid today")
@@ -81,6 +83,7 @@ fn row(line: &str) -> FreshnessRow {
         raw_line: line.to_string(),
         note_refresh_raw: None,
         tracker: None,
+        checklist: None,
     }
 }
 
@@ -355,6 +358,7 @@ fn stamped_row(
         raw_line: format!("- [{status}] #task Counted [fresh:: {fresh}]"),
         note_refresh_raw: None,
         tracker: None,
+        checklist: None,
     }
 }
 
@@ -475,6 +479,7 @@ fn lane_row(
         raw_line,
         note_refresh_raw: None,
         tracker: None,
+        checklist: None,
     }
 }
 
@@ -1178,4 +1183,299 @@ fn seven_tier_order_with_references() {
     assert_eq!(report.walk, 7);
     assert_eq!(report.references_due, 1);
     assert_eq!(report.by_tier.references, 1);
+}
+
+fn cl_pre(line: &str) -> FreshnessRow {
+    let mut chore = row(line);
+    chore.checklist = Some(ChecklistKind::Pre);
+    chore.recurring = line.contains("[repeat::");
+    chore
+}
+
+/// CL1. A past-scheduled recurring `#gtd #pre` chore walks in PRE
+/// with a Ready lane, null state/bucket, and null due_on.
+#[test]
+fn cl1_recurring_pre_chore() {
+    let mut chore = cl_pre(
+        "- [ ] #task #gtd #pre Brush teeth [repeat:: every day when done] [scheduled:: 2026-10-01]",
+    );
+    chore.scheduled = Some(date(2026, 10, 1));
+    let evaluated = evaluate(&chore, today(), &default_config());
+    assert_eq!(evaluated.tier, Some(Tier::Pre));
+    assert_eq!(evaluated.lane, Some(Lane::Ready));
+    assert_eq!(evaluated.state, None);
+    assert_eq!(bucket_for_state(evaluated.state), None);
+    assert_eq!(evaluated.due_on, None);
+    assert_eq!(evaluated.days_overdue, None);
+    assert!(!evaluated.decide);
+    let queued = queue(&[chore], today(), &default_config());
+    assert_eq!(queued.len(), 1);
+    assert_eq!(queued[0].tier, Tier::Pre);
+}
+
+/// CL2. A `[?]` `#gtd #pre` chore scheduled today walks in PRE with
+/// a null lane and stays in the queue.
+#[test]
+fn cl2_unknown_status_pre_is_queued_with_null_lane() {
+    let mut chore = cl_pre(
+        "- [?] #task #gtd #pre Check weather [repeat:: every day when done] [scheduled:: 2026-10-08]",
+    );
+    chore.status = '?';
+    chore.is_todo = false;
+    chore.scheduled = Some(today());
+    let evaluated = evaluate(&chore, today(), &default_config());
+    assert_eq!(evaluated.tier, Some(Tier::Pre));
+    assert_eq!(evaluated.lane, None);
+    let queued = queue(&[chore], today(), &default_config());
+    assert_eq!(queued.len(), 1);
+    assert_eq!(queued[0].lane, None);
+}
+
+/// CL3. Blocked, future-scheduled, hidden, and `_templates/`
+/// checklist rows have no tier and leave the queue.
+#[test]
+fn cl3_exclusions_drop_checklist_rows() {
+    let mut blocked = cl_pre(
+        "- [?] #task #gtd #pre Check weather [repeat:: every day when done] [scheduled:: 2026-10-08]",
+    );
+    blocked.status = '?';
+    blocked.is_todo = false;
+    blocked.scheduled = Some(today());
+    blocked.lane_visible = false;
+
+    let mut future = cl_pre(
+        "- [ ] #task #gtd #pre Brush teeth [repeat:: every day when done] [scheduled:: 2026-10-09]",
+    );
+    future.scheduled = Some(date(2026, 10, 9));
+    future.lane_visible = false;
+
+    let mut hidden = cl_pre(
+        "- [ ] #task #gtd #pre Brush teeth #hide [repeat:: every day when done] [scheduled:: 2026-10-01]",
+    );
+    hidden.scheduled = Some(date(2026, 10, 1));
+    hidden.lane_visible = false;
+
+    let mut templated = cl_pre(
+        "- [ ] #task #gtd #pre Brush teeth [repeat:: every day when done] [scheduled:: 2026-10-01]",
+    );
+    templated.path = "_templates/x.md".to_string();
+    templated.scheduled = Some(date(2026, 10, 1));
+    templated.lane_visible = false;
+
+    for (name, candidate) in [
+        ("blocked", blocked),
+        ("future", future),
+        ("hidden", hidden),
+        ("templates", templated),
+    ] {
+        let evaluated = evaluate(&candidate, today(), &default_config());
+        assert_eq!(evaluated.tier, None, "{name}");
+        assert!(
+            queue(&[candidate], today(), &default_config()).is_empty(),
+            "{name}"
+        );
+    }
+}
+
+/// CL4. Today-linked and canonical daily-note PRE chores still walk
+/// in PRE.
+#[test]
+fn cl4_today_and_daily_note_still_pre() {
+    let mut today_member = cl_pre(
+        "- [ ] #task #gtd #pre Brush teeth [repeat:: every day when done] [scheduled:: 2026-10-01]",
+    );
+    today_member.scheduled = Some(date(2026, 10, 1));
+    today_member.is_today = true;
+
+    let mut daily = today_member.clone();
+    daily.is_today = false;
+    daily.is_daily_note = true;
+    daily.path = "2026/20261008.md".to_string();
+
+    for candidate in [today_member, daily] {
+        let evaluated = evaluate(&candidate, today(), &default_config());
+        assert_eq!(evaluated.tier, Some(Tier::Pre));
+    }
+}
+
+/// CL5. Exact whole-token tags, case-insensitive. Nested or
+/// substring lookalikes are not members.
+#[test]
+fn cl5_tag_matching() {
+    assert_eq!(checklist_from_tags(&["#task".into(), "#pre".into()]), None);
+    assert_eq!(
+        checklist_from_tags(&[
+            "#task".into(),
+            "#gtd".into(),
+            "#pressed_juice".into()
+        ]),
+        None
+    );
+    assert_eq!(
+        checklist_from_tags(&["#task".into(), "#gtd/pre".into()]),
+        None
+    );
+    assert_eq!(
+        checklist_from_tags(&["#task".into(), "#GTD".into(), "#Pre".into()]),
+        Some(ChecklistKind::Pre)
+    );
+    let mut cased = row("- [ ] #task #GTD #Pre Brush teeth");
+    cased.checklist =
+        checklist_from_tags(&["#task".into(), "#GTD".into(), "#Pre".into()]);
+    assert_eq!(
+        evaluate(&cased, today(), &default_config()).tier,
+        Some(Tier::Pre)
+    );
+}
+
+/// CL6. `#gtd #pre #post` is PRE.
+#[test]
+fn cl6_conflict_prefers_pre() {
+    assert_eq!(
+        checklist_from_tags(&["#gtd".into(), "#pre".into(), "#post".into()]),
+        Some(ChecklistKind::Pre)
+    );
+    let mut conflicted = row("- [ ] #task #gtd #pre #post Both");
+    conflicted.checklist = Some(ChecklistKind::Pre);
+    assert_eq!(
+        evaluate(&conflicted, today(), &default_config()).tier,
+        Some(Tier::Pre)
+    );
+}
+
+/// CL7. A one-off unstamped `#gtd #post` row is POST with NEW state
+/// and counts in both `new` and `post_due`.
+#[test]
+fn cl7_one_off_post_keeps_new_state() {
+    let mut retro = row("- [ ] #task #gtd #post Write retro");
+    retro.checklist = Some(ChecklistKind::Post);
+    let evaluated = evaluate(&retro, today(), &default_config());
+    assert_eq!(evaluated.tier, Some(Tier::Post));
+    assert_eq!(evaluated.state, Some(FreshState::New));
+    assert_eq!(bucket_for_state(evaluated.state), Some("new"));
+    let report = counts(&[retro], today(), &default_config());
+    assert_eq!(report.new, 1);
+    assert_eq!(report.post_due, 1);
+    assert_eq!(report.by_tier.post, 1);
+}
+
+/// CL8. One row per tier walks PRE → NEW → PROJECTS → PENDING →
+/// NEXT → RETURNED → REFERENCES → ROTTEN → POST.
+#[test]
+fn cl8_nine_tier_order() {
+    let mut config = default_config();
+    config.reference_interval = Some(7);
+    let mut pre = ready_row("i.md", 1, None, None);
+    pre.checklist = Some(ChecklistKind::Pre);
+    pre.recurring = true;
+    pre.raw_line = "- [ ] #task #gtd #pre Brush [repeat:: every day when done]"
+        .to_string();
+    let new = ready_row("h.md", 1, None, None);
+    let mut prj = ready_row("g.md", 1, None, None);
+    prj.tracker = Some(TrackerKind::Prj);
+    prj.raw_line = "- [ ] #task Project ^prj".to_string();
+    let pending = lane_row("f.md", 1, '/', Some("2026-10-07"), None);
+    let next = lane_row("e.md", 1, '*', Some("2026-10-07"), None);
+    let mut returned = ready_row("d.md", 1, Some("2026-10-05"), None);
+    returned.scheduled = Some(date(2026, 10, 7));
+    let mut reference = ready_row("c.md", 1, Some("2026-10-01"), None);
+    reference.tracker = Some(TrackerKind::Ref);
+    reference.raw_line =
+        "- [ ] #task Read [fresh:: 2026-10-01] ^ref".to_string();
+    let rotten = ready_row("b.md", 1, Some("2026-09-20"), None);
+    let mut post = ready_row("a.md", 1, None, None);
+    post.checklist = Some(ChecklistKind::Post);
+    post.raw_line = "- [ ] #task #gtd #post Morning review".to_string();
+    let rows = vec![
+        post, rotten, reference, returned, next, pending, prj, new, pre,
+    ];
+    let ordered = queue(&rows, today(), &config);
+    assert_eq!(
+        queue_tiers(&ordered),
+        vec![
+            "pre",
+            "new",
+            "projects",
+            "pending",
+            "next",
+            "returned",
+            "references",
+            "rotten",
+            "post"
+        ]
+    );
+    let report = counts(&rows, today(), &config);
+    assert_eq!(report.walk, report.by_tier.sum());
+    assert_eq!(report.walk, 9);
+    assert_eq!(report.pre_due, 1);
+    assert_eq!(report.post_due, 1);
+}
+
+/// CL9. A recurring checklist row refuses a stamp; keeps, upkeep,
+/// refreshed_today, and decide stay unchanged.
+#[test]
+fn cl9_recurring_checklist_refuses_stamp() {
+    let line = "- [ ] #task #gtd #pre Brush teeth [repeat:: every day when done] [scheduled:: 2026-10-01]";
+    let stamped = stamp_fresh(line, today());
+    assert_eq!(stamped.refused, Some(Refusal::Recurring));
+    assert!(!stamped.changed);
+    assert_eq!(stamped.line, line);
+
+    let mut chore = cl_pre(line);
+    chore.scheduled = Some(date(2026, 10, 1));
+    let evaluated = evaluate(&chore, today(), &default_config());
+    assert!(!evaluated.decide);
+    assert_eq!(evaluated.keeps, 0);
+    let report = counts(&[chore], today(), &default_config());
+    assert_eq!(report.upkeep_today, 0);
+    assert_eq!(report.refreshed_today, 0);
+    assert_eq!(report.decide, 0);
+}
+
+/// CL10. After completion with the next occurrence inserted above,
+/// neither the future `[ ]` nor the `[x]` line is in the queue.
+#[test]
+fn cl10_completed_occurrence_and_future_next_leave_queue() {
+    let mut next = cl_pre(
+        "- [ ] #task #gtd #pre Brush teeth [repeat:: every day when done] [scheduled:: 2026-10-09]",
+    );
+    next.scheduled = Some(date(2026, 10, 9));
+    next.lane_visible = false;
+
+    let mut done = cl_pre(
+        "- [x] #task #gtd #pre Brush teeth [repeat:: every day when done] [completion:: 2026-10-08]",
+    );
+    done.status = 'x';
+    done.is_todo = false;
+    done.lane_visible = false;
+
+    assert!(queue(&[next, done], today(), &default_config()).is_empty());
+}
+
+/// CL11. Checklist beats lane tiers and trackers.
+#[test]
+fn cl11_checklist_beats_lane_and_tracker() {
+    let mut next = cl_pre("- [*] #task #gtd #pre Starred chore");
+    next.status = '*';
+    next.is_todo = false;
+    next.recurring = false;
+    let evaluated = evaluate(&next, today(), &default_config());
+    assert_eq!(evaluated.tier, Some(Tier::Pre));
+    assert_eq!(evaluated.lane, Some(Lane::Next));
+
+    let mut reference = row("- [ ] #task #gtd #post Read it ^ref");
+    reference.tracker = Some(TrackerKind::Ref);
+    reference.checklist = Some(ChecklistKind::Post);
+    let evaluated = evaluate(&reference, today(), &default_config());
+    assert_eq!(evaluated.tier, Some(Tier::Post));
+}
+
+/// CL12. A `#gtd #pre` row whose repeat lacks `when done` is still
+/// PRE (the lint is scan-time).
+#[test]
+fn cl12_repeat_without_when_done_still_pre() {
+    let chore =
+        cl_pre("- [ ] #task #gtd #pre Brush teeth [repeat:: every day]");
+    let evaluated = evaluate(&chore, today(), &default_config());
+    assert_eq!(evaluated.tier, Some(Tier::Pre));
 }

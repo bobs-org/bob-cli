@@ -97,8 +97,9 @@ The same `^prj` line doubles as the project's freshness tracker: while
 sync leaves it visible (no `#hide`), the morning review reminds Bryan
 to replenish it on its tracker cadence (`project_interval` when set,
 otherwise the normal Ready interval chain; see
-[`docs/freshness.md`](freshness.md) §4, "Tracking review"). Review is
-gated by sync's `#hide`, not a separate predicate.
+[`docs/freshness.md`](freshness.md) §4, "Tracking review"), unless it
+is also a PRE/POST checklist row. Review is gated by sync's `#hide`,
+not a separate predicate.
 
 Task statuses follow the Tasks plugin convention:
 

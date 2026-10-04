@@ -669,9 +669,9 @@ bob freshness seed [-b|--bob-dir DIR] [-d|--dry-run] [-F|--force] [-f|--format h
 ```
 
 Running `bob freshness` with no subcommand runs read-only `list`: the queue
-in order NEW → PROJECTS → PENDING → NEXT → RETURNED → REFERENCES → ROTTEN.
-Both `list` and `seed` use JSON schema 8. Counts cover the whole vault even
-with `--limit`; `counts.walk` sums the seven `counts.by_tier` values. Ready
+in order PRE → NEW → PROJECTS → PENDING → NEXT → RETURNED → REFERENCES → ROTTEN → POST.
+Both `list` and `seed` use JSON schema 9. Counts cover the whole vault even
+with `--limit`; `counts.walk` sums the nine `counts.by_tier` values. Ready
 state totals and walk-tier totals have different scopes.
 
 Ordinary Pending and Next tasks use `freshness.pending_interval` /
@@ -681,7 +681,8 @@ override the task/note/global cadence when configured, otherwise trackers
 inherit that cadence even in Pending or Next. Project review follows the
 `#hide` written by `bob projects sync`; reference review allows `#hide` on
 exact `^ref` tasks. Today-linked, recurring, daily-note, blocked, and
-future-scheduled tasks stay outside the review queue.
+future-scheduled tasks stay outside the review queue, except PRE/POST
+`#gtd` checklist rows, which walk by tag.
 
 On the dashboard, NEW holds unconfirmed tasks, READY holds confirmed/exempt
 backlog, and `rotten.md` holds returned deferrals plus expired tasks. Repeated

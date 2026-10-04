@@ -24,7 +24,7 @@ use super::super::{
 };
 use super::{
     placement::read_freshness,
-    state::{evaluate, FreshnessRow},
+    state::{checklist_from_tags, evaluate, FreshnessRow},
 };
 
 /// Today membership plus warnings for one daily note.
@@ -67,6 +67,7 @@ impl RowCtx {
             tracker: super::state::TrackerKind::from_block_id(
                 self.task.block_id.as_deref(),
             ),
+            checklist: checklist_from_tags(&self.task.tags),
         }
     }
 }
@@ -100,6 +101,10 @@ pub(crate) struct Snapshot {
     /// query. Ordinary hidden tasks — and hidden `^prj` rows — never
     /// land here.
     pub(crate) trackers: Vec<RowCtx>,
+    /// Open PRE/POST checklist candidates from the all-task scan
+    /// that are not already in a lane or tracker query. `[?]` chores
+    /// land here; lane-query members already carry `checklist`.
+    pub(crate) checklist: Vec<RowCtx>,
     /// Rows matching [`dataview::OPEN_QUERY`]: the seed universe.
     pub(crate) open: Vec<RowCtx>,
     /// Every task of any status: `refreshed_today`, `upkeep_today`,
@@ -253,6 +258,27 @@ pub(crate) fn scan(bob_dir: &Path) -> Result<Snapshot, ScanError> {
         }
     }
 
+    // Checklist candidates: open tagged rows from the all-task scan
+    // that pass checklist visibility and are not already in a lane
+    // or tracker query. Dedupe by (path, line).
+    let mut seen_keys = lane_keys;
+    for row in &trackers {
+        seen_keys.insert((row.task.path.clone(), row.task.line));
+    }
+    let mut checklist = Vec::new();
+    for row in &all {
+        if checklist_from_tags(&row.task.tags).is_none() {
+            continue;
+        }
+        let key = (row.task.path.clone(), row.task.line);
+        if seen_keys.contains(&key) {
+            continue;
+        }
+        if checklist_candidate_visible(row, today) {
+            checklist.push(row.clone());
+        }
+    }
+
     Ok(Snapshot {
         today,
         weekday,
@@ -261,6 +287,7 @@ pub(crate) fn scan(bob_dir: &Path) -> Result<Snapshot, ScanError> {
         pending,
         next,
         trackers,
+        checklist,
         open,
         all,
         today_warnings,
@@ -341,6 +368,87 @@ fn tracker_candidate_visible(row: &RowCtx, today: NaiveDate) -> bool {
     true
 }
 
+/// Visibility for a PRE/POST checklist candidate from the all-task
+/// scan: open status, not blocked, not hidden, not under
+/// `_templates`/`_conflicts`, and not scheduled after today.
+/// Recurring, canonical daily-note, and Today-linked rows stay in.
+fn checklist_candidate_visible(row: &RowCtx, today: NaiveDate) -> bool {
+    let status = row.task.status_symbol.chars().next().unwrap_or('\0');
+    if !matches!(status, ' ' | '*' | '/' | '?') {
+        return false;
+    }
+    if row.task.is_blocked {
+        return false;
+    }
+    if row
+        .task
+        .tags
+        .iter()
+        .any(|tag| tag.to_ascii_lowercase().contains("#hide"))
+    {
+        return false;
+    }
+    if row.task.path.contains("_templates")
+        || row.task.path.contains("_conflicts")
+    {
+        return false;
+    }
+    if row.task.scheduled.is_some_and(|date| date > today) {
+        return false;
+    }
+    true
+}
+
+fn is_open_for_checklist_lint(task: &RichTask) -> bool {
+    let symbol = task.status_symbol.chars().next().unwrap_or(' ');
+    if matches!(symbol, 'x' | 'X' | '-') {
+        return false;
+    }
+    task.status_type != "DONE" && task.status_type != "CANCELLED"
+}
+
+fn tag_has_exact(tags: &[String], needle: &str) -> bool {
+    tags.iter().any(|tag| tag.eq_ignore_ascii_case(needle))
+}
+
+fn repeat_lacks_when_done(line: &str) -> bool {
+    let lower = line.to_ascii_lowercase();
+    let marker = "[repeat::";
+    let Some(start) = lower.find(marker) else {
+        return false;
+    };
+    let after = &lower[start + marker.len()..];
+    let Some(end) = after.find(']') else {
+        return false;
+    };
+    let value = after[..end].trim();
+    !value.is_empty() && !value.contains("when done")
+}
+
+/// Checklist lints for one open task (`docs/freshness.md` §4).
+fn checklist_lints(task: &RichTask) -> Vec<String> {
+    if !is_open_for_checklist_lint(task) {
+        return Vec::new();
+    }
+    let has_gtd = tag_has_exact(&task.tags, "#gtd");
+    let has_pre = tag_has_exact(&task.tags, "#pre");
+    let has_post = tag_has_exact(&task.tags, "#post");
+    let mut lints = Vec::new();
+    if (has_pre || has_post) && !has_gtd {
+        lints.push("checklist_tag_incomplete".to_string());
+    }
+    if has_gtd && has_pre && has_post {
+        lints.push("checklist_tag_conflict".to_string());
+    }
+    if has_gtd
+        && (has_pre || has_post)
+        && repeat_lacks_when_done(&task.original_markdown)
+    {
+        lints.push("checklist_repeat_not_when_done".to_string());
+    }
+    lints
+}
+
 /// Bucket and confirmation date for one Ready-lane row, sharing
 /// the single `RowCtx::freshness_row(true)` construction so
 /// `note_ready` never duplicates it.
@@ -371,6 +479,14 @@ pub(crate) fn collect_warnings(
                 path: row.task.path.clone(),
                 line: Some(row.task.line),
                 message: lint_message(lint),
+            });
+        }
+        for lint in checklist_lints(&row.task) {
+            warnings.push(Warning {
+                code: lint.clone(),
+                path: row.task.path.clone(),
+                line: Some(row.task.line),
+                message: lint_message(&lint),
             });
         }
     }
@@ -415,6 +531,15 @@ pub(crate) fn lint_message(code: &str) -> String {
         }
         "today_link_unresolved" => {
             "a Today Task Link resolves to no countable task".to_string()
+        }
+        "checklist_tag_incomplete" => {
+            "#pre or #post without #gtd; not a checklist member".to_string()
+        }
+        "checklist_tag_conflict" => {
+            "#gtd #pre #post together; PRE wins".to_string()
+        }
+        "checklist_repeat_not_when_done" => {
+            "checklist recurrence is missing 'when done'".to_string()
         }
         other => format!("{other}: see docs/freshness.md"),
     }

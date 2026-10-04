@@ -6,11 +6,12 @@ aliases:
   - daily lane review
   - walk tiers
 summary:
-  "The ]s walk visits one shared queue in explicit tiers NEW → PENDING →
-  NEXT → RETURNED → ROTTEN; Pending and Next tasks come due for daily review
-  under pending_interval / next_interval (default 1, false walks that lane
-  off); tiers never feed buckets or chips; upkeep outside the lanes counts
-  the budget; stamps stay and the seed never re-runs."
+  "The ]s walk visits one shared queue in explicit tiers PRE → NEW →
+  PROJECTS → PENDING → NEXT → RETURNED → REFERENCES → ROTTEN → POST; #gtd
+  #pre/#post checklist rows resolve only by completion; Pending and Next come due
+  daily under pending_interval / next_interval (default 1, false walks that lane
+  off); tiers never feed buckets or chips; upkeep outside the lanes counts the
+  budget; stamps stay and the seed never re-runs."
 metadata:
   status: accepted
   decided: 2026-10-01
@@ -20,8 +21,16 @@ metadata:
 
 **Claim.** The morning walk is a structural tier order in the shared
 evaluator (Rust plus JavaScript, kept in sync under the walk vectors):
-NEW → PENDING → NEXT → RETURNED → ROTTEN, with per-tier comparators in
-`docs/freshness.md` §4. Pending (`[/]`) and Next (`[*]`) tasks come due
+PRE → NEW → PROJECTS → PENDING → NEXT → RETURNED → REFERENCES → ROTTEN →
+POST, with per-tier comparators in `docs/freshness.md` §4. Checklist
+membership is exact whole-token tags, case-insensitive: `#gtd` plus
+`#pre` is PRE, `#gtd` plus `#post` without `#pre` is POST. Checklist
+scope admits open status symbols ` `, `*`, `/`, and `?`; recurring,
+canonical daily-note, and Today-linked rows are admitted; hidden,
+dependency-blocked, future-scheduled, and template/conflict rows are
+not. Checklist rows resolve only by completion through Tasks, never by
+a stamp. PRE is a commitment tier; POST is the closing tier after
+ROTTEN that `]S` reaches. Pending (`[/]`) and Next (`[*]`) tasks come due
 for a daily review set by `pending_interval` / `next_interval` (integer
 1–365 or `false`; absent or null means the default 1). A walked lane's
 interval overrides the whole Ready chain for that task (`[refresh::]`,
@@ -29,14 +38,14 @@ note `task_refresh`, `freshness.interval`); `false` walks that lane off
 and its tasks fall back to the Ready chain. Tiers are due-only: a task
 stamped today drops out of the walk, and recurring, daily-note, hidden,
 dependency-blocked, future-scheduled, and Today-linked tasks are in no
-tier. The walk stays out of buckets and chips: `state()`, `bucket()`, NEW
-and READY gating, the `B = NEW ∪ RETURNED ∪ ROTTEN ∪ READY` partition,
-and the dash chips are unchanged, and lane rows carry null
-`state`/`bucket`. The upkeep budget counts today's stamps on tasks outside
-the lanes (`upkeep_today`), and every `✓` meter shows that number. No
-stamps are stripped or flattened and `bob freshness seed` never re-runs:
-the seeded `[fresh::]` dates come due by 2026-10-08 and are truthful
-after that.
+tier except as PRE/POST checklist rows. The walk stays out of buckets
+and chips: `state()`, `bucket()`, NEW and READY gating, the
+`B = NEW ∪ RETURNED ∪ ROTTEN ∪ READY` partition, and the dash chips are
+unchanged, and lane rows carry null `state`/`bucket`. The upkeep budget
+counts today's stamps on tasks outside the lanes (`upkeep_today`), and
+every `✓` meter shows that number. No stamps are stripped or flattened
+and `bob freshness seed` never re-runs: the seeded `[fresh::]` dates
+come due by 2026-10-08 and are truthful after that.
 
 Rejected alternatives:
 
@@ -58,11 +67,25 @@ Rejected alternatives:
   no extra tier tracks them.
 - **A Ready default of 1.** The Ready backlog keeps its 7-day cadence;
   only the lanes default to daily.
+- **A second keymap or gtd-only walk.** PRE/POST join the one shared
+  queue; `]s` is still the walk.
+- **Membership by file path, block ID, inline field, or nested tag.**
+  Exact `#gtd` plus `#pre`/`#post` tokens are the only members.
+- **Lifting the recurring exclusion for every task.** Only tagged
+  checklist rows admit recurrence, daily notes, Today, and `[?]`.
+- **Dropping `repeat`.** Recurrence still writes the next occurrence;
+  completion is the resolution.
+- **POST before ROTTEN.** Reopen if `]S` is pressed at the boundary
+  with zero ROTTEN done on most mornings.
+- **Auto-completing Morning review.** Checking it is the closeout.
 
 Evidence:
 `research:202610/tiered_morning_review_walk/tiered_morning_review_walk.md`;
 `plan:202610/tiered_morning_review_walk.md`;
-`docs/freshness.md` §§2/4/6/7/10–13 and schema 3 in bob-cli;
+`research:202610/gtd_pre_post_review_tiers` (artifact
+`file:explicit:715e310d22ca404995bfa4a6`);
+`plan:202610/gtd_pre_post_review_tiers.md`;
+`docs/freshness.md` §§2/4/6/7/10–13 and schema 9 in bob-cli;
 `api.freshness` namespace v4 in bob-ledger-tools;
 tier notices, walk anchor, and lane-aware refresh row in
 bob-navigation-hotkeys 1.50.0.
@@ -72,9 +95,13 @@ bob-navigation-hotkeys 1.50.0.
 kept in sync under the Q/L/R/S/B vectors.
 
 **Reopens when.** The lane keep rate stays above 90% after lengthening
-`next_interval`, or long-interval tasks starve past the weekly prune.
+`next_interval`, or long-interval tasks starve past the weekly prune,
+or PRE rows are skipped with `]s` on most mornings (then the habits
+leave `#task`).
 
 Amended in place 2026-10-04 at Bryan's request: the freshness trial was removed; nothing waits on it.
+
+Amended in place 2026-10-04 at Bryan's request: PRE/POST checklist tiers.
 
 Links [[decisions/task-lanes-are-sticky]] (its "daily review with release"
 cost) and [[decisions/ready-is-freshness-gated]] (its partition, chips, and

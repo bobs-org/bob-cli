@@ -728,7 +728,8 @@ The same `^ref` line doubles as the reference's freshness tracker: an
 unstamped reference walks in REFERENCES, not NEW, on the reference
 cadence in any lane (`reference_interval` when set, otherwise
 ordinary freshness; see [`docs/freshness.md`](freshness.md) §4,
-"Tracking review"). Sync never auto-confirms it.
+"Tracking review"), unless it is also a PRE/POST checklist row.
+Sync never auto-confirms it.
 
 | Checkbox | Obsidian Tasks status | Reference `status` | Meaning |
 | --- | --- | --- | --- |

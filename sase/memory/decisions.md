@@ -57,8 +57,9 @@ edited in place.
      review clears NEW then ROTTEN; no tags, fields, or status changes store review
      state.
 8. **Review Walk Is Tiered With Daily Lane Review** (`review-walk-is-tiered`)
-   - The ]s walk visits one shared queue in explicit tiers NEW → PENDING → NEXT →
-     RETURNED → ROTTEN; Pending and Next tasks come due for daily review under
+   - The ]s walk visits one shared queue in explicit tiers PRE → NEW → PROJECTS →
+     PENDING → NEXT → RETURNED → REFERENCES → ROTTEN → POST; #gtd #pre/#post checklist
+     rows resolve only by completion; Pending and Next come due daily under
      pending_interval / next_interval (default 1, false walks that lane off); tiers
      never feed buckets or chips; upkeep outside the lanes counts the budget; stamps
      stay and the seed never re-runs.

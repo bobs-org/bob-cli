@@ -34,24 +34,26 @@ const COMMAND_NAME: &str = "bob freshness";
 /// Bump only for a breaking change to the JSON objects below; new
 /// optional fields keep the current version.
 ///
-/// Schema 8 drops `config.decay.active_from` / `active`: decay
-/// decisions are available as soon as decay is enabled, with no
-/// calendar gate. Schema 7 adds the `references` walk tier (between
-/// `returned` and `rotten`), the seven-key `by_tier` histogram,
-/// `references_due` in counts, and the `^prj` hide gate: visible
-/// `^prj` rows are reviewed on sync's `#hide` alone, so the
-/// `project_scheduled_invalid` lint is gone. Schema 6 adds the tracker
-/// cadence contract:
-/// `project_interval` and `reference_interval` in `config` (number or
-/// null, null means inherit) plus the `project` and `reference`
-/// interval sources. Schema 5 added project/reference tracking
-/// review: the `projects` walk tier, `projects_due` and the six-key
-/// `by_tier` histogram in counts (with `walk = sum(by_tier)`), and
-/// decoupled state totals (`due = new + resurfaced + rotten` over
-/// Ready states, including eligible Ready trackers). Schema 4 added
-/// the keep-streak contract. The seed envelope shares this constant;
-/// seed contents are otherwise unchanged.
-const SCHEMA_VERSION: u32 = 8;
+/// Schema 9 adds PRE/POST checklist tiers: `pre`/`post` in `tier` and
+/// `by_tier`, `pre_due`/`post_due`, and `lane` may be null on
+/// checklist rows. Schema 8 drops `config.decay.active_from` /
+/// `active`: decay decisions are available as soon as decay is
+/// enabled, with no calendar gate. Schema 7 adds the `references`
+/// walk tier (between `returned` and `rotten`), the seven-key
+/// `by_tier` histogram, `references_due` in counts, and the `^prj`
+/// hide gate: visible `^prj` rows are reviewed on sync's `#hide`
+/// alone, so the `project_scheduled_invalid` lint is gone. Schema 6
+/// adds the tracker cadence contract: `project_interval` and
+/// `reference_interval` in `config` (number or null, null means
+/// inherit) plus the `project` and `reference` interval sources.
+/// Schema 5 added project/reference tracking review: the `projects`
+/// walk tier, `projects_due` and the six-key `by_tier` histogram in
+/// counts (with `walk = sum(by_tier)`), and decoupled state totals
+/// (`due = new + resurfaced + rotten` over Ready states, including
+/// eligible Ready trackers). Schema 4 added the keep-streak contract.
+/// The seed envelope shares this constant; seed contents are
+/// otherwise unchanged.
+const SCHEMA_VERSION: u32 = 9;
 
 pub(crate) fn run(args: Vec<OsString>) -> i32 {
     let argv: Vec<OsString> = iter::once(OsString::from(COMMAND_NAME))
@@ -119,8 +121,8 @@ pub(crate) fn build_cli() -> ClapCommand {
         .about("Walk the tiered freshness review queue")
         .long_about(
             "Walk the tiered freshness review queue: list the tasks due \
-            for review in tier order NEW → PROJECTS → PENDING → NEXT → \
-            RETURNED → REFERENCES → ROTTEN.\n\n\
+            for review in tier order PRE → NEW → PROJECTS → PENDING → \
+            NEXT → RETURNED → REFERENCES → ROTTEN → POST.\n\n\
             The list subcommand is read-only: it evaluates every visible, \
             non-recurring Ready, Pending, and Next task at read time — \
             never stored — and shows the tiered walk queue with counts. \
@@ -151,8 +153,8 @@ fn list_command_inner() -> ClapCommand {
         .about("List the tiered freshness review queue (default)")
         .long_about(
             "List the tiered freshness review queue: every task with a \
-            walk tier, ordered NEW → PROJECTS → PENDING → NEXT → \
-            RETURNED → REFERENCES → ROTTEN with each tier's comparator, with \
+            walk tier, ordered PRE → NEW → PROJECTS → PENDING → NEXT → \
+            RETURNED → REFERENCES → ROTTEN → POST with each tier's comparator, with \
             whole-vault counts. The command is read-only. Counts always \
             cover the whole vault; --limit truncates the queue rows \
             only. See docs/freshness.md for the full definition.",
@@ -290,7 +292,7 @@ fn bob_dir_from_matches(matches: &ArgMatches) -> PathBuf {
 struct ListedRow {
     rank: u32,
     tier: String,
-    lane: String,
+    lane: Option<String>,
     state: Option<FreshState>,
     /// Stable read-time bucket (`new`, `rotten`, or null) for
     /// dashboard gating. Lane rows carry null.
@@ -341,19 +343,17 @@ fn collect_list(snapshot: &Snapshot) -> ListReport {
     );
     // The review input is ready ∪ pending ∪ next plus hidden
     // tracker candidates (freshness-specific visibility, hide
-    // allowed). Ordinary hidden tasks never enter here.
+    // allowed) plus checklist candidates (`[?]` and other tagged
+    // rows the lane queries miss). Ordinary hidden tasks never
+    // enter here.
     let combined: Vec<(&RowCtx, super::state::FreshnessRow)> = snapshot
         .ready
         .iter()
         .chain(snapshot.pending.iter())
         .chain(snapshot.next.iter())
+        .chain(snapshot.trackers.iter())
+        .chain(snapshot.checklist.iter())
         .map(|row| (row, row.freshness_row(true)))
-        .chain(
-            snapshot
-                .trackers
-                .iter()
-                .map(|row| (row, row.freshness_row(true))),
-        )
         .collect();
 
     let queue_entries = queue(
@@ -388,7 +388,7 @@ fn collect_list(snapshot: &Snapshot) -> ListReport {
             rows.push(ListedRow {
                 rank: entry.rank,
                 tier: entry.tier.as_str().to_string(),
-                lane: entry.lane.as_str().to_string(),
+                lane: entry.lane.map(|lane| lane.as_str().to_string()),
                 state: entry.state,
                 bucket: bucket_for_state(entry.state),
                 path: entry.path.clone(),
@@ -424,8 +424,9 @@ fn collect_list(snapshot: &Snapshot) -> ListReport {
         .iter()
         .chain(snapshot.pending.iter())
         .chain(snapshot.next.iter())
+        .chain(snapshot.trackers.iter())
+        .chain(snapshot.checklist.iter())
         .map(|row| row.freshness_row(true))
-        .chain(snapshot.trackers.iter().map(|row| row.freshness_row(true)))
         .collect();
     let mut counts = counts(&combined_eval_rows, today, config);
     // Tier counts need ready ∪ pending ∪ next plus hidden tracker
@@ -540,9 +541,10 @@ fn human_list(report: &ListReport, styler: &Styler) -> String {
     output.push('\n');
     let _ = writeln!(
         output,
-        "  REVIEW {walk} due {sep} {new} new {sep} {projects} projects {sep} {pending} pending {sep} {next} next {sep} {returned} returned {sep} {references} references {sep} {rotten} rotten {sep} {today}",
+        "  REVIEW {walk} due {sep} {pre} pre {sep} {new} new {sep} {projects} projects {sep} {pending} pending {sep} {next} next {sep} {returned} returned {sep} {references} references {sep} {rotten} rotten {sep} {post} post {sep} {today}",
         walk = report.counts.walk,
         sep = styler.separator(),
+        pre = report.counts.by_tier.pre,
         new = report.counts.by_tier.new,
         projects = report.counts.by_tier.projects,
         pending = report.counts.by_tier.pending,
@@ -550,10 +552,12 @@ fn human_list(report: &ListReport, styler: &Styler) -> String {
         returned = report.counts.by_tier.returned,
         references = report.counts.by_tier.references,
         rotten = report.counts.by_tier.rotten,
+        post = report.counts.by_tier.post,
         today = today_meter(report),
     );
 
-    let tiers: [(&str, &str); 7] = [
+    let tiers: [(&str, &str); 9] = [
+        ("pre", "PRE"),
         ("new", "NEW"),
         ("projects", "PROJECTS"),
         ("pending", "PENDING"),
@@ -561,6 +565,7 @@ fn human_list(report: &ListReport, styler: &Styler) -> String {
         ("returned", "RETURNED"),
         ("references", "REFERENCES"),
         ("rotten", "ROTTEN"),
+        ("post", "POST"),
     ];
     let mut commitment_rows = 0;
     let mut rotten_rows = 0;
@@ -579,9 +584,15 @@ fn human_list(report: &ListReport, styler: &Styler) -> String {
                 styler.dim("── commitments done above · upkeep below ──"),
             ));
         }
+        if *tier == "post" && (commitment_rows > 0 || rotten_rows > 0) {
+            output.push_str(&format!(
+                "\n  {}\n",
+                styler.dim("── review closeout ──"),
+            ));
+        }
         if *tier == "rotten" {
             rotten_rows = tier_rows.len();
-        } else {
+        } else if *tier != "post" {
             commitment_rows += tier_rows.len();
         }
         output.push_str(&format!(
@@ -622,6 +633,8 @@ fn human_row(row: &ListedRow, styler: &Styler) -> String {
         source = row.interval_source,
     );
     let detail = match row.tier.as_str() {
+        "pre" => "Checklist · complete to resolve".to_string(),
+        "post" => "Closeout · complete last".to_string(),
         "new" => match &row.created {
             Some(created) => format!("created {created}"),
             None => "never confirmed".to_string(),
@@ -763,7 +776,10 @@ fn json_list(report: &ListReport) -> serde_json::Value {
             "next_due": report.counts.next_due,
             "projects_due": report.counts.projects_due,
             "references_due": report.counts.references_due,
+            "pre_due": report.counts.pre_due,
+            "post_due": report.counts.post_due,
             "by_tier": {
+                "pre": report.counts.by_tier.pre,
                 "new": report.counts.by_tier.new,
                 "projects": report.counts.by_tier.projects,
                 "pending": report.counts.by_tier.pending,
@@ -771,6 +787,7 @@ fn json_list(report: &ListReport) -> serde_json::Value {
                 "returned": report.counts.by_tier.returned,
                 "references": report.counts.by_tier.references,
                 "rotten": report.counts.by_tier.rotten,
+                "post": report.counts.by_tier.post,
             },
             "walk": report.counts.walk,
             "decide": report.counts.decide,
