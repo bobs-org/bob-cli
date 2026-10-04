@@ -58,7 +58,7 @@ pub(super) fn print_sync_report(
     let separator = styler.separator();
     if report.task_schedule_count() > 0 {
         println!(
-            "  hint: run `bob task-status-hooks` to reconcile derived [?] Blocked markers"
+            "  hint: run `bob task reconcile` to reconcile derived [?] Blocked markers"
         );
     }
     let mut summary = format!(

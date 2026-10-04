@@ -106,7 +106,7 @@ ordinary task receives a matching [scheduled:: YYYY-MM-DD] field unless it \
 already has a valid equal or later schedule, and ordinary-task #hide tags are \
 removed. Future dates keep exactly one #hide on ^prj; today and past dates \
 preserve ^prj visibility unless it is the note's only task. Run \
-`bob task-status-hooks` afterward to reconcile derived [?] Blocked markers. \
+`bob task reconcile` afterward to reconcile derived [?] Blocked markers. \
 Invalid dates are reported and that file is left untouched.",
         )
         .after_help(

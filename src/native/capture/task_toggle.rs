@@ -166,7 +166,7 @@ pub(super) fn plan_task_toggle_capture(
         && task_line_declares_dependencies(&previous_task_line)
     {
         warnings.push(format!(
-            "^{block_id} still declares dependencies; bob task-status-hooks may return it to Blocked"
+            "^{block_id} still declares dependencies; bob task reconcile may return it to Blocked"
         ));
     }
 

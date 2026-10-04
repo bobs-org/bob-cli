@@ -1,5 +1,6 @@
 //! CLI integration tests.
 
+mod aliases;
 mod capture;
 mod completion;
 mod dataview;

@@ -1,0 +1,21 @@
+Show Pomodoro status, print the tmux line, or notify on completion
+
+Usage: bob pomodoro [COMMAND]
+
+Commands:
+  notify  Notify when the current Pomodoro is complete
+  status  Show the current Pomodoro status (default)
+  tmux    Print the Pomodoro status and plan meter for tmux
+
+Options:
+  -h, --help  Print help
+
+Bare `bob pomodoro [-d] [-s] [-v]` runs `bob pomodoro status`.
+
+Examples:
+  bob pomodoro                 Show the current Pomodoro status
+  bob pomodoro -s              Include a stale open Pomodoro
+  bob pomodoro tmux            Print the tmux status-line segment
+  bob pomodoro notify 30 300   Check every 30 s; after notifying, wait 300 s
+
+Run 'bob pomodoro <command> --help' for more information on a command.

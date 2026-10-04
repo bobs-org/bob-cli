@@ -3,41 +3,28 @@ Bob — command-line tools for the Bob Obsidian vault and Pomodoro workflow
 Usage: bob <COMMAND>
 
 Daily workflow:
-  capture                Capture tasks, bullets, and Pomodoro commands into the
-                         vault
-  freshness              Walk the tiered freshness review queue
-  notify                 Notify when the current Pomodoro is complete
-  plan                   Show today's plan budget, Today's tasks, and
-                         NEXT/PENDING lanes
-  pomodoro               Show Pomodoro status, print the tmux line, or notify on
-                         completion
-  ready                  Show each area/project note's Ready lane against the
-                         per-note cap
-  tmux-pomodoro          Print the Pomodoro status and plan meter for tmux
+  capture     Capture tasks, bullets, and Pomodoro commands into the vault
+  freshness   Walk the tiered freshness review queue
+  plan        Show today's plan budget, Today's tasks, and NEXT/PENDING lanes
+  pomodoro    Show Pomodoro status, print the tmux line, or notify on completion
+  ready       Show each area/project note's Ready lane against the per-note cap
 
 Tasks and projects:
-  move-done-tasks        Move done and canceled tasks into done/ archives and
-                         repair links
-  projects               List and sync project notes via their ^prj tasks
-  randomize              Re-roll due prioritized tasks within their priority
-                         windows
-  task-status-hooks      Reconcile task statuses from the Pomodoro ledger and
-                         dependencies
+  projects    List and sync project notes via their ^prj tasks
+  task        Vault-wide task maintenance: reconcile, reroll, archive
 
 Vault:
-  nightly                Run nightly maintenance: vault-sync, move-done-tasks,
-                         vault-sync
-  query                  Run Dataview or Tasks queries against the vault
-  vault-sync             Reconcile the vault through Git (default: run) or show
-                         status
+  nightly     Run nightly maintenance: vault-sync, task archive, vault-sync
+  query       Run Dataview or Tasks queries against the vault
+  vault-sync  Reconcile the vault through Git (default: run) or show status
 
 Integrations:
-  gkeep                  Drain the Google Keep inbox into Obsidian tasks
-  highlights             Sync Highlights PDF annotations into reference notes
+  gkeep       Drain the Google Keep inbox into Obsidian tasks
+  highlights  Sync Highlights PDF annotations into reference notes
 
 Setup:
-  completion             Install and inspect shell completion for bob
-  plugins                List and deploy Bob's custom Obsidian plugins
+  completion  Install and inspect shell completion for bob
+  plugins     List and deploy Bob's custom Obsidian plugins
 
 Capture protocol (Bob Mac Capture JSON endpoints; `bob --help` lists them):
   capture-complete  capture-parse  capture-pomodoro-name  capture-pomodoros
@@ -54,7 +41,7 @@ Examples:
   bob plan                          Show today's plan budget and lanes
   bob freshness                     List the review queue
   bob ready                         Show Ready lanes against the per-note cap
-  bob task-status-hooks --dry-run   Preview task status reconciliation
+  bob task reconcile --dry-run      Preview task status reconciliation
   bob query --source '#project'     Print matching note paths
   bob vault-sync status --json      Print the last vault Git sync status
 

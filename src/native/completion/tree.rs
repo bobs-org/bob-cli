@@ -8,7 +8,7 @@
 use clap::Command as ClapCommand;
 
 use crate::native::NativeCommand;
-use crate::runner::subcommands;
+use crate::runner::{subcommands, Group, Subcommand, Target};
 
 const ABOUT: &str = "Bob \u{2014} command-line tools for the Bob Obsidian vault and Pomodoro workflow";
 
@@ -100,15 +100,55 @@ pub(crate) fn tree() -> ClapCommand {
         .about(ABOUT)
         .disable_help_subcommand(true);
     for entry in subcommands() {
-        root = root.subcommand(
-            entry
-                .native_command
-                .command()
-                .name(entry.name)
-                .about(entry.about),
-        );
+        root = root.subcommand(completion_subcommand(entry));
     }
     root
+}
+
+fn completion_subcommand(entry: &Subcommand) -> ClapCommand {
+    match entry.target {
+        Target::Leaf(leaf) => leaf
+            .native_command
+            .command()
+            .name(entry.name)
+            .about(entry.about),
+        Target::Group(group) => group_completion_command(entry, group),
+    }
+}
+
+fn group_completion_command(entry: &Subcommand, group: Group) -> ClapCommand {
+    let mut command = ClapCommand::new(entry.name)
+        .about(entry.about)
+        .disable_help_subcommand(true);
+    if let Some(default) = group.default {
+        let default_member = group
+            .members
+            .iter()
+            .find(|member| member.name == default)
+            .expect("group default must name a member");
+        let default_command = default_member.leaf.native_command.command();
+        command = command
+            .disable_help_flag(true)
+            .args_conflicts_with_subcommands(true);
+        for arg in default_command.get_arguments() {
+            let id = arg.get_id().as_str();
+            if id == "help" || id == "version" {
+                continue;
+            }
+            command = command.arg(arg.clone());
+        }
+    }
+    for member in group.members {
+        command = command.subcommand(
+            member
+                .leaf
+                .native_command
+                .command()
+                .name(member.name)
+                .about(member.about),
+        );
+    }
+    command
 }
 
 #[cfg(test)]
@@ -144,7 +184,11 @@ mod tests {
             .get_subcommands()
             .map(|command| command.get_name())
             .collect();
-        for hidden in ["mark-next-tasks", "task-status-setter", "help"] {
+        for hidden in crate::runner::ALIASES
+            .iter()
+            .map(|alias| alias.from)
+            .chain(std::iter::once("help"))
+        {
             assert!(!names.contains(&hidden), "tree must not contain {hidden}");
         }
         // No nested `help` subcommand either: disabling the help
@@ -180,9 +224,22 @@ mod tests {
         assert!(parses(&["bob", "freshness", "list", "-f", "json"]));
         assert!(parses(&["bob", "vault-sync", "--dry-run"]));
         assert!(parses(&["bob", "gkeep", "pull", "--dry-run"]));
-        assert!(parses(&["bob", "move-done-tasks", "-t", "10"]));
-        assert!(parses(&["bob", "notify", "-vv", "5", "10"]));
+        assert!(parses(&["bob", "task", "archive", "-t", "10"]));
+        assert!(parses(&["bob", "pomodoro", "notify", "-vv", "5", "10"]));
         assert!(parses(&["bob", "pomodoro", "-s"]));
+        assert!(parses(&["bob", "pomodoro", "status", "-s"]));
+    }
+
+    #[test]
+    fn descriptor_names_match_canonical_paths() {
+        for (path, leaf) in crate::runner::canonical_leaves() {
+            let expected = format!("bob {}", path.join(" "));
+            assert_eq!(
+                leaf.native_command.command().get_name(),
+                expected,
+                "descriptor name for path {path:?}"
+            );
+        }
     }
 
     fn descriptor_flags(command: &ClapCommand) -> (Vec<char>, Vec<String>) {
@@ -286,7 +343,7 @@ mod tests {
         assert_drift(
             &crate::native::collect_done::completion_descriptor(),
             &crate::native::collect_done::help_text(),
-            "move-done-tasks",
+            "bob task archive",
         );
         assert_drift(
             &crate::native::nightly::completion_descriptor(),
@@ -296,17 +353,17 @@ mod tests {
         assert_drift(
             &crate::native::notify::completion_descriptor(),
             &crate::native::notify::help_text(),
-            "notify",
+            "bob pomodoro notify",
         );
         assert_drift(
             &crate::native::pomodoro::completion_descriptor(),
             &crate::native::pomodoro::help_text(),
-            "pomodoro",
+            "bob pomodoro status",
         );
         assert_drift(
             &crate::native::pomodoro::tmux_completion_descriptor(),
             &crate::native::pomodoro::tmux_help_text(),
-            "tmux-pomodoro",
+            "bob pomodoro tmux",
         );
     }
 }

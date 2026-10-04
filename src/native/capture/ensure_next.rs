@@ -48,7 +48,7 @@ pub(super) fn plan_ensure_next_capture(
     let status_changed = previous_status_symbol != updated_task.status_symbol;
     if status_changed && task_line_declares_dependencies(&previous_task_line) {
         warnings.push(format!(
-            "^{block_id} still declares dependencies; bob task-status-hooks may return it to Blocked"
+            "^{block_id} still declares dependencies; bob task reconcile may return it to Blocked"
         ));
     }
 

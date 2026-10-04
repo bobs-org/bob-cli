@@ -1,4 +1,4 @@
-//! `bob randomize`: bulk re-roll of due prioritized tasks.
+//! `bob task reroll`: bulk re-roll of due prioritized tasks.
 //!
 //! Re-schedules every due P1–P4 Obsidian task to an independent random date
 //! inside that task's priority window, then publishes the whole change as a
@@ -36,7 +36,7 @@ use super::{
     vault_sync::{self, CycleReport},
 };
 
-const COMMAND_NAME: &str = "bob randomize";
+const COMMAND_NAME: &str = "bob task reroll";
 const DEFAULT_RETRY_TIMEOUT_SECS: u64 = 60;
 const RANDOMIZE_TOOL: &str = "randomize";
 const SPARK_BLOCKS: &[char] = &['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
@@ -78,7 +78,7 @@ P0 tasks, Next and In Progress tasks, tasks linked from today's open \
 Pomodoros, and tasks with `due` or `repeat` dates are always left alone, as \
 are tasks owned by `bob projects sync` (`^prj`).\n\n\
 A live run holds the shared vault-maintenance lock while it syncs, plans, \
-writes, commits exactly the rewritten notes as one `bob randomize` commit, \
+writes, commits exactly the rewritten notes as one `bob task reroll` commit, \
 and syncs again. Undo a run with `git -C ~/bob revert <sha> && bob vault-sync`; \
 re-running with the printed seed replays the same dates.",
         )
@@ -1174,7 +1174,7 @@ fn commit_message(report: &Report) -> String {
     let rerolled = plan.map_or(0, |plan| plan.rerolls.len());
     let notes = plan.map_or(0, |plan| plan.notes.len());
     let subject = format!(
-        "bob randomize {}: {} in {}",
+        "bob task reroll {}: {} in {}",
         iso(report.today),
         plural(rerolled, "task", "tasks"),
         plural(notes, "note", "notes")
@@ -1639,7 +1639,8 @@ fn print_needs_a_look(styler: &Styler, plan: &Plan) {
 }
 
 fn print_replay_line(report: &Report) {
-    let mut command = format!("bob randomize --seed {}", seed_hex(report.seed));
+    let mut command =
+        format!("bob task reroll --seed {}", seed_hex(report.seed));
     if let Some(levels) = &report.selected {
         for level in levels {
             command.push_str(&format!(" --level {level}"));

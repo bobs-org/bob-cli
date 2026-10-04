@@ -100,7 +100,7 @@ fn capture_project_note_creates_plain_note_with_json_and_human_output() {
     assert!(out.contains("[[cash]]"), "{out}");
     assert!(out.contains("^prj"), "{out}");
     assert!(out.contains("projects sync"), "{out}");
-    assert!(out.contains("task-status-hooks"), "{out}");
+    assert!(out.contains("task reconcile"), "{out}");
 }
 
 #[test]

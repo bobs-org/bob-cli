@@ -423,9 +423,17 @@ fn randomize_help_lists_options_alphabetically() {
         .output()
         .expect("run bob --help");
     assert_success(&top);
+    let top_help = stdout(&top);
     assert!(
-        stdout(&top).contains("randomize"),
-        "expected top-level help to list randomize:\n{}",
+        top_help.contains(
+            "task        Vault-wide task maintenance: reconcile, reroll, archive"
+        ),
+        "expected top-level help to list task reroll:\n{}",
+        format_output(&top)
+    );
+    assert!(
+        !top_help.contains("randomize"),
+        "expected randomize to stay a silent alias:\n{}",
         format_output(&top)
     );
 }
@@ -479,7 +487,7 @@ fn randomize_dry_run_writes_nothing_and_prints_replay() {
         "Still due",
         "1 P0 task",
         "tasks need a look",
-        "Nothing was written. Apply these dates with: bob randomize --seed 0x7f3a91c2",
+        "Nothing was written. Apply these dates with: bob task reroll --seed 0x7f3a91c2",
     ] {
         assert!(
             human.contains(marker),
@@ -630,7 +638,7 @@ fn randomize_live_offline_rewrites_notes_with_status_log_and_grouping() {
         "expected initial + randomize commits:\n{subjects:?}"
     );
     assert!(
-        subjects[0].contains("bob randomize 2026-09-28: 5 tasks in 3 notes"),
+        subjects[0].contains("bob task reroll 2026-09-28: 5 tasks in 3 notes"),
         "unexpected commit subject:\n{subjects:?}"
     );
     let sha = subjects[0]
@@ -1088,7 +1096,7 @@ fn randomize_bare_remote_syncs_scoped_commit_and_push() {
     let subjects = git_lines(&vault, ["log", "--format=%H %s"]);
     let randomize: Vec<&String> = subjects
         .iter()
-        .filter(|line| line.contains("bob randomize "))
+        .filter(|line| line.contains("bob task reroll "))
         .collect();
     assert_eq!(
         randomize.len(),
@@ -1638,7 +1646,7 @@ fn randomize_post_sync_conflict_keeps_local_commit_and_warns() {
     assert_eq!(
         stdout(&log)
             .lines()
-            .filter(|line| line.contains("bob randomize "))
+            .filter(|line| line.contains("bob task reroll "))
             .count(),
         1,
         "local commit must stand:\n{}",

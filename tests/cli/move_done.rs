@@ -42,8 +42,7 @@ fn move_done_tasks_commits_and_pushes_collection_changes_only() {
     let output_text = stdout(&output);
     assert!(
         output_text.contains("git:")
-            && output_text
-                .contains("committed: bob move-done-tasks 2026-06-02")
+            && output_text.contains("committed: bob task archive 2026-06-02")
             && output_text.contains("pushed"),
         "expected git section with commit and push:\n{}",
         format_output(&output)
@@ -71,7 +70,7 @@ done_tasks: \"[[done/obsidian_done]]\"
         ["show", "--name-only", "--format=%s", "HEAD"],
     ));
     assert!(
-        show.starts_with("bob move-done-tasks 2026-06-02\n"),
+        show.starts_with("bob task archive 2026-06-02\n"),
         "expected move-done-tasks commit subject:\n{show}"
     );
     assert!(
@@ -144,8 +143,7 @@ fn move_done_tasks_commits_link_repairs_with_collection_changes() {
     assert!(
         output_text.contains("Obsidian links repaired: 2")
             && output_text.contains("link-repair files updated: 1")
-            && output_text
-                .contains("committed: bob move-done-tasks 2026-06-02")
+            && output_text.contains("committed: bob task archive 2026-06-02")
             && output_text.contains("pushed"),
         "expected link repair commit and push:\n{}",
         format_output(&output)
@@ -225,8 +223,7 @@ type: \"[[done]]\"
     assert!(
         output_text.contains("moved block id renames: 1")
             && output_text.contains("Obsidian links repaired: 1")
-            && output_text
-                .contains("committed: bob move-done-tasks 2026-06-02")
+            && output_text.contains("committed: bob task archive 2026-06-02")
             && output_text.contains("pushed"),
         "expected block id rename, link repair, commit, and push:\n{}",
         format_output(&output)
@@ -257,7 +254,7 @@ done_tasks: \"[[done/obsidian_done]]\"
         ["show", "--name-only", "--format=%s", "HEAD"],
     ));
     assert!(
-        show.starts_with("bob move-done-tasks 2026-06-02\n")
+        show.starts_with("bob task archive 2026-06-02\n")
             && show.contains("\nobsidian.md\n")
             && show.contains("\ndone/obsidian_done.md\n")
             && show.contains("\ndaily.md\n"),
@@ -308,8 +305,7 @@ type: \"[[done]]\"
     let output_text = stdout(&output);
     assert!(
         output_text.contains("source done_tasks updates: 1")
-            && output_text
-                .contains("committed: bob move-done-tasks 2026-06-02")
+            && output_text.contains("committed: bob task archive 2026-06-02")
             && output_text.contains("pushed"),
         "expected metadata commit and push:\n{}",
         format_output(&output)
@@ -341,7 +337,7 @@ type: \"[[done]]\"
         ["show", "--name-only", "--format=%s", "HEAD"],
     ));
     assert!(
-        show.starts_with("bob move-done-tasks 2026-06-02\n"),
+        show.starts_with("bob task archive 2026-06-02\n"),
         "expected move-done-tasks commit subject:\n{show}"
     );
     assert!(
@@ -406,8 +402,7 @@ parent: \"[[done]]\"
     let output_text = stdout(&output);
     assert!(
         output_text.contains("archive metadata repairs: 1")
-            && output_text
-                .contains("committed: bob move-done-tasks 2026-06-02")
+            && output_text.contains("committed: bob task archive 2026-06-02")
             && output_text.contains("pushed"),
         "expected archive metadata commit and push:\n{}",
         format_output(&output)
@@ -439,7 +434,7 @@ type: \"[[done]]\"
         ["show", "--name-only", "--format=%s", "HEAD"],
     ));
     assert!(
-        show.starts_with("bob move-done-tasks 2026-06-02\n"),
+        show.starts_with("bob task archive 2026-06-02\n"),
         "expected move-done-tasks commit subject:\n{show}"
     );
     assert!(
@@ -600,7 +595,7 @@ fn move_done_tasks_rewrites_dirty_link_repair_files() {
     assert!(
         stdout(&output).contains("Obsidian links repaired: 1")
             && stdout(&output)
-                .contains("committed: bob move-done-tasks 2026-06-02")
+                .contains("committed: bob task archive 2026-06-02")
             && stdout(&output).contains("pushed"),
         "expected dirty link repair candidate success:\n{}",
         format_output(&output)
@@ -682,7 +677,7 @@ local edit
     assert!(
         stdout(&output).contains("task blocks: 1")
             && stdout(&output)
-                .contains("committed: bob move-done-tasks 2026-06-02")
+                .contains("committed: bob task archive 2026-06-02")
             && stdout(&output).contains("pushed"),
         "expected dirty candidate success:\n{}",
         format_output(&output)
@@ -761,7 +756,7 @@ type: \"[[done]]\"
     assert!(
         stdout(&output).contains("source done_tasks updates: 1")
             && stdout(&output)
-                .contains("committed: bob move-done-tasks 2026-06-02")
+                .contains("committed: bob task archive 2026-06-02")
             && stdout(&output).contains("pushed"),
         "expected dirty metadata source success:\n{}",
         format_output(&output)
@@ -862,7 +857,7 @@ local edit
     assert!(
         stdout(&output).contains("archive metadata repairs: 1")
             && stdout(&output)
-                .contains("committed: bob move-done-tasks 2026-06-02")
+                .contains("committed: bob task archive 2026-06-02")
             && stdout(&output).contains("pushed"),
         "expected dirty archive metadata success:\n{}",
         format_output(&output)

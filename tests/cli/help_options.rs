@@ -93,7 +93,7 @@ fn task_status_hooks_help_lists_options_alphabetically() {
     assert!(
         help.contains("Make the current Pomodoro ledger the source of truth")
             && help.contains("BOB_DAY_FILE")
-            && help.contains("bob task-status-hooks --dry-run"),
+            && help.contains("bob task reconcile --dry-run"),
         "expected task-status-hooks long help:\n{help}"
     );
     assert_text_order(
@@ -555,7 +555,7 @@ fn projects_help_lists_subcommands_and_options() {
             && help.contains("-d, --dry-run")
             && help.contains("Future dates")
             && help.contains("[scheduled:: YYYY-MM-DD]")
-            && help.contains("bob task-status-hooks")
+            && help.contains("bob task reconcile")
             && help.contains("Invalid dates"),
         "expected sync short and long options:\n{help}"
     );

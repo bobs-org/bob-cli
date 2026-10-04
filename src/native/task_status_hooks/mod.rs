@@ -35,7 +35,7 @@ use super::{
     vault_links::{target_to_markdown_path, NoteIndex},
 };
 
-const COMMAND_NAME: &str = "bob task-status-hooks";
+const COMMAND_NAME: &str = "bob task reconcile";
 const DEFAULT_GLOBAL_FILTER: &str = "#task";
 const TASKS_SETTINGS: &str =
     ".obsidian/plugins/obsidian-tasks-plugin/data.json";

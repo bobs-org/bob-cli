@@ -697,7 +697,7 @@ pub(super) fn print_human_item_success(
         println!(
             "  {}",
             styler.dim(
-                "hint: 'bob projects sync' adds the parent's Sub-projects line; 'bob task-status-hooks' reconciles Blocked state"
+                "hint: 'bob projects sync' adds the parent's Sub-projects line; 'bob task reconcile' reconciles Blocked state"
             )
         );
     }

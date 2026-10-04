@@ -10,7 +10,7 @@ use clap::{Arg, ArgAction, Command as ClapCommand};
 
 use super::{env as bob_env, pomodoro_status};
 
-const SCRIPT_NAME: &str = "bob_notify";
+const COMMAND_NAME: &str = "bob pomodoro notify";
 
 #[derive(Debug)]
 struct Args {
@@ -27,13 +27,13 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
             return 0;
         }
         ParseResult::Error(message) => {
-            eprintln!("{SCRIPT_NAME}: error: {message}");
+            eprintln!("{COMMAND_NAME}: error: {message}");
             return 2;
         }
     };
 
     if args.verbose > 1 {
-        eprintln!("{SCRIPT_NAME}: debug: verbose tracing requested");
+        eprintln!("{COMMAND_NAME}: debug: verbose tracing requested");
     }
 
     run_loop(&args)
@@ -50,7 +50,7 @@ fn run_loop(args: &Args) -> i32 {
 
         loop {
             if let Err(error) = sleep_arg(&args.pre_check_sleep) {
-                eprintln!("{SCRIPT_NAME}: error: sleep failed: {error}");
+                eprintln!("{COMMAND_NAME}: error: sleep failed: {error}");
                 return 1;
             }
 
@@ -71,7 +71,7 @@ fn run_loop(args: &Args) -> i32 {
             args.post_notify_sleep
         ));
         if let Err(error) = sleep_arg(&args.post_notify_sleep) {
-            eprintln!("{SCRIPT_NAME}: error: sleep failed: {error}");
+            eprintln!("{COMMAND_NAME}: error: sleep failed: {error}");
             return 1;
         }
     }
@@ -127,7 +127,7 @@ enum ParseResult {
 }
 
 pub(crate) fn completion_descriptor() -> ClapCommand {
-    ClapCommand::new("bob notify")
+    ClapCommand::new(COMMAND_NAME)
         .about("Notify when the current Pomodoro is complete")
         .disable_help_flag(true)
         .arg(
@@ -144,7 +144,7 @@ pub(crate) fn completion_descriptor() -> ClapCommand {
                 .value_name("PRE_CHECK_SLEEP")
                 .required(true)
                 .help(
-                    "The number of seconds to wait between calls to bob_pomodoro.",
+                    "The number of seconds to wait between Pomodoro status checks.",
                 ),
         )
         .arg(
@@ -174,7 +174,7 @@ Notify me when the current Bob pomodoro is complete.
 Positional Arguments:
 ---------------------
 PRE_CHECK_SLEEP
-    the number of seconds to wait between calls to bob_pomodoro.
+    the number of seconds to wait between Pomodoro status checks.
 
 POST_NOTIFY_SLEEP
     the number of seconds to wait after a notification.
@@ -196,7 +196,7 @@ fn print_help() {
 
 fn usage() -> String {
     format!(
-        "usage: {SCRIPT_NAME} [-v] PRE_CHECK_SLEEP POST_NOTIFY_SLEEP\n       {SCRIPT_NAME} -h"
+        "usage: {COMMAND_NAME} [-v] PRE_CHECK_SLEEP POST_NOTIFY_SLEEP\n       {COMMAND_NAME} -h"
     )
 }
 
@@ -253,5 +253,5 @@ fn command_available(command: &str) -> bool {
 }
 
 fn info(args: std::fmt::Arguments<'_>) {
-    eprintln!("{SCRIPT_NAME}: info: {args}");
+    eprintln!("{COMMAND_NAME}: info: {args}");
 }

@@ -261,7 +261,7 @@ fn task_status_hooks_human_retry_progress_goes_to_stdout() {
         human_output.contains("retry run=")
             && human_output.contains("attempt=1")
             && human_output.contains("Summary:")
-            && human_output.contains("bob task-status-hooks"),
+            && human_output.contains("bob task reconcile"),
         "expected retry progress and final human report on stdout:\n{human_output}"
     );
     assert_eq!(
@@ -596,7 +596,7 @@ fn task_status_hooks_cron_redirection_captures_retry_and_final_result() {
         "expected the final human result in the log:\n{log}"
     );
     assert!(
-        log.contains("bob task-status-hooks"),
+        log.contains("bob task reconcile"),
         "expected the human command report in the log:\n{log}"
     );
     assert_eq!(
@@ -655,7 +655,7 @@ fn task_status_hooks_cron_redirection_captures_terminal_failure_and_exit_status(
     );
 
     assert!(
-        stderr(&output).contains("bob task-status-hooks"),
+        stderr(&output).contains("bob task reconcile"),
         "expected the command name in the terminal diagnostic:\n{}",
         format_output(&output)
     );

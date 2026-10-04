@@ -540,21 +540,21 @@ fn format_pomodoro(range: &str, task: &str) -> String {
 
 fn debug(enabled: bool, args: std::fmt::Arguments<'_>) {
     if enabled {
-        eprintln!("bob_pomodoro: debug: {args}");
+        eprintln!("bob pomodoro status: debug: {args}");
     }
 }
 
 fn print_error(error: &Error) {
-    eprintln!("bob_pomodoro: error: {}", error.message);
+    eprintln!("bob pomodoro status: error: {}", error.message);
 }
 
 fn print_tmux_error(error: &Error) {
-    eprintln!("tmux_bob_pomodoro: error: {}", error.message);
-    eprintln!("Try 'bob tmux-pomodoro --help' for more information.");
+    eprintln!("bob pomodoro tmux: error: {}", error.message);
+    eprintln!("Try 'bob pomodoro tmux --help' for more information.");
 }
 
 pub(crate) fn completion_descriptor() -> ClapCommand {
-    ClapCommand::new("bob pomodoro")
+    ClapCommand::new("bob pomodoro status")
         .about("Show the current Pomodoro status")
         .disable_help_flag(true)
         .arg(
@@ -588,7 +588,7 @@ pub(crate) fn completion_descriptor() -> ClapCommand {
 }
 
 pub(crate) fn tmux_completion_descriptor() -> ClapCommand {
-    ClapCommand::new("bob tmux-pomodoro")
+    ClapCommand::new("bob pomodoro tmux")
         .about("Print Pomodoro status for tmux")
         .disable_help_flag(true)
         .arg(
@@ -602,8 +602,8 @@ pub(crate) fn tmux_completion_descriptor() -> ClapCommand {
 
 pub(crate) fn help_text() -> String {
     "\
-usage: bob pomodoro [-d|--debug] [-s|--show-stale] [-v|--verbose]
-       bob pomodoro -h
+usage: bob pomodoro [status] [-d|--debug] [-s|--show-stale] [-v|--verbose]
+       bob pomodoro status -h
 
 Show the current Pomodoro status from today's Bob daily note.
 
@@ -628,8 +628,8 @@ options:
 
 pub(crate) fn tmux_help_text() -> String {
     "\
-usage: bob tmux-pomodoro
-       bob tmux-pomodoro -h
+usage: bob pomodoro tmux
+       bob pomodoro tmux -h
 
 Print the current Pomodoro status in tmux status-line format.
 

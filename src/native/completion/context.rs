@@ -42,10 +42,11 @@ impl Context {
     pub(crate) fn parse(before: &[OsString]) -> Self {
         // `build` fills in each arg's `num_args` defaults; without it
         // every option looks valueless and no values are recorded.
+        let before = crate::runner::rewrite_alias_args(before);
         let mut root = tree();
         root.build();
         let mut walker = Walker::new(&root);
-        for word in before {
+        for word in &before {
             walker.step(word);
         }
         walker.finish()
@@ -253,6 +254,15 @@ mod tests {
 
         let repo = context(&["plugins", "sync", "--repo", "/tmp/repo"]);
         assert_eq!(repo.repo, Some(PathBuf::from("/tmp/repo")));
+    }
+
+    #[test]
+    fn alias_words_rewrite_to_the_canonical_path() {
+        let context = context(&["randomize", "--level", "P2"]);
+        assert_eq!(
+            context.path,
+            vec!["task".to_string(), "reroll".to_string()]
+        );
     }
 
     #[test]

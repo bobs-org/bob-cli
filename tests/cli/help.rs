@@ -63,7 +63,7 @@ fn move_done_tasks_help_is_native_only() {
 
     assert_success(&output);
     assert!(
-        stdout(&output).contains("usage: bob move-done-tasks"),
+        stdout(&output).contains("usage: bob task archive"),
         "expected move-done-tasks help text:\n{}",
         format_output(&output)
     );
@@ -91,7 +91,7 @@ fn task_status_hooks_help_is_native_only() {
 
         assert_success(&output);
         assert!(
-            stdout(&output).contains("Usage: bob task-status-hooks"),
+            stdout(&output).contains("Usage: bob task reconcile"),
             "expected canonical task-status-hooks help for {spelling}:\n{}",
             format_output(&output)
         );
@@ -108,7 +108,7 @@ fn task_status_hooks_help_is_native_only() {
             });
         assert_eq!(diagnostic.status.code(), Some(2));
         assert!(
-            stderr(&diagnostic).contains("Usage: bob task-status-hooks"),
+            stderr(&diagnostic).contains("Usage: bob task reconcile"),
             "expected canonical task-status-hooks diagnostic for {spelling}:\n{}",
             format_output(&diagnostic)
         );
@@ -487,16 +487,16 @@ fn all_top_level_subcommand_help_is_safe_and_plain() {
         (&["highlights", "--help"], "Usage: bob highlights"),
         (
             &["task-status-hooks", "--help"],
-            "Usage: bob task-status-hooks",
+            "Usage: bob task reconcile",
         ),
-        (&["move-done-tasks", "--help"], "usage: bob move-done-tasks"),
+        (&["move-done-tasks", "--help"], "usage: bob task archive"),
         (&["nightly", "--help"], "usage: bob nightly"),
         (&["notify", "--help"], "Notify me when"),
         (&["plugins", "--help"], "bob plugins"),
-        (&["pomodoro", "--help"], "usage: bob pomodoro"),
+        (&["pomodoro", "--help"], "Usage: bob pomodoro"),
         (&["projects", "--help"], "bob projects"),
         (&["ready", "--help"], "Usage: bob ready"),
-        (&["tmux-pomodoro", "--help"], "usage: bob tmux-pomodoro"),
+        (&["tmux-pomodoro", "--help"], "usage: bob pomodoro tmux"),
     ];
 
     for (args, marker) in cases {
@@ -748,7 +748,10 @@ fn script_fallback_help_is_safe_and_plain() {
     let temp = TempDir::new("bob-cli-script-help");
     let cases: &[(&[&str], &str)] = &[
         (&["notify", "--help"], "Notify me when"),
-        (&["pomodoro", "--help"], "Show the current Pomodoro status"),
+        (
+            &["pomodoro", "status", "--help"],
+            "Show the current Pomodoro status",
+        ),
         (
             &["tmux-pomodoro", "--help"],
             "Print the current Pomodoro status",
@@ -783,10 +786,11 @@ fn pomodoro_help_documents_show_stale_option() {
         (
             bob_command()
                 .arg("pomodoro")
+                .arg("status")
                 .arg("--help")
                 .output()
-                .expect("run bob pomodoro --help"),
-            "bob pomodoro --help",
+                .expect("run bob pomodoro status --help"),
+            "bob pomodoro status --help",
         ),
         (
             bob_pomodoro_command()
@@ -800,12 +804,13 @@ fn pomodoro_help_documents_show_stale_option() {
     cases.push((
         bob_command()
             .arg("pomodoro")
+            .arg("status")
             .arg("--help")
             .env("BOB_CLI_USE_SCRIPT", "1")
             .env("XDG_CACHE_HOME", temp.path().join("cache"))
             .output()
-            .expect("run script fallback bob pomodoro --help"),
-        "script fallback bob pomodoro --help",
+            .expect("run script fallback bob pomodoro status --help"),
+        "script fallback bob pomodoro status --help",
     ));
 
     for (output, label) in cases {
@@ -1046,6 +1051,8 @@ fn help_routes_match_direct_help_for_root_and_nested_commands() {
             &["task-status-setter"][..],
             &["task-status-hooks", "--help"][..],
         ),
+        (&["task", "reroll"][..], &["task", "reroll", "--help"][..]),
+        (&["randomize"][..], &["task", "reroll", "--help"][..]),
     ] {
         let expected =
             bob_command().args(direct).output().expect("direct help");

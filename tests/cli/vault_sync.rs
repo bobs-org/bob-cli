@@ -578,7 +578,7 @@ fn nightly_runs_vault_sync_move_done_tasks_vault_sync_in_order() {
     let lines: Vec<&str> = subjects.lines().collect();
     assert_eq!(
         lines.first().copied(),
-        Some("bob move-done-tasks 2026-06-02"),
+        Some("bob task archive 2026-06-02"),
         "move-done-tasks should be the newest commit:\n{subjects}"
     );
     assert!(
@@ -627,7 +627,7 @@ fn nightly_runs_vault_sync_move_done_tasks_vault_sync_in_order() {
             && out.contains("step 2/3")
             && out.contains("step 3/3")
             && out.contains("vault-sync")
-            && out.contains("move-done-tasks")
+            && out.contains("task archive")
             && out.contains("All steps passed"),
         "expected a structured nightly summary:\n{}",
         format_output(&output)
@@ -688,7 +688,7 @@ fn nightly_failed_step_still_runs_later_steps_and_exits_nonzero() {
     );
     let out = stdout(&output);
     assert!(
-        out.contains("\u{2717} move-done-tasks"),
+        out.contains("\u{2717} task archive"),
         "expected a failed move-done-tasks marker:\n{}",
         format_output(&output)
     );

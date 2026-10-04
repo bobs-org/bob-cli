@@ -28,7 +28,7 @@ fn projects_sync_propagates_scheduled_task_properties_at_date_boundary() {
         ) && stdout(&preview)
             .contains("would normalize #hide on ^prj  scheduled 2026-07-11")
             && stdout(&preview).contains("1 task schedules updated")
-            && stdout(&preview).contains("bob task-status-hooks"),
+            && stdout(&preview).contains("bob task reconcile"),
         "unexpected preview:\n{}",
         format_output(&preview)
     );

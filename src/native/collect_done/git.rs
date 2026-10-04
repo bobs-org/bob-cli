@@ -199,7 +199,8 @@ pub(super) fn report_git_failure(action: &str, output: &Output) {
 }
 pub(super) fn collect_done_commit_message() -> String {
     format!(
-        "bob move-done-tasks {}",
+        "{} {}",
+        super::COMMAND_NAME,
         bob_env::current_datetime().format("%Y-%m-%d")
     )
 }

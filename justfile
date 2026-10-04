@@ -108,6 +108,14 @@ install-smoke:
     "${root}/bin/bob" plugins list --help >/dev/null
     "${root}/bin/bob" plugins sync --help >/dev/null
     "${root}/bin/bob" pomodoro --help >/dev/null
+    "${root}/bin/bob" pomodoro notify --help >/dev/null
+    "${root}/bin/bob" pomodoro status --help >/dev/null
+    "${root}/bin/bob" pomodoro tmux --help >/dev/null
+    "${root}/bin/bob" task --help >/dev/null
+    "${root}/bin/bob" task archive --help >/dev/null
+    "${root}/bin/bob" task reconcile --help >/dev/null
+    "${root}/bin/bob" task reroll --help >/dev/null
+    "${root}/bin/bob" help plan >/dev/null
     "${root}/bin/bob" projects --help >/dev/null
     "${root}/bin/bob" projects sync --help >/dev/null
     "${root}/bin/bob" tmux-pomodoro --help >/dev/null

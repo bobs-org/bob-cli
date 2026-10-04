@@ -23,10 +23,37 @@ use crate::scripts::{embedded_assets, script_by_command, EmbeddedAsset};
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Subcommand {
     pub(crate) name: &'static str,
-    pub(crate) script_command: Option<&'static str>,
     pub(crate) about: &'static str,
-    pub(crate) native_command: NativeCommand,
     pub(crate) section: Section,
+    pub(crate) target: Target,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Target {
+    Leaf(Leaf),
+    Group(Group),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Leaf {
+    pub(crate) native_command: NativeCommand,
+    pub(crate) script_command: Option<&'static str>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Group {
+    pub(crate) members: &'static [Member],
+    pub(crate) default: Option<&'static str>,
+    pub(crate) extra_about: Option<&'static str>,
+    pub(crate) after_help: &'static str,
+    pub(crate) usage: &'static str,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Member {
+    pub(crate) name: &'static str,
+    pub(crate) about: &'static str,
+    pub(crate) leaf: Leaf,
 }
 
 /// Workflow section shared by root help and root completion.
@@ -82,13 +109,115 @@ pub(crate) struct Alias {
 pub(crate) const ALIASES: &[Alias] = &[
     Alias {
         from: "mark-next-tasks",
-        to: &["task-status-hooks"],
+        to: &["task", "reconcile"],
+    },
+    Alias {
+        from: "move-done-tasks",
+        to: &["task", "archive"],
+    },
+    Alias {
+        from: "notify",
+        to: &["pomodoro", "notify"],
+    },
+    Alias {
+        from: "randomize",
+        to: &["task", "reroll"],
+    },
+    Alias {
+        from: "task-status-hooks",
+        to: &["task", "reconcile"],
     },
     Alias {
         from: "task-status-setter",
-        to: &["task-status-hooks"],
+        to: &["task", "reconcile"],
+    },
+    Alias {
+        from: "tmux-pomodoro",
+        to: &["pomodoro", "tmux"],
     },
 ];
+
+const TASK_MEMBERS: &[Member] = &[
+    Member {
+        name: "archive",
+        about:
+            "Move done and canceled tasks into done/ archives and repair links",
+        leaf: Leaf {
+            native_command: NativeCommand::MoveDoneTasks,
+            script_command: None,
+        },
+    },
+    Member {
+        name: "reconcile",
+        about:
+            "Reconcile task statuses from the Pomodoro ledger and dependencies",
+        leaf: Leaf {
+            native_command: NativeCommand::TaskStatusHooks,
+            script_command: None,
+        },
+    },
+    Member {
+        name: "reroll",
+        about: "Re-roll due prioritized tasks within their priority windows",
+        leaf: Leaf {
+            native_command: NativeCommand::Randomize,
+            script_command: None,
+        },
+    },
+];
+
+const POMODORO_MEMBERS: &[Member] = &[
+    Member {
+        name: "notify",
+        about: "Notify when the current Pomodoro is complete",
+        leaf: Leaf {
+            native_command: NativeCommand::Notify,
+            script_command: Some("bob_notify"),
+        },
+    },
+    Member {
+        name: "status",
+        about: "Show the current Pomodoro status (default)",
+        leaf: Leaf {
+            native_command: NativeCommand::Pomodoro,
+            script_command: Some("bob_pomodoro"),
+        },
+    },
+    Member {
+        name: "tmux",
+        about: "Print the Pomodoro status and plan meter for tmux",
+        leaf: Leaf {
+            native_command: NativeCommand::TmuxPomodoro,
+            script_command: Some("tmux_bob_pomodoro"),
+        },
+    },
+];
+
+const TASK_AFTER_HELP: &str = "\
+Examples:
+  bob task reconcile --dry-run   Preview task status reconciliation
+  bob task reroll --dry-run      Preview re-rolling due prioritized tasks
+  bob task archive               Archive done and canceled tasks
+
+See also: bob plan, bob ready, bob freshness, bob projects, bob query
+Run 'bob task <command> --help' for more information on a command.";
+
+const POMODORO_AFTER_HELP: &str = "\
+Bare `bob pomodoro [-d] [-s] [-v]` runs `bob pomodoro status`.
+
+Examples:
+  bob pomodoro                 Show the current Pomodoro status
+  bob pomodoro -s              Include a stale open Pomodoro
+  bob pomodoro tmux            Print the tmux status-line segment
+  bob pomodoro notify 30 300   Check every 30 s; after notifying, wait 300 s
+
+Run 'bob pomodoro <command> --help' for more information on a command.";
+
+const GROUP_HELP_TEMPLATE: &str = "\
+{about-with-newline}
+{usage-heading} {usage}
+
+{all-args}{after-help}";
 
 /// Rewrite an exact root alias while retaining every remaining OsString.
 /// Runtime dispatch and completion share this argv-prefix table.
@@ -119,205 +248,230 @@ pub(crate) fn subcommands() -> &'static [Subcommand] {
 const SUBCOMMANDS: &[Subcommand] = &[
     Subcommand {
         name: "capture",
-        script_command: None,
         about: "Capture tasks, bullets, and Pomodoro commands into the vault",
-        native_command: NativeCommand::Capture,
         section: Section::DailyWorkflow,
+        target: Target::Leaf(Leaf {
+            native_command: NativeCommand::Capture,
+            script_command: None,
+        }),
     },
     Subcommand {
         name: "freshness",
-        script_command: None,
         about: "Walk the tiered freshness review queue",
-        native_command: NativeCommand::Freshness,
         section: Section::DailyWorkflow,
-    },
-    Subcommand {
-        name: "notify",
-        script_command: Some("bob_notify"),
-        about: "Notify when the current Pomodoro is complete",
-        native_command: NativeCommand::Notify,
-        section: Section::DailyWorkflow,
+        target: Target::Leaf(Leaf {
+            native_command: NativeCommand::Freshness,
+            script_command: None,
+        }),
     },
     Subcommand {
         name: "plan",
-        script_command: None,
         about:
             "Show today's plan budget, Today's tasks, and NEXT/PENDING lanes",
-        native_command: NativeCommand::Plan,
         section: Section::DailyWorkflow,
+        target: Target::Leaf(Leaf {
+            native_command: NativeCommand::Plan,
+            script_command: None,
+        }),
     },
     Subcommand {
         name: "pomodoro",
-        script_command: Some("bob_pomodoro"),
         about:
             "Show Pomodoro status, print the tmux line, or notify on completion",
-        native_command: NativeCommand::Pomodoro,
         section: Section::DailyWorkflow,
+        target: Target::Group(Group {
+            members: POMODORO_MEMBERS,
+            default: Some("status"),
+            extra_about: None,
+            after_help: POMODORO_AFTER_HELP,
+            usage: "bob pomodoro [COMMAND]",
+        }),
     },
     Subcommand {
         name: "ready",
-        script_command: None,
         about:
             "Show each area/project note's Ready lane against the per-note cap",
-        native_command: NativeCommand::NoteReady,
         section: Section::DailyWorkflow,
-    },
-    Subcommand {
-        name: "tmux-pomodoro",
-        script_command: Some("tmux_bob_pomodoro"),
-        about: "Print the Pomodoro status and plan meter for tmux",
-        native_command: NativeCommand::TmuxPomodoro,
-        section: Section::DailyWorkflow,
-    },
-    Subcommand {
-        name: "move-done-tasks",
-        script_command: None,
-        about:
-            "Move done and canceled tasks into done/ archives and repair links",
-        native_command: NativeCommand::MoveDoneTasks,
-        section: Section::TasksAndProjects,
+        target: Target::Leaf(Leaf {
+            native_command: NativeCommand::NoteReady,
+            script_command: None,
+        }),
     },
     Subcommand {
         name: "projects",
-        script_command: None,
         about: "List and sync project notes via their ^prj tasks",
-        native_command: NativeCommand::Projects,
         section: Section::TasksAndProjects,
+        target: Target::Leaf(Leaf {
+            native_command: NativeCommand::Projects,
+            script_command: None,
+        }),
     },
     Subcommand {
-        name: "randomize",
-        script_command: None,
-        about: "Re-roll due prioritized tasks within their priority windows",
-        native_command: NativeCommand::Randomize,
+        name: "task",
+        about: "Vault-wide task maintenance: reconcile, reroll, archive",
         section: Section::TasksAndProjects,
-    },
-    Subcommand {
-        name: "task-status-hooks",
-        script_command: None,
-        about:
-            "Reconcile task statuses from the Pomodoro ledger and dependencies",
-        native_command: NativeCommand::TaskStatusHooks,
-        section: Section::TasksAndProjects,
+        target: Target::Group(Group {
+            members: TASK_MEMBERS,
+            default: None,
+            extra_about: Some(
+                "Every `bob task` command rewrites task lines across the whole vault.",
+            ),
+            after_help: TASK_AFTER_HELP,
+            usage: "bob task <COMMAND>",
+        }),
     },
     Subcommand {
         name: "nightly",
-        script_command: None,
-        about:
-            "Run nightly maintenance: vault-sync, move-done-tasks, vault-sync",
-        native_command: NativeCommand::Nightly,
+        about: "Run nightly maintenance: vault-sync, task archive, vault-sync",
         section: Section::Vault,
+        target: Target::Leaf(Leaf {
+            native_command: NativeCommand::Nightly,
+            script_command: None,
+        }),
     },
     Subcommand {
         name: "query",
-        script_command: None,
         about: "Run Dataview or Tasks queries against the vault",
-        native_command: NativeCommand::Query,
         section: Section::Vault,
+        target: Target::Leaf(Leaf {
+            native_command: NativeCommand::Query,
+            script_command: None,
+        }),
     },
     Subcommand {
         name: "vault-sync",
-        script_command: None,
         about: "Reconcile the vault through Git (default: run) or show status",
-        native_command: NativeCommand::VaultSync,
         section: Section::Vault,
+        target: Target::Leaf(Leaf {
+            native_command: NativeCommand::VaultSync,
+            script_command: None,
+        }),
     },
     Subcommand {
         name: "gkeep",
-        script_command: None,
         about: "Drain the Google Keep inbox into Obsidian tasks",
-        native_command: NativeCommand::Gkeep,
         section: Section::Integrations,
+        target: Target::Leaf(Leaf {
+            native_command: NativeCommand::Gkeep,
+            script_command: None,
+        }),
     },
     Subcommand {
         name: "highlights",
-        script_command: None,
         about: "Sync Highlights PDF annotations into reference notes",
-        native_command: NativeCommand::Highlights,
         section: Section::Integrations,
+        target: Target::Leaf(Leaf {
+            native_command: NativeCommand::Highlights,
+            script_command: None,
+        }),
     },
     Subcommand {
         name: "completion",
-        script_command: None,
         about: "Install and inspect shell completion for bob",
-        native_command: NativeCommand::Completion,
         section: Section::Setup,
+        target: Target::Leaf(Leaf {
+            native_command: NativeCommand::Completion,
+            script_command: None,
+        }),
     },
     Subcommand {
         name: "plugins",
-        script_command: None,
         about: "List and deploy Bob's custom Obsidian plugins",
-        native_command: NativeCommand::Plugins,
         section: Section::Setup,
+        target: Target::Leaf(Leaf {
+            native_command: NativeCommand::Plugins,
+            script_command: None,
+        }),
     },
     Subcommand {
         name: "capture-complete",
-        script_command: None,
         about: "Complete the capture marker at the cursor",
-        native_command: NativeCommand::CaptureComplete,
         section: Section::CaptureProtocol,
+        target: Target::Leaf(Leaf {
+            native_command: NativeCommand::CaptureComplete,
+            script_command: None,
+        }),
     },
     Subcommand {
         name: "capture-parse",
-        script_command: None,
         about: "Explain what in-progress capture text currently means",
-        native_command: NativeCommand::CaptureParse,
         section: Section::CaptureProtocol,
+        target: Target::Leaf(Leaf {
+            native_command: NativeCommand::CaptureParse,
+            script_command: None,
+        }),
     },
     Subcommand {
         name: "capture-pomodoro-name",
-        script_command: None,
         about: "Write a name onto an open unnamed Pomodoro",
-        native_command: NativeCommand::CapturePomodoroName,
         section: Section::CaptureProtocol,
+        target: Target::Leaf(Leaf {
+            native_command: NativeCommand::CapturePomodoroName,
+            script_command: None,
+        }),
     },
     Subcommand {
         name: "capture-pomodoros",
-        script_command: None,
         about: "List today's Pomodoro ledger entries",
-        native_command: NativeCommand::CapturePomodoros,
         section: Section::CaptureProtocol,
+        target: Target::Leaf(Leaf {
+            native_command: NativeCommand::CapturePomodoros,
+            script_command: None,
+        }),
     },
     Subcommand {
         name: "capture-rewrite",
-        script_command: None,
         about: "Apply the capture grammar's automatic draft rewrites",
-        native_command: NativeCommand::CaptureRewrite,
         section: Section::CaptureProtocol,
+        target: Target::Leaf(Leaf {
+            native_command: NativeCommand::CaptureRewrite,
+            script_command: None,
+        }),
     },
     Subcommand {
         name: "capture-sections",
-        script_command: None,
         about: "List the non-Tasks sections of a capture note",
-        native_command: NativeCommand::CaptureSections,
         section: Section::CaptureProtocol,
+        target: Target::Leaf(Leaf {
+            native_command: NativeCommand::CaptureSections,
+            script_command: None,
+        }),
     },
     Subcommand {
         name: "capture-targets",
-        script_command: None,
         about: "List inbox, area, and active project capture routes",
-        native_command: NativeCommand::CaptureTargets,
         section: Section::CaptureProtocol,
+        target: Target::Leaf(Leaf {
+            native_command: NativeCommand::CaptureTargets,
+            script_command: None,
+        }),
     },
     Subcommand {
         name: "capture-task-id",
-        script_command: None,
         about: "Write a block ID onto an open capture task",
-        native_command: NativeCommand::CaptureTaskId,
         section: Section::CaptureProtocol,
+        target: Target::Leaf(Leaf {
+            native_command: NativeCommand::CaptureTaskId,
+            script_command: None,
+        }),
     },
     Subcommand {
         name: "capture-task-sections",
-        script_command: None,
         about: "List the ALL-CAPS child sections of a capture task",
-        native_command: NativeCommand::CaptureTaskSections,
         section: Section::CaptureProtocol,
+        target: Target::Leaf(Leaf {
+            native_command: NativeCommand::CaptureTaskSections,
+            script_command: None,
+        }),
     },
     Subcommand {
         name: "capture-tasks",
-        script_command: None,
         about: "List the open tasks of a capture note",
-        native_command: NativeCommand::CaptureTasks,
         section: Section::CaptureProtocol,
+        target: Target::Leaf(Leaf {
+            native_command: NativeCommand::CaptureTasks,
+            script_command: None,
+        }),
     },
 ];
 
@@ -352,15 +506,82 @@ pub fn run_bob() -> i32 {
     }
 
     let mut args = rewrite_alias_args(&argv[1..]);
-    if args.first().is_some_and(|first| first == "help") {
-        args = match route_help(&args[1..]) {
-            Ok(args) => args,
-            Err(exit_code) => return exit_code,
-        };
-    }
+    args = match route_help_tokens(args) {
+        Ok(args) => args,
+        Err(exit_code) => return exit_code,
+    };
+    args = insert_group_defaults(args);
     run_bob_with_args(
         std::iter::once(OsString::from("bob")).chain(args).collect(),
     )
+}
+
+fn route_help_tokens(args: Vec<OsString>) -> Result<Vec<OsString>, i32> {
+    if args.first().is_some_and(|first| first == "help") {
+        return route_help(&args[1..]);
+    }
+    if args.len() >= 2
+        && args.get(1).is_some_and(|token| token == "help")
+        && find_group(args[0].as_os_str()).is_some()
+    {
+        let mut path = vec![args[0].clone()];
+        path.extend(args.iter().skip(2).cloned());
+        return route_help(&path);
+    }
+    Ok(args)
+}
+
+fn insert_group_defaults(args: Vec<OsString>) -> Vec<OsString> {
+    let Some(first) = args.first() else {
+        return args;
+    };
+    let Some(group) = find_group(first.as_os_str()) else {
+        return args;
+    };
+    let Some(default) = group.default else {
+        return args;
+    };
+
+    let should_insert = match args.get(1) {
+        None => true,
+        Some(token) => {
+            starts_with_dash(token.as_os_str())
+                && !is_help_flag(token.as_os_str())
+        }
+    };
+    if !should_insert {
+        return args;
+    }
+
+    let mut out = Vec::with_capacity(args.len() + 1);
+    out.push(first.clone());
+    out.push(OsString::from(default));
+    out.extend(args.iter().skip(1).cloned());
+    out
+}
+
+fn starts_with_dash(token: &OsStr) -> bool {
+    token.as_encoded_bytes().first() == Some(&b'-')
+}
+
+fn is_help_flag(token: &OsStr) -> bool {
+    token == "-h" || token == "--help"
+}
+
+fn find_group(name: &OsStr) -> Option<&'static Group> {
+    SUBCOMMANDS.iter().find_map(|entry| {
+        if entry.name != name {
+            return None;
+        }
+        match &entry.target {
+            Target::Group(group) => Some(group),
+            Target::Leaf(_) => None,
+        }
+    })
+}
+
+fn find_entry(name: &str) -> Option<&'static Subcommand> {
+    SUBCOMMANDS.iter().find(|entry| entry.name == name)
 }
 
 fn route_help(path: &[OsString]) -> Result<Vec<OsString>, i32> {
@@ -426,19 +647,52 @@ fn run_bob_with_args(argv: Vec<OsString>) -> i32 {
         return 2;
     };
 
-    let Some((script_command, native_command)) =
-        command_for_subcommand(subcommand)
-    else {
+    let Some(leaf) = leaf_for_matches(subcommand, sub_matches) else {
         eprintln!("bob: unknown subcommand: {subcommand}");
         return 2;
     };
 
-    let args = sub_matches
+    let args = trailing_args(leaf_matches(subcommand, sub_matches));
+
+    run_command_or_report("bob", leaf.script_command, leaf.native_command, args)
+}
+
+fn leaf_for_matches(
+    subcommand: &str,
+    sub_matches: &clap::ArgMatches,
+) -> Option<Leaf> {
+    let entry = find_entry(subcommand)?;
+    match entry.target {
+        Target::Leaf(leaf) => Some(leaf),
+        Target::Group(group) => {
+            let (member_name, _) = sub_matches.subcommand()?;
+            group
+                .members
+                .iter()
+                .find(|member| member.name == member_name)
+                .map(|member| member.leaf)
+        }
+    }
+}
+
+fn leaf_matches<'a>(
+    subcommand: &str,
+    sub_matches: &'a clap::ArgMatches,
+) -> &'a clap::ArgMatches {
+    match find_entry(subcommand).map(|entry| entry.target) {
+        Some(Target::Group(_)) => sub_matches
+            .subcommand()
+            .map(|(_, matches)| matches)
+            .unwrap_or(sub_matches),
+        _ => sub_matches,
+    }
+}
+
+fn trailing_args(matches: &clap::ArgMatches) -> Vec<OsString> {
+    matches
         .get_many::<OsString>("args")
         .map(|values| values.cloned().collect())
-        .unwrap_or_default();
-
-    run_command_or_report("bob", script_command, native_command, args)
+        .unwrap_or_default()
 }
 
 pub fn run_legacy(script_command: &'static str) -> i32 {
@@ -525,7 +779,7 @@ Examples:
   bob plan                          Show today's plan budget and lanes
   bob freshness                     List the review queue
   bob ready                         Show Ready lanes against the per-note cap
-  bob task-status-hooks --dry-run   Preview task status reconciliation
+  bob task reconcile --dry-run      Preview task status reconciliation
   bob query --source '#project'     Print matching note paths
   bob vault-sync status --json      Print the last vault Git sync status
 
@@ -537,6 +791,13 @@ fn sectioned_help(long: bool) -> StyledStr {
     let styles = cli_styles();
     let name_width = SUBCOMMANDS
         .iter()
+        .filter(|entry| entry.section != Section::CaptureProtocol)
+        .map(|entry| entry.name.chars().count())
+        .max()
+        .unwrap_or(0);
+    let protocol_width = SUBCOMMANDS
+        .iter()
+        .filter(|entry| entry.section == Section::CaptureProtocol)
         .map(|entry| entry.name.chars().count())
         .max()
         .unwrap_or(0);
@@ -565,11 +826,16 @@ fn sectioned_help(long: bool) -> StyledStr {
         if *section == Section::CaptureProtocol && !long {
             append_wrapped_names(&mut help, &entries);
         } else {
+            let width = if *section == Section::CaptureProtocol {
+                protocol_width
+            } else {
+                name_width
+            };
             for entry in entries {
                 append_help_row(
                     &mut help,
                     entry,
-                    name_width,
+                    width,
                     long || *section != Section::CaptureProtocol,
                     styles.get_literal(),
                     color,
@@ -694,11 +960,41 @@ fn build_cli() -> ClapCommand {
         .arg_required_else_help(true);
 
     for subcommand in SUBCOMMANDS {
-        command = command.subcommand(
-            delegate_subcommand(subcommand.name, subcommand.about).hide(true),
-        );
+        command =
+            command.subcommand(dispatch_subcommand(subcommand).hide(true));
     }
 
+    command
+}
+
+fn dispatch_subcommand(entry: &Subcommand) -> ClapCommand {
+    match entry.target {
+        Target::Leaf(_) => delegate_subcommand(entry.name, entry.about),
+        Target::Group(group) => group_dispatch_command(entry, group),
+    }
+}
+
+fn group_dispatch_command(entry: &Subcommand, group: Group) -> ClapCommand {
+    let about = match group.extra_about {
+        Some(extra) => format!("{}\n\n{extra}", entry.about),
+        None => entry.about.to_string(),
+    };
+    let mut command = ClapCommand::new(entry.name)
+        .about(about)
+        .styles(cli_styles())
+        .help_template(GROUP_HELP_TEMPLATE)
+        .override_usage(group.usage)
+        .after_help(group.after_help)
+        .disable_help_subcommand(true);
+    if group.default.is_none() {
+        command = command
+            .subcommand_required(true)
+            .arg_required_else_help(true);
+    }
+    for member in group.members {
+        command =
+            command.subcommand(delegate_subcommand(member.name, member.about));
+    }
     command
 }
 
@@ -715,13 +1011,35 @@ fn delegate_subcommand(name: &'static str, about: &'static str) -> ClapCommand {
         )
 }
 
-fn command_for_subcommand(
-    subcommand: &str,
-) -> Option<(Option<&'static str>, NativeCommand)> {
-    SUBCOMMANDS.iter().find_map(|command| {
-        (command.name == subcommand)
-            .then_some((command.script_command, command.native_command))
-    })
+#[cfg(test)]
+pub(crate) fn canonical_leaves() -> Vec<(Vec<&'static str>, Leaf)> {
+    let mut leaves = Vec::new();
+    for entry in SUBCOMMANDS {
+        match entry.target {
+            Target::Leaf(leaf) => leaves.push((vec![entry.name], leaf)),
+            Target::Group(group) => {
+                for member in group.members {
+                    leaves.push((vec![entry.name, member.name], member.leaf));
+                }
+            }
+        }
+    }
+    leaves
+}
+
+#[cfg(test)]
+pub(crate) fn resolve_path(path: &[&str]) -> Option<Leaf> {
+    let (first, rest) = path.split_first()?;
+    let entry = find_entry(first)?;
+    match entry.target {
+        Target::Leaf(leaf) if rest.is_empty() => Some(leaf),
+        Target::Group(group) if rest.len() == 1 => group
+            .members
+            .iter()
+            .find(|member| member.name == rest[0])
+            .map(|member| member.leaf),
+        _ => None,
+    }
 }
 
 fn run_command_or_report(
@@ -976,8 +1294,85 @@ mod tests {
             OsString::from_vec(vec![0xff, b'x']),
         ];
         let rewritten = rewrite_alias_args(&args);
-        assert_eq!(rewritten[0], "task-status-hooks");
-        assert_eq!(rewritten[1], "--");
-        assert_eq!(rewritten[2].as_os_str().as_bytes(), [0xff, b'x']);
+        assert_eq!(rewritten[0], "task");
+        assert_eq!(rewritten[1], "reconcile");
+        assert_eq!(rewritten[2], "--");
+        assert_eq!(rewritten[3].as_os_str().as_bytes(), [0xff, b'x']);
+    }
+
+    #[test]
+    fn aliases_resolve_to_leaves_and_do_not_collide_with_root_names() {
+        let roots: Vec<&str> =
+            SUBCOMMANDS.iter().map(|entry| entry.name).collect();
+        for alias in super::ALIASES {
+            assert!(
+                !roots.contains(&alias.from),
+                "alias {} collides with a root command",
+                alias.from
+            );
+            assert!(
+                super::resolve_path(alias.to).is_some(),
+                "alias {} target {:?} is not a leaf",
+                alias.from,
+                alias.to
+            );
+        }
+    }
+
+    #[test]
+    fn every_native_command_is_on_exactly_one_canonical_path() {
+        use crate::native::NativeCommand;
+
+        let leaves = super::canonical_leaves();
+        let mut commands: Vec<NativeCommand> =
+            leaves.iter().map(|(_, leaf)| leaf.native_command).collect();
+        let total = commands.len();
+        commands.sort_by_key(|command| format!("{command:?}"));
+        commands.dedup();
+        assert_eq!(
+            commands.len(),
+            total,
+            "a NativeCommand is mounted on more than one canonical path"
+        );
+
+        let expected = [
+            NativeCommand::Capture,
+            NativeCommand::CaptureComplete,
+            NativeCommand::CaptureParse,
+            NativeCommand::CapturePomodoroName,
+            NativeCommand::CapturePomodoros,
+            NativeCommand::CaptureRewrite,
+            NativeCommand::CaptureSections,
+            NativeCommand::CaptureTargets,
+            NativeCommand::CaptureTaskId,
+            NativeCommand::CaptureTaskSections,
+            NativeCommand::CaptureTasks,
+            NativeCommand::Completion,
+            NativeCommand::Freshness,
+            NativeCommand::Gkeep,
+            NativeCommand::Query,
+            NativeCommand::Highlights,
+            NativeCommand::MoveDoneTasks,
+            NativeCommand::Nightly,
+            NativeCommand::NoteReady,
+            NativeCommand::Notify,
+            NativeCommand::Plan,
+            NativeCommand::Plugins,
+            NativeCommand::Pomodoro,
+            NativeCommand::Projects,
+            NativeCommand::Randomize,
+            NativeCommand::TaskStatusHooks,
+            NativeCommand::TmuxPomodoro,
+            NativeCommand::VaultSync,
+        ];
+        assert_eq!(commands.len(), expected.len());
+        for command in expected {
+            assert!(
+                leaves
+                    .iter()
+                    .any(|(_, leaf)| leaf.native_command == command),
+                "NativeCommand::{command:?} is not on a canonical path"
+            );
+        }
     }
 }

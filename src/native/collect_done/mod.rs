@@ -33,7 +33,7 @@ pub(crate) use transform::{
     trailing_block_id_in_line,
 };
 
-pub(super) const COMMAND_NAME: &str = "bob move-done-tasks";
+pub(super) const COMMAND_NAME: &str = "bob task archive";
 pub(crate) const DEFAULT_THRESHOLD: usize = 10;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Args {
@@ -357,7 +357,7 @@ Move done and canceled Bob task blocks into archive notes, link sources,
 repair archive metadata, and repair Obsidian links to moved block ids.
 
 example:
-  bob move-done-tasks --threshold 10
+  {COMMAND_NAME} --threshold 10
 
 options:
   -h, --help       show this help message and exit

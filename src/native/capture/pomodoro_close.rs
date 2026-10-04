@@ -1056,7 +1056,7 @@ pub(super) fn plan_pomodoro_close_link_item(
         && task_line_declares_dependencies(&previous_task_line)
     {
         warnings.push(format!(
-            "^{block_id} still declares dependencies; bob task-status-hooks may return it to Blocked"
+            "^{block_id} still declares dependencies; bob task reconcile may return it to Blocked"
         ));
     }
     if staged_task_contents != contents {
