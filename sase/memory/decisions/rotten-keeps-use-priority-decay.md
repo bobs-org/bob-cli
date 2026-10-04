@@ -8,8 +8,9 @@ summary:
   existing priority ladder; nothing decays silently and freshness itself still
   never changes priority or schedule."
 metadata:
-  status: accepted
+  status: superseded-in-part
   decided: 2026-10-03
+  superseded_by: decisions/decay-decisions-are-available-immediately
 ---
 
 **Applies to.** bob-cli, bob-plugins, vault.
@@ -61,3 +62,8 @@ human tally, never telemetry or automatic tuning.
 **Reopens when.** The post-activation calibration tally shows the limit
 misfires (mostly Keep suggests 4, mostly Drop suggests 2), or the recorded
 trial extends the 2026-10-19 boundary.
+
+Superseded in part: 2026-10-19 activation boundary and the
+trial-extension reopening condition only — see
+[[decisions/decay-decisions-are-available-immediately]]. Counting,
+explicit consent, priority/log writers, and exclusion rules stand.
