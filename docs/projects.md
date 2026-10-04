@@ -299,6 +299,10 @@ decay Less often entries still skip the card and open their stage.
 | Escape, `q`, `Q` | Close and discard uncommitted state; `q` never closes while a text field is focused |
 | `Ctrl+]` | Close from the card or any stage it opened, even from a focused date, reason, or Work summary field; nothing is written |
 
+Any card gesture that writes closes the card. On a Next or Pending task, a
+P-level or recommendation gesture first opens the Work summary stage (see
+[Scheduling Work Log prompt](#scheduling-work-log-prompt)).
+
 Same-level `2` on P2 is a deliberate re-pick that resets the roll streak.
 `Ctrl+Enter` remains a roll that can advance the decay ladder. Custom list
 properties stay in the More section; a More row opens that property's value
