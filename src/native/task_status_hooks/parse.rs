@@ -41,7 +41,7 @@ pub(super) fn should_skip_directory(name: &OsStr) -> bool {
         || is_always_excluded_note_directory_name(name)
 }
 
-pub(super) fn parse_tasks(
+pub(crate) fn parse_tasks(
     contents: &str,
     settings: &TasksSettings,
 ) -> Vec<TaskLine> {

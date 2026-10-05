@@ -8,17 +8,21 @@ use std::{
 use chrono::NaiveDateTime;
 
 use super::super::{
-    capture::{line_spans, LineSpan},
-    capture_language::{self, CloseLogEntry},
+    capture::line_spans,
+    capture_language::CloseLogEntry,
     capture_task_toggle, capture_work_log,
     note_tasks::{
         self, BlockIdLookup, NoteTask, NoteTaskSettings, TaskStatusType,
     },
     pomodoro,
-    task_dependencies::is_dependency_line,
+    task_complete::tree::{
+        add_or_replace_completion_field, close_policy_allows,
+        close_traversal_gate, embedded_children, line_text_at,
+        normalize_task_metadata_spacing, replace_line, task_has_global_filter,
+        RootPolicy,
+    },
     vault_links::LinkResolution,
 };
-use super::ledger::target_from_token;
 use super::links::{apply_edits, pomodoro_marker_prefix};
 use super::selection::{
     apply_close_selection, number_task_links, CloseSelection,
@@ -586,7 +590,9 @@ impl<'a, V: CloseVault> ClosePlanner<'a, V> {
         let Some(task) = self.task_for_key(&key, true)? else {
             return Ok(());
         };
-        if !matches!(task.status_symbol, ' ' | '*' | '/' | 'x') {
+        // The shared completion engine owns the traversal gate; the close
+        // runs it with `CloseLink` so `=x` keeps today's behavior exactly.
+        if !close_traversal_gate(RootPolicy::CloseLink, task.status_symbol) {
             return Ok(());
         }
         let Some(contents) = self.read_file(&key.0)? else {
@@ -606,7 +612,10 @@ impl<'a, V: CloseVault> ClosePlanner<'a, V> {
         let Some(current_task) = self.task_for_key(&key, true)? else {
             return Ok(());
         };
-        if matches!(current_task.status_symbol, ' ' | '*' | '/') {
+        if close_policy_allows(
+            RootPolicy::CloseLink,
+            current_task.status_symbol,
+        ) {
             let Some(line) = self.staged.get(&key.0).and_then(|contents| {
                 line_text_at(contents, current_task.line_index)
             }) else {
@@ -1202,29 +1211,6 @@ pub(crate) fn lookup_task(
     }
 }
 
-fn embedded_children(contents: &str, task: &NoteTask) -> Vec<BlockLinkTarget> {
-    let spans = line_spans(contents);
-    let mut children = Vec::new();
-    for (index, span) in spans.iter().enumerate().skip(task.line_index + 1) {
-        if span.end > task.block_end {
-            break;
-        }
-        // Closing a dependent never closes its prerequisites: Depends-On
-        // lines are not embedded-tree edges
-        // (`docs/task-dependencies.md` §5).
-        if is_dependency_line(span.text) {
-            continue;
-        }
-        children.extend(
-            wikilink_tokens(span.text)
-                .iter()
-                .filter(|token| token.embedded)
-                .map(|token| target_from_token(index + 1, token)),
-        );
-    }
-    children
-}
-
 fn work_log_node(node: &WorkLogNode) -> capture_work_log::WorkLogNode {
     capture_work_log::WorkLogNode {
         marker: node.marker.clone(),
@@ -1232,99 +1218,6 @@ fn work_log_node(node: &WorkLogNode) -> capture_work_log::WorkLogNode {
         children: node.children.iter().map(work_log_node).collect(),
         source_line: node.source_line,
     }
-}
-
-fn line_start(spans: &[LineSpan<'_>], line_index: usize) -> Option<usize> {
-    if line_index >= spans.len() {
-        return None;
-    }
-    Some(if line_index == 0 {
-        0
-    } else {
-        spans[line_index - 1].end
-    })
-}
-
-fn line_text_at(contents: &str, line_index: usize) -> Option<&str> {
-    line_spans(contents).get(line_index).map(|line| line.text)
-}
-
-fn replace_line(
-    contents: &str,
-    line_index: usize,
-    replacement: &str,
-) -> Option<String> {
-    let spans = line_spans(contents);
-    let span = spans.get(line_index)?;
-    let start = line_start(&spans, line_index)?;
-    let end = start.checked_add(span.text.len())?;
-    let mut output = String::with_capacity(contents.len() + replacement.len());
-    output.push_str(&contents[..start]);
-    output.push_str(replacement);
-    output.push_str(&contents[end..]);
-    Some(output)
-}
-
-fn normalize_task_metadata_spacing(line: &str) -> String {
-    let line = line.trim_end_matches([' ', '\t']);
-    let Some((before, last)) = line.rsplit_once(char::is_whitespace) else {
-        return line.to_string();
-    };
-    let id = last.strip_prefix('^').unwrap_or("");
-    if !capture_language::is_block_id(id) {
-        return line.to_string();
-    }
-    format!("{} ^{id}", before.trim_end_matches([' ', '\t']))
-}
-
-fn task_has_global_filter(line: &str, settings: &NoteTaskSettings) -> bool {
-    !settings.global_filter.is_empty()
-        && line
-            .split_whitespace()
-            .any(|token| token == settings.global_filter)
-}
-
-fn remove_completion_fields(line: &str) -> String {
-    let bytes = line.as_bytes();
-    let mut ranges = Vec::new();
-    let mut cursor = 0;
-    while let Some(relative) = line[cursor..].find("[completion::") {
-        let start = cursor + relative;
-        let Some(close_relative) = line[start..].find(']') else {
-            break;
-        };
-        let end = start + close_relative + 1;
-        let mut remove_start = start;
-        while remove_start > 0
-            && matches!(bytes[remove_start - 1], b' ' | b'\t')
-        {
-            remove_start -= 1;
-        }
-        ranges.push((remove_start, end));
-        cursor = end;
-    }
-    let mut updated = line.to_string();
-    for (start, end) in ranges.into_iter().rev() {
-        updated.replace_range(start..end, "");
-    }
-    normalize_task_metadata_spacing(&updated)
-}
-
-fn add_or_replace_completion_field(line: &str, date: &str) -> String {
-    let cleaned = remove_completion_fields(line);
-    let completion = format!("[completion:: {date}]");
-    let trimmed = cleaned.trim_end_matches([' ', '\t']);
-    let Some((before, last)) = trimmed.rsplit_once(char::is_whitespace) else {
-        return format!("{trimmed}  {completion}");
-    };
-    let id = last.strip_prefix('^').unwrap_or("");
-    if !capture_language::is_block_id(id) {
-        return format!("{trimmed}  {completion}");
-    }
-    format!(
-        "{}  {completion} ^{id}",
-        before.trim_end_matches([' ', '\t'])
-    )
 }
 
 fn retire_embedded_links(

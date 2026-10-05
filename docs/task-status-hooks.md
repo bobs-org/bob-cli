@@ -655,7 +655,9 @@ With no timed open entry, the last completed entry is the fallback:
 ```
 
 With only untimed open entries, the link is struck in place because no
-relocation target exists.
+relocation target exists. The scoped capture-side retirement reuses this
+same structural planner with its dedupe flag on, so a carried copy is
+dropped when the destination entry already links the task.
 
 A task must have a trailing `^block-id` to be linked. The edit changes only
 the status character, preserving indentation, list markers, descriptions,

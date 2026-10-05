@@ -59,6 +59,7 @@ mod projects;
 mod randomize;
 mod randomize_plan;
 mod style;
+mod task_complete;
 pub(crate) mod task_dependencies;
 mod task_fields;
 mod task_status_groups;

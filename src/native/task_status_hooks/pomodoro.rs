@@ -10,7 +10,7 @@ pub(super) fn logical_line(segment: &str) -> &str {
     without_lf.strip_suffix('\r').unwrap_or(without_lf)
 }
 
-pub(super) fn scan_pomodoros(
+pub(crate) fn scan_pomodoros(
     lines: &[&str],
     section: Range<usize>,
 ) -> PomodoroModel {
@@ -279,7 +279,7 @@ pub(super) fn marker_expected_for_occurrence(
     entry.completed && completed_pomodoro_marker_expected(link)
 }
 
-pub(super) fn plan_empty_pomodoro_removals(
+pub(crate) fn plan_empty_pomodoro_removals(
     contents: &str,
     original_model: &PomodoroModel,
 ) -> EmptyPomodoroPlan {
@@ -305,7 +305,7 @@ pub(super) fn plan_empty_pomodoro_removals(
     plan
 }
 
-pub(super) fn apply_empty_pomodoro_plan(
+pub(crate) fn apply_empty_pomodoro_plan(
     contents: &str,
     plan: &EmptyPomodoroPlan,
 ) -> String {

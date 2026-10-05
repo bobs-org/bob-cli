@@ -365,6 +365,7 @@ pub(super) fn sync_task_statuses(
         &settings.done_statuses,
         &settings.status_types,
         &deleted_lines,
+        false,
     );
     let structurally_updated_daily = apply_structural_plan(
         &daily_contents,
@@ -692,12 +693,12 @@ pub(super) fn sync_task_statuses(
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(super) struct TaskDependencyState {
-    pub(super) open_dependency_ids: Vec<String>,
-    pub(super) unresolved_dependency_ids: Vec<String>,
+pub(crate) struct TaskDependencyState {
+    pub(crate) open_dependency_ids: Vec<String>,
+    pub(crate) unresolved_dependency_ids: Vec<String>,
 }
 
-pub(super) fn task_dependency_states(
+pub(crate) fn task_dependency_states(
     files: &[FileScan],
     archive_closed_ids: &BTreeSet<String>,
 ) -> BTreeMap<(usize, usize), TaskDependencyState> {

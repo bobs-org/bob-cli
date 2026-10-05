@@ -739,7 +739,7 @@ fn link_from_token(
     }
 }
 
-pub(super) fn target_from_token(
+pub(crate) fn target_from_token(
     line: usize,
     token: &WikiToken,
 ) -> BlockLinkTarget {

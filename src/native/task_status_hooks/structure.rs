@@ -153,12 +153,13 @@ pub(super) fn plan_duplicate_line_removals(
     removed
 }
 
-pub(super) fn plan_structural_changes(
+pub(crate) fn plan_structural_changes(
     model: &PomodoroModel,
     resolved: &BTreeMap<RawReference, ResolvedReference>,
     done_statuses: &BTreeSet<char>,
     status_types: &BTreeMap<char, TaskStatusType>,
     duplicate_deleted_lines: &BTreeSet<usize>,
+    dedupe_into_destination: bool,
 ) -> StructuralPlan {
     let current = model
         .entries
@@ -169,10 +170,35 @@ pub(super) fn plan_structural_changes(
         .iter()
         .rposition(|entry| entry.completed && entry.has_child);
     let target_entry = current.or(fallback);
+    // With the opt-in dedupe flag, a bullet that would move is deleted
+    // instead when the destination entry already links the same task
+    // (struck or not). Reconcile passes `false` and is unaffected.
+    let destination_identities: BTreeSet<(PathBuf, String)> =
+        if dedupe_into_destination {
+            target_entry.map_or(BTreeSet::new(), |target| {
+                model
+                    .bullets
+                    .iter()
+                    .filter(|bullet| bullet.entry_index == target)
+                    .flat_map(|bullet| bullet.links.iter())
+                    .filter_map(|link| {
+                        resolved.get(&link.reference).map(|reference| {
+                            (
+                                reference.path.clone(),
+                                link.reference.block_id.clone(),
+                            )
+                        })
+                    })
+                    .collect()
+            })
+        } else {
+            BTreeSet::new()
+        };
     let mut token_edits: BTreeMap<usize, Vec<TokenEdit>> = BTreeMap::new();
     let mut move_candidates = Vec::new();
     let mut struck = Vec::new();
     let mut moved = Vec::new();
+    let mut deduplicated = Vec::new();
     let mut marker_added = Vec::new();
     let mut marker_removed = Vec::new();
     let mut removed_canceled = Vec::new();
@@ -247,6 +273,28 @@ pub(super) fn plan_structural_changes(
         } else {
             None
         };
+        if dedupe_into_destination
+            && let Some(target) = move_target
+            && bullet.end_line == bullet.line_index + 1
+            && !bullet.links.is_empty()
+            && bullet.links.iter().all(|link| {
+                resolved.get(&link.reference).is_some_and(|reference| {
+                    destination_identities.contains(&(
+                        reference.path.clone(),
+                        link.reference.block_id.clone(),
+                    ))
+                })
+            })
+        {
+            deleted_lines.extend(bullet.line_index..bullet.end_line);
+            deduplicated.push(DeduplicatedCompletedReference {
+                target: bullet.links[0].reference.target.clone(),
+                block_id: bullet.links[0].reference.block_id.clone(),
+                source_pomodoro: source.context.clone(),
+                destination_pomodoro: model.entries[target].context.clone(),
+            });
+            continue;
+        }
         let final_entry = move_target.unwrap_or(bullet.entry_index);
         for link in &bullet.links {
             let retire = completed_links
@@ -326,13 +374,14 @@ pub(super) fn plan_structural_changes(
         target_entry,
         struck,
         moved,
+        deduplicated,
         marker_added,
         marker_removed,
         removed_canceled,
     }
 }
 
-pub(super) fn apply_structural_plan(
+pub(crate) fn apply_structural_plan(
     contents: &str,
     model: &PomodoroModel,
     plan: &StructuralPlan,

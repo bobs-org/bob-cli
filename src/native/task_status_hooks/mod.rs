@@ -281,3 +281,17 @@ pub(crate) use references::{
 pub(crate) use settings::{read_tasks_settings, validate_blocked_status};
 pub(crate) use structure::fenced_lines;
 pub(crate) use sync::{canonical_daily_date, daily_anchor_date};
+// Shared completion-engine surface: the scoped ledger retirement and
+// dependent recovery in `task_complete` build on these.
+pub(crate) use model::{
+    DeduplicatedCompletedReference, EmptyPomodoroPlan, FileScan, LinkBullet,
+    LinkOccurrence, MovedCompletedReference, PomodoroEntry, PomodoroModel,
+    RawReference, RemovedEmptyPomodoro, ResolvedReference,
+    StruckCompletedReference, StructuralPlan, TaskLine,
+};
+pub(crate) use parse::parse_tasks;
+pub(crate) use pomodoro::{
+    apply_empty_pomodoro_plan, plan_empty_pomodoro_removals, scan_pomodoros,
+};
+pub(crate) use structure::{apply_structural_plan, plan_structural_changes};
+pub(crate) use sync::{task_dependency_states, TaskDependencyState};

@@ -67,34 +67,45 @@ pub(super) struct DependencyWarning {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub(super) struct StruckCompletedReference {
-    pub(super) target: String,
-    pub(super) block_id: String,
-    pub(super) pomodoro: String,
-    pub(super) removed_embed: bool,
+pub(crate) struct StruckCompletedReference {
+    pub(crate) target: String,
+    pub(crate) block_id: String,
+    pub(crate) pomodoro: String,
+    pub(crate) removed_embed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub(super) struct MovedCompletedReference {
-    pub(super) target: String,
-    pub(super) block_id: String,
-    pub(super) source_pomodoro: String,
-    pub(super) destination_pomodoro: String,
+pub(crate) struct MovedCompletedReference {
+    pub(crate) target: String,
+    pub(crate) block_id: String,
+    pub(crate) source_pomodoro: String,
+    pub(crate) destination_pomodoro: String,
+}
+
+/// A carried bullet deleted instead of moved because the destination entry
+/// already links the task. Reported only when the structural planner runs
+/// with its opt-in dedupe flag.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct DeduplicatedCompletedReference {
+    pub(crate) target: String,
+    pub(crate) block_id: String,
+    pub(crate) source_pomodoro: String,
+    pub(crate) destination_pomodoro: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub(super) struct MarkerReference {
-    pub(super) target: String,
-    pub(super) block_id: String,
-    pub(super) pomodoro: String,
+pub(crate) struct MarkerReference {
+    pub(crate) target: String,
+    pub(crate) block_id: String,
+    pub(crate) pomodoro: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub(super) struct RemovedCanceledReference {
-    pub(super) target: String,
-    pub(super) block_id: String,
-    pub(super) line_number: usize,
-    pub(super) pomodoro: String,
+pub(crate) struct RemovedCanceledReference {
+    pub(crate) target: String,
+    pub(crate) block_id: String,
+    pub(crate) line_number: usize,
+    pub(crate) pomodoro: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -112,9 +123,9 @@ pub(super) struct RemovedDuplicateLine {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub(super) struct RemovedEmptyPomodoro {
-    pub(super) line_number: usize,
-    pub(super) line: String,
+pub(crate) struct RemovedEmptyPomodoro {
+    pub(crate) line_number: usize,
+    pub(crate) line: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -191,11 +202,11 @@ pub(super) struct SyncResult {
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct FileScan {
-    pub(super) path: PathBuf,
-    pub(super) relative_path: PathBuf,
-    pub(super) contents: String,
-    pub(super) tasks: Vec<TaskLine>,
+pub(crate) struct FileScan {
+    pub(crate) path: PathBuf,
+    pub(crate) relative_path: PathBuf,
+    pub(crate) contents: String,
+    pub(crate) tasks: Vec<TaskLine>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -212,23 +223,23 @@ impl NoteKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct TaskLine {
-    pub(super) line_index: usize,
-    pub(super) status: char,
-    pub(super) status_byte_offset: usize,
-    pub(super) block_id: Option<String>,
-    pub(super) task_id: Option<String>,
-    pub(super) depends_on: Vec<String>,
-    pub(super) scheduled: Option<NaiveDate>,
-    pub(super) status_type: TaskStatusType,
-    pub(super) status_recognized: bool,
-    pub(super) description: String,
+pub(crate) struct TaskLine {
+    pub(crate) line_index: usize,
+    pub(crate) status: char,
+    pub(crate) status_byte_offset: usize,
+    pub(crate) block_id: Option<String>,
+    pub(crate) task_id: Option<String>,
+    pub(crate) depends_on: Vec<String>,
+    pub(crate) scheduled: Option<NaiveDate>,
+    pub(crate) status_type: TaskStatusType,
+    pub(crate) status_recognized: bool,
+    pub(crate) description: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(super) struct RawReference {
-    pub(super) target: String,
-    pub(super) block_id: String,
+pub(crate) struct RawReference {
+    pub(crate) target: String,
+    pub(crate) block_id: String,
 }
 
 #[derive(Debug, Clone)]
@@ -271,10 +282,10 @@ pub(super) struct ComposeContext<'a> {
 #[derive(Debug, Clone)]
 pub(crate) struct TasksSettings {
     pub(crate) global_filter: String,
-    pub(super) done_statuses: BTreeSet<char>,
+    pub(crate) done_statuses: BTreeSet<char>,
     pub(crate) status_types: BTreeMap<char, TaskStatusType>,
     pub(crate) status_definitions: Vec<TaskStatusDefinition>,
-    pub(super) status_settings_error: Option<String>,
+    pub(crate) status_settings_error: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -332,55 +343,55 @@ impl TaskStatusType {
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct PomodoroEntry {
-    pub(super) line_index: usize,
-    pub(super) end_line: usize,
-    pub(super) open: bool,
-    pub(super) completed: bool,
-    pub(super) timed: bool,
-    pub(super) has_child: bool,
-    pub(super) child_indentation: Option<String>,
-    pub(super) context: String,
+pub(crate) struct PomodoroEntry {
+    pub(crate) line_index: usize,
+    pub(crate) end_line: usize,
+    pub(crate) open: bool,
+    pub(crate) completed: bool,
+    pub(crate) timed: bool,
+    pub(crate) has_child: bool,
+    pub(crate) child_indentation: Option<String>,
+    pub(crate) context: String,
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct LinkOccurrence {
-    pub(super) reference: RawReference,
-    pub(super) edit_start: usize,
-    pub(super) edit_end: usize,
-    pub(super) current_token: String,
-    pub(super) preserved_marked_token: String,
-    pub(super) preserved_unmarked_token: String,
-    pub(super) retired_marked_token: String,
-    pub(super) retired_unmarked_token: String,
-    pub(super) embedded: bool,
-    pub(super) struck: bool,
-    pub(super) marker_count: usize,
+pub(crate) struct LinkOccurrence {
+    pub(crate) reference: RawReference,
+    pub(crate) edit_start: usize,
+    pub(crate) edit_end: usize,
+    pub(crate) current_token: String,
+    pub(crate) preserved_marked_token: String,
+    pub(crate) preserved_unmarked_token: String,
+    pub(crate) retired_marked_token: String,
+    pub(crate) retired_unmarked_token: String,
+    pub(crate) embedded: bool,
+    pub(crate) struck: bool,
+    pub(crate) marker_count: usize,
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct LinkBullet {
-    pub(super) entry_index: usize,
-    pub(super) line_index: usize,
-    pub(super) end_line: usize,
-    pub(super) indentation: String,
-    pub(super) links: Vec<LinkOccurrence>,
+pub(crate) struct LinkBullet {
+    pub(crate) entry_index: usize,
+    pub(crate) line_index: usize,
+    pub(crate) end_line: usize,
+    pub(crate) indentation: String,
+    pub(crate) links: Vec<LinkOccurrence>,
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct PomodoroModel {
-    pub(super) entries: Vec<PomodoroEntry>,
-    pub(super) bullets: Vec<LinkBullet>,
-    pub(super) open_pomodoros: usize,
-    pub(super) raw_references: BTreeSet<RawReference>,
-    pub(super) recent_references: BTreeSet<RawReference>,
-    pub(super) all_references: BTreeSet<RawReference>,
+pub(crate) struct PomodoroModel {
+    pub(crate) entries: Vec<PomodoroEntry>,
+    pub(crate) bullets: Vec<LinkBullet>,
+    pub(crate) open_pomodoros: usize,
+    pub(crate) raw_references: BTreeSet<RawReference>,
+    pub(crate) recent_references: BTreeSet<RawReference>,
+    pub(crate) all_references: BTreeSet<RawReference>,
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct ResolvedReference {
-    pub(super) path: PathBuf,
-    pub(super) statuses: Vec<char>,
+pub(crate) struct ResolvedReference {
+    pub(crate) path: PathBuf,
+    pub(crate) statuses: Vec<char>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -408,36 +419,37 @@ pub(super) enum ResolvePathError {
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct StructuralPlan {
-    pub(super) token_edits: BTreeMap<usize, Vec<TokenEdit>>,
-    pub(super) moves: Vec<BulletMove>,
-    pub(super) deleted_lines: BTreeSet<usize>,
-    pub(super) target_entry: Option<usize>,
-    pub(super) struck: Vec<StruckCompletedReference>,
-    pub(super) moved: Vec<MovedCompletedReference>,
-    pub(super) marker_added: Vec<MarkerReference>,
-    pub(super) marker_removed: Vec<MarkerReference>,
-    pub(super) removed_canceled: Vec<RemovedCanceledReference>,
+pub(crate) struct StructuralPlan {
+    pub(crate) token_edits: BTreeMap<usize, Vec<TokenEdit>>,
+    pub(crate) moves: Vec<BulletMove>,
+    pub(crate) deleted_lines: BTreeSet<usize>,
+    pub(crate) target_entry: Option<usize>,
+    pub(crate) struck: Vec<StruckCompletedReference>,
+    pub(crate) moved: Vec<MovedCompletedReference>,
+    pub(crate) deduplicated: Vec<DeduplicatedCompletedReference>,
+    pub(crate) marker_added: Vec<MarkerReference>,
+    pub(crate) marker_removed: Vec<MarkerReference>,
+    pub(crate) removed_canceled: Vec<RemovedCanceledReference>,
 }
 
 #[derive(Debug, Clone, Default)]
-pub(super) struct EmptyPomodoroPlan {
-    pub(super) deleted_lines: BTreeSet<usize>,
-    pub(super) removed: Vec<RemovedEmptyPomodoro>,
+pub(crate) struct EmptyPomodoroPlan {
+    pub(crate) deleted_lines: BTreeSet<usize>,
+    pub(crate) removed: Vec<RemovedEmptyPomodoro>,
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct TokenEdit {
-    pub(super) start: usize,
-    pub(super) end: usize,
-    pub(super) replacement: String,
+pub(crate) struct TokenEdit {
+    pub(crate) start: usize,
+    pub(crate) end: usize,
+    pub(crate) replacement: String,
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct BulletMove {
-    pub(super) start_line: usize,
-    pub(super) end_line: usize,
-    pub(super) source_indentation: String,
+pub(crate) struct BulletMove {
+    pub(crate) start_line: usize,
+    pub(crate) end_line: usize,
+    pub(crate) source_indentation: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

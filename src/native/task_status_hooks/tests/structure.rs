@@ -153,6 +153,7 @@ fn full_line_deletion_preserves_children_crlf_and_final_line_ending() {
         &BTreeSet::from(['x', 'X']),
         &test_settings().status_types,
         &deleted_lines,
+        false,
     );
 
     assert_eq!(
@@ -191,6 +192,7 @@ fn deleted_completed_duplicate_is_not_retired_moved_or_reinserted() {
         &BTreeSet::from(['x', 'X']),
         &test_settings().status_types,
         &deleted_lines,
+        false,
     );
 
     assert_eq!(plan.struck.len(), 1);
@@ -237,6 +239,7 @@ fn completed_fallback_does_not_take_mixed_live_bullets() {
         &BTreeSet::from(['x', 'X']),
         &test_settings().status_types,
         &BTreeSet::new(),
+        false,
     );
     assert!(plan.moves.is_empty());
     assert_eq!(plan.struck.len(), 1);
@@ -305,6 +308,7 @@ fn moves_completed_mixed_bullet_subtree_to_current_and_strikes_only_done() {
         &BTreeSet::from(['x', 'X']),
         &test_settings().status_types,
         &BTreeSet::new(),
+        false,
     );
     let updated = apply_structural_plan(contents, &model, &plan);
     assert_eq!(
@@ -342,6 +346,7 @@ fn repairs_completed_pomodoro_links_in_place_and_is_idempotent() {
         &BTreeSet::from(['x', 'X']),
         &test_settings().status_types,
         &BTreeSet::new(),
+        false,
     );
     assert!(plan.moves.is_empty());
     assert_eq!(plan.struck.len(), 3);
@@ -365,6 +370,7 @@ fn repairs_completed_pomodoro_links_in_place_and_is_idempotent() {
         &BTreeSet::from(['x', 'X']),
         &test_settings().status_types,
         &BTreeSet::new(),
+        false,
     );
     assert!(
         second.token_edits.is_empty(),
@@ -402,6 +408,7 @@ fn repairs_markers_by_owner_and_marks_completed_fallback_moves() {
         &BTreeSet::from(['x', 'X']),
         &test_settings().status_types,
         &BTreeSet::new(),
+        false,
     );
     assert_eq!(plan.marker_added.len(), 2);
     assert_eq!(plan.marker_removed.len(), 2);
@@ -431,6 +438,7 @@ fn conflicting_duplicate_statuses_are_not_normalized() {
         &BTreeSet::from(['x', 'X']),
         &test_settings().status_types,
         &BTreeSet::new(),
+        false,
     );
     assert!(plan.token_edits.is_empty());
     assert!(plan.moves.is_empty());
@@ -472,6 +480,7 @@ fn canceled_reference_removal_deletes_complete_mixed_content_items() {
         &settings.done_statuses,
         &settings.status_types,
         &BTreeSet::new(),
+        false,
     );
 
     assert_eq!(
@@ -550,6 +559,7 @@ fn canceled_reference_removal_deletes_complete_mixed_content_items() {
         &settings.done_statuses,
         &settings.status_types,
         &BTreeSet::new(),
+        false,
     );
     assert!(second.removed_canceled.is_empty());
     assert!(second.token_edits.is_empty());
@@ -593,6 +603,7 @@ fn canceled_subtrees_compose_with_nested_and_moving_bullets() {
         &settings.done_statuses,
         &settings.status_types,
         &BTreeSet::new(),
+        false,
     );
 
     assert_eq!(
@@ -640,6 +651,7 @@ fn canceled_subtree_deletion_preserves_crlf_and_no_final_newline() {
         &settings.done_statuses,
         &settings.status_types,
         &BTreeSet::new(),
+        false,
     );
 
     assert_eq!(
@@ -675,6 +687,7 @@ fn duplicate_deleted_lines_do_not_report_canceled_reference_edits() {
         &settings.done_statuses,
         &settings.status_types,
         &deleted_lines,
+        false,
     );
 
     assert_eq!(removals.len(), 1);
@@ -781,6 +794,7 @@ fn entries_emptied_by_duplicate_cleanup_are_removed_in_same_pass() {
         &settings.done_statuses,
         &settings.status_types,
         &deleted_lines,
+        false,
     );
     let structurally_updated =
         apply_structural_plan(contents, &model, &structural);
@@ -824,6 +838,7 @@ fn moving_last_child_removes_source_but_retains_destination() {
         &settings.done_statuses,
         &settings.status_types,
         &BTreeSet::new(),
+        false,
     );
     let structurally_updated =
         apply_structural_plan(contents, &model, &structural);
@@ -872,6 +887,7 @@ fn empty_timed_entries_are_not_current_targets_or_ambiguity_inputs() {
         &settings.done_statuses,
         &settings.status_types,
         &BTreeSet::new(),
+        false,
     );
 
     assert_eq!(non_empty_timed, 1);
