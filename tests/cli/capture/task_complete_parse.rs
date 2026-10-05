@@ -5,8 +5,6 @@ use crate::support::*;
 use std::fs;
 
 const BANG_QUERY: &str = "`!fix` opens the task picker; pick a task to insert its `!<note>:<block-id>` token, or write one yourself (for example `!sase:fix-flaky`)";
-const BANG_PENDING: &str =
-    "`!note:block-id` completion is not available in this build yet";
 
 fn parse_json(draft: &str) -> serde_json::Value {
     let output = bob_command()
@@ -160,7 +158,10 @@ fn task_complete_query_refuses_with_the_picker_teaching_error() {
 }
 
 #[test]
-fn task_complete_token_refuses_until_execute_lands() {
+fn task_complete_token_executes_now_that_execute_landed() {
+    // The `execute` phase replaced the temporary planner refusal with the
+    // staged batch writer: an unresolvable note now fails in resolution
+    // (still a usage error, still no inbox task).
     let temp = TempDir::new("bob-cli-task-complete-pending");
     let vault = temp.path().join("vault");
     fs::create_dir_all(&vault).expect("create vault");
@@ -169,14 +170,12 @@ fn task_complete_token_refuses_until_execute_lands() {
     assert_eq!(
         output.status.code(),
         Some(2),
-        "a complete token is a usage error until execute lands:\n{}",
+        "an unresolvable note is a usage error:\n{}",
         format_output(&output)
     );
     assert_eq!(
         stderr(&output).trim(),
-        format!(
-            "bob capture: capture item 1 starting on line 1: {BANG_PENDING}"
-        ),
+        "bob capture: capture item 1 starting on line 1: no such note: sase",
         "unexpected refusal:\n{}",
         format_output(&output)
     );

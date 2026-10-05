@@ -12,6 +12,7 @@ pub(crate) enum Placement {
     Closed,
     Started,
     Updated,
+    Completed,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -307,8 +308,97 @@ pub(super) struct CaptureItemResult {
     pub(super) pomodoro_close: Option<PomodoroCloseSummaryJson>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) dependency_update: Option<DependencyUpdateJson>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) task_complete: Option<TaskCompleteSummaryJson>,
     #[serde(skip)]
     pub(super) toggle_task_description: Option<String>,
+}
+
+/// One `task_complete` result: what completing a whole-item `!` wrote.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct TaskCompleteSummaryJson {
+    pub(super) raw: String,
+    pub(super) note: String,
+    pub(super) note_path: String,
+    pub(super) block_id: String,
+    pub(super) action: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) completion_date: Option<String>,
+    pub(super) subtasks: Vec<TaskCompleteSubtaskJson>,
+    pub(super) subtasks_left_open: Vec<TaskCompleteLeftOpenJson>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) ledger: Option<TaskCompleteLedgerJson>,
+    pub(super) unblocked: Vec<TaskCompleteUnblockedJson>,
+}
+
+/// One embedded subtask closed by a `task_complete` item.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct TaskCompleteSubtaskJson {
+    pub(super) note_path: String,
+    pub(super) block_id: String,
+    pub(super) line: usize,
+    pub(super) text: String,
+    pub(super) previous_status_symbol: char,
+    pub(super) previous_status_name: String,
+    pub(super) status_symbol: char,
+    pub(super) status_name: String,
+}
+
+/// One descendant left open by a `task_complete` item.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct TaskCompleteLeftOpenJson {
+    pub(super) note_path: String,
+    pub(super) block_id: String,
+    pub(super) line: usize,
+    pub(super) text: String,
+    pub(super) status_symbol: char,
+    pub(super) status_name: String,
+    pub(super) reason: String,
+}
+
+/// Ledger retirement for a `task_complete` item, omitted when the daily
+/// note was untouched.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct TaskCompleteLedgerJson {
+    pub(super) day_file: String,
+    pub(super) struck: usize,
+    pub(super) moved: Vec<TaskCompleteLedgerMoveJson>,
+    pub(super) deduplicated: usize,
+    pub(super) removed_placeholders: Vec<TaskCompleteRemovedPlaceholderJson>,
+}
+
+/// One moved bullet's source and destination entries.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct TaskCompleteLedgerMoveJson {
+    pub(super) from: TaskCompleteLedgerEndpointJson,
+    pub(super) to: TaskCompleteLedgerEndpointJson,
+}
+
+/// One ledger entry endpoint: 1-based line, short name, entry status.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct TaskCompleteLedgerEndpointJson {
+    pub(super) line: usize,
+    pub(super) name: String,
+    pub(super) status: String,
+}
+
+/// One placeholder removed by a `task_complete` item.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct TaskCompleteRemovedPlaceholderJson {
+    pub(super) name: String,
+}
+
+/// One dependent recovered by a `task_complete` item.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct TaskCompleteUnblockedJson {
+    pub(super) note_path: String,
+    pub(super) block_id: String,
+    pub(super) line: usize,
+    pub(super) text: String,
+    pub(super) previous_status_symbol: char,
+    pub(super) previous_status_name: String,
+    pub(super) status_symbol: char,
+    pub(super) status_name: String,
 }
 
 /// Summary JSON for one item's dependency effects, reported as
@@ -505,6 +595,16 @@ pub(super) fn print_human_item_success(
     }
     if result.toggle_direction.is_some() {
         print_human_task_toggle_success(
+            result,
+            &styler,
+            &prefix,
+            &ordinal,
+            &target_label,
+        );
+        return;
+    }
+    if result.kind == "task_complete" {
+        print_human_task_complete_success(
             result,
             &styler,
             &prefix,
@@ -1512,8 +1612,153 @@ pub(super) fn style_task_status_marker(
         '/' => styler.blue(&marker),
         '*' => styler.yellow(&marker),
         '?' => styler.red(&marker),
+        'x' | 'X' => styler.green(&marker),
         _ => styler.dim(&marker),
     }
+}
+
+/// Human rendering for a whole-item `!` completion: the status
+/// transition, closed subtasks, left-open descendants, ledger effects,
+/// and unblocked dependents.
+pub(super) fn print_human_task_complete_success(
+    result: &CaptureItemResult,
+    styler: &Styler,
+    prefix: &str,
+    ordinal: &str,
+    target_label: &str,
+) {
+    let Some(summary) = result.task_complete.as_ref() else {
+        let verb = if result.dry_run {
+            "would complete"
+        } else {
+            "completed"
+        };
+        println!("{prefix} {verb}  {ordinal}{target_label}");
+        return;
+    };
+    let block_label = styler.cyan(&format!("^{}", summary.block_id));
+    if summary.action == "already_done" {
+        let marker = result
+            .status_symbol
+            .map(|symbol| style_task_status_marker(styler, symbol))
+            .unwrap_or_else(|| styler.dim("[x]"));
+        let text = task_complete_display_text(
+            &result.task_line,
+            Some(summary.block_id.as_str()),
+        );
+        let body = if text.is_empty() {
+            format!("{marker}")
+        } else {
+            format!("{marker} {text}")
+        };
+        println!(
+            "{prefix} already done {body}  {ordinal}{target_label} {block_label} · nothing to change"
+        );
+        return;
+    }
+    let verb = if result.dry_run {
+        "would complete"
+    } else {
+        "completed"
+    };
+    let previous_marker = result
+        .previous_status_symbol
+        .map(|symbol| style_task_status_marker(styler, symbol))
+        .unwrap_or_else(|| "?".to_string());
+    let current_marker = result
+        .status_symbol
+        .map(|symbol| style_task_status_marker(styler, symbol))
+        .unwrap_or_else(|| "?".to_string());
+    let text = task_complete_display_text(
+        &result.task_line,
+        Some(summary.block_id.as_str()),
+    );
+    let head = if text.is_empty() {
+        format!("{previous_marker} → {current_marker}")
+    } else {
+        format!("{previous_marker} → {current_marker} {text}")
+    };
+    println!("{prefix} {verb} {head}  {ordinal}{target_label} {block_label}");
+    for subtask in &summary.subtasks {
+        let previous =
+            style_task_status_marker(styler, subtask.previous_status_symbol);
+        let current = style_task_status_marker(styler, subtask.status_symbol);
+        let locator = format!("{} ^{}", subtask.note_path, subtask.block_id);
+        if subtask.text.is_empty() {
+            println!("    {previous} → {current}  {locator}");
+        } else {
+            println!("    {previous} → {current} {}  {locator}", subtask.text);
+        }
+    }
+    for left in &summary.subtasks_left_open {
+        let marker = style_task_status_marker(styler, left.status_symbol);
+        let locator = format!("{} ^{}", left.note_path, left.block_id);
+        if left.text.is_empty() {
+            println!("    left {} {marker}  {locator}", left.status_name);
+        } else {
+            println!(
+                "    left {} {marker} {}  {locator}",
+                left.status_name, left.text
+            );
+        }
+    }
+    if let Some(ledger) = summary.ledger.as_ref() {
+        let mut parts: Vec<String> = Vec::new();
+        for item in &ledger.moved {
+            parts.push(format!(
+                "Task Link moved {} → {} (struck)",
+                item.from.name, item.to.name
+            ));
+        }
+        if ledger.moved.is_empty() && ledger.struck > 0 {
+            parts.push("Task Link struck".to_string());
+        }
+        if ledger.deduplicated > 0 {
+            let noun = if ledger.deduplicated == 1 {
+                "duplicate"
+            } else {
+                "duplicates"
+            };
+            parts.push(format!(
+                "dropped {} {noun} already linked at the destination",
+                ledger.deduplicated
+            ));
+        }
+        for removed in &ledger.removed_placeholders {
+            parts.push(format!("removed empty {}", removed.name));
+        }
+        parts.push(ledger.day_file.clone());
+        println!("  ledger  {}", parts.join(" · "));
+    }
+    for unblocked in &summary.unblocked {
+        let previous =
+            style_task_status_marker(styler, unblocked.previous_status_symbol);
+        let current = style_task_status_marker(styler, unblocked.status_symbol);
+        let locator =
+            format!("{} ^{}", unblocked.note_path, unblocked.block_id);
+        if unblocked.text.is_empty() {
+            println!("  unblocked {previous} → {current}  {locator}");
+        } else {
+            println!(
+                "  unblocked {previous} → {current} {}  {locator}",
+                unblocked.text
+            );
+        }
+    }
+}
+
+/// Clean display text for a completed task line: the body after the
+/// status box with the global filter, inline fields, and trailing block
+/// ID removed.
+fn task_complete_display_text(
+    task_line: &str,
+    block_id: Option<&str>,
+) -> String {
+    let body = task_line
+        .find("] ")
+        .map(|index| task_line[index + 2..].to_string())
+        .unwrap_or_else(|| task_line.to_string());
+    note_tasks::clean_description(&body, "#task", block_id)
 }
 
 pub(super) fn print_clip_file_confirmation(

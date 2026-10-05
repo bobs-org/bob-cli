@@ -184,7 +184,8 @@ separate steps:
 3. **Link and run today's work** on a Pomodoro in the daily note. Link with
    a marker-only `@route:id` capture (which raises Ready to Next), ensure an
    already-planned task with a bare `@route+id` capture, explicitly toggle a
-   task with `@route+id!`, or add a task link under a Pomodoro in Obsidian.
+   task with `@route+id!`, complete finished work with
+   `bob capture '!sase:fix-flaky'`, or add a task link under a Pomodoro in Obsidian.
    Start the queued session with `bob capture '='`, then close it with an
    outcome such as `bob capture '=x'` or `bob capture '=!'` (see
    [Capture](#capture)). Starting the timer leaves task statuses unchanged;

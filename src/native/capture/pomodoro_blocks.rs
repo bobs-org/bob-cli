@@ -32,6 +32,10 @@ pub(super) enum PomodoroBlockBefore {
     At(usize),
     Resolve,
     Created,
+    /// An entry the item deleted (an emptied placeholder): no post-state
+    /// headline exists. Retirement-driven captures report this so the
+    /// vanished-entry guard does not fire on an intended removal.
+    Removed(usize),
 }
 
 /// One planner-reported touch of a Pomodoro block. `after` is the 0-based
@@ -81,6 +85,17 @@ impl PomodoroBlockRef {
         Self {
             role: PomodoroBlockRole::Unlinked,
             before: PomodoroBlockBefore::At(before),
+            after: None,
+        }
+    }
+
+    /// An entry the item deleted outright (an emptied placeholder): the
+    /// tracker drops any tracked headline here and never reports the
+    /// entry itself.
+    pub(super) fn removed(before: usize) -> Self {
+        Self {
+            role: PomodoroBlockRole::Changed,
+            before: PomodoroBlockBefore::Removed(before),
             after: None,
         }
     }
@@ -167,8 +182,21 @@ impl PomodoroBlockTracker {
         let post_section_end =
             section_end(&post_lines).unwrap_or(post_lines.len());
         let (old_to_new, new_to_old) = line_maps(&pre_lines, &post_lines);
+        let removed: std::collections::BTreeSet<usize> = refs
+            .iter()
+            .filter_map(|item| match item.before {
+                PomodoroBlockBefore::Removed(before) => Some(before),
+                _ => None,
+            })
+            .collect();
+        let live_refs = refs
+            .into_iter()
+            .filter(|item| {
+                !matches!(item.before, PomodoroBlockBefore::Removed(_))
+            })
+            .collect::<Vec<_>>();
         let mut resolved = resolve_refs(
-            refs,
+            live_refs,
             &pre_scan,
             &post_scan,
             &pre_lines,
@@ -183,6 +211,7 @@ impl PomodoroBlockTracker {
             .collect::<std::collections::BTreeSet<_>>();
         autodetect(
             &mut resolved,
+            &removed,
             &pre_lines,
             &post_lines,
             &pre_scan,
@@ -195,6 +224,7 @@ impl PomodoroBlockTracker {
         );
         self.forward(
             &resolved,
+            &removed,
             &old_to_new,
             &pre_lines,
             &post_lines,
@@ -212,6 +242,7 @@ impl PomodoroBlockTracker {
     fn forward(
         &mut self,
         resolved: &[ResolvedBlockRef],
+        removed: &std::collections::BTreeSet<usize>,
         old_to_new: &BTreeMap<usize, usize>,
         pre_lines: &[&str],
         post_lines: &[&str],
@@ -219,6 +250,10 @@ impl PomodoroBlockTracker {
     ) {
         let mut drop_block = vec![false; self.tracked.len()];
         for (index, tracked) in self.tracked.iter_mut().enumerate() {
+            if removed.contains(&tracked.current) {
+                drop_block[index] = true;
+                continue;
+            }
             let matches = resolved
                 .iter()
                 .filter(|item| {
@@ -294,6 +329,15 @@ impl PomodoroBlockTracker {
                     debug_assert!(
                         false,
                         "unresolved pomodoro block ref reached tracking"
+                    );
+                    continue;
+                }
+                // Removals never reach tracking: `track_item` filters
+                // them out before resolution.
+                PomodoroBlockBefore::Removed(_) => {
+                    debug_assert!(
+                        false,
+                        "removed pomodoro block ref reached tracking"
                     );
                     continue;
                 }
@@ -552,6 +596,14 @@ fn resolve_refs(
                     "pomodoro block ref needs an explicit after line"
                 );
             }
+            // Removals never reach resolution: `track_item` filters them
+            // out before this match.
+            (PomodoroBlockBefore::Removed(_), _) => {
+                debug_assert!(
+                    false,
+                    "removed pomodoro block ref reached resolution"
+                );
+            }
             (PomodoroBlockBefore::Created, Some(after)) => {
                 if post_entries.contains(&after) {
                     resolved.push(ResolvedBlockRef {
@@ -581,6 +633,7 @@ fn resolve_refs(
 #[allow(clippy::too_many_arguments)]
 fn autodetect(
     resolved: &mut Vec<ResolvedBlockRef>,
+    removed: &std::collections::BTreeSet<usize>,
     pre_lines: &[&str],
     post_lines: &[&str],
     pre_scan: &capture_pomodoros::PomodoroScan,
@@ -697,6 +750,9 @@ fn autodetect(
     for entry in &pre_scan.entries {
         let headline = entry.line.saturating_sub(1);
         if tracked_current.contains(&headline) {
+            continue;
+        }
+        if removed.contains(&headline) {
             continue;
         }
         if old_to_new.contains_key(&headline) {

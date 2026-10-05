@@ -147,13 +147,23 @@ pub(super) fn plan_capture_item(
             dependency_ctx,
         );
     }
-    // Temporary planner arm: `!note:block-id` parses but its writer has
-    // not landed yet, so every complete token refuses here. `execute`
-    // replaces this arm with the staged batch writer.
-    if matches!(parsed.kind, CaptureKind::TaskComplete { .. }) {
-        return Err(CaptureError::usage(
-            crate::native::capture_language::BANG_EXECUTE_PENDING_ERROR,
-        ));
+    if let CaptureKind::TaskComplete {
+        raw,
+        note,
+        block_id,
+        ..
+    } = parsed.kind.clone()
+    {
+        return plan_task_complete_item(
+            request,
+            &parsed,
+            &raw,
+            &note,
+            &block_id,
+            today,
+            planner,
+            dependency_ctx,
+        );
     }
     if let CaptureKind::PomodoroClose { spec } = parsed.kind.clone() {
         return plan_pomodoro_close_item(
@@ -318,6 +328,7 @@ pub(super) fn plan_capture_item(
                 pomodoro_shift: None,
                 pomodoro_close: None,
                 dependency_update: None,
+                task_complete: None,
                 toggle_task_description: Some(toggle.task_description.clone()),
             },
             clip_plan: None,
@@ -420,6 +431,7 @@ pub(super) fn plan_capture_item(
                 pomodoro_shift: None,
                 pomodoro_close: None,
                 dependency_update: None,
+                task_complete: None,
                 toggle_task_description: Some(link.task_description.clone()),
             },
             clip_plan: None,
@@ -931,6 +943,7 @@ pub(super) fn plan_capture_item(
             pomodoro_shift: None,
             pomodoro_close: None,
             dependency_update,
+            task_complete: None,
             toggle_task_description: None,
         },
         clip_plan,

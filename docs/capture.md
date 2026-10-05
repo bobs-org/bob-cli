@@ -79,7 +79,7 @@ anything is written, and any failure rolls the whole batch back.
 | `&note:block-id` with no other text | Incomplete: a prerequisite is selected but no dependent is named (`capture-parse` needs `dependency_target`); execution never creates an ampersand-named task |
 | `!` | Incomplete: pick an open task to complete (`capture-parse` needs `task_complete`); accepting inserts `!<note>:<block-id>`, and execution never captures it |
 | `!fix`, `!sase:`, `!"Shopping List` | Incomplete: still typing the completion query (`capture-parse` needs `task_complete`) |
-| `!note:block-id` with no other text | Complete an existing open task (`capture-parse` mode `task_complete`); execution lands with the task-complete writer |
+| `!note:block-id` with no other text | Complete an existing open task (`capture-parse` mode `task_complete`); `bob capture` closes it exactly as `=x!N` would, retires its Task Links, and unblocks dependents |
 | `!note:block-id` plus anything extra | Claimed and invalid (`invalid_task_complete`); a completion must be the whole capture item, never a junk inbox task |
 | `+[N]` / `-[N]` | Adjust today's current timed Pomodoro by N five-minute units (`+5` extends by 25 minutes, `-` shortens by 5 minutes; the count defaults to 1); the item must contain only the signed count |
 | `++[N]` / `--[N]` | Shift today's running timed Pomodoro N five-minute units later/earlier, keeping its duration (`++3` moves 15 minutes later, `--` moves 5 minutes earlier; the count defaults to 1); the item must contain only the operator |
@@ -1092,9 +1092,65 @@ the sigil-inclusive `range`). Claimed invalid items report mode
 `task_complete` with an `invalid_task_complete` diagnostic, the same mode
 handling `invalid_pomodoro_link` uses for a padded `^route:id`.
 
-Execution lands with the task-complete writer: until then a complete
-`!note:block-id` token refuses with
-`` `!note:block-id` completion is not available in this build yet ``.
+Execution completes the named task through the shared task-completion
+engine, in this order and all against the staged batch snapshot:
+
+1. **Resolve.** The note resolves exactly like `&`: an explicit relative
+   path first, else a unique basename (notes staged earlier in the batch
+   count too). The block ID resolves through the same lookup, with the
+   same missing-with-suggestion, duplicate, and not-a-task errors.
+2. **Validate the status.** Ready `[ ]`, Blocked `[?]`, Next `[*]`, and In
+   Progress `[/]` complete. An already-Done task is an idempotent no-op
+   (`action: "already_done"`, nothing written). Canceled and unknown
+   statuses fail with an actionable error.
+3. **Refuse recurring tasks.** A line with `[repeat:: …]`, `(repeat:: …)`,
+   or `🔁` fails: complete recurring tasks in Obsidian so Tasks writes the
+   next occurrence.
+4. **Close the tree** exactly as `=x!N` writes it: the root gets `x` plus
+   `  [completion:: YYYY-MM-DD]` (only when the line carries the
+   global-filter tag), and embedded `![[…]]` subtasks close recursively
+   (Blocked, recurring, unknown-status, and over-cap descendants are left
+   open and reported, never silently dropped). Unlike `=x!N`, the root may
+   be Blocked.
+5. **Retire Task Links** in today's daily note (when it has a
+   `## Pomodoros` section): every completed identity is struck, its bullets
+   move to the running entry (else the last completed entry), emptied
+   placeholders are removed, and a carried copy is dropped when the
+   destination already links the task.
+6. **Recover dependents.** Blocked `[?]` dependents that name a completed
+   task's `[id::]`, have no other open dependency, and have no strictly
+   future `scheduled` date become Ready `[ ]`, exactly like Task Status
+   Cycler's Ctrl+Enter recovery.
+
+Status-group moves, `^prj` frontmatter, `#hide`, and archiving stay with
+their existing writers (`bob task reconcile`, `bob projects sync`, and
+`bob task archive`); capture never writes them.
+
+Worked example. Before (`sase.md` holds the task, today's daily note holds
+the link under the running `CAPTURE` session):
+
+```text
+- [*] #task Fix flaky gkeep test ^fix-flaky
+```
+
+```text
+## Pomodoros
+- [ ] (**0920-0950**) — CAPTURE
+  - [[sase#^fix-flaky]]
+```
+
+`bob capture '!sase:fix-flaky'` writes `- [x] #task Fix flaky gkeep test  [completion:: 2026-10-05] ^fix-flaky`,
+strikes the link in place to `~~[[sase#^fix-flaky]]~~`, and prints:
+
+```text
+✓ completed [*] → [x] Fix flaky gkeep test  sase.md ^fix-flaky
+```
+
+Dry-run JSON equals real-run JSON except for `dry_run`. Refusals (exit 1,
+nothing written): Canceled tasks, unknown statuses, recurring tasks,
+missing or ambiguous notes, missing IDs (with a close-match suggestion),
+duplicate IDs, non-task lines, and forced destination flags on the `!`
+item.
 
 ### Plan budget and strict mode
 
@@ -2707,7 +2763,7 @@ stable fields include `ok`, `dry_run`, `routed`, `route`, `route_label`,
 `placement`. The `kind` field is `"task"`, `"bullet"`, `"pomodoro_task"`,
 `"pomodoro_note"`, `"sub_bullet"`, `"task_toggle"`, `"project_note"`,
 `"pomodoro_adjust"`, `"pomodoro_shift"`, `"pomodoro_start"`,
-`"pomodoro_close"`, or `"pomodoro_link"`, and
+`"pomodoro_close"`, `"pomodoro_link"`, or `"task_complete"`, and
 `task_line` holds the rendered line for any kind — for `"project_note"` it is
 the rendered `^prj` line, and for `"pomodoro_link"` it is the linked task's
 post-image line. On JSON-mode failures, stdout is still a
@@ -2841,6 +2897,29 @@ any Pomodoro a link-direction toggle insert or unlink cleanup touches — also
 appears in the batch-level `pomodoro_blocks` array;
 see [Pomodoro blocks](#pomodoro-blocks).
 
+Task-complete results use kind `"task_complete"` with `placement:
+"completed"`, `routed: true`, `route: null`, and `text: ""`.
+`relative_target`/`target`/`route_label` name the task's note,
+`task_line`/`previous_task_line` carry the post- and pre-images,
+`block_id`, `previous_status_symbol`/`previous_status_name`,
+`status_symbol`/`status_name`, and `status_changed` describe the root
+transition, and the additive `task_complete` object reports `raw`, `note`,
+`note_path`, `block_id`, `action` (`"completed"` or `"already_done"`),
+`completion_date` (omitted when already done), `subtasks` and
+`subtasks_left_open` (each with `note_path`, `block_id`, `line`, `text`,
+status fields, and `reason` on left-open rows), `ledger` (omitted when the
+daily note was untouched: `day_file`, `struck`, `moved` with
+`from`/`to` entry `line`/`name`/`status`, `deduplicated`, and
+`removed_placeholders`), and `unblocked` dependents. The batch-level
+`task_blocks` array gains roles `"completed"` (the root and each closed
+subtask) and `"unblocked"` (each recovered dependent); see
+[Task blocks](#task-blocks). Human output prints
+`✓ completed [*] → [x] <text>  <note> ^<id>` (dry-run: `would complete`),
+one indented row per closed subtask and left-open descendant, a `ledger`
+line naming moves, strikes, dedupes, removed placeholders, and the day
+file, and one `unblocked` row per recovered dependent. Already-done tasks
+print `✓ already done [x] <text>  <note> ^<id> · nothing to change`.
+
 Pomodoro-note results use kind `"pomodoro_note"` with `routed: false`, `route:
 null`, and `target`/`relative_target` set to the daily note. They additionally
 include `day_file`, `parent_line`, and `parent_text` describing the selected
@@ -2940,8 +3019,10 @@ item or inside `captures[]`, and it is omitted when empty:
 
 Field rules:
 
-- One entry per distinct parent task that the batch's sub-bullet items
-  wrote under, in first-touch order, in its final state.
+- One entry per distinct parent task the batch touched — sub-bullet
+  parents, dependency writers, and whole-item `!` completions (roots,
+  closed subtasks, and recovered dependents) — in first-touch order, in
+  its final state.
 - `relative_target` and `route` name the note. `line` is the 1-based task
   line in the final staged note. `block_id` is the parent's trailing block
   ID, omitted when it has none (a picker task-ref parent).
@@ -2952,9 +3033,11 @@ Field rules:
   batch. This happens when an earlier item in the same draft created it,
   as in `Task @sase^new` followed by `note @sase+new`. A created block's
   lines are all `added`.
-- `roles` is informational and deduplicated. Today it is only
-  `"sub_bullet"`; future kinds may add values. Clients must not depend on
-  it.
+- `roles` is informational and deduplicated: `"sub_bullet"` for captured
+  children, `"dependency"` / `"dependency_target"` for prerequisite writes,
+  and `"completed"` (the completed root and each closed subtask) /
+  `"unblocked"` (each recovered dependent) for whole-item `!` completions.
+  Clients must not depend on it.
 - `lines` uses exactly the `pomodoro_blocks` line schema: `text`
   (verbatim, no terminator), `depth` (relative to the task line, computed
   by the same helper), `change` (`unchanged` / `added` / `removed` /

@@ -404,11 +404,6 @@ pub(super) const BANG_SUFFIX_HINT: &str =
 pub(super) const BANG_BULK_HINT: &str =
     "put each completion on its own item, separated by a blank line";
 
-/// Temporary refusal while `!note:block-id` execution lands. Read by the
-/// capture planner outside this module, so crate-visible.
-pub(crate) const BANG_EXECUTE_PENDING_ERROR: &str =
-    "`!note:block-id` completion is not available in this build yet";
-
 /// A terminal-plus selector is an editor-only task search gesture. It
 /// cannot be captured until the user accepts a candidate, which supplies
 /// the canonical `@route+block-id` parent marker.

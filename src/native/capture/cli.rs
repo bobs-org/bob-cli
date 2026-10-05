@@ -137,6 +137,19 @@ A single-token, single-line item starting with ':' (for example ':' or \
 error so an unfinished query cannot create a junk inbox task. Accepting the \
 picked task in a picker inserts its '@<route>:<block-id>' link, which \
 captures exactly like a typed link.\n\n\
+Capture a whole item `!note:block-id` (for example `!sase:fix-flaky`) to \
+complete that existing open task without closing a Pomodoro, the way `=x!N` \
+completes a linked task: the task line closes exactly as `=x!N` writes it \
+(including embedded subtasks), its Task Links retire the way `bob task \
+reconcile` retires them, and Blocked dependents recover the way Ctrl+Enter \
+recovers them. The token must be the entire item: no body text, children, \
+`%`, `s:`, `p:`, `#name`, `=`, `@@`, or forced destination flags. The note \
+locator works vault-wide exactly like `&note:block-id` \
+(`!projects/foo:bar`, `!\"Shopping List\":milk`). A bare `!` or partial \
+token fails with a teaching error so an unfinished query cannot create a \
+junk inbox task; accepting the picked task inserts its `!<note>:<block-id>` \
+token. JSON reports kind `task_complete` with an additive `task_complete` \
+object. Single-quote the argument: zsh history-expands `!`.\n\n\
 Capture a whole item `+N` or `-N` (for example `+5` or `-2`) to adjust \
 today's current timed Pomodoro by N five-minute units: `+5` extends by 25 \
 minutes, `-2` shortens by 10 minutes. The count is optional and defaults \

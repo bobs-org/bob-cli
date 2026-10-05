@@ -29,11 +29,11 @@ use crate::native::{
 /// settings, and the previous-daily guard, built once per batch so every
 /// item shares one vault walk.
 pub(super) struct DependencyContext {
-    discovered: DependencyTaskResult,
-    settings: note_tasks::NoteTaskSettings,
-    anchor: NaiveDate,
-    previous_daily: Option<PathBuf>,
-    today: NaiveDate,
+    pub(super) discovered: DependencyTaskResult,
+    pub(super) settings: note_tasks::NoteTaskSettings,
+    pub(super) anchor: NaiveDate,
+    pub(super) previous_daily: Option<PathBuf>,
+    pub(super) today: NaiveDate,
 }
 
 impl DependencyContext {
@@ -76,7 +76,7 @@ fn previous_daily_absolute(
 }
 
 /// Vault-relative display path (`a/b.md`) for diagnostics and JSON.
-fn display_relative(path: &Path) -> String {
+pub(super) fn display_relative(path: &Path) -> String {
     path.components()
         .filter_map(|component| {
             component.as_os_str().to_str().map(str::to_string)
@@ -92,7 +92,7 @@ fn absolute_note(bob_dir: &Path, relative: &Path) -> PathBuf {
 
 /// Current text of a note: staged contents when the batch already
 /// touched it, otherwise what is on disk.
-fn current_note_text(
+pub(super) fn current_note_text(
     planner: &mut CaptureBatchPlanner,
     absolute: &Path,
 ) -> Result<String, CaptureError> {
@@ -253,7 +253,7 @@ fn staged_note_index(
 /// Resolve a typed `&note` identity against the on-disk catalog, with a
 /// staged fallback for notes this batch created but has not committed.
 /// Returns the vault-relative path with extension.
-fn resolve_prerequisite_note(
+pub(super) fn resolve_prerequisite_note(
     ctx: &DependencyContext,
     planner: &CaptureBatchPlanner,
     bob_dir: &Path,
@@ -283,7 +283,7 @@ fn resolve_prerequisite_note(
 /// Staged-only counterpart to basename/exact resolution for notes this
 /// batch created: exact relative paths win, otherwise a unique
 /// case-insensitive basename.
-fn resolve_staged_note(
+pub(super) fn resolve_staged_note(
     planner: &CaptureBatchPlanner,
     bob_dir: &Path,
     typed: &str,
@@ -349,7 +349,7 @@ struct ResolvedPrerequisite {
 
 /// Look a task up by block ID in staged contents, with capture-shaped
 /// diagnostics. `route_label` names the note for messages.
-fn lookup_staged_task<'a>(
+pub(super) fn lookup_staged_task<'a>(
     scan: &'a note_tasks::NoteTaskScan,
     route_label: &str,
     block_id: &str,
@@ -2195,6 +2195,7 @@ pub(super) fn plan_dependency_only_item(
             pomodoro_shift: None,
             pomodoro_close: None,
             dependency_update: Some(summary),
+            task_complete: None,
             toggle_task_description: None,
         },
         clip_plan: None,

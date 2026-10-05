@@ -701,6 +701,7 @@ pub(super) fn plan_pomodoro_close_item(
             pomodoro_shift: None,
             pomodoro_close: Some(summary),
             dependency_update: None,
+            task_complete: None,
             toggle_task_description: None,
         },
         clip_plan: None,
@@ -1250,6 +1251,7 @@ pub(super) fn plan_pomodoro_close_link_item(
             pomodoro_shift: None,
             pomodoro_close: Some(summary),
             dependency_update: None,
+            task_complete: None,
             toggle_task_description: Some(task_description),
         },
         clip_plan: None,
@@ -1492,6 +1494,7 @@ pub(super) fn plan_pomodoro_close_task_item(
             dependency_update: close_dependencies
                 .as_ref()
                 .map(|(_, parts)| parts.summary.clone()),
+            task_complete: None,
             toggle_task_description: None,
         },
         clip_plan: None,

@@ -39,6 +39,7 @@ mod sections;
 mod sub_bullet;
 mod targets;
 mod task_blocks;
+mod task_complete;
 mod task_complete_parse;
 mod task_id;
 mod task_link;

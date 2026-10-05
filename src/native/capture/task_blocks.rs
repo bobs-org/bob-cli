@@ -18,6 +18,8 @@ pub(super) enum TaskBlockRole {
     SubBullet,
     Dependency,
     DependencyTarget,
+    Completed,
+    Unblocked,
 }
 
 /// One sub-bullet touch of a parent task. `line` is the 0-based parent
