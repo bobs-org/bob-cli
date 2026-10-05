@@ -224,7 +224,7 @@ pub(crate) enum BangClaim {
 /// and `!` runs stay prose). An incomplete token with other text on the
 /// item, or on a multi-line item, stays prose like `:dee` plus a child;
 /// a complete token with extra text or child lines is claimed invalid.
-pub(super) fn claim_bang_item(item: &CaptureItem<'_>) -> Option<BangClaim> {
+pub(crate) fn claim_bang_item(item: &CaptureItem<'_>) -> Option<BangClaim> {
     let (parent, children) = item.lines.split_first()?;
     let text = parent.raw.text;
     let trimmed = text.trim();

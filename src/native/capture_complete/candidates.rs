@@ -4,13 +4,14 @@ use super::{
     model::{
         ActiveTaskCandidate, ActiveTaskPomodoroCandidate, Candidates,
         CompleteError, DependencyCandidate, RouteCandidate, SectionCandidate,
-        TaskCandidate, TaskLinkCandidate, TaskParentCandidate,
-        TaskSectionCandidate,
+        TaskCandidate, TaskCompleteCandidate, TaskLinkCandidate,
+        TaskParentCandidate, TaskSectionCandidate,
     },
     support::rank,
 };
 use crate::native::{
-    capture, capture_active_tasks, capture_block_ids, capture_dependency_tasks,
+    capture, capture_active_tasks, capture_block_ids,
+    capture_completable_tasks, capture_dependency_tasks,
     capture_language::{DependencyTarget, DependencyTargetKind},
     capture_link_tasks, capture_targets, capture_task_sections, capture_tasks,
     note_tasks::{self, BlockIdLookup},
@@ -583,6 +584,97 @@ pub(super) fn dependency_candidates(
         })
         .collect();
     (Candidates::Dependency(candidates), discovered.warnings)
+}
+
+/// `task_complete` candidates for a whole-item `!` token: every open
+/// task (Ready, Blocked, Next, In Progress) in the vault-wide
+/// completable catalog, in today-first picker order (today rows by
+/// Pomodoro role, then In Progress, Next, and other open tasks) and
+/// ranked by the query with today matches on top. ID-less and guarded
+/// (recurring, already-selected) rows carry an empty replacement the
+/// client must never insert: ID-less rows resolve through the explicit
+/// Add block ID flow via `capture-task-id`'s `complete_replacement`.
+/// Read-only: selecting or highlighting a row writes nothing. A
+/// missing day file means no today rows and no warning.
+pub(super) fn task_complete_candidates(
+    bob_dir: &Path,
+    query: &str,
+    raw_text: &str,
+    cursor: usize,
+) -> (Candidates, Vec<String>) {
+    use std::path::Path as StdPath;
+    let discovered = capture_dependency_tasks::discover(bob_dir);
+    let day_file = pomodoro::day_file_for(bob_dir);
+    let catalog =
+        capture_completable_tasks::discover(bob_dir, &discovered, &day_file);
+    let selected = capture_completable_tasks::draft_selected(
+        &discovered,
+        bob_dir,
+        raw_text,
+        cursor,
+    );
+    let ordered =
+        capture_completable_tasks::order_for_picker(&catalog.tasks, query);
+    let candidates = ordered
+        .into_iter()
+        .map(|task| {
+            let requires_block_id = task.block_id.is_none();
+            let already = task.block_id.as_ref().is_some_and(|_| {
+                selected.contains(&(
+                    task.note_path.clone(),
+                    task.block_id.clone().unwrap_or_default(),
+                ))
+            });
+            let disabled_reason = if task.recurring {
+                Some(
+                    capture_completable_tasks::RECURRING_DISABLED_REASON
+                        .to_string(),
+                )
+            } else if already {
+                Some(
+                    capture_completable_tasks::ALREADY_SELECTED_DISABLED_REASON
+                        .to_string(),
+                )
+            } else {
+                None
+            };
+            let replacement = if requires_block_id || disabled_reason.is_some()
+            {
+                String::new()
+            } else {
+                capture_dependency_tasks::replacement_for_sigil(
+                    &catalog.index,
+                    StdPath::new(&task.note_path),
+                    task.block_id.as_deref().expect("identified task"),
+                    b'!',
+                )
+            };
+            TaskCompleteCandidate {
+                replacement,
+                task_ref: task.task_ref.clone(),
+                note_path: task.note_path.clone(),
+                locator: task.locator.clone(),
+                group: task.group,
+                hidden: task.hidden,
+                block_id: task.block_id.clone(),
+                requires_block_id,
+                block_id_suggestions: task.block_id_suggestions.clone(),
+                recurring: task.recurring,
+                already_selected: already,
+                disabled_reason,
+                status_symbol: task.status_symbol,
+                status_name: task.status_name.clone(),
+                status_type: capture_tasks::status_type_label(task.status_type),
+                text: task.text.clone(),
+                section: task.section.clone(),
+                depth: task.depth,
+                line: task.line,
+                scheduled: task.scheduled.clone(),
+                today: task.today.clone(),
+            }
+        })
+        .collect();
+    (Candidates::TaskComplete(candidates), catalog.warnings)
 }
 
 pub(super) enum TaskSectionLookupFailure {

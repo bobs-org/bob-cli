@@ -3,14 +3,15 @@ use std::path::Path;
 use super::{
     candidates::{
         active_task_candidates, link_candidates, route_candidates,
-        section_candidates, task_candidates, task_link_candidates,
-        task_parent_candidates, task_section_candidates, TaskSearch,
+        section_candidates, task_candidates, task_complete_candidates,
+        task_link_candidates, task_parent_candidates, task_section_candidates,
+        TaskSearch,
     },
     model::Candidates,
     pomodoros::{pomodoro_name_candidates, pomodoro_start_name_candidates},
 };
 use crate::native::{
-    capture, capture_block_ids,
+    capture, capture_block_ids, capture_completable_tasks,
     capture_language::{self, CompletionContext},
     capture_links,
     capture_targets::CaptureTargetKind,
@@ -364,6 +365,51 @@ pub(crate) fn shell_completion(
                     group: "parent tasks".to_string(),
                 });
             }
+        }
+        CompletionContext::TaskComplete => {
+            // Safe rows only: identified, enabled completions the
+            // shell can insert verbatim, today rows first. Guarded
+            // (recurring, already-selected) and ID-less rows stay in
+            // the interactive picker, which owns the Add block ID
+            // flow. The shell filters, so the full empty-query order
+            // is served here.
+            let (candidates, _) =
+                task_complete_candidates(bob_dir, "", raw_text, cursor);
+            let Candidates::TaskComplete(items) = candidates else {
+                return Ok(None);
+            };
+            for item in items {
+                if item.replacement.is_empty() {
+                    continue;
+                }
+                // Values never carry the `!` sigil itself: a leading
+                // `!` would parse as a protocol directive and the
+                // adapters would drop the row. The marker starts past
+                // the sigil instead, so the presenter keeps the sigil
+                // (plus any leading whitespace) with `!prefix` and the
+                // inserted text is still the full `!note:block-id`.
+                // The word prefix stays out of the value: the kept
+                // slice already covers everything before the marker.
+                let full = item
+                    .replacement
+                    .strip_prefix('!')
+                    .unwrap_or(item.replacement.as_str())
+                    .to_string();
+                if full.is_empty() {
+                    continue;
+                }
+                rows.push(ShellRow {
+                    nospace: ends_in_continuation(&full),
+                    full,
+                    description: item.text.clone(),
+                    group: capture_completable_tasks::group_label(item.group)
+                        .to_string(),
+                });
+            }
+            return Ok(Some(ShellCompletion {
+                marker_start: field.replacement.0 + 1,
+                rows,
+            }));
         }
         CompletionContext::PomodoroBlockId => {
             // A `+` after a `:` block ID is the retired project-note

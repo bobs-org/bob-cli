@@ -421,6 +421,11 @@ another thin client of that service (see `docs/capture.md`
   the `=x` line. The exact lone `+` remains an action; capture completion
   separately opens the parent-task picker, while shell completion offers
   only identified `@route+block-id` values in the `parent tasks` group.
+- **Whole-item `!` completes open tasks.** A leading `!` token opens the
+  Complete picker over every open task in the vault, and shell completion
+  offers only identified, enabled `!note:block-id` values (ID-less and
+  guarded rows stay in the interactive picker), grouped `today` /
+  `in progress` / `next` / `open` with today rows first.
 - **Presentation.** Values are full marker texts such as
   `@dev:remote-power`. Descriptions come from the row: task text, route
   kind, `new block ID`, or Pomodoro time and name. Groups are human

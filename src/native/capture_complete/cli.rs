@@ -158,7 +158,12 @@ Progress, then Next), and accepting a row inserts the full \
 `route:block-id` in one step while a typed `#name`/`=<X>` suffix \
 survives. A `#name` after `^route:block-id` completes Pomodoro names \
 exactly as it does after `@route:block-id`, and a cursor inside `=<X>` \
-or `=x[<N>][*<P>][!<M>][~<K>]`/`=*`/`=!` offers nothing. A solo leading `:` token \
+or `=x[<N>][*<P>][!<M>][~<K>]`/`=*`/`=!` offers nothing. A whole-item `!` token completes \
+`task_complete`: every open task (Ready, Blocked, Next, In Progress) in the vault-wide \
+completable catalog, today rows first and ranked by the query with today matches on top; \
+the replacement covers the whole `!` token, sigil included, and the response carries a \
+vault-scoped `picker` descriptor plus the `!`/`[` continuation keys on a bare `!`. \
+A solo leading `:` token \
 completes `task_link`: every linkable open task (Ready, Blocked, Next, In \
 Progress) in the routable inbox, area, and non-terminal project notes, in \
 canonical picker order and ranked by the query with ID-less tasks always \
@@ -184,7 +189,7 @@ searches like `[[##Head` and `[[^^block`. Candidate replacements own the \
 missing closing delimiter when needed and report the final cursor offset.",
         )
         .after_help(
-            "Examples:\n  bob capture-complete --cursor 1 --format json -- '@'\n  bob capture-complete -c 4 -- '@@fo'\n  bob capture-complete -c 20 -- 'Buy milk @@gro'\n  bob capture-complete -c 19 -f json -- 'jot idea @notes#Id'\n  bob capture-complete -c 20 -f json -- 'Fix flaky test @sase^'\n  bob capture-complete -c 12 -b ~/bob -- 'Do work @Dev^new-id'\n  bob capture-complete -c 16 -b ~/bob -- 'Do work @Dev:foc'\n  bob capture-complete -c 16 -b ~/bob -- 'note @foo+bar#'\n  bob capture-complete -a -c 6 -f json -- '@file+'\n  bob capture-complete -a -c 8 -f json -- '@@file+'\n  bob capture-complete -c 5 -- '[[sas'\n  bob capture-complete -c 1 -- '^'\n  bob capture-complete -c 1 -- ':'\n\nContexts:\n  route, section, pomodoro_block_id, task_block_id, project_task_block_id, pomodoro_name, pomodoro_start_name, task, task_section, active_task, task_link, task_parent, wikilink_note, wikilink_heading, wikilink_block",
+            "Examples:\n  bob capture-complete --cursor 1 --format json -- '@'\n  bob capture-complete -c 4 -- '@@fo'\n  bob capture-complete -c 20 -- 'Buy milk @@gro'\n  bob capture-complete -c 19 -f json -- 'jot idea @notes#Id'\n  bob capture-complete -c 20 -f json -- 'Fix flaky test @sase^'\n  bob capture-complete -c 12 -b ~/bob -- 'Do work @Dev^new-id'\n  bob capture-complete -c 16 -b ~/bob -- 'Do work @Dev:foc'\n  bob capture-complete -c 16 -b ~/bob -- 'note @foo+bar#'\n  bob capture-complete -a -c 6 -f json -- '@file+'\n  bob capture-complete -a -c 8 -f json -- '@@file+'\n  bob capture-complete -c 5 -- '[[sas'\n  bob capture-complete -c 1 -- '^'\n  bob capture-complete -c 1 -- ':'\n\nContexts:\n  route, section, pomodoro_block_id, task_block_id, project_task_block_id, pomodoro_name, pomodoro_start_name, task, task_section, active_task, task_link, task_parent, task_dependency, task_complete, wikilink_note, wikilink_heading, wikilink_block",
         )
         .disable_help_flag(true)
         .arg(all_tasks_arg())

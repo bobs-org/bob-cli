@@ -90,7 +90,9 @@ with one same-directory temporary file rename. The JSON success shape \
 additionally carries the exact `note_path` (in --note-path mode) and the \
 backend-formatted `dependency_replacement` (`&note:id`, quoted when the \
 locator needs it) so the app can resume the picker without losing \
-quoting or case, plus `parent_replacement` (`@route+block-id`) in routable \
+quoting or case, plus `complete_replacement` (`!note:id`, quoted when the \
+locator needs it, in both modes) so the Complete picker can splice the new ID, \
+plus `parent_replacement` (`@route+block-id`) in routable \
 `--route` mode. Dry-run plans the same \
 mutation and returns the same success shape without writing. Stale, \
 ambiguous, terminal, already-identified, duplicate, missing, unreadable, \
@@ -324,6 +326,11 @@ struct CaptureTaskIdResult {
     /// needs it) so the app resumes the picker without losing
     /// quoting or case.
     dependency_replacement: String,
+    /// Backend-formatted `!note:block-id` (quoted when the locator
+    /// needs it) so the Complete picker can splice the new ID without
+    /// losing quoting or case. Present in both `--route` and
+    /// `--note-path` modes.
+    complete_replacement: String,
     /// Backend-formatted parent-task marker, present only when `--route`
     /// identifies a routable note.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -509,6 +516,12 @@ fn plan_assignment(
         &target_path,
         &request.block_id,
     );
+    let complete_replacement = capture_dependency_tasks::replacement_for_sigil(
+        &discovered.index,
+        &target_path,
+        &request.block_id,
+        b'!',
+    );
     let parent_replacement = route
         .as_deref()
         .map(|route| format!("@{route}+{}", request.block_id));
@@ -528,6 +541,7 @@ fn plan_assignment(
             },
             block_id: request.block_id.clone(),
             dependency_replacement,
+            complete_replacement,
             parent_replacement,
             line: assigned.line,
             task_ref: assigned.task_ref.clone(),
@@ -1009,6 +1023,7 @@ mod tests {
             note_path: None,
             block_id: "report-id".to_string(),
             dependency_replacement: "&file:report-id".to_string(),
+            complete_replacement: "!file:report-id".to_string(),
             parent_replacement: Some("@file+report-id".to_string()),
             line: 2,
             task_ref: "2:abcd1234".to_string(),
@@ -1035,6 +1050,7 @@ mod tests {
         assert_eq!(value["relative_target"], "file.md");
         assert!(value.get("note_path").is_none());
         assert_eq!(value["dependency_replacement"], "&file:report-id");
+        assert_eq!(value["complete_replacement"], "!file:report-id");
         assert_eq!(value["block_id"], "report-id");
         assert_eq!(value["line"], 2);
         assert_eq!(value["ref"], "2:abcd1234");

@@ -4,8 +4,8 @@ use super::{
     candidates::{
         active_task_candidates, dependency_candidates, link_candidates,
         route_candidates, section_candidates, task_candidates,
-        task_link_candidates, task_parent_candidates, task_section_candidates,
-        TaskSearch,
+        task_complete_candidates, task_link_candidates, task_parent_candidates,
+        task_section_candidates, TaskSearch,
     },
     model::{
         Candidates, CaptureCompleteResult, CompleteError, PickerDescriptor,
@@ -74,7 +74,8 @@ pub(super) fn build_result(
             | CompletionContext::ActiveTask
             | CompletionContext::TaskLink
             | CompletionContext::TaskParent
-            | CompletionContext::TaskDependency => {
+            | CompletionContext::TaskDependency
+            | CompletionContext::TaskComplete => {
                 unreachable!("link field context")
             }
         };
@@ -219,6 +220,12 @@ pub(super) fn build_result(
         CompletionContext::TaskParent => {
             task_parent_candidates(bob_dir, &field.query)
         }
+        CompletionContext::TaskComplete => {
+            // The unfiltered snapshot comes back when the cursor sits
+            // at `replacement.start`: the field reports an empty query
+            // there, exactly like the `:` picker.
+            task_complete_candidates(bob_dir, &field.query, raw_text, cursor)
+        }
         CompletionContext::TaskDependency => {
             // Vault-wide prerequisite scan: the lexical owner of the
             // modifier under the cursor plus every complete `&note:id`
@@ -252,14 +259,17 @@ pub(super) fn build_result(
         }
     };
 
-    // Bob owns the search query for dependency, scoped task, and parent-task
-    // pickers. Dependency queries are decoded here so clients never parse a
-    // quoted note component; only that context also carries its owner.
+    // Bob owns the search query for dependency, scoped task,
+    // parent-task, and task-complete pickers. Dependency and
+    // task-complete queries are decoded here so clients never parse a
+    // quoted note component; only the dependency context also carries
+    // its owner.
     let (query, owner) = if matches!(
         field.context,
         CompletionContext::TaskDependency
             | CompletionContext::Task
             | CompletionContext::TaskParent
+            | CompletionContext::TaskComplete
     ) {
         (
             Some(field.query.clone()),
@@ -333,6 +343,30 @@ fn picker_descriptor(
                 marker_range,
                 trigger_removal_range: marker_range,
                 action_continuation_keys,
+            })
+        }
+        CompletionContext::TaskComplete => {
+            // The replacement already covers the whole `!` token,
+            // sigil included, so both ranges are the token. The
+            // continuation keys apply only to a bare whole-item `!`:
+            // an editor hands `!!` and `![[` straight back to prose
+            // and embeds.
+            let marker_range = Replacement {
+                start: field.replacement.0,
+                end: field.replacement.1,
+            };
+            let bare = raw_text
+                .get(marker_range.start..marker_range.end)
+                .is_some_and(|token| token == "!");
+            Some(PickerDescriptor {
+                kind: PickerKind::TaskComplete,
+                scope: PickerScope::Vault,
+                scope_token: "!".to_string(),
+                note_target: None,
+                marker_range,
+                trigger_removal_range: marker_range,
+                action_continuation_keys: bare
+                    .then(|| vec!["!".to_string(), "[".to_string()]),
             })
         }
         CompletionContext::Task => {

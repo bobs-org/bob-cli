@@ -3647,6 +3647,40 @@ link, and `query` is the token text between the sigil and the cursor (empty
 at or just after the sigil). For example `bob capture-complete -c 1 -- ':'`
 lists the full routable task catalog, and `-c 4 -- ':dee'` narrows to matching
 rows with `replacement` `{0, 4}`.
+A whole-item `!` token completes `task_complete`: while the cursor is anywhere in
+`[token.start, token.end]` — including just before the sigil, so clients can
+refetch the full list at `replacement.start` — the context offers every open
+task (Ready, Blocked, Next, In Progress) in the vault-wide completable catalog.
+The `replacement` covers the whole `!` token, sigil included, because accepting
+rewrites the query into the canonical `!note:block-id` completion, and `query`
+is the sigil-decoded text between the sigil and the cursor (empty at or just
+before the sigil). The response carries a vault-scoped `picker` descriptor
+(`kind: task_complete`, `scope_token: "!"`, both ranges the token); a bare
+whole-item `!` additionally returns the `!` and `[` `action_continuation_keys`
+so an editor can hand `!!` and `![[` straight back to prose and embeds.
+Candidates carry the `!loc:id` `replacement` (empty for ID-less and guarded
+rows, which resolve through `capture-task-id`'s `complete_replacement`
+instead), the exact `note_path`, the display `locator`, the `today` /
+`in_progress` / `next` / `open` group, and — for today rows only — the `today`
+placement: `role` (`running`, `worked`, `queued`, or `noted`), the entry
+(`line`, `name`, `time_range`, `status`; omitted for `noted`), and the
+distinct-session count. Any unstruck block link — plain or embedded, alias
+allowed, `🍅` markers stripped — places its task when it sits outside fenced
+code and Depends-On lines and resolves to an open task: links under the
+running entry read `running`, under a completed entry `worked`, under any
+other open entry `queued`, and outside `## Pomodoros` `noted`, keeping the
+strongest role. Recurring tasks and tasks another `!` item in the draft
+already names stay visible with `recurring` / `already_selected` and a
+`disabled_reason` but no insertable replacement. Empty queries list today rows
+first (running in ledger order, then worked most-recent-first, then queued in
+ledger order, then noted in document order), then In Progress and Next by note
+path and line, then all other open tasks; hidden rows sink within their
+section and recurring rows sink last. A nonempty query keeps today matches on
+top by score, then all other matches by score, using the shared tiered matcher
+over the task text, locator, `locator:block-id`, block ID, note path, section,
+and today Pomodoro name. For example `bob capture-complete -c 1 -- '!'`
+lists the full completable catalog, and `-c 4 -- '!fix'` narrows to matching
+rows with `replacement` `{0, 4}`.
 The analogous parent-task picker accepts a terminal `+query` on an item's
 parent line or an eligible authored child line. It uses context `task_parent`,
 strips `+` from the top-level `query`, and replaces the full selector token.
@@ -3935,7 +3969,7 @@ bob capture-task-id (--route NAME | --note-path PATH) --task-ref REF --block-id 
 
 Assigns a user-authored Obsidian block ID to one open task in a Bob note.
 This is the only write needed to turn a missing-ID `capture-complete --all-tasks`,
-`task_link`, `task_parent`, or `task_dependency` candidate into an identified task. The command validates
+`task_link`, `task_parent`, `task_dependency`, or `task_complete` candidate into an identified task. The command validates
 `--route` (or `--note-path`) and `--block-id` with Bob's shared grammar (`A-Z`, `a-z`, `0-9`, and `-` for the
 ID; routes also allow `_`), resolves `--task-ref` with the same stale-safe
 `<line>:<digest>` recovery as `bob capture --task-ref`, and then confirms the
@@ -3958,7 +3992,10 @@ absolute, ambiguous, and symlink-escaping paths.
 JSON success is a single versioned object with `ok`, `schema_version` `1`,
 `dry_run`, `route` (in `--route` mode) or `note_path` (in `--note-path`
 mode), `relative_target`, the backend-formatted `dependency_replacement`
-(`&note:id`, quoted when the locator needs it), the canonical `block_id`,
+(`&note:id`, quoted when the locator needs it), the backend-formatted
+`complete_replacement` (`!note:id`, quoted when the locator needs it, in
+both modes) for splicing the new ID into the Complete picker, the canonical
+`block_id`,
 the updated one-based `line`, the updated `ref`, and a `task` object with
 the same picker metadata as `capture-tasks` after the assignment. In `--route`
 mode it also returns `parent_replacement` (`@route+block-id`) for resuming a

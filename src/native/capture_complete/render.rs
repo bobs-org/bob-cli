@@ -2,13 +2,17 @@ use serde_json::json;
 
 use super::model::{
     Candidates, CaptureCompleteResult, CompleteError, DependencyCandidate,
-    OutputFormat, PomodoroNameCandidate, TaskLinkCandidate,
-    TaskParentCandidate,
+    OutputFormat, PomodoroNameCandidate, TaskCompleteCandidate,
+    TaskLinkCandidate, TaskParentCandidate,
 };
 use super::COMMAND_NAME;
 use crate::native::{
-    capture_block_ids, capture_language::CompletionContext, capture_link_tasks,
-    capture_pomodoros::PomodoroState, style::Styler,
+    capture_block_ids,
+    capture_completable_tasks::{group_label, role_label},
+    capture_language::CompletionContext,
+    capture_link_tasks,
+    capture_pomodoros::PomodoroState,
+    style::Styler,
 };
 
 pub(super) fn print_success(
@@ -191,6 +195,56 @@ pub(super) fn task_parent_line(item: &TaskParentCandidate) -> (String, String) {
     (label, detail)
 }
 
+/// One human line for a `task_complete` candidate: the insertable
+/// `!note:block-id` (or a needs-ID marker for rows the Add block ID
+/// flow must resolve first) plus task text, locator, picker group or
+/// today placement, and any guard reason.
+pub(super) fn task_complete_line(
+    item: &TaskCompleteCandidate,
+) -> (String, String) {
+    let mut detail =
+        format!("[{}] {}  · {}", item.status_symbol, item.text, item.locator);
+    match item.today.as_ref() {
+        Some(today) => {
+            detail.push_str(&format!("  · today {}", role_label(today.role)));
+            if let Some(name) = today
+                .pomodoro
+                .as_ref()
+                .and_then(|pomodoro| pomodoro.name.as_ref())
+            {
+                detail.push_str(&format!(" ({name})"));
+            }
+            if today.sessions >= 2 {
+                detail.push_str(&format!(" · {} sessions", today.sessions));
+            }
+        }
+        None => {
+            detail.push_str(&format!("  · {}", group_label(item.group)));
+        }
+    }
+    if let Some(reason) = item.disabled_reason.as_deref() {
+        detail.push_str(&format!("  · {reason}"));
+    } else if item.requires_block_id {
+        match item.block_id_suggestions.first() {
+            Some(suggestion) => {
+                detail.push_str(&format!(" · needs ID (^{suggestion})"))
+            }
+            None => detail.push_str(" · needs ID"),
+        }
+    } else if item.already_selected {
+        detail.push_str(" · already in this draft");
+    }
+    if let Some(scheduled) = &item.scheduled {
+        detail.push_str(&format!("  · scheduled {scheduled}"));
+    }
+    let label = if item.replacement.is_empty() {
+        "…".to_string()
+    } else {
+        item.replacement.clone()
+    };
+    (label, detail)
+}
+
 /// One human line for a `task_dependency` candidate: the insertable
 /// replacement (or a needs-ID marker for rows the Add block ID flow must
 /// resolve first) plus task text, locator, and any guard reason.
@@ -289,6 +343,9 @@ pub(super) fn candidate_lines(
         }
         Candidates::Dependency(items) => {
             items.iter().map(dependency_line).collect()
+        }
+        Candidates::TaskComplete(items) => {
+            items.iter().map(task_complete_line).collect()
         }
         Candidates::PomodoroName(items) => items
             .iter()
@@ -414,6 +471,7 @@ pub(super) fn context_label(context: CompletionContext) -> &'static str {
         CompletionContext::TaskLink => "task_link",
         CompletionContext::TaskParent => "task_parent",
         CompletionContext::TaskDependency => "task_dependency",
+        CompletionContext::TaskComplete => "task_complete",
         CompletionContext::WikilinkNote => "wikilink_note",
         CompletionContext::WikilinkHeading => "wikilink_heading",
         CompletionContext::WikilinkBlock => "wikilink_block",

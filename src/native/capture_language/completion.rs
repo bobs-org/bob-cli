@@ -36,6 +36,12 @@ pub(crate) enum CompletionContext {
     /// scan lands in the discovery phase; the lexical field (query plus the
     /// exact sigil-inclusive replacement range) is contract.
     TaskDependency,
+    /// A whole-item `!` token: vault-wide open-task search whose accept
+    /// inserts a Bob-authored `!note:block-id` replacement. The query is
+    /// decoded like `&`; the replacement covers the whole token, sigil
+    /// included, so refetching at `replacement.start` returns the
+    /// unfiltered snapshot.
+    TaskComplete,
     WikilinkNote,
     WikilinkHeading,
     WikilinkBlock,
@@ -168,6 +174,83 @@ pub(super) fn dependency_completion_field_at(
         route: None,
         block_id: None,
         query: typed,
+        replacement: (start, end),
+    })
+}
+
+/// Complete a solo leading `!` token: the query runs from just after
+/// the sigil to the cursor (decoded like `&`, empty at or just before
+/// the sigil) and the replacement covers the whole token including the
+/// sigil, because accepting rewrites the query into the canonical
+/// `!note:block-id` marker. The cursor may sit anywhere in
+/// `[token.start, token.end]`, including just before the sigil so
+/// clients can refetch the full list at `replacement.start`. Claimed
+/// invalid tokens offer nothing: they carry a teaching diagnostic, not
+/// a picker. Multi-line items stay prose, exactly like the claim
+/// predicate.
+pub(super) fn task_complete_completion_field_at(
+    item: &CaptureItem<'_>,
+    cursor: usize,
+) -> Option<CompletionField> {
+    match claim_bang_item(item)? {
+        BangClaim::Query { raw, start, end } => {
+            bang_completion_field(&raw, start, end, cursor)
+        }
+        BangClaim::Complete(dependency) => bang_completion_field(
+            &dependency.raw,
+            dependency.start,
+            dependency.end,
+            cursor,
+        ),
+        BangClaim::Invalid(_) => None,
+    }
+}
+
+/// Claimed whole-item `!` complete tokens across a batch draft, in
+/// source order: the item range plus the decoded note and block ID.
+/// The picker-contract catalog consumes this instead of re-deriving
+/// the claim; claimed invalid tokens, queries, and prose never appear
+/// here.
+pub(crate) fn claimed_task_complete_tokens(
+    raw_text: &str,
+) -> Vec<(usize, usize, String, String)> {
+    split_capture_draft(raw_text)
+        .items
+        .iter()
+        .filter_map(|item| match claim_bang_item(item)? {
+            BangClaim::Complete(dependency) => Some((
+                item.start,
+                item.end,
+                dependency.note.clone(),
+                dependency.block_id.clone(),
+            )),
+            BangClaim::Query { .. } | BangClaim::Invalid(_) => None,
+        })
+        .collect()
+}
+
+fn bang_completion_field(
+    raw: &str,
+    start: usize,
+    end: usize,
+    cursor: usize,
+) -> Option<CompletionField> {
+    if cursor < start || cursor > end {
+        return None;
+    }
+    // A cursor just before the sigil refetches the full list with an
+    // empty query; slicing past the sigil would invert the range, so
+    // spell that case directly (mirroring the `:` picker contract).
+    let query = if cursor == start {
+        String::new()
+    } else {
+        decode_dependency_query(raw.get(1..cursor - start)?)
+    };
+    Some(CompletionField {
+        context: CompletionContext::TaskComplete,
+        route: None,
+        block_id: None,
+        query,
         replacement: (start, end),
     })
 }
@@ -429,6 +512,16 @@ pub(crate) fn completion_field_at(
         return Some(field);
     }
     let leading = line_index == 0;
+
+    // A solo leading `!` token completes vault-wide completable
+    // tasks instead of offering `@` route completion. This runs before
+    // the `:` and `^` paths; all three only fire on the item's leading
+    // line and their claims are disjoint.
+    if leading
+        && let Some(field) = task_complete_completion_field_at(item, cursor)
+    {
+        return Some(field);
+    }
 
     // A solo leading `:` token completes vault-wide linkable tasks
     // instead of offering `@` route completion: the query runs from just

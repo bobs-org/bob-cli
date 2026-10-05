@@ -2,6 +2,7 @@ use serde::Serialize;
 
 use crate::native::{
     capture_block_ids,
+    capture_completable_tasks::{CompletableGroup, TodayInfo},
     capture_language::{
         CompletionContext, DependencyTarget as LanguageDependencyTarget,
     },
@@ -180,10 +181,56 @@ pub(super) struct TaskParentCandidate {
     pub(super) pomodoro: Option<ActiveTaskPomodoroCandidate>,
 }
 
+/// One `task_complete` (`!` picker) candidate: any open task in the
+/// vault-wide completable catalog. The JSON keys match the picker
+/// contract: `replacement` is the Bob-authored `!note:block-id` (or
+/// quoted `!"Note":block-id`) an accept inserts — empty for ID-less
+/// or guarded rows, which clients must never insert directly but
+/// resolve through the explicit Add block ID flow instead.
+/// `note_path` is the exact vault-relative path including extension
+/// (never the lowercased display route); `locator` is the short human
+/// display form; `group` is `today`, `in_progress`, `next`, or
+/// `open`; `today` carries the Task Link placement for today rows
+/// only. `recurring` and `already_selected` mark guarded rows with an
+/// explanatory `disabled_reason` and no insertable replacement.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct TaskCompleteCandidate {
+    pub(super) replacement: String,
+    #[serde(rename = "ref")]
+    pub(super) task_ref: String,
+    pub(super) note_path: String,
+    pub(super) locator: String,
+    pub(super) group: CompletableGroup,
+    /// A `#hide` task: the client renders it subdued. Always present
+    /// so row shape never depends on vault contents.
+    pub(super) hidden: bool,
+    pub(super) block_id: Option<String>,
+    pub(super) requires_block_id: bool,
+    pub(super) block_id_suggestions: Vec<String>,
+    #[serde(skip_serializing_if = "is_false")]
+    pub(super) recurring: bool,
+    #[serde(skip_serializing_if = "is_false")]
+    pub(super) already_selected: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) disabled_reason: Option<String>,
+    pub(super) status_symbol: char,
+    pub(super) status_name: String,
+    pub(super) status_type: &'static str,
+    pub(super) text: String,
+    pub(super) section: Option<String>,
+    pub(super) depth: usize,
+    pub(super) line: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) scheduled: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) today: Option<TodayInfo>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum PickerKind {
     ParentTask,
+    TaskComplete,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -269,6 +316,7 @@ pub(super) enum Candidates {
     TaskLink(Vec<TaskLinkCandidate>),
     TaskParent(Vec<TaskParentCandidate>),
     Dependency(Vec<DependencyCandidate>),
+    TaskComplete(Vec<TaskCompleteCandidate>),
     WikilinkNote(Vec<WikilinkNoteCandidate>),
     WikilinkHeading(Vec<WikilinkHeadingCandidate>),
     WikilinkBlock(Vec<WikilinkBlockCandidate>),
@@ -286,6 +334,7 @@ impl Candidates {
             Self::TaskLink(items) => items.len(),
             Self::TaskParent(items) => items.len(),
             Self::Dependency(items) => items.len(),
+            Self::TaskComplete(items) => items.len(),
             Self::WikilinkNote(items) => items.len(),
             Self::WikilinkHeading(items) => items.len(),
             Self::WikilinkBlock(items) => items.len(),
