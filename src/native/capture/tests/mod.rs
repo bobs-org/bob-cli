@@ -30,6 +30,7 @@ fn insert_bullet_line(
 }
 
 mod assembly;
+mod commit;
 mod grammar;
 mod placement;
 mod started;

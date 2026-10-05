@@ -67,9 +67,61 @@ pub(super) struct AppliedTextFile {
     pub(super) target_existed: bool,
 }
 
+/// Optimistic disk-preimage guard for the shared capture batch writer.
+///
+/// Compares every planned target against its planning-time preimage
+/// (`target_existed` / `original_target` from `batch.rs`). A missing
+/// formerly existing target, different bytes, or a newly appeared target
+/// that was absent at planning refuses the batch; other read errors
+/// propagate. These checks narrow the external-edit race but are not
+/// cross-process locking or a fully serialized transaction.
+pub(super) fn validate_disk_preimages(
+    files: &[StagedTextFile],
+) -> Result<(), CaptureError> {
+    for staged in files {
+        if staged.target_existed {
+            match fs::read(&staged.target) {
+                Ok(bytes) => {
+                    if bytes != staged.original_target.as_bytes() {
+                        return Err(CaptureError::io(format!(
+                            "refusing to overwrite {}: note changed on disk after planning",
+                            staged.target.display()
+                        )));
+                    }
+                }
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    return Err(CaptureError::io(format!(
+                        "refusing to overwrite {}: note was deleted on disk after planning",
+                        staged.target.display()
+                    )));
+                }
+                Err(error) => {
+                    return Err(fs_error("read target", &staged.target, error));
+                }
+            }
+        } else {
+            match fs::symlink_metadata(&staged.target) {
+                Ok(_) => {
+                    return Err(CaptureError::io(format!(
+                        "refusing to overwrite {}: note was created on disk after planning",
+                        staged.target.display()
+                    )));
+                }
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(fs_error("read target", &staged.target, error));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 pub(super) fn write_staged_files(
     files: &[StagedTextFile],
 ) -> Result<(), CaptureError> {
+    // Refuse a stale batch before creating any temporary files.
+    validate_disk_preimages(files)?;
     let mut pending = Vec::new();
     for (index, staged) in files.iter().enumerate() {
         let role = format!("batch-{index}");
@@ -107,9 +159,33 @@ pub(super) fn write_staged_files(
         });
     }
 
+    // Revalidate after staging so an edit that landed while temporary
+    // files were written still refuses before any target is replaced.
+    if let Err(error) = validate_disk_preimages(files) {
+        cleanup_pending_text_files(&pending);
+        return Err(error);
+    }
+
     let mut applied = Vec::new();
     while !pending.is_empty() {
         let pending_file = pending.remove(0);
+        // Narrow the remaining race: recheck this target immediately
+        // before replacing it.
+        if let Err(error) =
+            validate_disk_preimages(std::slice::from_ref(pending_file.staged))
+        {
+            remove_temporary_file(&pending_file.temporary);
+            if let Some(backup) = &pending_file.backup {
+                remove_temporary_file(backup);
+            }
+            cleanup_pending_text_files(&pending);
+            let mut message = error.message.clone();
+            append_rollback_message(
+                &mut message,
+                rollback_applied_files(&applied),
+            );
+            return Err(CaptureError::io(message));
+        }
         if let Err(error) =
             fs::rename(&pending_file.temporary, &pending_file.staged.target)
         {

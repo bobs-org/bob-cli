@@ -84,10 +84,11 @@ pub(super) fn plan_task_complete_item(
     // No staged preimage recheck here: `contents` above already read the
     // batch's staged text, and nothing staged this note in between, so a
     // fresh re-read would compare the value with itself. The guard against
-    // external edits is the batch's atomic plan-then-commit: every item
-    // plans against the in-memory staged snapshot and `write_staged_files`
-    // commits via temporary files with rollback, leaving notes at their
-    // original state on any failure.
+    // external edits is the shared disk-preimage validation in
+    // `write_staged_files` (commit.rs), which refuses the batch when
+    // current disk bytes differ from the planned preimage. Temporary files
+    // and rollback only make the commit atomic; they do not detect
+    // external edits.
     // Day file identity up front so pre-item coordinates are available
     // for pomodoro-block removal refs below.
     let day_file = pomodoro::day_file_for(bob_dir);
@@ -112,8 +113,9 @@ pub(super) fn plan_task_complete_item(
     // Stage tree post-images. No per-file preimage recheck: the tree
     // close read the same staged snapshot, and nothing else staged these
     // paths in between, so the check would compare staged text with
-    // itself. Atomic plan-then-commit (`write_staged_files`) remains the
-    // guard against external edits.
+    // itself. The shared disk-preimage validation in `write_staged_files`
+    // (commit.rs) remains the guard against external edits; rollback only
+    // restores already-replaced targets on failure.
     for (path, text) in &outcome.changed_files {
         planner.stage(path, text.clone())?;
     }
