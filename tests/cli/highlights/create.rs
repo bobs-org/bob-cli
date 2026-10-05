@@ -611,3 +611,329 @@ fn highlights_create_stamps_rendered_pdf_through_shared_install() {
     assert!(marker.contains("- parent: obsidian_ref\n"), "{marker}");
     assert!(marker.contains("- title: Stamped Report\n"), "{marker}");
 }
+
+fn write_listen_library_episode(
+    library: &std::path::Path,
+    episode_id: &str,
+    audio_bytes: &[u8],
+) -> std::path::PathBuf {
+    let episode_dir = library.join(episode_id);
+    std::fs::create_dir_all(&episode_dir).expect("create episode dir");
+    let audio_path = episode_dir.join("edition.mp3");
+    std::fs::write(&audio_path, audio_bytes).expect("write episode audio");
+    let manifest = serde_json::json!({
+        "created_at": "2026-10-04T21:00:00+00:00",
+        "source": {},
+        "script": {},
+        "audio": {"file": "edition.mp3"},
+    });
+    write_file(&episode_dir.join("manifest.json"), &manifest.to_string());
+    audio_path
+}
+
+#[test]
+fn highlights_create_dry_run_reports_planned_audio_copy() {
+    let temp = TempDir::new("bob-cli-highlights-create-audio-dry-run");
+    let library = temp.path().join("listen-library");
+    write_listen_library_episode(&library, "report-a1b2c3", b"audio-bytes");
+    let source = temp.path().join("report.md");
+    let vault = temp.path().join("vault");
+    write_file(
+        &source,
+        "---\ntitle: Audio Report\naudio:\n  episode_id: report-a1b2c3\n---\n\n# Audio Report\n",
+    );
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg(&source)
+        .arg("-b")
+        .arg(&vault)
+        .arg("-d")
+        .env("BOB_HIGHLIGHTS_AUDIO_LIBRARY", &library)
+        .env("BOB_PANDOC_COMMAND", "/definitely/missing/pandoc")
+        .output()
+        .expect("run create audio dry-run");
+
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("audio: ")
+            && report.contains("xlib/chat/report.mp3")
+            && report.contains("(from episode report-a1b2c3)")
+            && report.contains("writes: none"),
+        "{report}"
+    );
+    assert!(
+        !vault.join("xlib/chat/report.mp3").exists(),
+        "dry-run must not copy audio"
+    );
+    assert!(!vault.exists(), "dry-run must not create the vault");
+}
+
+#[test]
+fn highlights_create_reuses_identical_existing_companion() {
+    let temp = TempDir::new("bob-cli-highlights-create-audio-reuse");
+    let library = temp.path().join("listen-library");
+    write_listen_library_episode(&library, "report-a1b2c3", b"same-bytes");
+    let source = temp.path().join("report.md");
+    let vault = temp.path().join("vault");
+    write_file(
+        &source,
+        "---\ntitle: Audio Report\naudio:\n  episode_id: report-a1b2c3\n---\n\n# Audio Report\n",
+    );
+    let dest = vault.join("xlib/chat/report.mp3");
+    write_file(&dest, "same-bytes");
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg(&source)
+        .arg("-b")
+        .arg(&vault)
+        .arg("-d")
+        .env("BOB_HIGHLIGHTS_AUDIO_LIBRARY", &library)
+        .env("BOB_PANDOC_COMMAND", "/definitely/missing/pandoc")
+        .output()
+        .expect("run create audio reuse dry-run");
+
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("xlib/chat/report.mp3")
+            && report.contains("(from episode report-a1b2c3)"),
+        "{report}"
+    );
+}
+
+#[test]
+fn highlights_create_refuses_different_audio_without_force() {
+    let temp = TempDir::new("bob-cli-highlights-create-audio-conflict");
+    let source_audio = temp.path().join("new.mp3");
+    std::fs::write(&source_audio, b"new-bytes").expect("write source audio");
+    let source = temp.path().join("report.md");
+    let vault = temp.path().join("vault");
+    write_file(&source, "# Audio Conflict\n");
+    let dest = vault.join("xlib/chat/report.mp3");
+    write_file(&dest, "old-bytes");
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg(&source)
+        .arg("-b")
+        .arg(&vault)
+        .arg("-d")
+        .arg("--audio")
+        .arg(&source_audio)
+        .env("BOB_PANDOC_COMMAND", "/definitely/missing/pandoc")
+        .output()
+        .expect("run create audio conflict");
+
+    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+    assert!(
+        stderr(&output).contains("target audio already exists"),
+        "{}",
+        format_output(&output)
+    );
+
+    let forced = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg(&source)
+        .arg("-b")
+        .arg(&vault)
+        .arg("-d")
+        .arg("--audio")
+        .arg(&source_audio)
+        .arg("--force")
+        .env("BOB_PANDOC_COMMAND", "/definitely/missing/pandoc")
+        .output()
+        .expect("run create audio conflict --force");
+    assert_success(&forced);
+    assert!(
+        stdout(&forced).contains("(from --audio)"),
+        "{}",
+        format_output(&forced)
+    );
+}
+
+#[test]
+fn highlights_create_refuses_library_destination_audio() {
+    let temp = TempDir::new("bob-cli-highlights-create-audio-lib-dest");
+    let source_audio = temp.path().join("new.mp3");
+    std::fs::write(&source_audio, b"new-bytes").expect("write source audio");
+    let source = temp.path().join("report.md");
+    let vault = temp.path().join("vault");
+    write_file(&source, "# Library Audio Conflict\n");
+    write_file(&vault.join("lib/chat/report.mp3"), "archived-audio");
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg(&source)
+        .arg("-b")
+        .arg(&vault)
+        .arg("-d")
+        .arg("--audio")
+        .arg(&source_audio)
+        .env("BOB_PANDOC_COMMAND", "/definitely/missing/pandoc")
+        .output()
+        .expect("run create library audio conflict");
+
+    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+    assert!(
+        stderr(&output).contains("library destination already exists")
+            && stderr(&output).contains("lib/chat/report.mp3"),
+        "{}",
+        format_output(&output)
+    );
+}
+
+#[test]
+fn highlights_create_no_audio_skips_discovery() {
+    let temp = TempDir::new("bob-cli-highlights-create-no-audio");
+    let library = temp.path().join("listen-library");
+    write_listen_library_episode(&library, "report-a1b2c3", b"audio-bytes");
+    let source = temp.path().join("report.md");
+    let vault = temp.path().join("vault");
+    write_file(
+        &source,
+        "---\ntitle: Quiet Report\naudio:\n  episode_id: report-a1b2c3\n---\n\n# Quiet Report\n",
+    );
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg(&source)
+        .arg("-b")
+        .arg(&vault)
+        .arg("-d")
+        .arg("--no-audio")
+        .env("BOB_HIGHLIGHTS_AUDIO_LIBRARY", &library)
+        .env("BOB_PANDOC_COMMAND", "/definitely/missing/pandoc")
+        .output()
+        .expect("run create --no-audio");
+
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains("audio: none"),
+        "{}",
+        format_output(&output)
+    );
+}
+
+#[test]
+fn highlights_create_rejects_conflicting_audio_flags() {
+    let temp = TempDir::new("bob-cli-highlights-create-audio-flag-conflict");
+    let source = temp.path().join("report.md");
+    write_file(&source, "# Flag Conflict\n");
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg(&source)
+        .arg("--audio")
+        .arg(temp.path().join("x.mp3"))
+        .arg("--no-audio")
+        .env("BOB_PANDOC_COMMAND", "/definitely/missing/pandoc")
+        .output()
+        .expect("run create --audio --no-audio");
+
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+}
+
+#[test]
+fn highlights_create_rejects_bad_audio_paths() {
+    let temp = TempDir::new("bob-cli-highlights-create-bad-audio");
+    let source = temp.path().join("report.md");
+    let vault = temp.path().join("vault");
+    write_file(&source, "# Bad Audio\n");
+    let bad_ext = temp.path().join("notes.txt");
+    write_file(&bad_ext, "text");
+
+    for (audio, needle) in [
+        (temp.path().join("missing.mp3"), "audio file does not exist"),
+        (bad_ext, "must have one of"),
+    ] {
+        let output = bob_command()
+            .arg("highlights")
+            .arg("create")
+            .arg(&source)
+            .arg("-b")
+            .arg(&vault)
+            .arg("--audio")
+            .arg(&audio)
+            .env("BOB_PANDOC_COMMAND", "/definitely/missing/pandoc")
+            .output()
+            .unwrap_or_else(|error| panic!("run create bad audio: {error}"));
+
+        assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+        assert!(
+            stderr(&output).contains(needle),
+            "{}",
+            format_output(&output)
+        );
+    }
+}
+
+#[test]
+fn highlights_create_copies_audio_before_pdf_with_play_link() {
+    let temp = TempDir::new("bob-cli-highlights-create-audio-render");
+    let library = temp.path().join("listen-library");
+    write_listen_library_episode(&library, "report-a1b2c3", b"render-audio");
+    let source = temp.path().join("report.md");
+    let vault = temp.path().join("vault");
+    write_file(
+        &source,
+        concat!(
+            "---\n",
+            "title: Listen Report\n",
+            "audio:\n",
+            "  episode_id: report-a1b2c3\n",
+            "---\n\n",
+            "# Listen Report\n\n",
+            "<div class=\"listen\">\n\n",
+            "♫ **Brief audio edition**\n\n",
+            "</div>\n",
+        ),
+    );
+    let fixture = temp.path().join("rendered.pdf");
+    write_highlights_pdf_pages(&fixture, &[&[]]);
+    let pandoc = temp.path().join("pandoc");
+    write_executable(
+        &pandoc,
+        "#!/bin/sh\nout=\"\"\nprev=\"\"\nfor arg in \"$@\"; do\n  if [ \"$prev\" = \"-o\" ]; then out=\"$arg\"; fi\n  prev=\"$arg\"\ndone\ncp \"$BOB_TEST_FIXTURE_PDF\" \"$out\"\n",
+    );
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg(&source)
+        .arg("-b")
+        .arg(&vault)
+        .env("BOB_HIGHLIGHTS_AUDIO_LIBRARY", &library)
+        .env("BOB_PANDOC_COMMAND", &pandoc)
+        .env("BOB_TEST_FIXTURE_PDF", &fixture)
+        .output()
+        .expect("run create audio render");
+
+    assert_success(&output);
+    let report = stdout(&output);
+    let pdf = vault.join("xlib/chat/report.pdf");
+    let audio = vault.join("xlib/chat/report.mp3");
+    assert!(pdf.is_file(), "rendered PDF must be installed");
+    assert!(audio.is_file(), "companion audio must be copied");
+    assert_eq!(
+        std::fs::read(&audio).expect("read copied audio"),
+        b"render-audio"
+    );
+    assert!(
+        report.contains("audio: ")
+            && report.contains("xlib/chat/report.mp3")
+            && report.contains("(from episode report-a1b2c3)")
+            && report.contains("audio_link: ")
+            && report.contains("lib%2Fchat%2Freport.mp3"),
+        "{report}"
+    );
+}

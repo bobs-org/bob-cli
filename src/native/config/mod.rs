@@ -71,6 +71,7 @@ pub(crate) struct PriorityProperty {
 pub(crate) struct HighlightsConfig {
     pre_scan_hook: Option<String>,
     audio_link_template: Option<String>,
+    audio_library: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -159,6 +160,10 @@ impl HighlightsConfig {
 
     pub(crate) fn audio_link_template(&self) -> Option<&str> {
         self.audio_link_template.as_deref()
+    }
+
+    pub(crate) fn audio_library(&self) -> Option<&str> {
+        self.audio_library.as_deref()
     }
 }
 
@@ -352,6 +357,8 @@ struct RawHighlights {
     pre_scan_command: Option<serde_yaml::Value>,
     #[serde(default)]
     audio_link_template: Option<String>,
+    #[serde(default)]
+    audio_library: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -512,11 +519,18 @@ pub(crate) fn parse_highlights_config(
         .filter(|command| !command.is_empty());
     let audio_link_template = config
         .highlights
-        .and_then(|highlights| highlights.audio_link_template);
+        .as_ref()
+        .and_then(|highlights| highlights.audio_link_template.clone());
+    let audio_library = config
+        .highlights
+        .and_then(|highlights| highlights.audio_library)
+        .map(|library| library.trim().to_string())
+        .filter(|library| !library.is_empty());
 
     Ok(HighlightsConfig {
         pre_scan_hook,
         audio_link_template,
+        audio_library,
     })
 }
 

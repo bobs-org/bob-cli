@@ -68,7 +68,7 @@ Available commands:
 
 ```bash
 bob highlights clip <URL> [-A|--author NAME] [-b|--bob-dir PATH] [-d|--dry-run] [-f|--force] [-H|--html FILE] [-l|--lib-dir PATH] [-N|--name STEM] [-o|--output PDF] [-P|--parent NOTE] [-p|--published DATE] [-r|--ref-dir PATH] [-s|--status STATUS] [-T|--title TITLE] [-t|--ref-type DIR] [-x|--xlib-dir PATH]
-bob highlights create <md-file> [-b|--bob-dir PATH] [-d|--dry-run] [-f|--force] [-i|--include-id] [-l|--lib-dir PATH] [-o|--output PDF] [-P|--parent NOTE] [-r|--ref-dir PATH] [-s|--status STATUS] [-t|--ref-type DIR] [-x|--xlib-dir PATH]
+bob highlights create <md-file> [-a|--audio PATH] [-b|--bob-dir PATH] [-d|--dry-run] [-f|--force] [-i|--include-id] [-l|--lib-dir PATH] [-n|--no-audio] [-o|--output PDF] [-P|--parent NOTE] [-r|--ref-dir PATH] [-s|--status STATUS] [-t|--ref-type DIR] [-x|--xlib-dir PATH]
 bob highlights doctor [-b|--bob-dir PATH] [-l|--lib-dir PATH] [-n|--no-hooks] [-r|--ref-dir PATH] [-x|--xlib-dir PATH]
 bob highlights marker <pdf> [-b|--bob-dir PATH] [-l|--lib-dir PATH] [-r|--ref-dir PATH] [-x|--xlib-dir PATH]
 bob highlights scan [-b|--bob-dir PATH] [-d|--dry-run] [-j|--jobs N] [-l|--lib-dir PATH] [-n|--no-hooks] [-r|--ref-dir PATH] [-v|--verbose] [-w|--write-pdfs] [-x|--xlib-dir PATH]
@@ -151,11 +151,47 @@ running pandoc or creating output directories. Without `--include-id`, manual
 
 Markdown authors can wrap a short audio summary in `<div class="listen">` to
 render it as a light-blue callout in the Highlights PDF. A leading `♫` becomes
-a **▶ Play** button when a same-stem MP3 companion is present beside the PDF
-target and the target is in the Bob intake or library. Intake links point to
-the companion's final `lib/` location. Relative links inside the card, such as
-the narration-script link, are omitted from the PDF because the source file is
-not available there. Without a companion, the card remains with its `♫` glyph.
+a **▶ Play** button when companion audio is bound and the target is in the Bob
+intake or library. Intake links point to the companion's final `lib/`
+location. Relative links inside the card, such as the narration-script link,
+are omitted from the PDF because the source file is not available there.
+Without a companion, the card remains with its `♫` glyph.
+
+`create` now binds audio from the sase-listen library, not only from a file
+that was already beside the PDF. Discovery order, first hit wins:
+
+1. `--audio PATH` (missing files and non-audio extensions are errors;
+   `--no-audio` conflicts with `--audio` and disables discovery).
+2. Frontmatter `audio.episode_id` resolved through
+   `<library>/<id>/manifest.json` (`audio.file` must be a bare filename
+   present in that episode directory; an unresolvable id warns and falls
+   through).
+3. Sibling `<stem>_narration.md` (stripping a trailing `__final`), hashed
+   with SHA-256 and matched against `source.sha256` or `script.sha256` in
+   `<library>/*/manifest.json` (newest `created_at` wins).
+
+The library root is `BOB_HIGHLIGHTS_AUDIO_LIBRARY`, then
+`highlights.audio_library` in `bob/config.yml`, then
+`$XDG_DATA_HOME/sase-listen/library`, then
+`~/.local/share/sase-listen/library`:
+
+```yaml
+highlights:
+  audio_library: "/data/sase-listen/library"
+```
+
+The copy lands beside the PDF target with the source extension lowercased
+(`xlib/chat/<stem>.mp3`), planned before any write: identical bytes are
+reused, different bytes refuse without `--force`, and an existing mirrored
+`lib/<type>/<stem>.<ext>` refuses because scan would refuse to move over it.
+The PDF is rendered to a temp file, the audio is copied atomically (temp file
+in the destination directory, then rename), and only then is the PDF stamped
+and installed; a failed install deletes an audio file this run created and
+never a reused file. Success and dry-run output show
+`audio: <dest> (from <origin>)` after the `pdf:` line, or `audio: none`;
+`--include-id` gains no required flag. Backfill an already-scanned PDF by
+copying its MP3 into `xlib/<type>/<stem>.<ext>` for scan to late-pair; do not
+rerun `create --force` on an annotated library PDF.
 
 The URI template is selected from `BOB_HIGHLIGHTS_AUDIO_LINK_TEMPLATE`, then
 `highlights.audio_link_template` in `bob/config.yml`, then the default:

@@ -702,11 +702,13 @@ fn highlights_create_help_lists_options_alphabetically() {
     assert_text_order(
         &help,
         &[
+            "-a, --audio",
             "-b, --bob-dir",
             "-d, --dry-run",
             "-f, --force",
             "-i, --include-id",
             "-l, --lib-dir",
+            "-n, --no-audio",
             "-o, --output",
             "-P, --parent",
             "-r, --ref-dir",
