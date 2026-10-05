@@ -872,6 +872,7 @@ fn editor_agrees_with_execution_for_resolved_captures() {
             CaptureKind::PomodoroLink { .. } => EditorMode::PomodoroLink,
             CaptureKind::PomodoroClose { .. } => EditorMode::PomodoroClose,
             CaptureKind::PomodoroStart { .. } => EditorMode::PomodoroStart,
+            CaptureKind::TaskComplete { .. } => EditorMode::TaskComplete,
         };
         assert_eq!(parse.mode, expected_mode, "{raw}");
         assert_eq!(
@@ -1710,4 +1711,42 @@ fn editor_holds_unused_pomodoro_while_a_colon_id_is_unfinished() {
         vec!["unused_project_note_pomodoro"],
         "{lone_caret:?}"
     );
+}
+
+#[test]
+fn editor_reports_task_complete_modes_needs_and_diagnostics() {
+    // Queries report `incomplete` needing `task_complete`.
+    for raw in ["!", "!fix", "!sase:", "!\"Shopping List"] {
+        let parsed = editor(raw);
+        assert_eq!(parsed.mode, EditorMode::Incomplete, "{raw}");
+        assert_eq!(parsed.needs, vec![Need::TaskComplete], "{raw}");
+        assert!(parsed.diagnostics.is_empty(), "{raw}");
+    }
+
+    // Complete tokens report `task_complete` with the block ID.
+    let complete = editor("!sase:fix-flaky");
+    assert_eq!(complete.mode, EditorMode::TaskComplete);
+    assert_eq!(complete.block_id.as_deref(), Some("fix-flaky"));
+    assert!(complete.needs.is_empty());
+    assert!(complete.diagnostics.is_empty());
+
+    // Claimed invalid items keep `task_complete` with the diagnostic,
+    // like a padded `^route:id` keeps `pomodoro_link`.
+    for raw in [
+        "!sase:fix-flaky more",
+        "!sase:fix-flaky=x",
+        "!sase:a !sase:b",
+    ] {
+        let parsed = editor(raw);
+        assert_eq!(parsed.mode, EditorMode::TaskComplete, "{raw}");
+        assert_eq!(codes(&parsed), vec!["invalid_task_complete"], "{raw}");
+    }
+
+    // Prose rows never claim.
+    for raw in ["!wow this works", "Wow!", "Buy milk !sase:x", "!!"] {
+        let parsed = editor(raw);
+        assert_ne!(parsed.mode, EditorMode::TaskComplete, "{raw}");
+        assert_ne!(parsed.needs, vec![Need::TaskComplete], "{raw}");
+        assert_eq!(codes(&parsed), Vec::<&str>::new(), "{raw}");
+    }
 }

@@ -262,8 +262,8 @@ pub(crate) fn parse_for_editor(raw_text: &str) -> EditorParse {
             // Whole-item session operators, `=x[<N>][!<M>]` closes
             // (including dangling-separator editing states), `=`/`=<X>`
             // starts, `=<X>#` incomplete named starts (which carry
-            // the partial `pomodoro_start` spec), and `:` task-link
-            // queries are their own mode: a
+            // the partial `pomodoro_start` spec), `:` task-link queries,
+            // and `!` completion queries are their own mode: a
             // `@@` declaration routes ordinary items in the same draft
             // but never turns an operator, close, start, or query into a task
             // or changes its destination.
@@ -271,7 +271,9 @@ pub(crate) fn parse_for_editor(raw_text: &str) -> EditorParse {
                 || item.mode == EditorMode::PomodoroShift
                 || item.mode == EditorMode::PomodoroClose
                 || item.mode == EditorMode::PomodoroStart
+                || item.mode == EditorMode::TaskComplete
                 || item.needs == [Need::TaskLink]
+                || item.needs == [Need::TaskComplete]
                 || item.pomodoro_close.is_some()
                 || item.pomodoro_start.is_some()
             {
@@ -646,6 +648,7 @@ pub(super) fn parse_editor_task_link_item<'a>(
             pomodoro_close: None,
             dependencies: Vec::new(),
             dependency_target: None,
+            task_complete: None,
             spans: vec![Span {
                 start: token.start,
                 end: token.end,
@@ -658,6 +661,117 @@ pub(super) fn parse_editor_task_link_item<'a>(
         },
         declarations: Vec::new(),
     })
+}
+
+/// A whole-item `!` token: a still-typing query reports `incomplete`
+/// needing `task_complete` with one `interactive_placeholder` span over
+/// the whole token (sigil included); a complete token reports
+/// `task_complete` with sigil/note/block-ID spans and the per-item
+/// `task_complete` object; a claimed invalid token reports `task_complete`
+/// with an `invalid_task_complete` diagnostic, mirroring how a padded
+/// `^route:id` keeps `pomodoro_link` with its diagnostic. A `@@`
+/// declaration never applies to it, exactly like the `:` picker family.
+pub(super) fn parse_editor_task_complete_item<'a>(
+    item: &CaptureItem<'a>,
+) -> Option<EditorItemOutcome<'a>> {
+    let claim = claim_bang_item(item)?;
+    let outcome = |parsed: EditorItemParse| EditorItemOutcome {
+        item: parsed,
+        declarations: Vec::new(),
+    };
+    let base_item = |mode: EditorMode,
+                     needs: Vec<Need>,
+                     block_id: Option<String>,
+                     task_complete: Option<TaskCompleteEntry>,
+                     spans: Vec<Span>,
+                     diagnostics: Vec<Diagnostic>| {
+        outcome(EditorItemParse {
+            index: item.index,
+            start: item.start,
+            end: item.end,
+            line_start: item.line_start,
+            line_end: item.line_end,
+            body: String::new(),
+            mode,
+            route: None,
+            section: None,
+            block_id,
+            needs,
+            pomodoro_start: None,
+            pomodoro_adjust: None,
+            pomodoro_shift: None,
+            pomodoro_close: None,
+            dependencies: Vec::new(),
+            dependency_target: None,
+            task_complete,
+            spans,
+            diagnostics,
+            sub_bullets: Vec::new(),
+            has_local_destination: true,
+            local_destination_markers: Vec::new(),
+        })
+    };
+    match claim {
+        BangClaim::Query { raw: _, start, end } => Some(base_item(
+            EditorMode::Incomplete,
+            vec![Need::TaskComplete],
+            None,
+            None,
+            vec![Span {
+                start,
+                end,
+                kind: SpanKind::InteractivePlaceholder,
+            }],
+            Vec::new(),
+        )),
+        BangClaim::Complete(dependency) => {
+            let entry = TaskCompleteEntry {
+                raw: dependency.raw.clone(),
+                note: dependency.note.clone(),
+                block_id: dependency.block_id.clone(),
+                quoted: dependency.quoted,
+                start: dependency.start,
+                end: dependency.end,
+            };
+            Some(base_item(
+                EditorMode::TaskComplete,
+                Vec::new(),
+                Some(dependency.block_id.clone()),
+                Some(entry),
+                vec![
+                    Span {
+                        start: dependency.start,
+                        end: dependency.start + 1,
+                        kind: SpanKind::TaskCompleteSigil,
+                    },
+                    Span {
+                        start: dependency.start + 1,
+                        end: dependency.block_start - 1,
+                        kind: SpanKind::TaskCompleteNote,
+                    },
+                    Span {
+                        start: dependency.block_start,
+                        end: dependency.block_end,
+                        kind: SpanKind::TaskCompleteBlockId,
+                    },
+                ],
+                Vec::new(),
+            ))
+        }
+        BangClaim::Invalid(invalid) => Some(base_item(
+            EditorMode::TaskComplete,
+            Vec::new(),
+            None,
+            None,
+            Vec::new(),
+            vec![Diagnostic {
+                severity: Severity::Error,
+                code: "invalid_task_complete",
+                message: invalid.message.clone(),
+                range: Some((invalid.start, invalid.end)),
+            }],
+        )),
+    }
 }
 
 /// A terminal-plus task selector is unresolved editor input. Like the
@@ -690,6 +804,7 @@ pub(super) fn parse_editor_parent_task_item<'a>(
             pomodoro_close: None,
             dependencies: Vec::new(),
             dependency_target: None,
+            task_complete: None,
             spans: vec![Span {
                 start: token.start,
                 end: token.end,
@@ -709,6 +824,9 @@ pub(super) fn parse_editor_item<'a>(
 ) -> EditorItemOutcome<'a> {
     if let Some(task_link) = parse_editor_task_link_item(item) {
         return task_link;
+    }
+    if let Some(task_complete) = parse_editor_task_complete_item(item) {
+        return task_complete;
     }
     if let Some(close) = parse_editor_close_item(item) {
         return attach_operator_dependency_rejection(close, item);
@@ -1676,6 +1794,7 @@ pub(super) fn parse_editor_item<'a>(
             pomodoro_close,
             dependencies: item_dependencies.dependency_entries(),
             dependency_target,
+            task_complete: None,
             spans,
             diagnostics,
             sub_bullets,

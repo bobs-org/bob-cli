@@ -311,11 +311,23 @@ pub(crate) fn replacement_for(
     path: &Path,
     block_id: &str,
 ) -> String {
+    replacement_for_sigil(index, path, block_id, b'&')
+}
+
+/// Sigil-generalized replacement: `&` for dependency rows, `!` for
+/// task-completion rows. Quoting rules are sigil-independent.
+pub(crate) fn replacement_for_sigil(
+    index: &NoteIndex,
+    path: &Path,
+    block_id: &str,
+    sigil: u8,
+) -> String {
     let locator = locator_for(index, path);
+    let sigil = sigil as char;
     if needs_quoting(&locator) {
-        format!("&\"{}\":{block_id}", escape_quoted_note(&locator))
+        format!("{sigil}\"{}\":{block_id}", escape_quoted_note(&locator))
     } else {
-        format!("&{locator}:{block_id}")
+        format!("{sigil}{locator}:{block_id}")
     }
 }
 

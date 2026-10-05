@@ -192,14 +192,15 @@ fn decode_quoted_note(raw: &str) -> String {
 }
 
 /// Validate one vault-relative note identity, returning the repairable
-/// message when it cannot name a note.
-fn validate_note(note: &str) -> Option<String> {
+/// message when it cannot name a note. `sigil` renders the example in the
+/// empty-note message (`&` for dependencies, `!` for completions).
+fn validate_note(note: &str, sigil: u8) -> Option<String> {
     if note.is_empty() {
-        return Some(
-            "dependency note is empty: use '&note:block-id' \
-             (for spaces, quote the note: '&\"My Note\":block-id')"
-                .to_string(),
-        );
+        return Some(format!(
+            "dependency note is empty: use '{sigil}note:block-id' \
+             (for spaces, quote the note: '{sigil}\"My Note\":block-id')",
+            sigil = sigil as char,
+        ));
     }
     if note.starts_with('/') {
         return Some(format!(
@@ -222,11 +223,13 @@ fn validate_note(note: &str) -> Option<String> {
 }
 
 /// Validate one prerequisite block ID against Bob's existing rules.
-fn validate_block_id(block_id: &str) -> Option<String> {
+/// `sigil` renders the example (`&` for dependencies, `!` for completions).
+fn validate_block_id(block_id: &str, sigil: u8) -> Option<String> {
     if !super::tokens::is_block_id(block_id) {
         return Some(format!(
             "dependency block ID '{block_id}' must contain only A-Z, a-z, \
-             0-9 or '-' (use '&note:block-id')"
+             0-9 or '-' (use '{sigil}note:block-id')",
+            sigil = sigil as char,
         ));
     }
     None
@@ -278,9 +281,20 @@ pub(crate) fn scan_line_dependencies(
     found
 }
 
-/// Classify the modifier starting at `&` byte `amp` (already known to sit
+/// Classify the modifier starting at sigil byte `amp` (already known to sit
 /// at a token start, outside protected spans, and unescaped).
 fn scan_modifier(line: &str, base: usize, amp: usize) -> ScannedDependency {
+    scan_modifier_with_sigil(line, base, amp, b'&')
+}
+
+/// Classify the modifier starting at `sigil` byte `amp`, generalized over
+/// the `&` dependency and `!` completion sigils.
+fn scan_modifier_with_sigil(
+    line: &str,
+    base: usize,
+    amp: usize,
+    sigil: u8,
+) -> ScannedDependency {
     let start = base + amp;
     let mut cursor = amp + 1;
     if cursor >= line.len() || is_space_at(line, cursor) {
@@ -291,7 +305,7 @@ fn scan_modifier(line: &str, base: usize, amp: usize) -> ScannedDependency {
         };
     }
     if line.as_bytes()[cursor] == b'"' {
-        return scan_quoted_modifier(line, base, amp);
+        return scan_quoted_modifier(line, base, amp, sigil);
     }
     // Unquoted note: runs to the first `:` (or whitespace/end, which
     // leaves a partial query).
@@ -310,14 +324,24 @@ fn scan_modifier(line: &str, base: usize, amp: usize) -> ScannedDependency {
         };
     }
     let note = line[note_start..cursor].to_string();
-    scan_block_id(line, base, amp, start, note, false, cursor)
+    scan_block_id(line, base, amp, start, note, false, cursor, sigil)
 }
 
-/// Classify `&"quoted note"...` starting at `&` byte `amp`.
+/// Scan one whole-item `!note:block-id` token at the start of a trimmed
+/// line. `line` must start with `!`; `base` is its draft byte offset.
+/// Quote-aware through the shared `&` locator rules, so
+/// `!"Shopping List":milk` scans as one token.
+pub(crate) fn scan_bang_token(line: &str, base: usize) -> ScannedDependency {
+    debug_assert!(line.starts_with('!'));
+    scan_modifier_with_sigil(line, base, 0, b'!')
+}
+
+/// Classify a quoted-note modifier starting at `sigil` byte `amp`.
 fn scan_quoted_modifier(
     line: &str,
     base: usize,
     amp: usize,
+    sigil: u8,
 ) -> ScannedDependency {
     let start = base + amp;
     // `cursor` walks the bytes after the opening quote.
@@ -358,12 +382,12 @@ fn scan_quoted_modifier(
         };
     }
     let note = decode_quoted_note(&raw_note);
-    scan_block_id(line, base, amp, start, note, true, after)
+    scan_block_id(line, base, amp, start, note, true, after, sigil)
 }
 
 /// Classify the `:block-id` tail: `colon` is the byte index of the `:`
 /// separator. `note_end` reporting covers the typed component (inside the
-/// quotes when quoted).
+/// quotes when quoted). `sigil` renders the validation examples.
 #[allow(clippy::too_many_arguments)]
 fn scan_block_id(
     line: &str,
@@ -373,6 +397,7 @@ fn scan_block_id(
     note: String,
     quoted: bool,
     colon: usize,
+    sigil: u8,
 ) -> ScannedDependency {
     let mut end = colon + 1;
     while end < line.len() && !is_space_at(line, end) {
@@ -386,7 +411,7 @@ fn scan_block_id(
             end: base + end,
         };
     }
-    if let Some(message) = validate_note(&note) {
+    if let Some(message) = validate_note(&note, sigil) {
         return ScannedDependency::Invalid(InvalidDependency {
             raw,
             message,
@@ -395,7 +420,7 @@ fn scan_block_id(
         });
     }
     let block_id = line[colon + 1..end].to_string();
-    if let Some(message) = validate_block_id(&block_id) {
+    if let Some(message) = validate_block_id(&block_id, sigil) {
         return ScannedDependency::Invalid(InvalidDependency {
             raw,
             message,
@@ -1005,6 +1030,11 @@ pub(crate) fn resolve_execution_ownership(
         }
         CaptureKind::PomodoroStart { .. } => {
             Err(unsupported_target_dependency_error("Pomodoro-start"))
+        }
+        CaptureKind::TaskComplete { .. } => {
+            // A `!` item never carries `&` modifiers: any second token
+            // is claimed invalid before ownership resolves.
+            Err(unsupported_target_dependency_error("task-complete"))
         }
     }
 }

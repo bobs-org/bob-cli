@@ -123,6 +123,50 @@ pub(super) fn parse_capture_item<'a>(
         }
         return Err(task_link_picker_error(token.text));
     }
+    // A whole-item `!` token is claimed at the `:` query position:
+    // queries and padded items fail with teaching errors, and complete
+    // tokens become `TaskComplete`. `@@` inheritance skips these items:
+    // the kind below is never `Task`, so draft resolution leaves the
+    // global declaration alone.
+    if let Some(claim) = claim_bang_item(item) {
+        match claim {
+            BangClaim::Query { raw, .. } => {
+                return Err(bang_picker_error(&raw));
+            }
+            BangClaim::Invalid(invalid) => {
+                return Err(invalid.message);
+            }
+            BangClaim::Complete(dependency) => {
+                if forced_route.is_some() || forced_section.is_some() {
+                    return Err(bang_invalid_error(
+                        &dependency.raw,
+                        "its forced destination flags",
+                    ));
+                }
+                return Ok(parsed_capture_item_outcome(
+                    item,
+                    ParsedCaptureText {
+                        body: String::new(),
+                        clip: None,
+                        route: None,
+                        kind: CaptureKind::TaskComplete {
+                            raw: dependency.raw.clone(),
+                            note: dependency.note.clone(),
+                            block_id: dependency.block_id.clone(),
+                            quoted: dependency.quoted,
+                        },
+                        scheduled_offset: None,
+                        priority_level: None,
+                        sub_bullets: Vec::new(),
+                        dependencies: Vec::new(),
+                        dependency_target: None,
+                    },
+                    Vec::new(),
+                    Some(dependency.raw.clone()),
+                ));
+            }
+        }
+    }
     if let Some(outcome) = parse_pomodoro_equals_item(
         item,
         parent_line,

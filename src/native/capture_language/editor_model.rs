@@ -45,6 +45,9 @@ pub(crate) enum SpanKind {
     DependencySigil,
     DependencyNote,
     DependencyBlockId,
+    TaskCompleteSigil,
+    TaskCompleteNote,
+    TaskCompleteBlockId,
     InteractivePlaceholder,
     WikilinkDelimiter,
     WikilinkTarget,
@@ -95,6 +98,9 @@ impl SpanKind {
             Self::DependencySigil => "dependency_sigil",
             Self::DependencyNote => "dependency_note",
             Self::DependencyBlockId => "dependency_block_id",
+            Self::TaskCompleteSigil => "task_complete_sigil",
+            Self::TaskCompleteNote => "task_complete_note",
+            Self::TaskCompleteBlockId => "task_complete_block_id",
             Self::InteractivePlaceholder => "interactive_placeholder",
             Self::WikilinkDelimiter => "wikilink_delimiter",
             Self::WikilinkTarget => "wikilink_target",
@@ -163,6 +169,8 @@ pub(crate) enum EditorMode {
     /// A dependency-only action: prerequisites for an explicitly selected
     /// existing task, with no new task.
     TaskDependency,
+    /// A whole-item `!note:block-id` task completion.
+    TaskComplete,
     Incomplete,
 }
 
@@ -183,6 +191,7 @@ impl EditorMode {
             Self::PomodoroClose => "pomodoro_close",
             Self::PomodoroStart => "pomodoro_start",
             Self::TaskDependency => "task_dependency",
+            Self::TaskComplete => "task_complete",
             Self::Incomplete => "incomplete",
         }
     }
@@ -209,6 +218,8 @@ pub(crate) enum Need {
     TaskDependency,
     /// No dependent was named: add task text or `@note+task-id`.
     DependencyTarget,
+    /// A completion picker is still open: a `!` token is partial.
+    TaskComplete,
 }
 
 impl Need {
@@ -229,6 +240,7 @@ impl Need {
             Self::PomodoroStartTask => "pomodoro_start_task",
             Self::TaskDependency => "task_dependency",
             Self::DependencyTarget => "dependency_target",
+            Self::TaskComplete => "task_complete",
         }
     }
 }
@@ -248,6 +260,25 @@ pub(crate) struct DependencyEntry {
     pub(crate) quoted: bool,
     /// Whole-modifier range, sigil included.
     pub(crate) start: usize,
+    pub(crate) end: usize,
+}
+
+/// One whole-item `!note:block-id` completion token, in lexical form.
+/// Additive schema-version-1 data: the picker and writer phases add
+/// resolution results without changing these lexical fields.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct TaskCompleteEntry {
+    /// Exact typed text, sigil included.
+    pub(crate) raw: String,
+    /// Vault-relative note identity (quotes removed, escapes decoded).
+    pub(crate) note: String,
+    /// Task block ID.
+    pub(crate) block_id: String,
+    /// Whether the note was a `"quoted component"`.
+    pub(crate) quoted: bool,
+    /// Whole-token range, sigil included.
+    pub(crate) start: usize,
+    /// Whole-token range, sigil included.
     pub(crate) end: usize,
 }
 
@@ -355,6 +386,8 @@ pub(crate) struct EditorItemParse {
     pub(crate) dependencies: Vec<DependencyEntry>,
     /// Ownership of this item's modifiers, when a dependent is named.
     pub(crate) dependency_target: Option<DependencyTarget>,
+    /// Whole-item `!note:block-id` completion token, when claimed.
+    pub(crate) task_complete: Option<TaskCompleteEntry>,
     pub(crate) spans: Vec<Span>,
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) sub_bullets: Vec<AuthoredSubBullet>,

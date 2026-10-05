@@ -379,6 +379,36 @@ pub(super) fn task_link_picker_at_error(token: &str, query: &str) -> String {
     )
 }
 
+/// A whole-item `!` query (`!`, `!fix`, `!sase:`): only a picker search,
+/// never captured. It teaches the `!<note>:<block-id>` spelling.
+pub(super) fn bang_picker_error(token: &str) -> String {
+    format!(
+        "`{token}` opens the task picker; pick a task to insert its `!<note>:<block-id>` token, or write one yourself (for example `!sase:fix-flaky`)"
+    )
+}
+
+/// A claimed `!` item with extra text: a complete token must be the whole
+/// capture item. `extra` names what to remove (`more`-text in backticks,
+/// or `its child lines`).
+pub(super) fn bang_invalid_error(raw: &str, extra: &str) -> String {
+    format!(
+        "`{raw}` completes an existing task and must be the whole capture item; remove {extra}"
+    )
+}
+
+/// Hint appended when a claimed `!` token carries an `=` or `#` suffix.
+pub(super) const BANG_SUFFIX_HINT: &str =
+    "`!` takes no `=` or `#` suffix; to complete the running session's link while closing, use `=x!N`";
+
+/// Hint appended when one item holds two complete `!` tokens.
+pub(super) const BANG_BULK_HINT: &str =
+    "put each completion on its own item, separated by a blank line";
+
+/// Temporary refusal while `!note:block-id` execution lands. Read by the
+/// capture planner outside this module, so crate-visible.
+pub(crate) const BANG_EXECUTE_PENDING_ERROR: &str =
+    "`!note:block-id` completion is not available in this build yet";
+
 /// A terminal-plus selector is an editor-only task search gesture. It
 /// cannot be captured until the user accepts a candidate, which supplies
 /// the canonical `@route+block-id` parent marker.

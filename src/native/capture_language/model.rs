@@ -85,6 +85,15 @@ pub(crate) enum CaptureKind {
         spec: PomodoroStartSpec,
         pomodoro_name: Option<String>,
     },
+    /// A whole-item `!note:block-id` task completion: complete the existing
+    /// open task the vault-wide note locator names. The token must be the
+    /// entire capture item; anything extra is a teaching error.
+    TaskComplete {
+        raw: String,
+        note: String,
+        block_id: String,
+        quoted: bool,
+    },
 }
 
 /// Which sigil spelled a solo Pomodoro-link item.

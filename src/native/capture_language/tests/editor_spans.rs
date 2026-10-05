@@ -744,3 +744,34 @@ fn diagnostics_serialize_with_a_nullable_range_pair() {
     assert_eq!(value[0]["range"][0], 5);
     assert_eq!(value[0]["range"][1], 16);
 }
+
+#[test]
+fn editor_spans_cover_task_complete_tokens() {
+    let complete = editor("!sase:fix-flaky");
+    assert_eq!(
+        ranges(&complete),
+        vec![
+            (0, 1, SpanKind::TaskCompleteSigil),
+            (1, 5, SpanKind::TaskCompleteNote),
+            (6, 15, SpanKind::TaskCompleteBlockId),
+        ]
+    );
+
+    // The note span covers the quotes when quoted.
+    let quoted = editor("!\"Shopping List\":milk");
+    assert_eq!(
+        ranges(&quoted),
+        vec![
+            (0, 1, SpanKind::TaskCompleteSigil),
+            (1, 16, SpanKind::TaskCompleteNote),
+            (17, 21, SpanKind::TaskCompleteBlockId),
+        ]
+    );
+
+    // A query carries one placeholder span over the whole token.
+    let query = editor("!fix");
+    assert_eq!(
+        ranges(&query),
+        vec![(0, 4, SpanKind::InteractivePlaceholder)]
+    );
+}

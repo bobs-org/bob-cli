@@ -589,3 +589,35 @@ fn completion_requests_nothing_anywhere_on_a_chain() {
     let item = editor_item_at("+2 =x", 4).expect("close item");
     assert_eq!(item.mode, EditorMode::PomodoroClose);
 }
+
+#[test]
+fn bang_items_claim_each_blank_line_block_independently() {
+    // Bulk means one `!` item per blank-line-separated block: each block
+    // claims on its own, and any failure rolls the whole batch back.
+    let draft = execute_draft("!sase:first-done\n\n!projects/foo:second-done")
+        .expect("two completions");
+    assert_eq!(draft.items.len(), 2);
+    for item in &draft.items {
+        assert!(
+            matches!(item.parsed.kind, CaptureKind::TaskComplete { .. }),
+            "{:?}",
+            item.parsed.kind
+        );
+    }
+
+    // The same task twice still parses twice here; the writer reports
+    // the second as `already_done`.
+    let twice = execute_draft("!sase:fix-flaky\n\n!sase:fix-flaky")
+        .expect("same task twice");
+    assert_eq!(twice.items.len(), 2);
+
+    // A query anywhere in the draft fails the whole batch.
+    let error =
+        execute_draft("!sase:fix-flaky\n\n!fix").expect_err("query rolls back");
+    assert!(error.contains("opens the task picker"), "{error}");
+
+    // An invalid item anywhere in the draft fails the whole batch.
+    let error = execute_draft("!sase:fix-flaky\n\n!sase:x more")
+        .expect_err("invalid rolls back");
+    assert!(error.contains("must be the whole capture item"), "{error}");
+}

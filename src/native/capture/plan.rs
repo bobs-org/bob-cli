@@ -147,6 +147,14 @@ pub(super) fn plan_capture_item(
             dependency_ctx,
         );
     }
+    // Temporary planner arm: `!note:block-id` parses but its writer has
+    // not landed yet, so every complete token refuses here. `execute`
+    // replaces this arm with the staged batch writer.
+    if matches!(parsed.kind, CaptureKind::TaskComplete { .. }) {
+        return Err(CaptureError::usage(
+            crate::native::capture_language::BANG_EXECUTE_PENDING_ERROR,
+        ));
+    }
     if let CaptureKind::PomodoroClose { spec } = parsed.kind.clone() {
         return plan_pomodoro_close_item(
             request, parsed, spec, now, today, planner, warnings,
@@ -522,6 +530,9 @@ pub(super) fn plan_capture_item(
         }
         CaptureKind::PomodoroStart { .. } => {
             unreachable!("pomodoro start capture is planned before this point")
+        }
+        CaptureKind::TaskComplete { .. } => {
+            unreachable!("task complete capture is planned before this point")
         }
     };
     let kind_label = capture_kind_label(&parsed.kind);
@@ -987,6 +998,7 @@ pub(super) fn capture_kind_label(kind: &CaptureKind) -> &'static str {
         CaptureKind::PomodoroLink { .. } => "pomodoro_link",
         CaptureKind::PomodoroClose { .. } => "pomodoro_close",
         CaptureKind::PomodoroStart { .. } => "pomodoro_start",
+        CaptureKind::TaskComplete { .. } => "task_complete",
     }
 }
 

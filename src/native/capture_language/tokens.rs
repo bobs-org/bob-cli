@@ -1,6 +1,7 @@
 //! Route, caret, and selector parsers.
 
 use super::close_selection::*;
+use super::dependencies::*;
 use super::draft::*;
 use super::editor_parse::*;
 use super::item::*;
@@ -201,6 +202,106 @@ pub(super) fn task_link_query_token<'a>(
         return None;
     };
     token.text.starts_with(':').then_some(*token)
+}
+
+/// One whole-item `!` token claim, shared by execution, the editor parse,
+/// and completion. A query is still being typed (`!`, `!fix`, `!sase:`);
+/// a complete token names a task; anything extra on the item is a
+/// teaching error, never an inbox task.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum BangClaim {
+    Query {
+        raw: String,
+        start: usize,
+        end: usize,
+    },
+    Complete(DependencyRef),
+    Invalid(InvalidDependency),
+}
+
+/// Claim predicate for whole-item `!note:block-id` tokens. A leading `!`
+/// claims the item unless the second byte is `[` or `!` (embeds, images,
+/// and `!` runs stay prose). An incomplete token with other text on the
+/// item, or on a multi-line item, stays prose like `:dee` plus a child;
+/// a complete token with extra text or child lines is claimed invalid.
+pub(super) fn claim_bang_item(item: &CaptureItem<'_>) -> Option<BangClaim> {
+    let (parent, children) = item.lines.split_first()?;
+    let text = parent.raw.text;
+    let trimmed = text.trim();
+    if !trimmed.starts_with('!') {
+        return None;
+    }
+    if matches!(trimmed.as_bytes().get(1).copied(), Some(b'[') | Some(b'!')) {
+        return None;
+    }
+    let base = parent.raw.start + (text.len() - text.trim_start().len());
+    let has_children =
+        children.iter().any(|line| !line.raw.text.trim().is_empty());
+    match scan_bang_token(trimmed, base) {
+        ScannedDependency::Complete(dependency) => {
+            let token_len = dependency.end - base;
+            let rest = trimmed[token_len..].trim();
+            if rest.is_empty() {
+                if has_children {
+                    return Some(BangClaim::Invalid(InvalidDependency {
+                        raw: dependency.raw.clone(),
+                        message: bang_invalid_error(
+                            &dependency.raw,
+                            "its child lines",
+                        ),
+                        start: dependency.start,
+                        end: dependency.end,
+                    }));
+                }
+                return Some(BangClaim::Complete(dependency));
+            }
+            let extra = rest.to_string();
+            let hinted =
+                rest.split_whitespace().any(|token| token.starts_with('!'));
+            let mut message =
+                bang_invalid_error(&dependency.raw, &format!("`{extra}`"));
+            if hinted {
+                message.push_str(&format!(" ({})", BANG_BULK_HINT));
+            }
+            Some(BangClaim::Invalid(InvalidDependency {
+                raw: dependency.raw.clone(),
+                message,
+                start: dependency.start,
+                end: base + trimmed.len(),
+            }))
+        }
+        ScannedDependency::Partial { raw, start, end } => {
+            if end - base == trimmed.len() && !has_children {
+                Some(BangClaim::Query { raw, start, end })
+            } else {
+                // `!wow this works`, `! foo`, or an incomplete token plus
+                // a child line: ordinary prose.
+                None
+            }
+        }
+        ScannedDependency::Invalid(invalid) => {
+            let mut message = invalid.message.clone();
+            if let Some(tail) = invalid.raw.split_once(':').map(|(_, t)| t)
+                && (tail.contains('=') || tail.contains('#'))
+            {
+                message.push_str(&format!(" ({BANG_SUFFIX_HINT})"));
+            }
+            Some(BangClaim::Invalid(InvalidDependency {
+                raw: invalid.raw.clone(),
+                message: bang_invalid_wrapped(&invalid.raw, &message),
+                start: invalid.start,
+                end: invalid.end,
+            }))
+        }
+        ScannedDependency::Escaped { .. } => None,
+    }
+}
+
+/// Wrap a malformed single-token message in the whole-item teaching frame.
+fn bang_invalid_wrapped(raw: &str, detail: &str) -> String {
+    format!(
+        "`{raw}` completes an existing task and must be the whole capture item; {detail}"
+    )
 }
 
 /// One eligible bare-plus task selector on an item's parent line or an

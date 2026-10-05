@@ -235,6 +235,7 @@ pub(super) fn classify_local_marker(
         | EditorMode::PomodoroClose
         | EditorMode::PomodoroStart
         | EditorMode::TaskDependency
+        | EditorMode::TaskComplete
         | EditorMode::TaskToggle => LocalMarkerAbsorbability::NonAbsorbable,
         EditorMode::Incomplete => {
             unreachable!("complete_local_destination_marker filters these out")
@@ -296,6 +297,12 @@ pub(super) fn non_absorbable_marker_notice(
         // into `@@` would change which task the prerequisites attach to.
         EditorMode::TaskDependency => format!(
             "@@ cannot take a task dependency owner: leave {} on this item, or delete it",
+            marker.text
+        ),
+        // A completion token names an existing task: absorbing it into
+        // `@@` would change which task gets completed.
+        EditorMode::TaskComplete => format!(
+            "@@ cannot take a task completion: leave {} on this item, or delete it",
             marker.text
         ),
         EditorMode::Incomplete => {

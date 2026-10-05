@@ -1953,3 +1953,137 @@ fn plus_parent_picker_does_not_claim_operators_or_work_log_text() {
     let parsed = editor(log);
     assert_ne!(parsed.needs, vec![Need::TaskParent]);
 }
+
+#[test]
+fn bang_claim_covers_the_contract_table() {
+    // Queries: still typing, never executable.
+    for raw in [
+        "!",
+        "!fix",
+        "!sase:",
+        "!\"Shopping List",
+        "!\"Shopping List\"",
+    ] {
+        let error = execute(raw).expect_err(&format!("{raw} is a query"));
+        assert!(
+            error.contains("opens the task picker")
+                && error.contains("!sase:fix-flaky"),
+            "{raw}: {error}"
+        );
+    }
+
+    // Complete tokens become `TaskComplete`.
+    let complete = execute("!sase:fix-flaky").expect("complete token");
+    match complete.kind {
+        CaptureKind::TaskComplete {
+            raw,
+            note,
+            block_id,
+            quoted,
+        } => {
+            assert_eq!(raw, "!sase:fix-flaky");
+            assert_eq!(note, "sase");
+            assert_eq!(block_id, "fix-flaky");
+            assert!(!quoted);
+        }
+        other => panic!("wrong kind: {other:?}"),
+    }
+    assert_eq!(complete.body, "");
+
+    let nested = execute("!projects/foo:bar").expect("nested locator");
+    match nested.kind {
+        CaptureKind::TaskComplete { note, block_id, .. } => {
+            assert_eq!(note, "projects/foo");
+            assert_eq!(block_id, "bar");
+        }
+        other => panic!("wrong kind: {other:?}"),
+    }
+
+    let quoted = execute("!\"Shopping List\":milk").expect("quoted locator");
+    match quoted.kind {
+        CaptureKind::TaskComplete {
+            note,
+            block_id,
+            quoted,
+            ..
+        } => {
+            assert_eq!(note, "Shopping List");
+            assert_eq!(block_id, "milk");
+            assert!(quoted);
+        }
+        other => panic!("wrong kind: {other:?}"),
+    }
+
+    // Complete token plus anything extra is claimed invalid, never an
+    // inbox task.
+    for (raw, needle) in [
+        ("!sase:fix-flaky more", "remove `more`"),
+        ("!sase:fix-flaky p:1", "remove `p:1`"),
+        ("!sase:a !sase:b", "blank line"),
+        ("!sase:fix-flaky=x", "`=x!N`"),
+        ("!sase:fix-flaky#bugs", "`=x!N`"),
+    ] {
+        let error = execute(raw).expect_err(&format!("{raw} is invalid"));
+        assert!(error.contains(needle), "{raw}: {error}");
+        assert!(error.contains("must be the whole capture item"), "{raw}");
+    }
+
+    // A complete token plus a child line is claimed invalid too.
+    let child_error = parse_capture_draft_with_clip_control(
+        "!sase:fix-flaky\n- child",
+        None,
+        None,
+        true,
+    )
+    .expect_err("child lines are invalid");
+    assert!(child_error.contains("its child lines"), "{child_error}");
+
+    // An incomplete token plus a child line stays prose, like `:dee`.
+    let prose_draft = parse_capture_draft_with_clip_control(
+        "!fix\n- child",
+        None,
+        None,
+        true,
+    )
+    .expect("incomplete plus child is prose");
+    assert!(matches!(
+        prose_draft.items[0].parsed.kind,
+        CaptureKind::Task
+            | CaptureKind::Bullet { .. }
+            | CaptureKind::TaskWithBlockId { .. }
+    ));
+
+    // Prose rows never claim: several tokens with an incomplete first
+    // token, a space after `!`, or a non-leading `!`.
+    for raw in ["!wow this works", "! foo", "Wow!", "Buy milk !sase:x"] {
+        let parsed =
+            execute(raw).unwrap_or_else(|_| panic!("{raw} stays prose"));
+        assert!(
+            !matches!(parsed.kind, CaptureKind::TaskComplete { .. }),
+            "{raw}"
+        );
+    }
+
+    // Embeds, images, and `!` runs are never claimed.
+    for raw in ["![[sase#^x]]", "![alt](url)", "!!", "!!!"] {
+        let parsed =
+            execute(raw).unwrap_or_else(|_| panic!("{raw} stays prose"));
+        assert!(
+            !matches!(parsed.kind, CaptureKind::TaskComplete { .. }),
+            "{raw}"
+        );
+    }
+
+    // Forced destination flags are refused on complete tokens.
+    let forced = parse_capture_draft_with_clip_control(
+        "!sase:fix-flaky",
+        Some("work"),
+        None,
+        true,
+    )
+    .expect_err("forced route is invalid");
+    assert!(
+        forced.contains("must be the whole capture item"),
+        "{forced}"
+    );
+}

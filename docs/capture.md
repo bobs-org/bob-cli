@@ -26,6 +26,7 @@ workflow guide.
   - [Linking and starting existing tasks](#linking-and-starting-existing-tasks)
   - [Picking any open task with ':'](#picking-any-open-task-with-)
   - [Adding prerequisites with '&'](#adding-prerequisites-with-)
+  - [Completing tasks with '!'](#completing-tasks-with-)
   - [Plan budget and strict mode](#plan-budget-and-strict-mode)
   - [Starting the next Pomodoro](#starting-the-next-pomodoro)
   - [Starting a named Pomodoro](#starting-a-named-pomodoro)
@@ -76,6 +77,10 @@ anything is written, and any failure rolls the whole batch back.
 | `&note:block-id` | Prerequisite task link: the captured (or explicitly selected) task depends on `note.md`'s `^block-id` task; nested notes use `&projects/foo:bar`, notes with spaces use `&"Shopping List":bar` |
 | `&`, `&query`, `&note:` | Incomplete: the prerequisite picker is still open (`capture-parse` needs `task_dependency`); execution refuses with a teaching error |
 | `&note:block-id` with no other text | Incomplete: a prerequisite is selected but no dependent is named (`capture-parse` needs `dependency_target`); execution never creates an ampersand-named task |
+| `!` | Incomplete: pick an open task to complete (`capture-parse` needs `task_complete`); accepting inserts `!<note>:<block-id>`, and execution never captures it |
+| `!fix`, `!sase:`, `!"Shopping List` | Incomplete: still typing the completion query (`capture-parse` needs `task_complete`) |
+| `!note:block-id` with no other text | Complete an existing open task (`capture-parse` mode `task_complete`); execution lands with the task-complete writer |
+| `!note:block-id` plus anything extra | Claimed and invalid (`invalid_task_complete`); a completion must be the whole capture item, never a junk inbox task |
 | `+[N]` / `-[N]` | Adjust today's current timed Pomodoro by N five-minute units (`+5` extends by 25 minutes, `-` shortens by 5 minutes; the count defaults to 1); the item must contain only the signed count |
 | `++[N]` / `--[N]` | Shift today's running timed Pomodoro N five-minute units later/earlier, keeping its duration (`++3` moves 15 minutes later, `--` moves 5 minutes earlier; the count defaults to 1); the item must contain only the operator |
 | `=` / `=<X>` | Start today's next future Pomodoro now with `se<X>` timing (`=` is 25 minutes, `=3` is 15 minutes, `=-2` is 25 minutes with a 10-minute offset); the item must contain only the start token |
@@ -1035,6 +1040,61 @@ a targeted diagnostic, as do suffixed (`#name`, `=…`) or `!`-toggled
 dependency-only owners; missing notes, missing block IDs,
 self-dependencies, and batch cycles fail with an actionable error and
 leave the vault intact.
+
+### Completing tasks with '!'
+
+A capture item that is exactly `!note:block-id` marks that existing open
+task Done, without closing a Pomodoro. The token names the task with the
+same vault-wide note locator `&note:block-id` uses, so `!` and `&` share
+one lexer, one resolver, and one replacement formatter: simple root notes
+use `!foo:bar`, nested notes use `!projects/foo:bar`, and notes with
+whitespace or reserved punctuation use a quoted component such as
+`!"Shopping List":milk` (inside quotes only `\"` and `\\` are escapes).
+Single-quote the draft on shells that history-expand `!`:
+`bob capture '!sase:fix-flaky'`.
+
+A complete token must be the entire capture item: no body text, children,
+`%`, `s:`, `p:`, `#name`, `=…`, `@@`, or forced destination flags.
+Anything extra is a teaching error, never a junk inbox task. Bulk means
+one `!` item per blank-line-separated block; every item is planned
+against the same staged snapshot, and any failure rolls the whole batch
+back.
+
+| Draft item | Reading |
+| --- | --- |
+| `!` | Query `""`: incomplete, needs `task_complete`, the picker opens |
+| `!fix`, `!sase:`, `!"Shopping List`, `!"Shopping List"` | Query: incomplete, needs `task_complete` |
+| `!sase:fix-flaky` | Complete: mode `task_complete`; completes `^fix-flaky` in the note `sase` resolves to |
+| `!projects/foo:bar`, `!"Shopping List":milk` | Complete: nested and quoted locators, exactly as `&` decodes them |
+| `!sase:fix-flaky more`, `!sase:fix-flaky` plus a child line, `!sase:fix-flaky p:1` | Claimed and invalid: `invalid_task_complete` |
+| `!sase:fix-flaky=x`, `!sase:fix-flaky#bugs` | Claimed and invalid, with the hint "`!` takes no `=` or `#` suffix; to complete the running session's link while closing, use `=x!N`" |
+| `!sase:a !sase:b` | Claimed and invalid, with the hint "put each completion on its own item, separated by a blank line" |
+| `!wow this works`, `! foo`, `Wow!`, `Buy milk !sase:x` | Prose, unchanged: several tokens with an incomplete first token, a space after `!`, or a non-leading `!` |
+| `!fix` plus a child line | Prose: an incomplete token on a multi-line item, like `:dee` plus a child |
+| `![[sase#^x]]`, `![alt](url)`, `!!`, `!!!` | Prose: embeds, images, and `!` runs are never claimed (the second byte is `[` or `!`) |
+
+`bob capture` refuses a claimed query before any other item parser, with
+the usual `capture item K starting on line L:` prefix and exit 2:
+`` `!fix` opens the task picker; pick a task to insert its `!<note>:<block-id>` token, or write one yourself (for example `!sase:fix-flaky`) ``.
+A claimed invalid item reads
+`` `!sase:fix-flaky` completes an existing task and must be the whole capture item; remove `more` ``
+(or `remove its child lines`), plus the targeted hints above.
+`@@` declarations never apply to a `!` item.
+
+`capture-parse` (schema 1, additive) reports query items with mode
+`incomplete`, needs `["task_complete"]`, an empty body, and one
+`interactive_placeholder` span over the whole token, sigil included. It
+reports complete items with mode `task_complete`, `block_id`, three spans
+(`task_complete_sigil` over the `!`, `task_complete_note` over the note
+with quotes, `task_complete_block_id` over the ID), and the per-item
+`task_complete` object (`raw`, decoded `note`, `block_id`, `quoted`, and
+the sigil-inclusive `range`). Claimed invalid items report mode
+`task_complete` with an `invalid_task_complete` diagnostic, the same mode
+handling `invalid_pomodoro_link` uses for a padded `^route:id`.
+
+Execution lands with the task-complete writer: until then a complete
+`!note:block-id` token refuses with
+`` `!note:block-id` completion is not available in this build yet ``.
 
 ### Plan budget and strict mode
 
