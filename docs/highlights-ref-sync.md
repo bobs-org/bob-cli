@@ -144,6 +144,29 @@ If the filename stem is invalid for marker output, the command fails before
 running pandoc or creating output directories. Without `--include-id`, manual
 `create` calls keep the previous marker shape and do not add `id`.
 
+### Listen cards in PDFs
+
+Markdown authors can wrap a short audio summary in `<div class="listen">` to
+render it as a light-blue callout in the Highlights PDF. A leading `♫` becomes
+a **▶ Play** button when a same-stem MP3 companion is present beside the PDF
+target and the target is in the Bob intake or library. Intake links point to
+the companion's final `lib/` location. Relative links inside the card, such as
+the narration-script link, are omitted from the PDF because the source file is
+not available there. Without a companion, the card remains with its `♫` glyph.
+
+The URI template is selected from `BOB_HIGHLIGHTS_AUDIO_LINK_TEMPLATE`, then
+`highlights.audio_link_template` in `bob/config.yml`, then the default:
+
+```yaml
+highlights:
+  audio_link_template: "obsidian://open?vault={vault}&file={path}"
+```
+
+`{vault}` is the percent-encoded Bob directory name and `{path}` is the
+percent-encoded vault-relative companion path. Set the template to an empty
+string to disable the button. Only the generated PDF contains the Obsidian URI;
+the report Markdown stays portable.
+
 Path configuration options are `-b, --bob-dir <PATH>`, `-l, --lib-dir <PATH>`,
 `-r, --ref-dir <PATH>`, and `-x, --xlib-dir <PATH>`. `scan` also accepts
 `-j, --jobs <N>` and `-v, --verbose` (the detailed per-PDF plan report; the

@@ -70,6 +70,7 @@ pub(crate) struct PriorityProperty {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct HighlightsConfig {
     pre_scan_hook: Option<String>,
+    audio_link_template: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -154,6 +155,10 @@ impl PriorityProperty {
 impl HighlightsConfig {
     pub(crate) fn pre_scan_hook(&self) -> Option<&str> {
         self.pre_scan_hook.as_deref()
+    }
+
+    pub(crate) fn audio_link_template(&self) -> Option<&str> {
+        self.audio_link_template.as_deref()
     }
 }
 
@@ -345,6 +350,8 @@ struct RawHighlights {
     pre_scan_hook: Option<String>,
     #[serde(default)]
     pre_scan_command: Option<serde_yaml::Value>,
+    #[serde(default)]
+    audio_link_template: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -498,11 +505,19 @@ pub(crate) fn parse_highlights_config(
 
     let pre_scan_hook = config
         .highlights
-        .and_then(|highlights| highlights.pre_scan_hook)
+        .as_ref()
+        .and_then(|highlights| highlights.pre_scan_hook.as_ref())
+        .cloned()
         .map(|command| command.trim().to_string())
         .filter(|command| !command.is_empty());
+    let audio_link_template = config
+        .highlights
+        .and_then(|highlights| highlights.audio_link_template);
 
-    Ok(HighlightsConfig { pre_scan_hook })
+    Ok(HighlightsConfig {
+        pre_scan_hook,
+        audio_link_template,
+    })
 }
 
 fn parse_priority_level(
@@ -713,6 +728,20 @@ highlights:
         .expect("valid highlights config");
 
         assert_eq!(config.pre_scan_hook(), Some("bob_xlib_pull"));
+    }
+
+    #[test]
+    fn parses_highlights_audio_link_template() {
+        let config = parse_highlights_config(
+            "highlights:\n  audio_link_template: 'obsidian://open?vault={vault}&file={path}'\n",
+            Path::new("/config.yml"),
+        )
+        .expect("valid highlights config");
+
+        assert_eq!(
+            config.audio_link_template(),
+            Some("obsidian://open?vault={vault}&file={path}")
+        );
     }
 
     #[test]

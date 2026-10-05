@@ -20,6 +20,9 @@ const DEFAULT_PARENT: &str = "obsidian_ref";
 const DEFAULT_REF_TYPE: &str = "chat";
 const DEFAULT_STATUS: &str = "ready";
 const ENV_PANDOC_COMMAND: &str = "BOB_PANDOC_COMMAND";
+const ENV_AUDIO_LINK_TEMPLATE: &str = "BOB_HIGHLIGHTS_AUDIO_LINK_TEMPLATE";
+const DEFAULT_AUDIO_LINK_TEMPLATE: &str =
+    "obsidian://open?vault={vault}&file={path}";
 /// LaTeX preamble that wraps long code blocks instead of overflowing the page.
 ///
 /// Pandoc emits every fenced block as a `Highlighting` environment, which does
@@ -29,14 +32,22 @@ const PANDOC_HEADER_INCLUDES: &str = concat!(
     r"\usepackage{fvextra}",
     r"\DefineVerbatimEnvironment{Highlighting}{Verbatim}",
     r"{breaklines,breakanywhere,commandchars=\\\{\}}",
+    r"\definecolor{BobListenRule}{HTML}{3B6EA8}",
+    r"\definecolor{BobListenFill}{HTML}{EEF3FA}",
+    r"\newcommand{\BobListenCard}[1]{\par\medskip\noindent\hbox{{\color{BobListenRule}\vrule width 2.5pt}\setlength{\fboxsep}{6pt}\colorbox{BobListenFill}{\parbox{\dimexpr\linewidth-2.5pt-12pt\relax}{\sffamily\small\raggedright #1}}}\par\medskip}",
+    r"\newcommand{\BobListenPlay}{\colorbox{BobListenRule}{\textcolor{white}{\textbf{▶\,Play}}}}",
 );
-/// Pandoc Lua filter that gives long inline code somewhere to break.
-///
-/// Inline code is typeset as an unbreakable `\texttt` box, so paths and
-/// identifiers such as `src/sase/ace/tui/modals/plans_detail.py` overflow the
-/// text block. Splitting the span after each separator lets pandoc escape every
-/// piece normally while LaTeX gains a legal break point between the pieces.
+/// Pandoc Lua filter that gives long inline code somewhere to break and renders
+/// listen-card Divs as a compact LaTeX callout.
 const PANDOC_CODE_BREAK_FILTER: &str = r#"local SEPARATORS = "[/_%-%.:,]"
+local PLAY_URI = nil
+
+function Meta(meta)
+  local value = meta["bob-listen-uri"]
+  if value ~= nil then
+    PLAY_URI = pandoc.utils.stringify(value)
+  end
+end
 
 function Code(code)
   local pieces = {}
@@ -58,6 +69,78 @@ function Code(code)
   end
   return pieces
 end
+
+local function is_relative_target(target)
+  return not target:match("^[%w][%w+%.%-]*:") and not target:match("^#")
+end
+
+local function trim_dead_link_separator(inlines, link_index)
+  while link_index > 1 and inlines[link_index - 1].t == "Space" do
+    table.remove(inlines, link_index - 1)
+    link_index = link_index - 1
+  end
+  local previous = inlines[link_index - 1]
+  if previous and previous.t == "Str" then
+    previous.text = previous.text:gsub("%s*·$", "")
+    if previous.text == "" then
+      table.remove(inlines, link_index - 1)
+      link_index = link_index - 1
+    end
+  end
+  return link_index
+end
+
+function Div(div)
+  if not (FORMAT:match("latex") and div.classes:includes("listen")) then
+    return nil
+  end
+
+  local content = nil
+  for _, block in ipairs(div.content) do
+    if block.t == "Para" or block.t == "Plain" then
+      content = block.content
+      break
+    end
+  end
+  if content == nil then
+    return pandoc.Null()
+  end
+
+  local index = 1
+  while index <= #content do
+    local inline = content[index]
+    if inline.t == "Link" and is_relative_target(inline.target) then
+      index = trim_dead_link_separator(content, index)
+      table.remove(content, index)
+    else
+      index = index + 1
+    end
+  end
+
+  if PLAY_URI and PLAY_URI ~= "" then
+    local first = content[1]
+    if first and first.t == "Str" then
+      local remainder = first.text:gsub("^♫", "", 1)
+      if remainder ~= first.text then
+        table.remove(content, 1)
+        while content[1] and content[1].t == "Space" do
+          table.remove(content, 1)
+        end
+        table.insert(content, 1, pandoc.RawInline("latex", "\\hspace{0.7em}"))
+        table.insert(content, 1, pandoc.Link(
+          {pandoc.RawInline("latex", "\\BobListenPlay{}")}, PLAY_URI))
+        if remainder ~= "" then
+          table.insert(content, 2, pandoc.Str(remainder))
+        end
+      end
+    end
+  end
+
+  return pandoc.RawBlock("latex", "\\BobListenCard{" ..
+    pandoc.write(pandoc.Pandoc({pandoc.Plain(content)}), "latex") .. "}")
+end
+
+return {{Meta = Meta}, {Code = Code, Div = Div}}
 "#;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -164,7 +247,7 @@ pub(crate) fn command() -> ClapCommand {
         )
         .arg(xlib_dir_arg())
         .after_help(
-            "Examples:\n  bob highlights create report.md\n\nRenders a hyperlinked table of contents and PDF bookmarks with pandoc and embeds the page-1 marker used by `bob highlights scan`. By default the PDF is written to `<xlib-dir>/<ref-type>/<markdown-stem>.pdf`. `-o, --output` selects that complete path instead, including the filename; it requires a `.pdf` extension, expands a leading `~`, and resolves relative paths from the current directory. `--output` cannot be combined with `--ref-type` because `--ref-type` only participates in default target derivation. Scan moves intake PDFs into the library before writing reference notes. A PDF written directly into the library is still found by `bob highlights scan`. A PDF written outside the library and intake directories is not discovered by recursive scan; sync it with `bob highlights sync <PDF>`.",
+            "Examples:\n  bob highlights create report.md\n\nRenders a hyperlinked table of contents and PDF bookmarks with pandoc and embeds the page-1 marker used by `bob highlights scan`. By default the PDF is written to `<xlib-dir>/<ref-type>/<markdown-stem>.pdf`. `-o, --output` selects that complete path instead, including the filename; it requires a `.pdf` extension, expands a leading `~`, and resolves relative paths from the current directory. `--output` cannot be combined with `--ref-type` because `--ref-type` only participates in default target derivation. Scan moves intake PDFs into the library before writing reference notes. A PDF written directly into the library is still found by `bob highlights scan`. A PDF written outside the library and intake directories is not discovered by recursive scan; sync it with `bob highlights sync <PDF>`. A `<div class=\"listen\">` card is rendered as a callout; when a same-stem MP3 is already beside the PDF, it gets a Play link to its library location.",
         )
 }
 
@@ -259,7 +342,14 @@ fn create_pdf(
         ))
     })?;
     let _ = fs::remove_file(&render_path);
-    let result = render_and_install(&pandoc, &plan, &render_path, &filter_path);
+    let audio_uri = play_uri(config, &plan)?;
+    let result = render_and_install(
+        &pandoc,
+        &plan,
+        &render_path,
+        &filter_path,
+        audio_uri.as_deref(),
+    );
     let _ = fs::remove_file(&render_path);
     let _ = fs::remove_file(&filter_path);
     let page_count = result?;
@@ -269,6 +359,9 @@ fn create_pdf(
         styler.success_prefix(false)
     );
     println!("pdf: {}", plan.target.display());
+    if let Some(uri) = audio_uri {
+        println!("audio_link: {uri}");
+    }
     println!("title: {}", plan.title);
     println!("status: {}", options.status);
     println!("parent: {}", options.parent);
@@ -450,11 +543,107 @@ fn code_break_filter_path() -> PathBuf {
     env::temp_dir().join(format!("bob-highlights-create.{}.lua", process::id()))
 }
 
+fn play_uri(config: &Config, plan: &CreatePlan) -> Result<Option<String>> {
+    let Some(audio_path) = bound_audio_path(plan) else {
+        if fs::read_to_string(&plan.source)
+            .is_ok_and(|markdown| markdown.contains("class=\"listen\""))
+        {
+            eprintln!("warning: listen card has no bound companion audio");
+        }
+        return Ok(None);
+    };
+
+    let highlights = super::bob_config::load_highlights_config(
+        &super::bob_config::config_path(),
+    )
+    .map_err(super::config_error)?;
+    let template = resolve_audio_link_template(
+        env::var_os(ENV_AUDIO_LINK_TEMPLATE).as_deref(),
+        highlights.audio_link_template(),
+    );
+    if template.is_empty() || matches!(plan.workflow, TargetWorkflow::External)
+    {
+        return Ok(None);
+    }
+
+    let vault = config
+        .bob_dir
+        .file_name()
+        .and_then(OsStr::to_str)
+        .ok_or_else(|| {
+            CommandError::new(format!(
+                "bob directory has no UTF-8 basename: {}",
+                config.bob_dir.display()
+            ))
+        })?;
+    let relative = audio_path.strip_prefix(&config.bob_dir).map_err(|_| {
+        CommandError::new(format!(
+            "audio library path {} is outside bob directory {}",
+            audio_path.display(),
+            config.bob_dir.display()
+        ))
+    })?;
+    let path = relative.to_string_lossy().replace('\\', "/");
+    Ok(Some(
+        template
+            .replace("{vault}", &percent_encode(vault))
+            .replace("{path}", &percent_encode(&path)),
+    ))
+}
+
+fn bound_audio_path(plan: &CreatePlan) -> Option<PathBuf> {
+    match &plan.workflow {
+        TargetWorkflow::Intake {
+            library_destination,
+        } if plan.target.with_extension("mp3").is_file()
+            || plan.source.with_extension("mp3").is_file() =>
+        {
+            Some(library_destination.with_extension("mp3"))
+        }
+        TargetWorkflow::Library
+            if plan.target.with_extension("mp3").is_file()
+                || plan.source.with_extension("mp3").is_file() =>
+        {
+            Some(plan.target.with_extension("mp3"))
+        }
+        TargetWorkflow::External => None,
+        _ => None,
+    }
+}
+
+fn percent_encode(value: &str) -> String {
+    let mut encoded = String::new();
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || b"-._~".contains(&byte) {
+            encoded.push(char::from(byte));
+        } else {
+            use std::fmt::Write as _;
+            let _ = write!(encoded, "%{byte:02X}");
+        }
+    }
+    encoded
+}
+
+fn resolve_audio_link_template(
+    env_template: Option<&OsStr>,
+    configured: Option<&str>,
+) -> String {
+    env_template.map_or_else(
+        || {
+            configured
+                .unwrap_or(DEFAULT_AUDIO_LINK_TEMPLATE)
+                .to_string()
+        },
+        |value| value.to_string_lossy().into_owned(),
+    )
+}
+
 fn render_and_install(
     pandoc: &OsStr,
     plan: &CreatePlan,
     render_path: &Path,
     filter_path: &Path,
+    audio_uri: Option<&str>,
 ) -> Result<usize> {
     let resource_path = plan.source.parent().unwrap_or_else(|| Path::new("."));
     let output = Command::new(pandoc)
@@ -488,6 +677,9 @@ fn render_and_install(
         .arg(format!("header-includes={PANDOC_HEADER_INCLUDES}"))
         .arg("--metadata")
         .arg(format!("title={}", plan.title))
+        .args(audio_uri.into_iter().flat_map(|uri| {
+            ["--metadata".to_string(), format!("bob-listen-uri={uri}")]
+        }))
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
@@ -674,6 +866,177 @@ mod tests {
         assert!(
             latex.contains(r"\texttt{bead}"),
             "code without separators must stay a single span: {latex}"
+        );
+    }
+
+    #[test]
+    fn listen_filter_renders_card_and_encoded_play_link() {
+        let Some(pandoc) = pandoc_command() else {
+            eprintln!("skipping listen filter test: pandoc is required");
+            return;
+        };
+        let temp = TempDir::new("listen-card");
+        let filter = temp.path.join("listen-card.lua");
+        fs::write(&filter, PANDOC_CODE_BREAK_FILTER).expect("write filter");
+        let source = temp.path.join("report.md");
+        fs::write(
+            &source,
+            "<div class=\"listen\">\n\n♫ **Brief audio edition** · 4 min · 3 chapters · [Narration script](report_narration.md)\n\n</div>\n",
+        )
+        .expect("write source");
+
+        let output = Command::new(&pandoc)
+            .arg(&source)
+            .arg("--to=latex")
+            .arg("--lua-filter")
+            .arg(&filter)
+            .arg("--metadata")
+            .arg("bob-listen-uri=obsidian://open?vault=Research%20Notes&file=lib%2Fchat%2Freport.mp3")
+            .output()
+            .expect("run pandoc");
+        assert!(output.status.success(), "{output:?}");
+        let latex = String::from_utf8_lossy(&output.stdout);
+        assert!(latex.contains(r"\BobListenCard{"), "{latex}");
+        assert!(latex.contains(r"\BobListenPlay{}"), "{latex}");
+        assert!(
+            latex.contains(
+                r"obsidian://open?vault=Research\%20Notes\&file=lib\%2Fchat\%2Freport.mp3"
+            ),
+            "{latex}"
+        );
+        assert!(!latex.contains("report_narration.md"), "{latex}");
+        assert!(!latex.contains("♫"), "{latex}");
+    }
+
+    #[test]
+    fn listen_filter_keeps_glyph_without_bound_audio() {
+        let Some(pandoc) = pandoc_command() else {
+            eprintln!("skipping listen filter test: pandoc is required");
+            return;
+        };
+        let temp = TempDir::new("listen-card-unbound");
+        let filter = temp.path.join("listen-card.lua");
+        fs::write(&filter, PANDOC_CODE_BREAK_FILTER).expect("write filter");
+        let source = temp.path.join("report.md");
+        fs::write(
+            &source,
+            "<div class=\"listen\">\n\n♫ **Brief audio edition** · 4 min · 3 chapters · [Narration script](report_narration.md)\n\n</div>\n",
+        )
+        .expect("write source");
+
+        let output = Command::new(&pandoc)
+            .arg(&source)
+            .arg("--to=latex")
+            .arg("--lua-filter")
+            .arg(&filter)
+            .output()
+            .expect("run pandoc");
+        assert!(output.status.success(), "{output:?}");
+        let latex = String::from_utf8_lossy(&output.stdout);
+        assert!(latex.contains(r"\BobListenCard{"), "{latex}");
+        assert!(latex.contains("♫"), "{latex}");
+        assert!(!latex.contains("\\href"), "{latex}");
+        assert!(!latex.contains("report_narration.md"), "{latex}");
+    }
+
+    #[test]
+    fn audio_path_components_are_percent_encoded() {
+        assert_eq!(percent_encode("Research Notes"), "Research%20Notes");
+        assert_eq!(
+            percent_encode("lib/chat/hello+world.mp3"),
+            "lib%2Fchat%2Fhello%2Bworld.mp3"
+        );
+    }
+
+    #[test]
+    fn audio_link_template_precedence_is_env_then_config_then_default() {
+        assert_eq!(
+            resolve_audio_link_template(
+                Some(OsStr::new("custom:{vault}:{path}")),
+                Some("configured"),
+            ),
+            "custom:{vault}:{path}"
+        );
+        assert_eq!(
+            resolve_audio_link_template(None, Some("configured")),
+            "configured"
+        );
+        assert_eq!(
+            resolve_audio_link_template(None, None),
+            DEFAULT_AUDIO_LINK_TEMPLATE
+        );
+        assert_eq!(resolve_audio_link_template(Some(OsStr::new("")), None), "");
+    }
+
+    #[test]
+    fn listen_card_xelatex_render_uses_only_existing_packages() {
+        if pandoc_command().is_none()
+            || Command::new("xelatex").arg("--version").output().is_err()
+        {
+            eprintln!("skipping listen card PDF test: pandoc and xelatex are required");
+            return;
+        }
+        let temp = TempDir::new("listen-card-pdf");
+        let source = temp.path.join("report.md");
+        fs::write(
+            &source,
+            "# Report\n\n<div class=\"listen\">\n\n♫ **Brief audio edition** · 1 min · 1 chapter\n\n</div>\n",
+        )
+        .expect("write source");
+        let target = temp.path.join("xlib/chat/report.pdf");
+        fs::create_dir_all(target.parent().expect("target parent"))
+            .expect("create output directory");
+        let plan = CreatePlan {
+            source,
+            target: target.clone(),
+            sidecar: target.with_extension("md"),
+            workflow: TargetWorkflow::Intake {
+                library_destination: temp.path.join("lib/chat/report.pdf"),
+            },
+            title: "Report".to_string(),
+            id: None,
+            marker: compose_marker(
+                "ready",
+                "obsidian_ref",
+                "Report",
+                None,
+                &[],
+            )
+            .expect("compose marker"),
+        };
+        let render_path = render_temp_path(&target).expect("render path");
+        let filter_path = temp.path.join("listen-card.lua");
+        fs::write(&filter_path, PANDOC_CODE_BREAK_FILTER)
+            .expect("write filter");
+        let pandoc = pandoc_command().expect("pandoc checked above");
+        let page_count = render_and_install(
+            &pandoc,
+            &plan,
+            &render_path,
+            &filter_path,
+            Some("obsidian://open?vault=bob&file=lib%2Fchat%2Freport.mp3"),
+        )
+        .expect("render listen card PDF");
+
+        assert!(page_count > 0);
+        let document =
+            lopdf::Document::load(&target).expect("load rendered PDF");
+        let uri_objects = document
+            .objects
+            .values()
+            .filter(|object| {
+                let debug = format!("{object:?}");
+                debug.contains("URI") || debug.contains("obsidian")
+            })
+            .collect::<Vec<_>>();
+        let has_play_uri = uri_objects.iter().any(|object| {
+            format!("{object:?}").contains(
+                "(obsidian://open?vault=bob&file=lib%2Fchat%2Freport.mp3)",
+            )
+        });
+        assert!(
+            has_play_uri,
+            "rendered PDF should contain the Obsidian Play URI: {uri_objects:#?}"
         );
     }
 }
