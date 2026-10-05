@@ -94,6 +94,24 @@ pub(super) fn doctor_vault(config: &Config, no_hooks: bool) -> Result<()> {
         0
     };
     println!("xlib_pending: {xlib_pending}");
+    let orphan_audio = if layout_valid && config.xlib_dir.is_dir() {
+        match collect_orphan_audio(config) {
+            Ok(paths) => paths,
+            Err(error) => {
+                failures.push(error.to_string());
+                Vec::new()
+            }
+        }
+    } else {
+        Vec::new()
+    };
+    println!("xlib_orphan_audio: {}", orphan_audio.len());
+    for path in &orphan_audio {
+        warnings.push(format!(
+            "orphan companion audio has no PDF in xlib or lib: {}",
+            display_vault_relative_path(config, path)
+        ));
+    }
     if layout_valid && let Err(error) = plan_xlib_intake(config) {
         failures.push(error.to_string());
     }
@@ -248,6 +266,7 @@ pub(super) fn plan_xlib_intake(config: &Config) -> Result<Vec<IntakeMove>> {
 
     let mut moves = Vec::new();
     let mut conflicts = Vec::new();
+    let mut pdf_stems = BTreeSet::new();
     for source in pdfs {
         let relative =
             source.strip_prefix(&config.xlib_dir).map_err(|error| {
@@ -258,6 +277,9 @@ pub(super) fn plan_xlib_intake(config: &Config) -> Result<Vec<IntakeMove>> {
             })?;
         let destination = config.lib_dir.join(relative);
         let companions = intake_companion_moves(&source, &destination)?;
+        let mut stem = relative.to_path_buf();
+        stem.set_extension("");
+        pdf_stems.insert(stem);
 
         if destination.exists() {
             conflicts.push((source.clone(), destination.clone()));
@@ -275,6 +297,36 @@ pub(super) fn plan_xlib_intake(config: &Config) -> Result<Vec<IntakeMove>> {
             source,
             destination,
             companions,
+        });
+    }
+
+    let mut audio_files = Vec::new();
+    collect_audio_paths_from_dir(&config.xlib_dir, &mut audio_files)?;
+    audio_files.sort();
+    for source in audio_files {
+        let relative =
+            source.strip_prefix(&config.xlib_dir).map_err(|error| {
+                CommandError::new(format!(
+                    "derive xlib-relative path for {}: {error}",
+                    source.display()
+                ))
+            })?;
+        let mut stem = relative.to_path_buf();
+        stem.set_extension("");
+        if pdf_stems.contains(&stem) {
+            continue;
+        }
+        if library_pdf_for_xlib_audio(config, &source).is_none() {
+            continue;
+        }
+        let destination = config.lib_dir.join(relative);
+        if destination.exists() {
+            conflicts.push((source.clone(), destination.clone()));
+        }
+        moves.push(IntakeMove {
+            source,
+            destination,
+            companions: Vec::new(),
         });
     }
 
@@ -328,7 +380,27 @@ pub(super) fn intake_companion_moves(
         companions.push((textbundle, destination.with_extension("textbundle")));
     }
 
+    for extension in AUDIO_COMPANION_EXTENSIONS {
+        let audio = source.with_extension(extension);
+        if audio.is_file() {
+            companions.push((audio, destination.with_extension(extension)));
+        }
+    }
+
     Ok(companions)
+}
+
+pub(super) fn collect_orphan_audio(config: &Config) -> Result<Vec<PathBuf>> {
+    let mut audio_files = Vec::new();
+    collect_audio_paths_from_dir(&config.xlib_dir, &mut audio_files)?;
+    audio_files.sort();
+    Ok(audio_files
+        .into_iter()
+        .filter(|path| {
+            !same_stem_pdf_exists(path)
+                && library_pdf_for_xlib_audio(config, path).is_none()
+        })
+        .collect())
 }
 
 pub(super) fn execute_xlib_intake(moves: &[IntakeMove]) -> Result<()> {

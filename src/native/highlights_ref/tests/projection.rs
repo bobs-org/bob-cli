@@ -124,6 +124,8 @@ fn pipeline_fields_exclude_marker_user_projection() {
     assert!(!super::PIPELINE_FIELDS.contains(&"type"));
     assert!(super::is_command_managed_field("type"));
     assert!(super::is_command_managed_field("ref_type"));
+    assert!(super::is_command_managed_field("audio"));
+    assert!(!super::PIPELINE_FIELDS.contains(&"audio"));
 }
 
 #[test]

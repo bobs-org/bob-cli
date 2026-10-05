@@ -204,6 +204,9 @@ pub(super) struct PipelineMetadata {
     /// note that does not exist yet; existing notes keep their authored
     /// `created` line instead of a fresh timestamp.
     pub(super) created: Option<String>,
+    /// Vault-relative library path of a same-stem companion audio file
+    /// (`lib/<type>/<stem>.mp3`). Omitted when no companion exists.
+    pub(super) audio: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -846,6 +849,7 @@ impl ParsedNote {
         projection: &Projection,
         source_pdf: &str,
         rendered_highlights: Option<&RenderedHighlights>,
+        metadata: &PipelineMetadata,
     ) -> Result<String> {
         if !self.exists() {
             return Ok(default_note_body(
@@ -853,6 +857,7 @@ impl ParsedNote {
                 projection,
                 source_pdf,
                 rendered_highlights,
+                metadata.audio.as_deref(),
             ));
         }
 
@@ -862,14 +867,14 @@ impl ParsedNote {
             ));
         };
 
-        let Some(rendered_highlights) = rendered_highlights else {
-            return rewrite_pdf_task_checkbox_for_projection(
-                &self.body, projection,
-            );
+        let body = if let Some(rendered_highlights) = rendered_highlights {
+            let replacement = rendered_highlights.content.as_str();
+            let body = replace_managed_region(&self.body, replacement)?;
+            rewrite_pdf_task_checkbox_for_projection(&body, projection)?
+        } else {
+            rewrite_pdf_task_checkbox_for_projection(&self.body, projection)?
         };
-        let replacement = rendered_highlights.content.as_str();
-        let body = replace_managed_region(&self.body, replacement)?;
-        rewrite_pdf_task_checkbox_for_projection(&body, projection)
+        Ok(maybe_insert_audio_embed(self, metadata, &body))
     }
 
     pub(super) fn managed_region(&self) -> Result<Option<&str>> {

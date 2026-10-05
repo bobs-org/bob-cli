@@ -142,17 +142,28 @@ pub(super) fn print_verbose_scan_plan_report(
     println!("ob_sync: not-run");
     println!("pdf_count: {pdf_count}");
     println!("intake_moves: {}", intake.len());
+    let audio_moves = intake_audio_file_moves(intake);
+    println!("intake_audio_moves: {}", audio_moves.len());
+    let action = if options.dry_run {
+        "would-move"
+    } else {
+        "moved"
+    };
     for intake_move in intake {
         println!(
-            "intake: {} {} -> {}",
-            if options.dry_run {
-                "would-move"
-            } else {
-                "moved"
-            },
+            "intake: {action} {} -> {}",
             display_vault_relative_path(config, &intake_move.source),
             display_vault_relative_path(config, &intake_move.destination)
         );
+        for (source, destination) in &intake_move.companions {
+            if is_audio_companion_path(source) {
+                println!(
+                    "intake: {action} {} -> {}",
+                    display_vault_relative_path(config, source),
+                    display_vault_relative_path(config, destination)
+                );
+            }
+        }
     }
     for outcome in plan_outcomes {
         match outcome {
@@ -198,10 +209,40 @@ pub(super) fn print_concise_intake_report(
             display_vault_relative_path(config, &intake_move.source),
             display_vault_relative_path(config, &intake_move.destination)
         );
+        for (source, destination) in &intake_move.companions {
+            if is_audio_companion_path(source) {
+                println!(
+                    "  {} {} -> {}",
+                    styler.green(action),
+                    display_vault_relative_path(config, source),
+                    display_vault_relative_path(config, destination)
+                );
+            }
+        }
     }
     if !intake.is_empty() {
         println!();
     }
+}
+
+pub(super) fn intake_audio_file_moves(
+    intake: &[IntakeMove],
+) -> Vec<(PathBuf, PathBuf)> {
+    let mut moves = Vec::new();
+    for intake_move in intake {
+        if is_audio_companion_path(&intake_move.source) {
+            moves.push((
+                intake_move.source.clone(),
+                intake_move.destination.clone(),
+            ));
+        }
+        for (source, destination) in &intake_move.companions {
+            if is_audio_companion_path(source) {
+                moves.push((source.clone(), destination.clone()));
+            }
+        }
+    }
+    moves
 }
 
 pub(super) fn display_scan_lib_dir(config: &Config) -> String {

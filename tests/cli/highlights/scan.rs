@@ -1178,3 +1178,210 @@ fn highlights_ref_scan_stamps_created_on_category_and_intake_notes() {
         "repeat scan at a later clock must leave the intake note unchanged"
     );
 }
+
+fn assert_note_has_audio_player(contents: &str, vault_audio: &str) {
+    assert!(
+        contents.contains(&format!("audio: \"[[{vault_audio}]]\"\n")),
+        "{contents}"
+    );
+    assert!(
+        contents.contains(&format!("![[{vault_audio}]]\n")),
+        "{contents}"
+    );
+    assert!(
+        !contents.contains("highlights_marker_fields:"),
+        "audio must not enter marker fields:\n{contents}"
+    );
+}
+
+#[test]
+fn highlights_ref_scan_intakes_pdf_and_mp3_and_embeds_player() {
+    let temp = TempDir::new("bob-cli-highlights-ref-scan-audio");
+    let vault = temp.path().join("vault");
+    let source_pdf = vault.join("xlib/chat/listen.pdf");
+    let source_audio = vault.join("xlib/chat/listen.mp3");
+    let destination_pdf = vault.join("lib/chat/listen.pdf");
+    let destination_audio = vault.join("lib/chat/listen.mp3");
+    let note = vault.join("ref/chat/listen.md");
+    write_highlights_pdf(
+        &source_pdf,
+        "- status: wip\n- parent: obsidian\n- title: Listen PDF\n",
+    );
+    write_file(&source_audio, "fake-mp3");
+
+    let dry_run = bob_command()
+        .arg("highlights")
+        .arg("scan")
+        .arg("--verbose")
+        .arg("--dry-run")
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("dry-run audio intake");
+    assert_success(&dry_run);
+    let dry_report = stdout(&dry_run);
+    assert!(
+        dry_report.contains("intake_audio_moves: 1")
+            && dry_report.contains(
+                "intake: would-move xlib/chat/listen.mp3 -> lib/chat/listen.mp3"
+            )
+            && dry_report.contains("notes_create: 1")
+            && dry_report.contains("writes: none"),
+        "{dry_report}"
+    );
+    assert!(source_audio.is_file(), "dry-run must leave audio in xlib");
+    assert!(!destination_audio.exists(), "dry-run must not move audio");
+    assert!(!note.exists(), "dry-run must not create note");
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("scan")
+        .arg("--verbose")
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("scan audio intake");
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("intake_audio_moves: 1")
+            && report.contains(
+                "intake: moved xlib/chat/listen.mp3 -> lib/chat/listen.mp3"
+            )
+            && report.contains("notes_created: 1"),
+        "{report}"
+    );
+    assert!(!source_pdf.exists() && !source_audio.exists());
+    assert!(destination_pdf.is_file() && destination_audio.is_file());
+    let contents = fs::read_to_string(&note).expect("read generated note");
+    assert_note_has_audio_player(&contents, "lib/chat/listen.mp3");
+    assert!(
+        contents.contains(
+            "- [/] #task #ref [[lib/chat/listen.pdf]] #hide ^ref\n\n![[lib/chat/listen.mp3]]\n\n## Highlights\n"
+        ),
+        "{contents}"
+    );
+
+    let repeat = bob_command()
+        .arg("highlights")
+        .arg("scan")
+        .arg("--verbose")
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("repeat audio scan");
+    assert_success(&repeat);
+    assert!(
+        stdout(&repeat).contains("notes_unchanged: 1"),
+        "{}",
+        format_output(&repeat)
+    );
+    assert_eq!(
+        fs::read_to_string(&note).expect("read note after repeat"),
+        contents
+    );
+}
+
+#[test]
+fn highlights_ref_scan_late_pairs_audio_onto_existing_note() {
+    let temp = TempDir::new("bob-cli-highlights-ref-scan-late-pair");
+    let vault = temp.path().join("vault");
+    let pdf = vault.join("lib/chat/listen.pdf");
+    let note = vault.join("ref/chat/listen.md");
+    let audio = vault.join("xlib/chat/listen.mp3");
+    write_highlights_pdf(
+        &pdf,
+        "- status: wip\n- parent: obsidian\n- title: Listen PDF\n",
+    );
+    assert_success(
+        &bob_command()
+            .arg("highlights")
+            .arg("scan")
+            .env("BOB_DIR", &vault)
+            .output()
+            .expect("initial scan without audio"),
+    );
+    let before = fs::read_to_string(&note).expect("read note before audio");
+    assert!(!before.contains("\naudio:"), "{before}");
+    assert!(!before.contains("![[lib/chat/listen.mp3]]"), "{before}");
+
+    write_file(&audio, "fake-mp3");
+    let output = bob_command()
+        .arg("highlights")
+        .arg("scan")
+        .arg("--verbose")
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("late-pair scan");
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("intake_audio_moves: 1")
+            && report.contains(
+                "intake: moved xlib/chat/listen.mp3 -> lib/chat/listen.mp3"
+            )
+            && report.contains("notes_updated: 1"),
+        "{report}"
+    );
+    assert!(!audio.exists(), "late-pair must move audio out of xlib");
+    assert!(vault.join("lib/chat/listen.mp3").is_file());
+    let contents = fs::read_to_string(&note).expect("read late-paired note");
+    assert_note_has_audio_player(&contents, "lib/chat/listen.mp3");
+
+    let without_embed = contents.replace("\n![[lib/chat/listen.mp3]]\n", "\n");
+    write_file(&note, &without_embed);
+    let repeat = bob_command()
+        .arg("highlights")
+        .arg("scan")
+        .arg("--verbose")
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("repeat after user deleted embed");
+    assert_success(&repeat);
+    let after = fs::read_to_string(&note).expect("read note after deletion");
+    assert!(
+        after.contains("audio: \"[[lib/chat/listen.mp3]]\"\n"),
+        "{after}"
+    );
+    assert!(
+        !after.contains("![[lib/chat/listen.mp3]]"),
+        "deleted embed must stay deleted:\n{after}"
+    );
+}
+
+#[test]
+fn highlights_ref_scan_refuses_audio_destination_conflict() {
+    let temp = TempDir::new("bob-cli-highlights-ref-scan-audio-conflict");
+    let vault = temp.path().join("vault");
+    let source_pdf = vault.join("xlib/chat/conflict.pdf");
+    let source_audio = vault.join("xlib/chat/conflict.mp3");
+    let destination_audio = vault.join("lib/chat/conflict.mp3");
+    write_highlights_pdf(
+        &source_pdf,
+        "- status: wip\n- parent: obsidian\n- title: Conflict PDF\n",
+    );
+    write_file(&source_audio, "new-audio");
+    write_file(&destination_audio, "old-audio");
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("scan")
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("scan audio conflict");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "conflicting audio intake should fail:\n{}",
+        format_output(&output)
+    );
+    let diagnostic = stderr(&output);
+    assert!(
+        diagnostic.contains("xlib intake collision(s) detected before writes")
+            && diagnostic.contains("xlib/chat/conflict.mp3")
+            && diagnostic.contains("lib/chat/conflict.mp3"),
+        "{diagnostic}"
+    );
+    assert!(source_audio.is_file(), "conflict must leave xlib audio");
+    assert_eq!(
+        fs::read_to_string(&destination_audio).expect("read library audio"),
+        "old-audio"
+    );
+}

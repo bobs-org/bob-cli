@@ -37,6 +37,8 @@ pub(super) fn pipeline_metadata(
     // immediately before writing a new note so dry-run previews never
     // become persisted historical timestamps.
     let created = (!note.exists()).then(new_note_created_timestamp);
+    let audio = discover_companion_audio(config, pdf)
+        .map(|path| companion_audio_vault_path(config, pdf, &path));
 
     Ok(PipelineMetadata {
         source_pdf: source_pdf_value(config, pdf),
@@ -46,6 +48,7 @@ pub(super) fn pipeline_metadata(
         highlights_count,
         highlights_synced_at,
         created,
+        audio,
     })
 }
 
@@ -62,6 +65,7 @@ pub(super) fn default_note_body(
     projection: &Projection,
     source_pdf: &str,
     rendered_highlights: Option<&RenderedHighlights>,
+    audio: Option<&str>,
 ) -> String {
     let title = note_title(pdf, projection);
     let highlights = rendered_highlights
@@ -85,6 +89,10 @@ pub(super) fn default_note_body(
     body.push(' ');
     body.push_str(PDF_TASK_BLOCK_ID);
     body.push_str("\n\n");
+    if let Some(audio) = audio {
+        body.push_str(&audio_embed_line(audio));
+        body.push_str("\n\n");
+    }
     body.push_str("## Highlights\n\n");
     body.push_str(MANAGED_BODY_BEGIN);
     body.push_str("\n\n");
@@ -113,6 +121,13 @@ pub(super) fn push_command_managed_frontmatter_lines(
         lines.push(format!(
             "{FIELD_REF_TYPE}: {}",
             MarkerValue::String(ref_type.clone()).as_frontmatter_value()
+        ));
+    }
+    if let Some(audio) = &metadata.audio {
+        lines.push(format!(
+            "{FIELD_AUDIO}: {}",
+            MarkerValue::String(audio_frontmatter_value(audio))
+                .as_frontmatter_value()
         ));
     }
 }

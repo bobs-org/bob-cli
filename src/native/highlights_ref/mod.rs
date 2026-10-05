@@ -30,6 +30,7 @@ use super::{
 pub(crate) mod create;
 
 mod annotation_tasks;
+mod audio;
 pub(crate) mod cli;
 pub(crate) mod clip;
 mod clip_adapter;
@@ -53,6 +54,7 @@ mod tests;
 mod text;
 
 use annotation_tasks::*;
+use audio::*;
 use cli::*;
 use clip::*;
 use doctor::*;
@@ -88,6 +90,7 @@ const FIELD_ID: &str = "id";
 const FIELD_RESEARCH: &str = "research";
 const FIELD_NOTE_TYPE: &str = "type";
 const FIELD_REF_TYPE: &str = "ref_type";
+const FIELD_AUDIO: &str = "audio";
 const NOTE_TYPE_VALUE: &str = "[[ref]]";
 const STATUS_READY: &str = "ready";
 const STATUS_NEXT: &str = "next";
@@ -106,7 +109,8 @@ const ALLOWED_STATUS_VALUES: &[&str] = &[
     STATUS_LEGACY,
 ];
 const MARKER_REQUIRED_KEYS: &[&str] = &[FIELD_STATUS, FIELD_PARENT];
-const COMMAND_MANAGED_FIELDS: &[&str] = &[FIELD_NOTE_TYPE, FIELD_REF_TYPE];
+const COMMAND_MANAGED_FIELDS: &[&str] =
+    &[FIELD_NOTE_TYPE, FIELD_REF_TYPE, FIELD_AUDIO];
 const MANAGED_BODY_BEGIN: &str = "<!-- highlights:begin -->";
 const MANAGED_BODY_END: &str = "<!-- highlights:end -->";
 const TASKS_SECTION_TITLE: &str = "Tasks";

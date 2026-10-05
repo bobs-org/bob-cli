@@ -56,6 +56,7 @@ fn write_test_file(path: &Path, contents: &str) {
     fs::write(path, contents).expect("write test file");
 }
 
+mod audio;
 mod marker;
 mod projection;
 mod sidecar;

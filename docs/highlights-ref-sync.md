@@ -44,7 +44,8 @@ syncs keep the legacy `ref/<pdf-basename>.md` target. `marker <pdf>` inspects
 the same marker without writing.
 
 `scan` runs the configured pre-scan hook on writing runs, then moves pending
-PDFs from the configured intake directory into the mirrored library path,
+PDFs from the configured intake directory into the mirrored library path
+together with same-stem companion audio (`.mp3`, `.m4a`, `.ogg`, `.opus`),
 recursively finds PDFs under the configured library directory, and processes
 them in stable path order. Pass `-n, --no-hooks` on `scan`, or before the
 subcommand as `bob highlights --no-hooks scan`, to ignore the hook. Only
@@ -57,7 +58,9 @@ that would both write the same `ref/<ref_type>/<basename>.md` target.
 
 `doctor` checks vault paths, library/ref/xlib directories, pending intake,
 the configured pre-scan hook, sidecar presence, marker readability, Git
-worktree status, and optional `ob` availability. It never writes files. Pass
+worktree status, and optional `ob` availability. Companion audio sitting in
+`xlib/` with no matching PDF in `xlib/` or `lib/` is a warning, not a
+failure. It never writes files. Pass
 `-n, --no-hooks` on `doctor`, or before the subcommand as
 `bob highlights --no-hooks doctor`, to skip the pre-scan hook check.
 
@@ -166,6 +169,48 @@ highlights:
 percent-encoded vault-relative companion path. Set the template to an empty
 string to disable the button. Only the generated PDF contains the Obsidian URI;
 the report Markdown stays portable.
+
+### Companion audio on scan
+
+`scan` moves same-stem companion audio with its PDF from `xlib/<rel>` to
+`lib/<rel>`. Allowed extensions are `.mp3`, `.m4a`, `.ogg`, and `.opus`,
+checked in that order when choosing which file to record on the note.
+
+When an audio file is waiting in `xlib/` with no same-stem PDF still in
+intake, but `lib/<rel>.pdf` already exists, scan late-pairs it: the audio
+moves beside that library PDF and the existing reference note gains the
+player. Audio with no PDF in `xlib/` or `lib/` stays in intake for the next
+tick; `bob highlights doctor` reports it as a warning. Destination collisions
+join the existing pre-write intake conflict report, so scan writes nothing.
+
+The note records a bob-managed `audio` field from the companion's presence,
+never from a marker key:
+
+```yaml
+audio: "[[lib/chat/research_swarm_listen_card.mp3]]"
+```
+
+New notes place the Obsidian player once, directly below the generated PDF
+task:
+
+```md
+- [ ] #task #ref [[lib/chat/research_swarm_listen_card.pdf]] #hide ^ref
+
+![[lib/chat/research_swarm_listen_card.mp3]]
+
+## Highlights
+```
+
+Existing notes get the same embed on the first scan that observes a companion
+while the note still lacks `audio`. After that field exists, scan never
+touches the embed again, so a deleted player stays deleted. The managed
+Highlights region is unchanged. Dry-run reports the planned frontmatter and
+embed like other note changes.
+
+Backfill an already-read report by copying the MP3 to
+`~/bob/xlib/<ref-type>/<stem>.mp3`; the next scan attaches it. Do not rerun
+`create --force` to replace a library PDF that already has Highlights
+annotations. The vault already tracks `*.mp3` (about 2 MB per brief edition).
 
 Path configuration options are `-b, --bob-dir <PATH>`, `-l, --lib-dir <PATH>`,
 `-r, --ref-dir <PATH>`, and `-x, --xlib-dir <PATH>`. `scan` also accepts
@@ -382,9 +427,13 @@ highlights_marker_fields
 pipeline_version
 ```
 
-The command-managed `type` and `ref_type` fields are also excluded from marker
-sync. `type` is always rendered as `[[ref]]`; `ref_type` is rendered only when
-the PDF path is under `lib/<ref_type>/`.
+The command-managed `type`, `ref_type`, and `audio` fields are also excluded
+from marker sync. `type` is always rendered as `[[ref]]`; `ref_type` is
+rendered only when the PDF path is under `lib/<ref_type>/`. `audio` is
+rendered as a quoted wikilink to the library companion
+(`"[[lib/<type>/<stem>.mp3]]"`) when a same-stem audio file sits beside the
+PDF, and omitted otherwise. It never enters the marker projection, hash, or
+base.
 
 Standard synced user fields are `status`, `parent`, `title`, `id`, `research`,
 `aliases`, `topics`, `source_url`, `author`, `published`, and `captured`. `id` is ordinary
@@ -473,9 +522,11 @@ combined with `--write-pdfs`.
 
 Before planning notes, writing scans run the optional pre-scan hook and then
 preflight intake. Pass `-n, --no-hooks` to skip the hook. Intake moves each PDF under `xlib` to the mirrored `lib` path
-and moves same-stem Markdown sidecars and TextBundle directories with the PDF,
-so annotation text and image assets are not orphaned. If any destination PDF or
-sidecar already exists, the whole scan aborts before moving or writing anything.
+and moves same-stem Markdown sidecars, TextBundle directories, and companion
+audio with the PDF, so annotation text, image assets, and the listen-card
+player are not orphaned. Late-pair audio (intake audio whose PDF is already in
+`lib/`) moves on the same preflight. If any destination PDF, sidecar, or
+audio file already exists, the whole scan aborts before moving or writing anything.
 Intake runs before the dirty-target Git check because a newly rendered intake
 PDF is normally untracked, and the move never overwrites an existing path; a
 tracked synced PDF behaves as an ordinary Git rename.
@@ -664,7 +715,8 @@ Manual content outside those markers must be preserved. User edits inside the
 generated region may be overwritten.
 
 New generated notes include a title, a PDF wikilink Obsidian task line with
-the `#hide` tag and the stable `^ref` block ID, and `## Highlights`. `## Tasks`
+the `#hide` tag and the stable `^ref` block ID, an Obsidian audio embed when a
+same-stem companion exists, and `## Highlights`. `## Tasks`
 is not part of that skeleton; the section is created later, directly below the
 `^ref` task, when the first annotation task is imported.
 Existing notes must already contain the managed begin/end markers; otherwise
@@ -740,6 +792,17 @@ The generated task line is the reference-reading lifecycle:
 
 ```md
 - [ ] #task #ref [[lib/books/example.pdf]] #hide ^ref
+```
+
+When a companion audio file is present, the native player sits directly below
+that task, before `## Highlights`:
+
+```md
+- [ ] #task #ref [[lib/books/example.pdf]] #hide ^ref
+
+![[lib/books/example.mp3]]
+
+## Highlights
 ```
 
 The `#ref` tag immediately after `#task` marks this as the machine-managed

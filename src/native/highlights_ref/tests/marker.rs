@@ -342,6 +342,7 @@ Body
             highlights_count: None,
             highlights_synced_at: None,
             created: None,
+            audio: None,
         },
         &note.body,
     );
@@ -380,6 +381,7 @@ fn new_note_render_emits_exactly_one_created_line() {
             highlights_count: None,
             highlights_synced_at: None,
             created: Some("2026-10-03T15:42:18-0400".to_string()),
+            audio: None,
         },
         "# Example\n",
     );
@@ -426,6 +428,7 @@ Manual body.
             highlights_count: None,
             highlights_synced_at: None,
             created: None,
+            audio: None,
         },
         &note.body,
     );

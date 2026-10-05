@@ -326,6 +326,7 @@ pub(super) fn plan_pdf_sync(
         &synced_projection,
         &stable_metadata.source_pdf,
         rendered_highlights.as_ref(),
+        &stable_metadata,
     )?;
     let annotation_task_candidates = if annotation_task_intake_allowed {
         annotation_task_candidates(

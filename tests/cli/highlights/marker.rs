@@ -364,6 +364,55 @@ Note: marker note
 }
 
 #[test]
+fn highlights_ref_doctor_warns_on_orphan_companion_audio() {
+    let temp = TempDir::new("bob-cli-highlights-ref-doctor-orphan-audio");
+    let stub_bin = temp.path().join("bin");
+    let vault = temp.path().join("vault");
+    let pdf = vault.join("lib/example.pdf");
+    let sidecar = pdf.with_extension("md");
+    let orphan = vault.join("xlib/chat/orphan.mp3");
+    fs::create_dir_all(vault.join("ref")).expect("create ref dir");
+    fs::create_dir_all(&stub_bin).expect("create stub bin");
+    let pandoc_stub = stub_bin.join("pandoc");
+    write_executable(&pandoc_stub, "#!/bin/sh\nexit 0\n");
+    write_highlights_pdf(&pdf, "- status: wip\n- parent: obsidian\n");
+    write_file(
+        &sidecar,
+        "\
+## Page 1
+
+Note: marker note
+",
+    );
+    write_file(&orphan, "fake-mp3");
+    git_in(&vault, ["init", "-q"]);
+    git_in(&vault, ["config", "user.name", "Test User"]);
+    git_in(&vault, ["config", "user.email", "test@example.com"]);
+    git_in(&vault, ["add", "."]);
+    git_in(&vault, ["commit", "-q", "-m", "initial vault"]);
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("doctor")
+        .env("BOB_DIR", &vault)
+        .env("BOB_PANDOC_COMMAND", &pandoc_stub)
+        .output()
+        .expect("run highlights doctor with orphan audio");
+
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(report.contains("xlib_orphan_audio: 1"), "{report}");
+    assert!(
+        report.contains(
+            "orphan companion audio has no PDF in xlib or lib: xlib/chat/orphan.mp3"
+        ),
+        "{report}"
+    );
+    assert!(report.contains("result: ok"), "{report}");
+    assert!(orphan.is_file(), "doctor must leave orphan audio in xlib");
+}
+
+#[test]
 fn highlights_ref_marker_edit_updates_frontmatter() {
     let temp = TempDir::new("bob-cli-highlights-ref-marker-edit");
     let vault = temp.path().join("vault");
