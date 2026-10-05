@@ -344,7 +344,7 @@ impl<'a, V: CloseVault> TreeWork<'a, V> {
         if let Some(contents) = self.staged.get(path) {
             return Ok(Some(contents.clone()));
         }
-        let contents = self.vault.read_latest(path).map_err(|error| error)?;
+        let contents = self.vault.read_latest(path)?;
         if let Some(contents) = contents {
             self.originals.insert(path.to_path_buf(), contents.clone());
             self.staged.insert(path.to_path_buf(), contents.clone());

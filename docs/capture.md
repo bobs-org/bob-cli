@@ -1143,18 +1143,81 @@ the link under the running `CAPTURE` session):
   - [[sase#^fix-flaky]]
 ```
 
-`bob capture '!sase:fix-flaky'` writes `- [x] #task Fix flaky gkeep test  [completion:: 2026-10-05] ^fix-flaky`,
+`bob capture '!sase:fix-flaky'` writes
+`- [x] #task Fix flaky gkeep test  [completion:: 2026-10-05] ^fix-flaky`,
 strikes the link in place to `~~[[sase#^fix-flaky]]~~`, and prints:
 
 ```text
 ✓ completed [*] → [x] Fix flaky gkeep test  sase.md ^fix-flaky
+  ledger  Task Link struck in CAPTURE · 20261005.md
 ```
 
-Dry-run JSON equals real-run JSON except for `dry_run`. Refusals (exit 1,
-nothing written): Canceled tasks, unknown statuses, recurring tasks,
-missing or ambiguous notes, missing IDs (with a close-match suggestion),
-duplicate IDs, non-task lines, and forced destination flags on the `!`
-item.
+After, the day file reads:
+
+```text
+## Pomodoros
+- [ ] (**0920-0950**) — CAPTURE
+  - ~~[[sase#^fix-flaky]]~~
+```
+
+Dry-run JSON equals real-run JSON except for `dry_run`. A dry-run excerpt
+for the same capture carries the additive `task_complete` object with its
+clean `text` and named ledger entries:
+
+```json
+"task_complete": {
+  "raw": "!sase:fix-flaky",
+  "note": "sase",
+  "note_path": "sase.md",
+  "block_id": "fix-flaky",
+  "action": "completed",
+  "completion_date": "2026-10-05",
+  "text": "Fix flaky gkeep test",
+  "subtasks": [],
+  "subtasks_left_open": [],
+  "ledger": {
+    "day_file": "20261005.md",
+    "struck": 1,
+    "struck_in": [{"line": 2, "name": "CAPTURE", "status": "running"}],
+    "moved": [],
+    "deduplicated": 0,
+    "dropped": [],
+    "removed_placeholders": []
+  },
+  "unblocked": []
+}
+```
+
+The `ledger` line names entries in this order, joined with `·`, and ends
+with the day file: one `Task Link struck in <NAME>` row per entry with an
+in-place strike (` (completed)` appended when that entry is completed),
+one `Task Link moved <FROM> → <TO> (struck)` row per move, one
+`Task Link already in <TO>; dropped the <FROM> copy` row per deduplicated
+bullet, and one `removed empty <NAME>` row per removed placeholder. When
+an entry has no name, JSON carries `"name": ""` and the human line uses
+`line N`. Other variants from the same vocabulary:
+
+```text
+  ledger  Task Link struck in PLAN (completed) · 20261005.md
+  ledger  Task Link struck in SASE · Task Link moved SASE → CAPTURE (struck) · removed empty SASE · 20261005.md
+  ledger  Task Link already in MORNING; dropped the SASE copy · removed empty SASE · 20261005.md
+```
+
+Refusals leave the vault byte-identical. Each failure prints
+`bob capture: capture item K starting on line L: <message>`; usage errors
+exit 2 and I/O-class errors exit 1:
+
+| Refusal | Exit | Message |
+| --- | --- | --- |
+| Forced destination flags (`--route`, `--section`, `--task`, `--task-section`, `--clip`) on the `!` item | 2 | `` `!sase:solo` completes an existing task and must be the whole capture item; remove its forced destination flags `` |
+| Ambiguous note | 2 | `ambiguous note "dup": matches a/dup.md, b/dup.md; use the full relative path` |
+| No such note | 2 | `no such note: nosuchnote` |
+| Canceled task | 1 | `` `^cx` in sase.md is Canceled; reopen it before completing it `` |
+| Unknown status | 1 | `` `^wx` in sase.md has status `[>]`; only Ready, Blocked, Next, and In Progress tasks can be completed `` |
+| Recurring task | 1 | `` `^water` in sase.md repeats; complete recurring tasks in Obsidian so Tasks writes the next occurrence `` |
+| Missing ID (with a close-match suggestion when one is close) | 1 | `no task with block ID ^missing in sase.md (run 'bob capture-tasks -r sase.md' to list task block IDs)` |
+| Duplicate ID | 1 | `block ID ^dup appears 2 times in sase.md; make it unique before capturing` |
+| Non-task line | 1 | `^nt1 in sase.md is not a task (line 6: plain line ^nt1)` |
 
 ### Plan budget and strict mode
 
@@ -2909,20 +2972,30 @@ Task-complete results use kind `"task_complete"` with `placement:
 `status_symbol`/`status_name`, and `status_changed` describe the root
 transition, and the additive `task_complete` object reports `raw`, `note`,
 `note_path`, `block_id`, `action` (`"completed"` or `"already_done"`),
-`completion_date` (omitted when already done), `subtasks` and
-`subtasks_left_open` (each with `note_path`, `block_id`, `line`, `text`,
-status fields, and `reason` on left-open rows), `ledger` (omitted when the
-daily note was untouched: `day_file`, `struck`, `moved` with
-`from`/`to` entry `line`/`name`/`status`, `deduplicated`, and
-`removed_placeholders`), and `unblocked` dependents. The batch-level
+`completion_date` (omitted when already done), `text` (the root task's
+clean display text with the configured global filter, inline fields, and
+trailing block ID removed; the same string the human output prints),
+`subtasks` and `subtasks_left_open` (each with `note_path`, `block_id`,
+`line`, `text`, status fields, and `reason` on left-open rows), `ledger`
+(omitted when the daily note was untouched: `day_file`, `struck` count,
+`struck_in` with one `line`/`name`/`status` entry per entry struck in
+place, `moved` with `from`/`to` entry `line`/`name`/`status`,
+`deduplicated` count, `dropped` with one `from`/`to` entry pair per
+deduplicated bullet, and `removed_placeholders`), and `unblocked`
+dependents. `struck_in` and `dropped` are always present (possibly empty)
+whenever `ledger` is present; `struck` and `deduplicated` keep their count
+meaning. Entry `status` is `running`, `queued`, or `completed`; when an
+entry has no name, `name` is `""`. The batch-level
 `task_blocks` array gains roles `"completed"` (the root and each closed
 subtask) and `"unblocked"` (each recovered dependent); see
 [Task blocks](#task-blocks). Human output prints
 `✓ completed [*] → [x] <text>  <note> ^<id>` (dry-run: `would complete`),
 one indented row per closed subtask and left-open descendant, a `ledger`
-line naming moves, strikes, dedupes, removed placeholders, and the day
-file, and one `unblocked` row per recovered dependent. Already-done tasks
-print `✓ already done [x] <text>  <note> ^<id> · nothing to change`.
+line in struck, moved, dropped, removed order ending with the day file
+(an unnamed entry prints as `line N`), and one `unblocked` row per
+recovered dependent. A left-open descendant or unblocked dependent with no
+block ID prints only its note path with no trailing ` ^`. Already-done
+tasks print `✓ already done [x] <text>  <note> ^<id> · nothing to change`.
 
 Pomodoro-note results use kind `"pomodoro_note"` with `routed: false`, `route:
 null`, and `target`/`relative_target` set to the daily note. They additionally

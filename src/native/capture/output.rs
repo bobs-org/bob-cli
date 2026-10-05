@@ -324,6 +324,10 @@ pub(super) struct TaskCompleteSummaryJson {
     pub(super) action: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) completion_date: Option<String>,
+    /// Clean display text for the root task: the body after the status
+    /// box with the configured global filter, inline fields, and the
+    /// trailing block ID removed. Same string the human output prints.
+    pub(super) text: String,
     pub(super) subtasks: Vec<TaskCompleteSubtaskJson>,
     pub(super) subtasks_left_open: Vec<TaskCompleteLeftOpenJson>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -362,14 +366,27 @@ pub(super) struct TaskCompleteLeftOpenJson {
 pub(super) struct TaskCompleteLedgerJson {
     pub(super) day_file: String,
     pub(super) struck: usize,
+    /// One entry per ledger entry with an in-place strike, always
+    /// present (possibly empty) whenever `ledger` is present.
+    pub(super) struck_in: Vec<TaskCompleteLedgerEndpointJson>,
     pub(super) moved: Vec<TaskCompleteLedgerMoveJson>,
     pub(super) deduplicated: usize,
+    /// One entry per deduplicated bullet, always present (possibly
+    /// empty) whenever `ledger` is present.
+    pub(super) dropped: Vec<TaskCompleteLedgerDroppedJson>,
     pub(super) removed_placeholders: Vec<TaskCompleteRemovedPlaceholderJson>,
 }
 
 /// One moved bullet's source and destination entries.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct TaskCompleteLedgerMoveJson {
+    pub(super) from: TaskCompleteLedgerEndpointJson,
+    pub(super) to: TaskCompleteLedgerEndpointJson,
+}
+
+/// One deduplicated bullet's source and destination entries.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct TaskCompleteLedgerDroppedJson {
     pub(super) from: TaskCompleteLedgerEndpointJson,
     pub(super) to: TaskCompleteLedgerEndpointJson,
 }
@@ -1642,12 +1659,9 @@ pub(super) fn print_human_task_complete_success(
             .status_symbol
             .map(|symbol| style_task_status_marker(styler, symbol))
             .unwrap_or_else(|| styler.dim("[x]"));
-        let text = task_complete_display_text(
-            &result.task_line,
-            Some(summary.block_id.as_str()),
-        );
+        let text = summary.text.as_str();
         let body = if text.is_empty() {
-            format!("{marker}")
+            marker.clone()
         } else {
             format!("{marker} {text}")
         };
@@ -1669,10 +1683,7 @@ pub(super) fn print_human_task_complete_success(
         .status_symbol
         .map(|symbol| style_task_status_marker(styler, symbol))
         .unwrap_or_else(|| "?".to_string());
-    let text = task_complete_display_text(
-        &result.task_line,
-        Some(summary.block_id.as_str()),
-    );
+    let text = summary.text.as_str();
     let head = if text.is_empty() {
         format!("{previous_marker} → {current_marker}")
     } else {
@@ -1683,7 +1694,8 @@ pub(super) fn print_human_task_complete_success(
         let previous =
             style_task_status_marker(styler, subtask.previous_status_symbol);
         let current = style_task_status_marker(styler, subtask.status_symbol);
-        let locator = format!("{} ^{}", subtask.note_path, subtask.block_id);
+        let locator =
+            task_complete_locator(&subtask.note_path, &subtask.block_id);
         if subtask.text.is_empty() {
             println!("    {previous} → {current}  {locator}");
         } else {
@@ -1692,7 +1704,7 @@ pub(super) fn print_human_task_complete_success(
     }
     for left in &summary.subtasks_left_open {
         let marker = style_task_status_marker(styler, left.status_symbol);
-        let locator = format!("{} ^{}", left.note_path, left.block_id);
+        let locator = task_complete_locator(&left.note_path, &left.block_id);
         if left.text.is_empty() {
             println!("    left {} {marker}  {locator}", left.status_name);
         } else {
@@ -1704,24 +1716,26 @@ pub(super) fn print_human_task_complete_success(
     }
     if let Some(ledger) = summary.ledger.as_ref() {
         let mut parts: Vec<String> = Vec::new();
+        for struck in &ledger.struck_in {
+            let label = ledger_entry_label(&struck.name, struck.line);
+            if struck.status == "completed" {
+                parts.push(format!("Task Link struck in {label} (completed)"));
+            } else {
+                parts.push(format!("Task Link struck in {label}"));
+            }
+        }
         for item in &ledger.moved {
             parts.push(format!(
                 "Task Link moved {} → {} (struck)",
-                item.from.name, item.to.name
+                ledger_entry_label(&item.from.name, item.from.line),
+                ledger_entry_label(&item.to.name, item.to.line),
             ));
         }
-        if ledger.moved.is_empty() && ledger.struck > 0 {
-            parts.push("Task Link struck".to_string());
-        }
-        if ledger.deduplicated > 0 {
-            let noun = if ledger.deduplicated == 1 {
-                "duplicate"
-            } else {
-                "duplicates"
-            };
+        for item in &ledger.dropped {
             parts.push(format!(
-                "dropped {} {noun} already linked at the destination",
-                ledger.deduplicated
+                "Task Link already in {}; dropped the {} copy",
+                ledger_entry_label(&item.to.name, item.to.line),
+                ledger_entry_label(&item.from.name, item.from.line),
             ));
         }
         for removed in &ledger.removed_placeholders {
@@ -1735,7 +1749,7 @@ pub(super) fn print_human_task_complete_success(
             style_task_status_marker(styler, unblocked.previous_status_symbol);
         let current = style_task_status_marker(styler, unblocked.status_symbol);
         let locator =
-            format!("{} ^{}", unblocked.note_path, unblocked.block_id);
+            task_complete_locator(&unblocked.note_path, &unblocked.block_id);
         if unblocked.text.is_empty() {
             println!("  unblocked {previous} → {current}  {locator}");
         } else {
@@ -1747,18 +1761,40 @@ pub(super) fn print_human_task_complete_success(
     }
 }
 
+/// Ledger entry label for human output: the short name, or `line N`
+/// when the entry has no name.
+fn ledger_entry_label(name: &str, line: usize) -> String {
+    if name.is_empty() {
+        format!("line {line}")
+    } else {
+        name.to_string()
+    }
+}
+
+/// Human locator for a subtask, left-open descendant, or recovered
+/// dependent: the note path plus ` ^block-id`, or just the note path
+/// when the row has no block ID.
+fn task_complete_locator(note_path: &str, block_id: &str) -> String {
+    if block_id.is_empty() {
+        note_path.to_string()
+    } else {
+        format!("{note_path} ^{block_id}")
+    }
+}
+
 /// Clean display text for a completed task line: the body after the
-/// status box with the global filter, inline fields, and trailing block
-/// ID removed.
-fn task_complete_display_text(
+/// status box with the configured global filter, inline fields, and
+/// trailing block ID removed.
+pub(super) fn task_complete_display_text(
     task_line: &str,
+    global_filter: &str,
     block_id: Option<&str>,
 ) -> String {
     let body = task_line
         .find("] ")
         .map(|index| task_line[index + 2..].to_string())
         .unwrap_or_else(|| task_line.to_string());
-    note_tasks::clean_description(&body, "#task", block_id)
+    note_tasks::clean_description(&body, global_filter, block_id)
 }
 
 pub(super) fn print_clip_file_confirmation(

@@ -34,6 +34,10 @@ pub(super) struct DependencyContext {
     pub(super) anchor: NaiveDate,
     pub(super) previous_daily: Option<PathBuf>,
     pub(super) today: NaiveDate,
+    /// Cached on-disk markdown walk for `!` dependent recovery, built
+    /// lazily once per batch. Staged overlays are applied per item on
+    /// top of this base.
+    recovery_base: Option<BTreeMap<PathBuf, String>>,
 }
 
 impl DependencyContext {
@@ -52,7 +56,33 @@ impl DependencyContext {
             anchor,
             previous_daily,
             today,
+            recovery_base: None,
         }
+    }
+
+    /// On-disk markdown snapshot for `!` recovery, built once per batch
+    /// and cloned per item. Keys are vault-relative paths.
+    pub(super) fn recovery_base_snapshot(
+        &mut self,
+        bob_dir: &Path,
+    ) -> BTreeMap<PathBuf, String> {
+        if self.recovery_base.is_none() {
+            let mut base = BTreeMap::new();
+            if let Ok(files) = task_status_hooks::markdown_files(bob_dir) {
+                for absolute in files {
+                    let Ok(relative) =
+                        absolute.strip_prefix(bob_dir).map(Path::to_path_buf)
+                    else {
+                        continue;
+                    };
+                    if let Ok(contents) = std::fs::read_to_string(&absolute) {
+                        base.insert(relative, contents);
+                    }
+                }
+            }
+            self.recovery_base = Some(base);
+        }
+        self.recovery_base.clone().unwrap_or_default()
     }
 }
 

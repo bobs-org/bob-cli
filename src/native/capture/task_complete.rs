@@ -18,7 +18,7 @@ pub(super) fn plan_task_complete_item(
     block_id: &str,
     today: NaiveDate,
     planner: &mut CaptureBatchPlanner,
-    dependency_ctx: &DependencyContext,
+    dependency_ctx: &mut DependencyContext,
 ) -> Result<PlannedCaptureItem, CaptureError> {
     reject_task_complete_conflicts(parsed, request, raw)?;
     let bob_dir = &request.bob_dir;
@@ -42,7 +42,6 @@ pub(super) fn plan_task_complete_item(
         .to_string();
     let previous_status_symbol = task.status_symbol;
     let previous_status_name = task.status_name.clone();
-    let task_digest = task.digest.clone();
     let task_description = task.description.clone();
     // Validate the status before any staging.
     if is_done_status(task.status_symbol, &settings) {
@@ -82,16 +81,13 @@ pub(super) fn plan_task_complete_item(
         )));
     }
     let completion_date = date_string(today);
-    // Re-check the preimage the way `capture/dependencies.rs` does: the
-    // batch may have edited this note since resolution.
-    let fresh = current_note_text(planner, &absolute)?;
-    let fresh_scan = note_tasks::scan(&fresh, &settings);
-    let fresh_task = lookup_staged_task(&fresh_scan, &rel_display, block_id)?;
-    if fresh_task.digest != task_digest {
-        return Err(CaptureError::io(format!(
-            "task ^{block_id} in {rel_display} changed while planning; refusing to overwrite it"
-        )));
-    }
+    // No staged preimage recheck here: `contents` above already read the
+    // batch's staged text, and nothing staged this note in between, so a
+    // fresh re-read would compare the value with itself. The guard against
+    // external edits is the batch's atomic plan-then-commit: every item
+    // plans against the in-memory staged snapshot and `write_staged_files`
+    // commits via temporary files with rollback, leaving notes at their
+    // original state on any failure.
     // Day file identity up front so pre-item coordinates are available
     // for pomodoro-block removal refs below.
     let day_file = pomodoro::day_file_for(bob_dir);
@@ -113,21 +109,12 @@ pub(super) fn plan_task_complete_item(
                 .to_string(),
         ));
     };
-    // Stage tree post-images.
+    // Stage tree post-images. No per-file preimage recheck: the tree
+    // close read the same staged snapshot, and nothing else staged these
+    // paths in between, so the check would compare staged text with
+    // itself. Atomic plan-then-commit (`write_staged_files`) remains the
+    // guard against external edits.
     for (path, text) in &outcome.changed_files {
-        // Re-validate the task preimage before staging.
-        if path == &absolute {
-            let current =
-                planner.current_contents(&absolute)?.unwrap_or_default();
-            let current_scan = note_tasks::scan(&current, &settings);
-            let current_task =
-                lookup_staged_task(&current_scan, &rel_display, block_id)?;
-            if current_task.digest != task_digest {
-                return Err(CaptureError::io(format!(
-                    "task ^{block_id} in {rel_display} changed while planning; refusing to overwrite it"
-                )));
-            }
-        }
         planner.stage(path, text.clone())?;
     }
     // Completed identities for retirement + recovery (absolute paths).
@@ -157,6 +144,7 @@ pub(super) fn plan_task_complete_item(
         }
         if retirement.changed
             || retirement.struck > 0
+            || !retirement.struck_in.is_empty()
             || !retirement.moved.is_empty()
             || !retirement.deduplicated.is_empty()
             || !retirement.removed_placeholders.is_empty()
@@ -175,8 +163,11 @@ pub(super) fn plan_task_complete_item(
         }
     }
     // Blocked-dependent recovery over the staged snapshot (post-tree,
-    // post-retirement). Walk vault notes with staged overlays.
-    let snapshot = staged_snapshot_for_recovery(bob_dir, planner);
+    // post-retirement). The on-disk vault walk is built once per batch
+    // and cached on the batch context; staged overlays are applied per
+    // item so recovery still sees earlier items' staged edits.
+    let snapshot =
+        staged_snapshot_for_recovery(bob_dir, planner, dependency_ctx);
     let mut completed_ids: BTreeSet<String> = BTreeSet::new();
     for (path, id) in &completed {
         let relative_path = path
@@ -303,6 +294,14 @@ pub(super) fn plan_task_complete_item(
             status_name: status_name_for(bob_dir, dependent.status_symbol),
         })
         .collect::<Vec<_>>();
+    // Clean display text for the root task with the configured global
+    // filter, inline fields, and trailing block ID removed: the same
+    // string the human output prints.
+    let root_text = task_complete_display_text(
+        &task_line,
+        &settings.global_filter,
+        Some(block_id),
+    );
     let summary = TaskCompleteSummaryJson {
         raw: raw.to_string(),
         note: note.to_string(),
@@ -310,6 +309,7 @@ pub(super) fn plan_task_complete_item(
         block_id: block_id.to_string(),
         action: "completed",
         completion_date: Some(completion_date.clone()),
+        text: root_text,
         subtasks,
         subtasks_left_open: left_open,
         ledger: ledger_json,
@@ -455,6 +455,7 @@ fn removal_refs(
         .collect()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn already_done_item(
     request: &CaptureRequest,
     raw: &str,
@@ -474,6 +475,15 @@ fn already_done_item(
     without_extension.set_extension("");
     let route_value = display_relative(&without_extension);
     let _ = route_value;
+    // Clean display text with the configured global filter, matching the
+    // human already-done line and the completed path.
+    let global_filter =
+        note_tasks::read_settings(&request.bob_dir).global_filter;
+    let clean_text = task_complete_display_text(
+        previous_task_line,
+        &global_filter,
+        Some(block_id),
+    );
     PlannedCaptureItem {
         result: CaptureItemResult {
             ok: true,
@@ -534,6 +544,7 @@ fn already_done_item(
                 block_id: block_id.to_string(),
                 action: "already_done",
                 completion_date: None,
+                text: clean_text,
                 subtasks: Vec::new(),
                 subtasks_left_open: Vec::new(),
                 ledger: None,
@@ -734,10 +745,15 @@ fn compute_link_statuses(
 }
 
 /// Snapshot of vault notes with staged overlays for dependent recovery:
-/// every staged file plus every on-disk markdown file.
+/// the batch's cached on-disk markdown walk plus every staged file.
+/// The on-disk walk is built at most once per batch (lazily, only when a
+/// `!` item needs recovery) and cached on the batch context next to
+/// `DependencyContext`; staged overlays are applied per item so recovery
+/// still sees earlier items' staged edits.
 fn staged_snapshot_for_recovery(
     bob_dir: &Path,
     planner: &CaptureBatchPlanner,
+    dependency_ctx: &mut DependencyContext,
 ) -> Vec<(PathBuf, String)> {
     let mut staged: BTreeMap<PathBuf, String> = BTreeMap::new();
     for (absolute, contents) in planner.staged_snapshot() {
@@ -754,23 +770,8 @@ fn staged_snapshot_for_recovery(
             staged.insert(relative, contents);
         }
     }
-    let mut snapshot: BTreeMap<PathBuf, String> = BTreeMap::new();
-    if let Ok(files) = crate::native::task_status_hooks::markdown_files(bob_dir)
-    {
-        for absolute in files {
-            let Ok(relative) =
-                absolute.strip_prefix(bob_dir).map(Path::to_path_buf)
-            else {
-                continue;
-            };
-            if staged.contains_key(&relative) {
-                continue;
-            }
-            if let Ok(contents) = std::fs::read_to_string(&absolute) {
-                snapshot.insert(relative, contents);
-            }
-        }
-    }
+    let mut snapshot: BTreeMap<PathBuf, String> =
+        dependency_ctx.recovery_base_snapshot(bob_dir);
     for (relative, contents) in staged {
         snapshot.insert(relative, contents);
     }
@@ -783,8 +784,9 @@ fn ledger_json_for(
     day_relative: &str,
     retirement: &engine::LedgerRetirement,
 ) -> TaskCompleteLedgerJson {
-    // Map entry contexts to short names + running/queued/completed via
-    // the capture pomodoro scan of the pre-retirement day text.
+    // Map entry lines to short names + running/queued/completed via the
+    // capture pomodoro scan of the pre-retirement day text. When an entry
+    // has no name, `name` is "" and the human output uses `line N`.
     let scan = crate::native::capture_pomodoros::scan(pre_day_text);
     let entry_info = |line: usize| -> (String, String) {
         if let Some(entry) =
@@ -805,32 +807,29 @@ fn ledger_json_for(
             (String::new(), "queued".to_string())
         }
     };
+    let endpoint_for = |line: usize| -> TaskCompleteLedgerEndpointJson {
+        let (name, status) = entry_info(line);
+        TaskCompleteLedgerEndpointJson { line, name, status }
+    };
+    let struck_in = retirement
+        .struck_in
+        .iter()
+        .map(|entry| endpoint_for(entry.line))
+        .collect();
     let moved = retirement
         .moved
         .iter()
-        .map(|item| {
-            let (from_name, from_status) = entry_info(item.source_line);
-            let (to_name, to_status) = entry_info(item.destination_line);
-            TaskCompleteLedgerMoveJson {
-                from: TaskCompleteLedgerEndpointJson {
-                    line: item.source_line,
-                    name: if from_name.is_empty() {
-                        item.source_context.clone()
-                    } else {
-                        from_name
-                    },
-                    status: from_status,
-                },
-                to: TaskCompleteLedgerEndpointJson {
-                    line: item.destination_line,
-                    name: if to_name.is_empty() {
-                        item.destination_context.clone()
-                    } else {
-                        to_name
-                    },
-                    status: to_status,
-                },
-            }
+        .map(|item| TaskCompleteLedgerMoveJson {
+            from: endpoint_for(item.source_line),
+            to: endpoint_for(item.destination_line),
+        })
+        .collect();
+    let dropped = retirement
+        .deduplicated
+        .iter()
+        .map(|item| TaskCompleteLedgerDroppedJson {
+            from: endpoint_for(item.source_line),
+            to: endpoint_for(item.destination_line),
         })
         .collect();
     let removed_placeholders = retirement
@@ -850,8 +849,10 @@ fn ledger_json_for(
     TaskCompleteLedgerJson {
         day_file: day_relative.to_string(),
         struck: retirement.struck,
+        struck_in,
         moved,
         deduplicated: retirement.deduplicated.len(),
+        dropped,
         removed_placeholders,
     }
 }

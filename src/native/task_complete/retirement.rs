@@ -59,12 +59,25 @@ pub(crate) struct LedgerDedupe {
     pub(crate) destination_context: String,
 }
 
+/// One entry where a completed link was struck in place: 1-based line,
+/// entry context, and whether the entry is open.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LedgerStruckIn {
+    /// 1-based entry line.
+    pub(crate) line: usize,
+    pub(crate) context: String,
+    pub(crate) open: bool,
+}
+
 /// Result of [`retire_completed_links`].
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub(crate) struct LedgerRetirement {
     pub(crate) text: String,
     pub(crate) changed: bool,
     pub(crate) struck: usize,
+    /// One entry per ledger entry with an in-place strike, deduplicated
+    /// per entry in file order.
+    pub(crate) struck_in: Vec<LedgerStruckIn>,
     pub(crate) moved: Vec<LedgerMove>,
     pub(crate) deduplicated: Vec<LedgerDedupe>,
     pub(crate) removed_placeholders: Vec<RemovedEmptyPomodoro>,
@@ -101,6 +114,7 @@ pub(crate) fn retire_completed_links(
         text: text.to_string(),
         changed: false,
         struck: 0,
+        struck_in: Vec::new(),
         moved: Vec::new(),
         deduplicated: Vec::new(),
         removed_placeholders: Vec::new(),
@@ -191,10 +205,27 @@ pub(crate) fn retire_completed_links(
             }
         })
         .collect();
+    // In-place strikes, deduplicated per entry in file order: one row
+    // per ledger entry whose link was struck where it stood.
+    let mut seen_contexts = BTreeSet::new();
+    let mut struck_in = Vec::new();
+    for struck in &plan.struck {
+        if !seen_contexts.insert(struck.pomodoro.clone()) {
+            continue;
+        }
+        let (line, context, open) = entry_details(&model, &struck.pomodoro);
+        struck_in.push(LedgerStruckIn {
+            line,
+            context,
+            open,
+        });
+    }
+    struck_in.sort_by_key(|entry| entry.line);
     LedgerRetirement {
         changed: text != day_text,
         text,
         struck: plan.struck.len(),
+        struck_in,
         moved,
         deduplicated,
         removed_placeholders: empty_plan.removed,
