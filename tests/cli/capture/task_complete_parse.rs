@@ -116,6 +116,46 @@ fn task_complete_token_reports_mode_spans_and_object() {
 }
 
 #[test]
+fn single_item_task_complete_mirrors_top_level_object() {
+    // A lone `!note:block-id` draft emits the same `task_complete`
+    // object at the top level that multi-item drafts carry per item,
+    // mirroring how top-level `dependencies` is emitted.
+    for (draft, note, block_id, quoted, end) in [
+        ("!sase:fix-flaky", "sase", "fix-flaky", false, 15),
+        ("!\"Shopping List\":milk", "Shopping List", "milk", true, 21),
+    ] {
+        let json = parse_json(draft);
+        assert_eq!(json["mode"], "task_complete", "{draft}");
+        assert!(
+            json.get("items").is_none(),
+            "single-item drafts omit items[]: {draft}"
+        );
+        assert_eq!(
+            json["task_complete"],
+            serde_json::json!({
+                "raw": draft,
+                "note": note,
+                "block_id": block_id,
+                "quoted": quoted,
+                "range": { "start": 0, "end": end },
+            }),
+            "{draft}"
+        );
+    }
+    // Other drafts are unchanged: the top-level object is omitted.
+    let plain = parse_json("Call bank @cash+");
+    assert!(
+        plain.get("task_complete").is_none(),
+        "no top-level object without a completion: {plain}"
+    );
+    let query = parse_json("!fix");
+    assert!(
+        query.get("task_complete").is_none(),
+        "queries carry no object: {query}"
+    );
+}
+
+#[test]
 fn task_complete_padded_item_reports_invalid_task_complete() {
     let json = parse_json("!sase:fix-flaky more");
     assert_eq!(json["mode"], "task_complete");
@@ -198,8 +238,9 @@ fn task_complete_padded_item_refuses_without_capturing() {
         "a padded item is a usage error:\n{}",
         format_output(&output)
     );
-    assert!(
-        stderr(&output).contains("must be the whole capture item"),
+    assert_eq!(
+        stderr(&output).trim(),
+        "bob capture: capture item 1 starting on line 1: `!sase:fix-flaky` completes an existing task and must be the whole capture item; remove `more`",
         "unexpected refusal:\n{}",
         format_output(&output)
     );
@@ -207,6 +248,25 @@ fn task_complete_padded_item_refuses_without_capturing() {
         !vault.join("mac_inbox.md").exists(),
         "a refused completion must not create a junk inbox task"
     );
+}
+
+#[test]
+fn bang_prose_rows_parse_as_editor_tasks_and_queries() {
+    // Editor-mode rows that stay prose: embeds, `!` runs, padded
+    // queries, and an incomplete token plus a child line.
+    for draft in ["! foo", "![[sase#^x]]", "!!!"] {
+        let json = parse_json(draft);
+        assert_eq!(json["mode"], "task", "{draft}");
+        assert_eq!(json["needs"], serde_json::json!([]), "{draft}");
+        assert_eq!(json["diagnostics"], serde_json::json!([]), "{draft}");
+    }
+    let child = parse_json("!fix\n- child");
+    assert_eq!(child["mode"], "task", "!fix plus a child line");
+    assert_eq!(child["body"], "!fix", "!fix plus a child line");
+    // A quoted note with no block ID is still a picker query.
+    let query = parse_json("!\"Shopping List\"");
+    assert_eq!(query["mode"], "incomplete");
+    assert_eq!(query["needs"], serde_json::json!(["task_complete"]));
 }
 
 #[test]

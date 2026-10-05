@@ -342,6 +342,9 @@ pub(crate) struct EditorParse {
     pub(crate) dependencies: Vec<DependencyEntry>,
     /// Ownership of the first item's modifiers, when a dependent is named.
     pub(crate) dependency_target: Option<DependencyTarget>,
+    /// Whole-item `!note:block-id` completion token on the first item,
+    /// when claimed. Mirrors how top-level `dependencies` is emitted.
+    pub(crate) task_complete: Option<TaskCompleteEntry>,
     pub(crate) spans: Vec<Span>,
     pub(crate) diagnostics: Vec<Diagnostic>,
     /// Normalized authored-child bodies plus semantic depth for every other

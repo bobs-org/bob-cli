@@ -309,6 +309,7 @@ pub(crate) fn parse_for_editor(raw_text: &str) -> EditorParse {
             pomodoro_close: None,
             dependencies: Vec::new(),
             dependency_target: None,
+            task_complete: None,
             spans,
             diagnostics: global_diagnostics,
             sub_bullets: Vec::new(),
@@ -329,6 +330,7 @@ pub(crate) fn parse_for_editor(raw_text: &str) -> EditorParse {
     let pomodoro_close = first.pomodoro_close.clone();
     let dependencies = first.dependencies.clone();
     let dependency_target = first.dependency_target.clone();
+    let task_complete = first.task_complete.clone();
     let sub_bullets = first.sub_bullets.clone();
     let mut spans = global_spans;
     spans.extend(items.iter().flat_map(|item| item.spans.iter().copied()));
@@ -353,6 +355,7 @@ pub(crate) fn parse_for_editor(raw_text: &str) -> EditorParse {
         pomodoro_close,
         dependencies,
         dependency_target,
+        task_complete,
         spans,
         diagnostics,
         sub_bullets,

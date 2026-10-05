@@ -90,44 +90,13 @@ pub(super) fn parse_capture_item<'a>(
     if parent_normalized.is_empty() {
         return Err(missing_text_error());
     }
-    // `&note:block-id` dependency modifiers are staged for the writer:
-    // malformed or half-typed modifiers fail here, operator items fail
-    // with a targeted diagnostic, and complete modifiers strip from the
-    // marker runs below so the established pipeline resolves the
-    // remaining tokens unchanged. Ownership is decided once the finished
-    // item kind is known; ownerless items retry after `@@` inheritance in
-    // draft resolution.
-    let item_dependencies = scan_item_dependencies(item, parse_clip_markers);
-    if let Some(invalid) = item_dependencies.invalid.first() {
-        return Err(invalid.message.clone());
-    }
-    if !item_dependencies.partials.is_empty() {
-        return Err(incomplete_dependency_error());
-    }
-    let has_dependencies = !item_dependencies.entries.is_empty();
-    if has_dependencies {
-        reject_operator_dependencies(
-            item,
-            parent_line,
-            forced_route,
-            forced_section,
-        )?;
-    }
-    // A `:` picker query is never executable: it rejects with a teaching
-    // error before any other item parser, so the whole batch rolls back.
-    // Forced flags do not change this.
-    if let Some(token) = task_link_query_token(item) {
-        let query = token.text.strip_prefix(':').unwrap_or_default();
-        if parse_caret_link_token(&format!("^{query}")).is_ok() {
-            return Err(task_link_picker_at_error(token.text, query));
-        }
-        return Err(task_link_picker_error(token.text));
-    }
-    // A whole-item `!` token is claimed at the `:` query position:
-    // queries and padded items fail with teaching errors, and complete
-    // tokens become `TaskComplete`. `@@` inheritance skips these items:
-    // the kind below is never `Task`, so draft resolution leaves the
-    // global declaration alone.
+    // A whole-item `!` token is claimed before dependency scanning, so
+    // a claimed item gets the `!` teaching error rather than a
+    // dependency error, matching the editor: queries and padded items
+    // fail with teaching errors, and complete tokens become
+    // `TaskComplete`. `@@` inheritance skips these items: the kind below
+    // is never `Task`, so draft resolution leaves the global declaration
+    // alone.
     if let Some(claim) = claim_bang_item(item) {
         match claim {
             BangClaim::Query { raw, .. } => {
@@ -166,6 +135,39 @@ pub(super) fn parse_capture_item<'a>(
                 ));
             }
         }
+    }
+    // `&note:block-id` dependency modifiers are staged for the writer:
+    // malformed or half-typed modifiers fail here, operator items fail
+    // with a targeted diagnostic, and complete modifiers strip from the
+    // marker runs below so the established pipeline resolves the
+    // remaining tokens unchanged. Ownership is decided once the finished
+    // item kind is known; ownerless items retry after `@@` inheritance in
+    // draft resolution.
+    let item_dependencies = scan_item_dependencies(item, parse_clip_markers);
+    if let Some(invalid) = item_dependencies.invalid.first() {
+        return Err(invalid.message.clone());
+    }
+    if !item_dependencies.partials.is_empty() {
+        return Err(incomplete_dependency_error());
+    }
+    let has_dependencies = !item_dependencies.entries.is_empty();
+    if has_dependencies {
+        reject_operator_dependencies(
+            item,
+            parent_line,
+            forced_route,
+            forced_section,
+        )?;
+    }
+    // A `:` picker query is never executable: it rejects with a teaching
+    // error before any other item parser, so the whole batch rolls back.
+    // Forced flags do not change this.
+    if let Some(token) = task_link_query_token(item) {
+        let query = token.text.strip_prefix(':').unwrap_or_default();
+        if parse_caret_link_token(&format!("^{query}")).is_ok() {
+            return Err(task_link_picker_at_error(token.text, query));
+        }
+        return Err(task_link_picker_error(token.text));
     }
     if let Some(outcome) = parse_pomodoro_equals_item(
         item,

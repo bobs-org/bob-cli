@@ -621,3 +621,12 @@ fn bang_items_claim_each_blank_line_block_independently() {
         .expect_err("invalid rolls back");
     assert!(error.contains("must be the whole capture item"), "{error}");
 }
+
+#[test]
+fn bang_claim_beats_dependency_errors() {
+    // The `!` claim runs before dependency scanning, so a claimed item
+    // gets the `!` teaching error rather than a dependency error,
+    // matching the editor.
+    let error = execute_draft("!sase:x &foo").expect_err("claimed invalid");
+    assert!(error.contains("remove `&foo`"), "unexpected error: {error}");
+}

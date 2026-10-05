@@ -443,6 +443,12 @@ struct CaptureParseResult {
     /// selected dependent). Omitted when no dependent is named.
     #[serde(skip_serializing_if = "Option::is_none")]
     dependency_target: Option<DependencyTarget>,
+    /// Whole-item `!note:block-id` completion token on the first item,
+    /// mirroring how top-level `dependencies` is emitted. Omitted when
+    /// the draft names none, so schema version 1 is unchanged for older
+    /// inputs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    task_complete: Option<ParseTaskComplete>,
 }
 
 /// One complete `&note:block-id` modifier with its sigil-inclusive range.
@@ -551,6 +557,18 @@ impl CaptureParseResult {
             pomodoro_close: parse.pomodoro_close,
             dependencies: parse_dependencies(&parse.dependencies),
             dependency_target: parse.dependency_target,
+            task_complete: parse.task_complete.as_ref().map(|entry| {
+                ParseTaskComplete {
+                    raw: entry.raw.clone(),
+                    note: entry.note.clone(),
+                    block_id: entry.block_id.clone(),
+                    quoted: entry.quoted,
+                    range: SourceRange {
+                        start: entry.start,
+                        end: entry.end,
+                    },
+                }
+            }),
         }
     }
 }
@@ -781,6 +799,9 @@ fn print_human_success_with_styler(
             "dependency target",
             &format_dependency_target(target),
         );
+    }
+    if let Some(task_complete) = result.task_complete.as_ref() {
+        print_field(styler, "task complete", &task_complete.raw);
     }
 
     if !result.sub_bullets.is_empty() {

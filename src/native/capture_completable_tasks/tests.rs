@@ -59,6 +59,7 @@ fn fixture(root: &Path) -> std::path::PathBuf {
             "- [?] #task Blocked bill ^bill\n",
             "- [x] #task Old fix ^old-fix\n",
             "- [-] #task Dropped idea ^dropped\n",
+            "- [>] #task Migrated item ^migrated\n",
             "- [ ] #task Ignored everywhere ^ignored\n",
         ),
     );
@@ -134,6 +135,15 @@ fn open_tasks_list_with_locators_scheduled_and_suggestions() {
             .iter()
             .all(|task| task.block_id.as_deref() != Some("dropped")),
         "canceled tasks are excluded"
+    );
+    // Custom open statuses such as `[>]` default to an open type, but
+    // `bob capture` refuses them, so the catalog never offers them.
+    assert!(
+        result
+            .tasks
+            .iter()
+            .all(|task| task.block_id.as_deref() != Some("migrated")),
+        "custom-open statuses are excluded"
     );
     let by_id: HashMap<String, _> = result
         .tasks
@@ -324,6 +334,48 @@ fn hidden_and_recurring_sink_within_their_section() {
     assert!(
         bill_position < hidden_position && hidden_position < water_position,
         "visible before hidden before recurring: {open:?}"
+    );
+}
+
+#[test]
+fn recurring_today_rows_sink_below_visible_rows_in_the_same_entry() {
+    let root = tempfile::tempdir().expect("temp vault");
+    write_settings(root.path());
+    write_file(
+        &root.path().join("sase.md"),
+        concat!(
+            "- [ ] #task Normal chore ^normal\n",
+            "- [ ] #task Water plants \u{1f501} ^water\n",
+        ),
+    );
+    // The recurring row's link sits before the visible row's link in
+    // the same entry: sinking must still order the visible row first.
+    let day_file = root.path().join("2026/20260930.md");
+    write_file(
+        &day_file,
+        concat!(
+            "# Day\n",
+            "\n",
+            "## Pomodoros\n",
+            "- [ ] (**09:20 - 09:50** [t:: 30m]) \u{2014} CAPTURE\n",
+            "\t- [[sase#^water]]\n",
+            "\t- [[sase#^normal]]\n",
+        ),
+    );
+    let result = catalog(root.path(), &day_file);
+    assert_eq!(result.tasks.len(), 2, "both rows list: {result:?}");
+    let ordered = order_for_picker(&result.tasks, "");
+    let ids: Vec<&str> = ordered
+        .iter()
+        .map(|task| task.block_id.as_deref().unwrap_or(""))
+        .collect();
+    let normal_position =
+        ids.iter().position(|id| *id == "normal").expect("normal");
+    let water_position =
+        ids.iter().position(|id| *id == "water").expect("water");
+    assert!(
+        normal_position < water_position,
+        "visible today row before recurring one in the same entry: {ids:?}"
     );
 }
 

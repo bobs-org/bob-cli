@@ -274,6 +274,34 @@ fn editor_reports_incomplete_and_declaration_only_globals() {
 }
 
 #[test]
+fn task_complete_items_skip_global_inheritance() {
+    // A `@@` declaration routes ordinary items but never turns a `!`
+    // item into a task or changes its destination: execution leaves
+    // the `!` item a `TaskComplete` with no inherited route or tags.
+    let draft = parse_capture_draft_with_clip_control(
+        "@@cash\n\n!sase:x",
+        None,
+        None,
+        true,
+    )
+    .expect("parse");
+    assert_eq!(draft.items.len(), 1);
+    assert!(
+        matches!(draft.items[0].parsed.kind, CaptureKind::TaskComplete { .. }),
+        "{:?}",
+        draft.items[0].parsed.kind
+    );
+    assert_eq!(draft.items[0].parsed.route, None);
+    assert!(draft.items[0].parsed.dependencies.is_empty());
+
+    // The editor reports the same item in `task_complete` mode.
+    let parse = editor("@@cash\n\n!sase:x");
+    assert_eq!(parse.items.len(), 1);
+    assert_eq!(parse.items[0].mode, EditorMode::TaskComplete);
+    assert_eq!(parse.mode, EditorMode::TaskComplete);
+}
+
+#[test]
 fn editor_item_at_uses_the_inherited_global_route() {
     let raw = "@@sase\nSee [[#De";
     let item = editor_item_at(raw, raw.len()).expect("item");

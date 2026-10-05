@@ -70,7 +70,7 @@ pub(super) fn plan_task_complete_item(
             "`^{block_id}` in {rel_display} is Canceled; reopen it before completing it"
         )));
     }
-    if !matches!(task.status_symbol, ' ' | '?' | '*' | '/') {
+    if !engine::is_completable_status(task.status_symbol) {
         return Err(CaptureError::io(format!(
             "`^{block_id}` in {rel_display} has status `[{}]`; only Ready, Blocked, Next, and In Progress tasks can be completed",
             task.status_symbol

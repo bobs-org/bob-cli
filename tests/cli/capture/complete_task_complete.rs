@@ -23,6 +23,7 @@ fn write_fixture(vault: &std::path::Path) -> std::path::PathBuf {
             "- [ ] #task Water plants \u{1f501} ^water\n",
             "- [?] #task Blocked bill ^bill\n",
             "- [ ] #task Ship blog post ^blog\n",
+            "- [>] #task Migrated item ^migrated\n",
         ),
     );
     write_file(
@@ -181,6 +182,15 @@ fn complete_bare_bang_lists_today_first_with_picker() {
             "",
         ],
         "today-first order with quoted locators and ID-less tails"
+    );
+    // Custom open statuses such as `[>]` are refused by execution,
+    // so the picker never offers them.
+    assert!(
+        !replacements(&json)
+            .iter()
+            .any(|replacement| { replacement.contains("migrated") }),
+        "custom-open tasks never list: {}",
+        json["candidates"]
     );
     let deep = &json["candidates"][0];
     assert_eq!(deep["note_path"], "sase.md");
@@ -496,6 +506,13 @@ fn shell_completion_serves_identified_enabled_bang_rows() {
     );
     assert!(groups.contains(&"today"), "today group first: {groups:?}");
     assert!(groups.contains(&"open"), "open group present: {groups:?}");
+    // Today rows come first in shell completion order.
+    let first_open = groups.iter().position(|group| *group == "open");
+    let last_today = groups.iter().rposition(|group| *group == "today");
+    assert!(
+        last_today < first_open,
+        "today rows before open rows: {groups:?}"
+    );
     assert!(
         !out.contains("No id yet"),
         "shell serves identified rows only: {out}"

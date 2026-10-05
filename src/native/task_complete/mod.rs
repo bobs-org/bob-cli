@@ -20,6 +20,14 @@ pub(crate) use tree::{
     CompleteTreeOutcome, LeftOpenReason, LeftOpenTask, RootPolicy,
 };
 
+/// Shared completable-status rule for the `!` picker catalog and the
+/// `execute` phase: only Ready, Blocked, Next, and In Progress tasks can
+/// be completed. Custom open statuses such as `[>]` default to an open
+/// type but are refused here, so the picker never offers them.
+pub(crate) fn is_completable_status(symbol: char) -> bool {
+    matches!(symbol, ' ' | '?' | '*' | '/')
+}
+
 /// Shared recurring-task rule for the engine, the `execute` phase, and the
 /// completable-task catalog: a line with `[repeat:: …]`, `(repeat:: …)`, or
 /// `🔁` is recurring, matching the Cancel picker's refusal.

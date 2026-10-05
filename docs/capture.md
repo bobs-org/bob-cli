@@ -1088,7 +1088,10 @@ reports complete items with mode `task_complete`, `block_id`, three spans
 (`task_complete_sigil` over the `!`, `task_complete_note` over the note
 with quotes, `task_complete_block_id` over the ID), and the per-item
 `task_complete` object (`raw`, decoded `note`, `block_id`, `quoted`, and
-the sigil-inclusive `range`). Claimed invalid items report mode
+the sigil-inclusive `range`). When the draft has one item and that item is
+`task_complete`, the same `task_complete` object is emitted at the top level
+of the capture-parse result, mirroring how top-level `dependencies` is
+emitted; other drafts omit it. Claimed invalid items report mode
 `task_complete` with an `invalid_task_complete` diagnostic, the same mode
 handling `invalid_pomodoro_link` uses for a padded `^route:id`.
 
@@ -3306,7 +3309,7 @@ and the recognized `@...` token are removed, matching what `bob capture` would
 write for any input it accepts. `mode` is `task`, `bullet`, `pomodoro_task`,
 `pomodoro_note`, `sub_bullet`, `task_toggle`, `project_note`,
 `pomodoro_project_note`, `pomodoro_adjust`, `pomodoro_shift`,
-`pomodoro_link`, `pomodoro_close`, `pomodoro_start`, or `incomplete`, describing whichever line resolved a marker
+`pomodoro_link`, `pomodoro_close`, `pomodoro_start`, `task_dependency`, `task_complete`, or `incomplete`, describing whichever line resolved a marker
 first -- the parent's leading or trailing form, or else the first child line
 with a trailing marker. A solo `@route:block-id…` item reports
 `pomodoro_link` with the `pomodoro_route` / `pomodoro_block_id` /
@@ -3346,7 +3349,7 @@ the Pomodoro name when one was typed — the same "whichever applies" reuse
 `block_id` already has, and `mode` disambiguates — and the same holds for the
 `^` project-note form, where `section` is the `#pomodoro` name. `needs` lists what a picker
 still has to supply, in the
-order `route`, `section`, `block_id`, `pomodoro_id`, `pomodoro_name`, `task`, `task_section`, `active_task`, `task_link`, `task_parent`, `pomodoro_close_task`, `pomodoro_start_task`; it is an independent
+order `route`, `section`, `block_id`, `pomodoro_id`, `pomodoro_name`, `task`, `task_section`, `active_task`, `task_link`, `task_parent`, `pomodoro_close_task`, `pomodoro_start_task`, `task_dependency`, `dependency_target`, `task_complete`; it is an independent
 completion hint, so the executable `@route#` bullet reports mode `bullet` and
 needs `["section"]`, while `@route+id#` with no body text reports mode
 `incomplete` and needs `["pomodoro_name"]`, `note @route+id#` reports mode
@@ -3380,7 +3383,7 @@ per token: each `range` covers its token, and all entries share the physical
 line's `line_start`/`line_end`. Each entry has a one-based `index`, a `range` with global UTF-8
 `start`/`end` offsets into `input`, `line_start`/`line_end` physical line
 numbers, the item's `body`, `mode`, `route`, `section`, `block_id`, `needs`,
-and optional `sub_bullets`/`sub_bullet_depths`/`sub_bullet_task_ids`/`pomodoro_start`/`pomodoro_adjust`/`pomodoro_shift`/`pomodoro_close`. Real item indices and ranges
+and optional `sub_bullets`/`sub_bullet_depths`/`sub_bullet_task_ids`/`pomodoro_start`/`pomodoro_adjust`/`pomodoro_shift`/`pomodoro_close`/`dependencies`/`dependency_target`/`task_complete`. Real item indices and ranges
 exclude declaration-only `@@` lines but still index the original draft. Top-level and
 per-item `route`, `mode`, and `block_id` are the item's effective destination
 after inheritance. The legacy top-level fields continue to describe the first
@@ -3436,7 +3439,7 @@ non-overlapping, and always on a character boundary. Each `kind` is one of
 `sub_bullet_block_id`, `sub_bullet_section`, `task_toggle_route`,
 `task_toggle_block_id`, `task_toggle_pomodoro_name`, `task_toggle_explicit_toggle`, `global_route`,
 `global_sub_bullet_route`, `global_sub_bullet_block_id`, `schedule`, `priority`, `clipboard`,
-`interactive_placeholder`, `project_task_link_marker`, `project_task_block_id`, `wikilink_delimiter`, `wikilink_target`,
+`interactive_placeholder`, `project_task_link_marker`, `project_task_block_id`, `dependency_sigil`, `dependency_note`, `dependency_block_id`, `task_complete_sigil`, `task_complete_note`, `task_complete_block_id`, `wikilink_delimiter`, `wikilink_target`,
 `wikilink_heading`, `wikilink_block_id`, or `wikilink_alias`. A placeholder
 marks the part of a marker the user has not filled in yet: the trailing `+` in
 `@cash+` or `@@cash+`, the trailing `#` in `@cash+id#` or `@cash:id#`, the dangling `,` or `!` in `=x1,` or `=x!`, a lone `:` or `^` ending a project-note task bullet, or the whole `@+` /
@@ -3822,11 +3825,11 @@ JSON output is a single versioned object:
 full, regardless of where the cursor sits inside it; it is always present, even
 in an empty result, where it collapses to a zero-length range at the cursor.
 `context` is `route`, `section`, `pomodoro_block_id`, `task_block_id`, `project_task_block_id`, `pomodoro_name`, `task`,
-`task_section`, `active_task`, `task_link`, `task_parent`, `wikilink_note`, `wikilink_heading`, `wikilink_block`, or `null` when no completion field is
+`task_section`, `active_task`, `task_link`, `task_parent`, `task_dependency`, `task_complete`, `wikilink_note`, `wikilink_heading`, `wikilink_block`, or `null` when no completion field is
 active. `task_parent` covers a terminal `+query`, strips the sigil from its
 additive top-level `query`, and replaces the whole selector. `task` covers
 scoped `@route+id` with only the ID span replaced and the typed ID query.
-`query` is present only for `task_parent`, `task`, and `task_dependency`; it
+`query` is present only for `task_parent`, `task`, `task_dependency`, and `task_complete`; it
 contains the selector text after its sigil (and a decoded locator for a
 dependency query). Both parent-task contexts include an
 additive `picker` descriptor: `kind` is `parent_task`; `scope` is `vault`
@@ -3836,8 +3839,10 @@ present only for note scope. `marker_range` covers the selector (or the
 scoped marker through its ID), and `trigger_removal_range` covers the full
 bare selector or only the `+` through the scoped ID. All offsets are
 half-open UTF-8 byte ranges. Only the exact lone `+` includes
-`action_continuation_keys` (`0` through `9`, then `+`). The descriptor is
-omitted from all other contexts. `task_block_id` covers `@route^prefix` once the route resolves;
+`action_continuation_keys` (`0` through `9`, then `+`). The `task_complete`
+context carries its own vault-scoped `picker` descriptor (`kind:
+task_complete`, `scope_token: "!"`) instead; the descriptor is omitted from
+all other contexts. `task_block_id` covers `@route^prefix` once the route resolves;
 `candidates` is always `[]`. `project_task_block_id` covers a cursor inside a
 trailing ` :` / ` ^` task ID token on a first-level bullet of a project-note
 item with a resolved route and block ID, from just after the sigil to the

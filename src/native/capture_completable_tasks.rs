@@ -180,7 +180,11 @@ pub(crate) fn discover(
     let open_keys: HashSet<(String, String)> = dep
         .tasks
         .iter()
-        .filter(|task| task.open && task.block_id.is_some())
+        .filter(|task| {
+            task.open
+                && task_complete::is_completable_status(task.status_symbol)
+                && task.block_id.is_some()
+        })
         .map(|task| {
             (
                 task.note_path.clone(),
@@ -191,7 +195,9 @@ pub(crate) fn discover(
     let today = annotate_today(bob_dir, day_file, &open_keys);
     let mut line_cache: HashMap<String, Vec<String>> = HashMap::new();
     let mut tasks = Vec::new();
-    for task in dep.tasks.iter().filter(|task| task.open) {
+    for task in dep.tasks.iter().filter(|task| {
+        task.open && task_complete::is_completable_status(task.status_symbol)
+    }) {
         let raw_line = raw_task_line(bob_dir, &mut line_cache, task);
         let scheduled = raw_line.as_deref().and_then(scheduled_on);
         let recurring = raw_line
@@ -500,12 +506,13 @@ pub(crate) fn completable_search_fields(task: &CompletableTask) -> Vec<String> {
 /// ledger order, then worked most-recent-first in ledger order inside
 /// each entry, then queued in ledger order, then noted in document
 /// order), then In Progress and Next by note path and line, then all
-/// other open tasks by note path and document order. Recurring rows
-/// go last and hidden rows go after visible ones within their
-/// section; the note path and line break every remaining tie.
+/// other open tasks by note path and document order. Within each today
+/// Pomodoro entry (and within the `noted` group), visible rows come
+/// first, hidden rows sink below them, and recurring rows sink last;
+/// the link line, note path, and line break every remaining tie.
 fn canonical_key(
     task: &CompletableTask,
-) -> (u8, i64, i64, i64, u8, u8, &str, usize) {
+) -> (u8, i64, i64, u8, u8, i64, &str, usize) {
     let section: u8 = match task.group {
         CompletableGroup::Today => 0,
         CompletableGroup::InProgress => 1,
@@ -532,9 +539,9 @@ fn canonical_key(
         section,
         role_rank,
         entry_key,
-        link_key,
         u8::from(task.recurring),
         u8::from(task.hidden),
+        link_key,
         task.note_path.as_str(),
         task.line,
     )
