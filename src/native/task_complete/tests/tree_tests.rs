@@ -1,6 +1,8 @@
 //! Tree-close tests: nested embeds, left-open reasons, root policy,
 //! and completion-field spacing.
-use super::super::tree::add_or_replace_completion_field;
+use super::super::tree::{
+    add_or_replace_completion_field, LeftOpenReason, LeftOpenTask,
+};
 use super::*;
 
 const DATE: &str = "2026-10-05";
@@ -141,7 +143,7 @@ fn unknown_status_descendant_is_left_open() {
         concat!(
             "- [ ] #task Root ^root\n",
             "  - ![[sase#^weird]]\n",
-            "- [-] #task Canceled child ^weird\n",
+            "- [>] #task Custom open child ^weird\n",
         ),
     );
     let root = vault.absolute("sase.md");
@@ -153,4 +155,78 @@ fn unknown_status_descendant_is_left_open() {
     assert_eq!(outcome.left_open.len(), 1);
     assert_eq!(outcome.left_open[0].block_id, "weird");
     assert_eq!(outcome.left_open[0].reason, LeftOpenReason::UnknownStatus);
+}
+
+#[test]
+fn canceled_descendant_is_neither_closed_nor_reported() {
+    let mut vault = MemoryVault::new();
+    vault.insert(
+        "sase.md",
+        concat!(
+            "- [ ] #task Root ^root\n",
+            "  - ![[sase#^weird]]\n",
+            "- [-] #task Canceled child ^weird\n",
+        ),
+    );
+    let root = vault.absolute("sase.md");
+    let outcome =
+        complete_task_tree(&vault, &root, "root", DATE, RootPolicy::Explicit)
+            .expect("tree closes");
+    assert!(outcome.root.is_some());
+    assert!(outcome.closed_subtasks.is_empty());
+    assert!(outcome.left_open.is_empty());
+    let updated = outcome.changed_files.get(&root).expect("sase.md changed");
+    assert!(updated.contains("- [-] #task Canceled child ^weird"));
+}
+
+#[test]
+fn explicit_blocked_descendant_child_stays_open() {
+    let mut vault = MemoryVault::new();
+    vault.insert(
+        "sase.md",
+        concat!(
+            "- [ ] #task Root ^root\n",
+            "  - ![[sase#^blocked]]\n",
+            "- [?] #task Blocked middle ^blocked\n",
+            "  - ![[sase#^child]]\n",
+            "- [ ] #task Open child ^child\n",
+        ),
+    );
+    let root = vault.absolute("sase.md");
+    let outcome =
+        complete_task_tree(&vault, &root, "root", DATE, RootPolicy::Explicit)
+            .expect("tree closes");
+    assert!(outcome.root.is_some());
+    assert!(outcome.closed_subtasks.is_empty());
+    assert_eq!(outcome.left_open.len(), 1);
+    assert_eq!(outcome.left_open[0].block_id, "blocked");
+    assert_eq!(outcome.left_open[0].reason, LeftOpenReason::Blocked);
+    let updated = outcome.changed_files.get(&root).expect("sase.md changed");
+    assert!(updated.contains("- [?] #task Blocked middle ^blocked"));
+    assert!(updated.contains("- [ ] #task Open child ^child"));
+}
+
+#[test]
+fn explicit_done_descendant_is_not_descended() {
+    let mut vault = MemoryVault::new();
+    vault.insert(
+        "sase.md",
+        concat!(
+            "- [ ] #task Root ^root\n",
+            "  - ![[sase#^done]]\n",
+            "- [X] #task Done middle ^done\n",
+            "  - ![[sase#^child]]\n",
+            "- [ ] #task Open child ^child\n",
+        ),
+    );
+    let root = vault.absolute("sase.md");
+    let outcome =
+        complete_task_tree(&vault, &root, "root", DATE, RootPolicy::Explicit)
+            .expect("tree closes");
+    assert!(outcome.root.is_some());
+    assert!(outcome.closed_subtasks.is_empty());
+    assert!(outcome.left_open.is_empty());
+    let updated = outcome.changed_files.get(&root).expect("sase.md changed");
+    assert!(updated.contains("- [X] #task Done middle ^done"));
+    assert!(updated.contains("- [ ] #task Open child ^child"));
 }

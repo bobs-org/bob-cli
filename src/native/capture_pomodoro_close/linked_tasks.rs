@@ -16,10 +16,10 @@ use super::super::{
     },
     pomodoro,
     task_complete::tree::{
-        add_or_replace_completion_field, close_policy_allows,
-        close_traversal_gate, embedded_children, line_text_at,
-        normalize_task_metadata_spacing, replace_line, task_has_global_filter,
-        RootPolicy,
+        line_text_at, normalize_task_metadata_spacing, replace_line,
+    },
+    task_complete::{
+        complete_embedded_trees, EmbeddedTreeRoot, EmbeddedVisitOutcome,
     },
     vault_links::LinkResolution,
 };
@@ -126,6 +126,31 @@ pub(crate) trait CloseVault {
 
 type TaskKey = (PathBuf, String);
 
+/// Read-only view of the close planner's staged files layered over the
+/// vault, so the shared embedded-tree traversal reads exactly what the
+/// close planner would read at this point in planning.
+struct PlannerVault<'a, V> {
+    inner: &'a V,
+    staged: &'a BTreeMap<PathBuf, String>,
+}
+
+impl<V: CloseVault> CloseVault for PlannerVault<'_, V> {
+    fn bob_dir(&self) -> &Path {
+        self.inner.bob_dir()
+    }
+
+    fn resolve_target(&self, from_path: &Path, target: &str) -> LinkResolution {
+        self.inner.resolve_target(from_path, target)
+    }
+
+    fn read_latest(&self, path: &Path) -> Result<Option<String>, String> {
+        if let Some(contents) = self.staged.get(path) {
+            return Ok(Some(contents.clone()));
+        }
+        self.inner.read_latest(path)
+    }
+}
+
 /// Identity of one close task row: where its link was found and how the
 /// row reports. Groups the `register_reference` arguments.
 struct CloseTaskRef<'a> {
@@ -148,8 +173,6 @@ struct ClosePlanner<'a, V> {
     originals: BTreeMap<PathBuf, String>,
     task_indices: BTreeMap<TaskKey, usize>,
     unresolved_indices: BTreeMap<String, usize>,
-    visited_embeds: BTreeSet<TaskKey>,
-    visited_embed_count: usize,
     tasks: Vec<PomodoroCloseTask>,
     warnings: Vec<String>,
 }
@@ -186,8 +209,6 @@ impl<'a, V: CloseVault> ClosePlanner<'a, V> {
             originals,
             task_indices: BTreeMap::new(),
             unresolved_indices: BTreeMap::new(),
-            visited_embeds: BTreeSet::new(),
-            visited_embed_count: 0,
             tasks: Vec::new(),
             warnings: Vec::new(),
         }
@@ -546,92 +567,78 @@ impl<'a, V: CloseVault> ClosePlanner<'a, V> {
         Ok(())
     }
 
-    fn apply_embedded_tree(
+    /// Close every `=x` embedded tree through the shared completion
+    /// engine and replay its visit log to rebuild this plan's task rows.
+    /// The depth cap, the target cap, the Depends-On skip, and the gate
+    /// all live in `task_complete::tree` now; this method runs no
+    /// recursion of its own.
+    fn apply_embedded_trees(
         &mut self,
-        from_path: &Path,
-        target: &BlockLinkTarget,
-        depth: usize,
-        ledger_line: usize,
-        role: CloseTaskRole,
+        targets: &[BlockLinkTarget],
     ) -> Result<(), PomodoroClosePlanError> {
-        if depth > 25 {
-            self.warn(format!(
-                "embedded task recursion exceeded 25 levels below line {ledger_line}"
-            ));
+        if targets.is_empty() {
             return Ok(());
         }
-        let Some(key) = self.register_reference(
-            CloseTaskRef {
-                from_path,
-                path_part: &target.path_part,
-                block_id: &target.block_id,
-                role,
-                block_link: &target.wikilink,
-                ledger_line,
-                carried: false,
-            },
-            true,
-        )?
-        else {
-            return Ok(());
+        let outcome = {
+            let adapter = PlannerVault {
+                inner: self.vault,
+                staged: &self.staged,
+            };
+            let roots: Vec<EmbeddedTreeRoot<'_>> = targets
+                .iter()
+                .map(|target| EmbeddedTreeRoot {
+                    from_path: self.day_path,
+                    target,
+                })
+                .collect();
+            complete_embedded_trees(&adapter, &roots, &self.date)
+                .map_err(PomodoroClosePlanError::VaultRead)?
         };
-        if self.visited_embeds.contains(&key) {
-            return Ok(());
-        }
-        if self.visited_embed_count >= 250 {
-            self.warn(
-                "embedded task recursion exceeded 250 targets".to_string(),
-            );
-            return Ok(());
-        }
-        self.visited_embeds.insert(key.clone());
-        self.visited_embed_count += 1;
-
-        let Some(task) = self.task_for_key(&key, true)? else {
-            return Ok(());
-        };
-        // The shared completion engine owns the traversal gate; the close
-        // runs it with `CloseLink` so `=x` keeps today's behavior exactly.
-        if !close_traversal_gate(RootPolicy::CloseLink, task.status_symbol) {
-            return Ok(());
-        }
-        let Some(contents) = self.read_file(&key.0)? else {
-            return Ok(());
-        };
-        let descendants = embedded_children(&contents, &task);
-        for descendant in descendants {
-            self.apply_embedded_tree(
-                &key.0,
-                &descendant,
-                depth + 1,
-                ledger_line,
-                CloseTaskRole::Subtask,
+        // Replay the visit log in order. Reads still see pre-close staged
+        // text here, exactly as the old recursion's registers did, so
+        // every row keeps its pre-close previous status.
+        let mut closed: Vec<TaskKey> = Vec::new();
+        for visit in &outcome.visits {
+            if let EmbeddedVisitOutcome::DepthCapped { warning } =
+                &visit.outcome
+            {
+                self.warn(warning.clone());
+                continue;
+            }
+            let key = self.register_reference(
+                CloseTaskRef {
+                    from_path: visit.from_path.as_path(),
+                    path_part: &visit.path_part,
+                    block_id: &visit.block_id,
+                    role: if visit.is_root {
+                        CloseTaskRole::Embedded
+                    } else {
+                        CloseTaskRole::Subtask
+                    },
+                    block_link: &visit.wikilink,
+                    ledger_line: visit.ledger_line,
+                    carried: false,
+                },
+                true,
             )?;
+            match &visit.outcome {
+                EmbeddedVisitOutcome::Resolved { closed: was_closed } => {
+                    if *was_closed && let Some(key) = key {
+                        closed.push(key);
+                    }
+                }
+                EmbeddedVisitOutcome::TargetCapped { warning } => {
+                    self.warn(warning.clone());
+                }
+                EmbeddedVisitOutcome::Unresolved
+                | EmbeddedVisitOutcome::DepthCapped { .. } => {}
+            }
         }
-
-        let Some(current_task) = self.task_for_key(&key, true)? else {
-            return Ok(());
-        };
-        if close_policy_allows(
-            RootPolicy::CloseLink,
-            current_task.status_symbol,
-        ) {
-            let Some(line) = self.staged.get(&key.0).and_then(|contents| {
-                line_text_at(contents, current_task.line_index)
-            }) else {
-                return Ok(());
-            };
-            let Some(mut updated) =
-                capture_task_toggle::set_task_line_status(line, 'x')
-            else {
-                return Ok(());
-            };
-            if task_has_global_filter(line, &self.settings) {
-                updated = add_or_replace_completion_field(&updated, &self.date);
-            }
-            if self.replace_task_line(&key, &current_task, updated)? {
-                self.refresh_task_row(&key, true)?;
-            }
+        for (path, contents) in &outcome.changed_files {
+            self.save_file(path, contents.clone());
+        }
+        for key in &closed {
+            self.refresh_task_row(key, true)?;
         }
         Ok(())
     }
@@ -938,15 +945,7 @@ pub(crate) fn plan_pomodoro_close<V: CloseVault>(
         let carried = !parked_lines.contains(&target.line);
         planner.apply_startable(target, carried)?;
     }
-    for target in &ledger.embedded_targets {
-        planner.apply_embedded_tree(
-            day_path,
-            target,
-            0,
-            target.line,
-            CloseTaskRole::Embedded,
-        )?;
-    }
+    planner.apply_embedded_trees(&ledger.embedded_targets)?;
     let landed = planner.write_logs(&ledger, &log_lines, &log_entries)?;
     planner.retire_closed_embeds(&ledger, running.line.saturating_sub(1))?;
     let link_rows = link_row_mapping(

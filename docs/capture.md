@@ -1113,7 +1113,8 @@ engine, in this order and all against the staged batch snapshot:
    `  [completion:: YYYY-MM-DD]` (only when the line carries the
    global-filter tag), and embedded `![[…]]` subtasks close recursively
    (Blocked, recurring, unknown-status, and over-cap descendants are left
-   open and reported, never silently dropped). Unlike `=x!N`, the root may
+   open and reported, never silently dropped). A Blocked descendant and
+   everything below it stay open. Unlike `=x!N`, the root may
    be Blocked.
 5. **Retire Task Links** in today's daily note (when it has a
    `## Pomodoros` section): every completed identity is struck, its bullets

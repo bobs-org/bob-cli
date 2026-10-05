@@ -9,15 +9,13 @@ pub(crate) mod recovery;
 pub(crate) mod retirement;
 pub(crate) mod tree;
 
-pub(crate) use recovery::{
-    recover_blocked_dependents, DependentRecovery, RecoveredDependent,
-};
+pub(crate) use recovery::recover_blocked_dependents;
 pub(crate) use retirement::{
-    retire_completed_links, LedgerMove, LedgerRetirement, LinkStatus,
+    retire_completed_links, LedgerRetirement, LinkStatus,
 };
 pub(crate) use tree::{
-    close_policy_allows, close_traversal_gate, complete_task_tree, ClosedTask,
-    CompleteTreeOutcome, LeftOpenReason, LeftOpenTask, RootPolicy,
+    complete_embedded_trees, complete_task_tree, CompleteTreeOutcome,
+    EmbeddedTreeRoot, EmbeddedVisitOutcome, RootPolicy,
 };
 
 /// Shared completable-status rule for the `!` picker catalog and the

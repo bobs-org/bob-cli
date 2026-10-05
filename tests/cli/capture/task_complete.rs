@@ -170,7 +170,7 @@ fn embedded_subtasks_close_and_blocked_descendant_stays_open() {
     let day_file = vault.join("20261005.md");
     write_file(
         &vault.join("sase.md"),
-        "- [?] #task Blocked root ^root\n\t- ![[sase#^sub1]]\n\t- ![[sase#^sub2]]\n- [/] #task Sub one ^sub1\n- [?] #task Sub two ^sub2\n",
+        "- [?] #task Blocked root ^root\n\t- ![[sase#^sub1]]\n\t- ![[sase#^sub2]]\n- [/] #task Sub one ^sub1\n- [?] #task Sub two ^sub2\n\t- ![[sase#^sub3]]\n- [ ] #task Sub three ^sub3\n",
     );
     write_file(
         &day_file,
@@ -194,6 +194,14 @@ fn embedded_subtasks_close_and_blocked_descendant_stays_open() {
     );
     assert_eq!(complete["subtasks_left_open"][0]["block_id"], "sub2");
     assert_eq!(complete["subtasks_left_open"][0]["reason"], "blocked");
+    // The Blocked subtask is not descended: the open task below it stays
+    // open and is never reported.
+    assert!(
+        fs::read_to_string(vault.join("sase.md"))
+            .expect("read note")
+            .contains("- [ ] #task Sub three ^sub3\n"),
+        "{complete}"
+    );
     // Ledger untouched: no links to retire.
     assert!(complete.get("ledger").is_none(), "{complete}");
 }
