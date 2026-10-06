@@ -621,7 +621,7 @@ today on a canonical line is a no-op.
 
 | Surface                | Stamps | Never stamps |
 | ---------------------- | ------ | ------------ |
-| bob-navigation-hotkeys | Alt+F and Ctrl+Alt+F stamp through `api.freshness.keepLine` (counted only under exact eligibility); Alt+N commit and release; the Ctrl+Shift+P Task Card (`1`–`4`, `0`, Enter/Schedule, `b`, `f`, `x`, Ctrl+D) and the stages its actions open, in single, counted and Task Link mode; each open task moved by Ctrl+Shift+M; the Ctrl+Enter recommended roll and decay; decision-card outcomes write through the existing writers (Not now and levels through the priority writer, Less often through set-refresh, Reword through the generic stamp, Drop through the cancel row, which never stamps) | the cancel row (including the decay cancel), project-frontmatter edits, create-project-note-from-task, the `!` transclusion toggle (a pure toggle that never rewrites a task line) |
+| bob-navigation-hotkeys | Alt+F and Ctrl+Alt+F stamp through `api.freshness.keepLine` (counted only under exact eligibility); Alt+N commit and release; the Ctrl+Shift+P Task Card (`1`–`4`, `0`, Enter/Schedule, `b`, `f`, `x`, Ctrl+D) and the stages its actions open, in single, counted and Task Link mode; each open task moved by Ctrl+Shift+M; routed moves stamp like Ctrl+Shift+M; the Ctrl+Enter recommended roll and decay; decision-card outcomes write through the existing writers (Not now and levels through the priority writer, Less often through set-refresh, Reword through the generic stamp, Drop through the cancel row, which never stamps) | the cancel row (including the decay cancel), project-frontmatter edits, create-project-note-from-task, the `!` transclusion toggle (a pure toggle that never rewrites a task line) |
 | task-status-cycler     | Alt+[ / Alt+] (including counted and transcluded targets) when the result is an open status, including leaving Blocked by hand; Ctrl+Enter reopening a done task | closing (done or cancelled), Ctrl+Shift+] bullet → `#task` (that is creation), the dependency-ID normalizer, `recoverBlockedDependents` |
 | block-id-prompt        | Ctrl+Shift+Enter and `^^` when they rewrite the task line (Ready/Blocked → Next, a new block ID) | unlink, Task Link removal, Ctrl+6 rename |
 | `bob capture`          | `plan_task_link` (the link direction of `@route+id!`, Ensure Next, solo `@route:id` / `^route:id`, link-then-close), the `=x` rows that set `[/]`, and an `&note:id` dependency capture that edits an existing open dependent (its Depends-On line, derived fields, or Blocked status) | new tasks on any route (including new tasks with `&` prerequisites), `=x` complete, unlink, start rows, sub-bullets, prerequisite target-ID and lane promotion edits, an unchanged repeat `&` |
@@ -714,7 +714,9 @@ lengthen `next_interval` to 2–3 and leave Pending at 1.
 Review outcomes, one key each (every row except "edit" stamps by
 itself): still right (Ctrl+Alt+F → next; Alt+F stays); see it less often
 (Ctrl+Shift+P `f`, then 14 / 30 / 90 → next); not now (Ctrl+Shift+P
-`1`–`4` → next); do today (Ctrl+Shift+Enter / Alt+N → next); route to a
+`1`–`4` → next); do today (Ctrl+Shift+Enter / Alt+N → next); route an
+inbox task (any Ctrl+Shift+P answer or Ctrl+Shift+Enter asks where it goes,
+then answers → next); route to a
 project (Ctrl+Shift+M follows the task; ]s resumes); drop (Ctrl+Shift+P `x` → next); sequence
 (Ctrl+Shift+P `b` → next); wording wrong (edit, then Alt+F stays);
 already done (Ctrl+Enter → next, never onto a checklist row).
@@ -1462,6 +1464,7 @@ There is no freshness trial: no ritual change, release, or tuning waits on a tri
 - 2026-10-06: answering a landed row advances the walk (nav 2.6.1 / nav api v3, cycler 1.26.0, block-id-prompt 1.22.0, ledger 1.29.2).
 - 2026-10-06: Ctrl+Shift+M from a landing follows the task to its destination and never advances; the next ]s resumes at the moved row's neighbour (nav 2.7.0).
 - 2026-10-06: the walk keeps queue order across line shifts; it follows rows by note and text and moves only from the row just answered (nav 2.7.1).
+- 2026-10-06: inbox routing went live — on an open inbox task, every non-closing Ctrl+Shift+P answer and Ctrl+Shift+Enter asks where the task goes before writing, acts then moves without following, and advances the walk as an answer (nav 2.10.0, block-id-prompt 1.23.0).
 
 ## 14. Keep-streak rollout, rollback, and calibration
 

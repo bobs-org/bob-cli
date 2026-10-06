@@ -181,7 +181,9 @@ queue starts at PRE. Every gesture that answers the landed row advances the
 walk once to the next remaining item in the same keystroke: Ctrl+Enter
 completes (never crossing the PRE/POST boundary — Ctrl+Alt+F does),
 Ctrl+Alt+F keeps, Alt+N releases, Ctrl+Shift+Enter links to today, a
-resolving Task Card commit moves on. Ctrl+Shift+M never advances: it follows
+resolving Task Card commit moves on. On an inbox task, any Task Card answer or
+Ctrl+Shift+Enter asks where the task goes first, then answers and moves there.
+Ctrl+Shift+M never advances: it follows
 the moved task to its destination note, and the next `]s` resumes the walk.
 Alt+F is the one answer that stays, `]s` skips,
 and `<C-o>` returns to the row just answered. Walk commitments

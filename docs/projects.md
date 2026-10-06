@@ -35,6 +35,7 @@ that task instead of asking users to edit machine-facing metadata directly.
 - [Scheduling Work Log prompt](#scheduling-work-log-prompt)
 - [Deferring a task prunes it from today's open Pomodoros](#deferring-a-task-prunes-it-from-todays-open-pomodoros)
 - [Cancelling a task](#cancelling-a-task)
+- [Inbox routing](#inbox-routing)
 - [Warnings](#warnings)
 - [Examples](#examples)
 
@@ -1066,6 +1067,64 @@ Refusals write nothing: recurring tasks (a `[repeat:: …]`, `(repeat:: …)`, o
 handled), stale preimages (the note changed under the picker), and a failed
 Pomodoro prune (reported as a `Pomodoro links not removed` warning chip,
 never rolled back). A single cancel is one editor undo step.
+
+### Inbox routing
+
+On an open inbox task, `Ctrl+Shift+P` and `Ctrl+Shift+Enter` ask where the
+task goes as the last step before they write. An inbox note is `inbox.md`
+itself or an area note whose frontmatter `parent` resolves to `inbox.md`
+(today `mac_inbox.md` and `gkeep_inbox.md`); only direct children count, so
+a project filed under an inbox is not an inbox note.
+
+**Gesture order.** The Task Card opens exactly as today, with one extra
+muted `Inbox` header chip (`Answers ask where this task goes first`) while
+routing is armed. Pick an action and fill in its stages as today; at the
+moment the card would write, the route picker appears instead. For
+`Ctrl+Shift+Enter`, the block-ID prompt still comes first when one is
+needed, then the route picker appears right before the link or unlink
+write. Choosing a destination performs the write and the move. `Esc` in the
+route picker returns to the exact Task Card surface it came from (card or
+stage, typed input intact) with nothing written, or cancels the whole
+`Ctrl+Shift+Enter` toggle with nothing written — not even a new block ID.
+
+**Route picker.** Header icon `inbox`, title `Route out of <inbox
+basename>`, subtitle `<task text> · then <action>` (`<N> tasks · then
+<action>` for counted sessions), placeholder `Where does this go? Filter
+areas and open projects`. Destinations are the `Ctrl+Shift+M` areas and
+open projects minus every inbox note: the picker never offers another
+inbox. Keys: `↑↓` select, `↵` moves and applies, `⇧↵` applies in place and
+keeps the task in the inbox (today's behavior, for when the right home
+does not exist yet), `Esc` / `Ctrl+[` goes back (Task Card) or cancels
+(`Ctrl+Shift+Enter`). On `↵` the picker preflights the move against the
+live source and destination (destination still an area or open project, a
+`## Tasks` section where a project needs one, no block-ID collision); a
+refusal shows a Notice and keeps the picker open, with nothing written.
+
+**Act then move.** The action's existing writer runs unchanged, in place, in
+the inbox note; then nav re-discovers the routed tasks from the same start
+line and moves them with the existing move engine (children carried, block
+links rewritten vault-wide, freshness stamped like `Ctrl+Shift+M`). If the
+action is refused, fails, or writes nothing, nothing moves. If the action
+committed but the move fails, the action stays, the task stays in the
+inbox, and the notice ends with `· still in <inbox>` (recoverable with
+`Ctrl+Shift+M`). Unlike `Ctrl+Shift+M`, a routed move never focuses the
+destination or parks the walk: the cursor stays in the inbox note on the
+next inbox line.
+
+**Notices.** Task Card off the walk: the action's rich notice card, then
+`Moved to <dest>` (`Moved <N> tasks to <dest>` counted). On a landing: the
+rich card, then the walk toast with `Moved to <dest>` first. `Ctrl+Shift+Enter`:
+one toast, the existing link/unlink text with `· moved to <dest>` appended
+(preamble of the walk toast on a landing).
+
+**What does not route.** Closing gestures (the Task Card Cancel row `x`,
+a cancelling `Ctrl+Enter` recommendation, decision-card Drop — a closed
+task leaves the inbox through `bob task archive`); closed tasks, non-task
+bullets, non-inbox notes; Task Link sessions; the Alt+F decision card and
+its Less often stage; `Ctrl+Shift+M`, `^^` linking, `bob capture`, and the
+Mac Capture task-toggle mirror. A routed answer on a landing advances the
+walk exactly like any other answer (`route` outcome); if the move did not
+commit, the walk settles exactly as today for that action.
 
 ## Warnings
 

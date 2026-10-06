@@ -428,6 +428,21 @@ app.plugins.plugins["bob-navigation-hotkeys"].api = Object.freeze({
   behavior otherwise.
 - Plugins never import each other's `main.js`. bob-ledger-tools
   feature-detects `api?.version >= 1`.
+- Additive `inboxRoute` v1 namespace (nav 2.9.0+; `api.version` stays 3,
+  consumers feature-detect `api.inboxRoute?.version >= 1`):
+  `isInboxNote(path)` (sync, never throws: boolean),
+  `prompt(request)` (Promise of `{ kind: "move", path, name } |
+  { kind: "stay" } | { kind: "cancel" }`, never rejects),
+  `commit(request)` (Promise of
+  `{ ok, name, count, notice, handledRefs, reason? }`, never rejects),
+  where `request` carries
+  `{ editor, path, line, additionalTaskCount?, actionLabel, expected?,
+  reservedBlockIds?, destinationPath? }`. With a null plugin (after
+  unload), `isInboxNote` returns false, `prompt` resolves
+  `{ kind: "stay" }`, and `commit` resolves
+  `{ ok: false, reason: "unavailable" }`. block-id-prompt's
+  Ctrl+Shift+Enter routes through this namespace and falls back to
+  today's behavior when it is absent.
 
 ## 10. Legacy window and rollout
 
