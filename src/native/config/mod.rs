@@ -72,6 +72,7 @@ pub(crate) struct HighlightsConfig {
     pre_scan_hook: Option<String>,
     audio_link_template: Option<String>,
     audio_library: Option<String>,
+    listen_command: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -164,6 +165,10 @@ impl HighlightsConfig {
 
     pub(crate) fn audio_library(&self) -> Option<&str> {
         self.audio_library.as_deref()
+    }
+
+    pub(crate) fn listen_command(&self) -> Option<&str> {
+        self.listen_command.as_deref()
     }
 }
 
@@ -359,6 +364,8 @@ struct RawHighlights {
     audio_link_template: Option<String>,
     #[serde(default)]
     audio_library: Option<String>,
+    #[serde(default)]
+    listen_command: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -523,14 +530,22 @@ pub(crate) fn parse_highlights_config(
         .and_then(|highlights| highlights.audio_link_template.clone());
     let audio_library = config
         .highlights
-        .and_then(|highlights| highlights.audio_library)
+        .as_ref()
+        .and_then(|highlights| highlights.audio_library.as_ref())
         .map(|library| library.trim().to_string())
         .filter(|library| !library.is_empty());
+    let listen_command = config
+        .highlights
+        .as_ref()
+        .and_then(|highlights| highlights.listen_command.as_ref())
+        .map(|command| command.trim().to_string())
+        .filter(|command| !command.is_empty());
 
     Ok(HighlightsConfig {
         pre_scan_hook,
         audio_link_template,
         audio_library,
+        listen_command,
     })
 }
 
@@ -856,6 +871,51 @@ properties:
             error.message().contains("parse /config.yml"),
             "bad value must name the file: {}",
             error.message()
+        );
+    }
+
+    #[test]
+    fn parses_highlights_listen_command_trimmed() {
+        let config = parse_highlights_config(
+            "highlights:\n  listen_command: '  sase-listen render {target} -e full -o {audio}  '\n",
+            Path::new("/config.yml"),
+        )
+        .expect("valid highlights config");
+
+        assert_eq!(
+            config.listen_command(),
+            Some("sase-listen render {target} -e full -o {audio}")
+        );
+    }
+
+    #[test]
+    fn blank_and_absent_listen_command_parse_as_none() {
+        let blank = parse_highlights_config(
+            "highlights:\n  listen_command: '   '\n",
+            Path::new("/config.yml"),
+        )
+        .expect("valid blank highlights config");
+        assert_eq!(blank.listen_command(), None);
+
+        let absent = parse_highlights_config(
+            "properties:\n  - name: priority\n    values: priority\n",
+            Path::new("/config.yml"),
+        )
+        .expect("valid config without highlights block");
+        assert_eq!(absent.listen_command(), None);
+    }
+
+    #[test]
+    fn unrelated_highlights_keys_still_parse_with_listen_command() {
+        let config = parse_highlights_config(
+            "highlights:\n  future_key: ignored\n  listen_command: 'sase-listen render {target} -e full -o {audio}'\n",
+            Path::new("/config.yml"),
+        )
+        .expect("unknown highlights keys stay parseable");
+
+        assert_eq!(
+            config.listen_command(),
+            Some("sase-listen render {target} -e full -o {audio}")
         );
     }
 

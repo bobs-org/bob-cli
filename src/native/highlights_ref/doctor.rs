@@ -202,6 +202,7 @@ pub(super) fn doctor_vault(config: &Config, no_hooks: bool) -> Result<()> {
     }
 
     append_web_clip_doctor_rows(&mut warnings);
+    append_listen_doctor_row(&mut warnings);
 
     if !warnings.is_empty() {
         println!("warnings:");
