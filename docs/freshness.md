@@ -715,8 +715,8 @@ Review outcomes, one key each (every row except "edit" stamps by
 itself): still right (Ctrl+Alt+F → next; Alt+F stays); see it less often
 (Ctrl+Shift+P `f`, then 14 / 30 / 90 → next); not now (Ctrl+Shift+P
 `1`–`4` → next); do today (Ctrl+Shift+Enter / Alt+N → next); route an
-inbox task (any Ctrl+Shift+P answer or Ctrl+Shift+Enter asks where it goes,
-then answers → next); route to a
+inbox task (every non-closing Ctrl+Shift+P answer and Ctrl+Shift+Enter asks where it goes
+as the last step before writing, then answers → next); route to a
 project (Ctrl+Shift+M follows the task; ]s resumes); drop (Ctrl+Shift+P `x` → next); sequence
 (Ctrl+Shift+P `b` → next); wording wrong (edit, then Alt+F stays);
 already done (Ctrl+Enter → next, never onto a checklist row).
