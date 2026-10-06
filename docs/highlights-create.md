@@ -261,3 +261,32 @@ through URL validation (a private-host redirect is refused), and reports
 `install curl or set BOB_HIGHLIGHTS_CURL`. On a TTY one
 `fetching <host>…` line goes to stderr. `bob highlights doctor` reports the
 `curl` row.
+
+## Verified on athena
+
+Live verification ran 2026-10-06 into a scratch vault (`-b /tmp/lv-vault`):
+
+- Every non-listen target kind created, and `scan` wrote 5 ref notes
+  (markdown, local PDF, arXiv 1706.03762, PDF-URL dummy.pdf, Wikipedia
+  article); a pdf-spelling dedupe rerun refused with the `--listen` hint.
+- A real unpublished full-edition render
+  (`BOB_HIGHLIGHTS_LISTEN_COMMAND='sase-listen render {target} -e full -o
+  {audio} --no-publish'` under `script -qec`) streams sase-listen's Rich
+  live checklist unchanged, and a failed listen writes nothing to the
+  vault. Cost estimate for the arXiv paper was ≈$0.15 (10 chunks).
+- The full-edition TTS backend stalled on 2026-10-06: the arXiv render sat
+  at Synthesize 6/10 for 45+ minutes with zero new cached chunks, and a
+  fresh 239-word local-PDF render synthesized 0/6 in 9 minutes. The
+  `--listen` → `scan` → player path was therefore proven with a stub
+  listen command writing ID3-marker bytes to `{audio}`: `create -L` exited
+  0 with `audio: … (from --listen)`, `scan` moved the pair to
+  `lib/papers/`, and the ref note carries
+  `audio: "[[lib/papers/<stem>.mp3]]"` plus a `![[…mp3]]` player under the
+  `^ref` task. Attach mode (`create <in-vault-PDF> -L`) printed `ok
+  attached listen episode to existing capture`, left the library PDF bytes
+  unchanged, and a rescan paired the episode; re-attaching where audio
+  already exists refuses with `already has companion audio`.
+- `cargo test highlights`: 152 passed, 1 failed
+  (`listen_filter_renders_card_and_encoded_play_link` expects `\&` inside
+  `\href`, but athena's pandoc 3.1.11.1 emits a bare `&`; recorded as a
+  follow-up on bead bob-cli-4s.6).
