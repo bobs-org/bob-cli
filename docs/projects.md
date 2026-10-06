@@ -29,6 +29,7 @@ that task instead of asking users to edit machine-facing metadata directly.
 - [Task Card](#task-card)
 - [Scheduling from the `^prj` task](#scheduling-from-the-prj-task)
 - [Priority property and scheduled rolls](#priority-property-and-scheduled-rolls)
+- [Priority marks](#priority-marks)
 - [Recommended roll and priority decay](#recommended-roll-and-priority-decay)
 - [Schedule-log reason prompt](#schedule-log-reason-prompt)
 - [Scheduling Work Log prompt](#scheduling-work-log-prompt)
@@ -441,6 +442,205 @@ choosing it. In counted sessions, the suggestion appears only when every counted
 task has the same configured priority. Choosing the suggestion writes
 immediately with its own deterministic reason instead of prompting; see
 [Schedule-log reason prompt](#schedule-log-reason-prompt).
+
+### Priority marks
+
+This section is the authoritative display contract for task priority
+marks, in the style of `docs/freshness.md` §11. The JavaScript
+mirror is `api.priorityMarks` (namespace v1, top-level api v3) in
+bob-ledger-tools; its tests run the conformance vectors below
+verbatim.
+
+Every canonical `[priority:: …]` task field renders as one compact
+signal-bar glyph that reads the priority at a glance, in Live
+Preview, reading view, embeds, hover previews, Dataview task views,
+and Tasks query results. The stored Markdown never changes, the
+cursor reveals the raw field for editing, and broken priority fields
+get a visible repair flag. The Task Card and priority notices reuse
+the same glyph (a later phase), so you learn it where you pick a
+priority.
+
+**Principles** (borrowed from the freshness mark). Display-only:
+`[priority:: value]` stays the only stored form; nothing writes the
+mark, and the Rust and Tasks semantics are unchanged. Shape carries
+meaning; color whispers. Truthful or neutral: when the ladder config
+is unknown, the tooltip omits P-labels instead of guessing.
+Reversible: the cursor or a click reveals the raw field, source mode
+shows raw text, a session toggle restores today's pills and emoji,
+and without bob-ledger-tools the vault looks exactly as it does
+today. One glyph definition shared by every surface.
+
+**The glyph: a signal staircase.** Four rising, pill-ended bars sit
+in a 16-unit box. Filled bars show the priority, and a faint track
+shows the bars that are left — the same silhouette the nav priority
+notice already uses through Lucide `signal-high`/`-medium`/`-low`/`-zero`
+(4/3/2/1 filled positions for P1–P4), so the mapping is already
+familiar. The fill drains as a task decays P1 → P4, echoing the
+freshness lease ring that drains with age. The glyph is chosen by
+**stored Tasks value**, not ladder position, so it stays robust
+without config. Final geometry (viewBox `0 0 16 16`, black fills,
+used as CSS masks): bars as `rect`s with `width 2.4` and `rx 1.2`
+at `x 1.1 y 10 h 4`, `x 4.9 y 7 h 7`, `x 8.7 y 4 h 10`,
+`x 12.5 y 1 h 13` (shared bottom at y 14); urgent is a rounded
+square `x 1.5..14.5`, `y 1..14`, `rx 3.2`, with the `!` knocked out
+(`fill-rule="evenodd"`: stem rect `x 7.05 y 3.2 w 1.9 h 5.6`, dot
+circle `cx 8 cy 11.1 r 1.1`).
+
+| Stored value | Default label | Glyph                          |
+| ------------ | ------------- | ------------------------------ |
+| `high`       | P1            | 4 of 4 bars filled             |
+| `medium`     | P2            | 3 of 4                         |
+| `low`        | P3            | 2 of 4                         |
+| `lowest`     | P4            | 1 of 4                         |
+| `highest`    | (off-ladder)  | urgent: solid rounded square with a knocked-out `!`, no track, same footprint |
+| no field     | P0            | nothing: no field to replace, and P0 is the absence of deferral |
+
+**Tones (monochrome by design).** Filled bars use `--text-muted`;
+the track is the same ink at 26% (the freshness track opacity).
+Urgent uses `--text-normal`, so its weight carries the emphasis. On
+closed tasks (`x`, `X`, `-`) the ink is `--text-faint` at opacity
+0.75, derived purely in CSS from the nearest `li.task-list-item` /
+`.HyperMD-task-line` `[data-task]` ancestor, so it works on every
+surface; closed wins over any per-level color. Per-level theme hooks
+`--bob-priority-color-{highest,high,medium,low,lowest}` are unset by
+default: a user snippet can tint levels without touching the plugin.
+Metrics match `.bob-fresh-mark`: interface font at 0.8em,
+inline-flex, padding `0.06em 0.14em`, margin `0 0.08em`, pill
+radius, `vertical-align: 0.05em`, opacity 0.85; hover is opacity 1
+plus a 10% ink capsule; the glyph box is 1.08em square;
+`[data-fold-space="true"]` adds `margin-inline-start: 0.3em`;
+transitions are disabled under `prefers-reduced-motion`.
+
+**One glyph definition: CSS masks.** `styles.css` defines the SVG
+data-URI custom properties `--bob-priority-glyph-track`,
+`--bob-priority-glyph-fill-1` … `-4`, and
+`--bob-priority-glyph-urgent` once, on `body`. A glyph host draws
+the track with `::before` and the fill with `::after`, both
+absolutely positioned, using `-webkit-mask-image` and `mask-image`
+with `background-color` from the ink variable. There are two kinds
+of glyph host: `.bob-priority-mark[data-priority="…"]
+.bob-priority-mark-glyph`, emitted by the plugin's JS; and
+`body.bob-priority-marks .plugin-tasks-list-item
+.task-priority[data-task-priority="…"]`, which is CSS-only for Tasks
+results — the inner emoji span is visually hidden (clip pattern, not
+`display: none`) so screen readers keep it, and the host gets the
+glyph box plus `margin-inline-start: 0.3em`. No JS touches Tasks'
+DOM, so re-renders, sorting, and `hide priority` keep working.
+
+**Eligibility.** A canonical field matches
+`^[\[(] *priority:: *(highest|high|medium|low|lowest) *[\])]`: the
+brackets must be a matching pair, the key exactly `priority`, the
+value lowercase. In Live Preview the line must be a task line
+(quote-aware), hold exactly one `/priority\s*::/gi` occurrence, and
+not sit inside code; in rendered views a text node must hold exactly
+one canonical occurrence, sit under an `li.task-list-item`, and not
+sit inside `code`, `pre`, `.dataview.inline-field`,
+`.bob-priority-mark`, or `.bob-fresh-mark`. Anything else is left
+alone (a Dataview pill or raw text).
+
+**Repair flag.** While marks are on, any leftover `priority`
+Dataview pill in Live Preview is non-canonical: uppercase values,
+`P2`, `urgent`, duplicates, mismatched brackets, fields on non-task
+lines. CSS flags it with full opacity and a dashed orange border,
+matching the freshness repair flag, scoped to
+`body.bob-priority-marks .markdown-source-view.is-live-preview`.
+
+**Tooltip.** The mark carries `role="img"`, an `aria-label`, and
+`data-tooltip-position="top"`, lines joined with `\n`, never
+containing `::`. Value names are capitalized (`High`). On the
+ladder: `P2 · Medium priority`, then `Rolls 8–30 days ahead`, then
+`Ctrl+Shift+P to change` (equal bounds read `Rolls 5 days ahead`;
+1–1 reads `Rolls 1 day ahead`). Off the ladder with the ladder
+known: `Highest priority`, then `Not on the P1–P4 ladder` (first
+and last ladder labels, or the single label for a one-level
+ladder), then `Ctrl+Shift+P to change`. Ladder unknown (missing,
+unreadable, or invalid config, no matching entry, or mobile):
+`Medium priority`, then `Ctrl+Shift+P to change`.
+
+**Surfaces and interaction.** Live Preview uses a `Prec.highest`
+ViewPlugin emitting `Decoration.replace` with a widget; when the
+character before the opening bracket is a space the range folds it
+and the widget restores the gap, so the mark beats Dataview's pill
+widget by position. The mark hides while any selection range
+overlaps the field span, and a mousedown places the cursor at the
+field start and focuses the editor — it never writes;
+`Ctrl+Shift+P` stays the one way to change priority. Widget
+equality compares a model key, so unchanged marks never flicker;
+rebuilds happen on doc, viewport, or selection changes, Live Preview
+or file switches, and a refresh effect. No marks in source mode.
+The rendered-view post-processor (sort order 50, before Dataview's
+inline-field pass at 100) splits the text node into before / mark /
+after, covering reading view, embeds, hover previews, Dataview
+`TASK` views, and Tasks descriptions that still carry a
+non-trailing field. Tasks query results are CSS-only (no tooltip,
+accepted; the `li` already carries `data-task-priority`).
+
+**Session toggle.** The command "Toggle task priority marks" (id
+`toggle-priority-marks`) is session-only and on by default. It flips
+`body.bob-priority-marks` (which also gates the Tasks CSS and the
+repair flag), dispatches the refresh effect to every markdown
+editor, triggers the Tasks re-render event, and shows the Notice
+`Priority marks on` / `Priority marks off`. When off, JS creates no
+marks.
+
+**Programmatic reuse.** `api.priorityMarks` (namespace v1,
+top-level api stays v3) exposes `model(value)` and
+`render(host, value, options)`: synchronous, never throwing;
+`render` appends to `host` and returns the element, or `null` for
+non-Tasks values. `options.decorative` renders `aria-hidden` with no
+label for surfaces that already show a P-label;
+`options.inheritColor` makes the ink `currentColor`.
+
+**Rejected alternatives.** Changing storage to Tasks emoji or
+P-codes breaks the Tasks Dataview format and rewrites bob-cli
+parsers and writers, capture, and the Task Card, plus about 430
+vault lines. A CSS-only restyle of the Dataview pill (like
+`dependsOn`) cannot read the value text, so it cannot pick a glyph
+per level. Lucide `signal-*` icons inline are stroke-only with no
+track, hard to read at 0.8em, and P4 becomes a lone dot. A
+per-level hue ramp clashes with the status colors while the existing
+ramps already disagree. A P-label beside the glyph doubles the width
+on every line; the label is one hover away and on the Task Card.
+Marks on P0 tasks would glyph nearly every line with nothing to
+replace. Click never opens the Task Card: display surfaces never
+act. JS mutation of Tasks' DOM or a MutationObserver is fragile
+across re-renders and costly; CSS on Tasks' own
+`data-task-priority` is exact.
+
+**Conformance vectors** (default ladder: P1 `high` 2–7, P2 `medium`
+8–30, P3 `low` 31–90, P4 `lowest` 91–365; ⏎ separates tooltip lines):
+
+| #    | Input                                                      | Expected                                                                               |
+| ---- | ---------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| PM1  | `- [ ] #task A [priority:: high] ^a`                       | 4 bars · `P1 · High priority⏎Rolls 2–7 days ahead⏎Ctrl+Shift+P to change` · fold space |
+| PM2  | `- [?] #task B [priority::medium] [scheduled::2026-10-22]` | 3 bars · `P2 · Medium priority⏎Rolls 8–30 days ahead⏎…`                                |
+| PM3  | `- [ ] #task C (priority:: low)`                           | 2 bars · P3, 31–90                                                                     |
+| PM4  | `- [ ] #task D [ priority:: lowest ]`                      | 1 bar · P4, 91–365                                                                     |
+| PM5  | `- [ ] #task E [priority:: highest]`                       | urgent · `Highest priority⏎Not on the P1–P4 ladder⏎Ctrl+Shift+P to change`             |
+| PM6  | PM2 with the ladder unknown                                | 3 bars · `Medium priority⏎Ctrl+Shift+P to change`                                      |
+| PM7  | `- [ ] #task F [priority:: High]`                          | no mark (repair pill)                                                                  |
+| PM8  | `- [ ] #task G [priority:: P2]`                            | no mark                                                                                |
+| PM9  | `- [ ] #task H [priority:: high] [priority:: low]`         | no mark on either                                                                      |
+| PM10 | `- [ ] #task I [priority:: high)`                          | no mark                                                                                |
+| PM11 | `- plain bullet [priority:: high]`                         | no mark                                                                                |
+| PM12 | ``- [ ] #task J `[priority:: high]` ``                     | untouched (code)                                                                       |
+| PM13 | ladder `{P1, highest, 1–3}`, `[priority:: highest]`        | urgent · `P1 · Highest priority⏎Rolls 1–3 days ahead⏎…`                                |
+| PM14 | ladder `{P1, high, 5–5}` / `{P1, high, 1–1}`               | `Rolls 5 days ahead` / `Rolls 1 day ahead`                                             |
+| PM15 | `- [x] #task K [priority:: high]`                          | 4 bars, resting tone (CSS)                                                             |
+| PM16 | `> - [ ] #task L [priority:: medium]`                      | 3 bars (quote-aware)                                                                   |
+| PM17 | `- [ ] #task M x[priority:: low]`                          | 2 bars, no fold space                                                                  |
+
+**Live verification (Bryan, in Obsidian)** — still pending:
+
+- P1–P4 and highest look right in light and dark themes
+- the cursor or a click reveals the raw field
+- `dash.md` Tasks results show glyphs, not emoji
+- a hand-broken `[priority:: High]` shows the dashed repair pill
+- the toggle restores the pills and emoji and then turns the marks back on
+- closed tasks look resting
+- fresh marks and priority marks sit together cleanly
+- Metadata Menu does not double-decorate
+- mobile (iOS) renders the glyphs
 
 ### Recommended roll and priority decay
 
