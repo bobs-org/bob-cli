@@ -181,8 +181,9 @@ queue starts at PRE. Every gesture that answers the landed row advances the
 walk once to the next remaining item in the same keystroke: Ctrl+Enter
 completes (never crossing the PRE/POST boundary — Ctrl+Alt+F does),
 Ctrl+Alt+F keeps, Alt+N releases, Ctrl+Shift+Enter links to today, a
-resolving Task Card commit moves on, and Ctrl+Shift+M advances instead of
-focusing the destination. Alt+F is the one answer that stays, `]s` skips,
+resolving Task Card commit moves on. Ctrl+Shift+M never advances: it follows
+the moved task to its destination note, and the next `]s` resumes the walk.
+Alt+F is the one answer that stays, `]s` skips,
 and `<C-o>` returns to the row just answered. Walk commitments
 with `]s` / Ctrl+Alt+F until **Commitments done**. `]S` jumps to POST; complete
 Morning review last with Ctrl+Enter or Alt+F.

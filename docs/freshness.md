@@ -680,8 +680,10 @@ task stays due and Ctrl+Alt+F does not advance.
    keeps, while Escape leaves the task due), do it today with
    Ctrl+Shift+Enter, release with Alt+N. Every answer on a landed row
    moves on to the next remaining review item in the same keystroke —
-   including a resolving Task Card commit and Ctrl+Shift+M, which advances
-   instead of focusing the destination. Alt+F is the one answer that stays;
+   including a resolving Task Card commit. Ctrl+Shift+M never advances: it moves the
+   task and follows it to its destination note, `<C-o>` returns to the source, and the
+   next `]s` resumes the walk where the moved row was. Alt+F is the one answer that
+   stays on the row;
    `]s` skips without answering, and `<C-o>` returns to the row just
    answered. For a returned deferral, "not
    now" is a priority roll, not Alt+F. Clear CROWDED to 0 (split,
@@ -709,7 +711,7 @@ Review outcomes, one key each (every row except "edit" stamps by
 itself): still right (Ctrl+Alt+F → next; Alt+F stays); see it less often
 (Ctrl+Shift+P `f`, then 14 / 30 / 90 → next); not now (Ctrl+Shift+P
 `1`–`4` → next); do today (Ctrl+Shift+Enter / Alt+N → next); route to a
-project (Ctrl+Shift+M → next); drop (Ctrl+Shift+P `x` → next); sequence
+project (Ctrl+Shift+M follows the task; ]s resumes); drop (Ctrl+Shift+P `x` → next); sequence
 (Ctrl+Shift+P `b` → next); wording wrong (edit, then Alt+F stays);
 already done (Ctrl+Enter → next, never onto a checklist row).
 
@@ -1454,6 +1456,7 @@ There is no freshness trial: no ritual change, release, or tuning waits on a tri
 - 2026-10-04: PRE/POST checklist tiers went live (schema 9, ledger 1.29.0 / namespace v7, nav 2.3.0, cycler API v2).
 - 2026-10-04: Ctrl+Enter walks the PRE/POST checklist (nav 2.4.0 / nav api v2, cycler 1.25.0).
 - 2026-10-06: answering a landed row advances the walk (nav 2.6.1 / nav api v3, cycler 1.26.0, block-id-prompt 1.22.0, ledger 1.29.2).
+- 2026-10-06: Ctrl+Shift+M from a landing follows the task to its destination and never advances; the next ]s resumes at the moved row's neighbour (nav 2.7.0).
 
 ## 14. Keep-streak rollout, rollback, and calibration
 

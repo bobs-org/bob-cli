@@ -13,8 +13,10 @@ summary:
   boundary; a short gesture lock swallows double presses; every walk landing
   records a <C-o> jump."
 metadata:
-  status: accepted
+  status: superseded-in-part
   decided: 2026-10-06
+  superseded_by:
+    - decisions/task-move-never-advances-the-walk
 ---
 
 **Applies to.** bob-plugins (bob-navigation-hotkeys, task-status-cycler,
@@ -73,3 +75,6 @@ questions the Alt+F / Ctrl+Alt+F pair.
 
 Links [[decisions/review-walk-is-tiered]] (the tier order and walk this
 advance moves through).
+
+Superseded in part: Ctrl+Shift+M only — a move never advances the walk; see
+[[decisions/task-move-never-advances-the-walk]].
