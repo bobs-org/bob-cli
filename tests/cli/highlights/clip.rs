@@ -596,6 +596,44 @@ fn highlights_clip_refuses_library_and_dedupe_collisions_early() {
 }
 
 #[test]
+fn highlights_clip_refuses_a_legacy_url_note_for_the_same_article() {
+    let temp = TempDir::new("bob-cli-highlights-clip-legacy-url");
+    let vault = temp.path().join("vault");
+    let fake = FakeClip::new(&temp, "fake");
+
+    // A ref note carrying only the legacy `url:` key (as the existing
+    // paper refs do) takes part in dedupe.
+    write_file(
+        &vault.join("ref/papers/ea_graph.md"),
+        "---\ntitle: EA-Graph\nurl: https://arxiv.org/pdf/2608.04278\n---\n\n# EA-Graph\n",
+    );
+    let output = bob_command()
+        .arg("highlights")
+        .arg("clip")
+        .arg("https://arxiv.org/abs/2608.04278v2")
+        .arg("-b")
+        .arg(&vault)
+        .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+        .output()
+        .expect("run bob highlights clip over legacy-url note");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a legacy url: note must refuse the same paper:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        stderr(&output).contains("already captured as"),
+        "expected the dedupe error:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        !fake.called(),
+        "the legacy-url dedupe must precede the adapter"
+    );
+}
+
+#[test]
 fn highlights_clip_force_overwrites_the_same_intake_target() {
     let temp = TempDir::new("bob-cli-highlights-clip-force");
     let vault = temp.path().join("vault");

@@ -30,12 +30,14 @@ use super::{
 pub(crate) mod create;
 
 mod annotation_tasks;
+mod arxiv;
 mod audio;
 pub(crate) mod cli;
 pub(crate) mod clip;
 mod clip_adapter;
 mod clip_url;
 mod doctor;
+mod fetch;
 mod frontmatter;
 mod guard;
 mod hooks;
@@ -44,10 +46,12 @@ mod listen;
 mod marker;
 mod model;
 mod note;
+mod pdf_meta;
 mod projection;
 mod report;
 mod sidecar;
 mod sidecar_render;
+mod sources;
 mod stamp;
 mod sync;
 #[cfg(test)]

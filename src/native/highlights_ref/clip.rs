@@ -19,12 +19,11 @@ use clap::{Arg, ArgAction, ArgMatches, Command as ClapCommand};
 
 use super::{
     bob_dir_arg, compose_marker, current_local_date, lib_dir_arg,
-    normalize_lexically, parse_frontmatter_entry, parse_marker,
-    plan_default_target, plan_exact_output, print_next_step, read_pdf_marker,
-    ref_dir_arg, split_frontmatter, stamp_and_install, validate_ref_type,
-    xlib_dir_arg, CommandError, Config, PdfInfo, TargetPlan, TargetWorkflow,
+    plan_default_target, plan_exact_output, print_next_step, ref_dir_arg,
+    stamp_and_install, validate_ref_type, xlib_dir_arg, CommandError, Config,
+    PdfInfo, TargetPlan, TargetWorkflow,
 };
-use super::{clip_adapter::*, clip_url::*};
+use super::{clip_adapter::*, clip_url::*, pdf_meta::*, sources::*};
 use crate::native::style::Styler;
 
 const DEFAULT_PARENT: &str = "obsidian_ref";
@@ -56,6 +55,15 @@ impl ClipError {
 impl From<CommandError> for ClipError {
     fn from(error: CommandError) -> Self {
         Self::new(error.message)
+    }
+}
+
+impl From<SourcesError> for ClipError {
+    fn from(error: SourcesError) -> Self {
+        Self {
+            message: error.message,
+            hint: error.hint,
+        }
     }
 }
 
@@ -364,7 +372,12 @@ fn clip_pdf(
     let is_direct_pdf = response.kind.as_deref() == Some("pdf");
     let mut extracted_title = options.title.clone().or(response.title.clone());
     if extracted_title.is_none() && is_direct_pdf {
-        extracted_title = pdf_info_title(&out_pdf);
+        let stem_hint = options
+            .name
+            .clone()
+            .or_else(|| stem_from_url(&web_url))
+            .unwrap_or_default();
+        extracted_title = pdf_info_metadata(&out_pdf, &stem_hint).0;
     }
     let stem = options
         .name
@@ -482,179 +495,6 @@ fn plan_exact_output_guarded(
     Ok(plan)
 }
 
-/// Every `source_url` already recorded: ref-note frontmatter and queued
-/// intake-PDF markers, paired with their dedupe keys.
-struct RecordedSource {
-    dedupe_key: String,
-    path: PathBuf,
-    is_ref_note: bool,
-}
-
-fn collect_recorded_source_urls(
-    config: &Config,
-) -> std::result::Result<Vec<RecordedSource>, ClipError> {
-    let mut recorded = Vec::new();
-    if config.ref_dir.is_dir() {
-        collect_ref_note_sources(&config.ref_dir, &mut recorded)?;
-    }
-    if config.xlib_dir.is_dir() {
-        collect_intake_sources(&config.xlib_dir, &mut recorded)?;
-    }
-    Ok(recorded)
-}
-
-fn collect_ref_note_sources(
-    dir: &Path,
-    recorded: &mut Vec<RecordedSource>,
-) -> std::result::Result<(), ClipError> {
-    let entries = fs::read_dir(dir).map_err(|error| {
-        ClipError::new(format!("scan {}: {error}", dir.display()))
-    })?;
-    for entry in entries {
-        let entry = entry.map_err(|error| {
-            ClipError::new(format!("scan {}: {error}", dir.display()))
-        })?;
-        let path = entry.path();
-        let file_type = entry.file_type().map_err(|error| {
-            ClipError::new(format!("stat {}: {error}", path.display()))
-        })?;
-        if file_type.is_dir() {
-            if path
-                .file_name()
-                .is_none_or(|name| name != std::ffi::OsStr::new(".git"))
-            {
-                collect_ref_note_sources(&path, recorded)?;
-            }
-            continue;
-        }
-        if !file_type.is_file()
-            || !path
-                .extension()
-                .and_then(std::ffi::OsStr::to_str)
-                .is_some_and(|extension| extension.eq_ignore_ascii_case("md"))
-        {
-            continue;
-        }
-        let contents = fs::read_to_string(&path).map_err(|error| {
-            ClipError::new(format!("read note {}: {error}", path.display()))
-        })?;
-        let Some((frontmatter, _)) = split_frontmatter(&contents) else {
-            continue;
-        };
-        for raw in frontmatter {
-            let entry = parse_frontmatter_entry(&raw);
-            if entry.key.as_deref() != Some("source_url") {
-                continue;
-            }
-            if let Some(url) =
-                entry.value.as_ref().and_then(|value| value.as_string())
-                && let Ok(cleaned) = validate_and_clean(url)
-            {
-                recorded.push(RecordedSource {
-                    dedupe_key: cleaned.dedupe_key,
-                    path: path.clone(),
-                    is_ref_note: true,
-                });
-            }
-        }
-    }
-    Ok(())
-}
-
-fn collect_intake_sources(
-    dir: &Path,
-    recorded: &mut Vec<RecordedSource>,
-) -> std::result::Result<(), ClipError> {
-    let entries = fs::read_dir(dir).map_err(|error| {
-        ClipError::new(format!("scan {}: {error}", dir.display()))
-    })?;
-    for entry in entries {
-        let entry = entry.map_err(|error| {
-            ClipError::new(format!("scan {}: {error}", dir.display()))
-        })?;
-        let path = entry.path();
-        let file_type = entry.file_type().map_err(|error| {
-            ClipError::new(format!("stat {}: {error}", path.display()))
-        })?;
-        if file_type.is_dir() {
-            if path
-                .file_name()
-                .is_none_or(|name| name != std::ffi::OsStr::new(".git"))
-            {
-                collect_intake_sources(&path, recorded)?;
-            }
-            continue;
-        }
-        if !file_type.is_file()
-            || !path
-                .extension()
-                .and_then(std::ffi::OsStr::to_str)
-                .is_some_and(|extension| extension.eq_ignore_ascii_case("pdf"))
-        {
-            continue;
-        }
-        let Ok(marker) = read_pdf_marker(&path) else {
-            continue;
-        };
-        let Ok(projection) = parse_marker(&marker.contents) else {
-            continue;
-        };
-        if let Some(url) = projection
-            .get("source_url")
-            .and_then(|value| value.as_string())
-            && let Ok(cleaned) = validate_and_clean(url)
-        {
-            recorded.push(RecordedSource {
-                dedupe_key: cleaned.dedupe_key,
-                path: path.clone(),
-                is_ref_note: false,
-            });
-        }
-    }
-    Ok(())
-}
-
-fn check_dedupe(
-    recorded: &[RecordedSource],
-    dedupe_key: &str,
-    planned_target: Option<&Path>,
-    force: bool,
-) -> std::result::Result<(), ClipError> {
-    for hit in recorded {
-        if hit.dedupe_key != dedupe_key {
-            continue;
-        }
-        if hit.is_ref_note {
-            return Err(ClipError::new(format!(
-                "already captured as {} (source_url {})",
-                hit.path.display(),
-                dedupe_key,
-            ))
-            .with_hint("open the note, or delete it to recapture"));
-        }
-        let same_target = planned_target.is_some_and(|target| {
-            normalize_lexically(target) == normalize_lexically(&hit.path)
-        });
-        if same_target && force {
-            continue;
-        }
-        if planned_target.is_none() && force {
-            // The stem is only known after capture; the post-capture
-            // check with the final target decides.
-            continue;
-        }
-        return Err(ClipError::new(format!(
-            "already queued in {} (source_url {})",
-            hit.path.display(),
-            dedupe_key,
-        ))
-        .with_hint(
-            "pass --force to overwrite the same intake target, or delete the queued PDF to recapture",
-        ));
-    }
-    Ok(())
-}
-
 /// A 0700 scratch directory, removed on drop unless kept for debugging.
 struct ClipWorkdir {
     path: PathBuf,
@@ -709,21 +549,6 @@ impl Drop for ClipWorkdir {
             let _ = fs::remove_dir_all(&self.path);
         }
     }
-}
-
-/// Read the PDF Info `/Title` from a rendered file, if present.
-fn pdf_info_title(path: &Path) -> Option<String> {
-    let document = lopdf::Document::load(path).ok()?;
-    let info = document.trailer.get(b"Info").ok()?;
-    let dict = match info {
-        lopdf::Object::Reference(id) => document.get_dictionary(*id).ok()?,
-        lopdf::Object::Dictionary(dict) => dict,
-        _ => return None,
-    };
-    let title = dict.get(b"Title").ok()?;
-    lopdf::decode_text_string(title)
-        .ok()
-        .filter(|title| !title.trim().is_empty())
 }
 
 /// One-line `capture:` summary for the success and dry-run reports.

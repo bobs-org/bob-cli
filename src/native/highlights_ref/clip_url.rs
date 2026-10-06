@@ -71,10 +71,15 @@ pub(super) fn validate_and_clean(raw: &str) -> Result<WebUrl> {
     })
 }
 
-/// Compute the dedupe key for an already-validated URL: lowercase scheme
-/// and host (no leading `www.`, no default port), path without a trailing
-/// slash, and remaining query parameters sorted.
+/// Compute the dedupe key for an already-validated URL. Any spelling of
+/// an arXiv paper (abs, html, or pdf, with or without a version) maps to
+/// `https://arxiv.org/abs/<id>`; everything else uses the lowercase
+/// scheme and host (no leading `www.`, no default port), path without a
+/// trailing slash, and remaining query parameters sorted.
 pub(super) fn dedupe_key_for(url: &url::Url) -> String {
+    if let Some(paper) = super::arxiv::ArxivPaper::parse(url.as_str()) {
+        return paper.dedupe_key();
+    }
     let mut key = String::new();
     key.push_str(&url.scheme().to_lowercase());
     key.push_str("://");
@@ -304,6 +309,25 @@ pub(super) fn snake_case(text: &str) -> String {
     }
 }
 
+/// Derive the filename stem from a paper title with the short-title
+/// rule: when the text before the first colon is 1-4 words, that prefix
+/// is the short name (`EA-Graph: …` becomes `ea_graph`); otherwise the
+/// first 6 words stand in. The result runs through [`snake_case`], which
+/// caps it at 80 characters.
+pub(super) fn short_title_stem(title: &str) -> String {
+    let words: Vec<&str> = title.split_whitespace().collect();
+    let prefix: Vec<&str> = match title.find(':') {
+        Some(index) => title[..index].split_whitespace().collect(),
+        None => Vec::new(),
+    };
+    let source = if !prefix.is_empty() && prefix.len() <= 4 {
+        prefix.join(" ")
+    } else {
+        words.iter().take(6).copied().collect::<Vec<_>>().join(" ")
+    };
+    snake_case(&source)
+}
+
 /// Turn a stem back into a human-readable title fallback.
 pub(super) fn humanize_stem(stem: &str) -> String {
     let mut title = String::new();
@@ -430,6 +454,66 @@ mod tests {
             None,
             "numeric-only paths have no slug"
         );
+    }
+
+    #[test]
+    fn short_title_stem_uses_the_colon_prefix_or_six_words() {
+        assert_eq!(
+            short_title_stem(
+                "EA-Graph: Artifact-Anchored Verification Memory for Coding Agents"
+            ),
+            "ea_graph"
+        );
+        assert_eq!(
+            short_title_stem(
+                "A Very Long Prefix With Seven Words Here: the rest of the title"
+            ),
+            "a_very_long_prefix_with_seven",
+            "a seven-word prefix falls back to the first 6 words"
+        );
+        assert_eq!(
+            short_title_stem("Attention Is All You Need"),
+            "attention_is_all_you_need"
+        );
+        assert_eq!(
+            short_title_stem(
+                "One: Two Three Four Five Six Seven Eight Words Total Here"
+            ),
+            "one",
+            "a one-word prefix wins over the word count"
+        );
+        assert_eq!(
+            short_title_stem("Machine Learning Systems: Design and Operation"),
+            "machine_learning_systems",
+            "a three-word prefix is kept whole"
+        );
+    }
+
+    #[test]
+    fn arxiv_spellings_share_one_dedupe_key() {
+        let key = |raw: &str| {
+            let parsed = url::Url::parse(raw).expect("parse arXiv URL");
+            dedupe_key_for(&parsed)
+        };
+        assert_eq!(
+            key("https://arxiv.org/pdf/2608.04278"),
+            "https://arxiv.org/abs/2608.04278"
+        );
+        assert_eq!(
+            key("https://arxiv.org/abs/2608.04278v2"),
+            "https://arxiv.org/abs/2608.04278"
+        );
+        assert_eq!(
+            key("https://arxiv.org/html/2608.04278v1/"),
+            "https://arxiv.org/abs/2608.04278"
+        );
+    }
+
+    #[test]
+    fn non_arxiv_dedupe_keys_are_unchanged() {
+        let parsed = url::Url::parse("https://WWW.Example.COM:443/a/?b=2&a=1")
+            .expect("parse URL");
+        assert_eq!(dedupe_key_for(&parsed), "https://example.com/a?a=1&b=2");
     }
 
     #[test]
