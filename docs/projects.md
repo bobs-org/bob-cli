@@ -282,7 +282,9 @@ appending to the matching log.
 setting, no activation date, and no filtered property list: the card is the
 only surface. A `taskCard` value left in the plugin's saved data by the old
 setting is ignored. Direct Depends-On-line, chip, palette dependency, and
-decay Less often entries still skip the card and open their stage.
+decay Less often entries still skip the card and open their stage. A commit
+on the row the review walk just landed on advances the walk once to the next
+remaining item.
 
 | Gesture on the card | Outcome |
 | --- | --- |

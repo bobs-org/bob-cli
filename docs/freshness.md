@@ -662,8 +662,10 @@ task stays due and Ctrl+Alt+F does not advance.
    live row of that group with a completion and landing toast. It never
    leaves PRE: the final chore stays put with `PRE done` and a `]s → …`
    hint. Ctrl+Alt+F also completes and advances, crossing from PRE into the
-   next tier; Alt+F completes in place. Checklist rows never stamp, and
-   elsewhere Ctrl+Enter is unchanged.
+   next tier; Alt+F completes in place. Checklist rows never stamp.
+   Elsewhere, Ctrl+Enter on any landed row completes and advances, but it
+   never crosses the PRE/POST boundary: on the last lane row before POST it
+   stays with a `]s → POST` hint (Ctrl+Alt+F crosses).
    Keep import is the PRE chore "Import inbox tasks from Google Keep".
 3. Walk the commitments (NEW → PROJECTS → PENDING → NEXT → RETURNED →
    REFERENCES) with `]s` / Ctrl+Alt+F until the notice says
@@ -676,7 +678,12 @@ task stays due and Ctrl+Alt+F does not advance.
    In the lanes, ask "still in this lane?": keep with Ctrl+Alt+F
    (Pending asks for an optional Work Log summary; blank Enter still
    keeps, while Escape leaves the task due), do it today with
-   Ctrl+Shift+Enter, release with Alt+N. For a returned deferral, "not
+   Ctrl+Shift+Enter, release with Alt+N. Every answer on a landed row
+   moves on to the next remaining review item in the same keystroke —
+   including a resolving Task Card commit and Ctrl+Shift+M, which advances
+   instead of focusing the destination. Alt+F is the one answer that stays;
+   `]s` skips without answering, and `<C-o>` returns to the row just
+   answered. For a returned deferral, "not
    now" is a priority roll, not Alt+F. Clear CROWDED to 0 (split,
    sequence, defer, drop via `bob ready`) and choose a highlight (≤3
    themes, highlight first). CROWDED does not depend on how far ROTTEN
@@ -687,7 +694,7 @@ task stays due and Ctrl+Alt+F does not advance.
 5. `]S` jumps to POST; complete Morning review last with Ctrl+Enter or
    Alt+F. On a multi-row POST checklist, Ctrl+Enter and Ctrl+Alt+F move to
    the next row, Alt+F stays and counts remaining rows, and the review
-   closes on the last row.
+   closes on the last row. POST never wraps.
 
 The Obsidian footer keeps a condensed version of that `]s` notice
 visible while the cursor is on a review task, and the `]s next` hint
@@ -699,11 +706,20 @@ otherwise. Wrap and boundary preambles stay transient in the notice.
 lengthen `next_interval` to 2–3 and leave Pending at 1.
 
 Review outcomes, one key each (every row except "edit" stamps by
-itself): still right (Ctrl+Alt+F or Alt+F); see it less often
-(Ctrl+Shift+P `f`, then 14 / 30 / 90); not now (Ctrl+Shift+P
-`1`–`4`); do today (Ctrl+Shift+Enter / Alt+N); route to a project
-(Ctrl+Shift+M); drop (Ctrl+Shift+P `x`); sequence (Ctrl+Shift+P `b`);
-wording wrong (edit, then Alt+F).
+itself): still right (Ctrl+Alt+F → next; Alt+F stays); see it less often
+(Ctrl+Shift+P `f`, then 14 / 30 / 90 → next); not now (Ctrl+Shift+P
+`1`–`4` → next); do today (Ctrl+Shift+Enter / Alt+N → next); route to a
+project (Ctrl+Shift+M → next); drop (Ctrl+Shift+P `x` → next); sequence
+(Ctrl+Shift+P `b` → next); wording wrong (edit, then Alt+F stays);
+already done (Ctrl+Enter → next, never onto a checklist row).
+
+A landing is the exact row `]s` just put the cursor on, in today's walk:
+the same note, the same line text, and the row still due. An answer shows
+one toast — what was done, then where the walk landed — except Task Card
+commits, whose rich notice cards keep their own toast with the landing
+following on its own. After each advance the walk holds a ~350 ms settle
+window that swallows double presses; a fast habitual `]s` after the window
+can still skip a row (`[s` or `<C-o>` recovers it).
 
 A due at-limit task's Alt+F opens the decision card (Not now / Less
 often / Reword / Drop / Keep) as soon as compatible plugins are
@@ -1437,6 +1453,7 @@ There is no freshness trial: no ritual change, release, or tuning waits on a tri
 - 2026-10-01: the tiered morning review walk went live (schema 3, lane intervals, tier notices, walk anchor).
 - 2026-10-04: PRE/POST checklist tiers went live (schema 9, ledger 1.29.0 / namespace v7, nav 2.3.0, cycler API v2).
 - 2026-10-04: Ctrl+Enter walks the PRE/POST checklist (nav 2.4.0 / nav api v2, cycler 1.25.0).
+- 2026-10-06: answering a landed row advances the walk (nav 2.6.1 / nav api v3, cycler 1.26.0, block-id-prompt 1.22.0, ledger 1.29.2).
 
 ## 14. Keep-streak rollout, rollback, and calibration
 

@@ -177,12 +177,13 @@ Use `bob ready NOTE` for one note's
 worklist, or `bob ready --check` to exit 3 when notes are crowded.
 
 With the review plugins enabled in Obsidian, `[S` or `]s` from outside the
-queue starts at PRE. On the PRE/POST row just landed, Ctrl+Enter completes it
-through Tasks (including `[?]`) and walks to the next live row in that group;
-elsewhere it behaves as before. Ctrl+Alt+F completes and advances (crossing
-PRE into the next tier), Alt+F completes in place, and `]s` skips checklist
-rows; on multi-row POST, Ctrl+Enter and Ctrl+Alt+F advance, Alt+F stays and
-counts the rest, and the review closes on the last row. Walk commitments
+queue starts at PRE. Every gesture that answers the landed row advances the
+walk once to the next remaining item in the same keystroke: Ctrl+Enter
+completes (never crossing the PRE/POST boundary — Ctrl+Alt+F does),
+Ctrl+Alt+F keeps, Alt+N releases, Ctrl+Shift+Enter links to today, a
+resolving Task Card commit moves on, and Ctrl+Shift+M advances instead of
+focusing the destination. Alt+F is the one answer that stays, `]s` skips,
+and `<C-o>` returns to the row just answered. Walk commitments
 with `]s` / Ctrl+Alt+F until **Commitments done**. `]S` jumps to POST; complete
 Morning review last with Ctrl+Enter or Alt+F.
 Ctrl+Alt+J/K also walks due tasks. Alt+F confirms a non-checklist task under

@@ -385,14 +385,19 @@ chips. The ⚠ chip is the signal for those; the summary tracks blocking.
 | Ctrl+Shift+M, `task archive` | The line moves with its task. Same-note links inside a moved block whose target stayed behind gain the source note path. |
 | "Rewrite dependency navigation links" command, `migrate-dependency-bullets.mjs` | Deleted. They emit embeds. |
 
-## 9. Plugin api v2 (navigation-hotkeys)
+## 9. Plugin api v3 (navigation-hotkeys)
 
 ```js
 app.plugins.plugins["bob-navigation-hotkeys"].api = Object.freeze({
-  version: 2,
+  version: 3,
   openDependencyStage(ref),            // ref: { path, line } — any line of the task block or its Depends-On line
   removeDependency(parentRef, target), // target: { path, blockId }
   claimReviewWalkCompletion(editor),   // task-status-cycler's landed checklist Ctrl+Enter hook
+  reviewWalk: Object.freeze({
+    version: 1,
+    capture(editor),          // sync, never throws: null (not on a landing) | { busy: true } | frozen origin
+    continue(origin, outcome), // async, never throws: resolves { ok, advanced, stopped }
+  }),
 });
 ```
 
@@ -410,6 +415,17 @@ app.plugins.plugins["bob-navigation-hotkeys"].api = Object.freeze({
   hook. It synchronously returns `null` unless the cursor is on the PRE/POST
   row the review walk just landed on; otherwise it returns a Promise of
   `{ ok, reason? }` and never throws. See [freshness.md §6](freshness.md#6-review-ritual).
+- `reviewWalk.capture(editor)` returns `null` when the cursor is not on the
+  row the walk just landed on (callers behave normally), `{ busy: true }`
+  while a review gesture is in flight or settling (callers swallow the key
+  and write nothing), and otherwise a frozen origin holding the gesture
+  lock. `reviewWalk.continue(origin, outcome)` advances the walk exactly
+  once when the origin is current and the outcome resolves the row, shows
+  `outcome.notice` exactly once either way, and settles the lock. An
+  `outcome` of `null` settles without advancing. Every captured origin is
+  settled exactly once on every path. Callers feature-detect
+  `api.version >= 3` with `reviewWalk.version >= 1` and keep today's
+  behavior otherwise.
 - Plugins never import each other's `main.js`. bob-ledger-tools
   feature-detects `api?.version >= 1`.
 
