@@ -703,7 +703,8 @@ task stays due and Ctrl+Alt+F does not advance.
 
 The Obsidian footer keeps a condensed version of that `]s` notice
 visible while the cursor is on a review task, and the `]s next` hint
-otherwise. Wrap and boundary preambles stay transient in the notice.
+otherwise. Its trailing group summary omits the current review group;
+the full summary shows when no review row is current. Wrap and boundary preambles stay transient in the notice.
 
 **First walk:** release the lanes to their caps.
 
@@ -837,7 +838,7 @@ checklist row may carry `lane: null`), `path`,
 to execute an action. No new CLI subcommands or options. Human
 section counts, the REVIEW summary, status-bar walk totals, per-tier
 ranks, and commitment-boundary logic use tier counts, not state
-counts. The Obsidian footer omits zero-count groups and hides when
+counts. The Obsidian footer omits zero-count groups and the current review group (full summary when no review row is current) and hides when
 the walk is empty; CLI human output is unchanged. A NEW project
 counts once in PROJECTS, and `--limit` only
 truncates rows. A NEW-state Ready reference walks in REFERENCES, not
