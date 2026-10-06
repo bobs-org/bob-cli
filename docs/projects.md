@@ -456,9 +456,9 @@ signal-bar glyph that reads the priority at a glance, in Live
 Preview, reading view, embeds, hover previews, Dataview task views,
 and Tasks query results. The stored Markdown never changes, the
 cursor reveals the raw field for editing, and broken priority fields
-get a visible repair flag. The Task Card and priority notices reuse
-the same glyph (a later phase), so you learn it where you pick a
-priority.
+get a visible repair flag. The Task Card level strip and priority
+notices reuse the mark through `api.priorityMarks` v1, so you learn
+it where you pick a priority.
 
 **Principles** (borrowed from the freshness mark). Display-only:
 `[priority:: value]` stays the only stored form; nothing writes the
@@ -635,6 +635,7 @@ across re-renders and costly; CSS on Tasks' own
 - P1–P4 and highest look right in light and dark themes
 - the cursor or a click reveals the raw field
 - `dash.md` Tasks results show glyphs, not emoji
+- the Task Card shows the glyph beside P1–P4
 - a hand-broken `[priority:: High]` shows the dashed repair pill
 - the toggle restores the pills and emoji and then turns the marks back on
 - closed tasks look resting
