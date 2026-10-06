@@ -827,8 +827,8 @@ The full command contract lives in [`docs/gkeep.md`](docs/gkeep.md).
 ## Highlights
 
 ```bash
-bob highlights clip <URL> [-A|--author NAME] [-b|--bob-dir PATH] [-d|--dry-run] [-f|--force] [-H|--html FILE] [-l|--lib-dir PATH] [-N|--name STEM] [-o|--output PDF] [-P|--parent NOTE] [-p|--published DATE] [-r|--ref-dir PATH] [-s|--status STATUS] [-T|--title TITLE] [-t|--ref-type DIR] [-x|--xlib-dir PATH]
-bob highlights create <TARGET> [-a|--audio PATH] [-b|--bob-dir PATH] [-d|--dry-run] [-f|--force] [-i|--include-id] [-l|--lib-dir PATH] [-N|--name STEM] [-n|--no-audio] [-o|--output PDF] [-P|--parent NOTE] [-r|--ref-dir PATH] [-s|--status STATUS] [-T|--title TITLE] [-t|--ref-type DIR] [-x|--xlib-dir PATH]
+bob highlights clip <URL> [-A|--author NAME] [-b|--bob-dir PATH] [-d|--dry-run] [-f|--force] [-H|--html FILE] [-l|--lib-dir PATH] [-L|--listen] [-N|--name STEM] [-o|--output PDF] [-P|--parent NOTE] [-p|--published DATE] [-r|--ref-dir PATH] [-s|--status STATUS] [-T|--title TITLE] [-t|--ref-type DIR] [-x|--xlib-dir PATH]
+bob highlights create <TARGET> [-a|--audio PATH] [-b|--bob-dir PATH] [-d|--dry-run] [-f|--force] [-i|--include-id] [-l|--lib-dir PATH] [-L|--listen] [-N|--name STEM] [-n|--no-audio] [-o|--output PDF] [-P|--parent NOTE] [-r|--ref-dir PATH] [-s|--status STATUS] [-T|--title TITLE] [-t|--ref-type DIR] [-x|--xlib-dir PATH]
 bob highlights doctor [-b|--bob-dir PATH] [-l|--lib-dir PATH] [-n|--no-hooks] [-r|--ref-dir PATH] [-x|--xlib-dir PATH]
 bob highlights marker <pdf> [-b|--bob-dir PATH] [-l|--lib-dir PATH] [-r|--ref-dir PATH] [-x|--xlib-dir PATH]
 bob highlights scan [-b|--bob-dir PATH] [-d|--dry-run] [-j|--jobs N] [-l|--lib-dir PATH] [-n|--no-hooks] [-r|--ref-dir PATH] [-v|--verbose] [-w|--write-pdfs] [-x|--xlib-dir PATH]
@@ -844,8 +844,10 @@ Highlights annotations into Obsidian reference notes.
   `author`, `published`, and `captured` provenance. Already-captured URLs
   are refused, even with `--force`; bot-protected sites retry headed and
   otherwise fail closed with a hint. `-H, --html` replays a page saved from
-  a real browser. Needs `uv`, Google Chrome (or `BOB_CHROME`), and Xvfb for
-  bot-protected sites on Linux.
+  a real browser. `-L, --listen` narrates the article with
+  `highlights.listen_command` and binds the episode, attaching to the
+  existing capture when the URL is already captured. Needs `uv`, Google
+  Chrome (or `BOB_CHROME`), and Xvfb for bot-protected sites on Linux.
 - `create <TARGET>` renders Markdown through pandoc and xelatex into
   `xlib/chat/<basename>.pdf`, or stamps a local PDF, PDF URL, or arXiv paper
   as-is into `xlib/papers/<stem>.pdf` (override the subdirectory with
@@ -854,7 +856,10 @@ Highlights annotations into Obsidian reference notes.
   combined with `--ref-type` or `--name`. Relative output paths are resolved
   from the current directory and a leading `~` is expanded. `-N, --name`
   sets the output stem, `-T, --title` overrides the derived title, and
-  `--include-id` adds marker `id` (URL targets always embed it). Intake
+  `--include-id` adds marker `id` (URL targets always embed it). `-L, --listen`
+  narrates any target with `highlights.listen_command` and binds the episode
+  as companion audio (conflicts with `-a` and `-n`); an already-captured
+  target gains the episode as `xlib/<rel>.mp3` for `scan` to pair. Intake
   targets still go through `scan`; a PDF written directly into the library is
   also found by `scan`; a PDF outside both directories needs
   `bob highlights sync <PDF>`. The full target contract lives in
@@ -870,9 +875,9 @@ Highlights annotations into Obsidian reference notes.
 - `sync <pdf>` updates one reference note from the page-1 marker and sidecar.
 - `marker <pdf>` inspects that marker without writing.
 - `doctor` checks vault paths, intake, sidecars, markers, Git, pandoc, `curl`,
-  the web-clip chain (`uv`, adapter, browser, headed fallback), and optional
-  `ob` without writing. Pass `-n, --no-hooks` to skip the pre-scan hook
-  check.
+  the web-clip chain (`uv`, adapter, browser, headed fallback), the
+  `listen_command` row, and optional `ob` without writing. Pass
+  `-n, --no-hooks` to skip the pre-scan hook check.
 
 Generated notes live under `ref/`. Nested library PDFs such as
 `lib/books/foo.pdf` write `ref/books/foo.md` with `type: "[[ref]]"` and
@@ -1023,6 +1028,8 @@ The documented workflows use these external-tool integrations:
   `BOB_PANDOC_COMMAND`
 - `curl` for `bob highlights create` PDF URL and arXiv targets; override with
   `BOB_HIGHLIGHTS_CURL`
+- `sase-listen` for `bob highlights create --listen` and
+  `bob highlights clip --listen`, configured as `highlights.listen_command`
 - `uv` plus Google Chrome or Chromium (or `BOB_CHROME`) for
   `bob highlights clip`: `uv` fetches Python ≥3.10 and the pinned Playwright,
   Pillow, and nh3 on first run (override the whole spawn with
@@ -1085,7 +1092,9 @@ clipboard source alone.
 `$XDG_CONFIG_HOME/bob/config.yml`, then `~/.config/bob/config.yml`. That
 file holds the priority windows for `p:<N>` and `bob task reroll`,
 `highlights.pre_scan_hook` for `bob highlights scan` and
-`bob highlights doctor`, the `gkeep:` section for `bob gkeep`, and the
+`bob highlights doctor`, `highlights.listen_command` for
+`bob highlights create --listen` and `bob highlights clip --listen`,
+the `gkeep:` section for `bob gkeep`, and the
 optional `plan:` and `freshness:` blocks. Plan caps default to 3 themes,
 10 links, 15 NEXT tasks, 10 PENDING tasks, 100 dashboard READY tasks, and
 5 Ready-lane tasks per area/project note. `bob plan` and `bob ready` exit 2
@@ -1143,6 +1152,11 @@ like `BOB_PANDOC_COMMAND`.
 `BOB_HIGHLIGHTS_KEEP_WORKDIR=1` keeps the `bob highlights create` scratch
 directory for debugging and prints its path (the legacy
 `BOB_WEB_CLIP_KEEP_WORKDIR=1` is also honored).
+
+`BOB_HIGHLIGHTS_LISTEN_COMMAND` overrides `highlights.listen_command` in
+`bob/config.yml` for `bob highlights create --listen` and
+`bob highlights clip --listen` (see
+[create-target contract](docs/highlights-create.md#listen)).
 
 `BOB_HIGHLIGHTS_REF_DIR` sets the generated reference note directory used by
 `bob highlights`. It defaults to `ref` under `BOB_DIR`.

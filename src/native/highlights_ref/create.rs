@@ -10,12 +10,15 @@ use clap::{Arg, ArgAction, ArgMatches, Command as ClapCommand};
 use sha2::Digest;
 
 use super::{
+    attach as attach_mod, companion as companion_mod,
+    pdf_target as pdf_target_mod,
+};
+use super::{
     bob_dir_arg, compose_marker, dry_run_arg, lib_dir_arg, plan_default_target,
     plan_exact_output, print_next_step, ref_dir_arg, stamp_and_install,
     validate_ref_type, xlib_dir_arg, AudioCopyPlan, CommandError, Config,
     PdfInfo, Result, TargetPlan, TargetWorkflow,
 };
-use super::{companion as companion_mod, pdf_target as pdf_target_mod};
 use super::{sources as sources_mod, target as target_mod};
 use crate::native::style::Styler;
 
@@ -154,6 +157,7 @@ struct CreateOptions {
     dry_run: bool,
     force: bool,
     include_id: bool,
+    listen: bool,
     name: Option<String>,
     no_audio: bool,
     output: Option<PathBuf>,
@@ -229,6 +233,15 @@ pub(crate) fn command() -> ClapCommand {
         )
         .arg(lib_dir_arg())
         .arg(
+            Arg::new("listen")
+                .long("listen")
+                .short('L')
+                .action(ArgAction::SetTrue)
+                .conflicts_with("audio")
+                .conflicts_with("no-audio")
+                .help("Narrate TARGET with highlights.listen_command and bind the episode as companion audio"),
+        )
+        .arg(
             Arg::new("name")
                 .long("name")
                 .short('N')
@@ -295,7 +308,7 @@ pub(crate) fn command() -> ClapCommand {
         )
         .arg(xlib_dir_arg())
         .after_help(
-            "Targets:\n  Markdown file (.md) -> rendered with pandoc (default ref type chat)\n  Local PDF file (.pdf or %PDF- magic) -> stamped as-is (default ref type papers)\n  PDF URL (Content-Type PDF or sniffed %PDF-) -> downloaded, stamped as-is (default ref type papers)\n  arXiv paper URL (abs/html/pdf) -> PDF fetched from arxiv.org/pdf/<id>, metadata from the API (default ref type papers)\n  Web article URL (HTML 2xx or 403/429/503) -> captured with the clip engine (default ref type blogs; same PDF, marker, and report as `bob highlights clip`)\n\nAudio:\n  Create discovers audio as `--audio PATH`, then frontmatter `audio.episode_id` in the sase-listen library (Markdown only), then a sibling `<stem>_narration.md` hash matched against library manifests (`BOB_HIGHLIGHTS_AUDIO_LIBRARY`, then `highlights.audio_library`, then `$XDG_DATA_HOME/sase-listen/library`, then `~/.local/share/sase-listen/library`); `--no-audio` skips discovery. The copy lands beside the PDF with the source extension lowercased before the PDF is installed, reuses identical bytes, refuses different bytes without `--force`, and refuses when the mirrored library audio already exists. An existing companion beside the target is reused on every route.\n\nExamples:\n  bob highlights create report.md\n  bob highlights create paper.pdf -t papers\n  bob highlights create https://example.com/paper.pdf -N my_paper\n  bob highlights create https://arxiv.org/abs/1706.03762 -d\n\nRenders a hyperlinked table of contents and PDF bookmarks with pandoc and embeds the page-1 marker used by `bob highlights scan`. By default the PDF is written to `<xlib-dir>/<ref-type>/<stem>.pdf`. `-o, --output` selects that complete path instead, including the filename; it requires a `.pdf` extension, expands a leading `~`, and resolves relative paths from the current directory. `--output` cannot be combined with `--ref-type` or `--name` because those only participate in default target derivation. `-N, --name` sets the output filename stem and, with `-i`, the marker id. `-T, --title` overrides the derived title. Scan moves intake PDFs into the library before writing reference notes. A PDF written directly into the library is still found by `bob highlights scan`. A PDF written outside the library and intake directories is not discovered by recursive scan; sync it with `bob highlights sync <PDF>`. A `<div class=\"listen\">` card is rendered as a callout with a Play link when companion audio is bound.",
+            "Targets:\n  Markdown file (.md) -> rendered with pandoc (default ref type chat)\n  Local PDF file (.pdf or %PDF- magic) -> stamped as-is (default ref type papers)\n  PDF URL (Content-Type PDF or sniffed %PDF-) -> downloaded, stamped as-is (default ref type papers)\n  arXiv paper URL (abs/html/pdf) -> PDF fetched from arxiv.org/pdf/<id>, metadata from the API (default ref type papers)\n  Web article URL (HTML 2xx or 403/429/503) -> captured with the clip engine (default ref type blogs; same PDF, marker, and report as `bob highlights clip`)\n\nAudio:\n  Create discovers audio as `--audio PATH`, then frontmatter `audio.episode_id` in the sase-listen library (Markdown only), then a sibling `<stem>_narration.md` hash matched against library manifests (`BOB_HIGHLIGHTS_AUDIO_LIBRARY`, then `highlights.audio_library`, then `$XDG_DATA_HOME/sase-listen/library`, then `~/.local/share/sase-listen/library`); `--no-audio` skips discovery. The copy lands beside the PDF with the source extension lowercased before the PDF is installed, reuses identical bytes, refuses different bytes without `--force`, and refuses when the mirrored library audio already exists. An existing companion beside the target is reused on every route.\n\nListen:\n  `-L, --listen` narrates TARGET with `highlights.listen_command` (`BOB_HIGHLIGHTS_LISTEN_COMMAND` overrides), which must write MP3 audio to `{audio}`; bob shell-quotes `{target}`, `{pdf}`, `{audio}`, and `{title}` itself — do not quote them — and streams the command output unchanged. Preflights run first, the PDF is produced in private scratch, then the episode is bound beside the PDF; if the listen command fails nothing is written, and a failure after the episode exists keeps the scratch audio with a `kept:` line. If TARGET is already captured, `--listen` attaches the new episode (`xlib/<rel>.mp3`) for `bob highlights scan` to pair, and the PDF and ref note stay untouched.\n\nExamples:\n  bob highlights create report.md\n  bob highlights create paper.pdf -t papers\n  bob highlights create https://example.com/paper.pdf -N my_paper\n  bob highlights create https://arxiv.org/abs/1706.03762 -d\n  bob highlights create https://arxiv.org/abs/1706.03762 -L\n\nRenders a hyperlinked table of contents and PDF bookmarks with pandoc and embeds the page-1 marker used by `bob highlights scan`. By default the PDF is written to `<xlib-dir>/<ref-type>/<stem>.pdf`. `-o, --output` selects that complete path instead, including the filename; it requires a `.pdf` extension, expands a leading `~`, and resolves relative paths from the current directory. `--output` cannot be combined with `--ref-type` or `--name` because those only participate in default target derivation. `-N, --name` sets the output filename stem and, with `-i`, the marker id. `-T, --title` overrides the derived title. Scan moves intake PDFs into the library before writing reference notes. A PDF written directly into the library is still found by `bob highlights scan`. A PDF written outside the library and intake directories is not discovered by recursive scan; sync it with `bob highlights sync <PDF>`. A `<div class=\"listen\">` card is rendered as a callout with a Play link when companion audio is bound.",
         )
 }
 
@@ -327,6 +340,7 @@ pub(super) fn run(matches: &ArgMatches) -> i32 {
         dry_run: matches.get_flag("dry-run"),
         force: matches.get_flag("force"),
         include_id: matches.get_flag("include-id"),
+        listen: matches.get_flag("listen"),
         name: matches.get_one::<String>("name").cloned(),
         no_audio: matches.get_flag("no-audio"),
         output: matches.get_one::<OsString>("output").map(PathBuf::from),
@@ -354,7 +368,7 @@ pub(super) fn run(matches: &ArgMatches) -> i32 {
             } else {
                 eprintln!("bob highlights: {}: {message}", styler.red("error"));
             }
-            1
+            error.exit_code.unwrap_or(1)
         }
     }
 }
@@ -378,7 +392,17 @@ fn create_pdf(
     target_os: &OsString,
     options: &CreateOptions,
 ) -> Result<()> {
-    let scratch = super::ScratchDir::create("create")?;
+    // With --listen the command is resolved and validated before any
+    // fetch or render, so an unconfigured or invalid command fails
+    // before vault work starts.
+    let listen = match options.listen {
+        true => Some(
+            super::listen::require_validated()
+                .map_err(|error| error.into_command_error())?,
+        ),
+        false => None,
+    };
+    let mut scratch = super::ScratchDir::create("create")?;
     let target_lossy = target_os.to_string_lossy().into_owned();
     let target_raw = target_lossy.as_str();
     // Syntactic classification first; URL dedupe runs before any fetch.
@@ -390,6 +414,26 @@ fn create_pdf(
             Some(paper) => paper.dedupe_key(),
             None => url.dedupe_key.clone(),
         };
+        if let Some(command) = &listen
+            && let Some(hit) = sources_mod::find_refusing_hit(
+                &recorded,
+                &dedupe_key,
+                None,
+                options.force,
+            )
+        {
+            let attach = attach_mod::attach_for_dedupe_hit(config, &hit)?;
+            let (source_line, target_value) = url_attach_lines(&url, &arxiv);
+            return attach_mod::run_attach(
+                config,
+                command,
+                &attach,
+                &source_line,
+                &target_value,
+                options.dry_run,
+                &mut scratch,
+            );
+        }
         check_dedupe_with_listen_hint(
             &recorded,
             &dedupe_key,
@@ -398,7 +442,13 @@ fn create_pdf(
         )?;
         if let Some(paper) = arxiv {
             return create_arxiv_route(
-                config, paper, url, &scratch, options, &recorded,
+                config,
+                paper,
+                url,
+                &mut scratch,
+                options,
+                &recorded,
+                listen.as_ref(),
             );
         }
         match target_mod::fetch_and_route(url.clone(), &scratch)? {
@@ -406,11 +456,22 @@ fn create_pdf(
                 url, downloaded, ..
             } => {
                 return create_pdf_url_route(
-                    config, url, downloaded, &scratch, options, &recorded,
+                    config,
+                    url,
+                    downloaded,
+                    &mut scratch,
+                    options,
+                    &recorded,
+                    listen.as_ref(),
                 );
             }
             target_mod::CreateSource::WebArticle { url } => {
-                return create_article_route(config, url, options);
+                return create_article_route(
+                    config,
+                    url,
+                    options,
+                    listen.as_ref(),
+                );
             }
             _ => {
                 return Err(CommandError::new(
@@ -421,20 +482,65 @@ fn create_pdf(
     }
     let local_path = Path::new(target_os);
     match target_mod::resolve_local_target(local_path)? {
-        target_mod::CreateSource::Markdown(path) => {
-            create_markdown_route(config, &path, &scratch, options)
-        }
-        target_mod::CreateSource::LocalPdf(path) => {
-            create_local_pdf_route(config, &path, &scratch, options)
-        }
+        target_mod::CreateSource::Markdown(path) => create_markdown_route(
+            config,
+            &path,
+            &mut scratch,
+            options,
+            listen.as_ref(),
+        ),
+        target_mod::CreateSource::LocalPdf(path) => create_local_pdf_route(
+            config,
+            &path,
+            &mut scratch,
+            options,
+            listen.as_ref(),
+        ),
         _ => Err(CommandError::new("unexpected target classification")),
     }
+}
+
+/// The attach report's source line plus the `{target}` listen value for
+/// a URL that hit dedupe before any fetch.
+fn url_attach_lines(
+    url: &super::clip_url::WebUrl,
+    arxiv: &Option<super::arxiv::ArxivPaper>,
+) -> (String, String) {
+    match arxiv {
+        Some(paper) => (
+            format!("source: {} (arXiv {})", paper.abs_url(), paper.full_id()),
+            url.cleaned.clone(),
+        ),
+        None => (format!("source: {}", url.cleaned), url.cleaned.clone()),
+    }
+}
+
+/// A display-only [`AudioCopyPlan`] for a planned listen episode, so
+/// dry runs and reports share the `audio: … (from --listen)` line.
+fn listen_audio_plan(flow: &super::listen::ListenFlow) -> AudioCopyPlan {
+    AudioCopyPlan {
+        source: flow.scratch_audio.clone(),
+        dest: flow.dest.clone(),
+        library_dest: flow.library_dest.clone(),
+        origin: "--listen".to_string(),
+        reused: false,
+    }
+}
+
+/// Recovery hint for a post-listen install failure: rebind the kept
+/// episode explicitly.
+fn bind_create_hint(target_display: &str, scratch_audio: &Path) -> String {
+    format!(
+        "bind it with bob highlights create {target_display} --audio {}",
+        scratch_audio.display()
+    )
 }
 
 fn create_article_route(
     config: &Config,
     url: super::clip_url::WebUrl,
     options: &CreateOptions,
+    listen: Option<&super::listen::ListenCommand>,
 ) -> Result<()> {
     let ref_type =
         default_ref_type_for_kind("article", options.ref_type.as_deref())?;
@@ -450,9 +556,18 @@ fn create_article_route(
     )?;
     // `-i` is accepted and is a no-op: the clip engine always stamps `id`.
     // Author, published, and saved-page replay stay unset on this route.
-    let companion = match &options.audio {
-        Some(path) => super::clip::Companion::Explicit(path.clone()),
-        None => super::clip::Companion::None,
+    // (`-L` conflicts with `-a` at the CLI, so both can never be set.)
+    let companion = match (&options.audio, listen) {
+        (Some(path), None) => super::clip::Companion::Explicit(path.clone()),
+        (None, Some(command)) => {
+            super::clip::Companion::Listen(command.clone())
+        }
+        (None, None) => super::clip::Companion::None,
+        (Some(_), Some(_)) => {
+            return Err(CommandError::new(
+                "--listen cannot be used with --audio",
+            ));
+        }
     };
     super::clip::capture_article(
         config,
@@ -552,12 +667,54 @@ fn dispatch_create_pdf_after_scratch(
 fn create_markdown_route(
     config: &Config,
     source: &Path,
-    scratch: &super::ScratchDir,
+    scratch: &mut super::ScratchDir,
     options: &CreateOptions,
+    listen: Option<&super::listen::ListenCommand>,
 ) -> Result<()> {
-    let plan = plan_markdown(config, source, options)?;
+    let mut plan = plan_markdown(config, source, options)?;
     let styler = Styler::detect();
+    // With --listen the staged render doubles as the narration source:
+    // `{target}` and `{pdf}` are `<scratch>/<stem>.pdf`, and the listen
+    // card's Play URI targets `<stem>.mp3`.
+    let listen_setup = match listen {
+        Some(command) => {
+            let stem = plan
+                .target
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .ok_or_else(|| {
+                    CommandError::new(format!(
+                        "target has no file stem: {}",
+                        plan.target.display()
+                    ))
+                })?
+                .to_string();
+            let flow = super::listen::plan_listen_flow(
+                &plan.target_plan(),
+                scratch,
+                &stem,
+            )?;
+            plan.audio = Some(listen_audio_plan(&flow));
+            Some((command, flow, scratch.path().join(format!("{stem}.pdf"))))
+        }
+        None => None,
+    };
+    let audio_uri = play_uri(config, &plan)?;
     if options.dry_run {
+        if let Some((command, flow, render_path)) = &listen_setup {
+            println!(
+                "{}",
+                super::listen::would_run_line(
+                    command,
+                    &super::listen::ListenValues {
+                        target: render_path.display().to_string(),
+                        pdf: render_path.clone(),
+                        audio: flow.scratch_audio.clone(),
+                        title: plan.title.clone(),
+                    },
+                )
+            );
+        }
         print_plan(&plan, options, &styler);
         println!("writes: none");
         return Ok(());
@@ -579,7 +736,10 @@ fn create_markdown_route(
             parent.display()
         ))
     })?;
-    let render_path = scratch.path().join("render.pdf");
+    let render_path = match &listen_setup {
+        Some((.., path)) => path.clone(),
+        None => scratch.path().join("render.pdf"),
+    };
     let filter_path = scratch.path().join("filter.lua");
     fs::write(&filter_path, PANDOC_CODE_BREAK_FILTER).map_err(|error| {
         CommandError::new(format!(
@@ -587,35 +747,101 @@ fn create_markdown_route(
             filter_path.display()
         ))
     })?;
-    let audio_uri = play_uri(config, &plan)?;
-    let render_result = render_temp_pdf(
-        &pandoc,
-        &plan,
-        &render_path,
-        &filter_path,
-        audio_uri.as_deref(),
-    );
-    let audio_created = if render_result.is_ok() {
-        match companion_mod::copy_audio_for_install(plan.audio.as_ref()) {
-            Ok(created) => created,
-            Err(error) => return Err(error),
+    let (_audio_created, page_count) = match &listen_setup {
+        Some((command, flow, _)) => {
+            render_temp_pdf(
+                &pandoc,
+                &plan,
+                &render_path,
+                &filter_path,
+                audio_uri.as_deref(),
+            )?;
+            let values = super::listen::ListenValues {
+                target: render_path.display().to_string(),
+                pdf: render_path.clone(),
+                audio: flow.scratch_audio.clone(),
+                title: plan.title.clone(),
+            };
+            super::listen::run_listen(command, &values)
+                .map_err(|error| error.into_command_error())?;
+            // The vault may have changed during a long listen.
+            if let Err(error) = super::refuse_target_collisions(
+                &plan.target,
+                &plan.sidecar,
+                &plan.workflow,
+                options.force,
+            ) {
+                return Err(super::listen::post_listen_error(
+                    scratch,
+                    &flow.scratch_audio,
+                    error.to_string(),
+                    bind_create_hint(&plan.source, &flow.scratch_audio),
+                ));
+            }
+            let created =
+                super::listen::install_listen_audio(flow, options.force)
+                    .map_err(|error| {
+                        super::listen::post_listen_error(
+                            scratch,
+                            &flow.scratch_audio,
+                            error.to_string(),
+                            bind_create_hint(&plan.source, &flow.scratch_audio),
+                        )
+                    })?;
+            let page_count = match stamp_and_install(
+                &render_path,
+                &plan.target,
+                &plan.marker,
+                &PdfInfo::default(),
+            ) {
+                Ok(page_count) => page_count,
+                Err(error) => {
+                    companion_mod::cleanup_audio_on_failure(created.as_ref());
+                    return Err(super::listen::post_listen_error(
+                        scratch,
+                        &flow.scratch_audio,
+                        error.to_string(),
+                        bind_create_hint(&plan.source, &flow.scratch_audio),
+                    ));
+                }
+            };
+            (created, page_count)
         }
-    } else {
-        None
-    };
-    let install_result = render_result.and_then(|()| {
-        stamp_and_install(
-            &render_path,
-            &plan.target,
-            &plan.marker,
-            &PdfInfo::default(),
-        )
-    });
-    let page_count = match install_result {
-        Ok(page_count) => page_count,
-        Err(error) => {
-            companion_mod::cleanup_audio_on_failure(audio_created.as_ref());
-            return Err(error);
+        None => {
+            let render_result = render_temp_pdf(
+                &pandoc,
+                &plan,
+                &render_path,
+                &filter_path,
+                audio_uri.as_deref(),
+            );
+            let audio_created = if render_result.is_ok() {
+                match companion_mod::copy_audio_for_install(plan.audio.as_ref())
+                {
+                    Ok(created) => created,
+                    Err(error) => return Err(error),
+                }
+            } else {
+                None
+            };
+            let install_result = render_result.and_then(|()| {
+                stamp_and_install(
+                    &render_path,
+                    &plan.target,
+                    &plan.marker,
+                    &PdfInfo::default(),
+                )
+            });
+            let page_count = match install_result {
+                Ok(page_count) => page_count,
+                Err(error) => {
+                    companion_mod::cleanup_audio_on_failure(
+                        audio_created.as_ref(),
+                    );
+                    return Err(error);
+                }
+            };
+            (audio_created, page_count)
         }
     };
     println!(
@@ -646,16 +872,34 @@ fn create_markdown_route(
 fn create_local_pdf_route(
     config: &Config,
     source: &Path,
-    scratch: &super::ScratchDir,
+    scratch: &mut super::ScratchDir,
     options: &CreateOptions,
+    listen: Option<&super::listen::ListenCommand>,
 ) -> Result<()> {
-    pdf_target_mod::check_local_pdf_identity(config, source)?;
     let canonical = fs::canonicalize(source).map_err(|error| {
         CommandError::new(format!(
             "resolve PDF file {}: {error}",
             source.display()
         ))
     })?;
+    // Attach when the target itself is an existing capture.
+    if let Some(command) = listen
+        && let Some(attach) =
+            attach_mod::attach_for_local_pdf(config, &canonical)?
+    {
+        let source_line = format!("source: {} (PDF)", canonical.display());
+        let target_value = canonical.display().to_string();
+        return attach_mod::run_attach(
+            config,
+            command,
+            &attach,
+            &source_line,
+            &target_value,
+            options.dry_run,
+            scratch,
+        );
+    }
+    pdf_target_mod::check_local_pdf_identity(config, source)?;
     let pdf_plan = pdf_target_mod::plan_local_pdf(
         &canonical,
         options.name.as_deref(),
@@ -672,6 +916,21 @@ fn create_local_pdf_route(
     )?;
     let audio =
         plan_pdf_audio(config, &target_plan, options, Some(&canonical))?;
+    // With --listen `{target}` is the source path and `{pdf}` is the
+    // unstaged scratch copy; the library check runs now, the intake
+    // byte check after the run.
+    let (listen_flow, audio) = match listen {
+        Some(command) => {
+            let flow = super::listen::plan_listen_flow(
+                &target_plan,
+                scratch,
+                &pdf_plan.stem,
+            )?;
+            let display = listen_audio_plan(&flow);
+            (Some((command, flow)), Some(display))
+        }
+        None => (None, audio),
+    };
     let id = if options.include_id || options.name.is_some() {
         Some(pdf_plan.stem.clone())
     } else {
@@ -689,6 +948,22 @@ fn create_local_pdf_route(
     };
     let styler = Styler::detect();
     if options.dry_run {
+        if let Some((command, flow)) = &listen_flow {
+            let unstamped =
+                scratch.path().join(format!("{}.pdf", pdf_plan.stem));
+            println!(
+                "{}",
+                super::listen::would_run_line(
+                    command,
+                    &super::listen::ListenValues {
+                        target: canonical.display().to_string(),
+                        pdf: unstamped,
+                        audio: flow.scratch_audio.clone(),
+                        title: pdf_plan.title.clone(),
+                    },
+                )
+            );
+        }
         print_pdf_dry_run(
             config,
             &styler,
@@ -703,15 +978,96 @@ fn create_local_pdf_route(
         );
         return Ok(());
     }
-    let (stamped, page_count) = pdf_target_mod::stamp_pdf_to_scratch(
-        &canonical, scratch, &marker, &info,
-    )?;
-    let installed = pdf_target_mod::install_stamped_pdf(
-        &stamped,
-        &target_plan.target,
-        audio.as_ref(),
-        page_count,
-    )?;
+    let installed = match &listen_flow {
+        Some((command, flow)) => {
+            let unstamped =
+                scratch.path().join(format!("{}.pdf", pdf_plan.stem));
+            fs::copy(&canonical, &unstamped).map_err(|error| {
+                CommandError::new(format!(
+                    "stage PDF {}: {error}",
+                    canonical.display()
+                ))
+            })?;
+            let values = super::listen::ListenValues {
+                target: canonical.display().to_string(),
+                pdf: unstamped.clone(),
+                audio: flow.scratch_audio.clone(),
+                title: pdf_plan.title.clone(),
+            };
+            super::listen::run_listen(command, &values)
+                .map_err(|error| error.into_command_error())?;
+            // The vault may have changed during a long listen.
+            if let Err(error) = super::refuse_target_collisions(
+                &target_plan.target,
+                &target_plan.sidecar,
+                &target_plan.workflow,
+                options.force,
+            ) {
+                return Err(super::listen::post_listen_error(
+                    scratch,
+                    &flow.scratch_audio,
+                    error.to_string(),
+                    bind_create_hint(
+                        &canonical.display().to_string(),
+                        &flow.scratch_audio,
+                    ),
+                ));
+            }
+            let created =
+                super::listen::install_listen_audio(flow, options.force)
+                    .map_err(|error| {
+                        super::listen::post_listen_error(
+                            scratch,
+                            &flow.scratch_audio,
+                            error.to_string(),
+                            bind_create_hint(
+                                &canonical.display().to_string(),
+                                &flow.scratch_audio,
+                            ),
+                        )
+                    })?;
+            let (stamped, page_count) = pdf_target_mod::stamp_pdf_to_scratch(
+                &unstamped, scratch, &marker, &info,
+            )
+            .map_err(|error| {
+                super::listen::post_listen_error(
+                    scratch,
+                    &flow.scratch_audio,
+                    error.to_string(),
+                    bind_create_hint(
+                        &canonical.display().to_string(),
+                        &flow.scratch_audio,
+                    ),
+                )
+            })?;
+            if let Err(error) =
+                super::atomic_copy(&stamped, &target_plan.target)
+            {
+                companion_mod::cleanup_audio_on_failure(created.as_ref());
+                return Err(super::listen::post_listen_error(
+                    scratch,
+                    &flow.scratch_audio,
+                    error.to_string(),
+                    bind_create_hint(
+                        &canonical.display().to_string(),
+                        &flow.scratch_audio,
+                    ),
+                ));
+            }
+            page_count
+        }
+        None => {
+            let (stamped, page_count) = pdf_target_mod::stamp_pdf_to_scratch(
+                &canonical, scratch, &marker, &info,
+            )?;
+            pdf_target_mod::install_stamped_pdf(
+                &stamped,
+                &target_plan.target,
+                audio.as_ref(),
+                page_count,
+            )?
+        }
+    };
     let bytes = fs::metadata(&target_plan.target)
         .map(|m| m.len())
         .unwrap_or(0);
@@ -747,9 +1103,10 @@ fn create_pdf_url_route(
     config: &Config,
     url: super::clip_url::WebUrl,
     downloaded: PathBuf,
-    scratch: &super::ScratchDir,
+    scratch: &mut super::ScratchDir,
     options: &CreateOptions,
     recorded: &[sources_mod::RecordedSource],
+    listen: Option<&super::listen::ListenCommand>,
 ) -> Result<()> {
     let captured = super::current_local_date();
     let pdf_plan = pdf_target_mod::plan_pdf_url(
@@ -768,6 +1125,27 @@ fn create_pdf_url_route(
         options.output.as_ref(),
         options.force,
     )?;
+    // The stem is only known after the fetch, so a race that captured
+    // the URL mid-fetch attaches here instead of refusing.
+    if let Some(command) = listen
+        && let Some(hit) = sources_mod::find_refusing_hit(
+            recorded,
+            &url.dedupe_key,
+            Some(&target_plan.target),
+            options.force,
+        )
+    {
+        let attach = attach_mod::attach_for_dedupe_hit(config, &hit)?;
+        return attach_mod::run_attach(
+            config,
+            command,
+            &attach,
+            &format!("source: {} (PDF)", url.cleaned),
+            &url.cleaned,
+            options.dry_run,
+            scratch,
+        );
+    }
     check_dedupe_with_listen_hint(
         recorded,
         &url.dedupe_key,
@@ -775,6 +1153,20 @@ fn create_pdf_url_route(
         options.force,
     )?;
     let audio = plan_pdf_audio(config, &target_plan, options, None)?;
+    // With --listen `{target}` is the cleaned URL and `{pdf}` is the
+    // downloaded scratch copy.
+    let (listen_flow, audio) = match listen {
+        Some(command) => {
+            let flow = super::listen::plan_listen_flow(
+                &target_plan,
+                scratch,
+                &pdf_plan.stem,
+            )?;
+            let display = listen_audio_plan(&flow);
+            (Some((command, flow)), Some(display))
+        }
+        None => (None, audio),
+    };
     let id = Some(pdf_plan.stem.clone());
     let marker = pdf_target_mod::compose_pdf_marker(
         &options.status,
@@ -788,6 +1180,20 @@ fn create_pdf_url_route(
     };
     let styler = Styler::detect();
     if options.dry_run {
+        if let Some((command, flow)) = &listen_flow {
+            println!(
+                "{}",
+                super::listen::would_run_line(
+                    command,
+                    &super::listen::ListenValues {
+                        target: url.cleaned.clone(),
+                        pdf: downloaded.clone(),
+                        audio: flow.scratch_audio.clone(),
+                        title: pdf_plan.title.clone(),
+                    },
+                )
+            );
+        }
         print_pdf_dry_run(
             config,
             &styler,
@@ -802,18 +1208,82 @@ fn create_pdf_url_route(
         );
         return Ok(());
     }
-    let (stamped, page_count) = pdf_target_mod::stamp_pdf_to_scratch(
-        &downloaded,
-        scratch,
-        &marker,
-        &info,
-    )?;
-    let installed = pdf_target_mod::install_stamped_pdf(
-        &stamped,
-        &target_plan.target,
-        audio.as_ref(),
-        page_count,
-    )?;
+    let installed = match &listen_flow {
+        Some((command, flow)) => {
+            let values = super::listen::ListenValues {
+                target: url.cleaned.clone(),
+                pdf: downloaded.clone(),
+                audio: flow.scratch_audio.clone(),
+                title: pdf_plan.title.clone(),
+            };
+            super::listen::run_listen(command, &values)
+                .map_err(|error| error.into_command_error())?;
+            // The vault may have changed during a long listen.
+            if let Err(error) = super::refuse_target_collisions(
+                &target_plan.target,
+                &target_plan.sidecar,
+                &target_plan.workflow,
+                options.force,
+            ) {
+                return Err(super::listen::post_listen_error(
+                    scratch,
+                    &flow.scratch_audio,
+                    error.to_string(),
+                    bind_create_hint(&url.cleaned, &flow.scratch_audio),
+                ));
+            }
+            let created =
+                super::listen::install_listen_audio(flow, options.force)
+                    .map_err(|error| {
+                        super::listen::post_listen_error(
+                            scratch,
+                            &flow.scratch_audio,
+                            error.to_string(),
+                            bind_create_hint(&url.cleaned, &flow.scratch_audio),
+                        )
+                    })?;
+            let (stamped, page_count) = pdf_target_mod::stamp_pdf_to_scratch(
+                &downloaded,
+                scratch,
+                &marker,
+                &info,
+            )
+            .map_err(|error| {
+                super::listen::post_listen_error(
+                    scratch,
+                    &flow.scratch_audio,
+                    error.to_string(),
+                    bind_create_hint(&url.cleaned, &flow.scratch_audio),
+                )
+            })?;
+            if let Err(error) =
+                super::atomic_copy(&stamped, &target_plan.target)
+            {
+                companion_mod::cleanup_audio_on_failure(created.as_ref());
+                return Err(super::listen::post_listen_error(
+                    scratch,
+                    &flow.scratch_audio,
+                    error.to_string(),
+                    bind_create_hint(&url.cleaned, &flow.scratch_audio),
+                ));
+            }
+            page_count
+        }
+        None => {
+            let (stamped, page_count) = pdf_target_mod::stamp_pdf_to_scratch(
+                &downloaded,
+                scratch,
+                &marker,
+                &info,
+            )?;
+            pdf_target_mod::install_stamped_pdf(
+                &stamped,
+                &target_plan.target,
+                audio.as_ref(),
+                page_count,
+            )?
+        }
+    };
     let bytes = fs::metadata(&target_plan.target)
         .map(|m| m.len())
         .unwrap_or(0);
@@ -848,9 +1318,10 @@ fn create_arxiv_route(
     config: &Config,
     paper: super::arxiv::ArxivPaper,
     url: super::clip_url::WebUrl,
-    scratch: &super::ScratchDir,
+    scratch: &mut super::ScratchDir,
     options: &CreateOptions,
     recorded: &[sources_mod::RecordedSource],
+    listen: Option<&super::listen::ListenCommand>,
 ) -> Result<()> {
     let captured = super::current_local_date();
     let (metadata, warning) =
@@ -886,19 +1357,67 @@ fn create_arxiv_route(
     // Post-capture dedupe with the final target (stem known only now).
     let key = paper.dedupe_key();
     // Also check the user's URL spelling key (same arXiv key).
-    check_dedupe_with_listen_hint(
-        recorded,
-        &key,
-        Some(&target_plan.target),
-        options.force,
-    )?;
-    check_dedupe_with_listen_hint(
-        recorded,
-        &url.dedupe_key,
-        Some(&target_plan.target),
-        options.force,
-    )?;
+    // With --listen a hit attaches instead of refusing.
+    if let Some(command) = listen {
+        let hit = sources_mod::find_refusing_hit(
+            recorded,
+            &key,
+            Some(&target_plan.target),
+            options.force,
+        )
+        .or_else(|| {
+            sources_mod::find_refusing_hit(
+                recorded,
+                &url.dedupe_key,
+                Some(&target_plan.target),
+                options.force,
+            )
+        });
+        if let Some(hit) = hit {
+            let attach = attach_mod::attach_for_dedupe_hit(config, &hit)?;
+            return attach_mod::run_attach(
+                config,
+                command,
+                &attach,
+                &format!(
+                    "source: {} (arXiv {})",
+                    paper.abs_url(),
+                    paper.full_id()
+                ),
+                &url.cleaned,
+                options.dry_run,
+                scratch,
+            );
+        }
+    } else {
+        check_dedupe_with_listen_hint(
+            recorded,
+            &key,
+            Some(&target_plan.target),
+            options.force,
+        )?;
+        check_dedupe_with_listen_hint(
+            recorded,
+            &url.dedupe_key,
+            Some(&target_plan.target),
+            options.force,
+        )?;
+    }
     let audio = plan_pdf_audio(config, &target_plan, options, None)?;
+    // With --listen `{target}` is the cleaned URL (sase-listen does its
+    // own arXiv rewrite) and `{pdf}` is the fetched scratch copy.
+    let (listen_flow, audio) = match listen {
+        Some(command) => {
+            let flow = super::listen::plan_listen_flow(
+                &target_plan,
+                scratch,
+                &pdf_plan.stem,
+            )?;
+            let display = listen_audio_plan(&flow);
+            (Some((command, flow)), Some(display))
+        }
+        None => (None, audio),
+    };
     let id = Some(pdf_plan.stem.clone());
     let marker = pdf_target_mod::compose_pdf_marker(
         &options.status,
@@ -912,6 +1431,20 @@ fn create_arxiv_route(
     };
     let styler = Styler::detect();
     if options.dry_run {
+        if let Some((command, flow)) = &listen_flow {
+            println!(
+                "{}",
+                super::listen::would_run_line(
+                    command,
+                    &super::listen::ListenValues {
+                        target: url.cleaned.clone(),
+                        pdf: dest.clone(),
+                        audio: flow.scratch_audio.clone(),
+                        title: pdf_plan.title.clone(),
+                    },
+                )
+            );
+        }
         print_pdf_dry_run(
             config,
             &styler,
@@ -926,14 +1459,76 @@ fn create_arxiv_route(
         );
         return Ok(());
     }
-    let (stamped, page_count) =
-        pdf_target_mod::stamp_pdf_to_scratch(&dest, scratch, &marker, &info)?;
-    let installed = pdf_target_mod::install_stamped_pdf(
-        &stamped,
-        &target_plan.target,
-        audio.as_ref(),
-        page_count,
-    )?;
+    let installed = match &listen_flow {
+        Some((command, flow)) => {
+            let values = super::listen::ListenValues {
+                target: url.cleaned.clone(),
+                pdf: dest.clone(),
+                audio: flow.scratch_audio.clone(),
+                title: pdf_plan.title.clone(),
+            };
+            super::listen::run_listen(command, &values)
+                .map_err(|error| error.into_command_error())?;
+            // The vault may have changed during a long listen.
+            if let Err(error) = super::refuse_target_collisions(
+                &target_plan.target,
+                &target_plan.sidecar,
+                &target_plan.workflow,
+                options.force,
+            ) {
+                return Err(super::listen::post_listen_error(
+                    scratch,
+                    &flow.scratch_audio,
+                    error.to_string(),
+                    bind_create_hint(&url.cleaned, &flow.scratch_audio),
+                ));
+            }
+            let created =
+                super::listen::install_listen_audio(flow, options.force)
+                    .map_err(|error| {
+                        super::listen::post_listen_error(
+                            scratch,
+                            &flow.scratch_audio,
+                            error.to_string(),
+                            bind_create_hint(&url.cleaned, &flow.scratch_audio),
+                        )
+                    })?;
+            let (stamped, page_count) = pdf_target_mod::stamp_pdf_to_scratch(
+                &dest, scratch, &marker, &info,
+            )
+            .map_err(|error| {
+                super::listen::post_listen_error(
+                    scratch,
+                    &flow.scratch_audio,
+                    error.to_string(),
+                    bind_create_hint(&url.cleaned, &flow.scratch_audio),
+                )
+            })?;
+            if let Err(error) =
+                super::atomic_copy(&stamped, &target_plan.target)
+            {
+                companion_mod::cleanup_audio_on_failure(created.as_ref());
+                return Err(super::listen::post_listen_error(
+                    scratch,
+                    &flow.scratch_audio,
+                    error.to_string(),
+                    bind_create_hint(&url.cleaned, &flow.scratch_audio),
+                ));
+            }
+            page_count
+        }
+        None => {
+            let (stamped, page_count) = pdf_target_mod::stamp_pdf_to_scratch(
+                &dest, scratch, &marker, &info,
+            )?;
+            pdf_target_mod::install_stamped_pdf(
+                &stamped,
+                &target_plan.target,
+                audio.as_ref(),
+                page_count,
+            )?
+        }
+    };
     let bytes = fs::metadata(&target_plan.target)
         .map(|m| m.len())
         .unwrap_or(0);
@@ -973,6 +1568,11 @@ fn plan_pdf_audio(
     options: &CreateOptions,
     extra_beside: Option<&Path>,
 ) -> Result<Option<AudioCopyPlan>> {
+    // With --listen the episode is narrated fresh; discovery is skipped
+    // and the callers plan the `<target>.mp3` destination instead.
+    if options.listen {
+        return Ok(None);
+    }
     if options.no_audio {
         if options.audio.is_some() {
             return Err(CommandError::new(
@@ -1360,6 +1960,11 @@ fn plan_audio_copy(
     target_plan: &TargetPlan,
     options: &CreateOptions,
 ) -> Result<Option<AudioCopyPlan>> {
+    // With --listen the episode is narrated fresh: discovery is
+    // skipped and the listen card's Play URI targets `<stem>.mp3`.
+    if options.listen {
+        return Ok(None);
+    }
     if options.no_audio {
         if options.audio.is_some() {
             return Err(CommandError::new(
@@ -1697,6 +2302,7 @@ mod tests {
             dry_run: false,
             force: false,
             include_id: false,
+            listen: false,
             name: None,
             no_audio: false,
             output: None,

@@ -48,13 +48,22 @@ pub(super) type Projection = BTreeMap<String, MarkerValue>;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct CommandError {
     pub(super) message: String,
+    /// Process exit code for this failure (`None` means 1). An
+    /// interrupted listen command exits 130.
+    pub(super) exit_code: Option<i32>,
 }
 
 impl CommandError {
     pub(super) fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
+            exit_code: None,
         }
+    }
+
+    pub(super) fn with_exit_code(mut self, code: i32) -> Self {
+        self.exit_code = Some(code);
+        self
     }
 }
 

@@ -214,6 +214,38 @@ fn collect_intake_sources(
     Ok(())
 }
 
+/// The recorded source that [`check_dedupe`] would refuse, if any.
+/// `--listen` attach mode uses this to bind the new episode to the
+/// existing capture instead of refusing.
+pub(super) fn find_refusing_hit(
+    recorded: &[RecordedSource],
+    dedupe_key: &str,
+    planned_target: Option<&Path>,
+    force: bool,
+) -> Option<RecordedSource> {
+    for hit in recorded {
+        if hit.dedupe_key != dedupe_key {
+            continue;
+        }
+        if hit.is_ref_note {
+            return Some(hit.clone());
+        }
+        let same_target = planned_target.is_some_and(|target| {
+            normalize_lexically(target) == normalize_lexically(&hit.path)
+        });
+        if same_target && force {
+            continue;
+        }
+        if planned_target.is_none() && force {
+            // The stem is only known after capture; the post-capture
+            // check with the final target decides.
+            continue;
+        }
+        return Some(hit.clone());
+    }
+    None
+}
+
 pub(super) fn check_dedupe(
     recorded: &[RecordedSource],
     dedupe_key: &str,

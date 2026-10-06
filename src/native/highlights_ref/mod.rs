@@ -31,6 +31,7 @@ pub(crate) mod create;
 
 mod annotation_tasks;
 mod arxiv;
+mod attach;
 mod audio;
 pub(crate) mod cli;
 pub(crate) mod clip;

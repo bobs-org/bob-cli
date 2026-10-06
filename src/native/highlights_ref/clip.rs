@@ -32,6 +32,7 @@ const DEFAULT_STATUS: &str = "ready";
 pub(super) struct ClipError {
     message: String,
     hint: Option<String>,
+    exit_code: Option<i32>,
 }
 
 impl ClipError {
@@ -39,6 +40,7 @@ impl ClipError {
         Self {
             message: message.into(),
             hint: None,
+            exit_code: None,
         }
     }
 
@@ -50,7 +52,11 @@ impl ClipError {
 
 impl From<CommandError> for ClipError {
     fn from(error: CommandError) -> Self {
-        Self::new(error.message)
+        Self {
+            message: error.message,
+            hint: None,
+            exit_code: error.exit_code,
+        }
     }
 }
 
@@ -68,6 +74,7 @@ impl From<SourcesError> for ClipError {
         Self {
             message: error.message,
             hint: error.hint,
+            exit_code: None,
         }
     }
 }
@@ -77,6 +84,7 @@ impl From<AdapterFailure> for ClipError {
         Self {
             message: failure.message,
             hint: failure.hint,
+            exit_code: None,
         }
     }
 }
@@ -121,6 +129,13 @@ pub(crate) fn command() -> ClapCommand {
                 .help("Use a page already saved from a browser (Save Page As, SingleFile); `-` reads stdin"),
         )
         .arg(lib_dir_arg())
+        .arg(
+            Arg::new("listen")
+                .long("listen")
+                .short('L')
+                .action(ArgAction::SetTrue)
+                .help("Narrate the article with highlights.listen_command and bind the episode as companion audio"),
+        )
         .arg(
             Arg::new("name")
                 .long("name")
@@ -198,7 +213,10 @@ pub(crate) fn command() -> ClapCommand {
             browser executable; BOB_WEB_CLIP_TIMEOUT_SECS sets the adapter timeout in seconds \
             (default 300); BOB_WEB_CLIP_KEEP_WORKDIR=1 keeps the scratch directory for debugging. \
             `--output` cannot be combined with `--ref-type` or `--name` because those only \
-            participate in default target derivation.",
+            participate in default target derivation. `-L, --listen` narrates the article with \
+            `highlights.listen_command` (`BOB_HIGHLIGHTS_LISTEN_COMMAND` overrides), which must write \
+            MP3 audio to `{audio}`; bob shell-quotes the values itself and streams the command output \
+            unchanged. If the URL is already captured, `--listen` attaches the episode for scan to pair.",
         )
 }
 
@@ -250,14 +268,15 @@ impl ClipOptions {
     }
 }
 
-/// Companion audio for an article capture: none, or an explicit `--audio`
-/// path bound against the final target. (`create-listen` adds the listen
-/// variant later.)
+/// Companion audio for an article capture: none, an explicit `--audio`
+/// path bound against the final target, or a `--listen` episode
+/// narrated with the configured listen command.
 #[derive(Debug, Clone, Default)]
 pub(super) enum Companion {
     #[default]
     None,
     Explicit(PathBuf),
+    Listen(super::listen::ListenCommand),
 }
 
 pub(super) fn run(matches: &ArgMatches) -> i32 {
@@ -273,7 +292,7 @@ pub(super) fn run(matches: &ArgMatches) -> i32 {
             if let Some(hint) = error.hint {
                 eprintln!("hint: {hint}");
             }
-            1
+            error.exit_code.unwrap_or(1)
         }
     }
 }
@@ -323,7 +342,105 @@ fn clip_pdf(
         .expect("required by clap")
         .clone();
     let options = clip_options(matches)?;
-    capture_article(config, &raw_url, &options, Companion::None)
+    let companion = match matches.get_flag("listen") {
+        true => Companion::Listen(
+            super::listen::require_validated()
+                .map_err(|error| error.into_command_error())
+                .map_err(ClipError::from)?,
+        ),
+        false => Companion::None,
+    };
+    capture_article(config, &raw_url, &options, companion)
+}
+
+/// Map a dedupe refusal to its outcome: clear to proceed, attach the
+/// existing capture when `--listen` is set, or refuse with the
+/// `--listen` attach hint otherwise.
+fn check_dedupe_for_clip(
+    recorded: &[RecordedSource],
+    dedupe_key: &str,
+    planned_target: Option<&Path>,
+    force: bool,
+    companion: &Companion,
+) -> std::result::Result<Option<RecordedSource>, ClipError> {
+    match check_dedupe(recorded, dedupe_key, planned_target, force) {
+        Ok(()) => Ok(None),
+        Err(error) => {
+            if matches!(companion, Companion::Listen(_))
+                && let Some(hit) = super::sources::find_refusing_hit(
+                    recorded,
+                    dedupe_key,
+                    planned_target,
+                    force,
+                )
+            {
+                return Ok(Some(hit));
+            }
+            let hint = match error.hint {
+                Some(hint) => format!(
+                    "add --listen to narrate it and attach the episode to the existing capture ({hint})"
+                ),
+                None => "add --listen to narrate it and attach the episode to the existing capture"
+                    .to_string(),
+            };
+            Err(ClipError {
+                message: error.message,
+                hint: Some(hint),
+                exit_code: None,
+            })
+        }
+    }
+}
+
+/// Keep the workdir and report a failure that happened after the
+/// listen command produced audio.
+fn post_listen_install_error(
+    workdir: &mut ScratchDir,
+    scratch_audio: &Path,
+    message: String,
+    hint: String,
+) -> ClipError {
+    ClipError::from(super::listen::post_listen_error(
+        workdir,
+        scratch_audio,
+        message,
+        hint,
+    ))
+}
+
+/// Recovery hint for a post-listen install failure: rebind the kept
+/// episode explicitly through `create`, which accepts article URLs.
+fn bind_hint_for_clip(cleaned: &str, scratch_audio: &Path) -> String {
+    format!(
+        "bind it with bob highlights create {cleaned} --audio {}",
+        scratch_audio.display()
+    )
+}
+
+/// Attach a `--listen` episode to the capture behind a dedupe hit,
+/// without running the adapter.
+fn run_clip_attach(
+    config: &Config,
+    hit: &RecordedSource,
+    companion: &Companion,
+    cleaned: &str,
+    dry_run: bool,
+) -> std::result::Result<(), ClipError> {
+    let Companion::Listen(command) = companion else {
+        return Err(ClipError::new("internal: attach needs --listen"));
+    };
+    let attach = super::attach::attach_for_dedupe_hit(config, hit)?;
+    let mut scratch = super::ScratchDir::create("attach")?;
+    super::attach::run_attach(
+        config,
+        command,
+        &attach,
+        &format!("source_url: {cleaned}"),
+        cleaned,
+        dry_run,
+        &mut scratch,
+    )?;
+    Ok(())
 }
 
 /// Capture a web article through the clip adapter and install the
@@ -350,9 +467,24 @@ pub(super) fn capture_article(
     // anything expensive. A ref-note hit always refuses. An xlib hit
     // refuses unless --force can still prove the same target: when the
     // stem is only known after capture, that proof waits for the final
-    // plan below.
+    // plan below. With `--listen`, a hit attaches the new episode to
+    // the existing capture instead.
     let recorded = collect_recorded_source_urls(config)?;
-    check_dedupe(&recorded, &web_url.dedupe_key, None, options.force)?;
+    if let Some(hit) = check_dedupe_for_clip(
+        &recorded,
+        &web_url.dedupe_key,
+        None,
+        options.force,
+        &companion,
+    )? {
+        return run_clip_attach(
+            config,
+            &hit,
+            &companion,
+            &web_url.cleaned,
+            options.dry_run,
+        );
+    }
 
     // Fail fast when the target is already known: --output, --name, or a
     // URL slug all plan before the adapter runs.
@@ -373,16 +505,25 @@ pub(super) fn capture_article(
             })
             .transpose()?,
     };
-    if let Some(plan) = &pre_plan {
-        check_dedupe(
+    if let Some(plan) = &pre_plan
+        && let Some(hit) = check_dedupe_for_clip(
             &recorded,
             &web_url.dedupe_key,
             Some(&plan.target),
             options.force,
-        )?;
+            &companion,
+        )?
+    {
+        return run_clip_attach(
+            config,
+            &hit,
+            &companion,
+            &web_url.cleaned,
+            options.dry_run,
+        );
     }
 
-    let workdir = ScratchDir::create("clip")
+    let mut workdir = ScratchDir::create("clip")
         .map_err(|error| ClipError::from(CommandError::new(error.message)))?;
     let html_path = match &options.html {
         None => None,
@@ -484,17 +625,33 @@ pub(super) fn capture_article(
             options.force,
         )?,
     };
-    check_dedupe(
+    if let Some(hit) = check_dedupe_for_clip(
         &recorded,
         &web_url.dedupe_key,
         Some(&plan.target),
         options.force,
-    )?;
+        &companion,
+    )? {
+        return run_clip_attach(
+            config,
+            &hit,
+            &companion,
+            &web_url.cleaned,
+            options.dry_run,
+        );
+    }
+
+    let listen_command = match &companion {
+        Companion::Listen(command) => Some(command.clone()),
+        _ => None,
+    };
 
     // An explicit companion is planned against the final target, once
-    // the stem is known, and installed with the shared sequence.
+    // the stem is known, and installed with the shared sequence. A
+    // listen episode is planned against it too: the library check runs
+    // now, the intake byte check after the run.
     let audio = match &companion {
-        Companion::None => None,
+        Companion::None | Companion::Listen(_) => None,
         Companion::Explicit(path) => super::companion::plan_explicit_audio(
             config,
             &plan,
@@ -502,9 +659,40 @@ pub(super) fn capture_article(
             path,
         )?,
     };
+    let listen_flow = match &listen_command {
+        Some(_) => Some(
+            super::listen::plan_listen_flow(&plan, &workdir, &stem)
+                .map_err(ClipError::from)?,
+        ),
+        None => None,
+    };
+    let listen_display_audio =
+        listen_flow
+            .as_ref()
+            .map(|flow| super::companion::AudioCopyPlan {
+                source: flow.scratch_audio.clone(),
+                dest: flow.dest.clone(),
+                library_dest: flow.library_dest.clone(),
+                origin: "--listen".to_string(),
+                reused: false,
+            });
 
     let styler = Styler::detect();
     if options.dry_run {
+        if let (Some(command), Some(flow)) = (&listen_command, &listen_flow) {
+            println!(
+                "{}",
+                super::listen::would_run_line(
+                    command,
+                    &super::listen::ListenValues {
+                        target: web_url.cleaned.clone(),
+                        pdf: out_pdf.clone(),
+                        audio: flow.scratch_audio.clone(),
+                        title: title.clone(),
+                    },
+                )
+            );
+        }
         print_dry_run(
             &styler,
             &web_url,
@@ -515,7 +703,7 @@ pub(super) fn capture_article(
             &published,
             &captured,
             &response,
-            audio.as_ref(),
+            audio.as_ref().or(listen_display_audio.as_ref()),
         );
         return Ok(());
     }
@@ -524,15 +712,103 @@ pub(super) fn capture_article(
         title: Some(title.clone()),
         author: author.clone(),
     };
-    let created = super::companion::copy_audio_for_install(audio.as_ref())?;
-    let page_count =
-        match stamp_and_install(&out_pdf, &plan.target, &marker, &info) {
-            Ok(page_count) => page_count,
-            Err(error) => {
-                super::companion::cleanup_audio_on_failure(created.as_ref());
-                return Err(ClipError::from(error));
+    // With --listen the episode is produced in scratch first, then
+    // installed after re-verifying the vault; anything else uses the
+    // shared copy-audio/install-PDF sequence.
+    let (_created, page_count) = match (&listen_command, &listen_flow) {
+        (Some(command), Some(flow)) => {
+            let values = super::listen::ListenValues {
+                target: web_url.cleaned.clone(),
+                pdf: out_pdf.clone(),
+                audio: flow.scratch_audio.clone(),
+                title: title.clone(),
+            };
+            super::listen::run_listen(command, &values)
+                .map_err(|error| ClipError::from(error.into_command_error()))?;
+            // The vault may have changed during a long listen: re-run
+            // the collision and dedupe checks before installing.
+            if let Err(error) = super::refuse_target_collisions(
+                &plan.target,
+                &plan.sidecar,
+                &plan.workflow,
+                options.force,
+            ) {
+                return Err(post_listen_install_error(
+                    &mut workdir,
+                    &flow.scratch_audio,
+                    error.to_string(),
+                    bind_hint_for_clip(&web_url.cleaned, &flow.scratch_audio),
+                ));
             }
-        };
+            if let Err(error) = check_dedupe(
+                &recorded,
+                &web_url.dedupe_key,
+                Some(&plan.target),
+                options.force,
+            ) {
+                return Err(post_listen_install_error(
+                    &mut workdir,
+                    &flow.scratch_audio,
+                    error.message.clone(),
+                    bind_hint_for_clip(&web_url.cleaned, &flow.scratch_audio),
+                ));
+            }
+            let created = match super::listen::install_listen_audio(
+                flow,
+                options.force,
+            ) {
+                Ok(created) => created,
+                Err(error) => {
+                    return Err(post_listen_install_error(
+                        &mut workdir,
+                        &flow.scratch_audio,
+                        error.to_string(),
+                        bind_hint_for_clip(
+                            &web_url.cleaned,
+                            &flow.scratch_audio,
+                        ),
+                    ));
+                }
+            };
+            let page_count =
+                match stamp_and_install(&out_pdf, &plan.target, &marker, &info)
+                {
+                    Ok(page_count) => page_count,
+                    Err(error) => {
+                        super::companion::cleanup_audio_on_failure(
+                            created.as_ref(),
+                        );
+                        return Err(post_listen_install_error(
+                            &mut workdir,
+                            &flow.scratch_audio,
+                            error.to_string(),
+                            bind_hint_for_clip(
+                                &web_url.cleaned,
+                                &flow.scratch_audio,
+                            ),
+                        ));
+                    }
+                };
+            (created, page_count)
+        }
+        _ => {
+            let created =
+                super::companion::copy_audio_for_install(audio.as_ref())?;
+            let page_count =
+                match stamp_and_install(&out_pdf, &plan.target, &marker, &info)
+                {
+                    Ok(page_count) => page_count,
+                    Err(error) => {
+                        super::companion::cleanup_audio_on_failure(
+                            created.as_ref(),
+                        );
+                        return Err(ClipError::from(error));
+                    }
+                };
+            (created, page_count)
+        }
+    };
+    let report_audio = audio.as_ref().or(listen_display_audio.as_ref());
     let installed_bytes = fs::metadata(&plan.target)
         .map(|metadata| metadata.len())
         .unwrap_or(0);
@@ -542,7 +818,7 @@ pub(super) fn capture_article(
         styler.success_prefix(false)
     );
     println!("pdf: {}", plan.target.display());
-    if let Some(audio) = &audio {
+    if let Some(audio) = report_audio {
         println!("audio: {} (from {})", audio.dest.display(), audio.origin);
     }
     println!("title: {title}");

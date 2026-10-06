@@ -67,8 +67,129 @@ impl ListenError {
     }
 
     pub(super) fn into_command_error(self) -> CommandError {
+        let code = self.exit_code();
         CommandError::new(format!("{}\nhint: {}", self.message(), self.hint()))
+            .with_exit_code(code)
     }
+
+    /// Process exit code for a listen failure: an interrupted run exits
+    /// 130 like the signal, everything else exits 1.
+    pub(super) fn exit_code(&self) -> i32 {
+        match self {
+            Self::Interrupted { .. } => 130,
+            _ => 1,
+        }
+    }
+}
+
+/// Resolve the configured listen command and validate its template in
+/// one step. `--listen` callers run this before any fetch or render so
+/// an unconfigured or invalid command fails before vault work starts.
+pub(super) fn require_validated(
+) -> std::result::Result<ListenCommand, ListenError> {
+    let command = ListenCommand::require()?;
+    command.validate()?;
+    Ok(command)
+}
+
+/// One planned `--listen` episode: the scratch MP3 the listen command
+/// writes, the intake `<target>.mp3` it is bound to, and the mirrored
+/// library audio that must not already exist.
+#[derive(Debug, Clone)]
+pub(super) struct ListenFlow {
+    pub(super) scratch_audio: PathBuf,
+    pub(super) dest: PathBuf,
+    pub(super) library_dest: Option<PathBuf>,
+}
+
+/// Plan the episode destination for a normal (non-attach) `--listen`
+/// run. Refuses when the mirrored library audio already exists; an
+/// existing intake audio is compared after the listen run, when both
+/// byte strings exist.
+pub(super) fn plan_listen_flow(
+    target_plan: &TargetPlan,
+    scratch: &ScratchDir,
+    stem: &str,
+) -> Result<ListenFlow> {
+    let dest = target_plan.target.with_extension("mp3");
+    let library_dest = match &target_plan.workflow {
+        TargetWorkflow::Intake {
+            library_destination,
+        } => Some(library_destination.with_extension("mp3")),
+        TargetWorkflow::Library | TargetWorkflow::External => None,
+    };
+    if let Some(library_dest) = &library_dest
+        && library_dest.exists()
+    {
+        return Err(CommandError::new(format!(
+            "refusing to create {} because the library destination already exists: {}; remove or rename the archived copy before recreating it (bob highlights scan would refuse to move the new audio over it)",
+            dest.display(),
+            library_dest.display()
+        )));
+    }
+    Ok(ListenFlow {
+        scratch_audio: scratch.path().join(format!("{stem}.mp3")),
+        dest,
+        library_dest,
+    })
+}
+
+/// Install the episode after the listen command produced it: re-check
+/// the mirrored library audio (the vault may have changed during a
+/// long listen), refuse a different existing intake audio unless
+/// `--force` is given, and `atomic_copy` the episode. Identical bytes
+/// count as a reuse and skip the copy.
+pub(super) fn install_listen_audio(
+    flow: &ListenFlow,
+    force: bool,
+) -> Result<Option<PathBuf>> {
+    if let Some(library_dest) = &flow.library_dest
+        && library_dest.exists()
+    {
+        return Err(CommandError::new(format!(
+            "refusing to create {} because the library destination already exists: {}; remove or rename the archived copy before recreating it (bob highlights scan would refuse to move the new audio over it)",
+            flow.dest.display(),
+            library_dest.display()
+        )));
+    }
+    if flow.dest.exists() {
+        if super::companion::files_have_identical_bytes(
+            &flow.scratch_audio,
+            &flow.dest,
+        )? {
+            return Ok(None);
+        }
+        if !force {
+            return Err(CommandError::new(format!(
+                "target audio already exists: {}; pass --force to overwrite it",
+                flow.dest.display()
+            )));
+        }
+    }
+    atomic_copy(&flow.scratch_audio, &flow.dest)?;
+    Ok(Some(flow.dest.clone()))
+}
+
+/// Report a failure that happened after the listen command produced
+/// audio: keep the scratch directory, print the kept audio path, and
+/// return the failure with its recovery hint.
+pub(super) fn post_listen_error(
+    scratch: &mut ScratchDir,
+    scratch_audio: &Path,
+    message: String,
+    hint: String,
+) -> CommandError {
+    scratch.keep();
+    println!("kept: {}", scratch_audio.display());
+    CommandError::new(format!("{message}\nhint: {hint}"))
+}
+
+/// The dry-run line for a listen run that never executes.
+pub(super) fn would_run_line(
+    command: &ListenCommand,
+    values: &ListenValues,
+) -> String {
+    format!("listen: would-run {}", command.expand(values))
 }
 
 impl fmt::Display for ListenError {

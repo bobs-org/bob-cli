@@ -160,7 +160,10 @@ are omitted from the PDF because the source file is not available there.
 Without a companion, the card remains with its `♫` glyph.
 
 `create` now binds audio from the sase-listen library, not only from a file
-that was already beside the PDF. Discovery order, first hit wins:
+that was already beside the PDF, and `create --listen` (or `clip --listen`)
+narrates the target fresh instead of discovering anything. Discovery order,
+first hit wins (skipped entirely under `--listen`, whose episode binds as
+`<stem>.mp3` and reports `(from --listen)`):
 
 1. `--audio PATH` (missing files and non-audio extensions are errors;
    `--no-audio` conflicts with `--audio` and disables discovery).
@@ -180,6 +183,11 @@ The library root is `BOB_HIGHLIGHTS_AUDIO_LIBRARY`, then
 ```yaml
 highlights:
   audio_library: "/data/sase-listen/library"
+  # `bob highlights create --listen` (and `clip --listen`) narrates the
+  # target with this command, which must write MP3 audio to {audio}.
+  # Overridden by BOB_HIGHLIGHTS_LISTEN_COMMAND. See
+  # docs/highlights-create.md for the full contract.
+  listen_command: sase-listen render {target} -e full -o {audio}
 ```
 
 The copy lands beside the PDF target with the source extension lowercased

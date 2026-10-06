@@ -26,7 +26,18 @@ bob highlights clip https://example.com/posts/some-article/ \
 
 # Replay a page saved from a real browser (see below)
 bob highlights clip https://example.com/posts/some-article/ -H saved.html
+
+# Narrate the article and bind the episode as companion audio
+bob highlights clip https://example.com/posts/some-article/ -L
 ```
+
+`-L, --listen` narrates the article with `highlights.listen_command`
+(`BOB_HIGHLIGHTS_LISTEN_COMMAND` overrides; see
+[`highlights-create.md`](highlights-create.md) for the contract) and binds
+the episode beside the PDF as `<stem>.mp3`. The command's output streams
+unchanged, and nothing is written when it fails. When the URL is already
+captured, `--listen` attaches the episode (`xlib/<rel>.mp3`) for `scan` to
+late-pair onto the existing PDF and ref note.
 
 ## The pipeline
 
