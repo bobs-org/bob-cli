@@ -68,7 +68,7 @@ Available commands:
 
 ```bash
 bob highlights clip <URL> [-A|--author NAME] [-b|--bob-dir PATH] [-d|--dry-run] [-f|--force] [-H|--html FILE] [-l|--lib-dir PATH] [-N|--name STEM] [-o|--output PDF] [-P|--parent NOTE] [-p|--published DATE] [-r|--ref-dir PATH] [-s|--status STATUS] [-T|--title TITLE] [-t|--ref-type DIR] [-x|--xlib-dir PATH]
-bob highlights create <md-file> [-a|--audio PATH] [-b|--bob-dir PATH] [-d|--dry-run] [-f|--force] [-i|--include-id] [-l|--lib-dir PATH] [-n|--no-audio] [-o|--output PDF] [-P|--parent NOTE] [-r|--ref-dir PATH] [-s|--status STATUS] [-t|--ref-type DIR] [-x|--xlib-dir PATH]
+bob highlights create <TARGET> [-a|--audio PATH] [-b|--bob-dir PATH] [-d|--dry-run] [-f|--force] [-i|--include-id] [-l|--lib-dir PATH] [-N|--name STEM] [-n|--no-audio] [-o|--output PDF] [-P|--parent NOTE] [-r|--ref-dir PATH] [-s|--status STATUS] [-T|--title TITLE] [-t|--ref-type DIR] [-x|--xlib-dir PATH]
 bob highlights doctor [-b|--bob-dir PATH] [-l|--lib-dir PATH] [-n|--no-hooks] [-r|--ref-dir PATH] [-x|--xlib-dir PATH]
 bob highlights marker <pdf> [-b|--bob-dir PATH] [-l|--lib-dir PATH] [-r|--ref-dir PATH] [-x|--xlib-dir PATH]
 bob highlights scan [-b|--bob-dir PATH] [-d|--dry-run] [-j|--jobs N] [-l|--lib-dir PATH] [-n|--no-hooks] [-r|--ref-dir PATH] [-v|--verbose] [-w|--write-pdfs] [-x|--xlib-dir PATH]
@@ -80,15 +80,17 @@ pinned web-clip adapter and stamps the same page-1 marker plus the web
 provenance fields (`source_url`, `author`, `published`, `captured`); the
 full contract lives in [`highlights-clip.md`](highlights-clip.md).
 
-`create` accepts an existing `.md` file and writes
-`<xlib-dir>/<ref-type>/<basename>.pdf` (by default
-`~/bob/xlib/chat/<basename>.pdf`) unless `-o, --output <PDF>` selects the
-complete output path. `--output` keeps the supplied filename and requires a
-nonempty name with a case-insensitive `.pdf` extension. Relative output values
-are resolved from the current working directory; a leading `~` is expanded the
-same way as other Bob path options. `--output` cannot be combined with an
-explicit `--ref-type`, because `--ref-type` only participates in default target
-derivation.
+`create` accepts a Markdown file, a local PDF, a PDF URL, or an arXiv
+paper URL and writes `<xlib-dir>/<ref-type>/<stem>.pdf` (by default
+`~/bob/xlib/chat/<basename>.pdf` for Markdown and
+`~/bob/xlib/papers/<stem>.pdf` for PDFs) unless `-o, --output <PDF>`
+selects the complete output path. The full target contract lives in
+[`highlights-create.md`](highlights-create.md). `--output` keeps the
+supplied filename and requires a nonempty name with a case-insensitive
+`.pdf` extension. Relative output values are resolved from the current
+working directory; a leading `~` is expanded the same way as other Bob path
+options. `--output` cannot be combined with `--ref-type` or `--name`,
+because those only participate in default target derivation.
 
 When `--output` is omitted, the next `scan` moves the default intake PDF to
 `<lib-dir>/<ref-type>/<basename>.pdf`, refusing to create when that archived

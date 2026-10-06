@@ -201,6 +201,23 @@ pub(super) fn doctor_vault(config: &Config, no_hooks: bool) -> Result<()> {
         }
     }
 
+    match super::clip_adapter::find_on_path("curl").or_else(|| {
+        std::env::var_os(super::fetch::ENV_CURL_OVERRIDE)
+            .filter(|value| !value.is_empty())
+            .map(std::path::PathBuf::from)
+    }) {
+        Some(path) => {
+            println!("curl: available ({})", path.display());
+        }
+        None => {
+            println!("curl: warn (command not found)");
+            warnings.push(
+                "curl command not found; PDF URL and arXiv targets are unavailable"
+                    .to_string(),
+            );
+        }
+    }
+
     append_web_clip_doctor_rows(&mut warnings);
     append_listen_doctor_row(&mut warnings);
 

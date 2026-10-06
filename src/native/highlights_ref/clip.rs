@@ -6,13 +6,10 @@
 //! installs it into the Highlights intake. `scan` writes the ref note.
 
 use std::{
-    env,
     ffi::OsString,
     fs,
     io::{IsTerminal, Read},
     path::{Path, PathBuf},
-    process,
-    time::{SystemTime, UNIX_EPOCH},
 };
 
 use clap::{Arg, ArgAction, ArgMatches, Command as ClapCommand};
@@ -21,7 +18,7 @@ use super::{
     bob_dir_arg, compose_marker, current_local_date, lib_dir_arg,
     plan_default_target, plan_exact_output, print_next_step, ref_dir_arg,
     stamp_and_install, validate_ref_type, xlib_dir_arg, CommandError, Config,
-    PdfInfo, TargetPlan, TargetWorkflow,
+    PdfInfo, ScratchDir, TargetPlan, TargetWorkflow,
 };
 use super::{clip_adapter::*, clip_url::*, pdf_meta::*, sources::*};
 use crate::native::style::Styler;
@@ -29,7 +26,6 @@ use crate::native::style::Styler;
 const DEFAULT_PARENT: &str = "obsidian_ref";
 const DEFAULT_REF_TYPE: &str = "blogs";
 const DEFAULT_STATUS: &str = "ready";
-const ENV_KEEP_WORKDIR: &str = "BOB_WEB_CLIP_KEEP_WORKDIR";
 
 /// A clip failure: the message goes after `error:`, the hint after `hint:`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -322,7 +318,8 @@ fn clip_pdf(
         )?;
     }
 
-    let workdir = ClipWorkdir::create()?;
+    let workdir = ScratchDir::create("clip")
+        .map_err(|error| ClipError::from(CommandError::new(error.message)))?;
     let html_path = match &options.html {
         None => None,
         Some(path) if path == "-" => {
@@ -495,62 +492,6 @@ fn plan_exact_output_guarded(
     Ok(plan)
 }
 
-/// A 0700 scratch directory, removed on drop unless kept for debugging.
-struct ClipWorkdir {
-    path: PathBuf,
-    keep: bool,
-}
-
-impl ClipWorkdir {
-    fn create() -> std::result::Result<Self, ClipError> {
-        let base = env::var_os("TMPDIR")
-            .map(PathBuf::from)
-            .filter(|base| base.as_os_str().as_encoded_bytes().len() <= 40)
-            .unwrap_or_else(|| PathBuf::from("/tmp"));
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|duration| duration.as_nanos())
-            .unwrap_or(0);
-        let path = base.join(format!("bob-clip-{}-{nanos}", process::id()));
-        fs::create_dir_all(&path).map_err(|error| {
-            ClipError::new(format!(
-                "create workdir {}: {error}",
-                path.display()
-            ))
-        })?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&path, fs::Permissions::from_mode(0o700))
-                .map_err(|error| {
-                    ClipError::new(format!(
-                        "secure workdir {}: {error}",
-                        path.display()
-                    ))
-                })?;
-        }
-        Ok(Self {
-            path,
-            keep: env::var_os(ENV_KEEP_WORKDIR).as_deref()
-                == Some(std::ffi::OsStr::new("1")),
-        })
-    }
-
-    fn path(&self) -> &Path {
-        &self.path
-    }
-}
-
-impl Drop for ClipWorkdir {
-    fn drop(&mut self) {
-        if self.keep {
-            eprintln!("workdir: {}", self.path.display());
-        } else {
-            let _ = fs::remove_dir_all(&self.path);
-        }
-    }
-}
-
 /// One-line `capture:` summary for the success and dry-run reports.
 fn describe_capture(response: &CaptureSuccess) -> String {
     let browser = response
@@ -589,7 +530,7 @@ fn mode_label(mode: &str) -> &str {
     }
 }
 
-fn format_bytes(bytes: u64) -> String {
+pub(super) fn format_bytes(bytes: u64) -> String {
     if bytes >= 1_000_000 {
         format!("{:.1} MB", bytes as f64 / 1_000_000.0)
     } else if bytes >= 1_000 {

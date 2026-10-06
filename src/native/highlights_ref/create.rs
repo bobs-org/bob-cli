@@ -10,15 +10,19 @@ use clap::{Arg, ArgAction, ArgMatches, Command as ClapCommand};
 use sha2::Digest;
 
 use super::{
-    atomic_copy, bob_dir_arg, compose_marker, dry_run_arg, lib_dir_arg,
-    plan_default_target, plan_exact_output, print_next_step, ref_dir_arg,
-    stamp_and_install, xlib_dir_arg, CommandError, Config, PdfInfo, Result,
-    TargetPlan, TargetWorkflow,
+    bob_dir_arg, compose_marker, dry_run_arg, lib_dir_arg, plan_default_target,
+    plan_exact_output, print_next_step, ref_dir_arg, stamp_and_install,
+    validate_ref_type, xlib_dir_arg, AudioCopyPlan, CommandError, Config,
+    PdfInfo, Result, TargetPlan, TargetWorkflow,
 };
+use super::{companion as companion_mod, pdf_target as pdf_target_mod};
+use super::{sources as sources_mod, target as target_mod};
 use crate::native::style::Styler;
 
 const DEFAULT_PARENT: &str = "obsidian_ref";
-const DEFAULT_REF_TYPE: &str = "chat";
+const DEFAULT_MARKDOWN_REF_TYPE: &str = "chat";
+const DEFAULT_PDF_REF_TYPE: &str = "papers";
+const DEFAULT_ARTICLE_REF_TYPE: &str = "blogs";
 const DEFAULT_STATUS: &str = "ready";
 const ENV_PANDOC_COMMAND: &str = "BOB_PANDOC_COMMAND";
 const ENV_AUDIO_LINK_TEMPLATE: &str = "BOB_HIGHLIGHTS_AUDIO_LINK_TEMPLATE";
@@ -150,32 +154,32 @@ struct CreateOptions {
     dry_run: bool,
     force: bool,
     include_id: bool,
+    name: Option<String>,
     no_audio: bool,
     output: Option<PathBuf>,
     parent: String,
-    ref_type: String,
+    ref_type: Option<String>,
     status: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct AudioCopyPlan {
-    source: PathBuf,
-    dest: PathBuf,
-    library_dest: Option<PathBuf>,
-    origin: String,
-    reused: bool,
+    title: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CreatePlan {
-    source: PathBuf,
+    source: String,
+    source_kind: &'static str,
     target: PathBuf,
     sidecar: PathBuf,
     workflow: TargetWorkflow,
     title: String,
+    title_source: &'static str,
+    author: Option<String>,
+    published: Option<String>,
+    source_url: Option<String>,
+    captured: Option<String>,
     id: Option<String>,
     marker: String,
     audio: Option<AudioCopyPlan>,
+    page_count_hint: Option<usize>,
 }
 
 impl CreatePlan {
@@ -190,13 +194,13 @@ impl CreatePlan {
 
 pub(crate) fn command() -> ClapCommand {
     ClapCommand::new("create")
-        .about("Render Markdown as a Highlights-ready PDF")
+        .about("Create a Highlights-ready PDF from Markdown, a PDF, or a URL")
         .arg(
-            Arg::new("md-file")
-                .value_name("MD_FILE")
+            Arg::new("target")
+                .value_name("TARGET")
                 .required(true)
                 .value_parser(clap::builder::OsStringValueParser::new())
-                .help("Markdown file to render"),
+                .help("Markdown file, PDF file, PDF URL, arXiv paper URL, or web article URL"),
         )
         .arg(
             Arg::new("audio")
@@ -221,9 +225,16 @@ pub(crate) fn command() -> ClapCommand {
                 .long("include-id")
                 .short('i')
                 .action(ArgAction::SetTrue)
-                .help("Embed the Markdown filename without .md as marker id"),
+                .help("Embed the output filename stem as the marker id (URL targets always embed it)"),
         )
         .arg(lib_dir_arg())
+        .arg(
+            Arg::new("name")
+                .long("name")
+                .short('N')
+                .value_name("STEM")
+                .help("Output filename stem [default: derived from TARGET]"),
+        )
         .arg(
             Arg::new("no-audio")
                 .long("no-audio")
@@ -239,6 +250,7 @@ pub(crate) fn command() -> ClapCommand {
                 .value_name("PDF")
                 .value_parser(clap::builder::OsStringValueParser::new())
                 .conflicts_with("ref-type")
+                .conflicts_with("name")
                 .help("Complete path for the generated PDF, including the .pdf filename"),
         )
         .arg(
@@ -267,53 +279,81 @@ pub(crate) fn command() -> ClapCommand {
                 .help("Lifecycle status embedded in the marker"),
         )
         .arg(
+            Arg::new("title")
+                .long("title")
+                .short('T')
+                .value_name("TITLE")
+                .help("Override the derived title"),
+        )
+        .arg(
             Arg::new("ref-type")
                 .long("ref-type")
                 .short('t')
                 .value_name("DIR")
-                .default_value(DEFAULT_REF_TYPE)
                 .conflicts_with("output")
-                .help("Single library subdirectory for the generated PDF"),
+                .help("Single library subdirectory [default: chat for Markdown, papers for PDFs, blogs for web articles]"),
         )
         .arg(xlib_dir_arg())
         .after_help(
-            "Examples:\n  bob highlights create report.md\n\nRenders a hyperlinked table of contents and PDF bookmarks with pandoc and embeds the page-1 marker used by `bob highlights scan`. By default the PDF is written to `<xlib-dir>/<ref-type>/<markdown-stem>.pdf`. `-o, --output` selects that complete path instead, including the filename; it requires a `.pdf` extension, expands a leading `~`, and resolves relative paths from the current directory. `--output` cannot be combined with `--ref-type` because `--ref-type` only participates in default target derivation. Scan moves intake PDFs into the library before writing reference notes. A PDF written directly into the library is still found by `bob highlights scan`. A PDF written outside the library and intake directories is not discovered by recursive scan; sync it with `bob highlights sync <PDF>`. A `<div class=\"listen\">` card is rendered as a callout with a Play link when companion audio is bound. Create discovers audio as `--audio PATH`, then frontmatter `audio.episode_id` in the sase-listen library, then a sibling `<stem>_narration.md` hash matched against library manifests (`BOB_HIGHLIGHTS_AUDIO_LIBRARY`, then `highlights.audio_library`, then `$XDG_DATA_HOME/sase-listen/library`, then `~/.local/share/sase-listen/library`); `--no-audio` skips discovery. The copy lands beside the PDF with the source extension lowercased before the PDF is installed, reuses identical bytes, refuses different bytes without `--force`, and refuses when the mirrored library audio already exists.",
+            "Targets:\n  Markdown file (.md) -> rendered with pandoc (default ref type chat)\n  Local PDF file (.pdf or %PDF- magic) -> stamped as-is (default ref type papers)\n  PDF URL (Content-Type PDF or sniffed %PDF-) -> downloaded, stamped as-is (default ref type papers)\n  arXiv paper URL (abs/html/pdf) -> PDF fetched from arxiv.org/pdf/<id>, metadata from the API (default ref type papers)\n  Web article URL (HTML 2xx or 403/429/503) -> captured by `bob highlights clip <URL>` (create support lands next)\n\nAudio:\n  Create discovers audio as `--audio PATH`, then frontmatter `audio.episode_id` in the sase-listen library (Markdown only), then a sibling `<stem>_narration.md` hash matched against library manifests (`BOB_HIGHLIGHTS_AUDIO_LIBRARY`, then `highlights.audio_library`, then `$XDG_DATA_HOME/sase-listen/library`, then `~/.local/share/sase-listen/library`); `--no-audio` skips discovery. The copy lands beside the PDF with the source extension lowercased before the PDF is installed, reuses identical bytes, refuses different bytes without `--force`, and refuses when the mirrored library audio already exists. An existing companion beside the target is reused on every route.\n\nExamples:\n  bob highlights create report.md\n  bob highlights create paper.pdf -t papers\n  bob highlights create https://example.com/paper.pdf -N my_paper\n  bob highlights create https://arxiv.org/abs/1706.03762 -d\n\nRenders a hyperlinked table of contents and PDF bookmarks with pandoc and embeds the page-1 marker used by `bob highlights scan`. By default the PDF is written to `<xlib-dir>/<ref-type>/<stem>.pdf`. `-o, --output` selects that complete path instead, including the filename; it requires a `.pdf` extension, expands a leading `~`, and resolves relative paths from the current directory. `--output` cannot be combined with `--ref-type` or `--name` because those only participate in default target derivation. `-N, --name` sets the output filename stem and, with `-i`, the marker id. `-T, --title` overrides the derived title. Scan moves intake PDFs into the library before writing reference notes. A PDF written directly into the library is still found by `bob highlights scan`. A PDF written outside the library and intake directories is not discovered by recursive scan; sync it with `bob highlights sync <PDF>`. A `<div class=\"listen\">` card is rendered as a callout with a Play link when companion audio is bound.",
         )
 }
 
 pub(super) fn run(matches: &ArgMatches) -> i32 {
     let config = Config::from_matches(matches);
-    let source = PathBuf::from(
-        matches
-            .get_one::<OsString>("md-file")
-            .expect("required by clap"),
-    );
+    let target_os = matches
+        .get_one::<OsString>("target")
+        .expect("required by clap")
+        .clone();
+    // Validate -N early for a clean error even though the planner
+    // validates again.
+    if let Some(name) = matches.get_one::<String>("name") {
+        if let Err(error) = super::clip_url::validate_name(name) {
+            let styler = Styler::detect();
+            eprintln!("bob highlights: {}: {error}", styler.red("error"));
+            return 1;
+        }
+    }
+    let ref_type = matches.get_one::<String>("ref-type").cloned();
+    if let Some(ref_type) = &ref_type {
+        if let Err(error) = validate_ref_type(ref_type) {
+            let styler = Styler::detect();
+            eprintln!("bob highlights: {}: {error}", styler.red("error"));
+            return 1;
+        }
+    }
     let options = CreateOptions {
         audio: matches.get_one::<OsString>("audio").map(PathBuf::from),
         dry_run: matches.get_flag("dry-run"),
         force: matches.get_flag("force"),
         include_id: matches.get_flag("include-id"),
+        name: matches.get_one::<String>("name").cloned(),
         no_audio: matches.get_flag("no-audio"),
         output: matches.get_one::<OsString>("output").map(PathBuf::from),
         parent: matches
             .get_one::<String>("parent")
             .expect("defaulted by clap")
             .clone(),
-        ref_type: matches
-            .get_one::<String>("ref-type")
-            .expect("defaulted by clap")
-            .clone(),
+        ref_type,
         status: matches
             .get_one::<String>("status")
             .expect("defaulted by clap")
             .clone(),
+        title: matches.get_one::<String>("title").cloned(),
     };
 
-    match create_pdf(&config, &source, &options) {
+    match create_pdf(&config, &target_os, &options) {
         Ok(()) => 0,
         Err(error) => {
             let styler = Styler::detect();
-            eprintln!("bob highlights: {}: {error}", styler.red("error"));
+            // Errors may carry a `hint:` second line.
+            let message = error.message;
+            if let Some((first, hint)) = message.split_once("\nhint: ") {
+                eprintln!("bob highlights: {}: {first}", styler.red("error"));
+                eprintln!("hint: {hint}");
+            } else {
+                eprintln!("bob highlights: {}: {message}", styler.red("error"));
+            }
             1
         }
     }
@@ -335,18 +375,164 @@ pub(super) fn pandoc_command() -> Option<OsString> {
 
 fn create_pdf(
     config: &Config,
+    target_os: &OsString,
+    options: &CreateOptions,
+) -> Result<()> {
+    let scratch = super::ScratchDir::create("create")?;
+    let target_lossy = target_os.to_string_lossy().into_owned();
+    let target_raw = target_lossy.as_str();
+    // Syntactic classification first; URL dedupe runs before any fetch.
+    if target_mod::looks_like_url(target_raw) {
+        let (url, arxiv) = target_mod::resolve_url_syntactic(target_raw)?;
+        let recorded = sources_mod::collect_recorded_source_urls(config)
+            .map_err(|error| CommandError::new(error.message.clone()))?;
+        let dedupe_key = match &arxiv {
+            Some(paper) => paper.dedupe_key(),
+            None => url.dedupe_key.clone(),
+        };
+        check_dedupe_with_listen_hint(
+            &recorded,
+            &dedupe_key,
+            None,
+            options.force,
+        )?;
+        if let Some(paper) = arxiv {
+            return create_arxiv_route(
+                config, paper, url, &scratch, options, &recorded,
+            );
+        }
+        match target_mod::fetch_and_route(url.clone(), &scratch)? {
+            target_mod::CreateSource::PdfUrl {
+                url, downloaded, ..
+            } => {
+                return create_pdf_url_route(
+                    config, url, downloaded, &scratch, options, &recorded,
+                );
+            }
+            target_mod::CreateSource::WebArticle { url } => {
+                let _ = url;
+                return Err(CommandError::new(
+                    "web article URLs are captured by bob highlights clip <URL> (create support lands next)",
+                ));
+            }
+            _ => {
+                return Err(CommandError::new(
+                    "unexpected target classification",
+                ));
+            }
+        }
+    }
+    let local_path = Path::new(target_os);
+    match target_mod::resolve_local_target(local_path)? {
+        target_mod::CreateSource::Markdown(path) => {
+            create_markdown_route(config, &path, &scratch, options)
+        }
+        target_mod::CreateSource::LocalPdf(path) => {
+            create_local_pdf_route(config, &path, &scratch, options)
+        }
+        _ => Err(CommandError::new("unexpected target classification")),
+    }
+}
+
+fn check_dedupe_with_listen_hint(
+    recorded: &[sources_mod::RecordedSource],
+    dedupe_key: &str,
+    planned_target: Option<&Path>,
+    force: bool,
+) -> Result<()> {
+    sources_mod::check_dedupe(recorded, dedupe_key, planned_target, force)
+        .map_err(|error| {
+            let mut message = error.message.clone();
+            message.push_str(
+                "\nhint: add --listen to narrate it and attach the episode to the existing capture",
+            );
+            if let Some(hint) = error.hint.clone() {
+                message.push_str(&format!(" ({hint})"));
+            }
+            CommandError::new(message)
+        })
+}
+
+fn default_ref_type_for_kind(
+    kind: &str,
+    explicit: Option<&str>,
+) -> Result<String> {
+    if let Some(ref_type) = explicit {
+        validate_ref_type(ref_type)?;
+        return Ok(ref_type.to_string());
+    }
+    Ok(match kind {
+        "markdown" => DEFAULT_MARKDOWN_REF_TYPE.to_string(),
+        "pdf" | "arxiv" => DEFAULT_PDF_REF_TYPE.to_string(),
+        "article" => DEFAULT_ARTICLE_REF_TYPE.to_string(),
+        _ => DEFAULT_MARKDOWN_REF_TYPE.to_string(),
+    })
+}
+
+fn plan_target_for(
+    config: &Config,
+    stem: &str,
+    ref_type: &str,
+    output: Option<&PathBuf>,
+    force: bool,
+) -> Result<TargetPlan> {
+    match output {
+        Some(output) => plan_exact_output(config, output, force),
+        None => plan_default_target(
+            config,
+            std::ffi::OsStr::new(stem),
+            ref_type,
+            force,
+        ),
+    }
+}
+
+#[allow(dead_code)]
+fn plan_create_legacy_markdown_only(
+    config: &Config,
+    source: &Path,
+    options: &CreateOptions,
+) -> Result<CreatePlan> {
+    // Kept for reference; the Markdown route now lives in
+    // create_markdown_route. This shim preserves the old planner for
+    // unit tests that call plan_create directly.
+    let _ = (config, source, options);
+    Err(CommandError::new("internal: legacy planner retired"))
+}
+
+#[allow(dead_code)]
+fn create_pdf_legacy_shim(
+    config: &Config,
     source: &Path,
     options: &CreateOptions,
 ) -> Result<()> {
-    let plan = plan_create(config, source, options)?;
-    let styler = Styler::detect();
+    let _ = (config, source, options);
+    Err(CommandError::new("internal: legacy path retired"))
+}
 
+#[allow(dead_code)]
+fn dispatch_create_pdf_after_scratch(
+    config: &Config,
+    source: &Path,
+    options: &CreateOptions,
+) -> Result<()> {
+    let _ = (config, source, options);
+    Err(CommandError::new("internal: legacy path retired"))
+}
+
+fn create_markdown_route(
+    config: &Config,
+    source: &Path,
+    scratch: &super::ScratchDir,
+    options: &CreateOptions,
+) -> Result<()> {
+    let plan = plan_markdown(config, source, options)?;
+    let styler = Styler::detect();
     if options.dry_run {
         print_plan(&plan, options, &styler);
         println!("writes: none");
         return Ok(());
     }
-
     let pandoc = pandoc_command().ok_or_else(|| {
         CommandError::new(format!(
             "pandoc command not found; install pandoc or set {ENV_PANDOC_COMMAND}"
@@ -364,16 +550,14 @@ fn create_pdf(
             parent.display()
         ))
     })?;
-
-    let render_path = render_temp_path(&plan.target)?;
-    let filter_path = code_break_filter_path();
+    let render_path = scratch.path().join("render.pdf");
+    let filter_path = scratch.path().join("filter.lua");
     fs::write(&filter_path, PANDOC_CODE_BREAK_FILTER).map_err(|error| {
         CommandError::new(format!(
             "write pandoc filter {}: {error}",
             filter_path.display()
         ))
     })?;
-    let _ = fs::remove_file(&render_path);
     let audio_uri = play_uri(config, &plan)?;
     let render_result = render_temp_pdf(
         &pandoc,
@@ -382,20 +566,14 @@ fn create_pdf(
         &filter_path,
         audio_uri.as_deref(),
     );
-    let mut audio_created: Option<PathBuf> = None;
-    if render_result.is_ok()
-        && let Some(audio) = &plan.audio
-        && !audio.reused
-    {
-        match atomic_copy(&audio.source, &audio.dest) {
-            Ok(()) => audio_created = Some(audio.dest.clone()),
-            Err(error) => {
-                let _ = fs::remove_file(&render_path);
-                let _ = fs::remove_file(&filter_path);
-                return Err(error);
-            }
+    let audio_created = if render_result.is_ok() {
+        match companion_mod::copy_audio_for_install(plan.audio.as_ref()) {
+            Ok(created) => created,
+            Err(error) => return Err(error),
         }
-    }
+    } else {
+        None
+    };
     let install_result = render_result.and_then(|()| {
         stamp_and_install(
             &render_path,
@@ -404,22 +582,18 @@ fn create_pdf(
             &PdfInfo::default(),
         )
     });
-    let _ = fs::remove_file(&render_path);
-    let _ = fs::remove_file(&filter_path);
     let page_count = match install_result {
         Ok(page_count) => page_count,
         Err(error) => {
-            if let Some(created) = audio_created {
-                let _ = fs::remove_file(created);
-            }
+            companion_mod::cleanup_audio_on_failure(audio_created.as_ref());
             return Err(error);
         }
     };
-
     println!(
         "{} created Highlights-ready PDF",
         styler.success_prefix(false)
     );
+    println!("source: {}", plan.source);
     println!("pdf: {}", plan.target.display());
     if let Some(audio) = &plan.audio {
         println!("audio: {} (from {})", audio.dest.display(), audio.origin);
@@ -440,29 +614,502 @@ fn create_pdf(
     Ok(())
 }
 
+fn create_local_pdf_route(
+    config: &Config,
+    source: &Path,
+    scratch: &super::ScratchDir,
+    options: &CreateOptions,
+) -> Result<()> {
+    pdf_target_mod::check_local_pdf_identity(config, source)?;
+    let canonical = fs::canonicalize(source).map_err(|error| {
+        CommandError::new(format!(
+            "resolve PDF file {}: {error}",
+            source.display()
+        ))
+    })?;
+    let pdf_plan = pdf_target_mod::plan_local_pdf(
+        &canonical,
+        options.name.as_deref(),
+        options.title.as_deref(),
+    )?;
+    let ref_type =
+        default_ref_type_for_kind("pdf", options.ref_type.as_deref())?;
+    let target_plan = plan_target_for(
+        config,
+        &pdf_plan.stem,
+        &ref_type,
+        options.output.as_ref(),
+        options.force,
+    )?;
+    let audio =
+        plan_pdf_audio(config, &target_plan, options, Some(&canonical))?;
+    let id = if options.include_id || options.name.is_some() {
+        Some(pdf_plan.stem.clone())
+    } else {
+        None
+    };
+    let marker = pdf_target_mod::compose_pdf_marker(
+        &options.status,
+        &options.parent,
+        &pdf_plan,
+        id.as_deref(),
+    )?;
+    let info = PdfInfo {
+        title: Some(pdf_plan.title.clone()),
+        author: pdf_plan.author.clone(),
+    };
+    let styler = Styler::detect();
+    if options.dry_run {
+        print_pdf_dry_run(
+            config,
+            &styler,
+            &canonical.display().to_string(),
+            "PDF",
+            &target_plan,
+            &pdf_plan,
+            id.as_deref(),
+            &marker,
+            audio.as_ref(),
+            options,
+        );
+        return Ok(());
+    }
+    let (stamped, page_count) = pdf_target_mod::stamp_pdf_to_scratch(
+        &canonical, scratch, &marker, &info,
+    )?;
+    let installed = pdf_target_mod::install_stamped_pdf(
+        &stamped,
+        &target_plan.target,
+        audio.as_ref(),
+        page_count,
+    )?;
+    let bytes = fs::metadata(&target_plan.target)
+        .map(|m| m.len())
+        .unwrap_or(0);
+    println!(
+        "{} created Highlights-ready PDF",
+        styler.success_prefix(false)
+    );
+    println!("source: {} (PDF)", canonical.display());
+    println!("pdf: {}", target_plan.target.display());
+    if let Some(audio) = &audio {
+        println!("audio: {} (from {})", audio.dest.display(), audio.origin);
+    } else {
+        println!("audio: none");
+    }
+    println!("title: {}", pdf_plan.title);
+    if let Some(author) = &pdf_plan.author {
+        println!("author: {author}");
+    }
+    println!("status: {}", options.status);
+    println!("parent: {}", options.parent);
+    if let Some(id) = &id {
+        println!("id: {id}");
+    }
+    println!(
+        "pages: {installed} · size: {}",
+        super::clip::format_bytes(bytes)
+    );
+    print_next_step(&target_plan);
+    Ok(())
+}
+
+fn create_pdf_url_route(
+    config: &Config,
+    url: super::clip_url::WebUrl,
+    downloaded: PathBuf,
+    scratch: &super::ScratchDir,
+    options: &CreateOptions,
+    recorded: &[sources_mod::RecordedSource],
+) -> Result<()> {
+    let captured = super::current_local_date();
+    let pdf_plan = pdf_target_mod::plan_pdf_url(
+        &url,
+        &downloaded,
+        options.name.as_deref(),
+        options.title.as_deref(),
+        &captured,
+    )?;
+    let ref_type =
+        default_ref_type_for_kind("pdf", options.ref_type.as_deref())?;
+    let target_plan = plan_target_for(
+        config,
+        &pdf_plan.stem,
+        &ref_type,
+        options.output.as_ref(),
+        options.force,
+    )?;
+    check_dedupe_with_listen_hint(
+        recorded,
+        &url.dedupe_key,
+        Some(&target_plan.target),
+        options.force,
+    )?;
+    let audio = plan_pdf_audio(config, &target_plan, options, None)?;
+    let id = Some(pdf_plan.stem.clone());
+    let marker = pdf_target_mod::compose_pdf_marker(
+        &options.status,
+        &options.parent,
+        &pdf_plan,
+        id.as_deref(),
+    )?;
+    let info = PdfInfo {
+        title: Some(pdf_plan.title.clone()),
+        author: pdf_plan.author.clone(),
+    };
+    let styler = Styler::detect();
+    if options.dry_run {
+        print_pdf_dry_run(
+            config,
+            &styler,
+            &url.cleaned,
+            "PDF",
+            &target_plan,
+            &pdf_plan,
+            id.as_deref(),
+            &marker,
+            audio.as_ref(),
+            options,
+        );
+        return Ok(());
+    }
+    let (stamped, page_count) = pdf_target_mod::stamp_pdf_to_scratch(
+        &downloaded,
+        scratch,
+        &marker,
+        &info,
+    )?;
+    let installed = pdf_target_mod::install_stamped_pdf(
+        &stamped,
+        &target_plan.target,
+        audio.as_ref(),
+        page_count,
+    )?;
+    let bytes = fs::metadata(&target_plan.target)
+        .map(|m| m.len())
+        .unwrap_or(0);
+    println!(
+        "{} created Highlights-ready PDF",
+        styler.success_prefix(false)
+    );
+    println!("source: {} (PDF)", url.cleaned);
+    println!("pdf: {}", target_plan.target.display());
+    if let Some(audio) = &audio {
+        println!("audio: {} (from {})", audio.dest.display(), audio.origin);
+    } else {
+        println!("audio: none");
+    }
+    println!("title: {}", pdf_plan.title);
+    if let Some(author) = &pdf_plan.author {
+        println!("author: {author}");
+    }
+    println!("captured: {captured}");
+    println!("status: {}", options.status);
+    println!("parent: {}", options.parent);
+    println!("id: {}", pdf_plan.stem);
+    println!(
+        "pages: {installed} · size: {}",
+        super::clip::format_bytes(bytes)
+    );
+    print_next_step(&target_plan);
+    Ok(())
+}
+
+fn create_arxiv_route(
+    config: &Config,
+    paper: super::arxiv::ArxivPaper,
+    url: super::clip_url::WebUrl,
+    scratch: &super::ScratchDir,
+    options: &CreateOptions,
+    recorded: &[sources_mod::RecordedSource],
+) -> Result<()> {
+    let captured = super::current_local_date();
+    let (metadata, warning) =
+        super::arxiv::fetch_metadata(&paper, scratch.path());
+    if let Some(warning) = warning {
+        eprintln!("warning: {warning}");
+    }
+    let dest = scratch.path().join("arxiv.pdf");
+    let pdf_url = paper.pdf_url();
+    super::fetch::fetch_url(&pdf_url, &dest, 30).map_err(|error| {
+        CommandError::new(format!(
+            "fetch arXiv PDF {pdf_url}: {}",
+            error.message()
+        ))
+    })?;
+    let pdf_plan = pdf_target_mod::plan_arxiv(
+        &paper,
+        options.name.as_deref(),
+        options.title.as_deref(),
+        metadata.as_ref(),
+        &dest,
+        &captured,
+    )?;
+    let ref_type =
+        default_ref_type_for_kind("pdf", options.ref_type.as_deref())?;
+    let target_plan = plan_target_for(
+        config,
+        &pdf_plan.stem,
+        &ref_type,
+        options.output.as_ref(),
+        options.force,
+    )?;
+    // Post-capture dedupe with the final target (stem known only now).
+    let key = paper.dedupe_key();
+    // Also check the user's URL spelling key (same arXiv key).
+    check_dedupe_with_listen_hint(
+        recorded,
+        &key,
+        Some(&target_plan.target),
+        options.force,
+    )?;
+    check_dedupe_with_listen_hint(
+        recorded,
+        &url.dedupe_key,
+        Some(&target_plan.target),
+        options.force,
+    )?;
+    let audio = plan_pdf_audio(config, &target_plan, options, None)?;
+    let id = Some(pdf_plan.stem.clone());
+    let marker = pdf_target_mod::compose_pdf_marker(
+        &options.status,
+        &options.parent,
+        &pdf_plan,
+        id.as_deref(),
+    )?;
+    let info = PdfInfo {
+        title: Some(pdf_plan.title.clone()),
+        author: pdf_plan.author.clone(),
+    };
+    let styler = Styler::detect();
+    if options.dry_run {
+        print_pdf_dry_run(
+            config,
+            &styler,
+            &paper.abs_url(),
+            &format!("arXiv {}", paper.full_id()),
+            &target_plan,
+            &pdf_plan,
+            id.as_deref(),
+            &marker,
+            audio.as_ref(),
+            options,
+        );
+        return Ok(());
+    }
+    let (stamped, page_count) =
+        pdf_target_mod::stamp_pdf_to_scratch(&dest, scratch, &marker, &info)?;
+    let installed = pdf_target_mod::install_stamped_pdf(
+        &stamped,
+        &target_plan.target,
+        audio.as_ref(),
+        page_count,
+    )?;
+    let bytes = fs::metadata(&target_plan.target)
+        .map(|m| m.len())
+        .unwrap_or(0);
+    println!(
+        "{} created Highlights-ready PDF",
+        styler.success_prefix(false)
+    );
+    println!("source: {} (arXiv {})", paper.abs_url(), paper.full_id());
+    println!("pdf: {}", target_plan.target.display());
+    if let Some(audio) = &audio {
+        println!("audio: {} (from {})", audio.dest.display(), audio.origin);
+    } else {
+        println!("audio: none");
+    }
+    println!("title: {}", pdf_plan.title);
+    if let Some(author) = &pdf_plan.author {
+        println!("author: {author}");
+    }
+    if let Some(published) = &pdf_plan.published {
+        println!("published: {published}");
+    }
+    println!("captured: {captured}");
+    println!("status: {}", options.status);
+    println!("parent: {}", options.parent);
+    println!("id: {}", pdf_plan.stem);
+    println!(
+        "pages: {installed} · size: {}",
+        super::clip::format_bytes(bytes)
+    );
+    print_next_step(&target_plan);
+    Ok(())
+}
+
+fn plan_pdf_audio(
+    config: &Config,
+    target_plan: &TargetPlan,
+    options: &CreateOptions,
+    extra_beside: Option<&Path>,
+) -> Result<Option<AudioCopyPlan>> {
+    if options.no_audio {
+        if options.audio.is_some() {
+            return Err(CommandError::new(
+                "--no-audio cannot be used with --audio",
+            ));
+        }
+        return Ok(None);
+    }
+    if let Some(explicit) = &options.audio {
+        return companion_mod::plan_explicit_audio(
+            config,
+            target_plan,
+            options.force,
+            explicit,
+        );
+    }
+    companion_mod::plan_reused_companion(target_plan, extra_beside)
+}
+
+fn print_pdf_dry_run(
+    config: &Config,
+    styler: &Styler,
+    source_display: &str,
+    source_kind: &str,
+    target_plan: &TargetPlan,
+    pdf_plan: &pdf_target_mod::PdfPlan,
+    id: Option<&str>,
+    marker: &str,
+    audio: Option<&AudioCopyPlan>,
+    options: &CreateOptions,
+) {
+    let _ = config;
+    println!(
+        "{} would create Highlights-ready PDF",
+        styler.success_prefix(true)
+    );
+    if source_kind.starts_with("arXiv") {
+        println!("source: {source_display} ({source_kind})");
+    } else if source_kind == "PDF" {
+        println!("source: {source_display} (PDF)");
+    } else {
+        println!("source: {source_display}");
+    }
+    println!("pdf: {}", target_plan.target.display());
+    if let Some(audio) = audio {
+        println!("audio: {} (from {})", audio.dest.display(), audio.origin);
+    } else {
+        println!("audio: none");
+    }
+    println!("sidecar_guard: {}", target_plan.sidecar.display());
+    match &target_plan.workflow {
+        TargetWorkflow::Intake {
+            library_destination,
+        } => println!("library_destination: {}", library_destination.display()),
+        _ => println!("library_destination: n/a (external target)"),
+    }
+    println!("title: {} ({})", pdf_plan.title, pdf_plan.title_source);
+    if let Some(author) = &pdf_plan.author {
+        println!("author: {author} (pdf info)");
+    }
+    if let Some(published) = &pdf_plan.published {
+        println!("published: {published} (arxiv api)");
+    }
+    if let Some(captured) = &pdf_plan.captured {
+        println!("captured: {captured}");
+    }
+    println!("status: {}", options.status);
+    println!("parent: {}", options.parent);
+    if let Some(id) = id {
+        println!("id: {id}");
+    }
+    println!("marker:");
+    print!("{marker}");
+    if !marker.ends_with('\n') {
+        println!();
+    }
+    println!("writes: none");
+}
+
 fn plan_create(
     config: &Config,
     source: &Path,
     options: &CreateOptions,
 ) -> Result<CreatePlan> {
+    plan_markdown(config, source, options)
+}
+
+fn plan_markdown(
+    config: &Config,
+    source: &Path,
+    options: &CreateOptions,
+) -> Result<CreatePlan> {
     validate_markdown_path(source)?;
-    let source = fs::canonicalize(source).map_err(|error| {
+    let canonical = fs::canonicalize(source).map_err(|error| {
         CommandError::new(format!(
             "resolve Markdown file {}: {error}",
             source.display()
         ))
     })?;
-    let id = options
-        .include_id
-        .then(|| derive_marker_id(&source))
-        .transpose()?;
-    let markdown = fs::read_to_string(&source).map_err(|error| {
+    let markdown = fs::read_to_string(&canonical).map_err(|error| {
         CommandError::new(format!(
             "read Markdown file {} as UTF-8: {error}",
-            source.display()
+            canonical.display()
         ))
     })?;
-    let title = extract_title(&markdown, &source)?;
+    // Validate -i first so non-UTF8 stems report the marker-id error,
+    // matching the legacy planner order.
+    if options.include_id && options.name.is_none() {
+        let validated = derive_marker_id(&canonical)?;
+        let file_stem = canonical
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or_default()
+            .to_string();
+        let stem = match &options.name {
+            Some(name) => super::clip_url::validate_name(name)?,
+            None => {
+                if file_stem.is_empty() {
+                    return Err(CommandError::new(format!(
+                        "Markdown file has no file stem: {}",
+                        canonical.display()
+                    )));
+                }
+                file_stem.clone()
+            }
+        };
+        let _ = (validated, stem);
+    }
+    // Stem: -N wins, else the file stem.
+    let file_stem_os = canonical.file_stem().ok_or_else(|| {
+        CommandError::new(format!(
+            "Markdown file has no file stem: {}",
+            canonical.display()
+        ))
+    })?;
+    let file_stem = file_stem_os.to_str().unwrap_or_default().to_string();
+    let stem = match &options.name {
+        Some(name) => super::clip_url::validate_name(name)?,
+        None => {
+            if file_stem.is_empty() {
+                // Non-UTF8 stems fail here only when -i did not already
+                // fail above; report the marker-id error for consistency.
+                if options.include_id {
+                    derive_marker_id(&canonical)?;
+                }
+                return Err(CommandError::new(format!(
+                    "Markdown file has no file stem: {}",
+                    canonical.display()
+                )));
+            }
+            file_stem.clone()
+        }
+    };
+    // With -N, -i embeds the name.
+    let id = if options.include_id || options.name.is_some() {
+        Some(stem.clone())
+    } else {
+        None
+    };
+    // Title: -T wins, else frontmatter/H1/stem.
+    let title = match &options.title {
+        Some(override_title) if !override_title.is_empty() => {
+            override_title.clone()
+        }
+        _ => extract_title(&markdown, &canonical)?,
+    };
     let marker = compose_marker(
         &options.status,
         &options.parent,
@@ -470,31 +1117,35 @@ fn plan_create(
         id.as_deref(),
         &[],
     )?;
-    let target_plan = match &options.output {
-        Some(output) => plan_exact_output(config, output, options.force)?,
-        None => {
-            let stem = source.file_stem().ok_or_else(|| {
-                CommandError::new(format!(
-                    "Markdown file has no file stem: {}",
-                    source.display()
-                ))
-            })?;
-            plan_default_target(config, stem, &options.ref_type, options.force)?
-        }
-    };
+    let ref_type =
+        default_ref_type_for_kind("markdown", options.ref_type.as_deref())?;
+    let target_plan = plan_target_for(
+        config,
+        &stem,
+        &ref_type,
+        options.output.as_ref(),
+        options.force,
+    )?;
 
     let audio =
-        plan_audio_copy(config, &source, &markdown, &target_plan, options)?;
+        plan_audio_copy(config, &canonical, &markdown, &target_plan, options)?;
 
     Ok(CreatePlan {
-        source,
+        source: canonical.display().to_string(),
+        source_kind: "markdown",
         target: target_plan.target,
         sidecar: target_plan.sidecar,
         workflow: target_plan.workflow,
         title,
+        title_source: "markdown",
+        author: None,
+        published: None,
+        source_url: None,
+        captured: None,
         id,
         marker,
         audio,
+        page_count_hint: None,
     })
 }
 
@@ -597,6 +1248,7 @@ fn frontmatter_title(markdown: &str) -> Result<Option<String>> {
     Ok(Some(title.to_string()))
 }
 
+#[allow(dead_code)]
 fn render_temp_path(target: &Path) -> Result<PathBuf> {
     let stem = target.file_stem().ok_or_else(|| {
         CommandError::new(format!(
@@ -610,6 +1262,7 @@ fn render_temp_path(target: &Path) -> Result<PathBuf> {
     Ok(target.with_file_name(name))
 }
 
+#[allow(dead_code)]
 fn code_break_filter_path() -> PathBuf {
     env::temp_dir().join(format!("bob-highlights-create.{}.lua", process::id()))
 }
@@ -687,15 +1340,11 @@ fn plan_audio_copy(
         return Ok(None);
     }
     if let Some(explicit) = &options.audio {
-        let resolved = resolve_audio_arg_path(explicit)?;
-        let source = super::audio::validate_explicit_audio(&resolved)
-            .map(|path| fs::canonicalize(&path).unwrap_or(path))?;
-        return plan_audio_copy_for_source(
+        return companion_mod::plan_explicit_audio(
             config,
             target_plan,
             options.force,
-            source,
-            "--audio".to_string(),
+            explicit,
         );
     }
     let highlights = super::bob_config::load_highlights_config(
@@ -707,7 +1356,7 @@ fn plan_audio_copy(
         if let Some(source) =
             super::audio::episode_audio_source(&library, &episode_id)
         {
-            return plan_audio_copy_for_source(
+            return companion_mod::plan_audio_copy_for_source(
                 config,
                 target_plan,
                 options.force,
@@ -732,7 +1381,7 @@ fn plan_audio_copy(
         if let Some(source) =
             super::audio::find_audio_by_script_hash(&library, &digest)
         {
-            return plan_audio_copy_for_source(
+            return companion_mod::plan_audio_copy_for_source(
                 config,
                 target_plan,
                 options.force,
@@ -741,42 +1390,10 @@ fn plan_audio_copy(
             );
         }
     }
-    if let Some(existing) = super::audio::audio_beside(&target_plan.target)
-        .or_else(|| super::audio::audio_beside(source_md))
-    {
-        let extension = existing
-            .extension()
-            .and_then(OsStr::to_str)
-            .unwrap_or_default()
-            .to_lowercase();
-        let dest = target_plan.target.with_extension(&extension);
-        let library_dest = match &target_plan.workflow {
-            TargetWorkflow::Intake {
-                library_destination,
-            } => Some(library_destination.with_extension(&extension)),
-            _ => None,
-        };
-        if let Some(library_dest) = &library_dest
-            && library_dest.exists()
-            && existing != *library_dest
-        {
-            return Err(CommandError::new(format!(
-                "refusing to create {} because the library destination already exists: {}; remove or rename the archived copy before recreating it (bob highlights scan would refuse to move the new audio over it)",
-                dest.display(),
-                library_dest.display()
-            )));
-        }
-        return Ok(Some(AudioCopyPlan {
-            source: existing.clone(),
-            dest,
-            library_dest,
-            origin: "existing companion".to_string(),
-            reused: true,
-        }));
-    }
-    Ok(None)
+    companion_mod::plan_reused_companion(target_plan, Some(source_md))
 }
 
+#[allow(dead_code)]
 fn plan_audio_copy_for_source(
     config: &Config,
     target_plan: &TargetPlan,
@@ -845,6 +1462,7 @@ fn plan_audio_copy_for_source(
     }))
 }
 
+#[allow(dead_code)]
 fn resolve_audio_arg_path(path: &Path) -> Result<PathBuf> {
     if path.as_os_str().is_empty() {
         return Err(CommandError::new(
@@ -861,6 +1479,7 @@ fn resolve_audio_arg_path(path: &Path) -> Result<PathBuf> {
     Ok(cwd.join(expanded))
 }
 
+#[allow(dead_code)]
 fn files_have_identical_bytes(source: &Path, dest: &Path) -> Result<bool> {
     if source == dest {
         return Ok(true);
@@ -914,7 +1533,8 @@ fn render_temp_pdf(
     filter_path: &Path,
     audio_uri: Option<&str>,
 ) -> Result<()> {
-    let resource_path = plan.source.parent().unwrap_or_else(|| Path::new("."));
+    let source_path = Path::new(&plan.source);
+    let resource_path = source_path.parent().unwrap_or_else(|| Path::new("."));
     let output = Command::new(pandoc)
         .arg(&plan.source)
         .arg("-o")
@@ -969,7 +1589,7 @@ fn render_temp_pdf(
         };
         return Err(CommandError::new(format!(
             "pandoc failed while rendering {} (exit {}):\n{}",
-            plan.source.display(),
+            plan.source,
             output
                 .status
                 .code()
@@ -986,7 +1606,7 @@ fn print_plan(plan: &CreatePlan, options: &CreateOptions, styler: &Styler) {
         "{} would create Highlights-ready PDF",
         styler.success_prefix(true)
     );
-    println!("source: {}", plan.source.display());
+    println!("source: {}", plan.source);
     println!("pdf: {}", plan.target.display());
     if let Some(audio) = &plan.audio {
         println!("audio: {} (from {})", audio.dest.display(), audio.origin);
@@ -1048,11 +1668,13 @@ mod tests {
             dry_run: false,
             force: false,
             include_id: false,
+            name: None,
             no_audio: false,
             output: None,
             parent: DEFAULT_PARENT.to_string(),
-            ref_type: DEFAULT_REF_TYPE.to_string(),
+            ref_type: None,
             status: DEFAULT_STATUS.to_string(),
+            title: None,
         }
     }
 
@@ -1258,13 +1880,19 @@ mod tests {
         fs::create_dir_all(target.parent().expect("target parent"))
             .expect("create output directory");
         let plan = CreatePlan {
-            source,
+            source: source.display().to_string(),
+            source_kind: "markdown",
             target: target.clone(),
             sidecar: target.with_extension("md"),
             workflow: TargetWorkflow::Intake {
                 library_destination: temp.path.join("lib/chat/report.pdf"),
             },
             title: "Report".to_string(),
+            title_source: "markdown",
+            author: None,
+            published: None,
+            source_url: None,
+            captured: None,
             id: None,
             marker: compose_marker(
                 "ready",
@@ -1275,6 +1903,7 @@ mod tests {
             )
             .expect("compose marker"),
             audio: None,
+            page_count_hint: None,
         };
         let render_path = render_temp_path(&target).expect("render path");
         let filter_path = temp.path.join("listen-card.lua");

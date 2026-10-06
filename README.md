@@ -828,7 +828,7 @@ The full command contract lives in [`docs/gkeep.md`](docs/gkeep.md).
 
 ```bash
 bob highlights clip <URL> [-A|--author NAME] [-b|--bob-dir PATH] [-d|--dry-run] [-f|--force] [-H|--html FILE] [-l|--lib-dir PATH] [-N|--name STEM] [-o|--output PDF] [-P|--parent NOTE] [-p|--published DATE] [-r|--ref-dir PATH] [-s|--status STATUS] [-T|--title TITLE] [-t|--ref-type DIR] [-x|--xlib-dir PATH]
-bob highlights create <md-file> [-b|--bob-dir PATH] [-d|--dry-run] [-f|--force] [-i|--include-id] [-l|--lib-dir PATH] [-o|--output PDF] [-P|--parent NOTE] [-r|--ref-dir PATH] [-s|--status STATUS] [-t|--ref-type DIR] [-x|--xlib-dir PATH]
+bob highlights create <TARGET> [-a|--audio PATH] [-b|--bob-dir PATH] [-d|--dry-run] [-f|--force] [-i|--include-id] [-l|--lib-dir PATH] [-N|--name STEM] [-n|--no-audio] [-o|--output PDF] [-P|--parent NOTE] [-r|--ref-dir PATH] [-s|--status STATUS] [-T|--title TITLE] [-t|--ref-type DIR] [-x|--xlib-dir PATH]
 bob highlights doctor [-b|--bob-dir PATH] [-l|--lib-dir PATH] [-n|--no-hooks] [-r|--ref-dir PATH] [-x|--xlib-dir PATH]
 bob highlights marker <pdf> [-b|--bob-dir PATH] [-l|--lib-dir PATH] [-r|--ref-dir PATH] [-x|--xlib-dir PATH]
 bob highlights scan [-b|--bob-dir PATH] [-d|--dry-run] [-j|--jobs N] [-l|--lib-dir PATH] [-n|--no-hooks] [-r|--ref-dir PATH] [-v|--verbose] [-w|--write-pdfs] [-x|--xlib-dir PATH]
@@ -846,15 +846,19 @@ Highlights annotations into Obsidian reference notes.
   otherwise fail closed with a hint. `-H, --html` replays a page saved from
   a real browser. Needs `uv`, Google Chrome (or `BOB_CHROME`), and Xvfb for
   bot-protected sites on Linux.
-- `create <md-file>` renders through pandoc and xelatex into
-  `xlib/chat/<basename>.pdf` (override the subdirectory with `--ref-type`) and
-  embeds the page-1 marker `scan` needs. `-o, --output` writes the complete PDF
-  path instead, including the filename, and cannot be combined with
-  `--ref-type`. Relative output paths are resolved from the current directory
-  and a leading `~` is expanded. `--include-id` adds marker `id` from the
-  Markdown filename stem. Intake targets still go through `scan`; a PDF written
-  directly into the library is also found by `scan`; a PDF outside both
-  directories needs `bob highlights sync <PDF>`.
+- `create <TARGET>` renders Markdown through pandoc and xelatex into
+  `xlib/chat/<basename>.pdf`, or stamps a local PDF, PDF URL, or arXiv paper
+  as-is into `xlib/papers/<stem>.pdf` (override the subdirectory with
+  `--ref-type`: `chat` for Markdown, `papers` for PDFs). `-o, --output`
+  writes the complete PDF path instead, including the filename, and cannot be
+  combined with `--ref-type` or `--name`. Relative output paths are resolved
+  from the current directory and a leading `~` is expanded. `-N, --name`
+  sets the output stem, `-T, --title` overrides the derived title, and
+  `--include-id` adds marker `id` (URL targets always embed it). Intake
+  targets still go through `scan`; a PDF written directly into the library is
+  also found by `scan`; a PDF outside both directories needs
+  `bob highlights sync <PDF>`. The full target contract lives in
+  [`docs/highlights-create.md`](docs/highlights-create.md).
 - `scan` runs the configured `highlights.pre_scan_hook` on writing runs, then
   moves pending PDFs from `xlib/<rel>` to `lib/<rel>` and recursively syncs
   the library. Pass `-n, --no-hooks` on `scan` or `doctor`, or before the
@@ -865,8 +869,8 @@ Highlights annotations into Obsidian reference notes.
   of the concise report.
 - `sync <pdf>` updates one reference note from the page-1 marker and sidecar.
 - `marker <pdf>` inspects that marker without writing.
-- `doctor` checks vault paths, intake, sidecars, markers, Git, pandoc, the
-  web-clip chain (`uv`, adapter, browser, headed fallback), and optional
+- `doctor` checks vault paths, intake, sidecars, markers, Git, pandoc, `curl`,
+  the web-clip chain (`uv`, adapter, browser, headed fallback), and optional
   `ob` without writing. Pass `-n, --no-hooks` to skip the pre-scan hook
   check.
 
@@ -880,7 +884,8 @@ Marker `status` values are `ready`, `next`, `wip`, `read`, `abandoned`, and
 
 The full contract and MacBook setup guide live in
 [`docs/highlights-ref-sync.md`](docs/highlights-ref-sync.md); the web-capture
-contract lives in [`docs/highlights-clip.md`](docs/highlights-clip.md).
+contract lives in [`docs/highlights-clip.md`](docs/highlights-clip.md) and the
+create-target contract in [`docs/highlights-create.md`](docs/highlights-create.md).
 
 ## Nightly maintenance
 
@@ -1014,8 +1019,10 @@ The documented workflows use these external-tool integrations:
   macOS; `wl-paste`, `xclip`, or `xsel` on Linux; or `tmux show-buffer` in a
   display-less tmux session (see `BOB_CLIPBOARD_CMD` below for the exact
   fallback order)
-- `pandoc` and `xelatex` for `bob highlights create`; override pandoc with
+- `pandoc` and `xelatex` for `bob highlights create` Markdown targets; override pandoc with
   `BOB_PANDOC_COMMAND`
+- `curl` for `bob highlights create` PDF URL and arXiv targets; override with
+  `BOB_HIGHLIGHTS_CURL`
 - `uv` plus Google Chrome or Chromium (or `BOB_CHROME`) for
   `bob highlights clip`: `uv` fetches Python ≥3.10 and the pinned Playwright,
   Pillow, and nh3 on first run (override the whole spawn with
@@ -1128,6 +1135,14 @@ hook. `scan --dry-run` reports the hook it would run without executing it.
 Pass `-n, --no-hooks` to ignore the hook from every source. The legacy
 `BOB_HIGHLIGHTS_PRE_SCAN_COMMAND` variable is now an error. Bob exports
 `BOB_HIGHLIGHTS_IN_PRE_SCAN_HOOK=1` to the hook child process.
+
+`BOB_HIGHLIGHTS_CURL` replaces the `curl` program used by
+`bob highlights create` for PDF URL and arXiv targets. It is the test seam,
+like `BOB_PANDOC_COMMAND`.
+
+`BOB_HIGHLIGHTS_KEEP_WORKDIR=1` keeps the `bob highlights create` scratch
+directory for debugging and prints its path (the legacy
+`BOB_WEB_CLIP_KEEP_WORKDIR=1` is also honored).
 
 `BOB_HIGHLIGHTS_REF_DIR` sets the generated reference note directory used by
 `bob highlights`. It defaults to `ref` under `BOB_DIR`.
@@ -1279,6 +1294,7 @@ blocks point at `done/..._done#^block-id`, and the vault Git commit was pushed.
 | Task freshness review lease, placement, evaluation, and display | [`docs/freshness.md`](docs/freshness.md) |
 | Today's plan, sticky lanes, dashboard READY, and per-note Ready caps | [`docs/plan.md`](docs/plan.md) |
 | Highlights PDF intake and reference notes | [`docs/highlights-ref-sync.md`](docs/highlights-ref-sync.md) |
+| `bob highlights create` Markdown, PDF, and URL targets | [`docs/highlights-create.md`](docs/highlights-create.md) |
 | Web article capture into Highlights intake PDFs | [`docs/highlights-clip.md`](docs/highlights-clip.md) |
 | Obsidian Sync folder exclusion runbook (historical) | [`docs/obsidian-sync-exclusions.md`](docs/obsidian-sync-exclusions.md) |
 | Bob vault Git sync runbook | [`docs/vault-git-sync.md`](docs/vault-git-sync.md) |

@@ -696,8 +696,8 @@ fn highlights_create_help_lists_options_alphabetically() {
     assert_success(&output);
     let help = stdout(&output);
     assert!(
-        help.contains("Arguments:") && help.contains("<MD_FILE>"),
-        "expected Markdown positional argument in Arguments section:\n{help}"
+        help.contains("Arguments:") && help.contains("<TARGET>"),
+        "expected TARGET positional argument in Arguments section:\n{help}"
     );
     assert_text_order(
         &help,
@@ -708,11 +708,13 @@ fn highlights_create_help_lists_options_alphabetically() {
             "-f, --force",
             "-i, --include-id",
             "-l, --lib-dir",
+            "-N, --name",
             "-n, --no-audio",
             "-o, --output",
             "-P, --parent",
             "-r, --ref-dir",
             "-s, --status",
+            "-T, --title",
             "-t, --ref-type",
             "-x, --xlib-dir",
         ],

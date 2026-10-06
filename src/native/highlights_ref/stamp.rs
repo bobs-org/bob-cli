@@ -340,26 +340,30 @@ pub(super) fn embed_marker(
                 ))
             })?
             .set("Annots", Object::Array(vec![annotation])),
-        Some(Object::Array(_)) => document
-            .get_object_mut(first_page_id)
-            .and_then(Object::as_dict_mut)
-            .and_then(|page| page.get_mut(b"Annots"))
-            .and_then(Object::as_array_mut)
-            .map_err(|error| {
-                CommandError::new(format!(
-                    "read rendered PDF page annotations: {error}"
-                ))
-            })?
-            .push(annotation),
-        Some(Object::Reference(id)) => document
-            .get_object_mut(id)
-            .and_then(Object::as_array_mut)
-            .map_err(|error| {
-                CommandError::new(format!(
-                    "read rendered PDF annotation array: {error}"
-                ))
-            })?
-            .push(annotation),
+        Some(Object::Array(_)) => {
+            let array = document
+                .get_object_mut(first_page_id)
+                .and_then(Object::as_dict_mut)
+                .and_then(|page| page.get_mut(b"Annots"))
+                .and_then(Object::as_array_mut)
+                .map_err(|error| {
+                    CommandError::new(format!(
+                        "read rendered PDF page annotations: {error}"
+                    ))
+                })?;
+            array.insert(0, annotation);
+        }
+        Some(Object::Reference(id)) => {
+            let array = document
+                .get_object_mut(id)
+                .and_then(Object::as_array_mut)
+                .map_err(|error| {
+                    CommandError::new(format!(
+                        "read rendered PDF annotation array: {error}"
+                    ))
+                })?;
+            array.insert(0, annotation);
+        }
         Some(_) => {
             return Err(CommandError::new(
                 "rendered PDF first-page /Annots value is not an array",
@@ -401,6 +405,13 @@ pub(super) fn stamp_and_install(
     }
     atomic_save_pdf(target, &mut document)?;
     Ok(page_count)
+}
+
+pub(super) fn set_pdf_info_for_route(
+    document: &mut Document,
+    info: &PdfInfo,
+) -> Result<()> {
+    set_pdf_info(document, info)
 }
 
 fn set_pdf_info(document: &mut Document, info: &PdfInfo) -> Result<()> {

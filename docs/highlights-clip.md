@@ -3,8 +3,9 @@
 `bob highlights clip <URL>` turns a web article into a beautiful, readable,
 provenance-stamped PDF in the Highlights intake (`xlib/blogs/` by default),
 which the existing `bob highlights scan` turns into a `ref/` note. It is a
-sibling of `bob highlights create` and shares its target planning, collision
-guards, marker composition, and atomic install.
+sibling of `bob highlights create` (see [`highlights-create.md`](highlights-create.md))
+and shares its target planning, collision guards, marker composition, and
+atomic install.
 
 ```bash
 bob highlights clip [OPTIONS] <URL>
