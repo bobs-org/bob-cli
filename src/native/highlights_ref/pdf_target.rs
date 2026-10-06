@@ -19,9 +19,8 @@ use super::marker::{parse_marker, read_pdf_marker};
 use super::pdf_meta::pdf_info_metadata;
 use super::workdir::ScratchDir;
 use super::{
-    atomic_copy, atomic_save_pdf, compose_marker, embed_marker, path_is_inside,
-    relative_inside, resolve_exact_output_path, set_pdf_info_for_route,
-    CommandError, Config, PdfInfo, Result,
+    atomic_copy, atomic_save_pdf, compose_marker, embed_marker,
+    set_pdf_info_for_route, CommandError, Config, PdfInfo, Result,
 };
 
 /// 95 MiB vault-sync refusal limit.
@@ -71,7 +70,9 @@ pub(super) fn plan_local_pdf(
             }
         },
     };
-    let (info_title, info_author) = pdf_info_metadata(source, &stem);
+    // Reject an Info title that equals the source file stem, not the
+    // final (possibly `-N`/snake-cased) stem.
+    let (info_title, info_author) = pdf_info_metadata(source, &file_stem);
     let title;
     let title_source;
     if let Some(override_title) = title_override.filter(|t| !t.is_empty()) {
@@ -84,6 +85,7 @@ pub(super) fn plan_local_pdf(
         title = humanize_stem(&stem);
         title_source = "filename";
     }
+    let author_source = info_author.as_ref().map(|_| "pdf info");
     Ok(PdfPlan {
         stem,
         title,
@@ -92,7 +94,7 @@ pub(super) fn plan_local_pdf(
         source_url: None,
         captured: None,
         title_source,
-        author_source: None,
+        author_source,
     })
 }
 
@@ -132,7 +134,10 @@ pub(super) fn plan_pdf_url(
             }
         }
     };
-    let (info_title, info_author) = pdf_info_metadata(downloaded, &stem);
+    // Reject an Info title that equals the URL stem, not the final
+    // (possibly `-N`-overridden) stem.
+    let url_stem = stem_from_url(url).unwrap_or_default();
+    let (info_title, info_author) = pdf_info_metadata(downloaded, &url_stem);
     let title;
     let title_source;
     if let Some(override_title) = title_override.filter(|t| !t.is_empty()) {
@@ -145,6 +150,7 @@ pub(super) fn plan_pdf_url(
         title = humanize_stem(&stem);
         title_source = "filename";
     }
+    let author_source = info_author.as_ref().map(|_| "pdf info");
     Ok(PdfPlan {
         stem,
         title,
@@ -153,7 +159,7 @@ pub(super) fn plan_pdf_url(
         source_url: Some(url.cleaned.clone()),
         captured: Some(captured.to_string()),
         title_source,
-        author_source: None,
+        author_source,
     })
 }
 
@@ -175,7 +181,7 @@ pub(super) fn plan_arxiv(
                 if !short.is_empty() {
                     short
                 } else {
-                    arxiv_fallback_stem(&paper.full_id())
+                    arxiv_fallback_stem(&paper.id)
                 }
             } else {
                 // Without API metadata, try the PDF Info title's short
@@ -186,10 +192,10 @@ pub(super) fn plan_arxiv(
                     if !short.is_empty() {
                         short
                     } else {
-                        arxiv_fallback_stem(&paper.full_id())
+                        arxiv_fallback_stem(&paper.id)
                     }
                 } else {
-                    arxiv_fallback_stem(&paper.full_id())
+                    arxiv_fallback_stem(&paper.id)
                 }
             }
         }
@@ -207,13 +213,19 @@ pub(super) fn plan_arxiv(
         title = info;
         title_source = "pdf info";
     } else {
-        title = format!("arXiv {}", paper.full_id());
+        title = format!("arXiv {}", paper.id);
         title_source = "filename";
     }
-    let author = metadata
+    let (author, author_source) = match metadata
         .map(|meta| author_display(&meta.authors))
         .filter(|display| !display.is_empty())
-        .or(info_author);
+    {
+        Some(display) => (Some(display), Some("arxiv api")),
+        None => {
+            let source = info_author.as_ref().map(|_| "pdf info");
+            (info_author, source)
+        }
+    };
     let published = metadata.map(|meta| meta.published.clone());
     Ok(PdfPlan {
         stem,
@@ -223,7 +235,7 @@ pub(super) fn plan_arxiv(
         source_url: Some(paper.abs_url()),
         captured: Some(captured.to_string()),
         title_source,
-        author_source: None,
+        author_source,
     })
 }
 
@@ -293,8 +305,38 @@ pub(super) fn pdf_already_captured(path: &Path) -> bool {
     parse_marker(&marker.contents).is_ok()
 }
 
+/// Refuse a PDF that already carries a Highlights marker: out-of-vault
+/// sources and downloaded bodies are already captured upstream. Refuses
+/// before any write, naming the marked file and hinting at the library
+/// copy.
+pub(super) fn refuse_marked_pdf(
+    marked: &Path,
+    library_pdf: Option<&Path>,
+) -> Result<()> {
+    if !pdf_already_captured(marked) {
+        return Ok(());
+    }
+    let hint = match library_pdf {
+        Some(library) => format!(
+            "bob highlights sync {} re-syncs it, or bob highlights create {} --listen to add audio",
+            marked.display(),
+            library.display()
+        ),
+        None => format!(
+            "bob highlights sync {} re-syncs it, or bob highlights create <library PDF> --listen to add audio",
+            marked.display()
+        ),
+    };
+    Err(CommandError::new(format!(
+        "PDF already carries a Highlights marker: {}\nhint: {hint}",
+        marked.display()
+    )))
+}
+
 /// Refuse a local PDF inside the library/intake: a marked one is an
-/// existing capture, an unmarked one must be moved out first.
+/// existing capture, an unmarked one must be moved out first. Uses one
+/// shared canonical containment helper so relative (`-b vault`) and
+/// symlinked vaults still match.
 pub(super) fn check_local_pdf_identity(
     config: &Config,
     source: &Path,
@@ -302,38 +344,14 @@ pub(super) fn check_local_pdf_identity(
     let Ok(canonical) = fs::canonicalize(source) else {
         return Ok(());
     };
-    let in_lib = path_is_inside(&canonical, &config.lib_dir)
-        || relative_inside(&canonical, &config.lib_dir).is_some();
-    // Resolve both dirs lexically for the xlib check too, since the
-    // configured dirs may be relative.
-    let xlib_abs = resolve_exact_output_path(&config.xlib_dir)
-        .unwrap_or_else(|_| config.xlib_dir.clone());
-    let lib_abs = resolve_exact_output_path(&config.lib_dir)
-        .unwrap_or_else(|_| config.lib_dir.clone());
-    let in_xlib = path_is_inside(&canonical, &xlib_abs)
-        || relative_inside(&canonical, &xlib_abs).is_some();
-    let _ = (in_lib, lib_abs);
-    if !(in_lib
-        || in_xlib
-        || path_is_inside(source, &config.lib_dir)
-        || path_is_inside(source, &config.xlib_dir))
-    {
-        // Also try the unresolved source path (tests use non-canonical
-        // temp dirs that still sit under the vault).
-        let source_abs = if source.is_absolute() {
-            source.to_path_buf()
-        } else {
-            std::env::current_dir()
-                .map(|cwd| cwd.join(source))
-                .unwrap_or_else(|_| source.to_path_buf())
-        };
-        let inside = path_is_inside(&source_abs, &config.lib_dir)
-            || path_is_inside(&source_abs, &config.xlib_dir)
-            || path_is_inside(&canonical, &config.lib_dir)
-            || path_is_inside(&canonical, &config.xlib_dir);
-        if !inside {
-            return Ok(());
-        }
+    let inside = super::relative_inside_canonical(&canonical, &config.lib_dir)
+        .is_some()
+        || super::relative_inside_canonical(&canonical, &config.xlib_dir)
+            .is_some()
+        || super::path_is_inside_canonical(source, &config.lib_dir)
+        || super::path_is_inside_canonical(source, &config.xlib_dir);
+    if !inside {
+        return Ok(());
     }
     if pdf_already_captured(&canonical) {
         return Err(CommandError::new(format!(

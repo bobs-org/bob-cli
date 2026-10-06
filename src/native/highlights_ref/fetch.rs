@@ -175,6 +175,7 @@ fn curl_one_hop(
     max_time_secs: u64,
 ) -> std::result::Result<(u16, String, String), FetchError> {
     let output = Command::new(curl)
+        .arg("-q")
         .arg("-sS")
         .arg("--proto")
         .arg("=http,https")
@@ -262,7 +263,8 @@ mod tests {
 
     /// A fake curl: serves canned bodies by URL, prints the `-w` trailer
     /// lines, and exits on demand. The request URL is the last argument
-    /// and the `-o` argument is the destination file.
+    /// and the `-o` argument is the destination file. Logs its argv
+    /// (one per line) to `$FAKE_CURL_ARGV_LOG` when set.
     fn write_fake_curl(dir: &Path) -> PathBuf {
         let path = dir.join("fake-curl.sh");
         let script = r#"#!/bin/sh
@@ -270,6 +272,9 @@ mod tests {
 # selected by the request URL, prints the -w trailer (status,
 # content-type, redirect URL), and exits as told.
 ROOT="$FAKE_CURL_ROOT"
+if [ -n "$FAKE_CURL_ARGV_LOG" ]; then
+  printf '%s\n' "$@" >> "$FAKE_CURL_ARGV_LOG"
+fi
 dest=""
 url=""
 prev=""
@@ -401,6 +406,34 @@ esac
 
         unsafe { env::remove_var(ENV_CURL_OVERRIDE) };
         unsafe { env::remove_var("FAKE_CURL_ROOT") };
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn curl_passes_q_as_first_argument() {
+        let _guard = CURL_TEST_LOCK.lock().expect("lock curl env");
+        let dir = test_dir("curl-q");
+        let fake = write_fake_curl(&dir);
+        let argv_log = dir.join("argv.log");
+        unsafe { env::set_var("FAKE_CURL_ROOT", &dir) };
+        unsafe { env::set_var(ENV_CURL_OVERRIDE, &fake) };
+        unsafe {
+            env::set_var("FAKE_CURL_ARGV_LOG", &argv_log);
+        }
+
+        let dest = dir.join("out.pdf");
+        fetch_url("https://example.com/paper.pdf", &dest, 30)
+            .expect("fetch with fake curl");
+        let logged = fs::read_to_string(&argv_log).expect("read argv log");
+        let first = logged.lines().next().unwrap_or_default().to_string();
+        assert_eq!(
+            first, "-q",
+            "curl's first argument must be -q so ~/.curlrc cannot inject -L:\n{logged}"
+        );
+
+        unsafe { env::remove_var(ENV_CURL_OVERRIDE) };
+        unsafe { env::remove_var("FAKE_CURL_ROOT") };
+        unsafe { env::remove_var("FAKE_CURL_ARGV_LOG") };
         fs::remove_dir_all(&dir).ok();
     }
 

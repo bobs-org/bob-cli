@@ -77,14 +77,12 @@ use listen::*;
 use marker::*;
 use model::*;
 use note::*;
-use pdf_target::*;
 use projection::*;
 use report::*;
 use sidecar::*;
 use sidecar_render::*;
 use stamp::*;
 use sync::*;
-use target::*;
 use text::*;
 use workdir::*;
 

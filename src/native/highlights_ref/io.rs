@@ -82,6 +82,13 @@ pub(super) fn vault_relative_path_value(
     config: &Config,
     path: &Path,
 ) -> String {
+    if let (Ok(path_c), Ok(bob_c)) = (
+        std::fs::canonicalize(path),
+        std::fs::canonicalize(&config.bob_dir),
+    ) && let Ok(rel) = path_c.strip_prefix(&bob_c)
+    {
+        return rel.to_string_lossy().into_owned();
+    }
     path.strip_prefix(&config.bob_dir)
         .unwrap_or(path)
         .to_string_lossy()

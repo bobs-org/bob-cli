@@ -201,20 +201,53 @@ pub(super) fn doctor_vault(config: &Config, no_hooks: bool) -> Result<()> {
         }
     }
 
-    match super::clip_adapter::find_on_path("curl").or_else(|| {
+    // The fetcher checks `BOB_HIGHLIGHTS_CURL` first, so doctor does too.
+    if let Some(override_curl) =
         std::env::var_os(super::fetch::ENV_CURL_OVERRIDE)
             .filter(|value| !value.is_empty())
             .map(std::path::PathBuf::from)
-    }) {
-        Some(path) => {
-            println!("curl: available ({})", path.display());
-        }
-        None => {
-            println!("curl: warn (command not found)");
-            warnings.push(
-                "curl command not found; PDF URL and arXiv targets are unavailable"
-                    .to_string(),
+    {
+        #[cfg(unix)]
+        let usable = if override_curl.components().count() == 1 {
+            super::clip_adapter::find_on_path(&override_curl.to_string_lossy())
+                .is_some()
+        } else {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::metadata(&override_curl).is_ok_and(|m| {
+                m.is_file() && m.permissions().mode() & 0o111 != 0
+            })
+        };
+        #[cfg(not(unix))]
+        let usable = if override_curl.components().count() == 1 {
+            super::clip_adapter::find_on_path(&override_curl.to_string_lossy())
+                .is_some()
+        } else {
+            override_curl.is_file()
+        };
+        if usable {
+            println!("curl: available ({})", override_curl.display());
+        } else {
+            println!(
+                "curl: warn (override {} not found or not executable)",
+                override_curl.display()
             );
+            warnings.push(format!(
+                "curl override {} does not exist or is not executable; PDF URL and arXiv targets are unavailable",
+                override_curl.display()
+            ));
+        }
+    } else {
+        match super::clip_adapter::find_on_path("curl") {
+            Some(path) => {
+                println!("curl: available ({})", path.display());
+            }
+            None => {
+                println!("curl: warn (command not found)");
+                warnings.push(
+                    "curl command not found; PDF URL and arXiv targets are unavailable"
+                        .to_string(),
+                );
+            }
         }
     }
 

@@ -853,6 +853,76 @@ fn bash_shell_selection() {
 }
 
 #[test]
+fn bash_filters_create_target_by_extension() {
+    if !have_bash() {
+        return;
+    }
+    let temp = TempDir::new("bob-bash-target-filter");
+    let vault = fixture_vault(&temp);
+    let work = temp.path().join("work");
+    fs::create_dir_all(&work).expect("work");
+    write_file(&work.join("a.md"), "# A\n");
+    write_file(&work.join("b.pdf"), "%PDF-1.4\n");
+    write_file(&work.join("c.txt"), "plain\n");
+    let bin = temp.path().join("bin");
+    fs::create_dir_all(&bin).expect("bin");
+    std::os::unix::fs::symlink(BOB_BIN, bin.join("bob")).expect("link bob");
+    let q = |value: &str| shell_single_quote(value);
+    let mut script = String::new();
+    script.push_str("export LC_ALL=C.UTF-8 LANG=C.UTF-8\n");
+    script.push_str(&format!(
+        "export PATH={}:${{PATH}}\n",
+        q(&bin.display().to_string())
+    ));
+    script.push_str(&format!(
+        "export BOB_DIR={}\n",
+        q(&vault.display().to_string())
+    ));
+    script.push_str(&format!("export BOB_NOW={}\n", q(BOB_NOW)));
+    script.push_str(&format!(
+        "export BOB_CONFIG_FILE={}\n",
+        q(TEST_MISSING_CONFIG_FILE)
+    ));
+    script.push_str(&format!(
+        "export BOB_WEB_CLIP_ADAPTER={}\n",
+        q(TEST_MISSING_WEB_CLIP_ADAPTER)
+    ));
+    script.push_str(&format!(
+        "source {}\n",
+        q(&adapter_path().display().to_string())
+    ));
+    script.push_str(&format!("cd {}\n", q(&work.display().to_string())));
+    script.push_str("COMP_LINE='bob highlights create '\n");
+    script.push_str("COMP_POINT=22\n");
+    script.push_str("COMP_WORDS=(bob highlights create '')\n");
+    script.push_str("COMP_CWORD=3\n");
+    script.push_str("_bob\n");
+    script.push_str("printf '%s\\n' \"${COMPREPLY[@]}\"\n");
+    let output = Command::new("bash")
+        .args(["--norc", "--noprofile", "-c", &script])
+        .output()
+        .expect("run target filter case");
+    assert_success(&output);
+    let reply: Vec<String> = stdout(&output)
+        .lines()
+        .map(str::to_string)
+        .filter(|line| !line.is_empty())
+        .collect();
+    assert!(
+        reply.iter().any(|value| value.ends_with("a.md")),
+        "create TARGET keeps a.md: {reply:?}"
+    );
+    assert!(
+        reply.iter().any(|value| value.ends_with("b.pdf")),
+        "create TARGET keeps b.pdf: {reply:?}"
+    );
+    assert!(
+        !reply.iter().any(|value| value.ends_with("c.txt")),
+        "create TARGET drops c.txt: {reply:?}"
+    );
+}
+
+#[test]
 fn bash_print_matches_installed_bytes() {
     let temp = TempDir::new("bob-cli-bash-print");
     let fake = fakebin(&temp);

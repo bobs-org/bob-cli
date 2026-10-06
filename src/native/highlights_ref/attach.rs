@@ -90,16 +90,17 @@ pub(super) fn attach_for_local_pdf(
     config: &Config,
     canonical: &std::path::Path,
 ) -> Result<Option<AttachTarget>> {
-    let rel =
-        if let Some(rel) = super::relative_inside(canonical, &config.lib_dir) {
-            rel
-        } else if let Some(rel) =
-            super::relative_inside(canonical, &config.xlib_dir)
-        {
-            rel
-        } else {
-            return Ok(None);
-        };
+    let rel = if let Some(rel) =
+        super::relative_inside_canonical(canonical, &config.lib_dir)
+    {
+        rel
+    } else if let Some(rel) =
+        super::relative_inside_canonical(canonical, &config.xlib_dir)
+    {
+        rel
+    } else {
+        return Ok(None);
+    };
     if !super::pdf_target::pdf_already_captured(canonical) {
         return Ok(None);
     }
@@ -329,8 +330,12 @@ pub(super) fn run_attach(
         audio: scratch_audio.clone(),
         title: attach.title.clone(),
     };
+    let styler = crate::native::style::Styler::detect();
     if dry_run {
-        println!("would attach listen episode to existing capture");
+        println!(
+            "{} would attach listen episode to existing capture",
+            styler.success_prefix(true)
+        );
         println!("{source_line}");
         println!("pdf: {} (unchanged)", attach.existing_pdf.display());
         if let Some(note) = &attach.ref_note {
@@ -345,6 +350,16 @@ pub(super) fn run_attach(
     let produced = super::listen::run_listen(listen, &values)
         .map_err(|error| error.into_command_error())?;
     let _ = produced;
+    // Re-check after the listen: a race that installed audio mid-run
+    // must not be silently overwritten.
+    if let Err(error) = refuse_existing_audio(config, attach) {
+        return Err(super::listen::post_listen_error(
+            scratch,
+            &scratch_audio,
+            error.to_string(),
+            format!("copy it to {} for scan to pair", dest.display()),
+        ));
+    }
     if let Err(error) = super::atomic_copy(&scratch_audio, &dest) {
         return Err(super::listen::post_listen_error(
             scratch,
@@ -353,7 +368,10 @@ pub(super) fn run_attach(
             format!("copy it to {} for scan to pair", dest.display()),
         ));
     }
-    println!("ok attached listen episode to existing capture");
+    println!(
+        "{} attached listen episode to existing capture",
+        styler.success_prefix(false)
+    );
     println!("{source_line}");
     println!("pdf: {} (unchanged)", attach.existing_pdf.display());
     if let Some(note) = &attach.ref_note {

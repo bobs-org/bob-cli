@@ -42,7 +42,7 @@ bob highlights create report.md --audio episode.mp3 --include-id
 | Markdown (`.md`) | Rendered with pandoc/XeLaTeX | `chat` | `-T`, frontmatter `title`, first H1, file stem | `-N`, file stem |
 | Local PDF (`.pdf` or `%PDF-` magic) | Stamped as-is | `papers` | `-T`, plausible Info `/Title`, humanized stem | `-N`, file stem if it passes `--name` validation, else `snake_case` |
 | PDF URL (PDF content-type or sniffed `%PDF-`) | Downloaded with `curl`, stamped as-is | `papers` | `-T`, plausible Info `/Title`, humanized stem | `-N`, URL slug, short-title stem, `<host>_<YYYYMMDD>` |
-| arXiv (`arxiv.org` abs/html/pdf) | PDF fetched from `arxiv.org/pdf/<id>`, metadata from the API | `papers` | `-T`, arXiv API title, plausible Info `/Title`, `arXiv <id>` | `-N`, short-title stem, `arxiv_<id>` |
+| arXiv (`arxiv.org` abs/html/pdf) | PDF fetched from `arxiv.org/pdf/<id>`, metadata from the API | `papers` | `-T`, arXiv API title, plausible Info `/Title`, `arXiv <id>` (no version) | `-N`, short-title stem, `arxiv_<id>` (no version) |
 | Web article (HTML 2xx or 403/429/503) | Captured with the clip engine (same PDF, marker, and report as `bob highlights clip`) | `blogs` | clip rules (`-T` maps to the clip title override) | clip rules (`-N`) |
 
 Short-title stem: when the text before the first `:` is 1–4 words, that
@@ -51,10 +51,11 @@ first 6 words stand in, run through `snake_case` (capped at 80 chars).
 `Attention Is All You Need` becomes `attention_is_all_you_need`.
 
 Plausible Info title: trimmed and whitespace-collapsed, at least 3 chars
-with a letter, not equal to the stem, not a bare filename (`.pdf`, `.doc`,
-`.docx`, `.tex`, `.dvi`, `.ps`, `.pages`), not an exporter default
-(`Microsoft Word - …`, `Microsoft PowerPoint - …`), and not
-`untitled`/`title`. The same normalization applies to `/Author`.
+with a letter, not equal to the source file stem or URL stem
+(case-insensitive), not a bare filename (`.pdf`, `.doc`, `.docx`, `.tex`,
+`.dvi`, `.ps`, `.pages`), not an exporter default (`Microsoft Word - …`,
+`Microsoft PowerPoint - …`), and not `untitled`/`title`. The same
+normalization applies to `/Author`.
 
 ## PDF route
 
@@ -76,11 +77,15 @@ A local source file is never modified.
 URL routes stamp `source_url` (cleaned URL, or `https://arxiv.org/abs/<id>`
 with version), `author`, `published` (arXiv first-version date), `captured`
 (local `YYYY-MM-DD`), and always `id` (the stem). Local PDFs stamp `id`
-only with `-i` (or `-N`, which implies it).
+only with `-i` (with `-N`, `-i` embeds the name).
 
 A local PDF inside `lib/` or `xlib/` with a marker is already captured:
 `already captured; bob highlights sync <PDF> re-syncs it` plus the
-`--listen` attach hint. Without a marker it must be moved out first.
+`--listen` attach hint. Without a marker it must be moved out first. A PDF
+outside the vault, or a downloaded PDF (PDF URL or arXiv), that already
+carries a Highlights marker is refused before any write:
+`PDF already carries a Highlights marker: <path>` with a
+`bob highlights sync` / `create <library PDF> --listen` hint.
 
 ## arXiv
 
@@ -107,7 +112,10 @@ hit or a queued-intake hit refuses (use `--force` only to overwrite the same
 intake target). The refusal hint points at `--listen` attach mode.
 
 Markdown and local PDFs outside the vault whose planned library destination
-already exists keep refusing; identity is not proven by stem alone.
+already exists keep refusing; identity is not proven by stem alone. The
+refusal adds `hint: to add audio to that capture, run bob highlights
+create <library PDF> --listen`, naming the existing PDF path. The same hint
+applies when the planned intake target already exists.
 
 ## Listen
 

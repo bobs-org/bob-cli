@@ -1984,3 +1984,130 @@ fn highlights_create_article_dry_run_writes_nothing() {
         "dry run must not install: {report}"
     );
 }
+
+#[test]
+fn landing_name_alone_does_not_embed_marker_id() {
+    let temp = TempDir::new("bob-cli-landing-name-no-id");
+    let source = temp.path().join("report.md");
+    let vault = temp.path().join("vault");
+    write_file(&source, "# Report\n");
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg(&source)
+        .arg("-b")
+        .arg(&vault)
+        .arg("-N")
+        .arg("custom")
+        .arg("-d")
+        .output()
+        .expect("run create -N dry-run");
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        !report.contains("id:"),
+        "-N alone must not embed the marker id: {report}"
+    );
+}
+
+#[test]
+fn landing_companion_beside_source_is_copied() {
+    let temp = TempDir::new("bob-cli-landing-companion-copy");
+    let source = temp.path().join("paper.pdf");
+    let vault = temp.path().join("vault");
+    write_bare_pdf(&source, None, None);
+    std::fs::write(temp.path().join("paper.mp3"), b"ID3 fake")
+        .expect("sibling mp3");
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg(&source)
+        .arg("-b")
+        .arg(&vault)
+        .output()
+        .expect("run create local PDF with sibling audio");
+    assert_success(&output);
+    let installed = vault.join("xlib/papers/paper.mp3");
+    assert!(
+        installed.is_file(),
+        "sibling audio must be copied: {}",
+        stdout(&output)
+    );
+    assert_eq!(
+        std::fs::read(&installed).expect("read installed"),
+        b"ID3 fake",
+        "copied bytes must match"
+    );
+}
+
+#[test]
+fn landing_marked_pdf_outside_vault_is_refused() {
+    let temp = TempDir::new("bob-cli-landing-marked-refused");
+    let source = temp.path().join("marked.pdf");
+    let vault = temp.path().join("vault");
+    write_bare_pdf(&source, None, None);
+    // Stamp it so it reads as already captured.
+    let stamp = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg(&source)
+        .arg("-b")
+        .arg(&vault)
+        .output()
+        .expect("initial create");
+    assert_success(&stamp);
+    let installed = vault.join("xlib/papers/marked.pdf");
+    assert!(
+        installed.is_file(),
+        "setup must install: {}",
+        stdout(&stamp)
+    );
+    // Copy the stamped (marked) PDF out and retry as a fresh source.
+    let retry_src = temp.path().join("retry.pdf");
+    std::fs::copy(&installed, &retry_src).expect("copy marked out");
+    let vault2 = temp.path().join("vault2");
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg(&retry_src)
+        .arg("-b")
+        .arg(&vault2)
+        .output()
+        .expect("retry marked PDF");
+    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+    let diagnostic = stderr(&output);
+    assert!(
+        diagnostic.contains("already carries a Highlights marker"),
+        "{diagnostic}"
+    );
+}
+
+#[test]
+fn landing_library_collision_hints_listen_attach() {
+    let temp = TempDir::new("bob-cli-landing-collision-hint");
+    let source = temp.path().join("report.md");
+    let vault = temp.path().join("vault");
+    write_file(&source, "# Report\n");
+    // Pre-create the library destination so the intake refuses.
+    let library_pdf = vault.join("lib/chat/report.pdf");
+    std::fs::create_dir_all(library_pdf.parent().expect("lib parent"))
+        .expect("lib dir");
+    write_bare_pdf(&library_pdf, None, None);
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg(&source)
+        .arg("-b")
+        .arg(&vault)
+        .arg("-d")
+        .output()
+        .expect("run create with library collision");
+    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+    let diagnostic = stderr(&output);
+    assert!(
+        diagnostic.contains(
+            "to add audio to that capture, run bob highlights create"
+        ),
+        "{diagnostic}"
+    );
+}

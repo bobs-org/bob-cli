@@ -251,7 +251,7 @@ fn empty_cursor_at_positional_slot_offers_values_first() {
     // `highlights create` waits on a Markdown or PDF file first, not options.
     let output = complete(&["bob", "highlights", "create", ""]);
     assert_success(&output);
-    assert_eq!(directives(&output), vec!["!files *.{md,pdf}".to_string()]);
+    assert_eq!(directives(&output), vec!["!files *.md *.pdf".to_string()]);
     assert!(rows(&output).is_empty());
 
     // Slots without a value decision keep the options fallback.

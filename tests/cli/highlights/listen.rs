@@ -5,19 +5,37 @@ use super::fake_clip::*;
 use crate::support::*;
 
 /// Fake `BOB_HIGHLIGHTS_LISTEN_COMMAND`: logs argv to `$FAKE_LISTEN_LOG`,
-/// prints canned lines, and writes an ID3 stub to the `.mp3` argument.
+/// logs the environment to `$FAKE_LISTEN_ENV_LOG` when set, prints canned
+/// lines, and writes an ID3 stub to the `.mp3` argument.
 ///
 /// - `FAKE_LISTEN_EXIT`: exit code instead of 0.
 /// - `FAKE_LISTEN_NO_AUDIO=1`: write no audio (the NoAudio path).
 /// - `FAKE_LISTEN_TOUCH`: an extra file to create before exiting (the
 ///   post-listen collision path).
+/// - `FAKE_LISTEN_PROBE_TARGET`: when set, the fake records whether that
+///   path exists (`target-exists:yes/no`) to prove `{target}` is staged
+///   while the command runs.
 fn write_fake_listen(dir: &std::path::Path) -> std::path::PathBuf {
     let path = dir.join("fake-listen.sh");
     let script = r#"#!/bin/sh
 echo "$@" >> "$FAKE_LISTEN_LOG"
+if [ -n "$FAKE_LISTEN_ENV_LOG" ]; then env >> "$FAKE_LISTEN_ENV_LOG"; fi
+# Prove `{target}` ($1) exists while the command runs.
+if [ -f "$1" ]; then
+  echo "target-exists:yes" >> "$FAKE_LISTEN_LOG"
+else
+  echo "target-exists:no" >> "$FAKE_LISTEN_LOG"
+fi
+if [ -n "$FAKE_LISTEN_PROBE_TARGET" ]; then
+  if [ -f "$FAKE_LISTEN_PROBE_TARGET" ]; then
+    echo "probe-exists:yes" >> "$FAKE_LISTEN_LOG"
+  else
+    echo "probe-exists:no" >> "$FAKE_LISTEN_LOG"
+  fi
+fi
 echo "FAKE-LISTEN-STDOUT"
 echo "FAKE-LISTEN-STDERR" >&2
-if [ -n "$FAKE_LISTEN_TOUCH" ]; then printf 'fake' > "$FAKE_LISTEN_TOUCH"; fi
+if [ -n "$FAKE_LISTEN_TOUCH" ]; then mkdir -p "$(dirname "$FAKE_LISTEN_TOUCH")"; printf 'fake' > "$FAKE_LISTEN_TOUCH"; fi
 for arg in "$@"; do
   case "$arg" in
     *.mp3)
@@ -125,6 +143,26 @@ cp "$FAKE_PANDOC_FIXTURE" "$out"
     path
 }
 
+/// Recursively collect files under `dir` (empty when missing).
+fn collect_files(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut out = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(current) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&current) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.is_file() {
+                out.push(path);
+            }
+        }
+    }
+    out
+}
+
 /// `BOB_HIGHLIGHTS_LISTEN_COMMAND` value invoking the fake.
 fn listen_command(fake: &std::path::Path) -> String {
     format!(
@@ -182,10 +220,14 @@ fn listen_markdown_binds_episode_and_play_uri() {
     // `{target}` exists during the run and lives outside xlib/.
     let logged = std::fs::read_to_string(&log).expect("read listen log");
     assert!(
+        logged.contains("target-exists:yes"),
+        "the fake proves {{target}} exists while it runs: {logged}"
+    );
+    assert!(
         logged.contains("bob-create-")
             && logged.contains("report.pdf")
             && !logged.contains("xlib"),
-        "narration source is staged scratch: {logged}"
+        "narration source is staged scratch outside xlib: {logged}"
     );
 }
 
@@ -232,9 +274,17 @@ fn listen_pdf_url_streams_output_and_quotes_title() {
         report.contains("'Bob'\\''s Paper'"),
         "the title is shell-quoted: {report}"
     );
+    // `{target}` and `{title}` come from the fake's argv log, not bob's
+    // stdout: the URL also appears on the `source:` line, so a stdout
+    // check proves nothing.
+    let logged = std::fs::read_to_string(&log).expect("read listen log");
     assert!(
-        report.contains("https://example.com/paper.pdf"),
-        "the cleaned URL is the narration source: {report}"
+        logged.contains("https://example.com/paper.pdf"),
+        "the fake saw {{target}} as the cleaned URL: {logged}"
+    );
+    assert!(
+        logged.contains("Bob's Paper"),
+        "the fake saw {{title}} with the apostrophe intact: {logged}"
     );
     assert!(
         stderr(&output).contains("FAKE-LISTEN-STDERR"),
@@ -287,6 +337,12 @@ fn listen_failure_writes_nothing() {
         !vault.join("xlib/papers/paper.pdf").exists()
             && !vault.join("xlib/papers/paper.mp3").exists(),
         "a failed listen writes nothing"
+    );
+    // No file at all may remain under xlib/.
+    let leftovers = collect_files(&vault.join("xlib"));
+    assert!(
+        leftovers.is_empty(),
+        "xlib/ must contain no files after exit 4: {leftovers:?}"
     );
 }
 
@@ -367,6 +423,15 @@ fn listen_without_audio_is_an_error() {
     assert!(
         !vault.join("xlib/papers/paper.mp3").exists(),
         "missing audio is never installed"
+    );
+    assert!(
+        !vault.join("xlib/papers/paper.pdf").exists(),
+        "exit-0-with-no-audio also leaves no PDF"
+    );
+    let leftovers = collect_files(&vault.join("xlib"));
+    assert!(
+        leftovers.is_empty(),
+        "xlib/ must contain no files after NoAudio: {leftovers:?}"
     );
 }
 

@@ -43,11 +43,6 @@ impl ClipError {
             exit_code: None,
         }
     }
-
-    fn with_hint(mut self, hint: impl Into<String>) -> Self {
-        self.hint = Some(hint.into());
-        self
-    }
 }
 
 impl From<CommandError> for ClipError {
@@ -62,9 +57,13 @@ impl From<CommandError> for ClipError {
 
 impl From<ClipError> for CommandError {
     fn from(error: ClipError) -> Self {
-        match error.hint {
+        let base = match error.hint {
             Some(hint) => Self::new(format!("{}\nhint: {hint}", error.message)),
             None => Self::new(error.message),
+        };
+        match error.exit_code {
+            Some(code) => base.with_exit_code(code),
+            None => base,
         }
     }
 }
@@ -128,7 +127,6 @@ pub(crate) fn command() -> ClapCommand {
                 .value_parser(clap::builder::OsStringValueParser::new())
                 .help("Use a page already saved from a browser (Save Page As, SingleFile); `-` reads stdin"),
         )
-        .arg(lib_dir_arg())
         .arg(
             Arg::new("listen")
                 .long("listen")
@@ -136,6 +134,7 @@ pub(crate) fn command() -> ClapCommand {
                 .action(ArgAction::SetTrue)
                 .help("Narrate the article with highlights.listen_command and bind the episode as companion audio"),
         )
+        .arg(lib_dir_arg())
         .arg(
             Arg::new("name")
                 .long("name")
@@ -435,7 +434,7 @@ fn run_clip_attach(
         config,
         command,
         &attach,
-        &format!("source_url: {cleaned}"),
+        &format!("source: {cleaned}"),
         cleaned,
         dry_run,
         &mut scratch,
@@ -726,7 +725,9 @@ pub(super) fn capture_article(
             super::listen::run_listen(command, &values)
                 .map_err(|error| ClipError::from(error.into_command_error()))?;
             // The vault may have changed during a long listen: re-run
-            // the collision and dedupe checks before installing.
+            // the collision and dedupe checks before installing. Dedupe
+            // must re-collect: the pre-listen list cannot see a ref note
+            // the fake (or a race) wrote mid-run.
             if let Err(error) = super::refuse_target_collisions(
                 &plan.target,
                 &plan.sidecar,
@@ -740,8 +741,10 @@ pub(super) fn capture_article(
                     bind_hint_for_clip(&web_url.cleaned, &flow.scratch_audio),
                 ));
             }
+            let recorded_after = collect_recorded_source_urls(config)
+                .map_err(ClipError::from)?;
             if let Err(error) = check_dedupe(
-                &recorded,
+                &recorded_after,
                 &web_url.dedupe_key,
                 Some(&plan.target),
                 options.force,

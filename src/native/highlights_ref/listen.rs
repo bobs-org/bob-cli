@@ -461,14 +461,17 @@ pub(super) fn run_listen(
                 "listen command exited 0 but wrote no MP3 audio to {}",
                 values.audio.display()
             ),
-            hint: "make sure the command writes MP3 audio to {audio}"
-                .to_string(),
+            hint: format!(
+                "{LISTEN_FAILED_HINT}; make sure the command writes MP3 audio to {{audio}}"
+            ),
         });
     }
     if status_interrupted(&status) {
         return Err(ListenError::Interrupted {
             message: "listen command interrupted".to_string(),
-            hint: "rerun the same command to try again".to_string(),
+            hint: format!(
+                "{LISTEN_FAILED_HINT}; rerun the same command to try again"
+            ),
         });
     }
     Err(ListenError::Failed {

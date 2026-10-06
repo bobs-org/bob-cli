@@ -108,8 +108,9 @@ pub(super) fn refuse_target_collisions(
     {
         if library_destination.exists() {
             return Err(CommandError::new(format!(
-                "refusing to create {} because the library destination already exists: {}; remove or rename the archived copy before recreating it (bob highlights scan would refuse to move the new PDF over it)",
+                "refusing to create {} because the library destination already exists: {}; remove or rename the archived copy before recreating it (bob highlights scan would refuse to move the new PDF over it)\nhint: to add audio to that capture, run bob highlights create {} --listen",
                 target.display(),
+                library_destination.display(),
                 library_destination.display()
             )));
         }
@@ -125,8 +126,20 @@ pub(super) fn refuse_target_collisions(
         }
     }
     if target.exists() && !force {
+        let hint = match workflow {
+            TargetWorkflow::Intake {
+                library_destination,
+            } => format!(
+                "to add audio to that capture, run bob highlights create {} --listen",
+                library_destination.display()
+            ),
+            _ => format!(
+                "to add audio to that capture, run bob highlights create {} --listen",
+                target.display()
+            ),
+        };
         return Err(CommandError::new(format!(
-            "target PDF already exists: {}; pass --force to overwrite it",
+            "target PDF already exists: {}; pass --force to overwrite it\nhint: {hint}",
             target.display()
         )));
     }
@@ -208,6 +221,28 @@ pub(super) fn relative_inside(child: &Path, parent: &Path) -> Option<PathBuf> {
 
 pub(super) fn path_is_inside(child: &Path, parent: &Path) -> bool {
     relative_inside(child, parent).is_some()
+}
+
+/// Containment against canonicalized directories: resolves symlinks and
+/// relative vault paths (`-b vault`) so a relative or symlinked vault
+/// still matches. Falls back to lexical comparison when canonicalization
+/// fails.
+pub(super) fn relative_inside_canonical(
+    child: &Path,
+    parent: &Path,
+) -> Option<PathBuf> {
+    if let (Ok(child_c), Ok(parent_c)) =
+        (std::fs::canonicalize(child), std::fs::canonicalize(parent))
+    {
+        if let Some(rel) = relative_inside(&child_c, &parent_c) {
+            return Some(rel);
+        }
+    }
+    relative_inside(child, parent)
+}
+
+pub(super) fn path_is_inside_canonical(child: &Path, parent: &Path) -> bool {
+    relative_inside_canonical(child, parent).is_some()
 }
 
 pub(super) fn normalize_lexically(path: &Path) -> PathBuf {

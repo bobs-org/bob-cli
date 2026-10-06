@@ -12,7 +12,7 @@ use std::{
 
 use super::arxiv::ArxivPaper;
 use super::clip_url::{validate_and_clean, WebUrl};
-use super::fetch::{fetch_url, FetchResult};
+use super::fetch::fetch_url;
 use super::workdir::ScratchDir;
 use super::{CommandError, Result};
 
@@ -24,14 +24,7 @@ pub(super) enum CreateSource {
     /// Existing local PDF file.
     LocalPdf(PathBuf),
     /// A generic URL that fetched as a PDF (downloaded body in scratch).
-    PdfUrl {
-        url: WebUrl,
-        downloaded: PathBuf,
-        fetch: FetchResult,
-    },
-    /// An arXiv paper URL (no fetch yet; the PDF fetch uses
-    /// [`ArxivPaper::pdf_url`]).
-    Arxiv { paper: ArxivPaper, url: WebUrl },
+    PdfUrl { url: WebUrl, downloaded: PathBuf },
     /// A web article URL (clip engine; next phase).
     WebArticle { url: WebUrl },
 }
@@ -41,19 +34,6 @@ pub(super) enum CreateSource {
 pub(super) fn looks_like_url(raw: &str) -> bool {
     let lower = raw.trim().to_lowercase();
     lower.starts_with("http://") || lower.starts_with("https://")
-}
-
-/// Classify one `TARGET` string. Generic URLs are fetched into `scratch`
-/// to decide between the PDF-URL and article routes.
-pub(super) fn resolve_target(
-    raw: &str,
-    scratch: &ScratchDir,
-) -> Result<CreateSource> {
-    if looks_like_url(raw) {
-        let url = validate_and_clean(raw)?;
-        return resolve_url_target(url, scratch);
-    }
-    resolve_local_target(Path::new(raw))
 }
 
 /// Classify a local path target.
@@ -80,18 +60,6 @@ pub(super) fn resolve_local_target(path: &Path) -> Result<CreateSource> {
     )))
 }
 
-/// Classify a validated URL: arXiv URLs go straight to the arXiv route,
-/// every other URL is fetched into scratch.
-fn resolve_url_target(
-    url: WebUrl,
-    scratch: &ScratchDir,
-) -> Result<CreateSource> {
-    if let Some(paper) = ArxivPaper::parse(&url.cleaned) {
-        return Ok(CreateSource::Arxiv { paper, url });
-    }
-    fetch_and_route(url, scratch)
-}
-
 /// Validate a URL string syntactically (no fetch). Returns the cleaned URL
 /// plus its arXiv identity, if any.
 pub(super) fn resolve_url_syntactic(
@@ -108,13 +76,16 @@ pub(super) fn fetch_and_route(
     scratch: &ScratchDir,
 ) -> Result<CreateSource> {
     let dest = scratch.path().join("download");
-    let fetch = fetch_url(&url.cleaned, &dest, 30).map_err(|error| {
-        let mut message = error.message().to_string();
-        if let Some(hint) = error.hint() {
-            message.push_str(&format!(" (hint: {hint})"));
-        }
-        CommandError::new(message)
-    })?;
+    let fetch =
+        fetch_url(&url.cleaned, &dest, 300).map_err(|error| {
+            match error.hint() {
+                Some(hint) => CommandError::new(format!(
+                    "{}\nhint: {hint}",
+                    error.message()
+                )),
+                None => CommandError::new(error.message().to_string()),
+            }
+        })?;
     let status = fetch.status;
     let content_type = fetch.content_type.clone();
     let normalized = normalize_content_type(&content_type);
@@ -142,7 +113,6 @@ pub(super) fn fetch_and_route(
             Ok(CreateSource::PdfUrl {
                 url,
                 downloaded: fetch.path.clone(),
-                fetch,
             })
         }
         "text/html" | "application/xhtml+xml" => {
@@ -153,7 +123,6 @@ pub(super) fn fetch_and_route(
                 Ok(CreateSource::PdfUrl {
                     url,
                     downloaded: fetch.path.clone(),
-                    fetch,
                 })
             } else if normalized.is_empty() {
                 Err(CommandError::new(format!(
@@ -178,9 +147,13 @@ fn normalize_content_type(raw: &str) -> String {
 
 /// True when the first 1024 bytes contain `%PDF-`.
 pub(super) fn file_starts_with_pdf(path: &Path) -> bool {
-    let Ok(bytes) = fs::read(path) else {
+    use std::io::Read as _;
+    let Ok(mut file) = fs::File::open(path) else {
         return false;
     };
-    let head = &bytes[..bytes.len().min(1024)];
-    head.windows(5).any(|window| window == b"%PDF-")
+    let mut head = [0u8; 1024];
+    let Ok(n) = file.read(&mut head) else {
+        return false;
+    };
+    head[..n].windows(5).any(|window| window == b"%PDF-")
 }

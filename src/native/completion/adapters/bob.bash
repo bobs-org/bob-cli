@@ -60,7 +60,19 @@ _bob() {
   if ((has_files == 1)); then
     local -a all=() kept=()
     mapfile -t all < <(compgen -f -- "$cur_broken")
-    for val in "${all[@]}"; do [[ -z "$files_glob" || "$val" == $files_glob ]] && kept+=("$val"); done
+    if [[ -z "$files_glob" ]]; then
+      kept=("${all[@]}")
+    else
+      local pattern matched
+      for val in "${all[@]}"; do
+        matched=0
+        for pattern in $files_glob; do
+          # shellcheck disable=SC2053
+          if [[ "$val" == $pattern ]]; then matched=1; break; fi
+        done
+        (( matched )) && kept+=("$val")
+      done
+    fi
     COMPREPLY=("${kept[@]}"); compopt -o filenames 2>/dev/null; return 0
   fi
   # The cursor-word text readline will replace: everything up to and

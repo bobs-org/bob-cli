@@ -131,7 +131,7 @@ const TABLE: &[Entry] = &[
     Entry {
         path: &[],
         arg: "target",
-        kind: Kind::Files(Some("*.{md,pdf}")),
+        kind: Kind::Files(Some("*.md *.pdf")),
     },
     Entry {
         path: &[],

@@ -152,24 +152,92 @@ fn resolve_audio_arg_path(path: &Path) -> Result<PathBuf> {
     Ok(cwd.join(expanded))
 }
 
-/// Reuse an existing companion beside the target (and optionally beside
-/// one extra path, e.g. the Markdown or PDF source). Returns `None` when
-/// no companion exists.
+/// Reuse an existing companion already at the target's `<stem>.<ext>`
+/// (and optionally copy one beside the source). Returns `None` when no
+/// companion exists.
 pub(super) fn plan_reused_companion(
     target_plan: &TargetPlan,
     extra_beside: Option<&Path>,
 ) -> Result<Option<AudioCopyPlan>> {
-    let existing = audio_mod::audio_beside(&target_plan.target)
-        .or_else(|| extra_beside.and_then(audio_mod::audio_beside));
-    let Some(existing) = existing else {
-        return Ok(None);
-    };
-    let extension = existing
+    if let Some(existing) = audio_mod::audio_beside(&target_plan.target) {
+        let extension = existing
+            .extension()
+            .and_then(OsStr::to_str)
+            .unwrap_or_default()
+            .to_lowercase();
+        let dest = target_plan.target.with_extension(&extension);
+        // Only a companion already at the target path counts as reused.
+        // Anything else beside the target dir with a different stem is
+        // still a copy through the shared helper.
+        if existing == dest {
+            let library_dest = match &target_plan.workflow {
+                TargetWorkflow::Intake {
+                    library_destination,
+                } => Some(library_destination.with_extension(&extension)),
+                _ => None,
+            };
+            if let Some(library_dest) = &library_dest
+                && library_dest.exists()
+                && existing != *library_dest
+            {
+                return Err(CommandError::new(format!(
+                    "refusing to create {} because the library destination already exists: {}; remove or rename the archived copy before recreating it (bob highlights scan would refuse to move the new audio over it)",
+                    dest.display(),
+                    library_dest.display()
+                )));
+            }
+            return Ok(Some(AudioCopyPlan {
+                source: existing.clone(),
+                dest,
+                library_dest,
+                origin: "existing companion".to_string(),
+                reused: true,
+            }));
+        }
+        return plan_copy_for_source(target_plan, false, existing);
+    }
+    if let Some(beside) = extra_beside.and_then(audio_mod::audio_beside) {
+        return plan_copy_for_source(target_plan, false, beside);
+    }
+    Ok(None)
+}
+
+/// Plan a copy of a companion found beside the source through the same
+/// rules as `--audio`: identical bytes reuse, `--force` governs
+/// overwrites, and the mirrored library audio refuses.
+fn plan_copy_for_source(
+    target_plan: &TargetPlan,
+    force: bool,
+    source: PathBuf,
+) -> Result<Option<AudioCopyPlan>> {
+    let extension = source
         .extension()
         .and_then(OsStr::to_str)
         .unwrap_or_default()
         .to_lowercase();
+    if extension.is_empty() {
+        return Err(CommandError::new(format!(
+            "audio file has no extension: {}",
+            source.display()
+        )));
+    }
     let dest = target_plan.target.with_extension(&extension);
+    // Already at the target: reused, no copy.
+    if source == dest {
+        let library_dest = match &target_plan.workflow {
+            TargetWorkflow::Intake {
+                library_destination,
+            } => Some(library_destination.with_extension(&extension)),
+            _ => None,
+        };
+        return Ok(Some(AudioCopyPlan {
+            source,
+            dest,
+            library_dest,
+            origin: "existing companion".to_string(),
+            reused: true,
+        }));
+    }
     let library_dest = match &target_plan.workflow {
         TargetWorkflow::Intake {
             library_destination,
@@ -178,7 +246,6 @@ pub(super) fn plan_reused_companion(
     };
     if let Some(library_dest) = &library_dest
         && library_dest.exists()
-        && existing != *library_dest
     {
         return Err(CommandError::new(format!(
             "refusing to create {} because the library destination already exists: {}; remove or rename the archived copy before recreating it (bob highlights scan would refuse to move the new audio over it)",
@@ -186,12 +253,36 @@ pub(super) fn plan_reused_companion(
             library_dest.display()
         )));
     }
+    if dest.exists() {
+        if files_have_identical_bytes(&source, &dest)? {
+            return Ok(Some(AudioCopyPlan {
+                source,
+                dest,
+                library_dest,
+                origin: "existing companion".to_string(),
+                reused: true,
+            }));
+        }
+        if !force {
+            return Err(CommandError::new(format!(
+                "target audio already exists: {}; pass --force to overwrite it",
+                dest.display()
+            )));
+        }
+        return Ok(Some(AudioCopyPlan {
+            source,
+            dest,
+            library_dest,
+            origin: "existing companion".to_string(),
+            reused: false,
+        }));
+    }
     Ok(Some(AudioCopyPlan {
-        source: existing.clone(),
+        source,
         dest,
         library_dest,
         origin: "existing companion".to_string(),
-        reused: true,
+        reused: false,
     }))
 }
 
