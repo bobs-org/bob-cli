@@ -177,20 +177,16 @@ fn render_badges(
     newline: &str,
 ) -> String {
     let counts = [
-        ("⚪", plan.open_count, "open", None),
-        ("🔵", plan.counts[0], "next/wip", Some(GroupKind::Active)),
-        ("🔴", plan.counts[1], "blocked", Some(GroupKind::Blocked)),
-        (
-            "🟢",
-            plan.counts[2],
-            "done/canceled",
-            Some(GroupKind::Closed),
-        ),
+        (plan.open_count, None),
+        (plan.counts[0], Some(GroupKind::Active)),
+        (plan.counts[1], Some(GroupKind::Blocked)),
+        (plan.counts[2], Some(GroupKind::Closed)),
     ];
     let linked = !node.ancestry.iter().any(|segment| segment.contains('#'));
-    let row = counts
+    let row = super::BADGE_CHIPS
         .iter()
-        .map(|(emoji, count, label, group)| {
+        .zip(counts.iter())
+        .map(|((emoji, label), (count, group))| {
             let label = format!("`{emoji} {count} {label}`");
             if !linked {
                 return label;
@@ -208,7 +204,7 @@ fn render_badges(
         .collect::<Vec<_>>()
         .join(" \u{b7} ");
 
-    format!("{BADGE_MARKER}{newline}{row}{newline}{newline}")
+    format!("{row}{newline}{newline}")
 }
 
 fn render_anchor(segments: &[String]) -> String {

@@ -23,8 +23,16 @@ pub(crate) const MARKER_CLOSED: &str =
     "<!-- bob:task-status-group:v1:closed -->";
 
 const MARKER_PREFIX: &str = "bob:task-status-group:v1:";
-pub(crate) const BADGE_MARKER: &str = "<!-- bob:task-status-badges:v1 -->";
-const BADGE_MARKER_PREFIX: &str = "bob:task-status-badges:";
+
+/// Shared badge-row grammar: the four fixed-order `(emoji, label)` chips.
+/// Both the emitter (`render_badges`) and the recognizer (`is_badge_row`)
+/// iterate this table so the two cannot drift apart.
+const BADGE_CHIPS: [(&str, &str); 4] = [
+    ("⚪", "open"),
+    ("🔵", "next/wip"),
+    ("🔴", "blocked"),
+    ("🟢", "done/canceled"),
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum StatusBucket {
@@ -121,7 +129,7 @@ pub(crate) enum GroupingSkipCode {
     DuplicateGroupHeading,
     RenamedMarkedHeading,
     AuthoredHeadingInGroup,
-    MalformedBadgeMarker,
+    MisplacedBadgeRow,
     NestedUnderOrdinaryItem,
     UnsupportedOrderedList,
 }
@@ -136,7 +144,7 @@ impl GroupingSkipCode {
             Self::DuplicateGroupHeading => "duplicate_group_heading",
             Self::RenamedMarkedHeading => "renamed_marked_heading",
             Self::AuthoredHeadingInGroup => "authored_heading_in_group",
-            Self::MalformedBadgeMarker => "malformed_badge_marker",
+            Self::MisplacedBadgeRow => "misplaced_badge_row",
             Self::NestedUnderOrdinaryItem => "nested_under_ordinary_item",
             Self::UnsupportedOrderedList => "unsupported_ordered_list",
         }
@@ -165,8 +173,8 @@ impl GroupingSkipCode {
             Self::AuthoredHeadingInGroup => format!(
                 "authored child heading inside a managed status group in {title:?} at line {line}"
             ),
-            Self::MalformedBadgeMarker => format!(
-                "malformed task-status-badges marker in {title:?} at line {line}"
+            Self::MisplacedBadgeRow => format!(
+                "status badge row inside a managed status group in {title:?} at line {line}"
             ),
             Self::NestedUnderOrdinaryItem => format!(
                 "task nested under an ordinary list item in {title:?} at line {line} is structurally ineligible"
@@ -639,9 +647,6 @@ fn classify_children<'a>(
     if let Some(code) = stray_marker_in_exclusive(node, ctx.lines) {
         fail = Some(code);
     }
-    if let Some(code) = badge_marker_audit(node, ctx.lines) {
-        fail = Some(code);
-    }
 
     for child in &node.children {
         if is_tasks_title(&child.title) {
@@ -650,8 +655,8 @@ fn classify_children<'a>(
         }
 
         if let Some(kind) = GroupKind::from_title(&child.title) {
-            if badge_marker_in_span(ctx.lines, child.body_span.clone()) {
-                fail = Some(GroupingSkipCode::MalformedBadgeMarker);
+            if badge_row_in_span(ctx.lines, child.body_span.clone()) {
+                fail = Some(GroupingSkipCode::MisplacedBadgeRow);
             }
             if !child.children.is_empty() {
                 fail = Some(GroupingSkipCode::AuthoredHeadingInGroup);
@@ -716,3 +721,4 @@ mod tests;
 
 use emit::*;
 use parse::*;
+pub(crate) use parse::{is_badge_row, is_legacy_badge_marker};

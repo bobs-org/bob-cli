@@ -496,7 +496,6 @@ fn task_status_hooks_groups_area_project_tasks_after_final_statuses() {
         &project_after,
         &[
             "## Tasks",
-            "<!-- bob:task-status-badges:v1 -->",
             "[`⚪ 1 open`](#Alpha#Tasks)",
             "Project context.",
             "- [ ] #task Keep in intake ^ready",
@@ -518,7 +517,6 @@ fn task_status_hooks_groups_area_project_tasks_after_final_statuses() {
         &area_after,
         &[
             "## Tasks",
-            "<!-- bob:task-status-badges:v1 -->",
             "[`⚪ 0 open`](#Home#Tasks)",
             "### Next & In Progress",
             "- [*] #task Already next ^already",
@@ -651,11 +649,19 @@ fn task_status_hooks_reports_grouping_warnings_without_noop_text() {
         "---\n",
         "# Badges\n\n",
         "## Tasks\n",
-        "<!-- bob:task-status-badges:v1 -->\n",
-        "[`stale`](#Badges#Tasks)\n",
-        "<!-- bob:task-status-badges:v1 -->\n",
+        "\n",
+        "### Next & In Progress\n",
+        "<!-- bob:task-status-group:v1:active -->\n",
+        "\n",
+        "[`⚪ 0 open`](#Badges#Tasks) · [`🔵 1 next/wip`](#Badges#Tasks#Next%20&%20In%20Progress) · [`🔴 0 blocked`](#Badges#Tasks#Blocked) · [`🟢 0 done/canceled`](#Badges#Tasks#Done%20&%20Canceled)\n",
         "\n",
         "- [*] #task Next task ^next\n",
+        "\n",
+        "### Blocked\n",
+        "<!-- bob:task-status-group:v1:blocked -->\n",
+        "\n",
+        "### Done & Canceled\n",
+        "<!-- bob:task-status-group:v1:closed -->\n",
     );
     write_file(&duplicate_badges, duplicate_badges_original);
 
@@ -686,10 +692,10 @@ fn task_status_hooks_reports_grouping_warnings_without_noop_text() {
         .unwrap()
         .iter()
         .any(|warning| warning["path"] == "badges.md"
-            && warning["code"] == "malformed_badge_marker"));
+            && warning["code"] == "misplaced_badge_row"));
     assert!(
         stderr(&json_output).contains("H6 heading")
-            && stderr(&json_output).contains("task-status-badges"),
+            && stderr(&json_output).contains("status badge row"),
         "expected stderr warning:\n{}",
         format_output(&json_output)
     );
@@ -714,7 +720,7 @@ fn task_status_hooks_reports_grouping_warnings_without_noop_text() {
     );
     assert!(
         stderr(&human_output).contains("H6 heading")
-            && stderr(&human_output).contains("task-status-badges"),
+            && stderr(&human_output).contains("status badge row"),
         "expected human stderr warning:\n{}",
         format_output(&human_output)
     );

@@ -162,7 +162,6 @@ After (rolled 21 days into the P2 8–30 window):
 
 ```markdown
 ## Tasks
-<!-- bob:task-status-badges:v1 -->
 [`⚪ 0 open`](#Note#Tasks) · ... · [`🔴 1 blocked`](#Note#Tasks#Blocked) · ...
 
 ### Blocked

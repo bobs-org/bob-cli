@@ -1332,7 +1332,6 @@ properties:
                 "# Project\n",
                 "\n",
                 "## Tasks\n",
-                "<!-- bob:task-status-badges:v1 -->\n",
                 "[`⚪ 0 open`](#Project#Tasks) · [`🔵 0 next/wip`](#Project#Tasks#Next%20&%20In%20Progress) · [`🔴 1 blocked`](#Project#Tasks#Blocked) · [`🟢 0 done/canceled`](#Project#Tasks#Done%20&%20Canceled)\n",
                 "\n",
                 "### Next & In Progress\n",

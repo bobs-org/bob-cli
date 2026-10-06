@@ -507,7 +507,6 @@ are plain child headings with hidden ownership comments:
 # Project
 
 ## Tasks
-<!-- bob:task-status-badges:v1 -->
 [`⚪ 1 open`](#Project#Tasks) · [`🔵 2 next/wip`](#Project#Tasks#Next%20&%20In%20Progress) · [`🔴 1 blocked`](#Project#Tasks#Blocked) · [`🟢 2 done/canceled`](#Project#Tasks#Done%20&%20Canceled)
 
 Project context.
@@ -542,15 +541,17 @@ heading using Obsidian's nested heading path form, such as
 contains `#`, the row is rendered as unlinked code-span chips because that
 path cannot be represented safely.
 
-The badge marker owns its own line and the immediately following non-blank row
-line. On every grouping rewrite, the row is regenerated and moved back to the
-slot directly beneath the `Tasks` or authored-topic heading, so a capture that
-temporarily lands above it is self-healed on the next run. An orphaned badge
-block in a container with no generated groups and no groupable tasks is
-removed. Duplicate badge markers, badge markers inside managed group bodies or
-outside the container intake, and unrecognized `bob:task-status-badges:*`
-comments fail closed with `malformed_badge_marker`; the affected container's
-bytes are left unchanged.
+The row is recognized by its exact generated grammar: four fixed-order
+code-span chips (`open`, `next/wip`, `blocked`, `done/canceled`), each
+optionally wrapped in a heading link, joined by `·`. On every grouping
+rewrite, duplicate or relocated rows in the intake are regenerated into the
+slot directly beneath the `Tasks` or authored-topic heading, so a capture
+that temporarily lands above the row is self-healed on the next run. An
+orphaned badge row in a container with no generated groups and no groupable
+tasks is removed. A row inside a managed group fails closed with
+`misplaced_badge_row`; the affected container's bytes are left unchanged.
+Legacy `<!-- bob:task-status-badges:v1 -->` comments are removed on the next
+rewrite.
 
 Badge counts are a written snapshot, not a live Obsidian view. `bob capture`,
 manual checkbox edits, and `bob task archive` can make them stale; the next

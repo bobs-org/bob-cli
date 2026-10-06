@@ -38,14 +38,87 @@ fn parse_group_marker(line: &str) -> Option<Result<GroupKind, ()>> {
     }
 }
 
-fn parse_badge_marker(line: &str) -> Option<Result<(), ()>> {
-    let inner = markdown::standalone_html_comment(line)?;
-    let rest = inner.strip_prefix(BADGE_MARKER_PREFIX)?;
-    if rest == "v1" {
-        Some(Ok(()))
-    } else {
-        Some(Err(()))
+/// Whether `line` is a generated status-count badge row.
+///
+/// The row identifies itself by its strict generated grammar: four
+/// fixed-order chips joined by `" · "`, each an unlinked `` `{emoji} {n}
+/// {label}` `` code span or a linked `` [`{emoji} {n} {label}`]({anchor}) ``
+/// chip. Trailing whitespace (and any stray `\r`) is ignored; leading
+/// content is not, so prose look-alikes and list items never match.
+pub(crate) fn is_badge_row(line: &str) -> bool {
+    let line = line.trim_end();
+    let chips: Vec<&str> = line.split(" \u{b7} ").collect();
+    if chips.len() != 4 {
+        return false;
     }
+    for (chip, (emoji, label)) in chips.iter().zip(super::BADGE_CHIPS.iter()) {
+        if !is_badge_chip(chip, emoji, label) {
+            return false;
+        }
+    }
+    true
+}
+
+fn is_badge_chip(chip: &str, emoji: &str, label: &str) -> bool {
+    if let Some(rest) = chip.strip_prefix('[') {
+        let Some(inner) = rest.strip_prefix('`') else {
+            return false;
+        };
+        let Some(end) = inner.find('`') else {
+            return false;
+        };
+        let (span, after) = inner.split_at(end);
+        if !is_badge_span(span, emoji, label) {
+            return false;
+        }
+        let after = &after[1..];
+        let Some(after) = after.strip_prefix("](") else {
+            return false;
+        };
+        let Some(anchor) = after.strip_suffix(')') else {
+            return false;
+        };
+        return is_badge_anchor(anchor);
+    }
+    let Some(span) = chip.strip_prefix('`').and_then(|s| s.strip_suffix('`'))
+    else {
+        return false;
+    };
+    is_badge_span(span, emoji, label)
+}
+
+fn is_badge_span(span: &str, emoji: &str, label: &str) -> bool {
+    let Some(rest) = span.strip_prefix(emoji) else {
+        return false;
+    };
+    let Some(rest) = rest.strip_prefix(' ') else {
+        return false;
+    };
+    let digits = rest.bytes().take_while(|b| b.is_ascii_digit()).count();
+    if digits == 0 {
+        return false;
+    }
+    let rest = &rest[digits..];
+    let Some(rest) = rest.strip_prefix(' ') else {
+        return false;
+    };
+    rest == label
+}
+
+fn is_badge_anchor(anchor: &str) -> bool {
+    !anchor.is_empty()
+        && anchor.starts_with('#')
+        && !anchor.chars().any(|c| c.is_whitespace() || c == ')')
+}
+
+/// Whether `line` is a legacy badge-ownership comment.
+///
+/// Kept permanently so old backups and unsynced machines self-heal on the
+/// next rewrite: the grouping intake drops these lines and the emitter
+/// regenerates a marker-free row in the slot.
+pub(crate) fn is_legacy_badge_marker(line: &str) -> bool {
+    markdown::standalone_html_comment(line)
+        .is_some_and(|inner| inner.starts_with("bob:task-status-badges:"))
 }
 
 fn first_nonblank_line_index(
@@ -73,43 +146,14 @@ pub(super) fn stray_marker_in_exclusive(
     None
 }
 
-pub(super) fn badge_marker_audit(
-    node: &HeadingNode,
-    lines: &[SourceLine<'_>],
-) -> Option<GroupingSkipCode> {
-    let exclusive = exclusive_spans(node);
-    let allowed_span = exclusive.first().map(|span| (span.start, span.end));
-    let mut badge_count = 0usize;
-
-    for span in exclusive {
-        let line_range = line_range_for_bytes(lines, span);
-        for index in line_range {
-            let Some(state) = parse_badge_marker(lines[index].content) else {
-                continue;
-            };
-            let allowed = allowed_span.is_some_and(|(start, end)| {
-                lines[index].byte_range.start >= start
-                    && lines[index].byte_range.start < end
-            });
-            if !allowed || state.is_err() {
-                return Some(GroupingSkipCode::MalformedBadgeMarker);
-            }
-            badge_count += 1;
-            if badge_count > 1 {
-                return Some(GroupingSkipCode::MalformedBadgeMarker);
-            }
-        }
-    }
-
-    None
-}
-
-pub(super) fn badge_marker_in_span(
+pub(super) fn badge_row_in_span(
     lines: &[SourceLine<'_>],
     span: Range<usize>,
 ) -> bool {
-    line_range_for_bytes(lines, span)
-        .any(|index| parse_badge_marker(lines[index].content).is_some())
+    line_range_for_bytes(lines, span).any(|index| {
+        is_badge_row(lines[index].content)
+            || is_legacy_badge_marker(lines[index].content)
+    })
 }
 
 pub(super) fn adoptable_group_body(
@@ -369,9 +413,16 @@ fn parse_direct_pieces<'a>(
             break;
         }
 
-        if let Some(marker) = parse_badge_marker(line.content) {
-            if !allow_badges || marker.is_err() {
-                return Err(GroupingSkipCode::MalformedBadgeMarker);
+        // A legacy marker is itself an HTML comment (and therefore masked),
+        // so it is claimed before the mask skip, exactly like the old
+        // marker branch. A badge row is a plain paragraph line: it is only
+        // claimed outside masked spans, so a fenced look-alike survives as
+        // prose.
+        if is_legacy_badge_marker(line.content)
+            || (!mask.contains(&index) && is_badge_row(line.content))
+        {
+            if !allow_badges {
+                return Err(GroupingSkipCode::MisplacedBadgeRow);
             }
             flush_other(
                 contents,
@@ -379,18 +430,21 @@ fn parse_direct_pieces<'a>(
                 &mut cursor,
                 line.byte_range.start,
             );
-            let (end, next_index) =
-                badge_piece_end(lines, index, line_range.end, span.end);
+            let end = line.byte_range.end.min(span.end);
             pieces.push(DirectPiece::Badges {
                 byte_range: line.byte_range.start..end,
             });
             cursor = end;
-            index = next_index;
+            index += 1;
             continue;
         }
 
-        if mask.contains(&index)
-            || markdown::is_blockquote_line(line.content)
+        if mask.contains(&index) {
+            index += 1;
+            continue;
+        }
+
+        if markdown::is_blockquote_line(line.content)
             || markdown::is_indented_code_line(line.content)
             || markdown::html_comment_opens(line.content)
             || markdown::fence_marker(line.content).is_some()
@@ -468,24 +522,6 @@ fn parse_direct_pieces<'a>(
 
     flush_other(contents, &mut pieces, &mut cursor, span.end);
     Ok(pieces)
-}
-
-fn badge_piece_end(
-    lines: &[SourceLine<'_>],
-    marker_index: usize,
-    limit: usize,
-    span_end: usize,
-) -> (usize, usize) {
-    let mut end = lines[marker_index].byte_range.end.min(span_end);
-    let mut next_index = marker_index + 1;
-    if next_index < limit
-        && lines[next_index].byte_range.start < span_end
-        && !lines[next_index].content.trim().is_empty()
-    {
-        end = lines[next_index].byte_range.end.min(span_end);
-        next_index += 1;
-    }
-    (end, next_index)
 }
 
 fn matching_task(

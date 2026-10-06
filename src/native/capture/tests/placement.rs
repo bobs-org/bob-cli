@@ -233,10 +233,8 @@ fn nested_heading_stops_empty_tasks_section_insertion() {
 
 #[test]
 fn tasks_section_inserts_below_generated_status_badges() {
-    let contents = concat!(
-        "## Tasks\n",
-        "<!-- bob:task-status-badges:v1 -->\n",
-        "[`⚪ 0 open`](#Tasks) · [`🔵 1 next/wip`](#Tasks#Next%20&%20In%20Progress) · [`🔴 0 blocked`](#Tasks#Blocked) · [`🟢 0 done/canceled`](#Tasks#Done%20&%20Canceled)\n",
+    const ROW: &str = "[`⚪ 0 open`](#Tasks) · [`🔵 1 next/wip`](#Tasks#Next%20&%20In%20Progress) · [`🔴 0 blocked`](#Tasks#Blocked) · [`🟢 0 done/canceled`](#Tasks#Done%20&%20Canceled)\n";
+    const GROUP: &str = concat!(
         "\n",
         "### Next & In Progress\n",
         "<!-- bob:task-status-group:v1:active -->\n",
@@ -244,24 +242,31 @@ fn tasks_section_inserts_below_generated_status_badges() {
         "- [*] #task active\n",
     );
 
+    let marker_free = format!("## Tasks\n{ROW}{GROUP}");
     assert_eq!(
-        insert_task_line(contents, TASK),
+        insert_task_line(&marker_free, TASK),
         (
-            format!(
-                "{}\n{TASK}\n{}",
-                concat!(
-                    "## Tasks\n",
-                    "<!-- bob:task-status-badges:v1 -->\n",
-                    "[`⚪ 0 open`](#Tasks) · [`🔵 1 next/wip`](#Tasks#Next%20&%20In%20Progress) · [`🔴 0 blocked`](#Tasks#Blocked) · [`🟢 0 done/canceled`](#Tasks#Done%20&%20Canceled)\n",
-                ),
-                concat!(
-                    "\n",
-                    "### Next & In Progress\n",
-                    "<!-- bob:task-status-group:v1:active -->\n",
-                    "\n",
-                    "- [*] #task active\n",
-                )
-            ),
+            format!("## Tasks\n{ROW}\n{TASK}\n{GROUP}"),
+            Placement::Inserted,
+        )
+    );
+
+    let legacy =
+        format!("## Tasks\n<!-- bob:task-status-badges:v1 -->\n{ROW}{GROUP}");
+    assert_eq!(
+        insert_task_line(&legacy, TASK),
+        (
+            format!("## Tasks\n<!-- bob:task-status-badges:v1 -->\n{ROW}\n{TASK}\n{GROUP}"),
+            Placement::Inserted,
+        )
+    );
+
+    let legacy_prose =
+        "## Tasks\n<!-- bob:task-status-badges:v1 -->\nProject context.\n";
+    assert_eq!(
+        insert_task_line(legacy_prose, TASK),
+        (
+            format!("## Tasks\n<!-- bob:task-status-badges:v1 -->\n\n{TASK}\nProject context.\n"),
             Placement::Inserted,
         )
     );

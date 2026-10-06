@@ -432,28 +432,28 @@ pub(super) fn tasks_section(lines: &[LineSpan<'_>]) -> Option<TasksSection> {
         .map(|heading| heading.line_index)
         .unwrap_or(lines.len());
     Some(TasksSection {
-        heading_end: tasks_heading_end_after_badges(lines, heading_index),
+        heading_end: tasks_heading_end_after_badge_row(lines, heading_index),
         start_line: heading_index + 1,
         end_line,
     })
 }
 
-pub(super) fn tasks_heading_end_after_badges(
+pub(super) fn tasks_heading_end_after_badge_row(
     lines: &[LineSpan<'_>],
     heading_index: usize,
 ) -> usize {
     let mut heading_end = lines[heading_index].end;
-    let marker_index = heading_index + 1;
-    if marker_index >= lines.len()
-        || lines[marker_index].text.trim() != task_status_groups::BADGE_MARKER
+    let mut index = heading_index + 1;
+    if index < lines.len()
+        && task_status_groups::is_legacy_badge_marker(lines[index].text)
     {
-        return heading_end;
+        heading_end = lines[index].end;
+        index += 1;
     }
-
-    heading_end = lines[marker_index].end;
-    let row_index = marker_index + 1;
-    if row_index < lines.len() && !is_blank_line(lines[row_index].text) {
-        heading_end = lines[row_index].end;
+    if index < lines.len()
+        && task_status_groups::is_badge_row(lines[index].text)
+    {
+        heading_end = lines[index].end;
     }
     heading_end
 }

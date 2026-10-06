@@ -56,7 +56,6 @@ Short context for this project.
 
 const GOLDEN_OUTPUT: &str = "\
 ## Tasks
-<!-- bob:task-status-badges:v1 -->
 [`⚪ 1 open`](#Tasks) · [`🔵 2 next/wip`](#Tasks#Next%20&%20In%20Progress) · [`🔴 1 blocked`](#Tasks#Blocked) · [`🟢 2 done/canceled`](#Tasks#Done%20&%20Canceled)
 
 Short context for this project.
@@ -171,8 +170,144 @@ fn authored_child_containers_get_independent_badges_and_anchors() {
 }
 
 #[test]
-fn badge_marker_in_intake_is_relocated_to_the_slot() {
+fn is_badge_row_accepts_linked_unlinked_and_mixed_rows() {
+    let linked = "[`⚪ 1 open`](#Tasks) · [`🔵 2 next/wip`](#Tasks#Next%20&%20In%20Progress) · [`🔴 0 blocked`](#Tasks#Blocked) · [`🟢 3 done/canceled`](#Tasks#Done%20&%20Canceled)";
+    let unlinked =
+        "`⚪ 1 open` · `🔵 2 next/wip` · `🔴 0 blocked` · `🟢 3 done/canceled`";
+    let mixed = "[`⚪ 1 open`](#Tasks) · `🔵 2 next/wip` · [`🔴 0 blocked`](#Tasks#Blocked) · `🟢 3 done/canceled`";
+    assert!(is_badge_row(linked));
+    assert!(is_badge_row(unlinked));
+    assert!(is_badge_row(mixed));
+    assert!(is_badge_row(&format!("{linked}   ")));
+    assert!(is_badge_row(&format!("{linked}\r")));
+
+    let wrong_order = "[`🔵 2 next/wip`](#Tasks#Next%20&%20In%20Progress) · [`⚪ 1 open`](#Tasks) · [`🔴 0 blocked`](#Tasks#Blocked) · [`🟢 3 done/canceled`](#Tasks#Done%20&%20Canceled)";
+    assert!(!is_badge_row(wrong_order));
+    let wrong_label = "[`⚪ 1 opened`](#Tasks) · [`🔵 2 next/wip`](#Tasks#Next%20&%20In%20Progress) · [`🔴 0 blocked`](#Tasks#Blocked) · [`🟢 3 done/canceled`](#Tasks#Done%20&%20Canceled)";
+    assert!(!is_badge_row(wrong_label));
+    let missing_chip = "[`⚪ 1 open`](#Tasks) · [`🔵 2 next/wip`](#Tasks#Next%20&%20In%20Progress) · [`🔴 0 blocked`](#Tasks#Blocked)";
+    assert!(!is_badge_row(missing_chip));
+    let fifth_chip = format!("{linked} · `⚪ 1 open`");
+    assert!(!is_badge_row(&fifth_chip));
+    let non_digit = "[`⚪ x open`](#Tasks) · [`🔵 2 next/wip`](#Tasks#Next%20&%20In%20Progress) · [`🔴 0 blocked`](#Tasks#Blocked) · [`🟢 3 done/canceled`](#Tasks#Done%20&%20Canceled)";
+    assert!(!is_badge_row(non_digit));
+    let anchor_space = "[`⚪ 1 open`](#Ta sks) · [`🔵 2 next/wip`](#Tasks#Next%20&%20In%20Progress) · [`🔴 0 blocked`](#Tasks#Blocked) · [`🟢 3 done/canceled`](#Tasks#Done%20&%20Canceled)";
+    assert!(!is_badge_row(anchor_space));
+    let anchor_paren = "[`⚪ 1 open`](#a)b) · [`🔵 2 next/wip`](#Tasks#Next%20&%20In%20Progress) · [`🔴 0 blocked`](#Tasks#Blocked) · [`🟢 3 done/canceled`](#Tasks#Done%20&%20Canceled)";
+    assert!(!is_badge_row(anchor_paren));
+    let anchor_missing_hash = "[`⚪ 1 open`](Tasks) · [`🔵 2 next/wip`](#Tasks#Next%20&%20In%20Progress) · [`🔴 0 blocked`](#Tasks#Blocked) · [`🟢 3 done/canceled`](#Tasks#Done%20&%20Canceled)";
+    assert!(!is_badge_row(anchor_missing_hash));
+    assert!(!is_badge_row(&format!("- {linked}")));
+    assert!(!is_badge_row(&format!("Counts: {unlinked}")));
+    assert!(!is_badge_row("<!-- bob:task-status-badges:v1 -->"));
+    assert!(!is_badge_row("[`stale`](#Tasks)"));
+
+    assert!(is_legacy_badge_marker("<!-- bob:task-status-badges:v1 -->"));
+    assert!(is_legacy_badge_marker("<!-- bob:task-status-badges:v2 -->"));
+    assert!(!is_legacy_badge_marker(linked));
+    assert!(!is_legacy_badge_marker(
+        "<!-- bob:task-status-group:v1:active -->"
+    ));
+}
+
+#[test]
+fn marker_free_output_emits_row_directly_under_tasks() {
+    let result = grouped(GOLDEN_INPUT);
+    assert!(!result.contents.contains("task-status-badges"));
+    let mut lines = result.contents.lines();
+    assert_eq!(lines.next(), Some("## Tasks"));
+    let row = lines.next().expect("badge row directly under heading");
+    assert!(is_badge_row(row));
+    assert_idempotent(GOLDEN_INPUT);
+}
+
+#[test]
+fn legacy_marker_migrates_to_a_marker_free_row_in_the_slot() {
+    let stale = "[`⚪ 9 open`](#Tasks) · [`🔵 9 next/wip`](#Tasks#Next%20&%20In%20Progress) · [`🔴 9 blocked`](#Tasks#Blocked) · [`🟢 9 done/canceled`](#Tasks#Done%20&%20Canceled)";
+    let input = format!(
+        "\
+## Tasks
+<!-- bob:task-status-badges:v1 -->
+{stale}
+
+- [*] #task next
+"
+    );
+    let result = grouped(&input);
+
+    assert!(result.changed);
+    assert!(!result.contents.contains("task-status-badges"));
+    assert!(!result.contents.contains("9 open"));
+    assert!(result.contents.contains("[`⚪ 0 open`](#Tasks)"));
+    let mut lines = result.contents.lines();
+    assert_eq!(lines.next(), Some("## Tasks"));
+    assert!(is_badge_row(lines.next().expect("row in the slot")));
+    assert_idempotent(&result.contents);
+
+    let crlf = input.replace('\n', "\r\n");
+    let result = grouped(&crlf);
+    assert!(!result.contents.contains("task-status-badges"));
+    assert!(result.contents.contains("[`⚪ 0 open`](#Tasks)"));
+    assert_idempotent(&crlf);
+}
+
+#[test]
+fn legacy_marker_never_eats_following_prose() {
     let input = "\
+## Tasks
+<!-- bob:task-status-badges:v1 -->
+Project context.
+
+- [*] #task next
+";
+    let result = grouped(input);
+
+    assert!(result.changed);
+    assert!(!result.contents.contains("task-status-badges"));
+    assert!(result.contents.contains("Project context."));
+    assert!(result.contents.contains("[`⚪ 0 open`](#Tasks)"));
+    assert_idempotent(&result.contents);
+}
+
+#[test]
+fn duplicate_badge_rows_self_heal_into_the_slot() {
+    let stale = "[`⚪ 9 open`](#Tasks) · [`🔵 9 next/wip`](#Tasks#Next%20&%20In%20Progress) · [`🔴 9 blocked`](#Tasks#Blocked) · [`🟢 9 done/canceled`](#Tasks#Done%20&%20Canceled)";
+    let input = format!(
+        "\
+## Tasks
+{stale}
+
+Intro.
+
+{stale}
+
+- [*] #task next
+"
+    );
+    let result = grouped(&input);
+
+    assert!(result.changed);
+    assert!(result.warnings.is_empty());
+    assert!(!result.contents.contains("9 open"));
+    assert_eq!(
+        result
+            .contents
+            .lines()
+            .filter(|line| is_badge_row(line))
+            .count(),
+        1
+    );
+    let mut lines = result.contents.lines();
+    assert_eq!(lines.next(), Some("## Tasks"));
+    assert!(is_badge_row(lines.next().expect("single row in the slot")));
+    assert_idempotent(&result.contents);
+}
+
+#[test]
+fn badge_marker_in_intake_is_relocated_to_the_slot() {
+    let stale = "[`⚪ 9 open`](#Tasks) · [`🔵 9 next/wip`](#Tasks#Next%20&%20In%20Progress) · [`🔴 9 blocked`](#Tasks#Blocked) · [`🟢 9 done/canceled`](#Tasks#Done%20&%20Canceled)";
+    let input = format!(
+        "\
 ## Tasks
 
 Intro.
@@ -180,7 +315,7 @@ Intro.
 - [ ] #task ready
 
 <!-- bob:task-status-badges:v1 -->
-[`stale`](#Tasks)
+{stale}
 
 ### Next & In Progress
 <!-- bob:task-status-group:v1:active -->
@@ -192,35 +327,39 @@ Intro.
 
 ### Done & Canceled
 <!-- bob:task-status-group:v1:closed -->
-";
-    let result = grouped(input);
+"
+    );
+    let result = grouped(&input);
 
     assert!(result.changed);
     assert_text_order(
         &result.contents,
         &[
             "## Tasks",
-            "<!-- bob:task-status-badges:v1 -->",
             "[`⚪ 1 open`](#Tasks)",
             "Intro.",
             "- [ ] #task ready",
             "### Next & In Progress",
         ],
     );
-    assert!(!result.contents.contains("[`stale`](#Tasks)"));
+    assert!(!result.contents.contains("9 open"));
+    assert!(!result.contents.contains("task-status-badges"));
     assert_idempotent(&result.contents);
 }
 
 #[test]
 fn badge_row_is_not_a_task_or_ambiguous_boundary() {
-    let input = "\
+    let stale = "[`⚪ 9 open`](#Tasks) · [`🔵 9 next/wip`](#Tasks#Next%20&%20In%20Progress) · [`🔴 9 blocked`](#Tasks#Blocked) · [`🟢 9 done/canceled`](#Tasks#Done%20&%20Canceled)";
+    let input = format!(
+        "\
 ## Tasks
 <!-- bob:task-status-badges:v1 -->
-[`stale`](#Tasks)
+{stale}
 
 - [*] #task next
-";
-    let result = grouped(input);
+"
+    );
+    let result = grouped(&input);
 
     assert!(result.changed);
     assert!(result.warnings.is_empty());
@@ -231,48 +370,71 @@ fn badge_row_is_not_a_task_or_ambiguous_boundary() {
 
 #[test]
 fn orphaned_badge_block_is_removed_without_creating_groups() {
-    let input = "\
+    let row = "[`⚪ 1 open`](#Tasks) · [`🔵 0 next/wip`](#Tasks#Next%20&%20In%20Progress) · [`🔴 0 blocked`](#Tasks#Blocked) · [`🟢 0 done/canceled`](#Tasks#Done%20&%20Canceled)";
+    let input = format!(
+        "\
 ## Tasks
-<!-- bob:task-status-badges:v1 -->
-[`⚪ 1 open`](#Tasks)
+{row}
 
 - [ ] #task ready
-";
-    let result = grouped(input);
+"
+    );
+    let result = grouped(&input);
 
     assert!(result.changed);
     assert_eq!(result.grouped_sections, Vec::new());
     assert!(!result.contents.contains("task-status-badges"));
+    assert!(!result.contents.lines().any(is_badge_row));
     assert!(!result.contents.contains("Next & In Progress"));
+    assert!(result.contents.contains("- [ ] #task ready"));
+
+    let bare_marker = "\
+## Tasks
+<!-- bob:task-status-badges:v1 -->
+
+- [ ] #task ready
+";
+    let result = grouped(bare_marker);
+    assert!(result.changed);
+    assert!(!result.contents.contains("task-status-badges"));
     assert!(result.contents.contains("- [ ] #task ready"));
 }
 
 #[test]
-fn malformed_badge_markers_fail_closed() {
-    let duplicate = "\
+fn misplaced_badge_rows_fail_closed() {
+    let row = "[`⚪ 1 open`](#Tasks) · [`🔵 1 next/wip`](#Tasks#Next%20&%20In%20Progress) · [`🔴 0 blocked`](#Tasks#Blocked) · [`🟢 0 done/canceled`](#Tasks#Done%20&%20Canceled)";
+    let in_group = format!(
+        "\
 ## Tasks
-<!-- bob:task-status-badges:v1 -->
-[`stale`](#Tasks)
-<!-- bob:task-status-badges:v1 -->
+
+### Next & In Progress
+<!-- bob:task-status-group:v1:active -->
+
+{row}
 
 - [*] #task next
-";
-    let result = grouped(duplicate);
-    assert_eq!(result.contents, duplicate);
-    assert_eq!(result.warnings.len(), 1);
-    assert_eq!(
-        result.warnings[0].code,
-        GroupingSkipCode::MalformedBadgeMarker
-    );
 
-    let in_group = "\
+### Blocked
+<!-- bob:task-status-group:v1:blocked -->
+
+### Done & Canceled
+<!-- bob:task-status-group:v1:closed -->
+"
+    );
+    let result = grouped(&in_group);
+    assert_eq!(result.contents, in_group);
+    assert!(result
+        .warnings
+        .iter()
+        .any(|warning| warning.code == GroupingSkipCode::MisplacedBadgeRow));
+
+    let marker_in_group = "\
 ## Tasks
 
 ### Next & In Progress
 <!-- bob:task-status-group:v1:active -->
 
 <!-- bob:task-status-badges:v1 -->
-[`stale`](#Tasks)
 
 - [*] #task next
 
@@ -282,26 +444,37 @@ fn malformed_badge_markers_fail_closed() {
 ### Done & Canceled
 <!-- bob:task-status-group:v1:closed -->
 ";
-    let result = grouped(in_group);
-    assert_eq!(result.contents, in_group);
+    let result = grouped(marker_in_group);
+    assert_eq!(result.contents, marker_in_group);
     assert!(result
         .warnings
         .iter()
-        .any(|warning| warning.code == GroupingSkipCode::MalformedBadgeMarker));
+        .any(|warning| warning.code == GroupingSkipCode::MisplacedBadgeRow));
+}
 
-    let wrong_version = "\
+#[test]
+fn prose_lookalike_is_preserved_as_intake_prose() {
+    let input = "\
 ## Tasks
 
-<!-- bob:task-status-badges:v2 -->
+Counts: `⚪ 1 open`
 
 - [*] #task next
 ";
-    let result = grouped(wrong_version);
-    assert_eq!(result.contents, wrong_version);
-    assert!(result
-        .warnings
-        .iter()
-        .any(|warning| warning.code == GroupingSkipCode::MalformedBadgeMarker));
+    let result = grouped(input);
+
+    assert!(result.changed);
+    let intake = result.contents.split("### Next").next().unwrap();
+    assert!(intake.contains("Counts: `⚪ 1 open`"));
+    assert!(
+        result
+            .contents
+            .lines()
+            .filter(|line| is_badge_row(line))
+            .count()
+            >= 1
+    );
+    assert_idempotent(&result.contents);
 }
 
 #[test]
@@ -645,9 +818,8 @@ fn crlf_mixed_endings_unicode_and_missing_final_newline() {
     let result = grouped(input);
     assert!(result.contents.contains("café 日本語 ^id"));
     assert!(result.contents.contains("\r\n"));
-    assert!(result.contents.contains(
-        "<!-- bob:task-status-badges:v1 -->\r\n[`⚪ 0 open`](#Tasks)"
-    ));
+    assert!(result.contents.contains("[`⚪ 0 open`](#Tasks)"));
+    assert!(!result.contents.contains("task-status-badges"));
     assert!(!result.contents.ends_with('\n') || input.ends_with('\n'));
     assert!(!result.contents.ends_with('\n'));
     assert!(result.contents.contains("- [*] #task café 日本語 ^id\n"));
@@ -895,8 +1067,8 @@ fn skip_codes_are_stable() {
         "ambiguous_boundary"
     );
     assert_eq!(
-        GroupingSkipCode::MalformedBadgeMarker.as_str(),
-        "malformed_badge_marker"
+        GroupingSkipCode::MisplacedBadgeRow.as_str(),
+        "misplaced_badge_row"
     );
 }
 
