@@ -682,7 +682,10 @@ task stays due and Ctrl+Alt+F does not advance.
    moves on to the next remaining review item in the same keystroke —
    including a resolving Task Card commit. Ctrl+Shift+M never advances: it moves the
    task and follows it to its destination note, `<C-o>` returns to the source, and the
-   next `]s` resumes the walk where the moved row was. Alt+F is the one answer that
+   next `]s` resumes the walk where the moved row was. The walk follows rows by
+   note and line text and moves only from the row just answered, so a move, a
+   Work Log or SCHEDULE LOG insert, or any other line shift never makes an
+   answer or `]s` skip rows or jump ahead. Alt+F is the one answer that
    stays on the row;
    `]s` skips without answering, and `<C-o>` returns to the row just
    answered. For a returned deferral, "not
@@ -1457,6 +1460,7 @@ There is no freshness trial: no ritual change, release, or tuning waits on a tri
 - 2026-10-04: Ctrl+Enter walks the PRE/POST checklist (nav 2.4.0 / nav api v2, cycler 1.25.0).
 - 2026-10-06: answering a landed row advances the walk (nav 2.6.1 / nav api v3, cycler 1.26.0, block-id-prompt 1.22.0, ledger 1.29.2).
 - 2026-10-06: Ctrl+Shift+M from a landing follows the task to its destination and never advances; the next ]s resumes at the moved row's neighbour (nav 2.7.0).
+- 2026-10-06: the walk keeps queue order across line shifts; it follows rows by note and text and moves only from the row just answered (nav 2.7.1).
 
 ## 14. Keep-streak rollout, rollback, and calibration
 
