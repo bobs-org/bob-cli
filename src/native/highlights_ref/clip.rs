@@ -29,7 +29,7 @@ const DEFAULT_STATUS: &str = "ready";
 
 /// A clip failure: the message goes after `error:`, the hint after `hint:`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct ClipError {
+pub(super) struct ClipError {
     message: String,
     hint: Option<String>,
 }
@@ -51,6 +51,15 @@ impl ClipError {
 impl From<CommandError> for ClipError {
     fn from(error: CommandError) -> Self {
         Self::new(error.message)
+    }
+}
+
+impl From<ClipError> for CommandError {
+    fn from(error: ClipError) -> Self {
+        match error.hint {
+            Some(hint) => Self::new(format!("{}\nhint: {hint}", error.message)),
+            None => Self::new(error.message),
+        }
     }
 }
 
@@ -194,7 +203,7 @@ pub(crate) fn command() -> ClapCommand {
 }
 
 #[derive(Debug, Clone)]
-struct ClipOptions {
+pub(super) struct ClipOptions {
     dry_run: bool,
     force: bool,
     author: Option<String>,
@@ -206,6 +215,49 @@ struct ClipOptions {
     ref_type: String,
     status: String,
     title: Option<String>,
+}
+
+impl ClipOptions {
+    /// Options for a `create <article URL>` call. Author, published, and
+    /// saved-page replay stay unset; `-i` needs no mapping because the
+    /// engine always stamps `id`.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn for_create(
+        title: Option<String>,
+        name: Option<String>,
+        output: Option<PathBuf>,
+        parent: String,
+        ref_type: String,
+        status: String,
+        force: bool,
+        dry_run: bool,
+    ) -> std::result::Result<Self, ClipError> {
+        let name = name.map(|name| validate_name(&name)).transpose()?;
+        validate_ref_type(&ref_type)?;
+        Ok(Self {
+            dry_run,
+            force,
+            author: None,
+            html: None,
+            name,
+            output,
+            parent,
+            published: None,
+            ref_type,
+            status,
+            title,
+        })
+    }
+}
+
+/// Companion audio for an article capture: none, or an explicit `--audio`
+/// path bound against the final target. (`create-listen` adds the listen
+/// variant later.)
+#[derive(Debug, Clone, Default)]
+pub(super) enum Companion {
+    #[default]
+    None,
+    Explicit(PathBuf),
 }
 
 pub(super) fn run(matches: &ArgMatches) -> i32 {
@@ -271,7 +323,19 @@ fn clip_pdf(
         .expect("required by clap")
         .clone();
     let options = clip_options(matches)?;
-    let web_url = validate_and_clean(&raw_url)?;
+    capture_article(config, &raw_url, &options, Companion::None)
+}
+
+/// Capture a web article through the clip adapter and install the
+/// stamped PDF. Shared by `clip` (no companion) and `create <article
+/// URL>` (explicit `--audio` companion, if any).
+pub(super) fn capture_article(
+    config: &Config,
+    raw_url: &str,
+    options: &ClipOptions,
+    companion: Companion,
+) -> std::result::Result<(), ClipError> {
+    let web_url = validate_and_clean(raw_url)?;
     if let Some(html) = &options.html
         && html != "-"
         && !Path::new(html).is_file()
@@ -427,11 +491,31 @@ fn clip_pdf(
         options.force,
     )?;
 
+    // An explicit companion is planned against the final target, once
+    // the stem is known, and installed with the shared sequence.
+    let audio = match &companion {
+        Companion::None => None,
+        Companion::Explicit(path) => super::companion::plan_explicit_audio(
+            config,
+            &plan,
+            options.force,
+            path,
+        )?,
+    };
+
     let styler = Styler::detect();
     if options.dry_run {
         print_dry_run(
-            &styler, &web_url, &plan, &options, &title, &author, &published,
-            &captured, &response,
+            &styler,
+            &web_url,
+            &plan,
+            options,
+            &title,
+            &author,
+            &published,
+            &captured,
+            &response,
+            audio.as_ref(),
         );
         return Ok(());
     }
@@ -440,7 +524,15 @@ fn clip_pdf(
         title: Some(title.clone()),
         author: author.clone(),
     };
-    let page_count = stamp_and_install(&out_pdf, &plan.target, &marker, &info)?;
+    let created = super::companion::copy_audio_for_install(audio.as_ref())?;
+    let page_count =
+        match stamp_and_install(&out_pdf, &plan.target, &marker, &info) {
+            Ok(page_count) => page_count,
+            Err(error) => {
+                super::companion::cleanup_audio_on_failure(created.as_ref());
+                return Err(ClipError::from(error));
+            }
+        };
     let installed_bytes = fs::metadata(&plan.target)
         .map(|metadata| metadata.len())
         .unwrap_or(0);
@@ -450,6 +542,9 @@ fn clip_pdf(
         styler.success_prefix(false)
     );
     println!("pdf: {}", plan.target.display());
+    if let Some(audio) = &audio {
+        println!("audio: {} (from {})", audio.dest.display(), audio.origin);
+    }
     println!("title: {title}");
     if let Some(author) = &author {
         println!("author: {author}");
@@ -566,6 +661,7 @@ fn print_dry_run(
     published: &Option<String>,
     captured: &str,
     response: &CaptureSuccess,
+    audio: Option<&super::companion::AudioCopyPlan>,
 ) {
     println!(
         "{} would create Highlights-ready web PDF",
@@ -573,6 +669,9 @@ fn print_dry_run(
     );
     println!("source_url: {}", web_url.cleaned);
     println!("pdf: {}", plan.target.display());
+    if let Some(audio) = audio {
+        println!("audio: {} (from {})", audio.dest.display(), audio.origin);
+    }
     println!("sidecar_guard: {}", plan.sidecar.display());
     match &plan.workflow {
         TargetWorkflow::Intake {

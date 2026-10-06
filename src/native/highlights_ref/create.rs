@@ -295,7 +295,7 @@ pub(crate) fn command() -> ClapCommand {
         )
         .arg(xlib_dir_arg())
         .after_help(
-            "Targets:\n  Markdown file (.md) -> rendered with pandoc (default ref type chat)\n  Local PDF file (.pdf or %PDF- magic) -> stamped as-is (default ref type papers)\n  PDF URL (Content-Type PDF or sniffed %PDF-) -> downloaded, stamped as-is (default ref type papers)\n  arXiv paper URL (abs/html/pdf) -> PDF fetched from arxiv.org/pdf/<id>, metadata from the API (default ref type papers)\n  Web article URL (HTML 2xx or 403/429/503) -> captured by `bob highlights clip <URL>` (create support lands next)\n\nAudio:\n  Create discovers audio as `--audio PATH`, then frontmatter `audio.episode_id` in the sase-listen library (Markdown only), then a sibling `<stem>_narration.md` hash matched against library manifests (`BOB_HIGHLIGHTS_AUDIO_LIBRARY`, then `highlights.audio_library`, then `$XDG_DATA_HOME/sase-listen/library`, then `~/.local/share/sase-listen/library`); `--no-audio` skips discovery. The copy lands beside the PDF with the source extension lowercased before the PDF is installed, reuses identical bytes, refuses different bytes without `--force`, and refuses when the mirrored library audio already exists. An existing companion beside the target is reused on every route.\n\nExamples:\n  bob highlights create report.md\n  bob highlights create paper.pdf -t papers\n  bob highlights create https://example.com/paper.pdf -N my_paper\n  bob highlights create https://arxiv.org/abs/1706.03762 -d\n\nRenders a hyperlinked table of contents and PDF bookmarks with pandoc and embeds the page-1 marker used by `bob highlights scan`. By default the PDF is written to `<xlib-dir>/<ref-type>/<stem>.pdf`. `-o, --output` selects that complete path instead, including the filename; it requires a `.pdf` extension, expands a leading `~`, and resolves relative paths from the current directory. `--output` cannot be combined with `--ref-type` or `--name` because those only participate in default target derivation. `-N, --name` sets the output filename stem and, with `-i`, the marker id. `-T, --title` overrides the derived title. Scan moves intake PDFs into the library before writing reference notes. A PDF written directly into the library is still found by `bob highlights scan`. A PDF written outside the library and intake directories is not discovered by recursive scan; sync it with `bob highlights sync <PDF>`. A `<div class=\"listen\">` card is rendered as a callout with a Play link when companion audio is bound.",
+            "Targets:\n  Markdown file (.md) -> rendered with pandoc (default ref type chat)\n  Local PDF file (.pdf or %PDF- magic) -> stamped as-is (default ref type papers)\n  PDF URL (Content-Type PDF or sniffed %PDF-) -> downloaded, stamped as-is (default ref type papers)\n  arXiv paper URL (abs/html/pdf) -> PDF fetched from arxiv.org/pdf/<id>, metadata from the API (default ref type papers)\n  Web article URL (HTML 2xx or 403/429/503) -> captured with the clip engine (default ref type blogs; same PDF, marker, and report as `bob highlights clip`)\n\nAudio:\n  Create discovers audio as `--audio PATH`, then frontmatter `audio.episode_id` in the sase-listen library (Markdown only), then a sibling `<stem>_narration.md` hash matched against library manifests (`BOB_HIGHLIGHTS_AUDIO_LIBRARY`, then `highlights.audio_library`, then `$XDG_DATA_HOME/sase-listen/library`, then `~/.local/share/sase-listen/library`); `--no-audio` skips discovery. The copy lands beside the PDF with the source extension lowercased before the PDF is installed, reuses identical bytes, refuses different bytes without `--force`, and refuses when the mirrored library audio already exists. An existing companion beside the target is reused on every route.\n\nExamples:\n  bob highlights create report.md\n  bob highlights create paper.pdf -t papers\n  bob highlights create https://example.com/paper.pdf -N my_paper\n  bob highlights create https://arxiv.org/abs/1706.03762 -d\n\nRenders a hyperlinked table of contents and PDF bookmarks with pandoc and embeds the page-1 marker used by `bob highlights scan`. By default the PDF is written to `<xlib-dir>/<ref-type>/<stem>.pdf`. `-o, --output` selects that complete path instead, including the filename; it requires a `.pdf` extension, expands a leading `~`, and resolves relative paths from the current directory. `--output` cannot be combined with `--ref-type` or `--name` because those only participate in default target derivation. `-N, --name` sets the output filename stem and, with `-i`, the marker id. `-T, --title` overrides the derived title. Scan moves intake PDFs into the library before writing reference notes. A PDF written directly into the library is still found by `bob highlights scan`. A PDF written outside the library and intake directories is not discovered by recursive scan; sync it with `bob highlights sync <PDF>`. A `<div class=\"listen\">` card is rendered as a callout with a Play link when companion audio is bound.",
         )
 }
 
@@ -410,10 +410,7 @@ fn create_pdf(
                 );
             }
             target_mod::CreateSource::WebArticle { url } => {
-                let _ = url;
-                return Err(CommandError::new(
-                    "web article URLs are captured by bob highlights clip <URL> (create support lands next)",
-                ));
+                return create_article_route(config, url, options);
             }
             _ => {
                 return Err(CommandError::new(
@@ -432,6 +429,38 @@ fn create_pdf(
         }
         _ => Err(CommandError::new("unexpected target classification")),
     }
+}
+
+fn create_article_route(
+    config: &Config,
+    url: super::clip_url::WebUrl,
+    options: &CreateOptions,
+) -> Result<()> {
+    let ref_type =
+        default_ref_type_for_kind("article", options.ref_type.as_deref())?;
+    let clip_options = super::clip::ClipOptions::for_create(
+        options.title.clone(),
+        options.name.clone(),
+        options.output.clone(),
+        options.parent.clone(),
+        ref_type,
+        options.status.clone(),
+        options.force,
+        options.dry_run,
+    )?;
+    // `-i` is accepted and is a no-op: the clip engine always stamps `id`.
+    // Author, published, and saved-page replay stay unset on this route.
+    let companion = match &options.audio {
+        Some(path) => super::clip::Companion::Explicit(path.clone()),
+        None => super::clip::Companion::None,
+    };
+    super::clip::capture_article(
+        config,
+        &url.cleaned,
+        &clip_options,
+        companion,
+    )?;
+    Ok(())
 }
 
 fn check_dedupe_with_listen_hint(

@@ -1,11 +1,12 @@
 # `bob highlights create` — Markdown, PDF, and URL targets
 
 `bob highlights create <TARGET>` turns Markdown, a local PDF, a PDF URL,
-or an arXiv paper URL into a Highlights-ready PDF in the intake
-(`xlib/<ref-type>/<stem>.pdf` by default), which `bob highlights scan`
-later moves into `lib/` and turns into a `ref/` note. A PDF is stamped
-as-is, never re-rendered. Web article URLs are captured by
-`bob highlights clip <URL>` for now; `create` support lands next.
+an arXiv paper URL, or a web article URL into a Highlights-ready PDF in
+the intake (`xlib/<ref-type>/<stem>.pdf` by default), which
+`bob highlights scan` later moves into `lib/` and turns into a `ref/`
+note. A PDF is stamped as-is, never re-rendered. Web article URLs run
+through the clip engine with `create`'s options and get the same PDF,
+marker, and report as `bob highlights clip <URL>`.
 
 ```bash
 bob highlights create [OPTIONS] <TARGET>
@@ -26,6 +27,9 @@ bob highlights create https://example.com/paper.pdf -N my_paper
 # arXiv paper, preview only
 bob highlights create https://arxiv.org/abs/1706.03762 -d
 
+# Web article through the clip engine (default ref type blogs)
+bob highlights create https://example.com/article/hello
+
 # Overrides
 bob highlights create paper.pdf -T "The Real Title" -N my_paper -t docs
 bob highlights create report.md --audio episode.mp3 --include-id
@@ -39,7 +43,7 @@ bob highlights create report.md --audio episode.mp3 --include-id
 | Local PDF (`.pdf` or `%PDF-` magic) | Stamped as-is | `papers` | `-T`, plausible Info `/Title`, humanized stem | `-N`, file stem if it passes `--name` validation, else `snake_case` |
 | PDF URL (PDF content-type or sniffed `%PDF-`) | Downloaded with `curl`, stamped as-is | `papers` | `-T`, plausible Info `/Title`, humanized stem | `-N`, URL slug, short-title stem, `<host>_<YYYYMMDD>` |
 | arXiv (`arxiv.org` abs/html/pdf) | PDF fetched from `arxiv.org/pdf/<id>`, metadata from the API | `papers` | `-T`, arXiv API title, plausible Info `/Title`, `arXiv <id>` | `-N`, short-title stem, `arxiv_<id>` |
-| Web article (HTML 2xx or 403/429/503) | `bob highlights clip <URL>` (create support lands next) | `blogs` | clip rules | clip rules |
+| Web article (HTML 2xx or 403/429/503) | Captured with the clip engine (same PDF, marker, and report as `bob highlights clip`) | `blogs` | clip rules (`-T` maps to the clip title override) | clip rules (`-N`) |
 
 Short-title stem: when the text before the first `:` is 1–4 words, that
 prefix is the short name (`EA-Graph: …` becomes `ea_graph`); otherwise the

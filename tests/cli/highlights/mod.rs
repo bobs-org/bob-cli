@@ -2,6 +2,7 @@
 
 mod clip;
 mod create;
+mod fake_clip;
 mod marker;
 mod scan;
 mod scan_hooks;

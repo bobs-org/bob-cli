@@ -1,5 +1,6 @@
 //! Highlights create tests.
 
+use super::fake_clip::*;
 use crate::support::*;
 use std::ffi::OsString;
 #[cfg(unix)]
@@ -1077,6 +1078,10 @@ case "$url" in
     printf '<html><body>article</body></html>' > "$dest"
     printf '200\ntext/html; charset=utf-8\n\n'
     ;;
+  *"example.com/walled"*)
+    printf '<html><body>bot wall</body></html>' > "$dest"
+    printf '403\ntext/html; charset=utf-8\n\n'
+    ;;
   *"example.com/octet.pdf"*)
     cp "$FAKE_CURL_ROOT/paper.pdf" "$dest"
     printf '200\napplication/octet-stream\n\n'
@@ -1526,7 +1531,7 @@ fn highlights_create_pdf_url_stamps_and_dedupes() {
 }
 
 #[test]
-fn highlights_create_pdf_url_rejects_claimed_pdf_404_and_html() {
+fn highlights_create_pdf_url_rejects_claimed_pdf_and_404() {
     let temp = TempDir::new("bob-cli-highlights-create-pdf-errors");
     let vault = temp.path().join("vault");
     let root = temp.path().join("curl-root");
@@ -1561,14 +1566,6 @@ fn highlights_create_pdf_url_rejects_claimed_pdf_404_and_html() {
     assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
     assert!(
         stderr(&output).contains("server returned HTTP 404"),
-        "{}",
-        format_output(&output)
-    );
-
-    let output = run("https://example.com/article/hello");
-    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
-    assert!(
-        stderr(&output).contains("bob highlights clip"),
         "{}",
         format_output(&output)
     );
@@ -1758,5 +1755,232 @@ fn highlights_create_pdf_url_binds_explicit_audio() {
     assert!(
         vault.join("xlib/papers/paper.mp3").is_file(),
         "audio must be bound"
+    );
+}
+
+fn article_env(
+    command: &mut Command,
+    vault: &std::path::Path,
+    curl: &std::path::Path,
+    root: &std::path::Path,
+    log: &std::path::Path,
+    adapter: &std::path::Path,
+) {
+    command
+        .arg("-b")
+        .arg(vault)
+        .env("BOB_HIGHLIGHTS_CURL", curl)
+        .env("FAKE_CURL_ROOT", root)
+        .env("FAKE_CURL_LOG", log)
+        .env("BOB_WEB_CLIP_ADAPTER", adapter);
+}
+
+#[test]
+fn highlights_create_article_routes_through_clip_engine() {
+    let temp = TempDir::new("bob-cli-highlights-create-article");
+    let vault = temp.path().join("vault");
+    let root = temp.path().join("curl-root");
+    std::fs::create_dir_all(&root).expect("create curl root");
+    let fake_curl = write_fake_curl(temp.path());
+    let log = temp.path().join("curl.log");
+    std::fs::write(&log, "").expect("init log");
+    let fake = FakeClip::new(&temp, "fake");
+
+    let mut command = bob_command();
+    command
+        .arg("highlights")
+        .arg("create")
+        .arg("https://example.com/article/hello");
+    article_env(&mut command, &vault, &fake_curl, &root, &log, &fake.path);
+    let output = command.output().expect("run create article");
+    assert_success(&output);
+    let report = stdout(&output);
+    let target = vault.join("xlib/blogs/hello.pdf");
+    assert!(target.is_file(), "stamped PDF must be installed: {report}");
+    assert!(
+        report.contains("created Highlights-ready web PDF")
+            && report.contains("source_url: https://example.com/article/hello")
+            && report.contains("title: Symphony Spec")
+            && report.contains("author: Jane Doe")
+            && report.contains("id: hello"),
+        "{report}"
+    );
+    // Create hands the cleaned URL to the adapter with clip defaults.
+    let request = fake.request();
+    assert!(
+        request.contains("\"url\":\"https://example.com/article/hello\"")
+            && request.contains("\"dry_run\":false"),
+        "{request}"
+    );
+    let marker_output = bob_command()
+        .arg("highlights")
+        .arg("marker")
+        .arg(&target)
+        .arg("-b")
+        .arg(&vault)
+        .output()
+        .expect("inspect article marker");
+    assert_success(&marker_output);
+    let marker = stdout(&marker_output);
+    assert!(
+        marker.contains("- title: Symphony Spec\n")
+            && marker.contains("source_url: https://example.com/article/hello"),
+        "{marker}"
+    );
+
+    // A second run is refused by dedupe.
+    let mut rerun = bob_command();
+    rerun
+        .arg("highlights")
+        .arg("create")
+        .arg("https://example.com/article/hello");
+    article_env(&mut rerun, &vault, &fake_curl, &root, &log, &fake.path);
+    let output = rerun.output().expect("rerun create article");
+    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+    assert!(
+        stderr(&output).contains("already queued"),
+        "{}",
+        format_output(&output)
+    );
+}
+
+#[test]
+fn highlights_create_article_maps_options_to_clip() {
+    let temp = TempDir::new("bob-cli-highlights-create-article-opts");
+    let vault = temp.path().join("vault");
+    let root = temp.path().join("curl-root");
+    std::fs::create_dir_all(&root).expect("create curl root");
+    let fake_curl = write_fake_curl(temp.path());
+    let log = temp.path().join("curl.log");
+    std::fs::write(&log, "").expect("init log");
+    let fake = FakeClip::new(&temp, "fake");
+
+    let mut command = bob_command();
+    command
+        .arg("highlights")
+        .arg("create")
+        .arg("https://example.com/article/hello")
+        .arg("-T")
+        .arg("Custom Title")
+        .arg("-N")
+        .arg("custom_stem")
+        .arg("-t")
+        .arg("docs")
+        .arg("-s")
+        .arg("next")
+        .arg("-P")
+        .arg("sase_ref")
+        .arg("-i");
+    article_env(&mut command, &vault, &fake_curl, &root, &log, &fake.path);
+    let output = command.output().expect("run create article with options");
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        vault.join("xlib/docs/custom_stem.pdf").is_file(),
+        "mapped name and ref type must win: {report}"
+    );
+    assert!(
+        report.contains("title: Custom Title")
+            && report.contains("status: next")
+            && report.contains("parent: sase_ref")
+            && report.contains("id: custom_stem"),
+        "{report}"
+    );
+    // The -T override is visible in the adapter request.
+    let request = fake.request();
+    assert!(request.contains("\"title\":\"Custom Title\""), "{request}");
+}
+
+#[test]
+fn highlights_create_article_routes_bot_wall_to_adapter() {
+    let temp = TempDir::new("bob-cli-highlights-create-article-walled");
+    let vault = temp.path().join("vault");
+    let root = temp.path().join("curl-root");
+    std::fs::create_dir_all(&root).expect("create curl root");
+    let fake_curl = write_fake_curl(temp.path());
+    let log = temp.path().join("curl.log");
+    std::fs::write(&log, "").expect("init log");
+    let fake = FakeClip::new(&temp, "fake");
+
+    let mut command = bob_command();
+    command
+        .arg("highlights")
+        .arg("create")
+        .arg("https://example.com/walled/field-notes");
+    article_env(&mut command, &vault, &fake_curl, &root, &log, &fake.path);
+    let output = command.output().expect("run create walled article");
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        vault.join("xlib/blogs/field_notes.pdf").is_file(),
+        "bot-walled article must route to the adapter: {report}"
+    );
+    assert!(fake.called(), "the adapter must run for a 403");
+}
+
+#[test]
+fn highlights_create_article_binds_explicit_audio() {
+    let temp = TempDir::new("bob-cli-highlights-create-article-audio");
+    let vault = temp.path().join("vault");
+    let root = temp.path().join("curl-root");
+    std::fs::create_dir_all(&root).expect("create curl root");
+    let fake_curl = write_fake_curl(temp.path());
+    let log = temp.path().join("curl.log");
+    std::fs::write(&log, "").expect("init log");
+    let fake = FakeClip::new(&temp, "fake");
+    let audio = temp.path().join("episode.mp3");
+    std::fs::write(&audio, b"audio-bytes").expect("write audio");
+
+    let mut command = bob_command();
+    command
+        .arg("highlights")
+        .arg("create")
+        .arg("https://example.com/article/hello")
+        .arg("--audio")
+        .arg(&audio);
+    article_env(&mut command, &vault, &fake_curl, &root, &log, &fake.path);
+    let output = command.output().expect("run create article with audio");
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains("(from --audio)"),
+        "{}",
+        format_output(&output)
+    );
+    assert!(
+        vault.join("xlib/blogs/hello.mp3").is_file(),
+        "audio must be bound beside the article PDF"
+    );
+}
+
+#[test]
+fn highlights_create_article_dry_run_writes_nothing() {
+    let temp = TempDir::new("bob-cli-highlights-create-article-dry");
+    let vault = temp.path().join("vault");
+    let root = temp.path().join("curl-root");
+    std::fs::create_dir_all(&root).expect("create curl root");
+    let fake_curl = write_fake_curl(temp.path());
+    let log = temp.path().join("curl.log");
+    std::fs::write(&log, "").expect("init log");
+    let fake = FakeClip::new(&temp, "fake");
+
+    let mut command = bob_command();
+    command
+        .arg("highlights")
+        .arg("create")
+        .arg("https://example.com/article/hello")
+        .arg("-d");
+    article_env(&mut command, &vault, &fake_curl, &root, &log, &fake.path);
+    let output = command.output().expect("dry-run create article");
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("would create Highlights-ready web PDF")
+            && report.contains("writes: none"),
+        "{report}"
+    );
+    assert!(fake.called(), "dry run still captures to plan");
+    assert!(
+        !vault.join("xlib/blogs/hello.pdf").exists(),
+        "dry run must not install: {report}"
     );
 }
