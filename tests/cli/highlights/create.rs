@@ -1078,6 +1078,14 @@ case "$url" in
     printf '<html><body>article</body></html>' > "$dest"
     printf '200\ntext/html; charset=utf-8\n\n'
     ;;
+  *"example.com/index/open-source-codex-orchestration-symphony"*)
+    printf '<html><body>article</body></html>' > "$dest"
+    printf '200\ntext/html; charset=utf-8\n\n'
+    ;;
+  *"example.com/files/quarterly-report.pdf"*)
+    printf '<html><body>article</body></html>' > "$dest"
+    printf '200\ntext/html; charset=utf-8\n\n'
+    ;;
   *"example.com/walled"*)
     printf '<html><body>bot wall</body></html>' > "$dest"
     printf '403\ntext/html; charset=utf-8\n\n'
@@ -2339,5 +2347,1170 @@ fn ingest_characterizes_url_failure_modes() {
         stderr(&output).contains("uv was not found"),
         "{}",
         format_output(&output)
+    );
+}
+// --- Folded clip coverage: every clip scenario create did not already cover ---
+const FOLDED_URL: &str =
+    "https://example.com/index/open-source-codex-orchestration-symphony/";
+const FOLDED_STEM: &str = "open_source_codex_orchestration_symphony";
+
+#[test]
+fn highlights_create_rejects_html_with_local_target_before_any_work() {
+    let temp = TempDir::new("bob-cli-highlights-create-html-local");
+    let vault = temp.path().join("vault");
+    let source = temp.path().join("report.md");
+    write_file(&source, "# Report\n");
+    let html = temp.path().join("saved.html");
+    write_file(&html, "<html><body>saved</body></html>");
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg(&source)
+        .arg("-b")
+        .arg(&vault)
+        .arg("-H")
+        .arg(&html)
+        .output()
+        .expect("run create --html with local target");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "--html with a local TARGET must fail:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        stderr(&output).contains("--html requires an http(s) URL TARGET"),
+        "{}",
+        format_output(&output)
+    );
+    assert!(!vault.exists(), "rejection must precede any work");
+}
+
+#[test]
+fn highlights_create_rejects_bad_published_before_any_work() {
+    let temp = TempDir::new("bob-cli-highlights-create-bad-published");
+    let vault = temp.path().join("vault");
+    let fake = FakeClip::new(&temp, "fake");
+    let curl_root = temp.path().join("curl-root");
+    std::fs::create_dir_all(&curl_root).expect("create curl root");
+    let fake_curl = write_fake_curl(temp.path());
+    let curl_log = temp.path().join("curl.log");
+    std::fs::write(&curl_log, "").expect("init curl log");
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg("https://example.com/article/hello")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-p")
+        .arg("2026-13-40")
+        .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+        .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
+        .env("FAKE_CURL_ROOT", &curl_root)
+        .env("FAKE_CURL_LOG", &curl_log)
+        .output()
+        .expect("run create with bad --published");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "bad --published must fail:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        stderr(&output).contains("published date must be YYYY-MM-DD"),
+        "{}",
+        format_output(&output)
+    );
+    assert!(!fake.called(), "validation must precede the adapter");
+    assert!(
+        std::fs::read_to_string(&curl_log)
+            .expect("read curl log")
+            .is_empty(),
+        "validation must precede the probe"
+    );
+}
+
+#[test]
+fn highlights_create_local_pdf_overrides_author_and_published() {
+    let temp = TempDir::new("bob-cli-highlights-create-pdf-overrides");
+    let vault = temp.path().join("vault");
+    let source = temp.path().join("paper.pdf");
+    write_bare_pdf(&source, None, None);
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg(&source)
+        .arg("-b")
+        .arg(&vault)
+        .arg("-A")
+        .arg("Override Author")
+        .arg("-p")
+        .arg("2026-02-03")
+        .arg("-d")
+        .output()
+        .expect("run create local PDF with overrides --dry-run");
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("author: Override Author (override)")
+            && report.contains("published: 2026-02-03 (override)"),
+        "{report}"
+    );
+}
+
+#[test]
+fn highlights_create_arxiv_dry_run_shows_override_sources() {
+    let temp = TempDir::new("bob-cli-highlights-create-arxiv-overrides");
+    let vault = temp.path().join("vault");
+    let root = temp.path().join("curl-root");
+    std::fs::create_dir_all(&root).expect("create curl root");
+    write_bare_pdf(
+        &root.join("paper.pdf"),
+        Some("Remote Paper Title"),
+        Some("Jane Doe"),
+    );
+    write_arxiv_api_fixture(&root);
+    std::fs::copy(root.join("paper.pdf"), root.join("arxiv.pdf"))
+        .expect("copy arxiv pdf");
+    let fake_curl = write_fake_curl(temp.path());
+    let log = temp.path().join("curl.log");
+    std::fs::write(&log, "").expect("init log");
+    let fake = FakeClip::new(&temp, "fake");
+
+    let mut command = bob_command();
+    command
+        .arg("highlights")
+        .arg("create")
+        .arg("https://arxiv.org/abs/1706.03762")
+        .arg("-A")
+        .arg("Override Author")
+        .arg("-p")
+        .arg("2026-02-03")
+        .arg("-d");
+    article_env(&mut command, &vault, &fake_curl, &root, &log, &fake.path);
+    let output = command.output().expect("run create arXiv with overrides");
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("author: Override Author (override)")
+            && report.contains("published: 2026-02-03 (override)"),
+        "{report}"
+    );
+}
+
+#[test]
+fn highlights_create_markdown_marker_carries_author_and_published() {
+    let temp = TempDir::new("bob-cli-highlights-create-md-overrides");
+    let source = temp.path().join("report.md");
+    let vault = temp.path().join("vault");
+    write_file(&source, "# Report\n");
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg(&source)
+        .arg("-b")
+        .arg(&vault)
+        .arg("-A")
+        .arg("Override Author")
+        .arg("-p")
+        .arg("2026-02-03")
+        .arg("-d")
+        .output()
+        .expect("run create markdown with overrides --dry-run");
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("author: Override Author (override)")
+            && report.contains("published: 2026-02-03 (override)")
+            && report.contains("author: Override Author")
+            && report.contains("published: 2026-02-03"),
+        "marker must carry overrides:\n{report}"
+    );
+}
+
+#[test]
+fn highlights_create_clip_alias_is_byte_identical_on_error_path() {
+    let temp = TempDir::new("bob-cli-highlights-create-alias-error");
+    let vault = temp.path().join("vault");
+    std::fs::create_dir_all(&vault).expect("create vault");
+
+    let create = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg("ftp://example.com/article")
+        .arg("-b")
+        .arg(&vault)
+        .output()
+        .expect("run create error path");
+    let clip = bob_command()
+        .arg("highlights")
+        .arg("clip")
+        .arg("ftp://example.com/article")
+        .arg("-b")
+        .arg(&vault)
+        .output()
+        .expect("run clip error path");
+    assert_eq!(
+        create.status.code(),
+        clip.status.code(),
+        "alias error exit must match"
+    );
+    assert_eq!(
+        stderr(&clip),
+        stderr(&create),
+        "alias error stderr must be byte-identical"
+    );
+    assert_eq!(
+        stdout(&clip),
+        stdout(&create),
+        "alias error stdout must be byte-identical"
+    );
+}
+
+#[test]
+fn highlights_create_folded_success_writes_stamped_intake_pdf() {
+    let temp = TempDir::new("bob-cli-highlights-create-folded-success");
+    let vault = temp.path().join("vault");
+    let fake = FakeClip::new(&temp, "fake");
+    let curl_root = temp.path().join("curl-root");
+    std::fs::create_dir_all(&curl_root).expect("create curl root");
+    let fake_curl = write_fake_curl(temp.path());
+    let curl_log = temp.path().join("curl.log");
+    std::fs::write(&curl_log, "").expect("init curl log");
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg(FOLDED_URL)
+        .arg("-b")
+        .arg(&vault)
+        .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+        .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
+        .env("FAKE_CURL_ROOT", &curl_root)
+        .env("FAKE_CURL_LOG", &curl_log)
+        .output()
+        .expect("run bob highlights create");
+
+    assert_success(&output);
+    let report = stdout(&output);
+    let pdf = vault.join(format!("xlib/blogs/{FOLDED_STEM}.pdf"));
+    assert!(
+        report.contains("created Highlights-ready web PDF")
+            && report.contains(path_str(&pdf))
+            && report.contains("title: Symphony Spec")
+            && report.contains("author: Jane Doe")
+            && report.contains("published: 2026-04-27")
+            && report.contains("captured: ")
+            && report.contains("source_url: https://example.com/index/open-source-codex-orchestration-symphony/")
+            && report.contains("status: ready")
+            && report.contains("parent: obsidian_ref")
+            && report.contains(&format!("id: {FOLDED_STEM}"))
+            && report.contains("capture: chrome 154.0.0 · headless")
+            && report.contains("images: 2/2")
+            && report.contains("fidelity: ok")
+            && report.contains("next: bob ref scan"),
+        "{report}"
+    );
+    assert!(pdf.is_file(), "create must install the intake PDF");
+
+    let marker = bob_command()
+        .arg("highlights")
+        .arg("marker")
+        .arg(&pdf)
+        .arg("-b")
+        .arg(&vault)
+        .output()
+        .expect("run bob highlights marker");
+    assert_success(&marker);
+    let marker_report = stdout(&marker);
+    assert!(
+        marker_report.contains("source_url: https://example.com/index/open-source-codex-orchestration-symphony/")
+            && marker_report.contains("author: Jane Doe")
+            && marker_report.contains("published: 2026-04-27")
+            && marker_report.contains("captured: ")
+            && marker_report.contains(&format!("id: {FOLDED_STEM}")),
+        "{marker_report}"
+    );
+
+    let document = lopdf::Document::load(&pdf).expect("load created PDF");
+    let info = match document.trailer.get(b"Info") {
+        Ok(lopdf::Object::Reference(id)) => {
+            document.get_dictionary(*id).expect("read Info dict")
+        }
+        _ => panic!("expected an Info dictionary"),
+    };
+    let title = info.get(b"Title").expect("Info Title");
+    assert!(
+        lopdf::decode_text_string(title)
+            .expect("decode Info Title")
+            .contains("Symphony Spec"),
+        "Info Title must carry the article title"
+    );
+}
+
+#[test]
+fn highlights_create_folded_supports_ref_type_output_and_name() {
+    let temp = TempDir::new("bob-cli-highlights-create-folded-targets");
+    let vault = temp.path().join("vault");
+    let fake = FakeClip::new(&temp, "fake");
+    let curl_root = temp.path().join("curl-root");
+    std::fs::create_dir_all(&curl_root).expect("create curl root");
+    let fake_curl = write_fake_curl(temp.path());
+    let curl_log = temp.path().join("curl.log");
+    std::fs::write(&curl_log, "").expect("init curl log");
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg(FOLDED_URL)
+        .arg("-b")
+        .arg(&vault)
+        .arg("-t")
+        .arg("papers")
+        .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+        .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
+        .env("FAKE_CURL_ROOT", &curl_root)
+        .env("FAKE_CURL_LOG", &curl_log)
+        .output()
+        .expect("run bob highlights create -t");
+    assert_success(&output);
+    assert!(
+        vault
+            .join(format!("xlib/papers/{FOLDED_STEM}.pdf"))
+            .is_file(),
+        "-t papers must select the intake subdirectory"
+    );
+
+    let named = temp.path().join("vault-named");
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg(FOLDED_URL)
+        .arg("-b")
+        .arg(&named)
+        .arg("-N")
+        .arg("custom-stem.pdf")
+        .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+        .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
+        .env("FAKE_CURL_ROOT", &curl_root)
+        .env("FAKE_CURL_LOG", &curl_log)
+        .output()
+        .expect("run bob highlights create -N");
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains("id: custom-stem"),
+        "-N must strip .pdf and become the marker id:\n{}",
+        format_output(&output)
+    );
+    assert!(named.join("xlib/blogs/custom-stem.pdf").is_file());
+
+    let external_vault = temp.path().join("vault-external");
+    let external = temp.path().join("outside.pdf");
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg(FOLDED_URL)
+        .arg("-b")
+        .arg(&external_vault)
+        .arg("-o")
+        .arg(&external)
+        .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+        .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
+        .env("FAKE_CURL_ROOT", &curl_root)
+        .env("FAKE_CURL_LOG", &curl_log)
+        .output()
+        .expect("run bob highlights create -o");
+    assert_success(&output);
+    assert!(external.is_file(), "-o must write the exact path");
+    assert!(
+        stdout(&output).contains("next: bob ref sync"),
+        "-o outside the vault must point at sync:\n{}",
+        format_output(&output)
+    );
+}
+
+#[test]
+fn highlights_create_folded_forwards_overrides_and_html() {
+    let temp = TempDir::new("bob-cli-highlights-create-folded-overrides");
+    let vault = temp.path().join("vault");
+    let fake = FakeClip::new(&temp, "fake");
+    let curl_root = temp.path().join("curl-root");
+    std::fs::create_dir_all(&curl_root).expect("create curl root");
+    let fake_curl = write_fake_curl(temp.path());
+    let curl_log = temp.path().join("curl.log");
+    std::fs::write(&curl_log, "").expect("init curl log");
+    let html = temp.path().join("saved.html");
+    write_file(&html, "<html><body><h1>Saved</h1></body></html>");
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg(FOLDED_URL)
+        .arg("-b")
+        .arg(&vault)
+        .arg("-A")
+        .arg("Custom Author")
+        .arg("-T")
+        .arg("Custom Title")
+        .arg("-p")
+        .arg("2026-05-01")
+        .arg("-H")
+        .arg(&html)
+        .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+        .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
+        .env("FAKE_CURL_ROOT", &curl_root)
+        .env("FAKE_CURL_LOG", &curl_log)
+        .output()
+        .expect("run bob highlights create with overrides");
+    assert_success(&output);
+    let request = fake.request();
+    assert!(
+        request.contains(r#""title":"Custom Title""#)
+            && request.contains(r#""author":"Custom Author""#)
+            && request.contains(r#""published":"2026-05-01""#)
+            && request.contains(&format!(
+                r#""html_path":{}"#,
+                serde_json::to_string(path_str(&html)).expect("quote path")
+            )),
+        "overrides and --html must reach the adapter:\n{request}"
+    );
+    let report = stdout(&output);
+    assert!(
+        report.contains("title: Custom Title")
+            && report.contains("author: Custom Author")
+            && report.contains("published: 2026-05-01")
+            && report.contains("capture: "),
+        "{report}"
+    );
+    assert!(
+        !std::fs::read_to_string(&curl_log)
+            .expect("read curl log")
+            .contains("example.com"),
+        "probe must be skipped with --html: {}",
+        std::fs::read_to_string(&curl_log).expect("reread curl log")
+    );
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg(FOLDED_URL)
+        .arg("-b")
+        .arg(temp.path().join("vault-override-dry"))
+        .arg("-A")
+        .arg("Custom Author")
+        .arg("-T")
+        .arg("Custom Title")
+        .arg("-p")
+        .arg("2026-05-01")
+        .arg("-d")
+        .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+        .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
+        .env("FAKE_CURL_ROOT", &curl_root)
+        .env("FAKE_CURL_LOG", &curl_log)
+        .output()
+        .expect("run bob highlights create overrides --dry-run");
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("title: Custom Title (override)")
+            && report.contains("author: Custom Author (override)")
+            && report.contains("published: 2026-05-01 (override)"),
+        "{report}"
+    );
+
+    let piped = temp.path().join("vault-piped");
+    let mut command = bob_command();
+    command
+        .arg("highlights")
+        .arg("create")
+        .arg(FOLDED_URL)
+        .arg("-b")
+        .arg(&piped)
+        .arg("--html")
+        .arg("-")
+        .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+        .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
+        .env("FAKE_CURL_ROOT", &curl_root)
+        .env("FAKE_CURL_LOG", &curl_log);
+    let output =
+        run_with_stdin(&mut command, "<html><body>stdin page</body></html>");
+    assert_success(&output);
+    let request = fake.request();
+    assert!(
+        request.contains("input.html"),
+        "--html - must stage stdin in the workdir:\n{request}"
+    );
+    assert!(
+        std::fs::read_to_string(fake.root.join("staged.html"))
+            .expect("read staged stdin")
+            .contains("stdin page"),
+        "staged stdin must hold the piped HTML"
+    );
+}
+
+#[test]
+fn highlights_create_folded_dry_run_writes_nothing() {
+    let temp = TempDir::new("bob-cli-highlights-create-folded-dry-run");
+    let vault = temp.path().join("vault");
+    let fake = FakeClip::new(&temp, "fake");
+    let curl_root = temp.path().join("curl-root");
+    std::fs::create_dir_all(&curl_root).expect("create curl root");
+    let fake_curl = write_fake_curl(temp.path());
+    let curl_log = temp.path().join("curl.log");
+    std::fs::write(&curl_log, "").expect("init curl log");
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg(FOLDED_URL)
+        .arg("-b")
+        .arg(&vault)
+        .arg("-d")
+        .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+        .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
+        .env("FAKE_CURL_ROOT", &curl_root)
+        .env("FAKE_CURL_LOG", &curl_log)
+        .output()
+        .expect("run bob highlights create --dry-run");
+
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("would create Highlights-ready web PDF")
+            && report.contains("source_url: https://example.com/index/open-source-codex-orchestration-symphony/")
+            && report.contains(&format!("xlib/blogs/{FOLDED_STEM}.pdf"))
+            && report.contains("sidecar_guard:")
+            && report.contains("library_destination:")
+            && report.contains("published: 2026-04-27 (visible-date)")
+            && report.contains("fidelity: ok")
+            && report.contains("marker:")
+            && report.contains("writes: none"),
+        "{report}"
+    );
+    let request = fake.request();
+    assert!(
+        request.contains(r#""dry_run":true"#),
+        "dry-run must reach the adapter:\n{request}"
+    );
+    assert!(!vault.exists(), "dry-run must not create the vault");
+}
+
+#[test]
+fn highlights_create_folded_reports_adapter_failures_with_hints() {
+    let temp = TempDir::new("bob-cli-highlights-create-folded-failures");
+    let fake = FakeClip::new(&temp, "fake");
+    let curl_root = temp.path().join("curl-root");
+    std::fs::create_dir_all(&curl_root).expect("create curl root");
+    let fake_curl = write_fake_curl(temp.path());
+    let curl_log = temp.path().join("curl.log");
+    std::fs::write(&curl_log, "").expect("init curl log");
+
+    for (kind, message, hint) in [
+        (
+            "blocked",
+            "the bot challenge did not clear",
+            "save the page from your browser and pass --html FILE",
+        ),
+        (
+            "thin",
+            "extraction too small",
+            "retry with --html, or the page is not an article",
+        ),
+    ] {
+        let vault = temp.path().join(format!("vault-{kind}"));
+        fake.respond(&failure_response(kind, message, hint));
+        let output = bob_command()
+            .arg("highlights")
+            .arg("create")
+            .arg(FOLDED_URL)
+            .arg("-b")
+            .arg(&vault)
+            .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+            .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
+            .env("FAKE_CURL_ROOT", &curl_root)
+            .env("FAKE_CURL_LOG", &curl_log)
+            .output()
+            .expect("run failing bob highlights create");
+
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "{kind} must exit 1:\n{}",
+            format_output(&output)
+        );
+        let diagnostic = stderr(&output);
+        assert!(
+            diagnostic.contains("bob ref: error:")
+                && diagnostic.contains(message)
+                && diagnostic.contains(&format!("hint: {hint}")),
+            "{kind} must print error and hint:\n{}",
+            format_output(&output)
+        );
+        assert!(!vault.exists(), "{kind} must write nothing");
+    }
+}
+
+#[test]
+fn highlights_create_folded_rejects_before_the_adapter_runs() {
+    let temp = TempDir::new("bob-cli-highlights-create-folded-prefail");
+    let fake = FakeClip::new(&temp, "fake");
+    let curl_root = temp.path().join("curl-root");
+    std::fs::create_dir_all(&curl_root).expect("create curl root");
+    let fake_curl = write_fake_curl(temp.path());
+    let curl_log = temp.path().join("curl.log");
+    std::fs::write(&curl_log, "").expect("init curl log");
+
+    for raw in [
+        "ftp://example.com/article",
+        "https://user@example.com/article",
+        "http://localhost/article",
+        "http://10.0.0.1/article",
+        "http://100.101.1.2/article",
+        "http://[::1]/article",
+        "http://foo.local/article",
+    ] {
+        let vault = temp.path().join("vault-bad-url");
+        let output = bob_command()
+            .arg("highlights")
+            .arg("create")
+            .arg(raw)
+            .arg("-b")
+            .arg(&vault)
+            .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+            .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
+            .env("FAKE_CURL_ROOT", &curl_root)
+            .env("FAKE_CURL_LOG", &curl_log)
+            .output()
+            .expect("run bob highlights create with bad URL");
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "{raw} must exit 1:\n{}",
+            format_output(&output)
+        );
+    }
+    assert!(!fake.called(), "URL validation must precede the adapter");
+
+    for args in [
+        vec!["-p", "2026-13-40"],
+        vec!["-N", "has space"],
+        vec!["-t", "nested/dir"],
+    ] {
+        let vault = temp.path().join("vault-bad-option");
+        let output = bob_command()
+            .arg("highlights")
+            .arg("create")
+            .arg(FOLDED_URL)
+            .arg("-b")
+            .arg(&vault)
+            .args(&args)
+            .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+            .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
+            .env("FAKE_CURL_ROOT", &curl_root)
+            .env("FAKE_CURL_LOG", &curl_log)
+            .output()
+            .expect("run bob highlights create with bad option");
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "{args:?} must exit 1:\n{}",
+            format_output(&output)
+        );
+    }
+    assert!(!fake.called(), "option validation must precede the adapter");
+
+    for args in [
+        vec!["-o", "x.pdf", "-t", "papers"],
+        vec!["-o", "x.pdf", "-N", "stem"],
+    ] {
+        let vault = temp.path().join("vault-conflict");
+        let output = bob_command()
+            .arg("highlights")
+            .arg("create")
+            .arg(FOLDED_URL)
+            .arg("-b")
+            .arg(&vault)
+            .args(&args)
+            .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+            .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
+            .env("FAKE_CURL_ROOT", &curl_root)
+            .env("FAKE_CURL_LOG", &curl_log)
+            .output()
+            .expect("run bob highlights create with conflicts");
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{args:?} must be a clap conflict:\n{}",
+            format_output(&output)
+        );
+    }
+    assert!(!fake.called(), "clap conflicts must precede the adapter");
+}
+
+#[test]
+fn highlights_create_folded_refuses_library_and_dedupe_collisions_early() {
+    let temp = TempDir::new("bob-cli-highlights-create-folded-collisions");
+    let vault = temp.path().join("vault");
+    let fake = FakeClip::new(&temp, "fake");
+    let curl_root = temp.path().join("curl-root");
+    std::fs::create_dir_all(&curl_root).expect("create curl root");
+    let fake_curl = write_fake_curl(temp.path());
+    let curl_log = temp.path().join("curl.log");
+    std::fs::write(&curl_log, "").expect("init curl log");
+
+    write_highlights_pdf(
+        &vault.join(format!("lib/blogs/{FOLDED_STEM}.pdf")),
+        "- status: ready\n- parent: obsidian\n- title: Archived\n",
+    );
+    for force in [false, true] {
+        let mut command = bob_command();
+        command
+            .arg("highlights")
+            .arg("create")
+            .arg(FOLDED_URL)
+            .arg("-b")
+            .arg(&vault);
+        if force {
+            command.arg("--force");
+        }
+        let output = command
+            .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+            .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
+            .env("FAKE_CURL_ROOT", &curl_root)
+            .env("FAKE_CURL_LOG", &curl_log)
+            .output()
+            .expect("run bob highlights create over library PDF");
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "force={force} must refuse the library destination:\n{}",
+            format_output(&output)
+        );
+    }
+    assert!(
+        !fake.called(),
+        "the library collision must precede the adapter"
+    );
+
+    // A PDF-backed note refuses even with --force. A note without a
+    // `source_pdf` instead warns and captures (see
+    // `highlights_create_folded_captures_a_legacy_only_url_note_with_a_warning`).
+    let dedupe_vault = temp.path().join("dedupe-vault");
+    write_file(
+        &dedupe_vault.join("ref/blogs/existing.md"),
+        "---\nsource_url: https://example.com/index/open-source-codex-orchestration-symphony/\nsource_pdf: lib/blogs/existing.pdf\ntitle: Existing\n---\n\n# Existing\n",
+    );
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg(FOLDED_URL)
+        .arg("-b")
+        .arg(&dedupe_vault)
+        .arg("--force")
+        .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+        .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
+        .env("FAKE_CURL_ROOT", &curl_root)
+        .env("FAKE_CURL_LOG", &curl_log)
+        .output()
+        .expect("run bob highlights create over captured URL");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a captured URL must refuse even with --force:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        stderr(&output).contains("already captured as"),
+        "expected the dedupe error:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        !fake.called(),
+        "the ref-note dedupe must precede the adapter"
+    );
+}
+
+#[test]
+fn highlights_create_folded_captures_a_legacy_only_url_note_with_a_warning() {
+    let temp = TempDir::new("bob-cli-highlights-create-folded-legacy-url");
+    let vault = temp.path().join("vault");
+    let fake = FakeClip::new(&temp, "fake");
+    let curl_root = temp.path().join("curl-root");
+    std::fs::create_dir_all(&curl_root).expect("create curl root");
+    let fake_curl = write_fake_curl(temp.path());
+    let curl_log = temp.path().join("curl.log");
+    std::fs::write(&curl_log, "").expect("init curl log");
+
+    // A ref note carrying only the legacy `url:` key and no `source_pdf`
+    // (as the zorg-migrated notes do) no longer refuses: the URL
+    // captures with a warning, and scan later treats the old note as
+    // superseded.
+    write_file(
+        &vault.join("ref/ai/old.md"),
+        "---\ntitle: Old\nurl: https://example.com/index/open-source-codex-orchestration-symphony/\n---\n\n# Old\n",
+    );
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg(FOLDED_URL)
+        .arg("-b")
+        .arg(&vault)
+        .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+        .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
+        .env("FAKE_CURL_ROOT", &curl_root)
+        .env("FAKE_CURL_LOG", &curl_log)
+        .output()
+        .expect("run bob highlights create over legacy-only note");
+    assert_success(&output);
+    let diagnostic = stderr(&output);
+    assert!(
+        diagnostic.contains("already in the library as")
+            && diagnostic.contains("ref/ai/old.md")
+            && diagnostic.contains("capturing a fresh copy"),
+        "expected the legacy warning:\n{}",
+        format_output(&output)
+    );
+    assert_eq!(
+        diagnostic
+            .matches("hint: bob ref find and bob ref list")
+            .count(),
+        1,
+        "the legacy hint prints once per capture:\n{diagnostic}",
+    );
+    assert!(
+        fake.called(),
+        "the legacy-only hit must not precede the adapter"
+    );
+    assert!(
+        vault
+            .join(format!("xlib/blogs/{FOLDED_STEM}.pdf"))
+            .is_file(),
+        "the fresh copy must install:\n{}",
+        format_output(&output)
+    );
+
+    // A dry run reports the legacy hit without writing.
+    let dry_vault = temp.path().join("dry-vault");
+    write_file(
+        &dry_vault.join("ref/ai/old.md"),
+        "---\ntitle: Old\nurl: https://example.com/index/open-source-codex-orchestration-symphony/\n---\n\n# Old\n",
+    );
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg(FOLDED_URL)
+        .arg("-b")
+        .arg(&dry_vault)
+        .arg("--dry-run")
+        .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+        .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
+        .env("FAKE_CURL_ROOT", &curl_root)
+        .env("FAKE_CURL_LOG", &curl_log)
+        .output()
+        .expect("run bob highlights create --dry-run over legacy-only note");
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("legacy:")
+            && report.contains("ref/ai/old.md")
+            && report.contains("(superseded by this capture)"),
+        "expected the dry-run legacy line:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        stderr(&output).contains("already in the library as"),
+        "the dry run still warns on stderr:\n{}",
+        format_output(&output)
+    );
+}
+
+#[test]
+fn highlights_create_folded_still_refuses_a_pdf_backed_url_note() {
+    let temp = TempDir::new("bob-cli-highlights-create-folded-pdf-backed-url");
+    let vault = temp.path().join("vault");
+    let fake = FakeClip::new(&temp, "fake");
+    let curl_root = temp.path().join("curl-root");
+    std::fs::create_dir_all(&curl_root).expect("create curl root");
+    let fake_curl = write_fake_curl(temp.path());
+    let curl_log = temp.path().join("curl.log");
+    std::fs::write(&curl_log, "").expect("init curl log");
+
+    // A `url:` on a PDF-backed note is still an already-captured URL.
+    write_file(
+        &vault.join("ref/papers/ea_graph.md"),
+        "---\ntitle: EA-Graph\nurl: https://arxiv.org/pdf/2608.04278\nsource_pdf: lib/papers/ea_graph.pdf\n---\n\n# EA-Graph\n",
+    );
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg("https://arxiv.org/abs/2608.04278v2")
+        .arg("-b")
+        .arg(&vault)
+        .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+        .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
+        .env("FAKE_CURL_ROOT", &curl_root)
+        .env("FAKE_CURL_LOG", &curl_log)
+        .output()
+        .expect("run bob highlights create over PDF-backed url note");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "a PDF-backed url: note must refuse the same paper:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        stderr(&output).contains("already captured as"),
+        "expected the dedupe error:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        !fake.called(),
+        "the PDF-backed dedupe must precede the adapter"
+    );
+}
+
+#[test]
+fn highlights_create_folded_force_overwrites_the_same_intake_target() {
+    let temp = TempDir::new("bob-cli-highlights-create-folded-force");
+    let vault = temp.path().join("vault");
+    let fake = FakeClip::new(&temp, "fake");
+    let curl_root = temp.path().join("curl-root");
+    std::fs::create_dir_all(&curl_root).expect("create curl root");
+    let fake_curl = write_fake_curl(temp.path());
+    let curl_log = temp.path().join("curl.log");
+    std::fs::write(&curl_log, "").expect("init curl log");
+    let target = vault.join(format!("xlib/blogs/{FOLDED_STEM}.pdf"));
+    write_highlights_pdf(
+        &target,
+        "- status: ready\n- parent: obsidian\n- title: Queued\n- source_url: https://example.com/index/open-source-codex-orchestration-symphony/\n",
+    );
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg(FOLDED_URL)
+        .arg("-b")
+        .arg(&vault)
+        .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+        .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
+        .env("FAKE_CURL_ROOT", &curl_root)
+        .env("FAKE_CURL_LOG", &curl_log)
+        .output()
+        .expect("run bob highlights create over queued PDF");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "same-URL queue hit must refuse without --force:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        stderr(&output).contains("already queued in"),
+        "{}",
+        format_output(&output)
+    );
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg(FOLDED_URL)
+        .arg("-b")
+        .arg(&vault)
+        .arg("--force")
+        .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+        .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
+        .env("FAKE_CURL_ROOT", &curl_root)
+        .env("FAKE_CURL_LOG", &curl_log)
+        .output()
+        .expect("run bob highlights create --force over queued PDF");
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains("created Highlights-ready web PDF"),
+        "{}",
+        format_output(&output)
+    );
+}
+
+#[test]
+fn highlights_create_folded_direct_pdf_falls_back_to_slug_title() {
+    let temp = TempDir::new("bob-cli-highlights-create-folded-pdf-kind");
+    let vault = temp.path().join("vault");
+    let fake = FakeClip::new(&temp, "fake");
+    let curl_root = temp.path().join("curl-root");
+    std::fs::create_dir_all(&curl_root).expect("create curl root");
+    let fake_curl = write_fake_curl(temp.path());
+    let curl_log = temp.path().join("curl.log");
+    std::fs::write(&curl_log, "").expect("init curl log");
+    fake.respond(
+        r#"{"protocol":1,"ok":true,"op":"capture","kind":"pdf","final_url":"https://example.com/files/report.pdf","title":null,"author":null,"published":null,"metadata_sources":{},"word_count":0,"capture":{"browser":"chrome","browser_version":"154.0.0","mode":"direct-pdf","retried_after_challenge":false},"fidelity":{"status":"ok","page_large_media":0,"kept_large_media":0,"page_code_blocks":0,"kept_code_blocks":0,"page_words":0,"kept_words":0},"images":{"total":0,"kept":0,"skipped_small":0,"failed":0},"pdf_bytes":1200,"warnings":[]}"#,
+    );
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg("https://example.com/files/quarterly-report.pdf")
+        .arg("-b")
+        .arg(&vault)
+        .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+        .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
+        .env("FAKE_CURL_ROOT", &curl_root)
+        .env("FAKE_CURL_LOG", &curl_log)
+        .output()
+        .expect("run bob highlights create for a direct PDF");
+
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("title: quarterly report")
+            && report.contains("capture: chrome 154.0.0 · direct PDF")
+            && report.contains("id: quarterly_report"),
+        "{report}"
+    );
+    assert!(vault.join("xlib/blogs/quarterly_report.pdf").is_file());
+}
+
+#[test]
+fn highlights_create_folded_rejects_protocol_errors() {
+    let temp = TempDir::new("bob-cli-highlights-create-folded-protocol");
+    let vault = temp.path().join("vault");
+    let fake = FakeClip::new(&temp, "fake");
+    let curl_root = temp.path().join("curl-root");
+    std::fs::create_dir_all(&curl_root).expect("create curl root");
+    let fake_curl = write_fake_curl(temp.path());
+    let curl_log = temp.path().join("curl.log");
+    std::fs::write(&curl_log, "").expect("init curl log");
+    fake.respond("this is not json");
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg(FOLDED_URL)
+        .arg("-b")
+        .arg(&vault)
+        .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+        .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
+        .env("FAKE_CURL_ROOT", &curl_root)
+        .env("FAKE_CURL_LOG", &curl_log)
+        .output()
+        .expect("run bob highlights create with garbage adapter");
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "non-JSON stdout must exit 1:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        stderr(&output).contains("invalid JSON"),
+        "expected the protocol error:\n{}",
+        format_output(&output)
+    );
+    assert!(!vault.exists(), "protocol errors must write nothing");
+}
+
+#[test]
+fn highlights_create_folded_round_trips_through_scan() {
+    let temp = TempDir::new("bob-cli-highlights-create-folded-scan");
+    let vault = temp.path().join("vault");
+    let fake = FakeClip::new(&temp, "fake");
+    let curl_root = temp.path().join("curl-root");
+    std::fs::create_dir_all(&curl_root).expect("create curl root");
+    let fake_curl = write_fake_curl(temp.path());
+    let curl_log = temp.path().join("curl.log");
+    std::fs::write(&curl_log, "").expect("init curl log");
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg(FOLDED_URL)
+        .arg("-b")
+        .arg(&vault)
+        .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+        .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
+        .env("FAKE_CURL_ROOT", &curl_root)
+        .env("FAKE_CURL_LOG", &curl_log)
+        .output()
+        .expect("run bob highlights create for scan");
+    assert_success(&output);
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("--no-hooks")
+        .arg("scan")
+        .arg("-b")
+        .arg(&vault)
+        .output()
+        .expect("run bob highlights scan on created PDF");
+    assert_success(&output);
+
+    let note = vault.join(format!("ref/blogs/{FOLDED_STEM}.md"));
+    assert!(note.is_file(), "scan must write the ref note");
+    let contents =
+        std::fs::read_to_string(&note).expect("read scanned ref note");
+    assert!(
+        contents.contains("https://example.com/index/open-source-codex-orchestration-symphony/")
+            && contents.contains("Jane Doe")
+            && contents.contains("2026-04-27")
+            && contents.contains("captured:")
+            && contents.contains(FOLDED_STEM)
+            && contents.contains("ref_type: blogs")
+            && contents.contains("^ref"),
+        "{contents}"
+    );
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("--no-hooks")
+        .arg("scan")
+        .arg("-b")
+        .arg(&vault)
+        .output()
+        .expect("rerun bob highlights scan");
+    assert_success(&output);
+    assert_eq!(
+        std::fs::read_to_string(&note).expect("reread scanned ref note"),
+        contents,
+        "a second scan must be a no-op"
+    );
+}
+
+#[test]
+fn highlights_create_folded_doctor_reports_web_clip_rows() {
+    let temp = TempDir::new("bob-cli-highlights-create-folded-doctor-web-clip");
+    let vault = temp.path().join("vault");
+    std::fs::create_dir_all(vault.join("lib")).expect("create lib");
+    std::fs::create_dir_all(vault.join("ref")).expect("create ref");
+    std::fs::create_dir_all(vault.join("xlib")).expect("create xlib");
+    git_in(&vault, ["init", "-q"]);
+    configure_test_git_identity(&vault);
+    let fake = FakeClip::new(&temp, "fake");
+    std::fs::write(
+        fake.root.join("ping.json"),
+        r#"{"protocol":1,"ok":true,"op":"ping","playwright":"1.62.0","defuddle":"0.19.4","browser":{"kind":"chrome","path":"/usr/bin/google-chrome","version":"154.0.0"},"headed":"display"}"#,
+    )
+    .expect("write fake ping");
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("doctor")
+        .arg("--no-hooks")
+        .env("BOB_DIR", &vault)
+        .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+        .output()
+        .expect("run highlights doctor with fake adapter");
+
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains(
+            "web clip adapter: ok (playwright 1.62.0, defuddle 0.19.4)"
+        ) && report.contains(
+            "web clip browser: chrome 154.0.0 (/usr/bin/google-chrome)"
+        ) && report.contains("web clip headed fallback: display")
+            && report.contains("result: ok"),
+        "{report}"
     );
 }

@@ -35,7 +35,7 @@ mod arxiv;
 mod attach;
 mod audio;
 pub(crate) mod cli;
-pub(crate) mod clip;
+mod clip;
 mod clip_adapter;
 mod clip_url;
 mod companion;
@@ -247,7 +247,6 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
     };
 
     match matches.subcommand() {
-        Some(("clip", sub_matches)) => clip::run(sub_matches),
         Some(("create", sub_matches)) => create::run(sub_matches),
         Some(("find", sub_matches)) => {
             crate::native::ref_library::cli::run_find(sub_matches)

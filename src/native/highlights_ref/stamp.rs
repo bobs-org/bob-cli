@@ -1,6 +1,6 @@
 //! Shared target planning, marker composition, and stamp-plus-install helpers.
 //!
-//! `create` and `clip` both write one marker-stamped PDF into the Highlights
+//! `create` writes one marker-stamped PDF into the Highlights
 //! intake (`xlib/<ref_type>/<stem>.pdf`); this module owns the reusable parts:
 //! resolving the target, refusing collisions, composing the marker (including
 //! the optional web-provenance keys), and stamping plus atomically installing

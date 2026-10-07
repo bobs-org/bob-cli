@@ -1,5 +1,5 @@
 //! URL validation, cleaning, dedupe-key, and filename-stem rules for
-//! `bob ref clip`.
+//! the web-article engine behind `bob ref create`.
 //!
 //! The stored `source_url` is the user's URL with the fragment and tracking
 //! parameters removed. The dedupe key normalizes further (lowercased

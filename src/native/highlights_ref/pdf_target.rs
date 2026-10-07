@@ -40,6 +40,7 @@ pub(super) struct PdfPlan {
     /// Provenance tag for dry runs: override, arxiv api, pdf info, filename.
     pub(super) title_source: &'static str,
     pub(super) author_source: Option<&'static str>,
+    pub(super) published_source: Option<&'static str>,
 }
 
 /// Plan a local PDF target.
@@ -47,6 +48,8 @@ pub(super) fn plan_local_pdf(
     source: &Path,
     name_override: Option<&str>,
     title_override: Option<&str>,
+    author_override: Option<&str>,
+    published_override: Option<&str>,
 ) -> Result<PdfPlan> {
     validate_pdf_file(source)?;
     let file_stem = source
@@ -85,16 +88,33 @@ pub(super) fn plan_local_pdf(
         title = humanize_stem(&stem);
         title_source = "filename";
     }
-    let author_source = info_author.as_ref().map(|_| "pdf info");
+    let (author, author_source) =
+        match author_override.filter(|value| !value.is_empty()) {
+            Some(override_author) => {
+                (Some(override_author.to_string()), Some("override"))
+            }
+            None => {
+                let source = info_author.as_ref().map(|_| "pdf info");
+                (info_author, source)
+            }
+        };
+    let (published, published_source) =
+        match published_override.filter(|value| !value.is_empty()) {
+            Some(override_published) => {
+                (Some(override_published.to_string()), Some("override"))
+            }
+            None => (None, None),
+        };
     Ok(PdfPlan {
         stem,
         title,
-        author: info_author,
-        published: None,
+        author,
+        published,
         source_url: None,
         captured: None,
         title_source,
         author_source,
+        published_source,
     })
 }
 
@@ -104,6 +124,8 @@ pub(super) fn plan_pdf_url(
     downloaded: &Path,
     name_override: Option<&str>,
     title_override: Option<&str>,
+    author_override: Option<&str>,
+    published_override: Option<&str>,
     captured: &str,
 ) -> Result<PdfPlan> {
     validate_pdf_file(downloaded)?;
@@ -150,16 +172,33 @@ pub(super) fn plan_pdf_url(
         title = humanize_stem(&stem);
         title_source = "filename";
     }
-    let author_source = info_author.as_ref().map(|_| "pdf info");
+    let (author, author_source) =
+        match author_override.filter(|value| !value.is_empty()) {
+            Some(override_author) => {
+                (Some(override_author.to_string()), Some("override"))
+            }
+            None => {
+                let source = info_author.as_ref().map(|_| "pdf info");
+                (info_author, source)
+            }
+        };
+    let (published, published_source) =
+        match published_override.filter(|value| !value.is_empty()) {
+            Some(override_published) => {
+                (Some(override_published.to_string()), Some("override"))
+            }
+            None => (None, None),
+        };
     Ok(PdfPlan {
         stem,
         title,
-        author: info_author,
-        published: None,
+        author,
+        published,
         source_url: Some(url.cleaned.clone()),
         captured: Some(captured.to_string()),
         title_source,
         author_source,
+        published_source,
     })
 }
 
@@ -168,6 +207,8 @@ pub(super) fn plan_arxiv(
     paper: &ArxivPaper,
     name_override: Option<&str>,
     title_override: Option<&str>,
+    author_override: Option<&str>,
+    published_override: Option<&str>,
     metadata: Option<&ArxivMetadata>,
     downloaded: &Path,
     captured: &str,
@@ -216,7 +257,7 @@ pub(super) fn plan_arxiv(
         title = format!("arXiv {}", paper.id);
         title_source = "filename";
     }
-    let (author, author_source) = match metadata
+    let (derived_author, derived_author_source) = match metadata
         .map(|meta| author_display(&meta.authors))
         .filter(|display| !display.is_empty())
     {
@@ -226,7 +267,29 @@ pub(super) fn plan_arxiv(
             (info_author, source)
         }
     };
-    let published = metadata.map(|meta| meta.published.clone());
+    let derived_published = metadata.map(|meta| meta.published.clone());
+    let (derived_published_source, has_derived_published) =
+        match &derived_published {
+            Some(_) => (Some("arxiv api"), true),
+            None => (None, false),
+        };
+    let (author, author_source) =
+        match author_override.filter(|value| !value.is_empty()) {
+            Some(override_author) => {
+                (Some(override_author.to_string()), Some("override"))
+            }
+            None => (derived_author, derived_author_source),
+        };
+    let (published, published_source) =
+        match published_override.filter(|value| !value.is_empty()) {
+            Some(override_published) => {
+                (Some(override_published.to_string()), Some("override"))
+            }
+            None => match has_derived_published {
+                true => (derived_published, derived_published_source),
+                false => (None, None),
+            },
+        };
     Ok(PdfPlan {
         stem,
         title,
@@ -236,6 +299,7 @@ pub(super) fn plan_arxiv(
         captured: Some(captured.to_string()),
         title_source,
         author_source,
+        published_source,
     })
 }
 

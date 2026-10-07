@@ -11,8 +11,7 @@ use std::path::Path;
 use std::process::Output;
 
 const ALIASES: &[&str] = &["highlights", "highlights-ref"];
-const VERBS: &[&str] =
-    &["clip", "create", "doctor", "jobs", "marker", "scan", "sync"];
+const VERBS: &[&str] = &["create", "doctor", "jobs", "marker", "scan", "sync"];
 const FIXED_NOW: &str = "2026-10-06 12:00:00";
 
 fn run_root(root: &str, args: &[&str], vault: &Path) -> Output {
@@ -139,7 +138,6 @@ fn ref_error_paths_match_aliases_for_every_verb() {
 
     // One deterministic error path per verb: no vault writes involved.
     let cases: &[&[&str]] = &[
-        &["clip", "--dry-run"],
         &["create", "--dry-run"],
         &["doctor", "--prefer", "marker"],
         &["jobs", "list", "--format", "bogus"],

@@ -238,12 +238,19 @@ fn value_hints_beat_generic_kinds_entries() {
     assert_eq!(directives(&output), vec!["!files".to_string()]);
 
     // The highlights PDF `--output` keeps its glob through the
-    // path-specific entries.
-    for command in ["clip", "create"] {
-        let output = complete(&["bob", "highlights", command, "--output", ""]);
-        assert_success(&output);
-        assert_eq!(directives(&output), vec!["!files *.pdf".to_string()]);
-    }
+    // path-specific entry.
+    let output = complete(&["bob", "highlights", "create", "--output", ""]);
+    assert_success(&output);
+    assert_eq!(directives(&output), vec!["!files *.pdf".to_string()]);
+
+    // The folded `clip` alias offers no completion candidate.
+    let output = complete(&["bob", "ref", ""]);
+    assert_success(&output);
+    assert!(
+        !values(&output).contains(&"clip".to_string()),
+        "ref completion must not include clip: {:?}",
+        values(&output)
+    );
 }
 
 #[test]

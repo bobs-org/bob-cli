@@ -102,13 +102,12 @@ install-smoke:
     "${root}/bin/bob" randomize --help >/dev/null
     "${root}/bin/bob" ready --help >/dev/null
     "${root}/bin/bob" ref --help >/dev/null
-    "${root}/bin/bob" ref clip --help >/dev/null
+    "${root}/bin/bob" ref clip --help >/dev/null # hidden alias smoke: clip == create
     "${root}/bin/bob" ref create --help >/dev/null
     "${root}/bin/bob" ref find --help >/dev/null
     "${root}/bin/bob" ref list --help >/dev/null
     "${root}/bin/bob" ref show --help >/dev/null
     "${root}/bin/bob" highlights --help >/dev/null
-    "${root}/bin/bob" highlights clip --help >/dev/null
     "${root}/bin/bob" highlights create --help >/dev/null
     "${root}/bin/bob" task-status-hooks --help >/dev/null
     "${root}/bin/bob" move-done-tasks --help >/dev/null

@@ -5,8 +5,7 @@ an arXiv paper URL, or a web article URL into a Highlights-ready PDF in
 the intake (`xlib/<ref-type>/<stem>.pdf` by default), which
 `bob ref scan` later moves into `lib/` and turns into a `ref/`
 note. A PDF is stamped as-is, never re-rendered. Web article URLs run
-through the clip engine with `create`'s options and get the same PDF,
-marker, and report as `bob ref clip <URL>`.
+through the web-article engine with `create`'s options.
 
 ```bash
 bob ref create [OPTIONS] <TARGET>
@@ -27,13 +26,18 @@ bob ref create https://example.com/paper.pdf -N my_paper
 # arXiv paper, preview only
 bob ref create https://arxiv.org/abs/1706.03762 -d
 
-# Web article through the clip engine (default ref type blogs)
+# Web article through the web-article engine (default ref type blogs)
 bob ref create https://example.com/article/hello
 
 # Overrides
 bob ref create paper.pdf -T "The Real Title" -N my_paper -t docs
 bob ref create report.md --audio episode.mp3 --include-id
+
+# Web article with saved page and metadata overrides
+bob ref create https://example.com/essay -H saved.html
+bob ref create https://example.com/essay -A "Jane Doe" -p 2026-01-02 -d
 ```
+See [`highlights-clip.md`](highlights-clip.md) for web-article route details (reader-mode capture, headed retry, `--html` escape hatch, environment).
 
 ## Targets
 
@@ -43,7 +47,7 @@ bob ref create report.md --audio episode.mp3 --include-id
 | Local PDF (`.pdf` or `%PDF-` magic) | Stamped as-is | `papers` | `-T`, plausible Info `/Title`, humanized stem | `-N`, file stem if it passes `--name` validation, else `snake_case` |
 | PDF URL (PDF content-type or sniffed `%PDF-`) | Downloaded with `curl`, stamped as-is | `papers` | `-T`, plausible Info `/Title`, humanized stem | `-N`, URL slug, short-title stem, `<host>_<YYYYMMDD>` |
 | arXiv (`arxiv.org` abs/html/pdf) | PDF fetched from `arxiv.org/pdf/<id>`, metadata from the API | `papers` | `-T`, arXiv API title, plausible Info `/Title`, `arXiv <id>` (no version) | `-N`, short-title stem, `arxiv_<id>` (no version) |
-| Web article (HTML 2xx or 403/429/503) | Captured with the clip engine (same PDF, marker, and report as `bob ref clip`) | `blogs` | clip rules (`-T` maps to the clip title override) | clip rules (`-N`) |
+| Web article (HTML 2xx or 403/429/503) | Captured with the web-article engine | `blogs` | web-article rules (`-T` overrides the title) | web-article rules (`-N`) |
 
 Short-title stem: when the text before the first `:` is 1–4 words, that
 prefix is the short name (`EA-Graph: …` becomes `ea_graph`); otherwise the
@@ -105,7 +109,7 @@ PDF Info metadata. Authors display as `A`, `A and B`, `A, B, and C`, or
 
 Every URL dedupes before any fetch on its syntactic key. arXiv spellings
 (abs/html/pdf, with or without version) share
-`https://arxiv.org/abs/<id>`; everything else uses the clip key. Ref notes
+`https://arxiv.org/abs/<id>`; everything else uses the web-article key. Ref notes
 record `source_url` and legacy `url:`, and queued intake markers record
 both, so existing paper refs take part instead of duplicating. A
 PDF-backed ref-note hit or a queued-intake hit refuses (use `--force`
@@ -148,7 +152,7 @@ bullet used by every fallback path.
 
 `-L, --listen` (conflicts with `-a` and `-n`) narrates the target with the
 configured `highlights.listen_command` and binds the episode as the PDF's
-companion audio. `clip` accepts the same flag with the same semantics.
+companion audio. The web-article route accepts the same flag with the same semantics.
 
 ```bash
 bob ref create https://arxiv.org/abs/1706.03762 -L
@@ -243,7 +247,7 @@ next: bob ref scan
 
 ```yaml
 highlights:
-  # `bob ref create --listen` (and `clip --listen`) narrates the target
+  # `bob ref create --listen` narrates the target
   # with this command, which must write MP3 audio to {audio}; bob binds it as
   # the PDF's companion audio. bob shell-quotes {target} {pdf} {audio} {title}
   # itself — do not quote them. sase-listen's feed.auto_publish publishes the

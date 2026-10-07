@@ -1,9 +1,8 @@
-//! `bob ref clip`: capture a web article as a Highlights-ready PDF.
+//! Web-article capture engine behind `bob ref create <article URL>`.
 //!
-//! A sibling of `create` that shares its target, collision, marker, and
-//! install code. It captures reader-mode HTML through the pinned web-clip
-//! adapter (protocol v1), stamps the rendered PDF with provenance, and
-//! installs it into the Highlights intake. `scan` writes the ref note.
+//! It captures reader-mode HTML through the pinned web-clip adapter
+//! (protocol v1), stamps the rendered PDF with provenance, and installs
+//! it into the Highlights intake. `scan` writes the ref note.
 
 use std::{
     ffi::OsString,
@@ -12,20 +11,13 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use clap::{Arg, ArgAction, ArgMatches, Command as ClapCommand};
-
-use super::{
-    bob_dir_arg, compose_marker, current_local_date, lib_dir_arg,
-    plan_default_target, plan_exact_output, print_next_step, ref_dir_arg,
-    stamp_and_install, validate_ref_type, xlib_dir_arg, CommandError, Config,
-    PdfInfo, ScratchDir, TargetPlan, TargetWorkflow, COMMAND_NAME,
-};
 use super::{clip_adapter::*, clip_url::*, pdf_meta::*, sources::*};
+use super::{
+    compose_marker, current_local_date, plan_default_target, plan_exact_output,
+    print_next_step, stamp_and_install, CommandError, Config, PdfInfo,
+    ScratchDir, TargetPlan, TargetWorkflow,
+};
 use crate::native::style::Styler;
-
-const DEFAULT_PARENT: &str = "obsidian_ref";
-const DEFAULT_REF_TYPE: &str = "blogs";
-const DEFAULT_STATUS: &str = "ready";
 
 /// A clip failure: the message goes after `error:`, the hint after `hint:`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -88,185 +80,19 @@ impl From<AdapterFailure> for ClipError {
     }
 }
 
-pub(crate) fn command() -> ClapCommand {
-    ClapCommand::new("clip")
-        .about("Capture a web article URL into a Highlights intake PDF")
-        .arg(
-            Arg::new("url")
-                .value_name("URL")
-                .required(true)
-                .help("http(s) URL of the article to capture; recorded as the marker source_url"),
-        )
-        .arg(
-            Arg::new("author")
-                .long("author")
-                .short('A')
-                .value_name("NAME")
-                .help("Override the extracted author"),
-        )
-        .arg(bob_dir_arg())
-        .arg(
-            Arg::new("dry-run")
-                .long("dry-run")
-                .short('d')
-                .action(ArgAction::SetTrue)
-                .help("Capture and extract, then print the plan, marker, metadata sources, and fidelity report; write nothing"),
-        )
-        .arg(
-            Arg::new("force")
-                .long("force")
-                .short('f')
-                .action(ArgAction::SetTrue)
-                .help("Overwrite an existing intake PDF for this capture (never a library PDF)"),
-        )
-        .arg(
-            Arg::new("html")
-                .long("html")
-                .short('H')
-                .value_name("FILE")
-                .value_parser(clap::builder::OsStringValueParser::new())
-                .help("Use a page already saved from a browser (Save Page As, SingleFile); `-` reads stdin"),
-        )
-        .arg(
-            Arg::new("listen")
-                .long("listen")
-                .short('L')
-                .action(ArgAction::SetTrue)
-                .help("Narrate the article with highlights.listen_command and bind the episode as companion audio"),
-        )
-        .arg(lib_dir_arg())
-        .arg(
-            Arg::new("name")
-                .long("name")
-                .short('N')
-                .value_name("STEM")
-                .help("Output filename stem and marker id [default: derived from the URL]"),
-        )
-        .arg(
-            Arg::new("output")
-                .long("output")
-                .short('o')
-                .value_name("PDF")
-                .value_parser(clap::builder::OsStringValueParser::new())
-                .conflicts_with("ref-type")
-                .conflicts_with("name")
-                .help("Complete path for the generated PDF, including the .pdf filename"),
-        )
-        .arg(
-            Arg::new("parent")
-                .long("parent")
-                .short('P')
-                .value_name("NOTE")
-                .default_value(DEFAULT_PARENT)
-                .help("Bare Obsidian note target for the marker parent"),
-        )
-        .arg(
-            Arg::new("published")
-                .long("published")
-                .short('p')
-                .value_name("DATE")
-                .help("Override the extracted publish date (YYYY-MM-DD)"),
-        )
-        .arg(ref_dir_arg())
-        .arg(
-            Arg::new("status")
-                .long("status")
-                .short('s')
-                .value_name("STATUS")
-                .default_value(DEFAULT_STATUS)
-                .value_parser([
-                    "ready",
-                    "next",
-                    "wip",
-                    "read",
-                    "abandoned",
-                    "legacy",
-                ])
-                .help("Lifecycle status embedded in the marker"),
-        )
-        .arg(
-            Arg::new("title")
-                .long("title")
-                .short('T')
-                .value_name("TITLE")
-                .help("Override the extracted title"),
-        )
-        .arg(
-            Arg::new("ref-type")
-                .long("ref-type")
-                .short('t')
-                .value_name("DIR")
-                .default_value(DEFAULT_REF_TYPE)
-                .conflicts_with("output")
-                .help("Single library subdirectory for the generated PDF"),
-        )
-        .arg(xlib_dir_arg())
-        .after_help(
-            "Captures the article in reader mode and re-typesets it with a Bob-owned print template; \
-            it never prints the live page. `bob ref scan` later moves the intake PDF into the \
-            library and writes the reference note. A site that blocks headless browsers is retried \
-            headed automatically: on Linux under a private Xvfb display (as on athena) or in an \
-            off-screen window on macOS; hosts with no browser fail closed with a hint. `--html FILE` \
-            replays a page saved from a real browser instead of fetching. \
-            Environment: BOB_WEB_CLIP_ADAPTER replaces the adapter invocation; BOB_CHROME selects the \
-            browser executable; BOB_WEB_CLIP_TIMEOUT_SECS sets the adapter timeout in seconds \
-            (default 300); BOB_WEB_CLIP_KEEP_WORKDIR=1 keeps the scratch directory for debugging. \
-            `--output` cannot be combined with `--ref-type` or `--name` because those only \
-            participate in default target derivation. `-L, --listen` narrates the article with \
-            `highlights.listen_command` (`BOB_HIGHLIGHTS_LISTEN_COMMAND` overrides), which must write \
-            MP3 audio to `{audio}`; bob shell-quotes the values itself and streams the command output \
-            unchanged. If the URL is already captured, `--listen` attaches the episode for scan to pair; \
-            a URL recorded only by legacy notes without a Highlights PDF instead warns and captures \
-            a fresh copy, which scan treats as superseding the older notes.",
-        )
-}
-
 #[derive(Debug, Clone)]
 pub(super) struct ClipOptions {
-    dry_run: bool,
-    force: bool,
-    author: Option<String>,
-    html: Option<OsString>,
-    name: Option<String>,
-    output: Option<PathBuf>,
-    parent: String,
-    published: Option<String>,
-    ref_type: String,
-    status: String,
-    title: Option<String>,
-}
-
-impl ClipOptions {
-    /// Options for a `create <article URL>` call. Author, published, and
-    /// saved-page replay stay unset; `-i` needs no mapping because the
-    /// engine always stamps `id`.
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn for_create(
-        title: Option<String>,
-        name: Option<String>,
-        output: Option<PathBuf>,
-        parent: String,
-        ref_type: String,
-        status: String,
-        force: bool,
-        dry_run: bool,
-    ) -> std::result::Result<Self, ClipError> {
-        let name = name.map(|name| validate_name(&name)).transpose()?;
-        validate_ref_type(&ref_type)?;
-        Ok(Self {
-            dry_run,
-            force,
-            author: None,
-            html: None,
-            name,
-            output,
-            parent,
-            published: None,
-            ref_type,
-            status,
-            title,
-        })
-    }
+    pub(super) dry_run: bool,
+    pub(super) force: bool,
+    pub(super) author: Option<String>,
+    pub(super) html: Option<OsString>,
+    pub(super) name: Option<String>,
+    pub(super) output: Option<PathBuf>,
+    pub(super) parent: String,
+    pub(super) published: Option<String>,
+    pub(super) ref_type: String,
+    pub(super) status: String,
+    pub(super) title: Option<String>,
 }
 
 /// Companion audio for an article capture: none, an explicit `--audio`
@@ -278,80 +104,6 @@ pub(super) enum Companion {
     None,
     Explicit(PathBuf),
     Listen(super::listen::ListenCommand),
-}
-
-pub(super) fn run(matches: &ArgMatches) -> i32 {
-    let styler = Styler::detect();
-    match clip_pdf(&Config::from_matches(matches), matches) {
-        Ok(()) => 0,
-        Err(error) => {
-            eprintln!(
-                "{COMMAND_NAME}: {}: {}",
-                styler.red("error"),
-                error.message
-            );
-            if let Some(hint) = error.hint {
-                eprintln!("hint: {hint}");
-            }
-            error.exit_code.unwrap_or(1)
-        }
-    }
-}
-
-fn clip_options(
-    matches: &ArgMatches,
-) -> std::result::Result<ClipOptions, ClipError> {
-    let name = matches
-        .get_one::<String>("name")
-        .map(|name| validate_name(name))
-        .transpose()?;
-    if let Some(published) = matches.get_one::<String>("published") {
-        validate_published(published)?;
-    }
-    let ref_type = matches
-        .get_one::<String>("ref-type")
-        .expect("defaulted by clap")
-        .clone();
-    validate_ref_type(&ref_type)?;
-    Ok(ClipOptions {
-        dry_run: matches.get_flag("dry-run"),
-        force: matches.get_flag("force"),
-        author: matches.get_one::<String>("author").cloned(),
-        html: matches.get_one::<OsString>("html").cloned(),
-        name,
-        output: matches.get_one::<OsString>("output").map(PathBuf::from),
-        parent: matches
-            .get_one::<String>("parent")
-            .expect("defaulted by clap")
-            .clone(),
-        published: matches.get_one::<String>("published").cloned(),
-        ref_type,
-        status: matches
-            .get_one::<String>("status")
-            .expect("defaulted by clap")
-            .clone(),
-        title: matches.get_one::<String>("title").cloned(),
-    })
-}
-
-fn clip_pdf(
-    config: &Config,
-    matches: &ArgMatches,
-) -> std::result::Result<(), ClipError> {
-    let raw_url = matches
-        .get_one::<String>("url")
-        .expect("required by clap")
-        .clone();
-    let options = clip_options(matches)?;
-    let companion = match matches.get_flag("listen") {
-        true => Companion::Listen(
-            super::listen::require_validated()
-                .map_err(|error| error.into_command_error())
-                .map_err(ClipError::from)?,
-        ),
-        false => Companion::None,
-    };
-    capture_article(config, &raw_url, &options, companion, false)
 }
 
 /// Map a dedupe refusal to its outcome: clear to proceed, attach the
@@ -445,9 +197,8 @@ fn run_clip_attach(
 }
 
 /// Capture a web article through the clip adapter and install the
-/// stamped PDF. Shared by `clip` (no companion) and `create <article
-/// URL>` (explicit `--audio` companion, if any). `create` already
-/// warned about legacy-only hits before its fetch, so it passes
+/// stamped PDF for `create <article URL>`. `create` already warned
+/// about legacy-only hits before its fetch, so it passes
 /// `legacy_warned` to keep the warning to one line.
 pub(super) fn capture_article(
     config: &Config,
@@ -1045,7 +796,7 @@ pub(super) fn append_web_clip_doctor_rows(warnings: &mut Vec<String>) {
         None => {
             println!("web clip uv: warn (uv not found on PATH)");
             warnings.push(
-                "uv not found on PATH; bob ref clip cannot run its capture adapter"
+                "uv not found on PATH; bob ref create cannot run its capture adapter"
                     .to_string(),
             );
         }

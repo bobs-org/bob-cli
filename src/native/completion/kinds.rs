@@ -11,7 +11,7 @@
 //! things: `--block-id` is a _new_ ID in `capture-task-id` but an
 //! _existing_ task in `capture-task-sections`, `--source` is a choice
 //! in `gkeep list` but free text in `query`, and `--output` is a PDF in
-//! `ref clip` / `ref create` but whatever its
+//! `ref create` but whatever its
 //! [`clap::ValueHint`] says elsewhere. An empty path matches any
 //! command; a full-path entry wins over the all-commands entry, and a
 //! non-trivial [`clap::ValueHint`] sits between the two (see the
@@ -143,14 +143,9 @@ const TABLE: &[Entry] = &[
         arg: "pdf",
         kind: Kind::Files(Some("*.pdf")),
     },
-    // `--output` is a PDF only on the ref commands whose builder
+    // `--output` is a PDF only on the ref command whose builder
     // says so; everywhere else it falls through to its `ValueHint` (or
     // to free text when it has none).
-    Entry {
-        path: &["ref", "clip"],
-        arg: "output",
-        kind: Kind::Files(Some("*.pdf")),
-    },
     Entry {
         path: &["ref", "create"],
         arg: "output",
@@ -386,11 +381,6 @@ const TABLE: &[Entry] = &[
     },
     Entry {
         path: &[],
-        arg: "url",
-        kind: Kind::FreeText,
-    },
-    Entry {
-        path: &[],
         arg: "PRE_CHECK_SLEEP",
         kind: Kind::FreeText,
     },
@@ -607,12 +597,8 @@ mod tests {
             lookup_exact(&["gkeep", "list"], "source"),
             Some(Kind::Choices)
         );
-        // `--output` is a PDF only on the ref commands whose
+        // `--output` is a PDF only on the ref command whose
         // builder says so; the generic lookup finds no entry.
-        assert_eq!(
-            lookup_exact(&["ref", "clip"], "output"),
-            Some(Kind::Files(Some("*.pdf")))
-        );
         assert_eq!(
             lookup_exact(&["ref", "create"], "output"),
             Some(Kind::Files(Some("*.pdf")))

@@ -504,9 +504,10 @@ fn ingest_pdf_url_route(
     superseded_legacy: Option<String>,
 ) -> Result<IngestOutcome, IngestError> {
     let captured = current_local_date();
-    let pdf_plan =
-        super::pdf_target::plan_pdf_url(url, downloaded, None, None, &captured)
-            .map_err(command_error)?;
+    let pdf_plan = super::pdf_target::plan_pdf_url(
+        url, downloaded, None, None, None, None, &captured,
+    )
+    .map_err(command_error)?;
     let target_plan = plan_default_target(
         config,
         std::ffi::OsStr::new(&pdf_plan.stem),
@@ -605,6 +606,8 @@ fn ingest_arxiv_route(
         paper,
         None,
         None,
+        None,
+        None,
         metadata.as_ref(),
         &dest,
         &captured,
@@ -681,7 +684,7 @@ fn ingest_article_route(
     superseded_legacy: Option<String>,
     progress: Option<&dyn Fn(&str)>,
 ) -> Result<IngestOutcome, IngestError> {
-    // Fail fast when the stem is already known, mirroring `clip`.
+    // Fail fast when the stem is already known, mirroring the web-article engine.
     if let Some(stem) = stem_from_url(url) {
         let pre_plan = plan_default_target(
             config,

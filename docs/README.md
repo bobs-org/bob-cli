@@ -20,7 +20,7 @@ and [task date marks](date-marks.md).
 | [freshness.md](freshness.md) | Task freshness: review lease, placement, evaluation, and conformance vectors |
 | [getting-started.md](getting-started.md) | Vault requirements, first capture/session, command effects, and troubleshooting |
 | [gkeep.md](gkeep.md) | `bob gkeep` Keep inbox drain into Obsidian tasks |
-| [highlights-clip.md](highlights-clip.md) | `bob ref clip` web article capture into Highlights intake PDFs |
+| [highlights-clip.md](highlights-clip.md) | Web article capture (`bob ref create <URL>`) into Highlights intake PDFs |
 | [highlights-create.md](highlights-create.md) | `bob ref create` Markdown, PDF, and URL targets |
 | [highlights-ref-sync.md](highlights-ref-sync.md) | `bob ref` PDF intake and reference notes |
 | [obsidian-sync-exclusions.md](obsidian-sync-exclusions.md) | Historical: Obsidian Sync folder-exclusion semantics, kept for reference now that the vault syncs through git only |

@@ -172,7 +172,7 @@ pub fn os_to_string(value: &OsStr) -> String {
 /// checked first; then `$HOME/.local/bin/uv`, `$HOME/.cargo/bin/uv`,
 /// `/opt/homebrew/bin/uv`, and `/usr/local/bin/uv`, in that order. The
 /// Mac app environment sees only `~/.local/bin`, so the fallbacks keep
-/// `bob ref clip` and `bob gkeep` working there.
+/// `bob ref create` and `bob gkeep` working there.
 pub fn resolve_uv() -> Option<(PathBuf, bool)> {
     if let Some(path) = find_on_path("uv") {
         return Some((path, false));

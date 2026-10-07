@@ -1,4 +1,4 @@
-//! `bob ref clip` adapter client: spawn the pinned web-clip adapter.
+//! Web-clip adapter client behind `bob ref create`: spawn the pinned web-clip adapter.
 //!
 //! The client writes one compact JSON request to the adapter's stdin and
 //! reads one JSON response from stdout. `BOB_WEB_CLIP_ADAPTER` replaces the

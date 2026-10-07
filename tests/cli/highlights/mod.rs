@@ -1,6 +1,5 @@
 //! Highlights reference tests.
 
-mod clip;
 mod create;
 mod doctor_library;
 mod fake_clip;

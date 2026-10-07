@@ -1,34 +1,31 @@
-# `bob ref clip` — web URL to Highlights reference PDF
+# Web article capture (`bob ref create <URL>`)
 
-`bob ref clip <URL>` turns a web article into a beautiful, readable,
+`bob ref create <URL>` turns a web article into a beautiful, readable,
 provenance-stamped PDF in the Highlights intake (`xlib/blogs/` by default),
-which the existing `bob ref scan` turns into a `ref/` note. It is a
-sibling of `bob ref create` (see [`highlights-create.md`](highlights-create.md))
-and shares its target planning, collision guards, marker composition, and
-atomic install.
+which the existing `bob ref scan` turns into a `ref/` note. It is the web-article route of `bob ref create` (see [`highlights-create.md`](highlights-create.md)); `bob ref clip` is a permanent hidden alias.
 
 ```bash
-bob ref clip [OPTIONS] <URL>
+bob ref create [OPTIONS] <URL>
 ```
 
 ## Examples
 
 ```bash
 # Capture into xlib/blogs/ (scan writes ref/blogs/<stem>.md later)
-bob ref clip https://example.com/posts/some-article/
+bob ref create https://example.com/posts/some-article/
 
 # Preview everything without writing
-bob ref clip https://example.com/posts/some-article/ -d
+bob ref create https://example.com/posts/some-article/ -d
 
 # Override extracted metadata
-bob ref clip https://example.com/posts/some-article/ \
+bob ref create https://example.com/posts/some-article/ \
   -T "The Real Title" -A "Jane Doe" -p 2026-04-27
 
 # Replay a page saved from a real browser (see below)
-bob ref clip https://example.com/posts/some-article/ -H saved.html
+bob ref create https://example.com/posts/some-article/ -H saved.html
 
 # Narrate the article and bind the episode as companion audio
-bob ref clip https://example.com/posts/some-article/ -L
+bob ref create https://example.com/posts/some-article/ -L
 ```
 
 `-L, --listen` narrates the article with `highlights.listen_command`
@@ -81,8 +78,8 @@ When a site will not yield to automation, save the page from a real
 browser (Save Page As, or SingleFile) and replay it:
 
 ```bash
-bob ref clip https://example.com/walled/ -H ~/Downloads/walled.html
-cat ~/Downloads/walled.html | bob ref clip https://example.com/walled/ -H -
+bob ref create https://example.com/walled/ -H ~/Downloads/walled.html
+cat ~/Downloads/walled.html | bob ref create https://example.com/walled/ -H -
 ```
 
 Subresources still load live on a best-effort basis; the challenge retry

@@ -25,7 +25,7 @@ pub(crate) const BOB_BIN: &str = env!("CARGO_BIN_EXE_bob");
 pub(crate) const TEST_MISSING_CONFIG_FILE: &str =
     "/definitely/missing/bob-cli-test-config.yml";
 /// Keeps `highlights doctor` from spawning the real `uv` web-clip adapter;
-/// clip tests override it with their fake adapter.
+/// web-article tests override it with their fake adapter.
 pub(crate) const TEST_MISSING_WEB_CLIP_ADAPTER: &str =
     "/definitely/missing/bob-cli-test-web-clip-adapter";
 

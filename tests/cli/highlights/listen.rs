@@ -715,19 +715,24 @@ fn listen_legacy_only_hit_captures_fresh_instead_of_attaching() {
         "---\ntitle: Old\nurl: https://example.com/index/open-source-codex-orchestration-symphony/\n---\n\n# Old\n",
     );
     let (fake, log) = listen_for(&temp);
+    let fake_curl = write_fake_html_curl(temp.path());
+    let curl_log = temp.path().join("curl.log");
+    std::fs::write(&curl_log, "").expect("init curl log");
 
     let output = bob_command()
         .arg("highlights")
-        .arg("clip")
+        .arg("create")
         .arg("https://example.com/index/open-source-codex-orchestration-symphony/")
         .arg("-b")
         .arg(&vault)
         .arg("--listen")
         .env("BOB_WEB_CLIP_ADAPTER", &fake_clip.path)
+        .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
+        .env("FAKE_CURL_LOG", &curl_log)
         .env("BOB_HIGHLIGHTS_LISTEN_COMMAND", listen_command(&fake))
         .env("FAKE_LISTEN_LOG", &log)
         .output()
-        .expect("run clip --listen over legacy-only note");
+        .expect("run create --listen over legacy-only note");
     assert_success(&output);
     let diagnostic = stderr(&output);
     assert!(
@@ -1036,24 +1041,29 @@ fn listen_post_listen_collision_keeps_scratch() {
 }
 
 #[test]
-fn clip_listen_captures_and_binds_episode() {
-    let temp = TempDir::new("bob-cli-highlights-clip-listen");
+fn create_listen_captures_and_binds_episode() {
+    let temp = TempDir::new("bob-cli-highlights-create-listen");
     let vault = temp.path().join("vault");
     let fake = FakeClip::new(&temp, "fake");
     let (listen, log) = listen_for(&temp);
+    let fake_curl = write_fake_html_curl(temp.path());
+    let curl_log = temp.path().join("curl.log");
+    std::fs::write(&curl_log, "").expect("init curl log");
 
     let output = bob_command()
         .arg("highlights")
-        .arg("clip")
+        .arg("create")
         .arg("https://example.com/article/hello")
         .arg("-b")
         .arg(&vault)
         .arg("-L")
         .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+        .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
+        .env("FAKE_CURL_LOG", &curl_log)
         .env("BOB_HIGHLIGHTS_LISTEN_COMMAND", listen_command(&listen))
         .env("FAKE_LISTEN_LOG", &log)
         .output()
-        .expect("run clip --listen");
+        .expect("run create --listen");
     assert_success(&output);
     let report = stdout(&output);
     assert!(

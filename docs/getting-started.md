@@ -215,7 +215,7 @@ intervals. `p:1`–`p:4` capture and `bob task reroll` also require the
 | `task reroll` | Re-roll schedules; in a Git worktree, sync before/after and commit rewritten notes; `--offline` skips sync but still commits locally |
 | `plugins list`, `plugins sync` | Pull the plugin source repo by default, including for `sync --dry-run` (`--no-pull` skips); `sync` deploys plugin assets with backups |
 | `gkeep list`, `gkeep pull` | Contact Keep; `pull` writes tasks, commits in a Git worktree unless `--no-commit`, then archives verified Keep notes unless `--no-archive` |
-| `ref create`, `ref clip`, `ref scan`, `ref sync` | Write PDFs/reference notes; writing scans can run a configured pre-scan hook |
+| `ref create`, `ref scan`, `ref sync` | Write PDFs/reference notes; writing scans can run a configured pre-scan hook |
 | `completion install`, `completion uninstall` | Change shell adapter files and the completion manifest |
 
 Native vault reading and basic capture need no Git setup. Git workflows expect

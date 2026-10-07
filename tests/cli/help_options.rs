@@ -670,10 +670,13 @@ fn highlights_ref_help_lists_subcommands_alphabetically() {
 
     assert_success(&output);
     let help = stdout(&output);
+    assert!(
+        !help.contains("\n  clip "),
+        "clip must not be listed as a subcommand:\n{help}"
+    );
     assert_text_order(
         &help,
         &[
-            "\n  clip ",
             "\n  create ",
             "\n  doctor ",
             "\n  marker ",
@@ -702,10 +705,12 @@ fn highlights_create_help_lists_options_alphabetically() {
     assert_text_order(
         &help,
         &[
+            "-A, --author",
             "-a, --audio",
             "-b, --bob-dir",
             "-d, --dry-run",
             "-f, --force",
+            "-H, --html",
             "-i, --include-id",
             "-L, --listen",
             "-l, --lib-dir",
@@ -713,6 +718,7 @@ fn highlights_create_help_lists_options_alphabetically() {
             "-n, --no-audio",
             "-o, --output",
             "-P, --parent",
+            "-p, --published",
             "-r, --ref-dir",
             "-s, --status",
             "-T, --title",
@@ -733,48 +739,33 @@ fn highlights_create_help_lists_options_alphabetically() {
 }
 
 #[test]
-fn highlights_clip_help_lists_options_alphabetically() {
-    let output = bob_command()
+fn highlights_clip_alias_help_matches_create_help() {
+    let create = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg("--help")
+        .output()
+        .expect("run bob highlights create --help");
+    let clip = bob_command()
         .arg("highlights")
         .arg("clip")
         .arg("--help")
         .output()
         .expect("run bob highlights clip --help");
 
-    assert_success(&output);
-    let help = stdout(&output);
-    assert!(
-        help.contains("Arguments:") && help.contains("<URL>"),
-        "expected URL positional argument in Arguments section:\n{help}"
-    );
-    assert_text_order(
-        &help,
-        &[
-            "-A, --author",
-            "-b, --bob-dir",
-            "-d, --dry-run",
-            "-f, --force",
-            "-H, --html",
-            "-L, --listen",
-            "-l, --lib-dir",
-            "-N, --name",
-            "-o, --output",
-            "-P, --parent",
-            "-p, --published",
-            "-r, --ref-dir",
-            "-s, --status",
-            "-T, --title",
-            "-t, --ref-type",
-            "-x, --xlib-dir",
-        ],
+    assert_success(&create);
+    assert_success(&clip);
+    assert_eq!(
+        stdout(&clip),
+        stdout(&create),
+        "clip alias --help must be byte-identical to create --help"
     );
     assert!(
-        help.contains("`--output` cannot be combined with")
-            && help.contains("BOB_WEB_CLIP_ADAPTER")
-            && help.contains("bob ref scan"),
-        "expected output-conflict, env, and scan notes in help:\n{help}"
+        !stdout(&clip).contains("bob ref clip")
+            && !stdout(&clip).contains("\n  clip "),
+        "alias help must print only the canonical path:\n{}",
+        stdout(&clip)
     );
-    assert_stdout_has_no_ansi(&output);
 }
 
 #[test]

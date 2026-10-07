@@ -85,21 +85,20 @@ never fail the command:
 Available commands:
 
 ```bash
-bob ref clip <URL> [-A|--author NAME] [-b|--bob-dir PATH] [-d|--dry-run] [-f|--force] [-H|--html FILE] [-l|--lib-dir PATH] [-N|--name STEM] [-o|--output PDF] [-P|--parent NOTE] [-p|--published DATE] [-r|--ref-dir PATH] [-s|--status STATUS] [-T|--title TITLE] [-t|--ref-type DIR] [-x|--xlib-dir PATH]
-bob ref create <TARGET> [-a|--audio PATH] [-b|--bob-dir PATH] [-d|--dry-run] [-f|--force] [-i|--include-id] [-l|--lib-dir PATH] [-N|--name STEM] [-n|--no-audio] [-o|--output PDF] [-P|--parent NOTE] [-r|--ref-dir PATH] [-s|--status STATUS] [-T|--title TITLE] [-t|--ref-type DIR] [-x|--xlib-dir PATH]
+bob ref create <TARGET> [-A|--author NAME] [-a|--audio PATH] [-b|--bob-dir PATH] [-d|--dry-run] [-f|--force] [-H|--html FILE] [-i|--include-id] [-l|--lib-dir PATH] [-L|--listen] [-N|--name STEM] [-n|--no-audio] [-o|--output PDF] [-P|--parent NOTE] [-p|--published DATE] [-r|--ref-dir PATH] [-s|--status STATUS] [-T|--title TITLE] [-t|--ref-type DIR] [-x|--xlib-dir PATH]
 bob ref doctor [-b|--bob-dir PATH] [-l|--lib-dir PATH] [-n|--no-hooks] [-r|--ref-dir PATH] [-x|--xlib-dir PATH]
 bob ref marker <pdf> [-b|--bob-dir PATH] [-l|--lib-dir PATH] [-r|--ref-dir PATH] [-x|--xlib-dir PATH]
 bob ref scan [-b|--bob-dir PATH] [-d|--dry-run] [-j|--jobs N] [-l|--lib-dir PATH] [-n|--no-hooks] [-r|--ref-dir PATH] [-v|--verbose] [-w|--write-pdfs] [-x|--xlib-dir PATH]
 bob ref sync <pdf> [-b|--bob-dir PATH] [-d|--dry-run] [-l|--lib-dir PATH] [-p|--prefer marker|frontmatter] [-r|--ref-dir PATH] [-w|--write-pdf] [-x|--xlib-dir PATH]
 ```
 
-`clip` captures a web article into `xlib/blogs/<slug>.pdf` through the
+`create` captures a web article URL into `xlib/blogs/<slug>.pdf` through the
 pinned web-clip adapter and stamps the same page-1 marker plus the web
 provenance fields (`source_url`, `author`, `published`, `captured`); the
 full contract lives in [`highlights-clip.md`](highlights-clip.md).
 
-`create` accepts a Markdown file, a local PDF, a PDF URL, or an arXiv
-paper URL and writes `<xlib-dir>/<ref-type>/<stem>.pdf` (by default
+`create` accepts a Markdown file, a local PDF, a PDF URL, an arXiv
+paper URL, or a web article URL and writes `<xlib-dir>/<ref-type>/<stem>.pdf` (by default
 `~/bob/xlib/chat/<basename>.pdf` for Markdown and
 `~/bob/xlib/papers/<stem>.pdf` for PDFs) unless `-o, --output <PDF>`
 selects the complete output path. The full target contract lives in
@@ -178,7 +177,7 @@ are omitted from the PDF because the source file is not available there.
 Without a companion, the card remains with its `♫` glyph.
 
 `create` now binds audio from the sase-listen library, not only from a file
-that was already beside the PDF, and `create --listen` (or `clip --listen`)
+that was already beside the PDF, and `create --listen`
 narrates the target fresh instead of discovering anything. Discovery order,
 first hit wins (skipped entirely under `--listen`, whose episode binds as
 `<stem>.mp3` and reports `(from --listen)`):
@@ -201,7 +200,7 @@ The library root is `BOB_HIGHLIGHTS_AUDIO_LIBRARY`, then
 ```yaml
 highlights:
   audio_library: "/data/sase-listen/library"
-  # `bob ref create --listen` (and `clip --listen`) narrates the
+  # `bob ref create --listen` narrates the
   # target with this command, which must write MP3 audio to {audio}.
   # Overridden by BOB_HIGHLIGHTS_LISTEN_COMMAND. See
   # docs/highlights-create.md for the full contract.

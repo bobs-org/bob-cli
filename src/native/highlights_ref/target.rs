@@ -97,7 +97,7 @@ pub(super) fn fetch_and_route(
     }
     if !(200..300).contains(&status) {
         return Err(CommandError::new(format!(
-            "server returned HTTP {status} for {}",
+            "server returned HTTP {status} for {}\nhint: save the page from a browser and pass --html FILE",
             url.cleaned
         )));
     }

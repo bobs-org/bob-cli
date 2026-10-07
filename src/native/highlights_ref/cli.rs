@@ -14,7 +14,7 @@ const HELP_GROUPS: &[(&str, &[&str])] = &[
     ("Library", &["find", "list", "show"]),
     (
         "Highlights pipeline",
-        &["clip", "create", "doctor", "jobs", "marker", "scan", "sync"],
+        &["create", "doctor", "jobs", "marker", "scan", "sync"],
     ),
 ];
 
@@ -79,7 +79,6 @@ fn all_subcommands() -> Vec<ClapCommand> {
         crate::native::ref_library::cli::find_command(),
         crate::native::ref_library::cli::list_command(),
         crate::native::ref_library::cli::show_command(),
-        clip::command(),
         create::command(),
         doctor_command(),
         crate::native::ref_jobs::command(),

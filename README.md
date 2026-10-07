@@ -218,7 +218,7 @@ Paths below are relative to `BOB_DIR` (`~/bob` by default):
 | `img/`, `file/` | Images and saved clipboard snippets written by `bob capture` |
 | `_conflicts/` | Local copies of vault files `bob vault-sync` could not merge |
 | `.obsidian/plugins/` | Installed community plugins, including Bob's custom plugins |
-| `xlib/` | Highlights intake PDFs from `bob ref create` and `bob ref clip` |
+| `xlib/` | Highlights intake PDFs from `bob ref create` (web article targets) |
 | `lib/` | Highlights library PDFs after `bob ref scan` |
 | `old_lib/` | Archival predecessor of `lib/`; tracked in the vault Git repo, which is now the vault's only sync channel |
 | `ref/` | Generated Highlights reference notes |
@@ -827,8 +827,7 @@ The full command contract lives in [`docs/gkeep.md`](docs/gkeep.md).
 ## Reference library (bob ref)
 
 ```bash
-bob ref clip <URL> [-A|--author NAME] [-b|--bob-dir PATH] [-d|--dry-run] [-f|--force] [-H|--html FILE] [-l|--lib-dir PATH] [-L|--listen] [-N|--name STEM] [-o|--output PDF] [-P|--parent NOTE] [-p|--published DATE] [-r|--ref-dir PATH] [-s|--status STATUS] [-T|--title TITLE] [-t|--ref-type DIR] [-x|--xlib-dir PATH]
-bob ref create <TARGET> [-a|--audio PATH] [-b|--bob-dir PATH] [-d|--dry-run] [-f|--force] [-i|--include-id] [-l|--lib-dir PATH] [-L|--listen] [-N|--name STEM] [-n|--no-audio] [-o|--output PDF] [-P|--parent NOTE] [-r|--ref-dir PATH] [-s|--status STATUS] [-T|--title TITLE] [-t|--ref-type DIR] [-x|--xlib-dir PATH]
+bob ref create <TARGET> [-A|--author NAME] [-a|--audio PATH] [-b|--bob-dir PATH] [-d|--dry-run] [-f|--force] [-H|--html FILE] [-i|--include-id] [-l|--lib-dir PATH] [-L|--listen] [-N|--name STEM] [-n|--no-audio] [-o|--output PDF] [-P|--parent NOTE] [-p|--published DATE] [-r|--ref-dir PATH] [-s|--status STATUS] [-T|--title TITLE] [-t|--ref-type DIR] [-x|--xlib-dir PATH]
 bob ref doctor [-b|--bob-dir PATH] [-l|--lib-dir PATH] [-n|--no-hooks] [-r|--ref-dir PATH] [-x|--xlib-dir PATH]
 bob ref find <QUERY>... [-b|--bob-dir PATH] [-f|--format human|json|markdown] [-i|--include-intake] [-m|--min-score SCORE] [-r|--ref-dir PATH] [-x|--xlib-dir PATH]
 bob ref jobs [list] [-a|--all] [-f|--format human|json]
@@ -1049,10 +1048,9 @@ The documented workflows use these external-tool integrations:
   `BOB_PANDOC_COMMAND`
 - `curl` for `bob ref create` PDF URL and arXiv targets; override with
   `BOB_HIGHLIGHTS_CURL`
-- `sase-listen` for `bob ref create --listen` and
-  `bob ref clip --listen`, configured as `highlights.listen_command`
+- `sase-listen` for `bob ref create --listen`, configured as `highlights.listen_command`
 - `uv` plus Google Chrome or Chromium (or `BOB_CHROME`) for
-  `bob ref clip`: `uv` fetches Python ≥3.10 and the pinned Playwright,
+  `bob ref create` web article targets: `uv` fetches Python ≥3.10 and the pinned Playwright,
   Pillow, and nh3 on first run (override the whole spawn with
   `BOB_WEB_CLIP_ADAPTER`); on Linux, `Xvfb` lets it retry bot-protected sites
   headed
@@ -1078,8 +1076,8 @@ by `bob vault-sync`. The default is
 `$XDG_STATE_HOME/bob-cli/vault-sync.json`, or
 `$HOME/.local/state/bob-cli/vault-sync.json` when `XDG_STATE_HOME` is unset.
 
-`BOB_CHROME` sets the Chrome or Chromium executable the `bob ref clip`
-adapter launches instead of auto-discovering one.
+`BOB_CHROME` sets the Chrome or Chromium executable the `bob ref create`
+web-article adapter launches instead of auto-discovering one.
 
 `BOB_CLI_USE_SCRIPT=1` selects an embedded shell implementation where one is
 available. See [Compatibility shims](#compatibility-shims) for the exact command
@@ -1114,7 +1112,7 @@ clipboard source alone.
 file holds the priority windows for `p:<N>` and `bob task reroll`,
 `highlights.pre_scan_hook` for `bob ref scan` and
 `bob ref doctor`, `highlights.listen_command` for
-`bob ref create --listen` and `bob ref clip --listen`,
+`bob ref create --listen`,
 the `gkeep:` section for `bob gkeep`, and the
 optional `plan:` and `freshness:` blocks. Plan caps default to 3 themes,
 10 links, 15 NEXT tasks, 10 PENDING tasks, 100 dashboard READY tasks, and
@@ -1176,7 +1174,7 @@ directory for debugging and prints its path (the legacy
 
 `BOB_HIGHLIGHTS_LISTEN_COMMAND` overrides `highlights.listen_command` in
 `bob/config.yml` for `bob ref create --listen` and
-`bob ref clip --listen` (see
+`bob ref create --listen` (web article targets; see
 [create-target contract](docs/highlights-create.md#listen)).
 
 `BOB_HIGHLIGHTS_REF_DIR` sets the generated reference note directory used by
@@ -1215,13 +1213,13 @@ capture rolls independently. `bob task reroll` also reads it as the default
 base seed when `--seed` is omitted.
 
 `BOB_WEB_CLIP_ADAPTER` is the path of an executable that speaks the web-clip
-adapter protocol and replaces `uv run --script …` for `bob ref clip`
-and the `doctor` web-clip rows. It is the test hook, like `BOB_GKEEP_ADAPTER`.
+adapter protocol and replaces `uv run --script …` for `bob ref create`
+web article targets and the `doctor` web-clip rows. It is the test hook, like `BOB_GKEEP_ADAPTER`.
 
-`BOB_WEB_CLIP_KEEP_WORKDIR=1` keeps the `bob ref clip` scratch
+`BOB_WEB_CLIP_KEEP_WORKDIR=1` keeps the `bob ref create` web-article scratch
 directory for debugging and prints its path.
 
-`BOB_WEB_CLIP_TIMEOUT_SECS` sets the overall `bob ref clip` adapter
+`BOB_WEB_CLIP_TIMEOUT_SECS` sets the overall `bob ref create` web-article adapter
 timeout in seconds. It defaults to 300; the first run may download the pinned
 Python dependencies.
 
