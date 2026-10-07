@@ -237,6 +237,7 @@ pub(crate) fn command() -> ClapCommand {
                 .short('a')
                 .value_name("PATH")
                 .value_parser(clap::builder::OsStringValueParser::new())
+                .value_hint(clap::ValueHint::FilePath)
                 .conflicts_with("no-audio")
                 .help("Use this companion audio file instead of discovering one"),
         )
@@ -2406,12 +2407,20 @@ mod tests {
         let latex = String::from_utf8_lossy(&output.stdout);
         assert!(latex.contains(r"\BobListenCard{"), "{latex}");
         assert!(latex.contains(r"\BobListenPlay{}"), "{latex}");
+        // Pandoc 3.1.3 escapes the `&` in the `\href` target as `\&`;
+        // Pandoc 3.1.11.1 emits a bare `&`. Both compile to the same PDF
+        // link target (hyperref accepts both), so accept either form here
+        // while still pinning the percent-encoded URI segments below.
         assert!(
             latex.contains(
                 r"obsidian://open?vault=Research\%20Notes\&file=lib\%2Fchat\%2Freport.mp3"
+            ) || latex.contains(
+                r"obsidian://open?vault=Research\%20Notes&file=lib\%2Fchat\%2Freport.mp3"
             ),
             "{latex}"
         );
+        assert!(latex.contains(r"Research\%20Notes"), "{latex}");
+        assert!(latex.contains(r"lib\%2Fchat\%2Freport.mp3"), "{latex}");
         assert!(!latex.contains("report_narration.md"), "{latex}");
         assert!(!latex.contains("♫"), "{latex}");
     }

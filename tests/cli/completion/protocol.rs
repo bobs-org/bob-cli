@@ -237,6 +237,11 @@ fn value_hints_beat_generic_kinds_entries() {
     assert_success(&output);
     assert_eq!(directives(&output), vec!["!files".to_string()]);
 
+    // `ref create --audio` takes a companion audio file (bob-cli-4j).
+    let output = complete(&["bob", "ref", "create", "--audio", ""]);
+    assert_success(&output);
+    assert_eq!(directives(&output), vec!["!files".to_string()]);
+
     // The highlights PDF `--output` keeps its glob through the
     // path-specific entry.
     let output = complete(&["bob", "highlights", "create", "--output", ""]);
