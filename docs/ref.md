@@ -1,10 +1,12 @@
-# Reference library (`bob ref find`)
+# Reference library (`bob ref find`, `bob ref list`)
 
 `bob ref find` looks up URLs, arXiv IDs, DOIs, vault paths, note stems,
 titles, and frontmatter ids in the reference library under `ref/`. It
 answers "is this already in my library?" with a verdict per query, in
-human, Markdown, or versioned JSON output. It never writes to the vault
-(the one exception is `find -i`, which reads intake PDF markers).
+human, Markdown, or versioned JSON output. `bob ref list` renders
+filtered library views, defaulting to the reading queue (queued and
+started notes). Both verbs never write to the vault (the one exception
+is `find -i`, which reads intake PDF markers).
 
 ## Coverage
 
@@ -84,6 +86,59 @@ queued intake PDF matched, with `-i`), `possible` (only title
 candidates at or above `--min-score`), `not_found` (nothing matched).
 A title match is only ever a candidate, never proof; `not found` means
 only "not under ref/".
+
+## `bob ref list`
+
+```bash
+bob ref list
+bob ref list -R finished -S 30d -g
+bob ref list -o external -R finished -f json
+bob ref list -s legacy -R queued
+```
+
+Options: `-A/--all`, `-b/--bob-dir`, `-f/--format human|json|markdown`
+(default human), `-g/--git-dates`, `-n/--limit N` (default 50),
+`-o/--origin external|agent-report`, `-P/--parent NOTE`,
+`-R/--reading-state` (comma-separated, or `all`), `-r/--ref-dir`,
+`-S/--since DATE`, `-s/--status` (comma-separated),
+`-t/--ref-type` (comma-separated). `-A` conflicts with `-n`.
+
+With no filter option at all, `list` shows the reading queue (`queued`
+and `started` notes) in every format. Any filter option searches every
+reading state unless `-R` narrows it. Values within one option are ORed;
+different options are ANDed. Superseded notes are always excluded and
+counted in `hidden.superseded` (`find` and `show` still reach them).
+
+The row date is `finished` for the finished and dropped states, `added`
+otherwise. `--since` accepts `YYYY-MM-DD` or `<N>d|w|m|y` relative to
+today (calendar months); rows without a date are excluded and counted in
+`filters.undated_excluded`. Rows order by reading state (started,
+queued, finished, dropped, unknown), modern before legacy, `next` before
+`ready` within queued, row date newest first with undated last, then
+title. `--limit` applies after filtering and ordering.
+
+`-g/--git-dates` fills a missing `added` or `finished` date from one
+`git log` pass over `^ref` tracker lines only on modern notes, with
+source `git`. When Git is missing, the vault is not a repo, or the pass
+fails, `coverage.git_dates` is `"unavailable"` with one stderr warning;
+this is never fatal.
+
+Human output groups rows under one heading per reading state with its
+count (pre-cap totals), with the status chip, row date (or `—`), title,
+`♫` when audio is bound, type, and a dim path; the path drops first on
+narrow terminals, then titles truncate. A pending-sync `*` gets a
+footnote. Without `-s`, legacy-era rows collapse to one dim summary line
+instead of listing. The cap applies to the rows that are listed;
+truncation prints `… N more · -n N or -A to show more`. An empty default
+view prints `Nothing queued ✓`.
+
+Markdown output is a table with the columns State | Status | Date |
+Title | Type | Note, followed by the matched/returned and coverage lines.
+The JSON envelope carries `filters` (the effective `reading_state` plus
+`reading_state_defaulted`, every active filter, the `limit`, and
+`undated_excluded`), `matched`, `returned`, `truncated`, and
+`hidden.superseded` alongside the shared `coverage` and `library`
+counts.
 
 ## JSON envelope
 

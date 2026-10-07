@@ -2,6 +2,7 @@
 //! `highlights-ref` spellings stay byte-identical to the canonical command.
 
 mod find;
+mod list;
 
 use crate::support::*;
 use std::fs;

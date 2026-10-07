@@ -93,6 +93,9 @@ pub(crate) struct Coverage {
     pub intake: String,
     pub scope: String,
     pub annotations: String,
+    /// Set only by `list -g` when the vault Git pass fails.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub git_dates: Option<String>,
 }
 
 impl Coverage {

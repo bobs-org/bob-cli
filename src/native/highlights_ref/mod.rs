@@ -215,6 +215,9 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
         Some(("find", sub_matches)) => {
             crate::native::ref_library::cli::run_find(sub_matches)
         }
+        Some(("list", sub_matches)) => {
+            crate::native::ref_library::cli::run_list(sub_matches)
+        }
         Some(("scan", sub_matches)) => {
             run_scan(sub_matches, no_hooks_flag(&matches, sub_matches))
         }

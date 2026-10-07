@@ -15,6 +15,7 @@ mod coverage;
 mod find;
 mod frontmatter;
 mod identity;
+pub(crate) mod list;
 mod output;
 mod resolve;
 mod row;
@@ -28,6 +29,10 @@ pub(crate) use frontmatter::ParsedFrontmatter;
 pub(crate) use identity::{
     classify_query, normalize_doi_query, parse_arxiv_query, stored_identity,
     url_query_keys, QueryKind,
+};
+pub(crate) use list::{
+    fill_git_dates, filter_list, parse_since_cutoff, row_date, select,
+    validate_since, ListSelection, LIST_STATE_ORDER,
 };
 pub(crate) use resolve::{
     path_matches, primary_rank, resolve_query, title_score, MatchKind,
@@ -197,6 +202,7 @@ pub(crate) fn build_index(
         intake: "not_checked".to_string(),
         scope: Coverage::scope_text(),
         annotations: Coverage::annotations_text(),
+        git_dates: None,
     };
     Ok(RefIndex {
         bob_dir: config.bob_dir.clone(),

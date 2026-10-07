@@ -1,8 +1,9 @@
 //! CLI builders for the `bob ref` library verbs.
 //!
-//! This phase registers only `find`; `list` and `show` add their builders
-//! here in their own phases. Shared directory args reuse the Highlights
-//! builders so help strings stay identical.
+//! `find` looks up batch identity queries; `list` renders filtered
+//! library views with the reading queue as its default. `show` adds its
+//! builder here in its own phase. Shared directory args reuse the
+//! Highlights builders so help strings stay identical.
 use std::ffi::OsString;
 use std::path::PathBuf;
 
@@ -10,14 +11,19 @@ use clap::{Arg, ArgAction, ArgMatches, Command as ClapCommand};
 
 use super::find::resolve_find;
 use super::output::{
-    print_find_error, print_find_json, render_find_human, render_find_markdown,
-    Format,
+    print_find_error, print_find_json, print_list_json, render_find_human,
+    render_find_markdown, render_list_human, render_list_markdown,
+    CollapsedLegacy, Format,
 };
-use super::{build_index, Coverage, LibraryConfig, RefIndex};
+use super::{
+    build_index, fill_git_dates, filter_list, parse_since_cutoff, select,
+    validate_since, Coverage, LibraryConfig, ListSelection, RefIndex, RefRow,
+    LIST_STATE_ORDER,
+};
 use crate::native::env as bob_env;
 use crate::native::highlights_ref::{
     bob_dir_arg, collect_intake_records, ref_dir_arg, xlib_dir_arg,
-    IntakeRecord,
+    IntakeRecord, COMMAND_NAME,
 };
 use crate::native::style::{terminal_width, Styler};
 
@@ -72,6 +78,348 @@ pub(crate) fn find_command() -> ClapCommand {
             printf '%s\\n' URL1 URL2 | bob ref find - -f json\n  \
             bob ref find 1706.03762 -i",
         )
+}
+
+/// The `bob ref list` subcommand builder.
+pub(crate) fn list_command() -> ClapCommand {
+    ClapCommand::new("list")
+        .about(
+            "List reference notes by reading state, status, type, origin, or date",
+        )
+        .arg(
+            Arg::new("all")
+                .long("all")
+                .short('A')
+                .action(ArgAction::SetTrue)
+                .conflicts_with("limit")
+                .help("Show every matching note instead of the first --limit"),
+        )
+        .arg(bob_dir_arg())
+        .arg(
+            Arg::new("format")
+                .long("format")
+                .short('f')
+                .value_name("FORMAT")
+                .value_parser(["human", "json", "markdown"])
+                .default_value("human")
+                .help("Output format"),
+        )
+        .arg(
+            Arg::new("git-dates")
+                .long("git-dates")
+                .short('g')
+                .action(ArgAction::SetTrue)
+                .help("Fill missing added/finished dates from vault Git history (slower)"),
+        )
+        .arg(
+            Arg::new("limit")
+                .long("limit")
+                .short('n')
+                .value_name("N")
+                .value_parser(clap::value_parser!(u64).range(1..))
+                .default_value("50")
+                .help("Show at most N notes"),
+        )
+        .arg(
+            Arg::new("origin")
+                .long("origin")
+                .short('o')
+                .value_name("ORIGIN")
+                .value_parser(["external", "agent-report"])
+                .help("Only external references or agent reports"),
+        )
+        .arg(
+            Arg::new("parent")
+                .long("parent")
+                .short('P')
+                .value_name("NOTE")
+                .help("Only notes whose parent is this bare note name"),
+        )
+        .arg(
+            Arg::new("reading-state")
+                .long("reading-state")
+                .short('R')
+                .value_name("STATE")
+                .num_args(1..)
+                .value_delimiter(',')
+                .value_parser([
+                    "queued",
+                    "started",
+                    "finished",
+                    "dropped",
+                    "unknown",
+                    "all",
+                ])
+                .help("queued, started, finished, dropped, unknown, or all (comma-separated)"),
+        )
+        .arg(ref_dir_arg())
+        .arg(
+            Arg::new("since")
+                .long("since")
+                .short('S')
+                .value_name("DATE")
+                .value_parser(validate_since)
+                .help("Only notes whose row date is on or after DATE (YYYY-MM-DD, 7d, 4w, 6m, 1y)"),
+        )
+        .arg(
+            Arg::new("status")
+                .long("status")
+                .short('s')
+                .value_name("STATUS")
+                .num_args(1..)
+                .value_delimiter(',')
+                .value_parser([
+                    "ready",
+                    "next",
+                    "wip",
+                    "read",
+                    "abandoned",
+                    "legacy",
+                    "conflict",
+                    "unknown",
+                ])
+                .help("ready, next, wip, read, abandoned, legacy, conflict, unknown (comma-separated)"),
+        )
+        .arg(
+            Arg::new("ref-type")
+                .long("ref-type")
+                .short('t')
+                .value_name("TYPE")
+                .num_args(1..)
+                .value_delimiter(',')
+                .help("Library subdirectory, such as papers, blogs, docs, chat, or ai (comma-separated)"),
+        )
+        .after_help(
+            "With no filter option at all, list shows the reading queue (queued and started notes) in every format. Any filter option searches every reading state unless -R narrows it.\n\
+            \n\
+            Examples:\n  \
+            bob ref list\n  \
+            bob ref list -R finished -S 30d -g\n  \
+            bob ref list -o external -R finished -f json\n  \
+            bob ref list -s legacy -R queued",
+        )
+}
+
+/// Run `bob ref list`: build the index, filter and order it, and render.
+pub(crate) fn run_list(matches: &ArgMatches) -> i32 {
+    let format = Format::from_name(
+        matches
+            .get_one::<String>("format")
+            .map(String::as_str)
+            .unwrap_or("human"),
+    );
+    let config = list_config_from_matches(matches);
+    let mut index = match build_index(&config) {
+        Ok(index) => index,
+        Err(error) => {
+            print_find_error(
+                format,
+                "ref list",
+                "missing_ref_dir",
+                &error.to_string(),
+                Some("pass -b/--bob-dir or -r/--ref-dir, or set BOB_DIR"),
+            );
+            return 1;
+        }
+    };
+    let selection = match list_selection(matches) {
+        Ok(selection) => selection,
+        Err(message) => {
+            print_find_error(
+                format,
+                "ref list",
+                "invalid_option",
+                &message,
+                None,
+            );
+            return 2;
+        }
+    };
+    let mut coverage = index.coverage.clone();
+    if matches.get_flag("git-dates") {
+        let (git_word, warning) = fill_git_dates(&config, &mut index.rows);
+        coverage.git_dates = git_word;
+        if let Some(warning) = warning {
+            eprintln!("{COMMAND_NAME}: warning: {warning}");
+        }
+    }
+    let outcome = filter_list(&index.rows, &selection);
+    let matched = outcome.ordered.len();
+    // Without `-s`, legacy-era rows collapse to one human summary line
+    // instead of listing; JSON and Markdown still carry every match.
+    let collapse = !selection.has_status_filter();
+    let listed: Vec<usize> = outcome
+        .ordered
+        .iter()
+        .copied()
+        .filter(|row| !collapse || index.rows[*row].era != "legacy")
+        .collect();
+    let listed_total = listed.len();
+    let limit: usize = selection
+        .limit
+        .and_then(|capped| usize::try_from(capped).ok())
+        .unwrap_or(usize::MAX);
+    let shown: Vec<usize> = listed.iter().copied().take(limit).collect();
+    let truncated_more = listed_total.saturating_sub(shown.len());
+    let refs: Vec<RefRow> =
+        shown.iter().map(|row| index.rows[*row].clone()).collect();
+    match format {
+        Format::Json => {
+            let json_refs: Vec<RefRow> = outcome
+                .ordered
+                .iter()
+                .take(limit)
+                .map(|row| index.rows[*row].clone())
+                .collect();
+            print_list_json(
+                &coverage,
+                &selection,
+                matched,
+                json_refs.len(),
+                matched > json_refs.len(),
+                outcome.hidden_superseded,
+                outcome.undated_excluded,
+                &index.counts,
+                &json_refs,
+            );
+        }
+        Format::Markdown => {
+            let markdown_refs: Vec<RefRow> = outcome
+                .ordered
+                .iter()
+                .take(limit)
+                .map(|row| index.rows[*row].clone())
+                .collect();
+            print!(
+                "{}",
+                render_list_markdown(&coverage, matched, &markdown_refs)
+            );
+        }
+        Format::Human => {
+            print!(
+                "{}",
+                render_list_human(
+                    &selection,
+                    &coverage,
+                    &index.counts,
+                    listed_total,
+                    &refs,
+                    &group_totals(&index.rows, &listed),
+                    truncated_more,
+                    &collapse_legacy(&index.rows, &outcome.ordered, collapse),
+                    Styler::detect(),
+                    terminal_width(),
+                )
+            );
+        }
+    }
+    0
+}
+
+/// The effective selection from the `list` matches. `--since` values are
+/// already shape-checked by clap; resolve the cutoff against the clock.
+fn list_selection(matches: &ArgMatches) -> Result<ListSelection, String> {
+    let states = matches
+        .get_many::<String>("reading-state")
+        .map(|values| values.cloned().collect::<Vec<_>>());
+    let statuses = matches
+        .get_many::<String>("status")
+        .map(|values| values.cloned().collect::<Vec<_>>());
+    let ref_types = matches
+        .get_many::<String>("ref-type")
+        .map(|values| values.cloned().collect::<Vec<_>>());
+    let origin = matches.get_one::<String>("origin").cloned();
+    let parent = matches.get_one::<String>("parent").cloned();
+    let since = matches.get_one::<String>("since").cloned();
+    let since_cutoff = since
+        .as_deref()
+        .map(|value| {
+            parse_since_cutoff(value, &bob_env::current_datetime().date())
+                .ok_or_else(|| format!("invalid --since {value:?}"))
+        })
+        .transpose()?;
+    let limit = if matches.get_flag("all") {
+        None
+    } else {
+        Some(matches.get_one::<u64>("limit").copied().unwrap_or(50))
+    };
+    Ok(select(
+        states,
+        statuses,
+        ref_types,
+        origin,
+        parent,
+        since,
+        since_cutoff,
+        limit,
+    ))
+}
+
+/// Pre-cap per-state totals over the listed rows, in state order, for
+/// the human group headings.
+fn group_totals(
+    rows: &[RefRow],
+    listed: &[usize],
+) -> Vec<(&'static str, usize)> {
+    LIST_STATE_ORDER
+        .iter()
+        .map(|state| {
+            let count = listed
+                .iter()
+                .filter(|row| rows[**row].reading_state == *state)
+                .count();
+            (*state, count)
+        })
+        .filter(|(_, count)| *count > 0)
+        .collect()
+}
+
+/// The legacy-era summary for the human collapse line, in state order.
+/// Empty unless collapsing is active and legacy rows matched.
+fn collapse_legacy(
+    rows: &[RefRow],
+    ordered: &[usize],
+    collapse: bool,
+) -> Vec<CollapsedLegacy> {
+    if !collapse {
+        return Vec::new();
+    }
+    LIST_STATE_ORDER
+        .iter()
+        .filter_map(|state| {
+            let count = ordered
+                .iter()
+                .filter(|index| {
+                    rows[**index].era == "legacy"
+                        && rows[**index].reading_state == *state
+                })
+                .count();
+            (count > 0).then_some(CollapsedLegacy { state, count })
+        })
+        .collect()
+}
+
+/// Library locations from the `list` matches: only `bob-dir` and
+/// `ref-dir` are read, never the full Highlights config (whose `lib-dir`
+/// id this command does not define) and never `xlib-dir`.
+pub(crate) fn list_config_from_matches(matches: &ArgMatches) -> LibraryConfig {
+    let bob_dir = matches
+        .get_one::<OsString>("bob-dir")
+        .map(PathBuf::from)
+        .map(|path| bob_env::expand_tilde(&path))
+        .unwrap_or_else(bob_env::bob_dir);
+    let ref_dir = library_dir(
+        matches,
+        "ref-dir",
+        "BOB_HIGHLIGHTS_REF_DIR",
+        "ref",
+        &bob_dir,
+    );
+    LibraryConfig {
+        xlib_dir: bob_dir.join("xlib"),
+        bob_dir,
+        ref_dir,
+    }
 }
 
 /// Library locations from the `find` matches: only `bob-dir`, `ref-dir`,

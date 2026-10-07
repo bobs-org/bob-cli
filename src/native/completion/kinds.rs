@@ -167,6 +167,24 @@ const TABLE: &[Entry] = &[
         arg: "min-score",
         kind: Kind::FreeText,
     },
+    // `bob ref list` overrides the global `origin` (a vault note
+    // everywhere else) with a static choice, and adds its own choice
+    // and free-text slots.
+    Entry {
+        path: &["ref", "list"],
+        arg: "origin",
+        kind: Kind::Choices,
+    },
+    Entry {
+        path: &["ref", "list"],
+        arg: "reading-state",
+        kind: Kind::Choices,
+    },
+    Entry {
+        path: &["ref", "list"],
+        arg: "since",
+        kind: Kind::FreeText,
+    },
     // Static choices (also served live by the engine through clap
     // possible values; the entries keep the decision explicit).
     Entry {
