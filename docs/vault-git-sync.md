@@ -180,7 +180,7 @@ explicitly when a second machine needs the PDFs.
 
 `xlib/` is the Highlights intake bridge. athena and apollo each keep a gitignored
 `~/bob/xlib/` source queue, and `bob_xlib_pull` drains both into the MacBook, either as
-`bob highlights scan`'s pre-scan hook or when run by hand. The managed Bob config sets:
+`bob ref scan`'s pre-scan hook or when run by hand. The managed Bob config sets:
 
 ```yaml
 highlights:
@@ -198,8 +198,10 @@ After draining athena and apollo, `bob_xlib_pull` runs
 `bob highlights --no-hooks scan -w` itself on the MacBook, so a manual pull syncs the
 new PDFs immediately instead of waiting for the next cron tick. The scan runs even when
 both queues were empty or a probe or transfer failed, because `xlib/` can still hold
-files from an earlier run, and `--no-hooks` keeps it from re-entering the hook. It is
-skipped in two cases:
+files from an earlier run, and `--no-hooks` keeps it from re-entering the hook. The
+cron job and the hook intentionally keep the `bob highlights` spelling: it is a
+permanent alias of `bob ref`, so they keep working whatever bob is installed.
+It is skipped in two cases:
 
 - bob invoked `bob_xlib_pull` as the pre-scan hook. bob exports
   `BOB_HIGHLIGHTS_IN_PRE_SCAN_HOOK=1` to the hook and is about to scan anyway.
@@ -224,8 +226,8 @@ unavailable.
 Useful checks:
 
 ```bash
-bob highlights doctor
-ssh mac 'PATH="$HOME/bin:$HOME/.cargo/bin:/opt/homebrew/bin:/usr/bin:/bin" bob highlights doctor'
+bob ref doctor
+ssh mac 'PATH="$HOME/bin:$HOME/.cargo/bin:/opt/homebrew/bin:/usr/bin:/bin" bob ref doctor'
 ```
 
 ## Custom plugins

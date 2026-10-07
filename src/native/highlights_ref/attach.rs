@@ -379,6 +379,6 @@ pub(super) fn run_attach(
     }
     println!("audio: {} (from --listen)", dest.display());
     println!("title: {}", attach.title);
-    println!("next: bob highlights scan");
+    println!("next: bob ref scan");
     Ok(())
 }

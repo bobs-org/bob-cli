@@ -122,7 +122,7 @@ pub(super) fn plan_listen_flow(
         && library_dest.exists()
     {
         return Err(CommandError::new(format!(
-            "refusing to create {} because the library destination already exists: {}; remove or rename the archived copy before recreating it (bob highlights scan would refuse to move the new audio over it)",
+            "refusing to create {} because the library destination already exists: {}; remove or rename the archived copy before recreating it (bob ref scan would refuse to move the new audio over it)",
             dest.display(),
             library_dest.display()
         )));
@@ -147,7 +147,7 @@ pub(super) fn install_listen_audio(
         && library_dest.exists()
     {
         return Err(CommandError::new(format!(
-            "refusing to create {} because the library destination already exists: {}; remove or rename the archived copy before recreating it (bob highlights scan would refuse to move the new audio over it)",
+            "refusing to create {} because the library destination already exists: {}; remove or rename the archived copy before recreating it (bob ref scan would refuse to move the new audio over it)",
             flow.dest.display(),
             library_dest.display()
         )));

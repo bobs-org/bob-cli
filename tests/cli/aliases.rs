@@ -124,6 +124,8 @@ fn every_alias_matches_canonical_help_and_invalid_option() {
         (&["randomize"], &["task", "reroll"]),
         (&["notify"], &["pomodoro", "notify"]),
         (&["tmux-pomodoro"], &["pomodoro", "tmux"]),
+        (&["highlights"], &["ref"]),
+        (&["highlights-ref"], &["ref"]),
     ];
     for (old, canonical) in pairs {
         let mut old_help = old.to_vec();
@@ -538,12 +540,18 @@ fn completion_offers_group_members_status_flags_and_alias_options() {
         "randomize",
         "notify",
         "tmux-pomodoro",
+        "highlights",
+        "highlights-ref",
     ] {
         assert!(
             !root.contains(&alias.to_string()),
             "root completion must not offer {alias}"
         );
     }
+    assert!(
+        root.contains(&"ref".to_string()),
+        "root completion must offer ref: {root:?}"
+    );
 }
 
 fn write_reconcile_fixture(vault: &Path) {

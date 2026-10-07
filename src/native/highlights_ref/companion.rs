@@ -56,7 +56,7 @@ pub(super) fn plan_audio_copy_for_source(
         && library_dest.exists()
     {
         return Err(CommandError::new(format!(
-            "refusing to create {} because the library destination already exists: {}; remove or rename the archived copy before recreating it (bob highlights scan would refuse to move the new audio over it)",
+            "refusing to create {} because the library destination already exists: {}; remove or rename the archived copy before recreating it (bob ref scan would refuse to move the new audio over it)",
             dest.display(),
             library_dest.display()
         )));
@@ -181,7 +181,7 @@ pub(super) fn plan_reused_companion(
                 && existing != *library_dest
             {
                 return Err(CommandError::new(format!(
-                    "refusing to create {} because the library destination already exists: {}; remove or rename the archived copy before recreating it (bob highlights scan would refuse to move the new audio over it)",
+                    "refusing to create {} because the library destination already exists: {}; remove or rename the archived copy before recreating it (bob ref scan would refuse to move the new audio over it)",
                     dest.display(),
                     library_dest.display()
                 )));
@@ -248,7 +248,7 @@ fn plan_copy_for_source(
         && library_dest.exists()
     {
         return Err(CommandError::new(format!(
-            "refusing to create {} because the library destination already exists: {}; remove or rename the archived copy before recreating it (bob highlights scan would refuse to move the new audio over it)",
+            "refusing to create {} because the library destination already exists: {}; remove or rename the archived copy before recreating it (bob ref scan would refuse to move the new audio over it)",
             dest.display(),
             library_dest.display()
         )));

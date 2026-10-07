@@ -1,34 +1,34 @@
-# `bob highlights clip` — web URL to Highlights reference PDF
+# `bob ref clip` — web URL to Highlights reference PDF
 
-`bob highlights clip <URL>` turns a web article into a beautiful, readable,
+`bob ref clip <URL>` turns a web article into a beautiful, readable,
 provenance-stamped PDF in the Highlights intake (`xlib/blogs/` by default),
-which the existing `bob highlights scan` turns into a `ref/` note. It is a
-sibling of `bob highlights create` (see [`highlights-create.md`](highlights-create.md))
+which the existing `bob ref scan` turns into a `ref/` note. It is a
+sibling of `bob ref create` (see [`highlights-create.md`](highlights-create.md))
 and shares its target planning, collision guards, marker composition, and
 atomic install.
 
 ```bash
-bob highlights clip [OPTIONS] <URL>
+bob ref clip [OPTIONS] <URL>
 ```
 
 ## Examples
 
 ```bash
 # Capture into xlib/blogs/ (scan writes ref/blogs/<stem>.md later)
-bob highlights clip https://example.com/posts/some-article/
+bob ref clip https://example.com/posts/some-article/
 
 # Preview everything without writing
-bob highlights clip https://example.com/posts/some-article/ -d
+bob ref clip https://example.com/posts/some-article/ -d
 
 # Override extracted metadata
-bob highlights clip https://example.com/posts/some-article/ \
+bob ref clip https://example.com/posts/some-article/ \
   -T "The Real Title" -A "Jane Doe" -p 2026-04-27
 
 # Replay a page saved from a real browser (see below)
-bob highlights clip https://example.com/posts/some-article/ -H saved.html
+bob ref clip https://example.com/posts/some-article/ -H saved.html
 
 # Narrate the article and bind the episode as companion audio
-bob highlights clip https://example.com/posts/some-article/ -L
+bob ref clip https://example.com/posts/some-article/ -L
 ```
 
 `-L, --listen` narrates the article with `highlights.listen_command`
@@ -52,7 +52,7 @@ late-pair onto the existing PDF and ref note.
 4. The PDF is stamped with a page-1 marker (`status`, `parent`, `title`,
    `id`, `source_url`, plus `author`, `published`, and `captured` when
    known) and installed into `xlib/<ref-type>/<stem>.pdf`.
-5. `bob highlights scan` later moves it into `lib/` and writes the note.
+5. `bob ref scan` later moves it into `lib/` and writes the note.
    Clip never writes `ref/` notes itself.
 
 "Reliable" means "never silently wrong": bot challenges it cannot clear,
@@ -66,7 +66,7 @@ a bot challenge. That retry needs a display nobody sees: a private Xvfb
 display on Linux (as on athena) or an off-screen window on macOS. Hosts
 with no usable browser fail closed with an install hint; Playwright's
 bundled Chromium counts when one is present (apollo captured headed over
-an SSH-forwarded display). `bob highlights doctor` reports the `web clip
+an SSH-forwarded display). `bob ref doctor` reports the `web clip
 uv`, `web clip adapter`, `web clip browser`, and `web clip headed
 fallback` rows.
 
@@ -76,8 +76,8 @@ When a site will not yield to automation, save the page from a real
 browser (Save Page As, or SingleFile) and replay it:
 
 ```bash
-bob highlights clip https://example.com/walled/ -H ~/Downloads/walled.html
-cat ~/Downloads/walled.html | bob highlights clip https://example.com/walled/ -H -
+bob ref clip https://example.com/walled/ -H ~/Downloads/walled.html
+cat ~/Downloads/walled.html | bob ref clip https://example.com/walled/ -H -
 ```
 
 Subresources still load live on a best-effort basis; the challenge retry

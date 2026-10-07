@@ -318,12 +318,12 @@ pub(super) fn refuse_marked_pdf(
     }
     let hint = match library_pdf {
         Some(library) => format!(
-            "bob highlights sync {} re-syncs it, or bob highlights create {} --listen to add audio",
+            "bob ref sync {} re-syncs it, or bob ref create {} --listen to add audio",
             marked.display(),
             library.display()
         ),
         None => format!(
-            "bob highlights sync {} re-syncs it, or bob highlights create <library PDF> --listen to add audio",
+            "bob ref sync {} re-syncs it, or bob ref create <library PDF> --listen to add audio",
             marked.display()
         ),
     };
@@ -355,7 +355,7 @@ pub(super) fn check_local_pdf_identity(
     }
     if pdf_already_captured(&canonical) {
         return Err(CommandError::new(format!(
-            "already captured; bob highlights sync {} re-syncs it\nhint: add --listen to narrate it and attach the episode to the existing capture",
+            "already captured; bob ref sync {} re-syncs it\nhint: add --listen to narrate it and attach the episode to the existing capture",
             canonical.display()
         )));
     }

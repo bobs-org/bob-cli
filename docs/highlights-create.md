@@ -1,38 +1,38 @@
-# `bob highlights create` — Markdown, PDF, and URL targets
+# `bob ref create` — Markdown, PDF, and URL targets
 
-`bob highlights create <TARGET>` turns Markdown, a local PDF, a PDF URL,
+`bob ref create <TARGET>` turns Markdown, a local PDF, a PDF URL,
 an arXiv paper URL, or a web article URL into a Highlights-ready PDF in
 the intake (`xlib/<ref-type>/<stem>.pdf` by default), which
-`bob highlights scan` later moves into `lib/` and turns into a `ref/`
+`bob ref scan` later moves into `lib/` and turns into a `ref/`
 note. A PDF is stamped as-is, never re-rendered. Web article URLs run
 through the clip engine with `create`'s options and get the same PDF,
-marker, and report as `bob highlights clip <URL>`.
+marker, and report as `bob ref clip <URL>`.
 
 ```bash
-bob highlights create [OPTIONS] <TARGET>
+bob ref create [OPTIONS] <TARGET>
 ```
 
 ## Examples
 
 ```bash
 # Markdown through pandoc (default ref type chat)
-bob highlights create report.md
+bob ref create report.md
 
 # Local PDF, stamped as-is (default ref type papers)
-bob highlights create paper.pdf -t papers
+bob ref create paper.pdf -t papers
 
 # PDF URL with an explicit stem
-bob highlights create https://example.com/paper.pdf -N my_paper
+bob ref create https://example.com/paper.pdf -N my_paper
 
 # arXiv paper, preview only
-bob highlights create https://arxiv.org/abs/1706.03762 -d
+bob ref create https://arxiv.org/abs/1706.03762 -d
 
 # Web article through the clip engine (default ref type blogs)
-bob highlights create https://example.com/article/hello
+bob ref create https://example.com/article/hello
 
 # Overrides
-bob highlights create paper.pdf -T "The Real Title" -N my_paper -t docs
-bob highlights create report.md --audio episode.mp3 --include-id
+bob ref create paper.pdf -T "The Real Title" -N my_paper -t docs
+bob ref create report.md --audio episode.mp3 --include-id
 ```
 
 ## Targets
@@ -43,7 +43,7 @@ bob highlights create report.md --audio episode.mp3 --include-id
 | Local PDF (`.pdf` or `%PDF-` magic) | Stamped as-is | `papers` | `-T`, plausible Info `/Title`, humanized stem | `-N`, file stem if it passes `--name` validation, else `snake_case` |
 | PDF URL (PDF content-type or sniffed `%PDF-`) | Downloaded with `curl`, stamped as-is | `papers` | `-T`, plausible Info `/Title`, humanized stem | `-N`, URL slug, short-title stem, `<host>_<YYYYMMDD>` |
 | arXiv (`arxiv.org` abs/html/pdf) | PDF fetched from `arxiv.org/pdf/<id>`, metadata from the API | `papers` | `-T`, arXiv API title, plausible Info `/Title`, `arXiv <id>` (no version) | `-N`, short-title stem, `arxiv_<id>` (no version) |
-| Web article (HTML 2xx or 403/429/503) | Captured with the clip engine (same PDF, marker, and report as `bob highlights clip`) | `blogs` | clip rules (`-T` maps to the clip title override) | clip rules (`-N`) |
+| Web article (HTML 2xx or 403/429/503) | Captured with the clip engine (same PDF, marker, and report as `bob ref clip`) | `blogs` | clip rules (`-T` maps to the clip title override) | clip rules (`-N`) |
 
 Short-title stem: when the text before the first `:` is 1–4 words, that
 prefix is the short name (`EA-Graph: …` becomes `ea_graph`); otherwise the
@@ -80,12 +80,12 @@ with version), `author`, `published` (arXiv first-version date), `captured`
 only with `-i` (with `-N`, `-i` embeds the name).
 
 A local PDF inside `lib/` or `xlib/` with a marker is already captured:
-`already captured; bob highlights sync <PDF> re-syncs it` plus the
+`already captured; bob ref sync <PDF> re-syncs it` plus the
 `--listen` attach hint. Without a marker it must be moved out first. A PDF
 outside the vault, or a downloaded PDF (PDF URL or arXiv), that already
 carries a Highlights marker is refused before any write:
 `PDF already carries a Highlights marker: <path>` with a
-`bob highlights sync` / `create <library PDF> --listen` hint.
+`bob ref sync` / `create <library PDF> --listen` hint.
 
 ## arXiv
 
@@ -113,7 +113,7 @@ intake target). The refusal hint points at `--listen` attach mode.
 
 Markdown and local PDFs outside the vault whose planned library destination
 already exists keep refusing; identity is not proven by stem alone. The
-refusal adds `hint: to add audio to that capture, run bob highlights
+refusal adds `hint: to add audio to that capture, run bob ref
 create <library PDF> --listen`, naming the existing PDF path. The same hint
 applies when the planned intake target already exists.
 
@@ -124,7 +124,7 @@ configured `highlights.listen_command` and binds the episode as the PDF's
 companion audio. `clip` accepts the same flag with the same semantics.
 
 ```bash
-bob highlights create https://arxiv.org/abs/1706.03762 -L
+bob ref create https://arxiv.org/abs/1706.03762 -L
 ```
 
 All or nothing, on every route:
@@ -171,7 +171,7 @@ status: ready
 parent: obsidian_ref
 id: attention_is_all_you_need
 pages: 15 · size: 2.2 MB
-next: bob highlights scan
+next: bob ref scan
 ```
 
 A failed listen command writes nothing (`nothing was written to the vault;
@@ -179,7 +179,7 @@ rerun the same command once the listen error above is fixed`); rerunning is
 cheap because sase-listen resumes from its caches. An interrupted listen
 exits 130. Exit 0 with no MP3 at `{audio}` is an error. A failure after the
 episode exists keeps the scratch directory, prints `kept: <audio path>`,
-and hints at rebinding it (`bob highlights create <TARGET> --audio <path>`
+and hints at rebinding it (`bob ref create <TARGET> --audio <path>`
 in normal mode, `copy it to <xlib dest> for scan to pair` in attach mode).
 
 ## Attach
@@ -209,14 +209,14 @@ pdf: /home/bryan/bob/lib/papers/ea_graph.pdf (unchanged)
 ref: /home/bryan/bob/ref/papers/ea_graph.md
 audio: /home/bryan/bob/xlib/papers/ea_graph.mp3 (from --listen)
 title: EA-Graph: Artifact-Anchored Verification Memory for Coding Agents under Upstream Drift
-next: bob highlights scan
+next: bob ref scan
 ```
 
 ## Configuration
 
 ```yaml
 highlights:
-  # `bob highlights create --listen` (and `clip --listen`) narrates the target
+  # `bob ref create --listen` (and `clip --listen`) narrates the target
   # with this command, which must write MP3 audio to {audio}; bob binds it as
   # the PDF's companion audio. bob shell-quotes {target} {pdf} {audio} {title}
   # itself — do not quote them. sase-listen's feed.auto_publish publishes the
@@ -226,7 +226,7 @@ highlights:
 
 `BOB_HIGHLIGHTS_LISTEN_COMMAND` overrides the configured command. The
 template must contain `{audio}` plus `{target}` or `{pdf}`; unknown
-placeholders and quoted placeholders are errors. `bob highlights doctor`
+placeholders and quoted placeholders are errors. `bob ref doctor`
 reports the `listen_command` row (`none`, `ok`, or `warn`). An unconfigured
 `--listen` fails with the config snippet above.
 
@@ -267,7 +267,7 @@ Fetching runs `curl -sS --proto =http,https --connect-timeout 15
 through URL validation (a private-host redirect is refused), and reports
 `curl` exit codes (6/7/28/35/60/63) with hints. A missing `curl` hints at
 `install curl or set BOB_HIGHLIGHTS_CURL`. On a TTY one
-`fetching <host>…` line goes to stderr. `bob highlights doctor` reports the
+`fetching <host>…` line goes to stderr. `bob ref doctor` reports the
 `curl` row.
 
 ## Verified on athena

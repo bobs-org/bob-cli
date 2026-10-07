@@ -88,7 +88,7 @@ use sync::*;
 use text::*;
 use workdir::*;
 
-const COMMAND_NAME: &str = "bob highlights";
+const COMMAND_NAME: &str = "bob ref";
 const DEFAULT_LIB_DIR: &str = "lib";
 const DEFAULT_REF_DIR: &str = "ref";
 const DEFAULT_XLIB_DIR: &str = "xlib";

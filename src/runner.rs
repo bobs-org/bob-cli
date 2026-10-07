@@ -108,6 +108,14 @@ pub(crate) struct Alias {
 
 pub(crate) const ALIASES: &[Alias] = &[
     Alias {
+        from: "highlights",
+        to: &["ref"],
+    },
+    Alias {
+        from: "highlights-ref",
+        to: &["ref"],
+    },
+    Alias {
         from: "mark-next-tasks",
         to: &["task", "reconcile"],
     },
@@ -339,6 +347,15 @@ const SUBCOMMANDS: &[Subcommand] = &[
         }),
     },
     Subcommand {
+        name: "ref",
+        about: "Find, list, and read references; sync Highlights PDFs into them",
+        section: Section::Vault,
+        target: Target::Leaf(Leaf {
+            native_command: NativeCommand::Highlights,
+            script_command: None,
+        }),
+    },
+    Subcommand {
         name: "vault-sync",
         about: "Reconcile the vault through Git (default: run) or show status",
         section: Section::Vault,
@@ -353,15 +370,6 @@ const SUBCOMMANDS: &[Subcommand] = &[
         section: Section::Integrations,
         target: Target::Leaf(Leaf {
             native_command: NativeCommand::Gkeep,
-            script_command: None,
-        }),
-    },
-    Subcommand {
-        name: "highlights",
-        about: "Sync Highlights PDF annotations into reference notes",
-        section: Section::Integrations,
-        target: Target::Leaf(Leaf {
-            native_command: NativeCommand::Highlights,
             script_command: None,
         }),
     },

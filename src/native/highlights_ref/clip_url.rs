@@ -1,5 +1,5 @@
 //! URL validation, cleaning, dedupe-key, and filename-stem rules for
-//! `bob highlights clip`.
+//! `bob ref clip`.
 //!
 //! The stored `source_url` is the user's URL with the fragment and tracking
 //! parameters removed. The dedupe key normalizes further (lowercased

@@ -77,7 +77,7 @@ pub(super) fn doctor_vault(config: &Config, no_hooks: bool) -> Result<()> {
     print_path_check("xlib_dir", &config.xlib_dir, config.xlib_dir.is_dir());
     if !config.xlib_dir.is_dir() {
         warnings.push(format!(
-            "xlib intake directory does not exist: {} (bob highlights create creates it on demand)",
+            "xlib intake directory does not exist: {} (bob ref create creates it on demand)",
             config.xlib_dir.display()
         ));
     }

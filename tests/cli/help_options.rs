@@ -771,7 +771,7 @@ fn highlights_clip_help_lists_options_alphabetically() {
     assert!(
         help.contains("`--output` cannot be combined with")
             && help.contains("BOB_WEB_CLIP_ADAPTER")
-            && help.contains("bob highlights scan"),
+            && help.contains("bob ref scan"),
         "expected output-conflict, env, and scan notes in help:\n{help}"
     );
     assert_stdout_has_no_ansi(&output);
@@ -814,7 +814,7 @@ fn highlights_ref_scan_help_lists_options_alphabetically() {
         .arg("scan")
         .arg("--help")
         .output()
-        .expect("run bob highlights scan --help");
+        .expect("run bob ref scan --help");
 
     assert_success(&output);
     let help = stdout(&output);

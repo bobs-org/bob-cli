@@ -101,6 +101,9 @@ install-smoke:
     "${root}/bin/bob" query --help >/dev/null
     "${root}/bin/bob" randomize --help >/dev/null
     "${root}/bin/bob" ready --help >/dev/null
+    "${root}/bin/bob" ref --help >/dev/null
+    "${root}/bin/bob" ref clip --help >/dev/null
+    "${root}/bin/bob" ref create --help >/dev/null
     "${root}/bin/bob" highlights --help >/dev/null
     "${root}/bin/bob" highlights clip --help >/dev/null
     "${root}/bin/bob" highlights create --help >/dev/null

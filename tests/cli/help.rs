@@ -416,17 +416,17 @@ fn highlights_ref_help_is_native_only() {
         .env("BOB_CLI_USE_SCRIPT", "1")
         .env("XDG_CACHE_HOME", temp.path())
         .output()
-        .expect("run native-only bob highlights --help");
+        .expect("run native-only bob ref --help");
 
     assert_success(&output);
     assert!(
-        stdout(&output).contains("bob highlights"),
-        "expected highlights help text:\n{}",
+        stdout(&output).contains("bob ref"),
+        "expected ref help text:\n{}",
         format_output(&output)
     );
     assert!(
         !temp.path().join("bob-cli/scripts").exists(),
-        "native-only highlights should not extract script assets"
+        "native-only ref should not extract script assets"
     );
 }
 
@@ -450,8 +450,8 @@ fn highlights_ref_subcommand_help_works() {
         assert_success(&output);
         let help = stdout(&output);
         assert!(
-            help.contains("Usage: bob highlights"),
-            "expected highlights usage for {args:?}:\n{}",
+            help.contains("Usage: bob ref"),
+            "expected ref usage for {args:?}:\n{}",
             format_output(&output)
         );
         assert!(
@@ -484,7 +484,7 @@ fn all_top_level_subcommand_help_is_safe_and_plain() {
         (&["completion", "--help"], "bob completion"),
         (&["gkeep", "--help"], "bob gkeep"),
         (&["query", "--help"], "bob query"),
-        (&["highlights", "--help"], "Usage: bob highlights"),
+        (&["highlights", "--help"], "Usage: bob ref"),
         (
             &["task", "reconcile", "--help"],
             "Usage: bob task reconcile",
@@ -631,33 +631,18 @@ fn public_help_surfaces_do_not_list_long_only_options() {
         (&["gkeep", "login", "--help"], "bob gkeep login --help"),
         (&["gkeep", "pull", "--help"], "bob gkeep pull --help"),
         (&["query", "--help"], "bob query --help"),
-        (&["highlights", "--help"], "bob highlights --help"),
+        (&["highlights", "--help"], "bob ref --help"),
         (
             &["task", "reconcile", "--help"],
             "bob task reconcile --help",
         ),
         (&["task", "archive", "--help"], "bob task archive --help"),
         (&["task", "reroll", "--help"], "bob task reroll --help"),
-        (
-            &["highlights", "create", "--help"],
-            "bob highlights create --help",
-        ),
-        (
-            &["highlights", "doctor", "--help"],
-            "bob highlights doctor --help",
-        ),
-        (
-            &["highlights", "marker", "--help"],
-            "bob highlights marker --help",
-        ),
-        (
-            &["highlights", "scan", "--help"],
-            "bob highlights scan --help",
-        ),
-        (
-            &["highlights", "sync", "--help"],
-            "bob highlights sync --help",
-        ),
+        (&["highlights", "create", "--help"], "bob ref create --help"),
+        (&["highlights", "doctor", "--help"], "bob ref doctor --help"),
+        (&["highlights", "marker", "--help"], "bob ref marker --help"),
+        (&["highlights", "scan", "--help"], "bob ref scan --help"),
+        (&["highlights", "sync", "--help"], "bob ref sync --help"),
         (&["nightly", "--help"], "bob nightly --help"),
         (
             &["pomodoro", "notify", "--help"],
@@ -997,9 +982,9 @@ fn help_routes_match_direct_help_for_root_and_nested_commands() {
         "projects",
         "nightly",
         "query",
+        "ref",
         "vault-sync",
         "gkeep",
-        "highlights",
         "completion",
         "plugins",
         "capture-complete",
@@ -1054,6 +1039,8 @@ fn help_routes_match_direct_help_for_root_and_nested_commands() {
         ),
         (&["task", "reroll"][..], &["task", "reroll", "--help"][..]),
         (&["randomize"][..], &["task", "reroll", "--help"][..]),
+        (&["highlights"][..], &["ref", "--help"][..]),
+        (&["highlights-ref"][..], &["ref", "--help"][..]),
     ] {
         let expected =
             bob_command().args(direct).output().expect("direct help");

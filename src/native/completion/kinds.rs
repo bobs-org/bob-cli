@@ -11,7 +11,7 @@
 //! things: `--block-id` is a _new_ ID in `capture-task-id` but an
 //! _existing_ task in `capture-task-sections`, `--source` is a choice
 //! in `gkeep list` but free text in `query`, and `--output` is a PDF in
-//! `highlights clip` / `highlights create` but whatever its
+//! `ref clip` / `ref create` but whatever its
 //! [`clap::ValueHint`] says elsewhere. An empty path matches any
 //! command; a full-path entry wins over the all-commands entry, and a
 //! non-trivial [`clap::ValueHint`] sits between the two (see the
@@ -143,16 +143,16 @@ const TABLE: &[Entry] = &[
         arg: "pdf",
         kind: Kind::Files(Some("*.pdf")),
     },
-    // `--output` is a PDF only on the highlights commands whose builder
+    // `--output` is a PDF only on the ref commands whose builder
     // says so; everywhere else it falls through to its `ValueHint` (or
     // to free text when it has none).
     Entry {
-        path: &["highlights", "clip"],
+        path: &["ref", "clip"],
         arg: "output",
         kind: Kind::Files(Some("*.pdf")),
     },
     Entry {
-        path: &["highlights", "create"],
+        path: &["ref", "create"],
         arg: "output",
         kind: Kind::Files(Some("*.pdf")),
     },
@@ -180,7 +180,7 @@ const TABLE: &[Entry] = &[
     },
     // Vault slots with live read-only providers. Stale-safe refs
     // (`--task-ref`) stay free text: they name one task, not a set.
-    // `highlights --parent` is a bare note name, also free text.
+    // `ref --parent` is a bare note name, also free text.
     Entry {
         path: &[],
         arg: "route",
@@ -572,14 +572,14 @@ mod tests {
             lookup_exact(&["gkeep", "list"], "source"),
             Some(Kind::Choices)
         );
-        // `--output` is a PDF only on the highlights commands whose
+        // `--output` is a PDF only on the ref commands whose
         // builder says so; the generic lookup finds no entry.
         assert_eq!(
-            lookup_exact(&["highlights", "clip"], "output"),
+            lookup_exact(&["ref", "clip"], "output"),
             Some(Kind::Files(Some("*.pdf")))
         );
         assert_eq!(
-            lookup_exact(&["highlights", "create"], "output"),
+            lookup_exact(&["ref", "create"], "output"),
             Some(Kind::Files(Some("*.pdf")))
         );
         assert_eq!(lookup_exact(&["completion", "zsh"], "output"), None);

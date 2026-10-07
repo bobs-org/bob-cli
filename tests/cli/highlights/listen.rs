@@ -634,7 +634,7 @@ fn listen_attaches_to_ref_note_capture() {
             && report.contains("(unchanged)")
             && report.contains("title: EA-Graph Paper")
             && report.contains("xlib/papers/ea_graph.mp3 (from --listen)")
-            && report.contains("next: bob highlights scan"),
+            && report.contains("next: bob ref scan"),
         "{report}"
     );
     assert!(

@@ -17,7 +17,7 @@ use super::{
     bob_dir_arg, compose_marker, dry_run_arg, lib_dir_arg, plan_default_target,
     plan_exact_output, print_next_step, ref_dir_arg, stamp_and_install,
     validate_ref_type, xlib_dir_arg, AudioCopyPlan, CommandError, Config,
-    PdfInfo, Result, TargetPlan, TargetWorkflow,
+    PdfInfo, Result, TargetPlan, TargetWorkflow, COMMAND_NAME,
 };
 use super::{sources as sources_mod, target as target_mod};
 use crate::native::style::Styler;
@@ -308,7 +308,7 @@ pub(crate) fn command() -> ClapCommand {
         )
         .arg(xlib_dir_arg())
         .after_help(
-            "Targets:\n  Markdown file (.md) -> rendered with pandoc (default ref type chat)\n  Local PDF file (.pdf or %PDF- magic) -> stamped as-is (default ref type papers)\n  PDF URL (Content-Type PDF or sniffed %PDF-) -> downloaded, stamped as-is (default ref type papers)\n  arXiv paper URL (abs/html/pdf) -> PDF fetched from arxiv.org/pdf/<id>, metadata from the API (default ref type papers)\n  Web article URL (HTML 2xx or 403/429/503) -> captured with the clip engine (default ref type blogs; same PDF, marker, and report as `bob highlights clip`)\n\nListen:\n  `-L, --listen` narrates TARGET with `highlights.listen_command` (`BOB_HIGHLIGHTS_LISTEN_COMMAND` overrides), which must write MP3 audio to `{audio}`; bob shell-quotes `{target}`, `{pdf}`, `{audio}`, and `{title}` itself — do not quote them — and streams the command output unchanged. Preflights run first, the PDF is produced in private scratch, then the episode is bound beside the PDF; if the listen command fails nothing is written, and a failure after the episode exists keeps the scratch audio with a `kept:` line. If TARGET is already captured, `--listen` attaches the new episode (`xlib/<rel>.mp3`) for `bob highlights scan` to pair, and the PDF and ref note stay untouched.\n\nAudio:\n  Create discovers audio as `--audio PATH`, then frontmatter `audio.episode_id` in the sase-listen library (Markdown only), then a sibling `<stem>_narration.md` hash matched against library manifests (`BOB_HIGHLIGHTS_AUDIO_LIBRARY`, then `highlights.audio_library`, then `$XDG_DATA_HOME/sase-listen/library`, then `~/.local/share/sase-listen/library`); `--no-audio` skips discovery. The copy lands beside the PDF with the source extension lowercased before the PDF is installed, reuses identical bytes, refuses different bytes without `--force`, and refuses when the mirrored library audio already exists. Only a companion already at the target's `<stem>.<ext>` counts as reused; audio beside the source is copied through the same rules.\n\nOutput:\n  Default target `<xlib-dir>/<ref-type>/<stem>.pdf`. `-o, --output` selects the complete path instead, including the filename (`.pdf` required, `~` expanded, cwd-relative). `--output` cannot be combined with `--ref-type` or `--name` because those only participate in default target derivation. `-N` sets the stem (with `-i`, the marker id); `-T` overrides the title. Pandoc renders TOC/bookmarks and embeds the page-1 scan marker. Scan moves intake PDFs to the library before writing notes; library PDFs scan directly, other paths need `bob highlights sync`. A `<div class=\"listen\">` card becomes a callout with a Play link when audio is bound.\n\nExamples:\n  bob highlights create report.md\n  bob highlights create paper.pdf -t papers\n  bob highlights create https://example.com/paper.pdf -N my_paper\n  bob highlights create https://arxiv.org/abs/1706.03762 -d\n  bob highlights create https://arxiv.org/abs/1706.03762 -L",
+            "Targets:\n  Markdown file (.md) -> rendered with pandoc (default ref type chat)\n  Local PDF file (.pdf or %PDF- magic) -> stamped as-is (default ref type papers)\n  PDF URL (Content-Type PDF or sniffed %PDF-) -> downloaded, stamped as-is (default ref type papers)\n  arXiv paper URL (abs/html/pdf) -> PDF fetched from arxiv.org/pdf/<id>, metadata from the API (default ref type papers)\n  Web article URL (HTML 2xx or 403/429/503) -> captured with the clip engine (default ref type blogs; same PDF, marker, and report as `bob ref clip`)\n\nListen:\n  `-L, --listen` narrates TARGET with `highlights.listen_command` (`BOB_HIGHLIGHTS_LISTEN_COMMAND` overrides), which must write MP3 audio to `{audio}`; bob shell-quotes `{target}`, `{pdf}`, `{audio}`, and `{title}` itself — do not quote them — and streams the command output unchanged. Preflights run first, the PDF is produced in private scratch, then the episode is bound beside the PDF; if the listen command fails nothing is written, and a failure after the episode exists keeps the scratch audio with a `kept:` line. If TARGET is already captured, `--listen` attaches the new episode (`xlib/<rel>.mp3`) for `bob ref scan` to pair, and the PDF and ref note stay untouched.\n\nAudio:\n  Create discovers audio as `--audio PATH`, then frontmatter `audio.episode_id` in the sase-listen library (Markdown only), then a sibling `<stem>_narration.md` hash matched against library manifests (`BOB_HIGHLIGHTS_AUDIO_LIBRARY`, then `highlights.audio_library`, then `$XDG_DATA_HOME/sase-listen/library`, then `~/.local/share/sase-listen/library`); `--no-audio` skips discovery. The copy lands beside the PDF with the source extension lowercased before the PDF is installed, reuses identical bytes, refuses different bytes without `--force`, and refuses when the mirrored library audio already exists. Only a companion already at the target's `<stem>.<ext>` counts as reused; audio beside the source is copied through the same rules.\n\nOutput:\n  Default target `<xlib-dir>/<ref-type>/<stem>.pdf`. `-o, --output` selects the complete path instead, including the filename (`.pdf` required, `~` expanded, cwd-relative). `--output` cannot be combined with `--ref-type` or `--name` because those only participate in default target derivation. `-N` sets the stem (with `-i`, the marker id); `-T` overrides the title. Pandoc renders TOC/bookmarks and embeds the page-1 scan marker. Scan moves intake PDFs to the library before writing notes; library PDFs scan directly, other paths need `bob ref sync`. A `<div class=\"listen\">` card becomes a callout with a Play link when audio is bound.\n\nExamples:\n  bob ref create report.md\n  bob ref create paper.pdf -t papers\n  bob ref create https://example.com/paper.pdf -N my_paper\n  bob ref create https://arxiv.org/abs/1706.03762 -d\n  bob ref create https://arxiv.org/abs/1706.03762 -L",
         )
 }
 
@@ -323,7 +323,7 @@ pub(super) fn run(matches: &ArgMatches) -> i32 {
     if let Some(name) = matches.get_one::<String>("name") {
         if let Err(error) = super::clip_url::validate_name(name) {
             let styler = Styler::detect();
-            eprintln!("bob highlights: {}: {error}", styler.red("error"));
+            eprintln!("{COMMAND_NAME}: {}: {error}", styler.red("error"));
             return 1;
         }
     }
@@ -331,7 +331,7 @@ pub(super) fn run(matches: &ArgMatches) -> i32 {
     if let Some(ref_type) = &ref_type {
         if let Err(error) = validate_ref_type(ref_type) {
             let styler = Styler::detect();
-            eprintln!("bob highlights: {}: {error}", styler.red("error"));
+            eprintln!("{COMMAND_NAME}: {}: {error}", styler.red("error"));
             return 1;
         }
     }
@@ -363,10 +363,10 @@ pub(super) fn run(matches: &ArgMatches) -> i32 {
             // Errors may carry a `hint:` second line.
             let message = error.message;
             if let Some((first, hint)) = message.split_once("\nhint: ") {
-                eprintln!("bob highlights: {}: {first}", styler.red("error"));
+                eprintln!("{COMMAND_NAME}: {}: {first}", styler.red("error"));
                 eprintln!("hint: {hint}");
             } else {
-                eprintln!("bob highlights: {}: {message}", styler.red("error"));
+                eprintln!("{COMMAND_NAME}: {}: {message}", styler.red("error"));
             }
             error.exit_code.unwrap_or(1)
         }
@@ -529,7 +529,7 @@ fn listen_audio_plan(flow: &super::listen::ListenFlow) -> AudioCopyPlan {
 /// episode explicitly.
 fn bind_create_hint(target_display: &str, scratch_audio: &Path) -> String {
     format!(
-        "bind it with bob highlights create {target_display} --audio {}",
+        "bind it with bob ref create {target_display} --audio {}",
         scratch_audio.display()
     )
 }

@@ -31,7 +31,7 @@ sync files. The [guide index](docs/README.md) points to the detailed contracts.
 - [Projects](#projects)
 - [Plugins](#plugins)
 - [Gkeep](#gkeep)
-- [Highlights](#highlights)
+- [Reference library (bob ref)](#reference-library-bob-ref)
 - [Nightly maintenance](#nightly-maintenance)
 - [Vault sync](#vault-sync)
 - [Pomodoro](#pomodoro)
@@ -201,7 +201,7 @@ separate steps:
    again.
 
 Read-only inspection (`bob query`, `bob projects list`, `bob plugins list --no-pull`,
-`bob highlights doctor`) can run at any time.
+`bob ref doctor`) can run at any time.
 
 ## Vault layout
 
@@ -218,8 +218,8 @@ Paths below are relative to `BOB_DIR` (`~/bob` by default):
 | `img/`, `file/` | Images and saved clipboard snippets written by `bob capture` |
 | `_conflicts/` | Local copies of vault files `bob vault-sync` could not merge |
 | `.obsidian/plugins/` | Installed community plugins, including Bob's custom plugins |
-| `xlib/` | Highlights intake PDFs from `bob highlights create` and `bob highlights clip` |
-| `lib/` | Highlights library PDFs after `bob highlights scan` |
+| `xlib/` | Highlights intake PDFs from `bob ref create` and `bob ref clip` |
+| `lib/` | Highlights library PDFs after `bob ref scan` |
 | `old_lib/` | Archival predecessor of `lib/`; tracked in the vault Git repo, which is now the vault's only sync channel |
 | `ref/` | Generated Highlights reference notes |
 
@@ -253,6 +253,7 @@ Bob's workflow commands are:
 | --- | --- |
 | [`nightly`](#nightly-maintenance) | Run nightly maintenance: vault-sync, task archive, vault-sync |
 | [`query`](#query) | Run Dataview or Tasks queries against the vault |
+| [`ref`](#reference-library-bob-ref) | Find, list, and read references; sync Highlights PDFs into them |
 | [`vault-sync`](#vault-sync) | Reconcile the vault through Git (default: run) or show status |
 
 ### Integrations
@@ -260,7 +261,6 @@ Bob's workflow commands are:
 | Command | Purpose |
 | --- | --- |
 | [`gkeep`](#gkeep) | Drain the Google Keep inbox into Obsidian tasks |
-| [`highlights`](#highlights) | Sync Highlights PDF annotations into reference notes |
 
 ### Setup
 
@@ -824,15 +824,15 @@ verifies, commits, then archives. `login` is the one-time token setup and
 
 The full command contract lives in [`docs/gkeep.md`](docs/gkeep.md).
 
-## Highlights
+## Reference library (bob ref)
 
 ```bash
-bob highlights clip <URL> [-A|--author NAME] [-b|--bob-dir PATH] [-d|--dry-run] [-f|--force] [-H|--html FILE] [-l|--lib-dir PATH] [-L|--listen] [-N|--name STEM] [-o|--output PDF] [-P|--parent NOTE] [-p|--published DATE] [-r|--ref-dir PATH] [-s|--status STATUS] [-T|--title TITLE] [-t|--ref-type DIR] [-x|--xlib-dir PATH]
-bob highlights create <TARGET> [-a|--audio PATH] [-b|--bob-dir PATH] [-d|--dry-run] [-f|--force] [-i|--include-id] [-l|--lib-dir PATH] [-L|--listen] [-N|--name STEM] [-n|--no-audio] [-o|--output PDF] [-P|--parent NOTE] [-r|--ref-dir PATH] [-s|--status STATUS] [-T|--title TITLE] [-t|--ref-type DIR] [-x|--xlib-dir PATH]
-bob highlights doctor [-b|--bob-dir PATH] [-l|--lib-dir PATH] [-n|--no-hooks] [-r|--ref-dir PATH] [-x|--xlib-dir PATH]
-bob highlights marker <pdf> [-b|--bob-dir PATH] [-l|--lib-dir PATH] [-r|--ref-dir PATH] [-x|--xlib-dir PATH]
-bob highlights scan [-b|--bob-dir PATH] [-d|--dry-run] [-j|--jobs N] [-l|--lib-dir PATH] [-n|--no-hooks] [-r|--ref-dir PATH] [-v|--verbose] [-w|--write-pdfs] [-x|--xlib-dir PATH]
-bob highlights sync <pdf> [-b|--bob-dir PATH] [-d|--dry-run] [-l|--lib-dir PATH] [-p|--prefer marker|frontmatter] [-r|--ref-dir PATH] [-w|--write-pdf] [-x|--xlib-dir PATH]
+bob ref clip <URL> [-A|--author NAME] [-b|--bob-dir PATH] [-d|--dry-run] [-f|--force] [-H|--html FILE] [-l|--lib-dir PATH] [-L|--listen] [-N|--name STEM] [-o|--output PDF] [-P|--parent NOTE] [-p|--published DATE] [-r|--ref-dir PATH] [-s|--status STATUS] [-T|--title TITLE] [-t|--ref-type DIR] [-x|--xlib-dir PATH]
+bob ref create <TARGET> [-a|--audio PATH] [-b|--bob-dir PATH] [-d|--dry-run] [-f|--force] [-i|--include-id] [-l|--lib-dir PATH] [-L|--listen] [-N|--name STEM] [-n|--no-audio] [-o|--output PDF] [-P|--parent NOTE] [-r|--ref-dir PATH] [-s|--status STATUS] [-T|--title TITLE] [-t|--ref-type DIR] [-x|--xlib-dir PATH]
+bob ref doctor [-b|--bob-dir PATH] [-l|--lib-dir PATH] [-n|--no-hooks] [-r|--ref-dir PATH] [-x|--xlib-dir PATH]
+bob ref marker <pdf> [-b|--bob-dir PATH] [-l|--lib-dir PATH] [-r|--ref-dir PATH] [-x|--xlib-dir PATH]
+bob ref scan [-b|--bob-dir PATH] [-d|--dry-run] [-j|--jobs N] [-l|--lib-dir PATH] [-n|--no-hooks] [-r|--ref-dir PATH] [-v|--verbose] [-w|--write-pdfs] [-x|--xlib-dir PATH]
+bob ref sync <pdf> [-b|--bob-dir PATH] [-d|--dry-run] [-l|--lib-dir PATH] [-p|--prefer marker|frontmatter] [-r|--ref-dir PATH] [-w|--write-pdf] [-x|--xlib-dir PATH]
 ```
 
 Turns Markdown and web articles into Highlights-ready PDFs and turns
@@ -862,12 +862,12 @@ Highlights annotations into Obsidian reference notes.
   target gains the episode as `xlib/<rel>.mp3` for `scan` to pair. Intake
   targets still go through `scan`; a PDF written directly into the library is
   also found by `scan`; a PDF outside both directories needs
-  `bob highlights sync <PDF>`. The full target contract lives in
+  `bob ref sync <PDF>`. The full target contract lives in
   [`docs/highlights-create.md`](docs/highlights-create.md).
 - `scan` runs the configured `highlights.pre_scan_hook` on writing runs, then
   moves pending PDFs from `xlib/<rel>` to `lib/<rel>` and recursively syncs
   the library. Pass `-n, --no-hooks` on `scan` or `doctor`, or before the
-  subcommand as `bob highlights --no-hooks scan`, to ignore the hook. By
+  subcommand as `bob ref --no-hooks scan`, to ignore the hook. By
   default it does not write PDF markers; use `scan --dry-run --write-pdfs`,
   review, then
   `scan --write-pdfs`. `-v, --verbose` prints the detailed per-PDF plan instead
@@ -1024,14 +1024,14 @@ The documented workflows use these external-tool integrations:
   macOS; `wl-paste`, `xclip`, or `xsel` on Linux; or `tmux show-buffer` in a
   display-less tmux session (see `BOB_CLIPBOARD_CMD` below for the exact
   fallback order)
-- `pandoc` and `xelatex` for `bob highlights create` Markdown targets; override pandoc with
+- `pandoc` and `xelatex` for `bob ref create` Markdown targets; override pandoc with
   `BOB_PANDOC_COMMAND`
-- `curl` for `bob highlights create` PDF URL and arXiv targets; override with
+- `curl` for `bob ref create` PDF URL and arXiv targets; override with
   `BOB_HIGHLIGHTS_CURL`
-- `sase-listen` for `bob highlights create --listen` and
-  `bob highlights clip --listen`, configured as `highlights.listen_command`
+- `sase-listen` for `bob ref create --listen` and
+  `bob ref clip --listen`, configured as `highlights.listen_command`
 - `uv` plus Google Chrome or Chromium (or `BOB_CHROME`) for
-  `bob highlights clip`: `uv` fetches Python ≥3.10 and the pinned Playwright,
+  `bob ref clip`: `uv` fetches Python ≥3.10 and the pinned Playwright,
   Pillow, and nh3 on first run (override the whole spawn with
   `BOB_WEB_CLIP_ADAPTER`); on Linux, `Xvfb` lets it retry bot-protected sites
   headed
@@ -1057,7 +1057,7 @@ by `bob vault-sync`. The default is
 `$XDG_STATE_HOME/bob-cli/vault-sync.json`, or
 `$HOME/.local/state/bob-cli/vault-sync.json` when `XDG_STATE_HOME` is unset.
 
-`BOB_CHROME` sets the Chrome or Chromium executable the `bob highlights clip`
+`BOB_CHROME` sets the Chrome or Chromium executable the `bob ref clip`
 adapter launches instead of auto-discovering one.
 
 `BOB_CLI_USE_SCRIPT=1` selects an embedded shell implementation where one is
@@ -1091,9 +1091,9 @@ clipboard source alone.
 `BOB_CONFIG_FILE` sets the exact Bob config file. When unset, Bob uses
 `$XDG_CONFIG_HOME/bob/config.yml`, then `~/.config/bob/config.yml`. That
 file holds the priority windows for `p:<N>` and `bob task reroll`,
-`highlights.pre_scan_hook` for `bob highlights scan` and
-`bob highlights doctor`, `highlights.listen_command` for
-`bob highlights create --listen` and `bob highlights clip --listen`,
+`highlights.pre_scan_hook` for `bob ref scan` and
+`bob ref doctor`, `highlights.listen_command` for
+`bob ref create --listen` and `bob ref clip --listen`,
 the `gkeep:` section for `bob gkeep`, and the
 optional `plan:` and `freshness:` blocks. Plan caps default to 3 themes,
 10 links, 15 NEXT tasks, 10 PENDING tasks, 100 dashboard READY tasks, and
@@ -1132,13 +1132,13 @@ hook: tests point it at a fake adapter and configure everything else through
 a temporary config file.
 
 `BOB_HIGHLIGHTS_LIB_DIR` sets the Highlights PDF library directory used by
-`bob highlights`. It defaults to `lib` under `BOB_DIR`. Relative values are
+`bob ref`. It defaults to `lib` under `BOB_DIR`. Relative values are
 resolved under the Bob vault; absolute paths and `~/...` paths are used as
 configured.
 
 `BOB_HIGHLIGHTS_PRE_SCAN_HOOK` overrides
 `highlights.pre_scan_hook` from `~/.config/bob/config.yml` for
-`bob highlights scan` and `bob highlights doctor`. Non-empty values run with
+`bob ref scan` and `bob ref doctor`. Non-empty values run with
 `sh -c` from `BOB_DIR` before intake; an empty value disables a configured
 hook. `scan --dry-run` reports the hook it would run without executing it.
 Pass `-n, --no-hooks` to ignore the hook from every source. The legacy
@@ -1146,23 +1146,23 @@ Pass `-n, --no-hooks` to ignore the hook from every source. The legacy
 `BOB_HIGHLIGHTS_IN_PRE_SCAN_HOOK=1` to the hook child process.
 
 `BOB_HIGHLIGHTS_CURL` replaces the `curl` program used by
-`bob highlights create` for PDF URL and arXiv targets. It is the test seam,
+`bob ref create` for PDF URL and arXiv targets. It is the test seam,
 like `BOB_PANDOC_COMMAND`.
 
-`BOB_HIGHLIGHTS_KEEP_WORKDIR=1` keeps the `bob highlights create` scratch
+`BOB_HIGHLIGHTS_KEEP_WORKDIR=1` keeps the `bob ref create` scratch
 directory for debugging and prints its path (the legacy
 `BOB_WEB_CLIP_KEEP_WORKDIR=1` is also honored).
 
 `BOB_HIGHLIGHTS_LISTEN_COMMAND` overrides `highlights.listen_command` in
-`bob/config.yml` for `bob highlights create --listen` and
-`bob highlights clip --listen` (see
+`bob/config.yml` for `bob ref create --listen` and
+`bob ref clip --listen` (see
 [create-target contract](docs/highlights-create.md#listen)).
 
 `BOB_HIGHLIGHTS_REF_DIR` sets the generated reference note directory used by
-`bob highlights`. It defaults to `ref` under `BOB_DIR`.
+`bob ref`. It defaults to `ref` under `BOB_DIR`.
 
 `BOB_HIGHLIGHTS_XLIB_DIR` sets the Highlights PDF intake directory used by
-`bob highlights`. It defaults to `xlib` under `BOB_DIR`. `lib` and `xlib` must
+`bob ref`. It defaults to `xlib` under `BOB_DIR`. `lib` and `xlib` must
 be distinct, non-nested directories so intake cannot move PDFs inside the tree
 being scanned.
 
@@ -1179,7 +1179,7 @@ An unsupported value is ignored, after which Bob tries `DATE` and then the
 system clock.
 
 `BOB_PANDOC_COMMAND` overrides the pandoc executable used by
-`bob highlights create`.
+`bob ref create`.
 
 `BOB_PLUGINS_DIR` sets the source repository used by `bob plugins`. It defaults
 to `~/projects/github/bobs-org/bob-plugins`.
@@ -1194,13 +1194,13 @@ capture rolls independently. `bob task reroll` also reads it as the default
 base seed when `--seed` is omitted.
 
 `BOB_WEB_CLIP_ADAPTER` is the path of an executable that speaks the web-clip
-adapter protocol and replaces `uv run --script …` for `bob highlights clip`
+adapter protocol and replaces `uv run --script …` for `bob ref clip`
 and the `doctor` web-clip rows. It is the test hook, like `BOB_GKEEP_ADAPTER`.
 
-`BOB_WEB_CLIP_KEEP_WORKDIR=1` keeps the `bob highlights clip` scratch
+`BOB_WEB_CLIP_KEEP_WORKDIR=1` keeps the `bob ref clip` scratch
 directory for debugging and prints its path.
 
-`BOB_WEB_CLIP_TIMEOUT_SECS` sets the overall `bob highlights clip` adapter
+`BOB_WEB_CLIP_TIMEOUT_SECS` sets the overall `bob ref clip` adapter
 timeout in seconds. It defaults to 300; the first run may download the pinned
 Python dependencies.
 
@@ -1231,6 +1231,8 @@ otherwise be styled when stdout is a terminal.
 | `bob task-status-hooks` | `bob task reconcile` |
 | `bob task-status-setter` | `bob task reconcile` |
 | `bob tmux-pomodoro` | `bob pomodoro tmux` |
+| `bob highlights` | `bob ref` |
+| `bob highlights-ref` | `bob ref` |
 | `bob_pomodoro`, `bob_notify`, `tmux_bob_pomodoro` binaries | unchanged, same leaves |
 
 Old spellings are permanent hidden aliases with byte-identical behavior and
@@ -1242,7 +1244,8 @@ Reroll and archive commits are now labeled `bob task reroll` and
 
 The old top-level commands were renamed: `bob collect-done` is now
 `bob task archive`, `bob dataview` is now `bob query`, `bob highlights-ref`
-is now `bob highlights`. `bob sync`, `bob bulk-git-commit`, and the `bob_sync`
+is now `bob ref` (and the `bob highlights` spelling stays as a permanent
+alias). `bob sync`, `bob bulk-git-commit`, and the `bob_sync`
 binary have been retired in favor of `bob vault-sync`. Those retired
 top-level names are no longer registered.
 
@@ -1308,7 +1311,7 @@ blocks point at `done/..._done#^block-id`, and the vault Git commit was pushed.
 | Task freshness review lease, placement, evaluation, and display | [`docs/freshness.md`](docs/freshness.md) |
 | Today's plan, sticky lanes, dashboard READY, and per-note Ready caps | [`docs/plan.md`](docs/plan.md) |
 | Highlights PDF intake and reference notes | [`docs/highlights-ref-sync.md`](docs/highlights-ref-sync.md) |
-| `bob highlights create` Markdown, PDF, and URL targets | [`docs/highlights-create.md`](docs/highlights-create.md) |
+| `bob ref create` Markdown, PDF, and URL targets | [`docs/highlights-create.md`](docs/highlights-create.md) |
 | Web article capture into Highlights intake PDFs | [`docs/highlights-clip.md`](docs/highlights-clip.md) |
 | Obsidian Sync folder exclusion runbook (historical) | [`docs/obsidian-sync-exclusions.md`](docs/obsidian-sync-exclusions.md) |
 | Bob vault Git sync runbook | [`docs/vault-git-sync.md`](docs/vault-git-sync.md) |

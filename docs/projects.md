@@ -16,7 +16,7 @@ Blocked in one editor transaction; those gestures are not part of the CLI
 command. See [Task Card](#task-card) and
 [Scheduling from the `^prj` task](#scheduling-from-the-prj-task).
 
-This mirrors the `bob highlights` `^ref` convention for `[[ref]]` notes: the
+This mirrors the `bob ref` `^ref` convention for `[[ref]]` notes: the
 task line is the interaction point, and the command reconciles frontmatter from
 that task instead of asking users to edit machine-facing metadata directly.
 

@@ -108,7 +108,7 @@ pub(super) fn refuse_target_collisions(
     {
         if library_destination.exists() {
             return Err(CommandError::new(format!(
-                "refusing to create {} because the library destination already exists: {}; remove or rename the archived copy before recreating it (bob highlights scan would refuse to move the new PDF over it)\nhint: to add audio to that capture, run bob highlights create {} --listen",
+                "refusing to create {} because the library destination already exists: {}; remove or rename the archived copy before recreating it (bob ref scan would refuse to move the new PDF over it)\nhint: to add audio to that capture, run bob ref create {} --listen",
                 target.display(),
                 library_destination.display(),
                 library_destination.display()
@@ -118,7 +118,7 @@ pub(super) fn refuse_target_collisions(
         {
             if library_sidecar.exists() {
                 return Err(CommandError::new(format!(
-                    "refusing to create {} because the library destination sidecar already exists: {}; remove or rename the archived sidecar before recreating it (bob highlights scan would refuse to move the new PDF sidecar over it)",
+                    "refusing to create {} because the library destination sidecar already exists: {}; remove or rename the archived sidecar before recreating it (bob ref scan would refuse to move the new PDF sidecar over it)",
                     target.display(),
                     library_sidecar.display()
                 )));
@@ -130,11 +130,11 @@ pub(super) fn refuse_target_collisions(
             TargetWorkflow::Intake {
                 library_destination,
             } => format!(
-                "to add audio to that capture, run bob highlights create {} --listen",
+                "to add audio to that capture, run bob ref create {} --listen",
                 library_destination.display()
             ),
             _ => format!(
-                "to add audio to that capture, run bob highlights create {} --listen",
+                "to add audio to that capture, run bob ref create {} --listen",
                 target.display()
             ),
         };
@@ -506,13 +506,13 @@ fn copy_inline_info(document: &mut Document, info_id: ObjectId) -> Result<()> {
 pub(super) fn print_next_step(plan: &TargetPlan) {
     match &plan.workflow {
         TargetWorkflow::Intake { .. } | TargetWorkflow::Library => {
-            println!("next: bob highlights scan");
+            println!("next: bob ref scan");
         }
         TargetWorkflow::External => {
             println!(
                 "scan: recursive scan will not discover this PDF because it is outside the configured library and intake directories"
             );
-            println!("next: bob highlights sync {}", plan.target.display());
+            println!("next: bob ref sync {}", plan.target.display());
         }
     }
 }

@@ -96,7 +96,7 @@ fn highlights_create_output_dry_run_prints_exact_path_without_writes() {
                 && report.contains(
                     "scan: recursive scan will not discover this PDF"
                 )
-                && report.contains("next: bob highlights sync")
+                && report.contains("next: bob ref sync")
                 && !report.contains("library_destination:")
                 && report.contains("writes: none"),
             "flag {flag}: {report}"
@@ -170,7 +170,7 @@ fn highlights_create_output_dry_run_reports_direct_library_target() {
     let report = stdout(&output);
     assert!(
         report.contains(&output_pdf.display().to_string())
-            && report.contains("next: bob highlights scan")
+            && report.contains("next: bob ref scan")
             && !report.contains("library_destination:")
             && report.contains("writes: none"),
         "{report}"
@@ -425,7 +425,7 @@ fn highlights_create_renders_pdf_with_outline_and_marker_when_available() {
     assert!(
         report.contains("created Highlights-ready PDF")
             && report.contains("id: xprompt_role_binding")
-            && report.contains("next: bob highlights scan"),
+            && report.contains("next: bob ref scan"),
         "{report}"
     );
     assert!(!report.contains("research:"), "{report}");
@@ -518,7 +518,7 @@ fn highlights_create_output_renders_pdf_at_requested_path_when_available() {
         report.contains("created Highlights-ready PDF")
             && report.contains(&pdf.display().to_string())
             && report.contains("id: report")
-            && report.contains("next: bob highlights sync")
+            && report.contains("next: bob ref sync")
             && report.contains("recursive scan will not discover this PDF"),
         "{report}"
     );
@@ -594,7 +594,7 @@ fn highlights_create_stamps_rendered_pdf_through_shared_install() {
             && report.contains("pdf: ")
             && report.contains("title: Stamped Report")
             && report.contains("pages: 1")
-            && report.contains("next: bob highlights scan"),
+            && report.contains("next: bob ref scan"),
         "{report}"
     );
 
@@ -2105,9 +2105,7 @@ fn landing_library_collision_hints_listen_attach() {
     assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
     let diagnostic = stderr(&output);
     assert!(
-        diagnostic.contains(
-            "to add audio to that capture, run bob highlights create"
-        ),
+        diagnostic.contains("to add audio to that capture, run bob ref create"),
         "{diagnostic}"
     );
 }

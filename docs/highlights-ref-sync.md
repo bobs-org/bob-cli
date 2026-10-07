@@ -1,6 +1,6 @@
 # Highlights Reference Note Sync
 
-`bob highlights` creates Highlights-ready PDFs from Markdown and turns
+`bob ref` creates Highlights-ready PDFs from Markdown and turns
 Highlights app PDF annotations into Obsidian reference notes in the Bob vault.
 
 Typical order on a new PDF: `create` writes into `xlib/`, `scan --dry-run`
@@ -30,7 +30,7 @@ Code lives in this `bob-cli` repository. On the MacBook, use a checkout at
 
 ## What it does
 
-`bob highlights` implements marker/frontmatter synchronization, Markdown/TextBundle
+`bob ref` implements marker/frontmatter synchronization, Markdown/TextBundle
 sidecar parsing, generated note rendering, TextBundle image selection asset
 copying, recursive library scan with `xlib` intake, prerequisite checks, output
 collision detection, dirty-target refusal, and atomic note writes.
@@ -48,7 +48,7 @@ PDFs from the configured intake directory into the mirrored library path
 together with same-stem companion audio (`.mp3`, `.m4a`, `.ogg`, `.opus`),
 recursively finds PDFs under the configured library directory, and processes
 them in stable path order. Pass `-n, --no-hooks` on `scan`, or before the
-subcommand as `bob highlights --no-hooks scan`, to ignore the hook. Only
+subcommand as `bob ref --no-hooks scan`, to ignore the hook. Only
 `scan` and `doctor` honor that flag. A parent `--no-hooks` before `create`,
 `marker`, or `sync` is accepted and ignored. Per-PDF
 validation or write failures are reported without stopping unrelated PDFs; the
@@ -62,17 +62,17 @@ worktree status, and optional `ob` availability. Companion audio sitting in
 `xlib/` with no matching PDF in `xlib/` or `lib/` is a warning, not a
 failure. It never writes files. Pass
 `-n, --no-hooks` on `doctor`, or before the subcommand as
-`bob highlights --no-hooks doctor`, to skip the pre-scan hook check.
+`bob ref --no-hooks doctor`, to skip the pre-scan hook check.
 
 Available commands:
 
 ```bash
-bob highlights clip <URL> [-A|--author NAME] [-b|--bob-dir PATH] [-d|--dry-run] [-f|--force] [-H|--html FILE] [-l|--lib-dir PATH] [-N|--name STEM] [-o|--output PDF] [-P|--parent NOTE] [-p|--published DATE] [-r|--ref-dir PATH] [-s|--status STATUS] [-T|--title TITLE] [-t|--ref-type DIR] [-x|--xlib-dir PATH]
-bob highlights create <TARGET> [-a|--audio PATH] [-b|--bob-dir PATH] [-d|--dry-run] [-f|--force] [-i|--include-id] [-l|--lib-dir PATH] [-N|--name STEM] [-n|--no-audio] [-o|--output PDF] [-P|--parent NOTE] [-r|--ref-dir PATH] [-s|--status STATUS] [-T|--title TITLE] [-t|--ref-type DIR] [-x|--xlib-dir PATH]
-bob highlights doctor [-b|--bob-dir PATH] [-l|--lib-dir PATH] [-n|--no-hooks] [-r|--ref-dir PATH] [-x|--xlib-dir PATH]
-bob highlights marker <pdf> [-b|--bob-dir PATH] [-l|--lib-dir PATH] [-r|--ref-dir PATH] [-x|--xlib-dir PATH]
-bob highlights scan [-b|--bob-dir PATH] [-d|--dry-run] [-j|--jobs N] [-l|--lib-dir PATH] [-n|--no-hooks] [-r|--ref-dir PATH] [-v|--verbose] [-w|--write-pdfs] [-x|--xlib-dir PATH]
-bob highlights sync <pdf> [-b|--bob-dir PATH] [-d|--dry-run] [-l|--lib-dir PATH] [-p|--prefer marker|frontmatter] [-r|--ref-dir PATH] [-w|--write-pdf] [-x|--xlib-dir PATH]
+bob ref clip <URL> [-A|--author NAME] [-b|--bob-dir PATH] [-d|--dry-run] [-f|--force] [-H|--html FILE] [-l|--lib-dir PATH] [-N|--name STEM] [-o|--output PDF] [-P|--parent NOTE] [-p|--published DATE] [-r|--ref-dir PATH] [-s|--status STATUS] [-T|--title TITLE] [-t|--ref-type DIR] [-x|--xlib-dir PATH]
+bob ref create <TARGET> [-a|--audio PATH] [-b|--bob-dir PATH] [-d|--dry-run] [-f|--force] [-i|--include-id] [-l|--lib-dir PATH] [-N|--name STEM] [-n|--no-audio] [-o|--output PDF] [-P|--parent NOTE] [-r|--ref-dir PATH] [-s|--status STATUS] [-T|--title TITLE] [-t|--ref-type DIR] [-x|--xlib-dir PATH]
+bob ref doctor [-b|--bob-dir PATH] [-l|--lib-dir PATH] [-n|--no-hooks] [-r|--ref-dir PATH] [-x|--xlib-dir PATH]
+bob ref marker <pdf> [-b|--bob-dir PATH] [-l|--lib-dir PATH] [-r|--ref-dir PATH] [-x|--xlib-dir PATH]
+bob ref scan [-b|--bob-dir PATH] [-d|--dry-run] [-j|--jobs N] [-l|--lib-dir PATH] [-n|--no-hooks] [-r|--ref-dir PATH] [-v|--verbose] [-w|--write-pdfs] [-x|--xlib-dir PATH]
+bob ref sync <pdf> [-b|--bob-dir PATH] [-d|--dry-run] [-l|--lib-dir PATH] [-p|--prefer marker|frontmatter] [-r|--ref-dir PATH] [-w|--write-pdf] [-x|--xlib-dir PATH]
 ```
 
 `clip` captures a web article into `xlib/blogs/<slug>.pdf` through the
@@ -122,9 +122,9 @@ with `writes: none`. An existing target PDF requires `-f, --force`; a
 same-stem Markdown file beside the target PDF is always refused because
 Highlights would interpret it as a sidecar. Dry-run and success output show a
 mirrored `library_destination` only for intake targets. Intake and direct
-library targets recommend `bob highlights scan`; a PDF outside both managed
+library targets recommend `bob ref scan`; a PDF outside both managed
 directories states that recursive scan will not discover it and recommends
-`bob highlights sync <PDF>`. `BOB_PANDOC_COMMAND`
+`bob ref sync <PDF>`. `BOB_PANDOC_COMMAND`
 overrides the pandoc executable, and a render failure includes pandoc's
 diagnostic output.
 `-i, --include-id` opts into a stable marker ID derived from the Markdown
@@ -142,7 +142,7 @@ UTF-8, and embeds it as `id`:
 The option is intended for research hook execution, for example:
 
 ```bash
-bob highlights create --include-id 202608/xprompt_role_binding/xprompt_role_binding.md
+bob ref create --include-id 202608/xprompt_role_binding/xprompt_role_binding.md
 ```
 
 If the filename stem is invalid for marker output, the command fails before
@@ -183,7 +183,7 @@ The library root is `BOB_HIGHLIGHTS_AUDIO_LIBRARY`, then
 ```yaml
 highlights:
   audio_library: "/data/sase-listen/library"
-  # `bob highlights create --listen` (and `clip --listen`) narrates the
+  # `bob ref create --listen` (and `clip --listen`) narrates the
   # target with this command, which must write MP3 audio to {audio}.
   # Overridden by BOB_HIGHLIGHTS_LISTEN_COMMAND. See
   # docs/highlights-create.md for the full contract.
@@ -226,7 +226,7 @@ When an audio file is waiting in `xlib/` with no same-stem PDF still in
 intake, but `lib/<rel>.pdf` already exists, scan late-pairs it: the audio
 moves beside that library PDF and the existing reference note gains the
 player. Audio with no PDF in `xlib/` or `lib/` stays in intake for the next
-tick; `bob highlights doctor` reports it as a warning. Destination collisions
+tick; `bob ref doctor` reports it as a warning. Destination collisions
 join the existing pre-write intake conflict report, so scan writes nothing.
 
 The note records a bob-managed `audio` field from the companion's presence,
@@ -600,10 +600,10 @@ Reference note writes and image asset copies are atomic temporary-file renames
 and are skipped when the rendered note or content-addressed asset is
 byte-identical to the existing file.
 
-`bob highlights` does not reconcile the vault before or after writes. `bob
+`bob ref` does not reconcile the vault before or after writes. `bob
 nightly` runs `vault-sync` before and after the maintenance commands. The
 `source_pdf` field is rewritten on every sync, so a direct
-`bob highlights sync ~/bob/xlib/...` dry run or one-off sync self-heals to the
+`bob ref sync ~/bob/xlib/...` dry run or one-off sync self-heals to the
 library-relative path on the next scan after intake.
 
 ## Generated Body Contract
@@ -628,7 +628,7 @@ region.
 
 For PDFs that contain image or area (rectangle) annotations, the Highlights app
 sometimes fails to *create* the TextBundle sidecar in the first place, even with
-autosave enabled. This is a Highlights app limitation, not a `bob highlights`
+autosave enabled. This is a Highlights app limitation, not a `bob ref`
 behavior: Bob never creates or mutates sidecars, it only reads the PDF and
 sidecar content the app owns. Because Highlights can still *update* a TextBundle
 that already exists, the workaround is a one-time manual export per affected PDF.
@@ -649,11 +649,11 @@ The sidecar text must live at `~/bob/lib/<ref_type>/example.textbundle/text.md`
 (or `text.markdown`), and every referenced image must live under
 `~/bob/lib/<ref_type>/example.textbundle/assets/`.
 
-After creating the bundle, run `bob highlights scan --dry-run` and confirm the
+After creating the bundle, run `bob ref scan --dry-run` and confirm the
 affected PDF reports the expected `sidecar:` path and a nonzero `images:` count.
 The user-visible symptoms of a missing or incomplete bundle are:
 
-- A missing `.textbundle` looks like no sidecar, so `bob highlights scan`
+- A missing `.textbundle` looks like no sidecar, so `bob ref scan`
   performs marker/frontmatter planning but generates no image annotations.
 - A `.textbundle` without `text.md` or `text.markdown` surfaces as
   `unsupported textbundle sidecar`.
@@ -1013,7 +1013,7 @@ else
   git clone git@github.com:bobs-org/bob-cli.git ~/projects/bob-cli
 fi
 cargo install --path ~/projects/bob-cli --locked --force
-bob highlights --help
+bob ref --help
 ```
 
 Create or confirm the vault layout:
@@ -1025,7 +1025,7 @@ git -C ~/bob status --short
 
 In Highlights Pro on the MacBook:
 
-- Fresh PDFs created by `bob highlights create` land under
+- Fresh PDFs created by `bob ref create` land under
   `~/bob/xlib/<ref_type>/`; the next scan moves them to `~/bob/lib/<ref_type>/`.
 - Keep existing PDFs that should sync under `~/bob/lib/<ref_type>/`, such as
   `~/bob/lib/books`.
@@ -1037,7 +1037,7 @@ In Highlights Pro on the MacBook:
 - For PDFs with image or area annotations, Highlights may fail to create the
   TextBundle the first time even with autosave on. Manually export/create
   `example.textbundle/` beside `example.pdf` once, then confirm it with
-  `bob highlights scan --dry-run`. See
+  `bob ref scan --dry-run`. See
   [Known Highlights TextBundle Creation Bug](#known-highlights-textbundle-creation-bug).
 - Lock the Highlights Note Format to the sidecar contract above: page headings,
   `---` annotation separators, highlights as blockquote lines, highlight
@@ -1059,26 +1059,26 @@ Use this marker as a starting point:
 Run the initial checks:
 
 ```bash
-bob highlights doctor
-bob highlights scan --dry-run
-bob highlights sync ~/bob/lib/books/example.pdf --dry-run
-bob highlights marker ~/bob/lib/books/example.pdf
+bob ref doctor
+bob ref scan --dry-run
+bob ref sync ~/bob/lib/books/example.pdf --dry-run
+bob ref marker ~/bob/lib/books/example.pdf
 ```
 
 MacBook validation checklist:
 
 - `cargo install --path ~/projects/bob-cli --locked --force` installs the local
   checkout.
-- `bob highlights doctor` reports valid vault/library/ref paths, the xlib intake
+- `bob ref doctor` reports valid vault/library/ref paths, the xlib intake
   path and pending count, the pre-scan hook status, marker readability, Git
   status, and optional `ob` availability. A missing `~/bob/xlib` is
   warning-only because `create` creates it on demand.
-- `bob highlights scan --dry-run` lists the expected PDFs under `~/bob/lib` and
+- `bob ref scan --dry-run` lists the expected PDFs under `~/bob/lib` and
   any pending `~/bob/xlib` intake moves, reports the intended
   `~/bob/ref/<ref_type>/*.md` targets, and prints `writes: none`. If
   `scan_failures` is non-zero, inspect the per-PDF `plan_error` lines while
   noting that valid PDFs were still reported.
-- `bob highlights sync ~/bob/lib/books/example.pdf --dry-run` shows the
+- `bob ref sync ~/bob/lib/books/example.pdf --dry-run` shows the
   expected marker page/note, sync source, sidecar path, note action, and no
   writes.
 - The first real note write creates or updates `~/bob/ref/books/example.md`
@@ -1108,8 +1108,8 @@ Enable note writes only after reviewing the dry-run output:
 
 ```bash
 git -C ~/bob status --short
-bob highlights sync ~/bob/lib/books/example.pdf
-bob highlights scan
+bob ref sync ~/bob/lib/books/example.pdf
+bob ref scan
 ```
 
 `scan` does not enable PDF marker write-back by default. If a dry run reports
@@ -1117,23 +1117,23 @@ bob highlights scan
 bulk write-back:
 
 ```bash
-bob highlights scan --dry-run --write-pdfs
-bob highlights scan --write-pdfs
+bob ref scan --dry-run --write-pdfs
+bob ref scan --write-pdfs
 ```
 
 For a single PDF, keep using the targeted singular flag:
 
 ```bash
-bob highlights sync ~/bob/lib/books/example.pdf --dry-run
-bob highlights sync ~/bob/lib/books/example.pdf --write-pdf
+bob ref sync ~/bob/lib/books/example.pdf --dry-run
+bob ref sync ~/bob/lib/books/example.pdf --write-pdf
 ```
 
 The intended frontmatter edit workflow is:
 
 ```bash
 $EDITOR ~/bob/ref/books/example.md
-bob highlights sync ~/bob/lib/books/example.pdf --dry-run
-bob highlights sync ~/bob/lib/books/example.pdf --write-pdf
+bob ref sync ~/bob/lib/books/example.pdf --dry-run
+bob ref sync ~/bob/lib/books/example.pdf --write-pdf
 ```
 
 If the ref note is tracked in Git, the write-back command may update that dirty
@@ -1193,6 +1193,11 @@ launchctl kickstart -k gui/$(id -u)/com.bryan.bob-highlights-scan
 tail -n 80 ~/Library/Logs/bob/highlights-scan.out
 tail -n 80 ~/Library/Logs/bob/highlights-scan.err
 ```
+
+The scheduled LaunchAgent, the cron fallback, and the `bob_xlib_pull`
+pre-scan hook intentionally keep the `bob highlights` spelling: it is a
+permanent alias of `bob ref`, so those machines keep working whatever bob
+they have installed.
 
 After several clean dry-run cycles, remove `--dry-run` from the
 `ProgramArguments` command and reload the LaunchAgent with the same
@@ -1309,22 +1314,22 @@ field edits auto-merge and dry runs report `sync_source: auto-merge`. Same-field
 conflicts still fail and write nothing. Inspect both sides:
 
 ```bash
-bob highlights marker ~/bob/lib/books/example.pdf
+bob ref marker ~/bob/lib/books/example.pdf
 sed -n '1,120p' ~/bob/ref/books/example.md
-bob highlights sync ~/bob/lib/books/example.pdf --dry-run
+bob ref sync ~/bob/lib/books/example.pdf --dry-run
 ```
 
 Choose the PDF marker as the source of truth:
 
 ```bash
-bob highlights sync ~/bob/lib/books/example.pdf --prefer marker
+bob ref sync ~/bob/lib/books/example.pdf --prefer marker
 ```
 
 Choose the Obsidian frontmatter as the source of truth and write it back to the
 PDF marker:
 
 ```bash
-bob highlights sync ~/bob/lib/books/example.pdf --prefer frontmatter --write-pdf
+bob ref sync ~/bob/lib/books/example.pdf --prefer frontmatter --write-pdf
 ```
 
 If the only change is frontmatter or a generated lifecycle-task mark, or a
@@ -1332,14 +1337,14 @@ dry-run auto-merge reports `pdf_marker_action: would-update`, review the marker
 first, back up the PDF, then run the targeted write:
 
 ```bash
-bob highlights sync ~/bob/lib/books/example.pdf --write-pdf
+bob ref sync ~/bob/lib/books/example.pdf --write-pdf
 ```
 
 For reviewed bulk scan write-back, preview the library and then opt in:
 
 ```bash
-bob highlights scan --dry-run --write-pdfs
-bob highlights scan --write-pdfs
+bob ref scan --dry-run --write-pdfs
+bob ref scan --write-pdfs
 ```
 
 ## Expected Failures

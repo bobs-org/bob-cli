@@ -16,11 +16,11 @@ Tasks and projects:
 Vault:
   nightly     Run nightly maintenance: vault-sync, task archive, vault-sync
   query       Run Dataview or Tasks queries against the vault
+  ref         Find, list, and read references; sync Highlights PDFs into them
   vault-sync  Reconcile the vault through Git (default: run) or show status
 
 Integrations:
   gkeep       Drain the Google Keep inbox into Obsidian tasks
-  highlights  Sync Highlights PDF annotations into reference notes
 
 Setup:
   completion  Install and inspect shell completion for bob

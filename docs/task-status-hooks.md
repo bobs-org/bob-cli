@@ -480,8 +480,8 @@ flows through the next highlights sync as the corresponding reference status;
 clearing an unreachable daily-note `[*]` back to `[ ]` flows through as
 `status: ready`. Generated reference notes are ordinary notes for lane
 purposes: their `[/]` tasks are sticky like any other. Because the highlights lifecycle is also
-stored in the PDF marker, preview with `bob highlights scan --dry-run` and use a
-reviewed `bob highlights scan --write-pdfs` when marker write-back is needed.
+stored in the PDF marker, preview with `bob ref scan --dry-run` and use a
+reviewed `bob ref scan --write-pdfs` when marker write-back is needed.
 
 Completion is classified separately from Next synchronization. Conventional
 `[x]` and `[X]` tasks are complete. A custom checkbox symbol is also complete

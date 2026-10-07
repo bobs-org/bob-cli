@@ -42,7 +42,7 @@ fn highlights_clip_success_writes_stamped_intake_pdf() {
             && report.contains("capture: chrome 154.0.0 · headless")
             && report.contains("images: 2/2")
             && report.contains("fidelity: ok")
-            && report.contains("next: bob highlights scan"),
+            && report.contains("next: bob ref scan"),
         "{report}"
     );
     assert!(pdf.is_file(), "clip must install the intake PDF");
@@ -141,7 +141,7 @@ fn highlights_clip_supports_ref_type_output_and_name() {
     assert_success(&output);
     assert!(external.is_file(), "-o must write the exact path");
     assert!(
-        stdout(&output).contains("next: bob highlights sync"),
+        stdout(&output).contains("next: bob ref sync"),
         "-o outside the vault must point at sync:\n{}",
         format_output(&output)
     );
@@ -321,7 +321,7 @@ fn highlights_clip_reports_adapter_failures_with_hints() {
         );
         let diagnostic = stderr(&output);
         assert!(
-            diagnostic.contains("bob highlights: error:")
+            diagnostic.contains("bob ref: error:")
                 && diagnostic.contains(message)
                 && diagnostic.contains(&format!("hint: {hint}")),
             "{kind} must print error and hint:\n{}",

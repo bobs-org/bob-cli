@@ -1,4 +1,4 @@
-//! `bob highlights clip`: capture a web article as a Highlights-ready PDF.
+//! `bob ref clip`: capture a web article as a Highlights-ready PDF.
 //!
 //! A sibling of `create` that shares its target, collision, marker, and
 //! install code. It captures reader-mode HTML through the pinned web-clip
@@ -18,7 +18,7 @@ use super::{
     bob_dir_arg, compose_marker, current_local_date, lib_dir_arg,
     plan_default_target, plan_exact_output, print_next_step, ref_dir_arg,
     stamp_and_install, validate_ref_type, xlib_dir_arg, CommandError, Config,
-    PdfInfo, ScratchDir, TargetPlan, TargetWorkflow,
+    PdfInfo, ScratchDir, TargetPlan, TargetWorkflow, COMMAND_NAME,
 };
 use super::{clip_adapter::*, clip_url::*, pdf_meta::*, sources::*};
 use crate::native::style::Styler;
@@ -90,7 +90,7 @@ impl From<AdapterFailure> for ClipError {
 
 pub(crate) fn command() -> ClapCommand {
     ClapCommand::new("clip")
-        .about("Capture a web article as a Highlights-ready PDF")
+        .about("Capture a web article URL into a Highlights intake PDF")
         .arg(
             Arg::new("url")
                 .value_name("URL")
@@ -203,7 +203,7 @@ pub(crate) fn command() -> ClapCommand {
         .arg(xlib_dir_arg())
         .after_help(
             "Captures the article in reader mode and re-typesets it with a Bob-owned print template; \
-            it never prints the live page. `bob highlights scan` later moves the intake PDF into the \
+            it never prints the live page. `bob ref scan` later moves the intake PDF into the \
             library and writes the reference note. A site that blocks headless browsers is retried \
             headed automatically: on Linux under a private Xvfb display (as on athena) or in an \
             off-screen window on macOS; hosts with no browser fail closed with a hint. `--html FILE` \
@@ -284,7 +284,7 @@ pub(super) fn run(matches: &ArgMatches) -> i32 {
         Ok(()) => 0,
         Err(error) => {
             eprintln!(
-                "bob highlights: {}: {}",
+                "{COMMAND_NAME}: {}: {}",
                 styler.red("error"),
                 error.message
             );
@@ -411,7 +411,7 @@ fn post_listen_install_error(
 /// episode explicitly through `create`, which accepts article URLs.
 fn bind_hint_for_clip(cleaned: &str, scratch_audio: &Path) -> String {
     format!(
-        "bind it with bob highlights create {cleaned} --audio {}",
+        "bind it with bob ref create {cleaned} --audio {}",
         scratch_audio.display()
     )
 }
@@ -1025,7 +1025,7 @@ pub(super) fn append_web_clip_doctor_rows(warnings: &mut Vec<String>) {
         None => {
             println!("web clip uv: warn (uv not found on PATH)");
             warnings.push(
-                "uv not found on PATH; bob highlights clip cannot run its capture adapter"
+                "uv not found on PATH; bob ref clip cannot run its capture adapter"
                     .to_string(),
             );
         }

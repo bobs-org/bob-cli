@@ -1,4 +1,4 @@
-//! `bob highlights clip` adapter client: spawn the pinned web-clip adapter.
+//! `bob ref clip` adapter client: spawn the pinned web-clip adapter.
 //!
 //! The client writes one compact JSON request to the adapter's stdin and
 //! reads one JSON response from stdout. `BOB_WEB_CLIP_ADAPTER` replaces the
@@ -109,7 +109,7 @@ impl ClipAdapterClient {
         }
         let uv = find_on_path("uv").ok_or_else(|| {
             AdapterFailure::new("uv was not found on PATH").with_hint(
-                "install uv (https://docs.astral.sh/uv/) — bob highlights \
+                "install uv (https://docs.astral.sh/uv/) — bob ref \
                  clip runs its pinned web capture adapter with it",
             )
         })?;

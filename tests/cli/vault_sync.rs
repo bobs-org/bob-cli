@@ -516,7 +516,6 @@ fn renamed_old_top_level_commands_are_unknown() {
         "collect-done",
         "cronjob",
         "dataview",
-        "highlights-ref",
         "sync",
     ] {
         let output = bob_command()
