@@ -18,7 +18,7 @@ metadata:
 **Claim.** The stored `[keeps:: N]` field is a streak of due-Ready bare keeps
 (how many consecutive due reviews confirmed the task as written), not a
 lifetime refresh counter; absence means 0 and writers omit zero. Only an
-exact, due, Ready rotten/returned target increments, once per review, through
+exact, due, Ready rotten/tickler target increments, once per review, through
 the single JavaScript helper `api.freshness.keepLine`; every other human stamp
 clears the streak, and automation, hooks, randomize, and seed neither
 increment nor reset. At the configured limit (default 3) the next due
@@ -38,7 +38,7 @@ Rejected alternatives:
 - **Silent auto-decay at the limit.** The card asks; nothing changes
   without an explicit choice.
 - **Counting non-Ready lanes or NEW tasks.** Only due Ready
-  rotten/returned targets count; other targets stamp and preserve.
+  rotten/tickler targets count; other targets stamp and preserve.
 - **Timer-fired cards.** A card still requires an explicit gesture after
   the 2026-10-19 activation date, never a background write.
 - **A new REVIEW LOG structure.** Decisions reuse the existing Schedule,
@@ -67,3 +67,5 @@ Superseded in part: 2026-10-19 activation boundary and the
 trial-extension reopening condition only — see
 [[decisions/decay-decisions-are-available-immediately]]. Counting,
 explicit consent, priority/log writers, and exclusion rules stand.
+
+Amended in place 2026-10-07 at Bryan's request: the RETURNED walk tier is renamed TICKLER (machine tier `tickler`, footer label TICKS); the Ready state stays `resurfaced`.

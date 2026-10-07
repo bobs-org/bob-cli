@@ -25,10 +25,10 @@ metadata:
 freshness-exempt Ready tasks, computed at read time from the stable bucket
 contract in `docs/freshness.md` §4 (`bucket(new)`, `bucket(rotten)` for
 resurfaced and age-expired, null otherwise). The visible pool partitions as
-`B = NEW ∪ RETURNED ∪ ROTTEN ∪ READY`, pairwise disjoint. Dash section order
+`B = NEW ∪ TICKLER ∪ ROTTEN ∪ READY`, pairwise disjoint. Dash section order
 is TODAY → NEW → PENDING → NEXT → READY; chip order is NEW, PENDING, NEXT,
 READY, BLOCKED, ROTTEN, TODAY. NEW (unconfirmed, always visible, never
-limited) clears to 0 first, then `rotten.md` (RETURNED plus expired ROTTEN)
+limited) clears to 0 first, then `rotten.md` (TICKLER plus expired ROTTEN)
 until 0 or budget, then PENDING → NEXT. Tasks stay in their source notes;
 `rotten.md` rows are click-through views and `]s` / Alt+Shift+F reviews
 source lines. Rejected alternatives:
@@ -49,7 +49,7 @@ Evidence:
 `docs/freshness.md` §§4/6/8/13 and `docs/plan.md` READY backlog in bob-cli;
 `api.freshness.bucket` plus `reviewModel()` and gated `readyBudget` in
 bob-ledger-tools 1.11.0; `dash.md` NEW/gated-READY plus `rotten.md`
-RETURNED/ROTTEN groups in the vault.
+TICKLER/ROTTEN groups in the vault.
 
 **Cost.** READY visibility depends on review: skipping review lowers READY
 without lowering total lane pressure. Headless `bob query` without the plugin
@@ -72,3 +72,5 @@ Amended in place 2026-10-04 at Bryan's request: the freshness trial was removed;
 Superseded in part: 'stamps remain the only write' only — the approved
 decision card invokes separate existing writers on explicit approval, see
 [[decisions/rotten-keeps-use-priority-decay]].
+
+Amended in place 2026-10-07 at Bryan's request: the RETURNED walk tier is renamed TICKLER (machine tier `tickler`, footer label TICKS); the Ready state stays `resurfaced`.

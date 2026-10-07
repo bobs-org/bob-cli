@@ -20,7 +20,7 @@ gesture as soon as decay is enabled and compatible plugins are loaded
 (bob-ledger-tools freshness namespace v6 with `freshnessDecayCard`
 version ≥ 2). There is no October 19 switch, replacement date, opt-in,
 or calendar-based counting-only period. On an exact, due Ready
-ROTTEN/RETURNED task at the keep limit, a single press opens the existing
+ROTTEN/TICKLER task at the keep limit, a single press opens the existing
 consent card and writes nothing; counted and Task Link sessions skip
 those targets. A card still requires an explicit gesture, never a timer
 write. `freshness.decay: false` remains the off-switch. Counting,
@@ -53,3 +53,5 @@ capable install, or a future experiment needs a calendar gate.
 
 Supersedes in part [[decisions/rotten-keeps-use-priority-decay]] for the
 activation boundary and trial-extension reopening condition only.
+
+Amended in place 2026-10-07 at Bryan's request: the RETURNED walk tier is renamed TICKLER (machine tier `tickler`, footer label TICKS); the Ready state stays `resurfaced`.

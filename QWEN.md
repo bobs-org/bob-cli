@@ -163,7 +163,7 @@ edited in place.
    clears NEW then ROTTEN; no tags, fields, or status changes store review state.
 10. **Review Walk Is Tiered With Daily Lane Review** (`review-walk-is-tiered`) - The ]s
     walk visits one shared queue in explicit tiers PRE → NEW → PROJECTS → PENDING → NEXT
-    → RETURNED → REFERENCES → ROTTEN → POST; #gtd #pre/#post checklist rows resolve only
+    → TICKLER → REFERENCES → ROTTEN → POST; #gtd #pre/#post checklist rows resolve only
     by completion; Pending and Next come due daily under pending_interval /
     next_interval (default 1, false walks that lane off); tiers never feed buckets or
     chips; upkeep outside the lanes counts the budget; stamps stay and the seed never
@@ -193,10 +193,10 @@ tokens than one read per term, because terms shared between definitions are prin
 once. Terms are separated by semicolons; aliases follow in parentheses.
 
 **GLOSSARY TERMS:** Area Note; Inbox File (inbox note); Keep Streak (keeps); Mac Menu
-Bar Pomodoro Indicator (mac pom); Pomodoro; Project Note (prj note); Project Task (prj
-task); Reference Note (ref note); Reference Task (ref task); Schedule Log; Task
-Dependency Link (task dep link, dep link); Task Freshness (freshness); Task Link (task
-block link); Work Log
+Bar Pomodoro Indicator (mac pom); Morning GTD Review Footer (review footer); Pomodoro;
+Project Note (prj note); Project Task (prj task); Reference Note (ref note); Reference
+Task (ref task); Schedule Log; Task Dependency Link (task dep link, dep link); Task
+Freshness (freshness); Task Link (task block link); Work Log
 
 ### 3.3 Task Bead Types (task_types)
 

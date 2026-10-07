@@ -70,7 +70,7 @@ edited in place.
      state.
 10. **Review Walk Is Tiered With Daily Lane Review** (`review-walk-is-tiered`)
     - The ]s walk visits one shared queue in explicit tiers PRE → NEW → PROJECTS →
-      PENDING → NEXT → RETURNED → REFERENCES → ROTTEN → POST; #gtd #pre/#post checklist
+      PENDING → NEXT → TICKLER → REFERENCES → ROTTEN → POST; #gtd #pre/#post checklist
       rows resolve only by completion; Pending and Next come due daily under
       pending_interval / next_interval (default 1, false walks that lane off); tiers
       never feed buckets or chips; upkeep outside the lanes counts the budget; stamps
