@@ -173,6 +173,47 @@ fn doctor_annotations_warn_on_leaked_marker_mirror() {
 }
 
 #[test]
+fn doctor_coverage_uses_provenance_mirroring() {
+    let temp = TempDir::new("bob-cli-doctor-library-provenance");
+    let vault = base_vault(&temp);
+    write_queued_note(&vault, "queued");
+    write_file(
+        &vault.join("hub.md"),
+        "# Hub records\n\n- 260101#0a [[read]] ID::pair_one ^z-250425-0f\n  * status:: READ\n\n- 260101#0b [[read]] ID::pair_two ^z-250425-0f\n  * status:: READ\n\n- 260101#0c [[read]] ID::big_book ^z-260101-0a\n  * status:: BOOK\n\n- 260101#0d [[read]] LID::chapter_a First ^z-260101-0b\n  | BOOK: [[hub#^z-260101-0a|big_book]]\n  * status:: READ\n\n- 260101#0e [[read]] LID::chapter_b Second ^z-260101-0c\n  | BOOK: [[hub#^z-260101-0a|big_book]]\n  * status:: UNREAD\n",
+    );
+    // Mirrors the first member of the shared-block pair only: the
+    // `source_id` tells the pair apart.
+    write_file(
+        &vault.join("ref/ai/pair_one.md"),
+        "---\nstatus: legacy\nlegacy_status: read\ntitle: Pair One\nsource_block: ^z-250425-0f\nsource_path: hub.md\nsource_id: pair_one\n---\n\nMigrated body.\n",
+    );
+    // The book note folds both chapters through `source_blocks` and
+    // derives `started` from a finished and a queued chapter.
+    write_file(
+        &vault.join("ref/ai/big_book.md"),
+        "---\nstatus: legacy\nlegacy_status: book\ntitle: Big Book\nsource_block: ^z-260101-0a\nsource_path: hub.md\nsource_id: big_book\nsource_blocks:\n  - \"^z-260101-0b\"\n  - \"^z-260101-0c\"\nlegacy_chapter_statuses:\n  - \"read\"\n  - \"unread\"\n---\n\nMigrated body.\n",
+    );
+    commit_vault(&vault);
+
+    let output = run_doctor(&vault);
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains(
+            "coverage: warn (~1 zorg-era reading record outside ref/ is not indexed: hub.md 1)"
+        ),
+        "{report}"
+    );
+    assert!(
+        report.contains(
+            "library: ok (3 notes · 1 finished · 1 started · 1 queued · 0 dropped · 0 unknown)"
+        ),
+        "{report}"
+    );
+    assert!(report.contains("result: ok"), "{report}");
+}
+
+#[test]
 fn doctor_coverage_warn_counts_unmirrored_zorg_records() {
     let temp = TempDir::new("bob-cli-doctor-library-coverage");
     let vault = base_vault(&temp);

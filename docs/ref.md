@@ -50,6 +50,17 @@ per note:
 `frontmatter:read`, `legacy_status:review_lit_notes`,
 `conflict:…`, `none`).
 
+A legacy note whose `legacy_status` is `book` and that carries a
+non-empty `legacy_chapter_statuses` list derives its reading state
+from its chapters instead: each chapter status maps through the
+`legacy_status` column above (unknown and dropped chapters set
+aside), then finished wins when every remaining chapter is finished,
+started when any remaining chapter is started or finished, queued
+when chapters still remain, dropped when any chapter was dropped,
+and unknown otherwise. Its `reading_state_source` is
+`legacy_chapters:<finished>/<total>`; a book without chapters stays
+`unknown`.
+
 ## Identity
 
 Stored values come from `source_url` then `url` (scalars or lists).

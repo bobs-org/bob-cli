@@ -25,7 +25,12 @@ mod status;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use coverage::{count_zorg_records, ZorgCoverage};
+pub(crate) use coverage::{
+    count_zorg_records, normalize_block_id, ZorgCoverage,
+};
+// Reserved for the `planner` phase: the shared record-parser API.
+#[allow(unused_imports)]
+pub(crate) use coverage::{parse_zorg_records, record_is_mirrored, ZorgRecord};
 pub(crate) use frontmatter::ParsedFrontmatter;
 pub(crate) use identity::{
     classify_query, doi_keys, normalize_doi_query, parse_arxiv_query,
@@ -397,6 +402,13 @@ fn build_row(rel: &str, under_ref: &str, contents: &str) -> RefRow {
         id: front_string(&front, "id"),
         source_block: front_string(&front, "source_block"),
         source_path: front_string(&front, "source_path"),
+        source_id: front_string(&front, "source_id"),
+        source_blocks: front
+            .get_all("source_blocks")
+            .iter()
+            .map(|block| normalize_block_id(block))
+            .filter(|block| !block.is_empty() && block != "^")
+            .collect(),
     }
 }
 

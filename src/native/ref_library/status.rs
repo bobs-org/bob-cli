@@ -150,6 +150,27 @@ pub(crate) fn decide_status(
             diagnostics,
         },
         Some("legacy") => {
+            // A book with folded chapters derives its reading state
+            // from them; a book without chapters stays unknown.
+            if legacy_raw
+                .map(|value| value.trim().eq_ignore_ascii_case("book"))
+                .unwrap_or(false)
+            {
+                let chapters = front.get_all("legacy_chapter_statuses");
+                if !chapters.is_empty() {
+                    let (state, source) = book_reading_state(&chapters);
+                    return StatusOutcome {
+                        status: Some("legacy".to_string()),
+                        status_sync: "ok",
+                        frontmatter_status: None,
+                        has_usable_tracker: false,
+                        tracker: None,
+                        reading_state: state,
+                        reading_state_source: source,
+                        diagnostics,
+                    };
+                }
+            }
             let (state, source) = legacy_reading_state(legacy_raw);
             StatusOutcome {
                 status: Some("legacy".to_string()),
@@ -206,18 +227,58 @@ fn legacy_reading_state(raw: Option<&str>) -> (&'static str, String) {
     let folded = raw
         .map(|value| value.trim().to_lowercase())
         .unwrap_or_default();
-    let state = match folded.as_str() {
-        "unread" => "queued",
-        "collect_fleeting_notes" => "started",
-        "read" | "review_fleeting_notes" | "review_lit_notes" => "finished",
-        "abandoned" => "dropped",
-        _ => "unknown",
-    };
+    let state = map_legacy_status(&folded);
     let source = match raw.map(str::trim).filter(|s| !s.is_empty()) {
         Some(value) => format!("legacy_status:{value}"),
         None => "legacy_status:missing".to_string(),
     };
     (state, source)
+}
+
+/// One folded lowercase legacy status mapped to its reading state.
+fn map_legacy_status(folded: &str) -> &'static str {
+    match folded {
+        "unread" => "queued",
+        "collect_fleeting_notes" => "started",
+        "read" | "review_fleeting_notes" | "review_lit_notes" => "finished",
+        "abandoned" => "dropped",
+        _ => "unknown",
+    }
+}
+
+/// A legacy book's derived reading state from its chapters' raw
+/// statuses: finished when every known chapter is finished, started
+/// when any known chapter is started or finished, queued when known
+/// chapters remain, dropped when any chapter was dropped, and unknown
+/// otherwise.
+fn book_reading_state(chapters: &[String]) -> (&'static str, String) {
+    let mapped: Vec<&str> = chapters
+        .iter()
+        .map(|status| map_legacy_status(&status.trim().to_lowercase()))
+        .collect();
+    let total = mapped.len();
+    let finished = mapped.iter().filter(|state| **state == "finished").count();
+    let known: Vec<&&str> = mapped
+        .iter()
+        .filter(|state| matches!(**state, "finished" | "started" | "queued"))
+        .collect();
+    let state = if !known.is_empty()
+        && known.iter().all(|state| **state == "finished")
+    {
+        "finished"
+    } else if known
+        .iter()
+        .any(|state| matches!(**state, "started" | "finished"))
+    {
+        "started"
+    } else if !known.is_empty() {
+        "queued"
+    } else if mapped.contains(&"dropped") {
+        "dropped"
+    } else {
+        "unknown"
+    };
+    (state, format!("legacy_chapters:{finished}/{total}"))
 }
 
 /// The stored base `status` from the `highlights_marker_base` JSON, aliased
@@ -297,4 +358,100 @@ fn parse_tracker_line(line: &str) -> Option<TrackerHit> {
         mark,
         line: line.trim().to_string(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn book_front(chapters: &[&str]) -> ParsedFrontmatter {
+        let mut raw = vec![
+            "status: legacy".to_string(),
+            "legacy_status: book".to_string(),
+            "legacy_chapter_statuses:".to_string(),
+        ];
+        for chapter in chapters {
+            raw.push(format!("  - \"{chapter}\""));
+        }
+        ParsedFrontmatter::parse(&raw)
+    }
+
+    fn derived_state(chapters: &[&str]) -> (String, String) {
+        let front = book_front(chapters);
+        let outcome = decide_status("", &front);
+        assert_eq!(outcome.status.as_deref(), Some("legacy"));
+        (
+            outcome.reading_state.to_string(),
+            outcome.reading_state_source.clone(),
+        )
+    }
+
+    #[test]
+    fn book_derivation_covers_every_branch() {
+        // Every known chapter finished.
+        assert_eq!(
+            derived_state(&["read", "review_fleeting_notes"]),
+            ("finished".to_string(), "legacy_chapters:2/2".to_string())
+        );
+        // A started chapter alongside finished ones.
+        assert_eq!(
+            derived_state(&["read", "collect_fleeting_notes"]),
+            ("started".to_string(), "legacy_chapters:1/2".to_string())
+        );
+        // A queued chapter alongside a finished one is still started.
+        assert_eq!(
+            derived_state(&["read", "unread"]),
+            ("started".to_string(), "legacy_chapters:1/2".to_string())
+        );
+        // Only queued chapters remain.
+        assert_eq!(
+            derived_state(&["unread", "unread"]),
+            ("queued".to_string(), "legacy_chapters:0/2".to_string())
+        );
+        // Unknown and dropped chapters are set aside first.
+        assert_eq!(
+            derived_state(&["unread", "abandoned", "book"]),
+            ("queued".to_string(), "legacy_chapters:0/3".to_string())
+        );
+        // No known chapter, but one was dropped.
+        assert_eq!(
+            derived_state(&["abandoned", "book"]),
+            ("dropped".to_string(), "legacy_chapters:0/2".to_string())
+        );
+        // Nothing known and nothing dropped.
+        assert_eq!(
+            derived_state(&["book", "missing"]),
+            ("unknown".to_string(), "legacy_chapters:0/2".to_string())
+        );
+    }
+
+    #[test]
+    fn book_without_chapters_stays_unknown() {
+        let front = ParsedFrontmatter::parse(&[
+            "status: legacy".to_string(),
+            "legacy_status: book".to_string(),
+        ]);
+        let outcome = decide_status("", &front);
+        assert_eq!(outcome.reading_state, "unknown");
+        assert_eq!(
+            outcome.reading_state_source,
+            "legacy_status:book".to_string()
+        );
+    }
+
+    #[test]
+    fn non_book_legacy_ignores_chapter_statuses() {
+        let mut raw = vec![
+            "status: legacy".to_string(),
+            "legacy_status: read".to_string(),
+            "legacy_chapter_statuses:".to_string(),
+        ];
+        raw.push("  - \"unread\"".to_string());
+        let outcome = decide_status("", &ParsedFrontmatter::parse(&raw));
+        assert_eq!(outcome.reading_state, "finished");
+        assert_eq!(
+            outcome.reading_state_source,
+            "legacy_status:read".to_string()
+        );
+    }
 }

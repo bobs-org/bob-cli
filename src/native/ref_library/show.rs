@@ -1012,6 +1012,8 @@ mod tests {
                 id: None,
                 source_block: None,
                 source_path: None,
+                source_id: None,
+                source_blocks: Vec::new(),
             },
             annotations_status: "parsed".to_string(),
             raw_region: None,

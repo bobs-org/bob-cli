@@ -79,8 +79,11 @@ never fail the command:
 - `coverage` counts zorg-era `status::` reading records in `*.md` files
   outside `ref/` (hidden directories, `_generated/`, and `*.assets/`
   excluded), minus records already mirrored into the library. A record is
-  mirrored when some ref note carries the same `source_block` and
-  `source_path`. The warn form names the top 5 files by count.
+  mirrored when some ref note carries the same `source_path` and either
+  the same `source_block` with a matching `source_id` (notes without a
+  `source_id` still match on block plus path), or the record's block in
+  its `source_blocks` (one book note mirrors several folded chapters).
+  The warn form names the top 5 files by count.
 
 Available commands:
 

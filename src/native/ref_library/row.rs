@@ -51,6 +51,16 @@ pub(crate) struct RefRow {
     /// coverage count reads it to subtract already-mirrored records.
     #[serde(skip_serializing)]
     pub source_path: Option<String>,
+    /// Frontmatter `source_id`, kept out of JSON; only the zorg-era
+    /// coverage count reads it to tell records sharing one owner block
+    /// apart.
+    #[serde(skip_serializing)]
+    pub source_id: Option<String>,
+    /// Frontmatter `source_blocks`, kept out of JSON; only the zorg-era
+    /// coverage count reads it so one book note can mirror several
+    /// folded chapter blocks.
+    #[serde(skip_serializing)]
+    pub source_blocks: Vec<String>,
 }
 
 /// Stored identity keys for one row.
