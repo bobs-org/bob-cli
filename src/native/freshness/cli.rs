@@ -34,12 +34,16 @@ const COMMAND_NAME: &str = "bob freshness";
 /// Bump only for a breaking change to the JSON objects below; new
 /// optional fields keep the current version.
 ///
+/// Schema 10 renames the `returned` walk tier to `tickler` (`tier`
+/// values and `by_tier.tickler`); the Ready `state` stays `resurfaced`
+/// and `counts.resurfaced` is unchanged.
+///
 /// Schema 9 adds PRE/POST checklist tiers: `pre`/`post` in `tier` and
 /// `by_tier`, `pre_due`/`post_due`, and `lane` may be null on
 /// checklist rows. Schema 8 drops `config.decay.active_from` /
 /// `active`: decay decisions are available as soon as decay is
 /// enabled, with no calendar gate. Schema 7 adds the `references`
-/// walk tier (between `returned` and `rotten`), the seven-key
+/// walk tier (between `tickler` and `rotten`), the seven-key
 /// `by_tier` histogram, `references_due` in counts, and the `^prj`
 /// hide gate: visible `^prj` rows are reviewed on sync's `#hide`
 /// alone, so the `project_scheduled_invalid` lint is gone. Schema 6
@@ -53,7 +57,7 @@ const COMMAND_NAME: &str = "bob freshness";
 /// eligible Ready trackers). Schema 4 added the keep-streak contract.
 /// The seed envelope shares this constant; seed contents are
 /// otherwise unchanged.
-const SCHEMA_VERSION: u32 = 9;
+const SCHEMA_VERSION: u32 = 10;
 
 pub(crate) fn run(args: Vec<OsString>) -> i32 {
     let argv: Vec<OsString> = iter::once(OsString::from(COMMAND_NAME))
@@ -122,7 +126,7 @@ pub(crate) fn build_cli() -> ClapCommand {
         .long_about(
             "Walk the tiered freshness review queue: list the tasks due \
             for review in tier order PRE → NEW → PROJECTS → PENDING → \
-            NEXT → RETURNED → REFERENCES → ROTTEN → POST.\n\n\
+            NEXT → TICKLER → REFERENCES → ROTTEN → POST.\n\n\
             The list subcommand is read-only: it evaluates every visible, \
             non-recurring Ready, Pending, and Next task at read time — \
             never stored — and shows the tiered walk queue with counts. \
@@ -154,7 +158,7 @@ fn list_command_inner() -> ClapCommand {
         .long_about(
             "List the tiered freshness review queue: every task with a \
             walk tier, ordered PRE → NEW → PROJECTS → PENDING → NEXT → \
-            RETURNED → REFERENCES → ROTTEN → POST with each tier's comparator, with \
+            TICKLER → REFERENCES → ROTTEN → POST with each tier's comparator, with \
             whole-vault counts. The command is read-only. Counts always \
             cover the whole vault; --limit truncates the queue rows \
             only. See docs/freshness.md for the full definition.",
@@ -541,7 +545,7 @@ fn human_list(report: &ListReport, styler: &Styler) -> String {
     output.push('\n');
     let _ = writeln!(
         output,
-        "  REVIEW {walk} due {sep} {pre} pre {sep} {new} new {sep} {projects} projects {sep} {pending} pending {sep} {next} next {sep} {returned} returned {sep} {references} references {sep} {rotten} rotten {sep} {post} post {sep} {today}",
+        "  REVIEW {walk} due {sep} {pre} pre {sep} {new} new {sep} {projects} projects {sep} {pending} pending {sep} {next} next {sep} {tickler} tickler {sep} {references} references {sep} {rotten} rotten {sep} {post} post {sep} {today}",
         walk = report.counts.walk,
         sep = styler.separator(),
         pre = report.counts.by_tier.pre,
@@ -549,7 +553,7 @@ fn human_list(report: &ListReport, styler: &Styler) -> String {
         projects = report.counts.by_tier.projects,
         pending = report.counts.by_tier.pending,
         next = report.counts.by_tier.next,
-        returned = report.counts.by_tier.returned,
+        tickler = report.counts.by_tier.tickler,
         references = report.counts.by_tier.references,
         rotten = report.counts.by_tier.rotten,
         post = report.counts.by_tier.post,
@@ -562,7 +566,7 @@ fn human_list(report: &ListReport, styler: &Styler) -> String {
         ("projects", "PROJECTS"),
         ("pending", "PENDING"),
         ("next", "NEXT"),
-        ("returned", "RETURNED"),
+        ("tickler", "TICKLER"),
         ("references", "REFERENCES"),
         ("rotten", "ROTTEN"),
         ("post", "POST"),
@@ -700,8 +704,8 @@ fn human_row(row: &ListedRow, styler: &Styler) -> String {
                 format!("{lead} {sep} fresh {fresh}{every}")
             }
         },
-        "returned" => format!(
-            "returned {sep} scheduled {scheduled} {sep} fresh {fresh}",
+        "tickler" => format!(
+            "tickler {sep} scheduled {scheduled} {sep} fresh {fresh}",
             scheduled = row.scheduled.as_deref().unwrap_or("?"),
             fresh = row.fresh.as_deref().unwrap_or("?"),
         ),
@@ -784,7 +788,7 @@ fn json_list(report: &ListReport) -> serde_json::Value {
                 "projects": report.counts.by_tier.projects,
                 "pending": report.counts.by_tier.pending,
                 "next": report.counts.by_tier.next,
-                "returned": report.counts.by_tier.returned,
+                "tickler": report.counts.by_tier.tickler,
                 "references": report.counts.by_tier.references,
                 "rotten": report.counts.by_tier.rotten,
                 "post": report.counts.by_tier.post,

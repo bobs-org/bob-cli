@@ -240,15 +240,15 @@
    "config": "C1-absent",
    "date": "2026-10-20",
    "decide": true,
-   "id": "D4-returned",
+   "id": "D4-tickler",
    "keeps": 5,
    "lane": "ready",
    "runners": [
     "rust",
     "js"
    ],
-   "tier": "returned",
-   "why": "returned counts as due"
+   "tier": "tickler",
+   "why": "tickler counts as due"
   },
   {
    "config": "C1-absent",

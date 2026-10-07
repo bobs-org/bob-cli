@@ -333,7 +333,7 @@ fn s14_queue_order_new_then_due() {
             .iter()
             .map(|entry| entry.tier.as_str())
             .collect::<Vec<_>>(),
-        vec!["new", "new", "returned", "rotten", "rotten"]
+        vec!["new", "new", "tickler", "rotten", "rotten"]
     );
 }
 
@@ -536,11 +536,11 @@ fn q2_tier_order_beats_path_order() {
     let new = ready_row("e.md", 1, None, None);
     let pending = lane_row("d.md", 1, '/', Some("2026-10-07"), None);
     let next = lane_row("c.md", 1, '*', Some("2026-10-07"), None);
-    let mut returned = ready_row("b.md", 1, Some("2026-10-05"), None);
-    returned.scheduled = Some(date(2026, 10, 7));
+    let mut tickler = ready_row("b.md", 1, Some("2026-10-05"), None);
+    tickler.scheduled = Some(date(2026, 10, 7));
     let rotten = ready_row("a.md", 1, Some("2026-09-20"), None);
     let ordered =
-        queue(&[rotten, returned, next, pending, new], today(), &config);
+        queue(&[rotten, tickler, next, pending, new], today(), &config);
     assert_eq!(
         queue_keys(&ordered),
         vec![
@@ -553,7 +553,7 @@ fn q2_tier_order_beats_path_order() {
     );
     assert_eq!(
         queue_tiers(&ordered),
-        vec!["new", "pending", "next", "returned", "rotten"]
+        vec!["new", "pending", "next", "tickler", "rotten"]
     );
 }
 
@@ -658,21 +658,21 @@ fn l5_lane_order_never_stamped_first() {
 }
 
 #[test]
-fn r1_returned_beats_older_rotten() {
+fn r1_tickler_beats_older_rotten() {
     let config = default_config();
-    let mut returned = ready_row("b.md", 1, Some("2026-10-05"), None);
-    returned.scheduled = Some(date(2026, 10, 7));
+    let mut tickler = ready_row("b.md", 1, Some("2026-10-05"), None);
+    tickler.scheduled = Some(date(2026, 10, 7));
     let rotten = ready_row("a.md", 1, Some("2026-09-20"), None);
-    let ordered = queue(&[rotten, returned], today(), &config);
+    let ordered = queue(&[rotten, tickler], today(), &config);
     assert_eq!(
         queue_keys(&ordered),
         vec![("b.md".to_string(), 1), ("a.md".to_string(), 1)]
     );
-    assert_eq!(queue_tiers(&ordered), vec!["returned", "rotten"]);
+    assert_eq!(queue_tiers(&ordered), vec!["tickler", "rotten"]);
 }
 
 #[test]
-fn r2_returned_orders_by_schedule_then_newest_created() {
+fn r2_tickler_orders_by_schedule_then_newest_created() {
     let config = default_config();
     let mut x =
         ready_row("x.md", 1, Some("2026-10-05"), Some(date(2026, 9, 1)));
@@ -826,16 +826,16 @@ fn decide_at_limit_but_not_below() {
     assert!(!queued[1].decide);
 }
 
-/// D4/D5: RETURNED at the limit decides; NEW never does.
+/// D4/D5: TICKLER at the limit decides; NEW never does.
 #[test]
-fn decide_covers_returned_but_never_new() {
+fn decide_covers_tickler_but_never_new() {
     let config = decay_config(3, true);
-    let mut returned = row(
+    let mut tickler = row(
         "- [ ] #task Week habits [fresh:: 2026-10-05] [scheduled:: 2026-10-07] [keeps:: 5]",
     );
-    returned.scheduled = Some(date(2026, 10, 7));
-    let evaluated = evaluate(&returned, active_day(), &config);
-    assert_eq!(evaluated.tier, Some(Tier::Returned));
+    tickler.scheduled = Some(date(2026, 10, 7));
+    let evaluated = evaluate(&tickler, active_day(), &config);
+    assert_eq!(evaluated.tier, Some(Tier::Tickler));
     assert!(evaluated.decide);
     let new = evaluate(
         &row("- [ ] #task New capture [keeps:: 3]"),
@@ -1132,7 +1132,7 @@ fn resurfaced_reference_walks_references_without_decide() {
 }
 
 /// Seven-tier queue order with stable ties: NEW → PROJECTS →
-/// PENDING → NEXT → RETURNED → REFERENCES → ROTTEN, and the walk
+/// PENDING → NEXT → TICKLER → REFERENCES → ROTTEN, and the walk
 /// sums the histogram with a `references_due` count.
 #[test]
 fn seven_tier_order_with_references() {
@@ -1144,15 +1144,15 @@ fn seven_tier_order_with_references() {
     prj.raw_line = "- [ ] #task Project ^prj".to_string();
     let pending = lane_row("e.md", 1, '/', Some("2026-10-07"), None);
     let next = lane_row("d.md", 1, '*', Some("2026-10-07"), None);
-    let mut returned = ready_row("c.md", 1, Some("2026-10-05"), None);
-    returned.scheduled = Some(date(2026, 10, 7));
+    let mut tickler = ready_row("c.md", 1, Some("2026-10-05"), None);
+    tickler.scheduled = Some(date(2026, 10, 7));
     let mut reference = ready_row("b.md", 1, Some("2026-10-01"), None);
     reference.tracker = Some(TrackerKind::Ref);
     reference.raw_line =
         "- [ ] #task Read [fresh:: 2026-10-01] ^ref".to_string();
     let rotten = ready_row("a.md", 1, Some("2026-09-20"), None);
     let rows =
-        vec![rotten, reference, returned, next, pending, prj, new.clone()];
+        vec![rotten, reference, tickler, next, pending, prj, new.clone()];
     let ordered = queue(&rows, today(), &config);
     assert_eq!(
         queue_keys(&ordered),
@@ -1173,7 +1173,7 @@ fn seven_tier_order_with_references() {
             "projects",
             "pending",
             "next",
-            "returned",
+            "tickler",
             "references",
             "rotten"
         ]
@@ -1360,7 +1360,7 @@ fn cl7_one_off_post_keeps_new_state() {
 }
 
 /// CL8. One row per tier walks PRE → NEW → PROJECTS → PENDING →
-/// NEXT → RETURNED → REFERENCES → ROTTEN → POST.
+/// NEXT → TICKLER → REFERENCES → ROTTEN → POST.
 #[test]
 fn cl8_nine_tier_order() {
     let mut config = default_config();
@@ -1376,8 +1376,8 @@ fn cl8_nine_tier_order() {
     prj.raw_line = "- [ ] #task Project ^prj".to_string();
     let pending = lane_row("f.md", 1, '/', Some("2026-10-07"), None);
     let next = lane_row("e.md", 1, '*', Some("2026-10-07"), None);
-    let mut returned = ready_row("d.md", 1, Some("2026-10-05"), None);
-    returned.scheduled = Some(date(2026, 10, 7));
+    let mut tickler = ready_row("d.md", 1, Some("2026-10-05"), None);
+    tickler.scheduled = Some(date(2026, 10, 7));
     let mut reference = ready_row("c.md", 1, Some("2026-10-01"), None);
     reference.tracker = Some(TrackerKind::Ref);
     reference.raw_line =
@@ -1387,7 +1387,7 @@ fn cl8_nine_tier_order() {
     post.checklist = Some(ChecklistKind::Post);
     post.raw_line = "- [ ] #task #gtd #post Morning review".to_string();
     let rows = vec![
-        post, rotten, reference, returned, next, pending, prj, new, pre,
+        post, rotten, reference, tickler, next, pending, prj, new, pre,
     ];
     let ordered = queue(&rows, today(), &config);
     assert_eq!(
@@ -1398,7 +1398,7 @@ fn cl8_nine_tier_order() {
             "projects",
             "pending",
             "next",
-            "returned",
+            "tickler",
             "references",
             "rotten",
             "post"

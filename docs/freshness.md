@@ -13,13 +13,13 @@ The daily lane review reuses the same `[fresh::]` stamp for Pending
 (`[/]`) and Next (`[*]`) tasks: each lane has a review cadence
 (`freshness.pending_interval` / `freshness.next_interval`, default 1
 day), and the morning walk visits PRE → NEW → PROJECTS → PENDING → NEXT →
-RETURNED → REFERENCES → ROTTEN → POST in explicit tiers.
+TICKLER → REFERENCES → ROTTEN → POST in explicit tiers.
 
 This file is the contract both implementations cite. The Rust side is
 `src/native/freshness/` (`placement.rs`, `state.rs`) with the
 `freshness:` config block in `src/native/config/freshness.rs`; the
 JavaScript mirror is `api.freshness` in bob-ledger-tools (top-level
-api v3, freshness namespace v6). The bob-ledger-tools JavaScript
+api v3, freshness namespace v8). The bob-ledger-tools JavaScript
 tests use the conformance vectors below verbatim.
 
 The keep-streak contract (`keeps`, `decay`, introduced in schema 4) is specified
@@ -163,17 +163,17 @@ rules. No metadata leaks into clean task descriptions or capture
 previews.
 
 **Counting, clearing, and storage.** Exact eligibility authorizes counting
-only for an exact due-Ready ROTTEN/RETURNED row: the pre-write queue holds
+only for an exact due-Ready ROTTEN/TICKLER row: the pre-write queue holds
 exactly one row with `entry.path === path`, `entry.line === editorLine + 1`,
 `entry.originalMarkdown === rawLine`, `lane === 'ready'`, and
-`tier in {'rotten','returned'}`. The sole increment helper is
+`tier in {'rotten','tickler'}`. The sole increment helper is
 `api.freshness.keepLine(line, dateText, { counted })` with its valid-prior-
 `fresh < today` guard; Rust reads/clears/reports with no increment path
 (the seed preserve-mode exception aside). A v5 provider with a missing or
 throwing `keepLine` fails without writing, while pre-v5 falls back to the
 uncounted old stamper. The event table:
 
-- Alt+F / Ctrl+Alt+F on an exact due Ready target in `rotten`/`returned`
+- Alt+F / Ctrl+Alt+F on an exact due Ready target in `rotten`/`tickler`
   stamps and increments once in the same write, unless an active decision
   is required.
 - NEW, FRESH/early, Pending, Next, Blocked, Today-linked, tracker-tier
@@ -231,7 +231,7 @@ hard-coded P1–P4 table.
 **Availability.** Decay decisions are available as soon as decay is
 enabled and compatible plugins are loaded. There is no calendar gate,
 replacement date, or counting-only period. On an exact, due Ready
-ROTTEN/RETURNED task at the keep limit, a single Alt+F/Ctrl+Alt+F
+ROTTEN/TICKLER task at the keep limit, a single Alt+F/Ctrl+Alt+F
 press opens the consent card and writes nothing, while counted and
 Task Link sessions skip those targets (`N needs a decision`) without
 changing fresh/count. Below threshold they keep counting normally
@@ -243,7 +243,7 @@ with an older ledger falls back to counted keeps; new ledger with
 older or missing navigation shows pips without a card promise.
 
 **Read-time decision flag.** `decide = enabled && lane
-ready && tier rotten/returned && keeps >= limit`. The annotation
+ready && tier rotten/tickler && keeps >= limit`. The annotation
 means a choice is due, not permission to execute an action. The shared
 approved-decay action planner (`planFreshnessDecayCard` in
 bob-navigation-hotkeys) turns that flag into stable previewed decisions —
@@ -382,13 +382,13 @@ tier(t)       = checklist(t) if checklist_scope(t)   — beats every other tier,
               | new       if lane ready ∧ state NEW (ordinary tasks only)
               | pending   if lane pending ∧ walk_scope ∧ lane_due (never a tracker)
               | next      if lane next ∧ walk_scope ∧ lane_due (never a tracker)
-              | returned  if state RESURFACED
+              | tickler   if state RESURFACED
               | rotten    if state ROTTEN
               | none      otherwise
 ```
 
 The queue holds every row with a tier, in tier order PRE → NEW →
-PROJECTS → PENDING → NEXT → RETURNED → REFERENCES → ROTTEN → POST.
+PROJECTS → PENDING → NEXT → TICKLER → REFERENCES → ROTTEN → POST.
 Within each tier the order is:
 
 | Tier     | Order within the tier                                    |
@@ -398,14 +398,14 @@ Within each tier the order is:
 | projects | never-confirmed first, due_on ↑, created ↑, path ↑, line ↑ |
 | pending  | never-stamped first, due_on ↑, created ↑, path ↑, line ↑ |
 | next     | same as pending                                          |
-| returned | due_on (= scheduled) ↑, created ↓, path ↑, line ↑        |
+| tickler  | due_on (= scheduled) ↑, created ↓, path ↑, line ↑       |
 | references | never-confirmed first, due_on ↑, created ↑, path ↑, line ↑ |
 | rotten   | interval ↑, due_on ↑, created ↓, path ↑, line ↑          |
 | post     | path ↑, line ↑ (file order is the checklist order)       |
 
 A missing `created` always sorts after dated peers within its tier,
 in both ascending and descending keys. The commitment tiers are pre,
-new, projects, pending, next, returned, and references — PRE, PROJECTS,
+new, projects, pending, next, tickler, and references — PRE, PROJECTS,
 and REFERENCES sit before the "Commitments done" boundary, so meeting
 the upkeep budget never signals that commitments are finished while
 chores or trackers remain. Rotten is upkeep. POST is the closing tier
@@ -456,8 +456,8 @@ READY applies the visible TODO Ready pool plus `bucket !== "new"
 && bucket !== "rotten"` — never `state === "fresh"`, which would
 lose freshness-exempt tasks. A null bucket alone never proves a task
 is Ready. With the supported plugin and a ready cache, the visible
-pool partitions as `B = NEW ∪ RETURNED ∪ ROTTEN ∪ READY`, pairwise
-disjoint (RETURNED is bucket rotten with state resurfaced).
+pool partitions as `B = NEW ∪ TICKLER ∪ ROTTEN ∪ READY`, pairwise
+disjoint (TICKLER is bucket rotten with state resurfaced).
 
 Bucket conformance: S1 maps to `new`; S3, S4, and S11 map to
 `rotten`; S2, S5, S7, and S12 map to null; every S13 row maps to
@@ -467,7 +467,7 @@ null.
 also reminds Bryan to replenish surfaced projects and to review
 unfinished reading references, in one consistent contract on both
 sides including the `]s` / Ctrl+Alt+F walk: PRE → NEW → PROJECTS →
-PENDING → NEXT → RETURNED → REFERENCES → ROTTEN → POST.
+PENDING → NEXT → TICKLER → REFERENCES → ROTTEN → POST.
 
 - Identity is the parsed, exact trailing block ID `prj` or `ref` on
   a real task. Tags alone, `^prj-extra`, description text, and
@@ -540,16 +540,19 @@ header and status bar reading tier counts; hidden `^ref` rows join
 full review while the visible pool, lane, and capacity counts stay
 unchanged; neither tracker tier ever decays.
 
-**Machine vocabulary (schema 9).** Human output, help, and docs
+**Machine vocabulary (schema 10).** Human output, help, and docs
 say `rotten`, and so does the machine contract since the vocab-rotten
 migration published JSON schema 2: `state: "rotten"`,
 `counts.rotten`, and `freshness.rotten_daily_budget`. Each JSON queue
 row still carries the `bucket` field (`"new"`, `"rotten"`, or null).
+Schema 10 renames the `returned` walk tier to `tickler` (`tier`
+values and `by_tier.tickler`); the Ready `state` stays `resurfaced`
+and `counts.resurfaced` is unchanged.
 Schema 9 adds PRE/POST checklist tiers: `pre`/`post` in `tier` and
 `by_tier`, `pre_due`/`post_due`, and `lane` may be null on checklist
 rows. Schema 8 drops `config.decay.active_from` / `active`: decay
 decisions are available as soon as decay is enabled, with no calendar
-gate. Schema 7 adds the `references` walk tier between `returned` and
+gate. Schema 7 adds the `references` walk tier between `tickler` and
 `rotten`, the seven-key `counts.by_tier` histogram,
 `counts.references_due`, and the `^prj` hide gate (visible `^prj`
 rows review on sync's `#hide` alone; the `project_scheduled_invalid`
@@ -561,26 +564,35 @@ the `project` / `reference` interval sources. Schema 5 added the
 totals from tier totals as above; the shared seed envelope version
 advances with each, seed behavior unchanged.
 Likewise bob-ledger-tools uses the `"rotten"` state string under
-freshness namespace v6 (`api.freshness.version === 6` with the
+freshness namespace v8 (`api.freshness.version === 8` with the
 explicit `trackerReview` capability plus the explicit
 `referenceReview` capability, which tells consumers the queue may
 carry `references` entries; top-level api stays v3). Date-independent
 decide/config landed in v6; counting through `keepLine` remains
-available from v5.
+available from v5. V8 renames the `returned` tier and
+`byTier.returned` to `tickler`.
 Dashboard `freshness.reviewModel()` NEW/ROTTEN chips project the
 same memoized evaluated states onto the existing visible Ready
 pool — hidden review-only rows never feed a badge for a section
 that excludes them — while the status bar footer, `]s`, and the CLI
 use the full review counts. The desktop footer shows only nonempty
-walk groups in PRE → NEW → PROJECTS → PENDING → NEXT → RETURNED →
-REFERENCES → ROTTEN → POST order, splitting RETURNED from ROTTEN so the
-commitment/upkeep boundary is visible; dashboard ROTTEN chips still
-fold RETURNED plus ROTTEN. It appears only while a trustworthy
-nonempty queue remains and hides entirely when the queue is empty,
-including a met upkeep budget or a nonzero today count. `Review r/N`
-and `TIER i/M` are positions in the current queue; they never mean
-how many tasks were completed in a review session. Compact cursor
-context reuses the same presentation as the `]s` notice.
+walk groups in walk order with short labels — `WIP` for PENDING,
+`TICKS` for TICKLER, `REFS` for REFERENCES, and the full name for
+every other tier (for example `PRE 7 · NEW 1 · PROJECTS 2 · WIP 10 ·
+NEXT 15 · TICKS 14 · REFS 3 · ROTTEN 26 · POST 1`) — splitting TICKS
+from ROTTEN so the commitment/upkeep boundary is visible; dashboard
+ROTTEN chips still fold TICKLER plus ROTTEN. The current-row context
+uses the same short labels (for example `Review 5/76 · WIP 3/10`).
+`Review r/N` and `TIER i/M` are positions in the current queue; they
+never mean how many tasks were completed in a review session. `]s`
+jump notices and the CLI keep full tier names (`TICKLER 2/14`,
+`PENDING 3/10`). The tooltip gains one legend line, shown only when
+an abbreviated label is visible and listing only the abbreviations
+shown, in walk order (`WIP = PENDING · TICKS = TICKLER · REFS =
+REFERENCES`), beside the line `Footer splits TICKS from ROTTEN;
+dashboard ROTTEN chips still fold both.` It appears only while a
+trustworthy nonempty queue remains and hides entirely when the queue
+is empty, including a met upkeep budget or a nonzero today count.
 
 **One-release legacy budget key.** A config that still sets
 `freshness.stale_daily_budget` keeps working for one release: when
@@ -667,7 +679,7 @@ task stays due and Ctrl+Alt+F does not advance.
    never crosses the PRE/POST boundary: on the last lane row before POST it
    stays with a `]s → POST` hint (Ctrl+Alt+F crosses).
    Keep import is the PRE chore "Import inbox tasks from Google Keep".
-3. Walk the commitments (NEW → PROJECTS → PENDING → NEXT → RETURNED →
+3. Walk the commitments (NEW → PROJECTS → PENDING → NEXT → TICKLER →
    REFERENCES) with `]s` / Ctrl+Alt+F until the notice says
    **Commitments done**. `N]s` / `N[s` move N entries along that same
    queue and wrap with the existing notice, while `[S` / `]S` stay the
@@ -688,7 +700,7 @@ task stays due and Ctrl+Alt+F does not advance.
    answer or `]s` skip rows or jump ahead. Alt+F is the one answer that
    stays on the row;
    `]s` skips without answering, and `<C-o>` returns to the row just
-   answered. For a returned deferral, "not
+   answered. For a tickler, "not
    now" is a priority roll, not Alt+F. Clear CROWDED to 0 (split,
    sequence, defer, drop via `bob ready`) and choose a highlight (≤3
    themes, highlight first). CROWDED does not depend on how far ROTTEN
@@ -759,7 +771,7 @@ vault). Human output is colored only on a TTY:
 ```text
 bob freshness · Thu 2026-10-08 · every 7d · pending 1d · next 1d · keeps 3
 
-  REVIEW 76 due · 7 pre · 1 new · 2 projects · 10 pending · 15 next · 14 returned · 3 references · 26 rotten · 1 post · ✓ 12 today
+  REVIEW 76 due · 7 pre · 1 new · 2 projects · 10 pending · 15 next · 14 tickler · 3 references · 26 rotten · 1 post · ✓ 12 today
 
   PRE 7
     gtd_daily.md:1      Check weather           Checklist · complete to resolve
@@ -773,8 +785,8 @@ bob freshness · Thu 2026-10-08 · every 7d · pending 1d · next 1d · keeps 3
     work.md:12          Ship the report         due today · fresh 2026-10-07 · every 1d (pending)
   NEXT 15
     …
-  RETURNED 14
-    b.md:40             Week habits             returned · scheduled 2026-10-07 · fresh 2026-10-05
+  TICKLER 14
+    b.md:40             Week habits             tickler · scheduled 2026-10-07 · fresh 2026-10-05
   REFERENCES 3
     lib/books/paper.md:8  Read the paper        Reference · due today · fresh 2026-10-01 · every 7d (reference)
   ── commitments done above · upkeep below ──
@@ -787,7 +799,7 @@ bob freshness · Thu 2026-10-08 · every 7d · pending 1d · next 1d · keeps 3
 ```
 
 - The `REVIEW N due` total is `walk`.
-- Human vocabulary says "returned"; the machine `state` stays
+- Human vocabulary says "tickler"; the machine `state` stays
   `resurfaced`.
 - A disabled lane shows `pending off` in the header.
 - The header always shows the keep threshold: `keeps 3` when enabled,
@@ -813,7 +825,7 @@ render empty, and NEW/ROTTEN badges show `–` (never zero). Native
 and READY is ungated there; `bob freshness list` is the headless
 review interface.
 
-The JSON contract is `schema_version: 9` with `ok`, `date`,
+The JSON contract is `schema_version: 10` with `ok`, `date`,
 `config` (`interval`, `pending_interval` / `next_interval` as a number
 or `false`, `project_interval` / `reference_interval` as a number or
 null (null means inherit), `rotten_daily_budget`, plus normalized
@@ -825,7 +837,7 @@ null (null means inherit), `rotten_daily_budget`, plus normalized
 `walk` (`= sum(by_tier)`), `decide`, `refreshed_today`,
 `upkeep_today`, `budget`, `budget_met`; counts always cover the whole
 vault regardless of `--limit`), `queue` (each with `rank`, `tier`
-(`pre` | `new` | `projects` | `pending` | `next` | `returned` |
+(`pre` | `new` | `projects` | `pending` | `next` | `tickler` |
 `references` | `rotten` | `post`), `lane` (`ready` | `pending` |
 `next` | null),
 `state`, `bucket` (`"new"`, `"rotten"`, or null — lane rows carry
@@ -840,8 +852,11 @@ checklist row may carry `lane: null`), `path`,
 to execute an action. No new CLI subcommands or options. Human
 section counts, the REVIEW summary, status-bar walk totals, per-tier
 ranks, and commitment-boundary logic use tier counts, not state
-counts. The Obsidian footer omits zero-count groups and the current review group (full summary when no review row is current) and hides when
-the walk is empty; CLI human output is unchanged. A NEW project
+counts. The Obsidian footer shows short group labels (`WIP` for
+PENDING, `TICKS` for TICKLER, `REFS` for REFERENCES), omits
+zero-count groups and the current review group (full summary when no
+review row is current), and hides when the walk is empty; CLI
+human output keeps full tier names. A NEW project
 counts once in PROJECTS, and `--limit` only
 truncates rows. A NEW-state Ready reference walks in REFERENCES, not
 NEW, on the reference cadence in any lane.
@@ -871,7 +886,7 @@ differently under either Rust parser. A writing run then re-reads all touched
 files before the first write and refuses if one changed; `--dry-run` stops
 after planning and parse validation, without that file recheck. Each file is
 written through a temp file plus rename. The JSON contract is
-`schema_version: 9` with `ok`, `date`, `dry_run`,
+`schema_version: 10` with `ok`, `date`, `dry_run`,
 `stamped` (`ready`, `other`), `buckets` (`fresh`, `due_on`, `count`,
 `notes`), `skipped` (`already_stamped`, `recurring`,
 `out_of_scope`), `files`, and `warnings`. The shared schema constant
@@ -896,13 +911,13 @@ an invalid `freshness:` block or a non-Dataview task format.
 
 | Surface | Phase |
 | ------- | ----- |
-| `bob freshness` | fresh-cli (landed: `list` and `seed` in `src/native/freshness/`); tiered walk (schema 9: `list` walks PRE → NEW → PROJECTS → PENDING → NEXT → RETURNED → REFERENCES → ROTTEN → POST with lane intervals for ordinary tasks, tracker cadences for `^prj`/`^ref`, and `#gtd` `#pre`/`#post` checklist rows; decay config is `{enabled, keeps, enter}` with no calendar gate) |
+| `bob freshness` | fresh-cli (landed: `list` and `seed` in `src/native/freshness/`); tiered walk (schema 10: `list` walks PRE → NEW → PROJECTS → PENDING → NEXT → TICKLER → REFERENCES → ROTTEN → POST with lane intervals for ordinary tasks, tracker cadences for `^prj`/`^ref`, and `#gtd` `#pre`/`#post` checklist rows; decay config is `{enabled, keeps, enter}` with no calendar gate) |
 | `bob capture` | capture-stamps (landed: plan_task_link + `=x` close stamp via `stamp_fresh`; existing-dependent `&` dependency stamp via the same helper; capture never stamps trackers) |
 | bob-ledger-tools | ledger-freshness (landed: api v3 `api.freshness` + status bar in 1.8.0; tracking review under namespace v6 with the `trackerReview` capability; persistent review footer with additive `reviewEntryView`) |
 | bob-navigation-hotkeys | nav-review, nav-stamps (landed: Alt+N + Ctrl+Shift+P/Ctrl+Shift+M/! stamping + refresh row in 1.44.0; PROJECTS/REFERENCES tier walk with `trackerReview`/`referenceReview` capabilities and legacy v3/v4 fallback; notices feature-detect `reviewEntryView`) |
 | task-status-cycler | cycler-link-stamps (landed: Alt+[/Alt+] + Ctrl+Enter reopen stamping in 1.18.0) |
 | block-id-prompt | cycler-link-stamps (landed: Ctrl+Shift+Enter + ^^ stamping in 1.16.0) |
-| `rotten.md` (aliases `Review`, `Freshness review`, `Rotten Tasks`) | dash-gating (landed: live summary plus always-present RETURNED and ROTTEN groups; tasks stay in source notes, rows are click-through views) |
+| `rotten.md` (aliases `Review`, `Freshness review`, `Rotten Tasks`) | dash-gating (landed: live summary plus always-present TICKLER and ROTTEN groups; tasks stay in source notes, rows are click-through views) |
 | `dash.md` | dash-gating (landed: TODAY → NEW → PENDING → NEXT → READY sections; grouped Work / Review / Browse navigation with NEW/PENDING/NEXT/READY/CROWDED/BLOCKED/ROTTEN/TODAY plus PROJECTS/REFERENCES chips; gated READY with whole-lane tooltip; CROWDED via `noteReady` v1 opening crowded.md; PROJECTS/REFERENCES via `dashboardCollections` v1 opening dash_projects/dash_references with Base-contract guards) |
 | `crowded.md` + `bob-ready-notes` + heading chips | per-note Ready cap rollout (landed: Crowded Notes page, ranked-bar code block, live `ready n/cap` chips on each note's `## Tasks` heading) |
 | freshness mark | fresh-mark (landed: bob-ledger-tools 1.10.0 Live Preview + rendered views) |
@@ -1004,7 +1019,7 @@ The bob-ledger-tools JavaScript tests use these verbatim.
 - **S14 queue order (rewritten).** Given NEW `b.md:3` and NEW `a.md:9`;
   ROTTEN due 2026-10-01 at `c.md:2`; RESURFACED due 2026-10-07 at
   `a.md:4`; ROTTEN due 2026-10-07 at `a.md:2`. The order is `a.md:9`,
-  `b.md:3`, `a.md:4` (returned), `c.md:2`, `a.md:2`.
+  `b.md:3`, `a.md:4` (tickler), `c.md:2`, `a.md:2`.
 - **S15 counts (updated):** `refreshed_today` counts a `[*]` and an
   `[x]` stamped 2026-10-08, but not a Ready task stamped 2026-10-07;
   `upkeep_today` counts the `[x]` but not the `[*]`. With budget 15,
@@ -1016,9 +1031,9 @@ The bob-ledger-tools JavaScript tests use these verbatim.
   - `a.md:1` fresh 09-30, created 09-01.
   Order: `d.md:1` (A), `c.md:1` (D), `b.md:1` (C), `a.md:1` (B).
 - **Q2 (tier order beats path order).** NEW `e.md:1`; `[/]` `d.md:1`
-  fresh 10-07; `[*]` `c.md:1` fresh 10-07; RETURNED `b.md:1` fresh
+  fresh 10-07; `[*]` `c.md:1` fresh 10-07; TICKLER `b.md:1` fresh
   10-05 scheduled 10-07; ROTTEN `a.md:1` fresh 09-20. Order: e, d, c,
-  b, a, with tiers new, pending, next, returned, rotten.
+  b, a, with tiers new, pending, next, tickler, rotten.
 - **L1.** A `[*]` stamped 10-08 is in no tier. A `[*]` stamped 10-07
   has tier `next`, `due_on` 10-08, `days_overdue` 0, interval 1 from
   source `next`, and null `state`/`bucket`.
@@ -1037,10 +1052,10 @@ The bob-ledger-tools JavaScript tests use these verbatim.
   - `a.md:2` fresh 10-07, created 09-20;
   - `a.md:1` fresh 10-07, no created.
   Order: z.md:9, b.md:1, a.md:5, a.md:2, a.md:1.
-- **R1 (RETURNED beats older ROTTEN).** RETURNED `b.md:1` (fresh 10-05,
+- **R1 (TICKLER beats older ROTTEN).** TICKLER `b.md:1` (fresh 10-05,
   scheduled 10-07) comes before ROTTEN `a.md:1` (fresh 09-20, due
   09-27).
-- **R2 (returned order).** `x.md:1` scheduled 10-06 created 09-01,
+- **R2 (tickler order).** `x.md:1` scheduled 10-06 created 09-01,
   `w.md:1` scheduled 10-07 created 09-05, `y.md:1` scheduled 10-07
   created 09-01. Order: x, w, y.
 - **B1.** 20 lane stamps plus 5 Ready stamps today, budget 15 →
@@ -1069,7 +1084,7 @@ The bob-ledger-tools JavaScript tests use these verbatim.
 - **CL6.** `#gtd #pre #post` → `pre`, lint `checklist_tag_conflict`.
 - **CL7.** One-off, unstamped `- [ ] #task #gtd #post Write retro` → tier `post`, state
   `new`, bucket `new`. It counts in `new` and `post_due`.
-- **CL8.** One row per tier → queue order pre, new, projects, pending, next, returned,
+- **CL8.** One row per tier → queue order pre, new, projects, pending, next, tickler,
   references, rotten, post. `walk = Σ by_tier`, and `due`/`new`/`rotten` equal the same
   vault without the checklist rows (except a CL7-style one-off member's own state).
 - **CL9.** A recurring checklist row refuses a stamp (Rust `stamp`, JS
@@ -1135,12 +1150,12 @@ increment API; the JS side runs the increment vectors through
 Config vectors C1–C13 pin `decay` normalization (absent, null,
 `true`, `{}`, `false`, `keeps: 0`, fixed `enter`, and each invalid
 shape). Decide vectors D1–D8 pin `decide`: at-limit Ready due rows
-on every local day, below-limit Ready rows, RETURNED coverage, NEW
+on every local day, below-limit Ready rows, TICKLER coverage, NEW
 never, `keeps: 0` asking on every due Ready re-confirmation,
 `decay: false` never asking, and lane rows never deciding. Boundary
 vectors B1–B5 pin immediate availability on 2026-10-04, 2026-10-08,
 2026-10-18, 2026-10-19, and 2026-10-20. Rows have carried
-`keeps`/`decide` since schema 4, and the current schema is 9; counts
+`keeps`/`decide` since schema 4, and the current schema is 10; counts
 carry `decide`; `config.decay` reports normalized `enabled`,
 `keeps`, and `enter`. CLI human rows show `kept N×` and `· decide`
 where true; the header explains the threshold or the off state.
@@ -1488,7 +1503,7 @@ counting and pips; the session mark toggle restores raw pills. This
 rollout changed no global config, note intervals, or inbox residence.
 
 Calibration is a lightweight human tally one month after this ungated
-rollout: decision count, Keep/Drop outcomes, and RETURNED load for two
+rollout: decision count, Keep/Drop outcomes, and TICKLER load for two
 weeks after the first card wave, from counts, decision logs, and git
 history — no telemetry service or automatic tuning. If most cards
 (>50%) are Keep, consider limit 4; if most are Drop, consider limit 2.

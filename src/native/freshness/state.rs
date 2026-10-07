@@ -75,7 +75,7 @@ pub(crate) enum ChecklistKind {
 }
 
 /// Walk tier, in walk order (`docs/freshness.md` §4):
-/// PRE → NEW → PROJECTS → PENDING → NEXT → RETURNED → REFERENCES →
+/// PRE → NEW → PROJECTS → PENDING → NEXT → TICKLER → REFERENCES →
 /// ROTTEN → POST.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Tier {
@@ -84,7 +84,7 @@ pub(crate) enum Tier {
     Projects,
     Pending,
     Next,
-    Returned,
+    Tickler,
     References,
     Rotten,
     Post,
@@ -98,7 +98,7 @@ impl Tier {
             Self::Projects => "projects",
             Self::Pending => "pending",
             Self::Next => "next",
-            Self::Returned => "returned",
+            Self::Tickler => "tickler",
             Self::References => "references",
             Self::Rotten => "rotten",
             Self::Post => "post",
@@ -219,7 +219,7 @@ pub(crate) struct FreshnessRow {
 /// dependency-blocked, or future-scheduled, excluding recurring tasks
 /// and every `^prj` row. Callers pass only `READY_QUERY` rows, so the
 /// lane predicate is already applied; this checks the two row-level
-/// exclusions. It includes unconfirmed NEW, RETURNED, ROTTEN, and
+/// exclusions. It includes unconfirmed NEW, TICKLER, ROTTEN, and
 /// fresh tasks (including Today-linked rows), ignores `ready_cap`
 /// (including `off`), counts no Next/Pending rows, and never rolls up
 /// child projects, embeds, backlinks, or parent membership. Uses
@@ -250,7 +250,7 @@ pub(crate) struct Evaluated {
     /// The valid `[keeps:: N]` semantic count (0 when absent).
     pub(crate) keeps: u32,
     /// A choice is due — not permission to execute an action:
-    /// `enabled && lane ready && tier rotten/returned && keeps >= limit`.
+    /// `enabled && lane ready && tier rotten/tickler && keeps >= limit`.
     pub(crate) decide: bool,
     pub(crate) lints: Vec<String>,
 }
@@ -263,7 +263,7 @@ pub(crate) fn decide_for(
     keeps: u32,
     config: &FreshnessConfig,
 ) -> bool {
-    let due_tier = matches!(tier, Some(Tier::Rotten) | Some(Tier::Returned));
+    let due_tier = matches!(tier, Some(Tier::Rotten) | Some(Tier::Tickler));
     config.decay.enabled
         && lane == Some(Lane::Ready)
         && due_tier
@@ -496,7 +496,7 @@ fn evaluate_without_checklist(
     // tracker with its actual lane retained); both are checked before
     // NEW and the lane tiers, so a never-confirmed Ready reference
     // walks in REFERENCES, never NEW. PENDING/NEXT are due walked
-    // ordinary lanes; RETURNED/ROTTEN are the Ready resurfaced/rotten
+    // ordinary lanes; TICKLER/ROTTEN are the Ready resurfaced/rotten
     // states. Tracker tiers never precede NEW for ordinary tasks.
     let tracker_ready_due = is_tracker
         && lane == Some(Lane::Ready)
@@ -528,7 +528,7 @@ fn evaluate_without_checklist(
     {
         Some(Tier::Next)
     } else if state == Some(FreshState::Resurfaced) {
-        Some(Tier::Returned)
+        Some(Tier::Tickler)
     } else if state == Some(FreshState::Rotten) {
         Some(Tier::Rotten)
     } else {
@@ -766,7 +766,7 @@ fn compare_created(
 }
 
 /// The review queue in tier order PRE → NEW → PROJECTS → PENDING →
-/// NEXT → RETURNED → REFERENCES → ROTTEN → POST, with each tier's
+/// NEXT → TICKLER → REFERENCES → ROTTEN → POST, with each tier's
 /// comparator from `docs/freshness.md` §4.
 pub(crate) fn queue(
     rows: &[FreshnessRow],
@@ -817,7 +817,7 @@ pub(crate) fn queue(
                     .then(a.path.cmp(&b.path))
                     .then(a.line.cmp(&b.line))
             }
-            Tier::Returned => a
+            Tier::Tickler => a
                 .due_on
                 .cmp(&b.due_on)
                 .then(compare_created(a.created, b.created, true))
@@ -848,7 +848,7 @@ pub(crate) struct ByTier {
     pub(crate) projects: u32,
     pub(crate) pending: u32,
     pub(crate) next: u32,
-    pub(crate) returned: u32,
+    pub(crate) tickler: u32,
     pub(crate) references: u32,
     pub(crate) rotten: u32,
     pub(crate) post: u32,
@@ -861,7 +861,7 @@ impl ByTier {
             + self.projects
             + self.pending
             + self.next
-            + self.returned
+            + self.tickler
             + self.references
             + self.rotten
             + self.post
@@ -896,7 +896,7 @@ pub(crate) struct Counts {
     pub(crate) by_tier: ByTier,
     /// Full queue length, before any `--limit` (`walk = sum(by_tier)`).
     pub(crate) walk: u32,
-    /// Queue rows with a decision due (Ready rotten/returned at or
+    /// Queue rows with a decision due (Ready rotten/tickler at or
     /// over the keep limit while decay is enabled).
     pub(crate) decide: u32,
     /// Tasks of any status outside `_templates` / `_conflicts` whose
@@ -968,7 +968,7 @@ pub(crate) fn counts(
             Some(Tier::Projects) => by_tier.projects += 1,
             Some(Tier::Pending) => by_tier.pending += 1,
             Some(Tier::Next) => by_tier.next += 1,
-            Some(Tier::Returned) => by_tier.returned += 1,
+            Some(Tier::Tickler) => by_tier.tickler += 1,
             Some(Tier::References) => by_tier.references += 1,
             Some(Tier::Rotten) => by_tier.rotten += 1,
             Some(Tier::Post) => by_tier.post += 1,

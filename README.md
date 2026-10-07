@@ -694,7 +694,7 @@ examples live in [`docs/plan.md`](docs/plan.md).
 
 Task freshness is the human-confirmed `[fresh:: YYYY-MM-DD]` date when a
 task was last confirmed to still need doing as written. Visible, non-recurring
-Ready tasks never confirmed, returned from a scheduled deferral after their
+Ready tasks never confirmed, a tickler back from a scheduled deferral after their
 last confirmation, or whose review interval expired (7 days by
 default, overridable per task, per
 note, and in config), are due for review. Supported keymaps and
@@ -710,8 +710,8 @@ bob freshness seed [-b|--bob-dir DIR] [-d|--dry-run] [-F|--force] [-f|--format h
 ```
 
 Running `bob freshness` with no subcommand runs read-only `list`: the queue
-in order PRE → NEW → PROJECTS → PENDING → NEXT → RETURNED → REFERENCES → ROTTEN → POST.
-Both `list` and `seed` use JSON schema 9. Counts cover the whole vault even
+in order PRE → NEW → PROJECTS → PENDING → NEXT → TICKLER → REFERENCES → ROTTEN → POST.
+Both `list` and `seed` use JSON schema 10. Counts cover the whole vault even
 with `--limit`; `counts.walk` sums the nine `counts.by_tier` values. Ready
 state totals and walk-tier totals have different scopes.
 
@@ -726,7 +726,7 @@ future-scheduled tasks stay outside the review queue, except PRE/POST
 `#gtd` checklist rows, which walk by tag.
 
 On the dashboard, NEW holds unconfirmed tasks, READY holds confirmed/exempt
-backlog, and `rotten.md` holds returned deferrals plus expired tasks. Repeated
+backlog, and `rotten.md` holds tickler tasks plus expired tasks. Repeated
 due-Ready confirmations accumulate `[keeps:: N]`; the approved-decay decision
 card is available immediately, subject to config and plugin capability.
 
