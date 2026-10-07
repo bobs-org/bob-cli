@@ -64,6 +64,24 @@ failure. It never writes files. Pass
 `-n, --no-hooks` on `doctor`, or before the subcommand as
 `bob ref --no-hooks doctor`, to skip the pre-scan hook check.
 
+After the sync-prerequisite rows, `doctor` appends warning-level library
+health and coverage rows read through the read-only reference index. They
+never fail the command:
+
+- `library: ok (…)` totals the indexed notes by reading state.
+- `library diagnostics` rolls up row diagnostics by code with up to 3
+  example paths (`marker_mirror_excluded` is skipped here; it has its own
+  row below).
+- `identity` reports legacy notes superseded by a newer capture, or warns
+  about identity keys shared by more than one PDF-backed note.
+- `annotations` warns while notes still render a leaked marker mirror; the
+  next `bob ref scan` removes those blocks without tombstones.
+- `coverage` counts zorg-era `status::` reading records in `*.md` files
+  outside `ref/` (hidden directories, `_generated/`, and `*.assets/`
+  excluded), minus records already mirrored into the library. A record is
+  mirrored when some ref note carries the same `source_block` and
+  `source_path`. The warn form names the top 5 files by count.
+
 Available commands:
 
 ```bash
@@ -1087,7 +1105,8 @@ MacBook validation checklist:
   checkout.
 - `bob ref doctor` reports valid vault/library/ref paths, the xlib intake
   path and pending count, the pre-scan hook status, marker readability, Git
-  status, and optional `ob` availability. A missing `~/bob/xlib` is
+  status, optional `ob` availability, and the library health and coverage
+  rows. A missing `~/bob/xlib` is
   warning-only because `create` creates it on demand.
 - `bob ref scan --dry-run` lists the expected PDFs under `~/bob/lib` and
   any pending `~/bob/xlib` intake moves, reports the intended

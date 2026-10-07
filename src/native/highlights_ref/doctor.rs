@@ -253,6 +253,7 @@ pub(super) fn doctor_vault(config: &Config, no_hooks: bool) -> Result<()> {
 
     append_web_clip_doctor_rows(&mut warnings);
     append_listen_doctor_row(&mut warnings);
+    append_library_doctor_rows(config, &mut warnings);
 
     if !warnings.is_empty() {
         println!("warnings:");
@@ -271,6 +272,221 @@ pub(super) fn doctor_vault(config: &Config, no_hooks: bool) -> Result<()> {
             "doctor found failing checks:\n  {}",
             failures.join("\n  ")
         )))
+    }
+}
+
+/// Library health and coverage rows (phase `doctor` of
+/// `plan:202610/bob_ref_reference_library.md`).
+///
+/// These rows read the vault through the read-only ref index and never fail
+/// the command: every problem is a warning. The `library diagnostics` rollup
+/// skips `marker_mirror_excluded`, which has its own `annotations` row.
+fn append_library_doctor_rows(config: &Config, warnings: &mut Vec<String>) {
+    let library = crate::native::ref_library::LibraryConfig {
+        bob_dir: config.bob_dir.clone(),
+        ref_dir: config.ref_dir.clone(),
+        xlib_dir: config.xlib_dir.clone(),
+    };
+    let index = match crate::native::ref_library::build_index(&library) {
+        Ok(index) => index,
+        Err(error) => {
+            println!("library: unavailable ({error})");
+            warnings
+                .push(format!("reference library index unavailable: {error}"));
+            return;
+        }
+    };
+
+    let counts = &index.counts;
+    println!(
+        "library: ok ({} · {} finished · {} started · {} queued · {} dropped · {} unknown)",
+        plural_notes(counts.notes),
+        counts.finished,
+        counts.started,
+        counts.queued,
+        counts.dropped,
+        counts.unknown,
+    );
+
+    append_library_diagnostics_row(&index.rows, warnings);
+    append_library_identity_row(&index.rows, warnings);
+    append_library_annotations_row(&index.rows, warnings);
+
+    let zorg: crate::native::ref_library::ZorgCoverage =
+        crate::native::ref_library::count_zorg_records(
+            &config.bob_dir,
+            &config.ref_dir,
+            &index.rows,
+        );
+    if zorg.total == 0 {
+        println!(
+            "coverage: ok (no unindexed zorg-era reading records outside ref/)"
+        );
+    } else {
+        let mut entries = zorg
+            .top_files()
+            .iter()
+            .map(|(path, count)| format!("{path} {count}"))
+            .collect::<Vec<_>>();
+        if zorg.per_file.len() > entries.len() {
+            entries.push("…".to_string());
+        }
+        let record_word = if zorg.total == 1 {
+            "record outside ref/ is"
+        } else {
+            "records outside ref/ are"
+        };
+        println!(
+            "coverage: warn (~{} zorg-era reading {record_word} not indexed: {})",
+            zorg.total,
+            entries.join(", "),
+        );
+        warnings.push(format!(
+            "{} unindexed zorg-era reading records outside ref/",
+            zorg.total,
+        ));
+    }
+}
+
+fn append_library_diagnostics_row(
+    rows: &[crate::native::ref_library::RefRow],
+    warnings: &mut Vec<String>,
+) {
+    let mut by_code: BTreeMap<&str, usize> = BTreeMap::new();
+    let mut notes = 0usize;
+    let mut examples: Vec<&str> = Vec::new();
+    for row in rows {
+        let mut row_codes = false;
+        for diagnostic in &row.diagnostics {
+            if diagnostic.code == "marker_mirror_excluded" {
+                continue;
+            }
+            *by_code.entry(diagnostic.code.as_str()).or_default() += 1;
+            row_codes = true;
+        }
+        if row_codes {
+            notes += 1;
+            if examples.len() < 3 {
+                examples.push(row.path.as_str());
+            }
+        }
+    }
+    if notes == 0 {
+        println!("library diagnostics: ok (no diagnostics)");
+        return;
+    }
+    let mut summary = by_code
+        .iter()
+        .map(|(code, count)| format!("{count} {code}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    summary.push_str(&format!(" · e.g. {}", examples.join(", ")));
+    println!(
+        "library diagnostics: warn ({}: {summary})",
+        plural_notes(notes),
+    );
+    warnings.push(format!(
+        "{} reference notes carry diagnostics",
+        plural_notes(notes),
+    ));
+}
+
+fn append_library_identity_row(
+    rows: &[crate::native::ref_library::RefRow],
+    warnings: &mut Vec<String>,
+) {
+    let mut by_key: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+    for row in rows.iter().filter(|row| row.source_pdf.is_some()) {
+        let mut seen = BTreeSet::new();
+        for key in &row.identity.keys {
+            if seen.insert(key.as_str()) {
+                by_key
+                    .entry(key.as_str())
+                    .or_default()
+                    .insert(row.path.as_str());
+            }
+        }
+    }
+    let mut shared: Vec<&str> = by_key
+        .iter()
+        .filter_map(|(key, paths)| (paths.len() > 1).then_some(*key))
+        .collect();
+    shared.sort();
+    if !shared.is_empty() {
+        let listed = shared.iter().take(3).collect::<Vec<_>>();
+        let mut keys = listed
+            .iter()
+            .map(|key| key.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        if shared.len() > listed.len() {
+            keys.push_str(", …");
+        }
+        println!(
+            "identity: warn ({} shared by more than one PDF-backed note: {keys})",
+            plural_noun(shared.len(), "identity key", "identity keys"),
+        );
+        warnings.push(format!(
+            "{} shared by more than one PDF-backed note",
+            plural_noun(shared.len(), "identity key", "identity keys"),
+        ));
+        return;
+    }
+    let superseded = rows
+        .iter()
+        .filter(|row| row.superseded_by.is_some())
+        .count();
+    if superseded == 0 {
+        println!("identity: ok (no superseded notes)");
+    } else if superseded == 1 {
+        println!("identity: ok (1 legacy note superseded by a newer capture)");
+    } else {
+        println!(
+            "identity: ok ({superseded} legacy notes superseded by newer captures)"
+        );
+    }
+}
+
+fn append_library_annotations_row(
+    rows: &[crate::native::ref_library::RefRow],
+    warnings: &mut Vec<String>,
+) {
+    let mirrors = rows
+        .iter()
+        .filter(|row| {
+            row.diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "marker_mirror_excluded")
+        })
+        .count();
+    if mirrors == 0 {
+        println!("annotations: ok (no leaked marker mirrors)");
+    } else if mirrors == 1 {
+        println!(
+            "annotations: warn (1 note still renders a leaked marker mirror; the next bob ref scan removes it)"
+        );
+        warnings.push(
+            "1 reference note still renders a leaked marker mirror".to_string(),
+        );
+    } else {
+        println!(
+            "annotations: warn ({mirrors} notes still render a leaked marker mirror; the next bob ref scan removes them)"
+        );
+        warnings.push(format!(
+            "{mirrors} reference notes still render a leaked marker mirror"
+        ));
+    }
+}
+
+fn plural_notes(count: usize) -> String {
+    plural_noun(count, "note", "notes")
+}
+
+fn plural_noun(count: usize, singular: &str, plural: &str) -> String {
+    if count == 1 {
+        format!("1 {singular}")
+    } else {
+        format!("{count} {plural}")
     }
 }
 

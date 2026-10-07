@@ -77,7 +77,7 @@ fn all_subcommands() -> Vec<ClapCommand> {
 
 fn doctor_command() -> ClapCommand {
     ClapCommand::new("doctor")
-        .about("Check Highlights reference sync prerequisites")
+        .about("Check library health and Highlights sync prerequisites")
         .arg(bob_dir_arg())
         .arg(lib_dir_arg())
         .arg(no_hooks_arg())

@@ -10,6 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
+mod coverage;
 mod frontmatter;
 mod identity;
 mod resolve;
@@ -19,6 +20,7 @@ mod status;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use coverage::{count_zorg_records, ZorgCoverage};
 pub(crate) use frontmatter::ParsedFrontmatter;
 pub(crate) use identity::{classify_query, QueryKind};
 pub(crate) use resolve::{
@@ -418,6 +420,8 @@ fn build_row(rel: &str, under_ref: &str, contents: &str) -> RefRow {
         superseded_by: None,
         diagnostics,
         id: front_string(&front, "id"),
+        source_block: front_string(&front, "source_block"),
+        source_path: front_string(&front, "source_path"),
     }
 }
 

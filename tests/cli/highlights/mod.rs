@@ -2,6 +2,7 @@
 
 mod clip;
 mod create;
+mod doctor_library;
 mod fake_clip;
 mod listen;
 mod marker;

@@ -43,6 +43,14 @@ pub(crate) struct RefRow {
     /// Frontmatter `id`, kept out of JSON; only query resolution reads it.
     #[serde(skip_serializing)]
     pub id: Option<String>,
+    /// Frontmatter `source_block`, kept out of JSON; only the zorg-era
+    /// coverage count reads it to subtract already-mirrored records.
+    #[serde(skip_serializing)]
+    pub source_block: Option<String>,
+    /// Frontmatter `source_path`, kept out of JSON; only the zorg-era
+    /// coverage count reads it to subtract already-mirrored records.
+    #[serde(skip_serializing)]
+    pub source_path: Option<String>,
 }
 
 /// Stored identity keys for one row.
