@@ -678,7 +678,7 @@ task stays due and Ctrl+Alt+F does not advance.
    In the lanes, ask "still in this lane?": keep with Ctrl+Alt+F
    (Pending asks for an optional Work Log summary; blank Enter still
    keeps, while Escape leaves the task due), do it today with
-   Ctrl+Shift+Enter, release with Alt+N. Every answer on a landed row
+   Ctrl+Shift+Enter (picks a Pomodoro), release with Alt+N. Every answer on a landed row
    moves on to the next remaining review item in the same keystroke —
    including a resolving Task Card commit. Ctrl+Shift+M never advances: it moves the
    task and follows it to its destination note, `<C-o>` returns to the source, and the
@@ -714,7 +714,7 @@ lengthen `next_interval` to 2–3 and leave Pending at 1.
 Review outcomes, one key each (every row except "edit" stamps by
 itself): still right (Ctrl+Alt+F → next; Alt+F stays); see it less often
 (Ctrl+Shift+P `f`, then 14 / 30 / 90 → next); not now (Ctrl+Shift+P
-`1`–`4` → next); do today (Ctrl+Shift+Enter / Alt+N → next); route an
+`1`–`4` → next); do today (Ctrl+Shift+Enter picks a Pomodoro / Alt+N → next); route an
 inbox task (every non-closing Ctrl+Shift+P answer and Ctrl+Shift+Enter asks where it goes
 as the last step before writing, then answers → next); route to a
 project (Ctrl+Shift+M follows the task; ]s resumes); drop (Ctrl+Shift+P `x` → next); sequence

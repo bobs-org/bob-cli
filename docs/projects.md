@@ -1081,9 +1081,11 @@ a project filed under an inbox is not an inbox note.
 muted `Inbox` header chip (`Answers ask where this task goes first`) while
 routing is armed. Pick an action and fill in its stages as today; at the
 moment the card would write, the route picker appears instead. For
-`Ctrl+Shift+Enter`, the block-ID prompt still comes first when one is
-needed, then the route picker appears right before the link or unlink
-write. Choosing a destination performs the write and the move. `Esc` in the
+`Ctrl+Shift+Enter`, the Pomodoro picker comes first, then the block-ID prompt
+when one is needed, then the route picker appears right before the link or
+unlink write. Choosing a destination performs the write and the move. `Esc`
+in the Pomodoro picker cancels the whole `Ctrl+Shift+Enter` toggle with
+nothing written — not even a new block ID; `Esc` in the
 route picker returns to the exact Task Card surface it came from (card or
 stage, typed input intact) with nothing written, or cancels the whole
 `Ctrl+Shift+Enter` toggle with nothing written — not even a new block ID.

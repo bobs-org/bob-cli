@@ -180,7 +180,7 @@ With the review plugins enabled in Obsidian, `[S` or `]s` from outside the
 queue starts at PRE. Every gesture that answers the landed row advances the
 walk once to the next remaining item in the same keystroke: Ctrl+Enter
 completes (never crossing the PRE/POST boundary — Ctrl+Alt+F does),
-Ctrl+Alt+F keeps, Alt+N releases, Ctrl+Shift+Enter links to today, a
+Ctrl+Alt+F keeps, Alt+N releases, Ctrl+Shift+Enter picks a Pomodoro (↵ takes the current/next one), a
 resolving Task Card commit moves on. On an inbox task, every non-closing Task Card answer and
 Ctrl+Shift+Enter asks where the task goes as the last step before writing, then answers and moves there.
 Ctrl+Shift+M never advances: it follows
