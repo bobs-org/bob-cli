@@ -7,12 +7,11 @@
 use std::collections::BTreeSet;
 
 use super::identity::{
-    classify_query, normalize_doi_query, parse_arxiv_query, raw_identity_key,
+    classify_query, normalize_doi_query, parse_arxiv_query, url_query_keys,
     QueryKind,
 };
 use super::row::RefRow;
 use super::status::reading_state_rank;
-use crate::native::highlights_ref::{validate_and_clean, ArxivPaper};
 
 /// How one row matched a query.
 #[derive(
@@ -109,30 +108,7 @@ fn exact_hits(
 }
 
 fn resolve_url(rows: &[RefRow], query: &str) -> Vec<ScoredHit> {
-    let mut keys = Vec::new();
-    match validate_and_clean(query) {
-        Ok(cleaned) => {
-            keys.push(cleaned.dedupe_key);
-            if let Some(paper) = ArxivPaper::parse(query) {
-                keys.push(format!("arxiv:{}", paper.id));
-            }
-            // DOI hosts are covered through the stored `doi:` keys when the
-            // query URL parses; reuse the same host rule as stored keys.
-            if let Ok(url) = url::Url::parse(query.trim())
-                && let Some(host) = url.host_str().map(str::to_lowercase)
-                && matches!(
-                    host.strip_prefix("www.").unwrap_or(&host),
-                    "doi.org" | "dx.doi.org"
-                )
-            {
-                let path = url.path().trim_matches('/');
-                if !path.is_empty() {
-                    keys.push(format!("doi:{}", path.to_lowercase()));
-                }
-            }
-        }
-        Err(_) => keys.push(raw_identity_key(query)),
-    }
+    let keys = url_query_keys(query);
     let mut hits = rows
         .iter()
         .enumerate()
@@ -188,7 +164,11 @@ fn resolve_path(
 
 /// A path query matches the note path (vault-relative, `.md` optional, or
 /// absolute inside the vault) and, separately, `source_pdf`.
-fn path_matches(bob_dir: &std::path::Path, query: &str, target: &str) -> bool {
+pub(crate) fn path_matches(
+    bob_dir: &std::path::Path,
+    query: &str,
+    target: &str,
+) -> bool {
     let query = query.trim();
     if query == target {
         return true;

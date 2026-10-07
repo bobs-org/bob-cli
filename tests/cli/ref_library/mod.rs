@@ -1,6 +1,8 @@
 //! `bob ref` alias equivalence: the permanent `highlights` and
 //! `highlights-ref` spellings stay byte-identical to the canonical command.
 
+mod find;
+
 use crate::support::*;
 use std::fs;
 use std::path::Path;

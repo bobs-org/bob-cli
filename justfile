@@ -104,6 +104,7 @@ install-smoke:
     "${root}/bin/bob" ref --help >/dev/null
     "${root}/bin/bob" ref clip --help >/dev/null
     "${root}/bin/bob" ref create --help >/dev/null
+    "${root}/bin/bob" ref find --help >/dev/null
     "${root}/bin/bob" highlights --help >/dev/null
     "${root}/bin/bob" highlights clip --help >/dev/null
     "${root}/bin/bob" highlights create --help >/dev/null

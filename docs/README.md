@@ -26,6 +26,7 @@ For daily work, read [Capture](capture.md), [Plan and Ready caps](plan.md), and
 | [plugins.md](plugins.md) | `bob plugins` list and vault deploy |
 | [projects.md](projects.md) | `bob projects` `^prj` lifecycle and schedules |
 | [randomize.md](randomize.md) | `bob task reroll` bulk re-roll of due prioritized tasks |
+| [ref.md](ref.md) | `bob ref find` reference-library lookup: verdicts, identity, and JSON |
 | [task-dependencies.md](task-dependencies.md) | Task dependency links: Depends-On line contract and conformance vectors |
 | [task-status-hooks.md](task-status-hooks.md) | `bob task reconcile` Pomodoro-driven task status |
 | [vault-git-sync.md](vault-git-sync.md) | Git-only Bob vault sync operations, triggers, conflict copies, and bridge policy |

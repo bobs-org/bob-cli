@@ -9,11 +9,14 @@ use super::*;
 /// Grouped subcommand listing: the single source of `bob ref` help groups.
 ///
 /// Each entry is a group title plus the subcommand names it owns, in display
-/// order. Phase `find` adds the Library group alongside the pipeline group.
-pub(crate) const HELP_GROUPS: &[(&str, &[&str])] = &[(
-    "Highlights pipeline",
-    &["clip", "create", "doctor", "marker", "scan", "sync"],
-)];
+/// order.
+pub(crate) const HELP_GROUPS: &[(&str, &[&str])] = &[
+    ("Library", &["find"]),
+    (
+        "Highlights pipeline",
+        &["clip", "create", "doctor", "marker", "scan", "sync"],
+    ),
+];
 
 const REF_HELP_TEMPLATE: &str = "\
 {about-with-newline}
@@ -24,8 +27,9 @@ const REF_HELP_TEMPLATE: &str = "\
 
 const REF_AFTER_HELP: &str = "\
 Examples:
-  bob ref create <URL|PDF|MD> -L   Capture a reference and narrate it
-  bob ref scan                     Sync Highlights PDFs into reference notes
+  bob ref find https://arxiv.org/abs/1706.03762   Is this paper already in the library?
+  bob ref create <URL|PDF|MD> -L                  Capture a reference and narrate it
+  bob ref scan                                    Sync Highlights PDFs into reference notes
 ";
 
 pub(super) fn print_config_report(operation: &str, config: &Config) {
@@ -66,6 +70,7 @@ pub(crate) fn build_cli() -> ClapCommand {
 /// Every `bob ref` subcommand builder, in `HELP_GROUPS` order.
 fn all_subcommands() -> Vec<ClapCommand> {
     vec![
+        crate::native::ref_library::cli::find_command(),
         clip::command(),
         create::command(),
         doctor_command(),
@@ -291,7 +296,7 @@ pub(super) fn with_sync_args(command: ClapCommand) -> ClapCommand {
         .after_help("The first standalone /Text annotation on page 1 is treated as the marker note.")
 }
 
-pub(super) fn bob_dir_arg() -> Arg {
+pub(crate) fn bob_dir_arg() -> Arg {
     Arg::new("bob-dir")
         .long("bob-dir")
         .short('b')
@@ -311,7 +316,7 @@ pub(super) fn lib_dir_arg() -> Arg {
         )
 }
 
-pub(super) fn ref_dir_arg() -> Arg {
+pub(crate) fn ref_dir_arg() -> Arg {
     Arg::new("ref-dir")
         .long("ref-dir")
         .short('r')
@@ -320,7 +325,7 @@ pub(super) fn ref_dir_arg() -> Arg {
         .help("Reference note directory; defaults to BOB_HIGHLIGHTS_REF_DIR or ref")
 }
 
-pub(super) fn xlib_dir_arg() -> Arg {
+pub(crate) fn xlib_dir_arg() -> Arg {
     Arg::new("xlib-dir")
         .long("xlib-dir")
         .short('x')

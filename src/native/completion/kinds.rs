@@ -156,6 +156,17 @@ const TABLE: &[Entry] = &[
         arg: "output",
         kind: Kind::Files(Some("*.pdf")),
     },
+    // `bob ref find` takes free-text queries and a score floor.
+    Entry {
+        path: &["ref", "find"],
+        arg: "query",
+        kind: Kind::FreeText,
+    },
+    Entry {
+        path: &["ref", "find"],
+        arg: "min-score",
+        kind: Kind::FreeText,
+    },
     // Static choices (also served live by the engine through clap
     // possible values; the entries keep the decision explicit).
     Entry {

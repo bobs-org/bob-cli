@@ -10,9 +10,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
+pub(crate) mod cli;
 mod coverage;
+mod find;
 mod frontmatter;
 mod identity;
+mod output;
 mod resolve;
 mod row;
 mod status;
@@ -22,9 +25,13 @@ mod tests;
 
 pub(crate) use coverage::{count_zorg_records, ZorgCoverage};
 pub(crate) use frontmatter::ParsedFrontmatter;
-pub(crate) use identity::{classify_query, QueryKind};
+pub(crate) use identity::{
+    classify_query, normalize_doi_query, parse_arxiv_query, stored_identity,
+    url_query_keys, QueryKind,
+};
 pub(crate) use resolve::{
-    primary_rank, resolve_query, title_score, MatchKind, ScoredHit,
+    path_matches, primary_rank, resolve_query, title_score, MatchKind,
+    ScoredHit,
 };
 pub(crate) use row::{
     bare_parent_name, strip_wikilink_brackets, Coverage, Diagnostic,
@@ -33,7 +40,6 @@ pub(crate) use row::{
 pub(crate) use status::{decide_status, reading_state_rank};
 
 use frontmatter::FrontValue;
-use identity::stored_identity;
 
 use crate::native::env as bob_env;
 use crate::native::highlights_ref::{

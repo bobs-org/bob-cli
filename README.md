@@ -830,6 +830,7 @@ The full command contract lives in [`docs/gkeep.md`](docs/gkeep.md).
 bob ref clip <URL> [-A|--author NAME] [-b|--bob-dir PATH] [-d|--dry-run] [-f|--force] [-H|--html FILE] [-l|--lib-dir PATH] [-L|--listen] [-N|--name STEM] [-o|--output PDF] [-P|--parent NOTE] [-p|--published DATE] [-r|--ref-dir PATH] [-s|--status STATUS] [-T|--title TITLE] [-t|--ref-type DIR] [-x|--xlib-dir PATH]
 bob ref create <TARGET> [-a|--audio PATH] [-b|--bob-dir PATH] [-d|--dry-run] [-f|--force] [-i|--include-id] [-l|--lib-dir PATH] [-L|--listen] [-N|--name STEM] [-n|--no-audio] [-o|--output PDF] [-P|--parent NOTE] [-r|--ref-dir PATH] [-s|--status STATUS] [-T|--title TITLE] [-t|--ref-type DIR] [-x|--xlib-dir PATH]
 bob ref doctor [-b|--bob-dir PATH] [-l|--lib-dir PATH] [-n|--no-hooks] [-r|--ref-dir PATH] [-x|--xlib-dir PATH]
+bob ref find <QUERY>... [-b|--bob-dir PATH] [-f|--format human|json|markdown] [-i|--include-intake] [-m|--min-score SCORE] [-r|--ref-dir PATH] [-x|--xlib-dir PATH]
 bob ref marker <pdf> [-b|--bob-dir PATH] [-l|--lib-dir PATH] [-r|--ref-dir PATH] [-x|--xlib-dir PATH]
 bob ref scan [-b|--bob-dir PATH] [-d|--dry-run] [-j|--jobs N] [-l|--lib-dir PATH] [-n|--no-hooks] [-r|--ref-dir PATH] [-v|--verbose] [-w|--write-pdfs] [-x|--xlib-dir PATH]
 bob ref sync <pdf> [-b|--bob-dir PATH] [-d|--dry-run] [-l|--lib-dir PATH] [-p|--prefer marker|frontmatter] [-r|--ref-dir PATH] [-w|--write-pdf] [-x|--xlib-dir PATH]
@@ -874,6 +875,11 @@ Highlights annotations into Obsidian reference notes.
   of the concise report.
 - `sync <pdf>` updates one reference note from the page-1 marker and sidecar.
 - `marker <pdf>` inspects that marker without writing.
+- `find <QUERY>...` looks up URLs, arXiv IDs, DOIs, paths, stems, or titles
+  in the reference library with an `in_library`, `in_intake`, `possible`,
+  or `not_found` verdict per query. `-` reads one query per line from
+  stdin, `-i` also checks queued intake PDFs, and `-m` floors the title
+  scores. The lookup contract lives in [`docs/ref.md`](docs/ref.md).
 - `doctor` checks vault paths, intake, sidecars, markers, Git, pandoc, `curl`,
   the web-clip chain (`uv`, adapter, browser, headed fallback), the
   `listen_command` row, and optional `ob` without writing. Pass
@@ -889,8 +895,9 @@ Marker `status` values are `ready`, `next`, `wip`, `read`, `abandoned`, and
 
 The full contract and MacBook setup guide live in
 [`docs/highlights-ref-sync.md`](docs/highlights-ref-sync.md); the web-capture
-contract lives in [`docs/highlights-clip.md`](docs/highlights-clip.md) and the
-create-target contract in [`docs/highlights-create.md`](docs/highlights-create.md).
+contract lives in [`docs/highlights-clip.md`](docs/highlights-clip.md), the
+create-target contract in [`docs/highlights-create.md`](docs/highlights-create.md),
+and the library-lookup contract in [`docs/ref.md`](docs/ref.md).
 
 ## Nightly maintenance
 
@@ -1313,6 +1320,7 @@ blocks point at `done/..._done#^block-id`, and the vault Git commit was pushed.
 | Highlights PDF intake and reference notes | [`docs/highlights-ref-sync.md`](docs/highlights-ref-sync.md) |
 | `bob ref create` Markdown, PDF, and URL targets | [`docs/highlights-create.md`](docs/highlights-create.md) |
 | Web article capture into Highlights intake PDFs | [`docs/highlights-clip.md`](docs/highlights-clip.md) |
+| `bob ref find` reference-library lookup | [`docs/ref.md`](docs/ref.md) |
 | Obsidian Sync folder exclusion runbook (historical) | [`docs/obsidian-sync-exclusions.md`](docs/obsidian-sync-exclusions.md) |
 | Bob vault Git sync runbook | [`docs/vault-git-sync.md`](docs/vault-git-sync.md) |
 | Custom plugin list and vault deploy | [`docs/plugins.md`](docs/plugins.md) |

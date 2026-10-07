@@ -31,7 +31,7 @@ use super::{
 /// A dedupe failure: the message goes after `error:`, the hint after
 /// `hint:`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct SourcesError {
+pub(crate) struct SourcesError {
     pub(super) message: String,
     pub(super) hint: Option<String>,
 }
@@ -53,6 +53,12 @@ impl SourcesError {
 impl From<CommandError> for SourcesError {
     fn from(error: CommandError) -> Self {
         Self::new(error.message)
+    }
+}
+
+impl std::fmt::Display for SourcesError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
     }
 }
 
@@ -216,6 +222,103 @@ fn collect_intake_sources(
                 });
             }
         }
+    }
+    Ok(())
+}
+
+/// One queued intake PDF carrying a marker `source_url` or `url`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct IntakeRecord {
+    /// The intake PDF path, as found under the intake directory.
+    pub path: PathBuf,
+    /// The marker `source_url` (or `url`) the record was filed under.
+    pub source_url: String,
+    /// The marker `title`, when the marker carries one.
+    pub title: Option<String>,
+    /// The marker `status`, when the marker carries one.
+    pub status: Option<String>,
+}
+
+/// Queued intake records for read-only lookups such as `bob ref find -i`:
+/// every intake PDF whose marker parses and carries a `source_url` or
+/// `url`. Returns `None` when the intake directory does not exist, so
+/// callers report `unavailable` coverage instead of failing.
+pub(crate) fn collect_intake_records(
+    xlib_dir: &Path,
+) -> Option<std::result::Result<Vec<IntakeRecord>, SourcesError>> {
+    if !xlib_dir.is_dir() {
+        return None;
+    }
+    let mut records = Vec::new();
+    match collect_intake_records_inner(xlib_dir, &mut records) {
+        Ok(()) => {
+            records.sort_by(|a, b| a.path.cmp(&b.path));
+            Some(Ok(records))
+        }
+        Err(error) => Some(Err(error)),
+    }
+}
+
+fn collect_intake_records_inner(
+    dir: &Path,
+    records: &mut Vec<IntakeRecord>,
+) -> std::result::Result<(), SourcesError> {
+    let entries = fs::read_dir(dir).map_err(|error| {
+        SourcesError::new(format!("scan {}: {error}", dir.display()))
+    })?;
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            SourcesError::new(format!("scan {}: {error}", dir.display()))
+        })?;
+        let path = entry.path();
+        let file_type = entry.file_type().map_err(|error| {
+            SourcesError::new(format!("stat {}: {error}", path.display()))
+        })?;
+        if file_type.is_dir() {
+            if path
+                .file_name()
+                .is_none_or(|name| name != std::ffi::OsStr::new(".git"))
+            {
+                collect_intake_records_inner(&path, records)?;
+            }
+            continue;
+        }
+        if !file_type.is_file()
+            || !path
+                .extension()
+                .and_then(std::ffi::OsStr::to_str)
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("pdf"))
+        {
+            continue;
+        }
+        let Ok(marker) = read_pdf_marker(&path) else {
+            continue;
+        };
+        let Ok(projection) = parse_marker(&marker.contents) else {
+            continue;
+        };
+        let source_url: Option<String> = ["source_url", "url"]
+            .iter()
+            .filter_map(|key| {
+                projection.get(*key).and_then(|value| value.as_string())
+            })
+            .next()
+            .map(str::to_string);
+        let Some(source_url) = source_url else {
+            continue;
+        };
+        records.push(IntakeRecord {
+            path,
+            source_url,
+            title: projection
+                .get("title")
+                .and_then(|value| value.as_string())
+                .map(str::to_string),
+            status: projection
+                .get("status")
+                .and_then(|value| value.as_string())
+                .map(str::to_string),
+        });
     }
     Ok(())
 }

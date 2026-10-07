@@ -117,6 +117,38 @@ pub(crate) fn classify_query(raw: &str) -> QueryKind {
     QueryKind::Title
 }
 
+/// The identity keys a URL query looks up: the cleaned dedupe key plus
+/// an `arxiv:<id>` key for arXiv URLs and a `doi:<doi>` key for DOI URLs.
+/// A value that fails validation yields its opaque `raw:` key instead.
+/// This is the query side of [`stored_identity`].
+pub(crate) fn url_query_keys(raw: &str) -> Vec<String> {
+    let mut keys = Vec::new();
+    match validate_and_clean(raw) {
+        Ok(cleaned) => {
+            keys.push(cleaned.dedupe_key);
+            if let Some(paper) = ArxivPaper::parse(raw) {
+                keys.push(format!("arxiv:{}", paper.id));
+            }
+            // DOI hosts are covered through the stored `doi:` keys when the
+            // query URL parses; reuse the same host rule as stored keys.
+            if let Ok(url) = url::Url::parse(raw.trim())
+                && let Some(host) = url.host_str().map(str::to_lowercase)
+                && matches!(
+                    host.strip_prefix("www.").unwrap_or(&host),
+                    "doi.org" | "dx.doi.org"
+                )
+            {
+                let path = url.path().trim_matches('/');
+                if !path.is_empty() {
+                    keys.push(format!("doi:{}", path.to_lowercase()));
+                }
+            }
+        }
+        Err(_) => keys.push(raw_identity_key(raw)),
+    }
+    keys
+}
+
 /// The versionless arXiv base id for a bare id or `arxiv:`-prefixed query,
 /// or `None` when the query is not an arXiv id. The id grammar mirrors the
 /// canonical [`ArxivPaper`] path grammar (new style plus old archive style,

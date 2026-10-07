@@ -87,7 +87,7 @@ use sync::*;
 use text::*;
 use workdir::*;
 
-const COMMAND_NAME: &str = "bob ref";
+pub(crate) const COMMAND_NAME: &str = "bob ref";
 const DEFAULT_LIB_DIR: &str = "lib";
 const DEFAULT_REF_DIR: &str = "ref";
 const DEFAULT_XLIB_DIR: &str = "xlib";
@@ -130,6 +130,7 @@ pub(crate) const MANAGED_BODY_END: &str = "<!-- highlights:end -->";
 // Narrow `index`-phase seams: the sibling `ref_library` module builds its
 // read-only rows on these without exposing task-line or projection types.
 pub(crate) use arxiv::ArxivPaper;
+pub(crate) use cli::{bob_dir_arg, ref_dir_arg, xlib_dir_arg};
 pub(crate) use clip_url::{humanize_stem, validate_and_clean};
 pub(crate) use frontmatter::split_frontmatter;
 pub(crate) use marker::{
@@ -139,6 +140,7 @@ pub(crate) use region::{
     is_marker_mirror_text, parse_managed_region, split_note_body,
     RegionBlockKind,
 };
+pub(crate) use sources::{collect_intake_records, IntakeRecord};
 const TASKS_SECTION_TITLE: &str = "Tasks";
 const TASKS_SECTION_HEADING: &str = "## Tasks";
 const PDF_TASK_BLOCK_ID: &str = "^ref";
@@ -210,6 +212,9 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
     match matches.subcommand() {
         Some(("clip", sub_matches)) => clip::run(sub_matches),
         Some(("create", sub_matches)) => create::run(sub_matches),
+        Some(("find", sub_matches)) => {
+            crate::native::ref_library::cli::run_find(sub_matches)
+        }
         Some(("scan", sub_matches)) => {
             run_scan(sub_matches, no_hooks_flag(&matches, sub_matches))
         }
