@@ -158,11 +158,17 @@ def content_of(note: object) -> dict:
     return {"title": title, "text": getattr(note, "text", "") or "", "items": []}
 
 
-def decide_archive(note: object | None, expect: dict) -> tuple[str, bool]:
+def decide_archive(
+    note: object | None,
+    expect: dict,
+    expect_attachments: int | None = None,
+) -> tuple[str, bool]:
     """Decide one note's archive outcome before syncing.
 
     Returns ``(status, should_archive)`` where ``status`` is ``"proceed"``
     when the note is ready to archive, else a final per-note status.
+    When ``expect_attachments`` is not ``None``, a live blob count that
+    differs also refuses the archive with ``"changed"``.
     """
     if note is None:
         return ("missing", False)
@@ -172,7 +178,36 @@ def decide_archive(note: object | None, expect: dict) -> tuple[str, bool]:
         return ("already_archived", False)
     if content_of(note) != expect:
         return ("changed", False)
+    if expect_attachments is not None:
+        live = len(getattr(note, "blobs", []) or [])
+        if live != expect_attachments:
+            return ("changed", False)
     return ("proceed", True)
+
+
+def shared_links(note: object) -> list[dict]:
+    """Shared-link previews from ``note.annotations.links`` (WebLink).
+
+    Tolerates missing annotations: anything without a ``url`` is
+    skipped, and a missing ``annotations`` attribute gives ``[]``.
+    """
+    annotations = getattr(note, "annotations", None)
+    raw = getattr(annotations, "links", None) if annotations is not None else None
+    if raw is None:
+        return []
+    try:
+        entries = list(raw)
+    except TypeError:
+        return []
+    links = []
+    for entry in entries:
+        url = getattr(entry, "url", None) or ""
+        if not url:
+            continue
+        links.append(
+            {"url": url, "title": getattr(entry, "title", None) or ""}
+        )
+    return links
 
 
 def _iso(moment: object) -> str | None:
@@ -230,6 +265,7 @@ def serialize_note(note: object) -> dict:
         "shared": shared,
         "labels": labels,
         "attachments": attachments,
+        "links": shared_links(note),
         "created": _iso(getattr(stamps, "created", None)),
         "edited": edited,
         "url": getattr(note, "url", None),
@@ -405,6 +441,16 @@ def op_archive(request: dict) -> dict:
                 "protocol",
                 "each archive target needs an id and an expect object",
             )
+        expect_attachments = target.get("expect_attachments")
+        if expect_attachments is not None and (
+            isinstance(expect_attachments, bool)
+            or not isinstance(expect_attachments, int)
+            or expect_attachments < 0
+        ):
+            raise AdapterFail(
+                "protocol",
+                "expect_attachments must be a non-negative integer",
+            )
     try:
         keep, secrets = connect(auth)
         try:
@@ -412,7 +458,9 @@ def op_archive(request: dict) -> dict:
             results: list[dict] = []
             for target in targets:
                 note = keep.get(target["id"])  # type: ignore[union-attr]
-                status, proceed = decide_archive(note, target["expect"])
+                status, proceed = decide_archive(
+                    note, target["expect"], target.get("expect_attachments")
+                )
                 if proceed:
                     note.archived = True  # type: ignore[union-attr]
                     pending.append((target["id"], note))
@@ -632,6 +680,64 @@ def self_test() -> int:
         decide_archive(listing, expect) == ("already_archived", False),
     )
     check("decide_archive missing", decide_archive(None, expect)[0] == "missing")
+    guarded = StubList("Hardware store", items)
+    guarded_expect = content_of(guarded)
+    check(
+        "decide_archive attachment match",
+        decide_archive(guarded, guarded_expect, 0) == ("proceed", True),
+    )
+    check(
+        "decide_archive attachment mismatch",
+        decide_archive(guarded, guarded_expect, 1) == ("changed", False),
+    )
+    check(
+        "decide_archive no attachment guard",
+        decide_archive(guarded, guarded_expect) == ("proceed", True),
+    )
+
+    class StubLink:
+        def __init__(self, url, title=""):
+            self.url = url
+            self.title = title
+
+    class StubAnnotations:
+        def __init__(self, links):
+            self.links = links
+
+    class StubShared:
+        def __init__(self, links=(), blobs=()):
+            self.id = "shared-1"
+            self.title = ""
+            self.text = "https://example.com/post"
+            self.items = []
+            self.blobs = list(blobs)
+            self.pinned = False
+            self.archived = False
+            self.trashed = False
+            self.deleted = False
+            self.labels = []
+            self.collaborators = []
+            self.annotations = StubAnnotations(list(links))
+            self.url = None
+            self.timestamps = None
+
+    linked = StubShared(
+        [StubLink("https://example.com/post", "Example Post")]
+    )
+    serialized = serialize_note(linked)
+    check(
+        "serialize_note links",
+        serialized["links"]
+        == [{"url": "https://example.com/post", "title": "Example Post"}],
+    )
+    check(
+        "serialize_note no annotations",
+        serialize_note(StubShared())["links"] == [],
+    )
+    check(
+        "serialize_note skips empty urls",
+        serialize_note(StubShared([StubLink("")]))["links"] == [],
+    )
 
     try:
         validate_request({"protocol": 999, "op": "ping"})

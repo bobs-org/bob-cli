@@ -203,12 +203,15 @@ fn scan_file(bob_dir: &Path, path: &Path, entries: &mut Vec<LedgerEntry>) {
     }
 }
 
-/// A journal event. Only `written` feeds the planner; `archived` and
-/// `archive_refused` are audit history for `pull`.
+/// A journal event. `written` and `ref_created` feed the planner;
+/// `archived` and `archive_refused` are audit history for `pull`. An
+/// older bob reading a newer journal sees `ref_created` lines as
+/// corrupt and warns (they count toward the skipped-line total).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum JournalEvent {
     Written,
+    RefCreated,
     Archived,
     ArchiveRefused,
 }
@@ -227,6 +230,9 @@ pub(super) struct JournalRecord {
     pub(super) commit: Option<String>,
     #[serde(default)]
     pub(super) status: Option<String>,
+    /// The clipped URL for `ref_created` records.
+    #[serde(default)]
+    pub(super) url: Option<String>,
 }
 
 /// The append-only journal plus the corrupt-line count from the last read.
@@ -338,6 +344,15 @@ impl Journal {
     pub(super) fn has_id(&self, id: &str) -> bool {
         self.records.iter().any(|record| {
             record.event == JournalEvent::Written && record.id == id
+        })
+    }
+
+    /// Whether a `ref_created` record covers the exact `(id, fp)` pair.
+    pub(super) fn has_ref(&self, id: &str, fp: &str) -> bool {
+        self.records.iter().any(|record| {
+            record.event == JournalEvent::RefCreated
+                && record.id == id
+                && record.fp == fp
         })
     }
 }
@@ -618,6 +633,7 @@ mod tests {
                 path: "gkeep_inbox.md".to_string(),
                 commit: Some("4e1f2a9".to_string()),
                 status: None,
+                url: None,
             },
             JournalRecord {
                 ts: "2026-09-28T00:00:02Z".to_string(),
@@ -628,6 +644,7 @@ mod tests {
                 path: "gkeep_inbox.md".to_string(),
                 commit: None,
                 status: Some("archived".to_string()),
+                url: None,
             },
         ];
         Journal::append(&path, &records).expect("append");
@@ -652,13 +669,28 @@ mod tests {
             );
         }
 
-        let journal = Journal::read(&path).expect("read back");
+        let mut journal = Journal::read(&path).expect("read back");
         assert_eq!(journal.skipped, 0);
         assert_eq!(journal.records.len(), 3);
         assert_eq!(journal.records[0], records[0]);
         assert_eq!(journal.records[2], records[0]);
-        // Only `written` feeds the planner.
+        // Only `written` and `ref_created` feed the planner.
         assert!(journal.has("n1", "0123456789ab"));
+        assert!(!journal.has_ref("n1", "0123456789ab"));
+        journal.records.push(JournalRecord {
+            ts: "2026-09-28T00:00:03Z".to_string(),
+            event: JournalEvent::RefCreated,
+            id: "n1".to_string(),
+            ref_: "abc1234".to_string(),
+            fp: "0123456789ab".to_string(),
+            path: "xlib/blogs/post.pdf".to_string(),
+            commit: None,
+            status: None,
+            url: Some("https://example.com/post".to_string()),
+        });
+        assert!(journal.has_ref("n1", "0123456789ab"));
+        assert!(!journal.has_ref("n1", "ffffffffffff"));
+        assert!(!journal.has_ref("n2", "0123456789ab"));
         let archived_only = Journal {
             records: vec![records[1].clone()],
             skipped: 0,
@@ -698,6 +730,7 @@ mod tests {
             path: "gkeep_inbox.md".to_string(),
             commit: None,
             status: None,
+            url: None,
         }];
         Journal::append(&path, &records).expect("append");
         let journal = Journal::read(&path).expect("read back");

@@ -98,6 +98,13 @@ impl GkeepEnv {
 
     /// A `bob` command isolated to this vault and config, with the
     /// adapter override removed unless a test sets it.
+    ///
+    /// Hermetic clip defaults (mirroring `tests/cli/support.rs`):
+    /// fake DNS for the fetch resolved-address check, a missing
+    /// web-clip adapter, and a failing curl stand-in. Tests that clip
+    /// override `BOB_HIGHLIGHTS_CURL`/`BOB_WEB_CLIP_ADAPTER` per case;
+    /// offline tests (dry runs, `list`) override them with sentinels
+    /// that record any invocation.
     pub(crate) fn command(&self) -> Command {
         let mut command = Command::new(BOB_BIN);
         command
@@ -108,7 +115,13 @@ impl GkeepEnv {
                 "BOB_VAULT_SYNC_LOCK_FILE",
                 self.dir.path().join("bob_sync.lock"),
             )
-            .env("XDG_STATE_HOME", self.dir.path().join("state"));
+            .env("XDG_STATE_HOME", self.dir.path().join("state"))
+            .env("BOB_HIGHLIGHTS_RESOLVE", "*=203.0.113.1")
+            .env(
+                "BOB_WEB_CLIP_ADAPTER",
+                "/definitely/missing/bob-cli-test-web-clip-adapter",
+            )
+            .env("BOB_HIGHLIGHTS_CURL", "/bin/false");
         command
     }
 
@@ -322,6 +335,7 @@ pub(crate) struct NoteBuilder {
     shared: bool,
     labels: Vec<String>,
     attachments: Vec<(String, Option<String>)>,
+    links: Vec<(String, String)>,
     created: String,
     edited: Option<String>,
     url: Option<String>,
@@ -340,6 +354,7 @@ pub(crate) fn note(title: &str) -> NoteBuilder {
         shared: false,
         labels: Vec::new(),
         attachments: Vec::new(),
+        links: Vec::new(),
         created: "2026-09-27T21:14:03Z".to_string(),
         edited: None,
         url: None,
@@ -421,6 +436,12 @@ impl NoteBuilder {
         self
     }
 
+    /// Add a shared-link preview (`note.annotations.links` entry).
+    pub(crate) fn link(mut self, url: &str, title: &str) -> Self {
+        self.links.push((url.to_string(), title.to_string()));
+        self
+    }
+
     /// The `KeepContent` object for this note.
     pub(crate) fn content_json(&self) -> serde_json::Value {
         serde_json::json!({
@@ -448,6 +469,9 @@ impl NoteBuilder {
             "labels": self.labels,
             "attachments": self.attachments.iter().map(|(kind, ocr)| {
                 serde_json::json!({"kind": kind, "extracted_text": ocr})
+            }).collect::<Vec<_>>(),
+            "links": self.links.iter().map(|(url, title)| {
+                serde_json::json!({"url": url, "title": title})
             }).collect::<Vec<_>>(),
             "created": self.created,
             "edited": self.edited.clone().unwrap_or_else(|| self.created.clone()),

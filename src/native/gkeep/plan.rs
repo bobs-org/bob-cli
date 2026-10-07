@@ -12,6 +12,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::ledger::{Journal, Ledger};
 use super::model::{note_ref, KeepNote};
 use super::GkeepError;
+use crate::native::url_routing::{
+    classify_token, RoutingEntry, UrlIntent, UrlRoutingPolicy,
+};
 
 /// Planner inputs: the pull/list selection flags.
 #[derive(Debug, Clone, Default)]
@@ -22,6 +25,9 @@ pub(super) struct PlanOptions {
     pub(super) ids: Vec<String>,
     /// Take only the first N actionable notes, oldest first.
     pub(super) limit: Option<usize>,
+    /// URL routing policy for the R5 URL-only rule. `None` disables
+    /// reference classification (`-R`, or routing off in config).
+    pub(super) routing: Option<UrlRoutingPolicy>,
 }
 
 /// The classification of one Keep note.
@@ -61,6 +67,7 @@ pub(super) enum PlanAction {
     Write,
     WriteRevision,
     ArchiveOnly,
+    CreateRef,
     Skip,
 }
 
@@ -70,6 +77,7 @@ impl PlanAction {
             Self::Write => "write",
             Self::WriteRevision => "write_revision",
             Self::ArchiveOnly => "archive_only",
+            Self::CreateRef => "create_ref",
             Self::Skip => "skip",
         }
     }
@@ -84,6 +92,8 @@ pub(super) struct PlannedNote {
     pub(super) action: PlanAction,
     /// Why a skipped note stays in Keep (`pinned`, `shared`, …).
     pub(super) skip_reason: Option<String>,
+    /// The R5 URL-only intent when `action` is `CreateRef`.
+    pub(super) ref_intent: Option<UrlIntent>,
 }
 
 /// The classified plan plus per-state counts.
@@ -180,6 +190,7 @@ fn classify_one(
         state: NoteState::New,
         action: PlanAction::Write,
         skip_reason: None,
+        ref_intent: None,
     };
     let skip = |state: NoteState| {
         let mut skipped = planned.clone();
@@ -224,7 +235,106 @@ fn classify_one(
         planned.action = PlanAction::WriteRevision;
         return planned;
     }
+    // A `ref_created` journal event for the same `(id, fp)` means the
+    // link already clipped: archive only. A `ref_created` event for
+    // the same id with a different fp re-classifies normally below.
+    if journal.has_ref(&note.id, &fp) {
+        planned.state = NoteState::Pending;
+        planned.action = PlanAction::ArchiveOnly;
+        return planned;
+    }
+    if let Some(policy) = opts.routing.as_ref()
+        && let Some(intent) = url_only_intent(note, policy)
+    {
+        planned.action = PlanAction::CreateRef;
+        planned.ref_intent = Some(intent);
+    }
     planned
+}
+
+/// The R5 URL-only rule: the note holds exactly one bare link and
+/// nothing else, so a pull clips it into the reading queue instead of
+/// writing a task. Returns the link's intent when every condition
+/// holds: a text note with no attachments, not shared (even with
+/// `-S`), either an empty title with a single-token body or an empty
+/// body with a single-token title (a page title equal to the `WebLink`
+/// title also counts), a classifying token, and an admitting policy.
+pub(super) fn url_only_intent(
+    note: &KeepNote,
+    policy: &UrlRoutingPolicy,
+) -> Option<UrlIntent> {
+    if note.kind != super::model::KeepNoteKind::Note {
+        return None;
+    }
+    if !note.attachments.is_empty() {
+        return None;
+    }
+    if note.shared {
+        return None;
+    }
+    if !note.content.items.is_empty() {
+        return None;
+    }
+    let title = note.content.title.trim();
+    let body = note.content.text.trim();
+    let token = if body.is_empty() {
+        if title.is_empty() {
+            return None;
+        }
+        title
+    } else {
+        if body.chars().any(char::is_whitespace) {
+            return None;
+        }
+        if !title.is_empty()
+            && strip_brackets(title) != strip_brackets(body)
+            && !link_title_matches(note, title, body)
+        {
+            return None;
+        }
+        body
+    };
+    let intent = classify_token(token)?;
+    if !policy.admits(&intent, RoutingEntry::Gkeep) {
+        return None;
+    }
+    Some(intent)
+}
+
+/// Whether `title` equals the title of a `links` entry whose URL has
+/// `body`'s dedupe key. Both titles compare after casefolding and
+/// collapsing whitespace.
+fn link_title_matches(note: &KeepNote, title: &str, body: &str) -> bool {
+    let want = fold_title(title);
+    if want.is_empty() {
+        return false;
+    }
+    let body_key = classify_token(body).map(|intent| intent.dedupe_key);
+    let Some(body_key) = body_key else {
+        return false;
+    };
+    note.links.iter().any(|link| {
+        fold_title(&link.title) == want
+            && classify_token(&link.url)
+                .is_some_and(|intent| intent.dedupe_key == body_key)
+    })
+}
+
+/// Lowercase with whitespace runs collapsed, for link-title matching.
+fn fold_title(text: &str) -> String {
+    text.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+/// Strip one optional `<…>` wrapper.
+fn strip_brackets(token: &str) -> &str {
+    if token.starts_with('<') && token.ends_with('>') && token.len() >= 2 {
+        &token[1..token.len() - 1]
+    } else {
+        token
+    }
 }
 
 /// No title, text, items, or attachments. Attachments count even when
@@ -367,6 +477,7 @@ mod tests {
             shared: false,
             labels: Vec::new(),
             attachments: Vec::new(),
+            links: Vec::new(),
             created: created.to_string(),
             edited: created.to_string(),
             url: None,
@@ -392,6 +503,7 @@ mod tests {
             path: "gkeep_inbox.md".to_string(),
             commit: None,
             status: None,
+            url: None,
         }
     }
 
@@ -498,6 +610,241 @@ mod tests {
         let plan =
             classify(std::slice::from_ref(&blank), &ledger, &journal, &opts);
         assert_eq!(states(&plan), vec![("n1", "empty", "skip")]);
+    }
+
+    fn url_note(id: &str, title: &str, text: &str) -> KeepNote {
+        let mut built = note(id, "2026-09-27T21:14:03Z");
+        built.content.title = title.to_string();
+        built.content.text = text.to_string();
+        built
+    }
+
+    fn routed_opts() -> PlanOptions {
+        PlanOptions {
+            routing: Some(UrlRoutingPolicy::default()),
+            ..PlanOptions::default()
+        }
+    }
+
+    fn ref_created(id: &str, fp: &str) -> JournalRecord {
+        JournalRecord {
+            ts: "2026-09-28T00:00:00Z".to_string(),
+            event: JournalEvent::RefCreated,
+            id: id.to_string(),
+            ref_: note_ref(id),
+            fp: fp.to_string(),
+            path: "xlib/blogs/post.pdf".to_string(),
+            commit: None,
+            status: None,
+            url: Some("https://example.com/post".to_string()),
+        }
+    }
+
+    #[test]
+    fn url_only_body_note_becomes_create_ref() {
+        let (ledger, journal, _) = empty_plan();
+        let routed = routed_opts();
+        let opts = routed.clone();
+        let cases = [
+            ("body url", "", "https://example.com/post"),
+            ("title url", "https://example.com/post", ""),
+            (
+                "same title and body",
+                "https://example.com/post",
+                "https://example.com/post",
+            ),
+            ("bracketed", "", "<https://example.com/post>"),
+            ("arxiv", "", "https://arxiv.org/abs/2401.01234"),
+            ("pdf", "", "https://example.com/paper.pdf"),
+        ];
+        for (id, title, text) in cases {
+            let built = url_note(id, title, text);
+            assert!(
+                url_only_intent(&built, opts.routing.as_ref().expect("policy"))
+                    .is_some(),
+                "{id} matches R5"
+            );
+            let plan = classify(
+                std::slice::from_ref(&built),
+                &ledger,
+                &journal,
+                &routed,
+            );
+            assert_eq!(
+                states(&plan),
+                vec![(id, "new", "create_ref")],
+                "{id} classifies"
+            );
+            assert_eq!(
+                plan.notes[0].ref_intent.as_ref().expect("intent").cleaned,
+                if text.is_empty() {
+                    title
+                        .trim()
+                        .trim_start_matches('<')
+                        .trim_end_matches('>')
+                        .to_string()
+                } else {
+                    text.trim()
+                        .trim_start_matches('<')
+                        .trim_end_matches('>')
+                        .to_string()
+                },
+            );
+        }
+    }
+
+    #[test]
+    fn url_only_page_title_matching_link_title_becomes_create_ref() {
+        let (ledger, journal, _) = empty_plan();
+        let routed = routed_opts();
+        let mut built =
+            url_note("n1", "Example Post", "https://example.com/post");
+        built.links.push(super::super::model::KeepLink {
+            url: "https://example.com/post".to_string(),
+            title: "  example   POST ".to_string(),
+        });
+        let plan =
+            classify(std::slice::from_ref(&built), &ledger, &journal, &routed);
+        assert_eq!(states(&plan), vec![("n1", "new", "create_ref")]);
+    }
+
+    #[test]
+    fn non_url_only_notes_stay_tasks() {
+        let (ledger, journal, _) = empty_plan();
+        let routed = routed_opts();
+        let mut cases: Vec<(&str, KeepNote)> = vec![
+            (
+                "authored",
+                url_note("authored", "My take", "https://example.com/post"),
+            ),
+            (
+                "two",
+                url_note(
+                    "two",
+                    "",
+                    "https://example.com/a\nhttps://example.com/b",
+                ),
+            ),
+            (
+                "comment",
+                url_note("comment", "", "https://example.com/post nice"),
+            ),
+            (
+                "excluded",
+                url_note("excluded", "", "https://www.youtube.com/watch?v=x"),
+            ),
+            ("corp", url_note("corp", "", "http://go/x")),
+            ("ip", url_note("ip", "", "http://10.0.0.1/a")),
+        ];
+        let mut list = url_note("list", "", "https://example.com/post");
+        list.kind = KeepNoteKind::List;
+        cases.push(("list", list));
+        let mut attached = url_note("attached", "", "https://example.com/post");
+        attached.attachments.push(super::super::model::Attachment {
+            kind: super::super::model::AttachmentKind::Image,
+            extracted_text: None,
+        });
+        cases.push(("attached", attached));
+        for (id, built) in &cases {
+            assert!(
+                url_only_intent(
+                    built,
+                    routed.routing.as_ref().expect("policy")
+                )
+                .is_none(),
+                "{id} is not R5"
+            );
+            let plan = classify(
+                std::slice::from_ref(built),
+                &ledger,
+                &journal,
+                &routed,
+            );
+            assert_eq!(
+                states(&plan),
+                vec![(*id, "new", "write")],
+                "{id} stays a task"
+            );
+        }
+        // Shared notes stay tasks even with `-S`.
+        let mut shared = url_note("shared", "", "https://example.com/post");
+        shared.shared = true;
+        let mut shared_opts = routed_opts();
+        shared_opts.include_shared = true;
+        let plan = classify(
+            std::slice::from_ref(&shared),
+            &ledger,
+            &journal,
+            &shared_opts,
+        );
+        assert_eq!(states(&plan), vec![("shared", "new", "write")]);
+        // Pinned notes with `-p` follow the rule like any other note.
+        let mut pinned = url_note("pinned", "", "https://example.com/post");
+        pinned.pinned = true;
+        let mut pinned_opts = routed_opts();
+        pinned_opts.include_pinned = true;
+        let plan = classify(
+            std::slice::from_ref(&pinned),
+            &ledger,
+            &journal,
+            &pinned_opts,
+        );
+        assert_eq!(states(&plan), vec![("pinned", "new", "create_ref")]);
+        // `-R` keeps URL notes as tasks.
+        let url = url_note("norouting", "", "https://example.com/post");
+        let (ledger, journal, off) = empty_plan();
+        let plan =
+            classify(std::slice::from_ref(&url), &ledger, &journal, &off);
+        assert_eq!(states(&plan), vec![("norouting", "new", "write")]);
+        // A `capture: false` policy keeps gkeep callers unaffected only
+        // when the gkeep toggle is off; capture-off still clips in Keep.
+        let capture_off = UrlRoutingPolicy {
+            capture: false,
+            ..UrlRoutingPolicy::default()
+        };
+        let url = url_note("captureoff", "", "https://example.com/post");
+        assert!(url_only_intent(&url, &capture_off).is_some());
+        let gkeep_off = UrlRoutingPolicy {
+            gkeep: false,
+            ..UrlRoutingPolicy::default()
+        };
+        assert!(url_only_intent(&url, &gkeep_off).is_none());
+    }
+
+    #[test]
+    fn ref_created_journal_drives_archive_only() {
+        let built = url_note("n1", "", "https://example.com/post");
+        let fp = built.content.fingerprint();
+        let (ledger, mut journal, _) = empty_plan();
+        let routed = routed_opts();
+        journal.records.push(ref_created("n1", &fp));
+        let plan =
+            classify(std::slice::from_ref(&built), &ledger, &journal, &routed);
+        assert_eq!(states(&plan), vec![("n1", "pending", "archive_only")]);
+        // Same id with a different fp re-classifies normally.
+        let (ledger, mut journal, _) = empty_plan();
+        journal.records.push(ref_created("n1", "ffffffffffff"));
+        let plan =
+            classify(std::slice::from_ref(&built), &ledger, &journal, &routed);
+        assert_eq!(states(&plan), vec![("n1", "new", "create_ref")]);
+        // Ledger hits keep today's behavior for URL notes.
+        let (mut ledger, journal, _) = empty_plan();
+        ledger.entries.push(entry("n1", &fp));
+        let plan =
+            classify(std::slice::from_ref(&built), &ledger, &journal, &routed);
+        assert_eq!(states(&plan), vec![("n1", "pending", "archive_only")]);
+    }
+
+    #[test]
+    fn create_ref_counts_as_actionable_for_limit() {
+        let (ledger, journal, _) = empty_plan();
+        let mut routed = routed_opts();
+        routed.limit = Some(1);
+        let first = url_note("n1", "", "https://example.com/a");
+        let second = url_note("n2", "", "https://example.com/b");
+        let plan = classify(&[first, second], &ledger, &journal, &routed);
+        assert_eq!(plan.notes.len(), 1);
+        assert_eq!(states(&plan), vec![("n1", "new", "create_ref")]);
     }
 
     #[test]

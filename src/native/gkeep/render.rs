@@ -31,13 +31,25 @@ pub(super) fn render_note(
     indent: &str,
     revision: bool,
 ) -> RenderedBlock {
-    render_note_in(note, indent, revision, &chrono::Local)
+    render_note_in(note, indent, revision, None, &chrono::Local)
+}
+
+/// Render `note` with one extra child (already escaped) placed just
+/// before the `Source:` line: the permanent clip-failure fallback.
+pub(super) fn render_note_with_fallback(
+    note: &KeepNote,
+    indent: &str,
+    revision: bool,
+    fallback: &str,
+) -> RenderedBlock {
+    render_note_in(note, indent, revision, Some(fallback), &chrono::Local)
 }
 
 fn render_note_in<Tz: chrono::TimeZone>(
     note: &KeepNote,
     indent: &str,
     revision: bool,
+    extra_before_source: Option<&str>,
     tz: &Tz,
 ) -> RenderedBlock
 where
@@ -68,6 +80,9 @@ where
         for ocr in ocr_children(note) {
             lines.push(format!("{grandchild_prefix}- {ocr}"));
         }
+    }
+    if let Some(extra) = extra_before_source {
+        lines.push(format!("{child_prefix}- {extra}"));
     }
     lines.push(format!(
         "{child_prefix}- {}",
@@ -537,6 +552,7 @@ mod tests {
             shared: false,
             labels: Vec::new(),
             attachments: Vec::new(),
+            links: Vec::new(),
             created: "2026-09-27T21:14:03Z".to_string(),
             edited: "2026-09-27T21:14:03Z".to_string(),
             url: Some(
@@ -570,7 +586,7 @@ mod tests {
         note.content.title = "Call dentist about crown".to_string();
         note.content.text = "They close at 5 on Fridays".to_string();
 
-        let block = render_note_in(&note, "\t", false, &chrono::Utc);
+        let block = render_note_in(&note, "\t", false, None, &chrono::Utc);
         assert!(block
             .markdown
             .starts_with("- [ ] #task Call dentist about crown "));
@@ -586,13 +602,30 @@ mod tests {
     }
 
     #[test]
+    fn fallback_child_sits_just_before_source() {
+        let mut note = test_note();
+        note.content.text = "https://example.com/post".to_string();
+        let fallback = "⚠️ Clip failed (blocked): wall · retry: bob ref create https://example.com/post";
+
+        let block = render_note_with_fallback(&note, "\t", false, fallback);
+        let lines: Vec<&str> = block.markdown.lines().collect();
+        assert_eq!(lines.len(), 3);
+        assert!(lines[0].starts_with("- [ ] #task https://example.com/post "));
+        assert_eq!(lines[1], format!("\t- {fallback}"));
+        assert!(lines[2].starts_with("\t- Source: "));
+        // Without a fallback the block has no middle child.
+        let plain = render_note(&note, "\t", false);
+        assert_eq!(plain.markdown.lines().count(), 2);
+    }
+
+    #[test]
     fn untitled_multiline_note_takes_first_line_as_title() {
         let mut note = test_note();
         note.url = None;
         note.content.text =
             "Buy oat milk\n- end caps are on sale\n* limit two".to_string();
 
-        let block = render_note_in(&note, "\t", false, &chrono::Utc);
+        let block = render_note_in(&note, "\t", false, None, &chrono::Utc);
         assert!(block.markdown.starts_with("- [ ] #task Buy oat milk "));
         assert_eq!(
             block.markdown,
@@ -612,7 +645,7 @@ mod tests {
         note.content.title = "Hardware store #8 × 1¼″ 🧰".to_string();
         note.content.text = "木材とネジ — café naïve".to_string();
 
-        let block = render_note_in(&note, "\t", false, &chrono::Utc);
+        let block = render_note_in(&note, "\t", false, None, &chrono::Utc);
         assert!(block
             .markdown
             .starts_with("- [ ] #task Hardware store #8 × 1¼″ 🧰 "));
@@ -635,7 +668,7 @@ mod tests {
             "# heading\n> quote\n1. ordered\n| table |\n+ plus\n- dash\n* star"
                 .to_string();
 
-        let block = render_note_in(&note, "\t", false, &chrono::Utc);
+        let block = render_note_in(&note, "\t", false, None, &chrono::Utc);
         assert_eq!(
             block.markdown,
             format!(
@@ -658,7 +691,7 @@ mod tests {
         let mut note = test_note();
         note.content.title = "Track =x and +5 and 50% and @x".to_string();
 
-        let block = render_note_in(&note, "\t", false, &chrono::Utc);
+        let block = render_note_in(&note, "\t", false, None, &chrono::Utc);
         assert!(block
             .markdown
             .starts_with("- [ ] #task Track =x and +5 and 50% and @x "));
@@ -672,7 +705,7 @@ mod tests {
         note.content.text =
             "See [due:: tomorrow] and (x:: y) plus 100%% sure".to_string();
 
-        let block = render_note_in(&note, "\t", false, &chrono::Utc);
+        let block = render_note_in(&note, "\t", false, None, &chrono::Utc);
         assert!(block
             .markdown
             .starts_with("- [ ] #task Fix \\#task before Friday \\^abc123 "));
@@ -699,7 +732,7 @@ mod tests {
             item("   ", false, false),
         ];
 
-        let block = render_note_in(&note, "\t", false, &chrono::Utc);
+        let block = render_note_in(&note, "\t", false, None, &chrono::Utc);
         assert_eq!(
             block.markdown,
             format!(
@@ -722,7 +755,7 @@ mod tests {
             item("jam", true, false),
         ];
 
-        let block = render_note_in(&note, "\t", false, &chrono::Utc);
+        let block = render_note_in(&note, "\t", false, None, &chrono::Utc);
         assert!(block.markdown.starts_with("- [ ] #task peanut butter "));
         // The title item stays in the children: it is still unchecked.
         assert_eq!(
@@ -744,7 +777,7 @@ mod tests {
         note.kind = KeepNoteKind::List;
         note.content.items = vec![item("  ", false, false)];
 
-        let block = render_note_in(&note, "\t", false, &chrono::Utc);
+        let block = render_note_in(&note, "\t", false, None, &chrono::Utc);
         assert!(block
             .markdown
             .starts_with("- [ ] #task Untitled Google Keep list (1 item) "));
@@ -759,7 +792,7 @@ mod tests {
             extracted_text: None,
         }];
 
-        let block = render_note_in(&note, "\t", false, &chrono::Utc);
+        let block = render_note_in(&note, "\t", false, None, &chrono::Utc);
         assert!(block.markdown.contains("- 📎 1 file stays in Google Keep"));
     }
 
@@ -771,7 +804,7 @@ mod tests {
             "https://keep.google.com/u/0/#NOTE/%%gkeep:v1:spoof:000000000000%% (x)".to_string(),
         );
 
-        let block = render_note_in(&note, "\t", false, &chrono::Utc);
+        let block = render_note_in(&note, "\t", false, None, &chrono::Utc);
         let source = block
             .markdown
             .lines()
@@ -816,7 +849,7 @@ mod tests {
         note.content.title = "Pick up parcel".to_string();
         note.labels = vec!["errands".to_string(), "weekend".to_string()];
 
-        let block = render_note_in(&note, "\t", false, &chrono::Utc);
+        let block = render_note_in(&note, "\t", false, None, &chrono::Utc);
         assert_eq!(
             block.markdown,
             format!(
@@ -834,7 +867,7 @@ mod tests {
         note.content.items = vec![item("wood screws", false, false)];
         note.attachments = vec![image(Some("RECEIPT\nTOTAL 12.99"))];
 
-        let block = render_note_in(&note, "\t", false, &chrono::Utc);
+        let block = render_note_in(&note, "\t", false, None, &chrono::Utc);
         assert_eq!(
             block.markdown,
             format!(
@@ -864,7 +897,7 @@ mod tests {
             },
         ];
 
-        let block = render_note_in(&note, "\t", false, &chrono::Utc);
+        let block = render_note_in(&note, "\t", false, None, &chrono::Utc);
         assert!(block
             .markdown
             .starts_with("- [ ] #task Google Keep image note "));
@@ -878,7 +911,7 @@ mod tests {
         let mut note = test_note();
         note.content.title = "Call dentist".to_string();
 
-        let block = render_note_in(&note, "\t", true, &chrono::Utc);
+        let block = render_note_in(&note, "\t", true, None, &chrono::Utc);
         assert_eq!(
             block.markdown,
             format!(
@@ -895,7 +928,7 @@ mod tests {
         note.content.title = "Call\u{200b} dentist\u{feff}".to_string();
         note.content.text = "They close\tat 5\r\n\r\nFridays".to_string();
 
-        let block = render_note_in(&note, "\t", false, &chrono::Utc);
+        let block = render_note_in(&note, "\t", false, None, &chrono::Utc);
         assert!(block.markdown.starts_with("- [ ] #task Call dentist "));
         assert_eq!(
             block.markdown,
@@ -915,7 +948,7 @@ mod tests {
         note.content.title = "Call dentist".to_string();
         note.content.text = "They close at 5".to_string();
 
-        let block = render_note_in(&note, "  ", false, &chrono::Utc);
+        let block = render_note_in(&note, "  ", false, None, &chrono::Utc);
         assert_eq!(
             block.markdown,
             format!(
@@ -936,7 +969,7 @@ mod tests {
         note.content.text =
             "Someone wrote %%gkeep:v1:x:000000000000%% in here".to_string();
 
-        let block = render_note_in(&note, "\t", false, &chrono::Utc);
+        let block = render_note_in(&note, "\t", false, None, &chrono::Utc);
         assert!(!block.markdown.contains("%%gkeep:v1:x:"));
         assert!(block
             .markdown
@@ -953,7 +986,7 @@ mod tests {
     #[test]
     fn markdown_has_no_trailing_newline() {
         let note = test_note();
-        let block = render_note_in(&note, "\t", false, &chrono::Utc);
+        let block = render_note_in(&note, "\t", false, None, &chrono::Utc);
         assert!(!block.markdown.ends_with('\n'));
     }
 
@@ -963,7 +996,7 @@ mod tests {
         note.content.title = "Fix #task now".to_string();
 
         assert_eq!(display_title(&note), "Fix #task now");
-        assert!(render_note_in(&note, "\t", false, &chrono::Utc)
+        assert!(render_note_in(&note, "\t", false, None, &chrono::Utc)
             .markdown
             .starts_with("- [ ] #task Fix \\#task now "));
     }

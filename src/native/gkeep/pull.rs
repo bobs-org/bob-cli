@@ -18,16 +18,132 @@ use super::{
     adapter::{AdapterClient, Credentials},
     config::GkeepConfig,
     ledger::{Journal, JournalEvent, JournalRecord, Ledger},
-    model::{note_ref, ArchiveStatus, KeepContent},
+    model::{note_ref, ArchiveStatus, KeepContent, KeepNote},
     plan::{NoteState, Plan, PlanAction, PlanOptions, PlannedNote},
-    render::{display_title, render_note},
+    render::{display_title, render_note, render_note_with_fallback},
     ui,
 };
 use super::{GkeepError, PullArgs};
+use crate::native::highlights_ref::ingest::{
+    ingest_url, IngestOutcome, IngestRequest,
+};
+use crate::native::url_routing::{
+    library_verdicts, LibraryVerdict, UrlIntent, UrlRoutingPolicy,
+};
 use crate::native::{
     capture, env as bob_env, note_tasks, ob,
     style::{self, Styler},
 };
+
+/// One URL-only note's clip outcome from the pre-pass.
+#[derive(Debug, Clone)]
+struct ClipReport {
+    id: String,
+    intent: UrlIntent,
+    outcome: ClipOutcome,
+}
+
+/// The pre-pass result for one URL-only note.
+#[derive(Debug, Clone)]
+enum ClipOutcome {
+    Created {
+        pdf: String,
+    },
+    AlreadyInLibrary {
+        note: String,
+    },
+    AlreadyQueued {
+        pdf: String,
+    },
+    FailedRetryable {
+        kind: String,
+        message: String,
+    },
+    FailedPermanent {
+        kind: String,
+        message: String,
+        fallback: String,
+    },
+    WouldClip {
+        verdict: LibraryVerdict,
+    },
+}
+
+impl ClipOutcome {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::Created { .. } => "created",
+            Self::AlreadyInLibrary { .. } => "already_in_library",
+            Self::AlreadyQueued { .. } => "already_queued",
+            Self::FailedRetryable { .. } => "failed_retryable",
+            Self::FailedPermanent { .. } => "failed_permanent",
+            Self::WouldClip { .. } => "would_clip",
+        }
+    }
+}
+
+/// The clip pre-pass: per-note reports plus the successful clips due
+/// for archive `(id, Keep content, attachment count)`.
+#[derive(Debug, Clone, Default)]
+struct ClipSet {
+    reports: Vec<ClipReport>,
+    archives: Vec<(String, KeepContent, usize)>,
+}
+
+impl ClipSet {
+    fn for_id(&self, id: &str) -> Option<&ClipReport> {
+        self.reports.iter().find(|report| report.id == id)
+    }
+
+    /// Successful clips (an intake PDF or library note exists).
+    fn clipped(&self) -> usize {
+        self.reports
+            .iter()
+            .filter(|report| {
+                matches!(report.outcome, ClipOutcome::Created { .. })
+            })
+            .count()
+    }
+
+    /// Retryable failures: the note stays in Keep and the run fails.
+    fn failed_retryable(&self) -> usize {
+        self.reports
+            .iter()
+            .filter(|report| {
+                matches!(report.outcome, ClipOutcome::FailedRetryable { .. })
+            })
+            .count()
+    }
+
+    fn count(&self, outcome: &str) -> usize {
+        self.reports
+            .iter()
+            .filter(|report| report.outcome.as_str() == outcome)
+            .count()
+    }
+}
+
+/// Load the URL routing policy for `pull`. `-R` disables routing;
+/// a config error warns and disables it too (a bare URL then simply
+/// stays a task). A `gkeep: false` toggle disables it silently.
+fn load_gkeep_routing(no_ref: bool) -> Option<UrlRoutingPolicy> {
+    if no_ref {
+        return None;
+    }
+    match UrlRoutingPolicy::load() {
+        Ok(policy) => {
+            if policy.gkeep {
+                Some(policy)
+            } else {
+                None
+            }
+        }
+        Err(error) => {
+            eprintln!("bob gkeep pull: warning: URL routing is off: {error:?}");
+            None
+        }
+    }
+}
 
 /// Undocumented test hook (debug builds only): a shell snippet run just
 /// before each compare-and-swap re-read so tests can simulate Obsidian
@@ -113,72 +229,10 @@ pub(crate) fn run(args: &PullArgs) -> i32 {
     let bob_dir = args.bob_dir();
     let target_rel = PathBuf::from(config.target());
     let target_path = config.target_path(&bob_dir);
-    if !target_path.is_file() {
-        return ui::report_error(
-            "pull",
-            &GkeepError::setup(
-                "target",
-                format!(
-                    "target note {} does not exist",
-                    target_rel.to_string_lossy()
-                ),
-            )
-            .with_hint("create it or set gkeep.target"),
-            format_name,
-        );
-    }
 
-    // Take `bob_sync.lock` before reading the target and scanning the
-    // ledger/journal. Dry runs take no lock. (Obsidian ignores the lock,
-    // so CAS still guards the write.)
-    let _vault_guard = if args.dry_run {
-        None
-    } else {
-        let waiting = format!(
-            "  {}",
-            styler.dim("waiting for another vault maintenance run…")
-        );
-        let json_mode = is_json;
-        let on_first_wait = move || {
-            if json_mode {
-                eprintln!("waiting for another vault maintenance run…");
-            } else {
-                eprintln!("{waiting}");
-            }
-        };
-        match ob::acquire_lock_waiting(
-            std::time::Duration::from_secs(60),
-            on_first_wait,
-        ) {
-            Ok(guard) => Some(guard),
-            Err(error) => {
-                return ui::report_error(
-                    "pull",
-                    &GkeepError::runtime(
-                        "lock",
-                        format!("acquire vault maintenance lock: {error}"),
-                    ),
-                    format_name,
-                );
-            }
-        }
-    };
-
-    let target_bytes = match fs::read(&target_path) {
-        Ok(bytes) => bytes,
-        Err(error) => {
-            return ui::report_error(
-                "pull",
-                &GkeepError::runtime(
-                    "vault",
-                    format!("read {}: {error}", target_path.display()),
-                ),
-                format_name,
-            );
-        }
-    };
-    let target_contents = String::from_utf8_lossy(&target_bytes).into_owned();
-
+    // Scan the ledger and journal before the vault lock: the clip
+    // pre-pass below runs under the pull lock but outside the vault
+    // lock, so long clips never block vault maintenance.
     let ledger = match Ledger::scan(&bob_dir) {
         Ok(ledger) => ledger,
         Err(error) => {
@@ -221,48 +275,69 @@ pub(crate) fn run(args: &PullArgs) -> i32 {
         );
     }
 
+    let routing = load_gkeep_routing(args.no_ref);
     let plan_opts = PlanOptions {
         include_pinned: args.include_pinned,
         include_shared: args.include_shared,
         ids: args.id.clone(),
         limit: args.limit.map(|value| value as usize),
+        routing,
     };
     let plan = super::plan::classify(&notes, &ledger, &journal, &plan_opts);
 
-    // Render new and revised notes with the target indent unit.
-    let indent =
-        capture::dominant_indent_unit(&capture::line_spans(&target_contents))
-            .unwrap_or("\t")
-            .to_string();
-    let mut writes: Vec<WriteItem> = Vec::new();
-    for planned in &plan.notes {
-        let revision = matches!(planned.state, NoteState::Revised);
-        if !matches!(
+    // Clip URL-only notes before the target check and the vault lock,
+    // under the pull lock. A dry run only computes offline verdicts.
+    let clips =
+        run_clip_pre_pass(&plan, &bob_dir, args.dry_run, args.quiet, is_json);
+
+    // Dry runs stop at the plan: no locks, no clips, no writes, no
+    // archive calls. The indent comes from the target when it reads,
+    // else the default.
+    if args.dry_run {
+        let indent = fs::read(&target_path)
+            .ok()
+            .map(|bytes| {
+                let contents = String::from_utf8_lossy(&bytes).into_owned();
+                capture::dominant_indent_unit(&capture::line_spans(&contents))
+                    .unwrap_or("\t")
+                    .to_string()
+            })
+            .unwrap_or_else(|| "\t".to_string());
+        let writes = build_writes(&plan, &clips, &indent);
+        return print_dry_run(args, &config, &plan, &writes, &clips, &styler);
+    }
+
+    // Task writes (including permanent clip-failure fallbacks) need
+    // the target note. A pull whose notes all clip archives without
+    // it; every other run keeps today's existence check.
+    let needs_target = plan.notes.iter().any(|planned| {
+        matches!(
             planned.action,
             PlanAction::Write | PlanAction::WriteRevision
-        ) {
-            continue;
-        }
-        let block = render_note(&planned.note, &indent, revision);
-        writes.push(WriteItem {
-            planned: planned.clone(),
-            markdown: block.markdown,
-            fp: planned.note.content.fingerprint(),
-        });
+        )
+    }) || clips.reports.iter().any(|report| {
+        matches!(report.outcome, ClipOutcome::FailedPermanent { .. })
+    });
+    let all_clipped = !needs_target && !clips.archives.is_empty();
+    if !all_clipped && !target_path.is_file() {
+        return ui::report_error(
+            "pull",
+            &GkeepError::setup(
+                "target",
+                format!(
+                    "target note {} does not exist",
+                    target_rel.to_string_lossy()
+                ),
+            )
+            .with_hint("create it or set gkeep.target"),
+            format_name,
+        );
     }
 
-    let nothing_to_write = writes.is_empty();
-
-    // Dry runs stop at the plan: no locks, no writes, no archive calls.
-    if args.dry_run {
-        return print_dry_run(args, &config, &plan, &writes, &styler);
-    }
-
-    // Nothing to write (only pending/skipped): skip write, verify,
-    // and commit; drop the vault lock and go straight to the guarded
-    // archive.
-    if nothing_to_write {
-        drop(_vault_guard);
+    // Nothing to write (only pending/skipped, or clips alone): skip
+    // write, verify, and commit, take no vault lock, and go straight
+    // to the guarded archive.
+    if !needs_target {
         return finish_with_archive(
             args,
             &config,
@@ -272,9 +347,66 @@ pub(crate) fn run(args: &PullArgs) -> i32 {
             &plan,
             &[],
             None,
+            &clips,
             &styler,
         );
     }
+
+    // Take `bob_sync.lock` before reading the target. (Obsidian ignores
+    // the lock, so CAS still guards the write.)
+    let _vault_guard = {
+        let waiting = format!(
+            "  {}",
+            styler.dim("waiting for another vault maintenance run…")
+        );
+        let json_mode = is_json;
+        let on_first_wait = move || {
+            if json_mode {
+                eprintln!("waiting for another vault maintenance run…");
+            } else {
+                eprintln!("{waiting}");
+            }
+        };
+        match ob::acquire_lock_waiting(
+            std::time::Duration::from_secs(60),
+            on_first_wait,
+        ) {
+            Ok(guard) => guard,
+            Err(error) => {
+                return ui::report_error(
+                    "pull",
+                    &GkeepError::runtime(
+                        "lock",
+                        format!("acquire vault maintenance lock: {error}"),
+                    ),
+                    format_name,
+                );
+            }
+        }
+    };
+
+    let target_bytes = match fs::read(&target_path) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            return ui::report_error(
+                "pull",
+                &GkeepError::runtime(
+                    "vault",
+                    format!("read {}: {error}", target_path.display()),
+                ),
+                format_name,
+            );
+        }
+    };
+    let target_contents = String::from_utf8_lossy(&target_bytes).into_owned();
+
+    // Render new and revised notes with the target indent unit.
+    // Permanent clip failures render as tasks with a ⚠️ child.
+    let indent =
+        capture::dominant_indent_unit(&capture::line_spans(&target_contents))
+            .unwrap_or("\t")
+            .to_string();
+    let mut writes: Vec<WriteItem> = build_writes(&plan, &clips, &indent);
 
     // Build the insertion once; CAS re-reads immediately before the
     // rename, after the temp file is written and synced.
@@ -337,8 +469,28 @@ pub(crate) fn run(args: &PullArgs) -> i32 {
         let mut fresh_writes = Vec::with_capacity(writes.len());
         for item in &writes {
             let revision = matches!(item.planned.state, NoteState::Revised);
-            let block =
-                render_note(&item.planned.note, &fresh_indent, revision);
+            let block = if matches!(item.planned.action, PlanAction::CreateRef)
+            {
+                // A permanent clip-failure fallback: re-render with the
+                // fresh indent, keeping the ⚠️ child.
+                let fallback = clips
+                    .for_id(&item.planned.note.id)
+                    .and_then(|report| match &report.outcome {
+                        ClipOutcome::FailedPermanent { fallback, .. } => {
+                            Some(fallback.as_str())
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or("");
+                render_note_with_fallback(
+                    &item.planned.note,
+                    &fresh_indent,
+                    revision,
+                    fallback,
+                )
+            } else {
+                render_note(&item.planned.note, &fresh_indent, revision)
+            };
             fresh_writes.push(WriteItem {
                 planned: item.planned.clone(),
                 markdown: block.markdown,
@@ -489,6 +641,7 @@ pub(crate) fn run(args: &PullArgs) -> i32 {
             &plan,
             &verified,
             commit_sha.clone(),
+            &clips,
             &styler,
         );
         if !args.quiet {
@@ -519,6 +672,7 @@ pub(crate) fn run(args: &PullArgs) -> i32 {
         &plan,
         &verified,
         commit_sha,
+        &clips,
         &styler,
     )
 }
@@ -528,6 +682,216 @@ struct WriteItem {
     planned: PlannedNote,
     markdown: String,
     fp: String,
+}
+
+/// Build task writes: new/revised notes plus permanent clip-failure
+/// fallbacks (rendered exactly as today, with the ⚠️ child just
+/// before the `Source:` line).
+fn build_writes(plan: &Plan, clips: &ClipSet, indent: &str) -> Vec<WriteItem> {
+    let mut writes: Vec<WriteItem> = Vec::new();
+    for planned in &plan.notes {
+        let revision = matches!(planned.state, NoteState::Revised);
+        if matches!(
+            planned.action,
+            PlanAction::Write | PlanAction::WriteRevision
+        ) {
+            let block = render_note(&planned.note, indent, revision);
+            writes.push(WriteItem {
+                planned: planned.clone(),
+                markdown: block.markdown,
+                fp: planned.note.content.fingerprint(),
+            });
+        } else if matches!(planned.action, PlanAction::CreateRef)
+            && let Some(report) = clips.for_id(&planned.note.id)
+            && let ClipOutcome::FailedPermanent { fallback, .. } =
+                &report.outcome
+        {
+            let block = render_note_with_fallback(
+                &planned.note,
+                indent,
+                revision,
+                fallback,
+            );
+            writes.push(WriteItem {
+                planned: planned.clone(),
+                markdown: block.markdown,
+                fp: planned.note.content.fingerprint(),
+            });
+        }
+    }
+    writes
+}
+
+/// Clip every `CreateRef` note sequentially, before the vault lock. A
+/// dry run only computes offline verdicts and clips nothing. Terminal
+/// outcomes (`Created`, `AlreadyInLibrary`, `AlreadyQueued`) append
+/// one `ref_created` journal batch per clip immediately, so a crash
+/// between clip and archive re-pulls as `ArchiveOnly`.
+fn run_clip_pre_pass(
+    plan: &Plan,
+    bob_dir: &Path,
+    dry_run: bool,
+    quiet: bool,
+    is_json: bool,
+) -> ClipSet {
+    let targets: Vec<&PlannedNote> = plan
+        .notes
+        .iter()
+        .filter(|planned| {
+            matches!(planned.action, PlanAction::CreateRef)
+                && planned.ref_intent.is_some()
+        })
+        .collect();
+    if targets.is_empty() {
+        return ClipSet::default();
+    }
+    if dry_run {
+        let intents: Vec<&UrlIntent> = targets
+            .iter()
+            .filter_map(|planned| planned.ref_intent.as_ref())
+            .collect();
+        let verdicts = library_verdicts(bob_dir, &intents);
+        let reports = targets
+            .iter()
+            .zip(verdicts)
+            .map(|(planned, verdict)| ClipReport {
+                id: planned.note.id.clone(),
+                intent: planned.ref_intent.clone().expect("filtered intent"),
+                outcome: ClipOutcome::WouldClip { verdict },
+            })
+            .collect();
+        return ClipSet {
+            reports,
+            archives: Vec::new(),
+        };
+    }
+    let silent = quiet || is_json;
+    let total = targets.len();
+    let mut clips = ClipSet::default();
+    for (index, planned) in targets.iter().enumerate() {
+        let intent = planned.ref_intent.clone().expect("filtered intent");
+        let _spinner = if silent {
+            None
+        } else {
+            Some(ui::Spinner::start(&format!(
+                "Clipping {} ({}/{})",
+                intent.display,
+                index + 1,
+                total,
+            )))
+        };
+        let report_progress = |message: &str| {
+            eprintln!("  {message}");
+        };
+        let progress: Option<&dyn Fn(&str)> =
+            if silent { None } else { Some(&report_progress) };
+        let request = IngestRequest {
+            bob_dir,
+            url: &intent.cleaned,
+            progress,
+        };
+        let outcome = match ingest_url(&request) {
+            Ok(ingest) => match ingest {
+                IngestOutcome::Created { pdf, .. } => {
+                    ClipOutcome::Created { pdf }
+                }
+                IngestOutcome::AlreadyInLibrary { note } => {
+                    ClipOutcome::AlreadyInLibrary { note }
+                }
+                IngestOutcome::AlreadyQueued { pdf } => {
+                    ClipOutcome::AlreadyQueued { pdf }
+                }
+            },
+            Err(error) => {
+                if error.retryable() {
+                    ClipOutcome::FailedRetryable {
+                        kind: error.kind.as_str().to_string(),
+                        message: first_line(&error.message),
+                    }
+                } else {
+                    let fallback = error.fallback_note(&intent.cleaned);
+                    ClipOutcome::FailedPermanent {
+                        kind: error.kind.as_str().to_string(),
+                        message: first_line(&error.message),
+                        fallback,
+                    }
+                }
+            }
+        };
+        // Terminal outcomes join the archive set and journal now, one
+        // batch per clip.
+        match &outcome {
+            ClipOutcome::Created { pdf } => {
+                append_ref_created(
+                    &planned.note,
+                    pdf,
+                    Some(intent.cleaned.clone()),
+                );
+                clips.archives.push((
+                    planned.note.id.clone(),
+                    planned.note.content.clone(),
+                    planned.note.attachments.len(),
+                ));
+            }
+            ClipOutcome::AlreadyInLibrary { note } => {
+                append_ref_created(
+                    &planned.note,
+                    note,
+                    Some(intent.cleaned.clone()),
+                );
+                clips.archives.push((
+                    planned.note.id.clone(),
+                    planned.note.content.clone(),
+                    planned.note.attachments.len(),
+                ));
+            }
+            ClipOutcome::AlreadyQueued { pdf } => {
+                append_ref_created(
+                    &planned.note,
+                    pdf,
+                    Some(intent.cleaned.clone()),
+                );
+                clips.archives.push((
+                    planned.note.id.clone(),
+                    planned.note.content.clone(),
+                    planned.note.attachments.len(),
+                ));
+            }
+            ClipOutcome::FailedRetryable { .. }
+            | ClipOutcome::FailedPermanent { .. }
+            | ClipOutcome::WouldClip { .. } => {}
+        }
+        clips.reports.push(ClipReport {
+            id: planned.note.id.clone(),
+            intent,
+            outcome,
+        });
+    }
+    clips
+}
+
+/// Append one `ref_created` journal batch: `path` is the intake PDF or
+/// the existing ref note, `url` the clipped URL.
+fn append_ref_created(note: &KeepNote, path: &str, url: Option<String>) {
+    let record = JournalRecord {
+        ts: current_ts(),
+        event: JournalEvent::RefCreated,
+        id: note.id.clone(),
+        ref_: note_ref(&note.id),
+        fp: note.content.fingerprint(),
+        path: path.to_string(),
+        commit: None,
+        status: None,
+        url,
+    };
+    if let Err(error) = Journal::append(&journal_path(), &[record]) {
+        ui::warn(&format!("append the gkeep journal: {error}"));
+    }
+}
+
+/// First line of a message, for compact clip reports.
+fn first_line(message: &str) -> String {
+    message.lines().next().unwrap_or_default().to_string()
 }
 
 fn acquire_pull_lock() -> Result<File, GkeepError> {
@@ -709,17 +1073,20 @@ fn finish_with_archive(
     plan: &Plan,
     verified: &[WriteItem],
     commit_sha: Option<String>,
+    clips: &ClipSet,
     styler: &Styler,
 ) -> i32 {
     let is_json = args.format.is_json();
     // Archive set: every verified write plus every pending/revised note.
     // Pending notes were already verified by the ledger/journal lookup.
-    let mut archive_notes: Vec<(String, KeepContent)> = Vec::new();
+    // Successful clips join with their attachment counts for the guard.
+    let mut archive_notes: Vec<(String, KeepContent, usize)> = Vec::new();
     let mut archive_for: Vec<String> = Vec::new();
     for item in verified {
         archive_notes.push((
             item.planned.note.id.clone(),
             item.planned.note.content.clone(),
+            item.planned.note.attachments.len(),
         ));
         archive_for.push(item.planned.note.id.clone());
     }
@@ -727,12 +1094,22 @@ fn finish_with_archive(
         if matches!(planned.action, PlanAction::ArchiveOnly) {
             let id = planned.note.id.clone();
             if !archive_for.contains(&id) {
-                archive_notes.push((id.clone(), planned.note.content.clone()));
+                archive_notes.push((
+                    id.clone(),
+                    planned.note.content.clone(),
+                    planned.note.attachments.len(),
+                ));
                 archive_for.push(id);
             }
         }
         // Revised notes without a verified write (verify failed) stay out.
         // Revised notes with a verified write are already in the set.
+    }
+    for (id, content, attachments) in &clips.archives {
+        if !archive_for.contains(id) {
+            archive_notes.push((id.clone(), content.clone(), *attachments));
+            archive_for.push(id.clone());
+        }
     }
     // Nothing to archive and nothing written: the "nothing to pull" path.
     // Archive unless --no-archive.
@@ -749,7 +1126,7 @@ fn finish_with_archive(
         };
         match client.archive(creds, &archive_notes, spinner_label) {
             Ok(results) => {
-                for (id, _) in &archive_notes {
+                for (id, _, _) in &archive_notes {
                     let hit = results.iter().find(|row| row.id == *id);
                     match hit {
                         Some(row) => {
@@ -780,7 +1157,7 @@ fn finish_with_archive(
         // adapter message as detail, so both modes report one failure
         // per note.
         let mut failed_status = archive_status;
-        for (id, _) in &archive_notes {
+        for (id, _, _) in &archive_notes {
             failed_status.insert(
                 id.clone(),
                 (ArchiveStatus::Error, Some(error.message().to_string())),
@@ -830,6 +1207,7 @@ fn finish_with_archive(
                         &failed_status,
                         failed_markdown.clone(),
                         commit_sha.clone(),
+                        clips,
                         false,
                         Some(&error),
                     )
@@ -846,6 +1224,7 @@ fn finish_with_archive(
                     &failed_status,
                     failed_markdown.clone(),
                     commit_sha.clone(),
+                    clips,
                     false,
                     Some(&error),
                 )
@@ -860,6 +1239,7 @@ fn finish_with_archive(
                 &failed_status,
                 target_rel,
                 commit_sha.clone(),
+                clips,
                 styler,
                 false,
             );
@@ -892,7 +1272,7 @@ fn finish_with_archive(
         false,
     );
 
-    let failed = count_failed(plan, verified, &archive_status);
+    let failed = count_failed(plan, verified, &archive_status, clips);
     let ok = failed == 0;
 
     if is_json {
@@ -920,6 +1300,7 @@ fn finish_with_archive(
                 &archive_status,
                 inserted,
                 commit_sha,
+                clips,
                 ok,
             )
         );
@@ -934,6 +1315,16 @@ fn finish_with_archive(
         for planned in &plan.notes {
             let id = planned.note.id.as_str();
             if matches!(planned.action, PlanAction::Skip) {
+                continue;
+            }
+            if matches!(planned.action, PlanAction::CreateRef)
+                && let Some(report) = clips.for_id(id)
+                && let ClipOutcome::FailedRetryable { kind, message } =
+                    &report.outcome
+            {
+                eprintln!(
+                    "bob gkeep pull: clip failed for {id} ({kind}: {message}): left in Keep for the next pull"
+                );
                 continue;
             }
             let verified_ok = verified
@@ -995,6 +1386,7 @@ fn finish_with_archive(
         &archive_status,
         target_rel,
         commit_sha,
+        clips,
         styler,
         ok,
     );
@@ -1024,6 +1416,7 @@ fn count_failed(
         String,
         (ArchiveStatus, Option<String>),
     >,
+    clips: &ClipSet,
 ) -> usize {
     // Writes planned but not verified.
     let mut failed = 0;
@@ -1045,6 +1438,8 @@ fn count_failed(
             failed += 1;
         }
     }
+    // Retryable clip failures stay in Keep and fail the run.
+    failed += clips.failed_retryable();
     failed
 }
 
@@ -1073,6 +1468,7 @@ fn append_journal(
             path: target.clone(),
             commit: commit.clone(),
             status: None,
+            url: None,
         });
     }
     if !adapter_crashed {
@@ -1099,6 +1495,7 @@ fn append_journal(
                     path: target.clone(),
                     commit: commit.clone(),
                     status: Some(status.as_str().to_string()),
+                    url: None,
                 });
             } else {
                 records.push(JournalRecord {
@@ -1110,6 +1507,7 @@ fn append_journal(
                     path: target.clone(),
                     commit: commit.clone(),
                     status: Some(status.as_str().to_string()),
+                    url: None,
                 });
             }
         }
@@ -1130,6 +1528,7 @@ fn print_dry_run(
     config: &GkeepConfig,
     plan: &Plan,
     writes: &[WriteItem],
+    clips: &ClipSet,
     styler: &Styler,
 ) -> i32 {
     let is_json = args.format.is_json();
@@ -1155,7 +1554,8 @@ fn print_dry_run(
         println!(
             "{}",
             json_pull_report(
-                args, config, plan, writes, &empty, inserted, None, true,
+                args, config, plan, writes, &empty, inserted, None, clips,
+                true,
             )
         );
         return 0;
@@ -1187,7 +1587,12 @@ fn print_dry_run(
     }
     println!("[dry-run] Google Keep → {target} · {actionable} to pull");
     for planned in &plan.notes {
-        let title = truncate_title(&display_title(&planned.note));
+        // URL-only rows lead with the display URL, not the note title.
+        let title = if matches!(planned.action, PlanAction::CreateRef) {
+            truncate_title(&report_display(planned))
+        } else {
+            truncate_title(&display_title(&planned.note))
+        };
         let detail = match planned.action {
             PlanAction::Skip => format!(
                 "skipped · {}",
@@ -1207,6 +1612,7 @@ fn print_dry_run(
                     "would archive · already in vault".to_string()
                 }
             }
+            PlanAction::CreateRef => dry_ref_detail(planned, clips, args),
         };
         let glyph = styler.dim("·");
         println!("  {glyph} {title}  {detail}");
@@ -1221,6 +1627,13 @@ fn print_dry_run(
         for line in joined.lines() {
             println!("{}", styler.dim(&format!("│ {line}")));
         }
+    }
+    let would_clip = clips.reports.len();
+    if would_clip > 0 {
+        println!(
+            "{would_clip} link{} would be clipped into the reading queue",
+            if would_clip == 1 { "" } else { "s" },
+        );
     }
     let written = 0;
     let archived = if args.no_archive {
@@ -1244,6 +1657,67 @@ fn truncate_title(title: &str) -> String {
     style::truncate(title, available)
 }
 
+/// The dry-run detail for a URL-only note: the offline verdict for
+/// library hits, else the would-clip line.
+fn dry_ref_detail(
+    planned: &PlannedNote,
+    clips: &ClipSet,
+    args: &PullArgs,
+) -> String {
+    let archive_suffix = if args.no_archive {
+        " · left in Keep (--no-archive)"
+    } else {
+        " · would archive"
+    };
+    let Some(report) = clips.for_id(&planned.note.id) else {
+        return format!("would clip → reading queue{archive_suffix}");
+    };
+    let ClipOutcome::WouldClip { verdict } = &report.outcome else {
+        return "would clip → reading queue".to_string();
+    };
+    match verdict.verdict {
+        crate::native::url_routing::Verdict::InLibrary => {
+            let title = verdict.title.as_deref().unwrap_or("untitled");
+            match verdict.reading_state.as_deref() {
+                Some(state) => format!(
+                    "already in library: {title} ({state}){archive_suffix}"
+                ),
+                None => {
+                    format!("already in library: {title}{archive_suffix}")
+                }
+            }
+        }
+        crate::native::url_routing::Verdict::InIntake => {
+            let path = verdict.path.as_deref().unwrap_or("intake");
+            format!("already queued · {path}{archive_suffix}")
+        }
+        crate::native::url_routing::Verdict::Legacy => {
+            let path = verdict.path.as_deref().unwrap_or("library");
+            format!(
+                "in your library as a legacy note ({path}) · a fresh copy would be clipped{archive_suffix}"
+            )
+        }
+        crate::native::url_routing::Verdict::Unknown => {
+            let message = verdict.message.as_deref().unwrap_or("unreadable");
+            format!(
+                "would clip → reading queue · library check unavailable: {message}{archive_suffix}"
+            )
+        }
+        crate::native::url_routing::Verdict::NotFound => {
+            format!("would clip → reading queue{archive_suffix}")
+        }
+    }
+}
+
+/// Display URL for a planned ref note without a clip report.
+fn report_display(planned: &PlannedNote) -> String {
+    planned
+        .ref_intent
+        .as_ref()
+        .map(|intent| intent.display.clone())
+        .unwrap_or_else(|| display_title(&planned.note))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn print_human_report(
     args: &PullArgs,
@@ -1255,6 +1729,7 @@ fn print_human_report(
     >,
     target_rel: &Path,
     commit_sha: Option<String>,
+    clips: &ClipSet,
     styler: &Styler,
     ok: bool,
 ) {
@@ -1314,6 +1789,10 @@ fn print_human_report(
             println!("  {glyph} {title}  {detail}");
             continue;
         }
+        if matches!(planned.action, PlanAction::CreateRef) {
+            print_human_ref_row(args, planned, clips, archive_status, styler);
+            continue;
+        }
         // Write or revision.
         if !verified_ids.contains(id) {
             println!(
@@ -1364,6 +1843,7 @@ fn print_human_report(
     }
     println!();
     let written = verified.len();
+    let clipped = clips.clipped();
     let archived = archive_status
         .values()
         .filter(|(status, _)| status.is_success())
@@ -1378,14 +1858,103 @@ fn print_human_report(
     } else {
         styler.warning_prefix()
     };
-    let mut summary = format!(
-        "{prefix} {written} written · {archived} archived · {skipped} skipped"
-    );
+    let mut summary = format!("{prefix} {written} written");
+    if clipped > 0 {
+        summary.push_str(&format!(" · {clipped} clipped"));
+    }
+    summary.push_str(&format!(" · {archived} archived · {skipped} skipped"));
     if let Some(sha) = commit_sha {
         let short: String = sha.chars().take(7).collect();
         summary.push_str(&format!(" · vault commit {short}"));
     }
     println!("{summary}");
+}
+
+/// One human row for a URL-only note: the display URL, the clip
+/// outcome, and the archive suffix.
+fn print_human_ref_row(
+    args: &PullArgs,
+    planned: &PlannedNote,
+    clips: &ClipSet,
+    archive_status: &std::collections::BTreeMap<
+        String,
+        (ArchiveStatus, Option<String>),
+    >,
+    styler: &Styler,
+) {
+    let display = truncate_title(&report_display(planned));
+    let archive_suffix = |archived_word: &str| -> String {
+        if args.no_archive {
+            " · left in Keep (--no-archive)".to_string()
+        } else {
+            match archive_status.get(&planned.note.id) {
+                Some((status, _)) if status.is_success() => {
+                    format!(" · {archived_word}")
+                }
+                Some((ArchiveStatus::Changed, _)) => {
+                    " · NOT archived: edited in Keep during pull".to_string()
+                }
+                Some((ArchiveStatus::Missing, _)) => {
+                    " · NOT archived: note is gone".to_string()
+                }
+                Some((ArchiveStatus::Error, detail)) => {
+                    let text = detail.clone().unwrap_or_default();
+                    if text.is_empty() {
+                        " · NOT archived: adapter error".to_string()
+                    } else {
+                        format!(" · NOT archived: {text}")
+                    }
+                }
+                None | Some(_) => " · archiving skipped".to_string(),
+            }
+        }
+    };
+    let Some(report) = clips.for_id(&planned.note.id) else {
+        println!("  {} {display}  clip skipped", styler.dim("·"),);
+        return;
+    };
+    match &report.outcome {
+        ClipOutcome::Created { pdf } => {
+            let suffix = archive_suffix("archived");
+            println!(
+                "  {} {display}  clipped → {pdf}{suffix}",
+                styler.green("✓"),
+            );
+        }
+        ClipOutcome::AlreadyInLibrary { note } => {
+            let suffix = archive_suffix("archived");
+            println!(
+                "  {} {display}  already in library · {note}{suffix}",
+                styler.green("✓"),
+            );
+        }
+        ClipOutcome::AlreadyQueued { pdf } => {
+            let suffix = archive_suffix("archived");
+            println!(
+                "  {} {display}  already queued · {pdf}{suffix}",
+                styler.green("✓"),
+            );
+        }
+        ClipOutcome::FailedRetryable { kind, .. } => {
+            println!(
+                "  {} {display}  clip failed ({kind}) · left in Keep for the next pull",
+                styler.yellow("!"),
+            );
+        }
+        ClipOutcome::FailedPermanent { kind, .. } => {
+            let suffix = archive_suffix("archived");
+            println!(
+                "  {} {display}  clip failed ({kind}) · written as a task with a ⚠️ note{suffix}",
+                styler.green("✓"),
+            );
+        }
+        ClipOutcome::WouldClip { .. } => {
+            println!(
+                "  {} {display}  would clip → reading queue",
+                styler.dim("·"),
+            );
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1400,6 +1969,7 @@ fn json_pull_report(
     >,
     markdown: Option<String>,
     commit: Option<String>,
+    clips: &ClipSet,
     ok: bool,
 ) -> serde_json::Value {
     json_pull_report_with_error(
@@ -1410,9 +1980,40 @@ fn json_pull_report(
         archive_status,
         markdown,
         commit,
+        clips,
         ok,
         None,
     )
+}
+
+/// The per-note `clip` object for a URL-only note.
+fn clip_json(report: &ClipReport) -> serde_json::Value {
+    let mut value = json!({
+        "url": report.intent.cleaned,
+        "display": report.intent.display,
+        "outcome": report.outcome.as_str(),
+    });
+    match &report.outcome {
+        ClipOutcome::Created { pdf } | ClipOutcome::AlreadyQueued { pdf } => {
+            value["pdf"] = json!(pdf);
+        }
+        ClipOutcome::AlreadyInLibrary { note } => {
+            value["existing"] = json!(note);
+        }
+        ClipOutcome::FailedRetryable { kind, message }
+        | ClipOutcome::FailedPermanent { kind, message, .. } => {
+            value["error"] = json!({
+                "kind": kind,
+                "message": message,
+                "retryable": matches!(
+                    report.outcome,
+                    ClipOutcome::FailedRetryable { .. }
+                ),
+            });
+        }
+        ClipOutcome::WouldClip { .. } => {}
+    }
+    value
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1427,6 +2028,7 @@ fn json_pull_report_with_error(
     >,
     markdown: Option<String>,
     commit: Option<String>,
+    clips: &ClipSet,
     ok: bool,
     adapter_error: Option<&GkeepError>,
 ) -> serde_json::Value {
@@ -1458,7 +2060,9 @@ fn json_pull_report_with_error(
                     None,
                 ),
             };
-            json!({
+            // `ref` stays the short selection id; the clip outcome for
+            // URL-only notes rides alongside as `clip`.
+            let mut note = json!({
                 "id": planned.note.id,
                 "ref": note_ref(&planned.note.id),
                 "title": display_title(&planned.note),
@@ -1468,7 +2072,13 @@ fn json_pull_report_with_error(
                 "written": written,
                 "archive": archive,
                 "detail": detail,
-            })
+            });
+            if matches!(planned.action, PlanAction::CreateRef)
+                && let Some(report) = clips.for_id(&planned.note.id)
+            {
+                note["clip"] = clip_json(report);
+            }
+            note
         })
         .collect();
     let written = if dry { 0 } else { verified.len() };
@@ -1481,7 +2091,7 @@ fn json_pull_report_with_error(
         .iter()
         .filter(|item| matches!(item.action, PlanAction::Skip))
         .count();
-    let failed = count_failed(plan, verified, archive_status);
+    let failed = count_failed(plan, verified, archive_status, clips);
     let mut document = json!({
         "schema_version": 1,
         "ok": ok,
@@ -1497,6 +2107,13 @@ fn json_pull_report_with_error(
             "archived": archived,
             "skipped": skipped,
             "failed": failed,
+            "refs": {
+                "clipped": clips.count("created"),
+                "already_in_library": clips.count("already_in_library"),
+                "already_queued": clips.count("already_queued"),
+                "failed_retryable": clips.count("failed_retryable"),
+                "failed_permanent": clips.count("failed_permanent"),
+            },
         }
     });
     if let Some(error) = adapter_error {

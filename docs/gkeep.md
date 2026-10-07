@@ -173,14 +173,50 @@ written atomically, fsynced, re-read and parsed, and committed when the vault
 is a Git worktree. Notes edited in Keep during a pull stay in Keep; the next
 pull writes the revision. Nothing is ever deleted from Keep.
 
-The pipeline: snapshot, vault lock, plan, compare-and-swap durable write,
-parse-verify, scoped Git commit, content-guarded archive, journal append.
+The pipeline: snapshot, ledger/journal scan, plan, URL clip pre-pass,
+vault lock, compare-and-swap durable write, parse-verify, scoped Git commit,
+content-guarded archive, journal append.
 `-d, --dry-run` prints the exact Markdown a pull would write and changes
 nothing. `-n, --no-archive` writes and verifies but leaves notes in Keep.
-`-C, --no-commit` skips the vault Git commit. `-q, --quiet` prints only
-errors. `-l, --limit N` takes the first N actionable notes, oldest first.
+`-C, --no-commit` skips the vault Git commit. `-R, --no-ref` keeps URL-only
+notes as inbox tasks instead of clipping them for the reading queue.
+`-q, --quiet` prints only errors. `-l, --limit N` takes the first N
+actionable notes, oldest first.
 A per-host pull lock serializes concurrent pulls (exit 1 when held); dry runs
 take no lock.
+
+### URL-only notes go to the reading queue
+
+A note that holds exactly one bare public link and nothing else — an empty
+title with a link body, an empty body with a link title, a title equal to
+the link, or a page title equal to the shared-link preview title — is
+clipped into the reading queue instead of becoming a task. Lists, notes
+with attachments, shared notes (even with `-S`), multi-link or
+link-plus-prose notes, corporate short links, IP literals, and
+`highlights.url_routing.exclude_hosts` entries stay tasks. Pinned notes
+included with `-p` follow the rule like any other note.
+
+After planning and before the vault lock, each URL-only note clips
+sequentially through the same ingest as `bob ref create`, announced as
+`Clipping <display> (i/N)`. The outcomes:
+
+| Outcome | Meaning | Journal | Archive |
+| --- | --- | --- | --- |
+| `created` | A fresh intake PDF was clipped | `ref_created` at once | Archived |
+| `already_in_library` | A ref note already records the link | `ref_created` at once | Archived |
+| `already_queued` | An intake PDF is already queued | `ref_created` at once | Archived |
+| `failed_retryable` | Network, timeout, browser, or dependency failure | None | Left in Keep; exit 1 |
+| `failed_permanent` | Blocked, thin, render, or content failure | None | Written as a task with a ⚠️ child, then archived |
+
+A retryable failure leaves the note in Keep for the next pull and counts
+toward `summary.failed`. A permanent failure renders exactly as today with
+`⚠️ Clip failed (<kind>): <message> · retry: bob ref create <url>` as a
+child just before the `Source:` line. A pull whose notes all clip needs no
+`gkeep_inbox.md` and takes no vault lock. `pull -d` never clips: it shows
+`would clip → reading queue` rows (with the offline library verdict for
+library hits) followed by `N links would be clipped into the reading queue`,
+and the Markdown section excludes URL-only notes. `list` marks notes a pull
+would clip with a `🔗 ref` hint.
 
 Failure matrix:
 
@@ -264,10 +300,19 @@ naming each `path:line`.
 
 **Journal.** `$XDG_STATE_HOME/bob-cli/gkeep/journal.jsonl` (directory `0700`,
 file `0600`), append-only and fsynced per batch. Records look like
-`{"ts","event":"written"|"archived"|"archive_refused","id","ref","fp","path","commit","status"}`.
+`{"ts","event":"written"|"ref_created"|"archived"|"archive_refused","id","ref","fp","path","commit","status","url"}`.
 It never stores note bodies. A `written` record acts as a lower-priority
 ledger entry: the backstop for a task whose marker was deleted during triage
-while the note was still in Keep.
+while the note was still in Keep. A `ref_created` record (with the intake
+PDF or existing ref note in `path` and the clipped URL in `url`) covers a
+clipped link the same way: a re-pull archives it without clipping again. An
+older bob reading a newer journal counts `ref_created` lines as corrupt and
+warns.
+
+**Archive guard.** Every archive target carries the note's content plus its
+live attachment count (`expect_attachments`). The adapter refuses the
+archive with `changed` when either differs, so an attachment added mid-pull
+keeps the note in Keep.
 
 ## Exit status
 
@@ -304,6 +349,8 @@ Every JSON document carries `schema_version: 1`.
       "edited": "…Z", "url": "https://keep.google.com/…|null",
       "fingerprint": "3f9c2e1d0a7b",
       "lines": 0, "items_open": 0, "items_checked": 0, "attachments": 0
+      // only on notes a pull would clip:
+      // "clip": {"url": "…", "display": "…", "verdict": "not_found|…"}
     }]
   } | {"error": {"kind": "…", "message": "…", "hint": "…|null"}} | null,
   "vault": {"path": "gkeep_inbox.md", "tasks": [{
@@ -330,13 +377,20 @@ generic error document instead. A missing target in JSON gives `tasks: []`.
   "notes": [{
     "id": "…", "ref": "3f9c2e1", "title": "…",
     "state": "new|pending|revised|empty|pinned|shared|archived",
-    "action": "write|write_revision|archive_only|skip",
+    "action": "write|write_revision|archive_only|create_ref|skip",
     "skip_reason": "empty|pinned|shared|archived|null", "written": true,
     "archive": "archived|already_archived|changed|missing|error|not_requested|not_attempted",
     "detail": "…|null"
+    // only on URL-only notes:
+    // "clip": {"url": "…", "display": "…",
+    //   "outcome": "created|already_in_library|already_queued|failed_retryable|failed_permanent|would_clip",
+    //   "pdf": "…", "existing": "…",
+    //   "error": {"kind": "…", "message": "…", "retryable": true}}
   }],
   "markdown": "…|null",
-  "summary": {"written": 0, "archived": 0, "skipped": 0, "failed": 0},
+  "summary": {"written": 0, "archived": 0, "skipped": 0, "failed": 0,
+    "refs": {"clipped": 0, "already_in_library": 0, "already_queued": 0,
+      "failed_retryable": 0, "failed_permanent": 0}},
   "error": {"kind": "…", "message": "…", "hint": "…|null"}
 }
 ```

@@ -16,11 +16,12 @@ use super::{
     config::{GkeepConfig, DEFAULT_TARGET},
     ledger::{read_target_tasks, Journal, Ledger, VaultTask},
     model::{KeepNote, KeepNoteKind},
-    plan::{classify, NoteState, Plan, PlanOptions},
+    plan::{classify, NoteState, Plan, PlanAction, PlanOptions},
     render::{display_title, note_counts},
     ui::{format_age, report_error, warn},
 };
 use super::{GkeepError, ListArgs};
+use crate::native::url_routing::{library_verdicts, UrlRoutingPolicy};
 use crate::native::{
     env as bob_env, note_tasks,
     style::{self, Styler},
@@ -58,7 +59,7 @@ pub(crate) fn run(args: &ListArgs) -> i32 {
 
     if !show_keep {
         if args.format.is_json() {
-            print_json(args, &vault, None, None);
+            print_json(args, &vault, None, None, &empty_hints());
         } else {
             print_vault_table(&vault, None, args.all, &styler);
         }
@@ -95,11 +96,29 @@ pub(crate) fn run(args: &ListArgs) -> i32 {
         .into_iter()
         .filter(|note| args.all || !note.archived)
         .collect();
+    // URL-only notes show a 🔗 ref hint; a config error warns and
+    // lists without hints instead of failing.
+    let routing = match UrlRoutingPolicy::load() {
+        Ok(policy) => {
+            if policy.gkeep {
+                Some(policy)
+            } else {
+                None
+            }
+        }
+        Err(error) => {
+            warn(&format!("URL routing is off: {error:?}"));
+            None
+        }
+    };
     let plan = classify(
         &visible,
         &vault.ledger,
         &vault.journal,
-        &PlanOptions::default(),
+        &PlanOptions {
+            routing,
+            ..PlanOptions::default()
+        },
     );
     let fetched_at = super::ui::now_utc()
         .format("%Y-%m-%dT%H:%M:%SZ")
@@ -109,11 +128,12 @@ pub(crate) fn run(args: &ListArgs) -> i32 {
         fetched_at,
         plan,
     };
+    let ref_hints = ref_hint_map(&bob_dir, &keep.plan);
 
     if args.format.is_json() {
-        print_json(args, &vault, Some(&keep), None);
+        print_json(args, &vault, Some(&keep), None, &ref_hints);
     } else {
-        print_keep_table(&keep, &styler);
+        print_keep_table(&keep, &ref_hints, &styler);
         if show_vault {
             println!();
             print_vault_table(&vault, Some(&keep.plan), args.all, &styler);
@@ -129,6 +149,49 @@ struct KeepView {
     account: String,
     fetched_at: String,
     plan: Plan,
+}
+
+/// Offline verdicts for notes a pull would clip: note id to
+/// `(url, display, verdict)`.
+type RefHints = BTreeMap<String, (String, String, String)>;
+
+fn empty_hints() -> RefHints {
+    BTreeMap::new()
+}
+
+/// Offline library verdicts for every `CreateRef` note in one scan.
+fn ref_hint_map(bob_dir: &std::path::Path, plan: &Plan) -> RefHints {
+    let targets: Vec<&super::plan::PlannedNote> = plan
+        .notes
+        .iter()
+        .filter(|planned| {
+            matches!(planned.action, PlanAction::CreateRef)
+                && planned.ref_intent.is_some()
+        })
+        .collect();
+    if targets.is_empty() {
+        return BTreeMap::new();
+    }
+    let intents: Vec<&crate::native::url_routing::UrlIntent> = targets
+        .iter()
+        .filter_map(|planned| planned.ref_intent.as_ref())
+        .collect();
+    let verdicts = library_verdicts(bob_dir, &intents);
+    targets
+        .iter()
+        .zip(verdicts)
+        .map(|(planned, verdict)| {
+            let intent = planned.ref_intent.as_ref().expect("filtered intent");
+            (
+                planned.note.id.clone(),
+                (
+                    intent.cleaned.clone(),
+                    intent.display.clone(),
+                    verdict.verdict.as_str().to_string(),
+                ),
+            )
+        })
+        .collect()
 }
 
 /// The vault side: target tasks plus the ledger and journal behind them.
@@ -217,7 +280,7 @@ fn print_keep_failure(
     error: &GkeepError,
 ) -> i32 {
     if args.format.is_json() {
-        print_json(args, vault, None, Some(error));
+        print_json(args, vault, None, Some(error), &empty_hints());
         return 1;
     }
     let styler = Styler::detect();
@@ -235,12 +298,18 @@ fn print_keep_failure(
 }
 
 /// The Keep section: one row per planned note, oldest first.
-fn print_keep_table(keep: &KeepView, styler: &Styler) {
+fn print_keep_table(keep: &KeepView, ref_hints: &RefHints, styler: &Styler) {
     let rows: Vec<KeepRow> = keep
         .plan
         .notes
         .iter()
-        .map(|planned| KeepRow::new(planned.note.clone(), planned))
+        .map(|planned| {
+            KeepRow::new(
+                planned.note.clone(),
+                planned,
+                ref_hints.contains_key(&planned.note.id),
+            )
+        })
         .collect();
     let inbox = rows
         .iter()
@@ -321,7 +390,11 @@ struct KeepRow {
 }
 
 impl KeepRow {
-    fn new(note: KeepNote, planned: &super::plan::PlannedNote) -> Self {
+    fn new(
+        note: KeepNote,
+        planned: &super::plan::PlannedNote,
+        is_ref: bool,
+    ) -> Self {
         let now = super::ui::now_utc().timestamp();
         let age = match note.created_local() {
             Some(created) => format_age(now, created.timestamp()),
@@ -333,6 +406,9 @@ impl KeepRow {
         };
         let counts = note_counts(&note);
         let mut hints = Vec::new();
+        if is_ref {
+            hints.push("🔗 ref".to_string());
+        }
         if counts.extra_lines > 0 {
             hints.push(if counts.extra_lines == 1 {
                 "+1 line".to_string()
@@ -586,6 +662,7 @@ fn print_json(
     vault: &VaultData,
     keep: Option<&KeepView>,
     keep_error: Option<&GkeepError>,
+    ref_hints: &RefHints,
 ) {
     let keep_value = match (keep, keep_error) {
         (Some(keep), _) => {
@@ -599,7 +676,10 @@ fn print_json(
                         KeepNoteKind::Note => "note",
                         KeepNoteKind::List => "list",
                     };
-                    json!({
+                    // `ref` stays the short selection id; a note a
+                    // pull would clip carries its offline verdict as
+                    // `clip`.
+                    let mut note = json!({
                         "id": planned.note.id,
                         "ref": planned.ref_,
                         "kind": kind,
@@ -617,7 +697,17 @@ fn print_json(
                         "items_open": counts.open_items,
                         "items_checked": counts.checked_items,
                         "attachments": planned.note.attachments.len(),
-                    })
+                    });
+                    if let Some((url, display, verdict)) =
+                        ref_hints.get(&planned.note.id)
+                    {
+                        note["clip"] = json!({
+                            "url": url,
+                            "display": display,
+                            "verdict": verdict,
+                        });
+                    }
+                    note
                 })
                 .collect();
             json!({

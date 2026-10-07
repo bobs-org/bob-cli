@@ -175,11 +175,12 @@ impl AdapterClient {
         Ok(snapshot.notes)
     }
 
-    /// Archive notes whose content still matches, in one guarded call.
+    /// Archive notes whose content and attachment count still match,
+    /// in one guarded call.
     pub(crate) fn archive(
         &self,
         credentials: &Credentials,
-        notes: &[(String, KeepContent)],
+        notes: &[(String, KeepContent, usize)],
         spinner_label: Option<&str>,
     ) -> Result<Vec<ArchiveResult>, GkeepError> {
         let request = ArchiveRequest {
@@ -188,9 +189,10 @@ impl AdapterClient {
             auth: credentials.auth(),
             notes: notes
                 .iter()
-                .map(|(id, expect)| ArchiveTarget {
+                .map(|(id, expect, expect_attachments)| ArchiveTarget {
                     id: id.clone(),
                     expect: expect.clone(),
+                    expect_attachments: *expect_attachments,
                 })
                 .collect(),
         };
@@ -632,7 +634,7 @@ mod tests {
         let results = client
             .archive(
                 &test_credentials(),
-                &[("note-1".to_string(), content)],
+                &[("note-1".to_string(), content, 0)],
                 None,
             )
             .expect("archive succeeds");

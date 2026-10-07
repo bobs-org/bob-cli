@@ -770,3 +770,44 @@ fn all_with_no_tasks_prints_no_tasks() {
         stdout(&output)
     );
 }
+
+#[test]
+fn url_only_note_shows_ref_hint_and_json_verdict() {
+    let env = GkeepEnv::new("bob-cli-gkeep-list-ref");
+    install_token_stub(&env);
+    write_target(&env, "## Tasks\n");
+    let fake = FakeAdapter::new(&env, "adapter");
+    let url_note = note("")
+        .id("note-1")
+        .text("https://example.com/post")
+        .build();
+    let task_note = note("Call dentist")
+        .id("note-2")
+        .text("They close at 5")
+        .build();
+    fake.respond(
+        "snapshot",
+        &snapshot_ok("bryanbugyi34@gmail.com", vec![url_note, task_note]),
+    );
+    let output = list_command(&env, &fake, &[]).output().expect("run");
+    assert_eq!(output.status.code(), Some(0));
+    let text = stdout(&output);
+    assert!(text.contains("🔗 ref"), "ref hint:\n{text}");
+    let output = list_command(&env, &fake, &["-f", "json"])
+        .output()
+        .expect("run");
+    assert_eq!(output.status.code(), Some(0));
+    let document: serde_json::Value =
+        serde_json::from_str(&stdout(&output)).expect("json parses");
+    let notes = document["keep"]["notes"].as_array().expect("notes array");
+    assert_eq!(notes.len(), 2);
+    assert_eq!(notes[0]["id"], "note-1");
+    assert_eq!(notes[0]["state"], "new");
+    assert_eq!(notes[0]["clip"]["url"], "https://example.com/post");
+    assert_eq!(notes[0]["clip"]["display"], "example.com/post");
+    assert_eq!(notes[0]["clip"]["verdict"], "not_found");
+    assert!(
+        notes[1].get("clip").is_none(),
+        "ordinary notes carry no clip:\n{document}"
+    );
+}

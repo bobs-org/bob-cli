@@ -117,6 +117,7 @@ fn pull_command() -> ClapCommand {
         .arg(limit_arg())
         .arg(no_archive_arg())
         .arg(no_commit_arg())
+        .arg(no_ref_arg())
         .arg(quiet_arg())
         .after_help(pull_after_help())
 }
@@ -230,6 +231,14 @@ fn no_commit_arg() -> Arg {
         .short('C')
         .action(ArgAction::SetTrue)
         .help("Skip the vault Git commit after writing")
+}
+
+fn no_ref_arg() -> Arg {
+    Arg::new("no-ref")
+        .long("no-ref")
+        .short('R')
+        .action(ArgAction::SetTrue)
+        .help("Keep URL-only notes as inbox tasks instead of clipping them")
 }
 
 fn quiet_arg() -> Arg {
@@ -402,6 +411,8 @@ pub(crate) struct PullArgs {
     pub no_archive: bool,
     /// Skip the vault Git commit after writing.
     pub no_commit: bool,
+    /// Keep URL-only notes as inbox tasks instead of clipping them.
+    pub no_ref: bool,
     /// Print only errors.
     pub quiet: bool,
 }
@@ -425,6 +436,7 @@ impl PullArgs {
             limit: matches.get_one::<u64>("limit").copied(),
             no_archive: matches.get_flag("no-archive"),
             no_commit: matches.get_flag("no-commit"),
+            no_ref: matches.get_flag("no-ref"),
             quiet: matches.get_flag("quiet"),
         }
     }
@@ -546,6 +558,7 @@ mod tests {
                 "5",
                 "-n",
                 "-C",
+                "-R",
                 "-q",
             ],
             "pull",
@@ -559,6 +572,7 @@ mod tests {
         assert_eq!(args.limit, Some(5));
         assert!(args.no_archive);
         assert!(args.no_commit);
+        assert!(args.no_ref);
         assert!(args.quiet);
         assert_eq!(args.error_format(), "json");
 
@@ -568,6 +582,7 @@ mod tests {
         ));
         assert_eq!(args.id, Vec::<String>::new());
         assert_eq!(args.limit, None);
+        assert!(!args.no_ref);
         assert_eq!(args.format, HumanFormat::Human);
         assert_eq!(args.error_format(), "human");
     }

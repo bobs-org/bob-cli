@@ -66,6 +66,8 @@ pub(crate) struct KeepNote {
     pub(crate) labels: Vec<String>,
     #[serde(default)]
     pub(crate) attachments: Vec<Attachment>,
+    #[serde(default)]
+    pub(crate) links: Vec<KeepLink>,
     pub(crate) created: String,
     pub(crate) edited: String,
     #[serde(default)]
@@ -92,6 +94,14 @@ fn parse_keep_time(value: &str) -> Option<DateTime<Local>> {
 pub(crate) enum KeepNoteKind {
     Note,
     List,
+}
+
+/// A shared-link preview from `note.annotations.links` (WebLink).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct KeepLink {
+    pub(crate) url: String,
+    #[serde(default)]
+    pub(crate) title: String,
 }
 
 /// A Keep attachment; its OCR text never feeds the fingerprint.
@@ -154,11 +164,13 @@ pub(crate) struct SnapshotRequest {
     pub(crate) include_archived: bool,
 }
 
-/// One note the adapter should archive, guarded by expected content.
+/// One note the adapter should archive, guarded by expected content
+/// plus the live attachment count.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct ArchiveTarget {
     pub(crate) id: String,
     pub(crate) expect: KeepContent,
+    pub(crate) expect_attachments: usize,
 }
 
 /// An `archive` request: archive notes whose content still matches.
@@ -341,6 +353,7 @@ mod tests {
             notes: vec![ArchiveTarget {
                 id: "n1".to_string(),
                 expect: sample_content(),
+                expect_attachments: 0,
             }],
         };
         let json = serde_json::to_value(&archive).expect("json");
