@@ -8,7 +8,9 @@ filtered library views, defaulting to the reading queue (queued and
 started notes). `bob ref show` resolves one or more exact references
 into their metadata, annotations, notes, and tasks. All three verbs
 never write to the vault (the one exception is `find -i`, which reads
-intake PDF markers).
+intake PDF markers). `bob ref migrate-zorg` is the dry-run planner
+for the one bulk vault write: moving zorg-era `status::` reading
+records into legacy notes under `ref/zorg/`.
 
 ## Coverage
 
@@ -225,6 +227,69 @@ exact notes with `bob ref show <path>`. Prefer `-c -f markdown` for
 Bryan's own thoughts on a reference, and never claim a `not_found`
 result means he has not read something — it only means it is not under
 `ref/`.
+
+## Migrating zorg-era records (`bob ref migrate-zorg`)
+
+```bash
+bob ref migrate-zorg
+bob ref migrate-zorg -f json
+```
+
+Options: `-b/--bob-dir`, `-f/--format human|json` (default
+human), `-o/--offline`, `-r/--ref-dir`. The bare command is a
+read-only dry run: no lock, no sync, no writes. It plans one legacy
+note per unmirrored zorg-era `status::` record and prints the plan as
+a human or JSON report.
+
+Every parsed record lands in exactly one bucket: `already_migrated`
+(an indexed ref note carries the same `source_path` plus the same
+`source_block` with a matching `source_id`, or the block in its
+`source_blocks`), `skipped` (`no_owner`, `no_id`, or
+`unassigned_chapter`), `chapter` (folded into a book note), or `note`.
+
+- **Layout.** Each note goes to `<ref-dir>/zorg/<hub>/<stem>.md`,
+  where the hub is the source file's stem. The stem is the record's
+  `ID::` value unless that stem already names a Markdown file anywhere
+  in the vault (including `_generated/` and `ref/`) or another note
+  planned in the same run; collisions become `<ID>_ref`,
+  `<ID>_ref_2`, and so on, planned in source-path then owner-line
+  order. The report lists every rename and the file it avoided.
+- **Note shape.** Frontmatter in fixed key order (`parent`, `type`,
+  `tags`, `ref_type`, `status`, `legacy_status`, `title`, `url`,
+  `source_note`, `source_block`, `source_id`, `source_path`,
+  `source_line_start`, `source_line_end`, plus `source_blocks` and
+  `legacy_chapter_statuses` on books). Tags are `zorg/reference` plus
+  the `#tags` on the owner line. `ref_type` is the `lib/<kind>/` of
+  the first `file::` wikilink, else `zorg` (`chat` notes read as
+  `agent-report` origin). The title is the record's `title::` field
+  when present, else the humanized ID (words split on `_`/`-` and
+  capitalized, with ai, api, cli, gtd, html, http, json, llm, lsp,
+  mcp, pdf, prd, sql, ui, url, ux, and yaml uppercased). The body
+  carries `## Files`, `## Related`, `## Chapters` (books), and an
+  escaped `## Original Record` fence. No `^ref` tracker is written,
+  so migrated notes stay out of the reading queue.
+- **Books.** A source file holding exactly one BOOK record is a book;
+  its `LID::` records (plus an `ID::` record tied by a `| BOOK:`
+  line) fold into the book's note as `## Chapters` lines with their
+  blocks appended to the fence. The book's reading state derives
+  from its chapters. An `LID::` record with no owning book is
+  skipped as `unassigned_chapter`.
+- **URLs.** The first token of the inline `url::` value plus the
+  first token of each nested item under it; only values that pass
+  URL validation are stored (one scalar, a list for several, omitted
+  for none), so no migrated note earns an `opaque_url` diagnostic.
+  URL, arXiv, and DOI matches against existing notes are reported
+  as identity hits, and each record still migrates as its own note.
+
+The human report prints a headline (`N records in F files → M notes
+under ref/zorg/`), counts by status and by file, books with chapter
+counts and derived states, renamed stems, notes without a URL,
+identity hits, the already-migrated count, skipped records with
+reasons, and `coverage after --write: K unindexed`. The JSON
+envelope carries the same data with `mode: "dry_run"` and
+`commit: null`; each note entry shows its path, title, `ref_type`,
+provenance, `reading_state` (computed by running the rendered note
+through the index row builder), chapter count, and rename.
 
 ## JSON envelope
 

@@ -26,8 +26,9 @@ mod status;
 mod tests;
 
 pub(crate) use coverage::{
-    count_zorg_records, normalize_block_id, ZorgCoverage,
+    count_zorg_records, normalize_block_id, zorg_source_files, ZorgCoverage,
 };
+pub(crate) mod migrate_zorg;
 // Reserved for the `planner` phase: the shared record-parser API.
 #[allow(unused_imports)]
 pub(crate) use coverage::{parse_zorg_records, record_is_mirrored, ZorgRecord};

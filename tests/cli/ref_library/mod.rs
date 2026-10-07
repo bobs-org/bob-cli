@@ -3,6 +3,7 @@
 
 mod find;
 mod list;
+mod migrate_zorg;
 mod show;
 
 use crate::support::*;

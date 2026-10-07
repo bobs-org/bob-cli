@@ -71,6 +71,27 @@ impl ZorgCoverage {
     }
 }
 
+/// Vault Markdown files scanned for zorg records as
+/// (absolute path, vault-relative `/`-separated display), sorted.
+pub(crate) fn zorg_source_files(
+    bob_dir: &Path,
+    ref_dir: &Path,
+) -> Vec<(PathBuf, String)> {
+    let mut files = Vec::new();
+    collect_zorg_files(bob_dir, bob_dir, ref_dir, &mut files);
+    files.sort();
+    files
+        .into_iter()
+        .map(|path| {
+            let display = path
+                .strip_prefix(bob_dir)
+                .map(|rel| rel.to_string_lossy().replace('\\', "/"))
+                .unwrap_or_else(|_| path.to_string_lossy().into_owned());
+            (path, display)
+        })
+        .collect()
+}
+
 /// Count unmirrored zorg-era records under `bob_dir`, excluding `ref_dir`,
 /// hidden directories, `_generated/`, and `*.assets/` directories.
 pub(crate) fn count_zorg_records(
@@ -78,17 +99,10 @@ pub(crate) fn count_zorg_records(
     ref_dir: &Path,
     rows: &[RefRow],
 ) -> ZorgCoverage {
-    let mut files = Vec::new();
-    collect_zorg_files(bob_dir, bob_dir, ref_dir, &mut files);
-    files.sort();
     let mut per_file: Vec<(String, usize)> = Vec::new();
     let mut total = 0usize;
-    for path in &files {
-        let display = path
-            .strip_prefix(bob_dir)
-            .map(|rel| rel.to_string_lossy().replace('\\', "/"))
-            .unwrap_or_else(|_| path.to_string_lossy().into_owned());
-        let Ok(contents) = std::fs::read_to_string(path) else {
+    for (path, display) in zorg_source_files(bob_dir, ref_dir) {
+        let Ok(contents) = std::fs::read_to_string(&path) else {
             continue;
         };
         let count = parse_zorg_records(&contents, &display)

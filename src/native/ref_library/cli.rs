@@ -34,7 +34,7 @@ use crate::native::style::{terminal_width, Styler};
 pub(crate) fn find_command() -> ClapCommand {
     ClapCommand::new("find")
         .about(
-            "Look up URLs, arXiv IDs, DOIs, paths, or titles in the reference library",
+            "Look up URLs, arXiv IDs, DOIs, paths, or titles in the library",
         )
         .arg(
             Arg::new("query")
@@ -87,7 +87,7 @@ pub(crate) fn find_command() -> ClapCommand {
 pub(crate) fn list_command() -> ClapCommand {
     ClapCommand::new("list")
         .about(
-            "List reference notes by reading state, status, type, origin, or date",
+            "List notes by reading state, status, type, origin, or date",
         )
         .arg(
             Arg::new("all")
@@ -207,7 +207,7 @@ pub(crate) fn list_command() -> ClapCommand {
 pub(crate) fn show_command() -> ClapCommand {
     ClapCommand::new("show")
         .about(
-            "Show reference notes with metadata, annotations, and your own notes",
+            "Show notes with metadata, annotations, and your own notes",
         )
         .arg(
             Arg::new("ref")

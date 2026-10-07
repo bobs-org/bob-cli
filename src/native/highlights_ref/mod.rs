@@ -274,6 +274,11 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
         Some(("show", sub_matches)) => {
             crate::native::ref_library::cli::run_show(sub_matches)
         }
+        Some(("migrate-zorg", sub_matches)) => {
+            crate::native::ref_library::migrate_zorg::run_migrate_zorg(
+                sub_matches,
+            )
+        }
         Some(("jobs", sub_matches)) => {
             crate::native::ref_jobs::run(sub_matches)
         }
