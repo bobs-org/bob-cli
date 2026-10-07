@@ -215,7 +215,9 @@ pub(crate) fn command() -> ClapCommand {
             participate in default target derivation. `-L, --listen` narrates the article with \
             `highlights.listen_command` (`BOB_HIGHLIGHTS_LISTEN_COMMAND` overrides), which must write \
             MP3 audio to `{audio}`; bob shell-quotes the values itself and streams the command output \
-            unchanged. If the URL is already captured, `--listen` attaches the episode for scan to pair.",
+            unchanged. If the URL is already captured, `--listen` attaches the episode for scan to pair; \
+            a URL recorded only by legacy notes without a Highlights PDF instead warns and captures \
+            a fresh copy, which scan treats as superseding the older notes.",
         )
 }
 
@@ -349,7 +351,7 @@ fn clip_pdf(
         ),
         false => Companion::None,
     };
-    capture_article(config, &raw_url, &options, companion)
+    capture_article(config, &raw_url, &options, companion, false)
 }
 
 /// Map a dedupe refusal to its outcome: clear to proceed, attach the
@@ -444,12 +446,15 @@ fn run_clip_attach(
 
 /// Capture a web article through the clip adapter and install the
 /// stamped PDF. Shared by `clip` (no companion) and `create <article
-/// URL>` (explicit `--audio` companion, if any).
+/// URL>` (explicit `--audio` companion, if any). `create` already
+/// warned about legacy-only hits before its fetch, so it passes
+/// `legacy_warned` to keep the warning to one line.
 pub(super) fn capture_article(
     config: &Config,
     raw_url: &str,
     options: &ClipOptions,
     companion: Companion,
+    legacy_warned: bool,
 ) -> std::result::Result<(), ClipError> {
     let web_url = validate_and_clean(raw_url)?;
     if let Some(html) = &options.html
@@ -463,11 +468,13 @@ pub(super) fn capture_article(
     }
 
     // Dedupe against ref notes and queued intake PDFs before launching
-    // anything expensive. A ref-note hit always refuses. An xlib hit
-    // refuses unless --force can still prove the same target: when the
-    // stem is only known after capture, that proof waits for the final
-    // plan below. With `--listen`, a hit attaches the new episode to
-    // the existing capture instead.
+    // anything expensive. A PDF-backed ref-note hit always refuses. An
+    // xlib hit refuses unless --force can still prove the same target:
+    // when the stem is only known after capture, that proof waits for
+    // the final plan below. With `--listen`, a hit attaches the new
+    // episode to the existing capture instead. A URL recorded only by
+    // legacy notes without a Highlights PDF warns and captures a fresh
+    // copy instead of refusing.
     let recorded = collect_recorded_source_urls(config)?;
     if let Some(hit) = check_dedupe_for_clip(
         &recorded,
@@ -483,6 +490,10 @@ pub(super) fn capture_article(
             &web_url.cleaned,
             options.dry_run,
         );
+    }
+    let legacy = legacy_hits(&recorded, &web_url.dedupe_key);
+    if !legacy_warned {
+        warn_for_legacy_hits(&legacy);
     }
 
     // Fail fast when the target is already known: --output, --name, or a
@@ -703,6 +714,7 @@ pub(super) fn capture_article(
             &captured,
             &response,
             audio.as_ref().or(listen_display_audio.as_ref()),
+            &legacy,
         );
         return Ok(());
     }
@@ -941,6 +953,7 @@ fn print_dry_run(
     captured: &str,
     response: &CaptureSuccess,
     audio: Option<&super::companion::AudioCopyPlan>,
+    legacy: &[RecordedSource],
 ) {
     println!(
         "{} would create Highlights-ready web PDF",
@@ -989,6 +1002,12 @@ fn print_dry_run(
         response.fidelity.page_code_blocks,
     );
     print_warnings(styler, &response.warnings);
+    for hit in legacy {
+        println!(
+            "legacy: {} (superseded by this capture)",
+            hit.path.display()
+        );
+    }
     let marker = compose_marker(
         &options.status,
         &options.parent,

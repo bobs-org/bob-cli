@@ -704,6 +704,66 @@ fn listen_attaches_for_legacy_url_arxiv_note() {
 }
 
 #[test]
+fn listen_legacy_only_hit_captures_fresh_instead_of_attaching() {
+    // A URL recorded only by a legacy note without a Highlights PDF is
+    // a normal capture plus listen, never attach mode.
+    let temp = TempDir::new("bob-cli-highlights-listen-legacy");
+    let vault = temp.path().join("vault");
+    let fake_clip = FakeClip::new(&temp, "fake");
+    write_file(
+        &vault.join("ref/ai/old.md"),
+        "---\ntitle: Old\nurl: https://example.com/index/open-source-codex-orchestration-symphony/\n---\n\n# Old\n",
+    );
+    let (fake, log) = listen_for(&temp);
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("clip")
+        .arg("https://example.com/index/open-source-codex-orchestration-symphony/")
+        .arg("-b")
+        .arg(&vault)
+        .arg("--listen")
+        .env("BOB_WEB_CLIP_ADAPTER", &fake_clip.path)
+        .env("BOB_HIGHLIGHTS_LISTEN_COMMAND", listen_command(&fake))
+        .env("FAKE_LISTEN_LOG", &log)
+        .output()
+        .expect("run clip --listen over legacy-only note");
+    assert_success(&output);
+    let diagnostic = stderr(&output);
+    assert!(
+        diagnostic.contains("already in the library as")
+            && diagnostic.contains("ref/ai/old.md"),
+        "expected the legacy warning, not a refusal:\n{}",
+        format_output(&output)
+    );
+    let report = stdout(&output);
+    assert!(
+        !report.contains("attached listen episode"),
+        "a legacy-only hit must not attach:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        vault
+            .join("xlib/blogs/open_source_codex_orchestration_symphony.pdf")
+            .is_file(),
+        "the fresh copy must install:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        vault
+            .join("xlib/blogs/open_source_codex_orchestration_symphony.mp3")
+            .is_file(),
+        "the episode must bind to the fresh capture:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        log.is_file(),
+        "the listen command ran instead of attaching:\n{}",
+        format_output(&output)
+    );
+}
+
+#[test]
 fn listen_attach_refuses_when_audio_exists() {
     // A ref note that already carries an audio field refuses.
     let temp = TempDir::new("bob-cli-highlights-listen-attach-audio-field");

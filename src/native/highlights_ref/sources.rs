@@ -7,6 +7,12 @@
 //! so the existing paper refs (which use the ad hoc `url:` key) take part
 //! in dedupe instead of being duplicated. Moved out of `clip.rs` so the
 //! `create` PDF routes share it.
+//!
+//! A ref-note hit refuses only when the note is PDF-backed (it carries a
+//! `source_pdf`). A URL recorded only by a legacy note without a
+//! Highlights PDF is not a refusal: [`legacy_hits`] returns those hits so
+//! callers can warn and capture a fresh copy, which `bob ref scan` later
+//! treats as superseding the older note.
 
 use std::{
     fs,
@@ -214,9 +220,51 @@ fn collect_intake_sources(
     Ok(())
 }
 
+/// Ref-note hits that [`check_dedupe`] lets through: the note records
+/// the URL but has no `source_pdf`, so it is a legacy note without a
+/// Highlights PDF. Callers warn about these and capture a fresh copy.
+pub(super) fn legacy_hits(
+    recorded: &[RecordedSource],
+    dedupe_key: &str,
+) -> Vec<RecordedSource> {
+    recorded
+        .iter()
+        .filter(|hit| {
+            hit.dedupe_key == dedupe_key
+                && hit.is_ref_note
+                && hit.source_pdf.is_none()
+        })
+        .cloned()
+        .collect()
+}
+
+/// Warn about a legacy-only capture: the URL is already in the library,
+/// but only in notes without a Highlights PDF, so a fresh copy is
+/// captured and the older notes are superseded once `bob ref scan`
+/// writes the new one.
+pub(super) fn warn_for_legacy_hits(hits: &[RecordedSource]) {
+    for hit in hits {
+        eprintln!(
+            "warning: already in the library as {}, a note without a Highlights PDF; capturing a fresh copy",
+            hit.path.display(),
+        );
+        eprintln!(
+            "hint: bob ref find and bob ref list treat the older note as superseded once bob ref scan writes the new one",
+        );
+    }
+}
+
+/// A ref-note hit is PDF-backed: it carries a `source_pdf`, so the URL
+/// is already captured. Legacy-only notes (no `source_pdf`) never
+/// refuse; see [`legacy_hits`].
+fn is_refusing_ref_note(hit: &RecordedSource) -> bool {
+    hit.is_ref_note && hit.source_pdf.is_some()
+}
+
 /// The recorded source that [`check_dedupe`] would refuse, if any.
 /// `--listen` attach mode uses this to bind the new episode to the
-/// existing capture instead of refusing.
+/// existing capture instead of refusing. Legacy-only hits never attach:
+/// a `--listen` capture over them is a normal capture plus listen.
 pub(super) fn find_refusing_hit(
     recorded: &[RecordedSource],
     dedupe_key: &str,
@@ -227,8 +275,11 @@ pub(super) fn find_refusing_hit(
         if hit.dedupe_key != dedupe_key {
             continue;
         }
-        if hit.is_ref_note {
+        if is_refusing_ref_note(hit) {
             return Some(hit.clone());
+        }
+        if hit.is_ref_note {
+            continue;
         }
         let same_target = planned_target.is_some_and(|target| {
             normalize_lexically(target) == normalize_lexically(&hit.path)
@@ -256,13 +307,16 @@ pub(super) fn check_dedupe(
         if hit.dedupe_key != dedupe_key {
             continue;
         }
-        if hit.is_ref_note {
+        if is_refusing_ref_note(hit) {
             return Err(SourcesError::new(format!(
                 "already captured as {} (source_url {})",
                 hit.path.display(),
                 dedupe_key,
             ))
             .with_hint("open the note, or delete it to recapture"));
+        }
+        if hit.is_ref_note {
+            continue;
         }
         let same_target = planned_target.is_some_and(|target| {
             normalize_lexically(target) == normalize_lexically(&hit.path)
@@ -314,7 +368,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_url_notes_are_recorded_with_source_pdf_and_audio() {
+    fn pdf_backed_legacy_url_notes_are_recorded_and_still_refuse() {
         let root = test_dir("legacy-url");
         let config = test_config(&root);
         fs::create_dir_all(config.ref_dir.join("papers"))
@@ -364,12 +418,92 @@ mod tests {
     }
 
     #[test]
+    fn legacy_only_notes_warn_instead_of_refusing() {
+        let root = test_dir("legacy-only");
+        let config = test_config(&root);
+        fs::create_dir_all(config.ref_dir.join("ai")).expect("create ref dir");
+        fs::write(
+            config.ref_dir.join("ai/old.md"),
+            "---\ntitle: Old\nurl: https://example.com/essay/\n---\n\n# Old\n",
+        )
+        .expect("write legacy-only note");
+
+        let recorded =
+            collect_recorded_source_urls(&config).expect("collect sources");
+        assert_eq!(recorded.len(), 1, "the legacy-only note records");
+        assert!(
+            recorded[0].source_pdf.is_none(),
+            "the fixture has no source_pdf"
+        );
+
+        let cleaned = validate_and_clean("https://example.com/essay/")
+            .expect("clean url");
+        check_dedupe(&recorded, &cleaned.dedupe_key, None, false)
+            .expect("a legacy-only hit must not refuse");
+        assert!(
+            find_refusing_hit(&recorded, &cleaned.dedupe_key, None, false)
+                .is_none(),
+            "a legacy-only hit must never attach"
+        );
+        let legacy = legacy_hits(&recorded, &cleaned.dedupe_key);
+        assert_eq!(legacy.len(), 1, "the legacy hit is reported");
+        assert_eq!(legacy[0].path, recorded[0].path);
+        assert!(
+            legacy_hits(&recorded, "https://example.com/other").is_empty(),
+            "other keys report no legacy hits"
+        );
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn pdf_backed_note_still_refuses_beside_a_legacy_only_note() {
+        let recorded = vec![
+            RecordedSource {
+                dedupe_key: "https://example.com/essay".to_string(),
+                path: PathBuf::from("ref/ai/old.md"),
+                is_ref_note: true,
+                source_pdf: None,
+                has_audio: false,
+            },
+            RecordedSource {
+                dedupe_key: "https://example.com/essay".to_string(),
+                path: PathBuf::from("ref/blogs/fresh.md"),
+                is_ref_note: true,
+                source_pdf: Some("lib/blogs/fresh.pdf".to_string()),
+                has_audio: false,
+            },
+        ];
+        let error =
+            check_dedupe(&recorded, "https://example.com/essay", None, false)
+                .expect_err("the PDF-backed hit must refuse");
+        assert!(
+            error.message.contains("already captured as")
+                && error.message.contains("ref/blogs/fresh.md"),
+            "the refusal names the PDF-backed note: {}",
+            error.message
+        );
+        let hit = find_refusing_hit(
+            &recorded,
+            "https://example.com/essay",
+            None,
+            false,
+        )
+        .expect("the PDF-backed hit attaches");
+        assert_eq!(hit.path, PathBuf::from("ref/blogs/fresh.md"));
+        assert_eq!(
+            legacy_hits(&recorded, "https://example.com/essay").len(),
+            1,
+            "the legacy-only hit is still reported"
+        );
+    }
+
+    #[test]
     fn non_arxiv_keys_pass_through_unchanged() {
         let recorded = vec![RecordedSource {
             dedupe_key: "https://example.com/a?a=1&b=2".to_string(),
             path: PathBuf::from("ref/blogs/existing.md"),
             is_ref_note: true,
-            source_pdf: None,
+            source_pdf: Some("lib/blogs/existing.pdf".to_string()),
             has_audio: false,
         }];
         check_dedupe(&recorded, "https://example.com/a?a=1&b=2", None, false)

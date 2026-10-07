@@ -451,10 +451,13 @@ fn highlights_clip_refuses_library_and_dedupe_collisions_early() {
         "the library collision must precede the adapter"
     );
 
+    // A PDF-backed note refuses even with --force. A note without a
+    // `source_pdf` instead warns and captures (see
+    // `highlights_clip_captures_a_legacy_only_url_note_with_a_warning`).
     let dedupe_vault = temp.path().join("dedupe-vault");
     write_file(
         &dedupe_vault.join("ref/blogs/existing.md"),
-        "---\nsource_url: https://example.com/index/open-source-codex-orchestration-symphony/\ntitle: Existing\n---\n\n# Existing\n",
+        "---\nsource_url: https://example.com/index/open-source-codex-orchestration-symphony/\nsource_pdf: lib/blogs/existing.pdf\ntitle: Existing\n---\n\n# Existing\n",
     );
     let output = bob_command()
         .arg("highlights")
@@ -484,16 +487,89 @@ fn highlights_clip_refuses_library_and_dedupe_collisions_early() {
 }
 
 #[test]
-fn highlights_clip_refuses_a_legacy_url_note_for_the_same_article() {
+fn highlights_clip_captures_a_legacy_only_url_note_with_a_warning() {
     let temp = TempDir::new("bob-cli-highlights-clip-legacy-url");
     let vault = temp.path().join("vault");
     let fake = FakeClip::new(&temp, "fake");
 
-    // A ref note carrying only the legacy `url:` key (as the existing
-    // paper refs do) takes part in dedupe.
+    // A ref note carrying only the legacy `url:` key and no `source_pdf`
+    // (as the zorg-migrated notes do) no longer refuses: the URL
+    // captures with a warning, and scan later treats the old note as
+    // superseded.
+    write_file(
+        &vault.join("ref/ai/old.md"),
+        "---\ntitle: Old\nurl: https://example.com/index/open-source-codex-orchestration-symphony/\n---\n\n# Old\n",
+    );
+    let output = bob_command()
+        .arg("highlights")
+        .arg("clip")
+        .arg(CLIP_URL)
+        .arg("-b")
+        .arg(&vault)
+        .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+        .output()
+        .expect("run bob highlights clip over legacy-only note");
+    assert_success(&output);
+    let diagnostic = stderr(&output);
+    assert!(
+        diagnostic.contains("already in the library as")
+            && diagnostic.contains("ref/ai/old.md")
+            && diagnostic.contains("capturing a fresh copy"),
+        "expected the legacy warning:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        fake.called(),
+        "the legacy-only hit must not precede the adapter"
+    );
+    assert!(
+        vault.join(format!("xlib/blogs/{CLIP_STEM}.pdf")).is_file(),
+        "the fresh copy must install:\n{}",
+        format_output(&output)
+    );
+
+    // A dry run reports the legacy hit without writing.
+    let dry_vault = temp.path().join("dry-vault");
+    write_file(
+        &dry_vault.join("ref/ai/old.md"),
+        "---\ntitle: Old\nurl: https://example.com/index/open-source-codex-orchestration-symphony/\n---\n\n# Old\n",
+    );
+    let output = bob_command()
+        .arg("highlights")
+        .arg("clip")
+        .arg(CLIP_URL)
+        .arg("-b")
+        .arg(&dry_vault)
+        .arg("--dry-run")
+        .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+        .output()
+        .expect("run bob highlights clip --dry-run over legacy-only note");
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("legacy:")
+            && report.contains("ref/ai/old.md")
+            && report.contains("(superseded by this capture)"),
+        "expected the dry-run legacy line:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        stderr(&output).contains("already in the library as"),
+        "the dry run still warns on stderr:\n{}",
+        format_output(&output)
+    );
+}
+
+#[test]
+fn highlights_clip_still_refuses_a_pdf_backed_url_note() {
+    let temp = TempDir::new("bob-cli-highlights-clip-pdf-backed-url");
+    let vault = temp.path().join("vault");
+    let fake = FakeClip::new(&temp, "fake");
+
+    // A `url:` on a PDF-backed note is still an already-captured URL.
     write_file(
         &vault.join("ref/papers/ea_graph.md"),
-        "---\ntitle: EA-Graph\nurl: https://arxiv.org/pdf/2608.04278\n---\n\n# EA-Graph\n",
+        "---\ntitle: EA-Graph\nurl: https://arxiv.org/pdf/2608.04278\nsource_pdf: lib/papers/ea_graph.pdf\n---\n\n# EA-Graph\n",
     );
     let output = bob_command()
         .arg("highlights")
@@ -503,11 +579,11 @@ fn highlights_clip_refuses_a_legacy_url_note_for_the_same_article() {
         .arg(&vault)
         .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
         .output()
-        .expect("run bob highlights clip over legacy-url note");
+        .expect("run bob highlights clip over PDF-backed url note");
     assert_eq!(
         output.status.code(),
         Some(1),
-        "a legacy url: note must refuse the same paper:\n{}",
+        "a PDF-backed url: note must refuse the same paper:\n{}",
         format_output(&output)
     );
     assert!(
@@ -517,7 +593,7 @@ fn highlights_clip_refuses_a_legacy_url_note_for_the_same_article() {
     );
     assert!(
         !fake.called(),
-        "the legacy-url dedupe must precede the adapter"
+        "the PDF-backed dedupe must precede the adapter"
     );
 }
 

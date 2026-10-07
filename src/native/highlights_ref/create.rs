@@ -440,6 +440,15 @@ fn create_pdf(
             None,
             options.force,
         )?;
+        // A URL recorded only by legacy notes without a Highlights PDF
+        // warns here, before any fetch, and captures a fresh copy. The
+        // arXiv and PDF routes share this key (`dedupe_key_for` is
+        // arXiv-aware), so they must not warn again; the article route
+        // is told the warning already fired.
+        sources_mod::warn_for_legacy_hits(&sources_mod::legacy_hits(
+            &recorded,
+            &dedupe_key,
+        ));
         if let Some(paper) = arxiv {
             return create_arxiv_route(
                 config,
@@ -637,11 +646,14 @@ fn create_article_route(
             ));
         }
     };
+    // The top-level dispatch already warned about legacy-only hits
+    // before its fetch.
     super::clip::capture_article(
         config,
         &url.cleaned,
         &clip_options,
         companion,
+        true,
     )?;
     Ok(())
 }
@@ -1018,6 +1030,7 @@ fn create_local_pdf_route(
             &marker,
             audio.as_ref(),
             options,
+            &[],
         );
         return Ok(());
     }
@@ -1205,6 +1218,7 @@ fn create_pdf_url_route(
             &marker,
             audio.as_ref(),
             options,
+            &sources_mod::legacy_hits(recorded, &url.dedupe_key),
         );
         return Ok(());
     }
@@ -1427,6 +1441,12 @@ fn create_arxiv_route(
                 )
             );
         }
+        let mut legacy = sources_mod::legacy_hits(recorded, &key);
+        for hit in sources_mod::legacy_hits(recorded, &url.dedupe_key) {
+            if !legacy.iter().any(|known| known.path == hit.path) {
+                legacy.push(hit);
+            }
+        }
         print_pdf_dry_run(
             config,
             &styler,
@@ -1438,6 +1458,7 @@ fn create_arxiv_route(
             &marker,
             audio.as_ref(),
             options,
+            &legacy,
         );
         return Ok(());
     }
@@ -1542,6 +1563,7 @@ fn print_pdf_dry_run(
     marker: &str,
     audio: Option<&AudioCopyPlan>,
     options: &CreateOptions,
+    legacy: &[sources_mod::RecordedSource],
 ) {
     let _ = config;
     println!(
@@ -1580,6 +1602,12 @@ fn print_pdf_dry_run(
     }
     if let Some(captured) = &pdf_plan.captured {
         println!("captured: {captured}");
+    }
+    for hit in legacy {
+        println!(
+            "legacy: {} (superseded by this capture)",
+            hit.path.display()
+        );
     }
     println!("status: {}", options.status);
     println!("parent: {}", options.parent);

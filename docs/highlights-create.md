@@ -107,9 +107,15 @@ Every URL dedupes before any fetch on its syntactic key. arXiv spellings
 (abs/html/pdf, with or without version) share
 `https://arxiv.org/abs/<id>`; everything else uses the clip key. Ref notes
 record `source_url` and legacy `url:`, and queued intake markers record
-both, so existing paper refs take part instead of duplicating. A ref-note
-hit or a queued-intake hit refuses (use `--force` only to overwrite the same
-intake target). The refusal hint points at `--listen` attach mode.
+both, so existing paper refs take part instead of duplicating. A
+PDF-backed ref-note hit or a queued-intake hit refuses (use `--force`
+only to overwrite the same intake target). The refusal hint points at
+`--listen` attach mode. A URL recorded only by legacy notes without a
+Highlights PDF warns (`already in the library as <path>, a note without
+a Highlights PDF; capturing a fresh copy`) and captures a fresh copy
+instead of refusing; with `--listen` it is a normal capture plus listen,
+never attach mode. A dry run adds
+`legacy: <path> (superseded by this capture)` to its report.
 
 Markdown and local PDFs outside the vault whose planned library destination
 already exists keep refusing; identity is not proven by stem alone. The

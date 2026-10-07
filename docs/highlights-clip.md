@@ -37,7 +37,9 @@ bob ref clip https://example.com/posts/some-article/ -L
 the episode beside the PDF as `<stem>.mp3`. The command's output streams
 unchanged, and nothing is written when it fails. When the URL is already
 captured, `--listen` attaches the episode (`xlib/<rel>.mp3`) for `scan` to
-late-pair onto the existing PDF and ref note.
+late-pair onto the existing PDF and ref note — unless the URL is recorded
+only by legacy notes without a Highlights PDF, which capture a fresh copy
+plus the episode instead.
 
 ## The pipeline
 
@@ -45,8 +47,11 @@ late-pair onto the existing PDF and ref note.
    and tracking parameters (`utm_*`, `fbclid`, `gclid`, `mc_cid`, `mc_eid`,
    `ref_src`) are removed. The cleaned URL is recorded as the marker
    `source_url`.
-2. The URL is deduped against every ref-note `source_url` and every queued
-   intake PDF. An already-captured URL is refused, even with `--force`.
+2. The URL is deduped against every ref-note `source_url` (and legacy
+   `url:`) and every queued intake PDF. An already-captured URL is
+   refused, even with `--force` — except a URL recorded only by legacy
+   notes without a Highlights PDF, which warns and captures a fresh
+   copy.
 3. The pinned adapter fetches the page, extracts the article in reader
    mode, and renders a Bob-owned print template to PDF.
 4. The PDF is stamped with a page-1 marker (`status`, `parent`, `title`,
@@ -105,6 +110,14 @@ the default port, strips the trailing slash, and sorts the remaining
 query parameters, so the same article reached through two URL spellings
 dedupes. `--force` overwrites the same intake target only; library PDFs
 are never overwritten, and an already-captured ref note is never remade.
+
+A ref-note hit refuses only when the note is PDF-backed (it carries a
+`source_pdf`). A URL recorded only by legacy notes without a Highlights
+PDF warns (`already in the library as <path>, a note without a
+Highlights PDF; capturing a fresh copy`) and captures anyway; `bob ref
+find` and `bob ref list` treat the older notes as superseded once `bob
+ref scan` writes the new one. A dry run adds
+`legacy: <path> (superseded by this capture)` to its report.
 
 ## Failure kinds
 

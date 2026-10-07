@@ -1612,7 +1612,7 @@ fn highlights_create_arxiv_uses_api_metadata_and_short_stem() {
         "abs URL must fetch /pdf/<id>: {logged}"
     );
 
-    // A legacy url: note refuses the abs URL.
+    // A `url:` on a PDF-backed note still refuses the abs URL.
     std::fs::create_dir_all(vault.join("ref/papers")).expect("create ref dir");
     write_file(
         &vault.join("ref/papers/ea_graph.md"),
@@ -1631,6 +1631,85 @@ fn highlights_create_arxiv_uses_api_metadata_and_short_stem() {
         .output()
         .expect("run duplicate arXiv");
     assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+}
+
+#[test]
+fn highlights_create_arxiv_captures_a_legacy_only_url_note_with_a_warning() {
+    let temp = TempDir::new("bob-cli-highlights-create-arxiv-legacy");
+    let vault = temp.path().join("vault");
+    let root = temp.path().join("curl-root");
+    std::fs::create_dir_all(&root).expect("create curl root");
+    write_bare_pdf(&root.join("arxiv.pdf"), Some("T"), None);
+    write_bare_pdf(&root.join("paper.pdf"), Some("T"), None);
+    write_arxiv_api_fixture(&root);
+    let fake = write_fake_curl(temp.path());
+    let log = temp.path().join("curl.log");
+    std::fs::write(&log, "").expect("init log");
+
+    // The URL is recorded only by a legacy note without a Highlights
+    // PDF, so the arXiv route captures a fresh copy with a warning.
+    std::fs::create_dir_all(vault.join("ref/ai")).expect("create ref dir");
+    write_file(
+        &vault.join("ref/ai/old.md"),
+        "---\ntitle: Old\nurl: https://arxiv.org/pdf/1706.03762\n---\n\n# Old\n",
+    );
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg("https://arxiv.org/abs/1706.03762")
+        .arg("-b")
+        .arg(&vault)
+        .env("BOB_HIGHLIGHTS_CURL", &fake)
+        .env("FAKE_CURL_ROOT", &root)
+        .env("FAKE_CURL_LOG", &log)
+        .output()
+        .expect("run create arXiv over legacy-only note");
+    assert_success(&output);
+    let diagnostic = stderr(&output);
+    assert!(
+        diagnostic.contains("already in the library as")
+            && diagnostic.contains("ref/ai/old.md")
+            && diagnostic.contains("capturing a fresh copy"),
+        "expected the legacy warning:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        vault
+            .join("xlib/papers/attention_is_all_you_need.pdf")
+            .is_file(),
+        "the fresh copy must install:\n{}",
+        format_output(&output)
+    );
+
+    // A dry run reports the legacy hit without writing.
+    let dry_vault = temp.path().join("dry-vault");
+    std::fs::create_dir_all(dry_vault.join("ref/ai"))
+        .expect("create dry ref dir");
+    write_file(
+        &dry_vault.join("ref/ai/old.md"),
+        "---\ntitle: Old\nurl: https://arxiv.org/pdf/1706.03762\n---\n\n# Old\n",
+    );
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg("https://arxiv.org/abs/1706.03762")
+        .arg("-b")
+        .arg(&dry_vault)
+        .arg("--dry-run")
+        .env("BOB_HIGHLIGHTS_CURL", &fake)
+        .env("FAKE_CURL_ROOT", &root)
+        .env("FAKE_CURL_LOG", &log)
+        .output()
+        .expect("run create arXiv --dry-run over legacy-only note");
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("legacy:")
+            && report.contains("ref/ai/old.md")
+            && report.contains("(superseded by this capture)"),
+        "expected the dry-run legacy line:\n{}",
+        format_output(&output)
+    );
 }
 
 #[test]
