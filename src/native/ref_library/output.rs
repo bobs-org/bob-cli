@@ -80,6 +80,23 @@ pub(crate) fn print_find_json(
     );
 }
 
+/// One disambiguation candidate for a `ref show` error: the note a `REF`
+/// almost named, so agents can retry without another lookup.
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct ErrorCandidate {
+    pub path: String,
+    pub title: String,
+}
+
+impl ErrorCandidate {
+    pub(crate) fn new(path: &str, title: &str) -> Self {
+        Self {
+            path: path.to_string(),
+            title: title.to_string(),
+        }
+    }
+}
+
 /// The JSON error envelope shared by the library verbs.
 #[derive(Debug, Clone, Serialize)]
 struct ErrorEnvelope {
@@ -87,6 +104,8 @@ struct ErrorEnvelope {
     schema_version: u32,
     command: &'static str,
     error: ErrorBody,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    candidates: Option<Vec<ErrorCandidate>>,
 }
 
 /// The error body inside [`ErrorEnvelope`].
@@ -117,6 +136,7 @@ pub(crate) fn print_find_error(
                 message: message.to_string(),
                 hint: hint.map(str::to_string),
             },
+            candidates: None,
         };
         println!(
             "{}",
@@ -131,6 +151,40 @@ pub(crate) fn print_find_error(
     }
 }
 
+/// Report a `ref show` resolution failure: human errors go to stderr with
+/// one `hint:` line per candidate, JSON errors go to stdout with the
+/// shared envelope plus its `candidates` array.
+pub(crate) fn print_show_error(
+    format: Format,
+    code: &str,
+    message: &str,
+    candidates: &[ErrorCandidate],
+) {
+    if format == Format::Json {
+        let envelope = ErrorEnvelope {
+            ok: false,
+            schema_version: REF_SCHEMA_VERSION,
+            command: "ref show",
+            error: ErrorBody {
+                code: code.to_string(),
+                message: message.to_string(),
+                hint: None,
+            },
+            candidates: (!candidates.is_empty()).then(|| candidates.to_vec()),
+        };
+        println!(
+            "{}",
+            serde_json::to_string(&envelope)
+                .expect("show error envelope serializes")
+        );
+        return;
+    }
+    eprintln!("{COMMAND_NAME}: error: {message}");
+    for candidate in candidates {
+        eprintln!("hint: {} — {}", candidate.path, candidate.title);
+    }
+}
+
 /// Escape one Markdown table cell: backslashes, pipes, and newlines.
 pub(crate) fn escape_cell(text: &str) -> String {
     text.replace('\\', "\\\\")
@@ -141,7 +195,7 @@ pub(crate) fn escape_cell(text: &str) -> String {
 
 /// A reading-state chip: the glyph plus word always render, and color
 /// only reinforces them.
-fn state_chip(styler: Styler, reading_state: &str) -> String {
+pub(crate) fn state_chip(styler: Styler, reading_state: &str) -> String {
     match reading_state {
         "finished" => styler.green("✓ FINISHED"),
         "started" => styler.yellow("▸ STARTED"),
@@ -180,7 +234,7 @@ fn chip_width() -> usize {
 }
 
 /// The dated suffix for a primary match, when a date is known.
-fn dated_suffix(row: &super::RefRow) -> Option<String> {
+pub(crate) fn dated_suffix(row: &super::RefRow) -> Option<String> {
     match row.reading_state.as_str() {
         "finished" => row.finished.clone().map(|date| format!("read {date}")),
         "dropped" => row.finished.clone().map(|date| format!("dropped {date}")),

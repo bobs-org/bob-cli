@@ -3,6 +3,7 @@
 
 mod find;
 mod list;
+mod show;
 
 use crate::support::*;
 use std::fs;

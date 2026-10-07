@@ -11,7 +11,7 @@ use super::*;
 /// Each entry is a group title plus the subcommand names it owns, in display
 /// order.
 pub(crate) const HELP_GROUPS: &[(&str, &[&str])] = &[
-    ("Library", &["find", "list"]),
+    ("Library", &["find", "list", "show"]),
     (
         "Highlights pipeline",
         &["clip", "create", "doctor", "marker", "scan", "sync"],
@@ -29,6 +29,7 @@ const REF_AFTER_HELP: &str = "\
 Examples:
   bob ref find https://arxiv.org/abs/1706.03762   Is this paper already in the library?
   bob ref list                                    Show the reading queue
+  bob ref show ea_graph -c                        Read your comments on one reference
   bob ref create <URL|PDF|MD> -L                  Capture a reference and narrate it
   bob ref scan                                    Sync Highlights PDFs into reference notes
 ";
@@ -73,6 +74,7 @@ fn all_subcommands() -> Vec<ClapCommand> {
     vec![
         crate::native::ref_library::cli::find_command(),
         crate::native::ref_library::cli::list_command(),
+        crate::native::ref_library::cli::show_command(),
         clip::command(),
         create::command(),
         doctor_command(),

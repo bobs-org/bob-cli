@@ -1,12 +1,14 @@
-# Reference library (`bob ref find`, `bob ref list`)
+# Reference library (`bob ref find`, `bob ref list`, `bob ref show`)
 
 `bob ref find` looks up URLs, arXiv IDs, DOIs, vault paths, note stems,
 titles, and frontmatter ids in the reference library under `ref/`. It
 answers "is this already in my library?" with a verdict per query, in
 human, Markdown, or versioned JSON output. `bob ref list` renders
 filtered library views, defaulting to the reading queue (queued and
-started notes). Both verbs never write to the vault (the one exception
-is `find -i`, which reads intake PDF markers).
+started notes). `bob ref show` resolves one or more exact references
+into their metadata, annotations, notes, and tasks. All three verbs
+never write to the vault (the one exception is `find -i`, which reads
+intake PDF markers).
 
 ## Coverage
 
@@ -140,6 +142,72 @@ The JSON envelope carries `filters` (the effective `reading_state` plus
 `hidden.superseded` alongside the shared `coverage` and `library`
 counts.
 
+## `bob ref show`
+
+```bash
+bob ref show ea_graph
+bob ref show ea_graph -c
+bob ref show ref/papers/ea_graph.md -f json
+```
+
+Options: `-b/--bob-dir`, `-c/--comments-only`, `-f/--format
+human|json|markdown` (default human), `-N/--no-annotations`, `-r/--ref-dir`.
+`-c` conflicts with `-N`.
+
+Each `REF` is a vault path, note stem or id, URL, arXiv ID, DOI, or
+exact title. Resolution is exact (the exact match kinds plus a unique
+`title_exact`): several matches collapse to the one note that is not
+superseded, with the superseded companions listed under `also` (a dim
+`also: <path> (superseded legacy note)` line in human output); any other
+multi-match fails as `ambiguous reference` and names its candidates (it
+never picks the first stem); a miss fails as `no reference note matches
+<REF>` with up to three title candidates as `hint:` lines. Every `REF`
+resolves before anything prints, so one failure exits 1 and prints
+nothing else.
+
+Each shown row extends the base index row with the note's content:
+
+- `annotations_status`: `parsed`, `absent` (no managed region, as on
+  legacy notes), or `unparsed` (with `raw_region`).
+- `annotations`: one entry per live block — `page_label`, `kind`
+  (`highlight`, `note`, or `image`), `quote`, `comment`, `asset`,
+  `block_id`, and `link` (`[[ref/x#^h-…]]`). Quote and comment stay in
+  separate fields; standalone notes carry their text as `comment`.
+- `excluded`: counts of `marker_mirrors`, `preamble`, and `removed`
+  (tombstoned) blocks. Tombstones carry no text, so they are counted
+  instead of shown.
+- `own_notes`: the user's own text (a legacy note's whole migrated
+  body).
+- `tasks`: the parsed `## Tasks` lines (`checked`, `mark`, `text`,
+  `block_id`).
+- `also`: superseded companion paths.
+
+`-c/--comments-only` keeps only annotations with a comment and
+standalone notes, with their quotes. `-N/--no-annotations` keeps
+metadata and notes only. The `annotations` array honors the flags; the
+status, counts, and `excluded` facts always describe the whole region.
+
+Human output prints the title, a reading-state header (chip, date,
+type, origin, path), the metadata rows that have a value, then the
+annotations grouped by page with wrapped quotes (`“…”`) and cyan `↳`
+comments, the exclusion parenthetical, and the `NOTES` and `TASKS`
+sections. Empty sections stay omitted; several `REF`s are separated by a
+dim rule.
+
+Markdown output is a quotable digest per note: `## <title>`, bullets for
+the note link, reading state with evidence and date, source URL and
+arXiv/DOI, origin and type, annotation counts and snapshot date (plus
+`Research report: research:…` when set, and `Also: …` companions), then
+`### Annotations` (one `**Page N**` label per page, quotes as `>`
+blockquotes, comments as `Comment: …` lines, standalone notes as
+`Note: …`), `### Notes`, and `### Tasks`.
+
+Agent usage: resolve candidates with `bob ref find` first, then read
+exact notes with `bob ref show <path>`. Prefer `-c -f markdown` for
+Bryan's own thoughts on a reference, and never claim a `not_found`
+result means he has not read something — it only means it is not under
+`ref/`.
+
 ## JSON envelope
 
 `REF_SCHEMA_VERSION` is 1. Compact one-line JSON on stdout, no ANSI:
@@ -178,3 +246,6 @@ errors. In JSON mode, failures print
 `{"ok":false,"schema_version":1,"command":"ref find","error":{"code":"…","message":"…","hint":"…"}}`
 to stdout and exit 1. A missing intake directory under `-i` is not a
 failure: coverage reports `unavailable` and the lookup continues.
+`show` resolution failures (`ambiguous_reference`,
+`unknown_reference`) exit 1 as well; in JSON mode they add
+`"candidates":[{"path":…,"title":…}]` to the envelope.

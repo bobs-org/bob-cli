@@ -1,9 +1,10 @@
 //! CLI builders for the `bob ref` library verbs.
 //!
 //! `find` looks up batch identity queries; `list` renders filtered
-//! library views with the reading queue as its default. `show` adds its
-//! builder here in its own phase. Shared directory args reuse the
-//! Highlights builders so help strings stay identical.
+//! library views with the reading queue as its default; `show` resolves
+//! exact references into metadata, annotations, notes, and tasks. Shared
+//! directory args reuse the Highlights builders so help strings stay
+//! identical.
 use std::ffi::OsString;
 use std::path::PathBuf;
 
@@ -20,6 +21,8 @@ use super::{
     validate_since, Coverage, LibraryConfig, ListSelection, RefIndex, RefRow,
     LIST_STATE_ORDER,
 };
+
+pub(crate) use super::show::run_show;
 use crate::native::env as bob_env;
 use crate::native::highlights_ref::{
     bob_dir_arg, collect_intake_records, ref_dir_arg, xlib_dir_arg,
@@ -197,6 +200,55 @@ pub(crate) fn list_command() -> ClapCommand {
             bob ref list -R finished -S 30d -g\n  \
             bob ref list -o external -R finished -f json\n  \
             bob ref list -s legacy -R queued",
+        )
+}
+
+/// The `bob ref show` subcommand builder.
+pub(crate) fn show_command() -> ClapCommand {
+    ClapCommand::new("show")
+        .about(
+            "Show reference notes with metadata, annotations, and your own notes",
+        )
+        .arg(
+            Arg::new("ref")
+                .value_name("REF")
+                .num_args(1..)
+                .required(true)
+                .help("Vault path, note stem or id, URL, arXiv ID, DOI, or exact title"),
+        )
+        .arg(bob_dir_arg())
+        .arg(
+            Arg::new("comments-only")
+                .long("comments-only")
+                .short('c')
+                .action(ArgAction::SetTrue)
+                .conflicts_with("no-annotations")
+                .help("Only annotations you commented on and standalone notes, with their quotes"),
+        )
+        .arg(
+            Arg::new("format")
+                .long("format")
+                .short('f')
+                .value_name("FORMAT")
+                .value_parser(["human", "json", "markdown"])
+                .default_value("human")
+                .help("Output format"),
+        )
+        .arg(
+            Arg::new("no-annotations")
+                .long("no-annotations")
+                .short('N')
+                .action(ArgAction::SetTrue)
+                .help("Metadata and your own notes only"),
+        )
+        .arg(ref_dir_arg())
+        .after_help(
+            "Resolution is exact (a vault path, note stem or id, URL, arXiv ID, DOI, or exact title). Several matches collapse to the one note that is not superseded; any other multi-match is ambiguous and names its candidates, and a miss suggests up to three title candidates.\n\
+            \n\
+            Examples:\n  \
+            bob ref show ea_graph\n  \
+            bob ref show ea_graph -c\n  \
+            bob ref show ref/papers/ea_graph.md -f json",
         )
 }
 

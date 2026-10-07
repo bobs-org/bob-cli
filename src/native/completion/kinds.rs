@@ -185,6 +185,12 @@ const TABLE: &[Entry] = &[
         arg: "since",
         kind: Kind::FreeText,
     },
+    // `bob ref show` takes vault-note references.
+    Entry {
+        path: &["ref", "show"],
+        arg: "ref",
+        kind: Kind::VaultNote,
+    },
     // Static choices (also served live by the engine through clap
     // possible values; the entries keep the decision explicit).
     Entry {

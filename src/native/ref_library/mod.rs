@@ -19,6 +19,7 @@ pub(crate) mod list;
 mod output;
 mod resolve;
 mod row;
+pub(crate) mod show;
 mod status;
 
 #[cfg(test)]
