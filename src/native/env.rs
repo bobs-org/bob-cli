@@ -166,6 +166,51 @@ pub fn os_to_string(value: &OsStr) -> String {
     value.to_string_lossy().into_owned()
 }
 
+/// Resolve the `uv` binary shared by the web-clip and Keep adapters.
+///
+/// Returns the path plus whether it was found outside `PATH`. `PATH` is
+/// checked first; then `$HOME/.local/bin/uv`, `$HOME/.cargo/bin/uv`,
+/// `/opt/homebrew/bin/uv`, and `/usr/local/bin/uv`, in that order. The
+/// Mac app environment sees only `~/.local/bin`, so the fallbacks keep
+/// `bob ref clip` and `bob gkeep` working there.
+pub fn resolve_uv() -> Option<(PathBuf, bool)> {
+    if let Some(path) = find_on_path("uv") {
+        return Some((path, false));
+    }
+    let home = home_dir();
+    let mut candidates = vec![
+        home.join(".local/bin/uv"),
+        home.join(".cargo/bin/uv"),
+        PathBuf::from("/opt/homebrew/bin/uv"),
+        PathBuf::from("/usr/local/bin/uv"),
+    ];
+    candidates.retain(|path| is_executable_file(path));
+    candidates.into_iter().next().map(|path| (path, true))
+}
+
+/// Look `name` up on `PATH`, returning an executable file if found.
+pub fn find_on_path(name: &str) -> Option<PathBuf> {
+    let paths = env::var_os("PATH")?;
+    env::split_paths(&paths)
+        .map(|dir| dir.join(name))
+        .find(|path| is_executable_file(path))
+}
+
+#[cfg(unix)]
+pub fn is_executable_file(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    path.is_file()
+        && path
+            .metadata()
+            .map(|metadata| metadata.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
+}
+
+#[cfg(not(unix))]
+pub fn is_executable_file(path: &Path) -> bool {
+    path.is_file()
+}
+
 fn date_command_datetime(date_command: &str) -> Option<NaiveDateTime> {
     let output = run_date_command(date_command, ["+%Y-%m-%d %H:%M:%S"])?;
     parse_datetime_override(output.trim())

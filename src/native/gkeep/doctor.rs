@@ -59,7 +59,8 @@ pub(crate) fn run(args: &DoctorArgs) -> i32 {
         Ok(config) => config,
         Err(error) => {
             let mut checks = vec![config_fail_check(&error)];
-            for name in ["account", "token", "adapter", "keep", "target"] {
+            for name in ["account", "uv", "token", "adapter", "keep", "target"]
+            {
                 checks.push(skipped(name, "no gkeep config"));
             }
             // The git check needs no config, so it still runs.
@@ -68,7 +69,8 @@ pub(crate) fn run(args: &DoctorArgs) -> i32 {
         }
     };
 
-    let mut checks = vec![config_ok_check(), account_check(&config)];
+    let mut checks =
+        vec![config_ok_check(), account_check(&config), uv_check()];
     let (token_check, token) = token_check(&config);
     checks.push(token_check);
     let (adapter_check, client) = adapter_check(&config);
@@ -252,13 +254,44 @@ fn adapter_check(config: &GkeepConfig) -> (Check, Option<AdapterClient>) {
     }
 }
 
+/// The `uv` row: the resolved binary (`PATH` first, then the well-known
+/// install locations), with an `(outside PATH)` marker when applicable.
+/// It warns only when uv is missing everywhere.
+fn uv_check() -> Check {
+    match bob_env::resolve_uv() {
+        Some((path, outside_path)) => {
+            let mut summary = format!("available ({})", path.display());
+            if outside_path {
+                summary.push_str(" (outside PATH)");
+            }
+            Check {
+                name: "uv",
+                status: CheckStatus::Ok,
+                summary,
+                hint: None,
+            }
+        }
+        None => Check {
+            name: "uv",
+            status: CheckStatus::Warn,
+            summary: "uv not found on PATH".to_string(),
+            hint: Some(
+                "install uv (https://docs.astral.sh/uv/) — bob gkeep runs \
+                 its pinned Google Keep adapter with it"
+                    .to_string(),
+            ),
+        },
+    }
+}
+
 /// `uv --version` (for example `uv 0.11.8`), only when the bundled
 /// adapter runs instead of `BOB_GKEEP_ADAPTER`.
 fn uv_version() -> Option<String> {
     if GkeepConfig::adapter_override().is_some() {
         return None;
     }
-    let output = Command::new("uv").arg("--version").output().ok()?;
+    let (uv, _) = bob_env::resolve_uv()?;
+    let output = Command::new(uv).arg("--version").output().ok()?;
     if !output.status.success() {
         return None;
     }

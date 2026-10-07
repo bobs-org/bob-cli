@@ -33,6 +33,10 @@ pub(crate) fn bob_command() -> Command {
     let mut command = Command::new(BOB_BIN);
     command.env("BOB_CONFIG_FILE", TEST_MISSING_CONFIG_FILE);
     command.env("BOB_WEB_CLIP_ADAPTER", TEST_MISSING_WEB_CLIP_ADAPTER);
+    // Hermetic DNS for the fetch resolved-address check: a wildcard public
+    // address replaces real DNS, so fake-curl tests never touch the
+    // network to resolve. Tests covering the check itself override this.
+    command.env("BOB_HIGHLIGHTS_RESOLVE", "*=203.0.113.1");
     let nonce = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
     let isolation = std::env::temp_dir()
         .join(format!("bob-cli-test-iso-{}-{nonce}", std::process::id()));

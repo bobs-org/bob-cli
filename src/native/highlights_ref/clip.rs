@@ -1037,9 +1037,10 @@ fn print_warnings(styler: &Styler, warnings: &[String]) {
 /// Non-fatal `doctor` rows for the web-clip chain, printed after the pandoc
 /// row. Missing pieces warn; they never fail the vault doctor.
 pub(super) fn append_web_clip_doctor_rows(warnings: &mut Vec<String>) {
-    match find_on_path("uv") {
-        Some(path) => {
-            println!("web clip uv: available ({})", path.display());
+    match crate::native::env::resolve_uv() {
+        Some((path, outside_path)) => {
+            let marker = if outside_path { " (outside PATH)" } else { "" };
+            println!("web clip uv: available ({}{marker})", path.display());
         }
         None => {
             println!("web clip uv: warn (uv not found on PATH)");

@@ -90,12 +90,16 @@ impl ClipAdapterClient {
     /// Resolve the adapter command: the `BOB_WEB_CLIP_ADAPTER` override, or
     /// `uv run --quiet --script <materialized adapter>`.
     pub(super) fn resolve() -> AdapterResult<Self> {
-        Self::resolve_with(adapter_override(), timeout_secs(), &find_on_path)
+        Self::resolve_with(
+            adapter_override(),
+            timeout_secs(),
+            &resolve_uv_lookup,
+        )
     }
 
     /// Resolve a client with a fixed timeout (used by the doctor ping).
     pub(super) fn resolve_with_timeout(secs: u64) -> AdapterResult<Self> {
-        Self::resolve_with(adapter_override(), secs, &find_on_path)
+        Self::resolve_with(adapter_override(), secs, &resolve_uv_lookup)
     }
 
     fn resolve_with(
@@ -525,26 +529,22 @@ fn materialized_adapter_script() -> AdapterResult<PathBuf> {
 }
 
 /// Look `name` up on `PATH`, returning an executable file if found.
+/// Shared with the `curl` and `Xvfb` lookups; `uv` itself resolves through
+/// [`crate::native::env::resolve_uv`], which also checks the well-known
+/// install locations outside `PATH`.
 pub(super) fn find_on_path(name: &str) -> Option<PathBuf> {
-    let paths = env::var_os("PATH")?;
-    env::split_paths(&paths)
-        .map(|dir| dir.join(name))
-        .find(|path| is_executable_file(path.as_path()))
+    crate::native::env::find_on_path(name)
 }
 
-#[cfg(unix)]
-pub(super) fn is_executable_file(path: &std::path::Path) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-    path.is_file()
-        && path
-            .metadata()
-            .map(|metadata| metadata.permissions().mode() & 0o111 != 0)
-            .unwrap_or(false)
-}
-
-#[cfg(not(unix))]
-pub(super) fn is_executable_file(path: &std::path::Path) -> bool {
-    path.is_file()
+/// The `uv` lookup used for adapter resolution: the shared
+/// [`crate::native::env::resolve_uv`] (PATH plus the well-known install
+/// locations); anything else falls back to a plain PATH lookup.
+fn resolve_uv_lookup(name: &str) -> Option<PathBuf> {
+    if name == "uv" {
+        crate::native::env::resolve_uv().map(|(path, _)| path)
+    } else {
+        find_on_path(name)
+    }
 }
 
 /// Kill stragglers in the adapter's process group after the leader exits.

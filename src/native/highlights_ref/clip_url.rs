@@ -165,18 +165,18 @@ fn reject_private_host(host: &str) -> Result<()> {
     Ok(())
 }
 
-fn is_non_global_literal(address: &std::net::IpAddr) -> bool {
+pub(crate) fn is_non_global_literal(address: &std::net::IpAddr) -> bool {
     match address {
-        std::net::IpAddr::V4(ipv4) => {
-            let octets = ipv4.octets();
-            ipv4.is_loopback()
-                || ipv4.is_private()
-                || ipv4.is_link_local()
-                || ipv4.is_unspecified()
-                // CGNAT shared-address space, including the Tailscale range.
-                || (octets[0] == 100 && octets[1] & 0b1100_0000 == 64)
-        }
+        std::net::IpAddr::V4(ipv4) => is_non_global_ipv4(ipv4),
         std::net::IpAddr::V6(ipv6) => {
+            // IPv4-mapped (::ffff:a.b.c.d) and IPv4-compatible (::a.b.c.d)
+            // literals are judged by their embedded IPv4 address, so
+            // [::ffff:10.0.0.1] is refused like 10.0.0.1 (bob-cli-4v).
+            if let Some(embedded) = ipv6_embedded_ipv4(ipv6)
+                && is_non_global_ipv4(&embedded)
+            {
+                return true;
+            }
             let segments = ipv6.segments();
             ipv6.is_loopback()
                 || ipv6.is_unspecified()
@@ -186,6 +186,33 @@ fn is_non_global_literal(address: &std::net::IpAddr) -> bool {
                 || (segments[0] & 0xfe00 == 0xfc00)
         }
     }
+}
+
+fn is_non_global_ipv4(ipv4: &std::net::Ipv4Addr) -> bool {
+    let octets = ipv4.octets();
+    ipv4.is_loopback()
+        || ipv4.is_private()
+        || ipv4.is_link_local()
+        || ipv4.is_unspecified()
+        // CGNAT shared-address space, including the Tailscale range.
+        || (octets[0] == 100 && octets[1] & 0b1100_0000 == 64)
+}
+
+/// The embedded IPv4 address of an IPv4-mapped (`::ffff:a.b.c.d`) or
+/// IPv4-compatible (`::a.b.c.d`) IPv6 literal, if it has one.
+fn ipv6_embedded_ipv4(ipv6: &std::net::Ipv6Addr) -> Option<std::net::Ipv4Addr> {
+    if let Some(mapped) = ipv6.to_ipv4_mapped() {
+        return Some(mapped);
+    }
+    let segments = ipv6.segments();
+    // IPv4-compatible: the first 96 bits are zero.
+    if segments[..6] == [0, 0, 0, 0, 0, 0] {
+        let bytes = ipv6.octets();
+        return Some(std::net::Ipv4Addr::new(
+            bytes[12], bytes[13], bytes[14], bytes[15],
+        ));
+    }
+    None
 }
 
 /// Validate `--published` as a `YYYY-MM-DD` calendar date.
@@ -395,6 +422,11 @@ mod tests {
             "http://169.254.169.254/latest",
             "http://[::1]/article",
             "http://[fc00::1]/article",
+            // IPv4-mapped and IPv4-compatible literals are judged by
+            // their embedded IPv4 address (bob-cli-4v).
+            "http://[::ffff:127.0.0.1]/article",
+            "http://[::ffff:10.0.0.1]/article",
+            "http://[::10.0.0.1]/article",
             "not a url",
         ] {
             assert!(
@@ -402,6 +434,14 @@ mod tests {
                 "expected rejection: {raw}"
             );
         }
+    }
+
+    #[test]
+    fn validation_accepts_mapped_public_literals() {
+        // An IPv4-mapped literal with a global embedded address is
+        // public (bob-cli-4v).
+        validate_and_clean("http://[::ffff:93.184.216.34]/a")
+            .expect("accept mapped public literal");
     }
 
     #[test]

@@ -420,7 +420,7 @@ fn doctor_all_ok_reports_the_checklist() {
     let out = stdout(&output);
     assert!(out.contains("Google Keep doctor"), "header:\n{out}");
     for row in [
-        "config", "account", "token", "adapter", "keep", "target", "git",
+        "config", "account", "uv", "token", "adapter", "keep", "target", "git",
     ] {
         assert!(out.contains(row), "missing {row} row:\n{out}");
     }
@@ -567,14 +567,17 @@ fn doctor_json_reports_the_check_shape() {
     assert_eq!(report["schema_version"], serde_json::json!(1));
     assert_eq!(report["ok"], serde_json::json!(true));
     let checks = report["checks"].as_array().expect("checks array");
-    assert_eq!(checks.len(), 7);
+    assert_eq!(checks.len(), 8);
     let names: Vec<&str> = checks
         .iter()
         .map(|check| check["name"].as_str().expect("check name"))
         .collect();
     assert_eq!(
         names,
-        vec!["config", "account", "token", "adapter", "keep", "target", "git"]
+        vec![
+            "config", "account", "uv", "token", "adapter", "keep", "target",
+            "git"
+        ]
     );
     for check in checks {
         assert!(

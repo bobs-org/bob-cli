@@ -1572,6 +1572,40 @@ fn highlights_create_pdf_url_rejects_claimed_pdf_and_404() {
 }
 
 #[test]
+fn highlights_create_refuses_mapped_private_literals_without_fetching() {
+    // bob-cli-4v: IPv4-mapped IPv6 literals are judged by their embedded
+    // IPv4 address. `BOB_HIGHLIGHTS_CURL=/bin/false` proves no fetch is
+    // attempted: validation refuses the URL first.
+    let temp = TempDir::new("bob-cli-highlights-create-mapped-private");
+    let vault = temp.path().join("vault");
+    for url in [
+        "http://[::ffff:127.0.0.1]/article",
+        "http://[::ffff:10.0.0.1]/article",
+    ] {
+        let output = bob_command()
+            .arg("highlights")
+            .arg("create")
+            .arg(url)
+            .arg("-b")
+            .arg(&vault)
+            .env("BOB_HIGHLIGHTS_CURL", "/bin/false")
+            .output()
+            .expect("run create mapped private URL");
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "{url}: {}",
+            format_output(&output)
+        );
+        assert!(
+            stderr(&output).contains("private"),
+            "{url}: {}",
+            format_output(&output)
+        );
+    }
+}
+
+#[test]
 fn highlights_create_arxiv_uses_api_metadata_and_short_stem() {
     let temp = TempDir::new("bob-cli-highlights-create-arxiv");
     let vault = temp.path().join("vault");

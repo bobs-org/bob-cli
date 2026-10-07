@@ -263,15 +263,21 @@ legacy `BOB_WEB_CLIP_KEEP_WORKDIR=1`).
 | Variable | Meaning |
 | -------- | ------- |
 | `BOB_HIGHLIGHTS_CURL` | Replaces `curl` (test seam, like `BOB_PANDOC_COMMAND`) |
+| `BOB_HIGHLIGHTS_RESOLVE` | Replaces DNS for the fetch address check: comma-separated `host=ip` pairs with `*` as a wildcard (test seam) |
 | `BOB_HIGHLIGHTS_KEEP_WORKDIR` | `1` keeps the scratch directory for debugging |
 | `BOB_PANDOC_COMMAND` | Overrides pandoc for the Markdown route |
 | `BOB_HIGHLIGHTS_AUDIO_LIBRARY` | sase-listen library for Markdown audio discovery |
 | `BOB_HIGHLIGHTS_LISTEN_COMMAND` | Overrides `highlights.listen_command` for `--listen` |
 
 Fetching runs `curl -sS --proto =http,https --connect-timeout 15
---max-time 30 --max-filesize 95M`, follows up to 10 redirects manually
+--max-time 300 --max-filesize 95M`, follows up to 10 redirects manually
 through URL validation (a private-host redirect is refused), and reports
-`curl` exit codes (6/7/28/35/60/63) with hints. A missing `curl` hints at
+`curl` exit codes (6/7/28/35/60/63) with hints. Before every hop the host
+is resolved and refused when any address is non-global (`<host> resolves
+to a private address (<addr>)`); curl is then pinned to the checked
+address with `--resolve host:port:addr`. The article adapter's own browser
+navigation is not pinned: only bob's curl fetches go through the
+resolved-address check. A missing `curl` hints at
 `install curl or set BOB_HIGHLIGHTS_CURL`. On a TTY one
 `fetching <host>…` line goes to stderr. `bob ref doctor` reports the
 `curl` row.

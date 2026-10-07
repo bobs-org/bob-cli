@@ -14,15 +14,27 @@
 use std::{
     env, fs,
     io::IsTerminal,
+    net::{IpAddr, ToSocketAddrs},
     path::{Path, PathBuf},
     process::Command,
 };
 
-use super::{clip_url::validate_and_clean, CommandError};
+use super::{
+    clip_url::{is_non_global_literal, validate_and_clean},
+    CommandError,
+};
 
 /// Environment override replacing the `curl` program. This is the test
 /// seam, like `BOB_PANDOC_COMMAND`.
 pub(super) const ENV_CURL_OVERRIDE: &str = "BOB_HIGHLIGHTS_CURL";
+
+/// Environment override replacing DNS for the resolved-address check.
+/// Comma-separated `host=ip` pairs with `*` as a wildcard host (for
+/// example `example.com=93.184.216.34,*.example.org=93.184.216.34`). When
+/// set, it replaces DNS entirely and an unlisted host fails as a network
+/// error. This is the test seam; `tests/cli/support.rs::bob_command()`
+/// defaults it to a wildcard public address.
+pub(super) const ENV_RESOLVE_OVERRIDE: &str = "BOB_HIGHLIGHTS_RESOLVE";
 
 /// Refusal limit for downloaded PDFs, matching the vault-sync cap the
 /// clip adapter enforces (`PDF_MAX_BYTES` there).
@@ -124,8 +136,9 @@ fn fetch_with_curl(
     }
     let mut current = url.to_string();
     for _ in 0..=MAX_REDIRECTS {
+        let pin = resolve_host_for_pin(&current)?;
         let (status, content_type, redirect_url) =
-            curl_one_hop(curl, &current, dest, max_time_secs)?;
+            curl_one_hop(curl, &current, dest, max_time_secs, &pin)?;
         let redirect = redirect_url.trim().to_string();
         if !(300..400).contains(&status) || redirect.is_empty() {
             let bytes = fs::metadata(dest)
@@ -166,6 +179,77 @@ fn fetch_with_curl(
     Err(FetchError::new(format!("too many redirects for {url}")))
 }
 
+/// The address curl is pinned to for one hop: the hostname, its port,
+/// and the checked IP address.
+struct ResolvePin {
+    host: String,
+    port: u16,
+    addr: IpAddr,
+}
+
+/// Resolve `url`'s host and refuse it when any resolved address is
+/// non-global under the same predicate URL validation uses. The returned
+/// pin keeps curl on the address that was checked, so DNS cannot change
+/// between the check and the fetch.
+fn resolve_host_for_pin(
+    url: &str,
+) -> std::result::Result<ResolvePin, FetchError> {
+    let parsed = url::Url::parse(url).map_err(|error| {
+        FetchError::new(format!("invalid URL {url:?}: {error}"))
+    })?;
+    let host = parsed.host_str().unwrap_or_default().to_string();
+    let port = parsed.port_or_known_default().unwrap_or(443);
+    let mut addresses = resolve_host_addresses(&host, port)?;
+    if addresses.is_empty() {
+        return Err(FetchError::new(format!("cannot resolve host: {url}")));
+    }
+    for addr in &addresses {
+        if is_non_global_literal(addr) {
+            return Err(FetchError::new(format!(
+                "{host} resolves to a private address ({addr})"
+            )));
+        }
+    }
+    // Pin to the first checked address; every resolved address above is
+    // already known global.
+    let addr = addresses.remove(0);
+    Ok(ResolvePin { host, port, addr })
+}
+
+/// Resolve `host` to its IP addresses: real DNS, or the
+/// [`ENV_RESOLVE_OVERRIDE`] table when it is set (which replaces DNS
+/// entirely, so an unlisted host fails as a network error).
+fn resolve_host_addresses(
+    host: &str,
+    port: u16,
+) -> std::result::Result<Vec<IpAddr>, FetchError> {
+    if let Some(table) = env::var(ENV_RESOLVE_OVERRIDE)
+        .ok()
+        .filter(|value| !value.is_empty())
+    {
+        let mut wildcard: Option<IpAddr> = None;
+        for pair in table.split(',') {
+            let (name, ip) = pair.split_once('=').unwrap_or(("", ""));
+            let name = name.trim();
+            let ip: IpAddr = ip.trim().parse().map_err(|_| {
+                FetchError::new(format!("cannot resolve host: {host}"))
+            })?;
+            if name == "*" {
+                wildcard = Some(ip);
+            } else if name.eq_ignore_ascii_case(host) {
+                return Ok(vec![ip]);
+            }
+        }
+        return wildcard.map(|ip| vec![ip]).ok_or_else(|| {
+            FetchError::new(format!("cannot resolve host: {host}"))
+        });
+    }
+    (host, port)
+        .to_socket_addrs()
+        .map(|addrs| addrs.map(|addr| addr.ip()).collect())
+        .map_err(|_| FetchError::new(format!("cannot resolve host: {host}")))
+}
+
 /// Run one `curl` hop without `-L` and split its `-w` trailer into
 /// `(status, content_type, redirect_url)`.
 fn curl_one_hop(
@@ -173,6 +257,7 @@ fn curl_one_hop(
     url: &str,
     dest: &Path,
     max_time_secs: u64,
+    pin: &ResolvePin,
 ) -> std::result::Result<(u16, String, String), FetchError> {
     let output = Command::new(curl)
         .arg("-q")
@@ -194,6 +279,10 @@ fn curl_one_hop(
             "bob-cli/{} (+https://github.com/bobs-org/bob-cli)",
             env!("CARGO_PKG_VERSION"),
         ))
+        // Pin curl to the address the resolved-address check vetted, so
+        // DNS cannot change between the check and the fetch.
+        .arg("--resolve")
+        .arg(format!("{}:{}:{}", pin.host, pin.port, pin.addr))
         .arg(url)
         .output()
         .map_err(|error| {
@@ -329,6 +418,7 @@ esac
         let fake = write_fake_curl(&dir);
         unsafe { env::set_var("FAKE_CURL_ROOT", &dir) };
         unsafe { env::set_var(ENV_CURL_OVERRIDE, &fake) };
+        unsafe { env::set_var(ENV_RESOLVE_OVERRIDE, "*=203.0.113.1") };
 
         // A plain 200 PDF download.
         let dest = dir.join("paper.pdf.out");
@@ -405,6 +495,7 @@ esac
         );
 
         unsafe { env::remove_var(ENV_CURL_OVERRIDE) };
+        unsafe { env::remove_var(ENV_RESOLVE_OVERRIDE) };
         unsafe { env::remove_var("FAKE_CURL_ROOT") };
         fs::remove_dir_all(&dir).ok();
     }
@@ -417,6 +508,7 @@ esac
         let argv_log = dir.join("argv.log");
         unsafe { env::set_var("FAKE_CURL_ROOT", &dir) };
         unsafe { env::set_var(ENV_CURL_OVERRIDE, &fake) };
+        unsafe { env::set_var(ENV_RESOLVE_OVERRIDE, "*=203.0.113.1") };
         unsafe {
             env::set_var("FAKE_CURL_ARGV_LOG", &argv_log);
         }
@@ -432,6 +524,7 @@ esac
         );
 
         unsafe { env::remove_var(ENV_CURL_OVERRIDE) };
+        unsafe { env::remove_var(ENV_RESOLVE_OVERRIDE) };
         unsafe { env::remove_var("FAKE_CURL_ROOT") };
         unsafe { env::remove_var("FAKE_CURL_ARGV_LOG") };
         fs::remove_dir_all(&dir).ok();
@@ -444,6 +537,7 @@ esac
         unsafe {
             env::set_var(ENV_CURL_OVERRIDE, dir.join("no-such-curl-binary"))
         };
+        unsafe { env::set_var(ENV_RESOLVE_OVERRIDE, "*=203.0.113.1") };
         let error =
             fetch_url("https://example.com/paper.pdf", &dir.join("out"), 30)
                 .expect_err("missing curl must fail");
@@ -457,6 +551,104 @@ esac
             Some("install curl or set BOB_HIGHLIGHTS_CURL"),
         );
         unsafe { env::remove_var(ENV_CURL_OVERRIDE) };
+        unsafe { env::remove_var(ENV_RESOLVE_OVERRIDE) };
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn fetch_refuses_private_resolved_addresses_and_unlisted_hosts() {
+        let _guard = CURL_TEST_LOCK.lock().expect("lock curl env");
+        let dir = test_dir("resolve-check");
+        let fake = write_fake_curl(&dir);
+        unsafe { env::set_var("FAKE_CURL_ROOT", &dir) };
+        unsafe { env::set_var(ENV_CURL_OVERRIDE, &fake) };
+
+        // A host resolving to a private address is refused before curl
+        // runs, with the resolved address in the message.
+        unsafe {
+            env::set_var(
+                ENV_RESOLVE_OVERRIDE,
+                "example.com=10.0.0.1,*=203.0.113.1",
+            )
+        };
+        let dest = dir.join("private-resolve.out");
+        let error = fetch_url("https://example.com/paper.pdf", &dest, 30)
+            .expect_err("private resolution must be refused");
+        assert!(
+            error.message.contains("resolves to a private address")
+                && error.message.contains("10.0.0.1"),
+            "unexpected message: {}",
+            error.message
+        );
+
+        // Mapped private literals are refused by the same predicate.
+        unsafe { env::set_var(ENV_RESOLVE_OVERRIDE, "*=::ffff:10.0.0.1") };
+        let error = fetch_url("https://example.com/paper.pdf", &dest, 30)
+            .expect_err("mapped private resolution must be refused");
+        assert!(
+            error.message.contains("resolves to a private address"),
+            "unexpected message: {}",
+            error.message
+        );
+
+        // When the table is set, an unlisted host fails as a network
+        // error without touching DNS.
+        unsafe {
+            env::set_var(ENV_RESOLVE_OVERRIDE, "other.example=203.0.113.1")
+        };
+        let error = fetch_url("https://example.com/paper.pdf", &dest, 30)
+            .expect_err("unlisted host must fail");
+        assert!(
+            error.message.contains("cannot resolve host"),
+            "unexpected message: {}",
+            error.message
+        );
+
+        unsafe { env::remove_var(ENV_CURL_OVERRIDE) };
+        unsafe { env::remove_var(ENV_RESOLVE_OVERRIDE) };
+        unsafe { env::remove_var("FAKE_CURL_ROOT") };
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn curl_pins_the_checked_address_with_resolve() {
+        let _guard = CURL_TEST_LOCK.lock().expect("lock curl env");
+        let dir = test_dir("curl-resolve-pin");
+        let fake = write_fake_curl(&dir);
+        let argv_log = dir.join("argv.log");
+        unsafe { env::set_var("FAKE_CURL_ROOT", &dir) };
+        unsafe { env::set_var(ENV_CURL_OVERRIDE, &fake) };
+        unsafe {
+            env::set_var("FAKE_CURL_ARGV_LOG", &argv_log);
+        }
+        unsafe {
+            env::set_var(ENV_RESOLVE_OVERRIDE, "example.com=93.184.216.34")
+        };
+
+        let dest = dir.join("out.pdf");
+        fetch_url("https://example.com/paper.pdf", &dest, 30)
+            .expect("fetch with fake curl");
+        let logged = fs::read_to_string(&argv_log).expect("read argv log");
+        assert!(
+            logged
+                .lines()
+                .any(|line| line == "example.com:443:93.184.216.34"),
+            "curl must be pinned with --resolve to the checked address:\n{logged}"
+        );
+        assert!(
+            logged
+                .lines()
+                .last()
+                .unwrap_or_default()
+                .ends_with("/paper.pdf")
+                || logged.contains("https://example.com/paper.pdf"),
+            "the request URL must still be passed:\n{logged}"
+        );
+
+        unsafe { env::remove_var(ENV_CURL_OVERRIDE) };
+        unsafe { env::remove_var(ENV_RESOLVE_OVERRIDE) };
+        unsafe { env::remove_var("FAKE_CURL_ROOT") };
+        unsafe { env::remove_var("FAKE_CURL_ARGV_LOG") };
         fs::remove_dir_all(&dir).ok();
     }
 }

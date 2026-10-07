@@ -90,7 +90,7 @@ impl AdapterClient {
         Self::resolve_with(
             config,
             GkeepConfig::adapter_override(),
-            &find_on_path,
+            &resolve_uv_lookup,
         )
     }
 
@@ -451,27 +451,15 @@ fn materialized_adapter_script() -> Result<PathBuf, GkeepError> {
     Ok(dir.join("gkeep").join("gkeep_adapter.py"))
 }
 
-/// Look `name` up on `PATH`, returning an executable file if found.
-fn find_on_path(name: &str) -> Option<PathBuf> {
-    let paths = std::env::var_os("PATH")?;
-    std::env::split_paths(&paths)
-        .map(|dir| dir.join(name))
-        .find(|path| is_executable_file(path.as_path()))
-}
-
-#[cfg(unix)]
-fn is_executable_file(path: &std::path::Path) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-    path.is_file()
-        && path
-            .metadata()
-            .map(|metadata| metadata.permissions().mode() & 0o111 != 0)
-            .unwrap_or(false)
-}
-
-#[cfg(not(unix))]
-fn is_executable_file(path: &std::path::Path) -> bool {
-    path.is_file()
+/// The `uv` lookup used for adapter resolution: the shared
+/// [`crate::native::env::resolve_uv`] (PATH plus the well-known install
+/// locations); anything else falls back to a plain PATH lookup.
+fn resolve_uv_lookup(name: &str) -> Option<PathBuf> {
+    if name == "uv" {
+        crate::native::env::resolve_uv().map(|(path, _)| path)
+    } else {
+        crate::native::env::find_on_path(name)
+    }
 }
 
 /// Drain a child stdio pipe to a string; errors yield what arrived.
