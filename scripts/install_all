@@ -530,7 +530,7 @@ mac_capture_step() {
     if (( install_status == 72 )); then
       status=warn
       step_warning=$((step_warning + 1))
-      detail="$pull_detail · installed; restart it via Bob → Restart Bob Mac Capture"
+      detail="$pull_detail · installed; restart it via the Bob Mac Capture menu-bar icon → Restart Bob Mac Capture"
     else
       status=fail
       detail="$pull_detail · install failed (exit $install_status)"
