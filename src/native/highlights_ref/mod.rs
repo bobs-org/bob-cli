@@ -54,6 +54,7 @@ mod pdf_target;
 mod projection;
 mod region;
 mod report;
+pub(crate) mod return_links;
 mod sidecar;
 mod sidecar_render;
 mod sources;

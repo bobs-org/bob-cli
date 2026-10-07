@@ -465,6 +465,53 @@ fn highlights_create_renders_pdf_with_outline_and_marker_when_available() {
 }
 
 #[test]
+fn highlights_create_reports_paired_links_and_dead_warnings_when_available() {
+    let pandoc_available = Command::new("pandoc")
+        .arg("--version")
+        .output()
+        .is_ok_and(|output| output.status.success());
+    let xelatex_available = Command::new("xelatex")
+        .arg("--version")
+        .output()
+        .is_ok_and(|output| output.status.success());
+    if !pandoc_available || !xelatex_available {
+        eprintln!("skipping highlights create links test: pandoc and xelatex are required");
+        return;
+    }
+
+    let temp = TempDir::new("bob-cli-highlights-create-links");
+    let source = temp.path().join("report.md");
+    let vault = temp.path().join("vault");
+    write_file(
+        &source,
+        "# Report\n\nSee [first](#target) and [second](#target), plus [gone](#nope).\n\n## Target\n\nBody.\n",
+    );
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg(&source)
+        .arg("-b")
+        .arg(&vault)
+        .output()
+        .expect("run bob highlights create");
+
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("links: 2 paired (1 target) · 1 dead"),
+        "{report}"
+    );
+    let diagnostic = stderr(&output);
+    assert!(
+        diagnostic.contains(
+            "warning: local link #nope (\"gone\") has no target; rendered as plain text"
+        ),
+        "{diagnostic}"
+    );
+}
+
+#[test]
 fn highlights_create_output_renders_pdf_at_requested_path_when_available() {
     let pandoc_available = Command::new("pandoc")
         .arg("--version")
@@ -596,6 +643,15 @@ fn highlights_create_stamps_rendered_pdf_through_shared_install() {
             && report.contains("pages: 1")
             && report.contains("next: bob ref scan"),
         "{report}"
+    );
+    assert!(
+        !report.contains("links:"),
+        "fake pandoc writes no return-link report: {report}"
+    );
+    assert!(
+        !stderr(&output).contains("warning:"),
+        "fake pandoc adds no return-link warnings: {}",
+        stderr(&output)
     );
 
     let marker_output = bob_command()

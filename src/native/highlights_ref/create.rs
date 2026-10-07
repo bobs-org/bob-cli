@@ -62,7 +62,7 @@ const PANDOC_HEADER_INCLUDES: &str = concat!(
 );
 /// Pandoc Lua filter that gives long inline code somewhere to break and renders
 /// listen-card Divs as a compact LaTeX callout.
-const PANDOC_CODE_BREAK_FILTER: &str = r#"local SEPARATORS = "[/_%-%.:,]"
+pub(super) const PANDOC_CODE_BREAK_FILTER: &str = r#"local SEPARATORS = "[/_%-%.:,]"
 local PLAY_URI = nil
 
 function Meta(meta)
@@ -202,6 +202,15 @@ struct CreatePlan {
     marker: String,
     audio: Option<AudioCopyPlan>,
     page_count_hint: Option<usize>,
+}
+
+/// Pandoc inputs for the Markdown render: the code-break/listen filter, the
+/// return-link filter that runs after it, and the JSON report path the
+/// return-link filter writes for bob.
+struct RenderFilters {
+    code_break: PathBuf,
+    return_links: PathBuf,
+    report: PathBuf,
 }
 
 impl CreatePlan {
@@ -350,7 +359,7 @@ pub(crate) fn command() -> ClapCommand {
         )
         .arg(xlib_dir_arg())
         .after_help(
-            "Targets:\n  Markdown file (.md) -> rendered with pandoc (default ref type chat)\n  Local PDF file (.pdf or %PDF- magic) -> stamped as-is (default ref type papers)\n  PDF URL (Content-Type PDF or sniffed %PDF-) -> downloaded, stamped as-is (default ref type papers)\n  arXiv paper URL (abs/html/pdf) -> PDF fetched from arxiv.org/pdf/<id>, metadata from the API (default ref type papers)\n  Web article URL (HTML 2xx or 403/429/503) -> captured with the web-article engine into a Highlights-ready PDF (default ref type blogs)\n\nWeb articles:\n  Captures the article in reader mode and re-typesets it with a Bob-owned print template; it never prints the live page. `bob ref scan` later moves the intake PDF into the library and writes the reference note. A site that blocks headless browsers is retried headed automatically: on Linux under a private Xvfb display or in an off-screen window on macOS; hosts with no browser fail closed with a hint. `-H, --html FILE` replays a page saved from a real browser instead of fetching (`-` reads stdin) and forces the web-article route. `-A, --author` and `-p, --published` override the derived author/publish date on every route. Environment: BOB_WEB_CLIP_ADAPTER replaces the adapter invocation; BOB_CHROME selects the browser executable; BOB_WEB_CLIP_TIMEOUT_SECS sets the adapter timeout in seconds (default 300); BOB_WEB_CLIP_KEEP_WORKDIR=1 keeps the scratch directory for debugging.\n\nListen:\n  `-L, --listen` narrates TARGET with `highlights.listen_command` (`BOB_HIGHLIGHTS_LISTEN_COMMAND` overrides), which must write MP3 audio to `{audio}`; bob shell-quotes `{target}`, `{pdf}`, `{audio}`, and `{title}` itself — do not quote them — and streams the command output unchanged. Preflights run first, the PDF is produced in private scratch, then the episode is bound beside the PDF; if the listen command fails nothing is written, and a failure after the episode exists keeps the scratch audio with a `kept:` line. If TARGET is already captured, `--listen` attaches the new episode (`xlib/<rel>.mp3`) for `bob ref scan` to pair, and the PDF and ref note stay untouched.\n\nAudio:\n  Create discovers audio as `--audio PATH`, then frontmatter `audio.episode_id` in the sase-listen library (Markdown only), then a sibling `<stem>_narration.md` hash matched against library manifests (`BOB_HIGHLIGHTS_AUDIO_LIBRARY`, then `highlights.audio_library`, then `$XDG_DATA_HOME/sase-listen/library`, then `~/.local/share/sase-listen/library`); `--no-audio` skips discovery. The copy lands beside the PDF with the source extension lowercased before the PDF is installed, reuses identical bytes, refuses different bytes without `--force`, and refuses when the mirrored library audio already exists. Only a companion already at the target's `<stem>.<ext>` counts as reused; audio beside the source is copied through the same rules.\n\nOutput:\n  Default target `<xlib-dir>/<ref-type>/<stem>.pdf`. `-o, --output` selects the complete path instead, including the filename (`.pdf` required, `~` expanded, cwd-relative). `--output` cannot be combined with `--ref-type` or `--name` because those only participate in default target derivation. `-N` sets the stem (with `-i`, the marker id); `-T` overrides the title; `-A` and `-p` override the derived author/publish date. Pandoc renders TOC/bookmarks and embeds the page-1 scan marker. Scan moves intake PDFs to the library before writing notes; library PDFs scan directly, other paths need `bob ref sync`. A `<div class=\"listen\">` card becomes a callout with a Play link when audio is bound.\n\nExamples:\n  bob ref create report.md\n  bob ref create paper.pdf -t papers\n  bob ref create https://example.com/paper.pdf -N my_paper\n  bob ref create https://arxiv.org/abs/1706.03762 -d\n  bob ref create https://arxiv.org/abs/1706.03762 -L\n  bob ref create https://example.com/essay -H saved.html\n  bob ref create https://example.com/essay -A \"Jane Doe\" -p 2026-01-02 -d",
+            "Targets:\n  Markdown file (.md) -> rendered with pandoc (default ref type chat)\n  Local PDF file (.pdf or %PDF- magic) -> stamped as-is (default ref type papers)\n  PDF URL (Content-Type PDF or sniffed %PDF-) -> downloaded, stamped as-is (default ref type papers)\n  arXiv paper URL (abs/html/pdf) -> PDF fetched from arxiv.org/pdf/<id>, metadata from the API (default ref type papers)\n  Web article URL (HTML 2xx or 403/429/503) -> captured with the web-article engine into a Highlights-ready PDF (default ref type blogs)\n\nWeb articles:\n  Captures the article in reader mode and re-typesets it with a Bob-owned print template; it never prints the live page. `bob ref scan` later moves the intake PDF into the library and writes the reference note. A site that blocks headless browsers is retried headed automatically: on Linux under a private Xvfb display or in an off-screen window on macOS; hosts with no browser fail closed with a hint. `-H, --html FILE` replays a page saved from a real browser instead of fetching (`-` reads stdin) and forces the web-article route. `-A, --author` and `-p, --published` override the derived author/publish date on every route. Environment: BOB_WEB_CLIP_ADAPTER replaces the adapter invocation; BOB_CHROME selects the browser executable; BOB_WEB_CLIP_TIMEOUT_SECS sets the adapter timeout in seconds (default 300); BOB_WEB_CLIP_KEEP_WORKDIR=1 keeps the scratch directory for debugging.\n\nListen:\n  `-L, --listen` narrates TARGET with `highlights.listen_command` (`BOB_HIGHLIGHTS_LISTEN_COMMAND` overrides), which must write MP3 audio to `{audio}`; bob shell-quotes `{target}`, `{pdf}`, `{audio}`, and `{title}` itself — do not quote them — and streams the command output unchanged. Preflights run first, the PDF is produced in private scratch, then the episode is bound beside the PDF; if the listen command fails nothing is written, and a failure after the episode exists keeps the scratch audio with a `kept:` line. If TARGET is already captured, `--listen` attaches the new episode (`xlib/<rel>.mp3`) for `bob ref scan` to pair, and the PDF and ref note stay untouched.\n\nAudio:\n  Create discovers audio as `--audio PATH`, then frontmatter `audio.episode_id` in the sase-listen library (Markdown only), then a sibling `<stem>_narration.md` hash matched against library manifests (`BOB_HIGHLIGHTS_AUDIO_LIBRARY`, then `highlights.audio_library`, then `$XDG_DATA_HOME/sase-listen/library`, then `~/.local/share/sase-listen/library`); `--no-audio` skips discovery. The copy lands beside the PDF with the source extension lowercased before the PDF is installed, reuses identical bytes, refuses different bytes without `--force`, and refuses when the mirrored library audio already exists. Only a companion already at the target's `<stem>.<ext>` counts as reused; audio beside the source is copied through the same rules.\n\nOutput:\n  Default target `<xlib-dir>/<ref-type>/<stem>.pdf`. `-o, --output` selects the complete path instead, including the filename (`.pdf` required, `~` expanded, cwd-relative). `--output` cannot be combined with `--ref-type` or `--name` because those only participate in default target derivation. `-N` sets the stem (with `-i`, the marker id); `-T` overrides the title; `-A` and `-p` override the derived author/publish date. Pandoc renders TOC/bookmarks and embeds the page-1 scan marker. Scan moves intake PDFs to the library before writing notes; library PDFs scan directly, other paths need `bob ref sync`. A `<div class=\"listen\">` card becomes a callout with a Play link when audio is bound. Same-document `#` links get a raised letter tag and a matching `↩ p. N` return pill under their target, dead ones render as plain text with a warning, and frontmatter `bob-return-links: false` turns this off.\n\nExamples:\n  bob ref create report.md\n  bob ref create paper.pdf -t papers\n  bob ref create https://example.com/paper.pdf -N my_paper\n  bob ref create https://arxiv.org/abs/1706.03762 -d\n  bob ref create https://arxiv.org/abs/1706.03762 -L\n  bob ref create https://example.com/essay -H saved.html\n  bob ref create https://example.com/essay -A \"Jane Doe\" -p 2026-01-02 -d",
         )
 }
 
@@ -872,13 +881,27 @@ fn create_markdown_route(
             filter_path.display()
         ))
     })?;
-    let (_audio_created, page_count) = match &listen_setup {
+    let return_filter_path = scratch.path().join("return-links.lua");
+    fs::write(&return_filter_path, super::return_links::FILTER).map_err(
+        |error| {
+            CommandError::new(format!(
+                "write pandoc filter {}: {error}",
+                return_filter_path.display()
+            ))
+        },
+    )?;
+    let filters = RenderFilters {
+        code_break: filter_path,
+        return_links: return_filter_path,
+        report: scratch.path().join("return-links.json"),
+    };
+    let (_audio_created, page_count, link_outcome) = match &listen_setup {
         Some((command, flow, _)) => {
-            render_temp_pdf(
+            let link_outcome = render_temp_pdf(
                 &pandoc,
                 &plan,
                 &render_path,
-                &filter_path,
+                &filters,
                 audio_uri.as_deref(),
             )?;
             let values = super::listen::ListenValues {
@@ -930,14 +953,14 @@ fn create_markdown_route(
                     ));
                 }
             };
-            (created, page_count)
+            (created, page_count, link_outcome)
         }
         None => {
             let render_result = render_temp_pdf(
                 &pandoc,
                 &plan,
                 &render_path,
-                &filter_path,
+                &filters,
                 audio_uri.as_deref(),
             );
             let audio_created = if render_result.is_ok() {
@@ -949,16 +972,17 @@ fn create_markdown_route(
             } else {
                 None
             };
-            let install_result = render_result.and_then(|()| {
+            let install_result = render_result.and_then(|link_outcome| {
                 stamp_and_install(
                     &render_path,
                     &plan.target,
                     &plan.marker,
                     &PdfInfo::default(),
                 )
+                .map(|page_count| (link_outcome, page_count))
             });
-            let page_count = match install_result {
-                Ok(page_count) => page_count,
+            let (link_outcome, page_count) = match install_result {
+                Ok((link_outcome, page_count)) => (link_outcome, page_count),
                 Err(error) => {
                     companion_mod::cleanup_audio_on_failure(
                         audio_created.as_ref(),
@@ -966,7 +990,7 @@ fn create_markdown_route(
                     return Err(error);
                 }
             };
-            (audio_created, page_count)
+            (audio_created, page_count, link_outcome)
         }
     };
     println!(
@@ -990,6 +1014,7 @@ fn create_markdown_route(
         println!("id: {id}");
     }
     println!("pages: {page_count}");
+    super::return_links::emit_outcome(&link_outcome, &styler);
     print_next_step(&plan.target_plan());
     Ok(())
 }
@@ -2137,9 +2162,9 @@ fn render_temp_pdf(
     pandoc: &OsStr,
     plan: &CreatePlan,
     render_path: &Path,
-    filter_path: &Path,
+    filters: &RenderFilters,
     audio_uri: Option<&str>,
-) -> Result<()> {
+) -> Result<super::return_links::ReportOutcome> {
     let source_path = Path::new(&plan.source);
     let resource_path = source_path.parent().unwrap_or_else(|| Path::new("."));
     let output = Command::new(pandoc)
@@ -2154,9 +2179,19 @@ fn render_temp_pdf(
         .arg(format!("--resource-path={}", resource_path.display()))
         .arg("--highlight-style=tango")
         .arg("--lua-filter")
-        .arg(filter_path)
+        .arg(&filters.code_break)
+        .arg("--lua-filter")
+        .arg(&filters.return_links)
         .arg("-V")
         .arg("colorlinks=true")
+        .arg("-V")
+        .arg("linkcolor=BobLinkInk")
+        .arg("-V")
+        .arg("urlcolor=BobLinkInk")
+        .arg("-V")
+        .arg("filecolor=BobLinkInk")
+        .arg("-V")
+        .arg("citecolor=BobLinkInk")
         .arg("-V")
         .arg("geometry:margin=0.85in")
         .arg("-V")
@@ -2170,9 +2205,18 @@ fn render_temp_pdf(
         .arg("-V")
         .arg("monofont=DejaVu Sans Mono")
         .arg("-V")
-        .arg(format!("header-includes={PANDOC_HEADER_INCLUDES}"))
+        .arg(format!(
+            "header-includes={PANDOC_HEADER_INCLUDES}\n{}",
+            super::return_links::HEADER_INCLUDES
+        ))
         .arg("--metadata")
         .arg(format!("title={}", plan.title))
+        .arg("--metadata")
+        .arg(format!(
+            "{}={}",
+            super::return_links::REPORT_METADATA_KEY,
+            filters.report.display()
+        ))
         .args(audio_uri.into_iter().flat_map(|uri| {
             ["--metadata".to_string(), format!("bob-listen-uri={uri}")]
         }))
@@ -2205,7 +2249,7 @@ fn render_temp_pdf(
         )));
     }
 
-    Ok(())
+    Ok(super::return_links::read_report(&filters.report))
 }
 
 fn print_plan(plan: &CreatePlan, options: &CreateOptions, styler: &Styler) {
@@ -2534,12 +2578,20 @@ mod tests {
         let filter_path = temp.path.join("listen-card.lua");
         fs::write(&filter_path, PANDOC_CODE_BREAK_FILTER)
             .expect("write filter");
+        let return_filter_path = temp.path.join("return-links.lua");
+        fs::write(&return_filter_path, super::super::return_links::FILTER)
+            .expect("write return-link filter");
+        let filters = RenderFilters {
+            code_break: filter_path,
+            return_links: return_filter_path,
+            report: temp.path.join("return-links.json"),
+        };
         let pandoc = pandoc_command().expect("pandoc checked above");
         render_temp_pdf(
             &pandoc,
             &plan,
             &render_path,
-            &filter_path,
+            &filters,
             Some("obsidian://open?vault=bob&file=lib%2Fchat%2Freport.mp3"),
         )
         .expect("render listen card PDF");
@@ -2570,6 +2622,462 @@ mod tests {
         assert!(
             has_play_uri,
             "rendered PDF should contain the Obsidian Play URI: {uri_objects:#?}"
+        );
+    }
+
+    /// Modifier-letter tag glyphs from the return-link filter's `MOD` table,
+    /// plus the pill arrow. Used to prove outlines stay clean and to parse
+    /// pill rows out of `pdftotext` output.
+    const RETURN_TAG_GLYPHS: &str = "ᵃᵇᶜᵈᵉᶠᵍʰⁱʲᵏᵐⁿᵖʳˢᵗᵘᵛʷˣʸᶻ";
+    const RETURN_GLYPH_LETTERS: [(char, char); 23] = [
+        ('ᵃ', 'a'),
+        ('ᵇ', 'b'),
+        ('ᶜ', 'c'),
+        ('ᵈ', 'd'),
+        ('ᵉ', 'e'),
+        ('ᶠ', 'f'),
+        ('ᵍ', 'g'),
+        ('ʰ', 'h'),
+        ('ⁱ', 'i'),
+        ('ʲ', 'j'),
+        ('ᵏ', 'k'),
+        ('ᵐ', 'm'),
+        ('ⁿ', 'n'),
+        ('ᵖ', 'p'),
+        ('ʳ', 'r'),
+        ('ˢ', 's'),
+        ('ᵗ', 't'),
+        ('ᵘ', 'u'),
+        ('ᵛ', 'v'),
+        ('ʷ', 'w'),
+        ('ˣ', 'x'),
+        ('ʸ', 'y'),
+        ('ᶻ', 'z'),
+    ];
+    const RETURN_ALPHABET: &str = "abcdefghijkmnprstuvwxyz";
+
+    /// Inverse of the filter's bijective base-23 `letters`: tag glyphs back
+    /// to the 1-based link number.
+    fn return_tag_number(tag: &str) -> Option<u32> {
+        let mut number = 0u32;
+        let mut length = 0;
+        for glyph in tag.chars() {
+            let (_, letter) = RETURN_GLYPH_LETTERS
+                .iter()
+                .find(|(glyph_value, _)| *glyph_value == glyph)?;
+            let position = RETURN_ALPHABET.find(*letter)? as u32;
+            number = number * 23 + position + 1;
+            length += 1;
+        }
+        (length > 0).then_some(number)
+    }
+
+    fn resolve_pdf_object(
+        document: &lopdf::Document,
+        object: &lopdf::Object,
+    ) -> Option<lopdf::Object> {
+        match object {
+            lopdf::Object::Reference(id) => {
+                document.get_object(*id).ok().cloned()
+            }
+            other => Some(other.clone()),
+        }
+    }
+
+    fn pdf_dictionary(
+        document: &lopdf::Document,
+        object: &lopdf::Object,
+    ) -> Option<lopdf::Dictionary> {
+        match resolve_pdf_object(document, object)? {
+            lopdf::Object::Dictionary(dictionary) => Some(dictionary),
+            _ => None,
+        }
+    }
+
+    /// Named destinations mapped to 1-based page numbers.
+    fn named_dest_pages(
+        document: &lopdf::Document,
+    ) -> std::collections::BTreeMap<String, u32> {
+        let mut dests = std::collections::BTreeMap::new();
+        let page_numbers: std::collections::BTreeMap<lopdf::ObjectId, u32> =
+            document
+                .get_pages()
+                .into_iter()
+                .map(|(number, id)| (id, number))
+                .collect();
+        fn dest_page(
+            document: &lopdf::Document,
+            page_numbers: &std::collections::BTreeMap<lopdf::ObjectId, u32>,
+            value: &lopdf::Object,
+        ) -> Option<u32> {
+            match resolve_pdf_object(document, value)? {
+                lopdf::Object::Array(items) => items
+                    .first()
+                    .and_then(|page| page.as_reference().ok())
+                    .and_then(|id| page_numbers.get(&id).copied()),
+                lopdf::Object::Dictionary(dictionary) => {
+                    let dest = dictionary.get(b"D").ok()?;
+                    dest_page(
+                        document,
+                        page_numbers,
+                        &resolve_pdf_object(document, dest)?,
+                    )
+                }
+                _ => None,
+            }
+        }
+        let Ok(catalog) = document.catalog() else {
+            return dests;
+        };
+        let Some(names) = catalog
+            .get(b"Names")
+            .ok()
+            .and_then(|object| pdf_dictionary(document, object))
+        else {
+            return dests;
+        };
+        let Some(tree) = names
+            .get(b"Dests")
+            .ok()
+            .and_then(|object| pdf_dictionary(document, object))
+        else {
+            return dests;
+        };
+        // The xelatex name tree may nest intermediate `/Kids` nodes above
+        // the leaf `/Names` arrays; walk the whole tree.
+        fn collect(
+            document: &lopdf::Document,
+            page_numbers: &std::collections::BTreeMap<lopdf::ObjectId, u32>,
+            node: &lopdf::Dictionary,
+            dests: &mut std::collections::BTreeMap<String, u32>,
+        ) {
+            if let Some(lopdf::Object::Array(entries)) = node
+                .get(b"Names")
+                .ok()
+                .and_then(|object| resolve_pdf_object(document, object))
+            {
+                let mut pairs = entries.iter();
+                while let (Some(key), Some(value)) =
+                    (pairs.next(), pairs.next())
+                {
+                    let lopdf::Object::String(name_bytes, _) = key else {
+                        continue;
+                    };
+                    let name = String::from_utf8_lossy(name_bytes).into_owned();
+                    if let Some(page) = dest_page(document, page_numbers, value)
+                    {
+                        dests.insert(name, page);
+                    }
+                }
+            }
+            if let Some(lopdf::Object::Array(kids)) = node
+                .get(b"Kids")
+                .ok()
+                .and_then(|object| resolve_pdf_object(document, object))
+            {
+                for kid in &kids {
+                    if let Some(child) = pdf_dictionary(document, kid) {
+                        collect(document, page_numbers, &child, dests);
+                    }
+                }
+            }
+        }
+        collect(document, &page_numbers, &tree, &mut dests);
+        dests
+    }
+
+    /// Every GoTo link destination name in the document.
+    fn goto_dest_names(document: &lopdf::Document) -> Vec<String> {
+        let mut out = Vec::new();
+        for (_, page_id) in document.get_pages() {
+            let Ok(page) = document.get_dictionary(page_id) else {
+                continue;
+            };
+            let Some(lopdf::Object::Array(annots)) = page
+                .get(b"Annots")
+                .ok()
+                .and_then(|object| resolve_pdf_object(document, object))
+            else {
+                continue;
+            };
+            for annot in &annots {
+                let Some(dictionary) = pdf_dictionary(document, annot) else {
+                    continue;
+                };
+                let is_link = matches!(
+                    dictionary.get(b"Subtype"),
+                    Ok(lopdf::Object::Name(name)) if name == b"Link"
+                );
+                if !is_link {
+                    continue;
+                }
+                let dest = dictionary
+                    .get(b"A")
+                    .ok()
+                    .and_then(|action| pdf_dictionary(document, action))
+                    .and_then(|action| action.get(b"D").ok().cloned())
+                    .or_else(|| dictionary.get(b"Dest").ok().cloned());
+                if let Some(dest) = dest
+                    && let Some(lopdf::Object::String(bytes, _)) =
+                        resolve_pdf_object(document, &dest)
+                {
+                    out.push(String::from_utf8_lossy(&bytes).into_owned());
+                }
+            }
+        }
+        out
+    }
+
+    /// Every outline (bookmark) title in reading order.
+    fn outline_titles(document: &lopdf::Document) -> Vec<String> {
+        let mut titles = Vec::new();
+        fn walk(
+            document: &lopdf::Document,
+            dictionary: &lopdf::Dictionary,
+            titles: &mut Vec<String>,
+        ) {
+            let mut next = dictionary
+                .get(b"First")
+                .ok()
+                .and_then(|object| object.as_reference().ok());
+            while let Some(id) = next {
+                let Ok(lopdf::Object::Dictionary(item)) =
+                    document.get_object(id)
+                else {
+                    break;
+                };
+                if let Ok(title) = item.get(b"Title")
+                    && let Ok(text) = lopdf::decode_text_string(title)
+                {
+                    titles.push(text);
+                }
+                walk(document, item, titles);
+                next = item
+                    .get(b"Next")
+                    .ok()
+                    .and_then(|object| object.as_reference().ok());
+            }
+        }
+        if let Ok(catalog) = document.catalog()
+            && let Some(outlines) = catalog
+                .get(b"Outlines")
+                .ok()
+                .and_then(|object| pdf_dictionary(document, object))
+        {
+            walk(document, &outlines, &mut titles);
+        }
+        titles
+    }
+
+    /// `(printed page, tag glyphs)` for every `↩ p. N<tag>` pill on the page.
+    fn page_pills(text: &str) -> Vec<(u32, String)> {
+        let mut out = Vec::new();
+        let mut rest = text;
+        while let Some(position) = rest.find('↩') {
+            let after = &rest[position + '↩'.len_utf8()..];
+            rest = after;
+            let mut tail = after.trim_start();
+            if let Some(stripped) = tail.strip_prefix("p.") {
+                tail = stripped.trim_start();
+                let digits: String = tail
+                    .chars()
+                    .take_while(|char| char.is_ascii_digit())
+                    .collect();
+                if !digits.is_empty() {
+                    tail = tail[digits.len()..].trim_start();
+                    let tags: String = tail
+                        .chars()
+                        .take_while(|char| RETURN_TAG_GLYPHS.contains(*char))
+                        .collect();
+                    if !tags.is_empty()
+                        && let Ok(page) = digits.parse()
+                    {
+                        out.push((page, tags));
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn return_link_xelatex_render_pairs_pills_with_destinations() {
+        if pandoc_command().is_none()
+            || Command::new("xelatex").arg("--version").output().is_err()
+        {
+            eprintln!(
+                "skipping return-link PDF test: pandoc and xelatex are required"
+            );
+            return;
+        }
+        let temp = TempDir::new("return-links-pdf");
+        let mut source = "# Return Link Exercise\n\nA [solo link](#solo) opens the exercise.\n\n## Solo\n\nOne inbound link lands here.\n\n## Single\n\nThe [only link](#single) points here.\n\n## Lonely\n\nNobody links here.\n\n## Crowd\n\n".to_string();
+        source.push_str(
+            &["A", "B", "C", "D", "E", "F", "G", "H"]
+                .iter()
+                .map(|name| format!("[Fan {name}](#crowd)"))
+                .collect::<Vec<_>>()
+                .join(" "),
+        );
+        source.push_str("\n\n## Wrap\n\n");
+        source.push_str(
+            &(1..=21)
+                .map(|number| format!("[r{number}](#wrap)"))
+                .collect::<Vec<_>>()
+                .join(" "),
+        );
+        source.push_str("\n\n#### Deep dive {#deep}\n\nA [deep link](#deep) plus [this is a deliberately long link label that should wrap across more than one typeset line](#deep).\n\n::: {#mydiv}\n\nDiv target body.\n\n:::\n\nA [div link](#mydiv).\n\nA [span link](#myspan) plus [target words]{#myspan} inline.\n");
+        for number in 0..30 {
+            source.push_str(&format!(
+                "\nFiller paragraph {number} pads the exercise so return pills span several pages and page labels vary.\n"
+            ));
+        }
+        source.push_str("\n## Near bottom landing {#nearbottom}\n\n| cell one | cell two |\n|----------|----------|\n| r1c1 | r1c2 |\n| r2c1 | r2c2 |\n");
+        let source_path = temp.path.join("exercise.md");
+        fs::write(&source_path, source).expect("write source");
+        let target = temp.path.join("xlib/chat/exercise.pdf");
+        fs::create_dir_all(target.parent().expect("target parent"))
+            .expect("create output directory");
+        let plan = CreatePlan {
+            source: source_path.display().to_string(),
+            source_kind: "markdown",
+            target: target.clone(),
+            sidecar: target.with_extension("md"),
+            workflow: TargetWorkflow::Intake {
+                library_destination: temp.path.join("lib/chat/exercise.pdf"),
+            },
+            title: "Return Link Exercise".to_string(),
+            title_source: "markdown",
+            author: None,
+            published: None,
+            source_url: None,
+            captured: None,
+            id: None,
+            marker: compose_marker(
+                "ready",
+                "obsidian_ref",
+                "Return Link Exercise",
+                None,
+                &[],
+            )
+            .expect("compose marker"),
+            audio: None,
+            page_count_hint: None,
+        };
+        let render_path = render_temp_path(&target).expect("render path");
+        let code_break_path = temp.path.join("filter.lua");
+        fs::write(&code_break_path, PANDOC_CODE_BREAK_FILTER)
+            .expect("write filter");
+        let return_filter_path = temp.path.join("return-links.lua");
+        fs::write(&return_filter_path, super::super::return_links::FILTER)
+            .expect("write return-link filter");
+        let filters = RenderFilters {
+            code_break: code_break_path,
+            return_links: return_filter_path,
+            report: temp.path.join("return-links.json"),
+        };
+        let pandoc = pandoc_command().expect("pandoc checked above");
+        let outcome =
+            render_temp_pdf(&pandoc, &plan, &render_path, &filters, None)
+                .expect("render return-link PDF");
+        let super::super::return_links::ReportOutcome::Report(report) = outcome
+        else {
+            panic!("render must write a return-link report: {outcome:?}");
+        };
+        assert_eq!(report.paired, 35);
+        assert_eq!(report.targets, 7);
+        assert_eq!(report.prefix, "bob:ret:");
+        let page_count = stamp_and_install(
+            &render_path,
+            &plan.target,
+            &plan.marker,
+            &PdfInfo::default(),
+        )
+        .expect("install return-link PDF");
+        assert!(page_count > 1, "fixture must span pages");
+
+        let document =
+            lopdf::Document::load(&target).expect("load rendered PDF");
+        let dests = named_dest_pages(&document);
+        let prefixed = dests
+            .keys()
+            .filter(|name| name.starts_with(&report.prefix))
+            .count();
+        assert_eq!(
+            prefixed, report.paired as usize,
+            "one named destination per tagged link"
+        );
+        for name in goto_dest_names(&document) {
+            if let Some(target) = name.strip_prefix(&report.prefix) {
+                assert!(
+                    dests.contains_key(&name),
+                    "return link {target} resolves to a named destination"
+                );
+            }
+        }
+        let titles = outline_titles(&document);
+        assert!(
+            !titles.is_empty(),
+            "rendered PDF must carry outline bookmarks"
+        );
+        for title in &titles {
+            assert!(
+                !title.contains('↩')
+                    && !title
+                        .chars()
+                        .any(|char| RETURN_TAG_GLYPHS.contains(char)),
+                "outline title stays clean: {title}"
+            );
+        }
+
+        if Command::new("pdftotext").arg("-v").output().is_err() {
+            eprintln!(
+                "skipping return-link page checks: pdftotext is required"
+            );
+            return;
+        }
+        let mut pill_count = 0;
+        let mut heading_page = 0;
+        let mut cell_page = 0;
+        for page in 1..=page_count {
+            let output = Command::new("pdftotext")
+                .arg("-layout")
+                .arg("-f")
+                .arg(page.to_string())
+                .arg("-l")
+                .arg(page.to_string())
+                .arg(&target)
+                .arg("-")
+                .output()
+                .expect("run pdftotext");
+            assert!(output.status.success(), "{output:?}");
+            let text = String::from_utf8_lossy(&output.stdout).into_owned();
+            for (printed, tag) in page_pills(&text) {
+                let number = return_tag_number(&tag)
+                    .expect("pill tag decodes to a link number");
+                let anchor = format!("{}{number}", report.prefix);
+                assert_eq!(
+                    dests.get(&anchor),
+                    Some(&printed),
+                    "pill {tag} prints the page its destination sits on"
+                );
+                pill_count += 1;
+            }
+            if text.contains("Near bottom landing") {
+                heading_page = page;
+            }
+            if text.contains("cell one") {
+                cell_page = page;
+            }
+        }
+        assert_eq!(
+            pill_count, report.paired as usize,
+            "every pill is accounted for"
+        );
+        assert_ne!(heading_page, 0, "heading text must render");
+        assert_eq!(
+            heading_page, cell_page,
+            "near-bottom heading stays with its table"
         );
     }
 }

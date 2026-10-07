@@ -1,0 +1,18 @@
+% bob ref create: paired return links (see docs/highlights-create.md).
+\usepackage{needspace}
+\usepackage{tikz}
+\definecolor{BobLinkInk}{HTML}{2F5E96}
+\definecolor{BobTagInk}{HTML}{5C7FA8}
+\definecolor{BobPillFill}{HTML}{EEF3FA}
+\definecolor{BobPillRule}{HTML}{C9D7EA}
+\definecolor{BobMuted}{HTML}{6E7781}
+\makeatletter
+\newcommand{\BobReturnAnchor}[1]{\raisebox{1.6\baselineskip}[0pt][0pt]{\special{pdf:dest (#1) [@thispage /XYZ null @ypos null]}}\label{#1}}
+\newcommand{\BobTag}[1]{{\sffamily\bfseries\fontsize{1.3em}{0pt}\selectfont\color{BobTagInk}\kern0.04em #1}}
+\newcommand{\BobPillBody}[2]{{\color{BobLinkInk}↩}\hspace{0.3em}{\color{BobMuted}p.\,\pageref*{#1}}{\color{BobLinkInk}\bfseries\fontsize{1.3em}{0pt}\selectfont\,#2}}
+\newcommand{\BobBack}[2]{\hyperlink{#1}{\tikz[baseline=(p.base)]\node[fill=BobPillFill,draw=BobPillRule,line width=0.4pt,rounded corners=2.4pt,inner xsep=3.4pt,inner ysep=1.8pt,text height=1.75ex,text depth=0.45ex](p){\BobPillBody{#1}{#2}};}}
+\newcommand{\BobBackCompact}[2]{\hyperlink{#1}{\tikz[baseline=(p.base)]\node[fill=BobPillFill,draw=BobPillRule,line width=0.4pt,rounded corners=2pt,inner xsep=2.6pt,inner ysep=0.5pt,text height=1.5ex,text depth=0.35ex](p){\BobPillBody{#1}{#2}};}}
+\newcommand{\BobBackSep}{\hspace{0.35em}\allowbreak}
+\newcommand{\BobBacklinks}[1]{\par\nopagebreak[4]\vspace{0.15\baselineskip}\noindent{\raggedright\sffamily\footnotesize\lineskiplimit=3pt\lineskip=3pt #1\par}\nopagebreak[4]\addvspace{0.55\baselineskip}\@afterheading}
+\newcommand{\BobBackInline}[1]{\,{\sffamily\footnotesize #1}}
+\makeatother

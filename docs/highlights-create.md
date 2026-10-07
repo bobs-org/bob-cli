@@ -61,6 +61,53 @@ with a letter, not equal to the source file stem or URL stem
 `Microsoft PowerPoint - …`), and not `untitled`/`title`. The same
 normalization applies to `/Author`.
 
+## Local links and return pills
+
+Every same-document link (`[words](#some-heading)`) gets a small raised
+letter tag beside its words, and its target grows a row of return pills just
+underneath. Each pill reads `↩ p. N` plus the matching tag: tapping it jumps
+back to the passage the reader left, about a line and a half above the
+original sentence, keeping the current zoom and horizontal position. The
+heading text, TOC, and PDF bookmarks never change, and before tapping
+anything the row also shows which pages cite that section.
+
+Eligibility:
+
+| Link location or target | Result |
+| ----------------------- | ------ |
+| Paragraphs, plain blocks, line blocks, definition lists, block quotes, Div content, list items (not nav lists), table body cells, figure content, footnotes | Tagged + paired (when the target is return-capable) |
+| Headings, figure captions, table captions, table head rows (including intermediate body heads), table foot rows, hand-written TOC lists | Untagged: rewritten to the canonical id, still a working forward link |
+| Target is a CodeBlock, Table, Figure, Image, Code, Link, Span in a skip context, or a duplicated id | Untagged: working forward link |
+| Listen cards (already raw LaTeX) and metadata (title, abstract) | Untouched |
+| Unresolvable target (`#`, missing, or ambiguous alias) | Dead: plain text (a Span of the link content) plus a report record; applies in every context |
+| Non-`#` links | Untouched |
+
+Return-capable targets are Headings, Divs, and Spans outside headings,
+captions, and table head/foot rows. Each tagged link gets its own sequential
+letter in reading order (`a…z` without `l`, `o`, `q`, then `aa, ab, …`), and
+each target carries exactly one pill row in source reading order.
+
+Targets resolve in this order: the exact pandoc id, then the percent-decoded
+id, then a GitHub-style alias computed by pandoc's own `gfm` reader (only
+unique aliases count). Real ids always beat aliases; nothing is fuzzed by
+case or heading text. Headings that are linked often are safest with an
+explicit `{#id}`, which also fixes ambiguous-alias warnings.
+
+On success bob prints a `links:` line after `pages:` (`links: 27 paired
+(11 targets)`, plus `· N via GitHub-style slugs`, `· N untagged`, `· N dead`
+when nonzero; `links: none` when there are no `#` links; `links: off
+(bob-return-links: false)` for the opt-out below). Each dead link and each
+duplicated anchor also prints one `warning:` line on stderr: a missing target
+renders as plain text, an ambiguous GitHub-style slug names the fix
+(`give the heading an explicit {#id}`), and a duplicated anchor keeps working
+forward links but gets no return pills.
+
+Frontmatter `bob-return-links: false` turns the whole feature off for that
+document. Internal links, URLs, file links, citations, tags, and pills share
+one link ink (`#2F5E96`); the TOC stays black. Existing PDFs gain the feature
+only when re-rendered. When a render pairs links, bob stamps
+`return_links: true` so `bob ref sync` can keep exports clean.
+
 ## PDF route
 
 Before any write the PDF must load with `lopdf`, have at least one page,
