@@ -73,6 +73,9 @@ pub(crate) struct HighlightsConfig {
     audio_link_template: Option<String>,
     audio_library: Option<String>,
     listen_command: Option<String>,
+    url_routing_capture: Option<bool>,
+    url_routing_gkeep: Option<bool>,
+    url_routing_exclude_hosts: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -169,6 +172,18 @@ impl HighlightsConfig {
 
     pub(crate) fn listen_command(&self) -> Option<&str> {
         self.listen_command.as_deref()
+    }
+
+    pub(crate) fn url_routing_capture(&self) -> Option<bool> {
+        self.url_routing_capture
+    }
+
+    pub(crate) fn url_routing_gkeep(&self) -> Option<bool> {
+        self.url_routing_gkeep
+    }
+
+    pub(crate) fn url_routing_exclude_hosts(&self) -> Option<&[String]> {
+        self.url_routing_exclude_hosts.as_deref()
     }
 }
 
@@ -366,6 +381,18 @@ struct RawHighlights {
     audio_library: Option<String>,
     #[serde(default)]
     listen_command: Option<String>,
+    #[serde(default)]
+    url_routing: Option<RawUrlRouting>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawUrlRouting {
+    #[serde(default)]
+    capture: Option<bool>,
+    #[serde(default)]
+    gkeep: Option<bool>,
+    #[serde(default)]
+    exclude_hosts: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -540,13 +567,54 @@ pub(crate) fn parse_highlights_config(
         .and_then(|highlights| highlights.listen_command.as_ref())
         .map(|command| command.trim().to_string())
         .filter(|command| !command.is_empty());
+    let url_routing = config
+        .highlights
+        .as_ref()
+        .and_then(|highlights| highlights.url_routing.as_ref());
+    let url_routing_capture = url_routing.and_then(|routing| routing.capture);
+    let url_routing_gkeep = url_routing.and_then(|routing| routing.gkeep);
+    let url_routing_exclude_hosts = url_routing
+        .and_then(|routing| routing.exclude_hosts.as_ref())
+        .map(|hosts| {
+            hosts
+                .iter()
+                .filter_map(|host| normalize_url_routing_host(host))
+                .collect::<Vec<_>>()
+        });
 
     Ok(HighlightsConfig {
         pre_scan_hook,
         audio_link_template,
         audio_library,
         listen_command,
+        url_routing_capture,
+        url_routing_gkeep,
+        url_routing_exclude_hosts,
     })
+}
+
+/// Normalize one `highlights.url_routing.exclude_hosts` entry:
+/// lowercased, with any scheme, leading `www.`, or trailing `.` or
+/// `/` stripped. Returns `None` when nothing remains.
+fn normalize_url_routing_host(raw: &str) -> Option<String> {
+    let mut text = raw.trim().to_lowercase();
+    if text.is_empty() {
+        return None;
+    }
+    if let Some((_, after)) = text.split_once("://") {
+        text = after.to_string();
+    }
+    if let Some((host, _)) = text.split_once('/') {
+        text = host.to_string();
+    }
+    if let Some((host, _)) = text.split_once(':') {
+        text = host.to_string();
+    }
+    if let Some(stripped) = text.strip_prefix("www.") {
+        text = stripped.to_string();
+    }
+    text = text.trim_end_matches('.').to_string();
+    (!text.is_empty()).then_some(text)
 }
 
 fn parse_priority_level(

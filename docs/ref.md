@@ -256,3 +256,36 @@ failure: coverage reports `unavailable` and the lookup continues.
 `show` resolution failures (`ambiguous_reference`,
 `unknown_reference`) exit 1 as well; in JSON mode they add
 `"candidates":[{"path":…,"title":…}]` to the envelope.
+
+## URL routing
+
+Bare public links captured with `bob capture`, shared to Google Keep
+and pulled with `bob gkeep pull`, or previewed with `bob capture-parse`
+are routed to the reading queue instead of becoming inbox tasks. The
+classifier, policy, and offline verdict below are shared by every entry
+point; nothing here touches the network.
+
+A token is a reference URL only when it has no whitespace, carries an
+optional single `<…>` wrapper, uses `http`/`https`, passes
+`validate_and_clean`, and has a host that is not an IP literal and
+contains at least one `.` with non-empty labels. Corporate short links
+(`http://go/x`), `localhost`, and IP literals stay tasks.
+
+Policy lives under `highlights.url_routing` in `bob/config.yml`:
+
+```yaml
+highlights:
+  url_routing:
+    capture: true # bare-URL capture items become reading-queue references
+    gkeep: true # URL-only Keep notes are clipped during bob gkeep pull
+    exclude_hosts: # replaces the defaults; each entry matches the host and its subdomains
+      [google.com, googleplex.com, youtube.com, youtu.be, github.com, x.com, twitter.com]
+```
+
+Missing keys take the defaults shown. A configured `exclude_hosts`
+list replaces the defaults; an empty list excludes nothing. Entries
+are normalized (lowercased, with any scheme, leading `www.`, or
+trailing `.` or `/` stripped). An invalid `url_routing` block disables
+routing with a warning; a bare URL then simply stays a task. `bob ref
+doctor` prints the effective policy as
+`url routing: capture on · gkeep on · excludes google.com, …`.

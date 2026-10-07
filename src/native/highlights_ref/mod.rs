@@ -132,11 +132,14 @@ pub(crate) const MANAGED_BODY_END: &str = "<!-- highlights:end -->";
 // read-only rows on these without exposing task-line or projection types.
 pub(crate) use arxiv::ArxivPaper;
 pub(crate) use cli::{bob_dir_arg, ref_dir_arg, xlib_dir_arg};
-pub(crate) use clip_url::{humanize_stem, percent_decode, validate_and_clean};
+pub(crate) use clip_url::{
+    dedupe_key_for, humanize_stem, percent_decode, validate_and_clean,
+};
 pub(crate) use frontmatter::split_frontmatter;
 pub(crate) use marker::{
     normalize_deprecated_status_str, ref_task_mark_status,
 };
+pub(crate) use model::Config;
 pub(crate) use note::configured_path;
 pub(crate) use region::{
     is_marker_mirror_text, parse_managed_region, split_note_body,
@@ -144,6 +147,7 @@ pub(crate) use region::{
 };
 pub(crate) use sidecar::is_wikilink;
 pub(crate) use sources::{collect_intake_records, IntakeRecord};
+pub(crate) use sources::{collect_recorded_source_urls, RecordedSource};
 const TASKS_SECTION_TITLE: &str = "Tasks";
 const TASKS_SECTION_HEADING: &str = "## Tasks";
 const PDF_TASK_BLOCK_ID: &str = "^ref";

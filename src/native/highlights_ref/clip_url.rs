@@ -76,7 +76,7 @@ pub(crate) fn validate_and_clean(raw: &str) -> Result<WebUrl> {
 /// `https://arxiv.org/abs/<id>`; everything else uses the lowercase
 /// scheme and host (no leading `www.`, no default port), path without a
 /// trailing slash, and remaining query parameters sorted.
-pub(super) fn dedupe_key_for(url: &url::Url) -> String {
+pub(crate) fn dedupe_key_for(url: &url::Url) -> String {
     if let Some(paper) = super::arxiv::ArxivPaper::parse(url.as_str()) {
         return paper.dedupe_key();
     }

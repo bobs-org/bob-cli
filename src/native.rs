@@ -67,6 +67,7 @@ mod task_fields;
 mod task_status_groups;
 mod task_status_hooks;
 mod task_status_hooks_write;
+pub(crate) mod url_routing;
 mod vault_links;
 mod vault_sync;
 

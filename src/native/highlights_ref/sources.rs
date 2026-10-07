@@ -65,17 +65,17 @@ impl std::fmt::Display for SourcesError {
 /// Every source URL already recorded: ref-note frontmatter and queued
 /// intake-PDF markers, paired with their dedupe keys.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct RecordedSource {
-    pub(super) dedupe_key: String,
-    pub(super) path: PathBuf,
-    pub(super) is_ref_note: bool,
+pub(crate) struct RecordedSource {
+    pub(crate) dedupe_key: String,
+    pub(crate) path: PathBuf,
+    pub(crate) is_ref_note: bool,
     /// The note's `source_pdf`, as written (vault-relative), if any.
-    pub(super) source_pdf: Option<String>,
+    pub(crate) source_pdf: Option<String>,
     /// Whether the ref note carries an `audio` field.
-    pub(super) has_audio: bool,
+    pub(crate) has_audio: bool,
 }
 
-pub(super) fn collect_recorded_source_urls(
+pub(crate) fn collect_recorded_source_urls(
     config: &Config,
 ) -> std::result::Result<Vec<RecordedSource>, SourcesError> {
     let mut recorded = Vec::new();

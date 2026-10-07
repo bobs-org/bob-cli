@@ -253,6 +253,7 @@ pub(super) fn doctor_vault(config: &Config, no_hooks: bool) -> Result<()> {
 
     append_web_clip_doctor_rows(&mut warnings);
     append_listen_doctor_row(&mut warnings);
+    append_url_routing_doctor_row(&mut warnings);
     append_library_doctor_rows(config, &mut warnings);
 
     if !warnings.is_empty() {
@@ -272,6 +273,34 @@ pub(super) fn doctor_vault(config: &Config, no_hooks: bool) -> Result<()> {
             "doctor found failing checks:\n  {}",
             failures.join("\n  ")
         )))
+    }
+}
+
+/// URL-routing policy row: the effective toggles and exclusions.
+/// A config error turns routing off with a warning; it never fails
+/// the vault doctor.
+fn append_url_routing_doctor_row(warnings: &mut Vec<String>) {
+    match crate::native::url_routing::UrlRoutingPolicy::load() {
+        Ok(policy) => {
+            let excludes = if policy.exclude_hosts.is_empty() {
+                "none".to_string()
+            } else {
+                policy.exclude_hosts.join(", ")
+            };
+            println!(
+                "url routing: capture {} · gkeep {} · excludes {excludes}",
+                if policy.capture { "on" } else { "off" },
+                if policy.gkeep { "on" } else { "off" },
+            );
+        }
+        Err(error) => {
+            let message = match error {
+                bob_config::ConfigError::Read(message)
+                | bob_config::ConfigError::Invalid(message) => message,
+            };
+            println!("url routing: warn (off: {message})");
+            warnings.push(format!("URL routing is off: {message}"));
+        }
     }
 }
 

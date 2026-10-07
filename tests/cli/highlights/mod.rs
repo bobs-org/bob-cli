@@ -11,3 +11,4 @@ mod scan_hooks;
 mod sync;
 mod sync_tasks;
 mod tasks;
+mod url_routing;

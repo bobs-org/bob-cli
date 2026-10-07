@@ -2,11 +2,11 @@
 use super::*;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct Config {
-    pub(super) bob_dir: PathBuf,
-    pub(super) lib_dir: PathBuf,
-    pub(super) ref_dir: PathBuf,
-    pub(super) xlib_dir: PathBuf,
+pub(crate) struct Config {
+    pub(crate) bob_dir: PathBuf,
+    pub(crate) lib_dir: PathBuf,
+    pub(crate) ref_dir: PathBuf,
+    pub(crate) xlib_dir: PathBuf,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

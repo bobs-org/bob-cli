@@ -69,7 +69,7 @@ impl ArxivPaper {
     /// The dedupe key: `https://arxiv.org/abs/<id>` with no version, so
     /// every spelling of a paper (abs, html, or pdf, with or without a
     /// version) dedupes together.
-    pub(super) fn dedupe_key(&self) -> String {
+    pub(crate) fn dedupe_key(&self) -> String {
         format!("https://arxiv.org/abs/{}", self.id)
     }
 }
