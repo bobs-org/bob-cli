@@ -477,6 +477,27 @@ pub(super) struct GitStatusEntry {
 }
 
 impl Config {
+    pub(crate) fn for_vault(bob_dir: &Path) -> Self {
+        Self {
+            lib_dir: vault_configured_path(
+                bob_dir,
+                ENV_LIB_DIR,
+                DEFAULT_LIB_DIR,
+            ),
+            ref_dir: vault_configured_path(
+                bob_dir,
+                ENV_REF_DIR,
+                DEFAULT_REF_DIR,
+            ),
+            xlib_dir: vault_configured_path(
+                bob_dir,
+                ENV_XLIB_DIR,
+                DEFAULT_XLIB_DIR,
+            ),
+            bob_dir: bob_dir.to_path_buf(),
+        }
+    }
+
     pub(super) fn from_matches(matches: &ArgMatches) -> Self {
         let bob_dir = matches
             .get_one::<OsString>("bob-dir")
@@ -511,6 +532,21 @@ impl Config {
             xlib_dir,
         }
     }
+}
+
+/// Resolve a vault-relative directory for [`Config::for_vault`]: the env
+/// override when set and non-empty, else the default under `bob_dir`.
+/// Mirrors [`configured_path`](super::note::configured_path) without Clap.
+fn vault_configured_path(
+    bob_dir: &Path,
+    env_name: &str,
+    default_value: &str,
+) -> PathBuf {
+    let configured = std::env::var_os(env_name)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(default_value));
+    super::note::resolve_under_bob(bob_dir, &configured)
 }
 
 impl Prefer {

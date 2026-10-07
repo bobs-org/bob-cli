@@ -152,6 +152,17 @@ pub(super) fn atomic_copy(source: &Path, dest: &Path) -> Result<()> {
             temp_path.display()
         ))
     })?;
+    // Durability for the ingest path (and every `create` install): flush
+    // the temp file before the rename, then the parent directory after.
+    fs::File::open(&temp_path)
+        .and_then(|file| file.sync_all())
+        .map_err(|error| {
+            let _ = fs::remove_file(&temp_path);
+            CommandError::new(format!(
+                "sync temporary file {}: {error}",
+                temp_path.display()
+            ))
+        })?;
     fs::rename(&temp_path, dest).map_err(|error| {
         let _ = fs::remove_file(&temp_path);
         CommandError::new(format!(
@@ -159,7 +170,25 @@ pub(super) fn atomic_copy(source: &Path, dest: &Path) -> Result<()> {
             dest.display()
         ))
     })?;
+    if let Some(parent) = dest.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        sync_parent_dir(parent)?;
+    }
     Ok(())
+}
+
+/// Fsync a directory so a fresh rename survives a crash. Failures are
+/// reported; callers already installed the file.
+fn sync_parent_dir(dir: &Path) -> Result<()> {
+    fs::File::open(dir)
+        .and_then(|file| file.sync_all())
+        .map_err(|error| {
+            CommandError::new(format!(
+                "sync directory {}: {error}",
+                dir.display()
+            ))
+        })
 }
 
 pub(super) fn temporary_write_path(path: &Path) -> Result<PathBuf> {

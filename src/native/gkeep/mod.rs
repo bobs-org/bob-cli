@@ -13,7 +13,7 @@ mod login;
 mod model;
 mod plan;
 mod pull;
-mod render;
+pub(crate) mod render;
 mod ui;
 
 use std::{ffi::OsString, iter};

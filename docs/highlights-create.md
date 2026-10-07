@@ -123,6 +123,27 @@ refusal adds `hint: to add audio to that capture, run bob ref
 create <library PDF> --listen`, naming the existing PDF path. The same hint
 applies when the planned intake target already exists.
 
+## Ingest boundary
+
+`src/native/highlights_ref/ingest.rs::ingest_url` is the typed,
+non-printing URL ingest shared by `bob ref create`, the capture background
+worker, and `bob gkeep pull`. It takes a vault root plus a cleaned URL and
+returns `Created`, `AlreadyInLibrary`, or `AlreadyQueued`, or an
+`IngestError` with a snake-case `kind` and a `retryable()` flag. Fixed
+defaults: route-default ref type (`blogs` for articles, `papers` for PDFs
+and arXiv), status `ready`, parent `obsidian_ref`, no audio, no force, no
+title or name override. It holds the machine-wide
+`${XDG_STATE_HOME:-~/.local/state}/bob-cli/ref/ingest.lock` (fs2
+exclusive, blocking) for the whole call and reports
+`waiting for another clip…` once through its progress callback while it
+waits. It writes nothing to stdout and prints nothing to stderr itself.
+Error kinds: `network`, `timeout`, `http_status` (retryable only for 408,
+429, and 5xx), `browser`, and `dependency` are retryable; `blocked`,
+`thin`, `render`, `unsupported_content`, `collision`, `invalid_url`, and
+`internal` are permanent. `IngestError::fallback_note(url)` renders the
+shared `⚠️ Clip failed (<kind>): <message> · retry: bob ref create <url>`
+bullet used by every fallback path.
+
 ## Listen
 
 `-L, --listen` (conflicts with `-a` and `-n`) narrates the target with the

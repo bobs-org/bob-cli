@@ -186,10 +186,32 @@ pub(super) fn atomic_save_pdf(
             temp_path.display()
         ))
     })?;
+    fs::File::open(&temp_path)
+        .and_then(|file| file.sync_all())
+        .map_err(|error| {
+            let _ = fs::remove_file(&temp_path);
+            CommandError::new(format!(
+                "sync temporary PDF {}: {error}",
+                temp_path.display()
+            ))
+        })?;
     fs::rename(&temp_path, path).map_err(|error| {
         let _ = fs::remove_file(&temp_path);
         CommandError::new(format!("install PDF {}: {error}", path.display()))
-    })
+    })?;
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::File::open(parent)
+            .and_then(|file| file.sync_all())
+            .map_err(|error| {
+                CommandError::new(format!(
+                    "sync directory {}: {error}",
+                    parent.display()
+                ))
+            })?;
+    }
+    Ok(())
 }
 
 pub(super) fn parse_marker(contents: &str) -> Result<Projection> {

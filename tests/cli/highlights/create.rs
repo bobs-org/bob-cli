@@ -2222,3 +2222,122 @@ fn landing_library_collision_hints_listen_attach() {
         "{diagnostic}"
     );
 }
+
+#[test]
+fn ingest_characterizes_url_failure_modes() {
+    // Pins stdout, stderr, and exit codes for the URL failure modes the
+    // ingest phase extracts without changing: curl timeout, adapter
+    // `blocked`, adapter crash, and a missing uv/adapter.
+    let temp = TempDir::new("bob-cli-create-ingest-characterization");
+    let root = temp.path().join("curl-root");
+    std::fs::create_dir_all(&root).expect("create curl root");
+    write_bare_pdf(&root.join("paper.pdf"), Some("T"), None);
+    let log = temp.path().join("curl.log");
+    std::fs::write(&log, "").expect("init log");
+
+    // A curl timeout (exit 28) for a PDF URL.
+    let timeout_curl = temp.path().join("fake-curl-timeout.sh");
+    write_executable(
+        &timeout_curl,
+        "#!/bin/sh\nprintf 'curl: timeout\n' >&2\nexit 28\n",
+    );
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg("https://example.com/paper.pdf")
+        .arg("-b")
+        .arg(temp.path().join("vault-timeout"))
+        .env("BOB_HIGHLIGHTS_CURL", &timeout_curl)
+        .env("FAKE_CURL_ROOT", &root)
+        .env("FAKE_CURL_LOG", &log)
+        .output()
+        .expect("run create with timing-out curl");
+    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+    assert!(stdout(&output).is_empty(), "{}", format_output(&output));
+    assert!(
+        stderr(&output).contains("timed out"),
+        "{}",
+        format_output(&output)
+    );
+
+    // Adapter `blocked` for an article URL.
+    let fake_curl = write_fake_curl(temp.path());
+    let fake = FakeClip::new(&temp, "blocked");
+    fake.respond(&failure_response(
+        "blocked",
+        "the bot challenge did not clear",
+        "save the page from your browser and pass --html FILE",
+    ));
+    let mut blocked = bob_command();
+    blocked
+        .arg("highlights")
+        .arg("create")
+        .arg("https://example.com/article/hello");
+    article_env(
+        &mut blocked,
+        &temp.path().join("vault-blocked"),
+        &fake_curl,
+        &root,
+        &log,
+        &fake.path,
+    );
+    let output = blocked.output().expect("run create blocked article");
+    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+    assert!(stdout(&output).is_empty(), "{}", format_output(&output));
+    let diagnostic = stderr(&output);
+    assert!(
+        diagnostic.contains("blocked:")
+            && diagnostic.contains("the bot challenge did not clear")
+            && diagnostic.contains("hint: save the page"),
+        "{diagnostic}"
+    );
+
+    // Adapter crash (nonzero exit, no JSON).
+    let crasher = temp.path().join("crash-adapter.sh");
+    write_executable(&crasher, "#!/bin/sh\necho boom >&2\nexit 3\n");
+    let mut crashed = bob_command();
+    crashed
+        .arg("highlights")
+        .arg("create")
+        .arg("https://example.com/article/hello");
+    article_env(
+        &mut crashed,
+        &temp.path().join("vault-crash"),
+        &fake_curl,
+        &root,
+        &log,
+        &crasher,
+    );
+    let output = crashed.output().expect("run create crashing article");
+    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+    assert!(stdout(&output).is_empty(), "{}", format_output(&output));
+    assert!(
+        stderr(&output).contains("crashed"),
+        "{}",
+        format_output(&output)
+    );
+
+    // Missing uv and no adapter override.
+    let empty_bin = temp.path().join("empty-bin");
+    std::fs::create_dir_all(&empty_bin).expect("empty bin");
+    let mut missing = bob_command();
+    missing
+        .arg("highlights")
+        .arg("create")
+        .arg("https://example.com/article/hello")
+        .arg("-b")
+        .arg(temp.path().join("vault-missing"))
+        .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
+        .env("FAKE_CURL_ROOT", &root)
+        .env("FAKE_CURL_LOG", &log)
+        .env("BOB_WEB_CLIP_ADAPTER", "")
+        .env("PATH", &empty_bin);
+    let output = missing.output().expect("run create without uv");
+    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+    assert!(stdout(&output).is_empty(), "{}", format_output(&output));
+    assert!(
+        stderr(&output).contains("uv was not found"),
+        "{}",
+        format_output(&output)
+    );
+}

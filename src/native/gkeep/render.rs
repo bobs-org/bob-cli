@@ -124,7 +124,7 @@ fn escape_colon_runs(text: &str) -> String {
 
 /// Escape free text for a child bullet: the task-line escaping plus the
 /// leading-marker rule, since a child starts a fresh list item.
-pub(super) fn escape_child_text(text: &str) -> String {
+pub(crate) fn escape_child_text(text: &str) -> String {
     escape_leading_marker(&escape_task_text(text))
 }
 
