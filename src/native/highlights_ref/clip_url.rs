@@ -29,18 +29,18 @@ const STEM_MAX_LEN: usize = 80;
 
 /// A validated URL plus its cleaned and dedupe forms.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct WebUrl {
+pub(crate) struct WebUrl {
     /// The URL as recorded in the marker: fragment and tracking parameters
     /// removed, everything else as given.
-    pub(super) cleaned: String,
+    pub(crate) cleaned: String,
     /// The normalized identity used for dedupe comparisons.
-    pub(super) dedupe_key: String,
+    pub(crate) dedupe_key: String,
     /// The lowercase host without a leading `www.`, for stem fallbacks.
-    pub(super) host: String,
+    pub(crate) host: String,
 }
 
 /// Validate `raw` as a public `http(s)` URL and return its cleaned forms.
-pub(super) fn validate_and_clean(raw: &str) -> Result<WebUrl> {
+pub(crate) fn validate_and_clean(raw: &str) -> Result<WebUrl> {
     let url = url::Url::parse(raw.trim()).map_err(|error| {
         CommandError::new(format!("invalid URL {raw:?}: {error}"))
     })?;
@@ -329,7 +329,7 @@ pub(super) fn short_title_stem(title: &str) -> String {
 }
 
 /// Turn a stem back into a human-readable title fallback.
-pub(super) fn humanize_stem(stem: &str) -> String {
+pub(crate) fn humanize_stem(stem: &str) -> String {
     let mut title = String::new();
     let mut last_space = true;
     for c in stem.chars() {

@@ -571,3 +571,31 @@ pub(super) fn normalize_key(key: &str) -> String {
         })
         .collect::<String>()
 }
+
+/// Narrow seam for the `index` phase (`ref_library`): map a `^ref` checkbox
+/// mark to its canonical status through the [`PdfTaskLine`] mapping, without
+/// exposing task-line types. Returns `None` for an unknown mark.
+pub(crate) fn ref_task_mark_status(mark: char) -> Option<&'static str> {
+    match mark {
+        ' ' | '*' | '/' | 'x' | 'X' | '-' => PdfTaskLine {
+            line_index: 0,
+            checkbox_mark_index: 0,
+            checked: false,
+            mark,
+        }
+        .status()
+        .target_status(),
+        _ => None,
+    }
+}
+
+/// Narrow seam for the `index` phase (`ref_library`): the deprecated
+/// frontmatter alias map from [`normalize_deprecated_status`], returning the
+/// input unchanged when it carries no deprecated alias.
+pub(crate) fn normalize_deprecated_status_str(status: &str) -> &str {
+    match status {
+        DEPRECATED_STATUS_UNREAD => STATUS_READY,
+        DEPRECATED_STATUS_DONE => STATUS_READ,
+        _ => status,
+    }
+}

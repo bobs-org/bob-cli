@@ -14,18 +14,18 @@ use super::fetch::fetch_url;
 
 /// An arXiv paper: the base identifier plus an optional version suffix.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct ArxivPaper {
+pub(crate) struct ArxivPaper {
     /// The identifier without its version, e.g. `2602.16844`.
-    pub(super) id: String,
+    pub(crate) id: String,
     /// The version suffix, e.g. `v2`.
-    pub(super) version: Option<String>,
+    pub(crate) version: Option<String>,
 }
 
 impl ArxivPaper {
     /// Parse an arXiv paper URL (`abs`, `html`, or `pdf`), keeping the
     /// version. Query strings and fragments are ignored. Returns `None`
     /// for anything else.
-    pub(super) fn parse(raw: &str) -> Option<Self> {
+    pub(crate) fn parse(raw: &str) -> Option<Self> {
         let url = url::Url::parse(raw.trim()).ok()?;
         if !matches!(url.scheme(), "http" | "https") {
             return None;

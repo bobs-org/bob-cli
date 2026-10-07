@@ -46,7 +46,7 @@ pub(super) enum MarkerValue {
 pub(super) type Projection = BTreeMap<String, MarkerValue>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct CommandError {
+pub(crate) struct CommandError {
     pub(super) message: String,
     /// Process exit code for this failure (`None` means 1). An
     /// interrupted listen command exits 130.
@@ -75,7 +75,7 @@ impl fmt::Display for CommandError {
 
 impl StdError for CommandError {}
 
-pub(super) type Result<T> = std::result::Result<T, CommandError>;
+pub(crate) type Result<T> = std::result::Result<T, CommandError>;
 
 #[derive(Debug, Clone)]
 pub(super) struct PdfMarker {

@@ -32,7 +32,7 @@ pub(super) fn parse_note(contents: &str) -> ParsedNote {
     }
 }
 
-pub(super) fn split_frontmatter(
+pub(crate) fn split_frontmatter(
     contents: &str,
 ) -> Option<(Vec<String>, String)> {
     let marker_len = if contents.starts_with("---\r\n") {

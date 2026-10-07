@@ -1,0 +1,1 @@
+Non-markdown files are ignored silently, not counted as skipped.

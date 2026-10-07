@@ -79,7 +79,6 @@ use marker::*;
 use model::*;
 use note::*;
 use projection::*;
-use region::*;
 use report::*;
 use sidecar::*;
 use sidecar_render::*;
@@ -126,8 +125,20 @@ const ALLOWED_STATUS_VALUES: &[&str] = &[
 const MARKER_REQUIRED_KEYS: &[&str] = &[FIELD_STATUS, FIELD_PARENT];
 const COMMAND_MANAGED_FIELDS: &[&str] =
     &[FIELD_NOTE_TYPE, FIELD_REF_TYPE, FIELD_AUDIO];
-const MANAGED_BODY_BEGIN: &str = "<!-- highlights:begin -->";
-const MANAGED_BODY_END: &str = "<!-- highlights:end -->";
+pub(crate) const MANAGED_BODY_BEGIN: &str = "<!-- highlights:begin -->";
+pub(crate) const MANAGED_BODY_END: &str = "<!-- highlights:end -->";
+// Narrow `index`-phase seams: the sibling `ref_library` module builds its
+// read-only rows on these without exposing task-line or projection types.
+pub(crate) use arxiv::ArxivPaper;
+pub(crate) use clip_url::{humanize_stem, validate_and_clean};
+pub(crate) use frontmatter::split_frontmatter;
+pub(crate) use marker::{
+    normalize_deprecated_status_str, ref_task_mark_status,
+};
+pub(crate) use region::{
+    is_marker_mirror_text, parse_managed_region, split_note_body,
+    RegionBlockKind,
+};
 const TASKS_SECTION_TITLE: &str = "Tasks";
 const TASKS_SECTION_HEADING: &str = "## Tasks";
 const PDF_TASK_BLOCK_ID: &str = "^ref";

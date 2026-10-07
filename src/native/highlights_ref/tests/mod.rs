@@ -60,6 +60,7 @@ mod audio;
 mod marker;
 mod projection;
 mod region;
+mod seams;
 mod sidecar;
 mod status;
 mod tasks;
