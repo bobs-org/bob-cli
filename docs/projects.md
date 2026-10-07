@@ -459,7 +459,8 @@ and Tasks query results. The stored Markdown never changes, the
 cursor reveals the raw field for editing, and broken priority fields
 get a visible repair flag. The Task Card level strip and priority
 notices reuse the mark through `api.priorityMarks` v1, so you learn
-it where you pick a priority.
+it where you pick a priority. The sibling date-marks contract lives
+in `docs/date-marks.md`.
 
 **Principles** (borrowed from the freshness mark). Display-only:
 `[priority:: value]` stays the only stored form; nothing writes the

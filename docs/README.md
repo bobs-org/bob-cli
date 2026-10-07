@@ -7,7 +7,8 @@ The guides below explain current behavior and provide detailed contracts.
 
 For daily work, read [Capture](capture.md), [Plan and Ready caps](plan.md), and
 [Freshness review](freshness.md). For the Obsidian interface, read
-[Dashboard navigation](dashboard.md) and the [Task Card](projects.md#task-card).
+[Dashboard navigation](dashboard.md), the [Task Card](projects.md#task-card),
+and [task date marks](date-marks.md).
 
 | Guide | What it covers |
 | --- | --- |
@@ -15,6 +16,7 @@ For daily work, read [Capture](capture.md), [Plan and Ready caps](plan.md), and
 | [completion.md](completion.md) | Shell completion: the runtime model, protocol 1, and what completes |
 | [dataview.md](dataview.md) | `bob query` Dataview and Tasks |
 | [dashboard.md](dashboard.md) | Dashboard Work / Review / Browse navigation and collection pages |
+| [date-marks.md](date-marks.md) | Task date marks: calendar-label display contract for canonical task dates |
 | [freshness.md](freshness.md) | Task freshness: review lease, placement, evaluation, and conformance vectors |
 | [getting-started.md](getting-started.md) | Vault requirements, first capture/session, command effects, and troubleshooting |
 | [gkeep.md](gkeep.md) | `bob gkeep` Keep inbox drain into Obsidian tasks |
