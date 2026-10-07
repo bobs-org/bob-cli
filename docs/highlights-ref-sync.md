@@ -499,13 +499,17 @@ PDF, and omitted otherwise. It never enters the marker projection, hash, or
 base.
 
 Standard synced user fields are `status`, `parent`, `title`, `id`, `research`,
-`aliases`, `topics`, `source_url`, `author`, `published`, and `captured`. `id` is ordinary
+`aliases`, `topics`, `source_url`, `author`, `published`, `captured`, and
+`return_links`. `id` is ordinary
 user frontmatter for the basename-derived source identifier and does not
 require `highlights_marker_fields`. Existing `research` values remain legacy
 standard fields for repository-relative Markdown source paths; they round-trip
 without being renamed automatically to `id`. `captured` is the snapshot date
 (`YYYY-MM-DD`) of a web capture; like the other provenance fields it is
-omitted rather than written wrong.
+omitted rather than written wrong. `return_links` is stamped `true` by
+`bob ref create` when a Markdown render actually pairs return links, so
+`bob ref sync` knows to keep their tag glyphs and return pills out of synced
+highlight text; it never needs `highlights_marker_fields`.
 
 Every new reference note also records a note-local `created` field stamped
 from the writing invocation's clock (`BOB_NOW` overrides it for testing):
@@ -851,6 +855,8 @@ Annotation text is beautified only while rendering the generated region:
   next fragments keep it (`Marie-` + `Curie` -> `Marie-Curie`).
 - Ligature glyphs, non-breaking spaces, soft hyphens, zero-width characters,
   doubled spaces, and tab runs are normalized away.
+- For PDFs whose projection has `return_links: true`, highlight text drops
+  return-link tag glyphs and `↩ p. N` pill fragments before that cleanup.
 
 The cleanup is render-only. Block IDs, annotation-task source links, and
 processed `[h:: ...]` markers continue to use the raw normalized sidecar text,

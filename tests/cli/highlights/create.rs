@@ -512,6 +512,97 @@ fn highlights_create_reports_paired_links_and_dead_warnings_when_available() {
 }
 
 #[test]
+fn highlights_create_stamps_return_links_marker_only_when_links_paired() {
+    let pandoc_available = Command::new("pandoc")
+        .arg("--version")
+        .output()
+        .is_ok_and(|output| output.status.success());
+    let xelatex_available = Command::new("xelatex")
+        .arg("--version")
+        .output()
+        .is_ok_and(|output| output.status.success());
+    if !pandoc_available || !xelatex_available {
+        eprintln!(
+            "skipping highlights create return-links marker test: pandoc and xelatex are required"
+        );
+        return;
+    }
+
+    let temp = TempDir::new("bob-cli-highlights-create-return-links");
+    let vault = temp.path().join("vault");
+    let create = |source: &std::path::Path| {
+        bob_command()
+            .arg("highlights")
+            .arg("create")
+            .arg(source)
+            .arg("-b")
+            .arg(&vault)
+            .output()
+            .expect("run bob highlights create")
+    };
+    let marker_of = |pdf: &std::path::Path| {
+        let marker_output = bob_command()
+            .arg("highlights")
+            .arg("marker")
+            .arg(pdf)
+            .arg("-b")
+            .arg(&vault)
+            .output()
+            .expect("inspect created PDF marker");
+        assert_success(&marker_output);
+        stdout(&marker_output)
+    };
+
+    let source = temp.path().join("report.md");
+    write_file(
+        &source,
+        "# Report\n\nSee [first](#target).\n\n## Target\n\nBody.\n",
+    );
+    let output = create(&source);
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains("links: 1 paired (1 target)"),
+        "{}",
+        stdout(&output)
+    );
+    let marker = marker_of(&vault.join("xlib/chat/report.pdf"));
+    assert!(marker.contains("- return_links: true\n"), "{marker}");
+
+    let plain_source = temp.path().join("plain.md");
+    write_file(&plain_source, "# Plain\n\nNo local links here.\n");
+    let plain_output = create(&plain_source);
+    assert_success(&plain_output);
+    assert!(
+        stdout(&plain_output).contains("links: none"),
+        "{}",
+        stdout(&plain_output)
+    );
+    let plain_marker = marker_of(&vault.join("xlib/chat/plain.pdf"));
+    assert!(
+        !plain_marker.contains("return_links"),
+        "link-free renders stamp no key: {plain_marker}"
+    );
+
+    let off_source = temp.path().join("off.md");
+    write_file(
+        &off_source,
+        "---\nbob-return-links: false\n---\n\n# Report\n\nSee [first](#target).\n\n## Target\n\nBody.\n",
+    );
+    let off_output = create(&off_source);
+    assert_success(&off_output);
+    assert!(
+        stdout(&off_output).contains("links: off (bob-return-links: false)"),
+        "{}",
+        stdout(&off_output)
+    );
+    let off_marker = marker_of(&vault.join("xlib/chat/off.pdf"));
+    assert!(
+        !off_marker.contains("return_links"),
+        "opted-out renders stamp no key: {off_marker}"
+    );
+}
+
+#[test]
 fn highlights_create_output_renders_pdf_at_requested_path_when_available() {
     let pandoc_available = Command::new("pandoc")
         .arg("--version")
@@ -667,6 +758,10 @@ fn highlights_create_stamps_rendered_pdf_through_shared_install() {
     assert!(marker.contains("- status: ready\n"), "{marker}");
     assert!(marker.contains("- parent: obsidian_ref\n"), "{marker}");
     assert!(marker.contains("- title: Stamped Report\n"), "{marker}");
+    assert!(
+        !marker.contains("return_links"),
+        "fake pandoc writes no report, so nothing is stamped: {marker}"
+    );
 }
 
 fn write_listen_library_episode(

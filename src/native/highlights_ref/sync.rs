@@ -299,10 +299,19 @@ pub(super) fn plan_pdf_sync(
     }
 
     let sidecar = read_sidecar_for_pdf(pdf)?;
+    let strip_return_links =
+        super::return_links::strip_enabled(&synced_projection);
     let rendered_highlights = sidecar
         .as_ref()
         .map(|sidecar| {
-            render_sidecar_highlights(config, pdf, &note_path, &note, sidecar)
+            render_sidecar_highlights(
+                config,
+                pdf,
+                &note_path,
+                &note,
+                sidecar,
+                strip_return_links,
+            )
         })
         .transpose()?;
     let sidecar_path = sidecar.as_ref().map(|sidecar| sidecar.path.clone());

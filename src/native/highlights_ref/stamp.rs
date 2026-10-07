@@ -30,8 +30,13 @@ pub(super) struct PdfInfo {
 }
 
 /// Canonical insertion order for the optional provenance marker keys.
-pub(super) const MARKER_EXTRA_ORDER: &[&str] =
-    &["source_url", "author", "published", "captured"];
+pub(super) const MARKER_EXTRA_ORDER: &[&str] = &[
+    "source_url",
+    "author",
+    "published",
+    "captured",
+    "return_links",
+];
 
 /// Plan the default intake target `xlib/<ref_type>/<stem>.pdf`.
 pub(super) fn plan_default_target(
@@ -288,15 +293,16 @@ pub(super) fn validate_ref_type(ref_type: &str) -> Result<()> {
 }
 
 /// Compose a page-1 marker with the required keys plus the optional
-/// provenance extras (`source_url`, `author`, `published`, `captured`).
-/// Extras are inserted as plain strings in [`MARKER_EXTRA_ORDER`] order;
-/// empty values are skipped.
+/// provenance extras (`source_url`, `author`, `published`, `captured`,
+/// `return_links`). Extras are inserted in [`MARKER_EXTRA_ORDER`] order;
+/// empty strings are skipped. Values keep their [`MarkerValue`] shape so
+/// `return_links` rides as a boolean and renders as `- return_links: true`.
 pub(super) fn compose_marker(
     status: &str,
     parent: &str,
     title: &str,
     id: Option<&str>,
-    extras: &[(&str, String)],
+    extras: &[(&str, MarkerValue)],
 ) -> Result<String> {
     validate_marker_parent_value(
         parent,
@@ -318,10 +324,12 @@ pub(super) fn compose_marker(
         projection
             .insert(FIELD_ID.to_string(), MarkerValue::String(id.to_string()));
     }
-    let mut ordered: Vec<(&str, &String)> = extras
+    let mut ordered: Vec<(&str, &MarkerValue)> = extras
         .iter()
         .map(|(key, value)| (*key, value))
-        .filter(|(_, value)| !value.is_empty())
+        .filter(|(_, value)| {
+            !matches!(value, MarkerValue::String(text) if text.is_empty())
+        })
         .collect();
     ordered.sort_by_key(|(key, _)| {
         MARKER_EXTRA_ORDER
@@ -330,7 +338,7 @@ pub(super) fn compose_marker(
             .unwrap_or(MARKER_EXTRA_ORDER.len())
     });
     for (key, value) in ordered {
-        projection.insert(key.to_string(), MarkerValue::String(value.clone()));
+        projection.insert(key.to_string(), value.clone());
     }
     validate_required_marker_keys(&projection, "create marker")?;
     let marker = render_marker(&projection)?;
@@ -1010,10 +1018,15 @@ mod tests {
             "Clipped Article",
             Some("clipped_article"),
             &[
-                ("captured", "2026-10-01".to_string()),
-                ("source_url", "https://example.com/article".to_string()),
-                ("author", String::new()),
-                ("published", "2026-04-27".to_string()),
+                ("captured", MarkerValue::String("2026-10-01".to_string())),
+                (
+                    "source_url",
+                    MarkerValue::String(
+                        "https://example.com/article".to_string(),
+                    ),
+                ),
+                ("author", MarkerValue::String(String::new())),
+                ("published", MarkerValue::String("2026-04-27".to_string())),
             ],
         )
         .expect("marker");
@@ -1038,6 +1051,40 @@ mod tests {
     }
 
     #[test]
+    fn marker_return_links_key_orders_after_captured_and_round_trips() {
+        let marker = compose_marker(
+            "ready",
+            "obsidian_ref",
+            "Report",
+            None,
+            &[
+                ("captured", MarkerValue::String("2026-10-01".to_string())),
+                ("return_links", MarkerValue::Bool(true)),
+            ],
+        )
+        .expect("marker");
+        assert_eq!(
+            marker,
+            "- status: ready\n\
+             - parent: obsidian_ref\n\
+             - title: Report\n\
+             - captured: 2026-10-01\n\
+             - return_links: true\n"
+        );
+        let parsed = parse_marker_with_normalization(&marker).expect("marker");
+        assert_eq!(
+            parsed.projection.get("return_links"),
+            Some(&MarkerValue::Bool(true))
+        );
+        assert!(is_standard_user_field("return_links"));
+        assert!(unknown_synced_fields(&parsed.projection).is_empty());
+        assert_eq!(
+            MarkerValue::Bool(true).as_frontmatter_value(),
+            "true".to_string()
+        );
+    }
+
+    #[test]
     fn stamp_install_embeds_marker_and_info_without_annots() {
         let temp = TempDir::new("stamp-install");
         let rendered = temp.path.join("render.pdf");
@@ -1049,10 +1096,15 @@ mod tests {
             "Clipped Article",
             Some("clipped_article"),
             &[
-                ("source_url", "https://example.com/article".to_string()),
-                ("author", "Jane Doe".to_string()),
-                ("published", "2026-04-27".to_string()),
-                ("captured", "2026-10-01".to_string()),
+                (
+                    "source_url",
+                    MarkerValue::String(
+                        "https://example.com/article".to_string(),
+                    ),
+                ),
+                ("author", MarkerValue::String("Jane Doe".to_string())),
+                ("published", MarkerValue::String("2026-04-27".to_string())),
+                ("captured", MarkerValue::String("2026-10-01".to_string())),
             ],
         )
         .expect("marker");

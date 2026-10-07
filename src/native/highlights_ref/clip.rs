@@ -14,8 +14,8 @@ use std::{
 use super::{clip_adapter::*, clip_url::*, pdf_meta::*, sources::*};
 use super::{
     compose_marker, current_local_date, plan_default_target, plan_exact_output,
-    print_next_step, stamp_and_install, CommandError, Config, PdfInfo,
-    ScratchDir, TargetPlan, TargetWorkflow,
+    print_next_step, stamp_and_install, CommandError, Config, MarkerValue,
+    PdfInfo, ScratchDir, TargetPlan, TargetWorkflow,
 };
 use crate::native::style::Styler;
 
@@ -369,10 +369,16 @@ pub(super) fn capture_article(
         &title,
         Some(&stem),
         &[
-            ("source_url", web_url.cleaned.clone()),
-            ("author", author.clone().unwrap_or_default()),
-            ("published", published.clone().unwrap_or_default()),
-            ("captured", captured.clone()),
+            ("source_url", MarkerValue::String(web_url.cleaned.clone())),
+            (
+                "author",
+                MarkerValue::String(author.clone().unwrap_or_default()),
+            ),
+            (
+                "published",
+                MarkerValue::String(published.clone().unwrap_or_default()),
+            ),
+            ("captured", MarkerValue::String(captured.clone())),
         ],
     )?;
     let plan = match &options.output {
@@ -765,10 +771,16 @@ fn print_dry_run(
         title,
         plan.target.file_stem().and_then(|stem| stem.to_str()),
         &[
-            ("source_url", web_url.cleaned.clone()),
-            ("author", author.clone().unwrap_or_default()),
-            ("published", published.clone().unwrap_or_default()),
-            ("captured", captured.to_string()),
+            ("source_url", MarkerValue::String(web_url.cleaned.clone())),
+            (
+                "author",
+                MarkerValue::String(author.clone().unwrap_or_default()),
+            ),
+            (
+                "published",
+                MarkerValue::String(published.clone().unwrap_or_default()),
+            ),
+            ("captured", MarkerValue::String(captured.to_string())),
         ],
     );
     println!("marker:");

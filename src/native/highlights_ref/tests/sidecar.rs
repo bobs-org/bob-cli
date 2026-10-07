@@ -83,7 +83,7 @@ Comment: Compare this figure.
     let note = super::ParsedNote::empty();
 
     let rendered = super::render_sidecar_highlights(
-        &config, &pdf, &ref_note, &note, &sidecar,
+        &config, &pdf, &ref_note, &note, &sidecar, false,
     )
     .expect("render image selection");
 
@@ -171,6 +171,7 @@ fn image_block_id_is_stable_across_asset_renames() {
         &ref_note,
         &note,
         &first_sidecar,
+        false,
     )
     .expect("render first image sidecar");
     let second = super::render_sidecar_highlights(
@@ -179,6 +180,7 @@ fn image_block_id_is_stable_across_asset_renames() {
         &ref_note,
         &note,
         &second_sidecar,
+        false,
     )
     .expect("render renamed image sidecar");
 
@@ -211,6 +213,7 @@ fn missing_image_asset_error_points_at_textbundle_export() {
         &ref_note,
         &super::ParsedNote::empty(),
         &sidecar,
+        false,
     )
     .expect_err("missing image asset should fail planning");
     assert!(
@@ -306,7 +309,7 @@ Note:
     let note = super::ParsedNote::empty();
 
     let rendered = super::render_sidecar_highlights(
-        &config, pdf, ref_note, &note, &sidecar,
+        &config, pdf, ref_note, &note, &sidecar, false,
     )
     .expect("render annotation blocks");
 
@@ -371,7 +374,7 @@ Comment: Compare this with SLO notes.
     let note = super::ParsedNote::empty();
 
     let rendered = super::render_sidecar_highlights(
-        &config, pdf, ref_note, &note, &sidecar,
+        &config, pdf, ref_note, &note, &sidecar, false,
     )
     .expect("render beautified annotation block");
 
@@ -633,6 +636,7 @@ Comment: Keep this.
             ref_note,
             &super::ParsedNote::empty(),
             &sidecar,
+            false,
         )
         .expect("render preamble sidecar")
     };
@@ -723,6 +727,7 @@ fn leaked_mirror_and_preamble_blocks_drop_silently_while_genuine_tombstones() {
         Path::new("/tmp/bob/ref/example.md"),
         &note,
         &sidecar,
+        false,
     )
     .expect("render against leaked region");
 
@@ -776,4 +781,97 @@ Unlabeled comment
     assert!(!annotations[0].linked_page_style);
     assert_eq!(annotations[0].text, "Stable quoted text.");
     assert_eq!(annotations[0].comment.as_deref(), Some("Unlabeled comment"));
+}
+
+fn render_return_link_fixture(
+    contents: &str,
+    strip_return_links: bool,
+) -> super::RenderedHighlights {
+    let sidecar = super::SidecarInput {
+        path: PathBuf::from("example.md"),
+        annotations: parse_sidecar_markdown(contents),
+    };
+    let config = test_config();
+    super::render_sidecar_highlights(
+        &config,
+        Path::new("/tmp/bob/lib/example.pdf"),
+        Path::new("/tmp/bob/ref/example.md"),
+        &super::ParsedNote::empty(),
+        &sidecar,
+        strip_return_links,
+    )
+    .expect("render return-link fixture")
+}
+
+#[test]
+fn return_link_glyphs_strip_only_from_highlights_when_flagged() {
+    let contents = "\
+## Page 2
+
+> grows about 2–3 tasks a day (What I verifiedᵈ, row 12)
+
+---
+
+> see the rankingᵃᵈ.
+
+Comment: keep the ᵈ tag in comments.
+
+---
+
+> aspirated pʰ
+";
+    let plain = render_return_link_fixture(contents, false).content;
+    assert!(
+        plain.contains(
+            "> [!quote] grows about 2–3 tasks a day (What I verifiedᵈ, row 12)"
+        ),
+        "{plain}"
+    );
+    assert!(plain.contains("> [!quote] see the rankingᵃᵈ."), "{plain}");
+    assert!(plain.contains("> [!quote] aspirated pʰ"), "{plain}");
+
+    let stripped = render_return_link_fixture(contents, true).content;
+    assert!(
+        stripped.contains(
+            "> [!quote] grows about 2–3 tasks a day (What I verified, row 12)"
+        ),
+        "{stripped}"
+    );
+    assert!(
+        stripped.contains("> [!quote] see the ranking."),
+        "{stripped}"
+    );
+    assert!(
+        stripped.contains("> > [!note] Comment keep the ᵈ tag in comments."),
+        "comments are the user's own words and stay untouched: {stripped}"
+    );
+    assert!(!stripped.contains("What I verifiedᵈ"), "{stripped}");
+    assert!(stripped.contains("> [!quote] aspirated p"), "{stripped}");
+}
+
+#[test]
+fn return_link_strip_keeps_block_ids_stable() {
+    let contents = "\
+## Page 2
+
+> grows about 2–3 tasks a day (What I verifiedᵈ, row 12)
+
+---
+
+> 1.4 What I verified ↩ p. 2ᵈ Text continues
+";
+    let plain = render_return_link_fixture(contents, false);
+    let stripped = render_return_link_fixture(contents, true);
+    assert_eq!(
+        plain.block_ids_by_annotation_order,
+        stripped.block_ids_by_annotation_order
+    );
+    assert!(
+        stripped
+            .content
+            .contains("> [!quote] 1.4 What I verified Text continues"),
+        "{}",
+        stripped.content
+    );
+    assert!(!stripped.content.contains('↩'), "{}", stripped.content);
 }

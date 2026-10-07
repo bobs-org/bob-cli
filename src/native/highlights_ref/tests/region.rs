@@ -35,7 +35,7 @@ fn render_annotations(
         annotations,
     };
     let rendered = super::render_sidecar_highlights(
-        &config, &pdf, &ref_note, note, &sidecar,
+        &config, &pdf, &ref_note, note, &sidecar, false,
     )
     .expect("render region fixtures");
     (bob_dir, rendered)
@@ -151,7 +151,7 @@ fn region_round_trip_image() {
     };
     let note = ParsedNote::empty();
     let rendered = super::render_sidecar_highlights(
-        &config, &pdf, &ref_note, &note, &sidecar,
+        &config, &pdf, &ref_note, &note, &sidecar, false,
     )
     .expect("render image fixture");
 

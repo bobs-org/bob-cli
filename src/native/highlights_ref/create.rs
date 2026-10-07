@@ -32,7 +32,7 @@ use super::{
     bob_dir_arg, compose_marker, dry_run_arg, lib_dir_arg, plan_default_target,
     plan_exact_output, print_next_step, ref_dir_arg, stamp_and_install,
     validate_ref_type, xlib_dir_arg, AudioCopyPlan, CommandError, Config,
-    PdfInfo, Result, TargetPlan, TargetWorkflow, COMMAND_NAME,
+    MarkerValue, PdfInfo, Result, TargetPlan, TargetWorkflow, COMMAND_NAME,
 };
 use super::{sources as sources_mod, target as target_mod};
 use crate::native::style::Styler;
@@ -936,10 +936,12 @@ fn create_markdown_route(
                             bind_create_hint(&plan.source, &flow.scratch_audio),
                         )
                     })?;
+            let marker =
+                stamp_marker_for_outcome(&plan, options, &link_outcome)?;
             let page_count = match stamp_and_install(
                 &render_path,
                 &plan.target,
-                &plan.marker,
+                &marker,
                 &PdfInfo::default(),
             ) {
                 Ok(page_count) => page_count,
@@ -973,13 +975,16 @@ fn create_markdown_route(
                 None
             };
             let install_result = render_result.and_then(|link_outcome| {
-                stamp_and_install(
-                    &render_path,
-                    &plan.target,
-                    &plan.marker,
-                    &PdfInfo::default(),
-                )
-                .map(|page_count| (link_outcome, page_count))
+                stamp_marker_for_outcome(&plan, options, &link_outcome)
+                    .and_then(|marker| {
+                        stamp_and_install(
+                            &render_path,
+                            &plan.target,
+                            &marker,
+                            &PdfInfo::default(),
+                        )
+                        .map(|page_count| (link_outcome, page_count))
+                    })
             });
             let (link_outcome, page_count) = match install_result {
                 Ok((link_outcome, page_count)) => (link_outcome, page_count),
@@ -1838,22 +1843,14 @@ fn plan_markdown(
     };
     let author = options.author.clone().filter(|value| !value.is_empty());
     let published = options.published.clone().filter(|value| !value.is_empty());
-    let mut extras: Vec<(&str, String)> = Vec::new();
-    if let Some(author) = &author {
-        extras.push(("author", author.clone()));
-    }
-    if let Some(published) = &published {
-        extras.push(("published", published.clone()));
-    }
-    let marker = compose_marker(
+    let marker = compose_markdown_marker(
         &options.status,
         &options.parent,
         &title,
         id.as_deref(),
-        &extras
-            .iter()
-            .map(|(key, value)| (*key, value.clone()))
-            .collect::<Vec<_>>(),
+        author.as_deref(),
+        published.as_deref(),
+        false,
     )?;
     let ref_type =
         default_ref_type_for_kind("markdown", options.ref_type.as_deref())?;
@@ -1885,6 +1882,68 @@ fn plan_markdown(
         audio,
         page_count_hint: None,
     })
+}
+
+/// Compose the Markdown-route page-1 marker. `plan_markdown` previews it
+/// without the key for dry runs; `create_markdown_route` recomposes with
+/// `return_links: true` after a render whose report says links were paired.
+fn compose_markdown_marker(
+    status: &str,
+    parent: &str,
+    title: &str,
+    id: Option<&str>,
+    author: Option<&str>,
+    published: Option<&str>,
+    return_links: bool,
+) -> Result<String> {
+    let mut extras: Vec<(&str, MarkerValue)> = Vec::new();
+    if let Some(author) = author.filter(|value| !value.is_empty()) {
+        extras.push(("author", MarkerValue::String(author.to_string())));
+    }
+    if let Some(published) = published.filter(|value| !value.is_empty()) {
+        extras.push(("published", MarkerValue::String(published.to_string())));
+    }
+    if return_links {
+        extras.push(("return_links", MarkerValue::Bool(true)));
+    }
+    compose_marker(
+        status,
+        parent,
+        title,
+        id,
+        &extras
+            .iter()
+            .map(|(key, value)| (*key, value.clone()))
+            .collect::<Vec<_>>(),
+    )
+}
+
+/// The marker to stamp after a Markdown render: the planned marker plus
+/// `return_links: true` only when the filter report says the render actually
+/// paired at least one link (`Missing` test-double renders, `Invalid`
+/// reports, opt-outs, and link-free documents keep the planned marker).
+fn stamp_marker_for_outcome(
+    plan: &CreatePlan,
+    options: &CreateOptions,
+    outcome: &super::return_links::ReportOutcome,
+) -> Result<String> {
+    let paired = matches!(
+        outcome,
+        super::return_links::ReportOutcome::Report(report)
+            if report.enabled && report.paired >= 1
+    );
+    if !paired {
+        return Ok(plan.marker.clone());
+    }
+    compose_markdown_marker(
+        &options.status,
+        &options.parent,
+        &plan.title,
+        plan.id.as_deref(),
+        plan.author.as_deref(),
+        plan.published.as_deref(),
+        true,
+    )
 }
 
 fn derive_marker_id(source: &Path) -> Result<String> {
@@ -2388,6 +2447,65 @@ mod tests {
             marker.projection.get(FIELD_ID),
             Some(&MarkerValue::String("xprompt_role_binding".to_string()))
         );
+    }
+
+    #[test]
+    fn markdown_marker_gains_return_links_only_after_paired_render() {
+        let temp = TempDir::new("stamp-marker-outcome");
+        let source = temp.path.join("report.md");
+        fs::write(&source, "# Report\n").expect("write source");
+        let plan = plan_create(&config(&temp.path), &source, &options())
+            .expect("plan");
+        assert!(
+            !plan.marker.contains("return_links"),
+            "dry-run preview must not carry the key: {}",
+            plan.marker
+        );
+
+        fn outcome(
+            enabled: bool,
+            paired: u32,
+        ) -> super::super::return_links::ReportOutcome {
+            super::super::return_links::ReportOutcome::Report(
+                super::super::return_links::Report {
+                    version: 1,
+                    enabled,
+                    prefix: "bob:ret:".to_string(),
+                    paired,
+                    targets: 1,
+                    untagged: 0,
+                    github: 0,
+                    dead: Vec::new(),
+                    duplicates: Vec::new(),
+                },
+            )
+        }
+
+        let stamped =
+            stamp_marker_for_outcome(&plan, &options(), &outcome(true, 2))
+                .expect("stamp marker");
+        assert!(stamped.contains("- return_links: true\n"), "{stamped}");
+        let parsed = parse_marker_with_normalization(&stamped).expect("marker");
+        assert_eq!(
+            parsed.projection.get("return_links"),
+            Some(&MarkerValue::Bool(true))
+        );
+
+        for unchanged in [
+            super::super::return_links::ReportOutcome::Missing,
+            super::super::return_links::ReportOutcome::Invalid(
+                "bad".to_string(),
+            ),
+            outcome(false, 3),
+            outcome(true, 0),
+        ] {
+            assert_eq!(
+                stamp_marker_for_outcome(&plan, &options(), &unchanged)
+                    .expect("stamp marker"),
+                plan.marker,
+                "{unchanged:?} must keep the planned marker"
+            );
+        }
     }
 
     #[test]

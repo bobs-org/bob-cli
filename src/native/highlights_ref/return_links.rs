@@ -11,6 +11,7 @@ use std::{collections::BTreeMap, fs, path::Path};
 
 use serde::Deserialize;
 
+use super::{MarkerValue, Projection, FIELD_RETURN_LINKS};
 use crate::native::style::Styler;
 
 /// Second pandoc `--lua-filter`, run after the code-break/listen filter.
@@ -21,6 +22,27 @@ pub(crate) const HEADER_INCLUDES: &str = include_str!("return_links.tex");
 
 /// Pandoc metadata key carrying the JSON report path for the filter.
 pub(crate) const REPORT_METADATA_KEY: &str = "bob-return-links-report";
+
+/// Modifier-letter tag glyphs the return-link filter draws after link text,
+/// in alphabet order (`abcdefghijkmnprstuvwxyz`: no `l`, `o`, or `q`).
+/// Mirrored in `text.rs` so `bob ref sync` can strip them from highlights
+/// synced from PDFs stamped with `return_links: true`.
+pub(super) const TAG_GLYPHS: [char; 23] = [
+    'ᵃ', 'ᵇ', 'ᶜ', 'ᵈ', 'ᵉ', 'ᶠ', 'ᵍ', 'ʰ', 'ⁱ', 'ʲ', 'ᵏ', 'ᵐ', 'ⁿ', 'ᵖ', 'ʳ',
+    'ˢ', 'ᵗ', 'ᵘ', 'ᵛ', 'ʷ', 'ˣ', 'ʸ', 'ᶻ',
+];
+
+/// Whether a synced projection asks `bob ref sync` to strip return-link
+/// glyphs from highlight text: on only when `return_links` is boolean `true`
+/// or the string `"true"` (the marker value `bob ref create` stamps after a
+/// render that actually paired links).
+pub(super) fn strip_enabled(projection: &Projection) -> bool {
+    match projection.get(FIELD_RETURN_LINKS) {
+        Some(MarkerValue::Bool(true)) => true,
+        Some(MarkerValue::String(value)) => value == "true",
+        _ => false,
+    }
+}
 
 fn default_true() -> bool {
     true
@@ -432,6 +454,56 @@ mod tests {
                     .to_string()
             ]
         );
+    }
+
+    #[test]
+    fn tag_glyphs_match_filter_mod_table() {
+        let mut table = String::new();
+        let mut in_table = false;
+        for line in FILTER.lines() {
+            if line.starts_with("local MOD = ") {
+                in_table = true;
+            }
+            if in_table {
+                table.push_str(line);
+                if line.contains('}') {
+                    break;
+                }
+            }
+        }
+        assert!(!table.is_empty(), "MOD table must exist in the filter");
+        let mut from_filter: Vec<char> =
+            table.chars().filter(|cell| !cell.is_ascii()).collect();
+        from_filter.sort_unstable();
+        let mut expected = TAG_GLYPHS.to_vec();
+        expected.sort_unstable();
+        assert_eq!(from_filter, expected);
+    }
+
+    #[test]
+    fn strip_flag_reads_return_links_marker_value() {
+        use super::super::{MarkerValue, Projection};
+        let mut on_bool = Projection::new();
+        on_bool.insert("return_links".to_string(), MarkerValue::Bool(true));
+        assert!(strip_enabled(&on_bool));
+        let mut on_string = Projection::new();
+        on_string.insert(
+            "return_links".to_string(),
+            MarkerValue::String("true".to_string()),
+        );
+        assert!(strip_enabled(&on_string));
+        assert!(!strip_enabled(&Projection::new()));
+        for value in [
+            MarkerValue::Bool(false),
+            MarkerValue::String("false".to_string()),
+            MarkerValue::String("True".to_string()),
+            MarkerValue::String("1".to_string()),
+            MarkerValue::Null,
+        ] {
+            let mut off = Projection::new();
+            off.insert("return_links".to_string(), value);
+            assert!(!strip_enabled(&off));
+        }
     }
 
     struct FilterRender {

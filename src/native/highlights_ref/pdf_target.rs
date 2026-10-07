@@ -20,7 +20,7 @@ use super::pdf_meta::pdf_info_metadata;
 use super::workdir::ScratchDir;
 use super::{
     atomic_copy, atomic_save_pdf, compose_marker, embed_marker,
-    set_pdf_info_for_route, CommandError, Config, PdfInfo, Result,
+    set_pdf_info_for_route, CommandError, Config, MarkerValue, PdfInfo, Result,
 };
 
 /// 95 MiB vault-sync refusal limit.
@@ -503,18 +503,18 @@ pub(super) fn compose_pdf_marker(
     plan: &PdfPlan,
     id: Option<&str>,
 ) -> Result<String> {
-    let mut extras: Vec<(&str, String)> = Vec::new();
+    let mut extras: Vec<(&str, MarkerValue)> = Vec::new();
     if let Some(source_url) = &plan.source_url {
-        extras.push(("source_url", source_url.clone()));
+        extras.push(("source_url", MarkerValue::String(source_url.clone())));
     }
     if let Some(author) = &plan.author {
-        extras.push(("author", author.clone()));
+        extras.push(("author", MarkerValue::String(author.clone())));
     }
     if let Some(published) = &plan.published {
-        extras.push(("published", published.clone()));
+        extras.push(("published", MarkerValue::String(published.clone())));
     }
     if let Some(captured) = &plan.captured {
-        extras.push(("captured", captured.clone()));
+        extras.push(("captured", MarkerValue::String(captured.clone())));
     }
     compose_marker(status, parent, &plan.title, id, &extras)
 }

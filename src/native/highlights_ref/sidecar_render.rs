@@ -7,6 +7,7 @@ pub(super) fn render_sidecar_highlights(
     ref_note_path: &Path,
     note: &ParsedNote,
     sidecar: &SidecarInput,
+    strip_return_links: bool,
 ) -> Result<RenderedHighlights> {
     let existing_ids = note.generated_block_ids()?;
     let image_assets_by_order =
@@ -70,6 +71,7 @@ pub(super) fn render_sidecar_highlights(
             annotation,
             &block_id,
             image_asset,
+            strip_return_links,
         ));
     }
 
@@ -151,11 +153,22 @@ pub(super) fn render_annotation_block(
     annotation: &SidecarAnnotation,
     block_id: &str,
     image_asset: Option<&ImageAssetWrite>,
+    strip_return_links: bool,
 ) -> String {
     let mut rendered = String::new();
     match annotation.kind {
         SidecarAnnotationKind::Highlight => {
-            let text = beautify_annotation_text(&annotation.text);
+            // Return-link tags and pill fragments are render-only cleanup
+            // for PDFs stamped with `return_links: true`: block IDs and
+            // task sources keep using the raw sidecar text below.
+            let stripped;
+            let raw = if strip_return_links {
+                stripped = strip_return_link_glyphs(&annotation.text);
+                stripped.as_str()
+            } else {
+                annotation.text.as_str()
+            };
+            let text = beautify_annotation_text(raw);
             push_callout_block(&mut rendered, 1, "[!quote]", &text);
             push_annotation_comment_callout(&mut rendered, annotation);
         }

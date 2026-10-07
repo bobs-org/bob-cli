@@ -20,6 +20,7 @@ use super::clip_adapter::{
 };
 use super::clip_url::{humanize_stem, snake_case, stem_from_url, WebUrl};
 use super::io::vault_relative_path_value;
+use super::model::MarkerValue;
 use super::model::{CommandError, Config};
 use super::note::current_local_date;
 use super::stamp::{
@@ -767,10 +768,16 @@ fn ingest_article_route(
         &title,
         Some(&stem),
         &[
-            ("source_url", url.cleaned.clone()),
-            ("author", author.clone().unwrap_or_default()),
-            ("published", published.clone().unwrap_or_default()),
-            ("captured", captured.clone()),
+            ("source_url", MarkerValue::String(url.cleaned.clone())),
+            (
+                "author",
+                MarkerValue::String(author.clone().unwrap_or_default()),
+            ),
+            (
+                "published",
+                MarkerValue::String(published.clone().unwrap_or_default()),
+            ),
+            ("captured", MarkerValue::String(captured.clone())),
         ],
     )
     .map_err(command_error)?;

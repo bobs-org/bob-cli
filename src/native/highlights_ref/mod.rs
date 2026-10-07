@@ -188,6 +188,7 @@ const PIPELINE_FIELDS: &[&str] = &[
 ];
 
 const FIELD_CAPTURED: &str = "captured";
+const FIELD_RETURN_LINKS: &str = "return_links";
 const COMMON_USER_FIELDS: &[&str] = &[
     FIELD_PARENT,
     "title",
@@ -199,6 +200,7 @@ const COMMON_USER_FIELDS: &[&str] = &[
     "author",
     "published",
     FIELD_CAPTURED,
+    FIELD_RETURN_LINKS,
 ];
 
 /// A bare `bob ref jobs` (or bare flags) lists: rewrite to
