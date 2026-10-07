@@ -365,6 +365,64 @@ fn highlights_ref_doctor_checks_vault_git_without_writes() {
 }
 
 #[test]
+fn highlights_ref_doctor_warns_on_missing_latex_packages() {
+    let temp = TempDir::new("bob-cli-highlights-ref-doctor-latex");
+    let stub_bin = temp.path().join("bin");
+    let vault = temp.path().join("vault");
+    let pdf = vault.join("lib/example.pdf");
+    let sidecar = pdf.with_extension("md");
+    fs::create_dir_all(vault.join("ref")).expect("create ref dir");
+    fs::create_dir_all(&stub_bin).expect("create stub bin");
+    let pandoc_stub = stub_bin.join("pandoc");
+    write_executable(&pandoc_stub, "#!/bin/sh\nexit 0\n");
+    write_executable(&stub_bin.join("xelatex"), "#!/bin/sh\nexit 0\n");
+    write_executable(
+        &stub_bin.join("kpsewhich"),
+        "#!/bin/sh\nfor f in \"$@\"; do\n  case \"$f\" in\n    needspace.sty|tikz.sty) ;;\n    *) echo \"/tex/$f\" ;;\n  esac\ndone\nexit 1\n",
+    );
+    write_highlights_pdf(&pdf, "- status: wip\n- parent: obsidian\n");
+    write_file(
+        &sidecar,
+        "\
+## Page 1
+
+- status: wip
+- parent: obsidian
+",
+    );
+    git_in(&vault, ["init", "-q"]);
+    git_in(&vault, ["config", "user.name", "Test User"]);
+    git_in(&vault, ["config", "user.email", "test@example.com"]);
+    git_in(&vault, ["add", "."]);
+    git_in(&vault, ["commit", "-q", "-m", "initial vault"]);
+
+    let path = format!(
+        "{}:{}",
+        stub_bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let output = bob_command()
+        .arg("highlights")
+        .arg("doctor")
+        .env("BOB_DIR", &vault)
+        .env("BOB_PANDOC_COMMAND", &pandoc_stub)
+        .env("PATH", &path)
+        .output()
+        .expect("run highlights doctor with stub TeX");
+
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(report.contains("xelatex: available"), "{report}");
+    assert!(
+        report
+            .contains("latex_packages: warn (missing needspace.sty, tikz.sty)"),
+        "{report}"
+    );
+    assert!(report.contains("tlmgr install needspace pgf"), "{report}");
+    assert!(report.contains("result: ok"), "{report}");
+}
+
+#[test]
 fn highlights_ref_doctor_warns_on_orphan_companion_audio() {
     let temp = TempDir::new("bob-cli-highlights-ref-doctor-orphan-audio");
     let stub_bin = temp.path().join("bin");

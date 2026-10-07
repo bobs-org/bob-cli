@@ -58,9 +58,13 @@ that would both write the same `ref/<ref_type>/<basename>.md` target.
 
 `doctor` checks vault paths, library/ref/xlib directories, pending intake,
 the configured pre-scan hook, sidecar presence, marker readability, Git
-worktree status, and optional `ob` availability. Companion audio sitting in
+worktree status, the Markdown render tools (pandoc, xelatex, LaTeX packages),
+and optional `ob` availability. Companion audio sitting in
 `xlib/` with no matching PDF in `xlib/` or `lib/` is a warning, not a
-failure. It never writes files. Pass
+failure. The warning-level `xelatex` and `latex_packages` rows report the
+Markdown render prerequisites: a missing xelatex warns that PDF creation is
+unavailable, and missing LaTeX packages warn with the `tlmgr install` line
+that provides them. It never writes files. Pass
 `-n, --no-hooks` on `doctor`, or before the subcommand as
 `bob ref --no-hooks doctor`, to skip the pre-scan hook check.
 
@@ -146,7 +150,8 @@ library targets recommend `bob ref scan`; a PDF outside both managed
 directories states that recursive scan will not discover it and recommends
 `bob ref sync <PDF>`. `BOB_PANDOC_COMMAND`
 overrides the pandoc executable, and a render failure includes pandoc's
-diagnostic output.
+diagnostic output plus a `hint:` line for missing LaTeX packages (or a missing
+xelatex).
 `-i, --include-id` opts into a stable marker ID derived from the Markdown
 filename. Bob canonicalizes the Markdown source, removes only the final `.md`
 extension from the filename, requires the resulting stem to be nonempty valid

@@ -51,7 +51,7 @@ const DEFAULT_AUDIO_LINK_TEMPLATE: &str =
 /// Pandoc emits every fenced block as a `Highlighting` environment, which does
 /// not wrap by default, so a single long log or command line silently runs off
 /// the right margin.
-const PANDOC_HEADER_INCLUDES: &str = concat!(
+pub(super) const PANDOC_HEADER_INCLUDES: &str = concat!(
     r"\usepackage{fvextra}",
     r"\DefineVerbatimEnvironment{Highlighting}{Verbatim}",
     r"{breaklines,breakanywhere,commandchars=\\\{\}}",
@@ -2297,7 +2297,7 @@ fn render_temp_pdf(
             (true, false) => stdout,
             (true, true) => "pandoc produced no diagnostic output".to_string(),
         };
-        return Err(CommandError::new(format!(
+        let base = format!(
             "pandoc failed while rendering {} (exit {}):\n{}",
             plan.source,
             output
@@ -2305,7 +2305,11 @@ fn render_temp_pdf(
                 .code()
                 .map_or_else(|| "signal".to_string(), |code| code.to_string()),
             detail
-        )));
+        );
+        if let Some(hint) = super::render_tex::render_failure_hint(&detail) {
+            return Err(CommandError::new(format!("{base}\nhint: {hint}")));
+        }
+        return Err(CommandError::new(base));
     }
 
     Ok(super::return_links::read_report(&filters.report))

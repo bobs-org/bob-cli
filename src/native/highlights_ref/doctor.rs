@@ -202,6 +202,8 @@ pub(super) fn doctor_vault(config: &Config, no_hooks: bool) -> Result<()> {
         }
     }
 
+    super::render_tex::append_tex_doctor_rows(&mut warnings);
+
     // The fetcher checks `BOB_HIGHLIGHTS_CURL` first, so doctor does too.
     if let Some(override_curl) =
         bob_env::var_os(super::fetch::ENV_CURL_OVERRIDE)

@@ -53,6 +53,7 @@ mod pdf_meta;
 mod pdf_target;
 mod projection;
 mod region;
+mod render_tex;
 mod report;
 pub(crate) mod return_links;
 mod sidecar;

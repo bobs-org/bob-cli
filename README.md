@@ -894,7 +894,7 @@ Highlights annotations into Obsidian reference notes.
 - `show <REF>...` reads one reference note with its metadata, annotations,
   own notes, and tasks. `-c` keeps only commented annotations and
   standalone notes, `-N` keeps metadata and own notes only.
-- `doctor` checks vault paths, intake, sidecars, markers, Git, pandoc, `curl`,
+- `doctor` checks vault paths, intake, sidecars, markers, Git, pandoc, xelatex, LaTeX packages, `curl`,
   the web-clip chain (`uv`, adapter, browser, headed fallback), the
   `listen_command` row, and optional `ob` without writing. Pass
   `-n, --no-hooks` to skip the pre-scan hook check.
@@ -1045,8 +1045,8 @@ The documented workflows use these external-tool integrations:
   macOS; `wl-paste`, `xclip`, or `xsel` on Linux; or `tmux show-buffer` in a
   display-less tmux session (see `BOB_CLIPBOARD_CMD` below for the exact
   fallback order)
-- `pandoc` and `xelatex` for `bob ref create` Markdown targets; override pandoc with
-  `BOB_PANDOC_COMMAND`
+- `pandoc` and `xelatex` for `bob ref create` Markdown targets, plus the LaTeX packages `bob ref doctor` checks; override pandoc with
+  `BOB_PANDOC_COMMAND`. Doctor prints the `tlmgr install` line for any missing packages
 - `curl` for `bob ref create` PDF URL and arXiv targets; override with
   `BOB_HIGHLIGHTS_CURL`
 - `sase-listen` for `bob ref create --listen`, configured as `highlights.listen_command`

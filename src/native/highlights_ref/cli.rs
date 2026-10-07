@@ -95,7 +95,7 @@ fn doctor_command() -> ClapCommand {
         .arg(ref_dir_arg())
         .arg(xlib_dir_arg())
         .after_help(
-            "Checks vault paths, sidecars, PDF markers, Git state, and optional ob support.",
+            "Checks vault paths, sidecars, PDF markers, Git state, the Markdown render tools (pandoc, xelatex, LaTeX packages), and optional ob support.",
         )
 }
 
