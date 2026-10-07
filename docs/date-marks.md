@@ -188,6 +188,55 @@ Tasks descriptions with a non-trailing field. A duplicate split
 across separate text nodes is not detected (the accepted priority
 limit).
 
+## Tasks query results
+
+Tasks 8.4.0 always renders query-result date components with its
+emoji serializer: `span.task-created|task-scheduled|task-done|task-cancelled`
+wrapping an inner `span` whose text is `" ⏳ 2026-10-09"` (full mode)
+or `" ⏳"` (short mode). The DOM contract, confirmed against the
+installed `obsidian-tasks-plugin/main.js` (`renderTaskLine`,
+`taskToHtml`, `tasks-layout-short-mode`):
+
+- Each date component is a direct child span of
+  `li.plugin-tasks-list-item > .tasks-list-text`, with its text in a
+  single inner span. `done` maps to `task-done`.
+- The li receives `data-task` only at the end of `renderTaskLine`,
+  so it is the completion signal.
+- Short-mode containers carry `tasks-layout-short-mode`.
+- Date spans keep Tasks' click (date editor) and contextmenu
+  (postpone) listeners.
+
+CSS cannot split the emoji from the date, so unlike the priority
+mark (whose Tasks host is CSS-only), full mode needs a small, narrow
+JS frame pass — the narrowest JS that degrades to Tasks' native
+rendering. `scheduleTasksResultDateMarks(el)` runs at the end of
+`renderDateMarksIn`: Tasks renders every description through
+`MarkdownRenderer.render`, so it fires once per result row. It queues
+`el` when `el` has a result-row ancestor or is still detached, keeps
+at most one pending frame (`requestAnimationFrame`, falling back to
+a 16ms timeout), and schedules nothing when marks are off or for a
+connected non-Tasks element. `runTasksResultDateMarkFrame` resolves
+each entry to its row — a still-detached element is retried for up
+to 3 frames, a row without `data-task` for up to 60 — deduplicates
+rows with a WeakSet, and decorates complete rows with
+`decorateTasksResultDates(li, today)`. Exhausted entries are dropped
+silently, leaving Tasks' native emoji dates; in the common case the
+pass lands before the next paint, so the emoji dates never flash.
+Each `task-created`, `task-scheduled`, `task-done`, and
+`task-cancelled` span without `data-bob-date-mark` whose inner text
+ends in a canonical ISO date gets the same mark
+(`foldSpace: true`, `rendered: true`, `data-host="tasks"`) appended
+inside the span, which is then flagged `data-bob-date-mark="true"`;
+short-mode spans (no date), invalid dates, `task-due`, and
+`task-start` are untouched. The pass is idempotent, clicking a mark
+still opens Tasks' own date editor (the click bubbles to Tasks'
+span), and right-click postpone still works. `relabelRenderedDateMarks`
+already covers Tasks-host marks through `data-rendered="true"`, so
+they roll over at midnight like every other rendered mark. In short
+mode (`rotten.md`, `crowded.md`), CSS alone turns each date span
+into a 1.08em glyph box drawing the shared field mask at the default
+ink, resting from the row's `data-task`.
+
 ## Rollover and toggle
 
 The existing minute interval calls
@@ -220,7 +269,13 @@ Dataview format and Dataview's field index, rewrites thousands of
 vault fields plus the bob-cli parsers and writers, and relative text
 rots overnight. A CSS-only restyle of the Dataview pill cannot read
 the value, so the ISO date would stay with no `today`/`Fri` and no
-repair semantics. An age voice for created (`5w`) adds a second
+repair semantics. A CSS-only restyle of Tasks query results was
+rejected for the same reason in full mode — CSS cannot split Tasks'
+emoji from its date — while a global MutationObserver over Tasks'
+DOM was rejected as wider than needed: the description
+post-processor already fires once per result row, so one bounded
+frame pass that degrades to Tasks' native emoji dates is enough, and
+short mode stays CSS-only. An age voice for created (`5w`) adds a second
 grammar and breaks the closed-task timeline. Weekday names for past
 dates are ambiguous for scheduled. `×` for cancelled reads as math
 next to `+` and as a close button. Per-field hues clash with the
@@ -275,6 +330,15 @@ lines. `fold N` is `foldLength` in Live Preview.
 | DN8  | `[due:: 2026-10-09]` / `[start::1700]`                                                         | untouched, and never repair-flagged                                                                              |
 | DN9  | `- [ ] #task H [scheduled:: 2026-13-01] [created:: 2026-10-01]`                                | created `Oct 1` still marks; scheduled is a repair pill                                                          |
 | RO1  | a rendered `Fri` mark (date `2026-10-09`) when the day becomes `2026-10-08`, then `2026-10-09` | relabels in place to `tomorrow`, then `today` (`data-when="today"`); Live Preview editors get the refresh effect |
+| T1   | a complete li (`data-task=""`) with `span.task-scheduled > span` text `" ⏳ 2026-10-09"` | a `Fri` mark appended inside the span, which gets `data-bob-date-mark="true"` |
+| T2   | `span.task-done > span` text `" ✅ 2026-10-05"` | a completion mark `Oct 5` |
+| T3   | short-mode `span.task-created > span` text `" ➕"` | JS leaves it untouched |
+| T4   | an li without `data-task` | retried each frame, decorated once the attribute appears, left untouched after 60 frames |
+| T5   | a second pass | adds nothing |
+| T6   | `span.task-due` and `span.task-start` | untouched |
+| T7   | `" ⏳ 2026-13-01"` | untouched |
+| T8   | marks off; a non-Tasks connected `el` | nothing is scheduled |
+| T9   | a Tasks-host `Fri` mark on rollover | relabels to `tomorrow` |
 
 ## Live verification (Bryan, in Obsidian)
 
@@ -289,3 +353,7 @@ lines. `fold N` is `foldLength` in Live Preview.
 - [ ] Fresh, priority, and date marks sit together cleanly on one line
 - [ ] Metadata Menu does not double-decorate
 - [ ] Mobile (iOS) renders the glyphs
+- [ ] `dash.md` and `blocked.md` Tasks results show date marks
+- [ ] Clicking one opens Tasks' date editor, and right-click postpone works
+- [ ] `rotten.md` and `crowded.md` (short mode) show glyphs instead of emoji
+- [ ] Toggling off restores Tasks' emoji dates
