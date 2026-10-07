@@ -60,6 +60,12 @@ fn capture(
     args: &[&str],
 ) -> std::process::Command {
     let mut command = bob_command();
+    // Deterministic clipboard for `--clip` cases: the shared builder
+    // scrubs the session display, so `--clip` would otherwise have no
+    // source and the gate would depend on the session.
+    let clipboard = temp.path().join("clipboard-stub");
+    write_executable(&clipboard, "#!/bin/sh\nprintf 'stub clipboard\\n'\n");
+    command.env("BOB_CLIPBOARD_CMD", &clipboard);
     command.env("XDG_STATE_HOME", state_dir(temp));
     command.env("BOB_NOW", NOW);
     command.arg("capture").arg("-b").arg(vault);

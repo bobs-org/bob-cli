@@ -804,11 +804,16 @@ fn capture_pomodoro_link_solo_grammar_and_atomic_execution() {
         serde_json::from_str(stdout(&output).trim()).expect("json");
     assert_eq!(json["removed_scheduled"], "2026-07-20");
     assert!(json.get("schedule_log").is_some());
-    assert!(
-        stdout(&output).contains("declares dependencies")
-            || format!("{json}").contains("dependsOn")
-            || json["warnings"].is_null()
-            || true
+    // Schedule retirement promotes Blocked to Next, and the kept
+    // `[dependsOn::root]` must warn that reconcile may return it to
+    // Blocked (bob-cli-28): no tautology may stand in for this.
+    assert_eq!(json["previous_status_symbol"], "?");
+    assert_eq!(json["status_symbol"], "*");
+    assert_eq!(
+        json["warnings"],
+        serde_json::json!([
+            "^sched still declares dependencies; bob task reconcile may return it to Blocked"
+        ])
     );
     assert!(fs::read_to_string(&target).expect("t").contains("- [*]"));
 

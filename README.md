@@ -1283,10 +1283,17 @@ The retired `@<route>::<block-id>` capture spelling is no longer accepted; use
 Run the package checks from a clean worktree:
 
 ```bash
-just all
+just check
 just check-scripts
 just package-list
 ```
+
+`just check` is the canonical verification gate: `cargo fmt --check`,
+`cargo clippy --all-targets --all-features`, then
+`cargo test --no-fail-fast`, which runs the lib, every `tests/*` binary,
+and doctests even when one binary fails. `just test` runs the same
+unmasked test step on its own, and `just all` (fmt, lint, test) stays as
+the quick subset.
 
 Run a local install smoke test:
 

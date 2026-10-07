@@ -34,6 +34,14 @@ pub(crate) fn bob_command() -> Command {
     command.env("BOB_CONFIG_FILE", TEST_MISSING_CONFIG_FILE);
     command.env("BOB_REF_JOBS_KICK", "off");
     command.env("BOB_WEB_CLIP_ADAPTER", TEST_MISSING_WEB_CLIP_ADAPTER);
+    // Hermetic clipboard display: a stale SSH-forwarded DISPLAY (or
+    // WAYLAND_DISPLAY) or a tmux session would otherwise send spawned
+    // `bob` down the xclip/wl-paste/tmux path, so the gate must not
+    // depend on the session. Tests covering clipboard display set these
+    // explicitly.
+    command.env_remove("DISPLAY");
+    command.env_remove("WAYLAND_DISPLAY");
+    command.env_remove("TMUX");
     // Hermetic DNS for the fetch resolved-address check: a wildcard public
     // address replaces real DNS, so fake-curl tests never touch the
     // network to resolve. Tests covering the check itself override this.

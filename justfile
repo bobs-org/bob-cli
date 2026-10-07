@@ -17,7 +17,14 @@ lint: (_banner "33" "🔍" "LINT")
     cargo clippy --all-targets --all-features
 
 test: (_banner "32" "🧪" "TEST")
-    cargo test
+    cargo test --no-fail-fast
+
+# Canonical verification gate: formatting, lints, then every test binary
+# (lib, all tests/* binaries, doctests) even when one binary fails.
+check: (_banner "32" "✅" "CHECK")
+    cargo fmt --check
+    cargo clippy --all-targets --all-features
+    cargo test --no-fail-fast
 
 # Render a themed section banner: blank line, bold colored title + icon, colored rule.
 # Emits ANSI styling on a TTY and clean plain text when output is piped/redirected.
