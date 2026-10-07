@@ -1,5 +1,4 @@
 use std::{
-    ffi::OsString,
     fs,
     path::{Path, PathBuf},
     sync::atomic::{AtomicUsize, Ordering},
@@ -17,17 +16,9 @@ mod task_links;
 
 static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
-/// Serializes the `BOB_DAY_FILE` override: the override is
-/// process-global, so parallel tests must never set and read it at the
-/// same time. Hold the guard for the whole body of any test that touches
-/// the day file.
-static DAY_FILE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-fn day_file_guard() -> std::sync::MutexGuard<'static, ()> {
-    DAY_FILE_LOCK
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
-}
+// Overrides below are thread-local (see `crate::native::env`), so no
+// serializing lock is needed: a test's `BOB_DAY_FILE` override is
+// invisible to every other test thread.
 
 fn result(bob_dir: &Path, raw: &str, cursor: usize) -> CaptureCompleteResult {
     build_result(bob_dir, raw, cursor, false).expect("build result")
@@ -67,25 +58,6 @@ fn write_file(path: &Path, contents: &str) {
     }
     fs::write(path, contents)
         .unwrap_or_else(|error| panic!("write {}: {error}", path.display()));
-}
-
-fn with_env<T>(
-    key: &str,
-    value: impl Into<OsString>,
-    f: impl FnOnce() -> T,
-) -> T {
-    let old = std::env::var_os(key);
-    unsafe {
-        std::env::set_var(key, value.into());
-    }
-    let result = f();
-    unsafe {
-        match old {
-            Some(old) => std::env::set_var(key, old),
-            None => std::env::remove_var(key),
-        }
-    }
-    result
 }
 
 struct TempDir {

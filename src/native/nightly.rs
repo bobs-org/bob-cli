@@ -300,7 +300,7 @@ struct Styler {
 impl Styler {
     fn detect() -> Self {
         let color = std::io::stdout().is_terminal()
-            && std::env::var_os("NO_COLOR").is_none();
+            && bob_env::var_os("NO_COLOR").is_none();
         Self { color }
     }
 

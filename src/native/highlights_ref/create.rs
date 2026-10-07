@@ -1,3 +1,4 @@
+use crate::native::env as bob_env;
 use std::{
     env,
     ffi::{OsStr, OsString},
@@ -440,12 +441,12 @@ pub(super) fn run(matches: &ArgMatches) -> i32 {
 
 pub(super) fn pandoc_command() -> Option<OsString> {
     if let Some(command) =
-        env::var_os(ENV_PANDOC_COMMAND).filter(|value| !value.is_empty())
+        bob_env::var_os(ENV_PANDOC_COMMAND).filter(|value| !value.is_empty())
     {
         return Some(command);
     }
 
-    let path = env::var_os("PATH")?;
+    let path = bob_env::var_os("PATH")?;
     env::split_paths(&path)
         .map(|directory| directory.join("pandoc"))
         .find(|candidate| candidate.is_file())
@@ -1989,7 +1990,7 @@ fn play_uri(config: &Config, plan: &CreatePlan) -> Result<Option<String>> {
     )
     .map_err(super::config_error)?;
     let template = resolve_audio_link_template(
-        env::var_os(ENV_AUDIO_LINK_TEMPLATE).as_deref(),
+        bob_env::var_os(ENV_AUDIO_LINK_TEMPLATE).as_deref(),
         highlights.audio_link_template(),
     );
     if template.is_empty() || matches!(plan.workflow, TargetWorkflow::External)

@@ -8,6 +8,7 @@
 //! open. `BOB_REF_JOBS_KICK=off|0|false` disables it (the CLI test
 //! harness sets it to `off`).
 
+use crate::native::env as bob_env;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -24,7 +25,7 @@ pub(crate) fn kick_disabled_value(value: &str) -> bool {
 
 /// Whether the kick is disabled in this process.
 pub(crate) fn kick_disabled() -> bool {
-    std::env::var(ENV_KICK_DISABLE)
+    bob_env::var(ENV_KICK_DISABLE)
         .map(|value| kick_disabled_value(&value))
         .unwrap_or(false)
 }
@@ -79,6 +80,10 @@ fn spawn_detached(exe: &Path, log: &Path) -> Result<(), String> {
         format!("clone worker log {}: {error}", log.display())
     })?;
     let mut command = Command::new(exe);
+    // Tests seed the spool through thread-local overrides (for example
+    // `XDG_STATE_HOME`), which the detached worker cannot inherit:
+    // forward them explicitly. A no-op outside test builds.
+    crate::native::env::inherit_overrides(&mut command);
     command
         .args(["ref", "jobs", "run", "-q"])
         .stdin(Stdio::null())
@@ -108,21 +113,14 @@ fn spawn_detached(exe: &Path, log: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Mutex, OnceLock};
 
-    /// Serialize the tests that mutate process env: nothing else in
-    /// this suite touches `XDG_STATE_HOME` in-process, and the child
-    /// inherits whatever we set here.
-    fn env_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-    }
-
-    /// Run `f` with `vars` set and `unset` removed, restoring
-    /// everything before returning. The lock serializes our own spawn
-    /// sections; restoration is immediate — the kicked child already
-    /// copied its env at fork — so parallel tests never observe our
-    /// values while we poll for results _without_ env held.
+    /// Run `f` with thread-local test overrides set and `unset` removed,
+    /// restoring everything before returning. Overrides never touch process
+    /// environment, so parallel tests cannot observe our values while we
+    /// poll for results. The kicked child receives the overrides
+    /// explicitly: `crate::native::env::inherit_overrides` forwards them
+    /// onto its `Command`, because a child only inherits process
+    /// environment.
     fn with_spawn_env<F, T>(
         vars: Vec<(&'static str, std::ffi::OsString)>,
         unset: &[&'static str],
@@ -131,34 +129,13 @@ mod tests {
     where
         F: FnOnce() -> T,
     {
-        let _lock = env_lock().lock().expect("env lock");
-        let mut saved = Vec::new();
-        for (key, _) in &vars {
-            saved.push((*key, std::env::var_os(key)));
-        }
-        for key in unset {
-            saved.push((*key, std::env::var_os(key)));
-        }
-        for (key, value) in &vars {
-            unsafe {
-                std::env::set_var(key, value);
-            }
-        }
-        for key in unset {
-            unsafe {
-                std::env::remove_var(key);
-            }
-        }
-        let out = f();
-        for (key, old) in saved {
-            unsafe {
-                match old {
-                    Some(old) => std::env::set_var(key, old),
-                    None => std::env::remove_var(key),
-                }
-            }
-        }
-        out
+        let scoped: Vec<(&str, Option<&std::ffi::OsStr>)> = vars
+            .iter()
+            .map(|(key, value)| (*key, Some(value.as_os_str())))
+            .chain(unset.iter().map(|key| (*key, None)))
+            .collect();
+        let _guard = crate::native::env::TestEnvGuard::set(&scoped);
+        f()
     }
 
     #[test]
@@ -177,7 +154,7 @@ mod tests {
     /// fast no-op once the outer `cargo test` has built the bins.
     fn bob_binary() -> PathBuf {
         let cargo =
-            std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+            bob_env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
         let output = std::process::Command::new(cargo)
             .args(["build", "--bin", "bob", "--message-format=json"])
             .output()

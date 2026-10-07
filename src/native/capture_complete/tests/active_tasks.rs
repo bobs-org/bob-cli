@@ -5,7 +5,7 @@ use super::{
         model::{Candidates, Replacement},
         render::candidate_lines,
     },
-    day_file_guard, result, with_env, write_file, write_settings, TempDir,
+    result, write_file, write_settings, TempDir,
 };
 use crate::native::capture_language::CompletionContext;
 pub(super) fn active_task_fixture(root: &Path) -> PathBuf {
@@ -28,12 +28,12 @@ pub(super) fn active_task_fixture(root: &Path) -> PathBuf {
 
 #[test]
 fn active_task_completion_offers_queued_tasks_first() {
-    let _guard = day_file_guard();
     let temp = TempDir::new("bob-cli-capture-complete-active-task");
     let day_file = active_task_fixture(temp.path());
 
-    let value =
-        with_env("BOB_DAY_FILE", &day_file, || result(temp.path(), "^", 1));
+    let value = crate::native::env::with_var("BOB_DAY_FILE", &day_file, || {
+        result(temp.path(), "^", 1)
+    });
     assert_eq!(value.context, Some(CompletionContext::ActiveTask));
     assert_eq!(value.replacement, Replacement { start: 1, end: 1 });
     let Candidates::ActiveTask(candidates) = &value.candidates else {
@@ -64,12 +64,11 @@ fn active_task_completion_offers_queued_tasks_first() {
 
 #[test]
 fn active_task_completion_ranks_queries_and_pins_json_shape() {
-    let _guard = day_file_guard();
     let temp = TempDir::new("bob-cli-capture-complete-active-rank");
     let day_file = active_task_fixture(temp.path());
 
     let raw = "^sase:dee";
-    let value = with_env("BOB_DAY_FILE", &day_file, || {
+    let value = crate::native::env::with_var("BOB_DAY_FILE", &day_file, || {
         result(temp.path(), raw, raw.len())
     });
     assert_eq!(value.context, Some(CompletionContext::ActiveTask));
@@ -99,7 +98,6 @@ fn active_task_completion_ranks_queries_and_pins_json_shape() {
 
 #[test]
 fn active_task_completion_excludes_ready_tasks() {
-    let _guard = day_file_guard();
     let temp = TempDir::new("bob-cli-capture-complete-active-now");
     write_settings(temp.path());
     write_file(
@@ -113,8 +111,9 @@ fn active_task_completion_excludes_ready_tasks() {
     let day_file = temp.path().join("2026/20260710.md");
     write_file(&day_file, "## Pomodoros\n- [ ] () — BUGS\n");
 
-    let value =
-        with_env("BOB_DAY_FILE", &day_file, || result(temp.path(), "^", 1));
+    let value = crate::native::env::with_var("BOB_DAY_FILE", &day_file, || {
+        result(temp.path(), "^", 1)
+    });
     assert_eq!(value.context, Some(CompletionContext::ActiveTask));
     let Candidates::ActiveTask(candidates) = &value.candidates else {
         panic!("expected active-task candidates");
@@ -133,19 +132,19 @@ fn active_task_completion_excludes_ready_tasks() {
 
 #[test]
 fn active_task_completion_keeps_suffixes_and_names_pomodoros() {
-    let _guard = day_file_guard();
     let temp = TempDir::new("bob-cli-capture-complete-active-suffix");
     let day_file = active_task_fixture(temp.path());
 
     // The replacement always stops before `#`/`=`.
     let raw = "^sase:deep-fix#bu";
-    let link =
-        with_env("BOB_DAY_FILE", &day_file, || result(temp.path(), raw, 14));
+    let link = crate::native::env::with_var("BOB_DAY_FILE", &day_file, || {
+        result(temp.path(), raw, 14)
+    });
     assert_eq!(link.context, Some(CompletionContext::ActiveTask));
     assert_eq!(link.replacement, Replacement { start: 1, end: 14 });
 
     // After `#` the same marker completes Pomodoro names.
-    let name = with_env("BOB_DAY_FILE", &day_file, || {
+    let name = crate::native::env::with_var("BOB_DAY_FILE", &day_file, || {
         result(temp.path(), raw, raw.len())
     });
     assert_eq!(name.context, Some(CompletionContext::PomodoroName));
@@ -156,7 +155,7 @@ fn active_task_completion_keeps_suffixes_and_names_pomodoros() {
 
     // Inside `=<X>` there is no completion field at all.
     let raw = "^sase:deep-fix=3";
-    let empty = with_env("BOB_DAY_FILE", &day_file, || {
+    let empty = crate::native::env::with_var("BOB_DAY_FILE", &day_file, || {
         result(temp.path(), raw, raw.len())
     });
     assert_eq!(empty.context, None);
@@ -165,12 +164,12 @@ fn active_task_completion_keeps_suffixes_and_names_pomodoros() {
 
 #[test]
 fn active_task_human_rows_name_the_queue() {
-    let _guard = day_file_guard();
     let temp = TempDir::new("bob-cli-capture-complete-active-human");
     let day_file = active_task_fixture(temp.path());
 
-    let value =
-        with_env("BOB_DAY_FILE", &day_file, || result(temp.path(), "^", 1));
+    let value = crate::native::env::with_var("BOB_DAY_FILE", &day_file, || {
+        result(temp.path(), "^", 1)
+    });
     let rows = candidate_lines(&value.candidates, value.context);
     assert_eq!(
         rows,

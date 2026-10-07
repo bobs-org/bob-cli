@@ -8,7 +8,6 @@ use clap::{
     Arg, ArgAction, ArgGroup, ArgMatches, Command as ClapCommand,
 };
 use std::{
-    env,
     ffi::{OsStr, OsString},
     fs,
     io::{self, Read},
@@ -542,5 +541,7 @@ pub(super) fn normalize_vault_relative_path(path: &Path) -> PathBuf {
 }
 
 pub(super) fn default_vault_from_env() -> Option<String> {
-    env::var(ENV_VAULT).ok().filter(|value| !value.is_empty())
+    bob_env::var(ENV_VAULT)
+        .ok()
+        .filter(|value| !value.is_empty())
 }

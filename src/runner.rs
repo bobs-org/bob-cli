@@ -1,3 +1,4 @@
+use crate::native::env as bob_env;
 use std::{
     env,
     error::Error,
@@ -795,7 +796,8 @@ Run 'bob <command> --help' or 'bob help <command>' for more on a command.";
 
 fn sectioned_help(long: bool) -> StyledStr {
     let mut help = StyledStr::new();
-    let color = io::stdout().is_terminal() && env::var_os("NO_COLOR").is_none();
+    let color =
+        io::stdout().is_terminal() && bob_env::var_os("NO_COLOR").is_none();
     let styles = cli_styles();
     let name_width = SUBCOMMANDS
         .iter()
@@ -1081,7 +1083,7 @@ fn run_script_or_report(
 
 fn use_script_fallback() -> bool {
     matches!(
-        env::var("BOB_CLI_USE_SCRIPT").ok().as_deref(),
+        bob_env::var("BOB_CLI_USE_SCRIPT").ok().as_deref(),
         Some("1" | "true" | "TRUE" | "yes" | "YES")
     )
 }
@@ -1095,11 +1097,11 @@ fn script_cache_dir() -> PathBuf {
 }
 
 fn cache_home() -> PathBuf {
-    env::var_os("XDG_CACHE_HOME")
+    bob_env::var_os("XDG_CACHE_HOME")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
         .or_else(|| {
-            env::var_os("HOME")
+            bob_env::var_os("HOME")
                 .filter(|value| !value.is_empty())
                 .map(|home| PathBuf::from(home).join(".cache"))
         })
@@ -1164,7 +1166,7 @@ fn temporary_asset_path(target: &Path) -> Result<PathBuf, RunnerError> {
 fn path_with_script_dir(script_dir: &Path) -> Result<OsString, RunnerError> {
     let mut paths = vec![script_dir.to_path_buf()];
     if let Some(existing_path) =
-        env::var_os("PATH").filter(|value| !value.is_empty())
+        bob_env::var_os("PATH").filter(|value| !value.is_empty())
     {
         paths.extend(env::split_paths(&existing_path));
     }

@@ -242,7 +242,7 @@ fn sleep_arg(value: &str) -> io::Result<()> {
 }
 
 fn command_available(command: &str) -> bool {
-    let Some(path) = std::env::var_os("PATH") else {
+    let Some(path) = bob_env::var_os("PATH") else {
         return false;
     };
 

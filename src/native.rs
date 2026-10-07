@@ -43,7 +43,7 @@ mod collect_done;
 pub(crate) mod completion;
 mod config;
 mod dataview;
-mod env;
+pub(crate) mod env;
 mod freshness;
 mod gkeep;
 mod highlights_ref;

@@ -1,8 +1,6 @@
 //! CLI construction and config reporting.
-use std::{
-    env,
-    io::{self, IsTerminal},
-};
+use crate::native::env as bob_env;
+use std::io::{self, IsTerminal};
 
 use super::*;
 
@@ -201,7 +199,7 @@ fn append_help_group_row(
 }
 
 fn help_groups_color() -> bool {
-    io::stdout().is_terminal() && env::var_os("NO_COLOR").is_none()
+    io::stdout().is_terminal() && bob_env::var_os("NO_COLOR").is_none()
 }
 
 pub(super) fn with_config_args(command: ClapCommand) -> ClapCommand {

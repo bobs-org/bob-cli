@@ -245,7 +245,7 @@ fn resolve_seed(raw: Option<&OsString>) -> Result<u64, String> {
             )
         });
     }
-    if let Some(from_env) = std::env::var("BOB_PRIORITY_ROLL_SEED")
+    if let Some(from_env) = bob_env::var("BOB_PRIORITY_ROLL_SEED")
         .ok()
         .filter(|value| !value.trim().is_empty())
         .and_then(|value| parse_seed_value(&value))

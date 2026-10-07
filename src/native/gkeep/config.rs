@@ -4,6 +4,7 @@
 //! following the `highlights` pattern); this module resolves defaults,
 //! validates values, derives the device id, and reads the master token.
 
+use crate::native::env as bob_env;
 use std::{
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -198,7 +199,7 @@ impl GkeepConfig {
     /// The test hook: an executable speaking the adapter protocol that
     /// replaces `uv run --script …`, like `BOB_CLIPBOARD_CMD`.
     pub(crate) fn adapter_override() -> Option<PathBuf> {
-        Self::adapter_override_from(std::env::var_os(ADAPTER_ENV_VAR))
+        Self::adapter_override_from(bob_env::var_os(ADAPTER_ENV_VAR))
     }
 
     /// Pure helper for tests: resolve the override from an env value.

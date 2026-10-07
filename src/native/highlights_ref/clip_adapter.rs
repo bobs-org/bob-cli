@@ -6,9 +6,9 @@
 //! idea as `BOB_GKEEP_ADAPTER`. Every request carries `"protocol": 1`.
 //! `BOB_WEB_CLIP_TIMEOUT_SECS` sets the overall adapter timeout.
 
+use crate::native::env as bob_env;
 use std::{
     collections::BTreeMap,
-    env,
     ffi::OsString,
     io::Read,
     path::PathBuf,
@@ -508,13 +508,13 @@ impl AdapterFailure {
 }
 
 fn adapter_override() -> Option<PathBuf> {
-    env::var_os(ENV_ADAPTER_OVERRIDE)
+    bob_env::var_os(ENV_ADAPTER_OVERRIDE)
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
 }
 
 fn timeout_secs() -> u64 {
-    env::var_os(ENV_TIMEOUT_SECS)
+    bob_env::var_os(ENV_TIMEOUT_SECS)
         .and_then(|value| value.into_string().ok())
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(DEFAULT_TIMEOUT_SECS)

@@ -4,7 +4,6 @@
 //! and `git -C <vault>` command builder used for unattended commits and pushes.
 
 use std::{
-    env,
     ffi::{OsStr, OsString},
     fs::{self, File, OpenOptions},
     io::{self, Write},
@@ -34,7 +33,7 @@ pub(crate) fn git_command(vault: &Path, child_env: &ChildEnv) -> Command {
 pub(crate) fn child_env() -> ChildEnv {
     let mut values = source_ssh_agent_env();
 
-    if env::var_os("GIT_SSH_COMMAND").is_none()
+    if bob_env::var_os("GIT_SSH_COMMAND").is_none()
         && !values
             .iter()
             .any(|(key, _)| key == OsStr::new("GIT_SSH_COMMAND"))
@@ -381,13 +380,13 @@ pub(crate) fn commit_paths(
 }
 
 fn lock_file_from_env() -> Option<PathBuf> {
-    env::var_os("BOB_VAULT_SYNC_LOCK_FILE")
+    bob_env::var_os("BOB_VAULT_SYNC_LOCK_FILE")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
 }
 
 fn default_lock_file() -> PathBuf {
-    env::var_os("XDG_RUNTIME_DIR")
+    bob_env::var_os("XDG_RUNTIME_DIR")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
         .filter(|path| path.is_dir())
@@ -408,34 +407,50 @@ mod tests {
     /// This is the only test in the suite that writes
     /// `BOB_VAULT_SYNC_LOCK_FILE`, so no concurrent test can disagree on it.
     fn with_test_lock_file(tag: &str, f: impl FnOnce(&Path)) {
-        let path = env::temp_dir().join(format!(
+        let path = std::env::temp_dir().join(format!(
             "bob-ob-lock-test-{}-{tag}.lock",
             std::process::id()
         ));
         let _ = fs::remove_file(&path);
-        let old = env::var_os("BOB_VAULT_SYNC_LOCK_FILE");
-        unsafe {
-            env::set_var("BOB_VAULT_SYNC_LOCK_FILE", &path);
-        }
+        // Thread-local override: parallel tests never observe it.
+        let _guard = crate::native::env::TestEnvGuard::set(&[(
+            "BOB_VAULT_SYNC_LOCK_FILE",
+            Some(path.as_os_str()),
+        )]);
         f(&path);
-        unsafe {
-            match old {
-                Some(old) => env::set_var("BOB_VAULT_SYNC_LOCK_FILE", old),
-                None => env::remove_var("BOB_VAULT_SYNC_LOCK_FILE"),
-            }
-        }
         let _ = fs::remove_file(&path);
     }
 
-    // One test (not three) touches `BOB_VAULT_SYNC_LOCK_FILE`, because the
-    // variable is process-global and parallel tests would race on it.
+    // One test (not three) touches `BOB_VAULT_SYNC_LOCK_FILE`, so its
+    // override stays unique even though overrides are thread-local.
+    //
+    // Setup acquires poll briefly instead of expecting the lock free on
+    // the first try: a parallel test's forked-but-not-yet-exec'd child
+    // inherits our open lock fd across fork (CLOEXEC clears it at exec),
+    // so the file can look transiently contended under load. The hold is
+    // always short-lived; a lock held past the deadline still fails.
+    fn acquire_test_lock() -> File {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            match try_acquire_lock() {
+                Ok(file) => return file,
+                Err(LockAcquireError::Contended)
+                    if Instant::now() < deadline =>
+                {
+                    std::thread::sleep(Duration::from_millis(25));
+                }
+                Err(error) => panic!("setup acquire lock: {error:?}"),
+            }
+        }
+    }
+
     #[test]
     fn lock_wait_behavior() {
         with_test_lock_file("wait", |_| {
             let waits = Arc::new(AtomicUsize::new(0));
 
             // While held, a short budget times out and the callback fires once.
-            let held = try_acquire_lock().expect("initial lock");
+            let held = acquire_test_lock();
             let waits_before = Arc::clone(&waits);
             let result = acquire_lock_waiting(Duration::from_millis(400), {
                 let waits_before = Arc::clone(&waits_before);
@@ -451,11 +466,23 @@ mod tests {
             drop(held);
 
             // A waiter blocked while held acquires after release, firing the
-            // callback exactly once more.
-            let held = try_acquire_lock().expect("re-acquire lock");
+            // callback exactly once more. Thread-local overrides do not
+            // cross threads, so the waiter re-applies this thread's
+            // snapshot: without it the waiter would resolve a different
+            // lock file and never contend.
+            let held = acquire_test_lock();
+            let snapshot = crate::native::env::snapshot_overrides();
             let handle = std::thread::spawn({
                 let waits = Arc::clone(&waits);
                 move || {
+                    let scoped: Vec<(&str, Option<&std::ffi::OsStr>)> =
+                        snapshot
+                            .iter()
+                            .map(|(key, value)| {
+                                (key.as_str(), value.as_deref())
+                            })
+                            .collect();
+                    let _guard = crate::native::env::TestEnvGuard::set(&scoped);
                     acquire_lock_waiting(Duration::from_secs(10), move || {
                         waits.fetch_add(1, Ordering::SeqCst);
                     })

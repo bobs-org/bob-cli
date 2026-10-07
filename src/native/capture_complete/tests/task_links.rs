@@ -5,7 +5,7 @@ use super::{
         model::{Candidates, CaptureCompleteResult, Replacement},
         render::candidate_lines,
     },
-    day_file_guard, result, with_env, write_file, TempDir,
+    result, write_file, TempDir,
 };
 use crate::native::capture_language::CompletionContext;
 
@@ -66,8 +66,8 @@ pub(super) fn task_link_result(
     raw: &str,
     cursor: usize,
 ) -> CaptureCompleteResult {
-    with_env("BOB_DAY_FILE", day_file, || {
-        with_env("BOB_NOW", "2026-09-30 09:02:00", || {
+    crate::native::env::with_var("BOB_DAY_FILE", day_file, || {
+        crate::native::env::with_var("BOB_NOW", "2026-09-30 09:02:00", || {
             result(root, raw, cursor)
         })
     })
@@ -75,7 +75,6 @@ pub(super) fn task_link_result(
 
 #[test]
 fn task_link_completion_lists_worked_example_in_canonical_order() {
-    let _guard = day_file_guard();
     let temp = TempDir::new("bob-cli-capture-complete-task-link");
     let day_file = task_link_fixture(temp.path());
 
@@ -107,7 +106,6 @@ fn task_link_completion_lists_worked_example_in_canonical_order() {
 
 #[test]
 fn task_link_completion_pins_json_shape_and_omissions() {
-    let _guard = day_file_guard();
     let temp = TempDir::new("bob-cli-capture-complete-task-link-json");
     let day_file = task_link_fixture(temp.path());
 
@@ -183,7 +181,6 @@ fn task_link_completion_pins_json_shape_and_omissions() {
 
 #[test]
 fn task_link_completion_queries_cover_the_sigil_and_rank() {
-    let _guard = day_file_guard();
     let temp = TempDir::new("bob-cli-capture-complete-task-link-query");
     let day_file = task_link_fixture(temp.path());
 
@@ -207,7 +204,6 @@ fn task_link_completion_queries_cover_the_sigil_and_rank() {
 
 #[test]
 fn task_link_completion_scopes_to_the_batch_second_item() {
-    let _guard = day_file_guard();
     let temp = TempDir::new("bob-cli-capture-complete-task-link-batch");
     let day_file = task_link_fixture(temp.path());
 
@@ -224,7 +220,6 @@ fn task_link_completion_scopes_to_the_batch_second_item() {
 
 #[test]
 fn task_link_human_rows_name_queues_and_missing_ids() {
-    let _guard = day_file_guard();
     let temp = TempDir::new("bob-cli-capture-complete-task-link-human");
     let day_file = task_link_fixture(temp.path());
 
@@ -275,7 +270,6 @@ fn task_link_human_rows_name_queues_and_missing_ids() {
 
 #[test]
 fn task_link_completion_keeps_candidates_when_the_day_file_is_missing() {
-    let _guard = day_file_guard();
     let temp = TempDir::new("bob-cli-capture-complete-task-link-warn");
     let day_file = task_link_fixture(temp.path());
     let missing = day_file.parent().expect("day parent").join("20990101.md");

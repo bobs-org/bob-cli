@@ -5,7 +5,6 @@ use super::*;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
-    env,
     ffi::OsString,
     io,
     process::{Command, Output},
@@ -235,7 +234,7 @@ pub(super) fn is_text_file_busy(error: &io::Error) -> bool {
 }
 
 pub(super) fn obsidian_command() -> OsString {
-    env::var_os(ENV_OBSIDIAN_COMMAND)
+    bob_env::var_os(ENV_OBSIDIAN_COMMAND)
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| OsString::from("obsidian"))
 }

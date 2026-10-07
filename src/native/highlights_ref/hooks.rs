@@ -1,5 +1,6 @@
 //! Pre-scan hook configuration and execution.
 use super::*;
+use crate::native::env as bob_env;
 
 pub(super) fn configured_pre_scan_hook(
     no_hooks: bool,
@@ -7,12 +8,12 @@ pub(super) fn configured_pre_scan_hook(
     if no_hooks {
         return Ok(None);
     }
-    if env::var_os(ENV_LEGACY_PRE_SCAN_COMMAND).is_some() {
+    if bob_env::var_os(ENV_LEGACY_PRE_SCAN_COMMAND).is_some() {
         return Err(CommandError::new(format!(
             "{ENV_LEGACY_PRE_SCAN_COMMAND} was renamed; use {ENV_PRE_SCAN_HOOK}"
         )));
     }
-    if let Some(command) = env::var_os(ENV_PRE_SCAN_HOOK) {
+    if let Some(command) = bob_env::var_os(ENV_PRE_SCAN_HOOK) {
         return Ok(pre_scan_hook_from_os(command));
     }
 

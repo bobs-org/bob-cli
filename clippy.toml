@@ -1,0 +1,13 @@
+# Lib tests share one process, so mutating process environment from a test
+# is visible to every other test thread and flakes the suite under
+# parallel `cargo test --lib` (bob-cli-2e, bob-cli-40, bob-cli-5c).
+# Tests must use the thread-local facility in `src/native/env.rs`
+# (`TestEnvGuard`, `with_var`, `inherit_overrides`) instead: overrides
+# there are per-thread and restored on drop, and production code reads
+# them through `bob_env::var` / `bob_env::var_os`. The only process-env
+# write allowed is the one-time `TZ` pin inside that facility, which
+# carries its own `#[allow]`.
+disallowed-methods = [
+  { path = "std::env::set_var", reason = "use crate::native::env::TestEnvGuard thread-local overrides in tests; never mutate process environment" },
+  { path = "std::env::remove_var", reason = "use crate::native::env::TestEnvGuard thread-local overrides in tests; never mutate process environment" },
+]

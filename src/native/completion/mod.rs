@@ -21,6 +21,7 @@ pub(crate) mod report;
 mod tree;
 pub(crate) mod verify;
 
+use crate::native::env as bob_env;
 use std::ffi::OsString;
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -124,7 +125,7 @@ fn run_complete_inner(argv: &[OsString]) -> i32 {
 /// Read the completion deadline: 150 ms, unless the hidden
 /// `BOB_COMPLETE_DEADLINE_MS` test override sets a positive value.
 fn deadline_ms() -> u64 {
-    std::env::var("BOB_COMPLETE_DEADLINE_MS")
+    bob_env::var("BOB_COMPLETE_DEADLINE_MS")
         .ok()
         .and_then(|raw| raw.parse::<u64>().ok())
         .filter(|ms| *ms > 0)
@@ -142,7 +143,7 @@ fn write_debug_log(
     started: Instant,
     error: Option<&str>,
 ) {
-    let Ok(path) = std::env::var("BOB_COMPLETE_DEBUG") else {
+    let Ok(path) = bob_env::var("BOB_COMPLETE_DEBUG") else {
         return;
     };
     if path.is_empty() {
@@ -172,59 +173,29 @@ fn write_debug_log(
 mod tests {
     use super::*;
 
-    /// Restores the deadline override when the guard drops, so the
-    /// mutation cannot leak into other tests.
-    struct DeadlineGuard {
-        previous: Option<String>,
-    }
-
-    impl DeadlineGuard {
-        fn set(value: Option<&str>) -> Self {
-            let previous = std::env::var("BOB_COMPLETE_DEADLINE_MS").ok();
-            // `unsafe` because another thread could read the var
-            // concurrently; no other test reads this var, and the
-            // guard restores it on drop.
-            unsafe {
-                match value {
-                    Some(value) => {
-                        std::env::set_var("BOB_COMPLETE_DEADLINE_MS", value);
-                    }
-                    None => {
-                        std::env::remove_var("BOB_COMPLETE_DEADLINE_MS");
-                    }
-                }
-            }
-            Self { previous }
-        }
-    }
-
-    impl Drop for DeadlineGuard {
-        fn drop(&mut self) {
-            unsafe {
-                match &self.previous {
-                    Some(previous) => {
-                        std::env::set_var("BOB_COMPLETE_DEADLINE_MS", previous);
-                    }
-                    None => {
-                        std::env::remove_var("BOB_COMPLETE_DEADLINE_MS");
-                    }
-                }
-            }
-        }
-    }
+    /// Thread-local deadline override (see `crate::native::env`): never
+    /// touches process environment, so parallel tests cannot observe it.
+    /// Restores the previous effective value when the guard drops.
+    use crate::native::env::TestEnvGuard as DeadlineGuard;
 
     #[test]
     fn deadline_defaults_and_falls_back() {
-        let _unset = DeadlineGuard::set(None);
+        let _unset = DeadlineGuard::set(&[("BOB_COMPLETE_DEADLINE_MS", None)]);
         assert_eq!(deadline_ms(), COMPLETE_DEADLINE_MS);
 
-        let _override = DeadlineGuard::set(Some("5000"));
+        let _override = DeadlineGuard::set(&[(
+            "BOB_COMPLETE_DEADLINE_MS",
+            Some(std::ffi::OsStr::new("5000")),
+        )]);
         assert_eq!(deadline_ms(), 5000);
 
         // Empty, zero, and non-numeric overrides fall back instead
         // of disabling the deadline.
         for raw in ["", "0", "abc"] {
-            let _guard = DeadlineGuard::set(Some(raw));
+            let _guard = DeadlineGuard::set(&[(
+                "BOB_COMPLETE_DEADLINE_MS",
+                Some(std::ffi::OsStr::new(raw)),
+            )]);
             assert_eq!(deadline_ms(), COMPLETE_DEADLINE_MS, "raw: {raw}");
         }
     }

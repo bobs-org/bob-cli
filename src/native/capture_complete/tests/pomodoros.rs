@@ -15,7 +15,7 @@ use super::{
         },
         render::candidate_lines,
     },
-    day_file_guard, result, with_env, write_file, TempDir,
+    result, write_file, TempDir,
 };
 use crate::native::{
     capture_language::CompletionContext,
@@ -119,14 +119,13 @@ fn pomodoro_name_completion_keeps_nameable_rows_for_a_query() {
 
 #[test]
 fn pomodoro_name_completion_works_without_a_block_id() {
-    let _guard = day_file_guard();
     let temp = TempDir::new("bob-cli-capture-complete-pomodoro-name");
     write_file(&temp.path().join("dev.md"), "---\ntype: [[area]]\n---\n");
     let day_file = temp.path().join("2026/20260828.md");
     write_file(&day_file, "## Pomodoros\n- [ ] () — BUGS\n- [ ] ()\n");
 
     let raw = "note @dev:#bu";
-    let value = with_env("BOB_DAY_FILE", &day_file, || {
+    let value = crate::native::env::with_var("BOB_DAY_FILE", &day_file, || {
         result(temp.path(), raw, raw.len())
     });
 

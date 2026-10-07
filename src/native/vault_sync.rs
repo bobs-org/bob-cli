@@ -1,6 +1,5 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
-    env,
     ffi::{OsStr, OsString},
     fs::{self, OpenOptions},
     io::{self, Write},
@@ -1458,7 +1457,7 @@ fn print_status_panel(state_file: &Path, status: &StatusRecord) {
 }
 
 fn state_file_path() -> PathBuf {
-    env::var_os("BOB_VAULT_SYNC_STATE_FILE")
+    bob_env::var_os("BOB_VAULT_SYNC_STATE_FILE")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
         .map(|path| bob_env::expand_tilde(&path))
@@ -1576,7 +1575,7 @@ fn elapsed_ms(started: Instant) -> u64 {
 }
 
 fn hostname_slug() -> String {
-    env::var("HOSTNAME")
+    bob_env::var("HOSTNAME")
         .ok()
         .filter(|value| !value.is_empty())
         .or_else(|| {

@@ -5,8 +5,9 @@
 //! `scan` and `bob_xlib_pull` read every file in `xlib/`, so a listen run
 //! lasting minutes must never stage inside the vault.
 
+use crate::native::env as bob_env;
 use std::{
-    env, fs,
+    fs,
     path::{Path, PathBuf},
     process,
     time::{SystemTime, UNIX_EPOCH},
@@ -29,7 +30,7 @@ impl ScratchDir {
     /// Create a scratch directory tagged with `prefix`
     /// (`bob-<prefix>-<pid>-<nanos>`).
     pub(super) fn create(prefix: &str) -> Result<Self> {
-        let base = env::var_os("TMPDIR")
+        let base = bob_env::var_os("TMPDIR")
             .map(PathBuf::from)
             .filter(|base| {
                 #[cfg(unix)]
@@ -65,9 +66,9 @@ impl ScratchDir {
                     ))
                 })?;
         }
-        let keep = env::var_os(ENV_KEEP_WORKDIR).as_deref()
+        let keep = bob_env::var_os(ENV_KEEP_WORKDIR).as_deref()
             == Some(std::ffi::OsStr::new("1"))
-            || env::var_os(ENV_LEGACY_KEEP_WORKDIR).as_deref()
+            || bob_env::var_os(ENV_LEGACY_KEEP_WORKDIR).as_deref()
                 == Some(std::ffi::OsStr::new("1"));
         Ok(Self { path, keep })
     }

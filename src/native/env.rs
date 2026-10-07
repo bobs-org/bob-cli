@@ -5,10 +5,221 @@ use std::{
     process::Command,
 };
 
+#[cfg(test)]
+use std::{cell::RefCell, collections::HashMap};
+
 use chrono::{Datelike, Local, NaiveDate, NaiveDateTime, NaiveTime};
 
+// Thread-local test overrides for environment variables.
+//
+// Lib tests share one process, and process environment is process-global:
+// one test's `std::env::set_var` is visible to every other test thread, so
+// parallel `cargo test --lib` flakes whenever a writer and a reader overlap
+// on `BOB_DAY_FILE` or `BOB_NOW` (bob-cli-2e, bob-cli-40, bob-cli-5c).
+//
+// Tests must never touch process environment. Instead they set overrides
+// here through `TestEnvGuard`, which are visible only to the current
+// thread and restored on drop (even on panic). Production code reads
+// environment through `var` and `var_os`, which consult these overrides
+// first in test builds and read the real process environment otherwise.
+//
+// A `None` entry unsets the variable for the current thread. Code that
+// passes environment to a child process (or another thread) must forward
+// the effective values explicitly with `inherit_overrides`, because a
+// child only inherits process environment.
+#[cfg(test)]
+thread_local! {
+    static TEST_OVERRIDES: RefCell<HashMap<String, Option<OsString>>> =
+        RefCell::new(HashMap::new());
+}
+
+/// Read an environment variable, consulting the current thread's test
+/// overrides first in test builds. Falls through to process environment
+/// for keys no test overrides, so ambient reads are stable: no test can
+/// mutate what they see anymore.
+pub(crate) fn var(key: &str) -> Result<String, env::VarError> {
+    #[cfg(test)]
+    {
+        if let Some(hit) = TEST_OVERRIDES
+            .with(|overrides| overrides.borrow().get(key).cloned())
+        {
+            return match hit {
+                Some(value) => {
+                    value.into_string().map_err(env::VarError::NotUnicode)
+                }
+                None => Err(env::VarError::NotPresent),
+            };
+        }
+    }
+    env::var(key)
+}
+
+/// `OsString` variant of [`var`].
+pub(crate) fn var_os(key: &str) -> Option<OsString> {
+    #[cfg(test)]
+    {
+        if let Some(hit) = TEST_OVERRIDES
+            .with(|overrides| overrides.borrow().get(key).cloned())
+        {
+            return hit;
+        }
+    }
+    env::var_os(key)
+}
+
+/// Panic-safe scoped test environment override. Setting an override never
+/// touches process environment: it is recorded in the current thread's
+/// [`TEST_OVERRIDES`] map and the previous effective value is restored when
+/// the guard drops. Hold the guard for the whole body of any test that
+/// needs an override.
+///
+/// This guard is deliberately thread-local rather than a process-wide lock:
+/// tests that override different keys (or the same key with the same
+/// intent) still run in parallel, and ambient readers need no
+/// synchronization because nothing mutates what they read.
+#[cfg(test)]
+pub(crate) struct TestEnvGuard {
+    saved: Vec<(String, Option<OsString>)>,
+}
+
+#[cfg(test)]
+impl TestEnvGuard {
+    /// Override `vars` for the current thread until the guard drops. A
+    /// `None` value unsets the variable. Values are `Option<&OsStr>` so
+    /// both string literals (`Some(OsStr::new("..."))`) and paths
+    /// (`Some(path.as_os_str())`) fit the same call.
+    pub(crate) fn set(vars: &[(&str, Option<&OsStr>)]) -> Self {
+        let saved = TEST_OVERRIDES.with(|overrides| {
+            let mut overrides = overrides.borrow_mut();
+            vars.iter()
+                .map(|(key, value)| {
+                    let old = overrides
+                        .get(*key)
+                        .cloned()
+                        .unwrap_or_else(|| env::var_os(key));
+                    overrides.insert(
+                        (*key).to_string(),
+                        value.map(|value| value.to_os_string()),
+                    );
+                    ((*key).to_string(), old)
+                })
+                .collect()
+        });
+        Self { saved }
+    }
+}
+
+#[cfg(test)]
+impl Drop for TestEnvGuard {
+    fn drop(&mut self) {
+        TEST_OVERRIDES.with(|overrides| {
+            let mut overrides = overrides.borrow_mut();
+            for (key, old) in self.saved.drain(..) {
+                match old {
+                    Some(old) => {
+                        overrides.insert(key, Some(old));
+                    }
+                    None => {
+                        overrides.remove(&key);
+                    }
+                }
+            }
+        });
+    }
+}
+
+/// Clone the current thread's test overrides.
+///
+/// Thread-local overrides do not cross thread boundaries: a thread spawned
+/// while overrides are active starts with an empty map. When the test itself
+/// spawns the thread that must observe the overrides (for example the lock
+/// waiter in `ob::tests::lock_wait_behavior`), capture them here and
+/// re-apply them on the new thread with [`TestEnvGuard::set`]:
+///
+/// ```ignore
+/// let snapshot = snapshot_overrides();
+/// std::thread::spawn(move || {
+///     let scoped: Vec<(&str, Option<&OsStr>)> = snapshot
+///         .iter()
+///         .map(|(key, value)| (key.as_str(), value.as_deref()))
+///         .collect();
+///     let _guard = TestEnvGuard::set(&scoped);
+///     // ... work that reads overridden variables ...
+/// });
+/// ```
+#[cfg(test)]
+pub(crate) fn snapshot_overrides() -> Vec<(String, Option<OsString>)> {
+    TEST_OVERRIDES.with(|overrides| {
+        overrides
+            .borrow()
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect()
+    })
+}
+
+/// Run `f` with one test override set, restoring afterwards. Thin wrapper
+/// over [`TestEnvGuard`] for the common single-key case.
+#[cfg(test)]
+pub(crate) fn with_var<T>(
+    key: &str,
+    value: impl Into<OsString>,
+    f: impl FnOnce() -> T,
+) -> T {
+    let owned = value.into();
+    let _guard = TestEnvGuard::set(&[(key, Some(owned.as_os_str()))]);
+    f()
+}
+
+/// Forward the current thread's test overrides to a child process.
+///
+/// A spawned child inherits process environment, which tests never mutate,
+/// so without this the child would miss every override. Call it on the
+/// [`Command`] before spawning whenever the child (or the code it runs)
+/// reads a variable a test may override. In non-test builds this is a
+/// no-op.
+pub(crate) fn inherit_overrides(command: &mut Command) {
+    #[cfg(test)]
+    {
+        TEST_OVERRIDES.with(|overrides| {
+            for (key, value) in overrides.borrow().iter() {
+                match value {
+                    Some(value) => {
+                        command.env(key, value);
+                    }
+                    None => {
+                        command.env_remove(key);
+                    }
+                }
+            }
+        });
+    }
+    #[cfg(not(test))]
+    {
+        let _ = command;
+    }
+}
+
+/// Pin `TZ=UTC0` for timestamp-determinism tests.
+///
+/// `TZ` is read by libc, not by Rust code, so a thread-local override
+/// cannot pin it; and unlike every other test variable it is always set to
+/// the same value and never restored. Setting it exactly once per process
+/// keeps that behavior while removing the repeated racy mutation.
+#[cfg(test)]
+pub(crate) fn pin_tz_utc0_for_test() {
+    use std::sync::Once;
+    static PIN: Once = Once::new();
+    PIN.call_once(|| {
+        #[allow(clippy::disallowed_methods)]
+        unsafe {
+            env::set_var("TZ", "UTC0");
+        }
+    });
+}
+
 pub fn bob_dir() -> PathBuf {
-    env::var_os("BOB_DIR")
+    var_os("BOB_DIR")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
         .map(|path| expand_tilde(&path))
@@ -16,7 +227,7 @@ pub fn bob_dir() -> PathBuf {
 }
 
 pub fn plugins_dir() -> PathBuf {
-    env::var_os("BOB_PLUGINS_DIR")
+    var_os("BOB_PLUGINS_DIR")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
         .map(|path| expand_tilde(&path))
@@ -26,7 +237,7 @@ pub fn plugins_dir() -> PathBuf {
 }
 
 pub fn plugin_backups_dir() -> PathBuf {
-    env::var_os("BOB_PLUGIN_BACKUPS_DIR")
+    var_os("BOB_PLUGIN_BACKUPS_DIR")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
         .map(|path| expand_tilde(&path))
@@ -36,18 +247,18 @@ pub fn plugin_backups_dir() -> PathBuf {
 }
 
 pub fn home_dir() -> PathBuf {
-    env::var_os("HOME")
+    var_os("HOME")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
 pub fn state_home() -> PathBuf {
-    env::var_os("XDG_STATE_HOME")
+    var_os("XDG_STATE_HOME")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
         .or_else(|| {
-            env::var_os("HOME")
+            var_os("HOME")
                 .filter(|value| !value.is_empty())
                 .map(|home| PathBuf::from(home).join(".local/state"))
         })
@@ -59,11 +270,11 @@ pub fn bob_cli_state_dir() -> PathBuf {
 }
 
 pub fn bob_cli_cache_dir() -> PathBuf {
-    env::var_os("XDG_CACHE_HOME")
+    var_os("XDG_CACHE_HOME")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
         .or_else(|| {
-            env::var_os("HOME")
+            var_os("HOME")
                 .filter(|value| !value.is_empty())
                 .map(|home| PathBuf::from(home).join(".cache"))
         })
@@ -89,14 +300,13 @@ pub fn expand_tilde(path: &Path) -> PathBuf {
 
 pub fn current_datetime() -> NaiveDateTime {
     if let Some(override_value) =
-        env::var("BOB_NOW").ok().filter(|value| !value.is_empty())
+        var("BOB_NOW").ok().filter(|value| !value.is_empty())
         && let Some(parsed) = parse_datetime_override(&override_value)
     {
         return parsed;
     }
 
-    if let Some(date_value) =
-        env::var("DATE").ok().filter(|value| !value.is_empty())
+    if let Some(date_value) = var("DATE").ok().filter(|value| !value.is_empty())
     {
         if let Some(parsed) = parse_datetime_override(&date_value) {
             return parsed;
@@ -190,7 +400,7 @@ pub fn resolve_uv() -> Option<(PathBuf, bool)> {
 
 /// Look `name` up on `PATH`, returning an executable file if found.
 pub fn find_on_path(name: &str) -> Option<PathBuf> {
-    let paths = env::var_os("PATH")?;
+    let paths = var_os("PATH")?;
     env::split_paths(&paths)
         .map(|dir| dir.join(name))
         .find(|path| is_executable_file(path))

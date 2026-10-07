@@ -1,5 +1,6 @@
 //! Vault doctor checks and xlib intake.
 use super::*;
+use crate::native::env as bob_env;
 
 pub(super) fn show_marker(config: &Config, pdf: &Path) -> Result<()> {
     let marker = read_pdf_marker(pdf)?;
@@ -203,7 +204,7 @@ pub(super) fn doctor_vault(config: &Config, no_hooks: bool) -> Result<()> {
 
     // The fetcher checks `BOB_HIGHLIGHTS_CURL` first, so doctor does too.
     if let Some(override_curl) =
-        std::env::var_os(super::fetch::ENV_CURL_OVERRIDE)
+        bob_env::var_os(super::fetch::ENV_CURL_OVERRIDE)
             .filter(|value| !value.is_empty())
             .map(std::path::PathBuf::from)
     {

@@ -150,7 +150,7 @@ fn load_gkeep_routing(no_ref: bool) -> Option<UrlRoutingPolicy> {
 /// racing the rename.
 #[cfg(debug_assertions)]
 fn maybe_run_before_rename_hook() {
-    if let Ok(script) = std::env::var("BOB_GKEEP_TEST_BEFORE_RENAME")
+    if let Ok(script) = bob_env::var("BOB_GKEEP_TEST_BEFORE_RENAME")
         && !script.trim().is_empty()
     {
         let _ = std::process::Command::new("sh")

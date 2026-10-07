@@ -463,9 +463,6 @@ mod tests {
 
     #[test]
     fn arxiv_fetch_metadata_degrades_with_a_warning() {
-        let _guard = super::super::fetch::CURL_TEST_LOCK
-            .lock()
-            .expect("lock curl env");
         let dir = std::env::temp_dir().join(format!(
             "bob-arxiv-test-{}-{}",
             std::process::id(),
@@ -475,12 +472,12 @@ mod tests {
                 .unwrap_or(0),
         ));
         fs::create_dir_all(&dir).expect("create arxiv test dir");
-        unsafe {
-            std::env::set_var(
-                super::super::fetch::ENV_CURL_OVERRIDE,
-                dir.join("no-such-curl-binary"),
-            )
-        };
+        let missing = dir.join("no-such-curl-binary");
+        // Thread-local override: parallel tests never observe it.
+        let _guard = crate::native::env::TestEnvGuard::set(&[(
+            super::super::fetch::ENV_CURL_OVERRIDE,
+            Some(missing.as_os_str()),
+        )]);
         let paper = ArxivPaper::parse("https://arxiv.org/abs/1706.03762")
             .expect("parse paper");
         let (metadata, warning) = fetch_metadata(&paper, &dir, None);
@@ -490,7 +487,6 @@ mod tests {
             warning.contains("1706.03762"),
             "unexpected warning: {warning}"
         );
-        unsafe { std::env::remove_var(super::super::fetch::ENV_CURL_OVERRIDE) };
         fs::remove_dir_all(&dir).ok();
     }
 }

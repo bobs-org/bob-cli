@@ -5,6 +5,7 @@
 //! shell-quotes the `{target}`, `{pdf}`, `{audio}`, and `{title}` values
 //! itself, streams the command's output unchanged, and verifies the MP3.
 use super::*;
+use crate::native::env as bob_env;
 
 pub(super) const ENV_LISTEN_COMMAND: &str = "BOB_HIGHLIGHTS_LISTEN_COMMAND";
 
@@ -215,7 +216,7 @@ impl ListenCommand {
     /// Resolve the configured command: the environment override wins, then
     /// the config file. Blank means unset. A broken config file is an error.
     pub(super) fn resolve() -> Result<Option<Self>> {
-        if let Some(command) = env::var_os(ENV_LISTEN_COMMAND) {
+        if let Some(command) = bob_env::var_os(ENV_LISTEN_COMMAND) {
             let command = command.to_string_lossy().trim().to_string();
             if command.is_empty() {
                 return Ok(None);
@@ -667,10 +668,7 @@ fn quoted_placeholder(template: &str) -> Option<String> {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Mutex;
 
-    /// Serializes the tests that mutate process environment.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
     static SCRATCH_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
     fn test_command(template: &str) -> ListenCommand {
@@ -952,38 +950,18 @@ mod tests {
         );
     }
 
-    fn with_env(
+    fn with_listen_env(
         value: Option<&str>,
         config: Option<&str>,
         check: impl FnOnce(),
     ) {
-        let _guard = ENV_LOCK.lock().expect("env lock");
-        let old_listen = env::var_os(ENV_LISTEN_COMMAND);
-        let old_config = env::var_os("BOB_CONFIG_FILE");
-        // SAFETY: the mutex serializes every environment mutation in this
-        // test binary, and both values are restored before returning.
-        unsafe {
-            match value {
-                Some(value) => env::set_var(ENV_LISTEN_COMMAND, value),
-                None => env::remove_var(ENV_LISTEN_COMMAND),
-            }
-            match config {
-                Some(config) => env::set_var("BOB_CONFIG_FILE", config),
-                None => env::remove_var("BOB_CONFIG_FILE"),
-            }
-        }
+        // Thread-local overrides: never touch process environment, so no
+        // lock is needed and parallel tests cannot observe these values.
+        let _guard = crate::native::env::TestEnvGuard::set(&[
+            (ENV_LISTEN_COMMAND, value.map(std::ffi::OsStr::new)),
+            ("BOB_CONFIG_FILE", config.map(std::ffi::OsStr::new)),
+        ]);
         check();
-        // SAFETY: same serialized context as above.
-        unsafe {
-            match old_listen {
-                Some(value) => env::set_var(ENV_LISTEN_COMMAND, value),
-                None => env::remove_var(ENV_LISTEN_COMMAND),
-            }
-            match old_config {
-                Some(value) => env::set_var("BOB_CONFIG_FILE", value),
-                None => env::remove_var("BOB_CONFIG_FILE"),
-            }
-        }
     }
 
     #[test]
@@ -997,18 +975,22 @@ mod tests {
         .expect("write test config");
         let config = config_path.to_string_lossy().into_owned();
 
-        with_env(Some("from-env {target} -o {audio}"), Some(&config), || {
-            assert_eq!(
-                ListenCommand::resolve()
-                    .expect("resolve succeeds")
-                    .as_ref()
-                    .map(ListenCommand::display),
-                Some("from-env {target} -o {audio}"),
-                "environment must win over the config file"
-            );
-        });
+        with_listen_env(
+            Some("from-env {target} -o {audio}"),
+            Some(&config),
+            || {
+                assert_eq!(
+                    ListenCommand::resolve()
+                        .expect("resolve succeeds")
+                        .as_ref()
+                        .map(ListenCommand::display),
+                    Some("from-env {target} -o {audio}"),
+                    "environment must win over the config file"
+                );
+            },
+        );
 
-        with_env(None, Some(&config), || {
+        with_listen_env(None, Some(&config), || {
             assert_eq!(
                 ListenCommand::resolve()
                     .expect("resolve succeeds")
@@ -1026,14 +1008,14 @@ mod tests {
         let missing = scratch.join("definitely-missing-config.yml");
         let missing = missing.to_string_lossy().into_owned();
 
-        with_env(Some("   "), Some(&missing), || {
+        with_listen_env(Some("   "), Some(&missing), || {
             assert_eq!(
                 ListenCommand::resolve().expect("resolve succeeds"),
                 None,
                 "blank environment must mean unset"
             );
         });
-        with_env(None, Some(&missing), || {
+        with_listen_env(None, Some(&missing), || {
             assert_eq!(
                 ListenCommand::resolve().expect("resolve succeeds"),
                 None,
@@ -1047,7 +1029,7 @@ mod tests {
         let scratch = scratch_dir("require");
         let missing = scratch.join("definitely-missing-config.yml");
         let missing = missing.to_string_lossy().into_owned();
-        with_env(None, Some(&missing), || {
+        with_listen_env(None, Some(&missing), || {
             let error = ListenCommand::require()
                 .expect_err("unconfigured --listen must fail");
             assert!(

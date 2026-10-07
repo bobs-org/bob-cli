@@ -1,7 +1,5 @@
-use std::{
-    env,
-    io::{self, IsTerminal},
-};
+use crate::native::env as bob_env;
+use std::io::{self, IsTerminal};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Styler {
@@ -12,7 +10,7 @@ impl Styler {
     pub(crate) fn detect() -> Self {
         Self {
             color: io::stdout().is_terminal()
-                && env::var_os("NO_COLOR").is_none(),
+                && bob_env::var_os("NO_COLOR").is_none(),
         }
     }
 
@@ -103,7 +101,7 @@ pub(crate) const DEFAULT_TERM_WIDTH: usize = 100;
 /// The terminal width for table layout: `$COLUMNS` when set, else the
 /// default target.
 pub(crate) fn terminal_width() -> usize {
-    std::env::var("COLUMNS")
+    bob_env::var("COLUMNS")
         .ok()
         .and_then(|value| value.trim().parse::<usize>().ok())
         .filter(|width| *width > 0)

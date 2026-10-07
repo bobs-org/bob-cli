@@ -9,6 +9,7 @@
 //! `status -v` liveness failures (an unverified probe is a warning and
 //! stays 0), 2 for usage errors.
 
+use crate::native::env as bob_env;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
@@ -193,14 +194,14 @@ fn resolve_target(
 /// The bash adapter location:
 /// `${BASH_COMPLETION_USER_DIR:-${XDG_DATA_HOME:-~/.local/share}/bash-completion}/completions/bob`.
 fn bash_default_target() -> PathBuf {
-    if let Some(dir) = std::env::var_os("BASH_COMPLETION_USER_DIR")
+    if let Some(dir) = bob_env::var_os("BASH_COMPLETION_USER_DIR")
         .filter(|value| !value.is_empty())
     {
         return env::expand_tilde(Path::new(&dir))
             .join("completions")
             .join(Shell::Bash.file_name());
     }
-    let data_home = std::env::var_os("XDG_DATA_HOME")
+    let data_home = bob_env::var_os("XDG_DATA_HOME")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(|| env::home_dir().join(".local/share"));
@@ -219,7 +220,7 @@ fn default_target(shell: Shell) -> PathBuf {
 }
 
 fn oh_my_zsh_root() -> Option<PathBuf> {
-    if let Some(zsh) = std::env::var_os("ZSH").filter(|value| !value.is_empty())
+    if let Some(zsh) = bob_env::var_os("ZSH").filter(|value| !value.is_empty())
     {
         return Some(env::expand_tilde(Path::new(&zsh)));
     }
@@ -229,7 +230,7 @@ fn oh_my_zsh_root() -> Option<PathBuf> {
 
 fn oh_my_zsh_target(shell: Shell) -> Option<PathBuf> {
     let root = oh_my_zsh_root()?;
-    let custom = std::env::var_os("ZSH_CUSTOM")
+    let custom = bob_env::var_os("ZSH_CUSTOM")
         .filter(|value| !value.is_empty())
         .map(|value| env::expand_tilde(Path::new(&value)))
         .unwrap_or_else(|| root.join("custom"));
@@ -418,7 +419,7 @@ fn explicit_shells(matches: &clap::ArgMatches) -> Vec<Shell> {
 }
 
 fn shell_from_env() -> Option<Shell> {
-    std::env::var_os("SHELL")
+    bob_env::var_os("SHELL")
         .and_then(|value| {
             PathBuf::from(value).file_name().map(|name| name.to_owned())
         })

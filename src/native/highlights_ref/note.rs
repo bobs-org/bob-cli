@@ -1,5 +1,6 @@
 //! Note pipeline, body, and tasks-section insertion.
 use super::*;
+use crate::native::env as bob_env;
 
 pub(super) fn pipeline_metadata(
     config: &Config,
@@ -668,7 +669,7 @@ pub(crate) fn configured_path(
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
         .or_else(|| {
-            env::var_os(env_name)
+            bob_env::var_os(env_name)
                 .filter(|value| !value.is_empty())
                 .map(PathBuf::from)
         })

@@ -4,9 +4,9 @@ use super::{
         render::{candidate_lines, context_label},
         shell::shell_completion,
     },
-    day_file_guard, result_all,
+    result_all,
     task_links::task_link_fixture,
-    with_env, write_file,
+    write_file,
 };
 use crate::native::capture_language::CompletionContext;
 use std::path::Path;
@@ -18,8 +18,8 @@ fn parent_result(
     cursor: usize,
     all_tasks: bool,
 ) -> super::super::model::CaptureCompleteResult {
-    with_env("BOB_DAY_FILE", day_file, || {
-        with_env("BOB_NOW", "2026-09-30 09:02:00", || {
+    crate::native::env::with_var("BOB_DAY_FILE", day_file, || {
+        crate::native::env::with_var("BOB_NOW", "2026-09-30 09:02:00", || {
             super::super::engine::build_result(root, raw, cursor, all_tasks)
                 .expect("build parent-task completion")
         })
@@ -28,7 +28,6 @@ fn parent_result(
 
 #[test]
 fn bare_plus_serves_vault_candidates_and_operator_hints() {
-    let _guard = day_file_guard();
     let temp = super::TempDir::new("bob-cli-capture-complete-parent-task");
     let day_file = task_link_fixture(temp.path());
 
@@ -97,8 +96,8 @@ fn bare_plus_serves_vault_candidates_and_operator_hints() {
 
     // The literal lone plus remains available as a shell marker too, but
     // shell extraction only emits identified rows and never assigns IDs.
-    let shell = with_env("BOB_DAY_FILE", &day_file, || {
-        with_env("BOB_NOW", "2026-09-30 09:02:00", || {
+    let shell = crate::native::env::with_var("BOB_DAY_FILE", &day_file, || {
+        crate::native::env::with_var("BOB_NOW", "2026-09-30 09:02:00", || {
             shell_completion(temp.path(), "+", 1).expect("shell result")
         })
     })
@@ -111,7 +110,6 @@ fn bare_plus_serves_vault_candidates_and_operator_hints() {
 
 #[test]
 fn plus_query_ranks_candidates_and_scoped_descriptors_keep_exact_ranges() {
-    let _guard = day_file_guard();
     let temp =
         super::TempDir::new("bob-cli-capture-complete-parent-task-query");
     let day_file = task_link_fixture(temp.path());
@@ -176,7 +174,6 @@ fn plus_query_ranks_candidates_and_scoped_descriptors_keep_exact_ranges() {
 
 #[test]
 fn vault_catalog_excludes_non_capture_and_terminal_notes() {
-    let _guard = day_file_guard();
     let temp = super::TempDir::new("bob-cli-capture-complete-parent-catalog");
     let day_file = task_link_fixture(temp.path());
 
@@ -202,7 +199,6 @@ fn vault_catalog_excludes_non_capture_and_terminal_notes() {
 
 #[test]
 fn leading_plus_query_refetch_keeps_token_range_and_full_catalog() {
-    let _guard = day_file_guard();
     let temp = super::TempDir::new("bob-cli-capture-complete-parent-refetch");
     let day_file = task_link_fixture(temp.path());
 
@@ -234,7 +230,6 @@ fn leading_plus_query_refetch_keeps_token_range_and_full_catalog() {
 
 #[test]
 fn scoped_missing_and_empty_notes_keep_picker_and_empty_catalog() {
-    let _guard = day_file_guard();
     let temp = super::TempDir::new("bob-cli-capture-complete-parent-empty");
     let _day_file = task_link_fixture(temp.path());
     write_file(&temp.path().join("empty.md"), "---\ntype: [[area]]\n---\n");
@@ -263,7 +258,6 @@ fn scoped_missing_and_empty_notes_keep_picker_and_empty_catalog() {
 
 #[test]
 fn unicode_duplicates_and_queued_pomodoros_stay_in_catalog() {
-    let _guard = day_file_guard();
     let temp = super::TempDir::new("bob-cli-capture-complete-parent-unicode");
     let day_file = task_link_fixture(temp.path());
     write_file(

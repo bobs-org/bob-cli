@@ -1,5 +1,6 @@
 //! Shared types and their inherent impls for highlights_ref.
 use super::*;
+use crate::native::env as bob_env;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Config {
@@ -542,7 +543,7 @@ fn vault_configured_path(
     env_name: &str,
     default_value: &str,
 ) -> PathBuf {
-    let configured = std::env::var_os(env_name)
+    let configured = bob_env::var_os(env_name)
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(default_value));

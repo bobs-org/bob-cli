@@ -9,7 +9,7 @@ use super::{
         render::print_human_success_with_styler,
     },
     active_tasks::active_task_fixture,
-    day_file_guard, result, with_env, write_file, TempDir,
+    result, write_file, TempDir,
 };
 use crate::native::{
     capture_language::CompletionContext, capture_pomodoros,
@@ -43,29 +43,31 @@ fn trailing_hash_fragment_requests_no_completion() {
 
 #[test]
 fn close_items_and_suffixes_request_no_completion() {
-    let _guard = day_file_guard();
     let temp = TempDir::new("bob-cli-capture-complete-close");
     let day_file = active_task_fixture(temp.path());
     // Whole-item `=x`/`=` are actions: empty success everywhere.
     for (raw, cursor) in [("=x", 2), ("=", 1), ("=x more", 3)] {
-        let empty = with_env("BOB_DAY_FILE", &day_file, || {
-            result(temp.path(), raw, cursor)
-        });
+        let empty =
+            crate::native::env::with_var("BOB_DAY_FILE", &day_file, || {
+                result(temp.path(), raw, cursor)
+            });
         assert_eq!(empty.context, None, "{raw}");
         assert_eq!(empty.candidates.len(), 0, "{raw}");
     }
     // Inside a `=x` suffix there is no completion field.
     for raw in ["^sase:deep-fix=x", "Text @sase:deep-fix=x"] {
-        let empty = with_env("BOB_DAY_FILE", &day_file, || {
-            result(temp.path(), raw, raw.len())
-        });
+        let empty =
+            crate::native::env::with_var("BOB_DAY_FILE", &day_file, || {
+                result(temp.path(), raw, raw.len())
+            });
         assert_eq!(empty.context, None, "{raw}");
         assert_eq!(empty.candidates.len(), 0, "{raw}");
     }
     // Before the `=` the link still completes.
     let raw = "^sase:deep-fix=x";
-    let link =
-        with_env("BOB_DAY_FILE", &day_file, || result(temp.path(), raw, 14));
+    let link = crate::native::env::with_var("BOB_DAY_FILE", &day_file, || {
+        result(temp.path(), raw, 14)
+    });
     assert_eq!(link.context, Some(CompletionContext::ActiveTask));
 }
 

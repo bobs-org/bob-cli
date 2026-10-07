@@ -1,7 +1,6 @@
 use super::{
     super::model::{Candidates, Replacement},
-    day_file_guard, result, result_all, with_env, write_file, write_settings,
-    TempDir,
+    result, result_all, write_file, write_settings, TempDir,
 };
 use crate::native::{
     capture_block_ids, capture_language::CompletionContext,
@@ -321,14 +320,13 @@ fn task_section_completion_warns_once_for_an_unresolvable_parent() {
 
 #[test]
 fn hash_after_a_bare_block_id_marker_completes_a_pomodoro_name() {
-    let _guard = day_file_guard();
     let temp = TempDir::new("bob-cli-capture-complete-task-toggle-hash");
     write_file(&temp.path().join("cash.md"), "- [ ] #task Parent ^bar\n");
     let day_file = temp.path().join("2026/20260828.md");
     write_file(&day_file, "## Pomodoros\n- [ ] () — BUGS\n- [ ] ()\n");
 
     let raw = "@cash+bar#bu";
-    let value = with_env("BOB_DAY_FILE", &day_file, || {
+    let value = crate::native::env::with_var("BOB_DAY_FILE", &day_file, || {
         result(temp.path(), raw, raw.len())
     });
 

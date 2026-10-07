@@ -13,6 +13,7 @@
 //! the script text; real rc noise is ignored by parsing only the lines
 //! between `bob-*-start` and `bob-*-end`.
 
+use crate::native::env as bob_env;
 use std::io::Read;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -49,7 +50,7 @@ fn kill_process_group(child: &mut std::process::Child) {
 }
 
 pub(crate) fn probe_timeout_ms() -> u64 {
-    std::env::var("BOB_COMPLETION_PROBE_TIMEOUT_MS")
+    bob_env::var("BOB_COMPLETION_PROBE_TIMEOUT_MS")
         .ok()
         .and_then(|raw| raw.parse::<u64>().ok())
         .filter(|ms| *ms > 0)
@@ -318,7 +319,7 @@ fn complete_function(line: &str) -> Option<&str> {
 
 /// The resolved `bob` on `PATH`, if any.
 pub(crate) fn bob_on_path() -> Option<PathBuf> {
-    let path_var = std::env::var_os("PATH")?;
+    let path_var = bob_env::var_os("PATH")?;
     for dir in std::env::split_paths(&path_var) {
         let candidate = dir.join("bob");
         if candidate.is_file() && is_executable(&candidate) {
@@ -367,17 +368,21 @@ mod tests {
 
     #[test]
     fn timeout_override_falls_back() {
-        unsafe {
-            std::env::set_var("BOB_COMPLETION_PROBE_TIMEOUT_MS", "250");
-        }
+        // Thread-local overrides: parallel tests never observe them.
+        let _guard = crate::native::env::TestEnvGuard::set(&[(
+            "BOB_COMPLETION_PROBE_TIMEOUT_MS",
+            Some(std::ffi::OsStr::new("250")),
+        )]);
         assert_eq!(probe_timeout_ms(), 250);
-        unsafe {
-            std::env::set_var("BOB_COMPLETION_PROBE_TIMEOUT_MS", "bogus");
-        }
+        let _guard = crate::native::env::TestEnvGuard::set(&[(
+            "BOB_COMPLETION_PROBE_TIMEOUT_MS",
+            Some(std::ffi::OsStr::new("bogus")),
+        )]);
         assert_eq!(probe_timeout_ms(), DEFAULT_PROBE_TIMEOUT_MS);
-        unsafe {
-            std::env::remove_var("BOB_COMPLETION_PROBE_TIMEOUT_MS");
-        }
+        let _guard = crate::native::env::TestEnvGuard::set(&[(
+            "BOB_COMPLETION_PROBE_TIMEOUT_MS",
+            None,
+        )]);
         assert_eq!(probe_timeout_ms(), DEFAULT_PROBE_TIMEOUT_MS);
     }
 }

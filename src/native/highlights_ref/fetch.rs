@@ -11,6 +11,7 @@
 //! failures: a 404 is routing information, while a curl exit code is a
 //! transport failure.
 
+use crate::native::env as bob_env;
 use std::{
     env, fs,
     net::{IpAddr, ToSocketAddrs},
@@ -42,12 +43,12 @@ pub(super) const PDF_MAX_BYTES: u64 = 95 * 1024 * 1024;
 /// Maximum redirect hops followed before giving up.
 pub(super) const MAX_REDIRECTS: usize = 10;
 
-/// Serializes tests that point `BOB_HIGHLIGHTS_CURL` at fake scripts:
-/// environment variables are process-global, so parallel tests must not
-/// race on the same key.
-#[cfg(test)]
-pub(super) static CURL_TEST_LOCK: std::sync::Mutex<()> =
-    std::sync::Mutex::new(());
+// Tests below point `BOB_HIGHLIGHTS_CURL` at fake scripts through
+// thread-local overrides (see `crate::native::env`), so they need no
+// serializing lock: each test's values are invisible to the others.
+// The fake script itself runs as a child process and only inherits
+// process environment, so `curl_one_hop` forwards the overrides
+// explicitly with `crate::native::env::inherit_overrides`.
 
 /// What one `curl` invocation returned, after redirects were followed.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -115,7 +116,7 @@ pub(super) fn fetch_url(
 /// The `curl` program: `BOB_HIGHLIGHTS_CURL` when set and non-empty,
 /// otherwise plain `curl` resolved through `PATH`.
 fn curl_program() -> String {
-    env::var(ENV_CURL_OVERRIDE)
+    bob_env::var(ENV_CURL_OVERRIDE)
         .ok()
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "curl".to_string())
@@ -224,7 +225,7 @@ fn resolve_host_addresses(
     host: &str,
     port: u16,
 ) -> std::result::Result<Vec<IpAddr>, FetchError> {
-    if let Some(table) = env::var(ENV_RESOLVE_OVERRIDE)
+    if let Some(table) = bob_env::var(ENV_RESOLVE_OVERRIDE)
         .ok()
         .filter(|value| !value.is_empty())
     {
@@ -260,7 +261,12 @@ fn curl_one_hop(
     max_time_secs: u64,
     pin: &ResolvePin,
 ) -> std::result::Result<(u16, String, String), FetchError> {
-    let output = Command::new(curl)
+    let mut command = Command::new(curl);
+    // Tests point the fake curl at per-test directories through
+    // thread-local overrides, which the child cannot inherit: forward
+    // them explicitly (`FAKE_CURL_ROOT`, `FAKE_CURL_ARGV_LOG`).
+    crate::native::env::inherit_overrides(&mut command);
+    let output = command
         .arg("-q")
         .arg("-sS")
         .arg("--proto")
@@ -414,12 +420,19 @@ esac
 
     #[test]
     fn fetch_covers_redirects_statuses_and_exit_codes() {
-        let _guard = CURL_TEST_LOCK.lock().expect("lock curl env");
         let dir = test_dir("cases");
         let fake = write_fake_curl(&dir);
-        unsafe { env::set_var("FAKE_CURL_ROOT", &dir) };
-        unsafe { env::set_var(ENV_CURL_OVERRIDE, &fake) };
-        unsafe { env::set_var(ENV_RESOLVE_OVERRIDE, "*=203.0.113.1") };
+        // Thread-local overrides: parallel tests never observe them. The
+        // fake script sees them because `curl_one_hop` forwards overrides
+        // to the child process explicitly.
+        let _guard = crate::native::env::TestEnvGuard::set(&[
+            ("FAKE_CURL_ROOT", Some(dir.as_os_str())),
+            (ENV_CURL_OVERRIDE, Some(fake.as_os_str())),
+            (
+                ENV_RESOLVE_OVERRIDE,
+                Some(std::ffi::OsStr::new("*=203.0.113.1")),
+            ),
+        ]);
 
         // A plain 200 PDF download.
         let dest = dir.join("paper.pdf.out");
@@ -497,24 +510,23 @@ esac
             error.message
         );
 
-        unsafe { env::remove_var(ENV_CURL_OVERRIDE) };
-        unsafe { env::remove_var(ENV_RESOLVE_OVERRIDE) };
-        unsafe { env::remove_var("FAKE_CURL_ROOT") };
         fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn curl_passes_q_as_first_argument() {
-        let _guard = CURL_TEST_LOCK.lock().expect("lock curl env");
         let dir = test_dir("curl-q");
         let fake = write_fake_curl(&dir);
         let argv_log = dir.join("argv.log");
-        unsafe { env::set_var("FAKE_CURL_ROOT", &dir) };
-        unsafe { env::set_var(ENV_CURL_OVERRIDE, &fake) };
-        unsafe { env::set_var(ENV_RESOLVE_OVERRIDE, "*=203.0.113.1") };
-        unsafe {
-            env::set_var("FAKE_CURL_ARGV_LOG", &argv_log);
-        }
+        let _guard = crate::native::env::TestEnvGuard::set(&[
+            ("FAKE_CURL_ROOT", Some(dir.as_os_str())),
+            (ENV_CURL_OVERRIDE, Some(fake.as_os_str())),
+            (
+                ENV_RESOLVE_OVERRIDE,
+                Some(std::ffi::OsStr::new("*=203.0.113.1")),
+            ),
+            ("FAKE_CURL_ARGV_LOG", Some(argv_log.as_os_str())),
+        ]);
 
         let dest = dir.join("out.pdf");
         fetch_url("https://example.com/paper.pdf", &dest, 30, None)
@@ -526,21 +538,20 @@ esac
             "curl's first argument must be -q so ~/.curlrc cannot inject -L:\n{logged}"
         );
 
-        unsafe { env::remove_var(ENV_CURL_OVERRIDE) };
-        unsafe { env::remove_var(ENV_RESOLVE_OVERRIDE) };
-        unsafe { env::remove_var("FAKE_CURL_ROOT") };
-        unsafe { env::remove_var("FAKE_CURL_ARGV_LOG") };
         fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn fetch_reports_a_missing_curl_with_its_hint() {
-        let _guard = CURL_TEST_LOCK.lock().expect("lock curl env");
         let dir = test_dir("missing-curl");
-        unsafe {
-            env::set_var(ENV_CURL_OVERRIDE, dir.join("no-such-curl-binary"))
-        };
-        unsafe { env::set_var(ENV_RESOLVE_OVERRIDE, "*=203.0.113.1") };
+        let missing = dir.join("no-such-curl-binary");
+        let _guard = crate::native::env::TestEnvGuard::set(&[
+            (ENV_CURL_OVERRIDE, Some(missing.as_os_str())),
+            (
+                ENV_RESOLVE_OVERRIDE,
+                Some(std::ffi::OsStr::new("*=203.0.113.1")),
+            ),
+        ]);
         let error = fetch_url(
             "https://example.com/paper.pdf",
             &dir.join("out"),
@@ -557,80 +568,91 @@ esac
             error.hint.as_deref(),
             Some("install curl or set BOB_HIGHLIGHTS_CURL"),
         );
-        unsafe { env::remove_var(ENV_CURL_OVERRIDE) };
-        unsafe { env::remove_var(ENV_RESOLVE_OVERRIDE) };
         fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn fetch_refuses_private_resolved_addresses_and_unlisted_hosts() {
-        let _guard = CURL_TEST_LOCK.lock().expect("lock curl env");
         let dir = test_dir("resolve-check");
         let fake = write_fake_curl(&dir);
-        unsafe { env::set_var("FAKE_CURL_ROOT", &dir) };
-        unsafe { env::set_var(ENV_CURL_OVERRIDE, &fake) };
+        let _guard = crate::native::env::TestEnvGuard::set(&[
+            ("FAKE_CURL_ROOT", Some(dir.as_os_str())),
+            (ENV_CURL_OVERRIDE, Some(fake.as_os_str())),
+        ]);
 
         // A host resolving to a private address is refused before curl
         // runs, with the resolved address in the message.
-        unsafe {
-            env::set_var(
+        {
+            let _table = crate::native::env::TestEnvGuard::set(&[(
                 ENV_RESOLVE_OVERRIDE,
-                "example.com=10.0.0.1,*=203.0.113.1",
-            )
-        };
-        let dest = dir.join("private-resolve.out");
-        let error = fetch_url("https://example.com/paper.pdf", &dest, 30, None)
-            .expect_err("private resolution must be refused");
-        assert!(
-            error.message.contains("resolves to a private address")
-                && error.message.contains("10.0.0.1"),
-            "unexpected message: {}",
-            error.message
-        );
+                Some(std::ffi::OsStr::new(
+                    "example.com=10.0.0.1,*=203.0.113.1",
+                )),
+            )]);
+            let dest = dir.join("private-resolve.out");
+            let error =
+                fetch_url("https://example.com/paper.pdf", &dest, 30, None)
+                    .expect_err("private resolution must be refused");
+            assert!(
+                error.message.contains("resolves to a private address")
+                    && error.message.contains("10.0.0.1"),
+                "unexpected message: {}",
+                error.message
+            );
+        }
 
         // Mapped private literals are refused by the same predicate.
-        unsafe { env::set_var(ENV_RESOLVE_OVERRIDE, "*=::ffff:10.0.0.1") };
-        let error = fetch_url("https://example.com/paper.pdf", &dest, 30, None)
-            .expect_err("mapped private resolution must be refused");
-        assert!(
-            error.message.contains("resolves to a private address"),
-            "unexpected message: {}",
-            error.message
-        );
+        {
+            let _table = crate::native::env::TestEnvGuard::set(&[(
+                ENV_RESOLVE_OVERRIDE,
+                Some(std::ffi::OsStr::new("*=::ffff:10.0.0.1")),
+            )]);
+            let dest = dir.join("private-resolve.out");
+            let error =
+                fetch_url("https://example.com/paper.pdf", &dest, 30, None)
+                    .expect_err("mapped private resolution must be refused");
+            assert!(
+                error.message.contains("resolves to a private address"),
+                "unexpected message: {}",
+                error.message
+            );
+        }
 
         // When the table is set, an unlisted host fails as a network
         // error without touching DNS.
-        unsafe {
-            env::set_var(ENV_RESOLVE_OVERRIDE, "other.example=203.0.113.1")
-        };
-        let error = fetch_url("https://example.com/paper.pdf", &dest, 30, None)
-            .expect_err("unlisted host must fail");
-        assert!(
-            error.message.contains("cannot resolve host"),
-            "unexpected message: {}",
-            error.message
-        );
+        {
+            let _table = crate::native::env::TestEnvGuard::set(&[(
+                ENV_RESOLVE_OVERRIDE,
+                Some(std::ffi::OsStr::new("other.example=203.0.113.1")),
+            )]);
+            let dest = dir.join("private-resolve.out");
+            let error =
+                fetch_url("https://example.com/paper.pdf", &dest, 30, None)
+                    .expect_err("unlisted host must fail");
+            assert!(
+                error.message.contains("cannot resolve host"),
+                "unexpected message: {}",
+                error.message
+            );
+        }
 
-        unsafe { env::remove_var(ENV_CURL_OVERRIDE) };
-        unsafe { env::remove_var(ENV_RESOLVE_OVERRIDE) };
-        unsafe { env::remove_var("FAKE_CURL_ROOT") };
         fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn curl_pins_the_checked_address_with_resolve() {
-        let _guard = CURL_TEST_LOCK.lock().expect("lock curl env");
         let dir = test_dir("curl-resolve-pin");
         let fake = write_fake_curl(&dir);
         let argv_log = dir.join("argv.log");
-        unsafe { env::set_var("FAKE_CURL_ROOT", &dir) };
-        unsafe { env::set_var(ENV_CURL_OVERRIDE, &fake) };
-        unsafe {
-            env::set_var("FAKE_CURL_ARGV_LOG", &argv_log);
-        }
-        unsafe {
-            env::set_var(ENV_RESOLVE_OVERRIDE, "example.com=93.184.216.34")
-        };
+        let _guard = crate::native::env::TestEnvGuard::set(&[
+            ("FAKE_CURL_ROOT", Some(dir.as_os_str())),
+            (ENV_CURL_OVERRIDE, Some(fake.as_os_str())),
+            ("FAKE_CURL_ARGV_LOG", Some(argv_log.as_os_str())),
+            (
+                ENV_RESOLVE_OVERRIDE,
+                Some(std::ffi::OsStr::new("example.com=93.184.216.34")),
+            ),
+        ]);
 
         let dest = dir.join("out.pdf");
         fetch_url("https://example.com/paper.pdf", &dest, 30, None)
@@ -652,10 +674,6 @@ esac
             "the request URL must still be passed:\n{logged}"
         );
 
-        unsafe { env::remove_var(ENV_CURL_OVERRIDE) };
-        unsafe { env::remove_var(ENV_RESOLVE_OVERRIDE) };
-        unsafe { env::remove_var("FAKE_CURL_ROOT") };
-        unsafe { env::remove_var("FAKE_CURL_ARGV_LOG") };
         fs::remove_dir_all(&dir).ok();
     }
 }

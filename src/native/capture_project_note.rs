@@ -488,11 +488,11 @@ mod tests {
     }
 
     fn pin_utc() {
-        // Keep the rendered `created` offset deterministic. Every test in this
-        // module pins the same value, so concurrent tests cannot disagree.
-        unsafe {
-            std::env::set_var("TZ", "UTC0");
-        }
+        // Keep the rendered `created` offset deterministic. `TZ` is read
+        // by libc, so it cannot be a thread-local override; every test
+        // pins the same value exactly once per process instead of
+        // racing on repeated process-global writes.
+        crate::native::env::pin_tz_utc0_for_test();
     }
 
     #[test]

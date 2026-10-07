@@ -1,5 +1,4 @@
 use std::{
-    env,
     ffi::OsString,
     path::{Path, PathBuf},
 };
@@ -18,8 +17,8 @@ const CONFIG_RELATIVE_PATH: &str = "bob/config.yml";
 
 pub(crate) fn config_path() -> PathBuf {
     resolve_config_path(
-        env::var_os("BOB_CONFIG_FILE"),
-        env::var_os("XDG_CONFIG_HOME"),
+        bob_env::var_os("BOB_CONFIG_FILE"),
+        bob_env::var_os("XDG_CONFIG_HOME"),
         bob_env::home_dir(),
     )
 }
@@ -253,7 +252,7 @@ fn fnv_feed(hash: u64, byte: u8) -> u64 {
 }
 
 pub(crate) fn roll_seed() -> u64 {
-    if let Some(seed) = env::var("BOB_PRIORITY_ROLL_SEED")
+    if let Some(seed) = bob_env::var("BOB_PRIORITY_ROLL_SEED")
         .ok()
         .and_then(|value| value.trim().parse::<u64>().ok())
     {

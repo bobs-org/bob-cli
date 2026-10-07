@@ -1,5 +1,6 @@
 //! Companion audio discovery for Highlights scan and intake.
 use super::*;
+use crate::native::env as bob_env;
 
 pub(super) const AUDIO_COMPANION_EXTENSIONS: &[&str] =
     &["mp3", "m4a", "ogg", "opus"];
@@ -182,7 +183,7 @@ fn insert_lines_before(
 /// then `~/.local/share/sase-listen/library`.
 pub(super) fn audio_library_root(configured: Option<&str>) -> PathBuf {
     if let Some(value) =
-        env::var_os(ENV_AUDIO_LIBRARY).filter(|value| !value.is_empty())
+        bob_env::var_os(ENV_AUDIO_LIBRARY).filter(|value| !value.is_empty())
     {
         return bob_env::expand_tilde(&PathBuf::from(value));
     }
@@ -192,7 +193,7 @@ pub(super) fn audio_library_root(configured: Option<&str>) -> PathBuf {
         return bob_env::expand_tilde(Path::new(value));
     }
     if let Some(xdg) =
-        env::var_os("XDG_DATA_HOME").filter(|value| !value.is_empty())
+        bob_env::var_os("XDG_DATA_HOME").filter(|value| !value.is_empty())
     {
         return PathBuf::from(xdg).join("sase-listen/library");
     }

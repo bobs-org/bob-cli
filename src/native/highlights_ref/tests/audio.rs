@@ -388,63 +388,55 @@ fn script_hash_lookup_prefers_newest_created_at() {
 
 #[test]
 fn audio_library_root_prefers_env_then_config_then_xdg_then_home() {
-    let prior_audio = std::env::var_os(super::ENV_AUDIO_LIBRARY);
-    let prior_xdg = std::env::var_os("XDG_DATA_HOME");
-    let prior_home = std::env::var_os("HOME");
-
-    unsafe {
-        std::env::set_var(super::ENV_AUDIO_LIBRARY, "/tmp/env-library");
-    }
+    use std::ffi::OsStr;
+    // Thread-local overrides: parallel tests never observe them, and
+    // unsets apply even when the ambient process environment has the
+    // variable set.
+    let _guard = crate::native::env::TestEnvGuard::set(&[(
+        super::ENV_AUDIO_LIBRARY,
+        Some(OsStr::new("/tmp/env-library")),
+    )]);
     assert_eq!(
         super::audio_library_root(Some("/tmp/config-library")),
         PathBuf::from("/tmp/env-library")
     );
-    unsafe {
-        std::env::remove_var(super::ENV_AUDIO_LIBRARY);
+
+    {
+        let _guard = crate::native::env::TestEnvGuard::set(&[(
+            super::ENV_AUDIO_LIBRARY,
+            None,
+        )]);
+        assert_eq!(
+            super::audio_library_root(Some("  /tmp/config-library  ")),
+            PathBuf::from("/tmp/config-library")
+        );
+        assert_eq!(
+            super::audio_library_root(Some("")),
+            super::audio_library_root(None)
+        );
     }
 
-    assert_eq!(
-        super::audio_library_root(Some("  /tmp/config-library  ")),
-        PathBuf::from("/tmp/config-library")
-    );
-    assert_eq!(
-        super::audio_library_root(Some("")),
-        super::audio_library_root(None)
-    );
-
-    unsafe {
-        std::env::set_var("XDG_DATA_HOME", "/tmp/xdg-data");
+    {
+        let _guard = crate::native::env::TestEnvGuard::set(&[
+            (super::ENV_AUDIO_LIBRARY, None),
+            ("XDG_DATA_HOME", Some(OsStr::new("/tmp/xdg-data"))),
+        ]);
+        assert_eq!(
+            super::audio_library_root(None),
+            PathBuf::from("/tmp/xdg-data/sase-listen/library")
+        );
     }
-    assert_eq!(
-        super::audio_library_root(None),
-        PathBuf::from("/tmp/xdg-data/sase-listen/library")
-    );
 
-    unsafe {
-        std::env::remove_var("XDG_DATA_HOME");
-        std::env::set_var("HOME", "/tmp/fake-home");
-    }
-    assert_eq!(
-        super::audio_library_root(None),
-        PathBuf::from("/tmp/fake-home/.local/share/sase-listen/library")
-    );
-
-    unsafe {
-        if let Some(value) = prior_audio {
-            std::env::set_var(super::ENV_AUDIO_LIBRARY, value);
-        } else {
-            std::env::remove_var(super::ENV_AUDIO_LIBRARY);
-        }
-        if let Some(value) = prior_xdg {
-            std::env::set_var("XDG_DATA_HOME", value);
-        } else {
-            std::env::remove_var("XDG_DATA_HOME");
-        }
-        if let Some(value) = prior_home {
-            std::env::set_var("HOME", value);
-        } else {
-            std::env::remove_var("HOME");
-        }
+    {
+        let _guard = crate::native::env::TestEnvGuard::set(&[
+            (super::ENV_AUDIO_LIBRARY, None),
+            ("XDG_DATA_HOME", None),
+            ("HOME", Some(OsStr::new("/tmp/fake-home"))),
+        ]);
+        assert_eq!(
+            super::audio_library_root(None),
+            PathBuf::from("/tmp/fake-home/.local/share/sase-listen/library")
+        );
     }
 }
 

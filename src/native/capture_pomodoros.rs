@@ -1197,7 +1197,7 @@ mod tests {
         assert!(missing.warnings[0].contains("does not exist"));
 
         write_file(&temp.path().join("2026/20260828.md"), "# Day\n");
-        let sectionless = with_env(
+        let sectionless = crate::native::env::with_var(
             "BOB_DAY_FILE",
             temp.path().join("2026/20260828.md"),
             || {
@@ -1272,25 +1272,6 @@ mod tests {
         fs::create_dir_all(path.parent().expect("file parent"))
             .expect("create file parent");
         fs::write(path, contents).expect("write file");
-    }
-
-    fn with_env<T>(
-        key: &str,
-        value: impl Into<OsString>,
-        f: impl FnOnce() -> T,
-    ) -> T {
-        let old = std::env::var_os(key);
-        unsafe {
-            std::env::set_var(key, value.into());
-        }
-        let result = f();
-        unsafe {
-            match old {
-                Some(old) => std::env::set_var(key, old),
-                None => std::env::remove_var(key),
-            }
-        }
-        result
     }
 
     struct TempDir {

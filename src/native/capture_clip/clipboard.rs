@@ -1,11 +1,10 @@
 use std::{
-    env, io,
+    io,
     process::{Command, Output},
 };
 
 #[cfg(target_os = "macos")]
 use super::clipy::read_clipy_history;
-#[cfg(target_os = "macos")]
 use crate::native::env as bob_env;
 
 pub(crate) fn read_clipboard() -> Result<String, String> {
@@ -56,7 +55,7 @@ pub(super) fn merge_history_candidates(
 }
 
 fn read_history_candidates(count: usize) -> Result<Vec<String>, String> {
-    if let Some(command) = env::var("BOB_CLIPBOARD_HISTORY_CMD")
+    if let Some(command) = bob_env::var("BOB_CLIPBOARD_HISTORY_CMD")
         .ok()
         .filter(|value| !value.trim().is_empty())
     {
@@ -99,7 +98,7 @@ fn read_history_command(
 }
 
 fn clipboard_command_output() -> Result<Output, String> {
-    if let Some(command) = env::var("BOB_CLIPBOARD_CMD")
+    if let Some(command) = bob_env::var("BOB_CLIPBOARD_CMD")
         .ok()
         .filter(|value| !value.trim().is_empty())
     {
@@ -117,7 +116,7 @@ fn clipboard_command_output() -> Result<Output, String> {
 
     #[cfg(target_os = "linux")]
     {
-        if env::var_os("WAYLAND_DISPLAY").is_some() {
+        if bob_env::var_os("WAYLAND_DISPLAY").is_some() {
             return run_required_command(
                 "wl-paste",
                 &["--no-newline", "--type", "text"],
@@ -125,7 +124,7 @@ fn clipboard_command_output() -> Result<Output, String> {
             );
         }
 
-        if env::var_os("DISPLAY").is_some() {
+        if bob_env::var_os("DISPLAY").is_some() {
             match run_command("xclip", &["-selection", "clipboard", "-o"]) {
                 Ok(output) => return require_success(output, "xclip"),
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {
@@ -143,7 +142,7 @@ fn clipboard_command_output() -> Result<Output, String> {
     }
 
     #[cfg(not(target_os = "macos"))]
-    if env::var_os("TMUX").is_some() {
+    if bob_env::var_os("TMUX").is_some() {
         return run_required_command(
             "tmux",
             &["show-buffer"],

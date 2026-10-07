@@ -1,5 +1,4 @@
 use std::{
-    env,
     ffi::{OsStr, OsString},
     fs, io,
     ops::Range,
@@ -250,7 +249,7 @@ fn day_file() -> PathBuf {
 }
 
 pub(crate) fn day_file_for(bob_dir: &Path) -> PathBuf {
-    env::var_os("BOB_DAY_FILE")
+    bob_env::var_os("BOB_DAY_FILE")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(|| bob_env::default_day_file(bob_dir))
