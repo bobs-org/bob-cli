@@ -14,12 +14,13 @@ use serde_json::json;
 use super::{
     capture_language::{
         self, AuthoredSubBullet, DependencyEntry, DependencyTarget, Diagnostic,
-        EditorGlobalDestination, EditorItemParse, EditorMode, Need,
-        PomodoroAdjustSpec, PomodoroCloseSpec, PomodoroShiftSpec,
-        PomodoroStartSpec, ProjectTaskId, Severity, Span,
+        EditorGlobalDestination, EditorItemParse, EditorMode,
+        EditorParseOptions, Need, PomodoroAdjustSpec, PomodoroCloseSpec,
+        PomodoroShiftSpec, PomodoroStartSpec, ProjectTaskId, Severity, Span,
     },
     capture_links,
     style::Styler,
+    url_routing::UrlRoutingPolicy,
 };
 
 const COMMAND_NAME: &str = "bob capture-parse";
@@ -49,9 +50,28 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
         );
     }
 
-    let result = CaptureParseResult::new(raw_text);
+    // A config error stays silent here and keeps parse JSON
+    // unchanged: routing turns off and the URL stays a task.
+    let no_ref = matches.get_flag("no-ref");
+    let policy = load_parse_routing(no_ref);
+    let options = EditorParseOptions {
+        url_routing: policy.as_ref(),
+        has_global_destination: false,
+    };
+    let result = CaptureParseResult::new(raw_text, &options);
     print_success(&result, output_format);
     0
+}
+
+/// Load the URL routing policy for `capture-parse`. `-R` disables
+/// routing; a config error or a `capture: false` toggle does too.
+fn load_parse_routing(no_ref: bool) -> Option<UrlRoutingPolicy> {
+    if no_ref {
+        return None;
+    }
+    UrlRoutingPolicy::load()
+        .ok()
+        .filter(|policy| policy.capture)
 }
 
 fn print_clap_error(error: clap::Error) -> i32 {
@@ -294,7 +314,16 @@ stream.",
         .disable_help_flag(true)
         .arg(format_arg())
         .arg(help_arg())
+        .arg(no_ref_arg())
         .arg(text_arg())
+}
+
+fn no_ref_arg() -> Arg {
+    Arg::new("no-ref")
+        .long("no-ref")
+        .short('R')
+        .action(ArgAction::SetTrue)
+        .help("Keep bare links as tasks instead of reporting them as reference items")
 }
 
 fn format_arg() -> Arg {
@@ -523,8 +552,8 @@ struct SourceRange {
 }
 
 impl CaptureParseResult {
-    fn new(input: String) -> Self {
-        let parse = capture_language::parse_for_editor(&input);
+    fn new(input: String, options: &EditorParseOptions<'_>) -> Self {
+        let parse = capture_language::parse_for_editor_with(&input, options);
         let spans =
             merge_spans(parse.spans, capture_links::wikilink_spans(&input));
         let items = parse_items(&parse.items);
@@ -1088,7 +1117,10 @@ mod tests {
     use super::*;
 
     fn parse(input: &str) -> CaptureParseResult {
-        CaptureParseResult::new(input.to_string())
+        CaptureParseResult::new(
+            input.to_string(),
+            &EditorParseOptions::routing_off(),
+        )
     }
 
     fn json(input: &str) -> serde_json::Value {

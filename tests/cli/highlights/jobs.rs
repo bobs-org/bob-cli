@@ -258,11 +258,13 @@ fn ref_jobs_fallback_bytes_match_capture_twin_vault() {
     for vault in [&vault_a, &vault_b] {
         fs::create_dir_all(vault).expect("create vault");
     }
-    // Routing is still off in production, so capture writes the task.
+    // Routing is on in production; `-R` recovers the routing-off
+    // task bytes the fallback must match.
     let captured = bob_command()
         .arg("capture")
         .arg("-b")
         .arg(&vault_a)
+        .arg("-R")
         .arg(ARTICLE_URL)
         .env("BOB_NOW", "2026-10-07 12:00:00")
         .output()

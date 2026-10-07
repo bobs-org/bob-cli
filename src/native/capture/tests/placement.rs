@@ -339,6 +339,7 @@ fn json_success_shape_is_stable() {
             pomodoro_close: None,
             dependency_update: None,
             task_complete: None,
+            r#ref: None,
             toggle_task_description: None,
         }],
         None,

@@ -2227,6 +2227,7 @@ pub(super) fn plan_dependency_only_item(
             dependency_update: Some(summary),
             task_complete: None,
             toggle_task_description: None,
+            r#ref: None,
         },
         clip_plan: None,
         pomodoro_refs: Vec::new(),

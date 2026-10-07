@@ -176,7 +176,8 @@ separate steps:
 1. **Capture** with `bob capture` or Bob Mac Capture (the macOS panel that
    calls the same commands). Tasks land in `mac_inbox.md` unless an `@route`
    token sends them to another note; scheduled checkbox-bearing captures start
-   Blocked (`[?]`).
+   Blocked (`[?]`). A bare link queues for the reading queue instead
+   (`-R` keeps it a task).
 2. **Review and choose work** with the read-only reports `bob plan`,
    `bob freshness`, and `bob ready`; confirm or revise due tasks in Obsidian.
    After time away, preview the overdue backlog with

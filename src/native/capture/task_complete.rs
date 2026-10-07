@@ -406,6 +406,7 @@ pub(super) fn plan_task_complete_item(
             pomodoro_close: None,
             dependency_update: None,
             toggle_task_description: None,
+            r#ref: None,
             task_complete: Some(summary),
         },
         clip_plan: None,
@@ -539,6 +540,7 @@ fn already_done_item(
             pomodoro_close: None,
             dependency_update: None,
             toggle_task_description: None,
+            r#ref: None,
             task_complete: Some(TaskCompleteSummaryJson {
                 raw: raw.to_string(),
                 note: note.to_string(),

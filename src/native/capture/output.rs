@@ -13,6 +13,54 @@ pub(crate) enum Placement {
     Started,
     Updated,
     Completed,
+    Queued,
+    Unchanged,
+}
+
+/// Additive `ref` object on a reference item result: the classified
+/// URL, its offline library verdict, the staged job (real runs that
+/// queued only), and the inbox fallback (queued items only).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct RefItemJson {
+    pub(super) url: String,
+    pub(super) cleaned_url: String,
+    pub(super) dedupe_key: String,
+    pub(super) display: String,
+    pub(super) route_hint: &'static str,
+    pub(super) library: RefLibraryJson,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) job: Option<RefJobJson>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) fallback: Option<RefFallbackJson>,
+}
+
+/// Offline library verdict on a reference item.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct RefLibraryJson {
+    pub(super) verdict: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) reading_state: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) message: Option<String>,
+}
+
+/// Staged ref job on a real run that queued the link.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct RefJobJson {
+    pub(super) id: String,
+    pub(super) state: &'static str,
+}
+
+/// Inbox fallback on a queued reference item: where the task goes
+/// when the background clip fails.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct RefFallbackJson {
+    pub(super) relative_target: String,
+    pub(super) task_line: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -310,6 +358,8 @@ pub(super) struct CaptureItemResult {
     pub(super) dependency_update: Option<DependencyUpdateJson>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) task_complete: Option<TaskCompleteSummaryJson>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) r#ref: Option<RefItemJson>,
     #[serde(skip)]
     pub(super) toggle_task_description: Option<String>,
 }
@@ -570,6 +620,88 @@ pub(super) fn print_global_destination_summary(
     }
 }
 
+/// Human lines for a reference item, matching the reading-queue
+/// wording table: a queued headline names the display URL, an
+/// unchanged headline names the library path or display URL, and one
+/// dim detail line says what happens next.
+pub(super) fn print_human_ref_item_success(
+    result: &CaptureItemResult,
+    reference: &RefItemJson,
+    styler: &Styler,
+    prefix: &str,
+    ordinal: &str,
+) {
+    let queued = matches!(result.placement, Placement::Queued);
+    let (verb, subject) = match reference.library.verdict {
+        "in_library" => (
+            "already in library",
+            styler.cyan(
+                reference
+                    .library
+                    .path
+                    .as_deref()
+                    .unwrap_or(&reference.display),
+            ),
+        ),
+        "in_intake" => (
+            "already queued",
+            styler.cyan(
+                reference
+                    .library
+                    .path
+                    .as_deref()
+                    .unwrap_or(&reference.display),
+            ),
+        ),
+        "clipping" => ("already clipping", styler.cyan(&reference.display)),
+        "duplicate" => ("duplicate", styler.cyan(&reference.display)),
+        _ if queued && result.dry_run => (
+            "would queue",
+            styler.cyan(&format!("{} → reading queue", reference.display)),
+        ),
+        _ => (
+            "queued",
+            styler.cyan(&format!("{} → reading queue", reference.display)),
+        ),
+    };
+    println!("{prefix} {verb}  {ordinal}{subject}");
+    let detail = match reference.library.verdict {
+        "in_library" => match reference.library.title.as_deref() {
+            Some(title) => match reference.library.reading_state.as_deref() {
+                Some(state) => format!("{title} · {state}"),
+                None => title.to_string(),
+            },
+            None => reference
+                .library
+                .path
+                .clone()
+                .unwrap_or_else(|| reference.display.clone()),
+        },
+        "in_intake" => "waiting for bob ref scan".to_string(),
+        "clipping" => {
+            "a pending ref job has this link · bob ref jobs".to_string()
+        }
+        "duplicate" => reference
+            .library
+            .message
+            .clone()
+            .unwrap_or_else(|| "same link as an earlier item".to_string()),
+        "legacy" => format!(
+            "in your library as a legacy note ({}) · a fresh copy will be clipped",
+            reference.library.path.as_deref().unwrap_or("?"),
+        ),
+        "unknown" => format!(
+            "library check unavailable: {} · the clip still dedupes",
+            reference.library.message.as_deref().unwrap_or("unknown error"),
+        ),
+        _ if result.dry_run => {
+            "new to your library · clips in the background".to_string()
+        }
+        _ => "clipping in the background · bob ref jobs".to_string(),
+    };
+    println!("  {}", styler.dim(&detail));
+}
+
 pub(super) fn print_human_item_success(
     result: &CaptureItemResult,
     ordinal: Option<(usize, usize)>,
@@ -676,6 +808,14 @@ pub(super) fn print_human_item_success(
             );
             return;
         }
+    }
+    if result.kind == "ref"
+        && let Some(reference) = result.r#ref.as_ref()
+    {
+        print_human_ref_item_success(
+            result, reference, &styler, &prefix, &ordinal,
+        );
+        return;
     }
     let verb = if result.dry_run {
         "would capture"

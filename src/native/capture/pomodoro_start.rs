@@ -742,6 +742,7 @@ pub(super) fn plan_pomodoro_start_item(
             dependency_update: None,
             task_complete: None,
             toggle_task_description: None,
+            r#ref: None,
         },
         clip_plan: None,
         pomodoro_refs: vec![PomodoroBlockRef::at(
@@ -1168,6 +1169,7 @@ fn plan_named_pomodoro_start_item(
             dependency_update: None,
             task_complete: None,
             toggle_task_description: None,
+            r#ref: None,
         },
         clip_plan: None,
         pomodoro_refs: vec![PomodoroBlockRef {

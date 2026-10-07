@@ -37,8 +37,11 @@ use super::{
         frontmatter_is_area, frontmatter_is_project, frontmatter_value,
         parse_frontmatter, ProjectStatus,
     },
+    ref_jobs,
     style::Styler,
-    task_status_groups, vault_links,
+    task_status_groups,
+    url_routing::{self, UrlIntent, UrlRoutingPolicy},
+    vault_links,
 };
 
 pub(crate) use super::capture_language::is_route_token;
@@ -138,11 +141,35 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
     }
 }
 
+/// Load the URL routing policy for `capture`. `-R` disables routing;
+/// a config error warns and disables it too (a bare URL then simply
+/// stays a task). A `capture: false` toggle disables it silently.
+fn load_capture_routing(no_ref: bool) -> Option<UrlRoutingPolicy> {
+    if no_ref {
+        return None;
+    }
+    match UrlRoutingPolicy::load() {
+        Ok(policy) => policy.capture.then_some(policy),
+        Err(error) => {
+            eprintln!("{COMMAND_NAME}: warning: URL routing is off: {error:?}");
+            None
+        }
+    }
+}
+
 fn capture(request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
-    let mut batch = plan_capture_batch(&request)?;
+    let routing = load_capture_routing(request.no_ref);
+    let mut batch = plan_capture_batch(&request, routing.as_ref())?;
     append_plan_budget(&request, &mut batch)?;
     if !request.dry_run {
-        commit_capture_batch(&batch)?;
+        commit_capture_batch(&mut batch)?;
+        if !batch.staged_jobs.is_empty()
+            && let Err(error) = ref_jobs::kick()
+        {
+            eprintln!(
+                "{COMMAND_NAME}: warning: could not start the clip worker ({error}); run bob ref jobs run"
+            );
+        }
     }
     Ok(CaptureResult::from_items(
         batch.items.into_iter().map(|item| item.result).collect(),

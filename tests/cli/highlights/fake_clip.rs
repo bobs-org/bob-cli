@@ -7,13 +7,13 @@
 use crate::support::*;
 use std::fs;
 
-pub(super) struct FakeClip {
-    pub(super) root: std::path::PathBuf,
-    pub(super) path: std::path::PathBuf,
+pub(crate) struct FakeClip {
+    pub(crate) root: std::path::PathBuf,
+    pub(crate) path: std::path::PathBuf,
 }
 
 impl FakeClip {
-    pub(super) fn new(temp: &TempDir, name: &str) -> Self {
+    pub(crate) fn new(temp: &TempDir, name: &str) -> Self {
         let root = temp.path().join(name);
         fs::create_dir_all(&root).expect("create fake clip dir");
         let path = root.join("fake-clip-adapter.sh");
@@ -50,17 +50,17 @@ esac
         Self { root, path }
     }
 
-    pub(super) fn respond(&self, body: &str) {
+    pub(crate) fn respond(&self, body: &str) {
         fs::write(self.root.join("response.json"), body)
             .expect("write fake capture response");
     }
 
-    pub(super) fn request(&self) -> String {
+    pub(crate) fn request(&self) -> String {
         fs::read_to_string(self.root.join("request.json"))
             .expect("read saved adapter request")
     }
 
-    pub(super) fn called(&self) -> bool {
+    pub(crate) fn called(&self) -> bool {
         self.root.join("request.json").exists()
     }
 }
@@ -103,15 +103,15 @@ fn write_bare_pdf(path: &std::path::Path) {
     doc.save(path).expect("write bare PDF");
 }
 
-pub(super) fn default_ping() -> &'static str {
+pub(crate) fn default_ping() -> &'static str {
     r#"{"protocol":1,"ok":true,"op":"ping","python":"3.12.3","playwright":"1.62.0","pillow":"12.3.0","nh3":"0.3.7","defuddle":"0.19.4","browser":{"kind":"chrome","path":"/usr/bin/google-chrome","version":"154.0.0"},"headed":"xvfb","fonts":["Source Serif 4"]}"#
 }
 
-pub(super) fn default_capture() -> &'static str {
+pub(crate) fn default_capture() -> &'static str {
     r#"{"protocol":1,"ok":true,"op":"capture","kind":"article","final_url":"https://example.com/index/open-source-codex-orchestration-symphony/","title":"Symphony Spec","author":"Jane Doe","published":"2026-04-27","site":"Example","description":"A spec.","metadata_sources":{"title":"h1","author":"byline","published":"visible-date","site":"og:site_name"},"word_count":8921,"capture":{"browser":"chrome","browser_version":"154.0.0","mode":"headless","retried_after_challenge":false},"fidelity":{"status":"ok","page_large_media":2,"kept_large_media":2,"page_code_blocks":1,"kept_code_blocks":1,"page_words":10858,"kept_words":8921},"images":{"total":2,"kept":2,"skipped_small":0,"failed":0},"pdf_bytes":2400,"warnings":[]}"#
 }
 
-pub(super) fn failure_response(
+pub(crate) fn failure_response(
     kind: &str,
     message: &str,
     hint: &str,

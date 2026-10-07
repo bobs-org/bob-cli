@@ -9,6 +9,17 @@ pub(super) struct PlannedCaptureBatch {
     pub(super) plan_budget: Option<CapturePlanBudget>,
     pub(super) pomodoro_blocks: Vec<PomodoroBlockJson>,
     pub(super) task_blocks: Vec<TaskBlockJson>,
+    /// Ref jobs staged by reference items, in batch order. The commit
+    /// enqueues them as rolled-back side effects and patches each
+    /// item's `ref.job` with the created id.
+    pub(super) staged_jobs: Vec<StagedRefJob>,
+}
+
+/// One reference item's staged ref job plus its position in the
+/// batch's `items`, so the commit can patch the created job id back.
+pub(super) struct StagedRefJob {
+    pub(super) item: usize,
+    pub(super) job: ref_jobs::NewJob,
 }
 
 pub(super) struct PlannedCaptureItem {
@@ -24,13 +35,12 @@ pub(super) struct PlannedCaptureItem {
 
 pub(super) fn plan_capture_batch(
     request: &CaptureRequest,
+    routing: Option<&UrlRoutingPolicy>,
 ) -> Result<PlannedCaptureBatch, CaptureError> {
     let parse_clip_markers = request.forced_clip.is_none() && !request.no_clip;
-    // URL routing stays off until phase `capture` turns it on: every
-    // production caller plans bare URLs as tasks.
     let options = CaptureParseOptions {
         parse_clip_markers,
-        url_routing: None,
+        url_routing: routing,
         explicit_destination: request.forced_route.is_some()
             || request.forced_section.is_some()
             || request.forced_sub_bullet_target.is_some()
@@ -72,12 +82,40 @@ pub(super) fn plan_capture_batch(
     let task_settings = note_tasks::read_settings(&request.bob_dir);
     let mut task_tracker = TaskBlockTracker::new(task_settings);
     let mut dependency_ctx = DependencyContext::new(&request.bob_dir, today);
+    let mut ref_assignments = assign_ref_verdicts(request, &parsed_items);
+    let mut staged_jobs = Vec::new();
 
     for parsed_item in parsed_items {
         let item_number = parsed_item.index + 1;
         let line_start = parsed_item.line_start;
         let pre_day = planner.peek_text(&day_file);
         let pre_tasks = task_tracker.snapshot_pre(&planner);
+        if matches!(parsed_item.parsed.kind, CaptureKind::Ref(_)) {
+            let assignment = ref_assignments
+                .remove(&parsed_item.index)
+                .ok_or_else(|| {
+                    CaptureError::io(
+                        "reference capture invariant failed: missing verdict",
+                    )
+                })?;
+            let (planned, staged) =
+                plan_ref_item(request, parsed_item, assignment, today)
+                    .map_err(|mut error| {
+                        error.message = format!(
+                            "capture item {item_number} starting on line {line_start}: {}",
+                            error.message
+                        );
+                        error
+                    })?;
+            if let Some(job) = staged {
+                staged_jobs.push(StagedRefJob {
+                    item: items.len(),
+                    job,
+                });
+            }
+            items.push(planned);
+            continue;
+        }
         let mut planned = plan_capture_item(
             request,
             parsed_item,
@@ -125,7 +163,207 @@ pub(super) fn plan_capture_batch(
         plan_budget: None,
         pomodoro_blocks,
         task_blocks,
+        staged_jobs,
     })
+}
+
+/// One reference item's verdict plus the display fields its result
+/// and staged job need.
+struct RefAssignment {
+    intent: UrlIntent,
+    verdict: &'static str,
+    path: Option<String>,
+    title: Option<String>,
+    reading_state: Option<String>,
+    message: Option<String>,
+}
+
+/// Offline verdicts for every reference item in the draft, keyed by
+/// item index. Library verdicts and the spool's pending keys are each
+/// read once per batch. A `clipping` spool hit and a `duplicate`
+/// repeat within the draft both win over the library verdict.
+fn assign_ref_verdicts(
+    request: &CaptureRequest,
+    parsed_items: &[ParsedCaptureItem],
+) -> HashMap<usize, RefAssignment> {
+    let mut positions = Vec::new();
+    for parsed_item in parsed_items {
+        if let CaptureKind::Ref(intent) = &parsed_item.parsed.kind {
+            positions.push((parsed_item.index, intent));
+        }
+    }
+    if positions.is_empty() {
+        return HashMap::new();
+    }
+    let intents: Vec<&UrlIntent> =
+        positions.iter().map(|(_, intent)| *intent).collect();
+    let library = url_routing::library_verdicts(&request.bob_dir, &intents);
+    let spool_keys = ref_jobs::pending_keys(&ref_jobs::jobs_dir());
+    let mut seen: HashMap<&str, usize> = HashMap::new();
+    let mut assignments = HashMap::new();
+    for ((index, intent), verdict) in positions.into_iter().zip(library) {
+        let item_number = index + 1;
+        let assignment =
+            if let Some(first) = seen.get(intent.dedupe_key.as_str()) {
+                RefAssignment {
+                    intent: (*intent).clone(),
+                    verdict: "duplicate",
+                    path: None,
+                    title: None,
+                    reading_state: None,
+                    message: Some(format!("same link as item {first}")),
+                }
+            } else if spool_keys.contains(intent.dedupe_key.as_str()) {
+                RefAssignment {
+                    intent: (*intent).clone(),
+                    verdict: "clipping",
+                    path: None,
+                    title: None,
+                    reading_state: None,
+                    message: None,
+                }
+            } else {
+                RefAssignment {
+                    intent: (*intent).clone(),
+                    verdict: verdict.verdict.as_str(),
+                    path: verdict.path,
+                    title: verdict.title,
+                    reading_state: verdict.reading_state,
+                    message: verdict.message,
+                }
+            };
+        seen.entry(intent.dedupe_key.as_str())
+            .or_insert(item_number);
+        assignments.insert(index, assignment);
+    }
+    assignments
+}
+
+/// Plan one reference item: an honest result with no vault write, plus
+/// a staged ref job when the link still needs clipping. Queued items
+/// report the exact inbox task line capture would have written with
+/// routing off, so the worker's fallback matches it.
+fn plan_ref_item(
+    request: &CaptureRequest,
+    parsed_item: ParsedCaptureItem,
+    assignment: RefAssignment,
+    today: NaiveDate,
+) -> Result<(PlannedCaptureItem, Option<ref_jobs::NewJob>), CaptureError> {
+    let intent = assignment.intent;
+    let queued =
+        matches!(assignment.verdict, "not_found" | "legacy" | "unknown");
+    let (relative_target, target) = match assignment.verdict {
+        "in_library" | "in_intake" => match assignment.path.clone() {
+            Some(relative) => (
+                relative.clone(),
+                request.bob_dir.join(&relative).display().to_string(),
+            ),
+            None => (String::new(), String::new()),
+        },
+        _ => (String::new(), String::new()),
+    };
+    let created = date_string(today);
+    // The exact line routing-off capture would write for this item,
+    // so the fallback task matches it byte for byte.
+    let fallback_task_line =
+        format_task_line(&parsed_item.parsed.body, &created, None, None);
+    let fallback = queued.then(|| RefFallbackJson {
+        relative_target: INBOX_FILE.to_string(),
+        task_line: fallback_task_line.clone(),
+    });
+    let staged = queued.then(|| ref_jobs::NewJob {
+        source: "capture".to_string(),
+        bob_dir: request.bob_dir.clone(),
+        url: intent.original.clone(),
+        cleaned_url: intent.cleaned.clone(),
+        dedupe_key: intent.dedupe_key.clone(),
+        display: intent.display.clone(),
+        route_hint: intent.route_hint.as_str().to_string(),
+        fallback: ref_jobs::JobFallback {
+            relative_target: INBOX_FILE.to_string(),
+            task_line: fallback_task_line,
+        },
+    });
+    let planned = PlannedCaptureItem {
+        result: CaptureItemResult {
+            ok: true,
+            dry_run: request.dry_run,
+            routed: false,
+            route: None,
+            route_label: String::new(),
+            relative_target,
+            target,
+            text: intent.original.clone(),
+            task_line: String::new(),
+            kind: capture_kind_label(&parsed_item.parsed.kind),
+            created,
+            scheduled: None,
+            priority: None,
+            priority_label: None,
+            placement: if queued {
+                Placement::Queued
+            } else {
+                Placement::Unchanged
+            },
+            sub_bullets: Vec::new(),
+            clip: None,
+            schedule_log: None,
+            block_id: None,
+            day_file: None,
+            block_link: None,
+            pomodoro_link_placement: None,
+            parent_line: None,
+            parent_text: None,
+            parent_section: None,
+            parent_status_symbol: None,
+            parent_status_name: None,
+            toggle_direction: None,
+            previous_task_line: None,
+            status_symbol: None,
+            status_name: None,
+            previous_status_symbol: None,
+            previous_status_name: None,
+            pomodoro_name: None,
+            creates_pomodoro: None,
+            pomodoro_already_linked: None,
+            removed_pomodoro_links: None,
+            removed_scheduled: None,
+            pomodoro_selector_unused: None,
+            toggle_behavior: None,
+            status_changed: None,
+            pomodoro_link_action: None,
+            pomodoro_link_source: None,
+            pomodoro_link_destination: None,
+            project_note: None,
+            pomodoro_start: None,
+            pomodoro_adjust: None,
+            pomodoro_shift: None,
+            pomodoro_close: None,
+            dependency_update: None,
+            task_complete: None,
+            r#ref: Some(RefItemJson {
+                url: intent.original.clone(),
+                cleaned_url: intent.cleaned.clone(),
+                dedupe_key: intent.dedupe_key.clone(),
+                display: intent.display.clone(),
+                route_hint: intent.route_hint.as_str(),
+                library: RefLibraryJson {
+                    verdict: assignment.verdict,
+                    path: assignment.path,
+                    title: assignment.title,
+                    reading_state: assignment.reading_state,
+                    message: assignment.message,
+                },
+                job: None,
+                fallback,
+            }),
+            toggle_task_description: None,
+        },
+        clip_plan: None,
+        pomodoro_refs: Vec::new(),
+        task_block_refs: Vec::new(),
+    };
+    Ok((planned, staged))
 }
 
 pub(super) fn plan_capture_item(
@@ -342,6 +580,7 @@ pub(super) fn plan_capture_item(
                 dependency_update: None,
                 task_complete: None,
                 toggle_task_description: Some(toggle.task_description.clone()),
+                r#ref: None,
             },
             clip_plan: None,
             pomodoro_refs,
@@ -445,6 +684,7 @@ pub(super) fn plan_capture_item(
                 dependency_update: None,
                 task_complete: None,
                 toggle_task_description: Some(link.task_description.clone()),
+                r#ref: None,
             },
             clip_plan: None,
             pomodoro_refs,
@@ -960,6 +1200,7 @@ pub(super) fn plan_capture_item(
             dependency_update,
             task_complete: None,
             toggle_task_description: None,
+            r#ref: None,
         },
         clip_plan,
         pomodoro_refs,

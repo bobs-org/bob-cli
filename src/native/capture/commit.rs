@@ -17,17 +17,84 @@ pub(crate) fn validate_target_parent(
 }
 
 pub(super) fn commit_capture_batch(
-    batch: &PlannedCaptureBatch,
+    batch: &mut PlannedCaptureBatch,
 ) -> Result<(), CaptureError> {
     let created_clip_files = save_clip_plans(&batch.items)?;
+    let created_jobs = match save_ref_job_plans(&batch.staged_jobs) {
+        Ok(created) => created,
+        Err(mut message) => {
+            if !created_clip_files.is_empty() {
+                let cleanup =
+                    capture_clip::cleanup_created(&created_clip_files);
+                capture_clip::append_cleanup_message(&mut message, &cleanup);
+            }
+            return Err(CaptureError::io(message));
+        }
+    };
     if let Err(mut error) = write_staged_files(&batch.text_files) {
         if !created_clip_files.is_empty() {
             let cleanup = capture_clip::cleanup_created(&created_clip_files);
             capture_clip::append_cleanup_message(&mut error.message, &cleanup);
         }
+        if !created_jobs.is_empty() {
+            let paths: Vec<PathBuf> =
+                created_jobs.iter().map(|(_, path)| path.clone()).collect();
+            let failures = ref_jobs::remove_created(&paths);
+            append_ref_job_cleanup_message(&mut error.message, &failures);
+        }
         return Err(error);
     }
+    for (item, path) in created_jobs {
+        let id = path
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.display().to_string());
+        if let Some(planned) = batch.items.get_mut(item)
+            && let Some(reference) = planned.result.r#ref.as_mut()
+        {
+            reference.job = Some(RefJobJson {
+                id,
+                state: "pending",
+            });
+        }
+    }
     Ok(())
+}
+
+/// Enqueue every staged ref job, returning each batch position with
+/// its created spool path. A failure removes the jobs this capture
+/// already created, exactly as clipboard cleanup does.
+pub(super) fn save_ref_job_plans(
+    staged: &[StagedRefJob],
+) -> Result<Vec<(usize, PathBuf)>, String> {
+    let root = ref_jobs::jobs_dir();
+    let mut created = Vec::new();
+    for staged_job in staged {
+        match ref_jobs::enqueue(&root, &staged_job.job) {
+            Ok(path) => created.push((staged_job.item, path)),
+            Err(message) => {
+                if !created.is_empty() {
+                    let paths: Vec<PathBuf> =
+                        created.iter().map(|(_, path)| path.clone()).collect();
+                    let failures = ref_jobs::remove_created(&paths);
+                    let mut full = message;
+                    append_ref_job_cleanup_message(&mut full, &failures);
+                    return Err(full);
+                }
+                return Err(message);
+            }
+        }
+    }
+    Ok(created)
+}
+
+fn append_ref_job_cleanup_message(message: &mut String, failures: &[String]) {
+    if failures.is_empty() {
+        message.push_str("; removed ref jobs created by this capture");
+    } else {
+        message.push_str("; ref-job cleanup also failed: ");
+        message.push_str(&failures.join("; "));
+    }
 }
 
 pub(super) fn save_clip_plans(

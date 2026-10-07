@@ -20,6 +20,7 @@ workflow guide.
   - [Multi-item capture](#multi-item-capture)
   - [Authored sub-bullets](#authored-sub-bullets)
   - [Clipboard](#clipboard)
+  - [Saving links to your reading queue](#saving-links-to-your-reading-queue)
   - [Task with a requested block ID](#task-with-a-requested-block-id)
   - [Pomodoro-linked tasks](#pomodoro-linked-tasks)
   - [Starting the session atomically](#starting-the-session-atomically)
@@ -582,6 +583,35 @@ explicit header. Both forms force a single live value and keep `%` tokens in
 the captured text literal. A numeric header can be requested unambiguously with
 `--clip=20`; use `-n, --no-clip` when a genuine trailing `%N` or other `%...`
 token should remain literal. `--clip` and `--no-clip` conflict.
+
+### Saving links to your reading queue
+
+A capture item that is nothing but one bare public link becomes a reference
+item (`kind: "ref"`) instead of an inbox task: `bob capture
+https://example.com/essay` queues the link for the reading queue. Anything
+more — an extra word, `@route`, `#tag`, `s:`, `p:`, `%`, an operator, a child
+line, a `@@` declaration, or a forced flag (`-r -s -t -S -c`, `--task-ref`)
+— keeps the item a task, exactly as before. Corporate short links
+(`http://go/x`), IP literals, and excluded hosts (see
+`highlights.url_routing` in `docs/ref.md`) stay tasks too. A pasted
+blank-line-free block in which every line is a bare URL splits into one item
+per line, and each line is then classified on its own, so mixed lists queue
+the links and keep the rest as tasks.
+
+Submit never touches the network and returns at once: it writes a durable
+ref job and a detached background worker clips it through the same engine as
+`bob ref create`. If the clip fails, the link falls back to exactly the inbox
+task capture would have written, plus a `⚠️` child with the reason and a
+`bob ref create <url>` retry command. `bob ref jobs` lists every job; see
+`docs/ref-jobs.md`. The preview is honest and offline: `--dry-run` says
+whether the link is new, already in the library, already queued for scan,
+already clipping, or a duplicate within the draft. Reference items report
+`routed: false`, `route: null`, `route_label: ""`, `task_line: ""`, and
+`placement: "queued"` (still to clip) or `"unchanged"` (already known), plus
+an additive `ref` object with the classified URL, the library verdict, the
+staged `job` (real runs only), and the inbox `fallback` (queued items only).
+Opt out per capture with `-R, --no-ref`, or per entry point with
+`highlights.url_routing.capture`.
 
 ### Task with a requested block ID
 
@@ -2805,6 +2835,8 @@ Useful options:
 - `-d, --dry-run`: plan and report without writing notes or clipboard files
 - `-f, --format human|json`: human confirmation or stable JSON for callers
 - `-n, --no-clip`: keep trailing `%...` clipboard markers literal
+- `-R, --no-ref`: keep bare links as inbox tasks instead of queueing them
+  for the reading queue
 - `-r, --route NAME`: force `NAME.md` and keep any `@tokens` in the text literal
 - `-s, --section TITLE`: with `--route`, force a bullet into the exact section
 - `-t, --task BLOCK-ID`: with `--route`, append beneath the identified task
@@ -2830,11 +2862,20 @@ stable fields include `ok`, `dry_run`, `routed`, `route`, `route_label`,
 `placement`. The `kind` field is `"task"`, `"bullet"`, `"pomodoro_task"`,
 `"pomodoro_note"`, `"sub_bullet"`, `"task_toggle"`, `"project_note"`,
 `"pomodoro_adjust"`, `"pomodoro_shift"`, `"pomodoro_start"`,
-`"pomodoro_close"`, `"pomodoro_link"`, or `"task_complete"`, and
+`"pomodoro_close"`, `"pomodoro_link"`, `"task_complete"`, or `"ref"`, and
 `task_line` holds the rendered line for any kind — for `"project_note"` it is
 the rendered `^prj` line, and for `"pomodoro_link"` it is the linked task's
 post-image line. On JSON-mode failures, stdout is still a
 single object with `ok: false` and an `error` string.
+
+A reference item (`kind: "ref"`) uses `placement: "queued"` or
+`"unchanged"`, leaves `task_line` empty, and carries the additive `ref`
+object: `url`, `cleaned_url`, `dedupe_key`, `display`, `route_hint`
+(`"article"`, `"pdf"`, or `"arxiv"`), `library` (`verdict` plus the known
+`path`, `title`, `reading_state`, or `message`), `job` (`id` and `state`,
+only on a real run that queued), and `fallback` (`relative_target` and the
+exact `task_line` the failed clip writes, only when queued). A dry run's
+output equals the real run's apart from `dry_run` and `job`.
 
 A capture with authored sub-bullets additionally includes a `sub_bullets`
 array of the exact rendered child lines, including their target-selected
@@ -3202,7 +3243,7 @@ append/Ensure Next capture behavior.
 ## `bob capture-parse`
 
 ```bash
-bob capture-parse [-f|--format human|json] [--] [TEXT]...
+bob capture-parse [-f|--format human|json] [-R|--no-ref] [--] [TEXT]...
 ```
 
 Reports the authoritative capture grammar's reading of `TEXT` so an editor can
@@ -3383,9 +3424,11 @@ and the recognized `@...` token are removed, matching what `bob capture` would
 write for any input it accepts. `mode` is `task`, `bullet`, `pomodoro_task`,
 `pomodoro_note`, `sub_bullet`, `task_toggle`, `project_note`,
 `pomodoro_project_note`, `pomodoro_adjust`, `pomodoro_shift`,
-`pomodoro_link`, `pomodoro_close`, `pomodoro_start`, `task_dependency`, `task_complete`, or `incomplete`, describing whichever line resolved a marker
+`pomodoro_link`, `pomodoro_close`, `pomodoro_start`, `task_dependency`, `task_complete`, `ref`, or `incomplete`, describing whichever line resolved a marker
 first -- the parent's leading or trailing form, or else the first child line
-with a trailing marker. A solo `@route:block-id…` item reports
+with a trailing marker. A whole-item bare link reports mode `ref` with one
+`ref_url` span covering the whole token, `<>` included; `-R` keeps it a
+`task` so parse and capture always agree. A solo `@route:block-id…` item reports
 `pomodoro_link` with the `pomodoro_route` / `pomodoro_block_id` /
 `pomodoro_name` / `pomodoro_start` spans (or `pomodoro_close` plus the two
 list spans for an `=x…` suffix); the `^` spelling reports the same

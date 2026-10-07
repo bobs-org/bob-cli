@@ -327,6 +327,7 @@ pub(super) fn plan_project_note_item(
             dependency_update: None,
             task_complete: None,
             toggle_task_description: None,
+            r#ref: None,
         },
         clip_plan: None,
         pomodoro_refs: Vec::new(),

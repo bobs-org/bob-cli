@@ -551,12 +551,13 @@ mod tests {
             forced_sub_bullet_target: forced_target,
             forced_task_section: None,
             no_clip: true,
+            no_ref: false,
             raw_text: raw_text.to_string(),
         }
     }
 
     fn plan(vault: &Path, raw_text: &str) -> PlannedCaptureBatch {
-        plan_capture_batch(&dry_request(vault, raw_text, None, None))
+        plan_capture_batch(&dry_request(vault, raw_text, None, None), None)
             .expect("plan capture batch")
     }
 
@@ -877,7 +878,7 @@ mod tests {
                 digest: task_ref.digest,
             }),
         );
-        let batch = plan_capture_batch(&request).expect("plan");
+        let batch = plan_capture_batch(&request, None).expect("plan");
         assert_eq!(batch.task_blocks.len(), 1);
         let block = &batch.task_blocks[0];
         assert!(block.block_id.is_none());
