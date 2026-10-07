@@ -27,7 +27,27 @@ use super::{
 const MOMENT_SOURCE: &str = include_str!("vendor/moment.min.js");
 const MAX_MEMORY_BYTES: usize = 64 * 1024 * 1024;
 const MAX_STACK_BYTES: usize = 1024 * 1024;
-const EXPRESSION_TIMEOUT: Duration = Duration::from_secs(2);
+pub(super) const EXPRESSION_TIMEOUT: Duration = Duration::from_secs(2);
+/// Base initialization budget: parsing Moment and hydrating the whole
+/// vault must not compete with the per-expression deadline above.
+pub(super) const INIT_BASE_TIMEOUT: Duration = Duration::from_secs(10);
+/// Extra initialization budget per task in the vault.
+pub(super) const INIT_PER_TASK: Duration = Duration::from_millis(5);
+/// Upper bound for the scaled initialization budget.
+pub(super) const INIT_MAX_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Initialization budget for a vault with `task_count` tasks: a base
+/// allowance plus a per-task share, capped at [`INIT_MAX_TIMEOUT`].
+/// Always well above [`EXPRESSION_TIMEOUT`], even for an empty vault.
+pub(super) fn init_timeout(task_count: usize) -> Duration {
+    let per_task = INIT_PER_TASK
+        .checked_mul(u32::try_from(task_count).unwrap_or(u32::MAX))
+        .unwrap_or(INIT_MAX_TIMEOUT);
+    INIT_BASE_TIMEOUT
+        .checked_add(per_task)
+        .unwrap_or(INIT_MAX_TIMEOUT)
+        .min(INIT_MAX_TIMEOUT)
+}
 
 type Deadline = Arc<Mutex<Instant>>;
 
@@ -237,8 +257,8 @@ impl JsSandbox {
         })?;
         runtime.set_memory_limit(MAX_MEMORY_BYTES);
         runtime.set_max_stack_size(MAX_STACK_BYTES);
-        let deadline =
-            Arc::new(Mutex::new(Instant::now() + EXPRESSION_TIMEOUT));
+        let init_budget = init_timeout(tasks.len());
+        let deadline = Arc::new(Mutex::new(Instant::now() + init_budget));
         let interrupt_deadline = Arc::clone(&deadline);
         runtime.set_interrupt_handler(Some(Box::new(move || {
             Instant::now()
@@ -258,18 +278,21 @@ impl JsSandbox {
              globalThis.__bobSortKeySets = [];\n\
              {MOMENT_SOURCE}\n{BOOTSTRAP_SOURCE}\n{HYDRATE_SOURCE}"
         );
-        eval_unit(
+        eval_init_unit(
             &context,
             &deadline,
             &initialization,
             "initializing the Tasks JavaScript sandbox",
+            init_budget,
         )?;
-        eval_unit(
+        eval_init_unit(
             &context,
             &deadline,
             "if (typeof moment !== 'function' || !moment().isValid()) throw new Error('Moment initialization failed');",
             "verifying the pinned Moment.js clock",
+            init_budget,
         )?;
+        arm_deadline(&deadline);
 
         let task_indices = tasks
             .iter()
@@ -508,6 +531,31 @@ fn query_value(context: Option<&QueryContext>) -> Result<Value, DataviewError> {
     Ok(json!({ "file": file }))
 }
 
+/// Evaluate one initialization unit under its own `budget`, separate
+/// from the per-expression deadline that [`eval_unit`] arms. Callers
+/// pass [`init_timeout`] scaled to the vault so whole-vault hydration
+/// never competes with a single user expression's 2 s allowance.
+fn eval_init_unit(
+    context: &Context,
+    deadline: &Deadline,
+    source: &str,
+    action: &str,
+    budget: Duration,
+) -> Result<(), DataviewError> {
+    *deadline
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) =
+        Instant::now() + budget;
+    context.with(|context| {
+        context
+            .eval::<(), _>(source)
+            .catch(&context)
+            .map_err(|error| {
+                query_error(format!("JavaScript error while {action}: {error}"))
+            })
+    })
+}
+
 fn eval_unit(
     context: &Context,
     deadline: &Deadline,
@@ -576,5 +624,24 @@ fn task_error_message(error: DataviewError) -> String {
     match error {
         DataviewError::TasksQuery { message } => message,
         other => format!("{other:?}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn init_budget_is_separate_from_and_above_expression_timeout() {
+        assert!(INIT_BASE_TIMEOUT > EXPRESSION_TIMEOUT);
+        assert_eq!(init_timeout(0), INIT_BASE_TIMEOUT);
+        assert!(init_timeout(0) > EXPRESSION_TIMEOUT);
+    }
+
+    #[test]
+    fn init_budget_scales_with_task_count_and_caps() {
+        assert!(init_timeout(1_000) > init_timeout(0));
+        assert!(init_timeout(10_000) > init_timeout(1_000));
+        assert_eq!(init_timeout(usize::MAX), INIT_MAX_TIMEOUT);
     }
 }

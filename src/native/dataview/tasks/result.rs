@@ -65,9 +65,9 @@ pub(super) fn build(
     tree_tasks: Vec<Task>,
     now: NaiveDateTime,
     global_filter: &str,
-    javascript: &mut JsSandbox,
+    mut javascript: Option<&mut JsSandbox>,
 ) -> Result<TaskResult, DataviewError> {
-    sort_tasks(&mut tasks, &query.sorting, now, javascript)?;
+    sort_tasks(&mut tasks, &query.sorting, now, javascript.as_deref_mut())?;
     let count_before_limit = tasks.len();
     if let Some(limit) = query.limit {
         tasks.truncate(limit);
@@ -111,14 +111,30 @@ pub(super) fn build(
     })
 }
 
+fn missing_sandbox_error(clause: &str) -> DataviewError {
+    DataviewError::TasksQuery {
+        message: format!(
+            "query uses '{clause}' but no JavaScript sandbox was built"
+        ),
+    }
+}
+
 fn sort_tasks(
     tasks: &mut [Task],
     instructions: &[SortInstruction],
     now: NaiveDateTime,
-    javascript: &mut JsSandbox,
+    mut javascript: Option<&mut JsSandbox>,
 ) -> Result<(), DataviewError> {
-    let function_sort_handles =
-        javascript.prepare_function_sorts(instructions, tasks)?;
+    let needs_javascript = instructions
+        .iter()
+        .any(|instruction| instruction.key == SortKey::Function);
+    let function_sort_handles = match javascript.as_mut() {
+        Some(sandbox) => sandbox.prepare_function_sorts(instructions, tasks)?,
+        None if needs_javascript => {
+            return Err(missing_sandbox_error("sort by function"));
+        }
+        None => vec![None; instructions.len()],
+    };
     let defaults = [
         SortKey::StatusType,
         SortKey::Urgency,
@@ -127,6 +143,7 @@ fn sort_tasks(
         SortKey::Path,
     ];
     let mut error = None;
+    let javascript = &mut javascript;
     tasks.sort_by(|left, right| {
         if error.is_some() {
             return Ordering::Equal;
@@ -134,12 +151,15 @@ fn sort_tasks(
         for (instruction_index, instruction) in instructions.iter().enumerate()
         {
             let ordering = if instruction.key == SortKey::Function {
-                javascript.compare_precomputed_function_sort(
-                    function_sort_handles[instruction_index]
-                        .expect("function sort has a precomputed key set"),
-                    left,
-                    right,
-                )
+                match javascript.as_deref_mut() {
+                    Some(sandbox) => sandbox.compare_precomputed_function_sort(
+                        function_sort_handles[instruction_index]
+                            .expect("function sort has a precomputed key set"),
+                        left,
+                        right,
+                    ),
+                    None => Err(missing_sandbox_error("sort by function")),
+                }
             } else {
                 Ok(compare_key(
                     instruction.key,
@@ -263,7 +283,7 @@ fn compare_tags(index: usize, left: &Task, right: &Task) -> Ordering {
 fn group_tasks(
     tasks: Vec<Task>,
     instructions: &[GroupInstruction],
-    javascript: &mut JsSandbox,
+    mut javascript: Option<&mut JsSandbox>,
 ) -> Vec<TaskGroup> {
     if instructions.is_empty() {
         let count = tasks.len();
@@ -279,10 +299,12 @@ fn group_tasks(
 
     let mut groups = Vec::<TaskGroup>::new();
     let mut group_indices = HashMap::<Vec<String>, usize>::new();
+    let javascript = &mut javascript;
     for task in tasks {
         let mut names = vec![Vec::<String>::new()];
         for instruction in instructions {
-            let keys = group_keys(instruction, &task, javascript);
+            let keys =
+                group_keys(instruction, &task, javascript.as_deref_mut());
             let mut expanded = Vec::new();
             for prefix in names {
                 for key in &keys {
@@ -339,7 +361,7 @@ fn group_tasks(
 fn group_keys(
     instruction: &GroupInstruction,
     task: &Task,
-    javascript: &mut JsSandbox,
+    javascript: Option<&mut JsSandbox>,
 ) -> Vec<String> {
     let one = |value: String| vec![value];
     match instruction.key {
@@ -352,10 +374,16 @@ fn group_keys(
             one(format!("[[{}]]", task.file.filename_without_extension))
         }
         GroupKey::Folder => one(escape_markdown(&task.file.folder)),
-        GroupKey::Function => javascript.function_group_keys(
-            instruction.function.as_deref().unwrap_or_default(),
-            task,
-        ),
+        GroupKey::Function => match javascript {
+            Some(sandbox) => sandbox.function_group_keys(
+                instruction.function.as_deref().unwrap_or_default(),
+                task,
+            ),
+            None => vec![
+                "Error: query uses 'group by function' but no JavaScript sandbox was built"
+                    .to_string(),
+            ],
+        },
         GroupKey::Happens => one(happens(task).map_or_else(
             || "No happens date".to_string(),
             format_date_heading,
@@ -640,6 +668,39 @@ mod tests {
         assert_eq!(natural_compare("apple", "Banana"), Ordering::Less);
         assert_eq!(natural_compare("item2", "item10"), Ordering::Less);
         assert_eq!(natural_compare("ALPHA", "alpha"), Ordering::Equal);
+    }
+
+    #[test]
+    fn build_runs_without_a_sandbox_when_no_function_is_used() {
+        let query = QueryAst::default();
+        let now = NaiveDate::from_ymd_opt(2026, 7, 10)
+            .expect("valid date")
+            .and_hms_opt(12, 0, 0)
+            .expect("valid noon");
+        let outcome = build(&query, Vec::new(), Vec::new(), now, "", None)
+            .expect("a query without by function needs no sandbox");
+        assert_eq!(outcome.count, 0);
+    }
+
+    #[test]
+    fn build_reports_a_missing_sandbox_for_function_sorts() {
+        let mut query = QueryAst::default();
+        query.sorting.push(SortInstruction {
+            key: SortKey::Function,
+            reverse: false,
+            function: Some("task.due".to_string()),
+            tag_index: None,
+        });
+        let now = NaiveDate::from_ymd_opt(2026, 7, 10)
+            .expect("valid date")
+            .and_hms_opt(12, 0, 0)
+            .expect("valid noon");
+        let error = build(&query, Vec::new(), Vec::new(), now, "", None)
+            .expect_err("a by-function sort needs the sandbox");
+        assert!(
+            matches!(error, DataviewError::TasksQuery { .. }),
+            "unexpected error shape: {error:?}"
+        );
     }
 
     #[test]

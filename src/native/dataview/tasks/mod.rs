@@ -163,10 +163,9 @@ pub(crate) fn query_matching_descriptions(
         &settings,
         parse::ParseDialect::Native,
     )?;
-    let mut javascript =
-        js::JsSandbox::new(&index.tasks, parsed.context.as_ref(), now)?;
+    let mut javascript = maybe_sandbox(&parsed, &index.tasks, now)?;
     let execution =
-        execute_query(parsed, &settings, &index, now, &mut javascript)?;
+        execute_query(parsed, &settings, &index, now, javascript.as_mut())?;
     Ok(execution
         .result
         .tasks
@@ -191,16 +190,30 @@ pub(crate) fn query_rich_tasks(
         &settings,
         parse::ParseDialect::Native,
     )?;
-    let mut javascript =
-        js::JsSandbox::new(&index.tasks, parsed.context.as_ref(), now)?;
+    let mut javascript = maybe_sandbox(&parsed, &index.tasks, now)?;
     let execution =
-        execute_query(parsed, &settings, &index, now, &mut javascript)?;
+        execute_query(parsed, &settings, &index, now, javascript.as_mut())?;
     Ok(execution
         .result
         .tasks
         .iter()
         .map(|task| rich_task(task, &settings))
         .collect())
+}
+
+/// Build the JavaScript sandbox only when `query` needs it: a query
+/// without `by function` never pays Moment parsing or whole-vault
+/// hydration and never depends on the sandbox deadline (bob-cli-33).
+fn maybe_sandbox(
+    query: &parse::QueryAst,
+    tasks: &[task::Task],
+    now: chrono::NaiveDateTime,
+) -> Result<Option<js::JsSandbox>, DataviewError> {
+    if query.uses_javascript() {
+        js::JsSandbox::new(tasks, query.context.as_ref(), now).map(Some)
+    } else {
+        Ok(None)
+    }
 }
 
 fn rich_task(task: &task::Task, settings: &TasksSettings) -> RichTask {
@@ -236,10 +249,9 @@ pub(super) fn run(
         &settings,
         parse::ParseDialect::Upstream,
     )?;
-    let mut javascript =
-        js::JsSandbox::new(&index.tasks, query.context.as_ref(), now)?;
+    let mut javascript = maybe_sandbox(&query, &index.tasks, now)?;
     let execution =
-        execute_query(query, &settings, &index, now, &mut javascript)?;
+        execute_query(query, &settings, &index, now, javascript.as_mut())?;
     emit_single(execution, &settings, format)
 }
 
@@ -271,8 +283,11 @@ pub(super) fn run_note(
             )
         })
         .collect::<Vec<_>>();
-    let first_query = parsed.iter().find_map(|query| query.as_ref().ok());
-    let mut javascript = first_query
+    let first_javascript_query = parsed
+        .iter()
+        .filter_map(|query| query.as_ref().ok())
+        .find(|query| query.uses_javascript());
+    let mut javascript = first_javascript_query
         .map(|query| {
             js::JsSandbox::new(&index.tasks, query.context.as_ref(), now)
         })
@@ -280,15 +295,7 @@ pub(super) fn run_note(
     let mut executions = Vec::with_capacity(blocks.len());
     for (block, query) in blocks.iter().zip(parsed) {
         let result = query.and_then(|query| {
-            execute_query(
-                query,
-                &settings,
-                &index,
-                now,
-                javascript
-                    .as_mut()
-                    .expect("a parsed query created a JavaScript sandbox"),
-            )
+            execute_query(query, &settings, &index, now, javascript.as_mut())
         });
         match result {
             Ok(execution) => executions.push(NoteExecution {
@@ -322,7 +329,7 @@ fn execute_query(
     settings: &TasksSettings,
     index: &TaskIndex,
     now: chrono::NaiveDateTime,
-    javascript: &mut js::JsSandbox,
+    mut javascript: Option<&mut js::JsSandbox>,
 ) -> Result<Execution, DataviewError> {
     let all_tasks = index.tasks.clone();
     let tasks = filter::apply(
@@ -330,7 +337,7 @@ fn execute_query(
         index.tasks.clone(),
         now,
         &settings.global_filter,
-        javascript,
+        javascript.as_deref_mut(),
     )?;
     let result = result::build(
         &query,
@@ -338,10 +345,12 @@ fn execute_query(
         all_tasks,
         now,
         &settings.global_filter,
-        javascript,
+        javascript.as_deref_mut(),
     )?;
-    let function_groups =
-        javascript.function_groups(&query.grouping, &result.tasks);
+    let function_groups = javascript
+        .as_mut()
+        .map(|sandbox| sandbox.function_groups(&query.grouping, &result.tasks))
+        .unwrap_or_else(|| Value::Array(Vec::new()));
     let paths = result.paths();
     Ok(Execution {
         query,
@@ -699,6 +708,22 @@ mod tests {
         assert_eq!(blocks[0].query, "status.type is IN_PROGRESS");
         assert_eq!(blocks[1].heading.as_deref(), Some("Ready"));
         assert_eq!(blocks[1].query, "status.type is TODO");
+    }
+
+    #[test]
+    fn non_function_queries_skip_the_sandbox_on_a_real_vault() {
+        let vault = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/tasks_parity/vault");
+        let now = bob_env::current_datetime();
+        let descriptions = query_matching_descriptions(&vault, "not done", now)
+            .expect("a query without by function skips the sandbox");
+        assert!(
+            !descriptions.is_empty(),
+            "the parity fixture vault must yield open tasks"
+        );
+        let rich = query_rich_tasks(&vault, "not done", now)
+            .expect("a rich query without by function skips the sandbox");
+        assert_eq!(rich.len(), descriptions.len());
     }
 
     #[test]

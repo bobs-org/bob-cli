@@ -18,15 +18,16 @@ pub(super) fn apply(
     tasks: Vec<Task>,
     now: NaiveDateTime,
     global_filter: &str,
-    javascript: &mut JsSandbox,
+    mut javascript: Option<&mut JsSandbox>,
 ) -> Result<Vec<Task>, DataviewError> {
     let regexes = compile_filter_regexes(filters)
         .map_err(|message| DataviewError::TasksQuery { message })?;
     for filter in filters {
         validate_filter(filter, now.date())
             .map_err(|message| DataviewError::TasksQuery { message })?;
-        validate_function_filter(filter, javascript)?;
+        validate_function_filter(filter, javascript.as_deref_mut())?;
     }
+    let javascript = &mut javascript;
     tasks
         .into_iter()
         .filter_map(|task| {
@@ -39,7 +40,7 @@ pub(super) fn apply(
                         &task,
                         now.date(),
                         global_filter,
-                        javascript,
+                        javascript.as_deref_mut(),
                         &regexes,
                     )
                 }
@@ -97,21 +98,28 @@ fn compile_filter_regexes(
 
 fn validate_function_filter(
     filter: &FilterExpr,
-    javascript: &mut JsSandbox,
+    mut javascript: Option<&mut JsSandbox>,
 ) -> Result<(), DataviewError> {
     match filter {
         FilterExpr::And { left, right }
         | FilterExpr::Or { left, right }
         | FilterExpr::Xor { left, right } => {
-            validate_function_filter(left, javascript)?;
+            validate_function_filter(
+                left,
+                javascript.as_deref_mut(),
+            )?;
             validate_function_filter(right, javascript)
         }
         FilterExpr::Not { expression } => {
             validate_function_filter(expression, javascript)
         }
-        FilterExpr::Function { source } => {
-            javascript.validate_expression(source)
-        }
+        FilterExpr::Function { source } => match javascript {
+            Some(sandbox) => sandbox.validate_expression(source),
+            None => Err(DataviewError::TasksQuery {
+                message: "query uses 'filter by function' but no JavaScript sandbox was built"
+                    .to_string(),
+            }),
+        },
         _ => Ok(()),
     }
 }
@@ -145,7 +153,7 @@ fn matches_filter(
     task: &Task,
     today: NaiveDate,
     global_filter: &str,
-    javascript: &mut JsSandbox,
+    mut javascript: Option<&mut JsSandbox>,
     regexes: &HashMap<(String, String), regex::Regex>,
 ) -> Result<bool, String> {
     match filter {
@@ -154,7 +162,7 @@ fn matches_filter(
             task,
             today,
             global_filter,
-            javascript,
+            javascript.as_deref_mut(),
             regexes,
         )? && matches_filter(
             right,
@@ -169,7 +177,7 @@ fn matches_filter(
             task,
             today,
             global_filter,
-            javascript,
+            javascript.as_deref_mut(),
             regexes,
         )? || matches_filter(
             right,
@@ -184,7 +192,7 @@ fn matches_filter(
             task,
             today,
             global_filter,
-            javascript,
+            javascript.as_deref_mut(),
             regexes,
         )? ^ matches_filter(
             right,
@@ -253,12 +261,20 @@ fn matches_filter(
         }
         FilterExpr::Blocked { blocked } => Ok(task.is_blocked == *blocked),
         FilterExpr::Blocking { blocking } => Ok(task.is_blocking == *blocking),
-        FilterExpr::Function { source } => javascript
-            .matches_filter(source, task)
-            .map_err(|error| match error {
-                DataviewError::TasksQuery { message } => message,
-                other => format!("{other:?}"),
-            }),
+        FilterExpr::Function { source } => match javascript {
+            Some(sandbox) => {
+                sandbox.matches_filter(source, task).map_err(|error| {
+                    match error {
+                        DataviewError::TasksQuery { message } => message,
+                        other => format!("{other:?}"),
+                    }
+                })
+            }
+            None => Err(
+                "query uses 'filter by function' but no JavaScript sandbox was built"
+                    .to_string(),
+            ),
+        },
         FilterExpr::ExcludeSubItems => Ok(is_top_level(task)),
     }
 }
@@ -790,6 +806,37 @@ mod tests {
         assert_eq!(
             remove_global_filter("#task keep #task", "#task"),
             "keep #task"
+        );
+    }
+
+    #[test]
+    fn apply_runs_without_a_sandbox_when_no_function_is_used() {
+        let now = date("2026-07-10")
+            .and_hms_opt(12, 0, 0)
+            .expect("valid noon");
+        let filters = vec![FilterExpr::Done { done: false }];
+        let tasks = apply(&filters, Vec::new(), now, "", None)
+            .expect("a query without by function needs no sandbox");
+        assert!(tasks.is_empty());
+    }
+
+    #[test]
+    fn apply_reports_a_missing_sandbox_for_function_filters() {
+        let now = date("2026-07-10")
+            .and_hms_opt(12, 0, 0)
+            .expect("valid noon");
+        let filters = vec![FilterExpr::Function {
+            source: "task.isDone".to_string(),
+        }];
+        let error = apply(&filters, Vec::new(), now, "", None)
+            .expect_err("a by-function filter needs the sandbox");
+        let message = match error {
+            DataviewError::TasksQuery { message } => message,
+            other => panic!("unexpected error shape: {other:?}"),
+        };
+        assert!(
+            message.contains("no JavaScript sandbox was built"),
+            "unexpected message: {message}"
         );
     }
 }

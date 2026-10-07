@@ -43,6 +43,38 @@ pub(super) enum StatementSource {
     Preset,
 }
 
+impl QueryAst {
+    /// Whether executing this query needs the JavaScript sandbox: any
+    /// `filter by function`, `sort by function`, or `group by function`
+    /// clause. Queries without one run without ever constructing a
+    /// `JsSandbox`, so they never pay Moment parsing or whole-vault
+    /// hydration and never depend on its deadline.
+    pub(super) fn uses_javascript(&self) -> bool {
+        self.filters.iter().any(filter_uses_javascript)
+            || self
+                .sorting
+                .iter()
+                .any(|instruction| instruction.key == SortKey::Function)
+            || self
+                .grouping
+                .iter()
+                .any(|instruction| instruction.key == GroupKey::Function)
+    }
+}
+
+fn filter_uses_javascript(filter: &FilterExpr) -> bool {
+    match filter {
+        FilterExpr::And { left, right }
+        | FilterExpr::Or { left, right }
+        | FilterExpr::Xor { left, right } => {
+            filter_uses_javascript(left) || filter_uses_javascript(right)
+        }
+        FilterExpr::Not { expression } => filter_uses_javascript(expression),
+        FilterExpr::Function { .. } => true,
+        _ => false,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub(super) enum Instruction {
@@ -2104,6 +2136,69 @@ mod tests {
             statement.instruction == "path includes Folder/Query.md"
         }));
         assert!(!ast.layout.show_due_date);
+        fs::remove_dir_all(vault).unwrap();
+    }
+
+    #[test]
+    fn uses_javascript_detects_by_function_clauses() {
+        let mut plain = QueryAst::default();
+        plain.filters.push(FilterExpr::Done { done: false });
+        assert!(!plain.uses_javascript());
+
+        let mut nested = QueryAst::default();
+        nested.filters.push(FilterExpr::Not {
+            expression: Box::new(FilterExpr::And {
+                left: Box::new(FilterExpr::Done { done: false }),
+                right: Box::new(FilterExpr::Function {
+                    source: "task.isDone".to_string(),
+                }),
+            }),
+        });
+        assert!(nested.uses_javascript());
+
+        let mut sort = QueryAst::default();
+        sort.sorting.push(SortInstruction {
+            key: SortKey::Function,
+            reverse: false,
+            function: Some("task.due".to_string()),
+            tag_index: None,
+        });
+        assert!(sort.uses_javascript());
+
+        let mut group = QueryAst::default();
+        group.grouping.push(GroupInstruction {
+            key: GroupKey::Function,
+            reverse: false,
+            function: Some("task.due".to_string()),
+        });
+        assert!(group.uses_javascript());
+    }
+
+    #[test]
+    fn lane_queries_run_without_the_javascript_sandbox() {
+        let vault = std::env::temp_dir()
+            .join(format!("bob-cli-task-query-lane-js-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&vault);
+        fs::create_dir_all(&vault).unwrap();
+        let settings = TasksSettings::default();
+        for query in [
+            super::super::NEXT_QUERY,
+            super::super::PENDING_QUERY,
+            super::super::READY_QUERY,
+            super::super::OPEN_QUERY,
+        ] {
+            let ast =
+                parse(&vault, None, query, &settings, ParseDialect::Native)
+                    .unwrap_or_else(|error| {
+                        panic!(
+                            "failed to parse lane query {query:?}: {error:?}"
+                        )
+                    });
+            assert!(
+                !ast.uses_javascript(),
+                "lane query {query:?} must not need the JavaScript sandbox"
+            );
+        }
         fs::remove_dir_all(vault).unwrap();
     }
 
