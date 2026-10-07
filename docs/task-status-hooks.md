@@ -16,6 +16,8 @@ In practice it:
   In Progress (`[/]`) alone
 - Never lowers Next (`[*]`) or In Progress (`[/]`) when links disappear:
   lanes are sticky and only an explicit release returns them to Ready.
+  (In Obsidian, Alt+[ / Alt+] move a linked task between Next and In
+  Progress, and reconcile keeps both.)
   The single exception is a Next task that lives in a canonical daily note
   or the selected current ledger, which still clears once unlinked and stale
 - Follows task dependency links on each task's managed Depends-On line

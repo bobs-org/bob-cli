@@ -197,6 +197,225 @@ silent zero; a plugin too old for that API keeps the inline fallback,
 which applies the same base visibility and whatever TODAY predicate is
 available.
 
+## In Progress marks and the Task Link lane toggle
+
+In today's daily note, every Task Link under an open Pomodoro whose
+target task is In Progress (`[/]`) shows a rendered amber half-ring
+mark; a Next (`[*]`) target shows none. With the cursor on any
+Pomodoro Task Link, **Alt+[ or Alt+]** toggles its task between Next
+and In Progress, offering an optional Work Log entry when it goes
+back to Next. Nothing is ever written into the daily note: the mark
+is display-only and the toggle rewrites only the task line in its own
+note.
+
+```markdown
+## Pomodoros
+- [x] (**0900-0930** [t:: 30m])
+    - 🍅 Fix the parser crash
+    - 🍅 Review Ana's PR
+- [ ] (**0940-1010** [t:: 30m])
+    - ◐ Fix the parser crash           ← target is In Progress [/]
+    - Write release notes              ← target is Next [*], no mark
+- [ ] ()
+    - ◐ Benchmark the cache
+    - Answer support email
+```
+
+Hovering the mark shows a two-line tooltip: `In Progress` /
+`Alt+[ or Alt+] → Next`.
+
+### Principles
+
+- **The mark is rendered, never written.** Status lives on the task
+  line; writing it into the ledger would repeat the `#today`-tag
+  mistake (churn, races, staleness) and break every
+  dedicated-Task-Link parser, which accepts only `🍅 ` and `!`
+  prefixes. A written `◐ ` prefix would drop links out of Today,
+  `=x` numbering, and Work Log routing, and make reconcile write
+  `◐ 🍅 [[…]]`. The text-marker alternative was rejected for this
+  reason. Without the plugin the vault looks exactly as before.
+- **One marker slot, two tenses.** The mark sits immediately before
+  the link token, the same slot 🍅 takes under closed Pomodoros: 🍅
+  means worked in a past session, ◐ means in progress now.
+- **Truthful or neutral.** A link gets the mark only when all of
+  these hold: the open file is today's daily note; the link sits
+  under an open Pomodoro entry (running or planned placeholder,
+  named or unnamed); it is a dedicated plain Task Link at the
+  entry's first child indent (exactly one `[[target#^id]]` with an
+  optional alias, after stripping a leading 🍅 and an optional
+  trailing `#` move-only marker); and the target resolves to a list
+  item whose checkbox is exactly `/`. Everything else shows
+  nothing: Next, Ready, Blocked, done, unresolved or non-task
+  targets, struck `~~[[…]]~~` links, embedded `![[…]]` links (the
+  transclusion already shows its own amber checkbox), fenced lines,
+  deeper nested bullets, links mixed with other text, other daily
+  notes, and links outside `## Pomodoros`.
+
+### Glyph anatomy
+
+The mark is a ring with its right half filled (a Linear-style "in
+progress" circle: started, not finished), so the shape carries the
+meaning and never relies on color alone. Its ink is
+`var(--bob-progress-mark-color, var(--task-status-in-progress, var(--color-yellow, #c69026)))`,
+the status hue the vault already gives `[/]` checkboxes; the
+`--bob-progress-mark-color` theme hook is unset by default. It
+renders as a `1.15em` inline box that never changes line height,
+with a 160 ms entrance and 120 ms hover transitions; hovering sets
+full opacity with a 12% tint capsule. With
+`prefers-reduced-motion: reduce` the animation and transitions are
+off. The `Toggle Task Link In Progress marks` command flips a
+session toggle (default on).
+
+### Toggle scope
+
+Alt+[ and Alt+] become a lane toggle on a **Pomodoro Task Link
+line**: a line the link picker accepts (dedicated bullet — plain,
+🍅, `#` move-only, struck, or embedded) that sits inside a
+Pomodoro entry's sub-bullet block within the `## Pomodoros`
+section of a daily-note-shaped path. The entry can be open or
+closed; toggling from a 🍅 history line changes the task, not the
+line. Both keys do the same thing, because a two-state ring has no
+direction, and the bullet is never reformatted. Unchanged: task and
+checkbox lines (including the Pomodoro entry line itself and
+`[x] [[…]]` checklist rows), Depends-On lines, embedded links
+outside Pomodoros, and the formatting toggle on every other plain
+bullet (including plain link bullets outside Pomodoros).
+
+Only two statuses participate:
+
+| Target status | Single press | In a counted batch |
+| --- | --- | --- |
+| Next `[*]` | → In Progress `[/]` | "start" |
+| In Progress `[/]` | prompt, then → Next `[*]` | "pause" |
+| Ready `[ ]` | refused: `Task is Ready · Alt+N commits it to Next` | skipped, counted |
+| Blocked `[?]` | refused: `Blocked is derived · clear its dependency or future schedule first` | skipped, counted |
+| Done `[x]` / Cancelled `[-]` (incl. struck links) | refused: `Task is done · Ctrl+Enter reopens it` / `Task is cancelled` | skipped, counted |
+| Missing, duplicated, non-task, or unreadable target | the existing resolver error Notice | whole batch refused (as Alt+N) |
+
+### Counts
+
+A count covers the cursor link plus the next N sibling Task Links,
+clamped at the Pomodoro entry's end — the same rule Alt+N uses.
+The mode is decided **once, across all note groups**: if any
+target is Next, every Next target goes to In Progress and In
+Progress targets are left alone ("start wins"); otherwise, if any
+target is In Progress, every In Progress target goes to Next with
+one shared prompt and its entry logged on each task; otherwise the
+batch is refused with the first target's refusal. Duplicate
+targets are written once.
+
+### The Move to Next prompt
+
+Going from In Progress back to Next first opens a small **Move to
+Next** prompt: the task (or `N tasks` with up to three names and
+`The same entry is logged on each task` for a batch), an optional
+`Work summary (optional)` field, and a live preview of the Work
+Log entry (`🛠️ **WORK LOG**` / `*YYYY-MM-DD* — summary`, or `No
+work-log entry will be added.` when blank). Enter commits — a
+blank summary moves the task without logging — and Esc cancels the
+whole gesture with nothing written and no Notice. The entry is
+prepended newest-first under an existing direct-child 🛠️ WORK LOG
+or a newly created one.
+
+### Notices and instant feedback
+
+A successful toggle shows a short Notice, for example
+`◐ In Progress · Fix the parser crash · PENDING 8/10 · NEXT 11/15`
+or `→ Next · Fix … · logged`, with skipped counts and lane-budget
+suffixes (🔴 when over a lane cap) as needed. Because open target
+notes refresh their metadata cache only after autosave (~2 s), the
+toggle hands the new status to bob-ledger-tools as an optimistic
+hint, so the mark flips on the same frame; the hint wins until the
+cache agrees or 4 s pass.
+
+### Hooks interplay
+
+Sticky lanes still hold: this gesture moves a task between Next
+and Pending and never returns it to Ready — only Alt+N release
+does. Every toggle stamps `[fresh:: today]`. `bob task reconcile`
+never lowers `[/]` and leaves a directly linked `[*]` alone, so it
+keeps both directions. One edge case: a task that is a
+prerequisite of In Progress work reachable from today's open
+Pomodoros is raised back to `[/]` by dependency inheritance.
+Blocked stays derived and is never a destination. Task Links are
+never review-walk landings, so the gesture neither captures nor
+advances the walk.
+
+### Plugin APIs
+
+Both contracts are additive namespaces; the top-level api versions
+stay as they are (ledger-tools v3, nav v3) and consumers
+feature-detect the namespace version. ledger-tools exposes
+`api.progressMarks` v1 (`expect(entries)`, `refresh()`,
+`isEnabled()` — all synchronous, never throwing): optimistic
+`{ path, blockId, status }` hints that override the cached status
+until the cache agrees or 4 s pass. Nav exposes `api.taskLinkLane`
+v1: `matches({ content, line, path })` (synchronous, never throws;
+the single definition of "Pomodoro Task Link line") and
+`toggle({ editor, view, countExplicit, additionalTaskCount })`
+(resolves `{ ok: true, mode: "start" | "pause", changed }` or
+`{ ok: false, reason }`, never rejects; a second call while one is
+in flight resolves `{ ok: false, reason: "busy" }`). Without nav or
+its namespace, task-status-cycler keeps its legacy Alt+[ / Alt+]
+behavior.
+
+### Conformance vectors
+
+Notation: `D` is today's daily note, and `T` is a project note
+holding `- [s] #task Fix ^fix`.
+
+**Marks (P)**
+
+| ID | Setup | Mark? |
+| --- | --- | --- |
+| P1 | open timed entry, `\t- [[T#^fix]]`, `s=/` | yes, before `[[` |
+| P2 | same, `s=*` | no |
+| P3 | open placeholder `- [ ] ()` entry, `s=/` | yes |
+| P4 | named open entry `- [ ] () — GOALS`, aliased `[[T#^fix\|Fix]]`, `s=/` | yes |
+| P5 | closed entry `- [x] (…)` with `\t- 🍅 [[T#^fix]]`, `s=/` | no |
+| P6 | open entry, `\t- ![[T#^fix]]`, `s=/` | no (embed shows its own checkbox) |
+| P7 | open entry, `\t- ~~[[T#^fix]]~~`, `s=/` | no |
+| P8 | open entry, `\t- [[T#^fix]]#` and `\t- [[T#^fix]] #`, `s=/` | yes, both |
+| P9 | open entry, nested `\t\t- [[T#^fix]]`, or `\t- read [[T#^fix]] today`, `s=/` | no |
+| P10 | `[[T#^fix]]` inside a fence, outside `## Pomodoros`, or in yesterday's daily note | no |
+| P11 | unresolved target, or a non-task block id | no |
+| P12 | `s` is ` `, `?`, `x`, or `-` | no |
+| P13 | target task lives in `D` itself, edited live to `[/]` | yes, read from the live doc without waiting for the cache |
+| P14 | `expect([{T, fix, "/"}])` while the cache still says `*` | yes until the cache says `/` or 4 s pass; after 4 s the cache wins |
+
+**Toggle (L)**
+
+| ID | Cursor / setup | Result |
+| --- | --- | --- |
+| L1 | Alt+] on a Next link | `[*]→[/]`, `[fresh:: today]` stamped, no prompt, Notice `◐ In Progress · Fix …`, mark appears |
+| L2 | Alt+[ on an In Progress link, blank summary | prompt, `[/]→[*]`, no Work Log entry, Notice `→ Next · Fix …` |
+| L3 | as L2 with `Finished the API review` | entry `*YYYY-MM-DD* — Finished the API review` prepended under the existing 🛠️ WORK LOG (or a new marker), Notice ends `· logged` |
+| L4 | as L2, Esc | nothing written, no Notice |
+| L5 | Alt+[ vs Alt+] | identical results |
+| L6 | Ready / Blocked / done / cancelled / struck-done target | refusal Notices from the scope table, nothing written |
+| L7 | `2<A-]>` over `[*] [/] [*]` siblings | both Next become In Progress, the In Progress one is untouched, no prompt |
+| L8 | `2<A-]>` over `[/] [/] [?]` | one prompt, both In Progress become Next with the same entry, Notice includes `1 Blocked skipped — Blocked is derived` |
+| L9 | `5<A-]>` with 2 siblings left | clamped at the entry end, no error |
+| L10 | Alt+] on a closed-entry `🍅 [[T#^fix]]` line | toggles the task; the line is unchanged |
+| L11 | target edited while the prompt is open | `A linked note changed; no tasks were updated`, nothing written |
+| L12 | embedded `![[T#^fix]]` under a Pomodoro | two-state toggle (no longer the full ring) |
+| L13 | Pomodoro entry line, a task line, a Depends-On line, or a plain link outside Pomodoros | behavior exactly as before |
+| L14 | the same task linked twice in a counted batch | written once |
+| L15 | second Alt+] while a toggle or prompt is in flight | swallowed (`busy`), no write |
+
+### Live verification (Bryan, in Obsidian)
+
+- [ ] Light and dark: the ◐ mark reads amber in both, with its
+  shape (not just color) carrying the meaning.
+- [ ] The mark stays visible with the cursor on its line.
+- [ ] Toggle with the target open in a split: the mark flips on
+  the same frame, before autosave.
+- [ ] A counted batch over mixed Next / In Progress / Blocked
+  siblings prompts once and reports the skips.
+- [ ] Esc in the Move to Next prompt writes nothing and shows no
+  Notice.
+- [ ] Reading view shows the same marks as Live Preview.
+
 ## READY backlog (dashboard and daily badge)
 
 **READY** is the freshness-gated global backlog the `dash.md` READY
@@ -549,7 +768,7 @@ non-Dataview task format, or an unresolvable note, and 3 with
 | --- | --- |
 | `bob plan` | The full plan report: meters, today's themes (★ highlight, ▶ running), the TODAY list, and lint messages with codes |
 | `bob ready` | The per-note Ready cap report: crowded/full/room bar overview, the single-note worklist, schema-1 JSON, `--check` (exit 3), and `--cap` preview |
-| Daily note with a `bob-plan` code block | The Bob Ledger Tools plugin (api v3 with freshness namespace v4: `isToday`, `todayRank`, `nextBudget`, `pendingBudget`, `dashboardLaneBudget`, `renderDashboardLaneBadge`, `readyBudget`, `renderReadyBadge`, `renderReviewChip`, `freshness.reviewModel`) renders TODAY, PENDING, NEXT, READY chips, a theme line, and any lints. TODAY is the theme/link budget (`TODAY 3/3 · 7/10`, or `TODAY –` with no Pomodoros section). PENDING, NEXT, and READY show `–` when their data is unavailable; the shared READY badge is the freshness-gated live current backlog (`READY n/100` with a whole-lane tooltip) that opens `dash#READY Tasks` and never changes the PLAN status. Daily PENDING/NEXT keep whole-lane `pendingBudget`/`nextBudget`; only the dashboard uses the section budgets. |
+| Daily note with a `bob-plan` code block | The Bob Ledger Tools plugin (api v3 with freshness namespace v4: `isToday`, `todayRank`, `nextBudget`, `pendingBudget`, `dashboardLaneBudget`, `renderDashboardLaneBadge`, `readyBudget`, `renderReadyBadge`, `renderReviewChip`, `freshness.reviewModel`) renders TODAY, PENDING, NEXT, READY chips, a theme line, and any lints. Task Links under today's open Pomodoros carry a rendered half-ring In Progress mark (◐) when their target is `[/]`; Next targets show none (see `## In Progress marks and the Task Link lane toggle`). TODAY is the theme/link budget (`TODAY 3/3 · 7/10`, or `TODAY –` with no Pomodoros section). PENDING, NEXT, and READY show `–` when their data is unavailable; the shared READY badge is the freshness-gated live current backlog (`READY n/100` with a whole-lane tooltip) that opens `dash#READY Tasks` and never changes the PLAN status. Daily PENDING/NEXT keep whole-lane `pendingBudget`/`nextBudget`; only the dashboard uses the section budgets. |
 | `dash.md` | Its ten badges in grouped Work / Review / Browse navigation above `## Tasks` and mutually exclusive TODAY / NEW / PENDING / NEXT / READY sections (section order TODAY → NEW → PENDING → NEXT → READY) use the Bob Ledger Tools api v3 with freshness namespace v4 (`dashboardLaneBudget`/`renderDashboardLaneBadge` for PENDING/NEXT sections, `readyBudget`/`renderReadyBadge` for gated READY plus `renderReviewChip`/`reviewModel` for NEW/ROTTEN, with a guarded inline fallback when the plugin is older or unloaded) plus the `noteReady` namespace v1 `renderCrowdedChip` and the `dashboardCollections` namespace v1 `snapshot`/`renderChip` for the Browse row (each guarded with a clickable unavailable fallback when the plugin is older, unloaded, or throwing). Work is TODAY · PENDING · NEXT · READY; Review is NEW · ROTTEN · BLOCKED · CROWDED; Browse is PROJECTS · REFERENCES opening `dash_projects` and `dash_references`. PENDING/NEXT badges show the section count with the whole-lane pressure in the tooltip; non-dashboard `pendingBudget`/`nextBudget` keep whole-lane semantics. TODAY is that same theme/link budget and opens today's daily note. PROJECTS counts `projects.base#Active & Waiting` once per path and REFERENCES counts `refs.base#Reading Queue` once per path; a changed Base contract or pending metadata shows `–` with a reason instead of a stale number. |
 | `crowded.md` | The Crowded Notes page (`parent: "[[gtd]]"`, aliases Crowded Notes and Crowded): a `bob-ready-notes` block with the ranked CROWDED/FULL bar rows plus a `### CROWDED Tasks` query grouped by the noteReady group label. |
 | `bob-ready-notes` code block | The same model as the `bob ready` overview: a CROWDED summary line, CROWDED and FULL ranked-bar rows, compressed ROOM pills, dimmed exempt notes, and a remedies footer; `–` when unavailable. |
@@ -558,7 +777,7 @@ non-Dataview task format, or an unresolvable note, and 3 with
 | `bob task reconcile` | A `plan_budget` object in JSON and a human meter line such as `plan 3/3 themes · 7/10 links · TODAY 7 · PENDING 8/10 · NEXT 12/15`, when the daily note has a Pomodoros section and the plan config is valid. The meter describes the ledger before sync cleanup. |
 | `bob capture` | When a capture changes today's Pomodoros section, a before/after theme and link budget, cap warnings if the count grows over a cap, and the Task Link destination (for example `→ under GOALS (next up)`). Strict mode can refuse a new over-cap theme. |
 | Bob Mac Capture | The same budget in Themes and Links capsules, warning captions, and shorter destination rows such as `→ GOALS · next up` or `→ running GOALS 0945–1015`. |
-| Obsidian Notices | A lane-aware suffix on Task Link changes. Ctrl+Shift+Enter link and unlink Notices name the destination and append the plan meter, for example `Linked to CAPTURE · Next · plan 1/3 · 2/10` (🔴 when over a plan cap); Alt+N lane Notices report the lanes, for example `→ Ready · 2 tasks · unlinked 1 from today · NEXT 11/15 · PENDING 7/10`, with 🔴 plus a prune hint when over a lane cap. |
+| Obsidian Notices | A lane-aware suffix on Task Link changes. Ctrl+Shift+Enter link and unlink Notices name the destination and append the plan meter, for example `Linked to CAPTURE · Next · plan 1/3 · 2/10` (🔴 when over a plan cap); Alt+N lane Notices report the lanes, for example `→ Ready · 2 tasks · unlinked 1 from today · NEXT 11/15 · PENDING 7/10`, with 🔴 plus a prune hint when over a lane cap. Alt+[ / Alt+] Task Link lane-toggle Notices report the toggle, for example `◐ In Progress · Fix the parser crash · PENDING 8/10 · NEXT 11/15` or `→ Next · Fix … · logged`. |
 | Link to today picker | The Ctrl+Shift+Enter picker footer shows the plan meter (`plan 2/3 · 6/10`, red when over) and the create row carries a `+1 theme` badge (red `+1 theme · 4/3` when over the theme cap). |
 
 ## Conformance examples

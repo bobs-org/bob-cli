@@ -156,6 +156,10 @@ Inspect `bob task reconcile --dry-run`, then run `bob task reconcile` to
 reconcile statuses and clean up links. Next and Pending are sticky: unlinking
 a task keeps its lane. The explicit release gesture in Obsidian is Alt+N.
 Blocked is derived from open prerequisites and future task schedules.
+With the cursor on a Pomodoro Task Link, Alt+[ / Alt+] toggles the linked
+task between Next and In Progress (asking once for an optional Work Log
+summary when moving back to Next); In Progress targets show a rendered ◐
+mark in today's daily note.
 
 ## Review the backlog
 
