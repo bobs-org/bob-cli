@@ -1036,6 +1036,9 @@ pub(crate) fn resolve_execution_ownership(
             // is claimed invalid before ownership resolves.
             Err(unsupported_target_dependency_error("task-complete"))
         }
+        CaptureKind::Ref(_) => {
+            Err(unsupported_target_dependency_error("reference"))
+        }
     }
 }
 

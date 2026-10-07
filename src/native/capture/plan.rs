@@ -26,11 +26,23 @@ pub(super) fn plan_capture_batch(
     request: &CaptureRequest,
 ) -> Result<PlannedCaptureBatch, CaptureError> {
     let parse_clip_markers = request.forced_clip.is_none() && !request.no_clip;
+    // URL routing stays off until phase `capture` turns it on: every
+    // production caller plans bare URLs as tasks.
+    let options = CaptureParseOptions {
+        parse_clip_markers,
+        url_routing: None,
+        explicit_destination: request.forced_route.is_some()
+            || request.forced_section.is_some()
+            || request.forced_sub_bullet_target.is_some()
+            || request.forced_task_section.is_some()
+            || request.forced_clip.is_some(),
+        has_global_destination: false,
+    };
     let parsed_draft = parse_capture_draft_with_clip_control(
         &request.raw_text,
         request.forced_route.as_deref(),
         request.forced_section.as_deref(),
-        parse_clip_markers,
+        &options,
     )?;
     if parsed_draft.global.is_some()
         && !request.forced_destination_flags.is_empty()
@@ -546,6 +558,9 @@ pub(super) fn plan_capture_item(
         CaptureKind::TaskComplete { .. } => {
             unreachable!("task complete capture is planned before this point")
         }
+        CaptureKind::Ref(_) => {
+            return Err(CaptureError::usage("reference items are not enabled"));
+        }
     };
     let kind_label = capture_kind_label(&parsed.kind);
     let task_block_id = match &parsed.kind {
@@ -1012,6 +1027,7 @@ pub(super) fn capture_kind_label(kind: &CaptureKind) -> &'static str {
         CaptureKind::PomodoroClose { .. } => "pomodoro_close",
         CaptureKind::PomodoroStart { .. } => "pomodoro_start",
         CaptureKind::TaskComplete { .. } => "task_complete",
+        CaptureKind::Ref(_) => "ref",
     }
 }
 

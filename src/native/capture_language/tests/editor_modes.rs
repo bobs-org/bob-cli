@@ -843,9 +843,13 @@ fn editor_agrees_with_execution_for_resolved_captures() {
     ];
 
     for raw in inputs {
-        let executed =
-            parse_capture_text_with_clip_control(raw, None, None, true)
-                .unwrap_or_else(|error| panic!("{raw}: {error}"));
+        let executed = parse_capture_text_with_clip_control(
+            raw,
+            None,
+            None,
+            &CaptureParseOptions::routing_off(true),
+        )
+        .unwrap_or_else(|error| panic!("{raw}: {error}"));
         let parse = editor(raw);
         assert_eq!(parse.body, executed.body, "{raw}");
         assert_eq!(parse.route, executed.route, "{raw}");
@@ -873,6 +877,7 @@ fn editor_agrees_with_execution_for_resolved_captures() {
             CaptureKind::PomodoroClose { .. } => EditorMode::PomodoroClose,
             CaptureKind::PomodoroStart { .. } => EditorMode::PomodoroStart,
             CaptureKind::TaskComplete { .. } => EditorMode::TaskComplete,
+            CaptureKind::Ref(_) => EditorMode::Ref,
         };
         assert_eq!(parse.mode, expected_mode, "{raw}");
         assert_eq!(
@@ -1480,9 +1485,13 @@ fn interactive_markers_are_the_only_divergence_from_execution() {
         "Body @:",
         "Body @:focus-123",
     ] {
-        let executed =
-            parse_capture_text_with_clip_control(raw, None, None, true)
-                .unwrap_or_else(|error| panic!("{raw}: {error}"));
+        let executed = parse_capture_text_with_clip_control(
+            raw,
+            None,
+            None,
+            &CaptureParseOptions::routing_off(true),
+        )
+        .unwrap_or_else(|error| panic!("{raw}: {error}"));
         assert_eq!(executed.kind, CaptureKind::Task, "{raw}");
         assert_eq!(executed.route, None, "{raw}");
         assert_eq!(executed.body, raw, "{raw}");
@@ -1513,8 +1522,13 @@ fn interactive_markers_are_the_only_divergence_from_execution() {
         "Body @!",
         "Body @!dev",
     ] {
-        parse_capture_text_with_clip_control(raw, None, None, true)
-            .expect_err(raw);
+        parse_capture_text_with_clip_control(
+            raw,
+            None,
+            None,
+            &CaptureParseOptions::routing_off(true),
+        )
+        .expect_err(raw);
 
         let parse = editor(raw);
         assert_eq!(parse.mode, EditorMode::Incomplete, "{raw}");
@@ -1592,9 +1606,13 @@ fn caret_close_conflicts_agree_with_execution() {
     // Invalid link closes with item conflicts report the conflict in both
     // execution and the editor: a conflict wins over the lexical diagnostic.
     for raw in ["^r:id=x1,1 s:2", "^r:id=x1, s:2"] {
-        let execution =
-            parse_capture_text_with_clip_control(raw, None, None, true)
-                .expect_err(raw);
+        let execution = parse_capture_text_with_clip_control(
+            raw,
+            None,
+            None,
+            &CaptureParseOptions::routing_off(true),
+        )
+        .expect_err(raw);
         let parse = editor(raw);
         assert_eq!(parse.mode, EditorMode::PomodoroLink, "{raw}");
         let diagnostic = parse.diagnostics.first().expect("diagnostic");
@@ -1605,9 +1623,13 @@ fn caret_close_conflicts_agree_with_execution() {
         );
     }
     let child = "^r:id=x1,1\n- detail";
-    let execution =
-        parse_capture_text_with_clip_control(child, None, None, true)
-            .expect_err(child);
+    let execution = parse_capture_text_with_clip_control(
+        child,
+        None,
+        None,
+        &CaptureParseOptions::routing_off(true),
+    )
+    .expect_err(child);
     let parse = editor(child);
     let diagnostic = parse.diagnostics.first().expect("diagnostic");
     assert_eq!(diagnostic.message, execution, "{child}");

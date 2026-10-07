@@ -11,7 +11,7 @@ pub(super) fn parse_capture_text(
         raw_text,
         forced_route,
         forced_section,
-        true,
+        &capture_language::CaptureParseOptions::routing_off(true),
     )
 }
 
@@ -22,13 +22,13 @@ pub(super) fn parse_capture_text_with_clip_control(
     raw_text: &str,
     forced_route: Option<&str>,
     forced_section: Option<&str>,
-    parse_clip_markers: bool,
+    options: &capture_language::CaptureParseOptions<'_>,
 ) -> Result<ParsedCaptureText, CaptureError> {
     capture_language::parse_capture_text_with_clip_control(
         raw_text,
         forced_route,
         forced_section,
-        parse_clip_markers,
+        options,
     )
     .map_err(CaptureError::usage)
 }
@@ -37,13 +37,13 @@ pub(super) fn parse_capture_draft_with_clip_control(
     raw_text: &str,
     forced_route: Option<&str>,
     forced_section: Option<&str>,
-    parse_clip_markers: bool,
+    options: &capture_language::CaptureParseOptions<'_>,
 ) -> Result<capture_language::ParsedCaptureDraft, CaptureError> {
     capture_language::parse_capture_draft_with_clip_control(
         raw_text,
         forced_route,
         forced_section,
-        parse_clip_markers,
+        options,
     )
     .map_err(CaptureError::usage)
 }

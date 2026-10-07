@@ -6,6 +6,7 @@ use super::line::*;
 use super::markers::*;
 use super::model::*;
 use super::tokens::*;
+use crate::native::url_routing::is_url_list_line;
 
 /// Split `raw` into physical lines on LF, CRLF, and bare CR alike, so pasted
 /// Windows and classic-Mac text behaves exactly like LF text. Byte offsets
@@ -245,6 +246,25 @@ pub(super) fn push_capture_item<'a>(
     let Some(first) = current.first().copied() else {
         return;
     };
+    // A blank-line-free block of two or more URL-list lines splits into one
+    // item per line. The test is purely lexical, so parse, preview, and
+    // submit always agree; each item classifies on its own later.
+    if current.len() >= 2
+        && current.iter().all(|line| is_url_list_line(line.raw.text))
+    {
+        for line in std::mem::take(current) {
+            items.push(CaptureItem {
+                source,
+                index: items.len(),
+                start: line.raw.start,
+                end: line.raw.end,
+                line_start: line.line_number,
+                line_end: line.line_number,
+                lines: vec![line],
+            });
+        }
+        return;
+    }
     if let Some(tokens) = session_chain_tokens(&first.raw) {
         let rest: Vec<ItemLine<'a>> = current[1..].to_vec();
         let last_child = rest.last().copied();
@@ -526,7 +546,7 @@ pub(crate) fn parse_capture_text_with_clip_control(
     raw_text: &str,
     forced_route: Option<&str>,
     forced_section: Option<&str>,
-    parse_clip_markers: bool,
+    options: &CaptureParseOptions<'_>,
 ) -> Result<ParsedCaptureText, String> {
     let draft = split_capture_draft(raw_text);
     if draft.items.is_empty() {
@@ -537,17 +557,13 @@ pub(crate) fn parse_capture_text_with_clip_control(
             missing_text_error()
         });
     }
+    let options = options.with_global(!draft.declarations.is_empty());
 
     let item_outcomes = draft
         .items
         .iter()
         .map(|item| {
-            parse_capture_item(
-                item,
-                forced_route,
-                forced_section,
-                parse_clip_markers,
-            )
+            parse_capture_item(item, forced_route, forced_section, &options)
         })
         .collect::<Result<Vec<_>, _>>()?;
     let mut declarations = draft.declarations;
@@ -581,7 +597,7 @@ pub(crate) fn parse_capture_draft_with_clip_control(
     raw_text: &str,
     forced_route: Option<&str>,
     forced_section: Option<&str>,
-    parse_clip_markers: bool,
+    options: &CaptureParseOptions<'_>,
 ) -> Result<ParsedCaptureDraft, String> {
     let draft = split_capture_draft(raw_text);
     if draft.items.is_empty() {
@@ -592,24 +608,20 @@ pub(crate) fn parse_capture_draft_with_clip_control(
             missing_text_error()
         });
     }
+    let options = options.with_global(!draft.declarations.is_empty());
 
     let mut item_outcomes = draft
         .items
         .iter()
         .map(|item| {
-            parse_capture_item(
-                item,
-                forced_route,
-                forced_section,
-                parse_clip_markers,
-            )
-            .map_err(|message| {
-                format!(
-                    "capture item {} starting on line {}: {message}",
-                    item.index + 1,
-                    item.line_start
-                )
-            })
+            parse_capture_item(item, forced_route, forced_section, &options)
+                .map_err(|message| {
+                    format!(
+                        "capture item {} starting on line {}: {message}",
+                        item.index + 1,
+                        item.line_start
+                    )
+                })
         })
         .collect::<Result<Vec<_>, _>>()?;
 

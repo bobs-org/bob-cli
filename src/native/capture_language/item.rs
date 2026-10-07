@@ -11,6 +11,7 @@ use super::model::*;
 use super::project_tasks::*;
 use super::start_selection::*;
 use super::tokens::*;
+use crate::native::url_routing::{classify_token, RoutingEntry};
 
 pub(super) struct ParsedCaptureItemOutcome<'a> {
     pub(super) index: usize,
@@ -74,11 +75,55 @@ fn reject_operator_dependencies(
     Ok(())
 }
 
+/// Claim a whole-item bare URL as a reference item when the routing
+/// policy admits it. Runs after the operator claims and before the generic
+/// `resolve_line`, so any operator-shaped text keeps its existing meaning.
+fn claim_reference_item<'a>(
+    item: &CaptureItem<'a>,
+    options: &CaptureParseOptions<'_>,
+    has_dependencies: bool,
+) -> Option<ParsedCaptureItemOutcome<'a>> {
+    let policy = options.url_routing?;
+    if options.explicit_destination
+        || options.has_global_destination
+        || has_dependencies
+        || item.lines.len() != 1
+    {
+        return None;
+    }
+    let parent = item.lines.first()?.raw;
+    let tokens = tokenize_with_spans(parent.text);
+    if tokens.len() != 1 {
+        return None;
+    }
+    let token = tokens[0];
+    let intent = classify_token(token.text)?;
+    if !policy.admits(&intent, RoutingEntry::Capture) {
+        return None;
+    }
+    Some(parsed_capture_item_outcome(
+        item,
+        ParsedCaptureText {
+            body: token.text.to_string(),
+            clip: None,
+            route: None,
+            kind: CaptureKind::Ref(intent),
+            scheduled_offset: None,
+            priority_level: None,
+            sub_bullets: Vec::new(),
+            dependencies: Vec::new(),
+            dependency_target: None,
+        },
+        Vec::new(),
+        None,
+    ))
+}
+
 pub(super) fn parse_capture_item<'a>(
     item: &CaptureItem<'a>,
     forced_route: Option<&str>,
     forced_section: Option<&str>,
-    parse_clip_markers: bool,
+    options: &CaptureParseOptions<'_>,
 ) -> Result<ParsedCaptureItemOutcome<'a>, String> {
     let Some((parent_line, child_lines)) = item.lines.split_first() else {
         return Err(missing_text_error());
@@ -143,7 +188,8 @@ pub(super) fn parse_capture_item<'a>(
     // remaining tokens unchanged. Ownership is decided once the finished
     // item kind is known; ownerless items retry after `@@` inheritance in
     // draft resolution.
-    let item_dependencies = scan_item_dependencies(item, parse_clip_markers);
+    let item_dependencies =
+        scan_item_dependencies(item, options.parse_clip_markers);
     if let Some(invalid) = item_dependencies.invalid.first() {
         return Err(invalid.message.clone());
     }
@@ -202,6 +248,10 @@ pub(super) fn parse_capture_item<'a>(
     )? {
         return Ok(outcome);
     }
+    if let Some(outcome) = claim_reference_item(item, options, has_dependencies)
+    {
+        return Ok(outcome);
+    }
     // Dependency modifiers leave the token stream before terminal-marker
     // extraction and route selection see it, exactly like the editor
     // line pass: the remaining tokens resolve like a draft without them.
@@ -211,14 +261,18 @@ pub(super) fn parse_capture_item<'a>(
         parent_line.raw.text,
         parent_line.raw.start,
         true,
-        parse_clip_markers,
+        options.parse_clip_markers,
     );
     let parent_tokens = unescape_execution_tokens(
         parent_tokens,
         &parent_line_dependencies.escapes,
     );
-    let parent_outcome =
-        resolve_line(parent_tokens, true, detect_route, parse_clip_markers)?;
+    let parent_outcome = resolve_line(
+        parent_tokens,
+        true,
+        detect_route,
+        options.parse_clip_markers,
+    )?;
     declarations.extend(global_declarations_from_tokens(
         parent_outcome.declarations,
         parent_line.line_number,
@@ -280,12 +334,16 @@ pub(super) fn parse_capture_item<'a>(
             child_line.text,
             child_line.start,
             false,
-            parse_clip_markers,
+            options.parse_clip_markers,
         );
         let tokens =
             unescape_execution_tokens(tokens, &child_line_dependencies.escapes);
-        let outcome =
-            resolve_line(tokens, false, detect_route, parse_clip_markers)?;
+        let outcome = resolve_line(
+            tokens,
+            false,
+            detect_route,
+            options.parse_clip_markers,
+        )?;
         declarations.extend(global_declarations_from_tokens(
             outcome.declarations,
             line_number,

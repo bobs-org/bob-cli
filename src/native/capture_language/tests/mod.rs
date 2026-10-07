@@ -55,7 +55,12 @@ fn line_texts(raw: &str) -> Vec<&str> {
 }
 
 fn execute(raw: &str) -> Result<ParsedCaptureText, String> {
-    parse_capture_text_with_clip_control(raw, None, None, true)
+    parse_capture_text_with_clip_control(
+        raw,
+        None,
+        None,
+        &CaptureParseOptions::routing_off(true),
+    )
 }
 
 fn sub_bullet_bodies(sub_bullets: &[AuthoredSubBullet]) -> Vec<&str> {
@@ -81,4 +86,5 @@ mod editor_modes;
 mod editor_spans;
 mod globals;
 mod grammar;
+mod ref_grammar;
 mod rewrite;

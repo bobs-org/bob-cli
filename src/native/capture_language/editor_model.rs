@@ -45,6 +45,8 @@ pub(crate) enum SpanKind {
     DependencySigil,
     DependencyNote,
     DependencyBlockId,
+    /// A whole-item bare URL admitted by the routing policy.
+    RefUrl,
     TaskCompleteSigil,
     TaskCompleteNote,
     TaskCompleteBlockId,
@@ -98,6 +100,7 @@ impl SpanKind {
             Self::DependencySigil => "dependency_sigil",
             Self::DependencyNote => "dependency_note",
             Self::DependencyBlockId => "dependency_block_id",
+            Self::RefUrl => "ref_url",
             Self::TaskCompleteSigil => "task_complete_sigil",
             Self::TaskCompleteNote => "task_complete_note",
             Self::TaskCompleteBlockId => "task_complete_block_id",
@@ -171,6 +174,8 @@ pub(crate) enum EditorMode {
     TaskDependency,
     /// A whole-item `!note:block-id` task completion.
     TaskComplete,
+    /// A whole-item bare URL admitted by the routing policy.
+    Ref,
     Incomplete,
 }
 
@@ -192,6 +197,7 @@ impl EditorMode {
             Self::PomodoroStart => "pomodoro_start",
             Self::TaskDependency => "task_dependency",
             Self::TaskComplete => "task_complete",
+            Self::Ref => "ref",
             Self::Incomplete => "incomplete",
         }
     }

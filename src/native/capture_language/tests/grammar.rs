@@ -330,7 +330,7 @@ fn explicit_toggle_near_misses_have_focused_diagnostics() {
         "@@dev+id!\nTask",
         None,
         None,
-        true,
+        &CaptureParseOptions::routing_off(true),
     )
     .expect_err("global");
     assert!(executed_global.contains("`@@`"), "{executed_global}");
@@ -418,7 +418,7 @@ fn plus_in_a_pomodoro_name_does_not_select_the_sub_bullet_family() {
         "Do work @sase:deep-fix#c++",
         None,
         None,
-        true,
+        &CaptureParseOptions::routing_off(true),
     )
     .expect("pomodoro with plus name");
     assert_eq!(parsed.route.as_deref(), Some("sase"));
@@ -436,7 +436,7 @@ fn plus_in_a_pomodoro_name_does_not_select_the_sub_bullet_family() {
         "Do work @sase:deep-fix#bob+sase",
         None,
         None,
-        true,
+        &CaptureParseOptions::routing_off(true),
     )
     .expect("pomodoro with infix plus");
     assert_eq!(
@@ -453,7 +453,7 @@ fn plus_in_a_pomodoro_name_does_not_select_the_sub_bullet_family() {
         "Add context @sase+goog-exit#a+b",
         None,
         None,
-        true,
+        &CaptureParseOptions::routing_off(true),
     );
     assert_eq!(sub_bullet, Err(SUB_BULLET_SECTION_ERROR.to_string()));
 
@@ -1015,9 +1015,13 @@ fn execution_parses_equals_family_starts_alongside_close() {
         assert_eq!(parsed.kind, CaptureKind::Task, "{raw}");
     }
     // A forced route rejects an exact start with the start copy.
-    let forced =
-        parse_capture_text_with_clip_control("=3", Some("work"), None, true)
-            .expect_err("forced");
+    let forced = parse_capture_text_with_clip_control(
+        "=3",
+        Some("work"),
+        None,
+        &CaptureParseOptions::routing_off(true),
+    )
+    .expect_err("forced");
     assert_eq!(forced, POMODORO_START_FORCED_ERROR, "{forced}");
     // Close shapes keep today's meaning.
     let close = execute("=x").expect("close");
@@ -1649,7 +1653,7 @@ fn execution_forced_route_keeps_retired_and_special_markers_literal() {
         "Do thing @dev::id @dev+parent @dev^new-id",
         Some("work"),
         None,
-        true,
+        &CaptureParseOptions::routing_off(true),
     )
     .expect("parse");
     assert_eq!(parsed.route.as_deref(), Some("work"));
@@ -1771,7 +1775,7 @@ fn execution_keeps_other_trailing_hash_tags_rejected() {
         "Fix #now",
         Some("work"),
         None,
-        true,
+        &CaptureParseOptions::routing_off(true),
     )
     .expect_err("forced route trailing tag");
     assert!(forced.contains("bullet section markers"), "{forced}");
@@ -1779,7 +1783,7 @@ fn execution_keeps_other_trailing_hash_tags_rejected() {
         "Fix #now note",
         Some("work"),
         None,
-        true,
+        &CaptureParseOptions::routing_off(true),
     )
     .expect("forced route");
     assert_eq!(parsed.body, "Fix #now note");
@@ -1839,9 +1843,13 @@ fn task_link_query_rejects_single_colon_tokens_with_teaching_errors() {
         "padded"
     );
     // Forced flags do not change the rejection.
-    let forced =
-        parse_capture_text_with_clip_control(":dee", Some("work"), None, true)
-            .expect_err("forced query");
+    let forced = parse_capture_text_with_clip_control(
+        ":dee",
+        Some("work"),
+        None,
+        &CaptureParseOptions::routing_off(true),
+    )
+    .expect_err("forced query");
     assert!(forced.contains("opens the task picker"), "{forced}");
 }
 
@@ -2033,7 +2041,7 @@ fn bang_claim_covers_the_contract_table() {
         "!sase:fix-flaky\n- child",
         None,
         None,
-        true,
+        &CaptureParseOptions::routing_off(true),
     )
     .expect_err("child lines are invalid");
     assert!(child_error.contains("its child lines"), "{child_error}");
@@ -2043,7 +2051,7 @@ fn bang_claim_covers_the_contract_table() {
         "!fix\n- child",
         None,
         None,
-        true,
+        &CaptureParseOptions::routing_off(true),
     )
     .expect("incomplete plus child is prose");
     assert!(matches!(
@@ -2079,7 +2087,7 @@ fn bang_claim_covers_the_contract_table() {
         "!sase:fix-flaky",
         Some("work"),
         None,
-        true,
+        &CaptureParseOptions::routing_off(true),
     )
     .expect_err("forced route is invalid");
     assert!(

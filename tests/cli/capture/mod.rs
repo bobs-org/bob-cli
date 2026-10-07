@@ -33,6 +33,7 @@ mod pomodoro_start_named;
 mod pomodoro_whole_item;
 mod priority;
 mod project_note;
+mod ref_grammar;
 mod rewrite;
 mod routing;
 mod sections;

@@ -10,6 +10,7 @@ use super::markers::*;
 use super::model::*;
 use super::project_tasks::*;
 use super::tokens::*;
+use crate::native::url_routing::{classify_token, RoutingEntry};
 
 /// Remap one physical line's own tokenizer output into the original
 /// multi-line text's byte offsets, so every span an editor receives always
@@ -222,13 +223,25 @@ pub(super) fn duplicate_capture_marker_diagnostic(
 /// not body text; items inherit it unless they have a local destination
 /// marker.
 pub(crate) fn parse_for_editor(raw_text: &str) -> EditorParse {
+    parse_for_editor_with(raw_text, &EditorParseOptions::routing_off())
+}
+
+pub(crate) fn parse_for_editor_with(
+    raw_text: &str,
+    options: &EditorParseOptions<'_>,
+) -> EditorParse {
     let draft = split_capture_draft(raw_text);
     let mut global_spans = Vec::new();
     let mut global_diagnostics = Vec::new();
+    let options = EditorParseOptions {
+        has_global_destination: options.has_global_destination
+            || !draft.declarations.is_empty(),
+        ..*options
+    };
     let item_outcomes = draft
         .items
         .iter()
-        .map(parse_editor_item)
+        .map(|item| parse_editor_item_with(item, &options))
         .collect::<Vec<_>>();
     let mut declarations = draft.declarations;
     for outcome in &item_outcomes {
@@ -271,6 +284,7 @@ pub(crate) fn parse_for_editor(raw_text: &str) -> EditorParse {
                 || item.mode == EditorMode::PomodoroShift
                 || item.mode == EditorMode::PomodoroClose
                 || item.mode == EditorMode::PomodoroStart
+                || item.mode == EditorMode::Ref
                 || item.mode == EditorMode::TaskComplete
                 || item.needs == [Need::TaskLink]
                 || item.needs == [Need::TaskComplete]
@@ -822,8 +836,75 @@ pub(super) fn parse_editor_parent_task_item<'a>(
     })
 }
 
+/// A whole-item bare URL admitted by the routing policy: mode `ref`
+/// with one `ref_url` span over the whole token, `<>` included. Anything
+/// else (extra text, child lines, markers, `@@`, forced routing) falls
+/// through to the generic path, exactly like execution. Completion stays
+/// unchanged: a URL item triggers none.
+fn parse_editor_ref_item<'a>(
+    item: &CaptureItem<'a>,
+    options: &EditorParseOptions<'_>,
+) -> Option<EditorItemOutcome<'a>> {
+    let policy = options.url_routing?;
+    if options.has_global_destination || item.lines.len() != 1 {
+        return None;
+    }
+    if !scan_item_dependencies(item, true).is_empty() {
+        return None;
+    }
+    let parent = item.lines.first()?.raw;
+    let tokens = tokenize_line_with_spans(&parent);
+    if tokens.len() != 1 {
+        return None;
+    }
+    let token = tokens[0];
+    let intent = classify_token(token.text)?;
+    if !policy.admits(&intent, RoutingEntry::Capture) {
+        return None;
+    }
+    Some(EditorItemOutcome {
+        item: EditorItemParse {
+            index: item.index,
+            start: item.start,
+            end: item.end,
+            line_start: item.line_start,
+            line_end: item.line_end,
+            body: token.text.to_string(),
+            mode: EditorMode::Ref,
+            route: None,
+            section: None,
+            block_id: None,
+            needs: Vec::new(),
+            pomodoro_start: None,
+            pomodoro_adjust: None,
+            pomodoro_shift: None,
+            pomodoro_close: None,
+            dependencies: Vec::new(),
+            dependency_target: None,
+            task_complete: None,
+            spans: vec![Span {
+                start: token.start,
+                end: token.end,
+                kind: SpanKind::RefUrl,
+            }],
+            diagnostics: Vec::new(),
+            sub_bullets: Vec::new(),
+            has_local_destination: false,
+            local_destination_markers: Vec::new(),
+        },
+        declarations: Vec::new(),
+    })
+}
+
 pub(super) fn parse_editor_item<'a>(
     item: &CaptureItem<'a>,
+) -> EditorItemOutcome<'a> {
+    parse_editor_item_with(item, &EditorParseOptions::routing_off())
+}
+
+pub(crate) fn parse_editor_item_with<'a>(
+    item: &CaptureItem<'a>,
+    options: &EditorParseOptions<'_>,
 ) -> EditorItemOutcome<'a> {
     if let Some(task_link) = parse_editor_task_link_item(item) {
         return task_link;
@@ -839,6 +920,9 @@ pub(super) fn parse_editor_item<'a>(
     }
     if let Some(adjustment) = parse_editor_adjust_item(item) {
         return attach_operator_dependency_rejection(adjustment, item);
+    }
+    if let Some(reference) = parse_editor_ref_item(item, options) {
+        return reference;
     }
     let mut spans: Vec<Span> = Vec::new();
     let mut diagnostics: Vec<Diagnostic> = Vec::new();

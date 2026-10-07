@@ -236,6 +236,7 @@ pub(super) fn classify_local_marker(
         | EditorMode::PomodoroStart
         | EditorMode::TaskDependency
         | EditorMode::TaskComplete
+        | EditorMode::Ref
         | EditorMode::TaskToggle => LocalMarkerAbsorbability::NonAbsorbable,
         EditorMode::Incomplete => {
             unreachable!("complete_local_destination_marker filters these out")
@@ -303,6 +304,10 @@ pub(super) fn non_absorbable_marker_notice(
         // `@@` would change which task gets completed.
         EditorMode::TaskComplete => format!(
             "@@ cannot take a task completion: leave {} on this item, or delete it",
+            marker.text
+        ),
+        EditorMode::Ref => format!(
+            "@@ cannot take a reference link: leave {} on this item, or delete it",
             marker.text
         ),
         EditorMode::Incomplete => {

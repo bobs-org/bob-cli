@@ -312,7 +312,7 @@ fn clip_markers_are_terminal_forgiving_and_can_be_disabled() {
         "body %log",
         None,
         None,
-        false,
+        &CaptureParseOptions::routing_off(false),
     )
     .expect("disabled clip marker");
     assert_eq!(parsed.body, "body %log");

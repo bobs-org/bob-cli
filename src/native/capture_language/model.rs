@@ -3,9 +3,69 @@
 use serde::Serialize;
 use std::num::NonZeroUsize;
 
+use crate::native::url_routing::{UrlIntent, UrlRoutingPolicy};
+
+/// Grammar-level parse options shared by `bob capture` and
+/// `capture-parse`. `url_routing: None` turns reference claiming off, so
+/// every production caller passes `None` until phase `capture` turns
+/// routing on; only the lexical URL-list split stays live.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct CaptureParseOptions<'a> {
+    pub(crate) parse_clip_markers: bool,
+    pub(crate) url_routing: Option<&'a UrlRoutingPolicy>,
+    /// A forced destination or clip flag (`-r -s -t -S -c`, `--task-ref`)
+    /// keeps the item a task.
+    pub(crate) explicit_destination: bool,
+    /// A `@@` declaration in the draft keeps every item a task. Draft
+    /// resolution fills this in from the split declarations.
+    pub(crate) has_global_destination: bool,
+}
+
+impl<'a> CaptureParseOptions<'a> {
+    /// Routing-off options: reference items never claim.
+    pub(crate) fn routing_off(parse_clip_markers: bool) -> Self {
+        Self {
+            parse_clip_markers,
+            url_routing: None,
+            explicit_destination: false,
+            has_global_destination: false,
+        }
+    }
+
+    /// Copy these options with the draft's `@@` presence folded in.
+    pub(crate) fn with_global(&self, has_global_destination: bool) -> Self {
+        Self {
+            has_global_destination: self.has_global_destination
+                || has_global_destination,
+            ..*self
+        }
+    }
+}
+
+/// Editor-side parse options. The live editor has no forced flags, so it
+/// only needs the routing policy plus the draft's `@@` presence.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct EditorParseOptions<'a> {
+    pub(crate) url_routing: Option<&'a UrlRoutingPolicy>,
+    pub(crate) has_global_destination: bool,
+}
+
+impl<'a> EditorParseOptions<'a> {
+    /// Routing-off options: reference items never claim.
+    pub(crate) fn routing_off() -> Self {
+        Self {
+            url_routing: None,
+            has_global_destination: false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum CaptureKind {
     Task,
+    /// A whole-item bare URL admitted by the routing policy. The planner
+    /// cannot execute it yet; that arrives with phase `capture`.
+    Ref(UrlIntent),
     TaskWithBlockId {
         block_id: String,
     },

@@ -209,7 +209,7 @@ fn execution_batch_parser_prefixes_item_and_line_context() {
         "parent\n\nsecond\n  - orphan",
         None,
         None,
-        true,
+        &CaptureParseOptions::routing_off(true),
     )
     .unwrap_err();
     assert_eq!(
@@ -326,7 +326,7 @@ fn execution_forced_route_keeps_child_markers_literal() {
         "parent\n- child @home",
         Some("work"),
         None,
-        true,
+        &CaptureParseOptions::routing_off(true),
     )
     .expect("parse");
     assert_eq!(parsed.route.as_deref(), Some("work"));
@@ -455,7 +455,7 @@ fn execution_rejects_duplicate_global_declarations_by_line() {
         "@@foo\nBuy milk @@bar",
         None,
         None,
-        true,
+        &CaptureParseOptions::routing_off(true),
     )
     .unwrap_err();
     assert!(error.contains("duplicate global destination"), "{error}");

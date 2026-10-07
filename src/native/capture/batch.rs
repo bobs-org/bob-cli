@@ -227,6 +227,9 @@ pub(super) fn plan_capture_to_target(
                 "task complete capture invariant failed: wrong write planner",
             ));
         }
+        CaptureKind::Ref(_) => {
+            return Err(CaptureError::usage("reference items are not enabled"));
+        }
     };
     planner.stage(target, updated)?;
     Ok(CaptureWritePlan {
