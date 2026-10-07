@@ -106,7 +106,9 @@ Frontmatter `bob-return-links: false` turns the whole feature off for that
 document. Internal links, URLs, file links, citations, tags, and pills share
 one link ink (`#2F5E96`); the TOC stays black. Existing PDFs gain the feature
 only when re-rendered. When a render pairs links, bob stamps
-`return_links: true` so `bob ref sync` can keep exports clean.
+`return_links: true` so `bob ref sync` can keep exports clean. Dry runs
+preview the planned marker without `return_links`; the flag is added only
+after an actual render pairs a link.
 
 ## PDF route
 

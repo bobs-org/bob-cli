@@ -3029,7 +3029,7 @@ mod tests {
             return;
         }
         let temp = TempDir::new("return-links-pdf");
-        let mut source = "# Return Link Exercise\n\nA [solo link](#solo) opens the exercise.\n\n## Solo\n\nOne inbound link lands here.\n\n## Single\n\nThe [only link](#single) points here.\n\n## Lonely\n\nNobody links here.\n\n## Crowd\n\n".to_string();
+        let mut source = "# Return Link Exercise\n\nA [solo link](#solo) opens the exercise and a [near-bottom link](#nearbottom) targets the landing.\n\n## Solo\n\nOne inbound link lands here.\n\n## Single\n\nThe [only link](#single) points here.\n\n## Lonely\n\nNobody links here.\n\n## Crowd\n\n".to_string();
         source.push_str(
             &["A", "B", "C", "D", "E", "F", "G", "H"]
                 .iter()
@@ -3102,8 +3102,8 @@ mod tests {
         else {
             panic!("render must write a return-link report: {outcome:?}");
         };
-        assert_eq!(report.paired, 35);
-        assert_eq!(report.targets, 7);
+        assert_eq!(report.paired, 36);
+        assert_eq!(report.targets, 8);
         assert_eq!(report.prefix, "bob:ret:");
         let page_count = stamp_and_install(
             &render_path,

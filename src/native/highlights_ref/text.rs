@@ -287,14 +287,18 @@ fn strip_tag_runs(text: &str) -> String {
     let mut cursor = 0;
     let mut index = 0;
     while index < chars.len() {
-        let at_run_start = is_tag_glyph(chars[index])
-            && (index == 0 || !chars[index - 1].is_whitespace());
-        if at_run_start {
-            stripped.push_str(&text[offsets[cursor]..offsets[index]]);
+        if is_tag_glyph(chars[index]) {
+            let run_start = index;
             while index < chars.len() && is_tag_glyph(chars[index]) {
                 index += 1;
             }
-            cursor = index;
+            // The strip rule applies to a maximal run: decide from the
+            // character before its start whether to keep or remove it.
+            let strip = run_start == 0 || !chars[run_start - 1].is_whitespace();
+            if strip {
+                stripped.push_str(&text[offsets[cursor]..offsets[run_start]]);
+                cursor = index;
+            }
         } else {
             index += 1;
         }
@@ -338,5 +342,16 @@ mod tests {
         // A bare `↩` and a spaced tag glyph are not pill/tag shapes.
         assert_eq!(strip_return_link_glyphs("go ↩ back"), "go ↩ back");
         assert_eq!(strip_return_link_glyphs("tag ᵈ alone"), "tag ᵈ alone");
+        // A maximal run after whitespace survives whole, whatever its length
+        // or the whitespace kind.
+        assert_eq!(strip_return_link_glyphs("tag ᵃᵈ alone"), "tag ᵃᵈ alone");
+        assert_eq!(strip_return_link_glyphs("tag ᵃᵈᶜ alone"), "tag ᵃᵈᶜ alone");
+        assert_eq!(strip_return_link_glyphs("tag\nᵃᵈ alone"), "tag\nᵃᵈ alone");
+        assert_eq!(strip_return_link_glyphs("tag\tᵃᵈ alone"), "tag\tᵃᵈ alone");
+        assert_eq!(strip_return_link_glyphs("ᵃᵈ, row 12"), ", row 12");
+        assert_eq!(
+            strip_return_link_glyphs("Text ↩ p. 2ᵈᵃ continues"),
+            "Text continues"
+        );
     }
 }

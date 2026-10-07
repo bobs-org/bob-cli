@@ -115,43 +115,93 @@ function Pandoc(doc)
     Image = function(i) note_def(i, false) end,
     Link = function(l) note_def(l, false) end,
   })
-  -- Spans inside headings, captions, or table head/foot rows lose capability:
-  -- pills cannot attach there.
-  local function disqualify(blocks)
-    blocks:walk({ Span = function(s)
-      if s.identifier and s.identifier ~= "" then
-        capable[s.identifier] = false
-      end
-    end })
-  end
-  local function disqualify_inlines(inlines)
-    disqualify(pandoc.Blocks({ pandoc.Plain(inlines) }))
-  end
-  local function scan_skip_spans(blocks)
-    for _, b in ipairs(blocks) do
-      if b.t == "Header" then
-        disqualify_inlines(b.content)
-      elseif b.t == "Table" then
-        disqualify(b.caption.long)
-        local function rows(rs)
-          for _, row in ipairs(rs) do
-            for _, cell in ipairs(row.cells) do disqualify(cell.contents) end
-          end
+  -- Spans inside headings, captions/image descriptions, or table head/foot
+  -- rows lose capability: pills cannot attach there. This scan mirrors the
+  -- tagging walker's skip contexts exactly at every nesting depth so id
+  -- counting, capability classification and rendering decisions agree.
+  -- Definition lists, table body cells, Divs, figures and footnotes stay
+  -- eligible; only Spans in skip contexts lose capability. Heading text, TOC
+  -- entries and bookmarks never gain pills.
+  local scan_skip_blocks, scan_skip_inlines
+  scan_skip_inlines = function(inlines, skip)
+    for _, il in ipairs(inlines) do
+      if il.t == "Span" then
+        if skip and il.identifier and il.identifier ~= "" then
+          capable[il.identifier] = false
         end
-        rows(b.head.rows)
-        rows(b.foot.rows)
-        for _, body in ipairs(b.bodies) do rows(body.head) end
-      elseif b.t == "Figure" then
-        disqualify(b.caption.long)
-        scan_skip_spans(b.content)
-      elseif b.t == "Div" or b.t == "BlockQuote" then
-        scan_skip_spans(b.content)
-      elseif b.t == "BulletList" or b.t == "OrderedList" then
-        for _, item in ipairs(b.content) do scan_skip_spans(item) end
+        if il.content ~= nil and type(il.content) == "table" then
+          scan_skip_inlines(il.content, skip)
+        end
+      elseif il.t == "Image" then
+        -- Image descriptions are figure captions: never capable.
+        scan_skip_inlines(il.caption, true)
+      elseif il.t == "Note" then
+        -- Footnote bodies render as eligible blocks where the mark sits.
+        scan_skip_blocks(il.content, false)
+      elseif il.t == "Cite" then
+        -- Citation metadata never renders (no citeproc): its ids stay
+        -- non-capable, while visible content follows the ambient context.
+        for _, citation in ipairs(il.citations) do
+          scan_skip_inlines(citation.prefix, true)
+          scan_skip_inlines(citation.suffix, true)
+        end
+        scan_skip_inlines(il.content, skip)
+      elseif il.t == "Link" then
+        if il.content ~= nil and type(il.content) == "table" then
+          scan_skip_inlines(il.content, skip)
+        end
+      elseif il.content ~= nil and type(il.content) == "table" then
+        -- Emph, Strong, Strikeout, Superscript, Subscript, SmallCaps,
+        -- Underline, Quoted: recurse, keeping the current skip context.
+        scan_skip_inlines(il.content, skip)
       end
     end
   end
-  scan_skip_spans(doc.blocks)
+  scan_skip_blocks = function(blocks, skip)
+    skip = skip or false
+    for _, b in ipairs(blocks) do
+      if b.t == "Header" then
+        scan_skip_inlines(b.content, true)
+      elseif b.t == "Table" then
+        scan_skip_blocks(b.caption.long, true)
+        local function rows(rs, cell_skip)
+          for _, row in ipairs(rs) do
+            for _, cell in ipairs(row.cells) do scan_skip_blocks(cell.contents, cell_skip) end
+          end
+        end
+        rows(b.head.rows, true)
+        rows(b.foot.rows, true)
+        for _, body in ipairs(b.bodies) do
+          rows(body.head, true)
+          -- Body cells stay eligible: still recurse so nested headers,
+          -- figures, lists and images inside cells disqualify correctly.
+          rows(body.body, skip)
+        end
+      elseif b.t == "Figure" then
+        scan_skip_blocks(b.caption.long, true)
+        scan_skip_blocks(b.content, skip)
+      elseif b.t == "Div" or b.t == "BlockQuote" then
+        scan_skip_blocks(b.content, skip)
+      elseif b.t == "BulletList" or b.t == "OrderedList" then
+        local nav = (not skip) and is_nav_list(b)
+        for _, item in ipairs(b.content) do scan_skip_blocks(item, skip or nav) end
+      elseif b.t == "DefinitionList" then
+        for _, item in ipairs(b.content) do
+          scan_skip_inlines(item[1], skip)
+          for _, def in ipairs(item[2]) do scan_skip_blocks(def, skip) end
+        end
+      elseif b.t == "Para" or b.t == "Plain" then
+        scan_skip_inlines(b.content, skip)
+      elseif b.t == "LineBlock" then
+        for _, line in ipairs(b.content) do
+          scan_skip_inlines(line, skip)
+        end
+      else
+        -- CodeBlock, RawBlock, HorizontalRule, Null: no Span definitions.
+      end
+    end
+  end
+  scan_skip_blocks(doc.blocks, false)
 
   -- GitHub aliases for headers in document order, with GitHub's `-1`, `-2`
   -- duplicate numbering. An alias claimed by two different header ids is
@@ -260,10 +310,10 @@ function Pandoc(doc)
         il.content = walk_blocks(il.content, false)
         out:insert(il)
       elseif il.t == "Cite" then
-        for _, citation in ipairs(il.citations) do
-          citation.prefix = walk_inlines(citation.prefix, skip)
-          citation.suffix = walk_inlines(citation.suffix, skip)
-        end
+        -- Bob runs no citeproc: citation prefix/suffix metadata never
+        -- renders, so only the visible content carries links. Walking only
+        -- content avoids counting one occurrence twice.
+        il.content = walk_inlines(il.content, skip)
         out:insert(il)
       elseif il.content ~= nil and type(il.content) == "table" then
         -- Span, Emph, Strong, Strikeout, Superscript, Subscript, SmallCaps,

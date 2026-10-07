@@ -985,4 +985,201 @@ mod tests {
         );
         assert_eq!(anchors.len(), render.report.paired as usize);
     }
+
+    /// Run pandoc `--from=json --to=latex` with both filters, for AST forms
+    /// Markdown cannot express (table foot rows, constructed Cites).
+    fn render_json_latex(
+        name: &str,
+        json_source: &str,
+    ) -> Option<FilterRender> {
+        let Some(pandoc) = super::super::create::pandoc_command() else {
+            eprintln!("skipping return-link filter test: pandoc is required");
+            return None;
+        };
+        let temp = TempDir::new(name);
+        let code_break = temp.path.join("filter.lua");
+        let return_filter = temp.path.join("return-links.lua");
+        let report_path = temp.path.join("return-links.json");
+        let source_path = temp.path.join("doc.json");
+        fs::write(&code_break, super::super::create::PANDOC_CODE_BREAK_FILTER)
+            .expect("write filter");
+        fs::write(&return_filter, FILTER).expect("write return filter");
+        fs::write(&source_path, json_source).expect("write source");
+
+        let output = Command::new(&pandoc)
+            .arg(&source_path)
+            .arg("--from=json")
+            .arg("--to=latex")
+            .arg("--lua-filter")
+            .arg(&code_break)
+            .arg("--lua-filter")
+            .arg(&return_filter)
+            .arg("-M")
+            .arg(format!("{REPORT_METADATA_KEY}={}", report_path.display()))
+            .output()
+            .expect("run pandoc");
+        assert!(output.status.success(), "{output:?}");
+        let latex = String::from_utf8_lossy(&output.stdout).into_owned();
+        let outcome = read_report(&report_path);
+        let ReportOutcome::Report(report) = outcome else {
+            panic!("filter must write a report: {outcome:?}");
+        };
+        Some(FilterRender { latex, report })
+    }
+
+    #[test]
+    fn filter_treats_nested_heading_spans_as_skip_contexts() {
+        let Some(render) = render_latex(
+            "nested-heading-spans",
+            "[a](#inner1) [b](#inner2)\n\nTerm\n:   # [caption]{#inner1}\n\n::: {#outer}\n# [caption]{#inner2}\n:::\n",
+        ) else {
+            return;
+        };
+        assert!(
+            render.latex.contains("\\hyperref[inner1]"),
+            "nested DefinitionList link stays a forward link: {}",
+            render.latex
+        );
+        assert!(
+            render.latex.contains("\\hyperref[inner2]"),
+            "nested Div link stays a forward link: {}",
+            render.latex
+        );
+        assert!(
+            !render.latex.contains("\\BobTag")
+                && !render.latex.contains("\\BobReturnAnchor"),
+            "spans inside nested headings gain no tag or anchor: {}",
+            render.latex
+        );
+        assert!(
+            !render.latex.contains("\\BobBacklinks")
+                && !render.latex.contains("\\BobBackInline"),
+            "no pill enters a heading: {}",
+            render.latex
+        );
+        assert_eq!(render.report.paired, 0);
+        assert_eq!(render.report.targets, 0);
+        assert_eq!(render.report.untagged, 2);
+    }
+
+    #[test]
+    fn filter_treats_table_head_foot_spans_as_skip_contexts() {
+        let Some(head) = render_latex(
+            "table-head-span",
+            "[go](#inner)\n\n| [caption]{#inner} |\n|---|\n| body |\n",
+        ) else {
+            return;
+        };
+        assert!(
+            head.latex.contains("\\hyperref[inner]"),
+            "head span link stays a forward link: {}",
+            head.latex
+        );
+        assert!(
+            !head.latex.contains("\\BobTag")
+                && !head.latex.contains("\\BobBack"),
+            "head spans gain no tag or pill: {}",
+            head.latex
+        );
+        assert_eq!(head.report.paired, 0);
+        assert_eq!(head.report.targets, 0);
+        assert_eq!(head.report.untagged, 1);
+
+        let Some(foot) = render_json_latex(
+            "table-foot-span",
+            r##"{"pandoc-api-version": [1, 23, 1], "meta": {}, "blocks": [{"t": "Para", "c": [{"t": "Link", "c": [["", [], []], [{"t": "Str", "c": "go"}], ["#inner", ""]]}]}, {"t": "Table", "c": [["", [], []], [null, []], [[{"t": "AlignDefault"}, {"t": "ColWidthDefault"}]], [["", [], []], []], [[["", [], []], 0, [], [[["", [], []], [[["", [], []], {"t": "AlignDefault"}, 1, 1, [{"t": "Plain", "c": [{"t": "Str", "c": "body"}]}]]]]]]], [["", [], []], [[["", [], []], [[["", [], []], {"t": "AlignDefault"}, 1, 1, [{"t": "Plain", "c": [{"t": "Span", "c": [["inner", [], []], [{"t": "Str", "c": "caption"}]]}]}]]]]]]]}]}"##,
+        ) else {
+            return;
+        };
+        assert!(
+            foot.latex.contains("\\hyperref[inner]"),
+            "foot span link stays a forward link: {}",
+            foot.latex
+        );
+        assert!(
+            !foot.latex.contains("\\BobTag")
+                && !foot.latex.contains("\\BobBack"),
+            "foot spans gain no tag or pill: {}",
+            foot.latex
+        );
+        assert_eq!(foot.report.paired, 0);
+        assert_eq!(foot.report.targets, 0);
+        assert_eq!(foot.report.untagged, 1);
+    }
+
+    #[test]
+    fn filter_leaves_image_description_spans_untagged() {
+        let Some(render) = render_latex(
+            "image-description-span",
+            "[go](#inner)\n\nText ![[caption]{#inner}](image.png) inline.\n",
+        ) else {
+            return;
+        };
+        assert!(
+            render.latex.contains("\\hyperref[inner]{go}"),
+            "source link stays a forward link: {}",
+            render.latex
+        );
+        assert!(
+            !render.latex.contains("\\BobTag")
+                && !render.latex.contains("\\BobReturnAnchor"),
+            "image-description target gains no tag or anchor: {}",
+            render.latex
+        );
+        assert!(
+            !render.latex.contains("\\BobBack"),
+            "no pill for an invisible image description: {}",
+            render.latex
+        );
+        assert_eq!(render.report.paired, 0);
+        assert_eq!(render.report.targets, 0);
+        assert_eq!(render.report.untagged, 1);
+    }
+
+    #[test]
+    fn filter_counts_rendered_cite_content_not_metadata() {
+        let Some(hidden) = render_latex(
+            "cite-metadata",
+            "# Target\n\n[See [the target](#target) @smith].\n",
+        ) else {
+            return;
+        };
+        assert!(
+            !hidden.latex.contains("\\BobReturnAnchor")
+                && !hidden.latex.contains("\\BobTag")
+                && !hidden.latex.contains("\\BobBack"),
+            "invisible citation metadata gains no anchor, tag or pill: {}",
+            hidden.latex
+        );
+        assert_eq!(hidden.report.paired, 0);
+        assert_eq!(hidden.report.targets, 0);
+
+        let Some(visible) = render_json_latex(
+            "cite-visible",
+            r##"{"pandoc-api-version": [1, 23, 1], "meta": {}, "blocks": [{"t": "Header", "c": [1, ["target", [], []], [{"t": "Str", "c": "Target"}]]}, {"t": "Para", "c": [{"t": "Cite", "c": [[{"citationId": "smith", "citationPrefix": [], "citationSuffix": [], "citationMode": {"t": "NormalCitation"}, "citationNoteNum": 1, "citationHash": 0}], [{"t": "Link", "c": [["", [], []], [{"t": "Str", "c": "visible"}], ["#target", ""]]}]]}]}]}"##,
+        ) else {
+            return;
+        };
+        assert!(
+            visible.latex.contains("\\BobReturnAnchor{bob:ret:1}"),
+            "visible cite link gains an anchor: {}",
+            visible.latex
+        );
+        assert!(
+            visible.latex.contains("\\BobTag{ᵃ}"),
+            "visible cite link gains a tag: {}",
+            visible.latex
+        );
+        assert!(
+            visible.latex.contains("\\BobBack{bob:ret:1}{ᵃ}"),
+            "visible cite link gains one pill: {}",
+            visible.latex
+        );
+        assert_eq!(visible.report.paired, 1);
+        assert_eq!(visible.report.targets, 1);
+        let anchors = braced_names(&visible.latex, "\\BobReturnAnchor{");
+        let mut pills = braced_names(&visible.latex, "\\BobBack{");
+        pills.extend(braced_names(&visible.latex, "\\BobBackCompact{"));
+        assert_eq!(anchors, pills, "one anchor, one pill: {}", visible.latex);
+    }
 }
