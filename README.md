@@ -831,6 +831,8 @@ bob ref clip <URL> [-A|--author NAME] [-b|--bob-dir PATH] [-d|--dry-run] [-f|--f
 bob ref create <TARGET> [-a|--audio PATH] [-b|--bob-dir PATH] [-d|--dry-run] [-f|--force] [-i|--include-id] [-l|--lib-dir PATH] [-L|--listen] [-N|--name STEM] [-n|--no-audio] [-o|--output PDF] [-P|--parent NOTE] [-r|--ref-dir PATH] [-s|--status STATUS] [-T|--title TITLE] [-t|--ref-type DIR] [-x|--xlib-dir PATH]
 bob ref doctor [-b|--bob-dir PATH] [-l|--lib-dir PATH] [-n|--no-hooks] [-r|--ref-dir PATH] [-x|--xlib-dir PATH]
 bob ref find <QUERY>... [-b|--bob-dir PATH] [-f|--format human|json|markdown] [-i|--include-intake] [-m|--min-score SCORE] [-r|--ref-dir PATH] [-x|--xlib-dir PATH]
+bob ref jobs [list] [-a|--all] [-f|--format human|json]
+bob ref jobs run [-q|--quiet]
 bob ref list [-A|--all] [-b|--bob-dir PATH] [-f|--format human|json|markdown] [-g|--git-dates] [-n|--limit N] [-o|--origin external|agent-report] [-P|--parent NOTE] [-R|--reading-state STATE,...] [-r|--ref-dir PATH] [-S|--since DATE] [-s|--status STATUS,...] [-t|--ref-type TYPE,...]
 bob ref marker <pdf> [-b|--bob-dir PATH] [-l|--lib-dir PATH] [-r|--ref-dir PATH] [-x|--xlib-dir PATH]
 bob ref scan [-b|--bob-dir PATH] [-d|--dry-run] [-j|--jobs N] [-l|--lib-dir PATH] [-n|--no-hooks] [-r|--ref-dir PATH] [-v|--verbose] [-w|--write-pdfs] [-x|--xlib-dir PATH]
@@ -882,6 +884,10 @@ Highlights annotations into Obsidian reference notes.
   or `not_found` verdict per query. `-` reads one query per line from
   stdin, `-i` also checks queued intake PDFs, and `-m` floors the title
   scores. The lookup contract lives in [`docs/ref.md`](docs/ref.md).
+- `jobs` queues reading-queue links for background clipping (`list` is the
+  bare read-only default; `run` clips). A failed clip falls back to the
+  inbox task plus a ⚠️ bullet. The lifecycle lives in
+  [`docs/ref-jobs.md`](docs/ref-jobs.md).
 - `list` shows the reading queue by default and filtered library views by
   reading state, status, type, origin, parent, or date, with `--limit 50`
   in every format (`-A` lifts it) and opt-in `-g` Git dates.
@@ -1329,6 +1335,7 @@ blocks point at `done/..._done#^block-id`, and the vault Git commit was pushed.
 | `bob ref create` Markdown, PDF, and URL targets | [`docs/highlights-create.md`](docs/highlights-create.md) |
 | Web article capture into Highlights intake PDFs | [`docs/highlights-clip.md`](docs/highlights-clip.md) |
 | `bob ref find`, `list`, and `show` reference-library lookup | [`docs/ref.md`](docs/ref.md) |
+| Ref job spool, background worker, and fallback | [`docs/ref-jobs.md`](docs/ref-jobs.md) |
 | Obsidian Sync folder exclusion runbook (historical) | [`docs/obsidian-sync-exclusions.md`](docs/obsidian-sync-exclusions.md) |
 | Bob vault Git sync runbook | [`docs/vault-git-sync.md`](docs/vault-git-sync.md) |
 | Custom plugin list and vault deploy | [`docs/plugins.md`](docs/plugins.md) |

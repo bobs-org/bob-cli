@@ -1,7 +1,7 @@
 //! Staging, rollback, temporary files, and clipboard saves.
 use super::*;
 
-pub(super) fn validate_target_parent(
+pub(crate) fn validate_target_parent(
     target: &Path,
 ) -> Result<(), CaptureError> {
     let parent = target.parent().unwrap_or_else(|| Path::new("."));
@@ -117,7 +117,7 @@ pub(super) fn validate_disk_preimages(
     Ok(())
 }
 
-pub(super) fn write_staged_files(
+pub(crate) fn write_staged_files(
     files: &[StagedTextFile],
 ) -> Result<(), CaptureError> {
     // Refuse a stale batch before creating any temporary files.

@@ -15,11 +15,11 @@ pub(super) struct BatchTextFile {
     pub(super) current: String,
 }
 
-pub(super) struct StagedTextFile {
-    pub(super) target: PathBuf,
-    pub(super) target_existed: bool,
-    pub(super) original_target: String,
-    pub(super) updated_target: String,
+pub(crate) struct StagedTextFile {
+    pub(crate) target: PathBuf,
+    pub(crate) target_existed: bool,
+    pub(crate) original_target: String,
+    pub(crate) updated_target: String,
 }
 
 impl CaptureBatchPlanner {

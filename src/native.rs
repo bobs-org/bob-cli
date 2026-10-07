@@ -59,6 +59,7 @@ mod pomodoro;
 mod projects;
 mod randomize;
 mod randomize_plan;
+mod ref_jobs;
 pub(crate) mod ref_library;
 mod style;
 mod task_complete;

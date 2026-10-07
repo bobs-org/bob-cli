@@ -254,6 +254,7 @@ pub(super) fn doctor_vault(config: &Config, no_hooks: bool) -> Result<()> {
     append_web_clip_doctor_rows(&mut warnings);
     append_listen_doctor_row(&mut warnings);
     append_url_routing_doctor_row(&mut warnings);
+    crate::native::ref_jobs::append_ref_jobs_doctor_row(&mut warnings);
     append_library_doctor_rows(config, &mut warnings);
 
     if !warnings.is_empty() {

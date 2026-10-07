@@ -1843,9 +1843,9 @@ pub(super) fn print_capture_error(
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct CaptureError {
+pub(crate) struct CaptureError {
     pub(super) kind: CaptureErrorKind,
-    pub(super) message: String,
+    pub(crate) message: String,
     /// Machine-readable failure code, serialized only for the strict
     /// plan-budget refusal (`plan_theme_cap_exceeded`).
     pub(super) code: Option<String>,

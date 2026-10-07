@@ -142,31 +142,51 @@ impl IngestError {
             .unwrap_or_else(|| self.kind.retryable_by_kind())
     }
 
+    /// A synthetic non-retryable failure, for worker recovery paths
+    /// that fail without clipping (stale `running/` jobs at 2+
+    /// attempts).
+    pub(crate) fn internal(message: impl Into<String>) -> Self {
+        Self {
+            kind: IngestErrorKind::Internal,
+            message: message.into(),
+            hint: None,
+            retryable_override: None,
+        }
+    }
+
     /// The shared fallback bullet used by capture and Keep when a clip
     /// fails: exactly `⚠️ Clip failed (<kind>): <message> · retry:
     /// bob ref create <quoted url>`.
     pub(crate) fn fallback_note(&self, url: &str) -> String {
-        let collapsed = self
-            .message
-            .lines()
-            .next()
-            .unwrap_or_default()
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ");
-        let truncated = if collapsed.chars().count() > 120 {
-            format!("{}…", collapsed.chars().take(120).collect::<String>())
-        } else {
-            collapsed
-        };
-        let escaped =
-            crate::native::gkeep::render::escape_child_text(&truncated);
-        format!(
-            "⚠️ Clip failed ({}): {escaped} · retry: bob ref create {}",
-            self.kind.as_str(),
-            shell_quote_url(url),
-        )
+        fallback_note_for(self.kind.as_str(), &self.message, url)
     }
+}
+
+/// Render the shared fallback bullet from a stored kind and message,
+/// so the worker can retry a `stuck/` fallback without the original
+/// [`IngestError`]. Identical to [`IngestError::fallback_note`].
+pub(crate) fn fallback_note_for(
+    kind: &str,
+    message: &str,
+    url: &str,
+) -> String {
+    let collapsed = message
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let truncated = if collapsed.chars().count() > 120 {
+        format!("{}…", collapsed.chars().take(120).collect::<String>())
+    } else {
+        collapsed
+    };
+    let escaped = crate::native::gkeep::render::escape_child_text(&truncated);
+    format!(
+        "⚠️ Clip failed ({kind}): {escaped} · retry: bob ref create {}",
+        shell_quote_url(url),
+    )
 }
 
 /// Shell-quote a cleaned URL: bare when it matches

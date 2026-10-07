@@ -289,3 +289,8 @@ trailing `.` or `/` stripped). An invalid `url_routing` block disables
 routing with a warning; a bare URL then simply stays a task. `bob ref
 doctor` prints the effective policy as
 `url routing: capture on · gkeep on · excludes google.com, …`.
+
+Queued links clip in the background through durable ref jobs; a
+failed clip falls back to exactly the inbox task capture would have
+written, plus a ⚠️ bullet. The spool, worker, fallback, and
+`bob ref jobs` commands live in [`docs/ref-jobs.md`](ref-jobs.md).

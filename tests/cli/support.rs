@@ -32,6 +32,7 @@ pub(crate) const TEST_MISSING_WEB_CLIP_ADAPTER: &str =
 pub(crate) fn bob_command() -> Command {
     let mut command = Command::new(BOB_BIN);
     command.env("BOB_CONFIG_FILE", TEST_MISSING_CONFIG_FILE);
+    command.env("BOB_REF_JOBS_KICK", "off");
     command.env("BOB_WEB_CLIP_ADAPTER", TEST_MISSING_WEB_CLIP_ADAPTER);
     // Hermetic DNS for the fetch resolved-address check: a wildcard public
     // address replaces real DNS, so fake-curl tests never touch the

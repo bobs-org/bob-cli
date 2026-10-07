@@ -200,7 +200,37 @@ const COMMON_USER_FIELDS: &[&str] = &[
     FIELD_CAPTURED,
 ];
 
+/// A bare `bob ref jobs` (or bare flags) lists: rewrite to
+/// `jobs list …` so `list` stays the flag-only, read-only default.
+/// Help, explicit subcommands, and unknown words pass through.
+fn default_jobs_args(args: Vec<OsString>) -> Vec<OsString> {
+    let [first, rest @ ..] = args.as_slice() else {
+        return args;
+    };
+    if first != OsStr::new("jobs") {
+        return args;
+    }
+    let Some(second) = rest.first() else {
+        return vec![OsString::from("jobs"), OsString::from("list")];
+    };
+    if second == OsStr::new("-h")
+        || second == OsStr::new("--help")
+        || second == OsStr::new("list")
+        || second == OsStr::new("run")
+    {
+        return args;
+    }
+    if second.to_string_lossy().starts_with('-') {
+        return iter::once(OsString::from("jobs"))
+            .chain(iter::once(OsString::from("list")))
+            .chain(rest.iter().cloned())
+            .collect();
+    }
+    args
+}
+
 pub(crate) fn run(args: Vec<OsString>) -> i32 {
+    let args = default_jobs_args(args);
     let matches = match build_cli().try_get_matches_from(
         iter::once(OsString::from(COMMAND_NAME)).chain(args),
     ) {
@@ -227,6 +257,9 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
         }
         Some(("show", sub_matches)) => {
             crate::native::ref_library::cli::run_show(sub_matches)
+        }
+        Some(("jobs", sub_matches)) => {
+            crate::native::ref_jobs::run(sub_matches)
         }
         Some(("scan", sub_matches)) => {
             run_scan(sub_matches, no_hooks_flag(&matches, sub_matches))
