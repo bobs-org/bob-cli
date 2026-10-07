@@ -656,7 +656,7 @@ pub(super) fn current_local_date() -> String {
     Local::now().format("%Y-%m-%d").to_string()
 }
 
-pub(super) fn configured_path(
+pub(crate) fn configured_path(
     matches: &ArgMatches,
     arg_name: &str,
     env_name: &str,

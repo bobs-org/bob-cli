@@ -1,4 +1,4 @@
-/* Bob reader print template for `bob highlights clip`.
+/* Bob reader print template for `bob ref clip`.
  *
  * Chromium prints this with prefer_css_page_size, so @page wins. The
  * renderer injects one extra inline <style> block holding the @bottom-left

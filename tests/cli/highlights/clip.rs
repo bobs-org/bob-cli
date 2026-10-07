@@ -518,6 +518,13 @@ fn highlights_clip_captures_a_legacy_only_url_note_with_a_warning() {
         "expected the legacy warning:\n{}",
         format_output(&output)
     );
+    assert_eq!(
+        diagnostic
+            .matches("hint: bob ref find and bob ref list")
+            .count(),
+        1,
+        "the legacy hint prints once per capture:\n{diagnostic}",
+    );
     assert!(
         fake.called(),
         "the legacy-only hit must not precede the adapter"

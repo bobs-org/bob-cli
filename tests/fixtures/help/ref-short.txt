@@ -1,0 +1,28 @@
+Find, list, and read Bob reference notes, and sync Highlights PDFs into them
+
+Usage: bob ref [OPTIONS] <COMMAND>
+
+Library:
+  find  Look up URLs, arXiv IDs, DOIs, paths, or titles in the reference library
+  list  List reference notes by reading state, status, type, origin, or date
+  show  Show reference notes with metadata, annotations, and your own notes
+
+Highlights pipeline:
+  clip    Capture a web article URL into a Highlights intake PDF
+  create  Create a Highlights-ready PDF from Markdown, a PDF, or a URL
+  doctor  Check library health and Highlights sync prerequisites
+  marker  Inspect the marker note for one PDF
+  scan    Scan the configured Highlights library
+  sync    Sync one PDF marker note into its Bob reference note
+
+Options:
+  -n, --no-hooks  Ignore the configured highlights.pre_scan_hook
+  -h, --help      Print help
+
+Examples:
+  bob ref find https://arxiv.org/abs/1706.03762   Is this paper already in the library?
+  bob ref list                                    Show the reading queue
+  bob ref list -R finished -S 30d                 Show what was finished in the last 30 days
+  bob ref show ea_graph -c                        Read your comments on one reference
+  bob ref create <URL|PDF|MD> -L                  Capture a reference and narrate it
+  bob ref scan                                    Sync Highlights PDFs into reference notes

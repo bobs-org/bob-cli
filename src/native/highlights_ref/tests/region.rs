@@ -192,11 +192,26 @@ fn region_round_trip_pages_preamble_and_tombstones() {
     assert_eq!(parsed.blocks.len(), 3);
     assert_eq!(parsed.removed, vec!["h-0123456789ab".to_string()]);
     assert!(parsed.unparsed.is_empty());
-    assert_eq!(parsed.blocks[0].page_label, None);
+    // Every field and every ID round-trips on every block.
+    let expectations = [
+        (None, "Before any page", 0),
+        (Some("Page 1"), "On page one", 1),
+        (Some("Page 2"), "On page two", 2),
+    ];
+    for (block, (page, quote, order)) in parsed.blocks.iter().zip(expectations)
+    {
+        assert_eq!(block.kind, super::RegionBlockKind::Highlight);
+        assert_eq!(block.page_label.as_deref(), page);
+        assert_eq!(block.quote.as_deref(), Some(quote));
+        assert_eq!(block.comment, None);
+        assert_eq!(
+            block.block_id,
+            rendered.block_ids_by_annotation_order[&order]
+        );
+        assert!(!block.mirror);
+    }
     assert!(parsed.blocks[0].in_preamble);
-    assert_eq!(parsed.blocks[1].page_label.as_deref(), Some("Page 1"));
     assert!(!parsed.blocks[1].in_preamble);
-    assert_eq!(parsed.blocks[2].page_label.as_deref(), Some("Page 2"));
     assert!(!parsed.blocks[2].in_preamble);
 }
 
@@ -269,11 +284,11 @@ fn note_anatomy_full_body() {
     );
     assert_eq!(parts.own_notes, "My own note paragraph.");
     assert_eq!(parts.tasks.len(), 2);
-    assert_eq!(parts.tasks[0].checked, false);
+    assert!(!parts.tasks[0].checked);
     assert_eq!(parts.tasks[0].mark, ' ');
     assert_eq!(parts.tasks[0].text, "Do thing");
     assert_eq!(parts.tasks[0].block_id, "h-abc123def456");
-    assert_eq!(parts.tasks[1].checked, true);
+    assert!(parts.tasks[1].checked);
     assert_eq!(parts.tasks[1].mark, 'x');
     assert_eq!(parts.tasks[1].text, "Done thing");
     assert_eq!(parts.tasks[1].block_id, "");

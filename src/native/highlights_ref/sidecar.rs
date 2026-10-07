@@ -1,7 +1,7 @@
 //! Sidecar discovery, parsing, and asset resolution.
 use super::*;
 
-pub(super) fn is_wikilink(value: &str) -> bool {
+pub(crate) fn is_wikilink(value: &str) -> bool {
     let trimmed = value.trim();
     trimmed.starts_with("[[") && trimmed.ends_with("]]")
 }

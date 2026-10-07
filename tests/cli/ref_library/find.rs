@@ -177,8 +177,17 @@ fn find_doi_and_arxiv_doi_queries() {
     ] {
         let result = result_for(&document, query);
         assert_eq!(result["verdict"], "in_library", "query {query}");
+        // Both twin notes match through the shared `arxiv:` key, in
+        // primary-match order: finished first, then queued.
+        let paths = result["matches"]
+            .as_array()
+            .expect("matches array")
+            .iter()
+            .map(|hit| hit["ref"]["path"].as_str().expect("path"))
+            .collect::<Vec<_>>();
         assert_eq!(
-            result["matches"][0]["ref"]["path"], "ref/papers/arxiv_doi.md",
+            paths,
+            vec!["ref/papers/arxiv_pdf.md", "ref/papers/arxiv_doi.md"],
             "query {query}",
         );
         assert_eq!(result["matches"][0]["match_kind"], "identity");
@@ -405,6 +414,29 @@ fn find_intake_hit_with_marker_pdf() {
 }
 
 #[test]
+fn find_intake_records_both_marker_url_fields() {
+    let (_temp, vault) = fixture_vault("bob-cli-ref-find-intake-both-urls");
+    write_highlights_pdf(
+        &vault.join("xlib/blogs/both-urls.pdf"),
+        "- status: ready\n- parent: tech_blogs\n- title: Both Urls Article\n- source_url: https://example.com/intake/primary-article\n- url: https://example.com/intake/legacy-alias\n",
+    );
+    // Each marker URL field resolves through `find -i`, so a marker
+    // carrying both is found on either value.
+    for query in [
+        "https://example.com/intake/primary-article",
+        "https://example.com/intake/legacy-alias",
+    ] {
+        let document = run_find_json(&vault, &[query, "-i"]);
+        let result = result_for(&document, query);
+        assert_eq!(result["verdict"], "in_intake", "query {query}");
+        assert_eq!(
+            result["intake"][0]["path"], "xlib/blogs/both-urls.pdf",
+            "query {query}",
+        );
+    }
+}
+
+#[test]
 fn find_intake_unavailable_without_intake_dir() {
     let (_temp, vault) = fixture_vault("bob-cli-ref-find-nointake");
     let document = run_find_json(
@@ -617,9 +649,9 @@ fn find_markdown_table_and_coverage_line() {
     );
     assert!(
         markdown.contains(
-            "Library check: 1 of 2 in library (1 finished) · coverage: ref/ only",
+            "\n\nLibrary check: 1 of 2 in library (1 finished) · coverage: ref/ only\n",
         ),
-        "missing coverage line:\n{markdown}",
+        "blank line before the coverage line:\n{markdown}",
     );
 }
 

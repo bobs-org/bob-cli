@@ -150,11 +150,12 @@ pub(crate) fn parse_since_cutoff(
     let amount: u32 = digits.parse().ok()?;
     let cutoff = match unit {
         "d" => today.checked_sub_days(chrono::Days::new(u64::from(amount)))?,
-        "w" => {
-            today.checked_sub_days(chrono::Days::new(u64::from(amount) * 7))?
-        }
+        "w" => today.checked_sub_days(chrono::Days::new(
+            u64::from(amount).checked_mul(7)?,
+        ))?,
         "m" => today.checked_sub_months(chrono::Months::new(amount))?,
-        "y" => today.checked_sub_months(chrono::Months::new(amount * 12))?,
+        "y" => today
+            .checked_sub_months(chrono::Months::new(amount.checked_mul(12)?))?,
         _ => return None,
     };
     Some(cutoff.format("%Y-%m-%d").to_string())

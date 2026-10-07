@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pinned web-clip adapter for `bob highlights clip` (adapter protocol v1).
+"""Pinned web-clip adapter for `bob ref clip` (adapter protocol v1).
 
 The Rust side writes one compact JSON request to this script's stdin and
 closes it. This script writes exactly one JSON response to stdout and logs

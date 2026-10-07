@@ -5,6 +5,7 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
+use super::resolve::title_score;
 use super::*;
 
 fn vault_dir() -> PathBuf {
@@ -268,6 +269,9 @@ fn malformed_yaml_falls_back_and_reports() {
     assert!(codes(row).contains("invalid_yaml"));
     assert_eq!(row.status.as_deref(), Some("ready"));
     assert_eq!(row.title, "[unclosed list");
+    // The fallback keeps the unquoted wikilink intact, so the parent
+    // reads as the bare note name.
+    assert_eq!(row.parent.as_deref(), Some("fallback_parent"));
 }
 
 #[test]
@@ -482,10 +486,24 @@ fn arxiv_queries_strip_versions_and_order_by_state() {
             "{query}"
         );
     }
+    // A bare arXiv DOI derives the stored-side `doi:` key plus the
+    // `arxiv:` key, so it matches both twin notes in primary-match order.
     let doi =
         resolve_query(&index.rows, &index.bob_dir, "10.48550/arXiv.1706.03762");
-    assert_eq!(doi.len(), 1);
-    assert_eq!(index.rows[doi[0].row].path, "ref/papers/arxiv_doi.md");
+    assert_eq!(doi.len(), 2);
+    assert!(doi.iter().all(|hit| hit.kind == MatchKind::Identity));
+    assert_eq!(index.rows[doi[0].row].path, "ref/papers/arxiv_pdf.md");
+    assert_eq!(index.rows[doi[1].row].path, "ref/papers/arxiv_doi.md");
+    // A percent-encoded DOI URL query matches the same twins.
+    let encoded = resolve_query(
+        &index.rows,
+        &index.bob_dir,
+        "https://doi.org/10.48550%2FarXiv.1706.03762",
+    );
+    assert_eq!(encoded.len(), 2);
+    assert!(encoded.iter().all(|hit| hit.kind == MatchKind::Identity));
+    assert_eq!(index.rows[encoded[0].row].path, "ref/papers/arxiv_pdf.md");
+    assert_eq!(index.rows[encoded[1].row].path, "ref/papers/arxiv_doi.md");
 }
 
 #[test]

@@ -229,8 +229,10 @@ pub(crate) fn split_note_body(body: &str) -> NoteParts {
                 drop[index] = true;
             }
             if let (Some(heading), Some(end)) = (tasks_heading, tasks_end) {
-                for index in heading..end.min(lines.len()) {
-                    drop[index] = true;
+                for slot in
+                    drop.iter_mut().take(end.min(lines.len())).skip(heading)
+                {
+                    *slot = true;
                 }
             }
             collapse_blank_lines(

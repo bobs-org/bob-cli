@@ -376,25 +376,34 @@ fn detail_line(
     if pending {
         *pending_sync = true;
     }
-    let mut status = row.status.as_deref().unwrap_or("—").to_uppercase();
-    if pending {
-        status.push('*');
-    }
-    let mut rest = format!(" · {status}");
+    let status = row.status.as_deref().unwrap_or("—").to_uppercase();
+    // The pending-sync marker dims; width math measures the plain star
+    // so ANSI styling never shifts the truncation budget.
+    let star = if pending { "*" } else { "" };
+    let mut plain_rest = format!(" · {status}{star}");
     if let Some(arxiv) = row.identity.arxiv.as_deref() {
-        rest.push_str(&format!(" · arXiv {arxiv}"));
+        plain_rest.push_str(&format!(" · arXiv {arxiv}"));
     } else if let Some(doi) = row.identity.doi.as_deref() {
-        rest.push_str(&format!(" · DOI {doi}"));
+        plain_rest.push_str(&format!(" · DOI {doi}"));
     }
     if let Some(dated) = dated_suffix(row) {
-        rest.push_str(&format!(" · {dated}"));
+        plain_rest.push_str(&format!(" · {dated}"));
     }
-    let budget = max.saturating_sub(display_width(&rest)).max(8);
+    let budget = max.saturating_sub(display_width(&plain_rest)).max(8);
     let path = truncate(&row.path, budget.max(8));
-    let plain = format!("{path}{rest}");
+    let plain = format!("{path}{plain_rest}");
     if display_width(&plain) > max {
         return truncate(&plain, max);
     }
+    let rest = if pending {
+        plain_rest.replacen(
+            &format!("{status}*"),
+            &format!("{status}{}", styler.dim("*")),
+            1,
+        )
+    } else {
+        plain_rest
+    };
     format!("{}{}", styler.dim(&path), rest)
 }
 
@@ -527,6 +536,7 @@ pub(crate) fn render_find_markdown(
             escape_cell(&reference),
         ));
     }
+    out.push('\n');
     out.push_str(&format!(
         "Library check: {} of {} in library ({} finished) · coverage: ref/ only\n",
         summary.in_library, summary.queries, summary.finished,
@@ -661,12 +671,17 @@ pub(crate) fn render_list_human(
     }
     let chip_width = returned
         .iter()
-        .map(|row| display_width(&list_status_chip(row)))
+        .map(|row| display_width(&list_status_plain(row)))
         .max()
         .unwrap_or(0);
     let title_width = returned
         .iter()
         .map(|row| display_width(&row.title))
+        .max()
+        .unwrap_or(0);
+    let type_width = returned
+        .iter()
+        .map(|row| display_width(&list_kind(row)))
         .max()
         .unwrap_or(0);
     let mut pending_sync = false;
@@ -699,6 +714,7 @@ pub(crate) fn render_list_human(
                 row,
                 chip_width,
                 title_width,
+                type_width,
                 styler,
                 width,
             ));
@@ -789,9 +805,10 @@ fn group_heading(styler: Styler, state: &str) -> String {
     }
 }
 
-/// The status chip for one list row: the uppercased status (or `—`)
-/// with a pending-sync `*` footnote marker.
-fn list_status_chip(row: &RefRow) -> String {
+/// The plain status chip for one list row: the uppercased status (or
+/// `—`) with a pending-sync `*` footnote marker. Width math always
+/// measures this plain form so ANSI styling never shifts columns.
+fn list_status_plain(row: &RefRow) -> String {
     let mut chip = row
         .status
         .as_deref()
@@ -803,36 +820,57 @@ fn list_status_chip(row: &RefRow) -> String {
     chip
 }
 
-/// One aligned list row: status chip, row date (or `—`), title, type
-/// with `♫` when audio is bound, and a dim path. The path drops first
+/// The type column for one list row: `ref_type` with ` ♫` when audio is
+/// bound. Padded to the widest value among the rendered rows so the dim
+/// path column lines up.
+fn list_kind(row: &RefRow) -> String {
+    let mut kind = row.ref_type.clone().unwrap_or("—".to_string());
+    if row.audio.is_some() {
+        kind.push_str(" ♫");
+    }
+    kind
+}
+
+/// One aligned list row: status chip, row date (or `—` padded to 10
+/// columns), title, padded type, and a dim path. The path drops first
 /// on narrow terminals, then titles truncate.
 fn list_row_line(
     row: &RefRow,
     chip_width: usize,
     title_width: usize,
+    type_width: usize,
     styler: Styler,
     width: usize,
 ) -> String {
-    let chip = pad_right(&list_status_chip(row), chip_width);
-    let date = row_date(row).unwrap_or("—");
-    let mut kind = row.ref_type.clone().unwrap_or("—".to_string());
-    if row.audio.is_some() {
-        kind.push_str(" ♫");
-    }
+    let chip = pad_right(&list_status_plain(row), chip_width);
+    let chip = if row.status_sync != "ok" {
+        chip.replacen("*", &styler.dim("*"), 1)
+    } else {
+        chip
+    };
+    // The date column is a 10-character date or `—`; pad it to 10
+    // display columns so undated rows line up with dated ones.
+    let date = pad_right(row_date(row).unwrap_or("—"), 10);
+    let kind = pad_right(&list_kind(row), type_width);
     let title = pad_right(&row.title, title_width);
-    let full = format!("    {chip}  {date}  {title}  {kind}  {}", row.path);
+    let full = format!(
+        "    {}  {date}  {title}  {kind}  {}",
+        strip_ansi(&chip),
+        row.path
+    );
     if display_width(&full) <= width {
         let head = format!("    {chip}  {date}  {title}  {kind}  ");
         return format!("{head}{}", styler.dim(&row.path));
     }
     let without_path = format!("    {chip}  {date}  {title}  {kind}");
-    if display_width(&without_path) <= width {
+    if display_width(&strip_ansi(&without_path)) <= width {
         return without_path;
     }
     let fixed = format!("    {chip}  {date}  ");
     let tail = format!("  {kind}");
-    let budget =
-        width.saturating_sub(display_width(&fixed) + display_width(&tail));
+    let budget = width.saturating_sub(
+        display_width(&strip_ansi(&fixed)) + display_width(&strip_ansi(&tail)),
+    );
     let short_title = truncate(row.title.trim_end(), budget.max(1));
     format!("{fixed}{short_title}{tail}")
 }
@@ -846,7 +884,7 @@ pub(crate) fn render_list_markdown(
 ) -> String {
     let mut out =
         String::from("| State | Status | Date | Title | Type | Note |\n");
-    out.push_str("| --- | --- | --- | --- | --- |\n");
+    out.push_str("| --- | --- | --- | --- | --- | --- |\n");
     for row in returned {
         let state = match row.reading_state.as_str() {
             "finished" => "Finished",
@@ -858,13 +896,14 @@ pub(crate) fn render_list_markdown(
         out.push_str(&format!(
             "| {} | {} | {} | {} | {} | {} |\n",
             state,
-            escape_cell(&list_status_chip(row)),
+            escape_cell(&list_status_plain(row)),
             escape_cell(row_date(row).unwrap_or("—")),
             escape_cell(&row.title),
             escape_cell(row.ref_type.as_deref().unwrap_or("—")),
             escape_cell(&row.link),
         ));
     }
+    out.push('\n');
     out.push_str(&format!(
         "{} of {matched} matching notes shown · coverage: {}/ only\n",
         returned.len(),

@@ -25,8 +25,8 @@ use super::{
 pub(crate) use super::show::run_show;
 use crate::native::env as bob_env;
 use crate::native::highlights_ref::{
-    bob_dir_arg, collect_intake_records, ref_dir_arg, xlib_dir_arg,
-    IntakeRecord, COMMAND_NAME,
+    bob_dir_arg, collect_intake_records, configured_path, ref_dir_arg,
+    xlib_dir_arg, IntakeRecord, COMMAND_NAME, ENV_REF_DIR, ENV_XLIB_DIR,
 };
 use crate::native::style::{terminal_width, Styler};
 
@@ -460,13 +460,8 @@ pub(crate) fn list_config_from_matches(matches: &ArgMatches) -> LibraryConfig {
         .map(PathBuf::from)
         .map(|path| bob_env::expand_tilde(&path))
         .unwrap_or_else(bob_env::bob_dir);
-    let ref_dir = library_dir(
-        matches,
-        "ref-dir",
-        "BOB_HIGHLIGHTS_REF_DIR",
-        "ref",
-        &bob_dir,
-    );
+    let ref_dir =
+        configured_path(matches, "ref-dir", ENV_REF_DIR, "ref", &bob_dir);
     LibraryConfig {
         xlib_dir: bob_dir.join("xlib"),
         bob_dir,
@@ -485,49 +480,14 @@ pub(crate) fn library_config_from_matches(
         .map(PathBuf::from)
         .map(|path| bob_env::expand_tilde(&path))
         .unwrap_or_else(bob_env::bob_dir);
-    let ref_dir = library_dir(
-        matches,
-        "ref-dir",
-        "BOB_HIGHLIGHTS_REF_DIR",
-        "ref",
-        &bob_dir,
-    );
-    let xlib_dir = library_dir(
-        matches,
-        "xlib-dir",
-        "BOB_HIGHLIGHTS_XLIB_DIR",
-        "xlib",
-        &bob_dir,
-    );
+    let ref_dir =
+        configured_path(matches, "ref-dir", ENV_REF_DIR, "ref", &bob_dir);
+    let xlib_dir =
+        configured_path(matches, "xlib-dir", ENV_XLIB_DIR, "xlib", &bob_dir);
     LibraryConfig {
         bob_dir,
         ref_dir,
         xlib_dir,
-    }
-}
-
-fn library_dir(
-    matches: &ArgMatches,
-    arg_name: &str,
-    env_name: &str,
-    default_value: &str,
-    bob_dir: &std::path::Path,
-) -> PathBuf {
-    let configured = matches
-        .get_one::<OsString>(arg_name)
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var_os(env_name)
-                .filter(|value| !value.is_empty())
-                .map(PathBuf::from)
-        })
-        .unwrap_or_else(|| PathBuf::from(default_value));
-    let expanded = bob_env::expand_tilde(&configured);
-    if expanded.is_absolute() {
-        expanded
-    } else {
-        bob_dir.join(expanded)
     }
 }
 

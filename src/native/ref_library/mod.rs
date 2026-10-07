@@ -28,26 +28,24 @@ mod tests;
 pub(crate) use coverage::{count_zorg_records, ZorgCoverage};
 pub(crate) use frontmatter::ParsedFrontmatter;
 pub(crate) use identity::{
-    classify_query, normalize_doi_query, parse_arxiv_query, stored_identity,
-    url_query_keys, QueryKind,
+    classify_query, doi_keys, normalize_doi_query, parse_arxiv_query,
+    stored_identity, url_query_keys, QueryKind,
 };
 pub(crate) use list::{
     fill_git_dates, filter_list, parse_since_cutoff, row_date, select,
     validate_since, ListSelection, LIST_STATE_ORDER,
 };
 pub(crate) use resolve::{
-    path_matches, primary_rank, resolve_query, title_score, MatchKind,
-    ScoredHit,
+    path_matches, primary_rank, resolve_query, MatchKind,
 };
 pub(crate) use row::{
     bare_parent_name, strip_wikilink_brackets, Coverage, Diagnostic,
     LibraryCounts, RefIdentity, RefRow, RefSnapshot,
 };
-pub(crate) use status::{decide_status, reading_state_rank};
+pub(crate) use status::decide_status;
 
 use frontmatter::FrontValue;
 
-use crate::native::env as bob_env;
 use crate::native::highlights_ref::{
     humanize_stem, parse_managed_region, split_frontmatter, split_note_body,
     RegionBlockKind,
@@ -62,23 +60,6 @@ pub(crate) struct LibraryConfig {
 }
 
 impl LibraryConfig {
-    /// Resolve from `BOB_DIR`, `BOB_HIGHLIGHTS_REF_DIR`, and
-    /// `BOB_HIGHLIGHTS_XLIB_DIR`, then the `ref` / `xlib` defaults.
-    pub(crate) fn from_env() -> Self {
-        let bob_dir = std::env::var_os("BOB_DIR")
-            .map(PathBuf::from)
-            .map(|path| bob_env::expand_tilde(&path))
-            .unwrap_or_else(bob_env::bob_dir);
-        let ref_dir = configured_dir(&bob_dir, "BOB_HIGHLIGHTS_REF_DIR", "ref");
-        let xlib_dir =
-            configured_dir(&bob_dir, "BOB_HIGHLIGHTS_XLIB_DIR", "xlib");
-        Self {
-            bob_dir,
-            ref_dir,
-            xlib_dir,
-        }
-    }
-
     #[cfg(test)]
     pub(crate) fn for_ref_dir(bob_dir: PathBuf, ref_dir: PathBuf) -> Self {
         Self {
@@ -86,23 +67,6 @@ impl LibraryConfig {
             bob_dir,
             ref_dir,
         }
-    }
-}
-
-fn configured_dir(
-    bob_dir: &Path,
-    env_name: &str,
-    default_value: &str,
-) -> PathBuf {
-    let configured = std::env::var_os(env_name)
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(default_value));
-    let expanded = bob_env::expand_tilde(&configured);
-    if expanded.is_absolute() {
-        expanded
-    } else {
-        bob_dir.join(expanded)
     }
 }
 
@@ -138,6 +102,7 @@ pub(crate) struct RefIndex {
 }
 
 impl RefIndex {
+    #[cfg(test)]
     pub(crate) fn row_by_path(&self, path: &str) -> Option<&RefRow> {
         self.rows.iter().find(|row| row.path == path)
     }
@@ -155,12 +120,7 @@ pub(crate) fn build_index(
     }
     let mut files = Vec::new();
     let mut skipped = 0usize;
-    collect_member_files(
-        &config.ref_dir,
-        &config.ref_dir,
-        &mut files,
-        &mut skipped,
-    )?;
+    collect_member_files(&config.ref_dir, &mut files, &mut skipped)?;
     files.sort();
     let mut rows = Vec::with_capacity(files.len());
     for path in &files {
@@ -216,7 +176,6 @@ pub(crate) fn build_index(
 /// Collect member files: `<ref-dir>/**/*.md` minus hidden directories,
 /// `*.assets/` directories, and conflict copies.
 fn collect_member_files(
-    ref_dir: &Path,
     dir: &Path,
     files: &mut Vec<PathBuf>,
     skipped: &mut usize,
@@ -241,25 +200,29 @@ fn collect_member_files(
                 *skipped += count_markdown_under(&path);
                 continue;
             }
-            collect_member_files(ref_dir, &path, files, skipped)?;
+            collect_member_files(&path, files, skipped)?;
             continue;
         }
         if !file_type.is_file() {
             continue;
         }
         let name = path.file_name().and_then(OsStr::to_str).unwrap_or_default();
+        let is_markdown = path
+            .extension()
+            .and_then(OsStr::to_str)
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("md"));
         if name.contains(" (conflict")
             || name.contains(" (Conflicted copy")
             || name.contains(".sync-conflict-")
         {
-            *skipped += 1;
+            // Only Markdown conflict copies count as skipped notes;
+            // non-Markdown conflict files are not library members.
+            if is_markdown {
+                *skipped += 1;
+            }
             continue;
         }
-        if !path
-            .extension()
-            .and_then(OsStr::to_str)
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
-        {
+        if !is_markdown {
             continue;
         }
         files.push(path);
@@ -300,7 +263,6 @@ fn strip_forward(path: &Path, base: &Path) -> Option<String> {
 /// Build one row from vault-relative path and raw note contents.
 fn build_row(rel: &str, under_ref: &str, contents: &str) -> RefRow {
     let (raw_lines, body) = split_frontmatter(contents)
-        .map(|(lines, body)| (lines, body))
         .unwrap_or_else(|| (Vec::new(), contents.to_string()));
     let front = ParsedFrontmatter::parse(&raw_lines);
     let mut diagnostics = Vec::new();

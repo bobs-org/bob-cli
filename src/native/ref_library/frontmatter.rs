@@ -55,8 +55,9 @@ impl ParsedFrontmatter {
         }
     }
 
-    /// Line-by-line fallback that never fails; merges over (not under) any
-    /// YAML-parsed values so a half-parsed mapping still contributes.
+    /// Line-by-line fallback that never fails. It only fills keys absent
+    /// from the map, which is empty when invalid YAML fails to parse at
+    /// all; a half-parsed mapping still contributes its own keys.
     fn with_fallback(mut self, raw_lines: &[String]) -> Self {
         for raw in raw_lines {
             let Some((key, value)) = raw.split_once(':') else {
@@ -169,9 +170,16 @@ fn yaml_scalar_string(value: &serde_yaml::Value) -> Option<String> {
 }
 
 /// One fallback line value: an inline `[...]` list or a bare scalar with
-/// matching surrounding quotes stripped.
+/// matching surrounding quotes stripped. A bare wikilink stays intact
+/// (like the Highlights parser, which checks wikilinks before inline
+/// lists); otherwise `parent: [[x]]` would read as the list `["[x]"]`.
 fn parse_line_value(raw: &str) -> FrontValue {
+    use crate::native::highlights_ref::is_wikilink;
+
     let trimmed = raw.trim();
+    if is_wikilink(trimmed) {
+        return FrontValue::Str(trimmed.to_string());
+    }
     if let Some(inner) = trimmed
         .strip_prefix('[')
         .and_then(|rest| rest.strip_suffix(']'))

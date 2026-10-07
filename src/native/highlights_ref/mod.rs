@@ -95,8 +95,8 @@ const DEFAULT_XLIB_DIR: &str = "xlib";
 const ENV_LEGACY_PRE_SCAN_COMMAND: &str = "BOB_HIGHLIGHTS_PRE_SCAN_COMMAND";
 const ENV_LIB_DIR: &str = "BOB_HIGHLIGHTS_LIB_DIR";
 const ENV_PRE_SCAN_HOOK: &str = "BOB_HIGHLIGHTS_PRE_SCAN_HOOK";
-const ENV_REF_DIR: &str = "BOB_HIGHLIGHTS_REF_DIR";
-const ENV_XLIB_DIR: &str = "BOB_HIGHLIGHTS_XLIB_DIR";
+pub(crate) const ENV_REF_DIR: &str = "BOB_HIGHLIGHTS_REF_DIR";
+pub(crate) const ENV_XLIB_DIR: &str = "BOB_HIGHLIGHTS_XLIB_DIR";
 
 const FIELD_STATUS: &str = "status";
 const FIELD_PARENT: &str = "parent";
@@ -131,15 +131,17 @@ pub(crate) const MANAGED_BODY_END: &str = "<!-- highlights:end -->";
 // read-only rows on these without exposing task-line or projection types.
 pub(crate) use arxiv::ArxivPaper;
 pub(crate) use cli::{bob_dir_arg, ref_dir_arg, xlib_dir_arg};
-pub(crate) use clip_url::{humanize_stem, validate_and_clean};
+pub(crate) use clip_url::{humanize_stem, percent_decode, validate_and_clean};
 pub(crate) use frontmatter::split_frontmatter;
 pub(crate) use marker::{
     normalize_deprecated_status_str, ref_task_mark_status,
 };
+pub(crate) use note::configured_path;
 pub(crate) use region::{
     is_marker_mirror_text, parse_managed_region, split_note_body,
     RegionBlockKind,
 };
+pub(crate) use sidecar::is_wikilink;
 pub(crate) use sources::{collect_intake_records, IntakeRecord};
 const TASKS_SECTION_TITLE: &str = "Tasks";
 const TASKS_SECTION_HEADING: &str = "## Tasks";

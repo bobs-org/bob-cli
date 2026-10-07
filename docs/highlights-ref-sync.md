@@ -332,7 +332,7 @@ Writing scans can run a pre-scan hook before xlib intake:
 
 ```yaml
 highlights:
-  # Runs from the vault root before `bob highlights scan` inspects the library.
+  # Runs from the vault root before `bob ref scan` inspects the library.
   # Use it to deliver PDFs that do not travel on the git sync channel.
   pre_scan_hook: bob_xlib_pull
 ```

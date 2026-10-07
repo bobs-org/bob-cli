@@ -834,6 +834,7 @@ bob ref find <QUERY>... [-b|--bob-dir PATH] [-f|--format human|json|markdown] [-
 bob ref list [-A|--all] [-b|--bob-dir PATH] [-f|--format human|json|markdown] [-g|--git-dates] [-n|--limit N] [-o|--origin external|agent-report] [-P|--parent NOTE] [-R|--reading-state STATE,...] [-r|--ref-dir PATH] [-S|--since DATE] [-s|--status STATUS,...] [-t|--ref-type TYPE,...]
 bob ref marker <pdf> [-b|--bob-dir PATH] [-l|--lib-dir PATH] [-r|--ref-dir PATH] [-x|--xlib-dir PATH]
 bob ref scan [-b|--bob-dir PATH] [-d|--dry-run] [-j|--jobs N] [-l|--lib-dir PATH] [-n|--no-hooks] [-r|--ref-dir PATH] [-v|--verbose] [-w|--write-pdfs] [-x|--xlib-dir PATH]
+bob ref show <REF>... [-b|--bob-dir PATH] [-c|--comments-only] [-f|--format human|json|markdown] [-N|--no-annotations] [-r|--ref-dir PATH]
 bob ref sync <pdf> [-b|--bob-dir PATH] [-d|--dry-run] [-l|--lib-dir PATH] [-p|--prefer marker|frontmatter] [-r|--ref-dir PATH] [-w|--write-pdf] [-x|--xlib-dir PATH]
 ```
 
@@ -884,6 +885,9 @@ Highlights annotations into Obsidian reference notes.
 - `list` shows the reading queue by default and filtered library views by
   reading state, status, type, origin, parent, or date, with `--limit 50`
   in every format (`-A` lifts it) and opt-in `-g` Git dates.
+- `show <REF>...` reads one reference note with its metadata, annotations,
+  own notes, and tasks. `-c` keeps only commented annotations and
+  standalone notes, `-N` keeps metadata and own notes only.
 - `doctor` checks vault paths, intake, sidecars, markers, Git, pandoc, `curl`,
   the web-clip chain (`uv`, adapter, browser, headed fallback), the
   `listen_command` row, and optional `ob` without writing. Pass
@@ -1324,7 +1328,7 @@ blocks point at `done/..._done#^block-id`, and the vault Git commit was pushed.
 | Highlights PDF intake and reference notes | [`docs/highlights-ref-sync.md`](docs/highlights-ref-sync.md) |
 | `bob ref create` Markdown, PDF, and URL targets | [`docs/highlights-create.md`](docs/highlights-create.md) |
 | Web article capture into Highlights intake PDFs | [`docs/highlights-clip.md`](docs/highlights-clip.md) |
-| `bob ref find` reference-library lookup | [`docs/ref.md`](docs/ref.md) |
+| `bob ref find`, `list`, and `show` reference-library lookup | [`docs/ref.md`](docs/ref.md) |
 | Obsidian Sync folder exclusion runbook (historical) | [`docs/obsidian-sync-exclusions.md`](docs/obsidian-sync-exclusions.md) |
 | Bob vault Git sync runbook | [`docs/vault-git-sync.md`](docs/vault-git-sync.md) |
 | Custom plugin list and vault deploy | [`docs/plugins.md`](docs/plugins.md) |

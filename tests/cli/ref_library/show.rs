@@ -376,6 +376,24 @@ fn show_comments_only_and_no_annotations() {
 }
 
 #[test]
+fn show_comments_only_without_comments_reports_empty() {
+    let (_temp, vault) = inline_vault(
+        "bob-cli-ref-show-no-comments",
+        &[(
+            "ref/papers/quiet.md",
+            "---\nstatus: read\ntitle: Quiet Paper\n---\n\n# Quiet Paper\n\n- [x] #task #ref [[lib/papers/quiet.pdf]] #hide ^ref\n\n## Highlights\n\n<!-- highlights:begin -->\n\n### Page 1\n\n> [!quote] Quoted text without a comment.\n\n^h-ffffffffffffffff\n\n<!-- highlights:end -->\n",
+        )],
+    );
+    let output = run_show(&vault, &["quiet", "-c"]);
+    assert_success(&output);
+    let human = stdout(&output);
+    assert!(
+        human.contains("No comments or standalone notes."),
+        "empty comments report:\n{human}"
+    );
+}
+
+#[test]
 fn show_separates_several_refs_in_order() {
     let (_temp, vault) = fixture_vault("bob-cli-ref-show-multi");
     let document =
@@ -501,7 +519,7 @@ fn show_tasks_own_notes_and_multiline_comments() {
         "bob-cli-ref-show-tasks",
         &[(
             "ref/papers/tasks_case.md",
-            "---\nstatus: wip\ntitle: Tasks Case\n---\n\n# Tasks Case\n\n- [/] #task #ref [[lib/papers/tasks.pdf]] #hide ^ref\n\nSome own notes here.\n\n## Highlights\n\n<!-- highlights:begin -->\n\n### Page 4\n\n> [!quote] Quoted text here.\n>\n> > [!note] Comment First comment line.\n> > Second comment line.\n^h-eeeeeeeeeeeeeeee\n\n<!-- highlights:end -->\n\n## Tasks\n\n- [ ] Compare with the appendix. [[#^h-eeeeeeeeeeeeeeee|🔖]] [created:: 2026-10-01]\n- [x] Done item [[#^h-eeeeeeeeeeeeeeee|🔖]]\n",
+            "---\nstatus: wip\ntitle: Tasks Case\n---\n\n# Tasks Case\n\n- [/] #task #ref [[lib/papers/tasks.pdf]] #hide ^ref\n\nSome own notes here.\n\n## Highlights\n\n<!-- highlights:begin -->\n\n### Page 4\n\n> [!quote] Quoted text here.\n>\n> > [!note] Comment First comment line.\n> > Second comment line.\n^h-eeeeeeeeeeeeeeee\n\n<!-- highlights:end -->\n\n## Tasks\n\n- [ ] Compare with the appendix. [[#^h-eeeeeeeeeeeeeeee|🔖]] [created:: 2026-10-01]\n- [x] Done item [[#^h-eeeeeeeeeeeeeeee|🔖]]\n- [-] Partial item [[#^h-eeeeeeeeeeeeeeee|🔖]]\n",
         )],
     );
     let document = run_show_json(&vault, &["tasks_case"]);
@@ -526,6 +544,12 @@ fn show_tasks_own_notes_and_multiline_comments() {
                 "text": "Done item",
                 "block_id": "h-eeeeeeeeeeeeeeee",
             },
+            {
+                "checked": false,
+                "mark": "-",
+                "text": "Partial item",
+                "block_id": "h-eeeeeeeeeeeeeeee",
+            },
         ])
     );
 
@@ -533,8 +557,10 @@ fn show_tasks_own_notes_and_multiline_comments() {
     assert_success(&output);
     let human = stdout(&output);
     assert!(human.contains("TASKS"), "tasks section:\n{human}");
-    assert!(human.contains("☐ Compare with the appendix."));
-    assert!(human.contains("☑ Done item"));
+    // Each task carries its linked annotation's page label.
+    assert!(human.contains("☐ Compare with the appendix.   Page 4"));
+    assert!(human.contains("☑ Done item   Page 4"));
+    assert!(human.contains("☐ Partial item   Page 4"));
 
     let output = run_show(&vault, &["tasks_case", "-f", "markdown"]);
     assert_success(&output);
@@ -544,6 +570,7 @@ fn show_tasks_own_notes_and_multiline_comments() {
     assert!(markdown.contains("### Tasks"));
     assert!(markdown.contains("- [ ] Compare with the appendix."));
     assert!(markdown.contains("- [x] Done item"));
+    assert!(markdown.contains("- [-] Partial item"));
 }
 
 #[test]

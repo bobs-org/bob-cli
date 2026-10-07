@@ -9,9 +9,9 @@
 use serde::Serialize;
 
 use super::{
-    classify_query, normalize_doi_query, parse_arxiv_query, path_matches,
-    resolve_query, stored_identity, url_query_keys, MatchKind, QueryKind,
-    RefIndex, RefRow,
+    classify_query, doi_keys, normalize_doi_query, parse_arxiv_query,
+    path_matches, resolve_query, stored_identity, url_query_keys, MatchKind,
+    QueryKind, RefIndex, RefRow,
 };
 use crate::native::highlights_ref::IntakeRecord;
 
@@ -145,7 +145,6 @@ fn resolve_one(
                     });
                 }
             }
-            MatchKind::Intake => {}
         }
     }
     let intake_hits = intake
@@ -185,7 +184,7 @@ fn query_keys(query: &str, kind: QueryKind) -> Vec<String> {
             .map(|id| vec![format!("arxiv:{id}")])
             .unwrap_or_default(),
         QueryKind::Doi => normalize_doi_query(query)
-            .map(|doi| vec![format!("doi:{doi}")])
+            .map(|doi| doi_keys(&doi))
             .unwrap_or_default(),
         QueryKind::Path | QueryKind::Name | QueryKind::Title => Vec::new(),
     }
@@ -232,10 +231,7 @@ fn matched_key(
                 .unwrap_or(stem)
                 .to_string()
         }),
-        MatchKind::TitleExact
-        | MatchKind::Title
-        | MatchKind::SlugTitle
-        | MatchKind::Intake => None,
+        MatchKind::TitleExact | MatchKind::Title | MatchKind::SlugTitle => None,
     }
 }
 

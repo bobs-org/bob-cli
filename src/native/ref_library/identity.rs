@@ -7,7 +7,9 @@
 use regex::Regex;
 use std::sync::OnceLock;
 
-use crate::native::highlights_ref::{validate_and_clean, ArxivPaper};
+use crate::native::highlights_ref::{
+    percent_decode, validate_and_clean, ArxivPaper,
+};
 
 /// Stored identity for one row's `source_url` + `url` values.
 #[derive(Debug, Clone, Default)]
@@ -30,10 +32,10 @@ pub(crate) fn stored_identity(urls: &[String]) -> StoredIdentity {
         match validate_and_clean(value) {
             Ok(cleaned) => {
                 push_unique(&mut identity.keys, cleaned.dedupe_key);
-                if identity.arxiv.is_none()
-                    && let Some(paper) = ArxivPaper::parse(value)
-                {
-                    identity.arxiv = Some(paper.id.clone());
+                if let Some(paper) = ArxivPaper::parse(value) {
+                    if identity.arxiv.is_none() {
+                        identity.arxiv = Some(paper.id.clone());
+                    }
                     push_unique(
                         &mut identity.keys,
                         format!("arxiv:{}", paper.id),
@@ -44,10 +46,12 @@ pub(crate) fn stored_identity(urls: &[String]) -> StoredIdentity {
                         identity.doi = Some(doi.clone());
                     }
                     push_unique(&mut identity.keys, format!("doi:{doi}"));
-                    if identity.arxiv.is_none()
-                        && let Some(arxiv_id) = arxiv_id_from_doi(&doi)
-                    {
-                        identity.arxiv = Some(arxiv_id.clone());
+                    // Every arXiv URL earns its `arxiv:` key, not just
+                    // the first; `identity.arxiv` keeps the first id.
+                    if let Some(arxiv_id) = arxiv_id_from_doi(&doi) {
+                        if identity.arxiv.is_none() {
+                            identity.arxiv = Some(arxiv_id.clone());
+                        }
                         push_unique(
                             &mut identity.keys,
                             format!("arxiv:{arxiv_id}"),
@@ -118,9 +122,9 @@ pub(crate) fn classify_query(raw: &str) -> QueryKind {
 }
 
 /// The identity keys a URL query looks up: the cleaned dedupe key plus
-/// an `arxiv:<id>` key for arXiv URLs and a `doi:<doi>` key for DOI URLs.
-/// A value that fails validation yields its opaque `raw:` key instead.
-/// This is the query side of [`stored_identity`].
+/// the stored-side DOI keys (a `doi:<doi>` key, with an `arxiv:<id>` key
+/// for arXiv DOIs). A value that fails validation yields its opaque
+/// `raw:` key instead. This is the query side of [`stored_identity`].
 pub(crate) fn url_query_keys(raw: &str) -> Vec<String> {
     let mut keys = Vec::new();
     match validate_and_clean(raw) {
@@ -129,22 +133,21 @@ pub(crate) fn url_query_keys(raw: &str) -> Vec<String> {
             if let Some(paper) = ArxivPaper::parse(raw) {
                 keys.push(format!("arxiv:{}", paper.id));
             }
-            // DOI hosts are covered through the stored `doi:` keys when the
-            // query URL parses; reuse the same host rule as stored keys.
-            if let Ok(url) = url::Url::parse(raw.trim())
-                && let Some(host) = url.host_str().map(str::to_lowercase)
-                && matches!(
-                    host.strip_prefix("www.").unwrap_or(&host),
-                    "doi.org" | "dx.doi.org"
-                )
-            {
-                let path = url.path().trim_matches('/');
-                if !path.is_empty() {
-                    keys.push(format!("doi:{}", path.to_lowercase()));
-                }
+            if let Some(doi) = doi_from_url(raw) {
+                keys.extend(doi_keys(&doi));
             }
         }
         Err(_) => keys.push(raw_identity_key(raw)),
+    }
+    keys
+}
+
+/// The stored-side keys for one lowercased DOI: the `doi:<doi>` key plus
+/// an `arxiv:<id>` key for arXiv DOIs (`10.48550/arXiv.<id>`).
+pub(crate) fn doi_keys(doi: &str) -> Vec<String> {
+    let mut keys = vec![format!("doi:{doi}")];
+    if let Some(arxiv_id) = arxiv_id_from_doi(doi) {
+        keys.push(format!("arxiv:{arxiv_id}"));
     }
     keys
 }
@@ -245,8 +248,9 @@ fn split_arxiv_version(full_id: &str) -> Option<(String, Option<String>)> {
     }
 }
 
-/// Extract a `doi.org` / `dx.doi.org` DOI from a stored URL value.
-fn doi_from_url(value: &str) -> Option<String> {
+/// Extract a `doi.org` / `dx.doi.org` DOI from a stored URL value:
+/// the percent-decoded path, checked against the DOI regex.
+pub(crate) fn doi_from_url(value: &str) -> Option<String> {
     let url = url::Url::parse(value.trim()).ok()?;
     if !matches!(url.scheme(), "http" | "https") {
         return None;
@@ -265,7 +269,7 @@ fn doi_from_url(value: &str) -> Option<String> {
 }
 
 /// The arXiv id behind an arXiv DOI of the form `10.48550/arXiv.<id>`.
-fn arxiv_id_from_doi(doi: &str) -> Option<String> {
+pub(crate) fn arxiv_id_from_doi(doi: &str) -> Option<String> {
     let rest = doi.strip_prefix("10.48550/arxiv.")?;
     if rest.is_empty() || rest.contains('/') || rest.contains(' ') {
         return None;
@@ -275,35 +279,6 @@ fn arxiv_id_from_doi(doi: &str) -> Option<String> {
         Some(base)
     } else {
         None
-    }
-}
-
-fn percent_decode(segment: &str) -> String {
-    let mut decoded = Vec::with_capacity(segment.len());
-    let bytes = segment.as_bytes();
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] == b'%'
-            && index + 2 < bytes.len()
-            && let (Some(high), Some(low)) =
-                (hex_value(bytes[index + 1]), hex_value(bytes[index + 2]))
-        {
-            decoded.push(high << 4 | low);
-            index += 3;
-        } else {
-            decoded.push(bytes[index]);
-            index += 1;
-        }
-    }
-    String::from_utf8_lossy(&decoded).into_owned()
-}
-
-fn hex_value(byte: u8) -> Option<u8> {
-    match byte {
-        b'0'..=b'9' => Some(byte - b'0'),
-        b'a'..=b'f' => Some(byte - b'a' + 10),
-        b'A'..=b'F' => Some(byte - b'A' + 10),
-        _ => None,
     }
 }
 

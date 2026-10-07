@@ -10,7 +10,7 @@ use super::*;
 ///
 /// Each entry is a group title plus the subcommand names it owns, in display
 /// order.
-pub(crate) const HELP_GROUPS: &[(&str, &[&str])] = &[
+const HELP_GROUPS: &[(&str, &[&str])] = &[
     ("Library", &["find", "list", "show"]),
     (
         "Highlights pipeline",
@@ -29,6 +29,7 @@ const REF_AFTER_HELP: &str = "\
 Examples:
   bob ref find https://arxiv.org/abs/1706.03762   Is this paper already in the library?
   bob ref list                                    Show the reading queue
+  bob ref list -R finished -S 30d                 Show what was finished in the last 30 days
   bob ref show ea_graph -c                        Read your comments on one reference
   bob ref create <URL|PDF|MD> -L                  Capture a reference and narrate it
   bob ref scan                                    Sync Highlights PDFs into reference notes
@@ -51,7 +52,10 @@ pub(super) fn print_config_report(operation: &str, config: &Config) {
 
 pub(crate) fn build_cli() -> ClapCommand {
     let subcommands = all_subcommands();
+    // Trim the trailing newline like the root help does: the template
+    // adds the blank line before `Options:` itself.
     let groups = render_help_groups(&subcommands, help_groups_color());
+    let groups = groups.trim_end().to_string();
     let mut command = ClapCommand::new(COMMAND_NAME)
         .about(
             "Find, list, and read Bob reference notes, and sync Highlights PDFs into them",
@@ -200,63 +204,6 @@ fn help_groups_color() -> bool {
     io::stdout().is_terminal() && env::var_os("NO_COLOR").is_none()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn help_groups_cover_every_subcommand_exactly_once() {
-        let mounted: Vec<String> = build_cli()
-            .get_subcommands()
-            .map(|command| command.get_name().to_string())
-            .collect();
-        let grouped: Vec<String> = HELP_GROUPS
-            .iter()
-            .flat_map(|(_, names)| names.iter().map(|name| name.to_string()))
-            .collect();
-        assert!(!mounted.is_empty(), "expected mounted subcommands",);
-        let mut mounted_sorted = mounted.clone();
-        mounted_sorted.sort();
-        let mut grouped_sorted = grouped.clone();
-        grouped_sorted.sort();
-        assert_eq!(
-            mounted_sorted, grouped_sorted,
-            "every subcommand belongs in exactly one help group",
-        );
-    }
-
-    #[test]
-    fn help_groups_are_alphabetical_with_matching_abouts() {
-        let subcommands = all_subcommands();
-        for (title, names) in HELP_GROUPS {
-            let mut sorted = names.to_vec();
-            sorted.sort_unstable();
-            assert_eq!(
-                names.to_vec(),
-                sorted,
-                "group `{title}` is not alphabetical",
-            );
-            for name in *names {
-                let about = subcommands
-                    .iter()
-                    .find(|command| command.get_name() == *name)
-                    .and_then(|command| command.get_about())
-                    .map(|about| about.to_string())
-                    .unwrap_or_default();
-                assert!(
-                    !about.is_empty(),
-                    "group `{title}` member `{name}` has no about",
-                );
-                let rendered = render_help_groups(&subcommands, false);
-                assert!(
-                    rendered.contains(name) && rendered.contains(&about),
-                    "group `{title}` member `{name}` about is not rendered",
-                );
-            }
-        }
-    }
-}
-
 pub(super) fn with_config_args(command: ClapCommand) -> ClapCommand {
     command
         .arg(bob_dir_arg())
@@ -396,4 +343,61 @@ pub(super) fn write_pdfs_arg() -> Arg {
         .short('w')
         .action(ArgAction::SetTrue)
         .help("Allow marker writes back to all PDFs during scan")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn help_groups_cover_every_subcommand_exactly_once() {
+        let mounted: Vec<String> = build_cli()
+            .get_subcommands()
+            .map(|command| command.get_name().to_string())
+            .collect();
+        let grouped: Vec<String> = HELP_GROUPS
+            .iter()
+            .flat_map(|(_, names)| names.iter().map(|name| name.to_string()))
+            .collect();
+        assert!(!mounted.is_empty(), "expected mounted subcommands",);
+        let mut mounted_sorted = mounted.clone();
+        mounted_sorted.sort();
+        let mut grouped_sorted = grouped.clone();
+        grouped_sorted.sort();
+        assert_eq!(
+            mounted_sorted, grouped_sorted,
+            "every subcommand belongs in exactly one help group",
+        );
+    }
+
+    #[test]
+    fn help_groups_are_alphabetical_with_matching_abouts() {
+        let subcommands = all_subcommands();
+        for (title, names) in HELP_GROUPS {
+            let mut sorted = names.to_vec();
+            sorted.sort_unstable();
+            assert_eq!(
+                names.to_vec(),
+                sorted,
+                "group `{title}` is not alphabetical",
+            );
+            for name in *names {
+                let about = subcommands
+                    .iter()
+                    .find(|command| command.get_name() == *name)
+                    .and_then(|command| command.get_about())
+                    .map(|about| about.to_string())
+                    .unwrap_or_default();
+                assert!(
+                    !about.is_empty(),
+                    "group `{title}` member `{name}` has no about",
+                );
+                let rendered = render_help_groups(&subcommands, false);
+                assert!(
+                    rendered.contains(name) && rendered.contains(&about),
+                    "group `{title}` member `{name}` about is not rendered",
+                );
+            }
+        }
+    }
 }

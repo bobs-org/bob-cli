@@ -141,12 +141,59 @@ fn list_default_view_is_the_queue_in_every_format() {
     assert_success(&markdown);
     let body = stdout(&markdown);
     assert!(
-        body.starts_with("| State | Status | Date | Title | Type | Note |\n"),
-        "markdown table:\n{body}"
+        body.starts_with(
+            "| State | Status | Date | Title | Type | Note |\n| --- | --- | --- | --- | --- | --- |\n"
+        ),
+        "markdown table header and six-cell separator:\n{body}"
     );
     assert!(
-        body.contains("14 of 14 matching notes shown · coverage: ref/ only"),
-        "markdown footer:\n{body}"
+        body.contains(
+            "\n\n14 of 14 matching notes shown · coverage: ref/ only\n"
+        ),
+        "blank line before the markdown summary:\n{body}"
+    );
+}
+
+#[test]
+fn list_human_rows_align_dated_and_undated_columns() {
+    let (_temp, vault) = fixture_vault("bob-cli-ref-list-align");
+    let output = bob_command()
+        .arg("ref")
+        .arg("list")
+        .args(["-R", "queued", "-A"])
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", FIXED_NOW)
+        .env("COLUMNS", "300")
+        .output()
+        .expect("run wide bob ref list");
+    assert_success(&output);
+    let text = stdout(&output);
+    let dated = text
+        .lines()
+        .find(|line| line.ends_with("ref/papers/created_note.md"))
+        .unwrap_or_else(|| panic!("dated row:\n{text}"));
+    let undated = text
+        .lines()
+        .find(|line| line.ends_with("ref/papers/wiki_parent.md"))
+        .unwrap_or_else(|| panic!("undated row:\n{text}"));
+    assert!(undated.contains("—"), "undated row keeps `—`:\n{undated}");
+    // Compare display columns (char counts), not byte indices: `—` is
+    // multibyte. The date column pads to 10, so titles start together.
+    let columns = |line: &str, needle: &str| {
+        line.find(needle)
+            .map(|index| line[..index].chars().count())
+            .unwrap_or_else(|| panic!("missing {needle}:\n{line}"))
+    };
+    assert_eq!(
+        columns(dated, "created note"),
+        columns(undated, "Wiki Parent Note"),
+        "title columns:\n{dated}\n{undated}",
+    );
+    // The type column pads to the widest value, so paths start together.
+    assert_eq!(
+        columns(dated, "ref/papers/created_note.md"),
+        columns(undated, "ref/papers/wiki_parent.md"),
+        "path columns:\n{dated}\n{undated}",
     );
 }
 

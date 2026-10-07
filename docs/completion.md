@@ -97,21 +97,21 @@ failure, which yields empty output.
   and `-h/--help` once other arguments exist are dropped. Once capture
   text has started, or after `--`, no options are offered.
 - **Static choices.** Every option with clap possible values
-  (`--format`, `--engine`, highlights `--status`/`--prefer`, gkeep
+  (`--format`, `--engine`, ref `--status`/`--prefer`, gkeep
   `--source`, …) completes its values under a group named after the
   slot, such as `format`.
 - **Paths.** Directory options (`--bob-dir`, `--repo`, `--backup-dir`,
   `--lib-dir`, `--ref-dir`, `--xlib-dir`, `query --vault`) answer
-  `!dirs`. File options (`--query-file`, `--tasks-file`, highlights
+  `!dirs`. File options (`--query-file`, `--tasks-file`, ref
   markdown inputs, PDF arguments, clip `--html`) answer `!files` with
   a glob where one applies. A slot the builder annotates with a clap
   `ValueHint` (for example `completion install -t`, `completion zsh -o`)
   answers the same way with no table entry; a path-specific table entry
-  (the highlights PDF `--output`) beats the hint.
+  (the ref PDF `--output`) beats the hint.
 - **Free text.** Everything else answers a `!message` hint naming the
   slot, for example `MESSAGE — Override the generated Git commit
   message`. Stale-safe refs (`--task-ref`) and the bare note name of
-  `highlights --parent` stay free text: they name one thing, not a
+  `ref --parent` stay free text: they name one thing, not a
   set.
 - **Capture markers.** `TEXT` on `capture`, `capture-parse`, and
   `capture-rewrite` completes the marker at the end of the active word

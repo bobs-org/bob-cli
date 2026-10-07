@@ -971,6 +971,53 @@ fn root_help_matches_sectioned_short_and_long_snapshots() {
 }
 
 #[test]
+fn ref_help_matches_grouped_snapshot() {
+    let output = bob_command()
+        .arg("ref")
+        .arg("-h")
+        .env("NO_COLOR", "1")
+        .output()
+        .expect("run bob ref -h");
+
+    assert_success(&output);
+    assert_eq!(
+        stdout(&output),
+        include_str!("../fixtures/help/ref-short.txt"),
+        "grouped bob ref help snapshot changed"
+    );
+    assert_stdout_has_no_ansi(&output);
+    let help = stdout(&output);
+    // Exactly one blank line separates the last pipeline row from
+    // `Options:`, matching the root help spacing.
+    assert!(
+        help.contains("Sync one PDF marker note into its Bob reference note\n\nOptions:\n"),
+        "ref help spacing:\n{help}"
+    );
+    assert!(
+        help.contains(
+            "bob ref list -R finished -S 30d                 Show what was finished in the last 30 days",
+        ),
+        "missing finished example:\n{help}"
+    );
+    // Group rows wrap at 80 columns with per-group name widths (a
+    // shared column would push the `find` row past 80).
+    let listing = help
+        .split_once("Library:\n")
+        .expect("library group starts")
+        .1
+        .split_once("\nOptions:\n")
+        .expect("group listing ends")
+        .0;
+    for line in listing.lines() {
+        assert!(
+            line.chars().count() <= 80,
+            "ref help line exceeds 80 columns ({}): {line}",
+            line.chars().count()
+        );
+    }
+}
+
+#[test]
 fn help_routes_match_direct_help_for_root_and_nested_commands() {
     let roots = [
         "capture",

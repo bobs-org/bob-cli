@@ -7,8 +7,8 @@
 use std::collections::BTreeSet;
 
 use super::identity::{
-    classify_query, normalize_doi_query, parse_arxiv_query, url_query_keys,
-    QueryKind,
+    classify_query, doi_keys, normalize_doi_query, parse_arxiv_query,
+    url_query_keys, QueryKind,
 };
 use super::row::RefRow;
 use super::status::reading_state_rank;
@@ -27,7 +27,6 @@ pub(crate) enum MatchKind {
     TitleExact,
     Title,
     SlugTitle,
-    Intake,
 }
 
 /// One resolved row: its index into [`RefIndex`](super::RefIndex), how it
@@ -61,9 +60,11 @@ pub(crate) fn resolve_query(
         }
         QueryKind::Doi => {
             let doi = normalize_doi_query(trimmed).expect("classified doi");
-            let key = format!("doi:{doi}");
+            // Bare and `doi:` queries derive the same keys as stored
+            // keys: the `doi:` key plus an `arxiv:` key for arXiv DOIs.
+            let keys = doi_keys(&doi);
             exact_hits(rows, MatchKind::Identity, |row| {
-                row.identity.keys.iter().any(|k| k == &key)
+                row.identity.keys.iter().any(|key| keys.contains(key))
             })
         }
         QueryKind::Path => resolve_path(rows, bob_dir, trimmed),
@@ -82,7 +83,7 @@ pub(crate) fn primary_rank(row: &RefRow) -> (bool, u8, &str) {
     )
 }
 
-fn sort_primary(hits: &mut Vec<ScoredHit>, rows: &[RefRow]) {
+fn sort_primary(hits: &mut [ScoredHit], rows: &[RefRow]) {
     hits.sort_by(|a, b| {
         primary_rank(&rows[a.row]).cmp(&primary_rank(&rows[b.row]))
     });
@@ -351,14 +352,16 @@ fn slug_words(raw: &str) -> Option<Vec<String>> {
     let url = url::Url::parse(raw.trim()).ok()?;
     let segment = url
         .path_segments()?
-        .filter(|part| !part.is_empty())
-        .next_back()?;
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .find(|part| !part.is_empty())?;
     let stem = segment
         .rsplit_once('.')
         .map(|(head, _)| head)
         .unwrap_or(segment);
     let words = stem
-        .split(|c| c == '-' || c == '_')
+        .split(['-', '_'])
         .filter(|word| !word.is_empty())
         .map(str::to_string)
         .collect::<Vec<_>>();

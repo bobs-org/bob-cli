@@ -344,7 +344,7 @@ pub(crate) fn humanize_stem(stem: &str) -> String {
     title.trim().to_string()
 }
 
-fn percent_decode(segment: &str) -> String {
+pub(crate) fn percent_decode(segment: &str) -> String {
     let mut decoded = Vec::with_capacity(segment.len());
     let bytes = segment.as_bytes();
     let mut index = 0;

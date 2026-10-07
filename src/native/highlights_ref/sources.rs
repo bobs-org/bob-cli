@@ -147,10 +147,8 @@ fn collect_ref_note_sources(
                         source_pdf = value;
                     }
                 }
-                "audio" => {
-                    if value.is_some_and(|value| !value.is_empty()) {
-                        has_audio = true;
-                    }
+                "audio" if value.is_some_and(|value| !value.is_empty()) => {
+                    has_audio = true;
                 }
                 _ => {}
             }
@@ -211,7 +209,7 @@ fn collect_intake_sources(
         for key in ["source_url", "url"] {
             if let Some(url) =
                 projection.get(key).and_then(|value| value.as_string())
-                && let Ok(cleaned) = validate_and_clean(&url)
+                && let Ok(cleaned) = validate_and_clean(url)
             {
                 recorded.push(RecordedSource {
                     dedupe_key: cleaned.dedupe_key,
@@ -297,28 +295,38 @@ fn collect_intake_records_inner(
         let Ok(projection) = parse_marker(&marker.contents) else {
             continue;
         };
-        let source_url: Option<String> = ["source_url", "url"]
-            .iter()
-            .filter_map(|key| {
-                projection.get(*key).and_then(|value| value.as_string())
-            })
-            .next()
-            .map(str::to_string);
-        let Some(source_url) = source_url else {
+        // Both marker URL fields are recorded, mirroring
+        // `collect_intake_sources`: a marker carrying both is refused by
+        // `bob ref create` dedupe on either value, so `find -i` must see
+        // both too. One record travels per distinct value.
+        let mut urls: Vec<String> = Vec::new();
+        for key in ["source_url", "url"] {
+            if let Some(url) =
+                projection.get(key).and_then(|value| value.as_string())
+                && !urls.iter().any(|seen| seen.as_str() == url)
+            {
+                urls.push(url.to_string());
+            }
+        }
+        if urls.is_empty() {
             continue;
-        };
-        records.push(IntakeRecord {
-            path,
-            source_url,
-            title: projection
-                .get("title")
-                .and_then(|value| value.as_string())
-                .map(str::to_string),
-            status: projection
-                .get("status")
-                .and_then(|value| value.as_string())
-                .map(str::to_string),
-        });
+        }
+        let title = projection
+            .get("title")
+            .and_then(|value| value.as_string())
+            .map(str::to_string);
+        let status = projection
+            .get("status")
+            .and_then(|value| value.as_string())
+            .map(str::to_string);
+        for source_url in urls {
+            records.push(IntakeRecord {
+                path: path.clone(),
+                source_url,
+                title: title.clone(),
+                status: status.clone(),
+            });
+        }
     }
     Ok(())
 }
@@ -351,6 +359,8 @@ pub(super) fn warn_for_legacy_hits(hits: &[RecordedSource]) {
             "warning: already in the library as {}, a note without a Highlights PDF; capturing a fresh copy",
             hit.path.display(),
         );
+    }
+    if !hits.is_empty() {
         eprintln!(
             "hint: bob ref find and bob ref list treat the older note as superseded once bob ref scan writes the new one",
         );

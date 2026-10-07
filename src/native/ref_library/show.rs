@@ -130,7 +130,6 @@ pub(crate) fn resolve_show(
                     scored.push((score, hit.row));
                 }
             }
-            MatchKind::Intake => {}
         }
     }
     if title_exact.len() == 1 && !exact.contains(&title_exact[0]) {
@@ -174,7 +173,7 @@ pub(crate) fn resolve_show(
                 .collect(),
         });
     }
-    scored.sort_by(|left, right| right.0.cmp(&left.0));
+    scored.sort_by_key(|left| std::cmp::Reverse(left.0));
     scored.dedup_by_key(|(_, row)| *row);
     Err(ShowFailure::NotFound {
         query: query.to_string(),
@@ -771,10 +770,23 @@ fn render_one_human(
         out.push_str("TASKS\n");
         for task in &row.tasks {
             let box_glyph = if task.checked { "☑" } else { "☐" };
-            out.push_str(&truncate(
+            // The linked annotation's page label travels as a dim
+            // suffix; tasks without a matching annotation keep no suffix.
+            let page = row
+                .annotations
+                .iter()
+                .find(|annotation| annotation.block_id == task.block_id)
+                .and_then(|annotation| annotation.page_label.as_deref());
+            let suffix =
+                page.map(|page| format!("   {page}")).unwrap_or_default();
+            let base = truncate(
                 &format!("  {box_glyph} {}", task.text),
-                width,
-            ));
+                width.saturating_sub(display_width(&suffix)).max(1),
+            );
+            out.push_str(&base);
+            if !suffix.is_empty() {
+                out.push_str(&styler.dim(&suffix));
+            }
             out.push('\n');
         }
     }
@@ -927,8 +939,7 @@ fn render_one_markdown(row: &ShowRow, no_annotations: bool) -> String {
     if !row.tasks.is_empty() {
         out.push_str("\n### Tasks\n\n");
         for task in &row.tasks {
-            let mark = if task.checked { "x" } else { " " };
-            out.push_str(&format!("- [{mark}] {}\n", task.text));
+            out.push_str(&format!("- [{}] {}\n", task.mark, task.text));
         }
     }
     out
@@ -1098,7 +1109,7 @@ mod tests {
 
     #[test]
     fn markdown_digest_keeps_quote_comment_and_tasks() {
-        let markdown = render_show_markdown(&vec![show_test_row()], false);
+        let markdown = render_show_markdown(&[show_test_row()], false);
         assert!(
             markdown.contains("## EA-Graph: Verification Memory"),
             "title heading:\n{markdown}"

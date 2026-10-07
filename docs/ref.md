@@ -61,10 +61,14 @@ opaque `raw:` keys and earn an `opaque_url` diagnostic.
 Queries classify in order: URL, arXiv ID (bare or `arxiv:`-prefixed),
 DOI (bare or `doi:`-prefixed), path (contains `/` or ends in
 `.md`/`.pdf`), single token (note stem or frontmatter `id`), anything
-else (title). Title scoring is Dice over normalized token sets (0-100,
-normalized equality is 100 with kind `title_exact`); URL misses fall
-back to scoring their slug words as `slug_title`. At most 5 candidates
-are kept.
+else (title). URL queries derive the same stored-side keys (the dedupe
+key plus `doi:`/`arxiv:` through the same DOI helpers, so a
+percent-encoded DOI URL matches too); bare and `doi:`-prefixed DOI
+queries derive the `doi:` key plus the `arxiv:` key for arXiv DOIs, so
+one paper's twin notes both match in primary-match order. Title scoring
+is Dice over normalized token sets (0-100, normalized equality is 100
+with kind `title_exact`); URL misses fall back to scoring their slug
+words as `slug_title`. At most 5 candidates are kept.
 
 When a PDF-backed note shares an identity key with a note without a
 PDF, the PDF-less note is `superseded_by` the PDF-backed one. `find`
@@ -128,14 +132,15 @@ this is never fatal.
 Human output groups rows under one heading per reading state with its
 count (pre-cap totals), with the status chip, row date (or `—`), title,
 `♫` when audio is bound, type, and a dim path; the path drops first on
-narrow terminals, then titles truncate. A pending-sync `*` gets a
-footnote. Without `-s`, legacy-era rows collapse to one dim summary line
+narrow terminals, then titles truncate. A pending-sync `*` (dimmed) gets
+a footnote. Without `-s`, legacy-era rows collapse to one dim summary line
 instead of listing. The cap applies to the rows that are listed;
 truncation prints `… N more · -n N or -A to show more`. An empty default
 view prints `Nothing queued ✓`.
 
 Markdown output is a table with the columns State | Status | Date |
-Title | Type | Note, followed by the matched/returned and coverage lines.
+Title | Type | Note (six header cells with a six-cell separator row),
+followed by a blank line and the matched/returned and coverage lines.
 The JSON envelope carries `filters` (the effective `reading_state` plus
 `reading_state_defaulted`, every active filter, the `limit`, and
 `undated_excluded`), `matched`, `returned`, `truncated`, and
@@ -191,8 +196,9 @@ Human output prints the title, a reading-state header (chip, date,
 type, origin, path), the metadata rows that have a value, then the
 annotations grouped by page with wrapped quotes (`“…”`) and cyan `↳`
 comments, the exclusion parenthetical, and the `NOTES` and `TASKS`
-sections. Empty sections stay omitted; several `REF`s are separated by a
-dim rule.
+sections. Each `TASKS` row carries its linked annotation's page label
+as a dim suffix. Empty sections stay omitted; several `REF`s are
+separated by a dim rule.
 
 Markdown output is a quotable digest per note: `## <title>`, bullets for
 the note link, reading state with evidence and date, source URL and
@@ -200,7 +206,8 @@ arXiv/DOI, origin and type, annotation counts and snapshot date (plus
 `Research report: research:…` when set, and `Also: …` companions), then
 `### Annotations` (one `**Page N**` label per page, quotes as `>`
 blockquotes, comments as `Comment: …` lines, standalone notes as
-`Note: …`), `### Notes`, and `### Tasks`.
+`Note: …`), `### Notes`, and `### Tasks` (keeping each task's real
+mark, so a `[-]` task stays `[-]`).
 
 Agent usage: resolve candidates with `bob ref find` first, then read
 exact notes with `bob ref show <path>`. Prefer `-c -f markdown` for
