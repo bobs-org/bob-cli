@@ -122,31 +122,46 @@ pub(super) fn parse_sidecar_markdown(contents: &str) -> Vec<SidecarAnnotation> {
     let mut linked_page_style = false;
     let mut order = 0usize;
     let mut page_ordinals: BTreeMap<String, usize> = BTreeMap::new();
+    // Document preamble (a setext title, an author line, blank lines) before
+    // the first page heading is never an annotation (bob-cli-4r). Sidecars
+    // without any page heading have no preamble, so every chunk still parses.
+    let mut seen_page_heading = !contents
+        .lines()
+        .any(|line| sidecar_page_heading_details(line).is_some());
 
     for line in contents.lines() {
         if let Some(next_page_heading) = sidecar_page_heading_details(line) {
-            flush_sidecar_chunk(
-                &mut annotations,
-                &mut chunk,
-                page_label.as_deref(),
-                linked_page_style,
-                &mut order,
-                &mut page_ordinals,
-            );
+            if seen_page_heading {
+                flush_sidecar_chunk(
+                    &mut annotations,
+                    &mut chunk,
+                    page_label.as_deref(),
+                    linked_page_style,
+                    &mut order,
+                    &mut page_ordinals,
+                );
+            } else {
+                chunk.clear();
+            }
+            seen_page_heading = true;
             page_label = Some(next_page_heading.label);
             linked_page_style = next_page_heading.linked_page_style;
             continue;
         }
 
         if is_horizontal_rule(line) {
-            flush_sidecar_chunk(
-                &mut annotations,
-                &mut chunk,
-                page_label.as_deref(),
-                linked_page_style,
-                &mut order,
-                &mut page_ordinals,
-            );
+            if seen_page_heading {
+                flush_sidecar_chunk(
+                    &mut annotations,
+                    &mut chunk,
+                    page_label.as_deref(),
+                    linked_page_style,
+                    &mut order,
+                    &mut page_ordinals,
+                );
+            } else {
+                chunk.clear();
+            }
             continue;
         }
 

@@ -456,6 +456,7 @@ fn highlights_ref_task_ready_scan_reopens_read_ref_to_ready() {
             .arg("sync")
             .arg(&pdf)
             .env("BOB_DIR", &vault)
+            .env("BOB_NOW", "2026-10-03 09:00:00")
             .output()
             .expect("initial highlights sync"),
     );
@@ -463,9 +464,10 @@ fn highlights_ref_task_ready_scan_reopens_read_ref_to_ready() {
     let read_note = fs::read_to_string(&note).expect("read ref note");
     assert!(
         read_note.contains("status: read\n")
-            && read_note
-                .contains("- [x] #task #ref [[lib/example.pdf]] #hide ^ref\n"),
-        "expected a read ref with a checked ^ref task:\n{read_note}"
+            && read_note.contains(
+                "- [x] #task #ref [[lib/example.pdf]] #hide [completion:: 2026-10-03] ^ref\n"
+            ),
+        "expected a read ref with a checked, date-stamped ^ref task:\n{read_note}"
     );
     // The user moves the generated ^ref task to Ready to reopen the ref.
     let reopened_note = read_note.replace("- [x] #task", "- [ ] #task");
@@ -557,9 +559,10 @@ fn highlights_ref_task_ready_scan_reopens_read_ref_to_ready() {
         "{note_after_write}"
     );
     assert!(
-        note_after_write
-            .contains("- [ ] #task #ref [[lib/example.pdf]] #hide ^ref\n"),
-        "{note_after_write}"
+        note_after_write.contains(
+            "- [ ] #task #ref [[lib/example.pdf]] #hide [completion:: 2026-10-03] ^ref\n"
+        ),
+        "reopen must keep the stamped completion date:\n{note_after_write}"
     );
 
     let output = bob_command()
@@ -606,7 +609,8 @@ fn highlights_ref_task_checked_sync_creates_annotation_tasks_before_closing() {
         "\
 ## Page 7
 
-Note: marker note mirrored from the PDF
+- status: wip
+- parent: obsidian
 
 ---
 
@@ -762,7 +766,8 @@ fn highlights_ref_task_checked_scan_creates_annotation_tasks_before_closing() {
         "\
 ## Page 3
 
-Note: marker note mirrored from the PDF
+- status: wip
+- parent: obsidian
 
 ---
 

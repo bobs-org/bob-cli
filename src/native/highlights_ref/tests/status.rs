@@ -344,7 +344,18 @@ fn highlights_ref_task_checkbox_rewrite_and_dirty_allowance_are_narrow() {
         &read_projection,
     )
     .expect("rewrite task checkbox");
-    assert!(rewritten.contains("- [x] #task [[lib/example.pdf]] ^ref\n"));
+    // Sync itself closes the mark, so it stamps a completion date before
+    // the ^ref token.
+    let rewritten_task = rewritten
+        .lines()
+        .find(|line| line.contains(PDF_TASK_BLOCK_ID))
+        .expect("rewritten task line");
+    assert!(
+        rewritten_task
+            .starts_with("- [x] #task [[lib/example.pdf]] [completion:: "),
+        "{rewritten_task}"
+    );
+    assert!(rewritten_task.ends_with("] ^ref"), "{rewritten_task}");
 
     let hidden_body = "\
 # Example
@@ -362,8 +373,17 @@ fn highlights_ref_task_checkbox_rewrite_and_dirty_allowance_are_narrow() {
         &read_projection,
     )
     .expect("rewrite hidden task checkbox");
-    assert!(hidden_rewritten
-        .contains("- [x] #task [[lib/example.pdf]] #hide ^ref\n"));
+    let hidden_task = hidden_rewritten
+        .lines()
+        .find(|line| line.contains(PDF_TASK_BLOCK_ID))
+        .expect("hidden task line");
+    assert!(
+        hidden_task.starts_with(
+            "- [x] #task [[lib/example.pdf]] #hide [completion:: "
+        ),
+        "{hidden_task}"
+    );
+    assert!(hidden_task.ends_with("] ^ref"), "{hidden_task}");
 
     let cancelled_body = "\
 # Example
@@ -405,8 +425,19 @@ fn highlights_ref_task_checkbox_rewrite_and_dirty_allowance_are_narrow() {
         &abandoned_projection,
     )
     .expect("rewrite unchecked task checkbox to cancelled");
-    assert!(unchecked_cancelled
-        .contains("- [-] #task [[lib/example.pdf]] #hide ^ref\n"));
+    let unchecked_cancelled_task = unchecked_cancelled
+        .lines()
+        .find(|line| line.contains(PDF_TASK_BLOCK_ID))
+        .expect("cancelled task line");
+    assert!(
+        unchecked_cancelled_task
+            .starts_with("- [-] #task [[lib/example.pdf]] #hide [cancelled:: "),
+        "{unchecked_cancelled_task}"
+    );
+    assert!(
+        unchecked_cancelled_task.ends_with("] ^ref"),
+        "{unchecked_cancelled_task}"
+    );
 
     let unrelated_body = checked_body.replace("## Highlights", "Manual");
     assert!(!super::bodies_differ_only_by_pdf_task_checkbox(
@@ -420,4 +451,40 @@ fn highlights_ref_task_checkbox_rewrite_and_dirty_allowance_are_narrow() {
         &base_note,
         &current_note
     ));
+}
+
+#[test]
+fn close_date_stamp_inserts_once_before_ref_and_preserves_existing_dates() {
+    let open = "- [/] #task #ref [[lib/example.pdf]] #hide ^ref";
+    // `stamp_close_date` runs on the already-rewritten line, so hand it the
+    // closed mark exactly as `replace_pdf_task_checkbox_mark` does.
+    let stamped = super::stamp_close_date(&open.replace("- [/]", "- [x]"), 'x');
+    assert!(
+        stamped.starts_with(
+            "- [x] #task #ref [[lib/example.pdf]] #hide [completion:: "
+        ),
+        "{stamped}"
+    );
+    assert!(stamped.ends_with("] ^ref"), "{stamped}");
+
+    // Stamping is idempotent: an existing bracket or emoji date is kept.
+    assert_eq!(super::stamp_close_date(&stamped, 'x'), stamped);
+    let emoji = "- [x] #task #ref [[lib/example.pdf]] #hide ✅ 2026-01-02 ^ref";
+    assert_eq!(super::stamp_close_date(emoji, 'x'), emoji);
+
+    // `-` stamps a cancellation date instead.
+    let cancelled =
+        super::stamp_close_date(&open.replace("- [/]", "- [-]"), '-');
+    assert!(
+        cancelled.starts_with(
+            "- [-] #task #ref [[lib/example.pdf]] #hide [cancelled:: "
+        ),
+        "{cancelled}"
+    );
+    assert!(cancelled.ends_with("] ^ref"), "{cancelled}");
+
+    // Non-closing marks never stamp, and a reopen never removes a date.
+    assert_eq!(super::stamp_close_date(open, ' '), open);
+    assert_eq!(super::stamp_close_date(open, '/'), open);
+    assert_eq!(super::stamp_close_date(&stamped, ' '), stamped);
 }

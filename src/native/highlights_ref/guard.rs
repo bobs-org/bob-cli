@@ -280,8 +280,43 @@ pub(super) fn bodies_differ_only_by_pdf_task_checkbox(
         return false;
     }
 
-    replace_pdf_task_checkbox_mark(base_body, current_task.mark)
-        .is_ok_and(|toggled| toggled == current_body)
+    replace_pdf_task_checkbox_mark(base_body, current_task.mark).is_ok_and(
+        |toggled| {
+            // Sync stamps a close date when it flips the mark itself; a
+            // user-made close carries no stamp. Both count as a
+            // checkbox-only difference, so compare stamp-free.
+            toggled == current_body
+                || without_close_date_stamp(&toggled)
+                    == without_close_date_stamp(current_body)
+        },
+    )
+}
+
+/// Remove one sync-inserted `[completion:: DATE]` / `[cancelled:: DATE]`
+/// field sitting immediately before the `^ref` token, so dirty-guard
+/// comparisons see the checkbox change without the stamp.
+pub(super) fn without_close_date_stamp(body: &str) -> String {
+    for field in ["[completion::", "[cancelled::"] {
+        let needle = format!(" {field} ");
+        let Some(field_start) = body.find(&needle) else {
+            continue;
+        };
+        let value_start = field_start + needle.len();
+        let Some(value_end) = body[value_start..].find(']') else {
+            continue;
+        };
+        let after = &body[value_start + value_end + 1..];
+        if after == format!(" {PDF_TASK_BLOCK_ID}")
+            || after.starts_with(&format!(" {PDF_TASK_BLOCK_ID}\n"))
+            || after.starts_with(&format!(" {PDF_TASK_BLOCK_ID}\r"))
+        {
+            let mut stripped = String::with_capacity(body.len());
+            stripped.push_str(&body[..field_start]);
+            stripped.push_str(after);
+            return stripped;
+        }
+    }
+    body.to_string()
 }
 
 pub(super) fn git_status(

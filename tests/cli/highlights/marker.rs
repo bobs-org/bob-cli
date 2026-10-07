@@ -331,7 +331,8 @@ fn highlights_ref_doctor_checks_vault_git_without_writes() {
         "\
 ## Page 1
 
-Note: marker note
+- status: wip
+- parent: obsidian
 ",
     );
     git_in(&vault, ["init", "-q"]);
@@ -381,7 +382,8 @@ fn highlights_ref_doctor_warns_on_orphan_companion_audio() {
         "\
 ## Page 1
 
-Note: marker note
+- status: wip
+- parent: obsidian
 ",
     );
     write_file(&orphan, "fake-mp3");
@@ -1012,7 +1014,8 @@ fn highlights_ref_comment_edit_keeps_stable_block_id() {
         "\
 ## Page 4
 
-Note: marker note
+- status: wip
+- parent: obsidian
 
 ---
 
@@ -1039,7 +1042,8 @@ Comment: first comment
         "\
 ## Page 4
 
-Note: marker note
+- status: wip
+- parent: obsidian
 
 ---
 
@@ -1082,7 +1086,8 @@ fn highlights_ref_deleted_highlight_is_tombstoned() {
         "\
 ## Page 9
 
-Note: marker note
+- status: wip
+- parent: obsidian
 
 ---
 
@@ -1112,7 +1117,8 @@ Note: marker note
         "\
 ## Page 9
 
-Note: marker note
+- status: wip
+- parent: obsidian
 
 ---
 

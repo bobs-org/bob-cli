@@ -72,7 +72,8 @@ fn highlights_ref_scan_recurses_dry_runs_and_writes_multiple_pdfs() {
         "\
 ## Page 1
 
-Note: marker note
+- status: wip
+- parent: obsidian
 
 ---
 
@@ -84,7 +85,8 @@ Note: marker note
         "\
 ## Page 2
 
-Note: marker note
+- status: wip
+- parent: obsidian
 
 ---
 
@@ -278,7 +280,8 @@ fn highlights_ref_scan_intakes_xlib_sidecars_with_pdfs() {
         "\
 ## Page 1
 
-Note: marker note
+- status: wip
+- parent: obsidian
 
 ---
 
@@ -294,7 +297,8 @@ Note: marker note
         "\
 ## Page 2
 
-Note: marker note
+- status: wip
+- parent: obsidian
 
 ---
 
@@ -546,7 +550,8 @@ fn highlights_ref_scan_default_output_is_concise() {
         "\
 ## Page 1
 
-Note: marker note mirrored from the PDF
+- status: wip
+- parent: obsidian
 
 ---
 
@@ -590,7 +595,8 @@ Note: marker note mirrored from the PDF
         "\
 ## Page 2
 
-Note: marker note mirrored from the PDF
+- status: wip
+- parent: obsidian
 
 ---
 
@@ -825,7 +831,9 @@ fn highlights_ref_scan_jobs_flag_matches_sequential_output() {
         );
         write_file(
             &pdf.with_extension("md"),
-            &format!("## Page 1\n\nNote: marker note\n\n---\n\n> {quote}\n"),
+            &format!(
+                "## Page 1\n\n- status: wip\n- parent: obsidian\n\n---\n\n> {quote}\n"
+            ),
         );
     }
 
@@ -957,7 +965,8 @@ fn highlights_ref_scan_groups_routed_tasks_with_parallel_jobs() {
                 "\
 ## Page 1
 
-Note: marker note mirrored from the PDF
+- status: wip
+- parent: obsidian
 
 ---
 

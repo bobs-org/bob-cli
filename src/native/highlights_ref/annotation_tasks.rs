@@ -12,11 +12,9 @@ pub(super) fn annotation_task_candidates(
         return Ok(Vec::new());
     };
 
-    let mut skipped_marker_note = false;
     let mut candidates = Vec::new();
     for annotation in &sidecar.annotations {
-        if !skipped_marker_note && is_sidecar_marker_mirror(annotation) {
-            skipped_marker_note = true;
+        if is_sidecar_marker_mirror(annotation) {
             continue;
         }
 

@@ -670,6 +670,153 @@ fn highlights_ref_sync_preserves_authored_created_and_rejects_marker_created() {
     );
 }
 
+#[test]
+fn highlights_ref_sync_stamps_completion_date_when_it_closes_ref_task() {
+    let temp = TempDir::new("bob-cli-highlights-ref-close-date");
+    let vault = temp.path().join("vault");
+    let pdf = vault.join("lib/close-date.pdf");
+    let note = vault.join("ref/close-date.md");
+    write_highlights_pdf(&pdf, "- status: read\n- parent: obsidian\n");
+
+    // A dry run shows the close it is about to generate without writing.
+    let output = bob_command()
+        .arg("highlights")
+        .arg("sync")
+        .arg("--dry-run")
+        .arg(&pdf)
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", "2026-10-06 09:00:00")
+        .output()
+        .expect("dry-run close sync");
+
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains("note_action: create"),
+        "dry run should report the close:\n{}",
+        format_output(&output)
+    );
+    assert!(!note.exists(), "dry run must not create the note");
+
+    // A marker-driven close stamps the completion date before the ^ref token.
+    let output = bob_command()
+        .arg("highlights")
+        .arg("sync")
+        .arg(&pdf)
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", "2026-10-06 09:00:00")
+        .output()
+        .expect("close sync");
+
+    assert_success(&output);
+    let contents = fs::read_to_string(&note).expect("read closed ref note");
+    assert!(
+        contents.contains(
+            "- [x] #task #ref [[lib/close-date.pdf]] #hide [completion:: 2026-10-06] ^ref\n"
+        ),
+        "sync should stamp the completion date it closed:\n{contents}"
+    );
+
+    // The stamp lands exactly once: a repeat sync is a no-op.
+    let output = bob_command()
+        .arg("highlights")
+        .arg("sync")
+        .arg(&pdf)
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", "2026-10-07 09:00:00")
+        .output()
+        .expect("repeat close sync");
+
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains("note_action: none")
+            && stdout(&output).contains("writes: none"),
+        "stamped close should settle:\n{}",
+        format_output(&output)
+    );
+    let settled = fs::read_to_string(&note).expect("read settled ref note");
+    assert_eq!(
+        settled.matches("[completion::").count(),
+        1,
+        "completion date must be stamped exactly once:\n{settled}"
+    );
+
+    // A reopen keeps the date, and a user-made close never restamps it.
+    let reopened = settled.replace(
+        "- [x] #task #ref [[lib/close-date.pdf]] #hide [completion:: 2026-10-06] ^ref",
+        "- [ ] #task #ref [[lib/close-date.pdf]] #hide [completion:: 2026-10-06] ^ref",
+    );
+    write_file(&note, &reopened);
+    let output = bob_command()
+        .arg("highlights")
+        .arg("sync")
+        .arg(&pdf)
+        .arg("--write-pdf")
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", "2026-10-08 09:00:00")
+        .output()
+        .expect("reopen sync");
+
+    assert_success(&output);
+    let contents = fs::read_to_string(&note).expect("read reopened ref note");
+    assert!(
+        contents.contains(
+            "- [ ] #task #ref [[lib/close-date.pdf]] #hide [completion:: 2026-10-06] ^ref\n"
+        ),
+        "reopen must keep the stamped date:\n{contents}"
+    );
+
+    let user_closed = contents.replace("- [ ] #task", "- [x] #task");
+    write_file(&note, &user_closed);
+    let output = bob_command()
+        .arg("highlights")
+        .arg("sync")
+        .arg(&pdf)
+        .arg("--write-pdf")
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", "2026-10-09 09:00:00")
+        .output()
+        .expect("user close sync");
+
+    assert_success(&output);
+    let contents =
+        fs::read_to_string(&note).expect("read user-closed ref note");
+    assert!(
+        contents.contains("[completion:: 2026-10-06] ^ref"),
+        "user-made close must keep the existing date:\n{contents}"
+    );
+    assert!(
+        !contents.contains("2026-10-09"),
+        "user-made close must not restamp:\n{contents}"
+    );
+}
+
+#[test]
+fn highlights_ref_sync_stamps_cancellation_date_when_it_cancels_ref_task() {
+    let temp = TempDir::new("bob-cli-highlights-ref-cancel-date");
+    let vault = temp.path().join("vault");
+    let pdf = vault.join("lib/cancel-date.pdf");
+    let note = vault.join("ref/cancel-date.md");
+    write_highlights_pdf(&pdf, "- status: abandoned\n- parent: obsidian\n");
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("sync")
+        .arg(&pdf)
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", "2026-10-06 09:00:00")
+        .output()
+        .expect("cancel sync");
+
+    assert_success(&output);
+    let contents = fs::read_to_string(&note).expect("read cancelled ref note");
+    assert!(
+        contents.contains(
+            "- [-] #task #ref [[lib/cancel-date.pdf]] #hide [cancelled:: 2026-10-06] ^ref\n"
+        ),
+        "sync should stamp the cancellation date it set:\n{contents}"
+    );
+}
+
 fn set_pdf_marker_literal_contents(path: &Path, marker_contents: &str) {
     let mut doc = lopdf::Document::load(path)
         .unwrap_or_else(|error| panic!("load PDF {}: {error}", path.display()));

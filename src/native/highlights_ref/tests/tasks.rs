@@ -135,7 +135,8 @@ fn annotation_task_candidates_extract_from_comments_and_notes() {
         "\
 ## Page 2
 
-Note: marker note mirrored from the PDF
+- status: wip
+- parent: obsidian
 
 ---
 

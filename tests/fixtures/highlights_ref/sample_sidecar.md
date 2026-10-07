@@ -2,7 +2,8 @@
 
 ## Page 12
 
-Note: marker note mirrored from the PDF
+- status: wip
+- parent: obsidian
 
 ---
 

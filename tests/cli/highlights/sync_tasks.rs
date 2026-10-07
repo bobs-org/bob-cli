@@ -26,7 +26,8 @@ fn highlights_ref_sync_renders_sidecar_highlights_and_notes() {
 
 ## Page 12
 
-Note: marker note mirrored from the PDF
+- status: wip
+- parent: obsidian
 
 ---
 
@@ -89,8 +90,8 @@ Note: Keep a standalone observation after the marker.
         "{contents}"
     );
     assert!(
-        !contents.contains("marker note mirrored"),
-        "first standalone sidecar note should be excluded:\n{contents}"
+        !contents.contains("> [!note] - status:"),
+        "marker mirror should be excluded from rendered annotations:\n{contents}"
     );
     assert_eq!(highlight_block_ids(&contents).len(), 2, "{contents}");
     assert!(
@@ -138,7 +139,8 @@ fn highlights_ref_sync_renders_textbundle_image_selections() {
 
 ## Page 12
 
-Note: marker note mirrored from the PDF
+- status: wip
+- parent: obsidian
 
 ---
 
@@ -421,7 +423,8 @@ fn highlights_ref_sync_creates_tasks_from_pdf_note_task_bullets() {
 
 ## Page 4
 
-Note: marker note mirrored from the PDF
+- status: wip
+- parent: obsidian
 
 ---
 
@@ -674,7 +677,8 @@ fn highlights_ref_sync_skips_legacy_highlight_task_property() {
         "\
 ## Page 4
 
-Note: marker note mirrored from the PDF
+- status: wip
+- parent: obsidian
 
 ---
 
@@ -767,7 +771,8 @@ fn highlights_ref_sync_routes_annotation_tasks_to_existing_root_note() {
 
 ## Page 4
 
-Note: marker note mirrored from the PDF
+- status: wip
+- parent: obsidian
 
 ---
 
@@ -886,7 +891,8 @@ fn highlights_ref_sync_skips_annotation_tasks_for_non_wip_statuses() {
             "\
 ## Page 4
 
-Note: marker note mirrored from the PDF
+- status: wip
+- parent: obsidian
 
 ---
 
@@ -942,7 +948,8 @@ fn highlights_ref_sync_skips_vault_scan_when_no_annotation_candidates() {
 
 ## Page 4
 
-Note: marker note mirrored from the PDF
+- status: wip
+- parent: obsidian
 
 ---
 
@@ -986,7 +993,8 @@ fn highlights_ref_sync_missing_routed_target_fails_before_writes() {
         "\
 ## Page 4
 
-Note: marker note mirrored from the PDF
+- status: wip
+- parent: obsidian
 
 ---
 
@@ -1037,7 +1045,8 @@ fn highlights_ref_sync_preserves_manual_sections_and_rejects_missing_markers() {
         "\
 ## Page 2
 
-Note: marker note
+- status: wip
+- parent: obsidian
 
 ---
 
@@ -1066,7 +1075,8 @@ Note: marker note
         "\
 ## Page 2
 
-Note: marker note
+- status: wip
+- parent: obsidian
 
 ---
 
@@ -1142,7 +1152,8 @@ fn highlights_ref_sync_keeps_created_fixed_across_sidecar_updates() {
 
 ## Page 1
 
-Note: marker note
+- status: wip
+- parent: obsidian
 
 ---
 
@@ -1180,7 +1191,8 @@ Note: marker note
 
 ## Page 1
 
-Note: marker note
+- status: wip
+- parent: obsidian
 
 ---
 
@@ -1214,6 +1226,139 @@ Note: marker note
     );
     assert!(updated.contains("highlights_count: 2\n"), "{updated}");
     assert!(updated.contains("> [!quote] Second quote.\n"), "{updated}");
+}
+
+#[test]
+fn highlights_ref_sync_drops_leaked_mirror_without_tombstone() {
+    let temp = TempDir::new("bob-cli-highlights-ref-leak-cleanup");
+    let vault = temp.path().join("vault");
+    let pdf = vault.join("lib/blogs/agent-memory.pdf");
+    let sidecar = pdf.with_extension("md");
+    let note = vault.join("ref/blogs/agent-memory.md");
+    write_highlights_pdf(
+        &pdf,
+        "- status: wip\n- parent: memory_ref\n- title: Agent Memory\n",
+    );
+    write_file(
+        &sidecar,
+        "\
+Memory Systems for AI Agents | Steve Kinney
+=====================================================
+
+#### [Page 1](highlights://agent_memory#page=1)
+
+##### 2026-06-03:
+
+- status: wip
+- parent: memory_ref
+- url: https://example.com/agent-memory
+
+***
+
+#### [Page 2](highlights://agent_memory#page=2)
+
+##### 2026-06-03:
+
+> A genuine highlight worth keeping.
+
+Comment: Keep this.
+",
+    );
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("sync")
+        .arg(&pdf)
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("initial sync with setext preamble sidecar");
+
+    assert_success(&output);
+    let contents = fs::read_to_string(&note).expect("read generated note");
+    assert!(contents.contains("highlights_count: 1\n"), "{contents}");
+    assert!(
+        contents.contains("A genuine highlight worth keeping."),
+        "{contents}"
+    );
+    assert!(
+        !contents.contains("> [!note] - status:"),
+        "marker mirror must not render:\n{contents}"
+    );
+
+    // Plant a previously leaked mirror block exactly as bob-cli-4r-era syncs
+    // wrote it, with an inflated count to match.
+    let leaked = fs::read_to_string(&note)
+        .expect("read note for leak planting")
+        .replacen(
+            "<!-- highlights:begin -->\n",
+            "<!-- highlights:begin -->\n\n### Page 1\n\n> [!note] - status: wip\n> - parent: memory_ref\n> - url: https://example.com/agent-memory\n\n^h-aaaabbbbcccc\n",
+            1,
+        )
+        .replace("highlights_count: 1\n", "highlights_count: 2\n");
+    write_file(&note, &leaked);
+    let planted = fs::read_to_string(&note).expect("read planted note");
+    assert!(planted.contains("^h-aaaabbbbcccc\n"), "{planted}");
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("sync")
+        .arg("--dry-run")
+        .arg(&pdf)
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("dry-run leak cleanup sync");
+
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains("note_action: update"),
+        "dry run should report the leak removal:\n{}",
+        format_output(&output)
+    );
+    let dry_contents = fs::read_to_string(&note).expect("read dry-run note");
+    assert!(
+        dry_contents.contains("^h-aaaabbbbcccc\n"),
+        "dry run must not write:\n{dry_contents}"
+    );
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("sync")
+        .arg(&pdf)
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("writing leak cleanup sync");
+
+    assert_success(&output);
+    let contents = fs::read_to_string(&note).expect("read cleaned note");
+    assert!(
+        !contents.contains("^h-aaaabbbbcccc"),
+        "leaked mirror must be removed:\n{contents}"
+    );
+    assert!(
+        !contents.contains("### Removed highlights"),
+        "leak removal must not leave a tombstone:\n{contents}"
+    );
+    assert!(contents.contains("highlights_count: 1\n"), "{contents}");
+    assert!(
+        contents.contains("A genuine highlight worth keeping."),
+        "genuine annotation must survive:\n{contents}"
+    );
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("sync")
+        .arg(&pdf)
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("repeat leak cleanup sync");
+
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains("note_action: none")
+            && stdout(&output).contains("writes: none"),
+        "cleanup should settle:\n{}",
+        format_output(&output)
+    );
 }
 
 fn legacy_highlight_task_id(

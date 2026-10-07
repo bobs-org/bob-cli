@@ -62,7 +62,8 @@ fn render_sidecar_highlights_renders_image_assets_and_tasks() {
         "\
 ## Page 4
 
-Note: marker note mirrored from the PDF
+- status: wip
+- parent: obsidian
 
 ---
 
@@ -276,7 +277,8 @@ fn rendered_annotation_blocks_do_not_include_source_task_anchors() {
         "\
 ## Page 2
 
-Note: marker note mirrored from the PDF
+- status: wip
+- parent: obsidian
 
 ---
 
@@ -347,7 +349,8 @@ fn render_sidecar_highlights_beautifies_callout_text() {
         "\
 ## Page 2
 
-Note: marker note mirrored from the PDF
+- status: wip
+- parent: obsidian
 
 ---
 
@@ -561,6 +564,184 @@ fn linked_sidecar_parser_strips_comment_bullet_markers() {
         Some(
             "Preserve the first comment line.\nPreserve the second comment line."
         )
+    );
+}
+
+#[test]
+fn setext_preamble_yields_no_annotations_and_keeps_genuine_ids_stable() {
+    // The bob-cli-4r shape: a setext title plus an author line with a `---`
+    // underline before the first page heading. The preamble is never an
+    // annotation, and the genuine blocks render byte-identically with and
+    // without it (no page-ordinal or ID shift).
+    let with_preamble = "\
+Memory Systems for AI Agents | Steve Kinney
+=====================================================
+
+Steve Kinney
+---
+
+#### [Page 1](highlights://steve_kinney_agent_memory#page=1)
+
+##### 2026-06-03:
+
+- status: wip
+- parent: memory_ref
+- url: https://stevekinney.com/writing/agent-memory-systems
+
+***
+
+#### [Page 2](highlights://steve_kinney_agent_memory#page=2)
+
+##### 2026-06-03:
+
+> A genuine highlight worth keeping.
+
+Comment: Keep this.
+";
+    let without_preamble = with_preamble
+        .lines()
+        .skip_while(|line| super::sidecar_page_heading_details(line).is_none())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let preamble_annotations = super::parse_sidecar_markdown(with_preamble);
+    assert_eq!(preamble_annotations.len(), 2);
+    assert!(
+        preamble_annotations
+            .iter()
+            .all(|annotation| annotation.page_label.is_some()),
+        "preamble must not parse as an annotation: {preamble_annotations:?}"
+    );
+    assert!(
+        !preamble_annotations
+            .iter()
+            .any(|annotation| annotation.text.contains("Steve Kinney")),
+        "{preamble_annotations:?}"
+    );
+
+    let config = super::test_config();
+    let pdf = Path::new("/tmp/bob/lib/example.pdf");
+    let ref_note = Path::new("/tmp/bob/ref/example.md");
+    let render = |contents: &str| {
+        let sidecar = super::SidecarInput {
+            path: PathBuf::from("example.md"),
+            annotations: super::parse_sidecar_markdown(contents),
+        };
+        super::render_sidecar_highlights(
+            &config,
+            pdf,
+            ref_note,
+            &super::ParsedNote::empty(),
+            &sidecar,
+        )
+        .expect("render preamble sidecar")
+    };
+    let with_rendered = render(with_preamble);
+    let without_rendered = render(&without_preamble);
+
+    assert_eq!(with_rendered.count, 1);
+    assert_eq!(with_rendered.content, without_rendered.content);
+    assert_eq!(
+        with_rendered.block_ids_by_annotation_order,
+        without_rendered.block_ids_by_annotation_order
+    );
+    assert!(
+        with_rendered
+            .content
+            .contains("A genuine highlight worth keeping."),
+        "{}",
+        with_rendered.content
+    );
+    assert!(
+        !with_rendered.content.contains("[!note] - status:"),
+        "marker mirror must not render: {}",
+        with_rendered.content
+    );
+}
+
+#[test]
+fn sidecar_without_page_headings_has_no_preamble() {
+    let annotations = super::parse_sidecar_markdown(
+        "\
+# Empty Highlights Sidecar
+
+This placeholder reserves the sidecar fixture path for later parser tests.
+",
+    );
+
+    assert_eq!(annotations.len(), 1);
+    assert_eq!(annotations[0].page_label, None);
+}
+
+#[test]
+fn leaked_mirror_and_preamble_blocks_drop_silently_while_genuine_tombstones() {
+    let note = super::ParsedNote {
+        frontmatter: Vec::new(),
+        body: "\
+# Example
+
+- [/] #task #ref [[lib/example.pdf]] #hide ^ref
+
+## Highlights
+
+<!-- highlights:begin -->
+
+> [!note] - status: wip
+> - parent: memory_ref
+> - url: https://example.com/old
+
+^h-aaaabbbbcccc
+
+> [!quote] Preamble relic from an old export.
+
+^h-111122223333
+
+### Page 1
+
+> [!quote] A genuine highlight.
+
+^h-ddddeeeeffff
+
+<!-- highlights:end -->
+"
+        .to_string(),
+        original: None,
+    };
+    // The new sidecar carries only the marker mirror, so nothing renders:
+    // the leaked mirror and the preamble relic vanish without tombstones,
+    // while the genuinely lost highlight still tombstones.
+    let sidecar = super::SidecarInput {
+        path: PathBuf::from("example.md"),
+        annotations: super::parse_sidecar_markdown(
+            "## Page 1\n\n- status: wip\n- parent: memory_ref\n",
+        ),
+    };
+    let config = super::test_config();
+    let rendered = super::render_sidecar_highlights(
+        &config,
+        Path::new("/tmp/bob/lib/example.pdf"),
+        Path::new("/tmp/bob/ref/example.md"),
+        &note,
+        &sidecar,
+    )
+    .expect("render against leaked region");
+
+    assert_eq!(rendered.count, 0);
+    assert!(
+        !rendered.content.contains("^h-aaaabbbbcccc"),
+        "leaked mirror must drop without a tombstone: {}",
+        rendered.content
+    );
+    assert!(
+        !rendered.content.contains("^h-111122223333"),
+        "preamble relic must drop without a tombstone: {}",
+        rendered.content
+    );
+    assert!(
+        rendered.content.contains("### Removed highlights")
+            && rendered.content.contains("^h-ddddeeeeffff"),
+        "genuinely lost highlight must still tombstone: {}",
+        rendered.content
     );
 }
 

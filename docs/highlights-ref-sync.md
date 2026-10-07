@@ -674,15 +674,21 @@ Two Markdown sidecar shapes are supported. The simple shape is:
   after the image is treated as its comment. Multiple images in one chunk render
   as separate image annotations. Non-image targets such as PDFs remain ordinary
   standalone note text.
-- The first standalone note in sidecar order is treated as the PDF marker mirror
-  and is excluded from generated content.
+- Text before the first page heading is document preamble (a setext title, an
+  author line, blank lines), never an annotation. Sidecars without any page
+  heading have no preamble.
+- A standalone note whose text is a `status`/`parent` marker list, or a
+  linked-page highlight whose comment is one, is the PDF marker mirrored into
+  the sidecar — never one of your annotations — and is excluded from generated
+  content no matter where it sits in the sidecar.
 
 Simple sidecar fragment:
 
 ```md
 ## Page 12
 
-Note: marker note mirrored from the PDF
+- status: wip
+- parent: obsidian
 
 ---
 
@@ -885,6 +891,13 @@ the marker or frontmatter also moved status to a different value from the stored
 base, the task signal reports a conflict rather than silently choosing a side.
 When editing `status` directly, move the visible `^ref` task to the same state.
 
+When sync itself closes the `^ref` task, it stamps the close date on the line:
+a generated `[x]` carries `[completion:: YYYY-MM-DD]` and a generated `[-]`
+carries `[cancelled:: YYYY-MM-DD]`, inserted immediately before the `^ref`
+token and dated from `BOB_NOW` (else the local date). A line that already
+carries a bracket or emoji close date is never restamped, a checkbox you
+closed yourself gains no stamp, and reopening never removes the date.
+
 If a lifecycle change would update the PDF marker, `sync --dry-run` previews
 `pdf_marker_action: would-update`, plain `sync` refuses before writes, and
 targeted `sync --write-pdf` writes the marker. `scan --dry-run` previews this
@@ -979,7 +992,10 @@ the block without changing its ID. Image IDs use the source PDF path plus image
 bytes instead, so asset renames and nearby annotation order changes do not churn
 the image block. If a previously generated block disappears from the sidecar,
 the command keeps the old block ID under `### Removed highlights` with a
-tombstone message. Editing text highlight content itself mints a new block ID; a
+tombstone message. Previously leaked marker-mirror and preamble blocks are the
+exception: when the existing region shows a vanished block as mirror-shaped or
+sitting before the first page heading, sync drops it without a tombstone and
+every genuine block ID stays stable. Editing text highlight content itself mints a new block ID; a
 task created earlier keeps its original link, which then targets the tombstoned
 block under `### Removed highlights` — still a valid, resolvable jump.
 

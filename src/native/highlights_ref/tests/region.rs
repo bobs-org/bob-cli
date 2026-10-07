@@ -77,8 +77,9 @@ fn region_round_trip_highlight_with_multiline_comment() {
 
 #[test]
 fn region_round_trip_standalone_note() {
-    // The renderer skips the first standalone note as the marker mirror, so
-    // the fixture carries two: the first is dropped, the second renders.
+    // The renderer skips standalone notes whose text is a status/parent
+    // marker list, so the fixture carries a realistic mirror first: it is
+    // dropped by content, while the genuine personal note renders.
     let note = ParsedNote::empty();
     let (_bob_dir, rendered) = render_annotations(
         vec![
@@ -87,7 +88,7 @@ fn region_round_trip_standalone_note() {
                 kind: SidecarAnnotationKind::StandaloneNote,
                 page_label: Some("Page 1".to_string()),
                 linked_page_style: false,
-                text: "Dropped like the marker mirror".to_string(),
+                text: "- status: wip\n- parent: obsidian".to_string(),
                 comment: None,
                 task_source: None,
                 image: None,

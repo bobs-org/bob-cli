@@ -17,8 +17,8 @@ pub(super) fn render_sidecar_highlights(
     let mut block_ids_by_annotation_order = BTreeMap::new();
     let mut rendered = String::new();
     let mut current_page = None;
-    let mut skipped_marker_note = false;
     let mut image_count = 0usize;
+    let silently_dropped_ids = silently_dropped_block_ids(note);
 
     for image_asset in image_assets_by_order.values() {
         image_asset_writes_by_dest
@@ -27,8 +27,7 @@ pub(super) fn render_sidecar_highlights(
     }
 
     for annotation in &sidecar.annotations {
-        if !skipped_marker_note && is_sidecar_marker_mirror(annotation) {
-            skipped_marker_note = true;
+        if is_sidecar_marker_mirror(annotation) {
             continue;
         }
 
@@ -74,8 +73,12 @@ pub(super) fn render_sidecar_highlights(
         ));
     }
 
+    // Blocks the existing region marks as mirror-shaped or preamble are
+    // previously leaked content (bob-cli-4r): drop them without a tombstone.
+    // Every other disappearance still tombstones under Removed highlights.
     let removed_ids = existing_ids
         .difference(&current_ids)
+        .filter(|block_id| !silently_dropped_ids.contains(block_id.as_str()))
         .cloned()
         .collect::<Vec<_>>();
     if !removed_ids.is_empty() {
@@ -296,22 +299,45 @@ pub(super) fn is_sidecar_page_label(text: &str) -> bool {
         || lower.starts_with("p ")
 }
 
+/// Content-based marker-mirror detection shared with the region parser:
+/// a standalone note whose text is a `status`/`parent` marker list, or a
+/// linked-page highlight whose comment is one, is the PDF marker mirrored
+/// into the sidecar — never one of Bryan's annotations (bob-cli-4r). Real
+/// notes never look like a marker list, so every mirror-shaped annotation is
+/// skipped no matter where it sits in the sidecar.
 pub(super) fn is_sidecar_marker_mirror(annotation: &SidecarAnnotation) -> bool {
-    if annotation.kind == SidecarAnnotationKind::StandaloneNote {
-        return true;
+    match annotation.kind {
+        SidecarAnnotationKind::StandaloneNote => {
+            is_marker_mirror_text(&annotation.text)
+        }
+        SidecarAnnotationKind::Highlight => {
+            if !annotation.linked_page_style {
+                return false;
+            }
+            annotation
+                .comment
+                .as_deref()
+                .is_some_and(is_marker_mirror_text)
+        }
+        SidecarAnnotationKind::Image => false,
     }
+}
 
-    if annotation.kind != SidecarAnnotationKind::Highlight {
-        return false;
-    }
-    if !annotation.linked_page_style {
-        return false;
-    }
-
-    let Some(comment) = &annotation.comment else {
-        return false;
+/// Block IDs in the note's existing managed region that must disappear
+/// without a tombstone: mirror-shaped blocks and preamble blocks are
+/// previously leaked content (bob-cli-4r), not annotations the sidecar lost.
+pub(super) fn silently_dropped_block_ids(
+    note: &ParsedNote,
+) -> BTreeSet<String> {
+    let Ok(Some(region)) = note.managed_region() else {
+        return BTreeSet::new();
     };
-    parse_marker(comment).is_ok()
+    parse_managed_region(region)
+        .blocks
+        .into_iter()
+        .filter(|block| block.mirror || block.in_preamble)
+        .map(|block| block.block_id)
+        .collect()
 }
 
 pub(super) fn is_quote_continuation_line(line: &str) -> bool {

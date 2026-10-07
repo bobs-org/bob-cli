@@ -76,18 +76,19 @@ pub(super) fn default_note_body(
     body.push_str("# ");
     body.push_str(&title);
     body.push_str("\n\n");
-    body.push_str("- [");
-    body.push(projection_pdf_task_mark(projection));
-    body.push_str("] ");
-    body.push_str(PDF_TASK_TAG);
-    body.push(' ');
-    body.push_str(PDF_TASK_KIND_TAG);
-    body.push_str(" [[");
-    body.push_str(source_pdf);
-    body.push_str("]] ");
-    body.push_str(PDF_TASK_HIDE_TAG);
-    body.push(' ');
-    body.push_str(PDF_TASK_BLOCK_ID);
+    // A note generated already closed carries its close date from the
+    // start, so the library index can read it back from the tracker.
+    let mark = projection_pdf_task_mark(projection);
+    body.push_str(&stamp_close_date(
+        &format!(
+            "- [{mark}] {} {} [[{source_pdf}]] {} {}",
+            PDF_TASK_TAG,
+            PDF_TASK_KIND_TAG,
+            PDF_TASK_HIDE_TAG,
+            PDF_TASK_BLOCK_ID
+        ),
+        mark,
+    ));
     body.push_str("\n\n");
     if let Some(audio) = audio {
         body.push_str(&audio_embed_line(audio));
@@ -555,9 +556,11 @@ pub(super) fn replace_pdf_task_checkbox_mark(
             continue;
         }
         let (line, line_ending) = split_line_segment(segment);
-        rendered.push_str(&line[..task_line.checkbox_mark_index]);
-        rendered.push(mark);
-        rendered.push_str(&line[task_line.checkbox_mark_index + 1..]);
+        let mut updated = String::with_capacity(line.len() + 32);
+        updated.push_str(&line[..task_line.checkbox_mark_index]);
+        updated.push(mark);
+        updated.push_str(&line[task_line.checkbox_mark_index + 1..]);
+        rendered.push_str(&stamp_close_date(&updated, mark));
         rendered.push_str(line_ending);
     }
     if !body.ends_with('\n') {
@@ -570,6 +573,49 @@ pub(super) fn replace_pdf_task_checkbox_mark(
         );
     }
     Ok(rendered)
+}
+
+/// Stamp a completion or cancellation date when sync itself closes the
+/// generated `^ref` task: a mark of `x` inserts ` [completion:: YYYY-MM-DD]`
+/// immediately before the `^ref` token, and `-` inserts `[cancelled:: ...]`.
+/// The date comes from `env::current_datetime()` (honoring `BOB_NOW`).
+/// Existing fields are never touched — in either bracket or emoji form —
+/// and a reopen never removes a date, so stamping is idempotent.
+pub(super) fn stamp_close_date(line: &str, mark: char) -> String {
+    let field = match mark {
+        'x' | 'X' => "completion",
+        '-' => "cancelled",
+        _ => return line.to_string(),
+    };
+    let already_stamped = if field == "completion" {
+        line.contains("[completion::") || line.contains('✅')
+    } else {
+        line.contains("[cancelled::") || line.contains('❌')
+    };
+    if already_stamped {
+        return line.to_string();
+    }
+    let Some(token_start) = close_date_insert_position(line) else {
+        return line.to_string();
+    };
+    let date = bob_env::current_datetime().date().format("%Y-%m-%d");
+    format!(
+        "{}[{field}:: {date}] {}",
+        &line[..token_start],
+        &line[token_start..]
+    )
+}
+
+/// Byte position of the `^ref` token start when it is preceded by
+/// whitespace, so the close-date field lands immediately before it.
+pub(super) fn close_date_insert_position(line: &str) -> Option<usize> {
+    let token_start = line.rfind(PDF_TASK_BLOCK_ID)?;
+    if token_start == 0
+        || !line.as_bytes()[token_start - 1].is_ascii_whitespace()
+    {
+        return None;
+    }
+    Some(token_start)
 }
 
 pub(super) fn split_line_segment(segment: &str) -> (&str, &str) {
