@@ -157,7 +157,10 @@ first space of the U+0020 run directly before the field, and the
 widget restores one uniform gap — Tasks-written double-spaced
 `completion`/`cancelled` fields sit with the same gap as
 single-spaced ones. A field beginning the line's content never
-folds.
+folds. A selection endpoint never sits inside a fold. While a cursor or
+selection end lies strictly inside the space run, that field's mark folds nothing
+and the spaces show as text; the fold returns once the cursor leaves the run.
+Folded spaces still never reveal the field.
 
 ## Repair flag
 
@@ -175,7 +178,9 @@ says Tasks cannot read the value as a date.
 Live Preview uses a `Prec.highest` ViewPlugin emitting one
 `Decoration.replace` per eligible field, in line order. The mark
 hides while any selection overlaps its own field span, so editing
-`created` never reveals `scheduled`. Mousedown places the cursor at
+`created` never reveals `scheduled`. A selection endpoint never sits
+inside a fold: a cursor resting in the folded spaces unfolds that
+field's mark to fold 0. Mousedown places the cursor at
 the field start and focuses the editor; it never writes. Widget
 equality includes the label, `when`, and tooltip, so a new day
 always re-renders. Rebuilds happen on doc, viewport, or selection
@@ -324,6 +329,8 @@ lines. `fold N` is `foldLength` in Live Preview.
 | DM21 | `Paragraph text [scheduled:: 2026-10-09]`                                                      | `Fri` (non-list line)                                                                                            |
 | DM22 | ``- [ ] #task E `[created:: 2026-10-01]` ``                                                    | untouched (code)                                                                                                 |
 | DM23 | `- [ ] #task G [rescheduled:: 2026-10-09] [scheduled:: 2026-10-10]`                            | scheduled `Sat`; `rescheduled` untouched and not counted as a duplicate                                          |
+| DM24 | `- [ ] #task  [created:: 2026-10-07]`, cursor 12 (between the two spaces)                        | created `today`; cursor in the run unfolds to fold 0 (`[13, 35)`); cursor 11 keeps fold 2; after typing `b` (cursor 13) fold 1 |
+| DM25 | `- [x] #task Review skill [created:: 2026-08-29]  [completion:: 2026-09-03] ^review`, cursor 48   | completion fold 0 (`[49, 74)`); created stays fold 1 (`[24, 47)`)                                                 |
 | DN1  | `[scheduled:: 2026-13-01]`                                                                     | no mark (repair pill)                                                                                            |
 | DN2  | `[scheduled:: tomorrow]`                                                                       | no mark (repair pill)                                                                                            |
 | DN3  | `- [ ] #task F [scheduled:: 2026-09-10] (scheduled:: 2026-09-11)`                              | no mark on either (repair pills)                                                                                 |
@@ -348,6 +355,7 @@ lines. `fold N` is `foldLength` in Live Preview.
 
 - [ ] All four glyphs and every label form look right in light and dark themes
 - [ ] The cursor or a click reveals only that field's raw text
+- [ ] Vim `cw` on the word before a mark (and Backspacing that word without vim) types in order, before the mark
 - [ ] Tasks-written double-spaced `[completion:: …]` fields sit with the same gap as single-spaced ones
 - [ ] Created reads quiet, scheduled-today reads stronger, and closed tasks rest
 - [ ] A hand-broken `[scheduled:: 2026-13-01]` shows the dashed repair pill
