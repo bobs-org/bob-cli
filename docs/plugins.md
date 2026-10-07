@@ -194,6 +194,27 @@ For every managed file, `sync` reports one of:
   the repo does not contain is an error.
 - `-r, --repo <DIR>` selects the plugins repo root.
 
+### Foreign-checkout guard
+
+A bare sync (no `--repo`) deploys the resolved repo root (`--repo`, then
+`BOB_PLUGINS_DIR`, then `~/projects/github/bobs-org/bob-plugins`). When the
+current directory sits inside a *different* bob-plugins checkout — for
+example a SASE linked worktree — the bare sync would silently deploy the
+resolved checkout instead of the worktree, rolling back whatever the
+worktree just deployed. So the sync refuses before any pull or copy (exit 2,
+in `--dry-run` too) and prints the `--repo` command to run instead:
+
+```bash
+bob plugins sync --repo <checkout> [-p <id>]
+```
+
+A checkout counts as a bob-plugins checkout when its `origin` remote points
+at `bobs-org/bob-plugins`, or when its root holds a `plugins/` dir plus the
+monorepo `package.json`. An explicit `--repo`, a bare sync from inside the
+resolved checkout itself, and a bare sync from outside any bob-plugins
+checkout all behave as before. From a SASE worktree, deploy with
+`bob plugins sync --repo <worktree> -p <id>` to move one plugin.
+
 ### Dirty-file guard
 
 Before overwriting an existing vault file that differs from the repo, `sync`
@@ -212,7 +233,8 @@ uses `would copy` and `would back up to` wording and writes nothing. This makes
 `sync` exits `0` even when it skips dirty files — a refusal is a deliberate
 warning, not a failure, matching how `list` treats drift. It exits `1` only on a
 real error such as an unreadable repo, an unknown `--plugin` id, or a failed
-copy, and writes the cause to stderr.
+copy, and writes the cause to stderr. A refused bare sync from a foreign
+checkout exits `2` (see [Foreign-checkout guard](#foreign-checkout-guard)).
 
 ### JSON output
 

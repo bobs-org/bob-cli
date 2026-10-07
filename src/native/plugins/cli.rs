@@ -14,6 +14,7 @@ use crate::native::{env as bob_env, style::Styler};
 
 use super::{
     git::{print_pull_outcome, pull_repo},
+    guard::{check_bare_sync, refusal_message},
     model::{SyncOptions, COMMAND_NAME},
     render::{
         print_plugins_table, print_sync_report, success_json, sync_success_json,
@@ -112,7 +113,9 @@ overwritten vault files are copied to a timestamped backup directory first. \
 Files that already match the repo are reported as unchanged. The plugins repo \
 is refreshed with a non-interactive `git pull` before analysis unless \
 --no-pull is given. Pass `-f json` to print a single machine-readable object \
-instead of the table and diffs.",
+instead of the table and diffs. A bare sync (no --repo) run from inside a \
+different bob-plugins checkout refuses before any pull or copy: pass \
+--repo <checkout> to deploy that checkout.",
         )
         .after_help(
             "Examples:\n  bob plugins sync --dry-run\n  bob plugins sync --dry-run -f json\n  bob plugins sync --no-pull --dry-run\n  bob plugins sync -p bob-project-tasks\n  bob plugins sync -F -b ~/bob -r ~/projects/github/bobs-org/bob-plugins",
@@ -282,6 +285,15 @@ fn run_list(matches: &ArgMatches) -> i32 {
 
 fn run_sync(matches: &ArgMatches) -> i32 {
     let repo = repo_from_matches(matches);
+    // A bare sync from inside a different bob-plugins checkout would
+    // silently deploy the resolved repo instead of the cwd checkout
+    // (bob-cli-59). Refuse before any pull or copy, in dry-run too; an
+    // explicit --repo always names the checkout the caller means.
+    let repo_is_explicit = matches.get_one::<OsString>("repo").is_some();
+    if let Some(foreign) = check_bare_sync(&repo, repo_is_explicit) {
+        let message = refusal_message(&repo, &foreign);
+        return refuse_bare_sync(matches, &message);
+    }
     maybe_pull_repo(matches, &repo);
     let timestamp = bob_env::current_datetime().format("%Y%m%d-%H%M%S");
     let options = SyncOptions {
@@ -325,6 +337,20 @@ fn run_sync(matches: &ArgMatches) -> i32 {
     } else {
         1
     }
+}
+
+/// Refuse a bare sync from a foreign checkout: report the error the same
+/// way other sync failures report, without pulling or copying anything.
+fn refuse_bare_sync(matches: &ArgMatches, message: &str) -> i32 {
+    match OutputFormat::from_matches(matches) {
+        OutputFormat::Table => {
+            eprintln!("{COMMAND_NAME}: {message}");
+        }
+        OutputFormat::Json => {
+            println!("{}", json!({ "ok": false, "error": message }));
+        }
+    }
+    2
 }
 
 fn maybe_pull_repo(matches: &ArgMatches, repo: &Path) {
