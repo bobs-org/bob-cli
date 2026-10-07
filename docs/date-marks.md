@@ -248,7 +248,11 @@ in place. The command "Toggle task date marks" (id
 `toggle-date-marks`) is session-only and on by default: it flips
 `body.bob-date-marks` (which also gates the repair flag), dispatches
 the refresh effect, triggers the Tasks re-render event, and shows
-`Date marks on` / `Date marks off`. When off, JS creates no marks.
+`Date marks on` / `Date marks off`. When off, JS creates no marks:
+a Tasks-result frame that runs after toggle-off drops its queue
+without writing, and `onunload` disables marks and clears the
+Tasks queue/pending/dedup state so late callbacks cannot decorate
+after unload. Re-enabling decorates new rows normally.
 
 ## `api.dateMarks` v1
 
