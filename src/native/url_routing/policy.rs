@@ -138,7 +138,7 @@ mod tests {
             dedupe_key: format!("https://{host}/a"),
             host: host.to_string(),
             display: format!("{host}/a"),
-            route_hint: super::super::RouteHint::Article,
+            route_hint: super::super::intent::RouteHint::Article,
         }
     }
 

@@ -13,7 +13,6 @@
 
 use std::{
     env, fs,
-    io::IsTerminal,
     net::{IpAddr, ToSocketAddrs},
     path::{Path, PathBuf},
     process::Command,
@@ -108,8 +107,9 @@ pub(super) fn fetch_url(
     url: &str,
     dest: &Path,
     max_time_secs: u64,
+    progress: Option<&dyn Fn(&str)>,
 ) -> std::result::Result<FetchResult, FetchError> {
-    fetch_with_curl(url, dest, max_time_secs, &curl_program())
+    fetch_with_curl(url, dest, max_time_secs, &curl_program(), progress)
 }
 
 /// The `curl` program: `BOB_HIGHLIGHTS_CURL` when set and non-empty,
@@ -126,13 +126,14 @@ fn fetch_with_curl(
     dest: &Path,
     max_time_secs: u64,
     curl: &str,
+    progress: Option<&dyn Fn(&str)>,
 ) -> std::result::Result<FetchResult, FetchError> {
     let start_host = url::Url::parse(url)
         .ok()
         .and_then(|parsed| parsed.host_str().map(str::to_string))
         .unwrap_or_else(|| url.to_string());
-    if std::io::stderr().is_terminal() {
-        eprintln!("fetching {start_host}…");
+    if let Some(report) = progress {
+        report(&format!("fetching {start_host}…"));
     }
     let mut current = url.to_string();
     for _ in 0..=MAX_REDIRECTS {
@@ -422,8 +423,9 @@ esac
 
         // A plain 200 PDF download.
         let dest = dir.join("paper.pdf.out");
-        let fetched = fetch_url("https://example.com/paper.pdf", &dest, 30)
-            .expect("fetch 200 PDF");
+        let fetched =
+            fetch_url("https://example.com/paper.pdf", &dest, 30, None)
+                .expect("fetch 200 PDF");
         assert_eq!(fetched.status, 200);
         assert_eq!(fetched.content_type, "application/pdf");
         assert_eq!(fetched.final_url, "https://example.com/paper.pdf");
@@ -435,22 +437,23 @@ esac
 
         // A two-hop redirect chain ending at a PDF.
         let dest = dir.join("two-hop.pdf.out");
-        let fetched = fetch_url("https://example.com/two-hop-start", &dest, 30)
-            .expect("follow two-hop redirect");
+        let fetched =
+            fetch_url("https://example.com/two-hop-start", &dest, 30, None)
+                .expect("follow two-hop redirect");
         assert_eq!(fetched.status, 200);
         assert_eq!(fetched.final_url, "https://example.com/two-hop-end?x=1");
 
         // A relative Location resolves against the current URL.
         let dest = dir.join("relative.pdf.out");
         let fetched =
-            fetch_url("https://example.com/relative-start", &dest, 30)
+            fetch_url("https://example.com/relative-start", &dest, 30, None)
                 .expect("follow relative redirect");
         assert_eq!(fetched.final_url, "https://example.com/papers/paper.pdf");
 
         // A redirect to a private host is refused, not fetched.
         let dest = dir.join("private.pdf.out");
         let error =
-            fetch_url("https://example.com/private-redirect", &dest, 30)
+            fetch_url("https://example.com/private-redirect", &dest, 30, None)
                 .expect_err("private redirect must be refused");
         assert!(
             error.message.contains("private"),
@@ -460,28 +463,28 @@ esac
 
         // A 404 is returned to the caller for routing.
         let dest = dir.join("missing.out");
-        let fetched = fetch_url("https://example.com/missing", &dest, 30)
+        let fetched = fetch_url("https://example.com/missing", &dest, 30, None)
             .expect("404 is returned");
         assert_eq!(fetched.status, 404);
         assert_eq!(fetched.content_type, "text/html; charset=utf-8");
 
         // Curl exit codes map to their messages.
         let dest = dir.join("exit-63.out");
-        let error = fetch_url("https://example.com/exit-63", &dest, 30)
+        let error = fetch_url("https://example.com/exit-63", &dest, 30, None)
             .expect_err("exit 63 must fail");
         assert!(
             error.message.contains("95 MiB"),
             "unexpected message: {}",
             error.message
         );
-        let error = fetch_url("https://example.com/exit-28", &dest, 30)
+        let error = fetch_url("https://example.com/exit-28", &dest, 30, None)
             .expect_err("exit 28 must fail");
         assert!(
             error.message.contains("timed out"),
             "unexpected message: {}",
             error.message
         );
-        let error = fetch_url("https://example.com/exit-9", &dest, 30)
+        let error = fetch_url("https://example.com/exit-9", &dest, 30, None)
             .expect_err("other exits must fail");
         assert!(
             error.message.contains("curl failed (exit 9)"),
@@ -514,7 +517,7 @@ esac
         }
 
         let dest = dir.join("out.pdf");
-        fetch_url("https://example.com/paper.pdf", &dest, 30)
+        fetch_url("https://example.com/paper.pdf", &dest, 30, None)
             .expect("fetch with fake curl");
         let logged = fs::read_to_string(&argv_log).expect("read argv log");
         let first = logged.lines().next().unwrap_or_default().to_string();
@@ -538,9 +541,13 @@ esac
             env::set_var(ENV_CURL_OVERRIDE, dir.join("no-such-curl-binary"))
         };
         unsafe { env::set_var(ENV_RESOLVE_OVERRIDE, "*=203.0.113.1") };
-        let error =
-            fetch_url("https://example.com/paper.pdf", &dir.join("out"), 30)
-                .expect_err("missing curl must fail");
+        let error = fetch_url(
+            "https://example.com/paper.pdf",
+            &dir.join("out"),
+            30,
+            None,
+        )
+        .expect_err("missing curl must fail");
         assert!(
             error.message.contains("not found"),
             "unexpected message: {}",
@@ -572,7 +579,7 @@ esac
             )
         };
         let dest = dir.join("private-resolve.out");
-        let error = fetch_url("https://example.com/paper.pdf", &dest, 30)
+        let error = fetch_url("https://example.com/paper.pdf", &dest, 30, None)
             .expect_err("private resolution must be refused");
         assert!(
             error.message.contains("resolves to a private address")
@@ -583,7 +590,7 @@ esac
 
         // Mapped private literals are refused by the same predicate.
         unsafe { env::set_var(ENV_RESOLVE_OVERRIDE, "*=::ffff:10.0.0.1") };
-        let error = fetch_url("https://example.com/paper.pdf", &dest, 30)
+        let error = fetch_url("https://example.com/paper.pdf", &dest, 30, None)
             .expect_err("mapped private resolution must be refused");
         assert!(
             error.message.contains("resolves to a private address"),
@@ -596,7 +603,7 @@ esac
         unsafe {
             env::set_var(ENV_RESOLVE_OVERRIDE, "other.example=203.0.113.1")
         };
-        let error = fetch_url("https://example.com/paper.pdf", &dest, 30)
+        let error = fetch_url("https://example.com/paper.pdf", &dest, 30, None)
             .expect_err("unlisted host must fail");
         assert!(
             error.message.contains("cannot resolve host"),
@@ -626,7 +633,7 @@ esac
         };
 
         let dest = dir.join("out.pdf");
-        fetch_url("https://example.com/paper.pdf", &dest, 30)
+        fetch_url("https://example.com/paper.pdf", &dest, 30, None)
             .expect("fetch with fake curl");
         let logged = fs::read_to_string(&argv_log).expect("read argv log");
         assert!(

@@ -799,7 +799,7 @@ pub(super) fn plan_capture_item(
             unreachable!("task complete capture is planned before this point")
         }
         CaptureKind::Ref(_) => {
-            return Err(CaptureError::usage("reference items are not enabled"));
+            unreachable!("reference capture is planned before this point")
         }
     };
     let kind_label = capture_kind_label(&parsed.kind);

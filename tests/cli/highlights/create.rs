@@ -2326,8 +2326,18 @@ fn ingest_characterizes_url_failure_modes() {
     );
 
     // Missing uv and no adapter override.
+    if std::path::Path::new("/opt/homebrew/bin/uv").exists()
+        || std::path::Path::new("/usr/local/bin/uv").exists()
+    {
+        eprintln!(
+            "skipping missing-uv sub-case: host has absolute uv fallback"
+        );
+        return;
+    }
     let empty_bin = temp.path().join("empty-bin");
     std::fs::create_dir_all(&empty_bin).expect("empty bin");
+    let empty_home = temp.path().join("empty-home");
+    std::fs::create_dir_all(&empty_home).expect("empty home");
     let mut missing = bob_command();
     missing
         .arg("highlights")
@@ -2339,7 +2349,8 @@ fn ingest_characterizes_url_failure_modes() {
         .env("FAKE_CURL_ROOT", &root)
         .env("FAKE_CURL_LOG", &log)
         .env("BOB_WEB_CLIP_ADAPTER", "")
-        .env("PATH", &empty_bin);
+        .env("PATH", &empty_bin)
+        .env("HOME", &empty_home);
     let output = missing.output().expect("run create without uv");
     assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
     assert!(stdout(&output).is_empty(), "{}", format_output(&output));

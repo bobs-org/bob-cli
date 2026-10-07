@@ -123,7 +123,7 @@ fn pull_command() -> ClapCommand {
 }
 
 fn pull_after_help() -> &'static str {
-    "A note is archived only after its current content is verifiably in the vault: written atomically, fsynced, re-read and parsed, and committed when the vault is a Git worktree. Notes edited in Keep during a pull stay in Keep; the next pull writes the revision. Nothing is ever deleted from Keep.\n\nExamples:\n  bob gkeep pull --dry-run\n  bob gkeep pull\n  bob gkeep pull -d\n  bob gkeep pull -n\n  bob gkeep pull -i 3f9c2e1\n  bob gkeep pull -f json\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gkeep config; defaults to ~/.config/bob/config.yml\n  BOB_GKEEP_ADAPTER  adapter executable replacing `uv run --script …`"
+    "A note is archived only after its current content is verifiably in the vault: written atomically, fsynced, re-read and parsed, and committed when the vault is a Git worktree. Notes edited in Keep during a pull stay in Keep; the next pull writes the revision. Nothing is ever deleted from Keep. URL-only notes are clipped into the reading queue; -R keeps them as tasks instead.\n\nExamples:\n  bob gkeep pull --dry-run\n  bob gkeep pull\n  bob gkeep pull -d\n  bob gkeep pull -n\n  bob gkeep pull -i 3f9c2e1\n  bob gkeep pull -f json\n  bob gkeep pull -R\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gkeep config; defaults to ~/.config/bob/config.yml\n  BOB_GKEEP_ADAPTER  adapter executable replacing `uv run --script …`"
 }
 
 fn all_arg() -> Arg {

@@ -580,6 +580,18 @@ pub(crate) fn parse_capture_text_with_clip_control(
     }
 
     let mut outcome = item_outcomes.into_iter().next().expect("one item");
+    // An inline `@@` discovered after the initial parse still blocks the
+    // claim: re-parse a claimed Ref item with a global destination so it
+    // becomes an ordinary task that inherits the global.
+    if global.is_some() && matches!(outcome.parsed.kind, CaptureKind::Ref(_)) {
+        let global_options = options.with_global(true);
+        outcome = parse_capture_item(
+            &draft.items[0],
+            forced_route,
+            forced_section,
+            &global_options,
+        )?;
+    }
     if forced_route.is_none()
         && let Some(global) = &global
     {
@@ -630,6 +642,31 @@ pub(crate) fn parse_capture_draft_with_clip_control(
         declarations.extend(outcome.declarations.iter().copied());
     }
     let global = resolve_global_declaration_strict(&declarations)?;
+    // An inline `@@` discovered after the initial parse still blocks the
+    // claim: re-parse claimed Ref items with a global destination so they
+    // become ordinary tasks that inherit the global.
+    if global.is_some() {
+        let global_options = options.with_global(true);
+        for (index, outcome) in item_outcomes.iter_mut().enumerate() {
+            if matches!(outcome.parsed.kind, CaptureKind::Ref(_)) {
+                let item = &draft.items[index];
+                let re = parse_capture_item(
+                    item,
+                    forced_route,
+                    forced_section,
+                    &global_options,
+                )
+                .map_err(|message| {
+                    format!(
+                        "capture item {} starting on line {}: {message}",
+                        item.index + 1,
+                        item.line_start
+                    )
+                })?;
+                *outcome = re;
+            }
+        }
+    }
     let warnings = capture_shadow_warnings(&item_outcomes);
 
     let mut items = Vec::with_capacity(item_outcomes.len());

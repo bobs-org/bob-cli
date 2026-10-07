@@ -17,10 +17,7 @@ mod worker;
 
 pub(crate) use cli::{command, run};
 pub(crate) use doctor::append_ref_jobs_doctor_row;
-pub(crate) use fallback::write_fallback;
-pub(crate) use kick::{kick, kick_with, ENV_KICK_DISABLE};
+pub(crate) use kick::kick;
 pub(crate) use spool::{
-    enqueue, jobs_dir, list_jobs, pending_keys, remove_created, JobFallback,
-    JobFile, JobState, JobsView, ListedJob, NewJob, StoredError,
+    enqueue, jobs_dir, pending_keys, remove_created, JobFallback, NewJob,
 };
-pub(crate) use worker::run_jobs;

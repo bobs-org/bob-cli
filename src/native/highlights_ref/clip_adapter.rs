@@ -114,7 +114,9 @@ impl ClipAdapterClient {
         let uv = find_on_path("uv").ok_or_else(|| {
             AdapterFailure::new("uv was not found on PATH").with_hint(
                 "install uv (https://docs.astral.sh/uv/) — bob ref \
-                 clip runs its pinned web capture adapter with it",
+                 create runs its pinned web capture adapter with it; uv is \
+                 also searched in ~/.local/bin, ~/.cargo/bin, \
+                 /opt/homebrew/bin, and /usr/local/bin",
             )
         })?;
         let script = materialized_adapter_script()?;

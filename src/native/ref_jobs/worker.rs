@@ -7,7 +7,11 @@
 //! the lock it re-checks `pending/` so a job queued mid-pass is never
 //! stranded without another kick.
 
-use std::{fs, path::Path};
+use std::{
+    collections::HashSet,
+    fs,
+    path::{Path, PathBuf},
+};
 
 use crate::native::highlights_ref::ingest::{
     fallback_note_for, ingest_url, IngestError, IngestOutcome, IngestRequest,
@@ -15,8 +19,8 @@ use crate::native::highlights_ref::ingest::{
 
 use super::fallback::write_fallback;
 use super::spool::{
-    append_done, dir_rows, ensure_spool_dirs, move_job, DoneOutcome, JobFile,
-    StoredError,
+    append_done, atomic_install, dir_rows, ensure_spool_dirs, move_job,
+    DoneOutcome, JobFile, StoredError,
 };
 
 /// Exit codes: 0 when every processed job reached a terminal outcome,
@@ -25,24 +29,38 @@ pub(crate) fn run_jobs(root: &Path, quiet: bool) -> i32 {
     let _ = ensure_spool_dirs(root);
     trim_worker_log(root);
     let mut outcomes = Vec::new();
+    let mut acc_code = 0;
+    let mut first = true;
     let code = loop {
         let Some(lock) = take_worker_lock(root) else {
-            if !quiet {
-                println!("another clip worker is running");
+            if first {
+                if !quiet {
+                    println!("another clip worker is running");
+                }
+                return 0;
             }
-            return 0;
+            break acc_code;
         };
+        first = false;
         let mut pass = WorkerPass::new(root, quiet);
         pass.recover_running();
         pass.retry_stuck();
-        pass.drain_pending();
+        let failed = pass.drain_pending();
         outcomes.extend(std::mem::take(&mut pass.outcomes));
         let code = pass.exit_code(root);
+        acc_code = acc_code.max(code);
         drop(lock);
         // Lost-wakeup guard: a job queued after the drain started (its
         // kick found our lock held) must not wait for another kick.
+        // When the drain skipped files (e.g. `running/` unwritable) those
+        // stay in `pending/`; looping on them alone would spin the outer
+        // pass forever, so only loop when a non-failed pending file
+        // remains.
         if pending_count(root) == 0 {
-            break code;
+            break acc_code;
+        }
+        if pending_paths(root).iter().all(|path| failed.contains(path)) {
+            break acc_code;
         }
     };
     print_run_report(&outcomes, quiet);
@@ -51,6 +69,17 @@ pub(crate) fn run_jobs(root: &Path, quiet: bool) -> i32 {
 
 fn pending_count(root: &Path) -> usize {
     dir_rows(root, "pending").len()
+}
+
+fn pending_paths(root: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir(root.join("pending")) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "json"))
+        .collect()
 }
 
 /// One locked worker pass over the spool.
@@ -102,8 +131,9 @@ impl<'a> WorkerPass<'a> {
     }
 
     /// Stale `running/` files belong to a dead worker: we hold the
-    /// lock, so nobody is clipping them. At 2+ attempts they fail as
-    /// `internal` without clipping again; otherwise back to pending.
+    /// lock, so nobody is clipping them. Attempts increment first, then
+    /// at 2+ they fail as `internal` without clipping again; otherwise
+    /// back to pending.
     fn recover_running(&mut self) {
         for entry in dir_rows(self.root, "running") {
             let (job, path) = match entry {
@@ -116,7 +146,7 @@ impl<'a> WorkerPass<'a> {
             };
             let pending =
                 self.root.join("pending").join(format!("{}.json", job.id));
-            if job.attempts >= 2 {
+            if job.attempts + 1 >= 2 {
                 let error = IngestError::internal(
                     "the clip worker stopped twice while clipping this link",
                 );
@@ -178,16 +208,37 @@ impl<'a> WorkerPass<'a> {
     }
 
     /// Clip `pending/`, oldest `created_at` first, then by `id`.
-    fn drain_pending(&mut self) {
+    ///
+    /// A failing `move_job` into `running/` (or a failed `stuck/` park)
+    /// leaves the file in `pending/`; remembered paths are skipped so one
+    /// bad file cannot spin the drain forever. Returns the skipped paths
+    /// so the lost-wakeup guard does not loop on them alone.
+    fn drain_pending(&mut self) -> HashSet<PathBuf> {
+        let mut failed: HashSet<PathBuf> = HashSet::new();
         loop {
-            let next = dir_rows(self.root, "pending").into_iter().next();
+            let next =
+                dir_rows(self.root, "pending").into_iter().find(|entry| {
+                    match entry {
+                        Ok((_, path)) => !failed.contains(path),
+                        Err(message) => {
+                            let path_text =
+                                message.split(": ").next().unwrap_or("");
+                            !failed.contains(&PathBuf::from(path_text))
+                        }
+                    }
+                });
             let Some(entry) = next else {
-                return;
+                return failed;
             };
             let (job, path) = match entry {
                 Ok(row) => row,
                 Err(message) => {
+                    let path_text =
+                        message.split(": ").next().unwrap_or("").to_string();
                     park_unreadable(self.root, &message);
+                    if Path::new(&path_text).exists() {
+                        failed.insert(PathBuf::from(path_text));
+                    }
                     self.stuck_now = true;
                     continue;
                 }
@@ -197,6 +248,7 @@ impl<'a> WorkerPass<'a> {
             let job = match move_job(&path, &running, true, false) {
                 Ok(job) => job,
                 Err(error) => {
+                    failed.insert(path.clone());
                     self.stuck_now = true;
                     eprintln!("bob ref jobs: claim {}: {error}", job.id);
                     continue;
@@ -319,7 +371,7 @@ impl<'a> WorkerPass<'a> {
                 let bytes =
                     serde_json::to_vec_pretty(&parked).unwrap_or_default();
                 if !bytes.is_empty() {
-                    let _ = fs::write(&stuck, &bytes);
+                    let _ = atomic_install(&stuck, &bytes);
                 }
                 let _ = fs::remove_file(running);
                 eprintln!(

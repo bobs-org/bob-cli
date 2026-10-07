@@ -33,12 +33,9 @@ pub(crate) fn kick_disabled() -> bool {
 /// no-op; a spawn failure returns an error the caller prints as a
 /// warning without changing the exit code.
 pub(crate) fn kick() -> Result<(), String> {
-    if kick_disabled() {
-        return Ok(());
-    }
     let exe = std::env::current_exe()
         .map_err(|error| format!("find bob executable: {error}"))?;
-    spawn_detached(&exe, &worker_log_path()?)
+    kick_with(&exe)
 }
 
 /// Same as [`kick`], but with an injectable executable for tests.
@@ -62,13 +59,22 @@ fn worker_log_path() -> Result<PathBuf, String> {
 /// group, stdin from `/dev/null`, stdout and stderr appended to the
 /// worker log. Returns once the child spawns; never waits.
 fn spawn_detached(exe: &Path, log: &Path) -> Result<(), String> {
-    let out = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(log)
-        .map_err(|error| {
-            format!("open worker log {}: {error}", log.display())
-        })?;
+    #[cfg(unix)]
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut options = fs::OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
+    {
+        options.mode(0o600);
+    }
+    let out = options.open(log).map_err(|error| {
+        format!("open worker log {}: {error}", log.display())
+    })?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(log, fs::Permissions::from_mode(0o600));
+    }
     let err = out.try_clone().map_err(|error| {
         format!("clone worker log {}: {error}", log.display())
     })?;

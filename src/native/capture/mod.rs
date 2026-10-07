@@ -151,7 +151,7 @@ fn load_capture_routing(no_ref: bool) -> Option<UrlRoutingPolicy> {
     match UrlRoutingPolicy::load() {
         Ok(policy) => policy.capture.then_some(policy),
         Err(error) => {
-            eprintln!("{COMMAND_NAME}: warning: URL routing is off: {error:?}");
+            eprintln!("{COMMAND_NAME}: warning: URL routing is off: {error}");
             None
         }
     }

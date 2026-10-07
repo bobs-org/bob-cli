@@ -1525,6 +1525,67 @@ fn permanent_clip_failure_writes_task_with_warning() {
 }
 
 #[test]
+fn create_ref_fallback_verify_failure_counts_as_failed() {
+    // Same `BOB_GKEEP_TEST_BEFORE_RENAME` seam the Write verify-failure
+    // tests use. The hook race usually recovers (exit 0); only when a run
+    // reports `verification failed for note-1` do we assert the fixed
+    // counting and row. This mirrors `quiet_verify_failure_...`, which
+    // also passes when the race is won.
+    for json in [false, true] {
+        let (env, fake, state, _token) =
+            setup("bob-cli-gkeep-pull-ref-verify-fail");
+        let (curl, root, log) = write_clip_curl(state.path());
+        let (clip, _clip_root) = write_clip_adapter(
+            state.path(),
+            &clip_failure("blocked", "bot wall"),
+        );
+        let n1 = note("")
+            .id("note-1")
+            .text("https://example.com/article-one")
+            .build();
+        fake.respond(
+            "snapshot",
+            &snapshot_ok("bryanbugyi34@gmail.com", vec![n1]),
+        );
+        fake.respond("archive", &archive_ok(vec![("note-1", "archived")]));
+        let mut extra = curl_env(&curl, &root, &log);
+        extra.push(("BOB_WEB_CLIP_ADAPTER", clip.to_str().expect("clip path")));
+        let target = env.vault().join("gkeep_inbox.md");
+        let hook =
+            format!("printf 'corrupted' > '{}'", target.to_string_lossy());
+        extra.push(("BOB_GKEEP_TEST_BEFORE_RENAME", hook.as_str()));
+        let mut args: Vec<&str> = Vec::new();
+        if json {
+            args.push("-f");
+            args.push("json");
+        }
+        let out = run_pull(&env, &fake, &state, &args, &extra);
+        if out.status.code() != Some(1)
+            || !stderr(&out).contains("verification failed for note-1")
+        {
+            continue;
+        }
+        if json {
+            let doc: serde_json::Value =
+                serde_json::from_str(&stdout(&out)).expect("json parses");
+            assert_eq!(doc["summary"]["failed"], 1, "{doc}");
+            assert_eq!(doc["ok"], false, "{doc}");
+        } else {
+            let body = stdout(&out);
+            assert!(
+                body.contains("clip failed (blocked)")
+                    && body.contains("NOT written: verification failed"),
+                "fallback verify-failure row:\n{body}"
+            );
+            assert!(
+                !body.contains("written as a task with a"),
+                "row must not claim success:\n{body}"
+            );
+        }
+    }
+}
+
+#[test]
 fn archive_changed_after_clip_reports_and_keeps_journal() {
     let (env, fake, state, _token) = setup("bob-cli-gkeep-pull-ref-changed");
     let (curl, root, log) = write_clip_curl(state.path());
@@ -1532,7 +1593,10 @@ fn archive_changed_after_clip_reports_and_keeps_journal() {
         .id("note-1")
         .text("https://example.com/paper.pdf")
         .build();
-    fake.respond("snapshot", &snapshot_ok("bryanbugyi34@gmail.com", vec![n1]));
+    fake.respond(
+        "snapshot",
+        &snapshot_ok("bryanbugyi34@gmail.com", vec![n1.clone()]),
+    );
     // An attachment added mid-pull trips the archive guard.
     fake.respond("archive", &archive_ok(vec![("note-1", "changed")]));
     let out = run_pull(&env, &fake, &state, &[], &curl_env(&curl, &root, &log));
@@ -1546,6 +1610,21 @@ fn archive_changed_after_clip_reports_and_keeps_journal() {
     // clipping again.
     assert_eq!(ref_events(&state).len(), 1);
     assert!(env.vault().join("xlib/papers/paper.pdf").is_file());
+    fake.respond("snapshot", &snapshot_ok("bryanbugyi34@gmail.com", vec![n1]));
+    fake.respond("archive", &archive_ok(vec![("note-1", "archived")]));
+    let (sentinel, hit) = write_sentinel(state.path(), "curl-repull");
+    let out = run_pull(
+        &env,
+        &fake,
+        &state,
+        &["-f", "json"],
+        &[("BOB_HIGHLIGHTS_CURL", sentinel.to_str().expect("path"))],
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let doc: serde_json::Value =
+        serde_json::from_str(&stdout(&out)).expect("json parses");
+    assert_eq!(doc["notes"][0]["action"], "archive_only", "{doc}");
+    assert!(!hit.is_file(), "re-pull archives with no second clip");
 }
 
 #[test]
@@ -1566,6 +1645,69 @@ fn all_clip_pull_needs_no_target() {
         "clip row:\n{}",
         stdout(&out)
     );
+}
+
+#[test]
+fn retryable_clip_failure_needs_no_target() {
+    let (env, fake, state, _token) =
+        setup("bob-cli-gkeep-pull-ref-retry-no-target");
+    let (curl, root, log) = write_clip_curl(state.path());
+    fs::remove_file(env.vault().join("gkeep_inbox.md")).expect("remove target");
+    let n1 = note("")
+        .id("note-1")
+        .text("https://example.com/timeout")
+        .build();
+    fake.respond("snapshot", &snapshot_ok("bryanbugyi34@gmail.com", vec![n1]));
+    let out = run_pull(&env, &fake, &state, &[], &curl_env(&curl, &root, &log));
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    assert!(
+        stdout(&out)
+            .contains("clip failed (timeout) · left in Keep for the next pull"),
+        "retry row, not a target error:\n{}",
+        stdout(&out)
+    );
+    assert!(
+        !stderr(&out).contains("target note"),
+        "must not demand the target:\n{}",
+        stderr(&out)
+    );
+    assert_eq!(fake.call_count(), 1, "snapshot only, no archive");
+    assert!(ref_events(&state).is_empty(), "no ref_created journal");
+}
+
+#[test]
+fn ref_created_repull_needs_no_target() {
+    let (env, fake, state, _token) =
+        setup("bob-cli-gkeep-pull-ref-repull-no-target");
+    let (curl, root, log) = write_clip_curl(state.path());
+    let n1 = note("")
+        .id("note-1")
+        .text("https://example.com/paper.pdf")
+        .build();
+    fake.respond(
+        "snapshot",
+        &snapshot_ok("bryanbugyi34@gmail.com", vec![n1.clone()]),
+    );
+    fake.respond("archive", &archive_ok(vec![("note-1", "changed")]));
+    let out = run_pull(&env, &fake, &state, &[], &curl_env(&curl, &root, &log));
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    assert_eq!(ref_events(&state).len(), 1);
+    fs::remove_file(env.vault().join("gkeep_inbox.md")).expect("remove target");
+    fake.respond("snapshot", &snapshot_ok("bryanbugyi34@gmail.com", vec![n1]));
+    fake.respond("archive", &archive_ok(vec![("note-1", "archived")]));
+    let (sentinel, hit) = write_sentinel(state.path(), "curl-repull");
+    let out = run_pull(
+        &env,
+        &fake,
+        &state,
+        &["-f", "json"],
+        &[("BOB_HIGHLIGHTS_CURL", sentinel.to_str().expect("path"))],
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let doc: serde_json::Value =
+        serde_json::from_str(&stdout(&out)).expect("json parses");
+    assert_eq!(doc["notes"][0]["action"], "archive_only", "{doc}");
+    assert!(!hit.is_file(), "re-pull archives with no second clip");
 }
 
 #[test]

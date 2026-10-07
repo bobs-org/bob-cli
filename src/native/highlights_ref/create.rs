@@ -2,9 +2,23 @@ use std::{
     env,
     ffi::{OsStr, OsString},
     fs,
+    io::IsTerminal,
     path::{Path, PathBuf},
     process::{Command, Stdio},
 };
+
+/// TTY-gated `fetching …` reporter preserving the pre-ingest output:
+/// prints only on a terminal, exactly as `fetch` used to.
+fn fetch_progress(line: &str) {
+    if std::io::stderr().is_terminal() {
+        eprintln!("{line}");
+    }
+}
+
+/// Unconditional warning reporter preserving the pre-ingest PDF warning.
+fn pdf_progress(line: &str) {
+    eprintln!("{line}");
+}
 
 use clap::{Arg, ArgAction, ArgMatches, Command as ClapCommand};
 use sha2::Digest;
@@ -513,7 +527,11 @@ fn create_pdf(
                 listen.as_ref(),
             );
         }
-        match target_mod::fetch_and_route(url.clone(), &scratch)? {
+        match target_mod::fetch_and_route(
+            url.clone(),
+            &scratch,
+            Some(&fetch_progress),
+        )? {
             target_mod::CreateSource::PdfUrl { url, downloaded } => {
                 return create_pdf_url_route(
                     config,
@@ -1011,6 +1029,7 @@ fn create_local_pdf_route(
         options.title.as_deref(),
         options.author.as_deref(),
         options.published.as_deref(),
+        Some(&pdf_progress),
     )?;
     let ref_type =
         default_ref_type_for_kind("pdf", options.ref_type.as_deref())?;
@@ -1186,6 +1205,7 @@ fn create_pdf_url_route(
         options.author.as_deref(),
         options.published.as_deref(),
         &captured,
+        Some(&pdf_progress),
     )?;
     let ref_type =
         default_ref_type_for_kind("pdf", options.ref_type.as_deref())?;
@@ -1363,16 +1383,19 @@ fn create_arxiv_route(
     listen: Option<&super::listen::ListenCommand>,
 ) -> Result<()> {
     let captured = super::current_local_date();
-    let (metadata, warning) =
-        super::arxiv::fetch_metadata(&paper, scratch.path());
+    let (metadata, warning) = super::arxiv::fetch_metadata(
+        &paper,
+        scratch.path(),
+        Some(&fetch_progress),
+    );
     if let Some(warning) = warning {
         eprintln!("warning: {warning}");
     }
     let dest = scratch.path().join("arxiv.pdf");
     let pdf_url = paper.pdf_url();
     let fetch =
-        super::fetch::fetch_url(&pdf_url, &dest, 300).map_err(|error| {
-            match error.hint() {
+        super::fetch::fetch_url(&pdf_url, &dest, 300, Some(&fetch_progress))
+            .map_err(|error| match error.hint() {
                 Some(hint) => CommandError::new(format!(
                     "fetch arXiv PDF {pdf_url}: {}\nhint: {hint}",
                     error.message()
@@ -1381,8 +1404,7 @@ fn create_arxiv_route(
                     "fetch arXiv PDF {pdf_url}: {}",
                     error.message()
                 )),
-            }
-        })?;
+            })?;
     if !(200..300).contains(&fetch.status) {
         return Err(CommandError::new(format!(
             "server returned HTTP {} for {pdf_url}",
@@ -1403,6 +1425,7 @@ fn create_arxiv_route(
         metadata.as_ref(),
         &dest,
         &captured,
+        Some(&pdf_progress),
     )?;
     let ref_type =
         default_ref_type_for_kind("pdf", options.ref_type.as_deref())?;

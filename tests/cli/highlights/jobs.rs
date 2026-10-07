@@ -163,6 +163,31 @@ fn ref_jobs_bare_lists_empty_vault_state() {
 }
 
 #[test]
+fn ref_jobs_group_flag_before_jobs_lists() {
+    let temp = TempDir::new("bob-cli-ref-jobs-group-flag");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+
+    for args in [&["-n", "jobs"][..], &["--no-hooks", "jobs"][..]] {
+        let mut command = bob_command();
+        command.env("XDG_STATE_HOME", state_dir(&temp));
+        command.env("BOB_DIR", &vault);
+        command.arg("ref");
+        for arg in args {
+            command.arg(arg);
+        }
+        let output = command.output().expect("run bob ref with group flag");
+        assert_success(&output);
+        assert_eq!(
+            stdout(&output),
+            "bob ref · jobs · nothing pending · nothing in the last 7 days\n",
+            "args {args:?}:\n{}",
+            format_output(&output)
+        );
+    }
+}
+
+#[test]
 fn ref_jobs_run_clips_a_seeded_article() {
     let temp = TempDir::new("bob-cli-ref-jobs-clip");
     let vault = temp.path().join("vault");
@@ -350,7 +375,7 @@ fn ref_jobs_stale_running_twice_falls_back_without_clipping() {
     let temp = TempDir::new("bob-cli-ref-jobs-recover-twice");
     let vault = temp.path().join("vault");
     fs::create_dir_all(&vault).expect("create vault");
-    seed_running(&temp, &vault, "20261007T143012-eeeeee", 2);
+    seed_running(&temp, &vault, "20261007T143012-eeeeee", 1);
 
     // The default harness adapter is missing: any clip attempt would
     // fail as `dependency`, so `internal` proves nothing clipped.
@@ -620,5 +645,79 @@ fn ref_jobs_doctor_row_tracks_pending_and_stuck() {
             "ref jobs: warn (1 pending · oldest 2 h · hint: bob ref jobs run)"
         ) && report.contains("warnings:"),
         "{report}"
+    );
+}
+
+#[test]
+fn ref_jobs_run_uses_job_bob_dir_not_env() {
+    let temp = TempDir::new("bob-cli-ref-jobs-bob-dir");
+    let vault = temp.path().join("vault");
+    let note_dir = vault.join("ref/papers");
+    fs::create_dir_all(&note_dir).expect("create ref dir");
+    fs::write(
+        note_dir.join("post.md"),
+        "---\ntitle: Post\nsource_url: https://example.com/post\nsource_pdf: lib/papers/post.pdf\n---\n\n# Post\n",
+    )
+    .expect("write ref note");
+    seed_pending(&temp, &vault, "20261007T143012-bobdir", FIXED_CREATED_AT);
+    let sentinel = temp.path().join("sentinel-bob");
+
+    let output = jobs_command(&temp, &sentinel, &["run"])
+        .output()
+        .expect("run bob ref jobs run");
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("already in library"),
+        "{}",
+        format_output(&output)
+    );
+    let done = done_contents(&temp);
+    assert!(
+        done.contains("already_in_library") || done.contains("in_library"),
+        "{done}"
+    );
+    assert!(
+        !sentinel.exists(),
+        "worker must use the job bob_dir, never $BOB_DIR",
+    );
+}
+
+#[test]
+fn ref_jobs_unwritable_running_fails_promptly() {
+    let temp = TempDir::new("bob-cli-ref-jobs-unwritable");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    let pending_path =
+        seed_pending(&temp, &vault, "20261007T143012-999999", FIXED_CREATED_AT);
+    // Block the `pending/` → `running/` claim with non-empty
+    // directories at both the `running/` destination and the `stuck/`
+    // park destination: the atomic install cannot rename onto a
+    // non-empty directory, and the `running/` blocker cannot be parked
+    // away either. (A mode-0500 `running/` dir does not work: the worker
+    // resets spool modes to 0700 at startup. A lone `running/` blocker
+    // does not work either: recovery parks it to `stuck/` and clears
+    // the way.)
+    let running = state_dir(&temp).join("bob-cli/ref/jobs/running");
+    let stuck = state_dir(&temp).join("bob-cli/ref/jobs/stuck");
+    fs::create_dir_all(&running).expect("create running dir");
+    fs::create_dir_all(&stuck).expect("create stuck dir");
+    for dir in [
+        running.join("20261007T143012-999999.json"),
+        stuck.join("20261007T143012-999999.json"),
+    ] {
+        fs::create_dir_all(&dir).expect("block destination");
+        fs::write(dir.join("sentinel"), "block").expect("fill blocker");
+    }
+
+    let output = jobs_command(&temp, &vault, &["run"])
+        .output()
+        .expect("run bob ref jobs run");
+    fs::remove_dir_all(running.join("20261007T143012-999999.json")).ok();
+    fs::remove_dir_all(stuck.join("20261007T143012-999999.json")).ok();
+    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+    assert!(
+        pending_path.exists(),
+        "failed claim leaves the job in pending/",
     );
 }

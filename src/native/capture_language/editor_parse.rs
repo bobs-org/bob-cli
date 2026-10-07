@@ -238,7 +238,7 @@ pub(crate) fn parse_for_editor_with(
             || !draft.declarations.is_empty(),
         ..*options
     };
-    let item_outcomes = draft
+    let mut item_outcomes = draft
         .items
         .iter()
         .map(|item| parse_editor_item_with(item, &options))
@@ -253,6 +253,23 @@ pub(crate) fn parse_for_editor_with(
         &mut global_spans,
         &mut global_diagnostics,
     );
+    // An inline `@@` discovered after the initial parse still blocks the
+    // claim: re-parse claimed Ref items with a global destination so they
+    // become ordinary tasks that inherit the global.
+    if global_destination.is_some() {
+        let global_options = EditorParseOptions {
+            has_global_destination: true,
+            ..options
+        };
+        for (index, outcome) in item_outcomes.iter_mut().enumerate() {
+            if outcome.item.mode == EditorMode::Ref {
+                *outcome = parse_editor_item_with(
+                    &draft.items[index],
+                    &global_options,
+                );
+            }
+        }
+    }
     if !declarations.is_empty() && draft.items.is_empty() {
         global_diagnostics.push(Diagnostic {
             severity: Severity::Error,
@@ -902,7 +919,7 @@ pub(super) fn parse_editor_item<'a>(
     parse_editor_item_with(item, &EditorParseOptions::routing_off())
 }
 
-pub(crate) fn parse_editor_item_with<'a>(
+pub(super) fn parse_editor_item_with<'a>(
     item: &CaptureItem<'a>,
     options: &EditorParseOptions<'_>,
 ) -> EditorItemOutcome<'a> {

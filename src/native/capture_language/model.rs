@@ -6,9 +6,9 @@ use std::num::NonZeroUsize;
 use crate::native::url_routing::{UrlIntent, UrlRoutingPolicy};
 
 /// Grammar-level parse options shared by `bob capture` and
-/// `capture-parse`. `url_routing: None` turns reference claiming off, so
-/// every production caller passes `None` until phase `capture` turns
-/// routing on; only the lexical URL-list split stays live.
+/// `capture-parse`. `url_routing: None` turns reference claiming off (for
+/// `-R`, a config opt-out, or tests); production capture passes the loaded
+/// routing policy. Only the lexical URL-list split stays live without it.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct CaptureParseOptions<'a> {
     pub(crate) parse_clip_markers: bool,
@@ -22,7 +22,9 @@ pub(crate) struct CaptureParseOptions<'a> {
 }
 
 impl<'a> CaptureParseOptions<'a> {
-    /// Routing-off options: reference items never claim.
+    /// Routing-off options: reference items never claim (tests only;
+    /// production passes the loaded policy or explicit `None`).
+    #[cfg(test)]
     pub(crate) fn routing_off(parse_clip_markers: bool) -> Self {
         Self {
             parse_clip_markers,
@@ -63,8 +65,8 @@ impl<'a> EditorParseOptions<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum CaptureKind {
     Task,
-    /// A whole-item bare URL admitted by the routing policy. The planner
-    /// cannot execute it yet; that arrives with phase `capture`.
+    /// A whole-item bare URL admitted by the routing policy, queued for
+    /// the reading queue by the capture planner.
     Ref(UrlIntent),
     TaskWithBlockId {
         block_id: String,

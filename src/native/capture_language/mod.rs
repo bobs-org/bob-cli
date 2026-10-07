@@ -61,7 +61,6 @@ pub(crate) use self::editor_model::Severity;
 pub(crate) use self::editor_model::Span;
 pub(crate) use self::editor_model::SpanKind;
 pub(crate) use self::editor_parse::editor_item_at;
-pub(crate) use self::editor_parse::parse_editor_item_with;
 pub(crate) use self::editor_parse::parse_for_editor;
 pub(crate) use self::editor_parse::parse_for_editor_with;
 pub(crate) use self::editor_parse::tokenize_line_with_spans;

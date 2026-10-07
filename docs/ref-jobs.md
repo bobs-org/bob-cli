@@ -26,7 +26,7 @@ Everything lives under `${XDG_STATE_HOME:-~/.local/state}/bob-cli/ref/jobs/`.
 Directories are mode 0700 and files 0600.
 
 ```text
-ref/ingest.lock              machine-wide ingest lock (shared with create)
+ref/ingest.lock              machine-wide ingest lock (capture worker and bob gkeep pull)
 ref/jobs/pending/<id>.json   queued jobs
 ref/jobs/running/<id>.json   the job the worker is clipping
 ref/jobs/stuck/<id>.json     jobs whose fallback write failed (never lost)

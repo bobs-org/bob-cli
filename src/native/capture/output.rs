@@ -35,16 +35,16 @@ pub(super) struct RefItemJson {
 }
 
 /// Offline library verdict on a reference item.
+///
+/// All keys are always present (`null` when absent) per the capture JSON
+/// contract; Bob Mac Capture decodes them with `decodeIfPresent`, so both
+/// forms decode.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct RefLibraryJson {
     pub(super) verdict: &'static str,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) path: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) title: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) reading_state: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) message: Option<String>,
 }
 

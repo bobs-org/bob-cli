@@ -7,6 +7,7 @@
 
 use crate::highlights::fake_clip::{failure_response, FakeClip};
 use crate::support::*;
+use sha2::Digest;
 use std::fs;
 use std::time::Instant;
 
@@ -113,6 +114,13 @@ fn capture_lone_url_queues_a_ref_job() {
     assert_eq!(reference["display"], "example.com/post");
     assert_eq!(reference["route_hint"], "article");
     assert_eq!(reference["library"]["verdict"], "not_found");
+    for key in ["path", "title", "reading_state", "message"] {
+        assert!(
+            reference["library"].get(key).is_some()
+                && reference["library"][key].is_null(),
+            "not_found library carries {key} as null: {json}"
+        );
+    }
     assert_eq!(reference["job"]["state"], "pending");
     assert!(!reference["job"]["id"]
         .as_str()
@@ -263,6 +271,92 @@ fn capture_url_with_markers_or_flags_stays_a_task() {
         assert_success(&output);
         assert_eq!(parse_json(&output)["kind"], "task", "flags {flag:?}");
     }
+    write_file(
+        &vault.join("notes.md"),
+        "# Notes\n- [ ] #task existing ^test-id\n  - SEC\n\n## Sec\n",
+    );
+    let task_line = "- [ ] #task existing ^test-id";
+    let task_ref = format!(
+        "2:{}",
+        &hex::encode(sha2::Sha256::digest(task_line.trim_end().as_bytes()))
+            [..8]
+    );
+    // `-s` forces a section bullet, the others force task placement;
+    // all opt out of ref claiming (no `ref` object, never `ref` kind).
+    let flag_sets: Vec<Vec<String>> = vec![
+        vec!["-r", "notes", "-s", "Sec"],
+        vec!["-r", "notes", "-t", "test-id"],
+        vec!["-r", "notes", "-t", "test-id", "-S", "SEC"],
+        vec!["-r", "notes", "--task-ref", &task_ref],
+    ]
+    .into_iter()
+    .map(|flags| flags.into_iter().map(str::to_string).collect())
+    .collect();
+    for flag in &flag_sets {
+        let mut args = vec!["-d", "-f", "json"];
+        args.extend(flag.iter().map(String::as_str));
+        args.push(ARTICLE_URL);
+        let output = capture(&temp, &vault, &args)
+            .output()
+            .expect("run forced-flag capture");
+        assert_success(&output);
+        let json = parse_json(&output);
+        assert_ne!(json["kind"], "ref", "flags {flag:?}:\n{json}");
+        assert!(
+            json.get("ref").is_none() || json["ref"].is_null(),
+            "flags {flag:?}:\n{json}"
+        );
+    }
+}
+
+#[test]
+fn capture_inline_global_blocks_ref_claim() {
+    let temp = TempDir::new("bob-cli-capture-ref-inline-global");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+
+    let mut command = capture(&temp, &vault, &["-d", "-f", "json"]);
+    let output = run_with_stdin(
+        &mut command,
+        "Buy milk @@groceries\n\nhttps://example.com/post",
+    );
+    assert_success(&output);
+    let json = parse_json(&output);
+    let captures = json["captures"].as_array().expect("captures array");
+    assert_eq!(captures.len(), 2);
+    for capture in captures {
+        assert_eq!(capture["kind"], "task", "{json}");
+        assert!(
+            capture.get("ref").is_none() || capture["ref"].is_null(),
+            "{json}"
+        );
+    }
+    let second = &captures[1];
+    let routed = second["route"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("groceries")
+        || second["relative_target"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("groceries");
+    assert!(routed, "URL item routes to @@ target: {json}");
+
+    let output = bob_command()
+        .arg("capture-parse")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("Buy milk @@groceries\n\nhttps://example.com/post")
+        .output()
+        .expect("run inline-global capture-parse");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("parse JSON");
+    let items = json["items"].as_array().expect("items array");
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[1]["mode"], "task", "{json}");
+    assert_ne!(items[1]["mode"], "ref");
 }
 
 #[test]
@@ -304,9 +398,19 @@ fn capture_config_off_and_invalid_config_keep_tasks() {
         .expect("run invalid-config capture");
     assert_success(&output);
     assert_eq!(parse_json(&output)["kind"], "task");
+    let diagnostic = stderr(&output);
+    let expected = format!(
+        "bob capture: warning: URL routing is off: parse {}:",
+        bad.display()
+    );
     assert!(
-        stderr(&output).contains("bob capture: warning: URL routing is off:"),
-        "{}",
+        diagnostic.contains(&expected),
+        "expected full warning line {expected:?}:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        !diagnostic.contains("Invalid(") && !diagnostic.contains("Read("),
+        "warning must use Display, not Debug:\n{}",
         format_output(&output)
     );
 }
@@ -501,6 +605,20 @@ fn capture_human_wording_for_every_case() {
         &vault.join("xlib/blogs/queued.pdf"),
         "- status: ready\n- parent: obsidian_ref\n- title: Queued Post\n- source_url: https://example.com/queued\n",
     );
+    write_file(
+        &vault.join("ref/blogs/legacy.md"),
+        "---\ntitle: Legacy Post\nstatus: ready\nsource_url: https://example.com/legacy\n---\n\n- [ ] ^ref\n",
+    );
+    let clipping_pending = state_dir(&temp).join("bob-cli/ref/jobs/pending");
+    fs::create_dir_all(&clipping_pending).expect("create pending dir");
+    fs::write(
+        clipping_pending.join("seed.json"),
+        format!(
+            r#"{{"schema_version":1,"id":"seed","created_at":"2026-10-07T14:30:12-04:00","source":"capture","bob_dir":{},"url":"https://example.com/clipping","cleaned_url":"https://example.com/clipping","dedupe_key":"https://example.com/clipping","display":"example.com/clipping","route_hint":"article","attempts":0,"fallback":{{"relative_target":"mac_inbox.md","task_line":"- [ ] #task https://example.com/clipping [created::2026-10-07]"}}}}"#,
+            serde_json::json!(vault.to_string_lossy()),
+        ),
+    )
+    .expect("seed clipping job");
 
     let human = |args: &[&str]| -> String {
         let output = capture(&temp, &vault, args)
@@ -526,6 +644,138 @@ fn capture_human_wording_for_every_case() {
         human(&["-d", "https://example.com/queued"]),
         "[dry-run] ok already queued  xlib/blogs/queued.pdf\n  waiting for bob ref scan\n"
     );
+    assert_eq!(
+        human(&["-d", "https://example.com/legacy"]),
+        "[dry-run] ok would queue  example.com/legacy → reading queue\n  in your library as a legacy note (ref/blogs/legacy.md) · a fresh copy will be clipped\n"
+    );
+    assert_eq!(
+        human(&["https://example.com/legacy"]),
+        "✓ queued  example.com/legacy → reading queue\n  in your library as a legacy note (ref/blogs/legacy.md) · a fresh copy will be clipped\n"
+    );
+    assert_eq!(
+        human(&["-d", "https://example.com/clipping"]),
+        "[dry-run] ok already clipping  example.com/clipping\n  a pending ref job has this link · bob ref jobs\n"
+    );
+    assert_eq!(
+        human(&["https://example.com/clipping"]),
+        "✓ already clipping  example.com/clipping\n  a pending ref job has this link · bob ref jobs\n"
+    );
+
+    for dry in [true, false] {
+        let mut args = vec!["-f", "human"];
+        if dry {
+            args.push("-d");
+        }
+        let mut command = capture(&temp, &vault, &args);
+        let output = run_with_stdin(
+            &mut command,
+            "https://example.com/dup\n\nhttps://example.com/dup",
+        );
+        assert_success(&output);
+        let report = stdout(&output);
+        assert!(
+            report.contains("duplicate") && report.contains("example.com/dup"),
+            "duplicate headline:\n{report}"
+        );
+        assert!(
+            report.contains("same link as item 1"),
+            "duplicate detail:\n{report}"
+        );
+    }
+    let mut command = capture(&temp, &vault, &["-f", "json"]);
+    let output = run_with_stdin(
+        &mut command,
+        "https://example.com/dup\n\nhttps://example.com/dup",
+    );
+    assert_success(&output);
+    let json = parse_json(&output);
+    let captures = json["captures"].as_array().expect("captures array");
+    assert_eq!(captures[1]["ref"]["library"]["verdict"], "duplicate");
+    assert_eq!(
+        captures[1]["ref"]["library"]["message"],
+        "same link as item 1"
+    );
+}
+
+#[test]
+fn capture_unknown_library_queues_with_message() {
+    let temp = TempDir::new("bob-cli-capture-ref-unknown");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(vault.join("ref")).expect("create ref dir");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(
+            vault.join("ref"),
+            fs::Permissions::from_mode(0o000),
+        )
+        .expect("make ref unreadable");
+    }
+
+    // A real run queues a pending job, which would read back as
+    // `clipping` (not `unknown`) for the same URL — so every run uses a
+    // distinct URL.
+    let cases = [
+        (true, "json", "https://example.com/post-dry-json"),
+        (true, "human", "https://example.com/post-dry-human"),
+        (false, "json", "https://example.com/post-real-json"),
+        (false, "human", "https://example.com/post-real-human"),
+    ];
+    let mut outputs = Vec::new();
+    for (dry, mode, url) in cases {
+        if mode == "human" {
+            let mut human_args = vec![];
+            if dry {
+                human_args.push("-d");
+            }
+            let human_out = capture(&temp, &vault, &human_args)
+                .arg(url)
+                .output()
+                .expect("run unknown human capture");
+            outputs.push((dry, mode, url, None, Some(human_out)));
+        } else {
+            let mut args = vec!["-f", "json"];
+            if dry {
+                args.push("-d");
+            }
+            let json_out = capture(&temp, &vault, &args)
+                .arg(url)
+                .output()
+                .expect("run unknown capture");
+            outputs.push((dry, mode, url, Some(json_out), None));
+        }
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(
+            vault.join("ref"),
+            fs::Permissions::from_mode(0o755),
+        )
+        .expect("restore ref");
+    }
+
+    for (dry, mode, url, json_out, human_out) in &outputs {
+        if let Some(json_out) = json_out {
+            assert_success(json_out);
+            let json = parse_json(json_out);
+            assert_eq!(json["ref"]["library"]["verdict"], "unknown", "{json}");
+            let message = json["ref"]["library"]["message"]
+                .as_str()
+                .unwrap_or_default();
+            assert!(!message.is_empty(), "unknown carries a reason: {json}");
+        }
+        if let Some(human_out) = human_out {
+            assert_success(human_out);
+            let report = stdout(human_out);
+            assert!(
+                report.contains("library check unavailable:")
+                    && report.contains("the clip still dedupes"),
+                "unknown human wording (dry={dry}, mode={mode}, url={url}):\n{report}"
+            );
+        }
+    }
 }
 
 #[test]

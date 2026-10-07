@@ -261,13 +261,17 @@ pub(crate) fn ensure_spool_dirs(root: &Path) -> Result<(), String> {
     {
         use std::os::unix::fs::PermissionsExt;
         let _ = fs::set_permissions(root, fs::Permissions::from_mode(0o700));
+        if let Some(parent) = root.parent() {
+            let _ =
+                fs::set_permissions(parent, fs::Permissions::from_mode(0o700));
+        }
     }
     Ok(())
 }
 
 /// Atomically install `bytes` at `dest`: temp file, fsync, rename,
 /// directory fsync. The temp file is mode 0600.
-fn atomic_install(dest: &Path, bytes: &[u8]) -> Result<(), String> {
+pub(crate) fn atomic_install(dest: &Path, bytes: &[u8]) -> Result<(), String> {
     let file_name = dest.file_name().ok_or_else(|| {
         format!("spool path has no file name: {}", dest.display())
     })?;
@@ -469,13 +473,22 @@ pub(crate) fn append_done(
         .map_err(|error| format!("encode done record {}: {error}", job.id))?;
     line.push('\n');
     let path = root.join("done.jsonl");
-    let file = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-        .map_err(|error| {
-            format!("open done log {}: {error}", path.display())
-        })?;
+    #[cfg(unix)]
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut options = fs::OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
+    {
+        options.mode(0o600);
+    }
+    let file = options.open(&path).map_err(|error| {
+        format!("open done log {}: {error}", path.display())
+    })?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
+    }
     {
         use std::io::Write as _;
         let mut file = file;
@@ -873,5 +886,59 @@ mod tests {
         let records = read_done_records(&root);
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].id, "ok");
+    }
+
+    #[test]
+    fn spool_dirs_and_files_use_strict_modes() {
+        let base = temp_root("modes");
+        let root = base.join("jobs");
+        ensure_spool_dirs(&root).expect("ensure spool dirs");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            for dir in [
+                base.clone(),
+                root.clone(),
+                root.join("pending"),
+                root.join("running"),
+                root.join("stuck"),
+            ] {
+                let mode =
+                    fs::metadata(&dir).expect("stat dir").permissions().mode()
+                        & 0o777;
+                assert_eq!(mode, 0o700, "dir mode {}", dir.display());
+            }
+            let path = enqueue(&root, &sample_job()).expect("enqueue job");
+            let mode =
+                fs::metadata(&path).expect("stat job").permissions().mode()
+                    & 0o777;
+            assert_eq!(mode, 0o600, "job file mode");
+            let job = read_job_file(&path).expect("read job");
+            append_done(
+                &root,
+                &job,
+                DoneOutcome::Created,
+                Some("xlib/blogs/post.pdf".to_string()),
+                None,
+                None,
+                None,
+            )
+            .expect("append done");
+            let mode = fs::metadata(root.join("done.jsonl"))
+                .expect("stat done")
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(mode, 0o600, "done log mode");
+            let stuck = root.join("stuck").join("parked.json");
+            atomic_install(&stuck, b"{}").expect("install stuck");
+            let mode = fs::metadata(&stuck)
+                .expect("stat stuck")
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(mode, 0o600, "stuck file mode");
+        }
+        let _ = fs::remove_dir_all(&base);
     }
 }

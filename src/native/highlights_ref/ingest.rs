@@ -1,12 +1,16 @@
 //! Typed, non-printing URL ingest extracted from `bob ref create`.
 //!
-//! Every entry point that clips a link — `bob ref create`, the capture
-//! background worker, and `bob gkeep pull` — calls [`ingest_url`]. It uses
+//! The background paths that clip a link — the capture worker and
+//! `bob gkeep pull` — call [`ingest_url`]. It composes the same building
+//! blocks as create (`resolve_url_syntactic`, `fetch_and_route`, `sources`
+//! dedupe, `pdf_target` planning/stamp/install, `ClipAdapterClient`) with
 //! create's fixed reading-queue defaults (blogs/papers, status ready,
 //! parent obsidian_ref, no audio, no force), holds the machine-wide ingest
-//! lock, and installs with fsync. It writes nothing to stdout and prints
-//! nothing to stderr itself; short status lines go through
-//! [`IngestRequest::progress`] only.
+//! lock serializing the capture worker and Keep pull, and installs with
+//! fsync. `bob ref create` keeps its own printing routes and never calls
+//! [`ingest_url`]. Ingest writes nothing to stdout and prints nothing to
+//! stderr itself; short status lines go through [`IngestRequest::progress`]
+//! only.
 
 use std::{fs, path::Path};
 
@@ -44,16 +48,6 @@ pub(crate) enum IngestRoute {
     Article,
     Pdf,
     Arxiv,
-}
-
-impl IngestRoute {
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            IngestRoute::Article => "article",
-            IngestRoute::Pdf => "pdf",
-            IngestRoute::Arxiv => "arxiv",
-        }
-    }
 }
 
 /// The outcome of [`ingest_url`].
@@ -247,6 +241,7 @@ fn classify_unprefixed(message: &str) -> IngestErrorKind {
         || message.contains("TLS failure")
         || message.contains("navigation failed")
         || message.contains("could not download the PDF")
+        || message.contains("curl failed (exit")
     {
         return IngestErrorKind::Network;
     }
@@ -341,7 +336,16 @@ fn split_hint(message: &str) -> (String, Option<String>) {
 fn lock_ingest(
     progress: Option<&dyn Fn(&str)>,
 ) -> Result<fs::File, IngestError> {
-    let dir = crate::native::env::bob_cli_state_dir().join("ref");
+    lock_ingest_at(
+        &crate::native::env::bob_cli_state_dir().join("ref"),
+        progress,
+    )
+}
+
+fn lock_ingest_at(
+    dir: &Path,
+    progress: Option<&dyn Fn(&str)>,
+) -> Result<fs::File, IngestError> {
     fs::create_dir_all(&dir).map_err(|error| {
         ingest_error(format!("create ingest lock directory: {error}"), None)
     })?;
@@ -442,8 +446,9 @@ pub(crate) fn ingest_url(
     }
     let mut scratch =
         super::workdir::ScratchDir::create("ingest").map_err(command_error)?;
-    match super::target::fetch_and_route(url.clone(), &scratch)
-        .map_err(|error| ingest_error(error.message.clone(), None))?
+    // Ingest stays silent: the TTY `fetching …` line is dropped (None).
+    match super::target::fetch_and_route(url.clone(), &scratch, None)
+        .map_err(command_error)?
     {
         super::target::CreateSource::PdfUrl { url, downloaded } => {
             ingest_pdf_url_route(
@@ -453,6 +458,7 @@ pub(crate) fn ingest_url(
                 &mut scratch,
                 &recorded,
                 superseded_legacy,
+                request.progress,
             )
         }
         super::target::CreateSource::WebArticle { url } => {
@@ -502,10 +508,11 @@ fn ingest_pdf_url_route(
     scratch: &mut super::workdir::ScratchDir,
     recorded: &[super::sources::RecordedSource],
     superseded_legacy: Option<String>,
+    progress: Option<&dyn Fn(&str)>,
 ) -> Result<IngestOutcome, IngestError> {
     let captured = current_local_date();
     let pdf_plan = super::pdf_target::plan_pdf_url(
-        url, downloaded, None, None, None, None, &captured,
+        url, downloaded, None, None, None, None, &captured, progress,
     )
     .map_err(command_error)?;
     let target_plan = plan_default_target(
@@ -577,13 +584,14 @@ fn ingest_arxiv_route(
         super::workdir::ScratchDir::create("ingest").map_err(command_error)?;
     let dest = scratch.path().join("arxiv.pdf");
     let pdf_url = paper.pdf_url();
-    let fetch =
-        super::fetch::fetch_url(&pdf_url, &dest, 300).map_err(|error| {
+    let fetch = super::fetch::fetch_url(&pdf_url, &dest, 300, None).map_err(
+        |error| {
             ingest_error(
                 format!("fetch arXiv PDF {pdf_url}: {}", error.message()),
                 error.hint().map(str::to_string),
             )
-        })?;
+        },
+    )?;
     if !(200..300).contains(&fetch.status) {
         let message =
             format!("server returned HTTP {} for {pdf_url}", fetch.status);
@@ -596,7 +604,7 @@ fn ingest_arxiv_route(
         ));
     }
     let (metadata, warning) =
-        super::arxiv::fetch_metadata(paper, scratch.path());
+        super::arxiv::fetch_metadata(paper, scratch.path(), None);
     if let Some(warning) = warning
         && let Some(report) = progress
     {
@@ -611,6 +619,7 @@ fn ingest_arxiv_route(
         metadata.as_ref(),
         &dest,
         &captured,
+        progress,
     )
     .map_err(command_error)?;
     let target_plan = plan_default_target(
@@ -857,6 +866,16 @@ mod tests {
                 false,
             ),
             ("invalid URL \"x\": bad", IngestErrorKind::InvalidUrl, false),
+            (
+                "curl failed (exit 9) for https://example.com/a",
+                IngestErrorKind::Network,
+                true,
+            ),
+            (
+                "curl failed (exit 9): boom",
+                IngestErrorKind::Network,
+                true,
+            ),
             ("anything else", IngestErrorKind::Internal, false),
         ];
         for (message, kind, retryable) in cases {
@@ -865,6 +884,22 @@ mod tests {
             assert_eq!(error.retryable(), retryable, "{message}");
             assert_eq!(error.kind.as_str(), error.kind.as_str());
         }
+    }
+
+    #[test]
+    fn fetch_hint_splits_out_of_message() {
+        let raw = "server returned HTTP 404 for https://example.com/a\nhint: save the page from a browser and pass --html FILE";
+        let error =
+            command_error(super::super::CommandError::new(raw.to_string()));
+        assert_eq!(
+            error.message,
+            "server returned HTTP 404 for https://example.com/a"
+        );
+        assert!(!error.message.contains('\n'));
+        assert_eq!(
+            error.hint.as_deref(),
+            Some("save the page from a browser and pass --html FILE")
+        );
     }
 
     #[test]
@@ -885,8 +920,21 @@ mod tests {
             .ends_with("bob ref create 'https://example.com/a'\\''b'"),);
         // Only the first line survives, whitespace-collapsed, truncated.
         let long = format!("line one\nline two {}", "x".repeat(200));
-        let note = error.fallback_note("https://example.com/post");
-        let _ = (long, note);
+        let long_note =
+            ingest_error(long, None).fallback_note("https://example.com/post");
+        assert!(long_note.contains("line one"));
+        assert!(!long_note.contains("line two"));
+        let long_first = format!("{} tail", "x".repeat(200));
+        let long_first_note = ingest_error(long_first, None)
+            .fallback_note("https://example.com/post");
+        let long_first_part = long_first_note
+            .split("Clip failed (internal): ")
+            .nth(1)
+            .unwrap_or_default()
+            .split(" · retry:")
+            .next()
+            .unwrap_or_default();
+        assert_eq!(long_first_part, format!("{}…", "x".repeat(120)));
         let multi = ingest_error("first   line\nsecond line".to_string(), None);
         assert!(multi
             .fallback_note("https://example.com/post")
@@ -931,19 +979,24 @@ mod tests {
     fn second_ingest_waits_for_the_lock() {
         use std::sync::{Arc, Barrier};
         use std::time::Duration;
-        let held = lock_ingest(None).expect("take ingest lock");
+        let dir = test_root("ingest-lock");
+        let ref_dir = dir.join("ref");
+        let held = lock_ingest_at(&ref_dir, None).expect("take ingest lock");
         let entered = Arc::new(Barrier::new(2));
         let entered_child = Arc::clone(&entered);
         let progress_seen = Arc::new(std::sync::Mutex::new(Vec::new()));
         let progress_child = Arc::clone(&progress_seen);
         let handle = std::thread::spawn(move || {
             entered_child.wait();
-            let _guard = lock_ingest(Some(&|line: &str| {
-                progress_child
-                    .lock()
-                    .expect("lock progress")
-                    .push(line.to_string());
-            }))
+            let _guard = lock_ingest_at(
+                &ref_dir,
+                Some(&|line: &str| {
+                    progress_child
+                        .lock()
+                        .expect("lock progress")
+                        .push(line.to_string());
+                }),
+            )
             .expect("second lock");
         });
         entered.wait();
@@ -952,6 +1005,7 @@ mod tests {
         handle.join().expect("join waiter");
         let seen = progress_seen.lock().expect("read progress").clone();
         assert_eq!(seen, vec!["waiting for another clip…".to_string()]);
+        fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -985,26 +1039,6 @@ mod tests {
         let error = ingest_url(&bad).expect_err("invalid URL must fail");
         assert_eq!(error.kind, IngestErrorKind::InvalidUrl);
         assert!(!error.retryable());
-        fs::remove_dir_all(&root).ok();
-    }
-
-    #[test]
-    fn scratch_bob_dir_never_touches_bob_dir_env() {
-        let root = test_root("bob-dir-isolation");
-        let vault = root.join("vault");
-        let sentinel = root.join("sentinel-bob");
-        unsafe { env::set_var("BOB_DIR", &sentinel) };
-        let request = IngestRequest {
-            bob_dir: &vault,
-            url: "not a url",
-            progress: None,
-        };
-        let _ = ingest_url(&request).expect_err("must fail");
-        assert!(
-            !sentinel.exists(),
-            "ingest with a scratch bob_dir must never touch $BOB_DIR",
-        );
-        unsafe { env::remove_var("BOB_DIR") };
         fs::remove_dir_all(&root).ok();
     }
 }

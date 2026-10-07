@@ -202,16 +202,28 @@ const COMMON_USER_FIELDS: &[&str] = &[
 
 /// A bare `bob ref jobs` (or bare flags) lists: rewrite to
 /// `jobs list …` so `list` stays the flag-only, read-only default.
-/// Help, explicit subcommands, and unknown words pass through.
+/// Help, explicit subcommands, and unknown words pass through. The
+/// rewrite also applies when `bob ref`'s own flags (`-n`/`--no-hooks`)
+/// come before `jobs`, so `bob ref -n jobs` lists.
 fn default_jobs_args(args: Vec<OsString>) -> Vec<OsString> {
-    let [first, rest @ ..] = args.as_slice() else {
+    let mut prefix = 0;
+    while args.get(prefix).is_some_and(|arg| {
+        arg == OsStr::new("-n") || arg == OsStr::new("--no-hooks")
+    }) {
+        prefix += 1;
+    }
+    let Some(first) = args.get(prefix) else {
         return args;
     };
     if first != OsStr::new("jobs") {
         return args;
     }
+    let rest = &args[prefix + 1..];
     let Some(second) = rest.first() else {
-        return vec![OsString::from("jobs"), OsString::from("list")];
+        let mut out = args[..prefix].to_vec();
+        out.push(OsString::from("jobs"));
+        out.push(OsString::from("list"));
+        return out;
     };
     if second == OsStr::new("-h")
         || second == OsStr::new("--help")
@@ -221,10 +233,11 @@ fn default_jobs_args(args: Vec<OsString>) -> Vec<OsString> {
         return args;
     }
     if second.to_string_lossy().starts_with('-') {
-        return iter::once(OsString::from("jobs"))
-            .chain(iter::once(OsString::from("list")))
-            .chain(rest.iter().cloned())
-            .collect();
+        let mut out = args[..prefix].to_vec();
+        out.push(OsString::from("jobs"));
+        out.push(OsString::from("list"));
+        out.extend(rest.iter().cloned());
+        return out;
     }
     args
 }

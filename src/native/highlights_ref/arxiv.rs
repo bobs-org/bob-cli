@@ -134,13 +134,14 @@ pub(super) fn author_display(authors: &[String]) -> String {
 pub(super) fn fetch_metadata(
     paper: &ArxivPaper,
     dir: &Path,
+    progress: Option<&dyn Fn(&str)>,
 ) -> (Option<ArxivMetadata>, Option<String>) {
     let query = format!(
         "https://export.arxiv.org/api/query?id_list={}",
         paper.full_id()
     );
     let dest = dir.join("arxiv-api.xml");
-    if let Err(error) = fetch_url(&query, &dest, 20) {
+    if let Err(error) = fetch_url(&query, &dest, 20, progress) {
         return (
             None,
             Some(format!(
@@ -482,7 +483,7 @@ mod tests {
         };
         let paper = ArxivPaper::parse("https://arxiv.org/abs/1706.03762")
             .expect("parse paper");
-        let (metadata, warning) = fetch_metadata(&paper, &dir);
+        let (metadata, warning) = fetch_metadata(&paper, &dir, None);
         assert_eq!(metadata, None);
         let warning = warning.expect("a warning accompanies the fallback");
         assert!(

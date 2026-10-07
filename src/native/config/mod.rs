@@ -111,6 +111,16 @@ impl ConfigError {
     }
 }
 
+impl std::fmt::Display for ConfigError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Read(message) | Self::Invalid(message) => {
+                write!(f, "{message}")
+            }
+        }
+    }
+}
+
 impl PriorityProperty {
     pub(crate) fn name(&self) -> &str {
         &self.name
@@ -578,7 +588,9 @@ pub(crate) fn parse_highlights_config(
         .map(|hosts| {
             hosts
                 .iter()
-                .filter_map(|host| normalize_url_routing_host(host))
+                .filter_map(|host| {
+                    crate::native::url_routing::normalize_exclude_host(host)
+                })
                 .collect::<Vec<_>>()
         });
 
@@ -591,30 +603,6 @@ pub(crate) fn parse_highlights_config(
         url_routing_gkeep,
         url_routing_exclude_hosts,
     })
-}
-
-/// Normalize one `highlights.url_routing.exclude_hosts` entry:
-/// lowercased, with any scheme, leading `www.`, or trailing `.` or
-/// `/` stripped. Returns `None` when nothing remains.
-fn normalize_url_routing_host(raw: &str) -> Option<String> {
-    let mut text = raw.trim().to_lowercase();
-    if text.is_empty() {
-        return None;
-    }
-    if let Some((_, after)) = text.split_once("://") {
-        text = after.to_string();
-    }
-    if let Some((host, _)) = text.split_once('/') {
-        text = host.to_string();
-    }
-    if let Some((host, _)) = text.split_once(':') {
-        text = host.to_string();
-    }
-    if let Some(stripped) = text.strip_prefix("www.") {
-        text = stripped.to_string();
-    }
-    text = text.trim_end_matches('.').to_string();
-    (!text.is_empty()).then_some(text)
 }
 
 fn parse_priority_level(

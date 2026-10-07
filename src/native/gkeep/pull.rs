@@ -139,7 +139,7 @@ fn load_gkeep_routing(no_ref: bool) -> Option<UrlRoutingPolicy> {
             }
         }
         Err(error) => {
-            eprintln!("bob gkeep pull: warning: URL routing is off: {error:?}");
+            eprintln!("bob gkeep pull: warning: URL routing is off: {error}");
             None
         }
     }
@@ -308,8 +308,11 @@ pub(crate) fn run(args: &PullArgs) -> i32 {
     }
 
     // Task writes (including permanent clip-failure fallbacks) need
-    // the target note. A pull whose notes all clip archives without
-    // it; every other run keeps today's existence check.
+    // the target note. A pull with reading-queue notes (URL-only
+    // `CreateRef`, clip reports, or `ref_created` archive-only notes)
+    // never needs it otherwise — retryable failures stay in Keep and
+    // crash-recovery archives need no task write. Runs with none of
+    // those keep today's existence check.
     let needs_target = plan.notes.iter().any(|planned| {
         matches!(
             planned.action,
@@ -318,8 +321,31 @@ pub(crate) fn run(args: &PullArgs) -> i32 {
     }) || clips.reports.iter().any(|report| {
         matches!(report.outcome, ClipOutcome::FailedPermanent { .. })
     });
+    let has_create_ref = plan
+        .notes
+        .iter()
+        .any(|planned| matches!(planned.action, PlanAction::CreateRef));
+    let has_ref_archive = {
+        let ref_ids: std::collections::HashSet<&str> = journal
+            .records
+            .iter()
+            .filter(|record| record.event == JournalEvent::RefCreated)
+            .map(|record| record.id.as_str())
+            .collect();
+        plan.notes.iter().any(|planned| {
+            matches!(planned.action, PlanAction::ArchiveOnly)
+                && ref_ids.contains(planned.note.id.as_str())
+        })
+    };
+    let has_ref_content =
+        has_create_ref || !clips.reports.is_empty() || has_ref_archive;
     let all_clipped = !needs_target && !clips.archives.is_empty();
-    if !all_clipped && !target_path.is_file() {
+    let require_target = if needs_target || !has_ref_content {
+        !all_clipped
+    } else {
+        false
+    };
+    if require_target && !target_path.is_file() {
         return ui::report_error(
             "pull",
             &GkeepError::setup(
@@ -1432,6 +1458,14 @@ fn count_failed(
         {
             failed += 1;
         }
+        if matches!(planned.action, PlanAction::CreateRef)
+            && clips.for_id(&planned.note.id).is_some_and(|report| {
+                matches!(report.outcome, ClipOutcome::FailedPermanent { .. })
+            })
+            && !verified_ids.contains(planned.note.id.as_str())
+        {
+            failed += 1;
+        }
     }
     for (status, _) in archive_status.values() {
         if !status.is_success() {
@@ -1790,7 +1824,14 @@ fn print_human_report(
             continue;
         }
         if matches!(planned.action, PlanAction::CreateRef) {
-            print_human_ref_row(args, planned, clips, archive_status, styler);
+            print_human_ref_row(
+                args,
+                planned,
+                clips,
+                archive_status,
+                &verified_ids,
+                styler,
+            );
             continue;
         }
         // Write or revision.
@@ -1880,6 +1921,7 @@ fn print_human_ref_row(
         String,
         (ArchiveStatus, Option<String>),
     >,
+    verified_ids: &std::collections::BTreeSet<&str>,
     styler: &Styler,
 ) {
     let display = truncate_title(&report_display(planned));
@@ -1942,6 +1984,13 @@ fn print_human_ref_row(
             );
         }
         ClipOutcome::FailedPermanent { kind, .. } => {
+            if !verified_ids.contains(planned.note.id.as_str()) {
+                println!(
+                    "  {} {display}  clip failed ({kind}) · NOT written: verification failed",
+                    styler.red("✗"),
+                );
+                return;
+            }
             let suffix = archive_suffix("archived");
             println!(
                 "  {} {display}  clip failed ({kind}) · written as a task with a ⚠️ note{suffix}",

@@ -8,18 +8,19 @@ pub(crate) mod intent;
 pub(crate) mod policy;
 pub(crate) mod verdict;
 
-pub(crate) use intent::{
-    classify_token, display_url, is_url_list_line, RouteHint, UrlIntent,
-};
+pub(crate) use intent::{classify_token, is_url_list_line, UrlIntent};
 pub(crate) use policy::{
     normalize_exclude_host, RoutingEntry, UrlRoutingPolicy,
-    DEFAULT_EXCLUDE_HOSTS,
 };
 pub(crate) use verdict::{library_verdicts, LibraryVerdict, Verdict};
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::native::url_routing::{
+        intent::{display_url, RouteHint},
+        policy::DEFAULT_EXCLUDE_HOSTS,
+    };
 
     /// Smoke test over the module's re-exported phase API: the
     /// classifier, display form, list detection, policy defaults and

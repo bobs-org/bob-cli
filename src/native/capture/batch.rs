@@ -228,7 +228,9 @@ pub(super) fn plan_capture_to_target(
             ));
         }
         CaptureKind::Ref(_) => {
-            return Err(CaptureError::usage("reference items are not enabled"));
+            return Err(CaptureError::io(
+                "reference capture invariant failed: wrong write planner",
+            ));
         }
     };
     planner.stage(target, updated)?;

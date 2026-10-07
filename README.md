@@ -810,7 +810,7 @@ The full command contract lives in [`docs/plugins.md`](docs/plugins.md).
 ```bash
 bob gkeep [-a|--all] [-b|--bob-dir DIR] [-f|--format table|json] [-s|--source both|keep|vault]
 bob gkeep list [-a|--all] [-b|--bob-dir DIR] [-f|--format table|json] [-s|--source both|keep|vault]
-bob gkeep pull [-b|--bob-dir DIR] [-d|--dry-run] [-f|--format human|json] [-i|--id REF]... [-p|--include-pinned] [-S|--include-shared] [-l|--limit N] [-n|--no-archive] [-C|--no-commit] [-q|--quiet]
+bob gkeep pull [-b|--bob-dir DIR] [-d|--dry-run] [-f|--format human|json] [-i|--id REF]... [-p|--include-pinned] [-S|--include-shared] [-l|--limit N] [-n|--no-archive] [-C|--no-commit] [-q|--quiet] [-R|--no-ref]
 bob gkeep login [-e|--email EMAIL]
 bob gkeep doctor [-b|--bob-dir DIR] [-f|--format human|json]
 ```

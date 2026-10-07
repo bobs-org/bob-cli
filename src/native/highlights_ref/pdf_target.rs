@@ -50,8 +50,9 @@ pub(super) fn plan_local_pdf(
     title_override: Option<&str>,
     author_override: Option<&str>,
     published_override: Option<&str>,
+    progress: Option<&dyn Fn(&str)>,
 ) -> Result<PdfPlan> {
-    validate_pdf_file(source)?;
+    validate_pdf_file(source, progress)?;
     let file_stem = source
         .file_stem()
         .and_then(|stem| stem.to_str())
@@ -127,8 +128,9 @@ pub(super) fn plan_pdf_url(
     author_override: Option<&str>,
     published_override: Option<&str>,
     captured: &str,
+    progress: Option<&dyn Fn(&str)>,
 ) -> Result<PdfPlan> {
-    validate_pdf_file(downloaded)?;
+    validate_pdf_file(downloaded, progress)?;
     let stem = match name_override {
         Some(name) => validate_name(name)?,
         None => {
@@ -212,8 +214,9 @@ pub(super) fn plan_arxiv(
     metadata: Option<&ArxivMetadata>,
     downloaded: &Path,
     captured: &str,
+    progress: Option<&dyn Fn(&str)>,
 ) -> Result<PdfPlan> {
-    validate_pdf_file(downloaded)?;
+    validate_pdf_file(downloaded, progress)?;
     let stem = match name_override {
         Some(name) => validate_name(name)?,
         None => {
@@ -308,8 +311,13 @@ fn arxiv_fallback_stem(full_id: &str) -> String {
 }
 
 /// Validate a PDF file: size cap, loadable, at least one page, not
-/// encrypted. Files of 50 MiB or more print a warning.
-pub(super) fn validate_pdf_file(path: &Path) -> Result<()> {
+/// encrypted. Files of 50 MiB or more report a warning through
+/// `progress`; `None` drops it (ingest stays silent when it has no
+/// progress reporter, `bob ref create` passes an eprintln reporter).
+pub(super) fn validate_pdf_file(
+    path: &Path,
+    progress: Option<&dyn Fn(&str)>,
+) -> Result<()> {
     let bytes = fs::metadata(path)
         .map(|metadata| metadata.len())
         .unwrap_or(0);
@@ -320,12 +328,14 @@ pub(super) fn validate_pdf_file(path: &Path) -> Result<()> {
             path.display()
         )));
     }
-    if bytes >= PDF_WARN_BYTES {
-        eprintln!(
+    if bytes >= PDF_WARN_BYTES
+        && let Some(report) = progress
+    {
+        report(&format!(
             "warning: PDF is {} bytes (>= 50 MiB); vault sync may be slow: {}",
             bytes,
             path.display()
-        );
+        ));
     }
     let document = lopdf::Document::load(path).map_err(|error| {
         // `lopdf` reports junk magic as a parse error; surface it as a

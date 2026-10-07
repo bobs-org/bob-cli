@@ -71,13 +71,17 @@ pub(super) fn resolve_url_syntactic(
 }
 
 /// Fetch a generic URL into scratch and route it by status/content-type.
+///
+/// `progress` carries the `fetching …` line; `None` drops it (ingest
+/// stays silent, `bob ref create` passes a TTY-gated reporter).
 pub(super) fn fetch_and_route(
     url: WebUrl,
     scratch: &ScratchDir,
+    progress: Option<&dyn Fn(&str)>,
 ) -> Result<CreateSource> {
     let dest = scratch.path().join("download");
     let fetch =
-        fetch_url(&url.cleaned, &dest, 300).map_err(|error| {
+        fetch_url(&url.cleaned, &dest, 300, progress).map_err(|error| {
             match error.hint() {
                 Some(hint) => CommandError::new(format!(
                     "{}\nhint: {hint}",

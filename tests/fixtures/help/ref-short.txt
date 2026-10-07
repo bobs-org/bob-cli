@@ -8,7 +8,6 @@ Library:
   show  Show reference notes with metadata, annotations, and your own notes
 
 Highlights pipeline:
-  clip    Capture a web article URL into a Highlights intake PDF
   create  Create a Highlights-ready PDF from Markdown, a PDF, or a URL
   doctor  Check library health and Highlights sync prerequisites
   jobs    Queue and clip reading-queue links in the background
