@@ -14,11 +14,11 @@ when a consumer exists).
 `removeGlobalFilter: false`), so about 3,400 task lines start with an
 accent-colored `#task` tag pill. That pill repeats on almost every
 line and adds the most visual noise. Every exact `#task` tag on a
-task line renders as one small, faint, monochrome hash glyph instead:
+task line renders as one small teal identity hash glyph instead:
 
 ```text
 before: - [ ] #task Rename the queue input  ▮▮▮  + Sep 29  ⧗ today
-after:  - [ ] ⌗ Rename the queue input  ▮▮▮  + Sep 29  ⧗ today      (⌗ ≈ the faint hash glyph)
+after:  - [ ] ⌗ Rename the queue input  ▮▮▮  + Sep 29  ⧗ today      (⌗ ≈ the teal identity hash glyph)
         - [ ] Pack charger                                         (plain checklist: no glyph, unchanged)
 dash.md Tasks results:  - [ ] Rename the queue input  ▮▮▮  + Sep 29   (tasks_results = hide: tag dropped)
 ```
@@ -31,8 +31,9 @@ for editing.
 
 Display-only: the text `#task` stays the only stored form, and
 nothing writes the mark. Tasks, Dataview, bob-cli, and capture
-semantics are unchanged. Quietest mark in the family: it repeats on
-every task line, so it uses faint ink and no resting background. It
+semantics are unchanged. Small but distinct: it repeats on every
+task line, so it uses no pill or resting background, and one
+constant identity ink that never encodes state. It
 is truthful, never guessing: a mark appears only on exact, whole
 `#task` tags on task lines; anything else stays Obsidian's normal tag
 pill. It is reversible: the cursor or a click reveals the raw tag,
@@ -47,14 +48,55 @@ A Lucide-style hash keeps the tag affordance: you can see the tag is
 still there and still editable. It is drawn thin, slanted, and
 round-capped, so it reads as an icon rather than text. Geometry
 (viewBox `0 0 16 16`, stroked, used as a CSS mask, tunable ±0.3
-units): `stroke-width 1.6`, `stroke-linecap round`, path
+units): `stroke-width 1.8`, `stroke-linecap round`, path
 `M6.5 3 5.5 13M10.5 3 9.5 13M3.5 6.25h9M3.5 9.75h9`. The glyph is
 centered at (8, 8), with roughly square cells, and is about the
-height of a text `#`. CSS custom property, defined once on `body`:
+height of a text `#`. CSS custom properties, defined once on `body`:
 
 ```css
---bob-task-tag-glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.6' stroke-linecap='round'%3E%3Cpath d='M6.5 3 5.5 13M10.5 3 9.5 13M3.5 6.25h9M3.5 9.75h9'/%3E%3C/svg%3E");
+--bob-task-tag-glyph: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23000' stroke-width='1.8' stroke-linecap='round'%3E%3Cpath d='M6.5 3 5.5 13M10.5 3 9.5 13M3.5 6.25h9M3.5 9.75h9'/%3E%3C/svg%3E");
+--bob-task-tag-hue: color-mix(in srgb, var(--color-cyan, #00bfbc) 72%, var(--text-normal));
 ```
+
+## Ink
+
+The ink is one constant identity hue: a deep teal that means
+"tracked task" and nothing else. It never follows status, lane,
+priority, or freshness; that job stays with the checkbox and line
+tint. It never uses red, orange, yellow, green, or blue, and it
+stays legible on the red Blocked line tint.
+
+| Hue           | Already means                                                                              |
+| ------------- | ------------------------------------------------------------------------------------------ |
+| red           | Blocked (line tint, blocked chips)                                                         |
+| orange        | attention: due freshness, ROTTEN, repair flags, the Pending chip                           |
+| yellow        | In Progress (line tint, the half-ring progress mark)                                       |
+| green         | Next (line tint), fresh `✓ today`                                                          |
+| blue          | the Ready lane                                                                             |
+| violet accent | tags (`#prj`, `#gtd`, …) and links                                                         |
+| cyan          | inline code chips (`--inline-code-hue: var(--color-cyan)`)                                 |
+| grey          | priority and date marks, cancelled                                                         |
+
+Vault counts (2026-10-08): 3,406 `#task` lines, 2,934 closed, about
+470 open — mostly Blocked (`[?]`, 383 lines) on the red tint, plus
+Next (`[*]`, 19), In Progress (`[/]`, 7), and plain `[ ]` (63).
+656 `#task` lines carry another tag pill, usually `#prj` in the
+violet accent, beside the glyph.
+
+The chosen teal blends theme cyan toward the text color so it adapts
+to both themes: about `#0a9391` in light (about 3.8:1 on white, above
+the 3:1 non-text contrast floor) and a soft aqua of about `#79dedc`
+in dark. Teal complements the red Blocked tint, so it is crispest
+where most open `#task` glyphs sit, and it stands apart from the
+violet `#prj` pill. It shares a hue family only with inline code, a
+bordered monospace chip the glyph never reads as. Defined on `body`:
+
+```css
+--bob-task-tag-hue: color-mix(in srgb, var(--color-cyan, #00bfbc) 72%, var(--text-normal));
+```
+
+The theme hook `--bob-task-tag-color` is unset by default and still
+wins when set.
 
 ## Anatomy and tones
 
@@ -87,17 +129,17 @@ and unprefixed `mask-image: var(--bob-task-tag-glyph)`,
 `mask-position: center`, plus `print-color-adjust: exact` (and the
 `-webkit-` form) so PDF exports keep the glyph.
 
-| Situation                            | Ink (`--bob-task-tag-ink`)                     | Other                                                                                                                          |
-| ------------------------------------ | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| rest                                 | `var(--bob-task-tag-color, var(--text-faint))` | opacity 0.9                                                                                                                    |
-| hover                                | `var(--bob-task-tag-color, var(--text-muted))` | opacity 1; capsule `color-mix(in srgb, var(--text-muted) 10%, transparent)` (not `currentColor`: it is transparent here)       |
-| resting: closed task (`x`, `X`, `-`) | rest ink                                       | opacity 0.55, derived from the nearest `li.task-list-item[data-task]` / `.HyperMD-task-line[data-task]` like the priority mark |
+| Situation                            | Ink (`--bob-task-tag-ink`)                                                                        | Other                                                                                                                                                                  |
+| ------------------------------------ | ----------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| rest                                 | `var(--bob-task-tag-color, var(--bob-task-tag-hue))`                                            | opacity 0.9                                                                                                                                                            |
+| hover                                | `var(--bob-task-tag-color, var(--bob-task-tag-hue))`                                            | opacity 1; capsule `color-mix(in srgb, var(--bob-task-tag-ink) 14%, transparent)` on both hosts (not `currentColor`: it is transparent here)                            |
+| resting: closed task (`x`, `X`, `-`) | `color-mix(in srgb, var(--bob-task-tag-color, var(--bob-task-tag-hue)) 40%, var(--text-faint))` | opacity 0.75, derived from the nearest `li.task-list-item[data-task]` / `.HyperMD-task-line[data-task]` like the priority mark; wins on both hosts |
 
 Cursor: `default` on the Live Preview widget (as in the family) and
 `pointer` on the `a.tag` host (it is a link). Transitions (`opacity`,
 `background-color`, 120ms) are off under `prefers-reduced-motion`.
-The theme hook `--bob-task-tag-color` is unset by default. The mark
-ignores status accent colors (shape carries meaning; color whispers).
+The theme hook `--bob-task-tag-color` is unset by default. The ink
+is constant: it names what the line is, never its state.
 
 ## Tooltip
 
@@ -211,8 +253,14 @@ off, JS creates no marks.
 - **A dot or bullet**: it reads as a nested bullet. **A check icon**
   is redundant with the checkbox and clashes with done. **A filled
   tag silhouette** turns into a blob at 0.8em. **Lucide `list-todo`**
-  is too busy. **Accent or status hues** compete with the status line
-  tints.
+  is too busy.
+- **Ink**: faint grey (the 1.35.0 ink) is lost beside the grey
+  priority and date marks and near-invisible on closed lines;
+  status hues and blue would claim a state or the Ready lane;
+  orange means attention and repair; pink and orchid turn muddy on
+  the Blocked tint and read as a near-miss beside violet pills;
+  the theme tag accent makes the mark read as one more tag pill
+  beside `#prj`.
 - **Replacing `a.tag` with a new span in rendered views**: this loses
   native tag search, copy text, and robustness to re-renders.
 - **A glyph in Tasks results**: it would be a column of identical
@@ -268,8 +316,12 @@ Rendered views (fake DOM in tests):
 
 ## Live verification (Bryan, in Obsidian)
 
-- The glyph looks right beside the checkbox in light and dark
-  themes.
+- The teal ink reads clearly yet stays secondary to the title in
+  light and dark themes.
+- The ink stays legible on Blocked (red tint), Next (green tint),
+  and In Progress (yellow tint) lines, and sits well beside a
+  `#prj` pill.
+- The hover capsule appears in both Live Preview and reading view.
 - Plain checkboxes show no glyph.
 - The cursor or a click reveals `#task`, and typing `#task` stays raw
   until the space.
@@ -280,7 +332,7 @@ Rendered views (fake DOM in tests):
   clicking it opens the `#task` tag search.
 - `dash.md` Tasks results show no tag.
 - The toggle restores pills everywhere and back again.
-- Closed tasks rest.
+- Closed tasks show a faint ghost of the hue (reading view and Live Preview).
 - The glyph sits cleanly with the priority, date, and fresh marks on
   one line.
 - Mobile (iOS) renders it.
