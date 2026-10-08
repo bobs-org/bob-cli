@@ -176,8 +176,9 @@ separate steps:
 1. **Capture** with `bob capture` or Bob Mac Capture (the macOS panel that
    calls the same commands). Tasks land in `mac_inbox.md` unless an `@route`
    token sends them to another note; scheduled checkbox-bearing captures start
-   Blocked (`[?]`). A bare link queues for the reading queue instead
-   (`-R` keeps it a task).
+   Blocked (`[?]`). A bare public link queues a background clip
+   (`-R` keeps it a task). The confirmation says reading queue; `bob ref list`
+   shows the note after `bob ref scan`.
 2. **Review and choose work** with the read-only reports `bob plan`,
    `bob freshness`, and `bob ready`; confirm or revise due tasks in Obsidian.
    After time away, preview the overdue backlog with
@@ -235,7 +236,7 @@ Bob's workflow commands are:
 
 | Command | Purpose |
 | --- | --- |
-| [`capture`](#capture) | Capture tasks, bullets, or reading-queue links; manage Pomodoro sessions |
+| [`capture`](#capture) | Capture tasks, bullets, or bare public links; manage Pomodoro sessions |
 | [`freshness`](#task-freshness) | Walk the tiered freshness review queue |
 | [`plan`](#plan-budget) | Show today's plan budget, Today's tasks, and the NEXT/PENDING lanes |
 | [`pomodoro`](#pomodoro) | Show Pomodoro status, print the tmux line, or notify on completion |
@@ -261,7 +262,7 @@ Bob's workflow commands are:
 
 | Command | Purpose |
 | --- | --- |
-| [`gkeep`](#gkeep) | Drain the Google Keep inbox into tasks or reading-queue references |
+| [`gkeep`](#gkeep) | Drain the Google Keep inbox into tasks or inline reference clips |
 
 ### Setup
 
@@ -300,13 +301,16 @@ Old top-level spellings remain permanent silent aliases; see
 bob capture [OPTIONS] [--] [TEXT]...
 ```
 
-Captures tasks, ordinary Markdown bullets, task sub-bullets, or reading-queue
-links without opening desktop Obsidian. Tasks default to `mac_inbox.md`;
-an eligible bare public URL queues a background reference job instead. Use
-`-R, --no-ref` to keep a link as an inbox task. Extra prose or an explicit
-destination also keeps it a task; the routing policy excludes `google.com`,
-`googleplex.com`, `youtube.com`, `youtu.be`, `github.com`, `x.com`,
-`twitter.com`, and their subdomains by default. See
+Captures tasks, ordinary Markdown bullets, task sub-bullets, or bare public
+links without opening desktop Obsidian. Tasks default to `mac_inbox.md`.
+An eligible bare public URL queues a background reference job. The
+confirmation says the link is queued for the reading queue; the note appears
+in `bob ref list` after `bob ref scan`. Use `-R, --no-ref` to keep a link as
+an inbox task. Extra prose or an explicit destination also keeps it a task.
+Hosts without a dot (`http://go/x`, `localhost`), IP literals, and the
+default excluded hosts (`google.com`, `googleplex.com`, `youtube.com`,
+`youtu.be`, `github.com`, `x.com`, `twitter.com`, and their subdomains) stay
+tasks. See
 [saving links](docs/capture.md#saving-links-to-your-reading-queue).
 
 `TEXT` may be several physical lines: each item’s first nonblank line is the
@@ -335,7 +339,7 @@ typed on that same item. The whole batch is planned before anything is written.
 | `+query` or terminal prose `+` | Parent-task picker over the same task catalog; accepting inserts `@route+id` |
 | `&note:id` | Add a prerequisite to the captured task; `&projects/foo:bar` supports nested notes, and `&"Shopping List":bar` supports spaces |
 | `&note:id @route+id` with no body text | Add a prerequisite to an existing dependent task |
-| `!note:id` with no other text | Complete an existing task, retire its Task Links, and recover eligible blocked dependents; nested paths and quoted note names are supported |
+| `!note:block-id` with no other text | Complete that existing open task. Quote `!` on shells that history-expand it (`bob capture '!sase:fix-flaky'`). Nested paths and quoted note names work (`!projects/foo:bar`, `!"Shopping List":milk`). Pomodoro Task Links to the completed task are retired. A Blocked dependent returns to Ready when it names that task directly, has no other open dependency, and has no future scheduled date |
 | `+[N]` / `-[N]` | Adjust today's current timed Pomodoro by N five-minute units (`+5` extends 25m, `-` shortens 5m; the count defaults to 1); the item must contain only the signed count |
 | `++[N]` / `--[N]` | Shift today's running timed Pomodoro N five-minute units later/earlier, keeping its duration (`++3` moves 15m later, `--` moves 5m earlier; the count defaults to 1); the item must contain only the operator |
 | `=` / `=<X>` | Start today's next future Pomodoro now with `se<X>` timing (`=` is 25 minutes, `=3` is 15 minutes); the item must contain only the start token (quote in zsh) |
@@ -824,11 +828,13 @@ bob gkeep login [-e|--email EMAIL]
 bob gkeep doctor [-b|--bob-dir DIR] [-f|--format human|json]
 ```
 
-Imports Google Keep inbox notes into `gkeep_inbox.md` as Obsidian tasks;
-eligible URL-only notes become reference PDFs in the reading queue instead.
-URL imports clip inline during `pull`, while `bob capture` queues a background
-job. `pull -R` keeps links as tasks. Each note is archived in Keep only after
-its current content is verified in the vault (unless `--no-archive`).
+Imports Google Keep inbox notes into `gkeep_inbox.md` as Obsidian tasks.
+Eligible URL-only notes are clipped inline to intake PDFs during `pull`;
+`bob ref scan` writes the notes `bob ref list` shows. `bob capture` queues
+the same kind of link as a background job instead. `pull -R` keeps links as
+tasks. Each note is archived in Keep only after its current content is
+verified in the vault (unless `--no-archive`). A pull that only clips skips
+the inbox write and the Git commit.
 Running `bob gkeep` with no subcommand runs `list`: Keep notes
 and vault tasks side by side with per-note pull states. `pull -d` previews
 the exact Markdown, `pull -n` writes without archiving, and `pull` writes,
@@ -874,8 +880,11 @@ its note. `bob ref clip` remains a hidden alias of `create`.
   target gains the episode as `xlib/<rel>.mp3` for `scan` to pair. Intake
   targets still go through `scan`; a PDF written directly into the library is
   also found by `scan`; a PDF outside both directories needs
-  `bob ref sync <PDF>`. Web articles need `uv` and Chrome/Chromium; on Linux,
-  Xvfb enables headed retries for bot-protected sites. `-H, --html` replays a
+  `bob ref sync <PDF>`. Web articles need `uv` and a browser: Google Chrome
+  at its usual install path, Playwright's bundled Chromium, or `BOB_CHROME`.
+  A separately installed Chromium package is used when `BOB_CHROME` points
+  at it. On Linux, Xvfb enables headed retries for bot-protected sites; on
+  macOS the retry uses an off-screen window. `-H, --html` replays a
   saved page. A URL recorded by a PDF-backed library note refuses ordinary
   creation even with `--force`; `--force` can replace the same intake target.
   A URL recorded only by notes without a Highlights PDF warns and captures a
@@ -1068,11 +1077,14 @@ The documented workflows use these external-tool integrations:
 - `curl` for `bob ref create` PDF URL and arXiv targets; override with
   `BOB_HIGHLIGHTS_CURL`
 - `sase-listen` for `bob ref create --listen`, configured as `highlights.listen_command`
-- `uv` plus Google Chrome or Chromium (or `BOB_CHROME`) for
-  `bob ref create` web article targets: `uv` fetches Python ≥3.10 and the pinned Playwright,
-  Pillow, and nh3 on first run (override the whole spawn with
-  `BOB_WEB_CLIP_ADAPTER`); on Linux, `Xvfb` lets it retry bot-protected sites
-  headed
+- `uv` plus a browser for `bob ref create` web article targets. `uv` fetches
+  Python ≥3.10 and the pinned Playwright, Pillow, and nh3 on first run
+  (override the whole spawn with `BOB_WEB_CLIP_ADAPTER`). Discovery uses
+  Google Chrome at `/opt/google/chrome/chrome`, `/usr/bin/google-chrome`,
+  `/usr/bin/google-chrome-stable`, or the macOS Google Chrome app, then
+  Playwright's bundled Chromium. Set `BOB_CHROME` to another executable,
+  including a system Chromium package. On Linux, `Xvfb` lets it retry
+  bot-protected sites headed; on macOS the retry uses an off-screen window
 - `bash` for the embedded shell fallback and for sourcing
   `~/.ssh-agent-thing`; the Pomodoro shell fallback additionally uses `perl`
 - `uv` for `bob gkeep`: it fetches Python ≥3.10 and the pinned `gkeepapi` on
@@ -1095,8 +1107,9 @@ by `bob vault-sync`. The default is
 `$XDG_STATE_HOME/bob-cli/vault-sync.json`, or
 `$HOME/.local/state/bob-cli/vault-sync.json` when `XDG_STATE_HOME` is unset.
 
-`BOB_CHROME` sets the Chrome or Chromium executable the `bob ref create`
-web-article adapter launches instead of auto-discovering one.
+`BOB_CHROME` sets the browser executable the `bob ref create` web-article
+adapter launches. When it is unset, discovery tries the Google Chrome paths
+above, then Playwright's bundled Chromium.
 
 `BOB_CLI_USE_SCRIPT=1` selects an embedded shell implementation where one is
 available. See [Compatibility shims](#compatibility-shims) for the exact command

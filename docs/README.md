@@ -26,7 +26,7 @@ then creates the notes that `bob ref list` shows. The
 | [date-marks.md](date-marks.md) | Task date marks: calendar-label display contract for canonical task dates |
 | [freshness.md](freshness.md) | Task freshness: review lease, placement, evaluation, and conformance vectors |
 | [getting-started.md](getting-started.md) | Vault requirements, first capture/session, command effects, and troubleshooting |
-| [gkeep.md](gkeep.md) | `bob gkeep` Keep inbox drain into tasks or reading-queue references |
+| [gkeep.md](gkeep.md) | `bob gkeep` Keep inbox drain into tasks or inline reference clips |
 | [highlights-clip.md](highlights-clip.md) | Web article capture (`bob ref create <URL>`) into Highlights intake PDFs |
 | [highlights-create.md](highlights-create.md) | `bob ref create` Markdown, PDF, and URL targets |
 | [highlights-ref-sync.md](highlights-ref-sync.md) | `bob ref` PDF intake and reference notes |

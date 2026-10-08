@@ -1,8 +1,9 @@
 # Bob Gkeep
 
-`bob gkeep` drains the Google Keep inbox into Obsidian tasks or reading-queue
-references. Ordinary notes become tasks in `gkeep_inbox.md`; eligible URL-only
-notes are imported as reference PDFs instead. Each note is archived in Keep
+`bob gkeep` drains the Google Keep inbox into Obsidian tasks or inline
+reference clips. Ordinary notes become tasks in `gkeep_inbox.md`. An eligible
+URL-only note is clipped to an intake PDF during `pull`; `bob ref scan`
+writes the note that `bob ref list` shows. Each note is archived in Keep
 only after its current content is verified in the vault. Typical order:
 `bob gkeep` (or `bob gkeep list`) to see Keep and the vault side by side,
 `bob gkeep pull -d` to preview the exact Markdown, `bob gkeep pull -n` to
@@ -180,7 +181,7 @@ content-guarded archive, journal append.
 `-d, --dry-run` prints the exact Markdown a pull would write and changes
 nothing. `-n, --no-archive` writes and verifies but leaves notes in Keep.
 `-C, --no-commit` skips the vault Git commit. `-R, --no-ref` keeps URL-only
-notes as inbox tasks instead of clipping them for the reading queue.
+notes as inbox tasks instead of clipping them to intake PDFs.
 `-q, --quiet` prints only errors. `-l, --limit N` takes the first N
 actionable notes, oldest first.
 A per-host pull lock serializes concurrent pulls (exit 1 when held); dry runs
@@ -191,7 +192,9 @@ take no lock.
 A note that holds exactly one bare public link and nothing else — an empty
 title with a link body, an empty body with a link title, a title equal to
 the link, or a page title equal to the shared-link preview title — is
-clipped into the reading queue instead of becoming a task. Lists, notes
+clipped inline to an intake PDF instead of becoming a task. Pull messages
+still say `reading queue`; that means the link was accepted for import.
+The note joins `bob ref list` after `bob ref scan`. Lists, notes
 with attachments, shared notes (even with `-S`), multi-link or
 link-plus-prose notes, corporate short links, IP literals, and
 `highlights.url_routing.exclude_hosts` entries stay tasks. Pinned notes
@@ -206,17 +209,19 @@ sequentially through the same ingest as `bob ref create`, announced as
 | `created` | A fresh intake PDF was clipped | `ref_created` at once | Archived |
 | `already_in_library` | A PDF-backed ref note already records the link | `ref_created` at once | Archived |
 | `already_queued` | An intake PDF is already queued | `ref_created` at once | Archived |
-| `failed_retryable` | Network, timeout, browser, or dependency failure | None | Left in Keep; exit 1 |
-| `failed_permanent` | Blocked, thin, render, or content failure | None | Written as a task with a ⚠️ child, then archived |
+| `failed_retryable` | Network, timeout, browser, or dependency failure, or HTTP 408, 429, or 5xx | None | Left in Keep; exit 1 |
+| `failed_permanent` | Blocked, thin, render, unsupported content, collision, invalid URL, internal failure, or any other HTTP status | None | Written as a task with a ⚠️ child, then archived |
 
 A retryable failure leaves the note in Keep for the next pull and counts
 toward `summary.failed`. A permanent failure renders exactly as today with
 `⚠️ Clip failed (<kind>): <message> · retry: bob ref create <url>` as a
 child just before the `Source:` line. A pull whose notes all clip needs no
-`gkeep_inbox.md` and takes no vault lock. `pull -d` never clips: it shows
-`would clip → reading queue` rows (with the offline library verdict for
-library hits) followed by `N links would be clipped into the reading queue`,
-and the Markdown section excludes URL-only notes. `list` marks notes a pull
+`gkeep_inbox.md`, takes no vault lock, and skips the Git commit. `pull -d`
+still contacts Keep to snapshot notes, then stops: it does not clip, write
+the vault, or archive. It shows `would clip → reading queue` rows (with
+the offline library verdict for library hits) followed by
+`N links would be clipped into the reading queue`, and the Markdown section
+excludes URL-only notes. `list` marks notes a pull
 would clip with a `🔗 ref` hint.
 
 The Archive column assumes archiving is enabled; `-n, --no-archive` keeps

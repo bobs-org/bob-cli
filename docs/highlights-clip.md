@@ -46,10 +46,13 @@ plus the episode instead.
    `source_url`.
 2. The URL is deduped against scalar ref-note `source_url` (and legacy
    `url:`) values and queued intake PDFs. A PDF-backed ref-note hit refuses
-   even with `--force`; that flag can overwrite the same intake target.
-   A URL recorded only by notes without a Highlights PDF warns and captures
-   a fresh copy. URL lists are indexed by `ref find` but currently missed by
-   import deduplication.
+   even with `--force`; that flag can overwrite the same intake target when
+   the planned path matches. A URL recorded only by notes without a
+   Highlights PDF warns (`already in the library as <path>, a note without a
+   Highlights PDF; capturing a fresh copy`) and captures a fresh copy.
+   Import deduplication keeps only string scalars. A YAML list, including a
+   one-element flow list (`url: [https://example.com/a]`) or a block list,
+   is indexed by `ref find` and missed by this import check.
 3. The pinned adapter fetches the page, extracts the article in reader
    mode, and renders a Bob-owned print template to PDF.
 4. The PDF is stamped with a page-1 marker (`status`, `parent`, `title`,
@@ -91,7 +94,7 @@ is skipped.
 | Variable                    | Meaning                                                              |
 | --------------------------- | -------------------------------------------------------------------- |
 | `BOB_WEB_CLIP_ADAPTER`      | Replaces the adapter invocation (test seam)                          |
-| `BOB_CHROME`                | Chrome/Chromium executable the adapter launches instead of discovery |
+| `BOB_CHROME`                | Browser executable the adapter launches instead of discovery. Discovery itself tries Google Chrome at the usual Linux and macOS paths, then Playwright's bundled Chromium |
 | `BOB_WEB_CLIP_TIMEOUT_SECS` | Overall adapter timeout in seconds (default 300)                     |
 | `BOB_WEB_CLIP_KEEP_WORKDIR` | `1` keeps the scratch directory for debugging and prints its path    |
 
@@ -123,7 +126,7 @@ ref scan` writes the new one. A dry run adds
 | --------------------- | -------------------------------------------------------------------- |
 | `blocked`             | Challenge or login wall; rerun headed, or pass `--html FILE`         |
 | `thin`                | Extraction too small; retry with `--html`, or not an article         |
-| `browser`             | No usable browser; install Chrome or set `BOB_CHROME`                |
+| `browser`             | No usable browser. The hint is `install Google Chrome or set BOB_CHROME=/path/to/chrome`. A system Chromium package needs `BOB_CHROME` |
 | `network`             | DNS, TLS, HTTP, or private-network refusal                           |
 | `timeout`             | Capture took too long; raise `BOB_WEB_CLIP_TIMEOUT_SECS`             |
 | `unsupported_content` | Non-HTML, non-PDF content                                            |

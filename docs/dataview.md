@@ -296,14 +296,19 @@ they do not make otherwise successful read-only smoke queries fail.
 Tasks queries use the vault's Tasks settings and local Markdown index; they
 do not require Obsidian or a separate JavaScript runtime. Ordinary filters,
 sorts, groups, and dependency queries run without building a JavaScript
-sandbox, including `--tasks-note` blocks and configured global queries.
+sandbox.
 
-`filter by function`, `sort by function`, and `group by function` instructions
-run in an embedded QuickJS sandbox with Moment date support. A Boolean filter
-containing `filter by function` also enables the sandbox. Expressions have a
-two-second execution budget; initialization gets a separate budget that
-scales with the number of indexed tasks. Prefer standard filters for simple
-queries, and narrow expensive JavaScript expressions when a query times out.
+`filter by function`, `sort by function`, and `group by function` run in an
+embedded QuickJS sandbox with the vendored Moment library. A Boolean
+expression that contains one of those instructions also enables the sandbox.
+The same check applies to a `--tasks-note` block, a query-file default, and
+the configured global query. Those instructions are merged into the query,
+so a global query of `filter by function …` builds the sandbox even when
+the typed query is an ordinary filter. Each expression has a 2-second budget.
+Initialization has its own budget: 10 seconds plus 5 milliseconds per
+indexed task, capped at 120 seconds. The sandbox does not load desktop
+plugins and is not DataviewJS. Prefer standard filters for simple queries,
+and narrow expensive JavaScript expressions when a query times out.
 
 For example, the ordinary status filter and a custom expression use the same
 Tasks registry:
@@ -313,11 +318,9 @@ bob query --tasks 'status.type is IN_PROGRESS'
 bob query --tasks 'filter by function task.status.type === "IN_PROGRESS"'
 ```
 
-The sandbox supplies Tasks query/task context and Moment; it does not load
-desktop Bob plugins or provide a general DataviewJS environment. Queries
-depending on desktop-only plugin helpers can omit tasks or fail headlessly;
-use `bob freshness` and `bob plan` for Bob's supported review and ledger
-reports.
+Queries that depend on desktop-only plugin helpers can omit tasks or fail
+headlessly. Use `bob freshness` and `bob plan` for Bob's supported review
+and ledger reports.
 
 ## Native Dataview queries
 

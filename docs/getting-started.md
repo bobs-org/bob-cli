@@ -212,47 +212,57 @@ intervals. `p:1`–`p:4` capture and `bob task reroll` also require the
 
 ## Save and read references
 
-Bob's reference pipeline has three stages: capture a PDF into `xlib/`, scan it
-into `lib/` and a note under `ref/`, then inspect or read that note. A bare
-link capture handles the first stage in a background job:
+Bob's reference pipeline has three stages: clip a PDF into `xlib/`, scan it
+into `lib/` and a note under `ref/`, then read that note. A bare link capture
+handles the first stage in a background job. The success line says
+`queued … → reading queue` as soon as the job is saved. `bob ref list`'s
+reading queue is the later note, after `bob ref scan`.
 
 ```bash
 bob capture --dry-run 'https://example.com/article'
 bob capture 'https://example.com/article'
 bob ref jobs
+bob ref find 'https://example.com/article' --include-intake
 ```
 
-The preview reads local state and writes nothing. The submit queues the job;
-the worker fetches the link independently of the capture process. Eligible
-URLs contain no extra prose or capture markers. Short internal links, IP addresses, and the
-default excluded hosts (`google.com`, `googleplex.com`, `youtube.com`,
-`youtu.be`, `github.com`, `x.com`, `twitter.com`, and their subdomains) stay
-tasks. Use `--no-ref` for a task, or configure the
+The capture preview reads local state and writes nothing. The submit queues
+the job; the worker fetches the link independently of the capture process.
+`bob ref jobs` shows that job. While the PDF is still in `xlib/`,
+`find --include-intake` can locate it. After the scan moves it, plain
+`bob ref find` finds the note.
+
+Eligible URLs are the whole capture item: no extra prose and no capture
+markers. Hosts without a dot, such as `http://go/x` and `localhost`, IP
+literals, and the default excluded hosts (`google.com`, `googleplex.com`,
+`youtube.com`, `youtu.be`, `github.com`, `x.com`, `twitter.com`, and their
+subdomains) stay tasks. Use `--no-ref` for a task, or configure the
 [URL routing policy](ref.md#url-routing).
 
-When the job reports `clipped`, preview and run the scan, then inspect the
+When the job's state is `clipped`, preview and run the scan, then open the
 reading queue:
 
 ```bash
 bob ref scan --dry-run
 bob ref scan
 bob ref list
-bob ref find 'https://example.com/article' --include-intake
 ```
 
-`scan` processes the configured intake and library, so review its preview
-before writing. Pending jobs and intake PDFs are absent from `ref list` until
-they have a reference note. `find --include-intake` can locate a PDF awaiting
-scan; `ref jobs` reports a link still being fetched. If background capture
-fails, the worker writes the link as an inbox task with a warning and retry
-command. See [ref jobs](ref-jobs.md) for recovery.
+`scan` previews the whole configured library, so review that preview before
+writing. Pending jobs and intake PDFs stay out of `ref list` until the scan
+creates a reference note. The human and JSON job state for a finished clip is
+`clipped`; the `done.jsonl` record stores `outcome: created`. If background
+capture fails, the worker writes the link as an inbox task with a warning and
+retry command. See [ref jobs](ref-jobs.md) for recovery.
 
 For a local PDF, Markdown report, or immediate URL import, use
-`bob ref create <TARGET>`; it completes the import inline. Run `bob ref doctor`
-to check dependencies. Local PDFs are stamped as-is; Markdown needs pandoc,
-XeLaTeX, fonts, and LaTeX packages; web articles need `uv` and a browser.
-See the [target guide](highlights-create.md). Lookup commands require the
-configured `ref/` directory to exist.
+`bob ref create <TARGET>`; it completes the import inline and does not use
+the job spool. Run `bob ref doctor` to check dependencies. Local PDFs are
+stamped as-is; Markdown needs pandoc, XeLaTeX, DejaVu fonts, and LaTeX
+packages; web articles need `uv` and a browser. `bob ref create --dry-run`
+skips installing the final PDF, and a web article, PDF URL, or arXiv target
+still contacts the network. Use `bob capture --dry-run` for an offline link
+preview. See the [target guide](highlights-create.md). Lookup commands
+require the configured `ref/` directory to exist.
 
 To read a note's annotations and your own comments, use its path or an exact
 identifier returned by `find` or `list`:
@@ -270,13 +280,13 @@ The path above is illustrative; use the actual note path Bob reports.
 | --- | --- |
 | `query`, `plan`, `ready`, `freshness list`, capture discovery/parse/complete, `projects list` | Read local vault state |
 | `ref find`, `ref list`, `ref show`, `ref jobs [list]`, `ref migrate-zorg` without `--write` | Inspect local references, jobs, or a migration plan without vault writes |
-| `capture`, `capture-task-id`, `capture-pomodoro-name`, `projects sync`, `task reconcile`, `freshness seed` | Write vault notes; bare reference links queue jobs that later write intake PDFs or fallback tasks; preview with `--dry-run` where offered |
+| `capture`, `capture-task-id`, `capture-pomodoro-name`, `projects sync`, `task reconcile`, `freshness seed` | Write vault notes; a bare public link queues a job that later writes an intake PDF or a fallback task; `capture --dry-run` is offline |
 | `vault-sync`, `nightly` | Reconcile the vault with Git, including commits, merges, and pushes |
 | `task archive` | Archive task blocks and repair links; in a Git vault, commit touched files and push |
 | `task reroll` | Re-roll schedules; in a Git worktree, sync before/after and commit rewritten notes; `--offline` skips sync but still commits locally |
 | `plugins list`, `plugins sync` | Pull the plugin source repo by default, including for `sync --dry-run` (`--no-pull` skips); `sync` deploys plugin assets with backups |
-| `gkeep list`, `gkeep pull` | Contact Keep; `pull` writes tasks or reference PDFs, commits task writes in a Git worktree unless `--no-commit`, then archives verified Keep notes unless `--no-archive`; `pull --dry-run` still contacts Keep |
-| `ref create`, `ref scan`, `ref sync` | Write PDFs/reference notes; writing scans can run a configured pre-scan hook |
+| `gkeep list`, `gkeep pull` | Contact Keep; `pull` writes inbox tasks or intake PDFs, commits the Keep inbox note when tasks were written unless `--no-commit`, then archives verified Keep notes unless `--no-archive`; a clips-only pull skips that commit; `pull --dry-run` still contacts Keep and does not clip |
+| `ref create`, `ref scan`, `ref sync` | Write PDFs and reference notes inline; `create --dry-run` still downloads or opens URL targets; writing scans can run a configured pre-scan hook |
 | `ref jobs run` | Fetch queued links for their stored destination vaults; write intake PDFs or fallback inbox tasks |
 | `ref migrate-zorg --write` | Copy legacy reading records into `ref/zorg/` and commit them; sync before and after unless `--offline` |
 | `completion install`, `completion uninstall` | Change shell adapter files and the completion manifest |
@@ -297,8 +307,8 @@ Follow the [Git sync runbook](vault-git-sync.md) before enabling maintenance.
 | Hooks refuse a Blocked transition | The Tasks registry's `?` status must match the required definition |
 | A native query using plugin-dependent dashboard filters omits tasks | Native queries do not load desktop Bob plugins; use `bob freshness` for the headless review queue |
 | A captured link is absent from `ref list` | Inspect `bob ref jobs`; a clipped intake PDF needs `bob ref scan` before it has a note |
-| A link stays a task | Extra prose, markers, children, a forced destination, `--no-ref`, an excluded host, or routing disabled in config |
-| Markdown PDF creation fails | Check the `pandoc`, `xelatex`, and `latex_packages` rows in `bob ref doctor`, plus the required fonts |
+| A link stays a task | Extra prose, markers, children, a forced destination, `--no-ref`, a host without a dot, an IP address, an excluded host, or routing disabled in config |
+| Markdown PDF creation fails | Check the `pandoc`, `xelatex`, and `latex_packages` rows in `bob ref doctor`. Missing packages produce one `tlmgr install` line in the warnings section. Doctor does not check fonts; install DejaVu Serif, DejaVu Sans, and DejaVu Sans Mono when XeLaTeX cannot find them |
 
 Use `bob <command> --help` for accepted options and the [guide index](README.md)
 for detailed behavior, output formats, and recovery steps.

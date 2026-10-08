@@ -50,27 +50,41 @@ full reference-import toolchain.
 | --- | --- |
 | Local PDF | No external renderer; Bob stamps the PDF directly |
 | PDF URL or arXiv | `curl` for downloads |
-| Web article | `curl` for initial URL classification (skipped with `--html`), `uv` for the pinned Python adapter, and Chrome/Chromium for rendering; Xvfb on Linux for headed retries |
-| Markdown | `pandoc`, `xelatex`, the LaTeX packages below, and DejaVu Serif, Sans, and Sans Mono fonts |
+| Web article | `curl` for initial URL classification (skipped with `--html`), `uv` for the pinned Python adapter, and a browser: Google Chrome at `/opt/google/chrome/chrome`, `/usr/bin/google-chrome`, `/usr/bin/google-chrome-stable`, or the macOS Google Chrome app, then Playwright's bundled Chromium. Set `BOB_CHROME` for any other executable, including a system Chromium package. Headed retries use Xvfb on Linux and an off-screen window on macOS |
+| Markdown | `pandoc`, `xelatex`, the LaTeX packages below, and DejaVu Serif, DejaVu Sans, and DejaVu Sans Mono (`mainfont`, `sansfont`, and `monofont`) |
 | Any target with `--listen` | A configured `highlights.listen_command` that writes the requested MP3 |
 
 Run `bob ref doctor` to inspect the current host. Its `pandoc`, `xelatex`, and
 `latex_packages` rows diagnose Markdown rendering. A missing renderer or
 package is a warning rather than a fatal doctor error because other target
-types can still work. The package check uses `kpsewhich` and prints a
-`tlmgr install ...` command for any missing packages; run that command using
-the TeX Live installation that provides your `xelatex`.
+types can still work. The package check runs `kpsewhich` from beside
+`xelatex` when that copy exists, otherwise `kpsewhich` on `PATH`. The status
+row names the missing files (`latex_packages: warn (missing …)`). The
+warnings section prints one combined `tlmgr install …` line for every missing
+package; run that command with the TeX Live installation that provides your
+`xelatex`. A later render failure can also hint at a single missing package.
 
 Bob's headers require `fvextra`, `lineno`, `upquote`, `needspace`, and `pgf`
-(TikZ). Doctor also checks the packages used by pandoc's LaTeX template,
-including table and image support. Font discovery is separate from the
-package check; if XeLaTeX cannot find DejaVu fonts, install them for the host's
-font system before retrying.
+(`tikz.sty`). Doctor also checks the packages used by pandoc's LaTeX template,
+including table and image support. Doctor does not check whether the DejaVu
+fonts are installed. If XeLaTeX cannot find DejaVu Serif, DejaVu Sans, or
+DejaVu Sans Mono, install them for the host's font system before retrying.
 
-`--dry-run` plans the import without installing the final PDF or audio, but
-URL targets can still be downloaded or inspected to derive the route and
-metadata. It is not an offline preview. Use `bob capture --dry-run '<URL>'`
-to preview automatic URL routing using only local state.
+`--dry-run` plans the import and skips installing the final PDF and audio.
+What it still does depends on the target:
+
+| Target | During `--dry-run` |
+| --- | --- |
+| Local PDF | Reads the local file and prints the plan. No renderer runs |
+| Markdown | Returns before pandoc and XeLaTeX run |
+| PDF URL | Downloads the PDF with `curl`, then prints the plan |
+| arXiv | Downloads the API metadata and the PDF, then prints the plan |
+| Web article | Launches the browser and loads the page. Image localization and the PDF write are skipped |
+| Web article with `--html` | Skips the `curl` classification fetch, launches the browser in html-file mode, and loads the page. Image localization and the PDF write are skipped |
+
+URL targets still use the network during `--dry-run`. Use
+`bob capture --dry-run '<URL>'` to preview automatic URL routing from local
+state only.
 
 ## Targets
 

@@ -19,15 +19,18 @@ plans copies of zorg-era `status::` reading records into legacy notes under
 | See what remains to read | `bob ref list` | Read queued and started reference notes |
 | Read annotations and your notes | `bob ref show <note-path>` | Read one exact reference; `-c` selects commented annotations |
 | Import a URL, local PDF, or Markdown file now | `bob ref create <TARGET>` | Write an intake PDF inline; see [target types](highlights-create.md) |
-| Save a bare public link quickly | `bob capture '<URL>'` | Queue a background job when the routing policy admits the URL |
+| Save a bare public link quickly | `bob capture '<URL>'` | Queue a background job when the routing policy admits the URL; the note appears in `ref list` after `bob ref scan` |
 | Inspect or process background imports | `bob ref jobs`, `bob ref jobs run` | List jobs, or fetch pending links; see [ref jobs](ref-jobs.md) |
 | Turn intake PDFs into library notes | `bob ref scan --dry-run`, then `bob ref scan` | Preview, then move intake PDFs and sync notes/annotations |
 | Diagnose prerequisites and library health | `bob ref doctor` | Check paths, tools, routing policy, jobs, and index diagnostics |
 | Bring old reading records into the index | `bob ref migrate-zorg`, then `--write` | Preview, then create and commit legacy notes; see [migration](#migrating-zorg-era-records-bob-ref-migrate-zorg) |
 
-`--dry-run` prevents final PDF/reference-note writes; URL creation can still
-download or inspect the source. For an offline link preview, use
-`bob capture --dry-run '<URL>'`.
+`bob ref create --dry-run` skips installing the final PDF and audio. A local
+PDF or Markdown file stays local: Markdown returns before pandoc runs. A PDF
+URL is downloaded, and an arXiv target downloads both the metadata and the
+PDF, before the dry-run report. A web article, including `--html`, launches
+the browser and loads the page, then skips image localization and the PDF
+write. For an offline link preview, use `bob capture --dry-run '<URL>'`.
 
 The reading queue is derived from notes under `ref/`. A pending capture job or
 an intake PDF under `xlib/` does not appear in `ref list` until a scan creates
@@ -176,8 +179,12 @@ Human output groups rows under one heading per reading state with its
 count (pre-cap totals), with the status chip, row date (or `—`), title,
 `♫` when audio is bound, type, and a dim path; the path drops first on
 narrow terminals, then titles truncate. A pending-sync `*` (dimmed) gets
-a footnote. Without `-s`, legacy-era rows collapse to one dim summary line
-instead of listing. The cap applies to the rows that are listed;
+a footnote. Without `-s`, legacy-era rows collapse to one dim summary line,
+`+ N zorg-era legacy notes hidden (…) · show them with -s legacy`, instead
+of listing. Any `-s` value turns that collapse off and also filters to the
+named statuses, so `-s legacy` is the view that lists those notes. JSON and
+Markdown include the matching rows either way. The cap applies to the rows
+that are listed;
 truncation prints `… N more · -n N or -A to show more`. An empty default
 view prints `Nothing queued ✓`.
 
@@ -344,9 +351,12 @@ Every parsed record lands in exactly one bucket: `already_migrated`
   escaped `## Original Record` fence. The original source records are never
   edited or deleted. No `^ref` tracker is written, so these notes do not
   become actionable tracker tasks. Their `legacy_status` (or chapter states)
-  still determines their reading state: queued/started notes match the default
-  reading queue. Human `list` output collapses them into a legacy summary
-  unless `-s legacy` is supplied; JSON and Markdown include the matching rows.
+  still determines their reading state. `unread` becomes `queued` and
+  `collect_fleeting_notes` becomes `started`, so those notes match the
+  default reading-queue filter. Human `list` still hides them behind
+  `+ N zorg-era legacy notes hidden (…) · show them with -s legacy` until
+  you pass `-s`. Any `-s` value turns the collapse off and filters to that
+  status. JSON and Markdown include the matching rows either way.
 - **Books.** A source file holding exactly one BOOK record is a book;
   its `LID::` records (plus an `ID::` record tied by a `| BOOK:`
   line) fold into the book's note as `## Chapters` lines with their
@@ -416,9 +426,12 @@ failure: coverage reports `unavailable` and the lookup continues.
 
 Bare public links captured with `bob capture`, shared to Google Keep
 and pulled with `bob gkeep pull`, or previewed with `bob capture-parse`
-are routed to the reading queue instead of becoming inbox tasks. The
+are classified as references instead of inbox tasks. Capture saves a
+background job and prints `→ reading queue` before any note exists.
+Keep clips an intake PDF during `pull`. `bob ref scan` writes the note
+that `bob ref list` shows. `capture-parse` only classifies. The
 classifier, policy, and offline verdict below are shared by every entry
-point; nothing here touches the network.
+point; nothing in this section fetches the URL.
 
 A token is a reference URL only when it has no whitespace, carries an
 optional single `<…>` wrapper, uses `http`/`https`, passes
@@ -432,7 +445,7 @@ Policy lives under `highlights.url_routing` in `~/.config/bob/config.yml`
 ```yaml
 highlights:
   url_routing:
-    capture: true # bare-URL capture items become reading-queue references
+    capture: true # bare-URL capture items queue a background reference job
     gkeep: true # URL-only Keep notes are clipped during bob gkeep pull
     exclude_hosts: # replaces the defaults; each entry matches the host and its subdomains
       [google.com, googleplex.com, youtube.com, youtu.be, github.com, x.com, twitter.com]
@@ -440,17 +453,22 @@ highlights:
 
 Missing keys take the defaults shown. A configured `exclude_hosts`
 list replaces the defaults; an empty list excludes nothing. Entries
-are normalized (lowercased, with any scheme, leading `www.`, or
-trailing `.` or `/` stripped). An invalid `url_routing` block disables
-routing with a warning; a bare URL then simply stays a task. `bob ref
-doctor` prints the effective policy as
-`url routing: capture on · gkeep on · excludes google.com, …`.
+are normalized (lowercased, with any scheme, leading `www.`, trailing
+`.`, trailing `/`, path, or port stripped). A missing config file uses
+the defaults. An invalid `url_routing` block turns routing off: `bob
+capture`, `bob gkeep list`, and `bob gkeep pull` warn with
+`URL routing is off: …`, and `bob capture-parse` stays silent. In every
+case the bare URL stays a task. `capture: false` and `gkeep: false` turn
+off that entry point with no warning. `bob ref doctor` prints the
+effective policy as `url routing: capture on · gkeep on · excludes
+google.com, …`, or `url routing: warn (off: …)` when the file is invalid.
 
 `bob capture --no-ref '<URL>'` and `bob gkeep pull --no-ref` bypass routing
 for one invocation. Capture also keeps an item as a task when it has extra
 prose, markers, child lines, a global destination, or forced destination flags.
-`bob capture-parse` reads this policy without reading the vault or fetching
-anything; invalid config silently disables its reference classification.
+`bob capture-parse` reads this policy from the config file. It does not open
+the vault or fetch the URL. `-R`, `capture: false`, and an invalid config
+all keep its links classified as tasks.
 
 Capture queues links for background clipping through durable ref jobs; a
 failed clip falls back to exactly the inbox task capture would have written,

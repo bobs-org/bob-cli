@@ -1,7 +1,9 @@
 # Capture
 
-`bob capture` writes tasks and bullets, queues bare reading-queue links, and
-manages Pomodoro sessions without opening desktop Obsidian. Companion commands
+`bob capture` writes tasks and bullets, queues bare public links as background
+reference jobs, and manages Pomodoro sessions without opening desktop
+Obsidian. The job confirmation says reading queue; `bob ref list` shows the
+note after `bob ref scan`. Companion commands
 parse in-progress drafts, complete markers and wikilinks, list routes and
 tasks, assign block IDs, and name Pomodoros.
 Bob Mac Capture is the macOS menu-bar frontend: it owns the hotkey and panel,
@@ -415,16 +417,26 @@ leaves notes, ledgers, and newly-created clipboard files at their original
 state. `--dry-run` uses the same planner with the commit step disabled.
 
 Before replacing a note, Bob checks that its on-disk contents still match the
-planning snapshot. A changed, deleted, or newly created target refuses with
-`refusing to overwrite ...: note ... on disk after planning` (exit 1).
-Reload the affected note and rerun the capture. Checks happen before staging,
-after staging, and immediately before each replacement; they reduce overwrite
-races but do not lock out another writer. If rollback itself fails, the error
-names the file that needs inspection.
+planning snapshot. The check runs before any temporary files are created,
+again after those files exist, and once more immediately before each
+replacement. A mismatch refuses the batch with exit 1 and one of these
+messages:
 
-Reference items queue jobs during submission. Their later background imports
-run independently: a clip failure falls back for that link and does not undo
-other successfully captured items.
+- `refusing to overwrite <path>: note changed on disk after planning`
+- `refusing to overwrite <path>: note was deleted on disk after planning`
+- `refusing to overwrite <path>: note was created on disk after planning`
+
+Reload the affected note and rerun the capture. The checks narrow the race
+with another writer; they do not lock the file. If a later replacement fails,
+Bob restores notes it already replaced in this batch. A successful rollback
+appends `; rolled back earlier note writes`. A failed rollback names the
+file: `rollback of <path> failed: …`.
+
+Reference jobs are written before note files. If the note write fails, Bob
+removes the jobs it just created and appends
+`; removed ref jobs created by this capture`. A later clip failure writes a
+fallback inbox task for that link and leaves the other captured items in
+place.
 
 Same-line session-operator chains split the same way: a physical line holding
 only whitespace-separated session operators (`+2 =x`) yields one item per
@@ -603,13 +615,19 @@ token should remain literal. `--clip` and `--no-clip` conflict.
 ### Saving links to your reading queue
 
 A capture item that is nothing but one bare public link becomes a reference
-item (`kind: "ref"`) instead of an inbox task: `bob capture
-https://example.com/essay` queues the link for the reading queue. Anything
-more — an extra word, `@route`, `#tag`, `s:`, `p:`, `%`, an operator, a child
-line, a `@@` declaration, or a forced flag (`-r -s -t -S -c`, `--task-ref`)
-— keeps the item a task, exactly as before. Corporate short links
-(`http://go/x`), IP literals, and excluded hosts (see
-the [URL routing policy](ref.md#url-routing)) stay tasks too. A pasted
+item (`kind: "ref"`) instead of an inbox task. `bob capture
+'https://example.com/essay'` saves a background job. A new link prints
+`queued example.com/essay → reading queue` with the detail
+`clipping in the background · bob ref jobs`. That line means the job was
+saved. The reading queue in `bob ref list` is the reference note, and it
+appears after `bob ref scan`. Quote the URL when the shell would treat `#`
+as a comment.
+
+Anything more — an extra word, `@route`, `#tag`, `s:`, `p:`, `%`, an
+operator, a child line, a `@@` declaration, or a forced flag
+(`-r -s -t -S -c`, `--task-ref`) — keeps the item a task. Hosts without a
+dot (`http://go/x`, `localhost`), IP literals, and excluded hosts (see the
+[URL routing policy](ref.md#url-routing)) stay tasks too. A pasted
 blank-line-free block in which every line is a bare URL splits into one item
 per line, and each line is then classified on its own, so mixed lists queue
 the links and keep the rest as tasks.
@@ -618,17 +636,35 @@ Submit never touches the network and returns at once: it writes a durable
 ref job and a detached background worker clips it through the same engine as
 `bob ref create`. If the clip fails, the link falls back to exactly the inbox
 task capture would have written, plus a `⚠️` child with the reason and a
-`bob ref create <url>` retry command. `bob ref jobs` lists recent jobs
-(`--all` includes older history); see [ref jobs](ref-jobs.md). The offline
-`--dry-run` preview says whether the link is new, already in the library,
-already queued for scan, already clipping, or a duplicate within the draft.
-Reference items report
-`routed: false`, `route: null`, `route_label: ""`, `task_line: ""`, and
-`placement: "queued"` (still to clip) or `"unchanged"` (already known), plus
-an additive `ref` object with the classified URL, the library verdict, the
-staged `job` (real runs only), and the inbox `fallback` (queued items only).
+`bob ref create <url>` retry command. `bob ref jobs` lists pending, clipping,
+and stuck jobs plus finished jobs from the last 7 days (`--all` shows older
+finished jobs); see [ref jobs](ref-jobs.md).
+
+`--dry-run` is offline and writes nothing, including no job. Its headline and
+one detail line follow the library verdict:
+
+| Verdict | Headline | Detail |
+| --- | --- | --- |
+| `not_found` | `would queue <display> → reading queue` | `new to your library · clips in the background` |
+| `legacy` | `would queue <display> → reading queue` | `in your library as a legacy note (<path>) · a fresh copy will be clipped` |
+| `unknown` | `would queue <display> → reading queue` | `library check unavailable: <message> · the clip still dedupes` |
+| `in_library` | `already in library <path>` | title and reading state, when known |
+| `in_intake` | `already queued <path>` | `waiting for bob ref scan` |
+| `clipping` | `already clipping <display>` | `a pending ref job has this link · bob ref jobs` |
+| `duplicate` | `duplicate <display>` | `same link as an earlier item` |
+
+A real submit uses `queued` in place of `would queue`. The `not_found`
+detail becomes `clipping in the background · bob ref jobs`; legacy and
+unknown keep the details above. `placement` is
+`"queued"` for `not_found`, `legacy`, and `unknown` (a job will be written)
+and `"unchanged"` for the other verdicts (no new job). Reference items
+report `routed: false`, `route: null`, `route_label: ""`, and
+`task_line: ""`, plus an additive `ref` object with the classified URL, the
+library verdict, the staged `job`, and the inbox `fallback` on queued items.
+`ref.job` stays `null` until the commit, so every dry run has `job: null`.
 Opt out per capture with `-R, --no-ref`, or per entry point with
-`highlights.url_routing.capture`.
+`highlights.url_routing.capture: false` (silent; an invalid config warns and
+also keeps the link a task).
 
 ### Task with a requested block ID
 
@@ -2852,8 +2888,8 @@ Useful options:
 - `-d, --dry-run`: plan and report without writing notes or clipboard files
 - `-f, --format human|json`: human confirmation or stable JSON for callers
 - `-n, --no-clip`: keep trailing `%...` clipboard markers literal
-- `-R, --no-ref`: keep bare links as inbox tasks instead of queueing them
-  for the reading queue
+- `-R, --no-ref`: keep bare links as inbox tasks instead of queueing a
+  background reference job
 - `-r, --route NAME`: force `NAME.md` and keep any `@tokens` in the text literal
 - `-s, --section TITLE`: with `--route`, force a bullet into the exact section
 - `-t, --task BLOCK-ID`: with `--route`, append beneath the identified task
@@ -3270,13 +3306,19 @@ terminal-marker extraction, and the same `@token` classification, so the two
 commands can never disagree about a complete capture. Wikilink highlighting is
 syntax-only and additive; it does not change capture routing or diagnostics.
 
-The command is read-only. It reads the configured URL routing policy so a bare
-link's `ref`/`task` classification matches capture; `-R, --no-ref` disables
-that classification, and an invalid routing config silently keeps links as
-tasks. It never opens the vault, reads the clipboard, or contacts the network,
-and takes no `--bob-dir`; running it with a nonexistent `BOB_DIR` and a `%...`
-clipboard marker still succeeds. If `TEXT` is omitted and stdin is piped, it
-reads the complete piped stdin stream, like `bob capture`. Only a missing `TEXT` or a
+The command does not open the vault, read the clipboard, or contact the
+network, and it takes no `--bob-dir`. It does read the URL routing policy
+from the config file (`BOB_CONFIG_FILE`, otherwise
+`$XDG_CONFIG_HOME/bob/config.yml`, otherwise `~/.config/bob/config.yml`) so a
+bare link's `ref`/`task` classification matches capture. `-R, --no-ref`,
+`highlights.url_routing.capture: false`, and an invalid config all keep
+links as tasks. An invalid config is silent here. `bob capture`,
+`bob gkeep list`, and `bob gkeep pull` print `URL routing is off: …` for
+the same invalid file; `capture: false` and `gkeep: false` stay silent on
+those commands too. A missing config file uses the defaults. Running
+`capture-parse` with a nonexistent `BOB_DIR` and a `%...` clipboard marker
+still succeeds. If `TEXT` is omitted and stdin is piped, it reads the
+complete piped stdin stream, like `bob capture`. Only a missing `TEXT` or a
 bad flag is an error (exit 2); every other input succeeds.
 
 `TEXT` accepts the same batch draft `bob capture` does: one or more blank or

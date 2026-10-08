@@ -1,9 +1,11 @@
 # Ref jobs (`bob ref jobs`)
 
-A bare public link captured for the reading queue is never clipped
+A bare public link captured with `bob capture` is never clipped
 inline: capture queues one durable **ref job** and returns at once,
 and a detached background worker clips it through the same typed
-ingest as `bob ref create`. Capture planning and submission do not fetch
+ingest as `bob ref create`. The capture confirmation says
+`queued … → reading queue`. That names the job, not a row in
+`bob ref list`. Capture planning and submission do not fetch
 the URL; the worker needs network access and the target's normal
 [import dependencies](highlights-create.md#prerequisites).
 A failed clip falls back to exactly the inbox task capture would
@@ -19,11 +21,17 @@ pending → clipping → clipped | already in library | already queued
 
 One attempt in v1: a retryable failure still falls back instead of
 retrying. `bob ref scan` turns clipped intake PDFs into ref notes
-later; the configured [Mac scan job](highlights-ref-sync.md#scheduled-scan)
-runs it every 15 minutes. On another setup, run `bob ref scan` yourself.
-Neither capture nor the worker runs `scan`, and neither returns a ref-note
-path before it exists. Use `bob ref jobs` to inspect work before it reaches
-the reading queue shown by `bob ref list`.
+later. Nothing in bob-cli starts that scan. The published
+[Mac scan job](highlights-ref-sync.md#scheduled-scan) runs hourly
+(`StartInterval` 3600, or cron `0 * * * *`) and the example command is
+`bob highlights scan --dry-run` until you remove `--dry-run` after clean
+cycles. `bob highlights` is a permanent alias of `bob ref`. On another
+setup, run `bob ref scan` yourself. The `bob ref jobs` footer currently
+prints `the Mac runs it every 15 minutes`; follow the Scheduled Scan
+runbook for the interval and the dry-run command. Neither capture nor the
+worker runs `scan`, and neither returns a ref-note path before it exists.
+Use `bob ref jobs` to inspect work before the note appears in
+`bob ref list`.
 
 These jobs are created by `bob capture`. `bob ref create` imports inline,
 and [Google Keep URL imports](gkeep.md#url-only-notes-go-to-the-reading-queue)
@@ -35,8 +43,10 @@ Everything lives under `${XDG_STATE_HOME:-~/.local/state}/bob-cli/ref/jobs/`.
 Directories are mode 0700 and files 0600.
 
 The spool is shared by all vaults using the same user state directory.
-Each job stores its destination `bob_dir`, and `jobs list`/`jobs run` inspect
-or process those stored jobs rather than selecting the current `BOB_DIR`.
+Each job file stores its destination `bob_dir`. `jobs list` and `jobs run`
+inspect or process those stored jobs rather than selecting the current
+`BOB_DIR`. Human rows and JSON list entries do not print `bob_dir`; it is
+only in the job file. A JSON `path` is that spool file, not the vault.
 
 ```text
 ref/ingest.lock              machine-wide ingest lock (capture worker and bob gkeep pull)
@@ -98,7 +108,8 @@ exits 0. It then:
    `running/` with a `started_at` stamp.
 
 A clip success appends `created`, `already_in_library`, or
-`already_queued` to `done.jsonl`. A clip failure writes the
+`already_queued` to `done.jsonl`. Human output and JSON `state` say
+`clipped` for a `created` outcome. A clip failure writes the
 fallback task and appends `fell_back`; when the fallback write
 itself fails, the job parks in `stuck/` with both errors and the
 run exits 1. After releasing the lock the worker re-checks
@@ -136,10 +147,12 @@ bob ref jobs list [-a|--all] [-f|--format human|json]
 bob ref jobs run [-q|--quiet]                     # clip pending jobs
 ```
 
-A bare `bob ref jobs` lists; it never clips or writes. `-a/--all`
-shows every recorded job instead of the last 7 days. Human `run`
-prints one line per job (`⟳ clipping …`, then `✓ clipped … →
-xlib/blogs/post.pdf` or `↩ fell back … → mac_inbox.md
+A bare `bob ref jobs` lists; it never clips or writes. Pending,
+clipping, and stuck jobs always show. Finished jobs older than 7 days
+need `-a/--all`. When the visible set is empty, the human header reads
+`bob ref · jobs · nothing pending · nothing in the last 7 days`, including
+after `--all`. Human `run` prints one line per job (`⟳ clipping …`, then
+`✓ clipped … → xlib/blogs/post.pdf` or `↩ fell back … → mac_inbox.md
 (blocked: …)`), then a summary (`ok 2 clipped · 1 fell back`, or
 `nothing to do`).
 
@@ -165,5 +178,8 @@ hour or any job is stuck (hint: `bob ref jobs run`).
 Current in-flight deduplication compares URL keys across the shared spool
 without checking the destination vault. If the same link is pending or
 running for vault A, capture in vault B reports `already clipping` and queues
-no job for B. Wait for A's job to finish and capture the link again in B, or
-use `bob ref create --bob-dir /path/to/vault-b '<URL>'` to import it inline.
+no job for B. The list does not show which vault owns the in-flight job.
+Wait for A's job to finish and capture the link again in B, or use
+`bob ref create --bob-dir /path/to/vault-b '<URL>'` to import it inline.
+That inline import does not use this spool. Stuck and finished jobs do not
+block a new capture.
