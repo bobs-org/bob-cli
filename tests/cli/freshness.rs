@@ -1601,3 +1601,45 @@ fn list_json_and_human_cover_recurring_tier() {
         &["REVIEW", "RECURRING", "commitments done", "ROTTEN"],
     );
 }
+
+#[test]
+fn list_hidden_recurring_reference_stays_out_while_visible_walks() {
+    // Rust parity for the ledger `^ref` hide-bypass fix: a hidden
+    // recurring `^ref` keeps ordinary visibility (excluded), a visible
+    // recurring `^ref` walks RECURRING (never REFERENCES), and an
+    // ordinary hidden `^ref` still walks REFERENCES.
+    let temp = TempDir::new("bob-cli-freshness-recurring-ref-parity");
+    let vault = vault_dir(&temp);
+    write_blocked_tasks_settings(&vault);
+    write_file(
+        &vault.join("recur.md"),
+        "- [ ] #task Hidden #hide [repeat:: every week] [scheduled:: 2026-10-01] ^ref\n\
+- [ ] #task Visible [repeat:: every week] [scheduled:: 2026-10-01] ^ref\n\
+- [ ] #task Ordinary hidden #hide ^ref\n",
+    );
+    let (_, value) = list_json(&temp, &[]);
+    assert_eq!(value["ok"], true);
+    let queue = value["queue"].as_array().expect("queue array");
+    let tier_of = |text: &str| {
+        queue
+            .iter()
+            .find(|entry| {
+                entry["text"].as_str().is_some_and(|t| t.contains(text))
+            })
+            .map(|entry| entry["tier"].as_str().unwrap().to_string())
+    };
+    assert!(
+        tier_of("Hidden").is_none(),
+        "hidden recurring ^ref must stay out:\n{value}"
+    );
+    assert_eq!(
+        tier_of("Visible").as_deref(),
+        Some("recurring"),
+        "visible recurring ^ref walks RECURRING:\n{value}"
+    );
+    assert_eq!(
+        tier_of("Ordinary hidden").as_deref(),
+        Some("references"),
+        "ordinary hidden ^ref keeps REFERENCES:\n{value}"
+    );
+}
