@@ -109,8 +109,11 @@ written wrong.
 The dedupe key lowercases the scheme and host, drops a leading `www.` and
 the default port, strips the trailing slash, and sorts the remaining
 query parameters, so the same article reached through two URL spellings
-dedupes. `--force` overwrites the same intake target only; library PDFs
-are never overwritten, and an already-captured ref note is never remade.
+dedupes. Default targets walk `<stem>`, `<stem>_2`, …: a name taken by a
+different reference is suffixed (with a `renamed:` line before `pdf:`),
+and only the same reference refuses. `--force` overwrites the same intake
+target only; library PDFs are never overwritten, and an already-captured
+ref note is never remade.
 
 A ref-note hit refuses only when the note is PDF-backed (it carries a
 `source_pdf`). A URL recorded only by legacy notes without a Highlights

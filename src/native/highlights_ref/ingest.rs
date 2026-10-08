@@ -24,7 +24,8 @@ use super::model::MarkerValue;
 use super::model::{CommandError, Config};
 use super::note::current_local_date;
 use super::stamp::{
-    compose_marker, plan_default_target, stamp_and_install, PdfInfo,
+    compose_marker, plan_default_target, stamp_and_install,
+    DefaultTargetIdentity, PdfInfo,
 };
 
 /// Fixed reading-queue defaults for every ingest call.
@@ -516,13 +517,19 @@ fn ingest_pdf_url_route(
         url, downloaded, None, None, None, None, &captured, progress,
     )
     .map_err(command_error)?;
+    let identity = DefaultTargetIdentity::Url {
+        keys: vec![url.dedupe_key.clone()],
+        recorded,
+    };
     let target_plan = plan_default_target(
         config,
         std::ffi::OsStr::new(&pdf_plan.stem),
         INGEST_PDF_REF_TYPE,
         false,
+        &identity,
     )
     .map_err(command_error)?;
+    let final_stem = target_plan.stem.clone();
     if let Some(outcome) = outcome_for_refusing_hit(
         config,
         recorded,
@@ -539,7 +546,7 @@ fn ingest_pdf_url_route(
     };
     super::pdf_target::refuse_marked_pdf(downloaded, library_hint)
         .map_err(command_error)?;
-    let id = Some(pdf_plan.stem.clone());
+    let id = Some(final_stem);
     let marker = super::pdf_target::compose_pdf_marker(
         INGEST_STATUS,
         INGEST_PARENT,
@@ -623,14 +630,20 @@ fn ingest_arxiv_route(
         progress,
     )
     .map_err(command_error)?;
+    let key = paper.dedupe_key();
+    let identity = DefaultTargetIdentity::Url {
+        keys: vec![key.clone(), url.dedupe_key.clone()],
+        recorded,
+    };
     let target_plan = plan_default_target(
         config,
         std::ffi::OsStr::new(&pdf_plan.stem),
         INGEST_PDF_REF_TYPE,
         false,
+        &identity,
     )
     .map_err(command_error)?;
-    let key = paper.dedupe_key();
+    let final_stem = target_plan.stem.clone();
     if let Some(outcome) = outcome_for_refusing_hit(
         config,
         recorded,
@@ -655,7 +668,7 @@ fn ingest_arxiv_route(
     };
     super::pdf_target::refuse_marked_pdf(&dest, library_hint)
         .map_err(command_error)?;
-    let id = Some(pdf_plan.stem.clone());
+    let id = Some(final_stem);
     let marker = super::pdf_target::compose_pdf_marker(
         INGEST_STATUS,
         INGEST_PARENT,
@@ -696,11 +709,16 @@ fn ingest_article_route(
 ) -> Result<IngestOutcome, IngestError> {
     // Fail fast when the stem is already known, mirroring the web-article engine.
     if let Some(stem) = stem_from_url(url) {
+        let pre_identity = DefaultTargetIdentity::Url {
+            keys: vec![url.dedupe_key.clone()],
+            recorded,
+        };
         let pre_plan = plan_default_target(
             config,
             std::ffi::OsStr::new(&stem),
             INGEST_ARTICLE_REF_TYPE,
             false,
+            &pre_identity,
         )
         .map_err(command_error)?;
         if let Some(outcome) = outcome_for_refusing_hit(
@@ -762,11 +780,24 @@ fn ingest_article_route(
         })?;
     let author = response.author.clone();
     let published = response.published.clone();
+    let final_identity = DefaultTargetIdentity::Url {
+        keys: vec![url.dedupe_key.clone()],
+        recorded,
+    };
+    let plan = plan_default_target(
+        config,
+        std::ffi::OsStr::new(&stem),
+        INGEST_ARTICLE_REF_TYPE,
+        false,
+        &final_identity,
+    )
+    .map_err(command_error)?;
+    let final_stem = plan.stem.clone();
     let marker = compose_marker(
         INGEST_STATUS,
         INGEST_PARENT,
         &title,
-        Some(&stem),
+        Some(&final_stem),
         &[
             ("source_url", MarkerValue::String(url.cleaned.clone())),
             (
@@ -779,13 +810,6 @@ fn ingest_article_route(
             ),
             ("captured", MarkerValue::String(captured.clone())),
         ],
-    )
-    .map_err(command_error)?;
-    let plan = plan_default_target(
-        config,
-        std::ffi::OsStr::new(&stem),
-        INGEST_ARTICLE_REF_TYPE,
-        false,
     )
     .map_err(command_error)?;
     if let Some(outcome) = outcome_for_refusing_hit(
@@ -869,6 +893,16 @@ mod tests {
             ),
             (
                 "refusing to create x because the library destination already exists",
+                IngestErrorKind::Collision,
+                false,
+            ),
+            (
+                "already captured as x (title report)",
+                IngestErrorKind::Collision,
+                false,
+            ),
+            (
+                "already queued in x; pass --force to overwrite it",
                 IngestErrorKind::Collision,
                 false,
             ),

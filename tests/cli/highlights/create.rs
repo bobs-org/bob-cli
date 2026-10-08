@@ -322,6 +322,8 @@ fn highlights_create_reports_pandoc_failure_diagnostics() {
 
 #[test]
 fn highlights_create_refuses_existing_library_pdf_with_or_without_force() {
+    // A library PDF with a different title is a different reference: the
+    // default target suffixes to `_2` with a `renamed:` line.
     let temp = TempDir::new("bob-cli-highlights-create-library-destination");
     let source = temp.path().join("report.md");
     let vault = temp.path().join("vault");
@@ -330,6 +332,44 @@ fn highlights_create_refuses_existing_library_pdf_with_or_without_force() {
     write_highlights_pdf(
         &library_pdf,
         "- status: ready\n- parent: obsidian\n- title: Archived Report\n",
+    );
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg(&source)
+        .arg("-b")
+        .arg(&vault)
+        .arg("-d")
+        .env("BOB_PANDOC_COMMAND", "/definitely/missing/pandoc")
+        .output()
+        .expect("run create with different-title library PDF");
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("xlib/chat/report_2.pdf")
+            && report.contains("renamed: report.pdf is taken by")
+            && report.contains("using report_2.pdf"),
+        "{report}"
+    );
+    assert!(
+        !vault.join("xlib/chat/report_2.pdf").exists(),
+        "dry-run must not write an intake PDF"
+    );
+}
+
+#[test]
+fn highlights_create_refuses_same_title_library_pdf_with_or_without_force() {
+    // The same title means the same reference: it refuses even with
+    // `--force` and writes nothing.
+    let temp = TempDir::new("bob-cli-highlights-create-library-same");
+    let source = temp.path().join("report.md");
+    let vault = temp.path().join("vault");
+    let library_pdf = vault.join("lib/chat/report.pdf");
+    write_file(&source, "# Report\n");
+    write_highlights_pdf(
+        &library_pdf,
+        "- status: ready\n- parent: obsidian\n- title: Report\n",
     );
 
     for force in [false, true] {
@@ -352,19 +392,19 @@ fn highlights_create_refuses_existing_library_pdf_with_or_without_force() {
         assert_eq!(
             output.status.code(),
             Some(1),
-            "existing library PDF should fail force={force}:\n{}",
+            "same-title library PDF should fail force={force}:\n{}",
             format_output(&output)
         );
         let diagnostic = stderr(&output);
         assert!(
-            diagnostic.contains("library destination already exists")
-                && diagnostic.contains("xlib/chat/report.pdf")
+            diagnostic.contains("already captured")
                 && diagnostic.contains("lib/chat/report.pdf"),
             "{diagnostic}"
         );
     }
     assert!(
-        !vault.join("xlib/chat/report.pdf").exists(),
+        !vault.join("xlib/chat/report.pdf").exists()
+            && !vault.join("xlib/chat/report_2.pdf").exists(),
         "create refusal must not write an intake PDF"
     );
 }
@@ -2360,11 +2400,14 @@ fn landing_library_collision_hints_listen_attach() {
     let source = temp.path().join("report.md");
     let vault = temp.path().join("vault");
     write_file(&source, "# Report\n");
-    // Pre-create the library destination so the intake refuses.
+    // The same title means the same reference, so the intake refuses.
     let library_pdf = vault.join("lib/chat/report.pdf");
     std::fs::create_dir_all(library_pdf.parent().expect("lib parent"))
         .expect("lib dir");
-    write_bare_pdf(&library_pdf, None, None);
+    write_highlights_pdf(
+        &library_pdf,
+        "- status: ready\n- parent: obsidian\n- title: Report\n",
+    );
     let output = bob_command()
         .arg("highlights")
         .arg("create")
@@ -2379,6 +2422,35 @@ fn landing_library_collision_hints_listen_attach() {
     assert!(
         diagnostic.contains("to add audio to that capture, run bob ref create"),
         "{diagnostic}"
+    );
+}
+
+#[test]
+fn landing_bare_library_pdf_renames() {
+    // A bare library PDF without a matching title is a different
+    // reference: it renames instead of refusing.
+    let temp = TempDir::new("bob-cli-landing-bare-rename");
+    let source = temp.path().join("report.md");
+    let vault = temp.path().join("vault");
+    write_file(&source, "# Report\n");
+    let library_pdf = vault.join("lib/chat/report.pdf");
+    std::fs::create_dir_all(library_pdf.parent().expect("lib parent"))
+        .expect("lib dir");
+    write_bare_pdf(&library_pdf, None, None);
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg(&source)
+        .arg("-b")
+        .arg(&vault)
+        .arg("-d")
+        .output()
+        .expect("run create with bare library PDF");
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains("renamed: report.pdf is taken by"),
+        "{}",
+        format_output(&output)
     );
 }
 
@@ -3214,7 +3286,9 @@ fn highlights_create_folded_rejects_before_the_adapter_runs() {
 }
 
 #[test]
-fn highlights_create_folded_refuses_library_and_dedupe_collisions_early() {
+fn highlights_create_folded_library_without_url_suffixes() {
+    // A library PDF at the slug without a matching URL is a different
+    // reference: it captures to `<slug>_2` with a `renamed:` line.
     let temp = TempDir::new("bob-cli-highlights-create-folded-collisions");
     let vault = temp.path().join("vault");
     let fake = FakeClip::new(&temp, "fake");
@@ -3228,35 +3302,43 @@ fn highlights_create_folded_refuses_library_and_dedupe_collisions_early() {
         &vault.join(format!("lib/blogs/{FOLDED_STEM}.pdf")),
         "- status: ready\n- parent: obsidian\n- title: Archived\n",
     );
-    for force in [false, true] {
-        let mut command = bob_command();
-        command
-            .arg("highlights")
-            .arg("create")
-            .arg(FOLDED_URL)
-            .arg("-b")
-            .arg(&vault);
-        if force {
-            command.arg("--force");
-        }
-        let output = command
-            .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
-            .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
-            .env("FAKE_CURL_ROOT", &curl_root)
-            .env("FAKE_CURL_LOG", &curl_log)
-            .output()
-            .expect("run bob highlights create over library PDF");
-        assert_eq!(
-            output.status.code(),
-            Some(1),
-            "force={force} must refuse the library destination:\n{}",
-            format_output(&output)
-        );
-    }
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg(FOLDED_URL)
+        .arg("-b")
+        .arg(&vault)
+        .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+        .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
+        .env("FAKE_CURL_ROOT", &curl_root)
+        .env("FAKE_CURL_LOG", &curl_log)
+        .output()
+        .expect("run bob highlights create over library PDF");
+    assert_success(&output);
+    let report = stdout(&output);
     assert!(
-        !fake.called(),
-        "the library collision must precede the adapter"
+        report.contains(&format!("{FOLDED_STEM}_2.pdf"))
+            && report.contains("renamed:"),
+        "{report}"
     );
+    assert!(
+        vault
+            .join(format!("xlib/blogs/{FOLDED_STEM}_2.pdf"))
+            .is_file(),
+        "the suffixed copy must install:\n{}",
+        format_output(&output)
+    );
+}
+
+#[test]
+fn highlights_create_folded_refuses_library_and_dedupe_collisions_early() {
+    let temp = TempDir::new("bob-cli-highlights-create-folded-dedupe");
+    let fake = FakeClip::new(&temp, "fake");
+    let curl_root = temp.path().join("curl-root");
+    std::fs::create_dir_all(&curl_root).expect("create curl root");
+    let fake_curl = write_fake_curl(temp.path());
+    let curl_log = temp.path().join("curl.log");
+    std::fs::write(&curl_log, "").expect("init curl log");
 
     // A PDF-backed note refuses even with --force. A note without a
     // `source_pdf` instead warns and captures (see
@@ -3674,5 +3756,184 @@ fn highlights_create_folded_doctor_reports_web_clip_rows() {
         ) && report.contains("web clip headed fallback: display")
             && report.contains("result: ok"),
         "{report}"
+    );
+}
+
+#[test]
+fn highlights_create_local_pdf_recapture_refuses_then_overwrites() {
+    let temp = TempDir::new("bob-cli-create-local-recapture");
+    let vault = temp.path().join("vault");
+    let source = temp.path().join("paper.pdf");
+    write_bare_pdf(&source, Some("Local Paper"), None);
+
+    let run = |extra: &[&str]| {
+        let mut command = bob_command();
+        command
+            .arg("highlights")
+            .arg("create")
+            .arg(&source)
+            .arg("-b")
+            .arg(&vault);
+        for arg in extra {
+            command.arg(arg);
+        }
+        command.output().expect("run create local PDF")
+    };
+
+    assert_success(&run(&[]));
+    assert!(vault.join("xlib/papers/paper.pdf").is_file());
+
+    let output = run(&[]);
+    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+    assert!(
+        stderr(&output).contains("already queued"),
+        "{}",
+        format_output(&output)
+    );
+
+    assert_success(&run(&["--force"]));
+    assert!(vault.join("xlib/papers/paper.pdf").is_file());
+
+    // Simulated scan: move the intake PDF to lib/. The same title still
+    // refuses, even with --force.
+    let library = vault.join("lib/papers/paper.pdf");
+    std::fs::create_dir_all(library.parent().expect("lib parent"))
+        .expect("create lib parent");
+    std::fs::rename(vault.join("xlib/papers/paper.pdf"), &library)
+        .expect("simulate scan");
+    for extra in [&[] as &[&str], &["--force"] as &[&str]] {
+        let output = run(extra);
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "scanned library must refuse extra={extra:?}:\n{}",
+            format_output(&output)
+        );
+        assert!(
+            stderr(&output).contains("already captured"),
+            "{}",
+            format_output(&output)
+        );
+    }
+}
+
+#[test]
+fn highlights_create_local_pdf_different_title_suffixes_with_id() {
+    let temp = TempDir::new("bob-cli-create-local-different-title");
+    let vault = temp.path().join("vault");
+    let first = temp.path().join("a/paper.pdf");
+    let second = temp.path().join("b/paper.pdf");
+    write_bare_pdf(&first, Some("First Paper"), None);
+    write_bare_pdf(&second, Some("Second Paper"), None);
+
+    let run = |source: &std::path::Path, extra: &[&str]| {
+        let mut command = bob_command();
+        command
+            .arg("highlights")
+            .arg("create")
+            .arg(source)
+            .arg("-b")
+            .arg(&vault);
+        for arg in extra {
+            command.arg(arg);
+        }
+        command.output().expect("run create local PDF")
+    };
+
+    assert_success(&run(&first, &[]));
+    assert!(vault.join("xlib/papers/paper.pdf").is_file());
+
+    let output = run(&second, &["-i"]);
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("xlib/papers/paper_2.pdf")
+            && report.contains("renamed: paper.pdf is taken by")
+            && report.contains("id: paper_2"),
+        "{report}"
+    );
+    assert!(vault.join("xlib/papers/paper_2.pdf").is_file());
+    let marker_output = bob_command()
+        .arg("highlights")
+        .arg("marker")
+        .arg(vault.join("xlib/papers/paper_2.pdf"))
+        .arg("-b")
+        .arg(&vault)
+        .output()
+        .expect("inspect suffixed marker");
+    assert_success(&marker_output);
+    assert!(
+        stdout(&marker_output).contains("- id: paper_2\n"),
+        "{}",
+        format_output(&marker_output)
+    );
+}
+
+#[test]
+fn highlights_create_pdf_url_colliding_slug_suffixes() {
+    let temp = TempDir::new("bob-cli-create-url-collision");
+    let vault = temp.path().join("vault");
+    let root = temp.path().join("curl-root");
+    std::fs::create_dir_all(&root).expect("create curl root");
+    write_bare_pdf(&root.join("paper.pdf"), Some("Remote Paper Title"), None);
+    let fake_curl = write_fake_curl(temp.path());
+    let log = temp.path().join("curl.log");
+    std::fs::write(&log, "").expect("init log");
+
+    // Queue an intake PDF for a different source_url at the same slug.
+    write_highlights_pdf(
+        &vault.join("xlib/papers/paper.pdf"),
+        "- status: ready\n- parent: obsidian\n- title: Queued\n- source_url: https://example.com/other.pdf\n",
+    );
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg("https://example.com/paper.pdf")
+        .arg("-b")
+        .arg(&vault)
+        .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
+        .env("FAKE_CURL_ROOT", &root)
+        .env("FAKE_CURL_LOG", &log)
+        .output()
+        .expect("run create PDF URL over colliding slug");
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("xlib/papers/paper_2.pdf")
+            && report.contains("renamed: paper.pdf is taken by")
+            && report.contains("id: paper_2"),
+        "{report}"
+    );
+    assert!(vault.join("xlib/papers/paper_2.pdf").is_file());
+}
+
+#[test]
+fn highlights_create_output_existing_pdf_still_refuses_without_force() {
+    let temp = TempDir::new("bob-cli-create-output-existing");
+    let source = temp.path().join("report.md");
+    let vault = temp.path().join("vault");
+    write_file(&source, "# Report\n");
+    let output_pdf = temp.path().join("out/custom.pdf");
+    std::fs::create_dir_all(output_pdf.parent().expect("out parent"))
+        .expect("create out parent");
+    write_bare_pdf(&output_pdf, None, None);
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg(&source)
+        .arg("-b")
+        .arg(&vault)
+        .arg("-o")
+        .arg(&output_pdf)
+        .env("BOB_PANDOC_COMMAND", "/definitely/missing/pandoc")
+        .output()
+        .expect("run create -o over existing PDF");
+    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+    assert!(
+        stderr(&output).contains("--force"),
+        "{}",
+        format_output(&output)
     );
 }

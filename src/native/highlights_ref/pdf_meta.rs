@@ -42,6 +42,29 @@ fn normalize(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// Read the raw PDF Info `/Title` without any plausibility filtering:
+/// trimmed and whitespace-collapsed, returned even when it equals the
+/// stem. Used for local-route default-target identity, where the planned
+/// title must match the occupant's stamped title exactly.
+pub(super) fn raw_info_title(path: &Path) -> Option<String> {
+    let document = match lopdf::Document::load(path) {
+        Ok(document) => document,
+        Err(_) => return None,
+    };
+    let info = document.trailer.get(b"Info").ok();
+    let dict = match info {
+        Some(lopdf::Object::Reference(id)) => {
+            document.get_dictionary(*id).ok()?
+        }
+        Some(lopdf::Object::Dictionary(dict)) => dict,
+        _ => return None,
+    };
+    let object = dict.get(b"Title").ok()?;
+    let raw = lopdf::decode_text_string(object).ok()?;
+    let title = normalize(&raw);
+    (!title.is_empty()).then_some(title)
+}
+
 /// File extensions that mark a title as a bare filename.
 const FILENAME_EXTENSIONS: &[&str] =
     &[".pdf", ".doc", ".docx", ".tex", ".dvi", ".ps", ".pages"];

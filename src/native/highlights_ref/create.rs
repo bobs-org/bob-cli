@@ -32,7 +32,8 @@ use super::{
     bob_dir_arg, compose_marker, dry_run_arg, lib_dir_arg, plan_default_target,
     plan_exact_output, print_next_step, ref_dir_arg, stamp_and_install,
     validate_ref_type, xlib_dir_arg, AudioCopyPlan, CommandError, Config,
-    MarkerValue, PdfInfo, Result, TargetPlan, TargetWorkflow, COMMAND_NAME,
+    DefaultTargetIdentity, MarkerValue, PdfInfo, RenamedFrom, Result,
+    TargetPlan, TargetWorkflow, COMMAND_NAME,
 };
 use super::{sources as sources_mod, target as target_mod};
 use crate::native::style::Styler;
@@ -192,6 +193,8 @@ struct CreatePlan {
     target: PathBuf,
     sidecar: PathBuf,
     workflow: TargetWorkflow,
+    stem: String,
+    renamed_from: Option<RenamedFrom>,
     title: String,
     title_source: &'static str,
     author: Option<String>,
@@ -219,7 +222,15 @@ impl CreatePlan {
             target: self.target.clone(),
             sidecar: self.sidecar.clone(),
             workflow: self.workflow.clone(),
+            stem: self.stem.clone(),
+            renamed_from: self.renamed_from.clone(),
         }
+    }
+}
+
+fn print_renamed_if_needed(plan: &TargetPlan) {
+    if let Some(line) = plan.renamed_line() {
+        println!("{line}");
     }
 }
 
@@ -359,7 +370,7 @@ pub(crate) fn command() -> ClapCommand {
         )
         .arg(xlib_dir_arg())
         .after_help(
-            "Targets:\n  Markdown file (.md) -> rendered with pandoc (default ref type chat)\n  Local PDF file (.pdf or %PDF- magic) -> stamped as-is (default ref type papers)\n  PDF URL (Content-Type PDF or sniffed %PDF-) -> downloaded, stamped as-is (default ref type papers)\n  arXiv paper URL (abs/html/pdf) -> PDF fetched from arxiv.org/pdf/<id>, metadata from the API (default ref type papers)\n  Web article URL (HTML 2xx or 403/429/503) -> captured with the web-article engine into a Highlights-ready PDF (default ref type blogs)\n\nWeb articles:\n  Captures the article in reader mode and re-typesets it with a Bob-owned print template; it never prints the live page. `bob ref scan` later moves the intake PDF into the library and writes the reference note. A site that blocks headless browsers is retried headed automatically: on Linux under a private Xvfb display or in an off-screen window on macOS; hosts with no browser fail closed with a hint. `-H, --html FILE` replays a page saved from a real browser instead of fetching (`-` reads stdin) and forces the web-article route. `-A, --author` and `-p, --published` override the derived author/publish date on every route. Environment: BOB_WEB_CLIP_ADAPTER replaces the adapter invocation; BOB_CHROME selects the browser executable; BOB_WEB_CLIP_TIMEOUT_SECS sets the adapter timeout in seconds (default 300); BOB_WEB_CLIP_KEEP_WORKDIR=1 keeps the scratch directory for debugging.\n\nListen:\n  `-L, --listen` narrates TARGET with `highlights.listen_command` (`BOB_HIGHLIGHTS_LISTEN_COMMAND` overrides), which must write MP3 audio to `{audio}`; bob shell-quotes `{target}`, `{pdf}`, `{audio}`, and `{title}` itself — do not quote them — and streams the command output unchanged. Preflights run first, the PDF is produced in private scratch, then the episode is bound beside the PDF; if the listen command fails nothing is written, and a failure after the episode exists keeps the scratch audio with a `kept:` line. If TARGET is already captured, `--listen` attaches the new episode (`xlib/<rel>.mp3`) for `bob ref scan` to pair, and the PDF and ref note stay untouched.\n\nAudio:\n  Create discovers audio as `--audio PATH`, then frontmatter `audio.episode_id` in the sase-listen library (Markdown only), then a sibling `<stem>_narration.md` hash matched against library manifests (`BOB_HIGHLIGHTS_AUDIO_LIBRARY`, then `highlights.audio_library`, then `$XDG_DATA_HOME/sase-listen/library`, then `~/.local/share/sase-listen/library`); `--no-audio` skips discovery. The copy lands beside the PDF with the source extension lowercased before the PDF is installed, reuses identical bytes, refuses different bytes without `--force`, and refuses when the mirrored library audio already exists. Only a companion already at the target's `<stem>.<ext>` counts as reused; audio beside the source is copied through the same rules.\n\nOutput:\n  Default target `<xlib-dir>/<ref-type>/<stem>.pdf`. `-o, --output` selects the complete path instead, including the filename (`.pdf` required, `~` expanded, cwd-relative). `--output` cannot be combined with `--ref-type` or `--name` because those only participate in default target derivation. `-N` sets the stem (with `-i`, the marker id); `-T` overrides the title; `-A` and `-p` override the derived author/publish date. Pandoc renders TOC/bookmarks and embeds the page-1 scan marker. Scan moves intake PDFs to the library before writing notes; library PDFs scan directly, other paths need `bob ref sync`. A `<div class=\"listen\">` card becomes a callout with a Play link when audio is bound. Same-document `#` links get a raised letter tag and a matching `↩ p. N` return pill under their target, dead ones render as plain text with a warning, and frontmatter `bob-return-links: false` turns this off.\n\nExamples:\n  bob ref create report.md\n  bob ref create paper.pdf -t papers\n  bob ref create https://example.com/paper.pdf -N my_paper\n  bob ref create https://arxiv.org/abs/1706.03762 -d\n  bob ref create https://arxiv.org/abs/1706.03762 -L\n  bob ref create https://example.com/essay -H saved.html\n  bob ref create https://example.com/essay -A \"Jane Doe\" -p 2026-01-02 -d",
+            "Targets:\n  Markdown file (.md) -> rendered with pandoc (default ref type chat)\n  Local PDF file (.pdf or %PDF- magic) -> stamped as-is (default ref type papers)\n  PDF URL (Content-Type PDF or sniffed %PDF-) -> downloaded, stamped as-is (default ref type papers)\n  arXiv paper URL (abs/html/pdf) -> PDF fetched from arxiv.org/pdf/<id>, metadata from the API (default ref type papers)\n  Web article URL (HTML 2xx or 403/429/503) -> captured with the web-article engine into a Highlights-ready PDF (default ref type blogs)\n\nWeb articles:\n  Captures the article in reader mode and re-typesets it with a Bob-owned print template; it never prints the live page. `bob ref scan` later moves the intake PDF into the library and writes the reference note. A site that blocks headless browsers is retried headed automatically: on Linux under a private Xvfb display or in an off-screen window on macOS; hosts with no browser fail closed with a hint. `-H, --html FILE` replays a page saved from a real browser instead of fetching (`-` reads stdin) and forces the web-article route. `-A, --author` and `-p, --published` override the derived author/publish date on every route. Environment: BOB_WEB_CLIP_ADAPTER replaces the adapter invocation; BOB_CHROME selects the browser executable; BOB_WEB_CLIP_TIMEOUT_SECS sets the adapter timeout in seconds (default 300); BOB_WEB_CLIP_KEEP_WORKDIR=1 keeps the scratch directory for debugging.\n\nListen:\n  `-L, --listen` narrates TARGET with `highlights.listen_command` (`BOB_HIGHLIGHTS_LISTEN_COMMAND` overrides), which must write MP3 audio to `{audio}`; bob shell-quotes `{target}`, `{pdf}`, `{audio}`, and `{title}` itself — do not quote them — and streams the command output unchanged. Preflights run first, the PDF is produced in private scratch, then the episode is bound beside the PDF; if the listen command fails nothing is written, and a failure after the episode exists keeps the scratch audio with a `kept:` line. If TARGET is already captured, `--listen` attaches the new episode (`xlib/<rel>.mp3`) for `bob ref scan` to pair, and the PDF and ref note stay untouched.\n\nAudio:\n  Create discovers audio as `--audio PATH`, then frontmatter `audio.episode_id` in the sase-listen library (Markdown only), then a sibling `<stem>_narration.md` hash matched against library manifests (`BOB_HIGHLIGHTS_AUDIO_LIBRARY`, then `highlights.audio_library`, then `$XDG_DATA_HOME/sase-listen/library`, then `~/.local/share/sase-listen/library`); `--no-audio` skips discovery. The copy lands beside the PDF with the source extension lowercased before the PDF is installed, reuses identical bytes, refuses different bytes without `--force`, and refuses when the mirrored library audio already exists. Only a companion already at the target's `<stem>.<ext>` counts as reused; audio beside the source is copied through the same rules.\n\nOutput:\n  Default target `<xlib-dir>/<ref-type>/<stem>.pdf`, becoming `<stem>_2`, `<stem>_3`, … when the name is taken by a different reference; the same reference refuses (`already captured` / `already queued`), and `-o, --output` keeps the exact path. `-o, --output` selects the complete path instead, including the filename (`.pdf` required, `~` expanded, cwd-relative). `--output` cannot be combined with `--ref-type` or `--name` because those only participate in default target derivation. `-N` sets the stem (with `-i`, the marker id); `-T` overrides the title; `-A` and `-p` override the derived author/publish date. Pandoc renders TOC/bookmarks and embeds the page-1 scan marker. Scan moves intake PDFs to the library before writing notes; library PDFs scan directly, other paths need `bob ref sync`. A `<div class=\"listen\">` card becomes a callout with a Play link when audio is bound. Same-document `#` links get a raised letter tag and a matching `↩ p. N` return pill under their target, dead ones render as plain text with a warning, and frontmatter `bob-return-links: false` turns this off.\n\nExamples:\n  bob ref create report.md\n  bob ref create paper.pdf -t papers\n  bob ref create https://example.com/paper.pdf -N my_paper\n  bob ref create https://arxiv.org/abs/1706.03762 -d\n  bob ref create https://arxiv.org/abs/1706.03762 -L\n  bob ref create https://example.com/essay -H saved.html\n  bob ref create https://example.com/essay -A \"Jane Doe\" -p 2026-01-02 -d",
         )
 }
 
@@ -789,6 +800,7 @@ fn plan_target_for(
     ref_type: &str,
     output: Option<&PathBuf>,
     force: bool,
+    identity: &DefaultTargetIdentity<'_>,
 ) -> Result<TargetPlan> {
     match output {
         Some(output) => plan_exact_output(config, output, force),
@@ -797,6 +809,7 @@ fn plan_target_for(
             std::ffi::OsStr::new(stem),
             ref_type,
             force,
+            identity,
         ),
     }
 }
@@ -1003,6 +1016,7 @@ fn create_markdown_route(
         styler.success_prefix(false)
     );
     println!("source: {}", plan.source);
+    print_renamed_if_needed(&plan.target_plan());
     println!("pdf: {}", plan.target.display());
     if let Some(audio) = &plan.audio {
         println!("audio: {} (from {})", audio.dest.display(), audio.origin);
@@ -1065,13 +1079,20 @@ fn create_local_pdf_route(
     )?;
     let ref_type =
         default_ref_type_for_kind("pdf", options.ref_type.as_deref())?;
+    let identity = DefaultTargetIdentity::Title(pdf_plan.title.clone());
     let target_plan = plan_target_for(
         config,
         &pdf_plan.stem,
         &ref_type,
         options.output.as_ref(),
         options.force,
+        &identity,
     )?;
+    let final_stem = if options.output.is_some() {
+        pdf_plan.stem.clone()
+    } else {
+        target_plan.stem.clone()
+    };
     // An out-of-vault marked PDF is already captured: refuse before any
     // write (in-vault cases were handled by attach/identity above).
     {
@@ -1093,7 +1114,7 @@ fn create_local_pdf_route(
             let flow = super::listen::plan_listen_flow(
                 &target_plan,
                 scratch,
-                &pdf_plan.stem,
+                &final_stem,
             )?;
             let display = listen_audio_plan(&flow);
             (Some((command, flow)), Some(display))
@@ -1101,7 +1122,7 @@ fn create_local_pdf_route(
         None => (None, audio),
     };
     let id = if options.include_id {
-        Some(pdf_plan.stem.clone())
+        Some(final_stem.clone())
     } else {
         None
     };
@@ -1118,8 +1139,7 @@ fn create_local_pdf_route(
     let styler = Styler::detect();
     if options.dry_run {
         if let Some((command, flow)) = &listen_flow {
-            let unstamped =
-                scratch.path().join(format!("{}.pdf", pdf_plan.stem));
+            let unstamped = scratch.path().join(format!("{final_stem}.pdf"));
             println!(
                 "{}",
                 super::listen::would_run_line(
@@ -1150,8 +1170,7 @@ fn create_local_pdf_route(
     }
     let installed = match &listen_flow {
         Some((command, flow)) => {
-            let unstamped =
-                scratch.path().join(format!("{}.pdf", pdf_plan.stem));
+            let unstamped = scratch.path().join(format!("{final_stem}.pdf"));
             fs::copy(&canonical, &unstamped).map_err(|error| {
                 CommandError::new(format!(
                     "stage PDF {}: {error}",
@@ -1193,6 +1212,7 @@ fn create_local_pdf_route(
         styler.success_prefix(false)
     );
     println!("source: {} (PDF)", canonical.display());
+    print_renamed_if_needed(&target_plan);
     println!("pdf: {}", target_plan.target.display());
     if let Some(audio) = &audio {
         println!("audio: {} (from {})", audio.dest.display(), audio.origin);
@@ -1241,13 +1261,23 @@ fn create_pdf_url_route(
     )?;
     let ref_type =
         default_ref_type_for_kind("pdf", options.ref_type.as_deref())?;
+    let identity = DefaultTargetIdentity::Url {
+        keys: vec![url.dedupe_key.clone()],
+        recorded,
+    };
     let target_plan = plan_target_for(
         config,
         &pdf_plan.stem,
         &ref_type,
         options.output.as_ref(),
         options.force,
+        &identity,
     )?;
+    let final_stem = if options.output.is_some() {
+        pdf_plan.stem.clone()
+    } else {
+        target_plan.stem.clone()
+    };
     // The stem is only known after the fetch, so a race that captured
     // the URL mid-fetch attaches here instead of refusing.
     if let Some(command) = listen
@@ -1293,14 +1323,14 @@ fn create_pdf_url_route(
             let flow = super::listen::plan_listen_flow(
                 &target_plan,
                 scratch,
-                &pdf_plan.stem,
+                &final_stem,
             )?;
             let display = listen_audio_plan(&flow);
             (Some((command, flow)), Some(display))
         }
         None => (None, audio),
     };
-    let id = Some(pdf_plan.stem.clone());
+    let id = Some(final_stem.clone());
     let marker = pdf_target_mod::compose_pdf_marker(
         &options.status,
         &options.parent,
@@ -1380,6 +1410,7 @@ fn create_pdf_url_route(
         styler.success_prefix(false)
     );
     println!("source: {} (PDF)", url.cleaned);
+    print_renamed_if_needed(&target_plan);
     println!("pdf: {}", target_plan.target.display());
     if let Some(audio) = &audio {
         println!("audio: {} (from {})", audio.dest.display(), audio.origin);
@@ -1396,7 +1427,7 @@ fn create_pdf_url_route(
     println!("captured: {captured}");
     println!("status: {}", options.status);
     println!("parent: {}", options.parent);
-    println!("id: {}", pdf_plan.stem);
+    println!("id: {final_stem}");
     println!(
         "pages: {installed} · size: {}",
         super::clip::format_bytes(bytes)
@@ -1461,15 +1492,25 @@ fn create_arxiv_route(
     )?;
     let ref_type =
         default_ref_type_for_kind("pdf", options.ref_type.as_deref())?;
+    let key = paper.dedupe_key();
+    let identity = DefaultTargetIdentity::Url {
+        keys: vec![key.clone(), url.dedupe_key.clone()],
+        recorded,
+    };
     let target_plan = plan_target_for(
         config,
         &pdf_plan.stem,
         &ref_type,
         options.output.as_ref(),
         options.force,
+        &identity,
     )?;
+    let final_stem = if options.output.is_some() {
+        pdf_plan.stem.clone()
+    } else {
+        target_plan.stem.clone()
+    };
     // Post-capture dedupe with the final target (stem known only now).
-    let key = paper.dedupe_key();
     // Also check the user's URL spelling key (same arXiv key).
     // With --listen a hit attaches instead of refusing.
     if let Some(command) = listen {
@@ -1535,14 +1576,14 @@ fn create_arxiv_route(
             let flow = super::listen::plan_listen_flow(
                 &target_plan,
                 scratch,
-                &pdf_plan.stem,
+                &final_stem,
             )?;
             let display = listen_audio_plan(&flow);
             (Some((command, flow)), Some(display))
         }
         None => (None, audio),
     };
-    let id = Some(pdf_plan.stem.clone());
+    let id = Some(final_stem.clone());
     let marker = pdf_target_mod::compose_pdf_marker(
         &options.status,
         &options.parent,
@@ -1625,6 +1666,7 @@ fn create_arxiv_route(
         styler.success_prefix(false)
     );
     println!("source: {} (arXiv {})", paper.abs_url(), paper.full_id());
+    print_renamed_if_needed(&target_plan);
     println!("pdf: {}", target_plan.target.display());
     if let Some(audio) = &audio {
         println!("audio: {} (from {})", audio.dest.display(), audio.origin);
@@ -1641,7 +1683,7 @@ fn create_arxiv_route(
     println!("captured: {captured}");
     println!("status: {}", options.status);
     println!("parent: {}", options.parent);
-    println!("id: {}", pdf_plan.stem);
+    println!("id: {final_stem}");
     println!(
         "pages: {installed} · size: {}",
         super::clip::format_bytes(bytes)
@@ -1705,6 +1747,7 @@ fn print_pdf_dry_run(
     } else {
         println!("source: {source_display}");
     }
+    print_renamed_if_needed(target_plan);
     println!("pdf: {}", target_plan.target.display());
     if let Some(audio) = audio {
         println!("audio: {} (from {})", audio.dest.display(), audio.origin);
@@ -1828,13 +1871,8 @@ fn plan_markdown(
             file_stem.clone()
         }
     };
-    // With -N, -i embeds the name.
-    let id = if options.include_id {
-        Some(stem.clone())
-    } else {
-        None
-    };
-    // Title: -T wins, else frontmatter/H1/stem.
+    // Title: -T wins, else frontmatter/H1/stem. The title is the local
+    // identity, so it is computed before the default-target walk.
     let title = match &options.title {
         Some(override_title) if !override_title.is_empty() => {
             override_title.clone()
@@ -1843,6 +1881,29 @@ fn plan_markdown(
     };
     let author = options.author.clone().filter(|value| !value.is_empty());
     let published = options.published.clone().filter(|value| !value.is_empty());
+    let ref_type =
+        default_ref_type_for_kind("markdown", options.ref_type.as_deref())?;
+    let identity = DefaultTargetIdentity::Title(title.clone());
+    let target_plan = plan_target_for(
+        config,
+        &stem,
+        &ref_type,
+        options.output.as_ref(),
+        options.force,
+        &identity,
+    )?;
+    // With -i, the id follows the final (possibly suffixed) stem; the
+    // marker is composed after planning for the same reason. For
+    // `--output` there is no walk, so the id stays the base stem.
+    let id = if options.include_id {
+        if options.output.is_some() {
+            Some(stem.clone())
+        } else {
+            Some(target_plan.stem.clone())
+        }
+    } else {
+        None
+    };
     let marker = compose_markdown_marker(
         &options.status,
         &options.parent,
@@ -1852,15 +1913,6 @@ fn plan_markdown(
         published.as_deref(),
         false,
     )?;
-    let ref_type =
-        default_ref_type_for_kind("markdown", options.ref_type.as_deref())?;
-    let target_plan = plan_target_for(
-        config,
-        &stem,
-        &ref_type,
-        options.output.as_ref(),
-        options.force,
-    )?;
 
     let audio =
         plan_audio_copy(config, &canonical, &markdown, &target_plan, options)?;
@@ -1868,9 +1920,11 @@ fn plan_markdown(
     Ok(CreatePlan {
         source: canonical.display().to_string(),
         source_kind: "markdown",
-        target: target_plan.target,
-        sidecar: target_plan.sidecar,
-        workflow: target_plan.workflow,
+        target: target_plan.target.clone(),
+        sidecar: target_plan.sidecar.clone(),
+        workflow: target_plan.workflow.clone(),
+        stem: target_plan.stem.clone(),
+        renamed_from: target_plan.renamed_from.clone(),
         title,
         title_source: "markdown",
         author,
@@ -2321,6 +2375,7 @@ fn print_plan(plan: &CreatePlan, options: &CreateOptions, styler: &Styler) {
         styler.success_prefix(true)
     );
     println!("source: {}", plan.source);
+    print_renamed_if_needed(&plan.target_plan());
     println!("pdf: {}", plan.target.display());
     if let Some(audio) = &plan.audio {
         println!("audio: {} (from {})", audio.dest.display(), audio.origin);
@@ -2678,6 +2733,8 @@ mod tests {
             workflow: TargetWorkflow::Intake {
                 library_destination: temp.path.join("lib/chat/report.pdf"),
             },
+            stem: "report".to_string(),
+            renamed_from: None,
             title: "Report".to_string(),
             title_source: "markdown",
             author: None,
@@ -3068,6 +3125,8 @@ mod tests {
             workflow: TargetWorkflow::Intake {
                 library_destination: temp.path.join("lib/chat/exercise.pdf"),
             },
+            stem: "exercise".to_string(),
+            renamed_from: None,
             title: "Return Link Exercise".to_string(),
             title_source: "markdown",
             author: None,

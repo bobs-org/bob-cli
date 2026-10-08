@@ -116,9 +116,12 @@ working directory; a leading `~` is expanded the same way as other Bob path
 options. `--output` cannot be combined with `--ref-type` or `--name`,
 because those only participate in default target derivation.
 
-When `--output` is omitted, the next `scan` moves the default intake PDF to
-`<lib-dir>/<ref-type>/<basename>.pdf`, refusing to create when that archived
-library PDF or sidecar already exists. An exact path inside the configured
+When `--output` is omitted, the default intake target walks `<stem>`,
+`<stem>_2`, … (see [`highlights-create.md`](highlights-create.md)): a name
+taken by a different reference is suffixed, and the next `scan` moves the
+final intake PDF to `<lib-dir>/<ref-type>/<basename>.pdf`. An exact
+`--output` path keeps today's strict behavior, refusing to create when that
+archived library PDF or sidecar already exists. An exact path inside the configured
 intake directory keeps the same intake workflow: the mirrored library
 destination is `<lib-dir>/<intake-relative-path>`, including any nested
 directories, and that occupied library PDF or Markdown/TextBundle sidecar is
@@ -142,9 +145,10 @@ three-level table of contents and PDF outline bookmarks, and embeds a page-1
 The marker parent is deliberately bare; generated Obsidian frontmatter turns
 it into a wikilink later. `-P, --parent`, `-s, --status`, and `-t, --ref-type`
 override those defaults. `-d, --dry-run` prints the resolved paths and marker
-with `writes: none`. An existing target PDF requires `-f, --force`; a
-same-stem Markdown file beside the target PDF is always refused because
-Highlights would interpret it as a sidecar. Dry-run and success output show a
+with `writes: none`. For `--output` paths, an existing target PDF requires
+`-f, --force`; a same-stem Markdown file beside the target PDF is always
+refused because Highlights would interpret it as a sidecar. Default targets
+instead suffix to `<stem>_2`, … when taken by a different reference. Dry-run and success output show a
 mirrored `library_destination` only for intake targets. Intake and direct
 library targets recommend `bob ref scan`; a PDF outside both managed
 directories states that recursive scan will not discover it and recommends

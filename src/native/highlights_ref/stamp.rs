@@ -20,6 +20,41 @@ pub(super) struct TargetPlan {
     pub(super) target: PathBuf,
     pub(super) sidecar: PathBuf,
     pub(super) workflow: TargetWorkflow,
+    pub(super) stem: String,
+    pub(super) renamed_from: Option<RenamedFrom>,
+}
+
+/// The base stem plus the first occupant that forced a default-target
+/// rename. Rendered as
+/// `renamed: <base>.pdf is taken by <occupant>; using <final>.pdf`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct RenamedFrom {
+    pub(super) base_stem: String,
+    pub(super) occupant: PathBuf,
+}
+
+/// Route-supplied identity for the default-target walk.
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub(super) enum DefaultTargetIdentity<'a> {
+    Url {
+        keys: Vec<String>,
+        recorded: &'a [super::sources::RecordedSource],
+    },
+    Title(String),
+    AlwaysDifferent,
+}
+
+impl TargetPlan {
+    pub(super) fn renamed_line(&self) -> Option<String> {
+        let renamed = self.renamed_from.as_ref()?;
+        Some(format!(
+            "renamed: {}.pdf is taken by {}; using {}.pdf",
+            renamed.base_stem,
+            renamed.occupant.display(),
+            self.stem,
+        ))
+    }
 }
 
 /// Optional document Info fields set by [`stamp_and_install`].
@@ -39,41 +74,278 @@ pub(super) const MARKER_EXTRA_ORDER: &[&str] = &[
 ];
 
 /// Plan the default intake target `xlib/<ref_type>/<stem>.pdf`.
+///
+/// Walks `<stem>`, `<stem>_2`, … up to `<stem>_999`: a free candidate is
+/// chosen, a candidate occupied by the same reference refuses (or is
+/// overwritten with `--force` when it is the intake PDF), and a candidate
+/// occupied by a different reference is skipped with the next suffix.
+/// `--force` never selects a candidate owned by a different reference.
 pub(super) fn plan_default_target(
     config: &Config,
     stem: &OsStr,
     ref_type: &str,
     force: bool,
+    identity: &DefaultTargetIdentity<'_>,
 ) -> Result<TargetPlan> {
     validate_ref_type(ref_type)?;
-    let stem =
-        stem.to_str()
-            .filter(|stem| !stem.is_empty())
-            .ok_or_else(|| {
-                CommandError::new(
-                    "output filename stem is not a nonempty UTF-8 name",
-                )
-            })?;
-    let target = config
+    let base = stem
+        .to_str()
+        .filter(|stem| !stem.is_empty())
+        .ok_or_else(|| {
+            CommandError::new(
+                "output filename stem is not a nonempty UTF-8 name",
+            )
+        })?
+        .to_string();
+    let mut base_first_occupant: Option<PathBuf> = None;
+    for index in 1..=999 {
+        let candidate = if index == 1 {
+            base.clone()
+        } else {
+            format!("{base}_{index}")
+        };
+        let target = config
+            .xlib_dir
+            .join(ref_type)
+            .join(&candidate)
+            .with_extension("pdf");
+        let library_destination = config
+            .lib_dir
+            .join(ref_type)
+            .join(&candidate)
+            .with_extension("pdf");
+        let workflow = TargetWorkflow::Intake {
+            library_destination: library_destination.clone(),
+        };
+        let sidecar = target.with_extension("md");
+        let ref_note = config
+            .ref_dir
+            .join(ref_type)
+            .join(&candidate)
+            .with_extension("md");
+        let occupants = default_stem_occupants(config, ref_type, &candidate);
+        if index == 1
+            && let Some(first) = occupants.first().cloned()
+        {
+            base_first_occupant = Some(first);
+        }
+        if occupants.is_empty() {
+            let plan = TargetPlan {
+                target: target.clone(),
+                sidecar: sidecar.clone(),
+                workflow: workflow.clone(),
+                stem: candidate.clone(),
+                renamed_from: None,
+            };
+            // Free candidates pass trivially; keep the strict checks as
+            // the single source of truth.
+            refuse_target_collisions(&target, &sidecar, &workflow, force)?;
+            if candidate == base {
+                return Ok(plan);
+            }
+            return Ok(TargetPlan {
+                renamed_from: base_first_occupant.map(|occupant| RenamedFrom {
+                    base_stem: base.clone(),
+                    occupant,
+                }),
+                ..plan
+            });
+        }
+        let same = candidate_is_same_reference(
+            &target,
+            &library_destination,
+            &ref_note,
+            identity,
+        );
+        if !same {
+            continue;
+        }
+        // Same reference: library or ref-note occupants always refuse;
+        // an intake-only occupant refuses without --force and overwrites
+        // with --force (keeping the library/sidecar checks).
+        let has_library_or_note = occupants.iter().any(|occupant| {
+            occupant == &library_destination
+                || occupant == &ref_note
+                || library_destination_sidecars(&library_destination)
+                    .contains(occupant)
+        });
+        if has_library_or_note {
+            let hint = format!(
+                "to add audio to that capture, run bob ref create {} --listen",
+                library_destination.display()
+            );
+            return Err(CommandError::new(format!(
+                "already captured as {} ({}); pass -N/--name to capture under a different name\nhint: {hint}",
+                occupants
+                    .iter()
+                    .find(|occupant| *occupant == &library_destination
+                        || *occupant == &ref_note
+                        || library_destination_sidecars(&library_destination)
+                            .contains(occupant))
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_else(|| library_destination.display().to_string()),
+                normalize_title_for_report(identity),
+            )));
+        }
+        if !force {
+            let hint = format!(
+                "to add audio to that capture, run bob ref create {} --listen",
+                library_destination.display()
+            );
+            return Err(CommandError::new(format!(
+                "already queued in {}; pass --force to overwrite it\nhint: {hint}",
+                target.display(),
+            )));
+        }
+        // --force same-intake overwrite: the library/sidecar checks stay.
+        refuse_target_collisions(&target, &sidecar, &workflow, force)?;
+        if candidate == base {
+            return Ok(TargetPlan {
+                target,
+                sidecar,
+                workflow,
+                stem: candidate,
+                renamed_from: None,
+            });
+        }
+        return Ok(TargetPlan {
+            target,
+            sidecar,
+            workflow,
+            stem: candidate,
+            renamed_from: base_first_occupant.map(|occupant| RenamedFrom {
+                base_stem: base.clone(),
+                occupant,
+            }),
+        });
+    }
+    Err(CommandError::new(format!(
+        "no free default filename for {base}; pass -N/--name or -o/--output"
+    )))
+}
+
+/// Every path that blocks a default stem: intake PDF and Highlights
+/// sidecars, library PDF and sidecars, and the ref note `scan` would
+/// write. Companion audio is deliberately excluded.
+pub(super) fn default_stem_occupants(
+    config: &Config,
+    ref_type: &str,
+    stem: &str,
+) -> Vec<PathBuf> {
+    let intake_pdf = config
         .xlib_dir
         .join(ref_type)
         .join(stem)
         .with_extension("pdf");
-    let library_destination = config
+    let intake_md = config
+        .xlib_dir
+        .join(ref_type)
+        .join(stem)
+        .with_extension("md");
+    let intake_bundle = config
+        .xlib_dir
+        .join(ref_type)
+        .join(stem)
+        .with_extension("textbundle");
+    let library_pdf = config
         .lib_dir
         .join(ref_type)
         .join(stem)
         .with_extension("pdf");
-    let workflow = TargetWorkflow::Intake {
-        library_destination,
-    };
-    let sidecar = target.with_extension("md");
-    refuse_target_collisions(&target, &sidecar, &workflow, force)?;
-    Ok(TargetPlan {
-        target,
-        sidecar,
-        workflow,
-    })
+    let library_sidecars = library_destination_sidecars(&library_pdf);
+    let ref_note = config
+        .ref_dir
+        .join(ref_type)
+        .join(stem)
+        .with_extension("md");
+    let mut occupants = Vec::new();
+    for path in [
+        intake_pdf,
+        intake_md,
+        intake_bundle,
+        library_pdf,
+        library_sidecars[0].clone(),
+        library_sidecars[1].clone(),
+        ref_note,
+    ] {
+        if path.exists() {
+            occupants.push(path);
+        }
+    }
+    occupants
+}
+
+fn normalize_title_for_report(identity: &DefaultTargetIdentity<'_>) -> String {
+    match identity {
+        DefaultTargetIdentity::Title(title) => {
+            format!("title {}", title.trim())
+        }
+        DefaultTargetIdentity::Url { keys, .. } => {
+            keys.first().cloned().unwrap_or_else(|| "url".to_string())
+        }
+        DefaultTargetIdentity::AlwaysDifferent => "stem".to_string(),
+    }
+}
+
+/// Per-candidate identity: only intake/library PDFs (local title routes)
+/// and, for URL routes, recorded ref notes count. Sidecar-only,
+/// ref-note-only (local), and unmarked-PDF occupants are always a
+/// different reference.
+fn candidate_is_same_reference(
+    intake_pdf: &Path,
+    library_pdf: &Path,
+    ref_note: &Path,
+    identity: &DefaultTargetIdentity<'_>,
+) -> bool {
+    match identity {
+        DefaultTargetIdentity::AlwaysDifferent => false,
+        DefaultTargetIdentity::Title(planned) => {
+            title_matches_pdf(planned, intake_pdf)
+                || title_matches_pdf(planned, library_pdf)
+        }
+        DefaultTargetIdentity::Url { keys, recorded } => {
+            recorded.iter().any(|hit| {
+                keys.contains(&hit.dedupe_key)
+                    && (normalize_lexically(&hit.path)
+                        == normalize_lexically(intake_pdf)
+                        || (hit.is_ref_note
+                            && hit.source_pdf.is_some()
+                            && normalize_lexically(&hit.path)
+                                == normalize_lexically(ref_note)))
+            })
+        }
+    }
+}
+
+/// Trim, collapse whitespace, and lowercase for title comparisons.
+pub(super) fn normalize_title(raw: &str) -> String {
+    raw.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+/// True when the PDF at `path` carries the planned title as its page-1
+/// marker `title` or its raw Info `Title`.
+fn title_matches_pdf(planned: &str, path: &Path) -> bool {
+    let wanted = normalize_title(planned);
+    if wanted.is_empty() || !path.is_file() {
+        return false;
+    }
+    if let Ok(marker) = super::marker::read_pdf_marker(path)
+        && let Ok(projection) = super::marker::parse_marker(&marker.contents)
+        && let Some(title) =
+            projection.get("title").and_then(|value| value.as_string())
+        && normalize_title(title) == wanted
+    {
+        return true;
+    }
+    if let Some(info) = super::pdf_meta::raw_info_title(path)
+        && normalize_title(&info) == wanted
+    {
+        return true;
+    }
+    false
 }
 
 /// Plan an exact `--output` target path.
@@ -87,10 +359,17 @@ pub(super) fn plan_exact_output(
     let workflow = classify_target(config, &target)?;
     let sidecar = target.with_extension("md");
     refuse_target_collisions(&target, &sidecar, &workflow, force)?;
+    let stem = target
+        .file_stem()
+        .and_then(OsStr::to_str)
+        .unwrap_or_default()
+        .to_string();
     Ok(TargetPlan {
         target,
         sidecar,
         workflow,
+        stem,
+        renamed_from: None,
     })
 }
 
@@ -647,6 +926,46 @@ mod tests {
             .and_then(|value| decode_text_string(value).ok())
     }
 
+    fn always_different() -> DefaultTargetIdentity<'static> {
+        DefaultTargetIdentity::AlwaysDifferent
+    }
+
+    fn title_identity(title: &str) -> DefaultTargetIdentity<'static> {
+        DefaultTargetIdentity::Title(title.to_string())
+    }
+
+    fn write_stamped_pdf(target: &Path, title: &str) {
+        let rendered = target.with_extension("render.pdf");
+        write_minimal_pdf(&rendered, false);
+        let marker = compose_marker("ready", "obsidian_ref", title, None, &[])
+            .expect("marker");
+        stamp_and_install(
+            &rendered,
+            target,
+            &marker,
+            &PdfInfo {
+                title: Some(title.to_string()),
+                author: None,
+            },
+        )
+        .expect("stamp occupant");
+        let _ = fs::remove_file(&rendered);
+    }
+
+    fn write_info_only_pdf(target: &Path, info_title: &str) {
+        write_minimal_pdf(target, false);
+        let mut document = Document::load(target).expect("load info-only PDF");
+        set_pdf_info(
+            &mut document,
+            &PdfInfo {
+                title: Some(info_title.to_string()),
+                author: None,
+            },
+        )
+        .expect("set info title");
+        document.save(target).expect("save info-only PDF");
+    }
+
     #[test]
     fn default_target_derives_ref_type_output_and_valid_marker() {
         let temp = TempDir::new("plan");
@@ -655,11 +974,14 @@ mod tests {
             OsStr::new("report"),
             "books",
             false,
+            &always_different(),
         )
         .expect("plan");
 
         assert_eq!(plan.target, temp.path.join("xlib/books/report.pdf"));
         assert_eq!(plan.sidecar, temp.path.join("xlib/books/report.md"));
+        assert_eq!(plan.stem, "report");
+        assert_eq!(plan.renamed_from, None);
         assert_eq!(
             intake_destination(&plan),
             temp.path.join("lib/books/report.pdf")
@@ -683,111 +1005,326 @@ mod tests {
     fn default_target_rejects_bad_stem_and_ref_type() {
         let temp = TempDir::new("plan-invalid");
         let config = config(&temp.path);
-        assert!(plan_default_target(&config, OsStr::new(""), "chat", false)
-            .is_err());
+        assert!(plan_default_target(
+            &config,
+            OsStr::new(""),
+            "chat",
+            false,
+            &always_different(),
+        )
+        .is_err());
         assert!(plan_default_target(
             &config,
             OsStr::new("report"),
             "papers/deep",
-            false
+            false,
+            &always_different(),
         )
         .is_err());
     }
 
     #[test]
-    fn target_refuses_existing_pdf_without_force() {
-        let temp = TempDir::new("overwrite");
+    fn default_target_free_base_has_no_rename() {
+        let temp = TempDir::new("free");
+        let plan = plan_default_target(
+            &config(&temp.path),
+            OsStr::new("report"),
+            "chat",
+            false,
+            &title_identity("Report"),
+        )
+        .expect("free base");
+        assert_eq!(plan.stem, "report");
+        assert_eq!(plan.renamed_from, None);
+    }
+
+    #[test]
+    fn default_target_suffixes_each_occupant_kind() {
+        // Every occupant kind counts as occupied; with a different
+        // reference each bumps to `_2` with a `renamed:` record.
+        let cases: &[(&str, &str)] = &[
+            ("intake-pdf", "xlib/chat/report.pdf"),
+            ("intake-md", "xlib/chat/report.md"),
+            ("intake-bundle", "xlib/chat/report.textbundle"),
+            ("library-pdf", "lib/chat/report.pdf"),
+            ("library-md", "lib/chat/report.md"),
+            ("library-bundle", "lib/chat/report.textbundle"),
+            ("ref-note", "ref/chat/report.md"),
+        ];
+        for (name, relative) in cases {
+            let temp = TempDir::new(&format!("suffix-{name}"));
+            let occupant = temp.path.join(relative);
+            if relative.ends_with(".textbundle") {
+                fs::create_dir_all(&occupant).expect("create bundle dir");
+            } else {
+                fs::create_dir_all(occupant.parent().expect("occupant parent"))
+                    .expect("create occupant parent");
+                fs::write(&occupant, b"existing").expect("write occupant");
+            }
+            let plan = plan_default_target(
+                &config(&temp.path),
+                OsStr::new("report"),
+                "chat",
+                false,
+                &title_identity("A Different Title"),
+            )
+            .unwrap_or_else(|error| {
+                panic!("{name} must suffix, got error: {error}")
+            });
+            assert_eq!(plan.stem, "report_2", "{name}");
+            assert_eq!(
+                plan.target,
+                temp.path.join("xlib/chat/report_2.pdf"),
+                "{name}"
+            );
+            let renamed = plan.renamed_from.as_ref().expect("renamed");
+            assert_eq!(renamed.base_stem, "report", "{name}");
+            assert_eq!(renamed.occupant, occupant, "{name}");
+            let line = plan.renamed_line().expect("renamed line");
+            assert!(
+                line == format!(
+                    "renamed: report.pdf is taken by {}; using report_2.pdf",
+                    occupant.display()
+                ),
+                "{name}: {line}"
+            );
+        }
+    }
+
+    #[test]
+    fn default_target_chains_to_3_when_2_is_taken() {
+        let temp = TempDir::new("chain");
+        for stem in ["report", "report_2"] {
+            let occupant = temp.path.join(format!("xlib/chat/{stem}.pdf"));
+            fs::create_dir_all(occupant.parent().expect("parent"))
+                .expect("create parent");
+            fs::write(&occupant, b"existing").expect("write occupant");
+        }
+        let plan = plan_default_target(
+            &config(&temp.path),
+            OsStr::new("report"),
+            "chat",
+            false,
+            &title_identity("Different"),
+        )
+        .expect("chain to _3");
+        assert_eq!(plan.stem, "report_3");
+        assert_eq!(plan.target, temp.path.join("xlib/chat/report_3.pdf"));
+    }
+
+    #[test]
+    fn default_target_same_intake_refuses_then_overwrites_with_force() {
+        let temp = TempDir::new("same-intake");
         let target = temp.path.join("xlib/chat/report.pdf");
-        fs::create_dir_all(target.parent().expect("target parent"))
-            .expect("create target parent");
-        fs::write(&target, b"existing").expect("write target");
+        fs::create_dir_all(target.parent().expect("parent"))
+            .expect("create parent");
+        write_stamped_pdf(&target, "Report");
 
         let error = plan_default_target(
             &config(&temp.path),
             OsStr::new("report"),
             "chat",
             false,
+            &title_identity("Report"),
         )
-        .expect_err("must refuse overwrite");
-        assert!(error.to_string().contains("--force"), "{error}");
+        .expect_err("same intake must refuse without force");
+        let message = error.to_string();
+        assert!(message.contains("already queued"), "{message}");
+        assert!(message.contains("--force"), "{message}");
+        assert!(message.contains("--listen"), "{message}");
 
+        let plan = plan_default_target(
+            &config(&temp.path),
+            OsStr::new("report"),
+            "chat",
+            true,
+            &title_identity("Report"),
+        )
+        .expect("same intake overwrites with force");
+        assert_eq!(plan.stem, "report");
+        assert_eq!(plan.target, target);
+        assert_eq!(plan.renamed_from, None);
+    }
+
+    #[test]
+    fn default_target_same_library_refuses_with_and_without_force() {
+        for force in [false, true] {
+            let temp = TempDir::new(&format!("same-lib-{force}"));
+            let library = temp.path.join("lib/chat/report.pdf");
+            fs::create_dir_all(library.parent().expect("parent"))
+                .expect("create parent");
+            write_stamped_pdf(&library, "Report");
+
+            let error = plan_default_target(
+                &config(&temp.path),
+                OsStr::new("report"),
+                "chat",
+                force,
+                &title_identity("Report"),
+            )
+            .expect_err("same library must refuse");
+            let message = error.to_string();
+            assert!(message.contains("already captured"), "{message}");
+            assert!(message.contains("Report"), "{message}");
+            assert!(message.contains("--listen"), "{message}");
+        }
+    }
+
+    #[test]
+    fn default_target_different_library_suffixes() {
+        let temp = TempDir::new("diff-lib");
+        let library = temp.path.join("lib/chat/report.pdf");
+        fs::create_dir_all(library.parent().expect("parent"))
+            .expect("create parent");
+        write_stamped_pdf(&library, "Archived Report");
+
+        let plan = plan_default_target(
+            &config(&temp.path),
+            OsStr::new("report"),
+            "chat",
+            false,
+            &title_identity("Report"),
+        )
+        .expect("different library suffixes");
+        assert_eq!(plan.stem, "report_2");
+    }
+
+    #[test]
+    fn default_target_does_not_skip_past_same_at_2() {
+        let temp = TempDir::new("same-at-2");
+        let different = temp.path.join("xlib/chat/report.pdf");
+        fs::create_dir_all(different.parent().expect("parent"))
+            .expect("create parent");
+        fs::write(&different, b"existing").expect("write different");
+        let same = temp.path.join("xlib/chat/report_2.pdf");
+        write_stamped_pdf(&same, "Report");
+
+        let error = plan_default_target(
+            &config(&temp.path),
+            OsStr::new("report"),
+            "chat",
+            false,
+            &title_identity("Report"),
+        )
+        .expect_err("same at _2 must refuse");
+        assert!(error.to_string().contains("already queued"), "{error}");
+    }
+
+    #[test]
+    fn default_target_title_matches_marker_or_info_normalized() {
+        let temp = TempDir::new("title-match");
+        let target = temp.path.join("xlib/chat/report.pdf");
+        fs::create_dir_all(target.parent().expect("parent"))
+            .expect("create parent");
+        write_stamped_pdf(&target, "The Real Title");
+        // Whitespace and case are normalized.
         assert!(plan_default_target(
             &config(&temp.path),
             OsStr::new("report"),
             "chat",
-            true
+            false,
+            &title_identity("  the   REAL title "),
         )
-        .is_ok());
-    }
+        .is_err());
 
-    #[test]
-    fn target_refuses_highlights_markdown_sidecar_even_with_force() {
-        let temp = TempDir::new("sidecar");
-        let sidecar = temp.path.join("xlib/chat/report.md");
-        fs::create_dir_all(sidecar.parent().expect("sidecar parent"))
-            .expect("create sidecar parent");
-        fs::write(&sidecar, "# Sidecar\n").expect("write sidecar");
-
-        let error = plan_default_target(
-            &config(&temp.path),
+        let info_temp = TempDir::new("title-info");
+        let info_target = info_temp.path.join("xlib/chat/report.pdf");
+        fs::create_dir_all(info_target.parent().expect("parent"))
+            .expect("create parent");
+        write_info_only_pdf(&info_target, "Info Title");
+        assert!(plan_default_target(
+            &config(&info_temp.path),
             OsStr::new("report"),
             "chat",
-            true,
+            false,
+            &title_identity("info title"),
         )
-        .expect_err("must refuse sidecar collision");
-        assert!(error.to_string().contains("sidecar"), "{error}");
-    }
-
-    #[test]
-    fn target_refuses_existing_library_pdf_even_with_force() {
-        let temp = TempDir::new("library-pdf");
-        let library_destination = temp.path.join("lib/chat/report.pdf");
-        fs::create_dir_all(
-            library_destination
-                .parent()
-                .expect("library destination parent"),
-        )
-        .expect("create library destination parent");
-        fs::write(&library_destination, b"existing")
-            .expect("write library destination");
-
-        let error = plan_default_target(
-            &config(&temp.path),
+        .is_err());
+        // A different title suffixes instead.
+        let plan = plan_default_target(
+            &config(&info_temp.path),
             OsStr::new("report"),
             "chat",
-            true,
+            false,
+            &title_identity("Something Else"),
         )
-        .expect_err("must refuse archived library destination");
-
-        let message = error.to_string();
-        assert!(message.contains("xlib/chat/report.pdf"), "{message}");
-        assert!(message.contains("lib/chat/report.pdf"), "{message}");
-        assert!(
-            message.contains("library destination already exists"),
-            "{message}"
-        );
+        .expect("different title suffixes");
+        assert_eq!(plan.stem, "report_2");
     }
 
     #[test]
-    fn target_refuses_existing_library_sidecar() {
-        let temp = TempDir::new("library-sidecar");
-        let library_sidecar = temp.path.join("lib/chat/report.md");
-        fs::create_dir_all(library_sidecar.parent().expect("sidecar parent"))
-            .expect("create sidecar parent");
-        fs::write(&library_sidecar, "# Sidecar\n").expect("write sidecar");
+    fn default_target_url_identity_matches_intake_or_ref_note() {
+        use super::super::sources::RecordedSource;
+        let temp = TempDir::new("url-identity");
+        let config = config(&temp.path);
+        let intake = temp.path.join("xlib/blogs/post.pdf");
+        fs::create_dir_all(intake.parent().expect("parent"))
+            .expect("create parent");
+        fs::write(&intake, b"existing").expect("write intake");
+        let recorded = vec![RecordedSource {
+            dedupe_key: "https://example.com/post".to_string(),
+            path: intake.clone(),
+            is_ref_note: false,
+            source_pdf: None,
+            has_audio: false,
+        }];
+        let identity = DefaultTargetIdentity::Url {
+            keys: vec!["https://example.com/post".to_string()],
+            recorded: &recorded,
+        };
+        // Same URL at the base refuses without force.
+        assert!(plan_default_target(
+            &config,
+            OsStr::new("post"),
+            "blogs",
+            false,
+            &identity,
+        )
+        .is_err());
+        // A different URL suffixes.
+        let other = DefaultTargetIdentity::Url {
+            keys: vec!["https://example.com/other".to_string()],
+            recorded: &recorded,
+        };
+        let plan = plan_default_target(
+            &config,
+            OsStr::new("post"),
+            "blogs",
+            false,
+            &other,
+        )
+        .expect("different URL suffixes");
+        assert_eq!(plan.stem, "post_2");
+    }
 
+    #[test]
+    fn default_target_cap_reports_no_free_name() {
+        let temp = TempDir::new("cap");
+        for index in 1..=999 {
+            let stem = if index == 1 {
+                "report".to_string()
+            } else {
+                format!("report_{index}")
+            };
+            let occupant = temp.path.join(format!("xlib/chat/{stem}.pdf"));
+            fs::create_dir_all(occupant.parent().expect("parent"))
+                .expect("create parent");
+            fs::write(&occupant, b"x").expect("write occupant");
+        }
         let error = plan_default_target(
             &config(&temp.path),
             OsStr::new("report"),
             "chat",
             false,
+            &always_different(),
         )
-        .expect_err("must refuse archived library sidecar");
-
-        let message = error.to_string();
-        assert!(message.contains("xlib/chat/report.pdf"), "{message}");
-        assert!(message.contains("lib/chat/report.md"), "{message}");
-        assert!(message.contains("library destination sidecar"), "{message}");
+        .expect_err("cap must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("no free default filename for report"),
+            "{error}"
+        );
     }
 
     #[test]

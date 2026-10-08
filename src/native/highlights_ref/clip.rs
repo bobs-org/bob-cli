@@ -14,8 +14,9 @@ use std::{
 use super::{clip_adapter::*, clip_url::*, pdf_meta::*, sources::*};
 use super::{
     compose_marker, current_local_date, plan_default_target, plan_exact_output,
-    print_next_step, stamp_and_install, CommandError, Config, MarkerValue,
-    PdfInfo, ScratchDir, TargetPlan, TargetWorkflow,
+    print_next_step, stamp_and_install, CommandError, Config,
+    DefaultTargetIdentity, MarkerValue, PdfInfo, ScratchDir, TargetPlan,
+    TargetWorkflow,
 };
 use crate::native::style::Styler;
 
@@ -250,6 +251,10 @@ pub(super) fn capture_article(
     // Fail fast when the target is already known: --output, --name, or a
     // URL slug all plan before the adapter runs.
     let pre_stem = options.name.clone().or_else(|| stem_from_url(&web_url));
+    let pre_identity = DefaultTargetIdentity::Url {
+        keys: vec![web_url.dedupe_key.clone()],
+        recorded: &recorded,
+    };
     let pre_plan = match &options.output {
         Some(output) => {
             Some(plan_exact_output_guarded(config, output, options.force)?)
@@ -262,6 +267,7 @@ pub(super) fn capture_article(
                     std::ffi::OsStr::new(stem),
                     &options.ref_type,
                     options.force,
+                    &pre_identity,
                 )
             })
             .transpose()?,
@@ -363,11 +369,34 @@ pub(super) fn capture_article(
         })?;
     let author = options.author.clone().or(response.author.clone());
     let published = options.published.clone().or(response.published.clone());
+    // The final stem is only known after capture; the final plan re-walks
+    // with it, so the marker (and its id) is composed after planning.
+    let final_identity = DefaultTargetIdentity::Url {
+        keys: vec![web_url.dedupe_key.clone()],
+        recorded: &recorded,
+    };
+    let plan = match &options.output {
+        Some(output) => {
+            plan_exact_output_guarded(config, output, options.force)?
+        }
+        None => plan_default_target(
+            config,
+            std::ffi::OsStr::new(&stem),
+            &options.ref_type,
+            options.force,
+            &final_identity,
+        )?,
+    };
+    let final_stem = if options.output.is_some() {
+        stem.clone()
+    } else {
+        plan.stem.clone()
+    };
     let marker = compose_marker(
         &options.status,
         &options.parent,
         &title,
-        Some(&stem),
+        Some(&final_stem),
         &[
             ("source_url", MarkerValue::String(web_url.cleaned.clone())),
             (
@@ -381,17 +410,6 @@ pub(super) fn capture_article(
             ("captured", MarkerValue::String(captured.clone())),
         ],
     )?;
-    let plan = match &options.output {
-        Some(output) => {
-            plan_exact_output_guarded(config, output, options.force)?
-        }
-        None => plan_default_target(
-            config,
-            std::ffi::OsStr::new(&stem),
-            &options.ref_type,
-            options.force,
-        )?,
-    };
     if let Some(hit) = check_dedupe_for_clip(
         &recorded,
         &web_url.dedupe_key,
@@ -428,7 +446,7 @@ pub(super) fn capture_article(
     };
     let listen_flow = match &listen_command {
         Some(_) => Some(
-            super::listen::plan_listen_flow(&plan, &workdir, &stem)
+            super::listen::plan_listen_flow(&plan, &workdir, &final_stem)
                 .map_err(ClipError::from)?,
         ),
         None => None,
@@ -589,6 +607,9 @@ pub(super) fn capture_article(
         "{} created Highlights-ready web PDF",
         styler.success_prefix(false)
     );
+    if let Some(line) = plan.renamed_line() {
+        println!("{line}");
+    }
     println!("pdf: {}", plan.target.display());
     if let Some(audio) = report_audio {
         println!("audio: {} (from {})", audio.dest.display(), audio.origin);
@@ -604,7 +625,7 @@ pub(super) fn capture_article(
     println!("source_url: {}", web_url.cleaned);
     println!("status: {}", options.status);
     println!("parent: {}", options.parent);
-    println!("id: {stem}");
+    println!("id: {final_stem}");
     println!("capture: {}", describe_capture(&response));
     println!(
         "pages: {page_count} · images: {}/{} · size: {} · fidelity: {}",
@@ -717,6 +738,9 @@ fn print_dry_run(
         styler.success_prefix(true)
     );
     println!("source_url: {}", web_url.cleaned);
+    if let Some(line) = plan.renamed_line() {
+        println!("{line}");
+    }
     println!("pdf: {}", plan.target.display());
     if let Some(audio) = audio {
         println!("audio: {} (from {})", audio.dest.display(), audio.origin);
@@ -769,7 +793,7 @@ fn print_dry_run(
         &options.status,
         &options.parent,
         title,
-        plan.target.file_stem().and_then(|stem| stem.to_str()),
+        Some(plan.stem.as_str()),
         &[
             ("source_url", MarkerValue::String(web_url.cleaned.clone())),
             (

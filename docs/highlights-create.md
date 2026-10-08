@@ -221,11 +221,28 @@ Current note-side import deduplication reads scalar `source_url`/`url`
 fields only. A YAML list of URLs is indexed by `bob ref find` but missed by
 import deduplication; check those notes with `find` before importing again.
 
-Markdown and local PDFs outside the vault whose planned library destination
-already exists keep refusing; identity is not proven by stem alone. The
-refusal adds `hint: to add audio to that capture, run bob ref
-create <library PDF> --listen`, naming the existing PDF path. The same hint
-applies when the planned intake target already exists.
+Default targets dedupe by walking `<stem>`, `<stem>_2`, `<stem>_3`, …
+(up to `<stem>_999`): a free candidate is chosen, a candidate occupied by a
+different reference is skipped, and a candidate occupied by the same
+reference refuses (`already captured as <path>` for library or ref-note
+occupants, `already queued in <path>; pass --force to overwrite it` for
+intake occupants). Both refusals keep
+`hint: to add audio to that capture, run bob ref create <library PDF> --listen`.
+For Markdown and local PDFs the identity is the create-time title (the `-T`
+override, else frontmatter/H1/stem or Info title/filename): a candidate is
+the same reference when its intake or library PDF carries that title as its
+page-1 marker `title` or raw Info `Title` (trimmed, whitespace-collapsed,
+case-insensitive). A different source with the same filename but a different
+title is suffixed; two different sources with the same stem and title still
+refuse (pass `-N`). For URL routes the identity is the source URL dedupe
+key (arXiv checks both the paper and URL keys): in practice only the
+`--force` same-intake overwrite refuses, everything else suffixes. An
+explicit `-o/--output` path keeps the exact path with today's strict checks.
+When the walk skips at least one candidate, dry-run and success output print
+`renamed: <base>.pdf is taken by <first occupant>; using <final>.pdf` just
+before `pdf:`. `--force` only overwrites the same reference's intake PDF,
+never a different reference. If all 999 candidates are taken, the command
+fails with `no free default filename for <stem>; pass -N/--name or -o/--output`.
 
 ## Ingest boundary
 
@@ -245,8 +262,9 @@ exclusive, blocking) for the whole call — the lock serializes the
 capture worker and Keep pull — and reports
 `waiting for another clip…` once through its progress callback while it
 waits. `bob ref create` keeps its own printing routes and never calls
-`ingest_url`. Ingest writes nothing to stdout and prints nothing to
-stderr itself.
+`ingest_url`. Ingest uses the same default-target suffixing (`<stem>_2`,
+`<stem>_3`, …) with its URL identity and `force = false`. Ingest writes
+nothing to stdout and prints nothing to stderr itself.
 Error kinds: `network`, `timeout`, `http_status` (retryable only for 408,
 429, and 5xx), `browser`, and `dependency` are retryable; `blocked`,
 `thin`, `render`, `unsupported_content`, `collision`, `invalid_url`, and
