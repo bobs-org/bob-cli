@@ -8,7 +8,7 @@ The guides below explain current behavior and provide detailed contracts.
 For daily work, read [Capture](capture.md), [Plan and Ready caps](plan.md), and
 [Freshness review](freshness.md). For the Obsidian interface, read
 [Dashboard navigation](dashboard.md), the [Task Card](projects.md#task-card),
-and [task date marks](date-marks.md).
+[task date marks](date-marks.md), and [task tag marks](task-tag-marks.md).
 
 For reading, start with the [reference-library guide](ref.md). Import material
 with [`bob ref create`](highlights-create.md), or save bare links with
@@ -39,6 +39,7 @@ then creates the notes that `bob ref list` shows. The
 | [ref-jobs.md](ref-jobs.md) | `bob ref jobs` background capture progress, worker, fallback, and recovery |
 | [task-dependencies.md](task-dependencies.md) | Task dependency links: Depends-On line contract and conformance vectors |
 | [task-status-hooks.md](task-status-hooks.md) | `bob task reconcile` Pomodoro-driven task status |
+| [task-tag-marks.md](task-tag-marks.md) | Task tag marks: the quiet hash glyph that replaces the `#task` pill |
 | [vault-git-sync.md](vault-git-sync.md) | Git-only Bob vault sync operations, triggers, conflict copies, and bridge policy |
 
 `bob <command> --help` is the concise usage source for that command, and

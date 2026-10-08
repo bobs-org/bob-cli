@@ -1385,6 +1385,7 @@ blocks point at `done/..._done#^block-id`, and the vault Git commit was pushed.
 | `bob query` Dataview and Tasks | [`docs/dataview.md`](docs/dataview.md) |
 | Task freshness review lease, placement, evaluation, and display | [`docs/freshness.md`](docs/freshness.md) |
 | Task date marks and calendar labels | [`docs/date-marks.md`](docs/date-marks.md) |
+| Task tag marks for the #task tag | [`docs/task-tag-marks.md`](docs/task-tag-marks.md) |
 | Today's plan, sticky lanes, dashboard READY, and per-note Ready caps | [`docs/plan.md`](docs/plan.md) |
 | Highlights PDF intake and reference notes | [`docs/highlights-ref-sync.md`](docs/highlights-ref-sync.md) |
 | `bob ref create` Markdown, PDF, and URL targets | [`docs/highlights-create.md`](docs/highlights-create.md) |
