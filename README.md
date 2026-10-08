@@ -724,9 +724,9 @@ bob freshness seed [-b|--bob-dir DIR] [-d|--dry-run] [-F|--force] [-f|--format h
 ```
 
 Running `bob freshness` with no subcommand runs read-only `list`: the queue
-in order PRE → NEW → PROJECTS → PENDING → NEXT → TICKLER → REFERENCES → ROTTEN → POST.
-Both `list` and `seed` use JSON schema 10. Counts cover the whole vault even
-with `--limit`; `counts.walk` sums the nine `counts.by_tier` values. Ready
+in order PRE → NEW → PROJECTS → PENDING → NEXT → RECURRING → TICKLER → REFERENCES → ROTTEN → POST.
+Both `list` and `seed` use JSON schema 11. Counts cover the whole vault even
+with `--limit`; `counts.walk` sums the ten `counts.by_tier` values. Ready
 state totals and walk-tier totals have different scopes.
 
 Ordinary Pending and Next tasks use `freshness.pending_interval` /
@@ -735,7 +735,9 @@ Due `^prj` and `^ref` trackers walk in PROJECTS and REFERENCES; tracker interval
 override the task/note/global cadence when configured, otherwise trackers
 inherit that cadence even in Pending or Next. Project review follows the
 `#hide` written by `bob projects sync`; reference review allows `#hide` on
-exact `^ref` tasks. Today-linked, recurring, daily-note, blocked, and
+exact `^ref` tasks. Once a recurring occurrence's date arrives it walks in
+RECURRING until completed, rescheduled, linked to Today, or cancelled; undated
+recurring tasks get a lint instead. Today-linked, daily-note, blocked, and
 future-scheduled tasks stay outside the review queue, except PRE/POST
 `#gtd` checklist rows, which walk by tag.
 

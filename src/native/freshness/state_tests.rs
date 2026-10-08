@@ -79,6 +79,8 @@ fn row(line: &str) -> FreshnessRow {
         is_daily_note: false,
         is_today: false,
         scheduled: None,
+        due: None,
+        start: None,
         created: None,
         raw_line: line.to_string(),
         note_refresh_raw: None,
@@ -354,6 +356,8 @@ fn stamped_row(
         is_daily_note: false,
         is_today: false,
         scheduled: None,
+        due: None,
+        start: None,
         created: None,
         raw_line: format!("- [{status}] #task Counted [fresh:: {fresh}]"),
         note_refresh_raw: None,
@@ -475,6 +479,8 @@ fn lane_row(
         is_daily_note: false,
         is_today: false,
         scheduled: None,
+        due: None,
+        start: None,
         created,
         raw_line,
         note_refresh_raw: None,
@@ -1132,8 +1138,8 @@ fn resurfaced_reference_walks_references_without_decide() {
 }
 
 /// Seven-tier queue order with stable ties: NEW → PROJECTS →
-/// PENDING → NEXT → TICKLER → REFERENCES → ROTTEN, and the walk
-/// sums the histogram with a `references_due` count.
+/// PENDING → NEXT → RECURRING → TICKLER → REFERENCES → ROTTEN, and
+/// the walk sums the histogram with a `references_due` count.
 #[test]
 fn seven_tier_order_with_references() {
     let mut config = default_config();
@@ -1360,9 +1366,9 @@ fn cl7_one_off_post_keeps_new_state() {
 }
 
 /// CL8. One row per tier walks PRE → NEW → PROJECTS → PENDING →
-/// NEXT → TICKLER → REFERENCES → ROTTEN → POST.
+/// NEXT → RECURRING → TICKLER → REFERENCES → ROTTEN → POST.
 #[test]
-fn cl8_nine_tier_order() {
+fn cl8_ten_tier_order() {
     let mut config = default_config();
     config.reference_interval = Some(7);
     let mut pre = ready_row("i.md", 1, None, None);
@@ -1376,6 +1382,12 @@ fn cl8_nine_tier_order() {
     prj.raw_line = "- [ ] #task Project ^prj".to_string();
     let pending = lane_row("f.md", 1, '/', Some("2026-10-07"), None);
     let next = lane_row("e.md", 1, '*', Some("2026-10-07"), None);
+    let mut recurring = ready_row("ee.md", 1, None, None);
+    recurring.recurring = true;
+    recurring.scheduled = Some(date(2026, 10, 1));
+    recurring.raw_line =
+        "- [ ] #task Pay salary [repeat:: every month on the 1st] [scheduled:: 2026-10-01]"
+            .to_string();
     let mut tickler = ready_row("d.md", 1, Some("2026-10-05"), None);
     tickler.scheduled = Some(date(2026, 10, 7));
     let mut reference = ready_row("c.md", 1, Some("2026-10-01"), None);
@@ -1387,7 +1399,8 @@ fn cl8_nine_tier_order() {
     post.checklist = Some(ChecklistKind::Post);
     post.raw_line = "- [ ] #task #gtd #post Morning review".to_string();
     let rows = vec![
-        post, rotten, reference, tickler, next, pending, prj, new, pre,
+        post, rotten, reference, tickler, recurring, next, pending, prj, new,
+        pre,
     ];
     let ordered = queue(&rows, today(), &config);
     assert_eq!(
@@ -1398,6 +1411,7 @@ fn cl8_nine_tier_order() {
             "projects",
             "pending",
             "next",
+            "recurring",
             "tickler",
             "references",
             "rotten",
@@ -1406,9 +1420,10 @@ fn cl8_nine_tier_order() {
     );
     let report = counts(&rows, today(), &config);
     assert_eq!(report.walk, report.by_tier.sum());
-    assert_eq!(report.walk, 9);
+    assert_eq!(report.walk, 10);
     assert_eq!(report.pre_due, 1);
     assert_eq!(report.post_due, 1);
+    assert_eq!(report.recurring_due, 1);
 }
 
 /// CL9. A recurring checklist row refuses a stamp; keeps, upkeep,
@@ -1478,4 +1493,267 @@ fn cl12_repeat_without_when_done_still_pre() {
         cl_pre("- [ ] #task #gtd #pre Brush teeth [repeat:: every day]");
     let evaluated = evaluate(&chore, today(), &default_config());
     assert_eq!(evaluated.tier, Some(Tier::Pre));
+}
+
+/// Build a recurring row: `status` is the Tasks symbol, `scheduled` /
+/// `due` / `start` are the occurrence dates (`None` when absent).
+fn recurring_row(
+    path: &str,
+    line: u32,
+    status: char,
+    scheduled: Option<NaiveDate>,
+    due: Option<NaiveDate>,
+    start: Option<NaiveDate>,
+) -> FreshnessRow {
+    let is_todo = status == ' ';
+    FreshnessRow {
+        path: path.to_string(),
+        line,
+        status,
+        is_todo,
+        recurring: true,
+        lane_visible: true,
+        is_daily_note: false,
+        is_today: false,
+        scheduled,
+        due,
+        start,
+        created: None,
+        raw_line: format!("- [{status}] #task Recurring [repeat:: every week]"),
+        note_refresh_raw: None,
+        tracker: None,
+        checklist: None,
+    }
+}
+
+/// RC1. An arrived recurring row walks in RECURRING with a Ready
+/// lane, null state/bucket, and the occurrence due metadata.
+#[test]
+fn rc1_arrived_recurring_row() {
+    let candidate =
+        recurring_row("a.md", 1, ' ', Some(date(2026, 10, 1)), None, None);
+    let evaluated = evaluate(&candidate, today(), &default_config());
+    assert_eq!(evaluated.tier, Some(Tier::Recurring));
+    assert_eq!(evaluated.lane, Some(Lane::Ready));
+    assert_eq!(evaluated.state, None);
+    assert_eq!(bucket_for_state(evaluated.state), None);
+    assert_eq!(evaluated.due_on, Some(date(2026, 10, 1)));
+    assert_eq!(evaluated.days_overdue, Some(7));
+    assert!(!evaluated.decide);
+}
+
+/// RC2. An occurrence arriving today walks in RECURRING with zero
+/// days overdue.
+#[test]
+fn rc2_arrives_today() {
+    let candidate = recurring_row("a.md", 1, ' ', Some(today()), None, None);
+    let evaluated = evaluate(&candidate, today(), &default_config());
+    assert_eq!(evaluated.tier, Some(Tier::Recurring));
+    assert_eq!(evaluated.due_on, Some(today()));
+    assert_eq!(evaluated.days_overdue, Some(0));
+}
+
+/// RC3. A future-scheduled occurrence is not lane-visible and walks
+/// in no tier.
+#[test]
+fn rc3_future_occurrence_stays_out() {
+    let mut candidate =
+        recurring_row("a.md", 1, ' ', Some(date(2026, 10, 9)), None, None);
+    candidate.lane_visible = false;
+    let evaluated = evaluate(&candidate, today(), &default_config());
+    assert_eq!(evaluated.tier, None);
+    assert_eq!(evaluated.state, None);
+}
+
+/// RC4. A past due-only row walks in RECURRING on its due date.
+#[test]
+fn rc4_due_only_past() {
+    let candidate =
+        recurring_row("a.md", 1, ' ', None, Some(date(2026, 10, 5)), None);
+    let evaluated = evaluate(&candidate, today(), &default_config());
+    assert_eq!(evaluated.tier, Some(Tier::Recurring));
+    assert_eq!(evaluated.due_on, Some(date(2026, 10, 5)));
+    assert_eq!(evaluated.days_overdue, Some(3));
+}
+
+/// RC5. A future due-only row walks in no tier.
+#[test]
+fn rc5_due_only_future() {
+    let candidate =
+        recurring_row("a.md", 1, ' ', None, Some(date(2026, 10, 20)), None);
+    let evaluated = evaluate(&candidate, today(), &default_config());
+    assert_eq!(evaluated.tier, None);
+}
+
+/// RC6. The earliest of start/due/scheduled wins.
+#[test]
+fn rc6_earliest_date_wins() {
+    let candidate = recurring_row(
+        "a.md",
+        1,
+        ' ',
+        None,
+        Some(date(2026, 10, 20)),
+        Some(date(2026, 10, 2)),
+    );
+    let evaluated = evaluate(&candidate, today(), &default_config());
+    assert_eq!(evaluated.tier, Some(Tier::Recurring));
+    assert_eq!(evaluated.due_on, Some(date(2026, 10, 2)));
+    assert_eq!(evaluated.days_overdue, Some(6));
+}
+
+/// RC7. An undated recurring row walks in no tier.
+#[test]
+fn rc7_undated_recurring_stays_out() {
+    let candidate = recurring_row("a.md", 1, ' ', None, None, None);
+    let evaluated = evaluate(&candidate, today(), &default_config());
+    assert_eq!(evaluated.tier, None);
+    assert_eq!(evaluated.state, None);
+}
+
+/// RC8. Recurring lane rows keep their lane with null state and walk
+/// in RECURRING, never their lane tier.
+#[test]
+fn rc8_recurring_lane_rows_keep_lane() {
+    for (status, lane) in [('*', Lane::Next), ('/', Lane::Pending)] {
+        let candidate = recurring_row(
+            "a.md",
+            1,
+            status,
+            Some(date(2026, 10, 1)),
+            None,
+            None,
+        );
+        let evaluated = evaluate(&candidate, today(), &default_config());
+        assert_eq!(evaluated.tier, Some(Tier::Recurring), "{status}");
+        assert_eq!(evaluated.lane, Some(lane), "{status}");
+        assert_eq!(evaluated.state, None, "{status}");
+    }
+}
+
+/// RC9. Today-linked, daily-note, hidden, blocked, templated, and
+/// `[?]` recurring rows walk in no tier.
+#[test]
+fn rc9_exclusions_drop_recurring_rows() {
+    let base =
+        || recurring_row("a.md", 1, ' ', Some(date(2026, 10, 1)), None, None);
+    let mut today_member = base();
+    today_member.is_today = true;
+    let mut daily = base();
+    daily.is_daily_note = true;
+    daily.path = "2026/20261008.md".to_string();
+    let mut hidden = base();
+    hidden.lane_visible = false;
+    let mut blocked = base();
+    blocked.lane_visible = false;
+    let mut templated = base();
+    templated.path = "_templates/x.md".to_string();
+    templated.lane_visible = false;
+    let mut unknown = base();
+    unknown.status = '?';
+    unknown.is_todo = false;
+
+    for (name, candidate) in [
+        ("today", today_member),
+        ("daily", daily),
+        ("hidden", hidden),
+        ("blocked", blocked),
+        ("templates", templated),
+        ("unknown", unknown),
+    ] {
+        let evaluated = evaluate(&candidate, today(), &default_config());
+        assert_eq!(evaluated.tier, None, "{name}");
+        assert!(
+            queue(&[candidate], today(), &default_config()).is_empty(),
+            "{name}"
+        );
+    }
+}
+
+/// RC10. Checklist tags beat RECURRING.
+#[test]
+fn rc10_checklist_wins_over_recurring() {
+    let mut chore =
+        recurring_row("a.md", 1, ' ', Some(date(2026, 10, 1)), None, None);
+    chore.checklist = Some(ChecklistKind::Pre);
+    let evaluated = evaluate(&chore, today(), &default_config());
+    assert_eq!(evaluated.tier, Some(Tier::Pre));
+}
+
+/// RC11. A stray stamp on a recurring row is ignored: the row still
+/// walks in RECURRING with null state.
+#[test]
+fn rc11_stray_stamp_is_ignored() {
+    let mut candidate =
+        recurring_row("a.md", 1, ' ', Some(date(2026, 10, 1)), None, None);
+    candidate.raw_line = "- [ ] #task Pay salary [repeat:: every month on the 1st] [fresh:: 2026-10-08] [scheduled:: 2026-10-01]"
+        .to_string();
+    let evaluated = evaluate(&candidate, today(), &default_config());
+    assert_eq!(evaluated.tier, Some(Tier::Recurring));
+    assert_eq!(evaluated.state, None);
+    assert_eq!(evaluated.due_on, Some(date(2026, 10, 1)));
+}
+
+/// RC12. RECURRING order is due_on ↑, path ↑, line ↑; counts carry
+/// `by_tier.recurring` 3, `recurring_due` 3, `walk` 6, `due` 2, and
+/// the full order new, next, recurring × 3, tickler.
+#[test]
+fn rc12_order_and_counts() {
+    let config = default_config();
+    let mut b3 =
+        recurring_row("b.md", 3, ' ', Some(date(2026, 10, 5)), None, None);
+    b3.raw_line = "- [ ] #task Recur bee".to_string();
+    let mut a9 =
+        recurring_row("a.md", 9, ' ', Some(date(2026, 10, 5)), None, None);
+    a9.raw_line = "- [ ] #task Recur aye".to_string();
+    let mut a2 =
+        recurring_row("a.md", 2, ' ', Some(date(2026, 10, 1)), None, None);
+    a2.raw_line = "- [ ] #task Recur old".to_string();
+
+    let recurring_only = vec![b3.clone(), a9.clone(), a2.clone()];
+    let ordered = queue(&recurring_only, today(), &config);
+    assert_eq!(
+        queue_keys(&ordered),
+        vec![
+            ("a.md".to_string(), 2),
+            ("a.md".to_string(), 9),
+            ("b.md".to_string(), 3),
+        ]
+    );
+
+    let new = ready_row("w.md", 1, None, None);
+    let next = lane_row("n.md", 1, '*', Some("2026-10-07"), None);
+    let mut tickler = ready_row("t.md", 1, Some("2026-10-05"), None);
+    tickler.scheduled = Some(date(2026, 10, 7));
+    let rows = vec![b3, a9, a2, new.clone(), next.clone(), tickler.clone()];
+    let ordered = queue(&rows, today(), &config);
+    assert_eq!(
+        queue_keys(&ordered),
+        vec![
+            ("w.md".to_string(), 1),
+            ("n.md".to_string(), 1),
+            ("a.md".to_string(), 2),
+            ("a.md".to_string(), 9),
+            ("b.md".to_string(), 3),
+            ("t.md".to_string(), 1),
+        ]
+    );
+    assert_eq!(
+        queue_tiers(&ordered),
+        vec![
+            "new",
+            "next",
+            "recurring",
+            "recurring",
+            "recurring",
+            "tickler"
+        ]
+    );
+    let report = counts(&rows, today(), &config);
+    assert_eq!(report.by_tier.recurring, 3);
+    assert_eq!(report.recurring_due, 3);
+    assert_eq!(report.walk, 6);
+    assert_eq!(report.walk, report.by_tier.sum());
+    assert_eq!(report.due, 2);
+    assert_eq!(report.upkeep_today, 0);
 }

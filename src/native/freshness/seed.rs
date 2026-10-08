@@ -612,6 +612,8 @@ mod tests {
                 text: format!("Task {line}"),
                 created: NaiveDate::from_ymd_opt(2026, 9, 1),
                 scheduled: None,
+                due: None,
+                start: None,
                 is_recurring: false,
                 is_blocked: false,
                 tags: Vec::new(),

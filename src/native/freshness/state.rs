@@ -75,8 +75,8 @@ pub(crate) enum ChecklistKind {
 }
 
 /// Walk tier, in walk order (`docs/freshness.md` §4):
-/// PRE → NEW → PROJECTS → PENDING → NEXT → TICKLER → REFERENCES →
-/// ROTTEN → POST.
+/// PRE → NEW → PROJECTS → PENDING → NEXT → RECURRING → TICKLER →
+/// REFERENCES → ROTTEN → POST.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Tier {
     Pre,
@@ -84,6 +84,7 @@ pub(crate) enum Tier {
     Projects,
     Pending,
     Next,
+    Recurring,
     Tickler,
     References,
     Rotten,
@@ -98,6 +99,7 @@ impl Tier {
             Self::Projects => "projects",
             Self::Pending => "pending",
             Self::Next => "next",
+            Self::Recurring => "recurring",
             Self::Tickler => "tickler",
             Self::References => "references",
             Self::Rotten => "rotten",
@@ -204,6 +206,8 @@ pub(crate) struct FreshnessRow {
     pub(crate) is_daily_note: bool,
     pub(crate) is_today: bool,
     pub(crate) scheduled: Option<NaiveDate>,
+    pub(crate) due: Option<NaiveDate>,
+    pub(crate) start: Option<NaiveDate>,
     pub(crate) created: Option<NaiveDate>,
     pub(crate) raw_line: String,
     /// The note's raw `task_refresh` frontmatter value, if present.
@@ -310,13 +314,60 @@ fn overlay_checklist(
     evaluated
 }
 
+/// The earliest of the row's valid `scheduled`, `due`, and `start`
+/// dates (Tasks' "happens" date); none when it has none of them.
+pub(crate) fn occurs_on(row: &FreshnessRow) -> Option<NaiveDate> {
+    [row.scheduled, row.due, row.start]
+        .into_iter()
+        .flatten()
+        .min()
+}
+
+/// Recurring overlay (`docs/freshness.md` §4): an open, visible,
+/// non-checklist recurring row whose occurrence date has arrived
+/// walks in RECURRING. Applied after the checklist overlay so no
+/// early return in the evaluator can drop it. A checklist member
+/// never reaches here with a recurring tier.
+fn overlay_recurring(
+    row: &FreshnessRow,
+    mut evaluated: Evaluated,
+    today: NaiveDate,
+) -> Evaluated {
+    if row.checklist.is_some() {
+        return evaluated;
+    }
+    if !row.recurring {
+        return evaluated;
+    }
+    if evaluated.lane.is_none() || !row.lane_visible {
+        return evaluated;
+    }
+    if row.is_daily_note || row.is_today {
+        return evaluated;
+    }
+    let Some(occurs) = occurs_on(row) else {
+        return evaluated;
+    };
+    if occurs > today {
+        return evaluated;
+    }
+    evaluated.tier = Some(Tier::Recurring);
+    evaluated.due_on = Some(occurs);
+    evaluated.days_overdue =
+        Some(today.signed_duration_since(occurs).num_days());
+    evaluated.decide = false;
+    evaluated
+}
+
 /// Evaluate one row for `today` under `config`.
 pub(crate) fn evaluate(
     row: &FreshnessRow,
     today: NaiveDate,
     config: &FreshnessConfig,
 ) -> Evaluated {
-    overlay_checklist(row, evaluate_without_checklist(row, today, config))
+    let base = evaluate_without_checklist(row, today, config);
+    let checked = overlay_checklist(row, base);
+    overlay_recurring(row, checked, today)
 }
 
 fn evaluate_without_checklist(
@@ -766,8 +817,8 @@ fn compare_created(
 }
 
 /// The review queue in tier order PRE → NEW → PROJECTS → PENDING →
-/// NEXT → TICKLER → REFERENCES → ROTTEN → POST, with each tier's
-/// comparator from `docs/freshness.md` §4.
+/// NEXT → RECURRING → TICKLER → REFERENCES → ROTTEN → POST, with
+/// each tier's comparator from `docs/freshness.md` §4.
 pub(crate) fn queue(
     rows: &[FreshnessRow],
     today: NaiveDate,
@@ -808,6 +859,11 @@ pub(crate) fn queue(
             Tier::Pre | Tier::Post | Tier::New => {
                 a.path.cmp(&b.path).then(a.line.cmp(&b.line))
             }
+            Tier::Recurring => a
+                .due_on
+                .cmp(&b.due_on)
+                .then(a.path.cmp(&b.path))
+                .then(a.line.cmp(&b.line)),
             Tier::Projects | Tier::Pending | Tier::Next | Tier::References => {
                 // Never-stamped (`due_on` none) first, then due_on,
                 // created, path, line.
@@ -848,6 +904,7 @@ pub(crate) struct ByTier {
     pub(crate) projects: u32,
     pub(crate) pending: u32,
     pub(crate) next: u32,
+    pub(crate) recurring: u32,
     pub(crate) tickler: u32,
     pub(crate) references: u32,
     pub(crate) rotten: u32,
@@ -861,6 +918,7 @@ impl ByTier {
             + self.projects
             + self.pending
             + self.next
+            + self.recurring
             + self.tickler
             + self.references
             + self.rotten
@@ -892,6 +950,8 @@ pub(crate) struct Counts {
     pub(crate) pre_due: u32,
     /// Due `POST` checklist rows (equals its tier count).
     pub(crate) post_due: u32,
+    /// Due `RECURRING` rows (equals its tier count).
+    pub(crate) recurring_due: u32,
     /// Tier histogram for the actual full queue.
     pub(crate) by_tier: ByTier,
     /// Full queue length, before any `--limit` (`walk = sum(by_tier)`).
@@ -968,6 +1028,7 @@ pub(crate) fn counts(
             Some(Tier::Projects) => by_tier.projects += 1,
             Some(Tier::Pending) => by_tier.pending += 1,
             Some(Tier::Next) => by_tier.next += 1,
+            Some(Tier::Recurring) => by_tier.recurring += 1,
             Some(Tier::Tickler) => by_tier.tickler += 1,
             Some(Tier::References) => by_tier.references += 1,
             Some(Tier::Rotten) => by_tier.rotten += 1,
@@ -992,6 +1053,7 @@ pub(crate) fn counts(
         references_due: by_tier.references,
         pre_due: by_tier.pre,
         post_due: by_tier.post,
+        recurring_due: by_tier.recurring,
         by_tier,
         walk: by_tier.sum(),
         decide,

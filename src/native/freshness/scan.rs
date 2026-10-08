@@ -61,6 +61,8 @@ impl RowCtx {
             is_daily_note: self.is_daily_note,
             is_today: self.is_today,
             scheduled: self.task.scheduled,
+            due: self.task.due,
+            start: self.task.start,
             created: self.task.created,
             raw_line: self.task.original_markdown.clone(),
             note_refresh_raw: self.note_refresh_raw.clone(),
@@ -449,6 +451,30 @@ fn checklist_lints(task: &RichTask) -> Vec<String> {
     lints
 }
 
+/// Scan-side lint for an open recurring task with no occurrence
+/// date (`docs/freshness.md` §4): recurring, no checklist tags, a
+/// lane status, outside `_templates`/`_conflicts`, and no valid
+/// `scheduled`, `due`, or `start`. The review walk cannot tell when
+/// it comes due.
+fn recurring_undated(task: &RichTask) -> Option<String> {
+    if !task.is_recurring {
+        return None;
+    }
+    if checklist_from_tags(&task.tags).is_some() {
+        return None;
+    }
+    let status = task.status_symbol.chars().next().unwrap_or('\0');
+    let is_todo = task.status_type == "TODO";
+    super::state::lane_for_row(status, is_todo)?;
+    if task.path.contains("_templates") || task.path.contains("_conflicts") {
+        return None;
+    }
+    if task.scheduled.is_some() || task.due.is_some() || task.start.is_some() {
+        return None;
+    }
+    Some("recurring_undated".to_string())
+}
+
 /// Bucket and confirmation date for one Ready-lane row, sharing
 /// the single `RowCtx::freshness_row(true)` construction so
 /// `note_ready` never duplicates it.
@@ -482,6 +508,14 @@ pub(crate) fn collect_warnings(
             });
         }
         for lint in checklist_lints(&row.task) {
+            warnings.push(Warning {
+                code: lint.clone(),
+                path: row.task.path.clone(),
+                line: Some(row.task.line),
+                message: lint_message(&lint),
+            });
+        }
+        if let Some(lint) = recurring_undated(&row.task) {
             warnings.push(Warning {
                 code: lint.clone(),
                 path: row.task.path.clone(),
@@ -540,6 +574,10 @@ pub(crate) fn lint_message(code: &str) -> String {
         }
         "checklist_repeat_not_when_done" => {
             "checklist recurrence is missing 'when done'".to_string()
+        }
+        "recurring_undated" => {
+            "recurring task has no scheduled, due, or start date; the review walk cannot tell when it comes due"
+                .to_string()
         }
         other => format!("{other}: see docs/freshness.md"),
     }

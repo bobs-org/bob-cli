@@ -7,19 +7,21 @@ task that was never confirmed, whose scheduled deferral returned after its
 last confirmation, or whose review interval expired is due for review.
 Today-linked tasks and canonical daily-note tasks are outside this review
 scope. The morning review then costs roughly "pool ÷ interval +
-arrivals" glances instead of the whole pool.
+arrivals" glances instead of the whole pool. Recurring
+tasks are never stamped; once a recurring occurrence's date arrives it walks in the
+RECURRING tier until it is completed, rescheduled, linked to Today, or cancelled.
 
 The daily lane review reuses the same `[fresh::]` stamp for Pending
 (`[/]`) and Next (`[*]`) tasks: each lane has a review cadence
 (`freshness.pending_interval` / `freshness.next_interval`, default 1
 day), and the morning walk visits PRE → NEW → PROJECTS → PENDING → NEXT →
-TICKLER → REFERENCES → ROTTEN → POST in explicit tiers.
+RECURRING → TICKLER → REFERENCES → ROTTEN → POST in explicit tiers.
 
 This file is the contract both implementations cite. The Rust side is
 `src/native/freshness/` (`placement.rs`, `state.rs`) with the
 `freshness:` config block in `src/native/config/freshness.rs`; the
 JavaScript mirror is `api.freshness` in bob-ledger-tools (top-level
-api v3, freshness namespace v8). The bob-ledger-tools JavaScript
+api v3, freshness namespace v9 with the `recurringTier` capability). The bob-ledger-tools JavaScript
 tests use the conformance vectors below verbatim.
 
 The keep-streak contract (`keeps`, `decay`, introduced in schema 4) is specified
@@ -304,9 +306,8 @@ keeps a streak while stamping.
    false`.
 5. **Refusals.** Return the line unchanged with a reason for:
    - a line that is not a task line;
-   - a recurring task (a `repeat` field in the suffix): its recurrence
-     resurfaces it, and Tasks would copy the stamp into the next
-     occurrence;
+   - a recurring task (a `repeat` field in the suffix): its occurrence walks in RECURRING
+     once it arrives (§4), and Tasks would copy the stamp into the next occurrence;
    - done and cancelled tasks, which callers must not stamp.
 6. **Invariance.** For every vector, the Tasks fields both Rust parsers
    extract are identical before and after: status, dates, priority,
@@ -375,6 +376,7 @@ due_on(t)     = checklist_scope: none
                 RESURFACED: scheduled(t); ROTTEN/FRESH: fresh(t) + interval(t); NEW: none
 due(t)        = checklist_scope(t) ∨ (in_scope(t) ∧ state(t) ≠ FRESH)
 tier(t)       = checklist(t) if checklist_scope(t)   — beats every other tier, incl. ^prj/^ref and lanes
+              | recurring if recurring_due(t)         — beats every other rule; trackers included
               | projects  if due ^prj (Ready or lane, actual lane retained;
                             even when its Ready state is NEW or RESURFACED)
               | references if due ^ref (Ready or lane, actual lane retained;
@@ -385,27 +387,55 @@ tier(t)       = checklist(t) if checklist_scope(t)   — beats every other tier,
               | tickler   if state RESURFACED
               | rotten    if state ROTTEN
               | none      otherwise
+              (recurring rows never reach the lower rules: in_scope/walk_scope keep ¬recurring)
 ```
 
-The queue holds every row with a tier, in tier order PRE → NEW →
-PROJECTS → PENDING → NEXT → TICKLER → REFERENCES → ROTTEN → POST.
-Within each tier the order is:
+```text
+recurring(t)       = t carries a Tasks recurrence (`repeat` field) — the existing predicate on each side
+occurs_on(t)       = the earliest of t's valid `scheduled`, `due`, and `start` dates (Tasks' "happens" date);
+                     none when it has none of them
+recurring_scope(t) = recurring(t) ∧ checklist(t) = none
+                     ∧ lane(t) ≠ none                       (status ` `/TODO type, `*`, or `/`; `[?]` and closed rows stay out)
+                     ∧ lane-visible                         (the existing predicate: not dependency-blocked, no #hide,
+                                                             not under _templates/_conflicts, no scheduled > today)
+                     ∧ ¬canonical daily note ∧ ¬Today(t)
+recurring_due(t)   = recurring_scope(t) ∧ occurs_on(t) exists ∧ occurs_on(t) ≤ today
+tier(t)            = checklist(t)   if checklist_scope(t)              (unchanged; beats everything)
+                   | recurring      if recurring_due(t)                 (beats every other rule; trackers included)
+                   | the existing rules otherwise (recurring rows never reach them: in_scope/walk_scope keep ¬recurring)
+due_on(t)          = occurs_on(t) for recurring rows; days_overdue = today − occurs_on(t) (0 on the day)
+state, bucket      = unchanged: null for every recurring row (they stay out of in_scope)
+decide             = false for recurring rows; lane and interval fields are reported as today
+```
 
-| Tier     | Order within the tier                                    |
-| -------- | -------------------------------------------------------- |
-| pre      | path ↑, line ↑ (file order is the checklist order)       |
-| new      | path ↑, line ↑ (unchanged)                               |
-| projects | never-confirmed first, due_on ↑, created ↑, path ↑, line ↑ |
-| pending  | never-stamped first, due_on ↑, created ↑, path ↑, line ↑ |
-| next     | same as pending                                          |
-| tickler  | due_on (= scheduled) ↑, created ↓, path ↑, line ↑       |
+The recurring tier is an overlay applied after the checklist overlay, so that no
+early return in the evaluator can drop it. In Rust: `evaluate` =
+`overlay_recurring(overlay_checklist(evaluate_without_checklist(…)))`. The recurring
+overlay is a no-op whenever the row is a checklist member. It sets `tier`, `due_on`,
+`days_overdue`, and `decide = false`, and leaves `state`, `lane`, `fresh`, interval,
+keeps, and lints alone.
+
+The queue holds every row with a tier, in tier order PRE → NEW →
+PROJECTS → PENDING → NEXT → RECURRING → TICKLER → REFERENCES → ROTTEN → POST.
+Within RECURRING the order is `due_on` ↑, then path ↑, then line ↑ (the oldest occurrence
+first). Within each tier the order is:
+
+| Tier      | Order within the tier                                      |
+| --------- | ---------------------------------------------------------- |
+| pre       | path ↑, line ↑ (file order is the checklist order)         |
+| new       | path ↑, line ↑ (unchanged)                                 |
+| projects  | never-confirmed first, due_on ↑, created ↑, path ↑, line ↑ |
+| pending   | never-stamped first, due_on ↑, created ↑, path ↑, line ↑   |
+| next      | same as pending                                            |
+| recurring | due_on ↑, path ↑, line ↑ (the oldest occurrence first)     |
+| tickler   | due_on (= scheduled) ↑, created ↓, path ↑, line ↑          |
 | references | never-confirmed first, due_on ↑, created ↑, path ↑, line ↑ |
-| rotten   | interval ↑, due_on ↑, created ↓, path ↑, line ↑          |
-| post     | path ↑, line ↑ (file order is the checklist order)       |
+| rotten    | interval ↑, due_on ↑, created ↓, path ↑, line ↑            |
+| post      | path ↑, line ↑ (file order is the checklist order)         |
 
 A missing `created` always sorts after dated peers within its tier,
 in both ascending and descending keys. The commitment tiers are pre,
-new, projects, pending, next, tickler, and references — PRE, PROJECTS,
+new, projects, pending, next, recurring, tickler, and references — PRE, PROJECTS,
 and REFERENCES sit before the "Commitments done" boundary, so meeting
 the upkeep budget never signals that commitments are finished while
 chores or trackers remain. Rotten is upkeep. POST is the closing tier
@@ -420,11 +450,11 @@ Counts keep state and tier distinct:
   Ready states over the full review universe (`due = new +
   resurfaced + rotten`), including eligible Ready trackers once each.
   Pending/Next rows retain null state and never contribute.
-- `by_tier` counts the actual full queue with all nine machine tier
+- `by_tier` counts the actual full queue with all ten machine tier
   keys (zeroes for empty tiers); `walk = sum(by_tier.values())`,
   before any `--limit`.
 - `pending_due`, `next_due`, `projects_due`, `references_due`,
-  `pre_due`, and `post_due` each equal their tier count, for
+  `pre_due`, `post_due`, and `recurring_due` each equal their tier count, for
   symmetry.
 - `refreshed_today` keeps its meaning.
 - New count `upkeep_today`: tasks of any status outside `_templates`
@@ -467,7 +497,7 @@ null.
 also reminds Bryan to replenish surfaced projects and to review
 unfinished reading references, in one consistent contract on both
 sides including the `]s` / Ctrl+Alt+F walk: PRE → NEW → PROJECTS →
-PENDING → NEXT → TICKLER → REFERENCES → ROTTEN → POST.
+PENDING → NEXT → RECURRING → TICKLER → REFERENCES → ROTTEN → POST.
 
 - Identity is the parsed, exact trailing block ID `prj` or `ref` on
   a real task. Tags alone, `^prj-extra`, description text, and
@@ -533,18 +563,21 @@ bucket intact; lane `^ref` rows walk in REFERENCES with null state
 REFERENCES and never decides, even at the keep limit; Today,
 recurring, daily, template/conflict, blocked, and future-inline
 rows stay excluded from review scope; tag-only/near-match/embedded
-links never qualify; the nine-tier order holds with stable ties
+links never qualify; the ten-tier order holds with stable ties
 and `walk = sum(by_tier)`; counts, JSON, human output, status bar,
 `limit=1`, and the upkeep budget show no duplicate totals, with the
 header and status bar reading tier counts; hidden `^ref` rows join
 full review while the visible pool, lane, and capacity counts stay
 unchanged; neither tracker tier ever decays.
 
-**Machine vocabulary (schema 10).** Human output, help, and docs
+**Machine vocabulary (schema 11).** Human output, help, and docs
 say `rotten`, and so does the machine contract since the vocab-rotten
 migration published JSON schema 2: `state: "rotten"`,
 `counts.rotten`, and `freshness.rotten_daily_budget`. Each JSON queue
 row still carries the `bucket` field (`"new"`, `"rotten"`, or null).
+Schema 11 adds the RECURRING walk tier: `recurring` in `tier` and
+`by_tier`, `counts.recurring_due`; recurring rows carry `due_on` = the
+occurrence date.
 Schema 10 renames the `returned` walk tier to `tickler` (`tier`
 values and `by_tier.tickler`); the Ready `state` stays `resurfaced`
 and `counts.resurfaced` is unchanged.
@@ -564,10 +597,12 @@ the `project` / `reference` interval sources. Schema 5 added the
 totals from tier totals as above; the shared seed envelope version
 advances with each, seed behavior unchanged.
 Likewise bob-ledger-tools uses the `"rotten"` state string under
-freshness namespace v8 (`api.freshness.version === 8` with the
+freshness namespace v9 (`api.freshness.version === 9` with the
 explicit `trackerReview` capability plus the explicit
 `referenceReview` capability, which tells consumers the queue may
-carry `references` entries; top-level api stays v3). Date-independent
+carry `references` entries, plus the explicit `recurringTier`
+capability, which tells consumers the queue may carry `recurring`
+entries; top-level api stays v3). Date-independent
 decide/config landed in v6; counting through `keepLine` remains
 available from v5. V8 renames the `returned` tier and
 `byTier.returned` to `tickler`.
@@ -577,9 +612,9 @@ pool — hidden review-only rows never feed a badge for a section
 that excludes them — while the status bar footer, `]s`, and the CLI
 use the full review counts. The desktop footer shows only nonempty
 walk groups in walk order with short labels — `WIP` for PENDING,
-`TICKS` for TICKLER, `REFS` for REFERENCES, and the full name for
+`RECUR` for RECURRING, `TICKS` for TICKLER, `REFS` for REFERENCES, and the full name for
 every other tier (for example `PRE 7 · NEW 1 · PROJECTS 2 · WIP 10 ·
-NEXT 15 · TICKS 14 · REFS 3 · ROTTEN 26 · POST 1`) — splitting TICKS
+NEXT 15 · RECUR 4 · TICKS 14 · REFS 3 · ROTTEN 26 · POST 1`) — splitting TICKS
 from ROTTEN so the commitment/upkeep boundary is visible; dashboard
 ROTTEN chips still fold TICKLER plus ROTTEN. The current-row context
 uses the same short labels (for example `Review 5/76 · WIP 3/10`).
@@ -588,7 +623,7 @@ never mean how many tasks were completed in a review session. `]s`
 jump notices and the CLI keep full tier names (`TICKLER 2/14`,
 `PENDING 3/10`). The tooltip gains one legend line, shown only when
 an abbreviated label is visible and listing only the abbreviations
-shown, in walk order (`WIP = PENDING · TICKS = TICKLER · REFS =
+shown, in walk order (`WIP = PENDING · RECUR = RECURRING · TICKS = TICKLER · REFS =
 REFERENCES`), beside the line `Footer splits TICKS from ROTTEN;
 dashboard ROTTEN chips still fold both.` It appears only while a
 trustworthy nonempty queue remains and hides entirely when the queue
@@ -621,6 +656,11 @@ engine. Checklist lints apply only to open tasks: `checklist_tag_incomplete`
 (`#pre` or `#post` without `#gtd`), `checklist_tag_conflict`
 (`#gtd #pre #post`; PRE wins), and `checklist_repeat_not_when_done`
 (a checklist member whose `repeat` lacks `when done`).
+`recurring_undated` fires for an open recurring task with no
+checklist tags, a lane status, outside `_templates`/`_conflicts`, and
+no valid `scheduled`, `due`, or `start`: "recurring task has no
+scheduled, due, or start date; the review walk cannot tell when it
+comes due".
 
 ## 5. Who stamps
 
@@ -679,14 +719,19 @@ task stays due and Ctrl+Alt+F does not advance.
    never crosses the PRE/POST boundary: on the last lane row before POST it
    stays with a `]s → POST` hint (Ctrl+Alt+F crosses).
    Keep import is the PRE chore "Import inbox tasks from Google Keep".
-3. Walk the commitments (NEW → PROJECTS → PENDING → NEXT → TICKLER →
-   REFERENCES) with `]s` / Ctrl+Alt+F until the notice says
+3. Walk the commitments (NEW → PROJECTS → PENDING → NEXT → RECURRING →
+   TICKLER → REFERENCES) with `]s` / Ctrl+Alt+F until the notice says
    **Commitments done**. `N]s` / `N[s` move N entries along that same
    queue and wrap with the existing notice, while `[S` / `]S` stay the
    first and last entries. NEW is never capped or skipped. In PROJECTS,
    replenish the empty project with Ctrl+Alt+F; stamping a project
    advances to the correct next entry with the block ID and `#hide`
    preserved. In REFERENCES, confirm the reference still needs reading.
+   In RECURRING the occurrence date has arrived: complete it (Ctrl+Enter), do it today
+   (Ctrl+Shift+Enter), or move its scheduled date past today (Ctrl+Shift+P);
+   recurring rows are never stamped and cancel only through Obsidian Tasks.
+   Ctrl+Alt+F on a landed RECURRING row behaves like Alt+F: it writes nothing,
+   shows the recurring-tier notice, and stays on the row.
    In the lanes, ask "still in this lane?": keep with Ctrl+Alt+F
    (Pending asks for an optional Work Log summary; blank Enter still
    keeps, while Escape leaves the task due), do it today with
@@ -731,7 +776,8 @@ inbox task (every non-closing Ctrl+Shift+P answer and Ctrl+Shift+Enter asks wher
 as the last step before writing, then answers → next); route to a
 project (Ctrl+Shift+M follows the task; ]s resumes); drop (Ctrl+Shift+P `x` → next); sequence
 (Ctrl+Shift+P `b` → next); wording wrong (edit, then Alt+F stays);
-already done (Ctrl+Enter → next, never onto a checklist row).
+already done (Ctrl+Enter → next, never onto a checklist row); recurring occurrence due
+(Ctrl+Enter done · Ctrl+Shift+Enter today · Ctrl+Shift+P reschedule · `]s` skip — never stamped).
 
 A landing is the exact row `]s` just put the cursor on, in today's walk:
 the same note, the same line text, and the row still due. An answer shows
@@ -782,7 +828,7 @@ vault). Human output is colored only on a TTY:
 ```text
 bob freshness · Thu 2026-10-08 · every 7d · pending 1d · next 1d · keeps 3
 
-  REVIEW 76 due · 7 pre · 1 new · 2 projects · 10 pending · 15 next · 14 tickler · 3 references · 26 rotten · 1 post · ✓ 12 today
+  REVIEW 83 due · 7 pre · 1 new · 2 projects · 10 pending · 15 next · 4 recurring · 14 tickler · 3 references · 26 rotten · 1 post · ✓ 12 today
 
   PRE 7
     gtd_daily.md:1      Check weather           Checklist · complete to resolve
@@ -796,6 +842,9 @@ bob freshness · Thu 2026-10-08 · every 7d · pending 1d · next 1d · keeps 3
     work.md:12          Ship the report         due today · fresh 2026-10-07 · every 1d (pending)
   NEXT 15
     …
+  RECURRING 4
+    recur.md:3          Pay salary              Recurring · 7d overdue · since 2026-10-01
+    cash.md:9           Apply for unemployment  Recurring · due today
   TICKLER 14
     b.md:40             Week habits             tickler · scheduled 2026-10-07 · fresh 2026-10-05
   REFERENCES 3
@@ -836,7 +885,7 @@ render empty, and NEW/ROTTEN badges show `–` (never zero). Native
 and READY is ungated there; `bob freshness list` is the headless
 review interface.
 
-The JSON contract is `schema_version: 10` with `ok`, `date`,
+The JSON contract is `schema_version: 11` with `ok`, `date`,
 `config` (`interval`, `pending_interval` / `next_interval` as a number
 or `false`, `project_interval` / `reference_interval` as a number or
 null (null means inherit), `rotten_daily_budget`, plus normalized
@@ -844,12 +893,13 @@ null (null means inherit), `rotten_daily_budget`, plus normalized
 `counts` (`due`, `new`,
 `resurfaced`, `rotten`, `fresh`, `pending_due`, `next_due`,
 `projects_due`, `references_due`, `pre_due`, `post_due`,
-`by_tier` (all nine tier keys),
+`recurring_due`,
+`by_tier` (all ten tier keys),
 `walk` (`= sum(by_tier)`), `decide`, `refreshed_today`,
 `upkeep_today`, `budget`, `budget_met`; counts always cover the whole
 vault regardless of `--limit`), `queue` (each with `rank`, `tier`
-(`pre` | `new` | `projects` | `pending` | `next` | `tickler` |
-`references` | `rotten` | `post`), `lane` (`ready` | `pending` |
+(`pre` | `new` | `projects` | `pending` | `next` | `recurring` |
+`tickler` | `references` | `rotten` | `post`), `lane` (`ready` | `pending` |
 `next` | null),
 `state`, `bucket` (`"new"`, `"rotten"`, or null — lane rows carry
 `state: null` and `bucket: null`, as does a hidden `^prj`; a `[?]`
@@ -897,7 +947,7 @@ differently under either Rust parser. A writing run then re-reads all touched
 files before the first write and refuses if one changed; `--dry-run` stops
 after planning and parse validation, without that file recheck. Each file is
 written through a temp file plus rename. The JSON contract is
-`schema_version: 10` with `ok`, `date`, `dry_run`,
+`schema_version: 11` with `ok`, `date`, `dry_run`,
 `stamped` (`ready`, `other`), `buckets` (`fresh`, `due_on`, `count`,
 `notes`), `skipped` (`already_stamped`, `recurring`,
 `out_of_scope`), `files`, and `warnings`. The shared schema constant
@@ -922,7 +972,7 @@ an invalid `freshness:` block or a non-Dataview task format.
 
 | Surface | Phase |
 | ------- | ----- |
-| `bob freshness` | fresh-cli (landed: `list` and `seed` in `src/native/freshness/`); tiered walk (schema 10: `list` walks PRE → NEW → PROJECTS → PENDING → NEXT → TICKLER → REFERENCES → ROTTEN → POST with lane intervals for ordinary tasks, tracker cadences for `^prj`/`^ref`, and `#gtd` `#pre`/`#post` checklist rows; decay config is `{enabled, keeps, enter}` with no calendar gate) |
+| `bob freshness` | fresh-cli (landed: `list` and `seed` in `src/native/freshness/`); tiered walk (schema 11: `list` walks PRE → NEW → PROJECTS → PENDING → NEXT → RECURRING → TICKLER → REFERENCES → ROTTEN → POST with lane intervals for ordinary tasks, tracker cadences for `^prj`/`^ref`, due-occurrence review for recurring tasks, and `#gtd` `#pre`/`#post` checklist rows; decay config is `{enabled, keeps, enter}` with no calendar gate) |
 | `bob capture` | capture-stamps (landed: plan_task_link + `=x` close stamp via `stamp_fresh`; existing-dependent `&` dependency stamp via the same helper; capture never stamps trackers) |
 | bob-ledger-tools | ledger-freshness (landed: api v3 `api.freshness` + status bar in 1.8.0; tracking review under namespace v6 with the `trackerReview` capability; persistent review footer with additive `reviewEntryView`) |
 | bob-navigation-hotkeys | nav-review, nav-stamps (landed: Alt+N + Ctrl+Shift+P/Ctrl+Shift+M/! stamping + refresh row in 1.44.0; PROJECTS/REFERENCES tier walk with `trackerReview`/`referenceReview` capabilities and legacy v3/v4 fallback; notices feature-detect `reviewEntryView`) |
@@ -1021,7 +1071,8 @@ The bob-ledger-tools JavaScript tests use these verbatim.
   `resurfaced`, `due_on 2026-10-07`
 - **S12 not resurfaced:** `fresh 2026-10-07`, `scheduled 2026-10-07` →
   `fresh`
-- **S13 out of scope** (state `null`): a recurring task; a `[?]`
+- **S13 out of scope** (state `null`): a recurring task (its recurring row is undated,
+  so it never reaches RECURRING); a `[?]`
   with a future `scheduled`; `[*]`; `[/]`; `#hide`; `_templates/x.md`;
   daily note `2026/20261008.md`; a Ready task linked under today's
   open Pomodoro; a `[ ]` whose `dependsOn` names an open task.
@@ -1051,7 +1102,7 @@ The bob-ledger-tools JavaScript tests use these verbatim.
 - **L2 (lane overrides refresh).** A `[/]` with `[refresh:: 30]`
   stamped 10-07 has tier `pending` and interval 1 from source
   `pending`.
-- **L3.** A recurring `[*]`, a Today-linked `[*]`, a `[*]` in
+- **L3.** An undated recurring `[*]`, a Today-linked `[*]`, a `[*]` in
   `2026/20261008.md`, and a `#hide` `[*]` are each in no tier.
 - **L4.** With `next_interval: false`, a never-stamped `[*]` is in no
   tier, and its interval falls back to the Ready chain (7, default).
@@ -1108,6 +1159,55 @@ The bob-ledger-tools JavaScript tests use these verbatim.
   Checklist beats lane tiers and trackers.
 - **CL12.** A `#gtd #pre` row with `[repeat:: every day]` and no `when done` → `pre`,
   lint `checklist_repeat_not_when_done`.
+
+**Recurring tier (RC1–RC12).** Today `2026-10-08`, default config (interval 7, lanes 1), path `a.md` and Ready `[ ]`
+unless noted. "→ none" means no tier and `state` null.
+
+- **RC1 arrived:**
+  `- [ ] #task Pay salary [repeat:: every month on the 1st] [scheduled:: 2026-10-01]` →
+  tier `recurring`, lane `ready`, `state`/`bucket` null, `due_on` 2026-10-01,
+  `days_overdue` 7, `decide` false.
+- **RC2 arrives today:** the same with `[scheduled:: 2026-10-08]` → `recurring`,
+  `due_on` 2026-10-08, `days_overdue` 0.
+- **RC3 not yet:** `[scheduled:: 2026-10-09]` → none (not lane-visible).
+- **RC4 due only, past:** `[repeat:: every year] [due:: 2026-10-05]` with no `scheduled`
+  → `recurring`, `due_on` 2026-10-05, `days_overdue` 3.
+- **RC5 due only, future:** `[due:: 2026-10-20]` with no `scheduled` → none.
+- **RC6 earliest date wins:** `[start:: 2026-10-02] [due:: 2026-10-20]` → `recurring`,
+  `due_on` 2026-10-02, `days_overdue` 6.
+- **RC7 undated:** `- [ ] #task Water plants [repeat:: every week]` → none. Rust
+  `bob freshness list` reports warning `recurring_undated` for it. This is also why L3
+  and S13 (whose recurring rows carry no dates) stay unchanged.
+- **RC8 lanes:** a recurring `[*]` and a recurring `[/]`, each with
+  `[scheduled:: 2026-10-01]` → `recurring`, keeping lane `next` / `pending` and null
+  state. Neither is ever `next` or `pending` tier.
+- **RC9 exclusions:** a recurring row with `[scheduled:: 2026-10-01]` that is any of the
+  following → none:
+  - Today-linked;
+  - in `2026/20261008.md`;
+  - `#hide`;
+  - dependency-blocked;
+  - under `_templates/`;
+  - `[?]` (not a lane).
+- **RC10 checklist wins:**
+  `- [ ] #task #gtd #pre Brush teeth [repeat:: every day when done] [scheduled:: 2026-10-01]`
+  → `pre`, never `recurring`. CL1–CL12 are unchanged.
+- **RC11 a stray stamp is ignored:** `[fresh:: 2026-10-08] [scheduled:: 2026-10-01]` on
+  a recurring row → still `recurring`, with null `state`. Stamping that line is still
+  refused.
+- **RC12 order and counts:** the RECURRING rows are:
+  - `b.md:3` scheduled 10-05
+  - `a.md:9` scheduled 10-05
+  - `a.md:2` scheduled 10-01
+
+  Add NEW `w.md:1`, a `[*]` `n.md:1` stamped 10-07, and TICKLER `t.md:1` (fresh 10-05,
+  scheduled 10-07). The RECURRING order is `a.md:2`, `a.md:9`, `b.md:3`. Counts:
+  - `by_tier.recurring` 3, `recurring_due` 3, `walk` 6;
+  - `due` 2 (NEW + resurfaced; recurring rows add nothing);
+  - `upkeep_today` unchanged.
+
+  RC12 full order: `w.md:1` (new), `n.md:1`
+  (next), `a.md:2`, `a.md:9`, `b.md:3` (recurring), `t.md:1` (tickler).
 
 Lints are Rust-only (`bob freshness list` LINTS). They apply only to open tasks, not to
 done or cancelled lines in archives.
@@ -1166,7 +1266,7 @@ never, `keeps: 0` asking on every due Ready re-confirmation,
 `decay: false` never asking, and lane rows never deciding. Boundary
 vectors B1–B5 pin immediate availability on 2026-10-04, 2026-10-08,
 2026-10-18, 2026-10-19, and 2026-10-20. Rows have carried
-`keeps`/`decide` since schema 4, and the current schema is 10; counts
+`keeps`/`decide` since schema 4, and the current schema is 11; counts
 carry `decide`; `config.decay` reports normalized `enabled`,
 `keeps`, and `enter`. CLI human rows show `kept N×` and `· decide`
 where true; the header explains the threshold or the off state.

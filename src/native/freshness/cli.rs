@@ -34,6 +34,10 @@ const COMMAND_NAME: &str = "bob freshness";
 /// Bump only for a breaking change to the JSON objects below; new
 /// optional fields keep the current version.
 ///
+/// Schema 11 adds the RECURRING walk tier: `recurring` in `tier`
+/// and `by_tier`, `counts.recurring_due`; recurring rows carry
+/// `due_on` = the occurrence date.
+///
 /// Schema 10 renames the `returned` walk tier to `tickler` (`tier`
 /// values and `by_tier.tickler`); the Ready `state` stays `resurfaced`
 /// and `counts.resurfaced` is unchanged.
@@ -57,7 +61,7 @@ const COMMAND_NAME: &str = "bob freshness";
 /// eligible Ready trackers). Schema 4 added the keep-streak contract.
 /// The seed envelope shares this constant; seed contents are
 /// otherwise unchanged.
-const SCHEMA_VERSION: u32 = 10;
+const SCHEMA_VERSION: u32 = 11;
 
 pub(crate) fn run(args: Vec<OsString>) -> i32 {
     let argv: Vec<OsString> = iter::once(OsString::from(COMMAND_NAME))
@@ -126,7 +130,7 @@ pub(crate) fn build_cli() -> ClapCommand {
         .long_about(
             "Walk the tiered freshness review queue: list the tasks due \
             for review in tier order PRE → NEW → PROJECTS → PENDING → \
-            NEXT → TICKLER → REFERENCES → ROTTEN → POST.\n\n\
+            NEXT → RECURRING → TICKLER → REFERENCES → ROTTEN → POST.\n\n\
             The list subcommand is read-only: it evaluates every visible, \
             non-recurring Ready, Pending, and Next task at read time — \
             never stored — and shows the tiered walk queue with counts. \
@@ -158,7 +162,7 @@ fn list_command_inner() -> ClapCommand {
         .long_about(
             "List the tiered freshness review queue: every task with a \
             walk tier, ordered PRE → NEW → PROJECTS → PENDING → NEXT → \
-            TICKLER → REFERENCES → ROTTEN → POST with each tier's comparator, with \
+            RECURRING → TICKLER → REFERENCES → ROTTEN → POST with each tier's comparator, with \
             whole-vault counts. The command is read-only. Counts always \
             cover the whole vault; --limit truncates the queue rows \
             only. See docs/freshness.md for the full definition.",
@@ -545,7 +549,7 @@ fn human_list(report: &ListReport, styler: &Styler) -> String {
     output.push('\n');
     let _ = writeln!(
         output,
-        "  REVIEW {walk} due {sep} {pre} pre {sep} {new} new {sep} {projects} projects {sep} {pending} pending {sep} {next} next {sep} {tickler} tickler {sep} {references} references {sep} {rotten} rotten {sep} {post} post {sep} {today}",
+        "  REVIEW {walk} due {sep} {pre} pre {sep} {new} new {sep} {projects} projects {sep} {pending} pending {sep} {next} next {sep} {recurring} recurring {sep} {tickler} tickler {sep} {references} references {sep} {rotten} rotten {sep} {post} post {sep} {today}",
         walk = report.counts.walk,
         sep = styler.separator(),
         pre = report.counts.by_tier.pre,
@@ -553,6 +557,7 @@ fn human_list(report: &ListReport, styler: &Styler) -> String {
         projects = report.counts.by_tier.projects,
         pending = report.counts.by_tier.pending,
         next = report.counts.by_tier.next,
+        recurring = report.counts.by_tier.recurring,
         tickler = report.counts.by_tier.tickler,
         references = report.counts.by_tier.references,
         rotten = report.counts.by_tier.rotten,
@@ -560,12 +565,13 @@ fn human_list(report: &ListReport, styler: &Styler) -> String {
         today = today_meter(report),
     );
 
-    let tiers: [(&str, &str); 9] = [
+    let tiers: [(&str, &str); 10] = [
         ("pre", "PRE"),
         ("new", "NEW"),
         ("projects", "PROJECTS"),
         ("pending", "PENDING"),
         ("next", "NEXT"),
+        ("recurring", "RECURRING"),
         ("tickler", "TICKLER"),
         ("references", "REFERENCES"),
         ("rotten", "ROTTEN"),
@@ -709,6 +715,17 @@ fn human_row(row: &ListedRow, styler: &Styler) -> String {
             scheduled = row.scheduled.as_deref().unwrap_or("?"),
             fresh = row.fresh.as_deref().unwrap_or("?"),
         ),
+        "recurring" => match row.days_overdue {
+            Some(0) => "Recurring · due today".to_string(),
+            Some(days) => format!(
+                "Recurring · {days}d overdue · since {}",
+                row.due_on.as_deref().unwrap_or("?"),
+            ),
+            None => match &row.due_on {
+                Some(due) => format!("Recurring · due {due}"),
+                None => "Recurring".to_string(),
+            },
+        },
         _ => {
             let lead = match row.days_overdue {
                 Some(0) => "due today".to_string(),
@@ -782,12 +799,14 @@ fn json_list(report: &ListReport) -> serde_json::Value {
             "references_due": report.counts.references_due,
             "pre_due": report.counts.pre_due,
             "post_due": report.counts.post_due,
+            "recurring_due": report.counts.recurring_due,
             "by_tier": {
                 "pre": report.counts.by_tier.pre,
                 "new": report.counts.by_tier.new,
                 "projects": report.counts.by_tier.projects,
                 "pending": report.counts.by_tier.pending,
                 "next": report.counts.by_tier.next,
+                "recurring": report.counts.by_tier.recurring,
                 "tickler": report.counts.by_tier.tickler,
                 "references": report.counts.by_tier.references,
                 "rotten": report.counts.by_tier.rotten,

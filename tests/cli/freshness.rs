@@ -80,7 +80,7 @@ fn list_json_reports_queue_counts_and_contract() {
     let (_, value) = list_json(&temp, &[]);
 
     assert_eq!(value["ok"], true);
-    assert_eq!(value["schema_version"], 10);
+    assert_eq!(value["schema_version"], 11);
     assert_eq!(value["date"], NOW);
     assert_eq!(value["config"]["interval"], 7);
     assert_eq!(value["config"]["pending_interval"], 1);
@@ -109,7 +109,7 @@ fn list_json_reports_queue_counts_and_contract() {
 
     let queue = value["queue"].as_array().expect("queue array");
     assert_eq!(queue.len(), 7);
-    // Tier order NEW → PENDING → NEXT → TICKLER → ROTTEN: the
+    // Tier order NEW → PENDING → NEXT → RECURRING → TICKLER → ROTTEN: the
     // never-stamped [*] walks in NEXT between NEW and TICKLER.
     let tiers: Vec<&str> = queue
         .iter()
@@ -548,7 +548,7 @@ fn seed_dry_run_writes_nothing_and_reports_buckets() {
     let (output, value) = seed_json(&temp, &["--dry-run"]);
     assert_success(&output);
     assert_eq!(value["ok"], true);
-    assert_eq!(value["schema_version"], 10);
+    assert_eq!(value["schema_version"], 11);
     assert_eq!(value["dry_run"], true);
     assert_eq!(value["stamped"]["ready"], 3);
     assert_eq!(value["stamped"]["other"], 1);
@@ -652,7 +652,7 @@ fn list_lane_rows_cover_pending_and_next() {
         - [*] #task Fresh next [fresh:: 2026-10-08]\n",
     );
     let (_, value) = list_json(&temp, &[]);
-    assert_eq!(value["schema_version"], 10);
+    assert_eq!(value["schema_version"], 11);
     let counts = &value["counts"];
     assert_eq!(counts["pending_due"], 1);
     assert_eq!(counts["next_due"], 1);
@@ -859,7 +859,7 @@ fn list_reports_keeps_and_decide_per_schema_9() {
     let temp = keeps_vault("bob-cli-freshness-keeps");
     let value = keeps_list_json(&temp, "2026-10-20", &[]);
     assert_eq!(value["ok"], true);
-    assert_eq!(value["schema_version"], 10);
+    assert_eq!(value["schema_version"], 11);
     assert_eq!(value["config"]["decay"]["enabled"], true);
     assert_eq!(value["config"]["decay"]["keeps"], 3);
     assert!(value["config"]["decay"]["enter"].is_null());
@@ -913,7 +913,7 @@ fn list_decides_on_early_dates() {
     let temp = keeps_vault("bob-cli-freshness-keeps-early");
     for now in ["2026-10-04", NOW, "2026-10-18", "2026-10-19", "2026-10-20"] {
         let value = keeps_list_json(&temp, now, &[]);
-        assert_eq!(value["schema_version"], 10, "{now}");
+        assert_eq!(value["schema_version"], 11, "{now}");
         assert_eq!(value["counts"]["decide"], 1, "{now}");
         let queue = value["queue"].as_array().expect("queue array");
         let at_limit = queue
@@ -1020,7 +1020,7 @@ fn seed_preserves_existing_keeps() {
     write_file(&vault.join("a.md"), "- [ ] #task Kept before [keeps:: 2]\n");
     let (output, value) = seed_json(&temp, &[]);
     assert_success(&output);
-    assert_eq!(value["schema_version"], 10);
+    assert_eq!(value["schema_version"], 11);
     assert_eq!(value["stamped"]["ready"], 1);
     let contents =
         fs::read_to_string(vault.join("a.md")).expect("read seeded line");
@@ -1097,7 +1097,7 @@ fn list_tracker_intervals_and_hide_gate() {
     assert_success(&output);
     let value: Value =
         serde_json::from_str(stdout(&output).trim()).expect("list JSON");
-    assert_eq!(value["schema_version"], 10);
+    assert_eq!(value["schema_version"], 11);
     assert_eq!(value["config"]["project_interval"], 1);
     assert_eq!(value["config"]["reference_interval"], 3);
     // Both visible projects walk, whatever their notes hold; the
@@ -1194,7 +1194,7 @@ fn list_walks_projects_after_new_with_decoupled_counts() {
         "---\nscheduled: someday\n---\n- [ ] #task Broken project ^prj\n",
     );
     let (_, value) = list_json(&temp, &[]);
-    assert_eq!(value["schema_version"], 10);
+    assert_eq!(value["schema_version"], 11);
     let tiers: Vec<&str> = value["queue"]
         .as_array()
         .expect("queue array")
@@ -1344,7 +1344,7 @@ fn list_json_and_human_cover_checklist_tiers() {
     let temp = checklist_vault("bob-cli-freshness-checklist");
     let (_, value) = list_json(&temp, &[]);
     assert_eq!(value["ok"], true);
-    assert_eq!(value["schema_version"], 10);
+    assert_eq!(value["schema_version"], 11);
 
     let queue = value["queue"].as_array().expect("queue array");
     let texts: Vec<&str> = queue
@@ -1461,4 +1461,143 @@ fn list_json_and_human_cover_checklist_tiers() {
         "expected PRE-first / POST-last human sections:\n{human}"
     );
     assert_text_order(&human, &["REVIEW", "PRE", "review closeout", "POST"]);
+}
+
+fn recurring_vault(prefix: &str) -> TempDir {
+    let temp = TempDir::new(prefix);
+    let vault = vault_dir(&temp);
+    write_blocked_tasks_settings(&vault);
+    write_file(
+        &vault.join("recur.md"),
+        "\
+- [ ] #task Monthly salary [repeat:: every month on the 1st] [scheduled:: 2026-10-01]\n\
+- [ ] #task Yearly due [repeat:: every year] [due:: 2026-10-05]\n\
+- [?] #task Future maybe [repeat:: every week] [scheduled:: 2026-10-20]\n\
+- [ ] #task Water plants [repeat:: every week]\n\
+- [ ] #task Today recur [repeat:: every week] [scheduled:: 2026-10-01] ^recur-today\n\
+- [ ] #task #gtd #pre Brush teeth [repeat:: every day when done] [scheduled:: 2026-10-01]\n\
+- [ ] #task Stale bread [fresh:: 2026-09-20]\n",
+    );
+    write_file(
+        &vault.join("2026/20261008.md"),
+        "\
+# 2026-10-08\n\
+\n\
+## Pomodoros\n\
+\n\
+- [ ] (0900-0930) — REVIEW\n\
+\x20  - [[recur#^recur-today]]\n",
+    );
+    temp
+}
+
+#[test]
+fn list_json_and_human_cover_recurring_tier() {
+    let temp = recurring_vault("bob-cli-freshness-recurring");
+    let (_, value) = list_json(&temp, &[]);
+    assert_eq!(value["ok"], true);
+    assert_eq!(value["schema_version"], 11);
+
+    let queue = value["queue"].as_array().expect("queue array");
+    let tier_of = |text: &str| {
+        queue
+            .iter()
+            .find(|entry| {
+                entry["text"].as_str().is_some_and(|t| t.contains(text))
+            })
+            .map(|entry| entry["tier"].as_str().unwrap().to_string())
+    };
+    assert_eq!(tier_of("Monthly salary").as_deref(), Some("recurring"));
+    assert_eq!(tier_of("Yearly due").as_deref(), Some("recurring"));
+    assert_eq!(tier_of("Brush teeth").as_deref(), Some("pre"));
+    assert_eq!(tier_of("Stale bread").as_deref(), Some("rotten"));
+    for missing in ["Future maybe", "Water plants", "Today recur"] {
+        assert!(
+            !queue.iter().any(|entry| entry["text"]
+                .as_str()
+                .is_some_and(|t| t.contains(missing))),
+            "out-of-scope recurring row queued ({missing}):\n{value}"
+        );
+    }
+
+    let monthly = queue
+        .iter()
+        .find(|entry| {
+            entry["text"]
+                .as_str()
+                .is_some_and(|t| t.contains("Monthly"))
+        })
+        .expect("monthly row");
+    assert_eq!(monthly["lane"], "ready");
+    assert!(monthly["state"].is_null());
+    assert!(monthly["bucket"].is_null());
+    assert_eq!(monthly["due_on"], "2026-10-01");
+    assert_eq!(monthly["days_overdue"], 7);
+    assert_eq!(monthly["decide"], false);
+
+    let yearly = queue
+        .iter()
+        .find(|entry| {
+            entry["text"].as_str().is_some_and(|t| t.contains("Yearly"))
+        })
+        .expect("yearly row");
+    assert_eq!(yearly["due_on"], "2026-10-05");
+    assert_eq!(yearly["days_overdue"], 3);
+
+    // RECURRING order is due_on ↑: the 10-01 row comes first.
+    let tiers: Vec<&str> = queue
+        .iter()
+        .map(|entry| entry["tier"].as_str().unwrap())
+        .collect();
+    assert_eq!(tiers, vec!["pre", "recurring", "recurring", "rotten"]);
+    let texts: Vec<&str> = queue
+        .iter()
+        .map(|entry| entry["text"].as_str().unwrap())
+        .collect();
+    assert!(texts[1].contains("Monthly"), "order:\n{value}");
+    assert!(texts[2].contains("Yearly"), "order:\n{value}");
+
+    let counts = &value["counts"];
+    assert_eq!(counts["by_tier"]["recurring"], 2);
+    assert_eq!(counts["recurring_due"], 2);
+    assert_eq!(counts["walk"], 4);
+    assert_eq!(
+        counts["walk"].as_u64().unwrap(),
+        counts["by_tier"]["pre"].as_u64().unwrap()
+            + counts["by_tier"]["recurring"].as_u64().unwrap()
+            + counts["by_tier"]["rotten"].as_u64().unwrap()
+    );
+    // Recurring rows add nothing to the Ready-state totals.
+    assert_eq!(counts["due"], 1);
+    assert_eq!(counts["rotten"], 1);
+
+    let codes: Vec<&str> = value["warnings"]
+        .as_array()
+        .expect("warnings array")
+        .iter()
+        .filter_map(|warning| warning["code"].as_str())
+        .collect();
+    assert!(
+        codes.contains(&"recurring_undated"),
+        "missing undated-recurring lint:\n{value}"
+    );
+
+    let output = bob_command()
+        .arg("freshness")
+        .arg("list")
+        .env("BOB_DIR", vault_dir(&temp))
+        .env("BOB_NOW", NOW)
+        .output()
+        .expect("run bob freshness list");
+    assert_success(&output);
+    let human = stdout(&output);
+    assert!(
+        human.contains("RECURRING")
+            && human.contains("Recurring · 7d overdue · since 2026-10-01"),
+        "expected RECURRING human section:\n{human}"
+    );
+    assert_text_order(
+        &human,
+        &["REVIEW", "RECURRING", "commitments done", "ROTTEN"],
+    );
 }
