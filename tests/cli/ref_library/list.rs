@@ -99,7 +99,7 @@ fn list_default_view_is_the_queue_in_every_format() {
     assert_success(&human);
     let text = stdout(&human);
     assert!(
-        text.contains("reading queue") && text.contains("13 open"),
+        text.contains("reading queue") && text.contains("14 open"),
         "default header:\n{text}"
     );
     assert!(
@@ -112,8 +112,8 @@ fn list_default_view_is_the_queue_in_every_format() {
     );
 
     let document = run_list_json(&vault, &[]);
-    assert_eq!(document["matched"], 14);
-    assert_eq!(document["returned"], 14);
+    assert_eq!(document["matched"], 15);
+    assert_eq!(document["returned"], 15);
     assert_eq!(document["truncated"], false);
     assert_eq!(document["hidden"]["superseded"], 1);
     assert_eq!(
@@ -135,7 +135,8 @@ fn list_default_view_is_the_queue_in_every_format() {
     let paths = list_paths(&document);
     assert_eq!(paths[0], "ref/papers/two_trackers.md");
     assert_eq!(paths[1], "ref/ai/legacy_collect.md");
-    assert_eq!(paths[2], "ref/chat/chat_next.md");
+    assert_eq!(paths[2], "ref/papers/blocked_mark.md");
+    assert_eq!(paths[3], "ref/chat/chat_next.md");
 
     let markdown = run_list(&vault, &["-f", "markdown"]);
     assert_success(&markdown);
@@ -148,7 +149,7 @@ fn list_default_view_is_the_queue_in_every_format() {
     );
     assert!(
         body.contains(
-            "\n\n14 of 14 matching notes shown · coverage: ref/ only\n"
+            "\n\n15 of 15 matching notes shown · coverage: ref/ only\n"
         ),
         "blank line before the markdown summary:\n{body}"
     );
@@ -223,7 +224,7 @@ fn list_filters_or_within_and_across_options() {
 
     // `-R all` is every state, with no defaulting.
     let document = run_list_json(&vault, &["-R", "all"]);
-    assert_eq!(document["matched"], 31);
+    assert_eq!(document["matched"], 32);
     assert_eq!(document["filters"]["reading_state_defaulted"], false);
 }
 
@@ -335,20 +336,20 @@ fn list_limit_all_and_truncation() {
     let capped = run_list(&vault, &["-n", "2"]);
     assert_success(&capped);
     assert!(
-        stdout(&capped).contains("… 11 more · -n N or -A to show more"),
+        stdout(&capped).contains("… 12 more · -n N or -A to show more"),
         "truncation line:\n{}",
         stdout(&capped)
     );
 
     let document = run_list_json(&vault, &["-n", "2"]);
-    assert_eq!(document["matched"], 14);
+    assert_eq!(document["matched"], 15);
     assert_eq!(document["returned"], 2);
     assert_eq!(document["truncated"], true);
     assert_eq!(list_paths(&document).len(), 2);
 
     let document = run_list_json(&vault, &["-A"]);
-    assert_eq!(document["matched"], 14);
-    assert_eq!(document["returned"], 14);
+    assert_eq!(document["matched"], 15);
+    assert_eq!(document["returned"], 15);
     assert_eq!(document["truncated"], false);
     assert_eq!(document["filters"]["limit"], serde_json::Value::Null);
 

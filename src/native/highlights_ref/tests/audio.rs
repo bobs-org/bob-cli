@@ -155,6 +155,40 @@ parent: \"[[obsidian]]\"
 }
 
 #[test]
+fn audio_embed_inserts_after_ref_child_lines() {
+    let child = "\t- ⛓️ **DEPENDS ON:** [[other#^dep]]";
+    let body = format!(
+        "# Report\n\n- [?] #task #ref [[lib/chat/report.pdf]] [dependsOn:: dep] #hide ^ref\n{child}\n\n## Highlights\n\n<!-- highlights:begin -->\n\n<!-- highlights:end -->\n"
+    );
+    let note = parse_note(&format!(
+        "---\nstatus: next\nparent: \"[[obsidian]]\"\n---\n\n{body}"
+    ));
+    let metadata = test_metadata(Some("lib/chat/report.mp3"));
+    let inserted =
+        super::maybe_insert_audio_embed(&note, &metadata, &note.body);
+    assert!(
+        inserted
+            .contains(&format!("^ref\n{child}\n\n![[lib/chat/report.mp3]]\n")),
+        "{inserted}"
+    );
+
+    let childless_note = parse_note(
+        "---\nstatus: next\nparent: \"[[obsidian]]\"\n---\n\n# Report\n\n- [?] #task #ref [[lib/chat/report.pdf]] #hide ^ref\n\n## Highlights\n\n<!-- highlights:begin -->\n\n<!-- highlights:end -->\n",
+    );
+    let childless_inserted = super::maybe_insert_audio_embed(
+        &childless_note,
+        &metadata,
+        &childless_note.body,
+    );
+    assert!(
+        childless_inserted.contains(
+            "- [?] #task #ref [[lib/chat/report.pdf]] #hide ^ref\n\n![[lib/chat/report.mp3]]\n"
+        ),
+        "{childless_inserted}"
+    );
+}
+
+#[test]
 fn existing_note_skips_embed_when_audio_field_already_present() {
     let note = parse_note(
         "\

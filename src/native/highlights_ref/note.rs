@@ -204,7 +204,16 @@ pub(super) fn rewrite_pdf_task_checkbox_for_projection(
     body: &str,
     projection: &Projection,
 ) -> Result<String> {
-    replace_pdf_task_checkbox_mark(body, projection_pdf_task_mark(projection))
+    let mark = projection_pdf_task_mark(projection);
+    if matches!(mark, ' ' | '*' | '/')
+        && matches!(
+            parse_pdf_task_line(body)?,
+            PdfTaskLineState::Present(task) if task.mark == '?'
+        )
+    {
+        return Ok(body.to_string());
+    }
+    replace_pdf_task_checkbox_mark(body, mark)
 }
 
 #[cfg(test)]
@@ -309,8 +318,9 @@ pub(super) fn tasks_section_end_line_index(
 }
 
 /// Ensure the body has a `Tasks` section, creating `## Tasks` one blank line
-/// below the generated `^ref` task. Returns the body and the heading's line
-/// index.
+/// below the generated `^ref` task block (the task line plus its indented
+/// child lines, e.g. a `DEPENDS ON` line). Returns the body and the heading's
+/// line index.
 pub(super) fn ensure_tasks_section(
     body: &str,
     pdf_task_line_index: usize,
@@ -318,12 +328,15 @@ pub(super) fn ensure_tasks_section(
     if let Some(index) = tasks_heading_line_index(body) {
         return (body.to_string(), index);
     }
+    let lines: Vec<&str> = body.lines().collect();
+    let anchor =
+        task_block_end_line_index(&lines, pdf_task_line_index, lines.len());
     let body = insert_lines_after(
         body,
-        pdf_task_line_index,
+        anchor,
         &[String::new(), TASKS_SECTION_HEADING.to_string()],
     );
-    (body, pdf_task_line_index + 2)
+    (body, anchor + 2)
 }
 
 pub(super) fn insert_lines_into_tasks_section(

@@ -37,8 +37,8 @@ fn codes(row: &RefRow) -> BTreeSet<&str> {
 #[test]
 fn index_membership_and_coverage() {
     let index = fixture_index();
-    assert_eq!(index.rows.len(), 32);
-    assert_eq!(index.coverage.notes, 32);
+    assert_eq!(index.rows.len(), 33);
+    assert_eq!(index.coverage.notes, 33);
     assert_eq!(index.coverage.skipped, 3);
     assert_eq!(index.coverage.ref_dir, "ref");
     assert_eq!(index.coverage.intake, "not_checked");
@@ -153,7 +153,7 @@ fn legacy_unread_is_superseded_by_the_pdf_capture() {
     assert_eq!(row.added.as_deref(), Some("2026-01-01"));
     assert_eq!(row.added_source.as_deref(), Some("zorg_block"));
     // Library counts exclude superseded rows.
-    assert_eq!(index.counts.notes, 31);
+    assert_eq!(index.counts.notes, 32);
 }
 
 #[test]
@@ -260,6 +260,18 @@ fn tracker_diagnostics_fall_back_to_frontmatter() {
     // No frontmatter title: the first H1 is the title.
     assert_eq!(unknown.title, "Unknown Mark Note");
     assert_eq!(unknown.snapshot, None);
+}
+
+#[test]
+fn blocked_tracker_defers_to_frontmatter_without_diagnostic() {
+    let index = fixture_index();
+    let blocked = row(&index, "ref/papers/blocked_mark.md");
+    assert_eq!(blocked.status.as_deref(), Some("next"));
+    assert_eq!(blocked.status_sync, "ok");
+    assert_eq!(blocked.reading_state, "queued");
+    assert_eq!(blocked.reading_state_source, "ref_task:[?]");
+    assert!(blocked.diagnostics.is_empty());
+    assert_eq!(blocked.title, "Blocked Mark Note");
 }
 
 #[test]

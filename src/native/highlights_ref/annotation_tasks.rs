@@ -613,7 +613,7 @@ pub(super) fn parse_pdf_task_line(body: &str) -> Result<PdfTaskLineState> {
 
 pub(super) fn malformed_pdf_task_line_error(line_index: usize) -> CommandError {
     CommandError::new(format!(
-        "generated PDF task line on line {} is malformed; expected a generated task with one of [ ], [*], [/], [x], [X], or [-], such as '- [ ] #task #ref [[...pdf]] #hide ^ref'; legacy generated lines without #ref, with [p::2], or without #hide are still accepted",
+        "generated PDF task line on line {} is malformed; expected a generated task with one of [ ], [*], [/], [?], [x], [X], or [-], such as '- [ ] #task #ref [[...pdf]] #hide ^ref'; legacy generated lines without #ref, with [p::2], or without #hide are still accepted",
         line_index + 1
     ))
 }
@@ -653,7 +653,7 @@ pub(super) fn parse_markdown_task_checkbox(
     match mark {
         ' ' => Some((mark_index, false, mark)),
         'x' | 'X' => Some((mark_index, true, mark)),
-        '*' | '/' | '-' => Some((mark_index, false, mark)),
+        '*' | '/' | '-' | '?' => Some((mark_index, false, mark)),
         _ => None,
     }
 }
@@ -681,13 +681,6 @@ pub(super) fn contains_pdf_wikilink(line: &str) -> bool {
     false
 }
 
-/// Resolves the synced status targeted by the visible `^ref` task state.
-pub(super) fn pdf_task_target_status(
-    status: PdfTaskStatus,
-) -> Option<&'static str> {
-    status.target_status()
-}
-
 pub(super) fn apply_pdf_task_status_signal(
     resolution: &mut SyncResolution,
     task_line: &PdfTaskLineState,
@@ -700,7 +693,11 @@ pub(super) fn apply_pdf_task_status_signal(
         status,
         status_contributed: None,
     };
-    let Some(target_status) = pdf_task_target_status(status) else {
+    let current = resolution
+        .projection
+        .get(FIELD_STATUS)
+        .and_then(MarkerValue::as_string);
+    let Some(target_status) = status.target_status_given(current) else {
         return Ok(signal);
     };
     if projection_status_is(&resolution.projection, target_status) {

@@ -3,13 +3,16 @@
 //! A tracker is a list task line whose whitespace tokens include `^ref`, read
 //! outside fenced code and outside the managed region; the PDF wikilink is
 //! optional here (unlike the sync writer's strict task). The checkbox mark
-//! maps through the `highlights_ref` mark seam, and frontmatter aliases
-//! through its deprecated-status seam.
+//! maps through the `highlights_ref` mark seams, and frontmatter aliases
+//! through its deprecated-status seam. A single Blocked `[?]` tracker is
+//! status-neutral: it defers to the normalized frontmatter status (open
+//! statuses stay as is with source `ref_task:[?]`; terminal ones target
+//! `ready` through the usual pending/conflict comparison).
 use super::frontmatter::ParsedFrontmatter;
 use super::row::Diagnostic;
 use crate::native::highlights_ref::{
-    normalize_deprecated_status_str, ref_task_mark_status, MANAGED_BODY_BEGIN,
-    MANAGED_BODY_END,
+    is_known_ref_task_mark, normalize_deprecated_status_str,
+    ref_task_mark_target_status, MANAGED_BODY_BEGIN, MANAGED_BODY_END,
 };
 use crate::native::markdown::fenced_lines;
 
@@ -59,9 +62,16 @@ pub(crate) fn decide_status(
     let base_norm = base_status(front);
     let legacy_raw = front.get_str("legacy_status");
 
-    // Exactly one tracker with a known mark is usable.
-    let usable =
-        hits.len() == 1 && ref_task_mark_status(hits[0].mark).is_some();
+    // Exactly one tracker with a status-aware target is usable. A `[?]`
+    // tracker defers to the normalized frontmatter status, so it is usable
+    // only with an open or terminal frontmatter status; otherwise it falls
+    // through to the frontmatter path without an `unknown_ref_mark`.
+    let single_target = if hits.len() == 1 {
+        ref_task_mark_target_status(hits[0].mark, front_norm)
+    } else {
+        None
+    };
+    let usable = hits.len() == 1 && single_target.is_some();
     let mut diagnostics = Vec::new();
     if hits.len() > 1 {
         diagnostics.push(Diagnostic::new(
@@ -72,7 +82,7 @@ pub(crate) fn decide_status(
             ),
         ));
     }
-    if hits.len() == 1 && ref_task_mark_status(hits[0].mark).is_none() {
+    if hits.len() == 1 && !is_known_ref_task_mark(hits[0].mark) {
         diagnostics.push(Diagnostic::new(
             "unknown_ref_mark",
             format!("unsupported ^ref checkbox mark [{}]", hits[0].mark),
@@ -80,8 +90,7 @@ pub(crate) fn decide_status(
     }
 
     if usable {
-        let tracker_status =
-            ref_task_mark_status(hits[0].mark).expect("usable mark");
+        let tracker_status = single_target.expect("usable mark");
         let tracker = Some(hits[0].clone());
         if front_norm == Some(tracker_status) {
             let (state, source) =

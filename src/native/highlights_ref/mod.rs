@@ -139,7 +139,8 @@ pub(crate) use clip_url::{
 };
 pub(crate) use frontmatter::split_frontmatter;
 pub(crate) use marker::{
-    normalize_deprecated_status_str, ref_task_mark_status,
+    is_known_ref_task_mark, normalize_deprecated_status_str,
+    ref_task_mark_status, ref_task_mark_target_status,
 };
 pub(crate) use model::Config;
 pub(crate) use note::configured_path;

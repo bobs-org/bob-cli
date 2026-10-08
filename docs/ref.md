@@ -58,13 +58,17 @@ per note:
 
 1. Exactly one `^ref` tracker with a known mark maps through the
    checkbox marks (`[ ]` ready, `[*]` next, `[/]` wip, `[x]` read,
-   `[-]` abandoned). Against the frontmatter `status` (with
+   `[-]` abandoned). A single `[?]` tracker defers to the frontmatter
+   `status`: with an open frontmatter status the tracker agrees (source
+   `ref_task:[?]`, no diagnostic); with a terminal frontmatter status it
+   targets `ready`. Against the frontmatter `status` (with
    `unread`/`done` normalized) and the stored `highlights_marker_base`:
    agreement is `ok`; a tracker move with unchanged frontmatter is
    `pending` (the tracker wins); both sides moving is `conflict`.
-2. No usable tracker (none, several, or an unknown mark): the normalized
-   frontmatter `status`, plus a diagnostic for several trackers or an
-   unknown mark.
+2. No usable tracker (none, several, an unknown mark, or `[?]` without a
+   usable frontmatter status): the normalized frontmatter `status`, plus
+   a diagnostic for several trackers or an unknown mark (`unknown_ref_mark`
+   now covers other custom marks only).
 3. Neither: `status: null` and `unknown` reading state.
 
 | `reading_state` | From modern status | From `legacy_status`        |

@@ -135,7 +135,10 @@ pub(super) fn note_has_audio_field(note: &ParsedNote) -> bool {
 fn insert_audio_embed(body: &str, embed: &str) -> String {
     let after_task = [String::new(), embed.to_string()];
     if let Ok(PdfTaskLineState::Present(task)) = parse_pdf_task_line(body) {
-        return insert_lines_after(body, task.line_index, &after_task);
+        let lines: Vec<&str> = body.lines().collect();
+        let anchor =
+            task_block_end_line_index(&lines, task.line_index, lines.len());
+        return insert_lines_after(body, anchor, &after_task);
     }
     let before_anchor = [String::new(), embed.to_string(), String::new()];
     if let Some(index) = heading_line_index(body, "Highlights") {

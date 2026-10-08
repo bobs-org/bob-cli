@@ -561,7 +561,10 @@ Implemented conflict policy:
   enabled and any status edit agrees with the visible lifecycle task.
 - Treat the generated PDF task line as the reference-reading status:
   `[ ]` means `ready`, `[*]` means `next`, `[/]` means `wip`, `[x]`/`[X]`
-  means `read`, and `[-]` means `abandoned`.
+  means `read`, and `[-]` means `abandoned`. `[?]` means Blocked: it agrees
+  with any open selected status without contributing, and reopens a terminal
+  selected status to `ready` (to finish a blocked reference, check the `^ref`
+  task `[x]`).
 - If that task status differs from the selected marker/frontmatter projection,
   apply it as a note-side status signal. If marker or frontmatter also changed
   status to a different value from the stored base, report a conflict instead
@@ -882,7 +885,7 @@ The generated task line is the reference-reading lifecycle:
 ```
 
 When a companion audio file is present, the native player sits directly below
-that task, before `## Highlights`:
+that task block (after its indented child lines, if any), before `## Highlights`:
 
 ```md
 - [ ] #task #ref [[lib/books/example.pdf]] #hide ^ref
@@ -909,6 +912,7 @@ Sync never auto-confirms it.
 | `[ ]` | Todo | `ready` | In the reading queue, not started |
 | `[*]` | Next | `next` | Queued for action |
 | `[/]` | In Progress | `wip` | Actively reading |
+| `[?]` | Blocked | (status unchanged) | Waiting on an open dependency or future schedule; derived by `bob task-status-hooks` |
 | `[x]` / `[X]` | Done | `read` | Finished |
 | `[-]` | Cancelled | `abandoned` | Dropped |
 
@@ -918,6 +922,17 @@ final status selects the matching checkbox. `legacy` has no lifecycle checkbox
 and falls back to `[ ]`; legacy notes without a generated `^ref` task remain
 untouched. `unread` is accepted only as a deprecated alias of `ready`, while
 `done` remains a deprecated alias of `read`.
+
+Blocked `[?]` is a status-neutral overlay, not a new reference status: it
+agrees with any open selected status (`ready`, `next`, `wip`, `legacy`) and
+contributes nothing, so the stored lane stays as is. With a terminal selected
+status it acts like a reopen and targets `ready` through the usual conflict
+check. Sync never rewrites a Blocked task to `[ ]`, `[*]`, or `[/]` when the
+final status is open, because `bob task-status-hooks` owns that recovery; when
+the hooks unblock the task, the next sync applies the new mark normally. To
+finish a blocked reference, check the `^ref` task `[x]`; the hooks leave done
+tasks alone. Toggling only the checkbox to or from `[?]` counts as a
+checkbox-only body change.
 
 Changing `[x]` or `[-]` back to `[ ]` therefore reopens a reference to `ready`;
 use `[/]` to resume it directly as `wip`. Metadata such as
@@ -956,7 +971,8 @@ whitespace-delimited token is copied to an unchecked task:
 
 Created tasks go into the note's `## Tasks` section. If the note has no `Tasks`
 heading, one is created as `## Tasks` directly below the generated PDF `^ref`
-task, separated from it by a blank line. An existing `Tasks` heading at any
+task block (the task line plus its indented child lines, e.g. a `DEPENDS ON`
+line), separated from it by a blank line. An existing `Tasks` heading at any
 level is reused. New tasks are appended after the tasks already in the section:
 
 ```md

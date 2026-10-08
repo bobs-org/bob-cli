@@ -930,7 +930,8 @@ Generated notes live under `ref/`. Nested library PDFs such as
 `lib/books/foo.pdf` write `ref/books/foo.md` with `type: "[[ref]]"` and
 `ref_type: books`. New notes also get a local `created` timestamp; later syncs
 preserve it and do not backfill older notes. The generated `^ref` task is the
-visible lifecycle control.
+visible lifecycle control. A Blocked `[?]` `^ref` task is accepted and
+status-neutral.
 Marker `status` values are `ready`, `next`, `wip`, `read`, `abandoned`, and
 `legacy`.
 

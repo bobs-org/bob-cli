@@ -480,7 +480,9 @@ The machine-managed `#task #ref ... ^ref` reading task in a generated reference
 note is an ordinary scanned task. Promoting it to `[*]` or `[/]` therefore
 flows through the next highlights sync as the corresponding reference status;
 clearing an unreachable daily-note `[*]` back to `[ ]` flows through as
-`status: ready`. Generated reference notes are ordinary notes for lane
+`status: ready`. Blocking it to `[?]` is status-neutral for highlights sync:
+the reference keeps its stored lane and needs no PDF marker write; unblocking
+flows through like any other checkbox change. Generated reference notes are ordinary notes for lane
 purposes: their `[/]` tasks are sticky like any other. Because the highlights lifecycle is also
 stored in the PDF marker, preview with `bob ref scan --dry-run` and use a
 reviewed `bob ref scan --write-pdfs` when marker write-back is needed.

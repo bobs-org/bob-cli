@@ -596,7 +596,9 @@ pub(super) fn normalize_key(key: &str) -> String {
 
 /// Narrow seam for the `index` phase (`ref_library`): map a `^ref` checkbox
 /// mark to its canonical status through the [`PdfTaskLine`] mapping, without
-/// exposing task-line types. Returns `None` for an unknown mark.
+/// exposing task-line types. Returns `None` for an unknown mark. `[?]`
+/// (Blocked) has no fixed lifecycle status, so it still returns `None`;
+/// use [`ref_task_mark_target_status`] for its status-aware target.
 pub(crate) fn ref_task_mark_status(mark: char) -> Option<&'static str> {
     match mark {
         ' ' | '*' | '/' | 'x' | 'X' | '-' => PdfTaskLine {
@@ -609,6 +611,34 @@ pub(crate) fn ref_task_mark_status(mark: char) -> Option<&'static str> {
         .target_status(),
         _ => None,
     }
+}
+
+/// Whether `mark` is a known `^ref` tracker mark, including Blocked `[?]`.
+/// Built on the same [`PdfTaskLine`] mapping as the target seam below.
+pub(crate) fn is_known_ref_task_mark(mark: char) -> bool {
+    matches!(mark, ' ' | '*' | '/' | '?' | 'x' | 'X' | '-')
+}
+
+/// Narrow seam for the `index` phase (`ref_library`): status-aware target
+/// for a `^ref` checkbox mark given the normalized frontmatter status.
+/// Lifecycle marks return their fixed target; `[?]` agrees with any open
+/// status and reopens a terminal status to `ready`. Returns `None` for an
+/// unknown mark or a `[?]` without a usable current status.
+pub(crate) fn ref_task_mark_target_status(
+    mark: char,
+    current: Option<&str>,
+) -> Option<&'static str> {
+    if !is_known_ref_task_mark(mark) {
+        return None;
+    }
+    PdfTaskLine {
+        line_index: 0,
+        checkbox_mark_index: 0,
+        checked: false,
+        mark,
+    }
+    .status()
+    .target_status_given(current)
 }
 
 /// Narrow seam for the `index` phase (`ref_library`): the deprecated

@@ -13,6 +13,7 @@ fn highlights_ref_task_line_parser_recognizes_generated_pdf_task() {
         (' ', super::PdfTaskStatus::Ready),
         ('*', super::PdfTaskStatus::Next),
         ('/', super::PdfTaskStatus::Wip),
+        ('?', super::PdfTaskStatus::Blocked),
         ('x', super::PdfTaskStatus::Read),
         ('X', super::PdfTaskStatus::Read),
         ('-', super::PdfTaskStatus::Abandoned),
@@ -99,7 +100,7 @@ fn highlights_ref_task_line_parser_rejects_malformed_and_duplicate_tasks() {
         missing_tag.to_string().contains("malformed"),
         "{missing_tag}"
     );
-    for mark in ["[ ]", "[*]", "[/]", "[x]", "[X]", "[-]"] {
+    for mark in ["[ ]", "[*]", "[/]", "[?]", "[x]", "[X]", "[-]"] {
         assert!(missing_tag.to_string().contains(mark), "{missing_tag}");
     }
 
@@ -116,6 +117,19 @@ fn highlights_ref_task_line_parser_rejects_malformed_and_duplicate_tasks() {
         custom_marker.to_string().contains("malformed"),
         "{custom_marker}"
     );
+
+    let blocked = super::parse_pdf_task_line(
+        "- [?] #task #ref [[lib/x.pdf]] [dependsOn:: a] #hide ^ref\n",
+    )
+    .expect("parse blocked task");
+    match blocked {
+        super::PdfTaskLineState::Present(task) => {
+            assert_eq!(task.mark, '?');
+            assert!(!task.checked);
+            assert_eq!(task.status(), super::PdfTaskStatus::Blocked);
+        }
+        super::PdfTaskLineState::Missing => panic!("expected blocked task"),
+    }
 
     let duplicate = super::parse_pdf_task_line(
         "- [ ] #task [[lib/one.pdf]] ^ref\n- [x] #task [[lib/two.pdf]] ^ref\n",
@@ -686,4 +700,30 @@ fn annotation_task_batches_append_in_insertion_order() {
     let first_pos = second.find("- [ ] #task First").expect("first task");
     let second_pos = second.find("- [ ] #task Second").expect("second task");
     assert!(first_pos < second_pos, "{second}");
+}
+
+#[test]
+fn annotation_task_section_stays_after_ref_child_lines() {
+    let child = "\t- ⛓️ **DEPENDS ON:** [[other#^dep]]";
+    let body = format!(
+        "# Example\n\n- [?] #task #ref [[lib/example.pdf]] [dependsOn:: dep] #hide ^ref\n{child}\n\n## Highlights\n\n<!-- highlights:begin -->\n\n<!-- highlights:end -->\n"
+    );
+    let updated = insert_annotation_tasks(&body, &["- [ ] #task New"]);
+    assert!(
+        updated.contains(&format!(
+            "^ref\n{child}\n\n## Tasks\n\n- [ ] #task New\n"
+        )),
+        "{updated}"
+    );
+
+    let childless =
+        "# Example\n\n- [?] #task #ref [[lib/example.pdf]] #hide ^ref\n\n## Highlights\n\n<!-- highlights:begin -->\n\n<!-- highlights:end -->\n";
+    let childless_updated =
+        insert_annotation_tasks(childless, &["- [ ] #task New"]);
+    assert!(
+        childless_updated.contains(
+            "- [?] #task #ref [[lib/example.pdf]] #hide ^ref\n\n## Tasks\n\n- [ ] #task New\n"
+        ),
+        "{childless_updated}"
+    );
 }

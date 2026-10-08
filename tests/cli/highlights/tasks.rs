@@ -1093,6 +1093,103 @@ fn highlights_ref_status_abandoned_rewrites_generated_task_to_cancelled() {
     }
 }
 
+#[test]
+fn highlights_ref_blocked_task_syncs_as_status_neutral_overlay() {
+    let temp = TempDir::new("bob-cli-highlights-ref-blocked");
+    let vault = temp.path().join("vault");
+    let pdf = vault.join("lib/example.pdf");
+    let note = vault.join("ref/example.md");
+    write_highlights_pdf(&pdf, "- status: next\n- parent: obsidian\n");
+    assert_success(
+        &bob_command()
+            .arg("highlights")
+            .arg("sync")
+            .arg(&pdf)
+            .env("BOB_DIR", &vault)
+            .output()
+            .expect("initial highlights sync"),
+    );
+
+    let synced = fs::read_to_string(&note).expect("read ref note");
+    assert!(synced.contains("status: next\n"), "{synced}");
+    let blocked_line = "- [?] #task #ref [[lib/example.pdf]] [dependsOn:: dep] [fresh:: 2026-10-08] #hide ^ref";
+    let child = "\t- ⛓️ **DEPENDS ON:** [[other#^dep]]";
+    let blocked_note = synced.replacen(
+        "- [*] #task #ref [[lib/example.pdf]] #hide ^ref",
+        &format!("{blocked_line}\n{child}"),
+        1,
+    );
+    assert!(blocked_note.contains(child), "{blocked_note}");
+    write_file(&note, &blocked_note);
+    let marker_before = pdf_marker_contents(&pdf);
+
+    let output = bob_command()
+        .arg("ref")
+        .arg("scan")
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("blocked writing scan");
+    assert_success(&output);
+    let after = fs::read_to_string(&note).expect("read blocked note");
+    assert!(after.contains("status: next\n"), "{after}");
+    assert!(after.contains(blocked_line), "{after}");
+    assert!(after.contains(child), "{after}");
+    assert_eq!(pdf_marker_contents(&pdf), marker_before);
+
+    let output = bob_command()
+        .arg("ref")
+        .arg("scan")
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("repeat blocked scan");
+    assert_success(&output);
+    assert_eq!(
+        fs::read_to_string(&note).expect("read note after repeat"),
+        after
+    );
+
+    set_pdf_marker_contents(&pdf, "- status: read\n- parent: obsidian\n");
+    let note_before_conflict = after.clone();
+    let marker_before_conflict = pdf_marker_contents(&pdf);
+    let output = bob_command()
+        .arg("ref")
+        .arg("scan")
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("blocked conflict scan");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "blocked marker conflict should fail:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        format_output(&output).contains("blocked PDF task conflicts"),
+        "expected blocked conflict:\n{}",
+        format_output(&output)
+    );
+    assert_eq!(
+        fs::read_to_string(&note).expect("read note after conflict"),
+        note_before_conflict
+    );
+    assert_eq!(pdf_marker_contents(&pdf), marker_before_conflict);
+    set_pdf_marker_contents(&pdf, "- status: next\n- parent: obsidian\n");
+
+    let unblocked = after.replacen("- [?]", "- [ ]", 1);
+    write_file(&note, &unblocked);
+    let output = bob_command()
+        .arg("ref")
+        .arg("scan")
+        .arg("--write-pdfs")
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("blocked recovery scan");
+    assert_success(&output);
+    let recovered = fs::read_to_string(&note).expect("read recovered note");
+    assert!(recovered.contains("status: ready\n"), "{recovered}");
+    assert!(pdf_marker_contents(&pdf).contains("- status: ready\n"));
+}
+
 fn find_created_annotation_task(contents: &str, prose: &str) -> String {
     contents
         .lines()

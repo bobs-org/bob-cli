@@ -488,3 +488,159 @@ fn close_date_stamp_inserts_once_before_ref_and_preserves_existing_dates() {
     assert_eq!(super::stamp_close_date(open, '/'), open);
     assert_eq!(super::stamp_close_date(&stamped, ' '), stamped);
 }
+
+#[test]
+fn blocked_task_agrees_with_every_open_projection() {
+    for open in [
+        super::STATUS_READY,
+        super::STATUS_NEXT,
+        super::STATUS_WIP,
+        super::STATUS_LEGACY,
+    ] {
+        let base = test_projection(vec![
+            ("status", string_value(open)),
+            ("parent", string_value("[[obsidian]]")),
+        ]);
+        let mut resolution = signal_resolution(&base);
+        let task = super::parse_pdf_task_line(
+            "- [?] #task #ref [[lib/books/example.pdf]] [dependsOn:: a] #hide ^ref\n",
+        )
+        .expect("parse blocked task");
+        assert_eq!(task.status(), super::PdfTaskStatus::Blocked);
+
+        let signal = super::apply_pdf_task_status_signal(
+            &mut resolution,
+            &task,
+            Some(&base),
+            &base,
+            &base,
+        )
+        .expect("blocked agrees with open status");
+        assert_eq!(signal.status, super::PdfTaskStatus::Blocked);
+        assert_eq!(signal.status_contributed, None);
+        assert_eq!(
+            resolution
+                .projection
+                .get(super::FIELD_STATUS)
+                .and_then(MarkerValue::as_string),
+            Some(open)
+        );
+        assert!(!resolution.decision.frontmatter_contributed);
+    }
+}
+
+#[test]
+fn blocked_task_reopens_terminal_projections_to_ready() {
+    for terminal in [super::STATUS_READ, super::STATUS_ABANDONED] {
+        let base = test_projection(vec![
+            ("status", string_value(terminal)),
+            ("parent", string_value("[[obsidian]]")),
+        ]);
+        let mut resolution = signal_resolution(&base);
+        let task = super::parse_pdf_task_line(
+            "- [?] #task #ref [[lib/books/example.pdf]] #hide ^ref\n",
+        )
+        .expect("parse blocked task");
+
+        let signal = super::apply_pdf_task_status_signal(
+            &mut resolution,
+            &task,
+            Some(&base),
+            &base,
+            &base,
+        )
+        .expect("blocked reopens terminal status");
+        assert_eq!(signal.status_contributed, Some(super::STATUS_READY));
+        assert_eq!(
+            resolution
+                .projection
+                .get(super::FIELD_STATUS)
+                .and_then(MarkerValue::as_string),
+            Some(super::STATUS_READY)
+        );
+        assert!(resolution.decision.frontmatter_contributed);
+        assert!(resolution
+            .decision
+            .reason
+            .contains("blocked PDF task reopened status ready"));
+    }
+}
+
+#[test]
+fn blocked_task_conflicts_when_marker_moved_status_away() {
+    let base = test_projection(vec![
+        ("status", string_value(super::STATUS_NEXT)),
+        ("parent", string_value("[[obsidian]]")),
+    ]);
+    let marker = test_projection(vec![
+        ("status", string_value(super::STATUS_READ)),
+        ("parent", string_value("[[obsidian]]")),
+    ]);
+    let mut resolution = signal_resolution(&marker);
+    let task = super::parse_pdf_task_line(
+        "- [?] #task #ref [[lib/books/example.pdf]] #hide ^ref\n",
+    )
+    .expect("parse blocked task");
+
+    let error = super::apply_pdf_task_status_signal(
+        &mut resolution,
+        &task,
+        Some(&base),
+        &marker,
+        &base,
+    )
+    .expect_err("marker moving next->read must conflict with blocked");
+    let message = error.to_string();
+    assert!(
+        message.starts_with("blocked PDF task conflicts"),
+        "unexpected conflict message: {message}"
+    );
+}
+
+#[test]
+fn blocked_task_write_back_keeps_mark_for_open_and_closes_for_read() {
+    let blocked_body = "\
+# Example
+
+- [?] #task [[lib/example.pdf]] #hide ^ref
+
+## Highlights
+
+<!-- highlights:begin -->
+
+<!-- highlights:end -->
+";
+    for open in ["ready", "next", "wip"] {
+        let projection = test_projection(vec![
+            ("status", string_value(open)),
+            ("parent", string_value("[[obsidian]]")),
+        ]);
+        let rewritten = super::rewrite_pdf_task_checkbox_for_projection(
+            blocked_body,
+            &projection,
+        )
+        .expect("blocked write-back keeps mark");
+        assert!(rewritten.contains("- [?] #task"), "{open}: {rewritten}");
+    }
+    let read_projection = test_projection(vec![
+        ("status", string_value("read")),
+        ("parent", string_value("[[obsidian]]")),
+    ]);
+    let rewritten = super::rewrite_pdf_task_checkbox_for_projection(
+        blocked_body,
+        &read_projection,
+    )
+    .expect("blocked write-back closes for read");
+    assert!(rewritten.contains("- [x] #task"), "{rewritten}");
+    assert!(rewritten.contains("[completion:: "), "{rewritten}");
+
+    let ready_body = blocked_body.replace("- [?]", "- [*]");
+    assert!(super::bodies_differ_only_by_pdf_task_checkbox(
+        &ready_body,
+        blocked_body
+    ));
+    assert!(super::bodies_differ_only_by_pdf_task_checkbox(
+        blocked_body,
+        &blocked_body.replace("- [?]", "- [ ]")
+    ));
+}

@@ -115,6 +115,7 @@ impl PdfTaskLine {
             ' ' => PdfTaskStatus::Ready,
             '*' => PdfTaskStatus::Next,
             '/' => PdfTaskStatus::Wip,
+            '?' => PdfTaskStatus::Blocked,
             'x' | 'X' => PdfTaskStatus::Read,
             '-' => PdfTaskStatus::Abandoned,
             _ => unreachable!("parsed PDF task has an unsupported mark"),
@@ -143,6 +144,7 @@ pub(super) enum PdfTaskStatus {
     Ready,
     Next,
     Wip,
+    Blocked,
     Read,
     Abandoned,
 }
@@ -153,9 +155,38 @@ impl PdfTaskStatus {
             PdfTaskStatus::Ready => Some(STATUS_READY),
             PdfTaskStatus::Next => Some(STATUS_NEXT),
             PdfTaskStatus::Wip => Some(STATUS_WIP),
+            PdfTaskStatus::Blocked => None,
             PdfTaskStatus::Read => Some(STATUS_READ),
             PdfTaskStatus::Abandoned => Some(STATUS_ABANDONED),
             PdfTaskStatus::Missing => None,
+        }
+    }
+
+    /// Status-aware target for the sync signal and the `ref_library` seam.
+    /// Lifecycle variants return their fixed target. `Blocked` agrees with
+    /// any open selected status (returning its matching constant, so the
+    /// signal is a no-op) and reopens a terminal selected status to `ready`.
+    pub(super) fn target_status_given(
+        self,
+        current: Option<&str>,
+    ) -> Option<&'static str> {
+        match self {
+            PdfTaskStatus::Ready => Some(STATUS_READY),
+            PdfTaskStatus::Next => Some(STATUS_NEXT),
+            PdfTaskStatus::Wip => Some(STATUS_WIP),
+            PdfTaskStatus::Read => Some(STATUS_READ),
+            PdfTaskStatus::Abandoned => Some(STATUS_ABANDONED),
+            PdfTaskStatus::Missing => None,
+            PdfTaskStatus::Blocked => match current {
+                Some(STATUS_READY) => Some(STATUS_READY),
+                Some(STATUS_NEXT) => Some(STATUS_NEXT),
+                Some(STATUS_WIP) => Some(STATUS_WIP),
+                Some(STATUS_LEGACY) => Some(STATUS_LEGACY),
+                Some(STATUS_READ) | Some(STATUS_ABANDONED) => {
+                    Some(STATUS_READY)
+                }
+                _ => None,
+            },
         }
     }
 
@@ -165,6 +196,7 @@ impl PdfTaskStatus {
             PdfTaskStatus::Ready => "ready",
             PdfTaskStatus::Next => "next",
             PdfTaskStatus::Wip => "in-progress",
+            PdfTaskStatus::Blocked => "blocked",
             PdfTaskStatus::Read => "checked",
             PdfTaskStatus::Abandoned => "cancelled",
         }
@@ -175,6 +207,9 @@ impl PdfTaskStatus {
             PdfTaskStatus::Ready => Some("ready PDF task set status ready"),
             PdfTaskStatus::Next => Some("next PDF task set status next"),
             PdfTaskStatus::Wip => Some("in-progress PDF task set status wip"),
+            PdfTaskStatus::Blocked => {
+                Some("blocked PDF task reopened status ready")
+            }
             PdfTaskStatus::Read => Some("checked PDF task set status read"),
             PdfTaskStatus::Abandoned => {
                 Some("cancelled PDF task set status abandoned")
@@ -185,9 +220,10 @@ impl PdfTaskStatus {
 
     pub(super) fn conflict_action(self) -> &'static str {
         match self {
-            PdfTaskStatus::Ready | PdfTaskStatus::Next | PdfTaskStatus::Wip => {
-                "change"
-            }
+            PdfTaskStatus::Ready
+            | PdfTaskStatus::Next
+            | PdfTaskStatus::Wip
+            | PdfTaskStatus::Blocked => "change",
             PdfTaskStatus::Read => "uncheck",
             PdfTaskStatus::Abandoned => "uncancel",
             PdfTaskStatus::Missing => "clear",
