@@ -1,17 +1,64 @@
-//! Human and JSON reports for `bob ref migrate-zorg` (dry run).
+//! Human and JSON reports for `bob ref migrate-zorg`.
+//!
+//! The dry run and `--write` share one report shape: only the headline
+//! verb, the JSON `mode`, and the `commit` object differ.
 
 use serde::Serialize;
 
 use super::super::output::{generated_at, REF_SCHEMA_VERSION};
 use super::plan::MigrationPlan;
 
-/// Render the human dry-run report: headline, counts by file and status,
-/// books, renamed stems, URL gaps, identity hits, already-migrated and
-/// skipped records, and the post-write coverage line.
-pub(crate) fn render_human(plan: &MigrationPlan) -> String {
+/// Which run produced a report: a read-only dry run or an applied write.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ReportMode {
+    DryRun,
+    Write { sha: String, subject: String },
+}
+
+impl ReportMode {
+    pub(crate) fn dry_run() -> Self {
+        Self::DryRun
+    }
+
+    pub(crate) fn write(sha: &str, subject: &str) -> Self {
+        Self::Write {
+            sha: sha.to_string(),
+            subject: subject.to_string(),
+        }
+    }
+
+    fn headline_verb(&self) -> &'static str {
+        match self {
+            Self::DryRun => "dry run",
+            Self::Write { .. } => "write",
+        }
+    }
+
+    fn json_mode(&self) -> &'static str {
+        match self {
+            Self::DryRun => "dry_run",
+            Self::Write { .. } => "write",
+        }
+    }
+}
+
+/// The applied-write commit recorded in the JSON report.
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct CommitInfo {
+    pub sha: String,
+    pub subject: String,
+    pub paths: Vec<String>,
+}
+
+/// Render the human report: headline, counts by file and status, books,
+/// renamed stems, URL gaps, identity hits, already-migrated and skipped
+/// records, and the post-write coverage line. A write report ends with
+/// the commit it created.
+pub(crate) fn render_human(plan: &MigrationPlan, mode: &ReportMode) -> String {
     let mut out = String::new();
     out.push_str(&format!(
-        "bob ref migrate-zorg · dry run · {} records in {} files → {} notes under ref/zorg/\n",
+        "bob ref migrate-zorg · {} · {} records in {} files → {} notes under ref/zorg/\n",
+        mode.headline_verb(),
         plan.records,
         plan.by_file.len(),
         plan.notes.len(),
@@ -98,7 +145,15 @@ pub(crate) fn render_human(plan: &MigrationPlan) -> String {
         plan.skipped.len(),
         plan.skipped.len(),
     ));
+    if let ReportMode::Write { sha, subject } = mode {
+        out.push_str(&format!("\ncommitted {} {subject}\n", short_sha(sha),));
+    }
     out
+}
+
+/// The first 7 hex characters of a commit sha, matching the reroll report.
+fn short_sha(sha: &str) -> String {
+    sha.chars().take(7).collect()
 }
 
 /// The dry-run JSON envelope: compact one-line JSON, no ANSI.
@@ -115,7 +170,7 @@ struct ReportEnvelope {
     notes: Vec<NoteRow>,
     identity_hits: Vec<HitRow>,
     skipped: Vec<SkippedRow>,
-    commit: Option<serde_json::Value>,
+    commit: Option<CommitInfo>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -171,14 +226,38 @@ struct SkippedRow {
     reason: String,
 }
 
-/// Print the dry-run JSON envelope as compact one-line JSON.
-pub(crate) fn print_json(plan: &MigrationPlan) {
+/// Print the JSON envelope for a `--write` run that migrated nothing:
+/// `mode` is `write` with `commit: null`, reporting 0 to migrate.
+pub(crate) fn print_noop_json(plan: &MigrationPlan) {
+    print_envelope(plan, "write", None);
+}
+
+/// Print the JSON envelope as compact one-line JSON: `mode` is
+/// `dry_run` with `commit: null`, or `write` with the created commit.
+pub(crate) fn print_json(plan: &MigrationPlan, mode: &ReportMode) {
+    let commit = match mode {
+        ReportMode::DryRun => None,
+        ReportMode::Write { sha, subject } => Some(CommitInfo {
+            sha: sha.clone(),
+            subject: subject.clone(),
+            paths: plan.notes.iter().map(|note| note.path.clone()).collect(),
+        }),
+    };
+    print_envelope(plan, mode.json_mode(), commit);
+}
+
+/// Build and print the JSON envelope with an explicit mode and commit.
+fn print_envelope(
+    plan: &MigrationPlan,
+    mode: &'static str,
+    commit: Option<CommitInfo>,
+) {
     let envelope = ReportEnvelope {
         ok: true,
         schema_version: REF_SCHEMA_VERSION,
         command: "ref migrate-zorg",
         generated_at: generated_at(),
-        mode: "dry_run",
+        mode,
         summary: ReportSummary {
             records: plan.records,
             notes: plan.notes.len(),
@@ -236,7 +315,7 @@ pub(crate) fn print_json(plan: &MigrationPlan) {
                 reason: skipped.reason.to_string(),
             })
             .collect(),
-        commit: None,
+        commit,
     };
     println!(
         "{}",

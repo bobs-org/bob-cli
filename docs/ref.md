@@ -8,9 +8,10 @@ filtered library views, defaulting to the reading queue (queued and
 started notes). `bob ref show` resolves one or more exact references
 into their metadata, annotations, notes, and tasks. All three verbs
 never write to the vault (the one exception is `find -i`, which reads
-intake PDF markers). `bob ref migrate-zorg` is the dry-run planner
-for the one bulk vault write: moving zorg-era `status::` reading
-records into legacy notes under `ref/zorg/`.
+intake PDF markers). `bob ref migrate-zorg` plans the one bulk vault
+write — moving zorg-era `status::` reading records into legacy notes
+under `ref/zorg/` — as a dry run by default and applies it with
+`-w/--write`.
 
 ## Coverage
 
@@ -20,9 +21,10 @@ copies. A note that cannot be read or parsed still yields a row with a
 diagnostic; nothing is silently dropped.
 
 Absence from this index is never proof of not having read something:
-zorg-era reading records elsewhere in the vault are not indexed
-(`bob ref doctor` counts them), and annotations are the snapshot written
-by the last Highlights scan, not live PDF state.
+zorg-era `status::` reading records outside `ref/` are not indexed
+until `bob ref migrate-zorg` moves them into `ref/zorg/` (`bob ref
+doctor` counts any that remain), and annotations are the snapshot
+written by the last Highlights scan, not live PDF state.
 
 ## Reading state
 
@@ -233,13 +235,58 @@ result means he has not read something — it only means it is not under
 ```bash
 bob ref migrate-zorg
 bob ref migrate-zorg -f json
+bob ref migrate-zorg --write --offline
 ```
 
 Options: `-b/--bob-dir`, `-f/--format human|json` (default
-human), `-o/--offline`, `-r/--ref-dir`. The bare command is a
-read-only dry run: no lock, no sync, no writes. It plans one legacy
-note per unmirrored zorg-era `status::` record and prints the plan as
-a human or JSON report.
+human), `-o/--offline`, `-r/--ref-dir`, `-w/--write`. The bare
+command is a read-only dry run: no lock, no sync, no writes. It
+plans one legacy note per unmirrored zorg-era `status::` record and
+prints the plan as a human or JSON report. With `-w/--write` the
+same plan is applied as one scoped commit between two vault-sync
+cycles. A rerun afterwards reports `nothing to migrate`.
+
+The write flow, mirroring `bob task reroll`:
+
+1. Take `bob_sync.lock` (60 s budget) and require a git worktree:
+   reversibility depends on git.
+2. Pre-sync, unless `--offline`, so the migration commit holds only
+   the new files. A failed pre-sync aborts with an `--offline` hint.
+3. Re-plan from disk under the lock. An empty plan prints
+   `nothing to migrate` and exits 0 without committing or
+   post-syncing.
+4. Refuse before writing anything when a planned target already
+   exists, or when `ref/zorg/` holds uncommitted changes.
+5. Write each note with create-new semantics (temp file, fsync,
+   no-clobber rename, byte-compare re-read).
+6. Verify through the rebuilt index and coverage: every planned path
+   yields a row with no `invalid_yaml`, `opaque_url`, or
+   `missing_type` diagnostic, each row carries its planned reading
+   state, and coverage drops by exactly `notes + chapters`. Any
+   failure deletes every file the run created (plus its emptied
+   directories) and exits 1 without committing.
+7. Commit exactly the written paths as
+   `bob ref migrate-zorg: <records> records into <notes> notes under
+   ref/zorg`, then post-sync unless `--offline`.
+
+The JSON report carries `mode: "write"` with the created `commit`
+(`sha`, `subject`, `paths`); the human report ends with the
+`committed <sha> <subject>` line.
+
+### Rollback runbook
+
+The migration is one commit, so one `git revert` undoes it:
+
+```bash
+git -C ~/bob log --format=%h --grep='^bob ref migrate-zorg' -1
+bob vault-sync status --json   # check that no sync is running
+git -C ~/bob revert --no-edit <sha>
+bob vault-sync
+```
+
+If the revert hits conflicts because migrated notes were edited
+since, resolve them by hand: keep the pre-migration side for every
+`ref/zorg/` path to restore the unmigrated tree.
 
 Every parsed record lands in exactly one bucket: `already_migrated`
 (an indexed ref note carries the same `source_path` plus the same

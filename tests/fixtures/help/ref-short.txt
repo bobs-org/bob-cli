@@ -5,7 +5,7 @@ Usage: bob ref [OPTIONS] <COMMAND>
 Library:
   find          Look up URLs, arXiv IDs, DOIs, paths, or titles in the library
   list          List notes by reading state, status, type, origin, or date
-  migrate-zorg  Migrate zorg-era reading records into ref/zorg/ (dry run)
+  migrate-zorg  Migrate zorg-era records to ref/zorg/; dry run unless --write
   show          Show notes with metadata, annotations, and your own notes
 
 Highlights pipeline:

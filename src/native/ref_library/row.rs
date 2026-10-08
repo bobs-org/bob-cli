@@ -110,7 +110,7 @@ pub(crate) struct Coverage {
 
 impl Coverage {
     pub(crate) fn scope_text() -> String {
-        "Only notes under ref/ are indexed. Reading history elsewhere in the vault (for example zorg-era status:: records) is not; run `bob ref doctor` for a count. Absence from this index is never proof that something was not read.".to_string()
+        "Only notes under ref/ are indexed. Zorg-era status:: reading records outside ref/ are not until `bob ref migrate-zorg` moves them into ref/zorg/; run `bob ref doctor` to count any that remain. Absence from this index is never proof that something was not read.".to_string()
     }
 
     pub(crate) fn annotations_text() -> String {

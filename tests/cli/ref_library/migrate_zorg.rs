@@ -44,6 +44,358 @@ fn run_json(vault: &Path, args: &[&str]) -> serde_json::Value {
     })
 }
 
+/// A git vault with every fixture file committed once.
+fn git_vault(prefix: &str, files: &[(&str, &str)]) -> (TempDir, PathBuf) {
+    let (temp, vault) = vault_with(prefix, files);
+    git_in(&vault, ["init", "-q"]);
+    git_in(&vault, ["symbolic-ref", "HEAD", "refs/heads/master"]);
+    configure_test_git_identity(&vault);
+    git_in(&vault, ["add", "-A"]);
+    git_in(&vault, ["commit", "-q", "-m", "initial vault"]);
+    (temp, vault)
+}
+
+fn run_write(vault: &Path, args: &[&str]) -> Output {
+    let mut full = vec!["ref", "migrate-zorg", "--write", "--offline"];
+    full.extend(args);
+    bob_command()
+        .args(&full)
+        .env("BOB_DIR", vault)
+        .env("BOB_NOW", FIXED_NOW)
+        .env("NO_COLOR", "1")
+        .output()
+        .expect("run bob ref migrate-zorg --write")
+}
+
+fn run_write_json(vault: &Path, args: &[&str]) -> serde_json::Value {
+    let mut full = args.to_vec();
+    full.extend(["-f", "json"]);
+    let output = run_write(vault, &full);
+    assert_success(&output);
+    assert_stdout_has_no_ansi(&output);
+    serde_json::from_str(&stdout(&output)).unwrap_or_else(|error| {
+        panic!(
+            "parse migrate-zorg --write JSON: {error}\n{}",
+            format_output(&output)
+        )
+    })
+}
+
+/// Vault files minus `.git/`, so snapshots stay comparable across commits.
+fn worktree_snapshot(vault: &Path) -> Vec<(String, Vec<u8>)> {
+    vault_snapshot(vault)
+        .into_iter()
+        .filter(|(name, _)| name != ".git" && !name.starts_with(".git/"))
+        .collect()
+}
+
+fn git_stdout(vault: &Path, args: &[&str]) -> String {
+    let output = git_in(vault, args);
+    stdout(&output)
+}
+
+fn commit_subjects(vault: &Path) -> Vec<String> {
+    git_stdout(vault, &["log", "--format=%s"])
+        .lines()
+        .map(str::to_string)
+        .collect()
+}
+
+const SECOND_HUB: &str = "- 250115#0k [[read]] ID::dev_second ^z-250115-0k\n  * status:: READ\n  * url:: https://example.com/second\n";
+
+#[test]
+fn write_offline_writes_notes_and_commits_only_zorg() {
+    let (_temp, vault) = git_vault(
+        "bob-cli-migrate-zorg-write",
+        &[("work_ref.md", PLAIN_HUB), ("dev_ref.md", SECOND_HUB)],
+    );
+    let document = run_write_json(&vault, &[]);
+    assert_eq!(document["ok"], true);
+    assert_eq!(document["command"], "ref migrate-zorg");
+    assert_eq!(document["mode"], "write");
+    assert_eq!(document["summary"]["records"], 2);
+    assert_eq!(document["summary"]["notes"], 2);
+    assert_eq!(document["summary"]["skipped"], 0);
+    let commit = &document["commit"];
+    let sha = commit["sha"].as_str().expect("commit sha");
+    assert_eq!(sha.len(), 40, "expected a full commit sha");
+    assert_eq!(
+        commit["subject"],
+        serde_json::json!(
+            "bob ref migrate-zorg: 2 records into 2 notes under ref/zorg"
+        )
+    );
+    let mut paths: Vec<String> = commit["paths"]
+        .as_array()
+        .expect("commit paths")
+        .iter()
+        .map(|path| path.as_str().expect("path").to_string())
+        .collect();
+    paths.sort();
+    assert_eq!(
+        paths,
+        vec![
+            "ref/zorg/dev_ref/dev_second.md".to_string(),
+            "ref/zorg/work_ref/awesome_mcp_servers.md".to_string(),
+        ]
+    );
+
+    // Both notes exist with the planned frontmatter.
+    for (stem, id) in [
+        (
+            "ref/zorg/work_ref/awesome_mcp_servers.md",
+            "awesome_mcp_servers",
+        ),
+        ("ref/zorg/dev_ref/dev_second.md", "dev_second"),
+    ] {
+        let contents = fs::read_to_string(vault.join(stem)).expect("read note");
+        assert!(contents.contains("status: \"legacy\""), "{stem}");
+        assert!(contents.contains(id), "{stem}");
+    }
+
+    // Exactly one scoped commit holding only the new files.
+    let subjects = commit_subjects(&vault);
+    assert_eq!(subjects.len(), 2, "expected initial + write commits");
+    assert_eq!(
+        subjects[0],
+        "bob ref migrate-zorg: 2 records into 2 notes under ref/zorg"
+    );
+    let mut changed: Vec<String> =
+        git_stdout(&vault, &["show", "--name-only", "--format="])
+            .lines()
+            .map(str::to_string)
+            .collect();
+    changed.sort();
+    assert_eq!(
+        changed, paths,
+        "scoped commit must contain only ref/zorg/**"
+    );
+    let body = git_stdout(&vault, &["log", "--format=%B", "-n", "1"]);
+    for marker in [
+        "by status: READ 2",
+        "top files:",
+        "work_ref.md 1",
+        "rollback: git revert --no-edit <sha>",
+    ] {
+        assert!(
+            body.contains(marker),
+            "expected commit body to contain {marker:?}:\n{body}"
+        );
+    }
+
+    // Coverage drops to zero: the doctor row and a rerun agree.
+    let doctor = bob_command()
+        .args(["ref", "doctor"])
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", FIXED_NOW)
+        .env("NO_COLOR", "1")
+        .output()
+        .expect("run bob ref doctor");
+    assert_success(&doctor);
+    assert!(
+        stdout(&doctor).contains(
+            "coverage: ok (no unindexed zorg-era reading records outside ref/)"
+        ),
+        "doctor after --write:\n{}",
+        format_output(&doctor)
+    );
+    let rerun = run_write(&vault, &[]);
+    assert_success(&rerun);
+    assert!(
+        stdout(&rerun).contains("nothing to migrate"),
+        "second run is a no-op:\n{}",
+        format_output(&rerun)
+    );
+    assert_eq!(
+        commit_subjects(&vault).len(),
+        2,
+        "a no-op rerun must not commit"
+    );
+}
+
+#[test]
+fn write_blocked_hub_dir_fails_clean_with_nothing_committed() {
+    let (_temp, vault) = git_vault(
+        "bob-cli-migrate-zorg-write-blocked",
+        &[("work_ref.md", PLAIN_HUB)],
+    );
+    // A committed file where the hub directory goes: the plan still
+    // targets ref/zorg/work_ref/…, but no note can be installed there.
+    // (Planting the exact target file would only make the planner pick a
+    // `_ref` stem; the no-clobber guard itself is covered by unit test.)
+    write_file(&vault.join("ref/zorg/work_ref"), "# blocker\n");
+    git_in(&vault, ["add", "-A"]);
+    git_in(&vault, ["commit", "-q", "-m", "blocker file"]);
+    let before = worktree_snapshot(&vault);
+    let output = run_write(&vault, &[]);
+    assert!(
+        !output.status.success(),
+        "an uninstallable plan must fail:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        stderr(&output).contains("create parent directory"),
+        "expected the install error in stderr:\n{}",
+        format_output(&output)
+    );
+    assert_eq!(
+        worktree_snapshot(&vault),
+        before,
+        "a failed run must leave the tree byte-identical"
+    );
+    assert_eq!(
+        commit_subjects(&vault),
+        vec!["blocker file".to_string(), "initial vault".to_string()],
+        "a failed run must not commit"
+    );
+}
+
+#[test]
+fn write_refuses_dirty_zorg_with_nothing_written() {
+    let (_temp, vault) = git_vault(
+        "bob-cli-migrate-zorg-write-dirty",
+        &[("work_ref.md", PLAIN_HUB)],
+    );
+    let before = worktree_snapshot(&vault);
+    // An untracked note under ref/zorg/ makes the scoped status dirty.
+    write_file(&vault.join("ref/zorg/work_ref/scratch.md"), "# scratch\n");
+    let output = run_write(&vault, &[]);
+    assert!(
+        !output.status.success(),
+        "dirty ref/zorg/ must refuse:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        stderr(&output).contains("uncommitted changes"),
+        "expected the dirty-tree error:\n{}",
+        format_output(&output)
+    );
+    let mut after = worktree_snapshot(&vault);
+    after.retain(|(name, _)| name != "ref/zorg/work_ref/scratch.md");
+    assert_eq!(after, before, "a refused run must write nothing");
+    assert_eq!(
+        commit_subjects(&vault),
+        vec!["initial vault".to_string()],
+        "a refused run must not commit"
+    );
+}
+
+#[test]
+fn write_refuses_non_git_vault() {
+    let (_temp, vault) = vault_with(
+        "bob-cli-migrate-zorg-write-nongit",
+        &[("work_ref.md", PLAIN_HUB)],
+    );
+    let before = vault_snapshot(&vault);
+    let output = run_write(&vault, &[]);
+    assert!(
+        !output.status.success(),
+        "a non-git vault must refuse --write:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        stderr(&output).contains("not a git worktree"),
+        "expected the worktree error:\n{}",
+        format_output(&output)
+    );
+    assert_eq!(
+        vault_snapshot(&vault),
+        before,
+        "a refused run must write nothing"
+    );
+}
+
+#[test]
+fn write_revert_restores_tree_and_doctor_count() {
+    let (_temp, vault) = git_vault(
+        "bob-cli-migrate-zorg-write-revert",
+        &[("work_ref.md", PLAIN_HUB), ("dev_ref.md", SECOND_HUB)],
+    );
+    let before = worktree_snapshot(&vault);
+    let document = run_write_json(&vault, &[]);
+    let sha = document["commit"]["sha"]
+        .as_str()
+        .expect("commit sha")
+        .to_string();
+    assert!(vault.join("ref/zorg").exists());
+
+    git_in(&vault, ["revert", "--no-edit", &sha]);
+    // Reverting the migration commit deletes the added files, and git
+    // prunes the hub directories it emptied — including the pre-existing
+    // but empty ref/ itself. Recreate it: the snapshot records files
+    // only, so no migrated file may remain either way.
+    fs::create_dir_all(vault.join("ref")).expect("restore ref dir");
+    assert_eq!(
+        worktree_snapshot(&vault),
+        before,
+        "revert must restore the pre-write tree"
+    );
+
+    // The records are unmirrored again: the dry run reports them back.
+    let dry = run_json(&vault, &[]);
+    assert_eq!(dry["summary"]["records"], 2);
+    assert_eq!(dry["summary"]["notes"], 2);
+}
+
+#[test]
+fn write_sync_sandwich_merges_peer_and_pushes_scoped_commit() {
+    let temp = TempDir::new("bob-cli-migrate-zorg-write-remote");
+    let (vault, _remote, peer) = init_vault_sync_pair(&temp);
+    for dir in ["lib", "ref", "xlib"] {
+        fs::create_dir_all(vault.join(dir)).expect("create dir");
+    }
+    // Uncommitted hub fixtures: the pre-sync commits them separately so
+    // the migration commit holds only the new files.
+    write_file(&vault.join("work_ref.md"), PLAIN_HUB);
+    write_file(&vault.join("dev_ref.md"), SECOND_HUB);
+
+    // A peer's non-overlapping change merges before planning.
+    write_file(&peer.join("peer-side.md"), "# peer\n");
+    git_in(&peer, ["add", "-A"]);
+    git_in(&peer, ["commit", "-q", "-m", "peer side note"]);
+    git_in(&peer, ["push", "-q", "origin", "master"]);
+
+    let mut argv = vec!["ref", "migrate-zorg", "--write"];
+    argv.extend(["-f", "json"]);
+    let output = bob_command()
+        .args(&argv)
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", FIXED_NOW)
+        .env("NO_COLOR", "1")
+        .output()
+        .expect("run synced bob ref migrate-zorg --write");
+    assert_success(&output);
+    let document: serde_json::Value =
+        serde_json::from_str(&stdout(&output)).expect("parse write JSON");
+    assert_eq!(document["mode"], "write");
+    assert_eq!(document["summary"]["notes"], 2);
+    assert!(document["commit"]["sha"]
+        .as_str()
+        .is_some_and(|sha| !sha.is_empty()));
+
+    assert!(
+        vault.join("peer-side.md").is_file(),
+        "the peer change merges before planning"
+    );
+    let subjects = commit_subjects(&vault);
+    assert!(
+        subjects.iter().any(|subject| subject.contains("vault(")),
+        "expected an earlier vault() pre-sync commit:\n{subjects:?}"
+    );
+    let scoped: Vec<&String> = subjects
+        .iter()
+        .filter(|subject| subject.contains("bob ref migrate-zorg: "))
+        .collect();
+    assert_eq!(
+        scoped.len(),
+        1,
+        "expected exactly one migration commit:\n{subjects:?}"
+    );
+    let head = git_stdout(&vault, &["rev-parse", "HEAD"]);
+    let remote_head = git_stdout(&vault, &["rev-parse", "origin/master"]);
+    assert_eq!(head, remote_head, "the synced write must push");
+}
+
 fn vault_snapshot(vault: &Path) -> Vec<(String, Vec<u8>)> {
     let mut files = Vec::new();
     walk_snapshot(vault, vault, &mut files);

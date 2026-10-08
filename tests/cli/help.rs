@@ -1015,6 +1015,16 @@ fn ref_help_matches_grouped_snapshot() {
             line.chars().count()
         );
     }
+    // Every Library about fits its 64-column budget on one row: the
+    // group's name width is `migrate-zorg`, so a wrapped about would
+    // continue on a 16-space continuation line.
+    let library = listing.split_once("\n\n").expect("library group ends").0;
+    for line in library.lines() {
+        assert!(
+            !line.starts_with("                "),
+            "Library about wraps past one line: {line:?}"
+        );
+    }
 }
 
 #[test]
