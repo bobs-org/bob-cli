@@ -192,7 +192,8 @@ Ctrl+Shift+Enter asks where the task goes as the last step before writing, then 
 Ctrl+Shift+M never advances: it follows
 the moved task to its destination note, and the next `]s` resumes the walk.
 Alt+F is the one answer that stays, `]s` skips,
-and `<C-o>` returns to the row just answered. Walk commitments
+and `<C-o>` returns to the row just answered. Away from the
+current review task, `]s` / `[s` first bring you back to it. Walk commitments
 with `]s` / Ctrl+Alt+F until **Commitments done**. `]S` jumps to POST; complete
 Morning review last with Ctrl+Enter or Alt+F.
 Ctrl+Alt+J/K also walks due tasks. Alt+F confirms a non-checklist task under

@@ -667,7 +667,7 @@ task stays due and Ctrl+Alt+F does not advance.
 
 **Morning:**
 
-1. `[S`, or `]s` from outside the queue, starts at PRE.
+1. `[S`, or `]s` from outside the queue when no review task is current, starts at PRE.
 2. Complete each PRE chore with Ctrl+Enter or Ctrl+Alt+F, or skip it with
    `]s`. On the PRE/POST row the walk just landed on, Ctrl+Enter completes
    it through Tasks (including a still-`[?]` chore) and moves to the next
@@ -740,6 +740,17 @@ commits, whose rich notice cards keep their own toast with the landing
 following on its own. After each advance the walk holds a ~350 ms settle
 window that swallows double presses; a fast habitual `]s` after the window
 can still skip a row (`[s` or `<C-o>` recovers it).
+
+The current review task is the row the walk last landed on, and it outlives
+the landing (cursor moves and other notes). On a relative walk key, when a
+live current review task exists and is not selected, `]s` / `[s` (and
+Ctrl+Alt+J/K) first return to it: `[s` returns too, the count is ignored,
+there is a `<C-o>` jump back, the landing is re-armed, and `[S` / `]S` are
+unchanged. It ends on a new landing, an answer on its landing, a landed
+Ctrl+Shift+M park, a stamp or applied decision-card choice on the row
+itself, an empty queue, the day change or a reload, or when its row is no
+longer due with the same path and text; a stamp or answer elsewhere does
+not end it.
 
 A due at-limit task's Alt+F opens the decision card (Not now / Less
 often / Reword / Drop / Keep) as soon as compatible plugins are
@@ -1480,6 +1491,7 @@ There is no freshness trial: no ritual change, release, or tuning waits on a tri
 - 2026-10-06: Ctrl+Shift+M from a landing follows the task to its destination and never advances; the next ]s resumes at the moved row's neighbour (nav 2.7.0).
 - 2026-10-06: the walk keeps queue order across line shifts; it follows rows by note and text and moves only from the row just answered (nav 2.7.1).
 - 2026-10-06: inbox routing went live — on an open inbox task, every non-closing Ctrl+Shift+P answer and Ctrl+Shift+Enter asks where the task goes before writing, acts then moves without following, and advances the walk as an answer (nav 2.10.0, block-id-prompt 1.23.0).
+- 2026-10-08: `]s` / `[s` away from the current review task first return to it; the next press steps from there (nav 2.13.0).
 
 ## 14. Keep-streak rollout, rollback, and calibration
 
