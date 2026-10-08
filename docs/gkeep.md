@@ -1,8 +1,9 @@
 # Bob Gkeep
 
-`bob gkeep` drains the Google Keep inbox into Obsidian tasks. Every Keep inbox
-note becomes a task in `gkeep_inbox.md`, and each note is archived in Keep
-only after its current content is provably in the vault. Typical order:
+`bob gkeep` drains the Google Keep inbox into Obsidian tasks or reading-queue
+references. Ordinary notes become tasks in `gkeep_inbox.md`; eligible URL-only
+notes are imported as reference PDFs instead. Each note is archived in Keep
+only after its current content is verified in the vault. Typical order:
 `bob gkeep` (or `bob gkeep list`) to see Keep and the vault side by side,
 `bob gkeep pull -d` to preview the exact Markdown, `bob gkeep pull -n` to
 write without archiving, then `bob gkeep pull` to write and archive.
@@ -93,7 +94,7 @@ command only when that entry already holds an `aas_et/…` token.
 
 ```yaml
 gkeep:
-  email: bryanbugyi34@gmail.com # required for Keep access
+  email: you@example.com # required; use the account that owns your Keep notes
   token_command: pass show gkeep/master_token # default; prints the aas_et/… master token
   token_store_command: pass insert -m -f gkeep/master_token # default; `login` pipes the token on stdin
   device_id: 3f9c0a1b2c3d4e5f # optional hex; default derived from email
@@ -203,7 +204,7 @@ sequentially through the same ingest as `bob ref create`, announced as
 | Outcome | Meaning | Journal | Archive |
 | --- | --- | --- | --- |
 | `created` | A fresh intake PDF was clipped | `ref_created` at once | Archived |
-| `already_in_library` | A ref note already records the link | `ref_created` at once | Archived |
+| `already_in_library` | A PDF-backed ref note already records the link | `ref_created` at once | Archived |
 | `already_queued` | An intake PDF is already queued | `ref_created` at once | Archived |
 | `failed_retryable` | Network, timeout, browser, or dependency failure | None | Left in Keep; exit 1 |
 | `failed_permanent` | Blocked, thin, render, or content failure | None | Written as a task with a ⚠️ child, then archived |
@@ -217,6 +218,15 @@ child just before the `Source:` line. A pull whose notes all clip needs no
 library hits) followed by `N links would be clipped into the reading queue`,
 and the Markdown section excludes URL-only notes. `list` marks notes a pull
 would clip with a `🔗 ref` hint.
+
+The Archive column assumes archiving is enabled; `-n, --no-archive` keeps
+every note in Keep, including successful reference imports. Successful
+imports are journaled so the next pull can archive without clipping again.
+`-R, --no-ref` keeps URL-only notes as tasks for this pull;
+`highlights.url_routing.gkeep: false` disables routing persistently. A URL
+recorded only by a note without a Highlights PDF still imports a fresh PDF,
+with a warning. Unlike bare-link `bob capture`, Keep imports finish inline
+and do not queue background ref jobs.
 
 Failure matrix:
 

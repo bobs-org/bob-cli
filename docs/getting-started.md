@@ -92,6 +92,8 @@ ID for each task in a note. Reusing this creation command does not edit the
 existing task; a duplicate requested ID is an error.
 
 For an ordinary task without an ID, `bob capture 'Buy milk'` uses the same inbox.
+An eligible bare public URL queues a reference job instead of creating a task;
+use `bob capture --no-ref 'https://example.com/article'` to keep it in the inbox.
 For several tasks, separate items with blank lines; later bullet lines within
 an item become children. The batch is planned before it writes, so a failed
 item aborts the capture. See [Capture](capture.md) for routing, clipboard,
@@ -208,18 +210,75 @@ Optional config lives at `~/.config/bob/config.yml`, selected by
 intervals. `p:1`–`p:4` capture and `bob task reroll` also require the
 [priority configuration](projects.md#priority-property-and-scheduled-rolls).
 
+## Save and read references
+
+Bob's reference pipeline has three stages: capture a PDF into `xlib/`, scan it
+into `lib/` and a note under `ref/`, then inspect or read that note. A bare
+link capture handles the first stage in a background job:
+
+```bash
+bob capture --dry-run 'https://example.com/article'
+bob capture 'https://example.com/article'
+bob ref jobs
+```
+
+The preview reads local state and writes nothing. The submit queues the job;
+the worker fetches the link independently of the capture process. Eligible
+URLs contain no extra prose or capture markers. Short internal links, IP addresses, and the
+default excluded hosts (`google.com`, `googleplex.com`, `youtube.com`,
+`youtu.be`, `github.com`, `x.com`, `twitter.com`, and their subdomains) stay
+tasks. Use `--no-ref` for a task, or configure the
+[URL routing policy](ref.md#url-routing).
+
+When the job reports `clipped`, preview and run the scan, then inspect the
+reading queue:
+
+```bash
+bob ref scan --dry-run
+bob ref scan
+bob ref list
+bob ref find 'https://example.com/article' --include-intake
+```
+
+`scan` processes the configured intake and library, so review its preview
+before writing. Pending jobs and intake PDFs are absent from `ref list` until
+they have a reference note. `find --include-intake` can locate a PDF awaiting
+scan; `ref jobs` reports a link still being fetched. If background capture
+fails, the worker writes the link as an inbox task with a warning and retry
+command. See [ref jobs](ref-jobs.md) for recovery.
+
+For a local PDF, Markdown report, or immediate URL import, use
+`bob ref create <TARGET>`; it completes the import inline. Run `bob ref doctor`
+to check dependencies. Local PDFs are stamped as-is; Markdown needs pandoc,
+XeLaTeX, fonts, and LaTeX packages; web articles need `uv` and a browser.
+See the [target guide](highlights-create.md). Lookup commands require the
+configured `ref/` directory to exist.
+
+To read a note's annotations and your own comments, use its path or an exact
+identifier returned by `find` or `list`:
+
+```bash
+bob ref show ref/blogs/article.md
+bob ref show ref/blogs/article.md --comments-only --format markdown
+```
+
+The path above is illustrative; use the actual note path Bob reports.
+
 ## What commands change
 
 | Commands | Effects |
 | --- | --- |
 | `query`, `plan`, `ready`, `freshness list`, capture discovery/parse/complete, `projects list` | Read local vault state |
-| `capture`, `capture-task-id`, `capture-pomodoro-name`, `projects sync`, `task reconcile`, `freshness seed` | Write vault notes; preview with `--dry-run` where offered |
+| `ref find`, `ref list`, `ref show`, `ref jobs [list]`, `ref migrate-zorg` without `--write` | Inspect local references, jobs, or a migration plan without vault writes |
+| `capture`, `capture-task-id`, `capture-pomodoro-name`, `projects sync`, `task reconcile`, `freshness seed` | Write vault notes; bare reference links queue jobs that later write intake PDFs or fallback tasks; preview with `--dry-run` where offered |
 | `vault-sync`, `nightly` | Reconcile the vault with Git, including commits, merges, and pushes |
 | `task archive` | Archive task blocks and repair links; in a Git vault, commit touched files and push |
 | `task reroll` | Re-roll schedules; in a Git worktree, sync before/after and commit rewritten notes; `--offline` skips sync but still commits locally |
 | `plugins list`, `plugins sync` | Pull the plugin source repo by default, including for `sync --dry-run` (`--no-pull` skips); `sync` deploys plugin assets with backups |
-| `gkeep list`, `gkeep pull` | Contact Keep; `pull` writes tasks, commits in a Git worktree unless `--no-commit`, then archives verified Keep notes unless `--no-archive` |
+| `gkeep list`, `gkeep pull` | Contact Keep; `pull` writes tasks or reference PDFs, commits task writes in a Git worktree unless `--no-commit`, then archives verified Keep notes unless `--no-archive`; `pull --dry-run` still contacts Keep |
 | `ref create`, `ref scan`, `ref sync` | Write PDFs/reference notes; writing scans can run a configured pre-scan hook |
+| `ref jobs run` | Fetch queued links for their stored destination vaults; write intake PDFs or fallback inbox tasks |
+| `ref migrate-zorg --write` | Copy legacy reading records into `ref/zorg/` and commit them; sync before and after unless `--offline` |
 | `completion install`, `completion uninstall` | Change shell adapter files and the completion manifest |
 
 Native vault reading and basic capture need no Git setup. Git workflows expect
@@ -237,6 +296,9 @@ Follow the [Git sync runbook](vault-git-sync.md) before enabling maintenance.
 | Start says to finish the current Pomodoro | Close the running timed entry first; `bob capture '=x =3'` closes and starts atomically |
 | Hooks refuse a Blocked transition | The Tasks registry's `?` status must match the required definition |
 | A native query using plugin-dependent dashboard filters omits tasks | Native queries do not load desktop Bob plugins; use `bob freshness` for the headless review queue |
+| A captured link is absent from `ref list` | Inspect `bob ref jobs`; a clipped intake PDF needs `bob ref scan` before it has a note |
+| A link stays a task | Extra prose, markers, children, a forced destination, `--no-ref`, an excluded host, or routing disabled in config |
+| Markdown PDF creation fails | Check the `pandoc`, `xelatex`, and `latex_packages` rows in `bob ref doctor`, plus the required fonts |
 
 Use `bob <command> --help` for accepted options and the [guide index](README.md)
 for detailed behavior, output formats, and recovery steps.

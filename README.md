@@ -235,7 +235,7 @@ Bob's workflow commands are:
 
 | Command | Purpose |
 | --- | --- |
-| [`capture`](#capture) | Capture a task or section bullet, optionally with clipboard content |
+| [`capture`](#capture) | Capture tasks, bullets, or reading-queue links; manage Pomodoro sessions |
 | [`freshness`](#task-freshness) | Walk the tiered freshness review queue |
 | [`plan`](#plan-budget) | Show today's plan budget, Today's tasks, and the NEXT/PENDING lanes |
 | [`pomodoro`](#pomodoro) | Show Pomodoro status, print the tmux line, or notify on completion |
@@ -261,7 +261,7 @@ Bob's workflow commands are:
 
 | Command | Purpose |
 | --- | --- |
-| [`gkeep`](#gkeep) | Drain the Google Keep inbox into Obsidian tasks |
+| [`gkeep`](#gkeep) | Drain the Google Keep inbox into tasks or reading-queue references |
 
 ### Setup
 
@@ -300,8 +300,15 @@ Old top-level spellings remain permanent silent aliases; see
 bob capture [OPTIONS] [--] [TEXT]...
 ```
 
-Captures one task, ordinary Markdown bullet, or task sub-bullet into the vault
-without opening desktop Obsidian. The default destination is `mac_inbox.md`.
+Captures tasks, ordinary Markdown bullets, task sub-bullets, or reading-queue
+links without opening desktop Obsidian. Tasks default to `mac_inbox.md`;
+an eligible bare public URL queues a background reference job instead. Use
+`-R, --no-ref` to keep a link as an inbox task. Extra prose or an explicit
+destination also keeps it a task; the routing policy excludes `google.com`,
+`googleplex.com`, `youtube.com`, `youtu.be`, `github.com`, `x.com`,
+`twitter.com`, and their subdomains by default. See
+[saving links](docs/capture.md#saving-links-to-your-reading-queue).
+
 `TEXT` may be several physical lines: each item’s first nonblank line is the
 parent, later authored bullets become children, and blank lines split a batch
 of items. A `@@route` or `@@route+id` token anywhere in the draft is a
@@ -311,6 +318,7 @@ typed on that same item. The whole batch is planned before anything is written.
 
 | Marker | Meaning |
 | --- | --- |
+| Bare public URL | Queue a reference for background capture when the routing policy admits the host; `--no-ref` keeps it a task |
 | `@@route` | Shared task destination, anywhere in the draft, for otherwise-unrouted items |
 | `@@route+id` | Shared parent-task destination, anywhere in the draft, for otherwise-unrouted items |
 | `@route` | Task in `<route>.md` |
@@ -327,6 +335,7 @@ typed on that same item. The whole batch is planned before anything is written.
 | `+query` or terminal prose `+` | Parent-task picker over the same task catalog; accepting inserts `@route+id` |
 | `&note:id` | Add a prerequisite to the captured task; `&projects/foo:bar` supports nested notes, and `&"Shopping List":bar` supports spaces |
 | `&note:id @route+id` with no body text | Add a prerequisite to an existing dependent task |
+| `!note:id` with no other text | Complete an existing task, retire its Task Links, and recover eligible blocked dependents; nested paths and quoted note names are supported |
 | `+[N]` / `-[N]` | Adjust today's current timed Pomodoro by N five-minute units (`+5` extends 25m, `-` shortens 5m; the count defaults to 1); the item must contain only the signed count |
 | `++[N]` / `--[N]` | Shift today's running timed Pomodoro N five-minute units later/earlier, keeping its duration (`++3` moves 15m later, `--` moves 5m earlier; the count defaults to 1); the item must contain only the operator |
 | `=` / `=<X>` | Start today's next future Pomodoro now with `se<X>` timing (`=` is 25 minutes, `=3` is 15 minutes); the item must contain only the start token (quote in zsh) |
@@ -481,7 +490,7 @@ bob capture '@cash+goog-exit' 'Called Morgan Stanley today.'
 bob capture '@cash+goog-exit'
 bob capture '@cash+goog-exit!'
 bob capture '@cash+goog-exit#coding'
-bob capture remembered to bump the timeout #
+bob capture 'remembered to bump the timeout #'
 printf '@@foo\nFirst task\n\nSecond task @bar\n' | bob capture
 ```
 
@@ -815,9 +824,12 @@ bob gkeep login [-e|--email EMAIL]
 bob gkeep doctor [-b|--bob-dir DIR] [-f|--format human|json]
 ```
 
-Moves every Google Keep inbox note into `gkeep_inbox.md` as an Obsidian task
-and archives each note in Keep only after its current content is provably in
-the vault. Running `bob gkeep` with no subcommand runs `list`: Keep notes
+Imports Google Keep inbox notes into `gkeep_inbox.md` as Obsidian tasks;
+eligible URL-only notes become reference PDFs in the reading queue instead.
+URL imports clip inline during `pull`, while `bob capture` queues a background
+job. `pull -R` keeps links as tasks. Each note is archived in Keep only after
+its current content is verified in the vault (unless `--no-archive`).
+Running `bob gkeep` with no subcommand runs `list`: Keep notes
 and vault tasks side by side with per-note pull states. `pull -d` previews
 the exact Markdown, `pull -n` writes without archiving, and `pull` writes,
 verifies, commits, then archives. `login` is the one-time token setup and
@@ -834,26 +846,21 @@ bob ref find <QUERY>... [-b|--bob-dir PATH] [-f|--format human|json|markdown] [-
 bob ref jobs [list] [-a|--all] [-f|--format human|json]
 bob ref jobs run [-q|--quiet]
 bob ref list [-A|--all] [-b|--bob-dir PATH] [-f|--format human|json|markdown] [-g|--git-dates] [-n|--limit N] [-o|--origin external|agent-report] [-P|--parent NOTE] [-R|--reading-state STATE,...] [-r|--ref-dir PATH] [-S|--since DATE] [-s|--status STATUS,...] [-t|--ref-type TYPE,...]
+bob ref migrate-zorg [-b|--bob-dir PATH] [-f|--format human|json] [-o|--offline] [-r|--ref-dir PATH] [-w|--write]
 bob ref marker <pdf> [-b|--bob-dir PATH] [-l|--lib-dir PATH] [-r|--ref-dir PATH] [-x|--xlib-dir PATH]
 bob ref scan [-b|--bob-dir PATH] [-d|--dry-run] [-j|--jobs N] [-l|--lib-dir PATH] [-n|--no-hooks] [-r|--ref-dir PATH] [-v|--verbose] [-w|--write-pdfs] [-x|--xlib-dir PATH]
 bob ref show <REF>... [-b|--bob-dir PATH] [-c|--comments-only] [-f|--format human|json|markdown] [-N|--no-annotations] [-r|--ref-dir PATH]
 bob ref sync <pdf> [-b|--bob-dir PATH] [-d|--dry-run] [-l|--lib-dir PATH] [-p|--prefer marker|frontmatter] [-r|--ref-dir PATH] [-w|--write-pdf] [-x|--xlib-dir PATH]
 ```
 
-Turns Markdown and web articles into Highlights-ready PDFs and turns
-Highlights annotations into Obsidian reference notes.
+Looks up and reads the reference library, imports material as Highlights-ready
+PDFs, and syncs annotations into Obsidian reference notes. `create` writes
+intake PDFs; `scan` produces reference notes; `list` reads those notes. An
+intake PDF or pending job does not appear in `ref list` until a scan creates
+its note. `bob ref clip` remains a hidden alias of `create`.
 
-- `clip <URL>` captures a web article in reader mode through the pinned
-  web-clip adapter into `xlib/blogs/<slug>.pdf` (override the subdirectory
-  with `--ref-type`), stamping the page-1 marker with `source_url`,
-  `author`, `published`, and `captured` provenance. Already-captured URLs
-  are refused, even with `--force`; bot-protected sites retry headed and
-  otherwise fail closed with a hint. `-H, --html` replays a page saved from
-  a real browser. `-L, --listen` narrates the article with
-  `highlights.listen_command` and binds the episode, attaching to the
-  existing capture when the URL is already captured. Needs `uv`, Google
-  Chrome (or `BOB_CHROME`), and Xvfb for bot-protected sites on Linux.
-- `create <TARGET>` renders Markdown through pandoc and xelatex into
+- `create <TARGET>` captures a web article in reader mode into
+  `xlib/blogs/<stem>.pdf`, renders Markdown through pandoc and xelatex into
   `xlib/chat/<basename>.pdf`, or stamps a local PDF, PDF URL, or arXiv paper
   as-is into `xlib/papers/<stem>.pdf` (override the subdirectory with
   `--ref-type`: `chat` for Markdown, `papers` for PDFs). `-o, --output`
@@ -867,8 +874,14 @@ Highlights annotations into Obsidian reference notes.
   target gains the episode as `xlib/<rel>.mp3` for `scan` to pair. Intake
   targets still go through `scan`; a PDF written directly into the library is
   also found by `scan`; a PDF outside both directories needs
-  `bob ref sync <PDF>`. The full target contract lives in
-  [`docs/highlights-create.md`](docs/highlights-create.md).
+  `bob ref sync <PDF>`. Web articles need `uv` and Chrome/Chromium; on Linux,
+  Xvfb enables headed retries for bot-protected sites. `-H, --html` replays a
+  saved page. A URL recorded by a PDF-backed library note refuses ordinary
+  creation even with `--force`; `--force` can replace the same intake target.
+  A URL recorded only by notes without a Highlights PDF warns and captures a
+  fresh copy. See the
+  [target contract](docs/highlights-create.md) and
+  [web-article guide](docs/highlights-clip.md).
 - `scan` runs the configured `highlights.pre_scan_hook` on writing runs, then
   moves pending PDFs from `xlib/<rel>` to `lib/<rel>` and recursively syncs
   the library. Pass `-n, --no-hooks` on `scan` or `doctor`, or before the
@@ -884,9 +897,9 @@ Highlights annotations into Obsidian reference notes.
   or `not_found` verdict per query. `-` reads one query per line from
   stdin, `-i` also checks queued intake PDFs, and `-m` floors the title
   scores. The lookup contract lives in [`docs/ref.md`](docs/ref.md).
-- `jobs` queues reading-queue links for background clipping (`list` is the
-  bare read-only default; `run` clips). A failed clip falls back to the
-  inbox task plus a ⚠️ bullet. The lifecycle lives in
+- `jobs` inspects links queued by `bob capture` (`list` is the
+  bare read-only default; `run` clips pending jobs). A failed clip falls back
+  to the inbox task plus a ⚠️ bullet. The lifecycle lives in
   [`docs/ref-jobs.md`](docs/ref-jobs.md).
 - `list` shows the reading queue by default and filtered library views by
   reading state, status, type, origin, parent, or date, with `--limit 50`
@@ -894,6 +907,11 @@ Highlights annotations into Obsidian reference notes.
 - `show <REF>...` reads one reference note with its metadata, annotations,
   own notes, and tasks. `-c` keeps only commented annotations and
   standalone notes, `-N` keeps metadata and own notes only.
+- `migrate-zorg` previews copies of old `status::` reading records into
+  `ref/zorg/`, preserving the original records. `--write` requires a Git
+  worktree and commits the verified notes between two vault-sync cycles;
+  `--offline` skips the sync cycles and keeps the commit local. See the
+  [migration and rollback runbook](docs/ref.md#migrating-zorg-era-records-bob-ref-migrate-zorg).
 - `doctor` checks vault paths, intake, sidecars, markers, Git, pandoc, xelatex, LaTeX packages, `curl`,
   the web-clip chain (`uv`, adapter, browser, headed fallback), the
   `listen_command` row, and optional `ob` without writing. Pass
@@ -1174,8 +1192,7 @@ directory for debugging and prints its path (the legacy
 `BOB_WEB_CLIP_KEEP_WORKDIR=1` is also honored).
 
 `BOB_HIGHLIGHTS_LISTEN_COMMAND` overrides `highlights.listen_command` in
-`bob/config.yml` for `bob ref create --listen` and
-`bob ref create --listen` (web article targets; see
+`bob/config.yml` for `bob ref create --listen` across all target kinds (see
 [create-target contract](docs/highlights-create.md#listen)).
 
 `BOB_HIGHLIGHTS_REF_DIR` sets the generated reference note directory used by
@@ -1185,6 +1202,12 @@ directory for debugging and prints its path (the legacy
 `bob ref`. It defaults to `xlib` under `BOB_DIR`. `lib` and `xlib` must
 be distinct, non-nested directories so intake cannot move PDFs inside the tree
 being scanned.
+
+`BOB_REF_JOBS_KICK=off|0|false` disables the detached worker started after
+`bob capture` queues a link. Jobs remain durable; run `bob ref jobs run`
+to process them. The spool lives under
+`${XDG_STATE_HOME:-~/.local/state}/bob-cli/ref/jobs/`; see
+[ref jobs](docs/ref-jobs.md) for recovery and the shared-spool limitation.
 
 `BOB_NOW` overrides the local date and time used for Pomodoro status and default
 daily-note selection by `bob pomodoro`, Pomodoro-linked capture, and
@@ -1292,8 +1315,20 @@ just package-list
 `cargo clippy --all-targets --all-features`, then
 `cargo test --no-fail-fast`, which runs the lib, every `tests/*` binary,
 and doctests even when one binary fails. `just test` runs the same
-unmasked test step on its own, and `just all` (fmt, lint, test) stays as
-the quick subset.
+unmasked test step on its own. `just all` runs the same three checks through
+separate recipes.
+
+For documentation changes, build the Rust documentation and run doctests:
+
+```bash
+cargo doc --locked --no-deps
+cargo test --locked --doc
+git diff --check
+```
+
+There is no dedicated Markdown-check recipe. Review local Markdown links,
+heading anchors, code fences, and command examples against the current CLI
+help and implementation.
 
 Run a local install smoke test:
 
@@ -1336,11 +1371,12 @@ blocks point at `done/..._done#^block-id`, and the vault Git commit was pushed.
 | Shell completion: runtime model, protocol 1, lifecycle, and troubleshooting | [`docs/completion.md`](docs/completion.md) |
 | `bob query` Dataview and Tasks | [`docs/dataview.md`](docs/dataview.md) |
 | Task freshness review lease, placement, evaluation, and display | [`docs/freshness.md`](docs/freshness.md) |
+| Task date marks and calendar labels | [`docs/date-marks.md`](docs/date-marks.md) |
 | Today's plan, sticky lanes, dashboard READY, and per-note Ready caps | [`docs/plan.md`](docs/plan.md) |
 | Highlights PDF intake and reference notes | [`docs/highlights-ref-sync.md`](docs/highlights-ref-sync.md) |
 | `bob ref create` Markdown, PDF, and URL targets | [`docs/highlights-create.md`](docs/highlights-create.md) |
 | Web article capture into Highlights intake PDFs | [`docs/highlights-clip.md`](docs/highlights-clip.md) |
-| `bob ref find`, `list`, and `show` reference-library lookup | [`docs/ref.md`](docs/ref.md) |
+| Reference-library lookup, reading queue, URL routing, and legacy migration | [`docs/ref.md`](docs/ref.md) |
 | Ref job spool, background worker, and fallback | [`docs/ref-jobs.md`](docs/ref-jobs.md) |
 | Obsidian Sync folder exclusion runbook (historical) | [`docs/obsidian-sync-exclusions.md`](docs/obsidian-sync-exclusions.md) |
 | Bob vault Git sync runbook | [`docs/vault-git-sync.md`](docs/vault-git-sync.md) |

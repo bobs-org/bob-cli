@@ -44,11 +44,12 @@ plus the episode instead.
    and tracking parameters (`utm_*`, `fbclid`, `gclid`, `mc_cid`, `mc_eid`,
    `ref_src`) are removed. The cleaned URL is recorded as the marker
    `source_url`.
-2. The URL is deduped against every ref-note `source_url` (and legacy
-   `url:`) and every queued intake PDF. An already-captured URL is
-   refused, even with `--force` — except a URL recorded only by legacy
-   notes without a Highlights PDF, which warns and captures a fresh
-   copy.
+2. The URL is deduped against scalar ref-note `source_url` (and legacy
+   `url:`) values and queued intake PDFs. A PDF-backed ref-note hit refuses
+   even with `--force`; that flag can overwrite the same intake target.
+   A URL recorded only by notes without a Highlights PDF warns and captures
+   a fresh copy. URL lists are indexed by `ref find` but currently missed by
+   import deduplication.
 3. The pinned adapter fetches the page, extracts the article in reader
    mode, and renders a Bob-owned print template to PDF.
 4. The PDF is stamped with a page-1 marker (`status`, `parent`, `title`,

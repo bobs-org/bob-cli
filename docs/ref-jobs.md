@@ -3,8 +3,10 @@
 A bare public link captured for the reading queue is never clipped
 inline: capture queues one durable **ref job** and returns at once,
 and a detached background worker clips it through the same typed
-ingest as `bob ref create`. Every path is offline-safe and lossless:
-a failed clip falls back to exactly the inbox task capture would
+ingest as `bob ref create`. Capture planning and submission do not fetch
+the URL; the worker needs network access and the target's normal
+[import dependencies](highlights-create.md#prerequisites).
+A failed clip falls back to exactly the inbox task capture would
 have written, plus a ⚠️ bullet with the reason and a retry command.
 
 ## Lifecycle
@@ -17,13 +19,24 @@ pending → clipping → clipped | already in library | already queued
 
 One attempt in v1: a retryable failure still falls back instead of
 retrying. `bob ref scan` turns clipped intake PDFs into ref notes
-later (the Mac runs it every 15 minutes); no path runs `scan` for
-you, and no path fabricates a ref-note path that does not exist yet.
+later; the configured [Mac scan job](highlights-ref-sync.md#scheduled-scan)
+runs it every 15 minutes. On another setup, run `bob ref scan` yourself.
+Neither capture nor the worker runs `scan`, and neither returns a ref-note
+path before it exists. Use `bob ref jobs` to inspect work before it reaches
+the reading queue shown by `bob ref list`.
+
+These jobs are created by `bob capture`. `bob ref create` imports inline,
+and [Google Keep URL imports](gkeep.md#url-only-notes-go-to-the-reading-queue)
+also clip inline during `pull`; they do not use this spool.
 
 ## Layout
 
 Everything lives under `${XDG_STATE_HOME:-~/.local/state}/bob-cli/ref/jobs/`.
 Directories are mode 0700 and files 0600.
+
+The spool is shared by all vaults using the same user state directory.
+Each job stores its destination `bob_dir`, and `jobs list`/`jobs run` inspect
+or process those stored jobs rather than selecting the current `BOB_DIR`.
 
 ```text
 ref/ingest.lock              machine-wide ingest lock (capture worker and bob gkeep pull)
@@ -146,3 +159,11 @@ hour or any job is stuck (hint: `bob ref jobs run`).
   write without clipping again.
 - A pending job older than an hour usually means the kick never ran;
   run `bob ref jobs run` by hand and check `worker.log`.
+
+### Multiple vaults
+
+Current in-flight deduplication compares URL keys across the shared spool
+without checking the destination vault. If the same link is pending or
+running for vault A, capture in vault B reports `already clipping` and queues
+no job for B. Wait for A's job to finish and capture the link again in B, or
+use `bob ref create --bob-dir /path/to/vault-b '<URL>'` to import it inline.

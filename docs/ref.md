@@ -1,4 +1,4 @@
-# Reference library (`bob ref find`, `bob ref list`, `bob ref show`)
+# Reference library (`bob ref`)
 
 `bob ref find` looks up URLs, arXiv IDs, DOIs, vault paths, note stems,
 titles, and frontmatter ids in the reference library under `ref/`. It
@@ -6,12 +6,34 @@ answers "is this already in my library?" with a verdict per query, in
 human, Markdown, or versioned JSON output. `bob ref list` renders
 filtered library views, defaulting to the reading queue (queued and
 started notes). `bob ref show` resolves one or more exact references
-into their metadata, annotations, notes, and tasks. All three verbs
-never write to the vault (the one exception is `find -i`, which reads
-intake PDF markers). `bob ref migrate-zorg` plans the one bulk vault
-write — moving zorg-era `status::` reading records into legacy notes
-under `ref/zorg/` — as a dry run by default and applies it with
-`-w/--write`.
+into their metadata, annotations, notes, and tasks. All three verbs are
+read-only; `find -i` also reads intake PDF markers. `bob ref migrate-zorg`
+plans copies of zorg-era `status::` reading records into legacy notes under
+`ref/zorg/`. It is a dry run by default; `-w/--write` applies the plan.
+
+## Choose a command
+
+| Goal | Command | Effect |
+| --- | --- | --- |
+| Check whether a reference is known | `bob ref find <URL-or-identifier>` | Read library notes; `--include-intake` also checks queued PDFs |
+| See what remains to read | `bob ref list` | Read queued and started reference notes |
+| Read annotations and your notes | `bob ref show <note-path>` | Read one exact reference; `-c` selects commented annotations |
+| Import a URL, local PDF, or Markdown file now | `bob ref create <TARGET>` | Write an intake PDF inline; see [target types](highlights-create.md) |
+| Save a bare public link quickly | `bob capture '<URL>'` | Queue a background job when the routing policy admits the URL |
+| Inspect or process background imports | `bob ref jobs`, `bob ref jobs run` | List jobs, or fetch pending links; see [ref jobs](ref-jobs.md) |
+| Turn intake PDFs into library notes | `bob ref scan --dry-run`, then `bob ref scan` | Preview, then move intake PDFs and sync notes/annotations |
+| Diagnose prerequisites and library health | `bob ref doctor` | Check paths, tools, routing policy, jobs, and index diagnostics |
+| Bring old reading records into the index | `bob ref migrate-zorg`, then `--write` | Preview, then create and commit legacy notes; see [migration](#migrating-zorg-era-records-bob-ref-migrate-zorg) |
+
+`--dry-run` prevents final PDF/reference-note writes; URL creation can still
+download or inspect the source. For an offline link preview, use
+`bob capture --dry-run '<URL>'`.
+
+The reading queue is derived from notes under `ref/`. A pending capture job or
+an intake PDF under `xlib/` does not appear in `ref list` until a scan creates
+its note. Lookup commands require the configured reference directory to exist;
+a missing directory is an error rather than an empty library. Directory
+overrides are described in the [pipeline guide](highlights-ref-sync.md#default-paths).
 
 ## Coverage
 
@@ -22,7 +44,7 @@ diagnostic; nothing is silently dropped.
 
 Absence from this index is never proof of not having read something:
 zorg-era `status::` reading records outside `ref/` are not indexed
-until `bob ref migrate-zorg` moves them into `ref/zorg/` (`bob ref
+until `bob ref migrate-zorg --write` copies them into `ref/zorg/` (`bob ref
 doctor` counts any that remain), and annotations are the snapshot
 written by the last Highlights scan, not live PDF state.
 
@@ -88,6 +110,12 @@ words as `slug_title`. At most 5 candidates are kept.
 When a PDF-backed note shares an identity key with a note without a
 PDF, the PDF-less note is `superseded_by` the PDF-backed one. `find`
 still reaches superseded notes and prints them as `also` companions.
+
+Import deduplication currently differs from library lookup for list-valued
+metadata: `ref find` indexes every URL in a `source_url` or `url` list, but
+`ref create` and automatic URL routing read only scalar URL fields from notes.
+A list-only match can therefore import again without an already-known or
+legacy warning. Use `ref find` to check those references before importing.
 
 ## Usage
 
@@ -313,8 +341,12 @@ Every parsed record lands in exactly one bucket: `already_migrated`
   capitalized, with ai, api, cli, gtd, html, http, json, llm, lsp,
   mcp, pdf, prd, sql, ui, url, ux, and yaml uppercased). The body
   carries `## Files`, `## Related`, `## Chapters` (books), and an
-  escaped `## Original Record` fence. No `^ref` tracker is written,
-  so migrated notes stay out of the reading queue.
+  escaped `## Original Record` fence. The original source records are never
+  edited or deleted. No `^ref` tracker is written, so these notes do not
+  become actionable tracker tasks. Their `legacy_status` (or chapter states)
+  still determines their reading state: queued/started notes match the default
+  reading queue. Human `list` output collapses them into a legacy summary
+  unless `-s legacy` is supplied; JSON and Markdown include the matching rows.
 - **Books.** A source file holding exactly one BOOK record is a book;
   its `LID::` records (plus an `ID::` record tied by a `| BOOK:`
   line) fold into the book's note as `## Chapters` lines with their
@@ -394,7 +426,8 @@ optional single `<…>` wrapper, uses `http`/`https`, passes
 contains at least one `.` with non-empty labels. Corporate short links
 (`http://go/x`), `localhost`, and IP literals stay tasks.
 
-Policy lives under `highlights.url_routing` in `bob/config.yml`:
+Policy lives under `highlights.url_routing` in `~/.config/bob/config.yml`
+(`BOB_CONFIG_FILE` overrides the file; `XDG_CONFIG_HOME` overrides its base):
 
 ```yaml
 highlights:
@@ -413,7 +446,14 @@ routing with a warning; a bare URL then simply stays a task. `bob ref
 doctor` prints the effective policy as
 `url routing: capture on · gkeep on · excludes google.com, …`.
 
-Queued links clip in the background through durable ref jobs; a
-failed clip falls back to exactly the inbox task capture would have
-written, plus a ⚠️ bullet. The spool, worker, fallback, and
-`bob ref jobs` commands live in [`docs/ref-jobs.md`](ref-jobs.md).
+`bob capture --no-ref '<URL>'` and `bob gkeep pull --no-ref` bypass routing
+for one invocation. Capture also keeps an item as a task when it has extra
+prose, markers, child lines, a global destination, or forced destination flags.
+`bob capture-parse` reads this policy without reading the vault or fetching
+anything; invalid config silently disables its reference classification.
+
+Capture queues links for background clipping through durable ref jobs; a
+failed clip falls back to exactly the inbox task capture would have written,
+plus a ⚠️ bullet. Google Keep imports clip inline during `pull`: retryable
+failures stay in Keep, while permanent failures become tasks with a warning.
+See [ref jobs](ref-jobs.md) and [Keep URL imports](gkeep.md#url-only-notes-go-to-the-reading-queue).

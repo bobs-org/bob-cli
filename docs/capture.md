@@ -1,8 +1,9 @@
 # Capture
 
-`bob capture` writes tasks and bullets into the Bob vault without opening
-desktop Obsidian. Companion commands parse in-progress drafts, complete markers
-and wikilinks, list routes and tasks, assign block IDs, and name Pomodoros.
+`bob capture` writes tasks and bullets, queues bare reading-queue links, and
+manages Pomodoro sessions without opening desktop Obsidian. Companion commands
+parse in-progress drafts, complete markers and wikilinks, list routes and
+tasks, assign block IDs, and name Pomodoros.
 Bob Mac Capture is the macOS menu-bar frontend: it owns the hotkey and panel,
 then delegates grammar, preview, completion, and vault writes to these `bob`
 commands.
@@ -60,6 +61,7 @@ anything is written, and any failure rolls the whole batch back.
 
 | Marker | Meaning |
 | --- | --- |
+| Bare public URL | Queue a reference job when the URL routing policy admits it; `-R, --no-ref` keeps it a task |
 | `@@route` | Shared task destination, anywhere in the draft, for otherwise-unrouted items |
 | `@@route+block-id` | Shared parent-task destination, anywhere in the draft, for otherwise-unrouted items |
 | `@route` | Write a task to `<route>.md` (default route is `mac_inbox`) |
@@ -219,9 +221,11 @@ item no matter which of its lines they appear on.
 bob capture [OPTIONS] [--] [TEXT]...
 ```
 
-Captures one task, ordinary Markdown bullet, or task sub-bullet into the Bob vault without
-requiring desktop Obsidian to be open. `TEXT` is one or more physical lines: the
-first nonblank line is the captured parent, and whitespace within each line is
+Captures tasks, ordinary Markdown bullets, task sub-bullets, or reference links
+without requiring desktop Obsidian to be open. Reference links queue for
+background capture as described in [Saving links](#saving-links-to-your-reading-queue).
+`TEXT` is one or more physical lines: the first nonblank line is the captured
+parent, and whitespace within each line is
 normalized, but line breaks are meaningful -- see "Authored sub-bullets"
 below for the bounded hierarchy later lines accept. Task mode writes
 `- [ ] #task <text> [created::YYYY-MM-DD]` when unscheduled, or `[?]` when a
@@ -410,6 +414,18 @@ item fails to parse, read the clipboard, validate, stage, or replace, Bob
 leaves notes, ledgers, and newly-created clipboard files at their original
 state. `--dry-run` uses the same planner with the commit step disabled.
 
+Before replacing a note, Bob checks that its on-disk contents still match the
+planning snapshot. A changed, deleted, or newly created target refuses with
+`refusing to overwrite ...: note ... on disk after planning` (exit 1).
+Reload the affected note and rerun the capture. Checks happen before staging,
+after staging, and immediately before each replacement; they reduce overwrite
+races but do not lock out another writer. If rollback itself fails, the error
+names the file that needs inspection.
+
+Reference items queue jobs during submission. Their later background imports
+run independently: a clip failure falls back for that link and does not undo
+other successfully captured items.
+
 Same-line session-operator chains split the same way: a physical line holding
 only whitespace-separated session operators (`+2 =x`) yields one item per
 token, in order, exactly like the same operators on blank-line-separated
@@ -593,7 +609,7 @@ more — an extra word, `@route`, `#tag`, `s:`, `p:`, `%`, an operator, a child
 line, a `@@` declaration, or a forced flag (`-r -s -t -S -c`, `--task-ref`)
 — keeps the item a task, exactly as before. Corporate short links
 (`http://go/x`), IP literals, and excluded hosts (see
-`highlights.url_routing` in `docs/ref.md`) stay tasks too. A pasted
+the [URL routing policy](ref.md#url-routing)) stay tasks too. A pasted
 blank-line-free block in which every line is a bare URL splits into one item
 per line, and each line is then classified on its own, so mixed lists queue
 the links and keep the rest as tasks.
@@ -602,10 +618,11 @@ Submit never touches the network and returns at once: it writes a durable
 ref job and a detached background worker clips it through the same engine as
 `bob ref create`. If the clip fails, the link falls back to exactly the inbox
 task capture would have written, plus a `⚠️` child with the reason and a
-`bob ref create <url>` retry command. `bob ref jobs` lists every job; see
-`docs/ref-jobs.md`. The preview is honest and offline: `--dry-run` says
-whether the link is new, already in the library, already queued for scan,
-already clipping, or a duplicate within the draft. Reference items report
+`bob ref create <url>` retry command. `bob ref jobs` lists recent jobs
+(`--all` includes older history); see [ref jobs](ref-jobs.md). The offline
+`--dry-run` preview says whether the link is new, already in the library,
+already queued for scan, already clipping, or a duplicate within the draft.
+Reference items report
 `routed: false`, `route: null`, `route_label: ""`, `task_line: ""`, and
 `placement: "queued"` (still to clip) or `"unchanged"` (already known), plus
 an additive `ref` object with the classified URL, the library verdict, the
@@ -2748,7 +2765,7 @@ actual move. Relocation is never described as later duplicate removal through
 
 Append a bare trailing `#` marker to capture the item as a plain-text
 sub-bullet on a Pomodoro instead of a task. For example,
-`bob capture remembered to bump the timeout #` writes:
+`bob capture 'remembered to bump the timeout #'` writes:
 
 ```markdown
 - remembered to bump the timeout
@@ -3253,11 +3270,13 @@ terminal-marker extraction, and the same `@token` classification, so the two
 commands can never disagree about a complete capture. Wikilink highlighting is
 syntax-only and additive; it does not change capture routing or diagnostics.
 
-The command is purely lexical and completely read-only. It never opens the
-vault, never reads the clipboard, never touches the filesystem, and takes no
-`--bob-dir`; running it with a nonexistent `BOB_DIR` and a `%...` clipboard
-marker still succeeds. If `TEXT` is omitted and stdin is piped, it reads the
-complete piped stdin stream, like `bob capture`. Only a missing `TEXT` or a
+The command is read-only. It reads the configured URL routing policy so a bare
+link's `ref`/`task` classification matches capture; `-R, --no-ref` disables
+that classification, and an invalid routing config silently keeps links as
+tasks. It never opens the vault, reads the clipboard, or contacts the network,
+and takes no `--bob-dir`; running it with a nonexistent `BOB_DIR` and a `%...`
+clipboard marker still succeeds. If `TEXT` is omitted and stdin is piped, it
+reads the complete piped stdin stream, like `bob capture`. Only a missing `TEXT` or a
 bad flag is an error (exit 2); every other input succeeds.
 
 `TEXT` accepts the same batch draft `bob capture` does: one or more blank or

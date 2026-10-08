@@ -22,6 +22,7 @@ system clock), matching other Bob commands.
 - [Options](#options)
 - [JSON output](#json-output)
 - [Manual smoke test](#manual-smoke-test)
+- [Native Tasks queries](#native-tasks-queries)
 - [Native Dataview queries](#native-dataview-queries)
 - [Live Obsidian engine](#live-obsidian-engine)
 - [Environment](#environment)
@@ -289,6 +290,34 @@ bob query --format markdown --query 'TASK LIMIT 3'
 Native indexing may warn about ambiguous bare wikilinks when multiple notes
 share the same stem or alias. Those warnings are diagnostics about vault links;
 they do not make otherwise successful read-only smoke queries fail.
+
+## Native Tasks queries
+
+Tasks queries use the vault's Tasks settings and local Markdown index; they
+do not require Obsidian or a separate JavaScript runtime. Ordinary filters,
+sorts, groups, and dependency queries run without building a JavaScript
+sandbox, including `--tasks-note` blocks and configured global queries.
+
+`filter by function`, `sort by function`, and `group by function` instructions
+run in an embedded QuickJS sandbox with Moment date support. A Boolean filter
+containing `filter by function` also enables the sandbox. Expressions have a
+two-second execution budget; initialization gets a separate budget that
+scales with the number of indexed tasks. Prefer standard filters for simple
+queries, and narrow expensive JavaScript expressions when a query times out.
+
+For example, the ordinary status filter and a custom expression use the same
+Tasks registry:
+
+```bash
+bob query --tasks 'status.type is IN_PROGRESS'
+bob query --tasks 'filter by function task.status.type === "IN_PROGRESS"'
+```
+
+The sandbox supplies Tasks query/task context and Moment; it does not load
+desktop Bob plugins or provide a general DataviewJS environment. Queries
+depending on desktop-only plugin helpers can omit tasks or fail headlessly;
+use `bob freshness` and `bob plan` for Bob's supported review and ledger
+reports.
 
 ## Native Dataview queries
 

@@ -37,7 +37,40 @@ bob ref create report.md --audio episode.mp3 --include-id
 bob ref create https://example.com/essay -H saved.html
 bob ref create https://example.com/essay -A "Jane Doe" -p 2026-01-02 -d
 ```
-See [`highlights-clip.md`](highlights-clip.md) for web-article route details (reader-mode capture, headed retry, `--html` escape hatch, environment).
+See [web article capture](highlights-clip.md) for reader-mode capture, headed
+retries, the `--html` escape hatch, and environment variables. `bob ref clip`
+is a hidden compatibility alias for `create` with the same targets and options.
+
+## Prerequisites
+
+Dependencies depend on the target; basic vault capture does not require the
+full reference-import toolchain.
+
+| Target | Required tools |
+| --- | --- |
+| Local PDF | No external renderer; Bob stamps the PDF directly |
+| PDF URL or arXiv | `curl` for downloads |
+| Web article | `curl` for initial URL classification (skipped with `--html`), `uv` for the pinned Python adapter, and Chrome/Chromium for rendering; Xvfb on Linux for headed retries |
+| Markdown | `pandoc`, `xelatex`, the LaTeX packages below, and DejaVu Serif, Sans, and Sans Mono fonts |
+| Any target with `--listen` | A configured `highlights.listen_command` that writes the requested MP3 |
+
+Run `bob ref doctor` to inspect the current host. Its `pandoc`, `xelatex`, and
+`latex_packages` rows diagnose Markdown rendering. A missing renderer or
+package is a warning rather than a fatal doctor error because other target
+types can still work. The package check uses `kpsewhich` and prints a
+`tlmgr install ...` command for any missing packages; run that command using
+the TeX Live installation that provides your `xelatex`.
+
+Bob's headers require `fvextra`, `lineno`, `upquote`, `needspace`, and `pgf`
+(TikZ). Doctor also checks the packages used by pandoc's LaTeX template,
+including table and image support. Font discovery is separate from the
+package check; if XeLaTeX cannot find DejaVu fonts, install them for the host's
+font system before retrying.
+
+`--dry-run` plans the import without installing the final PDF or audio, but
+URL targets can still be downloaded or inspected to derive the route and
+metadata. It is not an offline preview. Use `bob capture --dry-run '<URL>'`
+to preview automatic URL routing using only local state.
 
 ## Targets
 
@@ -169,6 +202,10 @@ a Highlights PDF; capturing a fresh copy`) and captures a fresh copy
 instead of refusing; with `--listen` it is a normal capture plus listen,
 never attach mode. A dry run adds
 `legacy: <path> (superseded by this capture)` to its report.
+
+Current note-side import deduplication reads scalar `source_url`/`url`
+fields only. A YAML list of URLs is indexed by `bob ref find` but missed by
+import deduplication; check those notes with `find` before importing again.
 
 Markdown and local PDFs outside the vault whose planned library destination
 already exists keep refusing; identity is not proven by stem alone. The
