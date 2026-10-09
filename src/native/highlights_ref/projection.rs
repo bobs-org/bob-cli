@@ -1,6 +1,45 @@
 //! Sync projection resolution and diagnostics.
 use super::*;
 
+/// Strip `parent` from a marker/frontmatter projection: v2 notes project
+/// residence separately, so parent never joins the sync snapshot, the
+/// stored base, or the hash (design call 1).
+pub(super) fn without_parent(projection: &Projection) -> Projection {
+    let mut parent_free = projection.clone();
+    parent_free.remove(FIELD_PARENT);
+    parent_free
+}
+
+/// Migrate an old stored base to the parent-free shape before conflict
+/// detection, so a residence move (or the first v2 transition) does not
+/// read as a two-sided edit. Status and every other key pass through
+/// untouched; refusal on insufficient base evidence is unchanged.
+#[allow(dead_code)]
+pub(super) fn normalize_v2_base(base: &Projection) -> Projection {
+    without_parent(base)
+}
+
+/// Frontmatter `parent` rendered from residence, kept out of the sync
+/// snapshot: `parent: "[[<route>]]"`, like the command-managed `type`.
+#[allow(dead_code)]
+pub(super) fn residence_parent_value(route: &str) -> MarkerValue {
+    MarkerValue::String(format!("[[{route}]]"))
+}
+
+/// Full marker projection with the birth-hint `parent` restored for PDF
+/// marker writes. Hashes and bases always use the parent-free shape; only
+/// `--write-pdf(s)` refreshes a stale hint through this helper, and normal
+/// scans preserve the marker's birth hint untouched.
+#[allow(dead_code)]
+pub(super) fn marker_projection_with_parent_hint(
+    parent_free: &Projection,
+    route: &str,
+) -> Projection {
+    let mut marker = parent_free.clone();
+    marker.insert(FIELD_PARENT.to_string(), residence_parent_value(route));
+    marker
+}
+
 pub(super) fn resolve_sync_projection(
     inputs: SyncInputs<'_>,
 ) -> Result<SyncResolution> {

@@ -126,6 +126,32 @@ pub(super) fn maybe_insert_audio_embed(
     insert_audio_embed(body, &embed)
 }
 
+/// Anchor a companion-audio embed directly after the managed reading-task
+/// embed on v2 bodies (`![[residence#^id]]`, blank, audio). Bodies without
+/// a managed embed are returned unchanged — the caller heals or births the
+/// embed first — and an existing audio embed is never duplicated. The v1
+/// task-anchored placement above is untouched.
+pub(super) fn maybe_insert_audio_embed_after_managed(
+    body: &str,
+    audio_vault_path: &str,
+) -> String {
+    let embed = audio_embed_line(audio_vault_path);
+    if body.contains(&embed) {
+        return body.to_string();
+    }
+    let Some(managed) = crate::native::ref_tasks::find_managed_embed(body)
+    else {
+        return body.to_string();
+    };
+    let (mut lines, ending, trailing) = split_body_lines(body);
+    if managed.line_index >= lines.len() {
+        return body.to_string();
+    }
+    lines.insert(managed.line_index + 1, String::new());
+    lines.insert(managed.line_index + 2, embed);
+    join_body_lines(&lines, ending, trailing)
+}
+
 pub(super) fn note_has_audio_field(note: &ParsedNote) -> bool {
     note.frontmatter
         .iter()

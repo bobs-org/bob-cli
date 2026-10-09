@@ -128,7 +128,9 @@ pub(crate) fn is_marker_mirror_text(text: &str) -> bool {
 /// `note::managed_region`: a missing region (legacy migrated bodies) yields
 /// `None`, as does a broken marker pair. Legacy bodies pass through
 /// `own_notes` verbatim; otherwise `own_notes` is the body outside the region
-/// minus the first H1, the `^ref` tracker line, audio embeds, the
+/// minus the first H1, the `^ref` tracker line, the managed reading-task
+/// embed (exactly the line `find_managed_embed` recognizes, so unrelated
+/// authored embeds elsewhere survive), audio embeds, the
 /// `## Highlights` heading directly above the begin marker, and the
 /// `## Tasks` section, with runs of blank lines collapsed and the result
 /// trimmed.
@@ -216,6 +218,12 @@ pub(crate) fn split_note_body(body: &str) -> NoteParts {
             }
             if let Some(index) = tracker_index {
                 drop[index] = true;
+            }
+            if let Some(found) =
+                crate::native::ref_tasks::find_managed_embed(body)
+                && outside_region(found.line_index)
+            {
+                drop[found.line_index] = true;
             }
             for (index, line) in lines.iter().enumerate() {
                 if outside_region(index) && is_audio_embed_line(line) {
