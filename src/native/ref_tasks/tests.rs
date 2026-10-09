@@ -481,3 +481,134 @@ fn diagnostic_code_catalog_lists_every_code() {
 fn _path_buf(_p: PathBuf) {
     // Keep PathBuf import used across edits.
 }
+
+#[test]
+fn render_sanitizes_collapses_and_truncates_title() {
+    let alias = line::sanitize_title_alias(
+        "  Read [me] |x| #tag ^id `code`  lots   of space",
+    );
+    assert_eq!(alias, "Read me x tag id code lots of space");
+    let long = "word ".repeat(30);
+    let alias = line::sanitize_title_alias(&long);
+    assert!(alias.ends_with('…'), "{alias}");
+    assert!(
+        alias.chars().count() <= 101,
+        "at most 100 chars plus ellipsis: {alias}"
+    );
+    assert!(!alias[..alias.len() - 3].ends_with(' '), "{alias}");
+    let line = line::render_ref_task_line(
+        ' ',
+        "ref/papers/harness_engineering",
+        "Harness [Engineering] | #1",
+        "2026-10-09",
+        "ref-harness-engineering",
+    );
+    assert_eq!(
+        line,
+        "- [ ] #task #ref [[ref/papers/harness_engineering|Harness Engineering 1]] [created::2026-10-09] ^ref-harness-engineering"
+    );
+}
+
+#[test]
+fn slug_ascii_empty_length_and_numeric_collisions() {
+    assert_eq!(slug_ref_stem("Harness_Engineering!"), "harness-engineering");
+    assert_eq!(slug_ref_stem("___"), "reading");
+    assert_eq!(
+        render_ref_task_line(' ', "ref/papers/x", "T", "2026-10-09", "ref-reading"),
+        "- [ ] #task #ref [[ref/papers/x|T]] [created::2026-10-09] ^ref-reading"
+    );
+    // Full ID stays within 44 chars at a separator boundary.
+    let long_stem =
+        "a-very-long-ref-note-stem-that-keeps-going-and-going-forever";
+    let slug = slug_ref_stem(long_stem);
+    assert!(format!("ref-{slug}").len() <= 44, "ref-{slug}");
+    assert!(!slug.ends_with('-'), "{slug}");
+    // Numeric collisions preserve the bound.
+    let taken = |id: &str| matches!(id, "ref-x" | "ref-x-2");
+    assert_eq!(allocate_ref_block_id("x", &taken), "ref-x-3");
+    let mut reserved = std::collections::BTreeSet::new();
+    reserved.insert("ref-harness-engineering".to_string());
+    let id = allocate_ref_block_id("harness_engineering", &|id| {
+        reserved.contains(id)
+    });
+    assert_eq!(id, "ref-harness-engineering-2");
+}
+
+#[test]
+fn closed_at_birth_carries_completion_or_cancelled_stamp() {
+    let read = render_ref_task_line(
+        'x',
+        "ref/papers/x",
+        "Title",
+        "2026-10-09",
+        "ref-x",
+    );
+    assert_eq!(
+        read,
+        "- [x] #task #ref [[ref/papers/x|Title]] [created::2026-10-09] [completion:: 2026-10-09] ^ref-x"
+    );
+    let abandoned = render_ref_task_line(
+        '-',
+        "ref/papers/x",
+        "Title",
+        "2026-10-09",
+        "ref-x",
+    );
+    assert!(
+        abandoned.contains("[cancelled:: 2026-10-09] ^ref-x"),
+        "{abandoned}"
+    );
+    // Generalized stamp targets any trailing ^id and preserves existing stamps.
+    let stamped = stamp_close_date_any_id(
+        "- [x] #task #ref [[ref/papers/x|T]] [created::2026-10-09] ^ref-custom-1",
+        'x',
+    );
+    assert!(stamped.contains("[completion:: "), "{stamped}");
+    assert!(stamped.ends_with("^ref-custom-1"), "{stamped}");
+    let kept = stamp_close_date_any_id(
+        "- [x] #task #ref [[ref/papers/x|T]] [created::2026-10-09] [completion:: 2026-10-01] ^ref-x",
+        'x',
+    );
+    assert!(kept.contains("[completion:: 2026-10-01]"), "{kept}");
+    assert_eq!(managed_embed_line("sase", "ref-x"), "![[sase#^ref-x]]");
+    assert_eq!(
+        managed_embed_line("done/sase_done", "ref-x"),
+        "![[done/sase_done#^ref-x]]"
+    );
+}
+
+#[test]
+fn insert_checks_archive_and_preserves_crlf() {
+    let temp = tempfile::tempdir().expect("temp vault");
+    let root = temp.path();
+    write_vault_file(
+        root,
+        "sase.md",
+        "---\ntype: \"[[area]]\"\ndone_tasks: \"[[done/sase_done]]\"\n---\n\n# Sase\n\n## Tasks\n\n- [ ] old\n",
+    );
+    write_vault_file(
+        root,
+        "done/sase_done.md",
+        "---\nparent: \"[[sase]]\"\n---\n\n# Done\n\n- [x] #task #ref [[ref/papers/x|X]] [created::2026-10-09] ^ref-x\n",
+    );
+    let dest = root.join("sase.md");
+    let line =
+        "- [ ] #task #ref [[ref/papers/x|X]] [created::2026-10-09] ^ref-x";
+    let out = insert::insert_ref_task(root, &dest, line, &[]).expect("insert");
+    assert_eq!(out.block_id, "ref-x-2", "archive collision reallocates");
+
+    // CRLF line endings survive insertion.
+    let crlf = root.join("proj.md");
+    std::fs::write(
+        &crlf,
+        "---\r\ntype: \"[[project]]\"\r\n---\r\n\r\n# Proj\r\n\r\n## Tasks\r\n\r\n- [ ] old\r\n",
+    )
+    .expect("write crlf");
+    let line =
+        "- [ ] #task #ref [[ref/papers/y|Y]] [created::2026-10-09] ^ref-y";
+    insert::insert_ref_task(root, &crlf, line, &[]).expect("crlf insert");
+    let contents = std::fs::read(&crlf).expect("read bytes");
+    assert!(contents.windows(2).any(|w| w == b"\r\n"), "keeps CRLF");
+    let text = String::from_utf8(contents).expect("utf8");
+    assert!(text.contains("^ref-y"), "{text}");
+}
