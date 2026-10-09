@@ -201,6 +201,7 @@ fn json_shape_is_stable() {
         replacement: Replacement { start: 9, end: 10 },
         context: Some(CompletionContext::PomodoroName),
         candidates: Candidates::PomodoroName(vec![pomodoro_name]),
+        r#override: None,
         block_id: None,
         warnings: Vec::new(),
         query: None,
@@ -242,6 +243,7 @@ fn json_shape_is_stable() {
             kind: CaptureTargetKind::Area,
             status: None,
         }]),
+        r#override: None,
         block_id: None,
         warnings: Vec::new(),
         query: None,
@@ -271,6 +273,114 @@ fn empty_json_context_is_null() {
 }
 
 #[test]
+fn override_name_completion_carries_keeps_ledger_and_running() {
+    let temp = TempDir::new("bob-cli-capture-complete-override");
+    let day_file = temp.path().join("2026/20261009.md");
+    write_file(
+        &day_file,
+        concat!(
+            "## Pomodoros\n",
+            "- [x] (**0830-0855** [t:: 25m]) — PLAN\n",
+            "- [ ] (**0920-0945** [t:: 25m]) — CAPTURE\n",
+            "  - [[bob#^capture-stop]]\n",
+            "- [ ] () — BUGS\n",
+        ),
+    );
+    let complete = |raw: &str| {
+        crate::native::env::with_var("BOB_DAY_FILE", &day_file, || {
+            result(temp.path(), raw, raw.len())
+        })
+    };
+
+    // `==#` keeps the running ledger and names the running session.
+    let kept = complete("==#");
+    assert_eq!(kept.context, Some(CompletionContext::PomodoroStartName));
+    let kept_override = kept.r#override.as_ref().expect("override object");
+    assert!(kept_override.keeps_ledger);
+    let running = kept_override.running.as_ref().expect("running session");
+    assert_eq!(running.pomodoro_name.as_deref(), Some("CAPTURE"));
+    assert_eq!(running.line, 3);
+    assert_eq!(running.time_range, "0920-0945");
+    let kept_json = serde_json::to_value(&kept).expect("kept json");
+    assert_eq!(
+        kept_json["override"],
+        serde_json::json!({
+            "keeps_ledger": true,
+            "running": {
+                "pomodoro_name": "CAPTURE",
+                "line": 3,
+                "time_range": "0920-0945",
+            },
+        })
+    );
+
+    // `==3#bu` re-times instead of keeping the ledger; the candidates and
+    // the running session match the kept-ledger shape.
+    let fresh = complete("==3#bu");
+    assert_eq!(fresh.context, Some(CompletionContext::PomodoroStartName));
+    let fresh_override = fresh.r#override.as_ref().expect("override object");
+    assert!(!fresh_override.keeps_ledger);
+    assert_eq!(fresh_override.running, kept_override.running);
+    let fresh_json = serde_json::to_value(&fresh).expect("fresh json");
+    assert_eq!(fresh_json["override"]["keeps_ledger"], false);
+
+    // Plain `=#` stays byte-identical: no override key anywhere.
+    let plain = complete("=#");
+    assert_eq!(plain.context, Some(CompletionContext::PomodoroStartName));
+    assert!(plain.r#override.is_none());
+    let plain_json = serde_json::to_value(&plain).expect("plain json");
+    assert!(plain_json.get("override").is_none(), "{plain_json}");
+}
+
+#[test]
+fn override_name_completion_omits_running_without_a_single_runner() {
+    let temp = TempDir::new("bob-cli-capture-complete-override-idle");
+    let day_file = temp.path().join("2026/20261009.md");
+    write_file(
+        &day_file,
+        concat!("## Pomodoros\n", "- [ ] () — BUGS\n", "- [ ] () — SASE\n",),
+    );
+    let complete_at = |day: &std::path::Path, raw: &str| {
+        crate::native::env::with_var("BOB_DAY_FILE", day, || {
+            result(temp.path(), raw, raw.len())
+        })
+    };
+
+    // An idle ledger keeps the flag but names no running session.
+    let idle = complete_at(&day_file, "==#");
+    let idle_override = idle.r#override.as_ref().expect("override object");
+    assert!(idle_override.keeps_ledger);
+    assert!(idle_override.running.is_none());
+    let idle_json = serde_json::to_value(&idle).expect("idle json");
+    assert_eq!(
+        idle_json["override"],
+        serde_json::json!({"keeps_ledger": true})
+    );
+
+    // A missing daily note behaves the same way.
+    let missing = temp.path().join("2026/20261010.md");
+    let gone = complete_at(&missing, "==3#bu");
+    let gone_override = gone.r#override.as_ref().expect("override object");
+    assert!(!gone_override.keeps_ledger);
+    assert!(gone_override.running.is_none());
+
+    // Several runners also omit the session: no single session to keep.
+    write_file(
+        &day_file,
+        concat!(
+            "## Pomodoros\n",
+            "- [ ] (**0920-0945** [t:: 25m]) — CAPTURE\n",
+            "- [ ] (**0935-1000** [t:: 25m]) — BUGS\n",
+        ),
+    );
+    let crowded = complete_at(&day_file, "==#");
+    let crowded_override =
+        crowded.r#override.as_ref().expect("override object");
+    assert!(crowded_override.keeps_ledger);
+    assert!(crowded_override.running.is_none());
+}
+
+#[test]
 fn human_output_is_plain_without_color() {
     let styler = Styler::plain();
     assert!(!styler.is_color());
@@ -289,6 +399,7 @@ fn human_output_is_plain_without_color() {
                 kind: CaptureTargetKind::Area,
                 status: None,
             }]),
+            r#override: None,
             block_id: None,
             warnings: Vec::new(),
             query: None,

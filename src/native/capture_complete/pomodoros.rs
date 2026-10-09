@@ -1,7 +1,10 @@
 use std::{fs, io, path::Path};
 
 use super::{
-    model::{Candidates, CompleteError, PomodoroNameCandidate},
+    model::{
+        Candidates, CompleteError, OverrideRunningSession,
+        PomodoroNameCandidate,
+    },
     support::{bounded_warning, rank},
 };
 use crate::native::{
@@ -58,6 +61,29 @@ pub(super) fn pomodoro_name_candidates_at(
         pomodoro_name_candidates_from_scan_with_hint(&scan, query, plan_hint);
 
     Ok((Candidates::PomodoroName(candidates), warnings))
+}
+
+/// The single running Pomodoro session, for the `running` half of the
+/// `==` completion `override` object. `None` when the daily note is
+/// missing or holds zero or several timed open entries.
+pub(super) fn running_pomodoro_session(
+    bob_dir: &Path,
+) -> Option<OverrideRunningSession> {
+    let day_file = pomodoro::day_file_for(bob_dir);
+    let contents = fs::read_to_string(day_file).ok()?;
+    let scan = capture_pomodoros::scan(&contents);
+    let mut running = scan.entries.iter().filter(|entry| {
+        entry.state == PomodoroState::Open && entry.time_range.is_some()
+    });
+    let entry = running.next()?;
+    if running.next().is_some() {
+        return None;
+    }
+    Some(OverrideRunningSession {
+        pomodoro_name: entry.name.clone(),
+        line: entry.line,
+        time_range: entry.time_range.clone().unwrap_or_default(),
+    })
 }
 
 pub(super) fn pomodoro_start_name_candidates(

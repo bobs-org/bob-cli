@@ -3950,7 +3950,15 @@ name), then nameable rows for entries that still need a name
 last. A completed-only match never also offers a duplicate create row, and
 `again` rows resurface the most recent session first on an empty query. The
 new and again rows carry the plan-budget preview with `plan_themes_after`
-and `plan_themes_cap`. The
+and `plan_themes_cap`. For a `==` name field the context stays
+`pomodoro_start_name` and the candidates are unchanged; an additive top-level
+`override` object names the swap context: `keeps_ledger` is true when the
+`<X>` suffix is empty (the swap takes over the running session ledger
+byte-for-byte) and false for a fresh `<X>` timing, while `running` carries the
+running session (`pomodoro_name`, omitted when unnamed, the 1-based day-file
+`line`, and the ledger `time_range` such as `0920-0945`) and is omitted unless
+exactly one timed session runs. Plain `=` name fields never carry `override`.
+The
 `pomodoro_name` context below is backed by the same scan as `bob capture-pomodoros`, offers only open
 entries, and returns Pomodoros in picker order: named rows first, then
 nameable rows. Named rows rank by slug prefix, then slug substring, and open

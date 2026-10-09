@@ -713,6 +713,7 @@ fn pomodoro_creation_json_omits_ref_and_keeps_schema_version() {
         replacement: Replacement { start: 9, end: 10 },
         context: Some(CompletionContext::PomodoroName),
         candidates: Candidates::PomodoroName(vec![creation]),
+        r#override: None,
         block_id: None,
         warnings: Vec::new(),
         query: None,

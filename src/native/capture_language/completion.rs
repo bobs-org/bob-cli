@@ -391,24 +391,25 @@ pub(super) fn caret_link_field(
     })
 }
 
-/// Completion field for the name part of a `=<X>#name` named Pomodoro
-/// start. The cursor must lie inside `[name_start, name_end]`: just after
-/// `#` through the end of the name part. A cursor on `=<X>` or at the `#`
-/// byte itself yields nothing, and `#` is never inside the replacement.
-/// The replacement covers the whole name part regardless of where the
-/// cursor sits inside it. The lexer decides what counts as a named start;
-/// validity never matters here, so near misses complete the same way
-/// valid tokens do.
-fn pomodoro_start_name_field(
+/// Lexed facts for the named-start (`=<X>#name` or `==<X>#name`) token
+/// whose name part holds `cursor`: the doubled-sigil flag, the raw `<X>`
+/// suffix, the name text, and the absolute name-part span. `None` when the
+/// cursor is not inside such a name part: just after `#` through the end
+/// of the name part. A cursor on `=<X>` or at the `#` byte itself yields
+/// nothing, and `#` is never inside the span. The lexer decides what
+/// counts as a named start; validity never matters here, so near misses
+/// lex the same way valid tokens do.
+fn named_start_name_at(
     item: &CaptureItem<'_>,
     cursor: usize,
-) -> Option<CompletionField> {
+) -> Option<(bool, String, String, (usize, usize))> {
     let parent = item.lines.first()?;
     let text = parent.raw.text;
     let trimmed = text.trim();
     let super::item::EqualsToken::Start {
         suffix,
         name: Some(name),
+        r#override,
         ..
     } = super::item::session_equals_token(trimmed)?
     else {
@@ -425,6 +426,21 @@ fn pomodoro_start_name_field(
     if cursor < name_start || cursor > name_end {
         return None;
     }
+    Some((r#override, suffix, name, (name_start, name_end)))
+}
+
+/// Completion field for the name part of a `=<X>#name` named Pomodoro
+/// start. The cursor must lie inside `[name_start, name_end]`: just after
+/// `#` through the end of the name part. A cursor on `=<X>` or at the `#`
+/// byte itself yields nothing, and `#` is never inside the replacement.
+/// The replacement covers the whole name part regardless of where the
+/// cursor sits inside it.
+fn pomodoro_start_name_field(
+    item: &CaptureItem<'_>,
+    cursor: usize,
+) -> Option<CompletionField> {
+    let (_, _, name, (name_start, name_end)) =
+        named_start_name_at(item, cursor)?;
     let query = name.get(..cursor - name_start)?.to_string();
     Some(CompletionField {
         context: CompletionContext::PomodoroStartName,
@@ -433,6 +449,28 @@ fn pomodoro_start_name_field(
         query,
         replacement: (name_start, name_end),
     })
+}
+
+/// For a `pomodoro_start_name` field, whether the name belongs to a `==`
+/// override token: `Some(true)` when the `<X>` suffix is empty (a swap
+/// keeps the running ledger) and `Some(false)` for a fresh `<X>` timing.
+/// `None` for plain `=` tokens and when the cursor is not inside a
+/// named-start name part.
+pub(crate) fn pomodoro_start_override_at(
+    raw_text: &str,
+    cursor: usize,
+) -> Option<bool> {
+    if cursor_in_close_log_text(raw_text, cursor) {
+        return None;
+    }
+    let draft = split_capture_draft(raw_text);
+    let item = draft.items.iter().find(|item| {
+        item.lines
+            .iter()
+            .any(|line| cursor >= line.raw.start && cursor <= line.raw.end)
+    })?;
+    let (is_override, suffix, _, _) = named_start_name_at(item, cursor)?;
+    is_override.then_some(suffix.is_empty())
 }
 
 /// Identify the completable marker component at `cursor`, reusing the same

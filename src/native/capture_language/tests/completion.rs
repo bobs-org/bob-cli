@@ -742,6 +742,32 @@ fn pomodoro_override_name_completes_after_hash_with_wider_offsets() {
 }
 
 #[test]
+fn pomodoro_start_override_reports_sigil_and_suffix_emptiness() {
+    // An empty `<X>` keeps the running ledger; a fresh timing does not.
+    assert_eq!(pomodoro_start_override_at("==#", 3), Some(true));
+    assert_eq!(pomodoro_start_override_at("==#bugs", 7), Some(true));
+    assert_eq!(pomodoro_start_override_at("==3#bugs", 8), Some(false));
+    assert_eq!(pomodoro_start_override_at("==-2#bugs", 9), Some(false));
+    // A drop list does not change the kept ledger.
+    assert_eq!(pomodoro_start_override_at("==#bugs~2", 7), Some(true));
+    // Plain `=` names never carry override context.
+    assert_eq!(pomodoro_start_override_at("=#", 2), None);
+    assert_eq!(pomodoro_start_override_at("=3#bugs", 7), None);
+    // A cursor on the sigil, suffix, or `#` itself is not a name field.
+    assert_eq!(pomodoro_start_override_at("==#bugs", 2), None);
+    assert_eq!(pomodoro_start_override_at("==3#bugs", 3), None);
+    assert_eq!(pomodoro_start_override_at("==#", 2), None);
+    // Bare tokens and body text offer nothing.
+    assert_eq!(pomodoro_start_override_at("==", 2), None);
+    assert_eq!(pomodoro_start_override_at("buy milk", 4), None);
+    // Chains report per token: the override name keeps the ledger while
+    // the plain close token reports nothing.
+    let chain = "=x ==#de";
+    assert_eq!(pomodoro_start_override_at(chain, chain.len()), Some(true));
+    assert_eq!(pomodoro_start_override_at(chain, 1), None);
+}
+
+#[test]
 fn pomodoro_start_name_completes_per_token_inside_chains() {
     let chain = "=x =#de";
     let completion = field(chain, chain.len()).expect("chain name field");

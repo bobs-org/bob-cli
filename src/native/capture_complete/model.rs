@@ -342,6 +342,28 @@ impl Candidates {
     }
 }
 
+/// The running Pomodoro a `==` name field would override. `pomodoro_name`
+/// is absent for an unnamed running session; `line` is the 1-based day-file
+/// line and `time_range` the ledger span the swap keeps (`0920-0945`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct OverrideRunningSession {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) pomodoro_name: Option<String>,
+    pub(super) line: usize,
+    pub(super) time_range: String,
+}
+
+/// Additive override context for a `==` name field: `keeps_ledger` is true
+/// when the `<X>` suffix is empty (a swap takes over the running ledger
+/// byte-for-byte); `running` is present only when exactly one timed session
+/// runs. Plain `=` name fields never carry this object.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct OverrideCompletion {
+    pub(super) keeps_ledger: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) running: Option<OverrideRunningSession>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct CaptureCompleteResult {
     pub(super) ok: bool,
@@ -350,6 +372,8 @@ pub(super) struct CaptureCompleteResult {
     pub(super) replacement: Replacement,
     pub(super) context: Option<CompletionContext>,
     pub(super) candidates: Candidates,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) r#override: Option<OverrideCompletion>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) block_id: Option<capture_block_ids::BlockIdField>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -384,6 +408,7 @@ impl CaptureCompleteResult {
             },
             context: None,
             candidates: Candidates::Route(Vec::new()),
+            r#override: None,
             block_id: None,
             warnings: Vec::new(),
             query: None,

@@ -1094,6 +1094,120 @@ fn capture_complete_pomodoro_start_name_json_covers_empty_and_new_queries() {
 }
 
 #[test]
+fn capture_complete_override_name_json_carries_keeps_ledger_and_running() {
+    let temp = TempDir::new("bob-cli-capture-complete-override-name");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("dev.md"), "---\ntype: [[area]]\n---\n");
+    let day_file = vault.join("2026/20261009.md");
+    write_file(
+        &day_file,
+        concat!(
+            "## Pomodoros\n",
+            "- [x] (**0830-0855** [t:: 25m]) — PLAN\n",
+            "  - [[sase#^plan-day]]\n",
+            "- [ ] (**0920-0945** [t:: 25m]) — CAPTURE\n",
+            "  - [[bob#^capture-stop]]\n",
+            "- [ ] () — BUGS\n",
+        ),
+    );
+
+    let complete = |draft: &str| {
+        bob_command()
+            .arg("capture-complete")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-c")
+            .arg(draft.len().to_string())
+            .arg("-f")
+            .arg("json")
+            .arg("--")
+            .arg(draft)
+            .env("BOB_DAY_FILE", &day_file)
+            .output()
+            .expect("run override-name completion")
+    };
+
+    // `==#` keeps the running ledger and names the running session.
+    let kept = complete("==#");
+    assert_success(&kept);
+    let kept_json: serde_json::Value =
+        serde_json::from_str(stdout(&kept).trim()).expect("json");
+    assert_eq!(kept_json["context"], "pomodoro_start_name");
+    assert_eq!(
+        kept_json["override"],
+        serde_json::json!({
+            "keeps_ledger": true,
+            "running": {
+                "pomodoro_name": "CAPTURE",
+                "line": 4,
+                "time_range": "0920-0945",
+            },
+        }),
+        "{kept_json}"
+    );
+
+    // `==3#bu` re-times; the running session matches the kept shape.
+    let fresh = complete("==3#bu");
+    assert_success(&fresh);
+    let fresh_json: serde_json::Value =
+        serde_json::from_str(stdout(&fresh).trim()).expect("json");
+    assert_eq!(fresh_json["context"], "pomodoro_start_name");
+    assert_eq!(fresh_json["override"]["keeps_ledger"], false);
+    assert_eq!(
+        fresh_json["override"]["running"], kept_json["override"]["running"],
+        "{fresh_json}"
+    );
+
+    // Plain `=#` carries no override key.
+    let plain = complete("=#");
+    assert_success(&plain);
+    let plain_json: serde_json::Value =
+        serde_json::from_str(stdout(&plain).trim()).expect("json");
+    assert_eq!(plain_json["context"], "pomodoro_start_name");
+    assert!(plain_json.get("override").is_none(), "{plain_json}");
+
+    // An idle ledger omits the running session but keeps the flag.
+    write_file(
+        &day_file,
+        concat!("## Pomodoros\n", "- [ ] () — BUGS\n", "- [ ] () — SASE\n"),
+    );
+    let idle = complete("==#");
+    assert_success(&idle);
+    let idle_json: serde_json::Value =
+        serde_json::from_str(stdout(&idle).trim()).expect("json");
+    assert_eq!(
+        idle_json["override"],
+        serde_json::json!({ "keeps_ledger": true }),
+        "{idle_json}"
+    );
+
+    // A missing daily note behaves the same way.
+    let missing_day = vault.join("2026/20261010.md");
+    let gone = bob_command()
+        .arg("capture-complete")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-c")
+        .arg("6")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("==3#bu")
+        .env("BOB_DAY_FILE", &missing_day)
+        .output()
+        .expect("run override-name completion without a day file");
+    assert_success(&gone);
+    let gone_json: serde_json::Value =
+        serde_json::from_str(stdout(&gone).trim()).expect("json");
+    assert_eq!(gone_json["context"], "pomodoro_start_name");
+    assert_eq!(
+        gone_json["override"],
+        serde_json::json!({ "keeps_ledger": false }),
+        "{gone_json}"
+    );
+}
+
+#[test]
 fn capture_complete_pomodoro_start_name_human_labels_rows() {
     let temp = TempDir::new("bob-cli-capture-complete-start-name-human");
     let vault = temp.path().join("vault");

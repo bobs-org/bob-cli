@@ -38,6 +38,7 @@ pub(crate) use self::close_log::assign_log_positions;
 pub(crate) use self::close_log::PositionalLogError;
 pub(crate) use self::completion::claimed_task_complete_tokens;
 pub(crate) use self::completion::completion_field_at;
+pub(crate) use self::completion::pomodoro_start_override_at;
 pub(crate) use self::completion::project_task_block_id_detail;
 pub(crate) use self::completion::CompletionContext;
 pub(crate) use self::completion::CompletionField;

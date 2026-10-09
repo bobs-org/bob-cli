@@ -8,10 +8,13 @@ use super::{
         task_section_candidates, TaskSearch,
     },
     model::{
-        Candidates, CaptureCompleteResult, CompleteError, PickerDescriptor,
-        PickerKind, PickerScope, Replacement, SCHEMA_VERSION,
+        Candidates, CaptureCompleteResult, CompleteError, OverrideCompletion,
+        PickerDescriptor, PickerKind, PickerScope, Replacement, SCHEMA_VERSION,
     },
-    pomodoros::{pomodoro_name_candidates, pomodoro_start_name_candidates},
+    pomodoros::{
+        pomodoro_name_candidates, pomodoro_start_name_candidates,
+        running_pomodoro_session,
+    },
 };
 use crate::native::{
     capture, capture_active_tasks, capture_block_ids,
@@ -90,6 +93,7 @@ pub(super) fn build_result(
             },
             context: Some(field.context),
             candidates,
+            r#override: None,
             block_id: None,
             warnings: index.warnings(),
             query: None,
@@ -159,6 +163,7 @@ pub(super) fn build_result(
             },
             context: Some(field.context),
             candidates,
+            r#override: None,
             block_id: Some(block_field),
             warnings,
             query: None,
@@ -284,6 +289,15 @@ pub(super) fn build_result(
         (None, None)
     };
     let picker = picker_descriptor(raw_text, &field);
+    // A `==` name field carries the additive override context (keeps_ledger
+    // plus the running session); plain `=` output stays byte-identical.
+    let override_info = (field.context == CompletionContext::PomodoroStartName)
+        .then(|| capture_language::pomodoro_start_override_at(raw_text, cursor))
+        .flatten()
+        .map(|keeps_ledger| OverrideCompletion {
+            keeps_ledger,
+            running: running_pomodoro_session(bob_dir),
+        });
 
     Ok(CaptureCompleteResult {
         ok: true,
@@ -295,6 +309,7 @@ pub(super) fn build_result(
         },
         context: Some(field.context),
         candidates,
+        r#override: override_info,
         block_id: None,
         warnings,
         query,
