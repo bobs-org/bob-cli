@@ -177,6 +177,7 @@ fn show_human_and_json_carry_reading_tasks() {
 #[test]
 fn doctor_reports_ref_tasks_and_parents_rows() {
     let (_temp, vault) = fixture_vault("bob-cli-ref-tasks-doctor");
+    fs::create_dir_all(vault.join("lib")).expect("create lib dir for doctor");
     git_in(&vault, ["init", "-q"]);
     configure_test_git_identity(&vault);
     git_in(&vault, ["add", "."]);

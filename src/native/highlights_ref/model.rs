@@ -432,6 +432,66 @@ pub(super) struct RoutedTaskNoteWrite {
     pub(super) action: &'static str,
 }
 
+/// One routed destination's insertion intention: the lines one PDF wants
+/// appended/inserted, rebased against fresh disk bytes at execution.
+///
+/// `owner` is the originating PDF (for failure/report attribution);
+/// `candidates` parallels `lines` for execution-time dedup (processed IDs
+/// and legacy identities); `is_v2_default` selects capture's Tasks-section
+/// insertion (v2 unqualified follow-ups) over the legacy append behavior
+/// (explicit `@name` routes). Stale full-file snapshots are never stored
+/// here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct RoutedInsertionIntent {
+    pub(super) path: PathBuf,
+    pub(super) lines: Vec<String>,
+    pub(super) candidates: Vec<AnnotationTaskCandidate>,
+    pub(super) owner: PathBuf,
+    pub(super) is_v2_default: bool,
+}
+
+/// Cross-PDF execution dedup: actually successful annotation writes in this
+/// run, distinct from deterministic planning reservations. A failed PDF
+/// never consumes another PDF's follow-up work.
+#[derive(Debug, Clone, Default)]
+pub(super) struct RunWriteState {
+    pub(super) processed_ids: BTreeSet<String>,
+    pub(super) legacy_identities: BTreeSet<String>,
+    pub(super) source_anchors: BTreeSet<String>,
+}
+
+/// Shared per-scan planning context: one immutable locator index plus the
+/// invocation date. Built once after intake, shared across scoped planning
+/// threads; planning never mutates it.
+#[derive(Debug)]
+pub(super) struct ScanContext {
+    pub(super) index: crate::native::ref_tasks::RefTaskIndex,
+    pub(super) invocation_date: String,
+}
+
+impl ScanContext {
+    pub(super) fn build(config: &Config) -> Self {
+        Self {
+            index: crate::native::ref_tasks::RefTaskIndex::build(
+                &config.bob_dir,
+                &config.ref_dir,
+            ),
+            invocation_date: current_local_date(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn for_tests(
+        index: crate::native::ref_tasks::RefTaskIndex,
+        invocation_date: &str,
+    ) -> Self {
+        Self {
+            index,
+            invocation_date: invocation_date.to_string(),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(super) struct PdfSyncPlan {
     pub(super) pdf: PathBuf,
@@ -456,6 +516,14 @@ pub(super) struct PdfSyncPlan {
     pub(super) annotation_tasks_created: usize,
     pub(super) annotation_tasks_skipped: usize,
     pub(super) routed_task_note_writes: Vec<RoutedTaskNoteWrite>,
+    pub(super) routed_intents: Vec<RoutedInsertionIntent>,
+    pub(super) reading_task_plan: Option<ReadingTaskPlan>,
+    pub(super) reading_located:
+        Option<crate::native::ref_tasks::LocatedRefTask>,
+    pub(super) reading_diagnostics:
+        Vec<crate::native::ref_tasks::RefTaskDiagnostic>,
+    pub(super) preview_block_id: Option<String>,
+    pub(super) v2_residence: Option<String>,
     pub(super) pdf_task_signal: PdfTaskStatusSignal,
     pub(super) status_normalization: StatusNormalization,
 }

@@ -320,9 +320,10 @@ pub(super) fn scan_library_json(
         );
     }
 
+    let ctx = ScanContext::build(config);
     let mut plan_outcomes = pdfs
         .iter()
-        .zip(plan_pdfs(config, &pdfs, options, jobs))
+        .zip(plan_pdfs(config, &pdfs, options, jobs, &ctx))
         .map(|(pdf, result)| match result {
             Ok(plan) => ScanPlanOutcome::Planned(Box::new(plan)),
             Err(error) => ScanPlanOutcome::Failed(ScanFailure {
@@ -338,8 +339,9 @@ pub(super) fn scan_library_json(
             ScanPlanOutcome::Failed(_) => None,
         })
         .collect::<Vec<_>>();
+    reserve_preview_ids(config, &mut plans_to_finalize, &ctx);
     if let Err(error) =
-        finalize_annotation_task_plans(config, &mut plans_to_finalize)
+        finalize_annotation_task_plans(config, &mut plans_to_finalize, &ctx)
     {
         return print_scan_error_envelope(
             config,
@@ -423,9 +425,10 @@ pub(super) fn scan_library_json(
             &error,
         );
     }
+    let mut run_state = RunWriteState::default();
     let mut write_outcomes = Vec::new();
     for plan in &plans {
-        match execute_pdf_sync(config, plan) {
+        match execute_pdf_sync(config, plan, &mut run_state) {
             Ok(report) => {
                 write_outcomes.push(ScanWriteOutcome::Written(report))
             }

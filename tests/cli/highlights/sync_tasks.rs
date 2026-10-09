@@ -20,6 +20,10 @@ fn highlights_ref_sync_renders_sidecar_highlights_and_notes() {
         "- status: wip\n- parent: obsidian\n- title: Systems Performance\n",
     );
     write_file(
+        &note,
+        "# Systems Performance\n\n- [/] #task #ref [[lib/books/systems-performance.pdf]] #hide ^ref\n\n## Highlights\n\n<!-- highlights:begin -->\n\n<!-- highlights:end -->\n",
+    );
+    write_file(
         &sidecar,
         "\
 # Systems Performance
@@ -416,6 +420,10 @@ fn highlights_ref_sync_creates_tasks_from_pdf_note_task_bullets() {
         &pdf,
         "- status: wip\n- parent: obsidian\n- title: Task Notes\n",
     );
+    seed_v1_ref_note(
+        &note,
+        "- [/] #task #ref [[lib/books/task-notes.pdf]] #hide ^ref",
+    );
     write_file(
         &sidecar,
         "\
@@ -671,6 +679,10 @@ fn highlights_ref_sync_skips_legacy_highlight_task_property() {
     write_highlights_pdf(
         &pdf,
         "- status: wip\n- parent: obsidian\n- title: Legacy Task\n",
+    );
+    seed_v1_ref_note(
+        &note,
+        "- [/] #task #ref [[lib/books/legacy-task.pdf]] #hide ^ref",
     );
     write_file(
         &sidecar,

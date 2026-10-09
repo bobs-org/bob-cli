@@ -10,6 +10,8 @@ fn highlights_ref_sync_creates_note_frontmatter_from_marker_pdf_note() {
     let vault = temp.path().join("vault");
     let pdf = vault.join("lib/systems-performance.pdf");
     let note = vault.join("ref/systems-performance.md");
+    let parent_note = vault.join("obsidian.md");
+    write_area_note(&parent_note, "Obsidian");
     write_highlights_pdf(
         &pdf,
         "- status: wip\n- parent: obsidian\n- title: Systems Performance\n- id: systems-performance\n- topics: [linux, performance]\n",
@@ -49,10 +51,24 @@ fn highlights_ref_sync_creates_note_frontmatter_from_marker_pdf_note() {
         "{contents}"
     );
     assert!(
-        contents.contains(
-            "- [/] #task #ref [[lib/systems-performance.pdf]] #hide ^ref\n"
-        ),
-        "{contents}"
+        contents.contains("![[obsidian#^ref-systems-performance]]\n"),
+        "v2 birth should render a managed embed:\n{contents}"
+    );
+    assert!(
+        !contents.contains("#hide ^ref"),
+        "v2 birth must not write an in-note tracker:\n{contents}"
+    );
+    let parent_contents =
+        fs::read_to_string(&parent_note).expect("read parent reading task");
+    assert!(
+        parent_contents.contains(
+            "- [/] #task #ref [[ref/systems-performance|Systems Performance]]"
+        ) && parent_contents.contains("^ref-systems-performance"),
+        "v2 birth should file the reading task in the residence:\n{parent_contents}"
+    );
+    assert!(
+        !parent_contents.contains("⚠️"),
+        "a resolvable parent needs no fallback warning:\n{parent_contents}"
     );
     assert!(
         !contents.contains("ref_type:"),
@@ -458,6 +474,8 @@ fn highlights_ref_sync_sets_created_timestamp_on_new_sidecar_free_note() {
     let vault = temp.path().join("vault");
     let pdf = vault.join("lib/systems-created.pdf");
     let note = vault.join("ref/systems-created.md");
+    let parent_note = vault.join("obsidian.md");
+    write_area_note(&parent_note, "Obsidian");
     write_highlights_pdf(
         &pdf,
         "- status: ready\n- parent: obsidian\n- title: Systems Created\n",
@@ -486,10 +504,16 @@ fn highlights_ref_sync_sets_created_timestamp_on_new_sidecar_free_note() {
         "{contents}"
     );
     assert!(
-        contents.contains(
-            "- [ ] #task #ref [[lib/systems-created.pdf]] #hide ^ref\n"
-        ),
-        "{contents}"
+        contents.contains("![[obsidian#^ref-systems-created]]\n"),
+        "v2 birth should render a managed embed:\n{contents}"
+    );
+    let parent_contents =
+        fs::read_to_string(&parent_note).expect("read parent reading task");
+    assert!(
+        parent_contents.contains(
+            "- [ ] #task #ref [[ref/systems-created|Systems Created]]"
+        ) && parent_contents.contains("^ref-systems-created"),
+        "v2 birth should file the ready reading task in the residence:\n{parent_contents}"
     );
     assert_eq!(
         sha256_file(&pdf),
@@ -676,6 +700,8 @@ fn highlights_ref_sync_stamps_completion_date_when_it_closes_ref_task() {
     let vault = temp.path().join("vault");
     let pdf = vault.join("lib/close-date.pdf");
     let note = vault.join("ref/close-date.md");
+    let parent_note = vault.join("obsidian.md");
+    write_area_note(&parent_note, "Obsidian");
     write_highlights_pdf(&pdf, "- status: read\n- parent: obsidian\n");
 
     // A dry run shows the close it is about to generate without writing.
@@ -697,7 +723,8 @@ fn highlights_ref_sync_stamps_completion_date_when_it_closes_ref_task() {
     );
     assert!(!note.exists(), "dry run must not create the note");
 
-    // A marker-driven close stamps the completion date before the ^ref token.
+    // A marker-driven close stamps the completion date on the birth reading
+    // task in the residence parent.
     let output = bob_command()
         .arg("highlights")
         .arg("sync")
@@ -709,11 +736,18 @@ fn highlights_ref_sync_stamps_completion_date_when_it_closes_ref_task() {
 
     assert_success(&output);
     let contents = fs::read_to_string(&note).expect("read closed ref note");
+    assert!(contents.contains("status: read\n"), "{contents}");
     assert!(
-        contents.contains(
-            "- [x] #task #ref [[lib/close-date.pdf]] #hide [completion:: 2026-10-06] ^ref\n"
+        contents.contains("![[obsidian#^ref-close-date]]\n"),
+        "closed birth should heal the managed embed:\n{contents}"
+    );
+    let parent_contents =
+        fs::read_to_string(&parent_note).expect("read parent reading task");
+    assert!(
+        parent_contents.contains(
+            "- [x] #task #ref [[ref/close-date|close date]] [created::2026-10-06] [completion:: 2026-10-06] ^ref-close-date\n"
         ),
-        "sync should stamp the completion date it closed:\n{contents}"
+        "sync should stamp the completion date it closed:\n{parent_contents}"
     );
 
     // The stamp lands exactly once: a repeat sync is a no-op.
@@ -733,19 +767,20 @@ fn highlights_ref_sync_stamps_completion_date_when_it_closes_ref_task() {
         "stamped close should settle:\n{}",
         format_output(&output)
     );
-    let settled = fs::read_to_string(&note).expect("read settled ref note");
+    let settled_parent =
+        fs::read_to_string(&parent_note).expect("read settled parent task");
     assert_eq!(
-        settled.matches("[completion::").count(),
+        settled_parent.matches("[completion::").count(),
         1,
-        "completion date must be stamped exactly once:\n{settled}"
+        "completion date must be stamped exactly once:\n{settled_parent}"
     );
 
     // A reopen keeps the date, and a user-made close never restamps it.
-    let reopened = settled.replace(
-        "- [x] #task #ref [[lib/close-date.pdf]] #hide [completion:: 2026-10-06] ^ref",
-        "- [ ] #task #ref [[lib/close-date.pdf]] #hide [completion:: 2026-10-06] ^ref",
+    let reopened = settled_parent.replace(
+        "- [x] #task #ref [[ref/close-date|close date]] [created::2026-10-06] [completion:: 2026-10-06] ^ref-close-date",
+        "- [ ] #task #ref [[ref/close-date|close date]] [created::2026-10-06] [completion:: 2026-10-06] ^ref-close-date",
     );
-    write_file(&note, &reopened);
+    write_file(&parent_note, &reopened);
     let output = bob_command()
         .arg("highlights")
         .arg("sync")
@@ -757,16 +792,17 @@ fn highlights_ref_sync_stamps_completion_date_when_it_closes_ref_task() {
         .expect("reopen sync");
 
     assert_success(&output);
-    let contents = fs::read_to_string(&note).expect("read reopened ref note");
+    let parent_contents =
+        fs::read_to_string(&parent_note).expect("read reopened parent task");
     assert!(
-        contents.contains(
-            "- [ ] #task #ref [[lib/close-date.pdf]] #hide [completion:: 2026-10-06] ^ref\n"
+        parent_contents.contains(
+            "- [ ] #task #ref [[ref/close-date|close date]] [created::2026-10-06] [completion:: 2026-10-06] ^ref-close-date\n"
         ),
-        "reopen must keep the stamped date:\n{contents}"
+        "reopen must keep the stamped date:\n{parent_contents}"
     );
 
-    let user_closed = contents.replace("- [ ] #task", "- [x] #task");
-    write_file(&note, &user_closed);
+    let user_closed = parent_contents.replace("- [ ] #task", "- [x] #task");
+    write_file(&parent_note, &user_closed);
     let output = bob_command()
         .arg("highlights")
         .arg("sync")
@@ -778,15 +814,15 @@ fn highlights_ref_sync_stamps_completion_date_when_it_closes_ref_task() {
         .expect("user close sync");
 
     assert_success(&output);
-    let contents =
-        fs::read_to_string(&note).expect("read user-closed ref note");
+    let parent_contents =
+        fs::read_to_string(&parent_note).expect("read user-closed parent");
     assert!(
-        contents.contains("[completion:: 2026-10-06] ^ref"),
-        "user-made close must keep the existing date:\n{contents}"
+        parent_contents.contains("[completion:: 2026-10-06] ^ref-close-date"),
+        "user-made close must keep the existing date:\n{parent_contents}"
     );
     assert!(
-        !contents.contains("2026-10-09"),
-        "user-made close must not restamp:\n{contents}"
+        !parent_contents.contains("2026-10-09"),
+        "user-made close must not restamp:\n{parent_contents}"
     );
 }
 
@@ -796,6 +832,8 @@ fn highlights_ref_sync_stamps_cancellation_date_when_it_cancels_ref_task() {
     let vault = temp.path().join("vault");
     let pdf = vault.join("lib/cancel-date.pdf");
     let note = vault.join("ref/cancel-date.md");
+    let parent_note = vault.join("obsidian.md");
+    write_area_note(&parent_note, "Obsidian");
     write_highlights_pdf(&pdf, "- status: abandoned\n- parent: obsidian\n");
 
     let output = bob_command()
@@ -809,11 +847,18 @@ fn highlights_ref_sync_stamps_cancellation_date_when_it_cancels_ref_task() {
 
     assert_success(&output);
     let contents = fs::read_to_string(&note).expect("read cancelled ref note");
+    assert!(contents.contains("status: abandoned\n"), "{contents}");
     assert!(
-        contents.contains(
-            "- [-] #task #ref [[lib/cancel-date.pdf]] #hide [cancelled:: 2026-10-06] ^ref\n"
+        contents.contains("![[obsidian#^ref-cancel-date]]\n"),
+        "cancelled birth should heal the managed embed:\n{contents}"
+    );
+    let parent_contents =
+        fs::read_to_string(&parent_note).expect("read parent reading task");
+    assert!(
+        parent_contents.contains(
+            "- [-] #task #ref [[ref/cancel-date|cancel date]] [created::2026-10-06] [cancelled:: 2026-10-06] ^ref-cancel-date\n"
         ),
-        "sync should stamp the cancellation date it set:\n{contents}"
+        "sync should stamp the cancellation date it set:\n{parent_contents}"
     );
 }
 

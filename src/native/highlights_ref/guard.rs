@@ -114,6 +114,16 @@ where
                 touched_paths.insert(write.path.clone());
             }
         }
+        // Insertion intentions rebase at execution, but a dirty destination
+        // still refuses: the guard runs before execution knows which lines
+        // are already present. (Reading-task destinations carry no veto.)
+        for intent in &plan.routed_intents {
+            if !intent.lines.is_empty()
+                && intent_write_planned(&intent.path, intent)
+            {
+                touched_paths.insert(intent.path.clone());
+            }
+        }
         for write in &plan.image_assets {
             touched_paths.insert(write.dest_path.clone());
         }
@@ -160,6 +170,18 @@ pub(super) fn note_write_planned(plan: &PdfSyncPlan) -> bool {
     plan.stable_note_action != "none" || plan.marker_write_needed
 }
 
+/// True when an insertion intention may still write: at least one planned
+/// line's identity is absent from the destination's current bytes.
+fn intent_write_planned(path: &Path, intent: &RoutedInsertionIntent) -> bool {
+    let Ok(contents) = fs::read_to_string(path) else {
+        return true;
+    };
+    intent.candidates.iter().any(|candidate| {
+        !contents.contains(candidate.processed_id.as_str())
+            && !contents.contains(candidate.identity.as_str())
+    })
+}
+
 pub(super) fn dirty_entry_allowed_for_plans(
     config: &Config,
     plans: &[&PdfSyncPlan],
@@ -175,6 +197,31 @@ pub(super) fn dirty_entry_allowed_for_plans(
     };
     if !note_write_planned(plan) {
         return Ok(false);
+    }
+    // V2 ref notes additionally allow tracked modifications confined to the
+    // managed embed (including deletion, insertion, and repointing) plus
+    // permitted frontmatter edits; a residence-only frontmatter change is
+    // allowed even though `parent` is excluded from the sync contribution.
+    // Unrelated body edits still refuse, and the v1 guard below is untouched.
+    if plan
+        .reading_task_plan
+        .as_ref()
+        .is_some_and(|reading| reading.branch == NoteBranch::V2)
+    {
+        if !note_contents_match_plan(&path, plan.note.contents().as_deref())? {
+            return Ok(false);
+        }
+        let Some(head_contents) = git_head_contents(config, &path)? else {
+            return Ok(false);
+        };
+        let current_contents = fs::read_to_string(&path).map_err(|error| {
+            CommandError::new(format!("read note {}: {error}", path.display()))
+        })?;
+        return Ok(v2_dirty_note_allowed(
+            &head_contents,
+            &current_contents,
+            plan.decision.frontmatter_contributed,
+        ));
     }
     if path.strip_prefix(&config.ref_dir).is_err() {
         return Ok(false);

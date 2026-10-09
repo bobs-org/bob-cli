@@ -420,6 +420,31 @@ pub(crate) fn write_file(path: &Path, contents: &str) {
         .unwrap_or_else(|error| panic!("write {}: {error}", path.display()));
 }
 
+/// Seed a minimal legacy (v1) reference note so the first sync updates it
+/// instead of taking the v2 birth path: new births file a reading task in
+/// the parent note and render a managed embed, while an in-note `^ref`
+/// tracker keeps the legacy behavior these fixtures assert. `task_line` is
+/// the exact generated line a v1 birth would have rendered (mark matching
+/// the marker status, e.g. `- [/] #task #ref [[lib/example.pdf]] #hide
+/// ^ref` for `wip`).
+pub(crate) fn seed_v1_ref_note(note: &Path, task_line: &str) {
+    write_file(
+        note,
+        &format!(
+            "{task_line}\n\n## Highlights\n\n<!-- highlights:begin -->\n\n<!-- highlights:end -->\n"
+        ),
+    );
+}
+
+/// Seed a minimal area note so a marker `parent` hint resolves to a real
+/// residence instead of the `mac_inbox` fallback.
+pub(crate) fn write_area_note(note: &Path, title: &str) {
+    write_file(
+        note,
+        &format!("---\ntype: \"[[area]]\"\n---\n\n# {title}\n"),
+    );
+}
+
 pub(crate) fn blocked_tasks_settings_json(extra_custom_status: &str) -> String {
     format!(
         concat!(

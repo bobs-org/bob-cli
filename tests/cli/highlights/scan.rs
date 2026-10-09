@@ -566,6 +566,14 @@ fn highlights_ref_scan_default_output_is_concise() {
         &settled_pdf,
         "- status: wip\n- parent: obsidian\n- title: Settled\n",
     );
+    seed_v1_ref_note(
+        &update_note,
+        "- [/] #task #ref [[lib/books/update-me.pdf]] #hide ^ref",
+    );
+    seed_v1_ref_note(
+        &settled_note,
+        "- [/] #task #ref [[lib/books/settled.pdf]] #hide ^ref",
+    );
 
     assert_success(
         &bob_command()
@@ -636,7 +644,7 @@ fn highlights_ref_scan_default_output_is_concise() {
     );
     assert!(
         dry_run.contains(
-            "3 pdfs - 1 created - 1 updated - 1 unchanged - 1 marker - 1 task - writes: none"
+            "3 pdfs - 1 created - 1 updated - 1 unchanged - 2 markers - 1 task - writes: none"
         ),
         "expected concise dry-run summary:\n{dry_run}"
     );
@@ -672,7 +680,7 @@ fn highlights_ref_scan_default_output_is_concise() {
     );
     assert!(
         written.contains(
-            "3 pdfs - 1 created - 1 updated - 1 unchanged - 1 marker - 1 task - writes: note,pdf"
+            "3 pdfs - 1 created - 1 updated - 1 unchanged - 2 markers - 1 task - writes: note,pdf"
         ),
         "expected concise write summary:\n{written}"
     );
@@ -1212,6 +1220,8 @@ fn highlights_ref_scan_intakes_pdf_and_mp3_and_embeds_player() {
     let destination_pdf = vault.join("lib/chat/listen.pdf");
     let destination_audio = vault.join("lib/chat/listen.mp3");
     let note = vault.join("ref/chat/listen.md");
+    let parent_note = vault.join("obsidian.md");
+    write_area_note(&parent_note, "Obsidian");
     write_highlights_pdf(
         &source_pdf,
         "- status: wip\n- parent: obsidian\n- title: Listen PDF\n",
@@ -1264,9 +1274,17 @@ fn highlights_ref_scan_intakes_pdf_and_mp3_and_embeds_player() {
     assert_note_has_audio_player(&contents, "lib/chat/listen.mp3");
     assert!(
         contents.contains(
-            "- [/] #task #ref [[lib/chat/listen.pdf]] #hide ^ref\n\n![[lib/chat/listen.mp3]]\n\n## Highlights\n"
+            "![[obsidian#^ref-listen]]\n\n![[lib/chat/listen.mp3]]\n\n## Highlights\n"
         ),
-        "{contents}"
+        "v2 birth should anchor audio after the managed embed:\n{contents}"
+    );
+    let parent_contents =
+        fs::read_to_string(&parent_note).expect("read parent reading task");
+    assert!(
+        parent_contents.contains(
+            "- [/] #task #ref [[ref/chat/listen|Listen PDF]]"
+        ) && parent_contents.contains("^ref-listen"),
+        "v2 birth should file the reading task in the residence:\n{parent_contents}"
     );
 
     let repeat = bob_command()

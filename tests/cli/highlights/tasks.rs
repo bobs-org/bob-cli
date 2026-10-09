@@ -10,6 +10,7 @@ fn highlights_ref_task_cancelled_dry_run_requires_and_writes_pdf_marker() {
     let pdf = vault.join("lib/example.pdf");
     let note = vault.join("ref/example.md");
     write_highlights_pdf(&pdf, "- status: wip\n- parent: obsidian\n");
+    seed_v1_ref_note(&note, "- [/] #task #ref [[lib/example.pdf]] #hide ^ref");
     assert_success(
         &bob_command()
             .arg("highlights")
@@ -181,6 +182,7 @@ fn highlights_ref_task_cancelled_scan_write_pdfs_writes_pdf_marker() {
     let pdf = vault.join("lib/example.pdf");
     let note = vault.join("ref/example.md");
     write_highlights_pdf(&pdf, "- status: wip\n- parent: obsidian\n");
+    seed_v1_ref_note(&note, "- [/] #task #ref [[lib/example.pdf]] #hide ^ref");
     assert_success(
         &bob_command()
             .arg("highlights")
@@ -237,6 +239,7 @@ fn highlights_ref_task_checked_dry_run_requires_and_writes_pdf_marker() {
     let pdf = vault.join("lib/example.pdf");
     let note = vault.join("ref/example.md");
     write_highlights_pdf(&pdf, "- status: wip\n- parent: obsidian\n");
+    seed_v1_ref_note(&note, "- [/] #task #ref [[lib/example.pdf]] #hide ^ref");
     assert_success(
         &bob_command()
             .arg("highlights")
@@ -450,6 +453,10 @@ fn highlights_ref_task_ready_scan_reopens_read_ref_to_ready() {
     // Start from an already-read ref: the marker, note frontmatter, and the
     // generated ^ref task all reflect the terminal state.
     write_highlights_pdf(&pdf, "- status: read\n- parent: obsidian\n");
+    seed_v1_ref_note(
+        &note,
+        "- [x] #task #ref [[lib/example.pdf]] #hide [completion:: 2026-10-03] ^ref",
+    );
     assert_success(
         &bob_command()
             .arg("highlights")
@@ -593,6 +600,10 @@ fn highlights_ref_task_checked_sync_creates_annotation_tasks_before_closing() {
     write_highlights_pdf(
         &pdf,
         "- status: wip\n- parent: obsidian\n- title: Closing Order\n",
+    );
+    seed_v1_ref_note(
+        &note,
+        "- [/] #task #ref [[lib/books/closing-order.pdf]] #hide ^ref",
     );
     assert_success(
         &bob_command()
@@ -752,6 +763,10 @@ fn highlights_ref_task_checked_scan_creates_annotation_tasks_before_closing() {
         &pdf,
         "- status: wip\n- parent: obsidian\n- title: Scan Closing\n",
     );
+    seed_v1_ref_note(
+        &note,
+        "- [/] #task #ref [[lib/books/scan-closing.pdf]] #hide ^ref",
+    );
     assert_success(
         &bob_command()
             .arg("highlights")
@@ -859,6 +874,7 @@ fn highlights_ref_task_checked_dirty_tracked_note_is_allowed() {
     let pdf = vault.join("lib/example.pdf");
     let note = vault.join("ref/example.md");
     write_highlights_pdf(&pdf, "- status: wip\n- parent: obsidian\n");
+    seed_v1_ref_note(&note, "- [/] #task #ref [[lib/example.pdf]] #hide ^ref");
     assert_success(
         &bob_command()
             .arg("highlights")
@@ -908,6 +924,10 @@ fn highlights_ref_task_checked_competing_status_edits_fail() {
         let pdf = vault.join("lib/example.pdf");
         let note = vault.join("ref/example.md");
         write_highlights_pdf(&pdf, "- status: wip\n- parent: obsidian\n");
+        seed_v1_ref_note(
+            &note,
+            "- [/] #task #ref [[lib/example.pdf]] #hide ^ref",
+        );
         assert_success(
             &bob_command()
                 .arg("highlights")
@@ -975,6 +995,10 @@ fn highlights_ref_task_cancelled_competing_status_edits_fail() {
         let pdf = vault.join("lib/example.pdf");
         let note = vault.join("ref/example.md");
         write_highlights_pdf(&pdf, "- status: wip\n- parent: obsidian\n");
+        seed_v1_ref_note(
+            &note,
+            "- [/] #task #ref [[lib/example.pdf]] #hide ^ref",
+        );
         assert_success(
             &bob_command()
                 .arg("highlights")
@@ -1042,6 +1066,10 @@ fn highlights_ref_status_abandoned_rewrites_generated_task_to_cancelled() {
         let pdf = vault.join("lib/example.pdf");
         let note = vault.join("ref/example.md");
         write_highlights_pdf(&pdf, "- status: wip\n- parent: obsidian\n");
+        seed_v1_ref_note(
+            &note,
+            "- [/] #task #ref [[lib/example.pdf]] #hide ^ref",
+        );
         assert_success(
             &bob_command()
                 .arg("highlights")
@@ -1100,6 +1128,7 @@ fn highlights_ref_blocked_task_syncs_as_status_neutral_overlay() {
     let pdf = vault.join("lib/example.pdf");
     let note = vault.join("ref/example.md");
     write_highlights_pdf(&pdf, "- status: next\n- parent: obsidian\n");
+    seed_v1_ref_note(&note, "- [*] #task #ref [[lib/example.pdf]] #hide ^ref");
     assert_success(
         &bob_command()
             .arg("highlights")

@@ -479,6 +479,7 @@ fn highlights_ref_marker_edit_updates_frontmatter() {
     let pdf = vault.join("lib/example.pdf");
     let note = vault.join("ref/example.md");
     write_highlights_pdf(&pdf, "- status: wip\n- parent: obsidian\n");
+    seed_v1_ref_note(&note, "- [/] #task #ref [[lib/example.pdf]] #hide ^ref");
     assert_success(
         &bob_command()
             .arg("highlights")
@@ -521,6 +522,7 @@ fn highlights_ref_frontmatter_edit_updates_marker_when_pdf_writes_enabled() {
         &pdf,
         "- status: wip\n- parent: obsidian\n- title: The Log is the Agent\n",
     );
+    seed_v1_ref_note(&note, "- [/] #task #ref [[lib/example.pdf]] #hide ^ref");
     assert_success(
         &bob_command()
             .arg("highlights")
@@ -632,6 +634,7 @@ fn highlights_ref_deprecated_done_status_migrates_to_read_with_pdf_write() {
     let pdf = vault.join("lib/example.pdf");
     let note = vault.join("ref/example.md");
     write_highlights_pdf(&pdf, "- status: wip\n- parent: obsidian\n");
+    seed_v1_ref_note(&note, "- [/] #task #ref [[lib/example.pdf]] #hide ^ref");
     assert_success(
         &bob_command()
             .arg("highlights")
@@ -806,6 +809,7 @@ fn highlights_ref_non_overlapping_edits_auto_merge_and_settle() {
     let pdf = vault.join("lib/example.pdf");
     let note = vault.join("ref/example.md");
     write_highlights_pdf(&pdf, "- status: wip\n- parent: obsidian\n");
+    seed_v1_ref_note(&note, "- [/] #task #ref [[lib/example.pdf]] #hide ^ref");
     assert_success(
         &bob_command()
             .arg("highlights")
@@ -899,6 +903,7 @@ fn highlights_ref_frontmatter_missing_parent_fails_before_pdf_writeback() {
     let pdf = vault.join("lib/example.pdf");
     let note = vault.join("ref/example.md");
     write_highlights_pdf(&pdf, "- status: wip\n- parent: obsidian\n");
+    seed_v1_ref_note(&note, "- [/] #task #ref [[lib/example.pdf]] #hide ^ref");
     assert_success(
         &bob_command()
             .arg("highlights")
@@ -944,6 +949,7 @@ fn highlights_ref_frontmatter_unsupported_status_fails_before_pdf_writeback() {
     let pdf = vault.join("lib/example.pdf");
     let note = vault.join("ref/example.md");
     write_highlights_pdf(&pdf, "- status: wip\n- parent: obsidian\n");
+    seed_v1_ref_note(&note, "- [/] #task #ref [[lib/example.pdf]] #hide ^ref");
     assert_success(
         &bob_command()
             .arg("highlights")
