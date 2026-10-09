@@ -220,6 +220,51 @@ after, and with higher specificity than, the shared host rules. The
 description's leading space remains, giving a uniform gap on every
 row (accepted).
 
+## Reference reading tasks
+
+A task line whose exact `#task` tag is immediately followed by one
+whitespace run and `#ref` (any case, so `#REF` and `#Ref` pair) is a
+reference reading task: the pair renders as **one** open-book glyph in
+the slot, in the same teal identity ink the hash uses. Shape says the
+kind; ink still says "tracked task".
+
+```text
+before: - [ ] #task #ref Harness Engineering
+after:  - [ ] 📖 Harness Engineering               (📖 ≈ the teal open-book glyph)
+```
+
+One identity slot: `#ref` anywhere else (prose, headings, code,
+non-task lines, `#ref #task` order, `#task #references`) never renders
+the book. `#task #references` keeps the hash on `#task`; `#ref #task`
+keeps the hash on `#task`; a lone `#ref` gets no mark.
+
+The glyph is a 16×16 stroked open-book mask in the hash's stroke
+language (`stroke-width` 1.8, round caps and joins), defined once as
+`--bob-ref-task-glyph` beside `--bob-task-tag-glyph`. Closed reading
+tasks rest at the same 40 % mix toward `--text-faint` as closed hashes.
+`🔖` already means "jump to this highlight" on annotation follow-ups,
+which share the same `## Tasks` lists, so the book keeps one symbol for
+reading tasks. One symbol, one meaning.
+
+Behavior matches the hash: the cursor or a click reveals both raw tags
+(one touch anywhere on the pair exposes both, since the decoration
+covers the whole span); the session toggle, keyboard access, and PDF
+export behave as for `#task`. Hovering the book shows
+`#task #ref · reference reading task`; its accessible label is
+"Reference reading task".
+
+Reading view turns the `#task` anchor into the book and hides the
+adjacent `#ref` anchor in place (it stays in the DOM for copy and
+Dataview's `innerHTML` round trip). In Tasks query results, where
+`#task` already hides, the `#ref` pill renders as the book (CSS-only,
+like the `#task` rule).
+
+Pickers never show the pair: display text drops the `#ref` that follows
+`#task` (as it drops `#task`) and reads `📖 Harness Engineering` — in
+the task pickers, the Task Card header, and inbox-route subtitles. The
+stored line keeps both tags, so Tasks, Dataview, `bob query`, and grep
+keep working.
+
 ## Toggle and lifecycle
 
 The command "Toggle task tag marks" (id `toggle-task-tag-marks`) is
@@ -276,7 +321,8 @@ malformed canonical form).
 ## Conformance vectors
 
 Live Preview core: `taskTagMarkRanges(lineText)` returns
-`[{ from, to }]` in UTF-16 line offsets.
+`[{ from, to, kind }]` in UTF-16 line offsets, where `kind` is `"task"`
+or `"ref"` (a `ref` range spans the whole `#task #ref` pair).
 
 | #    | Input                                                      | Expected                                                                             |
 | ---- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------ |
@@ -299,6 +345,15 @@ Live Preview core: `taskTagMarkRanges(lineText)` returns
 | TT17 | `Paragraph #task text`                                     | none                                                                                 |
 | TT18 | `- [ ] #task`                                              | `[6,11)` (the tag ends the line)                                                     |
 | TT19 | `- [ ] (#task) parens`                                     | none (conservative boundary)                                                         |
+| TT20 | `- [ ] #task #ref Harness Engineering`                    | `[{[6,16), ref}]` (one range covering both tokens)                                   |
+| TT21 | `- [x] #task #ref Done book [completion:: 2026-10-05]`     | `[{[6,16), ref}]` (resting tone is CSS)                                              |
+| TT22 | `- [ ] #task #REF Loud`                                    | `[{[6,16), ref}]` (case-insensitive partner)                                         |
+| TT23 | `- [ ] #task   #ref Extra spaces`                          | `[{[6,18), ref}]` (extra whitespace still pairs)                                     |
+| TT24 | `- [ ] #task #references Not a ref`                        | `[{[6,11), task}]` (hash only)                                                       |
+| TT25 | `- [ ] #ref #task Reversed`                                | `[{[11,16), task}]` (hash only on `#task`)                                           |
+| TT26 | `- [ ] #ref Alone`                                         | none (`#ref` alone)                                                                  |
+| TT27 | `- #task #ref Not a task`                                  | none (not a task line)                                                               |
+| TT28 | ``- [ ] Note `the #task #ref pair` here``                  | none in Live Preview: the core returns `[{[16,26), ref}]`, and the inline-code check drops it |
 
 Rendered views (fake DOM in tests):
 
@@ -313,6 +368,10 @@ Rendered views (fake DOM in tests):
 | TR7 | detached root, no `li` ancestor                             | not annotated                                                                       |
 | TR8 | a second pass over TR1                                      | no change (idempotent)                                                              |
 | TR9 | marks off / toggle off / toggle on                          | nothing annotated / annotations stripped document-wide / eligible tags re-annotated |
+| TR10 | task li with `#task` + adjacent `#ref` anchors              | `#task` annotated with the book (reference label and tooltip); `#ref` hidden in place |
+| TR11 | `#task` + `#references` anchors, or `#ref` before `#task`   | hash only on `#task`                                                                 |
+| TR12 | `#ref` anchor inside `.plugin-tasks-list-item .task-description` | not annotated (Tasks rows are CSS-only: the `#ref` pill renders the book)         |
+| TR13 | pair present / toggle off / toggle on                        | book plus hidden `#ref` / book stripped and `#ref` revealed document-wide / pair re-annotated |
 
 ## Live verification (Bryan, in Obsidian)
 
