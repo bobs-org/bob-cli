@@ -194,15 +194,24 @@ pub(crate) fn allocate_ref_block_id(
     stem: &str,
     is_taken: &dyn Fn(&str) -> bool,
 ) -> String {
-    let base = format!("ref-{}", slug_ref_stem(stem));
-    if !is_taken(&base) {
-        return base;
+    allocate_unique_block_id(&format!("ref-{}", slug_ref_stem(stem)), is_taken)
+}
+
+/// Allocate a unique block ID from an explicit `base` ID: the base itself
+/// when free, else `base-2`, `base-3`, … while preserving the 44-character
+/// bound. Shared by fresh allocation and reopen's preferred-ID fallback.
+pub(crate) fn allocate_unique_block_id(
+    base: &str,
+    is_taken: &dyn Fn(&str) -> bool,
+) -> String {
+    if !is_taken(base) {
+        return base.to_string();
     }
     let mut n = 2u32;
     loop {
         let suffix = format!("-{n}");
         let max_base = REF_BLOCK_ID_MAX_LEN.saturating_sub(suffix.len());
-        let mut trimmed = base.as_str();
+        let mut trimmed = base;
         if trimmed.len() > max_base {
             let cut = &trimmed[..max_base];
             trimmed = cut.rfind('-').map(|p| &cut[..p]).unwrap_or(cut);

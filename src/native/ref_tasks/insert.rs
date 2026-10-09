@@ -48,6 +48,30 @@ pub(crate) fn insert_ref_task(
     line: &str,
     children: &[String],
 ) -> Result<InsertedRefTask, String> {
+    insert_ref_task_with_preferred_id(
+        bob_dir,
+        destination,
+        line,
+        children,
+        None,
+    )
+}
+
+/// Insert one reading task, reusing `prefer_block_id` when it is free.
+///
+/// The executor passes a reopen's old (possibly user-renamed) address here:
+/// it is kept verbatim only when absent from the fresh destination bytes
+/// and its `done_tasks` archive; otherwise the old ID is suffixed
+/// (`<old>-2`, …) under the same collision rules. `None` always allocates
+/// from the ref stem. The archive is never modified, including when an old
+/// ID must be suffixed in the live note.
+pub(crate) fn insert_ref_task_with_preferred_id(
+    bob_dir: &Path,
+    destination: &Path,
+    line: &str,
+    children: &[String],
+    prefer_block_id: Option<&str>,
+) -> Result<InsertedRefTask, String> {
     let stem = destination
         .file_stem()
         .and_then(|s| s.to_str())
@@ -76,15 +100,23 @@ pub(crate) fn insert_ref_task(
         // Distinguish real read errors from a missing file: a missing file
         // yields empty contents above; other errors already returned.
         let existed = destination.exists();
+        // Archive read failures other than not-found propagate: a
+        // collision hidden by an unreadable archive must not mint a
+        // duplicate ID.
         let archive_contents =
-            archive_contents_for(bob_dir, destination, &dest_contents);
+            archive_contents_for(bob_dir, destination, &dest_contents)?;
         let mut taken: BTreeSet<String> =
             block_ids_in_markdown(&dest_contents).into_iter().collect();
         if let Some(archive) = archive_contents.as_deref() {
             taken.extend(block_ids_in_markdown(archive));
         }
-        let block_id =
-            allocate_ref_block_id(preview_stem, &|id| taken.contains(id));
+        let is_taken = |id: &str| taken.contains(id);
+        let block_id = match prefer_block_id {
+            Some(preferred) if !preferred.is_empty() => {
+                super::line::allocate_unique_block_id(preferred, &is_taken)
+            }
+            _ => allocate_ref_block_id(preview_stem, &is_taken),
+        };
         let task_line = with_final_block_id(line, &block_id);
         let full_block = if children.is_empty() {
             task_line.clone()
@@ -174,13 +206,22 @@ fn archive_contents_for(
     bob_dir: &Path,
     destination: &Path,
     dest_contents: &str,
-) -> Option<String> {
-    let archive_rel = archive_rel_for_destination(destination, dest_contents)?;
+) -> Result<Option<String>, String> {
+    let Some(archive_rel) =
+        archive_rel_for_destination(bob_dir, destination, dest_contents)
+    else {
+        return Ok(None);
+    };
     let archive_path = bob_dir.join(&archive_rel);
-    fs::read_to_string(&archive_path).ok()
+    match fs::read_to_string(&archive_path) {
+        Ok(contents) => Ok(Some(contents)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!("read {}: {error}", archive_path.display())),
+    }
 }
 
 fn archive_rel_for_destination(
+    bob_dir: &Path,
     destination: &Path,
     dest_contents: &str,
 ) -> Option<String> {
@@ -200,8 +241,12 @@ fn archive_rel_for_destination(
             }
         }
     }
-    // Default `done/<stem>_done.md` for root notes.
-    if destination.components().count() <= 2 {
+    // Default `done/<stem>_done.md` for vault-root notes. The destination is
+    // absolute, so compare vault-relative components: an absolute vault-root
+    // note (`/vault/sase.md`) has three absolute components but exactly one
+    // relative one, and the old absolute count missed its archive.
+    let relative = destination.strip_prefix(bob_dir).unwrap_or(destination);
+    if relative.components().count() == 1 {
         if let Some(stem) = destination.file_stem().and_then(|s| s.to_str()) {
             return Some(format!("done/{stem}_done.md"));
         }
@@ -225,6 +270,103 @@ mod tests {
         assert_eq!(out.placement, Placement::Created);
         let contents = fs::read_to_string(&dest).expect("read");
         assert!(contents.contains("^ref-x"), "{contents}");
+    }
+
+    #[test]
+    fn preferred_id_reused_when_free() {
+        let temp = tempfile::tempdir().expect("temp vault");
+        let bob = temp.path();
+        let dest = bob.join("sase.md");
+        fs::write(&dest, "# Sase\n").expect("write");
+        let line =
+            "- [ ] #task #ref [[ref/papers/x|X]] [created::2026-10-09] ^ref-preview";
+        let out = insert_ref_task_with_preferred_id(
+            bob,
+            &dest,
+            line,
+            &[],
+            Some("ref-my-paper"),
+        )
+        .expect("insert");
+        assert_eq!(out.block_id, "ref-my-paper");
+        let contents = fs::read_to_string(&dest).expect("read");
+        assert!(contents.contains("^ref-my-paper"), "{contents}");
+        assert!(!contents.contains("^ref-preview"), "{contents}");
+    }
+
+    #[test]
+    fn preferred_id_suffixed_when_destination_taken() {
+        let temp = tempfile::tempdir().expect("temp vault");
+        let bob = temp.path();
+        let dest = bob.join("sase.md");
+        fs::write(
+            &dest,
+            "# Sase\n\n- [ ] #task #ref [[ref/papers/a|A]] [created::2026-10-09] ^ref-my-paper\n",
+        )
+        .expect("write");
+        let line =
+            "- [ ] #task #ref [[ref/papers/x|X]] [created::2026-10-09] ^ref-preview";
+        let out = insert_ref_task_with_preferred_id(
+            bob,
+            &dest,
+            line,
+            &[],
+            Some("ref-my-paper"),
+        )
+        .expect("insert");
+        // A taken old ID is suffixed in the live note; the archived bytes
+        // that forced the suffix stay untouched.
+        assert_eq!(out.block_id, "ref-my-paper-2");
+    }
+
+    #[test]
+    fn archive_collision_blocks_preferred_id() {
+        let temp = tempfile::tempdir().expect("temp vault");
+        let bob = temp.path();
+        let dest = bob.join("sase.md");
+        fs::write(&dest, "# Sase\n").expect("write");
+        fs::create_dir_all(bob.join("done")).expect("done dir");
+        fs::write(
+            bob.join("done/sase_done.md"),
+            "# Done\n\n- [x] #task #ref [[ref/papers/x|X]] [created::2026-10-01] [completion:: 2026-10-02] ^ref-my-paper\n",
+        )
+        .expect("write archive");
+        let line =
+            "- [ ] #task #ref [[ref/papers/x|X]] [created::2026-10-09] ^ref-preview";
+        // The default `done/<stem>_done.md` archive must be consulted for
+        // absolute vault-root destinations: the preferred ID is taken there.
+        let out = insert_ref_task_with_preferred_id(
+            bob,
+            &dest,
+            line,
+            &[],
+            Some("ref-my-paper"),
+        )
+        .expect("insert");
+        assert_ne!(out.block_id, "ref-my-paper");
+        let archive = fs::read_to_string(bob.join("done/sase_done.md"))
+            .expect("read archive");
+        assert!(
+            !archive.contains(&out.block_id),
+            "archive must stay untouched: {archive}"
+        );
+    }
+
+    #[test]
+    fn archive_read_errors_propagate() {
+        let temp = tempfile::tempdir().expect("temp vault");
+        let bob = temp.path();
+        let dest = bob.join("sase.md");
+        fs::write(&dest, "# Sase\n").expect("write");
+        // A directory where the archive file should be: reading it fails
+        // with an error other than not-found, which must propagate rather
+        // than silently mint a possibly-duplicate ID.
+        fs::create_dir_all(bob.join("done/sase_done.md")).expect("dir");
+        let line =
+            "- [ ] #task #ref [[ref/papers/x|X]] [created::2026-10-09] ^ref-x";
+        let error = insert_ref_task(bob, &dest, line, &[])
+            .expect_err("archive read error must propagate");
+        assert!(error.contains("sase_done.md"), "{error}");
     }
 
     #[test]

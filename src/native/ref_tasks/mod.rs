@@ -6,6 +6,7 @@
 //! `migrate-tasks`) reuse this API; nothing here writes the vault.
 
 mod dates;
+mod edit;
 mod embed;
 pub(crate) mod insert;
 mod line;
@@ -17,12 +18,19 @@ mod walk;
 mod tests;
 
 pub(crate) use dates::close_date;
+pub(crate) use edit::{
+    edit_reading_task_checkbox, locate_original_line, EditedReadingTask,
+    READING_TASK_CHANGED,
+};
 pub(crate) use embed::{find_managed_embed, ManagedEmbed};
-pub(crate) use insert::{insert_ref_task, InsertedRefTask};
+pub(crate) use insert::{
+    insert_ref_task, insert_ref_task_with_preferred_id, InsertedRefTask,
+};
 pub(crate) use line::{
-    allocate_ref_block_id, managed_embed_line, render_ref_task_line,
-    sanitize_title_alias, slug_ref_stem, stamp_close_date_any_id,
-    strip_blockquote_prefix, OrphanRefTask, RefFollowUp, REF_BLOCK_ID_MAX_LEN,
+    allocate_ref_block_id, allocate_unique_block_id, managed_embed_line,
+    render_ref_task_line, sanitize_title_alias, slug_ref_stem,
+    stamp_close_date_any_id, strip_blockquote_prefix, task_mark, OrphanRefTask,
+    RefFollowUp, REF_BLOCK_ID_MAX_LEN,
 };
 pub(crate) use select::{
     select_for_ref, RefTaskDiagnostic, RefTaskSelection, Selected,

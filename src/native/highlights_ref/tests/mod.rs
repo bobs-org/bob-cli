@@ -59,6 +59,7 @@ fn write_test_file(path: &Path, contents: &str) {
 mod audio;
 mod marker;
 mod projection;
+mod reading_execute;
 mod reading_plan;
 mod region;
 mod seams;
