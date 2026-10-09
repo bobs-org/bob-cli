@@ -50,6 +50,8 @@ fn run(
             .map(|(path, contents)| (PathBuf::from(path), contents.to_string()))
             .collect(),
         pre_day: pre_day.map(str::to_string),
+        post_day: None,
+        closing: None,
         day_relative: PathBuf::from(day_relative),
         today: today(),
         tasks_settings: &settings,

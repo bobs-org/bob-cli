@@ -353,11 +353,16 @@ impl PomodoroBlockTracker {
         }
     }
 
-    /// Re-extract every tracked block from the final staged day text and
-    /// diff it against its pre-batch bytes.
-    pub(super) fn finish(
+    /// Re-extract every tracked block from the final staged day text,
+    /// diff it against its pre-batch bytes, and mark added lines that
+    /// equal a surviving successor bullet with `reason: "unblocked"`
+    /// (`docs/task-dependencies.md` §12.5). The caller passes only
+    /// surviving links (net of the batch post-pass), so dropped
+    /// successors lose their marker here.
+    pub(super) fn finish_with_unblocked(
         self,
         final_contents: Option<&str>,
+        successor_links: &std::collections::BTreeSet<String>,
     ) -> Vec<PomodoroBlockJson> {
         let Some(final_contents) = final_contents else {
             return Vec::new();
@@ -410,7 +415,7 @@ impl PomodoroBlockTracker {
                     PomodoroBlockStatus::Queued
                 }
             };
-            let lines = if tracked.force_unchanged {
+            let mut lines = if tracked.force_unchanged {
                 final_block
                     .iter()
                     .zip(final_depths.iter().copied())
@@ -419,6 +424,7 @@ impl PomodoroBlockTracker {
                         depth,
                         change: PomodoroBlockChange::Unchanged,
                         before: None,
+                        reason: None,
                     })
                     .collect()
             } else {
@@ -430,6 +436,16 @@ impl PomodoroBlockTracker {
                     tracked.created,
                 )
             };
+            for line in lines.iter_mut() {
+                if line.change == PomodoroBlockChange::Added
+                    && line.reason.is_none()
+                    && successor_links.iter().any(|link| {
+                        line.text.trim_start() == format!("- {link}").as_str()
+                    })
+                {
+                    line.reason = Some("unblocked");
+                }
+            }
             blocks.push(PomodoroBlockJson {
                 relative_target: self.relative_target.clone(),
                 line: tracked.current + 1,
@@ -1000,7 +1016,10 @@ mod tests {
         for (pre, post, refs) in items {
             tracker.track_item(Some(pre), Some(post), refs.clone());
         }
-        tracker.finish(Some(final_contents))
+        tracker.finish_with_unblocked(
+            Some(final_contents),
+            &std::collections::BTreeSet::new(),
+        )
     }
 
     const LEDGER: &str = "## Pomodoros\n\

@@ -14,7 +14,8 @@ pub(crate) use retirement::{
     retire_completed_links, LedgerRetirement, LinkStatus,
 };
 pub(crate) use successors::{
-    plan_successors, CompletedTask, SuccessorInput, SuccessorPlan,
+    live_link_keys, plan_successors, ClosingContext, ClosingContinuation,
+    CompletedTask, SuccessorInput, SuccessorPlan,
 };
 pub(crate) use tree::{
     complete_embedded_trees, complete_task_tree, CompleteTreeOutcome,

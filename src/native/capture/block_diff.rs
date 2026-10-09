@@ -16,6 +16,12 @@ pub(super) struct BlockLineJson {
     pub(super) change: BlockLineChange,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) before: Option<String>,
+    /// Successor-link marker (`docs/task-dependencies.md` §12.5):
+    /// `"unblocked"` on added lines that equal a surviving successor
+    /// bullet. Always `None` on task blocks and on non-successor lines,
+    /// so unrelated output stays byte-identical.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) reason: Option<&'static str>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -133,6 +139,7 @@ pub(super) fn pair_lines(
                 depth,
                 change: BlockLineChange::Added,
                 before: None,
+                reason: None,
             })
             .collect();
     }
@@ -156,6 +163,7 @@ pub(super) fn pair_lines(
                 depth: *new_depth,
                 change: BlockLineChange::Changed,
                 before: Some(old_text.clone()),
+                reason: None,
             });
         }
         for (old_text, old_depth) in pending_old.drain(..).skip(shared) {
@@ -164,6 +172,7 @@ pub(super) fn pair_lines(
                 depth: old_depth,
                 change: BlockLineChange::Removed,
                 before: None,
+                reason: None,
             });
         }
         for (new_text, new_depth) in pending_new.drain(..).skip(shared) {
@@ -172,6 +181,7 @@ pub(super) fn pair_lines(
                 depth: new_depth,
                 change: BlockLineChange::Added,
                 before: None,
+                reason: None,
             });
         }
     };
@@ -185,6 +195,7 @@ pub(super) fn pair_lines(
                         depth: final_depths[new_index + offset],
                         change: BlockLineChange::Unchanged,
                         before: None,
+                        reason: None,
                     });
                 }
             }
@@ -222,6 +233,7 @@ pub(super) fn pair_lines(
                         depth: final_depths[new_index + offset],
                         change: BlockLineChange::Changed,
                         before: Some(before[old_index + offset].clone()),
+                        reason: None,
                     });
                 }
                 for offset in shared..old_len {
@@ -230,6 +242,7 @@ pub(super) fn pair_lines(
                         depth: before_depths[old_index + offset],
                         change: BlockLineChange::Removed,
                         before: None,
+                        reason: None,
                     });
                 }
                 for offset in shared..new_len {
@@ -238,6 +251,7 @@ pub(super) fn pair_lines(
                         depth: final_depths[new_index + offset],
                         change: BlockLineChange::Added,
                         before: None,
+                        reason: None,
                     });
                 }
             }

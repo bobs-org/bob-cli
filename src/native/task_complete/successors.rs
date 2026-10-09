@@ -56,12 +56,44 @@ pub(crate) struct SuccessorInput<'a> {
     pub completed: Vec<CompletedTask>,
     pub snapshot: Vec<(PathBuf, String)>,
     pub pre_day: Option<String>,
+    /// Post-gesture day text before successor insertion. `None` for `!`
+    /// (the pre-gesture text is the base); closes pass the post-close
+    /// staged text.
+    pub post_day: Option<String>,
+    /// Closing-target mode for Pomodoro closes
+    /// (`docs/task-dependencies.md` §12.3): every completed task anchors
+    /// at the closed entry's continuation instead of a slot. `None` for
+    /// `!`.
+    pub closing: Option<ClosingContext>,
     pub day_relative: PathBuf,
     pub today: NaiveDate,
     pub tasks_settings: &'a TasksSettings,
     pub note_settings: &'a NoteTaskSettings,
     pub link_unblocked: bool,
     pub index: &'a NoteIndex,
+}
+
+/// Closing-target context for Pomodoro closes
+/// (`docs/task-dependencies.md` §12.3 Placement).
+#[derive(Debug, Clone)]
+pub(crate) struct ClosingContext {
+    /// Short entry name (`""` when the closed entry was unnamed).
+    pub closed_name: String,
+    /// 0-based line of the closed entry in the post-close day text.
+    pub closed_line: usize,
+    /// The continuation the close left behind, when it left one: its
+    /// 1-based line plus whether the close created it.
+    pub continuation: Option<ClosingContinuation>,
+}
+
+/// The continuation a close left behind for successor links.
+#[derive(Debug, Clone)]
+pub(crate) struct ClosingContinuation {
+    /// 1-based line of the continuation entry in the post-close text.
+    pub line: usize,
+    /// True when the close created it (case 1); a reused same-name entry
+    /// reports false.
+    pub created: bool,
 }
 
 /// One predecessor behind an unblocked row.
@@ -150,12 +182,13 @@ fn in_done_archive(relative: &Path) -> bool {
     )
 }
 
-/// One ledger entry in the pre-gesture day text: its 0-based line and
-/// short name (`""` when unnamed).
+/// One ledger entry in the pre-gesture day text: its 0-based line,
+/// short name (`""` when unnamed), and whether it is still open.
 #[derive(Debug, Clone)]
 struct DayEntry {
     line: usize,
     name: String,
+    open: bool,
 }
 
 /// Slot anchor: insert after an anchor bullet's subtree.
@@ -197,6 +230,7 @@ impl DayView {
             .map(|entry| DayEntry {
                 line: entry.line_index,
                 name: names.get(&entry.line_index).cloned().unwrap_or_default(),
+                open: entry.open,
             })
             .collect::<Vec<_>>();
         let mut live = BTreeMap::new();
@@ -333,12 +367,23 @@ pub(crate) fn plan_successors(input: SuccessorInput) -> SuccessorPlan {
         Some(text) => DayView::parse(text, &input.day_relative, input.index),
         None => DayView::empty(),
     };
-    let anchors = input
-        .completed
-        .iter()
-        .enumerate()
-        .map(|(position, _)| day.anchor_for(&input.completed, position))
-        .collect::<Vec<_>>();
+    // Closing anchors (§12.3): a close completes links out of its own
+    // entry, so every predecessor anchors at the same continuation. One
+    // shared dummy keeps the ordering on note path and line.
+    let anchors = if input.closing.is_some() {
+        input
+            .completed
+            .iter()
+            .map(|_| Some(SlotAnchor::at(usize::MAX, usize::MAX, "\t")))
+            .collect::<Vec<_>>()
+    } else {
+        input
+            .completed
+            .iter()
+            .enumerate()
+            .map(|(position, _)| day.anchor_for(&input.completed, position))
+            .collect::<Vec<_>>()
+    };
 
     // Classify every open direct dependent of C.
     let mut verdicts = Vec::new();
@@ -436,6 +481,119 @@ pub(crate) fn plan_successors(input: SuccessorInput) -> SuccessorPlan {
     }
 
     apply_verdicts(input, files, verdicts, successor_positions, day)
+}
+
+/// One resolved closing target (`docs/task-dependencies.md` §12.3):
+/// where every successor of a Pomodoro close goes, plus the entry name
+/// the JSON rows report and whether the entry is new since the gesture.
+struct ResolvedClosingTarget {
+    target: SuccessorTarget,
+    name: String,
+    entry_created: bool,
+}
+
+/// Resolve the closing target against the post-close day text: the
+/// continuation the close left behind, else the first open same-name
+/// entry after the closed one, else a created placeholder immediately
+/// after the closed entry's block (exactly where the close would have
+/// created its continuation). Successors count as carried.
+fn resolve_closing_target(
+    text: &str,
+    day_relative: &Path,
+    index: &NoteIndex,
+    closing: &ClosingContext,
+) -> ResolvedClosingTarget {
+    let day = DayView::parse(text, day_relative, index);
+    let lines = logical_lines(text);
+    let end = pomodoros_section_range(&lines)
+        .map(|range| range.end)
+        .unwrap_or(lines.len());
+    let end = end.min(lines.len());
+    let block_end = |headline: usize| -> usize {
+        super::super::capture_pomodoros::pomodoro_block_range(
+            &lines,
+            headline.min(end),
+            end,
+        )
+        .end
+    };
+    let position_of = |line: usize| -> Option<usize> {
+        day.entries.iter().position(|entry| entry.line == line)
+    };
+    // Case 1: the continuation the close left behind. A close-created
+    // continuation counts as entry-created: it did not exist before this
+    // gesture.
+    if let Some(continuation) = closing.continuation.as_ref()
+        && let Some(position) = position_of(continuation.line.saturating_sub(1))
+    {
+        let entry = &day.entries[position];
+        return ResolvedClosingTarget {
+            target: SuccessorTarget::Closing {
+                entry_index: Some(position),
+                insert_at: block_end(entry.line),
+                created_name: None,
+            },
+            name: entry.name.clone(),
+            entry_created: continuation.created,
+        };
+    }
+    // Case 2: the first open entry after the closed one with the same
+    // non-empty name.
+    let reused = (!closing.closed_name.is_empty())
+        .then(|| position_of(closing.closed_line))
+        .flatten()
+        .and_then(|closed_position| {
+            day.entries
+                .iter()
+                .enumerate()
+                .skip(closed_position + 1)
+                .find(|(_, entry)| {
+                    entry.open && entry.name == closing.closed_name
+                })
+                .map(|(position, _)| position)
+        });
+    if let Some(position) = reused {
+        let entry = &day.entries[position];
+        return ResolvedClosingTarget {
+            target: SuccessorTarget::Closing {
+                entry_index: Some(position),
+                insert_at: block_end(entry.line),
+                created_name: None,
+            },
+            name: entry.name.clone(),
+            entry_created: false,
+        };
+    }
+    // Case 3: a created placeholder right after the closed entry's
+    // block. The entry index stays `None` so the inserter writes the
+    // `- [ ] () — NAME` headline itself.
+    let insert_at = position_of(closing.closed_line)
+        .map(|position| block_end(day.entries[position].line))
+        .unwrap_or_else(|| block_end(closing.closed_line));
+    ResolvedClosingTarget {
+        target: SuccessorTarget::Closing {
+            entry_index: None,
+            insert_at,
+            created_name: Some(closing.closed_name.clone()),
+        },
+        name: closing.closed_name.clone(),
+        entry_created: true,
+    }
+}
+
+/// Live-link keys of a day text: every unstruck Task Link bullet under
+/// an open entry, as `(note path, block id)`. Used by the net batch
+/// post-pass to verify a successor bullet still survives live
+/// (`docs/task-dependencies.md` §12.5 SL20).
+pub(crate) fn live_link_keys(
+    day_text: &str,
+    day_relative: &Path,
+    index: &NoteIndex,
+) -> BTreeSet<(PathBuf, String)> {
+    DayView::parse(day_text, day_relative, index)
+        .live
+        .into_keys()
+        .collect()
 }
 
 fn earliest_anchor(
@@ -556,8 +714,26 @@ fn apply_verdicts(
         minted.insert((file.relative_path.clone(), task.line_index), id);
     }
 
-    // Build placements (slot anchors only for `!`) and insert them into
-    // the day text before retirement runs.
+    // Insertion base: the post-close text for closes, the pre-gesture
+    // text for `!` (retirement runs after this and never moves a
+    // successor bullet for `!`).
+    let base_day_text = input
+        .post_day
+        .clone()
+        .or_else(|| input.pre_day.clone())
+        .unwrap_or_default();
+    // One shared closing target for every successor of a close; slot
+    // anchors stay per-successor for `!`.
+    let closing_target = input.closing.as_ref().map(|closing| {
+        resolve_closing_target(
+            &base_day_text,
+            &input.day_relative,
+            input.index,
+            closing,
+        )
+    });
+    // Build placements and insert them into the day text before
+    // retirement (for `!`) or as the final day text (for closes).
     let mut placements = Vec::new();
     for position in &successor_positions {
         let verdict = &verdicts[*position];
@@ -572,6 +748,32 @@ fn apply_verdicts(
                     .cloned()
             })
             .unwrap_or_default();
+        let block_link = successor_link_text(
+            &file.relative_path,
+            &block_id,
+            &input.day_relative,
+            input.index,
+        );
+        if let Some(resolved) = closing_target.as_ref() {
+            placements.push(SuccessorPlacement {
+                target: match &resolved.target {
+                    SuccessorTarget::Closing {
+                        entry_index,
+                        insert_at,
+                        created_name,
+                    } => SuccessorTarget::Closing {
+                        entry_index: *entry_index,
+                        insert_at: *insert_at,
+                        created_name: created_name.clone(),
+                    },
+                    SuccessorTarget::Slot { .. } => {
+                        unreachable!("closing target is never a slot")
+                    }
+                },
+                block_link,
+            });
+            continue;
+        }
         let anchor = verdict.anchor.as_ref().expect("successor has an anchor");
         placements.push(SuccessorPlacement {
             target: SuccessorTarget::Slot {
@@ -579,20 +781,14 @@ fn apply_verdicts(
                 bullet_end: anchor.bullet_end,
                 indent: anchor.indent.clone(),
             },
-            block_link: successor_link_text(
-                &file.relative_path,
-                &block_id,
-                &input.day_relative,
-                input.index,
-            ),
+            block_link,
         });
     }
-    let pre_day_text = input.pre_day.clone().unwrap_or_default();
     let (post_day_text, placed) = if placements.is_empty() {
-        (pre_day_text, Vec::new())
+        (base_day_text, Vec::new())
     } else {
         insert_successor_links(
-            &pre_day_text,
+            &base_day_text,
             &input.day_relative,
             input.index,
             placements,
@@ -710,12 +906,17 @@ fn apply_verdicts(
             .clone()
             .or(minted_id.clone())
             .unwrap_or_default();
-        let anchor = verdict.anchor.as_ref().expect("successor has an anchor");
-        let entry_name = day
-            .entries
-            .get(anchor.entry_index)
-            .map(|entry| entry.name.clone())
-            .unwrap_or_default();
+        let entry_name = match closing_target.as_ref() {
+            Some(resolved) => resolved.name.clone(),
+            None => {
+                let anchor =
+                    verdict.anchor.as_ref().expect("successor has an anchor");
+                day.entries
+                    .get(anchor.entry_index)
+                    .map(|entry| entry.name.clone())
+                    .unwrap_or_default()
+            }
+        };
         let block_link = successor_link_text(
             &file.relative_path,
             &block_id,
@@ -746,7 +947,10 @@ fn apply_verdicts(
                 entry_line: placed_link.entry_line,
                 line: placed_link.line,
                 block_link,
-                entry_created: placed_link.entry_created,
+                entry_created: placed_link.entry_created
+                    || closing_target
+                        .as_ref()
+                        .is_some_and(|resolved| resolved.entry_created),
                 next_up: placed_link.next_up,
                 block_id_created: minted_id.is_some(),
             }),

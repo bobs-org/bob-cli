@@ -487,6 +487,9 @@ pub(super) fn build_close_summary_json(
         carried,
         notes: ledger.notes.clone(),
         next_pomodoro,
+        unblocked: Vec::new(),
+        still_blocked: Vec::new(),
+        unblocked_check: "checked",
     };
     (summary, extra_warnings)
 }
@@ -544,6 +547,294 @@ pub(super) fn stage_close_plan(
         planner.stage(path, contents.clone())?;
     }
     Ok(())
+}
+
+/// Outcome of the close successor pass, ready for the summary JSON.
+struct CloseSuccessorOutcome {
+    unblocked: Vec<TaskCompleteUnblockedJson>,
+    still_blocked: Vec<TaskCompleteStillBlockedJson>,
+    unblocked_check: &'static str,
+}
+
+/// 0-based line of the closed entry in the post-close day text: the
+/// completed entry with the closed name nearest the pre-image line. The
+/// close rewrites the entry in place, so the hint is usually exact; the
+/// name/state match keeps it right when lines above shifted.
+fn close_entry_line(post_day: &str, closed_name: &str, hint: usize) -> usize {
+    let scan = capture_pomodoros::scan(post_day);
+    scan.entries
+        .iter()
+        .filter(|entry| {
+            entry.name.as_deref().unwrap_or_default() == closed_name
+                && entry.state == capture_pomodoros::PomodoroState::Completed
+        })
+        .min_by_key(|entry| entry.line.saturating_sub(1).abs_diff(hint))
+        .map(|entry| entry.line.saturating_sub(1))
+        .unwrap_or(hint)
+}
+
+/// Name the successor's continuation in the summary when successor
+/// logic created it (§12.5): unless the close already named a created
+/// continuation, the first linked row reporting a created entry becomes
+/// `next_pomodoro` (`{line, name, time_range: None, created: true}`).
+fn name_successor_continuation(
+    summary: &mut PomodoroCloseSummaryJson,
+    outcome: &CloseSuccessorOutcome,
+) {
+    if summary
+        .next_pomodoro
+        .as_ref()
+        .is_some_and(|next| next.created)
+    {
+        return;
+    }
+    let Some(link) = outcome
+        .unblocked
+        .iter()
+        .filter_map(|row| row.link.as_ref())
+        .find(|link| link.entry_created)
+    else {
+        return;
+    };
+    summary.next_pomodoro = Some(PomodoroCloseNextJson {
+        line: link.entry_line,
+        name: if link.entry_name.is_empty() {
+            None
+        } else {
+            Some(link.entry_name.clone())
+        },
+        time_range: None,
+        created: true,
+    });
+}
+
+/// Run recovery and successor linking for a Pomodoro close
+/// (`docs/task-dependencies.md` §12): derive C from the close plan's
+/// embedded/subtask rows that moved open → Done, run the shared planner
+/// with closing anchors on the post-close day text, stage the note edits
+/// and successor bullets, and report the rows for the summary JSON.
+/// `pre_day` is the day text before this item (pre-link for link forms):
+/// the already-planned baseline. A close that completed nothing stages
+/// nothing here, so `=x` closes that complete nothing stay
+/// byte-identical.
+#[allow(clippy::too_many_arguments)]
+fn plan_close_successors(
+    request: &CaptureRequest,
+    today: chrono::NaiveDate,
+    planner: &mut CaptureBatchPlanner,
+    dependency_ctx: &mut DependencyContext,
+    plan: &capture_pomodoro_close::PomodoroClosePlan,
+    pre_day: Option<String>,
+    day_file: &Path,
+    day_relative: &str,
+    task_block_refs: &mut Vec<TaskBlockRef>,
+) -> Result<CloseSuccessorOutcome, CaptureError> {
+    use crate::native::task_complete as engine;
+    let empty = |check: &'static str| CloseSuccessorOutcome {
+        unblocked: Vec::new(),
+        still_blocked: Vec::new(),
+        unblocked_check: check,
+    };
+    let bob_dir = &request.bob_dir;
+    let settings = note_tasks::read_settings(bob_dir);
+    // C: embedded roots plus closed subtasks this close moved open →
+    // Done. Plain `=x` keeps, parks, defers, and drops never land here.
+    let mut predecessors: Vec<engine::CompletedTask> = Vec::new();
+    for task in &plan.summary.tasks {
+        if !matches!(task.role.as_str(), "embedded" | "subtask") {
+            continue;
+        }
+        if task.status_symbol != Some('x') || !task.status_changed {
+            continue;
+        }
+        if !task.resolved {
+            continue;
+        }
+        let Some(absolute) = task.resolved_path() else {
+            continue;
+        };
+        let Ok(Some(note_text)) = planner.current_contents(absolute) else {
+            continue;
+        };
+        let scan = note_tasks::scan(&note_text, &settings);
+        let BlockIdLookup::Found(note_task) = scan.by_block_id(&task.block_id)
+        else {
+            continue;
+        };
+        let staged_line = note_text
+            .lines()
+            .nth(note_task.line_index)
+            .unwrap_or_default();
+        // The `[id::]` gate: without an identity no dependent can name
+        // this close, exactly as for `!`.
+        let metadata = crate::native::task_status_hooks::task_metadata(
+            staged_line,
+            Some(&task.block_id),
+        );
+        let Some(task_id) = metadata.task_id else {
+            continue;
+        };
+        predecessors.push(engine::CompletedTask {
+            relative_path: absolute
+                .strip_prefix(bob_dir)
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|_| absolute.clone()),
+            block_id: task.block_id.clone(),
+            task_id,
+            text: task_complete_display_text(
+                staged_line,
+                &settings.global_filter,
+                Some(&task.block_id),
+            ),
+            is_root: task.role.as_str() == "embedded",
+        });
+    }
+    if predecessors.is_empty() {
+        return Ok(empty("checked"));
+    }
+    if !dependency_ctx.dependents_snapshot().available {
+        // A snapshot failure is non-fatal: the close still succeeds and
+        // nothing is linked.
+        return Ok(empty("unavailable"));
+    }
+    let post_day = planner.current_contents(day_file)?;
+    let snapshot =
+        staged_snapshot_for_recovery(bob_dir, planner, dependency_ctx);
+    let note_index = staged_note_index(bob_dir, planner, dependency_ctx);
+    let running = &plan.summary.running;
+    let closed_name = running.name.clone().unwrap_or_default();
+    let closed_line = close_entry_line(
+        post_day.as_deref().unwrap_or_default(),
+        &closed_name,
+        running.line.saturating_sub(1),
+    );
+    let continuation = plan
+        .summary
+        .ledger
+        .next_pomodoro
+        .as_ref()
+        .filter(|next| next.created)
+        .map(|next| engine::ClosingContinuation {
+            line: next.line,
+            created: true,
+        });
+    let successor_plan = engine::plan_successors(engine::SuccessorInput {
+        completed: predecessors,
+        snapshot,
+        pre_day: pre_day.clone(),
+        post_day: post_day.clone(),
+        closing: Some(engine::ClosingContext {
+            closed_name,
+            closed_line,
+            continuation,
+        }),
+        day_relative: PathBuf::from(day_relative),
+        today,
+        tasks_settings: &crate::native::task_status_hooks::read_tasks_settings(
+            bob_dir,
+        ),
+        note_settings: &settings,
+        link_unblocked: dependency_ctx.link_unblocked(),
+        index: &note_index,
+    });
+    for (relative_path, text) in &successor_plan.changed_files {
+        planner.stage(&bob_dir.join(relative_path), text.clone())?;
+    }
+    if let Some(updated_day) = successor_plan.new_day_text.clone() {
+        planner.stage(day_file, updated_day)?;
+    }
+    let clean_row_text = |text: &str, block_id: &str| {
+        note_tasks::clean_description(
+            text,
+            &settings.global_filter,
+            if block_id.is_empty() {
+                None
+            } else {
+                Some(block_id)
+            },
+        )
+    };
+    let unblocked = successor_plan
+        .unblocked
+        .iter()
+        .map(|dependent| TaskCompleteUnblockedJson {
+            note_path: display_relative(&dependent.note_path),
+            block_id: dependent.block_id.clone(),
+            line: dependent.line,
+            text: clean_row_text(&dependent.text, &dependent.block_id),
+            previous_status_symbol: dependent.previous_status_symbol,
+            previous_status_name: status_name_for(
+                bob_dir,
+                dependent.previous_status_symbol,
+            ),
+            status_symbol: dependent.status_symbol,
+            status_name: status_name_for(bob_dir, dependent.status_symbol),
+            inbox: dependent.inbox,
+            unblocked_by: dependent
+                .unblocked_by
+                .iter()
+                .map(|cause| TaskCompleteUnblockedCauseJson {
+                    note_path: display_relative(&cause.note_path),
+                    block_id: cause.block_id.clone(),
+                    text: cause.text.clone(),
+                })
+                .collect(),
+            link: dependent.link.as_ref().map(|link| {
+                TaskCompleteSuccessorLinkJson {
+                    day_file: day_relative.to_string(),
+                    entry_name: link.entry_name.clone(),
+                    entry_line: link.entry_line,
+                    entry_created: link.entry_created,
+                    next_up: link.next_up,
+                    line: link.line,
+                    block_link: link.block_link.clone(),
+                    block_id_created: link.block_id_created,
+                }
+            }),
+            not_linked: dependent.not_linked.map(str::to_string),
+        })
+        .collect::<Vec<_>>();
+    let still_blocked = successor_plan
+        .still_blocked
+        .iter()
+        .map(|blocked| TaskCompleteStillBlockedJson {
+            note_path: display_relative(&blocked.note_path),
+            block_id: blocked.block_id.clone(),
+            line: blocked.line,
+            text: clean_row_text(&blocked.text, &blocked.block_id),
+            status_symbol: blocked.status_symbol,
+            status_name: status_name_for(bob_dir, blocked.status_symbol),
+            reason: blocked.reason,
+            waits_on: blocked.waits_on,
+            scheduled: blocked.scheduled.clone(),
+        })
+        .collect::<Vec<_>>();
+    // Task blocks: successors keep the unblocked role, as for `!`.
+    for dependent in &successor_plan.unblocked {
+        let absolute_path = bob_dir.join(&dependent.note_path);
+        let rel = display_relative(&dependent.note_path);
+        let mut stem = dependent.note_path.clone();
+        stem.set_extension("");
+        push_unblocked_ref(
+            task_block_refs,
+            absolute_path,
+            rel,
+            display_relative(&stem),
+            dependent.line.saturating_sub(1),
+            if dependent.block_id.is_empty() {
+                None
+            } else {
+                Some(dependent.block_id.clone())
+            },
+        );
+    }
+    Ok(CloseSuccessorOutcome {
+        unblocked,
+        still_blocked,
+        // The lookup ran here, or the empty-C gate above proved it
+        // unnecessary: either way the check reads "checked".
+        unblocked_check: "checked",
+    })
 }
 
 pub(super) fn build_reset_summary_json(
@@ -988,6 +1279,7 @@ fn selection_from_spec(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn plan_pomodoro_close_item(
     request: &CaptureRequest,
     parsed: ParsedCaptureText,
@@ -996,6 +1288,7 @@ pub(super) fn plan_pomodoro_close_item(
     today: chrono::NaiveDate,
     planner: &mut CaptureBatchPlanner,
     warnings: &mut Vec<String>,
+    dependency_ctx: &mut DependencyContext,
 ) -> Result<PlannedCaptureItem, CaptureError> {
     reject_pomodoro_close_conflicts(&parsed, request)?;
     let selection = selection_from_spec(&spec);
@@ -1007,6 +1300,9 @@ pub(super) fn plan_pomodoro_close_item(
         )));
     }
     let day_contents = planner.read_existing(&day_file)?;
+    // Already-planned baseline for successor linking (§12.2): the day
+    // text before this item struck, moved, or retired anything.
+    let pre_day_baseline = Some(day_contents.clone());
     let vault = SnapshotCloseVault::from_planner(planner, &request.bob_dir);
     let outcome = capture_pomodoro_close::plan_pomodoro_close_outcome(
         &day_file,
@@ -1028,7 +1324,7 @@ pub(super) fn plan_pomodoro_close_item(
             "pomodoro close capture invariant failed: missing close plan",
         ));
     };
-    let (summary, extra_warnings) =
+    let (mut summary, extra_warnings) =
         build_close_summary_json(&spec, &rel, &plan, now);
     warnings.extend(plan.warnings.clone());
     warnings.extend(extra_warnings.clone());
@@ -1041,6 +1337,24 @@ pub(super) fn plan_pomodoro_close_item(
         }
     }
     stage_close_plan(planner, &plan)?;
+    // Recovery plus successor linking on the post-close day text
+    // (§12): successors land in the closed entry's continuation.
+    let mut task_block_refs = Vec::new();
+    let successors = plan_close_successors(
+        request,
+        today,
+        planner,
+        dependency_ctx,
+        &plan,
+        pre_day_baseline,
+        &day_file,
+        &rel,
+        &mut task_block_refs,
+    )?;
+    name_successor_continuation(&mut summary, &successors);
+    summary.unblocked = successors.unblocked;
+    summary.still_blocked = successors.still_blocked;
+    summary.unblocked_check = successors.unblocked_check;
     let post_day = planner.read_existing(&day_file)?;
     let mut pomodoro_refs = vec![PomodoroBlockRef::at(
         PomodoroBlockRole::Closed,
@@ -1120,7 +1434,7 @@ pub(super) fn plan_pomodoro_close_item(
         },
         clip_plan: None,
         pomodoro_refs,
-        task_block_refs: Vec::new(),
+        task_block_refs,
     })
 }
 
@@ -1376,6 +1690,7 @@ pub(super) fn plan_pomodoro_close_link_item(
     warnings: &mut Vec<String>,
     block_id: &str,
     close_spec: PomodoroCloseSpec,
+    dependency_ctx: &mut DependencyContext,
 ) -> Result<PlannedCaptureItem, CaptureError> {
     reject_pomodoro_link_conflicts(&parsed, request)?;
     let selection = selection_from_spec(&close_spec);
@@ -1490,6 +1805,10 @@ pub(super) fn plan_pomodoro_close_link_item(
         )));
     }
     let mut day_contents = planner.read_existing(&day_file)?;
+    // Already-planned baseline for successor linking (§12.2): the day
+    // text before this item, which means pre-link here because the
+    // explicit link step happens first.
+    let pre_day_baseline = Some(day_contents.clone());
     // Surface section, none-running, and multiple-entry diagnostics from
     // pre-image lines before the link step shifts them.
     if let Some(error) = pre_link_running_error(&day_contents, &rel, &link_hint)
@@ -1590,7 +1909,7 @@ pub(super) fn plan_pomodoro_close_link_item(
             "pomodoro close capture invariant failed: missing close plan",
         ));
     };
-    let (summary, extra_warnings) =
+    let (mut summary, extra_warnings) =
         build_close_summary_json(&close_spec, &rel, &plan, now);
     for warning in plan.warnings.iter().chain(extra_warnings.iter()) {
         if !warnings.contains(warning) {
@@ -1598,6 +1917,24 @@ pub(super) fn plan_pomodoro_close_link_item(
         }
     }
     stage_close_plan(planner, &plan)?;
+    // Recovery plus successor linking on the post-close day text
+    // (§12): successors land in the closed entry's continuation.
+    let mut task_block_refs = Vec::new();
+    let successors = plan_close_successors(
+        request,
+        today,
+        planner,
+        dependency_ctx,
+        &plan,
+        pre_day_baseline,
+        &day_file,
+        &rel,
+        &mut task_block_refs,
+    )?;
+    name_successor_continuation(&mut summary, &successors);
+    summary.unblocked = successors.unblocked;
+    summary.still_blocked = successors.still_blocked;
+    summary.unblocked_check = successors.unblocked_check;
     // Block refs: the closed entry was the pre-link running entry
     // (`destination` still carries its pre-link line); a moved source
     // resolves through the item's line map; the next entry is named by
@@ -1709,7 +2046,7 @@ pub(super) fn plan_pomodoro_close_link_item(
         },
         clip_plan: None,
         pomodoro_refs,
-        task_block_refs: Vec::new(),
+        task_block_refs,
     })
 }
 
@@ -1726,6 +2063,7 @@ pub(super) fn plan_pomodoro_close_task_item(
     close_spec: &PomodoroCloseSpec,
     capture_block: &str,
     close_dependencies: Option<(String, PlannedDependencyUpdateParts)>,
+    dependency_ctx: &mut DependencyContext,
 ) -> Result<PlannedCaptureItem, CaptureError> {
     let selection = selection_from_spec(close_spec);
     // Body-bearing `<text> @route:block-id=x`: today's `:` new-task capture
@@ -1766,6 +2104,10 @@ pub(super) fn plan_pomodoro_close_task_item(
     };
     planner.stage(&target, updated_target)?;
     let day_contents = planner.read_existing(&day_file)?;
+    // Already-planned baseline for successor linking (§12.2): the day
+    // text before this item, which means pre-link here because the
+    // explicit link step happens first.
+    let pre_day_baseline = Some(day_contents.clone());
     // Surface section, none-running, and multiple-entry diagnostics from
     // pre-image lines before the link step shifts them.
     if let Some(error) = pre_link_running_error(&day_contents, &rel, &link_hint)
@@ -1839,7 +2181,7 @@ pub(super) fn plan_pomodoro_close_task_item(
             "pomodoro close capture invariant failed: missing close plan",
         ));
     };
-    let (summary, extra_warnings) =
+    let (mut summary, extra_warnings) =
         build_close_summary_json(close_spec, &rel, &plan, now);
     for warning in plan.warnings.iter().chain(extra_warnings.iter()) {
         if !warnings.contains(warning) {
@@ -1847,6 +2189,24 @@ pub(super) fn plan_pomodoro_close_task_item(
         }
     }
     stage_close_plan(planner, &plan)?;
+    // Recovery plus successor linking on the post-close day text
+    // (§12): successors land in the closed entry's continuation.
+    let mut task_block_refs = Vec::new();
+    let successors = plan_close_successors(
+        request,
+        today,
+        planner,
+        dependency_ctx,
+        &plan,
+        pre_day_baseline,
+        &day_file,
+        &rel,
+        &mut task_block_refs,
+    )?;
+    name_successor_continuation(&mut summary, &successors);
+    summary.unblocked = successors.unblocked;
+    summary.still_blocked = successors.still_blocked;
+    summary.unblocked_check = successors.unblocked_check;
     // Block refs: the closed entry was the pre-link running entry; a
     // moved source resolves through the item's line map; the next entry
     // is named by the close card, so it shows even when byte-identical.
@@ -1991,9 +2351,10 @@ pub(super) fn plan_pomodoro_close_task_item(
                 ) {
                     refs.insert(0, tracked);
                 }
+                refs.extend(task_block_refs);
                 refs
             }
-            None => Vec::new(),
+            None => task_block_refs,
         },
     })
 }

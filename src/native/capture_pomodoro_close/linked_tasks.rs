@@ -60,6 +60,16 @@ impl CloseTaskRole {
     }
 }
 
+impl PomodoroCloseTask {
+    /// Absolute vault path this row resolved to, if it resolved. Added
+    /// for capture-close successor linking so the batch planner can read
+    /// the completed task's `[id::]` identity from staged text without
+    /// re-resolving the link.
+    pub(crate) fn resolved_path(&self) -> Option<&PathBuf> {
+        self.resolved_path.as_ref()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PomodoroCloseTask {
     pub role: CloseTaskRole,

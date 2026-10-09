@@ -152,8 +152,18 @@ pub(super) fn plan_capture_batch(
         items.push(planned);
     }
 
+    // Net successor reporting (SL20): drop linked rows whose bullet or
+    // open status a later item took back, before blocks resolve reasons.
+    apply_successor_net_post_pass(
+        &mut items,
+        &mut planner,
+        &dependency_ctx,
+        &request.bob_dir,
+    );
     let final_day = planner.peek_text(&day_file);
-    let pomodoro_blocks = block_tracker.finish(final_day.as_deref());
+    let successor_links = surviving_successor_links(&items);
+    let pomodoro_blocks = block_tracker
+        .finish_with_unblocked(final_day.as_deref(), &successor_links);
     let task_blocks = task_tracker.finish(&planner);
     Ok(PlannedCaptureBatch {
         items,
@@ -418,7 +428,14 @@ pub(super) fn plan_capture_item(
     }
     if let CaptureKind::PomodoroClose { spec } = parsed.kind.clone() {
         return plan_pomodoro_close_item(
-            request, parsed, spec, now, today, planner, warnings,
+            request,
+            parsed,
+            spec,
+            now,
+            today,
+            planner,
+            warnings,
+            dependency_ctx,
         );
     }
     if let CaptureKind::PomodoroStart {
@@ -599,8 +616,15 @@ pub(super) fn plan_capture_item(
     {
         if let Some(close_spec) = close.clone() {
             return plan_pomodoro_close_link_item(
-                request, parsed, now, today, planner, warnings, block_id,
+                request,
+                parsed,
+                now,
+                today,
+                planner,
+                warnings,
+                block_id,
                 close_spec,
+                dependency_ctx,
             );
         }
         reject_pomodoro_link_conflicts(&parsed, request)?;
@@ -995,6 +1019,7 @@ pub(super) fn plan_capture_item(
                     &close_spec,
                     &capture_block,
                     close_dependencies,
+                    dependency_ctx,
                 );
             }
             plan_capture_with_pomodoro_link(

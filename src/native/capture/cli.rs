@@ -250,7 +250,9 @@ Progress work without carrying them forward), `=x!<M>` completes the links in `<
 `=x~<K>` drops the links in `<K>` (removed from the closed session, not \
 carried and not started; a dropped task keeps its lane), and combined \
 forms do each part at \
-once. `<N>`, `<P>`, `<M>`, and `<K>` are comma-separated task numbers in ledger \
+once; completing planned tasks also links what they unblocked into the \
+closed session's continuation (docs/task-dependencies.md §12; \
+`plan.link_unblocked: false` turns linking off). `<N>`, `<P>`, `<M>`, and `<K>` are comma-separated task numbers in ledger \
 order starting at 1 (the numbers `bob capture` shows, in human output, in \
 `--dry-run`, and as JSON `task_links`); a lone `0` means no \
 task stays in progress, as in `=x0`. Plain `=x0` on a note-free session resets it to the first future placeholder (clearing the parenthesized ledger to `()` and keeping all children); the same `=x0` on a session with a stand-alone note closes, deferring every numbered link. Explicit modifiers (`=x0*2`, `=x0!2`, `=x0~2`, wildcards) always close. A present `*` or `!` group with no digits selects every numbered link left after explicit assignments (`=*` parks all, `=!` completes all, `=x1*` keeps 1 in progress and parks the rest, `=x*!2` parks the rest and completes 2). Explicit forms such as `=*1`/`=!1` select only task 1; an absent group stays absent and `~` never defaults. Two empty wildcard groups compete, so `=*!` and `=!*` need numbers on at least one group. Log one entry on the close line: \

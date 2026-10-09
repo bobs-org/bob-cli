@@ -235,7 +235,10 @@ fn capture_pomodoro_close_worked_example() {
             "next_pomodoro": {
                 "line": 13, "name": "CAPTURE",
                 "time_range": null, "created": true
-            }
+            },
+            "unblocked": [],
+            "still_blocked": [],
+            "unblocked_check": "checked"
         })
     );
     // Ledger post-image, byte for byte.

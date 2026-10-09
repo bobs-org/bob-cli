@@ -177,6 +177,17 @@ pub(super) struct PomodoroCloseSummaryJson {
     pub(super) carried: Vec<PomodoroCloseCarriedJson>,
     pub(super) notes: Vec<String>,
     pub(super) next_pomodoro: Option<PomodoroCloseNextJson>,
+    /// Dependents this close fully unblocked and linked into the
+    /// continuation, or recovered with the reason they were not linked
+    /// (`docs/task-dependencies.md` §12.5). Empty when the close
+    /// completed nothing with an `[id::]` identity.
+    pub(super) unblocked: Vec<TaskCompleteUnblockedJson>,
+    /// Open dependents of the completed tasks that stay blocked.
+    pub(super) still_blocked: Vec<TaskCompleteStillBlockedJson>,
+    /// `"checked"` when the dependents lookup ran or the `[id::]` gate
+    /// proved it unnecessary; `"unavailable"` when the snapshot could
+    /// not be built and the close succeeded without linking.
+    pub(super) unblocked_check: &'static str,
 }
 
 /// One note-free `=x0` reset: the current Pomodoro returned to the
@@ -1320,6 +1331,12 @@ pub(super) fn print_human_pomodoro_close_success(
             println!("{log_indent}{}", styler.dim(entry));
         }
     }
+    print_human_successor_rows(
+        &close.unblocked,
+        &close.still_blocked,
+        result.dry_run,
+        styler,
+    );
     let mut parked: Vec<u32> = close
         .task_links
         .iter()
@@ -1361,10 +1378,15 @@ pub(super) fn print_human_pomodoro_close_success(
         } else {
             String::new()
         };
+        let unblocked_text = if close.unblocked.is_empty() {
+            String::new()
+        } else {
+            format!(" · {} unblocked", close.unblocked.len())
+        };
         println!(
             "  {}",
             styler.dim(&format!(
-                "next: {next_name}{created_text} at line {}{carries_text}",
+                "next: {next_name}{created_text} at line {}{carries_text}{unblocked_text}",
                 next.line
             ))
         );
@@ -2005,7 +2027,25 @@ pub(super) fn print_human_task_complete_success(
         parts.push(ledger.day_file.clone());
         println!("  ledger  {}", parts.join(" · "));
     }
-    for unblocked in &summary.unblocked {
+    print_human_successor_rows(
+        &summary.unblocked,
+        &summary.still_blocked,
+        result.dry_run,
+        styler,
+    );
+}
+
+/// Successor rows shared by `!` closes and Pomodoro closes
+/// (`docs/task-dependencies.md` §12.6 human output): linked rows with
+/// their destination capsule, recovered rows with their reason, and
+/// muted still-blocked rows.
+pub(super) fn print_human_successor_rows(
+    unblocked: &[TaskCompleteUnblockedJson],
+    still_blocked: &[TaskCompleteStillBlockedJson],
+    dry_run: bool,
+    styler: &Styler,
+) {
+    for unblocked in unblocked {
         let previous =
             style_task_status_marker(styler, unblocked.previous_status_symbol);
         let current = style_task_status_marker(styler, unblocked.status_symbol);
@@ -2017,11 +2057,7 @@ pub(super) fn print_human_task_complete_success(
             format!("{previous} → {current} {}", unblocked.text)
         };
         if let Some(link) = unblocked.link.as_ref() {
-            let verb = if result.dry_run {
-                "would link"
-            } else {
-                "linked"
-            };
+            let verb = if dry_run { "would link" } else { "linked" };
             let destination = successor_destination(link);
             let minted = link
                 .block_link
@@ -2039,7 +2075,7 @@ pub(super) fn print_human_task_complete_success(
             println!("  unblocked {head}  {locator} · {reason}");
         }
     }
-    for blocked in &summary.still_blocked {
+    for blocked in still_blocked {
         let locator =
             task_complete_locator(&blocked.note_path, &blocked.block_id);
         let detail = match blocked.reason {

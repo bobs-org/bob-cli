@@ -199,6 +199,8 @@ pub(super) fn plan_task_complete_item(
                 completed: predecessors,
                 snapshot,
                 pre_day: pre_day_text.clone(),
+                post_day: None,
+                closing: None,
                 day_relative: PathBuf::from(day_relative.clone()),
                 today,
                 tasks_settings:
@@ -706,7 +708,7 @@ fn is_done_status(
             == Some(&crate::native::task_status_hooks::TaskStatusType::Done)
 }
 
-fn status_name_for(bob_dir: &Path, symbol: char) -> String {
+pub(super) fn status_name_for(bob_dir: &Path, symbol: char) -> String {
     let settings = note_tasks::read_settings(bob_dir);
     settings
         .status_definitions
@@ -750,7 +752,7 @@ fn push_completed_ref(
     let _ = bob_dir;
 }
 
-fn push_unblocked_ref(
+pub(super) fn push_unblocked_ref(
     refs: &mut Vec<TaskBlockRef>,
     absolute: PathBuf,
     relative_target: String,
@@ -870,7 +872,7 @@ fn compute_link_statuses(
 /// Note index for successor link forms (`docs/task-dependencies.md`
 /// §12.4): the same walk-only catalog `&` dependency links use, unioned
 /// with the batch's staged `.md` files so batch-created notes resolve.
-fn staged_note_index(
+pub(super) fn staged_note_index(
     bob_dir: &Path,
     planner: &CaptureBatchPlanner,
     dependency_ctx: &DependencyContext,
@@ -892,7 +894,120 @@ fn staged_note_index(
     dependency_ctx.catalog().index.with_additional(staged)
 }
 
-fn staged_snapshot_for_recovery(
+/// Net batch post-pass for successor rows (`docs/task-dependencies.md`
+/// §12.5 SL20): after every item is planned, drop each linked row whose
+/// bullet no longer survives live in the final staged day text, or whose
+/// task is no longer open. Only rows with `link` are verified; recovered
+/// and still-blocked rows report what their own gesture did. Runs on
+/// staged text, so dry-run and real-run JSON stay equal.
+pub(super) fn apply_successor_net_post_pass(
+    items: &mut [PlannedCaptureItem],
+    planner: &mut CaptureBatchPlanner,
+    dependency_ctx: &DependencyContext,
+    bob_dir: &Path,
+) {
+    let any_linked = items.iter().any(|item| {
+        item.result.task_complete.as_ref().is_some_and(|summary| {
+            summary.unblocked.iter().any(|row| row.link.is_some())
+        }) || item.result.pomodoro_close.as_ref().is_some_and(|summary| {
+            summary.unblocked.iter().any(|row| row.link.is_some())
+        })
+    });
+    if !any_linked {
+        return;
+    }
+    let day_file = pomodoro::day_file_for(bob_dir);
+    let day_relative = capture_pomodoros::relative_day_file(&day_file, bob_dir);
+    let live = planner
+        .peek_text(&day_file)
+        .map(|final_day| {
+            let index = staged_note_index(bob_dir, planner, dependency_ctx);
+            engine::live_link_keys(&final_day, Path::new(&day_relative), &index)
+        })
+        .unwrap_or_default();
+    let tasks_settings =
+        crate::native::task_status_hooks::read_tasks_settings(bob_dir);
+    for item in items.iter_mut() {
+        if let Some(summary) = item.result.task_complete.as_mut() {
+            summary.unblocked.retain(|row| {
+                row.link.is_none()
+                    || successor_row_survives(
+                        row,
+                        &live,
+                        planner,
+                        bob_dir,
+                        &tasks_settings,
+                    )
+            });
+        }
+        if let Some(summary) = item.result.pomodoro_close.as_mut() {
+            summary.unblocked.retain(|row| {
+                row.link.is_none()
+                    || successor_row_survives(
+                        row,
+                        &live,
+                        planner,
+                        bob_dir,
+                        &tasks_settings,
+                    )
+            });
+        }
+    }
+}
+
+/// One linked row's net check: its bullet still lives unstruck under an
+/// open entry of the final staged day text, and its task is still open.
+fn successor_row_survives(
+    row: &TaskCompleteUnblockedJson,
+    live: &BTreeSet<(PathBuf, String)>,
+    planner: &mut CaptureBatchPlanner,
+    bob_dir: &Path,
+    tasks_settings: &crate::native::task_status_hooks::TasksSettings,
+) -> bool {
+    if !live.contains(&(PathBuf::from(&row.note_path), row.block_id.clone())) {
+        return false;
+    }
+    let absolute = bob_dir.join(&row.note_path);
+    let Ok(Some(contents)) = planner.current_contents(&absolute) else {
+        return false;
+    };
+    crate::native::task_status_hooks::parse_tasks(&contents, tasks_settings)
+        .iter()
+        .any(|task| {
+            task.block_id.as_deref() == Some(row.block_id.as_str())
+                && task.status_recognized
+                && task.status_type.is_open()
+        })
+}
+
+/// Block links of every linked row left after the net post-pass: the
+/// set Pomodoro-block diffs mark with `reason: "unblocked"`.
+pub(super) fn surviving_successor_links(
+    items: &[PlannedCaptureItem],
+) -> BTreeSet<String> {
+    let mut links = BTreeSet::new();
+    for item in items {
+        let rows = item
+            .result
+            .task_complete
+            .iter()
+            .flat_map(|summary| summary.unblocked.iter())
+            .chain(
+                item.result
+                    .pomodoro_close
+                    .iter()
+                    .flat_map(|summary| summary.unblocked.iter()),
+            );
+        for row in rows {
+            if let Some(link) = row.link.as_ref() {
+                links.insert(link.block_link.clone());
+            }
+        }
+    }
+    links
+}
+
+pub(super) fn staged_snapshot_for_recovery(
     bob_dir: &Path,
     planner: &CaptureBatchPlanner,
     dependency_ctx: &DependencyContext,
