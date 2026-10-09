@@ -35,7 +35,7 @@ then creates the notes that `bob ref list` shows. The
 | [plugins.md](plugins.md) | `bob plugins` list and vault deploy |
 | [projects.md](projects.md) | `bob projects` `^prj` lifecycle and schedules |
 | [randomize.md](randomize.md) | `bob task reroll` bulk re-roll of due prioritized tasks |
-| [ref.md](ref.md) | Reference-library lookup and views, reading state, URL routing, JSON, and `migrate-zorg` migration/rollback |
+| [ref.md](ref.md) | Reference-library lookup and views, reading state, URL routing, JSON, and `migrate-tasks`/`migrate-zorg` migration/rollback |
 | [ref-jobs.md](ref-jobs.md) | `bob ref jobs` background capture progress, worker, fallback, and recovery |
 | [task-dependencies.md](task-dependencies.md) | Task dependency links: Depends-On line contract and conformance vectors |
 | [task-status-hooks.md](task-status-hooks.md) | `bob task reconcile` Pomodoro-driven task status |

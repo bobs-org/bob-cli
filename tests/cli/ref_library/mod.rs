@@ -3,6 +3,7 @@
 
 mod find;
 mod list;
+mod migrate_tasks;
 mod migrate_zorg;
 mod show;
 mod tasks;

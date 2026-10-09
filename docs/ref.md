@@ -414,6 +414,66 @@ envelope carries the same data with `mode: "dry_run"` and
 provenance, `reading_state` (computed by running the rendered note
 through the index row builder), chapter count, and rename.
 
+## Migrating open ref tasks (`bob ref migrate-tasks`)
+
+```bash
+bob ref migrate-tasks
+bob ref migrate-tasks -f tsv
+bob ref migrate-tasks -m map.tsv --write --offline
+```
+
+Options: `-b/--bob-dir`, `-f/--format human|json|tsv` (default
+human), `-m/--map FILE`, `-o/--offline`, `-r/--ref-dir`,
+`-w/--write`. The bare command is a read-only dry run: no lock, no
+sync, no writes. It plans every open v1 ref task's move into its
+parent note and prints the plan as a human, JSON, or TSV report.
+With `-w/--write` the same plan is applied as one revertible commit
+between two vault-sync cycles. A rerun afterwards reports
+`nothing to migrate`.
+
+Parents resolve in order: the `-m` map row, else the note's
+frontmatter `parent` wikilink, else the PDF marker `parent`. An
+unmapped ref is listed and `--write` refuses the whole run before
+any write, as does any note with two or more open trackers.
+
+What is preserved and dropped: the mark stays, `[fresh::]`,
+`[refresh::]`, `[keeps::]`, priority, schedule, close fields,
+`[id::]`, `[dependsOn::]`, and every other tag stay; whole-token
+`#hide` and the PDF wikilink are dropped. The new line carries
+`#task #ref`, a path-qualified `[[ref/<type>/<stem>|<title>]]` link,
+`[created::YYYY-MM-DD]` when missing, and `^ref-<slug>` at the end.
+
+The write flow, mirroring `bob task reroll`:
+
+1. Take `bob_sync.lock` (60 s budget) and require a git worktree.
+2. Pre-sync, unless `--offline`.
+3. Re-plan from disk under the lock. An empty plan prints
+   `nothing to migrate` and exits 0 without committing or
+   post-syncing.
+4. Refuse before any write when any ref is unmapped, any note has
+   multiple open trackers, or any changing path differs from `HEAD`.
+5. Snapshot every changing path, write sequentially (reading task,
+   follow-ups, ref-note edit, graph rewrite), and verify through the
+   rebuilt index.
+6. Commit exactly the written paths as
+   `bob ref migrate-tasks: <N> ref tasks into <M> notes`, then
+   post-sync unless `--offline`.
+
+The JSON report carries `mode: "write"` with the created `commit`
+(`sha`, `subject`, `paths`); `-f tsv` prints
+`ref_note<TAB>parent<TAB>status<TAB>title` for map round trips.
+
+### Rollback runbook
+
+The migration is one commit, so one `git revert` undoes it:
+
+```bash
+git -C ~/bob log --format=%h --grep='^bob ref migrate-tasks' -1
+bob vault-sync status --json   # check that no sync is running
+git -C ~/bob revert --no-edit <sha>
+bob vault-sync
+```
+
 ## JSON envelope
 
 `REF_SCHEMA_VERSION` is 1. Compact one-line JSON on stdout, no ANSI:

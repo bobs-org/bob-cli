@@ -186,6 +186,12 @@ const TABLE: &[Entry] = &[
         arg: "ref",
         kind: Kind::VaultNote,
     },
+    // `bob ref migrate-tasks` takes a TSV map file.
+    Entry {
+        path: &["ref", "migrate-tasks"],
+        arg: "map",
+        kind: Kind::Files(None),
+    },
     // Static choices (also served live by the engine through clap
     // possible values; the entries keep the decision explicit).
     Entry {

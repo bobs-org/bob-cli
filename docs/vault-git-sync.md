@@ -259,7 +259,7 @@ the last error.
 Rollback to git, not Obsidian Sync. Tag the pre-cutover commit before risky changes and
 use the filesystem backups from the migration if the vault must be restored. Obsidian
 Sync was over quota when this channel replaced it, so it is not a reliable rollback
-target. To undo a `bob ref migrate-zorg --write` commit, follow the rollback runbook in
+target. To undo a `bob ref migrate-tasks --write` or `bob ref migrate-zorg --write` commit, follow the rollback runbook in
 `docs/ref.md` (`git revert` of the migration commit, then `bob vault-sync`).
 
 Keep the disabled `ob-sync-bob.service` and `ob-sync-bob-poll` files through the soak.

@@ -280,7 +280,7 @@ The path above is illustrative; use the actual note path Bob reports.
 | Commands | Effects |
 | --- | --- |
 | `query`, `plan`, `ready`, `freshness list`, capture discovery/parse/complete, `projects list` | Read local vault state |
-| `ref find`, `ref list`, `ref show`, `ref jobs [list]`, `ref migrate-zorg` without `--write` | Inspect local references, jobs, or a migration plan without vault writes |
+| `ref find`, `ref list`, `ref show`, `ref jobs [list]`, `ref migrate-tasks`, `ref migrate-zorg` without `--write` | Inspect local references, jobs, or a migration plan without vault writes |
 | `capture`, `capture-task-id`, `capture-pomodoro-name`, `projects sync`, `task reconcile`, `freshness seed` | Write vault notes; a bare public link queues a job that later writes an intake PDF or a fallback task; `capture --dry-run` is offline |
 | `vault-sync`, `nightly` | Reconcile the vault with Git, including commits, merges, and pushes |
 | `task archive` | Archive task blocks and repair links; in a Git vault, commit touched files and push |
@@ -289,7 +289,7 @@ The path above is illustrative; use the actual note path Bob reports.
 | `gkeep list`, `gkeep pull` | Contact Keep; `pull` writes inbox tasks or intake PDFs, commits the Keep inbox note when tasks were written unless `--no-commit`, then archives verified Keep notes unless `--no-archive`; a clips-only pull skips that commit; `pull --dry-run` still contacts Keep and does not clip |
 | `ref create`, `ref scan`, `ref sync` | Write PDFs and reference notes inline; `create --dry-run` still downloads or opens URL targets; writing scans can run a configured pre-scan hook |
 | `ref jobs run` | Fetch queued links for their stored destination vaults; write intake PDFs or fallback inbox tasks |
-| `ref migrate-zorg --write` | Copy legacy reading records into `ref/zorg/` and commit them; sync before and after unless `--offline` |
+| `ref migrate-tasks --write`, `ref migrate-zorg --write` | Copy legacy reading records into `ref/zorg/` or move open ref tasks into parent notes and commit them; sync before and after unless `--offline` |
 | `completion install`, `completion uninstall` | Change shell adapter files and the completion manifest |
 
 Native vault reading and basic capture need no Git setup. Git workflows expect

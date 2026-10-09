@@ -857,6 +857,7 @@ bob ref find <QUERY>... [-b|--bob-dir PATH] [-f|--format human|json|markdown] [-
 bob ref jobs [list] [-a|--all] [-f|--format human|json]
 bob ref jobs run [-q|--quiet]
 bob ref list [-A|--all] [-b|--bob-dir PATH] [-f|--format human|json|markdown] [-g|--git-dates] [-n|--limit N] [-o|--origin external|agent-report] [-P|--parent NOTE] [-R|--reading-state STATE,...] [-r|--ref-dir PATH] [-S|--since DATE] [-s|--status STATUS,...] [-t|--ref-type TYPE,...]
+bob ref migrate-tasks [-b|--bob-dir DIR] [-f|--format human|json|tsv] [-m|--map FILE] [-o|--offline] [-r|--ref-dir PATH] [-w|--write]
 bob ref migrate-zorg [-b|--bob-dir PATH] [-f|--format human|json] [-o|--offline] [-r|--ref-dir PATH] [-w|--write]
 bob ref marker <pdf> [-b|--bob-dir PATH] [-l|--lib-dir PATH] [-r|--ref-dir PATH] [-x|--xlib-dir PATH]
 bob ref scan [-b|--bob-dir PATH] [-d|--dry-run] [-j|--jobs N] [-l|--lib-dir PATH] [-n|--no-hooks] [-r|--ref-dir PATH] [-v|--verbose] [-w|--write-pdfs] [-x|--xlib-dir PATH]
@@ -924,6 +925,7 @@ its note. `bob ref clip` remains a hidden alias of `create`.
 - `show <REF>...` reads one reference note with its metadata, annotations,
   own notes, and tasks. `-c` keeps only commented annotations and
   standalone notes, `-N` keeps metadata and own notes only.
+- `migrate-tasks` moves open ref tasks into parent notes, rewriting links and dependency ids. `--write` requires a Git worktree and commits the verified moves between two vault-sync cycles; `--offline` skips the sync cycles and keeps the commit local. See the [migration and rollback runbook](docs/ref.md#migrating-open-ref-tasks-bob-ref-migrate-tasks).
 - `migrate-zorg` previews copies of old `status::` reading records into
   `ref/zorg/`, preserving the original records. `--write` requires a Git
   worktree and commits the verified notes between two vault-sync cycles;

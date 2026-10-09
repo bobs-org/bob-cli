@@ -9,7 +9,10 @@ use super::*;
 /// Each entry is a group title plus the subcommand names it owns, in display
 /// order.
 const HELP_GROUPS: &[(&str, &[&str])] = &[
-    ("Library", &["find", "list", "migrate-zorg", "show"]),
+    (
+        "Library",
+        &["find", "list", "migrate-tasks", "migrate-zorg", "show"],
+    ),
     (
         "Highlights pipeline",
         &["create", "doctor", "jobs", "marker", "scan", "sync"],
@@ -76,6 +79,7 @@ fn all_subcommands() -> Vec<ClapCommand> {
     vec![
         crate::native::ref_library::cli::find_command(),
         crate::native::ref_library::cli::list_command(),
+        crate::native::ref_library::migrate_tasks::migrate_tasks_command(),
         crate::native::ref_library::migrate_zorg::migrate_zorg_command(),
         crate::native::ref_library::cli::show_command(),
         create::command(),

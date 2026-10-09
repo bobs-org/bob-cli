@@ -3,10 +3,11 @@ Find, list, and read Bob reference notes, and sync Highlights PDFs into them
 Usage: bob ref [OPTIONS] <COMMAND>
 
 Library:
-  find          Look up URLs, arXiv IDs, DOIs, paths, or titles in the library
-  list          List notes by reading state, status, type, origin, or date
-  migrate-zorg  Migrate zorg-era records to ref/zorg/; dry run unless --write
-  show          Show notes with metadata, annotations, and your own notes
+  find           Look up URLs, arXiv IDs, DOIs, paths, or titles in the library
+  list           List notes by reading state, status, type, origin, or date
+  migrate-tasks  Move open ref tasks into parent notes; dry run unless --write
+  migrate-zorg   Migrate zorg-era records to ref/zorg/; dry run unless --write
+  show           Show notes with metadata, annotations, and your own notes
 
 Highlights pipeline:
   create  Create a Highlights-ready PDF from Markdown, a PDF, or a URL

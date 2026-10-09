@@ -785,3 +785,154 @@ fn unselected_task_plan(
         diagnostics: diagnostics.to_vec(),
     }
 }
+
+/// Apply the v2 migration edits to one ref note's contents.
+///
+/// Removes the open v1 tracker block, heals the managed embed slot to
+/// `![[<route>#^<block_id>]]` one blank line below the H1, sets
+/// frontmatter `parent` to `parent: "[[<route>]]"`, and recomputes
+/// `highlights_marker_hash`/`highlights_marker_base` from the
+/// parent-free projection when those lines exist. The rest of the note
+/// is preserved byte-for-byte.
+pub(crate) fn apply_v2_migration_note(
+    contents: &str,
+    route: &str,
+    block_id: &str,
+) -> std::result::Result<String, String> {
+    use crate::native::ref_tasks::managed_embed_line;
+    let (front_opt, body) = match super::split_frontmatter(contents) {
+        Some((front, body)) => (Some(front), body),
+        None => (None, contents.to_string()),
+    };
+    // Remove the first open v1 tracker block from the body.
+    let lines: Vec<&str> = body.lines().collect();
+    let mut tracker_idx: Option<usize> = None;
+    for (i, line) in lines.iter().enumerate() {
+        if let Some(hit) = crate::native::ref_tasks::parse_tracker_line(line) {
+            if crate::native::ref_tasks::is_open_mark(hit.mark) {
+                tracker_idx = Some(i);
+                break;
+            }
+        }
+    }
+    let mut body_lines: Vec<String> =
+        lines.iter().map(|s| s.to_string()).collect();
+    if let Some(idx) = tracker_idx {
+        let indent = body_lines[idx]
+            .find(|c: char| !c.is_whitespace())
+            .unwrap_or(0);
+        let mut end = idx + 1;
+        let mut i = idx + 1;
+        while i < body_lines.len() {
+            if body_lines[i].trim().is_empty() {
+                let next = body_lines[i + 1..]
+                    .iter()
+                    .position(|l| !l.trim().is_empty())
+                    .map(|o| i + 1 + o);
+                if next.is_some_and(|n| {
+                    body_lines[n]
+                        .find(|c: char| !c.is_whitespace())
+                        .unwrap_or(0)
+                        > indent
+                }) {
+                    end = i + 1;
+                    i += 1;
+                    continue;
+                }
+                break;
+            }
+            let ind = body_lines[i]
+                .find(|c: char| !c.is_whitespace())
+                .unwrap_or(body_lines[i].len());
+            if ind <= indent {
+                break;
+            }
+            end = i + 1;
+            i += 1;
+        }
+        body_lines.drain(idx..end);
+    }
+    let pruned = body_lines.join("\n");
+    // Preserve trailing newline shape of the original body.
+    let pruned = if body.ends_with('\n') && !pruned.ends_with('\n') {
+        format!("{pruned}\n")
+    } else {
+        pruned
+    };
+    let healed = heal_managed_embed(&pruned, route, block_id);
+    let _ = managed_embed_line(route, block_id);
+
+    // Frontmatter: set parent, recompute hash/base when present.
+    let mut front_lines: Vec<String> = front_opt.unwrap_or_default();
+    let parent_line = format!("parent: \"[[{route}]]\"");
+    let mut saw_parent = false;
+    for line in front_lines.iter_mut() {
+        if line
+            .split_once(':')
+            .is_some_and(|(k, _)| k.trim().eq_ignore_ascii_case("parent"))
+        {
+            *line = parent_line.clone();
+            saw_parent = true;
+        }
+    }
+    if !saw_parent {
+        front_lines.push(parent_line);
+    }
+    // Recompute parent-free hash/base when both lines exist.
+    let has_hash = front_lines.iter().any(|l| {
+        l.split_once(':')
+            .is_some_and(|(k, _)| k.trim() == "highlights_marker_hash")
+    });
+    let has_base = front_lines.iter().any(|l| {
+        l.split_once(':')
+            .is_some_and(|(k, _)| k.trim() == "highlights_marker_base")
+    });
+    if has_hash && has_base {
+        if let Some(updated) = recompute_parent_free_hash(&front_lines) {
+            front_lines = updated;
+        }
+    }
+    let front_joined = front_lines.join("\n");
+    Ok(format!("---\n{front_joined}\n---\n{healed}"))
+}
+
+/// Recompute `highlights_marker_hash` from the parent-free base snapshot.
+fn recompute_parent_free_hash(front_lines: &[String]) -> Option<Vec<String>> {
+    let mut base_json: Option<String> = None;
+    for line in front_lines {
+        if let Some((k, v)) = line.split_once(':') {
+            if k.trim() == "highlights_marker_base" {
+                let mut v = v.trim().to_string();
+                if (v.starts_with('\'') && v.ends_with('\'') && v.len() >= 2)
+                    || (v.starts_with('"') && v.ends_with('"') && v.len() >= 2)
+                {
+                    v = v[1..v.len() - 1].to_string();
+                }
+                // Unescape single-quoted YAML escaping.
+                v = v.replace("''", "'");
+                base_json = Some(v);
+            }
+        }
+    }
+    let base_json = base_json?;
+    let value: serde_json::Value = serde_json::from_str(&base_json).ok()?;
+    let serde_json::Value::Object(mut map) = value else {
+        return None;
+    };
+    map.remove("parent");
+    let canonical =
+        serde_json::to_string(&serde_json::Value::Object(map)).ok()?;
+    let hash = hex::encode(sha2::Sha256::digest(canonical.as_bytes()));
+    let mut out: Vec<String> = Vec::new();
+    for line in front_lines {
+        if let Some((k, _)) = line.split_once(':') {
+            if k.trim() == "highlights_marker_hash" {
+                // Preserve quoting style: single-quoted string.
+                out.push(format!("highlights_marker_hash: '{hash}'"));
+                continue;
+            }
+        }
+        out.push(line.clone());
+    }
+    Some(out)
+}

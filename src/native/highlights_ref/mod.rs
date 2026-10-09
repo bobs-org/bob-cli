@@ -150,6 +150,7 @@ pub(crate) use marker::{
 };
 pub(crate) use model::Config;
 pub(crate) use note::configured_path;
+pub(crate) use reading_plan::apply_v2_migration_note;
 pub(crate) use region::{
     is_marker_mirror_text, parse_follow_up_task, parse_managed_region,
     split_note_body, RegionBlockKind, RegionTask,
@@ -280,6 +281,11 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
         }
         Some(("show", sub_matches)) => {
             crate::native::ref_library::cli::run_show(sub_matches)
+        }
+        Some(("migrate-tasks", sub_matches)) => {
+            crate::native::ref_library::migrate_tasks::run_migrate_tasks(
+                sub_matches,
+            )
         }
         Some(("migrate-zorg", sub_matches)) => {
             crate::native::ref_library::migrate_zorg::run_migrate_zorg(
