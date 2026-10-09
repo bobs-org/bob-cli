@@ -37,8 +37,8 @@ fn codes(row: &RefRow) -> BTreeSet<&str> {
 #[test]
 fn index_membership_and_coverage() {
     let index = fixture_index();
-    assert_eq!(index.rows.len(), 33);
-    assert_eq!(index.coverage.notes, 33);
+    assert_eq!(index.rows.len(), 34);
+    assert_eq!(index.coverage.notes, 34);
     assert_eq!(index.coverage.skipped, 3);
     assert_eq!(index.coverage.ref_dir, "ref");
     assert_eq!(index.coverage.intake, "not_checked");
@@ -154,7 +154,7 @@ fn legacy_unread_is_superseded_by_the_pdf_capture() {
     assert_eq!(row.added.as_deref(), Some("2026-01-01"));
     assert_eq!(row.added_source.as_deref(), Some("zorg_block"));
     // Library counts exclude superseded rows.
-    assert_eq!(index.counts.notes, 32);
+    assert_eq!(index.counts.notes, 33);
 }
 
 #[test]
@@ -254,6 +254,14 @@ fn tracker_diagnostics_fall_back_to_frontmatter() {
     assert_eq!(two.reading_state, "started");
     assert_eq!(two.reading_state_source, "frontmatter:wip");
     assert!(!two.blocked);
+
+    // Several trackers with one `[?]` still leave `blocked` false: only
+    // exactly one `^ref` tracker with a `[?]` mark sets the overlay.
+    let pair = row(&index, "ref/papers/two_trackers_blocked.md");
+    assert_eq!(codes(pair), BTreeSet::from(["multiple_ref_trackers"]));
+    assert!(!pair.blocked);
+    assert_eq!(pair.reading_state, "unknown");
+    assert_eq!(pair.reading_state_source, "none");
 
     let unknown = row(&index, "ref/papers/unknown_mark.md");
     assert_eq!(codes(unknown), BTreeSet::from(["unknown_ref_mark"]));

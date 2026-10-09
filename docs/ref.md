@@ -88,7 +88,8 @@ every `list`, `show`, and `find` row: true when the note carries
 exactly one `^ref` tracker whose mark is Blocked `[?]`, false
 otherwise. It never changes `status` or `reading_state` — a blocked
 `next` row still reads `queued` in its lane — it only says the note is
-waiting on something else.
+waiting on something else. Clients such as Bob Mac Capture's Refs panel
+read Blocked from this field and never parse `reading_state_source`.
 
 A legacy note whose `legacy_status` is `book` and that carries a
 non-empty `legacy_chapter_statuses` list derives its reading state
@@ -414,11 +415,13 @@ through the index row builder), chapter count, and rename.
 intake directory). `library` counts exclude superseded notes.
 `generated_at` is local `YYYY-MM-DDTHH:MM:SS` (pin with `BOB_NOW`).
 Each `ref` object is the full index row: path, link, title, origin,
-ref_type, era, status, status_sync, legacy_status, `blocked`,
-reading_state and its source, parent, urls, identity keys,
+ref_type, era, status, status_sync, legacy_status,
+reading_state and its source, `blocked`, parent, urls, identity keys,
 author/published/captured, added/finished dates and sources,
 source_pdf, audio, annotation and comment counts, snapshot,
-research_ref, superseded_by, and diagnostics.
+research_ref, superseded_by, and diagnostics. `blocked` is additive
+under `schema_version` 1: it adds a field without changing any other
+field or the schema version.
 
 ## Errors and exit codes
 

@@ -224,7 +224,7 @@ fn list_filters_or_within_and_across_options() {
 
     // `-R all` is every state, with no defaulting.
     let document = run_list_json(&vault, &["-R", "all"]);
-    assert_eq!(document["matched"], 32);
+    assert_eq!(document["matched"], 33);
     assert_eq!(document["filters"]["reading_state_defaulted"], false);
 }
 
@@ -240,6 +240,7 @@ fn list_unknown_and_conflict_states() {
             "ref/ai/legacy_book.md",
             "ref/ai/legacy_missing.md",
             "ref/papers/conflict_note.md",
+            "ref/papers/two_trackers_blocked.md",
             "ref/toplevel_note.md",
         ]
     );
@@ -248,7 +249,10 @@ fn list_unknown_and_conflict_states() {
     let document = run_list_json(&vault, &["-s", "conflict"]);
     assert_eq!(list_paths(&document), vec!["ref/papers/conflict_note.md"]);
     let document = run_list_json(&vault, &["-s", "unknown"]);
-    assert_eq!(list_paths(&document), vec!["ref/toplevel_note.md"]);
+    assert_eq!(
+        list_paths(&document),
+        vec!["ref/toplevel_note.md", "ref/papers/two_trackers_blocked.md"]
+    );
 }
 
 #[test]
@@ -274,6 +278,12 @@ fn list_rows_carry_always_present_blocked() {
         .find(|row| row["path"] == "ref/papers/synced_paper.md")
         .expect("synced row");
     assert_eq!(synced["blocked"], false);
+    // Several trackers with one `[?]` still leave `blocked` false.
+    let pair = rows
+        .iter()
+        .find(|row| row["path"] == "ref/papers/two_trackers_blocked.md")
+        .expect("two-tracker blocked row");
+    assert_eq!(pair["blocked"], false);
 }
 
 #[test]

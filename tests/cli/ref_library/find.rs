@@ -525,14 +525,14 @@ fn find_json_envelope_is_stable_and_honest() {
     assert_eq!(document["command"], "ref find");
     assert_eq!(document["generated_at"], "2026-10-06T12:00:00");
     assert_eq!(document["coverage"]["ref_dir"], "ref");
-    assert_eq!(document["coverage"]["notes"], 33);
+    assert_eq!(document["coverage"]["notes"], 34);
     assert_eq!(document["coverage"]["skipped"], 3);
     assert!(document["coverage"]["scope"]
         .as_str()
         .expect("scope string")
         .contains("never proof"));
     // Library counts exclude the superseded legacy twin.
-    assert_eq!(document["library"]["notes"], 32);
+    assert_eq!(document["library"]["notes"], 33);
     // The vault-root hub is membership, never an index row.
     let hub = run_find_json(&vault, &["hub_ref", "Reference Hub"]);
     for query in ["hub_ref", "Reference Hub"] {
@@ -585,7 +585,7 @@ fn find_human_blocks_carry_chips_and_footnotes() {
     assert_success(&output);
     assert_stdout_has_no_ansi(&output);
     let human = stdout(&output);
-    assert!(human.starts_with("bob ref find · 4 queries · ref/ (33 notes)\n"));
+    assert!(human.starts_with("bob ref find · 4 queries · ref/ (34 notes)\n"));
     assert!(human.contains("✓ FINISHED"), "missing chip:\n{human}");
     assert!(human.contains("○ QUEUED"), "missing chip:\n{human}");
     assert!(human.contains("≈ POSSIBLE"), "missing chip:\n{human}");
