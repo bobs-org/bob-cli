@@ -1529,7 +1529,7 @@ fn editor_reports_named_pomodoro_start_modes_spans_and_diagnostics() {
     );
     assert_eq!(
         close_hash.diagnostics[0].message,
-        "`=x` always closes the running Pomodoro; remove `#bugs`, or write `=x =#bugs` to close it and then start that Pomodoro",
+        "`=x` always closes the running Pomodoro; remove `#bugs`, or write `=x =#bugs` to close it and then start that Pomodoro; `==#bugs` swaps it in without closing the running session",
         "=x#bugs"
     );
     assert_eq!(close_hash.diagnostics[0].range, Some((2, 7)), "=x#bugs");

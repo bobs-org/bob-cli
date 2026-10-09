@@ -225,13 +225,15 @@ The item must contain only the start token (leading/trailing whitespace \
 is fine) and have exactly one physical line; a claimed token (counted or \
 drop-carrying) with extra text, markers, or child lines (`=3 more`, `=3x`, \
 `=~2 more`) and an exact token with child lines fail instead of creating \
-a task, while a bare token with prose (`= foo`, `==`, `= ~2`) and mid-body \
-tokens (`Plan =3`) stay ordinary prose. A dangling `~`/`,` (`=~`, `=~2,`) \
+a task, while a bare token with prose (`= foo`, `= ~2`) and mid-body \
+tokens (`Plan =3`) stay ordinary prose (a bare `==` is the override \
+restart below, never prose). A dangling `~`/`,` (`=~`, `=~2,`) \
 is incomplete and fails. A bare `=`/`=<X>` start needs a future \
 `- [ ] ()` placeholder; a named start creates its session when no open \
 entry matches. Both forms refuse while a timed entry is running; a running \
 session names itself and teaches the `=x`-then-`=` switch idiom \
-(`=x =#name` switches sessions in one line). The started entry moves to \
+(`=x =#name` switches sessions in one line) plus the `==` swap below. \
+The started entry moves to \
 the current slot and reports its queued Task Links, numbered 1..N in \
 ledger order with a numbered human index column. A `@@` declaration \
 never applies to start items, and forced \
@@ -239,6 +241,24 @@ destination/task/section/clipboard options are rejected on them. Later items \
 see earlier staged edits, dry-run reports without writing, and any failure \
 rolls the whole batch back, so `=x`, blank line, `=` switches sessions \
 atomically.\n\n\
+Capture a whole item `==`/`==<X>` (for example `==`, `==3`, `==-2`) to \
+restart today's running timed Pomodoro now with fresh `se<X>` timing, or \
+`==[<X>]#<pomodoro>` (for example `==#bugs`, `==3#bugs`) to swap that \
+Pomodoro in as the running one: an empty `<X>` takes over the running \
+session ledger byte-for-byte while a counted `<X>` starts it with fresh \
+timing, and the old session returns intact to first future. A trailing \
+`~<K>` drop list (for example `==~2`, `==#bugs~2`) drops those queued \
+Task Links from the session that ends up running. When nothing is \
+running, every `==` token acts exactly like its `=` twin. The item must \
+contain only the override token (quote in zsh); a bare `==` with more \
+text stays prose, and `==x` teaches the `=x` close. Naming the running \
+session refuses (`==#capture` teaches `==`/`==<X>`), unless a timing is \
+given (`==3#capture` restarts like `==3`). JSON kind stays \
+`pomodoro_start` with an additive `pomodoro_start.override` object \
+(`action` restart/swap/start, `ledger` kept/fresh, `previous`, and \
+`demoted` for swaps); human output prints `restarted`/`swapped` with the \
+takeover and first-future lines. See `docs/capture.md` (`Restarting or \
+swapping the running Pomodoro`).\n\n\
 Capture a whole item `=x[<N>][*<P>][!<M>][~<K>]` (case-insensitive `=X`, with \
 `*`, `!`, and `~` in any order; `=*` omits `x` before an initial `*` and `=!` omits it before `!`) to close today's running timed Pomodoro the \
 way Obsidian's Ctrl+Enter completion does, plus an auto-decrement that \

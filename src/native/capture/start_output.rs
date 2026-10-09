@@ -10,19 +10,21 @@ pub(super) fn print_human_pomodoro_start_success(
     ordinal: &str,
     target_label: &str,
 ) {
-    let is_restart = matches!(
-        start.r#override.as_ref().map(|item| item.action),
-        Some("restart")
-    );
-    let is_idle_start = matches!(
-        start.r#override.as_ref().map(|item| item.action),
-        Some("start")
-    );
+    let action = start.r#override.as_ref().map(|item| item.action);
+    let is_restart = matches!(action, Some("restart"));
+    let is_swap = matches!(action, Some("swap"));
+    let is_idle_start = matches!(action, Some("start"));
     let verb = if is_restart {
         if result.dry_run {
             "would restart"
         } else {
             "restarted"
+        }
+    } else if is_swap {
+        if result.dry_run {
+            "would swap"
+        } else {
+            "swapped"
         }
     } else if result.dry_run {
         "would start"
@@ -40,7 +42,65 @@ pub(super) fn print_human_pomodoro_start_success(
     } else {
         ""
     };
-    if is_restart {
+    if is_swap {
+        let outcome = start.r#override.as_ref();
+        let kept = matches!(outcome.map(|item| item.ledger), Some("kept"));
+        let previous = outcome.and_then(|item| item.previous.as_ref());
+        let demoted = outcome.and_then(|item| item.demoted.as_ref());
+        if kept {
+            let range = previous
+                .map(|item| item.time_range.clone())
+                .unwrap_or_default();
+            println!(
+                "  {}",
+                styler.dim(&format!(
+                    "{name} takes over {range} ({}m) at line {}",
+                    start.duration_minutes, start.pomodoro_line,
+                ))
+            );
+        } else {
+            println!(
+                "  {}",
+                styler.dim(&format!(
+                    "{name} {}-{} ({}m){created} at line {}",
+                    start.start,
+                    start.end,
+                    start.duration_minutes,
+                    start.pomodoro_line,
+                ))
+            );
+        }
+        if let Some(demoted) = demoted {
+            let demoted_name = demoted
+                .pomodoro_name
+                .as_deref()
+                .filter(|name| !name.is_empty())
+                .unwrap_or("session");
+            // A kept ledger prints no before range (`CAPTURE → …`); a
+            // fresh one names what it left (`CAPTURE 0920-0945 → …`).
+            let before = match (kept, previous) {
+                (false, Some(item)) => format!("{} ", item.time_range),
+                _ => String::new(),
+            };
+            let links = if demoted.task_links == 1 {
+                "keeps 1 Task Link".to_string()
+            } else {
+                format!("keeps {} Task Links", demoted.task_links)
+            };
+            let notes = if demoted.has_notes {
+                " and its notes"
+            } else {
+                ""
+            };
+            println!(
+                "  {}",
+                styler.dim(&format!(
+                    "{demoted_name} {before}→ first future at line {} · {links}{notes}",
+                    demoted.pomodoro_line,
+                ))
+            );
+        }
+    } else if is_restart {
         let before = start
             .r#override
             .as_ref()

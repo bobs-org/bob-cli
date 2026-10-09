@@ -505,7 +505,7 @@ pub(super) fn pomodoro_close_hash_error(name: &str) -> String {
         "`=x` always closes the running Pomodoro; remove `#`".to_string()
     } else {
         format!(
-            "`=x` always closes the running Pomodoro; remove `#{name}`, or write `=x =#{name}` to close it and then start that Pomodoro"
+            "`=x` always closes the running Pomodoro; remove `#{name}`, or write `=x =#{name}` to close it and then start that Pomodoro; `==#{name}` swaps it in without closing the running session"
         )
     }
 }

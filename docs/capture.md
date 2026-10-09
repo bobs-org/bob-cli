@@ -91,6 +91,9 @@ anything is written, and any failure rolls the whole batch back.
 | `=` / `=<X>` | Start today's next future Pomodoro now with `se<X>` timing (`=` is 25 minutes, `=3` is 15 minutes, `=-2` is 25 minutes with a 10-minute offset); the item must contain only the start token |
 | `=<X>#pomodoro` | Start the named Pomodoro now with `se<X>` timing (`=#deep-work` is 25 minutes, `=3#bugs` is 15 minutes); an open match (whole slug, else prefix) starts in place, a completed match starts a new session with that name ("again"), otherwise a new named session is created and started; the item must contain only the start token |
 | `=[<X>][#<name>]~<K>` | Start without the queued Task Links in `<K>` (`=~2`, `=3~2,4`, `=#bugs~2`, `=3#bugs~1,3`); `~` drops, the drop part always comes last, and the item must contain only the start token |
+| `==` / `==<X>` | Restart today's running timed Pomodoro now with fresh `se<X>` timing (`==` is 25 minutes, `==3` is 15 minutes); when nothing is running, acts exactly like the `=` twin; the item must contain only the override token |
+| `==[<X>]#pomodoro` | Swap the named Pomodoro in as the running session: with an empty `<X>` it takes over the running session ledger byte-for-byte (`==#bugs`), otherwise it starts with fresh `se<X>` timing (`==3#bugs`); the old session returns intact to first future; when nothing is running, acts exactly like the `=` twin |
+| `==[<X>][#<name>]~<K>` | Restart or swap without the queued Task Links in `<K>` (`==~2`, `==#bugs~2`); `~` drops from the session that ends up running, numbered exactly as the `=` start lineup numbers them |
 | `=x[<N>][*<P>][!<M>][~<K>]` (also `=*…`/`=!…` omitting `x`) | Close today's running timed Pomodoro (case-insensitive `=X`, with `*`, `!`, and `~` in any order); `<N>` keeps only those numbered Task Links in progress, `*<P>` parks those links (normal work without carrying forward), `!<M>` completes those links, `~<K>` drops those links (removed, not carried, not started), a lone `0` means none; a present-but-empty `*` or `!` selects every remaining numbered Task Link after explicit assignments and is represented by `park_all`/`complete_all` with an empty lexical list; explicit forms such as `=*1`/`=!1` narrow the action to task 1; one Work Log entry may sit on the close line, several use child bullets |
 | `=x [<n>] <entry text…>` | One entry on the close line: with no number it logs to the first task the close works (task 1 for plain `=x`, the first eligible worked link for wildcard closes); a leading number names the task, so only the first token is an index (`=x 1 3 bugs fixed` logs `3 bugs fixed` to task 1) |
 | `=x` + `- [<n>] <text>` (+ `  - <detail>`) | Several entries while closing: bullets are numbered all or none — a numbered bullet logs its text to worked task `<n>`, while unnumbered bullets log in order to the close's worked tasks (one worked task takes them all, otherwise bullet `i` logs to worked task `i`); a two-space bullet nests an undated detail under its entry; an inline entry plus bullets fails |
@@ -151,7 +154,12 @@ anything is written, and any failure rolls the whole batch back.
 | `=3` | Start the next future Pomodoro for 15 minutes; a counted `=` token is a start, not prose |
 | `=-2` | Start the next future Pomodoro for 25 minutes with a 10-minute offset |
 | `=3 more` | Error: a start item must contain only the token; remove extra text, markers, or child lines |
-| `= foo`, `==` | Ordinary task text; a bare `=` run followed by prose stays prose |
+| `==`, `==3` | Restart the running Pomodoro (25 / 15 minutes); a counted `==` token restarts, never prose |
+| `==#bugs` | Swap the open `BUGS` Pomodoro in as the running session, taking over its ledger |
+| `==3#bugs` | Swap `BUGS` in with fresh 15-minute timing |
+| `==important== thing`, `==foo`, `== foo`, `===` | Ordinary task text; a bare `==` run followed by prose stays prose, which protects Obsidian highlights |
+| `==x` | Error: `` `==x` is not a close: `==` restarts or swaps the running Pomodoro and never closes it; close it with `=x` `` |
+| `= foo` | Ordinary task text; a bare `=` followed by prose stays prose |
 | `=xx` | Ordinary prose; only a selection-shaped `=x…` token closes |
 | `Plan =x` | Ordinary task text; a mid-body `=x` stays prose |
 | `Plan =3` | Ordinary task text; a mid-body `=3` stays prose |
@@ -167,6 +175,7 @@ anything is written, and any failure rolls the whole batch back.
 | `+2 =x` | Extend by 10 minutes, then close; exactly like `+2`, blank line, `=x` |
 | `=x =` | Close the running session, then start the next future Pomodoro |
 | `=x =#bugs` | Close the running session, then start the open `BUGS` Pomodoro; a session switch in one line |
+| `==#bugs +2` | Swap `BUGS` in, then extend it by 10 minutes; session operators chain left to right exactly like blank-line items |
 | `=~2` | Start the next session without queued Task Link 2 |
 | `=3~2,4` | Start the next session for 15 minutes without links 2 and 4 |
 | `=#bugs~2` | Start the open `BUGS` Pomodoro without its link 2 |
@@ -793,7 +802,8 @@ cannot start its session, so those combinations fail before anything is
 written. Only an untimed, open placeholder is ever started. Any open timed
 Pomodoro — including one past its nominal end — stops the capture with a
 "finish the current Pomodoro first" error (close it with `=x`); Bob never
-overwrites or double-starts an entry, and only `=x` completes one. A selected non-placeholder or structurally
+overwrites or double-starts an entry — only the explicit `==` override
+restarts or swaps it — and only `=x` completes one. A selected non-placeholder or structurally
 ambiguous ledger fails the same way. A newly created started entry uses the
 same placement as named creation: after the last completed Pomodoro's complete
 block, otherwise before the first Pomodoro in the section. Starting an existing
@@ -1381,11 +1391,13 @@ Pomodoro sessions form a lifecycle, taught in this order:
 | `=` / `=<X>` | start | Start the next future Pomodoro now, timed like `se<X>` | `se<X>` + Tab inside `()` |
 | `=<X>#<pomodoro>` | start named | Start that named Pomodoro now, timed like `se<X>` (open match in place, completed match again, else created) | `se<X>` + Tab inside `() — NAME` |
 | `==` / `==<X>` | restart | Restart the running session now with fresh `se<X>` timing (`==` is 25 minutes) | `se<X>` + Tab on the running line |
+| `==#<pomodoro>` | swap | Swap that Pomodoro in as the running session, taking over the running ledger; the old session returns intact to first future | `se` + Tab on the running line after picking the name |
+| `==<X>#<pomodoro>` | swap fresh | Swap that Pomodoro in with fresh `se<X>` timing (`==5#bugs` is 25 minutes) | `se<X>` + Tab on the running line after picking the name |
 | `+[N]` / `-[N]` | resize | Move the running session's end N × 5 min later / earlier | `N\p` / `N\P` |
 | `++[N]` / `--[N]` | shift | Move the running session's start and end N × 5 min later / earlier | `N\o` / `N\O` |
 | `=x` | close | Close the running session | Ctrl+Enter |
 
-Mnemonic: "`=` starts the next session, `=#name` starts that one, `==` restarts the running one, `=x` stops the running one."
+Mnemonic: "`=` starts the next session, `=#name` starts that one, `==` restarts the running one, `==#name` swaps that one in, `=x` stops the running one."
 
 Recognition: let `t` be the item's first physical line trimmed of leading
 and trailing whitespace (the token after a chain split; see
@@ -1403,9 +1415,10 @@ offset, `=2-1` is 10 minutes with a 5-minute offset, `0` and leading zeros
 are valid, and an oversized value fails before any write. A counted token
 followed by anything else (`=3 more`, `=-2 @work`, `=3s:1`, `=2-1-`, `=3x`)
 or an exact token with child lines fails as an invalid start, never a task.
-A bare token followed by more text (`= foo`, `=- foo`, `==`, `=-)`), every
+A bare token followed by more text (`= foo`, `=- foo`, `=-)`), every
 other close shape (`=xx`, `=xa`), and mid-body tokens (`Plan =3`, `a=3`)
-stay ordinary prose.
+stay ordinary prose. (A bare `==` is the override restart, never prose;
+only `==` followed by more text stays prose.)
 
 Guards, checked in order on the staged daily note: a missing day file, a
 missing `## Pomodoros` section, exactly one open timed entry (named with its
@@ -1619,11 +1632,32 @@ grammar and timing match `=<X>` exactly. A trailing `~<K>` drops queued
 Task Links from the restarted session, numbered exactly as the `=` start
 lineup numbers them. Quote `==` items in zsh like every other `=` item.
 
+Capture a whole item `==[<X>]#name` to swap another Pomodoro in as the
+running one:
+
+```bash
+bob capture '==#bugs'
+bob capture '==3#bugs'
+bob capture '==#bugs~2'
+```
+
+A swap exists to change _which_ Pomodoro is running, so an empty suffix
+keeps the clock instead of re-timing: `==#bugs` hands the running session
+ledger to `BUGS` byte-for-byte, while `==3#bugs` starts `BUGS` with fresh
+15-minute timing. `==5#name` is the explicit "swap in with a fresh 25
+minutes" spelling. Name resolution matches `=<X>#name` exactly: an open
+whole slug, else prefix; then a completed entry starts a new session with
+that name ("again"); otherwise a new named session is created and
+started, with the same "did you mean" warning (spelled with `==`).
+A trailing `~<K>` drops queued Task Links from the incoming session,
+numbered exactly as the `=` start lineup numbers them; a created or
+"again" target starts empty, so drops fail there with the
+created-session diagnostic before anything is written.
+
 Guards run in order on the staged daily note: a missing day file, a
 missing `## Pomodoros` section, more than one open timed entry, then no
 open timed entry (the idle fallback below) or exactly one open timed
-entry (the restart). A named override with a running session keeps
-today's refusal until swaps land; only the unnamed restart runs here.
+entry (a restart for `==<X>`, a swap for `==[<X>]#name`).
 
 A restart applies `~<K>` to the running session's lineup (pre-image
 numbering), replaces the whole parenthesized session ledger (the span
@@ -1665,6 +1699,47 @@ Worked example (`BOB_NOW=2026-10-09 09:32:00`, TAB indentation):
 | `==3` | CAPTURE becomes `(**0935-0950** [t:: 15m])` in place |
 | `==-2` | CAPTURE becomes `(**0925-0950** [t:: 25m])` in place |
 | `==~2` | CAPTURE restarts at `0935-1000` without `[[bob#^web-capture]]` |
+| `==#bugs` | BUGS takes over `(**0920-0945** [t:: 25m])` and moves under PLAN; CAPTURE becomes `- [ ] () — CAPTURE` right after BUGS, both links intact; SASE follows |
+| `==3#bugs` | Same layout, BUGS is `(**0935-0950** [t:: 15m])` |
+| `==#plan` | A new PLAN session ("again") takes over `0920-0945`; CAPTURE first future |
+| `==#capture` | Refused: CAPTURE is already running (teach `==` / `==<X>`) |
+| `==3#capture` | Identical to `==3` (a restart) |
+| `==#bugs +2` | Swap, then BUGS extends to `0920-0955` |
+
+`==#bugs` writes:
+
+```markdown
+## Pomodoros
+
+- [x] (**0830-0855** [t:: 25m]) — PLAN
+  - 🍅 [[bob#^capture-stop]]
+- [ ] (**0920-0945** [t:: 25m]) — BUGS
+  - [[sase#^fix-flaky]]
+- [ ] () — CAPTURE
+  - [[bob#^capture-stop]]
+  - [[bob#^web-capture]]
+- [ ] () — SASE
+```
+
+A swap resolves the name against the pre-image, then applies `~<K>` to
+the target's lineup, demotes the running session, and starts the target.
+Demoting clears the running ledger to `()` and moves the whole block
+before the earliest other open untimed placeholder (the `=x0` reset
+move), so the old session is first future: the headline suffix and every
+child byte stay intact (Task Links, struck links, nested details,
+stand-alone notes). There is no note gate (unlike `=x0`), no history row,
+no task-note writes, and no Work Log. The target then starts exactly as
+`=<X>#name` would with nothing running, except that an empty `<X>`
+writes the old ledger bytes verbatim — including range-local annotations
+— instead of the 25-minute default. When the ledger bytes cannot be
+isolated the swap refuses with
+``cannot read CAPTURE's session ledger at line 5; give the new session a timing instead (`==5#bugs`)``.
+Naming the running session with an empty `<X>` refuses with
+`` `==#capture` names CAPTURE, which is already running (0920-0945, line 5); restart it with `==` or `==<X>`, or name another Pomodoro to swap in ``;
+with a non-empty `<X>` it is a restart (`==3#capture` behaves exactly
+like `==3`). On a note-free ledger, `==<X>#name` leaves the day file
+byte-identical to `=x0 =<X>#name`, and `==#name` equals `=x0 =#name`
+except that the target's ledger is the old running ledger.
 
 JSON kind stays `pomodoro_start` with `placement: "started"`, `text` the
 raw token, and `task_line` the session now running. The existing
@@ -1681,13 +1756,32 @@ it):
 }
 ```
 
-`action` is `"restart"` here (`"swap"` and its `demoted` object land with
-swaps; `"start"` is the idle fallback with `previous` and `demoted`
-omitted). `ledger` is `"fresh"` for every restart. `previous` is the
-running session in the pre-image (`pomodoro_name` omitted when unnamed;
-`start`/`end` match `pomodoro_start.start` format). The running session is
-also reported once in the batch-level `pomodoro_blocks` array with role
-`started`; see [Pomodoro blocks](#pomodoro-blocks).
+`action` is `"restart"`, `"swap"`, or `"start"` (the idle fallback,
+with `previous` and `demoted` omitted). `ledger` is `"fresh"` for every
+restart; for a swap it is `"kept"` (empty `<X>`) or `"fresh"`. `previous`
+is the running session in the pre-image (`pomodoro_name` omitted when
+unnamed; `start`/`end` match `pomodoro_start.start` format). A swap also
+carries `demoted`: the swapped-out session in the post-image, with
+`task_links` counting its direct-child Task Links and `has_notes`
+reporting a stand-alone session note:
+
+```json
+"override": {
+  "action": "swap",
+  "ledger": "kept",
+  "previous": {"pomodoro_name": "CAPTURE", "pomodoro_line": 5, "start": "0920",
+               "end": "0945", "duration_minutes": 25, "time_range": "0920-0945"},
+  "demoted": {"pomodoro_name": "CAPTURE", "pomodoro_line": 7,
+              "entry_line": "- [ ] () — CAPTURE", "task_links": 2, "has_notes": false}
+}
+```
+
+For a kept ledger the existing `pomodoro_start` fields describe the
+transferred range (`start`/`end`/`duration_minutes`/`time_range` from it,
+`offset_units: 0`). The running session is reported once in the
+batch-level `pomodoro_blocks` array with role `started` (before =
+its pre-image entry, or `created`); a swapped-out session is reported
+with role `reset`; see [Pomodoro blocks](#pomodoro-blocks).
 
 Human output prints `restarted` (dry-run: `would restart`), the
 before → after range line, the canonical ledger line, one numbered row per
@@ -1700,6 +1794,22 @@ queued task, and `nothing queued` when empty:
   1 [*] Add support for `=x` syntax! bob.md ^capture-stop
   2 [*] Add capture support for web URLs! bob.md ^web-capture
 ```
+
+A swap prints `swapped` (dry-run: `would swap`), the takeover (or fresh
+timing) line, and the demoted session's first-future line, then the same
+numbered lineup, dropped rows, `Dropped …` summary, and `nothing queued`:
+
+```text
+✓ swapped  2026/20261009.md
+  BUGS takes over 0920-0945 (25m) at line 5
+  CAPTURE → first future at line 7 · keeps 2 Task Links
+  - [ ] (**0920-0945** [t:: 25m]) — BUGS
+  1 [*] Fix flaky gkeep test sase.md ^fix-flaky
+```
+
+A fresh swap prints `BUGS 0935-0950 (15m) at line 5` (with ` (created)`
+when created) and `CAPTURE 0920-0945 → first future …`; `and its notes`
+is appended when the demoted session owns a stand-alone note.
 
 ### Adjusting the current Pomodoro
 
@@ -1854,7 +1964,8 @@ close line itself (or it shares its line only with other session operators;
 see
 [Chaining session operators on one line](#chaining-session-operators-on-one-line)
 and [Logging work while closing](#logging-work-while-closing));
-`=xx`/`==` plus mid-body `Plan =x` stay ordinary prose. A bare
+`=xx` plus mid-body `Plan =x` stay ordinary prose. (`==x` is a claimed
+near miss teaching the `=x` close, never prose.) A bare
 `=` is now a whole-item start, not an incomplete state. When no session is
 running but a future Pomodoro exists, the close diagnostic names it with a
 `(start it with `=`)` hint. `@route:block-id=x…` and
@@ -3311,7 +3422,8 @@ Field rules:
 - `created` is true when the entry did not exist before the batch.
 - `roles` is an informational, deduplicated list in first-touch order. The
   vocabulary is `"adjusted"`, `"shifted"`, `"started"`, `"closed"`,
-  `"next"`, `"linked"`, `"unlinked"`, and `"changed"` (auto-detected);
+  `"reset"` (a demoted swap session or `=x0` reset), `"next"`,
+  `"linked"`, `"unlinked"`, and `"changed"` (auto-detected);
   clients must not depend on it.
 - `lines` is the block in document order — the headline plus every
   following line up to the first non-blank zero-indent line or the end of
@@ -3614,7 +3726,7 @@ far, the spans typed so far, and one `interactive_placeholder` span over the
 separator. A same-line chain splits into one `items[]` entry per operator,
 with child lines attaching to the line's `=x`; a chain whose `=x` is not
 last nests its item ranges, so they never partially overlap. Other
-`=`-prefixed tokens (`=xx`, `=xa`, `==`,
+`=`-prefixed tokens (`=xx`, `=xa`,
 `= foo`) and mid-body `=x`/`=3` stay ordinary prose. On link items the
 `=x…` suffix spans the same four span kinds instead of `pomodoro_start`:
 `@r:id=x1!2` and `^r:id=x1` stay `pomodoro_link` (or `pomodoro_task` with body
