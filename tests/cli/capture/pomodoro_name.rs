@@ -97,6 +97,114 @@ fn capture_pomodoros_json_lists_open_entries_with_stable_picker_shape() {
 }
 
 #[test]
+fn capture_pomodoros_task_link_count_matches_dry_run_lineup() {
+    let temp = TempDir::new("bob-cli-capture-pomodoros-parity");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("2026/20260828.md");
+    write_file(
+        &day_file,
+        concat!(
+            "# Day\n",
+            "## Pomodoros\n",
+            "- [ ] (**09:00 - 09:30** [t:: 30m]) — MEMORY\n",
+            "\t- [[sase#^deep-fix]]\n",
+            "\t- [[sase#^second-task]]#\n",
+            "\t- ![[sase#^embedded-task]]\n",
+            "\t- ~~[[sase#^struck-task]]~~\n",
+            "\t- quick note\n",
+            "- [ ] () — FUTURE WORK\n",
+        ),
+    );
+    write_file(
+        &vault.join("sase.md"),
+        concat!(
+            "## Tasks\n",
+            "- [*] #task Deep fix [created:: 2026-08-20] ^deep-fix\n",
+            "- [*] #task Second task [created:: 2026-08-21] ^second-task\n",
+            "- [*] #task Embedded task [created:: 2026-08-22] ^embedded-task\n",
+            "- [x] #task Struck task [created:: 2026-08-19] [completion:: 2026-08-28] ^struck-task\n",
+        ),
+    );
+
+    let pomodoros_output = bob_command()
+        .arg("capture-pomodoros")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-08-28 09:10:00")
+        .output()
+        .expect("run bob capture-pomodoros json");
+    assert_success(&pomodoros_output);
+    let pomodoros_json: serde_json::Value =
+        serde_json::from_str(stdout(&pomodoros_output).trim())
+            .expect("pomodoros json");
+    assert_eq!(pomodoros_json["schema_version"], 1);
+    let current = pomodoros_json["pomodoros"]
+        .as_array()
+        .expect("pomodoros array")
+        .iter()
+        .find(|entry| entry["is_current"] == true)
+        .expect("current entry")
+        .clone();
+    let task_link_count = current["task_link_count"]
+        .as_u64()
+        .expect("current task_link_count");
+
+    let close_output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("--dry-run")
+        .arg("--no-clip")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("=x")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-08-28 09:10:00")
+        .output()
+        .expect("run bob capture dry-run =x");
+    assert_success(&close_output);
+    let close_json: serde_json::Value =
+        serde_json::from_str(stdout(&close_output).trim()).expect("close json");
+    let task_links = close_json["pomodoro_close"]["task_links"]
+        .as_array()
+        .expect("task_links array");
+    assert_eq!(task_link_count, task_links.len() as u64);
+    assert_eq!(task_link_count, 3);
+
+    for entry in pomodoros_json["pomodoros"].as_array().expect("array") {
+        if entry["is_current"] != true {
+            assert!(
+                entry["task_link_count"].is_null(),
+                "non-current entries carry null: {entry}"
+            );
+        }
+    }
+
+    let name_output = bob_command()
+        .arg("capture-pomodoro-name")
+        .arg("--pomodoro-ref")
+        .arg("1:deadbeef")
+        .arg("--name")
+        .arg("MEMORY")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .env("BOB_DAY_FILE", &day_file)
+        .output()
+        .expect("run capture-pomodoro-name");
+    let name_stdout = stdout(&name_output).trim().to_string();
+    assert!(
+        !name_stdout.contains("task_link_count"),
+        "capture-pomodoro-name JSON is unchanged:\n{name_stdout}"
+    );
+}
+
+#[test]
 fn capture_pomodoros_human_output_is_plain_when_piped() {
     let temp = TempDir::new("bob-cli-capture-pomodoros-human");
     let vault = temp.path().join("vault");

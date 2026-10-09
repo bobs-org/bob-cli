@@ -47,4 +47,4 @@ pub(crate) use reset::{
     has_standalone_note, is_reset_selection, is_reset_spec, plan_reset,
     reset_if_eligible, ResetPlan,
 };
-pub(crate) use selection::{join_numbers, CloseSelection};
+pub(crate) use selection::{join_numbers, number_task_links, CloseSelection};

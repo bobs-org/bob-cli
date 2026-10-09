@@ -4298,7 +4298,7 @@ object with `ok`, `schema_version` `1`, `day_file`, `relative_day_file`,
 `count`, `warnings`, and an ordered `pomodoros` array. Each Pomodoro has `ref`
 (`<line>:<digest>`), `line`, `state` (`open` or `completed`), `status_symbol`,
 nullable `name`, `slug`, `selectable`, nullable `time_range`, `placeholder`,
-`is_current`, and `child_count`. The ref is stale-safe: a later write command
+`is_current`, `child_count`, and `task_link_count`. `task_link_count` is the size of the numbered Task Link lineup that a plain `=x` close indexes, the same count as `pomodoro_close.task_links`, present as an integer only on the `is_current` entry and `null` elsewhere. Editors use it to know whether close task numbers can be multi-digit. The ref is stale-safe: a later write command
 can resolve exact line plus digest first, then a unique shifted digest match.
 Named Pomodoros use the same slug rules as task sections — ASCII-lowercase,
 whitespace collapsed to `-`, whole-slug matching before the first slug-prefix
