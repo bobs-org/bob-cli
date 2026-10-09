@@ -1025,36 +1025,35 @@ fn tracker_intervals_override_for_matching_type() {
     assert_eq!(evaluated.interval_source, IntervalSource::Task);
 }
 
-/// Reference lane rows use the reference cadence with a REFERENCES
-/// tier, their actual lane, and null state; a disabled lane still
-/// reviews references, matching projects.
+/// Lane ref rows are ordinary lane rows: the lane interval wins
+/// over the reference cadence, they walk PENDING/NEXT, and a
+/// disabled lane walks neither them nor ordinary tasks — while lane
+/// `^prj` keeps PROJECTS with the project cadence.
 #[test]
 fn tracker_lane_precedence_and_disabled_lanes() {
     let config = config_with_trackers(Some(1), Some(3));
-    // `^ref` in Pending uses the 3-day reference cadence, not the
-    // 1-day lane interval, and walks in REFERENCES with null state.
+    // A `#ref` row in Pending uses the 1-day lane interval, not the
+    // 3-day reference cadence, and walks in PENDING with null state.
     let mut pending_ref = lane_row("r.md", 1, '/', Some("2026-10-05"), None);
     pending_ref.tracker = Some(TrackerKind::Ref);
     pending_ref.raw_line =
-        "- [/] #task Read [fresh:: 2026-10-05] ^ref".to_string();
+        "- [/] #task #ref Read [fresh:: 2026-10-05] ^ref-r".to_string();
     let evaluated = evaluate(&pending_ref, today(), &config);
     assert_eq!(evaluated.lane, Some(Lane::Pending));
     assert_eq!(evaluated.state, None);
-    assert_eq!(evaluated.tier, Some(Tier::References));
-    assert_eq!(evaluated.interval_days, 3);
-    assert_eq!(evaluated.interval_source, IntervalSource::Reference);
-    assert_eq!(evaluated.due_on, Some(date(2026, 10, 8)));
+    assert_eq!(evaluated.tier, Some(Tier::Pending));
+    assert_eq!(evaluated.interval_days, 1);
+    assert_eq!(evaluated.interval_source, IntervalSource::Pending);
+    assert_eq!(evaluated.due_on, Some(date(2026, 10, 6)));
 
-    // Same lane disabled: references still walk, like projects.
+    // Same lane disabled: lane refs stay unwalked, like ordinary
+    // tasks. Only `^prj` keeps its review with the lane off.
     let mut disabled = config_with_trackers(None, Some(3));
     disabled.pending_interval = None;
     let evaluated = evaluate(&pending_ref, today(), &disabled);
     assert_eq!(evaluated.lane, Some(Lane::Pending));
     assert_eq!(evaluated.state, None);
-    assert_eq!(evaluated.tier, Some(Tier::References));
-    assert_eq!(evaluated.interval_days, 3);
-    assert_eq!(evaluated.interval_source, IntervalSource::Reference);
-    assert_eq!(evaluated.due_on, Some(date(2026, 10, 8)));
+    assert_eq!(evaluated.tier, None);
 
     // Ordinary lane rows stay unwalked with the lane off.
     let ordinary = lane_row("o.md", 1, '/', Some("2026-10-05"), None);
@@ -1076,29 +1075,116 @@ fn tracker_lane_precedence_and_disabled_lanes() {
     assert_eq!(evaluated.interval_source, IntervalSource::Project);
 }
 
-/// Lane `^ref` rows without a configured `reference_interval` use
-/// the Ready chain, never the lane interval.
+/// Lane `#ref` rows use the lane interval, never the reference
+/// cadence or the Ready chain.
 #[test]
-fn lane_reference_uses_ready_chain_without_configured_cadence() {
-    // Pending lane interval is 1: stamped yesterday is due for an
-    // ordinary task, but a `^ref` without `reference_interval` runs
-    // the 7-day Ready chain and stays fresh.
+fn lane_reference_uses_lane_interval_without_configured_cadence() {
+    // Pending lane interval is 1: a `#ref` stamped yesterday is due
+    // in PENDING exactly like an ordinary task.
     let mut pending_ref = lane_row("r.md", 1, '/', Some("2026-10-07"), None);
     pending_ref.tracker = Some(TrackerKind::Ref);
     pending_ref.raw_line =
-        "- [/] #task Read [fresh:: 2026-10-07] ^ref".to_string();
+        "- [/] #task #ref Read [fresh:: 2026-10-07] ^ref-r".to_string();
     let evaluated = evaluate(&pending_ref, today(), &default_config());
-    assert_eq!(evaluated.interval_days, 7);
-    assert_eq!(evaluated.interval_source, IntervalSource::Default);
-    assert_eq!(evaluated.tier, None);
-
-    // Stamped 7 days ago, the Ready chain is due.
-    let mut due_ref = lane_row("r.md", 2, '/', Some("2026-10-01"), None);
-    due_ref.tracker = Some(TrackerKind::Ref);
-    due_ref.raw_line = "- [/] #task Read [fresh:: 2026-10-01] ^ref".to_string();
-    let evaluated = evaluate(&due_ref, today(), &default_config());
-    assert_eq!(evaluated.tier, Some(Tier::References));
+    assert_eq!(evaluated.interval_days, 1);
+    assert_eq!(evaluated.interval_source, IntervalSource::Pending);
+    assert_eq!(evaluated.tier, Some(Tier::Pending));
     assert_eq!(evaluated.due_on, Some(date(2026, 10, 8)));
+
+    // A `[*]` ref walks NEXT on the next interval.
+    let mut next_ref = lane_row("r.md", 2, '*', Some("2026-10-07"), None);
+    next_ref.tracker = Some(TrackerKind::Ref);
+    next_ref.raw_line =
+        "- [*] #task #ref Read [fresh:: 2026-10-07] ^ref-r".to_string();
+    let evaluated = evaluate(&next_ref, today(), &default_config());
+    assert_eq!(evaluated.lane, Some(Lane::Next));
+    assert_eq!(evaluated.tier, Some(Tier::Next));
+    assert_eq!(evaluated.interval_days, 1);
+    assert_eq!(evaluated.interval_source, IntervalSource::Next);
+
+    // With the lane walk off, a lane ref falls back like an ordinary
+    // task: no tier, no due date.
+    let mut lane_off = default_config();
+    lane_off.pending_interval = None;
+    let evaluated = evaluate(&pending_ref, today(), &lane_off);
+    assert_eq!(evaluated.tier, None);
+    assert_eq!(evaluated.due_on, None);
+}
+
+/// Ref identity is the `#ref` tag or the exact `^ref` block ID:
+/// whole-token, case-insensitive; near matches never qualify.
+#[test]
+fn ref_identity_is_tag_or_exact_block_id() {
+    let tags = |list: &[&str]| {
+        list.iter().map(|tag| tag.to_string()).collect::<Vec<_>>()
+    };
+    assert_eq!(
+        TrackerKind::from_tags_and_block_id(&tags(&[]), Some("prj")),
+        Some(TrackerKind::Prj)
+    );
+    assert_eq!(
+        TrackerKind::from_tags_and_block_id(&tags(&[]), Some("ref")),
+        Some(TrackerKind::Ref)
+    );
+    assert_eq!(
+        TrackerKind::from_tags_and_block_id(
+            &tags(&["#task", "#ref"]),
+            Some("ref-essay")
+        ),
+        Some(TrackerKind::Ref)
+    );
+    assert_eq!(
+        TrackerKind::from_tags_and_block_id(&tags(&["#task", "#REF"]), None),
+        Some(TrackerKind::Ref)
+    );
+    assert_eq!(
+        TrackerKind::from_tags_and_block_id(
+            &tags(&["#task", "#references"]),
+            None
+        ),
+        None
+    );
+    assert_eq!(
+        TrackerKind::from_tags_and_block_id(&tags(&["#task", "#ref/x"]), None),
+        None
+    );
+    assert_eq!(
+        TrackerKind::from_tags_and_block_id(&tags(&["#task"]), Some("ref-2")),
+        None
+    );
+    assert_eq!(
+        TrackerKind::from_tags_and_block_id(&tags(&["#task"]), Some("prj-x")),
+        None
+    );
+    assert_eq!(
+        TrackerKind::from_tags_and_block_id(&tags(&["#task"]), None),
+        None
+    );
+}
+
+/// A tag-only Ready `#ref` row walks REFERENCES (never NEW) with
+/// its Ready state intact; a `#ref` line with `#hide` is hidden
+/// like any task, while an exact-`^ref` hidden v1 tracker still
+/// reviews through the transitional bypass.
+#[test]
+fn tag_only_ready_ref_walks_references() {
+    let config = default_config();
+    // Unstamped tag-only Ready ref: REFERENCES with NEW state, never
+    // the NEW tier.
+    let mut ready_ref = row("- [ ] #task #ref Read ^ref-essay");
+    ready_ref.tracker = Some(TrackerKind::Ref);
+    let evaluated = evaluate(&ready_ref, today(), &config);
+    assert_eq!(evaluated.state, Some(FreshState::New));
+    assert_eq!(evaluated.tier, Some(Tier::References));
+    assert_eq!(bucket_for_state(evaluated.state), Some("new"));
+
+    // A hand-written `#hide` on a v2 line hides it like any task.
+    let mut hidden_tag = row("- [ ] #task #ref Read #hide ^ref-essay");
+    hidden_tag.tracker = Some(TrackerKind::Ref);
+    hidden_tag.lane_visible = false;
+    let evaluated = evaluate(&hidden_tag, today(), &config);
+    assert_eq!(evaluated.state, None);
+    assert_eq!(evaluated.tier, None);
 }
 
 /// A 7-day reference cadence: stamped 6 days ago is not due, stamped

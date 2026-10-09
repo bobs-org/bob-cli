@@ -49,7 +49,9 @@ impl RowCtx {
     /// carry it from the engine, so callers pass `true` there. For
     /// exact `^ref` trackers callers pass the freshness-specific
     /// visibility (hide allowed); every other exclusion still
-    /// applies. Exact `^prj` rows use the ordinary predicate.
+    /// applies. Tag-only `#ref` rows use the ordinary predicate: a
+    /// hand-written `#hide` on a v2 line hides it like any task.
+    /// Exact `^prj` rows use the ordinary predicate.
     pub(crate) fn freshness_row(&self, lane_visible: bool) -> FreshnessRow {
         FreshnessRow {
             path: self.task.path.clone(),
@@ -66,7 +68,8 @@ impl RowCtx {
             created: self.task.created,
             raw_line: self.task.original_markdown.clone(),
             note_refresh_raw: self.note_refresh_raw.clone(),
-            tracker: super::state::TrackerKind::from_block_id(
+            tracker: super::state::TrackerKind::from_tags_and_block_id(
+                &self.task.tags,
                 self.task.block_id.as_deref(),
             ),
             checklist: checklist_from_tags(&self.task.tags),

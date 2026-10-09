@@ -113,8 +113,10 @@ impl Tier {
 }
 
 /// Tracking-task identity: the parsed, exact trailing block ID `prj`
-/// or `ref` on a real task. Tags alone, `^prj-extra`, description
-/// text, and `[[x#^prj]]` links/embeds are never identities.
+/// on a real task, or — for references — the exact trailing block ID
+/// `ref` or a whole-token `#ref` tag (case-insensitive). `^prj-extra`,
+/// `#references`, description text, and `[[x#^prj]]` links/embeds are
+/// never identities.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TrackerKind {
     Prj,
@@ -130,11 +132,23 @@ impl TrackerKind {
         }
     }
 
-    pub(crate) fn from_block_id(block_id: Option<&str>) -> Option<Self> {
+    /// Ref-task identity is the `#ref` tag or the exact `^ref` block
+    /// ID; `^prj` behavior is unchanged. Tags compare as whole tokens,
+    /// case-insensitive (`#REF` qualifies, `#references` does not).
+    pub(crate) fn from_tags_and_block_id(
+        tags: &[String],
+        block_id: Option<&str>,
+    ) -> Option<Self> {
         match block_id {
             Some("prj") => Some(Self::Prj),
             Some("ref") => Some(Self::Ref),
-            _ => None,
+            _ => {
+                if tags.iter().any(|tag| tag.eq_ignore_ascii_case("#ref")) {
+                    Some(Self::Ref)
+                } else {
+                    None
+                }
+            }
         }
     }
 }
@@ -188,12 +202,14 @@ pub(crate) fn lane_for_row(status: char, is_todo: bool) -> Option<Lane> {
 /// canonical daily note (`YYYY/YYYYMMDD.md`), and `is_today` is
 /// membership in today's open Pomodoro Task Links.
 ///
-/// Exact `^ref` tasks (`tracker` is `Ref`) bypass only the `#hide`
-/// exclusion: callers set `lane_visible` to the freshness-specific
-/// visibility (hide allowed for exact `^ref`), and every other
-/// exclusion still applies. Exact `^prj` rows use the ordinary
-/// lane-visible predicate with no `#hide` exemption: `bob projects
-/// sync` owns that tag, so a hidden `^prj` is simply out of scope.
+/// Exact `^ref` tasks bypass only the `#hide` exclusion: callers
+/// set `lane_visible` to the freshness-specific visibility (hide
+/// allowed for exact `^ref`), and every other exclusion still
+/// applies. Tag-only `#ref` rows use the ordinary lane-visible
+/// predicate with no `#hide` exemption. Exact `^prj` rows use the
+/// ordinary lane-visible predicate with no `#hide` exemption:
+/// `bob projects sync` owns that tag, so a hidden `^prj` is simply
+/// out of scope.
 #[derive(Debug, Clone)]
 pub(crate) struct FreshnessRow {
     pub(crate) path: String,
@@ -212,7 +228,8 @@ pub(crate) struct FreshnessRow {
     pub(crate) raw_line: String,
     /// The note's raw `task_refresh` frontmatter value, if present.
     pub(crate) note_refresh_raw: Option<String>,
-    /// Exact trailing `^prj` / `^ref` identity, if any.
+    /// Tracking identity, if any: exact trailing `^prj`, or exact
+    /// trailing `^ref` / whole-token `#ref` tag for references.
     pub(crate) tracker: Option<TrackerKind>,
     /// Exact `#gtd` + `#pre`/`#post` membership, if any.
     pub(crate) checklist: Option<ChecklistKind>,
@@ -393,9 +410,13 @@ fn evaluate_without_checklist(
     // Explicit tracker cadences override every other level for that
     // tracker type (`docs/freshness.md` §2). A tracker without a
     // configured cadence uses the Ready chain in every lane: the
-    // weekly reminder must not become a daily lane review.
+    // weekly reminder must not become a daily lane review. Only Ready
+    // refs keep the tracker cadence and REFERENCES tier; lane refs
+    // (`[*]`/`[/]`) are ordinary lane rows (`docs/freshness.md` §6,
+    // the J4 split). `^prj` behavior is unchanged.
     let is_prj = row.tracker == Some(TrackerKind::Prj);
-    let is_ref = row.tracker == Some(TrackerKind::Ref);
+    let is_ref =
+        row.tracker == Some(TrackerKind::Ref) && lane == Some(Lane::Ready);
     let is_tracker = is_prj || is_ref;
     let tracker_override: Option<(u16, IntervalSource)> = if is_prj {
         config
@@ -542,9 +563,10 @@ fn evaluate_without_checklist(
         })
     };
 
-    // Tier: PROJECTS is every due `^prj` and REFERENCES every due
-    // `^ref` (Ready NEW/RESURFACED/ROTTEN states, plus every due lane
-    // tracker with its actual lane retained); both are checked before
+    // Tier: PROJECTS is every due `^prj` (Ready NEW/RESURFACED/ROTTEN
+    // states, plus every due lane tracker with its actual lane
+    // retained) and REFERENCES every due Ready `#ref`/`^ref` row; both
+    // are checked before
     // NEW and the lane tiers, so a never-confirmed Ready reference
     // walks in REFERENCES, never NEW. PENDING/NEXT are due walked
     // ordinary lanes; TICKLER/ROTTEN are the Ready resurfaced/rotten

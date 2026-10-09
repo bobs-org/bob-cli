@@ -34,6 +34,13 @@ const COMMAND_NAME: &str = "bob freshness";
 /// Bump only for a breaking change to the JSON objects below; new
 /// optional fields keep the current version.
 ///
+/// Schema 12 re-keys ref review identity from the exact `^ref`
+/// block ID to the `#ref` tag: Ready `#ref` rows keep the
+/// `reference_interval` cadence and REFERENCES tier (never NEW,
+/// never decide), while `[*]`/`[/]` refs are ordinary lane rows on
+/// the lane interval. The transitional `#hide` bypass survives only
+/// for exact `^ref` rows.
+///
 /// Schema 11 adds the RECURRING walk tier: `recurring` in `tier`
 /// and `by_tier`, `counts.recurring_due`; recurring rows carry
 /// `due_on` = the occurrence date.
@@ -61,7 +68,7 @@ const COMMAND_NAME: &str = "bob freshness";
 /// eligible Ready trackers). Schema 4 added the keep-streak contract.
 /// The seed envelope shares this constant; seed contents are
 /// otherwise unchanged.
-const SCHEMA_VERSION: u32 = 11;
+const SCHEMA_VERSION: u32 = 12;
 
 pub(crate) fn run(args: Vec<OsString>) -> i32 {
     let argv: Vec<OsString> = iter::once(OsString::from(COMMAND_NAME))
