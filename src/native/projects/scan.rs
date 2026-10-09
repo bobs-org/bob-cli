@@ -398,6 +398,195 @@ pub(crate) fn trim_yaml_scalar(value: &str) -> &str {
     value
 }
 
+/// External names for an area or project note (`project_name_aliases`).
+///
+/// Reads the line-based frontmatter form in flow (`["bob-cli"]`) or block
+/// (`- bob-cli`) shape. Returns the accepted aliases in file order plus one
+/// warning per ignored entry; a non-list value warns once and yields none.
+pub(crate) fn project_name_aliases(
+    frontmatter: &Frontmatter<'_>,
+) -> (Vec<String>, Vec<String>) {
+    let key_index = frontmatter.lines.iter().position(|line| {
+        line.strip_prefix("project_name_aliases")
+            .and_then(|rest| rest.strip_prefix(':'))
+            .is_some()
+    });
+    let Some(key_index) = key_index else {
+        return (Vec::new(), Vec::new());
+    };
+    let raw = frontmatter.lines[key_index]
+        .strip_prefix("project_name_aliases")
+        .and_then(|rest| rest.strip_prefix(':'))
+        .unwrap_or("")
+        .trim();
+    if raw.is_empty() {
+        return parse_alias_block_list(&frontmatter.lines[key_index + 1..]);
+    }
+    if raw.starts_with('[') {
+        return parse_alias_flow_list(raw);
+    }
+    (
+        Vec::new(),
+        vec![
+            "project_name_aliases is not a list; expected flow ([\"name\"]) or block (\"- name\") form"
+                .to_string(),
+        ],
+    )
+}
+
+fn parse_alias_flow_list(raw: &str) -> (Vec<String>, Vec<String>) {
+    let Some(inner) = raw
+        .strip_prefix('[')
+        .and_then(|rest| rest.rfind(']').map(|end| &rest[..end]))
+    else {
+        return (
+            Vec::new(),
+            vec![
+                "project_name_aliases list is not closed with ']'; ignoring it"
+                    .to_string(),
+            ],
+        );
+    };
+    let mut aliases = Vec::new();
+    let mut warnings = Vec::new();
+    if inner.trim().is_empty() {
+        return (aliases, warnings);
+    }
+    for item in split_flow_items(inner) {
+        match classify_alias_entry(item) {
+            Ok(alias) => {
+                if !aliases.iter().any(|seen| seen == &alias) {
+                    aliases.push(alias);
+                }
+            }
+            Err(warning) => warnings.push(warning),
+        }
+    }
+    (aliases, warnings)
+}
+
+fn parse_alias_block_list(lines: &[&str]) -> (Vec<String>, Vec<String>) {
+    let mut aliases = Vec::new();
+    let mut warnings = Vec::new();
+    let mut saw_item = false;
+    for line in lines {
+        let trimmed = line.trim_start();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Some(item) = trimmed
+            .strip_prefix("- ")
+            .or_else(|| trimmed.strip_prefix('-'))
+        else {
+            break;
+        };
+        saw_item = true;
+        // A `-` with no text after it is an empty entry.
+        let item = item.strip_prefix(' ').unwrap_or(item);
+        match classify_alias_entry(item) {
+            Ok(alias) => {
+                if !aliases.iter().any(|seen| seen == &alias) {
+                    aliases.push(alias);
+                }
+            }
+            Err(warning) => warnings.push(warning),
+        }
+    }
+    if !saw_item {
+        warnings.push(
+            "project_name_aliases has no list items; ignoring it".to_string(),
+        );
+    }
+    (aliases, warnings)
+}
+
+/// Split flow-list items on commas that sit outside quotes.
+fn split_flow_items(inner: &str) -> Vec<&str> {
+    let mut items = Vec::new();
+    let mut start = 0;
+    let mut quote = None;
+    for (index, byte) in inner.char_indices() {
+        match quote {
+            Some(active) if byte == active => quote = None,
+            Some(_) => {}
+            None => {
+                if byte == '"' || byte == '\'' {
+                    quote = Some(byte);
+                } else if byte == ',' {
+                    items.push(inner[start..index].trim());
+                    start = index + 1;
+                }
+            }
+        }
+    }
+    items.push(inner[start..].trim());
+    items
+}
+
+/// Classify one raw alias entry: quoted and bare-word strings are kept,
+/// empty and YAML non-string scalars are reported and dropped.
+fn classify_alias_entry(raw: &str) -> Result<String, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(
+            "project_name_aliases entry is empty; ignoring it".to_string()
+        );
+    }
+    let bytes = trimmed.as_bytes();
+    if trimmed.len() >= 2
+        && ((bytes[0] == b'"' && bytes[trimmed.len() - 1] == b'"')
+            || (bytes[0] == b'\'' && bytes[trimmed.len() - 1] == b'\''))
+    {
+        let inner = trimmed[1..trimmed.len() - 1].trim();
+        if inner.is_empty() {
+            return Err(
+                "project_name_aliases entry is empty; ignoring it".to_string()
+            );
+        }
+        return Ok(inner.to_string());
+    }
+    if is_yaml_non_string_scalar(trimmed) {
+        return Err(format!(
+            "project_name_aliases entry '{trimmed}' is not a string; ignoring it"
+        ));
+    }
+    // Strip a trailing YAML comment (`name # note`) before keeping it.
+    let without_comment = split_yaml_comment(trimmed).trim().to_string();
+    if without_comment.is_empty() {
+        return Err(
+            "project_name_aliases entry is empty; ignoring it".to_string()
+        );
+    }
+    Ok(without_comment)
+}
+
+fn is_yaml_non_string_scalar(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    matches!(
+        lower.as_str(),
+        "~" | "null" | "true" | "false" | "yes" | "no" | "on" | "off"
+    ) || value.parse::<f64>().is_ok_and(|_| {
+        value.bytes().all(|byte| {
+            byte.is_ascii_digit()
+                || matches!(byte, b'.' | b'+' | b'-' | b'e' | b'E' | b'_')
+        }) && !value.is_empty()
+    })
+}
+
+fn split_yaml_comment(value: &str) -> &str {
+    let bytes = value.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'#'
+            && (index == 0 || matches!(bytes[index - 1], b' ' | b'\t'))
+        {
+            return value[..index].trim_end();
+        }
+        index += 1;
+    }
+    value
+}
+
 /// One typed area/project note for the per-note Ready cap.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TypedNote {

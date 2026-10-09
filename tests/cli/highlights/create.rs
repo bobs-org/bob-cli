@@ -18,6 +18,7 @@ fn highlights_create_dry_run_prints_plan_without_writes() {
         &source,
         "---\ntitle: A Useful Report\n---\n\n# Ignored H1\n",
     );
+    write_file(&vault.join("sase_ref.md"), "---\ntype: [[area]]\n---\n");
 
     let output = bob_command()
         .arg("highlights")
@@ -42,7 +43,7 @@ fn highlights_create_dry_run_prints_plan_without_writes() {
     assert!(
         report.contains("A Useful Report")
             && report.contains("status: next")
-            && report.contains("parent: sase_ref")
+            && report.contains("parent    sase_ref  (area · sase_ref.md)")
             && report.contains("id: xprompt_role_binding")
             && report.contains("xlib/papers/xprompt_role_binding.pdf")
             && report.contains("library_destination:")
@@ -52,7 +53,90 @@ fn highlights_create_dry_run_prints_plan_without_writes() {
         "{report}"
     );
     assert!(!report.contains("research:"), "{report}");
-    assert!(!vault.exists(), "dry-run must not create the vault");
+    assert!(
+        !vault.join("xlib").exists(),
+        "dry-run must not write intake PDFs"
+    );
+}
+
+#[test]
+fn highlights_create_dry_run_resolves_parent_alias_to_canonical_route() {
+    let temp = TempDir::new("bob-cli-highlights-create-dry-run-alias");
+    let source = temp.path().join("report.md");
+    let vault = temp.path().join("vault");
+    write_file(&source, "# Alias Report\n");
+    write_file(
+        &vault.join("bob.md"),
+        "---\ntype: [[project]]\nstatus: wip\nproject_name_aliases: [\"bob-cli\"]\n---\n",
+    );
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg(&source)
+        .arg("-b")
+        .arg(&vault)
+        .arg("-d")
+        .arg("-P")
+        .arg("bob-cli")
+        .env("BOB_PANDOC_COMMAND", "/definitely/missing/pandoc")
+        .output()
+        .expect("run bob highlights create --dry-run with alias");
+
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report
+            .contains("parent    bob  (project · bob.md · via alias bob-cli)")
+            && report.contains("- parent: bob\n"),
+        "{report}"
+    );
+    assert!(
+        !vault.join("xlib").exists(),
+        "dry-run must not write intake PDFs"
+    );
+}
+
+#[test]
+fn highlights_create_dry_run_rejects_unknown_parent_with_hints() {
+    let temp = TempDir::new("bob-cli-highlights-create-dry-run-bad-parent");
+    let source = temp.path().join("report.md");
+    let vault = temp.path().join("vault");
+    write_file(&source, "# Bad Parent Report\n");
+    write_file(
+        &vault.join("bob.md"),
+        "---\ntype: [[project]]\nstatus: wip\n---\n",
+    );
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg(&source)
+        .arg("-b")
+        .arg(&vault)
+        .arg("-d")
+        .arg("-P")
+        .arg("bobx")
+        .env("BOB_PANDOC_COMMAND", "/definitely/missing/pandoc")
+        .output()
+        .expect("run bob highlights create --dry-run with bad parent");
+
+    assert!(
+        !output.status.success(),
+        "an unresolvable -P must fail before any work: {}",
+        format_output(&output)
+    );
+    let error = stderr(&output);
+    assert!(
+        error.contains("no area or project named 'bobx'")
+            && error.contains("did you mean bob (project · bob.md)?")
+            && error.contains("project_name_aliases"),
+        "{error}"
+    );
+    assert!(
+        !vault.join("xlib").exists(),
+        "a rejected -P must not write anything"
+    );
 }
 
 #[test]
@@ -2162,6 +2246,7 @@ fn highlights_create_article_maps_options_to_clip() {
     let vault = temp.path().join("vault");
     let root = temp.path().join("curl-root");
     std::fs::create_dir_all(&root).expect("create curl root");
+    write_file(&vault.join("sase_ref.md"), "---\ntype: [[area]]\n---\n");
     let fake_curl = write_fake_curl(temp.path());
     let log = temp.path().join("curl.log");
     std::fs::write(&log, "").expect("init log");

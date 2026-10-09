@@ -4252,9 +4252,13 @@ values are also accepted. Nested notes, projects whose status is `done`,
 `canceled`, or `cancelled` (case-insensitively), and other note types are
 omitted. Human output groups routes by kind. JSON output has `ok`, `bob_dir`,
 `count`, and an ordered `targets` array; each target has `route`, `name`,
-`label`, `kind`, `is_default`, `status`, and `relative_path`. `--verbose`
+`label`, `kind`, `is_default`, `status`, `relative_path`, and
+`project_name_aliases` (the note's external names, `[]` when it has none;
+human output shows them as `aka bob-cli`). `--verbose`
 reports top-level Markdown files omitted because their filename is not a valid
-route; other omissions remain silent.
+route, plus `project_name_aliases` problems (malformed entries, duplicate
+claims, and shadowed aliases); other omissions remain silent. See
+[`docs/projects.md`](projects.md) §"External names (`project_name_aliases`)".
 
 `capture-sections` lists each parsed ATX heading (H1-H6) except a heading
 titled exactly `Tasks`, in document order. It ignores headings in YAML

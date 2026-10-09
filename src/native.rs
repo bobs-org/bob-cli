@@ -53,6 +53,7 @@ mod note_ready;
 mod note_tasks;
 mod notify;
 mod ob;
+pub(crate) mod parent_notes;
 mod plan_budget;
 mod plugins;
 mod pomodoro;

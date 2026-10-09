@@ -24,6 +24,7 @@ that task instead of asking users to edit machine-facing metadata directly.
 
 - [Commands](#commands)
 - [Project notes](#project-notes)
+- [External names (`project_name_aliases`)](#external-names-project_name_aliases)
 - [The `^prj` task](#the-prj-task)
 - [Sync rules](#sync-rules)
 - [Task Card](#task-card)
@@ -68,6 +69,32 @@ Bare `type: [[project]]` is accepted too. The scan skips `done/`, `.git/`,
 
 `sync` also reads an optional `parent` frontmatter field when it is an Obsidian
 wikilink, such as `parent: "[[Parent Project]]"`.
+
+## External Names (`project_name_aliases`)
+
+An area or project note can answer to more than its file stem. Add a
+`project_name_aliases` frontmatter list with the external names that should
+resolve to the note, in flow or block form:
+
+```yaml
+project_name_aliases: ["bob-cli"]
+```
+
+```yaml
+project_name_aliases:
+  - bob-cli
+```
+
+`bob capture-targets` reports each note's aliases (`project_name_aliases`
+in JSON, `aka bob-cli` in human output), and `bob ref create -P` resolves
+them: `-P bob-cli` files under `bob.md` and stores the canonical route
+`bob` in the marker. Matching is case-insensitive; `-` and `_` are
+different characters, and resolution is never fuzzy when mutating — a
+near miss is a hint, not a match. An exact stem always wins over an alias;
+two notes claiming one alias is an ambiguity error naming both, and an
+alias equal to another note's stem is shadowed by that stem. Empty and
+non-string entries are ignored with a warning, visible with
+`bob capture-targets -v` alongside the duplicate and shadow warnings.
 
 Project scheduling is an optional frontmatter date:
 

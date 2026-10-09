@@ -15,7 +15,8 @@ use super::{
     capture, env as bob_env,
     projects::{
         frontmatter_is_area, frontmatter_is_project, frontmatter_value,
-        is_markdown_file, parse_frontmatter, ProjectStatus,
+        is_markdown_file, parse_frontmatter, project_name_aliases,
+        ProjectStatus,
     },
     style::{display_width, pad_right, Styler},
 };
@@ -207,6 +208,7 @@ pub(crate) struct CaptureTarget {
     pub(crate) is_default: bool,
     pub(crate) status: Option<String>,
     pub(crate) relative_path: String,
+    pub(crate) project_name_aliases: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -246,6 +248,59 @@ pub(crate) fn scan_capture_targets(bob_dir: &Path) -> CaptureTargetsReport {
     report.targets.extend(areas);
     report.targets.extend(projects);
     report
+        .warnings
+        .extend(alias_conflict_warnings(&report.targets));
+    report
+}
+
+/// Cross-note alias problems: two notes claiming one alias, and an alias
+/// equal to another candidate's stem (the stem wins at resolve time).
+fn alias_conflict_warnings(targets: &[CaptureTarget]) -> Vec<ScanNote> {
+    use std::collections::BTreeMap;
+
+    let mut warnings = Vec::new();
+    let mut claimants: BTreeMap<String, Vec<&CaptureTarget>> = BTreeMap::new();
+    for target in targets {
+        for alias in &target.project_name_aliases {
+            claimants
+                .entry(alias.to_ascii_lowercase())
+                .or_default()
+                .push(target);
+        }
+    }
+    for (alias, claimants) in &claimants {
+        if claimants.len() > 1 {
+            let notes = claimants
+                .iter()
+                .map(|target| target.label.clone())
+                .collect::<Vec<_>>()
+                .join(", ");
+            warnings.push(ScanNote::path(
+                PathBuf::from("."),
+                format!(
+                    "project_name_aliases '{alias}' is claimed by more than one note ({notes}); the alias is ambiguous"
+                ),
+            ));
+        }
+    }
+    for target in targets {
+        for alias in &target.project_name_aliases {
+            let lowered = alias.to_ascii_lowercase();
+            if let Some(owner) =
+                targets.iter().find(|other| other.route == lowered)
+                && owner.route != target.route
+            {
+                warnings.push(ScanNote::path(
+                    PathBuf::from(&target.relative_path),
+                    format!(
+                        "project_name_aliases '{alias}' is shadowed by the {} stem; the stem wins",
+                        owner.route
+                    ),
+                ));
+            }
+        }
+    }
+    warnings
 }
 
 fn read_sorted_root_directory(
@@ -309,7 +364,14 @@ fn scan_root_entry(
     };
 
     if frontmatter_is_area(&frontmatter) {
-        areas.push(target_from_route(route, CaptureTargetKind::Area, None));
+        let (aliases, alias_warnings) = project_name_aliases(&frontmatter);
+        push_alias_warnings(report, &relative_path, alias_warnings);
+        areas.push(target_from_route(
+            route,
+            CaptureTargetKind::Area,
+            None,
+            aliases,
+        ));
         return;
     }
 
@@ -323,11 +385,26 @@ fn scan_root_entry(
         return;
     }
 
+    let (aliases, alias_warnings) = project_name_aliases(&frontmatter);
+    push_alias_warnings(report, &relative_path, alias_warnings);
     projects.push(target_from_route(
         route,
         CaptureTargetKind::Project,
         Some(status.label().to_string()),
+        aliases,
     ));
+}
+
+fn push_alias_warnings(
+    report: &mut CaptureTargetsReport,
+    relative_path: &Path,
+    warnings: Vec<String>,
+) {
+    for warning in warnings {
+        report
+            .warnings
+            .push(ScanNote::path(relative_path.to_path_buf(), warning));
+    }
 }
 
 fn default_inbox_target() -> CaptureTarget {
@@ -340,6 +417,7 @@ fn default_inbox_target() -> CaptureTarget {
         is_default: true,
         status: None,
         relative_path: capture::INBOX_FILE.to_string(),
+        project_name_aliases: Vec::new(),
     }
 }
 
@@ -347,6 +425,7 @@ fn target_from_route(
     route: String,
     kind: CaptureTargetKind,
     status: Option<String>,
+    project_name_aliases: Vec<String>,
 ) -> CaptureTarget {
     let label = capture::route_label(&route);
     CaptureTarget {
@@ -357,6 +436,7 @@ fn target_from_route(
         is_default: false,
         status,
         relative_path: label,
+        project_name_aliases,
     }
 }
 
@@ -468,19 +548,34 @@ fn print_target_row(
 }
 
 fn target_detail(target: &CaptureTarget, styler: &Styler) -> String {
+    let aka = if target.project_name_aliases.is_empty() {
+        String::new()
+    } else {
+        format!("aka {}", target.project_name_aliases.join(", "))
+    };
+
     if target.is_default {
-        return styler.yellow("default");
+        let default = styler.yellow("default");
+        if aka.is_empty() {
+            return default;
+        }
+        return format!("{default} · {aka}");
     }
 
     if target.kind != CaptureTargetKind::Project {
-        return String::new();
+        return aka;
     }
 
     let status = target.status.as_deref().unwrap_or("wip");
-    if status == "waiting" {
+    let status = if status == "waiting" {
         styler.blue(status)
     } else {
         styler.yellow(status)
+    };
+    if aka.is_empty() {
+        status
+    } else {
+        format!("{status} · {aka}")
     }
 }
 
@@ -676,11 +771,13 @@ mod tests {
                     "cash".to_string(),
                     CaptureTargetKind::Area,
                     None,
+                    Vec::new(),
                 ),
                 target_from_route(
                     "bob".to_string(),
                     CaptureTargetKind::Project,
                     Some("wip".to_string()),
+                    vec!["bob-cli".to_string()],
                 ),
             ],
             warnings: Vec::new(),
@@ -697,9 +794,91 @@ mod tests {
         assert_eq!(value["targets"][0]["kind"], "inbox");
         assert_eq!(value["targets"][0]["is_default"], true);
         assert!(value["targets"][0]["status"].is_null());
+        assert_eq!(
+            value["targets"][0]["project_name_aliases"],
+            serde_json::json!([])
+        );
         assert_eq!(value["targets"][1]["kind"], "area");
+        assert_eq!(
+            value["targets"][1]["project_name_aliases"],
+            serde_json::json!([])
+        );
         assert_eq!(value["targets"][2]["kind"], "project");
         assert_eq!(value["targets"][2]["status"], "wip");
+        assert_eq!(
+            value["targets"][2]["project_name_aliases"],
+            serde_json::json!(["bob-cli"])
+        );
+    }
+
+    #[test]
+    fn scan_reads_aliases_and_warns_on_conflicts() {
+        let temp = TempDir::new("bob-cli-capture-targets-aliases");
+        write_file(
+            &temp.path().join("bob.md"),
+            "---\ntype: [[project]]\nstatus: wip\nproject_name_aliases: [\"bob-cli\"]\n---\n",
+        );
+        write_file(
+            &temp.path().join("sase.md"),
+            "---\ntype: [[area]]\nproject_name_aliases:\n  - sase-alias\n  - \"\"\n---\n",
+        );
+        write_file(
+            &temp.path().join("other.md"),
+            "---\ntype: [[area]]\nproject_name_aliases: [\"bob-cli\"]\n---\n",
+        );
+
+        let report = scan_capture_targets(temp.path());
+        let bob = report
+            .targets
+            .iter()
+            .find(|target| target.route == "bob")
+            .expect("bob target");
+        assert_eq!(bob.project_name_aliases, vec!["bob-cli".to_string()]);
+        let sase = report
+            .targets
+            .iter()
+            .find(|target| target.route == "sase")
+            .expect("sase target");
+        assert_eq!(sase.project_name_aliases, vec!["sase-alias".to_string()]);
+        let warnings = report
+            .warnings
+            .iter()
+            .map(ScanNote::display)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            warnings.contains("empty; ignoring"),
+            "empty entries warn:\n{warnings}"
+        );
+        assert!(
+            warnings.contains("claimed by more than one note"),
+            "duplicate claims warn:\n{warnings}"
+        );
+    }
+
+    #[test]
+    fn scan_warns_on_shadowed_alias() {
+        let temp = TempDir::new("bob-cli-capture-targets-shadow");
+        write_file(
+            &temp.path().join("bob.md"),
+            "---\ntype: [[project]]\nstatus: wip\n---\n",
+        );
+        write_file(
+            &temp.path().join("sase.md"),
+            "---\ntype: [[area]]\nproject_name_aliases: [\"bob\"]\n---\n",
+        );
+
+        let report = scan_capture_targets(temp.path());
+        let warnings = report
+            .warnings
+            .iter()
+            .map(ScanNote::display)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            warnings.contains("shadowed by the bob stem"),
+            "shadowed aliases warn:\n{warnings}"
+        );
     }
 
     fn write_file(path: &Path, contents: &str) {

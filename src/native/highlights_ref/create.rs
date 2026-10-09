@@ -180,6 +180,7 @@ struct CreateOptions {
     no_audio: bool,
     output: Option<PathBuf>,
     parent: String,
+    resolved_parent: Option<crate::native::parent_notes::ResolvedParent>,
     published: Option<String>,
     ref_type: Option<String>,
     status: String,
@@ -418,6 +419,45 @@ pub(super) fn run(matches: &ArgMatches) -> i32 {
         );
         return 1;
     }
+    let parent_input = matches
+        .get_one::<String>("parent")
+        .expect("defaulted by clap")
+        .clone();
+    // An explicit -P resolves before any work (pandoc, the browser, the
+    // network, or a write) and the marker stores the canonical route. The
+    // obsidian_ref default stays unresolved until ref-create-parent.
+    let parent_given = matches
+        .value_source("parent")
+        .is_some_and(|source| source == clap::parser::ValueSource::CommandLine);
+    let (parent, resolved_parent) = match parent_given {
+        false => (parent_input, None),
+        true => {
+            match crate::native::parent_notes::resolve_parent(
+                &config.bob_dir,
+                &parent_input,
+            ) {
+                Ok(resolved) => (resolved.route.clone(), Some(resolved)),
+                Err(error) => {
+                    let styler = Styler::detect();
+                    let message = error.message();
+                    if let Some((first, hint)) = message.split_once("\nhint: ")
+                    {
+                        eprintln!(
+                            "bob ref create: {}: {first}",
+                            styler.red("error")
+                        );
+                        eprintln!("hint: {hint}");
+                    } else {
+                        eprintln!(
+                            "bob ref create: {}: {message}",
+                            styler.red("error")
+                        );
+                    }
+                    return 1;
+                }
+            }
+        }
+    };
     let options = CreateOptions {
         audio: matches.get_one::<OsString>("audio").map(PathBuf::from),
         author: matches.get_one::<String>("author").cloned(),
@@ -429,10 +469,8 @@ pub(super) fn run(matches: &ArgMatches) -> i32 {
         name: matches.get_one::<String>("name").cloned(),
         no_audio: matches.get_flag("no-audio"),
         output: matches.get_one::<OsString>("output").map(PathBuf::from),
-        parent: matches
-            .get_one::<String>("parent")
-            .expect("defaulted by clap")
-            .clone(),
+        parent,
+        resolved_parent,
         published: matches.get_one::<String>("published").cloned(),
         ref_type,
         status: matches
@@ -1784,7 +1822,7 @@ fn print_pdf_dry_run(
         );
     }
     println!("status: {}", options.status);
-    println!("parent: {}", options.parent);
+    print_parent_line(options);
     if let Some(id) = id {
         println!("id: {id}");
     }
@@ -2369,6 +2407,15 @@ fn render_temp_pdf(
     Ok(super::return_links::read_report(&filters.report))
 }
 
+/// The dry-run parent line: the resolved `parent    route  (kind · label
+/// [· via alias])` line for an explicit `-P`, else today's `parent: …` line.
+fn print_parent_line(options: &CreateOptions) {
+    match &options.resolved_parent {
+        Some(resolved) => println!("{}", resolved.dry_run_line()),
+        None => println!("parent: {}", options.parent),
+    }
+}
+
 fn print_plan(plan: &CreatePlan, options: &CreateOptions, styler: &Styler) {
     println!(
         "{} would create Highlights-ready PDF",
@@ -2397,7 +2444,7 @@ fn print_plan(plan: &CreatePlan, options: &CreateOptions, styler: &Styler) {
         println!("published: {published} (override)");
     }
     println!("status: {}", options.status);
-    println!("parent: {}", options.parent);
+    print_parent_line(options);
     if let Some(id) = &plan.id {
         println!("id: {id}");
     }
@@ -2450,6 +2497,7 @@ mod tests {
             no_audio: false,
             output: None,
             parent: DEFAULT_PARENT.to_string(),
+            resolved_parent: None,
             published: None,
             ref_type: None,
             status: DEFAULT_STATUS.to_string(),

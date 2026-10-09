@@ -77,6 +77,88 @@ fn capture_targets_json_lists_picker_targets_in_order() {
     assert_eq!(targets[3]["status"], "wip");
     assert_eq!(targets[4]["status"], "blocked");
     assert_eq!(targets[5]["status"], "waiting");
+    for target in targets {
+        assert!(
+            target
+                .get("project_name_aliases")
+                .is_some_and(|aliases| aliases.as_array().is_some()),
+            "every target carries project_name_aliases: {target}"
+        );
+    }
+}
+
+#[test]
+fn capture_targets_json_reports_aliases_and_human_shows_aka() {
+    let temp = TempDir::new("bob-cli-capture-targets-aliases");
+    let vault = temp.path().join("vault");
+
+    write_file(&vault.join("mac_inbox.md"), "---\ntype: [[area]]\n---\n");
+    write_file(
+        &vault.join("bob.md"),
+        "---\ntype: [[project]]\nstatus: wip\nproject_name_aliases: [\"bob-cli\"]\n---\n",
+    );
+    write_file(
+        &vault.join("sase.md"),
+        "---\ntype: [[area]]\nproject_name_aliases:\n  - sase-alias\n---\n",
+    );
+
+    let output = bob_command()
+        .arg("capture-targets")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .output()
+        .expect("run bob capture-targets json with aliases");
+
+    assert_success(&output);
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .unwrap_or_else(|error| {
+            panic!("stdout should be JSON: {error}\n{}", format_output(&output))
+        });
+    let targets = json["targets"].as_array().expect("targets array");
+    let bob = targets
+        .iter()
+        .find(|target| target["route"] == "bob")
+        .expect("bob target");
+    assert_eq!(bob["project_name_aliases"], serde_json::json!(["bob-cli"]));
+    let sase = targets
+        .iter()
+        .find(|target| target["route"] == "sase")
+        .expect("sase target");
+    assert_eq!(
+        sase["project_name_aliases"],
+        serde_json::json!(["sase-alias"])
+    );
+
+    let human = bob_command()
+        .arg("capture-targets")
+        .arg("-b")
+        .arg(&vault)
+        .output()
+        .expect("run bob capture-targets human with aliases");
+
+    assert_success(&human);
+    let out = stdout(&human);
+    assert!(
+        out.contains("aka bob-cli") && out.contains("aka sase-alias"),
+        "human output shows aliases:\n{out}"
+    );
+
+    let verbose = bob_command()
+        .arg("capture-targets")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-v")
+        .output()
+        .expect("run bob capture-targets verbose with aliases");
+
+    assert_success(&verbose);
+    assert!(
+        stderr(&verbose).is_empty(),
+        "clean aliases warn about nothing:\n{}",
+        format_output(&verbose)
+    );
 }
 
 #[test]
