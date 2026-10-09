@@ -43,6 +43,7 @@ mod rewrite;
 mod routing;
 mod sections;
 mod sub_bullet;
+mod successor_integration;
 mod targets;
 mod task_blocks;
 mod task_complete;

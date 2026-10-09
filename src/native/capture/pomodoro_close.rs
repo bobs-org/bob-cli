@@ -665,15 +665,15 @@ fn plan_close_successors(
             .lines()
             .nth(note_task.line_index)
             .unwrap_or_default();
-        // The `[id::]` gate: without an identity no dependent can name
-        // this close, exactly as for `!`.
+        // Keep root/ancestry data separate from the dependency-ID
+        // gate, exactly as for `!`: an ID-less embedded root is retained
+        // with an empty `task_id`. Matching still uses only nonempty
+        // explicit IDs, and no dependency ID is ever minted here.
         let metadata = crate::native::task_status_hooks::task_metadata(
             staged_line,
             Some(&task.block_id),
         );
-        let Some(task_id) = metadata.task_id else {
-            continue;
-        };
+        let task_id = metadata.task_id.unwrap_or_default();
         predecessors.push(engine::CompletedTask {
             relative_path: absolute
                 .strip_prefix(bob_dir)
@@ -689,12 +689,19 @@ fn plan_close_successors(
             is_root: task.role.as_str() == "embedded",
         });
     }
-    if predecessors.is_empty() {
+    // The `[id::]` gate: without an explicit identity on any completed
+    // task no dependent can name this close, so skip with no dependents
+    // lookup and no extra reads.
+    if !predecessors.iter().any(|task| !task.task_id.is_empty()) {
         return Ok(empty("checked"));
     }
-    if !dependency_ctx.dependents_snapshot().available {
-        // A snapshot failure is non-fatal: the close still succeeds and
-        // nothing is linked.
+    let overlay = super::task_complete::staged_overlay_map(bob_dir, planner);
+    if !dependency_ctx
+        .dependents_snapshot()
+        .snapshot_complete(&overlay)
+    {
+        // An incomplete snapshot is non-fatal: the close still succeeds
+        // and nothing is linked.
         return Ok(empty("unavailable"));
     }
     let post_day = planner.current_contents(day_file)?;

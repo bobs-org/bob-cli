@@ -429,6 +429,77 @@ fn close_successor_human_rows_and_next_line() {
     assert!(out.contains("1 unblocked"), "{out}");
 }
 
+// An `=!` close whose successor lives in the day file: the continuation
+// carries the link while the day task flips in the same write.
+#[test]
+fn close_all_day_file_successor_composes_edits() {
+    let (_temp, vault, day_file) = vault("bob-cli-close-slday");
+    write_file(
+        &vault.join("sase.md"),
+        "- [ ] #task Predecessor [id:: p] ^p\n",
+    );
+    write_file(
+        &day_file,
+        "## Pomodoros\n- [ ] (**0920-0950**) \u{2014} BOB\n  - [[sase#^p]]\n## Tasks\n- [?] #task Day job [dependsOn:: p] ^job\n",
+    );
+
+    let json = run_close_json(&vault, &day_file, NOW, &["=!"]);
+    let close = &json["pomodoro_close"];
+    assert_eq!(close["unblocked_check"], "checked");
+    let unblocked = close["unblocked"].as_array().expect("unblocked");
+    assert_eq!(unblocked.len(), 1);
+    let row = &unblocked[0];
+    assert_eq!(row["note_path"], "20261005.md");
+    assert_eq!(row["block_id"], "job");
+    assert_eq!(row["previous_status_symbol"], "?");
+    assert_eq!(row["status_symbol"], "*");
+    assert_eq!(row["link"]["block_link"], "[[20261005#^job]]");
+    assert_eq!(row["link"]["entry_name"], "BOB");
+    assert_eq!(row["link"]["entry_created"], true);
+    let day = fs::read_to_string(&day_file).expect("read day");
+    assert!(
+        day.contains("- [*] #task Day job [dependsOn:: p] ^job"),
+        "{day}"
+    );
+    assert!(
+        day.contains("  - [[sase#^p]]") || day.contains("~~[[sase#^p]]~~"),
+        "{day}"
+    );
+    assert!(day.contains("[[20261005#^job]]"), "{day}");
+}
+
+// An unreadable dependency note makes the close snapshot incomplete:
+// the `=!` close still succeeds with no successor work (`unavailable`).
+#[test]
+fn close_with_invalid_dependency_note_reports_unavailable() {
+    let (_temp, vault, day_file) = vault("bob-cli-close-slunavail");
+    write_file(
+        &vault.join("sase.md"),
+        "- [ ] #task Predecessor [id:: p] ^p\n",
+    );
+    write_file(
+        &vault.join("d.md"),
+        "- [?] #task Dependent [dependsOn:: p, q] [id:: d] ^d\n",
+    );
+    let mut bad = b"- [ ] #task Other [id:: q] ^q\n".to_vec();
+    bad.push(0xff);
+    fs::write(vault.join("bad.md"), bad).expect("write bad note");
+    write_file(
+        &day_file,
+        "## Pomodoros\n- [ ] (**0920-0950**) \u{2014} BOB\n  - [[sase#^p]]\n",
+    );
+
+    let json = run_close_json(&vault, &day_file, NOW, &["=!"]);
+    let close = &json["pomodoro_close"];
+    assert_eq!(close["unblocked_check"], "unavailable");
+    assert_eq!(close["unblocked"], serde_json::json!([]));
+    assert_eq!(close["still_blocked"], serde_json::json!([]));
+    assert_eq!(
+        fs::read_to_string(vault.join("d.md")).expect("read dependent"),
+        "- [?] #task Dependent [dependsOn:: p, q] [id:: d] ^d\n"
+    );
+}
+
 // An `=x` close whose embeds carry no `[id::]` identity links nothing
 // and leaves no successor rows behind.
 #[test]

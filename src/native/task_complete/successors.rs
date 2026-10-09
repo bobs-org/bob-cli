@@ -163,13 +163,177 @@ pub(crate) struct SuccessorPlan {
     pub new_day_text: Option<String>,
 }
 
-/// Whether a vault-relative note path lives in an inbox file, mirroring
-/// nav's `isInboxNotePath`: Bob's capture inbox note.
-pub(crate) fn is_inbox_note_path(relative: &Path) -> bool {
+/// Whether a vault-relative note is an inbox note, mirroring nav's
+/// `255-inbox-route.js::classifyInboxNote`: root `inbox.md`, plus direct
+/// area children whose live frontmatter `parent` resolves to it. A
+/// project or untyped child never counts, whatever its parent; neither
+/// does a nested grandchild (its parent points at the area, not the
+/// inbox). `contents` is the note's live (staged) text and `index` the
+/// vault note index; only this candidate's frontmatter is read.
+pub(crate) fn is_inbox_note(
+    relative: &Path,
+    contents: &str,
+    index: &NoteIndex,
+) -> bool {
+    if normalized_relative(relative) == "inbox.md" {
+        return true;
+    }
+    if !index
+        .relative_paths()
+        .any(|path| normalized_relative(path) == "inbox.md")
+    {
+        return false;
+    }
+    let Some(frontmatter) = super::super::projects::parse_frontmatter(contents)
+    else {
+        return false;
+    };
+    // nav's `getChildNoteInfo`: projects win over areas, and untyped
+    // notes are plain — only areas can be inbox children.
+    if super::super::projects::frontmatter_is_project(&frontmatter)
+        || !super::super::projects::frontmatter_is_area(&frontmatter)
+    {
+        return false;
+    }
+    let Some(parent) = parent_field_text(contents) else {
+        return false;
+    };
+    parent_link_targets(&parent).iter().any(|target| {
+        index
+            .resolve(Some(relative), target)
+            .is_some_and(|resolved| {
+                normalized_relative(&resolved) == "inbox.md"
+            })
+    })
+}
+
+/// The raw text of a note's frontmatter `parent` field: the scalar rest
+/// of the `parent:` line, or the following `- item` lines when the rest
+/// is empty (block-list form). Scanned only inside the `---` block so a
+/// body `parent:` line never counts. Same key matching as the shared
+/// `frontmatter_value` convention.
+fn parent_field_text(contents: &str) -> Option<String> {
+    let mut lines = contents.lines();
+    let first = lines.next()?;
+    if first.strip_suffix('\r').unwrap_or(first) != "---" {
+        return None;
+    }
+    let mut collected: Option<String> = None;
+    let mut block_items: Vec<String> = Vec::new();
+    let mut in_block = false;
+    for line in lines {
+        let line = line.strip_suffix('\r').unwrap_or(line);
+        if line == "---" {
+            break;
+        }
+        if in_block {
+            let trimmed = line.trim_start();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if let Some(item) = trimmed
+                .strip_prefix("- ")
+                .or_else(|| trimmed.strip_prefix('-'))
+            {
+                block_items.push(item.trim().to_string());
+                continue;
+            }
+            break;
+        }
+        let Some(rest) = line.strip_prefix("parent") else {
+            continue;
+        };
+        let Some(value) = rest.strip_prefix(':') else {
+            continue;
+        };
+        if !value.trim().is_empty() {
+            collected = Some(value.trim().to_string());
+            break;
+        }
+        in_block = true;
+    }
+    if in_block {
+        if block_items.is_empty() {
+            return None;
+        }
+        return Some(block_items.join("\n"));
+    }
+    collected.filter(|text| !text.is_empty())
+}
+
+/// Vault-relative path with native separators normalized, matching nav's
+/// `normalizeVaultRelativePath` separator folding (case is significant,
+/// exactly as nav's `=== "inbox.md"` check).
+fn normalized_relative(relative: &Path) -> String {
     relative
-        .file_name()
-        .and_then(OsStr::to_str)
-        .is_some_and(|name| name.eq_ignore_ascii_case("mac_inbox.md"))
+        .components()
+        .filter_map(|component| {
+            component.as_os_str().to_str().map(str::to_string)
+        })
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// Every link target a frontmatter `parent` value names: each `[[target]]`
+/// (alias and `#section` stripped), falling back to the bare value itself
+/// when it names no wikilink (mirroring nav's plain-text link fallback).
+/// Flow (`[a, b]`) and block-list (`- a`) forms contribute each item.
+fn parent_link_targets(value: &str) -> Vec<String> {
+    let mut targets = Vec::new();
+    let mut items = Vec::new();
+    let trimmed = value.trim();
+    if trimmed.starts_with('[') && !trimmed.starts_with("[[") {
+        let inner = trimmed
+            .strip_prefix('[')
+            .unwrap_or(trimmed)
+            .strip_suffix(']')
+            .unwrap_or(trimmed);
+        for item in inner.split(',') {
+            items.push(item.trim().trim_matches(['"', '\'']).to_string());
+        }
+    } else {
+        for line in value.lines() {
+            let line = line.trim();
+            let item = line
+                .strip_prefix("- ")
+                .or_else(|| line.strip_prefix('-'))
+                .map(str::trim)
+                .unwrap_or(line);
+            if !item.is_empty() {
+                items.push(item.trim().trim_matches(['"', '\'']).to_string());
+            }
+        }
+        if items.is_empty() && !trimmed.is_empty() {
+            items.push(trimmed.trim_matches(['"', '\'']).to_string());
+        }
+    }
+    for item in items {
+        let mut found = false;
+        let mut rest = item.as_str();
+        while let Some(start) = rest.find("[[") {
+            let after = &rest[start + 2..];
+            let Some(end) = after.find("]]") else {
+                break;
+            };
+            let target = after[..end]
+                .split('|')
+                .next()
+                .unwrap_or_default()
+                .split('#')
+                .next()
+                .unwrap_or_default()
+                .trim();
+            if !target.is_empty() {
+                targets.push(target.to_string());
+                found = true;
+            }
+            rest = &after[end + 2..];
+        }
+        if !found && !item.trim().is_empty() {
+            targets.push(item.trim().to_string());
+        }
+    }
+    targets
 }
 
 /// Whether a vault-relative note path is archive history: anything under
@@ -784,21 +948,22 @@ fn apply_verdicts(
             block_link,
         });
     }
-    let (post_day_text, placed) = if placements.is_empty() {
-        (base_day_text, Vec::new())
+    // Live-link baseline for derived recover ranks: insertions change
+    // which bullets exist while status/mint edits never do, so parsing
+    // the base with insertions (before status edits) is exact.
+    let inserted_base = if placements.is_empty() {
+        base_day_text.clone()
     } else {
         insert_successor_links(
             &base_day_text,
             &input.day_relative,
             input.index,
-            placements,
+            placements.clone(),
         )
+        .0
     };
     let post_live =
-        DayView::parse(&post_day_text, &input.day_relative, input.index);
-    if !placed.is_empty() {
-        plan.new_day_text = Some(post_day_text);
-    }
+        DayView::parse(&inserted_base, &input.day_relative, input.index);
 
     // Apply note edits: successor statuses plus mints, then recovered
     // ranks. Line layout never changes (in-place status swaps and
@@ -877,6 +1042,56 @@ fn apply_verdicts(
             None,
         );
     }
+    // Compose one coherent day post-image when successor bullets were
+    // inserted AND the day file itself carries task edits (a successor
+    // living in the day file): re-run the same placements over the edited
+    // day base. The layout is identical (status/mint edits are in-place),
+    // so anchor coordinates stay valid. The day then rides only in
+    // `new_day_text`, never in `changed_files`, so callers staging both
+    // cannot overwrite one half with the other.
+    let mut placed: Vec<PlacedSuccessor> = Vec::new();
+    // Post-edit task locations in the day file by stable block identity,
+    // including minted IDs: insertions shift lines, so snapshot line
+    // numbers are stale for day rows.
+    let mut day_task_lines: BTreeMap<String, usize> = BTreeMap::new();
+    if !placements.is_empty() {
+        if let Some(edited_day) = edited.remove(&input.day_relative) {
+            let (coherent, coherent_placed) = insert_successor_links(
+                &edited_day,
+                &input.day_relative,
+                input.index,
+                placements,
+            );
+            for task in super::super::task_status_hooks::parse_tasks(
+                &coherent,
+                input.tasks_settings,
+            ) {
+                if let Some(id) = task.block_id.as_deref()
+                    && !day_task_lines.contains_key(id)
+                {
+                    day_task_lines.insert(id.to_string(), task.line_index + 1);
+                }
+            }
+            plan.new_day_text = Some(coherent);
+            placed = coherent_placed;
+        } else {
+            let (post_day_text, post_placed) = insert_successor_links(
+                &base_day_text,
+                &input.day_relative,
+                input.index,
+                placements,
+            );
+            plan.new_day_text = Some(post_day_text);
+            placed = post_placed;
+        }
+    }
+    let day_line = |note_path: &PathBuf, block_id: &str, fallback: usize| {
+        if *note_path == input.day_relative && !block_id.is_empty() {
+            day_task_lines.get(block_id).copied().unwrap_or(fallback)
+        } else {
+            fallback
+        }
+    };
     for (relative, contents) in &edited {
         let original = files
             .iter()
@@ -923,14 +1138,20 @@ fn apply_verdicts(
             &input.day_relative,
             input.index,
         );
+        let line =
+            day_line(&file.relative_path, &block_id, task.line_index + 1);
         plan.unblocked.push(UnblockedRow {
             note_path: file.relative_path.clone(),
             block_id,
-            line: task.line_index + 1,
+            line,
             text: task.description.clone(),
             previous_status_symbol: task.status,
             status_symbol: successor_new_status(task.status),
-            inbox: is_inbox_note_path(&file.relative_path),
+            inbox: is_inbox_note(
+                &file.relative_path,
+                &file.contents,
+                input.index,
+            ),
             unblocked_by: input
                 .completed
                 .iter()
@@ -962,10 +1183,16 @@ fn apply_verdicts(
         let task = &file.tasks[verdict.task];
         match verdict.kind {
             VerdictKind::StillBlockedWaitsOn => {
+                let block_id = task.block_id.clone().unwrap_or_default();
+                let line = day_line(
+                    &file.relative_path,
+                    &block_id,
+                    task.line_index + 1,
+                );
                 plan.still_blocked.push(StillBlockedRow {
                     note_path: file.relative_path.clone(),
-                    block_id: task.block_id.clone().unwrap_or_default(),
-                    line: task.line_index + 1,
+                    block_id,
+                    line,
                     text: task.description.clone(),
                     status_symbol: task.status,
                     reason: "waits_on",
@@ -974,10 +1201,16 @@ fn apply_verdicts(
                 });
             }
             VerdictKind::StillBlockedScheduled => {
+                let block_id = task.block_id.clone().unwrap_or_default();
+                let line = day_line(
+                    &file.relative_path,
+                    &block_id,
+                    task.line_index + 1,
+                );
                 plan.still_blocked.push(StillBlockedRow {
                     note_path: file.relative_path.clone(),
-                    block_id: task.block_id.clone().unwrap_or_default(),
-                    line: task.line_index + 1,
+                    block_id,
+                    line,
                     text: task.description.clone(),
                     status_symbol: task.status,
                     reason: "scheduled",
@@ -1000,14 +1233,24 @@ fn apply_verdicts(
                 if status_symbol == task.status {
                     continue;
                 }
+                let block_id = task.block_id.clone().unwrap_or_default();
+                let line = day_line(
+                    &file.relative_path,
+                    &block_id,
+                    task.line_index + 1,
+                );
                 plan.unblocked.push(UnblockedRow {
                     note_path: file.relative_path.clone(),
-                    block_id: task.block_id.clone().unwrap_or_default(),
-                    line: task.line_index + 1,
+                    block_id,
+                    line,
                     text: task.description.clone(),
                     previous_status_symbol: task.status,
                     status_symbol,
-                    inbox: is_inbox_note_path(&file.relative_path),
+                    inbox: is_inbox_note(
+                        &file.relative_path,
+                        &file.contents,
+                        input.index,
+                    ),
                     unblocked_by: input
                         .completed
                         .iter()
@@ -1162,7 +1405,6 @@ pub(crate) fn insert_successor_links(
                 created_post.insert(jobs[*job_index].order, placeholder_post);
             }
         }
-        let mut took_stub = false;
         for (position, job_index) in group.iter().enumerate() {
             let job = &jobs[*job_index];
             if position == 0
@@ -1171,15 +1413,16 @@ pub(crate) fn insert_successor_links(
             {
                 *slot = job.bullet.clone();
                 bullet_post.insert(job.order, replaced);
-                took_stub = true;
             } else {
                 fresh.push(job.bullet.clone());
                 bullet_post.insert(job.order, at + fresh.len() - 1);
             }
         }
-        let replaced = usize::from(took_stub);
+        // The stub take is an in-place rewrite of an existing line, so
+        // only spliced lines count as net additions (a lone stub taken by
+        // a single successor adds `fresh.len()` lines, never -1).
         segments.splice(at..at, fresh.iter().cloned());
-        let net = fresh.len() - replaced;
+        let net = fresh.len();
         *added_below.entry(first.insert_at).or_default() += net;
         applied.push((first.insert_at, net));
     }

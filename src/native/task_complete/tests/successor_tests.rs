@@ -506,6 +506,43 @@ fn sl23_subtask_inherits_root_anchor() {
     assert!(plan.unblocked[0].link.is_some());
 }
 
+// An ID-less planned root with an ID-bearing embedded subtask: the
+// subtask keeps the root entry for its anchor (no dependency ID is
+// minted for the root), so the subtask's dependent links instead of
+// recovering to `not_planned_today`.
+#[test]
+fn idless_root_anchors_id_bearing_child_dependent() {
+    let vault_index = index(&["sase.md", "sub.md", "d.md", "20261005.md"]);
+    let plan = run(
+        vec![
+            pred("sase.md", "p", "", "Root", true),
+            pred("sub.md", "s", "s", "Subtask", false),
+        ],
+        &[
+            (
+                "sub.md",
+                "- [x] #task Subtask [id:: s] ^s\n",
+            ),
+            (
+                "d.md",
+                "- [?] #task Dependent [dependsOn:: s] [id:: d] ^d\n",
+            ),
+        ],
+        Some(
+            "## Pomodoros\n- [ ] (**0920-0950**) \u{2014} CAPTURE\n- [ ] () \u{2014} FIX\n  - [[sase#^p]]\n",
+        ),
+        "20261005.md",
+        true,
+        &vault_index,
+    );
+    assert_eq!(plan.unblocked.len(), 1);
+    let row = &plan.unblocked[0];
+    assert_eq!(row.block_id, "d");
+    let link = row.link.as_ref().expect("linked at root anchor");
+    assert_eq!(link.entry_name, "FIX");
+    assert_eq!(link.block_link, "[[d#^d]]");
+}
+
 // SL25: an already-Next dependent that is already planned produces no
 // row and no write.
 #[test]
@@ -539,13 +576,15 @@ fn sl25_planned_next_reports_nothing() {
 }
 
 // SL26: a successor living in an inbox file links with `inbox: true`.
+// Inbox follows nav's `classifyInboxNote`: root `inbox.md`, plus direct
+// area children whose frontmatter `parent` resolves to it.
 #[test]
 fn sl26_inbox_successor_links_with_flag() {
-    let vault_index = index(&["sase.md", "mac_inbox.md", "20261005.md"]);
+    let vault_index = index(&["sase.md", "inbox.md", "20261005.md"]);
     let plan = run(
         vec![pred("sase.md", "fix-apollo", "fix-apollo", "Fix apollo", true)],
         &[(
-            "mac_inbox.md",
+            "inbox.md",
             "- [?] #task Triage me [dependsOn:: fix-apollo] [id:: triage] ^triage\n",
         )],
         Some(&day_with_fix_link()),
@@ -556,12 +595,93 @@ fn sl26_inbox_successor_links_with_flag() {
     assert_eq!(plan.unblocked.len(), 1);
     assert!(plan.unblocked[0].inbox);
     assert!(plan.unblocked[0].link.is_some());
-    assert!(!super::super::successors::is_inbox_note_path(Path::new(
-        "sase.md"
-    )));
-    assert!(super::super::successors::is_inbox_note_path(Path::new(
+    let sase_contents = "- [?] #task Triage me [dependsOn:: fix-apollo] [id:: triage] ^triage\n";
+    assert!(!super::super::successors::is_inbox_note(
+        Path::new("sase.md"),
+        sase_contents,
+        &vault_index,
+    ));
+    assert!(super::super::successors::is_inbox_note(
+        Path::new("inbox.md"),
+        "- [?] #task Triage me [dependsOn:: fix-apollo] [id:: triage] ^triage\n",
+        &vault_index,
+    ));
+}
+
+// Inbox parity shared cases (mirrored in the cycler's inbox suite):
+// root, renamed direct area child, mac/gkeep inboxes with and without
+// the defining metadata, project child, untyped child, nested
+// grandchild.
+#[test]
+fn inbox_parity_shared_cases() {
+    use super::super::successors::is_inbox_note;
+    let vault_index = index(&[
+        "inbox.md",
+        "areas/triage.md",
+        "renamed.md",
         "mac_inbox.md",
-    )));
+        "gkeep_inbox.md",
+        "proj.md",
+        "plain.md",
+        "areas/child.md",
+        "areas/child/grand.md",
+    ]);
+    let area_parent = "---\ntype: [[area]]\nparent: [[inbox]]\n---\n";
+    let task = "- [?] #task D [dependsOn:: p] [id:: d] ^d\n";
+    // Root inbox counts with no metadata at all.
+    assert!(is_inbox_note(Path::new("inbox.md"), task, &vault_index));
+    // A renamed direct area child still counts: parent resolves by link.
+    assert!(is_inbox_note(
+        Path::new("renamed.md"),
+        &format!("{area_parent}{task}"),
+        &vault_index,
+    ));
+    // mac/gkeep capture inboxes count only with the defining metadata.
+    assert!(is_inbox_note(
+        Path::new("mac_inbox.md"),
+        &format!("{area_parent}{task}"),
+        &vault_index,
+    ));
+    assert!(!is_inbox_note(
+        Path::new("mac_inbox.md"),
+        task,
+        &vault_index
+    ));
+    assert!(is_inbox_note(
+        Path::new("gkeep_inbox.md"),
+        &format!("{area_parent}{task}"),
+        &vault_index,
+    ));
+    assert!(!is_inbox_note(
+        Path::new("gkeep_inbox.md"),
+        task,
+        &vault_index
+    ));
+    // A project child never counts, whatever its parent.
+    assert!(!is_inbox_note(
+        Path::new("proj.md"),
+        &format!("---\ntype: [[project]]\nparent: [[inbox]]\n---\n{task}"),
+        &vault_index,
+    ));
+    // An untyped child never counts, whatever its parent.
+    assert!(!is_inbox_note(
+        Path::new("plain.md"),
+        &format!("---\nparent: [[inbox]]\n---\n{task}"),
+        &vault_index,
+    ));
+    // A nested grandchild's parent points at the area, not the inbox.
+    assert!(!is_inbox_note(
+        Path::new("areas/child/grand.md"),
+        &format!("---\ntype: [[area]]\nparent: [[child]]\n---\n{task}"),
+        &vault_index,
+    ));
+    // Without a vault inbox, even an area child pointing at it is out.
+    let no_inbox = index(&["areas/triage.md"]);
+    assert!(!is_inbox_note(
+        Path::new("areas/triage.md"),
+        &format!("{area_parent}{task}"),
+        &no_inbox,
+    ));
 }
 
 // SL28: a successor living in the day file itself names the note in its
@@ -656,4 +776,39 @@ fn closing_placement_creates_placeholder() {
     assert_eq!(placed.len(), 1);
     assert!(placed[0].entry_created);
     assert!(text.contains("- [ ] () \u{2014} BOB\n\t- [[sase#^next]]\n"));
+}
+
+// A single closing placement into an existing entry whose only child is
+// a lone stub takes the stub line in place: no panic, no leftover blank
+// bullet, and the reported line points at the link.
+#[test]
+fn closing_placement_takes_lone_stub() {
+    let vault_index = index(&["sase.md", "20261005.md"]);
+    let day = concat!(
+        "## Pomodoros\n",
+        "- [x] (**0900-0920**) \u{2014} BOB\n",
+        "  - ~~[[sase#^done]]~~\n",
+        "- [ ] () \u{2014} BOB\n",
+        "\t- \n",
+        "- [ ] () \u{2014} FIX\n",
+    );
+    let (text, placed) = insert_successor_links(
+        &day,
+        Path::new("20261005.md"),
+        &vault_index,
+        vec![SuccessorPlacement {
+            target: SuccessorTarget::Closing {
+                entry_index: Some(1),
+                insert_at: 5,
+                created_name: None,
+            },
+            block_link: "[[sase#^next]]".to_string(),
+        }],
+    );
+    assert_eq!(placed.len(), 1);
+    assert!(!placed[0].entry_created);
+    assert_eq!(placed[0].entry_line, 4);
+    assert_eq!(placed[0].line, 5);
+    assert!(text.contains("- [ ] () \u{2014} BOB\n\t- [[sase#^next]]\n"));
+    assert!(!text.contains("\t- \n"));
 }

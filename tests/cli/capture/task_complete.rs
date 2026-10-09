@@ -1386,3 +1386,133 @@ fn successor_dry_run_matches_real_with_human_rows() {
         "{out}"
     );
 }
+
+// A successor living in the day file itself: one coherent day post-image
+// carries both the task edit and the ledger edit. The `[?]` still flips
+// to `[*]` when the successor bullet is inserted, the link names the day
+// note, JSON task-block lines agree with the committed bytes, and
+// dry-run JSON equals real-run JSON.
+#[test]
+fn day_file_successor_composes_task_and_ledger_edits() {
+    let (_temp, vault) = vault_with_settings("bob-cli-task-complete-dayjob");
+    let day_file = vault.join("20261005.md");
+    write_file(
+        &vault.join("sase.md"),
+        "- [ ] #task Predecessor [id:: p] ^p\n",
+    );
+    write_file(
+        &day_file,
+        "## Pomodoros\n- [ ] (**0920-0950**) \u{2014} BOB\n  - [[sase#^p]]\n## Tasks\n- [?] #task Day job [dependsOn:: p] ^job\n",
+    );
+
+    let json =
+        capture_json_dry_run_matches_real(&vault, &day_file, NOW, &["!sase:p"]);
+    let complete = &json["task_complete"];
+    assert_eq!(complete["unblocked_check"], "checked");
+    let unblocked = complete["unblocked"].as_array().expect("unblocked");
+    assert_eq!(unblocked.len(), 1);
+    let row = &unblocked[0];
+    assert_eq!(row["note_path"], "20261005.md");
+    assert_eq!(row["block_id"], "job");
+    assert_eq!(row["previous_status_symbol"], "?");
+    assert_eq!(row["status_symbol"], "*");
+    assert_eq!(row["link"]["block_link"], "[[20261005#^job]]");
+    assert_eq!(row["link"]["entry_name"], "BOB");
+    assert_eq!(row["link"]["block_id_created"], false);
+    // The surviving ID/link agreement: the JSON line matches the bytes.
+    assert_eq!(row["line"], 6);
+    assert_eq!(
+        fs::read_to_string(&day_file).expect("read day"),
+        "## Pomodoros\n- [ ] (**0920-0950**) \u{2014} BOB\n  - ~~[[sase#^p]]~~\n  - [[20261005#^job]]\n## Tasks\n- [*] #task Day job [dependsOn:: p] ^job\n"
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("sase.md")).expect("read note"),
+        "- [x] #task Predecessor [id:: p]  [completion:: 2026-10-05] ^p\n"
+    );
+    let task_blocks = json["task_blocks"].as_array().expect("task_blocks");
+    assert!(
+        task_blocks.iter().any(|block| block["block_id"] == "job"
+            && block["roles"] == serde_json::json!(["unblocked"])),
+        "{task_blocks:?}"
+    );
+}
+
+// An unreadable dependency note makes the snapshot incomplete: the
+// requested close still succeeds, but successor recovery/linking is
+// skipped (`unavailable`) and the dependent stays exactly as it was.
+#[test]
+fn invalid_dependency_note_reports_unavailable_and_skips_linking() {
+    let (_temp, vault) = vault_with_settings("bob-cli-task-complete-unavail");
+    let day_file = vault.join("20261005.md");
+    write_file(
+        &vault.join("sase.md"),
+        "- [ ] #task Predecessor [id:: p] ^p\n",
+    );
+    write_file(
+        &vault.join("d.md"),
+        "- [?] #task Dependent [dependsOn:: p, q] [id:: d] ^d\n",
+    );
+    let mut bad = b"- [ ] #task Other [id:: q] ^q\n".to_vec();
+    bad.push(0xff);
+    fs::write(vault.join("bad.md"), bad).expect("write bad note");
+    write_file(
+        &day_file,
+        "## Pomodoros\n- [ ] (**0920-0950**) \u{2014} BOB\n  - [[sase#^p]]\n",
+    );
+
+    let json = capture_json(&vault, &day_file, &["!sase:p"]);
+    let complete = &json["task_complete"];
+    assert_eq!(complete["action"], "completed");
+    assert_eq!(complete["unblocked_check"], "unavailable");
+    assert_eq!(complete["unblocked"], serde_json::json!([]));
+    assert_eq!(complete["still_blocked"], serde_json::json!([]));
+    // The close itself landed; the dependent is untouched.
+    assert_eq!(
+        fs::read_to_string(vault.join("sase.md")).expect("read note"),
+        "- [x] #task Predecessor [id:: p]  [completion:: 2026-10-05] ^p\n"
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("d.md")).expect("read dependent"),
+        "- [?] #task Dependent [dependsOn:: p, q] [id:: d] ^d\n"
+    );
+}
+
+// The same day-file successor without a `^block-id`: the mint lands on
+// the task line in the same write (no panic, no lost bullet), the link
+// names the minted ID, and dry-run JSON equals real-run JSON.
+#[test]
+fn day_file_successor_without_block_id_mints_in_place() {
+    let (_temp, vault) = vault_with_settings("bob-cli-task-complete-daymint");
+    let day_file = vault.join("20261005.md");
+    write_file(
+        &vault.join("sase.md"),
+        "- [ ] #task Predecessor [id:: p] ^p\n",
+    );
+    write_file(
+        &day_file,
+        "## Pomodoros\n- [ ] (**0920-0950**) \u{2014} BOB\n  - [[sase#^p]]\n## Tasks\n- [?] #task Day job [dependsOn:: p]\n",
+    );
+
+    let json =
+        capture_json_dry_run_matches_real(&vault, &day_file, NOW, &["!sase:p"]);
+    let row = &json["task_complete"]["unblocked"][0];
+    assert_eq!(row["note_path"], "20261005.md");
+    assert_eq!(row["previous_status_symbol"], "?");
+    assert_eq!(row["status_symbol"], "*");
+    assert_eq!(row["link"]["block_id_created"], true);
+    let minted = row["block_id"].as_str().expect("minted block id");
+    assert!(!minted.is_empty());
+    assert_eq!(
+        row["link"]["block_link"],
+        serde_json::Value::String(format!("[[20261005#^{minted}]]"))
+    );
+    let day = fs::read_to_string(&day_file).expect("read day");
+    assert!(
+        day.contains(&format!("- [*] #task Day job [dependsOn:: p] ^{minted}")),
+        "{day}"
+    );
+    assert!(
+        day.contains(&format!("  - [[20261005#^{minted}]]")),
+        "{day}"
+    );
+}

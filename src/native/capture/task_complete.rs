@@ -153,9 +153,12 @@ pub(super) fn plan_task_complete_item(
             &staged_line,
             Some(id),
         );
-        let Some(task_id) = metadata.task_id else {
-            continue;
-        };
+        // Keep root/ancestry data separate from the dependency-ID gate:
+        // an ID-less root is retained with an empty `task_id` so a
+        // closed ID-bearing subtask can inherit its anchor. Matching
+        // still uses only nonempty explicit IDs, and no dependency ID
+        // is ever minted here.
+        let task_id = metadata.task_id.unwrap_or_default();
         let is_root = outcome.root.as_ref().is_some_and(|root| {
             root.absolute_path == *path && root.block_id == *id
         });
@@ -174,6 +177,12 @@ pub(super) fn plan_task_complete_item(
             is_root,
         });
     }
+    // The `[id::]` gate: without an explicit identity on any completed
+    // task no dependent can name this close, so drop the whole set with
+    // no dependents lookup and no extra reads.
+    if !predecessors.iter().any(|task| !task.task_id.is_empty()) {
+        predecessors.clear();
+    }
     // Day text before this gesture's strikes, moves, or retirement: the
     // already-planned baseline for anchors and derived ranks. The tree
     // close never rewrites Pomodoro bullets, so the post-tree staged
@@ -186,9 +195,13 @@ pub(super) fn plan_task_complete_item(
     let mut successor_plan = engine::SuccessorPlan::default();
     let mut unblocked_check = "checked";
     if !predecessors.is_empty() {
-        if !dependency_ctx.dependents_snapshot().available {
-            // A snapshot failure is non-fatal: the close still succeeds
-            // and nothing is linked.
+        let overlay = staged_overlay_map(bob_dir, planner);
+        let snapshot_ready = dependency_ctx
+            .dependents_snapshot()
+            .snapshot_complete(&overlay);
+        if !snapshot_ready {
+            // An incomplete snapshot is non-fatal: the close still
+            // succeeds and nothing is linked.
             unblocked_check = "unavailable";
         } else {
             let snapshot =
@@ -825,6 +838,11 @@ fn compute_link_statuses(
     let model = scan_pomodoros(&lines, section);
     let vault = SnapshotCloseVault::from_planner(planner, bob_dir);
     let settings = note_tasks::read_settings(bob_dir);
+    // One read and one task scan per distinct linked note: a busy day
+    // links the same note dozens of times, and rescanning it per link
+    // dominates close latency on large vaults.
+    let mut scans: BTreeMap<PathBuf, Option<note_tasks::NoteTaskScan>> =
+        BTreeMap::new();
     for reference in model.all_references.iter() {
         let resolved = match vault.resolve_target(day_file, &reference.target) {
             LinkResolution::Found(path) => path,
@@ -837,16 +855,20 @@ fn compute_link_statuses(
             );
             continue;
         }
-        let contents = match vault.read_latest(&resolved) {
-            Ok(Some(contents)) => contents,
+        let scan = scans.entry(resolved.clone()).or_insert_with(|| {
+            let contents = vault.read_latest(&resolved).ok().flatten();
+            contents.map(|text| note_tasks::scan(&text, &settings))
+        });
+        let task = match scan.as_ref().and_then(|scan| {
+            match scan.by_block_id(&reference.block_id) {
+                BlockIdLookup::Found(task) => Some(task.status_symbol),
+                _ => None,
+            }
+        }) {
+            Some(symbol) => symbol,
             _ => continue,
         };
-        let scan = note_tasks::scan(&contents, &settings);
-        let task = match scan.by_block_id(&reference.block_id) {
-            BlockIdLookup::Found(task) => task,
-            _ => continue,
-        };
-        if is_done_status(task.status_symbol, &settings) {
+        if is_done_status(task, &settings) {
             // Done elsewhere and not yet reconciled: untouched.
             continue;
         }
@@ -854,7 +876,7 @@ fn compute_link_statuses(
             reference.clone(),
             engine::LinkStatus::Live {
                 path: resolved,
-                status: task.status_symbol,
+                status: task,
             },
         );
     }
@@ -1007,15 +1029,15 @@ pub(super) fn surviving_successor_links(
     links
 }
 
-pub(super) fn staged_snapshot_for_recovery(
+/// The batch's staged `.md` overlay keyed by vault-relative path
+/// (`None` for a staged deletion): what the prefiltered snapshot is
+/// overlaid with, and what snapshot completeness is judged against. A
+/// staged entry supersedes its disk image, so a failed disk read covered
+/// here never reports the snapshot as unavailable.
+pub(super) fn staged_overlay_map(
     bob_dir: &Path,
     planner: &CaptureBatchPlanner,
-    dependency_ctx: &DependencyContext,
-) -> Vec<(PathBuf, String)> {
-    let snapshot = dependency_ctx.dependents_snapshot();
-    if !snapshot.available {
-        return Vec::new();
-    }
+) -> BTreeMap<PathBuf, Option<String>> {
     let mut staged: BTreeMap<PathBuf, Option<String>> = BTreeMap::new();
     for (absolute, contents) in planner.staged_snapshot() {
         let Ok(relative) =
@@ -1029,6 +1051,19 @@ pub(super) fn staged_snapshot_for_recovery(
         {
             staged.insert(relative, contents);
         }
+    }
+    staged
+}
+
+pub(super) fn staged_snapshot_for_recovery(
+    bob_dir: &Path,
+    planner: &CaptureBatchPlanner,
+    dependency_ctx: &DependencyContext,
+) -> Vec<(PathBuf, String)> {
+    let snapshot = dependency_ctx.dependents_snapshot();
+    let staged = staged_overlay_map(bob_dir, planner);
+    if !snapshot.snapshot_complete(&staged) {
+        return Vec::new();
     }
     snapshot.overlaid(staged)
 }

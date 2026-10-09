@@ -109,8 +109,9 @@ impl DependencyContext {
     /// Batch-scoped prefiltered dependents snapshot for `!` recovery,
     /// built once per batch and borrowed afterwards.
     pub(super) fn dependents_snapshot(&self) -> &DependentsSnapshot {
-        self.dependents
-            .get_or_init(|| DependentsSnapshot::build(&self.bob_dir))
+        self.dependents.get_or_init(|| {
+            DependentsSnapshot::build(&self.bob_dir, self.catalog())
+        })
     }
 
     /// Successor-linking kill switch (`docs/task-dependencies.md`
@@ -129,14 +130,20 @@ impl DependencyContext {
 /// Walk-only note catalog for `!`/`&` resolution: the basename index
 /// plus ambiguity diagnostics over the same path set [`discover`]
 /// walks, without reading any note contents.
+///
+/// `complete` reports whether the walk covered every note (an empty
+/// warning set means the traversal fully succeeded), so dependents
+/// scanning can treat the same path list as its complete input instead
+/// of walking twice.
 pub(super) struct NoteCatalog {
     pub(super) index: NoteIndex,
     pub(super) basenames: HashMap<String, Vec<String>>,
+    complete: bool,
 }
 
 impl NoteCatalog {
     fn walk(bob_dir: &Path) -> Self {
-        let (relative_paths, _) =
+        let (relative_paths, warnings) =
             capture_dependency_tasks::vault_note_paths(bob_dir);
         let index = NoteIndex::from_paths(relative_paths.iter().cloned());
         // Basename diagnostics mirror `discover` exactly (same walk,
@@ -153,7 +160,18 @@ impl NoteCatalog {
         for paths in basenames.values_mut() {
             paths.sort();
         }
-        Self { index, basenames }
+        Self {
+            index,
+            basenames,
+            complete: warnings.is_empty(),
+        }
+    }
+
+    /// Whether the walk covered every note. Dependents scanning reuses
+    /// these paths instead of walking twice; an incomplete walk reports
+    /// the snapshot as unavailable, exactly like a failed walk.
+    pub(super) fn complete(&self) -> bool {
+        self.complete
     }
 }
 
@@ -164,40 +182,81 @@ impl NoteCatalog {
 /// identity to `task_dependency_states`.
 pub(super) struct DependentsSnapshot {
     base: BTreeMap<PathBuf, String>,
+    /// Vault-relative paths whose on-disk image could not be used despite
+    /// looking dependency-relevant: read failures and marker-positive
+    /// invalid UTF-8. Marker-negative bytes (safe to omit) never land
+    /// here. A staged overlay covering the path supersedes the disk
+    /// image, so [`DependentsSnapshot::snapshot_complete`] excuses those.
+    failed: Vec<PathBuf>,
     /// False when the vault walk itself failed. Recovery then finds
     /// nothing; `capture_complete` reports the lookup as unavailable.
     pub(super) available: bool,
 }
 
-impl DependentsSnapshot {
-    fn build(bob_dir: &Path) -> Self {
-        // The walk runs on the calling thread. Every env-dependent path
-        // is resolved here, before fanning out: `bob_env` overrides are
-        // thread-local, so nothing env-dependent may resolve inside the
-        // scoped workers below (they only read bytes and match
-        // substrings).
-        let files = match task_status_hooks::markdown_files(bob_dir) {
-            Ok(files) => files,
-            Err(_) => {
-                return Self {
-                    base: BTreeMap::new(),
-                    available: false,
-                };
-            }
-        };
-        let mut pairs = Vec::with_capacity(files.len());
-        for absolute in files {
-            let Ok(relative) =
-                absolute.strip_prefix(bob_dir).map(Path::to_path_buf)
-            else {
-                continue;
-            };
-            pairs.push((absolute, relative));
+/// Whether a vault-relative note sits under an archive directory:
+/// `task_status_hooks::markdown_files` never descends into a `done`
+/// directory at any level, while the catalog covers it (needed for `&`
+/// links), so dependents scanning re-applies that exclusion to the
+/// shared path list. A note merely *named* `done.md` still counts.
+fn under_archive_dir(relative: &Path) -> bool {
+    let mut current = relative.parent();
+    while let Some(directory) = current {
+        if directory.file_name().is_some_and(|name| name == "done") {
+            return true;
         }
+        current = directory.parent();
+    }
+    false
+}
+
+impl DependentsSnapshot {
+    fn build(bob_dir: &Path, catalog: &NoteCatalog) -> Self {
+        // One shared vault walk: the catalog's path list feeds the
+        // prefiltered readers instead of walking twice. An incomplete
+        // walk reports unavailable, exactly like a failed walk, and
+        // archived notes stay out, exactly like `markdown_files`.
+        // Every env-dependent path is resolved here, before fanning out:
+        // `bob_env` overrides are thread-local, so nothing env-dependent
+        // may resolve inside the scoped workers below (they only read
+        // bytes and match substrings).
+        if !catalog.complete() {
+            return Self {
+                base: BTreeMap::new(),
+                failed: Vec::new(),
+                available: false,
+            };
+        }
+        let mut pairs = Vec::new();
+        for relative in catalog.index.relative_paths() {
+            if under_archive_dir(relative) {
+                continue;
+            }
+            pairs.push((bob_dir.join(relative), relative.to_path_buf()));
+        }
+        let (base, failed) = read_prefiltered_parallel(&pairs);
         Self {
-            base: read_prefiltered_parallel(&pairs),
+            base,
+            failed,
             available: true,
         }
+    }
+
+    /// Whether the snapshot covers every dependency-relevant note once the
+    /// batch's staged overlay is applied. The walk flag alone is not
+    /// enough: a missing prerequisite would otherwise look closed. A
+    /// staged entry (new text or deletion) supersedes its disk image, so
+    /// a valid staged replacement is never mistaken for an unavailable
+    /// dependency merely because the superseded disk bytes are unusable.
+    pub(super) fn snapshot_complete(
+        &self,
+        staged: &BTreeMap<PathBuf, Option<String>>,
+    ) -> bool {
+        if !self.available {
+            return false;
+        }
+        self.failed
+            .iter()
+            .all(|relative| staged.contains_key(relative))
     }
 
     /// Base contents with one batch item's staged overlay applied:
@@ -241,30 +300,46 @@ fn contains_dependency_markers(bytes: &[u8]) -> bool {
         || memchr::memmem::find(bytes, b"id::").is_some()
 }
 
-/// One walked note read through the prefilter: raw bytes first (so an
-/// invalid-UTF-8 note that matches still skips cleanly), then kept only
-/// when marker-positive and valid UTF-8.
-fn read_prefiltered_one(
-    pair: &(PathBuf, PathBuf),
-) -> Option<(PathBuf, String)> {
-    let bytes = std::fs::read(&pair.0).ok()?;
-    if !contains_dependency_markers(&bytes) {
-        return None;
-    }
-    let text = String::from_utf8(bytes).ok()?;
-    Some((pair.1.clone(), text))
+/// One walked note read through the prefilter: raw bytes first, then
+/// kept only when marker-positive and valid UTF-8. Marker-negative bytes
+/// are safe to omit; a read failure or marker-positive invalid UTF-8
+/// means a prerequisite could be missed, so the caller records the
+/// relative path as failed.
+enum PrefilteredRead {
+    Kept((PathBuf, String)),
+    Skipped,
+    Failed(PathBuf),
 }
+
+fn read_prefiltered_one(pair: &(PathBuf, PathBuf)) -> PrefilteredRead {
+    let bytes = match std::fs::read(&pair.0) {
+        Ok(bytes) => bytes,
+        Err(_) => return PrefilteredRead::Failed(pair.1.clone()),
+    };
+    if !contains_dependency_markers(&bytes) {
+        return PrefilteredRead::Skipped;
+    }
+    match String::from_utf8(bytes) {
+        Ok(text) => PrefilteredRead::Kept((pair.1.clone(), text)),
+        Err(_) => PrefilteredRead::Failed(pair.1.clone()),
+    }
+}
+
+/// Kept prefiltered notes plus the relative paths that failed, per
+/// snapshot worker: the merge shape of [`read_prefiltered_parallel`].
+type PrefilteredWorkerOutput = (Vec<(PathBuf, String)>, Vec<PathBuf>);
 
 /// Read every walked note on scoped worker threads, keeping only
 /// marker-positive notes. Mirrors the atomic work-queue shape of
 /// `highlights_ref::sync::plan_pdfs`: workers pull indices off a shared
 /// counter and the merge restores vault order, so output is
-/// deterministic.
+/// deterministic. Returns the kept notes plus the relative paths that
+/// failed (read errors and marker-positive invalid UTF-8).
 fn read_prefiltered_parallel(
     pairs: &[(PathBuf, PathBuf)],
-) -> BTreeMap<PathBuf, String> {
+) -> (BTreeMap<PathBuf, String>, Vec<PathBuf>) {
     if pairs.is_empty() {
-        return BTreeMap::new();
+        return (BTreeMap::new(), Vec::new());
     }
     let worker_count = std::thread::available_parallelism()
         .map(|parallelism| parallelism.get())
@@ -272,24 +347,43 @@ fn read_prefiltered_parallel(
         .min(pairs.len())
         .max(1);
     if worker_count <= 1 {
-        return pairs.iter().filter_map(read_prefiltered_one).collect();
+        let mut kept = BTreeMap::new();
+        let mut failed = Vec::new();
+        for pair in pairs {
+            match read_prefiltered_one(pair) {
+                PrefilteredRead::Kept(entry) => {
+                    kept.insert(entry.0, entry.1);
+                }
+                PrefilteredRead::Skipped => {}
+                PrefilteredRead::Failed(relative) => failed.push(relative),
+            }
+        }
+        failed.sort();
+        return (kept, failed);
     }
     let next = AtomicUsize::new(0);
-    let collected: Vec<Vec<(PathBuf, String)>> = std::thread::scope(|scope| {
+    let collected: Vec<PrefilteredWorkerOutput> = std::thread::scope(|scope| {
         let handles: Vec<_> = (0..worker_count)
             .map(|_| {
                 scope.spawn(|| {
-                    let mut local = Vec::new();
+                    let mut local_kept = Vec::new();
+                    let mut local_failed = Vec::new();
                     loop {
                         let index = next.fetch_add(1, Ordering::Relaxed);
                         let Some(pair) = pairs.get(index) else {
                             break;
                         };
-                        if let Some(entry) = read_prefiltered_one(pair) {
-                            local.push(entry);
+                        match read_prefiltered_one(pair) {
+                            PrefilteredRead::Kept(entry) => {
+                                local_kept.push(entry);
+                            }
+                            PrefilteredRead::Skipped => {}
+                            PrefilteredRead::Failed(relative) => {
+                                local_failed.push(relative);
+                            }
                         }
                     }
-                    local
+                    (local_kept, local_failed)
                 })
             })
             .collect();
@@ -298,7 +392,17 @@ fn read_prefiltered_parallel(
             .map(|handle| handle.join().expect("snapshot worker panicked"))
             .collect()
     });
-    collected.into_iter().flatten().collect()
+    let mut kept = BTreeMap::new();
+    let mut failed = Vec::new();
+    for (local_kept, local_failed) in collected {
+        for (relative, text) in local_kept {
+            kept.insert(relative, text);
+        }
+        failed.extend(local_failed);
+    }
+    failed.sort();
+    failed.dedup();
+    (kept, failed)
 }
 
 /// The latest daily note before `anchor`, mirroring the hooks' previous
@@ -2556,6 +2660,16 @@ mod tests {
             "fence.md",
             "# Queries\n```dataview\nTABLE dependsOn, id::mine\n```\n",
         );
+        write_note(
+            root,
+            "done/archived.md",
+            "- [x] #task Archived [id:: archived] ^archived\n",
+        );
+        write_note(
+            root,
+            "done.md",
+            "- [x] #task Named done [id:: donename] ^donename\n",
+        );
         let settings = note_tasks::read_settings(root);
         let today = chrono::NaiveDate::from_ymd_opt(2026, 10, 5).expect("date");
         let completed: BTreeSet<String> = ["done-root", "paren-root"]
@@ -2600,7 +2714,9 @@ mod tests {
         let full_snapshot: Vec<(PathBuf, String)> = full.into_iter().collect();
 
         // New path: parallel prefiltered base plus staged overlay.
-        let base = DependentsSnapshot::build(root);
+        let catalog = NoteCatalog::walk(root);
+        assert!(catalog.complete());
+        let base = DependentsSnapshot::build(root, &catalog);
         assert!(base.available);
         assert!(
             !base.base.contains_key(Path::new("prose.md")),
@@ -2609,6 +2725,14 @@ mod tests {
         assert!(
             base.base.contains_key(Path::new("fence.md")),
             "fenced-only markers still keep the note"
+        );
+        assert!(
+            !base.base.contains_key(Path::new("done/archived.md")),
+            "archived notes stay out of the snapshot, like markdown_files"
+        );
+        assert!(
+            base.base.contains_key(Path::new("done.md")),
+            "a note merely named done.md still counts"
         );
         let filtered_snapshot = base.overlaid(staged);
 

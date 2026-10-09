@@ -894,12 +894,13 @@ The one exception: a successor that lives in the day file itself still
 names the note (`[[20261009#^id]]`), never the bare `[[#^id]]`. Rust
 uses `task_dependencies::format::canonical_link` with the same
 `NoteIndex` capture uses for `&` dependency links. That index covers
-every task-bearing vault note the dependency discovery walks —
-untyped root notes, nested folders, ref notes, terminal projects,
-daily notes, hidden tasks, and completed/cancelled/archive history,
-excluding dot-directories, `_templates`, `_generated`, `_conflicts`,
-and the other always-excluded names — unioned with the batch's staged
-`.md` files. The JS port counts the same set.
+every eligible Markdown note the discovery walks — task-bearing or
+prose-only, including untyped root notes, nested folders, ref notes,
+terminal projects, daily notes, hidden tasks, and
+completed/cancelled/archive history, excluding dot-directories,
+`_templates`, `_generated`, `_conflicts`, and the other
+always-excluded names — unioned with the batch's staged `.md` files.
+The JS port counts the same set without reading note bodies.
 
 ### 12.5 Reporting model
 
