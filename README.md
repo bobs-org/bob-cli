@@ -914,7 +914,10 @@ its note. `bob ref clip` remains a hidden alias of `create`.
   [`docs/ref-jobs.md`](docs/ref-jobs.md).
 - `list` shows the reading queue by default and filtered library views by
   reading state, status, type, origin, parent, or date, with `--limit 50`
-  in every format (`-A` lifts it) and opt-in `-g` Git dates.
+  in every format (`-A` lifts it) and opt-in `-g` Git dates. Every row
+  carries a `blocked` boolean overlay (true when the note's `^ref` tracker
+  is Blocked `[?]`); it never changes `status` or `reading_state`. Bob Mac
+  Capture's Bob Refs panel reads it as a display overlay only.
 - `show <REF>...` reads one reference note with its metadata, annotations,
   own notes, and tasks. `-c` keeps only commented annotations and
   standalone notes, `-N` keeps metadata and own notes only.
