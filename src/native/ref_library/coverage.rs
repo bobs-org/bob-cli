@@ -469,6 +469,7 @@ mod tests {
             status_sync: "ok".to_string(),
             frontmatter_status: None,
             legacy_status: Some("read".to_string()),
+            blocked: false,
             reading_state: "finished".to_string(),
             reading_state_source: "legacy_status:read".to_string(),
             parent: None,

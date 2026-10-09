@@ -29,6 +29,10 @@ pub(crate) struct StatusOutcome {
     pub status: Option<String>,
     pub status_sync: &'static str,
     pub frontmatter_status: Option<String>,
+    /// True when the note carries exactly one `^ref` tracker and its
+    /// mark is Blocked `[?]`: an overlay on the reading lane, never a
+    /// status of its own.
+    pub blocked: bool,
     pub has_usable_tracker: bool,
     pub tracker: Option<TrackerHit>,
     pub reading_state: &'static str,
@@ -72,6 +76,7 @@ pub(crate) fn decide_status(
         None
     };
     let usable = hits.len() == 1 && single_target.is_some();
+    let blocked = hits.len() == 1 && hits[0].mark == '?';
     let mut diagnostics = Vec::new();
     if hits.len() > 1 {
         diagnostics.push(Diagnostic::new(
@@ -99,6 +104,7 @@ pub(crate) fn decide_status(
                 status: Some(tracker_status.to_string()),
                 status_sync: "ok",
                 frontmatter_status: None,
+                blocked,
                 has_usable_tracker: true,
                 tracker,
                 reading_state: state,
@@ -115,6 +121,7 @@ pub(crate) fn decide_status(
                 status: Some(tracker_status.to_string()),
                 status_sync: "pending",
                 frontmatter_status: front_norm.map(str::to_string),
+                blocked,
                 has_usable_tracker: true,
                 tracker,
                 reading_state: state,
@@ -134,6 +141,7 @@ pub(crate) fn decide_status(
             status: Some("conflict".to_string()),
             status_sync: "conflict",
             frontmatter_status: front_norm.map(str::to_string),
+            blocked,
             has_usable_tracker: true,
             tracker,
             reading_state: "unknown",
@@ -152,6 +160,7 @@ pub(crate) fn decide_status(
             status: None,
             status_sync: "ok",
             frontmatter_status: None,
+            blocked,
             has_usable_tracker: false,
             tracker: None,
             reading_state: "unknown",
@@ -172,6 +181,7 @@ pub(crate) fn decide_status(
                         status: Some("legacy".to_string()),
                         status_sync: "ok",
                         frontmatter_status: None,
+                        blocked,
                         has_usable_tracker: false,
                         tracker: None,
                         reading_state: state,
@@ -185,6 +195,7 @@ pub(crate) fn decide_status(
                 status: Some("legacy".to_string()),
                 status_sync: "ok",
                 frontmatter_status: None,
+                blocked,
                 has_usable_tracker: false,
                 tracker: None,
                 reading_state: state,
@@ -199,6 +210,7 @@ pub(crate) fn decide_status(
                 status: Some(status.to_string()),
                 status_sync: "ok",
                 frontmatter_status: None,
+                blocked,
                 has_usable_tracker: false,
                 tracker: None,
                 reading_state: state,

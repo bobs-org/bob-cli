@@ -20,6 +20,9 @@ pub(crate) struct RefRow {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub frontmatter_status: Option<String>,
     pub legacy_status: Option<String>,
+    /// True when the note's single `^ref` tracker is Blocked `[?]`:
+    /// an overlay on the reading lane, always present in JSON.
+    pub blocked: bool,
     pub reading_state: String,
     pub reading_state_source: String,
     pub parent: Option<String>,

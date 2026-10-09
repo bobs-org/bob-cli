@@ -985,6 +985,7 @@ mod tests {
             status_sync: "ok".to_string(),
             frontmatter_status: None,
             legacy_status: None,
+            blocked: false,
             reading_state: reading_state.to_string(),
             reading_state_source: "ref_task:[ ]".to_string(),
             parent: None,

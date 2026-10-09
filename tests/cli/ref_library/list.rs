@@ -252,6 +252,31 @@ fn list_unknown_and_conflict_states() {
 }
 
 #[test]
+fn list_rows_carry_always_present_blocked() {
+    let (_temp, vault) = fixture_vault("bob-cli-ref-list-blocked");
+    let document = run_list_json(&vault, &["-R", "all", "-A"]);
+    let rows = document["refs"].as_array().expect("refs array");
+    assert!(!rows.is_empty());
+    for row in rows {
+        assert!(
+            row.get("blocked").is_some_and(|value| value.is_boolean()),
+            "always-present blocked boolean: {}",
+            row["path"]
+        );
+    }
+    let blocked = rows
+        .iter()
+        .find(|row| row["path"] == "ref/papers/blocked_mark.md")
+        .expect("blocked row");
+    assert_eq!(blocked["blocked"], true);
+    let synced = rows
+        .iter()
+        .find(|row| row["path"] == "ref/papers/synced_paper.md")
+        .expect("synced row");
+    assert_eq!(synced["blocked"], false);
+}
+
+#[test]
 fn list_hides_superseded_notes_everywhere() {
     let (_temp, vault) = fixture_vault("bob-cli-ref-list-superseded");
     for args in [vec!["-R", "all"], vec!["-s", "legacy"]] {

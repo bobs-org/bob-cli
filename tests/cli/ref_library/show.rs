@@ -77,6 +77,21 @@ fn shown_paths(document: &serde_json::Value) -> Vec<String> {
         .collect()
 }
 
+#[test]
+fn show_rows_carry_blocked() {
+    let (_temp, vault) = fixture_vault("bob-cli-ref-show-blocked");
+    let document = run_show_json(
+        &vault,
+        &["ref/papers/blocked_mark.md", "ref/papers/synced_paper.md"],
+    );
+    let rows = document["refs"].as_array().expect("refs array");
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0]["path"], "ref/papers/blocked_mark.md");
+    assert_eq!(rows[0]["blocked"], true);
+    assert_eq!(rows[1]["path"], "ref/papers/synced_paper.md");
+    assert_eq!(rows[1]["blocked"], false);
+}
+
 fn vault_snapshot(vault: &Path) -> Vec<(String, Vec<u8>)> {
     let mut files = Vec::new();
     walk_snapshot(vault, vault, &mut files);

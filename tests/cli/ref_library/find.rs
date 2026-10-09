@@ -65,6 +65,21 @@ fn result_for(document: &serde_json::Value, query: &str) -> serde_json::Value {
         .clone()
 }
 
+#[test]
+fn find_rows_carry_blocked() {
+    let (_temp, vault) = fixture_vault("bob-cli-ref-find-blocked");
+    let document = run_find_json(
+        &vault,
+        &["ref/papers/blocked_mark.md", "ref/papers/synced_paper.md"],
+    );
+    let blocked = result_for(&document, "ref/papers/blocked_mark.md");
+    assert_eq!(blocked["verdict"], "in_library");
+    assert_eq!(blocked["matches"][0]["ref"]["blocked"], true);
+    let synced = result_for(&document, "ref/papers/synced_paper.md");
+    assert_eq!(synced["verdict"], "in_library");
+    assert_eq!(synced["matches"][0]["ref"]["blocked"], false);
+}
+
 fn vault_snapshot(vault: &Path) -> Vec<(String, Vec<u8>)> {
     let mut files = Vec::new();
     walk_snapshot(vault, vault, &mut files);

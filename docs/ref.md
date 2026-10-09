@@ -83,6 +83,13 @@ per note:
 `frontmatter:read`, `legacy_status:review_lit_notes`,
 `conflict:…`, `none`).
 
+`blocked` is a boolean overlay on the reading lane, always present on
+every `list`, `show`, and `find` row: true when the note carries
+exactly one `^ref` tracker whose mark is Blocked `[?]`, false
+otherwise. It never changes `status` or `reading_state` — a blocked
+`next` row still reads `queued` in its lane — it only says the note is
+waiting on something else.
+
 A legacy note whose `legacy_status` is `book` and that carries a
 non-empty `legacy_chapter_statuses` list derives its reading state
 from its chapters instead: each chapter status maps through the
@@ -407,10 +414,11 @@ through the index row builder), chapter count, and rename.
 intake directory). `library` counts exclude superseded notes.
 `generated_at` is local `YYYY-MM-DDTHH:MM:SS` (pin with `BOB_NOW`).
 Each `ref` object is the full index row: path, link, title, origin,
-ref_type, era, status, status_sync, legacy_status, reading_state and
-its source, parent, urls, identity keys, author/published/captured,
-added/finished dates and sources, source_pdf, audio, annotation and
-comment counts, snapshot, research_ref, superseded_by, and diagnostics.
+ref_type, era, status, status_sync, legacy_status, `blocked`,
+reading_state and its source, parent, urls, identity keys,
+author/published/captured, added/finished dates and sources,
+source_pdf, audio, annotation and comment counts, snapshot,
+research_ref, superseded_by, and diagnostics.
 
 ## Errors and exit codes
 

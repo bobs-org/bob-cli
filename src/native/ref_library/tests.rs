@@ -105,6 +105,7 @@ fn synced_paper_row_covers_the_core_fields() {
     assert_eq!(row.research_ref, None);
     assert_eq!(row.superseded_by, None);
     assert_eq!(codes(row), BTreeSet::from(["marker_mirror_excluded"]));
+    assert!(!row.blocked);
 }
 
 #[test]
@@ -252,9 +253,11 @@ fn tracker_diagnostics_fall_back_to_frontmatter() {
     assert_eq!(two.status.as_deref(), Some("wip"));
     assert_eq!(two.reading_state, "started");
     assert_eq!(two.reading_state_source, "frontmatter:wip");
+    assert!(!two.blocked);
 
     let unknown = row(&index, "ref/papers/unknown_mark.md");
     assert_eq!(codes(unknown), BTreeSet::from(["unknown_ref_mark"]));
+    assert!(!unknown.blocked);
     assert_eq!(unknown.status.as_deref(), Some("ready"));
     assert_eq!(unknown.reading_state, "queued");
     // No frontmatter title: the first H1 is the title.
@@ -272,6 +275,7 @@ fn blocked_tracker_defers_to_frontmatter_without_diagnostic() {
     assert_eq!(blocked.reading_state_source, "ref_task:[?]");
     assert!(blocked.diagnostics.is_empty());
     assert_eq!(blocked.title, "Blocked Mark Note");
+    assert!(blocked.blocked);
 }
 
 #[test]

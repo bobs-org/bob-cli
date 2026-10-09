@@ -366,6 +366,7 @@ fn build_row(rel: &str, under_ref: &str, contents: &str) -> RefRow {
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .map(str::to_string),
+        blocked: outcome.blocked,
         reading_state: outcome.reading_state.to_string(),
         reading_state_source: outcome.reading_state_source.clone(),
         parent,
