@@ -476,13 +476,26 @@ pub(super) fn pomodoro_named_start_shape_error(
 }
 
 /// Named-start E4 variant when the name is empty and extra text follows
-/// (`=# bugs`): no space after `#`.
+/// (`=# bugs`): no space after `#`. `sigil` is the typed `=`/`==` prefix
+/// so an override keeps its doubled spelling.
 pub(super) fn pomodoro_named_start_nospace_error(
+    sigil: &str,
     suffix: &str,
     word: &str,
 ) -> String {
     format!(
-        "write the Pomodoro name right after `#`, with no space: `={suffix}#{word}`"
+        "write the Pomodoro name right after `#`, with no space: `{sigil}{suffix}#{word}`"
+    )
+}
+
+/// `==`-prefixed close shape (`==x`, `==X1`, `==*`, `==!2`): `==`
+/// restarts or swaps the running Pomodoro and never closes it.
+pub(super) fn pomodoro_double_close_error(
+    token: &str,
+    close_spelling: &str,
+) -> String {
+    format!(
+        "`{token}` is not a close: `==` restarts or swaps the running Pomodoro and never closes it; close it with `{close_spelling}`"
     )
 }
 

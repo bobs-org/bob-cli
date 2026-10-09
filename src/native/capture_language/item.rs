@@ -861,19 +861,42 @@ pub(crate) enum EqualsToken {
     Close,
     /// `=` plus the longest `[0-9]*(-[0-9]*)?` run, plus an optional
     /// `#name` part, plus an optional `~<K>` drop part. `suffix` excludes
-    /// the `=`, `counted` is true when the suffix holds at least one digit,
-    /// `name` is `Some` when a `#` immediately follows the suffix
+    /// the sigil, `counted` is true when the suffix holds at least one
+    /// digit, `name` is `Some` when a `#` immediately follows the suffix
     /// (possibly empty, as in `=#`; it ends at the first ASCII whitespace
     /// or `~`), `drop` holds the `~` offset inside the token plus the text
-    /// after it when a `~` immediately follows the suffix or name, and
-    /// `len` is the token's byte length including the name and drop parts.
+    /// after it when a `~` immediately follows the suffix or name, `len`
+    /// is the token's byte length including the sigil, the name, and the
+    /// drop parts, and `override` is true when the token used the doubled
+    /// `==` sigil (an override of the running Pomodoro).
     Start {
         suffix: String,
         counted: bool,
         len: usize,
         name: Option<String>,
         drop: Option<(usize, String)>,
+        r#override: bool,
     },
+}
+
+/// Whether the text after a leading `=` is itself a claimed whole-item
+/// close token (`=x`, `=x<N>…`, `=x#…`, `=*…`, `=!…`): only then does a
+/// `==`-prefixed token become the `==x` teaching error. Anything else
+/// (`==xyz`, `==foo`) lexes as an override start below and stays prose
+/// unless it claims its item, which protects Obsidian `==highlight==`
+/// prose.
+fn double_close_tail_is_claimed(after_first: &str) -> bool {
+    let Some(first) = after_first.split_whitespace().next() else {
+        return false;
+    };
+    if !first.starts_with('=') || first.starts_with("==") {
+        return false;
+    }
+    is_close_hash_token(first)
+        || first.eq_ignore_ascii_case("=x")
+        || whole_item_close_after_x(first).is_some()
+        || first.starts_with("=*")
+        || first.starts_with("=!")
 }
 
 /// Lex the `=`-family token at the start of trimmed item text, mirroring
@@ -887,16 +910,32 @@ pub(crate) enum EqualsToken {
 /// ASCII whitespace (or end of line).
 pub(crate) fn session_equals_token(text: &str) -> Option<EqualsToken> {
     let rest = text.strip_prefix('=')?;
-    if rest
-        .as_bytes()
-        .first()
-        .is_some_and(|byte| byte.eq_ignore_ascii_case(&b'x'))
+    // The doubled `==` sigil is the override twin of every whole-item `=`
+    // start: when the text after the first `=` is itself a claimed close
+    // token (`==x`, `==X1`, `==*`, `==!2`), the token is the teaching
+    // near miss below; otherwise it lexes as an override start with the
+    // same suffix/name/drop grammar (`==`, `==<X>`, `==[<X>]#name`,
+    // `…~<K>`).
+    let (rest, sigil_len, is_override) = match rest.strip_prefix('=') {
+        Some(after_second) => {
+            if double_close_tail_is_claimed(&text[1..]) {
+                return Some(EqualsToken::Close);
+            }
+            (after_second, 2, true)
+        }
+        None => (rest, 1, false),
+    };
+    if !is_override
+        && rest
+            .as_bytes()
+            .first()
+            .is_some_and(|byte| byte.eq_ignore_ascii_case(&b'x'))
     {
         return Some(EqualsToken::Close);
     }
     // Short close aliases `=*`/`=!` claim the token even when their list is
     // malformed, so `=*abc` reports a close diagnostic, never a task.
-    if rest.starts_with('*') || rest.starts_with('!') {
+    if !is_override && (rest.starts_with('*') || rest.starts_with('!')) {
         return Some(EqualsToken::Close);
     }
     let bytes = rest.as_bytes();
@@ -912,7 +951,7 @@ pub(crate) fn session_equals_token(text: &str) -> Option<EqualsToken> {
     }
     let suffix = rest[..len].to_string();
     let counted = suffix.bytes().any(|byte| byte.is_ascii_digit());
-    let mut token_len = len + 1;
+    let mut token_len = len + sigil_len;
     let mut name: Option<String> = None;
     if rest.as_bytes().get(len) == Some(&b'#') {
         let after_hash = &rest[len + 1..];
@@ -925,8 +964,11 @@ pub(crate) fn session_equals_token(text: &str) -> Option<EqualsToken> {
         token_len += 1 + name_len;
     }
     let mut drop: Option<(usize, String)> = None;
-    if rest.as_bytes().get(token_len - 1) == Some(&b'~') {
-        let after_tilde = &rest[token_len..];
+    // A `~` follows the suffix or name part: its `rest` index is the token
+    // offset minus the sigil length (they coincide only for `=`).
+    let tilde_at = token_len - sigil_len;
+    if rest.as_bytes().get(tilde_at) == Some(&b'~') {
+        let after_tilde = &rest[tilde_at + 1..];
         let drop_len = after_tilde
             .find(|character: char| character.is_ascii_whitespace())
             .unwrap_or(after_tilde.len());
@@ -939,6 +981,7 @@ pub(crate) fn session_equals_token(text: &str) -> Option<EqualsToken> {
         len: token_len,
         name,
         drop,
+        r#override: is_override,
     })
 }
 
@@ -973,7 +1016,11 @@ pub(super) fn is_session_chain_token(token: &str) -> bool {
             len == token.len() || counted
         }
         Some(EqualsToken::Close) => {
-            token.eq_ignore_ascii_case("=x")
+            // A `==`-prefixed close tail (`==x`, `==X1`, `==*`, `==!2`) is
+            // a claimed teaching near miss, so it chains like any other
+            // claimed token and reports its own diagnostic per item.
+            token.starts_with("==")
+                || token.eq_ignore_ascii_case("=x")
                 || whole_item_close_after_x(token).is_some()
                 || is_close_hash_token(token)
         }
@@ -1134,8 +1181,9 @@ fn named_token_error(
     {
         let drop_suffix =
             drop_text.map(|text| format!("~{text}")).unwrap_or_default();
+        let sigil = if token.starts_with("==") { "==" } else { "=" };
         return Some(format!(
-            "write the duration before the name: `={after}#{before}{drop_suffix}` instead of `{token}`"
+            "write the duration before the name: `{sigil}{after}#{before}{drop_suffix}` instead of `{token}`"
         ));
     }
     if !is_pomodoro_selector_component(name) {
@@ -1175,8 +1223,9 @@ pub(super) fn named_shape_error_with_drop(
             let joined = words.join("-");
             let drop_suffix =
                 drop_text.map(|text| format!("~{text}")).unwrap_or_default();
+            let sigil = if token.starts_with("==") { "==" } else { "=" };
             message.push_str(&format!(
-                "; to name a multi-word Pomodoro, join the words with `-`: `={suffix}#{name}-{joined}{drop_suffix}`"
+                "; to name a multi-word Pomodoro, join the words with `-`: `{sigil}{suffix}#{name}-{joined}{drop_suffix}`"
             ));
         }
     }
@@ -1254,7 +1303,12 @@ pub(super) fn named_nospace_error(
     if word.is_empty() {
         return None;
     }
-    Some(pomodoro_named_start_nospace_error(suffix, word))
+    let sigil = if parent_trimmed.starts_with("==") {
+        "=="
+    } else {
+        "="
+    };
+    Some(pomodoro_named_start_nospace_error(sigil, suffix, word))
 }
 
 /// Absolute byte offset of a whole-item close token's `after_x` text (the
@@ -1285,10 +1339,11 @@ fn close_after_x_offset(
 /// start token (`=3`, `=-2`, `=3-`, `=2-1`, `=0`) with anything else; or an
 /// exact start token with child lines. Near misses never fall through as
 /// ordinary tasks. A bare token followed by more text on the same line
-/// (`= foo`, `=- foo`, `==`, `=-)`), every other close shape (`=xx`, `=xa`,
-/// `=x.`), and mid-body tokens (`Plan =3`, `a=3`, `Plan =x1`) stay ordinary
-/// prose: a bare sign run followed by prose stays prose while a counted
-/// token claims its item.
+/// (`= foo`, `=- foo`, `== foo`, `=-)`), every other close shape (`=xx`,
+/// `=xa`, `=x.`), `==` lookalikes that are no close tail (`==xyz`, `==foo`,
+/// `===`), and mid-body tokens (`Plan =3`, `Plan ==3`, `a=3`, `Plan =x1`)
+/// stay ordinary prose: a bare sign run followed by prose stays prose while
+/// a counted token claims its item.
 ///
 /// A selection-shaped first token (`=x`/`=X` followed by a digit, `,`, `*`,
 /// `!`, or `~`) claims the item the same way: an exact single-token item
@@ -1310,6 +1365,18 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
             let Some(first) = parent_trimmed.split_whitespace().next() else {
                 return Ok(None);
             };
+            // A `==`-prefixed close shape (`==x`, `==X1`, `==*`, `==!2`)
+            // is never a close: `==` restarts or swaps the running
+            // Pomodoro. The lexer only yields `Close` here for a claimed
+            // close tail, so this always reports the teaching error.
+            if first.starts_with("==") {
+                let close_spelling =
+                    format!("={}", first.trim_start_matches('='));
+                return Err(pomodoro_double_close_error(
+                    first,
+                    &close_spelling,
+                ));
+            }
             if is_close_hash_token(first) {
                 let name = first
                     .find('#')
@@ -1600,6 +1667,7 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
             len,
             name,
             drop,
+            r#override,
         } => {
             if let Some(selector) = name {
                 let token_text =
@@ -1676,6 +1744,7 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                     return Ok(None);
                 }
                 let mut spec = parse_pomodoro_start_suffix(&suffix)?;
+                spec.r#override = r#override;
                 if let Some((_, after_tilde)) = drop.as_ref() {
                     spec.drop = lex_start_drop_for_execution(
                         parent_line,
@@ -1755,6 +1824,7 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
             }
             // Suffix errors win over the drop list.
             let mut spec = parse_pomodoro_start_suffix(&suffix)?;
+            spec.r#override = r#override;
             if let Some((_, after_tilde)) = drop.as_ref() {
                 let token_text = parent_trimmed;
                 spec.drop = lex_start_drop_for_execution(

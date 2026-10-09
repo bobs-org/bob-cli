@@ -710,8 +710,8 @@ fn capture_parse_pomodoro_start_protocol() {
 
     // Prose lookalikes stay ordinary tasks with no diagnostics.
     for text in [
-        "= foo", "=- foo", "==", "=-)", "Plan =3", "a=3", "=xx", "=xa",
-        "Plan =x", "Plan =x1",
+        "= foo", "=- foo", "== foo", "==foo", "===", "==xyz", "=-)", "Plan =3",
+        "Plan ==3", "a=3", "=xx", "=xa", "Plan =x", "Plan =x1",
     ] {
         let value = parse(text);
         assert_eq!(value["mode"], "task", "{text}");
@@ -920,6 +920,20 @@ fn capture_parse_pomodoro_start_human_and_help() {
         stdout(&named).contains("=3#bugs (15m, offset 0u)"),
         "{}",
         stdout(&named)
+    );
+
+    // An override keeps its doubled sigil in the human line.
+    let overridden = bob_command()
+        .arg("capture-parse")
+        .arg("--")
+        .arg("==3#bugs")
+        .output()
+        .expect("run override human");
+    assert_success(&overridden);
+    assert!(
+        stdout(&overridden).contains("==3#bugs (15m, offset 0u)"),
+        "{}",
+        stdout(&overridden)
     );
 
     let marked = bob_command()

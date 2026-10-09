@@ -708,6 +708,40 @@ fn pomodoro_start_name_completes_after_hash_on_a_named_start() {
 }
 
 #[test]
+fn pomodoro_override_name_completes_after_hash_with_wider_offsets() {
+    // `==#` offers an empty insertion point one byte later than `=#`.
+    let empty = field("==#", 3).expect("override name field");
+    assert_eq!(empty.context, CompletionContext::PomodoroStartName);
+    assert_eq!(empty.route, None);
+    assert_eq!(empty.block_id, None);
+    assert_eq!(empty.query, "");
+    assert_eq!(empty.replacement, (3, 3));
+
+    // A mid-name cursor reports the typed prefix but replaces the whole
+    // name part, which starts after the doubled sigil.
+    let raw = "==3#bugs";
+    let mid = field(raw, 6).expect("mid-name field");
+    assert_eq!(mid.context, CompletionContext::PomodoroStartName);
+    assert_eq!(mid.query, "bu");
+    assert_eq!(mid.replacement, (4, 8));
+
+    let end = field(raw, raw.len()).expect("end-of-name field");
+    assert_eq!(end.query, "bugs");
+    assert_eq!(end.replacement, (4, 8));
+
+    // A cursor on `==<X>` or at the `#` byte itself offers nothing.
+    assert_eq!(field("==#bugs", 0), None);
+    assert_eq!(field("==#bugs", 1), None);
+    assert_eq!(field("==#bugs", 2), None);
+    assert_eq!(field("==3#bugs", 3), None);
+    assert_eq!(field("==#", 2), None);
+
+    // Bare overrides offer nothing.
+    assert_eq!(field("==", 2), None);
+    assert_eq!(field("==3", 3), None);
+}
+
+#[test]
 fn pomodoro_start_name_completes_per_token_inside_chains() {
     let chain = "=x =#de";
     let completion = field(chain, chain.len()).expect("chain name field");

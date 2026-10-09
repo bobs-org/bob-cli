@@ -71,12 +71,14 @@ pub(crate) fn lex_start_drop(
         });
     }
     // A `#name` after the drop list belongs before it. Keep the typed `<X>`
-    // in the suggestion (for example `=3~2#bugs` teaches `=3#bugs~2`).
+    // in the suggestion (for example `=3~2#bugs` teaches `=3#bugs~2`),
+    // spelling the typed `=`/`==` sigil.
     if let Some(hash) = after_tilde.find('#') {
         let numbers = &after_tilde[..hash];
         let name = &after_tilde[hash + 1..];
         let suffix = start_token_suffix(token);
-        let suggestion = format!("={suffix}#{name}~{numbers}");
+        let sigil = if token.starts_with("==") { "==" } else { "=" };
+        let suggestion = format!("{sigil}{suffix}#{name}~{numbers}");
         return Err(StartDropError {
             message: start_drop_hash_error(&suggestion, token),
             range: (base_offset + hash, token_end),
@@ -127,10 +129,13 @@ pub(crate) fn lex_start_drop(
 }
 
 /// The typed `<X>` suffix of a whole-item start token (the `[0-9-]*` run
-/// after `=`), so a `#name`-after-drop diagnostic can keep it in its
+/// after `=`/`==`), so a `#name`-after-drop diagnostic can keep it in its
 /// suggestion.
 fn start_token_suffix(token: &str) -> &str {
-    let rest = token.strip_prefix('=').unwrap_or(token);
+    let rest = token
+        .strip_prefix("==")
+        .or_else(|| token.strip_prefix('='))
+        .unwrap_or(token);
     let mut len = 0;
     while len < rest.len() && rest.as_bytes()[len].is_ascii_digit() {
         len += 1;

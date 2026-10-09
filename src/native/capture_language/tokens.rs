@@ -771,6 +771,7 @@ pub(super) fn parse_pomodoro_start_suffix(
     if raw.is_empty() {
         return Ok(PomodoroStartSpec {
             raw: raw.to_string(),
+            r#override: false,
             drop: Vec::new(),
             duration_units: 5,
             offset_units: 0,
@@ -779,6 +780,7 @@ pub(super) fn parse_pomodoro_start_suffix(
     if raw == "-" {
         return Ok(PomodoroStartSpec {
             raw: raw.to_string(),
+            r#override: false,
             drop: Vec::new(),
             duration_units: 5,
             offset_units: 1,
@@ -795,6 +797,7 @@ pub(super) fn parse_pomodoro_start_suffix(
             .map_err(|_| POMODORO_START_OVERFLOW_ERROR.to_string())?;
         return Ok(PomodoroStartSpec {
             raw: raw.to_string(),
+            r#override: false,
             drop: Vec::new(),
             duration_units: 5,
             offset_units,
@@ -823,6 +826,7 @@ pub(super) fn parse_pomodoro_start_suffix(
             raw: raw.to_string(),
             duration_units,
             offset_units,
+            r#override: false,
             drop: Vec::new(),
         });
     }
@@ -836,6 +840,7 @@ pub(super) fn parse_pomodoro_start_suffix(
         raw: raw.to_string(),
         duration_units,
         offset_units: 0,
+        r#override: false,
         drop: Vec::new(),
     })
 }

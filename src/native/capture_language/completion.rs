@@ -416,7 +416,10 @@ fn pomodoro_start_name_field(
     };
     let leading = text.len() - text.trim_start().len();
     let token_start = parent.raw.start + leading;
-    let prefix_len = 1 + suffix.len();
+    // The `==` sigil is one byte longer than `=`, so a `==#` name field
+    // starts one byte later.
+    let sigil_len = if trimmed.starts_with("==") { 2 } else { 1 };
+    let prefix_len = sigil_len + suffix.len();
     let name_start = token_start + prefix_len + 1;
     let name_end = name_start + name.len();
     if cursor < name_start || cursor > name_end {

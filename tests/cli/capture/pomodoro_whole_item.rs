@@ -570,7 +570,7 @@ fn capture_pomodoro_whole_item_start_rejects_shape_and_forced_flags() {
 
     // Prose that must stay prose: bare tokens with text and mid-body
     // tokens never claim an item.
-    for text in ["= foo", "=- foo", "==", "Plan =3"] {
+    for text in ["= foo", "=- foo", "== foo", "==foo", "Plan =3", "Plan ==3"] {
         let temp_p = TempDir::new("bob-cli-capture-start-prose");
         let vault_p = temp_p.path().join("vault");
         let day_p = vault_p.join("day.md");

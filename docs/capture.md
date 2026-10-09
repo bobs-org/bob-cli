@@ -3453,7 +3453,18 @@ characters (ranged on the name), an oversized suffix (ranged on `=<X>`), or
 extra text, markers, or child lines on a well-formed token (ranged on the
 extra text or the child line, with the join-with-`-` hint when the extra
 text is all name characters). A `@@` declaration never applies to named
-starts either. A whole-item `=x[<N>][*<P>][!<M>][~<K>]` close
+starts either. The `==` family (`==`, `==<X>`, `==[<X>]#name`, `…~<K>`)
+parses with `=`-identical claim rules and the same spans, plus the
+`override` spec flag: an exact token claims its item, and a counted, named,
+or drop-carrying token claims it even with extra text (a precise error,
+never a task). A bare `==` with more text stays prose, which protects
+Obsidian highlights (`==important== thing`, `==foo`, `== foo`, `===`, and
+mid-body `Plan ==3` stay ordinary tasks). Near misses teach the doubled
+spelling: `==#bugs=3` suggests `==3#bugs`, `==~2#bugs` suggests
+`==#bugs~2`, and `==x` (plus `==X1`, `==*`, `==!2`) is never a close —
+anything else such as `==xyz` stays prose. `==#` needs `pomodoro_name`,
+`==~` and `==~2,` need `pomodoro_start_task`, and `==` tokens chain exactly
+like `=` tokens (`==#bugs +2`, `+2 ==#bugs`, `== --1`, `=x ==`). A whole-item `=x[<N>][*<P>][!<M>][~<K>]` close
 (case-insensitive `=X`, with `*`, `!`, and `~` in any order) parses as
 `pomodoro_close` with a `pomodoro_close` object (`raw` plus the additive
 `in_progress` list, `null` when no `<N>` was typed, the `park` list,
@@ -3647,7 +3658,10 @@ present, so schema version 1 stays additive.
 start suffix or whole-item start, with the typed `raw` `<X>` text (excluding
 `=` on whole-item starts, so `=3` reports `"3"` and `=` reports `""`) plus
 5-minute `duration_units` and `offset_units`, so schema version 1 is
-unchanged for older inputs. Multi-item drafts report each item's own
+unchanged for older inputs. A doubled `==` sigil adds an additive
+`"override": true` flag (omitted for plain `=`), marking the start as an
+override of the running Pomodoro; older clients still read the mode, spans,
+and timing unchanged. Multi-item drafts report each item's own
 `pomodoro_start` alongside the top-level preview of the first item; start
 items never inherit a `@@` declaration.
 

@@ -1009,7 +1009,19 @@ fn execution_parses_equals_family_starts_alongside_close() {
     assert_eq!(overflow, POMODORO_START_OVERFLOW_ERROR, "{overflow}");
     // Bare tokens with prose, other close shapes, and mid-body tokens
     // stay ordinary tasks.
-    for raw in ["= foo", "=- foo", "==", "=-)", "Plan =3", "a=3"] {
+    for raw in [
+        "= foo",
+        "=- foo",
+        "== foo",
+        "==foo",
+        "===",
+        "==xyz",
+        "==important== thing",
+        "=-)",
+        "Plan =3",
+        "Plan ==3",
+        "a=3",
+    ] {
         let parsed =
             execute(raw).unwrap_or_else(|error| panic!("{raw}: {error}"));
         assert_eq!(parsed.kind, CaptureKind::Task, "{raw}");
@@ -1060,6 +1072,122 @@ fn execution_parses_equals_family_starts_alongside_close() {
     assert!(
         dangling.contains("`=x~` is incomplete: type a task number after `~`"),
         "{dangling}"
+    );
+}
+
+#[test]
+fn execution_parses_override_family_with_identical_claim_rules() {
+    // Exact override starts carry `override: true` with `=`-identical timing.
+    for (raw, suffix, duration, offset) in [
+        ("==", "", 5, 0),
+        ("  ==  ", "", 5, 0),
+        ("==3", "3", 3, 0),
+        ("==-", "-", 5, 1),
+        ("==-2", "-2", 5, 2),
+        ("==3-", "3-", 3, 1),
+        ("==2-1", "2-1", 2, 1),
+    ] {
+        let parsed =
+            execute(raw).unwrap_or_else(|error| panic!("{raw}: {error}"));
+        assert_eq!(parsed.body, raw.trim(), "{raw}");
+        match parsed.kind {
+            CaptureKind::PomodoroStart {
+                spec,
+                pomodoro_name,
+            } => {
+                assert_eq!(pomodoro_name, None, "{raw}");
+                assert_eq!(spec.raw, suffix, "{raw}");
+                assert_eq!(spec.duration_units, duration, "{raw}");
+                assert_eq!(spec.offset_units, offset, "{raw}");
+                assert!(spec.r#override, "{raw}");
+            }
+            other => panic!("{raw}: expected start, got {other:?}"),
+        }
+    }
+    // A plain `=` start keeps `override: false`.
+    match execute("=3").expect("plain").kind {
+        CaptureKind::PomodoroStart { spec, .. } => {
+            assert!(!spec.r#override, "=3");
+        }
+        other => panic!("=3: expected start, got {other:?}"),
+    }
+    // Named and drop-carrying overrides claim their item the same way.
+    match execute("==3#bugs").expect("named").kind {
+        CaptureKind::PomodoroStart {
+            spec,
+            pomodoro_name,
+        } => {
+            assert_eq!(pomodoro_name.as_deref(), Some("bugs"), "==3#bugs");
+            assert!(spec.r#override, "==3#bugs");
+        }
+        other => panic!("==3#bugs: expected start, got {other:?}"),
+    }
+    match execute("==~2").expect("drop").kind {
+        CaptureKind::PomodoroStart { spec, .. } => {
+            assert_eq!(spec.drop, vec![2], "==~2");
+            assert!(spec.r#override, "==~2");
+        }
+        other => panic!("==~2: expected start, got {other:?}"),
+    }
+    // Near misses spell every suggestion with the typed `==` sigil.
+    for (raw, expected) in [
+        (
+            "==#bugs=3",
+            "write the duration before the name: `==3#bugs` instead of `==#bugs=3`",
+        ),
+        (
+            "==~2#bugs",
+            "write the drop list after the name: `==#bugs~2` instead of `==~2#bugs`",
+        ),
+        (
+            "==3 more",
+            "Pomodoro start `==3` must be the whole capture item; remove extra text, markers, or child lines (to start a task's session instead, use `^route:block-id=3`)",
+        ),
+        (
+            "==# bugs",
+            "write the Pomodoro name right after `#`, with no space: `==#bugs`",
+        ),
+        (
+            "==x",
+            "`==x` is not a close: `==` restarts or swaps the running Pomodoro and never closes it; close it with `=x`",
+        ),
+        (
+            "==X1",
+            "`==X1` is not a close: `==` restarts or swaps the running Pomodoro and never closes it; close it with `=X1`",
+        ),
+        (
+            "==*",
+            "`==*` is not a close: `==` restarts or swaps the running Pomodoro and never closes it; close it with `=*`",
+        ),
+        (
+            "==!2",
+            "`==!2` is not a close: `==` restarts or swaps the running Pomodoro and never closes it; close it with `=!2`",
+        ),
+        (
+            "==#",
+            "`==#` is incomplete: type a Pomodoro name after `#` (for example `==#deep-work`)",
+        ),
+        (
+            "==~",
+            "`==~` is incomplete: type a task number after `~`",
+        ),
+        (
+            "==~2,",
+            "`==~2,` is incomplete: type a task number after `,`",
+        ),
+    ] {
+        assert_eq!(execute(raw).expect_err(raw), expected, "{raw}");
+    }
+    // A named override with extra text teaches the hyphenated spelling.
+    assert_eq!(
+        execute("==#deep work").expect_err("multi-word"),
+        "Pomodoro start `==#deep` must be the whole capture item; remove extra text, markers, or child lines (to start a task's session in a named Pomodoro instead, use `^route:block-id#deep=`); to name a multi-word Pomodoro, join the words with `-`: `==#deep-work`",
+    );
+    // Anything else stays prose: `==xyz` is not a close tail.
+    assert_eq!(
+        execute("==xyz").expect("==xyz").kind,
+        CaptureKind::Task,
+        "==xyz"
     );
 }
 

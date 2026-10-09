@@ -359,6 +359,11 @@ pub(crate) struct PomodoroStartSpec {
     pub(crate) duration_units: u64,
     /// Number of 5-minute offset units.
     pub(crate) offset_units: u64,
+    /// `true` when the token used the doubled `==` sigil: an override of
+    /// the running Pomodoro rather than a plain start. Omitted from JSON
+    /// when false, so plain `=` output stays byte-identical.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(crate) r#override: bool,
     /// Queued lineup numbers to drop from the started session, empty when
     /// no `~<K>` list was typed. Every parser leaves it empty until the
     /// start-drop grammar lands; the lineup engine already applies it.

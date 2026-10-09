@@ -156,7 +156,11 @@ with a `pomodoro_start` object (`raw` excludes `=`, plus 5-minute \
 `pomodoro_start` span covering the whole token (only `=<X>` when a `~<K>` \
 drop part is present, with a `pomodoro_start_drop` span covering `~<K>` \
 including the `~`); the human `start` line reads `=3#bugs~1,3 (15m, \
-offset 0u · drop 1, 3)`. The parse stays purely lexical and never guesses \
+offset 0u · drop 1, 3)`. The `==` family (`==`, `==<X>`, `==[<X>]#name`, \
+`…~<K>`) parses the same way with an additive `override: true` flag on the \
+spec and the doubled sigil in the human line; a bare `==` with more text \
+stays prose (Obsidian `==highlight==` text), and `==x` is never a close. \
+The parse stays purely lexical and never guesses \
 current ledger times. A counted or drop-carrying token with extra text, \
 markers, or child lines (`=3 more`, `=3x`, `=~2 more`), an exact token \
 with child lines, and an oversized suffix report 'pomodoro_start' plus an \
@@ -176,7 +180,9 @@ bytes only (the `#` is in no span), `=<X>#` with no name reports mode \
 'incomplete' needing `pomodoro_name` with an `interactive_placeholder` \
 span over `#` and the partial `pomodoro_start` spec, and `=x#name` reports \
 mode 'pomodoro_close' with an `invalid_pomodoro_close` diagnostic over \
-`#name`. A whole-item \
+`#name`. Named overrides (`==#bugs`, `==3#bugs`) parse the same way with \
+the `override` flag; `==#` needs `pomodoro_name` with the partial override \
+spec, and `==#bugs=3` teaches `==3#bugs`. A whole-item \
 `=x[<N>][*<P>][!<M>][~<K>]` close (case-insensitive `=X`, with `*`, `!`, and `~` in \
 any order; `=*`/`=!` omit `x` before an initial `*`/`!`) reports mode 'pomodoro_close' with a `pomodoro_close` object \
 (`raw` exactly as typed plus the additive `in_progress` list, null when no `<N>` was typed, \
@@ -888,15 +894,17 @@ fn print_human_success_with_styler(
 }
 
 /// Render a validated whole-item start for human output: the whole
-/// typed token (`=<X>` plus `#name` for a named start plus `~<K>` for a
-/// drop list) plus its resolved 5-minute duration and offset units.
+/// typed token (`=`/`==` plus `<X>`, plus `#name` for a named start plus
+/// `~<K>` for a drop list) plus its resolved 5-minute duration and offset
+/// units. An override keeps its doubled sigil.
 fn format_pomodoro_start(
     start: &PomodoroStartSpec,
     section: Option<&str>,
 ) -> String {
+    let sigil = if start.r#override { "==" } else { "=" };
     let mut token = match section {
-        Some(name) => format!("={}#{name}", start.raw),
-        None => format!("={}", start.raw),
+        Some(name) => format!("{sigil}{}#{name}", start.raw),
+        None => format!("{sigil}{}", start.raw),
     };
     if !start.drop.is_empty() {
         let compact = start
@@ -1601,6 +1609,59 @@ mod tests {
         assert_eq!(
             chain["items"][1]["range"],
             serde_json::json!({ "start": 3, "end": 9 })
+        );
+    }
+
+    #[test]
+    fn json_reports_override_starts_with_the_doubled_sigil() {
+        // An override keeps mode `pomodoro_start` with an additive
+        // `"override": true` flag, the doubled sigil in the human line,
+        // and spans covering `==<X>`.
+        let value = json("==3#bugs");
+        assert_eq!(value["mode"], "pomodoro_start");
+        assert_eq!(value["body"], "==3#bugs");
+        assert_eq!(value["section"], "bugs");
+        assert_eq!(
+            value["pomodoro_start"],
+            serde_json::json!({
+                "raw": "3",
+                "duration_units": 3,
+                "offset_units": 0,
+                "override": true,
+            })
+        );
+        assert_eq!(
+            value["spans"],
+            serde_json::json!([
+                { "start": 0, "end": 3, "kind": "pomodoro_start" },
+                { "start": 4, "end": 8, "kind": "pomodoro_name" },
+            ])
+        );
+        assert_eq!(value["diagnostics"], serde_json::json!([]));
+
+        // A plain start omits the flag, so older clients read it unchanged.
+        let plain = json("=3#bugs");
+        assert_eq!(
+            plain["pomodoro_start"],
+            serde_json::json!({
+                "raw": "3",
+                "duration_units": 3,
+                "offset_units": 0,
+            })
+        );
+
+        // An override incomplete keeps the flag on its partial spec.
+        let incomplete = json("==#");
+        assert_eq!(incomplete["mode"], "incomplete");
+        assert_eq!(incomplete["needs"], serde_json::json!(["pomodoro_name"]));
+        assert_eq!(
+            incomplete["pomodoro_start"],
+            serde_json::json!({
+                "raw": "",
+                "duration_units": 5,
+                "offset_units": 0,
+                "override": true,
+            })
         );
     }
 

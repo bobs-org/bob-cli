@@ -62,12 +62,46 @@ fn chain_token_predicate_covers_the_documented_table() {
         "=x1,1",
         "=x1,",
         "=x!",
+        "==",
+        "==3",
+        "==-2",
+        "==#bugs",
+        "==3#bugs",
+        "==#",
+        "==~2",
+        "==3#bugs~1",
+        "==#bugs=3",
+        "==~2#bugs",
+        "==x",
+        "==X1",
+        "==*",
+        "==!2",
     ] {
         assert!(is_session_chain_token(token), "{token}");
     }
     for token in [
-        "foo", "==", "=xx", "=xa", "+++", "+-", "-foo", "--aside", "1,3", "!2",
-        "^r:id=", "@r:id=x", "s:1", "p:2", "%", "#", "@@r", "#bugs", "bugs",
+        "foo",
+        "==foo",
+        "===",
+        "==xyz",
+        "==important==",
+        "=xx",
+        "=xa",
+        "+++",
+        "+-",
+        "-foo",
+        "--aside",
+        "1,3",
+        "!2",
+        "^r:id=",
+        "@r:id=x",
+        "s:1",
+        "p:2",
+        "%",
+        "#",
+        "@@r",
+        "#bugs",
+        "bugs",
     ] {
         assert!(!is_session_chain_token(token), "{token}");
     }
@@ -148,6 +182,28 @@ fn chain_token_predicate_equals_claimed_for_single_tokens() {
             !matches!(equals, Ok(None)) || !matches!(adjust, Ok(None));
         assert_eq!(is_session_chain_token(token), claimed, "{token}");
     }
+}
+
+#[test]
+fn draft_splits_override_chains_with_absolute_ranges() {
+    // `==` tokens chain exactly like `=` tokens: a swap plus an
+    // adjustment, a close plus a bare restart, and a restart plus a shift.
+    assert_eq!(
+        draft_items("==#bugs +2"),
+        vec![(0, 1, "==#bugs"), (1, 1, "+2")]
+    );
+    assert_eq!(draft_items("=x =="), vec![(0, 1, "=x"), (1, 1, "==")]);
+    assert_eq!(draft_items("== --1"), vec![(0, 1, "=="), (1, 1, "--1")]);
+    assert_eq!(
+        execute_draft("==#bugs +2").expect("chain").items.len(),
+        2,
+        "==#bugs +2"
+    );
+    assert_eq!(
+        execute_draft("=x ==").expect("chain").items.len(),
+        2,
+        "=x =="
+    );
 }
 
 #[test]
