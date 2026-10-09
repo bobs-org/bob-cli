@@ -11,8 +11,8 @@
 use super::*;
 use crate::native::parent_notes::{ParentError, ResolvedParent};
 use crate::native::ref_tasks::{
-    find_managed_embed, managed_embed_line, select_for_ref, LocatedRefTask,
-    RefTaskDiagnostic, Selected, TrackerHit,
+    find_managed_embed, is_open_mark, managed_embed_line, select_for_ref,
+    LocatedRefTask, RefTaskDiagnostic, Selected, TrackerHit,
 };
 
 /// Which sync branch owns one PDF's note.
@@ -558,6 +558,20 @@ fn embed_for_task(task: &LocatedRefTask) -> Option<ReadingTaskEmbed> {
     })
 }
 
+/// The migrate-tasks hint for one note's in-note trackers: `Some` when an
+/// open `^ref` tracker remains, whatever branch owns the note. Shared by the
+/// v2 planner and the legacy v1 scan path so both count the same remainder.
+pub(super) fn open_v1_tracker_diagnostic(
+    v1_hits: &[TrackerHit],
+) -> Option<RefTaskDiagnostic> {
+    v1_hits.iter().any(|hit| is_open_mark(hit.mark)).then(|| {
+        RefTaskDiagnostic::new(
+            "open_v1_tracker",
+            "open in-note ^ref tracker; run bob ref migrate-tasks to move it into its parent note".to_string(),
+        )
+    })
+}
+
 /// Compose the full reading-task plan for one PDF: classify, then plan the
 /// birth or the existing-task sync. V1 notes return a hands-off plan; the
 /// executor keeps today's path for them exactly.
@@ -572,7 +586,13 @@ pub(super) fn plan_reading_task(
         inputs.candidates,
     );
     if branch == NoteBranch::V1 {
+        // A v1 note keeps today's hands-off plan, but an open in-note
+        // tracker is still reported so scan summaries can count the
+        // remaining unmigrated references. Bytes and writes are unchanged.
         return Ok(ReadingTaskPlan {
+            diagnostics: open_v1_tracker_diagnostic(inputs.v1_hits)
+                .into_iter()
+                .collect(),
             branch,
             kind: ReadingTaskKind::V1,
             action: ReadingTaskAction::NoWrite,
@@ -581,7 +601,6 @@ pub(super) fn plan_reading_task(
             status_target: None,
             task_changed: false,
             refuse_status_parent_writes: false,
-            diagnostics: Vec::new(),
         });
     }
     if !inputs.note_exists {

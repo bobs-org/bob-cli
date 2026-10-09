@@ -7,7 +7,7 @@ use crate::native::capture_targets::CaptureTargetKind;
 use crate::native::parent_notes::{
     ParentError, ParentMatchKind, ResolvedParent,
 };
-use crate::native::ref_tasks::LocatedRefTask;
+use crate::native::ref_tasks::{LocatedRefTask, TrackerHit};
 
 fn located(
     path: &str,
@@ -1144,4 +1144,44 @@ fn plan_task_gesture_conflict_errors() {
     ))
     .expect_err("incompatible gestures conflict");
     assert!(error.to_string().contains("conflict"), "{error}");
+}
+
+#[test]
+fn plan_v1_open_tracker_reports_migrate_diagnostic() {
+    let body = "# Stem\n\n- [ ] #task [[lib/papers/stem.pdf]] #hide ^ref\n";
+    let hits = [TrackerHit {
+        mark: ' ',
+        line: "- [ ] #task [[lib/papers/stem.pdf]] #hide ^ref".to_string(),
+    }];
+    let resolver = &stub_resolver as &dyn Fn(&str) -> TestResolverResult;
+    let mut inputs =
+        plan_inputs(true, body, &[], None, None, None, None, resolver, false);
+    inputs.v1_hits = &hits;
+    let plan = super::plan_reading_task(inputs).expect("plan");
+    assert_eq!(plan.branch, super::NoteBranch::V1);
+    assert_eq!(plan.action, super::ReadingTaskAction::NoWrite);
+    assert!(
+        plan.diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "open_v1_tracker"
+                && diagnostic.detail.contains("bob ref migrate-tasks")),
+        "open v1 tracker should surface the migrate hint: {:?}",
+        plan.diagnostics
+    );
+}
+
+#[test]
+fn plan_v1_closed_tracker_stays_silent() {
+    let body = "# Stem\n\n- [x] #task [[lib/papers/stem.pdf]] #hide ^ref\n";
+    let hits = [TrackerHit {
+        mark: 'x',
+        line: "- [x] #task [[lib/papers/stem.pdf]] #hide ^ref".to_string(),
+    }];
+    let resolver = &stub_resolver as &dyn Fn(&str) -> TestResolverResult;
+    let mut inputs =
+        plan_inputs(true, body, &[], None, None, None, None, resolver, false);
+    inputs.v1_hits = &hits;
+    let plan = super::plan_reading_task(inputs).expect("plan");
+    assert_eq!(plan.branch, super::NoteBranch::V1);
+    assert!(plan.diagnostics.is_empty(), "{:?}", plan.diagnostics);
 }

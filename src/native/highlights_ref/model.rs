@@ -528,7 +528,7 @@ pub(super) struct PdfSyncPlan {
     pub(super) status_normalization: StatusNormalization,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct SyncWriteReport {
     pub(super) note_action: &'static str,
     pub(super) marker_action: &'static str,
@@ -538,6 +538,23 @@ pub(super) struct SyncWriteReport {
     pub(super) routed_note_actions: usize,
     pub(super) annotation_tasks_created: usize,
     pub(super) annotation_tasks_skipped: usize,
+    /// Successful reading-task insert this PDF performed (birth or reopen),
+    /// with the actual destination and final block ID. Adoptions, unchanged
+    /// tasks, and failures leave this empty, so aggregates count only real
+    /// creations.
+    pub(super) reading_created: Option<ReadingTaskOutcome>,
+    /// Successful reading-task checkbox edit this PDF performed, with the
+    /// destination file and block ID.
+    pub(super) reading_updated: Option<ReadingTaskOutcome>,
+}
+
+/// What one PDF's reading-task write did, for human reports.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ReadingTaskOutcome {
+    /// Vault-relative destination file (`sase.md`).
+    pub(super) dest: String,
+    /// Final block ID (`ref-alpha`), without the caret.
+    pub(super) id: String,
 }
 
 #[derive(Debug, Clone)]

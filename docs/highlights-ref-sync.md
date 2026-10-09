@@ -21,6 +21,7 @@ Code lives in this `bob-cli` repository. On the MacBook, use a checkout at
 - [Synced properties](#synced-properties)
 - [Scan, safety, and Git/ob behavior](#scan-safety-and-gitob-behavior)
 - [Generated body contract](#generated-body-contract)
+- [Reading tasks in parent notes (v2)](#reading-tasks-in-parent-notes-v2)
 - [MacBook setup guide](#macbook-setup-guide)
 - [Scheduled scan](#scheduled-scan)
 - [Disable one PDF](#disable-one-pdf)
@@ -47,7 +48,11 @@ the same marker without writing.
 PDFs from the configured intake directory into the mirrored library path
 together with same-stem companion audio (`.mp3`, `.m4a`, `.ogg`, `.opus`),
 recursively finds PDFs under the configured library directory, and processes
-them in stable path order. Pass `-n, --no-hooks` on `scan`, or before the
+them in stable path order. New references file one ordinary reading task in
+their area, project, or inbox note while the reference note shows a managed
+embed; see [Reading tasks in parent notes
+(v2)](#reading-tasks-in-parent-notes-v2). Notes that still carry an in-note
+`^ref` tracker keep the legacy behavior described below. Pass `-n, --no-hooks` on `scan`, or before the
 subcommand as `bob ref --no-hooks scan`, to ignore the hook. Only
 `scan` and `doctor` honor that flag. A parent `--no-hooks` before `create`,
 `marker`, or `sync` is accepted and ignored. Per-PDF
@@ -896,11 +901,13 @@ The generated region is the only body region the tool owns:
 Manual content outside those markers must be preserved. User edits inside the
 generated region may be overwritten.
 
-New generated notes include a title, a PDF wikilink Obsidian task line with
+Legacy (v1) generated notes include a title, a PDF wikilink Obsidian task line with
 the `#hide` tag and the stable `^ref` block ID, an Obsidian audio embed when a
 same-stem companion exists, and `## Highlights`. `## Tasks`
 is not part of that skeleton; the section is created later, directly below the
-`^ref` task, when the first annotation task is imported.
+`^ref` task, when the first annotation task is imported. New v2 notes instead
+show a managed embed pointing at the parent-note reading task; see
+[Reading tasks in parent notes (v2)](#reading-tasks-in-parent-notes-v2).
 Existing notes must already contain the managed begin/end markers; otherwise
 `sync` fails instead of guessing where generated content belongs.
 
@@ -972,7 +979,7 @@ processed `[h:: ...]` markers continue to use the raw normalized sidecar text,
 so unchanged sidecar annotations keep their existing `^h-...` IDs when a note is
 regenerated with the callout format.
 
-The generated task line is the reference-reading lifecycle:
+The legacy (v1) generated task line is the reference-reading lifecycle:
 
 ```md
 - [ ] #task #ref [[lib/books/example.pdf]] #hide ^ref
@@ -1063,7 +1070,7 @@ whitespace-delimited token is copied to an unchecked task:
 - #task Send the quote to Alice @alice
 ```
 
-Created tasks go into the note's `## Tasks` section. If the note has no `Tasks`
+Legacy (v1) created tasks go into the note's `## Tasks` section. If the note has no `Tasks`
 heading, one is created as `## Tasks` directly below the generated PDF `^ref`
 task block (the task line plus its indented child lines, e.g. a `DEPENDS ON`
 line), separated from it by a blank line. An existing `Tasks` heading at any
@@ -1143,6 +1150,82 @@ sitting before the first page heading, sync drops it without a tombstone and
 every genuine block ID stays stable. Editing text highlight content itself mints a new block ID; a
 task created earlier keeps its original link, which then targets the tombstoned
 block under `### Removed highlights` — still a valid, resolvable jump.
+
+## Reading Tasks In Parent Notes (v2)
+
+A newly scanned reference files one ordinary reading task in its
+area, project, or inbox note; the reference note itself shows a managed
+embed pointing at that task. An existing note stays on this branch when
+the locator finds its task outside the reference note (live or archived)
+or the body already carries the managed embed. Notes with an in-note
+`^ref` tracker, and trackerless legacy notes, keep the v1 behavior
+documented above byte-for-byte.
+
+Birth inserts `- [ ] #task #ref [[ref/books/example|Title]]
+[created::YYYY-MM-DD] ^ref-example` into the resolved parent: the marker
+parent through the shared area/project/inbox resolver, or `mac_inbox`
+with a `⚠️ parent '<hint>' is not an open area or project` child bullet
+when the hint is unresolvable, ambiguous, or terminal. A uniquely located
+orphan is adopted before any insertion; ambiguous or archive-open
+candidates refuse instead of guessing. IDs allocate as `ref-<stem>` with
+numeric suffixes on destination or archive collision, honoring
+`BOB_NOW` for the created date. Births carry no `#hide` or `[fresh::]`
+tags, and a birth at a closed status stamps its close date like any
+generated close. A repeated run after a successful sync is a no-op.
+
+The reference note renders frontmatter `parent` from the task's
+residence, while stored sync bases and hashes exclude `parent`, so
+refiling the task repoints the parent without reading as a two-sided
+edit. The body carries exactly one managed embed,
+`![[<task-path-without-md>#^<id>]]`, on its own line one blank below the
+H1 (archive tasks address `done/...`). Sync heals a missing, stale, or
+deleted embed; authored material around the managed slot is preserved,
+and unrelated authored embeds elsewhere are untouched. Companion audio
+anchors directly after the managed embed on new notes.
+
+Located-task status compares the task checkbox against the stored base:
+a marker- or frontmatter-only move drives a checkbox line edit, while
+incompatible moves on both sides still conflict. `[?]` stays a
+status-neutral overlay. A closed archive task supplies terminal state; a
+deliberate marker/frontmatter reopen files a fresh open task in the
+archive's source parent (or the inbox with a warning) and may keep the
+renamed address when it is free. An open v2 note with no task anywhere
+gains no replacement: sync reports `open_ref_without_task` with
+restore-from-git/set-abandoned guidance, and duplicate live candidates
+refuse status and parent writes. Scan never mutates `done/`.
+
+Each PDF writes in parent-first order: destination reading-task and
+routed annotation insertions first, then the explicitly authorized PDF
+marker write, then the reference note with the actual final ID. The
+destination write rereads immediately before touching the line, so a
+moved or altered task fails with `reading task changed during sync;
+rerun` before any marker or ref-note write for that PDF. There is no
+multi-file transaction: when a later marker or ref write fails after the
+parent succeeded, rerunning adopts the existing task and finishes
+without duplication.
+
+Destination notes have no git-dirty veto; capture's preimage-checked
+writer rebuilds from fresh bytes on bounded retries, so unrelated user
+additions survive. The ref-note guard additionally allows edits confined
+to the managed embed (including deletion and repointing) plus
+residence-only frontmatter changes; unrelated body edits still refuse,
+and the v1 guard is unchanged. A parent-only move never demands marker
+write-back; only `--write-pdf` / `--write-pdfs` refreshes a stale
+marker hint to the residence.
+
+Unqualified annotation follow-ups file into the reading task's residence
+(or `mac_inbox` when there is none, never an archive) with full-path
+`[[ref/<type>/<stem>#^h-…|🔖]]` source links, rebased against fresh
+destination bytes at execution. Explicit `@name` routes and v1
+local-note defaults are unchanged.
+
+Concise human scans report `📖 N reading tasks created · <dest> (n)`
+and `↻ N reading tasks updated` from actual successful writes only:
+adoptions are not creations, unchanged tasks are not updates, and
+failures never count. Remaining unmigrated references print as `N open
+v1 ref tasks · run bob ref migrate-tasks`. Verbose, dry-run, and
+single-PDF reports name the destination, preview or final ID, adoptions,
+and planned or performed line edits. JSON output is unchanged.
 
 ## MacBook Setup Guide
 

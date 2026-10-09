@@ -33,8 +33,8 @@ pub(crate) use line::{
     RefFollowUp, REF_BLOCK_ID_MAX_LEN,
 };
 pub(crate) use select::{
-    select_for_ref, RefTaskDiagnostic, RefTaskSelection, Selected,
-    REF_TASK_DIAGNOSTIC_CODES,
+    is_open_mark, select_for_ref, RefTaskDiagnostic, RefTaskSelection,
+    Selected, REF_TASK_DIAGNOSTIC_CODES,
 };
 pub(crate) use v1::{
     find_trackers, managed_region_line_range, parse_tracker_line, TrackerHit,

@@ -443,7 +443,7 @@ pub(super) fn scan_library_json(
     let reports = write_outcomes
         .iter()
         .filter_map(|outcome| match outcome {
-            ScanWriteOutcome::Written(report) => Some(*report),
+            ScanWriteOutcome::Written(report) => Some(report.clone()),
             ScanWriteOutcome::Failed(_) => None,
         })
         .collect::<Vec<_>>();

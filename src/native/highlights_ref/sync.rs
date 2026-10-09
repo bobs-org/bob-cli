@@ -32,7 +32,7 @@ pub(super) fn sync_pdf(
     ensure_safe_to_write(config, iter::once(&plan))?;
     let mut run_state = RunWriteState::default();
     let report = execute_pdf_sync(config, &plan, &mut run_state)?;
-    print_sync_write_report(report);
+    print_sync_write_report(&report);
     Ok(())
 }
 
@@ -151,7 +151,7 @@ pub(super) fn scan_library(
     let reports = write_outcomes
         .iter()
         .filter_map(|outcome| match outcome {
-            ScanWriteOutcome::Written(report) => Some(*report),
+            ScanWriteOutcome::Written(report) => Some(report.clone()),
             ScanWriteOutcome::Failed(_) => None,
         })
         .collect::<Vec<_>>();
@@ -168,6 +168,7 @@ pub(super) fn scan_library(
         }
         print_scan_write_summary(
             &reports,
+            &plans,
             plan_failures.len(),
             write_failures.len(),
         );
@@ -405,6 +406,24 @@ pub(super) fn plan_pdf_sync(
         note.contents().as_deref(),
         &stable_rendered_note,
     );
+    // The legacy v1 path keeps today's planning and execution exactly, but
+    // it still carries a hands-off reading plan so human reports can count
+    // the remaining open in-note trackers. Bytes and writes are unchanged.
+    let v1_reading_plan = ReadingTaskPlan {
+        branch: NoteBranch::V1,
+        kind: ReadingTaskKind::V1,
+        action: ReadingTaskAction::NoWrite,
+        residence: None,
+        embed: None,
+        status_target: None,
+        task_changed: false,
+        refuse_status_parent_writes: false,
+        diagnostics: open_v1_tracker_diagnostic(&ref_tasks_mod::find_trackers(
+            &note.body,
+        ))
+        .into_iter()
+        .collect(),
+    };
 
     Ok(PdfSyncPlan {
         pdf: pdf.to_path_buf(),
@@ -430,7 +449,7 @@ pub(super) fn plan_pdf_sync(
         annotation_tasks_skipped: 0,
         routed_task_note_writes: Vec::new(),
         routed_intents: Vec::new(),
-        reading_task_plan: None,
+        reading_task_plan: Some(v1_reading_plan),
         reading_located: None,
         reading_diagnostics: Vec::new(),
         preview_block_id: None,
@@ -1285,6 +1304,10 @@ fn execute_pdf_sync_v1(
         annotation_tasks_skipped: plan
             .annotation_tasks_skipped
             .saturating_add(intent_outcome.deduped),
+        // The v1 path never touches reading tasks; v2 outcomes live in
+        // `execute_pdf_sync_v2`.
+        reading_created: None,
+        reading_updated: None,
     })
 }
 
@@ -1494,6 +1517,26 @@ fn execute_pdf_sync_v2(
         atomic_write(&plan.note_path, &rendered_note)?;
     }
 
+    // Actual successful reading-task actions only: an insert (birth or
+    // reopen) records its actual destination and final ID, a line edit
+    // records the edited line, and adoption/unchanged work records
+    // nothing. Failures never reach this report.
+    let mut reading_created = None;
+    let mut reading_updated = None;
+    if let Some(execution) = reading.execution.as_ref() {
+        let outcome = ReadingTaskOutcome {
+            dest: vault_rel_forward(config, &execution.destination),
+            id: execution.block_id.clone(),
+        };
+        match execution.action {
+            ReadingTaskExecutionAction::Inserted => {
+                reading_created = Some(outcome);
+            }
+            ReadingTaskExecutionAction::LineEdited => {
+                reading_updated = Some(outcome);
+            }
+        }
+    }
     Ok(SyncWriteReport {
         note_action,
         marker_action: if plan.marker_write_needed {
@@ -1515,6 +1558,8 @@ fn execute_pdf_sync_v2(
         annotation_tasks_skipped: plan
             .annotation_tasks_skipped
             .saturating_add(intent_outcome.deduped),
+        reading_created,
+        reading_updated,
     })
 }
 

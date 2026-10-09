@@ -1,5 +1,6 @@
 //! Sync and scan reporting and summaries.
 use super::*;
+use crate::native::ref_tasks::LocatedRefTask;
 
 pub(super) fn print_pdf_sync_report(
     operation: &str,
@@ -58,9 +59,12 @@ pub(super) fn print_pdf_sync_report(
         "routed_task_note_writes: {}",
         planned_routed_note_write_count(plan)
     );
+    for line in reading_plan_report_lines(plan) {
+        println!("{line}");
+    }
 }
 
-pub(super) fn print_sync_write_report(report: SyncWriteReport) {
+pub(super) fn print_sync_write_report(report: &SyncWriteReport) {
     println!("note_action: {}", report.note_action);
     println!("pdf_marker_action: {}", report.marker_action);
     if report.image_count > 0 || report.image_assets_written > 0 {
@@ -77,10 +81,13 @@ pub(super) fn print_sync_write_report(report: SyncWriteReport) {
         report.annotation_tasks_skipped
     );
     println!("routed_task_note_writes: {}", report.routed_note_actions);
+    for line in reading_write_report_lines(report) {
+        println!("{line}");
+    }
     println!("writes: {}", write_summary(report));
 }
 
-pub(super) fn write_summary(report: SyncWriteReport) -> &'static str {
+pub(super) fn write_summary(report: &SyncWriteReport) -> &'static str {
     let note_writes = report.note_action != "none"
         || report.routed_note_actions > 0
         || report.image_assets_written > 0;
@@ -89,6 +96,208 @@ pub(super) fn write_summary(report: SyncWriteReport) -> &'static str {
         (false, true) => "pdf",
         (true, false) => "note",
         (true, true) => "note,pdf",
+    }
+}
+
+/// One PDF's reading-task plan as a verbose `reading_task:` line naming
+/// the destination, preview ID, adoption, or planned line edit.
+pub(super) fn reading_plan_report_lines(plan: &PdfSyncPlan) -> Vec<String> {
+    let Some(reading) = plan.reading_task_plan.as_ref() else {
+        return vec!["reading_task: none (unplanned)".to_string()];
+    };
+    let located = plan.reading_located.as_ref();
+    let located_suffix = |located: Option<&LocatedRefTask>| match located {
+        Some(task) => {
+            let id = task.block_id.as_deref().unwrap_or("pending");
+            format!("{} ^{id}", task.path)
+        }
+        None => "pending".to_string(),
+    };
+    match &reading.action {
+        ReadingTaskAction::Insert {
+            destination_route,
+            prefer_block_id,
+            ..
+        } => {
+            let dest = format!("{destination_route}.md");
+            let preview = plan.preview_block_id.as_deref().unwrap_or("pending");
+            let verb = if reading.kind == ReadingTaskKind::Reopen {
+                "reopen"
+            } else {
+                "insert"
+            };
+            let mut line = format!("reading_task: {verb} {dest} ^{preview}");
+            if let Some(old) = prefer_block_id {
+                if old == preview {
+                    line.push_str(&format!(" (keeps ^{old})"));
+                } else {
+                    line.push_str(&format!(" (old ^{old} taken)"));
+                }
+            }
+            vec![line]
+        }
+        ReadingTaskAction::LineEdit { target_mark } => {
+            vec![format!(
+                "reading_task: line-edit {} -> [{target_mark}]",
+                located_suffix(located)
+            )]
+        }
+        ReadingTaskAction::NoWrite => {
+            if reading.kind == ReadingTaskKind::Birth {
+                return vec![format!(
+                    "reading_task: adopt {}",
+                    located_suffix(located)
+                )];
+            }
+            match located {
+                Some(_) => vec![format!(
+                    "reading_task: unchanged {}",
+                    located_suffix(located)
+                )],
+                None => vec![format!(
+                    "reading_task: none ({})",
+                    reading_kind_label(&reading.kind)
+                )],
+            }
+        }
+    }
+}
+
+fn reading_kind_label(kind: &ReadingTaskKind) -> &'static str {
+    match kind {
+        ReadingTaskKind::V1 => "v1",
+        ReadingTaskKind::Birth => "birth",
+        ReadingTaskKind::Existing => "existing",
+        ReadingTaskKind::ClosedTerminal => "closed",
+        ReadingTaskKind::Reopen => "reopen",
+        ReadingTaskKind::Missing => "missing",
+        ReadingTaskKind::Refused => "refused",
+    }
+}
+
+/// One PDF's performed reading-task write as `reading_task_created:` /
+/// `reading_task_updated:` lines naming the actual destination and final ID.
+/// Adoptions, unchanged tasks, and v1 notes print nothing.
+pub(super) fn reading_write_report_lines(
+    report: &SyncWriteReport,
+) -> Vec<String> {
+    let mut lines = Vec::new();
+    if let Some(created) = report.reading_created.as_ref() {
+        lines.push(format!(
+            "reading_task_created: {} ^{}",
+            created.dest, created.id
+        ));
+    }
+    if let Some(updated) = report.reading_updated.as_ref() {
+        lines.push(format!(
+            "reading_task_updated: {} ^{}",
+            updated.dest, updated.id
+        ));
+    }
+    lines
+}
+
+/// Aggregate reading-task counts for one scan's human summary lines.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(super) struct ReadingRollup {
+    pub(super) created: usize,
+    /// Per-destination creation counts, sorted by destination.
+    pub(super) created_by_dest: Vec<(String, usize)>,
+    pub(super) updated: usize,
+}
+
+impl ReadingRollup {
+    /// Roll up actual successful writes. Adoptions and unchanged tasks
+    /// never counted; failures never produce reports.
+    pub(super) fn from_reports(reports: &[SyncWriteReport]) -> Self {
+        let mut by_dest: BTreeMap<&str, usize> = BTreeMap::new();
+        let mut updated = 0usize;
+        for report in reports {
+            if let Some(created) = report.reading_created.as_ref() {
+                *by_dest.entry(created.dest.as_str()).or_default() += 1;
+            }
+            if report.reading_updated.is_some() {
+                updated += 1;
+            }
+        }
+        Self {
+            created: by_dest.values().sum(),
+            created_by_dest: by_dest
+                .into_iter()
+                .map(|(dest, count)| (dest.to_string(), count))
+                .collect(),
+            updated,
+        }
+    }
+
+    /// Roll up planned writes for dry-run and verbose plan summaries.
+    pub(super) fn from_plans(plans: &[&PdfSyncPlan]) -> Self {
+        let mut by_dest: BTreeMap<String, usize> = BTreeMap::new();
+        let mut updated = 0usize;
+        for plan in plans {
+            match plan
+                .reading_task_plan
+                .as_ref()
+                .map(|reading| &reading.action)
+            {
+                Some(ReadingTaskAction::Insert {
+                    destination_route, ..
+                }) => {
+                    *by_dest
+                        .entry(format!("{destination_route}.md"))
+                        .or_default() += 1;
+                }
+                Some(ReadingTaskAction::LineEdit { .. }) => {
+                    updated += 1;
+                }
+                _ => {}
+            }
+        }
+        Self {
+            created: by_dest.values().sum(),
+            created_by_dest: by_dest.into_iter().collect(),
+            updated,
+        }
+    }
+}
+
+/// Scan-scoped count of references that still need `bob ref migrate-tasks`:
+/// open v1 trackers, whether the note stays on the v1 branch or a v2 task
+/// already claims the ref alongside the leftover tracker.
+pub(super) fn count_open_v1(plans: &[&PdfSyncPlan]) -> usize {
+    plans
+        .iter()
+        .filter(|plan| {
+            plan.reading_task_plan.as_ref().is_some_and(|reading| {
+                reading
+                    .diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.code == "open_v1_tracker")
+            })
+        })
+        .count()
+}
+
+/// Print the concise reading-task summary lines after a scan summary:
+/// creations with their per-destination breakdown, updates, and the
+/// migrate-tasks reminder. Each line prints only when its count is nonzero,
+/// so no-op scans stay quiet.
+pub(super) fn print_reading_summary_lines(
+    rollup: &ReadingRollup,
+    open_v1: usize,
+) {
+    if rollup.created > 0 {
+        let mut line = format!("📖 {} reading tasks created", rollup.created);
+        for (dest, count) in &rollup.created_by_dest {
+            line.push_str(&format!(" · {dest} ({count})"));
+        }
+        println!("{line}");
+    }
+    if rollup.updated > 0 {
+        println!("↻ {} reading tasks updated", rollup.updated);
+    }
+    if open_v1 > 0 {
+        println!("{open_v1} open v1 ref tasks · run bob ref migrate-tasks");
     }
 }
 
@@ -296,6 +505,10 @@ pub(super) fn print_concise_scan_plan_report(
             styler,
         )
     );
+    print_reading_summary_lines(
+        &ReadingRollup::from_plans(plans),
+        count_open_v1(plans),
+    );
 }
 
 pub(super) fn print_concise_scan_write_report(
@@ -342,6 +555,17 @@ pub(super) fn print_concise_scan_write_report(
             write_summary_from_reports(reports),
             styler,
         )
+    );
+    let planned: Vec<&PdfSyncPlan> = plan_outcomes
+        .iter()
+        .filter_map(|outcome| match outcome {
+            ScanPlanOutcome::Planned(plan) => Some(plan.as_ref()),
+            ScanPlanOutcome::Failed(_) => None,
+        })
+        .collect();
+    print_reading_summary_lines(
+        &ReadingRollup::from_reports(reports),
+        count_open_v1(&planned),
     );
 }
 
@@ -797,6 +1021,9 @@ pub(super) fn print_scan_plan_entry(plan: &PdfSyncPlan) {
         "  routed_task_note_writes: {}",
         planned_routed_note_write_count(plan)
     );
+    for line in reading_plan_report_lines(plan) {
+        println!("  {line}");
+    }
 }
 
 pub(super) fn print_scan_plan_failure_entry(failure: &ScanFailure) {
@@ -835,6 +1062,10 @@ pub(super) fn print_scan_plan_summary(
         counts.routed_task_note_writes
     );
     println!("  pdf_markers_would_update: {}", counts.marker_updates);
+    let reading = ReadingRollup::from_plans(plans);
+    println!("  reading_tasks_create: {}", reading.created);
+    println!("  reading_tasks_update: {}", reading.updated);
+    println!("  open_v1_ref_tasks: {}", count_open_v1(plans));
     println!("  pdfs_planned: {}", plans.len());
     println!("  plan_failures: {plan_failure_count}");
     println!("  scan_failures: {plan_failure_count}");
@@ -845,6 +1076,7 @@ pub(super) fn print_scan_plan_summary(
 
 pub(super) fn print_scan_write_summary(
     reports: &[SyncWriteReport],
+    plans: &[&PdfSyncPlan],
     plan_failure_count: usize,
     write_failure_count: usize,
 ) {
@@ -869,6 +1101,10 @@ pub(super) fn print_scan_write_summary(
         "  routed_task_note_writes: {}",
         counts.routed_task_note_writes
     );
+    let reading = ReadingRollup::from_reports(reports);
+    println!("  reading_tasks_created: {}", reading.created);
+    println!("  reading_tasks_updated: {}", reading.updated);
+    println!("  open_v1_ref_tasks: {}", count_open_v1(plans));
     println!("  pdf_markers_updated: {}", counts.marker_updates);
     println!("  write_successes: {}", reports.len());
     println!("  plan_failures: {plan_failure_count}");

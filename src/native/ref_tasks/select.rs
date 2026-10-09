@@ -56,7 +56,10 @@ impl RefTaskSelection {
     }
 }
 
-fn is_open_mark(mark: char) -> bool {
+/// Whether a reading-task checkbox mark counts as open. Terminal marks are
+/// `x`, `X`, `-`; every other mark, including `?` and unknown marks, is
+/// open. Shared by selection and the v2 planner's v1-branch diagnostic.
+pub(crate) fn is_open_mark(mark: char) -> bool {
     !matches!(mark, 'x' | 'X' | '-')
 }
 

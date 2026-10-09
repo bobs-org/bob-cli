@@ -656,3 +656,457 @@ fn v2_alias_parent_resolves_to_canonical_residence() {
         "an alias match must not fall back to the inbox"
     );
 }
+
+#[test]
+fn v2_concise_scan_reports_reading_task_creations() {
+    let (_temp, vault) = scan_vault("bob-cli-scan-integration-report-born");
+    let first_pdf = vault.join("lib/books/alpha.pdf");
+    let second_pdf = vault.join("lib/papers/beta.pdf");
+    let parent_note = vault.join("obsidian.md");
+    write_area_note(&parent_note, "Obsidian");
+    write_highlights_pdf(
+        &first_pdf,
+        "- status: wip\n- parent: obsidian\n- title: Alpha\n",
+    );
+    write_highlights_pdf(
+        &second_pdf,
+        "- status: wip\n- parent: obsidian\n- title: Beta\n",
+    );
+
+    // Concise dry-run rolls up the planned births by destination.
+    let output = bob_command()
+        .arg("highlights")
+        .arg("scan")
+        .arg("--dry-run")
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", PINNED_NOW)
+        .output()
+        .expect("dry-run scan");
+    assert_success(&output);
+    let planned = stdout(&output);
+    assert!(
+        planned.contains("reading tasks created · obsidian.md (2)"),
+        "dry-run summary should roll up planned births:\n{planned}"
+    );
+
+    // Verbose dry-run names the planned destination and preview ID per PDF.
+    let output = bob_command()
+        .arg("highlights")
+        .arg("scan")
+        .arg("--dry-run")
+        .arg("--verbose")
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", PINNED_NOW)
+        .output()
+        .expect("verbose dry-run scan");
+    assert_success(&output);
+    let verbose = stdout(&output);
+    assert!(
+        verbose.contains("reading_task: insert obsidian.md ^ref-alpha")
+            && verbose.contains("reading_task: insert obsidian.md ^ref-beta"),
+        "verbose dry-run should name each birth destination and ID:\n{verbose}"
+    );
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("scan")
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", PINNED_NOW)
+        .output()
+        .expect("write scan");
+    assert_success(&output);
+    let written = stdout(&output);
+    assert!(
+        written.contains("📖 2 reading tasks created · obsidian.md (2)"),
+        "concise scan should report actual births by destination:\n{written}"
+    );
+    assert!(
+        !written.contains("reading tasks updated"),
+        "births must not count as updates:\n{written}"
+    );
+
+    // A repeated run after successful sync is quiet: no creation lines.
+    let output = bob_command()
+        .arg("highlights")
+        .arg("scan")
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", PINNED_NOW)
+        .output()
+        .expect("repeat scan");
+    assert_success(&output);
+    let repeat = stdout(&output);
+    assert!(
+        !repeat.contains("reading tasks created")
+            && !repeat.contains("reading tasks updated"),
+        "settled reruns must not report reading-task writes:\n{repeat}"
+    );
+}
+
+#[test]
+fn v2_single_pdf_report_names_performed_reading_write() {
+    let (_temp, vault) = scan_vault("bob-cli-scan-integration-report-one");
+    let pdf = vault.join("lib/solo.pdf");
+    let parent_note = vault.join("obsidian.md");
+    write_area_note(&parent_note, "Obsidian");
+    write_highlights_pdf(&pdf, "- status: wip\n- parent: obsidian\n");
+
+    let output = sync_pdf(&vault, &pdf, &["--dry-run"]);
+    assert_success(&output);
+    let planned = stdout(&output);
+    assert!(
+        planned.contains("reading_task: insert obsidian.md ^ref-solo"),
+        "single-PDF dry-run should name the planned birth:\n{planned}"
+    );
+
+    let output = sync_pdf(&vault, &pdf, &[]);
+    assert_success(&output);
+    let written = stdout(&output);
+    assert!(
+        written.contains("reading_task_created: obsidian.md ^ref-solo"),
+        "single-PDF write should name the actual destination and ID:\n{written}"
+    );
+}
+
+#[test]
+fn v2_concise_scan_reports_reading_task_updates() {
+    let (_temp, vault) = scan_vault("bob-cli-scan-integration-report-edit");
+    let pdf = vault.join("lib/grow.pdf");
+    let note = vault.join("ref/grow.md");
+    let parent_note = vault.join("obsidian.md");
+    write_area_note(&parent_note, "Obsidian");
+    write_highlights_pdf(&pdf, "- status: ready\n- parent: obsidian\n");
+
+    assert_success(&sync_pdf(&vault, &pdf, &[]));
+
+    // The reader moves the ref-note frontmatter forward; sync flips the
+    // located checkbox instead of inserting a replacement task.
+    let before = fs::read_to_string(&note).expect("read born note");
+    assert!(before.contains("![[obsidian#^ref-grow]]\n"), "{before}");
+    let moved = before.replace("status: ready", "status: wip");
+    assert_ne!(moved, before, "born note should carry a status: {before}");
+    write_file(&note, &moved);
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("scan")
+        .arg("--write-pdfs")
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", PINNED_NOW)
+        .output()
+        .expect("update scan");
+    assert_success(&output);
+    let written = stdout(&output);
+    assert!(
+        written.contains("↻ 1 reading tasks updated"),
+        "concise scan should report the performed line edit:\n{written}"
+    );
+    assert!(
+        !written.contains("reading tasks created"),
+        "a line edit must not count as a creation:\n{written}"
+    );
+    let parent_contents =
+        fs::read_to_string(&parent_note).expect("read parent");
+    assert!(
+        parent_contents.contains("- [/] #task #ref [[ref/grow|"),
+        "the located task should flip to in-progress:\n{parent_contents}"
+    );
+}
+
+#[test]
+fn v2_concise_scan_flags_open_v1_with_migrate_hint() {
+    let (_temp, vault) = scan_vault("bob-cli-scan-integration-report-v1");
+    let pdf = vault.join("lib/books/legacy.pdf");
+    let note = vault.join("ref/books/legacy.md");
+    write_highlights_pdf(&pdf, "- status: ready\n- parent: obsidian\n");
+    seed_v1_ref_note(
+        &note,
+        "- [ ] #task #ref [[lib/books/legacy.pdf]] #hide ^ref",
+    );
+
+    // One sync settles the legacy note's frontmatter; the second scan is
+    // the frozen steady state this test asserts.
+    assert_success(&sync_pdf(&vault, &pdf, &[]));
+    let before = fs::read_to_string(&note).expect("read v1 note");
+    assert!(before.contains("#hide ^ref"), "{before}");
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("scan")
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", PINNED_NOW)
+        .output()
+        .expect("v1 scan");
+    assert_success(&output);
+    let written = stdout(&output);
+    assert!(
+        written.contains("1 open v1 ref tasks · run bob ref migrate-tasks"),
+        "concise scan should point at the remaining v1 reference:\n{written}"
+    );
+    assert!(
+        !written.contains("reading tasks created")
+            && !written.contains("reading tasks updated"),
+        "v1 notes perform no reading-task writes:\n{written}"
+    );
+    assert_eq!(
+        fs::read_to_string(&note).expect("read v1 note"),
+        before,
+        "an unchanged v1 note must keep frozen bytes"
+    );
+}
+
+#[test]
+fn v2_adoption_reports_neither_created_nor_updated() {
+    let (_temp, vault) = scan_vault("bob-cli-scan-integration-report-adopt");
+    let pdf = vault.join("lib/papers/orphan.pdf");
+    let parent_note = vault.join("obsidian.md");
+    write_file(
+        &parent_note,
+        "---\ntype: \"[[area]]\"\n---\n\n# Obsidian\n\n- [ ] #task #ref [[ref/papers/orphan|Orphan]] [created::2026-10-06] ^ref-orphan\n",
+    );
+    write_highlights_pdf(
+        &pdf,
+        "- status: wip\n- parent: obsidian\n- title: Orphan\n",
+    );
+
+    let output = sync_pdf(&vault, &pdf, &[]);
+    assert_success(&output);
+    let written = stdout(&output);
+    assert!(
+        written.contains("reading_task: adopt"),
+        "the plan report should name the adoption:\n{written}"
+    );
+    assert!(
+        !written.contains("reading_task_created:")
+            && !written.contains("reading tasks created"),
+        "adoption is not creation:\n{written}"
+    );
+    assert!(
+        !written.contains("reading tasks updated"),
+        "adoption is not an update:\n{written}"
+    );
+}
+
+#[test]
+fn v2_sidecar_free_birth_pins_created_date() {
+    let (_temp, vault) = scan_vault("bob-cli-scan-integration-sidecar-free");
+    let pdf = vault.join("lib/nosidecar.pdf");
+    let note = vault.join("ref/nosidecar.md");
+    let parent_note = vault.join("obsidian.md");
+    write_area_note(&parent_note, "Obsidian");
+    write_highlights_pdf(&pdf, "- status: ready\n- parent: obsidian\n");
+
+    let output = sync_pdf(&vault, &pdf, &[]);
+    assert_success(&output);
+    let written = stdout(&output);
+    assert!(
+        written.contains("reading_task_created: obsidian.md ^ref-nosidecar"),
+        "sidecar-free births still report the reading task:\n{written}"
+    );
+    let parent_contents =
+        fs::read_to_string(&parent_note).expect("read parent");
+    assert!(
+        parent_contents.contains("[created::2026-10-06]"),
+        "birth dates pin to the invocation date:\n{parent_contents}"
+    );
+    let contents = fs::read_to_string(&note).expect("read born note");
+    assert!(
+        contents.contains("![[obsidian#^ref-nosidecar]]\n"),
+        "sidecar-free births still heal the managed embed:\n{contents}"
+    );
+}
+
+#[test]
+fn v2_deleted_managed_embed_heals_without_new_task() {
+    let (_temp, vault) = scan_vault("bob-cli-scan-integration-embed-heal");
+    let pdf = vault.join("lib/heal.pdf");
+    let note = vault.join("ref/heal.md");
+    let parent_note = vault.join("obsidian.md");
+    write_area_note(&parent_note, "Obsidian");
+    write_highlights_pdf(&pdf, "- status: wip\n- parent: obsidian\n");
+
+    assert_success(&sync_pdf(&vault, &pdf, &[]));
+    let born = fs::read_to_string(&note).expect("read born note");
+    assert!(born.contains("![[obsidian#^ref-heal]]\n"), "{born}");
+
+    // The reader deletes the managed embed; the next sync heals the slot
+    // without filing a replacement task.
+    let stripped = born
+        .lines()
+        .filter(|line| !line.contains("![[obsidian#^ref-heal]]"))
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    write_file(&note, &stripped);
+
+    let output = sync_pdf(&vault, &pdf, &[]);
+    assert_success(&output);
+    let written = stdout(&output);
+    assert!(
+        !written.contains("reading_task_created:"),
+        "healing the embed must not create a task:\n{written}"
+    );
+    let healed = fs::read_to_string(&note).expect("read healed note");
+    assert!(
+        healed.contains("![[obsidian#^ref-heal]]\n"),
+        "the managed embed should heal:\n{healed}"
+    );
+    assert_eq!(
+        fs::read_to_string(&parent_note)
+            .expect("read parent")
+            .matches("^ref-heal")
+            .count(),
+        1,
+        "healing must not duplicate the reading task"
+    );
+}
+
+#[test]
+fn v2_parent_move_settles_without_pdf_opt_in() {
+    let (_temp, vault) = scan_vault("bob-cli-scan-integration-parent-move");
+    let pdf = vault.join("lib/shift.pdf");
+    let note = vault.join("ref/shift.md");
+    let first_parent = vault.join("obsidian.md");
+    let second_parent = vault.join("sase.md");
+    write_area_note(&first_parent, "Obsidian");
+    write_area_note(&second_parent, "Sase");
+    write_highlights_pdf(&pdf, "- status: wip\n- parent: obsidian\n");
+
+    assert_success(&sync_pdf(&vault, &pdf, &[]));
+
+    // The user refiles the reading task; the PDF bytes never change.
+    let task_line = fs::read_to_string(&first_parent)
+        .expect("read first parent")
+        .lines()
+        .find(|line| line.contains("^ref-shift"))
+        .expect("find reading task")
+        .to_string();
+    let without = fs::read_to_string(&first_parent)
+        .expect("read first parent")
+        .lines()
+        .filter(|line| !line.contains("^ref-shift"))
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    write_file(&first_parent, &without);
+    let second = fs::read_to_string(&second_parent).expect("read second");
+    write_file(&second_parent, &format!("{second}{task_line}\n"));
+
+    // No `--write-pdfs`: a parent-only move must never demand marker
+    // write-back.
+    let output = bob_command()
+        .arg("highlights")
+        .arg("scan")
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", PINNED_NOW)
+        .output()
+        .expect("move scan");
+    assert_success(&output);
+    let written = stdout(&output);
+    assert!(
+        !written.contains("reading tasks created"),
+        "a residence move is not a creation:\n{written}"
+    );
+    let contents = fs::read_to_string(&note).expect("read moved note");
+    assert!(
+        contents.contains("parent: \"[[sase]]\"\n"),
+        "the residence move should repoint the parent:\n{contents}"
+    );
+    assert!(
+        contents.contains("![[sase#^ref-shift]]\n"),
+        "the residence move should heal the embed:\n{contents}"
+    );
+}
+
+#[test]
+fn v2_birth_honors_configured_ref_dir() {
+    let (_temp, vault) = scan_vault("bob-cli-scan-integration-ref-dir");
+    let pdf = vault.join("lib/books/custom.pdf");
+    let note = vault.join("custom/books/custom.md");
+    let parent_note = vault.join("obsidian.md");
+    write_area_note(&parent_note, "Obsidian");
+    write_highlights_pdf(&pdf, "- status: ready\n- parent: obsidian\n");
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("scan")
+        .arg("--ref-dir")
+        .arg("custom")
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", PINNED_NOW)
+        .output()
+        .expect("custom ref-dir scan");
+    assert_success(&output);
+    let written = stdout(&output);
+    assert!(
+        written.contains("📖 1 reading tasks created · obsidian.md (1)"),
+        "custom ref dirs still report the birth:\n{written}"
+    );
+    let contents = fs::read_to_string(&note).expect("read custom ref note");
+    assert!(
+        contents.contains("![[obsidian#^ref-custom]]\n"),
+        "the note should birth under the configured ref dir:\n{contents}"
+    );
+}
+
+#[test]
+fn v2_opt_in_refreshes_stale_marker_hint() {
+    let (_temp, vault) = scan_vault("bob-cli-scan-integration-hint-refresh");
+    let pdf = vault.join("lib/hint.pdf");
+    let note = vault.join("ref/hint.md");
+    let inbox = vault.join("mac_inbox.md");
+    let home = vault.join("nowhere.md");
+    write_highlights_pdf(&pdf, "- status: wip\n- parent: Nowhere\n");
+
+    // No matching area note yet: the birth falls back to the inbox and a
+    // normal scan preserves the marker's original hint untouched.
+    assert_success(&sync_pdf(&vault, &pdf, &[]));
+    assert!(
+        fs::read_to_string(&inbox)
+            .expect("read inbox")
+            .contains("^ref-hint"),
+        "fallback birth should file into the inbox"
+    );
+
+    // The reader refiles the task into the new area note. A normal scan
+    // follows the residence for the ref note but still leaves the marker
+    // hint alone; only the opt-in write refreshes it to the residence.
+    write_area_note(&home, "Nowhere");
+    let task_line = fs::read_to_string(&inbox)
+        .expect("read inbox")
+        .lines()
+        .find(|line| line.contains("^ref-hint"))
+        .expect("find reading task")
+        .to_string();
+    let without = fs::read_to_string(&inbox)
+        .expect("read inbox")
+        .lines()
+        .filter(|line| !line.contains("^ref-hint"))
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    write_file(&inbox, &without);
+    let second = fs::read_to_string(&home).expect("read new parent");
+    write_file(&home, &format!("{second}{task_line}\n"));
+
+    assert_success(&sync_pdf(&vault, &pdf, &[]));
+    let contents = fs::read_to_string(&note).expect("read moved note");
+    assert!(
+        contents.contains("parent: \"[[nowhere]]\"\n"),
+        "the residence move should repoint the parent:\n{contents}"
+    );
+
+    assert_success(&sync_pdf(&vault, &pdf, &["--write-pdf"]));
+    let marker = bob_command()
+        .arg("highlights")
+        .arg("marker")
+        .arg(&pdf)
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("read back marker");
+    assert_success(&marker);
+    let shown = stdout(&marker);
+    assert!(
+        shown.contains("parent: nowhere"),
+        "opt-in should refresh the stale hint to the residence:\n{shown}"
+    );
+}
