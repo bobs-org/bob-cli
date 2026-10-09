@@ -2,7 +2,7 @@
 use super::*;
 use crate::native::{
     capture_pomodoro_close::CloseVault, task_complete as engine,
-    task_dependencies, vault_links::LinkResolution,
+    vault_links::LinkResolution,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -165,38 +165,33 @@ pub(super) fn plan_task_complete_item(
         }
     }
     // Blocked-dependent recovery over the staged snapshot (post-tree,
-    // post-retirement). The on-disk vault walk is built once per batch
-    // and cached on the batch context; staged overlays are applied per
-    // item so recovery still sees earlier items' staged edits.
-    let snapshot =
-        staged_snapshot_for_recovery(bob_dir, planner, dependency_ctx);
+    // post-retirement). The `[id::]` gate runs first: the staged
+    // post-close lines of the completed tasks (root and closed subtasks)
+    // are read directly from the planner, and when none carries an
+    // `[id::]` field no dependent can name this close, so recovery is
+    // skipped with no dependents lookup and no extra reads. Dependents
+    // that name only the canonical id of a target without `[id::]` are
+    // left to the hooks (successor-links gate edge).
     let mut completed_ids: BTreeSet<String> = BTreeSet::new();
     for (path, id) in &completed {
-        let relative_path = path
-            .strip_prefix(bob_dir)
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|_| path.clone());
-        let text = snapshot
-            .iter()
-            .find(|(rel, _)| rel == &relative_path)
-            .map(|(_, text)| text.as_str())
-            .unwrap_or("");
-        let line = text
-            .lines()
-            .nth(completed_line_hint(&outcome, path, id).unwrap_or(0));
-        if let Some(line) = line {
-            let metadata =
-                crate::native::task_status_hooks::task_metadata(line, Some(id));
-            if let Some(task_id) = metadata.task_id {
-                completed_ids.insert(task_id);
-            }
-        }
-        if let Ok(canonical) =
-            task_dependencies::dependency_id(&relative_path, id)
-        {
-            completed_ids.insert(canonical);
+        let line_index = completed_line_hint(&outcome, path, id).unwrap_or(0);
+        let task_id = planner
+            .peek_text(path)
+            .as_deref()
+            .and_then(|text| text.lines().nth(line_index))
+            .and_then(|line| {
+                crate::native::task_status_hooks::task_metadata(line, Some(id))
+                    .task_id
+            });
+        if let Some(task_id) = task_id {
+            completed_ids.insert(task_id);
         }
     }
+    let snapshot = if completed_ids.is_empty() {
+        Vec::new()
+    } else {
+        staged_snapshot_for_recovery(bob_dir, planner, dependency_ctx)
+    };
     let recovery = engine::recover_blocked_dependents(
         snapshot,
         &completed_ids,
@@ -749,19 +744,23 @@ fn compute_link_statuses(
 }
 
 /// Snapshot of vault notes with staged overlays for dependent recovery:
-/// the batch's cached on-disk markdown walk plus every staged file.
-/// The on-disk walk is built at most once per batch (lazily, only when a
-/// `!` item needs recovery) and cached on the batch context next to
-/// `DependencyContext`; staged overlays are applied per item so recovery
-/// still sees earlier items' staged edits.
+/// the batch's prefiltered on-disk snapshot plus every staged file.
+/// The on-disk base is built at most once per batch (lazily, only when a
+/// `!` item passes the `[id::]` gate) and borrowed afterwards; staged
+/// overlays are applied per item so recovery still sees earlier items'
+/// staged edits. An unavailable base yields an empty snapshot: the close
+/// still succeeds and nothing is recovered.
 fn staged_snapshot_for_recovery(
     bob_dir: &Path,
     planner: &CaptureBatchPlanner,
-    dependency_ctx: &mut DependencyContext,
+    dependency_ctx: &DependencyContext,
 ) -> Vec<(PathBuf, String)> {
-    let mut staged: BTreeMap<PathBuf, String> = BTreeMap::new();
+    let snapshot = dependency_ctx.dependents_snapshot();
+    if !snapshot.available {
+        return Vec::new();
+    }
+    let mut staged: BTreeMap<PathBuf, Option<String>> = BTreeMap::new();
     for (absolute, contents) in planner.staged_snapshot() {
-        let Some(contents) = contents else { continue };
         let Ok(relative) =
             absolute.strip_prefix(bob_dir).map(Path::to_path_buf)
         else {
@@ -774,12 +773,7 @@ fn staged_snapshot_for_recovery(
             staged.insert(relative, contents);
         }
     }
-    let mut snapshot: BTreeMap<PathBuf, String> =
-        dependency_ctx.recovery_base_snapshot(bob_dir);
-    for (relative, contents) in staged {
-        snapshot.insert(relative, contents);
-    }
-    snapshot.into_iter().collect()
+    snapshot.overlaid(staged)
 }
 
 fn ledger_json_for(

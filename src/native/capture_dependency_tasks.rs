@@ -87,11 +87,22 @@ pub(crate) struct DependencyTaskResult {
 /// and non-task block anchors (the task scan only yields real task
 /// lines, and the shared global filter still applies). Symlinked
 /// directories are never descended; unreadable notes warn and continue.
-pub(crate) fn discover(bob_dir: &Path) -> DependencyTaskResult {
+/// Vault-relative note paths for dependency resolution, in canonical
+/// order, plus bounded walk warnings. Read-free: only the directory
+/// walk runs, so note resolution can build its basename index without
+/// scanning any note contents. The set matches [`discover`]: every
+/// `.md` note including `done/` archive history, minus dot-directories
+/// and the always-excluded names.
+pub(crate) fn vault_note_paths(bob_dir: &Path) -> (Vec<PathBuf>, Vec<String>) {
     let mut warnings = Vec::new();
     let mut relative_paths = Vec::new();
     collect_note_paths(bob_dir, bob_dir, &mut relative_paths, &mut warnings);
     relative_paths.sort();
+    (relative_paths, warnings)
+}
+
+pub(crate) fn discover(bob_dir: &Path) -> DependencyTaskResult {
+    let (relative_paths, mut warnings) = vault_note_paths(bob_dir);
     let index = NoteIndex::from_paths(relative_paths.iter().cloned());
     let settings = note_tasks::read_settings(bob_dir);
     let mut tasks = Vec::new();
@@ -226,7 +237,7 @@ fn collect_note_paths(
     }
 }
 
-fn display_path(relative: &Path) -> String {
+pub(crate) fn display_path(relative: &Path) -> String {
     relative.to_string_lossy().replace('\\', "/")
 }
 
@@ -355,6 +366,25 @@ pub(crate) fn resolve_dependency_note(
     discovered: &DependencyTaskResult,
     typed: &str,
 ) -> Result<PathBuf, LocatorError> {
+    resolve_dependency_note_in(
+        bob_dir,
+        &discovered.index,
+        &discovered.basenames,
+        typed,
+    )
+}
+
+/// [`resolve_dependency_note`] over a walk-only catalog: identical
+/// resolution (exact relative path first, otherwise a unique
+/// case-insensitive basename) without the vault-wide task scan. The
+/// index and basenames must come from the same walk
+/// ([`vault_note_paths`]) so diagnostics match [`discover`].
+pub(crate) fn resolve_dependency_note_in(
+    bob_dir: &Path,
+    index: &NoteIndex,
+    basenames: &HashMap<String, Vec<String>>,
+    typed: &str,
+) -> Result<PathBuf, LocatorError> {
     if typed.is_empty() {
         return Err(LocatorError::Usage(
             "empty note identity; use &note:block-id".to_string(),
@@ -411,12 +441,12 @@ pub(crate) fn resolve_dependency_note(
         reject_symlink_escape(bob_dir, &candidate)?;
         return Ok(candidate);
     }
-    match discovered.index.resolve(None, typed) {
+    match index.resolve(None, typed) {
         Some(resolved) => {
             reject_symlink_escape(bob_dir, &resolved)?;
             Ok(resolved)
         }
-        None => Err(LocatorError::Usage(no_such_note(discovered, typed))),
+        None => Err(LocatorError::Usage(no_such_note(basenames, typed))),
     }
 }
 
@@ -447,12 +477,15 @@ fn reject_symlink_escape(
 
 /// Targeted missing/ambiguous diagnostics: a duplicate basename must
 /// be disambiguated with its full relative path.
-fn no_such_note(discovered: &DependencyTaskResult, typed: &str) -> String {
+fn no_such_note(
+    basenames: &HashMap<String, Vec<String>>,
+    typed: &str,
+) -> String {
     let stem = typed
         .strip_suffix(".md")
         .or_else(|| typed.strip_suffix(".MD"))
         .unwrap_or(typed);
-    if let Some(paths) = discovered.basenames.get(&stem.to_lowercase())
+    if let Some(paths) = basenames.get(&stem.to_lowercase())
         && paths.len() > 1
     {
         return format!(

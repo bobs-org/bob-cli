@@ -155,6 +155,7 @@ dependencies = [
  "hex",
  "libc",
  "lopdf",
+ "memchr",
  "plist",
  "regex",
  "rquickjs",

@@ -9,7 +9,14 @@
 //! staged. Commit keeps the existing temporary-file/rollback contract;
 //! a failed item aborts planning before anything is written.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::{
+    collections::{BTreeMap, BTreeSet, HashMap},
+    ffi::OsStr,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        OnceLock,
+    },
+};
 
 use super::*;
 use crate::native::{
@@ -26,64 +33,258 @@ use crate::native::{
 };
 
 /// Batch-scoped dependency writer state: the vault catalog, task
-/// settings, and the previous-daily guard, built once per batch so every
-/// item shares one vault walk.
+/// settings, and the previous-daily guard, shared by every item in one
+/// batch.
 pub(super) struct DependencyContext {
-    pub(super) discovered: DependencyTaskResult,
-    pub(super) settings: note_tasks::NoteTaskSettings,
-    pub(super) anchor: NaiveDate,
-    pub(super) previous_daily: Option<PathBuf>,
+    bob_dir: PathBuf,
     pub(super) today: NaiveDate,
-    /// Cached on-disk markdown walk for `!` dependent recovery, built
-    /// lazily once per batch. Staged overlays are applied per item on
-    /// top of this base.
-    recovery_base: Option<BTreeMap<PathBuf, String>>,
+    pub(super) anchor: NaiveDate,
+    /// Lazily initialised vault state: `new` performs no I/O, so plain
+    /// captures never touch the vault. The full task scan runs only for
+    /// `&` dependency writes; `!` note resolution uses the walk-only
+    /// catalog; `!` recovery uses the prefiltered dependents snapshot.
+    settings: OnceLock<note_tasks::NoteTaskSettings>,
+    discovered: OnceLock<DependencyTaskResult>,
+    catalog: OnceLock<NoteCatalog>,
+    previous_daily: OnceLock<Option<PathBuf>>,
+    dependents: OnceLock<DependentsSnapshot>,
 }
 
 impl DependencyContext {
     pub(super) fn new(bob_dir: &Path, today: NaiveDate) -> Self {
-        let discovered = capture_dependency_tasks::discover(bob_dir);
-        let settings = note_tasks::read_settings(bob_dir);
+        // No I/O here: the day-file path is pure path math plus
+        // environment, and the anchor parses its file name. Every vault
+        // read below waits for first use.
         let day_file = pomodoro::day_file_for(bob_dir);
         let anchor = task_status_hooks::daily_anchor_date(&day_file, today);
-        // A missing or unreadable vault root lists no daily notes; the
-        // requested read or write still fails decisively downstream.
-        let previous_daily =
-            previous_daily_absolute(bob_dir, anchor).ok().flatten();
         Self {
-            discovered,
-            settings,
-            anchor,
-            previous_daily,
+            bob_dir: bob_dir.to_path_buf(),
             today,
-            recovery_base: None,
+            anchor,
+            settings: OnceLock::new(),
+            discovered: OnceLock::new(),
+            catalog: OnceLock::new(),
+            previous_daily: OnceLock::new(),
+            dependents: OnceLock::new(),
         }
     }
 
-    /// On-disk markdown snapshot for `!` recovery, built once per batch
-    /// and cloned per item. Keys are vault-relative paths.
-    pub(super) fn recovery_base_snapshot(
-        &mut self,
-        bob_dir: &Path,
-    ) -> BTreeMap<PathBuf, String> {
-        if self.recovery_base.is_none() {
-            let mut base = BTreeMap::new();
-            if let Ok(files) = task_status_hooks::markdown_files(bob_dir) {
-                for absolute in files {
-                    let Ok(relative) =
-                        absolute.strip_prefix(bob_dir).map(Path::to_path_buf)
-                    else {
-                        continue;
-                    };
-                    if let Ok(contents) = std::fs::read_to_string(&absolute) {
-                        base.insert(relative, contents);
-                    }
-                }
-            }
-            self.recovery_base = Some(base);
-        }
-        self.recovery_base.clone().unwrap_or_default()
+    /// Task settings, read once per batch on first dependency use.
+    pub(super) fn settings(&self) -> &note_tasks::NoteTaskSettings {
+        self.settings
+            .get_or_init(|| note_tasks::read_settings(&self.bob_dir))
     }
+
+    /// Full prerequisite scan, warmed only by `&` dependency writes.
+    /// `!` resolution and recovery never touch it.
+    pub(super) fn ensure_discovered(&self) -> &DependencyTaskResult {
+        self.discovered
+            .get_or_init(|| capture_dependency_tasks::discover(&self.bob_dir))
+    }
+
+    /// Walk-only note catalog for `!`/`&` resolution: no note contents
+    /// are read.
+    pub(super) fn catalog(&self) -> &NoteCatalog {
+        self.catalog
+            .get_or_init(|| NoteCatalog::walk(&self.bob_dir))
+    }
+
+    /// The latest daily note before `anchor`, resolved lazily on first
+    /// `&` target-ID projection.
+    pub(super) fn previous_daily(&self) -> Option<&Path> {
+        self.previous_daily
+            .get_or_init(|| {
+                // A missing or unreadable vault root lists no daily
+                // notes; the requested read or write still fails
+                // decisively downstream.
+                previous_daily_absolute(&self.bob_dir, self.anchor)
+                    .ok()
+                    .flatten()
+            })
+            .as_deref()
+    }
+
+    /// Batch-scoped prefiltered dependents snapshot for `!` recovery,
+    /// built once per batch and borrowed afterwards.
+    pub(super) fn dependents_snapshot(&self) -> &DependentsSnapshot {
+        self.dependents
+            .get_or_init(|| DependentsSnapshot::build(&self.bob_dir))
+    }
+}
+
+/// Walk-only note catalog for `!`/`&` resolution: the basename index
+/// plus ambiguity diagnostics over the same path set [`discover`]
+/// walks, without reading any note contents.
+pub(super) struct NoteCatalog {
+    pub(super) index: NoteIndex,
+    pub(super) basenames: HashMap<String, Vec<String>>,
+}
+
+impl NoteCatalog {
+    fn walk(bob_dir: &Path) -> Self {
+        let (relative_paths, _) =
+            capture_dependency_tasks::vault_note_paths(bob_dir);
+        let index = NoteIndex::from_paths(relative_paths.iter().cloned());
+        // Basename diagnostics mirror `discover` exactly (same walk,
+        // same display form, same sort).
+        let mut basenames: HashMap<String, Vec<String>> = HashMap::new();
+        for relative in &relative_paths {
+            if let Some(stem) = relative.file_stem().and_then(OsStr::to_str) {
+                basenames
+                    .entry(stem.to_lowercase())
+                    .or_default()
+                    .push(capture_dependency_tasks::display_path(relative));
+            }
+        }
+        for paths in basenames.values_mut() {
+            paths.sort();
+        }
+        Self { index, basenames }
+    }
+}
+
+/// Batch-scoped dependents snapshot for `!` recovery: the prefiltered
+/// on-disk contents built once per batch and borrowed afterwards. Only
+/// notes whose bytes contain `dependsOn` or `id::` are kept; a note is
+/// excluded only when it contributes no dependency edge and no task
+/// identity to `task_dependency_states`.
+pub(super) struct DependentsSnapshot {
+    base: BTreeMap<PathBuf, String>,
+    /// False when the vault walk itself failed. Recovery then finds
+    /// nothing; `capture_complete` reports the lookup as unavailable.
+    pub(super) available: bool,
+}
+
+impl DependentsSnapshot {
+    fn build(bob_dir: &Path) -> Self {
+        // The walk runs on the calling thread. Every env-dependent path
+        // is resolved here, before fanning out: `bob_env` overrides are
+        // thread-local, so nothing env-dependent may resolve inside the
+        // scoped workers below (they only read bytes and match
+        // substrings).
+        let files = match task_status_hooks::markdown_files(bob_dir) {
+            Ok(files) => files,
+            Err(_) => {
+                return Self {
+                    base: BTreeMap::new(),
+                    available: false,
+                };
+            }
+        };
+        let mut pairs = Vec::with_capacity(files.len());
+        for absolute in files {
+            let Ok(relative) =
+                absolute.strip_prefix(bob_dir).map(Path::to_path_buf)
+            else {
+                continue;
+            };
+            pairs.push((absolute, relative));
+        }
+        Self {
+            base: read_prefiltered_parallel(&pairs),
+            available: true,
+        }
+    }
+
+    /// Base contents with one batch item's staged overlay applied:
+    /// staged text replaces the disk version (or, for a staged deletion,
+    /// removes it), and staged text is prefiltered the same way. The
+    /// base map is borrowed, never cloned. The result is sorted by
+    /// vault-relative path, like the full-vault read it replaces.
+    pub(super) fn overlaid(
+        &self,
+        staged: BTreeMap<PathBuf, Option<String>>,
+    ) -> Vec<(PathBuf, String)> {
+        let mut snapshot: Vec<(PathBuf, String)> =
+            Vec::with_capacity(self.base.len() + staged.len());
+        for (relative, text) in &self.base {
+            if staged.contains_key(relative) {
+                continue;
+            }
+            snapshot.push((relative.clone(), text.clone()));
+        }
+        for (relative, contents) in staged {
+            let Some(text) = contents else {
+                continue;
+            };
+            if contains_dependency_markers(text.as_bytes()) {
+                snapshot.push((relative, text));
+            }
+        }
+        snapshot.sort_by(|left, right| left.0.cmp(&right.0));
+        snapshot
+    }
+}
+
+/// Byte prefilter for dependency relevance: a note whose bytes contain
+/// neither `dependsOn` nor `id::` holds no parsed `dependsOn` field and
+/// no `[id::]`/`(id::)` identity (`task_metadata` only recognizes those
+/// exact keys), so recovery and `task_dependency_states` cannot observe
+/// it. Matching is deliberately substring-wide: a prose or fenced-code
+/// match only keeps the note, never changes its parse.
+fn contains_dependency_markers(bytes: &[u8]) -> bool {
+    memchr::memmem::find(bytes, b"dependsOn").is_some()
+        || memchr::memmem::find(bytes, b"id::").is_some()
+}
+
+/// One walked note read through the prefilter: raw bytes first (so an
+/// invalid-UTF-8 note that matches still skips cleanly), then kept only
+/// when marker-positive and valid UTF-8.
+fn read_prefiltered_one(
+    pair: &(PathBuf, PathBuf),
+) -> Option<(PathBuf, String)> {
+    let bytes = std::fs::read(&pair.0).ok()?;
+    if !contains_dependency_markers(&bytes) {
+        return None;
+    }
+    let text = String::from_utf8(bytes).ok()?;
+    Some((pair.1.clone(), text))
+}
+
+/// Read every walked note on scoped worker threads, keeping only
+/// marker-positive notes. Mirrors the atomic work-queue shape of
+/// `highlights_ref::sync::plan_pdfs`: workers pull indices off a shared
+/// counter and the merge restores vault order, so output is
+/// deterministic.
+fn read_prefiltered_parallel(
+    pairs: &[(PathBuf, PathBuf)],
+) -> BTreeMap<PathBuf, String> {
+    if pairs.is_empty() {
+        return BTreeMap::new();
+    }
+    let worker_count = std::thread::available_parallelism()
+        .map(|parallelism| parallelism.get())
+        .unwrap_or(4)
+        .min(pairs.len())
+        .max(1);
+    if worker_count <= 1 {
+        return pairs.iter().filter_map(read_prefiltered_one).collect();
+    }
+    let next = AtomicUsize::new(0);
+    let collected: Vec<Vec<(PathBuf, String)>> = std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..worker_count)
+            .map(|_| {
+                scope.spawn(|| {
+                    let mut local = Vec::new();
+                    loop {
+                        let index = next.fetch_add(1, Ordering::Relaxed);
+                        let Some(pair) = pairs.get(index) else {
+                            break;
+                        };
+                        if let Some(entry) = read_prefiltered_one(pair) {
+                            local.push(entry);
+                        }
+                    }
+                    local
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|handle| handle.join().expect("snapshot worker panicked"))
+            .collect()
+    });
+    collected.into_iter().flatten().collect()
 }
 
 /// The latest daily note before `anchor`, mirroring the hooks' previous
@@ -263,7 +464,7 @@ fn staged_note_index(
     bob_dir: &Path,
 ) -> NoteIndex {
     let mut paths: BTreeSet<PathBuf> = ctx
-        .discovered
+        .catalog()
         .index
         .relative_paths()
         .map(Path::to_path_buf)
@@ -289,9 +490,11 @@ pub(super) fn resolve_prerequisite_note(
     bob_dir: &Path,
     typed: &str,
 ) -> Result<PathBuf, CaptureError> {
-    match capture_dependency_tasks::resolve_dependency_note(
+    let catalog = ctx.catalog();
+    match capture_dependency_tasks::resolve_dependency_note_in(
         bob_dir,
-        &ctx.discovered,
+        &catalog.index,
+        &catalog.basenames,
         typed,
     ) {
         Ok(relative) => Ok(relative),
@@ -438,7 +641,7 @@ fn project_prerequisite_id(
 ) -> Result<(String, Option<usize>), CaptureError> {
     let contents = current_note_text(planner, absolute)?;
     let lines: Vec<&str> = contents.lines().collect();
-    let scan = note_tasks::scan(&contents, &ctx.settings);
+    let scan = note_tasks::scan(&contents, ctx.settings());
     let route_label = display_relative(relative);
     let task = lookup_staged_task(&scan, &route_label, block_id)?;
     let task_line = lines.get(task.line_index).copied().unwrap_or_default();
@@ -459,7 +662,7 @@ fn project_prerequisite_id(
             "cannot depend on {route_label}^{block_id} for {dependent_desc}: it lives in archive history without an [id::] and archive notes are never stamped"
         )));
     }
-    if ctx.previous_daily.as_deref() == Some(absolute) {
+    if ctx.previous_daily() == Some(absolute) {
         return Err(CaptureError::usage(format!(
             "cannot depend on {route_label}^{block_id} for {dependent_desc}: it lives in the previous daily note without an [id::], and the previous daily snapshot is never stamped (add the [id::] by editing that note first)"
         )));
@@ -475,7 +678,7 @@ fn project_prerequisite_id(
     // Revalidate the task line against current staged text before
     // stamping: the batch may have edited this note since resolution.
     let fresh = current_note_text(planner, absolute)?;
-    let fresh_scan = note_tasks::scan(&fresh, &ctx.settings);
+    let fresh_scan = note_tasks::scan(&fresh, ctx.settings());
     let fresh_task = lookup_staged_task(&fresh_scan, &route_label, block_id)?;
     if fresh_task.digest != task.digest {
         return Err(CaptureError::io(format!(
@@ -587,7 +790,7 @@ fn resolve_prerequisites(
         }
         // Re-read the (possibly just stamped) target for status/text.
         let contents = current_note_text(planner, &absolute)?;
-        let scan = note_tasks::scan(&contents, &ctx.settings);
+        let scan = note_tasks::scan(&contents, ctx.settings());
         let route_label = display_relative(&relative);
         let task = lookup_staged_task(&scan, &route_label, &dep.block_id)?;
         resolved.push(ResolvedPrerequisite {
@@ -637,7 +840,7 @@ impl DependencyGraph {
             status: HashMap::new(),
         };
         let mut rels: BTreeSet<PathBuf> = ctx
-            .discovered
+            .catalog()
             .index
             .relative_paths()
             .map(Path::to_path_buf)
@@ -667,7 +870,7 @@ impl DependencyGraph {
                     Err(_) => continue,
                 },
             };
-            let scan = note_tasks::scan(&contents, &ctx.settings);
+            let scan = note_tasks::scan(&contents, ctx.settings());
             scans.insert(
                 relative.clone(),
                 (contents.lines().map(str::to_string).collect(), scan),
@@ -1047,7 +1250,7 @@ fn plan_promotions(
         // Preimage check: the staged task must still carry the status
         // the promotion was decided from.
         let contents = current_note_text(planner, &absolute)?;
-        let scan = note_tasks::scan(&contents, &ctx.settings);
+        let scan = note_tasks::scan(&contents, ctx.settings());
         let task = lookup_staged_task(&scan, note_display, block_id)?;
         if task.status_symbol != current {
             return Err(CaptureError::io(format!(
@@ -1087,7 +1290,7 @@ fn find_task_by_field_id(
     field_id: &str,
 ) -> Result<Option<(PathBuf, String)>, CaptureError> {
     let mut rels: BTreeSet<PathBuf> = ctx
-        .discovered
+        .catalog()
         .index
         .relative_paths()
         .map(Path::to_path_buf)
@@ -1111,7 +1314,7 @@ fn find_task_by_field_id(
                 Err(_) => continue,
             },
         };
-        let scan = note_tasks::scan(&contents, &ctx.settings);
+        let scan = note_tasks::scan(&contents, ctx.settings());
         for task in scan.tasks() {
             let Some(block_id) = task.block_id.as_deref() else {
                 continue;
@@ -1173,7 +1376,7 @@ fn read_identity_for_link(
     let Some(contents) = planner_staged_or_disk(planner, absolute) else {
         return LinkIdentity::Unresolved;
     };
-    let scan = note_tasks::scan(&contents, &ctx.settings);
+    let scan = note_tasks::scan(&contents, ctx.settings());
     match scan.by_block_id(block_id) {
         note_tasks::BlockIdLookup::Found(task) => {
             let lines: Vec<&str> = contents.lines().collect();
@@ -1214,7 +1417,7 @@ fn archive_projected_id(
     block_id: &str,
 ) -> Option<String> {
     let contents = planner_staged_or_disk(planner, absolute)?;
-    let scan = note_tasks::scan(&contents, &ctx.settings);
+    let scan = note_tasks::scan(&contents, ctx.settings());
     let task = match scan.by_block_id(block_id) {
         note_tasks::BlockIdLookup::Found(task) => task,
         _ => return None,
@@ -1589,6 +1792,9 @@ pub(super) fn plan_existing_task_dependencies(
         format!("^{dependent_block_id} in {}", display_relative(&dep_rel));
     let dependent =
         (display_relative(&dep_rel), dependent_block_id.to_string());
+    // `&` writes plan against the dependency pool: warm the full vault
+    // scan now so every resolution below sees it.
+    ctx.ensure_discovered();
     let index = staged_note_index(ctx, planner, bob_dir);
     // Resolve prerequisites first: every target-ID stamp lands before
     // the dependent's own edits resolve, so same-note writes compose.
@@ -1603,7 +1809,7 @@ pub(super) fn plan_existing_task_dependencies(
         &dep_desc,
     )?;
     let contents = current_note_text(planner, &dep_abs)?;
-    let scan = note_tasks::scan(&contents, &ctx.settings);
+    let scan = note_tasks::scan(&contents, ctx.settings());
     let task = lookup_staged_task(&scan, dependent_route, dependent_block_id)?;
     if task.status_type.is_terminal() || !task.status_type.is_open() {
         return Err(CaptureError::io(format!(
@@ -1707,7 +1913,7 @@ pub(super) fn plan_existing_task_dependencies(
     // Re-resolve the dependent against current staged text: same-note
     // target stamps above may have shifted it.
     let fresh = current_note_text(planner, &dep_abs)?;
-    let fresh_scan = note_tasks::scan(&fresh, &ctx.settings);
+    let fresh_scan = note_tasks::scan(&fresh, ctx.settings());
     let fresh_task =
         lookup_staged_task(&fresh_scan, dependent_route, dependent_block_id)?;
     if fresh_task.digest != dependent_digest {
@@ -1785,7 +1991,7 @@ pub(super) fn plan_existing_task_dependencies(
         task_dependencies::dependency_id(&dep_rel, dependent_block_id).ok()
     });
     let joined = note.join();
-    let joined_scan = note_tasks::scan(&joined, &ctx.settings);
+    let joined_scan = note_tasks::scan(&joined, ctx.settings());
     let joined_task =
         lookup_staged_task(&joined_scan, dependent_route, dependent_block_id)?;
     let current_line = note
@@ -1797,7 +2003,7 @@ pub(super) fn plan_existing_task_dependencies(
     let mut status_name = fresh_task.status_name.clone();
     let mut status_changed = false;
     if open_count > 0 && status_char != '?' {
-        task_status_hooks::validate_blocked_status(&ctx.settings)
+        task_status_hooks::validate_blocked_status(ctx.settings())
             .map_err(|error| CaptureError::io(error.message().to_string()))?;
         status_char = '?';
         status_name = "Blocked".to_string();
@@ -1874,7 +2080,7 @@ pub(super) fn plan_existing_task_dependencies(
         status_changed,
     };
     let final_contents = current_note_text(planner, &dep_abs)?;
-    let final_scan = note_tasks::scan(&final_contents, &ctx.settings);
+    let final_scan = note_tasks::scan(&final_contents, ctx.settings());
     let final_task =
         lookup_staged_task(&final_scan, dependent_route, dependent_block_id)?;
     Ok(PlannedDependencyUpdate {
@@ -1928,6 +2134,9 @@ pub(super) fn plan_new_task_dependencies(
         }
         None => format!("new task in {}", display_relative(&dep_rel)),
     };
+    // `&` writes plan against the dependency pool: warm the full vault
+    // scan now so every resolution below sees it.
+    ctx.ensure_discovered();
     let index = staged_note_index(ctx, planner, bob_dir);
     let (prereqs, repeats, mut touches) = resolve_prerequisites(
         ctx,
@@ -1974,7 +2183,7 @@ pub(super) fn plan_new_task_dependencies(
     let mut status_name = status_name_for(capture_status).to_string();
     let mut status_changed = false;
     if open_count > 0 && status_char != '?' {
-        task_status_hooks::validate_blocked_status(&ctx.settings)
+        task_status_hooks::validate_blocked_status(ctx.settings())
             .map_err(|error| CaptureError::io(error.message().to_string()))?;
         status_char = '?';
         status_name = "Blocked".to_string();
@@ -2148,7 +2357,7 @@ pub(super) fn plan_dependency_only_item(
     // Previous status for the preview comes from the pre-write staged
     // text; the update below re-resolves before staging.
     let previous = current_note_text(planner, &absolute)?;
-    let previous_scan = note_tasks::scan(&previous, &ctx.settings);
+    let previous_scan = note_tasks::scan(&previous, ctx.settings());
     let previous_task = lookup_staged_task(&previous_scan, &route, &block_id)?;
     let previous_line = previous
         .lines()
@@ -2233,4 +2442,192 @@ pub(super) fn plan_dependency_only_item(
         pomodoro_refs: Vec::new(),
         task_block_refs,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::native::task_complete::recovery::recover_blocked_dependents;
+    use std::fs;
+
+    fn write_note(vault: &Path, relative: &str, contents: &str) {
+        let path = vault.join(relative);
+        fs::create_dir_all(path.parent().expect("parent")).expect("parent");
+        fs::write(&path, contents).expect("write fixture note");
+    }
+
+    fn file_scans(
+        snapshot: &[(PathBuf, String)],
+        settings: &note_tasks::NoteTaskSettings,
+    ) -> Vec<task_status_hooks::FileScan> {
+        snapshot
+            .iter()
+            .map(|(relative, contents)| task_status_hooks::FileScan {
+                path: relative.clone(),
+                relative_path: relative.clone(),
+                contents: contents.clone(),
+                tasks: task_status_hooks::parse_tasks(contents, settings),
+            })
+            .collect()
+    }
+
+    fn normalized_states(
+        snapshot: &[(PathBuf, String)],
+        settings: &note_tasks::NoteTaskSettings,
+    ) -> Vec<(PathBuf, usize, task_status_hooks::TaskDependencyState)> {
+        let files = file_scans(snapshot, settings);
+        let states =
+            task_status_hooks::task_dependency_states(&files, &BTreeSet::new());
+        let mut normalized: Vec<_> = states
+            .into_iter()
+            .map(|((file_index, task_index), state)| {
+                (files[file_index].relative_path.clone(), task_index, state)
+            })
+            .collect();
+        normalized
+            .sort_by(|left, right| (&left.0, left.1).cmp(&(&right.0, right.1)));
+        normalized
+    }
+
+    /// The prefiltered snapshot plus staged overlay yields the same
+    /// `task_dependency_states` and the same `recover_blocked_dependents`
+    /// result as a full vault read: same-note and cross-note edges, a
+    /// `(id:: …)` paren form, a staged-new note, and a staged deletion.
+    #[test]
+    fn prefiltered_snapshot_matches_full_read() {
+        let vault = tempfile::tempdir().expect("temp vault");
+        let root = vault.path();
+        write_note(
+            root,
+            ".obsidian/plugins/obsidian-tasks-plugin/data.json",
+            r##"{
+              "globalFilter": "#task",
+              "statusSettings": {
+                "coreStatuses": [
+                  {"symbol":" ","name":"Ready","type":"TODO"},
+                  {"symbol":"x","name":"Done","type":"DONE"}
+                ],
+                "customStatuses": [
+                  {"symbol":"*","name":"Next","type":"ON_HOLD"},
+                  {"symbol":"?","name":"Blocked","type":"TODO"},
+                  {"symbol":"/","name":"In Progress","type":"IN_PROGRESS"},
+                  {"symbol":"-","name":"Canceled","type":"CANCELLED"}
+                ]
+              }
+            }"##,
+        );
+        write_note(
+            root,
+            "sase.md",
+            "- [x] #task Done root [id:: done-root] ^done\n- [?] #task Waiting on root [dependsOn:: done-root] [id:: waiter] ^waiter\n",
+        );
+        write_note(
+            root,
+            "travel.md",
+            "- [?] #task Cross waiter [dependsOn:: done-root] [id:: cross] ^cross\n",
+        );
+        write_note(
+            root,
+            "paren.md",
+            "- [x] #task Paren root (id:: paren-root) ^proot\n- [?] #task Paren waiter (dependsOn:: paren-root) (id:: paren-waiter) ^pwaiter\n",
+        );
+        write_note(
+            root,
+            "prose.md",
+            "# Field notes\nNothing here names a task identity or a prerequisite.\n",
+        );
+        write_note(
+            root,
+            "fence.md",
+            "# Queries\n```dataview\nTABLE dependsOn, id::mine\n```\n",
+        );
+        let settings = note_tasks::read_settings(root);
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 10, 5).expect("date");
+        let completed: BTreeSet<String> = ["done-root", "paren-root"]
+            .iter()
+            .map(|id| id.to_string())
+            .collect();
+
+        // Reference: the old full-vault read (every note, no prefilter)
+        // with the same staged overlay applied.
+        let mut full: BTreeMap<PathBuf, String> = BTreeMap::new();
+        for absolute in
+            task_status_hooks::markdown_files(root).expect("walk vault")
+        {
+            let relative = absolute
+                .strip_prefix(root)
+                .map(Path::to_path_buf)
+                .expect("relative");
+            full.insert(
+                relative,
+                fs::read_to_string(&absolute).expect("read note"),
+            );
+        }
+        let mut staged: BTreeMap<PathBuf, Option<String>> = BTreeMap::new();
+        staged.insert(
+            PathBuf::from("new.md"),
+            Some(
+                "- [?] #task Staged waiter [dependsOn:: paren-root] [id:: staged-waiter] ^staged\n"
+                    .to_string(),
+            ),
+        );
+        staged.insert(PathBuf::from("travel.md"), None);
+        for (relative, contents) in &staged {
+            match contents {
+                Some(text) => {
+                    full.insert(relative.clone(), text.clone());
+                }
+                None => {
+                    full.remove(relative);
+                }
+            }
+        }
+        let full_snapshot: Vec<(PathBuf, String)> = full.into_iter().collect();
+
+        // New path: parallel prefiltered base plus staged overlay.
+        let base = DependentsSnapshot::build(root);
+        assert!(base.available);
+        assert!(
+            !base.base.contains_key(Path::new("prose.md")),
+            "marker-free notes are excluded"
+        );
+        assert!(
+            base.base.contains_key(Path::new("fence.md")),
+            "fenced-only markers still keep the note"
+        );
+        let filtered_snapshot = base.overlaid(staged);
+
+        // The prefiltered snapshot is smaller by design (prose.md is
+        // excluded); what must match is every downstream result.
+        assert!(
+            filtered_snapshot.len() < full_snapshot.len(),
+            "prefilter excluded the marker-free note"
+        );
+
+        // File indices shift when a note is excluded, so compare
+        // states keyed by vault-relative path and in-file task order.
+        let full_states = normalized_states(&full_snapshot, &settings);
+        let filtered_states = normalized_states(&filtered_snapshot, &settings);
+        assert_eq!(filtered_states, full_states);
+
+        let full_recovery = recover_blocked_dependents(
+            full_snapshot,
+            &completed,
+            today,
+            &settings,
+        );
+        let filtered_recovery = recover_blocked_dependents(
+            filtered_snapshot,
+            &completed,
+            today,
+            &settings,
+        );
+        assert_eq!(filtered_recovery, full_recovery);
+        let recovered: BTreeSet<&str> = filtered_recovery
+            .recovered
+            .iter()
+            .filter_map(|dependent| dependent.block_id.as_deref())
+            .collect();
+        assert_eq!(recovered, BTreeSet::from(["waiter", "pwaiter", "staged"]));
+    }
 }

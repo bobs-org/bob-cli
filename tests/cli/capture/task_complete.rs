@@ -934,3 +934,74 @@ fn custom_global_filter_yields_clean_text_and_human_output() {
     let json = capture_json(&vault, &day_file, &["!sase:fixcustom"]);
     assert_eq!(json["task_complete"]["text"], "Fix with custom filter");
 }
+
+#[test]
+fn hello_ignores_poisoned_note_only_discovery_would_touch() {
+    // Lazy `DependencyContext`: a plain capture never scans note
+    // contents, so an invalid-UTF-8 note that only a vault-wide scan
+    // would touch succeeds silently.
+    let (_temp, vault) = vault_with_settings("bob-cli-task-complete-poison");
+    let day_file = vault.join("20261005.md");
+    fs::write(
+        vault.join("poison.md"),
+        b"\xff\xfe invalid \xfe\xff [dependsOn:: ghost] [id:: poison]",
+    )
+    .expect("write poison note");
+    let json = capture_json(&vault, &day_file, &["hello"]);
+    assert_eq!(json["ok"], true);
+    if let Some(warnings) = json.get("warnings") {
+        assert!(!warnings.to_string().contains("poison"), "{warnings}");
+    }
+}
+
+#[test]
+fn close_completing_nothing_ignores_poisoned_note() {
+    // Same laziness for `=x`: closing a session with no embedded tasks
+    // completes nothing and never scans note contents.
+    let (_temp, vault) = vault_with_settings("bob-cli-task-complete-poison-x");
+    let day_file = vault.join("20261005.md");
+    write_file(&vault.join("sase.md"), "- [ ] #task Open work ^work\n");
+    write_file(
+        &day_file,
+        "## Pomodoros\n- [ ] (**0920-0950**) \u{2014} CAPTURE\n  - [[sase#^work]]\n",
+    );
+    fs::write(
+        vault.join("poison.md"),
+        b"\xff\xfe invalid \xfe\xff [dependsOn:: ghost] [id:: poison]",
+    )
+    .expect("write poison note");
+    let json = capture_json(&vault, &day_file, &["=x"]);
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["kind"], "pomodoro_close");
+    if let Some(warnings) = json.get("warnings") {
+        assert!(!warnings.to_string().contains("poison"), "{warnings}");
+    }
+}
+
+#[test]
+fn complete_without_id_skips_dependent_lookup() {
+    // `[id::]` gate: completing a task without `[id::]` neither reads
+    // nor reports dependents, even when one names the canonical id.
+    // (Successor-links gate edge: that stale dependent is left to the
+    // hooks, which stamp the target's `[id::]` on their next run.)
+    let (_temp, vault) = vault_with_settings("bob-cli-task-complete-gate");
+    let day_file = vault.join("20261005.md");
+    write_file(&vault.join("sase.md"), "- [?] #task Plain root ^root\n");
+    write_file(
+        &vault.join("travel.md"),
+        "- [?] #task Canonical waiter [dependsOn:: sase__root] ^waiter\n",
+    );
+    write_file(
+        &day_file,
+        "## Pomodoros\n- [ ] (**0920-0950**) \u{2014} CAPTURE\n",
+    );
+    let json = capture_json(&vault, &day_file, &["!sase:root"]);
+    assert_eq!(json["status_symbol"], "x");
+    assert_eq!(json["task_complete"]["unblocked"], serde_json::json!([]));
+    assert!(
+        fs::read_to_string(vault.join("travel.md"))
+            .expect("read travel")
+            .contains("- [?] #task Canonical waiter [dependsOn:: sase__root] ^waiter\n"),
+        "the canonical-only dependent stays Blocked for the hooks"
+    );
+}
