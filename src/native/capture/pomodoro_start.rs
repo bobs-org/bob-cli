@@ -705,15 +705,20 @@ pub(super) fn plan_pomodoro_start_item(
                 Some(name) => format!("{name} {range}"),
                 None => format!("the current session {range}"),
             };
-        let restart_hint = match running
-            .name
-            .as_deref()
-            .filter(|name| !name.is_empty())
-        {
-            Some(name) => format!(", or capture `==<X>` to restart {name} now"),
-            None => ", or capture `==<X>` to restart the current session now"
-                .to_string(),
-        };
+        // Spell the concrete override of the typed suffix (`=3` teaches
+        // `==3`), like the named still-running hint does.
+        let raw = &spec.raw;
+        let restart_hint =
+            match running.name.as_deref().filter(|name| !name.is_empty()) {
+                Some(name) => {
+                    format!(", or capture `=={raw}` to restart {name} now")
+                }
+                None => {
+                    format!(
+                    ", or capture `=={raw}` to restart the current session now"
+                )
+                }
+            };
         // Echo the full typed token (including any `~<K>` drop list) so
         // the taught switch idiom stays copy-pasteable.
         let token = parsed.body.clone();

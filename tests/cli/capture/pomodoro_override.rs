@@ -942,6 +942,20 @@ fn override_swap_reports_notes() {
 fn override_swap_teaching_errors() {
     let (_temp, vault, day_file) = worked_vault("bob-cli-override-swap-teach");
     let before = fs::read_to_string(&day_file).expect("read before");
+    // Unnamed `=<X>` while a session runs teaches the concrete restart
+    // spelling of the typed suffix.
+    for (item, hint) in [
+        ("=", "or capture `==` to restart CAPTURE now"),
+        ("=3", "or capture `==3` to restart CAPTURE now"),
+    ] {
+        let output = run_json_err(&vault, &day_file, &[item]);
+        assert!(!output.status.success(), "{}", format_output(&output));
+        assert!(
+            format_output(&output).contains(hint),
+            "{item}: {}",
+            format_output(&output)
+        );
+    }
     // Named `=` while another session runs teaches the swap spelling.
     let output = run_json_err(&vault, &day_file, &["=#bugs"]);
     assert!(!output.status.success(), "{}", format_output(&output));
