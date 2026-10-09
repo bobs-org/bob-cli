@@ -174,7 +174,8 @@ impl<'a> WorkerPass<'a> {
                 self.stuck_now = true;
                 continue;
             };
-            let note = error_note(&error, &job.cleaned_url);
+            let note =
+                error_note(&error, &job.cleaned_url, job.effective_parent());
             match write_fallback(
                 &job.bob_dir,
                 &job.fallback.relative_target,
@@ -265,9 +266,12 @@ impl<'a> WorkerPass<'a> {
                 println!("  {line}");
             }
         };
+        // A job without a parent uses its source's inbox (jobs written
+        // by an older `bob` carry none).
         let request = IngestRequest {
             bob_dir: &job.bob_dir,
             url: &job.cleaned_url,
+            parent: job.effective_parent(),
             progress: Some(&progress),
         };
         match ingest_url(&request) {
@@ -335,7 +339,10 @@ impl<'a> WorkerPass<'a> {
             message: first_line(&error.message),
             retryable: error.retryable(),
         };
-        let note = error.fallback_note(&job.cleaned_url);
+        // The fallback task lands in the job's parent note (staged as
+        // `<parent>.md` by capture) with a retry command naming `-P`.
+        let note =
+            error.fallback_note(&job.cleaned_url, job.effective_parent());
         match write_fallback(
             &job.bob_dir,
             &job.fallback.relative_target,
@@ -418,8 +425,8 @@ fn first_line(message: &str) -> String {
 
 /// The `stuck/` retry note reuses the clip's own fallback text,
 /// recomputed from the stored kind and message.
-fn error_note(error: &StoredError, cleaned_url: &str) -> String {
-    fallback_note_for(&error.kind, &error.message, cleaned_url)
+fn error_note(error: &StoredError, cleaned_url: &str, parent: &str) -> String {
+    fallback_note_for(&error.kind, &error.message, cleaned_url, parent)
 }
 
 /// Move an unreadable spool file to `stuck/` preserving its bytes, so

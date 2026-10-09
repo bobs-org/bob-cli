@@ -12,21 +12,24 @@ bob ref create [OPTIONS] <URL>
 
 ```bash
 # Capture into xlib/blogs/ (scan writes ref/blogs/<stem>.md later)
-bob ref create https://example.com/posts/some-article/
+bob ref create https://example.com/posts/some-article/ -P sase
 
 # Preview everything without writing
-bob ref create https://example.com/posts/some-article/ -d
+bob ref create https://example.com/posts/some-article/ -d -P sase
 
 # Override extracted metadata
 bob ref create https://example.com/posts/some-article/ \
-  -T "The Real Title" -A "Jane Doe" -p 2026-04-27
+  -T "The Real Title" -A "Jane Doe" -p 2026-04-27 -P sase
 
 # Replay a page saved from a real browser (see below)
-bob ref create https://example.com/posts/some-article/ -H saved.html
+bob ref create https://example.com/posts/some-article/ -H saved.html -P sase
 
 # Narrate the article and bind the episode as companion audio
-bob ref create https://example.com/posts/some-article/ -L
+bob ref create https://example.com/posts/some-article/ -L -P sase
 ```
+
+`-P/--parent` is required on every invocation: the area or project note
+that owns the reading task.
 
 `-L, --listen` narrates the article with `highlights.listen_command`
 (`BOB_HIGHLIGHTS_LISTEN_COMMAND` overrides; see
@@ -100,8 +103,9 @@ is skipped.
 
 ## Marker fields and dedupe
 
-Every marker carries `status` (default `ready`), `parent` (default
-`obsidian_ref`), `title`, `id` (always the file stem), and `source_url`.
+Every marker carries `status` (default `ready`), `parent` (required:
+the resolved `-P` route), `title`, `id` (always the file stem), and
+`source_url`.
 It also carries `author`, `published` (`YYYY-MM-DD`), and `captured`
 (`YYYY-MM-DD`, local date) when known; a field is omitted rather than
 written wrong.

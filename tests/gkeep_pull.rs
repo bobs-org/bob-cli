@@ -1506,7 +1506,7 @@ fn permanent_clip_failure_writes_task_with_warning() {
     );
     assert!(
         target
-            .contains("retry: bob ref create https://example.com/article-one"),
+            .contains("retry: bob ref create https://example.com/article-one -P gkeep_inbox"),
         "retry command:\n{target}"
     );
     assert!(ref_events(&state).is_empty(), "no ref_created journal");

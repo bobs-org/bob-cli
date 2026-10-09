@@ -811,9 +811,12 @@ fn run_clip_pre_pass(
         };
         let progress: Option<&dyn Fn(&str)> =
             if silent { None } else { Some(&report_progress) };
+        // Interim parent until `capture-gkeep-parent` prompts and
+        // routes: every Keep-pulled ref clips under `gkeep_inbox`.
         let request = IngestRequest {
             bob_dir,
             url: &intent.cleaned,
+            parent: "gkeep_inbox",
             progress,
         };
         let outcome = match ingest_url(&request) {
@@ -835,7 +838,8 @@ fn run_clip_pre_pass(
                         message: first_line(&error.message),
                     }
                 } else {
-                    let fallback = error.fallback_note(&intent.cleaned);
+                    let fallback =
+                        error.fallback_note(&intent.cleaned, "gkeep_inbox");
                     ClipOutcome::FailedPermanent {
                         kind: error.kind.as_str().to_string(),
                         message: first_line(&error.message),

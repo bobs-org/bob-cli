@@ -73,6 +73,7 @@ directory):
   "dedupe_key": "https://example.com/post",
   "display": "example.com/post",
   "route_hint": "article",
+  "parent": "mac_inbox",
   "attempts": 0,
   "fallback": {
     "relative_target": "mac_inbox.md",
@@ -80,6 +81,12 @@ directory):
   }
 }
 ```
+
+`parent` is the resolved parent route capture staged for the job
+(`schema_version` stays 1; jobs written by an older `bob` omit it and
+the worker uses the source's inbox instead: `capture` →
+`mac_inbox`). `bob ref jobs` shows it as `→ <parent>` on pending and
+clipping rows and as `parent` in `-f json`.
 
 `fallback.task_line` is the exact line capture would have written for
 the item with routing off, so its `created` date is the capture day.
@@ -89,7 +96,7 @@ the item with routing off, so its `created` date is the capture day.
 ```text
 {schema_version, id, url, cleaned_url, display,
  outcome: created|already_in_library|already_queued|fell_back,
- pdf?, note?, error?{kind,message,retryable},
+ parent?, pdf?, note?, error?{kind,message,retryable},
  fallback?{relative_target}, created_at, started_at, finished_at}
 ```
 
@@ -128,10 +135,11 @@ code. `BOB_REF_JOBS_KICK=off|0|false` disables it.
 
 ## Fallback
 
-A failed clip writes `fallback.task_line` plus one child bullet:
+A failed clip writes `fallback.task_line` into the job's parent note
+plus one child bullet:
 
 ```text
-⚠️ Clip failed (<kind>): <message> · retry: bob ref create <url>
+⚠️ Clip failed (<kind>): <message> · retry: bob ref create <url> -P <parent>
 ```
 
 The write goes through capture's staged-file commit — same section

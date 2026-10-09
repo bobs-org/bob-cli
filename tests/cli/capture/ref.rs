@@ -885,7 +885,7 @@ fn capture_end_to_end_falls_back_on_blocked() {
     // The fallback is exactly the routing-off task line plus the ⚠️ child.
     assert_eq!(
         fs::read_to_string(vault.join("mac_inbox.md")).expect("read inbox"),
-        format!("{TASK_LINE}\n\t- ⚠️ Clip failed (blocked): blocked: Bot wall · retry: bob ref create {ARTICLE_URL}\n")
+        format!("{TASK_LINE}\n\t- ⚠️ Clip failed (blocked): blocked: Bot wall · retry: bob ref create {ARTICLE_URL} -P mac_inbox\n")
     );
 }
 

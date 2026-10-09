@@ -50,10 +50,33 @@ fn seed_pending_with_url(
     url: &str,
     task_line: &str,
 ) -> std::path::PathBuf {
+    seed_pending_with_parent(
+        temp,
+        vault,
+        id,
+        created_at,
+        url,
+        task_line,
+        Some("mac_inbox"),
+        "mac_inbox.md",
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn seed_pending_with_parent(
+    temp: &TempDir,
+    vault: &std::path::Path,
+    id: &str,
+    created_at: &str,
+    url: &str,
+    task_line: &str,
+    parent: Option<&str>,
+    relative_target: &str,
+) -> std::path::PathBuf {
     let pending = state_dir(temp).join("bob-cli/ref/jobs/pending");
     fs::create_dir_all(&pending).expect("create pending dir");
     let path = pending.join(format!("{id}.json"));
-    let job = serde_json::json!({
+    let mut job = serde_json::json!({
         "schema_version": 1,
         "id": id,
         "created_at": created_at,
@@ -66,10 +89,13 @@ fn seed_pending_with_url(
         "route_hint": "article",
         "attempts": 0,
         "fallback": {
-            "relative_target": "mac_inbox.md",
+            "relative_target": relative_target,
             "task_line": task_line,
         },
     });
+    if let Some(parent) = parent {
+        job["parent"] = serde_json::json!(parent);
+    }
     fs::write(&path, serde_json::to_vec_pretty(&job).expect("encode job"))
         .expect("seed pending job");
     path
@@ -263,7 +289,9 @@ fn ref_jobs_run_falls_back_on_blocked() {
         "{inbox}"
     );
     assert!(
-        inbox.contains("retry: bob ref create https://example.com/post"),
+        inbox.contains(
+            "retry: bob ref create https://example.com/post -P mac_inbox",
+        ),
         "{inbox}"
     );
     let done = done_contents(&temp);
@@ -333,8 +361,9 @@ fn ref_jobs_fallback_bytes_match_capture_twin_vault() {
     );
     assert!(
         actual_lines[expected_lines.len()].contains("⚠️ Clip failed (blocked)")
-            && actual_lines[expected_lines.len()]
-                .contains("retry: bob ref create https://example.com/post"),
+            && actual_lines[expected_lines.len()].contains(
+                "retry: bob ref create https://example.com/post -P mac_inbox"
+            ),
         "fallback child last:\n{actual}"
     );
 }
@@ -720,4 +749,121 @@ fn ref_jobs_unwritable_running_fails_promptly() {
         pending_path.exists(),
         "failed claim leaves the job in pending/",
     );
+}
+
+#[test]
+fn ref_jobs_run_falls_back_into_the_staged_parent() {
+    // A job carrying a resolved parent clips under it: the failed clip
+    // lands in the parent note and the retry names -P.
+    let temp = TempDir::new("bob-cli-ref-jobs-parent");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    let fake = FakeClip::new(&temp, "fake");
+    fake.respond(&failure_response("blocked", "Bot wall", "try later"));
+    let curl = write_article_curl(temp.path(), 0);
+    seed_pending_with_parent(
+        &temp,
+        &vault,
+        "20261007T143012-aaaaab",
+        FIXED_CREATED_AT,
+        ARTICLE_URL,
+        TASK_LINE,
+        Some("sase"),
+        "sase.md",
+    );
+
+    let output = jobs_command(&temp, &vault, &["run"])
+        .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+        .env("BOB_HIGHLIGHTS_CURL", &curl)
+        .output()
+        .expect("run bob ref jobs run");
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains("↩ fell back example.com/post → sase.md"),
+        "{}",
+        format_output(&output)
+    );
+    let parent = fs::read_to_string(vault.join("sase.md"))
+        .expect("read parent fallback target");
+    assert!(
+        parent.contains(TASK_LINE)
+            && parent.contains(
+                "retry: bob ref create https://example.com/post -P sase"
+            ),
+        "{parent}"
+    );
+    assert!(
+        !vault.join("mac_inbox.md").exists(),
+        "nothing falls back to the inbox when a parent is staged"
+    );
+    let done = done_contents(&temp);
+    assert!(
+        done.contains("\"outcome\":\"fell_back\"")
+            && done.contains("\"parent\":\"sase\""),
+        "{done}"
+    );
+}
+
+#[test]
+fn ref_jobs_run_parentless_job_uses_the_source_inbox() {
+    // Jobs an older `bob` wrote carry no parent: the worker clips under
+    // the source inbox and the retry names it.
+    let temp = TempDir::new("bob-cli-ref-jobs-old-job");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    let fake = FakeClip::new(&temp, "fake");
+    fake.respond(&failure_response("blocked", "Bot wall", "try later"));
+    let curl = write_article_curl(temp.path(), 0);
+    seed_pending_with_parent(
+        &temp,
+        &vault,
+        "20261007T143012-aaaaac",
+        FIXED_CREATED_AT,
+        ARTICLE_URL,
+        TASK_LINE,
+        None,
+        "mac_inbox.md",
+    );
+
+    let output = jobs_command(&temp, &vault, &["run"])
+        .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+        .env("BOB_HIGHLIGHTS_CURL", &curl)
+        .output()
+        .expect("run bob ref jobs run");
+    assert_success(&output);
+    let inbox = fs::read_to_string(vault.join("mac_inbox.md"))
+        .expect("read fallback target");
+    assert!(
+        inbox.contains(
+            "retry: bob ref create https://example.com/post -P mac_inbox"
+        ),
+        "{inbox}"
+    );
+}
+
+#[test]
+fn ref_jobs_list_shows_the_parent() {
+    let temp = TempDir::new("bob-cli-ref-jobs-list-parent");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    seed_pending(&temp, &vault, "20261007T143012-aaaaad", FIXED_CREATED_AT);
+
+    let output = jobs_command(&temp, &vault, &["list"])
+        .output()
+        .expect("run bob ref jobs list");
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains("→ mac_inbox"),
+        "{}",
+        format_output(&output)
+    );
+
+    let output = jobs_command(&temp, &vault, &["list", "-f", "json"])
+        .output()
+        .expect("run bob ref jobs list -f json");
+    assert_success(&output);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&stdout(&output)).expect("parse json");
+    assert_eq!(parsed["schema_version"], 1);
+    assert_eq!(parsed["jobs"][0]["parent"], "mac_inbox");
 }

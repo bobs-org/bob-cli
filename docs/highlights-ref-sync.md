@@ -149,14 +149,14 @@ three-level table of contents and PDF outline bookmarks, and embeds a page-1
 
 ```text
 - status: ready
-- parent: obsidian_ref
+- parent: sase
 - title: <document title>
 ```
 
 The marker parent is deliberately bare; generated Obsidian frontmatter turns
-it into a wikilink later. `-P, --parent`, `-s, --status`, and `-t, --ref-type`
-override those defaults. `-d, --dry-run` prints the resolved paths and marker
-with `writes: none`.
+it into a wikilink later. `-P, --parent` is required (no default), while
+`-s, --status` and `-t, --ref-type` override their defaults. `-d, --dry-run`
+prints the resolved paths and marker with `writes: none`.
 
 An explicit `-P` resolves before any work (pandoc, the browser, the network,
 or a write) through the shared area/project/inbox resolver, and the marker
@@ -168,8 +168,8 @@ The dry run reports the resolution, for example
 `parent    bob  (project · bob.md · via alias bob-cli)`. An unknown name
 fails with near-miss and alias hints; a terminal project (`project 'x' is
 done`) and a non-area/project hub (`obsidian_ref.md is not an area or
-project note`) report themselves. The `obsidian_ref` default stays
-unresolved for now. For `--output` paths, an existing target PDF requires
+project note`) report themselves. A missing `-P` fails before any work with a hint
+naming `bob capture-targets`. For `--output` paths, an existing target PDF requires
 `-f, --force`; a same-stem Markdown file beside the target PDF is always
 refused because Highlights would interpret it as a sidecar. Default targets
 instead suffix to `<stem>_2`, … when taken by a different reference. Dry-run and success output show a
@@ -187,7 +187,7 @@ UTF-8, and embeds it as `id`:
 
 ```text
 - status: ready
-- parent: obsidian_ref
+- parent: sase
 - title: <document title>
 - id: xprompt_role_binding
 ```
@@ -195,7 +195,7 @@ UTF-8, and embeds it as `id`:
 The option is intended for research hook execution, for example:
 
 ```bash
-bob ref create --include-id 202608/xprompt_role_binding/xprompt_role_binding.md
+bob ref create --include-id -P sase 202608/xprompt_role_binding/xprompt_role_binding.md
 ```
 
 If the filename stem is invalid for marker output, the command fails before

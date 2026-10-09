@@ -15,28 +15,33 @@ bob ref create [OPTIONS] <TARGET>
 
 ```bash
 # Markdown through pandoc (default ref type chat)
-bob ref create report.md
+bob ref create report.md -P sase
 
 # Local PDF, stamped as-is (default ref type papers)
-bob ref create paper.pdf -t papers
+bob ref create paper.pdf -t papers -P sase
 
 # PDF URL with an explicit stem
-bob ref create https://example.com/paper.pdf -N my_paper
+bob ref create https://example.com/paper.pdf -N my_paper -P sase
 
 # arXiv paper, preview only
-bob ref create https://arxiv.org/abs/1706.03762 -d
+bob ref create https://arxiv.org/abs/1706.03762 -d -P bob
 
 # Web article through the web-article engine (default ref type blogs)
-bob ref create https://example.com/article/hello
+bob ref create https://example.com/article/hello -P sase
 
 # Overrides
-bob ref create paper.pdf -T "The Real Title" -N my_paper -t docs
-bob ref create report.md --audio episode.mp3 --include-id
+bob ref create paper.pdf -T "The Real Title" -N my_paper -t docs -P sase
+bob ref create report.md --audio episode.mp3 --include-id -P sase
 
 # Web article with saved page and metadata overrides
-bob ref create https://example.com/essay -H saved.html
-bob ref create https://example.com/essay -A "Jane Doe" -p 2026-01-02 -d
+bob ref create https://example.com/essay -H saved.html -P sase
+bob ref create https://example.com/essay -A "Jane Doe" -p 2026-01-02 -d -P sase
 ```
+
+`-P/--parent` is required: the area or project note that owns the
+reading task (see [`highlights-ref-sync.md`](highlights-ref-sync.md) for
+resolution). A missing `-P` fails before any work with a hint naming
+`bob capture-targets`.
 See [web article capture](highlights-clip.md) for reader-mode capture, headed
 retries, the `--html` escape hatch, and environment variables. `bob ref clip`
 is a hidden compatibility alias for `create` with the same targets and options.
@@ -251,11 +256,12 @@ non-printing URL ingest shared by the capture background worker and
 `bob gkeep pull`. It composes the same building blocks as create
 (`resolve_url_syntactic`, `fetch_and_route`, `sources` dedupe,
 `pdf_target` planning/stamp/install, `ClipAdapterClient`). It takes a
-vault root plus a cleaned URL and returns `Created`, `AlreadyInLibrary`,
-or `AlreadyQueued`, or an `IngestError` with a snake-case `kind` and a
-`retryable()` flag. Fixed defaults: route-default ref type (`blogs` for
-articles, `papers` for PDFs and arXiv), status `ready`, parent
-`obsidian_ref`, no audio, no force, no title or name override. It holds
+vault root, a cleaned URL, and the resolved parent route, and returns
+`Created`, `AlreadyInLibrary`, or `AlreadyQueued`, or an `IngestError`
+with a snake-case `kind` and a `retryable()` flag. Fixed defaults:
+route-default ref type (`blogs` for articles, `papers` for PDFs and
+arXiv), status `ready`, no audio, no force, no title or name override.
+It holds
 the machine-wide
 `${XDG_STATE_HOME:-~/.local/state}/bob-cli/ref/ingest.lock` (fs2
 exclusive, blocking) for the whole call — the lock serializes the
@@ -323,7 +329,7 @@ author: Ashish Vaswani et al.
 published: 2017-06-12
 captured: 2026-10-06
 status: ready
-parent: obsidian_ref
+parent: sase
 id: attention_is_all_you_need
 pages: 15 · size: 2.2 MB
 next: bob ref scan

@@ -179,12 +179,18 @@ fn extra_paint_width(state: JobState, styler: &Styler) -> usize {
 
 fn row_detail(job: &ListedJob, styler: &Styler) -> String {
     let dimmed = |text: String| styler.dim(&text);
+    let parent_suffix = job
+        .parent
+        .as_deref()
+        .map(|parent| format!(" → {parent}"))
+        .unwrap_or_default();
     match job.state {
-        JobState::Pending => {
-            dimmed(format!("queued {}", age_phrase(&job.created_at)))
-        }
+        JobState::Pending => dimmed(format!(
+            "queued {}{parent_suffix}",
+            age_phrase(&job.created_at)
+        )),
         JobState::Clipping => {
-            dimmed(format!("started {}", started_phrase(job)))
+            dimmed(format!("started {}{parent_suffix}", started_phrase(job)))
         }
         JobState::Clipped => dimmed(format!(
             "{} · {}",
@@ -278,6 +284,9 @@ fn print_list_json(view: &JobsView) {
                 "display": job.display,
                 "created_at": job.created_at,
             });
+            if let Some(parent) = &job.parent {
+                entry["parent"] = json!(parent);
+            }
             if let Some(started) = &job.started_at {
                 entry["started_at"] = json!(started);
             }

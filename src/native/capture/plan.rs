@@ -281,6 +281,8 @@ fn plan_ref_item(
         relative_target: INBOX_FILE.to_string(),
         task_line: fallback_task_line.clone(),
     });
+    // Interim parent until `capture-gkeep-parent` routes URLs: every
+    // capture-queued ref clips under `mac_inbox` and falls back there.
     let staged = queued.then(|| ref_jobs::NewJob {
         source: "capture".to_string(),
         bob_dir: request.bob_dir.clone(),
@@ -289,6 +291,7 @@ fn plan_ref_item(
         dedupe_key: intent.dedupe_key.clone(),
         display: intent.display.clone(),
         route_hint: intent.route_hint.as_str().to_string(),
+        parent: Some(inbox_route().to_string()),
         fallback: ref_jobs::JobFallback {
             relative_target: INBOX_FILE.to_string(),
             task_line: fallback_task_line,

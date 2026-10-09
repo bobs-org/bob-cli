@@ -18,6 +18,7 @@ fn dead_network(command: &mut std::process::Command) {
 fn url_routing_in_library_matches_create_refusal() {
     let temp = TempDir::new("bob-cli-url-routing-in-library");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     write_file(
         &vault.join("ref/papers/captured.md"),
         "---\ntitle: Captured Post\nstatus: ready\nsource_url: https://example.com/captured\nsource_pdf: lib/papers/captured.pdf\n---\n\n- [ ] ^ref\n",
@@ -27,6 +28,8 @@ fn url_routing_in_library_matches_create_refusal() {
     command
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg("https://example.com/captured")
         .arg("-b")
         .arg(&vault);
@@ -45,6 +48,7 @@ fn url_routing_in_library_matches_create_refusal() {
 fn url_routing_in_intake_matches_create_refusal() {
     let temp = TempDir::new("bob-cli-url-routing-in-intake");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     write_highlights_pdf(
         &vault.join("xlib/blogs/queued.pdf"),
         "- status: ready\n- parent: obsidian_ref\n- title: Queued Post\n- source_url: https://example.com/queued\n",
@@ -54,6 +58,8 @@ fn url_routing_in_intake_matches_create_refusal() {
     command
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg("https://example.com/queued")
         .arg("-b")
         .arg(&vault);
@@ -72,6 +78,7 @@ fn url_routing_in_intake_matches_create_refusal() {
 fn url_routing_legacy_matches_create_warning() {
     let temp = TempDir::new("bob-cli-url-routing-legacy");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     write_file(
         &vault.join("ref/ai/old.md"),
         "---\ntitle: Old\nsource_url: https://example.com/legacy-note\n---\n\n# Old\n",
@@ -83,6 +90,8 @@ fn url_routing_legacy_matches_create_warning() {
     command
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg("https://example.com/legacy-note")
         .arg("-b")
         .arg(&vault)

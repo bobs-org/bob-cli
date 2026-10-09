@@ -5,12 +5,12 @@
 //! blocks as create (`resolve_url_syntactic`, `fetch_and_route`, `sources`
 //! dedupe, `pdf_target` planning/stamp/install, `ClipAdapterClient`) with
 //! create's fixed reading-queue defaults (blogs/papers, status ready,
-//! parent obsidian_ref, no audio, no force), holds the machine-wide ingest
-//! lock serializing the capture worker and Keep pull, and installs with
-//! fsync. `bob ref create` keeps its own printing routes and never calls
-//! [`ingest_url`]. Ingest writes nothing to stdout and prints nothing to
-//! stderr itself; short status lines go through [`IngestRequest::progress`]
-//! only.
+//! no audio, no force) plus the caller's resolved parent route, holds the
+//! machine-wide ingest lock serializing the capture worker and Keep pull,
+//! and installs with fsync. `bob ref create` keeps its own printing routes
+//! and never calls [`ingest_url`]. Ingest writes nothing to stdout and
+//! prints nothing to stderr itself; short status lines go through
+//! [`IngestRequest::progress`] only.
 
 use std::{fs, path::Path};
 
@@ -29,7 +29,6 @@ use super::stamp::{
 };
 
 /// Fixed reading-queue defaults for every ingest call.
-const INGEST_PARENT: &str = "obsidian_ref";
 const INGEST_STATUS: &str = "ready";
 const INGEST_ARTICLE_REF_TYPE: &str = "blogs";
 const INGEST_PDF_REF_TYPE: &str = "papers";
@@ -40,6 +39,8 @@ pub(crate) struct IngestRequest<'a> {
     pub(crate) bob_dir: &'a Path,
     /// [`WebUrl::cleaned`] for the link.
     pub(crate) url: &'a str,
+    /// Resolved parent route stamped into the marker (e.g. `mac_inbox`).
+    pub(crate) parent: &'a str,
     /// Short status lines; never stdout.
     pub(crate) progress: Option<&'a dyn Fn(&str)>,
 }
@@ -152,9 +153,9 @@ impl IngestError {
 
     /// The shared fallback bullet used by capture and Keep when a clip
     /// fails: exactly `⚠️ Clip failed (<kind>): <message> · retry:
-    /// bob ref create <quoted url>`.
-    pub(crate) fn fallback_note(&self, url: &str) -> String {
-        fallback_note_for(self.kind.as_str(), &self.message, url)
+    /// bob ref create <quoted url> -P <parent>`.
+    pub(crate) fn fallback_note(&self, url: &str, parent: &str) -> String {
+        fallback_note_for(self.kind.as_str(), &self.message, url, parent)
     }
 }
 
@@ -165,6 +166,7 @@ pub(crate) fn fallback_note_for(
     kind: &str,
     message: &str,
     url: &str,
+    parent: &str,
 ) -> String {
     let collapsed = message
         .lines()
@@ -180,7 +182,7 @@ pub(crate) fn fallback_note_for(
     };
     let escaped = crate::native::gkeep::render::escape_child_text(&truncated);
     format!(
-        "⚠️ Clip failed ({kind}): {escaped} · retry: bob ref create {}",
+        "⚠️ Clip failed ({kind}): {escaped} · retry: bob ref create {} -P {parent}",
         shell_quote_url(url),
     )
 }
@@ -375,8 +377,9 @@ fn lock_ingest_at(
 
 /// Clip one URL into the reading queue without printing anything.
 ///
-/// Fixed defaults: route-default ref type, status `ready`, parent
-/// `obsidian_ref`, no audio, no force, no title or name override.
+/// Fixed defaults: route-default ref type, status `ready`, no audio, no
+/// force, no title or name override. The marker parent is the request's
+/// resolved parent route.
 pub(crate) fn ingest_url(
     request: &IngestRequest,
 ) -> Result<IngestOutcome, IngestError> {
@@ -422,6 +425,7 @@ pub(crate) fn ingest_url(
             &url,
             &recorded,
             superseded_legacy,
+            request.parent,
             request.progress,
         );
     }
@@ -439,6 +443,7 @@ pub(crate) fn ingest_url(
                 &mut scratch,
                 &recorded,
                 superseded_legacy,
+                request.parent,
                 request.progress,
             )
         }
@@ -448,6 +453,7 @@ pub(crate) fn ingest_url(
                 &url,
                 &recorded,
                 superseded_legacy,
+                request.parent,
                 request.progress,
             )
         }
@@ -482,6 +488,7 @@ fn outcome_for_refusing_hit(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn ingest_pdf_url_route(
     config: &Config,
     url: &WebUrl,
@@ -489,6 +496,7 @@ fn ingest_pdf_url_route(
     scratch: &mut super::workdir::ScratchDir,
     recorded: &[super::sources::RecordedSource],
     superseded_legacy: Option<String>,
+    parent: &str,
     progress: Option<&dyn Fn(&str)>,
 ) -> Result<IngestOutcome, IngestError> {
     let captured = current_local_date();
@@ -528,7 +536,7 @@ fn ingest_pdf_url_route(
     let id = Some(final_stem);
     let marker = super::pdf_target::compose_pdf_marker(
         INGEST_STATUS,
-        INGEST_PARENT,
+        parent,
         &pdf_plan,
         id.as_deref(),
     )
@@ -564,6 +572,7 @@ fn ingest_arxiv_route(
     url: &WebUrl,
     recorded: &[super::sources::RecordedSource],
     superseded_legacy: Option<String>,
+    parent: &str,
     progress: Option<&dyn Fn(&str)>,
 ) -> Result<IngestOutcome, IngestError> {
     let captured = current_local_date();
@@ -650,7 +659,7 @@ fn ingest_arxiv_route(
     let id = Some(final_stem);
     let marker = super::pdf_target::compose_pdf_marker(
         INGEST_STATUS,
-        INGEST_PARENT,
+        parent,
         &pdf_plan,
         id.as_deref(),
     )
@@ -679,11 +688,13 @@ fn ingest_arxiv_route(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn ingest_article_route(
     config: &Config,
     url: &WebUrl,
     recorded: &[super::sources::RecordedSource],
     superseded_legacy: Option<String>,
+    parent: &str,
     progress: Option<&dyn Fn(&str)>,
 ) -> Result<IngestOutcome, IngestError> {
     // Fail fast when the stem is already known, mirroring the web-article engine.
@@ -774,7 +785,7 @@ fn ingest_article_route(
     let final_stem = plan.stem.clone();
     let marker = compose_marker(
         INGEST_STATUS,
-        INGEST_PARENT,
+        parent,
         &title,
         Some(&final_stem),
         &[
@@ -927,26 +938,30 @@ mod tests {
         // Bare URLs stay unquoted.
         let error = ingest_error("blocked: no entry".to_string(), None);
         assert_eq!(
-            error.fallback_note("https://example.com/post"),
-            "⚠️ Clip failed (blocked): blocked: no entry · retry: bob ref create https://example.com/post",
+            error.fallback_note("https://example.com/post", "mac_inbox"),
+            "⚠️ Clip failed (blocked): blocked: no entry · retry: bob ref create https://example.com/post -P mac_inbox",
         );
         // Query strings need single quotes.
         assert!(error
-            .fallback_note("https://example.com/a?b=1&c=2")
-            .ends_with("bob ref create 'https://example.com/a?b=1&c=2'"),);
+            .fallback_note("https://example.com/a?b=1&c=2", "mac_inbox")
+            .ends_with(
+                "bob ref create 'https://example.com/a?b=1&c=2' -P mac_inbox"
+            ),);
         // Embedded quotes use '\''.
         assert!(error
-            .fallback_note("https://example.com/a'b")
-            .ends_with("bob ref create 'https://example.com/a'\\''b'"),);
+            .fallback_note("https://example.com/a'b", "mac_inbox")
+            .ends_with(
+                "bob ref create 'https://example.com/a'\\''b' -P mac_inbox"
+            ),);
         // Only the first line survives, whitespace-collapsed, truncated.
         let long = format!("line one\nline two {}", "x".repeat(200));
-        let long_note =
-            ingest_error(long, None).fallback_note("https://example.com/post");
+        let long_note = ingest_error(long, None)
+            .fallback_note("https://example.com/post", "mac_inbox");
         assert!(long_note.contains("line one"));
         assert!(!long_note.contains("line two"));
         let long_first = format!("{} tail", "x".repeat(200));
         let long_first_note = ingest_error(long_first, None)
-            .fallback_note("https://example.com/post");
+            .fallback_note("https://example.com/post", "mac_inbox");
         let long_first_part = long_first_note
             .split("Clip failed (internal): ")
             .nth(1)
@@ -957,10 +972,10 @@ mod tests {
         assert_eq!(long_first_part, format!("{}…", "x".repeat(120)));
         let multi = ingest_error("first   line\nsecond line".to_string(), None);
         assert!(multi
-            .fallback_note("https://example.com/post")
+            .fallback_note("https://example.com/post", "mac_inbox")
             .contains("first line · retry:"),);
         let huge = ingest_error(format!("{} end", "y".repeat(200)), None);
-        let note = huge.fallback_note("https://example.com/post");
+        let note = huge.fallback_note("https://example.com/post", "mac_inbox");
         let message_part = note
             .split("Clip failed (internal): ")
             .nth(1)
@@ -973,7 +988,7 @@ mod tests {
         // Keep child-text escaping applies (leading `#task` is escaped).
         let tasky = ingest_error("#task list".to_string(), None);
         assert!(tasky
-            .fallback_note("https://example.com/post")
+            .fallback_note("https://example.com/post", "mac_inbox")
             .contains("\\#task list"),);
     }
 
@@ -1042,6 +1057,7 @@ mod tests {
         let request = IngestRequest {
             bob_dir: &vault,
             url: "https://example.com/post",
+            parent: "mac_inbox",
             progress: None,
         };
         match ingest_url(&request).expect("ingest library hit") {
@@ -1054,6 +1070,7 @@ mod tests {
         let bad = IngestRequest {
             bob_dir: &vault,
             url: "not a url",
+            parent: "mac_inbox",
             progress: None,
         };
         let error = ingest_url(&bad).expect_err("invalid URL must fail");

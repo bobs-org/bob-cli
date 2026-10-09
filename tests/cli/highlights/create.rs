@@ -7,6 +7,27 @@ use std::ffi::OsString;
 use std::os::unix::ffi::OsStringExt;
 use std::process::Command;
 
+/// The vault holds exactly these top-level entries, in sorted order.
+/// `-P` resolution requires a parent note, so dry-run and rejection
+/// tests seed `sase.md` and then prove nothing else was written.
+fn vault_holds_only(vault: &std::path::Path, expected: &[&str]) {
+    let mut entries: Vec<String> = std::fs::read_dir(vault)
+        .expect("read vault")
+        .map(|entry| {
+            entry
+                .expect("vault entry")
+                .file_name()
+                .into_string()
+                .expect("utf8 entry")
+        })
+        .collect();
+    entries.sort();
+    let mut want: Vec<String> =
+        expected.iter().map(|name| name.to_string()).collect();
+    want.sort();
+    assert_eq!(entries, want, "vault holds only {want:?}");
+}
+
 #[test]
 fn highlights_create_dry_run_prints_plan_without_writes() {
     let temp = TempDir::new("bob-cli-highlights-create-dry-run");
@@ -140,10 +161,47 @@ fn highlights_create_dry_run_rejects_unknown_parent_with_hints() {
 }
 
 #[test]
+fn highlights_create_missing_parent_fails_before_any_work() {
+    let temp = TempDir::new("bob-cli-highlights-create-missing-parent");
+    let source = temp.path().join("report.md");
+    let vault = temp.path().join("vault");
+    write_file(&source, "# No Parent Report\n");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg(&source)
+        .arg("-b")
+        .arg(&vault)
+        .arg("-d")
+        .env("BOB_PANDOC_COMMAND", "/definitely/missing/pandoc")
+        .output()
+        .expect("run bob highlights create --dry-run without -P");
+
+    assert!(
+        !output.status.success(),
+        "a missing -P must fail before any work: {}",
+        format_output(&output)
+    );
+    let error = stderr(&output);
+    assert!(
+        error.contains("--parent is required")
+            && error.contains("bob capture-targets"),
+        "{error}"
+    );
+    assert!(
+        !vault.join("xlib").exists(),
+        "a missing -P must not write anything"
+    );
+}
+
+#[test]
 fn highlights_create_output_dry_run_prints_exact_path_without_writes() {
     let temp = TempDir::new("bob-cli-highlights-create-output-dry-run");
     let source = temp.path().join("report.md");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     write_file(&source, "# Custom Output\n");
     let sentinel = temp.path().join("pandoc-invoked");
     let pandoc = temp.path().join("pandoc");
@@ -160,6 +218,8 @@ fn highlights_create_output_dry_run_prints_exact_path_without_writes() {
             .current_dir(temp.path())
             .arg("highlights")
             .arg("create")
+            .arg("-P")
+            .arg("sase")
             .arg(&source)
             .arg("-b")
             .arg(&vault)
@@ -190,7 +250,7 @@ fn highlights_create_output_dry_run_prints_exact_path_without_writes() {
             "dry-run must not write {flag} target"
         );
         assert!(!sentinel.exists(), "dry-run must not invoke pandoc");
-        assert!(!vault.exists(), "dry-run must not create the vault");
+        vault_holds_only(&vault, &["sase.md"]);
     }
 }
 
@@ -199,12 +259,15 @@ fn highlights_create_output_dry_run_reports_intake_library_destination() {
     let temp = TempDir::new("bob-cli-highlights-create-output-intake");
     let source = temp.path().join("report.md");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     let output_pdf = vault.join("xlib/papers/deep/custom.pdf");
     write_file(&source, "# Intake Output\n");
 
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg(&source)
         .arg("-b")
         .arg(&vault)
@@ -226,7 +289,7 @@ fn highlights_create_output_dry_run_reports_intake_library_destination() {
         "{report}"
     );
     assert!(!output_pdf.exists(), "dry-run must not write intake target");
-    assert!(!vault.exists(), "dry-run must not create the vault");
+    vault_holds_only(&vault, &["sase.md"]);
 }
 
 #[test]
@@ -234,12 +297,15 @@ fn highlights_create_output_dry_run_reports_direct_library_target() {
     let temp = TempDir::new("bob-cli-highlights-create-output-library");
     let source = temp.path().join("report.md");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     let output_pdf = vault.join("lib/chat/direct.pdf");
     write_file(&source, "# Library Output\n");
 
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg(&source)
         .arg("-b")
         .arg(&vault)
@@ -270,6 +336,8 @@ fn highlights_create_rejects_output_combined_with_ref_type() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg(&source)
         .arg("--output")
         .arg(temp.path().join("out.pdf"))
@@ -294,12 +362,15 @@ fn highlights_create_rejects_non_pdf_output() {
     let temp = TempDir::new("bob-cli-highlights-create-output-invalid");
     let source = temp.path().join("report.md");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     let output_path = temp.path().join("report.txt");
     write_file(&source, "# Invalid Output\n");
 
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg(&source)
         .arg("-b")
         .arg(&vault)
@@ -316,7 +387,7 @@ fn highlights_create_rejects_non_pdf_output() {
         "{diagnostic}"
     );
     assert!(!output_path.exists(), "invalid output must not be written");
-    assert!(!vault.exists(), "failure must happen before vault writes");
+    vault_holds_only(&vault, &["sase.md"]);
 }
 
 #[cfg(unix)]
@@ -328,6 +399,7 @@ fn highlights_create_rejects_non_utf8_include_id_before_writes() {
         .join("research")
         .join(OsString::from_vec(b"xprompt_\xff.md".to_vec()));
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     let pandoc = temp.path().join("pandoc");
     let sentinel = temp.path().join("pandoc-invoked");
     write_file(&source, "# Invalid ID\n");
@@ -342,6 +414,8 @@ fn highlights_create_rejects_non_utf8_include_id_before_writes() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg(&source)
         .arg("-b")
         .arg(&vault)
@@ -364,7 +438,7 @@ fn highlights_create_rejects_non_utf8_include_id_before_writes() {
             && diagnostic.contains("Markdown source"),
         "{diagnostic}"
     );
-    assert!(!vault.exists(), "failure must happen before vault writes");
+    vault_holds_only(&vault, &["sase.md"]);
     assert!(!sentinel.exists(), "pandoc must not be invoked");
 }
 
@@ -373,6 +447,7 @@ fn highlights_create_reports_pandoc_failure_diagnostics() {
     let temp = TempDir::new("bob-cli-highlights-create-failure");
     let source = temp.path().join("research.md");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     let pandoc = temp.path().join("pandoc");
     write_file(&source, "# Render Failure\n");
     write_executable(
@@ -383,6 +458,8 @@ fn highlights_create_reports_pandoc_failure_diagnostics() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg(&source)
         .arg("-b")
         .arg(&vault)
@@ -411,6 +488,7 @@ fn highlights_create_refuses_existing_library_pdf_with_or_without_force() {
     let temp = TempDir::new("bob-cli-highlights-create-library-destination");
     let source = temp.path().join("report.md");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     let library_pdf = vault.join("lib/chat/report.pdf");
     write_file(&source, "# Report\n");
     write_highlights_pdf(
@@ -421,6 +499,8 @@ fn highlights_create_refuses_existing_library_pdf_with_or_without_force() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg(&source)
         .arg("-b")
         .arg(&vault)
@@ -449,6 +529,7 @@ fn highlights_create_refuses_same_title_library_pdf_with_or_without_force() {
     let temp = TempDir::new("bob-cli-highlights-create-library-same");
     let source = temp.path().join("report.md");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     let library_pdf = vault.join("lib/chat/report.pdf");
     write_file(&source, "# Report\n");
     write_highlights_pdf(
@@ -461,6 +542,8 @@ fn highlights_create_refuses_same_title_library_pdf_with_or_without_force() {
         command
             .arg("highlights")
             .arg("create")
+            .arg("-P")
+            .arg("sase")
             .arg(&source)
             .arg("-b")
             .arg(&vault)
@@ -513,6 +596,7 @@ fn highlights_create_renders_pdf_with_outline_and_marker_when_available() {
         .path()
         .join("202608/xprompt_role_binding/xprompt_role_binding.md");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     write_file(
         &source,
         concat!(
@@ -536,6 +620,8 @@ fn highlights_create_renders_pdf_with_outline_and_marker_when_available() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg(&source)
         .arg("-b")
         .arg(&vault)
@@ -579,7 +665,7 @@ fn highlights_create_renders_pdf_with_outline_and_marker_when_available() {
     assert_success(&marker_output);
     let marker = stdout(&marker_output);
     assert!(marker.contains("- status: ready\n"), "{marker}");
-    assert!(marker.contains("- parent: obsidian_ref\n"), "{marker}");
+    assert!(marker.contains("- parent: sase\n"), "{marker}");
     assert!(
         marker.contains("- title: Rendered Research Report\n"),
         "{marker}"
@@ -606,6 +692,7 @@ fn highlights_create_reports_paired_links_and_dead_warnings_when_available() {
     let temp = TempDir::new("bob-cli-highlights-create-links");
     let source = temp.path().join("report.md");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     write_file(
         &source,
         "# Report\n\nSee [first](#target) and [second](#target), plus [gone](#nope).\n\n## Target\n\nBody.\n",
@@ -614,6 +701,8 @@ fn highlights_create_reports_paired_links_and_dead_warnings_when_available() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg(&source)
         .arg("-b")
         .arg(&vault)
@@ -654,10 +743,13 @@ fn highlights_create_stamps_return_links_marker_only_when_links_paired() {
 
     let temp = TempDir::new("bob-cli-highlights-create-return-links");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     let create = |source: &std::path::Path| {
         bob_command()
             .arg("highlights")
             .arg("create")
+            .arg("-P")
+            .arg("sase")
             .arg(source)
             .arg("-b")
             .arg(&vault)
@@ -746,6 +838,7 @@ fn highlights_create_output_renders_pdf_at_requested_path_when_available() {
     let temp = TempDir::new("bob-cli-highlights-create-output-render");
     let source = temp.path().join("report.md");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     let pdf = temp.path().join("custom/exact-output.pdf");
     write_file(
         &source,
@@ -765,6 +858,8 @@ fn highlights_create_output_renders_pdf_at_requested_path_when_available() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg(&source)
         .arg("-b")
         .arg(&vault)
@@ -814,7 +909,7 @@ fn highlights_create_output_renders_pdf_at_requested_path_when_available() {
     assert_success(&marker_output);
     let marker = stdout(&marker_output);
     assert!(marker.contains("- status: ready\n"), "{marker}");
-    assert!(marker.contains("- parent: obsidian_ref\n"), "{marker}");
+    assert!(marker.contains("- parent: sase\n"), "{marker}");
     assert!(
         marker.contains("- title: Exact Output Report\n"),
         "{marker}"
@@ -827,6 +922,7 @@ fn highlights_create_stamps_rendered_pdf_through_shared_install() {
     let temp = TempDir::new("bob-cli-highlights-create-stamp");
     let source = temp.path().join("report.md");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     write_file(&source, "# Stamped Report\n");
     let fixture = temp.path().join("rendered.pdf");
     write_highlights_pdf_pages(&fixture, &[&[]]);
@@ -839,6 +935,8 @@ fn highlights_create_stamps_rendered_pdf_through_shared_install() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg(&source)
         .arg("-b")
         .arg(&vault)
@@ -880,7 +978,7 @@ fn highlights_create_stamps_rendered_pdf_through_shared_install() {
     assert_success(&marker_output);
     let marker = stdout(&marker_output);
     assert!(marker.contains("- status: ready\n"), "{marker}");
-    assert!(marker.contains("- parent: obsidian_ref\n"), "{marker}");
+    assert!(marker.contains("- parent: sase\n"), "{marker}");
     assert!(marker.contains("- title: Stamped Report\n"), "{marker}");
     assert!(
         !marker.contains("return_links"),
@@ -914,6 +1012,7 @@ fn highlights_create_dry_run_reports_planned_audio_copy() {
     write_listen_library_episode(&library, "report-a1b2c3", b"audio-bytes");
     let source = temp.path().join("report.md");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     write_file(
         &source,
         "---\ntitle: Audio Report\naudio:\n  episode_id: report-a1b2c3\n---\n\n# Audio Report\n",
@@ -922,6 +1021,8 @@ fn highlights_create_dry_run_reports_planned_audio_copy() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg(&source)
         .arg("-b")
         .arg(&vault)
@@ -944,7 +1045,7 @@ fn highlights_create_dry_run_reports_planned_audio_copy() {
         !vault.join("xlib/chat/report.mp3").exists(),
         "dry-run must not copy audio"
     );
-    assert!(!vault.exists(), "dry-run must not create the vault");
+    vault_holds_only(&vault, &["sase.md"]);
 }
 
 #[test]
@@ -954,6 +1055,7 @@ fn highlights_create_reuses_identical_existing_companion() {
     write_listen_library_episode(&library, "report-a1b2c3", b"same-bytes");
     let source = temp.path().join("report.md");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     write_file(
         &source,
         "---\ntitle: Audio Report\naudio:\n  episode_id: report-a1b2c3\n---\n\n# Audio Report\n",
@@ -964,6 +1066,8 @@ fn highlights_create_reuses_identical_existing_companion() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg(&source)
         .arg("-b")
         .arg(&vault)
@@ -989,6 +1093,7 @@ fn highlights_create_refuses_different_audio_without_force() {
     std::fs::write(&source_audio, b"new-bytes").expect("write source audio");
     let source = temp.path().join("report.md");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     write_file(&source, "# Audio Conflict\n");
     let dest = vault.join("xlib/chat/report.mp3");
     write_file(&dest, "old-bytes");
@@ -996,6 +1101,8 @@ fn highlights_create_refuses_different_audio_without_force() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg(&source)
         .arg("-b")
         .arg(&vault)
@@ -1016,6 +1123,8 @@ fn highlights_create_refuses_different_audio_without_force() {
     let forced = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg(&source)
         .arg("-b")
         .arg(&vault)
@@ -1041,12 +1150,15 @@ fn highlights_create_refuses_library_destination_audio() {
     std::fs::write(&source_audio, b"new-bytes").expect("write source audio");
     let source = temp.path().join("report.md");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     write_file(&source, "# Library Audio Conflict\n");
     write_file(&vault.join("lib/chat/report.mp3"), "archived-audio");
 
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg(&source)
         .arg("-b")
         .arg(&vault)
@@ -1073,6 +1185,7 @@ fn highlights_create_no_audio_skips_discovery() {
     write_listen_library_episode(&library, "report-a1b2c3", b"audio-bytes");
     let source = temp.path().join("report.md");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     write_file(
         &source,
         "---\ntitle: Quiet Report\naudio:\n  episode_id: report-a1b2c3\n---\n\n# Quiet Report\n",
@@ -1081,6 +1194,8 @@ fn highlights_create_no_audio_skips_discovery() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg(&source)
         .arg("-b")
         .arg(&vault)
@@ -1108,6 +1223,8 @@ fn highlights_create_rejects_conflicting_audio_flags() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg(&source)
         .arg("--audio")
         .arg(temp.path().join("x.mp3"))
@@ -1124,6 +1241,7 @@ fn highlights_create_rejects_bad_audio_paths() {
     let temp = TempDir::new("bob-cli-highlights-create-bad-audio");
     let source = temp.path().join("report.md");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     write_file(&source, "# Bad Audio\n");
     let bad_ext = temp.path().join("notes.txt");
     write_file(&bad_ext, "text");
@@ -1135,6 +1253,8 @@ fn highlights_create_rejects_bad_audio_paths() {
         let output = bob_command()
             .arg("highlights")
             .arg("create")
+            .arg("-P")
+            .arg("sase")
             .arg(&source)
             .arg("-b")
             .arg(&vault)
@@ -1160,6 +1280,7 @@ fn highlights_create_copies_audio_before_pdf_with_play_link() {
     write_listen_library_episode(&library, "report-a1b2c3", b"render-audio");
     let source = temp.path().join("report.md");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     write_file(
         &source,
         concat!(
@@ -1185,6 +1306,8 @@ fn highlights_create_copies_audio_before_pdf_with_play_link() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg(&source)
         .arg("-b")
         .arg(&vault)
@@ -1407,6 +1530,7 @@ fn highlights_create_local_pdf_installs_and_stamps() {
     let temp = TempDir::new("bob-cli-highlights-create-local-pdf");
     let source = temp.path().join("paper.pdf");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     write_bare_pdf(
         &source,
         Some("Attention Is All You Need"),
@@ -1417,6 +1541,8 @@ fn highlights_create_local_pdf_installs_and_stamps() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg(&source)
         .arg("-b")
         .arg(&vault)
@@ -1460,12 +1586,15 @@ fn highlights_create_local_pdf_title_override_and_name_type_output() {
     let temp = TempDir::new("bob-cli-highlights-create-local-opts");
     let source = temp.path().join("paper.pdf");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     write_bare_pdf(&source, Some("Info Title"), None);
 
     // -T overrides the Info title.
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg(&source)
         .arg("-b")
         .arg(&vault)
@@ -1485,6 +1614,8 @@ fn highlights_create_local_pdf_title_override_and_name_type_output() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg(&source)
         .arg("-b")
         .arg(&vault)
@@ -1504,6 +1635,8 @@ fn highlights_create_local_pdf_title_override_and_name_type_output() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg(&source)
         .arg("-b")
         .arg(&vault)
@@ -1524,6 +1657,8 @@ fn highlights_create_local_pdf_title_override_and_name_type_output() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg(&source)
         .arg("-b")
         .arg(&vault)
@@ -1545,11 +1680,14 @@ fn highlights_create_local_pdf_dry_run_writes_nothing_and_refuses_junk() {
     let temp = TempDir::new("bob-cli-highlights-create-local-dry");
     let source = temp.path().join("paper.pdf");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     write_bare_pdf(&source, Some("Dry Title"), None);
 
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg(&source)
         .arg("-b")
         .arg(&vault)
@@ -1562,7 +1700,7 @@ fn highlights_create_local_pdf_dry_run_writes_nothing_and_refuses_junk() {
         "{}",
         format_output(&output)
     );
-    assert!(!vault.exists(), "dry-run must not create the vault");
+    vault_holds_only(&vault, &["sase.md"]);
 
     // Non-PDF bytes with a .pdf extension are refused.
     let junk = temp.path().join("junk.pdf");
@@ -1570,6 +1708,8 @@ fn highlights_create_local_pdf_dry_run_writes_nothing_and_refuses_junk() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg(&junk)
         .arg("-b")
         .arg(&vault)
@@ -1583,6 +1723,8 @@ fn highlights_create_local_pdf_dry_run_writes_nothing_and_refuses_junk() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg(&txt)
         .arg("-b")
         .arg(&vault)
@@ -1609,6 +1751,8 @@ fn highlights_create_local_pdf_dry_run_writes_nothing_and_refuses_junk() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg(&enc)
         .arg("-b")
         .arg(&vault)
@@ -1626,6 +1770,7 @@ fn highlights_create_local_pdf_dry_run_writes_nothing_and_refuses_junk() {
 fn highlights_create_local_pdf_prepends_marker_and_snake_cases_stem() {
     let temp = TempDir::new("bob-cli-highlights-create-local-sticky");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
 
     // A page-1 sticky note is kept; bob's marker goes first.
     let sticky = temp.path().join("sticky.pdf");
@@ -1633,6 +1778,8 @@ fn highlights_create_local_pdf_prepends_marker_and_snake_cases_stem() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg(&sticky)
         .arg("-b")
         .arg(&vault)
@@ -1677,6 +1824,8 @@ fn highlights_create_local_pdf_prepends_marker_and_snake_cases_stem() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg(&spaced)
         .arg("-b")
         .arg(&vault)
@@ -1695,12 +1844,15 @@ fn highlights_create_local_pdf_prepends_marker_and_snake_cases_stem() {
 fn highlights_create_local_pdf_inside_library_is_refused_with_listen_hint() {
     let temp = TempDir::new("bob-cli-highlights-create-local-inside");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     let library_pdf = vault.join("lib/papers/paper.pdf");
     write_bare_pdf(&library_pdf, Some("Library Paper"), None);
     // Stamp it so it reads as already captured.
     let stamp = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg(&library_pdf)
         .arg("-b")
         .arg(&vault)
@@ -1715,6 +1867,8 @@ fn highlights_create_local_pdf_inside_library_is_refused_with_listen_hint() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg(&outside)
         .arg("-b")
         .arg(&vault)
@@ -1727,6 +1881,8 @@ fn highlights_create_local_pdf_inside_library_is_refused_with_listen_hint() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg(&library_pdf)
         .arg("-b")
         .arg(&vault)
@@ -1745,6 +1901,7 @@ fn highlights_create_local_pdf_inside_library_is_refused_with_listen_hint() {
 fn highlights_create_pdf_url_stamps_and_dedupes() {
     let temp = TempDir::new("bob-cli-highlights-create-pdf-url");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     let root = temp.path().join("curl-root");
     std::fs::create_dir_all(&root).expect("create curl root");
     write_bare_pdf(
@@ -1763,6 +1920,8 @@ fn highlights_create_pdf_url_stamps_and_dedupes() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg("https://example.com/paper.pdf")
         .arg("-b")
         .arg(&vault)
@@ -1802,6 +1961,8 @@ fn highlights_create_pdf_url_stamps_and_dedupes() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg("https://example.com/paper.pdf")
         .arg("-b")
         .arg(&vault)
@@ -1817,6 +1978,7 @@ fn highlights_create_pdf_url_stamps_and_dedupes() {
 fn highlights_create_pdf_url_rejects_claimed_pdf_and_404() {
     let temp = TempDir::new("bob-cli-highlights-create-pdf-errors");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     let root = temp.path().join("curl-root");
     std::fs::create_dir_all(&root).expect("create curl root");
     write_bare_pdf(&root.join("paper.pdf"), Some("T"), None);
@@ -1827,6 +1989,8 @@ fn highlights_create_pdf_url_rejects_claimed_pdf_and_404() {
         bob_command()
             .arg("highlights")
             .arg("create")
+            .arg("-P")
+            .arg("sase")
             .arg(url)
             .arg("-b")
             .arg(&vault)
@@ -1861,6 +2025,7 @@ fn highlights_create_refuses_mapped_private_literals_without_fetching() {
     // attempted: validation refuses the URL first.
     let temp = TempDir::new("bob-cli-highlights-create-mapped-private");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     for url in [
         "http://[::ffff:127.0.0.1]/article",
         "http://[::ffff:10.0.0.1]/article",
@@ -1868,6 +2033,8 @@ fn highlights_create_refuses_mapped_private_literals_without_fetching() {
         let output = bob_command()
             .arg("highlights")
             .arg("create")
+            .arg("-P")
+            .arg("sase")
             .arg(url)
             .arg("-b")
             .arg(&vault)
@@ -1892,6 +2059,7 @@ fn highlights_create_refuses_mapped_private_literals_without_fetching() {
 fn highlights_create_arxiv_uses_api_metadata_and_short_stem() {
     let temp = TempDir::new("bob-cli-highlights-create-arxiv");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     let root = temp.path().join("curl-root");
     std::fs::create_dir_all(&root).expect("create curl root");
     write_bare_pdf(&root.join("arxiv.pdf"), Some("Junk Info Title"), None);
@@ -1904,6 +2072,8 @@ fn highlights_create_arxiv_uses_api_metadata_and_short_stem() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg("https://arxiv.org/abs/1706.03762")
         .arg("-b")
         .arg(&vault)
@@ -1939,6 +2109,8 @@ fn highlights_create_arxiv_uses_api_metadata_and_short_stem() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg("https://arxiv.org/abs/2608.04278v2")
         .arg("-b")
         .arg(&vault)
@@ -1954,6 +2126,7 @@ fn highlights_create_arxiv_uses_api_metadata_and_short_stem() {
 fn highlights_create_arxiv_captures_a_legacy_only_url_note_with_a_warning() {
     let temp = TempDir::new("bob-cli-highlights-create-arxiv-legacy");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     let root = temp.path().join("curl-root");
     std::fs::create_dir_all(&root).expect("create curl root");
     write_bare_pdf(&root.join("arxiv.pdf"), Some("T"), None);
@@ -1973,6 +2146,8 @@ fn highlights_create_arxiv_captures_a_legacy_only_url_note_with_a_warning() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg("https://arxiv.org/abs/1706.03762")
         .arg("-b")
         .arg(&vault)
@@ -2000,6 +2175,7 @@ fn highlights_create_arxiv_captures_a_legacy_only_url_note_with_a_warning() {
 
     // A dry run reports the legacy hit without writing.
     let dry_vault = temp.path().join("dry-vault");
+    write_file(&dry_vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     std::fs::create_dir_all(dry_vault.join("ref/ai"))
         .expect("create dry ref dir");
     write_file(
@@ -2009,6 +2185,8 @@ fn highlights_create_arxiv_captures_a_legacy_only_url_note_with_a_warning() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg("https://arxiv.org/abs/1706.03762")
         .arg("-b")
         .arg(&dry_vault)
@@ -2033,6 +2211,7 @@ fn highlights_create_arxiv_captures_a_legacy_only_url_note_with_a_warning() {
 fn highlights_create_arxiv_api_failure_falls_back_with_warning() {
     let temp = TempDir::new("bob-cli-highlights-create-arxiv-fallback");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     let root = temp.path().join("curl-root");
     std::fs::create_dir_all(&root).expect("create curl root");
     // No API fixture: the fake returns 500 for unknown ids, and the PDF
@@ -2051,6 +2230,8 @@ fn highlights_create_arxiv_api_failure_falls_back_with_warning() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg("https://arxiv.org/abs/2602.16844")
         .arg("-b")
         .arg(&vault)
@@ -2075,6 +2256,7 @@ fn highlights_create_markdown_renders_outside_xlib() {
     let temp = TempDir::new("bob-cli-highlights-create-scratch-render");
     let source = temp.path().join("report.md");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     write_file(&source, "# Scratch Render\n");
     let fixture = temp.path().join("rendered.pdf");
     write_highlights_pdf_pages(&fixture, &[&[]]);
@@ -2091,6 +2273,8 @@ fn highlights_create_markdown_renders_outside_xlib() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg(&source)
         .arg("-b")
         .arg(&vault)
@@ -2120,6 +2304,7 @@ fn highlights_create_markdown_renders_outside_xlib() {
 fn highlights_create_pdf_url_binds_explicit_audio() {
     let temp = TempDir::new("bob-cli-highlights-create-pdf-audio");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     let root = temp.path().join("curl-root");
     std::fs::create_dir_all(&root).expect("create curl root");
     write_bare_pdf(&root.join("paper.pdf"), Some("Audio Paper"), None);
@@ -2132,6 +2317,8 @@ fn highlights_create_pdf_url_binds_explicit_audio() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg("https://example.com/paper.pdf")
         .arg("-b")
         .arg(&vault)
@@ -2175,6 +2362,7 @@ fn article_env(
 fn highlights_create_article_routes_through_clip_engine() {
     let temp = TempDir::new("bob-cli-highlights-create-article");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     let root = temp.path().join("curl-root");
     std::fs::create_dir_all(&root).expect("create curl root");
     let fake_curl = write_fake_curl(temp.path());
@@ -2186,6 +2374,8 @@ fn highlights_create_article_routes_through_clip_engine() {
     command
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg("https://example.com/article/hello");
     article_env(&mut command, &vault, &fake_curl, &root, &log, &fake.path);
     let output = command.output().expect("run create article");
@@ -2229,6 +2419,8 @@ fn highlights_create_article_routes_through_clip_engine() {
     rerun
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg("https://example.com/article/hello");
     article_env(&mut rerun, &vault, &fake_curl, &root, &log, &fake.path);
     let output = rerun.output().expect("rerun create article");
@@ -2292,6 +2484,7 @@ fn highlights_create_article_maps_options_to_clip() {
 fn highlights_create_article_routes_bot_wall_to_adapter() {
     let temp = TempDir::new("bob-cli-highlights-create-article-walled");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     let root = temp.path().join("curl-root");
     std::fs::create_dir_all(&root).expect("create curl root");
     let fake_curl = write_fake_curl(temp.path());
@@ -2303,6 +2496,8 @@ fn highlights_create_article_routes_bot_wall_to_adapter() {
     command
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg("https://example.com/walled/field-notes");
     article_env(&mut command, &vault, &fake_curl, &root, &log, &fake.path);
     let output = command.output().expect("run create walled article");
@@ -2319,6 +2514,7 @@ fn highlights_create_article_routes_bot_wall_to_adapter() {
 fn highlights_create_article_binds_explicit_audio() {
     let temp = TempDir::new("bob-cli-highlights-create-article-audio");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     let root = temp.path().join("curl-root");
     std::fs::create_dir_all(&root).expect("create curl root");
     let fake_curl = write_fake_curl(temp.path());
@@ -2332,6 +2528,8 @@ fn highlights_create_article_binds_explicit_audio() {
     command
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg("https://example.com/article/hello")
         .arg("--audio")
         .arg(&audio);
@@ -2353,6 +2551,7 @@ fn highlights_create_article_binds_explicit_audio() {
 fn highlights_create_article_dry_run_writes_nothing() {
     let temp = TempDir::new("bob-cli-highlights-create-article-dry");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     let root = temp.path().join("curl-root");
     std::fs::create_dir_all(&root).expect("create curl root");
     let fake_curl = write_fake_curl(temp.path());
@@ -2364,6 +2563,8 @@ fn highlights_create_article_dry_run_writes_nothing() {
     command
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg("https://example.com/article/hello")
         .arg("-d");
     article_env(&mut command, &vault, &fake_curl, &root, &log, &fake.path);
@@ -2387,10 +2588,13 @@ fn landing_name_alone_does_not_embed_marker_id() {
     let temp = TempDir::new("bob-cli-landing-name-no-id");
     let source = temp.path().join("report.md");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     write_file(&source, "# Report\n");
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg(&source)
         .arg("-b")
         .arg(&vault)
@@ -2412,12 +2616,15 @@ fn landing_companion_beside_source_is_copied() {
     let temp = TempDir::new("bob-cli-landing-companion-copy");
     let source = temp.path().join("paper.pdf");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     write_bare_pdf(&source, None, None);
     std::fs::write(temp.path().join("paper.mp3"), b"ID3 fake")
         .expect("sibling mp3");
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg(&source)
         .arg("-b")
         .arg(&vault)
@@ -2442,11 +2649,14 @@ fn landing_marked_pdf_outside_vault_is_refused() {
     let temp = TempDir::new("bob-cli-landing-marked-refused");
     let source = temp.path().join("marked.pdf");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     write_bare_pdf(&source, None, None);
     // Stamp it so it reads as already captured.
     let stamp = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg(&source)
         .arg("-b")
         .arg(&vault)
@@ -2463,9 +2673,12 @@ fn landing_marked_pdf_outside_vault_is_refused() {
     let retry_src = temp.path().join("retry.pdf");
     std::fs::copy(&installed, &retry_src).expect("copy marked out");
     let vault2 = temp.path().join("vault2");
+    write_file(&vault2.join("sase.md"), "---\ntype: [[area]]\n---\n");
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg(&retry_src)
         .arg("-b")
         .arg(&vault2)
@@ -2484,6 +2697,7 @@ fn landing_library_collision_hints_listen_attach() {
     let temp = TempDir::new("bob-cli-landing-collision-hint");
     let source = temp.path().join("report.md");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     write_file(&source, "# Report\n");
     // The same title means the same reference, so the intake refuses.
     let library_pdf = vault.join("lib/chat/report.pdf");
@@ -2496,6 +2710,8 @@ fn landing_library_collision_hints_listen_attach() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg(&source)
         .arg("-b")
         .arg(&vault)
@@ -2517,6 +2733,7 @@ fn landing_bare_library_pdf_renames() {
     let temp = TempDir::new("bob-cli-landing-bare-rename");
     let source = temp.path().join("report.md");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     write_file(&source, "# Report\n");
     let library_pdf = vault.join("lib/chat/report.pdf");
     std::fs::create_dir_all(library_pdf.parent().expect("lib parent"))
@@ -2525,6 +2742,8 @@ fn landing_bare_library_pdf_renames() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg(&source)
         .arg("-b")
         .arg(&vault)
@@ -2557,9 +2776,15 @@ fn ingest_characterizes_url_failure_modes() {
         &timeout_curl,
         "#!/bin/sh\nprintf 'curl: timeout\n' >&2\nexit 28\n",
     );
+    write_file(
+        &temp.path().join("vault-timeout/sase.md"),
+        "---\ntype: [[area]]\n---\n",
+    );
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg("https://example.com/paper.pdf")
         .arg("-b")
         .arg(temp.path().join("vault-timeout"))
@@ -2588,7 +2813,13 @@ fn ingest_characterizes_url_failure_modes() {
     blocked
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg("https://example.com/article/hello");
+    write_file(
+        &temp.path().join("vault-blocked/sase.md"),
+        "---\ntype: [[area]]\n---\n",
+    );
     article_env(
         &mut blocked,
         &temp.path().join("vault-blocked"),
@@ -2615,7 +2846,13 @@ fn ingest_characterizes_url_failure_modes() {
     crashed
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg("https://example.com/article/hello");
+    write_file(
+        &temp.path().join("vault-crash/sase.md"),
+        "---\ntype: [[area]]\n---\n",
+    );
     article_env(
         &mut crashed,
         &temp.path().join("vault-crash"),
@@ -2646,10 +2883,16 @@ fn ingest_characterizes_url_failure_modes() {
     std::fs::create_dir_all(&empty_bin).expect("empty bin");
     let empty_home = temp.path().join("empty-home");
     std::fs::create_dir_all(&empty_home).expect("empty home");
+    write_file(
+        &temp.path().join("vault-missing/sase.md"),
+        "---\ntype: [[area]]\n---\n",
+    );
     let mut missing = bob_command();
     missing
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg("https://example.com/article/hello")
         .arg("-b")
         .arg(temp.path().join("vault-missing"))
@@ -2677,6 +2920,7 @@ const FOLDED_STEM: &str = "open_source_codex_orchestration_symphony";
 fn highlights_create_rejects_html_with_local_target_before_any_work() {
     let temp = TempDir::new("bob-cli-highlights-create-html-local");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     let source = temp.path().join("report.md");
     write_file(&source, "# Report\n");
     let html = temp.path().join("saved.html");
@@ -2685,6 +2929,8 @@ fn highlights_create_rejects_html_with_local_target_before_any_work() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg(&source)
         .arg("-b")
         .arg(&vault)
@@ -2703,13 +2949,14 @@ fn highlights_create_rejects_html_with_local_target_before_any_work() {
         "{}",
         format_output(&output)
     );
-    assert!(!vault.exists(), "rejection must precede any work");
+    vault_holds_only(&vault, &["sase.md"]);
 }
 
 #[test]
 fn highlights_create_rejects_bad_published_before_any_work() {
     let temp = TempDir::new("bob-cli-highlights-create-bad-published");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     let fake = FakeClip::new(&temp, "fake");
     let curl_root = temp.path().join("curl-root");
     std::fs::create_dir_all(&curl_root).expect("create curl root");
@@ -2720,6 +2967,8 @@ fn highlights_create_rejects_bad_published_before_any_work() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg("https://example.com/article/hello")
         .arg("-b")
         .arg(&vault)
@@ -2755,12 +3004,15 @@ fn highlights_create_rejects_bad_published_before_any_work() {
 fn highlights_create_local_pdf_overrides_author_and_published() {
     let temp = TempDir::new("bob-cli-highlights-create-pdf-overrides");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     let source = temp.path().join("paper.pdf");
     write_bare_pdf(&source, None, None);
 
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg(&source)
         .arg("-b")
         .arg(&vault)
@@ -2784,6 +3036,7 @@ fn highlights_create_local_pdf_overrides_author_and_published() {
 fn highlights_create_arxiv_dry_run_shows_override_sources() {
     let temp = TempDir::new("bob-cli-highlights-create-arxiv-overrides");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     let root = temp.path().join("curl-root");
     std::fs::create_dir_all(&root).expect("create curl root");
     write_bare_pdf(
@@ -2803,6 +3056,8 @@ fn highlights_create_arxiv_dry_run_shows_override_sources() {
     command
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg("https://arxiv.org/abs/1706.03762")
         .arg("-A")
         .arg("Override Author")
@@ -2825,11 +3080,14 @@ fn highlights_create_markdown_marker_carries_author_and_published() {
     let temp = TempDir::new("bob-cli-highlights-create-md-overrides");
     let source = temp.path().join("report.md");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     write_file(&source, "# Report\n");
 
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg(&source)
         .arg("-b")
         .arg(&vault)
@@ -2855,11 +3113,14 @@ fn highlights_create_markdown_marker_carries_author_and_published() {
 fn highlights_create_clip_alias_is_byte_identical_on_error_path() {
     let temp = TempDir::new("bob-cli-highlights-create-alias-error");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     std::fs::create_dir_all(&vault).expect("create vault");
 
     let create = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg("ftp://example.com/article")
         .arg("-b")
         .arg(&vault)
@@ -2868,6 +3129,8 @@ fn highlights_create_clip_alias_is_byte_identical_on_error_path() {
     let clip = bob_command()
         .arg("highlights")
         .arg("clip")
+        .arg("-P")
+        .arg("sase")
         .arg("ftp://example.com/article")
         .arg("-b")
         .arg(&vault)
@@ -2894,6 +3157,7 @@ fn highlights_create_clip_alias_is_byte_identical_on_error_path() {
 fn highlights_create_folded_success_writes_stamped_intake_pdf() {
     let temp = TempDir::new("bob-cli-highlights-create-folded-success");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     let fake = FakeClip::new(&temp, "fake");
     let curl_root = temp.path().join("curl-root");
     std::fs::create_dir_all(&curl_root).expect("create curl root");
@@ -2904,6 +3168,8 @@ fn highlights_create_folded_success_writes_stamped_intake_pdf() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg(FOLDED_URL)
         .arg("-b")
         .arg(&vault)
@@ -2926,7 +3192,7 @@ fn highlights_create_folded_success_writes_stamped_intake_pdf() {
             && report.contains("captured: ")
             && report.contains("source_url: https://example.com/index/open-source-codex-orchestration-symphony/")
             && report.contains("status: ready")
-            && report.contains("parent: obsidian_ref")
+            && report.contains("parent: sase")
             && report.contains(&format!("id: {FOLDED_STEM}"))
             && report.contains("capture: chrome 154.0.0 · headless")
             && report.contains("images: 2/2")
@@ -2975,6 +3241,7 @@ fn highlights_create_folded_success_writes_stamped_intake_pdf() {
 fn highlights_create_folded_supports_ref_type_output_and_name() {
     let temp = TempDir::new("bob-cli-highlights-create-folded-targets");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     let fake = FakeClip::new(&temp, "fake");
     let curl_root = temp.path().join("curl-root");
     std::fs::create_dir_all(&curl_root).expect("create curl root");
@@ -2985,6 +3252,8 @@ fn highlights_create_folded_supports_ref_type_output_and_name() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg(FOLDED_URL)
         .arg("-b")
         .arg(&vault)
@@ -3005,9 +3274,12 @@ fn highlights_create_folded_supports_ref_type_output_and_name() {
     );
 
     let named = temp.path().join("vault-named");
+    write_file(&named.join("sase.md"), "---\ntype: [[area]]\n---\n");
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg(FOLDED_URL)
         .arg("-b")
         .arg(&named)
@@ -3028,10 +3300,16 @@ fn highlights_create_folded_supports_ref_type_output_and_name() {
     assert!(named.join("xlib/blogs/custom-stem.pdf").is_file());
 
     let external_vault = temp.path().join("vault-external");
+    write_file(
+        &external_vault.join("sase.md"),
+        "---\ntype: [[area]]\n---\n",
+    );
     let external = temp.path().join("outside.pdf");
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg(FOLDED_URL)
         .arg("-b")
         .arg(&external_vault)
@@ -3056,6 +3334,7 @@ fn highlights_create_folded_supports_ref_type_output_and_name() {
 fn highlights_create_folded_forwards_overrides_and_html() {
     let temp = TempDir::new("bob-cli-highlights-create-folded-overrides");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     let fake = FakeClip::new(&temp, "fake");
     let curl_root = temp.path().join("curl-root");
     std::fs::create_dir_all(&curl_root).expect("create curl root");
@@ -3068,6 +3347,8 @@ fn highlights_create_folded_forwards_overrides_and_html() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg(FOLDED_URL)
         .arg("-b")
         .arg(&vault)
@@ -3113,12 +3394,16 @@ fn highlights_create_folded_forwards_overrides_and_html() {
         std::fs::read_to_string(&curl_log).expect("reread curl log")
     );
 
+    let override_dry = temp.path().join("vault-override-dry");
+    write_file(&override_dry.join("sase.md"), "---\ntype: [[area]]\n---\n");
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg(FOLDED_URL)
         .arg("-b")
-        .arg(temp.path().join("vault-override-dry"))
+        .arg(&override_dry)
         .arg("-A")
         .arg("Custom Author")
         .arg("-T")
@@ -3142,10 +3427,13 @@ fn highlights_create_folded_forwards_overrides_and_html() {
     );
 
     let piped = temp.path().join("vault-piped");
+    write_file(&piped.join("sase.md"), "---\ntype: [[area]]\n---\n");
     let mut command = bob_command();
     command
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg(FOLDED_URL)
         .arg("-b")
         .arg(&piped)
@@ -3175,6 +3463,7 @@ fn highlights_create_folded_forwards_overrides_and_html() {
 fn highlights_create_folded_dry_run_writes_nothing() {
     let temp = TempDir::new("bob-cli-highlights-create-folded-dry-run");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     let fake = FakeClip::new(&temp, "fake");
     let curl_root = temp.path().join("curl-root");
     std::fs::create_dir_all(&curl_root).expect("create curl root");
@@ -3185,6 +3474,8 @@ fn highlights_create_folded_dry_run_writes_nothing() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg(FOLDED_URL)
         .arg("-b")
         .arg(&vault)
@@ -3215,7 +3506,7 @@ fn highlights_create_folded_dry_run_writes_nothing() {
         request.contains(r#""dry_run":true"#),
         "dry-run must reach the adapter:\n{request}"
     );
-    assert!(!vault.exists(), "dry-run must not create the vault");
+    vault_holds_only(&vault, &["sase.md"]);
 }
 
 #[test]
@@ -3241,10 +3532,13 @@ fn highlights_create_folded_reports_adapter_failures_with_hints() {
         ),
     ] {
         let vault = temp.path().join(format!("vault-{kind}"));
+        write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
         fake.respond(&failure_response(kind, message, hint));
         let output = bob_command()
             .arg("highlights")
             .arg("create")
+            .arg("-P")
+            .arg("sase")
             .arg(FOLDED_URL)
             .arg("-b")
             .arg(&vault)
@@ -3269,7 +3563,7 @@ fn highlights_create_folded_reports_adapter_failures_with_hints() {
             "{kind} must print error and hint:\n{}",
             format_output(&output)
         );
-        assert!(!vault.exists(), "{kind} must write nothing");
+        vault_holds_only(&vault, &["sase.md"]);
     }
 }
 
@@ -3296,6 +3590,8 @@ fn highlights_create_folded_rejects_before_the_adapter_runs() {
         let output = bob_command()
             .arg("highlights")
             .arg("create")
+            .arg("-P")
+            .arg("sase")
             .arg(raw)
             .arg("-b")
             .arg(&vault)
@@ -3323,6 +3619,8 @@ fn highlights_create_folded_rejects_before_the_adapter_runs() {
         let output = bob_command()
             .arg("highlights")
             .arg("create")
+            .arg("-P")
+            .arg("sase")
             .arg(FOLDED_URL)
             .arg("-b")
             .arg(&vault)
@@ -3350,6 +3648,8 @@ fn highlights_create_folded_rejects_before_the_adapter_runs() {
         let output = bob_command()
             .arg("highlights")
             .arg("create")
+            .arg("-P")
+            .arg("sase")
             .arg(FOLDED_URL)
             .arg("-b")
             .arg(&vault)
@@ -3376,6 +3676,7 @@ fn highlights_create_folded_library_without_url_suffixes() {
     // reference: it captures to `<slug>_2` with a `renamed:` line.
     let temp = TempDir::new("bob-cli-highlights-create-folded-collisions");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     let fake = FakeClip::new(&temp, "fake");
     let curl_root = temp.path().join("curl-root");
     std::fs::create_dir_all(&curl_root).expect("create curl root");
@@ -3390,6 +3691,8 @@ fn highlights_create_folded_library_without_url_suffixes() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg(FOLDED_URL)
         .arg("-b")
         .arg(&vault)
@@ -3429,6 +3732,7 @@ fn highlights_create_folded_refuses_library_and_dedupe_collisions_early() {
     // `source_pdf` instead warns and captures (see
     // `highlights_create_folded_captures_a_legacy_only_url_note_with_a_warning`).
     let dedupe_vault = temp.path().join("dedupe-vault");
+    write_file(&dedupe_vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     write_file(
         &dedupe_vault.join("ref/blogs/existing.md"),
         "---\nsource_url: https://example.com/index/open-source-codex-orchestration-symphony/\nsource_pdf: lib/blogs/existing.pdf\ntitle: Existing\n---\n\n# Existing\n",
@@ -3436,6 +3740,8 @@ fn highlights_create_folded_refuses_library_and_dedupe_collisions_early() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg(FOLDED_URL)
         .arg("-b")
         .arg(&dedupe_vault)
@@ -3467,6 +3773,7 @@ fn highlights_create_folded_refuses_library_and_dedupe_collisions_early() {
 fn highlights_create_folded_captures_a_legacy_only_url_note_with_a_warning() {
     let temp = TempDir::new("bob-cli-highlights-create-folded-legacy-url");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     let fake = FakeClip::new(&temp, "fake");
     let curl_root = temp.path().join("curl-root");
     std::fs::create_dir_all(&curl_root).expect("create curl root");
@@ -3485,6 +3792,8 @@ fn highlights_create_folded_captures_a_legacy_only_url_note_with_a_warning() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg(FOLDED_URL)
         .arg("-b")
         .arg(&vault)
@@ -3524,6 +3833,7 @@ fn highlights_create_folded_captures_a_legacy_only_url_note_with_a_warning() {
 
     // A dry run reports the legacy hit without writing.
     let dry_vault = temp.path().join("dry-vault");
+    write_file(&dry_vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     write_file(
         &dry_vault.join("ref/ai/old.md"),
         "---\ntitle: Old\nurl: https://example.com/index/open-source-codex-orchestration-symphony/\n---\n\n# Old\n",
@@ -3531,6 +3841,8 @@ fn highlights_create_folded_captures_a_legacy_only_url_note_with_a_warning() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg(FOLDED_URL)
         .arg("-b")
         .arg(&dry_vault)
@@ -3561,6 +3873,7 @@ fn highlights_create_folded_captures_a_legacy_only_url_note_with_a_warning() {
 fn highlights_create_folded_still_refuses_a_pdf_backed_url_note() {
     let temp = TempDir::new("bob-cli-highlights-create-folded-pdf-backed-url");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     let fake = FakeClip::new(&temp, "fake");
     let curl_root = temp.path().join("curl-root");
     std::fs::create_dir_all(&curl_root).expect("create curl root");
@@ -3576,6 +3889,8 @@ fn highlights_create_folded_still_refuses_a_pdf_backed_url_note() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg("https://arxiv.org/abs/2608.04278v2")
         .arg("-b")
         .arg(&vault)
@@ -3606,6 +3921,7 @@ fn highlights_create_folded_still_refuses_a_pdf_backed_url_note() {
 fn highlights_create_folded_force_overwrites_the_same_intake_target() {
     let temp = TempDir::new("bob-cli-highlights-create-folded-force");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     let fake = FakeClip::new(&temp, "fake");
     let curl_root = temp.path().join("curl-root");
     std::fs::create_dir_all(&curl_root).expect("create curl root");
@@ -3621,6 +3937,8 @@ fn highlights_create_folded_force_overwrites_the_same_intake_target() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg(FOLDED_URL)
         .arg("-b")
         .arg(&vault)
@@ -3645,6 +3963,8 @@ fn highlights_create_folded_force_overwrites_the_same_intake_target() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg(FOLDED_URL)
         .arg("-b")
         .arg(&vault)
@@ -3667,6 +3987,7 @@ fn highlights_create_folded_force_overwrites_the_same_intake_target() {
 fn highlights_create_folded_direct_pdf_falls_back_to_slug_title() {
     let temp = TempDir::new("bob-cli-highlights-create-folded-pdf-kind");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     let fake = FakeClip::new(&temp, "fake");
     let curl_root = temp.path().join("curl-root");
     std::fs::create_dir_all(&curl_root).expect("create curl root");
@@ -3680,6 +4001,8 @@ fn highlights_create_folded_direct_pdf_falls_back_to_slug_title() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg("https://example.com/files/quarterly-report.pdf")
         .arg("-b")
         .arg(&vault)
@@ -3705,6 +4028,7 @@ fn highlights_create_folded_direct_pdf_falls_back_to_slug_title() {
 fn highlights_create_folded_rejects_protocol_errors() {
     let temp = TempDir::new("bob-cli-highlights-create-folded-protocol");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     let fake = FakeClip::new(&temp, "fake");
     let curl_root = temp.path().join("curl-root");
     std::fs::create_dir_all(&curl_root).expect("create curl root");
@@ -3716,6 +4040,8 @@ fn highlights_create_folded_rejects_protocol_errors() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg(FOLDED_URL)
         .arg("-b")
         .arg(&vault)
@@ -3737,13 +4063,14 @@ fn highlights_create_folded_rejects_protocol_errors() {
         "expected the protocol error:\n{}",
         format_output(&output)
     );
-    assert!(!vault.exists(), "protocol errors must write nothing");
+    vault_holds_only(&vault, &["sase.md"]);
 }
 
 #[test]
 fn highlights_create_folded_round_trips_through_scan() {
     let temp = TempDir::new("bob-cli-highlights-create-folded-scan");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     let fake = FakeClip::new(&temp, "fake");
     let curl_root = temp.path().join("curl-root");
     std::fs::create_dir_all(&curl_root).expect("create curl root");
@@ -3754,6 +4081,8 @@ fn highlights_create_folded_round_trips_through_scan() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg(FOLDED_URL)
         .arg("-b")
         .arg(&vault)
@@ -3848,6 +4177,7 @@ fn highlights_create_folded_doctor_reports_web_clip_rows() {
 fn highlights_create_local_pdf_recapture_refuses_then_overwrites() {
     let temp = TempDir::new("bob-cli-create-local-recapture");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     let source = temp.path().join("paper.pdf");
     write_bare_pdf(&source, Some("Local Paper"), None);
 
@@ -3856,6 +4186,8 @@ fn highlights_create_local_pdf_recapture_refuses_then_overwrites() {
         command
             .arg("highlights")
             .arg("create")
+            .arg("-P")
+            .arg("sase")
             .arg(&source)
             .arg("-b")
             .arg(&vault);
@@ -3906,6 +4238,7 @@ fn highlights_create_local_pdf_recapture_refuses_then_overwrites() {
 fn highlights_create_local_pdf_different_title_suffixes_with_id() {
     let temp = TempDir::new("bob-cli-create-local-different-title");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     let first = temp.path().join("a/paper.pdf");
     let second = temp.path().join("b/paper.pdf");
     write_bare_pdf(&first, Some("First Paper"), None);
@@ -3916,6 +4249,8 @@ fn highlights_create_local_pdf_different_title_suffixes_with_id() {
         command
             .arg("highlights")
             .arg("create")
+            .arg("-P")
+            .arg("sase")
             .arg(source)
             .arg("-b")
             .arg(&vault);
@@ -3958,6 +4293,7 @@ fn highlights_create_local_pdf_different_title_suffixes_with_id() {
 fn highlights_create_pdf_url_colliding_slug_suffixes() {
     let temp = TempDir::new("bob-cli-create-url-collision");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     let root = temp.path().join("curl-root");
     std::fs::create_dir_all(&root).expect("create curl root");
     write_bare_pdf(&root.join("paper.pdf"), Some("Remote Paper Title"), None);
@@ -3974,6 +4310,8 @@ fn highlights_create_pdf_url_colliding_slug_suffixes() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg("https://example.com/paper.pdf")
         .arg("-b")
         .arg(&vault)
@@ -3998,6 +4336,7 @@ fn highlights_create_output_existing_pdf_still_refuses_without_force() {
     let temp = TempDir::new("bob-cli-create-output-existing");
     let source = temp.path().join("report.md");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     write_file(&source, "# Report\n");
     let output_pdf = temp.path().join("out/custom.pdf");
     std::fs::create_dir_all(output_pdf.parent().expect("out parent"))
@@ -4007,6 +4346,8 @@ fn highlights_create_output_existing_pdf_still_refuses_without_force() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg(&source)
         .arg("-b")
         .arg(&vault)

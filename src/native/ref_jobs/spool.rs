@@ -58,6 +58,10 @@ pub(crate) struct JobFile {
     pub(crate) display: String,
     /// Fetch hint: `article`, `pdf`, or `arxiv`.
     pub(crate) route_hint: String,
+    /// Resolved parent route stamped into the marker and owning the
+    /// fallback task; `None` on jobs written by an older `bob`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) parent: Option<String>,
     /// Completed worker attempts; a stale `running/` file comes back
     /// with `attempts + 1` and fails at 2 without clipping again.
     #[serde(default)]
@@ -97,7 +101,30 @@ pub(crate) struct NewJob {
     pub(crate) dedupe_key: String,
     pub(crate) display: String,
     pub(crate) route_hint: String,
+    /// Resolved parent route; the worker falls back to the source's
+    /// inbox when it is `None`.
+    pub(crate) parent: Option<String>,
     pub(crate) fallback: JobFallback,
+}
+
+/// The inbox a parentless job falls back to, by spool `source`.
+/// Capture stages `mac_inbox` itself now; this only covers jobs an
+/// older `bob` wrote.
+pub(crate) fn default_parent_for_source(source: &str) -> &'static str {
+    match source {
+        "gkeep" => "gkeep_inbox",
+        _ => "mac_inbox",
+    }
+}
+
+impl JobFile {
+    /// The parent route this job clips and falls back under: its own
+    /// `parent`, else its source's inbox.
+    pub(crate) fn effective_parent(&self) -> &str {
+        self.parent
+            .as_deref()
+            .unwrap_or_else(|| default_parent_for_source(&self.source))
+    }
 }
 
 /// A terminal outcome in `done.jsonl`.
@@ -129,6 +156,8 @@ pub(crate) struct DoneRecord {
     pub(crate) cleaned_url: String,
     pub(crate) display: String,
     pub(crate) outcome: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) parent: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) pdf: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -182,6 +211,8 @@ pub(crate) struct ListedJob {
     pub(crate) state: JobState,
     pub(crate) url: String,
     pub(crate) display: String,
+    /// Effective parent route (`job.parent`, else the source inbox).
+    pub(crate) parent: Option<String>,
     pub(crate) created_at: String,
     pub(crate) started_at: Option<String>,
     pub(crate) finished_at: Option<String>,
@@ -348,6 +379,7 @@ fn enqueue_at(
         dedupe_key: job.dedupe_key.clone(),
         display: job.display.clone(),
         route_hint: job.route_hint.clone(),
+        parent: job.parent.clone(),
         attempts: 0,
         fallback: job.fallback.clone(),
         error: None,
@@ -460,6 +492,7 @@ pub(crate) fn append_done(
         cleaned_url: job.cleaned_url.clone(),
         display: job.display.clone(),
         outcome: outcome.as_str().to_string(),
+        parent: Some(job.effective_parent().to_string()),
         pdf,
         note,
         error,
@@ -552,6 +585,7 @@ pub(crate) fn list_jobs(root: &Path, all: bool) -> JobsView {
                     state: JobState::Pending,
                     url: job.url.clone(),
                     display: job.display.clone(),
+                    parent: Some(job.effective_parent().to_string()),
                     created_at: job.created_at.clone(),
                     started_at: None,
                     finished_at: None,
@@ -578,6 +612,7 @@ pub(crate) fn list_jobs(root: &Path, all: bool) -> JobsView {
                     state: JobState::Clipping,
                     url: job.url.clone(),
                     display: job.display.clone(),
+                    parent: Some(job.effective_parent().to_string()),
                     created_at: job.created_at.clone(),
                     started_at: job.started_at.clone(),
                     finished_at: None,
@@ -604,6 +639,7 @@ pub(crate) fn list_jobs(root: &Path, all: bool) -> JobsView {
                     state: JobState::Stuck,
                     url: job.url.clone(),
                     display: job.display.clone(),
+                    parent: Some(job.effective_parent().to_string()),
                     created_at: job.created_at.clone(),
                     started_at: job.started_at.clone(),
                     finished_at: None,
@@ -640,6 +676,7 @@ pub(crate) fn list_jobs(root: &Path, all: bool) -> JobsView {
             state,
             url: record.url.clone(),
             display: record.display.clone(),
+            parent: record.parent.clone(),
             created_at: record.created_at.clone(),
             started_at: record.started_at.clone(),
             finished_at: Some(record.finished_at.clone()),
@@ -669,6 +706,7 @@ fn unreadable_row(message: String) -> ListedJob {
         state: JobState::Stuck,
         url: String::new(),
         display: "unreadable job file".to_string(),
+        parent: None,
         created_at: String::new(),
         started_at: None,
         finished_at: None,
@@ -776,6 +814,7 @@ mod tests {
             dedupe_key: "https://example.com/post".to_string(),
             display: "example.com/post".to_string(),
             route_hint: "article".to_string(),
+            parent: Some("mac_inbox".to_string()),
             fallback: JobFallback {
                 relative_target: "mac_inbox.md".to_string(),
                 task_line: "- [ ] #task https://example.com/post?utm_source=x [created::2026-10-07]".to_string(),
@@ -800,6 +839,8 @@ mod tests {
             .into_owned();
         assert_eq!(job.id, stem);
         assert_eq!(job.source, "capture");
+        assert_eq!(job.parent.as_deref(), Some("mac_inbox"));
+        assert_eq!(job.effective_parent(), "mac_inbox");
         assert_eq!(job.fallback.relative_target, "mac_inbox.md");
         #[cfg(unix)]
         {
@@ -809,6 +850,34 @@ mod tests {
                     & 0o777;
             assert_eq!(mode, 0o600, "job file mode");
         }
+    }
+
+    #[test]
+    fn parentless_jobs_read_as_none_and_use_the_source_inbox() {
+        // Jobs written by an older `bob` carry no `parent` key: they
+        // still parse (schema stays 1) and fall back to the source inbox.
+        let root = temp_root("no-parent").join("jobs");
+        let pending = root.join("pending");
+        fs::create_dir_all(&pending).expect("create pending dir");
+        let path = pending.join("20261007T143012-aaaaaa.json");
+        fs::write(
+            &path,
+            r#"{"schema_version":1,"id":"20261007T143012-aaaaaa","created_at":"2026-10-07T14:30:12-04:00","source":"capture","bob_dir":"/home/bryan/bob","url":"https://example.com/post","cleaned_url":"https://example.com/post","dedupe_key":"https://example.com/post","display":"example.com/post","route_hint":"article","attempts":0,"fallback":{"relative_target":"mac_inbox.md","task_line":"- [ ] #task https://example.com/post [created::2026-10-07]"}}"#,
+        )
+        .expect("seed parentless job");
+        let job = read_job_file(&path).expect("read parentless job");
+        assert!(job.parent.is_none());
+        assert_eq!(job.effective_parent(), "mac_inbox");
+        assert_eq!(default_parent_for_source("capture"), "mac_inbox");
+        assert_eq!(default_parent_for_source("gkeep"), "gkeep_inbox");
+        assert_eq!(default_parent_for_source("unknown"), "mac_inbox");
+        let view = list_jobs(&root, true);
+        assert_eq!(view.jobs.len(), 1);
+        assert_eq!(
+            view.jobs[0].parent.as_deref(),
+            Some("mac_inbox"),
+            "list shows the effective parent"
+        );
     }
 
     #[test]

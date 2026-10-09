@@ -176,6 +176,7 @@ fn listen_markdown_binds_episode_and_play_uri() {
     let temp = TempDir::new("bob-cli-highlights-listen-markdown");
     let source = temp.path().join("report.md");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     write_file(
         &source,
         "# Report\n\n<div class=\"listen\">\n\n♫ **Brief audio edition**\n\n</div>\n",
@@ -188,6 +189,8 @@ fn listen_markdown_binds_episode_and_play_uri() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg(&source)
         .arg("-b")
         .arg(&vault)
@@ -235,6 +238,7 @@ fn listen_markdown_binds_episode_and_play_uri() {
 fn listen_pdf_url_streams_output_and_quotes_title() {
     let temp = TempDir::new("bob-cli-highlights-listen-pdf-url");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     let root = temp.path().join("curl-root");
     std::fs::create_dir_all(&root).expect("create curl root");
     write_bare_pdf(&root.join("paper.pdf"));
@@ -247,6 +251,8 @@ fn listen_pdf_url_streams_output_and_quotes_title() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg("https://example.com/paper.pdf")
         .arg("-b")
         .arg(&vault)
@@ -302,6 +308,7 @@ fn listen_pdf_url_streams_output_and_quotes_title() {
 fn listen_failure_writes_nothing() {
     let temp = TempDir::new("bob-cli-highlights-listen-failure");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     let root = temp.path().join("curl-root");
     std::fs::create_dir_all(&root).expect("create curl root");
     write_bare_pdf(&root.join("paper.pdf"));
@@ -314,6 +321,8 @@ fn listen_failure_writes_nothing() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg("https://example.com/paper.pdf")
         .arg("-b")
         .arg(&vault)
@@ -350,6 +359,7 @@ fn listen_failure_writes_nothing() {
 fn listen_interrupted_exits_130() {
     let temp = TempDir::new("bob-cli-highlights-listen-interrupt");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     let root = temp.path().join("curl-root");
     std::fs::create_dir_all(&root).expect("create curl root");
     write_bare_pdf(&root.join("paper.pdf"));
@@ -362,6 +372,8 @@ fn listen_interrupted_exits_130() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg("https://example.com/paper.pdf")
         .arg("-b")
         .arg(&vault)
@@ -390,6 +402,7 @@ fn listen_interrupted_exits_130() {
 fn listen_without_audio_is_an_error() {
     let temp = TempDir::new("bob-cli-highlights-listen-no-audio");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     let root = temp.path().join("curl-root");
     std::fs::create_dir_all(&root).expect("create curl root");
     write_bare_pdf(&root.join("paper.pdf"));
@@ -402,6 +415,8 @@ fn listen_without_audio_is_an_error() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg("https://example.com/paper.pdf")
         .arg("-b")
         .arg(&vault)
@@ -439,6 +454,7 @@ fn listen_without_audio_is_an_error() {
 fn listen_dry_run_prints_would_run_without_invoking() {
     let temp = TempDir::new("bob-cli-highlights-listen-dry-run");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     let root = temp.path().join("curl-root");
     std::fs::create_dir_all(&root).expect("create curl root");
     write_bare_pdf(&root.join("paper.pdf"));
@@ -451,6 +467,8 @@ fn listen_dry_run_prints_would_run_without_invoking() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg("https://example.com/paper.pdf")
         .arg("-b")
         .arg(&vault)
@@ -472,13 +490,14 @@ fn listen_dry_run_prints_would_run_without_invoking() {
         "{report}"
     );
     assert!(!log.exists(), "dry run never invokes the listen command");
-    assert!(!vault.exists(), "dry run writes nothing");
+    assert!(!vault.join("xlib").exists(), "dry run writes nothing");
 }
 
 #[test]
 fn listen_unconfigured_fails_before_fetch() {
     let temp = TempDir::new("bob-cli-highlights-listen-unconfigured");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     let root = temp.path().join("curl-root");
     std::fs::create_dir_all(&root).expect("create curl root");
     write_bare_pdf(&root.join("paper.pdf"));
@@ -488,6 +507,8 @@ fn listen_unconfigured_fails_before_fetch() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg("https://example.com/paper.pdf")
         .arg("-b")
         .arg(&vault)
@@ -517,12 +538,15 @@ fn listen_unconfigured_fails_before_fetch() {
 fn listen_invalid_template_is_an_error() {
     let temp = TempDir::new("bob-cli-highlights-listen-invalid");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     let source = temp.path().join("report.md");
     write_file(&source, "# Report\n");
 
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg(&source)
         .arg("-b")
         .arg(&vault)
@@ -536,7 +560,10 @@ fn listen_invalid_template_is_an_error() {
         "{}",
         format_output(&output)
     );
-    assert!(!vault.exists(), "an invalid template fails pre-render");
+    assert!(
+        !vault.join("xlib").exists(),
+        "an invalid template fails pre-render"
+    );
 }
 
 #[test]
@@ -551,6 +578,8 @@ fn listen_conflicts_with_audio_and_no_audio() {
         let output = bob_command()
             .arg("highlights")
             .arg("create")
+            .arg("-P")
+            .arg("sase")
             .arg(&source)
             .args(&args)
             .output()
@@ -601,6 +630,7 @@ fn listen_for(temp: &TempDir) -> (std::path::PathBuf, std::path::PathBuf) {
 fn listen_attaches_to_ref_note_capture() {
     let temp = TempDir::new("bob-cli-highlights-listen-attach-note");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     let before = write_library_capture(
         &vault,
         "EA-Graph Paper",
@@ -616,6 +646,8 @@ fn listen_attaches_to_ref_note_capture() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg("https://arxiv.org/abs/2608.04278v2")
         .arg("-b")
         .arg(&vault)
@@ -669,6 +701,7 @@ fn listen_attaches_to_ref_note_capture() {
 fn listen_attaches_for_legacy_url_arxiv_note() {
     let temp = TempDir::new("bob-cli-highlights-listen-attach-legacy");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     write_library_capture(
         &vault,
         "EA-Graph Paper",
@@ -681,6 +714,8 @@ fn listen_attaches_for_legacy_url_arxiv_note() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg("https://arxiv.org/abs/2608.04278")
         .arg("-b")
         .arg(&vault)
@@ -709,6 +744,7 @@ fn listen_legacy_only_hit_captures_fresh_instead_of_attaching() {
     // a normal capture plus listen, never attach mode.
     let temp = TempDir::new("bob-cli-highlights-listen-legacy");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     let fake_clip = FakeClip::new(&temp, "fake");
     write_file(
         &vault.join("ref/ai/old.md"),
@@ -722,6 +758,8 @@ fn listen_legacy_only_hit_captures_fresh_instead_of_attaching() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg("https://example.com/index/open-source-codex-orchestration-symphony/")
         .arg("-b")
         .arg(&vault)
@@ -773,6 +811,7 @@ fn listen_attach_refuses_when_audio_exists() {
     // A ref note that already carries an audio field refuses.
     let temp = TempDir::new("bob-cli-highlights-listen-attach-audio-field");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     write_library_capture(
         &vault,
         "EA-Graph Paper",
@@ -785,6 +824,8 @@ fn listen_attach_refuses_when_audio_exists() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg("https://arxiv.org/abs/2608.04278")
         .arg("-b")
         .arg(&vault)
@@ -807,6 +848,7 @@ fn listen_attach_refuses_when_audio_exists() {
     // A companion beside the library PDF refuses too.
     let temp = TempDir::new("bob-cli-highlights-listen-attach-companion");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     write_library_capture(
         &vault,
         "EA-Graph Paper",
@@ -821,6 +863,8 @@ fn listen_attach_refuses_when_audio_exists() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg("https://arxiv.org/abs/2608.04278")
         .arg("-b")
         .arg(&vault)
@@ -842,6 +886,7 @@ fn listen_attach_refuses_when_audio_exists() {
 fn listen_attaches_to_queued_intake_pdf() {
     let temp = TempDir::new("bob-cli-highlights-listen-attach-intake");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     let root = temp.path().join("curl-root");
     std::fs::create_dir_all(&root).expect("create curl root");
     write_bare_pdf(&root.join("paper.pdf"));
@@ -854,6 +899,8 @@ fn listen_attaches_to_queued_intake_pdf() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg("https://example.com/paper.pdf")
         .arg("-b")
         .arg(&vault)
@@ -869,6 +916,8 @@ fn listen_attaches_to_queued_intake_pdf() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg("https://example.com/paper.pdf")
         .arg("-b")
         .arg(&vault)
@@ -895,6 +944,7 @@ fn listen_attaches_to_queued_intake_pdf() {
 fn listen_attaches_when_target_is_the_library_pdf() {
     let temp = TempDir::new("bob-cli-highlights-listen-attach-local");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     let source = temp.path().join("paper.pdf");
     write_bare_pdf(&source);
 
@@ -903,6 +953,8 @@ fn listen_attaches_when_target_is_the_library_pdf() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg(&source)
         .arg("-b")
         .arg(&vault)
@@ -920,6 +972,8 @@ fn listen_attaches_when_target_is_the_library_pdf() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg(&library)
         .arg("-b")
         .arg(&vault)
@@ -952,6 +1006,7 @@ fn listen_attaches_when_target_is_the_library_pdf() {
 fn listen_refusal_without_flag_points_at_listen() {
     let temp = TempDir::new("bob-cli-highlights-listen-hint");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     let root = temp.path().join("curl-root");
     std::fs::create_dir_all(&root).expect("create curl root");
     write_bare_pdf(&root.join("paper.pdf"));
@@ -964,6 +1019,8 @@ fn listen_refusal_without_flag_points_at_listen() {
         command
             .arg("highlights")
             .arg("create")
+            .arg("-P")
+            .arg("sase")
             .arg("https://example.com/paper.pdf")
             .arg("-b")
             .arg(&vault)
@@ -987,6 +1044,7 @@ fn listen_post_listen_collision_keeps_scratch() {
     let temp = TempDir::new("bob-cli-highlights-listen-collision");
     let source = temp.path().join("report.md");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     write_file(&source, "# Report\n");
     write_bare_pdf(&temp.path().join("render-fixture.pdf"));
     let pandoc = write_fake_pandoc(temp.path());
@@ -998,6 +1056,8 @@ fn listen_post_listen_collision_keeps_scratch() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg(&source)
         .arg("-b")
         .arg(&vault)
@@ -1044,6 +1104,7 @@ fn listen_post_listen_collision_keeps_scratch() {
 fn create_listen_captures_and_binds_episode() {
     let temp = TempDir::new("bob-cli-highlights-create-listen");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     let fake = FakeClip::new(&temp, "fake");
     let (listen, log) = listen_for(&temp);
     let fake_curl = write_fake_html_curl(temp.path());
@@ -1053,6 +1114,8 @@ fn create_listen_captures_and_binds_episode() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg("https://example.com/article/hello")
         .arg("-b")
         .arg(&vault)
@@ -1086,6 +1149,7 @@ fn create_listen_captures_and_binds_episode() {
 fn create_article_listen_uses_adapter_render() {
     let temp = TempDir::new("bob-cli-highlights-create-article-listen");
     let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     let fake = FakeClip::new(&temp, "fake");
     let fake_curl = write_fake_html_curl(temp.path());
     let curl_log = temp.path().join("curl.log");
@@ -1095,6 +1159,8 @@ fn create_article_listen_uses_adapter_render() {
     let output = bob_command()
         .arg("highlights")
         .arg("create")
+        .arg("-P")
+        .arg("sase")
         .arg("https://example.com/article/hello")
         .arg("-b")
         .arg(&vault)
