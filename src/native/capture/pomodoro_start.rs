@@ -138,6 +138,7 @@ pub(super) fn plan_pomodoro_start(
                         tasks: None,
                         drop: Vec::new(),
                         dropped: Vec::new(),
+                        r#override: None,
                     },
                     PomodoroBlockBefore::At(index),
                 ));
@@ -175,6 +176,7 @@ pub(super) fn plan_pomodoro_start(
                         tasks: None,
                         drop: Vec::new(),
                         dropped: Vec::new(),
+                        r#override: None,
                     },
                     PomodoroBlockBefore::Created,
                 ));
@@ -227,6 +229,7 @@ pub(super) fn plan_pomodoro_start(
                 tasks: None,
                 drop: Vec::new(),
                 dropped: Vec::new(),
+                r#override: None,
             },
             PomodoroBlockBefore::At(index),
         ));
@@ -254,6 +257,7 @@ pub(super) fn plan_pomodoro_start(
             tasks: None,
             drop: Vec::new(),
             dropped: Vec::new(),
+            r#override: None,
         },
         PomodoroBlockBefore::Created,
     ))
@@ -599,17 +603,42 @@ pub(super) fn plan_pomodoro_start_item(
         .collect::<Vec<_>>();
     if timed_open.len() == 1 {
         let running = timed_open[0];
+        if spec.r#override {
+            return plan_override_restart_item(
+                request,
+                parsed,
+                &spec,
+                running,
+                &start,
+                &end,
+                duration_minutes,
+                &time_range,
+                today,
+                planner,
+                warnings,
+                &day_file,
+            );
+        }
         let range = running.time_range.clone().unwrap_or_default();
         let subject =
             match running.name.as_deref().filter(|name| !name.is_empty()) {
                 Some(name) => format!("{name} {range}"),
                 None => format!("the current session {range}"),
             };
+        let restart_hint = match running
+            .name
+            .as_deref()
+            .filter(|name| !name.is_empty())
+        {
+            Some(name) => format!(", or capture `==<X>` to restart {name} now"),
+            None => ", or capture `==<X>` to restart the current session now"
+                .to_string(),
+        };
         // Echo the full typed token (including any `~<K>` drop list) so
         // the taught switch idiom stays copy-pasteable.
         let token = parsed.body.clone();
         return Err(CaptureError::io(format!(
-            "cannot start the next Pomodoro: {subject} is still running at line {}; close it with `=x` first, or capture `=x`, a blank line, then `{token}` to switch sessions",
+            "cannot start the next Pomodoro: {subject} is still running at line {}; close it with `=x` first, or capture `=x`, a blank line, then `{token}` to switch sessions{restart_hint}",
             running.line,
         )));
     }
@@ -675,6 +704,15 @@ pub(super) fn plan_pomodoro_start_item(
     );
     let mut drop_list = spec.drop.clone();
     drop_list.sort_unstable();
+    // Idle fallback: nothing was running, so the `==` token behaved
+    // exactly like its `=` twin. The day file matches `=` byte for byte;
+    // only `text` and this additive object differ.
+    let idle_override = spec.r#override.then_some(PomodoroStartOverrideJson {
+        action: "start",
+        ledger: "fresh",
+        previous: None,
+        demoted: None,
+    });
     let summary = PomodoroStartSummary {
         start,
         end,
@@ -687,6 +725,7 @@ pub(super) fn plan_pomodoro_start_item(
         tasks: Some(tasks),
         drop: drop_list,
         dropped,
+        r#override: idle_override,
     };
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
@@ -753,6 +792,256 @@ pub(super) fn plan_pomodoro_start_item(
         )],
         task_block_refs: Vec::new(),
     })
+}
+
+/// Restart the running session in place with fresh `se<X>` timing.
+///
+/// Drops apply to R's lineup on the staged pre-image, then R's whole
+/// parenthesized session ledger (the span `=x0` clears) is spliced to the
+/// canonical range, then R moves to the current slot exactly as any start
+/// does. Unlike `=x0`, a restart never closes a note-bearing session.
+#[allow(clippy::too_many_arguments)]
+fn plan_override_restart_item(
+    request: &CaptureRequest,
+    parsed: ParsedCaptureText,
+    spec: &PomodoroStartSpec,
+    running: &capture_pomodoros::PomodoroEntry,
+    start: &str,
+    end: &str,
+    duration_minutes: u64,
+    time_range: &str,
+    today: NaiveDate,
+    planner: &mut CaptureBatchPlanner,
+    warnings: &mut Vec<String>,
+    day_file: &Path,
+) -> Result<PlannedCaptureItem, CaptureError> {
+    let staged = planner.read_existing(day_file)?;
+    let running_line = running.line;
+    let running_index = running_line.checked_sub(1).ok_or_else(|| {
+        CaptureError::io(
+            "Pomodoro capture invariant failed: running entry is out of range",
+        )
+    })?;
+    let running_name = running.name.clone();
+    let running_range = running.time_range.clone().unwrap_or_default();
+    let (prev_start, prev_end) = running_range
+        .split_once('-')
+        .map(|(before, after)| (before.to_string(), after.to_string()))
+        .unwrap_or_default();
+    let previous_duration = previous_range_duration_minutes(&running_range);
+    let previous = PomodoroStartPreviousJson {
+        pomodoro_name: running_name.clone(),
+        pomodoro_line: running_line,
+        start: prev_start,
+        end: prev_end,
+        duration_minutes: previous_duration,
+        time_range: running_range,
+    };
+    let token = parsed.body.clone();
+    let owner = match running_name.as_deref().filter(|name| !name.is_empty()) {
+        Some(name) => capture_pomodoro_start::StartOwner::Named {
+            name: name.to_string(),
+        },
+        None => capture_pomodoro_start::StartOwner::Next,
+    };
+    let drop_plan = capture_pomodoro_start::plan_start_drop(
+        &staged,
+        running_index,
+        &spec.drop,
+        &owner,
+        &token,
+    )
+    .map_err(|error| CaptureError::io(error.to_string()))?;
+    let restarted =
+        splice_session_ledger(&drop_plan.contents, running_index, time_range)?;
+    let (moved_contents, moved_index) =
+        move_started_pomodoro_to_current_slot(&restarted, running_index)?;
+    let task_line = line_spans(&moved_contents)
+        .get(moved_index)
+        .map(|line| line.text.to_string())
+        .ok_or_else(|| {
+            CaptureError::io(
+                "Pomodoro capture invariant failed: restarted entry is out of range",
+            )
+        })?;
+    planner.stage(day_file, moved_contents)?;
+    warnings.extend(drop_plan.warnings);
+    let relative_target = day_file
+        .strip_prefix(&request.bob_dir)
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|_| day_file.to_path_buf());
+    let staged_day = planner.read_existing(day_file)?;
+    let vault = SnapshotCloseVault::from_planner(planner, &request.bob_dir);
+    let (tasks, dropped) = plan_start_rows_json(
+        &vault,
+        day_file,
+        &staged_day,
+        moved_index,
+        &drop_plan.kept,
+        &drop_plan.dropped,
+    );
+    let mut drop_list = spec.drop.clone();
+    drop_list.sort_unstable();
+    let summary = PomodoroStartSummary {
+        start: start.to_string(),
+        end: end.to_string(),
+        duration_minutes,
+        offset_units: spec.offset_units,
+        pomodoro_name: running_name.clone(),
+        pomodoro_line: moved_index + 1,
+        created_pomodoro: false,
+        time_range: time_range.to_string(),
+        tasks: Some(tasks),
+        drop: drop_list,
+        dropped,
+        r#override: Some(PomodoroStartOverrideJson {
+            action: "restart",
+            ledger: "fresh",
+            previous: Some(previous),
+            demoted: None,
+        }),
+    };
+    Ok(PlannedCaptureItem {
+        result: CaptureItemResult {
+            ok: true,
+            dry_run: request.dry_run,
+            routed: false,
+            route: None,
+            route_label: String::new(),
+            relative_target: relative_target.to_string_lossy().into_owned(),
+            target: day_file.display().to_string(),
+            text: parsed.body.clone(),
+            task_line,
+            kind: capture_kind_label(&parsed.kind),
+            created: date_string(today),
+            scheduled: None,
+            priority: None,
+            priority_label: None,
+            placement: Placement::Started,
+            sub_bullets: Vec::new(),
+            clip: None,
+            schedule_log: None,
+            block_id: None,
+            day_file: None,
+            block_link: None,
+            pomodoro_link_placement: None,
+            parent_line: None,
+            parent_text: None,
+            parent_section: None,
+            parent_status_symbol: None,
+            parent_status_name: None,
+            toggle_direction: None,
+            previous_task_line: None,
+            status_symbol: None,
+            status_name: None,
+            previous_status_symbol: None,
+            previous_status_name: None,
+            pomodoro_name: running_name,
+            creates_pomodoro: None,
+            pomodoro_already_linked: None,
+            removed_pomodoro_links: None,
+            removed_scheduled: None,
+            pomodoro_selector_unused: None,
+            toggle_behavior: None,
+            status_changed: None,
+            pomodoro_link_action: None,
+            pomodoro_link_source: None,
+            pomodoro_link_destination: None,
+            project_note: None,
+            pomodoro_start: Some(summary),
+            pomodoro_adjust: None,
+            pomodoro_shift: None,
+            pomodoro_close: None,
+            pomodoro_reset: None,
+            dependency_update: None,
+            task_complete: None,
+            toggle_task_description: None,
+            r#ref: None,
+        },
+        clip_plan: None,
+        pomodoro_refs: vec![PomodoroBlockRef::at(
+            PomodoroBlockRole::Started,
+            running_index,
+            moved_index,
+        )],
+        task_block_refs: Vec::new(),
+    })
+}
+
+/// Duration of a plain `HHMM-HHMM` range in minutes, wrapping past
+/// midnight. Falls back to 25 when the range does not parse.
+fn previous_range_duration_minutes(range: &str) -> u64 {
+    let Some((before, after)) = range.split_once('-') else {
+        return 25;
+    };
+    let parse_hhmm = |text: &str| -> Option<u64> {
+        let text = text.trim();
+        if text.len() == 4 && text.bytes().all(|byte| byte.is_ascii_digit()) {
+            let hour = text[..2].parse::<u64>().ok()?;
+            let minute = text[2..].parse::<u64>().ok()?;
+            (hour <= 23 && minute <= 59).then_some(hour * 60 + minute)
+        } else if text.len() == 5 && text.as_bytes()[2] == b':' {
+            let hour = text[..2].parse::<u64>().ok()?;
+            let minute = text[3..].parse::<u64>().ok()?;
+            (hour <= 23 && minute <= 59).then_some(hour * 60 + minute)
+        } else {
+            None
+        }
+    };
+    let (Some(start_minutes), Some(end_minutes)) =
+        (parse_hhmm(before), parse_hhmm(after))
+    else {
+        return 25;
+    };
+    end_minutes.wrapping_sub(start_minutes).wrapping_add(1440) % 1440
+}
+
+/// Replace the running entry's whole parenthesized session ledger with
+/// the canonical range, splicing bytes so CRLF and a missing final
+/// newline survive. Uses the adjustment span first (canonical and legacy
+/// range spellings with any `[t:: ...]` or range-local metadata), then
+/// the ledger's parenthetical time-range discovery.
+fn splice_session_ledger(
+    contents: &str,
+    entry_index: usize,
+    time_range: &str,
+) -> Result<String, CaptureError> {
+    let spans = line_spans(contents);
+    let line = spans.get(entry_index).ok_or_else(|| {
+        CaptureError::io(
+            "Pomodoro capture invariant failed: running entry is out of range",
+        )
+    })?;
+    let segment_start = if entry_index == 0 {
+        0
+    } else {
+        spans[entry_index - 1].end
+    };
+    if let Some(range) = parse_adjustment_range(line.text) {
+        let mut updated =
+            String::with_capacity(contents.len() + time_range.len());
+        updated.push_str(&contents[..segment_start + range.start_ch]);
+        updated.push_str(time_range);
+        updated.push_str(&contents[segment_start + range.end_ch..]);
+        return Ok(updated);
+    }
+    if let Some((raw_range, _, _)) = pomodoro::task_time_range(line.text) {
+        let relative = line.text.find(raw_range).ok_or_else(|| {
+            CaptureError::io(
+                "running Pomodoro timing could not be safely identified",
+            )
+        })?;
+        let mut updated =
+            String::with_capacity(contents.len() + time_range.len());
+        updated.push_str(&contents[..segment_start + relative]);
+        updated.push_str(time_range);
+        updated
+            .push_str(&contents[segment_start + relative + raw_range.len()..]);
+        return Ok(updated);
+    }
+    Err(CaptureError::io(
+        "running Pomodoro timing could not be safely identified",
+    ))
 }
 
 /// One lineup row as JSON, with the close's explicit-null convention:
@@ -1103,6 +1392,12 @@ fn plan_named_pomodoro_start_item(
         })?;
     let mut drop_list = spec.drop.clone();
     drop_list.sort_unstable();
+    let idle_override = spec.r#override.then_some(PomodoroStartOverrideJson {
+        action: "start",
+        ledger: "fresh",
+        previous: None,
+        demoted: None,
+    });
     let summary = PomodoroStartSummary {
         start: start.to_string(),
         end: end.to_string(),
@@ -1115,6 +1410,7 @@ fn plan_named_pomodoro_start_item(
         tasks: Some(tasks),
         drop: drop_list,
         dropped,
+        r#override: idle_override,
     };
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {

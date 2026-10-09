@@ -323,6 +323,48 @@ pub(super) struct PomodoroStartSummary {
     /// `tasks`, so an older client's "N queued tasks" stays truthful.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(super) dropped: Vec<PomodoroStartTaskJson>,
+    /// Override outcome, present exactly when the token used the doubled
+    /// `==` sigil. Plain `=` starts never carry it, so their output stays
+    /// byte-identical.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) r#override: Option<PomodoroStartOverrideJson>,
+}
+
+/// Override outcome for a `==` token: how the running session was
+/// overridden, or that nothing was running and the token behaved like its
+/// `=` twin. `demoted` is swaps only; restarts and idle starts omit it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct PomodoroStartOverrideJson {
+    pub(super) action: &'static str,
+    pub(super) ledger: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) previous: Option<PomodoroStartPreviousJson>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) demoted: Option<PomodoroStartDemotedJson>,
+}
+
+/// The running session in the pre-image: name (omitted when unnamed),
+/// 1-based line, and its `HHMM` range plus duration.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct PomodoroStartPreviousJson {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) pomodoro_name: Option<String>,
+    pub(super) pomodoro_line: usize,
+    pub(super) start: String,
+    pub(super) end: String,
+    pub(super) duration_minutes: u64,
+    pub(super) time_range: String,
+}
+
+/// The swapped-out session in the post-image: swaps only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct PomodoroStartDemotedJson {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) pomodoro_name: Option<String>,
+    pub(super) pomodoro_line: usize,
+    pub(super) entry_line: String,
+    pub(super) task_links: usize,
+    pub(super) has_notes: bool,
 }
 
 /// One queued Task Link row on a started Pomodoro, following the close

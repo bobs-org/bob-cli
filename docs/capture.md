@@ -1380,11 +1380,12 @@ Pomodoro sessions form a lifecycle, taught in this order:
 | --- | --- | --- | --- |
 | `=` / `=<X>` | start | Start the next future Pomodoro now, timed like `se<X>` | `se<X>` + Tab inside `()` |
 | `=<X>#<pomodoro>` | start named | Start that named Pomodoro now, timed like `se<X>` (open match in place, completed match again, else created) | `se<X>` + Tab inside `() — NAME` |
+| `==` / `==<X>` | restart | Restart the running session now with fresh `se<X>` timing (`==` is 25 minutes) | `se<X>` + Tab on the running line |
 | `+[N]` / `-[N]` | resize | Move the running session's end N × 5 min later / earlier | `N\p` / `N\P` |
 | `++[N]` / `--[N]` | shift | Move the running session's start and end N × 5 min later / earlier | `N\o` / `N\O` |
 | `=x` | close | Close the running session | Ctrl+Enter |
 
-Mnemonic: "`=` starts the next session, `=#name` starts that one, `=x` stops the running one."
+Mnemonic: "`=` starts the next session, `=#name` starts that one, `==` restarts the running one, `=x` stops the running one."
 
 Recognition: let `t` be the item's first physical line trimmed of leading
 and trailing whitespace (the token after a chain split; see
@@ -1597,6 +1598,108 @@ empty. A `@@` declaration never applies to named starts, and forced
 `--section` / `--task` / `--task-ref` / `--task-section` / `--clip` fail on
 them with the existing start error. Quote named starts in zsh like every
 other `=` item: `bob capture '=#deep-work'`.
+
+### Restarting or swapping the running Pomodoro
+
+Capture a whole item `==<X>` to restart today's running session now with
+fresh `se<X>` timing:
+
+```bash
+bob capture '=='
+bob capture '==3'
+bob capture '==-2'
+bob capture '==~2'
+```
+
+Mental model: `=` starts a session; `==` overrides the running one. A
+restart keeps which session is running and re-times it: an empty suffix
+means the default 25 minutes (exactly what `=` would write), `==3` is 15
+minutes, and `==-2` is 25 minutes with a 10-minute offset. The `se<X>`
+grammar and timing match `=<X>` exactly. A trailing `~<K>` drops queued
+Task Links from the restarted session, numbered exactly as the `=` start
+lineup numbers them. Quote `==` items in zsh like every other `=` item.
+
+Guards run in order on the staged daily note: a missing day file, a
+missing `## Pomodoros` section, more than one open timed entry, then no
+open timed entry (the idle fallback below) or exactly one open timed
+entry (the restart). A named override with a running session keeps
+today's refusal until swaps land; only the unnamed restart runs here.
+
+A restart applies `~<K>` to the running session's lineup (pre-image
+numbering), replaces the whole parenthesized session ledger (the span
+`=x0` clears, including `[t:: …]` and range-local annotations) with the
+canonical `(**HHMM-HHMM** [t:: Nm])` range, then moves the session to the
+current slot exactly as any start does (normally a no-op). On a note-free
+ledger, `==<X>` leaves the day file byte-identical to `=x0 =<X>`; unlike
+`=x0`, a restart never closes a note-bearing session. CRLF and a missing
+final newline are preserved, no task lane changes (no status, Work Log,
+or task-note writes), `plan.strict` never refuses a restart, later batch
+items and chain tokens see the staged result, and any failure rolls the
+whole batch back. Dry-run computes the same result without writing.
+
+When nothing is running, every `==` token acts exactly like its `=` twin
+instead of refusing: `==<X>` starts the next session and `==<X>#name`
+starts that named session, including their errors (for example "no future
+Pomodoro"). The day file matches `=` byte for byte; only `text` and the
+additive `override` object differ, and human output adds a dim
+`nothing was running, so == started it like =` line.
+
+Worked example (`BOB_NOW=2026-10-09 09:32:00`, TAB indentation):
+
+```markdown
+## Pomodoros
+
+- [x] (**0830-0855** [t:: 25m]) — PLAN
+  - 🍅 [[bob#^capture-stop]]
+- [ ] (**0920-0945** [t:: 25m]) — CAPTURE
+  - [[bob#^capture-stop]]
+  - [[bob#^web-capture]]
+- [ ] () — SASE
+- [ ] () — BUGS
+  - [[sase#^fix-flaky]]
+```
+
+| Item | Result |
+| --- | --- |
+| `==` | CAPTURE becomes `(**0935-1000** [t:: 25m])` in place |
+| `==3` | CAPTURE becomes `(**0935-0950** [t:: 15m])` in place |
+| `==-2` | CAPTURE becomes `(**0925-0950** [t:: 25m])` in place |
+| `==~2` | CAPTURE restarts at `0935-1000` without `[[bob#^web-capture]]` |
+
+JSON kind stays `pomodoro_start` with `placement: "started"`, `text` the
+raw token, and `task_line` the session now running. The existing
+`pomodoro_start` fields describe that session. A new `pomodoro_start.override`
+object is present exactly when the token was `==` (plain `=` never carries
+it):
+
+```json
+"override": {
+  "action": "restart",
+  "ledger": "fresh",
+  "previous": {"pomodoro_name": "CAPTURE", "pomodoro_line": 5, "start": "0920",
+               "end": "0945", "duration_minutes": 25, "time_range": "0920-0945"}
+}
+```
+
+`action` is `"restart"` here (`"swap"` and its `demoted` object land with
+swaps; `"start"` is the idle fallback with `previous` and `demoted`
+omitted). `ledger` is `"fresh"` for every restart. `previous` is the
+running session in the pre-image (`pomodoro_name` omitted when unnamed;
+`start`/`end` match `pomodoro_start.start` format). The running session is
+also reported once in the batch-level `pomodoro_blocks` array with role
+`started`; see [Pomodoro blocks](#pomodoro-blocks).
+
+Human output prints `restarted` (dry-run: `would restart`), the
+before → after range line, the canonical ledger line, one numbered row per
+queued task, and `nothing queued` when empty:
+
+```text
+✓ restarted  2026/20261009.md
+  CAPTURE 0920-0945 → 0935-0950 (15m) at line 5
+  - [ ] (**0935-0950** [t:: 15m]) — CAPTURE
+  1 [*] Add support for `=x` syntax! bob.md ^capture-stop
+  2 [*] Add capture support for web URLs! bob.md ^web-capture
+```
 
 ### Adjusting the current Pomodoro
 

@@ -640,6 +640,7 @@ pub(super) fn plan_pomodoro_link_with_start(
                         tasks: None,
                         drop: Vec::new(),
                         dropped: Vec::new(),
+                        r#override: None,
                     };
                     return Ok(CaptureWritePlan {
                         placement: Placement::Linked,
@@ -764,6 +765,7 @@ pub(super) fn plan_pomodoro_link_with_start(
                     tasks: None,
                     drop: Vec::new(),
                     dropped: Vec::new(),
+                    r#override: None,
                 };
                 return Ok(CaptureWritePlan {
                     placement: Placement::Linked,
@@ -900,6 +902,7 @@ pub(super) fn plan_pomodoro_link_with_start(
                     tasks: None,
                     drop: Vec::new(),
                     dropped: Vec::new(),
+                    r#override: None,
                 };
                 return Ok(CaptureWritePlan {
                     placement: Placement::Linked,
@@ -991,6 +994,7 @@ pub(super) fn plan_pomodoro_link_with_start(
         tasks: None,
         drop: Vec::new(),
         dropped: Vec::new(),
+        r#override: None,
     };
     let _ = (q_line_index, q_subtree_end);
     // The queued entry started in place and already holds the link: the

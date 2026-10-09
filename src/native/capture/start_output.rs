@@ -10,7 +10,21 @@ pub(super) fn print_human_pomodoro_start_success(
     ordinal: &str,
     target_label: &str,
 ) {
-    let verb = if result.dry_run {
+    let is_restart = matches!(
+        start.r#override.as_ref().map(|item| item.action),
+        Some("restart")
+    );
+    let is_idle_start = matches!(
+        start.r#override.as_ref().map(|item| item.action),
+        Some("start")
+    );
+    let verb = if is_restart {
+        if result.dry_run {
+            "would restart"
+        } else {
+            "restarted"
+        }
+    } else if result.dry_run {
         "would start"
     } else {
         "started"
@@ -26,18 +40,43 @@ pub(super) fn print_human_pomodoro_start_success(
     } else {
         ""
     };
-    println!(
-        "  {}",
-        styler.dim(&format!(
-            "{} {}-{} ({}m){created} at line {}",
-            name,
-            start.start,
-            start.end,
-            start.duration_minutes,
-            start.pomodoro_line,
-        ))
-    );
+    if is_restart {
+        let before = start
+            .r#override
+            .as_ref()
+            .and_then(|item| item.previous.as_ref())
+            .map(|previous| previous.time_range.clone())
+            .unwrap_or_default();
+        println!(
+            "  {}",
+            styler.dim(&format!(
+                "{name} {before} → {}-{} ({}m) at line {}",
+                start.start,
+                start.end,
+                start.duration_minutes,
+                start.pomodoro_line,
+            ))
+        );
+    } else {
+        println!(
+            "  {}",
+            styler.dim(&format!(
+                "{} {}-{} ({}m){created} at line {}",
+                name,
+                start.start,
+                start.end,
+                start.duration_minutes,
+                start.pomodoro_line,
+            ))
+        );
+    }
     println!("  {}", styler.dim(&result.task_line));
+    if is_idle_start {
+        println!(
+            "  {}",
+            styler.dim("nothing was running, so == started it like =")
+        );
+    }
     // Queued-task lineup in the close's row style, with the unchanged
     // status marker instead of a transition. Link and task starts carry no
     // rows and print nothing here.
