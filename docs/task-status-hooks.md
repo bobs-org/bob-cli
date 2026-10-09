@@ -432,6 +432,11 @@ future schedule that caused the Blocked marker, which is what keeps this
 command from immediately re-deriving `[?]` on its next run. A remaining open
 dependency, or a project-level `scheduled` frontmatter date that
 `bob projects sync` re-propagates, still re-blocks the task on the next run.
+Cycling any task into Done through the same keys runs the same immediate
+recover-and-link pass as Ctrl+Enter above (linking what the close unblocked);
+cycling into Cancelled runs recovery only and never links. Reopening the
+predecessor the same day through Ctrl+Enter takes back untouched successor
+links from that pass and restores their statuses.
 
 The installed Tasks registry must contain exactly one compatible status:
 
