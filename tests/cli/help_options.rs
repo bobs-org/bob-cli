@@ -441,7 +441,13 @@ fn capture_pomodoros_help_lists_options_alphabetically() {
     );
     assert_text_order(
         &help,
-        &["-a, --all", "-b, --bob-dir", "-f, --format", "-h, --help"],
+        &[
+            "-a, --all",
+            "-b, --bob-dir",
+            "-f, --format",
+            "-h, --help",
+            "-t, --tasks",
+        ],
     );
     assert_stdout_has_no_ansi(&output);
 }

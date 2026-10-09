@@ -638,12 +638,25 @@ pub(crate) fn number_task_links(
     }
     let range = sub_bullet_range(&line_text, entry_index);
     let fenced = markdown::fenced_lines(&line_text, 0..line_text.len());
+    number_task_links_in_range(&line_text, &fenced, range)
+}
+
+/// Numbered Task Link walk over one entry's sub-bullet range. The close
+/// lineup and the agenda payload share this walk so both number exactly
+/// the same ledger lines.
+pub(crate) fn number_task_links_in_range(
+    line_text: &[&str],
+    fenced: &BTreeSet<usize>,
+    range: std::ops::Range<usize>,
+) -> Vec<NumberedTaskLink> {
     let mut links = Vec::new();
     for index in range {
+        let Some(line) = line_text.get(index) else {
+            continue;
+        };
         if fenced.contains(&index) {
             continue;
         }
-        let line = line_text[index];
         let stripped = strip_pomodoro_markers(line);
         let Some(candidate) = classify_numbered_line(&stripped) else {
             continue;

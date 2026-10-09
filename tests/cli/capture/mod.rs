@@ -35,6 +35,7 @@ mod pomodoro_start;
 mod pomodoro_start_drop;
 mod pomodoro_start_named;
 mod pomodoro_whole_item;
+mod pomodoros_agenda;
 mod priority;
 mod project_note;
 mod r#ref;

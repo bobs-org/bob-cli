@@ -64,7 +64,7 @@ pub(super) fn line_maps(
 /// non-list continuation line gets its parent list item's depth + 1, and
 /// a blank line is 0. Mixed tabs and spaces work because parents come
 /// from [`nearest_shallower_list_item_parent`].
-pub(super) fn block_depths(
+pub(crate) fn block_depths(
     lines: &[&str],
     headline: usize,
     range: std::ops::Range<usize>,

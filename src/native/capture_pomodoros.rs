@@ -19,8 +19,8 @@ use super::{
         leading_spaces_or_tabs_len, line_spans, list_item_body,
         nearest_shallower_list_item_parent, LineSpan,
     },
-    capture_language, capture_pomodoro_close, capture_task_sections,
-    env as bob_env, markdown, note_tasks, pomodoro,
+    capture_language, capture_pomodoro_close, capture_pomodoros_agenda,
+    capture_task_sections, env as bob_env, markdown, note_tasks, pomodoro,
     style::{display_width, pad_right, Styler},
 };
 
@@ -73,16 +73,22 @@ The command is read-only and reports Pomodoros in document order with stable \
 refs, names, selector slugs, time ranges, current-session status, child \
 link counts, and the current entry's numbered Task Link count for picker callers. Open entries are listed by default; use \
 --all to include completed entries. A missing daily note or missing \
-Pomodoros section returns a successful empty list with a warning.",
+Pomodoros section returns a successful empty list with a warning.\n\n\
+With --tasks, each listed entry also carries its agenda payload: the entry \
+role, naive start/end datetimes, the retired-link count, session notes, and \
+the resolved Task Link lineup with operator numbers, clean titles, statuses, \
+task-block lines, and ledger notes. The same vault bytes always produce the \
+same output bytes.",
         )
         .after_help(
-            "Examples:\n  bob capture-pomodoros --format json\n  bob capture-pomodoros\n  bob capture-pomodoros --all\n  bob capture-pomodoros -f json\n  bob capture-pomodoros -b ~/bob -a -f json\n\nEnvironment:\n  BOB_DAY_FILE              Daily note override; otherwise <bob-dir>/YYYY/YYYYMMDD.md\n  BOB_DIR                   Bob vault root when --bob-dir is omitted\n  BOB_NOW                   Local datetime override for default daily-note selection",
+            "Examples:\n  bob capture-pomodoros --format json\n  bob capture-pomodoros\n  bob capture-pomodoros --all\n  bob capture-pomodoros -f json\n  bob capture-pomodoros -b ~/bob -a -f json\n  bob capture-pomodoros -t -f json\n\nEnvironment:\n  BOB_DAY_FILE              Daily note override; otherwise <bob-dir>/YYYY/YYYYMMDD.md\n  BOB_DIR                   Bob vault root when --bob-dir is omitted\n  BOB_NOW                   Local datetime override for default daily-note selection",
         )
         .disable_help_flag(true)
         .arg(all_arg())
         .arg(bob_dir_arg())
         .arg(format_arg())
         .arg(help_arg())
+        .arg(tasks_arg())
 }
 
 fn all_arg() -> Arg {
@@ -120,6 +126,17 @@ fn help_arg() -> Arg {
         .help("Show help")
 }
 
+fn tasks_arg() -> Arg {
+    Arg::new("tasks")
+        .long("tasks")
+        .short('t')
+        .action(ArgAction::SetTrue)
+        .help(
+            "Resolve each open entry's Task Links into tasks for agenda \
+views (roles, operator numbers, task blocks)",
+        )
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OutputFormat {
     Human,
@@ -143,6 +160,7 @@ impl OutputFormat {
 struct CapturePomodorosRequest {
     bob_dir: PathBuf,
     include_all: bool,
+    include_tasks: bool,
 }
 
 impl CapturePomodorosRequest {
@@ -150,6 +168,7 @@ impl CapturePomodorosRequest {
         Self {
             bob_dir: bob_dir_from_matches(matches),
             include_all: matches.get_flag("all"),
+            include_tasks: matches.get_flag("tasks"),
         }
     }
 }
@@ -171,6 +190,10 @@ struct CapturePomodorosResult {
     count: usize,
     pomodoros: Vec<CapturePomodorosOutputEntry>,
     warnings: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    date: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    completed_summary: Option<capture_pomodoros_agenda::CompletedSummary>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -178,6 +201,18 @@ struct CapturePomodorosOutputEntry {
     #[serde(flatten)]
     entry: PomodoroEntry,
     task_link_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    role: Option<capture_pomodoros_agenda::AgendaRole>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    starts_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ends_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    retired_link_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    notes: Option<Vec<capture_pomodoros_agenda::AgendaLine>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    items: Option<Vec<capture_pomodoros_agenda::AgendaItem>>,
 }
 
 fn list_capture_pomodoros(
@@ -186,6 +221,15 @@ fn list_capture_pomodoros(
     let day_file = pomodoro::day_file_for(&request.bob_dir);
     let relative_day_file = relative_day_file(&day_file, &request.bob_dir);
     let mut warnings = Vec::new();
+    let agenda_date = capture_pomodoros_agenda::agenda_date(&day_file);
+    let empty_summary = || {
+        request.include_tasks.then_some(
+            capture_pomodoros_agenda::CompletedSummary {
+                count: 0,
+                minutes: 0,
+            },
+        )
+    };
     let contents = match fs::read_to_string(&day_file) {
         Ok(contents) => contents,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
@@ -201,6 +245,8 @@ fn list_capture_pomodoros(
                 count: 0,
                 pomodoros: Vec::new(),
                 warnings,
+                date: request.include_tasks.then(|| agenda_date.to_string()),
+                completed_summary: empty_summary(),
             });
         }
         Err(error) => {
@@ -220,24 +266,56 @@ fn list_capture_pomodoros(
     }
     warnings.extend(scan.warnings.iter().cloned());
     let current_count = current_task_link_count(&contents, &scan.entries);
-    let pomodoros = scan
+    let listed: Vec<PomodoroEntry> = scan
         .entries
-        .into_iter()
+        .iter()
         .filter(|entry| {
             request.include_all || entry.state == PomodoroState::Open
         })
-        .map(|entry| {
-            let task_link_count = if entry.is_current {
-                current_count
-            } else {
-                None
-            };
-            CapturePomodorosOutputEntry {
-                entry,
-                task_link_count,
-            }
-        })
-        .collect::<Vec<_>>();
+        .cloned()
+        .collect();
+    let agenda = if request.include_tasks {
+        let next_line = next_future_pomodoro(&scan).map(|entry| entry.line);
+        let mut notes = capture_pomodoros_agenda::AgendaNotes::new(
+            &request.bob_dir,
+            &day_file,
+            &contents,
+        );
+        Some(capture_pomodoros_agenda::agenda_entries(
+            &mut notes,
+            &contents,
+            &listed,
+            next_line,
+            agenda_date,
+            &day_file,
+        ))
+    } else {
+        None
+    };
+    let completed_summary = request
+        .include_tasks
+        .then(|| completed_summary_for(&scan.entries));
+    let mut pomodoros = Vec::with_capacity(listed.len());
+    for (position, entry) in listed.into_iter().enumerate() {
+        let task_link_count = if entry.is_current {
+            current_count
+        } else {
+            None
+        };
+        let agenda_entry =
+            agenda.as_ref().and_then(|entries| entries.get(position));
+        pomodoros.push(CapturePomodorosOutputEntry {
+            entry,
+            task_link_count,
+            role: agenda_entry.map(|agenda| agenda.role),
+            starts_at: agenda_entry.and_then(|agenda| agenda.starts_at.clone()),
+            ends_at: agenda_entry.and_then(|agenda| agenda.ends_at.clone()),
+            retired_link_count: agenda_entry
+                .map(|agenda| agenda.retired_link_count),
+            notes: agenda_entry.map(|agenda| agenda.notes.clone()),
+            items: agenda_entry.map(|agenda| agenda.items.clone()),
+        });
+    }
 
     Ok(CapturePomodorosResult {
         ok: true,
@@ -247,7 +325,29 @@ fn list_capture_pomodoros(
         count: pomodoros.len(),
         pomodoros,
         warnings,
+        date: request.include_tasks.then(|| agenda_date.to_string()),
+        completed_summary,
     })
+}
+
+fn completed_summary_for(
+    entries: &[PomodoroEntry],
+) -> capture_pomodoros_agenda::CompletedSummary {
+    let mut count = 0;
+    let mut minutes = 0;
+    for entry in entries {
+        if entry.state != PomodoroState::Completed {
+            continue;
+        }
+        count += 1;
+        if let Some(range) = entry.time_range.as_deref()
+            && let Some(duration) =
+                capture_pomodoros_agenda::range_minutes(range)
+        {
+            minutes += duration;
+        }
+    }
+    capture_pomodoros_agenda::CompletedSummary { count, minutes }
 }
 
 fn current_task_link_count(
@@ -271,7 +371,7 @@ pub(crate) fn relative_day_file(day_file: &Path, bob_dir: &Path) -> String {
         .to_string()
 }
 
-fn bounded_warning(message: String) -> String {
+pub(crate) fn bounded_warning(message: String) -> String {
     const LIMIT: usize = 300;
     if message.chars().count() <= LIMIT {
         return message;
@@ -753,11 +853,26 @@ fn print_human_success(result: &CapturePomodorosResult) {
 }
 
 fn human_success(result: &CapturePomodorosResult, styler: &Styler) -> String {
-    let mut output = format!(
-        "Capture Pomodoros {} {}\n\n",
+    let mut header = format!(
+        "Capture Pomodoros {} {}",
         styler.separator(),
         styler.cyan(&result.relative_day_file)
     );
+    if let (Some(date), Some(summary)) =
+        (result.date.as_deref(), result.completed_summary.as_ref())
+    {
+        header.push_str(&format!(
+            " {} {} {}",
+            styler.separator(),
+            agenda_day_label(date),
+            styler.dim(&format!(
+                "{} done ({})",
+                summary.count,
+                agenda_minutes_label(summary.minutes)
+            )),
+        ));
+    }
+    let mut output = format!("{header}\n\n");
 
     for warning in &result.warnings {
         output.push_str(&format!(
@@ -773,6 +888,10 @@ fn human_success(result: &CapturePomodorosResult, styler: &Styler) -> String {
 
     if result.pomodoros.is_empty() {
         output.push_str("  No Pomodoros found.\n");
+    } else if result.date.is_some() {
+        for item in &result.pomodoros {
+            output.push_str(&human_agenda_entry(item, styler));
+        }
     } else {
         let name_width = result
             .pomodoros
@@ -817,6 +936,197 @@ fn human_success(result: &CapturePomodorosResult, styler: &Styler) -> String {
         plural(result.count, "Pomodoro", "Pomodoros")
     ));
     output
+}
+
+fn agenda_day_label(date: &str) -> String {
+    match chrono::NaiveDate::parse_from_str(date, "%F") {
+        Ok(day) => day.format("%a %F").to_string(),
+        Err(_) => date.to_string(),
+    }
+}
+
+fn agenda_minutes_label(minutes: u64) -> String {
+    if minutes >= 60 {
+        format!("{}h {}m", minutes / 60, minutes % 60)
+    } else {
+        format!("{minutes}m")
+    }
+}
+
+/// `HHMM-HHMM` ledger range for human eyes.
+fn agenda_time_label(time_range: Option<&str>) -> String {
+    let Some(range) = time_range else {
+        return "planned".to_string();
+    };
+    let Some((start, end)) = range.split_once('-') else {
+        return range.to_string();
+    };
+    if start.len() == 4
+        && end.len() == 4
+        && start.bytes().all(|byte| byte.is_ascii_digit())
+        && end.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        format!(
+            "{}:{}-{}:{}",
+            &start[..2],
+            &start[2..],
+            &end[..2],
+            &end[2..]
+        )
+    } else {
+        range.to_string()
+    }
+}
+
+fn human_agenda_entry(
+    item: &CapturePomodorosOutputEntry,
+    styler: &Styler,
+) -> String {
+    use capture_pomodoros_agenda::AgendaRole;
+    let entry = &item.entry;
+    let name = entry.name.as_deref().unwrap_or("unnamed");
+    let time = agenda_time_label(entry.time_range.as_deref());
+    let mut output = match item.role {
+        Some(AgendaRole::Current) => format!(
+            "  {} {name} {time} {}\n",
+            styler.green("▶"),
+            styler.dim("now"),
+        ),
+        Some(AgendaRole::Next) => format!(
+            "  {} {name} {} {}\n",
+            styler.cyan("◌"),
+            styler.dim("next"),
+            styler.dim("= starts it"),
+        ),
+        Some(AgendaRole::Later) => {
+            let trail = if entry.selectable && !entry.slug.is_empty() {
+                format!(" {}", styler.dim(&format!("=#{}", entry.slug)))
+            } else {
+                String::new()
+            };
+            format!(
+                "  {} {name} {}{trail}\n",
+                styler.dim("◌"),
+                styler.dim("later"),
+            )
+        }
+        Some(AgendaRole::Open) => format!(
+            "  {} {name} {time} {}\n",
+            styler.yellow("◆"),
+            styler.dim("open"),
+        ),
+        Some(AgendaRole::Completed) | None => {
+            format!("  {} {time}\n", styler.dim(name),)
+        }
+    };
+    if let Some(notes) = item.notes.as_deref() {
+        for note in notes {
+            output.push_str(&format!(
+                "    {} {}\n",
+                styler.dim("·"),
+                styler.dim(&note.text)
+            ));
+        }
+    }
+    if let Some(items) = item.items.as_deref() {
+        let width = items
+            .iter()
+            .filter_map(|item| item.index)
+            .map(|index| index.to_string().len())
+            .max()
+            .unwrap_or(1)
+            .max(1);
+        for agenda_item in items {
+            if agenda_item.resolution
+                != capture_pomodoros_agenda::AgendaResolution::Resolved
+            {
+                output.push_str(&format!(
+                    "    {} {} {}\n",
+                    styler.yellow("!"),
+                    agenda_item.block_link,
+                    styler.dim(
+                        agenda_item.warning.as_deref().unwrap_or("unresolved")
+                    ),
+                ));
+            } else {
+                let number = agenda_item
+                    .index
+                    .map(|index| {
+                        let text = index.to_string();
+                        format!("{}{text}", " ".repeat(width - text.len()))
+                    })
+                    .unwrap_or_else(|| " ".repeat(width));
+                let symbol = agenda_item
+                    .status_symbol
+                    .map(|symbol| symbol.to_string())
+                    .unwrap_or_else(|| " ".to_string());
+                let target = match (
+                    agenda_item.relative_target.as_deref(),
+                    agenda_item.line,
+                ) {
+                    (Some(target), Some(line)) => {
+                        format!(" {}", styler.dim(&format!("{target}:{line}")))
+                    }
+                    (Some(target), None) => {
+                        format!(" {}", styler.dim(target))
+                    }
+                    (None, _) => String::new(),
+                };
+                let summary = agenda_item_summary(agenda_item);
+                let summary = if summary.is_empty() {
+                    String::new()
+                } else {
+                    format!("  {}", styler.dim(&summary))
+                };
+                output.push_str(&format!(
+                    "    {number} [{symbol}] {}{target}{summary}\n",
+                    agenda_item.text.as_deref().unwrap_or(""),
+                ));
+            }
+            for note in agenda_item.ledger_notes.iter() {
+                output.push_str(&format!(
+                    "      {} {}\n",
+                    styler.dim("·"),
+                    styler.dim(&note.text)
+                ));
+            }
+        }
+    }
+    if item.retired_link_count.unwrap_or(0) > 0 {
+        output.push_str(&format!(
+            "    {}\n",
+            styler.dim(&format!(
+                "✓ {} done",
+                item.retired_link_count.unwrap_or(0)
+            ))
+        ));
+    }
+    output
+}
+
+fn agenda_item_summary(item: &capture_pomodoros_agenda::AgendaItem) -> String {
+    use capture_pomodoros_agenda::AgendaLog;
+    let mut parts = Vec::new();
+    if !item.lines.is_empty() {
+        parts.push(format!("+{} lines", item.lines.len()));
+    }
+    let work = item
+        .lines
+        .iter()
+        .filter(|line| line.log == Some(AgendaLog::Work))
+        .count();
+    if work > 0 {
+        parts.push(format!("work log {work}"));
+    }
+    let schedule = item
+        .lines
+        .iter()
+        .filter(|line| line.log == Some(AgendaLog::Schedule))
+        .count();
+    if schedule > 0 {
+        parts.push(format!("schedule log {schedule}"));
+    }
+    parts.join(" · ")
 }
 
 fn slug_label(entry: &PomodoroEntry) -> &str {
@@ -1196,8 +1506,16 @@ mod tests {
                     child_count: 5,
                 },
                 task_link_count: Some(3),
+                role: None,
+                starts_at: None,
+                ends_at: None,
+                retired_link_count: None,
+                notes: None,
+                items: None,
             }],
             warnings: Vec::new(),
+            date: None,
+            completed_summary: None,
         };
 
         let value: serde_json::Value =
@@ -1219,6 +1537,21 @@ mod tests {
         assert_eq!(value["pomodoros"][0]["is_current"], true);
         assert_eq!(value["pomodoros"][0]["child_count"], 5);
         assert_eq!(value["pomodoros"][0]["task_link_count"], 3);
+        for key in [
+            "role",
+            "starts_at",
+            "ends_at",
+            "retired_link_count",
+            "notes",
+            "items",
+        ] {
+            assert!(
+                value["pomodoros"][0].get(key).is_none(),
+                "agenda key {key:?} must stay absent without --tasks",
+            );
+        }
+        assert!(value.get("date").is_none());
+        assert!(value.get("completed_summary").is_none());
         assert_eq!(value["warnings"].as_array().expect("warnings").len(), 0);
     }
 
@@ -1228,6 +1561,7 @@ mod tests {
         let missing = list_capture_pomodoros(&CapturePomodorosRequest {
             bob_dir: temp.path().to_path_buf(),
             include_all: false,
+            include_tasks: false,
         })
         .expect("missing note success");
         assert_eq!(missing.count, 0);
@@ -1241,6 +1575,7 @@ mod tests {
                 list_capture_pomodoros(&CapturePomodorosRequest {
                     bob_dir: temp.path().to_path_buf(),
                     include_all: false,
+                    include_tasks: false,
                 })
             },
         )
@@ -1276,6 +1611,12 @@ mod tests {
                         child_count: 1,
                     },
                     task_link_count: Some(1),
+                    role: None,
+                    starts_at: None,
+                    ends_at: None,
+                    retired_link_count: None,
+                    notes: None,
+                    items: None,
                 },
                 CapturePomodorosOutputEntry {
                     entry: PomodoroEntry {
@@ -1295,9 +1636,17 @@ mod tests {
                         child_count: 0,
                     },
                     task_link_count: None,
+                    role: None,
+                    starts_at: None,
+                    ends_at: None,
+                    retired_link_count: None,
+                    notes: None,
+                    items: None,
                 },
             ],
             warnings: vec!["watch out".to_string()],
+            date: None,
+            completed_summary: None,
         };
         let human = human_success(&result, &Styler::plain());
         assert!(human.contains("warning - watch out"));
@@ -1334,6 +1683,7 @@ mod tests {
                 list_capture_pomodoros(&CapturePomodorosRequest {
                     bob_dir: temp.path().to_path_buf(),
                     include_all: false,
+                    include_tasks: false,
                 })
             })
             .expect("task link count success");
@@ -1369,6 +1719,7 @@ mod tests {
                 list_capture_pomodoros(&CapturePomodorosRequest {
                     bob_dir: temp.path().to_path_buf(),
                     include_all: false,
+                    include_tasks: false,
                 })
             })
             .expect("no-current success");
@@ -1401,6 +1752,7 @@ mod tests {
                 list_capture_pomodoros(&CapturePomodorosRequest {
                     bob_dir: temp.path().to_path_buf(),
                     include_all: false,
+                    include_tasks: false,
                 })
             })
             .expect("multiple success");
@@ -1429,6 +1781,7 @@ mod tests {
                 list_capture_pomodoros(&CapturePomodorosRequest {
                     bob_dir: temp.path().to_path_buf(),
                     include_all: false,
+                    include_tasks: false,
                 })
             })
             .expect("many-links success");
@@ -1460,6 +1813,7 @@ mod tests {
                 list_capture_pomodoros(&CapturePomodorosRequest {
                     bob_dir: temp.path().to_path_buf(),
                     include_all: true,
+                    include_tasks: false,
                 })
             })
             .expect("completed success");

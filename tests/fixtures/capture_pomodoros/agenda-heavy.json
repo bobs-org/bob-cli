@@ -1,0 +1,2598 @@
+{
+  "completed_summary": {
+    "count": 0,
+    "minutes": 0
+  },
+  "count": 25,
+  "date": "2026-08-28",
+  "day_file": "/Users/test/bob/vault/2026/20260828.md",
+  "ok": true,
+  "pomodoros": [
+    {
+      "child_count": 3,
+      "ends_at": "2026-08-28T08:30",
+      "is_current": true,
+      "items": [
+        {
+          "block_id": "n0-t0",
+          "block_link": "[[n0#^n0-t0]]",
+          "index": 1,
+          "ledger_depth": 1,
+          "ledger_line": 4,
+          "ledger_notes": [],
+          "line": 1,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 0"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n0.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 0-0",
+          "warning": null
+        },
+        {
+          "block_id": "n1-t1",
+          "block_link": "[[n1#^n1-t1]]",
+          "index": 2,
+          "ledger_depth": 1,
+          "ledger_line": 5,
+          "ledger_notes": [],
+          "line": 3,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 1"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n1.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 1-1",
+          "warning": null
+        },
+        {
+          "block_id": "n2-t2",
+          "block_link": "[[n2#^n2-t2]]",
+          "index": 3,
+          "ledger_depth": 1,
+          "ledger_line": 6,
+          "ledger_notes": [],
+          "line": 5,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 2"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n2.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 2-2",
+          "warning": null
+        }
+      ],
+      "line": 3,
+      "name": "FIRST",
+      "notes": [],
+      "placeholder": false,
+      "ref": "3:645962a8",
+      "retired_link_count": 0,
+      "role": "current",
+      "selectable": true,
+      "slug": "first",
+      "starts_at": "2026-08-28T08:00",
+      "state": "open",
+      "status_symbol": " ",
+      "task_link_count": 3,
+      "time_range": "0800-0830"
+    },
+    {
+      "child_count": 3,
+      "is_current": false,
+      "items": [
+        {
+          "block_id": "n1-t3",
+          "block_link": "[[n1#^n1-t3]]",
+          "index": 1,
+          "ledger_depth": 1,
+          "ledger_line": 8,
+          "ledger_notes": [],
+          "line": 7,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 3"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n1.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 1-3",
+          "warning": null
+        },
+        {
+          "block_id": "n2-t4",
+          "block_link": "[[n2#^n2-t4]]",
+          "index": 2,
+          "ledger_depth": 1,
+          "ledger_line": 9,
+          "ledger_notes": [],
+          "line": 9,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 4"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n2.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 2-4",
+          "warning": null
+        },
+        {
+          "block_id": "n3-t5",
+          "block_link": "[[n3#^n3-t5]]",
+          "index": 3,
+          "ledger_depth": 1,
+          "ledger_line": 10,
+          "ledger_notes": [],
+          "line": 11,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 5"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n3.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 3-5",
+          "warning": null
+        }
+      ],
+      "line": 7,
+      "name": "E1",
+      "notes": [],
+      "placeholder": true,
+      "ref": "7:550f7166",
+      "retired_link_count": 0,
+      "role": "next",
+      "selectable": true,
+      "slug": "e1",
+      "state": "open",
+      "status_symbol": " ",
+      "task_link_count": null,
+      "time_range": null
+    },
+    {
+      "child_count": 3,
+      "is_current": false,
+      "items": [
+        {
+          "block_id": "n2-t6",
+          "block_link": "[[n2#^n2-t6]]",
+          "index": 1,
+          "ledger_depth": 1,
+          "ledger_line": 12,
+          "ledger_notes": [],
+          "line": 13,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 6"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n2.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 2-6",
+          "warning": null
+        },
+        {
+          "block_id": "n3-t7",
+          "block_link": "[[n3#^n3-t7]]",
+          "index": 2,
+          "ledger_depth": 1,
+          "ledger_line": 13,
+          "ledger_notes": [],
+          "line": 15,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 7"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n3.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 3-7",
+          "warning": null
+        },
+        {
+          "block_id": "n4-t8",
+          "block_link": "[[n4#^n4-t8]]",
+          "index": 3,
+          "ledger_depth": 1,
+          "ledger_line": 14,
+          "ledger_notes": [],
+          "line": 17,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 8"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n4.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 4-8",
+          "warning": null
+        }
+      ],
+      "line": 11,
+      "name": "E2",
+      "notes": [],
+      "placeholder": true,
+      "ref": "11:e0f618e0",
+      "retired_link_count": 0,
+      "role": "later",
+      "selectable": true,
+      "slug": "e2",
+      "state": "open",
+      "status_symbol": " ",
+      "task_link_count": null,
+      "time_range": null
+    },
+    {
+      "child_count": 3,
+      "is_current": false,
+      "items": [
+        {
+          "block_id": "n3-t9",
+          "block_link": "[[n3#^n3-t9]]",
+          "index": 1,
+          "ledger_depth": 1,
+          "ledger_line": 16,
+          "ledger_notes": [],
+          "line": 19,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 9"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n3.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 3-9",
+          "warning": null
+        },
+        {
+          "block_id": "n4-t10",
+          "block_link": "[[n4#^n4-t10]]",
+          "index": 2,
+          "ledger_depth": 1,
+          "ledger_line": 17,
+          "ledger_notes": [],
+          "line": 21,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 10"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n4.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 4-10",
+          "warning": null
+        },
+        {
+          "block_id": "n5-t11",
+          "block_link": "[[n5#^n5-t11]]",
+          "index": 3,
+          "ledger_depth": 1,
+          "ledger_line": 18,
+          "ledger_notes": [],
+          "line": 23,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 11"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n5.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 5-11",
+          "warning": null
+        }
+      ],
+      "line": 15,
+      "name": "E3",
+      "notes": [],
+      "placeholder": true,
+      "ref": "15:7f02e81c",
+      "retired_link_count": 0,
+      "role": "later",
+      "selectable": true,
+      "slug": "e3",
+      "state": "open",
+      "status_symbol": " ",
+      "task_link_count": null,
+      "time_range": null
+    },
+    {
+      "child_count": 3,
+      "is_current": false,
+      "items": [
+        {
+          "block_id": "n4-t12",
+          "block_link": "[[n4#^n4-t12]]",
+          "index": 1,
+          "ledger_depth": 1,
+          "ledger_line": 20,
+          "ledger_notes": [],
+          "line": 25,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 12"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n4.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 4-12",
+          "warning": null
+        },
+        {
+          "block_id": "n5-t0",
+          "block_link": "[[n5#^n5-t0]]",
+          "index": 2,
+          "ledger_depth": 1,
+          "ledger_line": 21,
+          "ledger_notes": [],
+          "line": 1,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 0"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n5.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 5-0",
+          "warning": null
+        },
+        {
+          "block_id": "n0-t1",
+          "block_link": "[[n0#^n0-t1]]",
+          "index": 3,
+          "ledger_depth": 1,
+          "ledger_line": 22,
+          "ledger_notes": [],
+          "line": 3,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 1"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n0.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 0-1",
+          "warning": null
+        }
+      ],
+      "line": 19,
+      "name": "E4",
+      "notes": [],
+      "placeholder": true,
+      "ref": "19:7a8c80d1",
+      "retired_link_count": 0,
+      "role": "later",
+      "selectable": true,
+      "slug": "e4",
+      "state": "open",
+      "status_symbol": " ",
+      "task_link_count": null,
+      "time_range": null
+    },
+    {
+      "child_count": 3,
+      "is_current": false,
+      "items": [
+        {
+          "block_id": "n5-t2",
+          "block_link": "[[n5#^n5-t2]]",
+          "index": 1,
+          "ledger_depth": 1,
+          "ledger_line": 24,
+          "ledger_notes": [],
+          "line": 5,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 2"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n5.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 5-2",
+          "warning": null
+        },
+        {
+          "block_id": "n0-t3",
+          "block_link": "[[n0#^n0-t3]]",
+          "index": 2,
+          "ledger_depth": 1,
+          "ledger_line": 25,
+          "ledger_notes": [],
+          "line": 7,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 3"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n0.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 0-3",
+          "warning": null
+        },
+        {
+          "block_id": "n1-t4",
+          "block_link": "[[n1#^n1-t4]]",
+          "index": 3,
+          "ledger_depth": 1,
+          "ledger_line": 26,
+          "ledger_notes": [],
+          "line": 9,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 4"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n1.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 1-4",
+          "warning": null
+        }
+      ],
+      "line": 23,
+      "name": "E5",
+      "notes": [],
+      "placeholder": true,
+      "ref": "23:0aac070c",
+      "retired_link_count": 0,
+      "role": "later",
+      "selectable": true,
+      "slug": "e5",
+      "state": "open",
+      "status_symbol": " ",
+      "task_link_count": null,
+      "time_range": null
+    },
+    {
+      "child_count": 3,
+      "is_current": false,
+      "items": [
+        {
+          "block_id": "n0-t5",
+          "block_link": "[[n0#^n0-t5]]",
+          "index": 1,
+          "ledger_depth": 1,
+          "ledger_line": 28,
+          "ledger_notes": [],
+          "line": 11,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 5"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n0.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 0-5",
+          "warning": null
+        },
+        {
+          "block_id": "n1-t6",
+          "block_link": "[[n1#^n1-t6]]",
+          "index": 2,
+          "ledger_depth": 1,
+          "ledger_line": 29,
+          "ledger_notes": [],
+          "line": 13,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 6"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n1.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 1-6",
+          "warning": null
+        },
+        {
+          "block_id": "n2-t7",
+          "block_link": "[[n2#^n2-t7]]",
+          "index": 3,
+          "ledger_depth": 1,
+          "ledger_line": 30,
+          "ledger_notes": [],
+          "line": 15,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 7"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n2.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 2-7",
+          "warning": null
+        }
+      ],
+      "line": 27,
+      "name": "E6",
+      "notes": [],
+      "placeholder": true,
+      "ref": "27:f86eff09",
+      "retired_link_count": 0,
+      "role": "later",
+      "selectable": true,
+      "slug": "e6",
+      "state": "open",
+      "status_symbol": " ",
+      "task_link_count": null,
+      "time_range": null
+    },
+    {
+      "child_count": 3,
+      "is_current": false,
+      "items": [
+        {
+          "block_id": "n1-t8",
+          "block_link": "[[n1#^n1-t8]]",
+          "index": 1,
+          "ledger_depth": 1,
+          "ledger_line": 32,
+          "ledger_notes": [],
+          "line": 17,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 8"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n1.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 1-8",
+          "warning": null
+        },
+        {
+          "block_id": "n2-t9",
+          "block_link": "[[n2#^n2-t9]]",
+          "index": 2,
+          "ledger_depth": 1,
+          "ledger_line": 33,
+          "ledger_notes": [],
+          "line": 19,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 9"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n2.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 2-9",
+          "warning": null
+        },
+        {
+          "block_id": "n3-t10",
+          "block_link": "[[n3#^n3-t10]]",
+          "index": 3,
+          "ledger_depth": 1,
+          "ledger_line": 34,
+          "ledger_notes": [],
+          "line": 21,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 10"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n3.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 3-10",
+          "warning": null
+        }
+      ],
+      "line": 31,
+      "name": "E7",
+      "notes": [],
+      "placeholder": true,
+      "ref": "31:610449f6",
+      "retired_link_count": 0,
+      "role": "later",
+      "selectable": true,
+      "slug": "e7",
+      "state": "open",
+      "status_symbol": " ",
+      "task_link_count": null,
+      "time_range": null
+    },
+    {
+      "child_count": 3,
+      "is_current": false,
+      "items": [
+        {
+          "block_id": "n2-t11",
+          "block_link": "[[n2#^n2-t11]]",
+          "index": 1,
+          "ledger_depth": 1,
+          "ledger_line": 36,
+          "ledger_notes": [],
+          "line": 23,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 11"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n2.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 2-11",
+          "warning": null
+        },
+        {
+          "block_id": "n3-t12",
+          "block_link": "[[n3#^n3-t12]]",
+          "index": 2,
+          "ledger_depth": 1,
+          "ledger_line": 37,
+          "ledger_notes": [],
+          "line": 25,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 12"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n3.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 3-12",
+          "warning": null
+        },
+        {
+          "block_id": "n4-t0",
+          "block_link": "[[n4#^n4-t0]]",
+          "index": 3,
+          "ledger_depth": 1,
+          "ledger_line": 38,
+          "ledger_notes": [],
+          "line": 1,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 0"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n4.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 4-0",
+          "warning": null
+        }
+      ],
+      "line": 35,
+      "name": "E8",
+      "notes": [],
+      "placeholder": true,
+      "ref": "35:6500666a",
+      "retired_link_count": 0,
+      "role": "later",
+      "selectable": true,
+      "slug": "e8",
+      "state": "open",
+      "status_symbol": " ",
+      "task_link_count": null,
+      "time_range": null
+    },
+    {
+      "child_count": 3,
+      "is_current": false,
+      "items": [
+        {
+          "block_id": "n3-t1",
+          "block_link": "[[n3#^n3-t1]]",
+          "index": 1,
+          "ledger_depth": 1,
+          "ledger_line": 40,
+          "ledger_notes": [],
+          "line": 3,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 1"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n3.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 3-1",
+          "warning": null
+        },
+        {
+          "block_id": "n4-t2",
+          "block_link": "[[n4#^n4-t2]]",
+          "index": 2,
+          "ledger_depth": 1,
+          "ledger_line": 41,
+          "ledger_notes": [],
+          "line": 5,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 2"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n4.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 4-2",
+          "warning": null
+        },
+        {
+          "block_id": "n5-t3",
+          "block_link": "[[n5#^n5-t3]]",
+          "index": 3,
+          "ledger_depth": 1,
+          "ledger_line": 42,
+          "ledger_notes": [],
+          "line": 7,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 3"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n5.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 5-3",
+          "warning": null
+        }
+      ],
+      "line": 39,
+      "name": "E9",
+      "notes": [],
+      "placeholder": true,
+      "ref": "39:3e796626",
+      "retired_link_count": 0,
+      "role": "later",
+      "selectable": true,
+      "slug": "e9",
+      "state": "open",
+      "status_symbol": " ",
+      "task_link_count": null,
+      "time_range": null
+    },
+    {
+      "child_count": 3,
+      "is_current": false,
+      "items": [
+        {
+          "block_id": "n4-t4",
+          "block_link": "[[n4#^n4-t4]]",
+          "index": 1,
+          "ledger_depth": 1,
+          "ledger_line": 44,
+          "ledger_notes": [],
+          "line": 9,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 4"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n4.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 4-4",
+          "warning": null
+        },
+        {
+          "block_id": "n5-t5",
+          "block_link": "[[n5#^n5-t5]]",
+          "index": 2,
+          "ledger_depth": 1,
+          "ledger_line": 45,
+          "ledger_notes": [],
+          "line": 11,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 5"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n5.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 5-5",
+          "warning": null
+        },
+        {
+          "block_id": "n0-t6",
+          "block_link": "[[n0#^n0-t6]]",
+          "index": 3,
+          "ledger_depth": 1,
+          "ledger_line": 46,
+          "ledger_notes": [],
+          "line": 13,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 6"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n0.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 0-6",
+          "warning": null
+        }
+      ],
+      "line": 43,
+      "name": "E10",
+      "notes": [],
+      "placeholder": true,
+      "ref": "43:a1b40909",
+      "retired_link_count": 0,
+      "role": "later",
+      "selectable": true,
+      "slug": "e10",
+      "state": "open",
+      "status_symbol": " ",
+      "task_link_count": null,
+      "time_range": null
+    },
+    {
+      "child_count": 3,
+      "is_current": false,
+      "items": [
+        {
+          "block_id": "n5-t7",
+          "block_link": "[[n5#^n5-t7]]",
+          "index": 1,
+          "ledger_depth": 1,
+          "ledger_line": 48,
+          "ledger_notes": [],
+          "line": 15,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 7"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n5.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 5-7",
+          "warning": null
+        },
+        {
+          "block_id": "n0-t8",
+          "block_link": "[[n0#^n0-t8]]",
+          "index": 2,
+          "ledger_depth": 1,
+          "ledger_line": 49,
+          "ledger_notes": [],
+          "line": 17,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 8"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n0.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 0-8",
+          "warning": null
+        },
+        {
+          "block_id": "n1-t9",
+          "block_link": "[[n1#^n1-t9]]",
+          "index": 3,
+          "ledger_depth": 1,
+          "ledger_line": 50,
+          "ledger_notes": [],
+          "line": 19,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 9"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n1.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 1-9",
+          "warning": null
+        }
+      ],
+      "line": 47,
+      "name": "E11",
+      "notes": [],
+      "placeholder": true,
+      "ref": "47:5110dab9",
+      "retired_link_count": 0,
+      "role": "later",
+      "selectable": true,
+      "slug": "e11",
+      "state": "open",
+      "status_symbol": " ",
+      "task_link_count": null,
+      "time_range": null
+    },
+    {
+      "child_count": 3,
+      "is_current": false,
+      "items": [
+        {
+          "block_id": "n0-t10",
+          "block_link": "[[n0#^n0-t10]]",
+          "index": 1,
+          "ledger_depth": 1,
+          "ledger_line": 52,
+          "ledger_notes": [],
+          "line": 21,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 10"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n0.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 0-10",
+          "warning": null
+        },
+        {
+          "block_id": "n1-t11",
+          "block_link": "[[n1#^n1-t11]]",
+          "index": 2,
+          "ledger_depth": 1,
+          "ledger_line": 53,
+          "ledger_notes": [],
+          "line": 23,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 11"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n1.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 1-11",
+          "warning": null
+        },
+        {
+          "block_id": "n2-t12",
+          "block_link": "[[n2#^n2-t12]]",
+          "index": 3,
+          "ledger_depth": 1,
+          "ledger_line": 54,
+          "ledger_notes": [],
+          "line": 25,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 12"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n2.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 2-12",
+          "warning": null
+        }
+      ],
+      "line": 51,
+      "name": "E12",
+      "notes": [],
+      "placeholder": true,
+      "ref": "51:7b90b7de",
+      "retired_link_count": 0,
+      "role": "later",
+      "selectable": true,
+      "slug": "e12",
+      "state": "open",
+      "status_symbol": " ",
+      "task_link_count": null,
+      "time_range": null
+    },
+    {
+      "child_count": 3,
+      "is_current": false,
+      "items": [
+        {
+          "block_id": "n1-t0",
+          "block_link": "[[n1#^n1-t0]]",
+          "index": 1,
+          "ledger_depth": 1,
+          "ledger_line": 56,
+          "ledger_notes": [],
+          "line": 1,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 0"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n1.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 1-0",
+          "warning": null
+        },
+        {
+          "block_id": "n2-t1",
+          "block_link": "[[n2#^n2-t1]]",
+          "index": 2,
+          "ledger_depth": 1,
+          "ledger_line": 57,
+          "ledger_notes": [],
+          "line": 3,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 1"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n2.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 2-1",
+          "warning": null
+        },
+        {
+          "block_id": "n3-t2",
+          "block_link": "[[n3#^n3-t2]]",
+          "index": 3,
+          "ledger_depth": 1,
+          "ledger_line": 58,
+          "ledger_notes": [],
+          "line": 5,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 2"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n3.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 3-2",
+          "warning": null
+        }
+      ],
+      "line": 55,
+      "name": "E13",
+      "notes": [],
+      "placeholder": true,
+      "ref": "55:6d19af11",
+      "retired_link_count": 0,
+      "role": "later",
+      "selectable": true,
+      "slug": "e13",
+      "state": "open",
+      "status_symbol": " ",
+      "task_link_count": null,
+      "time_range": null
+    },
+    {
+      "child_count": 3,
+      "is_current": false,
+      "items": [
+        {
+          "block_id": "n2-t3",
+          "block_link": "[[n2#^n2-t3]]",
+          "index": 1,
+          "ledger_depth": 1,
+          "ledger_line": 60,
+          "ledger_notes": [],
+          "line": 7,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 3"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n2.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 2-3",
+          "warning": null
+        },
+        {
+          "block_id": "n3-t4",
+          "block_link": "[[n3#^n3-t4]]",
+          "index": 2,
+          "ledger_depth": 1,
+          "ledger_line": 61,
+          "ledger_notes": [],
+          "line": 9,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 4"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n3.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 3-4",
+          "warning": null
+        },
+        {
+          "block_id": "n4-t5",
+          "block_link": "[[n4#^n4-t5]]",
+          "index": 3,
+          "ledger_depth": 1,
+          "ledger_line": 62,
+          "ledger_notes": [],
+          "line": 11,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 5"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n4.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 4-5",
+          "warning": null
+        }
+      ],
+      "line": 59,
+      "name": "E14",
+      "notes": [],
+      "placeholder": true,
+      "ref": "59:11d4571b",
+      "retired_link_count": 0,
+      "role": "later",
+      "selectable": true,
+      "slug": "e14",
+      "state": "open",
+      "status_symbol": " ",
+      "task_link_count": null,
+      "time_range": null
+    },
+    {
+      "child_count": 3,
+      "is_current": false,
+      "items": [
+        {
+          "block_id": "n3-t6",
+          "block_link": "[[n3#^n3-t6]]",
+          "index": 1,
+          "ledger_depth": 1,
+          "ledger_line": 64,
+          "ledger_notes": [],
+          "line": 13,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 6"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n3.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 3-6",
+          "warning": null
+        },
+        {
+          "block_id": "n4-t7",
+          "block_link": "[[n4#^n4-t7]]",
+          "index": 2,
+          "ledger_depth": 1,
+          "ledger_line": 65,
+          "ledger_notes": [],
+          "line": 15,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 7"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n4.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 4-7",
+          "warning": null
+        },
+        {
+          "block_id": "n5-t8",
+          "block_link": "[[n5#^n5-t8]]",
+          "index": 3,
+          "ledger_depth": 1,
+          "ledger_line": 66,
+          "ledger_notes": [],
+          "line": 17,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 8"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n5.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 5-8",
+          "warning": null
+        }
+      ],
+      "line": 63,
+      "name": "E15",
+      "notes": [],
+      "placeholder": true,
+      "ref": "63:642471c9",
+      "retired_link_count": 0,
+      "role": "later",
+      "selectable": true,
+      "slug": "e15",
+      "state": "open",
+      "status_symbol": " ",
+      "task_link_count": null,
+      "time_range": null
+    },
+    {
+      "child_count": 3,
+      "is_current": false,
+      "items": [
+        {
+          "block_id": "n4-t9",
+          "block_link": "[[n4#^n4-t9]]",
+          "index": 1,
+          "ledger_depth": 1,
+          "ledger_line": 68,
+          "ledger_notes": [],
+          "line": 19,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 9"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n4.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 4-9",
+          "warning": null
+        },
+        {
+          "block_id": "n5-t10",
+          "block_link": "[[n5#^n5-t10]]",
+          "index": 2,
+          "ledger_depth": 1,
+          "ledger_line": 69,
+          "ledger_notes": [],
+          "line": 21,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 10"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n5.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 5-10",
+          "warning": null
+        },
+        {
+          "block_id": "n0-t11",
+          "block_link": "[[n0#^n0-t11]]",
+          "index": 3,
+          "ledger_depth": 1,
+          "ledger_line": 70,
+          "ledger_notes": [],
+          "line": 23,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 11"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n0.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 0-11",
+          "warning": null
+        }
+      ],
+      "line": 67,
+      "name": "E16",
+      "notes": [],
+      "placeholder": true,
+      "ref": "67:721faf7c",
+      "retired_link_count": 0,
+      "role": "later",
+      "selectable": true,
+      "slug": "e16",
+      "state": "open",
+      "status_symbol": " ",
+      "task_link_count": null,
+      "time_range": null
+    },
+    {
+      "child_count": 3,
+      "is_current": false,
+      "items": [
+        {
+          "block_id": "n5-t12",
+          "block_link": "[[n5#^n5-t12]]",
+          "index": 1,
+          "ledger_depth": 1,
+          "ledger_line": 72,
+          "ledger_notes": [],
+          "line": 25,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 12"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n5.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 5-12",
+          "warning": null
+        },
+        {
+          "block_id": "n0-t0",
+          "block_link": "[[n0#^n0-t0]]",
+          "index": 2,
+          "ledger_depth": 1,
+          "ledger_line": 73,
+          "ledger_notes": [],
+          "line": 1,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 0"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n0.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 0-0",
+          "warning": null
+        },
+        {
+          "block_id": "n1-t1",
+          "block_link": "[[n1#^n1-t1]]",
+          "index": 3,
+          "ledger_depth": 1,
+          "ledger_line": 74,
+          "ledger_notes": [],
+          "line": 3,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 1"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n1.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 1-1",
+          "warning": null
+        }
+      ],
+      "line": 71,
+      "name": "E17",
+      "notes": [],
+      "placeholder": true,
+      "ref": "71:c586c0d9",
+      "retired_link_count": 0,
+      "role": "later",
+      "selectable": true,
+      "slug": "e17",
+      "state": "open",
+      "status_symbol": " ",
+      "task_link_count": null,
+      "time_range": null
+    },
+    {
+      "child_count": 3,
+      "is_current": false,
+      "items": [
+        {
+          "block_id": "n0-t2",
+          "block_link": "[[n0#^n0-t2]]",
+          "index": 1,
+          "ledger_depth": 1,
+          "ledger_line": 76,
+          "ledger_notes": [],
+          "line": 5,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 2"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n0.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 0-2",
+          "warning": null
+        },
+        {
+          "block_id": "n1-t3",
+          "block_link": "[[n1#^n1-t3]]",
+          "index": 2,
+          "ledger_depth": 1,
+          "ledger_line": 77,
+          "ledger_notes": [],
+          "line": 7,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 3"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n1.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 1-3",
+          "warning": null
+        },
+        {
+          "block_id": "n2-t4",
+          "block_link": "[[n2#^n2-t4]]",
+          "index": 3,
+          "ledger_depth": 1,
+          "ledger_line": 78,
+          "ledger_notes": [],
+          "line": 9,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 4"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n2.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 2-4",
+          "warning": null
+        }
+      ],
+      "line": 75,
+      "name": "E18",
+      "notes": [],
+      "placeholder": true,
+      "ref": "75:4ce91937",
+      "retired_link_count": 0,
+      "role": "later",
+      "selectable": true,
+      "slug": "e18",
+      "state": "open",
+      "status_symbol": " ",
+      "task_link_count": null,
+      "time_range": null
+    },
+    {
+      "child_count": 3,
+      "is_current": false,
+      "items": [
+        {
+          "block_id": "n1-t5",
+          "block_link": "[[n1#^n1-t5]]",
+          "index": 1,
+          "ledger_depth": 1,
+          "ledger_line": 80,
+          "ledger_notes": [],
+          "line": 11,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 5"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n1.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 1-5",
+          "warning": null
+        },
+        {
+          "block_id": "n2-t6",
+          "block_link": "[[n2#^n2-t6]]",
+          "index": 2,
+          "ledger_depth": 1,
+          "ledger_line": 81,
+          "ledger_notes": [],
+          "line": 13,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 6"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n2.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 2-6",
+          "warning": null
+        },
+        {
+          "block_id": "n3-t7",
+          "block_link": "[[n3#^n3-t7]]",
+          "index": 3,
+          "ledger_depth": 1,
+          "ledger_line": 82,
+          "ledger_notes": [],
+          "line": 15,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 7"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n3.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 3-7",
+          "warning": null
+        }
+      ],
+      "line": 79,
+      "name": "E19",
+      "notes": [],
+      "placeholder": true,
+      "ref": "79:5388b0be",
+      "retired_link_count": 0,
+      "role": "later",
+      "selectable": true,
+      "slug": "e19",
+      "state": "open",
+      "status_symbol": " ",
+      "task_link_count": null,
+      "time_range": null
+    },
+    {
+      "child_count": 3,
+      "is_current": false,
+      "items": [
+        {
+          "block_id": "n2-t8",
+          "block_link": "[[n2#^n2-t8]]",
+          "index": 1,
+          "ledger_depth": 1,
+          "ledger_line": 84,
+          "ledger_notes": [],
+          "line": 17,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 8"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n2.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 2-8",
+          "warning": null
+        },
+        {
+          "block_id": "n3-t9",
+          "block_link": "[[n3#^n3-t9]]",
+          "index": 2,
+          "ledger_depth": 1,
+          "ledger_line": 85,
+          "ledger_notes": [],
+          "line": 19,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 9"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n3.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 3-9",
+          "warning": null
+        },
+        {
+          "block_id": "n4-t10",
+          "block_link": "[[n4#^n4-t10]]",
+          "index": 3,
+          "ledger_depth": 1,
+          "ledger_line": 86,
+          "ledger_notes": [],
+          "line": 21,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 10"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n4.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 4-10",
+          "warning": null
+        }
+      ],
+      "line": 83,
+      "name": "E20",
+      "notes": [],
+      "placeholder": true,
+      "ref": "83:0aac4a3b",
+      "retired_link_count": 0,
+      "role": "later",
+      "selectable": true,
+      "slug": "e20",
+      "state": "open",
+      "status_symbol": " ",
+      "task_link_count": null,
+      "time_range": null
+    },
+    {
+      "child_count": 3,
+      "is_current": false,
+      "items": [
+        {
+          "block_id": "n3-t11",
+          "block_link": "[[n3#^n3-t11]]",
+          "index": 1,
+          "ledger_depth": 1,
+          "ledger_line": 88,
+          "ledger_notes": [],
+          "line": 23,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 11"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n3.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 3-11",
+          "warning": null
+        },
+        {
+          "block_id": "n4-t12",
+          "block_link": "[[n4#^n4-t12]]",
+          "index": 2,
+          "ledger_depth": 1,
+          "ledger_line": 89,
+          "ledger_notes": [],
+          "line": 25,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 12"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n4.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 4-12",
+          "warning": null
+        },
+        {
+          "block_id": "n5-t0",
+          "block_link": "[[n5#^n5-t0]]",
+          "index": 3,
+          "ledger_depth": 1,
+          "ledger_line": 90,
+          "ledger_notes": [],
+          "line": 1,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 0"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n5.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 5-0",
+          "warning": null
+        }
+      ],
+      "line": 87,
+      "name": "E21",
+      "notes": [],
+      "placeholder": true,
+      "ref": "87:feedadb2",
+      "retired_link_count": 0,
+      "role": "later",
+      "selectable": true,
+      "slug": "e21",
+      "state": "open",
+      "status_symbol": " ",
+      "task_link_count": null,
+      "time_range": null
+    },
+    {
+      "child_count": 3,
+      "is_current": false,
+      "items": [
+        {
+          "block_id": "n4-t1",
+          "block_link": "[[n4#^n4-t1]]",
+          "index": 1,
+          "ledger_depth": 1,
+          "ledger_line": 92,
+          "ledger_notes": [],
+          "line": 3,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 1"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n4.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 4-1",
+          "warning": null
+        },
+        {
+          "block_id": "n5-t2",
+          "block_link": "[[n5#^n5-t2]]",
+          "index": 2,
+          "ledger_depth": 1,
+          "ledger_line": 93,
+          "ledger_notes": [],
+          "line": 5,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 2"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n5.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 5-2",
+          "warning": null
+        },
+        {
+          "block_id": "n0-t3",
+          "block_link": "[[n0#^n0-t3]]",
+          "index": 3,
+          "ledger_depth": 1,
+          "ledger_line": 94,
+          "ledger_notes": [],
+          "line": 7,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 3"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n0.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 0-3",
+          "warning": null
+        }
+      ],
+      "line": 91,
+      "name": "E22",
+      "notes": [],
+      "placeholder": true,
+      "ref": "91:d2ff119c",
+      "retired_link_count": 0,
+      "role": "later",
+      "selectable": true,
+      "slug": "e22",
+      "state": "open",
+      "status_symbol": " ",
+      "task_link_count": null,
+      "time_range": null
+    },
+    {
+      "child_count": 3,
+      "is_current": false,
+      "items": [
+        {
+          "block_id": "n5-t4",
+          "block_link": "[[n5#^n5-t4]]",
+          "index": 1,
+          "ledger_depth": 1,
+          "ledger_line": 96,
+          "ledger_notes": [],
+          "line": 9,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 4"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n5.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 5-4",
+          "warning": null
+        },
+        {
+          "block_id": "n0-t5",
+          "block_link": "[[n0#^n0-t5]]",
+          "index": 2,
+          "ledger_depth": 1,
+          "ledger_line": 97,
+          "ledger_notes": [],
+          "line": 11,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 5"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n0.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 0-5",
+          "warning": null
+        },
+        {
+          "block_id": "n1-t6",
+          "block_link": "[[n1#^n1-t6]]",
+          "index": 3,
+          "ledger_depth": 1,
+          "ledger_line": 98,
+          "ledger_notes": [],
+          "line": 13,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 6"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n1.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 1-6",
+          "warning": null
+        }
+      ],
+      "line": 95,
+      "name": "E23",
+      "notes": [],
+      "placeholder": true,
+      "ref": "95:c6e12de3",
+      "retired_link_count": 0,
+      "role": "later",
+      "selectable": true,
+      "slug": "e23",
+      "state": "open",
+      "status_symbol": " ",
+      "task_link_count": null,
+      "time_range": null
+    },
+    {
+      "child_count": 6,
+      "is_current": false,
+      "items": [
+        {
+          "block_id": "n0-t0",
+          "block_link": "[[n0#^n0-t0]]",
+          "index": 1,
+          "ledger_depth": 1,
+          "ledger_line": 100,
+          "ledger_notes": [],
+          "line": 1,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 0"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n0.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 0-0",
+          "warning": null
+        },
+        {
+          "block_id": "n0-t1",
+          "block_link": "[[n0#^n0-t1]]",
+          "index": 2,
+          "ledger_depth": 1,
+          "ledger_line": 101,
+          "ledger_notes": [],
+          "line": 3,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 1"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n0.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 0-1",
+          "warning": null
+        },
+        {
+          "block_id": "n0-t2",
+          "block_link": "[[n0#^n0-t2]]",
+          "index": 3,
+          "ledger_depth": 1,
+          "ledger_line": 102,
+          "ledger_notes": [],
+          "line": 5,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 2"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n0.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 0-2",
+          "warning": null
+        },
+        {
+          "block_id": "n0-t3",
+          "block_link": "[[n0#^n0-t3]]",
+          "index": 4,
+          "ledger_depth": 1,
+          "ledger_line": 103,
+          "ledger_notes": [],
+          "line": 7,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 3"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n0.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 0-3",
+          "warning": null
+        },
+        {
+          "block_id": "n0-t4",
+          "block_link": "[[n0#^n0-t4]]",
+          "index": 5,
+          "ledger_depth": 1,
+          "ledger_line": 104,
+          "ledger_notes": [],
+          "line": 9,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 4"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n0.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 0-4",
+          "warning": null
+        },
+        {
+          "block_id": "n0-t5",
+          "block_link": "[[n0#^n0-t5]]",
+          "index": 6,
+          "ledger_depth": 1,
+          "ledger_line": 105,
+          "ledger_notes": [],
+          "line": 11,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "detail 5"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "n0.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Task 0-5",
+          "warning": null
+        }
+      ],
+      "line": 99,
+      "name": "EXTRA",
+      "notes": [],
+      "placeholder": true,
+      "ref": "99:10846e7b",
+      "retired_link_count": 0,
+      "role": "later",
+      "selectable": true,
+      "slug": "extra",
+      "state": "open",
+      "status_symbol": " ",
+      "task_link_count": null,
+      "time_range": null
+    }
+  ],
+  "relative_day_file": "2026/20260828.md",
+  "schema_version": 1,
+  "warnings": []
+}

@@ -4456,7 +4456,7 @@ JSON forms as the underlying scan would.
 ## Discovery commands
 
 ```bash
-bob capture-pomodoros [-a|--all] [-b|--bob-dir DIR] [-f|--format human|json]
+bob capture-pomodoros [-a|--all] [-b|--bob-dir DIR] [-f|--format human|json] [-t|--tasks]
 bob capture-sections --route NAME [-b|--bob-dir DIR] [-f|--format human|json]
 bob capture-targets [-b|--bob-dir DIR] [-f|--format human|json] [-v|--verbose]
 bob capture-task-sections --route NAME (--block-id ID | --task-ref REF) [-b|--bob-dir DIR] [-f|--format human|json]
@@ -4546,6 +4546,43 @@ Named Pomodoros use the same slug rules as task sections — ASCII-lowercase,
 whitespace collapsed to `-`, whole-slug matching before the first slug-prefix
 match — with `+` also allowed in the selector. Entries whose names produce
 untypeable slugs stay in the list with `selectable: false`.
+
+With `-t/--tasks`, `capture-pomodoros` resolves each listed entry's Task Links
+into agenda views. The top level adds `date` (`YYYY-MM-DD`, from the day file's
+name or today) and `completed_summary` (`count` of completed ledger entries and
+their summed time-range `minutes`). Each entry adds `role` (`current`, `next`,
+`later`, `open`, or `completed`), naive `starts_at`/`ends_at` datetimes for timed
+entries (an end before the start rolls to the next day), `retired_link_count`
+(struck single-link lines), `notes` (session notes: sub-bullet lines that are
+neither items nor retired links nor descendants of an item), and `items` (every
+line the `=x` recognizer accepts: any depth, plain, deferred `[[T]]#`, or
+embedded, unstruck, outside fences). Each item carries its operator `index`, the
+1-based `ledger_line` and entry-relative `ledger_depth`, the `marker`
+(`plain`, `deferred`, or `embedded`), the verbatim `block_link`, the
+`resolution` (`resolved`, `missing_note`, `ambiguous_note`, `missing_block`,
+`duplicate_block`, `not_a_task`, or `unreadable`), the vault-relative
+`relative_target`, the 1-based task `line`, the `block_id`, the clean title
+`text`, `status_symbol`, `status_name`, `status_type` (the same uppercase labels
+`capture-tasks` uses), the first 150 task block `lines` (`lines_truncated`
+counts the rest), the link line's `ledger_notes`, and a human
+`warning` for any non-`resolved` resolution. A display line has `text` (task
+lines use the clean description, bullets the body after the list marker, other
+lines the line without indentation), relative `depth`, `kind` (`bullet`,
+`task`, `text`, `code`, or `log_marker`), `status_symbol` on task lines, and a
+`work`/`schedule` `log` tag on managed log markers and their subtrees.
+
+Numbering follows the session operators exactly: on the current entry `index`
+is the `=x` number, and on every other open entry it is the `=` lineup number
+matched by ledger line (`null` where that rule numbers nothing, such as deferred
+or nested links on a non-current entry). Later entries are numbered too, because
+`=#NAME~K` and `==#NAME~K` drop by those same lineup numbers. `--all --tasks`
+is allowed; completed entries report `role: "completed"` with empty `notes`
+and `items`. Resolution never fails the command: each distinct note is read and
+scanned once per filter mode (embedded links resolve with the global filter
+cleared), empty link targets resolve to the daily note, and one bad link
+becomes that item's `resolution` and `warning` while a missing daily note or
+missing `## Pomodoros` section keeps the successful empty list with a warning.
+The same vault bytes always produce the same output bytes.
 
 `capture-task-sections` lists the ALL-CAPS direct-child section bullets of one
 parent task in document order. Exactly one of `--block-id`/`-i` or

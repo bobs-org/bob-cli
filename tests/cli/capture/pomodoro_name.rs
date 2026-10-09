@@ -175,6 +175,37 @@ fn capture_pomodoros_task_link_count_matches_dry_run_lineup() {
     assert_eq!(task_link_count, task_links.len() as u64);
     assert_eq!(task_link_count, 3);
 
+    // `--tasks` numbers the current entry exactly like the `=x` lineup.
+    let tasks_output = bob_command()
+        .arg("capture-pomodoros")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-t")
+        .arg("-f")
+        .arg("json")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-08-28 09:10:00")
+        .output()
+        .expect("run bob capture-pomodoros --tasks json");
+    assert_success(&tasks_output);
+    let tasks_json: serde_json::Value =
+        serde_json::from_str(stdout(&tasks_output).trim()).expect("tasks json");
+    let agenda_current = tasks_json["pomodoros"]
+        .as_array()
+        .expect("pomodoros array")
+        .iter()
+        .find(|entry| entry["is_current"] == true)
+        .expect("agenda current entry")
+        .clone();
+    assert_eq!(agenda_current["role"], "current");
+    let agenda_items = agenda_current["items"].as_array().expect("items array");
+    assert_eq!(agenda_items.len(), task_links.len());
+    for (item, row) in agenda_items.iter().zip(task_links.iter()) {
+        assert_eq!(item["index"], row["index"]);
+        assert_eq!(item["ledger_line"], row["ledger_line"]);
+        assert_eq!(item["block_link"], row["block_link"]);
+    }
+
     for entry in pomodoros_json["pomodoros"].as_array().expect("array") {
         if entry["is_current"] != true {
             assert!(

@@ -1,0 +1,14 @@
+{
+  "completed_summary": {
+    "count": 0,
+    "minutes": 0
+  },
+  "count": 0,
+  "date": "2026-08-28",
+  "day_file": "/Users/test/bob/vault/2026/20260828.md",
+  "ok": true,
+  "pomodoros": [],
+  "relative_day_file": "2026/20260828.md",
+  "schema_version": 1,
+  "warnings": []
+}

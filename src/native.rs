@@ -29,6 +29,7 @@ mod capture_pomodoro_close;
 mod capture_pomodoro_name;
 mod capture_pomodoro_start;
 mod capture_pomodoros;
+mod capture_pomodoros_agenda;
 mod capture_project_note;
 mod capture_rewrite;
 mod capture_schedule_log;

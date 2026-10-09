@@ -98,6 +98,7 @@ use task_complete::*;
 use task_toggle::*;
 
 pub(crate) use batch::StagedTextFile;
+pub(crate) use block_diff::block_depths;
 pub(crate) use commit::{validate_target_parent, write_staged_files};
 pub(crate) use output::{CaptureError, Placement};
 pub(crate) use plan::{format_task_line, inbox_route, route_label};

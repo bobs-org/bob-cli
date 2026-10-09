@@ -1,0 +1,321 @@
+{
+  "completed_summary": {
+    "count": 1,
+    "minutes": 30
+  },
+  "count": 4,
+  "date": "2026-08-28",
+  "day_file": "/Users/test/bob/vault/2026/20260828.md",
+  "ok": true,
+  "pomodoros": [
+    {
+      "child_count": 5,
+      "ends_at": "2026-08-28T08:30",
+      "is_current": true,
+      "items": [
+        {
+          "block_id": "deep-fix",
+          "block_link": "[[tasks#^deep-fix]]",
+          "index": 1,
+          "ledger_depth": 1,
+          "ledger_line": 6,
+          "ledger_notes": [],
+          "line": 2,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "first child"
+            },
+            {
+              "depth": 1,
+              "kind": "log_marker",
+              "log": "work",
+              "status_symbol": null,
+              "text": "🛠️ **Work log**"
+            },
+            {
+              "depth": 2,
+              "kind": "bullet",
+              "log": "work",
+              "status_symbol": null,
+              "text": "Aug 27 — running research"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "tasks.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Deep fix",
+          "warning": null
+        },
+        {
+          "block_id": "second-task",
+          "block_link": "[[tasks#^second-task]]",
+          "index": 2,
+          "ledger_depth": 1,
+          "ledger_line": 8,
+          "ledger_notes": [],
+          "line": 6,
+          "lines": [],
+          "lines_truncated": 0,
+          "marker": "embedded",
+          "relative_target": "tasks.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Second task",
+          "warning": null
+        },
+        {
+          "block_id": "deep-fix",
+          "block_link": "[[tasks#^deep-fix]]",
+          "index": 3,
+          "ledger_depth": 1,
+          "ledger_line": 10,
+          "ledger_notes": [],
+          "line": 2,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "first child"
+            },
+            {
+              "depth": 1,
+              "kind": "log_marker",
+              "log": "work",
+              "status_symbol": null,
+              "text": "🛠️ **Work log**"
+            },
+            {
+              "depth": 2,
+              "kind": "bullet",
+              "log": "work",
+              "status_symbol": null,
+              "text": "Aug 27 — running research"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "deferred",
+          "relative_target": "tasks.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Deep fix",
+          "warning": null
+        }
+      ],
+      "line": 5,
+      "name": "FIX",
+      "notes": [
+        {
+          "depth": 1,
+          "kind": "bullet",
+          "log": null,
+          "status_symbol": null,
+          "text": "epic on test"
+        }
+      ],
+      "placeholder": false,
+      "ref": "5:e318d837",
+      "retired_link_count": 1,
+      "role": "current",
+      "selectable": true,
+      "slug": "fix",
+      "starts_at": "2026-08-28T08:00",
+      "state": "open",
+      "status_symbol": " ",
+      "task_link_count": 3,
+      "time_range": "0800-0830"
+    },
+    {
+      "child_count": 2,
+      "is_current": false,
+      "items": [
+        {
+          "block_id": "second-task",
+          "block_link": "[[tasks#^second-task]]",
+          "index": 1,
+          "ledger_depth": 1,
+          "ledger_line": 12,
+          "ledger_notes": [],
+          "line": 6,
+          "lines": [],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "tasks.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Second task",
+          "warning": null
+        },
+        {
+          "block_id": "deep-fix",
+          "block_link": "[[tasks#^deep-fix]]",
+          "index": null,
+          "ledger_depth": 2,
+          "ledger_line": 13,
+          "ledger_notes": [],
+          "line": 2,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "first child"
+            },
+            {
+              "depth": 1,
+              "kind": "log_marker",
+              "log": "work",
+              "status_symbol": null,
+              "text": "🛠️ **Work log**"
+            },
+            {
+              "depth": 2,
+              "kind": "bullet",
+              "log": "work",
+              "status_symbol": null,
+              "text": "Aug 27 — running research"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "tasks.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Deep fix",
+          "warning": null
+        },
+        {
+          "block_id": "gone",
+          "block_link": "[[missing#^gone]]",
+          "index": 2,
+          "ledger_depth": 1,
+          "ledger_line": 14,
+          "ledger_notes": [],
+          "line": null,
+          "lines": [],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": null,
+          "resolution": "missing_note",
+          "status_name": null,
+          "status_symbol": null,
+          "status_type": null,
+          "text": null,
+          "warning": "[[missing#^gone]] does not resolve to a vault note"
+        }
+      ],
+      "line": 11,
+      "name": "SASE",
+      "notes": [],
+      "placeholder": true,
+      "ref": "11:872a7840",
+      "retired_link_count": 0,
+      "role": "next",
+      "selectable": true,
+      "slug": "sase",
+      "state": "open",
+      "status_symbol": " ",
+      "task_link_count": null,
+      "time_range": null
+    },
+    {
+      "child_count": 1,
+      "is_current": false,
+      "items": [
+        {
+          "block_id": "deep-fix",
+          "block_link": "[[tasks#^deep-fix]]",
+          "index": 1,
+          "ledger_depth": 1,
+          "ledger_line": 16,
+          "ledger_notes": [],
+          "line": 2,
+          "lines": [
+            {
+              "depth": 1,
+              "kind": "bullet",
+              "log": null,
+              "status_symbol": null,
+              "text": "first child"
+            },
+            {
+              "depth": 1,
+              "kind": "log_marker",
+              "log": "work",
+              "status_symbol": null,
+              "text": "🛠️ **Work log**"
+            },
+            {
+              "depth": 2,
+              "kind": "bullet",
+              "log": "work",
+              "status_symbol": null,
+              "text": "Aug 27 — running research"
+            }
+          ],
+          "lines_truncated": 0,
+          "marker": "plain",
+          "relative_target": "tasks.md",
+          "resolution": "resolved",
+          "status_name": "Todo",
+          "status_symbol": " ",
+          "status_type": "TODO",
+          "text": "Deep fix",
+          "warning": null
+        }
+      ],
+      "line": 15,
+      "name": "LATER WORK",
+      "notes": [],
+      "placeholder": true,
+      "ref": "15:2b0dc43e",
+      "retired_link_count": 0,
+      "role": "later",
+      "selectable": true,
+      "slug": "later-work",
+      "state": "open",
+      "status_symbol": " ",
+      "task_link_count": null,
+      "time_range": null
+    },
+    {
+      "child_count": 0,
+      "is_current": false,
+      "items": [],
+      "line": 17,
+      "name": null,
+      "notes": [],
+      "placeholder": true,
+      "ref": "17:5c651ef9",
+      "retired_link_count": 0,
+      "role": "later",
+      "selectable": false,
+      "slug": "",
+      "state": "open",
+      "status_symbol": " ",
+      "task_link_count": null,
+      "time_range": null
+    }
+  ],
+  "relative_day_file": "2026/20260828.md",
+  "schema_version": 1,
+  "warnings": []
+}
