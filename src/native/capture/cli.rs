@@ -251,7 +251,7 @@ forms do each part at \
 once. `<N>`, `<P>`, `<M>`, and `<K>` are comma-separated task numbers in ledger \
 order starting at 1 (the numbers `bob capture` shows, in human output, in \
 `--dry-run`, and as JSON `task_links`); a lone `0` means no \
-task stays in progress, as in `=x0`. A present `*` or `!` group with no digits selects every numbered link left after explicit assignments (`=*` parks all, `=!` completes all, `=x1*` keeps 1 in progress and parks the rest, `=x*!2` parks the rest and completes 2). Explicit forms such as `=*1`/`=!1` select only task 1; an absent group stays absent and `~` never defaults. Two empty wildcard groups compete, so `=*!` and `=!*` need numbers on at least one group. Log one entry on the close line: \
+task stays in progress, as in `=x0`. Plain `=x0` on a note-free session resets it to the first future placeholder (clearing the parenthesized ledger to `()` and keeping all children); the same `=x0` on a session with a stand-alone note closes, deferring every numbered link. Explicit modifiers (`=x0*2`, `=x0!2`, `=x0~2`, wildcards) always close. A present `*` or `!` group with no digits selects every numbered link left after explicit assignments (`=*` parks all, `=!` completes all, `=x1*` keeps 1 in progress and parks the rest, `=x*!2` parks the rest and completes 2). Explicit forms such as `=*1`/`=!1` select only task 1; an absent group stays absent and `~` never defaults. Two empty wildcard groups compete, so `=*!` and `=!*` need numbers on at least one group. Log one entry on the close line: \
 `=x wired the lexer` logs to the first task the close works (task 1 for a \
 plain `=x`, the first eligible worked link with wildcard intent), and \
 `=x1,3 3 fixed the flaky test` logs to task 3. A leading \

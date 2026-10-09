@@ -30,9 +30,9 @@ use super::selection::{
 };
 use super::{
     close_task_text, find_running_pomodoro, plan_ledger_close,
-    plan_ledger_close_with_parked, sub_bullet_range, wikilink_tokens,
-    BlockLinkTarget, FindRunningError, LedgerClosePlan, LedgerLinkRole,
-    RunningPomodoro, WorkLogNode,
+    plan_ledger_close_with_parked, reset as reset_mod, sub_bullet_range,
+    wikilink_tokens, BlockLinkTarget, FindRunningError, LedgerClosePlan,
+    LedgerLinkRole, RunningPomodoro, WorkLogNode,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -113,6 +113,13 @@ pub(crate) enum PomodoroClosePlanError {
     FindRunning(FindRunningError),
     VaultRead(String),
     Selection(CloseSelectionError),
+    Reset(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum PomodoroCloseOutcome {
+    Close(PomodoroClosePlan),
+    Reset(super::reset::ResetPlan),
 }
 
 /// Read-only access to the vault view used by a close plan. Implementations
@@ -867,6 +874,34 @@ impl<'a, V: CloseVault> ClosePlanner<'a, V> {
         self.save_file(self.day_path, updated);
         Ok(())
     }
+}
+
+/// Shared reset-versus-close decision. Validates the selection, then
+/// branches before ledger rewriting and task effects. Note-bearing `=x0`
+/// and every explicit-modifier selection fall through to the preserved
+/// close planner unchanged.
+pub(crate) fn plan_pomodoro_close_outcome<V: CloseVault>(
+    day_path: &Path,
+    day_contents: &str,
+    now: NaiveDateTime,
+    vault: &V,
+    selection: Option<&CloseSelection>,
+) -> Result<PomodoroCloseOutcome, PomodoroClosePlanError> {
+    let running = find_running_pomodoro(day_contents)
+        .map_err(PomodoroClosePlanError::FindRunning)?;
+    if let Some(sel) = selection
+        && reset_mod::is_reset_selection(sel)
+    {
+        apply_close_selection(day_contents, &running, sel)
+            .map_err(PomodoroClosePlanError::Selection)?;
+        if !reset_mod::has_standalone_note(day_contents, running.line) {
+            let reset = reset_mod::plan_reset(day_contents, &running)
+                .map_err(PomodoroClosePlanError::Reset)?;
+            return Ok(PomodoroCloseOutcome::Reset(reset));
+        }
+    }
+    plan_pomodoro_close(day_path, day_contents, now, vault, selection)
+        .map(PomodoroCloseOutcome::Close)
 }
 
 pub(crate) fn plan_pomodoro_close<V: CloseVault>(

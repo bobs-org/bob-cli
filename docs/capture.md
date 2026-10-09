@@ -138,7 +138,7 @@ anything is written, and any failure rolls the whole batch back.
 | `=x1,3!2` | Close keeping tasks 1 and 3 in progress, completing task 2, deferring the rest |
 | `=x1~2` | Close keeping task 1 in progress, dropping task 2, deferring the rest |
 | `=x1!2~3` | Close keeping task 1 in progress, completing task 2, dropping task 3 |
-| `=x0` | Close deferring every numbered Task Link |
+| `=x0` | Reset a note-free session to the first future placeholder; close (deferring every numbered Task Link) when the session owns a stand-alone note |
 | `=*` | Close parking every numbered Task Link |
 | `=!` | Close completing every numbered Task Link |
 | `=x*` | Close parking every numbered Task Link |
@@ -1733,7 +1733,9 @@ and `!` history expansion applies.
 This ports Obsidian's Ctrl+Enter Pomodoro completion (task-status-cycler's
 `completeActivePomodoroTask`), not the Ctrl+Shift+Enter task-level pause:
 the ledger ends up byte-identical to Obsidian's completion except for the
-auto-decrement below and the deliberate atomicity divergences. A session
+auto-decrement below, the deliberate atomicity divergences, and the
+intentional capture-only `=x0` reset exception (a note-free `=x0` resets to
+first future instead of completing; Obsidian completion remains separate). A session
 closed before its planned end is shortened to the stop time
 (`BOB_NOW=2026-09-28 09:37:00` closing `0920-0950` writes `0920-0940 [t::
 20m]`): `remaining = end − now` normalized into (−720, 720] minutes, and
@@ -2154,6 +2156,19 @@ Both tasks stay `[*]`, and `^capture-stop` still gets its Work Log. `=x1`
 equals plain `=x` on this fixture (2 was already deferred); `=x1,2`
 un-defers 2 so both links get `🍅`, both tasks become `[/]`, and the
 placeholder carries `[[bob#^capture-stop]]` then `[[bob#^web-capture]]`.
+
+A note-free `=x0` instead resets: it clears the current headline's
+parenthesized session ledger to `()` (including `[t:: ...]`, legacy
+duration notation, and range-local annotations), keeps the headline suffix
+and every child byte, and moves the whole block before the earliest other
+future placeholder so it becomes first future. No history row is created,
+no task is started/completed/released, and no Work Log is copied. Nested
+details under a dedicated task link stay with that task; any direct prose
+note (including a note after a blank, an empty bullet with authored
+descendants, or meaningful indented/fenced content outside a dedicated
+subtree) keeps the existing close. Explicit modifiers (`=x0*2`, `=x0!2`,
+`=x0~2`, wildcards) always close. After a reset, `=x0 =` restarts the reset
+session and a second `=x0` reports next-up.
 
 **Diagnostics (all write nothing).** Out of range:
 `` `=x4` names task 4, but CAPTURE has 2 numbered Task Links (1–2) `` (`(1)`
@@ -3665,6 +3680,22 @@ token reports no `pomodoro_close` object at all, only the
 `invalid_pomodoro_close` diagnostic. Multi-item drafts report each item's
 own `pomodoro_close` alongside the top-level preview of the first item;
 close items never inherit a `@@` declaration.
+
+`pomodoro_reset` is an optional object, mutually exclusive with
+`pomodoro_close`, for a note-free plain `=x0` (including `=X0`) that returns
+the current Pomodoro to the first future placeholder. The parser still
+reports the syntactic close input (it cannot know the vault-dependent
+outcome), so `capture-parse` keeps describing `=x0` while `bob capture`
+resolves it to `pomodoro_reset` or `pomodoro_close`. Whole-item resets report
+`kind: "pomodoro_reset"` with `placement: "updated"`; attached link/new-task
+forms keep their link/task kind and placement and add `pomodoro_reset`. The
+object carries `raw`, `day_relative`, optional `pomodoro_name`,
+`previous_pomodoro_line`, `pomodoro_line`, `previous_entry_line`,
+`entry_line`, `previous_time_range`, `time_range: null`,
+`created_pomodoro: false`, and `moved`. Batch-level `pomodoro_blocks` shows
+the reset block with a `reset` role in its final open/untimed state. Schema
+version stays 1; older clients ignore the additive key and fall back to
+generic capture/block presentation.
 
 `spans` are UTF-8 byte offsets into `input`, half-open `[start, end)`, ordered,
 non-overlapping, and always on a character boundary. Each `kind` is one of

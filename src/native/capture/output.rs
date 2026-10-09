@@ -179,6 +179,26 @@ pub(super) struct PomodoroCloseSummaryJson {
     pub(super) next_pomodoro: Option<PomodoroCloseNextJson>,
 }
 
+/// One note-free `=x0` reset: the current Pomodoro returned to the
+/// front of the future queue with its session ledger cleared. Reset and
+/// `pomodoro_close` are mutually exclusive; the parser still reports the
+/// syntactic close input since it cannot know the vault-dependent outcome.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct PomodoroResetSummaryJson {
+    pub(super) raw: String,
+    pub(super) day_relative: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) pomodoro_name: Option<String>,
+    pub(super) previous_pomodoro_line: usize,
+    pub(super) pomodoro_line: usize,
+    pub(super) previous_entry_line: String,
+    pub(super) entry_line: String,
+    pub(super) previous_time_range: String,
+    pub(super) time_range: Option<String>,
+    pub(super) created_pomodoro: bool,
+    pub(super) moved: bool,
+}
+
 fn is_false(value: &bool) -> bool {
     !value
 }
@@ -354,6 +374,8 @@ pub(super) struct CaptureItemResult {
     pub(super) pomodoro_shift: Option<PomodoroShiftSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) pomodoro_close: Option<PomodoroCloseSummaryJson>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) pomodoro_reset: Option<PomodoroResetSummaryJson>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) dependency_update: Option<DependencyUpdateJson>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -721,6 +743,17 @@ pub(super) fn print_human_item_success(
     let ordinal = ordinal
         .map(|(index, total)| format!("{index}/{total}  "))
         .unwrap_or_default();
+    if let Some(reset) = result.pomodoro_reset.as_ref() {
+        print_human_pomodoro_reset_success(
+            result,
+            reset,
+            &styler,
+            &prefix,
+            &ordinal,
+            &target_label,
+        );
+        return;
+    }
     if let Some(close) = result.pomodoro_close.as_ref() {
         print_human_pomodoro_close_success(
             result,
@@ -977,6 +1010,46 @@ fn typed_work_log_lines(
         }
     }
     lines
+}
+
+pub(super) fn print_human_pomodoro_reset_success(
+    result: &CaptureItemResult,
+    reset: &PomodoroResetSummaryJson,
+    styler: &Styler,
+    prefix: &str,
+    ordinal: &str,
+    _target_label: &str,
+) {
+    let verb = if result.dry_run {
+        "would reset"
+    } else {
+        "reset"
+    };
+    let name = reset.pomodoro_name.as_deref().unwrap_or("session");
+    println!(
+        "{prefix} {ordinal}{verb} {name} · {} line {}",
+        reset.day_relative, reset.pomodoro_line
+    );
+    println!(
+        "  {}",
+        styler.dim("now the first future Pomodoro with its contents kept")
+    );
+    if result.routed
+        && let (Some(action), Some(dest)) = (
+            result.pomodoro_link_action,
+            result.pomodoro_link_destination.as_ref(),
+        )
+    {
+        let dest_name = dest.name.as_deref().unwrap_or("session");
+        println!(
+            "  {}",
+            styler.dim(&format!(
+                "{action} into {dest_name} at line {}",
+                dest.line
+            ))
+        );
+    }
+    println!("  {}", styler.dim(&reset.entry_line));
 }
 
 pub(super) fn print_human_pomodoro_close_success(

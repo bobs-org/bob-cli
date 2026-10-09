@@ -26,6 +26,7 @@ mod pomodoro_close_log;
 mod pomodoro_close_selection;
 mod pomodoro_link;
 mod pomodoro_name;
+mod pomodoro_reset;
 mod pomodoro_shift;
 mod pomodoro_start;
 mod pomodoro_start_drop;

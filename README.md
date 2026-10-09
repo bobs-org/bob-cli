@@ -446,7 +446,7 @@ auto-decrement that shortens an early-stopped session to the earliest
 five-minute step at or after now: `bob capture '=x'` closes the session,
 `bob capture '=x wired the lexer'` logs one entry to task 1,
 `bob capture '=x2'` keeps only task 2 in progress, `bob capture '=x1!2'`
-keeps task 1 in progress and completes task 2, `bob capture '=x0'` defers everything,
+keeps task 1 in progress and completes task 2, `bob capture '=x0'` resets a note-free session to first future (or closes, deferring everything, when it owns a stand-alone note),
 `bob capture '=*'` parks every numbered Task Link without carrying it forward,
 `bob capture '=!'` completes every numbered Task Link,
 `bob capture '=x1~2'` keeps task 1 in progress and drops task 2,

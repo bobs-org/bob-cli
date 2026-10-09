@@ -266,6 +266,9 @@ pub(super) fn map_close_plan_error(
         capture_pomodoro_close::PomodoroClosePlanError::Selection(error) => {
             CaptureError::io(error.to_string())
         }
+        capture_pomodoro_close::PomodoroClosePlanError::Reset(message) => {
+            CaptureError::io(message)
+        }
     }
 }
 
@@ -543,6 +546,403 @@ pub(super) fn stage_close_plan(
     Ok(())
 }
 
+pub(super) fn build_reset_summary_json(
+    raw: &str,
+    day_relative: &str,
+    reset: &capture_pomodoro_close::ResetPlan,
+) -> PomodoroResetSummaryJson {
+    PomodoroResetSummaryJson {
+        raw: raw.to_string(),
+        day_relative: day_relative.to_string(),
+        pomodoro_name: reset.pomodoro_name.clone(),
+        previous_pomodoro_line: reset.previous_pomodoro_line,
+        pomodoro_line: reset.pomodoro_line,
+        previous_entry_line: reset.previous_entry_line.clone(),
+        entry_line: reset.entry_line.clone(),
+        previous_time_range: reset.previous_time_range.clone(),
+        time_range: None,
+        created_pomodoro: false,
+        moved: reset.moved,
+    }
+}
+
+pub(super) fn stage_reset_plan(
+    planner: &mut CaptureBatchPlanner,
+    day_file: &Path,
+    reset: &capture_pomodoro_close::ResetPlan,
+) -> Result<(), CaptureError> {
+    planner.stage(day_file, reset.contents.clone())?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn plan_reset_link_item(
+    request: &CaptureRequest,
+    parsed: ParsedCaptureText,
+    today: chrono::NaiveDate,
+    planner: &mut CaptureBatchPlanner,
+    _warnings: &mut Vec<String>,
+    day_file: &Path,
+    rel: &str,
+    reset: &capture_pomodoro_close::ResetPlan,
+    close_spec: &PomodoroCloseSpec,
+    route: &str,
+    block_id: &str,
+    target: &Path,
+    rel_target: &Path,
+    staged_task_contents: &str,
+    updated_task: &note_tasks::NoteTask,
+    settings: &note_tasks::NoteTaskSettings,
+    action: &'static str,
+    source: Option<PomodoroLinkEndpoint>,
+    _destination: PomodoroLinkEndpoint,
+    link_placement: Option<Placement>,
+    created: String,
+    previous_task_line: String,
+    previous_status_symbol: char,
+    previous_status_name: String,
+    schedule_log: Option<capture_schedule_log::ScheduleLog>,
+    task_description: String,
+) -> Result<PlannedCaptureItem, CaptureError> {
+    stage_reset_plan(planner, day_file, reset)?;
+    let summary = build_reset_summary_json(&close_spec.raw, rel, reset);
+    let mut pomodoro_refs = vec![PomodoroBlockRef::at(
+        PomodoroBlockRole::Reset,
+        reset.previous_pomodoro_line.saturating_sub(1),
+        reset.pomodoro_line.saturating_sub(1),
+    )];
+    if let Some(moved) = source.as_ref() {
+        pomodoro_refs.push(PomodoroBlockRef::unlinked_before(
+            moved.line.saturating_sub(1),
+        ));
+    }
+    let final_task_line =
+        final_task_line_for(planner, &request.bob_dir, route, block_id)
+            .unwrap_or_else(|| {
+                staged_task_contents
+                    .lines()
+                    .next()
+                    .unwrap_or("")
+                    .to_string()
+            });
+    let (final_status_symbol, final_status_name) = {
+        let target_path = request.bob_dir.join(rel_target);
+        let contents = planner
+            .current_contents(&target_path)
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        let scan = note_tasks::scan(&contents, settings);
+        match scan.by_block_id(block_id) {
+            BlockIdLookup::Found(task) => {
+                (task.status_symbol, task.status_name.clone())
+            }
+            _ => (updated_task.status_symbol, updated_task.status_name.clone()),
+        }
+    };
+    // Reset clears the timing payload: the link destination is untimed
+    // (null), not the old closed range.
+    let destination = PomodoroLinkEndpoint {
+        line: reset.pomodoro_line,
+        name: reset.pomodoro_name.clone(),
+        time_range: None,
+        role: Some("current"),
+    };
+    let block_link = format!("[[{route}#^{block_id}]]");
+    let day_file_label = day_file.display().to_string();
+    let _ = today;
+    Ok(PlannedCaptureItem {
+        result: CaptureItemResult {
+            ok: true,
+            dry_run: request.dry_run,
+            routed: true,
+            route: Some(route.to_string()),
+            route_label: route_label(route),
+            relative_target: rel_target.to_string_lossy().into_owned(),
+            target: target.display().to_string(),
+            text: String::new(),
+            task_line: final_task_line,
+            kind: capture_kind_label(&parsed.kind),
+            created,
+            scheduled: None,
+            priority: None,
+            priority_label: None,
+            placement: Placement::Linked,
+            sub_bullets: Vec::new(),
+            clip: None,
+            schedule_log,
+            block_id: Some(block_id.to_string()),
+            day_file: Some(day_file_label),
+            block_link: Some(block_link),
+            pomodoro_link_placement: link_placement,
+            parent_line: None,
+            parent_text: None,
+            parent_section: None,
+            parent_status_symbol: None,
+            parent_status_name: None,
+            toggle_direction: None,
+            previous_task_line: Some(previous_task_line),
+            status_symbol: Some(final_status_symbol),
+            status_name: Some(final_status_name),
+            previous_status_symbol: Some(previous_status_symbol),
+            previous_status_name: Some(previous_status_name),
+            pomodoro_name: reset.pomodoro_name.clone(),
+            creates_pomodoro: Some(false),
+            pomodoro_already_linked: None,
+            removed_pomodoro_links: None,
+            removed_scheduled: None,
+            pomodoro_selector_unused: None,
+            toggle_behavior: None,
+            status_changed: Some(previous_status_symbol != final_status_symbol),
+            pomodoro_link_action: Some(action),
+            pomodoro_link_source: source,
+            pomodoro_link_destination: Some(destination),
+            project_note: None,
+            pomodoro_start: None,
+            pomodoro_adjust: None,
+            pomodoro_shift: None,
+            pomodoro_close: None,
+            pomodoro_reset: Some(summary),
+            dependency_update: None,
+            task_complete: None,
+            toggle_task_description: Some(task_description),
+            r#ref: None,
+        },
+        clip_plan: None,
+        pomodoro_refs,
+        task_block_refs: Vec::new(),
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn plan_reset_task_item(
+    request: &CaptureRequest,
+    parsed: ParsedCaptureText,
+    today: chrono::NaiveDate,
+    planner: &mut CaptureBatchPlanner,
+    day_file: &Path,
+    rel: &str,
+    reset: &capture_pomodoro_close::ResetPlan,
+    close_spec: &PomodoroCloseSpec,
+    route: &str,
+    block_id: &str,
+    capture_block: &str,
+    placement: Placement,
+    close_dependencies: Option<(String, PlannedDependencyUpdateParts)>,
+    link_source: Option<PomodoroLinkEndpoint>,
+    running_dest: PomodoroLinkEndpoint,
+) -> Result<PlannedCaptureItem, CaptureError> {
+    stage_reset_plan(planner, day_file, reset)?;
+    let summary = build_reset_summary_json(&close_spec.raw, rel, reset);
+    let _ = running_dest;
+    let mut pomodoro_refs = vec![PomodoroBlockRef::at(
+        PomodoroBlockRole::Reset,
+        reset.previous_pomodoro_line.saturating_sub(1),
+        reset.pomodoro_line.saturating_sub(1),
+    )];
+    if let Some(moved) = link_source.as_ref() {
+        pomodoro_refs.push(PomodoroBlockRef::unlinked_before(
+            moved.line.saturating_sub(1),
+        ));
+    }
+    let final_task_line =
+        final_task_line_for(planner, &request.bob_dir, route, block_id)
+            .unwrap_or_else(|| {
+                capture_block.lines().next().unwrap_or("").to_string()
+            });
+    let (final_status_symbol, final_status_name) = {
+        let target_path = request.bob_dir.join(relative_target(Some(route)));
+        let contents = planner
+            .current_contents(&target_path)
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        let settings = note_tasks::read_settings(&request.bob_dir);
+        let scan = note_tasks::scan(&contents, &settings);
+        match scan.by_block_id(block_id) {
+            BlockIdLookup::Found(task) => {
+                (Some(task.status_symbol), Some(task.status_name.clone()))
+            }
+            _ => (None, None),
+        }
+    };
+    let day_file_label = day_file.display().to_string();
+    let block_link = format!("[[{route}#^{block_id}]]");
+    let destination = PomodoroLinkEndpoint {
+        line: reset.pomodoro_line,
+        name: reset.pomodoro_name.clone(),
+        time_range: None,
+        role: Some("current"),
+    };
+    let relative_target_path = relative_target(Some(route));
+    let target_path = request.bob_dir.join(&relative_target_path);
+    Ok(PlannedCaptureItem {
+        result: CaptureItemResult {
+            ok: true,
+            dry_run: request.dry_run,
+            routed: true,
+            route: Some(route.to_string()),
+            route_label: route_label(route),
+            relative_target: relative_target_path
+                .to_string_lossy()
+                .into_owned(),
+            target: target_path.display().to_string(),
+            text: parsed.body.clone(),
+            task_line: final_task_line,
+            kind: capture_kind_label(&parsed.kind),
+            created: date_string(today),
+            scheduled: None,
+            priority: None,
+            priority_label: None,
+            placement,
+            sub_bullets: Vec::new(),
+            clip: None,
+            schedule_log: None,
+            block_id: Some(block_id.to_string()),
+            day_file: Some(day_file_label),
+            block_link: Some(block_link),
+            pomodoro_link_placement: Some(placement),
+            parent_line: None,
+            parent_text: None,
+            parent_section: None,
+            parent_status_symbol: None,
+            parent_status_name: None,
+            toggle_direction: None,
+            previous_task_line: None,
+            status_symbol: final_status_symbol,
+            status_name: final_status_name,
+            previous_status_symbol: Some(' '),
+            previous_status_name: Some("Ready".to_string()),
+            pomodoro_name: reset.pomodoro_name.clone(),
+            creates_pomodoro: None,
+            pomodoro_already_linked: None,
+            removed_pomodoro_links: None,
+            removed_scheduled: None,
+            pomodoro_selector_unused: None,
+            toggle_behavior: None,
+            status_changed: Some(true),
+            pomodoro_link_action: Some("linked"),
+            pomodoro_link_source: None,
+            pomodoro_link_destination: Some(destination),
+            project_note: None,
+            pomodoro_start: None,
+            pomodoro_adjust: None,
+            pomodoro_shift: None,
+            pomodoro_close: None,
+            pomodoro_reset: Some(summary),
+            dependency_update: close_dependencies
+                .as_ref()
+                .map(|(_, parts)| parts.summary.clone()),
+            task_complete: None,
+            toggle_task_description: None,
+            r#ref: None,
+        },
+        clip_plan: None,
+        pomodoro_refs,
+        task_block_refs: match close_dependencies.as_ref() {
+            Some((task_line, parts)) => {
+                let mut refs = parts.target_refs.clone();
+                if let Some(tracked) = locate_new_task_ref(
+                    planner,
+                    &request.bob_dir,
+                    parts,
+                    task_line,
+                ) {
+                    refs.insert(0, tracked);
+                }
+                refs
+            }
+            None => Vec::new(),
+        },
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn plan_reset_whole_item(
+    request: &CaptureRequest,
+    parsed: ParsedCaptureText,
+    spec: PomodoroCloseSpec,
+    today: chrono::NaiveDate,
+    planner: &mut CaptureBatchPlanner,
+    day_file: &Path,
+    rel: &str,
+    reset: &capture_pomodoro_close::ResetPlan,
+) -> Result<PlannedCaptureItem, CaptureError> {
+    stage_reset_plan(planner, day_file, reset)?;
+    let summary = build_reset_summary_json(&spec.raw, rel, reset);
+    let pomodoro_refs = vec![PomodoroBlockRef::at(
+        PomodoroBlockRole::Reset,
+        reset.previous_pomodoro_line.saturating_sub(1),
+        reset.pomodoro_line.saturating_sub(1),
+    )];
+    let relative_target = day_file
+        .strip_prefix(&request.bob_dir)
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|_| day_file.to_path_buf());
+    let _ = parsed;
+    Ok(PlannedCaptureItem {
+        result: CaptureItemResult {
+            ok: true,
+            dry_run: request.dry_run,
+            routed: false,
+            route: None,
+            route_label: String::new(),
+            relative_target: relative_target.to_string_lossy().into_owned(),
+            target: day_file.display().to_string(),
+            text: spec.raw.clone(),
+            task_line: summary.entry_line.clone(),
+            kind: "pomodoro_reset",
+            created: date_string(today),
+            scheduled: None,
+            priority: None,
+            priority_label: None,
+            placement: Placement::Updated,
+            sub_bullets: Vec::new(),
+            clip: None,
+            schedule_log: None,
+            block_id: None,
+            day_file: Some(day_file.display().to_string()),
+            block_link: None,
+            pomodoro_link_placement: None,
+            parent_line: None,
+            parent_text: None,
+            parent_section: None,
+            parent_status_symbol: None,
+            parent_status_name: None,
+            toggle_direction: None,
+            previous_task_line: None,
+            status_symbol: None,
+            status_name: None,
+            previous_status_symbol: None,
+            previous_status_name: None,
+            pomodoro_name: summary.pomodoro_name.clone(),
+            creates_pomodoro: None,
+            pomodoro_already_linked: None,
+            removed_pomodoro_links: None,
+            removed_scheduled: None,
+            pomodoro_selector_unused: None,
+            toggle_behavior: None,
+            status_changed: None,
+            pomodoro_link_action: None,
+            pomodoro_link_source: None,
+            pomodoro_link_destination: None,
+            project_note: None,
+            pomodoro_start: None,
+            pomodoro_adjust: None,
+            pomodoro_shift: None,
+            pomodoro_close: None,
+            pomodoro_reset: Some(summary),
+            dependency_update: None,
+            task_complete: None,
+            toggle_task_description: None,
+            r#ref: None,
+        },
+        clip_plan: None,
+        pomodoro_refs,
+        task_block_refs: Vec::new(),
+    })
+}
+
 pub(super) fn final_task_line_for(
     planner: &mut CaptureBatchPlanner,
     bob_dir: &Path,
@@ -608,7 +1008,7 @@ pub(super) fn plan_pomodoro_close_item(
     }
     let day_contents = planner.read_existing(&day_file)?;
     let vault = SnapshotCloseVault::from_planner(planner, &request.bob_dir);
-    let plan = capture_pomodoro_close::plan_pomodoro_close(
+    let outcome = capture_pomodoro_close::plan_pomodoro_close_outcome(
         &day_file,
         &day_contents,
         now,
@@ -616,6 +1016,18 @@ pub(super) fn plan_pomodoro_close_item(
         selection.as_ref(),
     )
     .map_err(|error| map_close_plan_error(error, &rel, None))?;
+    if let capture_pomodoro_close::PomodoroCloseOutcome::Reset(reset) = outcome
+    {
+        return plan_reset_whole_item(
+            request, parsed, spec, today, planner, &day_file, &rel, &reset,
+        );
+    }
+    let capture_pomodoro_close::PomodoroCloseOutcome::Close(plan) = outcome
+    else {
+        return Err(CaptureError::io(
+            "pomodoro close capture invariant failed: missing close plan",
+        ));
+    };
     let (summary, extra_warnings) =
         build_close_summary_json(&spec, &rel, &plan, now);
     warnings.extend(plan.warnings.clone());
@@ -700,6 +1112,7 @@ pub(super) fn plan_pomodoro_close_item(
             pomodoro_adjust: None,
             pomodoro_shift: None,
             pomodoro_close: Some(summary),
+            pomodoro_reset: None,
             dependency_update: None,
             task_complete: None,
             toggle_task_description: None,
@@ -1130,9 +1543,9 @@ pub(super) fn plan_pomodoro_close_link_item(
     }
     planner.stage(&day_file, linked_day.clone())?;
     day_contents = linked_day;
-    // Close _R_ on the staged ledger.
+    // Close _R_ on the staged ledger (or reset it when note-free).
     let vault = SnapshotCloseVault::from_planner(planner, &request.bob_dir);
-    let plan = capture_pomodoro_close::plan_pomodoro_close(
+    let outcome = capture_pomodoro_close::plan_pomodoro_close_outcome(
         &day_file,
         &day_contents,
         now,
@@ -1140,6 +1553,43 @@ pub(super) fn plan_pomodoro_close_link_item(
         selection.as_ref(),
     )
     .map_err(|error| map_close_plan_error(error, &rel, Some(&link_hint)))?;
+    if let capture_pomodoro_close::PomodoroCloseOutcome::Reset(reset) = outcome
+    {
+        return plan_reset_link_item(
+            request,
+            parsed,
+            today,
+            planner,
+            warnings,
+            &day_file,
+            &rel,
+            &reset,
+            &close_spec,
+            &route,
+            block_id,
+            &target,
+            &rel_target,
+            &staged_task_contents,
+            &updated_task,
+            &settings,
+            action,
+            source,
+            destination,
+            link_placement,
+            created,
+            previous_task_line.clone(),
+            previous_status_symbol,
+            previous_status_name.clone(),
+            task_plan.schedule_log.clone(),
+            task_description.clone(),
+        );
+    }
+    let capture_pomodoro_close::PomodoroCloseOutcome::Close(plan) = outcome
+    else {
+        return Err(CaptureError::io(
+            "pomodoro close capture invariant failed: missing close plan",
+        ));
+    };
     let (summary, extra_warnings) =
         build_close_summary_json(&close_spec, &rel, &plan, now);
     for warning in plan.warnings.iter().chain(extra_warnings.iter()) {
@@ -1251,6 +1701,7 @@ pub(super) fn plan_pomodoro_close_link_item(
             pomodoro_adjust: None,
             pomodoro_shift: None,
             pomodoro_close: Some(summary),
+            pomodoro_reset: None,
             dependency_update: None,
             task_complete: None,
             toggle_task_description: Some(task_description),
@@ -1354,7 +1805,7 @@ pub(super) fn plan_pomodoro_close_task_item(
         })?;
     planner.stage(&day_file, linked_day.clone())?;
     let vault = SnapshotCloseVault::from_planner(planner, &request.bob_dir);
-    let plan = capture_pomodoro_close::plan_pomodoro_close(
+    let outcome = capture_pomodoro_close::plan_pomodoro_close_outcome(
         &day_file,
         &linked_day,
         now,
@@ -1362,6 +1813,32 @@ pub(super) fn plan_pomodoro_close_task_item(
         selection.as_ref(),
     )
     .map_err(|error| map_close_plan_error(error, &rel, Some(&link_hint)))?;
+    if let capture_pomodoro_close::PomodoroCloseOutcome::Reset(reset) = outcome
+    {
+        return plan_reset_task_item(
+            request,
+            parsed,
+            today,
+            planner,
+            &day_file,
+            &rel,
+            &reset,
+            close_spec,
+            route,
+            block_id,
+            capture_block,
+            placement,
+            close_dependencies,
+            link_source,
+            running_dest,
+        );
+    }
+    let capture_pomodoro_close::PomodoroCloseOutcome::Close(plan) = outcome
+    else {
+        return Err(CaptureError::io(
+            "pomodoro close capture invariant failed: missing close plan",
+        ));
+    };
     let (summary, extra_warnings) =
         build_close_summary_json(close_spec, &rel, &plan, now);
     for warning in plan.warnings.iter().chain(extra_warnings.iter()) {
@@ -1493,6 +1970,7 @@ pub(super) fn plan_pomodoro_close_task_item(
             pomodoro_adjust: None,
             pomodoro_shift: None,
             pomodoro_close: Some(summary),
+            pomodoro_reset: None,
             dependency_update: close_dependencies
                 .as_ref()
                 .map(|(_, parts)| parts.summary.clone()),

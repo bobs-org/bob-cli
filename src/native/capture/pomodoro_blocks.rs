@@ -19,6 +19,7 @@ pub(super) enum PomodoroBlockRole {
     Shifted,
     Started,
     Closed,
+    Reset,
     Next,
     Linked,
     Unlinked,
