@@ -32,7 +32,7 @@ struct ScanJsonHook {
 /// One PDF intake move: vault-relative `from` and `to`, in move order.
 /// Sidecar and audio companion moves are not listed.
 #[derive(Debug, Clone, Serialize)]
-struct ScanJsonIntakeMove {
+pub(super) struct ScanJsonIntakeMove {
     from: String,
     to: String,
 }
@@ -615,13 +615,15 @@ fn print_scan_error_envelope(
     1
 }
 
-/// Vault-relative intake moves, in move order.
-fn intake_moves(
+/// Vault-relative PDF intake moves, in move order. Standalone audio moves
+/// still execute on disk but are excluded from the JSON contract.
+pub(super) fn intake_moves(
     config: &Config,
     intake: &[IntakeMove],
 ) -> Vec<ScanJsonIntakeMove> {
     intake
         .iter()
+        .filter(|intake_move| is_pdf_path(&intake_move.destination))
         .map(|intake_move| ScanJsonIntakeMove {
             from: scan_vault_relative(config, &intake_move.source),
             to: scan_vault_relative(config, &intake_move.destination),

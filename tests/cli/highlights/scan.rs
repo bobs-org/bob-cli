@@ -1918,6 +1918,81 @@ fn ref_scan_json_dry_run_ignores_writer_lock() {
 }
 
 #[test]
+fn ref_scan_json_intake_lists_pdf_only_when_audio_moves_alone() {
+    let temp = TempDir::new("bob-cli-ref-scan-json-pdf-only-intake");
+    let vault = temp.path().join("vault");
+    let library_pdf = vault.join("lib/chat/listen.pdf");
+    let library_note = vault.join("ref/chat/listen.md");
+    let standalone_audio = vault.join("xlib/chat/listen.mp3");
+    let intake_pdf = vault.join("xlib/chat/fresh.pdf");
+    write_highlights_pdf(
+        &library_pdf,
+        "- status: wip\n- parent: obsidian\n- title: Listen PDF\n",
+    );
+    assert_success(&run_ref_scan(&vault, &[]));
+    assert!(library_note.is_file(), "initial scan must create the note");
+    write_highlights_pdf(
+        &intake_pdf,
+        "- status: wip\n- parent: obsidian\n- title: Fresh PDF\n",
+    );
+    write_file(&standalone_audio, "fake-mp3");
+
+    let dry_run = run_ref_scan(&vault, &["-f", "json", "--dry-run"]);
+    assert_eq!(
+        dry_run.status.code(),
+        Some(0),
+        "dry-run json scan should succeed:\n{}",
+        format_output(&dry_run)
+    );
+    let dry_document = scan_json_stdout(&dry_run);
+    assert_eq!(
+        dry_document["intake"],
+        serde_json::json!([{
+            "from": "xlib/chat/fresh.pdf",
+            "to": "lib/chat/fresh.pdf",
+        }]),
+        "dry-run intake must exclude the planned audio move:\n{}",
+        format_output(&dry_run)
+    );
+    assert!(
+        standalone_audio.is_file(),
+        "dry-run must leave standalone audio in xlib"
+    );
+    assert!(intake_pdf.is_file(), "dry-run must leave the PDF in xlib");
+
+    let output = run_ref_scan(&vault, &["-f", "json"]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "json scan should succeed:\n{}",
+        format_output(&output)
+    );
+    let document = scan_json_stdout(&output);
+    assert_eq!(
+        document["intake"],
+        serde_json::json!([{
+            "from": "xlib/chat/fresh.pdf",
+            "to": "lib/chat/fresh.pdf",
+        }]),
+        "audio still moves but JSON intake lists only the PDF:\n{}",
+        format_output(&output)
+    );
+    assert_scan_json_key_order(&output, "\"intake\":[", &["from", "to"]);
+    assert!(
+        !standalone_audio.exists(),
+        "standalone audio must still move out of xlib"
+    );
+    assert!(
+        vault.join("lib/chat/listen.mp3").is_file(),
+        "standalone audio must land beside its library PDF"
+    );
+    assert!(
+        !intake_pdf.exists() && vault.join("lib/chat/fresh.pdf").is_file(),
+        "PDF intake must still move"
+    );
+}
+
+#[test]
 fn ref_scan_human_scan_busy_when_writer_lock_held() {
     let temp = TempDir::new("bob-cli-ref-scan-human-busy");
     let vault = temp.path().join("vault");

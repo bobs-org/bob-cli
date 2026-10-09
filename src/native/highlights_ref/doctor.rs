@@ -834,17 +834,18 @@ pub(super) fn collect_orphan_audio(config: &Config) -> Result<Vec<PathBuf>> {
         .collect())
 }
 
-/// Move every planned intake pair, returning the count of fully moved
-/// main PDFs so a later failure can report which moves already happened.
-/// Move every planned intake pair, returning the count of fully moved
-/// main PDFs so a later failure can report which moves already happened.
+/// Move every planned intake pair, returning the count of completed
+/// top-level renames so a later failure can report which moves already
+/// happened.
 pub(super) fn execute_xlib_intake(moves: &[IntakeMove]) -> Result<usize> {
     let (moved, result) = execute_xlib_intake_counting(moves);
     result.map(|()| moved)
 }
 
-/// Move every planned intake pair, reporting how many main PDFs moved
-/// before the first error alongside that error.
+/// Move every planned intake pair, reporting how many top-level renames
+/// completed before the first error alongside that error. A main rename
+/// counts immediately, before companions are attempted, so an already
+/// moved PDF is still reported when a companion fails.
 pub(super) fn execute_xlib_intake_counting(
     moves: &[IntakeMove],
 ) -> (usize, Result<()>) {
@@ -855,12 +856,12 @@ pub(super) fn execute_xlib_intake_counting(
         {
             return (moved, Err(error));
         }
+        moved += 1;
         for (source, destination) in &intake_move.companions {
             if let Err(error) = execute_intake_move(source, destination) {
                 return (moved, Err(error));
             }
         }
-        moved += 1;
     }
     (moved, Ok(()))
 }

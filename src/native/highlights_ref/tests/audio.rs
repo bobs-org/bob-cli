@@ -74,6 +74,61 @@ fn plan_xlib_intake_leaves_audio_without_any_pdf() {
 }
 
 #[test]
+fn execute_xlib_intake_counting_reports_pdf_when_companion_fails() {
+    let bob_dir = temp_bob_dir("xlib-intake-companion-failure");
+    let config = test_config_for_bob_dir(bob_dir.clone());
+    let source = config.xlib_dir.join("chat/report.pdf");
+    let destination = config.lib_dir.join("chat/report.pdf");
+    write_test_file(&source, "pdf");
+    let missing_companion_source = config.xlib_dir.join("chat/report.mp3");
+    let companion_destination = config.lib_dir.join("chat/report.mp3");
+    let moves = vec![super::IntakeMove {
+        source: source.clone(),
+        destination: destination.clone(),
+        companions: vec![(missing_companion_source, companion_destination)],
+    }];
+
+    let (moved, result) = super::execute_xlib_intake_counting(&moves);
+    assert!(result.is_err(), "missing companion must fail");
+    assert_eq!(moved, 1, "completed PDF rename must count");
+    assert!(
+        destination.is_file(),
+        "PDF destination must exist after companion failure"
+    );
+    assert!(!source.exists(), "PDF source must be gone");
+    let prefix = &moves[..moved.min(moves.len())];
+    let intake = super::intake_moves(&config, prefix);
+    assert_eq!(intake.len(), 1, "completed prefix must keep the PDF");
+    let value = serde_json::to_value(&intake).expect("serialize intake");
+    assert_eq!(
+        value,
+        serde_json::json!([{
+            "from": "xlib/chat/report.pdf",
+            "to": "lib/chat/report.pdf",
+        }])
+    );
+
+    fs::remove_dir_all(bob_dir).expect("remove temp bob dir");
+}
+
+#[test]
+fn execute_xlib_intake_counting_omits_failed_main_rename() {
+    let bob_dir = temp_bob_dir("xlib-intake-main-failure");
+    let config = test_config_for_bob_dir(bob_dir.clone());
+    let moves = vec![super::IntakeMove {
+        source: config.xlib_dir.join("chat/missing.pdf"),
+        destination: config.lib_dir.join("chat/missing.pdf"),
+        companions: Vec::new(),
+    }];
+
+    let (moved, result) = super::execute_xlib_intake_counting(&moves);
+    assert!(result.is_err(), "missing main source must fail");
+    assert_eq!(moved, 0, "failed main rename must not count");
+
+    fs::remove_dir_all(bob_dir).expect("remove temp bob dir");
+}
+
+#[test]
 fn plan_xlib_intake_reports_audio_destination_conflicts() {
     let bob_dir = temp_bob_dir("xlib-audio-conflict");
     let config = test_config_for_bob_dir(bob_dir.clone());
