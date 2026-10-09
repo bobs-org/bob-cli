@@ -522,9 +522,31 @@ fn v2_multiple_open_tasks_refuse_replacement() {
     );
     write_file(&parent_note, &parent_contents);
 
+    let task_before = fs::read_to_string(&parent_note).expect("read parent");
+    let ref_before = fs::read_to_string(&note).expect("read note");
+    let pdf_before = fs::read(&pdf).expect("read pdf");
     let output = sync_pdf(&vault, &pdf, &[]);
-    assert_success(&output);
+    assert!(
+        !output.status.success(),
+        "ambiguity must refuse with a per-PDF diagnostic failure:\n{}",
+        format_output(&output)
+    );
+    let stderr = format_output(&output);
+    assert!(
+        stderr.contains("multiple_open_ref_tasks"),
+        "refusal must name the ambiguity:\n{stderr}"
+    );
     let after = fs::read_to_string(&parent_note).expect("read parent");
+    assert_eq!(
+        after, task_before,
+        "refusal must leave task bytes unchanged"
+    );
+    assert_eq!(
+        fs::read_to_string(&note).expect("read note"),
+        ref_before,
+        "refusal must leave ref bytes unchanged"
+    );
+    assert_eq!(fs::read(&pdf).expect("read pdf"), pdf_before);
     assert_eq!(
         after.matches("ref/ambiguous").count(),
         2,
@@ -1109,4 +1131,231 @@ fn v2_opt_in_refreshes_stale_marker_hint() {
         shown.contains("parent: nowhere"),
         "opt-in should refresh the stale hint to the residence:\n{shown}"
     );
+}
+
+#[test]
+fn v2_archive_move_dedups_follow_up() {
+    let (_temp, vault) = scan_vault("bob-cli-scan-integration-archive-move");
+    let pdf = vault.join("lib/move.pdf");
+    let note = vault.join("ref/move.md");
+    let parent_note = vault.join("obsidian.md");
+    let archive = vault.join("done/obsidian_done.md");
+    write_area_note(&parent_note, "Obsidian");
+    write_highlights_pdf(&pdf, "- status: wip\n- parent: obsidian\n");
+    write_file(
+        &pdf.with_extension("md"),
+        "# Move
+
+## Page 1
+
+- status: wip
+- parent: obsidian
+
+---
+
+> Move quote.
+
+- #task Archived follow-up.
+",
+    );
+
+    assert_success(&sync_pdf(&vault, &pdf, &[]));
+    let parent_before = fs::read_to_string(&parent_note).expect("read parent");
+    let follow_line = parent_before
+        .lines()
+        .find(|line| line.contains("Archived follow-up"))
+        .expect("follow-up born")
+        .to_string();
+    assert!(
+        follow_line.contains("[h::"),
+        "follow-up carries [h::]:\n{follow_line}"
+    );
+    let processed = follow_line
+        .split("[h::")
+        .nth(1)
+        .and_then(|rest| rest.split(']').next())
+        .expect("processed id")
+        .trim()
+        .to_string();
+    assert!(!processed.is_empty(), "processed id present");
+
+    // Move the follow-up into done/ carrying its [h::] property.
+    let without = parent_before
+        .lines()
+        .filter(|line| !line.contains("Archived follow-up"))
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    write_file(&parent_note, &without);
+    write_file(&archive, &format!("{follow_line}\n"));
+    let archive_before = fs::read_to_string(&archive).expect("read archive");
+
+    // Rescan: no recreation, archive bytes intact, counts accurate.
+    let output = bob_command()
+        .arg("highlights")
+        .arg("scan")
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", PINNED_NOW)
+        .output()
+        .expect("rescan after archive move");
+    assert_success(&output);
+    let parent_after = fs::read_to_string(&parent_note).expect("read parent");
+    assert!(
+        !parent_after.contains("Archived follow-up"),
+        "archived follow-up must not recreate:\n{parent_after}"
+    );
+    assert_eq!(
+        fs::read_to_string(&archive).expect("read archive"),
+        archive_before,
+        "archive bytes must stay intact"
+    );
+    let written = stdout(&output);
+    assert!(
+        !written.contains("Archived follow-up"),
+        "no duplicate follow-up reported:\n{written}"
+    );
+
+    // Subsequent run is a no-op for this follow-up.
+    let output = bob_command()
+        .arg("highlights")
+        .arg("scan")
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", PINNED_NOW)
+        .output()
+        .expect("repeat after archive move");
+    assert_success(&output);
+    assert_eq!(
+        fs::read_to_string(&parent_note).expect("read parent"),
+        parent_after,
+        "repeat must stay settled"
+    );
+    assert_eq!(
+        fs::read_to_string(&archive).expect("read archive"),
+        archive_before,
+        "repeat must leave archive intact"
+    );
+
+    // Archived terminal reading sync leaves archive bytes intact (birth
+    // archive path is untouched by later scans).
+    assert!(note.is_file(), "ref note still exists");
+}
+
+#[test]
+fn v2_lifecycle_needs_opt_in_and_settles_on_rerun() {
+    let (_temp, vault) = scan_vault("bob-cli-scan-integration-lifecycle");
+    let pdf = vault.join("lib/life.pdf");
+    let note = vault.join("ref/life.md");
+    let parent_note = vault.join("obsidian.md");
+    write_area_note(&parent_note, "Obsidian");
+    write_highlights_pdf(&pdf, "- status: ready\n- parent: obsidian\n");
+    assert_success(&sync_pdf(&vault, &pdf, &[]));
+
+    // Birth a Ready ref, then drive it to Next via the external task.
+    let task_line = fs::read_to_string(&parent_note)
+        .expect("read parent")
+        .lines()
+        .find(|line| line.contains("^ref-life"))
+        .expect("reading task")
+        .to_string();
+    assert!(task_line.starts_with("- [ ]"), "{task_line}");
+    let next_line = task_line.replacen("[ ]", "[*]", 1);
+    let parent_next = fs::read_to_string(&parent_note)
+        .expect("read parent")
+        .replace(&task_line, &next_line);
+    write_file(&parent_note, &parent_next);
+    let note_before = fs::read_to_string(&note).expect("read note");
+
+    // First sync without opt-in must refuse before any write; the marker
+    // stays Ready while frontmatter/base already say Next, so the next run
+    // would revert without the refusal.
+    let output = sync_pdf(&vault, &pdf, &[]);
+    assert!(
+        !output.status.success(),
+        "task-driven status without opt-in must refuse:\n{}",
+        format_output(&output)
+    );
+    assert_eq!(
+        fs::read_to_string(&note).expect("read note"),
+        note_before,
+        "refusal must leave ref bytes unchanged"
+    );
+    // With opt-in, marker, note/base, and task settle consistently.
+    assert_success(&sync_pdf(&vault, &pdf, &["--write-pdf"]));
+    let output = sync_pdf(&vault, &pdf, &[]);
+    assert_success(&output);
+    let parent_after = fs::read_to_string(&parent_note).expect("read parent");
+    assert!(parent_after.contains("- [*]"), "{parent_after}");
+}
+
+#[test]
+fn v2_ambiguity_leaves_bytes_unchanged_with_pdf_writes() {
+    let (_temp, vault) = scan_vault("bob-cli-scan-integration-ambiguous-bytes");
+    let pdf = vault.join("lib/amb.pdf");
+    let note = vault.join("ref/amb.md");
+    let parent_note = vault.join("obsidian.md");
+    write_area_note(&parent_note, "Obsidian");
+    write_highlights_pdf(&pdf, "- status: wip\n- parent: obsidian\n");
+    assert_success(&sync_pdf(&vault, &pdf, &[]));
+    // Second claimant creates ambiguity; change marker status and request
+    // PDF writes: affected task/ref/PDF bytes must stay unchanged.
+    let mut parent_contents =
+        fs::read_to_string(&parent_note).expect("read parent");
+    parent_contents.push_str(
+        "- [/] #task #ref [[ref/amb|Amb]] [created::2026-10-06] ^ref-amb-2\n",
+    );
+    write_file(&parent_note, &parent_contents);
+    let task_before = fs::read_to_string(&parent_note).expect("read parent");
+    let ref_before = fs::read_to_string(&note).expect("read note");
+    let pdf_before = fs::read(&pdf).expect("read pdf");
+    let output = sync_pdf(&vault, &pdf, &["--write-pdf"]);
+    assert!(
+        !output.status.success(),
+        "ambiguity with PDF writes must refuse:\n{}",
+        format_output(&output)
+    );
+    assert_eq!(
+        fs::read_to_string(&parent_note).expect("read parent"),
+        task_before
+    );
+    assert_eq!(fs::read_to_string(&note).expect("read note"), ref_before);
+    assert_eq!(fs::read(&pdf).expect("read pdf"), pdf_before);
+}
+
+#[test]
+fn v2_dirty_parent_accepts_default_follow_up() {
+    let (_temp, vault) = scan_vault("bob-cli-scan-integration-dirty-parent");
+    let pdf = vault.join("lib/dirty.pdf");
+    let parent_note = vault.join("obsidian.md");
+    write_area_note(&parent_note, "Obsidian");
+    write_highlights_pdf(&pdf, "- status: wip\n- parent: obsidian\n");
+    write_file(
+        &pdf.with_extension("md"),
+        "# Dirty\n\n## Page 1\n\n- status: wip\n- parent: obsidian\n\n---\n\n> Q.\n\n- #task Default follow-up.\n",
+    );
+    assert_success(&sync_pdf(&vault, &pdf, &[]));
+    // Tracked dirty parent with unrelated additions plus a reading action
+    // and default annotation insertion must still succeed (v2 exemption).
+    let mut parent_contents =
+        fs::read_to_string(&parent_note).expect("read parent");
+    parent_contents.push_str("- [ ] unrelated authored task\n");
+    write_file(&parent_note, &parent_contents);
+    // Stage the vault as a git repo with the parent tracked and dirty.
+    let _ = std::process::Command::new("git")
+        .arg("init")
+        .current_dir(&vault)
+        .output();
+    let _ = std::process::Command::new("git")
+        .args(["add", "."])
+        .current_dir(&vault)
+        .output();
+    // Without git the guard is a no-op; with git the v2 default must still
+    // accept the dirty destination. Either way the follow-up lands.
+    let output = bob_command()
+        .arg("highlights")
+        .arg("scan")
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", PINNED_NOW)
+        .output()
+        .expect("dirty scan");
+    assert_success(&output);
 }

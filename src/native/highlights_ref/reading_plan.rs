@@ -4,9 +4,9 @@
 //! for one PDF, resolves birth and reopen parents through an injected
 //! resolver, compares the located task status against the parent-free stored
 //! base, and renders or heals the managed embed. Nothing here touches the
-//! vault, the PDF marker, or the public scan entrypoints: those stay on
-//! today's path until `scan-integration` wires this seam in, and the
-//! `v2-execution` worker consumes [`ReadingTaskPlan`] for the guarded writes.
+//! vault or the PDF marker; the scan entrypoints call [`plan_reading_task`]
+//! directly, and the `v2-execution` worker consumes [`ReadingTaskPlan`] for
+//! the guarded writes.
 
 use super::*;
 use crate::native::parent_notes::{ParentError, ResolvedParent};
@@ -81,7 +81,6 @@ pub(super) struct BirthParent {
 ///
 /// The resolver is injected so tests stay vault-free; the scan entrypoint
 /// passes `|hint| resolve_parent(&config.bob_dir, hint)`.
-#[allow(dead_code)]
 pub(super) fn resolve_birth_parent(
     hint: &str,
     resolver: &dyn Fn(&str) -> std::result::Result<ResolvedParent, ParentError>,
@@ -575,7 +574,6 @@ pub(super) fn open_v1_tracker_diagnostic(
 /// Compose the full reading-task plan for one PDF: classify, then plan the
 /// birth or the existing-task sync. V1 notes return a hands-off plan; the
 /// executor keeps today's path for them exactly.
-#[allow(dead_code)]
 pub(super) fn plan_reading_task(
     inputs: ReadingTaskPlanInputs<'_>,
 ) -> Result<ReadingTaskPlan> {
@@ -692,18 +690,27 @@ fn plan_existing_task(
             located.residence.as_deref(),
             inputs.archive_source_open,
         );
+        // A reopen never reuses the archived task's old residence: the
+        // projected/destination residence, follow-ups, frontmatter parent,
+        // and embed all use the new insert route (source parent or inbox
+        // fallback). The archive and any terminal source stay unchanged.
+        let reopen_embed =
+            located.block_id.clone().map(|block_id| ReadingTaskEmbed {
+                target: parent.route.clone(),
+                block_id,
+            });
         return Ok(ReadingTaskPlan {
             branch: NoteBranch::V2,
             kind: ReadingTaskKind::Reopen,
             action: ReadingTaskAction::Insert {
-                destination_route: parent.route,
+                destination_route: parent.route.clone(),
                 destination_label: parent.label,
                 warning_child: parent.warning_child,
                 mark: status_mark(inputs.resolved_status).unwrap_or(' '),
                 prefer_block_id: located.block_id.clone(),
             },
-            residence,
-            embed,
+            residence: Some(parent.route),
+            embed: reopen_embed,
             status_target: signal.target,
             task_changed: signal.task_changed,
             refuse_status_parent_writes: false,

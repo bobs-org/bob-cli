@@ -11,11 +11,15 @@ pub(crate) struct ManagedEmbed {
     pub block_id: String,
 }
 
-/// Find the managed embed between the H1 and the first `##` heading (or the
-/// managed region begin), skipping fenced lines.
+/// Find the managed embed in its designated slot: one blank line below the
+/// H1 (leading blank/embed run only), skipping fenced lines.
 ///
 /// Returns the first line whose trimmed text is exactly one block embed
-/// `![[<target>#^<id>]]`: no alias, nothing else on the line.
+/// `![[<target>#^<id>]]`: no alias, nothing else on the line. An unrelated
+/// authored block embed in a later introductory paragraph (after prose) is
+/// never managed, so healing preserves it and the dirty guard refuses its
+/// change as non-managed. No-H1 bodies keep the legacy top-to-first-`##`
+/// search; fenced lines are always ignored.
 pub(crate) fn find_managed_embed(body: &str) -> Option<ManagedEmbed> {
     let lines: Vec<&str> = body.lines().collect();
     let fenced = markdown::fenced_lines(&lines, 0..lines.len());
@@ -62,6 +66,54 @@ pub(crate) fn find_managed_embed(body: &str) -> Option<ManagedEmbed> {
                 break;
             }
         }
+    }
+    if h1_seen {
+        // Designated slot only: the leading blank/embed run below H1.
+        // Prose (or a heading/region) ends the slot so a later authored
+        // block embed is never managed; standalone non-managed embeds
+        // (aliases, audio) are skipped like blanks. Duplicates within the
+        // run still collapse via repeated healing.
+        for index in start..end.min(lines.len()) {
+            if fenced.contains(&index) {
+                continue;
+            }
+            let line = lines[index];
+            if line.contains("<!-- highlights:begin -->") {
+                break;
+            }
+            if let Some((level, _)) = markdown::atx_heading(line) {
+                // H2 (or any later heading) ends the intro; the slot never
+                // crosses it. The initial H1 itself is behind us.
+                if level >= 2 {
+                    break;
+                }
+                // Any other heading text counts as prose and ends the run.
+                break;
+            }
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let Some(inner) = trimmed
+                .strip_prefix("![[")
+                .and_then(|rest| rest.strip_suffix("]]"))
+            else {
+                break;
+            };
+            if inner.contains('|') {
+                continue;
+            }
+            let Some((target, block_id)) = parse_block_link_inside(inner)
+            else {
+                continue;
+            };
+            return Some(ManagedEmbed {
+                line_index: index,
+                target,
+                block_id,
+            });
+        }
+        return None;
     }
     for index in start..end.min(lines.len()) {
         if fenced.contains(&index) {

@@ -104,6 +104,23 @@ where
     I: IntoIterator<Item = &'a PdfSyncPlan>,
 {
     let plans = plans.into_iter().collect::<Vec<_>>();
+    // V2 default follow-ups share reading-task destinations and must accept
+    // unrelated authored changes there. A destination used only by v2
+    // default insertions is exempt from the dirty-target veto; any explicit
+    // route (or legacy v1 write) to the same path retains the legacy policy.
+    let mut explicit_paths: BTreeSet<PathBuf> = BTreeSet::new();
+    for plan in &plans {
+        for write in &plan.routed_task_note_writes {
+            if write.action != "none" {
+                explicit_paths.insert(write.path.clone());
+            }
+        }
+        for intent in &plan.routed_intents {
+            if !intent.is_v2_default {
+                explicit_paths.insert(intent.path.clone());
+            }
+        }
+    }
     let mut touched_paths = BTreeSet::new();
     for plan in &plans {
         if note_write_planned(plan) {
@@ -114,10 +131,15 @@ where
                 touched_paths.insert(write.path.clone());
             }
         }
-        // Insertion intentions rebase at execution, but a dirty destination
-        // still refuses: the guard runs before execution knows which lines
-        // are already present. (Reading-task destinations carry no veto.)
+        // Insertion intentions rebase at execution, but a dirty explicit
+        // destination still refuses: the guard runs before execution knows
+        // which lines are already present. V2-default-only destinations are
+        // exempt so shared reading-task notes accept unrelated edits.
+        // (Reading-task destinations carry no veto.)
         for intent in &plan.routed_intents {
+            if intent.is_v2_default && !explicit_paths.contains(&intent.path) {
+                continue;
+            }
             if !intent.lines.is_empty()
                 && intent_write_planned(&intent.path, intent)
             {

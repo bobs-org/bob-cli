@@ -2,10 +2,9 @@
 //!
 //! Side-effectful counterpart to [`plan_reading_task`]: it consumes
 //! [`ReadingTaskPlan`] actions — insert, exact line edit, or adoption —
-//! without touching the public scan entrypoints (those stay on today's path
-//! until `scan-integration` wires this seam in).
+//! called from the scan entrypoints' v2 execution path.
 //!
-//! Mandated per-PDF write order for the later wiring: destination
+//! Mandated per-PDF write order: destination
 //! reading-task and routed insertion actions first, then the explicitly
 //! authorized PDF marker write, then the ref note, using the actual final ID
 //! and refreshed metadata from [`ReadingTaskExecution`]. A detected changed
@@ -71,7 +70,6 @@ pub(super) struct ReadingInsertInputs<'a> {
 /// preview ID, allocate the final ID against fresh destination bytes (plus
 /// its archive and any preferred reopen ID), and write through capture's
 /// guarded insertion path.
-#[allow(dead_code)]
 pub(super) fn execute_reading_insert(
     inputs: ReadingInsertInputs<'_>,
 ) -> Result<ReadingTaskExecution> {
@@ -111,7 +109,6 @@ pub(super) fn execute_reading_insert(
 /// Archived tasks are refused: scan never mutates `done/`. A same-mark
 /// terminal task that only needs its stamp is still refused here — the
 /// planner routes archive reopens through insertion instead.
-#[allow(dead_code)]
 pub(super) fn execute_reading_line_edit(
     bob_dir: &Path,
     task: &LocatedRefTask,
@@ -148,7 +145,6 @@ pub(super) fn execute_reading_line_edit(
 /// ID or mark flows into the healed embed and parent. Changed, deleted, or
 /// ambiguous originals fail with the reading-task-changed error so no stale
 /// healed embed or parent is written.
-#[allow(dead_code)]
 pub(super) fn revalidate_located_task(
     bob_dir: &Path,
     task: &LocatedRefTask,
@@ -251,7 +247,6 @@ pub(super) fn frontmatter_change_is_residence_only(
 /// though `parent` is excluded from the sync contribution. Unrelated body
 /// edits still refuse. The v1 guard is untouched — this predicate only runs
 /// on the v2 branch, so v1 notes keep their exact checkbox-only allowance.
-#[allow(dead_code)]
 pub(super) fn v2_dirty_note_allowed(
     base_contents: &str,
     current_contents: &str,

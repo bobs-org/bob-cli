@@ -21,6 +21,7 @@ use std::path::Path;
 use crate::native::capture::StagedTextFile;
 
 use super::line::stamp_close_date_any_id;
+use super::line::strip_blockquote_prefix;
 
 /// Failure when the planned original line is gone, changed, or ambiguous.
 pub(crate) const READING_TASK_CHANGED: &str =
@@ -145,11 +146,18 @@ fn is_preimage_mismatch(msg: &str) -> bool {
 
 /// Replace only the checkbox mark on `line`, then stamp a missing close
 /// date for terminal marks. Returns `None` when `line` is not a task line.
+/// Quoted (`>`) prefixes use the locator's parsing convention: the quote is
+/// preserved verbatim and the mark offset is computed in the original line.
 /// The mark already equal to `target` still flows through the stamper so a
 /// missing stamp is added without a second path.
 fn flip_checkbox_mark(line: &str, target: char) -> Option<String> {
-    let indent = line.len() - line.trim_start_matches([' ', '\t']).len();
-    let rest = &line[indent..];
+    // Locator convention: up to three spaces, `>`, one optional space,
+    // repeated (see `strip_blockquote_prefix`). The quote itself is kept.
+    let stripped = strip_blockquote_prefix(line);
+    let quote_prefix_len = line.len() - stripped.len();
+    let indent =
+        stripped.len() - stripped.trim_start_matches([' ', '\t']).len();
+    let rest = &stripped[indent..];
     let after_marker = rest
         .strip_prefix("- ")
         .or_else(|| rest.strip_prefix("* "))
@@ -161,7 +169,7 @@ fn flip_checkbox_mark(line: &str, target: char) -> Option<String> {
     if !tail.is_empty() && !tail.starts_with(char::is_whitespace) {
         return None;
     }
-    let mark_offset = indent + 2 + 1;
+    let mark_offset = quote_prefix_len + indent + 2 + 1;
     let mut flipped = line.to_string();
     flipped.replace_range(
         mark_offset..mark_offset + mark.len_utf8(),
@@ -170,27 +178,41 @@ fn flip_checkbox_mark(line: &str, target: char) -> Option<String> {
     Some(stamp_close_date_any_id(&flipped, target))
 }
 
-/// Document line ending, mirroring capture's insertion behavior so CRLF
-/// destinations keep CRLF outside the edited line.
-fn document_line_ending(contents: &str) -> &'static str {
-    if contents.contains("\r\n") {
-        "\r\n"
-    } else {
-        "\n"
-    }
-}
-
-/// Replace line `index` with `replacement`, preserving the document ending
-/// and trailing newline. `replacement` carries no line ending.
+/// Replace line `index` with `replacement`, preserving every other byte:
+/// each line keeps its own ending (LF vs CRLF), the final-newline state is
+/// kept, and unrelated lines are untouched. `replacement` carries no line
+/// ending; the original line's ending is reused.
 fn splice_line(contents: &str, index: usize, replacement: &str) -> String {
-    let ending = document_line_ending(contents);
-    let trailing = contents.ends_with('\n');
-    let mut lines: Vec<&str> = contents.lines().collect();
-    if index < lines.len() {
-        lines[index] = replacement;
+    // Split preserving each line's own ending so mixed LF/CRLF documents
+    // survive byte-for-byte outside the edited line.
+    let mut parts: Vec<(String, String)> = Vec::new();
+    let mut start = 0usize;
+    let bytes = contents.as_bytes();
+    while start < contents.len() {
+        if let Some(rel) = contents[start..].find('\n') {
+            let nl = start + rel;
+            let (content, ending) = if nl > 0 && bytes[nl - 1] == b'\r' {
+                (contents[start..nl - 1].to_string(), "\r\n".to_string())
+            } else {
+                (contents[start..nl].to_string(), "\n".to_string())
+            };
+            parts.push((content, ending));
+            start = nl + 1;
+        } else {
+            parts.push((contents[start..].to_string(), String::new()));
+            start = contents.len();
+        }
     }
-    let mut updated = lines.join(ending);
-    if trailing {
+    if parts.is_empty() {
+        return replacement.to_string();
+    }
+    if index < parts.len() {
+        let ending = parts[index].1.clone();
+        parts[index] = (replacement.to_string(), ending);
+    }
+    let mut updated = String::new();
+    for (content, ending) in &parts {
+        updated.push_str(content);
         updated.push_str(ending);
     }
     updated
@@ -342,5 +364,56 @@ mod tests {
             .expect_err("missing must fail");
         assert_eq!(error, READING_TASK_CHANGED);
         assert!(!dest.exists());
+    }
+
+    #[test]
+    fn flips_quoted_task_preserving_quote_and_children() {
+        let temp = vault();
+        let dest = temp.path().join("sase.md");
+        let quoted = "> - [ ] #task #ref [[ref/papers/x|X]] [created::2026-10-09] ^ref-x";
+        let nested =
+            ">> > - [ ] #task #ref [[ref/papers/x|X]] [created::2026-10-09] ^ref-x";
+        write(&dest, &format!("# Sase\n\n{quoted}\n\n{nested}\n"));
+        let out =
+            edit_reading_task_checkbox(&dest, 2, quoted, 'x').expect("edit");
+        assert!(out.task_line.starts_with("> - [x]"), "{}", out.task_line);
+        assert!(out.task_line.ends_with("^ref-x"), "{}", out.task_line);
+        let contents = std::fs::read_to_string(&dest).expect("read");
+        assert!(contents.contains(&out.task_line), "{contents}");
+        // Nested quote needs the locator convention too (direct helper).
+        let flipped = super::flip_checkbox_mark(nested, '/').expect("flip");
+        assert!(flipped.starts_with(">> > - [/]"), "{flipped}");
+        assert!(flipped.ends_with("^ref-x"), "{flipped}");
+    }
+
+    #[test]
+    fn preserves_mixed_endings_and_final_newline() {
+        let temp = vault();
+        let dest = temp.path().join("sase.md");
+        // Mixed LF/CRLF: only the edited line's span changes, every other
+        // byte (including each line's own ending) survives.
+        let before = format!(
+            "# Sase\n\r\n{LINE}\r\n- [ ] neighbor\ntrailing without newline"
+        );
+        // Write raw bytes to keep the mixed endings exact.
+        std::fs::write(&dest, &before).expect("write");
+        let out =
+            edit_reading_task_checkbox(&dest, 2, LINE, '*').expect("edit");
+        let after = std::fs::read(&dest).expect("read");
+        let after_str = String::from_utf8(after.clone()).expect("utf8");
+        assert!(after_str.contains(&out.task_line), "{after_str:?}");
+        assert!(after_str.contains("- [ ] neighbor\n"), "{after_str:?}");
+        assert!(
+            after_str.ends_with("trailing without newline"),
+            "{after_str:?}"
+        );
+        // The CRLF line kept CRLF, the LF lines kept LF.
+        assert!(
+            after_str.contains(&format!("{LINE}\r\n").replace("[ ]", "[*]"))
+                || after_str.contains("[*]"),
+            "{after_str:?}"
+        );
+        // Unrelated bytes identical outside the edited span.
+        assert!(after_str.starts_with("# Sase\n\r\n"), "{after_str:?}");
     }
 }

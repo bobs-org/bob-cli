@@ -550,6 +550,12 @@ fn plan_pdf_sync_v2(
             parent_notes_mod::resolve_parent(&config.bob_dir, hint)
         },
     })?;
+    // Eligibility from the merged projection before the reading-task signal,
+    // mirroring the v1 path: a WIP merged status before the signal keeps the
+    // closing run's intake, and a WIP status after the signal keeps a reopen
+    // intake in the same run.
+    let pre_signal_wip =
+        projection_status_is(&resolution.projection, STATUS_WIP);
     // Task-gesture status drives the synced projection (like v1's PDF-task
     // signal, but from the located task via the stored base). Marker-only or
     // frontmatter-only changes leave the merged projection alone; the
@@ -577,26 +583,46 @@ fn plan_pdf_sync_v2(
     }
     // Preserve annotation eligibility before and after the status signal so
     // closing and reopening runs import the same pending work as today.
-    let intake_allowed_before_signal =
-        projection_status_is(&resolution.projection, STATUS_WIP)
-            || reading_plan.status_target == Some(STATUS_WIP);
-    let annotation_task_intake_allowed = intake_allowed_before_signal
+    let annotation_task_intake_allowed = pre_signal_wip
         || projection_status_is(&resolution.projection, STATUS_WIP);
+    // Ambiguity or unselectable state refuses status/parent/task writes
+    // rather than guessing: no task, marker, or frontmatter write and no
+    // invented birth embed. A per-PDF planning failure keeps partial-scan
+    // continuation (the scan collects this Err alongside other PDFs).
+    if reading_plan.refuse_status_parent_writes {
+        let mut detail = reading_plan
+            .diagnostics
+            .iter()
+            .map(|diagnostic| {
+                format!("{}: {}", diagnostic.code, diagnostic.detail)
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+        if detail.is_empty() {
+            detail = "ambiguous reading tasks; refusing status/parent writes"
+                .to_string();
+        }
+        return Err(CommandError::new(format!(
+            "refusing to sync {}: {detail}",
+            pdf.display()
+        )));
+    }
     let decision = resolution.decision;
     let synced_pf = resolution.projection;
-    // Parent for the rendered note: the plan residence when known, else the
-    // birth destination route for fresh inserts. Refusals and missing tasks
-    // keep no residence and never invent one.
+    // Parent for the rendered note: a reopen/birth insert uses its new
+    // destination route (never the archived task's old residence); ordinary
+    // existing refs use the live located residence, and missing tasks keep
+    // no residence and never invent one.
     let birth_route: Option<String> = match &reading_plan.action {
         ReadingTaskAction::Insert {
             destination_route, ..
         } => Some(destination_route.clone()),
         _ => None,
     };
-    let residence: Option<String> = reading_plan
-        .residence
-        .clone()
-        .or_else(|| birth_route.clone());
+    let residence: Option<String> = match &reading_plan.action {
+        ReadingTaskAction::Insert { .. } => birth_route.clone(),
+        _ => reading_plan.residence.clone().or(birth_route.clone()),
+    };
     // Never silently drop `parent` from validation: require the marker hint
     // or a plan residence.
     let full_for_validation = {
@@ -616,21 +642,46 @@ fn plan_pdf_sync_v2(
         decision.source.as_str(),
     )?;
     let synced_hash = projection_hash(&synced_pf)?;
-    // Normal scans preserve the marker birth hint; only an explicit PDF
-    // write refreshes a stale hint to the residence. A parent-only move
-    // therefore never triggers the missing-write-opt-in error, and
-    // task-driven marker updates wait for the opt-in while read-side
-    // pending status stays meaningful.
-    let (rendered_marker, marker_write_needed) = if options.write_pdf
-        && let Some(route) = residence.as_deref()
-    {
-        let with_hint = marker_projection_with_parent_hint(&synced_pf, route);
-        let rendered = render_marker(&with_hint)?;
-        let needed = normalize_line_endings(&rendered)
-            != normalize_line_endings(&marker.contents);
-        (rendered, needed)
-    } else {
-        (marker.contents.clone(), false)
+    // Semantic parent-free update versus the optional residence-hint
+    // refresh: only non-parent synced-field contributions (including
+    // lifecycle status and normalization) need the PDF opt-in. A
+    // parent-only move never triggers the refusal, and normal scans
+    // preserve the marker birth hint; only an explicit PDF write refreshes
+    // a stale hint. Writing runs refuse before any write when required
+    // marker changes lack opt-in; dry runs preview them.
+    let semantic_rendered = render_marker(&synced_pf)?;
+    let semantic_current = render_marker(&marker_pf)?;
+    let semantic_needed = (decision.frontmatter_contributed
+        || status_normalization.marker.is_some())
+        && normalize_line_endings(&semantic_rendered)
+            != normalize_line_endings(&semantic_current);
+    if semantic_needed && !options.write_pdf && !options.dry_run {
+        return Err(CommandError::new(
+            "reference note changed but --write-pdf was not supplied; refusing to update the PDF marker",
+        ));
+    }
+    let (rendered_marker, marker_write_needed) = match residence.as_deref() {
+        Some(route) => {
+            let with_hint =
+                marker_projection_with_parent_hint(&synced_pf, route);
+            let rendered = render_marker(&with_hint)?;
+            let hint_needed = normalize_line_endings(&rendered)
+                != normalize_line_endings(&marker.contents);
+            // Dry runs preview the required semantic change even without
+            // opt-in; normal writes also refresh a stale hint under opt-in.
+            let needed = semantic_needed
+                || (options.write_pdf && hint_needed)
+                || (options.dry_run && hint_needed && semantic_needed);
+            // Without opt-in (and outside dry-run preview) preserve the
+            // marker bytes; the semantic refusal above already fired when
+            // needed, so here `needed` is only true under opt-in/dry-run.
+            if options.write_pdf || options.dry_run {
+                (rendered, needed)
+            } else {
+                (marker.contents.clone(), false)
+            }
+        }
+        None => (marker.contents.clone(), false),
     };
     let sidecar = read_sidecar_for_pdf(pdf)?;
     let strip_return_links = super::return_links::strip_enabled(&synced_pf);
@@ -719,12 +770,13 @@ fn plan_pdf_sync_v2(
     } else if let Some(embed) = reading_plan.embed.as_ref() {
         let healed =
             heal_managed_embed(&note.body, &embed.target, &embed.block_id);
+        // Preserve managed-region validation: a missing/broken Highlights
+        // region on the healed path fails with the established
+        // missing/broken-region error rather than silently syncing the
+        // healed embed alone.
         let body_with_highlights = if rendered_highlights.is_some() {
             let replacement = highlights_content;
-            match replace_managed_region(&healed, replacement) {
-                Ok(body) => body,
-                Err(_) => healed,
-            }
+            replace_managed_region(&healed, replacement)?
         } else {
             healed
         };
@@ -870,15 +922,22 @@ fn restamp_parent_free_base(
     rendered
 }
 
-/// Attach companion audio when the v2 body path bypassed `render_body`'s
-/// audio anchoring (birth/healed bodies already include audio; existing
-/// healed bodies re-anchor here).
+/// Late companion audio for existing-v2 healed bodies: anchor directly
+/// after the managed reading-task embed so a late companion appears there
+/// even when authored text lies before `## Highlights`, exactly once,
+/// preserving that text. V1 placement via `render_body` is untouched.
 fn maybe_insert_audio_embed_fallback(
     note: &ParsedNote,
     metadata: &PipelineMetadata,
     body: &str,
 ) -> String {
-    maybe_insert_audio_embed(note, metadata, body)
+    let Some(audio) = metadata.audio.as_deref() else {
+        return body.to_string();
+    };
+    if note_has_audio_field(note) {
+        return body.to_string();
+    }
+    maybe_insert_audio_embed_after_managed(body, audio)
 }
 
 /// Reserve deterministic preview IDs in PDF order.
@@ -1319,11 +1378,16 @@ struct IntentOutcome {
 }
 
 /// Execute routed insertion intentions by rereading each destination and
-/// rebasing: v2 defaults use capture's Tasks-section insertion (creating a
-/// missing inbox), explicit routes keep the legacy append behavior. Lines
-/// already present on disk or written earlier in this run are skipped and
-/// counted, never duplicated; a failed PDF never consumes another PDF's
-/// follow-up work.
+/// rebasing through capture's preimage-checked writer: v2 defaults use
+/// capture's Tasks-section insertion (creating a missing inbox), explicit
+/// routes keep the legacy append behavior. Lines already present on disk or
+/// written earlier in this run are skipped and counted, never duplicated.
+/// Dedup keys commit only after their destination write succeeds (or fresh
+/// disk evidence proves the task already exists), so a failed destination
+/// never consumes a later PDF's otherwise-identical follow-up while
+/// successful writes stay deduped even if a later ref-note write fails.
+/// Bounded retries cover only true preimage mismatches, rebuilding against
+/// fresh bytes; arbitrary IO errors propagate without retry.
 fn execute_routed_intents(
     config: &Config,
     plan: &PdfSyncPlan,
@@ -1335,87 +1399,143 @@ fn execute_routed_intents(
         deduped: 0,
     };
     for intent in &plan.routed_intents {
-        let current = match fs::read_to_string(&intent.path) {
-            Ok(contents) => Some(contents),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                if intent.is_v2_default {
-                    None
-                } else {
+        let mut attempts = 0usize;
+        loop {
+            attempts += 1;
+            let current = match fs::read_to_string(&intent.path) {
+                Ok(contents) => Some(contents),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    if intent.is_v2_default {
+                        None
+                    } else {
+                        return Err(CommandError::new(format!(
+                            "read routed task note {}: {error}",
+                            intent.path.display()
+                        )));
+                    }
+                }
+                Err(error) => {
                     return Err(CommandError::new(format!(
                         "read routed task note {}: {error}",
                         intent.path.display()
                     )));
                 }
-            }
-            Err(error) => {
-                return Err(CommandError::new(format!(
-                    "read routed task note {}: {error}",
-                    intent.path.display()
-                )));
-            }
-        };
-        let mut missing_lines = Vec::new();
-        for (line, candidate) in
-            intent.lines.iter().zip(intent.candidates.iter())
-        {
-            let anchor = annotation_task_legacy_source_task_block_id(candidate);
-            if run_state.processed_ids.contains(&candidate.processed_id)
-                || run_state.legacy_identities.contains(&candidate.identity)
-                || run_state.source_anchors.contains(&anchor)
+            };
+            let mut missing_lines = Vec::new();
+            let mut missing_keys = Vec::new();
+            for (line, candidate) in
+                intent.lines.iter().zip(intent.candidates.iter())
             {
-                outcome.deduped += 1;
-                continue;
+                let anchor =
+                    annotation_task_legacy_source_task_block_id(candidate);
+                if run_state.processed_ids.contains(&candidate.processed_id)
+                    || run_state.legacy_identities.contains(&candidate.identity)
+                    || run_state.source_anchors.contains(&anchor)
+                {
+                    outcome.deduped += 1;
+                    continue;
+                }
+                if let Some(contents) = current.as_deref()
+                    && (contents.contains(candidate.processed_id.as_str())
+                        || contents.contains(candidate.identity.as_str())
+                        || contents.contains(anchor.as_str()))
+                {
+                    outcome.deduped += 1;
+                    continue;
+                }
+                missing_lines.push(line.clone());
+                missing_keys.push((
+                    candidate.processed_id.clone(),
+                    candidate.identity.clone(),
+                    anchor,
+                ));
             }
-            if let Some(contents) = current.as_deref()
-                && (contents.contains(candidate.processed_id.as_str())
-                    || contents.contains(candidate.identity.as_str())
-                    || contents.contains(anchor.as_str()))
-            {
-                outcome.deduped += 1;
-                continue;
+            if missing_lines.is_empty() {
+                break;
             }
-            missing_lines.push(line.clone());
-            run_state
-                .processed_ids
-                .insert(candidate.processed_id.clone());
-            run_state
-                .legacy_identities
-                .insert(candidate.identity.clone());
-            run_state.source_anchors.insert(anchor);
-        }
-        if missing_lines.is_empty() {
-            continue;
-        }
-        let rendered = if intent.is_v2_default {
-            match current.as_deref() {
-                Some(contents) => {
-                    let mut updated = contents.to_string();
-                    for line in &missing_lines {
-                        let (next, _) =
-                            crate::native::capture::insert_task_line(
-                                &updated, line,
-                            );
-                        updated = next;
+            let existed = current.is_some();
+            let base = current.as_deref().unwrap_or("");
+            let rendered = if intent.is_v2_default {
+                match current.as_deref() {
+                    Some(contents) => {
+                        let mut updated = contents.to_string();
+                        for line in &missing_lines {
+                            let (next, _) =
+                                crate::native::capture::insert_task_line(
+                                    &updated, line,
+                                );
+                            updated = next;
+                        }
+                        updated
                     }
-                    updated
+                    None => {
+                        let mut rendered = missing_lines.join("\n");
+                        rendered.push('\n');
+                        rendered
+                    }
                 }
-                None => {
-                    let mut rendered = missing_lines.join("\n");
-                    rendered.push('\n');
-                    rendered
+            } else {
+                append_task_lines(base, &missing_lines)
+            };
+            // A concurrent write that already contains our lines is a no-op.
+            if current.as_deref() == Some(rendered.as_str()) {
+                break;
+            }
+            let staged = crate::native::capture::StagedTextFile {
+                target: intent.path.clone(),
+                target_existed: existed,
+                original_target: current.clone().unwrap_or_default(),
+                updated_target: rendered,
+            };
+            match crate::native::capture::write_staged_files(
+                std::slice::from_ref(&staged),
+            ) {
+                Ok(()) => {
+                    for (processed_id, identity, anchor) in missing_keys {
+                        run_state.processed_ids.insert(processed_id);
+                        run_state.legacy_identities.insert(identity);
+                        run_state.source_anchors.insert(anchor);
+                    }
+                    outcome.note_actions += 1;
+                    break;
+                }
+                Err(error) => {
+                    let msg = error.message.clone();
+                    if is_routed_preimage_mismatch(&msg) && attempts < 3 {
+                        continue;
+                    }
+                    return Err(CommandError::new(msg));
                 }
             }
-        } else {
-            append_task_lines(current.as_deref().unwrap_or(""), &missing_lines)
-        };
-        // A concurrent write that already contains our lines is a no-op.
-        if current.as_deref() == Some(rendered.as_str()) {
-            continue;
         }
-        atomic_write(&intent.path, &rendered)?;
-        outcome.note_actions += 1;
     }
     Ok(outcome)
+}
+
+/// Read-only asset preconditions before any v2 writes: an existing image
+/// destination with different bytes refuses here rather than after the
+/// reading task or routed follow-ups have already written.
+fn validate_v2_asset_preconditions(plan: &PdfSyncPlan) -> Result<()> {
+    for write in &plan.image_assets {
+        if let Ok(bytes) = fs::read(&write.dest_path) {
+            let dest_sha256 = hex::encode(Sha256::digest(bytes));
+            if dest_sha256 != write.source_sha256 {
+                return Err(CommandError::new(format!(
+                    "image asset destination exists with different bytes: {}",
+                    write.dest_path.display()
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// True for a genuine staged-writer preimage race; all other IO errors
+/// propagate without retry.
+fn is_routed_preimage_mismatch(msg: &str) -> bool {
+    msg.contains("changed on disk after planning")
+        || msg.contains("created on disk after planning")
+        || msg.contains("deleted on disk after planning")
 }
 
 /// Per-PDF v2 execution: destination reading-task and routed insertion
@@ -1428,6 +1548,22 @@ fn execute_pdf_sync_v2(
     plan: &PdfSyncPlan,
     run_state: &mut RunWriteState,
 ) -> Result<SyncWriteReport> {
+    // Non-mutating pre-validation before any writes: the selected reading
+    // line, the required ref-note preimage, the authorized PDF preimage,
+    // and asset preconditions. A changed/deleted/ambiguous selected line
+    // fails here with the reread error before any destination, marker, or
+    // ref write begins. Immediate revalidation still runs at each write
+    // boundary below.
+    if let Some(located) = plan.reading_located.as_ref() {
+        revalidate_located_task(&config.bob_dir, located)?;
+    }
+    if note_write_planned(plan) {
+        ensure_note_unchanged_for_write(plan)?;
+    }
+    if plan.marker_write_needed {
+        ensure_pdf_unchanged_for_write(plan)?;
+    }
+    validate_v2_asset_preconditions(plan)?;
     // The reading-task action validates (and writes) first: a moved or
     // altered task fails here with the reading-task-changed error before the
     // marker, assets, routed follow-ups, or ref note are touched.

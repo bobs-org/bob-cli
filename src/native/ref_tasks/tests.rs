@@ -411,6 +411,20 @@ fn managed_embed_matches_positive_and_negative_cases() {
 }
 
 #[test]
+fn managed_slot_ignores_later_authored_embed() {
+    // Slot embed wins; a later authored block embed after prose is never
+    // managed, so healing preserves it and the dirty guard treats its
+    // change as non-managed.
+    let body = "# Title\n\n![[sase#^ref-x]]\n\nSome intro prose.\n\n![[other#^ref-y]]\n\n## Next\n";
+    let found = embed::find_managed_embed(body).expect("slot");
+    assert_eq!(found.block_id, "ref-x");
+    assert_eq!(found.line_index, 2);
+    // No slot embed: later authored alone is not managed.
+    let later_only = "# Title\n\nSome prose.\n\n![[other#^ref-y]]\n\n## Next\n";
+    assert!(embed::find_managed_embed(later_only).is_none());
+}
+
+#[test]
 fn outside_area_fires_for_daily_and_hub_notes() {
     let daily = walk::LocatedRefTask {
         path: "2026/20261008.md".to_string(),

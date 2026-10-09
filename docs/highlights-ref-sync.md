@@ -1205,13 +1205,26 @@ parent succeeded, rerunning adopts the existing task and finishes
 without duplication.
 
 Destination notes have no git-dirty veto; capture's preimage-checked
-writer rebuilds from fresh bytes on bounded retries, so unrelated user
-additions survive. The ref-note guard additionally allows edits confined
-to the managed embed (including deletion and repointing) plus
+writer rebuilds from fresh bytes on bounded retries (preimage races only),
+so unrelated user additions survive. V2 default annotation destinations
+share reading-task notes and accept unrelated dirty edits there; explicit
+routes keep the legacy dirty refusal, and a mixed default/explicit share
+keeps the legacy policy. Routed dedup commits only after its destination
+write succeeds (or fresh disk proves the task exists), so a failed
+destination never consumes a later PDF's follow-up. Before any write, sync
+revalidates the selected reading line, the ref-note preimage, the
+authorized PDF preimage, and asset preconditions; a changed, deleted, or
+ambiguous line fails with the reread error before any destination, marker,
+or ref write. The ref-note guard additionally allows edits confined
+to the managed embed slot (including deletion and repointing) plus
 residence-only frontmatter changes; unrelated body edits still refuse,
 and the v1 guard is unchanged. A parent-only move never demands marker
-write-back; only `--write-pdf` / `--write-pdfs` refreshes a stale
-marker hint to the residence.
+write-back; writing runs refuse before any write when a non-parent synced
+field (including lifecycle status and normalization) needs marker
+write-back without `--write-pdf` / `--write-pdfs`, while dry runs preview
+it. Only the opt-in refreshes a stale marker hint to the residence.
+Ambiguous births and archive-open candidates refuse status, parent, task,
+and embed writes with per-PDF diagnostics (partial scans continue).
 
 Unqualified annotation follow-ups file into the reading task's residence
 (or `mac_inbox` when there is none, never an archive) with full-path

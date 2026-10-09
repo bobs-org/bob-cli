@@ -62,6 +62,9 @@ pub(super) fn print_pdf_sync_report(
     for line in reading_plan_report_lines(plan) {
         println!("{line}");
     }
+    for line in reading_diagnostic_report_lines(plan) {
+        println!("{line}");
+    }
 }
 
 pub(super) fn print_sync_write_report(report: &SyncWriteReport) {
@@ -173,6 +176,36 @@ fn reading_kind_label(kind: &ReadingTaskKind) -> &'static str {
         ReadingTaskKind::Missing => "missing",
         ReadingTaskKind::Refused => "refused",
     }
+}
+
+/// One PDF's stored reading diagnostics as `reading_diagnostic:` lines.
+/// Missing tasks gain no replacement; `open_ref_without_task` carries the
+/// restore-from-git/set-abandoned guidance from planning. Refusals surface
+/// their `multiple_open_ref_tasks` / `open_ref_task_in_done` evidence here
+/// in human/verbose output; JSON keeps one envelope with refusal details in
+/// its established per-PDF failure message.
+pub(super) fn reading_diagnostic_report_lines(
+    plan: &PdfSyncPlan,
+) -> Vec<String> {
+    let mut lines = Vec::new();
+    if let Some(reading) = plan.reading_task_plan.as_ref() {
+        for diagnostic in &reading.diagnostics {
+            lines.push(format!(
+                "reading_diagnostic: {}: {}",
+                diagnostic.code, diagnostic.detail
+            ));
+        }
+    }
+    for diagnostic in &plan.reading_diagnostics {
+        let line = format!(
+            "reading_diagnostic: {}: {}",
+            diagnostic.code, diagnostic.detail
+        );
+        if !lines.contains(&line) {
+            lines.push(line);
+        }
+    }
+    lines
 }
 
 /// One PDF's performed reading-task write as `reading_task_created:` /
@@ -1022,6 +1055,9 @@ pub(super) fn print_scan_plan_entry(plan: &PdfSyncPlan) {
         planned_routed_note_write_count(plan)
     );
     for line in reading_plan_report_lines(plan) {
+        println!("  {line}");
+    }
+    for line in reading_diagnostic_report_lines(plan) {
         println!("  {line}");
     }
 }
