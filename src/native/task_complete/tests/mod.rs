@@ -12,6 +12,7 @@ use super::*;
 
 mod recovery_tests;
 mod retirement_tests;
+mod successor_tests;
 mod tree_tests;
 
 pub(super) struct MemoryVault {

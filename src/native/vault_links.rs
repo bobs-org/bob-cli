@@ -48,6 +48,38 @@ impl NoteIndex {
         self.relative_paths.iter().map(PathBuf::as_path)
     }
 
+    /// This index plus a few extra paths (batch-staged notes), without
+    /// rebuilding the whole basename map: the common successor-link
+    /// case adds a handful of staged files to a vault-wide index.
+    pub(crate) fn with_additional<I>(&self, extra: I) -> Self
+    where
+        I: IntoIterator<Item = PathBuf>,
+    {
+        let mut next = Self {
+            relative_paths: self.relative_paths.clone(),
+            basename_paths: self.basename_paths.clone(),
+        };
+        for path in extra {
+            if next.relative_paths.contains(&path) {
+                continue;
+            }
+            if let Some(name) = markdown_basename(&path) {
+                match next.basename_paths.entry(name.to_lowercase()) {
+                    std::collections::btree_map::Entry::Vacant(entry) => {
+                        entry.insert(Some(path.clone()));
+                    }
+                    std::collections::btree_map::Entry::Occupied(mut entry) => {
+                        if entry.get().as_ref() != Some(&path) {
+                            entry.insert(None);
+                        }
+                    }
+                }
+            }
+            next.relative_paths.insert(path);
+        }
+        next
+    }
+
     pub(crate) fn resolve(
         &self,
         current_path: Option<&Path>,
@@ -252,6 +284,31 @@ mod tests {
             resolver.resolve(day, "solo"),
             LinkResolution::Found(PathBuf::from("Solo.md"))
         );
+    }
+
+    #[test]
+    fn with_additional_unions_staged_notes_without_rebuilding() {
+        let base = NoteIndex::from_paths([
+            PathBuf::from("sase.md"),
+            PathBuf::from("20261005.md"),
+        ]);
+        let union = base.with_additional([PathBuf::from("fresh.md")]);
+        assert_eq!(
+            union.resolve(None, "fresh"),
+            Some(PathBuf::from("fresh.md"))
+        );
+        assert_eq!(union.resolve(None, "sase"), Some(PathBuf::from("sase.md")));
+        // A staged twin flips a basename to ambiguous, exactly as a
+        // rebuilt index would (no exact root hit either way).
+        let nested = NoteIndex::from_paths([PathBuf::from("docs/sase.md")]);
+        let ambiguous = nested.with_additional([PathBuf::from("sub/sase.md")]);
+        assert_eq!(ambiguous.resolve(None, "sase"), None);
+        assert_eq!(
+            ambiguous.resolve(None, "sub/sase"),
+            Some(PathBuf::from("sub/sase.md"))
+        );
+        // The base index is untouched.
+        assert_eq!(base.resolve(None, "sase"), Some(PathBuf::from("sase.md")));
     }
 
     #[test]

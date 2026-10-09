@@ -142,7 +142,9 @@ complete that existing open task without closing a Pomodoro, the way `=x!N` \
 completes a linked task: the task line closes exactly as `=x!N` writes it \
 (including embedded subtasks), its Task Links retire the way `bob task \
 reconcile` retires them, and Blocked dependents recover the way Ctrl+Enter \
-recovers them. The token must be the entire item: no body text, children, \
+recovers them, with the dependents this close fully unblocked linked into \
+the predecessor's slot as Next (docs/task-dependencies.md §12; \
+`plan.link_unblocked: false` turns linking off). The token must be the entire item: no body text, children, \
 `%`, `s:`, `p:`, `#name`, `=`, `@@`, or forced destination flags. The note \
 locator works vault-wide exactly like `&note:block-id` \
 (`!projects/foo:bar`, `!\"Shopping List\":milk`). A bare `!` or partial \

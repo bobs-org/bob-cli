@@ -247,7 +247,7 @@ fn bounded_warning(message: String) -> String {
 
 /// Whether a raw task line carries the `#hide` tag as its own token:
 /// near-matches such as `#hidden` or `#hideaway` do not count.
-fn has_hide_tag(raw_line: &str) -> bool {
+pub(crate) fn has_hide_tag(raw_line: &str) -> bool {
     raw_line.split_whitespace().any(|token| token == "#hide")
 }
 

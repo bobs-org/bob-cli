@@ -48,6 +48,7 @@ pub(super) struct DependencyContext {
     catalog: OnceLock<NoteCatalog>,
     previous_daily: OnceLock<Option<PathBuf>>,
     dependents: OnceLock<DependentsSnapshot>,
+    link_unblocked: OnceLock<bool>,
 }
 
 impl DependencyContext {
@@ -66,6 +67,7 @@ impl DependencyContext {
             catalog: OnceLock::new(),
             previous_daily: OnceLock::new(),
             dependents: OnceLock::new(),
+            link_unblocked: OnceLock::new(),
         }
     }
 
@@ -109,6 +111,18 @@ impl DependencyContext {
     pub(super) fn dependents_snapshot(&self) -> &DependentsSnapshot {
         self.dependents
             .get_or_init(|| DependentsSnapshot::build(&self.bob_dir))
+    }
+
+    /// Successor-linking kill switch (`docs/task-dependencies.md`
+    /// §12.8), read once per batch: `plan.link_unblocked`, defaulting to
+    /// `true`. An invalid plan config falls back to `true` through the
+    /// existing plan-budget warning paths.
+    pub(super) fn link_unblocked(&self) -> bool {
+        *self.link_unblocked.get_or_init(|| {
+            config::load_plan_config(&config::config_path())
+                .map(|loaded| loaded.link_unblocked())
+                .unwrap_or(true)
+        })
     }
 }
 

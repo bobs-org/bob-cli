@@ -7,11 +7,14 @@
 
 pub(crate) mod recovery;
 pub(crate) mod retirement;
+pub(crate) mod successors;
 pub(crate) mod tree;
 
-pub(crate) use recovery::recover_blocked_dependents;
 pub(crate) use retirement::{
     retire_completed_links, LedgerRetirement, LinkStatus,
+};
+pub(crate) use successors::{
+    plan_successors, CompletedTask, SuccessorInput, SuccessorPlan,
 };
 pub(crate) use tree::{
     complete_embedded_trees, complete_task_tree, CompleteTreeOutcome,

@@ -12,6 +12,7 @@ pub(crate) struct PlanConfig {
     pub(crate) max_ready: u32,
     pub(crate) max_ready_per_note: u32,
     pub(crate) strict: bool,
+    pub(crate) link_unblocked: bool,
     pub(crate) exempt: Vec<String>,
     pub(crate) inventory_labels: Vec<String>,
 }
@@ -26,6 +27,7 @@ impl Default for PlanConfig {
             max_ready: 100,
             max_ready_per_note: 5,
             strict: false,
+            link_unblocked: true,
             exempt: vec!["GTD".to_string()],
             inventory_labels: vec![
                 "LATER".to_string(),
@@ -64,6 +66,10 @@ impl PlanConfig {
 
     pub(crate) fn strict(&self) -> bool {
         self.strict
+    }
+
+    pub(crate) fn link_unblocked(&self) -> bool {
+        self.link_unblocked
     }
 
     pub(crate) fn exempt(&self) -> &[String] {
@@ -220,6 +226,20 @@ fn parse_plan_config(
         }
     };
 
+    // Successor linking kill switch (`docs/task-dependencies.md` §12.8):
+    // boolean only; an invalid value fails the load and the caller falls
+    // back to `true` through the existing warning paths.
+    let link_unblocked_value = match get("link_unblocked") {
+        None | Some(serde_yaml::Value::Null) => defaults.link_unblocked,
+        Some(serde_yaml::Value::Bool(flag)) => flag,
+        Some(other) => {
+            return Err(ConfigError::Invalid(format!(
+                "plan.link_unblocked in {path_display} must be a boolean; got {}",
+                render_scalar(&other)
+            )));
+        }
+    };
+
     let strings = |name: &str, value: Option<serde_yaml::Value>| {
         let Some(value) = value else {
             return Ok(match name {
@@ -272,6 +292,7 @@ fn parse_plan_config(
             defaults.max_ready_per_note,
         )?,
         strict: strict_value,
+        link_unblocked: link_unblocked_value,
         exempt: strings("exempt", get("exempt"))?,
         inventory_labels: strings("inventory_labels", get("inventory_labels"))?,
     })
@@ -358,6 +379,7 @@ mod tests {
         assert_eq!(config.max_ready(), 42);
         assert_eq!(config.max_ready_per_note(), 3);
         assert!(config.strict());
+        assert!(config.link_unblocked());
         assert_eq!(config.exempt(), ["GTD", "ADMIN"]);
         assert_eq!(config.inventory_labels(), ["LATER"]);
     }
@@ -382,6 +404,8 @@ mod tests {
             "plan:\n  max_ready_per_note: 4294967296\n",
             "plan:\n  max_themes: many\n",
             "plan:\n  strict: \"yes\"\n",
+            "plan:\n  link_unblocked: \"yes\"\n",
+            "plan:\n  link_unblocked: 1\n",
             "plan:\n  exempt: GTD\n",
             "plan:\n  exempt: [GTD, '']\n",
             "plan:\n  exempt: [GTD, 7]\n",
@@ -396,6 +420,28 @@ mod tests {
                 "expected invalid config for {text:?}, got {error:?}"
             );
         }
+    }
+
+    #[test]
+    fn link_unblocked_defaults_true_and_parses_false() {
+        let defaulted = parse_plan_config(
+            "plan:\n  max_links: 12\n",
+            Path::new("/config.yml"),
+        )
+        .expect("absent link_unblocked");
+        assert!(defaulted.link_unblocked());
+        let nulled = parse_plan_config(
+            "plan:\n  link_unblocked: null\n",
+            Path::new("/config.yml"),
+        )
+        .expect("null link_unblocked");
+        assert!(nulled.link_unblocked());
+        let disabled = parse_plan_config(
+            "plan:\n  link_unblocked: false\n",
+            Path::new("/config.yml"),
+        )
+        .expect("explicit false");
+        assert!(!disabled.link_unblocked());
     }
 
     #[test]

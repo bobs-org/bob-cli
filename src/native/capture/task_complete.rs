@@ -126,8 +126,100 @@ pub(super) fn plan_task_complete_item(
         completed
             .insert((closed.absolute_path.clone(), closed.block_id.clone()));
     }
-    // Scoped ledger retirement over the post-tree staged day file.
+    // Successor linking (`docs/task-dependencies.md` §12) runs before
+    // ledger retirement: the completed set C and its anchors are read
+    // from the staged post-tree day text (before this gesture's strikes,
+    // moves, or retirement), the planner recovers newly unblocked
+    // dependents and inserts successor links, and retirement then strikes
+    // the predecessor in place while the successor keeps the vacated
+    // slot. The `[id::]` gate runs first: the staged post-close lines of
+    // the completed tasks (root and closed subtasks) are read directly
+    // from the planner, and when none carries an `[id::]` field no
+    // dependent can name this close, so successor planning is skipped
+    // with no dependents lookup and no extra reads. Dependents that name
+    // only the canonical id of a target without `[id::]` are left to the
+    // hooks (successor-links gate edge).
     let day_exists = planner.currently_exists(&day_file)? || day_file.is_file();
+    let mut predecessors: Vec<engine::CompletedTask> = Vec::new();
+    for (path, id) in &completed {
+        let line_index = completed_line_hint(&outcome, path, id).unwrap_or(0);
+        let staged_line = planner
+            .peek_text(path)
+            .as_deref()
+            .and_then(|text| text.lines().nth(line_index))
+            .unwrap_or_default()
+            .to_string();
+        let metadata = crate::native::task_status_hooks::task_metadata(
+            &staged_line,
+            Some(id),
+        );
+        let Some(task_id) = metadata.task_id else {
+            continue;
+        };
+        let is_root = outcome.root.as_ref().is_some_and(|root| {
+            root.absolute_path == *path && root.block_id == *id
+        });
+        predecessors.push(engine::CompletedTask {
+            relative_path: path
+                .strip_prefix(bob_dir)
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|_| PathBuf::from(&staged_line)),
+            block_id: id.clone(),
+            task_id,
+            text: task_complete_display_text(
+                &staged_line,
+                &settings.global_filter,
+                Some(id),
+            ),
+            is_root,
+        });
+    }
+    // Day text before this gesture's strikes, moves, or retirement: the
+    // already-planned baseline for anchors and derived ranks. The tree
+    // close never rewrites Pomodoro bullets, so the post-tree staged
+    // text is the right baseline.
+    let pre_day_text = if day_exists {
+        planner.current_contents(&day_file)?
+    } else {
+        None
+    };
+    let mut successor_plan = engine::SuccessorPlan::default();
+    let mut unblocked_check = "checked";
+    if !predecessors.is_empty() {
+        if !dependency_ctx.dependents_snapshot().available {
+            // A snapshot failure is non-fatal: the close still succeeds
+            // and nothing is linked.
+            unblocked_check = "unavailable";
+        } else {
+            let snapshot =
+                staged_snapshot_for_recovery(bob_dir, planner, dependency_ctx);
+            let note_index =
+                staged_note_index(bob_dir, planner, dependency_ctx);
+            successor_plan = engine::plan_successors(engine::SuccessorInput {
+                completed: predecessors,
+                snapshot,
+                pre_day: pre_day_text.clone(),
+                day_relative: PathBuf::from(day_relative.clone()),
+                today,
+                tasks_settings:
+                    &crate::native::task_status_hooks::read_tasks_settings(
+                        bob_dir,
+                    ),
+                note_settings: &settings,
+                link_unblocked: dependency_ctx.link_unblocked(),
+                index: &note_index,
+            });
+            for (relative_path, text) in &successor_plan.changed_files {
+                let absolute_path = bob_dir.join(relative_path);
+                planner.stage(&absolute_path, text.clone())?;
+            }
+            if let Some(updated_day) = successor_plan.new_day_text.clone() {
+                planner.stage(&day_file, updated_day)?;
+            }
+        }
+    }
+    // Scoped ledger retirement over the post-successor staged day file,
+    // so link statuses resolve the inserted successor links as Live.
     let mut ledger_json: Option<TaskCompleteLedgerJson> = None;
     let mut pomodoro_refs: Vec<PomodoroBlockRef> = Vec::new();
     if day_exists && let Some(day_text) = planner.current_contents(&day_file)? {
@@ -163,44 +255,6 @@ pub(super) fn plan_task_complete_item(
                 &retirement,
             ));
         }
-    }
-    // Blocked-dependent recovery over the staged snapshot (post-tree,
-    // post-retirement). The `[id::]` gate runs first: the staged
-    // post-close lines of the completed tasks (root and closed subtasks)
-    // are read directly from the planner, and when none carries an
-    // `[id::]` field no dependent can name this close, so recovery is
-    // skipped with no dependents lookup and no extra reads. Dependents
-    // that name only the canonical id of a target without `[id::]` are
-    // left to the hooks (successor-links gate edge).
-    let mut completed_ids: BTreeSet<String> = BTreeSet::new();
-    for (path, id) in &completed {
-        let line_index = completed_line_hint(&outcome, path, id).unwrap_or(0);
-        let task_id = planner
-            .peek_text(path)
-            .as_deref()
-            .and_then(|text| text.lines().nth(line_index))
-            .and_then(|line| {
-                crate::native::task_status_hooks::task_metadata(line, Some(id))
-                    .task_id
-            });
-        if let Some(task_id) = task_id {
-            completed_ids.insert(task_id);
-        }
-    }
-    let snapshot = if completed_ids.is_empty() {
-        Vec::new()
-    } else {
-        staged_snapshot_for_recovery(bob_dir, planner, dependency_ctx)
-    };
-    let recovery = engine::recover_blocked_dependents(
-        snapshot,
-        &completed_ids,
-        today,
-        &crate::native::task_status_hooks::read_tasks_settings(bob_dir),
-    );
-    for (relative_path, text) in &recovery.changed_files {
-        let absolute_path = bob_dir.join(relative_path);
-        planner.stage(&absolute_path, text.clone())?;
     }
     // Final post-images for JSON + task blocks.
     let final_note_text =
@@ -270,18 +324,25 @@ pub(super) fn plan_task_complete_item(
             reason: left.reason.as_str().to_string(),
         })
         .collect::<Vec<_>>();
-    let unblocked = recovery
-        .recovered
+    let clean_row_text = |text: &str, block_id: &str| {
+        note_tasks::clean_description(
+            text,
+            &settings.global_filter,
+            if block_id.is_empty() {
+                None
+            } else {
+                Some(block_id)
+            },
+        )
+    };
+    let unblocked = successor_plan
+        .unblocked
         .iter()
         .map(|dependent| TaskCompleteUnblockedJson {
-            note_path: display_relative(&dependent.relative_path),
-            block_id: dependent.block_id.clone().unwrap_or_default(),
+            note_path: display_relative(&dependent.note_path),
+            block_id: dependent.block_id.clone(),
             line: dependent.line,
-            text: note_tasks::clean_description(
-                &dependent.text,
-                &settings.global_filter,
-                dependent.block_id.as_deref(),
-            ),
+            text: clean_row_text(&dependent.text, &dependent.block_id),
             previous_status_symbol: dependent.previous_status_symbol,
             previous_status_name: status_name_for(
                 bob_dir,
@@ -289,6 +350,44 @@ pub(super) fn plan_task_complete_item(
             ),
             status_symbol: dependent.status_symbol,
             status_name: status_name_for(bob_dir, dependent.status_symbol),
+            inbox: dependent.inbox,
+            unblocked_by: dependent
+                .unblocked_by
+                .iter()
+                .map(|cause| TaskCompleteUnblockedCauseJson {
+                    note_path: display_relative(&cause.note_path),
+                    block_id: cause.block_id.clone(),
+                    text: cause.text.clone(),
+                })
+                .collect(),
+            link: dependent.link.as_ref().map(|link| {
+                TaskCompleteSuccessorLinkJson {
+                    day_file: day_relative.clone(),
+                    entry_name: link.entry_name.clone(),
+                    entry_line: link.entry_line,
+                    entry_created: link.entry_created,
+                    next_up: link.next_up,
+                    line: link.line,
+                    block_link: link.block_link.clone(),
+                    block_id_created: link.block_id_created,
+                }
+            }),
+            not_linked: dependent.not_linked.map(str::to_string),
+        })
+        .collect::<Vec<_>>();
+    let still_blocked = successor_plan
+        .still_blocked
+        .iter()
+        .map(|blocked| TaskCompleteStillBlockedJson {
+            note_path: display_relative(&blocked.note_path),
+            block_id: blocked.block_id.clone(),
+            line: blocked.line,
+            text: clean_row_text(&blocked.text, &blocked.block_id),
+            status_symbol: blocked.status_symbol,
+            status_name: status_name_for(bob_dir, blocked.status_symbol),
+            reason: blocked.reason,
+            waits_on: blocked.waits_on,
+            scheduled: blocked.scheduled.clone(),
         })
         .collect::<Vec<_>>();
     // Clean display text for the root task with the configured global
@@ -299,6 +398,14 @@ pub(super) fn plan_task_complete_item(
         &settings.global_filter,
         Some(block_id),
     );
+    // The top-level day file is set whenever the gesture changed the
+    // day file, so Open Note(s) can include the daily note (§12.5).
+    let day_changed = ledger_json.is_some()
+        || successor_plan
+            .unblocked
+            .iter()
+            .any(|row| row.link.is_some());
+    let top_day_file = day_changed.then(|| day_file.display().to_string());
     let summary = TaskCompleteSummaryJson {
         raw: raw.to_string(),
         note: note.to_string(),
@@ -311,6 +418,8 @@ pub(super) fn plan_task_complete_item(
         subtasks_left_open: left_open,
         ledger: ledger_json,
         unblocked: unblocked.clone(),
+        still_blocked,
+        unblocked_check,
     };
     // Task blocks: completed (root + closed subtasks) + unblocked.
     let mut task_block_refs = Vec::new();
@@ -332,10 +441,10 @@ pub(super) fn plan_task_complete_item(
             &closed.block_id,
         );
     }
-    for dependent in &recovery.recovered {
-        let absolute_path = bob_dir.join(&dependent.relative_path);
-        let rel = display_relative(&dependent.relative_path);
-        let mut stem = dependent.relative_path.clone();
+    for dependent in &successor_plan.unblocked {
+        let absolute_path = bob_dir.join(&dependent.note_path);
+        let rel = display_relative(&dependent.note_path);
+        let mut stem = dependent.note_path.clone();
         stem.set_extension("");
         push_unblocked_ref(
             &mut task_block_refs,
@@ -343,7 +452,11 @@ pub(super) fn plan_task_complete_item(
             rel,
             display_relative(&stem),
             dependent.line.saturating_sub(1),
-            dependent.block_id.clone(),
+            if dependent.block_id.is_empty() {
+                None
+            } else {
+                Some(dependent.block_id.clone())
+            },
         );
     }
     Ok(PlannedCaptureItem {
@@ -367,7 +480,7 @@ pub(super) fn plan_task_complete_item(
             clip: None,
             schedule_log: None,
             block_id: Some(block_id.to_string()),
-            day_file: None,
+            day_file: top_day_file,
             block_link: None,
             pomodoro_link_placement: None,
             parent_line: None,
@@ -550,6 +663,8 @@ fn already_done_item(
                 subtasks_left_open: Vec::new(),
                 ledger: None,
                 unblocked: Vec::new(),
+                still_blocked: Vec::new(),
+                unblocked_check: "checked",
             }),
         },
         clip_plan: None,
@@ -752,6 +867,31 @@ fn compute_link_statuses(
 /// overlays are applied per item so recovery still sees earlier items'
 /// staged edits. An unavailable base yields an empty snapshot: the close
 /// still succeeds and nothing is recovered.
+/// Note index for successor link forms (`docs/task-dependencies.md`
+/// §12.4): the same walk-only catalog `&` dependency links use, unioned
+/// with the batch's staged `.md` files so batch-created notes resolve.
+fn staged_note_index(
+    bob_dir: &Path,
+    planner: &CaptureBatchPlanner,
+    dependency_ctx: &DependencyContext,
+) -> crate::native::vault_links::NoteIndex {
+    let mut staged: Vec<PathBuf> = Vec::new();
+    for (absolute, _) in planner.staged_snapshot() {
+        let Ok(relative) =
+            absolute.strip_prefix(bob_dir).map(Path::to_path_buf)
+        else {
+            continue;
+        };
+        if relative
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("md"))
+        {
+            staged.push(relative);
+        }
+    }
+    dependency_ctx.catalog().index.with_additional(staged)
+}
+
 fn staged_snapshot_for_recovery(
     bob_dir: &Path,
     planner: &CaptureBatchPlanner,

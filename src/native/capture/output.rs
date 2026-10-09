@@ -405,6 +405,8 @@ pub(super) struct TaskCompleteSummaryJson {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) ledger: Option<TaskCompleteLedgerJson>,
     pub(super) unblocked: Vec<TaskCompleteUnblockedJson>,
+    pub(super) still_blocked: Vec<TaskCompleteStillBlockedJson>,
+    pub(super) unblocked_check: &'static str,
 }
 
 /// One embedded subtask closed by a `task_complete` item.
@@ -477,7 +479,9 @@ pub(super) struct TaskCompleteRemovedPlaceholderJson {
     pub(super) name: String,
 }
 
-/// One dependent recovered by a `task_complete` item.
+/// One dependent unblocked by a `task_complete` item: linked into its
+/// predecessor's slot, or recovered with the reason it was not linked
+/// (`docs/task-dependencies.md` §12.5).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct TaskCompleteUnblockedJson {
     pub(super) note_path: String,
@@ -488,6 +492,50 @@ pub(super) struct TaskCompleteUnblockedJson {
     pub(super) previous_status_name: String,
     pub(super) status_symbol: char,
     pub(super) status_name: String,
+    pub(super) inbox: bool,
+    pub(super) unblocked_by: Vec<TaskCompleteUnblockedCauseJson>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) link: Option<TaskCompleteSuccessorLinkJson>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) not_linked: Option<String>,
+}
+
+/// One predecessor behind an unblocked row.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct TaskCompleteUnblockedCauseJson {
+    pub(super) note_path: String,
+    pub(super) block_id: String,
+    pub(super) text: String,
+}
+
+/// Placement of one linked successor (`docs/task-dependencies.md`
+/// §12.5): 1-based lines in the day text after the gesture.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct TaskCompleteSuccessorLinkJson {
+    pub(super) day_file: String,
+    pub(super) entry_name: String,
+    pub(super) entry_line: usize,
+    pub(super) entry_created: bool,
+    pub(super) next_up: bool,
+    pub(super) line: usize,
+    pub(super) block_link: String,
+    pub(super) block_id_created: bool,
+}
+
+/// One open dependent of the completed tasks that stays blocked
+/// (`docs/task-dependencies.md` §12.5 `still_blocked[]`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct TaskCompleteStillBlockedJson {
+    pub(super) note_path: String,
+    pub(super) block_id: String,
+    pub(super) line: usize,
+    pub(super) text: String,
+    pub(super) status_symbol: char,
+    pub(super) status_name: String,
+    pub(super) reason: &'static str,
+    pub(super) waits_on: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) scheduled: Option<String>,
 }
 
 /// Summary JSON for one item's dependency effects, reported as
@@ -1963,14 +2011,84 @@ pub(super) fn print_human_task_complete_success(
         let current = style_task_status_marker(styler, unblocked.status_symbol);
         let locator =
             task_complete_locator(&unblocked.note_path, &unblocked.block_id);
-        if unblocked.text.is_empty() {
-            println!("  unblocked {previous} → {current}  {locator}");
+        let head = if unblocked.text.is_empty() {
+            format!("{previous} → {current}")
         } else {
-            println!(
-                "  unblocked {previous} → {current} {}  {locator}",
-                unblocked.text
-            );
+            format!("{previous} → {current} {}", unblocked.text)
+        };
+        if let Some(link) = unblocked.link.as_ref() {
+            let verb = if result.dry_run {
+                "would link"
+            } else {
+                "linked"
+            };
+            let destination = successor_destination(link);
+            let minted = link
+                .block_link
+                .rsplit_once('^')
+                .filter(|_| link.block_id_created)
+                .map(|(_, id)| format!(" · added ^{id}"))
+                .unwrap_or_default();
+            println!("  {verb} {head}  {locator} → {destination}{minted}");
+        } else {
+            let reason = unblocked
+                .not_linked
+                .as_deref()
+                .map(not_linked_reason)
+                .unwrap_or_default();
+            println!("  unblocked {head}  {locator} · {reason}");
         }
+    }
+    for blocked in &summary.still_blocked {
+        let locator =
+            task_complete_locator(&blocked.note_path, &blocked.block_id);
+        let detail = match blocked.reason {
+            "scheduled" => blocked
+                .scheduled
+                .as_deref()
+                .map(|date| format!("until {date}"))
+                .unwrap_or_else(|| "scheduled".to_string()),
+            _ => format!("waits on {} more", blocked.waits_on),
+        };
+        if blocked.text.is_empty() {
+            println!("  still blocked  {locator} · {detail}");
+        } else {
+            println!("  still blocked  {}  {locator} · {detail}", blocked.text);
+        }
+    }
+}
+
+/// Destination capsule for a linked successor row
+/// (`docs/task-dependencies.md` §12.6).
+fn successor_destination(link: &TaskCompleteSuccessorLinkJson) -> String {
+    let mut destination = if link.entry_created {
+        if link.entry_name.is_empty() {
+            "new session".to_string()
+        } else {
+            format!("new {} session", link.entry_name)
+        }
+    } else if link.entry_name.is_empty() {
+        format!("line {}", link.entry_line)
+    } else {
+        link.entry_name.clone()
+    };
+    if link.next_up {
+        destination.push_str(" (next up)");
+    }
+    destination
+}
+
+/// Human suffix for a recovered (not linked) successor row
+/// (`docs/task-dependencies.md` §12.6).
+fn not_linked_reason(reason: &str) -> &str {
+    match reason {
+        "already_planned" => "already planned",
+        "not_planned_today" => "not planned today",
+        "breaker" => "not linked, more than 5",
+        "project_task" => "project task",
+        "hidden" => "hidden",
+        "disabled" => "linking off",
+        _ => reason,
     }
 }
 
