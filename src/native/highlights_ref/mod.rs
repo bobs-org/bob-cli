@@ -56,6 +56,7 @@ mod region;
 mod render_tex;
 mod report;
 pub(crate) mod return_links;
+mod scan_json;
 mod sidecar;
 mod sidecar_render;
 mod sources;
@@ -83,6 +84,7 @@ use model::*;
 use note::*;
 use projection::*;
 use report::*;
+use scan_json::*;
 use sidecar::*;
 use sidecar_render::*;
 use stamp::*;
@@ -300,12 +302,29 @@ fn no_hooks_flag(root_matches: &ArgMatches, sub_matches: &ArgMatches) -> bool {
 }
 
 fn run_scan(matches: &ArgMatches, no_hooks: bool) -> i32 {
+    let json = matches
+        .get_one::<String>("format")
+        .is_some_and(|format| format == "json");
+    if json && matches.get_flag("verbose") {
+        eprintln!(
+            "error: the argument '--format <FORMAT>' cannot be used with '--verbose'\n\nUsage: bob ref scan [OPTIONS]\n\nFor more information, try '--help'."
+        );
+        return 2;
+    }
     let config = Config::from_matches(matches);
     let options = SyncOptions {
         dry_run: matches.get_flag("dry-run"),
         write_pdf: matches.get_flag("write-pdfs"),
         prefer: None,
     };
+    if json {
+        return scan_library_json(
+            &config,
+            options,
+            jobs_from_matches(matches),
+            no_hooks,
+        );
+    }
     report_result(scan_library(
         &config,
         options,

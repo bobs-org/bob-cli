@@ -34,7 +34,10 @@ write. For an offline link preview, use `bob capture --dry-run '<URL>'`.
 
 The reading queue is derived from notes under `ref/`. A pending capture job or
 an intake PDF under `xlib/` does not appear in `ref list` until a scan creates
-its note. Lookup commands require the configured reference directory to exist;
+its note. `bob ref scan -f json` reports the same scan as a versioned JSON
+envelope (see [JSON output](highlights-ref-sync.md#json-output)); its client
+is the Refs panel in Bob Mac Capture, which runs it when Bryan presses ⌘S.
+Lookup commands require the configured reference directory to exist;
 a missing directory is an error rather than an empty library. Directory
 overrides are described in the [pipeline guide](highlights-ref-sync.md#default-paths).
 

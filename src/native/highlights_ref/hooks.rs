@@ -67,6 +67,7 @@ pub(super) fn run_pre_scan_hook(
                 "run pre-scan hook {}: {error}",
                 command.display()
             ))
+            .with_code("hook_failed")
         })?;
 
     if status.success() {
@@ -76,7 +77,56 @@ pub(super) fn run_pre_scan_hook(
             "pre-scan hook failed with {}: {}",
             exit_status_label(&status),
             command.display()
-        )))
+        ))
+        .with_code("hook_failed"))
+    }
+}
+
+/// JSON-mode pre-scan hook: the status line goes to stderr and the hook
+/// child's stdout is redirected to bob's stderr, so a chatty hook can
+/// never corrupt the one-line JSON report on stdout.
+pub(super) fn run_pre_scan_hook_json(
+    config: &Config,
+    command: Option<&PreScanHook>,
+    dry_run: bool,
+) -> Result<()> {
+    let Some(command) = command else {
+        return Ok(());
+    };
+
+    if dry_run {
+        eprintln!("pre_scan_hook: would-run {}", command.display());
+        return Ok(());
+    }
+
+    eprintln!("pre_scan_hook: run {}", command.display());
+    let output = process::Command::new("sh")
+        .arg("-c")
+        .arg(&command.command)
+        .current_dir(&config.bob_dir)
+        .env("BOB_HIGHLIGHTS_IN_PRE_SCAN_HOOK", "1")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .output()
+        .map_err(|error| {
+            CommandError::new(format!(
+                "run pre-scan hook {}: {error}",
+                command.display()
+            ))
+            .with_code("hook_failed")
+        })?;
+    eprint!("{}", String::from_utf8_lossy(&output.stdout));
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(CommandError::new(format!(
+            "pre-scan hook failed with {}: {}",
+            exit_status_label(&output.status),
+            command.display()
+        ))
+        .with_code("hook_failed"))
     }
 }
 

@@ -633,17 +633,21 @@ pub(super) fn plan_xlib_intake(config: &Config) -> Result<Vec<IntakeMove>> {
     if !conflicts.is_empty() {
         let mut message =
             String::from("xlib intake collision(s) detected before writes:");
+        let mut destinations = Vec::new();
         for (source, destination) in conflicts {
             message.push('\n');
             message.push_str("  ");
             message.push_str(&source.display().to_string());
             message.push_str(" -> ");
             message.push_str(&destination.display().to_string());
+            destinations.push(destination);
         }
         message.push_str(
             "\nremove or rename the existing library destination(s) before rerunning scan",
         );
-        return Err(CommandError::new(message));
+        return Err(CommandError::new(message)
+            .with_code("intake_collision")
+            .with_paths(destinations));
     }
 
     Ok(moves)
@@ -703,14 +707,35 @@ pub(super) fn collect_orphan_audio(config: &Config) -> Result<Vec<PathBuf>> {
         .collect())
 }
 
-pub(super) fn execute_xlib_intake(moves: &[IntakeMove]) -> Result<()> {
+/// Move every planned intake pair, returning the count of fully moved
+/// main PDFs so a later failure can report which moves already happened.
+/// Move every planned intake pair, returning the count of fully moved
+/// main PDFs so a later failure can report which moves already happened.
+pub(super) fn execute_xlib_intake(moves: &[IntakeMove]) -> Result<usize> {
+    let (moved, result) = execute_xlib_intake_counting(moves);
+    result.map(|()| moved)
+}
+
+/// Move every planned intake pair, reporting how many main PDFs moved
+/// before the first error alongside that error.
+pub(super) fn execute_xlib_intake_counting(
+    moves: &[IntakeMove],
+) -> (usize, Result<()>) {
+    let mut moved = 0usize;
     for intake_move in moves {
-        execute_intake_move(&intake_move.source, &intake_move.destination)?;
-        for (source, destination) in &intake_move.companions {
-            execute_intake_move(source, destination)?;
+        if let Err(error) =
+            execute_intake_move(&intake_move.source, &intake_move.destination)
+        {
+            return (moved, Err(error));
         }
+        for (source, destination) in &intake_move.companions {
+            if let Err(error) = execute_intake_move(source, destination) {
+                return (moved, Err(error));
+            }
+        }
+        moved += 1;
     }
-    Ok(())
+    (moved, Ok(()))
 }
 
 pub(super) fn execute_intake_move(

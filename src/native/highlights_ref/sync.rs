@@ -38,6 +38,7 @@ pub(super) fn scan_library(
     no_hooks: bool,
 ) -> Result<()> {
     validate_library_layout(config)?;
+    let _scan_lock = acquire_scan_writer_lock(options.dry_run)?;
     let pre_scan_hook = configured_pre_scan_hook(no_hooks)?;
     run_pre_scan_hook(config, pre_scan_hook.as_ref(), options.dry_run)?;
     let intake = plan_xlib_intake(config)?;

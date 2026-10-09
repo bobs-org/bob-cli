@@ -95,7 +95,7 @@ Available commands:
 bob ref create <TARGET> [-A|--author NAME] [-a|--audio PATH] [-b|--bob-dir PATH] [-d|--dry-run] [-f|--force] [-H|--html FILE] [-i|--include-id] [-l|--lib-dir PATH] [-L|--listen] [-N|--name STEM] [-n|--no-audio] [-o|--output PDF] [-P|--parent NOTE] [-p|--published DATE] [-r|--ref-dir PATH] [-s|--status STATUS] [-T|--title TITLE] [-t|--ref-type DIR] [-x|--xlib-dir PATH]
 bob ref doctor [-b|--bob-dir PATH] [-l|--lib-dir PATH] [-n|--no-hooks] [-r|--ref-dir PATH] [-x|--xlib-dir PATH]
 bob ref marker <pdf> [-b|--bob-dir PATH] [-l|--lib-dir PATH] [-r|--ref-dir PATH] [-x|--xlib-dir PATH]
-bob ref scan [-b|--bob-dir PATH] [-d|--dry-run] [-j|--jobs N] [-l|--lib-dir PATH] [-n|--no-hooks] [-r|--ref-dir PATH] [-v|--verbose] [-w|--write-pdfs] [-x|--xlib-dir PATH]
+bob ref scan [-b|--bob-dir PATH] [-d|--dry-run] [-f|--format human|json] [-j|--jobs N] [-l|--lib-dir PATH] [-n|--no-hooks] [-r|--ref-dir PATH] [-v|--verbose] [-w|--write-pdfs] [-x|--xlib-dir PATH]
 bob ref sync <pdf> [-b|--bob-dir PATH] [-d|--dry-run] [-l|--lib-dir PATH] [-p|--prefer marker|frontmatter] [-r|--ref-dir PATH] [-w|--write-pdf] [-x|--xlib-dir PATH]
 ```
 
@@ -654,6 +654,81 @@ nightly` runs `vault-sync` before and after the maintenance commands. The
 `source_pdf` field is rewritten on every sync, so a direct
 `bob ref sync ~/bob/xlib/...` dry run or one-off sync self-heals to the
 library-relative path on the next scan after intake.
+
+### JSON output
+
+`bob ref scan -f json` (equivalently `--format json`) prints the same scan as
+a versioned machine-readable report instead of the human display lines:
+
+```bash
+bob ref scan -w -f json
+```
+
+Stdout carries exactly one compact JSON line followed by a newline, and
+nothing else: no intake lines, no per-PDF lines, no summary line, and no ANSI
+escapes. The `pre_scan_hook: run …` status line goes to stderr, and the hook
+child's stdout is redirected to bob's stderr, so a chatty hook cannot corrupt
+the report. `--format json` with `-v/--verbose` is a usage error (exit 2).
+JSON mode works with `--dry-run` too.
+
+A successful or partially failed scan prints this envelope (field order is
+fixed: `ok`, `schema_version`, `command`, `generated_at`, `mode`,
+`write_pdfs`, `hook`, `intake`, `summary`, `notes`, `failures`):
+
+| Field | Meaning |
+| --- | --- |
+| `ok` | `true` exactly when `failures` is empty and there is no `error` |
+| `schema_version` | `1`; clients reject any other version |
+| `command` | `"ref scan"` |
+| `generated_at` | Local-time stamp, pinned by `BOB_NOW` in tests |
+| `mode` | `"write"` or `"dry_run"` |
+| `write_pdfs` | Whether `-w` was given |
+| `hook.status` | `"ran"`, `"would_run"` (dry run), `"skipped"` (`--no-hooks` or an empty override), or `"none"` (not configured) |
+| `hook.command` | The hook command, or `null` when none is configured |
+| `intake` | PDF intake moves as vault-relative `from`/`to` pairs in move order; sidecar and audio moves are not listed |
+| `summary` | `pdfs`, `created`, `updated`, `unchanged`, `markers`, `tasks`, `failures`: the same counts the human summary line prints |
+| `notes` | One entry per PDF whose reference note was created or updated (or would be, in a dry run), in scan order |
+| `notes[].action` | `"create"` or `"update"`; marker-only changes are counted in `summary.markers` and not listed |
+| `notes[].path` | Vault-relative note path, byte-identical to the `path` that `bob ref list -f json` reports for the same note |
+| `notes[].title` | The note title the scan wrote |
+| `notes[].ref_type`, `notes[].source_pdf` | Stable plan metadata; `source_pdf` is vault-relative |
+| `notes[].marker` | Whether this PDF's marker was (or would be) written back |
+| `failures` | One entry per per-PDF failure: `pdf` (vault-relative), `stage` (`"plan"` or `"write"`), and `message` (the same text the human report prints) |
+
+A hard failure prints the error envelope instead (`ok`, `schema_version`,
+`command`, `generated_at`, `mode`, `write_pdfs`, `intake`, `error`), where
+`intake` lists any moves that already happened before the failure.
+`error.hint` is a string or `null`; `error.paths` is always an array of
+vault-relative paths. Exit codes: 0 means `ok: true`; 1 means per-PDF
+failures (the full envelope above, `ok: false`) or a hard failure (the error
+envelope below, with JSON on stdout either way); 2 is a clap usage error with
+no JSON on stdout.
+
+| `error.code` | Raised by |
+| --- | --- |
+| `scan_busy` | The writer lock stayed held past the wait (see below) |
+| `hook_failed` | The pre-scan hook failed to spawn or exited non-zero |
+| `intake_collision` | An intake destination already exists (`paths`: the colliding destinations) |
+| `output_collision` | Two PDFs map to one note or asset path (`paths`: the colliding targets) |
+| `dirty_targets` | The dirty-target git preflight refused (`paths`: the dirty files) |
+| `scan_failed` | Every other hard failure |
+
+### Writer lock
+
+A writing scan (not a dry run) takes an exclusive lock on
+`<state>/bob-cli/ref/scan.lock` after layout validation and before the
+pre-scan hook runs, and holds it until the scan returns, so two writing
+scans (for example ⌘S and the 15-minute cron) serialize instead of racing
+on intake moves. The lock file is mode 0600 and the directory 0700. While
+the lock is held, a scan prints `waiting for another bob ref scan to
+finish…` once to stderr (in both human and JSON modes) and retries every
+250 ms for up to 120 s, then fails with `scan_busy`. The wait is
+overridable with the internal `BOB_REF_SCAN_LOCK_WAIT_SECONDS` environment
+variable, for tests. The hook runs with `BOB_HIGHLIGHTS_IN_PRE_SCAN_HOOK=1`,
+so a hook that shells back into `bob ref scan` never deadlocks on the lock.
+A dry run never takes the lock. Human mode is otherwise byte-identical,
+except for the new lock-wait line on stderr and the new `scan_busy`
+failure.
 
 ## Generated Body Contract
 
@@ -1463,5 +1538,6 @@ preflight failures remain hard global failures before writes.
 | `marker/frontmatter conflict` | Marker and frontmatter changed the same field differently, or the note has no stored base snapshot for a safe merge. | Inspect both sides, then rerun with `--prefer marker` or `--prefer frontmatter --write-pdf`. |
 | `changed during sync; rerun` | The note or PDF changed after planning and before writing. | Rerun after closing or pausing apps that may touch the file. |
 | `scan completed with ... per-PDF failure(s)` | A recursive scan finished reporting or writing valid PDFs, but at least one PDF had a `plan_error` or `write_failure`. | Fix the named PDFs and rerun; review successful writes before assuming the scan wrote nothing. |
+| `another bob ref scan is still running` | A writing scan found the `scan.lock` writer lock held past the 120 s wait. | Wait for the other scan to finish, then scan again. |
 | `existing reference note is missing the managed Highlights region` | An existing ref note lacks `<!-- highlights:begin -->` and `<!-- highlights:end -->`. | Add both markers around the generated section or move the note aside and regenerate. |
 | `unsupported textbundle sidecar` | The `.textbundle` has no `text.md` or `text.markdown`. | Verify the bundle contains `text.md` or `text.markdown`; manually re-export/create a valid TextBundle beside the PDF if it does not. See [Known Highlights TextBundle Creation Bug](#known-highlights-textbundle-creation-bug). |

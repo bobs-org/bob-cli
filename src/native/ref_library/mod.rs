@@ -16,7 +16,7 @@ mod find;
 mod frontmatter;
 mod identity;
 pub(crate) mod list;
-mod output;
+pub(crate) mod output;
 mod resolve;
 mod row;
 pub(crate) mod show;

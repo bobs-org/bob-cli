@@ -479,3 +479,135 @@ fn highlights_ref_scan_rejects_legacy_pre_scan_env() {
         format_output(&output)
     );
 }
+
+// `bob ref scan --format json` hook-output tests (bob-cli-5x
+// cli-scan-json).
+
+/// Pinned clock for `generated_at` assertions.
+const SCAN_JSON_NOW: &str = "2026-10-06 12:00:00";
+
+/// Assert stdout is exactly one JSON line and return the parsed value.
+fn scan_json_stdout(output: &std::process::Output) -> serde_json::Value {
+    let text = stdout(output);
+    assert_eq!(
+        text.lines().count(),
+        1,
+        "JSON stdout must be exactly one line:\n{}",
+        format_output(output)
+    );
+    serde_json::from_str(text.trim()).expect("stdout must parse as JSON")
+}
+
+#[test]
+fn ref_scan_json_hook_stdout_reaches_stderr_not_stdout() {
+    let temp = TempDir::new("bob-cli-ref-scan-json-hook-output");
+    let vault = temp.path().join("vault");
+    let pdf = vault.join("lib/chat/hooked.pdf");
+    let config = temp.path().join("config.yml");
+    let script = temp.path().join("pre-scan");
+    write_highlights_pdf(
+        &pdf,
+        "- status: wip\n- parent: obsidian\n- title: Hooked\n",
+    );
+    write_executable(
+        &script,
+        "#!/bin/sh\n\
+         printf 'hook stdout line\\n'\n\
+         printf 'hook stderr line\\n' >&2\n",
+    );
+    write_file(
+        &config,
+        &format!(
+            "highlights:\n  pre_scan_hook: {}\n",
+            shell_single_quote(path_str(&script))
+        ),
+    );
+
+    let output = bob_command()
+        .arg("ref")
+        .arg("scan")
+        .arg("-f")
+        .arg("json")
+        .env("BOB_DIR", &vault)
+        .env("BOB_CONFIG_FILE", &config)
+        .env("BOB_NOW", SCAN_JSON_NOW)
+        .output()
+        .expect("json scan with chatty hook");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "json scan with chatty hook should succeed:\n{}",
+        format_output(&output)
+    );
+    let document = scan_json_stdout(&output);
+    assert_eq!(document["ok"], true);
+    assert_eq!(document["hook"]["status"], "ran");
+    assert!(
+        !stdout(&output).contains("hook stdout line"),
+        "hook stdout must never corrupt the JSON line:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        stderr(&output).contains("pre_scan_hook: run")
+            && stderr(&output).contains("hook stdout line")
+            && stderr(&output).contains("hook stderr line"),
+        "hook output is redirected to stderr:\n{}",
+        format_output(&output)
+    );
+}
+
+#[test]
+fn ref_scan_json_hook_failure_error_envelope() {
+    let temp = TempDir::new("bob-cli-ref-scan-json-hook-fail");
+    let vault = temp.path().join("vault");
+    let config = temp.path().join("config.yml");
+    let script = temp.path().join("pre-scan");
+    fs::create_dir_all(&vault).expect("create vault");
+    write_executable(
+        &script,
+        "#!/bin/sh\n\
+         printf 'hook stdout before failure\\n'\n\
+         exit 17\n",
+    );
+    write_file(
+        &config,
+        &format!(
+            "highlights:\n  pre_scan_hook: {}\n",
+            shell_single_quote(path_str(&script))
+        ),
+    );
+
+    let output = bob_command()
+        .arg("ref")
+        .arg("scan")
+        .arg("-f")
+        .arg("json")
+        .env("BOB_DIR", &vault)
+        .env("BOB_CONFIG_FILE", &config)
+        .env("BOB_NOW", SCAN_JSON_NOW)
+        .output()
+        .expect("json scan with failing hook");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "failing hook should abort the json scan:\n{}",
+        format_output(&output)
+    );
+    let document = scan_json_stdout(&output);
+    assert_eq!(document["ok"], false);
+    assert_eq!(document["intake"], serde_json::json!([]));
+    assert_eq!(document["error"]["code"], "hook_failed");
+    assert!(
+        document["error"]["message"]
+            .as_str()
+            .expect("hook error message")
+            .contains("pre-scan hook failed with exit 17"),
+        "unexpected hook error message:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        stderr(&output).contains("hook stdout before failure"),
+        "hook stdout still reaches stderr on failure:\n{}",
+        format_output(&output)
+    );
+}

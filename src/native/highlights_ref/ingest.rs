@@ -348,35 +348,14 @@ fn lock_ingest_at(
     dir: &Path,
     progress: Option<&dyn Fn(&str)>,
 ) -> Result<fs::File, IngestError> {
-    fs::create_dir_all(&dir).map_err(|error| {
-        ingest_error(format!("create ingest lock directory: {error}"), None)
-    })?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
-        let mut builder = fs::DirBuilder::new();
-        builder.mode(0o700);
-        let _ = builder.create(&dir);
-        let _ = fs::set_permissions(&dir, fs::Permissions::from_mode(0o700));
-    }
     let path = dir.join("ingest.lock");
-    let file = fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(&path)
+    let file = crate::native::env::create_state_lock_file(dir, "ingest.lock")
         .map_err(|error| {
-            ingest_error(
-                format!("open ingest lock {}: {error}", path.display()),
-                None,
-            )
-        })?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
-    }
+        ingest_error(
+            format!("open ingest lock {}: {error}", path.display()),
+            None,
+        )
+    })?;
     {
         use fs2::FileExt;
         if file.try_lock_exclusive().is_err() {

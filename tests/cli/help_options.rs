@@ -813,11 +813,18 @@ fn highlights_ref_scan_help_lists_options_alphabetically() {
         help.contains("-w, --write-pdfs"),
         "expected short and long write-pdfs flag in scan help:\n{help}"
     );
+    assert!(
+        help.contains(
+            "Output format: human (default) or json, a one-line machine-readable report"
+        ) && help.contains("bob ref scan -w -f json"),
+        "expected the json format flag and example in scan help:\n{help}"
+    );
     assert_text_order(
         &help,
         &[
             "-b, --bob-dir",
             "-d, --dry-run",
+            "-f, --format",
             "-j, --jobs",
             "-l, --lib-dir",
             "-r, --ref-dir",
@@ -827,6 +834,36 @@ fn highlights_ref_scan_help_lists_options_alphabetically() {
         ],
     );
     assert_stdout_has_no_ansi(&output);
+}
+
+#[test]
+fn highlights_ref_scan_json_verbose_is_usage_error() {
+    let output = bob_command()
+        .arg("highlights")
+        .arg("scan")
+        .arg("-f")
+        .arg("json")
+        .arg("-v")
+        .output()
+        .expect("run bob scan -f json -v");
+
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "json with verbose must be a usage error:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        !stdout(&output).contains('{'),
+        "a usage error carries no JSON on stdout:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        stderr(&output).contains("--format")
+            && stderr(&output).contains("--verbose"),
+        "the usage error names both flags:\n{}",
+        format_output(&output)
+    );
 }
 
 #[test]

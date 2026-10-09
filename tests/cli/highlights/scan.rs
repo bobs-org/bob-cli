@@ -1394,3 +1394,561 @@ fn highlights_ref_scan_refuses_audio_destination_conflict() {
         "old-audio"
     );
 }
+
+// `bob ref scan --format json` report and writer-lock tests
+// (bob-cli-5x cli-scan-json).
+
+/// Pinned clock for `generated_at` assertions.
+const SCAN_JSON_NOW: &str = "2026-10-06 12:00:00";
+
+/// Assert JSON object keys appear in wire order, scanning forward from
+/// `start_needle` (serde_json parses into a sorted map here, so order must
+/// be checked on the raw line, which is what the contract pins).
+fn assert_scan_json_key_order(
+    output: &std::process::Output,
+    start_needle: &str,
+    keys: &[&str],
+) {
+    let text = stdout(output);
+    let mut cursor = text.find(start_needle).unwrap_or_else(|| {
+        panic!(
+            "expected `{start_needle}` in JSON stdout:\n{}",
+            format_output(output)
+        )
+    });
+    for key in keys {
+        let needle = format!("\"{key}\":");
+        let relative = text[cursor..].find(&needle).unwrap_or_else(|| {
+            panic!(
+                "expected `{needle}` after `{start_needle}`:\n{}",
+                format_output(output)
+            )
+        });
+        cursor += relative + needle.len();
+    }
+}
+
+/// Run `bob ref scan` with a pinned clock, returning the raw output.
+fn run_ref_scan(
+    vault: &std::path::Path,
+    args: &[&str],
+) -> std::process::Output {
+    bob_command()
+        .arg("ref")
+        .arg("scan")
+        .args(args)
+        .env("BOB_DIR", vault)
+        .env("BOB_NOW", SCAN_JSON_NOW)
+        .output()
+        .expect("run bob ref scan")
+}
+
+/// Assert stdout is exactly one JSON line and return the parsed value.
+fn scan_json_stdout(output: &std::process::Output) -> serde_json::Value {
+    let text = stdout(output);
+    assert_eq!(
+        text.lines().count(),
+        1,
+        "JSON stdout must be exactly one line:\n{}",
+        format_output(output)
+    );
+    assert!(
+        text.ends_with('\n'),
+        "JSON stdout must end with a newline:\n{}",
+        format_output(output)
+    );
+    serde_json::from_str(text.trim()).expect("stdout must parse as JSON")
+}
+
+/// Hold the scan writer lock the way a concurrent `bob ref scan` would,
+/// returning the open file so the lock stays held.
+fn hold_scan_writer_lock(state_dir: &std::path::Path) -> std::fs::File {
+    let lock_dir = state_dir.join("bob-cli/ref");
+    std::fs::create_dir_all(&lock_dir).expect("create scan lock dir");
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(lock_dir.join("scan.lock"))
+        .expect("open scan lock");
+    fs2::FileExt::try_lock_exclusive(&file).expect("take scan lock");
+    file
+}
+
+#[test]
+fn ref_scan_json_success_envelope_names_created_and_updated_notes() {
+    let temp = TempDir::new("bob-cli-ref-scan-json-success");
+    let vault = temp.path().join("vault");
+    let create_pdf = vault.join("lib/chat/fresh_report.pdf");
+    let update_pdf = vault.join("lib/chat/standing_memo.pdf");
+    let update_note = vault.join("ref/chat/standing_memo.md");
+    write_highlights_pdf(
+        &update_pdf,
+        "- status: wip\n- parent: obsidian\n- title: Standing Memo\n",
+    );
+    assert_success(&run_ref_scan(&vault, &[]));
+    write_highlights_pdf(
+        &create_pdf,
+        "- status: wip\n- parent: obsidian\n- title: Fresh Report\n",
+    );
+    set_pdf_marker_contents(
+        &update_pdf,
+        "- status: wip\n- parent: obsidian\n- title: Standing Memo Revised\n",
+    );
+
+    let output = run_ref_scan(&vault, &["-f", "json"]);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "json scan should succeed:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        stderr(&output).is_empty(),
+        "uncontended json scan should be silent on stderr:\n{}",
+        format_output(&output)
+    );
+    let document = scan_json_stdout(&output);
+    assert_scan_json_key_order(
+        &output,
+        "{",
+        &[
+            "ok",
+            "schema_version",
+            "command",
+            "generated_at",
+            "mode",
+            "write_pdfs",
+            "hook",
+            "intake",
+            "summary",
+            "notes",
+            "failures",
+        ],
+    );
+    assert_eq!(document["ok"], true);
+    assert_eq!(document["schema_version"], 1);
+    assert_eq!(document["command"], "ref scan");
+    assert_eq!(document["generated_at"], "2026-10-06T12:00:00");
+    assert_eq!(document["mode"], "write");
+    assert_eq!(document["write_pdfs"], false);
+    assert_eq!(
+        document["hook"],
+        serde_json::json!({"status": "none", "command": null})
+    );
+    assert_eq!(document["intake"], serde_json::json!([]));
+    assert_eq!(
+        document["summary"],
+        serde_json::json!({
+            "pdfs": 2,
+            "created": 1,
+            "updated": 1,
+            "unchanged": 0,
+            "markers": 0,
+            "tasks": 0,
+            "failures": 0,
+        })
+    );
+    let notes = document["notes"]
+        .as_array()
+        .expect("notes must be an array");
+    assert_eq!(notes.len(), 2, "{notes:?}");
+    assert_scan_json_key_order(
+        &output,
+        "\"notes\":[",
+        &[
+            "action",
+            "path",
+            "title",
+            "ref_type",
+            "source_pdf",
+            "marker",
+        ],
+    );
+    assert_eq!(notes[0]["action"], "create");
+    assert_eq!(notes[0]["path"], "ref/chat/fresh_report.md");
+    assert_eq!(notes[0]["title"], "Fresh Report");
+    assert_eq!(notes[0]["ref_type"], "chat");
+    assert_eq!(notes[0]["source_pdf"], "lib/chat/fresh_report.pdf");
+    assert_eq!(notes[0]["marker"], false);
+    assert_eq!(notes[1]["action"], "update");
+    assert_eq!(notes[1]["path"], "ref/chat/standing_memo.md");
+    assert_eq!(notes[1]["title"], "Standing Memo Revised");
+    assert_eq!(notes[1]["ref_type"], "chat");
+    assert_eq!(notes[1]["source_pdf"], "lib/chat/standing_memo.pdf");
+    assert_eq!(notes[1]["marker"], false);
+    assert_eq!(document["failures"], serde_json::json!([]));
+    assert!(
+        update_note.is_file(),
+        "updated note must still exist after the json scan"
+    );
+
+    let list = bob_command()
+        .arg("ref")
+        .arg("list")
+        .arg("-f")
+        .arg("json")
+        .arg("--all")
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", SCAN_JSON_NOW)
+        .output()
+        .expect("run bob ref list");
+    assert_success(&list);
+    let listed: serde_json::Value =
+        serde_json::from_str(stdout(&list).trim()).expect("list JSON");
+    let rows = listed["refs"].as_array().expect("refs must be an array");
+    assert!(
+        rows.iter()
+            .any(|row| row["path"] == "ref/chat/fresh_report.md"),
+        "scan note path must equal the ref list path:\n{}",
+        format_output(&list)
+    );
+}
+
+#[test]
+fn ref_scan_json_partial_failure_reports_pdf_stage_and_message() {
+    let temp = TempDir::new("bob-cli-ref-scan-json-partial");
+    let vault = temp.path().join("vault");
+    let valid_pdf = vault.join("lib/books/valid.pdf");
+    let invalid_pdf = vault.join("lib/papers/invalid.pdf");
+    let valid_note = vault.join("ref/books/valid.md");
+    write_highlights_pdf(
+        &valid_pdf,
+        "- status: wip\n- parent: obsidian\n- title: Valid PDF\n",
+    );
+    write_highlights_pdf(
+        &invalid_pdf,
+        "- parent: obsidian\n- title: Missing Status\n",
+    );
+
+    let output = run_ref_scan(&vault, &["-f", "json"]);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "partial json scan should exit 1:\n{}",
+        format_output(&output)
+    );
+    let document = scan_json_stdout(&output);
+    assert_eq!(document["ok"], false);
+    assert_eq!(
+        document["summary"],
+        serde_json::json!({
+            "pdfs": 2,
+            "created": 1,
+            "updated": 0,
+            "unchanged": 0,
+            "markers": 0,
+            "tasks": 0,
+            "failures": 1,
+        })
+    );
+    let failures = document["failures"].as_array().expect("failures array");
+    assert_eq!(failures.len(), 1, "{failures:?}");
+    assert_scan_json_key_order(
+        &output,
+        "\"failures\":[",
+        &["pdf", "stage", "message"],
+    );
+    assert_eq!(failures[0]["pdf"], "lib/papers/invalid.pdf");
+    assert_eq!(failures[0]["stage"], "plan");
+    assert!(
+        failures[0]["message"]
+            .as_str()
+            .expect("failure message")
+            .contains("missing required marker key: status"),
+        "unexpected failure message:\n{}",
+        format_output(&output)
+    );
+    let notes = document["notes"]
+        .as_array()
+        .expect("notes must be an array");
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    assert_eq!(notes[0]["action"], "create");
+    assert_eq!(notes[0]["path"], "ref/books/valid.md");
+    assert!(
+        valid_note.is_file(),
+        "the created note must still be listed and written"
+    );
+}
+
+#[test]
+fn ref_scan_json_dry_run_plans_intake_without_writing() {
+    let temp = TempDir::new("bob-cli-ref-scan-json-dry-run");
+    let vault = temp.path().join("vault");
+    let source_pdf = vault.join("xlib/chat/preview.pdf");
+    let destination_pdf = vault.join("lib/chat/preview.pdf");
+    let note = vault.join("ref/chat/preview.md");
+    let config = temp.path().join("config.yml");
+    let script = temp.path().join("pre-scan");
+    let sentinel = temp.path().join("pre-scan-ran");
+    let command = shell_single_quote(path_str(&script));
+    write_highlights_pdf(
+        &source_pdf,
+        "- status: wip\n- parent: obsidian\n- title: Preview PDF\n",
+    );
+    write_executable(
+        &script,
+        &format!(
+            "#!/bin/sh\nprintf ran > {}\n",
+            shell_single_quote(path_str(&sentinel))
+        ),
+    );
+    write_file(
+        &config,
+        "highlights:\n  pre_scan_hook: should-not-use-file-config\n",
+    );
+
+    let output = bob_command()
+        .arg("ref")
+        .arg("scan")
+        .arg("-f")
+        .arg("json")
+        .arg("--dry-run")
+        .env("BOB_DIR", &vault)
+        .env("BOB_CONFIG_FILE", &config)
+        .env("BOB_HIGHLIGHTS_PRE_SCAN_HOOK", &command)
+        .env("BOB_NOW", SCAN_JSON_NOW)
+        .output()
+        .expect("dry-run json scan");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "dry-run json scan should succeed:\n{}",
+        format_output(&output)
+    );
+    let document = scan_json_stdout(&output);
+    assert_eq!(document["ok"], true);
+    assert_eq!(document["mode"], "dry_run");
+    assert_eq!(document["write_pdfs"], false);
+    assert_eq!(document["hook"]["status"], "would_run");
+    assert_eq!(
+        document["hook"]["command"].as_str().expect("hook command"),
+        command
+    );
+    assert_eq!(
+        document["intake"],
+        serde_json::json!([{
+            "from": "xlib/chat/preview.pdf",
+            "to": "lib/chat/preview.pdf",
+        }])
+    );
+    assert_scan_json_key_order(&output, "\"intake\":[", &["from", "to"]);
+    let notes = document["notes"]
+        .as_array()
+        .expect("notes must be an array");
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    assert_eq!(notes[0]["action"], "create");
+    assert_eq!(notes[0]["path"], "ref/chat/preview.md");
+    assert!(
+        stderr(&output).contains("pre_scan_hook: would-run"),
+        "dry-run hook status goes to stderr:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        !sentinel.exists(),
+        "dry-run must not execute the pre-scan hook"
+    );
+    assert!(source_pdf.is_file(), "dry-run must leave PDF in xlib");
+    assert!(
+        !destination_pdf.exists(),
+        "dry-run must not move PDF into lib"
+    );
+    assert!(!note.exists(), "dry-run must not create the note");
+}
+
+#[test]
+fn ref_scan_json_dirty_targets_error_envelope() {
+    let temp = TempDir::new("bob-cli-ref-scan-json-dirty");
+    let vault = temp.path().join("vault");
+    let pdf = vault.join("lib/chat/memo.pdf");
+    let note = vault.join("ref/chat/memo.md");
+    write_highlights_pdf(
+        &pdf,
+        "- status: wip\n- parent: obsidian\n- title: Memo\n",
+    );
+    assert_success(&run_ref_scan(&vault, &[]));
+    git_in(&vault, ["init", "-q"]);
+    git_in(&vault, ["config", "user.name", "Test User"]);
+    git_in(&vault, ["config", "user.email", "test@example.com"]);
+    git_in(&vault, ["add", "."]);
+    git_in(&vault, ["commit", "-q", "-m", "initial sync"]);
+    let dirty_note = fs::read_to_string(&note)
+        .expect("read note")
+        .replace("## Highlights\n\n", "Local edit.\n\n## Highlights\n\n");
+    write_file(&note, &dirty_note);
+    set_pdf_marker_contents(
+        &pdf,
+        "- status: wip\n- parent: obsidian\n- title: Memo Revised\n",
+    );
+
+    let output = run_ref_scan(&vault, &["-f", "json"]);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "dirty json scan should exit 1:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        !stderr(&output).contains("bob ref:"),
+        "json hard failures carry no `bob ref:` stderr line:\n{}",
+        format_output(&output)
+    );
+    let document = scan_json_stdout(&output);
+    assert_scan_json_key_order(
+        &output,
+        "{",
+        &[
+            "ok",
+            "schema_version",
+            "command",
+            "generated_at",
+            "mode",
+            "write_pdfs",
+            "intake",
+            "error",
+        ],
+    );
+    assert_eq!(document["ok"], false);
+    assert_eq!(document["mode"], "write");
+    assert_eq!(document["intake"], serde_json::json!([]));
+    let error = &document["error"];
+    assert_scan_json_key_order(
+        &output,
+        "\"error\":",
+        &["code", "message", "hint", "paths"],
+    );
+    assert_eq!(error["code"], "dirty_targets");
+    assert_eq!(error["message"], "refusing to modify dirty vault files");
+    assert_eq!(
+        error["hint"],
+        "commit, stash, or clean those paths, then scan again"
+    );
+    assert_eq!(error["paths"], serde_json::json!(["ref/chat/memo.md"]));
+}
+
+#[test]
+fn ref_scan_json_scan_busy_when_writer_lock_held() {
+    let temp = TempDir::new("bob-cli-ref-scan-json-busy");
+    let vault = temp.path().join("vault");
+    let pdf = vault.join("lib/chat/locked.pdf");
+    write_highlights_pdf(
+        &pdf,
+        "- status: wip\n- parent: obsidian\n- title: Locked\n",
+    );
+    let state_dir = temp.path().join("state");
+    let _held = hold_scan_writer_lock(&state_dir);
+
+    let output = bob_command()
+        .arg("ref")
+        .arg("scan")
+        .arg("-f")
+        .arg("json")
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", SCAN_JSON_NOW)
+        .env("XDG_STATE_HOME", &state_dir)
+        .env("BOB_REF_SCAN_LOCK_WAIT_SECONDS", "0")
+        .output()
+        .expect("busy json scan");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "busy json scan should exit 1:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        stderr(&output).contains("waiting for another bob ref scan to finish…"),
+        "the lock wait line goes to stderr:\n{}",
+        format_output(&output)
+    );
+    let document = scan_json_stdout(&output);
+    assert_eq!(document["ok"], false);
+    assert_eq!(document["error"]["code"], "scan_busy");
+    assert_eq!(
+        document["error"]["message"],
+        "another bob ref scan is still running"
+    );
+    assert_eq!(
+        document["error"]["hint"],
+        "wait for it to finish, then scan again"
+    );
+    assert_eq!(document["error"]["paths"], serde_json::json!([]));
+}
+
+#[test]
+fn ref_scan_json_dry_run_ignores_writer_lock() {
+    let temp = TempDir::new("bob-cli-ref-scan-json-dry-run-lock");
+    let vault = temp.path().join("vault");
+    let pdf = vault.join("lib/chat/preview.pdf");
+    let note = vault.join("ref/chat/preview.md");
+    write_highlights_pdf(
+        &pdf,
+        "- status: wip\n- parent: obsidian\n- title: Preview PDF\n",
+    );
+    let state_dir = temp.path().join("state");
+    let _held = hold_scan_writer_lock(&state_dir);
+
+    let output = bob_command()
+        .arg("ref")
+        .arg("scan")
+        .arg("-f")
+        .arg("json")
+        .arg("--dry-run")
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", SCAN_JSON_NOW)
+        .env("XDG_STATE_HOME", &state_dir)
+        .env("BOB_REF_SCAN_LOCK_WAIT_SECONDS", "0")
+        .output()
+        .expect("dry-run json scan under lock");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "a dry run must ignore the writer lock:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        !stderr(&output).contains("waiting for another bob ref scan to finish"),
+        "a dry run must not wait on the lock:\n{}",
+        format_output(&output)
+    );
+    let document = scan_json_stdout(&output);
+    assert_eq!(document["ok"], true);
+    assert_eq!(document["mode"], "dry_run");
+    assert!(!note.exists(), "dry-run must not create the note");
+}
+
+#[test]
+fn ref_scan_human_scan_busy_when_writer_lock_held() {
+    let temp = TempDir::new("bob-cli-ref-scan-human-busy");
+    let vault = temp.path().join("vault");
+    let pdf = vault.join("lib/chat/locked.pdf");
+    write_highlights_pdf(
+        &pdf,
+        "- status: wip\n- parent: obsidian\n- title: Locked\n",
+    );
+    let state_dir = temp.path().join("state");
+    let _held = hold_scan_writer_lock(&state_dir);
+
+    let output = bob_command()
+        .arg("ref")
+        .arg("scan")
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", SCAN_JSON_NOW)
+        .env("XDG_STATE_HOME", &state_dir)
+        .env("BOB_REF_SCAN_LOCK_WAIT_SECONDS", "0")
+        .output()
+        .expect("busy human scan");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "busy human scan should exit 1:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        stderr(&output).contains("waiting for another bob ref scan to finish…")
+            && stderr(&output)
+                .contains("another bob ref scan is still running"),
+        "human mode reports the wait and the failure on stderr:\n{}",
+        format_output(&output)
+    );
+}

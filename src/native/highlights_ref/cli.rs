@@ -117,7 +117,7 @@ fn scan_command() -> ClapCommand {
             .about("Scan the configured Highlights library"),
     )
     .after_help(
-        "Examples:\n  bob ref scan --dry-run\n\nScans PDFs recursively, preflights collisions and dirty targets, then syncs each PDF.",
+        "Examples:\n  bob ref scan --dry-run\n  bob ref scan -w -f json\n\nScans PDFs recursively, preflights collisions and dirty targets, then syncs each PDF.",
     )
 }
 
@@ -215,6 +215,7 @@ pub(super) fn with_scan_args(command: ClapCommand) -> ClapCommand {
     command
         .arg(bob_dir_arg())
         .arg(dry_run_arg())
+        .arg(format_arg())
         .arg(jobs_arg())
         .arg(lib_dir_arg())
         .arg(no_hooks_arg())
@@ -298,6 +299,18 @@ pub(super) fn dry_run_arg() -> Arg {
         .short('d')
         .action(ArgAction::SetTrue)
         .help("Preview work without modifying the vault or PDF")
+}
+
+pub(super) fn format_arg() -> Arg {
+    Arg::new("format")
+        .long("format")
+        .short('f')
+        .value_name("FORMAT")
+        .value_parser(["human", "json"])
+        .default_value("human")
+        .help(
+            "Output format: human (default) or json, a one-line machine-readable report",
+        )
 }
 
 pub(super) fn jobs_arg() -> Arg {

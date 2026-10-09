@@ -23,6 +23,7 @@ pub(super) fn validate_output_collisions(
 
     let mut message =
         String::from("output path collision(s) detected before writes:");
+    let mut targets = Vec::new();
     for (note_path, pdfs) in collisions {
         message.push('\n');
         message.push_str("  ");
@@ -35,8 +36,11 @@ pub(super) fn validate_output_collisions(
                 .collect::<Vec<_>>()
                 .join(", "),
         );
+        targets.push(note_path);
     }
-    Err(CommandError::new(message))
+    Err(CommandError::new(message)
+        .with_code("output_collision")
+        .with_paths(targets))
 }
 
 pub(super) fn validate_planned_asset_collisions(
@@ -62,6 +66,7 @@ pub(super) fn validate_planned_asset_collisions(
 
     let mut message =
         String::from("output path collision(s) detected before writes:");
+    let mut targets = Vec::new();
     for (asset_path, pdfs) in collisions {
         message.push('\n');
         message.push_str("  ");
@@ -74,8 +79,11 @@ pub(super) fn validate_planned_asset_collisions(
                 .collect::<Vec<_>>()
                 .join(", "),
         );
+        targets.push(asset_path);
     }
-    Err(CommandError::new(message))
+    Err(CommandError::new(message)
+        .with_code("output_collision")
+        .with_paths(targets))
 }
 
 pub(super) fn validate_note_target(path: &Path) -> Result<()> {
@@ -126,9 +134,11 @@ where
     match git_status(config, &touched_paths)? {
         GitStatus::Worktree { entries } if !entries.is_empty() => {
             let mut refused = Vec::new();
+            let mut refused_paths = Vec::new();
             for entry in &entries {
                 if !dirty_entry_allowed_for_plans(config, &plans, entry)? {
                     refused.push(entry.raw.clone());
+                    refused_paths.push(config.bob_dir.join(&entry.path));
                 }
             }
             if refused.is_empty() {
@@ -137,7 +147,9 @@ where
                 Err(CommandError::new(format!(
                     "refusing to modify dirty vault files:\n  {}\ncommit, stash, or clean these files before rerunning",
                     refused.join("\n  ")
-                )))
+                ))
+                .with_code("dirty_targets")
+                .with_paths(refused_paths))
             }
         }
         _ => Ok(()),

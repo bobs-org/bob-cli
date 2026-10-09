@@ -269,6 +269,42 @@ pub fn bob_cli_state_dir() -> PathBuf {
     state_home().join("bob-cli")
 }
 
+/// Create (but do not lock) a machine-wide state lock file: the directory
+/// is mode 0700 and the file mode 0600. Shared by the ingest lock and the
+/// `ref scan` writer lock so both serialize on the same permissions.
+pub(crate) fn create_state_lock_file(
+    dir: &Path,
+    file_name: &str,
+) -> std::io::Result<std::fs::File> {
+    std::fs::create_dir_all(dir)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+        let mut builder = std::fs::DirBuilder::new();
+        builder.mode(0o700);
+        let _ = builder.create(dir);
+        let _ = std::fs::set_permissions(
+            dir,
+            std::fs::Permissions::from_mode(0o700),
+        );
+    }
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(dir.join(file_name))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(
+            &dir.join(file_name),
+            std::fs::Permissions::from_mode(0o600),
+        );
+    }
+    Ok(file)
+}
+
 pub fn bob_cli_cache_dir() -> PathBuf {
     var_os("XDG_CACHE_HOME")
         .filter(|value| !value.is_empty())

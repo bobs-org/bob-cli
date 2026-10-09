@@ -52,6 +52,14 @@ pub(crate) struct CommandError {
     /// Process exit code for this failure (`None` means 1). An
     /// interrupted listen command exits 130.
     pub(super) exit_code: Option<i32>,
+    /// Machine-readable `ref scan --format json` failure code
+    /// (`scan_busy`, `hook_failed`, `intake_collision`,
+    /// `output_collision`, `dirty_targets`); `None` means `scan_failed`.
+    /// Human rendering ignores it.
+    pub(super) code: Option<&'static str>,
+    /// Vault paths the failure site knows (colliding destinations,
+    /// colliding targets, dirty files); human rendering ignores them.
+    pub(super) paths: Vec<PathBuf>,
 }
 
 impl CommandError {
@@ -59,11 +67,23 @@ impl CommandError {
         Self {
             message: message.into(),
             exit_code: None,
+            code: None,
+            paths: Vec::new(),
         }
     }
 
     pub(super) fn with_exit_code(mut self, code: i32) -> Self {
         self.exit_code = Some(code);
+        self
+    }
+
+    pub(super) fn with_code(mut self, code: &'static str) -> Self {
+        self.code = Some(code);
+        self
+    }
+
+    pub(super) fn with_paths(mut self, paths: Vec<PathBuf>) -> Self {
+        self.paths = paths;
         self
     }
 }
