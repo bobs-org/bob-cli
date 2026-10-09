@@ -405,8 +405,12 @@ Ctrl+Enter recovery in the Task Status Cycler plugin is intentionally narrower
 and immediate. After that keypress actually changes one or more tasks to Done,
 the plugin reopens only Blocked dependents that directly name one of those
 tasks and have no other recognized open dependency in the post-close vault
-snapshot. The immediate target is always Ready (`[ ]`): the plugin does not
-guess the final Pomodoro rank. It reads unsaved open Markdown buffers, preserves
+snapshot. The immediate target is the derived rank: `[?]` becomes `[ ]`,
+or `[*]` when the dependent has a live link in the post-gesture day text —
+and a dependent this close fully unblocked is linked into the predecessor's
+slot as a successor (Next) in the same pass, per
+[task-dependencies.md §12](task-dependencies.md#12-successor-links).
+It reads unsaved open Markdown buffers, preserves
 the active cursor, skips stale or failed notes without rolling back completed
 tasks, and serializes recovery with closed-reference retirement. A later
 `bob task reconcile` run remains authoritative across the whole vault and

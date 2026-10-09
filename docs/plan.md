@@ -577,6 +577,7 @@ plan:
   max_ready: 100 # soft limit for dashboard READY tasks, excluding Today (see above)
   max_ready_per_note: 5 # soft cap per area/project note; frontmatter ready_cap overrides
   strict: false # refuse #NAME captures that would create a theme past max_themes
+  link_unblocked: true # link a closed planned task's unblocked dependents into its slot (docs/task-dependencies.md §12)
   exempt: [GTD] # open entries that never count as themes
   inventory_labels: [LATER, MISC, NEW FEATURES, SASE] # open names that are storage, not themes
 ```
@@ -586,7 +587,8 @@ defaults above, shared by Rust and JavaScript. Unknown keys stay
 ignored.
 
 **Validation.** Caps are integers ≥ 1 (`max_ready_per_note` is
-`1–999`), and the lists hold non-empty strings.
+`1–999`), `strict` and `link_unblocked` are booleans, and the lists hold
+non-empty strings.
 
 **Invalid values:**
 
@@ -594,6 +596,8 @@ ignored.
 - Capture skips its `plan_budget` report and adds a warning string; hooks
   return `plan_budget: null` with a stderr warning. Their vault writes
   continue, and capture's strict plan enforcement is unavailable.
+- An invalid `link_unblocked` falls back to `true` through the same
+  warning paths: close-time recovery still runs, and linking stays on.
 - Capture completion omits the plan-creation hint.
 - The native tmux meter silently uses defaults. Obsidian budget surfaces
   use defaults and flag invalid config in their feedback. Invalid plan config

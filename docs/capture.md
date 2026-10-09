@@ -1204,10 +1204,16 @@ engine, in this order and all against the staged batch snapshot:
    move to the running entry (else the last completed entry), emptied
    placeholders are removed, and a carried copy is dropped when the
    destination already links the task.
-6. **Recover dependents.** Blocked `[?]` dependents that name a completed
-   task's `[id::]`, have no other open dependency, and have no strictly
-   future `scheduled` date become Ready `[ ]`, exactly like Task Status
-   Cycler's Ctrl+Enter recovery.
+6. **Recover dependents and link successors.** Blocked `[?]` dependents
+   that name a completed task's `[id::]`, have no other open dependency,
+   and have no strictly future `scheduled` date recover to their derived
+   rank, exactly like Task Status Cycler's Ctrl+Enter recovery. Every
+   dependent this close fully unblocked is then linked into the
+   predecessor's slot and becomes Next in the same write, per
+   [task-dependencies.md §12](task-dependencies.md#12-successor-links).
+   The successor link is placed **before** retirement runs (step 5), so
+   retirement strikes or moves the predecessor around it and the vacated
+   slot keeps its successor.
 
 Status-group moves, `^prj` frontmatter, `#hide`, and archiving stay with
 their existing writers (`bob task reconcile`, `bob projects sync`, and
@@ -1773,9 +1779,15 @@ carried or no later entry follows; with nothing carried the placeholder gets
 a `\t- ` stub. Direct-child qualifying links with descendants write dated
 Work Log entries under a `🛠️ **WORK LOG**` marker (newest on top) or append
 one after the task's child block. Notes stay in the ledger (copied, not
-moved). Vault-wide Blocked recovery and completed-reference retirement
-outside the session stay in `bob task reconcile`, which already owns
-both.
+moved). Close-time recovery plus successor linking runs on every close
+that completes tasks, per
+[task-dependencies.md §12](task-dependencies.md#12-successor-links):
+successors go into the same-name continuation, created when needed, and
+count as carried. The continuation rule is the same-name entry search in
+§12.3: the created continuation first, else the first open same-name
+entry after the closed one, else a new placeholder at the continuation
+position. Completed-reference retirement **outside** the session still
+stays with reconcile.
 
 Diagnostics (all write nothing): a missing day file, a missing Pomodoros
 section, no open timed entry (`` no running Pomodoro to close ``, plus
@@ -1851,14 +1863,29 @@ Field notes:
   row.
 - Whole-item `=x` reports `created` as the clock's date string, as every
   other kind does.
+- `pomodoro_close` carries the same `unblocked[]`, `still_blocked[]`,
+  and `unblocked_check` fields as `task_complete` (see the
+  task-complete result contract above): the same row shapes, the same
+  `not_linked` reasons, and the same gate semantics over the close's
+  completed set. Dry-run JSON equals real-run JSON except for `dry_run`.
+- When the successor logic created the continuation, `next_pomodoro`
+  reports it (`{line, name, time_range: None, created: true}`); the
+  successors count as carried.
+- Added block lines that equal a surviving successor bullet carry
+  `"reason": "unblocked"` in the `pomodoro_blocks` line objects; rows
+  dropped by net batch reporting lose the reason.
 
 Human output prints `closed NAME old → new (Nm, −Xm) · file line N` (or a
 single range with no decrement, plus `(ran Nm over)` on overruns), always
 naming the day file; one line per task as `transition text route ^id`
 plus `+N Work Log` counts; dropped rows read `dropped <K> [[T]]`
 (with a `stays <status>` lane caption: a dropped task keeps its status) and a
-`Dropped <K>` summary follows the rows; and the next session, which reads
-`carries 1 link` in the singular. When at least one row is numbered, every
+`Dropped <K>` summary follows the rows; the same `linked` / `unblocked` /
+`still blocked` successor rows the `!` close prints, after the task rows;
+and the next session, which reads
+`carries 1 link` in the singular. When successors rode along, `next:`
+names them (`next: BOB (created) at line N · carries K links ·
+1 unblocked`). When at least one row is numbered, every
 task row is prefixed with a right-aligned index column (width = digits of
 the highest number) plus one space; unnumbered rows get blanks of the same
 width and Work Log preview lines indent to stay under the text. The index
@@ -3075,19 +3102,48 @@ trailing block ID removed; the same string the human output prints),
 `struck_in` with one `line`/`name`/`status` entry per entry struck in
 place, `moved` with `from`/`to` entry `line`/`name`/`status`,
 `deduplicated` count, `dropped` with one `from`/`to` entry pair per
-deduplicated bullet, and `removed_placeholders`), and `unblocked`
-dependents. `struck_in` and `dropped` are always present (possibly empty)
+deduplicated bullet, and `removed_placeholders`), the extended
+`unblocked[]` (each row adds `inbox`, `unblocked_by` with one
+`note_path`/`block_id`/`text` entry per predecessor closed by this item,
+`link` with `day_file` (vault-relative), `entry_name` (`""` when
+unnamed), 1-based `entry_line` and `line`, `entry_created`, `next_up`,
+`block_link`, and `block_id_created` — non-null exactly when this item
+linked the dependent — and `not_linked` with one of `already_planned`,
+`not_planned_today`, `breaker`, `project_task`, `hidden`, or `disabled`,
+null when linked), `still_blocked[]` (one `note_path`/`block_id`/`line`/
+`text`/`status_symbol` row per open dependent that stays blocked, with
+`reason` `waits_on` or `scheduled`, `waits_on` counting the open
+prerequisites left, and `scheduled` set only for `scheduled`), and
+`unblocked_check` (`"checked"` when the lookup ran or the `[id::]` gate
+proved it unnecessary, `"unavailable"` when the dependents snapshot
+could not be built). `block_id` holds the minted ID when one was minted
+(SL10), and `""` when the dependent has none and none was minted.
+`struck_in` and `dropped` are always present (possibly empty)
 whenever `ledger` is present; `struck` and `deduplicated` keep their count
 meaning. Entry `status` is `running`, `queued`, or `completed`; when an
-entry has no name, `name` is `""`. The batch-level
+entry has no name, `name` is `""`. The item's top-level `day_file` is the
+absolute day file path whenever the item changed the day file (`ledger`
+present or a successor linked); previously it was always `null`. After
+all items are planned, net batch reporting drops any successor row whose
+link no longer survives live in the final staged day text, or whose task
+is no longer open (SL20). Dry-run JSON equals real-run JSON except for
+`dry_run`. The batch-level
 `task_blocks` array gains roles `"completed"` (the root and each closed
 subtask) and `"unblocked"` (each recovered dependent); see
 [Task blocks](#task-blocks). Human output prints
 `✓ completed [*] → [x] <text>  <note> ^<id>` (dry-run: `would complete`),
 one indented row per closed subtask and left-open descendant, a `ledger`
 line in struck, moved, dropped, removed order ending with the day file
-(an unnamed entry prints as `line N`), and one `unblocked` row per
-recovered dependent. A left-open descendant or unblocked dependent with no
+(an unnamed entry prints as `line N`), one `linked` row per linked
+successor (`linked [?] → [*] <text>  <note> ^<id> → <destination>`,
+dry-run: `would link`, with destinations `→ FIX`, `→ FIX (next up)`,
+`→ new BOB session (next up)`, `→ new session`, and `→ line 37`, plus
+`· added ^<id>` when an ID was minted), one `unblocked` row per
+recovered-but-unlinked dependent (with suffixes `· already planned`,
+`· not planned today`, `· project task`, `· hidden`,
+`· not linked, more than 5`, `· linking off`), and one `still blocked`
+row per remaining blocked dependent (`· waits on N more`,
+`· until YYYY-MM-DD`). A left-open descendant or unblocked dependent with no
 block ID prints only its note path with no trailing ` ^`. Already-done
 tasks print `✓ already done [x] <text>  <note> ^<id> · nothing to change`.
 

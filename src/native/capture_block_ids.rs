@@ -613,6 +613,28 @@ pub(crate) fn suggest_ids(
     suggest_ids_with_used(body, marker, &used)
 }
 
+/// Mint a block ID for a successor-link dependent (`docs/task-dependencies.md`
+/// §12.4): the first [`suggest_ids_with_used`] candidate, else the first free
+/// `task`, `task-2`, `task-3`, … ID. Pure function.
+pub(crate) fn mint_block_id(description: &str, used: &HashSet<&str>) -> String {
+    if let Some(first) = suggest_ids_with_used(description, '^', used)
+        .into_iter()
+        .next()
+    {
+        return first;
+    }
+    if !used.contains("task") {
+        return "task".to_string();
+    }
+    for suffix in 2.. {
+        let candidate = format!("task-{suffix}");
+        if !used.contains(candidate.as_str()) {
+            return candidate;
+        }
+    }
+    unreachable!("suffixes are unbounded")
+}
+
 /// [`suggest_ids`] with a caller-held used-ID set, so vault-wide scans can
 /// build the set once per note instead of once per task. Pure function.
 pub(crate) fn suggest_ids_with_used(
@@ -766,6 +788,83 @@ mod tests {
             );
         }
         assert!(suggest_ids("é🚀", '^', &[]).is_empty());
+    }
+
+    /// Successor block-ID vectors (`docs/task-dependencies.md` §11.7). Each
+    /// row feeds a raw task line through the successor mint pipeline — the
+    /// body after the status box, cleaned with the default `#task` global
+    /// filter exactly as `capture_complete` mints it — then through
+    /// [`mint_block_id`] with the note's used IDs.
+    #[test]
+    fn successor_mints_follow_the_pinned_vectors() {
+        fn mint(raw_line: &str, used_ids: &[&str]) -> String {
+            let body = raw_line
+                .find("] ")
+                .map(|index| &raw_line[index + 2..])
+                .unwrap_or(raw_line);
+            let description =
+                note_tasks::clean_description(body, "#task", None);
+            let used: HashSet<&str> = used_ids.iter().copied().collect();
+            mint_block_id(&description, &used)
+        }
+
+        // (SB id, raw task line, used IDs in the note, minted ID)
+        let cases: &[(&str, &str, &[&str], &str)] = &[
+            (
+                "SB1",
+                "- [?] #task Renew the library books",
+                &[],
+                "renew-library-books",
+            ),
+            (
+                "SB2",
+                "- [?] #task Fix apollo machine",
+                &[],
+                "fix-apollo-machine",
+            ),
+            (
+                "SB3",
+                "- [?] #task Add support for new `%hold` directive",
+                &[],
+                "hold",
+            ),
+            (
+                "SB4",
+                "- [?] #task Review [[sase#^fix-apollo|apollo fix]] notes",
+                &[],
+                "apollo-fix",
+            ),
+            (
+                "SB5",
+                "- [?] #task Book flights [scheduled:: 2026-10-13] #task",
+                &[],
+                "book-flights",
+            ),
+            (
+                "SB6",
+                "- [?] #task Book flights [scheduled:: 2026-10-13] #task",
+                &["book-flights"],
+                "book-flights-2",
+            ),
+            (
+                "SB7",
+                "- [?] #task Fix it",
+                &[
+                    "fix", "fix-2", "fix-3", "fix-4", "fix-5", "fix-6",
+                    "fix-7", "fix-8", "fix-9",
+                ],
+                "task",
+            ),
+            ("SB8", "- [?] #task é🚀", &[], "task"),
+            ("SB9", "- [?] #task é🚀", &["task", "task-2"], "task-3"),
+        ];
+        for (id, raw_line, used_ids, expected) in cases {
+            assert_eq!(
+                mint(raw_line, used_ids),
+                expected.to_string(),
+                "{id} raw line {raw_line:?}"
+            );
+        }
     }
 
     #[test]

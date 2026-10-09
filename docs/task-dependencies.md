@@ -192,6 +192,8 @@ block id).
 - **Removing a dependency** recovers the dependent to its derived rank
   _immediately_ when no open prerequisite and no future `scheduled`
   date remain. Otherwise it stays `[?]`. The hooks keep the final word.
+- **Closing.** Closing a planned prerequisite links the dependents it
+  fully unblocked into its slot (§12).
 
 ## 6. The Depends on stage (navigation-hotkeys)
 
@@ -398,6 +400,10 @@ app.plugins.plugins["bob-navigation-hotkeys"].api = Object.freeze({
     capture(editor),          // sync, never throws: null (not on a landing) | { busy: true } | frozen origin
     continue(origin, outcome), // async, never throws: resolves { ok, advanced, stopped }
   }),
+  notice: Object.freeze({
+    version: 1,
+    showUnblocked(model),     // additive: renders the Unblocked notice card (§12.6); returns true when shown
+  }),
 });
 ```
 
@@ -426,6 +432,11 @@ app.plugins.plugins["bob-navigation-hotkeys"].api = Object.freeze({
   settled exactly once on every path. Callers feature-detect
   `api.version >= 3` with `reviewWalk.version >= 1` and keep today's
   behavior otherwise.
+- `notice.showUnblocked(model)` renders the shared successor-link notice
+  model (§12.5) as the Unblocked card (§12.6) and returns `true` when
+  shown. The member is additive: the api stays `version: 3` and callers
+  feature-detect `api.notice?.version >= 1`, falling back to a plain
+  text notice when it is absent.
 - Plugins never import each other's `main.js`. bob-ledger-tools
   feature-detects `api?.version >= 1`.
 - Additive `inboxRoute` v1 namespace (nav 2.9.0+; `api.version` stays 3,
@@ -608,3 +619,544 @@ is `↗ note` for a cross-note target, else absent. Text cuts at about
 | DC10 | four Done targets | `✓×4` collapsed | `✓ all clear` |
 | DC11 | no open targets, one Done | `✓` chip | `✓ all clear` |
 | DC12 | 60-character description | text cut at about 40 characters, full text in the tooltip | `waiting on 1` |
+
+### 11.6 SL — successor-link vectors
+
+Outcomes of the shared successor-link rule (§12). Rust tests run them
+through capture (`!` and close); cycler tests run them through the pure
+helpers.
+
+| # | Situation | Outcome |
+| --- | --- | --- |
+| SL1 | P linked in the running entry; D `[?]` depends only on P | link right after P's bullet subtree; D `[?]`→`[*]`; `unblocked_by: [P]` |
+| SL2 | P linked in queued FIX while BOB runs; `!` retirement moves P's struck link into BOB | D at P's vacated FIX position; FIX not removed as empty |
+| SL3 | D also depends on open Q | no link; `still_blocked{waits_on, 1}`; D stays `[?]` |
+| SL4 | D's only remaining blocker is a future `scheduled` | no link; `still_blocked{scheduled}`; schedule untouched |
+| SL5 | D already has a live link under another open entry | no link (`already_planned`); `[?]`→`[*]`; existing link not moved |
+| SL6 | D's only links today are struck or under closed entries | linked as in SL1 |
+| SL7 | `=!` closes BOB; nothing carried; FIX follows | `- [ ] () — BOB` created right after BOB holding only D; `entry_created`, `next_up`; `next_pomodoro` names it |
+| SL8 | `=x` close with carried links; an embed P completes | D appended after the carried lines in the continuation |
+| SL9 | P has no live link today | D `[?]`→`[ ]`; `not_planned_today`; successor logic leaves the ledger alone |
+| SL10 | D has no `^block-id` | ` ^<mint>` appended (SB rule); `block_id_created: true`; `block_id` is the mint |
+| SL11 | D is `^prj` / carries `#hide` | recover only; `project_task` / `hidden` |
+| SL12 | One gesture closes P1 and P2; D depends on both | D linked once, after the earlier anchor; `unblocked_by: [P1, P2]` |
+| SL13 | Chain P → D → E | D linked; E untouched and not reported |
+| SL14 | D's basename is ambiguous | `[[dir/note#^id]]` |
+| SL15 | D is a stale `[ ]` whose only prerequisite was P | linked; `[ ]`→`[*]` |
+| SL16 | No task in C carries `[id::]` | gate: no lookup, no extra reads; empty arrays; `checked` |
+| SL17 | Six successors from one gesture | none linked; all `breaker`, recovered to derived rank |
+| SL18 | `plan.link_unblocked: false` | recovery to derived rank; no links or mints; `disabled` |
+| SL19 | The same close re-applied (already Done) / a double press | no writes, no rows |
+| SL20 | Draft `!P` then `!D` | the first item's `unblocked` omits D (net) |
+| SL21 | Cancel, reopen, raw checkbox, hooks run, `=*` park | never link |
+| SL22 | Ctrl+Enter on a Depends-On line | unchanged (nothing) |
+| SL23 | P closes as a subtask of an embedded root R planned today | P anchors at R's link (`inherit`) |
+| SL24 | Close creates no continuation; a later open entry named BOB exists | D appended to that BOB entry; `entry_created: false` |
+| SL25 | D already `[*]` and already planned | nothing written, no row |
+| SL26 | D lives in an inbox file | linked; `inbox: true` |
+| SL27 | `=x~K` drops D's link in the same close that completes P | D not re-linked (`already_planned`); recovers to `[ ]` |
+| SL28 | D lives in today's day file | link names the note (`[[20261009#^id]]`), never `[[#^id]]` |
+
+### 11.7 SB — successor block-ID vectors
+
+Each row feeds the raw task line through the successor mint pipeline —
+the body after the status box, cleaned with the default `#task` global
+filter — then through `mint_block_id` with the note's used IDs
+(`src/native/capture_block_ids.rs`,
+`successor_mints_follow_the_pinned_vectors`).
+
+| # | raw task line | used IDs in the note | mint |
+| --- | --- | --- | --- |
+| SB1 | `- [?] #task Renew the library books` | — | `renew-library-books` |
+| SB2 | `- [?] #task Fix apollo machine` | — | `fix-apollo-machine` |
+| SB3 | ``- [?] #task Add support for new `%hold` directive`` | — | `hold` |
+| SB4 | `- [?] #task Review [[sase#^fix-apollo\|apollo fix]] notes` | — | `apollo-fix` |
+| SB5 | `- [?] #task Book flights [scheduled:: 2026-10-13] #task` | — | `book-flights` |
+| SB6 | `- [?] #task Book flights [scheduled:: 2026-10-13] #task` | `book-flights` | `book-flights-2` |
+| SB7 | `- [?] #task Fix it` | `fix`, `fix-2` … `fix-9` | `task` |
+| SB8 | `- [?] #task é🚀` | — | `task` |
+| SB9 | `- [?] #task é🚀` | `task`, `task-2` | `task-3` |
+
+SB1 is plain prose. SB2 drops the leading verb into the second
+suggestion (`apollo-machine`) and mints the first. SB3 mints the
+backticked phrase. SB4 mints the wikilink alias, not the target. SB5
+strips the inline field and both `#task` tags. SB6 takes the `-2`
+suffix on collision. SB7 falls back to `task` when every suggestion and
+every `-2`…`-9` suffix is taken. SB8 falls back on non-ASCII text with
+no words. SB9 walks the `task-N` fallback past taken IDs.
+
+## 12. Successor links
+
+When a Bob close gesture completes a task planned in today's ledger,
+every direct dependent that this close fully unblocked is linked into
+the predecessor's slot and becomes Next in the same write.
+
+- **Gesture.** One Obsidian Ctrl+Enter, or one capture **item**. A
+  multi-item draft is several gestures, planned in order against the
+  staged batch.
+- **Predecessor (P).** A task this gesture moved from open to Done. That
+  covers the root and every embedded subtask closed with it.
+- **Successor (D).** An open direct dependent of a predecessor whose
+  **last** blocker this gesture removed.
+- **Anchor.** Where a predecessor was planned today. It is read from
+  today's day text **before** this gesture strikes or moves anything.
+- **Successor link.** The plain Task Link bullet the gesture inserts for
+  D, for example `\t- [[sase#^relaunch-agents]]`. It is never an embed
+  and never annotated.
+- **Live link.** An unstruck Task Link sub-bullet (plain, embed, or
+  `#`-deferred; 🍅 markers ignored) under an **open** `[ ]` entry of
+  today's day file's `## Pomodoros` section. Struck links and links
+  under closed entries are history, not plans.
+
+### 12.1 Trigger
+
+Successor linking runs inside these gestures, and only when they
+**complete** a task:
+
+| Gesture | Where |
+| --- | --- |
+| Ctrl+Enter on a Task Link (plain or embed) under any Pomodoro, on the task line in its own note, or through the fallback link branch | task-status-cycler |
+| Ctrl+Enter on a Pomodoro line (its closed embeds) | task-status-cycler |
+| nav's PRE/POST walk Ctrl+Enter (`completeTaskAtCursor`) | task-status-cycler + nav |
+| `bob capture '!note:id'` | bob-cli |
+| `bob capture` closes that complete links: `=x` with embeds, `=x!M`, `=!`, `^route:id=x…` | bob-cli |
+| Alt+] / Alt+[ status cycling into Done | task-status-cycler |
+
+It **never** runs on any of the following:
+
+- cancel (the nav Ctrl+Shift+P cancel, Alt+[ into Cancelled);
+- reopen;
+- raw checkbox clicks;
+- `bob task reconcile` / hooks;
+- `=*` parks;
+- Ctrl+Enter on a Depends-On line.
+
+Cancels still recover dependents exactly as today.
+
+### 12.2 Rule
+
+One definition, two engines (Rust capture and the JS cycler):
+
+```text
+C        = tasks this gesture moved open → Done (roots + closed embedded subtasks),
+           read from the staged post-close text
+GATE     : if no c ∈ C carries an [id::] field → stop. No dependents lookup and no extra
+           reads. unblocked_check = "checked"; unblocked = still_blocked = [].
+match(c) = c's [id::] value
+
+ANCHORS (computed on today's day text BEFORE this gesture's strikes, moves, or retirement,
+         but AFTER any explicit link step of the same item, e.g. ^route:id=x…)
+  closing    : c's link sits under the Pomodoro this gesture closes
+  slot(E, b) : else the first live link to c in ledger order, under open entry E
+               (b = that bullet)
+  inherit    : a closed subtask with no live link of its own takes its root's anchor
+  none       : otherwise (no today day file, no ## Pomodoros, or not planned today)
+
+CANDIDATES = open tasks D (status type Todo/InProgress/OnHold: ' ', '?', '*', '/'),
+             outside done/, whose [dependsOn::] contains match(c) for some c ∈ C
+
+FOR EACH D, in this order:
+  post_open = D's open prerequisites in the staged post-close snapshot
+              (exactly task_dependency_states)
+  1. post_open ≠ ∅                → still_blocked{reason: waits_on, waits_on: |post_open|}
+  2. D.scheduled > today          → still_blocked{reason: scheduled, scheduled}
+  3. D's block id is prj          → recover; not_linked: project_task
+  4. D carries #hide              → recover; not_linked: hidden
+  5. D had a live link before this gesture
+                                  → recover; not_linked: already_planned
+  6. no predecessor of D in C has an anchor
+                                  → recover; not_linked: not_planned_today
+  7. plan.link_unblocked is false → recover; not_linked: disabled
+  8. otherwise                    → SUCCESSOR, anchored at the earliest (ledger order)
+                                    anchor among D's predecessors in C
+
+BREAKER  : more than 5 successors in one gesture → link none; each becomes
+           recover + not_linked: breaker
+ORDER    : successors by anchor ledger position, then note path, then line
+recover  : '?' → derived rank on the POST-gesture day text: '*' if D has a live link
+           there, else ' '. ' ', '*', '/' are unchanged.
+SUCCESSOR: '?' or ' ' → '*'; '*' and '/' are unchanged. Mint a missing ^block-id, then
+           insert the successor link (Placement).
+```
+
+- **Identity.** Matching uses only c's `[id::]` value. That is the one
+  identity under which `task_dependency_states` resolves blocking: its
+  identity map is built from explicit `[id::]` fields. A dependent that
+  names only the canonical `note__block-id` of a target **without**
+  `[id::]` was never blocked by that target under the derived rule, so
+  it cannot be "unblocked" by closing it. The hooks heal that rare stale
+  case on their next run, because they write the target's `[id::]`.
+  - This drops the canonical-id match the Rust `!` recovery uses today.
+    The JS cycler already matches only `[id::]` values.
+  - The gate is therefore exact: about 96% of open tasks carry no
+    `[id::]`, and closing one of them can never unblock anyone.
+- **Graph transition, not checkbox.** Eligibility depends on `post_open`
+  and on D depending on something this gesture closed. Every c in C was
+  open before the gesture, so "pre_open ∩ C ≠ ∅" holds automatically. A
+  stale `[ ]` dependent therefore qualifies (SL15), and a `[?]` with
+  another open prerequisite never does.
+- **The already-planned baseline** is the day text **before** the
+  gesture. Three consequences:
+  - A dependent whose link this same close carries forward stays planned
+    and is not duplicated.
+  - A dependent whose link this same close **drops** (`=x~K`) is never
+    re-linked. The drop wins, and the dependent recovers to Ready.
+  - The recovered rank is derived from the **post**-gesture text,
+    because that is what the hooks will see.
+- **Rows report what the gesture did.** A dependent appears in
+  `unblocked[]` only if this gesture changed its status or linked it. An
+  already-Next dependent that is already planned produces no row.
+  `still_blocked[]` lists every open dependent of C that stays blocked.
+- **No recursion.** Linking D is not completing D, so D's own dependents
+  wait (SL13).
+- **No managed-line guard in v1.** The field is the single identity,
+  exactly as recovery and the hooks use it. Staleness is the same window
+  Blocked derivation already has.
+
+### 12.3 Anchors and placement
+
+The inserted line is always `<indent>- <link>`. The indent is the anchor
+bullet's indent for slot anchors, and one tab for entry children.
+Nothing else goes on the line: prose would stop it counting as a Task
+Link.
+
+**Slot anchors** (`slot(E, b)`): insert immediately after bullet `b`'s
+subtree (`b` plus its deeper-indented children), in successor order.
+
+- **Rust (`!`).** Insert **before** retirement runs. Retirement then
+  strikes `b` in place, or moves `b`'s subtree into the running entry,
+  while the successor stays at the vacated position in E. Because E
+  still has a child, it is never removed as an emptied placeholder
+  (SL2).
+- **Obsidian.** Insert before the cycler strikes the cursor link. The
+  insertion is below the cursor line, so the strike target is
+  unaffected.
+
+**Closing anchors.** The target entry is the first that applies:
+
+1. the continuation this close created (`next_pomodoro.created`);
+2. else the first open entry **after** the closed one with the same
+   non-empty name;
+3. else a new placeholder, `- [ ] () — NAME` (or `- [ ] ()` when the
+   closed entry was unnamed). It goes immediately after the closed
+   entry's sub-bullet range, exactly where the close would have created
+   its continuation. Successors count as carried.
+
+Successors are appended after the target's existing children; a lone
+`\t- ` stub is replaced. `link.entry_created` is true when the entry
+did not exist before this gesture, in case 1 or 3.
+
+**Next up.** `link.next_up` is true when, after the gesture, the target
+entry is the first open untimed placeholder in the ledger: the one a
+bare `=` would start. A created continuation becomes next up, exactly
+like carried work today. The notice always says so, so it is never a
+surprise.
+
+### 12.4 Writes
+
+Each gesture makes one write set: one staged batch in capture, one
+planned pass in Obsidian.
+
+- **Successor's note.** Its status changes per the rule. A missing
+  `^block-id` is appended as ` ^<mint>` at the end of the task line.
+- **Day file.** Successor bullets are inserted, plus the created
+  placeholder when one is needed.
+- **Freshness.** Never touched: no `[fresh::]` stamp, and an existing
+  stamp is kept byte-for-byte. Automation never stamps. An unstamped
+  successor surfaces in tomorrow's NEXT review, which is correct.
+- **Schedule.** Never touched: no `scheduled` change and no Schedule Log
+  line. Eligible successors have no future date by definition.
+- **Fields.** No `[id::]` / `[dependsOn::]` writes; the hooks own those.
+- **Do not call `plan_task_link`** (Rust) or nav's
+  `planTargetTaskUpdate`: both stamp freshness and retire schedules. Use
+  the lower-level status writer (`set_task_line_status`) and the
+  placement helper.
+
+**Block-ID minting.** `mint(D)` is the first entry of bob's
+`capture_block_ids::suggest_ids_with_used(description, '^', used)`.
+
+- `description` is `note_tasks::clean_description` of D's body: the
+  trailing block ID, inline fields, and the Tasks global filter are
+  removed, and whitespace is collapsed.
+- `used` is every block ID in D's note (staged text), plus IDs this
+  gesture already minted in that note.
+- When the suggester returns nothing, mint `task`, `task-2`,
+  `task-3`… (first free), via `capture_block_ids::mint_block_id`.
+- The ID is deterministic and readable. Capture and Ctrl+Enter mint
+  byte-identical IDs; §11.7 SB vectors pin both.
+
+**Link form.** Same rules as dependency links (§3):
+
+1. `[[basename#^id]]` when the basename is unique;
+2. otherwise `[[dir/note#^id]]`.
+
+The one exception: a successor that lives in the day file itself still
+names the note (`[[20261009#^id]]`), never the bare `[[#^id]]`. Rust
+uses `task_dependencies::format::canonical_link` with the same
+`NoteIndex` capture uses for `&` dependency links. That index covers
+every task-bearing vault note the dependency discovery walks —
+untyped root notes, nested folders, ref notes, terminal projects,
+daily notes, hidden tasks, and completed/cancelled/archive history,
+excluding dot-directories, `_templates`, `_generated`, `_conflicts`,
+and the other always-excluded names — unioned with the batch's staged
+`.md` files. The JS port counts the same set.
+
+### 12.5 Reporting model
+
+The capture result contract is additive under schema version 1, so old
+clients keep working. Dry-run JSON equals real-run JSON except for
+`dry_run`. There is no new subcommand and no new CLI option.
+
+Both `task_complete` and `pomodoro_close` objects carry the same three
+fields:
+
+```json
+"unblocked": [{
+  "note_path": "sase.md", "block_id": "relaunch-failed-agents", "line": 82,
+  "text": "Re-launch all failed agents on apollo!",
+  "previous_status_symbol": "?", "previous_status_name": "Blocked",
+  "status_symbol": "*", "status_name": "Next",
+  "inbox": false,
+  "unblocked_by": [{"note_path": "sase.md", "block_id": "fix-apollo",
+                    "text": "Fix apollo machine!"}],
+  "link": {"day_file": "2026/20261009.md", "entry_name": "FIX", "entry_line": 37,
+           "entry_created": false, "next_up": false, "line": 40,
+           "block_link": "[[sase#^relaunch-failed-agents]]",
+           "block_id_created": true},
+  "not_linked": null
+}],
+"still_blocked": [{"note_path": "sase_agents_repo.md", "block_id": "badges", "line": 21,
+  "text": "Start adding sase--<name> badges", "status_symbol": "?",
+  "reason": "scheduled", "waits_on": 0, "scheduled": "2026-10-13"}],
+"unblocked_check": "checked"
+```
+
+**`unblocked[]` rows**
+
+- The existing fields keep their meaning; `unblocked` stays on
+  `task_complete` and is new on `pomodoro_close`.
+- `block_id` holds the minted ID when one was minted, and `""` when D
+  has none and none was minted.
+- `link` is non-null exactly when this gesture linked D.
+  - Line numbers are 1-based in the day text after this item.
+  - `day_file` is vault-relative.
+  - `entry_name` is `""` when the entry is unnamed.
+- `not_linked` is one of `already_planned`, `not_planned_today`,
+  `breaker`, `project_task`, `hidden`, `disabled`.
+  - The cycler-only model adds `failed` and `cancelled`; Rust never
+    emits them.
+
+**`still_blocked[]` rows**
+
+- `reason` is `waits_on` or `scheduled`.
+- `waits_on` counts the open prerequisites left.
+- `scheduled` is set only for `scheduled`, otherwise `null`.
+
+**`unblocked_check`**
+
+- `"checked"`: the lookup ran, or the gate proved it unnecessary.
+- `"unavailable"`: the dependents snapshot could not be built. The close
+  still succeeds and nothing is linked.
+- A missing key means an older `bob`.
+
+**Elsewhere in the result**
+
+- **`task_complete` top-level `day_file`.** Set to the absolute day file
+  path whenever the gesture changed the day file (`ledger` present or a
+  successor linked). Previously it was always `null`.
+- **`pomodoro_close.next_pomodoro`** names the successor's continuation
+  when the successor logic created it.
+- **`pomodoro_blocks[].lines[].reason`.** Optional `"unblocked"` on
+  added lines that are surviving successor links.
+- **Net batch reporting (SL20).** After all items are planned, a
+  successor whose link no longer survives live in the final staged day
+  text, or whose task is no longer open, is dropped from its item's
+  `unblocked[]` and loses its block-line `reason`.
+- **`task_blocks`.** Successors keep role `unblocked`.
+
+**Shared notice model** (cycler → nav `api.notice.showUnblocked(model)`).
+It is the JSON row shape above, kept in snake_case on purpose so one
+vocabulary serves Rust, JS, Swift, and the vectors:
+
+```js
+{
+  version: 1,
+  predecessors: [{ note_path, block_id, text }],
+  unblocked: [/* rows exactly as JSON, plus not_linked "failed" | "cancelled" */],
+  still_blocked: [/* rows exactly as JSON */],
+  daily_path: "2026/20261009.md",
+  daily_content: "<post-write day text, for the plan chip>" | null,
+  failure: null | { count, reason },
+}
+```
+
+### 12.6 Copy
+
+**Copy rules (shared by every surface).**
+
+- One notice per gesture, and silence when nothing was unblocked.
+- Each row reads successor text first, then the destination, then the
+  cause.
+- Use only existing glyphs: 🔓 unblocked (Mac `lock.open.fill`), 🔒
+  still blocked (Mac `lock.fill`), ✓ done.
+- Use only existing `--task-status-*` colour tokens, with no new hex
+  values.
+- Show at most 3 rows (linked, then not linked, then still blocked),
+  then `+N more`. This is a display limit, not an insertion limit.
+- Never lead with a block ID.
+- Truncate task text to 48 characters with `…`.
+
+**Notice text** (`successorNoticeText(model)` in the cycler, and the Mac
+notification line). This is the plain fallback and walk-toast form:
+
+| Situation | Text |
+| --- | --- |
+| One linked | `🔓 Next in FIX: Re-launch all failed agents on apollo!` |
+| Several linked, one entry | `🔓 3 linked → SASE: Review memory beads, Ship AGENTS.md…, +1` |
+| Several entries | `🔓 3 linked · FIX, SASE` |
+| Created continuation | `🔓 Next in new BOB session (next up): Re-launch…` |
+| Breaker | `🔓 7 unblocked · not linked (more than 5)` |
+| Recovered only | `🔓 Unblocked: Book flights (Ready)` |
+| Partial failure (Obsidian) | `⚠ Closed Fix apollo machine! — couldn't link 1 successor (daily note changed)` |
+
+**Obsidian: the `Unblocked` card** (nav's notice family,
+`bob-nh-notice is-unblock`).
+
+```text
+┌──────────────────────────────────────────────────────────────────┐
+│ 🔓  Unblocked   1 → FIX                     ✓ Fix apollo machine! │
+│  ＋ Re-launch all failed agents on apollo!               [ Next ] │
+│  🔒 Start adding sase--<name> badges · waits until Oct 13         │
+│ ──────────────────────────────────────────────────────────────── │
+│  (plan 3/3 · 10/10)  (added ^relaunch-failed-agents)  (Alt+N releases) │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+- **Header.**
+  - 🔓 sits in the existing glyph slot.
+  - The title is `Unblocked`.
+  - The count chip reads `n → NAME` / `n → new NAME session` /
+    `n linked`, plus `· next up` when it applies.
+  - The right-aligned muted receipt reads `✓ <predecessor>`, or
+    `✓ N tasks`.
+- **Rows.**
+  - **Linked rows** show `＋ text`, a lane pill (`Next`), `↗ <note>`
+    when D lives in a different note than its first predecessor, and
+    `inbox` when D lives in an inbox file.
+  - **Not-linked rows** show the text, a lane pill (`Ready`/`Next`), and
+    a muted reason: `already planned`, `not planned today`,
+    `not linked · more than 5`, `project task`, `hidden`, `linking off`,
+    `couldn't link`, or `cancelled`.
+  - **Still-blocked rows** are muted: `🔒 text · waits on N more` or
+    `· waits until Oct 13`.
+  - Clicking a row opens that task (`app.workspace.openLinkText`).
+- **Footer chips.**
+  - The plan meter on the post-write daily content, which turns warn/🔴
+    when over.
+  - `added ^id`, or `added N block IDs`.
+  - `Alt+N releases` (muted), shown when anything was linked.
+- **Breaker variant.** The header reads `7 · not linked`, followed by one
+  reason line: `More than 5 at once — link the ones you want with
+  Ctrl+Shift+Enter`.
+- **Duration.** 6 s plus 1 s per extra visible row, capped at 10 s.
+- **No nav.** Without nav (or with `api.notice` missing), show a plain
+  `new Notice(successorNoticeText(model))`.
+- **Walk landings.** The gesture keeps its **single** walk toast. The
+  notice text is composed into `outcome.notice` as the line after
+  `✓ Done · <task>`, and no card is shown. Inserted rows never steal
+  focus or cause a second advance.
+
+**Bob Mac Capture: preview first, notification second.** Preview is the
+primary surface because it explains before anything is written.
+
+- **`!` card unblocked rows.**
+  - **Linked.** `lock.open.fill` in the Next tint, monospaced
+    `[?] → [*]  Re-launch…`, and a trailing destination capsule
+    (`→ FIX` / `→ new BOB · next up`). A caption reads `added ^id` when
+    an ID was minted. An `inbox` capsule appears when it applies.
+  - **Not linked.** `lock.open.fill` in secondary colour,
+    `[?] → [ ]  text`, and a caption with the reason
+    (`Ready · not planned today`).
+  - **Still blocked.** `lock.fill` in tertiary colour, `text`, and a
+    caption reading `stays Blocked · waits on 1 more` /
+    `· until Oct 13`.
+- **`=x` close card.** Gains an **Unblocked** section under its task
+  rows, with the same row views.
+- **Block diff.** An added line with `reason == "unblocked"` gets a small
+  trailing `lock.open.fill` badge with `.help("Unblocked successor")`,
+  so the successor visibly sits under its struck predecessor.
+- **Notification.** One extra body line, taken from the notice-text table
+  above. There is never a second notification. With only recovered rows,
+  keep today's `· unblocked A, B`.
+- **Open Note(s)** includes the daily note whenever anything was linked.
+
+**Human output** follows the existing word-led rows (`dry run`:
+`would link`). It prints after the `ledger` line for `!`, and after the
+task rows and before `next:` for closes:
+
+```text
+✓ completed [*] → [x] Fix apollo machine!  sase.md ^fix-apollo
+  ledger  Task Link struck in FIX · 2026/20261009.md
+  linked [?] → [*] Re-launch all failed agents on apollo!  sase.md ^relaunch-failed-agents → FIX · added ^relaunch-failed-agents
+  unblocked [?] → [ ] Book flights  travel.md ^book-flights · not planned today
+  still blocked  Start adding sase--<name> badges  sase_agents_repo.md ^badges · until 2026-10-13
+plan 3/3 themes · 10/10 links
+```
+
+- **Destinations:**
+  - `→ FIX`
+  - `→ FIX (next up)`
+  - `→ new BOB session (next up)`
+  - `→ new session` for an unnamed created entry
+  - `→ line 37` for an unnamed existing entry
+- **Reason suffixes:**
+  - `· already planned`
+  - `· not planned today`
+  - `· project task`
+  - `· hidden`
+  - `· not linked, more than 5`
+  - `· linking off`
+- **Still-blocked suffixes:** `· waits on N more`, `· until YYYY-MM-DD`.
+- A row with no block ID omits ` ^`, as today.
+
+### 12.7 Performance
+
+| Layer | What | Effect |
+| --- | --- | --- |
+| 0. `[id::]` gate | Before any lookup, check the **staged** post-close lines of C for an `[id::]` field. | Zero extra I/O for about 96% of closes, in Rust and JS. It also speeds up today's Ctrl+Enter recovery. |
+| 1. Lazy context | `DependencyContext` builds `discover` only for items that need the dependency pool. `!` resolves notes from a walk-only index. | `hello` / `=x` previews go from about 270 ms to about 40 ms on apollo. |
+| 2. Prefiltered parallel snapshot | One batch-scoped dependents snapshot. Byte reads run in parallel, and a prefilter keeps only notes containing `dependsOn` or `id::`. Staged files always overlay disk. Shared by every `!` and close item in the batch, never cloned per item. | About 30 ms per batch, paid only when the gate passes. |
+| 3. Obsidian Tasks cache | When Tasks reports Warm, build a reverse index `id → dependents` from `getTasks()`. Open editor buffers override the cache. Read only the candidate notes and today's daily note. A cold cache falls back to the full scan. | The notice lands about 50 ms after the keypress. |
+| No daemon, no persistent cache | A validated cache needs a stat walk (32–55 ms) that costs as much as layer 2. | Respects the thin-client rule: no Swift-side dependency or placement logic. |
+
+**Targets.** Measured on apollo with a release build, against a temporary
+**copy** of `~/bob` (never the live vault):
+
+- `hello` and `=x` dry runs take ≤ 40 ms;
+- a `!` or `=x!` that closes a real prerequisite takes ≤ 70 ms;
+- `capture-parse` does no new work;
+- no extra spawn is needed to report results.
+
+### 12.8 Kill switch
+
+`plan.link_unblocked: true` lives in `~/.config/bob/config.yml` and is
+read by Rust and the cycler. Setting it to `false` turns off **linking
+and minting only**:
+
+- close-time recovery still runs and still uses the derived rank;
+- each unblocked row reports `not_linked: "disabled"`.
+
+Recovery is the honest half of the feature and costs nothing extra once
+the dependents are found. An invalid value falls back to `true` and
+surfaces through the existing invalid-plan-config warning paths
+(`docs/plan.md` "Invalid values").
+
+### 12.9 Undo
+
+- **One successor.** Alt+N on its link releases it, as the inverse of
+  what was written. The card's chip teaches this.
+- **The whole gesture, in Obsidian.** Reopening the predecessor the same
+  day takes back its successor links if they are untouched. This uses an
+  in-memory receipt; nothing is stored in Markdown.
+- **Not undo.** Deleting the bullet or pressing `u` in the editor leaves
+  the sticky Next. That is the general sticky-lane cost.
