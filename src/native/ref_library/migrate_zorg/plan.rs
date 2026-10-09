@@ -342,9 +342,14 @@ fn plan_note(
         &blocks,
     );
     // Prove the rendered frontmatter parses the way the index reads it.
-    let reading_state = build_row(&path, &under_ref, &contents)
-        .reading_state
-        .clone();
+    let reading_state = build_row(
+        &path,
+        &under_ref,
+        &contents,
+        crate::native::ref_tasks::RefTaskIndex::build_empty_selection(),
+    )
+    .reading_state
+    .clone();
     PlannedNote {
         path,
         contents,

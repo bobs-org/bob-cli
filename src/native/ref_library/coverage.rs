@@ -473,6 +473,7 @@ mod tests {
             reading_state: "finished".to_string(),
             reading_state_source: "legacy_status:read".to_string(),
             parent: None,
+            task: None,
             urls: Vec::new(),
             identity: super::super::row::RefIdentity {
                 keys: Vec::new(),
@@ -502,6 +503,7 @@ mod tests {
                 .iter()
                 .map(|block| block.to_string())
                 .collect(),
+            v2: false,
         }
     }
 

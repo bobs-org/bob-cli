@@ -599,6 +599,12 @@ fn highlights_heading_line_index(
     }
 }
 
+/// Shared follow-up task parser: both the `## Tasks` section and the
+/// vault-wide `🔖` locator strip the `🔖` link and inline fields identically.
+pub(crate) fn parse_follow_up_task(line: &str) -> Option<RegionTask> {
+    parse_region_task(line)
+}
+
 fn parse_region_task(line: &str) -> Option<RegionTask> {
     let trimmed = line.trim_start();
     let after_bracket = trimmed

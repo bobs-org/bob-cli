@@ -46,9 +46,9 @@ pub(crate) use resolve::{
 };
 pub(crate) use row::{
     bare_parent_name, strip_wikilink_brackets, Coverage, Diagnostic,
-    LibraryCounts, RefIdentity, RefRow, RefSnapshot,
+    LibraryCounts, RefIdentity, RefRow, RefSnapshot, RefTaskView,
 };
-pub(crate) use status::decide_status;
+pub(crate) use status::{decide_status, TrackerHit};
 
 use frontmatter::FrontValue;
 
@@ -105,6 +105,7 @@ pub(crate) struct RefIndex {
     pub rows: Vec<RefRow>,
     pub coverage: Coverage,
     pub counts: LibraryCounts,
+    pub ref_tasks: crate::native::ref_tasks::RefTaskIndex,
 }
 
 impl RefIndex {
@@ -124,6 +125,10 @@ pub(crate) fn build_index(
             config.ref_dir.display()
         )));
     }
+    let ref_tasks = crate::native::ref_tasks::RefTaskIndex::build(
+        &config.bob_dir,
+        &config.ref_dir,
+    );
     let mut files = Vec::new();
     let mut skipped = 0usize;
     collect_member_files(&config.ref_dir, &mut files, &mut skipped)?;
@@ -139,10 +144,25 @@ pub(crate) fn build_index(
             strip_forward(path, &config.ref_dir).expect("member under ref dir");
         match std::fs::read_to_string(path) {
             Ok(contents) => {
-                rows.push(build_row(&display, &under_ref, &contents));
+                let body = split_frontmatter(&contents)
+                    .map(|(_, rest)| rest)
+                    .unwrap_or(contents.clone());
+                let v1_hits = crate::native::ref_tasks::find_trackers(&body);
+                let mut selection = ref_tasks.select(&display, &v1_hits);
+                // The note is v2 when any candidate exists or the body
+                // holds the managed embed.
+                if crate::native::ref_tasks::find_managed_embed(&body).is_some()
+                {
+                    selection.v2 = true;
+                }
+                rows.push(build_row(
+                    &display, &under_ref, &contents, selection,
+                ));
             }
             Err(error) => {
-                let mut row = build_row(&display, &under_ref, "");
+                let selection =
+                    crate::native::ref_tasks::RefTaskIndex::build_empty_selection();
+                let mut row = build_row(&display, &under_ref, "", selection);
                 row.diagnostics.push(Diagnostic::new(
                     "invalid_yaml",
                     format!("could not read note: {error}"),
@@ -176,6 +196,7 @@ pub(crate) fn build_index(
         rows,
         coverage,
         counts,
+        ref_tasks,
     })
 }
 
@@ -217,10 +238,7 @@ fn collect_member_files(
             .extension()
             .and_then(OsStr::to_str)
             .is_some_and(|ext| ext.eq_ignore_ascii_case("md"));
-        if name.contains(" (conflict")
-            || name.contains(" (Conflicted copy")
-            || name.contains(".sync-conflict-")
-        {
+        if crate::native::ref_tasks::is_conflict_copy_name(name) {
             // Only Markdown conflict copies count as skipped notes;
             // non-Markdown conflict files are not library members.
             if is_markdown {
@@ -266,8 +284,14 @@ fn strip_forward(path: &Path, base: &Path) -> Option<String> {
         .map(|rel| rel.to_string_lossy().replace('\\', "/"))
 }
 
-/// Build one row from vault-relative path and raw note contents.
-fn build_row(rel: &str, under_ref: &str, contents: &str) -> RefRow {
+/// Build one row from vault-relative path, raw note contents, and the
+/// ref-task selection for this note.
+fn build_row(
+    rel: &str,
+    under_ref: &str,
+    contents: &str,
+    selection: crate::native::ref_tasks::RefTaskSelection,
+) -> RefRow {
     let (raw_lines, body) = split_frontmatter(contents)
         .unwrap_or_else(|| (Vec::new(), contents.to_string()));
     let front = ParsedFrontmatter::parse(&raw_lines);
@@ -276,7 +300,10 @@ fn build_row(rel: &str, under_ref: &str, contents: &str) -> RefRow {
         diagnostics.push(Diagnostic::new("invalid_yaml", detail));
     }
 
-    let outcome = decide_status(&body, &front);
+    let outcome = decide_status(&selection.status_hits, &front);
+    for item in &selection.diagnostics {
+        diagnostics.push(Diagnostic::new(item.code, item.detail.clone()));
+    }
     diagnostics.extend(outcome.diagnostics.clone());
     let era = if !outcome.has_usable_tracker
         && outcome.status.as_deref() == Some("legacy")
@@ -322,11 +349,34 @@ fn build_row(rel: &str, under_ref: &str, contents: &str) -> RefRow {
         "external"
     };
 
-    let parent = front
+    let front_parent = front
         .get_all("parent")
         .iter()
         .filter_map(|value| bare_parent_name(value))
         .next();
+    // Parent: for a v2 selection with residence, the parent is the
+    // residence; otherwise the frontmatter parent.
+    let parent = if let Some(residence) = selection.residence.as_deref() {
+        Some(residence.to_string())
+    } else {
+        front_parent.clone()
+    };
+    // parent_mismatch: a selected v2 task with residence r, and a
+    // frontmatter parent missing or not ASCII-case-equal to r.
+    if let Some(residence) = selection.residence.as_deref() {
+        let matches = front_parent
+            .as_deref()
+            .is_some_and(|p| p.eq_ignore_ascii_case(residence));
+        if !matches {
+            let shown = front_parent.as_deref().unwrap_or("missing");
+            diagnostics.push(Diagnostic::new(
+                "parent_mismatch",
+                format!(
+                    "frontmatter parent {shown} ≠ residence {residence}; the next scan sets it",
+                ),
+            ));
+        }
+    }
     let mut urls = front.get_all("source_url");
     urls.extend(front.get_all("url"));
     let stored = stored_identity(&urls);
@@ -349,6 +399,81 @@ fn build_row(rel: &str, under_ref: &str, contents: &str) -> RefRow {
     } else {
         (None, None)
     };
+    // open_ref_without_task: the note is v2 (a candidate exists or the
+    // body holds the managed embed), no candidates and no v1 hits, and
+    // the decided status is ready/next/wip. Rule 2 ambiguity also has
+    // empty hits but does hold candidates, so it is excluded.
+    if selection.v2
+        && selection.status_hits.is_empty()
+        && !selection
+            .diagnostics
+            .iter()
+            .any(|d| d.code == "multiple_open_ref_tasks")
+        && matches!(outcome.status.as_deref(), Some("ready" | "next" | "wip"))
+    {
+        // No candidates: check the selection really has none. `v2` may be
+        // true via the managed embed alone.
+        diagnostics.push(Diagnostic::new(
+            "open_ref_without_task",
+            format!(
+                "status {} but no reading task found; restore it from git or set status: abandoned",
+                outcome.status.as_deref().unwrap_or("unknown"),
+            ),
+        ));
+    }
+
+    // Task view: v2 selections carry the residence file and block link;
+    // v1 carries the ref note with block `ref`; ambiguity and no-task
+    // both give null.
+    let task = match &selection.task {
+        Some(crate::native::ref_tasks::Selected::V2(located)) => {
+            let stem = located
+                .path
+                .strip_suffix(".md")
+                .or_else(|| located.path.strip_suffix(".MD"))
+                .unwrap_or(&located.path);
+            let link = match &located.block_id {
+                Some(id) => format!("[[{stem}#^{id}]]"),
+                None => format!("[[{stem}]]"),
+            };
+            Some(RefTaskView {
+                path: located.path.clone(),
+                block_id: located.block_id.clone(),
+                link,
+                mark: located.mark,
+                archived: located.archived,
+            })
+        }
+        Some(crate::native::ref_tasks::Selected::V1(_)) | None => {
+            if outcome.has_usable_tracker
+                && let Some(hit) = outcome.tracker.as_ref()
+            {
+                Some(RefTaskView {
+                    path: rel.to_string(),
+                    block_id: Some("ref".to_string()),
+                    link: format!(
+                        "[[{}#^ref]]",
+                        rel.strip_suffix(".md").unwrap_or(rel)
+                    ),
+                    mark: hit.mark,
+                    archived: false,
+                })
+            } else {
+                None
+            }
+        }
+    };
+    // Rule 2 ambiguity (multiple open) must give null even when a usable
+    // v1 tracker exists: detect via the diagnostic.
+    let task = if selection
+        .diagnostics
+        .iter()
+        .any(|d| d.code == "multiple_open_ref_tasks")
+    {
+        None
+    } else {
+        task
+    };
 
     let link = format!("[[{}]]", rel.strip_suffix(".md").unwrap_or(rel));
     RefRow {
@@ -370,6 +495,7 @@ fn build_row(rel: &str, under_ref: &str, contents: &str) -> RefRow {
         reading_state: outcome.reading_state.to_string(),
         reading_state_source: outcome.reading_state_source.clone(),
         parent,
+        task,
         urls,
         identity: RefIdentity {
             keys: stored.keys,
@@ -411,6 +537,7 @@ fn build_row(rel: &str, under_ref: &str, contents: &str) -> RefRow {
             .map(|block| normalize_block_id(block))
             .filter(|block| !block.is_empty() && block != "^")
             .collect(),
+        v2: selection.v2,
     }
 }
 
@@ -536,70 +663,19 @@ fn zorg_block_date(block: &str) -> Option<String> {
     Some(format!("20{year:02}-{month:02}-{day:02}"))
 }
 
-/// The `finished` date for finished/dropped rows: the tracker's
-/// `[completion:: D]` or `[cancelled:: D]` (`✅ D` / `❌ D` also accepted).
+/// The `finished` date for finished/dropped rows: the selected hit's line
+/// via `ref_tasks::close_date` (`[completion:: D]`, `[cancelled:: D]`,
+/// `✅ D`/`✔ D`, `❌ D`/`✖ D`).
 fn finished_date(
     tracker: Option<&status::TrackerHit>,
 ) -> (Option<String>, Option<String>) {
     let Some(hit) = tracker else {
         return (None, None);
     };
-    if let Some(date) = bracket_task_date(&hit.line, "completion") {
-        return (Some(date), Some("ref_task".to_string()));
-    }
-    if let Some(date) = bracket_task_date(&hit.line, "cancelled") {
-        return (Some(date), Some("ref_task".to_string()));
-    }
-    if let Some(date) = emoji_task_date(&hit.line, ['✅', '✔']) {
-        return (Some(date), Some("ref_task".to_string()));
-    }
-    if let Some(date) = emoji_task_date(&hit.line, ['❌', '✖']) {
+    if let Some(date) = crate::native::ref_tasks::close_date(&hit.line) {
         return (Some(date), Some("ref_task".to_string()));
     }
     (None, None)
-}
-
-fn bracket_task_date(line: &str, key: &str) -> Option<String> {
-    let mut rest = line;
-    while let Some(start) = rest.find('[') {
-        let after = &rest[start + 1..];
-        let Some(end) = after.find(']') else {
-            break;
-        };
-        let inside = &after[..end];
-        if let Some((name, value)) = inside.split_once("::")
-            && name.trim().eq_ignore_ascii_case(key)
-        {
-            let date = value
-                .split_whitespace()
-                .next()
-                .unwrap_or("")
-                .trim_matches([',', '.', ';'])
-                .to_string();
-            if !date.is_empty() {
-                return Some(date);
-            }
-        }
-        rest = &after[end + 1..];
-    }
-    None
-}
-
-fn emoji_task_date(line: &str, marks: [char; 2]) -> Option<String> {
-    for mark in marks {
-        if let Some(pos) = line.find(mark) {
-            let after = line[pos + mark.len_utf8()..].trim_start();
-            let date = after
-                .split_whitespace()
-                .next()
-                .unwrap_or("")
-                .trim_matches([',', '.', ';']);
-            if !date.is_empty() {
-                return Some(date.to_string());
-            }
-        }
-    }
-    None
 }
 
 fn snapshot(front: &ParsedFrontmatter) -> Option<RefSnapshot> {

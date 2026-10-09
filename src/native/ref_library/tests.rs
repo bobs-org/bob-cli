@@ -104,7 +104,10 @@ fn synced_paper_row_covers_the_core_fields() {
     );
     assert_eq!(row.research_ref, None);
     assert_eq!(row.superseded_by, None);
-    assert_eq!(codes(row), BTreeSet::from(["marker_mirror_excluded"]));
+    assert_eq!(
+        codes(row),
+        BTreeSet::from(["marker_mirror_excluded", "open_v1_tracker"])
+    );
     assert!(!row.blocked);
 }
 
@@ -249,7 +252,10 @@ fn pending_and_conflict_status_precedence() {
 fn tracker_diagnostics_fall_back_to_frontmatter() {
     let index = fixture_index();
     let two = row(&index, "ref/papers/two_trackers.md");
-    assert_eq!(codes(two), BTreeSet::from(["multiple_ref_trackers"]));
+    assert_eq!(
+        codes(two),
+        BTreeSet::from(["multiple_ref_trackers", "open_v1_tracker"])
+    );
     assert_eq!(two.status.as_deref(), Some("wip"));
     assert_eq!(two.reading_state, "started");
     assert_eq!(two.reading_state_source, "frontmatter:wip");
@@ -258,13 +264,19 @@ fn tracker_diagnostics_fall_back_to_frontmatter() {
     // Several trackers with one `[?]` still leave `blocked` false: only
     // exactly one `^ref` tracker with a `[?]` mark sets the overlay.
     let pair = row(&index, "ref/papers/two_trackers_blocked.md");
-    assert_eq!(codes(pair), BTreeSet::from(["multiple_ref_trackers"]));
+    assert_eq!(
+        codes(pair),
+        BTreeSet::from(["multiple_ref_trackers", "open_v1_tracker"])
+    );
     assert!(!pair.blocked);
     assert_eq!(pair.reading_state, "unknown");
     assert_eq!(pair.reading_state_source, "none");
 
     let unknown = row(&index, "ref/papers/unknown_mark.md");
-    assert_eq!(codes(unknown), BTreeSet::from(["unknown_ref_mark"]));
+    assert_eq!(
+        codes(unknown),
+        BTreeSet::from(["unknown_ref_mark", "open_v1_tracker"])
+    );
     assert!(!unknown.blocked);
     assert_eq!(unknown.status.as_deref(), Some("ready"));
     assert_eq!(unknown.reading_state, "queued");
@@ -281,7 +293,7 @@ fn blocked_tracker_defers_to_frontmatter_without_diagnostic() {
     assert_eq!(blocked.status_sync, "ok");
     assert_eq!(blocked.reading_state, "queued");
     assert_eq!(blocked.reading_state_source, "ref_task:[?]");
-    assert!(blocked.diagnostics.is_empty());
+    assert_eq!(codes(blocked), BTreeSet::from(["open_v1_tracker"]));
     assert_eq!(blocked.title, "Blocked Mark Note");
     assert!(blocked.blocked);
 }
@@ -305,7 +317,7 @@ fn wikilink_parent_and_opaque_url() {
     assert_eq!(wiki.parent.as_deref(), Some("sase_ref"));
 
     let go = row(&index, "ref/blogs/go_link.md");
-    assert_eq!(codes(go), BTreeSet::from(["opaque_url"]));
+    assert_eq!(codes(go), BTreeSet::from(["opaque_url", "open_v1_tracker"]));
     assert_eq!(go.identity.keys, vec!["raw:go/capture-thing".to_string()]);
 }
 
@@ -332,7 +344,10 @@ fn arxiv_and_doi_identities_share_keys_and_conflict() {
         Some("10.48550/arxiv.1706.03762")
     );
     assert_eq!(doi.identity.arxiv.as_deref(), Some("1706.03762"));
-    assert_eq!(codes(doi), BTreeSet::from(["duplicate_identity"]));
+    assert_eq!(
+        codes(doi),
+        BTreeSet::from(["duplicate_identity", "open_v1_tracker"])
+    );
     // Both notes are PDF-backed, so neither is superseded.
     assert_eq!(pdf.superseded_by, None);
     assert_eq!(doi.superseded_by, None);
@@ -391,7 +406,11 @@ fn region_oddities_exclude_preamble_and_report_unparsed() {
     assert_eq!(row.comment_count, 0);
     assert_eq!(
         codes(row),
-        BTreeSet::from(["preamble_excluded", "unparsed_region"])
+        BTreeSet::from([
+            "preamble_excluded",
+            "unparsed_region",
+            "open_v1_tracker"
+        ])
     );
 }
 
@@ -417,6 +436,7 @@ fn every_diagnostic_code_is_represented() {
             "opaque_url",
             "duplicate_identity",
             "missing_type",
+            "open_v1_tracker",
         ])
     );
 }

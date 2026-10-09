@@ -59,12 +59,16 @@ pub(crate) struct ShowExcluded {
 
 /// One parsed `## Tasks` line: the checkbox state, its mark, the text with
 /// the block link and inline fields stripped, and the linked block id.
+/// `path` is set only on elsewhere follow-ups, so in-note rows stay
+/// byte-identical.
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct ShowTask {
     pub checked: bool,
     pub mark: char,
     pub text: String,
     pub block_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
 }
 
 /// One shown reference: the base index row plus the note's content.
@@ -273,6 +277,27 @@ pub(crate) fn load_show_row(
                     .is_some_and(|comment| !comment.is_empty())
         });
     }
+    let mut tasks: Vec<ShowTask> = parts
+        .tasks
+        .into_iter()
+        .map(|task| ShowTask {
+            checked: task.checked,
+            mark: task.mark,
+            text: task.text,
+            block_id: task.block_id,
+            path: None,
+        })
+        .collect();
+    // Follow-ups found elsewhere, after the in-note ones.
+    for follow in index.ref_tasks.follow_ups(&row.path) {
+        tasks.push(ShowTask {
+            checked: matches!(follow.mark, 'x' | 'X'),
+            mark: follow.mark,
+            text: follow.text.clone(),
+            block_id: follow.block_id.clone(),
+            path: Some(follow.path.clone()),
+        });
+    }
     Ok(ShowRow {
         row: row.clone(),
         annotations_status,
@@ -280,16 +305,7 @@ pub(crate) fn load_show_row(
         annotations,
         excluded,
         own_notes: parts.own_notes,
-        tasks: parts
-            .tasks
-            .into_iter()
-            .map(|task| ShowTask {
-                checked: task.checked,
-                mark: task.mark,
-                text: task.text,
-                block_id: task.block_id,
-            })
-            .collect(),
+        tasks,
         also: resolved.also.clone(),
     })
 }
@@ -675,6 +691,94 @@ fn annotation_lines(
     out
 }
 
+/// Lane label by mark for the reading-task line.
+fn lane_label(mark: char) -> String {
+    match mark {
+        ' ' => "Ready".to_string(),
+        '*' => "⭐ Next".to_string(),
+        '/' => "▸ In Progress".to_string(),
+        '?' => "Blocked".to_string(),
+        other => format!("[{other}]"),
+    }
+}
+
+/// The reading-task line for human and Markdown, or `None` when there is
+/// no task and no ambiguity to report.
+fn reading_task_plain(row: &ShowRow) -> Option<String> {
+    // Ambiguity first: task is null but the diagnostic names the count.
+    if let Some(diag) = row
+        .row
+        .diagnostics
+        .iter()
+        .find(|d| d.code == "multiple_open_ref_tasks")
+    {
+        let count = diag
+            .detail
+            .split_whitespace()
+            .next()
+            .unwrap_or("2")
+            .to_string();
+        return Some(format!(
+            "📖 Reading task  ⚠ {count} open tasks claim this ref · run bob ref doctor",
+        ));
+    }
+    let task = row.row.task.as_ref()?;
+    let is_v1 =
+        task.block_id.as_deref() == Some("ref") && task.path == row.row.path;
+    if is_v1 {
+        return Some(format!(
+            "📖 Reading task  in this note (v1) · {}",
+            lane_label(task.mark),
+        ));
+    }
+    let closed = matches!(task.mark, 'x' | 'X' | '-');
+    if closed {
+        let verb = if task.mark == '-' { "Dropped" } else { "Read" };
+        let mut line = format!("📖 {verb}");
+        if let Some(date) = row.row.finished.as_deref() {
+            line.push_str(&format!(" · {date}"));
+        }
+        if let Some(parent) = row.row.parent.as_deref() {
+            line.push_str(&format!(" · {parent}"));
+        }
+        if task.archived {
+            line.push_str(" (archived)");
+        }
+        return Some(line);
+    }
+    // Open v2.
+    let residence = row.row.parent.as_deref().unwrap_or(&task.path);
+    Some(format!(
+        "📖 Reading task  {residence} · {} → {}",
+        lane_label(task.mark),
+        task.link,
+    ))
+}
+
+/// The styled reading-task line: the link dims so piped output stays plain.
+fn reading_task_styled(
+    row: &ShowRow,
+    styler: Styler,
+    width: usize,
+) -> Option<String> {
+    let plain = reading_task_plain(row)?;
+    // Dim only the `[[...]]` link on open-v2 lines.
+    if let Some(task) = row.row.task.as_ref()
+        && task.block_id.as_deref() != Some("ref")
+        && !matches!(task.mark, 'x' | 'X' | '-')
+        && row
+            .row
+            .diagnostics
+            .iter()
+            .all(|d| d.code != "multiple_open_ref_tasks")
+    {
+        let styled_link = styler.dim(&task.link);
+        let with_style = plain.replacen(&task.link, &styled_link, 1);
+        return Some(truncate(&with_style, width));
+    }
+    Some(truncate(&plain, width))
+}
+
 /// Render one shown row in human form.
 fn render_one_human(
     row: &ShowRow,
@@ -688,6 +792,10 @@ fn render_one_human(
     out.push('\n');
     out.push_str(&header_line(row, styler, width));
     out.push('\n');
+    if let Some(line) = reading_task_styled(row, styler, width) {
+        out.push_str(&line);
+        out.push('\n');
+    }
     for (label, value) in metadata_rows(row) {
         out.push_str(&truncate(
             &format!("  {}  {value}", pad_right(&label, 8)),
@@ -772,13 +880,18 @@ fn render_one_human(
             let box_glyph = if task.checked { "☑" } else { "☐" };
             // The linked annotation's page label travels as a dim
             // suffix; tasks without a matching annotation keep no suffix.
+            // Elsewhere follow-ups carry a dim ` · <path>` suffix.
             let page = row
                 .annotations
                 .iter()
                 .find(|annotation| annotation.block_id == task.block_id)
                 .and_then(|annotation| annotation.page_label.as_deref());
-            let suffix =
+            let mut suffix =
                 page.map(|page| format!("   {page}")).unwrap_or_default();
+            if let Some(path) = task.path.as_deref() {
+                suffix.push_str(&format!(" · {path}"));
+            }
+            // Only dim the path part; keep page suffix behavior.
             let base = truncate(
                 &format!("  {box_glyph} {}", task.text),
                 width.saturating_sub(display_width(&suffix)).max(1),
@@ -848,6 +961,9 @@ fn render_one_markdown(row: &ShowRow, no_annotations: bool) -> String {
     let mut out = format!("## {}\n", row.row.title);
     out.push_str(&format!("\n- Note: {}\n", row.row.link));
     out.push_str(&format!("- Reading state: {}\n", state_bullet(row)));
+    if let Some(task_line) = reading_task_plain(row) {
+        out.push_str(&format!("- **Reading task:** {task_line}\n"));
+    }
     if let Some(source) = source_bullet(row) {
         out.push_str(&format!("- Source: {source}\n"));
     }
@@ -983,6 +1099,7 @@ mod tests {
                 reading_state: "finished".to_string(),
                 reading_state_source: "ref_task:[x]".to_string(),
                 parent: Some("sase_ref".to_string()),
+                task: None,
                 urls: vec!["https://arxiv.org/pdf/2608.04278".to_string()],
                 identity: RefIdentity {
                     keys: vec![
@@ -1015,6 +1132,7 @@ mod tests {
                 source_path: None,
                 source_id: None,
                 source_blocks: Vec::new(),
+                v2: false,
             },
             annotations_status: "parsed".to_string(),
             raw_region: None,
@@ -1051,6 +1169,7 @@ mod tests {
                 mark: ' ',
                 text: "Compare with the appendix.".to_string(),
                 block_id: "h-aaaaaaaaaaaaaaaa".to_string(),
+                path: None,
             }],
             also: Vec::new(),
         }

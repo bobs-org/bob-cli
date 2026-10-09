@@ -35,6 +35,10 @@ pub(crate) struct ListSelection {
     pub ref_types: Option<Vec<String>>,
     pub origin: Option<String>,
     pub parent: Option<String>,
+    /// Alternate parent spelling accepted alongside `parent` (the
+    /// normalized `-P` input when it resolved to a different canonical
+    /// route); never serialized, only the match reads it.
+    pub parent_alt: Option<String>,
     /// The `--since` value as given.
     pub since: Option<String>,
     /// The resolved `YYYY-MM-DD` cutoff, or `None` without `--since`.
@@ -98,6 +102,7 @@ pub(crate) fn select(
         ref_types,
         origin,
         parent,
+        parent_alt: None,
         since,
         since_cutoff,
         limit,
@@ -238,10 +243,14 @@ fn matches_attributes(row: &RefRow, selection: &ListSelection) -> bool {
     {
         return false;
     }
-    if let Some(parent) = selection.parent.as_deref()
-        && row.parent.as_deref() != Some(parent)
-    {
-        return false;
+    if selection.parent.is_some() {
+        let row_parent = row.parent.as_deref().unwrap_or("");
+        let matches = |wanted: &str| row_parent.eq_ignore_ascii_case(wanted);
+        let primary = selection.parent.as_deref().is_some_and(matches);
+        let alt = selection.parent_alt.as_deref().is_some_and(matches);
+        if !primary && !alt {
+            return false;
+        }
     }
     true
 }
@@ -296,6 +305,7 @@ pub(crate) fn fill_git_dates(
 ) -> (Option<String>, Option<String>) {
     let wanted = rows.iter().any(|row| {
         row.era == "modern"
+            && !row.v2
             && (row.added.is_none()
                 || matches!(row.reading_state.as_str(), "finished" | "dropped")
                     && row.finished.is_none())
@@ -314,7 +324,7 @@ pub(crate) fn fill_git_dates(
             );
         }
     };
-    for row in rows.iter_mut().filter(|row| row.era == "modern") {
+    for row in rows.iter_mut().filter(|row| row.era == "modern" && !row.v2) {
         // `load_ref_history` returns newest-first; the earliest add is
         // the last record for the path.
         if row.added.is_none()

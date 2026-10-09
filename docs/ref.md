@@ -56,7 +56,13 @@ written by the last Highlights scan, not live PDF state.
 
 ## Reading state
 
-Reading state is derived, never stored. The effective `status` is decided
+Reading state is derived, never stored. It comes from the located reading
+task: the vault-wide `#ref` locator finds every v2 task (a `#task #ref`
+line with a wikilink to the ref note), selects one per the v2/v1 order
+(one open v2 wins; ambiguity falls back to frontmatter; then the newest
+closed v2; then the in-note v1 `^ref` tracker; else frontmatter), and the
+residence parent (the area/project/inbox stem, or the `done/` archive's
+`parent:`) becomes the row parent. The effective `status` is decided
 per note:
 
 1. Exactly one `^ref` tracker with a known mark maps through the
@@ -176,6 +182,13 @@ reading state unless `-R` narrows it. Values within one option are ORed;
 different options are ANDed. Superseded notes are always excluded and
 counted in `hidden.superseded` (`find` and `show` still reach them).
 
+`-P/--parent NOTE` resolves through area/project routes and
+`project_name_aliases` (`bob-cli` matches `bob`); any other name matches
+the frontmatter parent literally (ASCII case-insensitive, never an
+error). `filters.parent` echoes the canonical route when the input
+resolved, else the normalized input. `-g/--git-dates` never backfills
+v2 rows.
+
 The row date is `finished` for the finished and dropped states, `added`
 otherwise. `--since` accepts `YYYY-MM-DD` or `<N>d|w|m|y` relative to
 today (calendar months); rows without a date are excluded and counted in
@@ -249,7 +262,7 @@ Each shown row extends the base index row with the note's content:
 - `own_notes`: the user's own text (a legacy note's whole migrated
   body).
 - `tasks`: the parsed `## Tasks` lines (`checked`, `mark`, `text`,
-  `block_id`).
+  `block_id`, plus `path` only on follow-ups found elsewhere).
 - `also`: superseded companion paths.
 
 `-c/--comments-only` keeps only annotations with a comment and
@@ -258,15 +271,21 @@ metadata and notes only. The `annotations` array honors the flags; the
 status, counts, and `excluded` facts always describe the whole region.
 
 Human output prints the title, a reading-state header (chip, date,
-type, origin, path), the metadata rows that have a value, then the
-annotations grouped by page with wrapped quotes (`“…”`) and cyan `↳`
-comments, the exclusion parenthetical, and the `NOTES` and `TASKS`
-sections. Each `TASKS` row carries its linked annotation's page label
-as a dim suffix. Empty sections stay omitted; several `REF`s are
-separated by a dim rule.
+type, origin, path), the reading-task line, the metadata rows that have
+a value, then the annotations grouped by page with wrapped quotes
+(`“…”`) and cyan `↳` comments, the exclusion parenthetical, and the
+`NOTES` and `TASKS` sections. The reading-task line is `📖 Reading task
+<residence> · <lane> → <link>` for open v2, `📖 Read/Dropped · <date> ·
+<residence> [(archived)]` for closed v2, `📖 Reading task in this note
+(v1) · <lane>` for v1, and `📖 Reading task ⚠ N open tasks claim this
+ref · run bob ref doctor` for ambiguity. Each `TASKS` row carries its
+linked annotation's page label as a dim suffix, plus a dim `· <path>`
+for follow-ups found elsewhere. Empty sections stay omitted; several
+`REF`s are separated by a dim rule.
 
 Markdown output is a quotable digest per note: `## <title>`, bullets for
-the note link, reading state with evidence and date, source URL and
+the note link, reading state with evidence and date, a `- **Reading
+task:** …` bullet with the same text as the human line, source URL and
 arXiv/DOI, origin and type, annotation counts and snapshot date (plus
 `Research report: research:…` when set, and `Also: …` companions), then
 `### Annotations` (one `**Page N**` label per page, quotes as `>`
@@ -419,12 +438,25 @@ intake directory). `library` counts exclude superseded notes.
 `generated_at` is local `YYYY-MM-DDTHH:MM:SS` (pin with `BOB_NOW`).
 Each `ref` object is the full index row: path, link, title, origin,
 ref_type, era, status, status_sync, legacy_status,
-reading_state and its source, `blocked`, parent, urls, identity keys,
-author/published/captured, added/finished dates and sources,
+reading_state and its source, `blocked`, parent, `task`, urls, identity
+keys, author/published/captured, added/finished dates and sources,
 source_pdf, audio, annotation and comment counts, snapshot,
-research_ref, superseded_by, and diagnostics. `blocked` is additive
-under `schema_version` 1: it adds a field without changing any other
-field or the schema version.
+research_ref, superseded_by, and diagnostics. `task` is always present
+(`null` when there is no task): v2 carries `path` (the residence file),
+`block_id`, `link` (`[[path#^id]]` or `[[path]]`), `mark`, and
+`archived`; v1 carries the ref note path, `block_id: "ref"`,
+`link: [[ref/…#^ref]]`, and `archived: false`. One `(path, block_id)`
+join works for both eras. `blocked` and `task` are additive under
+`schema_version` 1.
+
+Diagnostics: `multiple_open_ref_tasks` (several open v2 claim the ref;
+detail lists `path:line`), `open_ref_task_in_done` (open task under
+`done/`, report-only), `open_ref_without_task` (v2 note with a
+ready/next/wip status but no task), `orphan_ref_task` (a `#ref` line
+resolving to no note), `ref_task_outside_area` (live task outside an
+area/project/inbox), `parent_mismatch` (frontmatter parent differs from
+residence), and `open_v1_tracker` (open in-note `^ref`; run `bob ref
+migrate-tasks`).
 
 ## Errors and exit codes
 

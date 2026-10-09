@@ -26,6 +26,7 @@ pub(crate) struct RefRow {
     /// an overlay on the reading lane, always present in JSON.
     pub blocked: bool,
     pub parent: Option<String>,
+    pub task: Option<RefTaskView>,
     pub urls: Vec<String>,
     pub identity: RefIdentity,
     pub author: Option<String>,
@@ -64,6 +65,22 @@ pub(crate) struct RefRow {
     /// folded chapter blocks.
     #[serde(skip_serializing)]
     pub source_blocks: Vec<String>,
+    /// True when any v2 candidate exists for this ref (or the body holds
+    /// the managed embed); kept out of JSON, only `-g` reads it.
+    #[serde(skip_serializing)]
+    pub v2: bool,
+}
+
+/// One located reading task, serialized right after `parent` and always
+/// present (`null` when there is no task). One `(path, block_id)` join
+/// works for both eras.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub(crate) struct RefTaskView {
+    pub path: String,
+    pub block_id: Option<String>,
+    pub link: String,
+    pub mark: char,
+    pub archived: bool,
 }
 
 /// Stored identity keys for one row.

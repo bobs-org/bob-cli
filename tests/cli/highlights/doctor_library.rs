@@ -59,6 +59,8 @@ fn doctor_library_rows_report_ok_on_clean_vault() {
         report.contains("library diagnostics: ok (no diagnostics)"),
         "{report}"
     );
+    assert!(report.contains("ref tasks:"), "{report}");
+    assert!(report.contains("parents:"), "{report}");
     assert!(
         report.contains("identity: ok (no superseded notes)"),
         "{report}"
@@ -97,6 +99,8 @@ fn doctor_library_diagnostics_warn_lists_codes_and_paths() {
         ),
         "{report}"
     );
+    assert!(report.contains("ref tasks:"), "{report}");
+    assert!(report.contains("parents:"), "{report}");
     assert!(report.contains("result: ok"), "{report}");
 }
 

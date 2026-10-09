@@ -65,6 +65,8 @@ pub(super) struct TaskCandidate {
     pub(super) child_count: usize,
     pub(super) line: usize,
     pub(super) pomodoro: Option<ActiveTaskPomodoroCandidate>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) task_kind: Option<&'static str>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -124,6 +126,8 @@ pub(super) struct DependencyCandidate {
     pub(super) section: Option<String>,
     pub(super) depth: usize,
     pub(super) line: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) task_kind: Option<&'static str>,
 }
 
 /// One `task_link` (`:` picker) candidate: any linkable open task in a
@@ -154,6 +158,8 @@ pub(super) struct TaskLinkCandidate {
     #[serde(skip_serializing_if = "is_false")]
     pub(super) pulls_forward: bool,
     pub(super) pomodoro: Option<ActiveTaskPomodoroCandidate>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) task_kind: Option<&'static str>,
 }
 
 /// One `task_parent` picker candidate: a linkable open task in the capture
@@ -179,6 +185,8 @@ pub(super) struct TaskParentCandidate {
     pub(super) line: usize,
     pub(super) group: capture_link_tasks::LinkTaskGroup,
     pub(super) pomodoro: Option<ActiveTaskPomodoroCandidate>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) task_kind: Option<&'static str>,
 }
 
 /// One `task_complete` (`!` picker) candidate: any open task in the
@@ -224,6 +232,8 @@ pub(super) struct TaskCompleteCandidate {
     pub(super) scheduled: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) today: Option<TodayInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) task_kind: Option<&'static str>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -268,6 +278,8 @@ pub(super) struct ActiveTaskCandidate {
     pub(super) text: String,
     pub(super) section: Option<String>,
     pub(super) pomodoro: Option<ActiveTaskPomodoroCandidate>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) task_kind: Option<&'static str>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

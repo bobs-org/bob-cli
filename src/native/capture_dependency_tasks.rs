@@ -61,6 +61,7 @@ pub(crate) struct DependencyTask {
     /// no replacement can name it unambiguously until the note is
     /// repaired.
     pub(crate) duplicate_id: bool,
+    pub(crate) task_kind: Option<&'static str>,
 }
 
 /// Discovery output: canonically ordered candidates plus bounded
@@ -157,6 +158,7 @@ pub(crate) fn discover(bob_dir: &Path) -> DependencyTaskResult {
                 hidden: has_hide_tag(raw_line),
                 open,
                 duplicate_id,
+                task_kind: task.task_kind,
             });
         }
     }

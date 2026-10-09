@@ -38,6 +38,8 @@ pub(crate) struct ActiveTask {
     pub(crate) task_ref: String,
     pub(crate) line: usize,
     pub(crate) pomodoro: Option<ActiveTaskPomodoro>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) task_kind: Option<&'static str>,
 }
 
 impl ActiveTask {
@@ -108,6 +110,7 @@ pub(crate) fn discover_at(bob_dir: &Path, day_file: &Path) -> ActiveTaskResult {
                     task_ref: task.task_ref(),
                     line: task.line_index + 1,
                     pomodoro: None,
+                    task_kind: task.task_kind,
                 }),
         );
     }

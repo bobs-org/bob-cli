@@ -74,8 +74,14 @@ never fail the command:
 
 - `library: ok (…)` totals the indexed notes by reading state.
 - `library diagnostics` rolls up row diagnostics by code with up to 3
-  example paths (`marker_mirror_excluded` is skipped here; it has its own
-  row below).
+  example paths (`marker_mirror_excluded` and every
+  `REF_TASK_DIAGNOSTIC_CODES` code are skipped here; they have their own
+  rows below).
+- `ref tasks` rolls up reading tasks (`N live · M archived · K open v1`,
+  plus warn-level per-code counts in code order with up to 3 example
+  paths; `open_v1_tracker` is count-only until migration).
+- `parents` reports parent notes and aliases, or warns with the
+  structural `project_name_aliases` problems.
 - `identity` reports legacy notes superseded by a newer capture, or warns
   about identity keys shared by more than one PDF-backed note.
 - `annotations` warns while notes still render a leaked marker mirror; the

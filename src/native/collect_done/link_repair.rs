@@ -401,7 +401,7 @@ pub(super) fn archive_parent_matches_source(
         .as_deref()
         == Some(source_relative_path)
 }
-pub(super) fn archive_parent_target(contents: &str) -> Option<String> {
+pub(crate) fn archive_parent_target(contents: &str) -> Option<String> {
     let lines: Vec<&str> = contents.split_inclusive('\n').collect();
     if lines
         .first()

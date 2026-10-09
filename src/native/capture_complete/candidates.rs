@@ -125,6 +125,7 @@ pub(super) fn task_candidates(
                     child_count: task.child_count,
                     line: task.line_index + 1,
                     pomodoro: None,
+                    task_kind: task.task_kind,
                 }
             })
             .collect(),
@@ -182,6 +183,7 @@ pub(super) fn link_candidates(
                 child_count: task.child_count,
                 line: task.line_index + 1,
                 pomodoro,
+                task_kind: task.task_kind,
             }
         })
         .collect();
@@ -385,6 +387,7 @@ pub(super) fn active_task_candidates(
                     is_current: pomodoro.is_current,
                 }
             }),
+            task_kind: task.task_kind,
         })
         .collect();
     (Candidates::ActiveTask(candidates), discovered.warnings)
@@ -430,6 +433,7 @@ pub(super) fn task_link_candidates(
                     is_current: pomodoro.is_current,
                 }
             }),
+            task_kind: task.task_kind,
         })
         .collect();
     (Candidates::TaskLink(candidates), discovered.warnings)
@@ -475,6 +479,7 @@ pub(super) fn task_parent_candidates(
                         is_current: pomodoro.is_current,
                     }
                 }),
+                task_kind: task.task_kind,
             }
         })
         .collect();
@@ -580,6 +585,7 @@ pub(super) fn dependency_candidates(
                 section: task.section.clone(),
                 depth: task.depth,
                 line: task.line,
+                task_kind: task.task_kind,
             }
         })
         .collect();
@@ -671,6 +677,7 @@ pub(super) fn task_complete_candidates(
                 line: task.line,
                 scheduled: task.scheduled.clone(),
                 today: task.today.clone(),
+                task_kind: task.task_kind,
             }
         })
         .collect();

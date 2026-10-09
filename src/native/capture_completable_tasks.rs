@@ -152,6 +152,7 @@ pub(crate) struct CompletableTask {
     /// Today's Task Link placement, when today's daily note links the
     /// task.
     pub(crate) today: Option<TodayInfo>,
+    pub(crate) task_kind: Option<&'static str>,
 }
 
 /// Discovery output: today-ordered candidates plus the note index for
@@ -234,6 +235,7 @@ pub(crate) fn discover(
             recurring,
             group,
             today: today.get(&key).cloned(),
+            task_kind: task.task_kind,
         });
     }
     CompletableResult {

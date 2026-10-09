@@ -62,6 +62,8 @@ pub(crate) struct LinkTask {
     pub(crate) pulls_forward: bool,
     pub(crate) pomodoro: Option<ActiveTaskPomodoro>,
     pub(crate) group: LinkTaskGroup,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) task_kind: Option<&'static str>,
 }
 
 fn is_false(value: &bool) -> bool {
@@ -199,6 +201,7 @@ pub(crate) fn discover_at(
                     pulls_forward,
                     pomodoro,
                     group,
+                    task_kind: task.task_kind,
                 },
                 sort_key,
             ));
@@ -915,6 +918,7 @@ mod tests {
             pulls_forward: false,
             pomodoro: None,
             group: LinkTaskGroup::Note,
+            task_kind: None,
         };
         let second = LinkTask {
             text: "sandwich".to_string(),
@@ -975,6 +979,7 @@ mod tests {
                 pulls_forward: false,
                 pomodoro: None,
                 group: LinkTaskGroup::Note,
+                task_kind: None,
             }
         }
         let tasks = vec![

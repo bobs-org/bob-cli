@@ -35,6 +35,25 @@ pub(crate) struct NoteTask {
     pub(crate) child_count: usize,
     pub(crate) block_end: usize,
     pub(crate) digest: String,
+    pub(crate) task_kind: Option<&'static str>,
+}
+
+/// True when the parsed task body carries the global filter token
+/// immediately followed by a `#ref` token (ASCII case-insensitive).
+/// This is the same predicate `clean_description` uses to drop the `#ref`
+/// glyph token.
+pub(crate) fn is_ref_task_kind(body: &str, global_filter: &str) -> bool {
+    if global_filter.is_empty() {
+        return false;
+    }
+    let tokens: Vec<&str> = body.split_whitespace().collect();
+    for window in tokens.windows(2) {
+        if window[0] == global_filter && window[1].eq_ignore_ascii_case("#ref")
+        {
+            return true;
+        }
+    }
+    false
 }
 
 impl NoteTask {
@@ -226,6 +245,9 @@ pub(crate) fn scan(
             let (child_count, block_end) =
                 task_block_extent(&lines, line_index, parsed.indentation.len());
             let task_index = tasks.len();
+            let task_kind =
+                is_ref_task_kind(parsed.body, &settings.global_filter)
+                    .then_some("ref");
             tasks.push(NoteTask {
                 line_index,
                 indentation: parsed.indentation.to_string(),
@@ -246,6 +268,7 @@ pub(crate) fn scan(
                 child_count,
                 block_end,
                 digest: line_digest(line.text),
+                task_kind,
             });
             task_index
         });
@@ -318,11 +341,27 @@ pub(crate) fn clean_description(
         .and_then(|id| body.trim_end().strip_suffix(&format!("^{id}")))
         .unwrap_or(body);
     let without_fields = INLINE_FIELD_RE.replace_all(without_block, " ");
-    without_fields
-        .split_whitespace()
-        .filter(|token| global_filter.is_empty() || *token != global_filter)
-        .collect::<Vec<_>>()
-        .join(" ")
+    let tokens: Vec<&str> = without_fields.split_whitespace().collect();
+    // Drop the global filter, plus a `#ref` token (ASCII case-insensitive)
+    // that directly follows a dropped global-filter token. This matches
+    // the landed `docs/task-tag-marks.md` reference rule and bob-plugins
+    // `REF_AFTER_TASK_RE`: `#task #ref X` → `X`, `#task #references X`
+    // keeps `#references`, `#ref #task X` keeps `#ref`.
+    let mut out = Vec::new();
+    let mut prev_dropped_filter = false;
+    for token in tokens {
+        if !global_filter.is_empty() && token == global_filter {
+            prev_dropped_filter = true;
+            continue;
+        }
+        if prev_dropped_filter && token.eq_ignore_ascii_case("#ref") {
+            prev_dropped_filter = false;
+            continue;
+        }
+        prev_dropped_filter = false;
+        out.push(token);
+    }
+    out.join(" ")
 }
 
 pub(crate) fn line_digest(line: &str) -> String {
@@ -622,6 +661,30 @@ mod tests {
         assert_eq!(scan.suggest_block_id("Alphx"), Some("Alpha"));
         assert_eq!(scan.suggest_block_id("bravx"), None);
         assert_eq!(scan.suggest_block_id("nothing-close"), None);
+    }
+
+    #[test]
+    fn clean_description_drops_ref_after_task_filter() {
+        assert_eq!(clean_description("#task #ref X", "#task", None), "X");
+        assert_eq!(clean_description("#task #REF X", "#task", None), "X");
+        assert_eq!(
+            clean_description("#task #references X", "#task", None),
+            "#references X"
+        );
+        assert_eq!(clean_description("#ref #task X", "#task", None), "#ref X");
+    }
+
+    #[test]
+    fn ref_task_kind_marks_filter_then_ref_rows() {
+        let (_root, mut settings) = missing_settings();
+        settings.global_filter = "#task".to_string();
+        let scan = scan(
+            "- [ ] #task #ref Read paper ^r\n- [ ] #task Other ^o\n",
+            &settings,
+        );
+        assert_eq!(scan.tasks[0].task_kind, Some("ref"));
+        assert_eq!(scan.tasks[0].description, "Read paper");
+        assert_eq!(scan.tasks[1].task_kind, None);
     }
 
     #[test]

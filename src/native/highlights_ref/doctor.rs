@@ -342,6 +342,8 @@ fn append_library_doctor_rows(config: &Config, warnings: &mut Vec<String>) {
     );
 
     append_library_diagnostics_row(&index.rows, warnings);
+    append_ref_tasks_row(&index, warnings);
+    append_parents_row(&config.bob_dir, warnings);
     append_library_identity_row(&index.rows, warnings);
     append_library_annotations_row(&index.rows, warnings);
 
@@ -391,7 +393,10 @@ fn append_library_diagnostics_row(
     for row in rows {
         let mut row_codes = false;
         for diagnostic in &row.diagnostics {
-            if diagnostic.code == "marker_mirror_excluded" {
+            if diagnostic.code == "marker_mirror_excluded"
+                || crate::native::ref_tasks::REF_TASK_DIAGNOSTIC_CODES
+                    .contains(&diagnostic.code.as_str())
+            {
                 continue;
             }
             *by_code.entry(diagnostic.code.as_str()).or_default() += 1;
@@ -422,6 +427,128 @@ fn append_library_diagnostics_row(
         "{} reference notes carry diagnostics",
         plural_notes(notes),
     ));
+}
+
+/// The `ref tasks` rollup: live/archived/open-v1 counts plus warn-level
+/// ref-task codes in code order. `open_v1_tracker` is count-only and
+/// expected until migration; it never warns.
+fn append_ref_tasks_row(
+    index: &crate::native::ref_library::RefIndex,
+    warnings: &mut Vec<String>,
+) {
+    let rows = &index.rows;
+    let live = rows
+        .iter()
+        .filter(|row| {
+            row.task.as_ref().is_some_and(|task| {
+                task.block_id.as_deref() != Some("ref") && !task.archived
+            })
+        })
+        .count();
+    let archived = rows
+        .iter()
+        .filter(|row| {
+            row.task.as_ref().is_some_and(|task| {
+                task.block_id.as_deref() != Some("ref") && task.archived
+            })
+        })
+        .count();
+    let open_v1 = rows
+        .iter()
+        .filter(|row| {
+            row.diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "open_v1_tracker")
+        })
+        .count();
+    // Warn-level codes in REF_TASK_DIAGNOSTIC_CODES order, excluding the
+    // count-only open_v1_tracker.
+    let mut by_code: Vec<(&str, usize)> = Vec::new();
+    let mut examples: Vec<String> = Vec::new();
+    for code in crate::native::ref_tasks::REF_TASK_DIAGNOSTIC_CODES {
+        if code == "open_v1_tracker" {
+            continue;
+        }
+        if code == "orphan_ref_task" {
+            let count = index.ref_tasks.orphans().len();
+            if count > 0 {
+                by_code.push((code, count));
+                for orphan in index.ref_tasks.orphans().iter().take(3) {
+                    if examples.len() < 3 {
+                        examples.push(orphan.path.clone());
+                    }
+                }
+            }
+            continue;
+        }
+        let mut count = 0usize;
+        for row in rows {
+            if row
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == code)
+            {
+                count += 1;
+                if examples.len() < 3 {
+                    examples.push(row.path.clone());
+                }
+            }
+        }
+        if count > 0 {
+            by_code.push((code, count));
+        }
+    }
+    let base = format!("{live} live · {archived} archived · {open_v1} open v1");
+    if by_code.is_empty() {
+        println!("ref tasks: ok ({base})");
+        return;
+    }
+    let summary = by_code
+        .iter()
+        .map(|(code, count)| format!("{count} {code}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    println!(
+        "ref tasks: warn ({base} · {summary} · e.g. {})",
+        examples.join(", "),
+    );
+    let total: usize = by_code.iter().map(|(_, count)| count).sum();
+    warnings.push(format!("{total} reading-task problems"));
+}
+
+/// The `parents` rollup: parent-note and alias counts, or the structural
+/// alias problems collected by `capture_targets`.
+fn append_parents_row(bob_dir: &Path, warnings: &mut Vec<String>) {
+    let report = crate::native::capture_targets::scan_capture_targets(bob_dir);
+    if report.alias_warnings.is_empty() {
+        let notes = report.targets.len();
+        let aliases: usize = report
+            .targets
+            .iter()
+            .map(|target| target.project_name_aliases.len())
+            .sum();
+        println!("parents: ok ({notes} parent notes · {aliases} aliases)",);
+        return;
+    }
+    let problems: Vec<String> = report
+        .alias_warnings
+        .iter()
+        .map(|note| note.display())
+        .collect();
+    let shown = problems
+        .iter()
+        .take(3)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("; ");
+    let mut line =
+        format!("parents: warn ({} alias problems: {shown}", problems.len(),);
+    if problems.len() > 3 {
+        line.push_str("; …");
+    }
+    line.push(')');
+    println!("{line}");
+    warnings.push(format!("{} project_name_aliases problems", problems.len(),));
 }
 
 fn append_library_identity_row(

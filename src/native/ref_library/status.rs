@@ -12,16 +12,9 @@ use super::frontmatter::ParsedFrontmatter;
 use super::row::Diagnostic;
 use crate::native::highlights_ref::{
     is_known_ref_task_mark, normalize_deprecated_status_str,
-    ref_task_mark_target_status, MANAGED_BODY_BEGIN, MANAGED_BODY_END,
+    ref_task_mark_target_status,
 };
-use crate::native::markdown::fenced_lines;
-
-/// One `^ref` tracker candidate found in the body.
-#[derive(Debug, Clone)]
-pub(crate) struct TrackerHit {
-    pub mark: char,
-    pub line: String,
-}
+pub(crate) use crate::native::ref_tasks::TrackerHit;
 
 /// The decided status plus its evidence.
 #[derive(Debug, Clone)]
@@ -54,10 +47,9 @@ pub(crate) fn reading_state_rank(state: &str) -> u8 {
 
 /// Decide the effective status and derived reading state for one note.
 pub(crate) fn decide_status(
-    body: &str,
+    hits: &[TrackerHit],
     front: &ParsedFrontmatter,
 ) -> StatusOutcome {
-    let hits = find_trackers(body);
     let front_raw = front
         .get_str("status")
         .map(str::trim)
@@ -311,75 +303,10 @@ fn base_status(front: &ParsedFrontmatter) -> Option<String> {
     Some(normalize_deprecated_status_str(status.trim()).to_string())
 }
 
-/// All `^ref` tracker candidates: list task lines carrying the token, outside
-/// fenced code and outside the managed region.
-fn find_trackers(body: &str) -> Vec<TrackerHit> {
-    let lines: Vec<&str> = body.lines().collect();
-    let fenced = fenced_lines(&lines, 0..lines.len());
-    let region = managed_region_line_range(&lines);
-    lines
-        .iter()
-        .enumerate()
-        .filter(|(index, _)| {
-            !fenced.contains(index)
-                && region
-                    .is_none_or(|(begin, end)| *index < begin || *index > end)
-        })
-        .filter_map(|(_, line)| parse_tracker_line(line))
-        .collect()
-}
-
-/// The managed-region line range (inclusive) when exactly one begin marker is
-/// followed by its end marker; anything broken reads as no region.
-fn managed_region_line_range(lines: &[&str]) -> Option<(usize, usize)> {
-    let begin = lines
-        .iter()
-        .position(|line| line.contains(MANAGED_BODY_BEGIN))?;
-    if lines
-        .iter()
-        .filter(|line| line.contains(MANAGED_BODY_BEGIN))
-        .count()
-        > 1
-    {
-        return None;
-    }
-    let end = lines[begin..]
-        .iter()
-        .position(|line| line.contains(MANAGED_BODY_END))
-        .map(|offset| begin + offset)?;
-    if lines
-        .iter()
-        .filter(|line| line.contains(MANAGED_BODY_END))
-        .count()
-        > 1
-    {
-        return None;
-    }
-    Some((begin, end))
-}
-
-/// A loose `^ref` tracker line: an unordered list task checkbox of any single
-/// mark whose whitespace tokens include `^ref`.
-fn parse_tracker_line(line: &str) -> Option<TrackerHit> {
-    let trimmed = line.trim_start();
-    let after_marker = trimmed
-        .strip_prefix("- ")
-        .or_else(|| trimmed.strip_prefix("* "))
-        .or_else(|| trimmed.strip_prefix("+ "))?;
-    let bracket = after_marker.strip_prefix('[')?;
-    let mark = bracket.chars().next()?;
-    let rest = bracket[mark.len_utf8()..].strip_prefix(']')?;
-    if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
-        return None;
-    }
-    if !line.split_whitespace().any(|token| token == "^ref") {
-        return None;
-    }
-    Some(TrackerHit {
-        mark,
-        line: line.trim().to_string(),
-    })
-}
+#[cfg(test)]
+pub(crate) use crate::native::ref_tasks::{
+    find_trackers, managed_region_line_range, parse_tracker_line,
+};
 
 #[cfg(test)]
 mod tests {
@@ -399,7 +326,7 @@ mod tests {
 
     fn derived_state(chapters: &[&str]) -> (String, String) {
         let front = book_front(chapters);
-        let outcome = decide_status("", &front);
+        let outcome = decide_status(&[], &front);
         assert_eq!(outcome.status.as_deref(), Some("legacy"));
         (
             outcome.reading_state.to_string(),
@@ -452,7 +379,7 @@ mod tests {
             "status: legacy".to_string(),
             "legacy_status: book".to_string(),
         ]);
-        let outcome = decide_status("", &front);
+        let outcome = decide_status(&[], &front);
         assert_eq!(outcome.reading_state, "unknown");
         assert_eq!(
             outcome.reading_state_source,
@@ -468,7 +395,7 @@ mod tests {
             "legacy_chapter_statuses:".to_string(),
         ];
         raw.push("  - \"unread\"".to_string());
-        let outcome = decide_status("", &ParsedFrontmatter::parse(&raw));
+        let outcome = decide_status(&[], &ParsedFrontmatter::parse(&raw));
         assert_eq!(outcome.reading_state, "finished");
         assert_eq!(
             outcome.reading_state_source,

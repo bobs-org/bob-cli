@@ -136,7 +136,7 @@ pub(crate) fn list_command() -> ClapCommand {
                 .long("parent")
                 .short('P')
                 .value_name("NOTE")
-                .help("Only notes whose parent is this bare note name"),
+                .help("Only notes whose parent is NOTE: an area or project route or a project_name_aliases entry (bob-cli matches bob); other names match the frontmatter parent literally"),
         )
         .arg(
             Arg::new("reading-state")
@@ -370,6 +370,8 @@ pub(crate) fn run_list(matches: &ArgMatches) -> i32 {
 
 /// The effective selection from the `list` matches. `--since` values are
 /// already shape-checked by clap; resolve the cutoff against the clock.
+/// `-P` never errors: a resolvable route echoes its canonical route and
+/// matches either spelling; any other name matches literally.
 fn list_selection(matches: &ArgMatches) -> Result<ListSelection, String> {
     let states = matches
         .get_many::<String>("reading-state")
@@ -381,7 +383,25 @@ fn list_selection(matches: &ArgMatches) -> Result<ListSelection, String> {
         .get_many::<String>("ref-type")
         .map(|values| values.cloned().collect::<Vec<_>>());
     let origin = matches.get_one::<String>("origin").cloned();
-    let parent = matches.get_one::<String>("parent").cloned();
+    let raw_parent = matches.get_one::<String>("parent").cloned();
+    let (parent, parent_alt) = match raw_parent {
+        None => (None, None),
+        Some(input) => {
+            let bob_dir = list_config_from_matches(matches).bob_dir;
+            let normalized =
+                crate::native::parent_notes::normalize_parent_input(&input);
+            match crate::native::parent_notes::resolve_parent(&bob_dir, &input)
+            {
+                Ok(resolved) => {
+                    let canonical = resolved.route;
+                    let alt = (!canonical.eq_ignore_ascii_case(&normalized))
+                        .then(|| normalized.clone());
+                    (Some(canonical), alt)
+                }
+                Err(_) => (Some(normalized), None),
+            }
+        }
+    };
     let since = matches.get_one::<String>("since").cloned();
     let since_cutoff = since
         .as_deref()
@@ -395,7 +415,7 @@ fn list_selection(matches: &ArgMatches) -> Result<ListSelection, String> {
     } else {
         Some(matches.get_one::<u64>("limit").copied().unwrap_or(50))
     };
-    Ok(select(
+    let mut selection = select(
         states,
         statuses,
         ref_types,
@@ -404,7 +424,9 @@ fn list_selection(matches: &ArgMatches) -> Result<ListSelection, String> {
         since,
         since_cutoff,
         limit,
-    ))
+    );
+    selection.parent_alt = parent_alt;
+    Ok(selection)
 }
 
 /// Pre-cap per-state totals over the listed rows, in state order, for

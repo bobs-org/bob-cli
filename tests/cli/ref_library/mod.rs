@@ -5,6 +5,7 @@ mod find;
 mod list;
 mod migrate_zorg;
 mod show;
+mod tasks;
 
 use crate::support::*;
 use std::fs;

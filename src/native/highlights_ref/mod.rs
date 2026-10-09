@@ -147,9 +147,10 @@ pub(crate) use marker::{
 pub(crate) use model::Config;
 pub(crate) use note::configured_path;
 pub(crate) use region::{
-    is_marker_mirror_text, parse_managed_region, split_note_body,
-    RegionBlockKind,
+    is_marker_mirror_text, parse_follow_up_task, parse_managed_region,
+    split_note_body, RegionBlockKind, RegionTask,
 };
+pub(crate) const SOURCE_LINK_ALIAS: &str = "🔖";
 pub(crate) use sidecar::is_wikilink;
 pub(crate) use sources::{collect_intake_records, IntakeRecord};
 pub(crate) use sources::{collect_recorded_source_urls, RecordedSource};
@@ -165,7 +166,6 @@ const HIGHLIGHT_TASK_ID_VERSION: &str = "v1";
 const SOURCE_TASK_BLOCK_ID_PREFIX: &str = "ht-";
 const PIPELINE_VERSION: &str = "highlights-ref-mvp-3";
 const REMOVED_HIGHLIGHTS_HEADING: &str = "### Removed highlights";
-const SOURCE_LINK_ALIAS: &str = "🔖";
 const TEXTBUNDLE_TEXT_FILES: &[&str] = &["text.md", "text.markdown"];
 
 const FIELD_CREATED: &str = "created";

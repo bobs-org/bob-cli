@@ -148,6 +148,9 @@ pub(crate) struct CaptureTargetsReport {
     pub(crate) targets: Vec<CaptureTarget>,
     pub(crate) warnings: Vec<ScanNote>,
     pub(crate) issues: Vec<ScanNote>,
+    /// Alias problems recorded structurally (also still in `warnings`);
+    /// doctor reads this instead of matching on message text.
+    pub(crate) alias_warnings: Vec<ScanNote>,
 }
 
 impl CaptureTargetsReport {
@@ -224,6 +227,7 @@ pub(crate) fn scan_capture_targets(bob_dir: &Path) -> CaptureTargetsReport {
         targets: vec![default_inbox_target()],
         warnings: Vec::new(),
         issues: Vec::new(),
+        alias_warnings: Vec::new(),
     };
     let mut areas = Vec::new();
     let mut projects = Vec::new();
@@ -247,9 +251,9 @@ pub(crate) fn scan_capture_targets(bob_dir: &Path) -> CaptureTargetsReport {
     sort_targets(&mut projects);
     report.targets.extend(areas);
     report.targets.extend(projects);
-    report
-        .warnings
-        .extend(alias_conflict_warnings(&report.targets));
+    let conflicts = alias_conflict_warnings(&report.targets);
+    report.warnings.extend(conflicts.iter().cloned());
+    report.alias_warnings.extend(conflicts);
     report
 }
 
@@ -401,9 +405,9 @@ fn push_alias_warnings(
     warnings: Vec<String>,
 ) {
     for warning in warnings {
-        report
-            .warnings
-            .push(ScanNote::path(relative_path.to_path_buf(), warning));
+        let note = ScanNote::path(relative_path.to_path_buf(), warning);
+        report.warnings.push(note.clone());
+        report.alias_warnings.push(note);
     }
 }
 
@@ -782,6 +786,7 @@ mod tests {
             ],
             warnings: Vec::new(),
             issues: Vec::new(),
+            alias_warnings: Vec::new(),
         }
         .result(Path::new("/tmp/bob"));
 

@@ -4438,7 +4438,12 @@ insert. A `task_parent` candidate has the same task metadata plus `note_kind`,
 `group`, and nullable `pomodoro`, but no `scheduled` or `pulls_forward` fields;
 identified rows use `@route+block-id` replacements, while ID-less rows have
 an empty replacement, `requires_block_id: true`, and suggested IDs. Human
-rows begin with `@route+block-id` or `@route+…` and describe missing IDs. A
+rows begin with `@route+block-id` or `@route+…` and describe missing IDs.
+Every task-bearing candidate (`task`, `active_task`, `task_link`,
+`task_parent`, `task_dependency`, `task_complete`) also carries an additive
+`task_kind` (`"ref"` when the row is a `#task #ref` reference reading task,
+omitted otherwise, so existing JSON stays byte-identical). `bob query`
+`text` also drops that `#ref` token, so `#task #ref X` reads as `X`. A
 wikilink note candidate has `path`, `name`, optional `alias`,
 and `match_kind`; heading and block candidates add `heading`/`level` or
 `block_id`/optional `preview` metadata. Link-index warnings, when present, are

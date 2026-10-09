@@ -989,6 +989,7 @@ mod tests {
             reading_state: reading_state.to_string(),
             reading_state_source: "ref_task:[ ]".to_string(),
             parent: None,
+            task: None,
             urls: Vec::new(),
             identity: super::super::RefIdentity {
                 keys: Vec::new(),
@@ -1015,6 +1016,7 @@ mod tests {
             source_path: None,
             source_id: None,
             source_blocks: Vec::new(),
+            v2: false,
         }
     }
 

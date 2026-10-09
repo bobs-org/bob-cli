@@ -28,6 +28,7 @@ use plan::*;
 use transform::*;
 
 pub(crate) use archive::atomic_write;
+pub(crate) use link_repair::archive_parent_target;
 pub(crate) use transform::{
     block_ids_in_markdown, is_block_id_byte, split_line_ending,
     trailing_block_id_in_line,
