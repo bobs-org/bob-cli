@@ -182,6 +182,8 @@ content-guarded archive, journal append.
 nothing. `-n, --no-archive` writes and verifies but leaves notes in Keep.
 `-C, --no-commit` skips the vault Git commit. `-R, --no-ref` keeps URL-only
 notes as inbox tasks instead of clipping them to intake PDFs.
+`-P, --parent ROUTE` files URL-only notes under that parent route (overrides
+note `@route` and the prompt; an invalid route fails before any clip).
 `-q, --quiet` prints only errors. `-l, --limit N` takes the first N
 actionable notes, oldest first.
 A per-host pull lock serializes concurrent pulls (exit 1 when held); dry runs
@@ -189,20 +191,33 @@ take no lock.
 
 ### URL-only notes go to the reading queue
 
-A note that holds exactly one bare public link and nothing else — an empty
-title with a link body, an empty body with a link title, a title equal to
-the link, or a page title equal to the shared-link preview title — is
-clipped inline to an intake PDF instead of becoming a task. Pull messages
-still say `reading queue`; that means the link was accepted for import.
-The note joins `bob ref list` after `bob ref scan`. Lists, notes
-with attachments, shared notes (even with `-S`), multi-link or
-link-plus-prose notes, corporate short links, IP literals, and
-`highlights.url_routing.exclude_hosts` entries stay tasks. Pinned notes
-included with `-p` follow the rule like any other note.
+A note that holds exactly one bare public link (plus an optional single
+trailing `@route`) and nothing else — an empty title with a link body, an
+empty body with a link title, a title equal to the link, or a page title
+equal to the shared-link preview title — is clipped inline to an intake PDF
+instead of becoming a task. The trailing route never becomes part of the clip
+target. Pull messages name the selected parent (`would clip →
+sase`, `clipped → <pdf> → sase`); that means the link was accepted for
+import. The note joins `bob ref list` after `bob ref scan`. Lists, notes
+with attachments, shared notes (even with `-S`), multi-link (beyond one
+trailing route) or link-plus-prose notes, corporate short links, IP
+literals, and `highlights.url_routing.exclude_hosts` entries stay tasks.
+Pinned notes included with `-p` follow the rule like any other note.
 
-After planning and before the vault lock, each URL-only note clips
-sequentially through the same ingest as `bob ref create`, announced as
-`Clipping <display> (i/N)`. The outcomes:
+Parents are chosen per new URL before any clipping: a valid note `@route`
+first, then explicit `-P/--parent`, then one TTY prompt per URL
+(`File example.com/essay under [gkeep_inbox]: `, Enter accepts the default,
+each answer becomes the next default, unknown names print hints and
+re-prompt, EOF uses the default), else `gkeep_inbox`. All explicit values use
+the strict resolver and canonical route; an invalid note route warns with
+hints and falls through, while an invalid `-P` fails before any clip or
+mutation. The prompt runs only when stdin and stderr are terminals without
+`--quiet` or JSON output; listing never prompts. Selection applies only to
+references; ordinary Keep tasks keep their current target.
+
+After planning and parent selection but before the vault lock, each URL-only
+note clips sequentially through the same ingest as `bob ref create` with its
+selected parent, announced as `Clipping <display> (i/N)`. The outcomes:
 
 | Outcome | Meaning | Journal | Archive |
 | --- | --- | --- | --- |
@@ -214,15 +229,17 @@ sequentially through the same ingest as `bob ref create`, announced as
 
 A retryable failure leaves the note in Keep for the next pull and counts
 toward `summary.failed`. A permanent failure renders exactly as today with
-`⚠️ Clip failed (<kind>): <message> · retry: bob ref create <url>` as a
-child just before the `Source:` line. A pull whose notes all clip needs no
-`gkeep_inbox.md`, takes no vault lock, and skips the Git commit. `pull -d`
-still contacts Keep to snapshot notes, then stops: it does not clip, write
-the vault, or archive. It shows `would clip → reading queue` rows (with
-the offline library verdict for library hits) followed by
+`⚠️ Clip failed (<kind>): <message> · retry: bob ref create <url> -P
+<parent>` as a child just before the `Source:` line. A pull whose notes all
+clip needs no `gkeep_inbox.md`, takes no vault lock, and skips the Git
+commit. `pull -d` still contacts Keep to snapshot notes, then stops: it does
+not clip, write the vault, or archive. It shows `would clip → <parent>` rows
+(with the offline library verdict for library hits) followed by
 `N links would be clipped into the reading queue`, and the Markdown section
-excludes URL-only notes. `list` marks notes a pull
-would clip with a `🔗 ref` hint.
+excludes URL-only notes. `list` marks notes a pull would clip with
+`🔗 ref → <parent>` (or `🔗 ref → asks · gkeep_inbox` when a future
+interactive pull will choose); JSON `clip` carries the planned `parent`.
+Pull JSON `clip` also carries the selected `parent`.
 
 The Archive column assumes archiving is enabled; `-n, --no-archive` keeps
 every note in Keep, including successful reference imports. Successful
@@ -315,12 +332,14 @@ naming each `path:line`.
 
 **Journal.** `$XDG_STATE_HOME/bob-cli/gkeep/journal.jsonl` (directory `0700`,
 file `0600`), append-only and fsynced per batch. Records look like
-`{"ts","event":"written"|"ref_created"|"archived"|"archive_refused","id","ref","fp","path","commit","status","url"}`.
+`{"ts","event":"written"|"ref_created"|"archived"|"archive_refused","id","ref","fp","path","commit","status","url","parent"}`.
 It never stores note bodies. A `written` record acts as a lower-priority
 ledger entry: the backstop for a task whose marker was deleted during triage
 while the note was still in Keep. A `ref_created` record (with the intake
-PDF or existing ref note in `path` and the clipped URL in `url`) covers a
-clipped link the same way: a re-pull archives it without clipping again. An
+PDF or existing ref note in `path`, the clipped URL in `url`, and the
+selected canonical route in `parent`) covers a clipped link the same way: a
+re-pull archives it without clipping or re-prompting again, recovering the
+parent for reports. Older journal lines carry no `parent` and still load. An
 older bob reading a newer journal counts `ref_created` lines as corrupt and
 warns.
 

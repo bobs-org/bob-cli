@@ -31,6 +31,34 @@ fn route_completion_ranks_prefix_matches_before_substring_matches() {
 }
 
 #[test]
+fn route_completion_matches_aliases_with_canonical_replacement_after_prefix() {
+    let temp = TempDir::new("bob-cli-capture-complete-routes-alias");
+    write_file(&temp.path().join("cash.md"), "---\ntype: [[area]]\n---\n");
+    write_file(
+        &temp.path().join("bob.md"),
+        "---\ntype: [[project]]\nstatus: wip\nproject_name_aliases: [\"bob-cli\"]\n---\n",
+    );
+    // Canonical prefix matches first; the alias match carries the
+    // canonical replacement with `match_kind: "alias"`.
+    let value = result(temp.path(), "@bob-cli", 8);
+    let Candidates::Route(routes) = &value.candidates else {
+        panic!("expected route candidates");
+    };
+    let names: Vec<&str> =
+        routes.iter().map(|route| route.route.as_str()).collect();
+    assert_eq!(names, vec!["bob"]);
+    assert_eq!(routes[0].replacement, "bob");
+    assert_eq!(routes[0].match_kind, Some("alias"));
+    // An empty query keeps existing behavior with no alias markers.
+    let empty = result(temp.path(), "@", 1);
+    let Candidates::Route(empty_routes) = &empty.candidates else {
+        panic!("expected route candidates");
+    };
+    assert!(empty_routes.iter().all(|route| route.match_kind.is_none()));
+    assert_eq!(empty_routes.len(), 3);
+}
+
+#[test]
 fn route_completion_lists_every_target_for_an_empty_query() {
     let temp = TempDir::new("bob-cli-capture-complete-routes-empty");
     let value = result(temp.path(), "@", 1);

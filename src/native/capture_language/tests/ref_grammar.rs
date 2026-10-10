@@ -139,8 +139,9 @@ fn routing_off_keeps_bare_url_a_task() {
 #[test]
 fn claim_off_cases_stay_tasks() {
     let policy = open_policy();
+    // `URL @route` now claims a reference (explicit parent); it no longer
+    // stays a task.
     for raw in [
-        "https://example.com/post @notes",
         "https://example.com/post s:3",
         "https://example.com/post p:1",
         "https://example.com/post %",
@@ -181,19 +182,19 @@ fn excluded_hosts_stay_tasks() {
 #[test]
 fn forced_destination_global_and_clip_keep_tasks() {
     let policy = open_policy();
-    // Production callers mark forced flags as an explicit destination.
+    // Non-route forced flags still keep the item a task.
     let options = CaptureParseOptions {
         explicit_destination: true,
         ..routing_options(Some(&policy))
     };
-    let forced = parse_capture_text_with_clip_control(
+    let forced_blocked = parse_capture_text_with_clip_control(
         "https://example.com/post",
         Some("notes"),
         None,
         &options,
     )
-    .expect("forced route stays a task");
-    assert!(matches!(forced.kind, CaptureKind::Task));
+    .expect("blocked forced route stays a task");
+    assert!(matches!(forced_blocked.kind, CaptureKind::Task));
 
     let explicit = CaptureParseOptions {
         explicit_destination: true,
@@ -208,15 +209,39 @@ fn forced_destination_global_and_clip_keep_tasks() {
     .expect("explicit destination stays a task");
     assert!(matches!(clipped.kind, CaptureKind::Task));
 
-    // A `@@` declaration keeps the item a task.
+    // A forced `-r` route alone claims an explicit-parent reference.
+    let forced_ref = parse_capture_text_with_clip_control(
+        "https://example.com/post",
+        Some("notes"),
+        None,
+        &routing_options(Some(&policy)),
+    )
+    .expect("forced -r claims");
+    assert!(matches!(forced_ref.kind, CaptureKind::Ref(_)));
+    assert_eq!(forced_ref.route.as_deref(), Some("notes"));
+    assert_eq!(forced_ref.body, "https://example.com/post");
+
+    // A plain `@@notes` declaration routes a default ref globally.
     let draft =
         draft_routing("@@notes\nhttps://example.com/post", Some(&policy))
             .expect("global draft parses");
     assert_eq!(draft.items.len(), 1);
     assert!(
-        matches!(draft.items[0].parsed.kind, CaptureKind::Task),
+        matches!(draft.items[0].parsed.kind, CaptureKind::Ref(_)),
         "got {:?}",
         draft.items[0].parsed.kind
+    );
+    assert_eq!(draft.items[0].parsed.route.as_deref(), Some("notes"));
+    assert_eq!(draft.items[0].ref_source, Some(RefParentSource::Global));
+
+    // `@@notes+block-id` keeps task/sub-bullet semantics (never a ref).
+    let task_global =
+        draft_routing("@@notes+abc\nhttps://example.com/post", Some(&policy))
+            .expect("task global parses");
+    assert!(
+        !matches!(task_global.items[0].parsed.kind, CaptureKind::Ref(_)),
+        "got {:?}",
+        task_global.items[0].parsed.kind
     );
 
     // A child bullet keeps the item a task.
@@ -356,7 +381,8 @@ fn editor_reports_ref_mode_with_one_exact_span() {
         vec![(0, "<https://x.org/a>".len(), SpanKind::RefUrl)]
     );
 
-    // Routing off, extra text, and `@@` all stay tasks.
+    // Routing off and extra text stay tasks; a plain `@@` routes the
+    // ref globally instead.
     assert_eq!(
         editor_routing("https://example.com/post", None).mode,
         EditorMode::Task
@@ -365,12 +391,10 @@ fn editor_reports_ref_mode_with_one_exact_span() {
         editor_routing("https://example.com/post extra", Some(&policy)).mode,
         EditorMode::Task
     );
-    assert_eq!(
-        editor_routing("@@notes\nhttps://example.com/post", Some(&policy))
-            .items[0]
-            .mode,
-        EditorMode::Task
-    );
+    let global =
+        editor_routing("@@notes\nhttps://example.com/post", Some(&policy));
+    assert_eq!(global.items[0].mode, EditorMode::Ref);
+    assert_eq!(global.items[0].route.as_deref(), Some("notes"));
 }
 
 #[test]
@@ -394,4 +418,85 @@ fn editor_url_list_items_each_report_ref() {
     ranges.sort();
     assert_eq!(ranges.len(), 2);
     assert!(ranges[0].1 <= ranges[1].0, "spans must not overlap");
+}
+
+#[test]
+fn ref_parent_sources_cover_explicit_global_and_default() {
+    let policy = open_policy();
+    // Explicit trailing route.
+    let trailing =
+        execute_routing("https://example.com/post @sase", Some(&policy))
+            .expect("trailing claims");
+    assert!(matches!(trailing.kind, CaptureKind::Ref(_)));
+    assert_eq!(trailing.body, "https://example.com/post");
+    assert_eq!(trailing.route.as_deref(), Some("sase"));
+    // Explicit leading route.
+    let leading =
+        execute_routing("@sase https://example.com/post", Some(&policy))
+            .expect("leading claims");
+    assert!(matches!(leading.kind, CaptureKind::Ref(_)));
+    assert_eq!(leading.body, "https://example.com/post");
+    assert_eq!(leading.route.as_deref(), Some("sase"));
+    // Draft sources: explicit stays explicit under a global.
+    let draft =
+        draft_routing("@@other\nhttps://example.com/post @sase", Some(&policy))
+            .expect("explicit under global");
+    assert_eq!(draft.items[0].parsed.route.as_deref(), Some("sase"));
+    assert_eq!(draft.items[0].ref_source, Some(RefParentSource::Explicit));
+    // Default with no route.
+    let default = draft_routing("https://example.com/post", Some(&policy))
+        .expect("default parses");
+    assert_eq!(default.items[0].parsed.route, None);
+    assert_eq!(default.items[0].ref_source, Some(RefParentSource::Default));
+    // Extra words, child lines, and `@@route+id` keep task behavior.
+    assert_task("https://example.com/post @sase extra", Some(&policy));
+    let child =
+        draft_routing("https://example.com/post @sase\n- why", Some(&policy))
+            .expect("child parses");
+    assert!(matches!(child.items[0].parsed.kind, CaptureKind::Task));
+    let task_global =
+        draft_routing("@@sase+abc\nhttps://example.com/post", Some(&policy))
+            .expect("task global parses");
+    assert!(
+        !matches!(task_global.items[0].parsed.kind, CaptureKind::Ref(_)),
+        "got {:?}",
+        task_global.items[0].parsed.kind
+    );
+}
+
+#[test]
+fn editor_ref_route_spans_use_byte_offsets_including_utf8() {
+    let policy = open_policy();
+    // Leading route: route span then URL span, both with exact offsets.
+    let raw = "@sase https://example.com/é";
+    let parse = editor_routing(raw, Some(&policy));
+    assert_eq!(parse.mode, EditorMode::Ref);
+    assert_eq!(parse.body, "https://example.com/é");
+    assert_eq!(parse.route.as_deref(), Some("sase"));
+    let mut kinds: Vec<SpanKind> =
+        parse.spans.iter().map(|span| span.kind).collect();
+    kinds.sort_by_key(|kind| format!("{kind:?}"));
+    assert!(kinds.contains(&SpanKind::RefUrl));
+    assert!(kinds.contains(&SpanKind::Route));
+    for span in &parse.spans {
+        assert!(raw.is_char_boundary(span.start));
+        assert!(raw.is_char_boundary(span.end));
+        assert_eq!(
+            &raw[span.start..span.end].to_string(),
+            &raw[span.start..span.end]
+        );
+    }
+    // Trailing route keeps the ordinary route span.
+    let trailing =
+        editor_routing("https://example.com/post @sase", Some(&policy));
+    assert_eq!(trailing.mode, EditorMode::Ref);
+    assert_eq!(trailing.route.as_deref(), Some("sase"));
+    assert!(trailing
+        .spans
+        .iter()
+        .any(|span| span.kind == SpanKind::Route));
+    assert!(trailing
+        .spans
+        .iter()
+        .any(|span| span.kind == SpanKind::RefUrl));
 }

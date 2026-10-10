@@ -398,6 +398,26 @@ pub(crate) struct TaskSectionSelector {
     pub(crate) exact: bool,
 }
 
+/// Where a reference item's parent token came from: an explicit `@route`
+/// (leading, trailing, or forced `-r`), a `@@route` global declaration,
+/// or the default inbox when no route was selected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RefParentSource {
+    Explicit,
+    Global,
+    Default,
+}
+
+impl RefParentSource {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Explicit => "explicit",
+            Self::Global => "global",
+            Self::Default => "default",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ParsedCaptureText {
     pub(crate) body: String,
@@ -618,6 +638,10 @@ pub(crate) struct ParsedCaptureItem {
     pub(crate) line_start: usize,
     pub(crate) line_end: usize,
     pub(crate) parsed: ParsedCaptureText,
+    /// Lexical ref-parent source for `Ref` items (`explicit` for an inline
+    /// `@route` or forced `-r`, `global` for a plain `@@route` upgrade,
+    /// `default` otherwise). `None` for non-`Ref` items.
+    pub(crate) ref_source: Option<RefParentSource>,
 }
 
 /// Draft-wide `@@` declarations plus the real capture items.

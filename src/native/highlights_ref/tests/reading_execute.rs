@@ -128,6 +128,12 @@ fn reopen_into_inbox_fallback_carries_warning_child() {
 
 #[test]
 fn line_edit_updates_checkbox_and_stamps_close() {
+    // The close-date stamper reads the clock: pin it to the literal
+    // `created` date so the asserted stamp holds on any calendar day.
+    let _clock = crate::native::env::TestEnvGuard::set(&[(
+        "BOB_NOW",
+        Some(std::ffi::OsStr::new("2026-10-09")),
+    )]);
     let bob = temp_bob_dir("reading-execute-edit");
     write_test_file(&bob.join("sase.md"), "# Sase\n");
     let inserted =

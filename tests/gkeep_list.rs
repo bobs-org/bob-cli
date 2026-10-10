@@ -811,3 +811,38 @@ fn url_only_note_shows_ref_hint_and_json_verdict() {
         "ordinary notes carry no clip:\n{document}"
     );
 }
+
+#[test]
+fn url_only_note_shows_parent_hint_for_resolved_and_asks_routes() {
+    let env = GkeepEnv::new("bob-cli-gkeep-list-parent");
+    install_token_stub(&env);
+    write_target(&env, "## Tasks\n");
+    fs::write(env.vault().join("sase.md"), "---\ntype: [[area]]\n---\n")
+        .expect("sase parent");
+    let fake = FakeAdapter::new(&env, "adapter");
+    let routed = note("")
+        .id("note-1")
+        .text("https://example.com/a @sase")
+        .build();
+    let asks = note("").id("note-2").text("https://example.com/b").build();
+    fake.respond(
+        "snapshot",
+        &snapshot_ok("bryanbugyi34@gmail.com", vec![routed, asks]),
+    );
+    let output = list_command(&env, &fake, &[]).output().expect("run");
+    assert_eq!(output.status.code(), Some(0));
+    let text = stdout(&output);
+    assert!(text.contains("🔗 ref → sase"), "resolved hint:\n{text}");
+    assert!(
+        text.contains("🔗 ref → asks · gkeep_inbox"),
+        "asks hint:\n{text}"
+    );
+    let output = list_command(&env, &fake, &["-f", "json"])
+        .output()
+        .expect("run");
+    let document: serde_json::Value =
+        serde_json::from_str(&stdout(&output)).expect("json parses");
+    let notes = document["keep"]["notes"].as_array().expect("notes array");
+    assert_eq!(notes[0]["clip"]["parent"], "sase");
+    assert_eq!(notes[1]["clip"]["parent"], "gkeep_inbox");
+}

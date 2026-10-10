@@ -580,17 +580,30 @@ pub(crate) fn parse_capture_text_with_clip_control(
     }
 
     let mut outcome = item_outcomes.into_iter().next().expect("one item");
-    // An inline `@@` discovered after the initial parse still blocks the
-    // claim: re-parse a claimed Ref item with a global destination so it
-    // becomes an ordinary task that inherits the global.
-    if global.is_some() && matches!(outcome.parsed.kind, CaptureKind::Ref(_)) {
-        let global_options = options.with_global(true);
-        outcome = parse_capture_item(
-            &draft.items[0],
-            forced_route,
-            forced_section,
-            &global_options,
-        )?;
+    // An inline `@@route+id` discovered after the initial parse still
+    // blocks the claim: re-parse a claimed Ref item so it becomes an
+    // ordinary task that inherits the global. A plain `@@route` upgrades
+    // a default (routeless) Ref to its global parent; an explicit local
+    // `@route` or forced `-r` keeps local precedence.
+    if let Some(global) = &global
+        && matches!(outcome.parsed.kind, CaptureKind::Ref(_))
+    {
+        if global.block_id.is_some() {
+            // Disable ref claiming so the re-parse becomes the ordinary
+            // task that inherits the `@@route+id` global.
+            let global_options = CaptureParseOptions {
+                url_routing: None,
+                ..options.with_global(true)
+            };
+            outcome = parse_capture_item(
+                &draft.items[0],
+                forced_route,
+                forced_section,
+                &global_options,
+            )?;
+        } else if outcome.parsed.route.is_none() {
+            outcome.parsed.route = Some(global.route.clone());
+        }
     }
     if forced_route.is_none()
         && let Some(global) = &global
@@ -642,28 +655,37 @@ pub(crate) fn parse_capture_draft_with_clip_control(
         declarations.extend(outcome.declarations.iter().copied());
     }
     let global = resolve_global_declaration_strict(&declarations)?;
-    // An inline `@@` discovered after the initial parse still blocks the
-    // claim: re-parse claimed Ref items with a global destination so they
-    // become ordinary tasks that inherit the global.
-    if global.is_some() {
-        let global_options = options.with_global(true);
+    // An inline `@@route+id` discovered after the initial parse still
+    // blocks the claim: re-parse those Ref items so they become ordinary
+    // tasks. A plain `@@route` upgrades default (routeless) Refs to the
+    // global parent; explicit local `@route` and forced `-r` keep local
+    // precedence.
+    if let Some(global_ref) = &global {
+        let global_options = CaptureParseOptions {
+            url_routing: None,
+            ..options.with_global(true)
+        };
         for (index, outcome) in item_outcomes.iter_mut().enumerate() {
             if matches!(outcome.parsed.kind, CaptureKind::Ref(_)) {
-                let item = &draft.items[index];
-                let re = parse_capture_item(
-                    item,
-                    forced_route,
-                    forced_section,
-                    &global_options,
-                )
-                .map_err(|message| {
-                    format!(
-                        "capture item {} starting on line {}: {message}",
-                        item.index + 1,
-                        item.line_start
+                if global_ref.block_id.is_some() {
+                    let item = &draft.items[index];
+                    let re = parse_capture_item(
+                        item,
+                        forced_route,
+                        forced_section,
+                        &global_options,
                     )
-                })?;
-                *outcome = re;
+                    .map_err(|message| {
+                        format!(
+                            "capture item {} starting on line {}: {message}",
+                            item.index + 1,
+                            item.line_start
+                        )
+                    })?;
+                    *outcome = re;
+                } else if outcome.parsed.route.is_none() {
+                    outcome.parsed.route = Some(global_ref.route.clone());
+                }
             }
         }
     }
@@ -696,6 +718,19 @@ pub(crate) fn parse_capture_draft_with_clip_control(
                 },
             )?;
         }
+        let ref_source = if matches!(outcome.parsed.kind, CaptureKind::Ref(_)) {
+            if forced_route.is_some()
+                || outcome.local_destination_marker.is_some()
+            {
+                Some(crate::native::capture_language::RefParentSource::Explicit)
+            } else if outcome.parsed.route.is_some() {
+                Some(crate::native::capture_language::RefParentSource::Global)
+            } else {
+                Some(crate::native::capture_language::RefParentSource::Default)
+            }
+        } else {
+            None
+        };
         items.push(ParsedCaptureItem {
             index: outcome.index,
             start: outcome.start,
@@ -703,6 +738,7 @@ pub(crate) fn parse_capture_draft_with_clip_control(
             line_start: outcome.line_start,
             line_end: outcome.line_end,
             parsed: outcome.parsed,
+            ref_source,
         });
     }
 

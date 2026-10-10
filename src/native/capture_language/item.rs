@@ -78,45 +78,129 @@ fn reject_operator_dependencies(
 /// Claim a whole-item bare URL as a reference item when the routing
 /// policy admits it. Runs after the operator claims and before the generic
 /// `resolve_line`, so any operator-shaped text keeps its existing meaning.
+///
+/// An admitted bare URL is a reference when it has exactly one ordinary
+/// leading or trailing `@route`, a forced `-r` route, or no route at all
+/// (the default inbox; a plain `@@route` declaration upgrades it to a
+/// global parent during draft resolution). The body/URL intent excludes
+/// the route token. Policy-gated markers (`-R`, excluded hosts, disabled
+/// routing, child lines, extra words/tags, schedule/priority/clipboard,
+/// dependencies, operators, task refs, destination flags beyond `-r`)
+/// retain existing task or diagnostic behavior.
 fn claim_reference_item<'a>(
     item: &CaptureItem<'a>,
     options: &CaptureParseOptions<'_>,
     has_dependencies: bool,
+    forced_route: Option<&str>,
 ) -> Option<ParsedCaptureItemOutcome<'a>> {
     let policy = options.url_routing?;
-    if options.explicit_destination
-        || options.has_global_destination
-        || has_dependencies
-        || item.lines.len() != 1
+    if options.explicit_destination || has_dependencies || item.lines.len() != 1
     {
         return None;
     }
     let parent = item.lines.first()?.raw;
     let tokens = tokenize_with_spans(parent.text);
-    if tokens.len() != 1 {
+    // A `@@` token is a global declaration, never an inline ref parent.
+    if tokens.iter().any(|token| token.text.starts_with("@@")) {
         return None;
     }
-    let token = tokens[0];
-    let intent = classify_token(token.text)?;
-    if !policy.admits(&intent, RoutingEntry::Capture) {
-        return None;
+    if tokens.len() == 1 {
+        let token = tokens[0];
+        let intent = classify_token(token.text)?;
+        if !policy.admits(&intent, RoutingEntry::Capture) {
+            return None;
+        }
+        // A forced `-r` route is the explicit parent; otherwise the item
+        // claims with no local route and draft resolution applies a plain
+        // `@@route` global or leaves the default inbox.
+        if let Some(forced) = forced_route {
+            let route = normalize_forced_route(forced).ok()?;
+            return Some(parsed_capture_item_outcome(
+                item,
+                ParsedCaptureText {
+                    body: token.text.to_string(),
+                    clip: None,
+                    route: Some(route),
+                    kind: CaptureKind::Ref(intent),
+                    scheduled_offset: None,
+                    priority_level: None,
+                    sub_bullets: Vec::new(),
+                    dependencies: Vec::new(),
+                    dependency_target: None,
+                },
+                Vec::new(),
+                Some(format!("--route {forced}")),
+            ));
+        }
+        return Some(parsed_capture_item_outcome(
+            item,
+            ParsedCaptureText {
+                body: token.text.to_string(),
+                clip: None,
+                route: None,
+                kind: CaptureKind::Ref(intent),
+                scheduled_offset: None,
+                priority_level: None,
+                sub_bullets: Vec::new(),
+                dependencies: Vec::new(),
+                dependency_target: None,
+            },
+            Vec::new(),
+            None,
+        ));
     }
-    Some(parsed_capture_item_outcome(
-        item,
-        ParsedCaptureText {
-            body: token.text.to_string(),
-            clip: None,
-            route: None,
-            kind: CaptureKind::Ref(intent),
-            scheduled_offset: None,
-            priority_level: None,
-            sub_bullets: Vec::new(),
-            dependencies: Vec::new(),
-            dependency_target: None,
-        },
-        Vec::new(),
-        None,
-    ))
+    if tokens.len() == 2 && forced_route.is_none() {
+        // Exactly one URL plus exactly one ordinary `@route`, in either
+        // order. Anything else (extra words, tags, markers, `+`/`:`/`#`
+        // shapes) falls through to the generic task path.
+        let first_intent = classify_token(tokens[0].text);
+        let second_intent = classify_token(tokens[1].text);
+        let (url_token, route_token) =
+            if first_intent.is_some() && second_intent.is_none() {
+                (tokens[0], tokens[1])
+            } else if first_intent.is_none() && second_intent.is_some() {
+                (tokens[1], tokens[0])
+            } else {
+                return None;
+            };
+        let intent = classify_token(url_token.text)?;
+        if !policy.admits(&intent, RoutingEntry::Capture) {
+            return None;
+        }
+        let route_parsed = parse_route_token(route_token.text)?;
+        let Some(route) = route_parsed.route else {
+            return None;
+        };
+        if !matches!(route_parsed.kind, CaptureKind::Task) {
+            return None;
+        }
+        // Plain `@route` only: the token text must be exactly the sigil
+        // plus the route name (case-insensitive), with no `#` section or
+        // other suffix.
+        if route_token.text.to_ascii_lowercase() != format!("@{route}") {
+            return None;
+        }
+        if !is_route_token(&route) {
+            return None;
+        }
+        return Some(parsed_capture_item_outcome(
+            item,
+            ParsedCaptureText {
+                body: url_token.text.to_string(),
+                clip: None,
+                route: Some(route),
+                kind: CaptureKind::Ref(intent),
+                scheduled_offset: None,
+                priority_level: None,
+                sub_bullets: Vec::new(),
+                dependencies: Vec::new(),
+                dependency_target: None,
+            },
+            Vec::new(),
+            Some(route_token.text.to_string()),
+        ));
+    }
+    None
 }
 
 pub(super) fn parse_capture_item<'a>(
@@ -248,7 +332,8 @@ pub(super) fn parse_capture_item<'a>(
     )? {
         return Ok(outcome);
     }
-    if let Some(outcome) = claim_reference_item(item, options, has_dependencies)
+    if let Some(outcome) =
+        claim_reference_item(item, options, has_dependencies, forced_route)
     {
         return Ok(outcome);
     }

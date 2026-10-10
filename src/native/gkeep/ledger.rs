@@ -233,6 +233,10 @@ pub(super) struct JournalRecord {
     /// The clipped URL for `ref_created` records.
     #[serde(default)]
     pub(super) url: Option<String>,
+    /// The canonical parent route selected for `ref_created` records.
+    /// Older journal lines carry none and still load.
+    #[serde(default)]
+    pub(super) parent: Option<String>,
 }
 
 /// The append-only journal plus the corrupt-line count from the last read.
@@ -353,6 +357,19 @@ impl Journal {
             record.event == JournalEvent::RefCreated
                 && record.id == id
                 && record.fp == fp
+        })
+    }
+
+    /// The parent recorded on a `ref_created` event for `(id, fp)`, when
+    /// the journal carries one. Older lines predate the field and yield
+    /// `None`; callers fall back without forcing a fresh selection.
+    pub(super) fn ref_parent(&self, id: &str, fp: &str) -> Option<String> {
+        self.records.iter().find_map(|record| {
+            (record.event == JournalEvent::RefCreated
+                && record.id == id
+                && record.fp == fp)
+                .then(|| record.parent.clone())
+                .flatten()
         })
     }
 }
@@ -634,6 +651,7 @@ mod tests {
                 commit: Some("4e1f2a9".to_string()),
                 status: None,
                 url: None,
+                parent: None,
             },
             JournalRecord {
                 ts: "2026-09-28T00:00:02Z".to_string(),
@@ -645,6 +663,7 @@ mod tests {
                 commit: None,
                 status: Some("archived".to_string()),
                 url: None,
+                parent: None,
             },
         ];
         Journal::append(&path, &records).expect("append");
@@ -687,10 +706,23 @@ mod tests {
             commit: None,
             status: None,
             url: Some("https://example.com/post".to_string()),
+            parent: None,
         });
         assert!(journal.has_ref("n1", "0123456789ab"));
         assert!(!journal.has_ref("n1", "ffffffffffff"));
         assert!(!journal.has_ref("n2", "0123456789ab"));
+        // Older `ref_created` lines predate the parent field: no recovery.
+        assert_eq!(journal.ref_parent("n1", "0123456789ab"), None);
+        // A parent-bearing event recovers for reports; other pairs yield
+        // nothing without forcing a fresh selection.
+        journal.records.last_mut().expect("ref record").parent =
+            Some("sase".to_string());
+        assert_eq!(
+            journal.ref_parent("n1", "0123456789ab"),
+            Some("sase".to_string())
+        );
+        assert_eq!(journal.ref_parent("n1", "ffffffffffff"), None);
+        assert_eq!(journal.ref_parent("n2", "0123456789ab"), None);
         let archived_only = Journal {
             records: vec![records[1].clone()],
             skipped: 0,
@@ -731,6 +763,7 @@ mod tests {
             commit: None,
             status: None,
             url: None,
+            parent: None,
         }];
         Journal::append(&path, &records).expect("append");
         let journal = Journal::read(&path).expect("read back");

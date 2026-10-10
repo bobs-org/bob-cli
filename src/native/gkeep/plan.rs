@@ -94,6 +94,9 @@ pub(super) struct PlannedNote {
     pub(super) skip_reason: Option<String>,
     /// The R5 URL-only intent when `action` is `CreateRef`.
     pub(super) ref_intent: Option<UrlIntent>,
+    /// Trailing `@route` on a URL-only note, lowercased, when present.
+    /// Routing never becomes part of the clip target.
+    pub(super) ref_route: Option<String>,
 }
 
 /// The classified plan plus per-state counts.
@@ -191,6 +194,7 @@ fn classify_one(
         action: PlanAction::Write,
         skip_reason: None,
         ref_intent: None,
+        ref_route: None,
     };
     let skip = |state: NoteState| {
         let mut skipped = planned.clone();
@@ -244,25 +248,28 @@ fn classify_one(
         return planned;
     }
     if let Some(policy) = opts.routing.as_ref()
-        && let Some(intent) = url_only_intent(note, policy)
+        && let Some((intent, route)) = url_only_intent(note, policy)
     {
         planned.action = PlanAction::CreateRef;
         planned.ref_intent = Some(intent);
+        planned.ref_route = route;
     }
     planned
 }
 
-/// The R5 URL-only rule: the note holds exactly one bare link and
-/// nothing else, so a pull clips it into the reading queue instead of
-/// writing a task. Returns the link's intent when every condition
-/// holds: a text note with no attachments, not shared (even with
-/// `-S`), either an empty title with a single-token body or an empty
+/// The R5 URL-only rule: the note holds exactly one bare link (plus an
+/// optional single trailing `@route`) and nothing else, so a pull clips
+/// it into the reading queue instead of writing a task. Returns the
+/// link's intent plus the trailing route (lowercased) when every
+/// condition holds: a text note with no attachments, not shared (even
+/// with `-S`), either an empty title with a single-token body or an empty
 /// body with a single-token title (a page title equal to the `WebLink`
 /// title also counts), a classifying token, and an admitting policy.
+/// The route never becomes part of the clip target.
 pub(super) fn url_only_intent(
     note: &KeepNote,
     policy: &UrlRoutingPolicy,
-) -> Option<UrlIntent> {
+) -> Option<(UrlIntent, Option<String>)> {
     if note.kind != super::model::KeepNoteKind::Note {
         return None;
     }
@@ -277,6 +284,32 @@ pub(super) fn url_only_intent(
     }
     let title = note.content.title.trim();
     let body = note.content.text.trim();
+    // Trailing `@route`: exactly two body tokens, the first a URL and the
+    // second a plain route. Title rules apply to the URL token alone, so
+    // routing never becomes part of the clip target.
+    let body_tokens: Vec<&str> = body.split_whitespace().collect();
+    if body_tokens.len() == 2 {
+        let (url_token, route_token) = (body_tokens[0], body_tokens[1]);
+        let Some(route) = parse_trailing_route(route_token) else {
+            return None;
+        };
+        let Some(intent) = classify_token(url_token) else {
+            return None;
+        };
+        if !policy.admits(&intent, RoutingEntry::Gkeep) {
+            return None;
+        }
+        if !title.is_empty()
+            && strip_brackets(title) != strip_brackets(url_token)
+            && !link_title_matches(note, title, url_token)
+        {
+            return None;
+        }
+        return Some((intent, Some(route)));
+    }
+    if body_tokens.len() > 2 {
+        return None;
+    }
     let token = if body.is_empty() {
         if title.is_empty() {
             return None;
@@ -298,7 +331,26 @@ pub(super) fn url_only_intent(
     if !policy.admits(&intent, RoutingEntry::Gkeep) {
         return None;
     }
-    Some(intent)
+    Some((intent, None))
+}
+
+/// A plain trailing `@route` token, lowercased. Rejects `@@`, `+`/`:`/`#`
+/// shapes, and non-route text so ordinary task capture keeps its behavior.
+fn parse_trailing_route(token: &str) -> Option<String> {
+    let rest = token.strip_prefix('@')?;
+    if rest.is_empty() || rest.starts_with('@') {
+        return None;
+    }
+    if token.contains(['+', ':', '#', '^', '!', '~', '[', ']', '(', ')']) {
+        return None;
+    }
+    if !rest
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+    {
+        return None;
+    }
+    Some(rest.to_ascii_lowercase())
 }
 
 /// Whether `title` equals the title of a `links` entry whose URL has
@@ -504,6 +556,7 @@ mod tests {
             commit: None,
             status: None,
             url: None,
+            parent: None,
         }
     }
 
@@ -637,6 +690,7 @@ mod tests {
             commit: None,
             status: None,
             url: Some("https://example.com/post".to_string()),
+            parent: None,
         }
     }
 
@@ -691,6 +745,33 @@ mod tests {
                 },
             );
         }
+    }
+
+    #[test]
+    fn url_only_trailing_route_is_tracked_without_becoming_the_target() {
+        let (ledger, journal, _) = empty_plan();
+        let routed = routed_opts();
+        let built = url_note("n1", "", "https://example.com/post @sase");
+        let (intent, route) =
+            url_only_intent(&built, routed.routing.as_ref().expect("policy"))
+                .expect("trailing route matches");
+        assert_eq!(intent.cleaned, "https://example.com/post");
+        assert_eq!(route.as_deref(), Some("sase"));
+        let plan =
+            classify(std::slice::from_ref(&built), &ledger, &journal, &routed);
+        assert_eq!(states(&plan), vec![("n1", "new", "create_ref")]);
+        assert_eq!(plan.notes[0].ref_route.as_deref(), Some("sase"));
+        assert_eq!(
+            plan.notes[0].ref_intent.as_ref().expect("intent").cleaned,
+            "https://example.com/post"
+        );
+        // Extra body text beyond the route stays a task.
+        let extra = url_note("n2", "", "https://example.com/post @sase extra");
+        assert!(url_only_intent(
+            &extra,
+            routed.routing.as_ref().expect("policy")
+        )
+        .is_none());
     }
 
     #[test]

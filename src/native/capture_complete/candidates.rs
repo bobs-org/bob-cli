@@ -27,19 +27,59 @@ pub(super) fn route_candidates(
         return Err(CompleteError::io(report.issue_summary()));
     }
 
-    let ranked = rank(report.targets, query, |target| target.route.as_str());
+    let ranked = rank_route_targets(report.targets, query);
     Ok(Candidates::Route(
         ranked
             .into_iter()
-            .map(|target| RouteCandidate {
+            .map(|(target, match_kind)| RouteCandidate {
                 replacement: target.route.clone(),
                 route: target.route,
                 label: target.label,
                 kind: target.kind,
                 status: target.status,
+                match_kind,
             })
             .collect(),
     ))
+}
+
+/// Route ranking with `project_name_aliases`: canonical prefix matches
+/// first, alias matches (canonical replacement, `match_kind: "alias"`)
+/// next, then the remaining substring matches, each group keeping the
+/// scan's stable order. One candidate per route; an empty query keeps
+/// every target with no `match_kind`.
+fn rank_route_targets(
+    targets: Vec<capture_targets::CaptureTarget>,
+    query: &str,
+) -> Vec<(capture_targets::CaptureTarget, Option<&'static str>)> {
+    if query.is_empty() {
+        return targets.into_iter().map(|target| (target, None)).collect();
+    }
+    let lowered = query.to_lowercase();
+    let mut prefix = Vec::new();
+    let mut alias = Vec::new();
+    let mut substring = Vec::new();
+    for target in targets {
+        let route_lower = target.route.to_lowercase();
+        if route_lower.starts_with(&lowered) {
+            prefix.push((target, None));
+            continue;
+        }
+        let alias_hit = target.project_name_aliases.iter().any(|name| {
+            let name_lower = name.to_lowercase();
+            name_lower.starts_with(&lowered) || name_lower.contains(&lowered)
+        });
+        if alias_hit {
+            alias.push((target, Some("alias")));
+            continue;
+        }
+        if route_lower.contains(&lowered) {
+            substring.push((target, None));
+        }
+    }
+    prefix.extend(alias);
+    prefix.extend(substring);
+    prefix
 }
 
 pub(super) fn section_candidates(

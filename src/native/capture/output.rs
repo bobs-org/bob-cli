@@ -18,8 +18,9 @@ pub(crate) enum Placement {
 }
 
 /// Additive `ref` object on a reference item result: the classified
-/// URL, its offline library verdict, the staged job (real runs that
-/// queued only), and the inbox fallback (queued items only).
+/// URL, its offline library verdict, the canonical resolved parent, the
+/// staged job (real runs that queued only), and the parent fallback
+/// (queued items only).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct RefItemJson {
     pub(super) url: String,
@@ -28,10 +29,23 @@ pub(super) struct RefItemJson {
     pub(super) display: String,
     pub(super) route_hint: &'static str,
     pub(super) library: RefLibraryJson,
+    pub(super) parent: RefParentJson,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) job: Option<RefJobJson>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) fallback: Option<RefFallbackJson>,
+}
+
+/// Canonical resolved reference parent: the route, its label, its kind,
+/// how the input token was selected (`explicit`|`global`|`default`), and
+/// the matched alias (or null).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct RefParentJson {
+    pub(super) route: String,
+    pub(super) label: String,
+    pub(super) kind: &'static str,
+    pub(super) source: &'static str,
+    pub(super) alias: Option<String>,
 }
 
 /// Offline library verdict on a reference item.
@@ -713,6 +727,7 @@ pub(super) fn print_human_ref_item_success(
     ordinal: &str,
 ) {
     let queued = matches!(result.placement, Placement::Queued);
+    let parent_route = reference.parent.route.as_str();
     let (verb, subject) = match reference.library.verdict {
         "in_library" => (
             "already in library",
@@ -738,11 +753,11 @@ pub(super) fn print_human_ref_item_success(
         "duplicate" => ("duplicate", styler.cyan(&reference.display)),
         _ if queued && result.dry_run => (
             "would queue",
-            styler.cyan(&format!("{} → reading queue", reference.display)),
+            styler.cyan(&format!("{} → {parent_route}", reference.display)),
         ),
         _ => (
             "queued",
-            styler.cyan(&format!("{} → reading queue", reference.display)),
+            styler.cyan(&format!("{} → {parent_route}", reference.display)),
         ),
     };
     println!("{prefix} {verb}  {ordinal}{subject}");
@@ -776,9 +791,25 @@ pub(super) fn print_human_ref_item_success(
             reference.library.message.as_deref().unwrap_or("unknown error"),
         ),
         _ if result.dry_run => {
-            "new to your library · clips in the background".to_string()
+            if parent_route == "mac_inbox" {
+                "new to your library · reading task lands in mac_inbox.md · file it later"
+                    .to_string()
+            } else {
+                format!(
+                    "new to your library · reading task lands in {parent_route}.md"
+                )
+            }
         }
-        _ => "clipping in the background · bob ref jobs".to_string(),
+        _ => {
+            if parent_route == "mac_inbox" {
+                "clipping in the background · reading task lands in mac_inbox.md · file it later"
+                    .to_string()
+            } else {
+                format!(
+                    "clipping in the background · reading task lands in {parent_route}.md"
+                )
+            }
+        }
     };
     println!("  {}", styler.dim(&detail));
 }

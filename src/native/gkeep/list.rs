@@ -152,14 +152,17 @@ struct KeepView {
 }
 
 /// Offline verdicts for notes a pull would clip: note id to
-/// `(url, display, verdict)`.
-type RefHints = BTreeMap<String, (String, String, String)>;
+/// `(url, display, verdict, resolved parent or None when a future
+/// interactive pull will choose)`. Listing never prompts; resolution is
+/// offline vault reads only.
+type RefHints = BTreeMap<String, (String, String, String, Option<String>)>;
 
 fn empty_hints() -> RefHints {
     BTreeMap::new()
 }
 
-/// Offline library verdicts for every `CreateRef` note in one scan.
+/// Offline library verdicts plus the planned parent for every `CreateRef`
+/// note in one scan.
 fn ref_hint_map(bob_dir: &std::path::Path, plan: &Plan) -> RefHints {
     let targets: Vec<&super::plan::PlannedNote> = plan
         .notes
@@ -182,12 +185,21 @@ fn ref_hint_map(bob_dir: &std::path::Path, plan: &Plan) -> RefHints {
         .zip(verdicts)
         .map(|(planned, verdict)| {
             let intent = planned.ref_intent.as_ref().expect("filtered intent");
+            // A resolved note route names the parent; otherwise a future
+            // interactive pull will choose (defaulting to the inbox).
+            // Listing itself never prompts.
+            let parent = planned.ref_route.as_deref().and_then(|token| {
+                crate::native::parent_notes::resolve_parent(bob_dir, token)
+                    .ok()
+                    .map(|resolved| resolved.route)
+            });
             (
                 planned.note.id.clone(),
                 (
                     intent.cleaned.clone(),
                     intent.display.clone(),
                     verdict.verdict.as_str().to_string(),
+                    parent,
                 ),
             )
         })
@@ -304,11 +316,10 @@ fn print_keep_table(keep: &KeepView, ref_hints: &RefHints, styler: &Styler) {
         .notes
         .iter()
         .map(|planned| {
-            KeepRow::new(
-                planned.note.clone(),
-                planned,
-                ref_hints.contains_key(&planned.note.id),
-            )
+            let parent = ref_hints
+                .get(&planned.note.id)
+                .map(|(_, _, _, parent)| parent.clone());
+            KeepRow::new(planned.note.clone(), planned, parent)
         })
         .collect();
     let inbox = rows
@@ -393,7 +404,7 @@ impl KeepRow {
     fn new(
         note: KeepNote,
         planned: &super::plan::PlannedNote,
-        is_ref: bool,
+        ref_parent: Option<Option<String>>,
     ) -> Self {
         let now = super::ui::now_utc().timestamp();
         let age = match note.created_local() {
@@ -406,8 +417,11 @@ impl KeepRow {
         };
         let counts = note_counts(&note);
         let mut hints = Vec::new();
-        if is_ref {
-            hints.push("🔗 ref".to_string());
+        if let Some(parent) = ref_parent {
+            match parent {
+                Some(route) => hints.push(format!("🔗 ref → {route}")),
+                None => hints.push("🔗 ref → asks · gkeep_inbox".to_string()),
+            }
         }
         if counts.extra_lines > 0 {
             hints.push(if counts.extra_lines == 1 {
@@ -698,13 +712,14 @@ fn print_json(
                         "items_checked": counts.checked_items,
                         "attachments": planned.note.attachments.len(),
                     });
-                    if let Some((url, display, verdict)) =
+                    if let Some((url, display, verdict, parent)) =
                         ref_hints.get(&planned.note.id)
                     {
                         note["clip"] = json!({
                             "url": url,
                             "display": display,
                             "verdict": verdict,
+                            "parent": parent.clone().unwrap_or_else(|| "gkeep_inbox".to_string()),
                         });
                     }
                     note

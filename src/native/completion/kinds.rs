@@ -81,6 +81,12 @@ const TABLE: &[Entry] = &[
         arg: "source",
         kind: Kind::FreeText,
     },
+    // `gkeep pull --parent` names a routable parent note.
+    Entry {
+        path: &["gkeep", "pull"],
+        arg: "parent",
+        kind: Kind::Route,
+    },
     // Directories.
     Entry {
         path: &[],

@@ -7,13 +7,14 @@ mod gkeep_support;
 
 use std::{
     fs,
+    io::Write as _,
     path::{Path, PathBuf},
-    process::Output,
+    process::{Command, Output, Stdio},
 };
 
 use gkeep_support::{
     archive_ok, error_response, note, snapshot_ok, stderr, stdout, FakeAdapter,
-    GkeepEnv, TempDir,
+    GkeepEnv, TempDir, BOB_BIN,
 };
 
 #[cfg(unix)]
@@ -1298,7 +1299,9 @@ fn url_only_pdf_note_clips_and_archives_without_task() {
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
     let body = stdout(&out);
     assert!(
-        body.contains("clipped → xlib/papers/paper.pdf · archived"),
+        body.contains(
+            "clipped → xlib/papers/paper.pdf → gkeep_inbox · archived"
+        ),
         "clip row:\n{body}"
     );
     assert!(
@@ -1317,6 +1320,7 @@ fn url_only_pdf_note_clips_and_archives_without_task() {
     assert_eq!(events[0]["id"], "note-1");
     assert_eq!(events[0]["path"], "xlib/papers/paper.pdf");
     assert_eq!(events[0]["url"], "https://example.com/paper.pdf");
+    assert_eq!(events[0]["parent"], "gkeep_inbox");
     // The archive guard carries the attachment count.
     let req: serde_json::Value =
         serde_json::from_str(&fake.request("archive", 2)).expect("archive req");
@@ -1382,8 +1386,9 @@ fn second_note_with_same_url_reports_already_queued() {
     let out = run_pull(&env, &fake, &state, &[], &curl_env(&curl, &root, &log));
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
     assert!(
-        stdout(&out)
-            .contains("already queued · xlib/papers/paper.pdf · archived"),
+        stdout(&out).contains(
+            "already queued · xlib/papers/paper.pdf → gkeep_inbox · archived"
+        ),
         "queued row:\n{}",
         stdout(&out)
     );
@@ -1417,7 +1422,7 @@ fn already_in_library_archives_without_fetch() {
     assert!(!hit.is_file(), "no fetch for a library hit");
     let body = stdout(&out);
     assert!(
-        body.contains("already in library · ref/papers/captured.md · archived"),
+        body.contains("already in library · ref/papers/captured.md → gkeep_inbox · archived"),
         "library row:\n{body}"
     );
     let events = ref_events(&state);
@@ -1641,7 +1646,9 @@ fn all_clip_pull_needs_no_target() {
     let out = run_pull(&env, &fake, &state, &[], &curl_env(&curl, &root, &log));
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
     assert!(
-        stdout(&out).contains("clipped → xlib/papers/paper.pdf · archived"),
+        stdout(&out).contains(
+            "clipped → xlib/papers/paper.pdf → gkeep_inbox · archived"
+        ),
         "clip row:\n{}",
         stdout(&out)
     );
@@ -1764,7 +1771,7 @@ fn dry_run_previews_ref_without_clipping() {
     assert!(!clip_hit.is_file(), "dry run never clips");
     let body = stdout(&out);
     assert!(
-        body.contains("would clip → reading queue · would archive"),
+        body.contains("would clip → gkeep_inbox · would archive"),
         "would-clip row:\n{body}"
     );
     assert!(
@@ -1894,5 +1901,254 @@ fn url_only_matrix_classifies_without_clipping() {
             ("m10", "create_ref"),
         ],
         "matrix actions:\n{doc}"
+    );
+}
+
+#[test]
+fn keep_parent_precedence_note_route_cli_alias_and_fallback() {
+    let (env, fake, state, _token) = setup("bob-cli-gkeep-pull-parent");
+    fs::write(env.vault().join("sase.md"), "---\ntype: [[area]]\n---\n")
+        .expect("sase parent");
+    fs::write(
+        env.vault().join("bob.md"),
+        "---\ntype: [[project]]\nstatus: wip\nproject_name_aliases: [\"bob-cli\"]\n---\n",
+    )
+    .expect("bob parent");
+    let notes = vec![
+        note("")
+            .id("note-1")
+            .text("https://example.com/a @sase")
+            .build(),
+        note("").id("note-2").text("https://example.com/b").build(),
+    ];
+    fake.respond("snapshot", &snapshot_ok("bryanbugyi34@gmail.com", notes));
+    // Note routes win over `-P`; `-P bob-cli` canonicalizes to `bob`.
+    let out = run_pull(
+        &env,
+        &fake,
+        &state,
+        &["-d", "-f", "json", "-P", "bob-cli"],
+        &[],
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let doc: serde_json::Value =
+        serde_json::from_str(&stdout(&out)).expect("json parses");
+    let parents: Vec<(&str, &str)> = doc["notes"]
+        .as_array()
+        .expect("notes")
+        .iter()
+        .map(|row| {
+            (
+                row["id"].as_str().expect("id"),
+                row["clip"]["parent"].as_str().expect("parent"),
+            )
+        })
+        .collect();
+    assert_eq!(
+        parents,
+        vec![("note-1", "sase"), ("note-2", "bob")],
+        "note route wins, CLI alias canonicalizes:\n{doc}"
+    );
+
+    // An invalid note route warns and falls back to the CLI parent.
+    let notes = vec![note("")
+        .id("note-3")
+        .text("https://example.com/c @nope")
+        .build()];
+    fake.respond("snapshot", &snapshot_ok("bryanbugyi34@gmail.com", notes));
+    let out = run_pull(
+        &env,
+        &fake,
+        &state,
+        &["-d", "-f", "json", "-P", "sase"],
+        &[],
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let doc: serde_json::Value =
+        serde_json::from_str(&stdout(&out)).expect("json parses");
+    assert_eq!(doc["notes"][0]["clip"]["parent"], "sase");
+
+    // Without any route source the non-TTY default is the inbox.
+    let notes =
+        vec![note("").id("note-4").text("https://example.com/d").build()];
+    fake.respond("snapshot", &snapshot_ok("bryanbugyi34@gmail.com", notes));
+    let out = run_pull(&env, &fake, &state, &["-d", "-f", "json"], &[]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let doc: serde_json::Value =
+        serde_json::from_str(&stdout(&out)).expect("json parses");
+    assert_eq!(doc["notes"][0]["clip"]["parent"], "gkeep_inbox");
+
+    // An invalid CLI parent fails before any clip or mutation.
+    let notes =
+        vec![note("").id("note-5").text("https://example.com/e").build()];
+    fake.respond("snapshot", &snapshot_ok("bryanbugyi34@gmail.com", notes));
+    let out = run_pull(
+        &env,
+        &fake,
+        &state,
+        &["-d", "-f", "json", "-P", "nope"],
+        &[],
+    );
+    assert_ne!(out.status.code(), Some(0));
+    let body = format!("{}{}", stdout(&out), stderr(&out));
+    assert!(body.contains("no area or project named 'nope'"), "{body}");
+}
+
+// ---------- interactive parent prompt (PTY) ----------
+
+/// Shell-quote one argv word for `script(1) -c`.
+#[cfg(target_os = "linux")]
+fn shell_quote(word: &str) -> String {
+    format!("'{}'", word.replace('\'', "'\\''"))
+}
+
+/// Run `bob gkeep pull` exactly as `run_pull` would (same vault, config,
+/// fake adapter, locks, and hermetic clip defaults), but under a
+/// pseudo-terminal via `script(1)` so stdin and stderr are terminals and
+/// the parent prompt engages. Feeds `stdin_bytes` up front; the pty holds
+/// them until each prompt reads. Returns `(exit_code, typescript)`.
+/// `script` propagates the child exit status with `-e`.
+#[cfg(target_os = "linux")]
+fn run_pull_pty(
+    env: &GkeepEnv,
+    fake: &FakeAdapter,
+    state: &TempDir,
+    args: &[&str],
+    extra_env: &[(&str, &str)],
+    stdin_bytes: &[u8],
+) -> (i32, String) {
+    let mut words =
+        vec![BOB_BIN.to_string(), "gkeep".to_string(), "pull".to_string()];
+    words.extend(args.iter().map(|arg| (*arg).to_string()));
+    let command_line = words
+        .iter()
+        .map(|word| shell_quote(word))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let mut cmd = Command::new("script");
+    cmd.arg("-qec")
+        .arg(&command_line)
+        .arg("/dev/null")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        // Mirror `GkeepEnv::command` plus the `run_pull` overrides, so the
+        // run under the pty sees the same vault, config, fake adapter,
+        // locks, and hermetic clip defaults as every other pull test.
+        // `NO_COLOR` keeps the typescript free of ANSI escapes.
+        .env("BOB_DIR", env.vault())
+        .env("BOB_CONFIG_FILE", env.config())
+        .env("BOB_GKEEP_ADAPTER", fake.path())
+        .env(
+            "BOB_VAULT_SYNC_LOCK_FILE",
+            state.path().join("bob_sync.lock"),
+        )
+        .env("XDG_STATE_HOME", state.path())
+        .env("XDG_CACHE_HOME", state.path().join("cache"))
+        .env("BOB_HIGHLIGHTS_RESOLVE", "*=203.0.113.1")
+        .env(
+            "BOB_WEB_CLIP_ADAPTER",
+            "/definitely/missing/bob-cli-test-web-clip-adapter",
+        )
+        .env("BOB_HIGHLIGHTS_CURL", "/bin/false")
+        .env("TZ", "UTC")
+        .env("NO_COLOR", "1");
+    for (key, value) in extra_env {
+        cmd.env(key, value);
+    }
+    let mut child = cmd.spawn().expect("run script(1) for the pty pull");
+    child
+        .stdin
+        .take()
+        .expect("pty stdin")
+        .write_all(stdin_bytes)
+        .expect("feed pty answers");
+    let out = child.wait_with_output().expect("collect pty output");
+    let code = out.status.code().unwrap_or(-1);
+    let mut typescript = String::from_utf8_lossy(&out.stdout).into_owned();
+    typescript.push_str(&String::from_utf8_lossy(&out.stderr));
+    (code, typescript)
+}
+
+/// Two URLs under a real pseudo-terminal: the first answer is unknown
+/// (hints and a re-prompt), the accepted answer becomes the next
+/// prompt's default, and a dry run clips, writes, and archives nothing.
+/// Parent selection runs before the clip pre-pass, so the sentinels
+/// proving "no fetch, no clip" also prove the answers were consumed
+/// before any clip adapter could run.
+#[test]
+#[cfg(target_os = "linux")]
+fn interactive_parent_prompt_sticky_default_and_reprompt() {
+    let (env, fake, state, _token) = setup("bob-cli-gkeep-pull-pty");
+    fs::write(env.vault().join("sase.md"), "---\ntype: [[area]]\n---\n")
+        .expect("sase parent");
+    // Oldest first: note-1 is prompted before note-2.
+    let notes = vec![
+        note("")
+            .id("note-1")
+            .created("2026-09-25T12:00:00Z")
+            .text("https://example.com/one")
+            .build(),
+        note("")
+            .id("note-2")
+            .created("2026-09-26T12:00:00Z")
+            .text("https://example.com/two")
+            .build(),
+    ];
+    fake.respond("snapshot", &snapshot_ok("bryanbugyi34@gmail.com", notes));
+    let (curl_sentinel, curl_hit) = write_sentinel(state.path(), "curl");
+    let (clip_sentinel, clip_hit) = write_sentinel(state.path(), "clip");
+    // "nope" is unknown (hints, re-prompt), "sase" is accepted for the
+    // first URL, and Enter takes the sticky "sase" default for the second.
+    let (code, typescript) = run_pull_pty(
+        &env,
+        &fake,
+        &state,
+        &["-d"],
+        &[
+            ("BOB_HIGHLIGHTS_CURL", curl_sentinel.to_str().expect("path")),
+            (
+                "BOB_WEB_CLIP_ADAPTER",
+                clip_sentinel.to_str().expect("path"),
+            ),
+        ],
+        b"nope\nsase\n\n",
+    );
+    assert_eq!(code, 0, "pty pull exits 0:\n{typescript}");
+    assert!(typescript.contains("[dry-run]"), "dry run:\n{typescript}");
+    // The first prompt offers the inbox default; the unknown answer is
+    // rejected exactly once and the prompt repeats unchanged.
+    assert_eq!(
+        typescript
+            .matches("File example.com/one under [gkeep_inbox]:")
+            .count(),
+        2,
+        "prompt then re-prompt:\n{typescript}"
+    );
+    assert!(
+        typescript.contains("no area or project named 'nope'"),
+        "unknown-parent hints:\n{typescript}"
+    );
+    // The accepted answer becomes the next prompt's default.
+    assert!(
+        typescript.contains("File example.com/two under [sase]:"),
+        "sticky default:\n{typescript}"
+    );
+    // Both dry-run rows carry the selected parent.
+    assert_eq!(
+        typescript.matches("would clip → sase").count(),
+        2,
+        "both rows name the parent:\n{typescript}"
+    );
+    // A dry run clips, writes, journals, and archives nothing: snapshot
+    // is the only adapter call.
+    assert!(!curl_hit.is_file(), "dry run never fetches");
+    assert!(!clip_hit.is_file(), "dry run never clips");
+    assert_eq!(fake.call_count(), 1, "no archive call on dry run");
+    assert!(ref_events(&state).is_empty(), "dry run writes no journal");
+    assert_eq!(
+        read_target(env.vault()),
+        default_target(),
+        "dry run writes nothing"
     );
 }

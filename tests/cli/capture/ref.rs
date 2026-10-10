@@ -242,11 +242,11 @@ fn capture_url_with_markers_or_flags_stays_a_task() {
     fs::create_dir_all(&vault).expect("create vault");
 
     // Each natural opt-out keeps the item a task, exactly as before.
+    // A single `URL @route`, a plain `@@route`, and a bare `-r` now claim
+    // references instead.
     let drafts = [
         vec!["https://example.com/post read later"],
-        vec!["https://example.com/post @cash"],
         vec!["https://example.com/post s:1"],
-        vec!["@@work", "https://example.com/post"],
     ];
     for draft in &drafts {
         let mut args = vec!["-d", "-f", "json"];
@@ -266,17 +266,14 @@ fn capture_url_with_markers_or_flags_stays_a_task() {
     assert_success(&output);
     assert_eq!(parse_json(&output)["kind"], "task");
 
-    // Forced flags are explicit choices that keep the item a task.
-    for flag in [&["-r", "notes"][..], &["-c"][..]] {
-        let mut args = vec!["-d", "-f", "json"];
-        args.extend(flag.iter());
-        args.push(ARTICLE_URL);
-        let output = capture(&temp, &vault, &args)
+    // A bare `-r` now claims an explicit-parent reference; `-c` still
+    // keeps the item a task.
+    let output =
+        capture(&temp, &vault, &["-d", "-f", "json", "-c", ARTICLE_URL])
             .output()
             .expect("run forced-flag capture");
-        assert_success(&output);
-        assert_eq!(parse_json(&output)["kind"], "task", "flags {flag:?}");
-    }
+    assert_success(&output);
+    assert_eq!(parse_json(&output)["kind"], "task");
     write_file(
         &vault.join("notes.md"),
         "# Notes\n- [ ] #task existing ^test-id\n  - SEC\n\n## Sec\n",
@@ -320,7 +317,13 @@ fn capture_inline_global_blocks_ref_claim() {
     let temp = TempDir::new("bob-cli-capture-ref-inline-global");
     let vault = temp.path().join("vault");
     fs::create_dir_all(&vault).expect("create vault");
+    write_file(
+        &vault.join("groceries.md"),
+        "---\ntype: [[area]]\n---\n\n# Groceries\n\n- [ ] #task existing ^abc\n",
+    );
 
+    // A plain `@@groceries` routes the default ref globally (source
+    // `global`); the first item stays a task.
     let mut command = capture(&temp, &vault, &["-d", "-f", "json"]);
     let output = run_with_stdin(
         &mut command,
@@ -330,23 +333,10 @@ fn capture_inline_global_blocks_ref_claim() {
     let json = parse_json(&output);
     let captures = json["captures"].as_array().expect("captures array");
     assert_eq!(captures.len(), 2);
-    for capture in captures {
-        assert_eq!(capture["kind"], "task", "{json}");
-        assert!(
-            capture.get("ref").is_none() || capture["ref"].is_null(),
-            "{json}"
-        );
-    }
-    let second = &captures[1];
-    let routed = second["route"]
-        .as_str()
-        .unwrap_or_default()
-        .contains("groceries")
-        || second["relative_target"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("groceries");
-    assert!(routed, "URL item routes to @@ target: {json}");
+    assert_eq!(captures[0]["kind"], "task", "{json}");
+    assert_eq!(captures[1]["kind"], "ref", "{json}");
+    assert_eq!(captures[1]["ref"]["parent"]["route"], "groceries", "{json}");
+    assert_eq!(captures[1]["ref"]["parent"]["source"], "global", "{json}");
 
     let output = bob_command()
         .arg("capture-parse")
@@ -361,8 +351,20 @@ fn capture_inline_global_blocks_ref_claim() {
         serde_json::from_str(stdout(&output).trim()).expect("parse JSON");
     let items = json["items"].as_array().expect("items array");
     assert_eq!(items.len(), 2);
-    assert_eq!(items[1]["mode"], "task", "{json}");
-    assert_ne!(items[1]["mode"], "ref");
+    assert_eq!(items[1]["mode"], "ref", "{json}");
+    assert_eq!(items[1]["ref_parent"]["token"], "groceries", "{json}");
+    assert_eq!(items[1]["ref_parent"]["source"], "global", "{json}");
+
+    // `@@groceries+block-id` keeps task/sub-bullet semantics (never ref).
+    let mut command = capture(&temp, &vault, &["-d", "-f", "json"]);
+    let output = run_with_stdin(
+        &mut command,
+        "Buy milk @@groceries+abc\n\nhttps://example.com/post",
+    );
+    assert_success(&output);
+    let json = parse_json(&output);
+    let captures = json["captures"].as_array().expect("captures array");
+    assert_ne!(captures[1]["kind"], "ref", "{json}");
 }
 
 #[test]
@@ -636,11 +638,11 @@ fn capture_human_wording_for_every_case() {
 
     assert_eq!(
         human(&["-d", ARTICLE_URL]),
-        "[dry-run] ok would queue  example.com/post → reading queue\n  new to your library · clips in the background\n"
+        "[dry-run] ok would queue  example.com/post → mac_inbox\n  new to your library · reading task lands in mac_inbox.md · file it later\n"
     );
     assert_eq!(
         human(&[ARTICLE_URL]),
-        "✓ queued  example.com/post → reading queue\n  clipping in the background · bob ref jobs\n"
+        "✓ queued  example.com/post → mac_inbox\n  clipping in the background · reading task lands in mac_inbox.md · file it later\n"
     );
     assert_eq!(
         human(&["-d", "https://example.com/captured"]),
@@ -652,11 +654,11 @@ fn capture_human_wording_for_every_case() {
     );
     assert_eq!(
         human(&["-d", "https://example.com/legacy"]),
-        "[dry-run] ok would queue  example.com/legacy → reading queue\n  in your library as a legacy note (ref/blogs/legacy.md) · a fresh copy will be clipped\n"
+        "[dry-run] ok would queue  example.com/legacy → mac_inbox\n  in your library as a legacy note (ref/blogs/legacy.md) · a fresh copy will be clipped\n"
     );
     assert_eq!(
         human(&["https://example.com/legacy"]),
-        "✓ queued  example.com/legacy → reading queue\n  in your library as a legacy note (ref/blogs/legacy.md) · a fresh copy will be clipped\n"
+        "✓ queued  example.com/legacy → mac_inbox\n  in your library as a legacy note (ref/blogs/legacy.md) · a fresh copy will be clipped\n"
     );
     assert_eq!(
         human(&["-d", "https://example.com/clipping"]),
@@ -970,4 +972,103 @@ fn capture_parse_reports_ref_mode_and_span() {
     let items = json["items"].as_array().expect("items array");
     assert_eq!(items.len(), 2);
     assert!(items.iter().all(|item| item["mode"] == "ref"));
+}
+
+#[test]
+fn capture_ref_parent_selection_reports_canonical_routes_and_hints() {
+    let temp = TempDir::new("bob-cli-capture-ref-parent");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
+    write_file(
+        &vault.join("bob.md"),
+        "---\ntype: [[project]]\nstatus: wip\nproject_name_aliases: [\"bob-cli\"]\n---\n",
+    );
+
+    // Explicit trailing route resolves canonically with its source.
+    let output =
+        capture(&temp, &vault, &["-d", "-f", "json", ARTICLE_URL, "@sase"])
+            .output()
+            .expect("run explicit capture");
+    assert_success(&output);
+    let json = parse_json(&output);
+    assert_eq!(json["kind"], "ref");
+    assert_eq!(json["ref"]["parent"]["route"], "sase");
+    assert_eq!(json["ref"]["parent"]["source"], "explicit");
+    assert_eq!(json["ref"]["parent"]["alias"], serde_json::Value::Null);
+
+    // Leading route and alias canonicalization.
+    let output = capture(
+        &temp,
+        &vault,
+        &["-d", "-f", "json", "@bob-cli", ARTICLE_URL],
+    )
+    .output()
+    .expect("run alias capture");
+    assert_success(&output);
+    let json = parse_json(&output);
+    assert_eq!(json["ref"]["parent"]["route"], "bob");
+    assert_eq!(json["ref"]["parent"]["source"], "explicit");
+    assert_eq!(json["ref"]["parent"]["alias"], "bob-cli");
+
+    // Forced `-r` is an explicit parent.
+    let output = capture(
+        &temp,
+        &vault,
+        &["-d", "-f", "json", "-r", "sase", ARTICLE_URL],
+    )
+    .output()
+    .expect("run forced capture");
+    assert_success(&output);
+    let json = parse_json(&output);
+    assert_eq!(json["ref"]["parent"]["route"], "sase");
+    assert_eq!(json["ref"]["parent"]["source"], "explicit");
+
+    // Default uses the inbox.
+    let output = capture(&temp, &vault, &["-d", "-f", "json", ARTICLE_URL])
+        .output()
+        .expect("run default capture");
+    assert_success(&output);
+    let json = parse_json(&output);
+    assert_eq!(json["ref"]["parent"]["route"], "mac_inbox");
+    assert_eq!(json["ref"]["parent"]["source"], "default");
+
+    // Unknown routes fail with hints and queue nothing.
+    let output =
+        capture(&temp, &vault, &["-d", "-f", "json", ARTICLE_URL, "@nope"])
+            .output()
+            .expect("run unknown capture");
+    assert!(!output.status.success());
+    let body = format_output(&output);
+    assert!(body.contains("no area or project named 'nope'"), "{body}");
+    assert!(pending_files(&temp).is_empty(), "no job on error");
+
+    // `capture-parse` reports the lexical parent outside `needs`.
+    let output = bob_command()
+        .arg("capture-parse")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg(format!("{ARTICLE_URL} @sase"))
+        .output()
+        .expect("run explicit parse");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("parse JSON");
+    assert_eq!(json["mode"], "ref");
+    assert_eq!(json["ref_parent"]["token"], "sase");
+    assert_eq!(json["ref_parent"]["source"], "explicit");
+
+    // Staged jobs and fallbacks carry the resolved parent.
+    let output = capture(&temp, &vault, &["-f", "json", ARTICLE_URL, "@sase"])
+        .output()
+        .expect("run staged capture");
+    assert_success(&output);
+    let json = parse_json(&output);
+    assert_eq!(json["ref"]["parent"]["route"], "sase");
+    assert_eq!(json["ref"]["fallback"]["relative_target"], "sase.md");
+    assert!(json["ref"]["fallback"]["task_line"]
+        .as_str()
+        .unwrap_or_default()
+        .contains(ARTICLE_URL));
 }

@@ -63,8 +63,10 @@ anything is written, and any failure rolls the whole batch back.
 
 | Marker | Meaning |
 | --- | --- |
-| Bare public URL | Queue a reference job when the URL routing policy admits it; `-R, --no-ref` keeps it a task |
-| `@@route` | Shared task destination, anywhere in the draft, for otherwise-unrouted items |
+| Bare public URL | Queue a reference job under `mac_inbox` when the URL routing policy admits it; `-R, --no-ref` keeps it a task |
+| `URL @route` or `@route URL` | Queue the reference under that route (aliases resolve; source `explicit`) |
+| Bare URL with `-r route` | Queue the reference under that route (source `explicit`) |
+| `@@route` | Shared task destination, anywhere in the draft, for otherwise-unrouted items; a plain declaration also routes default (routeless) refs (source `global`), while `@@route+block-id` keeps refs as tasks |
 | `@@route+block-id` | Shared parent-task destination, anywhere in the draft, for otherwise-unrouted items |
 | `@route` | Write a task to `<route>.md` (default route is `mac_inbox`) |
 | `@route#Section` | Write an ordinary bullet into a matching non-`Tasks` heading |
@@ -625,52 +627,72 @@ token should remain literal. `--clip` and `--no-clip` conflict.
 
 A capture item that is nothing but one bare public link becomes a reference
 item (`kind: "ref"`) instead of an inbox task. `bob capture
-'https://example.com/essay'` saves a background job. A new link prints
-`queued example.com/essay → reading queue` with the detail
-`clipping in the background · bob ref jobs`. That line means the job was
-saved. The reading queue in `bob ref list` is the reference note, and it
-appears after `bob ref scan`. Quote the URL when the shell would treat `#`
-as a comment.
+'https://example.com/essay'` saves a background job under `mac_inbox`. Add
+exactly one ordinary leading or trailing `@route` (`URL @sase` or
+`@sase URL`), a bare URL under a plain `@@sase` declaration, or a bare URL
+with `-r sase` to file it under that route instead: aliases resolve to the
+canonical route (so `URL @bob-cli` files under `bob`). The body holds only
+the URL; the input token and its canonical parent stay distinct, and the
+parent source is `explicit`, `global`, or `default`. A new link prints
+`queued example.com/essay → sase` with the detail
+`new to your library · reading task lands in sase.md` (or `→ mac_inbox` with
+`file it later` for the default inbox). That line means the job was saved.
+The reading queue in `bob ref list` is the reference note, and it appears
+after `bob ref scan`. Quote the URL when the shell would treat `#` as a
+comment.
 
-Anything more — an extra word, `@route`, `#tag`, `s:`, `p:`, `%`, an
-operator, a child line, a `@@` declaration, or a forced flag
-(`-r -s -t -S -c`, `--task-ref`) — keeps the item a task. Hosts without a
-dot (`http://go/x`, `localhost`), IP literals, and excluded hosts (see the
-[URL routing policy](ref.md#url-routing)) stay tasks too. A pasted
-blank-line-free block in which every line is a bare URL splits into one item
-per line, and each line is then classified on its own, so mixed lists queue
-the links and keep the rest as tasks.
+Anything more — an extra word, `#tag`, `s:`, `p:`, `%`, an operator, a child
+line, a `@@route+block-id` declaration, task/destination flags beyond `-r`
+(`-s -t -S -c`, `--task-ref`), or a second `@route` — keeps the item a task.
+`-R` also keeps it a task. Hosts without a dot (`http://go/x`, `localhost`),
+IP literals, and excluded hosts (see the
+[URL routing policy](ref.md#url-routing)) stay tasks too. An unresolvable
+route fails the item with near-miss hints and the whole batch rolls back; it
+never silently creates a new note. A pasted blank-line-free block in which
+every line is a bare URL splits into one item per line, and each line is then
+classified on its own, so mixed lists queue the links and keep the rest as
+tasks. A plain `@@sase` routes default (routeless) refs to `sase` while an
+explicit local `@route` keeps local precedence; `@@sase+block-id` keeps the
+item a task. Ordinary task `@route` capture does not resolve aliases.
 
 Submit never touches the network and returns at once: it writes a durable
-ref job and a detached background worker clips it through the same engine as
-`bob ref create`. If the clip fails, the link falls back to exactly the inbox
-task capture would have written, plus a `⚠️` child with the reason and a
-`bob ref create <url>` retry command. `bob ref jobs` lists pending, clipping,
-and stuck jobs plus finished jobs from the last 7 days (`--all` shows older
-finished jobs); see [ref jobs](ref-jobs.md).
+ref job staged with the resolved parent and a detached background worker
+clips it through the same engine as `bob ref create`. If the clip fails, the
+link falls back to the parent note (`<parent>.md`) with exactly the URL task
+line capture previewed, plus a `⚠️` child with the reason and a
+`bob ref create <url> -P <parent>` retry command. `bob ref jobs` lists
+pending, clipping, and stuck jobs plus finished jobs from the last 7 days
+(`--all` shows older finished jobs); see [ref jobs](ref-jobs.md).
 
 `--dry-run` is offline and writes nothing, including no job. Its headline and
-one detail line follow the library verdict:
+one detail line follow the library verdict (with the resolved parent):
 
 | Verdict | Headline | Detail |
 | --- | --- | --- |
-| `not_found` | `would queue <display> → reading queue` | `new to your library · clips in the background` |
-| `legacy` | `would queue <display> → reading queue` | `in your library as a legacy note (<path>) · a fresh copy will be clipped` |
-| `unknown` | `would queue <display> → reading queue` | `library check unavailable: <message> · the clip still dedupes` |
+| `not_found` | `would queue <display> → <parent>` | `new to your library · reading task lands in <parent>.md` (`· file it later` for `mac_inbox`) |
+| `legacy` | `would queue <display> → <parent>` | `in your library as a legacy note (<path>) · a fresh copy will be clipped` |
+| `unknown` | `would queue <display> → <parent>` | `library check unavailable: <message> · the clip still dedupes` |
 | `in_library` | `already in library <path>` | title and reading state, when known |
 | `in_intake` | `already queued <path>` | `waiting for bob ref scan` |
 | `clipping` | `already clipping <display>` | `a pending ref job has this link · bob ref jobs` |
 | `duplicate` | `duplicate <display>` | `same link as an earlier item` |
 
 A real submit uses `queued` in place of `would queue`. The `not_found`
-detail becomes `clipping in the background · bob ref jobs`; legacy and
-unknown keep the details above. `placement` is
-`"queued"` for `not_found`, `legacy`, and `unknown` (a job will be written)
-and `"unchanged"` for the other verdicts (no new job). Reference items
-report `routed: false`, `route: null`, `route_label: ""`, and
-`task_line: ""`, plus an additive `ref` object with the classified URL, the
-library verdict, the staged `job`, and the inbox `fallback` on queued items.
-`ref.job` stays `null` until the commit, so every dry run has `job: null`.
+detail becomes `clipping in the background · reading task lands in
+<parent>.md` (`· file it later` for `mac_inbox`); legacy and unknown keep the
+details above. `placement` is `"queued"` for `not_found`, `legacy`, and
+`unknown` (a job will be written) and `"unchanged"` for the other verdicts
+(no new job). Reference items report `routed: false`, `route: null`,
+`route_label: ""`, and `task_line: ""`, plus an additive `ref` object with
+the classified URL, the library verdict, the canonical `parent: {route,
+label, kind, source, alias}` (including already-known URLs), the staged
+`job`, and the parent `fallback` on queued items. `ref.job` stays `null`
+until the commit, so every dry run has `job: null`.
+`bob capture-parse` reports `ref_parent: {token, source}` on `ref` items
+outside `needs` (explicit token, inherited global route, or `mac_inbox`;
+source `explicit|global|default`), and a local route token keeps its ordinary
+`route` span. Route completion also matches `project_name_aliases` with
+`match_kind: "alias"` after canonical prefix matches.
 Opt out per capture with `-R, --no-ref`, or per entry point with
 `highlights.url_routing.capture: false` (silent; an invalid config warns and
 also keeps the link a task).

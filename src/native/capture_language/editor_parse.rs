@@ -253,20 +253,25 @@ pub(crate) fn parse_for_editor_with(
         &mut global_spans,
         &mut global_diagnostics,
     );
-    // An inline `@@` discovered after the initial parse still blocks the
-    // claim: re-parse claimed Ref items with a global destination so they
-    // become ordinary tasks that inherit the global.
-    if global_destination.is_some() {
+    // An inline `@@route+id` discovered after the initial parse still
+    // blocks the claim: re-parse those Ref items so they become ordinary
+    // tasks. A plain `@@route` upgrades default (routeless) Refs to the
+    // global parent; explicit local `@route` keeps local precedence.
+    if let Some(global_ref) = &global_destination {
         let global_options = EditorParseOptions {
+            url_routing: None,
             has_global_destination: true,
-            ..options
         };
         for (index, outcome) in item_outcomes.iter_mut().enumerate() {
             if outcome.item.mode == EditorMode::Ref {
-                *outcome = parse_editor_item_with(
-                    &draft.items[index],
-                    &global_options,
-                );
+                if global_ref.block_id.is_some() {
+                    *outcome = parse_editor_item_with(
+                        &draft.items[index],
+                        &global_options,
+                    );
+                } else if outcome.item.route.is_none() {
+                    outcome.item.route = global_ref.route.clone();
+                }
             }
         }
     }
@@ -854,16 +859,20 @@ pub(super) fn parse_editor_parent_task_item<'a>(
 }
 
 /// A whole-item bare URL admitted by the routing policy: mode `ref`
-/// with one `ref_url` span over the whole token, `<>` included. Anything
-/// else (extra text, child lines, markers, `@@`, forced routing) falls
-/// through to the generic path, exactly like execution. Completion stays
-/// unchanged: a URL item triggers none.
+/// with one `ref_url` span over the URL token, `<>` included, plus an
+/// ordinary `route` span when exactly one plain `@route` token leads or
+/// trails it. Anything else (extra text, child lines, markers, `@@`,
+/// dependencies) falls through to the generic path, exactly like
+/// execution. A bare URL remains submittable and never acquires a required
+/// `needs` entry merely because a client can offer a parent picker.
+/// Completion stays unchanged: a URL item triggers none, while a local
+/// route token keeps its ordinary route span so route completion works.
 fn parse_editor_ref_item<'a>(
     item: &CaptureItem<'a>,
     options: &EditorParseOptions<'_>,
 ) -> Option<EditorItemOutcome<'a>> {
     let policy = options.url_routing?;
-    if options.has_global_destination || item.lines.len() != 1 {
+    if item.lines.len() != 1 {
         return None;
     }
     if !scan_item_dependencies(item, true).is_empty() {
@@ -871,46 +880,125 @@ fn parse_editor_ref_item<'a>(
     }
     let parent = item.lines.first()?.raw;
     let tokens = tokenize_line_with_spans(&parent);
-    if tokens.len() != 1 {
+    if tokens.iter().any(|token| token.text.starts_with("@@")) {
         return None;
     }
-    let token = tokens[0];
-    let intent = classify_token(token.text)?;
-    if !policy.admits(&intent, RoutingEntry::Capture) {
-        return None;
+    if tokens.len() == 1 {
+        let token = tokens[0];
+        let intent = classify_token(token.text)?;
+        if !policy.admits(&intent, RoutingEntry::Capture) {
+            return None;
+        }
+        return Some(EditorItemOutcome {
+            item: EditorItemParse {
+                index: item.index,
+                start: item.start,
+                end: item.end,
+                line_start: item.line_start,
+                line_end: item.line_end,
+                body: token.text.to_string(),
+                mode: EditorMode::Ref,
+                route: None,
+                section: None,
+                block_id: None,
+                needs: Vec::new(),
+                pomodoro_start: None,
+                pomodoro_adjust: None,
+                pomodoro_shift: None,
+                pomodoro_close: None,
+                dependencies: Vec::new(),
+                dependency_target: None,
+                task_complete: None,
+                spans: vec![Span {
+                    start: token.start,
+                    end: token.end,
+                    kind: SpanKind::RefUrl,
+                }],
+                diagnostics: Vec::new(),
+                sub_bullets: Vec::new(),
+                has_local_destination: false,
+                local_destination_markers: Vec::new(),
+            },
+            declarations: Vec::new(),
+        });
     }
-    Some(EditorItemOutcome {
-        item: EditorItemParse {
-            index: item.index,
-            start: item.start,
-            end: item.end,
-            line_start: item.line_start,
-            line_end: item.line_end,
-            body: token.text.to_string(),
-            mode: EditorMode::Ref,
-            route: None,
-            section: None,
-            block_id: None,
-            needs: Vec::new(),
-            pomodoro_start: None,
-            pomodoro_adjust: None,
-            pomodoro_shift: None,
-            pomodoro_close: None,
-            dependencies: Vec::new(),
-            dependency_target: None,
-            task_complete: None,
-            spans: vec![Span {
-                start: token.start,
-                end: token.end,
-                kind: SpanKind::RefUrl,
-            }],
-            diagnostics: Vec::new(),
-            sub_bullets: Vec::new(),
-            has_local_destination: false,
-            local_destination_markers: Vec::new(),
-        },
-        declarations: Vec::new(),
-    })
+    if tokens.len() == 2 {
+        let first_intent = classify_token(tokens[0].text);
+        let second_intent = classify_token(tokens[1].text);
+        let (url_token, route_token) =
+            if first_intent.is_some() && second_intent.is_none() {
+                (tokens[0], tokens[1])
+            } else if first_intent.is_none() && second_intent.is_some() {
+                (tokens[1], tokens[0])
+            } else {
+                return None;
+            };
+        let intent = classify_token(url_token.text)?;
+        if !policy.admits(&intent, RoutingEntry::Capture) {
+            return None;
+        }
+        let route_parsed = parse_route_token(route_token.text)?;
+        let Some(route) = route_parsed.route else {
+            return None;
+        };
+        if !matches!(route_parsed.kind, CaptureKind::Task) {
+            return None;
+        }
+        if route_token.text.to_ascii_lowercase() != format!("@{route}") {
+            return None;
+        }
+        if !is_route_token(&route) {
+            return None;
+        }
+        return Some(EditorItemOutcome {
+            item: EditorItemParse {
+                index: item.index,
+                start: item.start,
+                end: item.end,
+                line_start: item.line_start,
+                line_end: item.line_end,
+                body: url_token.text.to_string(),
+                mode: EditorMode::Ref,
+                route: Some(route.clone()),
+                section: None,
+                block_id: None,
+                needs: Vec::new(),
+                pomodoro_start: None,
+                pomodoro_adjust: None,
+                pomodoro_shift: None,
+                pomodoro_close: None,
+                dependencies: Vec::new(),
+                dependency_target: None,
+                task_complete: None,
+                spans: vec![
+                    Span {
+                        start: url_token.start,
+                        end: url_token.end,
+                        kind: SpanKind::RefUrl,
+                    },
+                    Span {
+                        start: route_token.start,
+                        end: route_token.end,
+                        kind: SpanKind::Route,
+                    },
+                ],
+                diagnostics: Vec::new(),
+                sub_bullets: Vec::new(),
+                has_local_destination: true,
+                local_destination_markers: vec![LocalDestinationMarker {
+                    start: route_token.start,
+                    end: route_token.end,
+                    text: route_token.text.to_string(),
+                    mode: EditorMode::Ref,
+                    route: Some(route),
+                    block_id: None,
+                    section: None,
+                }],
+            },
+            declarations: Vec::new(),
+        });
+    }
+    None
 }
 
 pub(super) fn parse_editor_item<'a>(

@@ -6,8 +6,9 @@
 //! a Git worktree. A duplicate is always preferred over data loss.
 
 use std::{
+    collections::HashMap,
     fs::{self, File, OpenOptions},
-    io,
+    io::{self, IsTerminal, Write},
     path::{Path, PathBuf},
 };
 
@@ -35,11 +36,13 @@ use crate::native::{
     style::{self, Styler},
 };
 
-/// One URL-only note's clip outcome from the pre-pass.
+/// One URL-only note's clip outcome from the pre-pass, plus the
+/// canonical parent route selected for it before any clipping.
 #[derive(Debug, Clone)]
 struct ClipReport {
     id: String,
     intent: UrlIntent,
+    parent: String,
     outcome: ClipOutcome,
 }
 
@@ -285,10 +288,30 @@ pub(crate) fn run(args: &PullArgs) -> i32 {
     };
     let plan = super::plan::classify(&notes, &ledger, &journal, &plan_opts);
 
+    // Select and remember Keep parents before clipping: note `@route`,
+    // explicit `-P`, an interactive answer, then `gkeep_inbox`. An
+    // invalid CLI parent fails before any clip or mutation.
+    let parents = match select_keep_parents(
+        &plan,
+        &bob_dir,
+        args.parent.as_deref(),
+        args.quiet,
+        is_json,
+    ) {
+        Ok(parents) => parents,
+        Err(error) => return ui::report_error("pull", &error, format_name),
+    };
+
     // Clip URL-only notes before the target check and the vault lock,
     // under the pull lock. A dry run only computes offline verdicts.
-    let clips =
-        run_clip_pre_pass(&plan, &bob_dir, args.dry_run, args.quiet, is_json);
+    let clips = run_clip_pre_pass(
+        &plan,
+        &bob_dir,
+        &parents,
+        args.dry_run,
+        args.quiet,
+        is_json,
+    );
 
     // Dry runs stop at the plan: no locks, no clips, no writes, no
     // archive calls. The indent comes from the target when it reads,
@@ -748,6 +771,157 @@ fn build_writes(plan: &Plan, clips: &ClipSet, indent: &str) -> Vec<WriteItem> {
     writes
 }
 
+/// Choose the parent for each new URL: a valid note `@route`, explicit
+/// `-P`, an interactive answer, then `gkeep_inbox`. All explicit values
+/// use the strict resolver and canonical route. An invalid note route
+/// warns with resolver hints and falls through; an invalid CLI parent is
+/// an error before clipping. Selection applies only to references.
+fn select_keep_parents(
+    plan: &Plan,
+    bob_dir: &Path,
+    cli_parent: Option<&str>,
+    quiet: bool,
+    is_json: bool,
+) -> Result<HashMap<String, String>, GkeepError> {
+    let mut parents = HashMap::new();
+    let targets: Vec<&PlannedNote> = plan
+        .notes
+        .iter()
+        .filter(|planned| {
+            matches!(planned.action, PlanAction::CreateRef)
+                && planned.ref_intent.is_some()
+        })
+        .collect();
+    if targets.is_empty() {
+        return Ok(parents);
+    }
+    // An invalid CLI parent fails before any clipping or mutation.
+    let cli_canonical = if let Some(raw) = cli_parent {
+        match crate::native::parent_notes::resolve_parent(bob_dir, raw) {
+            Ok(resolved) => Some(resolved.route),
+            Err(error) => {
+                return Err(GkeepError::setup(
+                    "invalid_parent",
+                    error.message(),
+                ));
+            }
+        }
+    } else {
+        None
+    };
+    let prompt_eligible = std::io::stdin().is_terminal()
+        && std::io::stderr().is_terminal()
+        && !quiet
+        && !is_json;
+    let mut sticky_default = "gkeep_inbox".to_string();
+    let mut eof_sticky = false;
+    for planned in targets {
+        // A valid note `@route` wins over `-P` and the prompt.
+        if let Some(route_token) = planned.ref_route.as_deref() {
+            match crate::native::parent_notes::resolve_parent(
+                bob_dir,
+                route_token,
+            ) {
+                Ok(resolved) => {
+                    parents.insert(planned.note.id.clone(), resolved.route);
+                    continue;
+                }
+                Err(error) => {
+                    ui::warn(&format!(
+                        "ignoring @{} on {}: {}",
+                        route_token,
+                        planned.ref_.as_str(),
+                        error.message().replace('\n', " · "),
+                    ));
+                }
+            }
+        }
+        if let Some(cli) = cli_canonical.clone() {
+            parents.insert(planned.note.id.clone(), cli);
+            continue;
+        }
+        if prompt_eligible && !eof_sticky {
+            let intent = planned.ref_intent.clone().expect("filtered intent");
+            match prompt_keep_parent(bob_dir, &intent.display, &sticky_default)
+            {
+                PromptAnswer::Parent(canonical) => {
+                    sticky_default = canonical.clone();
+                    parents.insert(planned.note.id.clone(), canonical);
+                    continue;
+                }
+                PromptAnswer::Eof => {
+                    eof_sticky = true;
+                    parents.insert(
+                        planned.note.id.clone(),
+                        sticky_default.clone(),
+                    );
+                    continue;
+                }
+            }
+        }
+        parents.insert(
+            planned.note.id.clone(),
+            cli_canonical
+                .clone()
+                .unwrap_or_else(|| sticky_default.clone()),
+        );
+    }
+    // A non-TTY, quiet, or JSON run without higher-precedence parents
+    // files everything under the inbox default.
+    Ok(parents)
+}
+
+enum PromptAnswer {
+    Parent(String),
+    Eof,
+}
+
+/// Ask per new URL that lacks a higher-precedence parent:
+/// `File example.com/essay under [gkeep_inbox]: `. Enter accepts the
+/// default; each accepted answer becomes the next prompt's default.
+/// Invalid answers print hints and re-prompt. EOF uses the default
+/// without looping.
+fn prompt_keep_parent(
+    bob_dir: &Path,
+    display: &str,
+    default: &str,
+) -> PromptAnswer {
+    let stdin = std::io::stdin();
+    let mut handle = stdin.lock();
+    prompt_keep_parent_from(bob_dir, &mut handle, display, default)
+}
+
+fn prompt_keep_parent_from(
+    bob_dir: &Path,
+    reader: &mut dyn std::io::BufRead,
+    display: &str,
+    default: &str,
+) -> PromptAnswer {
+    loop {
+        eprint!("File {display} under [{default}]: ");
+        let _ = std::io::stderr().flush();
+        let mut line = String::new();
+        match reader.read_line(&mut line) {
+            Ok(0) => return PromptAnswer::Eof,
+            Ok(_) => {}
+            Err(_) => return PromptAnswer::Eof,
+        }
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            return PromptAnswer::Parent(default.to_string());
+        }
+        match crate::native::parent_notes::resolve_parent(bob_dir, trimmed) {
+            Ok(resolved) => return PromptAnswer::Parent(resolved.route),
+            Err(error) => {
+                eprintln!(
+                    "bob gkeep pull: {}",
+                    error.message().replace('\n', "\n  hint: ")
+                );
+            }
+        }
+    }
+}
+
 /// Clip every `CreateRef` note sequentially, before the vault lock. A
 /// dry run only computes offline verdicts and clips nothing. Terminal
 /// outcomes (`Created`, `AlreadyInLibrary`, `AlreadyQueued`) append
@@ -756,6 +930,7 @@ fn build_writes(plan: &Plan, clips: &ClipSet, indent: &str) -> Vec<WriteItem> {
 fn run_clip_pre_pass(
     plan: &Plan,
     bob_dir: &Path,
+    parents: &HashMap<String, String>,
     dry_run: bool,
     quiet: bool,
     is_json: bool,
@@ -783,6 +958,10 @@ fn run_clip_pre_pass(
             .map(|(planned, verdict)| ClipReport {
                 id: planned.note.id.clone(),
                 intent: planned.ref_intent.clone().expect("filtered intent"),
+                parent: parents
+                    .get(&planned.note.id)
+                    .cloned()
+                    .unwrap_or_else(|| "gkeep_inbox".to_string()),
                 outcome: ClipOutcome::WouldClip { verdict },
             })
             .collect();
@@ -796,6 +975,10 @@ fn run_clip_pre_pass(
     let mut clips = ClipSet::default();
     for (index, planned) in targets.iter().enumerate() {
         let intent = planned.ref_intent.clone().expect("filtered intent");
+        let parent = parents
+            .get(&planned.note.id)
+            .cloned()
+            .unwrap_or_else(|| "gkeep_inbox".to_string());
         let _spinner = if silent {
             None
         } else {
@@ -811,14 +994,14 @@ fn run_clip_pre_pass(
         };
         let progress: Option<&dyn Fn(&str)> =
             if silent { None } else { Some(&report_progress) };
-        // Interim parent until `capture-gkeep-parent` prompts and
-        // routes: every Keep-pulled ref clips under `gkeep_inbox`.
         let request = IngestRequest {
             bob_dir,
             url: &intent.cleaned,
-            parent: "gkeep_inbox",
+            parent: parent.as_str(),
             progress,
         };
+        // Clone for the error path: `request` borrows `parent`.
+        let parent_for_error = parent.clone();
         let outcome = match ingest_url(&request) {
             Ok(ingest) => match ingest {
                 IngestOutcome::Created { pdf, .. } => {
@@ -839,7 +1022,7 @@ fn run_clip_pre_pass(
                     }
                 } else {
                     let fallback =
-                        error.fallback_note(&intent.cleaned, "gkeep_inbox");
+                        error.fallback_note(&intent.cleaned, &parent_for_error);
                     ClipOutcome::FailedPermanent {
                         kind: error.kind.as_str().to_string(),
                         message: first_line(&error.message),
@@ -849,13 +1032,14 @@ fn run_clip_pre_pass(
             }
         };
         // Terminal outcomes join the archive set and journal now, one
-        // batch per clip.
+        // batch per clip, recording the selected parent for replay.
         match &outcome {
             ClipOutcome::Created { pdf } => {
                 append_ref_created(
                     &planned.note,
                     pdf,
                     Some(intent.cleaned.clone()),
+                    Some(parent.clone()),
                 );
                 clips.archives.push((
                     planned.note.id.clone(),
@@ -868,6 +1052,7 @@ fn run_clip_pre_pass(
                     &planned.note,
                     note,
                     Some(intent.cleaned.clone()),
+                    Some(parent.clone()),
                 );
                 clips.archives.push((
                     planned.note.id.clone(),
@@ -880,6 +1065,7 @@ fn run_clip_pre_pass(
                     &planned.note,
                     pdf,
                     Some(intent.cleaned.clone()),
+                    Some(parent.clone()),
                 );
                 clips.archives.push((
                     planned.note.id.clone(),
@@ -894,6 +1080,7 @@ fn run_clip_pre_pass(
         clips.reports.push(ClipReport {
             id: planned.note.id.clone(),
             intent,
+            parent,
             outcome,
         });
     }
@@ -901,8 +1088,14 @@ fn run_clip_pre_pass(
 }
 
 /// Append one `ref_created` journal batch: `path` is the intake PDF or
-/// the existing ref note, `url` the clipped URL.
-fn append_ref_created(note: &KeepNote, path: &str, url: Option<String>) {
+/// the existing ref note, `url` the clipped URL, `parent` the canonical
+/// route the pull selected for this URL.
+fn append_ref_created(
+    note: &KeepNote,
+    path: &str,
+    url: Option<String>,
+    parent: Option<String>,
+) {
     let record = JournalRecord {
         ts: current_ts(),
         event: JournalEvent::RefCreated,
@@ -913,6 +1106,7 @@ fn append_ref_created(note: &KeepNote, path: &str, url: Option<String>) {
         commit: None,
         status: None,
         url,
+        parent,
     };
     if let Err(error) = Journal::append(&journal_path(), &[record]) {
         ui::warn(&format!("append the gkeep journal: {error}"));
@@ -1507,6 +1701,7 @@ fn append_journal(
             commit: commit.clone(),
             status: None,
             url: None,
+            parent: None,
         });
     }
     if !adapter_crashed {
@@ -1534,6 +1729,7 @@ fn append_journal(
                     commit: commit.clone(),
                     status: Some(status.as_str().to_string()),
                     url: None,
+                    parent: None,
                 });
             } else {
                 records.push(JournalRecord {
@@ -1546,6 +1742,7 @@ fn append_journal(
                     commit: commit.clone(),
                     status: Some(status.as_str().to_string()),
                     url: None,
+                    parent: None,
                 });
             }
         }
@@ -1696,7 +1893,8 @@ fn truncate_title(title: &str) -> String {
 }
 
 /// The dry-run detail for a URL-only note: the offline verdict for
-/// library hits, else the would-clip line.
+/// library hits, else the would-clip line, always naming the
+/// selected/planned parent.
 fn dry_ref_detail(
     planned: &PlannedNote,
     clips: &ClipSet,
@@ -1710,39 +1908,42 @@ fn dry_ref_detail(
     let Some(report) = clips.for_id(&planned.note.id) else {
         return format!("would clip → reading queue{archive_suffix}");
     };
+    let parent = report.parent.as_str();
     let ClipOutcome::WouldClip { verdict } = &report.outcome else {
-        return "would clip → reading queue".to_string();
+        return format!("would clip → {parent}");
     };
     match verdict.verdict {
         crate::native::url_routing::Verdict::InLibrary => {
             let title = verdict.title.as_deref().unwrap_or("untitled");
             match verdict.reading_state.as_deref() {
                 Some(state) => format!(
-                    "already in library: {title} ({state}){archive_suffix}"
+                    "already in library: {title} ({state}) → {parent}{archive_suffix}"
                 ),
                 None => {
-                    format!("already in library: {title}{archive_suffix}")
+                    format!(
+                        "already in library: {title} → {parent}{archive_suffix}"
+                    )
                 }
             }
         }
         crate::native::url_routing::Verdict::InIntake => {
             let path = verdict.path.as_deref().unwrap_or("intake");
-            format!("already queued · {path}{archive_suffix}")
+            format!("already queued · {path} → {parent}{archive_suffix}")
         }
         crate::native::url_routing::Verdict::Legacy => {
             let path = verdict.path.as_deref().unwrap_or("library");
             format!(
-                "in your library as a legacy note ({path}) · a fresh copy would be clipped{archive_suffix}"
+                "in your library as a legacy note ({path}) · a fresh copy would be clipped → {parent}{archive_suffix}"
             )
         }
         crate::native::url_routing::Verdict::Unknown => {
             let message = verdict.message.as_deref().unwrap_or("unreadable");
             format!(
-                "would clip → reading queue · library check unavailable: {message}{archive_suffix}"
+                "would clip → {parent} · library check unavailable: {message}{archive_suffix}"
             )
         }
         crate::native::url_routing::Verdict::NotFound => {
-            format!("would clip → reading queue{archive_suffix}")
+            format!("would clip → {parent}{archive_suffix}")
         }
     }
 }
@@ -1959,25 +2160,26 @@ fn print_human_ref_row(
         println!("  {} {display}  clip skipped", styler.dim("·"),);
         return;
     };
+    let parent = report.parent.as_str();
     match &report.outcome {
         ClipOutcome::Created { pdf } => {
             let suffix = archive_suffix("archived");
             println!(
-                "  {} {display}  clipped → {pdf}{suffix}",
+                "  {} {display}  clipped → {pdf} → {parent}{suffix}",
                 styler.green("✓"),
             );
         }
         ClipOutcome::AlreadyInLibrary { note } => {
             let suffix = archive_suffix("archived");
             println!(
-                "  {} {display}  already in library · {note}{suffix}",
+                "  {} {display}  already in library · {note} → {parent}{suffix}",
                 styler.green("✓"),
             );
         }
         ClipOutcome::AlreadyQueued { pdf } => {
             let suffix = archive_suffix("archived");
             println!(
-                "  {} {display}  already queued · {pdf}{suffix}",
+                "  {} {display}  already queued · {pdf} → {parent}{suffix}",
                 styler.green("✓"),
             );
         }
@@ -2002,10 +2204,7 @@ fn print_human_ref_row(
             );
         }
         ClipOutcome::WouldClip { .. } => {
-            println!(
-                "  {} {display}  would clip → reading queue",
-                styler.dim("·"),
-            );
+            println!("  {} {display}  would clip → {parent}", styler.dim("·"),);
         }
     }
 }
@@ -2039,12 +2238,14 @@ fn json_pull_report(
     )
 }
 
-/// The per-note `clip` object for a URL-only note.
+/// The per-note `clip` object for a URL-only note, with the
+/// selected/planned parent additively (schema stays 1).
 fn clip_json(report: &ClipReport) -> serde_json::Value {
     let mut value = json!({
         "url": report.intent.cleaned,
         "display": report.intent.display,
         "outcome": report.outcome.as_str(),
+        "parent": report.parent,
     });
     match &report.outcome {
         ClipOutcome::Created { pdf } | ClipOutcome::AlreadyQueued { pdf } => {
@@ -2182,6 +2383,48 @@ fn json_pull_report_with_error(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Cursor;
+
+    #[test]
+    fn prompt_accepts_default_reprompts_unknown_and_stops_on_eof() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let bob_dir = dir.path();
+        std::fs::write(bob_dir.join("sase.md"), "---\ntype: [[area]]\n---\n")
+            .expect("sase parent");
+        // Enter accepts the sticky default.
+        let mut enter = Cursor::new("\n");
+        match prompt_keep_parent_from(
+            bob_dir,
+            &mut enter,
+            "example.com/a",
+            "gkeep_inbox",
+        ) {
+            PromptAnswer::Parent(parent) => assert_eq!(parent, "gkeep_inbox"),
+            PromptAnswer::Eof => panic!("Enter should accept the default"),
+        }
+        // Unknown names re-prompt with hints, then accept the next answer.
+        let mut retry = Cursor::new("nope\nsase\n");
+        match prompt_keep_parent_from(
+            bob_dir,
+            &mut retry,
+            "example.com/b",
+            "gkeep_inbox",
+        ) {
+            PromptAnswer::Parent(parent) => assert_eq!(parent, "sase"),
+            PromptAnswer::Eof => panic!("valid answer should resolve"),
+        }
+        // EOF uses the default without looping.
+        let mut eof = Cursor::new("");
+        match prompt_keep_parent_from(
+            bob_dir,
+            &mut eof,
+            "example.com/c",
+            "sase",
+        ) {
+            PromptAnswer::Parent(_) => panic!("EOF should not resolve"),
+            PromptAnswer::Eof => {}
+        }
+    }
 
     #[test]
     fn git_ancestor_checks_dot_git_files_and_dirs() {

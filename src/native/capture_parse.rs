@@ -414,6 +414,8 @@ struct CaptureParseResult {
     section: Option<String>,
     block_id: Option<String>,
     needs: Vec<Need>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ref_parent: Option<RefParentParse>,
     spans: Vec<Span>,
     diagnostics: Vec<Diagnostic>,
     /// Normalized authored-child bodies (source list marker and capture
@@ -517,6 +519,16 @@ struct GlobalDestinationParse {
     needs: Vec<Need>,
 }
 
+/// Additive `ref_parent` on `ref` items: the lexical parent token
+/// (explicit route, inherited global route, or `mac_inbox`) plus its
+/// source (`explicit`|`global`|`default`). Outside `needs` so a bare URL
+/// stays submittable while the client knows to offer a parent picker.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct RefParentParse {
+    token: String,
+    source: &'static str,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct CaptureParseItem {
     index: usize,
@@ -529,6 +541,8 @@ struct CaptureParseItem {
     section: Option<String>,
     block_id: Option<String>,
     needs: Vec<Need>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ref_parent: Option<RefParentParse>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     sub_bullets: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -563,6 +577,11 @@ impl CaptureParseResult {
         let spans =
             merge_spans(parse.spans, capture_links::wikilink_spans(&input));
         let items = parse_items(&parse.items);
+        let ref_parent = ref_parent_for(
+            parse.mode,
+            parse.route.as_deref(),
+            parse.items.first().map(|item| item.has_local_destination),
+        );
         let sub_bullets = parse.sub_bullets;
         let sub_bullet_depths = sub_bullet_depths(&sub_bullets);
         let sub_bullet_task_ids = sub_bullet_task_ids(&sub_bullets);
@@ -576,6 +595,7 @@ impl CaptureParseResult {
             section: parse.section,
             block_id: parse.block_id,
             needs: parse.needs,
+            ref_parent,
             spans,
             diagnostics: parse.diagnostics,
             sub_bullets: sub_bullet_bodies(&sub_bullets),
@@ -640,6 +660,30 @@ fn global_destination_parse(
     }
 }
 
+fn ref_parent_for(
+    mode: EditorMode,
+    route: Option<&str>,
+    has_local: Option<bool>,
+) -> Option<RefParentParse> {
+    if mode != EditorMode::Ref {
+        return None;
+    }
+    match (route, has_local.unwrap_or(false)) {
+        (Some(route), true) => Some(RefParentParse {
+            token: route.to_string(),
+            source: "explicit",
+        }),
+        (Some(route), false) => Some(RefParentParse {
+            token: route.to_string(),
+            source: "global",
+        }),
+        (None, _) => Some(RefParentParse {
+            token: "mac_inbox".to_string(),
+            source: "default",
+        }),
+    }
+}
+
 fn parse_items(items: &[EditorItemParse]) -> Vec<CaptureParseItem> {
     if items.len() <= 1 {
         return Vec::new();
@@ -660,6 +704,11 @@ fn parse_items(items: &[EditorItemParse]) -> Vec<CaptureParseItem> {
             section: item.section.clone(),
             block_id: item.block_id.clone(),
             needs: item.needs.clone(),
+            ref_parent: ref_parent_for(
+                item.mode,
+                item.route.as_deref(),
+                Some(item.has_local_destination),
+            ),
             sub_bullets: sub_bullet_bodies(&item.sub_bullets),
             sub_bullet_depths: sub_bullet_depths(&item.sub_bullets),
             sub_bullet_task_ids: sub_bullet_task_ids(&item.sub_bullets),

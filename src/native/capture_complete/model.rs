@@ -37,6 +37,12 @@ pub(super) struct RouteCandidate {
     pub(super) label: String,
     pub(super) kind: CaptureTargetKind,
     pub(super) status: Option<String>,
+    /// Additive alias-match marker: `Some("alias")` when the query matched
+    /// a `project_name_aliases` entry and `replacement`/`route` carry the
+    /// canonical route. Omitted for canonical matches so schema version 1
+    /// is unchanged for older inputs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) match_kind: Option<&'static str>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

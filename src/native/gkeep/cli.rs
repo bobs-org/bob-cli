@@ -118,12 +118,13 @@ fn pull_command() -> ClapCommand {
         .arg(no_archive_arg())
         .arg(no_commit_arg())
         .arg(no_ref_arg())
+        .arg(parent_arg())
         .arg(quiet_arg())
         .after_help(pull_after_help())
 }
 
 fn pull_after_help() -> &'static str {
-    "A note is archived only after its current content is verifiably in the vault: written atomically, fsynced, re-read and parsed, and committed when the vault is a Git worktree. Notes edited in Keep during a pull stay in Keep; the next pull writes the revision. Nothing is ever deleted from Keep. URL-only notes are clipped into the reading queue; -R keeps them as tasks instead.\n\nExamples:\n  bob gkeep pull --dry-run\n  bob gkeep pull\n  bob gkeep pull -d\n  bob gkeep pull -n\n  bob gkeep pull -i 3f9c2e1\n  bob gkeep pull -f json\n  bob gkeep pull -R\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gkeep config; defaults to ~/.config/bob/config.yml\n  BOB_GKEEP_ADAPTER  adapter executable replacing `uv run --script …`"
+    "A note is archived only after its current content is verifiably in the vault: written atomically, fsynced, re-read and parsed, and committed when the vault is a Git worktree. Notes edited in Keep during a pull stay in Keep; the next pull writes the revision. Nothing is ever deleted from Keep. URL-only notes are clipped into the reading queue under a trailing @route, -P/--parent, a TTY prompt, or gkeep_inbox; -R keeps them as tasks instead.\n\nExamples:\n  bob gkeep pull --dry-run\n  bob gkeep pull\n  bob gkeep pull -d\n  bob gkeep pull -n\n  bob gkeep pull -i 3f9c2e1\n  bob gkeep pull -f json\n  bob gkeep pull -R\n  bob gkeep pull -P sase\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gkeep config; defaults to ~/.config/bob/config.yml\n  BOB_GKEEP_ADAPTER  adapter executable replacing `uv run --script …`"
 }
 
 fn all_arg() -> Arg {
@@ -239,6 +240,15 @@ fn no_ref_arg() -> Arg {
         .short('R')
         .action(ArgAction::SetTrue)
         .help("Keep URL-only notes as inbox tasks instead of clipping them")
+}
+
+fn parent_arg() -> Arg {
+    Arg::new("parent")
+        .long("parent")
+        .short('P')
+        .value_name("ROUTE")
+        .value_parser(OsStringValueParser::new())
+        .help("Parent route for URL-only notes clipped into the reading queue")
 }
 
 fn quiet_arg() -> Arg {
@@ -413,6 +423,8 @@ pub(crate) struct PullArgs {
     pub no_commit: bool,
     /// Keep URL-only notes as inbox tasks instead of clipping them.
     pub no_ref: bool,
+    /// Parent route for URL-only notes clipped into the reading queue.
+    pub parent: Option<String>,
     /// Print only errors.
     pub quiet: bool,
 }
@@ -437,6 +449,9 @@ impl PullArgs {
             no_archive: matches.get_flag("no-archive"),
             no_commit: matches.get_flag("no-commit"),
             no_ref: matches.get_flag("no-ref"),
+            parent: matches
+                .get_one::<OsString>("parent")
+                .map(|value| value.to_string_lossy().into_owned()),
             quiet: matches.get_flag("quiet"),
         }
     }

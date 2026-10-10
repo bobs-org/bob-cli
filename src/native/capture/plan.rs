@@ -38,11 +38,12 @@ pub(super) fn plan_capture_batch(
     routing: Option<&UrlRoutingPolicy>,
 ) -> Result<PlannedCaptureBatch, CaptureError> {
     let parse_clip_markers = request.forced_clip.is_none() && !request.no_clip;
+    // A forced `-r` route is an allowed explicit ref parent; every other
+    // forced destination or clip flag keeps the item a task.
     let options = CaptureParseOptions {
         parse_clip_markers,
         url_routing: routing,
-        explicit_destination: request.forced_route.is_some()
-            || request.forced_section.is_some()
+        explicit_destination: request.forced_section.is_some()
             || request.forced_sub_bullet_target.is_some()
             || request.forced_task_section.is_some()
             || request.forced_clip.is_some(),
@@ -249,10 +250,13 @@ fn assign_ref_verdicts(
     assignments
 }
 
-/// Plan one reference item: an honest result with no vault write, plus
-/// a staged ref job when the link still needs clipping. Queued items
-/// report the exact inbox task line capture would have written with
-/// routing off, so the worker's fallback matches it.
+/// Plan one reference item: resolve the canonical parent with
+/// `parent_notes::resolve_parent` before staging anything, then report an
+/// honest result with no vault write, plus a staged ref job when the link
+/// still needs clipping. Queued items preview the exact parent task line
+/// the worker's fallback writes, so the fallback matches it byte for byte.
+/// An unresolvable route fails the item with the resolver's hints and the
+/// whole batch rolls back.
 fn plan_ref_item(
     request: &CaptureRequest,
     parsed_item: ParsedCaptureItem,
@@ -272,17 +276,46 @@ fn plan_ref_item(
         },
         _ => (String::new(), String::new()),
     };
+    // Lexical token plus source: an inline `@route` or forced `-r` is
+    // explicit, a plain `@@route` upgrade is global, otherwise the default
+    // inbox. The planning layer resolves the token to its canonical route.
+    let token = parsed_item
+        .parsed
+        .route
+        .clone()
+        .unwrap_or_else(|| inbox_route().to_string());
+    let source = parsed_item
+        .ref_source
+        .unwrap_or(crate::native::capture_language::RefParentSource::Default);
+    let resolved =
+        crate::native::parent_notes::resolve_parent(&request.bob_dir, &token)
+            .map_err(|error| CaptureError::usage(error.message()))?;
+    let parent_route = resolved.route.clone();
+    let parent_label = resolved.label.clone();
+    let parent_kind = resolved.kind_name();
+    let parent_alias = match &resolved.matched {
+        crate::native::parent_notes::ParentMatchKind::Alias(alias) => {
+            Some(alias.clone())
+        }
+        crate::native::parent_notes::ParentMatchKind::Stem => None,
+    };
+    let parent_json = RefParentJson {
+        route: parent_route.clone(),
+        label: parent_label,
+        kind: parent_kind,
+        source: source.as_str(),
+        alias: parent_alias,
+    };
     let created = date_string(today);
-    // The exact line routing-off capture would write for this item,
-    // so the fallback task matches it byte for byte.
+    // The fallback task line holds only the URL body in the resolved
+    // parent note, so the worker's fallback matches it byte for byte.
+    let fallback_target = format!("{parent_route}.md");
     let fallback_task_line =
         format_task_line(&parsed_item.parsed.body, &created, None, None);
     let fallback = queued.then(|| RefFallbackJson {
-        relative_target: INBOX_FILE.to_string(),
+        relative_target: fallback_target.clone(),
         task_line: fallback_task_line.clone(),
     });
-    // Interim parent until `capture-gkeep-parent` routes URLs: every
-    // capture-queued ref clips under `mac_inbox` and falls back there.
     let staged = queued.then(|| ref_jobs::NewJob {
         source: "capture".to_string(),
         bob_dir: request.bob_dir.clone(),
@@ -291,9 +324,9 @@ fn plan_ref_item(
         dedupe_key: intent.dedupe_key.clone(),
         display: intent.display.clone(),
         route_hint: intent.route_hint.as_str().to_string(),
-        parent: Some(inbox_route().to_string()),
+        parent: Some(parent_route.clone()),
         fallback: ref_jobs::JobFallback {
-            relative_target: INBOX_FILE.to_string(),
+            relative_target: fallback_target,
             task_line: fallback_task_line,
         },
     });
@@ -368,6 +401,7 @@ fn plan_ref_item(
                     reading_state: assignment.reading_state,
                     message: assignment.message,
                 },
+                parent: parent_json,
                 job: None,
                 fallback,
             }),
