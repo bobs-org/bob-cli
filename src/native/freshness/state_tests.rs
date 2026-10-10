@@ -29,7 +29,6 @@ fn config_with_interval(days: u16) -> FreshnessConfig {
         pending_interval: Some(1),
         next_interval: Some(1),
         project_interval: None,
-        reference_interval: None,
         rotten_daily_budget: None,
         interval_from_config: true,
         stale_budget_deprecated: false,
@@ -43,7 +42,6 @@ fn config_with_budget(budget: u32) -> FreshnessConfig {
         pending_interval: Some(1),
         next_interval: Some(1),
         project_interval: None,
-        reference_interval: None,
         rotten_daily_budget: Some(budget),
         interval_from_config: false,
         stale_budget_deprecated: false,
@@ -60,7 +58,6 @@ fn config_with_lanes(
         pending_interval: pending,
         next_interval: next,
         project_interval: None,
-        reference_interval: None,
         rotten_daily_budget: None,
         interval_from_config: false,
         stale_budget_deprecated: false,
@@ -746,7 +743,6 @@ fn b1_upkeep_counts_outside_the_lanes() {
         pending_interval: Some(1),
         next_interval: Some(1),
         project_interval: None,
-        reference_interval: None,
         rotten_daily_budget: Some(15),
         interval_from_config: false,
         stale_budget_deprecated: false,
@@ -776,7 +772,6 @@ fn decay_config(keeps: u16, enabled: bool) -> FreshnessConfig {
         pending_interval: Some(1),
         next_interval: Some(1),
         project_interval: None,
-        reference_interval: None,
         rotten_daily_budget: None,
         interval_from_config: false,
         stale_budget_deprecated: false,
@@ -872,12 +867,8 @@ fn decide_zero_off_and_lane_rows() {
     assert!(!lane.decide);
 }
 
-/// Tracker review: a visible `^prj` walks in PROJECTS (never NEW)
-/// with no occupancy or schedule gate, a hidden `^prj` is out of
-/// scope, a visible `^ref` walks in REFERENCES with its Ready state
-/// intact while a hidden `^ref` stays out like any hidden task,
-/// lane trackers keep their lane with null state, and counts
-/// decouple states from the seven-key tier histogram.
+/// Project trackers retain their dedicated lane. References use the
+/// ordinary groups and do not affect the state/tier relationship.
 #[test]
 fn tracking_projects_tier_and_counts() {
     let config = default_config();
@@ -904,19 +895,15 @@ fn tracking_projects_tier_and_counts() {
     assert_eq!(evaluated.tier, None);
     assert!(evaluated.lints.is_empty());
 
-    // A visible reference walks in REFERENCES with its Ready NEW
-    // state and bucket intact.
-    let mut visible_ref = row("- [ ] #task Read ^ref");
-    visible_ref.tracker = Some(TrackerKind::Ref);
+    // A visible reference follows ordinary NEW freshness.
+    let visible_ref = row("- [ ] #task #ref Read ^ref");
     let evaluated = evaluate(&visible_ref, today(), &config);
     assert_eq!(evaluated.state, Some(FreshState::New));
-    assert_eq!(evaluated.tier, Some(Tier::References));
+    assert_eq!(evaluated.tier, Some(Tier::New));
     assert_eq!(bucket_for_state(evaluated.state), Some("new"));
 
-    // A hidden `^ref` stays out like any hidden task: the
-    // transitional hide bypass is gone.
-    let mut hidden_ref = row("- [ ] #task Read #hide ^ref");
-    hidden_ref.tracker = Some(TrackerKind::Ref);
+    // A hidden reference stays out like any hidden task.
+    let mut hidden_ref = row("- [ ] #task #ref Read #hide ^ref");
     hidden_ref.lane_visible = false;
     let evaluated = evaluate(&hidden_ref, today(), &config);
     assert_eq!(evaluated.state, None);
@@ -940,15 +927,13 @@ fn tracking_projects_tier_and_counts() {
     assert_eq!(evaluated.interval_days, 7);
     assert_eq!(evaluated.interval_source, IntervalSource::Default);
 
-    // Counts: states decouple from tiers; walk sums the histogram.
+    // Counts preserve ordinary reference state and tier totals.
     let report = counts(&[empty_prj, visible_ref, lane_prj], today(), &config);
     assert_eq!(report.new, 2);
     assert_eq!(report.due, 2);
     assert_eq!(report.projects_due, 2);
-    assert_eq!(report.references_due, 1);
-    assert_eq!(report.by_tier.new, 0);
     assert_eq!(report.by_tier.projects, 2);
-    assert_eq!(report.by_tier.references, 1);
+    assert_eq!(report.by_tier.new, 1);
     assert_eq!(
         report.walk,
         report.by_tier.sum(),
@@ -968,16 +953,12 @@ fn counts_carry_decide() {
     assert_eq!(early.decide, 1);
 }
 
-fn config_with_trackers(
-    project: Option<u16>,
-    reference: Option<u16>,
-) -> FreshnessConfig {
+fn config_with_project(project: Option<u16>) -> FreshnessConfig {
     FreshnessConfig {
         interval: 7,
         pending_interval: Some(1),
         next_interval: Some(1),
         project_interval: project,
-        reference_interval: reference,
         rotten_daily_budget: None,
         interval_from_config: false,
         stale_budget_deprecated: false,
@@ -985,11 +966,11 @@ fn config_with_trackers(
     }
 }
 
-/// Tracker cadences override every other level for that tracker type,
-/// while ordinary tasks and absent keys preserve the prior chain.
+/// Project cadence remains special; references match a control task
+/// across Ready, Pending, and Next lanes.
 #[test]
-fn tracker_intervals_override_for_matching_type() {
-    let config = config_with_trackers(Some(1), Some(3));
+fn project_interval_is_special_and_reference_freshness_is_ordinary() {
+    let config = config_with_project(Some(1));
     // `^prj` stamped yesterday is due today with the project cadence,
     // even with task/note/global/lane values that would say otherwise.
     let mut prj =
@@ -1002,25 +983,18 @@ fn tracker_intervals_override_for_matching_type() {
     assert_eq!(evaluated.due_on, Some(date(2026, 10, 8)));
     assert_eq!(evaluated.tier, Some(Tier::Projects));
 
-    // `^ref` stamped 2 days ago is still fresh under a 3-day cadence.
-    let mut fresh_ref = row("- [ ] #task Read [fresh:: 2026-10-06] ^ref");
-    fresh_ref.tracker = Some(TrackerKind::Ref);
-    let evaluated = evaluate(&fresh_ref, today(), &config);
-    assert_eq!(evaluated.interval_days, 3);
-    assert_eq!(evaluated.interval_source, IntervalSource::Reference);
-    assert_eq!(evaluated.state, Some(FreshState::Fresh));
-
-    // `^ref` stamped 3 days ago is rotten with accurate due metadata,
-    // walking in REFERENCES with its Ready state intact.
-    let mut rotten_ref = row("- [ ] #task Read [fresh:: 2026-10-05] ^ref");
-    rotten_ref.tracker = Some(TrackerKind::Ref);
-    let evaluated = evaluate(&rotten_ref, today(), &config);
-    assert_eq!(evaluated.interval_days, 3);
-    assert_eq!(evaluated.interval_source, IntervalSource::Reference);
-    assert_eq!(evaluated.state, Some(FreshState::Rotten));
-    assert_eq!(evaluated.tier, Some(Tier::References));
-    assert_eq!(evaluated.due_on, Some(date(2026, 10, 8)));
-    assert_eq!(evaluated.days_overdue, Some(0));
+    let reference =
+        row("- [ ] #task #ref Read [fresh:: 2026-10-01] [refresh:: 3] ^ref");
+    let ordinary =
+        row("- [ ] #task Read [fresh:: 2026-10-01] [refresh:: 3] ^plain");
+    let reference_eval = evaluate(&reference, today(), &config);
+    let ordinary_eval = evaluate(&ordinary, today(), &config);
+    assert_eq!(reference_eval.interval_days, 3);
+    assert_eq!(reference_eval.interval_source, IntervalSource::Task);
+    assert_eq!(reference_eval.state, Some(FreshState::Rotten));
+    assert_eq!(reference_eval.tier, Some(Tier::Rotten));
+    assert_eq!(reference_eval.due_on, Some(date(2026, 10, 4)));
+    assert_eq!(reference_eval, ordinary_eval);
 
     // Ordinary tasks ignore both tracker keys.
     let ordinary = row("- [ ] #task Plain [fresh:: 2026-10-01]");
@@ -1041,11 +1015,10 @@ fn tracker_intervals_override_for_matching_type() {
 /// `^prj` keeps PROJECTS with the project cadence.
 #[test]
 fn tracker_lane_precedence_and_disabled_lanes() {
-    let config = config_with_trackers(Some(1), Some(3));
-    // A `#ref` row in Pending uses the 1-day lane interval, not the
-    // 3-day reference cadence, and walks in PENDING with null state.
+    let config = config_with_project(Some(1));
+    // A `#ref` row in Pending matches an ordinary task and uses the
+    // one-day lane interval.
     let mut pending_ref = lane_row("r.md", 1, '/', Some("2026-10-05"), None);
-    pending_ref.tracker = Some(TrackerKind::Ref);
     pending_ref.raw_line =
         "- [/] #task #ref Read [fresh:: 2026-10-05] ^ref-r".to_string();
     let evaluated = evaluate(&pending_ref, today(), &config);
@@ -1055,10 +1028,14 @@ fn tracker_lane_precedence_and_disabled_lanes() {
     assert_eq!(evaluated.interval_days, 1);
     assert_eq!(evaluated.interval_source, IntervalSource::Pending);
     assert_eq!(evaluated.due_on, Some(date(2026, 10, 6)));
+    let mut pending_plain = pending_ref.clone();
+    pending_plain.raw_line =
+        "- [/] #task Read [fresh:: 2026-10-05] ^plain".to_string();
+    assert_eq!(evaluated, evaluate(&pending_plain, today(), &config));
 
     // Same lane disabled: lane refs stay unwalked, like ordinary
     // tasks. Only `^prj` keeps its review with the lane off.
-    let mut disabled = config_with_trackers(None, Some(3));
+    let mut disabled = config_with_project(None);
     disabled.pending_interval = None;
     let evaluated = evaluate(&pending_ref, today(), &disabled);
     assert_eq!(evaluated.lane, Some(Lane::Pending));
@@ -1076,7 +1053,7 @@ fn tracker_lane_precedence_and_disabled_lanes() {
     lane_prj.tracker = Some(TrackerKind::Prj);
     lane_prj.raw_line =
         "- [/] #task Project [fresh:: 2026-10-06] ^prj".to_string();
-    let mut lane_off = config_with_trackers(Some(1), Some(3));
+    let mut lane_off = config_with_project(Some(1));
     lane_off.pending_interval = None;
     let evaluated = evaluate(&lane_prj, today(), &lane_off);
     assert_eq!(evaluated.lane, Some(Lane::Pending));
@@ -1085,14 +1062,13 @@ fn tracker_lane_precedence_and_disabled_lanes() {
     assert_eq!(evaluated.interval_source, IntervalSource::Project);
 }
 
-/// Lane `#ref` rows use the lane interval, never the reference
-/// cadence or the Ready chain.
+/// References in Next follow the same interval and tier as ordinary
+/// tasks, including when their lane is disabled.
 #[test]
-fn lane_reference_uses_lane_interval_without_configured_cadence() {
-    // Pending lane interval is 1: a `#ref` stamped yesterday is due
-    // in PENDING exactly like an ordinary task.
+fn reference_lane_interval_matches_ordinary_task() {
+    // Pending lane interval is 1: a `#ref` stamped yesterday matches
+    // the ordinary control row exactly.
     let mut pending_ref = lane_row("r.md", 1, '/', Some("2026-10-07"), None);
-    pending_ref.tracker = Some(TrackerKind::Ref);
     pending_ref.raw_line =
         "- [/] #task #ref Read [fresh:: 2026-10-07] ^ref-r".to_string();
     let evaluated = evaluate(&pending_ref, today(), &default_config());
@@ -1100,10 +1076,16 @@ fn lane_reference_uses_lane_interval_without_configured_cadence() {
     assert_eq!(evaluated.interval_source, IntervalSource::Pending);
     assert_eq!(evaluated.tier, Some(Tier::Pending));
     assert_eq!(evaluated.due_on, Some(date(2026, 10, 8)));
+    let mut pending_plain = pending_ref.clone();
+    pending_plain.raw_line =
+        "- [/] #task Read [fresh:: 2026-10-07] ^plain".to_string();
+    assert_eq!(
+        evaluated,
+        evaluate(&pending_plain, today(), &default_config())
+    );
 
     // A `[*]` ref walks NEXT on the next interval.
     let mut next_ref = lane_row("r.md", 2, '*', Some("2026-10-07"), None);
-    next_ref.tracker = Some(TrackerKind::Ref);
     next_ref.raw_line =
         "- [*] #task #ref Read [fresh:: 2026-10-07] ^ref-r".to_string();
     let evaluated = evaluate(&next_ref, today(), &default_config());
@@ -1121,125 +1103,26 @@ fn lane_reference_uses_lane_interval_without_configured_cadence() {
     assert_eq!(evaluated.due_on, None);
 }
 
-/// Ref identity is the `#ref` tag or the exact `^ref` block ID:
-/// whole-token, case-insensitive; near matches never qualify.
+/// References use the normal keep/decay path and share their tier's
+/// comparator with ordinary rows.
 #[test]
-fn ref_identity_is_tag_or_exact_block_id() {
-    let tags = |list: &[&str]| {
-        list.iter().map(|tag| tag.to_string()).collect::<Vec<_>>()
-    };
-    assert_eq!(
-        TrackerKind::from_tags_and_block_id(&tags(&[]), Some("prj")),
-        Some(TrackerKind::Prj)
-    );
-    assert_eq!(
-        TrackerKind::from_tags_and_block_id(&tags(&[]), Some("ref")),
-        Some(TrackerKind::Ref)
-    );
-    assert_eq!(
-        TrackerKind::from_tags_and_block_id(
-            &tags(&["#task", "#ref"]),
-            Some("ref-essay")
-        ),
-        Some(TrackerKind::Ref)
-    );
-    assert_eq!(
-        TrackerKind::from_tags_and_block_id(&tags(&["#task", "#REF"]), None),
-        Some(TrackerKind::Ref)
-    );
-    assert_eq!(
-        TrackerKind::from_tags_and_block_id(
-            &tags(&["#task", "#references"]),
-            None
-        ),
-        None
-    );
-    assert_eq!(
-        TrackerKind::from_tags_and_block_id(&tags(&["#task", "#ref/x"]), None),
-        None
-    );
-    assert_eq!(
-        TrackerKind::from_tags_and_block_id(&tags(&["#task"]), Some("ref-2")),
-        None
-    );
-    assert_eq!(
-        TrackerKind::from_tags_and_block_id(&tags(&["#task"]), Some("prj-x")),
-        None
-    );
-    assert_eq!(
-        TrackerKind::from_tags_and_block_id(&tags(&["#task"]), None),
-        None
-    );
-}
-
-/// A tag-only Ready `#ref` row walks REFERENCES (never NEW) with
-/// its Ready state intact; a `#ref` line with `#hide` is hidden
-/// like any task, as is a hidden exact-`^ref` row now that the
-/// transitional bypass is gone.
-#[test]
-fn tag_only_ready_ref_walks_references() {
-    let config = default_config();
-    // Unstamped tag-only Ready ref: REFERENCES with NEW state, never
-    // the NEW tier.
-    let mut ready_ref = row("- [ ] #task #ref Read ^ref-essay");
-    ready_ref.tracker = Some(TrackerKind::Ref);
-    let evaluated = evaluate(&ready_ref, today(), &config);
-    assert_eq!(evaluated.state, Some(FreshState::New));
-    assert_eq!(evaluated.tier, Some(Tier::References));
-    assert_eq!(bucket_for_state(evaluated.state), Some("new"));
-
-    // A hand-written `#hide` on a v2 line hides it like any task.
-    let mut hidden_tag = row("- [ ] #task #ref Read #hide ^ref-essay");
-    hidden_tag.tracker = Some(TrackerKind::Ref);
-    hidden_tag.lane_visible = false;
-    let evaluated = evaluate(&hidden_tag, today(), &config);
-    assert_eq!(evaluated.state, None);
-    assert_eq!(evaluated.tier, None);
-}
-
-/// A 7-day reference cadence: stamped 6 days ago is not due, stamped
-/// 7 days ago is due today.
-#[test]
-fn reference_interval_boundary() {
-    let config = config_with_trackers(None, Some(7));
-    let mut fresh_ref = row("- [ ] #task Read [fresh:: 2026-10-02] ^ref");
-    fresh_ref.tracker = Some(TrackerKind::Ref);
-    let evaluated = evaluate(&fresh_ref, today(), &config);
-    assert_eq!(evaluated.state, Some(FreshState::Fresh));
-    assert_eq!(evaluated.tier, None);
-
-    let mut due_ref = row("- [ ] #task Read [fresh:: 2026-10-01] ^ref");
-    due_ref.tracker = Some(TrackerKind::Ref);
-    let evaluated = evaluate(&due_ref, today(), &config);
-    assert_eq!(evaluated.state, Some(FreshState::Rotten));
-    assert_eq!(evaluated.tier, Some(Tier::References));
-    assert_eq!(evaluated.days_overdue, Some(0));
-}
-
-/// A RESURFACED Ready `^ref` walks in REFERENCES and never decides,
-/// even at the keep limit.
-#[test]
-fn resurfaced_reference_walks_references_without_decide() {
-    let mut config = decay_config(3, true);
-    config.reference_interval = Some(7);
+fn reference_rows_share_ordinary_keep_and_tier_behavior() {
+    let config = decay_config(3, true);
     let mut resurfaced = row(
-        "- [ ] #task Read [fresh:: 2026-10-05] [scheduled:: 2026-10-07] [keeps:: 5] ^ref",
+        "- [ ] #task #REF Read [fresh:: 2026-10-05] [scheduled:: 2026-10-07] [keeps:: 3] ^ref",
     );
-    resurfaced.tracker = Some(TrackerKind::Ref);
     resurfaced.scheduled = Some(date(2026, 10, 7));
     let evaluated = evaluate(&resurfaced, active_day(), &config);
     assert_eq!(evaluated.state, Some(FreshState::Resurfaced));
-    assert_eq!(evaluated.tier, Some(Tier::References));
-    assert!(!evaluated.decide);
-}
+    assert_eq!(evaluated.tier, Some(Tier::Tickler));
+    assert!(evaluated.decide);
+    let mut ordinary = resurfaced.clone();
+    ordinary.raw_line = "- [ ] #task Read [fresh:: 2026-10-05] [scheduled:: 2026-10-07] [keeps:: 3] ^plain".to_string();
+    assert_eq!(evaluated, evaluate(&ordinary, active_day(), &config));
 
-/// Seven-tier queue order with stable ties: NEW → PROJECTS →
-/// PENDING → NEXT → RECURRING → TICKLER → REFERENCES → ROTTEN, and
-/// the walk sums the histogram with a `references_due` count.
-#[test]
-fn seven_tier_order_with_references() {
-    let mut config = default_config();
-    config.reference_interval = Some(7);
+    // A ref with an arrived schedule takes TICKLER even when its age
+    // would otherwise put it in ROTTEN.
+    let config = default_config();
     let new = ready_row("g.md", 1, None, None);
     let mut prj = ready_row("f.md", 1, None, None);
     prj.tracker = Some(TrackerKind::Prj);
@@ -1249,9 +1132,8 @@ fn seven_tier_order_with_references() {
     let mut tickler = ready_row("c.md", 1, Some("2026-10-05"), None);
     tickler.scheduled = Some(date(2026, 10, 7));
     let mut reference = ready_row("b.md", 1, Some("2026-10-01"), None);
-    reference.tracker = Some(TrackerKind::Ref);
     reference.raw_line =
-        "- [ ] #task Read [fresh:: 2026-10-01] ^ref".to_string();
+        "- [ ] #task #ref Read [fresh:: 2026-10-01] ^ref".to_string();
     let rotten = ready_row("a.md", 1, Some("2026-09-20"), None);
     let rows =
         vec![rotten, reference, tickler, next, pending, prj, new.clone()];
@@ -1264,27 +1146,19 @@ fn seven_tier_order_with_references() {
             ("e.md".to_string(), 1),
             ("d.md".to_string(), 1),
             ("c.md".to_string(), 1),
-            ("b.md".to_string(), 1),
             ("a.md".to_string(), 1),
+            ("b.md".to_string(), 1),
         ]
     );
     assert_eq!(
         queue_tiers(&ordered),
         vec![
-            "new",
-            "projects",
-            "pending",
-            "next",
-            "tickler",
-            "references",
-            "rotten"
+            "new", "projects", "pending", "next", "tickler", "rotten", "rotten"
         ]
     );
     let report = counts(&rows, today(), &config);
     assert_eq!(report.walk, report.by_tier.sum());
     assert_eq!(report.walk, 7);
-    assert_eq!(report.references_due, 1);
-    assert_eq!(report.by_tier.references, 1);
 }
 
 fn cl_pre(line: &str) -> FreshnessRow {
@@ -1461,12 +1335,11 @@ fn cl7_one_off_post_keeps_new_state() {
     assert_eq!(report.by_tier.post, 1);
 }
 
-/// CL8. One row per tier walks PRE → NEW → PROJECTS → PENDING →
-/// NEXT → RECURRING → TICKLER → REFERENCES → ROTTEN → POST.
+/// CL8. The queue uses exactly nine tiers; ordinary references share
+/// TICKLER/ROTTEN with other Ready tasks.
 #[test]
-fn cl8_ten_tier_order() {
-    let mut config = default_config();
-    config.reference_interval = Some(7);
+fn cl8_nine_tier_order() {
+    let config = default_config();
     let mut pre = ready_row("i.md", 1, None, None);
     pre.checklist = Some(ChecklistKind::Pre);
     pre.recurring = true;
@@ -1487,9 +1360,8 @@ fn cl8_ten_tier_order() {
     let mut tickler = ready_row("d.md", 1, Some("2026-10-05"), None);
     tickler.scheduled = Some(date(2026, 10, 7));
     let mut reference = ready_row("c.md", 1, Some("2026-10-01"), None);
-    reference.tracker = Some(TrackerKind::Ref);
     reference.raw_line =
-        "- [ ] #task Read [fresh:: 2026-10-01] ^ref".to_string();
+        "- [ ] #task #ref Read [fresh:: 2026-10-01] ^ref".to_string();
     let rotten = ready_row("b.md", 1, Some("2026-09-20"), None);
     let mut post = ready_row("a.md", 1, None, None);
     post.checklist = Some(ChecklistKind::Post);
@@ -1509,7 +1381,7 @@ fn cl8_ten_tier_order() {
             "next",
             "recurring",
             "tickler",
-            "references",
+            "rotten",
             "rotten",
             "post"
         ]
@@ -1575,7 +1447,6 @@ fn cl11_checklist_beats_lane_and_tracker() {
     assert_eq!(evaluated.lane, Some(Lane::Next));
 
     let mut reference = row("- [ ] #task #gtd #post Read it ^ref");
-    reference.tracker = Some(TrackerKind::Ref);
     reference.checklist = Some(ChecklistKind::Post);
     let evaluated = evaluate(&reference, today(), &default_config());
     assert_eq!(evaluated.tier, Some(Tier::Post));

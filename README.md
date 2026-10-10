@@ -726,30 +726,13 @@ bob freshness list [-b|--bob-dir DIR] [-f|--format human|json] [-l|--limit N]
 bob freshness seed [-b|--bob-dir DIR] [-d|--dry-run] [-F|--force] [-f|--format human|json]
 ```
 
-Running `bob freshness` with no subcommand runs read-only `list`: the queue
-in order PRE → NEW → PROJECTS → PENDING → NEXT → RECURRING → TICKLER → REFERENCES → ROTTEN → POST.
-Both `list` and `seed` use JSON schema 11. Counts cover the whole vault even
-with `--limit`; `counts.walk` sums the ten `counts.by_tier` values. Ready
-state totals and walk-tier totals have different scopes.
+Running bob freshness with no subcommand runs read-only list: the queue is ordered PRE → NEW → PROJECTS → PENDING → NEXT → RECURRING → TICKLER → ROTTEN → POST. Both list and seed use JSON schema 13. Counts cover the whole vault even with --limit; counts.walk sums the nine counts.by_tier values. Ready state totals and walk-tier totals have different scopes.
 
-Ordinary Pending and Next tasks use `freshness.pending_interval` /
-`next_interval` (default 1 day; `false` disables that ordinary lane's walk).
-Due `^prj` and `^ref` trackers walk in PROJECTS and REFERENCES; tracker intervals
-override the task/note/global cadence when configured, otherwise trackers
-inherit that cadence even in Pending or Next. Project review follows the
-`#hide` written by `bob projects sync`; reference review allows `#hide` on
-exact `^ref` tasks. Once a recurring occurrence's date arrives it walks in
-RECURRING until completed, rescheduled, linked to Today, or cancelled; undated
-recurring tasks get a lint instead. Today-linked, daily-note, blocked, and
-future-scheduled tasks stay outside the review queue, except PRE/POST
-`#gtd` checklist rows, which walk by tag.
+Ordinary Pending and Next tasks, including references, use freshness.pending_interval / next_interval (default 1 day; false disables that ordinary lane's walk). Due ^prj trackers walk in PROJECTS on project_interval or the ordinary Ready chain. References use ordinary freshness and review groups: Ready refs join NEW, TICKLER, or ROTTEN, while Pending/Next refs use their lane groups. Project review follows the #hide written by bob projects sync; hidden references follow the ordinary #hide exclusion. Recurring occurrences, Today-linked, daily-note, blocked, and future-scheduled tasks stay outside the review queue, except PRE/POST #gtd checklist rows, which walk by tag.
 
-On the dashboard, NEW holds unconfirmed tasks, READY holds confirmed/exempt
-backlog, and `rotten.md` holds tickler tasks plus expired tasks. Repeated
-due-Ready confirmations accumulate `[keeps:: N]`; the approved-decay decision
-card is available immediately, subject to config and plugin capability.
+On the dashboard, NEW holds unconfirmed tasks, READY holds confirmed/exempt backlog, and rotten.md holds tickler tasks plus expired tasks. Repeated due-Ready confirmations accumulate [keeps:: N]; the approved-decay decision card is available immediately, subject to config and plugin capability.
 
-`seed` is a one-time migration, not daily maintenance. For tasks lacking a
+Seed is a one-time migration, not daily maintenance. For tasks lacking a
 valid freshness date, it staggers Ready candidates across seven date buckets
 and stamps other eligible open tasks today. Existing older stamps plus new
 candidates cause a refusal unless `--force`; valid stamps remain unchanged,

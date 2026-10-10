@@ -140,14 +140,7 @@ task-line field, or a file-path filter.
 
 ## Lanes (NEXT and PENDING)
 
-The daily lane review in [`docs/freshness.md`](freshness.md) §4 walks
-Pending and Next tasks once a day on their lane interval, with PRE
-before NEW for `#gtd #pre` checklist chores, POST after ROTTEN for
-`#gtd #post` closeout, the PROJECTS tier between NEW and PENDING for
-visible `^prj` reminders, and the REFERENCES tier just before ROTTEN
-for due `^ref` rows, each on its tracker cadence (`project_interval` /
-`reference_interval` when set, otherwise the Ready chain; a disabled
-lane walk never disables either tracker tier).
+The daily lane review in docs/freshness.md §4 walks Pending and Next tasks once a day on their lane interval, with PRE before NEW for #gtd #pre checklist chores, POST after ROTTEN for #gtd #post closeout, and the PROJECTS tier between NEW and PENDING for visible ^prj reminders on project_interval / the Ready chain. Reference tasks use ordinary freshness and enter their lane group, NEW, TICKLER, or ROTTEN as appropriate. A disabled lane walk never disables PROJECTS review.
 
 **NEXT** is every `[*]` task and **PENDING** every `[/]` task that
 the dash's defaults show: not done, not dependency-blocked, not

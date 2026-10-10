@@ -15,14 +15,13 @@ The daily lane review reuses the same `[fresh::]` stamp for Pending
 (`[/]`) and Next (`[*]`) tasks: each lane has a review cadence
 (`freshness.pending_interval` / `freshness.next_interval`, default 1
 day), and the morning walk visits PRE → NEW → PROJECTS → PENDING → NEXT →
-RECURRING → TICKLER → REFERENCES → ROTTEN → POST in explicit tiers.
+RECURRING → TICKLER → ROTTEN → POST in explicit tiers.
 
 This file is the contract both implementations cite. The Rust side is
 `src/native/freshness/` (`placement.rs`, `state.rs`) with the
 `freshness:` config block in `src/native/config/freshness.rs`; the
 JavaScript mirror is `api.freshness` in bob-ledger-tools (top-level
-api v3, freshness namespace v10 with the `recurringTier` and
-`refTagIdentity` capabilities). The bob-ledger-tools JavaScript
+api v3, freshness namespace v11 with the `recurringTier` capability). The bob-ledger-tools JavaScript
 tests use the conformance vectors below verbatim.
 
 The keep-streak contract (`keeps`, `decay`, introduced in schema 4) is specified
@@ -73,31 +72,10 @@ as NEW until a human confirms it.
 | `freshness.pending_interval`   | `~/.config/bob/config.yml`                     | integer days, 1–365, or `false`; default 1 |
 | `freshness.next_interval`      | `~/.config/bob/config.yml`                     | integer days, 1–365, or `false`; default 1 |
 | `freshness.project_interval`   | `~/.config/bob/config.yml`                     | optional integer days, 1–365; absent/null inherits |
-| `freshness.reference_interval` | `~/.config/bob/config.yml`                     | optional integer days, 1–365; absent/null inherits |
 | `freshness.rotten_daily_budget` | `~/.config/bob/config.yml`                    | optional integer ≥ 1, default off        |
 | `freshness.decay`              | `~/.config/bob/config.yml`                     | keep-streak policy: mapping, `true`, `false`, or null (§2a) |
 
-**Interval precedence.** A configured `project_interval` overrides
-every other level for `^prj` rows (source `project`); a configured
-`reference_interval` overrides every other level for Ready `#ref`
-rows (source `reference`) — task `refresh`, note `task_refresh`,
-global `interval`, and the lane interval alike. A tracker without a
-configured cadence uses the Ready chain in every lane, never the
-lane interval. A lane (`[*]`/`[/]`) `#ref` row is an ordinary lane
-task: it uses that lane's interval, never the reference cadence.
-Otherwise `interval(t)` for an ordinary lane task in
-a walked lane is that lane's interval (`pending_interval` for `[/]`
-with source `pending`, `next_interval` for `[*]` with source
-`next`), overriding the whole Ready chain below. Otherwise
-`interval(t)` is the task's `refresh`, then the containing note's
-`task_refresh`, then `freshness.interval`, then 7. The note override
-applies by residence (the note that contains the task), not through
-`parent` links. `pending_interval: false` / `next_interval: false`
-turns that lane's walk off for ordinary tasks (lane refs included),
-but never `^prj` review — PROJECTS walks even with the lane off;
-an absent or null lane value means the default 1, matching how
-`interval:` already treats null. Absent/null tracker keys inherit
-the previous cadence exactly.
+**Interval precedence.** A configured project_interval overrides every other level for ^prj rows (source project). References have no special cadence or grouping: Ready references use the ordinary chain refresh → task_refresh → freshness.interval → 7; Pending and Next references use their lane interval, like other tasks. Otherwise interval(t) for an ordinary task in a walked lane is that lane's interval (pending_interval for [/] with source pending, next_interval for [*] with source next), overriding the Ready chain below. The note override applies by residence, not through parent links. pending_interval: false / next_interval: false turns that lane's walk off for ordinary tasks, including references, but never ^prj review — PROJECTS walks even with the lane off; an absent or null lane value means the default 1. An absent/null project key inherits the Ready chain.
 
 **Invalid values.**
 
@@ -118,7 +96,7 @@ freshness:
   pending_interval: 1 # [/] lane daily review; false = not walked
   next_interval: 1 # [*] lane daily review; false = not walked
   # project_interval: 1 # ^prj review cadence; absent/null inherits
-  # reference_interval: 7 # Ready #ref review cadence; absent/null inherits
+
   # rotten_daily_budget: 15 # counts upkeep outside the lanes; never hides tasks
 ```
 
@@ -181,8 +159,7 @@ uncounted old stamper. The event table:
 - Alt+F / Ctrl+Alt+F on an exact due Ready target in `rotten`/`tickler`
   stamps and increments once in the same write, unless an active decision
   is required.
-- NEW, FRESH/early, Pending, Next, Blocked, Today-linked, tracker-tier
-  (PROJECTS/REFERENCES) trackers, other excluded targets, and
+- NEW, FRESH/early, Pending, Next, Blocked, Today-linked, PROJECTS rows, other excluded targets, and
   unresolved cache matches stamp through `keepLine` uncounted and
   preserve the streak.
 - A repeated same-day keep preserves the streak and is byte-identical.
@@ -190,9 +167,9 @@ uncounted old stamper. The event table:
 - Close/cancel preserves the streak on the closed line.
 - Automation, hooks, randomize, and seed neither increment nor reset.
 - Recurring and closed targets are refused.
-- Trackers in the PROJECTS/REFERENCES tiers never `decide` and their
-  explicit keeps are uncounted — like PROJECTS, REFERENCES behaves as
-  a commitment tier that never asks. Dependency capture (`bob
+- PROJECTS trackers never `decide` and their explicit keeps are uncounted.
+  Due Ready references use ordinary keep counting and can reach the
+  approved-decay decision at the keep limit. Dependency capture (`bob
   capture` `&`) is a generic stamp that clears `keeps`.
 
 What Rust guarantees today:
@@ -341,60 +318,45 @@ in_scope(t)   = status type TODO ("[ ]") ∧ lane-visible ∧ ¬recurring
                   not dependency-blocked, not under _templates or _conflicts,
                   no scheduled date after today, no #hide
                   (see "Tracking review" below)
-ref(t)        = exact trailing ^prj → prj; exact trailing ^ref or a
-                whole-token #ref tag (case-insensitive) → ref; else none.
-                (^prj-extra, #references, and #ref/x never qualify.)
-fresh(t)      = the latest valid `fresh` date on the line; none if there is none
-                (malformed ⇒ ignored + lint; a future date ⇒ treated as none + lint)
+identity(t)   = exact trailing ^prj → prj; else none
+                (^prj-extra, description text, and links/embeds never qualify)
+fresh(t)      = latest valid fresh date on the line; none if absent
+                (malformed ⇒ ignored + lint; future date ⇒ none + lint)
 state(t)      = NEW         if no fresh(t)
               | RESURFACED  if scheduled(t) exists ∧ fresh(t) < scheduled(t) ≤ today
-              | ROTTEN      if today ≥ fresh(t) + interval(t)   (stamped Mon at 7 ⇒ due next Mon)
+              | ROTTEN      if today ≥ fresh(t) + interval(t)
               | FRESH       otherwise
                 (Ready only; lane rows keep a null state)
-lane(t)       = pending  if status symbol "/"
-              | next     if status symbol "*"
-              | ready    if status type TODO ("[ ]")
-              | none     otherwise (Blocked, closed, custom non-TODO)
-                (a null lane never drops a checklist row)
+lane(t)       = pending if status symbol "/"
+              | next    if status symbol "*"
+              | ready   if status type TODO ("[ ]")
+              | none    otherwise (Blocked, closed, custom non-TODO)
 walk_scope(t) = lane(t) ≠ none ∧ lane-visible ∧ ¬recurring ∧ ¬canonical daily note ∧ ¬Today(t)
-                (lane-visible is the existing NEXT/PENDING predicate, unchanged)
-lane_interval = freshness.pending_interval (pending) | freshness.next_interval (next);
+lane_interval = pending_interval (pending) | next_interval (next);
                 default 1; false = that lane is not walked
-interval(t)   = ref(t)=prj with project_interval: project_interval, source "project"
-                | ref(t)=ref in the Ready lane with reference_interval:
-                  reference_interval, source "reference"
-                | tracker without a configured cadence: the Ready chain above
-                | ordinary lane task (lane refs included) with a walked lane:
-                  lane_interval, source "pending" | "next"
-                otherwise unchanged: task refresh → note task_refresh → freshness.interval → 7
-                (a ^prj in any lane never uses the lane interval, so the
-                weekly reminder never becomes a daily lane review; the line
-                picker shows it too. A set tracker interval wins over all of
-                it, including task/note/global/lane levels)
+interval(t)   = identity(t)=prj with project_interval: project_interval, source project
+              | ordinary task in a walked lane: lane interval, source pending | next
+              | otherwise: task refresh → note task_refresh → freshness.interval → 7
+                (^prj always uses the Ready chain or project interval)
 lane_due(t)   = walked ordinary lane ∧ (no fresh(t) ∨ today ≥ fresh(t) + lane_interval)
 tracker_due(t)= ^prj lane ∧ walk_scope ∧ (no fresh(t) ∨ resurfaced
                 ∨ today ≥ fresh(t) + interval(t)); a disabled lane walk
                 never disables ^prj review
-due_on(t)     = checklist_scope: none
-                ordinary lane row (lane refs included): fresh(t) + lane_interval,
-                or none when never stamped
-                (^prj lane row: effective tracker due date, none when never
-                stamped)
+due_on(t)     = checklist: none
+                ordinary lane row: fresh(t) + lane_interval, or none when unstamped
+                ^prj lane row: effective tracker due date, or none when unstamped
                 RESURFACED: scheduled(t); ROTTEN/FRESH: fresh(t) + interval(t); NEW: none
 due(t)        = checklist_scope(t) ∨ (in_scope(t) ∧ state(t) ≠ FRESH)
-tier(t)       = checklist(t) if checklist_scope(t)   — beats every other tier, incl. trackers and lanes
-              | recurring if recurring_due(t)         — beats every other rule; trackers included
-              | projects  if due ^prj (Ready or lane, actual lane retained;
-                            even when its Ready state is NEW or RESURFACED)
-              | references if due Ready #ref (even when its Ready state is
-                            NEW or RESURFACED; never NEW, never decide)
-              | new       if lane ready ∧ state NEW (ordinary non-ref tasks only)
-              | pending   if lane pending ∧ walk_scope ∧ lane_due (lane refs included)
-              | next      if lane next ∧ walk_scope ∧ lane_due (lane refs included)
+tier(t)       = checklist(t) if checklist_scope(t)
+              | recurring if recurring_due(t)
+              | projects  if due ^prj (Ready or lane; actual lane retained)
+              | new       if Ready ∧ state NEW
+              | pending   if lane pending ∧ walk_scope ∧ lane_due
+              | next      if lane next ∧ walk_scope ∧ lane_due
               | tickler   if state RESURFACED
               | rotten    if state ROTTEN
               | none      otherwise
-              (recurring rows never reach the lower rules: in_scope/walk_scope keep ¬recurring)
+                (recurring rows never reach lower rules)
 ```
 
 ```text
@@ -422,34 +384,21 @@ overlay is a no-op whenever the row is a checklist member. It sets `tier`, `due_
 `days_overdue`, and `decide = false`, and leaves `state`, `lane`, `fresh`, interval,
 keeps, and lints alone.
 
-The queue holds every row with a tier, in tier order PRE → NEW →
-PROJECTS → PENDING → NEXT → RECURRING → TICKLER → REFERENCES → ROTTEN → POST.
-Within RECURRING the order is `due_on` ↑, then path ↑, then line ↑ (the oldest occurrence
-first). Within each tier the order is:
+The queue holds every row with a tier, in order PRE → NEW → PROJECTS → PENDING → NEXT → RECURRING → TICKLER → ROTTEN → POST. Within RECURRING the order is due_on ↑, path ↑, line ↑ (oldest occurrence first). Other tiers keep their existing comparator:
 
-| Tier      | Order within the tier                                      |
-| --------- | ---------------------------------------------------------- |
-| pre       | path ↑, line ↑ (file order is the checklist order)         |
-| new       | path ↑, line ↑ (unchanged)                                 |
-| projects  | never-confirmed first, due_on ↑, created ↑, path ↑, line ↑ |
-| pending   | never-stamped first, due_on ↑, created ↑, path ↑, line ↑   |
-| next      | same as pending                                            |
-| recurring | due_on ↑, path ↑, line ↑ (the oldest occurrence first)     |
-| tickler   | due_on (= scheduled) ↑, created ↓, path ↑, line ↑          |
-| references | never-confirmed first, due_on ↑, created ↑, path ↑, line ↑ |
-| rotten    | interval ↑, due_on ↑, created ↓, path ↑, line ↑            |
-| post      | path ↑, line ↑ (file order is the checklist order)         |
+| Tier | Order within the tier |
+| --- | --- |
+| pre | path ↑, line ↑ |
+| new | path ↑, line ↑ |
+| projects | never-confirmed first, due_on ↑, created ↑, path ↑, line ↑ |
+| pending | never-stamped first, due_on ↑, created ↑, path ↑, line ↑ |
+| next | same as pending |
+| recurring | due_on ↑, path ↑, line ↑ |
+| tickler | due_on (= scheduled) ↑, created ↓, path ↑, line ↑ |
+| rotten | interval ↑, due_on ↑, created ↓, path ↑, line ↑ |
+| post | path ↑, line ↑ |
 
-A missing `created` always sorts after dated peers within its tier,
-in both ascending and descending keys. The commitment tiers are pre,
-new, projects, pending, next, recurring, tickler, and references — PRE, PROJECTS,
-and REFERENCES sit before the "Commitments done" boundary, so meeting
-the upkeep budget never signals that commitments are finished while
-chores or trackers remain. Rotten is upkeep. POST is the closing tier
-after ROTTEN; `]S` reaches it in one key. A PROJECTS or REFERENCES row
-never acquires a decay decision for being rotten underneath;
-ordinary rotten behavior is unchanged. Checklist rows resolve only by
-completion through Tasks and are never stamped by the walk.
+A missing created always sorts after dated peers. The commitment tiers are PRE, NEW, PROJECTS, PENDING, NEXT, RECURRING, and TICKLER. They sit before the Commitments done boundary. ROTTEN is upkeep, and POST is the closing tier after ROTTEN. A PROJECTS row never acquires a decay decision for being rotten underneath; ordinary rotten behavior applies to references. Checklist rows resolve only by completion through Tasks and are never stamped by the walk.
 
 Counts keep state and tier distinct:
 
@@ -457,12 +406,10 @@ Counts keep state and tier distinct:
   Ready states over the full review universe (`due = new +
   resurfaced + rotten`), including eligible Ready trackers once each.
   Pending/Next rows retain null state and never contribute.
-- `by_tier` counts the actual full queue with all ten machine tier
+- `by_tier` counts the actual full queue with all nine machine tier
   keys (zeroes for empty tiers); `walk = sum(by_tier.values())`,
   before any `--limit`.
-- `pending_due`, `next_due`, `projects_due`, `references_due`,
-  `pre_due`, `post_due`, and `recurring_due` each equal their tier count, for
-  symmetry.
+- `pending_due`, `next_due`, `projects_due`, `pre_due`, `post_due`, and `recurring_due` each equal their tier count, for symmetry.
 - `refreshed_today` keeps its meaning.
 - New count `upkeep_today`: tasks of any status outside `_templates`
   / `_conflicts` whose `fresh` equals today and whose status symbol is
@@ -500,152 +447,24 @@ Bucket conformance: S1 maps to `new`; S3, S4, and S11 map to
 `rotten`; S2, S5, S7, and S12 map to null; every S13 row maps to
 null.
 
-**Tracking review (projects and references).** The freshness walk
-also reminds Bryan to replenish surfaced projects and to review
-unfinished reading references, in one consistent contract on both
-sides including the `]s` / Ctrl+Alt+F walk: PRE → NEW → PROJECTS →
-PENDING → NEXT → RECURRING → TICKLER → REFERENCES → ROTTEN → POST.
+**Tracking review (projects).** PROJECTS remains the one special tracker group, for visible ^prj tasks. References use ordinary freshness and review groups: Ready refs can be NEW, TICKLER, or ROTTEN; Pending/Next refs use their lane groups; fresh Ready refs do not enter the walk.
 
-- Identity is the parsed, exact trailing block ID `prj` on a real
-  task — or, for references, the exact trailing block ID `ref` or a
-  whole-token `#ref` tag (case-insensitive). `^prj-extra`,
-  `#references`, `#ref/x`, description text, and `[[x#^prj]]`
-  links/embeds are never identities; legacy lines without the
-  cosmetic `#prj`/`#ref` tag stay supported.
-- A `^prj` row is reviewed exactly when it does not carry `#hide`.
-  `bob projects sync` owns that tag: it removes `#hide` when a
-  project has no unhidden open tasks and no open sub-projects, and
-  adds it back otherwise — so the evaluator never counts open tasks
-  and never reads the note's `scheduled` frontmatter. A hidden
-  `^prj` is out of scope (null state/bucket/tier), like any hidden
-  task. If a visible `^prj` sits in a note that has open tasks
-  because sync has not run yet, it is reviewed; sync runs every 15
-  minutes, so the window is small.
-- A `#hide` tag hides a `#ref` row like any task — exact-`^ref`
-  rows included. (The transitional `#hide` bypass for exact-`^ref`
-  rows was removed at closeout, after the live migration moved every
-  open ref task into its parent note.) Every other exclusion still
-  applies (unsupported/closed/blocked status, dependency blocking,
-  recurring, template/conflict path, canonical daily note, Today
-  membership, future inline scheduling); hidden tasks remain out.
-- The checkbox stays authoritative: done/canceled trackers
-  disappear. Missing optional type/tag metadata never disables an
-  exact anchor, and no task is created for a note missing its
-  tracker. Creation, import, and sync never auto-confirm; existing
-  confirmation dates are preserved.
-- A visible `^prj` reviews on its tracker cadence
-  (`project_interval` when set, otherwise the normal Ready interval
-  chain `refresh` → `task_refresh` → `freshness.interval` → 7), due
-  in PROJECTS even when its Ready state is NEW or RESURFACED, with
-  ordinary inline-`scheduled` RESURFACED handling for Ready rows. A
-  `[*]`/`[/]` `^prj` keeps its lane (with null state) and the same
-  cadence in PROJECTS; a disabled lane walk never disables it.
-  Trackers never decide and never count keeps.
-- Every due in-scope Ready `#ref` row walks in REFERENCES. That
-  includes never-confirmed Ready references, which never enter NEW
-  and never decide. Ready references keep their Ready
-  `state`/`bucket` unchanged (NEW, RESURFACED, ROTTEN, FRESH) and
-  only the tier changes. The cadence is `reference_interval` when
-  set, otherwise the Ready chain — never the lane interval.
-  Within REFERENCES the order is the same as PROJECTS:
-  never-confirmed first, then `due_on` ↑, `created` ↑, path ↑,
-  line ↑.
-- A lane (`[*]`/`[/]`) `#ref` row is an ordinary lane row: it walks
-  PENDING/NEXT on the lane interval with null state, never
-  REFERENCES, and `pending_interval: false` / `next_interval: false`
-  turns its walk off like any lane task.
+- Project identity is the exact trailing block ID prj on a real task. ^prj-extra, description text, and [[x#^prj]] links/embeds are never identities; legacy lines without the cosmetic #prj tag stay supported.
+- A ^prj row is reviewed when it does not carry #hide. bob projects sync owns that tag. A hidden ^prj is out of scope, like any hidden task.
+- A #hide tag hides a reference task like any task. Other exclusions still apply: unsupported/closed/blocked status, dependency blocking, recurring, template/conflict path, canonical daily note, Today membership, and future inline scheduling.
+- The checkbox stays authoritative: done/canceled tasks disappear. Creation, import, and sync never auto-confirm; existing confirmation dates are preserved.
+- A visible ^prj reviews on project_interval when set, otherwise the Ready chain refresh → task_refresh → freshness.interval → 7. It is due in PROJECTS even when Ready state is NEW or RESURFACED. A [*]/[/] ^prj keeps its lane and the same cadence; a disabled lane walk never disables PROJECTS. Project trackers never decide and never count keeps.
+- References have ordinary freshness, sorting, and keep eligibility. A due Ready reference in NEW or TICKLER is a commitment; once it is ROTTEN it is upkeep and can use the normal keep/decay decision path. Pending/Next references have null state/bucket and use the ordinary lane cadence. No tag, block ID, config field, or special sorting key creates a reference-specific group.
 
-PR/RF conformance (fixed local dates; default interval 7, plus
-config 10, note 14, task 3 for precedence, plus project 1 and
-reference 3 for tracker precedence): a visible unstamped `^prj`
-lands in PROJECTS once, never NEW; a hidden `^prj` stays out of
-scope; stamps today/6-days-ago suppress while 7-days-ago and older
-surface with accurate due metadata (1-day project and 3-day
-reference cadences when set); a visible `^prj` in a note with open
-tasks or a future frontmatter schedule is still reviewed, with no
-lint; lane `^prj` keeps its lane with null state and the Ready
-chain (or the project cadence when set); disabled lanes still
-review PROJECTS; absent tracker keys preserve the prior
-chain and ordinary tasks ignore both keys; an unstamped Ready
-`#ref` walks in REFERENCES (never NEW) with its NEW state and
-bucket intact; lane `#ref` rows walk PENDING/NEXT with null state
-(never REFERENCES); a `[/]` ref with `pending_interval: false`
-falls back like an ordinary task; a RESURFACED Ready `#ref` walks in
-REFERENCES and never decides, even at the keep limit; Today,
-recurring, daily, template/conflict, blocked, and future-inline
-rows stay excluded from review scope; a `#ref` line with `#hide` is
-hidden, exact-`^ref` rows included;
-`#references`, `^prj-extra`, and embedded links never qualify; the
-ten-tier order holds with stable ties and `walk = sum(by_tier)`;
-counts, JSON, human output, status bar, `limit=1`, and the upkeep
-budget show no duplicate totals, with the header and status bar
-reading tier counts; neither tracker tier ever decays.
+Reference conformance compares tag-only #ref and legacy ^ref tasks against an otherwise-identical ordinary task: interval/source, state, bucket, tier, due date, overdue days, keeps, and decision eligibility match. An unstamped Ready ref is NEW; a resurfaced ref is TICKLER; an expired Ready ref is ROTTEN and can decide at the keep limit. Lane refs use PENDING/NEXT cadence with null state/bucket; disabled lanes suppress them like ordinary lane tasks. Hidden, blocked, Today-linked, daily-note, template/conflict, and future-scheduled refs remain excluded. ^prj remains the only freshness tracker exception and keeps its project cadence and PROJECTS tier.
 
-**Machine vocabulary (schema 12).** Human output, help, and docs
-say `rotten`, and so does the machine contract since the vocab-rotten
-migration published JSON schema 2: `state: "rotten"`,
-`counts.rotten`, and `freshness.rotten_daily_budget`. Each JSON queue
-row still carries the `bucket` field (`"new"`, `"rotten"`, or null).
-Schema 12 re-keys ref review identity from the exact `^ref` block ID
-to the `#ref` tag (Ready `#ref` rows keep REFERENCES on the
-reference cadence; lane refs walk PENDING/NEXT). Closeout then
-removed the transitional `#hide` bypass for exact `^ref` rows, so a
-`#hide` tag hides them like any other task.
-Schema 11 adds the RECURRING walk tier: `recurring` in `tier` and
-`by_tier`, `counts.recurring_due`; recurring rows carry `due_on` = the
-occurrence date.
-Schema 10 renames the `returned` walk tier to `tickler` (`tier`
-values and `by_tier.tickler`); the Ready `state` stays `resurfaced`
-and `counts.resurfaced` is unchanged.
-Schema 9 adds PRE/POST checklist tiers: `pre`/`post` in `tier` and
-`by_tier`, `pre_due`/`post_due`, and `lane` may be null on checklist
-rows. Schema 8 drops `config.decay.active_from` / `active`: decay
-decisions are available as soon as decay is enabled, with no calendar
-gate. Schema 7 adds the `references` walk tier between `tickler` and
-`rotten`, the seven-key `counts.by_tier` histogram,
-`counts.references_due`, and the `^prj` hide gate (visible `^prj`
-rows review on sync's `#hide` alone; the `project_scheduled_invalid`
-lint is gone). Schema 6 adds `config.project_interval` /
-`config.reference_interval` (number or null, null means inherit) and
-the `project` / `reference` interval sources. Schema 5 added the
-`projects` walk tier with `counts.projects_due` and the six-key
-`counts.by_tier` histogram (`walk` sums it), and decoupled state
-totals from tier totals as above; the shared seed envelope version
-advances with each, seed behavior unchanged.
-Likewise bob-ledger-tools uses the `"rotten"` state string under
-freshness namespace v10 (`api.freshness.version === 10` with the
-explicit `trackerReview` capability plus the explicit
-`referenceReview` capability, which tells consumers the queue may
-carry `references` entries, plus the explicit `recurringTier`
-capability, which tells consumers the queue may carry `recurring`
-entries, plus the explicit `refTagIdentity` capability, which tells
-consumers ref identity is the `#ref` tag with the Ready/lane split;
-top-level api stays v3). Date-independent
-decide/config landed in v6; counting through `keepLine` remains
-available from v5. V8 renames the `returned` tier and
-`byTier.returned` to `tickler`.
-Dashboard `freshness.reviewModel()` NEW/ROTTEN chips project the
-same memoized evaluated states onto the existing visible Ready
-pool — hidden review-only rows never feed a badge for a section
-that excludes them — while the status bar footer, `]s`, and the CLI
-use the full review counts. The desktop footer shows only nonempty
-walk groups in walk order with short labels — `WIP` for PENDING,
-`RECUR` for RECURRING, `TICKS` for TICKLER, `REFS` for REFERENCES, and the full name for
-every other tier (for example `PRE 7 · NEW 1 · PROJECTS 2 · WIP 10 ·
-NEXT 15 · RECUR 4 · TICKS 14 · REFS 3 · ROTTEN 26 · POST 1`) — splitting TICKS
-from ROTTEN so the commitment/upkeep boundary is visible; dashboard
-ROTTEN chips still fold TICKLER plus ROTTEN. The current-row context
-uses the same short labels (for example `Review 5/76 · WIP 3/10`).
-`Review r/N` and `TIER i/M` are positions in the current queue; they
-never mean how many tasks were completed in a review session. `]s`
-jump notices and the CLI keep full tier names (`TICKLER 2/14`,
-`PENDING 3/10`). The tooltip gains one legend line, shown only when
-an abbreviated label is visible and listing only the abbreviations
-shown, in walk order (`WIP = PENDING · RECUR = RECURRING · TICKS = TICKLER · REFS =
-REFERENCES`), beside the line `Footer splits TICKS from ROTTEN;
-dashboard ROTTEN chips still fold both.` It appears only while a
-trustworthy nonempty queue remains and hides entirely when the queue
-is empty, including a met upkeep budget or a nonzero today count.
+**Machine vocabulary (schema 13).** Human and machine output use the nine current groups PRE → NEW → PROJECTS → PENDING → NEXT → RECURRING → TICKLER → ROTTEN → POST. The current JSON contract is schema 13. It contains no reference cadence, interval source, tier, or convenience counter. The histogram has exactly these nine keys, including zero values; walk equals the sum of by_tier before --limit. References remain ordinary tasks in the existing state and tier counts.
+
+Schema history is historical: schemas 6–12 accepted a project and/or reference cadence, and schemas 7–12 included a REFERENCES tier. Schema 13 removes the reference-specific fields and redistributes those tasks through the ordinary evaluator. Schema 12 re-keyed ref review identity from exact ^ref to the #ref tag; schema 11 added recurring, schema 10 renamed returned to tickler, schema 9 added PRE/POST, schema 8 removed the decay calendar gate, and earlier schemas introduced tracker and project fields. Those historical shapes do not describe current output. The shared seed envelope advances with the schema constant; seed behavior is unchanged.
+
+Bob-ledger-tools keeps top-level api v3 and advances api.freshness.version to 11. The current namespace advertises trackerReview, recurringTier, and checklistTiers; it no longer advertises referenceReview or refTagIdentity. Its queue and footer use the nine current groups, and public config/count fallbacks match warm snapshots. Navigation may present a REFERENCES entry only when explicitly marked as legacy from a freshness namespace <=10; the new producer never creates one, and the compatibility path preserves old loaded-provider rows until plugin reload.
+
+Dashboard freshness.reviewModel NEW/ROTTEN chips still project memoized evaluated states onto the existing visible Ready pool. Hidden review-only rows never feed a badge for a section that excludes them. The status bar footer, ]s, and CLI use the full review counts. The desktop footer shows nonempty groups in walk order with short labels WIP for PENDING, RECUR for RECURRING, and TICKS for TICKLER; it splits TICKLER from ROTTEN so the commitment/upkeep boundary is visible. Dashboard ROTTEN chips still fold TICKLER plus ROTTEN. Review r/N and TIER i/M are queue positions, not completed-task counts. Jump notices and CLI output use full tier names.
 
 **One-release legacy budget key.** A config that still sets
 `freshness.stale_daily_budget` keeps working for one release: when
@@ -737,15 +556,7 @@ task stays due and Ctrl+Alt+F does not advance.
    never crosses the PRE/POST boundary: on the last lane row before POST it
    stays with a `]s → POST` hint (Ctrl+Alt+F crosses).
    Keep import is the PRE chore "Import inbox tasks from Google Keep".
-3. Walk the commitments (NEW → PROJECTS → PENDING → NEXT → RECURRING →
-   TICKLER → REFERENCES) with `]s` / Ctrl+Alt+F until the notice says
-   **Commitments done**. `N]s` / `N[s` move N entries along that same
-   queue and wrap with the existing notice, while `[S` / `]S` stay the
-   first and last entries. NEW is never capped or skipped. In PROJECTS,
-   replenish the empty project with Ctrl+Alt+F; stamping a project
-   advances to the correct next entry with the block ID and `#hide`
-   preserved. In REFERENCES, confirm the reference still needs reading.
-   In RECURRING the occurrence date has arrived: complete it (Ctrl+Enter), do it today
+3. Walk commitments through NEW → PROJECTS → PENDING → NEXT → RECURRING → TICKLER with ]s / Ctrl+Alt+F until the notice says Commitments done. N]s / N[s move N entries along that queue and wrap with the existing notice, while [S / ]S stay at the first and last entries. NEW is never capped or skipped. In PROJECTS, replenish the empty project with Ctrl+Alt+F; stamping a project advances to the correct next entry with its block ID and #hide preserved. References follow the ordinary NEW, lane, TICKLER, and ROTTEN rules as other tasks. In RECURRING the occurrence date has arrived: complete it (Ctrl+Enter), do it today
    (Ctrl+Shift+Enter), or move its scheduled date past today (Ctrl+Shift+P);
    recurring rows are never stamped and cancel only through Obsidian Tasks.
    Ctrl+Alt+F on a landed RECURRING row behaves like Alt+F: it writes nothing,
@@ -846,12 +657,13 @@ vault). Human output is colored only on a TTY:
 ```text
 bob freshness · Thu 2026-10-08 · every 7d · pending 1d · next 1d · keeps 3
 
-  REVIEW 83 due · 7 pre · 1 new · 2 projects · 10 pending · 15 next · 4 recurring · 14 tickler · 3 references · 26 rotten · 1 post · ✓ 12 today
+  REVIEW 83 due · 7 pre · 1 new · 2 projects · 10 pending · 15 next · 4 recurring · 14 tickler · 29 rotten · 1 post · ✓ 12 today
 
   PRE 7
     gtd_daily.md:1      Check weather           Checklist · complete to resolve
-  NEW 1
+  NEW 4
     gkeep_inbox.md:14   Pick up our daughter    created 2026-09-30
+    lib/books/paper.md:8 Read the paper         created 2026-09-30
   PROJECTS 2
     home.md:10          Replenish home          Empty project · never confirmed · every 7d (default)
     work.md:44          Staff the launch        Empty project · due today · fresh 2026-10-01 · every 7d (default)
@@ -865,8 +677,6 @@ bob freshness · Thu 2026-10-08 · every 7d · pending 1d · next 1d · keeps 3
     cash.md:9           Apply for unemployment  Recurring · due today
   TICKLER 14
     b.md:40             Week habits             tickler · scheduled 2026-10-07 · fresh 2026-10-05
-  REFERENCES 3
-    lib/books/paper.md:8  Read the paper        Reference · due today · fresh 2026-10-01 · every 7d (reference)
   ── commitments done above · upkeep below ──
   ROTTEN 26
     d.md:1              Water the herbs         due today · fresh 2026-10-07 · every 1d (task)
@@ -903,45 +713,9 @@ render empty, and NEW/ROTTEN badges show `–` (never zero). Native
 and READY is ungated there; `bob freshness list` is the headless
 review interface.
 
-The JSON contract is `schema_version: 12` with `ok`, `date`,
-`config` (`interval`, `pending_interval` / `next_interval` as a number
-or `false`, `project_interval` / `reference_interval` as a number or
-null (null means inherit), `rotten_daily_budget`, plus normalized
-`decay` with `enabled`, `keeps`, `enter` (label or null)),
-`counts` (`due`, `new`,
-`resurfaced`, `rotten`, `fresh`, `pending_due`, `next_due`,
-`projects_due`, `references_due`, `pre_due`, `post_due`,
-`recurring_due`,
-`by_tier` (all ten tier keys),
-`walk` (`= sum(by_tier)`), `decide`, `refreshed_today`,
-`upkeep_today`, `budget`, `budget_met`; counts always cover the whole
-vault regardless of `--limit`), `queue` (each with `rank`, `tier`
-(`pre` | `new` | `projects` | `pending` | `next` | `recurring` |
-`tickler` | `references` | `rotten` | `post`), `lane` (`ready` | `pending` |
-`next` | null),
-`state`, `bucket` (`"new"`, `"rotten"`, or null — lane rows carry
-`state: null` and `bucket: null`, as does a hidden `^prj`; a `[?]`
-checklist row may carry `lane: null`), `path`,
-`line`, `block_id`,
-`status_symbol`, `text`, `created`, `fresh`, `interval`,
-`interval_source` (`task` | `note` | `config` | `default` |
-`pending` | `next` | `project` | `reference`), `due_on`,
-`days_overdue`, `keeps`, `decide`), and `warnings` (`code`, `path`,
-`line`, `message`). `decide` means a choice is due, not permission
-to execute an action. No new CLI subcommands or options. Human
-section counts, the REVIEW summary, status-bar walk totals, per-tier
-ranks, and commitment-boundary logic use tier counts, not state
-counts. The Obsidian footer shows short group labels (`WIP` for
-PENDING, `TICKS` for TICKLER, `REFS` for REFERENCES), omits
-zero-count groups and the current review group (full summary when no
-review row is current), and hides when the walk is empty; CLI
-human output keeps full tier names. A NEW project
-counts once in PROJECTS, and `--limit` only
-truncates rows. A NEW-state Ready reference walks in REFERENCES, not
-NEW, on the reference cadence; lane refs walk PENDING/NEXT.
+The current JSON contract is schema_version 13. It includes config interval, pending_interval/next_interval, project_interval, rotten_daily_budget, and normalized decay; counts due/new/resurfaced/rotten/fresh, pending_due/next_due/projects_due/pre_due/post_due/recurring_due, a nine-key by_tier histogram, walk, decide, refreshed_today, upkeep_today, budget, and budget_met; queue rows with the nine current tiers, lane/state/bucket, interval_source task/note/config/default/pending/next/project, due metadata, keeps, and decide; and warnings. It has no reference interval, references_due, references tier, or reference interval source. Counts cover the whole vault regardless of --limit. The Obsidian footer abbreviates PENDING as WIP, RECURRING as RECUR, and TICKLER as TICKS; it omits empty groups and the current group. A NEW project counts once in PROJECTS. References follow their ordinary state and lane groups.
 
-`seed` options: `-d/--dry-run`, `-F/--force`, `-f/--format
-human|json`. Ready tasks without a valid `fresh` are grouped by note
+Seed options: -d/--dry-run, -F/--force, -f/--format human|json. Ready tasks without a valid `fresh` are grouped by note
 and bin-packed largest-note-first into 7 buckets; a note bigger than
 `ceil(total / 7)` splits into consecutive line-order chunks, and ties
 break by path, then bucket index. Bucket `k` (1–7) lands on `today −
@@ -965,11 +739,11 @@ differently under either Rust parser. A writing run then re-reads all touched
 files before the first write and refuses if one changed; `--dry-run` stops
 after planning and parse validation, without that file recheck. Each file is
 written through a temp file plus rename. The JSON contract is
-`schema_version: 12` with `ok`, `date`, `dry_run`,
+`schema_version: 13` with `ok`, `date`, `dry_run`,
 `stamped` (`ready`, `other`), `buckets` (`fresh`, `due_on`, `count`,
 `notes`), `skipped` (`already_stamped`, `recurring`,
 `out_of_scope`), `files`, and `warnings`. The shared schema constant
-also moves the `seed` envelope to 9, with seed content unchanged. Seed
+also moves the `seed` envelope to 10, with seed content unchanged. Seed
 candidate selection is unchanged, and list stays read-only. The `buckets`
 dates describe the initial distribution: `fresh` is the unadjusted bucket
 date, and `due_on` adds the global interval. Per-task adjustments described
@@ -990,10 +764,10 @@ an invalid `freshness:` block or a non-Dataview task format.
 
 | Surface | Phase |
 | ------- | ----- |
-| `bob freshness` | fresh-cli (landed: `list` and `seed` in `src/native/freshness/`); tiered walk (schema 12: `list` walks PRE → NEW → PROJECTS → PENDING → NEXT → RECURRING → TICKLER → REFERENCES → ROTTEN → POST with lane intervals for ordinary tasks (lane refs included), tracker cadences for `^prj` and Ready `#ref`, due-occurrence review for recurring tasks, and `#gtd` `#pre`/`#post` checklist rows; decay config is `{enabled, keeps, enter}` with no calendar gate) |
+| bob freshness | fresh-cli: schema 13 tiered walk PRE → NEW → PROJECTS → PENDING → NEXT → RECURRING → TICKLER → ROTTEN → POST; ordinary reference freshness, project cadence for ^prj, recurring occurrences, PRE/POST checklists, and approved-decay policy. |
 | `bob capture` | capture-stamps (landed: plan_task_link + `=x` close stamp via `stamp_fresh`; existing-dependent `&` dependency stamp via the same helper; capture never stamps trackers) |
 | bob-ledger-tools | ledger-freshness (landed: api v3 `api.freshness` + status bar in 1.8.0; tracking review under namespace v6 with the `trackerReview` capability; persistent review footer with additive `reviewEntryView`) |
-| bob-navigation-hotkeys | nav-review, nav-stamps (landed: Alt+N + Ctrl+Shift+P/Ctrl+Shift+M/! stamping + refresh row in 1.44.0; PROJECTS/REFERENCES tier walk with `trackerReview`/`referenceReview` capabilities and legacy v3/v4 fallback; notices feature-detect `reviewEntryView`) |
+| bob-navigation-hotkeys | nav-review, nav-stamps (landed: Alt+N + Ctrl+Shift+P/Ctrl+Shift+M/! stamping + refresh row in 1.44.0; PROJECTS tier walk with `trackerReview` capability and legacy v3/v4 fallback; notices feature-detect `reviewEntryView`) |
 | task-status-cycler | cycler-link-stamps (landed: Alt+[/Alt+] + Ctrl+Enter reopen stamping in 1.18.0) |
 | block-id-prompt | cycler-link-stamps (landed: Ctrl+Shift+Enter + ^^ stamping in 1.16.0) |
 | `rotten.md` (aliases `Review`, `Freshness review`, `Rotten Tasks`) | dash-gating (landed: live summary plus always-present TICKLER and ROTTEN groups; tasks stay in source notes, rows are click-through views) |
@@ -1164,8 +938,8 @@ The bob-ledger-tools JavaScript tests use these verbatim.
 - **CL6.** `#gtd #pre #post` → `pre`, lint `checklist_tag_conflict`.
 - **CL7.** One-off, unstamped `- [ ] #task #gtd #post Write retro` → tier `post`, state
   `new`, bucket `new`. It counts in `new` and `post_due`.
-- **CL8.** One row per tier → queue order pre, new, projects, pending, next, tickler,
-  references, rotten, post. `walk = Σ by_tier`, and `due`/`new`/`rotten` equal the same
+- **CL8.** One task per surviving tier comparator → queue order pre, new, projects, pending, next, tickler,
+  rotten, rotten, post when the example reference and ordinary task are both due. `walk = Σ by_tier`, and `due`/`new`/`rotten` equal the same
   vault without the checklist rows (except a CL7-style one-off member's own state).
 - **CL9.** A recurring checklist row refuses a stamp (Rust `stamp`, JS
   `stampLine`/`keepLine`). `keeps`, `upkeep_today`, and `refreshed_today` are unchanged,
@@ -1350,27 +1124,26 @@ age: `today`, `yesterday`, or `N days ago`. `every …` reads `every N
 days` (or `every 1 day`), plus ` (this task)`, ` (this note)`, or
 ` (config)` for those sources and nothing for the default, plus
 ` (pending lane)` / ` (next lane)` for the lane sources and
-` (project)` / ` (reference)` for the tracker sources. Line 1:
+` (project)` for the project tracker source. Line 1:
 `Confirmed today` at age 0, otherwise `Confirmed {date} ·
 {relative}`. Line 2 is picked by resolution rather than tone: closed
 or out of scope → `Not in the review queue: {reason}`; a due lane
 row → `Daily {PENDING|NEXT} review due since {dueOn} · every …`; a
 lane row stamped today → `Next review {fresh+interval} · every …
 ({pending|next} lane)`; a PROJECTS row → `Empty project` with its
-confirmation/due detail and effective tracker interval (never a daily
-lane review or a generic hidden-task exemption); a REFERENCES row →
-`Reference` with the same shape on the reference cadence; ROTTEN →
+confirmation/due detail and effective project interval (never a daily
+lane review or a generic hidden-task exemption); ROTTEN →
 `Due for review since {dueOn} ·
 every …`; RESURFACED → `Resurfaced {scheduled}: scheduled after it
 was confirmed`; FRESH or unresolved with the lease running → `Next
 review {fresh+interval} · every …`; unresolved with the lease over →
 `Review lease ended {fresh+interval} · every …`. Line 3, `due` tone
 only: `Alt+F to confirm` (lane rows add the lane keep/release/today
-keys per M9). Lane and tracker-tier rows with a tier get the `due`
+keys per M9). Lane and project-tier rows with a tier get the `due`
 tone and lane rows stamped today get the `today` tone. Lane tasks
 outside the walk (Today, daily note, disabled lane, recurring,
 hidden ordinary tasks) keep `resting` with the existing reasons —
-but a disabled lane never takes trackers out of the walk. Reasons by
+but a disabled lane never takes a project tracker out of the walk. Reasons by
 status symbol: `*` Next, `/` In Progress, `?` Blocked, `x`/`X` Done,
 `-` Cancelled, any other non-space symbol `status [s]`; for `[ ]`,
 the first that applies: `linked today`, `in a daily note`,
@@ -1611,7 +1384,8 @@ There is no freshness trial: no ritual change, release, or tuning waits on a tri
 - 2026-10-06: inbox routing went live — on an open inbox task, every non-closing Ctrl+Shift+P answer and Ctrl+Shift+Enter asks where the task goes before writing, acts then moves without following, and advances the walk as an answer (nav 2.10.0, block-id-prompt 1.23.0).
 - 2026-10-08: `]s` / `[s` away from the current review task first return to it; the next press steps from there (nav 2.13.0).
 - 2026-10-09: ref review re-keyed from the exact `^ref` block ID to the `#ref` tag (schema 12, ledger 1.37.0 / namespace v10 with `refTagIdentity`): Ready `#ref` rows keep REFERENCES on the reference cadence (never NEW, never decide); `[*]`/`[/]` refs walk PENDING/NEXT as ordinary lane tasks; the `#hide` bypass survives only for exact `^ref` rows until closeout.
-- 2026-10-10: closeout removed the transitional `#hide` bypass for exact `^ref` rows (schema stays 12, JSON shape unchanged; ledger 1.39.0, namespace stays v10): hidden rows stay out of the walk like any hidden task, after the live migration moved every open ref task into its parent note.
+- 2026-10-10: closeout removed the transitional hidden-tag bypass for exact reference rows (schema 12, historical shape; ledger 1.39.0 / namespace v10): hidden rows stay out of the walk like any hidden task.
+- 2026-10-10: schema 13 and freshness namespace v11 removed the reference cadence and REFERENCES review group. References now use ordinary freshness, lane groups, keep/decay eligibility, and commitment/upkeep rules.
 
 ## 14. Keep-streak rollout, rollback, and calibration
 

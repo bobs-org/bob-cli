@@ -669,9 +669,7 @@ fn plan_pdf_sync_v2(
                 != normalize_line_endings(&marker.contents);
             // Dry runs preview the required semantic change even without
             // opt-in; normal writes also refresh a stale hint under opt-in.
-            let needed = semantic_needed
-                || (options.write_pdf && hint_needed)
-                || (options.dry_run && hint_needed && semantic_needed);
+            let needed = semantic_needed || (options.write_pdf && hint_needed);
             // Without opt-in (and outside dry-run preview) preserve the
             // marker bytes; the semantic refusal above already fired when
             // needed, so here `needed` is only true under opt-in/dry-run.

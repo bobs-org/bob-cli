@@ -67,8 +67,7 @@ impl RowCtx {
             created: self.task.created,
             raw_line: self.task.original_markdown.clone(),
             note_refresh_raw: self.note_refresh_raw.clone(),
-            tracker: super::state::TrackerKind::from_tags_and_block_id(
-                &self.task.tags,
+            tracker: super::state::TrackerKind::from_block_id(
                 self.task.block_id.as_deref(),
             ),
             checklist: checklist_from_tags(&self.task.tags),

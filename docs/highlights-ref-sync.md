@@ -1001,15 +1001,7 @@ reference lifecycle task so Obsidian task views can tell it apart from ordinary
 annotation-derived follow-up tasks. It is additive: legacy generated lines
 without `#ref` are still recognized.
 
-The same `^ref` line doubles as the reference's freshness tracker: a
-visible unstamped reference walks in REFERENCES, not NEW, on the
-reference cadence in any lane (`reference_interval` when set,
-otherwise ordinary freshness; see
-[`docs/freshness.md`](freshness.md) §4, "Tracking review"), unless it
-is also a PRE/POST checklist row. Since closeout removed the
-transitional `#hide` bypass, the `#hide` tag on this v1 line keeps it
-out of the walk like any hidden task.
-Sync never auto-confirms it.
+The ^ref block ID remains part of the reference lifecycle and link contract; it does not create a freshness tracker or review group. Reference tasks use ordinary freshness and review rules (including #hide exclusion), as described in docs/freshness.md. PRE/POST checklist membership and recurring occurrence rules still take precedence. Sync never auto-confirms a task.
 
 | Checkbox | Obsidian Tasks status | Reference `status` | Meaning |
 | --- | --- | --- | --- |

@@ -80,7 +80,7 @@ fn list_json_reports_queue_counts_and_contract() {
     let (_, value) = list_json(&temp, &[]);
 
     assert_eq!(value["ok"], true);
-    assert_eq!(value["schema_version"], 12);
+    assert_eq!(value["schema_version"], 13);
     assert_eq!(value["date"], NOW);
     assert_eq!(value["config"]["interval"], 7);
     assert_eq!(value["config"]["pending_interval"], 1);
@@ -548,7 +548,7 @@ fn seed_dry_run_writes_nothing_and_reports_buckets() {
     let (output, value) = seed_json(&temp, &["--dry-run"]);
     assert_success(&output);
     assert_eq!(value["ok"], true);
-    assert_eq!(value["schema_version"], 12);
+    assert_eq!(value["schema_version"], 13);
     assert_eq!(value["dry_run"], true);
     assert_eq!(value["stamped"]["ready"], 3);
     assert_eq!(value["stamped"]["other"], 1);
@@ -652,7 +652,7 @@ fn list_lane_rows_cover_pending_and_next() {
         - [*] #task Fresh next [fresh:: 2026-10-08]\n",
     );
     let (_, value) = list_json(&temp, &[]);
-    assert_eq!(value["schema_version"], 12);
+    assert_eq!(value["schema_version"], 13);
     let counts = &value["counts"];
     assert_eq!(counts["pending_due"], 1);
     assert_eq!(counts["next_due"], 1);
@@ -859,7 +859,7 @@ fn list_reports_keeps_and_decide_per_schema_9() {
     let temp = keeps_vault("bob-cli-freshness-keeps");
     let value = keeps_list_json(&temp, "2026-10-20", &[]);
     assert_eq!(value["ok"], true);
-    assert_eq!(value["schema_version"], 12);
+    assert_eq!(value["schema_version"], 13);
     assert_eq!(value["config"]["decay"]["enabled"], true);
     assert_eq!(value["config"]["decay"]["keeps"], 3);
     assert!(value["config"]["decay"]["enter"].is_null());
@@ -913,7 +913,7 @@ fn list_decides_on_early_dates() {
     let temp = keeps_vault("bob-cli-freshness-keeps-early");
     for now in ["2026-10-04", NOW, "2026-10-18", "2026-10-19", "2026-10-20"] {
         let value = keeps_list_json(&temp, now, &[]);
-        assert_eq!(value["schema_version"], 12, "{now}");
+        assert_eq!(value["schema_version"], 13, "{now}");
         assert_eq!(value["counts"]["decide"], 1, "{now}");
         let queue = value["queue"].as_array().expect("queue array");
         let at_limit = queue
@@ -1020,7 +1020,7 @@ fn seed_preserves_existing_keeps() {
     write_file(&vault.join("a.md"), "- [ ] #task Kept before [keeps:: 2]\n");
     let (output, value) = seed_json(&temp, &[]);
     assert_success(&output);
-    assert_eq!(value["schema_version"], 12);
+    assert_eq!(value["schema_version"], 13);
     assert_eq!(value["stamped"]["ready"], 1);
     let contents =
         fs::read_to_string(vault.join("a.md")).expect("read seeded line");
@@ -1082,7 +1082,7 @@ fn list_tracker_intervals_and_hide_gate() {
     let config = temp.path().join("config.yml");
     write_file(
         &config,
-        "freshness:\n  project_interval: 1\n  reference_interval: 3\n",
+        "freshness:\n  interval: 3\n  project_interval: 1\n  reference_interval: false\n",
     );
     let mut command = bob_command();
     command
@@ -1097,9 +1097,9 @@ fn list_tracker_intervals_and_hide_gate() {
     assert_success(&output);
     let value: Value =
         serde_json::from_str(stdout(&output).trim()).expect("list JSON");
-    assert_eq!(value["schema_version"], 12);
+    assert_eq!(value["schema_version"], 13);
     assert_eq!(value["config"]["project_interval"], 1);
-    assert_eq!(value["config"]["reference_interval"], 3);
+    assert!(value["config"].get("reference_interval").is_none());
     // Both visible projects walk, whatever their notes hold; the
     // hidden one stays out.
     let tiers: Vec<String> = value["queue"]
@@ -1127,18 +1127,18 @@ fn list_tracker_intervals_and_hide_gate() {
         !tiers.iter().any(|key| key.starts_with("hidden.md:")),
         "hidden project must stay out:\n{value}"
     );
-    // The reference uses the 3-day cadence: stamped 2026-10-05, due
-    // 2026-10-08, source `reference`, tier `references`.
+    // The obsolete false key is ignored; the ordinary configured
+    // interval makes the reference due with the ordinary source/tier.
     let reference = value["queue"]
         .as_array()
         .expect("queue array")
         .iter()
         .find(|row| row["path"] == "r.md")
         .expect("reference row");
-    assert_eq!(reference["interval_source"], "reference");
+    assert_eq!(reference["interval_source"], "config");
     assert_eq!(reference["interval"], 3);
     assert_eq!(reference["due_on"], "2026-10-08");
-    assert_eq!(reference["tier"], "references");
+    assert_eq!(reference["tier"], "rotten");
     assert_eq!(reference["state"], "rotten");
     // The project uses the 1-day cadence with source `project`.
     let project = value["queue"]
@@ -1194,25 +1194,18 @@ fn list_walks_projects_after_new_with_decoupled_counts() {
         "---\nscheduled: someday\n---\n- [ ] #task Broken project ^prj\n",
     );
     let (_, value) = list_json(&temp, &[]);
-    assert_eq!(value["schema_version"], 12);
+    assert_eq!(value["schema_version"], 13);
     let tiers: Vec<&str> = value["queue"]
         .as_array()
         .expect("queue array")
         .iter()
         .map(|row| row["tier"].as_str().expect("tier string"))
         .collect();
-    // NEW, then every visible `^prj` in PROJECTS, then the visible
-    // reference in REFERENCES; the hidden `^prj` stays out.
+    // Both unstamped ordinary rows are NEW, followed by visible
+    // `^prj` rows in PROJECTS; the hidden project stays out.
     assert_eq!(
         tiers,
-        vec![
-            "new",
-            "projects",
-            "projects",
-            "projects",
-            "projects",
-            "references"
-        ]
+        vec!["new", "new", "projects", "projects", "projects", "projects",]
     );
     let keys: Vec<String> = value["queue"]
         .as_array()
@@ -1230,11 +1223,11 @@ fn list_walks_projects_after_new_with_decoupled_counts() {
         keys,
         vec![
             "full.md:2",
+            "r.md:1",
             "bad.md:4",
             "full.md:1",
             "fut.md:4",
             "p.md:1",
-            "r.md:1",
         ]
     );
     assert!(
@@ -1242,15 +1235,14 @@ fn list_walks_projects_after_new_with_decoupled_counts() {
         "hidden ^prj must be absent:\n{value}"
     );
     let counts = &value["counts"];
-    // Ready states: Real work NEW, four PROJECTS NEW, and the
-    // reference NEW.
+    // Ready states: two ordinary NEW tasks and four PROJECTS NEW.
     assert_eq!(counts["new"], 6);
     assert_eq!(counts["due"], 6);
     assert_eq!(counts["projects_due"], 4);
-    assert_eq!(counts["references_due"], 1);
-    assert_eq!(counts["by_tier"]["new"], 1);
+    assert!(counts.get("references_due").is_none());
+    assert_eq!(counts["by_tier"]["new"], 2);
     assert_eq!(counts["by_tier"]["projects"], 4);
-    assert_eq!(counts["by_tier"]["references"], 1);
+    assert!(counts["by_tier"].get("references").is_none());
     assert_eq!(counts["walk"], 6);
     // The header tier numbers sum to the walk.
     let header_sum = counts["by_tier"]["pre"].as_u64().unwrap_or(99)
@@ -1259,7 +1251,6 @@ fn list_walks_projects_after_new_with_decoupled_counts() {
         + counts["by_tier"]["pending"].as_u64().unwrap_or(99)
         + counts["by_tier"]["next"].as_u64().unwrap_or(99)
         + counts["by_tier"]["tickler"].as_u64().unwrap_or(99)
-        + counts["by_tier"]["references"].as_u64().unwrap_or(99)
         + counts["by_tier"]["rotten"].as_u64().unwrap_or(99)
         + counts["by_tier"]["post"].as_u64().unwrap_or(99);
     assert_eq!(header_sum, counts["walk"].as_u64().expect("walk number"));
@@ -1277,7 +1268,7 @@ fn list_walks_projects_after_new_with_decoupled_counts() {
 }
 
 #[test]
-fn list_human_shows_references_before_rotten_divider() {
+fn list_human_shows_reference_in_new_before_rotten_divider() {
     let temp = TempDir::new("bob-cli-freshness-references-human");
     let vault = vault_dir(&temp);
     write_blocked_tasks_settings(&vault);
@@ -1297,18 +1288,15 @@ fn list_human_shows_references_before_rotten_divider() {
     let human = stdout(&output);
     assert!(
         human.contains("REVIEW 2 due")
-            && human.contains("1 references")
+            && human.contains("1 new")
             && human.contains("1 rotten"),
         "header tier numbers must sum to walk:\n{human}"
     );
     assert!(
-        human.contains("REFERENCES 1") && human.contains("ROTTEN 1"),
-        "expected REFERENCES above the divider:\n{human}"
+        human.contains("NEW 1") && human.contains("ROTTEN 1"),
+        "expected ordinary NEW and ROTTEN groups:\n{human}"
     );
-    assert_text_order(
-        &human,
-        &["REVIEW", "REFERENCES", "commitments done", "ROTTEN"],
-    );
+    assert_text_order(&human, &["REVIEW", "NEW", "commitments done", "ROTTEN"]);
 }
 
 fn checklist_vault(prefix: &str) -> TempDir {
@@ -1344,7 +1332,7 @@ fn list_json_and_human_cover_checklist_tiers() {
     let temp = checklist_vault("bob-cli-freshness-checklist");
     let (_, value) = list_json(&temp, &[]);
     assert_eq!(value["ok"], true);
-    assert_eq!(value["schema_version"], 12);
+    assert_eq!(value["schema_version"], 13);
 
     let queue = value["queue"].as_array().expect("queue array");
     let texts: Vec<&str> = queue
@@ -1496,7 +1484,7 @@ fn list_json_and_human_cover_recurring_tier() {
     let temp = recurring_vault("bob-cli-freshness-recurring");
     let (_, value) = list_json(&temp, &[]);
     assert_eq!(value["ok"], true);
-    assert_eq!(value["schema_version"], 12);
+    assert_eq!(value["schema_version"], 13);
 
     let queue = value["queue"].as_array().expect("queue array");
     let tier_of = |text: &str| {
@@ -1644,7 +1632,7 @@ fn list_hidden_reference_stays_out_while_visible_walks() {
     );
     assert_eq!(
         tier_of("Ordinary visible").as_deref(),
-        Some("references"),
-        "ordinary visible ^ref walks REFERENCES:\n{value}"
+        Some("new"),
+        "ordinary visible ^ref walks NEW:\n{value}"
     );
 }

@@ -76,7 +76,7 @@ pub(crate) enum ChecklistKind {
 
 /// Walk tier, in walk order (`docs/freshness.md` §4):
 /// PRE → NEW → PROJECTS → PENDING → NEXT → RECURRING → TICKLER →
-/// REFERENCES → ROTTEN → POST.
+/// ROTTEN → POST.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Tier {
     Pre,
@@ -86,7 +86,6 @@ pub(crate) enum Tier {
     Next,
     Recurring,
     Tickler,
-    References,
     Rotten,
     Post,
 }
@@ -101,7 +100,6 @@ impl Tier {
             Self::Next => "next",
             Self::Recurring => "recurring",
             Self::Tickler => "tickler",
-            Self::References => "references",
             Self::Rotten => "rotten",
             Self::Post => "post",
         }
@@ -112,15 +110,10 @@ impl Tier {
     }
 }
 
-/// Tracking-task identity: the parsed, exact trailing block ID `prj`
-/// on a real task, or — for references — the exact trailing block ID
-/// `ref` or a whole-token `#ref` tag (case-insensitive). `^prj-extra`,
-/// `#references`, description text, and `[[x#^prj]]` links/embeds are
-/// never identities.
+/// Project-task identity is the exact trailing `^prj` block ID.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TrackerKind {
     Prj,
-    Ref,
 }
 
 impl TrackerKind {
@@ -128,28 +121,11 @@ impl TrackerKind {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Prj => "prj",
-            Self::Ref => "ref",
         }
     }
 
-    /// Ref-task identity is the `#ref` tag or the exact `^ref` block
-    /// ID; `^prj` behavior is unchanged. Tags compare as whole tokens,
-    /// case-insensitive (`#REF` qualifies, `#references` does not).
-    pub(crate) fn from_tags_and_block_id(
-        tags: &[String],
-        block_id: Option<&str>,
-    ) -> Option<Self> {
-        match block_id {
-            Some("prj") => Some(Self::Prj),
-            Some("ref") => Some(Self::Ref),
-            _ => {
-                if tags.iter().any(|tag| tag.eq_ignore_ascii_case("#ref")) {
-                    Some(Self::Ref)
-                } else {
-                    None
-                }
-            }
-        }
+    pub(crate) fn from_block_id(block_id: Option<&str>) -> Option<Self> {
+        (block_id == Some("prj")).then_some(Self::Prj)
     }
 }
 
@@ -163,7 +139,6 @@ pub(crate) enum IntervalSource {
     Pending,
     Next,
     Project,
-    Reference,
 }
 
 impl IntervalSource {
@@ -176,7 +151,6 @@ impl IntervalSource {
             Self::Pending => "pending",
             Self::Next => "next",
             Self::Project => "project",
-            Self::Reference => "reference",
         }
     }
 }
@@ -223,8 +197,7 @@ pub(crate) struct FreshnessRow {
     pub(crate) raw_line: String,
     /// The note's raw `task_refresh` frontmatter value, if present.
     pub(crate) note_refresh_raw: Option<String>,
-    /// Tracking identity, if any: exact trailing `^prj`, or exact
-    /// trailing `^ref` / whole-token `#ref` tag for references.
+    /// Project tracking identity, if this is an exact trailing project anchor.
     pub(crate) tracker: Option<TrackerKind>,
     /// Exact `#gtd` + `#pre`/`#post` membership, if any.
     pub(crate) checklist: Option<ChecklistKind>,
@@ -402,25 +375,15 @@ fn evaluate_without_checklist(
         Some(Lane::Next) => config.next_interval,
         _ => None,
     };
-    // Explicit tracker cadences override every other level for that
-    // tracker type (`docs/freshness.md` §2). A tracker without a
-    // configured cadence uses the Ready chain in every lane: the
-    // weekly reminder must not become a daily lane review. Only Ready
-    // refs keep the tracker cadence and REFERENCES tier; lane refs
-    // (`[*]`/`[/]`) are ordinary lane rows (`docs/freshness.md` §6,
-    // the J4 split). `^prj` behavior is unchanged.
+    // Project rows keep their dedicated cadence and PROJECTS tier.
+    // References use the same Ready and lane intervals as ordinary
+    // tasks, regardless of their tag or block ID.
     let is_prj = row.tracker == Some(TrackerKind::Prj);
-    let is_ref =
-        row.tracker == Some(TrackerKind::Ref) && lane == Some(Lane::Ready);
-    let is_tracker = is_prj || is_ref;
+    let is_tracker = is_prj;
     let tracker_override: Option<(u16, IntervalSource)> = if is_prj {
         config
             .project_interval
             .map(|days| (days, IntervalSource::Project))
-    } else if is_ref {
-        config
-            .reference_interval
-            .map(|days| (days, IntervalSource::Reference))
     } else {
         None
     };
@@ -445,8 +408,8 @@ fn evaluate_without_checklist(
         && !row.is_today;
 
     // Lane due date for walked ordinary lanes: fresh + lane interval,
-    // or none when never stamped. Trackers never use the lane
-    // interval here; their lane arithmetic lives below.
+    // or none when never stamped. Project trackers use their own lane
+    // arithmetic below; references follow this ordinary path.
     let lane_due_on: Option<NaiveDate> = match (lane, lane_days, read.fresh) {
         (Some(Lane::Pending) | Some(Lane::Next), Some(days), Some(fresh)) => {
             fresh
@@ -528,10 +491,9 @@ fn evaluate_without_checklist(
         }
     };
 
-    // Tracker lane due date uses the effective (tracker-override or
-    // Ready-chain) interval, never the lane interval; a disabled lane
-    // walk does not disable the reminder. Lane trackers are due when
-    // never stamped, resurfaced, or at/over the effective interval.
+    // Project lane due date uses its effective tracker or Ready-chain
+    // interval, never the lane interval; a disabled lane walk does not
+    // disable the reminder.
     let tracker_lane_eligible = is_tracker
         && matches!(lane, Some(Lane::Pending) | Some(Lane::Next))
         && walk_scope;
@@ -558,14 +520,9 @@ fn evaluate_without_checklist(
         })
     };
 
-    // Tier: PROJECTS is every due `^prj` (Ready NEW/RESURFACED/ROTTEN
-    // states, plus every due lane tracker with its actual lane
-    // retained) and REFERENCES every due Ready `#ref`/`^ref` row; both
-    // are checked before
-    // NEW and the lane tiers, so a never-confirmed Ready reference
-    // walks in REFERENCES, never NEW. PENDING/NEXT are due walked
-    // ordinary lanes; TICKLER/ROTTEN are the Ready resurfaced/rotten
-    // states. Tracker tiers never precede NEW for ordinary tasks.
+    // PROJECTS is every due `^prj` row (Ready states and lane rows
+    // with their actual lane retained). All other rows, including
+    // references, use the ordinary NEW/lane/TICKLER/ROTTEN groups.
     let tracker_ready_due = is_tracker
         && lane == Some(Lane::Ready)
         && matches!(
@@ -579,8 +536,6 @@ fn evaluate_without_checklist(
         && (tracker_ready_due || tracker_lane_due_row)
     {
         Some(Tier::Projects)
-    } else if is_ref && (tracker_ready_due || tracker_lane_due_row) {
-        Some(Tier::References)
     } else if lane == Some(Lane::Ready)
         && state == Some(FreshState::New)
         && !is_tracker
@@ -834,7 +789,7 @@ fn compare_created(
 }
 
 /// The review queue in tier order PRE → NEW → PROJECTS → PENDING →
-/// NEXT → RECURRING → TICKLER → REFERENCES → ROTTEN → POST, with
+/// NEXT → RECURRING → TICKLER → ROTTEN → POST, with
 /// each tier's comparator from `docs/freshness.md` §4.
 pub(crate) fn queue(
     rows: &[FreshnessRow],
@@ -881,7 +836,7 @@ pub(crate) fn queue(
                 .cmp(&b.due_on)
                 .then(a.path.cmp(&b.path))
                 .then(a.line.cmp(&b.line)),
-            Tier::Projects | Tier::Pending | Tier::Next | Tier::References => {
+            Tier::Projects | Tier::Pending | Tier::Next => {
                 // Never-stamped (`due_on` none) first, then due_on,
                 // created, path, line.
                 a.due_on
@@ -923,7 +878,6 @@ pub(crate) struct ByTier {
     pub(crate) next: u32,
     pub(crate) recurring: u32,
     pub(crate) tickler: u32,
-    pub(crate) references: u32,
     pub(crate) rotten: u32,
     pub(crate) post: u32,
 }
@@ -937,7 +891,6 @@ impl ByTier {
             + self.next
             + self.recurring
             + self.tickler
-            + self.references
             + self.rotten
             + self.post
     }
@@ -961,8 +914,6 @@ pub(crate) struct Counts {
     pub(crate) next_due: u32,
     /// Due `PROJECTS` rows (equals its tier count).
     pub(crate) projects_due: u32,
-    /// Due `REFERENCES` rows (equals its tier count).
-    pub(crate) references_due: u32,
     /// Due `PRE` checklist rows (equals its tier count).
     pub(crate) pre_due: u32,
     /// Due `POST` checklist rows (equals its tier count).
@@ -1018,8 +969,8 @@ pub(crate) fn counts(
             decide += 1;
         }
         // State totals count evaluated Ready states (a due Ready
-        // tracker contributes its state to new/resurfaced/rotten and
-        // its queue row to PROJECTS or REFERENCES); tier totals count
+        // project contributes its state to new/resurfaced/rotten and
+        // its queue row to PROJECTS); tier totals count
         // the actual full queue.
         match evaluated.state {
             Some(FreshState::New) => {
@@ -1047,7 +998,6 @@ pub(crate) fn counts(
             Some(Tier::Next) => by_tier.next += 1,
             Some(Tier::Recurring) => by_tier.recurring += 1,
             Some(Tier::Tickler) => by_tier.tickler += 1,
-            Some(Tier::References) => by_tier.references += 1,
             Some(Tier::Rotten) => by_tier.rotten += 1,
             Some(Tier::Post) => by_tier.post += 1,
             None => {}
@@ -1067,7 +1017,6 @@ pub(crate) fn counts(
         pending_due: by_tier.pending,
         next_due: by_tier.next,
         projects_due: by_tier.projects,
-        references_due: by_tier.references,
         pre_due: by_tier.pre,
         post_due: by_tier.post,
         recurring_due: by_tier.recurring,

@@ -173,7 +173,7 @@ bob ready
 
 `bob plan` reports today's themes and Task Links plus Next/Pending pressure.
 `bob freshness` shows the due review queue in PRE → NEW → PROJECTS → PENDING → NEXT
-→ TICKLER → REFERENCES → ROTTEN → POST order. `bob ready` reports each area's or
+→ TICKLER → ROTTEN → POST order. `bob ready` reports each area's or
 project's whole Ready lane, including NEW and ROTTEN; the dashboard READY
 backlog filters out those review buckets and Today-linked work. Today means
 linked under an open Pomodoro in the selected daily note; it is not a task

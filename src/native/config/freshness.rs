@@ -43,9 +43,6 @@ pub(crate) struct FreshnessConfig {
     /// Explicit `^prj` review cadence. `None` means inherit the
     /// existing Ready chain.
     pub(crate) project_interval: Option<u16>,
-    /// Explicit `^ref` review cadence. `None` means inherit the
-    /// existing Ready chain (Ready) or lane interval (Pending/Next).
-    pub(crate) reference_interval: Option<u16>,
     pub(crate) rotten_daily_budget: Option<u32>,
     pub(crate) interval_from_config: bool,
     /// The removed `stale_daily_budget` key supplied the budget, so
@@ -62,7 +59,6 @@ impl Default for FreshnessConfig {
             pending_interval: Some(1),
             next_interval: Some(1),
             project_interval: None,
-            reference_interval: None,
             rotten_daily_budget: None,
             interval_from_config: false,
             stale_budget_deprecated: false,
@@ -172,15 +168,6 @@ fn parse_freshness_config(
             &path_display.to_string(),
         )?;
     }
-    let mut reference_interval = defaults.reference_interval;
-    if let Some(value) = get("reference_interval") {
-        reference_interval = parse_tracker_interval(
-            &value,
-            "freshness.reference_interval",
-            &path_display.to_string(),
-        )?;
-    }
-
     // The canonical `rotten_daily_budget` wins by presence,
     // including an explicit null (budget off). The removed
     // `stale_daily_budget` still supplies the budget for one release
@@ -220,7 +207,6 @@ fn parse_freshness_config(
         pending_interval,
         next_interval,
         project_interval,
-        reference_interval,
         rotten_daily_budget: budget,
         interval_from_config,
         stale_budget_deprecated,
@@ -689,49 +675,41 @@ mod tests {
     }
 
     #[test]
-    fn tracker_intervals_default_absent_and_null() {
+    fn project_interval_defaults_absent_and_null() {
         for text in [
             "freshness:\n  interval: 7\n",
-            "freshness:\n  project_interval:\n  reference_interval:\n",
+            "freshness:\n  project_interval:\n",
         ] {
             let config = parse_freshness_config(text, Path::new("/config.yml"))
-                .expect("absent or null tracker keys inherit");
+                .expect("absent or null project key inherits");
             assert_eq!(config.project_interval, None);
-            assert_eq!(config.reference_interval, None);
         }
     }
 
     #[test]
-    fn tracker_intervals_parse_integers() {
+    fn project_interval_parses_integers() {
         let config = parse_freshness_config(
-            "freshness:\n  project_interval: 1\n  reference_interval: 3\n",
+            "freshness:\n  project_interval: 1\n",
             Path::new("/config.yml"),
         )
         .expect("tracker intervals parse");
         assert_eq!(config.project_interval, Some(1));
-        assert_eq!(config.reference_interval, Some(3));
         let config = parse_freshness_config(
-            "freshness:\n  project_interval: 365\n  reference_interval: 365\n",
+            "freshness:\n  project_interval: 365\n",
             Path::new("/config.yml"),
         )
         .expect("tracker upper bound parses");
         assert_eq!(config.project_interval, Some(365));
-        assert_eq!(config.reference_interval, Some(365));
     }
 
     #[test]
     fn rejects_invalid_tracker_intervals() {
         for text in [
             "freshness:\n  project_interval: false\n",
-            "freshness:\n  reference_interval: false\n",
             "freshness:\n  project_interval: true\n",
-            "freshness:\n  reference_interval: true\n",
             "freshness:\n  project_interval: 0\n",
-            "freshness:\n  reference_interval: 366\n",
             "freshness:\n  project_interval: soon\n",
-            "freshness:\n  reference_interval: 7.5\n",
             "freshness:\n  project_interval: [1]\n",
-            "freshness:\n  reference_interval:\n    days: 3\n",
         ] {
             let error = parse_freshness_config(text, Path::new("/config.yml"))
                 .expect_err("invalid tracker interval must fail");
@@ -739,6 +717,20 @@ mod tests {
                 matches!(error, ConfigError::Invalid(_)),
                 "expected invalid config for {text:?}, got {error:?}"
             );
+        }
+    }
+
+    #[test]
+    fn obsolete_reference_interval_is_ignored_regardless_of_value() {
+        for value in ["3", "null", "false", "soon", "{ days: 3 }"] {
+            let text = format!(
+                "freshness:\n  interval: 5\n  reference_interval: {value}\n"
+            );
+            let config =
+                parse_freshness_config(&text, Path::new("/config.yml"))
+                    .expect("obsolete unknown key must be ignored");
+            assert_eq!(config.interval, 5, "value {value}");
+            assert!(config.interval_from_config, "value {value}");
         }
     }
 
@@ -830,9 +822,7 @@ mod tests {
             "freshness:\n  pending_interval: 366\n",
             "freshness:\n  next_interval: soon\n",
             "freshness:\n  project_interval: false\n",
-            "freshness:\n  reference_interval: 0\n",
             "freshness:\n  project_interval: 366\n",
-            "freshness:\n  reference_interval: soon\n",
             "freshness: [1, 2]\n",
         ] {
             let error = parse_freshness_config(text, Path::new("/config.yml"))
