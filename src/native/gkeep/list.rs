@@ -6,8 +6,9 @@
 //! config and makes no adapter call, so it stays fast enough for
 //! widgets; a Keep failure still prints the vault section and exits 1.
 
-use std::{collections::BTreeMap, fs, path::PathBuf};
+use std::{collections::BTreeMap, fs, path::PathBuf, sync::LazyLock};
 
+use regex::Regex;
 use serde_json::{json, Value};
 
 use super::{
@@ -550,11 +551,16 @@ fn print_vault_table(
         } else {
             format!("  {}", hints.join("  "))
         };
-        let plain = format!("{}{}", task.description, suffix);
+        let description = if task.marker.is_some() {
+            collapse_keep_source_link(&task.description)
+        } else {
+            task.description.clone()
+        };
+        let plain = format!("{}{}", description, suffix);
         let cell = if style::display_width(&plain) <= available {
-            format!("{}{}", task.description, styler.dim(&suffix))
+            format!("{}{}", description, styler.dim(&suffix))
         } else if suffix.is_empty() {
-            style::truncate(&task.description, available)
+            style::truncate(&description, available)
         } else {
             style::truncate(&plain, available)
         };
@@ -572,6 +578,16 @@ fn print_vault_table(
             style::pad_right(age, age_width),
         );
     }
+}
+
+/// Hide the generated Keep URL and tooltip in the compact human table.
+/// JSON descriptions retain the ordinary Markdown link.
+fn collapse_keep_source_link(description: &str) -> String {
+    static KEEP_SOURCE_LINK: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r#"\[💡\]\([^()\s\"<>]+ \"Open in Google Keep\"\)"#)
+            .expect("valid generated Keep source-link regex")
+    });
+    KEEP_SOURCE_LINK.replace_all(description, "💡").into_owned()
 }
 
 /// The vault task's age from its `[created::…]` date, else `—`.
@@ -604,6 +620,28 @@ fn display_path(path: &std::path::Path) -> String {
         }
     }
     text.into_owned()
+}
+
+#[cfg(test)]
+mod source_link_tests {
+    use super::collapse_keep_source_link;
+
+    #[test]
+    fn collapses_only_the_generated_keep_link_shape() {
+        assert_eq!(
+            collapse_keep_source_link(
+                "Call [💡](https://keep.google.com/u/0/#NOTE/id \"Open in Google Keep\") then [site](https://example.test)"
+            ),
+            "Call 💡 then [site](https://example.test)",
+        );
+        for lookalike in [
+            "[💡](https://example.test \"Open in Keep\")",
+            "[💡](https://example.test \"Open in Google Keep\"",
+            "[💡](https://example.test (broken) \"Open in Google Keep\")",
+        ] {
+            assert_eq!(collapse_keep_source_link(lookalike), lookalike);
+        }
+    }
 }
 
 /// The footer: non-zero state counts, then the next command when

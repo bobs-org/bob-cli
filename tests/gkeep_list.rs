@@ -207,6 +207,35 @@ fn vault_source_needs_no_config_or_adapter() {
 }
 
 #[test]
+fn marked_keep_source_link_is_compact_in_table_and_preserved_in_json() {
+    let env = GkeepEnv::new("bob-cli-gkeep-list-source-icon");
+    write_target(
+        &env,
+        "## Tasks\n\n- [ ] #task Call dentist [💡](https://keep.google.com/u/0/#NOTE/id \"Open in Google Keep\") [created::2026-09-27]\n  %%gkeep:v1:note-1:0123456789ab%%\n",
+    );
+    let fake = FakeAdapter::new(&env, "adapter");
+    let table = list_command(&env, &fake, &["-s", "vault"])
+        .output()
+        .expect("run table");
+    assert_eq!(table.status.code(), Some(0));
+    let text = stdout(&table);
+    assert!(text.contains("Call dentist 💡"), "{text}");
+    assert!(!text.contains("keep.google.com"), "{text}");
+    assert!(!text.contains("Open in Google Keep"), "{text}");
+
+    let json = list_command(&env, &fake, &["-s", "vault", "-f", "json"])
+        .output()
+        .expect("run JSON");
+    let document: serde_json::Value =
+        serde_json::from_slice(&json.stdout).expect("parse JSON");
+    let description = document["vault"]["tasks"][0]["description"]
+        .as_str()
+        .expect("description");
+    assert!(description.contains("[💡](https://keep.google.com"));
+    assert!(description.contains("Open in Google Keep"));
+}
+
+#[test]
 fn keep_source_omits_the_vault_section() {
     let env = GkeepEnv::new("bob-cli-gkeep-list-keep-only");
     install_token_stub(&env);

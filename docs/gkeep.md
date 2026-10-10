@@ -228,9 +228,9 @@ selected parent, announced as `Clipping <display> (i/N)`. The outcomes:
 | `failed_permanent` | Blocked, thin, render, unsupported content, collision, invalid URL, internal failure, or any other HTTP status | None | Written as a task with a ⚠️ child, then archived |
 
 A retryable failure leaves the note in Keep for the next pull and counts
-toward `summary.failed`. A permanent failure renders exactly as today with
+toward `summary.failed`. A permanent failure renders
 `⚠️ Clip failed (<kind>): <message> · retry: bob ref create <url> -P
-<parent>` as a child just before the `Source:` line. A pull whose notes all
+<parent>` as the final visible child, after any labels. A pull whose notes all
 clip needs no `gkeep_inbox.md`, takes no vault lock, and skips the Git
 commit. `pull -d` still contacts Keep to snapshot notes, then stops: it does
 not clip, write the vault, or archive. It shows `would clip → <parent>` rows
@@ -278,14 +278,19 @@ first, else the first non-blank text line (inner whitespace collapsed, one
 leading `- `/`* `/`• ` bullet stripped, then removed from the children), else
 the first list item, else a `Google Keep image note` fallback when attachments
 exist, else an `Untitled Google Keep list (N items)` fallback
-(`1 item` singular). Children use the target note's indent unit (what
+(`1 item` singular). A URL-bearing note gets a linked `💡` immediately after
+the escaped task description, titled `Open in Google Keep`; missing, empty, or
+blank URLs omit the icon. The task's `[created::YYYY-MM-DD]` field remains
+after the icon and is still derived from Keep's local creation date. Children use the target note's indent unit (what
 `bob capture` would use); list children nest one level deeper when indented
 or checked; OCR text nests under an attachment summary line
 (`📎 N image(s)/drawing(s)/audio clip(s)/file(s) stay(s) in Google Keep`,
-with unknown kinds as `other` → `file(s)`); the `Source:` child links back
-to Keep with the local created time, labels, and the marker (with a
-`· revised` flag for revisions). Source URLs percent-encode `%`, `(`, `)`,
-`<`, `>`, `[`, `]`, and whitespace, so a crafted id cannot plant a marker.
+with unknown kinds as `other` → `file(s)`). Labels appear as one ordinary
+`- 🏷 label, ...` child. Revisions append `· revised` to the task description.
+The final indented continuation is the hidden `%%gkeep:...%%` marker; it is
+not a list item. Source URLs percent-encode Markdown delimiters, quotes,
+backslashes, and whitespace, so crafted destinations cannot break the link or
+plant a marker.
 
 Escaping: `#task` tokens → `\#task`; trailing ` ^id` block ids (including a
 caret starting the text or following Unicode whitespace/NBSP) → `\^id`;
@@ -296,22 +301,25 @@ child), thematic breaks (`---`/`***`/`___`, spaces allowed), and code fences
 (leading ` ``` `/`~~~`) gain a leading backslash.
 
 ```markdown
-- [ ] #task Call dentist about crown [created::2026-09-27]
+- [ ] #task Call dentist about crown [💡](https://keep.google.com/u/0/#NOTE/… "Open in Google Keep") [created::2026-09-27]
 	- They close at 5 on Fridays
-	- Source: [Google Keep](https://keep.google.com/u/0/#NOTE/…) · 2026-09-27 21:14 %%gkeep:v1:<id>:3f9c2e1d0a7b%%
-- [ ] #task Hardware store [created::2026-09-26]
+	%%gkeep:v1:<id>:3f9c2e1d0a7b%%
+- [ ] #task Hardware store [💡](https://keep.google.com/u/0/#NOTE/… "Open in Google Keep") [created::2026-09-26]
 	- [ ] wood screws
 		- [ ] #8 × 1¼"
 	- [x] sandpaper
 	- 📎 1 image stays in Google Keep
 		- RECEIPT TOTAL 12.99
-	- Source: [Google Keep](…) · 2026-09-26 08:02 · 🏷 errands %%gkeep:v1:<id>:9b1e44c07a2d%%
+	- 🏷 errands
+	%%gkeep:v1:<id>:9b1e44c07a2d%%
 ```
 
 ## Marker, ledger, and journal
 
-**Marker.** `%%gkeep:v1:<id>:<fp12>%%`, at the end of the task's `Source:`
-child line. Obsidian hides `%%…%%` comments in Live Preview and Reading view.
+**Marker.** `%%gkeep:v1:<id>:<fp12>%%`, on an indented, non-bullet final
+continuation of the task block. Obsidian hides `%%…%%` comments in Live Preview
+and Reading view. The source link is a normal Markdown link; the hidden marker
+stays separate so it does not leak into task descriptions.
 Ids are percent-encoded outside `[A-Za-z0-9._-]`; the raw id never goes into
 a block id. Parse regex: `%%gkeep:v1:([A-Za-z0-9._%-]+):([0-9a-f]{12})%%`.
 
@@ -324,7 +332,7 @@ a note look revised.
 **Ledger.** A scan over every `.md` file in the vault, including `done/`,
 skipping the always-excluded note directories. A cheap
 `contents.contains("%%gkeep:")` pre-filter skips files without markers; each
-hit records `{id, fp, path, line}`. Tasks keep their `Source:` child through
+hit records `{id, fp, path, line}`. Tasks keep the marker continuation through
 triage and `task archive` (formerly `move-done-tasks`, still accepted), so
 re-runs are idempotent across hosts with no
 local state. More than one ledger entry with the same `(id, fp)` warns,

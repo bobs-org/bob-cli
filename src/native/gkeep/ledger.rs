@@ -820,4 +820,24 @@ mod tests {
         assert_eq!(tasks[0].checked_items, 0);
         assert_eq!(tasks[0].marker, None);
     }
+
+    #[test]
+    fn read_target_tasks_associates_new_hidden_continuation_with_task() {
+        let settings = read_settings(Path::new("/nonexistent-bob-dir"));
+        let contents = "- [ ] #task Call dentist · revised [💡](https://keep.google.com/u/0/#NOTE/id \"Open in Google Keep\") [created::2026-09-27]\n  - note text\n  %%gkeep:v1:id:0123456789ab%%\n- [ ] #task Neighbor [created::2026-09-28]\n";
+        let tasks = read_target_tasks(contents, &settings);
+        assert_eq!(tasks.len(), 2);
+        assert_eq!(
+            tasks[0].created,
+            task_fields::parse_strict_calendar_date("2026-09-27")
+        );
+        assert_eq!(
+            tasks[0].marker,
+            Some(("id".to_string(), "0123456789ab".to_string()))
+        );
+        assert!(tasks[0]
+            .description
+            .contains("[💡](https://keep.google.com"));
+        assert_eq!(tasks[1].marker, None);
+    }
 }

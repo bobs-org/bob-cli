@@ -25,7 +25,7 @@ pub(super) struct RenderedBlock {
 ///
 /// `indent` is the target note's indent unit (one tab or two spaces) and
 /// prefixes every child; grandchildren use it twice. When `revision` is
-/// set the `Source:` line carries a `· revised` flag.
+/// set the task description carries a `· revised` annotation.
 pub(super) fn render_note(
     note: &KeepNote,
     indent: &str,
@@ -34,8 +34,8 @@ pub(super) fn render_note(
     render_note_in(note, indent, revision, None, &chrono::Local)
 }
 
-/// Render `note` with one extra child (already escaped) placed just
-/// before the `Source:` line: the permanent clip-failure fallback.
+/// Render `note` with one extra visible child (already escaped): the
+/// permanent clip-failure fallback.
 pub(super) fn render_note_with_fallback(
     note: &KeepNote,
     indent: &str,
@@ -49,14 +49,24 @@ fn render_note_in<Tz: chrono::TimeZone>(
     note: &KeepNote,
     indent: &str,
     revision: bool,
-    extra_before_source: Option<&str>,
+    extra_last_child: Option<&str>,
     tz: &Tz,
 ) -> RenderedBlock
 where
     Tz::Offset: std::fmt::Display,
 {
     let (title_raw, consumed_first_line) = raw_title(note);
-    let task_text = escape_task_text(&title_raw);
+    let mut task_text = escape_task_text(&title_raw);
+    if revision {
+        task_text.push_str(" · revised");
+    }
+    if let Some(url) = note.url.as_deref().filter(|url| !url.trim().is_empty())
+    {
+        task_text.push_str(&format!(
+            " [💡]({} \"Open in Google Keep\")",
+            encode_source_url(url),
+        ));
+    }
     let created = created_date_in(note, tz);
     let task_line = capture::format_task_line(&task_text, &created, None, None);
 
@@ -81,12 +91,21 @@ where
             lines.push(format!("{grandchild_prefix}- {ocr}"));
         }
     }
-    if let Some(extra) = extra_before_source {
+    if !note.labels.is_empty() {
+        let labels = note
+            .labels
+            .iter()
+            .map(|label| escape_task_text(&normalize_body(label)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        lines.push(format!("{child_prefix}- 🏷 {labels}"));
+    }
+    if let Some(extra) = extra_last_child {
         lines.push(format!("{child_prefix}- {extra}"));
     }
     lines.push(format!(
-        "{child_prefix}- {}",
-        source_line_in(note, revision, tz)
+        "{child_prefix}{}",
+        format_marker(&note.id, &note.content.fingerprint())
     ));
 
     RenderedBlock {
@@ -431,43 +450,8 @@ fn ocr_children(note: &KeepNote) -> Vec<String> {
         .collect()
 }
 
-/// The trailing `Source:` child: link, local created time, labels, an
-/// optional `· revised` flag, then the gkeep marker.
-fn source_line_in<Tz: chrono::TimeZone>(
-    note: &KeepNote,
-    revision: bool,
-    tz: &Tz,
-) -> String
-where
-    Tz::Offset: std::fmt::Display,
-{
-    let link = match &note.url {
-        Some(url) => format!("[Google Keep]({})", encode_source_url(url)),
-        None => "Google Keep".to_string(),
-    };
-    let mut line =
-        format!("Source: {link} · {}", created_datetime_in(note, tz));
-    if !note.labels.is_empty() {
-        let labels = note
-            .labels
-            .iter()
-            .map(|label| escape_task_text(&normalize_body(label)))
-            .collect::<Vec<_>>()
-            .join(", ");
-        line.push_str(&format!(" · 🏷 {labels}"));
-    }
-    if revision {
-        line.push_str(" · revised");
-    }
-    line.push_str(&format!(
-        " {}",
-        format_marker(&note.id, &note.content.fingerprint())
-    ));
-    line
-}
-
-/// Percent-encode `%`, `(`, `)`, `<`, `>`, `[`, `]`, and whitespace
-/// in a source URL, so a crafted id inside the URL cannot plant a
+/// Percent-encode Markdown delimiters and whitespace in a source URL,
+/// so a crafted id inside the URL cannot plant a
 /// parseable `%%gkeep:v1:…%%` marker before the real one.
 fn encode_source_url(url: &str) -> String {
     let mut out = String::with_capacity(url.len());
@@ -479,6 +463,8 @@ fn encode_source_url(url: &str) -> String {
             || c == '>'
             || c == '['
             || c == ']'
+            || c == '"'
+            || c == '\\'
             || c.is_whitespace()
         {
             for byte in c.encode_utf8(&mut [0; 4]).as_bytes() {
@@ -509,21 +495,6 @@ where
         chrono::Utc::now()
             .with_timezone(tz)
             .format("%Y-%m-%d")
-            .to_string()
-    }
-}
-
-/// The Keep `created` time in local time as `YYYY-MM-DD HH:MM`.
-fn created_datetime_in<Tz: chrono::TimeZone>(note: &KeepNote, tz: &Tz) -> String
-where
-    Tz::Offset: std::fmt::Display,
-{
-    if let Ok(utc) = note.created.parse::<chrono::DateTime<chrono::Utc>>() {
-        utc.with_timezone(tz).format("%Y-%m-%d %H:%M").to_string()
-    } else {
-        chrono::Utc::now()
-            .with_timezone(tz)
-            .format("%Y-%m-%d %H:%M")
             .to_string()
     }
 }
@@ -593,16 +564,16 @@ mod tests {
         assert_eq!(
             block.markdown,
             format!(
-                "- [ ] #task Call dentist about crown [created::2026-09-27]\n\
+                "- [ ] #task Call dentist about crown [💡](https://keep.google.com/u/0/#NOTE/note-abc-1 \"Open in Google Keep\") [created::2026-09-27]\n\
                  \t- They close at 5 on Fridays\n\
-                 \t- Source: [Google Keep](https://keep.google.com/u/0/#NOTE/note-abc-1) · 2026-09-27 21:14 {}",
+                 \t{}",
                 marker_fp(&note),
             ),
         );
     }
 
     #[test]
-    fn fallback_child_sits_just_before_source() {
+    fn fallback_child_precedes_hidden_marker() {
         let mut note = test_note();
         note.content.text = "https://example.com/post".to_string();
         let fallback = "⚠️ Clip failed (blocked): wall · retry: bob ref create https://example.com/post";
@@ -612,7 +583,7 @@ mod tests {
         assert_eq!(lines.len(), 3);
         assert!(lines[0].starts_with("- [ ] #task https://example.com/post "));
         assert_eq!(lines[1], format!("\t- {fallback}"));
-        assert!(lines[2].starts_with("\t- Source: "));
+        assert_eq!(lines[2], format!("\t{}", marker_fp(&note)));
         // Without a fallback the block has no middle child.
         let plain = render_note(&note, "\t", false);
         assert_eq!(plain.markdown.lines().count(), 2);
@@ -633,7 +604,7 @@ mod tests {
                 "- [ ] #task Buy oat milk [created::2026-09-27]\n\
                  \t- end caps are on sale\n\
                  \t- limit two\n\
-                 \t- Source: Google Keep · 2026-09-27 21:14 {}",
+                 \t{}",
                 marker_fp(&note),
             ),
         );
@@ -652,9 +623,9 @@ mod tests {
         assert_eq!(
             block.markdown,
             format!(
-                "- [ ] #task Hardware store #8 × 1¼″ 🧰 [created::2026-09-27]\n\
+                "- [ ] #task Hardware store #8 × 1¼″ 🧰 [💡](https://keep.google.com/u/0/#NOTE/note-abc-1 \"Open in Google Keep\") [created::2026-09-27]\n\
                  \t- 木材とネジ — café naïve\n\
-                 \t- Source: [Google Keep](https://keep.google.com/u/0/#NOTE/note-abc-1) · 2026-09-27 21:14 {}",
+                 \t{}",
                 marker_fp(&note),
             ),
         );
@@ -672,7 +643,7 @@ mod tests {
         assert_eq!(
             block.markdown,
             format!(
-                "- [ ] #task Notes [created::2026-09-27]\n\
+                "- [ ] #task Notes [💡](https://keep.google.com/u/0/#NOTE/note-abc-1 \"Open in Google Keep\") [created::2026-09-27]\n\
                  \t- \\# heading\n\
                  \t- \\> quote\n\
                  \t- \\1. ordered\n\
@@ -680,7 +651,7 @@ mod tests {
                  \t- \\+ plus\n\
                  \t- dash\n\
                  \t- star\n\
-                 \t- Source: [Google Keep](https://keep.google.com/u/0/#NOTE/note-abc-1) · 2026-09-27 21:14 {}",
+                 \t{}",
                 marker_fp(&note),
             ),
         );
@@ -712,9 +683,9 @@ mod tests {
         assert_eq!(
             block.markdown,
             format!(
-                "- [ ] #task Fix \\#task before Friday \\^abc123 [created::2026-09-27]\n\
+                "- [ ] #task Fix \\#task before Friday \\^abc123 [💡](https://keep.google.com/u/0/#NOTE/note-abc-1 \"Open in Google Keep\") [created::2026-09-27]\n\
                  \t- See [due\\:\\: tomorrow] and (x\\:\\: y) plus 100%&#37; sure\n\
-                 \t- Source: [Google Keep](https://keep.google.com/u/0/#NOTE/note-abc-1) · 2026-09-27 21:14 {}",
+                 \t{}",
                 marker_fp(&note),
             ),
         );
@@ -736,11 +707,11 @@ mod tests {
         assert_eq!(
             block.markdown,
             format!(
-                "- [ ] #task Hardware store [created::2026-09-27]\n\
+                "- [ ] #task Hardware store [💡](https://keep.google.com/u/0/#NOTE/note-abc-1 \"Open in Google Keep\") [created::2026-09-27]\n\
                  \t- [ ] wood screws\n\
                  \t\t- [ ] #8 × 1¼″\n\
                  \t- [x] sandpaper\n\
-                 \t- Source: [Google Keep](https://keep.google.com/u/0/#NOTE/note-abc-1) · 2026-09-27 21:14 {}",
+                 \t{}",
                 marker_fp(&note),
             ),
         );
@@ -761,10 +732,10 @@ mod tests {
         assert_eq!(
             block.markdown,
             format!(
-                "- [ ] #task peanut butter [created::2026-09-27]\n\
+                "- [ ] #task peanut butter [💡](https://keep.google.com/u/0/#NOTE/note-abc-1 \"Open in Google Keep\") [created::2026-09-27]\n\
                  \t- [ ] peanut butter\n\
                  \t- [x] jam\n\
-                 \t- Source: [Google Keep](https://keep.google.com/u/0/#NOTE/note-abc-1) · 2026-09-27 21:14 {}",
+                 \t{}",
                 marker_fp(&note),
             ),
         );
@@ -805,19 +776,57 @@ mod tests {
         );
 
         let block = render_note_in(&note, "\t", false, None, &chrono::Utc);
-        let source = block
-            .markdown
-            .lines()
-            .find(|line| line.contains("Source:"))
-            .expect("source line exists");
+        let source = block.markdown.lines().next().expect("task line exists");
         assert!(!source.contains("%%gkeep:v1:spoof:"));
         assert!(source.contains("%25%25gkeep:v1:spoof"));
         let markers: Vec<(String, String)> =
-            source.lines().flat_map(parse_markers).collect();
+            block.markdown.lines().flat_map(parse_markers).collect();
         assert_eq!(
             markers,
             vec![(note.id.clone(), note.content.fingerprint(),)]
         );
+    }
+
+    #[test]
+    fn source_link_escapes_title_delimiters_and_omits_blank_urls() {
+        let mut note = test_note();
+        note.url = Some("https://example.test/a(\"b\\c)?q=x#frag".into());
+        let block = render_note_in(&note, "  ", false, None, &chrono::Utc);
+        assert!(block.markdown.contains(
+            "[💡](https://example.test/a%28%22b%5Cc%29?q=x#frag \"Open in Google Keep\")"
+        ), "{}", block.markdown);
+        let marker = format!("  {}", marker_fp(&note));
+        assert_eq!(block.markdown.lines().last(), Some(marker.as_str()));
+
+        for url in [None, Some(""), Some(" \t\n ")] {
+            note.url = url.map(str::to_string);
+            let block = render_note_in(&note, "\t", false, None, &chrono::Utc);
+            assert!(!block.markdown.contains("[💡]"), "{}", block.markdown);
+            assert!(block.markdown.contains("[created::2026-09-27]"));
+            assert!(block
+                .markdown
+                .ends_with(&format!("\t{}", marker_fp(&note))));
+        }
+    }
+
+    #[test]
+    fn decorated_description_keeps_created_field_parseable() {
+        let mut note = test_note();
+        note.content.title = "Hardware store".into();
+        let block = render_note_in(&note, "\t", true, None, &chrono::Utc);
+        let task_body = block
+            .markdown
+            .lines()
+            .next()
+            .and_then(|line| line.split_once("#task ").map(|(_, body)| body))
+            .expect("task body");
+        let details = crate::native::dataview::parse_details(
+            task_body,
+            crate::native::dataview::TaskFormat::Dataview,
+        );
+        assert!(details.created.is_some());
+        assert!(details.description.contains("[💡](https://keep.google.com"));
+        assert!(details.description.contains("· revised"));
     }
 
     #[test]
@@ -853,8 +862,8 @@ mod tests {
         assert_eq!(
             block.markdown,
             format!(
-                "- [ ] #task Pick up parcel [created::2026-09-27]\n\
-                 \t- Source: [Google Keep](https://keep.google.com/u/0/#NOTE/note-abc-1) · 2026-09-27 21:14 · 🏷 errands, weekend {}",
+                "- [ ] #task Pick up parcel [💡](https://keep.google.com/u/0/#NOTE/note-abc-1 \"Open in Google Keep\") [created::2026-09-27]\n\
+                 \t- 🏷 errands, weekend\n\t{}",
                 marker_fp(&note),
             ),
         );
@@ -871,12 +880,12 @@ mod tests {
         assert_eq!(
             block.markdown,
             format!(
-                "- [ ] #task Hardware store [created::2026-09-27]\n\
+                "- [ ] #task Hardware store [💡](https://keep.google.com/u/0/#NOTE/note-abc-1 \"Open in Google Keep\") [created::2026-09-27]\n\
                  \t- [ ] wood screws\n\
                  \t- 📎 1 image stays in Google Keep\n\
                  \t\t- RECEIPT\n\
                  \t\t- TOTAL 12.99\n\
-                 \t- Source: [Google Keep](https://keep.google.com/u/0/#NOTE/note-abc-1) · 2026-09-27 21:14 {}",
+                 \t{}",
                 marker_fp(&note),
             ),
         );
@@ -907,7 +916,7 @@ mod tests {
     }
 
     #[test]
-    fn revision_flags_the_source_line() {
+    fn revision_annotates_task_description() {
         let mut note = test_note();
         note.content.title = "Call dentist".to_string();
 
@@ -915,8 +924,8 @@ mod tests {
         assert_eq!(
             block.markdown,
             format!(
-                "- [ ] #task Call dentist [created::2026-09-27]\n\
-                 \t- Source: [Google Keep](https://keep.google.com/u/0/#NOTE/note-abc-1) · 2026-09-27 21:14 · revised {}",
+                "- [ ] #task Call dentist · revised [💡](https://keep.google.com/u/0/#NOTE/note-abc-1 \"Open in Google Keep\") [created::2026-09-27]\n\
+                 \t{}",
                 marker_fp(&note),
             ),
         );
@@ -933,10 +942,10 @@ mod tests {
         assert_eq!(
             block.markdown,
             format!(
-                "- [ ] #task Call dentist [created::2026-09-27]\n\
+                "- [ ] #task Call dentist [💡](https://keep.google.com/u/0/#NOTE/note-abc-1 \"Open in Google Keep\") [created::2026-09-27]\n\
                  \t- They close at 5\n\
                  \t- Fridays\n\
-                 \t- Source: [Google Keep](https://keep.google.com/u/0/#NOTE/note-abc-1) · 2026-09-27 21:14 {}",
+                 \t{}",
                 marker_fp(&note),
             ),
         );
@@ -952,9 +961,9 @@ mod tests {
         assert_eq!(
             block.markdown,
             format!(
-                "- [ ] #task Call dentist [created::2026-09-27]\n\
+                "- [ ] #task Call dentist [💡](https://keep.google.com/u/0/#NOTE/note-abc-1 \"Open in Google Keep\") [created::2026-09-27]\n\
                  {}- They close at 5\n\
-                 {}- Source: [Google Keep](https://keep.google.com/u/0/#NOTE/note-abc-1) · 2026-09-27 21:14 {}",
+                 {}{}",
                 "  ",
                 "  ",
                 marker_fp(&note),

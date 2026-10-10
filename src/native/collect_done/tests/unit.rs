@@ -234,6 +234,19 @@ fn preserves_line_endings_in_source_and_archive() {
 }
 
 #[test]
+fn archives_indented_gkeep_marker_with_its_task_and_not_its_neighbor() {
+    let transform = transform_markdown(
+        "- [x] done #task Call dentist [💡](https://keep.google.com/u/0/#NOTE/id \"Open in Google Keep\") [created::2026-09-27]\r\n  - detail\r\n  %%gkeep:v1:id:0123456789ab%%\r\n- [ ] active #task Neighbor\r\n",
+    );
+    assert_eq!(transform.task_count, 1);
+    assert_eq!(
+        transform.archive_append,
+        "- [x] done #task Call dentist [💡](https://keep.google.com/u/0/#NOTE/id \"Open in Google Keep\") [created::2026-09-27]\r\n  - detail\r\n  %%gkeep:v1:id:0123456789ab%%\r\n"
+    );
+    assert_eq!(transform.source_contents, "- [ ] active #task Neighbor\r\n");
+}
+
+#[test]
 fn extracts_block_ids_from_every_moved_task_block_line() {
     let transform = transform_markdown(
         "\

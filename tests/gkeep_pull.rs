@@ -233,7 +233,7 @@ fn normal_pull_writes_verifies_commits_and_archives() {
     let pos2 = target.find("%%gkeep:v1:note-1:").unwrap();
     assert!(pos1 < pos2, "oldest first:\n{target}");
     // Byte-exact whole file (TZ=UTC; rendering uses only created dates).
-    let expected = "---\nkey: value\n---\n- intro bullet one\n- The tasks below are pulled in by the `bob gkeep` command.\n## Tasks\n\n- [ ] #task Hardware store [created::2026-09-26]\n\t- [ ] wood screws\n\t- [x] sandpaper\n\t- Source: Google Keep \u{00b7} 2026-09-26 08:02 %%gkeep:v1:note-2:32a5e5e2fd2c%%\n- [ ] #task Call dentist about crown [created::2026-09-27]\n\t- They close at 5 on Fridays\n\t- Source: [Google Keep](https://keep.google.com/u/0/#NOTE/note-1) \u{00b7} 2026-09-27 21:14 %%gkeep:v1:note-1:47582521e307%%\n";
+    let expected = "---\nkey: value\n---\n- intro bullet one\n- The tasks below are pulled in by the `bob gkeep` command.\n## Tasks\n\n- [ ] #task Hardware store [created::2026-09-26]\n\t- [ ] wood screws\n\t- [x] sandpaper\n\t%%gkeep:v1:note-2:32a5e5e2fd2c%%\n- [ ] #task Call dentist about crown [💡](https://keep.google.com/u/0/#NOTE/note-1 \"Open in Google Keep\") [created::2026-09-27]\n\t- They close at 5 on Fridays\n\t%%gkeep:v1:note-1:47582521e307%%\n";
     assert_eq!(target, expected, "byte-exact target:\n{target}");
 
     let journal = journal_records(&state);
@@ -698,7 +698,8 @@ fn crlf_endings_preserved_and_space_indent_used() {
     }
     let text = String::from_utf8_lossy(&raw).into_owned();
     // The space-indented target uses two spaces for the new children.
-    assert!(text.contains("\n  - Source:"), "{text}");
+    assert!(text.contains("\n  %%gkeep:v1:note-1:"), "{text}");
+    assert!(!text.contains("Source:"), "{text}");
 }
 
 #[test]
@@ -1048,6 +1049,7 @@ fn dry_run_markdown_equals_real_run() {
     let n1 = note("Equal note")
         .id("note-1")
         .created("2026-09-27T21:14:03Z")
+        .url("https://keep.google.com/u/0/#NOTE/note-1?source=test")
         .build();
     fake.respond("snapshot", &snapshot_ok("bryanbugyi34@gmail.com", vec![n1]));
     fake.respond("archive", &archive_ok(vec![("note-1", "archived")]));

@@ -734,8 +734,7 @@ struct WriteItem {
 }
 
 /// Build task writes: new/revised notes plus permanent clip-failure
-/// fallbacks (rendered exactly as today, with the ⚠️ child just
-/// before the `Source:` line).
+/// fallbacks, with the ⚠️ child after the note's ordinary children.
 fn build_writes(plan: &Plan, clips: &ClipSet, indent: &str) -> Vec<WriteItem> {
     let mut writes: Vec<WriteItem> = Vec::new();
     for planned in &plan.notes {
