@@ -1,15 +1,16 @@
 # Dashboard navigation and child pages
 
 The Dashboard (`dash.md`, alias Dashboard) is the calm place to choose
-work, review its health, and open the two larger collections. Its
-navigation sits immediately after `# Dash`, above `## Tasks`, as three
-labeled rows in exact reading and keyboard order: Work, Review, Browse.
+work, review its health, and open supporting collection and task pages.
+Its navigation sits immediately after `# Dash`, above `## Tasks`, as
+three labeled rows in exact reading and keyboard order: Work, Review,
+Browse.
 
 | Group | Badges, left to right | Purpose |
 | --- | --- | --- |
 | Work | TODAY · PENDING · NEXT · READY | Today's plan and the actionable lanes |
-| Review | NEW · ROTTEN · BLOCKED · CROWDED | Intake, aging work, dependencies, crowded notes |
-| Browse | PROJECTS · REFERENCES | Open the two collection pages |
+| Review | NEW · ROTTEN · CROWDED | Intake, aging work, crowded notes |
+| Browse | PROJECTS · REFERENCES · BLOCKED | Open supporting collection and task pages |
 
 Grouping is navigation only. It never changes the freshness walk, lane
 semantics, caps, or review sequence, and the Projects collection badge
@@ -27,7 +28,8 @@ Daily badges, CLI warnings, and navigation notices continue to check the whole
 lane, including TODAY.
 
 BLOCKED is informational and has no cap. Its count stays available for
-navigation and uses a neutral theme color regardless of its size.
+navigation and uses the same informational accent as PROJECTS and
+REFERENCES regardless of its size.
 
 ## Child pages
 
