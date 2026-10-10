@@ -867,7 +867,7 @@ pub(super) fn parse_editor_parent_task_item<'a>(
 }
 
 /// Resolve a plain `@route` token for the editor ref path. A
-/// standalone `@` listen marker never resolves.
+/// standalone `%` listen marker (or compatible `@` alias) never resolves.
 fn editor_plain_ref_route(text: &str) -> Option<String> {
     if is_standalone_listen_marker(text) {
         return None;
@@ -890,10 +890,11 @@ fn editor_plain_ref_route(text: &str) -> Option<String> {
 /// A whole-item bare URL admitted by the routing policy: mode `ref`
 /// with one `ref_url` span over the URL token, `<>` included, plus an
 /// ordinary `route` span when exactly one plain `@route` token leads or
-/// trails it, plus a `ref_listen` span over a standalone `@` immediately
-/// after the URL. `URL @`, `URL @ @route`, and `@route URL @` request
-/// companion audio. Anything else (extra text, child lines, markers,
-/// `@@`, dependencies, `URL @route @`, `URL @ @`) falls through to the
+/// trails it, plus a `ref_listen` span over a standalone `%` or compatible
+/// `@` immediately after the URL. `URL %`/`URL @`,
+/// `URL % @route`/`URL @ @route`, and `@route URL %`/`@route URL @`
+/// request companion audio. Anything else (extra text, child
+/// lines, markers, `@@`, dependencies, `URL @route %`, `URL % %`) falls through to the
 /// generic path, exactly like execution. A bare URL remains submittable
 /// and never acquires a required `needs` entry merely because a client
 /// can offer a parent picker.
@@ -954,7 +955,7 @@ fn parse_editor_ref_item<'a>(
         });
     }
     if tokens.len() == 2 {
-        // `URL @`: listen with default/global parent.
+        // `URL %` / `URL @`: listen with default/global parent.
         if is_standalone_listen_marker(tokens[1].text) {
             if let Some(intent) = classify_token(tokens[0].text) {
                 if !policy.admits(&intent, RoutingEntry::Capture) {
@@ -1073,7 +1074,7 @@ fn parse_editor_ref_item<'a>(
         });
     }
     if tokens.len() == 3 {
-        // `URL @ @route`: trailing explicit parent with listen.
+        // `URL % @route`: trailing explicit parent with listen.
         if is_standalone_listen_marker(tokens[1].text) {
             let url_token = tokens[0];
             let route_token = tokens[2];
@@ -1136,7 +1137,7 @@ fn parse_editor_ref_item<'a>(
                 declarations: Vec::new(),
             });
         }
-        // `@route URL @`: leading explicit parent with listen.
+        // `@route URL %`: leading explicit parent with listen.
         if is_standalone_listen_marker(tokens[2].text)
             && !is_standalone_listen_marker(tokens[0].text)
         {

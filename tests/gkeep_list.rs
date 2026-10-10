@@ -814,14 +814,26 @@ fn url_only_note_shows_ref_hint_and_json_verdict() {
         .id("note-2")
         .text("They close at 5")
         .build();
+    let percent_listen_note = note("")
+        .id("note-3")
+        .text("https://arxiv.org/pdf/2609.12039 %")
+        .build();
+    let at_listen_note = note("")
+        .id("note-4")
+        .text("https://example.com/post @")
+        .build();
     fake.respond(
         "snapshot",
-        &snapshot_ok("bryanbugyi34@gmail.com", vec![url_note, task_note]),
+        &snapshot_ok(
+            "bryanbugyi34@gmail.com",
+            vec![url_note, task_note, percent_listen_note, at_listen_note],
+        ),
     );
     let output = list_command(&env, &fake, &[]).output().expect("run");
     assert_eq!(output.status.code(), Some(0));
     let text = stdout(&output);
     assert!(text.contains("🔗 ref"), "ref hint:\n{text}");
+    assert!(text.contains("🎧 listen"), "listen hint:\n{text}");
     let output = list_command(&env, &fake, &["-f", "json"])
         .output()
         .expect("run");
@@ -829,12 +841,16 @@ fn url_only_note_shows_ref_hint_and_json_verdict() {
     let document: serde_json::Value =
         serde_json::from_str(&stdout(&output)).expect("json parses");
     let notes = document["keep"]["notes"].as_array().expect("notes array");
-    assert_eq!(notes.len(), 2);
+    assert_eq!(notes.len(), 4);
     assert_eq!(notes[0]["id"], "note-1");
     assert_eq!(notes[0]["state"], "new");
     assert_eq!(notes[0]["clip"]["url"], "https://example.com/post");
     assert_eq!(notes[0]["clip"]["display"], "example.com/post");
     assert_eq!(notes[0]["clip"]["verdict"], "not_found");
+    assert_eq!(notes[2]["clip"]["url"], "https://arxiv.org/pdf/2609.12039");
+    assert_eq!(notes[2]["clip"]["listen"], true);
+    assert_eq!(notes[3]["clip"]["url"], "https://example.com/post");
+    assert_eq!(notes[3]["clip"]["listen"], true);
     assert!(
         notes[1].get("clip").is_none(),
         "ordinary notes carry no clip:\n{document}"

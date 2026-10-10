@@ -94,7 +94,8 @@ pub(super) struct PlannedNote {
     /// Why a skipped note stays in Keep (`pinned`, `shared`, …).
     pub(super) skip_reason: Option<String>,
     /// The R5 URL-only intent when `action` is `CreateRef`, including
-    /// whether the standalone `@` marker requested companion audio.
+    /// whether standalone `%` (or the compatible `@` alias) requested
+    /// companion audio.
     pub(super) ref_intent: Option<RefIntent>,
     /// Trailing `@route` on a URL-only note, lowercased, when present.
     /// Routing never becomes part of the clip target.
@@ -303,17 +304,18 @@ fn classify_one_with_imports(
 }
 
 /// The R5 URL-only rule: the note holds exactly one bare link (plus an
-/// optional single trailing `@route` and an optional standalone `@`
-/// listen marker) and nothing else, so a pull clips it into the reading
-/// queue instead of writing a task. Returns the link's intent plus the
+/// optional single trailing `@route` and an optional standalone `%`
+/// listen marker or compatible `@` alias) and nothing else, so a pull clips
+/// it into the reading queue instead of writing a task. Returns the link's
+/// intent plus the
 /// trailing route (lowercased) when every condition holds: a text note
 /// with no attachments, not shared (even with `-S`), either an empty
 /// title with a marked body or an empty body with a marked title (a page
 /// title equal to the `WebLink` title also counts), a classifying token,
 /// and an admitting policy. The route and listen marker never become part
-/// of the clip target. `URL @` requests companion audio; `URL @ @route`
-/// adds an explicit parent. `URL @route @`, attached `path@`, and leading
-/// routes stay ordinary notes.
+/// of the clip target. `URL %` requests companion audio (with `URL @`
+/// as a compatible alias); `URL % @route` adds an explicit parent.
+/// `URL @route %`, attached `path@`, and leading routes stay ordinary notes.
 pub(super) fn url_only_intent(
     note: &KeepNote,
     policy: &UrlRoutingPolicy,
@@ -332,7 +334,7 @@ pub(super) fn url_only_intent(
     }
     let title = note.content.title.trim();
     let body = note.content.text.trim();
-    // Body shapes: `URL`, `URL @`, `URL @route`, `URL @ @route`.
+    // Body shapes: `URL`, `URL %`/`URL @`, `URL @route`, `URL % @route`.
     if !body.is_empty() {
         if let Some((intent, route)) =
             url_only_body_tokens(body, title, note, policy)
@@ -351,7 +353,7 @@ pub(super) fn url_only_intent(
 }
 
 /// Parse one Keep text field (body with a title for matching, or title
-/// alone) as `URL`, `URL @`, `URL @route`, or `URL @ @route`. Returns the
+/// alone) as `URL`, `URL %`/`URL @`, `URL @route`, or `URL % @route`. Returns the
 /// wrapped intent plus the trailing route. Title/WebLink matching always
 /// compares the URL alone, so the marker never becomes part of the clip
 /// target.
@@ -376,7 +378,7 @@ fn url_only_body_tokens(
             }
             Some((RefIntent::without_listen(intent), None))
         }
-        // `URL @`: listen with existing parent selection.
+        // `URL %` / `URL @`: listen with existing parent selection.
         [url_token, marker] if is_standalone_listen_marker(marker) => {
             let intent = classify_token(url_token)?;
             if !policy.admits(&intent, RoutingEntry::Gkeep) {
@@ -391,7 +393,7 @@ fn url_only_body_tokens(
             Some((RefIntent::with_listen(intent), None))
         }
         [url_token, route_token] => {
-            // `URL @` is handled above; a second token that is not a
+            // Listen markers are handled above; a second token that is not a
             // plain route (including a second `@`) stays an ordinary note.
             if is_standalone_listen_marker(route_token) {
                 return None;
@@ -409,7 +411,7 @@ fn url_only_body_tokens(
             }
             Some((RefIntent::without_listen(intent), Some(route)))
         }
-        // `URL @ @route`: listen with trailing explicit parent.
+        // `URL % @route`: listen with trailing explicit parent.
         [url_token, marker, route_token]
             if is_standalone_listen_marker(marker) =>
         {
@@ -871,6 +873,71 @@ mod tests {
             routed.routing.as_ref().expect("policy")
         )
         .is_none());
+    }
+
+    #[test]
+    fn url_only_percent_and_at_markers_queue_listen_intent() {
+        let (ledger, journal, _) = empty_plan();
+        let routed = routed_opts();
+        let cases = [
+            (
+                "percent body",
+                "",
+                "https://arxiv.org/pdf/2609.12039 %",
+                None,
+            ),
+            ("percent title", "https://example.com/title %", "", None),
+            ("at alias", "", "https://example.com/post @", None),
+            (
+                "at alias with route",
+                "",
+                "https://example.com/routed @ @sase",
+                Some("sase"),
+            ),
+            (
+                "percent with route",
+                "",
+                "https://example.com/post % @sase",
+                Some("sase"),
+            ),
+        ];
+
+        for (id, title, text, expected_route) in cases {
+            let built = url_note(id, title, text);
+            let (intent, route) = url_only_intent(
+                &built,
+                routed.routing.as_ref().expect("policy"),
+            )
+            .unwrap_or_else(|| panic!("{id} matches"));
+            assert!(intent.listen, "{id} carries listen intent");
+            let raw = if text.is_empty() { title } else { text };
+            assert_eq!(intent.cleaned, raw.split_whitespace().next().unwrap());
+            assert_eq!(route.as_deref(), expected_route, "{id} route");
+
+            let plan = classify(
+                std::slice::from_ref(&built),
+                &ledger,
+                &journal,
+                &routed,
+            );
+            assert_eq!(states(&plan), vec![(id, "new", "create_ref")]);
+            let planned_intent = plan.notes[0].ref_intent.as_ref().unwrap();
+            assert!(planned_intent.listen, "{id} persists listen intent");
+            assert_eq!(planned_intent.cleaned, intent.cleaned);
+        }
+
+        for (id, text) in [
+            ("misordered", "https://example.com/post @sase %"),
+            ("duplicate", "https://example.com/post % %"),
+            ("prose", "Read https://example.com/post %"),
+        ] {
+            let built = url_note(id, "", text);
+            assert!(
+                url_only_intent(&built, routed.routing.as_ref().unwrap())
+                    .is_none(),
+                "{id} stays outside the reference grammar"
+            );
+        }
     }
 
     #[test]

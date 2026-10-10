@@ -13,6 +13,7 @@ use std::time::Instant;
 
 const NOW: &str = "2026-10-07 13:40:00";
 const ARTICLE_URL: &str = "https://example.com/post";
+const ARXIV_PDF_URL: &str = "https://arxiv.org/pdf/2609.12039";
 const TASK_LINE: &str =
     "- [ ] #task https://example.com/post [created::2026-10-07]";
 
@@ -85,6 +86,22 @@ fn write_article_curl(dir: &std::path::Path) -> std::path::PathBuf {
     let path = dir.join("fake-curl.sh");
     let script = "#!/bin/sh\ndest=\"\"\nprev=\"\"\nfor arg in \"$@\"; do\n  if [ \"$prev\" = \"-o\" ]; then dest=\"$arg\"; fi\n  prev=\"$arg\"\n  url=\"$arg\"\ndone\ncase \"$url\" in\n  *\"example.com\"*)\n    printf '<html><body>article</body></html>' > \"$dest\"\n    printf '200\\ntext/html; charset=utf-8\\n\\n'\n    ;;\n  *)\n    printf '404\\ntext/html\\n\\n'\n    ;;\nesac\n";
     write_executable(&path, script);
+    path
+}
+
+fn write_fake_listen(dir: &std::path::Path) -> std::path::PathBuf {
+    let path = dir.join("fake-listen.sh");
+    write_executable(
+        &path,
+        r##"#!/bin/sh
+echo "$@" >> "$FAKE_LISTEN_LOG"
+for arg in "$@"; do
+  case "$arg" in
+    *.mp3) printf 'ID3 fake companion audio' > "$arg" ;;
+  esac
+done
+"##,
+    );
     path
 }
 
@@ -520,6 +537,29 @@ fn capture_library_hits_are_unchanged() {
     assert!(json["ref"].get("fallback").is_none(), "{json}");
     assert!(pending_files(&temp).is_empty());
 
+    // A later listen request reports the explicit attach command; it never
+    // upgrades this known capture or queues a second job implicitly.
+    let output = capture(
+        &temp,
+        &vault,
+        &["-f", "json", "https://example.com/captured %"],
+    )
+    .output()
+    .expect("run known percent-listen capture");
+    assert_success(&output);
+    let json = parse_json(&output);
+    assert_eq!(json["placement"], "unchanged");
+    assert_eq!(json["ref"]["listen"], true);
+    assert!(
+        json["ref"]["listen_hint"]
+            .as_str()
+            .is_some_and(|hint| hint.contains(
+                "bob ref create https://example.com/captured -P mac_inbox -L"
+            )),
+        "known listen request should show the explicit attach command: {json}"
+    );
+    assert!(pending_files(&temp).is_empty());
+
     // Already queued for scan: the intake PDF is the target.
     let output =
         capture(&temp, &vault, &["-f", "json", "https://example.com/queued"])
@@ -571,6 +611,7 @@ fn capture_spool_hit_is_clipping() {
     let json = parse_json(&output);
     assert_eq!(json["placement"], "unchanged");
     assert_eq!(json["ref"]["library"]["verdict"], "clipping");
+    assert!(!json["ref"]["listen"].as_bool().unwrap_or(false));
     assert_eq!(pending_files(&temp).len(), 1, "no duplicate job");
 }
 
@@ -858,6 +899,107 @@ fn capture_end_to_end_clips_through_the_worker() {
 }
 
 #[test]
+fn percent_listen_reference_runs_existing_worker_and_installs_audio() {
+    let temp = TempDir::new("bob-cli-capture-ref-percent-listen-worker");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    let fake = FakeClip::new(&temp, "fake");
+    let curl = write_article_curl(temp.path());
+    let listen = write_fake_listen(temp.path());
+    let listen_log = temp.path().join("listen.log");
+    let url = format!("{ARTICLE_URL} %");
+    let listen_command =
+        format!("{} {{target}} -o {{audio}}", path_str(&listen));
+
+    let output = capture(&temp, &vault, &["-f", "json", url.as_str()])
+        .env("BOB_HIGHLIGHTS_CURL", &curl)
+        .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+        .env("BOB_HIGHLIGHTS_LISTEN_COMMAND", &listen_command)
+        .env("FAKE_LISTEN_LOG", &listen_log)
+        .env("BOB_REF_JOBS_KICK", "off")
+        .output()
+        .expect("queue percent-listen reference");
+    assert_success(&output);
+    let capture_json = parse_json(&output);
+    assert_eq!(capture_json["kind"], "ref", "{capture_json}");
+    assert_eq!(capture_json["ref"]["listen"], true, "{capture_json}");
+    assert_eq!(pending_files(&temp).len(), 1);
+
+    let output = bob_command()
+        .arg("ref")
+        .arg("jobs")
+        .arg("run")
+        .env("XDG_STATE_HOME", state_dir(&temp))
+        .env("BOB_DIR", &vault)
+        .env("BOB_HIGHLIGHTS_CURL", &curl)
+        .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+        .env("BOB_HIGHLIGHTS_LISTEN_COMMAND", &listen_command)
+        .env("FAKE_LISTEN_LOG", &listen_log)
+        .output()
+        .expect("drain listen reference job");
+    assert_success(&output);
+    let listen_args =
+        fs::read_to_string(&listen_log).expect("read listen invocation");
+    assert!(listen_args.contains(".pdf -o "), "{listen_args}");
+    assert!(
+        vault.join("xlib/blogs/symphony_spec.mp3").is_file(),
+        "companion audio was installed"
+    );
+}
+
+#[test]
+fn failed_percent_listen_worker_keeps_listen_retry_guidance() {
+    let temp = TempDir::new("bob-cli-capture-ref-percent-listen-failure");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    let fake = FakeClip::new(&temp, "fake");
+    let curl = write_article_curl(temp.path());
+    let listen = temp.path().join("failing-listen.sh");
+    let listen_log = temp.path().join("listen.log");
+    write_executable(
+        &listen,
+        "#!/bin/sh\necho \"$@\" >> \"$FAKE_LISTEN_LOG\"\necho narration failed >&2\nexit 4\n",
+    );
+    let listen_command =
+        format!("{} {{target}} -o {{audio}}", path_str(&listen));
+
+    let output =
+        capture(&temp, &vault, &["-f", "json", "https://example.com/post %"])
+            .env("BOB_HIGHLIGHTS_CURL", &curl)
+            .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+            .env("BOB_HIGHLIGHTS_LISTEN_COMMAND", &listen_command)
+            .env("FAKE_LISTEN_LOG", &listen_log)
+            .env("BOB_REF_JOBS_KICK", "off")
+            .output()
+            .expect("queue percent-listen reference");
+    assert_success(&output);
+    assert_eq!(parse_json(&output)["ref"]["listen"], true);
+
+    let output = bob_command()
+        .arg("ref")
+        .arg("jobs")
+        .arg("run")
+        .env("XDG_STATE_HOME", state_dir(&temp))
+        .env("BOB_DIR", &vault)
+        .env("BOB_HIGHLIGHTS_CURL", &curl)
+        .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+        .env("BOB_HIGHLIGHTS_LISTEN_COMMAND", &listen_command)
+        .env("FAKE_LISTEN_LOG", &listen_log)
+        .output()
+        .expect("run failing listen job");
+    assert_success(&output);
+    assert!(listen_log.is_file(), "listen runner was invoked");
+    let inbox = fs::read_to_string(vault.join("mac_inbox.md"))
+        .expect("read failed-job fallback");
+    assert!(
+        inbox.contains(
+            "retry: bob ref create https://example.com/post -P mac_inbox -L"
+        ),
+        "listen retry guidance must retain -L:\n{inbox}"
+    );
+}
+
+#[test]
 fn capture_end_to_end_falls_back_on_blocked() {
     let temp = TempDir::new("bob-cli-capture-ref-fallback");
     let vault = temp.path().join("vault");
@@ -972,6 +1114,167 @@ fn capture_parse_reports_ref_mode_and_span() {
     let items = json["items"].as_array().expect("items array");
     assert_eq!(items.len(), 2);
     assert!(items.iter().all(|item| item["mode"] == "ref"));
+}
+
+#[test]
+fn percent_listen_reference_never_reads_clipboard_and_queues_listen_job() {
+    let temp = TempDir::new("bob-cli-capture-ref-percent-listen");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    let marker = temp.path().join("clipboard-called");
+    let clipboard = temp.path().join("failing-clipboard.sh");
+    write_executable(
+        &clipboard,
+        &format!(
+            "#!/bin/sh\necho called >> {}\nexit 1\n",
+            shell_single_quote(path_str(&marker))
+        ),
+    );
+    let draft = format!("{ARXIV_PDF_URL} %");
+
+    let parsed = bob_command()
+        .arg("capture-parse")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg(&draft)
+        .env("BOB_CLIPBOARD_CMD", &clipboard)
+        .output()
+        .expect("parse percent-listen reference");
+    assert_success(&parsed);
+    let parsed_json: serde_json::Value =
+        serde_json::from_slice(&parsed.stdout).expect("capture-parse JSON");
+    assert_eq!(parsed_json["mode"], "ref", "{parsed_json}");
+    assert_eq!(parsed_json["ref_listen"], true, "{parsed_json}");
+    assert!(parsed_json["spans"].as_array().unwrap().iter().any(|span| {
+        span["kind"] == "ref_listen"
+            && span["start"] == ARXIV_PDF_URL.len() + 1
+            && span["end"] == ARXIV_PDF_URL.len() + 2
+    }));
+    assert!(!marker.exists(), "parse must not read clipboard");
+
+    let mixed = format!("{draft}\n\n{ARTICLE_URL}");
+    let parsed = bob_command()
+        .arg("capture-parse")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg(&mixed)
+        .env("BOB_CLIPBOARD_CMD", &clipboard)
+        .output()
+        .expect("parse mixed percent-listen references");
+    assert_success(&parsed);
+    let mixed_json: serde_json::Value = serde_json::from_slice(&parsed.stdout)
+        .expect("mixed capture-parse JSON");
+    assert_eq!(mixed_json["items"][0]["ref_listen"], true, "{mixed_json}");
+    assert_eq!(
+        mixed_json["items"][1]["ref_listen"]
+            .as_bool()
+            .unwrap_or(false),
+        false,
+        "{mixed_json}"
+    );
+    assert_eq!(mixed_json["items"][0]["mode"], "ref", "{mixed_json}");
+    assert_eq!(mixed_json["items"][1]["mode"], "ref", "{mixed_json}");
+    assert!(!marker.exists(), "mixed parse must not read clipboard");
+
+    // The live-preview form deliberately sets --no-clip. The explicit
+    // preview also leaves clip expansion enabled; both parse the same ref.
+    for args in [
+        vec!["-d", "-n", "-f", "json", draft.as_str()],
+        vec!["-d", "-f", "json", draft.as_str()],
+    ] {
+        let output = capture(&temp, &vault, &args)
+            .env("BOB_CLIPBOARD_CMD", &clipboard)
+            .env("BOB_REF_JOBS_KICK", "off")
+            .output()
+            .expect("preview percent-listen reference");
+        assert_success(&output);
+        let json = parse_json(&output);
+        assert_eq!(json["kind"], "ref", "{json}");
+        assert_eq!(json["ref"]["listen"], true, "{json}");
+        assert_eq!(json["text"], ARXIV_PDF_URL, "{json}");
+        assert!(!marker.exists(), "preview must not read clipboard");
+    }
+    assert!(pending_files(&temp).is_empty(), "previews enqueue nothing");
+    assert!(
+        !vault.join("mac_inbox.md").exists(),
+        "previews write no task"
+    );
+
+    let output = capture(&temp, &vault, &["-f", "json", draft.as_str()])
+        .env("BOB_CLIPBOARD_CMD", &clipboard)
+        .env("BOB_REF_JOBS_KICK", "off")
+        .output()
+        .expect("submit percent-listen reference");
+    assert_success(&output);
+    let json = parse_json(&output);
+    assert_eq!(json["kind"], "ref", "{json}");
+    assert_eq!(json["ref"]["listen"], true, "{json}");
+    assert_eq!(json["ref"]["url"], ARXIV_PDF_URL, "{json}");
+    assert_eq!(
+        json["ref"]["dedupe_key"], "https://arxiv.org/abs/2609.12039",
+        "{json}"
+    );
+    assert_eq!(json["ref"]["job"]["state"], "pending", "{json}");
+    let jobs = pending_files(&temp);
+    assert_eq!(jobs.len(), 1, "{json}");
+    let job: serde_json::Value =
+        serde_json::from_slice(&fs::read(&jobs[0]).expect("read queued job"))
+            .expect("job JSON");
+    assert_eq!(job["listen"], true, "{job}");
+    assert_eq!(job["url"], ARXIV_PDF_URL, "{job}");
+    assert_eq!(
+        job["dedupe_key"], "https://arxiv.org/abs/2609.12039",
+        "{job}"
+    );
+    assert_eq!(job["parent"], "mac_inbox", "{job}");
+    assert!(!marker.exists(), "capture must not read clipboard");
+    assert!(
+        !vault.join("mac_inbox.md").exists(),
+        "no duplicate inbox task"
+    );
+}
+
+#[test]
+fn explicit_url_clip_forms_keep_the_clipboard_path() {
+    let temp = TempDir::new("bob-cli-capture-ref-percent-clip-optout");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    let marker = temp.path().join("clipboard-called");
+    let clipboard = temp.path().join("clipboard.sh");
+    write_executable(
+        &clipboard,
+        &format!(
+            "#!/bin/sh\necho called >> {}\nprintf 'copied value\\n'\n",
+            shell_single_quote(path_str(&marker))
+        ),
+    );
+    let marked_url = format!("{ARTICLE_URL} %1");
+    let listen_url = format!("{ARTICLE_URL} %");
+
+    for args in [
+        vec!["-d", "-f", "json", marked_url.as_str()],
+        vec!["-d", "-f", "json", "-R", listen_url.as_str()],
+    ] {
+        let output = capture(&temp, &vault, &args)
+            .env("BOB_CLIPBOARD_CMD", &clipboard)
+            .output()
+            .expect("run explicit clipboard capture");
+        assert_success(&output);
+        assert_eq!(parse_json(&output)["kind"], "task");
+        assert!(marker.exists(), "explicit clipboard request must read it");
+        fs::remove_file(&marker).expect("reset clipboard marker");
+    }
+
+    let forced =
+        capture(&temp, &vault, &["-d", "-f", "json", "-c", ARTICLE_URL])
+            .env("BOB_CLIPBOARD_CMD", &clipboard)
+            .output()
+            .expect("run forced clipboard capture");
+    assert_success(&forced);
+    assert_eq!(parse_json(&forced)["kind"], "task");
+    assert!(marker.exists(), "--clip must read the clipboard");
 }
 
 #[test]

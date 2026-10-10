@@ -20,8 +20,8 @@ pub(crate) enum Placement {
 /// Additive `ref` object on a reference item result: the classified
 /// URL, its offline library verdict, the canonical resolved parent, the
 /// staged job (real runs that queued only), and the parent fallback
-/// (queued items only). `listen` is true when the standalone `@` marker
-/// requested companion audio; `listen_hint` explains an unchanged marked
+/// (queued items only). `listen` is true when the standalone `%` marker (or
+/// compatible `@` alias) requested companion audio; `listen_hint` explains an unchanged marked
 /// item's no-new-listen outcome with the explicit retry command.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct RefItemJson {

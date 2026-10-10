@@ -87,7 +87,7 @@ directory):
 the worker uses the source's inbox instead: `capture` →
 `mac_inbox`). `bob ref jobs` shows it as `→ <parent>` on pending and
 clipping rows and as `parent` in `-f json`. `listen` is true when the
-standalone `@` marker requested companion audio (omitted when false, so
+standalone `%` marker (or compatible `@` alias) requested companion audio (omitted when false, so
 older jobs keep their exact shape; jobs written by an older `bob` omit it
 and the worker never upgrades them).
 

@@ -80,7 +80,7 @@ fn reject_operator_dependencies(
 /// Resolve a plain `@route` token to its route name. Returns `None`
 /// unless the token is exactly `@route` (case-insensitive) with no `#`
 /// section or other suffix, the parsed kind is `Task`, and the route is
-/// a known route token. A standalone `@` listen marker never resolves.
+/// a known route token. A standalone `%` listen marker (or `@` alias) never resolves.
 fn plain_ref_route(text: &str) -> Option<String> {
     if is_standalone_listen_marker(text) {
         return None;
@@ -107,14 +107,15 @@ fn plain_ref_route(text: &str) -> Option<String> {
 /// leading or trailing `@route`, a forced `-r` route, or no route at all
 /// (the default inbox; a plain `@@route` declaration upgrades it to a
 /// global parent during draft resolution), plus an optional standalone
-/// `@` listen marker immediately after the URL. `URL @` requests
-/// companion audio; `URL @ @route` and `@route URL @` request it with an
-/// explicit parent. The body/URL intent excludes the route and listen
+/// `%` listen marker (or compatible `@` alias) immediately after the URL.
+/// `URL %` requests companion audio; `URL % @route` and `@route URL %`
+/// request it with an explicit parent. The compatible alias works in the
+/// same positions. The body/URL intent excludes the route and listen
 /// tokens. Policy-gated markers (`-R`, excluded hosts, disabled
 /// routing, child lines, extra words/tags, schedule/priority/clipboard,
 /// dependencies, operators, task refs, destination flags beyond `-r`)
-/// retain existing task or diagnostic behavior. `URL @route @`,
-/// `URL @ @`, attached `path@`, queries/fragments, and encoded forms
+/// retain existing task or diagnostic behavior. `URL @route %`,
+/// `URL % %`, attached `path@`, queries/fragments, and encoded forms
 /// stay unsupported and fall through.
 fn claim_reference_item<'a>(
     item: &CaptureItem<'a>,
@@ -179,7 +180,7 @@ fn claim_reference_item<'a>(
         ));
     }
     if tokens.len() == 2 {
-        // `URL @`: listen with default/global/forced parent. The marker
+        // `URL %` / `URL @`: listen with default/global/forced parent. The marker
         // is item-local and whitespace-delimited; attached `@` stays part
         // of the URL and never claims here.
         if is_standalone_listen_marker(tokens[1].text) {
@@ -272,9 +273,9 @@ fn claim_reference_item<'a>(
         ));
     }
     if tokens.len() == 3 && forced_route.is_none() {
-        // `URL @ @route` (trailing explicit parent with listen) and
-        // `@route URL @` (leading explicit parent with listen). Every
-        // other three-token shape (`URL @route @`, `URL @ @`, extra
+        // `URL % @route` (trailing explicit parent with listen) and
+        // `@route URL %` (leading explicit parent with listen). Every
+        // other three-token shape (`URL @route %`, `URL % %`, extra
         // words) stays an ordinary task/diagnostic.
         if is_standalone_listen_marker(tokens[1].text) {
             let url_token = tokens[0];
@@ -305,7 +306,7 @@ fn claim_reference_item<'a>(
             let route_token = tokens[0];
             let url_token = tokens[1];
             // The middle token must be the URL and the last token the
-            // standalone marker; a leading `@` listen shape never claims.
+            // standalone marker; a leading listen-marker shape never claims.
             if is_standalone_listen_marker(route_token.text) {
                 return None;
             }

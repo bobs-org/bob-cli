@@ -38,7 +38,9 @@ fn capture_help_lists_options_alphabetically() {
             && help.contains("%<nonnumeric header>")
             && help.contains("--clip")
             && help.contains("--no-clip")
-            && help.contains("'%1' is equivalent to '%'")
+            && help.contains(
+                "ordinary non-reference text, '%1' is equivalent to '%'"
+            )
             && help.contains("'%0' stays literal")
             && help.contains("bob capture research links %3")
             && help.contains("Bare --clip also captures without a header")

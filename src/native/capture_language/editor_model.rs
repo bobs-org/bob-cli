@@ -47,7 +47,7 @@ pub(crate) enum SpanKind {
     DependencyBlockId,
     /// A whole-item bare URL admitted by the routing policy.
     RefUrl,
-    /// The standalone `@` listen marker requesting companion audio.
+    /// The standalone `%` listen marker (or compatible `@` alias).
     RefListen,
     TaskCompleteSigil,
     TaskCompleteNote,
@@ -329,7 +329,7 @@ pub(crate) struct EditorParse {
     pub(crate) section: Option<String>,
     pub(crate) block_id: Option<String>,
     pub(crate) needs: Vec<Need>,
-    /// Whether the standalone `@` listen marker requested companion
+    /// Whether standalone `%` (or compatible `@`) requested companion
     /// audio on this `Ref` item. Always false for non-`Ref` modes.
     pub(crate) ref_listen: bool,
     /// Validated additive `@<route>:<block-id>[#<name>]=<X>` start suffix,
@@ -393,7 +393,7 @@ pub(crate) struct EditorItemParse {
     pub(crate) section: Option<String>,
     pub(crate) block_id: Option<String>,
     pub(crate) needs: Vec<Need>,
-    /// Whether the standalone `@` listen marker requested companion
+    /// Whether standalone `%` (or compatible `@`) requested companion
     /// audio on this `Ref` item. Always false for non-`Ref` modes.
     pub(crate) ref_listen: bool,
     pub(crate) pomodoro_start: Option<PomodoroStartSpec>,

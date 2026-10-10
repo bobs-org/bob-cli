@@ -416,7 +416,8 @@ struct CaptureParseResult {
     needs: Vec<Need>,
     #[serde(skip_serializing_if = "Option::is_none")]
     ref_parent: Option<RefParentParse>,
-    /// Whether the standalone `@` marker requested companion audio.
+    /// Whether the standalone `%` marker (or compatible `@` alias)
+    /// requested companion audio.
     /// Additive schema-version-1 field: omitted when false, so every
     /// older input keeps its exact JSON shape.
     #[serde(default, skip_serializing_if = "is_false")]

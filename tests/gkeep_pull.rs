@@ -1896,6 +1896,55 @@ fn url_only_matrix_classifies_without_clipping() {
 }
 
 #[test]
+fn percent_and_at_listen_markers_survive_keep_pull_planning() {
+    let (env, fake, state, _token) =
+        setup("bob-cli-gkeep-pull-ref-listen-markers");
+    fs::write(env.vault().join("sase.md"), "---\ntype: [[area]]\n---\n")
+        .expect("sase parent");
+    let notes = vec![
+        note("")
+            .id("percent")
+            .text("https://arxiv.org/pdf/2609.12039 % @sase")
+            .build(),
+        note("")
+            .id("at-alias")
+            .text("https://example.com/post @")
+            .build(),
+        note("")
+            .id("prose")
+            .text("Read https://example.com/post %")
+            .build(),
+    ];
+    fake.respond("snapshot", &snapshot_ok("bryanbugyi34@gmail.com", notes));
+
+    let out =
+        run_pull(&env, &fake, &state, &["-d", "-f", "json", "-S", "-p"], &[]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let doc: serde_json::Value =
+        serde_json::from_str(&stdout(&out)).expect("json parses");
+    let notes = doc["notes"].as_array().expect("notes");
+    let by_id = |id: &str| {
+        notes
+            .iter()
+            .find(|row| row["id"] == id)
+            .unwrap_or_else(|| panic!("missing {id}: {doc}"))
+    };
+    let percent = by_id("percent");
+    assert_eq!(percent["action"], "create_ref");
+    assert_eq!(percent["clip"]["url"], "https://arxiv.org/pdf/2609.12039");
+    assert_eq!(percent["clip"]["listen"], true);
+    assert_eq!(percent["clip"]["parent"], "sase");
+    let at_alias = by_id("at-alias");
+    assert_eq!(at_alias["action"], "create_ref");
+    assert_eq!(at_alias["clip"]["url"], "https://example.com/post");
+    assert_eq!(at_alias["clip"]["listen"], true);
+    assert_eq!(at_alias["clip"]["parent"], "gkeep_inbox");
+    let prose = by_id("prose");
+    assert_eq!(prose["action"], "write");
+    assert!(prose.get("clip").is_none());
+}
+
+#[test]
 fn keep_parent_precedence_note_route_cli_alias_and_fallback() {
     let (env, fake, state, _token) = setup("bob-cli-gkeep-pull-parent");
     fs::write(env.vault().join("sase.md"), "---\ntype: [[area]]\n---\n")

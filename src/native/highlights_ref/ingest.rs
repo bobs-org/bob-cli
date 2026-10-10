@@ -43,7 +43,8 @@ pub(crate) struct IngestRequest<'a> {
     pub(crate) url: &'a str,
     /// Resolved parent route stamped into the marker (e.g. `mac_inbox`).
     pub(crate) parent: &'a str,
-    /// Whether the standalone `@` marker requested companion audio.
+    /// Whether standalone `%` (or the compatible `@` alias) requested
+    /// companion audio.
     pub(crate) listen: bool,
     /// Short status lines; never stdout.
     pub(crate) progress: Option<&'a dyn Fn(&str)>,

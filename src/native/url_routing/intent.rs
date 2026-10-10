@@ -138,13 +138,14 @@ pub(crate) fn display_url(cleaned: &str) -> String {
     format!("{head}…{tail}")
 }
 
-/// Standalone listen marker for the `at` choice: exactly `@`.
-/// A bare `@` requests companion audio immediately after a URL; `@route`
-/// still selects a parent. Attached forms (`https://example.com/path@`),
-/// encoded `%40`/`%25`, queries, fragments, and userinfo remain part of
-/// the URL and never count as the marker.
+/// Standalone reference listen marker: exactly `%` or the compatible `@`
+/// alias. A standalone marker requests companion audio in an eligible
+/// reference shape; in other contexts `%` keeps its clipboard meaning and
+/// `@route` still selects a parent. Attached forms, `%25`/`%40`, queries,
+/// fragments, and userinfo remain part of the URL and never count as this
+/// directive.
 pub(crate) fn is_standalone_listen_marker(token: &str) -> bool {
-    token == "@"
+    matches!(token, "%" | "@")
 }
 
 /// Reference intent: the classified URL plus whether companion audio was
@@ -190,8 +191,8 @@ impl std::ops::DerefMut for RefIntent {
 /// Shared suffix recognizer for a URL token plus an optional adjacent
 /// listen token. Returns the URL text and whether the next
 /// whitespace-delimited token on the same line is the standalone listen
-/// marker. Callers keep route and note-eligibility checks in their own
-/// layer and never use string replacement.
+/// marker (`%` or its `@` alias). Callers keep route and note-eligibility
+/// checks in their own layer and never use string replacement.
 pub(crate) fn split_listen_suffix(
     url_token: &str,
     next_token: Option<&str>,
@@ -203,9 +204,9 @@ pub(crate) fn split_listen_suffix(
 
 /// Lexical URL-list line test: a single whitespace-free token,
 /// optionally `<…>`-wrapped, with an `http`/`https` scheme that parses
-/// with `url::Url::parse`, or a URL plus the standalone listen marker
-/// (`URL @`) with one or more spaces/tabs between them. No policy,
-/// validation, or config.
+/// with `url::Url::parse`, or a URL plus a standalone listen marker
+/// (`URL %` or the compatible `URL @`) with one or more spaces/tabs between
+/// them. No policy, validation, or config.
 pub(crate) fn is_url_list_line(line: &str) -> bool {
     if line.is_empty() {
         return false;
@@ -233,7 +234,7 @@ pub(crate) fn is_url_list_line(line: &str) -> bool {
             }
             url::Url::parse(&inner).is_ok()
         }
-        // `URL @`: exactly one URL plus the standalone listen marker.
+        // `URL %` / `URL @`: exactly one URL plus the standalone marker.
         [url, marker] if is_standalone_listen_marker(marker) => {
             let inner = match strip_single_brackets(url) {
                 Some(inner) => inner,

@@ -208,14 +208,17 @@ take no lock.
 ### URL-only notes go to the reading queue
 
 A note that holds exactly one bare public link (plus an optional single
-trailing `@route` and an optional standalone `@` listen marker) and nothing
+trailing `@route` and an optional standalone `%` listen marker, with `@` as
+a compatible alias) and nothing
 else — an empty title with a link body, an empty body with a link title, a
 title equal to the link, or a page title equal to the shared-link preview
 title — is clipped inline to an intake PDF instead of becoming a task. The
 trailing route and listen marker never become part of the clip target.
-`URL @` requests companion audio like
-`bob ref create <URL> -P <parent> -L`; `URL @ @route` adds an explicit
-parent. Pull messages name the selected parent (`would clip →
+`URL %` (or the compatible `URL @`) requests companion audio like
+`bob ref create <URL> -P <parent> -L`; `URL % @route` adds an explicit
+parent (the compatible alias form is `URL @ @route`). The listen marker
+must immediately follow the URL.
+Pull messages name the selected parent (`would clip →
 sase`, `clipped → <pdf> → sase`); that means the link was accepted for
 import. A marked clip shows `· Listen` with `· companion audio requested`,
 and an already-known marked link shows
@@ -224,7 +227,9 @@ The note joins `bob ref list` after `bob ref scan`. Lists, notes
 with attachments, shared notes (even with `-S`), multi-link (beyond one
 trailing route) or link-plus-prose notes, corporate short links, IP
 literals, and `highlights.url_routing.exclude_hosts` entries stay tasks.
-`URL @route @`, attached `path@`, and leading routes stay ordinary notes.
+`URL @route %`, duplicate markers, attached `path@`, and leading routes stay
+ordinary notes. Non-reference percent markers retain clipboard semantics in
+capture; URL `%1` explicitly requests that path.
 Pinned notes included with `-p` follow the rule like any other note. A
 marked import needs a configured `highlights.listen_command`; narration
 failures are retryable and leave the note in Keep, never archiving audio

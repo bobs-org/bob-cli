@@ -325,7 +325,8 @@ companion audio. The web-article route accepts the same flag with the same seman
 bob ref create https://arxiv.org/abs/1706.03762 -L
 ```
 
-The `URL @` shorthand in `bob capture` and `bob gkeep pull` clips like
+The `URL %` shorthand in `bob capture` and `bob gkeep pull` (with `URL @`
+kept as a compatible alias) clips like
 `bob ref create <URL> -P <parent> -L` (same placeholders, same install
 guarantees, same `bob ref scan` pairing). It never adds audio to existing
 captures; background ingest runs the command quietly (never stdout) with

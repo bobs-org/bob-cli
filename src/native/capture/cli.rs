@@ -72,7 +72,7 @@ Append a trailing clipboard marker: '%' captures one live value without a \
 header; '%<positive integer>' captures exactly that many values without \
 headers, starting with the live clipboard and then recent history newest first; \
 and '%<nonnumeric header>' captures one live value under an explicit header. \
-'%1' is equivalent to '%', while '%0' stays literal. Headers use letters, \
+For ordinary non-reference text, '%1' is equivalent to '%', while '%0' stays literal. Headers use letters, \
 digits, '_' and '-'; '_' renders as a space. The marker composes with s:<N>, \
 p:<N>, and every route kind in either terminal order. Each value is classified separately: \
 small text stays inline; 2-10 flat text lines and 1-10 flat unordered Markdown \
@@ -81,7 +81,13 @@ paths are saved under img/ or file/; and long or other Markdown-structured text 
 is preserved in a timestamped file/clip-*.md snippet. Clipboard children use \
 the target note's dominant tab-or-two-space indentation and fall back to a tab. \
 History captures fail without writing \
-unless the exact requested count succeeds. Use --clip[=HEADER] to force one live \
+unless the exact requested count succeeds. For an eligible URL-only reference, \
+for an eligible URL-only reference, exact standalone 'URL %' requests \
+companion audio before clipboard parsing; \
+the shipped 'URL @' spelling is still accepted. Use 'URL %1' or --clip URL \
+to explicitly request clipboard capture for a URL. Live preview's --no-clip \
+still recognizes eligible URL listen references, while ordinary clipboard \
+markers remain literal. Use --clip[=HEADER] to force one live \
 capture while keeping '%' tokens literal; --clip=<digits> requests a numeric \
 header. Bare --clip also captures without a header. Use --no-clip to keep a \
 genuine trailing '%...' token literal. Clipboard failures abort before the note \

@@ -620,8 +620,8 @@ pub(crate) fn completion_field_at(
     {
         return Some(field);
     }
-    // A recognized standalone `@` listen marker never offers route
-    // completion: completing it would replace the listen request with a
+    // A recognized standalone `%` listen marker (or `@` alias) never offers
+    // route completion: completing it would replace the listen request with a
     // route. The policy check agrees with the parser rather than
     // suppressing every trailing `@`.
     if cursor_in_listen_marker(&scan_line, cursor) {
@@ -939,12 +939,12 @@ pub(super) fn has_previous_first_level_authored_item(
     })
 }
 
-/// Whether `cursor` sits inside a standalone `@` listen marker that
-/// the parser would claim as companion-audio intent. Only a recognized
+/// Whether `cursor` sits inside a standalone `%` listen marker (or `@` alias)
+/// that the parser would claim as companion-audio intent. Only a recognized
 /// listen span suppresses route completion; the routing policy must admit
 /// the URL, so an excluded host or disabled routing keeps its existing
 /// completion behavior. Typing letters onto the marker turns it into
-/// `@route` and completion resumes; a separate ` @sa` after `URL @`
+/// `@route` and completion resumes; a separate ` @sa` after `URL %`
 /// still completes the parent normally.
 fn cursor_in_listen_marker(line: &RawLine<'_>, cursor: usize) -> bool {
     let tokens = tokenize_with_spans(line.text)
@@ -970,7 +970,7 @@ fn cursor_in_listen_marker(line: &RawLine<'_>, cursor: usize) -> bool {
     let Some(policy) = policy.as_ref() else {
         return false;
     };
-    // `URL @`
+    // `URL %` / `URL @`
     if tokens.len() == 2
         && index == 1
         && let Some(intent) = classify_token(tokens[0].text)
@@ -978,7 +978,7 @@ fn cursor_in_listen_marker(line: &RawLine<'_>, cursor: usize) -> bool {
     {
         return true;
     }
-    // `URL @ @route` (cursor in the middle `@`)
+    // `URL % @route` / `URL @ @route` (cursor in the listen marker)
     if tokens.len() == 3
         && index == 1
         && is_standalone_listen_marker(tokens[1].text)
@@ -988,7 +988,7 @@ fn cursor_in_listen_marker(line: &RawLine<'_>, cursor: usize) -> bool {
     {
         return true;
     }
-    // `@route URL @` (cursor in the trailing `@`)
+    // `@route URL %` / `@route URL @` (cursor in the trailing marker)
     if tokens.len() == 3
         && index == 2
         && is_standalone_listen_marker(tokens[2].text)

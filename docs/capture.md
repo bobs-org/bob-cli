@@ -65,8 +65,8 @@ anything is written, and any failure rolls the whole batch back.
 | --- | --- |
 | Bare public URL | Queue a reference job under `mac_inbox` when the URL routing policy admits it; `-R, --no-ref` keeps it a task |
 | `URL @route` or `@route URL` | Queue the reference under that route (aliases resolve; source `explicit`) |
-| `URL @` | Queue the reference with companion audio requested (`ref.listen` true; same parent selection as a bare URL: default, `@@route` global, or `-r` forced) |
-| `URL @ @route` or `@route URL @` | Queue the reference with companion audio under that explicit parent |
+| `URL %` | Queue the reference with companion audio requested (`ref.listen` true; same parent selection as a bare URL: default, `@@route` global, or `-r` forced); exact standalone `@` remains a compatible alias |
+| `URL % @route` or `@route URL %` | Queue the reference with companion audio under that explicit parent (`@` also remains a compatible listen alias) |
 | Bare URL with `-r route` | Queue the reference under that route (source `explicit`) |
 | `@@route` | Shared task destination, anywhere in the draft, for otherwise-unrouted items; a plain declaration also routes default (routeless) refs (source `global`), while `@@route+block-id` keeps refs as tasks |
 | `@@route+block-id` | Shared parent-task destination, anywhere in the draft, for otherwise-unrouted items |
@@ -532,12 +532,19 @@ content beneath the new task or bullet:
 - `%` captures the live clipboard once without a header.
 - `%<positive integer>` captures exactly that many values without headers: the
   live clipboard first, followed by recent history newest first. For example,
-  `bob capture research links %3` captures three values. `%1` is equivalent to
-  `%`, leading zeroes are accepted, and `%0` stays literal.
+  `bob capture research links %3` captures three values. For ordinary
+  non-reference task text, `%1` is equivalent to `%`, leading zeroes are
+  accepted, and `%0` stays literal.
 - `%<nonnumeric header>` captures the live clipboard once under an explicit
   header. Headers accept letters, digits, `_`, and `-`, render in uppercase,
   and replace underscores with spaces; for example, `%build_log` renders
   `**BUILD LOG:**`.
+
+The grammar is context-dependent for an eligible URL-only reference: exact
+standalone `URL %` requests companion audio before clipboard parsing, so it
+does not read the clipboard even in live preview's `--no-clip` mode. Use
+`URL %1` or `--clip URL` to explicitly request clipboard capture for a URL;
+non-reference `text %`, `%N`, and `%header` keep their clipboard meanings.
 
 The marker composes with `s:<N>`, `p:<N>`, ordinary routes, bullet routes,
 ID-only task routes, and Pomodoro routes in either terminal order. Invalid
@@ -643,18 +650,23 @@ The reading queue in `bob ref list` is the reference note, and it appears
 after `bob ref scan`. Quote the URL when the shell would treat `#` as a
 comment.
 
-Append a standalone `@` immediately after the URL (the next
+Append a standalone `%` immediately after the URL (the next
 whitespace-delimited token on the same line, one or more spaces/tabs) to
-request companion audio: `https://example.blog.com/somepost @` clips like
-`bob ref create <URL> -P <resolved-parent> -L`. `URL @ @sase` and
-`@sase URL @` combine listen with an explicit parent; `URL @` alone uses the
-default, `@@route` global, or `-r` forced parent. Do not attach the `@` to
-the URL (`https://example.com/path@`), queries, fragments, encoded
-`%40`/`%25`, or userinfo — those bytes stay part of the URL. One optional
-`<...>` wrapper around the URL is still accepted. `URL %` keeps its
-clipboard meaning; a non-URL bare `@` and prefixes such as `@sa` remain
-route completion, and completing a claimed listen token never replaces it
-(a separate ` @sa` after `URL @` still completes the parent). A marked item
+request companion audio: `https://example.blog.com/somepost %` clips like
+`bob ref create <URL> -P <resolved-parent> -L`. The shipped standalone `@`
+spelling remains a compatible alias. `URL % @sase` and `@sase URL %`
+combine listen with an explicit parent; `URL %` alone uses the default,
+`@@route` global, or `-r` forced parent. Do not attach the directive to the
+URL, or put it in a query, fragment, encoded `%25`/`%40`, or userinfo — those
+bytes stay part of the URL. One optional `<...>` wrapper around the URL is
+still accepted. Exact `URL %` takes reference precedence over clipboard
+parsing; `URL %1`, `--clip URL`, and `-R 'URL %'` explicitly keep the
+clipboard/task path. Outside an admitted reference shape, `%` keeps its
+clipboard meaning, and `--no-clip` leaves ordinary clipboard markers
+literal. In live preview, `--no-clip` does not suppress a recognized URL
+reference listen marker. A non-URL bare `@` and prefixes such as `@sa`
+remain route completion, and completing a claimed listen marker never
+replaces it (a separate ` @sa` after `URL %` still completes the parent). A marked item
 prints `queued … · Listen` with `· companion audio requested`; it needs a
 configured `highlights.listen_command` and a later `bob ref scan` to pair
 the PDF and MP3. Unlike an explicit `ref create -L`, the shorthand never
@@ -662,7 +674,7 @@ adds audio to existing captures: a marked duplicate, pending job, or
 library hit queues nothing and shows `no new listen job was queued · to
 attach audio run: bob ref create <URL> -P <parent> -L`.
 
-Anything more — an extra word, `#tag`, `s:`, `p:`, `%`, an operator, a child
+Anything more — an extra word, `#tag`, `s:`, `p:`, a clipboard marker, an operator, a child
 line, a `@@route+block-id` declaration, task/destination flags beyond `-r`
 (`-s -t -S -c`, `--task-ref`), or a second `@route` — keeps the item a task.
 `-R` also keeps it a task. Hosts without a dot (`http://go/x`, `localhost`),
@@ -708,11 +720,17 @@ details above. `placement` is `"queued"` for `not_found`, `legacy`, and
 the classified URL, the library verdict, the canonical `parent: {route,
 label, kind, source, alias}` (including already-known URLs), the staged
 `job`, and the parent `fallback` on queued items. `ref.job` stays `null`
-until the commit, so every dry run has `job: null`.
+until the commit, so every dry run has `job: null`. Marked references add
+`ref.listen: true`; when the URL is already known, `ref.listen_hint` gives
+the explicit `bob ref create ... -P ... -L` command because this shorthand
+never attaches audio or upgrades an existing job.
 `bob capture-parse` reports `ref_parent: {token, source}` on `ref` items
 outside `needs` (explicit token, inherited global route, or `mac_inbox`;
 source `explicit|global|default`), and a local route token keeps its ordinary
-`route` span. Route completion also matches `project_name_aliases` with
+`route` span. An eligible URL listen reference also reports
+`ref_listen: true` and a `ref_listen` span over the standalone `%` (or
+compatible `@`) token; both additions are omitted when listen is false.
+Route completion also matches `project_name_aliases` with
 `match_kind: "alias"` after canonical prefix matches.
 Opt out per capture with `-R, --no-ref`, or per entry point with
 `highlights.url_routing.capture: false` (silent; an invalid config warns and
@@ -3820,15 +3838,17 @@ JSON output is a single versioned object:
 ```
 
 `input` is the raw text as received, before whitespace normalization. `body` is
-the normalized capture body after terminal `s:<N>`, `p:<N>`, and `%...` markers
-and the recognized `@...` token are removed, matching what `bob capture` would
+the normalized capture body after terminal `s:<N>`, `p:<N>`, and applicable
+`%...` markers and the recognized `@...` token are removed, matching what `bob capture` would
 write for any input it accepts. `mode` is `task`, `bullet`, `pomodoro_task`,
 `pomodoro_note`, `sub_bullet`, `task_toggle`, `project_note`,
 `pomodoro_project_note`, `pomodoro_adjust`, `pomodoro_shift`,
 `pomodoro_link`, `pomodoro_close`, `pomodoro_start`, `task_dependency`, `task_complete`, `ref`, or `incomplete`, describing whichever line resolved a marker
 first -- the parent's leading or trailing form, or else the first child line
 with a trailing marker. A whole-item bare link reports mode `ref` with one
-`ref_url` span covering the whole token, `<>` included; `-R` keeps it a
+`ref_url` span covering the whole token, `<>` included. In an eligible URL
+reference, exact standalone `URL %` (or compatible `URL @`) adds
+`ref_listen: true` and a `ref_listen` span over the directive; `-R` keeps it a
 `task` so parse and capture always agree. A solo `@route:block-id…` item reports
 `pomodoro_link` with the `pomodoro_route` / `pomodoro_block_id` /
 `pomodoro_name` / `pomodoro_start` spans (or `pomodoro_close` plus the two
@@ -3976,6 +3996,7 @@ non-overlapping, and always on a character boundary. Each `kind` is one of
 `sub_bullet_block_id`, `sub_bullet_section`, `task_toggle_route`,
 `task_toggle_block_id`, `task_toggle_pomodoro_name`, `task_toggle_explicit_toggle`, `global_route`,
 `global_sub_bullet_route`, `global_sub_bullet_block_id`, `schedule`, `priority`, `clipboard`,
+`ref_url`, `ref_listen`,
 `interactive_placeholder`, `project_task_link_marker`, `project_task_block_id`, `dependency_sigil`, `dependency_note`, `dependency_block_id`, `task_complete_sigil`, `task_complete_note`, `task_complete_block_id`, `wikilink_delimiter`, `wikilink_target`,
 `wikilink_heading`, `wikilink_block_id`, or `wikilink_alias`. A placeholder
 marks the part of a marker the user has not filled in yet: the trailing `+` in

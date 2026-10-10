@@ -67,8 +67,8 @@ pub(crate) enum CaptureKind {
     Task,
     /// A whole-item bare URL admitted by the routing policy, queued for
     /// the reading queue by the capture planner. The wrapped intent
-    /// carries the classified URL plus whether the standalone listen
-    /// marker (`@`) requested companion audio.
+    /// carries the classified URL plus whether standalone `%` (or the
+    /// compatible `@` alias) requested companion audio.
     Ref(RefIntent),
     TaskWithBlockId {
         block_id: String,
