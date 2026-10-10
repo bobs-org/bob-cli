@@ -15,6 +15,20 @@ Grouping is navigation only. It never changes the freshness walk, lane
 semantics, caps, or review sequence, and the Projects collection badge
 is not the freshness PROJECTS tier.
 
+## Task badge warnings
+
+PENDING and NEXT show the dashboard section counts, which exclude TODAY.
+Their warning color follows the same visible count: a badge turns red only
+when its section count is strictly above its cap. A section at the cap stays
+normal-colored. Tooltips and accessibility labels still show the whole-lane
+count, TODAY count, and any whole-lane excess. For example, NEXT `10/15` stays
+normal-colored when the whole lane is `17/15` because seven tasks are in TODAY.
+Daily badges, CLI warnings, and navigation notices continue to check the whole
+lane, including TODAY.
+
+BLOCKED is informational and has no cap. Its count stays available for
+navigation and uses a neutral theme color regardless of its size.
+
 ## Child pages
 
 Root-level notes with hierarchy from frontmatter `parent: "[[dash]]"`:
