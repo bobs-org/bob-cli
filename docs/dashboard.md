@@ -24,8 +24,10 @@ when its section count is strictly above its cap. A section at the cap stays
 normal-colored. Tooltips and accessibility labels still show the whole-lane
 count, TODAY count, and any whole-lane excess. For example, NEXT `10/15` stays
 normal-colored when the whole lane is `17/15` because seven tasks are in TODAY.
-Daily badges, CLI warnings, and navigation notices continue to check the whole
-lane, including TODAY.
+Daily `bob-plan` PENDING/NEXT badges use the same live section counts and
+warning color, including on older daily notes. CLI warnings and navigation
+notices continue to check the whole lane, including TODAY. Daily lint lines
+name that whole-lane pressure explicitly.
 
 BLOCKED is informational and has no cap. Its count stays available for
 navigation and uses the same informational accent as PROJECTS and
