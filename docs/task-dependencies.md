@@ -284,10 +284,19 @@ encoded; a target or dependent that changed since the stage opened
 ### 6.5 Block ids
 
 A `＋ id` row opens the existing block-ID stage when the change is
-applied. It is pre-filled from `suggestBlockIdFromTask`, with
-uniqueness checked against the **target's** note, so ↵ accepts it. A
-batch prompts for one target at a time. Highlighting a row never
-writes.
+applied. It is pre-filled from the prompt policy (`suggestPromptBlockId`
+in both prompt-owning plugins): the raw target headline seeds a compact
+slug (named phrases first, then the first three meaningful prose words,
+accents normalized, at most 32 characters), with uniqueness checked
+against the **target's** note (all blocks, plus pending batch reservations),
+so ↵ accepts it. A valid, free legacy `[id::]` is reused as-is (for example
+`flights`); an invalid or taken value — including a path-qualified value
+such as `Tasks__target` — falls through to generation. Collisions walk
+`stem-2`, `stem-3`, … past nine. A batch prompts for one target at a time.
+Highlighting a row never writes. Typing replaces the suggestion and Escape
+writes nothing. Project conversion's automatic IDs still use the existing
+`suggestBlockIdFromTask`; capture and successor minting (§11.7, §12) are
+unchanged.
 
 ### 6.6 One gesture writes
 
