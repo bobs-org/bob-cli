@@ -197,19 +197,14 @@ pub(crate) fn lane_for_row(status: char, is_todo: bool) -> Option<Lane> {
 /// Callers precompute the scope inputs: `is_todo` is the Tasks status
 /// type TODO, `lane_visible` is the NEXT/PENDING lane predicate (not
 /// done, not dependency-blocked, not under `_templates` or
-/// `_conflicts`, no scheduled date after today; no `#hide` for
-/// ordinary tasks and exact `^prj` rows), `is_daily_note` is a
-/// canonical daily note (`YYYY/YYYYMMDD.md`), and `is_today` is
-/// membership in today's open Pomodoro Task Links.
+/// `_conflicts`, no scheduled date after today, no `#hide`),
+/// `is_daily_note` is a canonical daily note (`YYYY/YYYYMMDD.md`),
+/// and `is_today` is membership in today's open Pomodoro Task Links.
 ///
-/// Exact `^ref` tasks bypass only the `#hide` exclusion: callers
-/// set `lane_visible` to the freshness-specific visibility (hide
-/// allowed for exact `^ref`), and every other exclusion still
-/// applies. Tag-only `#ref` rows use the ordinary lane-visible
-/// predicate with no `#hide` exemption. Exact `^prj` rows use the
-/// ordinary lane-visible predicate with no `#hide` exemption:
-/// `bob projects sync` owns that tag, so a hidden `^prj` is simply
-/// out of scope.
+/// Every row uses the ordinary lane-visible predicate with no `#hide`
+/// exemption — including exact `^ref` rows (whose transitional bypass
+/// was removed at closeout) and exact `^prj` rows (`bob projects sync`
+/// owns that tag, so a hidden `^prj` is simply out of scope).
 #[derive(Debug, Clone)]
 pub(crate) struct FreshnessRow {
     pub(crate) path: String,

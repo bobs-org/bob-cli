@@ -1183,7 +1183,7 @@ fn list_walks_projects_after_new_with_decoupled_counts() {
         &vault.join("full.md"),
         "- [ ] #task Full project ^prj\n- [ ] #task Real work\n",
     );
-    write_file(&vault.join("r.md"), "- [ ] #task Read me #hide ^ref\n");
+    write_file(&vault.join("r.md"), "- [ ] #task Read me ^ref\n");
     // Frontmatter schedules no longer gate tracker review: both walk.
     write_file(
         &vault.join("fut.md"),
@@ -1201,7 +1201,7 @@ fn list_walks_projects_after_new_with_decoupled_counts() {
         .iter()
         .map(|row| row["tier"].as_str().expect("tier string"))
         .collect();
-    // NEW, then every visible `^prj` in PROJECTS, then the hidden
+    // NEW, then every visible `^prj` in PROJECTS, then the visible
     // reference in REFERENCES; the hidden `^prj` stays out.
     assert_eq!(
         tiers,
@@ -1281,7 +1281,7 @@ fn list_human_shows_references_before_rotten_divider() {
     let temp = TempDir::new("bob-cli-freshness-references-human");
     let vault = vault_dir(&temp);
     write_blocked_tasks_settings(&vault);
-    write_file(&vault.join("r.md"), "- [ ] #task Read me #hide ^ref\n");
+    write_file(&vault.join("r.md"), "- [ ] #task Read me ^ref\n");
     write_file(
         &vault.join("old.md"),
         "- [ ] #task Stale bread [fresh:: 2026-09-20]\n",
@@ -1603,11 +1603,11 @@ fn list_json_and_human_cover_recurring_tier() {
 }
 
 #[test]
-fn list_hidden_recurring_reference_stays_out_while_visible_walks() {
-    // Rust parity for the ledger `^ref` hide-bypass fix: a hidden
+fn list_hidden_reference_stays_out_while_visible_walks() {
+    // Closeout removed the transitional `^ref` hide bypass: a hidden
     // recurring `^ref` keeps ordinary visibility (excluded), a visible
     // recurring `^ref` walks RECURRING (never REFERENCES), and an
-    // ordinary hidden `^ref` still walks REFERENCES.
+    // ordinary hidden `^ref` stays out like any hidden task.
     let temp = TempDir::new("bob-cli-freshness-recurring-ref-parity");
     let vault = vault_dir(&temp);
     write_blocked_tasks_settings(&vault);
@@ -1615,7 +1615,8 @@ fn list_hidden_recurring_reference_stays_out_while_visible_walks() {
         &vault.join("recur.md"),
         "- [ ] #task Hidden #hide [repeat:: every week] [scheduled:: 2026-10-01] ^ref\n\
 - [ ] #task Visible [repeat:: every week] [scheduled:: 2026-10-01] ^ref\n\
-- [ ] #task Ordinary hidden #hide ^ref\n",
+- [ ] #task Ordinary hidden #hide ^ref\n\
+- [ ] #task Ordinary visible ^ref\n",
     );
     let (_, value) = list_json(&temp, &[]);
     assert_eq!(value["ok"], true);
@@ -1637,9 +1638,13 @@ fn list_hidden_recurring_reference_stays_out_while_visible_walks() {
         Some("recurring"),
         "visible recurring ^ref walks RECURRING:\n{value}"
     );
+    assert!(
+        tier_of("Ordinary hidden").is_none(),
+        "ordinary hidden ^ref must stay out:\n{value}"
+    );
     assert_eq!(
-        tier_of("Ordinary hidden").as_deref(),
+        tier_of("Ordinary visible").as_deref(),
         Some("references"),
-        "ordinary hidden ^ref keeps REFERENCES:\n{value}"
+        "ordinary visible ^ref walks REFERENCES:\n{value}"
     );
 }

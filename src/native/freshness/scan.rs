@@ -46,12 +46,11 @@ pub(crate) struct RowCtx {
 impl RowCtx {
     /// Build the evaluator input. `lane_visible` is the NEXT/PENDING
     /// lane predicate: rows from [`dataview::READY_QUERY`] already
-    /// carry it from the engine, so callers pass `true` there. For
-    /// exact `^ref` trackers callers pass the freshness-specific
-    /// visibility (hide allowed); every other exclusion still
-    /// applies. Tag-only `#ref` rows use the ordinary predicate: a
-    /// hand-written `#hide` on a v2 line hides it like any task.
-    /// Exact `^prj` rows use the ordinary predicate.
+    /// carry it from the engine, so callers pass `true` there.
+    /// Every row uses the ordinary predicate: a `#hide` tag hides
+    /// it like any task, including exact `^ref` rows (the
+    /// transitional hide bypass was removed at closeout) and exact
+    /// `^prj` rows.
     pub(crate) fn freshness_row(&self, lane_visible: bool) -> FreshnessRow {
         FreshnessRow {
             path: self.task.path.clone(),
@@ -100,15 +99,11 @@ pub(crate) struct Snapshot {
     /// Rows matching [`dataview::NEXT_QUERY`]: the `[*]` lane,
     /// lane-visible by construction.
     pub(crate) next: Vec<RowCtx>,
-    /// Hidden exact `^ref` candidates from the all-task scan:
-    /// freshness-specific visibility (hide allowed) with every other
-    /// exclusion still applied, excluding rows already in a lane
-    /// query. Ordinary hidden tasks — and hidden `^prj` rows — never
-    /// land here.
-    pub(crate) trackers: Vec<RowCtx>,
     /// Open PRE/POST checklist candidates from the all-task scan
-    /// that are not already in a lane or tracker query. `[?]` chores
-    /// land here; lane-query members already carry `checklist`.
+    /// that are not already in a lane query. `[?]` chores land here;
+    /// lane-query members already carry `checklist`. (The transitional
+    /// hidden exact-`^ref` tracker set was removed at closeout: a
+    /// `#hide` tag now hides those rows like any other task.)
     pub(crate) checklist: Vec<RowCtx>,
     /// Rows matching [`dataview::OPEN_QUERY`]: the seed universe.
     pub(crate) open: Vec<RowCtx>,
@@ -239,37 +234,16 @@ pub(crate) fn scan(bob_dir: &Path) -> Result<Snapshot, ScanError> {
         all.push(context(task)?);
     }
 
-    // Hidden tracker candidates: exact `^ref` rows from the all-task
-    // scan that pass every scope exclusion except `#hide`, and are not
-    // already in a lane query. Ordinary hidden tasks — and hidden
-    // `^prj` rows, which sync gates — stay out. Deduplicate by (path,
-    // line) when combining.
-    let mut lane_keys: std::collections::BTreeSet<(String, u32)> =
+    // Lane membership for checklist dedupe by (path, line).
+    let mut seen_keys: std::collections::BTreeSet<(String, u32)> =
         std::collections::BTreeSet::new();
     for row in ready.iter().chain(pending.iter()).chain(next.iter()) {
-        lane_keys.insert((row.task.path.clone(), row.task.line));
-    }
-    let mut trackers = Vec::new();
-    for row in &all {
-        if row.task.block_id.as_deref() != Some("ref") {
-            continue;
-        }
-        let key = (row.task.path.clone(), row.task.line);
-        if lane_keys.contains(&key) {
-            continue;
-        }
-        if tracker_candidate_visible(row, today) {
-            trackers.push(row.clone());
-        }
+        seen_keys.insert((row.task.path.clone(), row.task.line));
     }
 
     // Checklist candidates: open tagged rows from the all-task scan
     // that pass checklist visibility and are not already in a lane
-    // or tracker query. Dedupe by (path, line).
-    let mut seen_keys = lane_keys;
-    for row in &trackers {
-        seen_keys.insert((row.task.path.clone(), row.task.line));
-    }
+    // query. Dedupe by (path, line).
     let mut checklist = Vec::new();
     for row in &all {
         if checklist_from_tags(&row.task.tags).is_none() {
@@ -291,7 +265,6 @@ pub(crate) fn scan(bob_dir: &Path) -> Result<Snapshot, ScanError> {
         ready,
         pending,
         next,
-        trackers,
         checklist,
         open,
         all,
@@ -339,38 +312,6 @@ pub(crate) fn upkeep_today(rows: &[RowCtx], today: NaiveDate) -> u32 {
         count += 1;
     }
     count
-}
-
-/// Freshness-specific visibility for an exact `^ref` candidate from
-/// the all-task scan: every scope exclusion still applies except the
-/// conventional `#hide` tag. Ordinary hidden tasks never reach here
-/// (callers filter by exact tracker identity first).
-fn tracker_candidate_visible(row: &RowCtx, today: NaiveDate) -> bool {
-    use super::state::lane_for_row;
-    let status = row.task.status_symbol.chars().next().unwrap_or(' ');
-    let is_todo = row.task.status_type == "TODO";
-    // Unsupported/closed status, dependency blocking, and recurring
-    // tasks stay out.
-    if lane_for_row(status, is_todo).is_none() {
-        return false;
-    }
-    if row.task.is_blocked || row.task.is_recurring {
-        return false;
-    }
-    if row.is_daily_note || row.is_today {
-        return false;
-    }
-    // Template/conflict paths stay out (mirror the lane queries).
-    if row.task.path.contains("_templates")
-        || row.task.path.contains("_conflicts")
-    {
-        return false;
-    }
-    // Future inline scheduling suppresses review.
-    if row.task.scheduled.is_some_and(|date| date > today) {
-        return false;
-    }
-    true
 }
 
 /// Visibility for a PRE/POST checklist candidate from the all-task

@@ -38,8 +38,9 @@ const COMMAND_NAME: &str = "bob freshness";
 /// block ID to the `#ref` tag: Ready `#ref` rows keep the
 /// `reference_interval` cadence and REFERENCES tier (never NEW,
 /// never decide), while `[*]`/`[/]` refs are ordinary lane rows on
-/// the lane interval. The transitional `#hide` bypass survives only
-/// for exact `^ref` rows.
+/// the lane interval. The transitional `#hide` bypass for exact
+/// `^ref` rows was removed at closeout: hidden rows stay out like
+/// any other hidden task.
 ///
 /// Schema 11 adds the RECURRING walk tier: `recurring` in `tier`
 /// and `by_tier`, `counts.recurring_due`; recurring rows carry
@@ -356,17 +357,14 @@ fn collect_list(snapshot: &Snapshot) -> ListReport {
         snapshot.ready.iter().all(|row| !row.task.is_blocked),
         "READY_QUERY rows must never be blocked"
     );
-    // The review input is ready ∪ pending ∪ next plus hidden
-    // tracker candidates (freshness-specific visibility, hide
-    // allowed) plus checklist candidates (`[?]` and other tagged
-    // rows the lane queries miss). Ordinary hidden tasks never
-    // enter here.
+    // The review input is ready ∪ pending ∪ next plus checklist
+    // candidates (`[?]` and other tagged rows the lane queries
+    // miss). Hidden tasks never enter here.
     let combined: Vec<(&RowCtx, super::state::FreshnessRow)> = snapshot
         .ready
         .iter()
         .chain(snapshot.pending.iter())
         .chain(snapshot.next.iter())
-        .chain(snapshot.trackers.iter())
         .chain(snapshot.checklist.iter())
         .map(|row| (row, row.freshness_row(true)))
         .collect();
@@ -439,13 +437,12 @@ fn collect_list(snapshot: &Snapshot) -> ListReport {
         .iter()
         .chain(snapshot.pending.iter())
         .chain(snapshot.next.iter())
-        .chain(snapshot.trackers.iter())
         .chain(snapshot.checklist.iter())
         .map(|row| row.freshness_row(true))
         .collect();
     let mut counts = counts(&combined_eval_rows, today, config);
-    // Tier counts need ready ∪ pending ∪ next plus hidden tracker
-    // rows; the meters need every status (S15, B1).
+    // Tier counts need ready ∪ pending ∪ next plus checklist rows;
+    // the meters need every status (S15, B1).
     counts.refreshed_today = refreshed_today(&snapshot.all, today);
     counts.upkeep_today = upkeep_today(&snapshot.all, today);
     counts.budget_met = config

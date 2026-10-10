@@ -339,10 +339,8 @@ in_scope(t)   = status type TODO ("[ ]") ∧ lane-visible ∧ ¬recurring
                 ∧ ¬in a canonical daily note (YYYY/YYYYMMDD.md) ∧ ¬Today(t)
                   lane-visible = the NEXT/PENDING lane predicate on each side: not done,
                   not dependency-blocked, not under _templates or _conflicts,
-                  no scheduled date after today, no #hide for ordinary tasks
-                  (including tag-only #ref rows) and exact ^prj rows —
-                  except exact ^ref trackers, which bypass only the #hide
-                  exclusion (see "Tracking review" below)
+                  no scheduled date after today, no #hide
+                  (see "Tracking review" below)
 ref(t)        = exact trailing ^prj → prj; exact trailing ^ref or a
                 whole-token #ref tag (case-insensitive) → ref; else none.
                 (^prj-extra, #references, and #ref/x never qualify.)
@@ -359,8 +357,7 @@ lane(t)       = pending  if status symbol "/"
               | none     otherwise (Blocked, closed, custom non-TODO)
                 (a null lane never drops a checklist row)
 walk_scope(t) = lane(t) ≠ none ∧ lane-visible ∧ ¬recurring ∧ ¬canonical daily note ∧ ¬Today(t)
-                (lane-visible is the existing NEXT/PENDING predicate, unchanged;
-                exact ^ref rows use the freshness-specific visibility above)
+                (lane-visible is the existing NEXT/PENDING predicate, unchanged)
 lane_interval = freshness.pending_interval (pending) | freshness.next_interval (next);
                 default 1; false = that lane is not walked
 interval(t)   = ref(t)=prj with project_interval: project_interval, source "project"
@@ -524,15 +521,13 @@ PENDING → NEXT → RECURRING → TICKLER → REFERENCES → ROTTEN → POST.
   task. If a visible `^prj` sits in a note that has open tasks
   because sync has not run yet, it is reviewed; sync runs every 15
   minutes, so the window is small.
-- An exact-`^ref` row keeps the transitional `#hide` bypass until
-  `closeout` removes it: the conventional `#hide` tag is allowed
-  without changing global lane queries, dashboard visibility, task
-  tags, or project/highlights sync rules. A hand-written `#hide` on
-  a tag-only `#ref` line hides it like any task. Every other
-  exclusion still applies (unsupported/closed/blocked status,
-  dependency blocking, recurring, template/conflict path, canonical
-  daily note, Today membership, future inline scheduling); ordinary
-  hidden tasks remain out.
+- A `#hide` tag hides a `#ref` row like any task — exact-`^ref`
+  rows included. (The transitional `#hide` bypass for exact-`^ref`
+  rows was removed at closeout, after the live migration moved every
+  open ref task into its parent note.) Every other exclusion still
+  applies (unsupported/closed/blocked status, dependency blocking,
+  recurring, template/conflict path, canonical daily note, Today
+  membership, future inline scheduling); hidden tasks remain out.
 - The checkbox stays authoritative: done/canceled trackers
   disappear. Missing optional type/tag metadata never disables an
   exact anchor, and no task is created for a note missing its
@@ -579,14 +574,12 @@ falls back like an ordinary task; a RESURFACED Ready `#ref` walks in
 REFERENCES and never decides, even at the keep limit; Today,
 recurring, daily, template/conflict, blocked, and future-inline
 rows stay excluded from review scope; a `#ref` line with `#hide` is
-hidden while an exact-`^ref` hidden v1 tracker still reviews;
+hidden, exact-`^ref` rows included;
 `#references`, `^prj-extra`, and embedded links never qualify; the
 ten-tier order holds with stable ties and `walk = sum(by_tier)`;
 counts, JSON, human output, status bar, `limit=1`, and the upkeep
 budget show no duplicate totals, with the header and status bar
-reading tier counts; hidden exact-`^ref` rows join full review
-while the visible pool, lane, and capacity counts stay unchanged;
-neither tracker tier ever decays.
+reading tier counts; neither tracker tier ever decays.
 
 **Machine vocabulary (schema 12).** Human output, help, and docs
 say `rotten`, and so does the machine contract since the vocab-rotten
@@ -595,8 +588,9 @@ migration published JSON schema 2: `state: "rotten"`,
 row still carries the `bucket` field (`"new"`, `"rotten"`, or null).
 Schema 12 re-keys ref review identity from the exact `^ref` block ID
 to the `#ref` tag (Ready `#ref` rows keep REFERENCES on the
-reference cadence; lane refs walk PENDING/NEXT; the `#hide` bypass
-survives only for exact `^ref` rows).
+reference cadence; lane refs walk PENDING/NEXT). Closeout then
+removed the transitional `#hide` bypass for exact `^ref` rows, so a
+`#hide` tag hides them like any other task.
 Schema 11 adds the RECURRING walk tier: `recurring` in `tier` and
 `by_tier`, `counts.recurring_due`; recurring rows carry `due_on` = the
 occurrence date.
@@ -1617,6 +1611,7 @@ There is no freshness trial: no ritual change, release, or tuning waits on a tri
 - 2026-10-06: inbox routing went live — on an open inbox task, every non-closing Ctrl+Shift+P answer and Ctrl+Shift+Enter asks where the task goes before writing, acts then moves without following, and advances the walk as an answer (nav 2.10.0, block-id-prompt 1.23.0).
 - 2026-10-08: `]s` / `[s` away from the current review task first return to it; the next press steps from there (nav 2.13.0).
 - 2026-10-09: ref review re-keyed from the exact `^ref` block ID to the `#ref` tag (schema 12, ledger 1.37.0 / namespace v10 with `refTagIdentity`): Ready `#ref` rows keep REFERENCES on the reference cadence (never NEW, never decide); `[*]`/`[/]` refs walk PENDING/NEXT as ordinary lane tasks; the `#hide` bypass survives only for exact `^ref` rows until closeout.
+- 2026-10-10: closeout removed the transitional `#hide` bypass for exact `^ref` rows (schema stays 12, JSON shape unchanged): hidden rows stay out of the walk like any hidden task, after the live migration moved every open ref task into its parent note.
 
 ## 14. Keep-streak rollout, rollback, and calibration
 

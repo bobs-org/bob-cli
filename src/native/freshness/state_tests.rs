@@ -874,8 +874,9 @@ fn decide_zero_off_and_lane_rows() {
 
 /// Tracker review: a visible `^prj` walks in PROJECTS (never NEW)
 /// with no occupancy or schedule gate, a hidden `^prj` is out of
-/// scope, a hidden `^ref` walks in REFERENCES with its Ready state
-/// intact, lane trackers keep their lane with null state, and counts
+/// scope, a visible `^ref` walks in REFERENCES with its Ready state
+/// intact while a hidden `^ref` stays out like any hidden task,
+/// lane trackers keep their lane with null state, and counts
 /// decouple states from the seven-key tier histogram.
 #[test]
 fn tracking_projects_tier_and_counts() {
@@ -903,14 +904,23 @@ fn tracking_projects_tier_and_counts() {
     assert_eq!(evaluated.tier, None);
     assert!(evaluated.lints.is_empty());
 
-    // An eligible hidden reference walks in REFERENCES (hide
-    // bypassed) with its Ready NEW state and bucket intact.
-    let mut hidden_ref = row("- [ ] #task Read #hide ^ref");
-    hidden_ref.tracker = Some(TrackerKind::Ref);
-    let evaluated = evaluate(&hidden_ref, today(), &config);
+    // A visible reference walks in REFERENCES with its Ready NEW
+    // state and bucket intact.
+    let mut visible_ref = row("- [ ] #task Read ^ref");
+    visible_ref.tracker = Some(TrackerKind::Ref);
+    let evaluated = evaluate(&visible_ref, today(), &config);
     assert_eq!(evaluated.state, Some(FreshState::New));
     assert_eq!(evaluated.tier, Some(Tier::References));
     assert_eq!(bucket_for_state(evaluated.state), Some("new"));
+
+    // A hidden `^ref` stays out like any hidden task: the
+    // transitional hide bypass is gone.
+    let mut hidden_ref = row("- [ ] #task Read #hide ^ref");
+    hidden_ref.tracker = Some(TrackerKind::Ref);
+    hidden_ref.lane_visible = false;
+    let evaluated = evaluate(&hidden_ref, today(), &config);
+    assert_eq!(evaluated.state, None);
+    assert_eq!(evaluated.tier, None);
 
     // An ordinary hidden task stays out.
     let mut hidden = row("- [ ] #task Read #hide");
@@ -931,7 +941,7 @@ fn tracking_projects_tier_and_counts() {
     assert_eq!(evaluated.interval_source, IntervalSource::Default);
 
     // Counts: states decouple from tiers; walk sums the histogram.
-    let report = counts(&[empty_prj, hidden_ref, lane_prj], today(), &config);
+    let report = counts(&[empty_prj, visible_ref, lane_prj], today(), &config);
     assert_eq!(report.new, 2);
     assert_eq!(report.due, 2);
     assert_eq!(report.projects_due, 2);
@@ -1164,8 +1174,8 @@ fn ref_identity_is_tag_or_exact_block_id() {
 
 /// A tag-only Ready `#ref` row walks REFERENCES (never NEW) with
 /// its Ready state intact; a `#ref` line with `#hide` is hidden
-/// like any task, while an exact-`^ref` hidden v1 tracker still
-/// reviews through the transitional bypass.
+/// like any task, as is a hidden exact-`^ref` row now that the
+/// transitional bypass is gone.
 #[test]
 fn tag_only_ready_ref_walks_references() {
     let config = default_config();
