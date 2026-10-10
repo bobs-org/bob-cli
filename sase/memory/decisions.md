@@ -38,7 +38,12 @@ edited in place.
      Today's Pomodoro ledger drives Next and In Progress; open dependencies and future
      scheduled dates drive Blocked. bob task-status-hooks reconciles them, so writers
      change those inputs, never just the checkbox.
-4. **Answering A Walk Landing Advances The Walk** (`answering-advances-the-walk`)
+4. **An Empty Capture Draft Shows Today's Ledger Agenda**
+   (`idle-capture-shows-ledger-agenda`) - An empty capture draft shows bob's
+   `capture-pomodoros --tasks` agenda (Now, Next, Later), cached in app memory and
+   revalidated on filtered vault events and show; folds go farthest-first (logs,
+   one-line, one-row, name strip) below a fixed eye line; the app never reads the vault.
+5. **Answering A Walk Landing Advances The Walk** (`answering-advances-the-walk`)
    - _[partly superseded by `task-move-never-advances-the-walk`]_ A gesture that started
      on the row ]s just landed on, and whose committed write takes that row out of
      today's walk, advances the walk exactly once to the next remaining review item:
@@ -46,45 +51,45 @@ edited in place.
      Card commit, and Ctrl+Shift+M. Alt+F is the one stay answer; Ctrl+Enter never
      crosses the PRE/POST boundary; a short gesture lock swallows double presses; every
      walk landing records a <C-o> jump.
-5. **Bob Mac Capture Is A Thin Client Of bob** (`mac-capture-is-a-thin-client`)
+6. **Bob Mac Capture Is A Thin Client Of bob** (`mac-capture-is-a-thin-client`)
    - Bob Mac Capture never parses capture grammar, computes previews, or writes the
      vault; it runs bob, renders the spans, candidates, and previews bob returns, and
      submits each draft as one bob capture call.
-6. **Decay Decisions Are Available Immediately**
+7. **Decay Decisions Are Available Immediately**
    (`decay-decisions-are-available-immediately`) - Gesture-triggered approved-decay
    cards are available as soon as compatible plugins are installed; there is no calendar
    gate, replacement date, or counting-only period.
-7. **Next And Pending Are Sticky Lanes; Only Blocked Is Derived**
+8. **Next And Pending Are Sticky Lanes; Only Blocked Is Derived**
    (`task-lanes-are-sticky`) - Linking raises Ready to Next and an =x close sets In
    Progress (PENDING); no unlink, hooks run, or capture drop lowers them; only Alt+N
    release returns a task to Ready; Blocked stays derived.
-8. **Note Ready Cap Counts The Lane** (`note-ready-cap-counts-the-lane`)
+9. **Note Ready Cap Counts The Lane** (`note-ready-cap-counts-the-lane`)
    - The per-note soft cap (plan.max_ready_per_note, default 5; ready_cap: N|off) counts
      each area/project note's whole Ready lane by residence, whatever its freshness.
-9. **READY Is Freshness-Gated With NEW and ROTTEN Review** (`ready-is-freshness-gated`)
-   - _[partly superseded by `note-ready-cap-counts-the-lane`, `review-walk-is-tiered`,
-     `rotten-keeps-use-priority-decay`]_ READY is the freshness-gated confirmed/exempt
-     backlog (visible TODO pool minus NEW and ROTTEN buckets) with TODAY → NEW → PENDING
-     → NEXT → READY sections and NEW/PENDING/NEXT/READY/BLOCKED/ROTTEN/TODAY chips;
-     review clears NEW then ROTTEN; no tags, fields, or status changes store review
-     state.
-10. **Review Walk Is Tiered With Daily Lane Review** (`review-walk-is-tiered`)
+10. **READY Is Freshness-Gated With NEW and ROTTEN Review** (`ready-is-freshness-gated`)
+    - _[partly superseded by `note-ready-cap-counts-the-lane`, `review-walk-is-tiered`,
+      `rotten-keeps-use-priority-decay`]_ READY is the freshness-gated confirmed/exempt
+      backlog (visible TODO pool minus NEW and ROTTEN buckets) with TODAY → NEW →
+      PENDING → NEXT → READY sections and NEW/PENDING/NEXT/READY/BLOCKED/ROTTEN/TODAY
+      chips; review clears NEW then ROTTEN; no tags, fields, or status changes store
+      review state.
+11. **Review Walk Is Tiered With Daily Lane Review** (`review-walk-is-tiered`)
     - The ]s walk visits one shared queue in explicit tiers PRE → NEW → PROJECTS →
       PENDING → NEXT → TICKLER → REFERENCES → ROTTEN → POST; #gtd #pre/#post checklist
       rows resolve only by completion; Pending and Next come due daily under
       pending_interval / next_interval (default 1, false walks that lane off); tiers
       never feed buckets or chips; upkeep outside the lanes counts the budget; stamps
       stay and the seed never re-runs.
-11. **Rotten Keeps Decay Through The Priority Ladder**
+12. **Rotten Keeps Decay Through The Priority Ladder**
     (`rotten-keeps-use-priority-decay`) - _[partly superseded by
     `decay-decisions-are-available-immediately`]_ Repeated due-Ready keeps earn an
     explicit approved decision that enters the existing priority ladder; nothing decays
     silently and freshness itself still never changes priority or schedule.
-12. **Task Dependencies Are Links On One Depends-On Line**
+13. **Task Dependencies Are Links On One Depends-On Line**
     (`task-deps-are-depends-on-links`) - A task's prerequisites live as plain task
     dependency links on one managed Depends-On first-child line; that line is the source
     of truth and the [dependsOn::] / [id::] fields are derived from it.
-13. **Today Is Read From The Ledger, Never Written To Tasks**
+14. **Today Is Read From The Ledger, Never Written To Tasks**
     (`today-is-read-from-the-ledger`) - _[partly superseded by
     `ready-is-freshness-gated`]_ Today is the open tasks with a dedicated Task Link
     under today's open Pomodoros, computed at read time by bob plan and
