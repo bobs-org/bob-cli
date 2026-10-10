@@ -437,11 +437,7 @@ pub(super) fn unfinished<'a>(
 ) -> Vec<&'a (PathBuf, TransactionFile)> {
     files
         .iter()
-        .filter(|(_, file)| {
-            file.entries
-                .iter()
-                .any(|entry| entry.state == EntryState::Prepared)
-        })
+        .filter(|(_, file)| !is_completed(file))
         .collect()
 }
 
@@ -568,10 +564,23 @@ pub(super) fn preflight_trackable(
     paths: &[PathBuf],
 ) -> Result<(), TrackError> {
     for rel in paths {
-        match check_ignore_quiet(bob_dir, child_env, rel)? {
+        // Metadata callers sometimes pass a directory before its first
+        // receipt exists. Probe a representative JSON child so an explicit
+        // file allowlist can make the directory trackable.
+        let check_path = if is_gkeep_metadata_directory(rel) {
+            rel.join(".bob-trackability-probe.json")
+        } else {
+            rel.clone()
+        };
+        match check_ignore_quiet(bob_dir, child_env, &check_path)? {
             IgnoreQuiet::Trackable => {}
             IgnoreQuiet::Ignored => {
-                return Err(ignored_path_error(bob_dir, child_env, rel));
+                return Err(ignored_path_error(
+                    bob_dir,
+                    child_env,
+                    rel,
+                    &check_path,
+                ));
             }
         }
     }
@@ -700,16 +709,17 @@ fn ignored_path_error(
     bob_dir: &Path,
     child_env: &crate::native::ob::ChildEnv,
     rel: &Path,
+    check_path: &Path,
 ) -> TrackError {
-    let inspect = inspect_hint(bob_dir, rel);
+    let inspect = inspect_hint(bob_dir, check_path);
     let fallback = TrackError::new(
         format!(
             "{}\nGit ignore inspection failed after the path was ignored; run: {inspect}",
             cannot_track_line(rel)
         ),
-        Some(repair_hint(bob_dir, rel, None)),
+        Some(repair_hint(bob_dir, rel, check_path, None)),
     );
-    match check_ignore_verbose(bob_dir, child_env, rel) {
+    match check_ignore_verbose(bob_dir, child_env, check_path) {
         Ok(Some(diag)) => {
             if diag.pattern.starts_with('!') {
                 // Quiet said ignored; a negated last match means the
@@ -725,7 +735,7 @@ fn ignored_path_error(
             );
             TrackError::new(
                 message,
-                Some(repair_hint(bob_dir, rel, Some(&diag))),
+                Some(repair_hint(bob_dir, rel, check_path, Some(&diag))),
             )
         }
         Ok(None) | Err(_) => fallback,
@@ -810,9 +820,25 @@ fn is_import_receipt_path(rel: &Path) -> bool {
     text.starts_with(".bob/gkeep/imports/") && text.ends_with(".json")
 }
 
+fn is_import_history_path(rel: &Path) -> bool {
+    is_import_receipt_path(rel)
+        || rel.to_string_lossy().replace('\\', "/") == IMPORTS_DIR
+}
+
+fn is_gkeep_metadata_path(rel: &Path) -> bool {
+    let text = rel.to_string_lossy().replace('\\', "/");
+    text == ".bob/gkeep" || text.starts_with(".bob/gkeep/")
+}
+
+fn is_gkeep_metadata_directory(rel: &Path) -> bool {
+    rel.extension().is_none() && is_gkeep_metadata_path(rel)
+}
+
 fn cannot_track_line(rel: &Path) -> String {
-    if is_import_receipt_path(rel) {
+    if is_import_history_path(rel) {
         format!("cannot track GKeep import history: {}", rel.display())
+    } else if is_gkeep_metadata_path(rel) {
+        format!("cannot track GKeep metadata: {}", rel.display())
     } else {
         format!("cannot track GKeep target note: {}", rel.display())
     }
@@ -829,15 +855,16 @@ fn inspect_hint(bob_dir: &Path, rel: &Path) -> String {
 fn repair_hint(
     bob_dir: &Path,
     rel: &Path,
+    check_path: &Path,
     diag: Option<&IgnoreDiag>,
 ) -> String {
-    let inspect = inspect_hint(bob_dir, rel);
-    if is_import_receipt_path(rel) {
+    let inspect = inspect_hint(bob_dir, check_path);
+    if is_import_history_path(rel) {
         if let Some(diag) = diag {
             if gitignore_star_rule(diag) {
                 return "Allow /.bob/gkeep/imports/*.json in the vault's .gitignore, then retry. Import history must sync with the imported tasks.".to_string();
             }
-            if pattern_excludes_ancestor(&diag.pattern, rel) {
+            if pattern_excludes_ancestor(&diag.pattern, check_path) {
                 return format!(
                     "{} excludes a parent directory; add traversal exceptions for each ancestor before allowing the receipt files. A leaf *.json exception alone is not enough. Import history must sync with the imported tasks. Inspect with: {inspect}",
                     diag.pattern
@@ -849,6 +876,17 @@ fn repair_hint(
             );
         }
         return "Allow /.bob/gkeep/imports/*.json in the vault's .gitignore, then retry. Import history must sync with the imported tasks.".to_string();
+    }
+    if is_gkeep_metadata_path(rel) {
+        if let Some(diag) = diag {
+            return format!(
+                "Allow the GKeep metadata path in {}, then retry. Metadata must sync with the vault. Inspect with: {inspect}",
+                diag.source
+            );
+        }
+        return format!(
+            "Allow the GKeep metadata path in the vault's Git ignore rules, then retry. Metadata must sync with the vault. Inspect with: {inspect}"
+        );
     }
     if let Some(diag) = diag {
         format!(
@@ -1182,5 +1220,36 @@ mod tests {
         let missing = PathBuf::from(".bob/gkeep/imports/nope.json");
         assert!(!matches_head(dir.path(), &isolated_env(), &missing)
             .expect("missing"));
+    }
+
+    #[test]
+    fn preflight_metadata_directories_probe_json_entries() {
+        let dir = tempfile::tempdir().expect("temp repo");
+        init_git_repo(dir.path());
+        fs::write(
+            dir.path().join(".gitignore"),
+            "*\n!*/\n!/.bob/gkeep/imports/*.json\n!*.md\n",
+        )
+        .expect("write ignore rules");
+
+        let child_env = isolated_env();
+        assert!(preflight_trackable(
+            dir.path(),
+            &child_env,
+            &[PathBuf::from(IMPORTS_DIR)],
+        )
+        .is_ok());
+        let error = preflight_trackable(
+            dir.path(),
+            &child_env,
+            &[PathBuf::from(".bob/gkeep/migrate-tasks")],
+        )
+        .expect_err("migration metadata ignored");
+        assert!(error.message.contains("cannot track GKeep metadata"));
+        assert!(error
+            .hint
+            .as_deref()
+            .unwrap_or_default()
+            .contains("must sync"));
     }
 }

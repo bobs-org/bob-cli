@@ -12,6 +12,7 @@ mod ledger;
 mod list;
 mod login;
 mod migrate;
+mod migrate_tasks;
 mod model;
 mod plan;
 mod pull;
@@ -20,7 +21,9 @@ mod ui;
 
 use std::{ffi::OsString, iter};
 
-pub(crate) use cli::{DoctorArgs, ListArgs, LoginArgs, MigrateArgs, PullArgs};
+pub(crate) use cli::{
+    DoctorArgs, ListArgs, LoginArgs, MigrateArgs, MigrateTasksArgs, PullArgs,
+};
 // Later phases import the rest directly: `super::cli::ListFormat`,
 // `super::config::GkeepConfig`, `super::model::KeepNote`,
 // `super::ui::report_error`.
@@ -123,6 +126,9 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
         }
         Some(("migrate-markers", sub_matches)) => {
             migrate::run(&MigrateArgs::from_matches(sub_matches))
+        }
+        Some(("migrate-tasks", sub_matches)) => {
+            migrate_tasks::run(&MigrateTasksArgs::from_matches(sub_matches))
         }
         Some((name, _)) => {
             eprintln!("{COMMAND_NAME}: unknown subcommand: {name}");

@@ -105,6 +105,7 @@ install-smoke:
     "${root}/bin/bob" gkeep list --help >/dev/null
     "${root}/bin/bob" gkeep login --help >/dev/null
     "${root}/bin/bob" gkeep migrate-markers --help >/dev/null
+    "${root}/bin/bob" gkeep migrate-tasks --help >/dev/null
     "${root}/bin/bob" gkeep pull --help >/dev/null
     "${root}/bin/bob" query --help >/dev/null
     "${root}/bin/bob" randomize --help >/dev/null

@@ -38,6 +38,7 @@ pub(crate) fn build_cli() -> ClapCommand {
         .subcommand(list_command())
         .subcommand(login_command())
         .subcommand(migrate_markers_command())
+        .subcommand(migrate_tasks_command())
         .subcommand(pull_command())
 }
 
@@ -116,6 +117,26 @@ fn migrate_markers_command() -> ClapCommand {
 
 fn migrate_markers_after_help() -> &'static str {
     "Offline migration: removes supported `%%gkeep:…%%` markers from task Markdown while preserving import evidence in `.bob/gkeep/imports/`. Needs no credentials, adapter, Keep snapshot, or network access, and does not require a configured target note.\n\nExamples:\n  bob gkeep migrate-markers --dry-run\n  bob gkeep migrate-markers\n  bob gkeep migrate-markers -d -f json\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob"
+}
+
+fn migrate_tasks_command() -> ClapCommand {
+    ClapCommand::new("migrate-tasks")
+        .about("Backfill compact Keep links on open tasks (offline)")
+        .long_about(
+            "Convert generated Google Keep Source children to the compact linked 💡 task format. This repair operation only considers open tasks; closed tasks remain unchanged.",
+        )
+        .disable_help_flag(true)
+        .arg(bob_dir_arg())
+        .arg(dry_run_arg())
+        .arg(human_format_arg())
+        .arg(help_arg())
+        .arg(no_commit_arg())
+        .arg(quiet_arg())
+        .after_help(migrate_tasks_after_help())
+}
+
+fn migrate_tasks_after_help() -> &'static str {
+    "Offline migration: converts recognized generated Keep Source children on open tasks to one `[💡](URL \"Open in Google Keep\")` link, removes redundant timestamps and supported markers, and keeps labels, task metadata, children, and import history. This command repairs open tasks only. Ambiguous or unsupported content is left for review and reported. No credentials, adapter, configuration, snapshot, or network access is used.\n\nExamples:\n  bob gkeep migrate-tasks --dry-run --format json\n  bob gkeep migrate-tasks --dry-run\n  bob gkeep migrate-tasks\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to BOB_DIR or ~/bob"
 }
 
 fn pull_command() -> ClapCommand {
@@ -500,6 +521,43 @@ pub(crate) struct MigrateArgs {
     pub quiet: bool,
 }
 
+/// Typed `migrate-tasks` arguments.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct MigrateTasksArgs {
+    /// Vault root override before `BOB_DIR` fallback.
+    pub bob_dir: Option<PathBuf>,
+    /// Report exact proposed edits with zero writes.
+    pub dry_run: bool,
+    /// Output format.
+    pub format: HumanFormat,
+    /// Skip the vault Git commit after migrating.
+    pub no_commit: bool,
+    /// Print only errors.
+    pub quiet: bool,
+}
+
+impl MigrateTasksArgs {
+    pub(crate) fn from_matches(matches: &ArgMatches) -> Self {
+        Self {
+            bob_dir: raw_bob_dir(matches),
+            dry_run: matches.get_flag("dry-run"),
+            format: HumanFormat::from_matches(matches),
+            no_commit: matches.get_flag("no-commit"),
+            quiet: matches.get_flag("quiet"),
+        }
+    }
+
+    /// The vault root: `--bob-dir`, else `BOB_DIR` or `~/bob`.
+    pub(crate) fn bob_dir(&self) -> PathBuf {
+        self.bob_dir.clone().unwrap_or_else(bob_env::bob_dir)
+    }
+
+    /// The error-reporting format name.
+    pub(crate) fn error_format(&self) -> &'static str {
+        self.format.as_str()
+    }
+}
+
 impl MigrateArgs {
     pub(crate) fn from_matches(matches: &ArgMatches) -> Self {
         Self {
@@ -678,6 +736,29 @@ mod tests {
             "login",
         ));
         assert_eq!(args.email, None);
+    }
+
+    #[test]
+    fn migrate_tasks_args_pin_options() {
+        let args = MigrateTasksArgs::from_matches(&sub_matches_for(
+            &[
+                "bob gkeep",
+                "migrate-tasks",
+                "-b",
+                "~/vault",
+                "-d",
+                "-f",
+                "json",
+                "-C",
+                "-q",
+            ],
+            "migrate-tasks",
+        ));
+        assert_eq!(args.bob_dir(), bob_env::home_dir().join("vault"));
+        assert!(args.dry_run);
+        assert_eq!(args.format, HumanFormat::Json);
+        assert!(args.no_commit);
+        assert!(args.quiet);
     }
 
     #[test]

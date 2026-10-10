@@ -813,6 +813,7 @@ bob gkeep [-a|--all] [-b|--bob-dir DIR] [-f|--format table|json] [-s|--source bo
 bob gkeep list [-a|--all] [-b|--bob-dir DIR] [-f|--format table|json] [-s|--source both|keep|vault]
 bob gkeep pull [-b|--bob-dir DIR] [-d|--dry-run] [-f|--format human|json] [-i|--id REF]... [-p|--include-pinned] [-S|--include-shared] [-l|--limit N] [-n|--no-archive] [-C|--no-commit] [-q|--quiet] [-R|--no-ref]
 bob gkeep migrate-markers [-b|--bob-dir DIR] [-d|--dry-run] [-f|--format human|json] [-C|--no-commit] [-q|--quiet]
+bob gkeep migrate-tasks [-b|--bob-dir DIR] [-d|--dry-run] [-f|--format human|json] [-C|--no-commit] [-q|--quiet]
 bob gkeep login [-e|--email EMAIL]
 bob gkeep doctor [-b|--bob-dir DIR] [-f|--format human|json]
 ```
@@ -832,7 +833,11 @@ tasks. Each note is archived in Keep only after its current content is
 verified in the vault (unless `--no-archive`). A pull that only clips skips
 the inbox write and the Git commit. Unidentifiable URL-less edited tasks
 keep `keep_id`/`keep_state` null rather than guessing another note's
-identity.
+identity. `bob gkeep migrate-tasks -d` previews full visual cleanup of
+recognized generated Keep source children on open tasks; running it without
+`-d` applies the offline migration while preserving import history. It keeps
+closed tasks unchanged and reports ambiguous candidates. The older
+`migrate-markers` command remains marker-only and includes all task statuses.
 Running `bob gkeep` with no subcommand runs `list`: Keep notes
 and vault tasks side by side with per-note pull states. `pull -d` previews
 the exact Markdown, `pull -n` writes without archiving, and `pull` writes,

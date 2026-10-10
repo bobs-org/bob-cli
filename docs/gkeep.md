@@ -35,6 +35,7 @@ bob gkeep [-a|--all] [-b|--bob-dir DIR] [-f|--format table|json] [-s|--source bo
 bob gkeep list [-a|--all] [-b|--bob-dir DIR] [-f|--format table|json] [-s|--source both|keep|vault]
 bob gkeep pull [-b|--bob-dir DIR] [-d|--dry-run] [-f|--format human|json] [-i|--id REF]... [-p|--include-pinned] [-S|--include-shared] [-l|--limit N] [-n|--no-archive] [-C|--no-commit] [-q|--quiet] [-R|--no-ref]
 bob gkeep migrate-markers [-b|--bob-dir DIR] [-d|--dry-run] [-f|--format human|json] [-C|--no-commit] [-q|--quiet]
+bob gkeep migrate-tasks [-b|--bob-dir DIR] [-d|--dry-run] [-f|--format human|json] [-C|--no-commit] [-q|--quiet]
 bob gkeep login [-e|--email EMAIL]
 bob gkeep doctor [-b|--bob-dir DIR] [-f|--format human|json]
 ```
@@ -442,12 +443,40 @@ a crash before cleanup is safe to rerun with no extra import; races leave the
 marker recoverable. Only changed notes and generated records commit; a clean
 rerun writes nothing and creates no commit.
 
+`bob gkeep migrate-tasks` is a separate offline repair for existing open
+tasks. It converts only recognized generated `Source:` children to the
+compact `[💡](URL "Open in Google Keep")` task link, keeps labels as a
+`🏷` child, moves a proven `revised` flag onto the task line, and removes
+the generated timestamp and supported marker. It also removes a redundant
+Source child when the matching bulb is already present, or a standalone
+marker when the task already has that bulb. URL-less legacy imports may
+lose their generated Source wrapper and marker without receiving an invented
+link. Marker-backed edits preserve the exact `(id, fp)` in the import store
+before changing Markdown. Every changed note also gets an exact-image receipt
+under `.bob/gkeep/migrate-tasks/` for crash recovery and commit retries; this
+separate journal keeps marker-free cosmetic edits out of the Keep import store
+so older pull binaries continue to read it.
+
+The command scans Markdown in the selected vault, including moved open tasks
+under `done/`, and follows configured open status types. It excludes closed
+tasks, code examples, frontmatter, quotes, and comments. Ambiguous ownership,
+different destinations, malformed metadata, or extra Source descendants are
+retained and reported for review. It needs no Keep config, credentials,
+adapter, or network access. Preview exact proposed edits with
+`bob gkeep migrate-tasks -d -f json`; apply with `bob gkeep migrate-tasks`.
+Both modes preserve task semantics and use the existing GKeep locks and
+scoped vault commits. The journal's before and after file hashes let a rerun
+recover a crash between marker cleanup and receipt finalization.
+
+Use `migrate-tasks` for full visual cleanup on open tasks. Keep
+`migrate-markers` for marker-only cleanup across every eligible status.
+
 ## Exit status
 
 - `0` — success, including "nothing to pull".
 - `1` — runtime failure: auth rejected, network, adapter crash or timeout,
-  lock contention, verify or commit failure, or any note that could not be
-  archived.
+  lock contention, verify or commit failure, unresolved migration candidates,
+  or any note that could not be archived.
 - `2` — usage or setup error: clap usage errors, missing or invalid `gkeep`
   config, unknown or ambiguous `--id`, a missing target note, `uv` not found,
   or no stored token.

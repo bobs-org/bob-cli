@@ -1712,7 +1712,7 @@ fn build_prepared_transaction(
 ///   (handled by the commit step, not here).
 /// - target edited/moved and the intended result cannot be proven: stop
 ///   with a precise diagnostic, retaining evidence and Keep content.
-fn resolve_unfinished(
+pub(crate) fn resolve_unfinished(
     bob_dir: &Path,
     target_rel: &Path,
     settings: &note_tasks::NoteTaskSettings,
@@ -1778,6 +1778,29 @@ fn resolve_unfinished(
                 ));
             }
             files.remove(index);
+            continue;
+        }
+        // Offline visual migrations prepare an exact file post-image before
+        // removing a legacy marker. If that whole post-image is installed,
+        // it is stronger recovery proof than a top-level task-boundary scan
+        // (which intentionally does not model nested task ownership).
+        if file.after_sha256.as_deref() == Some(current_sha.as_str()) {
+            let mut finalized = file.clone();
+            for entry in &mut finalized.entries {
+                if entry.state == EntryState::Prepared {
+                    entry.state = EntryState::Verified;
+                    entry.intended = None;
+                    entry.dest_digest = Some(current_sha.clone());
+                }
+            }
+            if let Err(error) = imports::persist_verified(&tx_path, &finalized)
+            {
+                return Err(GkeepError::runtime(
+                    "vault",
+                    format!("finalize the gkeep import store: {error}"),
+                ));
+            }
+            files[index].1 = finalized;
             continue;
         }
         // Target installed but record still prepared: verify recorded
