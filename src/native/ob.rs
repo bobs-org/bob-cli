@@ -499,10 +499,38 @@ mod tests {
             );
 
             // Uncontended, the lock is acquired without waiting or calling back.
-            let _guard = acquire_lock_waiting(Duration::ZERO, || {
-                waits.fetch_add(1, Ordering::SeqCst);
-            })
-            .expect("lock");
+            // Poll briefly first: like the setup path above, a parallel
+            // test's forked-but-not-yet-exec'd child can inherit our lock fd
+            // across fork and hold it transiently after we drop our copy.
+            // Each attempt uses its own callback counter so a transient
+            // timeout never pollutes the shared count; the winning attempt
+            // must fire no callback.
+            let deadline = Instant::now() + Duration::from_secs(10);
+            let _guard = loop {
+                let fired = Arc::new(AtomicUsize::new(0));
+                let on_wait = {
+                    let fired = Arc::clone(&fired);
+                    move || {
+                        fired.fetch_add(1, Ordering::SeqCst);
+                    }
+                };
+                match acquire_lock_waiting(Duration::ZERO, on_wait) {
+                    Ok(guard) => {
+                        assert_eq!(
+                            fired.load(Ordering::SeqCst),
+                            0,
+                            "uncontended acquire must not wait"
+                        );
+                        break guard;
+                    }
+                    Err(LockWaitError::Timeout { .. })
+                        if Instant::now() < deadline =>
+                    {
+                        std::thread::sleep(Duration::from_millis(25));
+                    }
+                    Err(error) => panic!("uncontended acquire: {error:?}"),
+                }
+            };
             assert_eq!(waits.load(Ordering::SeqCst), 2);
         });
     }

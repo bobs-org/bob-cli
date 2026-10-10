@@ -1611,7 +1611,7 @@ There is no freshness trial: no ritual change, release, or tuning waits on a tri
 - 2026-10-06: inbox routing went live — on an open inbox task, every non-closing Ctrl+Shift+P answer and Ctrl+Shift+Enter asks where the task goes before writing, acts then moves without following, and advances the walk as an answer (nav 2.10.0, block-id-prompt 1.23.0).
 - 2026-10-08: `]s` / `[s` away from the current review task first return to it; the next press steps from there (nav 2.13.0).
 - 2026-10-09: ref review re-keyed from the exact `^ref` block ID to the `#ref` tag (schema 12, ledger 1.37.0 / namespace v10 with `refTagIdentity`): Ready `#ref` rows keep REFERENCES on the reference cadence (never NEW, never decide); `[*]`/`[/]` refs walk PENDING/NEXT as ordinary lane tasks; the `#hide` bypass survives only for exact `^ref` rows until closeout.
-- 2026-10-10: closeout removed the transitional `#hide` bypass for exact `^ref` rows (schema stays 12, JSON shape unchanged): hidden rows stay out of the walk like any hidden task, after the live migration moved every open ref task into its parent note.
+- 2026-10-10: closeout removed the transitional `#hide` bypass for exact `^ref` rows (schema stays 12, JSON shape unchanged; ledger 1.39.0, namespace stays v10): hidden rows stay out of the walk like any hidden task, after the live migration moved every open ref task into its parent note.
 
 ## 14. Keep-streak rollout, rollback, and calibration
 
