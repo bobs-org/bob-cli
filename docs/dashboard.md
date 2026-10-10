@@ -16,25 +16,52 @@ Grouping is navigation only. It never changes the freshness walk, lane
 semantics, caps, or review sequence, and the Projects collection badge
 is not the freshness PROJECTS tier.
 
-## Task badge warnings
+## Work badge colors
 
-PENDING and NEXT show the dashboard section counts, which exclude TODAY.
-Their warning color follows the same visible count: a badge turns red only
-when its section count is strictly above its cap. A section at the cap stays
-normal-colored. Tooltips and accessibility labels still show the whole-lane
-count, TODAY count, and any whole-lane excess. For example, NEXT `10/15` stays
-normal-colored when the whole lane is `17/15` because seven tasks are in TODAY.
-Daily `bob-plan` PENDING/NEXT badges use the same live section counts and
-warning color, including on older daily notes. CLI warnings and navigation
-notices continue to check the whole lane, including TODAY. Daily lint lines
-name that whole-lane pressure explicitly.
+TODAY, PENDING, NEXT, and READY share one count-to-limit color scheme in
+daily-note `bob-plan` blocks and the Work row at the top of `dash.md`.
+For an available nonnegative integer count `n` and positive integer limit
+`L`, using exact comparisons (never rounded displayed percentages):
+
+| Condition | Color |
+| --- | --- |
+| `n === 0` | grey |
+| `0 < n < L / 2` | blue |
+| `L / 2 <= n < 3 * L / 4` | green |
+| `3 * L / 4 <= n < L` | yellow |
+| `n === L` | orange |
+| `n > L` | red |
+
+Check zero, strict excess, and equality before descending through 75%
+and 50%. Small and odd caps may naturally skip bands.
+
+PENDING and NEXT show the dashboard section counts, which exclude TODAY,
+compared with that lane's configured cap. Their color follows the same
+visible count: for example, NEXT section `10/15` with whole lane `17/15`
+and TODAY 7 is green, while section `15/15` with a larger whole lane is
+orange. Whole-lane pressure remains separately labeled in tooltips and
+accessibility labels, and in daily lint lines. READY uses its
+freshness-gated backlog and `max_ready`, with the whole-lane breakdown in
+its tooltip. TODAY uses `budget.links.count / budget.links.cap`, with one
+higher-priority override: `budget.themes.count > budget.themes.cap` makes
+it red, including when the link count is zero. Themes exactly at their cap
+do not affect the link-based color. Both TODAY fractions remain displayed.
+Exact-cap orange is a presentation state, not a new lint or an `over`
+condition.
+
+Daily `bob-plan` PENDING/NEXT/READY badges use the same live section
+counts and colors, including on older daily notes; older notes retain
+their own TODAY ledger but use current live PENDING/NEXT/READY counts.
+CLI warnings and navigation notices continue to check the whole lane,
+including TODAY. An unavailable count remains `–` with neutral styling
+and unavailable accessibility text; it is never converted into numeric
+zero. Missing ledger data or a missing Pomodoros section remains
+unavailable, rather than a synthetic `0/limit`.
 
 NEW, ROTTEN, and CROWDED share one Review count rule: muted grey with
 `0 ✓` when the count is zero, red for every positive count, and `–`
 when unavailable. ROTTEN follows its displayed count even below the
-escalation threshold or after the upkeep budget is met. This differs
-from PENDING/NEXT, which stay normal-colored at the cap and turn red
-only above it.
+escalation threshold or after the upkeep budget is met.
 
 BLOCKED is informational and has no cap. Its count stays available for
 navigation and uses the same informational accent as PROJECTS and

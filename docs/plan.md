@@ -138,6 +138,14 @@ task-line field, or a file-path filter.
 6. Dependency targets do **not** inherit Today; the hooks
    still promote them to Next.
 
+The daily and dashboard TODAY badge shares the Work badge colors with
+PENDING, NEXT, and READY: it colors `budget.links.count /
+budget.links.cap` with the same grey/blue/green/yellow/orange/red bands,
+except `budget.themes.count > budget.themes.cap` forces red, including
+when links are zero. Themes exactly at cap keep the link-based color.
+Missing ledger data or a missing Pomodoros section is `TODAY –`, never a
+synthetic `0/limit`; an existing empty Pomodoros section is grey.
+
 ## Lanes (NEXT and PENDING)
 
 The daily lane review in docs/freshness.md §4 walks Pending and Next tasks once a day on their lane interval, with PRE before NEW for #gtd #pre checklist chores, POST after ROTTEN for #gtd #post closeout, and the PROJECTS tier between NEW and PENDING for visible ^prj reminders on project_interval / the Ready chain. Reference tasks use ordinary freshness and enter their lane group, NEW, TICKLER, or ROTTEN as appropriate. A disabled lane walk never disables PROJECTS review.
@@ -178,17 +186,23 @@ dashboard PENDING/NEXT sections exclude TODAY (plus `dash.md` itself);
 keep the **whole lane, Today included**, so those counts don't swing
 during the day. The dashboard badges and the daily `bob-plan` PENDING/NEXT
 badges show the **section count over the cap** as the primary number (for
-example `PENDING 9/10`) and turn red only when that displayed section
-count is strictly above the cap. A section exactly at the cap stays
-normal-colored. Whole-lane pressure remains clearly labeled in the
+example `PENDING 9/10`) and share the Work badge colors with TODAY and
+READY: for an available section count `n` and cap `L`, `n === 0` is grey,
+`0 < n < L / 2` blue, `L / 2 <= n < 3 * L / 4` green,
+`3 * L / 4 <= n < L` yellow, `n === L` orange, and `n > L` red, using
+exact comparisons. For example, NEXT section `10/15` with whole lane
+`17/15` and TODAY 7 is green, while section `15/15` with a larger whole
+lane is orange. Whole-lane pressure remains clearly labeled in the
 tooltip and accessible label (for example
 `NEXT 10/15; whole lane 17/15; 7 in TODAY; 2 over the whole-lane cap`),
-so TODAY-driven excess does not color an at-cap section red. Daily badges
-on older notes follow today's live section, while that note's TODAY
-theme/link budget keeps its own ledger. CLI warnings and navigation
-notices still check the full lane, including TODAY. Daily
+so TODAY-driven excess does not color an at-cap section red. Exact-cap
+orange is a presentation state, not a new lint or an `over` condition.
+Daily badges on older notes follow today's live section, while that
+note's TODAY theme/link budget keeps its own ledger. CLI warnings and
+navigation notices still check the full lane, including TODAY. Daily
 `next_cap_exceeded` / `pending_cap_exceeded` lints keep those whole-lane
-counts and name them as the whole lane, including TODAY.
+counts and name them as the whole lane, including TODAY. An unavailable
+section is `–`, never a synthetic zero.
 `dashboardLaneBudget("pending" | "next")` in bob-ledger-tools is the
 versioned dashboard contract. When Tasks data or the current-day Today
 cache is not ready, the dashboard section is unavailable (`–`), never a
@@ -435,9 +449,13 @@ enforcement, or tmux meter. The daily `bob-plan` block shows a
 `ready_cap_exceeded` lint line beneath its chips when READY is strictly
 over the cap. A cap exactly met raises no lint.
 
-The badge shows `READY n/cap` (for example `READY 87/100`); exactly at
-the cap is fine and only a strict excess turns red (`READY 101/100`).
-There is no intermediate warning color. This is a **soft limit**: it
+The badge shows `READY n/cap` (for example `READY 87/100`) and shares
+the Work badge colors: `0` grey, `0 < n < L / 2` blue,
+`L / 2 <= n < 3 * L / 4` green, `3 * L / 4 <= n < L` yellow, `n === L`
+orange, and `n > L` red, using exact comparisons. Exactly at the cap is
+orange as a presentation state, not a lint or an `over` condition; only a
+strict excess raises the `ready_cap_exceeded` lint (`READY 101/100`).
+This is a **soft limit**: it
 communicates backlog pressure without refusing capture, changing task
 statuses, or removing tasks. The cap now bounds only the
 confirmed/exempt pullable backlog: skipping review can lower READY
