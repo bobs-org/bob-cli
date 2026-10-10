@@ -3,13 +3,13 @@
 The Dashboard (`dash.md`, alias Dashboard) is the calm place to choose
 work, review its health, and open supporting collection and task pages.
 Its navigation sits immediately after `# Dash`, above `## Tasks`, as
-three labeled rows in exact reading and keyboard order: Work, Review,
+three labeled rows in exact reading and keyboard order: Review, Work,
 Browse.
 
 | Group | Badges, left to right | Purpose |
 | --- | --- | --- |
-| Work | TODAY · PENDING · NEXT · READY | Today's plan and the actionable lanes |
 | Review | NEW · ROTTEN · CROWDED | Intake, aging work, crowded notes |
+| Work | TODAY · PENDING · NEXT · READY | Today's plan and the actionable lanes |
 | Browse | PROJECTS · REFERENCES · BLOCKED | Open supporting collection and task pages |
 
 Grouping is navigation only. It never changes the freshness walk, lane
@@ -19,7 +19,7 @@ is not the freshness PROJECTS tier.
 ## Work badge colors
 
 TODAY, PENDING, NEXT, and READY share one count-to-limit color scheme in
-daily-note `bob-plan` blocks and the Work row at the top of `dash.md`.
+daily-note `bob-plan` blocks and the Work row on `dash.md`.
 For an available nonnegative integer count `n` and positive integer limit
 `L`, using exact comparisons (never rounded displayed percentages):
 

@@ -771,7 +771,7 @@ an invalid `freshness:` block or a non-Dataview task format.
 | task-status-cycler | cycler-link-stamps (landed: Alt+[/Alt+] + Ctrl+Enter reopen stamping in 1.18.0) |
 | block-id-prompt | cycler-link-stamps (landed: Ctrl+Shift+Enter + ^^ stamping in 1.16.0) |
 | `rotten.md` (aliases `Review`, `Freshness review`, `Rotten Tasks`) | dash-gating (landed: live summary plus always-present TICKLER and ROTTEN groups; tasks stay in source notes, rows are click-through views) |
-| `dash.md` | dash-gating (landed: TODAY → NEW → PENDING → NEXT → READY sections; grouped Work / Review / Browse navigation with NEW/PENDING/NEXT/READY/CROWDED/BLOCKED/ROTTEN/TODAY plus PROJECTS/REFERENCES chips; gated READY with whole-lane tooltip; CROWDED via `noteReady` v1 opening crowded.md; PROJECTS/REFERENCES via `dashboardCollections` v1 opening dash_projects/dash_references with Base-contract guards) |
+| `dash.md` | dash-gating (landed: TODAY → NEW → PENDING → NEXT → READY sections; grouped Review / Work / Browse navigation with NEW/PENDING/NEXT/READY/CROWDED/BLOCKED/ROTTEN/TODAY plus PROJECTS/REFERENCES chips; gated READY with whole-lane tooltip; CROWDED via `noteReady` v1 opening crowded.md; PROJECTS/REFERENCES via `dashboardCollections` v1 opening dash_projects/dash_references with Base-contract guards) |
 | `crowded.md` + `bob-ready-notes` + heading chips | per-note Ready cap rollout (landed: Crowded Notes page, ranked-bar code block, live `ready n/cap` chips on each note's `## Tasks` heading) |
 | freshness mark | fresh-mark (landed: bob-ledger-tools 1.10.0 Live Preview + rendered views) |
 

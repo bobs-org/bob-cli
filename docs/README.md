@@ -22,7 +22,7 @@ then creates the notes that `bob ref list` shows. The
 | [capture.md](capture.md) | Capture grammar, JSON, and picker commands (`bob capture`, parse, complete, discovery) |
 | [completion.md](completion.md) | Shell completion: the runtime model, protocol 1, and what completes |
 | [dataview.md](dataview.md) | `bob query` Dataview and Tasks |
-| [dashboard.md](dashboard.md) | Dashboard Work / Review / Browse navigation and collection pages |
+| [dashboard.md](dashboard.md) | Dashboard Review / Work / Browse navigation and collection pages |
 | [date-marks.md](date-marks.md) | Task date marks: calendar-label display contract for canonical task dates |
 | [freshness.md](freshness.md) | Task freshness: review lease, placement, evaluation, and conformance vectors |
 | [getting-started.md](getting-started.md) | Vault requirements, first capture/session, command effects, and troubleshooting |
