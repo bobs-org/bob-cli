@@ -1,5 +1,6 @@
 //! Draft rewrite tests.
 
+use super::super::editor_model::EditorMode;
 use super::super::editor_parse::*;
 use super::super::rewrite::*;
 
@@ -165,4 +166,218 @@ fn rewrite_draft_keeps_offsets_on_char_boundaries_with_multibyte_input() {
         assert!(raw.is_char_boundary(edit.end));
     }
     assert_eq!(rewrite.text, "caf\u{e9} \u{1f680} @@dev");
+}
+
+fn switch_at(raw: &str) -> DraftRewrite {
+    rewrite_draft(raw, Some(raw.len()))
+}
+
+fn assert_switch(
+    raw: &str,
+    expected: &str,
+    from: &str,
+    to: &str,
+    start: usize,
+) {
+    let rewrite = rewrite_draft(raw, Some(raw.len()));
+    assert_eq!(
+        rewrite.rule,
+        Some(RewriteRule::SwitchBlockIdSeparator),
+        "{raw}"
+    );
+    assert_eq!(rewrite.text, expected, "{raw}");
+    assert_eq!(rewrite.cursor, Some(expected.len()), "{raw}");
+    assert_eq!(
+        rewrite.summary.as_deref(),
+        Some(format!("Changed {from} to {to}").as_str()),
+        "{raw}"
+    );
+    assert_eq!(
+        rewrite.edits,
+        vec![TextEdit {
+            start,
+            end: raw.len(),
+            replacement: to.to_string(),
+        }],
+        "{raw}"
+    );
+    assert!(raw.is_char_boundary(start), "{raw}");
+    assert!(raw.is_char_boundary(raw.len()), "{raw}");
+
+    let again = rewrite_draft(&rewrite.text, rewrite.cursor);
+    assert_eq!(again.rule, None, "idempotent {raw}");
+    assert_eq!(again.text, rewrite.text, "idempotent {raw}");
+}
+
+#[test]
+fn rewrite_draft_switches_a_trailing_colon_marker_to_caret() {
+    assert_switch(
+        "Do work @file:id^",
+        "Do work @file^id",
+        "@file:id",
+        "@file^id",
+        8,
+    );
+}
+
+#[test]
+fn rewrite_draft_switches_a_trailing_caret_marker_to_colon() {
+    assert_switch(
+        "Do work @file^id:",
+        "Do work @file:id",
+        "@file^id",
+        "@file:id",
+        8,
+    );
+}
+
+#[test]
+fn rewrite_draft_switches_solo_and_leading_markers() {
+    assert_switch("@file:id^", "@file^id", "@file:id", "@file^id", 0);
+    assert_switch("@file^id:", "@file:id", "@file^id", "@file:id", 0);
+    let raw = "@file:id^ Do work";
+    let caret_after_id = "@file:id^".len();
+    let rewrite = rewrite_draft(raw, Some(caret_after_id));
+    assert_eq!(rewrite.rule, Some(RewriteRule::SwitchBlockIdSeparator));
+    assert_eq!(rewrite.text, "@file^id Do work");
+    assert_eq!(rewrite.cursor, Some("@file^id".len()));
+}
+
+#[test]
+fn rewrite_draft_switches_a_child_line_trailing_marker() {
+    let raw = "Do work\n- detail @file:id^";
+    let rewrite = switch_at(raw);
+    assert_eq!(rewrite.rule, Some(RewriteRule::SwitchBlockIdSeparator));
+    assert_eq!(rewrite.text, "Do work\n- detail @file^id");
+    assert_eq!(rewrite.cursor, Some(rewrite.text.len()));
+}
+
+#[test]
+fn rewrite_draft_switches_one_item_in_a_batch() {
+    let first = "First @file:id^";
+    let raw = format!("{first}\n\nSecond @file:id");
+    let rewrite = rewrite_draft(&raw, Some(first.len()));
+    assert_eq!(rewrite.rule, Some(RewriteRule::SwitchBlockIdSeparator));
+    assert_eq!(rewrite.text, "First @file^id\n\nSecond @file:id");
+    assert_eq!(rewrite.cursor, Some("First @file^id".len()));
+}
+
+#[test]
+fn rewrite_draft_switches_uppercase_and_hyphenated_ids() {
+    assert_switch(
+        "Do work @Cash:Goog-Exit^",
+        "Do work @Cash^Goog-Exit",
+        "@Cash:Goog-Exit",
+        "@Cash^Goog-Exit",
+        8,
+    );
+}
+
+#[test]
+fn rewrite_draft_switches_beside_emoji_and_preserves_crlf() {
+    let raw = "caf\u{e9} \u{1f680} @file:id^";
+    let rewrite = switch_at(raw);
+    assert_eq!(rewrite.rule, Some(RewriteRule::SwitchBlockIdSeparator));
+    assert_eq!(rewrite.text, "caf\u{e9} \u{1f680} @file^id");
+    for edit in &rewrite.edits {
+        assert!(raw.is_char_boundary(edit.start));
+        assert!(raw.is_char_boundary(edit.end));
+    }
+
+    let raw = "Do work @file:id^\r\nNext";
+    let cursor = "Do work @file:id^".len();
+    let rewrite = rewrite_draft(raw, Some(cursor));
+    assert_eq!(rewrite.rule, Some(RewriteRule::SwitchBlockIdSeparator));
+    assert_eq!(rewrite.text, "Do work @file^id\r\nNext");
+    assert!(rewrite.text.contains("\r\n"));
+}
+
+#[test]
+fn rewrite_draft_switches_before_a_schedule_marker() {
+    let raw = "Do work @file:id^ s:2";
+    let cursor = "Do work @file:id^".len();
+    let rewrite = rewrite_draft(raw, Some(cursor));
+    assert_eq!(rewrite.rule, Some(RewriteRule::SwitchBlockIdSeparator));
+    assert_eq!(rewrite.text, "Do work @file^id s:2");
+    assert_eq!(rewrite.cursor, Some("Do work @file^id".len()));
+}
+
+#[test]
+fn rewrite_draft_separator_toggle_alternates() {
+    let first = switch_at("Do work @file:id^");
+    assert_eq!(first.text, "Do work @file^id");
+    let second_raw = format!("{}:", first.text);
+    let second = switch_at(&second_raw);
+    assert_eq!(second.text, "Do work @file:id");
+    let third_raw = format!("{}^", second.text);
+    let third = switch_at(&third_raw);
+    assert_eq!(third.text, "Do work @file^id");
+}
+
+#[test]
+fn rewrite_draft_separator_toggle_requires_a_cursor() {
+    let raw = "Do work @file:id^";
+    let rewrite = rewrite_draft(raw, None);
+    assert_eq!(rewrite.rule, None);
+    assert_eq!(rewrite.text, raw);
+    assert_eq!(rewrite.cursor, None);
+}
+
+#[test]
+fn rewrite_draft_separator_toggle_keeps_absorption_when_it_does_not_claim() {
+    let raw = "Do work @file:id\n\nBuy milk @dev @@";
+    let rewrite = rewrite_draft(raw, Some(raw.len()));
+    assert_eq!(rewrite.rule, Some(RewriteRule::AbsorbLocalMarker));
+    assert_eq!(rewrite.text, "Do work @file:id\n\nBuy milk @@dev");
+}
+
+#[test]
+fn rewrite_draft_separator_toggle_exclusions() {
+    let inside_id = "Do work @file:i^d";
+    let mid_prose = "see @file:id^ here";
+    let cases = [
+        ("Do work @file:id:", "Do work @file:id:".len()),
+        ("Do work @file^id^", "Do work @file^id^".len()),
+        ("Do work @file:id ^", "Do work @file:id ^".len()),
+        ("Do work @file:id\n^", "Do work @file:id\n^".len()),
+        ("@file:id#name^", "@file:id#name^".len()),
+        ("@file:id+^", "@file:id+^".len()),
+        ("@file:id=3^", "@file:id=3^".len()),
+        ("@file^id+^", "@file^id+^".len()),
+        ("@file^id+#bugs:", "@file^id+#bugs:".len()),
+        ("@@file:id^", "@@file:id^".len()),
+        ("@!file:id^", "@!file:id^".len()),
+        ("^file:id^", "^file:id^".len()),
+        ("&note:id^", "&note:id^".len()),
+        ("!note:id^", "!note:id^".len()),
+        (":id^", ":id^".len()),
+        ("^id:", "^id:".len()),
+        ("@file:^", "@file:^".len()),
+        ("@file^:", "@file^:".len()),
+        (mid_prose, "see @file:id^".len()),
+        (inside_id, "Do work @file:i^".len()),
+    ];
+    for (raw, cursor) in cases {
+        let rewrite = rewrite_draft(raw, Some(cursor));
+        assert_eq!(rewrite.rule, None, "{raw}");
+        assert_eq!(rewrite.text, raw, "{raw}");
+    }
+}
+
+#[test]
+fn rewrite_draft_separator_toggle_parses_as_the_switched_mode() {
+    let caret = switch_at("Do work @file:id^");
+    let parsed = parse_for_editor(&caret.text);
+    assert_eq!(parsed.mode, EditorMode::Task);
+    assert_eq!(parsed.block_id.as_deref(), Some("id"));
+    assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+
+    let colon = switch_at("Do work @file^id:");
+    let parsed = parse_for_editor(&colon.text);
+    assert_eq!(parsed.mode, EditorMode::PomodoroTask);
+    assert_eq!(parsed.block_id.as_deref(), Some("id"));
+    assert!(parsed.diagnostics.is_empty(), "{:?}", parsed.diagnostics);
+
+    let raw = parse_for_editor("Do work @file:id^");
+    assert_ne!(raw.block_id.as_deref(), Some("id"));
 }

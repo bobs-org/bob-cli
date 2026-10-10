@@ -465,6 +465,8 @@ fn capture_rewrite_help_lists_options_alphabetically() {
     assert!(
         help.contains("purely lexical and completely read-only")
             && help.contains("absorb")
+            && help.contains("switch")
+            && help.contains("--cursor")
             && help.contains("no-op"),
         "expected capture-rewrite long help:\n{help}"
     );

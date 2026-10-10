@@ -210,6 +210,106 @@ fn capture_rewrite_never_touches_the_vault_or_clipboard() {
         !missing.exists(),
         "capture-rewrite must not create the vault directory"
     );
+
+    let toggle = bob_command()
+        .arg("capture-rewrite")
+        .arg("-c")
+        .arg("17")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("Do work @file:id^")
+        .env("BOB_DIR", &missing)
+        .output()
+        .expect("run bob capture-rewrite toggle without a vault");
+    assert_success(&toggle);
+    let json: serde_json::Value = serde_json::from_str(stdout(&toggle).trim())
+        .expect("capture-rewrite JSON");
+    assert_eq!(json["rule"], "switch_block_id_separator");
+    assert_eq!(json["text"], "Do work @file^id");
+    assert!(
+        !missing.exists(),
+        "capture-rewrite must not create the vault directory"
+    );
+}
+
+#[test]
+fn capture_rewrite_json_switches_a_block_id_separator() {
+    let output = bob_command()
+        .arg("capture-rewrite")
+        .arg("-c")
+        .arg("17")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("Do work @file:id^")
+        .output()
+        .expect("run bob capture-rewrite toggle json");
+
+    assert_success(&output);
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture-rewrite JSON");
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["schema_version"], 1);
+    assert_eq!(json["input"], "Do work @file:id^");
+    assert_eq!(json["text"], "Do work @file^id");
+    assert_eq!(json["changed"], true);
+    assert_eq!(json["cursor"], 16);
+    assert_eq!(json["rule"], "switch_block_id_separator");
+    assert_eq!(
+        json["edits"],
+        serde_json::json!([
+            { "range": { "start": 8, "end": 17 }, "replacement": "@file^id" },
+        ])
+    );
+    assert_eq!(json["summary"], "Changed @file:id to @file^id");
+
+    let again = bob_command()
+        .arg("capture-rewrite")
+        .arg("-c")
+        .arg("16")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("Do work @file^id")
+        .output()
+        .expect("run bob capture-rewrite idempotent");
+    assert_success(&again);
+    let json: serde_json::Value = serde_json::from_str(stdout(&again).trim())
+        .expect("capture-rewrite JSON");
+    assert_eq!(json["changed"], false);
+    assert_eq!(json["text"], "Do work @file^id");
+}
+
+#[test]
+fn capture_parse_does_not_apply_the_separator_toggle() {
+    let output = bob_command()
+        .arg("capture-parse")
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("Do work @file:id^")
+        .output()
+        .expect("run bob capture-parse unrewritten toggle");
+
+    assert_success(&output);
+    let json: serde_json::Value = serde_json::from_str(stdout(&output).trim())
+        .expect("capture-parse JSON");
+    assert_eq!(json["input"], "Do work @file:id^");
+    assert_eq!(json["body"], "Do work");
+    assert!(json["block_id"].is_null(), "{json}");
+    let codes: Vec<&str> = json["diagnostics"]
+        .as_array()
+        .expect("diagnostics")
+        .iter()
+        .filter_map(|diagnostic| diagnostic["code"].as_str())
+        .collect();
+    assert!(
+        codes
+            .iter()
+            .any(|code| *code == "invalid_pomodoro_block_id"),
+        "{json}"
+    );
 }
 
 #[test]

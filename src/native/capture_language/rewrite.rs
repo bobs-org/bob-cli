@@ -3,7 +3,9 @@
 use super::draft::*;
 use super::editor_model::*;
 use super::editor_parse::*;
+use super::markers::is_route_token;
 use super::model::*;
+use super::tokens::is_block_id;
 
 /// The result of applying the capture grammar's automatic draft rewrites to
 /// `raw_text`. See [`rewrite_draft`].
@@ -38,6 +40,7 @@ pub(crate) struct TextEdit {
 pub(crate) enum RewriteRule {
     AbsorbLocalMarker,
     AbsorbDeclaration,
+    SwitchBlockIdSeparator,
 }
 
 impl RewriteRule {
@@ -45,19 +48,41 @@ impl RewriteRule {
         match self {
             Self::AbsorbLocalMarker => "absorb_local_marker",
             Self::AbsorbDeclaration => "absorb_declaration",
+            Self::SwitchBlockIdSeparator => "switch_block_id_separator",
         }
     }
 }
 
-/// Apply Rule A1's absorption to the bare `@@` at (or before, when no cursor
-/// is given, the last one in source order at) `cursor`: claim the item's own
-/// absorbable local destination marker, or else the draft's one other
-/// declaration token, rewriting the bare token to `@@<payload>` and deleting
-/// the token(s) it absorbed. Never fails; an input with no eligible bare
-/// `@@` -- or whose local marker cannot be expressed as a declaration
+/// Apply the capture grammar's editor typing assists to `raw_text`.
+///
+/// With an explicit `cursor`, a complete plain `@route:id` / `@route^id`
+/// marker that just grew the opposite separator (`^` after a colon marker,
+/// `:` after a caret marker) is rewritten to the other spelling and the
+/// appended trigger is dropped. That rule never searches the draft: no
+/// cursor means absorption-only, matching the historical `@@` contract.
+///
+/// Otherwise apply Rule A1's absorption to the bare `@@` at (or before, when
+/// no cursor is given, the last one in source order at) `cursor`: claim the
+/// item's own absorbable local destination marker, or else the draft's one
+/// other declaration token, rewriting the bare token to `@@<payload>` and
+/// deleting the token(s) it absorbed. Never fails; an input with no eligible
+/// bare `@@` -- or whose local marker cannot be expressed as a declaration
 /// (Rule A5), or whose item already has more than one local marker
 /// (Rule A6) -- returns `rule: None` with `text` unchanged.
 pub(crate) fn rewrite_draft(
+    raw_text: &str,
+    cursor: Option<usize>,
+) -> DraftRewrite {
+    if let Some(position) = cursor
+        && let Some(rewrite) = switch_block_id_separator(raw_text, position)
+    {
+        return rewrite;
+    }
+
+    absorb_bare_declaration(raw_text, cursor)
+}
+
+fn absorb_bare_declaration(
     raw_text: &str,
     cursor: Option<usize>,
 ) -> DraftRewrite {
@@ -149,6 +174,170 @@ pub(crate) fn rewrite_draft(
     }
 
     unchanged_rewrite(raw_text, cursor, Vec::new())
+}
+
+/// Typing `^` immediately after a complete plain `@route:id`, or `:` after
+/// `@route^id`, consumes that trigger and swaps the separator. The token
+/// must end at `cursor`; the stripped remainder must be the line's selected
+/// destination marker, complete, and free of `#`/`+`/`=`/`!` suffixes.
+fn switch_block_id_separator(
+    raw_text: &str,
+    cursor: usize,
+) -> Option<DraftRewrite> {
+    let token = tokenize_with_spans(raw_text)
+        .into_iter()
+        .find(|token| token.end == cursor)?;
+    let trigger = *token.text.as_bytes().last()?;
+    if trigger != b':' && trigger != b'^' {
+        return None;
+    }
+    let stripped_end = token.end - 1;
+    if stripped_end <= token.start || !raw_text.is_char_boundary(stripped_end) {
+        return None;
+    }
+    let token_start = token.start;
+    let token_end = token.end;
+    let stripped = &raw_text[token_start..stripped_end];
+    let (separator, route, id) = plain_block_id_parts(stripped)?;
+    let trigger_char = trigger as char;
+    let expected_separator = if trigger_char == '^' { ':' } else { '^' };
+    if separator != expected_separator {
+        return None;
+    }
+
+    let mut candidate = String::with_capacity(raw_text.len() - 1);
+    candidate.push_str(&raw_text[..stripped_end]);
+    candidate.push_str(&raw_text[token_end..]);
+    if !candidate_selects_plain_marker(
+        &candidate,
+        token_start,
+        stripped_end,
+        stripped,
+        separator,
+    ) {
+        return None;
+    }
+
+    let new_separator = if separator == ':' { '^' } else { ':' };
+    let replacement = format!("@{route}{new_separator}{id}");
+    let summary = format!("Changed {stripped} to {replacement}");
+    let edits = vec![TextEdit {
+        start: token_start,
+        end: token_end,
+        replacement: replacement.clone(),
+    }];
+    let text = apply_text_edits(raw_text, &edits);
+    Some(DraftRewrite {
+        rule: Some(RewriteRule::SwitchBlockIdSeparator),
+        edits,
+        text,
+        cursor: Some(token_start + replacement.len()),
+        summary: Some(summary),
+        notices: Vec::new(),
+    })
+}
+
+/// A complete plain `@route:id` or `@route^id` token: one `@`, exactly one
+/// colon or caret, a valid route, a valid block ID, and no suffix family.
+fn plain_block_id_parts(token: &str) -> Option<(char, &str, &str)> {
+    let rest = token.strip_prefix('@')?;
+    if token.starts_with("@@") || token.starts_with("@!") {
+        return None;
+    }
+    if rest.contains('#')
+        || rest.contains('+')
+        || rest.contains('=')
+        || rest.contains('!')
+    {
+        return None;
+    }
+    match (rest.find(':'), rest.find('^')) {
+        (Some(colon), None) => {
+            if rest[colon + 1..].contains(':') {
+                return None;
+            }
+            let (route, id) = rest.split_once(':')?;
+            (is_route_token(route) && is_block_id(id))
+                .then_some((':', route, id))
+        }
+        (None, Some(caret)) => {
+            if rest[caret + 1..].contains('^') {
+                return None;
+            }
+            let (route, id) = rest.split_once('^')?;
+            (is_route_token(route) && is_block_id(id))
+                .then_some(('^', route, id))
+        }
+        _ => None,
+    }
+}
+
+fn candidate_selects_plain_marker(
+    candidate: &str,
+    start: usize,
+    end: usize,
+    stripped: &str,
+    separator: char,
+) -> bool {
+    let draft = split_capture_draft(candidate);
+    for item in &draft.items {
+        for (position, line) in item.lines.iter().enumerate() {
+            if !(line.raw.start <= start && end <= line.raw.end) {
+                continue;
+            }
+            let leading = position == 0;
+            let (line_text, line_base, line_end) = if leading {
+                (line.raw.text, line.raw.start, line.raw.end)
+            } else {
+                match classify_authored_line(line.raw) {
+                    AuthoredLineClass::Item(authored) => {
+                        (authored.body, authored.body_start, line.raw.end)
+                    }
+                    _ => return false,
+                }
+            };
+            if start < line_base || end > line_end {
+                return false;
+            }
+            let raw_line = RawLine {
+                text: line_text,
+                start: line_base,
+                end: line_end,
+            };
+            let tokens = tokenize_line_with_spans(&raw_line);
+            let parse =
+                parse_editor_line(tokens, line_text, line_base, leading);
+            let Some(marker) = parse.marker.as_ref() else {
+                return false;
+            };
+            if parse.marker_text.as_deref() != Some(stripped) {
+                return false;
+            }
+            let expected_mode = if separator == '^' {
+                EditorMode::Task
+            } else {
+                EditorMode::PomodoroTask
+            };
+            if marker.mode != expected_mode
+                || !marker.needs.is_empty()
+                || marker.section.is_some()
+                || marker.pomodoro_start.is_some()
+                || marker.pomodoro_close.is_some()
+                || marker.route.is_none()
+                || marker.block_id.is_none()
+            {
+                return false;
+            }
+            let Some(first) = marker.spans.first() else {
+                return false;
+            };
+            let Some(last) = marker.spans.last() else {
+                return false;
+            };
+            return first.start == start && last.end == end;
+        }
+    }
+    false
 }
 
 pub(super) fn unchanged_rewrite(

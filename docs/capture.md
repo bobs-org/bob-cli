@@ -4006,14 +4006,40 @@ clean.
 bob capture-rewrite [-c|--cursor N] [-f|--format human|json] [--] [TEXT]...
 ```
 
-Applies the capture grammar's automatic draft rewrites -- today, the bare
-`@@` absorption rule -- and reports the resulting edits, cursor, and a human
-summary. Like `bob capture-parse` it is purely lexical and completely
-read-only: it never opens the vault, never reads the clipboard, never
-touches the filesystem, and takes no `--bob-dir`. If `TEXT` is omitted and
-stdin is piped, it reads the complete piped stdin stream. Only a missing
-`TEXT` or a bad flag is an error (exit 2); every other input succeeds, with
-`changed: false` when nothing needed to change.
+Applies the capture grammar's automatic draft rewrites -- the block-ID
+separator toggle and the bare `@@` absorption rule -- and reports the
+resulting edits, cursor, and a human summary. Like `bob capture-parse` it is
+purely lexical and completely read-only: it never opens the vault, never
+reads the clipboard, never touches the filesystem, and takes no `--bob-dir`.
+If `TEXT` is omitted and stdin is piped, it reads the complete piped stdin
+stream. Only a missing `TEXT` or a bad flag is an error (exit 2); every
+other input succeeds, with `changed: false` when nothing needed to change.
+
+**Block-ID separator toggle.** Typing `^` immediately after a complete
+plain `@route:id`, or `:` immediately after `@route^id`, consumes that
+character and swaps the separator. `--cursor` is required: only the token
+ending at that caret is examined, so the command never searches the draft
+for a toggle. The new key must sit against the ID with no intervening
+whitespace and must end the token (end of input or a following whitespace
+boundary). Inserting it inside an ID does not toggle a prefix.
+
+```text
+Do work @file:id^
+```
+
+becomes `Do work @file^id`, with the cursor placed just past the unchanged
+ID. The same gesture the other way restores the colon spelling. Solo
+markers, leading markers, a trailing marker before later body text, a
+trailing marker on an authored child line, and one item in a blank-line
+batch are eligible wherever the shared grammar already recognizes that
+token as the item's destination. Route and ID spelling, surrounding
+whitespace, CRLF, schedule/priority/dependency markers, and other items
+stay byte-for-byte. Suffix families (`#name`, `+`, `=...`), `@@`, `@!`,
+standalone `^route:id`, `&note:id`, `!note:id`, project-task `:id`/`^id`,
+incomplete or malformed markers, same-separator repeats, and
+marker-looking prose the contextual parser does not select are left
+unchanged. This is an editor assist: `bob capture` and `bob capture-parse`
+keep the literal `@file:id^` text.
 
 Typing a bare `@@` inside an item that already carries a local destination
 marker moves that marker onto the `@@` and deletes it, so the item ends up
@@ -4101,9 +4127,11 @@ JSON output is a single versioned object:
 }
 ```
 
-`rule` is `absorb_local_marker` or `absorb_declaration`, omitted when nothing
-changed. `cursor` is present only when `--cursor` was supplied, mapped
-through every edit so it lands just past the rewritten `@@<payload>` token.
+`rule` is `switch_block_id_separator`, `absorb_local_marker`, or
+`absorb_declaration`, omitted when nothing changed. `cursor` is present only
+when `--cursor` was supplied, mapped through every edit so it lands just
+past the rewritten token (`@file^id` / `@file:id` for a separator toggle, or
+the rewritten `@@<payload>` token for absorption).
 `edits` index `input`, are sorted by `start`, never overlap, and applying
 them left-to-right yields `text`; `text` always equals `input` when
 `changed` is `false`. `summary` is omitted when nothing changed; `notices`

@@ -76,28 +76,43 @@ pub(crate) fn build_cli() -> ClapCommand {
 report the resulting edits, cursor, and a human summary.\n\n\
 The command is purely lexical and completely read-only: it never opens the \
 vault, never reads the clipboard, never touches the filesystem, and takes no \
---bob-dir. Today it implements the bare '@@' absorption rule: typing a bare \
-'@@' inside an item that already carries a local destination marker (or, \
-absent that, when the draft already carries exactly one other '@@' \
-declaration) rewrites the bare token to '@@<payload>', deletes the token it \
-absorbed, and deletes every other declaration token in the draft, so the \
-result always carries at most one declaration. Only the bare '@@' at \
---cursor (or, when --cursor is omitted, the last bare '@@' in source order) \
-is a candidate. An item whose single local marker cannot be expressed as a \
-declaration -- '@route#Section', '@route+block-id#section', \
-'@route+block-id' (a task toggle), '@route^block-id', '@route:block-id', \
-or a trailing bare '#' -- is left untouched with a notice explaining why; an item \
-with more than one local marker is left untouched with no notice, since \
-'bob capture-parse' already reports that duplicate. Feeding a rewrite's own \
-output back in is a no-op, because the claiming token is no longer bare. \
-A whole-item `=x[<N>][!<M>]` close item is never rewritten or absorbed, and \
-a `@@` declaration never applies to it.\n\n\
-Only a missing TEXT or a bad flag is an error; every other input succeeds \
-with 'changed: false' when nothing needed to change. If TEXT is omitted and \
+--bob-dir. It implements two rules.\n\n\
+Block-ID separator toggle (requires --cursor): typing '^' immediately after \
+a complete plain '@route:id', or ':' immediately after '@route^id', consumes \
+that character and switches the separator so '@file:id^' becomes '@file^id' \
+and '@file^id:' becomes '@file:id' (`switch_block_id_separator`). The caret \
+stays just past the unchanged ID. \
+Only the token ending at --cursor is examined; the key must sit against the \
+ID with no space, and it must end the token. Suffix families \
+('@route:id#name', '+', '=...'), '@@', '@!', standalone '^route:id', \
+'&note:id', '!note:id', project-task ':id'/'^id', incomplete markers, \
+same-separator repeats, and tokens the contextual parser does not select \
+are left unchanged. Without --cursor this rule is skipped rather than \
+searching the draft.\n\n\
+Bare '@@' absorption: typing a bare '@@' inside an item that already \
+carries a local destination marker (or, absent that, when the draft already \
+carries exactly one other '@@' declaration) rewrites the bare token to \
+'@@<payload>', deletes the token it absorbed, and deletes every other \
+declaration token in the draft, so the result always carries at most one \
+declaration. Only the bare '@@' at --cursor (or, when --cursor is omitted, \
+the last bare '@@' in source order) is a candidate. An item whose single \
+local marker cannot be expressed as a declaration -- '@route#Section', \
+'@route+block-id#section', '@route+block-id' (a task toggle), \
+'@route^block-id', '@route:block-id', or a trailing bare '#' -- is left \
+untouched with a notice explaining why; an item with more than one local \
+marker is left untouched with no notice, since 'bob capture-parse' already \
+reports that duplicate. Feeding a rewrite's own output back in is a no-op, \
+because the claiming token is no longer bare and no longer ends in a toggle \
+trigger. A whole-item `=x[<N>][!<M>]` close item is never rewritten or \
+absorbed, and a `@@` declaration never applies to it.\n\n\
+These assists are editor-only: 'bob capture' and 'bob capture-parse' keep \
+the literal TEXT, so '@file:id^' is not silently rewritten there. Only a \
+missing TEXT or a bad flag is an error; every other input succeeds with \
+'changed: false' when nothing needed to change. If TEXT is omitted and \
 stdin is piped, it reads the complete piped stdin stream.",
         )
         .after_help(
-            "Examples:\n  bob capture-rewrite -c 16 -f json -- 'Buy milk @dev @@'\n  bob capture-rewrite -- 'Called Morgan Stanley @cash+goog-exit @@'\n  printf 'Buy milk @dev @@' | bob capture-rewrite -f json\n  printf '@@foo\\nBuy milk @@\\n' | bob capture-rewrite -f json\n  printf 'Buy milk @dev\\n- more detail @@\\n' | bob capture-rewrite -f json",
+            "Examples:\n  bob capture-rewrite -c 17 -f json -- 'Do work @file:id^'\n  bob capture-rewrite -c 16 -f json -- 'Buy milk @dev @@'\n  bob capture-rewrite -- 'Called Morgan Stanley @cash+goog-exit @@'\n  printf 'Buy milk @dev @@' | bob capture-rewrite -f json\n  printf '@@foo\\nBuy milk @@\\n' | bob capture-rewrite -f json\n  printf 'Buy milk @dev\\n- more detail @@\\n' | bob capture-rewrite -f json",
         )
         .disable_help_flag(true)
         .arg(cursor_arg())
@@ -392,6 +407,35 @@ mod tests {
         assert_eq!(value["text"], "Buy milk @dev");
         assert!(value.get("rule").is_none(), "{value}");
         assert!(value.get("summary").is_none(), "{value}");
+    }
+
+    #[test]
+    fn json_shape_switches_a_block_id_separator() {
+        let value = json("Do work @file:id^", Some(17));
+        assert_eq!(value["ok"], true);
+        assert_eq!(value["schema_version"], 1);
+        assert_eq!(value["input"], "Do work @file:id^");
+        assert_eq!(value["text"], "Do work @file^id");
+        assert_eq!(value["changed"], true);
+        assert_eq!(value["cursor"], 16);
+        assert_eq!(value["rule"], "switch_block_id_separator");
+        assert_eq!(
+            value["edits"],
+            serde_json::json!([
+                { "range": { "start": 8, "end": 17 }, "replacement": "@file^id" },
+            ])
+        );
+        assert_eq!(value["summary"], "Changed @file:id to @file^id");
+        assert!(value.get("notices").is_none(), "{value}");
+    }
+
+    #[test]
+    fn json_does_not_search_for_a_separator_toggle_without_a_cursor() {
+        let value = json("Do work @file:id^", None);
+        assert_eq!(value["changed"], false);
+        assert_eq!(value["text"], "Do work @file:id^");
+        assert!(value.get("rule").is_none(), "{value}");
+        assert!(value.get("cursor").is_none(), "{value}");
     }
 
     #[test]
