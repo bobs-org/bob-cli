@@ -29,6 +29,13 @@ warning color, including on older daily notes. CLI warnings and navigation
 notices continue to check the whole lane, including TODAY. Daily lint lines
 name that whole-lane pressure explicitly.
 
+NEW, ROTTEN, and CROWDED share one Review count rule: muted grey with
+`0 ✓` when the count is zero, red for every positive count, and `–`
+when unavailable. ROTTEN follows its displayed count even below the
+escalation threshold or after the upkeep budget is met. This differs
+from PENDING/NEXT, which stay normal-colored at the cap and turn red
+only above it.
+
 BLOCKED is informational and has no cap. Its count stays available for
 navigation and uses the same informational accent as PROJECTS and
 REFERENCES regardless of its size.
