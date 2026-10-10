@@ -57,7 +57,7 @@ full reference-import toolchain.
 | PDF URL or arXiv | `curl` for downloads |
 | Web article | `curl` for initial URL classification (skipped with `--html`), `uv` for the pinned Python adapter, and a browser: Google Chrome at `/opt/google/chrome/chrome`, `/usr/bin/google-chrome`, `/usr/bin/google-chrome-stable`, or the macOS Google Chrome app, then Playwright's bundled Chromium. Set `BOB_CHROME` for any other executable, including a system Chromium package. Headed retries use Xvfb on Linux and an off-screen window on macOS |
 | Markdown | `pandoc`, `xelatex`, the LaTeX packages below, and DejaVu Serif, DejaVu Sans, and DejaVu Sans Mono (`mainfont`, `sansfont`, and `monofont`) |
-| Any target with `--listen` | A configured `highlights.listen_command` that writes the requested MP3. Installing Bob does not install a narration frontend: the SASE plugin (`sase plugin install listen`) provides `sase listen`; a standalone install (`uv tool install sase-listen`) provides `sase-listen` |
+| Any target with `--listen` | A configured `highlights.listen_command` (`sase listen render ...`) that writes the requested MP3. Installing Bob does not install a narration frontend: the SASE plugin (`sase plugin install listen`) provides `sase listen` |
 
 Run `bob ref doctor` to inspect the current host. Its `pandoc`, `xelatex`, and
 `latex_packages` rows diagnose Markdown rendering. A missing renderer or
@@ -342,28 +342,28 @@ All or nothing, on every route:
 4. The PDF is produced in private scratch (rendered, downloaded, or
    adapter-captured).
 5. A dry run prints the plan with `listen: would-run …` and stops.
-6. The listen command runs with stdin, stdout, and stderr inherited, so
-   sase-listen's live checklist and its "Published to apollo" summary
-   appear unchanged. bob prints `listen: run <expanded command>` first.
+6. The `sase listen render` command runs with stdin, stdout, and stderr inherited, so
+   the listen plugin's live checklist and its "Published to apollo" summary
+   appear unchanged. bob prints `listen: run sase listen render ...` first (shell quoting is display-only).
 7. Collisions and the audio plan are re-checked (the vault may have
    changed during a long listen), the audio is installed, then the PDF.
    If the PDF install fails, only an audio file this run created is
    deleted.
 
-Placeholder values: `{target}` is the cleaned URL for URL routes (sase-listen
+Placeholder values: `{target}` is the cleaned URL for URL routes (the listen renderer
 does its own arXiv rewrite), the absolute source path for a local PDF, and
 the staged `<scratch>/<stem>.pdf` render for Markdown (pandoc sets its Info
-Title, which sase-listen reads). `{pdf}` is the unstamped scratch PDF (or
+Title, which the listen renderer reads). `{pdf}` is the unstamped scratch PDF (or
 the existing capture in attach mode), `{audio}` is `<scratch>/<stem>.mp3`,
-and `{title}` is the resolved title. bob shell-quotes every value itself;
-never quote the placeholders. Markdown skips audio discovery under
+and `{title}` is the resolved title. bob passes every value as a single argument to `sase` itself;
+never quote the placeholders. A direct `sase-listen render ...` setting migrates automatically to `sase listen render ...`; wrappers, shell programs, chains, pipelines, redirections, and expansions are rejected. Markdown skips audio discovery under
 `--listen`, and the listen card's Play URI targets `<stem>.mp3`.
 
 Success looks like this (arXiv example):
 
 ```text
-listen: run sase-listen render https://arxiv.org/abs/1706.03762 -e full -o /tmp/bob-create-…/attention_is_all_you_need.mp3
-  … sase-listen's live checklist and summary, unchanged …
+listen: run sase listen render https://arxiv.org/abs/1706.03762 -e full -o /tmp/bob-create-…/attention_is_all_you_need.mp3
+  … the listen plugin's live checklist and summary, unchanged …
 ok created Highlights-ready PDF
 source: https://arxiv.org/abs/1706.03762 (arXiv 1706.03762)
 pdf: /home/bryan/bob/xlib/papers/attention_is_all_you_need.pdf
@@ -381,7 +381,7 @@ next: bob ref scan
 
 A failed listen command writes nothing (`nothing was written to the vault;
 rerun the same command once the listen error above is fixed`); rerunning is
-cheap because sase-listen resumes from its caches. An interrupted listen
+cheap because the listen renderer resumes from its caches. An interrupted listen
 exits 130. Exit 0 with no MP3 at `{audio}` is an error. A failure after the
 episode exists keeps the scratch directory, prints `kept: <audio path>`,
 and hints at rebinding it (`bob ref create <TARGET> --audio <path>`
@@ -422,33 +422,37 @@ next: bob ref scan
 ```yaml
 highlights:
   # `bob ref create --listen` narrates the target
-  # with this command, which must write MP3 audio to {audio}; bob binds it as
-  # the PDF's companion audio. bob shell-quotes {target} {pdf} {audio} {title}
-  # itself — do not quote them. The plugin's feed.auto_publish publishes the
+  # with `sase listen render ...`, which must write MP3 audio to {audio}; bob binds it as
+  # the PDF's companion audio. bob passes {target} {pdf} {audio} {title} as single
+  # arguments to `sase` itself — do not quote them. The plugin's feed.auto_publish publishes the
   # episode. Installing Bob does not install a narration frontend.
   listen_command: sase listen render {target} -e full -o {audio}
 ```
 
-A standalone `uv tool install sase-listen` uses
-`sase-listen render {target} -e full -o {audio}` instead of
-`sase listen render ...`. The managed setup above is the SASE plugin
+A direct `sase-listen render {target} -e full -o {audio}` setting migrates automatically
+to `sase listen render ...` in memory (the file is never rewritten). Wrappers,
+shell programs, chains, pipelines, redirections, and expansions are rejected with
+the canonical remediation. The managed setup above is the SASE plugin
 (`sase plugin install listen`).
 
-`BOB_HIGHLIGHTS_LISTEN_COMMAND` overrides the configured command. The
-template must contain `{audio}` plus `{target}` or `{pdf}`; unknown
-placeholders and quoted placeholders are errors. `bob ref doctor`
-reports the `listen_command` row (`none`, `ok`, or `warn`). An unconfigured
-`--listen` fails with the config snippet above.
+`BOB_HIGHLIGHTS_LISTEN_COMMAND` overrides the configured command. The setting must be
+a direct `sase listen render ...` invocation (a direct `sase-listen render ...`
+migrates); it must contain `{audio}` plus `{target}` or `{pdf}`; unknown placeholders,
+quoted placeholders, wrappers, chains, pipelines, redirections, and shell expansions
+are errors. `bob ref doctor` reports the `listen_command` row (`none`, `ok`, or `warn`)
+and checks the fixed `sase` launcher. An unconfigured `--listen` fails with the config snippet above.
 
 Troubleshooting:
 
-- Exit 127 (`sh: sase-listen: command not found`, or the same for `sase`):
-  the configured executable is missing from PATH. Distinguish the two
-  installations with `command -v sase-listen`, `sase listen --help`, and
-  `bob ref doctor --no-hooks`. Doctor's `listen_command` row names the first
-  token of the template. A plugin install needs `sase listen ...`; a
-  standalone install needs `sase-listen ...`. The failed command left the
-  vault untouched and can be rerun after the command setting is corrected.
+- A missing launcher (`sase: command not found`) or a failing plugin:
+  `sase` itself is missing from PATH, or the listen plugin (or its credentials)
+  failed. Check with `command -v sase`, `sase listen --help`, and
+  `bob ref doctor --no-hooks`. Doctor's `listen_command` row checks the fixed `sase`
+  launcher and template validity (an `ok` row is not proof the plugin works).
+  There is no fallback to `sase-listen`: a direct `sase-listen render ...` setting
+  migrates to `sase listen render ...`, and wrappers/shell programs are rejected
+  with the canonical remediation. The failed command left the
+  vault untouched and can be rerun after SASE and the setting are corrected.
   Temporary override:
 
   ```sh
@@ -457,17 +461,16 @@ Troubleshooting:
   ```
 
   Permanent repair: set `highlights.listen_command` in the managed Bob
-  config to the matching frontend (plugin template above, or the standalone
-  `sase-listen` form) and apply it.
-- A sase-listen bot-wall 403 on an article that bob captured headed: bob
-  captured the PDF fine, but sase-listen fetches the URL itself and fails.
-  Replay the page for sase-listen another way, or narrate the staged PDF.
+  config to the canonical plugin template above and apply it.
+- A listen-renderer bot-wall 403 on an article that bob captured headed: bob
+  captured the PDF fine, but the renderer fetches the URL itself and fails.
+  Replay the page another way, or narrate the staged PDF.
 - A credential prompt from `pass` (via sase-listen's `api_key_command`):
   it inherits bob's stdin, so answer it in the terminal and the run
   continues.
-- A queued publish (remote publish failure): sase-listen warns and still
+- A queued publish (remote publish failure): the renderer warns and still
   exits 0, so the episode binds normally; publish drains later.
-- A rerun after failure reuses sase-listen's source, writer, and chunk
+- A rerun after failure reuses the renderer's source, writer, and chunk
   caches, then re-masters and re-publishes; a kept scratch episode rebinds
   with `--audio`.
 
@@ -511,8 +514,8 @@ Live verification ran 2026-10-06 into a scratch vault (`-b /tmp/lv-vault`):
   (markdown, local PDF, arXiv 1706.03762, PDF-URL dummy.pdf, Wikipedia
   article); a pdf-spelling dedupe rerun refused with the `--listen` hint.
 - A real unpublished full-edition render
-  (`BOB_HIGHLIGHTS_LISTEN_COMMAND='sase-listen render {target} -e full -o
-  {audio} --no-publish'` under `script -qec`) streams sase-listen's Rich
+  (`BOB_HIGHLIGHTS_LISTEN_COMMAND='sase listen render {target} -e full -o
+  {audio} --no-publish'`) streams the listen plugin's Rich
   live checklist unchanged, and a failed listen writes nothing to the
   vault. Cost estimate for the arXiv paper was ≈$0.15 (10 chunks).
 - The full-edition TTS backend stalled on 2026-10-06: the arXiv render sat

@@ -919,8 +919,8 @@ fn ingest_arxiv_route(
         title: Some(pdf_plan.title.clone()),
         author: pdf_plan.author.clone(),
     };
-    // With --listen `{target}` is the cleaned URL (sase-listen does its
-    // own arXiv rewrite) and `{pdf}` is the fetched scratch copy.
+    // With --listen `{target}` is the cleaned URL (the listen renderer does
+    // its own arXiv rewrite) and `{pdf}` is the fetched scratch copy.
     if let Some(command) = listen {
         // `dest` lives in a function-local scratch that would drop before
         // install; move it into the outer scratch's namespace by copying

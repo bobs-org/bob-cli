@@ -1,21 +1,36 @@
-//! Configurable listen command contract and runner (`--listen`).
+//! SASE-only listen launcher contract and runner (`--listen`).
 //!
-//! The command comes from `BOB_HIGHLIGHTS_LISTEN_COMMAND`, and otherwise from
-//! `highlights.listen_command`. It must write MP3 audio to `{audio}`; bob
-//! shell-quotes the `{target}`, `{pdf}`, `{audio}`, and `{title}` values
-//! itself, streams the command's output unchanged, and verifies the MP3.
+//! The setting comes from `BOB_HIGHLIGHTS_LISTEN_COMMAND`, otherwise from
+//! `highlights.listen_command`. It must be a direct `sase listen render`
+//! invocation (a direct `sase-listen render` invocation migrates
+//! automatically) with arguments that write MP3 audio to `{audio}`. Bob
+//! passes `{target}`, `{pdf}`, `{audio}`, and `{title}` as single arguments
+//! to `sase` itself, streams the child's output unchanged, and verifies the
+//! MP3. No shell runs: wrappers, chains, pipelines, redirections, and shell
+//! expansions are rejected before any fetch or render.
 use super::*;
 use crate::native::env as bob_env;
 
 pub(super) const ENV_LISTEN_COMMAND: &str = "BOB_HIGHLIGHTS_LISTEN_COMMAND";
 
+/// Canonical SASE render template shown in every remediation hint.
+const CANONICAL_TEMPLATE: &str =
+    "sase listen render {target} -e full -o {audio}";
 /// Hint printed when `--listen` is requested without a configured command.
-const NOT_CONFIGURED_HINT: &str = "add `listen_command: sase-listen render {target} -e full -o {audio}` under `highlights:`";
+const NOT_CONFIGURED_HINT: &str =
+    "add `listen_command: sase listen render {target} -e full -o {audio}` under `highlights:`";
 /// Hint printed when the listen command itself fails: nothing was written.
 const LISTEN_FAILED_HINT: &str = "nothing was written to the vault; rerun the same command once the listen error above is fixed";
+/// Hint printed when `sase` itself cannot be launched.
+const SASE_LAUNCH_HINT: &str = "check that SASE is installed with its listen plugin (`sase listen --help`); nothing was written to the vault";
 /// Hint printed when a placeholder is wrapped in quotes.
 const QUOTED_PLACEHOLDER_HINT: &str =
-    "bob shell-quotes placeholder values itself; remove the quotes";
+    "bob passes placeholder values as single arguments itself; remove the quotes";
+/// Shared migration explanation: the setting is SASE render arguments.
+const MIGRATION_EXPLANATION: &str =
+    "settings now describe SASE render arguments rather than shell programs";
+/// Canonical remediation for every rejected template.
+const MIGRATION_HINT: &str = "use `listen_command: sase listen render {target} -e full -o {audio}` under `highlights:` (a direct `sase-listen render ...` setting migrates automatically; convert wrappers, chains, pipelines, redirections, and shell expansions to plain arguments)";
 
 const KNOWN_PLACEHOLDERS: &[&str] = &["target", "pdf", "audio", "title"];
 
@@ -40,8 +55,13 @@ pub(super) enum ListenOutput {
     Quiet,
 }
 
-/// A validated-or-not shell command template that narrates a target and
-/// writes MP3 audio to `{audio}`.
+/// A validated-or-not SASE render invocation template.
+///
+/// The raw trimmed setting is kept verbatim. Only a direct `sase listen
+/// render ...` invocation is accepted; a direct `sase-listen render ...`
+/// invocation is normalized to `sase listen render ...` in memory (token for
+/// token, never by substring rewrite, so runtime data containing
+/// `sase-listen` stays intact). The file on disk is never rewritten.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ListenCommand {
     command: String,
@@ -216,12 +236,18 @@ pub(super) fn post_listen_error_quiet(
     CommandError::new(format!("{message}\nhint: {hint}"))
 }
 
-/// The dry-run line for a listen run that never executes.
+/// The dry-run line for a listen run that never executes. Display uses the
+/// normalized `sase listen render ...` argv (shell quoting is display-only).
 pub(super) fn would_run_line(
     command: &ListenCommand,
     values: &ListenValues,
 ) -> String {
-    format!("listen: would-run {}", command.expand(values))
+    match command.expanded_argv(values) {
+        Ok(argv) => {
+            format!("listen: would-run {}", format_argv_for_display(&argv))
+        }
+        Err(_) => format!("listen: would-run {}", command.command),
+    }
 }
 
 impl fmt::Display for ListenError {
@@ -284,20 +310,23 @@ impl ListenCommand {
         }
     }
 
-    /// Check the template contract: `{audio}` plus `{target}` or `{pdf}`
-    /// must be present, every placeholder must be known, and none may be
-    /// wrapped in quotes (bob quotes values itself).
+    /// Check the SASE-only contract: a direct `sase listen render`
+    /// invocation (or a direct `sase-listen render` legacy invocation that
+    /// migrates), `{audio}` plus `{target}` or `{pdf}`, known placeholders
+    /// only, and no quoting around placeholders (bob passes values as single
+    /// arguments itself).
     pub(super) fn validate(&self) -> std::result::Result<(), ListenError> {
         if let Some(name) = quoted_placeholder(&self.command) {
             return Err(invalid(
                 format!(
                     "highlights.listen_command quotes placeholder {{{name}}}; \
-                     bob shell-quotes placeholder values itself"
+                     bob passes placeholder values as single arguments itself"
                 ),
                 QUOTED_PLACEHOLDER_HINT,
             ));
         }
-        let placeholders = find_placeholders(&self.command);
+        let render_args = self.parse_render_template()?;
+        let placeholders = find_placeholders_in_args(&render_args);
         for name in &placeholders {
             if !KNOWN_PLACEHOLDERS.contains(&name.as_str()) {
                 return Err(invalid(
@@ -306,8 +335,10 @@ impl ListenCommand {
                          highlights.listen_command (expected {{target}}, \
                          {{pdf}}, {{audio}}, or {{title}})"
                     ),
-                    "use only {target}, {pdf}, {audio}, and {title}; \
-                     ${VAR} and {a,b} pass through to the shell",
+                    format!(
+                        "use only {{target}}, {{pdf}}, {{audio}}, and {{title}}; {MIGRATION_EXPLANATION}: \
+                         `{CANONICAL_TEMPLATE}`"
+                    ),
                 ));
             }
         }
@@ -315,8 +346,9 @@ impl ListenCommand {
             return Err(invalid(
                 "highlights.listen_command must write MP3 audio to {audio}"
                     .to_string(),
-                "add {audio} to the command, for example: \
-                 sase-listen render {target} -e full -o {audio}",
+                format!(
+                    "add {{audio}} to the command, for example: {CANONICAL_TEMPLATE}"
+                ),
             ));
         }
         if !placeholders
@@ -326,49 +358,290 @@ impl ListenCommand {
             return Err(invalid(
                 "highlights.listen_command must contain {target} or {pdf}"
                     .to_string(),
-                "add the narration source, for example: \
-                 sase-listen render {target} -e full -o {audio}",
+                format!(
+                    "add the narration source, for example: {CANONICAL_TEMPLATE}"
+                ),
             ));
         }
         Ok(())
     }
 
-    /// Substitute the values into the template, POSIX-shell-quoting each
-    /// one. `${VAR}` and `{a,b}` pass through to the shell unchanged.
-    pub(super) fn expand(&self, values: &ListenValues) -> String {
-        let mut expanded = String::with_capacity(self.command.len());
-        let mut cursor = 0;
-        while cursor < self.command.len() {
-            let is_placeholder_open = self.command.as_bytes()[cursor] == b'{'
-                && (cursor == 0 || self.command.as_bytes()[cursor - 1] != b'$');
-            if is_placeholder_open
-                && let Some((name, end)) = placeholder_at(&self.command, cursor)
-                && let Some(quoted) = substitute_placeholder(name, values)
-            {
-                expanded.push_str(&quoted);
-                cursor = end;
-                continue;
-            }
-            let character =
-                self.command[cursor..].chars().next().unwrap_or('\0');
-            if character == '\0' {
-                break;
-            }
-            expanded.push(character);
-            cursor += character.len_utf8();
+    /// Parse the raw setting into SASE render argument templates (the words
+    /// after `sase listen render`, placeholders still intact).
+    ///
+    /// Only `sase listen render ...` is accepted. A direct `sase-listen
+    /// render ...` invocation migrates automatically by token (never by
+    /// substring, so data containing `sase-listen` is untouched). Anything
+    /// else — other executables, paths, `env`/`command`/shell wrappers,
+    /// chains, pipelines, redirections, substitutions — fails with the
+    /// canonical remediation before any fetch or render.
+    fn parse_render_template(
+        &self,
+    ) -> std::result::Result<Vec<String>, ListenError> {
+        let raw = &self.command;
+        if raw.contains('\0') {
+            return Err(invalid(
+                format!(
+                    "highlights.listen_command contains a NUL byte; \
+                     {MIGRATION_EXPLANATION}: `{CANONICAL_TEMPLATE}`"
+                ),
+                MIGRATION_HINT,
+            ));
         }
-        expanded
+        if let Some(kind) = find_unquoted_shell_operator(raw) {
+            return Err(invalid(
+                format!(
+                    "unsupported highlights.listen_command ({kind}); \
+                     {MIGRATION_EXPLANATION}: `{CANONICAL_TEMPLATE}`"
+                ),
+                MIGRATION_HINT,
+            ));
+        }
+        let tokens = shlex::split(raw).ok_or_else(|| {
+            invalid(
+                format!(
+                    "highlights.listen_command has malformed quoting; \
+                     {MIGRATION_EXPLANATION}: `{CANONICAL_TEMPLATE}`"
+                ),
+                MIGRATION_HINT,
+            )
+        })?;
+        if tokens.is_empty() {
+            return Err(invalid(
+                format!(
+                    "unsupported highlights.listen_command (empty); \
+                     {MIGRATION_EXPLANATION}: `{CANONICAL_TEMPLATE}`"
+                ),
+                MIGRATION_HINT,
+            ));
+        }
+        if tokens.len() >= 3
+            && tokens[0] == "sase"
+            && tokens[1] == "listen"
+            && tokens[2] == "render"
+        {
+            return Ok(tokens[3..].to_vec());
+        }
+        // Limited legacy migration: only a direct `sase-listen render`
+        // invocation (complete tokens) normalizes to `sase listen render`.
+        if tokens.len() >= 2
+            && tokens[0] == "sase-listen"
+            && tokens[1] == "render"
+        {
+            return Ok(tokens[2..].to_vec());
+        }
+        let reason = if tokens[0].contains('/') || tokens[0].contains('\\') {
+            "executable paths are not supported"
+        } else if is_env_assignment(&tokens[0]) {
+            "leading environment assignments are not supported"
+        } else if is_launcher_wrapper(&tokens[0]) {
+            "wrappers (`env`, `command`, shells, `script`, `sudo`, ...) are not supported"
+        } else {
+            "only a direct `sase listen render ...` invocation is supported"
+        };
+        Err(invalid(
+            format!(
+                "unsupported highlights.listen_command ({reason}: `{raw}`); \
+                 {MIGRATION_EXPLANATION}: `{CANONICAL_TEMPLATE}`"
+            ),
+            MIGRATION_HINT,
+        ))
+    }
+
+    /// Expand placeholder templates into raw argument values (no shell
+    /// quoting: each value stays data in the same argument).
+    fn expand_render_args(
+        &self,
+        values: &ListenValues,
+    ) -> std::result::Result<Vec<String>, ListenError> {
+        Ok(self
+            .parse_render_template()?
+            .iter()
+            .map(|token| expand_arg_template(token, values))
+            .collect())
+    }
+
+    /// Full `sase listen render ...` argv for execution (raw values).
+    fn expanded_argv(
+        &self,
+        values: &ListenValues,
+    ) -> std::result::Result<Vec<String>, ListenError> {
+        let mut argv = vec![
+            "sase".to_string(),
+            "listen".to_string(),
+            "render".to_string(),
+        ];
+        argv.extend(self.expand_render_args(values)?);
+        Ok(argv)
+    }
+
+    /// Normalized template for doctor (unexpanded, `sase listen render`
+    /// prefix, placeholders bare). Falls back to the raw setting when the
+    /// template is invalid (doctor reports the validation error instead).
+    fn normalized_template_display(&self) -> String {
+        let Ok(render_args) = self.parse_render_template() else {
+            return self.command.clone();
+        };
+        let mut out = String::from("sase listen render");
+        for token in &render_args {
+            out.push(' ');
+            out.push_str(&format_template_token_for_display(token));
+        }
+        out
     }
 }
 
-fn substitute_placeholder(name: &str, values: &ListenValues) -> Option<String> {
+/// Expand `{target}`/`{pdf}`/`{audio}`/`{title}` inside one argument-template
+/// token into raw values. Unknown `{...}` shapes are left literal (they were
+/// already rejected when lowercase-unknown); runtime values are never
+/// rescanned as shell programs.
+fn expand_arg_template(token: &str, values: &ListenValues) -> String {
+    let mut out = String::with_capacity(token.len());
+    let mut cursor = 0;
+    while cursor < token.len() {
+        if token.as_bytes()[cursor] == b'{'
+            && let Some((name, end)) = placeholder_at(token, cursor)
+            && let Some(raw) = raw_placeholder_value(name, values)
+        {
+            out.push_str(&raw);
+            cursor = end;
+            continue;
+        }
+        let character = token[cursor..].chars().next().unwrap_or('\0');
+        if character == '\0' {
+            break;
+        }
+        out.push(character);
+        cursor += character.len_utf8();
+    }
+    out
+}
+
+fn raw_placeholder_value(name: &str, values: &ListenValues) -> Option<String> {
     match name {
-        "target" => Some(shell_quote(&values.target)),
-        "pdf" => Some(shell_quote(&values.pdf.to_string_lossy())),
-        "audio" => Some(shell_quote(&values.audio.to_string_lossy())),
-        "title" => Some(shell_quote(&values.title)),
+        "target" => Some(values.target.clone()),
+        "pdf" => Some(values.pdf.to_string_lossy().into_owned()),
+        "audio" => Some(values.audio.to_string_lossy().into_owned()),
+        "title" => Some(values.title.clone()),
         _ => None,
     }
+}
+
+/// Format one template token for the normalized doctor display: bare unless
+/// it needs quoting for readability (spaces/quotes). Placeholders stay bare.
+fn format_template_token_for_display(token: &str) -> String {
+    if token.contains(' ')
+        || token.contains('\t')
+        || token.contains('\'')
+        || token.contains('"')
+    {
+        shell_quote(token)
+    } else {
+        token.to_string()
+    }
+}
+
+/// Format an expanded argv for the human-readable `listen: run ...` /
+/// `listen: would-run ...` lines. Shell quoting is display-only.
+fn format_argv_for_display(argv: &[String]) -> String {
+    argv.iter()
+        .map(|arg| shell_quote(arg))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// True when `word` looks like `NAME=value` (a leading environment
+/// assignment, never a SASE launcher).
+fn is_env_assignment(word: &str) -> bool {
+    let Some((name, _)) = word.split_once('=') else {
+        return false;
+    };
+    !name.is_empty()
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// True for `env`/`command`/shell/`script`/`sudo`-style wrappers. These never
+/// name the SASE launcher directly.
+fn is_launcher_wrapper(word: &str) -> bool {
+    matches!(
+        word,
+        "env"
+            | "command"
+            | "sh"
+            | "bash"
+            | "dash"
+            | "zsh"
+            | "fish"
+            | "sudo"
+            | "doas"
+            | "su"
+            | "nice"
+            | "time"
+            | "nohup"
+            | "setsid"
+            | "script"
+            | "xargs"
+            | "strace"
+            | "gdb"
+    )
+}
+
+/// Find unquoted shell syntax in the template: chains (`;`, `&`, newlines),
+/// pipelines (`|`), redirections (`<`, `>`), groups (`(`, `)`), and
+/// substitutions/expansions (`$`, backticks). Single-quoted data may contain
+/// any punctuation; double-quoted `$`/backticks still expand in a shell, so
+/// they are rejected. Backslash escapes the next character (literal data).
+/// Unclosed quotes are left for the tokenizer to reject as malformed.
+fn find_unquoted_shell_operator(template: &str) -> Option<&'static str> {
+    let mut chars = template.chars();
+    let mut in_single = false;
+    let mut in_double = false;
+    while let Some(c) = chars.next() {
+        if in_single {
+            if c == '\'' {
+                in_single = false;
+            }
+            continue;
+        }
+        if in_double {
+            if c == '\\' {
+                let _ = chars.next();
+                continue;
+            }
+            if c == '"' {
+                in_double = false;
+                continue;
+            }
+            if c == '$' || c == '`' {
+                return Some("shell expansions");
+            }
+            continue;
+        }
+        if c == '\\' {
+            let _ = chars.next();
+            continue;
+        }
+        if c == '\'' {
+            in_single = true;
+            continue;
+        }
+        if c == '"' {
+            in_double = true;
+            continue;
+        }
+        match c {
+            ';' => return Some("command chains (`;`)"),
+            '&' => return Some("command chains (`&`)"),
+            '|' => return Some("pipelines (`|`)"),
+            '<' | '>' => return Some("redirections (`<`/`>`)"),
+            '(' | ')' => return Some("subshells/command groups"),
+            '\n' | '\r' => return Some("command chains (newline)"),
+            '$' => return Some("shell expansions (`$`)"),
+            '`' => return Some("shell substitutions (backticks)"),
+            _ => {}
+        }
+    }
+    None
 }
 
 /// Quote one value for `sh`: bare when every byte is shell-safe, otherwise
@@ -399,28 +672,6 @@ pub(super) fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
-/// Collect every `{name}` placeholder in order. A `{` preceded by `$` is
-/// shell syntax (`${HOME}`), not a placeholder.
-fn find_placeholders(template: &str) -> Vec<String> {
-    let mut placeholders = Vec::new();
-    let mut cursor = 0;
-    while cursor < template.len() {
-        let is_open = template.as_bytes()[cursor] == b'{'
-            && (cursor == 0 || template.as_bytes()[cursor - 1] != b'$');
-        if is_open && let Some((name, end)) = placeholder_at(template, cursor) {
-            placeholders.push(name.to_string());
-            cursor = end;
-        } else {
-            let character = template[cursor..].chars().next().unwrap_or('\0');
-            if character == '\0' {
-                break;
-            }
-            cursor += character.len_utf8();
-        }
-    }
-    placeholders
-}
-
 /// Parse the placeholder opening at `open` (`template[open] == '{'`).
 /// Returns the name and the byte index just past the closing `}`.
 fn placeholder_at(template: &str, open: usize) -> Option<(&str, usize)> {
@@ -439,6 +690,31 @@ fn placeholder_at(template: &str, open: usize) -> Option<(&str, usize)> {
         return None;
     }
     Some((&rest[..length], open + 1 + length + 1))
+}
+
+/// Collect placeholders from already-tokenized render arguments. Tokens are
+/// scanned for `{name}`; `${...}` cannot occur (a `$` is rejected as shell
+/// syntax before tokenization).
+fn find_placeholders_in_args(args: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    for arg in args {
+        let mut cursor = 0;
+        while cursor < arg.len() {
+            if arg.as_bytes()[cursor] == b'{'
+                && let Some((name, end)) = placeholder_at(arg, cursor)
+            {
+                out.push(name.to_string());
+                cursor = end;
+            } else {
+                let character = arg[cursor..].chars().next().unwrap_or('\0');
+                if character == '\0' {
+                    break;
+                }
+                cursor += character.len_utf8();
+            }
+        }
+    }
+    out
 }
 
 /// Run the listen command with the values substituted in, streaming its
@@ -463,7 +739,9 @@ pub(super) fn run_listen_with_output(
     output: ListenOutput,
 ) -> std::result::Result<PathBuf, ListenError> {
     command.validate()?;
-    let expanded = command.expand(values);
+    let argv = command.expanded_argv(values)?;
+    let display = format_argv_for_display(&argv);
+    let expanded = display.clone();
     match output {
         ListenOutput::Print => {
             println!("listen: run {expanded}");
@@ -481,8 +759,11 @@ pub(super) fn run_listen_with_output(
     // Ctrl-C reaches the listen command's graceful stop, and reset both to
     // the default dispositions in the child.
     let previous_signals = parent_ignore_signals();
-    let mut child = process::Command::new("sh");
-    child.arg("-c").arg(&expanded).stdin(Stdio::inherit());
+    // SASE-only launch: no shell. `argv` is `sase listen render ...` with raw
+    // values as single arguments; quoting exists only in `display`.
+    let mut child = process::Command::new("sase");
+    child.args(&argv[1..]).stdin(Stdio::inherit());
+    bob_env::inherit_overrides(&mut child);
     match output {
         ListenOutput::Print => {
             child.stdout(Stdio::inherit()).stderr(Stdio::inherit());
@@ -510,7 +791,7 @@ pub(super) fn run_listen_with_output(
                 parent_restore_signals(previous_signals);
                 ListenError::Failed {
                     message: format!("run listen command {expanded}: {error}"),
-                    hint: LISTEN_FAILED_HINT.to_string(),
+                    hint: SASE_LAUNCH_HINT.to_string(),
                 }
             })?;
             // Forward piped stdout to stderr in bounded 8 KiB chunks
@@ -549,7 +830,7 @@ pub(super) fn run_listen_with_output(
     }
     let status = status.map_err(|error| ListenError::Failed {
         message: format!("run listen command {expanded}: {error}"),
-        hint: LISTEN_FAILED_HINT.to_string(),
+        hint: SASE_LAUNCH_HINT.to_string(),
     })?;
 
     if status.success() {
@@ -666,8 +947,11 @@ fn audio_is_mp3(path: &Path) -> bool {
     read >= 2 && header[0] == 0xFF && header[1] & 0xE0 == 0xE0
 }
 
-/// Non-fatal `doctor` row for the listen command, printed after the pandoc
-/// and web-clip rows. Problems warn; they never fail the vault doctor.
+/// Non-fatal `doctor` row for the listen setting, printed after the pandoc
+/// and web-clip rows. Problems warn; they never fail the vault doctor. An
+/// `ok` row means the template is valid and the fixed `sase` launcher is
+/// available — not that the listen plugin or its credentials work (use
+/// `sase listen --help` to diagnose the plugin).
 pub(super) fn append_listen_doctor_row(warnings: &mut Vec<String>) {
     let command = match ListenCommand::resolve() {
         Ok(command) => command,
@@ -686,51 +970,33 @@ pub(super) fn append_listen_doctor_row(warnings: &mut Vec<String>) {
     if let Err(error) = command.validate() {
         println!("listen_command: warn ({})", error.message());
         warnings.push(format!(
-            "highlights listen command is invalid: {}",
+            "highlights listen command is invalid: {}; hint: {MIGRATION_HINT}",
             error.message()
         ));
         return;
     }
-    let hook = PreScanHook {
-        command: OsString::from(command.display()),
-    };
-    let Some(program) = pre_scan_program(&hook) else {
-        println!(
-            "listen_command: warn ({}; executable not found)",
-            command.display()
-        );
-        warnings.push(format!(
-            "highlights listen command has no executable word: {}",
-            command.display()
-        ));
-        return;
-    };
+    let normalized = command.normalized_template_display();
+    let program = OsString::from("sase");
     match shell_command_available(&program) {
         Ok(true) => {
             println!(
-                "listen_command: ok ({}; executable: {})",
-                command.display(),
-                program.to_string_lossy()
+                "listen_command: ok ({normalized}; launcher available: sase; template valid — use `sase listen --help` to diagnose the listen plugin)"
             );
         }
         Ok(false) => {
             println!(
-                "listen_command: warn ({}; executable not found: {})",
-                command.display(),
-                program.to_string_lossy()
+                "listen_command: warn ({normalized}; launcher not found: sase)"
             );
             warnings.push(format!(
-                "highlights listen command executable not found: {}",
-                program.to_string_lossy()
+                "highlights listen command launcher not found: sase ({normalized}); hint: {MIGRATION_HINT}"
             ));
         }
         Err(error) => {
             println!(
-                "listen_command: warn ({}; executable check failed: {error})",
-                command.display()
+                "listen_command: warn ({normalized}; launcher check failed: {error})"
             );
             warnings.push(format!(
-                "highlights listen command executable check failed: {error}"
+                "highlights listen command launcher check failed: {error}"
             ));
         }
     }
@@ -812,23 +1078,106 @@ mod tests {
     }
 
     #[test]
-    fn accepts_complete_and_shell_syntax_templates() {
+    fn accepts_canonical_and_legacy_templates() {
         for template in [
+            "sase listen render {target} -e full -o {audio}",
+            "sase listen render {pdf} -e full -o {audio} --title {title}",
+            "sase listen render {target} -e full -o {audio} --no-publish",
+            "sase listen render --title 'static words' {target} -o {audio}",
             "sase-listen render {target} -e full -o {audio}",
-            "sase-listen render {pdf} -e full -o {audio} --title {title}",
-            "${HOME}/bin/render {target} -o {audio}",
-            "render {target} --fmt {a,b} -o {audio}",
-            "render {target} -o {audio} ${HOME} {a,b} {} {Target} {AUDIO}",
+            "sase-listen render {pdf} -e full -o {audio} --title {title} --no-publish",
         ] {
             test_command(template)
                 .validate()
                 .expect("template must validate");
         }
+        // Legacy normalizes to the SASE launcher in memory.
+        let legacy =
+            test_command("sase-listen render {target} -e full -o {audio}");
+        assert_eq!(
+            legacy.normalized_template_display(),
+            "sase listen render {target} -e full -o {audio}",
+            "legacy must normalize to sase"
+        );
+        let canonical =
+            test_command("sase listen render {target} -e full -o {audio}");
+        assert_eq!(
+            canonical.normalized_template_display(),
+            "sase listen render {target} -e full -o {audio}",
+        );
+    }
+
+    #[test]
+    fn rejects_shell_wrappers_chains_and_other_programs() {
+        for template in [
+            "${HOME}/bin/render {target} -o {audio}",
+            "render {target} --fmt {a,b} -o {audio}",
+            "render {target} -o {audio}",
+            "sase render {target} -o {audio}",
+            "sase listen publish {target} -o {audio}",
+            "sase listen {target} -o {audio}",
+            "/usr/bin/sase listen render {target} -o {audio}",
+            "./sase listen render {target} -o {audio}",
+            "FOO=1 sase listen render {target} -o {audio}",
+            "env sase listen render {target} -o {audio}",
+            "command sase listen render {target} -o {audio}",
+            "sh -c 'sase listen render {target} -o {audio}'",
+            "bash -c 'sase listen render {target} -o {audio}'",
+            "sase listen render {target} -o {audio}; rm -rf /",
+            "sase listen render {target} -o {audio} && echo hi",
+            "sase listen render {target} -o {audio} | cat",
+            "sase listen render {target} -o {audio} > out.mp3",
+            "sase listen render $HOME -o {audio} {target}",
+            "sase listen render `evil` {target} -o {audio}",
+            "sase listen render {target} -o {audio} ${HOME}",
+            "sase-listen renderx {target} -o {audio}",
+            "sase-listenx render {target} -o {audio}",
+        ] {
+            let error = test_command(template)
+                .validate()
+                .expect_err("template must fail");
+            assert!(
+                error.message().contains("sase listen render")
+                    || error.message().contains("SASE render arguments"),
+                "missing canonical remediation for {template:?}: {}",
+                error.message()
+            );
+            assert!(
+                error.hint().contains("sase listen render {target}"),
+                "missing canonical hint for {template:?}: {}",
+                error.hint()
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_partial_launcher_prefixes() {
+        // Complete tokens only: `sase-listenx` or `sase-listen renderx` must
+        // not count as the legacy launcher.
+        for template in [
+            "sase-listenx render {target} -o {audio}",
+            "sase-listen renderx {target} -o {audio}",
+            "sase-listen2 render {target} -o {audio}",
+        ] {
+            test_command(template)
+                .validate()
+                .expect_err("partial launcher must fail");
+        }
+    }
+
+    #[test]
+    fn rejects_malformed_quoting_and_nuls() {
+        test_command("sase listen render 'unterminated {target} -o {audio}")
+            .validate()
+            .expect_err("malformed quoting must fail");
+        test_command("sase listen render {target} -o {audio}\0")
+            .validate()
+            .expect_err("NUL must fail");
     }
 
     #[test]
     fn rejects_templates_missing_audio_or_source() {
-        let missing_audio = test_command("sase-listen render {target}");
+        let missing_audio = test_command("sase listen render {target}");
         let error = missing_audio
             .validate()
             .expect_err("template without {audio} must fail");
@@ -838,7 +1187,7 @@ mod tests {
             error.message()
         );
 
-        let missing_source = test_command("sase-listen render -o {audio}");
+        let missing_source = test_command("sase listen render -o {audio}");
         let error = missing_source
             .validate()
             .expect_err("template without {target}/{pdf} must fail");
@@ -853,7 +1202,7 @@ mod tests {
     #[test]
     fn rejects_unknown_placeholders() {
         let command = test_command(
-            "sase-listen render {target} -o {audio} --name {targt}",
+            "sase listen render {target} -o {audio} --name {targt}",
         );
         let error = command
             .validate()
@@ -868,23 +1217,75 @@ mod tests {
     #[test]
     fn rejects_quoted_placeholders() {
         for template in [
-            "sase-listen render '{target}' -o {audio}",
-            "sase-listen render \"{target}\" -o {audio}",
-            "sase-listen render {target} -o '{audio}'",
+            "sase listen render '{target}' -o {audio}",
+            "sase listen render \"{target}\" -o {audio}",
+            "sase listen render {target} -o '{audio}'",
         ] {
             let error = test_command(template)
                 .validate()
                 .expect_err("quoted placeholder must fail");
             assert_eq!(
                 error.hint(),
-                "bob shell-quotes placeholder values itself; remove the quotes",
+                "bob passes placeholder values as single arguments itself; remove the quotes",
                 "unexpected hint for {template}"
             );
         }
     }
 
+    /// Fake `sase` executable: asserts the fixed launcher, logs argv
+    /// boundaries, strips `listen render`, then writes an ID3 stub to the
+    /// `.mp3` argument. Honors `FAKE_LISTEN_EXIT`, `FAKE_LISTEN_NO_AUDIO`,
+    /// and `FAKE_LISTEN_TEXT` like the CLI fixtures.
+    fn write_fake_sase(bin_dir: &Path) -> PathBuf {
+        let script = r#"#!/bin/sh
+echo "$@" >> "$FAKE_LISTEN_LOG"
+if [ "$1" != "listen" ] || [ "$2" != "render" ]; then
+  echo "bad-launcher:$1:$2" >> "$FAKE_LISTEN_LOG"
+  exit 99
+fi
+shift 2
+for arg in "$@"; do
+  printf 'arg:%s\n' "$arg" >> "$FAKE_LISTEN_LOG"
+  case "$arg" in
+    *.mp3)
+      if [ "${FAKE_LISTEN_EXIT:-0}" = "0" ] && [ -z "$FAKE_LISTEN_NO_AUDIO" ]; then
+        if [ -n "$FAKE_LISTEN_TEXT" ]; then
+          printf '%s' "$FAKE_LISTEN_TEXT" > "$arg"
+        else
+          printf 'ID3 fake episode' > "$arg"
+        fi
+      fi
+      ;;
+  esac
+done
+exit "${FAKE_LISTEN_EXIT:-0}"
+"#;
+        write_executable(bin_dir, "sase", script)
+    }
+
+    /// Fake `sase-listen` trap: records any invocation and fails. Its marker
+    /// must remain absent on every path (no fallback).
+    fn write_sase_listen_trap(bin_dir: &Path, marker: &Path) -> PathBuf {
+        let marker_str = marker.display().to_string();
+        let script = format!(
+            "#!/bin/sh\necho \"trap-hit:$@\" >> \"{marker_str}\"\nexit 99\n"
+        );
+        write_executable(bin_dir, "sase-listen", &script)
+    }
+
+    fn path_with_bin(bin_dir: &Path) -> std::ffi::OsString {
+        let old = crate::native::env::var_os("PATH").unwrap_or_default();
+        let mut out = bin_dir.as_os_str().to_os_string();
+        out.push(":");
+        out.push(old);
+        out
+    }
+
     #[test]
-    fn quoting_round_trips_through_shell() {
+    fn placeholder_values_stay_single_arguments() {
+        // Token expansion keeps spaces, quotes, Unicode, newlines, dollar
+        // signs, shell metacharacters, and the text `sase-listen` as data in
+        // the same argument; no naive global replacement runs.
         let values = [
             "plain",
             "with spaces",
@@ -894,43 +1295,59 @@ mod tests {
             "a`b`c",
             "line1\nline2",
             "https://example.com/?a=1&b=2",
+            "sase-listen render faked",
+            "ünïcodé — ♫",
             "",
         ];
         for value in values {
-            let command = test_command("printf '%s\\n' {title}");
-            let expanded = command.expand(&ListenValues {
-                target: String::new(),
-                pdf: PathBuf::from("in.pdf"),
-                audio: PathBuf::from("out.mp3"),
-                title: value.to_string(),
-            });
-            let output = process::Command::new("sh")
-                .arg("-c")
-                .arg(&expanded)
-                .output()
-                .expect("run quoted round-trip");
-            assert!(
-                output.status.success(),
-                "expanded command failed: {expanded}"
+            let command = test_command(
+                "sase listen render {target} -e full -o {audio} --title {title}",
             );
-            assert_eq!(
-                String::from_utf8_lossy(&output.stdout),
-                format!("{value}\n"),
-                "round-trip mismatch for {value:?} ({expanded})"
+            let args = command
+                .expand_render_args(&ListenValues {
+                    target: "t".to_string(),
+                    pdf: PathBuf::from("in.pdf"),
+                    audio: PathBuf::from("out.mp3"),
+                    title: value.to_string(),
+                })
+                .expect("valid template must expand");
+            assert!(
+                args.iter().any(|arg| arg == value),
+                "value {value:?} must arrive as one argument: {args:?}"
             );
         }
+        // Static quoted data with punctuation stays one token too.
+        let command = test_command(
+            "sase listen render --note 'a;b | c' {target} -o {audio}",
+        );
+        let args = command
+            .expand_render_args(&test_values(Path::new("/tmp")))
+            .expect("quoted static data must expand");
+        assert!(
+            args.contains(&"a;b | c".to_string()),
+            "quoted static data must stay one argument: {args:?}"
+        );
     }
 
     #[test]
     fn run_listen_writes_id3_audio_on_success() {
         let scratch = scratch_dir("ok");
-        let script = write_executable(
-            &scratch,
-            "fake-listen-ok.sh",
-            "#!/bin/sh\nprintf 'ID3\\x04\\x00fake-mp3-payload' > \"$2\"\n",
-        );
+        let bin = scratch.join("bin");
+        fs::create_dir_all(&bin).expect("create fake bin");
+        let log = scratch.join("listen.log");
+        let trap_marker = scratch.join("trap.hit");
+        write_fake_sase(&bin);
+        write_sase_listen_trap(&bin, &trap_marker);
+        let path = path_with_bin(&bin);
+        let _guard = crate::native::env::TestEnvGuard::set(&[
+            ("PATH", Some(path.as_os_str())),
+            ("FAKE_LISTEN_LOG", Some(log.as_os_str())),
+            ("FAKE_LISTEN_EXIT", None),
+            ("FAKE_LISTEN_NO_AUDIO", None),
+            ("FAKE_LISTEN_TEXT", None),
+        ]);
         let command =
-            test_command(&format!("{} {{target}} {{audio}}", script.display()));
+            test_command("sase listen render {target} -e full -o {audio}");
         let values = test_values(&scratch);
         let audio =
             run_listen(&command, &values).expect("ID3 audio must verify");
@@ -939,7 +1356,59 @@ mod tests {
             fs::read(&values.audio)
                 .expect("read written audio")
                 .starts_with(b"ID3"),
-            "fake script must have written the ID3 stub"
+            "fake sase must have written the ID3 stub"
+        );
+        let logged = fs::read_to_string(&log).expect("read listen log");
+        assert!(
+            logged.contains("listen render"),
+            "fake saw the fixed launcher: {logged}"
+        );
+        assert!(!trap_marker.exists(), "legacy trap must not run on success");
+    }
+
+    #[test]
+    fn legacy_template_migrates_and_preserves_flags() {
+        let scratch = scratch_dir("legacy-ok");
+        let bin = scratch.join("bin");
+        fs::create_dir_all(&bin).expect("create fake bin");
+        let log = scratch.join("listen.log");
+        let trap_marker = scratch.join("trap.hit");
+        write_fake_sase(&bin);
+        write_sase_listen_trap(&bin, &trap_marker);
+        let path = path_with_bin(&bin);
+        let _guard = crate::native::env::TestEnvGuard::set(&[
+            ("PATH", Some(path.as_os_str())),
+            ("FAKE_LISTEN_LOG", Some(log.as_os_str())),
+            ("FAKE_LISTEN_EXIT", None),
+            ("FAKE_LISTEN_NO_AUDIO", None),
+            ("FAKE_LISTEN_TEXT", None),
+        ]);
+        let command = test_command(
+            "sase-listen render {target} -e full -o {audio} --no-publish",
+        );
+        let values = test_values(&scratch);
+        run_listen(&command, &values).expect("legacy must run via sase");
+        let logged = fs::read_to_string(&log).expect("read listen log");
+        assert!(
+            logged.starts_with("listen render"),
+            "legacy ran the fixed launcher: {logged}"
+        );
+        assert!(
+            logged.contains("--no-publish"),
+            "custom flags survive migration: {logged}"
+        );
+        assert!(
+            !trap_marker.exists(),
+            "legacy must not hit the standalone trap"
+        );
+        let dry = would_run_line(&command, &values);
+        assert!(
+            dry.contains("sase listen render"),
+            "dry-run uses the normalized launcher: {dry}"
+        );
+        assert!(
+            !dry.contains("sase-listen"),
+            "dry-run never shows the legacy launcher: {dry}"
         );
     }
 
@@ -955,15 +1424,25 @@ mod tests {
     #[test]
     fn run_listen_reports_failed_exits() {
         let scratch = scratch_dir("failed");
-        let script = write_executable(
-            &scratch,
-            "fake-listen-fail.sh",
-            "#!/bin/sh\nexit 4\n",
-        );
+        let bin = scratch.join("bin");
+        fs::create_dir_all(&bin).expect("create fake bin");
+        let log = scratch.join("listen.log");
+        let trap_marker = scratch.join("trap.hit");
+        write_fake_sase(&bin);
+        write_sase_listen_trap(&bin, &trap_marker);
+        let path = path_with_bin(&bin);
+        let _guard = crate::native::env::TestEnvGuard::set(&[
+            ("PATH", Some(path.as_os_str())),
+            ("FAKE_LISTEN_LOG", Some(log.as_os_str())),
+            ("FAKE_LISTEN_EXIT", Some(std::ffi::OsStr::new("4"))),
+            ("FAKE_LISTEN_NO_AUDIO", None),
+            ("FAKE_LISTEN_TEXT", None),
+        ]);
         let command =
-            test_command(&format!("{} {{target}} {{audio}}", script.display()));
-        let error = run_listen(&command, &test_values(&scratch))
-            .expect_err("exit 4 must fail");
+            test_command("sase listen render {target} -e full -o {audio}");
+        let values = test_values(&scratch);
+        let error =
+            run_listen(&command, &values).expect_err("exit 4 must fail");
         assert!(
             matches!(error, ListenError::Failed { .. }),
             "unexpected error: {error}"
@@ -973,22 +1452,30 @@ mod tests {
             "unexpected message: {}",
             error.message()
         );
+        assert!(!values.audio.exists(), "failed runs must not produce audio");
         assert!(
-            !test_values(&scratch).audio.exists(),
-            "failed runs must not produce audio"
+            !trap_marker.exists(),
+            "failure must not fall back to the trap"
         );
     }
 
     #[test]
     fn run_listen_reports_interrupt_exits() {
         let scratch = scratch_dir("interrupted");
-        let script = write_executable(
-            &scratch,
-            "fake-listen-interrupt.sh",
-            "#!/bin/sh\nexit 130\n",
-        );
+        let bin = scratch.join("bin");
+        fs::create_dir_all(&bin).expect("create fake bin");
+        let log = scratch.join("listen.log");
+        write_fake_sase(&bin);
+        let path = path_with_bin(&bin);
+        let _guard = crate::native::env::TestEnvGuard::set(&[
+            ("PATH", Some(path.as_os_str())),
+            ("FAKE_LISTEN_LOG", Some(log.as_os_str())),
+            ("FAKE_LISTEN_EXIT", Some(std::ffi::OsStr::new("130"))),
+            ("FAKE_LISTEN_NO_AUDIO", None),
+            ("FAKE_LISTEN_TEXT", None),
+        ]);
         let command =
-            test_command(&format!("{} {{target}} {{audio}}", script.display()));
+            test_command("sase listen render {target} -e full -o {audio}");
         let error = run_listen(&command, &test_values(&scratch))
             .expect_err("exit 130 must interrupt");
         assert!(
@@ -1000,47 +1487,100 @@ mod tests {
     #[test]
     fn run_listen_rejects_missing_and_non_mp3_audio() {
         let scratch = scratch_dir("no-audio");
-        let silent = write_executable(
-            &scratch,
-            "fake-listen-silent.sh",
-            "#!/bin/sh\nexit 0\n",
-        );
+        let bin = scratch.join("bin");
+        fs::create_dir_all(&bin).expect("create fake bin");
+        let log = scratch.join("listen.log");
+        write_fake_sase(&bin);
+        let path = path_with_bin(&bin);
         let command =
-            test_command(&format!("{} {{target}} {{audio}}", silent.display()));
+            test_command("sase listen render {target} -e full -o {audio}");
         let values = test_values(&scratch);
-        let error = run_listen(&command, &values)
-            .expect_err("exit 0 without audio must fail");
-        assert!(
-            matches!(error, ListenError::NoAudio { .. }),
-            "unexpected error: {error}"
-        );
-        assert!(
-            error
-                .message()
-                .contains(&values.audio.display().to_string()),
-            "unexpected message: {}",
-            error.message()
-        );
+        {
+            let _guard = crate::native::env::TestEnvGuard::set(&[
+                ("PATH", Some(path.as_os_str())),
+                ("FAKE_LISTEN_LOG", Some(log.as_os_str())),
+                ("FAKE_LISTEN_EXIT", None),
+                ("FAKE_LISTEN_NO_AUDIO", Some(std::ffi::OsStr::new("1"))),
+                ("FAKE_LISTEN_TEXT", None),
+            ]);
+            let error = run_listen(&command, &values)
+                .expect_err("exit 0 without audio must fail");
+            assert!(
+                matches!(error, ListenError::NoAudio { .. }),
+                "unexpected error: {error}"
+            );
+            assert!(
+                error
+                    .message()
+                    .contains(&values.audio.display().to_string()),
+                "unexpected message: {}",
+                error.message()
+            );
+        }
+        {
+            let _guard = crate::native::env::TestEnvGuard::set(&[
+                ("PATH", Some(path.as_os_str())),
+                ("FAKE_LISTEN_LOG", Some(log.as_os_str())),
+                ("FAKE_LISTEN_EXIT", None),
+                ("FAKE_LISTEN_NO_AUDIO", None),
+                (
+                    "FAKE_LISTEN_TEXT",
+                    Some(std::ffi::OsStr::new("not audio at all")),
+                ),
+            ]);
+            let error = run_listen(&command, &values)
+                .expect_err("non-MP3 bytes must fail");
+            assert!(
+                matches!(error, ListenError::NoAudio { .. }),
+                "unexpected error: {error}"
+            );
+        }
+    }
 
-        let noisy = write_executable(
-            &scratch,
-            "fake-listen-noisy.sh",
-            "#!/bin/sh\nprintf 'not audio at all' > \"$2\"\nexit 0\n",
-        );
+    #[test]
+    fn run_listen_has_no_fallback_when_sase_missing() {
+        // `sase` absent but `sase-listen` present: no standalone retry.
+        let scratch = scratch_dir("no-sase");
+        let bin = scratch.join("bin");
+        fs::create_dir_all(&bin).expect("create fake bin");
+        let trap_marker = scratch.join("trap.hit");
+        write_sase_listen_trap(&bin, &trap_marker);
+        let path: std::ffi::OsString = {
+            let mut out = bin.as_os_str().to_os_string();
+            out
+        };
+        let _guard = crate::native::env::TestEnvGuard::set(&[
+            ("PATH", Some(path.as_os_str())),
+            ("FAKE_LISTEN_EXIT", None),
+            ("FAKE_LISTEN_NO_AUDIO", None),
+            ("FAKE_LISTEN_TEXT", None),
+        ]);
         let command =
-            test_command(&format!("{} {{target}} {{audio}}", noisy.display()));
+            test_command("sase listen render {target} -e full -o {audio}");
+        let values = test_values(&scratch);
         let error =
-            run_listen(&command, &values).expect_err("non-MP3 bytes must fail");
+            run_listen(&command, &values).expect_err("missing sase must fail");
         assert!(
-            matches!(error, ListenError::NoAudio { .. }),
+            matches!(error, ListenError::Failed { .. }),
             "unexpected error: {error}"
         );
+        assert!(
+            error.hint().contains("SASE"),
+            "missing launcher must suggest SASE: {}",
+            error.hint()
+        );
+        assert!(
+            !trap_marker.exists(),
+            "no fallback to sase-listen when sase is absent"
+        );
+        assert!(!values.audio.exists(), "failed launch writes no audio");
     }
 
     #[test]
     fn run_listen_validates_before_running() {
         let scratch = scratch_dir("invalid");
-        let command = test_command("sase-listen render {target}");
+        // Missing {audio} still fails before any subprocess runs.
+        let command = test_command("sase listen render {target}");
         let error = run_listen(&command, &test_values(&scratch))
             .expect_err("invalid template must fail before running");
         assert!(
@@ -1069,13 +1609,13 @@ mod tests {
         let config_path = scratch.join("config.yml");
         fs::write(
             &config_path,
-            "highlights:\n  listen_command: 'from-config {target} -o {audio}'\n",
+            "highlights:\n  listen_command: 'sase listen render {target} -o {audio} --from-config'\n",
         )
         .expect("write test config");
         let config = config_path.to_string_lossy().into_owned();
 
         with_listen_env(
-            Some("from-env {target} -o {audio}"),
+            Some("sase listen render {target} -o {audio} --from-env"),
             Some(&config),
             || {
                 assert_eq!(
@@ -1083,7 +1623,7 @@ mod tests {
                         .expect("resolve succeeds")
                         .as_ref()
                         .map(ListenCommand::display),
-                    Some("from-env {target} -o {audio}"),
+                    Some("sase listen render {target} -o {audio} --from-env"),
                     "environment must win over the config file"
                 );
             },
@@ -1095,10 +1635,35 @@ mod tests {
                     .expect("resolve succeeds")
                     .as_ref()
                     .map(ListenCommand::display),
-                Some("from-config {target} -o {audio}"),
+                Some("sase listen render {target} -o {audio} --from-config"),
                 "config applies without the environment override"
             );
         });
+    }
+
+    #[test]
+    fn invalid_wrappers_fail_before_any_run() {
+        // Wrappers/chains fail validation, so no subprocess ever runs.
+        for template in [
+            "sh -c 'sase listen render {target} -o {audio}'",
+            "sase listen render {target} -o {audio}; echo hi",
+            "my-narrator {target} -o {audio}",
+        ] {
+            let error = test_command(template)
+                .validate()
+                .expect_err("wrapper must fail");
+            assert!(
+                error.hint().contains("sase listen render {target}"),
+                "unexpected hint for {template:?}: {}",
+                error.hint()
+            );
+            let values = test_values(Path::new("/tmp"));
+            let dry = would_run_line(&test_command(template), &values);
+            assert!(
+                !dry.contains("listen: run"),
+                "invalid dry-run must not look like a run: {dry}"
+            );
+        }
     }
 
     #[test]
@@ -1143,11 +1708,83 @@ mod tests {
             );
             assert!(
                 error.hint().contains(
-                    "listen_command: sase-listen render {target} -e full -o {audio}"
+                    "listen_command: sase listen render {target} -e full -o {audio}"
                 ),
                 "unexpected hint: {}",
                 error.hint()
             );
         });
+    }
+
+    #[test]
+    fn quiet_runner_preserves_typed_failures() {
+        // The shared Quiet path (background ingest) keeps JSON stdout clean
+        // by sending everything to stderr, with the same typed errors.
+        let scratch = scratch_dir("quiet");
+        let bin = scratch.join("bin");
+        fs::create_dir_all(&bin).expect("create fake bin");
+        let log = scratch.join("listen.log");
+        let trap_marker = scratch.join("trap.hit");
+        write_fake_sase(&bin);
+        write_sase_listen_trap(&bin, &trap_marker);
+        let path = path_with_bin(&bin);
+        let command =
+            test_command("sase listen render {target} -e full -o {audio}");
+        let values = test_values(&scratch);
+        {
+            let _guard = crate::native::env::TestEnvGuard::set(&[
+                ("PATH", Some(path.as_os_str())),
+                ("FAKE_LISTEN_LOG", Some(log.as_os_str())),
+                ("FAKE_LISTEN_EXIT", None),
+                ("FAKE_LISTEN_NO_AUDIO", None),
+                ("FAKE_LISTEN_TEXT", None),
+            ]);
+            let audio =
+                run_listen_with_output(&command, &values, ListenOutput::Quiet)
+                    .expect("quiet success must verify");
+            assert_eq!(audio, values.audio);
+        }
+        {
+            let _guard = crate::native::env::TestEnvGuard::set(&[
+                ("PATH", Some(path.as_os_str())),
+                ("FAKE_LISTEN_LOG", Some(log.as_os_str())),
+                ("FAKE_LISTEN_EXIT", Some(std::ffi::OsStr::new("4"))),
+                ("FAKE_LISTEN_NO_AUDIO", None),
+                ("FAKE_LISTEN_TEXT", None),
+            ]);
+            let error = run_listen_with_output(
+                &command,
+                &test_values(&scratch),
+                ListenOutput::Quiet,
+            )
+            .expect_err("quiet exit 4 must fail");
+            assert!(
+                matches!(error, ListenError::Failed { .. }),
+                "unexpected error: {error}"
+            );
+        }
+        {
+            // Remove the audio written by the success block: NoAudio must be
+            // proven by absence, not by leftover bytes.
+            fs::remove_file(&values.audio).ok();
+            let _guard = crate::native::env::TestEnvGuard::set(&[
+                ("PATH", Some(path.as_os_str())),
+                ("FAKE_LISTEN_LOG", Some(log.as_os_str())),
+                ("FAKE_LISTEN_EXIT", None),
+                ("FAKE_LISTEN_NO_AUDIO", Some(std::ffi::OsStr::new("1"))),
+                ("FAKE_LISTEN_TEXT", None),
+            ]);
+            let error =
+                run_listen_with_output(&command, &values, ListenOutput::Quiet)
+                    .expect_err("quiet no-audio must fail");
+            assert!(
+                matches!(error, ListenError::NoAudio { .. }),
+                "unexpected error: {error}"
+            );
+        }
+        assert!(
+            !trap_marker.exists(),
+            "quiet path never falls back to the trap"
+        );
     }
 }

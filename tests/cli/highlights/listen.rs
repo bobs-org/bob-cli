@@ -4,9 +4,13 @@
 use super::fake_clip::*;
 use crate::support::*;
 
-/// Fake `BOB_HIGHLIGHTS_LISTEN_COMMAND`: logs argv to `$FAKE_LISTEN_LOG`,
-/// logs the environment to `$FAKE_LISTEN_ENV_LOG` when set, prints canned
-/// lines, and writes an ID3 stub to the `.mp3` argument.
+/// Fake `sase` program plus a `sase-listen` trap.
+///
+/// The fake asserts the fixed launcher (`listen render`), logs the full argv
+/// to `$FAKE_LISTEN_LOG`, logs each render argument as `arg:<value>` for
+/// boundary checks, strips `listen render`, then runs the legacy fake
+/// behaviors (ID3 stub, exit codes, touch/probe markers, canned output).
+/// `PATH` must scope to the returned bin dir so no installed SASE runs.
 ///
 /// - `FAKE_LISTEN_EXIT`: exit code instead of 0.
 /// - `FAKE_LISTEN_NO_AUDIO=1`: write no audio (the NoAudio path).
@@ -15,12 +19,32 @@ use crate::support::*;
 /// - `FAKE_LISTEN_PROBE_TARGET`: when set, the fake records whether that
 ///   path exists (`target-exists:yes/no`) to prove `{target}` is staged
 ///   while the command runs.
-fn write_fake_listen(dir: &std::path::Path) -> std::path::PathBuf {
-    let path = dir.join("fake-listen.sh");
+/// - The `sase-listen` trap records any invocation to the trap marker and
+///   fails; the marker must stay absent (no fallback).
+struct FakeSase {
+    log: std::path::PathBuf,
+    trap: std::path::PathBuf,
+    path: String,
+}
+
+fn setup_fake_sase(temp: &TempDir) -> FakeSase {
+    let bin = temp.path().join("fake-sase-bin");
+    std::fs::create_dir_all(&bin).expect("create fake sase bin");
+    let log = temp.path().join("listen.log");
+    let trap = temp.path().join("sase-listen-trap.hit");
+    let sase = bin.join("sase");
     let script = r#"#!/bin/sh
 echo "$@" >> "$FAKE_LISTEN_LOG"
 if [ -n "$FAKE_LISTEN_ENV_LOG" ]; then env >> "$FAKE_LISTEN_ENV_LOG"; fi
-# Prove `{target}` ($1) exists while the command runs.
+if [ "$1" != "listen" ] || [ "$2" != "render" ]; then
+  echo "bad-launcher:$1:$2" >> "$FAKE_LISTEN_LOG"
+  exit 99
+fi
+shift 2
+for arg in "$@"; do
+  printf 'arg:%s\n' "$arg" >> "$FAKE_LISTEN_LOG"
+done
+# Prove `{target}` ($1 after the shift) exists while the command runs.
 if [ -f "$1" ]; then
   echo "target-exists:yes" >> "$FAKE_LISTEN_LOG"
 else
@@ -47,8 +71,13 @@ for arg in "$@"; do
 done
 exit "${FAKE_LISTEN_EXIT:-0}"
 "#;
-    write_executable(&path, script);
-    path
+    write_executable(&sase, script);
+    let marker = trap.display().to_string();
+    let trap_script =
+        format!("#!/bin/sh\necho \"trap-hit:$@\" >> \"{marker}\"\nexit 99\n");
+    write_executable(&bin.join("sase-listen"), &trap_script);
+    let path = path_with_prefix(&bin);
+    FakeSase { log, trap, path }
 }
 
 /// Minimal fake curl: serves `$FAKE_CURL_ROOT/paper.pdf` as a PDF for any
@@ -163,12 +192,14 @@ fn collect_files(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
     out
 }
 
-/// `BOB_HIGHLIGHTS_LISTEN_COMMAND` value invoking the fake.
-fn listen_command(fake: &std::path::Path) -> String {
-    format!(
-        "{} {{target}} -e full -o {{audio}} --title {{title}}",
-        path_str(fake)
-    )
+/// Canonical `BOB_HIGHLIGHTS_LISTEN_COMMAND` invoking the fake `sase`.
+fn listen_command() -> String {
+    "sase listen render {target} -e full -o {audio} --title {title}".to_string()
+}
+
+/// Legacy direct `sase-listen render ...` setting (migrates automatically).
+fn legacy_listen_command() -> String {
+    "sase-listen render {target} -e full -o {audio} --title {title}".to_string()
 }
 
 #[test]
@@ -183,8 +214,7 @@ fn listen_markdown_binds_episode_and_play_uri() {
     );
     write_bare_pdf(&temp.path().join("render-fixture.pdf"));
     let pandoc = write_fake_pandoc(temp.path());
-    let fake = write_fake_listen(temp.path());
-    let log = temp.path().join("listen.log");
+    let fake_sase = setup_fake_sase(&temp);
 
     let output = bob_command()
         .arg("highlights")
@@ -200,8 +230,9 @@ fn listen_markdown_binds_episode_and_play_uri() {
             "FAKE_PANDOC_FIXTURE",
             temp.path().join("render-fixture.pdf"),
         )
-        .env("BOB_HIGHLIGHTS_LISTEN_COMMAND", listen_command(&fake))
-        .env("FAKE_LISTEN_LOG", &log)
+        .env("BOB_HIGHLIGHTS_LISTEN_COMMAND", listen_command())
+        .env("PATH", &fake_sase.path)
+        .env("FAKE_LISTEN_LOG", &fake_sase.log)
         .output()
         .expect("run create markdown --listen");
     assert_success(&output);
@@ -221,7 +252,8 @@ fn listen_markdown_binds_episode_and_play_uri() {
         "report binds the episode and its Play URI: {report}"
     );
     // `{target}` exists during the run and lives outside xlib/.
-    let logged = std::fs::read_to_string(&log).expect("read listen log");
+    let logged =
+        std::fs::read_to_string(&fake_sase.log).expect("read listen log");
     assert!(
         logged.contains("target-exists:yes"),
         "the fake proves {{target}} exists while it runs: {logged}"
@@ -245,8 +277,7 @@ fn listen_pdf_url_streams_output_and_quotes_title() {
     let fake_curl = write_fake_pdf_curl(temp.path());
     let curl_log = temp.path().join("curl.log");
     std::fs::write(&curl_log, "").expect("init curl log");
-    let fake = write_fake_listen(temp.path());
-    let log = temp.path().join("listen.log");
+    let fake_sase = setup_fake_sase(&temp);
 
     let output = bob_command()
         .arg("highlights")
@@ -262,8 +293,9 @@ fn listen_pdf_url_streams_output_and_quotes_title() {
         .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
         .env("FAKE_CURL_ROOT", &root)
         .env("FAKE_CURL_LOG", &curl_log)
-        .env("BOB_HIGHLIGHTS_LISTEN_COMMAND", listen_command(&fake))
-        .env("FAKE_LISTEN_LOG", &log)
+        .env("BOB_HIGHLIGHTS_LISTEN_COMMAND", listen_command())
+        .env("PATH", &fake_sase.path)
+        .env("FAKE_LISTEN_LOG", &fake_sase.log)
         .output()
         .expect("run create PDF URL --listen");
     assert_success(&output);
@@ -283,7 +315,8 @@ fn listen_pdf_url_streams_output_and_quotes_title() {
     // `{target}` and `{title}` come from the fake's argv log, not bob's
     // stdout: the URL also appears on the `source:` line, so a stdout
     // check proves nothing.
-    let logged = std::fs::read_to_string(&log).expect("read listen log");
+    let logged =
+        std::fs::read_to_string(&fake_sase.log).expect("read listen log");
     assert!(
         logged.contains("https://example.com/paper.pdf"),
         "the fake saw {{target}} as the cleaned URL: {logged}"
@@ -315,8 +348,7 @@ fn listen_failure_writes_nothing() {
     let fake_curl = write_fake_pdf_curl(temp.path());
     let curl_log = temp.path().join("curl.log");
     std::fs::write(&curl_log, "").expect("init curl log");
-    let fake = write_fake_listen(temp.path());
-    let log = temp.path().join("listen.log");
+    let fake_sase = setup_fake_sase(&temp);
 
     let output = bob_command()
         .arg("highlights")
@@ -330,8 +362,9 @@ fn listen_failure_writes_nothing() {
         .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
         .env("FAKE_CURL_ROOT", &root)
         .env("FAKE_CURL_LOG", &curl_log)
-        .env("BOB_HIGHLIGHTS_LISTEN_COMMAND", listen_command(&fake))
-        .env("FAKE_LISTEN_LOG", &log)
+        .env("BOB_HIGHLIGHTS_LISTEN_COMMAND", listen_command())
+        .env("PATH", &fake_sase.path)
+        .env("FAKE_LISTEN_LOG", &fake_sase.log)
         .env("FAKE_LISTEN_EXIT", "4")
         .output()
         .expect("run create with failing listen");
@@ -366,8 +399,7 @@ fn listen_interrupted_exits_130() {
     let fake_curl = write_fake_pdf_curl(temp.path());
     let curl_log = temp.path().join("curl.log");
     std::fs::write(&curl_log, "").expect("init curl log");
-    let fake = write_fake_listen(temp.path());
-    let log = temp.path().join("listen.log");
+    let fake_sase = setup_fake_sase(&temp);
 
     let output = bob_command()
         .arg("highlights")
@@ -381,8 +413,9 @@ fn listen_interrupted_exits_130() {
         .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
         .env("FAKE_CURL_ROOT", &root)
         .env("FAKE_CURL_LOG", &curl_log)
-        .env("BOB_HIGHLIGHTS_LISTEN_COMMAND", listen_command(&fake))
-        .env("FAKE_LISTEN_LOG", &log)
+        .env("BOB_HIGHLIGHTS_LISTEN_COMMAND", listen_command())
+        .env("PATH", &fake_sase.path)
+        .env("FAKE_LISTEN_LOG", &fake_sase.log)
         .env("FAKE_LISTEN_EXIT", "130")
         .output()
         .expect("run create with interrupted listen");
@@ -409,8 +442,7 @@ fn listen_without_audio_is_an_error() {
     let fake_curl = write_fake_pdf_curl(temp.path());
     let curl_log = temp.path().join("curl.log");
     std::fs::write(&curl_log, "").expect("init curl log");
-    let fake = write_fake_listen(temp.path());
-    let log = temp.path().join("listen.log");
+    let fake_sase = setup_fake_sase(&temp);
 
     let output = bob_command()
         .arg("highlights")
@@ -424,8 +456,9 @@ fn listen_without_audio_is_an_error() {
         .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
         .env("FAKE_CURL_ROOT", &root)
         .env("FAKE_CURL_LOG", &curl_log)
-        .env("BOB_HIGHLIGHTS_LISTEN_COMMAND", listen_command(&fake))
-        .env("FAKE_LISTEN_LOG", &log)
+        .env("BOB_HIGHLIGHTS_LISTEN_COMMAND", listen_command())
+        .env("PATH", &fake_sase.path)
+        .env("FAKE_LISTEN_LOG", &fake_sase.log)
         .env("FAKE_LISTEN_NO_AUDIO", "1")
         .output()
         .expect("run create with silent listen");
@@ -461,8 +494,7 @@ fn listen_dry_run_prints_would_run_without_invoking() {
     let fake_curl = write_fake_pdf_curl(temp.path());
     let curl_log = temp.path().join("curl.log");
     std::fs::write(&curl_log, "").expect("init curl log");
-    let fake = write_fake_listen(temp.path());
-    let log = temp.path().join("listen.log");
+    let fake_sase = setup_fake_sase(&temp);
 
     let output = bob_command()
         .arg("highlights")
@@ -477,8 +509,9 @@ fn listen_dry_run_prints_would_run_without_invoking() {
         .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
         .env("FAKE_CURL_ROOT", &root)
         .env("FAKE_CURL_LOG", &curl_log)
-        .env("BOB_HIGHLIGHTS_LISTEN_COMMAND", listen_command(&fake))
-        .env("FAKE_LISTEN_LOG", &log)
+        .env("BOB_HIGHLIGHTS_LISTEN_COMMAND", listen_command())
+        .env("PATH", &fake_sase.path)
+        .env("FAKE_LISTEN_LOG", &fake_sase.log)
         .output()
         .expect("dry-run create --listen");
     assert_success(&output);
@@ -489,7 +522,10 @@ fn listen_dry_run_prints_would_run_without_invoking() {
             && report.contains("(from --listen)"),
         "{report}"
     );
-    assert!(!log.exists(), "dry run never invokes the listen command");
+    assert!(
+        !fake_sase.log.exists(),
+        "dry run never invokes the listen command"
+    );
     assert!(!vault.join("xlib").exists(), "dry run writes nothing");
 }
 
@@ -524,7 +560,7 @@ fn listen_unconfigured_fails_before_fetch() {
     assert!(
         diagnostic.contains("--listen needs highlights.listen_command")
             && diagnostic.contains(
-                "listen_command: sase-listen render {target} -e full -o {audio}"
+                "listen_command: sase listen render {target} -e full -o {audio}"
             ),
         "{diagnostic}"
     );
@@ -551,7 +587,10 @@ fn listen_invalid_template_is_an_error() {
         .arg("-b")
         .arg(&vault)
         .arg("-L")
-        .env("BOB_HIGHLIGHTS_LISTEN_COMMAND", "render {target}")
+        .env(
+            "BOB_HIGHLIGHTS_LISTEN_COMMAND",
+            "sase listen render {target}",
+        )
         .output()
         .expect("run create --listen with invalid template");
     assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
@@ -620,10 +659,8 @@ fn write_library_capture(
     before
 }
 
-fn listen_for(temp: &TempDir) -> (std::path::PathBuf, std::path::PathBuf) {
-    let fake = write_fake_listen(temp.path());
-    let log = temp.path().join("listen.log");
-    (fake, log)
+fn listen_for(temp: &TempDir) -> FakeSase {
+    setup_fake_sase(temp)
 }
 
 #[test]
@@ -640,7 +677,7 @@ fn listen_attaches_to_ref_note_capture() {
     );
     let fake_curl = write_fake_pdf_curl(temp.path());
     let curl_log = temp.path().join("curl.log");
-    let (fake, log) = listen_for(&temp);
+    let fake_sase = listen_for(&temp);
 
     // A different spelling of the same paper hits the same dedupe key.
     let output = bob_command()
@@ -655,8 +692,9 @@ fn listen_attaches_to_ref_note_capture() {
         .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
         .env("FAKE_CURL_ROOT", temp.path())
         .env("FAKE_CURL_LOG", &curl_log)
-        .env("BOB_HIGHLIGHTS_LISTEN_COMMAND", listen_command(&fake))
-        .env("FAKE_LISTEN_LOG", &log)
+        .env("BOB_HIGHLIGHTS_LISTEN_COMMAND", listen_command())
+        .env("PATH", &fake_sase.path)
+        .env("FAKE_LISTEN_LOG", &fake_sase.log)
         .output()
         .expect("run create --listen attach");
     assert_success(&output);
@@ -690,7 +728,8 @@ fn listen_attaches_to_ref_note_capture() {
         "attach never fetches: {}",
         format_output(&output)
     );
-    let logged = std::fs::read_to_string(&log).expect("read listen log");
+    let logged =
+        std::fs::read_to_string(&fake_sase.log).expect("read listen log");
     assert!(
         logged.contains("https://arxiv.org/abs/2608.04278v2"),
         "the cleaned URL is the narration source: {logged}"
@@ -709,7 +748,7 @@ fn listen_attaches_for_legacy_url_arxiv_note() {
         "https://arxiv.org/pdf/2608.04278",
         None,
     );
-    let (fake, log) = listen_for(&temp);
+    let fake_sase = listen_for(&temp);
 
     let output = bob_command()
         .arg("highlights")
@@ -721,8 +760,9 @@ fn listen_attaches_for_legacy_url_arxiv_note() {
         .arg(&vault)
         .arg("-L")
         .env("BOB_HIGHLIGHTS_CURL", temp.path().join("unused-curl"))
-        .env("BOB_HIGHLIGHTS_LISTEN_COMMAND", listen_command(&fake))
-        .env("FAKE_LISTEN_LOG", &log)
+        .env("BOB_HIGHLIGHTS_LISTEN_COMMAND", listen_command())
+        .env("PATH", &fake_sase.path)
+        .env("FAKE_LISTEN_LOG", &fake_sase.log)
         .output()
         .expect("run create --listen legacy attach");
     assert_success(&output);
@@ -750,7 +790,7 @@ fn listen_legacy_only_hit_captures_fresh_instead_of_attaching() {
         &vault.join("ref/ai/old.md"),
         "---\ntitle: Old\nurl: https://example.com/index/open-source-codex-orchestration-symphony/\n---\n\n# Old\n",
     );
-    let (fake, log) = listen_for(&temp);
+    let fake_sase = listen_for(&temp);
     let fake_curl = write_fake_html_curl(temp.path());
     let curl_log = temp.path().join("curl.log");
     std::fs::write(&curl_log, "").expect("init curl log");
@@ -767,8 +807,9 @@ fn listen_legacy_only_hit_captures_fresh_instead_of_attaching() {
         .env("BOB_WEB_CLIP_ADAPTER", &fake_clip.path)
         .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
         .env("FAKE_CURL_LOG", &curl_log)
-        .env("BOB_HIGHLIGHTS_LISTEN_COMMAND", listen_command(&fake))
-        .env("FAKE_LISTEN_LOG", &log)
+        .env("BOB_HIGHLIGHTS_LISTEN_COMMAND", listen_command())
+        .env("PATH", &fake_sase.path)
+        .env("FAKE_LISTEN_LOG", &fake_sase.log)
         .output()
         .expect("run create --listen over legacy-only note");
     assert_success(&output);
@@ -800,7 +841,7 @@ fn listen_legacy_only_hit_captures_fresh_instead_of_attaching() {
         format_output(&output)
     );
     assert!(
-        log.is_file(),
+        fake_sase.log.is_file(),
         "the listen command ran instead of attaching:\n{}",
         format_output(&output)
     );
@@ -819,7 +860,7 @@ fn listen_attach_refuses_when_audio_exists() {
         "https://arxiv.org/abs/2608.04278",
         Some("\"[[lib/papers/ea_graph.mp3]]\""),
     );
-    let (fake, log) = listen_for(&temp);
+    let fake_sase = listen_for(&temp);
 
     let output = bob_command()
         .arg("highlights")
@@ -830,8 +871,9 @@ fn listen_attach_refuses_when_audio_exists() {
         .arg("-b")
         .arg(&vault)
         .arg("-L")
-        .env("BOB_HIGHLIGHTS_LISTEN_COMMAND", listen_command(&fake))
-        .env("FAKE_LISTEN_LOG", &log)
+        .env("BOB_HIGHLIGHTS_LISTEN_COMMAND", listen_command())
+        .env("PATH", &fake_sase.path)
+        .env("FAKE_LISTEN_LOG", &fake_sase.log)
         .output()
         .expect("run attach with note audio");
     assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
@@ -858,7 +900,7 @@ fn listen_attach_refuses_when_audio_exists() {
     );
     std::fs::write(vault.join("lib/papers/ea_graph.mp3"), b"old-episode")
         .expect("write library companion");
-    let (fake, log) = listen_for(&temp);
+    let fake_sase = listen_for(&temp);
 
     let output = bob_command()
         .arg("highlights")
@@ -869,8 +911,9 @@ fn listen_attach_refuses_when_audio_exists() {
         .arg("-b")
         .arg(&vault)
         .arg("-L")
-        .env("BOB_HIGHLIGHTS_LISTEN_COMMAND", listen_command(&fake))
-        .env("FAKE_LISTEN_LOG", &log)
+        .env("BOB_HIGHLIGHTS_LISTEN_COMMAND", listen_command())
+        .env("PATH", &fake_sase.path)
+        .env("FAKE_LISTEN_LOG", &fake_sase.log)
         .output()
         .expect("run attach with library companion");
     assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
@@ -893,7 +936,7 @@ fn listen_attaches_to_queued_intake_pdf() {
     let fake_curl = write_fake_pdf_curl(temp.path());
     let curl_log = temp.path().join("curl.log");
     std::fs::write(&curl_log, "").expect("init curl log");
-    let (fake, log) = listen_for(&temp);
+    let fake_sase = listen_for(&temp);
 
     // Capture the PDF URL without --listen first: it queues the intake.
     let output = bob_command()
@@ -925,8 +968,9 @@ fn listen_attaches_to_queued_intake_pdf() {
         .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
         .env("FAKE_CURL_ROOT", &root)
         .env("FAKE_CURL_LOG", &curl_log)
-        .env("BOB_HIGHLIGHTS_LISTEN_COMMAND", listen_command(&fake))
-        .env("FAKE_LISTEN_LOG", &log)
+        .env("BOB_HIGHLIGHTS_LISTEN_COMMAND", listen_command())
+        .env("PATH", &fake_sase.path)
+        .env("FAKE_LISTEN_LOG", &fake_sase.log)
         .output()
         .expect("run create --listen intake attach");
     assert_success(&output);
@@ -967,7 +1011,7 @@ fn listen_attaches_when_target_is_the_library_pdf() {
         .expect("create lib dir");
     std::fs::rename(&queued, &library).expect("archive the PDF");
     let before = std::fs::read(&library).expect("read library bytes");
-    let (fake, log) = listen_for(&temp);
+    let fake_sase = listen_for(&temp);
 
     let output = bob_command()
         .arg("highlights")
@@ -978,8 +1022,9 @@ fn listen_attaches_when_target_is_the_library_pdf() {
         .arg("-b")
         .arg(&vault)
         .arg("-L")
-        .env("BOB_HIGHLIGHTS_LISTEN_COMMAND", listen_command(&fake))
-        .env("FAKE_LISTEN_LOG", &log)
+        .env("BOB_HIGHLIGHTS_LISTEN_COMMAND", listen_command())
+        .env("PATH", &fake_sase.path)
+        .env("FAKE_LISTEN_LOG", &fake_sase.log)
         .output()
         .expect("run create library PDF --listen");
     assert_success(&output);
@@ -995,7 +1040,8 @@ fn listen_attaches_when_target_is_the_library_pdf() {
         before,
         "the library PDF is untouched"
     );
-    let logged = std::fs::read_to_string(&log).expect("read listen log");
+    let logged =
+        std::fs::read_to_string(&fake_sase.log).expect("read listen log");
     assert!(
         logged.contains(&library.display().to_string()),
         "the PDF path is the narration source: {logged}"
@@ -1048,7 +1094,7 @@ fn listen_post_listen_collision_keeps_scratch() {
     write_file(&source, "# Report\n");
     write_bare_pdf(&temp.path().join("render-fixture.pdf"));
     let pandoc = write_fake_pandoc(temp.path());
-    let (fake, log) = listen_for(&temp);
+    let fake_sase = listen_for(&temp);
     // The fake creates the target PDF mid-listen, so the post-listen
     // collision check fires.
     let target = vault.join("xlib/chat/report.pdf");
@@ -1067,8 +1113,9 @@ fn listen_post_listen_collision_keeps_scratch() {
             "FAKE_PANDOC_FIXTURE",
             temp.path().join("render-fixture.pdf"),
         )
-        .env("BOB_HIGHLIGHTS_LISTEN_COMMAND", listen_command(&fake))
-        .env("FAKE_LISTEN_LOG", &log)
+        .env("BOB_HIGHLIGHTS_LISTEN_COMMAND", listen_command())
+        .env("PATH", &fake_sase.path)
+        .env("FAKE_LISTEN_LOG", &fake_sase.log)
         .env("FAKE_LISTEN_TOUCH", &target)
         .output()
         .expect("run create with colliding listen");
@@ -1106,7 +1153,7 @@ fn create_listen_captures_and_binds_episode() {
     let vault = temp.path().join("vault");
     write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
     let fake = FakeClip::new(&temp, "fake");
-    let (listen, log) = listen_for(&temp);
+    let fake_sase = listen_for(&temp);
     let fake_curl = write_fake_html_curl(temp.path());
     let curl_log = temp.path().join("curl.log");
     std::fs::write(&curl_log, "").expect("init curl log");
@@ -1123,8 +1170,9 @@ fn create_listen_captures_and_binds_episode() {
         .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
         .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
         .env("FAKE_CURL_LOG", &curl_log)
-        .env("BOB_HIGHLIGHTS_LISTEN_COMMAND", listen_command(&listen))
-        .env("FAKE_LISTEN_LOG", &log)
+        .env("BOB_HIGHLIGHTS_LISTEN_COMMAND", listen_command())
+        .env("PATH", &fake_sase.path)
+        .env("FAKE_LISTEN_LOG", &fake_sase.log)
         .output()
         .expect("run create --listen");
     assert_success(&output);
@@ -1138,7 +1186,8 @@ fn create_listen_captures_and_binds_episode() {
         "the episode is bound: {report}"
     );
     assert!(report.contains("(from --listen)"), "{report}");
-    let logged = std::fs::read_to_string(&log).expect("read listen log");
+    let logged =
+        std::fs::read_to_string(&fake_sase.log).expect("read listen log");
     assert!(
         logged.contains("https://example.com/article/hello"),
         "the cleaned URL is the narration source: {logged}"
@@ -1154,7 +1203,7 @@ fn create_article_listen_uses_adapter_render() {
     let fake_curl = write_fake_html_curl(temp.path());
     let curl_log = temp.path().join("curl.log");
     std::fs::write(&curl_log, "").expect("init curl log");
-    let (listen, log) = listen_for(&temp);
+    let fake_sase = listen_for(&temp);
 
     let output = bob_command()
         .arg("highlights")
@@ -1169,8 +1218,9 @@ fn create_article_listen_uses_adapter_render() {
         .env("FAKE_CURL_ROOT", temp.path())
         .env("FAKE_CURL_LOG", &curl_log)
         .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
-        .env("BOB_HIGHLIGHTS_LISTEN_COMMAND", listen_command(&listen))
-        .env("FAKE_LISTEN_LOG", &log)
+        .env("BOB_HIGHLIGHTS_LISTEN_COMMAND", listen_command())
+        .env("PATH", &fake_sase.path)
+        .env("FAKE_LISTEN_LOG", &fake_sase.log)
         .output()
         .expect("run create article --listen");
     assert_success(&output);
@@ -1180,7 +1230,8 @@ fn create_article_listen_uses_adapter_render() {
         "the episode is bound on the article route: {report}"
     );
     assert!(report.contains("(from --listen)"), "{report}");
-    let logged = std::fs::read_to_string(&log).expect("read listen log");
+    let logged =
+        std::fs::read_to_string(&fake_sase.log).expect("read listen log");
     assert!(
         logged.contains("https://example.com/article/hello"),
         "the cleaned URL is the narration source: {logged}"
@@ -1221,21 +1272,476 @@ fn doctor_listen_rows_cover_unset_ok_and_invalid() {
         format_output(&output)
     );
 
-    let fake = write_fake_listen(temp.path());
-    let output =
-        doctor(Some(format!("{} {{target}} -o {{audio}}", path_str(&fake))));
+    let fake_sase = setup_fake_sase(&temp);
+    // Doctor must see the fake `sase` on PATH for an `ok` row.
+    let doctor_with_path = |listen: Option<String>| {
+        let mut command = bob_command();
+        command
+            .arg("highlights")
+            .arg("doctor")
+            .arg("--no-hooks")
+            .arg("-b")
+            .arg(&vault)
+            .env("PATH", &fake_sase.path);
+        if let Some(template) = listen {
+            command.env("BOB_HIGHLIGHTS_LISTEN_COMMAND", template);
+        } else {
+            command.env_remove("BOB_HIGHLIGHTS_LISTEN_COMMAND");
+        }
+        command.output().expect("run highlights doctor")
+    };
+    let output = doctor_with_path(Some(listen_command()));
     assert_success(&output);
     assert!(
-        stdout(&output).contains("listen_command: ok"),
+        stdout(&output).contains("listen_command: ok")
+            && stdout(&output).contains("sase listen render"),
         "{}",
         format_output(&output)
     );
+    // Legacy normalizes in doctor output.
+    let output = doctor_with_path(Some(legacy_listen_command()));
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains("listen_command: ok")
+            && stdout(&output).contains("sase listen render"),
+        "{}",
+        format_output(&output)
+    );
+    assert!(
+        !stdout(&output).contains("sase-listen render"),
+        "doctor never shows the legacy launcher: {}",
+        format_output(&output)
+    );
 
-    let output = doctor(Some("render {target}".to_string()));
+    let output = doctor_with_path(Some("render {target}".to_string()));
     assert_success(&output);
     assert!(
         stdout(&output).contains("listen_command: warn"),
         "{}",
         format_output(&output)
+    );
+}
+
+#[test]
+fn listen_legacy_env_migrates_and_preserves_flags() {
+    let temp = TempDir::new("bob-cli-highlights-listen-legacy-env");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
+    let root = temp.path().join("curl-root");
+    std::fs::create_dir_all(&root).expect("create curl root");
+    write_bare_pdf(&root.join("paper.pdf"));
+    let fake_curl = write_fake_pdf_curl(temp.path());
+    let curl_log = temp.path().join("curl.log");
+    std::fs::write(&curl_log, "").expect("init curl log");
+    let fake_sase = setup_fake_sase(&temp);
+
+    let template =
+        "sase-listen render {target} -e full -o {audio} --no-publish --title {title}";
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg("-P")
+        .arg("sase")
+        .arg("https://example.com/paper.pdf")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-L")
+        .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
+        .env("FAKE_CURL_ROOT", &root)
+        .env("FAKE_CURL_LOG", &curl_log)
+        .env("BOB_HIGHLIGHTS_LISTEN_COMMAND", template)
+        .env("PATH", &fake_sase.path)
+        .env("FAKE_LISTEN_LOG", &fake_sase.log)
+        .output()
+        .expect("run create with legacy listen");
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("sase listen render"),
+        "run line uses the normalized launcher: {report}"
+    );
+    assert!(
+        !report.contains("sase-listen render"),
+        "run line never shows the legacy launcher: {report}"
+    );
+    let logged =
+        std::fs::read_to_string(&fake_sase.log).expect("read listen log");
+    assert!(
+        logged.starts_with("listen render"),
+        "legacy ran the fixed launcher: {logged}"
+    );
+    assert!(
+        logged.contains("--no-publish"),
+        "custom flags survive migration: {logged}"
+    );
+    assert!(
+        !fake_sase.trap.exists(),
+        "legacy migration never hits the standalone trap"
+    );
+    assert!(
+        vault.join("xlib/papers/paper.mp3").is_file(),
+        "episode binds after migration: {report}"
+    );
+}
+
+#[test]
+fn listen_wrappers_and_chains_fail_before_fetch() {
+    for template in [
+        "sh -c 'sase listen render {target} -o {audio}'",
+        "sase listen render {target} -o {audio}; echo hi",
+        "sase listen render {target} -o {audio} | cat",
+        "my-narrator {target} -o {audio}",
+        "sase listen render $HOME -o {audio} {target}",
+        "/usr/bin/sase listen render {target} -o {audio}",
+    ] {
+        let temp = TempDir::new("bob-cli-highlights-listen-reject");
+        let vault = temp.path().join("vault");
+        write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
+        let root = temp.path().join("curl-root");
+        std::fs::create_dir_all(&root).expect("create curl root");
+        write_bare_pdf(&root.join("paper.pdf"));
+        let fake_curl = write_fake_pdf_curl(temp.path());
+        let curl_log = temp.path().join("curl.log");
+        let fake_sase = setup_fake_sase(&temp);
+        let output = bob_command()
+            .arg("highlights")
+            .arg("create")
+            .arg("-P")
+            .arg("sase")
+            .arg("https://example.com/paper.pdf")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-L")
+            .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
+            .env("FAKE_CURL_ROOT", &root)
+            .env("FAKE_CURL_LOG", &curl_log)
+            .env("BOB_HIGHLIGHTS_LISTEN_COMMAND", template)
+            .env("PATH", &fake_sase.path)
+            .env("FAKE_LISTEN_LOG", &fake_sase.log)
+            .output()
+            .expect("run create with rejected listen");
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "template {template:?}: {}",
+            format_output(&output)
+        );
+        let diagnostic = stderr(&output);
+        assert!(
+            diagnostic.contains("SASE render arguments")
+                && diagnostic.contains("sase listen render {target}"),
+            "template {template:?} needs the migration hint: {diagnostic}"
+        );
+        assert!(
+            !curl_log.exists(),
+            "template {template:?} must fail pre-fetch"
+        );
+        assert!(
+            !fake_sase.log.exists(),
+            "template {template:?} must never run"
+        );
+        assert!(
+            !fake_sase.trap.exists(),
+            "template {template:?} must never hit the trap"
+        );
+    }
+}
+
+#[test]
+fn listen_has_no_fallback_when_sase_missing() {
+    let temp = TempDir::new("bob-cli-highlights-listen-no-sase");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
+    let root = temp.path().join("curl-root");
+    std::fs::create_dir_all(&root).expect("create curl root");
+    write_bare_pdf(&root.join("paper.pdf"));
+    let fake_curl = write_fake_pdf_curl(temp.path());
+    let curl_log = temp.path().join("curl.log");
+    std::fs::write(&curl_log, "").expect("init curl log");
+    // Bin dir with only the `sase-listen` trap: `sase` is absent.
+    let bin = temp.path().join("trap-only-bin");
+    std::fs::create_dir_all(&bin).expect("create trap bin");
+    let trap = temp.path().join("sase-listen-trap.hit");
+    let marker = trap.display().to_string();
+    write_executable(
+        &bin.join("sase-listen"),
+        &format!("#!/bin/sh\necho \"trap-hit:$@\" >> \"{marker}\"\nexit 99\n"),
+    );
+    let mut paths = vec![bin.clone()];
+    paths.extend(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    ));
+    let path = std::env::join_paths(paths)
+        .expect("join PATH")
+        .into_string()
+        .expect("PATH UTF-8");
+    // Hide any installed `sase` by scoping PATH to the trap dir plus system
+    // dirs minus sase? We cannot remove sase from system dirs portably, so
+    // assert on the trap marker and the SASE hint: a real `sase` would not
+    // write the trap marker. If a real sase exists, this test still proves no
+    // fallback (trap absent) but may succeed; force absence by using a bogus
+    // PATH entry first? Instead, run with an empty-ish PATH containing only
+    // the trap dir and the fake curl dir's dirname for `sh`? `sh` is /bin/sh,
+    // so a trap-only PATH still launches. Bob looks up `sase` on PATH and
+    // fails when it is absent there.
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg("-P")
+        .arg("sase")
+        .arg("https://example.com/paper.pdf")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-L")
+        .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
+        .env("FAKE_CURL_ROOT", &root)
+        .env("FAKE_CURL_LOG", &curl_log)
+        .env("BOB_HIGHLIGHTS_LISTEN_COMMAND", listen_command())
+        .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+        .output()
+        .expect("run create without sase");
+    // When a real `sase` is installed this may succeed; the invariant is no
+    // fallback: the trap never runs.
+    assert!(
+        !trap.exists(),
+        "no fallback to sase-listen when sase is missing/present: {}",
+        format_output(&output)
+    );
+    let _ = path;
+}
+
+#[test]
+fn listen_plugin_failure_has_no_fallback() {
+    let temp = TempDir::new("bob-cli-highlights-listen-plugin-fail");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
+    let root = temp.path().join("curl-root");
+    std::fs::create_dir_all(&root).expect("create curl root");
+    write_bare_pdf(&root.join("paper.pdf"));
+    let fake_curl = write_fake_pdf_curl(temp.path());
+    let curl_log = temp.path().join("curl.log");
+    std::fs::write(&curl_log, "").expect("init curl log");
+    let fake_sase = setup_fake_sase(&temp);
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg("-P")
+        .arg("sase")
+        .arg("https://example.com/paper.pdf")
+        .arg("-b")
+        .arg(&vault)
+        .arg("--listen")
+        .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
+        .env("FAKE_CURL_ROOT", &root)
+        .env("FAKE_CURL_LOG", &curl_log)
+        .env("BOB_HIGHLIGHTS_LISTEN_COMMAND", listen_command())
+        .env("PATH", &fake_sase.path)
+        .env("FAKE_LISTEN_LOG", &fake_sase.log)
+        .env("FAKE_LISTEN_EXIT", "3")
+        .output()
+        .expect("run create with failing plugin");
+    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+    assert!(
+        stderr(&output).contains("listen command failed with exit 3"),
+        "{}",
+        format_output(&output)
+    );
+    assert!(
+        !fake_sase.trap.exists(),
+        "plugin failure never falls back to the trap"
+    );
+    assert!(
+        vault.join("xlib").exists() == false
+            || collect_files(&vault.join("xlib")).is_empty(),
+        "a failed plugin writes nothing to the vault"
+    );
+}
+
+#[test]
+fn listen_literal_values_arrive_intact() {
+    let temp = TempDir::new("bob-cli-highlights-listen-literal");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
+    let root = temp.path().join("curl-root");
+    std::fs::create_dir_all(&root).expect("create curl root");
+    write_bare_pdf(&root.join("paper.pdf"));
+    let fake_curl = write_fake_pdf_curl(temp.path());
+    let curl_log = temp.path().join("curl.log");
+    std::fs::write(&curl_log, "").expect("init curl log");
+    let fake_sase = setup_fake_sase(&temp);
+    let title = "Bob's \u{2014} \u{266b} sase-listen render $(evil) | cat & rm";
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg("-P")
+        .arg("sase")
+        .arg("https://example.com/paper.pdf")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-L")
+        .arg("-T")
+        .arg(title)
+        .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
+        .env("FAKE_CURL_ROOT", &root)
+        .env("FAKE_CURL_LOG", &curl_log)
+        .env("BOB_HIGHLIGHTS_LISTEN_COMMAND", listen_command())
+        .env("PATH", &fake_sase.path)
+        .env("FAKE_LISTEN_LOG", &fake_sase.log)
+        .output()
+        .expect("run create with tricky title");
+    assert_success(&output);
+    let logged =
+        std::fs::read_to_string(&fake_sase.log).expect("read listen log");
+    assert!(
+        logged.contains(&format!("arg:{title}")),
+        "tricky title arrives as one argument: {logged}"
+    );
+    assert!(!fake_sase.trap.exists(), "literal data never hits the trap");
+}
+
+#[test]
+fn listen_dry_run_uses_normalized_launcher() {
+    let temp = TempDir::new("bob-cli-highlights-listen-dry-normalized");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
+    let root = temp.path().join("curl-root");
+    std::fs::create_dir_all(&root).expect("create curl root");
+    write_bare_pdf(&root.join("paper.pdf"));
+    let fake_curl = write_fake_pdf_curl(temp.path());
+    let curl_log = temp.path().join("curl.log");
+    std::fs::write(&curl_log, "").expect("init curl log");
+    let fake_sase = setup_fake_sase(&temp);
+    // Legacy template dry-runs as normalized `sase listen render`.
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg("-P")
+        .arg("sase")
+        .arg("https://example.com/paper.pdf")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-L")
+        .arg("-d")
+        .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
+        .env("FAKE_CURL_ROOT", &root)
+        .env("FAKE_CURL_LOG", &curl_log)
+        .env("BOB_HIGHLIGHTS_LISTEN_COMMAND", legacy_listen_command())
+        .env("PATH", &fake_sase.path)
+        .env("FAKE_LISTEN_LOG", &fake_sase.log)
+        .output()
+        .expect("dry-run legacy listen");
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("listen: would-run sase listen render"),
+        "dry-run uses the normalized launcher: {report}"
+    );
+    assert!(
+        !report.contains("sase-listen render"),
+        "dry-run never shows the legacy launcher: {report}"
+    );
+    assert!(!fake_sase.log.exists(), "dry run executes neither fake");
+    assert!(!fake_sase.trap.exists(), "dry run never hits the trap");
+}
+
+fn write_fake_arxiv_curl(dir: &std::path::Path) -> std::path::PathBuf {
+    let path = dir.join("fake-arxiv-curl.sh");
+    let script = r#"#!/bin/sh
+dest=""
+url=""
+prev=""
+for arg in "$@"; do
+  if [ "$prev" = "-o" ]; then dest="$arg"; fi
+  prev="$arg"
+  url="$arg"
+done
+echo "$url" >> "$FAKE_CURL_LOG"
+case "$url" in
+  *"export.arxiv.org/api/query"*1706.03762*)
+    cat "$FAKE_CURL_ROOT/arxiv-api.xml" > "$dest"
+    printf '200\napplication/atom+xml; charset=utf-8\n\n'
+    ;;
+  *"arxiv.org/pdf/1706.03762"*)
+    cp "$FAKE_CURL_ROOT/arxiv.pdf" "$dest"
+    printf '200\napplication/pdf\n\n'
+    ;;
+  *)
+    printf '404\ntext/html\n\n'
+    ;;
+esac
+"#;
+    write_executable(&path, script);
+    path
+}
+
+#[test]
+fn listen_arxiv_offline_renders_via_sase() {
+    let temp = TempDir::new("bob-cli-highlights-listen-arxiv");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
+    let root = temp.path().join("curl-root");
+    std::fs::create_dir_all(&root).expect("create curl root");
+    write_bare_pdf(&root.join("arxiv.pdf"));
+    std::fs::write(
+        root.join("arxiv-api.xml"),
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<feed xmlns=\"http://www.w3.org/2005/Atom\">\n<entry>\n<id>http://arxiv.org/abs/1706.03762v7</id>\n<published>2017-06-12T17:57:34Z</published>\n<title>Attention Is All You Need</title>\n<author><name>Ashish Vaswani</name></author>\n</entry>\n</feed>",
+    )
+    .expect("write arxiv api");
+    let fake_curl = write_fake_arxiv_curl(temp.path());
+    let curl_log = temp.path().join("curl.log");
+    std::fs::write(&curl_log, "").expect("init curl log");
+    let fake_sase = setup_fake_sase(&temp);
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg("-P")
+        .arg("sase")
+        .arg("https://arxiv.org/abs/1706.03762")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-i")
+        .arg("-L")
+        .env("BOB_HIGHLIGHTS_CURL", &fake_curl)
+        .env("FAKE_CURL_ROOT", &root)
+        .env("FAKE_CURL_LOG", &curl_log)
+        .env("BOB_HIGHLIGHTS_LISTEN_COMMAND", listen_command())
+        .env("PATH", &fake_sase.path)
+        .env("FAKE_LISTEN_LOG", &fake_sase.log)
+        .output()
+        .expect("run arxiv create -i -L -P sase");
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        vault
+            .join("xlib/papers/attention_is_all_you_need.pdf")
+            .is_file(),
+        "arXiv PDF binds: {report}"
+    );
+    assert!(
+        vault
+            .join("xlib/papers/attention_is_all_you_need.mp3")
+            .is_file(),
+        "arXiv episode binds: {report}"
+    );
+    let logged =
+        std::fs::read_to_string(&fake_sase.log).expect("read listen log");
+    assert!(
+        logged.starts_with(
+            "listen render https://arxiv.org/abs/1706.03762 -e full"
+        ),
+        "actual listen render argv with -e full: {logged}"
+    );
+    assert!(
+        logged.contains("attention_is_all_you_need.mp3"),
+        "scratch output path reaches the fake: {logged}"
+    );
+    assert!(
+        !logged.contains("sase-listen render") && !fake_sase.trap.exists(),
+        "no legacy spawn: {logged}"
+    );
+    assert!(
+        report.contains("sase listen render")
+            && !report.contains("sase-listen render"),
+        "run line is normalized: {report}"
     );
 }

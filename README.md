@@ -1088,11 +1088,10 @@ The documented workflows use these external-tool integrations:
 - `curl` for `bob ref create` PDF URL and arXiv targets; override with
   `BOB_HIGHLIGHTS_CURL`
 - A narration frontend for `bob ref create --listen`, configured as
-  `highlights.listen_command`. Installing Bob does not install one. The SASE
-  plugin (`sase plugin install listen`) uses
-  `sase listen render {target} -e full -o {audio}`; a standalone install
-  (`uv tool install sase-listen`) uses
-  `sase-listen render {target} -e full -o {audio}`
+  `highlights.listen_command` (`sase listen render ...`). Installing Bob does not install one. The SASE
+  plugin (`sase plugin install listen`) provides
+  `sase listen render {target} -e full -o {audio}`; a direct `sase-listen render ...`
+  setting migrates automatically, and wrappers/shell programs are rejected
 - `uv` plus a browser for `bob ref create` web article targets. `uv` fetches
   Python ≥3.10 and the pinned Playwright, Pillow, and nh3 on first run
   (override the whole spawn with `BOB_WEB_CLIP_ADAPTER`). Discovery uses
