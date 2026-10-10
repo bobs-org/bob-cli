@@ -57,7 +57,7 @@ full reference-import toolchain.
 | PDF URL or arXiv | `curl` for downloads |
 | Web article | `curl` for initial URL classification (skipped with `--html`), `uv` for the pinned Python adapter, and a browser: Google Chrome at `/opt/google/chrome/chrome`, `/usr/bin/google-chrome`, `/usr/bin/google-chrome-stable`, or the macOS Google Chrome app, then Playwright's bundled Chromium. Set `BOB_CHROME` for any other executable, including a system Chromium package. Headed retries use Xvfb on Linux and an off-screen window on macOS |
 | Markdown | `pandoc`, `xelatex`, the LaTeX packages below, and DejaVu Serif, DejaVu Sans, and DejaVu Sans Mono (`mainfont`, `sansfont`, and `monofont`) |
-| Any target with `--listen` | A configured `highlights.listen_command` that writes the requested MP3 |
+| Any target with `--listen` | A configured `highlights.listen_command` that writes the requested MP3. Installing Bob does not install a narration frontend: the SASE plugin (`sase plugin install listen`) provides `sase listen`; a standalone install (`uv tool install sase-listen`) provides `sase-listen` |
 
 Run `bob ref doctor` to inspect the current host. Its `pandoc`, `xelatex`, and
 `latex_packages` rows diagnose Markdown rendering. A missing renderer or
@@ -417,10 +417,15 @@ highlights:
   # `bob ref create --listen` narrates the target
   # with this command, which must write MP3 audio to {audio}; bob binds it as
   # the PDF's companion audio. bob shell-quotes {target} {pdf} {audio} {title}
-  # itself — do not quote them. sase-listen's feed.auto_publish publishes the
-  # episode.
-  listen_command: sase-listen render {target} -e full -o {audio}
+  # itself — do not quote them. The plugin's feed.auto_publish publishes the
+  # episode. Installing Bob does not install a narration frontend.
+  listen_command: sase listen render {target} -e full -o {audio}
 ```
+
+A standalone `uv tool install sase-listen` uses
+`sase-listen render {target} -e full -o {audio}` instead of
+`sase listen render ...`. The managed setup above is the SASE plugin
+(`sase plugin install listen`).
 
 `BOB_HIGHLIGHTS_LISTEN_COMMAND` overrides the configured command. The
 template must contain `{audio}` plus `{target}` or `{pdf}`; unknown
@@ -430,6 +435,23 @@ reports the `listen_command` row (`none`, `ok`, or `warn`). An unconfigured
 
 Troubleshooting:
 
+- Exit 127 (`sh: sase-listen: command not found`, or the same for `sase`):
+  the configured executable is missing from PATH. Distinguish the two
+  installations with `command -v sase-listen`, `sase listen --help`, and
+  `bob ref doctor --no-hooks`. Doctor's `listen_command` row names the first
+  token of the template. A plugin install needs `sase listen ...`; a
+  standalone install needs `sase-listen ...`. The failed command left the
+  vault untouched and can be rerun after the command setting is corrected.
+  Temporary override:
+
+  ```sh
+  BOB_HIGHLIGHTS_LISTEN_COMMAND='sase listen render {target} -e full -o {audio}' \
+    bob ref create https://interconnected.org/home/2026/01/15/reminders -i -L -P sase
+  ```
+
+  Permanent repair: set `highlights.listen_command` in the managed Bob
+  config to the matching frontend (plugin template above, or the standalone
+  `sase-listen` form) and apply it.
 - A sase-listen bot-wall 403 on an article that bob captured headed: bob
   captured the PDF fine, but sase-listen fetches the URL itself and fails.
   Replay the page for sase-listen another way, or narrate the staged PDF.

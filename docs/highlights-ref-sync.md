@@ -238,9 +238,12 @@ highlights:
   audio_library: "/data/sase-listen/library"
   # `bob ref create --listen` narrates the
   # target with this command, which must write MP3 audio to {audio}.
+  # The managed setup uses the SASE plugin (`sase listen`). A standalone
+  # `uv tool install sase-listen` uses
+  # `sase-listen render {target} -e full -o {audio}`.
   # Overridden by BOB_HIGHLIGHTS_LISTEN_COMMAND. See
   # docs/highlights-create.md for the full contract.
-  listen_command: sase-listen render {target} -e full -o {audio}
+  listen_command: sase listen render {target} -e full -o {audio}
 ```
 
 The copy lands beside the PDF target with the source extension lowercased
