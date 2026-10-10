@@ -75,6 +75,43 @@ including table and image support. Doctor does not check whether the DejaVu
 fonts are installed. If XeLaTeX cannot find DejaVu Serif, DejaVu Sans, or
 DejaVu Sans Mono, install them for the host's font system before retrying.
 
+### macOS BasicTeX: installing a missing package in user mode
+
+BasicTeX ships a small package set, so a render can fail with
+`! LaTeX Error: File '<name>.sty' not found` even when pandoc and XeLaTeX
+are present (verified 2026-10-10: `needspace.sty` missing from BasicTeX /
+TeX Live 2026). Use `kpsewhich`, `xelatex`, and `tlmgr` from the same
+installation; on that host all three live under `/Library/TeX/texbin`,
+while the system tree (`/usr/local/texlive/2026basic`) is root-owned.
+
+For a missing package such as `needspace`, initialize the
+default user tree once and install without administrator access, as the
+same user that runs the file hook:
+
+```sh
+tex_home=$(/Library/TeX/texbin/kpsewhich -var-value=TEXMFHOME)
+if ! test -f "$tex_home/tlpkg/texlive.tlpdb"; then
+    /Library/TeX/texbin/tlmgr init-usertree
+fi
+/Library/TeX/texbin/tlmgr --usermode install needspace
+/Library/TeX/texbin/kpsewhich needspace.sty
+```
+
+The default user tree (`~/Library/texmf`) is already on kpsewhich's
+search path. User-tree packages are maintained separately from the system
+installation, so specify `--usermode` on future package operations too.
+Verify with the `latex_packages` doctor row (`ok (24 checked)`) and then
+a real render: a doctor exit of zero alone does not establish render
+readiness, because missing render dependencies are warnings by design,
+and Markdown `--dry-run` returns before pandoc runs.
+
+The `[WARNING] Deprecated: --highlight-style` line is unrelated noise
+from pandoc, not the fatal error; the `! LaTeX Error` line names the
+actual missing file. See the official
+[TeX Live user-mode documentation](https://tug.org/texlive/doc/tlmgr.html#USER-MODE);
+the [CTAN needspace entry](https://ctan.org/pkg/needspace) confirms its
+TeX Live package name.
+
 `--dry-run` plans the import and skips installing the final PDF and audio.
 What it still does depends on the target:
 
