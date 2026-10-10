@@ -416,6 +416,11 @@ struct CaptureParseResult {
     needs: Vec<Need>,
     #[serde(skip_serializing_if = "Option::is_none")]
     ref_parent: Option<RefParentParse>,
+    /// Whether the standalone `@` marker requested companion audio.
+    /// Additive schema-version-1 field: omitted when false, so every
+    /// older input keeps its exact JSON shape.
+    #[serde(default, skip_serializing_if = "is_false")]
+    ref_listen: bool,
     spans: Vec<Span>,
     diagnostics: Vec<Diagnostic>,
     /// Normalized authored-child bodies (source list marker and capture
@@ -543,6 +548,8 @@ struct CaptureParseItem {
     needs: Vec<Need>,
     #[serde(skip_serializing_if = "Option::is_none")]
     ref_parent: Option<RefParentParse>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    ref_listen: bool,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     sub_bullets: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -582,6 +589,7 @@ impl CaptureParseResult {
             parse.route.as_deref(),
             parse.items.first().map(|item| item.has_local_destination),
         );
+        let ref_listen = parse.ref_listen;
         let sub_bullets = parse.sub_bullets;
         let sub_bullet_depths = sub_bullet_depths(&sub_bullets);
         let sub_bullet_task_ids = sub_bullet_task_ids(&sub_bullets);
@@ -596,6 +604,7 @@ impl CaptureParseResult {
             block_id: parse.block_id,
             needs: parse.needs,
             ref_parent,
+            ref_listen,
             spans,
             diagnostics: parse.diagnostics,
             sub_bullets: sub_bullet_bodies(&sub_bullets),
@@ -709,6 +718,7 @@ fn parse_items(items: &[EditorItemParse]) -> Vec<CaptureParseItem> {
                 item.route.as_deref(),
                 Some(item.has_local_destination),
             ),
+            ref_listen: item.ref_listen,
             sub_bullets: sub_bullet_bodies(&item.sub_bullets),
             sub_bullet_depths: sub_bullet_depths(&item.sub_bullets),
             sub_bullet_task_ids: sub_bullet_task_ids(&item.sub_bullets),
@@ -776,6 +786,10 @@ fn sub_bullet_task_ids(
 
 fn all_task_ids_none(ids: &[Option<ProjectTaskId>]) -> bool {
     ids.iter().all(Option::is_none)
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 fn merge_spans(

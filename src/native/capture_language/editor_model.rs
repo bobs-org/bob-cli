@@ -47,6 +47,8 @@ pub(crate) enum SpanKind {
     DependencyBlockId,
     /// A whole-item bare URL admitted by the routing policy.
     RefUrl,
+    /// The standalone `@` listen marker requesting companion audio.
+    RefListen,
     TaskCompleteSigil,
     TaskCompleteNote,
     TaskCompleteBlockId,
@@ -101,6 +103,7 @@ impl SpanKind {
             Self::DependencyNote => "dependency_note",
             Self::DependencyBlockId => "dependency_block_id",
             Self::RefUrl => "ref_url",
+            Self::RefListen => "ref_listen",
             Self::TaskCompleteSigil => "task_complete_sigil",
             Self::TaskCompleteNote => "task_complete_note",
             Self::TaskCompleteBlockId => "task_complete_block_id",
@@ -326,6 +329,9 @@ pub(crate) struct EditorParse {
     pub(crate) section: Option<String>,
     pub(crate) block_id: Option<String>,
     pub(crate) needs: Vec<Need>,
+    /// Whether the standalone `@` listen marker requested companion
+    /// audio on this `Ref` item. Always false for non-`Ref` modes.
+    pub(crate) ref_listen: bool,
     /// Validated additive `@<route>:<block-id>[#<name>]=<X>` start suffix,
     /// when the resolved marker carries one. `None` for every older marker
     /// shape, so version-tolerant readers see no change.
@@ -387,6 +393,9 @@ pub(crate) struct EditorItemParse {
     pub(crate) section: Option<String>,
     pub(crate) block_id: Option<String>,
     pub(crate) needs: Vec<Need>,
+    /// Whether the standalone `@` listen marker requested companion
+    /// audio on this `Ref` item. Always false for non-`Ref` modes.
+    pub(crate) ref_listen: bool,
     pub(crate) pomodoro_start: Option<PomodoroStartSpec>,
     pub(crate) pomodoro_adjust: Option<PomodoroAdjustSpec>,
     pub(crate) pomodoro_shift: Option<PomodoroShiftSpec>,

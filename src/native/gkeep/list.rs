@@ -157,7 +157,8 @@ struct KeepView {
 /// `(url, display, verdict, resolved parent or None when a future
 /// interactive pull will choose)`. Listing never prompts; resolution is
 /// offline vault reads only.
-type RefHints = BTreeMap<String, (String, String, String, Option<String>)>;
+type RefHints =
+    BTreeMap<String, (String, String, String, Option<String>, bool)>;
 
 fn empty_hints() -> RefHints {
     BTreeMap::new()
@@ -179,7 +180,9 @@ fn ref_hint_map(bob_dir: &std::path::Path, plan: &Plan) -> RefHints {
     }
     let intents: Vec<&crate::native::url_routing::UrlIntent> = targets
         .iter()
-        .filter_map(|planned| planned.ref_intent.as_ref())
+        .filter_map(|planned| {
+            planned.ref_intent.as_ref().map(|intent| &intent.intent)
+        })
         .collect();
     let verdicts = library_verdicts(bob_dir, &intents);
     targets
@@ -202,6 +205,7 @@ fn ref_hint_map(bob_dir: &std::path::Path, plan: &Plan) -> RefHints {
                     intent.display.clone(),
                     verdict.verdict.as_str().to_string(),
                     parent,
+                    intent.listen,
                 ),
             )
         })
@@ -339,7 +343,7 @@ fn print_keep_table(keep: &KeepView, ref_hints: &RefHints, styler: &Styler) {
         .map(|planned| {
             let parent = ref_hints
                 .get(&planned.note.id)
-                .map(|(_, _, _, parent)| parent.clone());
+                .map(|(_, _, _, parent, _)| parent.clone());
             KeepRow::new(planned.note.clone(), planned, parent)
         })
         .collect();
@@ -442,6 +446,13 @@ impl KeepRow {
             match parent {
                 Some(route) => hints.push(format!("🔗 ref → {route}")),
                 None => hints.push("🔗 ref → asks · gkeep_inbox".to_string()),
+            }
+            if planned
+                .ref_intent
+                .as_ref()
+                .is_some_and(|intent| intent.listen)
+            {
+                hints.push("🎧 listen".to_string());
             }
         }
         if counts.extra_lines > 0 {
@@ -770,15 +781,19 @@ fn print_json(
                         "items_checked": counts.checked_items,
                         "attachments": planned.note.attachments.len(),
                     });
-                    if let Some((url, display, verdict, parent)) =
+                    if let Some((url, display, verdict, parent, listen)) =
                         ref_hints.get(&planned.note.id)
                     {
-                        note["clip"] = json!({
+                        let mut clip = json!({
                             "url": url,
                             "display": display,
                             "verdict": verdict,
                             "parent": parent.clone().unwrap_or_else(|| "gkeep_inbox".to_string()),
                         });
+                        if *listen {
+                            clip["listen"] = json!(true);
+                        }
+                        note["clip"] = clip;
                     }
                     note
                 })

@@ -58,6 +58,10 @@ pub(crate) struct JobFile {
     pub(crate) display: String,
     /// Fetch hint: `article`, `pdf`, or `arxiv`.
     pub(crate) route_hint: String,
+    /// Whether the standalone `@` marker requested companion audio.
+    /// Missing on jobs written by an older `bob`; defaults to false.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(crate) listen: bool,
     /// Resolved parent route stamped into the marker and owning the
     /// fallback task; `None` on jobs written by an older `bob`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -101,6 +105,7 @@ pub(crate) struct NewJob {
     pub(crate) dedupe_key: String,
     pub(crate) display: String,
     pub(crate) route_hint: String,
+    pub(crate) listen: bool,
     /// Resolved parent route; the worker falls back to the source's
     /// inbox when it is `None`.
     pub(crate) parent: Option<String>,
@@ -237,6 +242,10 @@ impl JobsView {
     fn count(&mut self, state: JobState) {
         *self.counts.entry(state.as_str()).or_insert(0) += 1;
     }
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 /// Current local-offset timestamp in RFC 3339 seconds precision.
@@ -379,6 +388,7 @@ fn enqueue_at(
         dedupe_key: job.dedupe_key.clone(),
         display: job.display.clone(),
         route_hint: job.route_hint.clone(),
+        listen: job.listen,
         parent: job.parent.clone(),
         attempts: 0,
         fallback: job.fallback.clone(),
@@ -814,6 +824,7 @@ mod tests {
             dedupe_key: "https://example.com/post".to_string(),
             display: "example.com/post".to_string(),
             route_hint: "article".to_string(),
+            listen: false,
             parent: Some("mac_inbox".to_string()),
             fallback: JobFallback {
                 relative_target: "mac_inbox.md".to_string(),

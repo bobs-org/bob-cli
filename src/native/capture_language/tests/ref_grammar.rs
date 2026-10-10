@@ -500,3 +500,119 @@ fn editor_ref_route_spans_use_byte_offsets_including_utf8() {
         .iter()
         .any(|span| span.kind == SpanKind::RefUrl));
 }
+
+#[test]
+fn listen_marker_at_requests_companion_audio() {
+    use crate::native::url_routing::{
+        is_standalone_listen_marker, is_url_list_line,
+    };
+
+    let policy = open_policy();
+    // Standalone marker recognition: exactly `@`, never attached or encoded.
+    assert!(is_standalone_listen_marker("@"));
+    assert!(!is_standalone_listen_marker("@sase"));
+    assert!(!is_standalone_listen_marker("https://example.com/path@"));
+    assert!(!is_standalone_listen_marker("%40"));
+    // Lexical URL lists accept `URL @` with spaces/tabs, column zero only.
+    assert!(is_url_list_line("https://example.com/a @"));
+    assert!(is_url_list_line("https://example.com/a\t@"));
+    assert!(!is_url_list_line("  https://example.com/a @"));
+    assert!(!is_url_list_line("https://example.com/a @ @"));
+    // Attached `@` stays a single-token URL line, never a listen split.
+    assert!(is_url_list_line("https://example.com/path@"));
+
+    // `URL @`: reference with listen, default parent, body excludes marker.
+    let parsed = execute_routing("https://example.com/post @", Some(&policy))
+        .expect("URL @ claims");
+    let CaptureKind::Ref(intent) = &parsed.kind else {
+        panic!("expected ref, got {:?}", parsed.kind);
+    };
+    assert!(intent.listen);
+    assert_eq!(parsed.body, "https://example.com/post");
+    assert_eq!(intent.cleaned, "https://example.com/post");
+    assert!(parsed.route.is_none());
+
+    // `URL @ @sase`: listen with trailing explicit parent.
+    let parsed =
+        execute_routing("https://example.com/post @ @sase", Some(&policy))
+            .expect("URL @ @route claims");
+    let CaptureKind::Ref(intent) = &parsed.kind else {
+        panic!("expected ref, got {:?}", parsed.kind);
+    };
+    assert!(intent.listen);
+    assert_eq!(parsed.body, "https://example.com/post");
+    assert_eq!(parsed.route.as_deref(), Some("sase"));
+
+    // `@sase URL @`: listen with leading explicit parent.
+    let parsed =
+        execute_routing("@sase https://example.com/post @", Some(&policy))
+            .expect("leading route URL @ claims");
+    let CaptureKind::Ref(intent) = &parsed.kind else {
+        panic!("expected ref, got {:?}", parsed.kind);
+    };
+    assert!(intent.listen);
+    assert_eq!(parsed.route.as_deref(), Some("sase"));
+
+    // Unsupported shapes stay tasks/diagnostics, never refs.
+    assert_not_ref("https://example.com/post @sase @", Some(&policy));
+    assert_not_ref("https://example.com/post @ @", Some(&policy));
+    assert_not_ref("Read https://example.com/post @", Some(&policy));
+
+    // Attached `@` stays part of the URL, never a marker.
+    let parsed = execute_routing("https://example.com/path@", Some(&policy))
+        .expect("attached @ stays URL");
+    let CaptureKind::Ref(intent) = &parsed.kind else {
+        panic!("expected ref, got {:?}", parsed.kind);
+    };
+    assert!(!intent.listen);
+
+    // Editor: `URL @` reports ref with listen and both spans.
+    let parse = editor_routing("https://example.com/post @", Some(&policy));
+    assert_eq!(parse.mode, EditorMode::Ref);
+    assert_eq!(parse.body, "https://example.com/post");
+    assert!(parse.ref_listen);
+    assert!(parse.spans.iter().any(|span| span.kind == SpanKind::RefUrl));
+    assert!(parse
+        .spans
+        .iter()
+        .any(|span| span.kind == SpanKind::RefListen));
+    // Unmarked editor has no listen span.
+    let plain = editor_routing("https://example.com/post", Some(&policy));
+    assert!(!plain.ref_listen);
+    assert!(!plain
+        .spans
+        .iter()
+        .any(|span| span.kind == SpanKind::RefListen));
+
+    // URL lists split marked and unmarked lines independently.
+    let draft = draft_routing(
+        "https://example.com/a @\nhttps://example.com/b\n",
+        Some(&policy),
+    )
+    .expect("mixed list splits");
+    assert_eq!(draft.items.len(), 2);
+    for item in &draft.items {
+        assert!(
+            matches!(item.parsed.kind, CaptureKind::Ref(_)),
+            "each URL-list line claims, got {:?}",
+            item.parsed.kind
+        );
+    }
+    let first = &draft.items[0].parsed;
+    let CaptureKind::Ref(first_intent) = &first.kind else {
+        panic!("expected ref");
+    };
+    assert!(first_intent.listen);
+    let second = &draft.items[1].parsed;
+    let CaptureKind::Ref(second_intent) = &second.kind else {
+        panic!("expected ref");
+    };
+    assert!(!second_intent.listen);
+
+    // Completion: a recognized listen span suppresses route completion.
+    assert!(crate::native::capture_language::completion_field_at(
+        "https://example.com/post @",
+        "https://example.com/post @".len()
+    )
+    .is_none());
+}

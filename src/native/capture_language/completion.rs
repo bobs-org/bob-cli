@@ -11,6 +11,9 @@ use super::markers::*;
 use super::model::*;
 use super::project_tasks::*;
 use super::tokens::*;
+use crate::native::url_routing::{
+    classify_token, is_standalone_listen_marker, RoutingEntry, UrlRoutingPolicy,
+};
 use serde::Serialize;
 
 /// Which discovery source a completion request should query.
@@ -617,6 +620,13 @@ pub(crate) fn completion_field_at(
     {
         return Some(field);
     }
+    // A recognized standalone `@` listen marker never offers route
+    // completion: completing it would replace the listen request with a
+    // route. The policy check agrees with the parser rather than
+    // suppressing every trailing `@`.
+    if cursor_in_listen_marker(&scan_line, cursor) {
+        return None;
+    }
 
     let mut tokens = tokenize_line_with_spans(&scan_line);
     take_global_declarations(&mut tokens);
@@ -927,6 +937,88 @@ pub(super) fn has_previous_first_level_authored_item(
             .body
             .is_empty()
     })
+}
+
+/// Whether `cursor` sits inside a standalone `@` listen marker that
+/// the parser would claim as companion-audio intent. Only a recognized
+/// listen span suppresses route completion; the routing policy must admit
+/// the URL, so an excluded host or disabled routing keeps its existing
+/// completion behavior. Typing letters onto the marker turns it into
+/// `@route` and completion resumes; a separate ` @sa` after `URL @`
+/// still completes the parent normally.
+fn cursor_in_listen_marker(line: &RawLine<'_>, cursor: usize) -> bool {
+    let tokens = tokenize_with_spans(line.text)
+        .into_iter()
+        .map(|token| Token {
+            text: token.text,
+            start: token.start + line.start,
+            end: token.end + line.start,
+        })
+        .collect::<Vec<_>>();
+    let index = tokens
+        .iter()
+        .position(|token| cursor >= token.start && cursor <= token.end);
+    let Some(index) = index else {
+        return false;
+    };
+    if !is_standalone_listen_marker(tokens[index].text) {
+        return false;
+    }
+    let policy = UrlRoutingPolicy::load()
+        .ok()
+        .filter(|policy| policy.capture);
+    let Some(policy) = policy.as_ref() else {
+        return false;
+    };
+    // `URL @`
+    if tokens.len() == 2
+        && index == 1
+        && let Some(intent) = classify_token(tokens[0].text)
+        && policy.admits(&intent, RoutingEntry::Capture)
+    {
+        return true;
+    }
+    // `URL @ @route` (cursor in the middle `@`)
+    if tokens.len() == 3
+        && index == 1
+        && is_standalone_listen_marker(tokens[1].text)
+        && let Some(intent) = classify_token(tokens[0].text)
+        && policy.admits(&intent, RoutingEntry::Capture)
+        && plain_route_for_completion(tokens[2].text).is_some()
+    {
+        return true;
+    }
+    // `@route URL @` (cursor in the trailing `@`)
+    if tokens.len() == 3
+        && index == 2
+        && is_standalone_listen_marker(tokens[2].text)
+        && let Some(intent) = classify_token(tokens[1].text)
+        && policy.admits(&intent, RoutingEntry::Capture)
+        && plain_route_for_completion(tokens[0].text).is_some()
+    {
+        return true;
+    }
+    false
+}
+
+/// Plain `@route` check for the completion suppressor, mirroring the
+/// claim parsers without claiming.
+fn plain_route_for_completion(text: &str) -> Option<String> {
+    if is_standalone_listen_marker(text) {
+        return None;
+    }
+    let parsed = parse_route_token(text)?;
+    let route = parsed.route?;
+    if !matches!(parsed.kind, CaptureKind::Task) {
+        return None;
+    }
+    if text.to_ascii_lowercase() != format!("@{route}") {
+        return None;
+    }
+    if !is_route_token(&route) {
+        return None;
+    }
+    Some(route)
 }
 
 /// Mirror [`select_marker_token`]'s leading-then-trailing precedence, but

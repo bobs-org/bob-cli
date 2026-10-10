@@ -181,7 +181,7 @@ pub(super) fn plan_capture_batch(
 /// One reference item's verdict plus the display fields its result
 /// and staged job need.
 struct RefAssignment {
-    intent: UrlIntent,
+    intent: RefIntent,
     verdict: &'static str,
     path: Option<String>,
     title: Option<String>,
@@ -207,7 +207,7 @@ fn assign_ref_verdicts(
         return HashMap::new();
     }
     let intents: Vec<&UrlIntent> =
-        positions.iter().map(|(_, intent)| *intent).collect();
+        positions.iter().map(|(_, intent)| &intent.intent).collect();
     let library = url_routing::library_verdicts(&request.bob_dir, &intents);
     let spool_keys = ref_jobs::pending_keys(&ref_jobs::jobs_dir());
     let mut seen: HashMap<&str, usize> = HashMap::new();
@@ -257,6 +257,36 @@ fn assign_ref_verdicts(
 /// the worker's fallback writes, so the fallback matches it byte for byte.
 /// An unresolvable route fails the item with the resolver's hints and the
 /// whole batch rolls back.
+fn shell_quote_listen_url(url: &str) -> String {
+    let bare = !url.is_empty()
+        && url.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric()
+                || matches!(
+                    byte,
+                    b'.' | b'_'
+                        | b'~'
+                        | b':'
+                        | b'/'
+                        | b'%'
+                        | b'+'
+                        | b'='
+                        | b'-'
+                )
+        });
+    if bare {
+        url.to_string()
+    } else {
+        format!("'{}'", url.replace('\'', "'\\''"))
+    }
+}
+
+fn listen_hint_for_unchanged(cleaned_url: &str, parent_route: &str) -> String {
+    format!(
+        "no new listen job was queued · to attach audio run: bob ref create {} -P {parent_route} -L",
+        shell_quote_listen_url(cleaned_url),
+    )
+}
+
 fn plan_ref_item(
     request: &CaptureRequest,
     parsed_item: ParsedCaptureItem,
@@ -316,6 +346,7 @@ fn plan_ref_item(
         relative_target: fallback_target.clone(),
         task_line: fallback_task_line.clone(),
     });
+    let listen = intent.listen;
     let staged = queued.then(|| ref_jobs::NewJob {
         source: "capture".to_string(),
         bob_dir: request.bob_dir.clone(),
@@ -324,12 +355,18 @@ fn plan_ref_item(
         dedupe_key: intent.dedupe_key.clone(),
         display: intent.display.clone(),
         route_hint: intent.route_hint.as_str().to_string(),
+        listen,
         parent: Some(parent_route.clone()),
         fallback: ref_jobs::JobFallback {
             relative_target: fallback_target,
             task_line: fallback_task_line,
         },
     });
+    // Unlike an explicit `ref create -L`, the shorthand never adds audio
+    // to existing captures: a marked but unchanged item queues nothing
+    // and carries the explicit retry command instead.
+    let listen_hint = (!queued && listen)
+        .then(|| listen_hint_for_unchanged(&intent.cleaned, &parent_route));
     let planned = PlannedCaptureItem {
         result: CaptureItemResult {
             ok: true,
@@ -394,6 +431,7 @@ fn plan_ref_item(
                 dedupe_key: intent.dedupe_key.clone(),
                 display: intent.display.clone(),
                 route_hint: intent.route_hint.as_str(),
+                listen,
                 library: RefLibraryJson {
                     verdict: assignment.verdict,
                     path: assignment.path,
@@ -404,6 +442,7 @@ fn plan_ref_item(
                 parent: parent_json,
                 job: None,
                 fallback,
+                listen_hint,
             }),
             toggle_task_description: None,
         },

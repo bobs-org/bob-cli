@@ -13,7 +13,8 @@ use super::ledger::{Journal, Ledger};
 use super::model::{note_ref, KeepNote};
 use super::GkeepError;
 use crate::native::url_routing::{
-    classify_token, RoutingEntry, UrlIntent, UrlRoutingPolicy,
+    classify_token, is_standalone_listen_marker, RefIntent, RoutingEntry,
+    UrlRoutingPolicy,
 };
 
 /// Planner inputs: the pull/list selection flags.
@@ -92,8 +93,9 @@ pub(super) struct PlannedNote {
     pub(super) action: PlanAction,
     /// Why a skipped note stays in Keep (`pinned`, `shared`, …).
     pub(super) skip_reason: Option<String>,
-    /// The R5 URL-only intent when `action` is `CreateRef`.
-    pub(super) ref_intent: Option<UrlIntent>,
+    /// The R5 URL-only intent when `action` is `CreateRef`, including
+    /// whether the standalone `@` marker requested companion audio.
+    pub(super) ref_intent: Option<RefIntent>,
     /// Trailing `@route` on a URL-only note, lowercased, when present.
     /// Routing never becomes part of the clip target.
     pub(super) ref_route: Option<String>,
@@ -301,18 +303,21 @@ fn classify_one_with_imports(
 }
 
 /// The R5 URL-only rule: the note holds exactly one bare link (plus an
-/// optional single trailing `@route`) and nothing else, so a pull clips
-/// it into the reading queue instead of writing a task. Returns the
-/// link's intent plus the trailing route (lowercased) when every
-/// condition holds: a text note with no attachments, not shared (even
-/// with `-S`), either an empty title with a single-token body or an empty
-/// body with a single-token title (a page title equal to the `WebLink`
-/// title also counts), a classifying token, and an admitting policy.
-/// The route never becomes part of the clip target.
+/// optional single trailing `@route` and an optional standalone `@`
+/// listen marker) and nothing else, so a pull clips it into the reading
+/// queue instead of writing a task. Returns the link's intent plus the
+/// trailing route (lowercased) when every condition holds: a text note
+/// with no attachments, not shared (even with `-S`), either an empty
+/// title with a marked body or an empty body with a marked title (a page
+/// title equal to the `WebLink` title also counts), a classifying token,
+/// and an admitting policy. The route and listen marker never become part
+/// of the clip target. `URL @` requests companion audio; `URL @ @route`
+/// adds an explicit parent. `URL @route @`, attached `path@`, and leading
+/// routes stay ordinary notes.
 pub(super) fn url_only_intent(
     note: &KeepNote,
     policy: &UrlRoutingPolicy,
-) -> Option<(UrlIntent, Option<String>)> {
+) -> Option<(RefIntent, Option<String>)> {
     if note.kind != super::model::KeepNoteKind::Note {
         return None;
     }
@@ -327,54 +332,105 @@ pub(super) fn url_only_intent(
     }
     let title = note.content.title.trim();
     let body = note.content.text.trim();
-    // Trailing `@route`: exactly two body tokens, the first a URL and the
-    // second a plain route. Title rules apply to the URL token alone, so
-    // routing never becomes part of the clip target.
-    let body_tokens: Vec<&str> = body.split_whitespace().collect();
-    if body_tokens.len() == 2 {
-        let (url_token, route_token) = (body_tokens[0], body_tokens[1]);
-        let Some(route) = parse_trailing_route(route_token) else {
-            return None;
-        };
-        let Some(intent) = classify_token(url_token) else {
-            return None;
-        };
-        if !policy.admits(&intent, RoutingEntry::Gkeep) {
-            return None;
-        }
-        if !title.is_empty()
-            && strip_brackets(title) != strip_brackets(url_token)
-            && !link_title_matches(note, title, url_token)
+    // Body shapes: `URL`, `URL @`, `URL @route`, `URL @ @route`.
+    if !body.is_empty() {
+        if let Some((intent, route)) =
+            url_only_body_tokens(body, title, note, policy)
         {
-            return None;
+            return Some((intent, route));
         }
-        return Some((intent, Some(route)));
-    }
-    if body_tokens.len() > 2 {
+        // A non-empty body that is not a marked reference shape is not
+        // R5, even when the title holds a URL.
         return None;
     }
-    let token = if body.is_empty() {
-        if title.is_empty() {
-            return None;
-        }
-        title
-    } else {
-        if body.chars().any(char::is_whitespace) {
-            return None;
-        }
-        if !title.is_empty()
-            && strip_brackets(title) != strip_brackets(body)
-            && !link_title_matches(note, title, body)
-        {
-            return None;
-        }
-        body
-    };
-    let intent = classify_token(token)?;
-    if !policy.admits(&intent, RoutingEntry::Gkeep) {
+    // Empty body: the title holds the marked expression.
+    if title.is_empty() {
         return None;
     }
-    Some((intent, None))
+    url_only_body_tokens(title, "", note, policy)
+}
+
+/// Parse one Keep text field (body with a title for matching, or title
+/// alone) as `URL`, `URL @`, `URL @route`, or `URL @ @route`. Returns the
+/// wrapped intent plus the trailing route. Title/WebLink matching always
+/// compares the URL alone, so the marker never becomes part of the clip
+/// target.
+fn url_only_body_tokens(
+    field: &str,
+    title: &str,
+    note: &KeepNote,
+    policy: &UrlRoutingPolicy,
+) -> Option<(RefIntent, Option<String>)> {
+    let tokens: Vec<&str> = field.split_whitespace().collect();
+    match tokens.as_slice() {
+        [url_token] => {
+            let intent = classify_token(url_token)?;
+            if !policy.admits(&intent, RoutingEntry::Gkeep) {
+                return None;
+            }
+            if !title.is_empty()
+                && strip_brackets(title) != strip_brackets(url_token)
+                && !link_title_matches(note, title, url_token)
+            {
+                return None;
+            }
+            Some((RefIntent::without_listen(intent), None))
+        }
+        // `URL @`: listen with existing parent selection.
+        [url_token, marker] if is_standalone_listen_marker(marker) => {
+            let intent = classify_token(url_token)?;
+            if !policy.admits(&intent, RoutingEntry::Gkeep) {
+                return None;
+            }
+            if !title.is_empty()
+                && strip_brackets(title) != strip_brackets(url_token)
+                && !link_title_matches(note, title, url_token)
+            {
+                return None;
+            }
+            Some((RefIntent::with_listen(intent), None))
+        }
+        [url_token, route_token] => {
+            // `URL @` is handled above; a second token that is not a
+            // plain route (including a second `@`) stays an ordinary note.
+            if is_standalone_listen_marker(route_token) {
+                return None;
+            }
+            let route = parse_trailing_route(route_token)?;
+            let intent = classify_token(url_token)?;
+            if !policy.admits(&intent, RoutingEntry::Gkeep) {
+                return None;
+            }
+            if !title.is_empty()
+                && strip_brackets(title) != strip_brackets(url_token)
+                && !link_title_matches(note, title, url_token)
+            {
+                return None;
+            }
+            Some((RefIntent::without_listen(intent), Some(route)))
+        }
+        // `URL @ @route`: listen with trailing explicit parent.
+        [url_token, marker, route_token]
+            if is_standalone_listen_marker(marker) =>
+        {
+            if is_standalone_listen_marker(route_token) {
+                return None;
+            }
+            let route = parse_trailing_route(route_token)?;
+            let intent = classify_token(url_token)?;
+            if !policy.admits(&intent, RoutingEntry::Gkeep) {
+                return None;
+            }
+            if !title.is_empty()
+                && strip_brackets(title) != strip_brackets(url_token)
+                && !link_title_matches(note, title, url_token)
+            {
+                return None;
+            }
+            Some((RefIntent::with_listen(intent), Some(route)))
+        }
+        _ => None,
+    }
 }
 
 /// A plain trailing `@route` token, lowercased. Rejects `@@`, `+`/`:`/`#`

@@ -208,17 +208,27 @@ take no lock.
 ### URL-only notes go to the reading queue
 
 A note that holds exactly one bare public link (plus an optional single
-trailing `@route`) and nothing else — an empty title with a link body, an
-empty body with a link title, a title equal to the link, or a page title
-equal to the shared-link preview title — is clipped inline to an intake PDF
-instead of becoming a task. The trailing route never becomes part of the clip
-target. Pull messages name the selected parent (`would clip →
+trailing `@route` and an optional standalone `@` listen marker) and nothing
+else — an empty title with a link body, an empty body with a link title, a
+title equal to the link, or a page title equal to the shared-link preview
+title — is clipped inline to an intake PDF instead of becoming a task. The
+trailing route and listen marker never become part of the clip target.
+`URL @` requests companion audio like
+`bob ref create <URL> -P <parent> -L`; `URL @ @route` adds an explicit
+parent. Pull messages name the selected parent (`would clip →
 sase`, `clipped → <pdf> → sase`); that means the link was accepted for
-import. The note joins `bob ref list` after `bob ref scan`. Lists, notes
+import. A marked clip shows `· Listen` with `· companion audio requested`,
+and an already-known marked link shows
+`no new listen job was queued · to attach audio run: bob ref create <URL> -P <parent> -L`.
+The note joins `bob ref list` after `bob ref scan`. Lists, notes
 with attachments, shared notes (even with `-S`), multi-link (beyond one
 trailing route) or link-plus-prose notes, corporate short links, IP
 literals, and `highlights.url_routing.exclude_hosts` entries stay tasks.
-Pinned notes included with `-p` follow the rule like any other note.
+`URL @route @`, attached `path@`, and leading routes stay ordinary notes.
+Pinned notes included with `-p` follow the rule like any other note. A
+marked import needs a configured `highlights.listen_command`; narration
+failures are retryable and leave the note in Keep, never archiving audio
+without its PDF.
 
 Parents are chosen per new URL before any clipping: a valid note `@route`
 first, then explicit `-P/--parent`, then one TTY prompt per URL
@@ -240,7 +250,7 @@ selected parent, announced as `Clipping <display> (i/N)`. The outcomes:
 | `created` | A fresh intake PDF was clipped | `ref_created` at once | Archived |
 | `already_in_library` | A PDF-backed ref note already records the link | `ref_created` at once | Archived |
 | `already_queued` | An intake PDF is already queued | `ref_created` at once | Archived |
-| `failed_retryable` | Network, timeout, browser, or dependency failure, or HTTP 408, 429, or 5xx | None | Left in Keep; exit 1 |
+| `failed_retryable` | Network, timeout, browser, dependency, listen config/execution/missing-audio/interruption failure, or HTTP 408, 429, or 5xx | None | Left in Keep; exit 1 |
 | `failed_permanent` | Blocked, thin, render, unsupported content, collision, invalid URL, internal failure, or any other HTTP status | None | Written as a task with a ⚠️ child, then archived |
 
 A retryable failure leaves the note in Keep for the next pull and counts
@@ -254,8 +264,10 @@ not clip, write the vault, or archive. It shows `would clip → <parent>` rows
 `N links would be clipped into the reading queue`, and the Markdown section
 excludes URL-only notes. `list` marks notes a pull would clip with
 `🔗 ref → <parent>` (or `🔗 ref → asks · gkeep_inbox` when a future
-interactive pull will choose); JSON `clip` carries the planned `parent`.
-Pull JSON `clip` also carries the selected `parent`.
+interactive pull will choose) plus `🎧 listen` when audio was requested;
+JSON `clip` carries the planned `parent` and `"listen": true` when marked.
+Pull JSON `clip` also carries the selected `parent`, `"listen": true`, and
+`"listen_hint"` for already-known marked links.
 
 The Archive column assumes archiving is enabled; `-n, --no-archive` keeps
 every note in Keep, including successful reference imports. Successful

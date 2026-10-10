@@ -65,6 +65,8 @@ anything is written, and any failure rolls the whole batch back.
 | --- | --- |
 | Bare public URL | Queue a reference job under `mac_inbox` when the URL routing policy admits it; `-R, --no-ref` keeps it a task |
 | `URL @route` or `@route URL` | Queue the reference under that route (aliases resolve; source `explicit`) |
+| `URL @` | Queue the reference with companion audio requested (`ref.listen` true; same parent selection as a bare URL: default, `@@route` global, or `-r` forced) |
+| `URL @ @route` or `@route URL @` | Queue the reference with companion audio under that explicit parent |
 | Bare URL with `-r route` | Queue the reference under that route (source `explicit`) |
 | `@@route` | Shared task destination, anywhere in the draft, for otherwise-unrouted items; a plain declaration also routes default (routeless) refs (source `global`), while `@@route+block-id` keeps refs as tasks |
 | `@@route+block-id` | Shared parent-task destination, anywhere in the draft, for otherwise-unrouted items |
@@ -640,6 +642,25 @@ parent source is `explicit`, `global`, or `default`. A new link prints
 The reading queue in `bob ref list` is the reference note, and it appears
 after `bob ref scan`. Quote the URL when the shell would treat `#` as a
 comment.
+
+Append a standalone `@` immediately after the URL (the next
+whitespace-delimited token on the same line, one or more spaces/tabs) to
+request companion audio: `https://example.blog.com/somepost @` clips like
+`bob ref create <URL> -P <resolved-parent> -L`. `URL @ @sase` and
+`@sase URL @` combine listen with an explicit parent; `URL @` alone uses the
+default, `@@route` global, or `-r` forced parent. Do not attach the `@` to
+the URL (`https://example.com/path@`), queries, fragments, encoded
+`%40`/`%25`, or userinfo — those bytes stay part of the URL. One optional
+`<...>` wrapper around the URL is still accepted. `URL %` keeps its
+clipboard meaning; a non-URL bare `@` and prefixes such as `@sa` remain
+route completion, and completing a claimed listen token never replaces it
+(a separate ` @sa` after `URL @` still completes the parent). A marked item
+prints `queued … · Listen` with `· companion audio requested`; it needs a
+configured `highlights.listen_command` and a later `bob ref scan` to pair
+the PDF and MP3. Unlike an explicit `ref create -L`, the shorthand never
+adds audio to existing captures: a marked duplicate, pending job, or
+library hit queues nothing and shows `no new listen job was queued · to
+attach audio run: bob ref create <URL> -P <parent> -L`.
 
 Anything more — an extra word, `#tag`, `s:`, `p:`, `%`, an operator, a child
 line, a `@@route+block-id` declaration, task/destination flags beyond `-r`

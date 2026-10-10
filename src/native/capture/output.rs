@@ -20,7 +20,9 @@ pub(crate) enum Placement {
 /// Additive `ref` object on a reference item result: the classified
 /// URL, its offline library verdict, the canonical resolved parent, the
 /// staged job (real runs that queued only), and the parent fallback
-/// (queued items only).
+/// (queued items only). `listen` is true when the standalone `@` marker
+/// requested companion audio; `listen_hint` explains an unchanged marked
+/// item's no-new-listen outcome with the explicit retry command.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct RefItemJson {
     pub(super) url: String,
@@ -28,12 +30,16 @@ pub(super) struct RefItemJson {
     pub(super) dedupe_key: String,
     pub(super) display: String,
     pub(super) route_hint: &'static str,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(super) listen: bool,
     pub(super) library: RefLibraryJson,
     pub(super) parent: RefParentJson,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) job: Option<RefJobJson>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) fallback: Option<RefFallbackJson>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) listen_hint: Option<String>,
 }
 
 /// Canonical resolved reference parent: the route, its label, its kind,
@@ -760,8 +766,15 @@ pub(super) fn print_human_ref_item_success(
             styler.cyan(&format!("{} → {parent_route}", reference.display)),
         ),
     };
+    // A small “Listen” cue keeps the card and CLI wording aligned:
+    // queued means the request was saved, never that narration finished.
+    let subject = if reference.listen {
+        format!("{subject} · Listen")
+    } else {
+        subject.to_string()
+    };
     println!("{prefix} {verb}  {ordinal}{subject}");
-    let detail = match reference.library.verdict {
+    let mut detail = match reference.library.verdict {
         "in_library" => match reference.library.title.as_deref() {
             Some(title) => match reference.library.reading_state.as_deref() {
                 Some(state) => format!("{title} · {state}"),
@@ -811,6 +824,13 @@ pub(super) fn print_human_ref_item_success(
             }
         }
     };
+    if reference.listen {
+        if queued {
+            detail.push_str(" · companion audio requested");
+        } else if let Some(hint) = reference.listen_hint.as_deref() {
+            detail.push_str(&format!(" · {hint}"));
+        }
+    }
     println!("  {}", styler.dim(&detail));
 }
 

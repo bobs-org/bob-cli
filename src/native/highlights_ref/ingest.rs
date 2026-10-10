@@ -19,13 +19,15 @@ use super::clip_adapter::{
     CaptureRequest, ClipAdapterClient, MetadataOverrides,
 };
 use super::clip_url::{humanize_stem, snake_case, stem_from_url, WebUrl};
+use super::companion::cleanup_audio_on_failure;
 use super::io::vault_relative_path_value;
+use super::listen::{ListenCommand, ListenError, ListenOutput, ListenValues};
 use super::model::MarkerValue;
 use super::model::{CommandError, Config};
 use super::note::current_local_date;
 use super::stamp::{
     compose_marker, plan_default_target, stamp_and_install,
-    DefaultTargetIdentity, PdfInfo,
+    DefaultTargetIdentity, PdfInfo, TargetPlan,
 };
 
 /// Fixed reading-queue defaults for every ingest call.
@@ -41,6 +43,8 @@ pub(crate) struct IngestRequest<'a> {
     pub(crate) url: &'a str,
     /// Resolved parent route stamped into the marker (e.g. `mac_inbox`).
     pub(crate) parent: &'a str,
+    /// Whether the standalone `@` marker requested companion audio.
+    pub(crate) listen: bool,
     /// Short status lines; never stdout.
     pub(crate) progress: Option<&'a dyn Fn(&str)>,
 }
@@ -90,6 +94,10 @@ pub(crate) enum IngestErrorKind {
     Collision,
     InvalidUrl,
     Internal,
+    ListenConfig,
+    ListenFailed,
+    ListenNoAudio,
+    ListenInterrupted,
 }
 
 impl IngestErrorKind {
@@ -107,10 +115,16 @@ impl IngestErrorKind {
             IngestErrorKind::Collision => "collision",
             IngestErrorKind::InvalidUrl => "invalid_url",
             IngestErrorKind::Internal => "internal",
+            IngestErrorKind::ListenConfig => "listen_config",
+            IngestErrorKind::ListenFailed => "listen_failed",
+            IngestErrorKind::ListenNoAudio => "listen_no_audio",
+            IngestErrorKind::ListenInterrupted => "listen_interrupted",
         }
     }
 
     /// Whether the caller should leave the link queued for another try.
+    /// Narration failures are retryable: fixing the command and re-pulling
+    /// succeeds without narrating twice.
     pub(crate) fn retryable_by_kind(self) -> bool {
         matches!(
             self,
@@ -118,6 +132,10 @@ impl IngestErrorKind {
                 | IngestErrorKind::Timeout
                 | IngestErrorKind::Browser
                 | IngestErrorKind::Dependency
+                | IngestErrorKind::ListenConfig
+                | IngestErrorKind::ListenFailed
+                | IngestErrorKind::ListenNoAudio
+                | IngestErrorKind::ListenInterrupted
         )
     }
 }
@@ -153,9 +171,21 @@ impl IngestError {
 
     /// The shared fallback bullet used by capture and Keep when a clip
     /// fails: exactly `⚠️ Clip failed (<kind>): <message> · retry:
-    /// bob ref create <quoted url> -P <parent>`.
-    pub(crate) fn fallback_note(&self, url: &str, parent: &str) -> String {
-        fallback_note_for(self.kind.as_str(), &self.message, url, parent)
+    /// bob ref create <quoted url> -P <parent>[ -L]`. The `-L` suffix is
+    /// preserved when the original request asked for companion audio.
+    pub(crate) fn fallback_note(
+        &self,
+        url: &str,
+        parent: &str,
+        listen: bool,
+    ) -> String {
+        fallback_note_for_with_listen(
+            self.kind.as_str(),
+            &self.message,
+            url,
+            parent,
+            listen,
+        )
     }
 }
 
@@ -167,6 +197,18 @@ pub(crate) fn fallback_note_for(
     message: &str,
     url: &str,
     parent: &str,
+) -> String {
+    fallback_note_for_with_listen(kind, message, url, parent, false)
+}
+
+/// Listen-preserving variant: appends ` -L` to the retry command when
+/// the original request asked for companion audio.
+pub(crate) fn fallback_note_for_with_listen(
+    kind: &str,
+    message: &str,
+    url: &str,
+    parent: &str,
+    listen: bool,
 ) -> String {
     let collapsed = message
         .lines()
@@ -181,10 +223,57 @@ pub(crate) fn fallback_note_for(
         collapsed
     };
     let escaped = crate::native::gkeep::render::escape_child_text(&truncated);
+    let suffix = if listen { " -L" } else { "" };
     format!(
-        "⚠️ Clip failed ({kind}): {escaped} · retry: bob ref create {} -P {parent}",
+        "⚠️ Clip failed ({kind}): {escaped} · retry: bob ref create {} -P {parent}{suffix}",
         shell_quote_url(url),
     )
+}
+
+/// Map a [`ListenError`] to its deliberate [`IngestError`] without
+/// substring matching on unrelated network messages.
+fn listen_ingest_error(error: ListenError) -> IngestError {
+    let (kind, message, hint) = match &error {
+        ListenError::NotConfigured { message, hint }
+        | ListenError::Invalid { message, hint } => {
+            (IngestErrorKind::ListenConfig, message.clone(), hint.clone())
+        }
+        ListenError::Failed { message, hint } => {
+            (IngestErrorKind::ListenFailed, message.clone(), hint.clone())
+        }
+        ListenError::NoAudio { message, hint } => (
+            IngestErrorKind::ListenNoAudio,
+            message.clone(),
+            hint.clone(),
+        ),
+        ListenError::Interrupted { message, hint } => (
+            IngestErrorKind::ListenInterrupted,
+            message.clone(),
+            hint.clone(),
+        ),
+    };
+    IngestError {
+        kind,
+        message,
+        hint: Some(hint),
+        retryable_override: Some(true),
+    }
+}
+
+/// Resolve and validate the configured listen command before any
+/// fetch/render, while the ingest lock is held. A missing or invalid
+/// command fails fast without touching the network or vault.
+fn require_listen_command() -> Result<ListenCommand, IngestError> {
+    super::listen::require_validated().map_err(listen_ingest_error)
+}
+
+/// Run narration quietly (never stdout) and map its typed failure.
+fn run_listen_quiet(
+    command: &ListenCommand,
+    values: &ListenValues,
+) -> Result<std::path::PathBuf, IngestError> {
+    super::listen::run_listen_with_output(command, values, ListenOutput::Quiet)
+        .map_err(listen_ingest_error)
 }
 
 /// Shell-quote a cleaned URL: bare when it matches
@@ -334,6 +423,131 @@ fn split_hint(message: &str) -> (String, Option<String>) {
     }
 }
 
+/// Recovery hint for a post-listen install failure: rebind the kept
+/// episode explicitly.
+fn bind_ingest_hint(cleaned_url: &str, scratch_audio: &Path) -> String {
+    format!(
+        "bind it with bob ref create {} --audio {}",
+        shell_quote_url(cleaned_url),
+        scratch_audio.display()
+    )
+}
+
+/// Stamp the PDF into scratch *before* narration, run the listen quietly
+/// (never stdout), recheck collisions, install audio then PDF, and clean
+/// up only audio created by this attempt if PDF installation fails. Paid
+/// audio is retained with the recovery hint on post-listen errors. Shares
+/// guarantees with create; never installs a PDF first and then narrates.
+#[allow(clippy::too_many_arguments)]
+fn stamp_listen_and_install_for_ingest(
+    scratch: &mut super::workdir::ScratchDir,
+    target_plan: &TargetPlan,
+    command: &ListenCommand,
+    listen_target: &str,
+    listen_pdf: &Path,
+    listen_title: &str,
+    cleaned_url: &str,
+    stamp_source: &Path,
+    marker: &str,
+    info: &PdfInfo,
+    progress: Option<&dyn Fn(&str)>,
+) -> Result<usize, IngestError> {
+    // Fail fast before the paid render: no audio exists yet.
+    let (stamped, page_count) = super::pdf_target::stamp_pdf_to_scratch(
+        stamp_source,
+        scratch,
+        marker,
+        info,
+    )
+    .map_err(command_error)?;
+    let flow = super::listen::plan_listen_flow(
+        target_plan,
+        scratch,
+        &target_plan.stem,
+    )
+    .map_err(command_error)?;
+    let values = ListenValues {
+        target: listen_target.to_string(),
+        pdf: listen_pdf.to_path_buf(),
+        audio: flow.scratch_audio.clone(),
+        title: listen_title.to_string(),
+    };
+    run_listen_quiet(command, &values)?;
+    // The vault may have changed during a long listen: recheck
+    // target/audio collisions after narration.
+    if let Err(error) = super::stamp::refuse_target_collisions(
+        &target_plan.target,
+        &target_plan.sidecar,
+        &target_plan.workflow,
+        false,
+    ) {
+        let cmd = command_error(error);
+        let hint = bind_ingest_hint(cleaned_url, &flow.scratch_audio);
+        let kept = super::listen::post_listen_error_quiet(
+            scratch,
+            &flow.scratch_audio,
+            cmd.message.clone(),
+            hint,
+            progress,
+        );
+        let (message, hint) = split_hint(&kept.message);
+        return Err(IngestError {
+            kind: IngestErrorKind::Collision,
+            message,
+            hint,
+            retryable_override: Some(false),
+        });
+    }
+    let created =
+        super::listen::install_listen_audio(&flow, false).map_err(|error| {
+            let cmd = command_error(error);
+            let hint = bind_ingest_hint(cleaned_url, &flow.scratch_audio);
+            let kept = super::listen::post_listen_error_quiet(
+                scratch,
+                &flow.scratch_audio,
+                cmd.message.clone(),
+                hint,
+                progress,
+            );
+            let (message, hint) = split_hint(&kept.message);
+            // Audio install collisions are non-retryable without --force,
+            // like the non-listen collision path.
+            IngestError {
+                kind: IngestErrorKind::Collision,
+                message,
+                hint,
+                retryable_override: Some(false),
+            }
+        })?;
+    match super::pdf_target::install_stamped_pdf(
+        &stamped,
+        &target_plan.target,
+        None,
+        page_count,
+    ) {
+        Ok(_) => Ok(page_count),
+        Err(error) => {
+            cleanup_audio_on_failure(created.as_ref());
+            let cmd = command_error(error);
+            let hint = bind_ingest_hint(cleaned_url, &flow.scratch_audio);
+            let kept = super::listen::post_listen_error_quiet(
+                scratch,
+                &flow.scratch_audio,
+                cmd.message.clone(),
+                hint,
+                progress,
+            );
+            let (message, hint) = split_hint(&kept.message);
+            Err(IngestError {
+                kind: IngestErrorKind::Collision,
+                message,
+                hint,
+                retryable_override: Some(false),
+            })
+        }
+    }
+}
+
 /// Machine-wide ingest lock: `bob_cli_state_dir()/ref/ingest.lock` (fs2
 /// exclusive, blocking). Reports `waiting for another clip…` once through
 /// `progress` while it waits.
@@ -377,9 +591,12 @@ fn lock_ingest_at(
 
 /// Clip one URL into the reading queue without printing anything.
 ///
-/// Fixed defaults: route-default ref type, status `ready`, no audio, no
-/// force, no title or name override. The marker parent is the request's
-/// resolved parent route.
+/// Fixed defaults: route-default ref type, status `ready`, no force, no
+/// title or name override. The marker parent is the request's resolved
+/// parent route. When `request.listen` is true, companion audio is
+/// narrated with the configured listen command using the same cleaned
+/// URL, resolved title, unstamped PDF, and scratch audio placeholder
+/// meanings as CLI create.
 pub(crate) fn ingest_url(
     request: &IngestRequest,
 ) -> Result<IngestOutcome, IngestError> {
@@ -391,6 +608,8 @@ pub(crate) fn ingest_url(
         None => url.dedupe_key.clone(),
     };
     // Pre-lock dedupe so already-known links never take the lock.
+    // Existing references stay fast unchanged outcomes even when marked:
+    // the shorthand never adds audio to them.
     let recorded = super::sources::collect_recorded_source_urls(&config)
         .map_err(|error| {
             ingest_error(error.message.clone(), error.hint.clone())
@@ -417,6 +636,14 @@ pub(crate) fn ingest_url(
     {
         return Ok(outcome);
     }
+    // For a new marked import, resolve/validate the listen command
+    // before fetch/render, while retaining the ingest lock and its
+    // under-lock dedupe recheck.
+    let listen_command = if request.listen {
+        Some(require_listen_command()?)
+    } else {
+        None
+    };
 
     if let Some(paper) = arxiv {
         return ingest_arxiv_route(
@@ -427,6 +654,7 @@ pub(crate) fn ingest_url(
             superseded_legacy,
             request.parent,
             request.progress,
+            listen_command.as_ref(),
         );
     }
     let mut scratch =
@@ -445,6 +673,7 @@ pub(crate) fn ingest_url(
                 superseded_legacy,
                 request.parent,
                 request.progress,
+                listen_command.as_ref(),
             )
         }
         super::target::CreateSource::WebArticle { url } => {
@@ -455,6 +684,7 @@ pub(crate) fn ingest_url(
                 superseded_legacy,
                 request.parent,
                 request.progress,
+                listen_command.as_ref(),
             )
         }
         _ => Err(ingest_error(
@@ -498,6 +728,7 @@ fn ingest_pdf_url_route(
     superseded_legacy: Option<String>,
     parent: &str,
     progress: Option<&dyn Fn(&str)>,
+    listen: Option<&ListenCommand>,
 ) -> Result<IngestOutcome, IngestError> {
     let captured = current_local_date();
     let pdf_plan = super::pdf_target::plan_pdf_url(
@@ -545,17 +776,35 @@ fn ingest_pdf_url_route(
         title: Some(pdf_plan.title.clone()),
         author: pdf_plan.author.clone(),
     };
-    let (stamped, page_count) = super::pdf_target::stamp_pdf_to_scratch(
-        downloaded, scratch, &marker, &info,
-    )
-    .map_err(command_error)?;
-    super::pdf_target::install_stamped_pdf(
-        &stamped,
-        &target_plan.target,
-        None,
-        page_count,
-    )
-    .map_err(command_error)?;
+    // With --listen `{target}` is the cleaned URL and `{pdf}` is the
+    // downloaded scratch copy, matching CLI create.
+    if let Some(command) = listen {
+        stamp_listen_and_install_for_ingest(
+            scratch,
+            &target_plan,
+            command,
+            &url.cleaned,
+            downloaded,
+            &pdf_plan.title,
+            &url.cleaned,
+            downloaded,
+            &marker,
+            &info,
+            progress,
+        )?;
+    } else {
+        let (stamped, page_count) = super::pdf_target::stamp_pdf_to_scratch(
+            downloaded, scratch, &marker, &info,
+        )
+        .map_err(command_error)?;
+        super::pdf_target::install_stamped_pdf(
+            &stamped,
+            &target_plan.target,
+            None,
+            page_count,
+        )
+        .map_err(command_error)?;
+    }
     Ok(IngestOutcome::Created {
         pdf: vault_relative_path_value(config, &target_plan.target),
         ref_type: INGEST_PDF_REF_TYPE.to_string(),
@@ -574,6 +823,7 @@ fn ingest_arxiv_route(
     superseded_legacy: Option<String>,
     parent: &str,
     progress: Option<&dyn Fn(&str)>,
+    listen: Option<&ListenCommand>,
 ) -> Result<IngestOutcome, IngestError> {
     let captured = current_local_date();
     let scratch =
@@ -668,17 +918,63 @@ fn ingest_arxiv_route(
         title: Some(pdf_plan.title.clone()),
         author: pdf_plan.author.clone(),
     };
-    let (stamped, page_count) = super::pdf_target::stamp_pdf_to_scratch(
-        &dest, &scratch, &marker, &info,
-    )
-    .map_err(command_error)?;
-    super::pdf_target::install_stamped_pdf(
-        &stamped,
-        &target_plan.target,
-        None,
-        page_count,
-    )
-    .map_err(command_error)?;
+    // With --listen `{target}` is the cleaned URL (sase-listen does its
+    // own arXiv rewrite) and `{pdf}` is the fetched scratch copy.
+    if let Some(command) = listen {
+        // `dest` lives in a function-local scratch that would drop before
+        // install; move it into the outer scratch's namespace by copying
+        // to a stable path. Simplest: use `dest` directly since `scratch`
+        // below is a different dir – copy to the outer scratch via the
+        // helper's scratch param by reusing `dest` as stamp source while
+        // the helper uses its own scratch for stamped output. To keep
+        // lifetimes simple, create the listen flow against the local
+        // `scratch` variable (shadowed) – we need a mutable scratch for
+        // the helper, so use a new scratch for stamping.
+        // Actually `dest` is inside the local `scratch` dir which lives
+        // until return, so passing `&mut scratch` (local) works if we
+        // shadow: the helper needs `&mut ScratchDir`; we have `scratch`
+        // (local) – but it was moved? No, `scratch` is local mut, `dest`
+        // borrows from it. We need a second scratch for stamped output to
+        // avoid borrowing conflicts: reuse the same `scratch` by cloning
+        // `dest` path (it lives as long as `scratch`).
+        let mut listen_scratch =
+            super::workdir::ScratchDir::create("ingest-listen")
+                .map_err(command_error)?;
+        // Copy the fetched PDF into the listen scratch as the unstamped
+        // source so the helper's stamp/output paths are stable.
+        let staged = listen_scratch.path().join("arxiv-source.pdf");
+        std::fs::copy(&dest, &staged).map_err(|error| {
+            ingest_error(
+                format!("stage arXiv PDF {}: {error}", dest.display()),
+                None,
+            )
+        })?;
+        stamp_listen_and_install_for_ingest(
+            &mut listen_scratch,
+            &target_plan,
+            command,
+            &url.cleaned,
+            &staged,
+            &pdf_plan.title,
+            &url.cleaned,
+            &staged,
+            &marker,
+            &info,
+            progress,
+        )?;
+    } else {
+        let (stamped, page_count) = super::pdf_target::stamp_pdf_to_scratch(
+            &dest, &scratch, &marker, &info,
+        )
+        .map_err(command_error)?;
+        super::pdf_target::install_stamped_pdf(
+            &stamped,
+            &target_plan.target,
+            None,
+            page_count,
+        )
+        .map_err(command_error)?;
+    }
     Ok(IngestOutcome::Created {
         pdf: vault_relative_path_value(config, &target_plan.target),
         ref_type: INGEST_PDF_REF_TYPE.to_string(),
@@ -696,6 +992,7 @@ fn ingest_article_route(
     superseded_legacy: Option<String>,
     parent: &str,
     progress: Option<&dyn Fn(&str)>,
+    listen: Option<&ListenCommand>,
 ) -> Result<IngestOutcome, IngestError> {
     // Fail fast when the stem is already known, mirroring the web-article engine.
     if let Some(stem) = stem_from_url(url) {
@@ -814,8 +1111,30 @@ fn ingest_article_route(
         title: Some(title.clone()),
         author: author.clone(),
     };
-    stamp_and_install(&out_pdf, &plan.target, &marker, &info)
-        .map_err(command_error)?;
+    // With --listen the staged render doubles as the narration source:
+    // `{target}` and `{pdf}` are the scratch render PDF, matching CLI.
+    if let Some(command) = listen {
+        let mut listen_scratch =
+            super::workdir::ScratchDir::create("ingest-listen")
+                .map_err(command_error)?;
+        let target_display = out_pdf.display().to_string();
+        stamp_listen_and_install_for_ingest(
+            &mut listen_scratch,
+            &plan,
+            command,
+            &target_display,
+            &out_pdf,
+            &title,
+            &url.cleaned,
+            &out_pdf,
+            &marker,
+            &info,
+            progress,
+        )?;
+    } else {
+        stamp_and_install(&out_pdf, &plan.target, &marker, &info)
+            .map_err(command_error)?;
+    }
     // Keep the workdir alive until after install; cleanup via drop.
     let _ = workdir.path();
     Ok(IngestOutcome::Created {
@@ -938,30 +1257,36 @@ mod tests {
         // Bare URLs stay unquoted.
         let error = ingest_error("blocked: no entry".to_string(), None);
         assert_eq!(
-            error.fallback_note("https://example.com/post", "mac_inbox"),
+            error.fallback_note("https://example.com/post", "mac_inbox", false),
             "⚠️ Clip failed (blocked): blocked: no entry · retry: bob ref create https://example.com/post -P mac_inbox",
         );
         // Query strings need single quotes.
         assert!(error
-            .fallback_note("https://example.com/a?b=1&c=2", "mac_inbox")
+            .fallback_note("https://example.com/a?b=1&c=2", "mac_inbox", false)
             .ends_with(
                 "bob ref create 'https://example.com/a?b=1&c=2' -P mac_inbox"
             ),);
         // Embedded quotes use '\''.
         assert!(error
-            .fallback_note("https://example.com/a'b", "mac_inbox")
+            .fallback_note("https://example.com/a'b", "mac_inbox", false)
             .ends_with(
                 "bob ref create 'https://example.com/a'\\''b' -P mac_inbox"
             ),);
         // Only the first line survives, whitespace-collapsed, truncated.
         let long = format!("line one\nline two {}", "x".repeat(200));
-        let long_note = ingest_error(long, None)
-            .fallback_note("https://example.com/post", "mac_inbox");
+        let long_note = ingest_error(long, None).fallback_note(
+            "https://example.com/post",
+            "mac_inbox",
+            false,
+        );
         assert!(long_note.contains("line one"));
         assert!(!long_note.contains("line two"));
         let long_first = format!("{} tail", "x".repeat(200));
-        let long_first_note = ingest_error(long_first, None)
-            .fallback_note("https://example.com/post", "mac_inbox");
+        let long_first_note = ingest_error(long_first, None).fallback_note(
+            "https://example.com/post",
+            "mac_inbox",
+            false,
+        );
         let long_first_part = long_first_note
             .split("Clip failed (internal): ")
             .nth(1)
@@ -972,10 +1297,11 @@ mod tests {
         assert_eq!(long_first_part, format!("{}…", "x".repeat(120)));
         let multi = ingest_error("first   line\nsecond line".to_string(), None);
         assert!(multi
-            .fallback_note("https://example.com/post", "mac_inbox")
+            .fallback_note("https://example.com/post", "mac_inbox", false)
             .contains("first line · retry:"),);
         let huge = ingest_error(format!("{} end", "y".repeat(200)), None);
-        let note = huge.fallback_note("https://example.com/post", "mac_inbox");
+        let note =
+            huge.fallback_note("https://example.com/post", "mac_inbox", false);
         let message_part = note
             .split("Clip failed (internal): ")
             .nth(1)
@@ -988,7 +1314,7 @@ mod tests {
         // Keep child-text escaping applies (leading `#task` is escaped).
         let tasky = ingest_error("#task list".to_string(), None);
         assert!(tasky
-            .fallback_note("https://example.com/post", "mac_inbox")
+            .fallback_note("https://example.com/post", "mac_inbox", false)
             .contains("\\#task list"),);
     }
 
@@ -1058,6 +1384,7 @@ mod tests {
             bob_dir: &vault,
             url: "https://example.com/post",
             parent: "mac_inbox",
+            listen: false,
             progress: None,
         };
         match ingest_url(&request).expect("ingest library hit") {
@@ -1071,6 +1398,7 @@ mod tests {
             bob_dir: &vault,
             url: "not a url",
             parent: "mac_inbox",
+            listen: false,
             progress: None,
         };
         let error = ingest_url(&bad).expect_err("invalid URL must fail");

@@ -3,7 +3,7 @@
 use serde::Serialize;
 use std::num::NonZeroUsize;
 
-use crate::native::url_routing::{UrlIntent, UrlRoutingPolicy};
+use crate::native::url_routing::{RefIntent, UrlRoutingPolicy};
 
 /// Grammar-level parse options shared by `bob capture` and
 /// `capture-parse`. `url_routing: None` turns reference claiming off (for
@@ -66,8 +66,10 @@ impl<'a> EditorParseOptions<'a> {
 pub(crate) enum CaptureKind {
     Task,
     /// A whole-item bare URL admitted by the routing policy, queued for
-    /// the reading queue by the capture planner.
-    Ref(UrlIntent),
+    /// the reading queue by the capture planner. The wrapped intent
+    /// carries the classified URL plus whether the standalone listen
+    /// marker (`@`) requested companion audio.
+    Ref(RefIntent),
     TaskWithBlockId {
         block_id: String,
     },

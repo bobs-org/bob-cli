@@ -30,7 +30,7 @@ use crate::native::highlights_ref::ingest::{
     ingest_url, IngestOutcome, IngestRequest,
 };
 use crate::native::url_routing::{
-    library_verdicts, LibraryVerdict, UrlIntent, UrlRoutingPolicy,
+    library_verdicts, LibraryVerdict, RefIntent, UrlRoutingPolicy,
 };
 use crate::native::{
     capture, env as bob_env, note_tasks, ob,
@@ -42,7 +42,7 @@ use crate::native::{
 #[derive(Debug, Clone)]
 struct ClipReport {
     id: String,
-    intent: UrlIntent,
+    intent: RefIntent,
     parent: String,
     outcome: ClipOutcome,
 }
@@ -1375,9 +1375,11 @@ fn run_clip_pre_pass(
         return ClipSet::default();
     }
     if dry_run {
-        let intents: Vec<&UrlIntent> = targets
+        let intents: Vec<&crate::native::url_routing::UrlIntent> = targets
             .iter()
-            .filter_map(|planned| planned.ref_intent.as_ref())
+            .filter_map(|planned| {
+                planned.ref_intent.as_ref().map(|intent| &intent.intent)
+            })
             .collect();
         let verdicts = library_verdicts(bob_dir, &intents);
         let reports = targets
@@ -1426,6 +1428,7 @@ fn run_clip_pre_pass(
             bob_dir,
             url: &intent.cleaned,
             parent: parent.as_str(),
+            listen: intent.listen,
             progress,
         };
         // Clone for the error path: `request` borrows `parent`.
@@ -1449,8 +1452,11 @@ fn run_clip_pre_pass(
                         message: first_line(&error.message),
                     }
                 } else {
-                    let fallback =
-                        error.fallback_note(&intent.cleaned, &parent_for_error);
+                    let fallback = error.fallback_note(
+                        &intent.cleaned,
+                        &parent_for_error,
+                        intent.listen,
+                    );
                     ClipOutcome::FailedPermanent {
                         kind: error.kind.as_str().to_string(),
                         message: first_line(&error.message),
@@ -1544,6 +1550,30 @@ fn append_ref_created(
 /// First line of a message, for compact clip reports.
 fn first_line(message: &str) -> String {
     message.lines().next().unwrap_or_default().to_string()
+}
+
+/// Shell-quote a cleaned URL for the explicit retry command.
+fn shell_quote_clip_url(url: &str) -> String {
+    let bare = !url.is_empty()
+        && url.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric()
+                || matches!(
+                    byte,
+                    b'.' | b'_'
+                        | b'~'
+                        | b':'
+                        | b'/'
+                        | b'%'
+                        | b'+'
+                        | b'='
+                        | b'-'
+                )
+        });
+    if bare {
+        url.to_string()
+    } else {
+        format!("'{}'", url.replace('\'', "'\\''"))
+    }
 }
 
 fn acquire_pull_lock() -> Result<File, GkeepError> {
@@ -2956,25 +2986,47 @@ fn print_human_ref_row(
         return;
     };
     let parent = report.parent.as_str();
+    let listen_suffix = if report.intent.listen {
+        " · Listen"
+    } else {
+        ""
+    };
+    let no_listen_hint = if report.intent.listen {
+        match &report.outcome {
+            ClipOutcome::AlreadyInLibrary { .. }
+            | ClipOutcome::AlreadyQueued { .. } => format!(
+                " · no new listen job was queued · to attach audio run: bob ref create {} -P {parent} -L",
+                shell_quote_clip_url(&report.intent.cleaned),
+            ),
+            _ => String::new(),
+        }
+    } else {
+        String::new()
+    };
     match &report.outcome {
         ClipOutcome::Created { pdf } => {
             let suffix = archive_suffix("archived");
+            let audio_suffix = if report.intent.listen {
+                " · companion audio requested"
+            } else {
+                ""
+            };
             println!(
-                "  {} {display}  clipped → {pdf} → {parent}{suffix}",
+                "  {} {display}{listen_suffix}  clipped → {pdf} → {parent}{audio_suffix}{suffix}",
                 styler.green("✓"),
             );
         }
         ClipOutcome::AlreadyInLibrary { note } => {
             let suffix = archive_suffix("archived");
             println!(
-                "  {} {display}  already in library · {note} → {parent}{suffix}",
+                "  {} {display}{listen_suffix}  already in library · {note} → {parent}{no_listen_hint}{suffix}",
                 styler.green("✓"),
             );
         }
         ClipOutcome::AlreadyQueued { pdf } => {
             let suffix = archive_suffix("archived");
             println!(
-                "  {} {display}  already queued · {pdf} → {parent}{suffix}",
+                "  {} {display}{listen_suffix}  already queued · {pdf} → {parent}{no_listen_hint}{suffix}",
                 styler.green("✓"),
             );
         }
@@ -2999,7 +3051,10 @@ fn print_human_ref_row(
             );
         }
         ClipOutcome::WouldClip { .. } => {
-            println!("  {} {display}  would clip → {parent}", styler.dim("·"),);
+            println!(
+                "  {} {display}{listen_suffix}  would clip → {parent}",
+                styler.dim("·"),
+            );
         }
     }
 }
@@ -3034,7 +3089,7 @@ fn json_pull_report(
 }
 
 /// The per-note `clip` object for a URL-only note, with the
-/// selected/planned parent additively (schema stays 1).
+/// selected/planned parent and listen bit additively (schema stays 1).
 fn clip_json(report: &ClipReport) -> serde_json::Value {
     let mut value = json!({
         "url": report.intent.cleaned,
@@ -3042,6 +3097,22 @@ fn clip_json(report: &ClipReport) -> serde_json::Value {
         "outcome": report.outcome.as_str(),
         "parent": report.parent,
     });
+    if report.intent.listen {
+        value["listen"] = json!(true);
+        // Unchanged marked outcomes carry the explicit no-new-listen
+        // retry command, matching capture's `ref.listen_hint`.
+        match &report.outcome {
+            ClipOutcome::AlreadyInLibrary { .. }
+            | ClipOutcome::AlreadyQueued { .. } => {
+                value["listen_hint"] = json!(format!(
+                    "no new listen job was queued · to attach audio run: bob ref create {} -P {} -L",
+                    shell_quote_clip_url(&report.intent.cleaned),
+                    report.parent,
+                ));
+            }
+            _ => {}
+        }
+    }
     match &report.outcome {
         ClipOutcome::Created { pdf } | ClipOutcome::AlreadyQueued { pdf } => {
             value["pdf"] = json!(pdf);

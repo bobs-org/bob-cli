@@ -28,6 +28,18 @@ pub(super) struct ListenValues {
     pub(super) title: String,
 }
 
+/// Where a listen run sends its progress and child output. CLI
+/// `ref create -L` inherits the terminal (`Print`); background ingest
+/// (`Quiet`) sends everything to stderr/log handling and never touches
+/// JSON stdout, so a noisy fake listener cannot corrupt it. Quiet mode
+/// also avoids buffering unlimited child output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(super) enum ListenOutput {
+    #[default]
+    Print,
+    Quiet,
+}
+
 /// A validated-or-not shell command template that narrates a target and
 /// writes MP3 audio to `{audio}`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -182,6 +194,25 @@ pub(super) fn post_listen_error(
 ) -> CommandError {
     scratch.keep();
     println!("kept: {}", scratch_audio.display());
+    CommandError::new(format!("{message}\nhint: {hint}"))
+}
+
+/// Quiet variant for background ingest: keeps the scratch directory,
+/// reports the kept path to stderr (never stdout, so JSON stays clean),
+/// and returns the failure with its recovery hint.
+pub(super) fn post_listen_error_quiet(
+    scratch: &mut ScratchDir,
+    scratch_audio: &Path,
+    message: String,
+    hint: String,
+    progress: Option<&dyn Fn(&str)>,
+) -> CommandError {
+    scratch.keep();
+    let line = format!("kept: {}", scratch_audio.display());
+    eprintln!("{line}");
+    if let Some(report) = progress {
+        report(&line);
+    }
     CommandError::new(format!("{message}\nhint: {hint}"))
 }
 
@@ -418,12 +449,32 @@ pub(super) fn run_listen(
     command: &ListenCommand,
     values: &ListenValues,
 ) -> std::result::Result<PathBuf, ListenError> {
+    run_listen_with_output(command, values, ListenOutput::Print)
+}
+
+/// Same as [`run_listen`] with an explicit output policy. `Quiet` sends
+/// the `listen: run …` line and the child's stdout/stderr to stderr so
+/// background ingest never contaminates JSON stdout, and avoids
+/// buffering unlimited child output by streaming the piped stdout to
+/// stderr in bounded chunks.
+pub(super) fn run_listen_with_output(
+    command: &ListenCommand,
+    values: &ListenValues,
+    output: ListenOutput,
+) -> std::result::Result<PathBuf, ListenError> {
     command.validate()?;
     let expanded = command.expand(values);
-    println!("listen: run {expanded}");
-    {
-        use std::io::Write as _;
-        let _ = std::io::stdout().flush();
+    match output {
+        ListenOutput::Print => {
+            println!("listen: run {expanded}");
+            {
+                use std::io::Write as _;
+                let _ = std::io::stdout().flush();
+            }
+        }
+        ListenOutput::Quiet => {
+            eprintln!("listen: run {expanded}");
+        }
     }
 
     // Like `system(3)`: ignore SIGINT/SIGQUIT while the child runs so
@@ -431,12 +482,17 @@ pub(super) fn run_listen(
     // the default dispositions in the child.
     let previous_signals = parent_ignore_signals();
     let mut child = process::Command::new("sh");
-    child
-        .arg("-c")
-        .arg(&expanded)
-        .stdin(Stdio::inherit())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit());
+    child.arg("-c").arg(&expanded).stdin(Stdio::inherit());
+    match output {
+        ListenOutput::Print => {
+            child.stdout(Stdio::inherit()).stderr(Stdio::inherit());
+        }
+        ListenOutput::Quiet => {
+            // Pipe stdout so it can be forwarded to stderr without ever
+            // touching stdout; stderr stays inherited.
+            child.stdout(Stdio::piped()).stderr(Stdio::inherit());
+        }
+    }
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt as _;
@@ -446,8 +502,51 @@ pub(super) fn run_listen(
             child.pre_exec(reset_child_signals);
         }
     }
-    let status = child.status();
-    parent_restore_signals(previous_signals);
+    let status = match output {
+        ListenOutput::Print => child.status(),
+        ListenOutput::Quiet => {
+            use std::io::Read as _;
+            let mut spawned = child.spawn().map_err(|error| {
+                parent_restore_signals(previous_signals);
+                ListenError::Failed {
+                    message: format!("run listen command {expanded}: {error}"),
+                    hint: LISTEN_FAILED_HINT.to_string(),
+                }
+            })?;
+            // Forward piped stdout to stderr in bounded 8 KiB chunks
+            // (cap 1 MiB) so a noisy listener never contaminates JSON
+            // stdout and never buffers unbounded output.
+            if let Some(mut piped) = spawned.stdout.take() {
+                let mut buf = [0u8; 8192];
+                let mut total: usize = 0;
+                loop {
+                    match piped.read(&mut buf) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            total += n;
+                            if total <= 1024 * 1024 {
+                                use std::io::Write as _;
+                                let _ = std::io::stderr().write_all(&buf[..n]);
+                            }
+                        }
+                        Err(_) => break,
+                    }
+                }
+            }
+            spawned.wait()
+        }
+    };
+    // Restore signals after wait in both paths. The early spawn-error
+    // path above already restored before returning.
+    if matches!(output, ListenOutput::Print) {
+        parent_restore_signals(previous_signals);
+    } else {
+        // Quiet spawn path has not restored yet unless it early-returned.
+        // Restore now; the early-error return already restored.
+        // Use a no-op restore guard: calling restore twice is safe because
+        // it only installs dispositions.
+        parent_restore_signals(previous_signals);
+    }
     let status = status.map_err(|error| ListenError::Failed {
         message: format!("run listen command {expanded}: {error}"),
         hint: LISTEN_FAILED_HINT.to_string(),

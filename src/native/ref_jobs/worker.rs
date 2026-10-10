@@ -14,7 +14,8 @@ use std::{
 };
 
 use crate::native::highlights_ref::ingest::{
-    fallback_note_for, ingest_url, IngestError, IngestOutcome, IngestRequest,
+    fallback_note_for_with_listen, ingest_url, IngestError, IngestOutcome,
+    IngestRequest,
 };
 
 use super::fallback::write_fallback;
@@ -174,8 +175,12 @@ impl<'a> WorkerPass<'a> {
                 self.stuck_now = true;
                 continue;
             };
-            let note =
-                error_note(&error, &job.cleaned_url, job.effective_parent());
+            let note = error_note(
+                &error,
+                &job.cleaned_url,
+                job.effective_parent(),
+                job.listen,
+            );
             match write_fallback(
                 &job.bob_dir,
                 &job.fallback.relative_target,
@@ -267,11 +272,13 @@ impl<'a> WorkerPass<'a> {
             }
         };
         // A job without a parent uses its source's inbox (jobs written
-        // by an older `bob` carry none).
+        // by an older `bob` carry none). Old jobs without the listen
+        // field deserialize as false and must not be upgraded.
         let request = IngestRequest {
             bob_dir: &job.bob_dir,
             url: &job.cleaned_url,
             parent: job.effective_parent(),
+            listen: job.listen,
             progress: Some(&progress),
         };
         match ingest_url(&request) {
@@ -327,7 +334,9 @@ impl<'a> WorkerPass<'a> {
     }
 
     /// Write the fallback task for a failed clip. A fallback that
-    /// itself fails parks the job in `stuck/` with both errors.
+    /// itself fails parks the job in `stuck/` with both errors. The
+    /// fallback preserves the requested `-L` operation and any
+    /// retained-audio recovery information.
     fn finish_failed(
         &mut self,
         job: JobFile,
@@ -340,9 +349,18 @@ impl<'a> WorkerPass<'a> {
             retryable: error.retryable(),
         };
         // The fallback task lands in the job's parent note (staged as
-        // `<parent>.md` by capture) with a retry command naming `-P`.
-        let note =
-            error.fallback_note(&job.cleaned_url, job.effective_parent());
+        // `<parent>.md` by capture) with a retry command naming `-P`
+        // and `-L` when listen was requested.
+        let mut note = error.fallback_note(
+            &job.cleaned_url,
+            job.effective_parent(),
+            job.listen,
+        );
+        if let Some(hint) = error.hint.as_deref()
+            && hint.contains("kept:")
+        {
+            note.push_str(&format!(" · {hint}"));
+        }
         match write_fallback(
             &job.bob_dir,
             &job.fallback.relative_target,
@@ -424,9 +442,21 @@ fn first_line(message: &str) -> String {
 }
 
 /// The `stuck/` retry note reuses the clip's own fallback text,
-/// recomputed from the stored kind and message.
-fn error_note(error: &StoredError, cleaned_url: &str, parent: &str) -> String {
-    fallback_note_for(&error.kind, &error.message, cleaned_url, parent)
+/// recomputed from the stored kind and message, preserving `-L` when
+/// the parked job requested listen.
+fn error_note(
+    error: &StoredError,
+    cleaned_url: &str,
+    parent: &str,
+    listen: bool,
+) -> String {
+    fallback_note_for_with_listen(
+        &error.kind,
+        &error.message,
+        cleaned_url,
+        parent,
+        listen,
+    )
 }
 
 /// Move an unreadable spool file to `stuck/` preserving its bytes, so

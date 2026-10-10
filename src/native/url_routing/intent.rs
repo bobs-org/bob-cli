@@ -138,32 +138,118 @@ pub(crate) fn display_url(cleaned: &str) -> String {
     format!("{head}…{tail}")
 }
 
+/// Standalone listen marker for the `at` choice: exactly `@`.
+/// A bare `@` requests companion audio immediately after a URL; `@route`
+/// still selects a parent. Attached forms (`https://example.com/path@`),
+/// encoded `%40`/`%25`, queries, fragments, and userinfo remain part of
+/// the URL and never count as the marker.
+pub(crate) fn is_standalone_listen_marker(token: &str) -> bool {
+    token == "@"
+}
+
+/// Reference intent: the classified URL plus whether companion audio was
+/// requested with the standalone listen marker. The URL identity
+/// (`original`/`cleaned`/`dedupe_key`/display/network target) never
+/// includes the directive.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RefIntent {
+    pub(crate) intent: UrlIntent,
+    pub(crate) listen: bool,
+}
+
+impl RefIntent {
+    pub(crate) fn without_listen(intent: UrlIntent) -> Self {
+        Self {
+            intent,
+            listen: false,
+        }
+    }
+
+    pub(crate) fn with_listen(intent: UrlIntent) -> Self {
+        Self {
+            intent,
+            listen: true,
+        }
+    }
+}
+
+impl std::ops::Deref for RefIntent {
+    type Target = UrlIntent;
+
+    fn deref(&self) -> &Self::Target {
+        &self.intent
+    }
+}
+
+impl std::ops::DerefMut for RefIntent {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.intent
+    }
+}
+
+/// Shared suffix recognizer for a URL token plus an optional adjacent
+/// listen token. Returns the URL text and whether the next
+/// whitespace-delimited token on the same line is the standalone listen
+/// marker. Callers keep route and note-eligibility checks in their own
+/// layer and never use string replacement.
+pub(crate) fn split_listen_suffix(
+    url_token: &str,
+    next_token: Option<&str>,
+) -> Option<(UrlIntent, bool)> {
+    let intent = classify_token(url_token)?;
+    let listen = next_token.is_some_and(is_standalone_listen_marker);
+    Some((intent, listen))
+}
+
 /// Lexical URL-list line test: a single whitespace-free token,
 /// optionally `<…>`-wrapped, with an `http`/`https` scheme that parses
-/// with `url::Url::parse`. No policy, validation, or config.
+/// with `url::Url::parse`, or a URL plus the standalone listen marker
+/// (`URL @`) with one or more spaces/tabs between them. No policy,
+/// validation, or config.
 pub(crate) fn is_url_list_line(line: &str) -> bool {
     if line.is_empty() {
         return false;
     }
-    // Column zero: no leading whitespace. Single token: no
-    // whitespace anywhere.
-    if line.starts_with(char::is_whitespace)
-        || line.chars().any(char::is_whitespace)
-    {
+    // Column zero: no leading whitespace.
+    if line.starts_with(char::is_whitespace) {
         return false;
     }
-    let inner = match strip_single_brackets(line) {
-        Some(inner) => inner,
-        None => return false,
-    };
-    if inner.is_empty() || inner.chars().any(char::is_whitespace) {
-        return false;
+    let tokens: Vec<&str> = line.split_whitespace().collect();
+    match tokens.as_slice() {
+        [single] => {
+            if single.is_empty() || single.chars().any(char::is_whitespace) {
+                return false;
+            }
+            let inner = match strip_single_brackets(single) {
+                Some(inner) => inner,
+                None => return false,
+            };
+            if inner.is_empty() || inner.chars().any(char::is_whitespace) {
+                return false;
+            }
+            let lower = inner.to_lowercase();
+            if !lower.starts_with("http://") && !lower.starts_with("https://") {
+                return false;
+            }
+            url::Url::parse(&inner).is_ok()
+        }
+        // `URL @`: exactly one URL plus the standalone listen marker.
+        [url, marker] if is_standalone_listen_marker(marker) => {
+            let inner = match strip_single_brackets(url) {
+                Some(inner) => inner,
+                None => return false,
+            };
+            if inner.is_empty() || inner.chars().any(char::is_whitespace) {
+                return false;
+            }
+            let lower = inner.to_lowercase();
+            if !lower.starts_with("http://") && !lower.starts_with("https://") {
+                return false;
+            }
+            url::Url::parse(&inner).is_ok()
+        }
+        _ => false,
     }
-    let lower = inner.to_lowercase();
-    if !lower.starts_with("http://") && !lower.starts_with("https://") {
-        return false;
-    }
-    url::Url::parse(&inner).is_ok()
 }
 
 #[cfg(test)]

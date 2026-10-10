@@ -86,7 +86,10 @@ directory):
 (`schema_version` stays 1; jobs written by an older `bob` omit it and
 the worker uses the source's inbox instead: `capture` →
 `mac_inbox`). `bob ref jobs` shows it as `→ <parent>` on pending and
-clipping rows and as `parent` in `-f json`.
+clipping rows and as `parent` in `-f json`. `listen` is true when the
+standalone `@` marker requested companion audio (omitted when false, so
+older jobs keep their exact shape; jobs written by an older `bob` omit it
+and the worker never upgrades them).
 
 `fallback.task_line` is the exact line capture would have written for
 the item with routing off, so its `created` date is the capture day.
@@ -139,8 +142,13 @@ A failed clip writes `fallback.task_line` into the job's parent note
 plus one child bullet:
 
 ```text
-⚠️ Clip failed (<kind>): <message> · retry: bob ref create <url> -P <parent>
+⚠️ Clip failed (<kind>): <message> · retry: bob ref create <url> -P <parent>[ -L]
 ```
+
+The retry preserves `-L` when the job requested listen, plus any retained-audio
+`kept:` recovery hint. Listen config, execution, missing-MP3, and interruption
+failures are typed (`listen_config`, `listen_failed`, `listen_no_audio`,
+`listen_interrupted`) and retryable, never substring-matched network errors.
 
 The write goes through capture's staged-file commit — same section
 placement as capture, same disk-preimage guard with re-read
