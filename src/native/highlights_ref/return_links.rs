@@ -552,6 +552,22 @@ mod tests {
         haystack.match_indices(needle).count()
     }
 
+    /// Pandoc has emitted both `\\hyperref[id]` and `\\hyperlink{id}` for
+    /// same-document links across supported writer versions.
+    fn has_forward_link_to(latex: &str, id: &str) -> bool {
+        latex.contains(&format!("\\hyperref[{id}]"))
+            || latex.contains(&format!("\\protect\\hyperlink{{{id}}}"))
+            || latex.contains(&format!("\\hyperlink{{{id}}}"))
+    }
+
+    /// Pandoc uses either a label or a hypertarget for block identifiers.
+    fn find_target(latex: &str, id: &str) -> Option<usize> {
+        [format!("\\label{{{id}}}"), format!("\\hypertarget{{{id}}}")]
+            .iter()
+            .filter_map(|needle| latex.find(needle))
+            .min()
+    }
+
     /// Names inside `MARKER{...}` in document order.
     fn braced_names(haystack: &str, marker: &str) -> Vec<String> {
         let mut out = Vec::new();
@@ -642,7 +658,7 @@ mod tests {
             render.latex
         );
         assert!(
-            render.latex.contains("\\hyperref[target]"),
+            has_forward_link_to(&render.latex, "target"),
             "skip links stay working forward links: {}",
             render.latex
         );
@@ -663,17 +679,17 @@ mod tests {
             return;
         };
         assert!(
-            render.latex.contains("\\hyperref[a-b]"),
+            has_forward_link_to(&render.latex, "a-b"),
             "percent-decoded id resolves: {}",
             render.latex
         );
         assert!(
-            render.latex.contains("\\hyperref[ranked-recommendations]"),
+            has_forward_link_to(&render.latex, "ranked-recommendations"),
             "GitHub slug resolves to the canonical id: {}",
             render.latex
         );
         assert!(
-            render.latex.contains("\\hyperref[init__-method]"),
+            has_forward_link_to(&render.latex, "init__-method"),
             "code-span slug resolves to the canonical id: {}",
             render.latex
         );
@@ -697,17 +713,17 @@ mod tests {
             return;
         };
         assert!(
-            render.latex.contains("\\hyperref[two]"),
+            has_forward_link_to(&render.latex, "two"),
             "GitHub -1 numbering resolves: {}",
             render.latex
         );
         assert!(
-            render.latex.contains("\\hyperref[ccc]"),
+            has_forward_link_to(&render.latex, "ccc"),
             "real id resolves: {}",
             render.latex
         );
         assert!(
-            !render.latex.contains("\\hyperref[dup-1]"),
+            !has_forward_link_to(&render.latex, "dup-1"),
             "ambiguous alias must not stay a link: {}",
             render.latex
         );
@@ -737,7 +753,7 @@ mod tests {
             return;
         };
         assert!(
-            render.latex.contains("\\hyperref[dup-1]"),
+            has_forward_link_to(&render.latex, "dup-1"),
             "real id beats the ambiguous alias: {}",
             render.latex
         );
@@ -753,7 +769,7 @@ mod tests {
             return;
         };
         assert!(
-            !render.latex.contains("\\hyperref[nope]"),
+            !has_forward_link_to(&render.latex, "nope"),
             "dead link must not stay a link: {}",
             render.latex
         );
@@ -782,7 +798,7 @@ mod tests {
         };
         for id in ["mycode", "myfig", "setup", "innerspan"] {
             assert!(
-                render.latex.contains(&format!("\\hyperref[{id}]")),
+                has_forward_link_to(&render.latex, id),
                 "non-capable target {id} keeps its forward link: {}",
                 render.latex
             );
@@ -818,7 +834,7 @@ mod tests {
             return;
         };
         let latex = &render.latex;
-        let div_label = latex.find("\\label{mydiv}").expect("div label");
+        let div_label = find_target(latex, "mydiv").expect("div target");
         let div_row = latex[div_label..]
             .find("\\BobBacklinks")
             .map(|offset| div_label + offset)
@@ -1036,12 +1052,12 @@ mod tests {
             return;
         };
         assert!(
-            render.latex.contains("\\hyperref[inner1]"),
+            has_forward_link_to(&render.latex, "inner1"),
             "nested DefinitionList link stays a forward link: {}",
             render.latex
         );
         assert!(
-            render.latex.contains("\\hyperref[inner2]"),
+            has_forward_link_to(&render.latex, "inner2"),
             "nested Div link stays a forward link: {}",
             render.latex
         );
@@ -1071,7 +1087,7 @@ mod tests {
             return;
         };
         assert!(
-            head.latex.contains("\\hyperref[inner]"),
+            has_forward_link_to(&head.latex, "inner"),
             "head span link stays a forward link: {}",
             head.latex
         );
@@ -1092,7 +1108,7 @@ mod tests {
             return;
         };
         assert!(
-            foot.latex.contains("\\hyperref[inner]"),
+            has_forward_link_to(&foot.latex, "inner"),
             "foot span link stays a forward link: {}",
             foot.latex
         );
@@ -1116,7 +1132,7 @@ mod tests {
             return;
         };
         assert!(
-            render.latex.contains("\\hyperref[inner]{go}"),
+            has_forward_link_to(&render.latex, "inner"),
             "source link stays a forward link: {}",
             render.latex
         );

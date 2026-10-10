@@ -14,6 +14,15 @@ const GOLDEN_ROOT: &str = "/Users/test/bob";
 const PINNED_NOW: &str = "2026-08-28 09:10:00";
 
 fn agenda_json(vault: &Path, day_file: &Path, extra: &[&str]) -> Value {
+    agenda_json_with_config(vault, day_file, extra, None)
+}
+
+fn agenda_json_with_config(
+    vault: &Path,
+    day_file: &Path,
+    extra: &[&str],
+    config: Option<&Path>,
+) -> Value {
     let mut command = bob_command();
     command
         .arg("capture-pomodoros")
@@ -24,6 +33,9 @@ fn agenda_json(vault: &Path, day_file: &Path, extra: &[&str]) -> Value {
         .arg("json");
     for arg in extra {
         command.arg(arg);
+    }
+    if let Some(config) = config {
+        command.env("BOB_CONFIG_FILE", config);
     }
     let output = command
         .env("BOB_DAY_FILE", day_file)
@@ -254,6 +266,13 @@ fn agenda_all_lists_completed_with_empty_payloads() {
         serde_json::json!({"count": 1, "minutes": 30})
     );
     assert_eq!(json["date"], "2026-08-28");
+    assert_eq!(json["plan_budget"]["status"], "ok");
+    // The completed EARLY entry and its link are visible under --all but
+    // don't contribute to the saved open-ledger budget.
+    assert_eq!(json["plan_budget"]["themes"]["count"], 1);
+    assert_eq!(json["plan_budget"]["themes"]["cap"], 3);
+    assert_eq!(json["plan_budget"]["links"]["count"], 0);
+    assert_eq!(json["plan_budget"]["links"]["cap"], 10);
 }
 
 #[test]
@@ -286,6 +305,7 @@ fn agenda_default_output_stays_byte_identical() {
         serde_json::from_str(stdout(&output).trim()).expect("default json");
     assert!(json.get("date").is_none(), "{json}");
     assert!(json.get("completed_summary").is_none(), "{json}");
+    assert!(json.get("plan_budget").is_none(), "{json}");
     for entry in json["pomodoros"].as_array().expect("array") {
         for key in [
             "role",
@@ -298,6 +318,148 @@ fn agenda_default_output_stays_byte_identical() {
             assert!(entry.get(key).is_none(), "{key}: {json}");
         }
     }
+}
+
+#[test]
+fn agenda_budget_uses_configured_caps_and_strict_over_comparison() {
+    let temp = TempDir::new("bob-cli-pomodoros-agenda-budget-caps");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("2026/20260828.md");
+    let config = temp.path().join("config.yml");
+    write_file(
+        &day_file,
+        concat!(
+            "# Day\n",
+            "## Pomodoros\n",
+            "- [ ] () — ALPHA\n",
+            "\t- [[tasks#^a]]\n",
+            "- [ ] () — BETA\n",
+            "\t- [[tasks#^b]]\n",
+            "- [ ] () — GAMMA\n",
+            "\t- [[tasks#^c]]\n",
+            "- [ ] () — DELTA\n",
+            "\t- [[tasks#^d]]\n",
+        ),
+    );
+    write_file(
+        &config,
+        "plan:\n  max_themes: 4\n  max_links: 4\n  strict: true\n",
+    );
+
+    let at_cap = agenda_json_with_config(&vault, &day_file, &[], Some(&config));
+    assert_eq!(
+        at_cap["plan_budget"],
+        serde_json::json!({
+            "status": "ok",
+            "themes": {"count": 4, "cap": 4, "over": false},
+            "links": {"count": 4, "cap": 4, "over": false}
+        })
+    );
+
+    write_file(&config, "plan:\n  max_themes: 3\n  max_links: 3\n");
+    let over = agenda_json_with_config(&vault, &day_file, &[], Some(&config));
+    assert_eq!(
+        over["plan_budget"],
+        serde_json::json!({
+            "status": "over",
+            "themes": {"count": 4, "cap": 3, "over": true},
+            "links": {"count": 4, "cap": 3, "over": true}
+        })
+    );
+}
+
+#[test]
+fn agenda_budget_includes_real_zero_for_empty_and_completed_only_ledgers() {
+    let temp = TempDir::new("bob-cli-pomodoros-agenda-budget-empty");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("2026/20260828.md");
+    write_file(&day_file, "# Day\n## Pomodoros\n");
+
+    let empty = agenda_json(&vault, &day_file, &[]);
+    assert_eq!(empty["plan_budget"]["themes"]["count"], 0);
+    assert_eq!(empty["plan_budget"]["themes"]["cap"], 3);
+    assert_eq!(empty["plan_budget"]["links"]["count"], 0);
+    assert_eq!(empty["plan_budget"]["links"]["cap"], 10);
+
+    write_file(
+        &day_file,
+        "# Day\n## Pomodoros\n- [x] (0700-0730) — CLOSED\n\t- [[tasks#^closed]]\n",
+    );
+    let closed = agenda_json_with_config(&vault, &day_file, &["--all"], None);
+    assert_eq!(closed["pomodoros"].as_array().unwrap().len(), 1);
+    assert_eq!(closed["plan_budget"]["themes"]["count"], 0);
+    assert_eq!(closed["plan_budget"]["links"]["count"], 0);
+}
+
+#[test]
+fn agenda_budget_omits_missing_section_and_degrades_on_invalid_config() {
+    let temp = TempDir::new("bob-cli-pomodoros-agenda-budget-failures");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("2026/20260828.md");
+    let config = temp.path().join("config.yml");
+    write_file(&day_file, "# Day\n## Other\n- [ ] no ledger\n");
+    let missing_section = agenda_json(&vault, &day_file, &[]);
+    assert!(missing_section.get("plan_budget").is_none());
+
+    write_file(&day_file, "# Day\n## Pomodoros\n- [ ] () — ALPHA\n");
+    write_file(&config, "plan:\n  max_themes: many\n");
+    let invalid =
+        agenda_json_with_config(&vault, &day_file, &[], Some(&config));
+    assert!(invalid.get("plan_budget").is_none());
+    let warnings = invalid["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 1);
+    assert!(warnings[0]
+        .as_str()
+        .unwrap()
+        .starts_with("plan budget unavailable: "));
+
+    let output = bob_command()
+        .arg("capture-pomodoros")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_CONFIG_FILE", &config)
+        .env("BOB_NOW", PINNED_NOW)
+        .output()
+        .expect("run no-tasks output");
+    assert_success(&output);
+    let no_tasks: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(no_tasks.get("plan_budget").is_none());
+    assert!(no_tasks["warnings"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn agenda_budget_output_is_repeatable_and_read_only() {
+    let temp = TempDir::new("bob-cli-pomodoros-agenda-budget-read-only");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("2026/20260828.md");
+    write_file(
+        &day_file,
+        "# Day\n## Pomodoros\n- [ ] () — ALPHA\n\t- [[tasks#^a]]\n",
+    );
+    let before = fs::read(&day_file).unwrap();
+    let run = || {
+        let output = bob_command()
+            .arg("capture-pomodoros")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-t")
+            .arg("-f")
+            .arg("json")
+            .env("BOB_DAY_FILE", &day_file)
+            .env("BOB_NOW", PINNED_NOW)
+            .output()
+            .expect("run agenda");
+        assert_success(&output);
+        output.stdout
+    };
+    let first = run();
+    let second = run();
+    assert_eq!(first, second);
+    assert_eq!(fs::read(&day_file).unwrap(), before);
+    assert_eq!(fs::read_dir(&vault).unwrap().count(), 1);
 }
 
 #[test]
@@ -321,6 +483,7 @@ fn agenda_numbers_match_operator_lineups() {
         ),
     );
     let agenda = agenda_json(&vault, &day_file, &[]);
+    let saved_budget = &agenda["plan_budget"];
     let current = agenda["pomodoros"]
         .as_array()
         .expect("array")
@@ -346,6 +509,14 @@ fn agenda_numbers_match_operator_lineups() {
     assert_success(&close);
     let close_json: Value =
         serde_json::from_str(stdout(&close).trim()).expect("close json");
+    assert_eq!(
+        close_json["plan_budget"]["themes"]["before"],
+        saved_budget["themes"]["count"]
+    );
+    assert_eq!(
+        close_json["plan_budget"]["links"]["before"],
+        saved_budget["links"]["count"]
+    );
     let lineup = close_json["pomodoro_close"]["task_links"]
         .as_array()
         .expect("task_links");
@@ -398,6 +569,23 @@ fn agenda_numbers_match_operator_lineups() {
     assert_success(&start);
     let start_json: Value =
         serde_json::from_str(stdout(&start).trim()).expect("start json");
+    assert_eq!(
+        start_json["plan_budget"]["themes"]["before"],
+        idle_agenda["plan_budget"]["themes"]["count"]
+    );
+    assert_eq!(
+        start_json["plan_budget"]["links"]["before"],
+        idle_agenda["plan_budget"]["links"]["count"]
+    );
+    for meter in ["themes", "links"] {
+        for field in ["count", "cap", "over"] {
+            assert_eq!(
+                start_json["plan_budget"][meter][field],
+                idle_agenda["plan_budget"][meter][field],
+                "{meter}.{field}"
+            );
+        }
+    }
     let rows = start_json["pomodoro_start"]["tasks"]
         .as_array()
         .expect("tasks");
@@ -408,5 +596,64 @@ fn agenda_numbers_match_operator_lineups() {
         assert_eq!(item["ledger_line"], row["ledger_line"]);
         assert_eq!(item["block_link"], row["block_link"]);
         assert_eq!(item["text"], row["text"]);
+    }
+}
+
+#[test]
+fn agenda_budget_matches_plan_for_merged_exempt_alias_and_prose_links() {
+    let temp = TempDir::new("bob-cli-pomodoros-agenda-budget-parity");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("2026/20260828.md");
+    write_file(
+        &day_file,
+        concat!(
+            "# Day\n",
+            "## Pomodoros\n",
+            "- [ ] () — ALPHA / BETA\n",
+            "  - [[#^self]]\n",
+            "  - [[20260828#^self]]\n",
+            "  - [[2026/20260828#^self]]\n",
+            "  - note with [[tasks#^prose]]\n",
+            "  - [[tasks#^shared]]\n",
+            "  - ~~[[tasks#^struck]]~~\n",
+            "  - `[[tasks#^code]]`\n",
+            "  - ![[tasks#^embedded]]\n",
+            "  - [[tasks#^deferred]]#\n",
+            "  - ```markdown\n",
+            "    [[tasks#^fenced]]\n",
+            "    ```\n",
+            "- [ ] () — BETA / ALPHA\n",
+            "  - [[tasks#^shared]]\n",
+            "  - [[tasks#^second]]\n",
+            "- [ ] () — GTD\n",
+            "  - [[tasks#^exempt]]\n",
+            "- [x] (0700-0730) — CLOSED\n",
+            "  - [[tasks#^closed]]\n",
+            "- [ ] ()\n",
+            "  - [[tasks#^unnamed]]\n",
+        ),
+    );
+    let agenda = agenda_json(&vault, &day_file, &[]);
+    let plan = bob_command()
+        .arg("plan")
+        .arg("-f")
+        .arg("json")
+        .env("BOB_DIR", &vault)
+        .env("BOB_DAY_FILE", &day_file)
+        .output()
+        .expect("run bob plan json");
+    assert_success(&plan);
+    let plan: Value = serde_json::from_slice(&plan.stdout).expect("plan json");
+
+    for field in ["status"] {
+        assert_eq!(agenda["plan_budget"][field], plan[field]);
+    }
+    for meter in ["themes", "links"] {
+        for field in ["count", "cap", "over"] {
+            assert_eq!(
+                agenda["plan_budget"][meter][field], plan[meter][field],
+                "{meter}.{field}"
+            );
+        }
     }
 }

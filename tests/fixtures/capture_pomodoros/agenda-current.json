@@ -7,6 +7,19 @@
   "date": "2026-08-28",
   "day_file": "/Users/test/bob/vault/2026/20260828.md",
   "ok": true,
+  "plan_budget": {
+    "links": {
+      "cap": 10,
+      "count": 3,
+      "over": false
+    },
+    "status": "ok",
+    "themes": {
+      "cap": 3,
+      "count": 3,
+      "over": false
+    }
+  },
   "pomodoros": [
     {
       "child_count": 5,

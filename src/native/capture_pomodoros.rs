@@ -20,7 +20,8 @@ use super::{
         list_item_body, nearest_shallower_list_item_parent, LineSpan,
     },
     capture_language, capture_pomodoro_close, capture_pomodoros_agenda,
-    capture_task_sections, env as bob_env, markdown, note_tasks, pomodoro,
+    capture_task_sections, config, env as bob_env, markdown, note_tasks,
+    plan_budget, pomodoro,
     style::{display_width, pad_right, Styler},
 };
 
@@ -77,8 +78,8 @@ Pomodoros section returns a successful empty list with a warning.\n\n\
 With --tasks, each listed entry also carries its agenda payload: the entry \
 role, naive start/end datetimes, the retired-link count, session notes, and \
 the resolved Task Link lineup with operator numbers, clean titles, statuses, \
-task-block lines, and ledger notes. The same vault bytes always produce the \
-same output bytes.",
+task-block lines, and ledger notes. Its optional plan_budget is computed from \
+the saved daily note and the configured plan limits.",
         )
         .after_help(
             "Examples:\n  bob capture-pomodoros --format json\n  bob capture-pomodoros\n  bob capture-pomodoros --all\n  bob capture-pomodoros -f json\n  bob capture-pomodoros -b ~/bob -a -f json\n  bob capture-pomodoros -t -f json\n\nEnvironment:\n  BOB_DAY_FILE              Daily note override; otherwise <bob-dir>/YYYY/YYYYMMDD.md\n  BOB_DIR                   Bob vault root when --bob-dir is omitted\n  BOB_NOW                   Local datetime override for default daily-note selection",
@@ -194,6 +195,18 @@ struct CapturePomodorosResult {
     date: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     completed_summary: Option<capture_pomodoros_agenda::CompletedSummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    plan_budget: Option<CapturePomodorosPlanBudget>,
+}
+
+/// Saved daily-plan budget for idle agenda clients. Capture's before/after
+/// budget is mutation-specific, so the agenda exposes only the shared engine's
+/// status and current meters.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct CapturePomodorosPlanBudget {
+    status: plan_budget::PlanStatus,
+    themes: plan_budget::PlanMeter,
+    links: plan_budget::PlanMeter,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -247,6 +260,7 @@ fn list_capture_pomodoros(
                 warnings,
                 date: request.include_tasks.then(|| agenda_date.to_string()),
                 completed_summary: empty_summary(),
+                plan_budget: None,
             });
         }
         Err(error) => {
@@ -265,6 +279,39 @@ fn list_capture_pomodoros(
         )));
     }
     warnings.extend(scan.warnings.iter().cloned());
+    let plan_budget = if request.include_tasks && scan.has_section {
+        match config::load_plan_config(&config::config_path()) {
+            Ok(config) => {
+                let daily_key = day_file
+                    .strip_prefix(&request.bob_dir)
+                    .map(|path| path.display().to_string())
+                    .ok()
+                    .or_else(|| plan_budget::daily_key_from_path(&day_file));
+                let budget = plan_budget::compute_for_daily(
+                    &contents,
+                    &config,
+                    daily_key.as_deref(),
+                );
+                Some(CapturePomodorosPlanBudget {
+                    status: budget.status,
+                    themes: budget.themes,
+                    links: budget.links,
+                })
+            }
+            Err(error) => {
+                let message = match error {
+                    config::ConfigError::Read(message)
+                    | config::ConfigError::Invalid(message) => message,
+                };
+                warnings.push(bounded_warning(format!(
+                    "plan budget unavailable: {message}"
+                )));
+                None
+            }
+        }
+    } else {
+        None
+    };
     let current_count = current_task_link_count(&contents, &scan.entries);
     let listed: Vec<PomodoroEntry> = scan
         .entries
@@ -327,6 +374,7 @@ fn list_capture_pomodoros(
         warnings,
         date: request.include_tasks.then(|| agenda_date.to_string()),
         completed_summary,
+        plan_budget,
     })
 }
 
@@ -1533,6 +1581,7 @@ mod tests {
             warnings: Vec::new(),
             date: None,
             completed_summary: None,
+            plan_budget: None,
         };
 
         let value: serde_json::Value =
@@ -1569,6 +1618,7 @@ mod tests {
         }
         assert!(value.get("date").is_none());
         assert!(value.get("completed_summary").is_none());
+        assert!(value.get("plan_budget").is_none());
         assert_eq!(value["warnings"].as_array().expect("warnings").len(), 0);
     }
 
@@ -1664,6 +1714,7 @@ mod tests {
             warnings: vec!["watch out".to_string()],
             date: None,
             completed_summary: None,
+            plan_budget: None,
         };
         let human = human_success(&result, &Styler::plain());
         assert!(human.contains("warning - watch out"));

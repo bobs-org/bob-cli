@@ -4635,7 +4635,19 @@ scanned once per filter mode (embedded links resolve with the global filter
 cleared), empty link targets resolve to the daily note, and one bad link
 becomes that item's `resolution` and `warning` while a missing daily note or
 missing `## Pomodoros` section keeps the successful empty list with a warning.
-The same vault bytes always produce the same output bytes.
+When the daily note has a `## Pomodoros` section, the top level also adds
+`plan_budget` with `status`, `themes`, and `links`. Each meter contains the saved
+open-ledger `count`, configured `cap`, and `over` flag (`count > cap`). It uses
+the same `plan:` limits loaded by capture (defaults are 3 themes and 10 links),
+and the counting rules in [Plan budgets](plan.md); it does not include capture
+growth, destination, or warning details. Empty and completed-only ledgers include
+real zero counts. A missing daily note or section omits the budget. If the plan
+configuration is invalid or unreadable, the agenda remains available, omits
+`plan_budget`, and adds one bounded `plan budget unavailable: ...` warning. A
+missing config file uses the loader's defaults. Calls without `--tasks` neither
+load plan configuration nor include the budget. The budget depends on both the
+daily-note contents and plan configuration; the rest of the agenda is derived
+from its existing note inputs.
 
 `capture-task-sections` lists the ALL-CAPS direct-child section bullets of one
 parent task in document order. Exactly one of `--block-id`/`-i` or
