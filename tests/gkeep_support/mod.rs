@@ -75,6 +75,7 @@ impl GkeepEnv {
         let dir = TempDir::new(prefix);
         let vault = dir.path().join("vault");
         fs::create_dir_all(&vault).expect("create vault dir");
+        fs::create_dir_all(dir.path().join("home")).expect("create home dir");
         let config = dir.path().join("config.yml");
         fs::write(&config, "gkeep:\n  email: bryanbugyi34@gmail.com\n")
             .expect("write gkeep config");
@@ -116,6 +117,10 @@ impl GkeepEnv {
                 self.dir.path().join("bob_sync.lock"),
             )
             .env("XDG_STATE_HOME", self.dir.path().join("state"))
+            .env("HOME", self.dir.path().join("home"))
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
             .env("BOB_HIGHLIGHTS_RESOLVE", "*=203.0.113.1")
             .env(
                 "BOB_WEB_CLIP_ADAPTER",
@@ -165,6 +170,92 @@ pub(crate) fn stdout(output: &std::process::Output) -> String {
 
 pub(crate) fn stderr(output: &std::process::Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
+}
+
+/// Isolate a `git` command from the developer's global/system ignore rules.
+pub(crate) fn isolate_git(command: &mut Command) -> &mut Command {
+    command
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+}
+
+/// Production-style vault allowlist: ignore everything, then un-ignore
+/// notes, directory traversal, and Obsidian JSON.
+pub(crate) fn production_allowlist() -> &'static str {
+    "# Ignore everything by default.\n\
+     *\n\
+     \n\
+     !.gitignore\n\
+     !*/\n\
+     !*.md\n\
+     !.obsidian/\n\
+     !.obsidian/**/*.json\n"
+}
+
+/// Initialize a Git vault isolated from global/system Git config.
+pub(crate) fn init_git(vault: &Path) {
+    git(vault, &["init"]);
+    git(vault, &["config", "user.email", "test@example.com"]);
+    git(vault, &["config", "user.name", "Test"]);
+    git(vault, &["config", "commit.gpgsign", "false"]);
+    git(vault, &["config", "core.excludesFile", "/dev/null"]);
+}
+
+/// Run `git -C vault <args>` with isolated config.
+pub(crate) fn git(vault: &Path, args: &[&str]) -> std::process::Output {
+    let output = isolate_git(&mut Command::new("git"))
+        .arg("-C")
+        .arg(vault)
+        .args(args)
+        .output()
+        .unwrap_or_else(|error| panic!("run git {args:?}: {error}"));
+    assert!(
+        output.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    output
+}
+
+pub(crate) fn git_rev_list_count(vault: &Path) -> usize {
+    let out = isolate_git(&mut Command::new("git"))
+        .arg("-C")
+        .arg(vault)
+        .args(["rev-list", "--count", "HEAD"])
+        .output()
+        .expect("git rev-list");
+    assert!(out.status.success());
+    String::from_utf8_lossy(&out.stdout)
+        .trim()
+        .parse()
+        .expect("rev-list count parses")
+}
+
+pub(crate) fn git_log_names(vault: &Path) -> Vec<String> {
+    let out = isolate_git(&mut Command::new("git"))
+        .arg("-C")
+        .arg(vault)
+        .args(["show", "--name-only", "--format="])
+        .output()
+        .expect("git show");
+    assert!(out.status.success());
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(str::to_string)
+        .filter(|line| !line.is_empty())
+        .collect()
+}
+
+pub(crate) fn git_check_ignore_quiet(vault: &Path, rel: &str) -> i32 {
+    isolate_git(&mut Command::new("git"))
+        .arg("-C")
+        .arg(vault)
+        .args(["check-ignore", "-q", "--", rel])
+        .status()
+        .expect("git check-ignore")
+        .code()
+        .unwrap_or(255)
 }
 
 /// A fake `BOB_GKEEP_ADAPTER` executable speaking adapter protocol v1.

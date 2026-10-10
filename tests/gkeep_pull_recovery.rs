@@ -224,6 +224,246 @@ fn portability_second_host_with_empty_state_adds_nothing() {
     let _ = state;
 }
 
+fn store_files(vault: &Path) -> Vec<std::path::PathBuf> {
+    let dir = vault.join(".bob/gkeep/imports");
+    let Ok(entries) = fs::read_dir(&dir) else {
+        return Vec::new();
+    };
+    let mut out: Vec<std::path::PathBuf> = entries
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "json"))
+        .collect();
+    out.sort();
+    out
+}
+
+fn write_allowlist(vault: &Path, extra: &str) {
+    fs::write(
+        vault.join(".gitignore"),
+        format!("{}{extra}", gkeep_support::production_allowlist()),
+    )
+    .expect("gitignore");
+}
+
+fn wrap_adapter_recording_head(
+    env: &GkeepEnv,
+    fake: &FakeAdapter,
+    out_dir: &Path,
+) -> std::path::PathBuf {
+    let path = out_dir.join("record-head-adapter.sh");
+    let fake_path = fake.path().display().to_string().replace('\'', "'\\''");
+    let vault = env.vault().display().to_string().replace('\'', "'\\''");
+    let dest = out_dir.display().to_string().replace('\'', "'\\''");
+    fs::write(
+        &path,
+        format!(
+            "#!/bin/sh\n\
+             request=$(cat)\n\
+             op=$(printf '%s' \"$request\" | sed -n 's/.*\"op\":\"\\([a-z_]*\\)\".*/\\1/p')\n\
+             if [ \"$op\" = archive ]; then\n\
+             GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null \\\n\
+             git -C '{vault}' rev-parse HEAD > '{dest}/archive-head'\n\
+             GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null \\\n\
+             git -C '{vault}' show --name-only --format= HEAD > '{dest}/archive-files'\n\
+             fi\n\
+             printf '%s' \"$request\" | '{fake_path}'\n"
+        ),
+    )
+    .expect("wrapper");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&path).expect("stat").permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&path, perms).expect("chmod");
+    }
+    path
+}
+
+#[test]
+fn ignored_uncommitted_receipt_retries_commit_before_archive() {
+    let (env, fake, state) = setup("bob-cli-gkeep-retry-ignored");
+    gkeep_support::init_git(env.vault());
+    write_allowlist(env.vault(), "!/.bob/gkeep/imports/*.json\n");
+    gkeep_support::git(env.vault(), &["add", ".gitignore"]);
+    gkeep_support::git(env.vault(), &["commit", "-m", "allowlist"]);
+    let n1 = note("Retry me").id("note-1").build();
+    fake.respond(
+        "snapshot",
+        &snapshot_ok("bryanbugyi34@gmail.com", vec![n1.clone()]),
+    );
+    fake.respond("archive", &archive_ok(vec![("note-1", "archived")]));
+    let crashed = run_pull(
+        &env,
+        &fake,
+        &state,
+        &[],
+        &[("BOB_GKEEP_TEST_FAIL_AFTER_RECEIPT", "1")],
+    );
+    assert_ne!(crashed.status.code(), Some(0), "{}", stderr(&crashed));
+    assert!(target(&env).contains("Retry me"));
+    assert_eq!(store_files(env.vault()).len(), 1);
+    assert_eq!(fake.call_count(), 1, "no archive after receipt fault");
+
+    write_allowlist(env.vault(), "");
+    let ignored = run_pull(&env, &fake, &state, &[], &[]);
+    assert_eq!(ignored.status.code(), Some(1), "{}", stderr(&ignored));
+    let combined = format!("{}{}", stdout(&ignored), stderr(&ignored));
+    assert!(
+        combined.contains("cannot track GKeep import history"),
+        "{combined}"
+    );
+    assert_eq!(
+        target(&env).matches("Retry me").count(),
+        1,
+        "no duplicate write"
+    );
+    assert_eq!(fake.call_count(), 2, "snapshot only on ignored retry");
+
+    write_allowlist(env.vault(), "!/.bob/gkeep/imports/*.json\n");
+    let wrapper = wrap_adapter_recording_head(&env, &fake, state.path());
+    let recovered = run_pull(
+        &env,
+        &fake,
+        &state,
+        &[],
+        &[("BOB_GKEEP_ADAPTER", wrapper.to_str().unwrap())],
+    );
+    assert_eq!(recovered.status.code(), Some(0), "{}", stderr(&recovered));
+    assert_eq!(target(&env).matches("Retry me").count(), 1);
+    let names = gkeep_support::git_log_names(env.vault());
+    assert!(
+        names.iter().any(|name| name == "gkeep_inbox.md"),
+        "{names:?}"
+    );
+    assert!(
+        names
+            .iter()
+            .any(|name| name.starts_with(".bob/gkeep/imports/")),
+        "{names:?}"
+    );
+    let archive_files =
+        fs::read_to_string(state.path().join("archive-files")).expect("files");
+    assert!(
+        archive_files.contains("gkeep_inbox.md"),
+        "commit landed before archive:\n{archive_files}"
+    );
+    assert!(
+        archive_files.contains(".bob/gkeep/imports/"),
+        "receipt committed before archive:\n{archive_files}"
+    );
+}
+
+#[test]
+fn archive_only_uses_recorded_destination_not_inbox() {
+    let (env, fake, state) = setup("bob-cli-gkeep-other-dest");
+    gkeep_support::init_git(env.vault());
+    write_allowlist(env.vault(), "!/.bob/gkeep/imports/*.json\n");
+    gkeep_support::git(env.vault(), &["add", ".gitignore"]);
+    gkeep_support::git(env.vault(), &["commit", "-m", "allowlist"]);
+    let n1 = note("Elsewhere").id("note-1").build();
+    fake.respond(
+        "snapshot",
+        &snapshot_ok("bryanbugyi34@gmail.com", vec![n1.clone()]),
+    );
+    fake.respond("archive", &archive_ok(vec![("note-1", "archived")]));
+    let first = run_pull(
+        &env,
+        &fake,
+        &state,
+        &[],
+        &[("BOB_GKEEP_TEST_FAIL_AFTER_RECEIPT", "1")],
+    );
+    assert_ne!(first.status.code(), Some(0));
+    let inbox = target(&env);
+    fs::write(env.vault().join("projects.md"), &inbox).expect("other dest");
+    fs::write(env.vault().join("gkeep_inbox.md"), "## Tasks\n")
+        .expect("reset inbox");
+    let receipt_path = &store_files(env.vault())[0];
+    let mut tx: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(receipt_path).expect("read tx"),
+    )
+    .expect("json");
+    tx["destination"] = serde_json::json!("projects.md");
+    tx["entries"][0]["path"] = serde_json::json!("projects.md");
+    fs::write(
+        receipt_path,
+        serde_json::to_string_pretty(&tx).expect("write"),
+    )
+    .expect("rewrite tx");
+    let out = run_pull(&env, &fake, &state, &[], &[]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let names = gkeep_support::git_log_names(env.vault());
+    assert!(
+        names.iter().any(|name| name == "projects.md"),
+        "recorded dest committed: {names:?}"
+    );
+    assert!(
+        names
+            .iter()
+            .any(|name| name.starts_with(".bob/gkeep/imports/")),
+        "{names:?}"
+    );
+}
+
+#[test]
+fn committed_receipt_survives_missing_original_note() {
+    let (env, fake, state) = setup("bob-cli-gkeep-missing-dest");
+    gkeep_support::init_git(env.vault());
+    write_allowlist(env.vault(), "!/.bob/gkeep/imports/*.json\n");
+    gkeep_support::git(env.vault(), &["add", ".gitignore"]);
+    gkeep_support::git(env.vault(), &["commit", "-m", "allowlist"]);
+    let n1 = note("Moved on").id("note-1").build();
+    fake.respond(
+        "snapshot",
+        &snapshot_ok("bryanbugyi34@gmail.com", vec![n1.clone()]),
+    );
+    fake.respond("archive", &archive_ok(vec![("note-1", "archived")]));
+    let first = run_pull(&env, &fake, &state, &[], &[]);
+    assert_eq!(first.status.code(), Some(0), "{}", stderr(&first));
+    let inbox = target(&env);
+    fs::write(env.vault().join("projects.md"), &inbox).expect("move dest");
+    fs::write(env.vault().join("gkeep_inbox.md"), "## Tasks\n")
+        .expect("reset inbox");
+    let receipt_path = &store_files(env.vault())[0];
+    let mut tx: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(receipt_path).expect("read tx"),
+    )
+    .expect("json");
+    tx["destination"] = serde_json::json!("projects.md");
+    tx["entries"][0]["path"] = serde_json::json!("projects.md");
+    fs::write(
+        receipt_path,
+        serde_json::to_string_pretty(&tx).expect("write"),
+    )
+    .expect("rewrite tx");
+    gkeep_support::git(
+        env.vault(),
+        &[
+            "add",
+            "projects.md",
+            "gkeep_inbox.md",
+            receipt_path
+                .strip_prefix(env.vault())
+                .expect("rel")
+                .to_str()
+                .expect("utf8"),
+        ],
+    );
+    gkeep_support::git(env.vault(), &["commit", "-m", "moved"]);
+    fs::remove_file(env.vault().join("projects.md")).expect("delete dest");
+    let before_count = gkeep_support::git_rev_list_count(env.vault());
+    let out = run_pull(&env, &fake, &state, &[], &[]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(
+        gkeep_support::git_rev_list_count(env.vault()),
+        before_count,
+        "no empty commit"
+    );
+    assert!(!env.vault().join("projects.md").exists());
+}
+
 fn copy_dir(src: &Path, dst: &Path) {
     fs::create_dir_all(dst).expect("mkdir dst");
     for entry in fs::read_dir(src).expect("read src") {

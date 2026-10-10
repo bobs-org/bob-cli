@@ -418,9 +418,42 @@ pub(crate) fn run(args: &PullArgs) -> i32 {
 
     // Nothing to write (only pending/skipped, or clips alone): skip
     // write, verify, and commit, take no vault lock, and go straight
-    // to the guarded archive — unless an unfinished transaction needs
-    // vault-lock recovery first.
-    if !needs_target && imports::unfinished(&store_files).is_empty() {
+    // to the guarded archive — unless an unfinished transaction or a
+    // verified-but-uncommitted receipt needs vault-lock recovery first.
+    // A verified receipt is not proof of a Git commit.
+    let child_env_early = ob::child_env();
+    let git_worktree = if args.no_commit {
+        false
+    } else {
+        match ob::detect_git_worktree(&bob_dir, &child_env_early) {
+            Ok(inside) => inside,
+            Err(error) => {
+                if has_git_ancestor(&bob_dir) {
+                    return ui::report_error(
+                        "pull",
+                        &GkeepError::runtime(
+                            "commit",
+                            format!("detect the vault Git worktree: {error}"),
+                        ),
+                        format_name,
+                    );
+                }
+                false
+            }
+        }
+    };
+    let receipt_backed_archive = plan.notes.iter().any(|planned| {
+        matches!(planned.action, PlanAction::ArchiveOnly)
+            && imports::has_verified(
+                &store_files,
+                &planned.note.id,
+                &planned.note.content.fingerprint(),
+            )
+    });
+    if !needs_target
+        && imports::unfinished(&store_files).is_empty()
+        && !(git_worktree && receipt_backed_archive)
+    {
         return finish_with_archive(
             args,
             &config,
@@ -527,6 +560,7 @@ pub(crate) fn run(args: &PullArgs) -> i32 {
     if !fresh_needs_target {
         // Archive-only recovery: a verified working-tree record alone must
         // not bypass the commit requirement. Complete the scoped commit
+        // of outstanding receipt batches and their recorded destinations
         // before any archive.
         if !args.no_commit {
             let child_env = ob::child_env();
@@ -549,29 +583,15 @@ pub(crate) fn run(args: &PullArgs) -> i32 {
                 }
             };
             if worktree {
-                let tx_rel_paths: Vec<PathBuf> = fresh_store
-                    .iter()
-                    .filter(|(_, file)| {
-                        file.destination
-                            == target_rel.to_string_lossy().replace('\\', "/")
-                    })
-                    .map(|(path, _)| {
-                        path.strip_prefix(&bob_dir)
-                            .map(|relative| relative.to_path_buf())
-                            .unwrap_or_else(|_| {
-                                PathBuf::from(imports::IMPORTS_DIR)
-                                    .join(path.file_name().unwrap_or_default())
-                            })
-                    })
-                    .collect();
                 let message =
                     "bob gkeep pull: recover verified imports".to_string();
-                match commit_target_and_metadata(
+                match commit_outstanding_imports(
                     &bob_dir,
                     &child_env,
                     &message,
-                    &target_rel,
-                    &tx_rel_paths,
+                    &fresh_store,
+                    &fresh_plan,
+                    &[],
                 ) {
                     Ok(sha) => {
                         return finish_with_archive(
@@ -672,17 +692,13 @@ pub(crate) fn run(args: &PullArgs) -> i32 {
         // Preflight only when the vault is a worktree; non-Git vaults
         // still require durable verified records before archival.
         if ob::detect_git_worktree(&bob_dir, &child_env).unwrap_or(false)
-            && let Err(message) = imports::preflight_trackable(
+            && let Err(error) = imports::preflight_trackable(
                 &bob_dir,
                 &child_env,
                 &[target_rel.clone(), tx_rel_preview.clone()],
             )
         {
-            return ui::report_error(
-                "pull",
-                &GkeepError::runtime("commit", message),
-                format_name,
-            );
+            return ui::report_error("pull", &error.into_gkeep(), format_name);
         }
     }
     let tx_path = match imports::persist_prepared(&bob_dir, &prepared) {
@@ -1038,38 +1054,15 @@ pub(crate) fn run(args: &PullArgs) -> i32 {
             let count = verified.len();
             let message =
                 format!("bob gkeep pull: {count} notes from Google Keep");
-            // Include previously verified-but-uncommitted batches for the
-            // same destination so one commit finishes recovery.
-            let mut tx_rel_paths = vec![tx_rel.clone()];
-            if let Ok(all) = imports::read_all(&bob_dir) {
-                for (path, file) in &all {
-                    if *path == tx_path {
-                        continue;
-                    }
-                    if file.destination
-                        != target_rel.to_string_lossy().replace('\\', "/")
-                    {
-                        continue;
-                    }
-                    if file
-                        .entries
-                        .iter()
-                        .any(|entry| entry.state == EntryState::Verified)
-                    {
-                        if let Ok(rel) = path.strip_prefix(&bob_dir) {
-                            if !tx_rel_paths.contains(&rel.to_path_buf()) {
-                                tx_rel_paths.push(rel.to_path_buf());
-                            }
-                        }
-                    }
-                }
-            }
-            match commit_target_and_metadata(
+            let extra = vec![target_rel.clone(), tx_rel.clone()];
+            let store_now = imports::read_all(&bob_dir).unwrap_or_default();
+            match commit_outstanding_imports(
                 &bob_dir,
                 &child_env,
                 &message,
-                &target_rel,
-                &tx_rel_paths,
+                &store_now,
+                &fresh_plan,
+                &extra,
             ) {
                 Ok(sha) => {
                     commit_sha = sha;
@@ -1863,24 +1856,66 @@ fn resolve_unfinished(
     Ok(files)
 }
 
-/// Commit the target and this operation's metadata with the existing
-/// scoped helper. Other dirty or staged files remain untouched. After a
-/// successful commit, re-read the committed target evidence so an
-/// intervening editor save cannot be accepted as the verified write.
-fn commit_target_and_metadata(
+/// Commit outstanding receipt batches and their recorded destinations
+/// with the existing scoped helper. Other dirty or staged files remain
+/// untouched. Paths already present unchanged in HEAD are skipped so a
+/// repeat pull cannot create an empty commit. Extra paths (the current
+/// write's target and new receipt) are always included.
+fn commit_outstanding_imports(
     bob_dir: &Path,
     child_env: &ob::ChildEnv,
     message: &str,
-    target_rel: &Path,
-    tx_rel_paths: &[PathBuf],
+    store: &[(PathBuf, TransactionFile)],
+    plan: &Plan,
+    extra: &[PathBuf],
 ) -> Result<Option<String>, GkeepError> {
-    // Preflight: metadata paths must be trackable, never force-added.
-    let mut check: Vec<PathBuf> = vec![target_rel.to_path_buf()];
-    check.extend(tx_rel_paths.iter().cloned());
-    if let Err(message) =
-        imports::preflight_trackable(bob_dir, child_env, &check)
+    let mut check = extra.to_vec();
+    for planned in &plan.notes {
+        let fp = planned.note.content.fingerprint();
+        let Some((tx_path, file)) =
+            imports::verified_file_for(store, &planned.note.id, &fp)
+        else {
+            continue;
+        };
+        let receipt_rel = imports::vault_rel(bob_dir, tx_path);
+        let dest_rel = PathBuf::from(&file.destination);
+        let receipt_committed =
+            match imports::matches_head(bob_dir, child_env, &receipt_rel) {
+                Ok(value) => value,
+                Err(error) => {
+                    return Err(GkeepError::runtime("commit", error));
+                }
+            };
+        if receipt_committed {
+            continue;
+        }
+        let dest_path = bob_dir.join(&dest_rel);
+        if !dest_path.is_file() {
+            return Err(GkeepError::runtime(
+                "vault",
+                format!(
+                    "cannot finish GKeep import {}: destination {} is missing; evidence retained at {}; Keep content untouched",
+                    file.transaction_id,
+                    file.destination,
+                    tx_path.display()
+                ),
+            ));
+        }
+        if !check.iter().any(|path| path == &receipt_rel) {
+            check.push(receipt_rel);
+        }
+        if !check.iter().any(|path| path == &dest_rel) {
+            check.push(dest_rel);
+        }
+    }
+    check.sort();
+    check.dedup();
+    if check.is_empty() {
+        return Ok(None);
+    }
+    if let Err(error) = imports::preflight_trackable(bob_dir, child_env, &check)
     {
-        return Err(GkeepError::runtime("commit", message));
+        return Err(error.into_gkeep());
     }
     match ob::commit_paths(bob_dir, child_env, message, &check) {
         Ok(sha) => Ok(sha),

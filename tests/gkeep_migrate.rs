@@ -225,3 +225,127 @@ fn needs_no_config_or_adapter() {
     let after = fs::read_to_string(vault.join("gkeep_inbox.md")).expect("read");
     assert!(!after.contains("%%gkeep:"));
 }
+
+fn write_allowlist(vault: &Path, extra: &str) {
+    fs::write(
+        vault.join(".gitignore"),
+        format!("{}{extra}", gkeep_support::production_allowlist()),
+    )
+    .expect("gitignore");
+}
+
+#[test]
+fn restrictive_allowlist_leaves_markers_and_evidence_untouched() {
+    let env = GkeepEnv::new("bob-cli-gkeep-migrate-ignore");
+    gkeep_support::init_git(env.vault());
+    write_allowlist(env.vault(), "");
+    write(
+        &env.vault().join("gkeep_inbox.md"),
+        b"- [ ] #task Call dentist [created::2026-09-27]\n\t%%gkeep:v1:note-1:0123456789ab%%\n",
+    );
+    write(
+        &env.vault().join(".bob/gkeep/imports/preexisting.json"),
+        br#"{
+  "schema_version": 1,
+  "transaction_id": "preexisting01",
+  "destination": "other.md",
+  "before_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "after_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "baseline_counts": {},
+  "entries": [{
+    "id": "note-9",
+    "fp": "ffffffffffff",
+    "path": "other.md",
+    "block_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "state": "verified",
+    "dest_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  }]
+}
+"#,
+    );
+    gkeep_support::git(
+        env.vault(),
+        &["add", "-f", ".gitignore", "gkeep_inbox.md"],
+    );
+    gkeep_support::git(env.vault(), &["commit", "-m", "before"]);
+    let before_note =
+        fs::read(env.vault().join("gkeep_inbox.md")).expect("note");
+    let before_receipt =
+        fs::read(env.vault().join(".bob/gkeep/imports/preexisting.json"))
+            .expect("receipt");
+    let out = run_migrate(&env, &["-f", "json"]);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    let doc: serde_json::Value =
+        serde_json::from_str(&stdout(&out)).expect("json");
+    assert_eq!(doc["ok"], false);
+    assert_eq!(
+        fs::read(env.vault().join("gkeep_inbox.md")).expect("note after"),
+        before_note
+    );
+    assert_eq!(
+        fs::read(env.vault().join(".bob/gkeep/imports/preexisting.json"))
+            .expect("receipt after"),
+        before_receipt
+    );
+    assert_eq!(store_files(env.vault()).len(), 1);
+}
+
+#[test]
+fn allowlist_migrates_markers_and_reuses_uncommitted_receipt() {
+    let env = GkeepEnv::new("bob-cli-gkeep-migrate-allow");
+    gkeep_support::init_git(env.vault());
+    write_allowlist(env.vault(), "!/.bob/gkeep/imports/*.json\n");
+    write(
+        &env.vault().join("gkeep_inbox.md"),
+        b"- [ ] #task Call dentist [created::2026-09-27]\n\t%%gkeep:v1:note-1:0123456789ab%%\n",
+    );
+    gkeep_support::git(env.vault(), &["add", ".gitignore", "gkeep_inbox.md"]);
+    gkeep_support::git(env.vault(), &["commit", "-m", "before"]);
+    let first = run_migrate(&env, &[]);
+    assert_eq!(first.status.code(), Some(0), "{}", stderr(&first));
+    let after =
+        fs::read_to_string(env.vault().join("gkeep_inbox.md")).expect("read");
+    assert!(!after.contains("%%gkeep:"), "{after}");
+    let files = store_files(env.vault());
+    assert_eq!(files.len(), 1);
+    let names = gkeep_support::git_log_names(env.vault());
+    assert!(
+        names.iter().any(|name| name == "gkeep_inbox.md"),
+        "{names:?}"
+    );
+    assert!(
+        names
+            .iter()
+            .any(|name| name.starts_with(".bob/gkeep/imports/")),
+        "{names:?}"
+    );
+
+    write(
+        &env.vault().join("second.md"),
+        b"- [ ] #task Hardware [created::2026-09-26]\n\t%%gkeep:v1:note-2:ffffffffffff%%\n",
+    );
+    let prepared = run_migrate(&env, &["-C"]);
+    assert_eq!(prepared.status.code(), Some(0), "{}", stderr(&prepared));
+    let second_note =
+        fs::read_to_string(env.vault().join("second.md")).expect("second");
+    assert!(!second_note.contains("%%gkeep:"), "{second_note}");
+    assert_eq!(store_files(env.vault()).len(), 2);
+    write(
+        &env.vault().join("second.md"),
+        b"- [ ] #task Hardware [created::2026-09-26]\n\t%%gkeep:v1:note-2:ffffffffffff%%\n",
+    );
+    let reused = run_migrate(&env, &[]);
+    assert_eq!(reused.status.code(), Some(0), "{}", stderr(&reused));
+    assert_eq!(store_files(env.vault()).len(), 2, "reused existing receipt");
+    let names = gkeep_support::git_log_names(env.vault());
+    assert!(
+        names.iter().any(|name| name == "second.md"),
+        "reused receipt still committed with the note: {names:?}"
+    );
+    assert!(
+        names
+            .iter()
+            .any(|name| name.starts_with(".bob/gkeep/imports/")),
+        "{names:?}"
+    );
+}

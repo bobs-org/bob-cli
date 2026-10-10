@@ -338,6 +338,36 @@ task write or archive; an absent store is valid for a pre-upgrade vault.
 Read-only commands never create the store. In a Git vault the target and its
 records commit together (ignored metadata fails instead of force-adding);
 non-Git and `--no-commit` still require durable receipts before archival.
+`--no-commit` is not a workaround for a Git-synced vault: history must travel
+with the imported tasks.
+
+A vault that ignore-allowlists by extension (root `*` plus `!*/`, with JSON
+allowed only under `.obsidian`) must also allow the receipt files:
+
+```gitignore
+!/.bob/gkeep/imports/*.json
+```
+
+`!*/` already supplies directory traversal. If a parent directory is excluded
+(for example `.bob/`), add traversal exceptions for each ancestor
+(`!.bob/`, `!.bob/gkeep/`, `!.bob/gkeep/imports/`) before the leaf `*.json`
+rule; the leaf exception alone is not enough. Bob never force-adds receipts or
+edits `.gitignore`. When a path is ignored, the error names the source file,
+line, and pattern, and a JSON failure keeps
+`{"schema_version":1,"ok":false,"error":{"kind":…,"message":…,"hint":…}}`.
+
+Inspect a prospective receipt with quiet `git check-ignore` (exit 1 means the
+path is not ignored):
+
+```bash
+git -C "$BOB_DIR" check-ignore -q -- .bob/gkeep/imports/probe.json; echo $?
+git -C "$BOB_DIR" check-ignore -v -- .bob/gkeep/imports/probe.json
+```
+
+After allowing the path, retry `bob gkeep pull`. Leave any receipts from a
+prior attempt in place so the retry can commit them. `bob gkeep pull --dry-run`
+previews Markdown and does not prove the commit step. Do not move or delete
+receipts or pass `--no-commit` to skip Git tracking on a synced vault.
 
 **Legacy marker (read-only).** `%%gkeep:v1:<id>:<fp12>%%`, formerly on an
 indented, non-bullet final continuation of the task block. Bob no longer

@@ -173,6 +173,24 @@ athena's cron entry runs `bob nightly` at 03:30. `bob nightly` now runs:
 That ordering pulls the MacBook's latest notes before maintenance rewrites task blocks
 and pushes the maintenance commit afterwards.
 
+## Google Keep import history
+
+`.bob/gkeep/imports/*.json` receipts are tracked shared history. They travel
+with the imported tasks on every host that runs `bob vault-sync`, including
+the MacBook. The vault allowlist ignores everything by default (`*`) and
+un-ignores selected note and attachment extensions; JSON is otherwise allowed
+only under `.obsidian`, so the vault root `.gitignore` also carries:
+
+```gitignore
+!/.bob/gkeep/imports/*.json
+```
+
+Do not move or delete those files, and do not disable commits, to make a Keep
+import succeed. A bob-cli binary update cannot change vault ignore rules; the
+allowance has to reach each host through this Git sync workflow. After the
+change is on `origin/master`, `bob vault-sync` on the MacBook is the path that
+makes `bob gkeep pull` able to track a new receipt.
+
 ## Highlights bridge
 
 `lit_review/` and `xlib/` are gitignored. `lit_review/` is out-of-band storage: copy it

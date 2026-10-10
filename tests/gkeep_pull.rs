@@ -91,52 +91,15 @@ fn setup(prefix: &str) -> (GkeepEnv, FakeAdapter, TempDir, PathBuf) {
 }
 
 fn init_git(vault: &Path) {
-    let run = |args: &[&str]| {
-        let status = std::process::Command::new("git")
-            .arg("-C")
-            .arg(vault)
-            .args(args)
-            .output()
-            .expect("run git");
-        assert!(
-            status.status.success(),
-            "git {args:?} failed: {}",
-            String::from_utf8_lossy(&status.stderr)
-        );
-    };
-    run(&["init"]);
-    run(&["config", "user.email", "test@example.com"]);
-    run(&["config", "user.name", "Test"]);
-    run(&["config", "commit.gpgsign", "false"]);
+    gkeep_support::init_git(vault);
 }
 
 fn git_rev_list_count(vault: &Path) -> usize {
-    let out = std::process::Command::new("git")
-        .arg("-C")
-        .arg(vault)
-        .args(["rev-list", "--count", "HEAD"])
-        .output()
-        .expect("git rev-list");
-    assert!(out.status.success());
-    String::from_utf8_lossy(&out.stdout)
-        .trim()
-        .parse()
-        .expect("rev-list count parses")
+    gkeep_support::git_rev_list_count(vault)
 }
 
 fn git_log_names(vault: &Path) -> Vec<String> {
-    let out = std::process::Command::new("git")
-        .arg("-C")
-        .arg(vault)
-        .args(["show", "--name-only", "--format="])
-        .output()
-        .expect("git show");
-    assert!(out.status.success());
-    String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .map(str::to_string)
-        .filter(|line| !line.is_empty())
-        .collect()
+    gkeep_support::git_log_names(vault)
 }
 
 fn journal_records(state: &TempDir) -> Vec<serde_json::Value> {
@@ -2179,4 +2142,256 @@ fn interactive_parent_prompt_sticky_default_and_reprompt() {
         default_target(),
         "dry run writes nothing"
     );
+}
+
+fn write_allowlist(vault: &Path, extra: &str) {
+    fs::write(
+        vault.join(".gitignore"),
+        format!("{}{extra}", gkeep_support::production_allowlist()),
+    )
+    .expect("write gitignore");
+}
+
+fn store_files(vault: &Path) -> Vec<PathBuf> {
+    let dir = vault.join(".bob/gkeep/imports");
+    let Ok(entries) = fs::read_dir(&dir) else {
+        return Vec::new();
+    };
+    let mut out: Vec<PathBuf> = entries
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "json"))
+        .collect();
+    out.sort();
+    out
+}
+
+#[test]
+fn production_allowlist_refuses_ignored_receipt_without_writes() {
+    let (env, fake, state, _token) = setup("bob-cli-gkeep-allowlist-fail");
+    init_git(env.vault());
+    write_allowlist(env.vault(), "");
+    gkeep_support::git(env.vault(), &["add", ".gitignore"]);
+    gkeep_support::git(env.vault(), &["commit", "-m", "allowlist"]);
+    let before = fs::read(env.vault().join("gkeep_inbox.md")).expect("read");
+    let n1 = note("Call dentist")
+        .id("note-1")
+        .created("2026-09-27T21:14:03Z")
+        .build();
+    fake.respond("snapshot", &snapshot_ok("bryanbugyi34@gmail.com", vec![n1]));
+    fake.respond("archive", &archive_ok(vec![("note-1", "archived")]));
+    let out = run_pull(&env, &fake, &state, &["-f", "json"], &[]);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    let doc: serde_json::Value =
+        serde_json::from_str(&stdout(&out)).expect("json");
+    assert_eq!(doc["schema_version"], 1);
+    assert_eq!(doc["ok"], false);
+    assert_eq!(doc["error"]["kind"], "commit");
+    let message = doc["error"]["message"].as_str().expect("message");
+    assert!(
+        message.contains("cannot track GKeep import history"),
+        "{message}"
+    );
+    assert!(message.contains(".gitignore:"), "{message}");
+    assert!(message.contains("pattern: *"), "{message}");
+    let hint = doc["error"]["hint"].as_str().expect("hint");
+    assert!(hint.contains("Allow /.bob/gkeep/imports/*.json"), "{hint}");
+    assert_eq!(
+        fs::read(env.vault().join("gkeep_inbox.md")).expect("reread"),
+        before,
+        "target unchanged"
+    );
+    assert!(store_files(env.vault()).is_empty(), "no receipt");
+    assert_eq!(fake.call_count(), 1, "snapshot only, no archive");
+}
+
+#[test]
+fn production_allowlist_with_receipt_exception_commits_and_archives() {
+    let (env, fake, state, _token) = setup("bob-cli-gkeep-allowlist-ok");
+    init_git(env.vault());
+    write_allowlist(env.vault(), "!/.bob/gkeep/imports/*.json\n");
+    fs::write(env.vault().join("scratch.md"), "dirty\n").expect("dirty");
+    fs::write(env.vault().join("staged.md"), "staged\n").expect("staged");
+    gkeep_support::git(env.vault(), &["add", ".gitignore", "staged.md"]);
+    gkeep_support::git(env.vault(), &["commit", "-m", "allowlist"]);
+    // Restage after the baseline commit so the pull must leave it staged.
+    fs::write(env.vault().join("staged.md"), "staged again\n")
+        .expect("restage");
+    gkeep_support::git(env.vault(), &["add", "staged.md"]);
+    let n1 = note("Call dentist")
+        .id("note-1")
+        .created("2026-09-27T21:14:03Z")
+        .build();
+    fake.respond("snapshot", &snapshot_ok("bryanbugyi34@gmail.com", vec![n1]));
+    fake.respond("archive", &archive_ok(vec![("note-1", "archived")]));
+    let out = run_pull(&env, &fake, &state, &[], &[]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert!(read_target(env.vault()).contains("Call dentist"));
+    let files = store_files(env.vault());
+    assert_eq!(files.len(), 1);
+    let names = git_log_names(env.vault());
+    assert!(
+        names.iter().any(|name| name == "gkeep_inbox.md"),
+        "{names:?}"
+    );
+    assert!(
+        names
+            .iter()
+            .any(|name| name.starts_with(".bob/gkeep/imports/")),
+        "{names:?}"
+    );
+    assert!(!names.iter().any(|name| name == "scratch.md"), "{names:?}");
+    assert!(!names.iter().any(|name| name == "staged.md"), "{names:?}");
+    let status = gkeep_support::isolate_git(&mut Command::new("git"))
+        .arg("-C")
+        .arg(env.vault())
+        .args(["status", "--porcelain"])
+        .output()
+        .expect("status");
+    let porcelain = String::from_utf8_lossy(&status.stdout);
+    assert!(porcelain.contains("scratch.md"), "{porcelain}");
+    assert!(porcelain.contains("staged.md"), "{porcelain}");
+    assert_eq!(fake.call_count(), 2, "snapshot then archive");
+
+    let receipt = files[0]
+        .strip_prefix(env.vault())
+        .expect("rel")
+        .to_string_lossy()
+        .replace('\\', "/");
+    assert_eq!(
+        gkeep_support::git_check_ignore_quiet(env.vault(), &receipt),
+        1,
+        "receipt is eligible"
+    );
+    assert_eq!(
+        gkeep_support::git_check_ignore_quiet(
+            env.vault(),
+            ".bob/gkeep/imports/.abc.json.tmp.123"
+        ),
+        0,
+        "temp files stay ignored"
+    );
+    assert_eq!(
+        gkeep_support::git_check_ignore_quiet(env.vault(), ".bob/other.json"),
+        0,
+        "other .bob json stays ignored"
+    );
+    fs::create_dir_all(env.vault().join("lit_review")).expect("dir");
+    fs::write(env.vault().join("lit_review/keep.json"), "{}\n").expect("write");
+    assert_eq!(
+        gkeep_support::git_check_ignore_quiet(
+            env.vault(),
+            "lit_review/keep.json"
+        ),
+        0,
+        "excluded trees stay ignored"
+    );
+
+    let second = run_pull(&env, &fake, &state, &[], &[]);
+    assert_eq!(second.status.code(), Some(0), "{}", stderr(&second));
+    assert_eq!(
+        read_target(env.vault()).matches("Call dentist").count(),
+        1,
+        "no duplicate"
+    );
+}
+
+#[test]
+fn ignored_target_parent_exclusion_and_fatal_git_are_truthful() {
+    let (env, fake, state, _token) = setup("bob-cli-gkeep-ignore-target");
+    init_git(env.vault());
+    fs::write(env.vault().join(".gitignore"), "gkeep_inbox.md\n")
+        .expect("ignore target");
+    gkeep_support::git(env.vault(), &["add", ".gitignore"]);
+    gkeep_support::git(env.vault(), &["commit", "-m", "ignore target"]);
+    let n1 = note("Call dentist")
+        .id("note-1")
+        .created("2026-09-27T21:14:03Z")
+        .build();
+    fake.respond(
+        "snapshot",
+        &snapshot_ok("bryanbugyi34@gmail.com", vec![n1.clone()]),
+    );
+    fake.respond("archive", &archive_ok(vec![("note-1", "archived")]));
+    let out = run_pull(&env, &fake, &state, &["-f", "json"], &[]);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    let doc: serde_json::Value =
+        serde_json::from_str(&stdout(&out)).expect("json");
+    let message = doc["error"]["message"].as_str().expect("message");
+    assert!(
+        message.contains("cannot track GKeep target note"),
+        "{message}"
+    );
+    assert!(message.contains("gkeep_inbox.md"), "{message}");
+    assert_eq!(fake.call_count(), 1);
+
+    let (env2, fake2, state2, _t2) = setup("bob-cli-gkeep-ignore-parent");
+    init_git(env2.vault());
+    fs::write(env2.vault().join(".gitignore"), ".bob/\n").expect("parent");
+    gkeep_support::git(env2.vault(), &["add", ".gitignore"]);
+    gkeep_support::git(env2.vault(), &["commit", "-m", "parent"]);
+    fake2.respond(
+        "snapshot",
+        &snapshot_ok("bryanbugyi34@gmail.com", vec![n1.clone()]),
+    );
+    fake2.respond("archive", &archive_ok(vec![("note-1", "archived")]));
+    let out = run_pull(&env2, &fake2, &state2, &[], &[]);
+    let combined = format!("{}{}", stdout(&out), stderr(&out));
+    assert_ne!(out.status.code(), Some(0));
+    assert!(
+        combined.contains("parent directory") || combined.contains(".bob/"),
+        "{combined}"
+    );
+    assert_eq!(fake2.call_count(), 1);
+
+    let (env3, fake3, state3, _t3) = setup("bob-cli-gkeep-fatal-git");
+    init_git(env3.vault());
+    write_allowlist(env3.vault(), "!/.bob/gkeep/imports/*.json\n");
+    gkeep_support::git(env3.vault(), &["add", ".gitignore"]);
+    gkeep_support::git(env3.vault(), &["commit", "-m", "ok"]);
+    let bin = state3.path().join("bin");
+    fs::create_dir_all(&bin).expect("bin");
+    let wrapper = bin.join("git");
+    let real_git = Command::new("which")
+        .arg("git")
+        .output()
+        .expect("which git");
+    let real = String::from_utf8_lossy(&real_git.stdout).trim().to_string();
+    fs::write(
+        &wrapper,
+        format!(
+            "#!/bin/sh\n\
+             case \" $* \" in\n\
+             *' check-ignore '*) echo 'fatal: injected' >&2; exit 128 ;;\n\
+             esac\n\
+             exec '{}' \"$@\"\n",
+            real.replace('\'', "'\\''")
+        ),
+    )
+    .expect("wrapper");
+    #[cfg(unix)]
+    {
+        let mut perms = fs::metadata(&wrapper).expect("stat").permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&wrapper, perms).expect("chmod");
+    }
+    fake3.respond("snapshot", &snapshot_ok("bryanbugyi34@gmail.com", vec![n1]));
+    fake3.respond("archive", &archive_ok(vec![("note-1", "archived")]));
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let before = read_target(env3.vault());
+    let out = run_pull(&env3, &fake3, &state3, &[], &[("PATH", &path)]);
+    assert_ne!(out.status.code(), Some(0), "{}", stderr(&out));
+    let combined = format!("{}{}", stdout(&out), stderr(&out));
+    assert!(
+        combined.contains("cannot inspect Git ignore rules")
+            || combined.contains("injected"),
+        "{combined}"
+    );
+    assert_eq!(read_target(env3.vault()), before);
+    assert!(store_files(env3.vault()).is_empty());
+    assert_eq!(fake3.call_count(), 1);
 }

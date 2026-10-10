@@ -217,10 +217,17 @@ pub(crate) fn run(args: &MigrateArgs) -> i32 {
         }
     };
 
-    let mut changed_rel: Vec<PathBuf> = Vec::new();
-    let mut tx_rel_paths: Vec<PathBuf> = Vec::new();
+    struct MigrateJob<'a> {
+        plan: &'a FilePlan,
+        file_ok_hits: Vec<&'a MarkerHit>,
+        after_contents: String,
+        new_tx: Option<TransactionFile>,
+        existing_rel: Vec<PathBuf>,
+    }
+
+    let mut jobs: Vec<MigrateJob<'_>> = Vec::new();
     let mut failures: Vec<(String, String)> = Vec::new();
-    let mut removed_total = 0usize;
+    let settings = note_tasks::read_settings(&bob_dir);
 
     for plan in &file_plans {
         if plan.hits.is_empty() {
@@ -253,11 +260,9 @@ pub(crate) fn run(args: &MigrateArgs) -> i32 {
         if file_ok_hits.is_empty() {
             continue;
         }
-        // Persist import evidence before removing its only marker, with
-        // the old marker as the import proof. Do not reconstruct the
-        // Keep fingerprint from a user-edited task. Skip receipts that
-        // already exist (safe rerun after a crash before cleanup).
-        let settings = note_tasks::read_settings(&bob_dir);
+        // Plan the cleaned note and receipts before any write. Skip
+        // receipts that already exist (safe rerun after a crash before
+        // cleanup) and still include those paths in the later commit.
         let after_contents = match apply_cleanup(plan, &file_ok_hits) {
             Some(text) => text,
             None => {
@@ -269,25 +274,27 @@ pub(crate) fn run(args: &MigrateArgs) -> i32 {
             }
         };
         let after_sha = imports::sha256_hex(after_contents.as_bytes());
-        // Build verified receipts for hits lacking them.
         let mut new_entries: Vec<ImportEntry> = Vec::new();
-        // Need after-cleanup block digests per hit: compute task blocks
-        // in the cleaned file.
+        let mut existing_rel: Vec<PathBuf> = Vec::new();
         let cleaned_blocks = task_block_map(&after_contents, &settings);
         for hit in &file_ok_hits {
+            if let Some((path, _)) =
+                imports::verified_file_for(&store_files, &hit.id, &hit.fp)
+            {
+                let rel = imports::vault_rel(&bob_dir, path);
+                if !existing_rel.contains(&rel) {
+                    existing_rel.push(rel);
+                }
+                continue;
+            }
             if verified.contains(&(hit.id.clone(), hit.fp.clone())) {
                 continue;
             }
-            // URL from the task description (💡 link) when present; the
-            // adapter id stays in `id`, never recovered from the URL.
             let url = source_url_for_hit(plan, hit);
-            // Initial block digest: digest of the cleaned task block
-            // containing this hit's line (marker-free).
             let block_digest = cleaned_blocks
                 .get(&hit.line_index)
                 .cloned()
                 .unwrap_or_else(|| "0".repeat(64));
-            // Original relative path: where the marker was found.
             new_entries.push(ImportEntry {
                 id: hit.id.clone(),
                 fp: hit.fp.clone(),
@@ -299,7 +306,6 @@ pub(crate) fn run(args: &MigrateArgs) -> i32 {
                 dest_digest: Some(after_sha.clone()),
             });
         }
-        // Deduplicate identical new proofs (same id/fp/path/digest).
         {
             let mut seen = BTreeSet::new();
             new_entries.retain(|entry| {
@@ -311,28 +317,85 @@ pub(crate) fn run(args: &MigrateArgs) -> i32 {
                 ))
             });
         }
-        let had_new = !new_entries.is_empty();
-        let tx_path_opt = if !had_new {
+        let new_tx = if new_entries.is_empty() {
             None
         } else {
-            let tx = TransactionFile {
+            Some(TransactionFile {
                 schema_version: imports::SCHEMA_VERSION,
                 transaction_id: imports::new_transaction_id(),
                 destination: plan.rel.clone(),
                 before_sha256: imports::sha256_hex(&plan.before_bytes),
                 after_sha256: Some(after_sha.clone()),
                 baseline_counts: BTreeMap::new(),
-                entries: std::mem::take(&mut new_entries),
-            };
-            match imports::persist_prepared(&bob_dir, &tx) {
+                entries: new_entries,
+            })
+        };
+        jobs.push(MigrateJob {
+            plan,
+            file_ok_hits,
+            after_contents,
+            new_tx,
+            existing_rel,
+        });
+    }
+
+    // Preflight candidate notes and both new and reused receipt paths
+    // before persisting evidence or removing markers.
+    if !args.no_commit && !jobs.is_empty() {
+        let child_env = ob::child_env();
+        let worktree = match ob::detect_git_worktree(&bob_dir, &child_env) {
+            Ok(inside) => inside,
+            Err(error) => {
+                if has_git_ancestor(&bob_dir) {
+                    return ui::report_error(
+                        "migrate-markers",
+                        &GkeepError::runtime(
+                            "commit",
+                            format!("detect the vault Git worktree: {error}"),
+                        ),
+                        format_name,
+                    );
+                }
+                false
+            }
+        };
+        if worktree {
+            let mut paths: Vec<PathBuf> = Vec::new();
+            for job in &jobs {
+                paths.push(PathBuf::from(&job.plan.rel));
+                if let Some(tx) = &job.new_tx {
+                    paths.push(
+                        PathBuf::from(imports::IMPORTS_DIR)
+                            .join(format!("{}.json", tx.transaction_id)),
+                    );
+                }
+                paths.extend(job.existing_rel.iter().cloned());
+            }
+            paths.sort();
+            paths.dedup();
+            if let Err(error) =
+                imports::preflight_trackable(&bob_dir, &child_env, &paths)
+            {
+                return ui::report_error(
+                    "migrate-markers",
+                    &error.into_gkeep(),
+                    format_name,
+                );
+            }
+        }
+    }
+
+    let mut changed_rel: Vec<PathBuf> = Vec::new();
+    let mut tx_rel_paths: Vec<PathBuf> = Vec::new();
+    let mut removed_total = 0usize;
+
+    for job in jobs {
+        tx_rel_paths.extend(job.existing_rel.iter().cloned());
+        let had_new = job.new_tx.is_some();
+        let tx_path_opt = if let Some(tx) = job.new_tx.as_ref() {
+            match imports::persist_prepared(&bob_dir, tx) {
                 Ok(path) => {
-                    let rel = path
-                        .strip_prefix(&bob_dir)
-                        .map(|relative| relative.to_path_buf())
-                        .unwrap_or_else(|_| {
-                            PathBuf::from(imports::IMPORTS_DIR)
-                                .join(path.file_name().unwrap_or_default())
-                        });
+                    let rel = imports::vault_rel(&bob_dir, &path);
                     tx_rel_paths.push(rel);
                     Some(path)
                 }
@@ -340,31 +403,33 @@ pub(crate) fn run(args: &MigrateArgs) -> i32 {
                     // Record-persistence failure leaves the marker
                     // recoverable: do not touch the note.
                     failures.push((
-                        plan.rel.clone(),
+                        job.plan.rel.clone(),
                         format!("persist import evidence: {error}"),
                     ));
                     None
                 }
             }
+        } else {
+            None
         };
         if had_new && tx_path_opt.is_none() {
             continue;
         }
         // CAS-protected write of the cleaned note. A race leaves the
         // marker recoverable (evidence already persisted; rerun cleans).
-        match install_cleaned(plan, &after_contents) {
+        match install_cleaned(job.plan, &job.after_contents) {
             Ok(true) => {
-                removed_total += file_ok_hits.len();
-                changed_rel.push(PathBuf::from(&plan.rel));
+                removed_total += job.file_ok_hits.len();
+                changed_rel.push(PathBuf::from(&job.plan.rel));
             }
             Ok(false) => {
                 failures.push((
-                    plan.rel.clone(),
+                    job.plan.rel.clone(),
                     "the note changed during migration; evidence retained, marker untouched".to_string(),
                 ));
             }
             Err(error) => {
-                failures.push((plan.rel.clone(), error));
+                failures.push((job.plan.rel.clone(), error));
             }
         }
     }
@@ -395,12 +460,12 @@ pub(crate) fn run(args: &MigrateArgs) -> i32 {
             paths.extend(tx_rel_paths.clone());
             paths.sort();
             paths.dedup();
-            if let Err(message) =
+            if let Err(error) =
                 imports::preflight_trackable(&bob_dir, &child_env, &paths)
             {
                 return ui::report_error(
                     "migrate-markers",
-                    &GkeepError::runtime("commit", message),
+                    &error.into_gkeep(),
                     format_name,
                 );
             }

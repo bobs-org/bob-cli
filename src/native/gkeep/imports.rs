@@ -17,8 +17,9 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File},
-    io,
+    io::{self, Write},
     path::{Component, Path, PathBuf},
+    process::Stdio,
 };
 
 use serde::{Deserialize, Serialize};
@@ -405,6 +406,31 @@ pub(super) fn has_verified_id(
     })
 }
 
+/// Store file that holds a verified `(id, fp)` receipt, when present.
+pub(super) fn verified_file_for<'a>(
+    files: &'a [(PathBuf, TransactionFile)],
+    id: &str,
+    fp: &str,
+) -> Option<&'a (PathBuf, TransactionFile)> {
+    files.iter().find(|(_, file)| {
+        file.entries.iter().any(|entry| {
+            entry.state == EntryState::Verified
+                && entry.id == id
+                && entry.fp == fp
+        })
+    })
+}
+
+/// Vault-relative form of `path` under `bob_dir`.
+pub(super) fn vault_rel(bob_dir: &Path, path: &Path) -> PathBuf {
+    path.strip_prefix(bob_dir)
+        .map(|relative| relative.to_path_buf())
+        .unwrap_or_else(|_| {
+            PathBuf::from(IMPORTS_DIR)
+                .join(path.file_name().unwrap_or_default())
+        })
+}
+
 /// Unfinished (prepared-entry) transactions.
 pub(super) fn unfinished<'a>(
     files: &'a [(PathBuf, TransactionFile)],
@@ -504,37 +530,383 @@ fn write_atomic(dest: &Path, contents: &str) -> Result<(), ImportsError> {
     Ok(())
 }
 
-/// Preflight that metadata paths can be tracked in a Git vault: if any is
-/// ignored, fail with the specific path instead of force-adding or
-/// editing `.gitignore`.
+/// Actionable Git-ignore preflight failure. Callers map this onto the
+/// existing `GkeepError` envelope (`kind`, `message`, `hint`).
+#[derive(Debug, Clone)]
+pub(super) struct TrackError {
+    pub(super) message: String,
+    pub(super) hint: Option<String>,
+}
+
+impl TrackError {
+    fn new(message: String, hint: Option<String>) -> Self {
+        Self { message, hint }
+    }
+
+    pub(super) fn into_gkeep(self) -> super::GkeepError {
+        let mut error = super::GkeepError::runtime("commit", self.message);
+        if let Some(hint) = self.hint {
+            error = error.with_hint(&hint);
+        }
+        error
+    }
+}
+
+/// Quiet `git check-ignore` outcome for one path.
+enum IgnoreQuiet {
+    Ignored,
+    Trackable,
+}
+
+/// Preflight that paths can be tracked in a Git vault: if any is ignored,
+/// fail with the matching rule instead of force-adding or editing
+/// `.gitignore`. Tracked paths stay trackable even when an ignore pattern
+/// would match an untracked counterpart (`--no-index` is never used).
 pub(super) fn preflight_trackable(
     bob_dir: &Path,
     child_env: &crate::native::ob::ChildEnv,
     paths: &[PathBuf],
-) -> Result<(), String> {
-    use std::process::Stdio;
+) -> Result<(), TrackError> {
     for rel in paths {
-        let mut cmd = crate::native::ob::git_command(bob_dir, child_env);
-        cmd.arg("check-ignore")
-            .arg("--quiet")
-            .arg("--")
-            .arg(rel)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        match cmd.status() {
-            Ok(status) if status.success() => {
-                return Err(format!(
-                    "gkeep metadata {} is ignored by Git; remove the ignore rule or move the vault so import history can be tracked (refusing to force-add or edit .gitignore)",
-                    rel.display()
-                ));
-            }
-            Ok(_) => {}
-            Err(error) => {
-                return Err(format!("failed to run git check-ignore: {error}"));
+        match check_ignore_quiet(bob_dir, child_env, rel)? {
+            IgnoreQuiet::Trackable => {}
+            IgnoreQuiet::Ignored => {
+                return Err(ignored_path_error(bob_dir, child_env, rel));
             }
         }
     }
     Ok(())
+}
+
+/// Whether `rel` is present in `HEAD` with the same blob as the worktree.
+/// The index alone is not proof of a commit. A missing HEAD path is
+/// `Ok(false)`; a Git inspection failure is an error.
+pub(super) fn matches_head(
+    bob_dir: &Path,
+    child_env: &crate::native::ob::ChildEnv,
+    rel: &Path,
+) -> Result<bool, String> {
+    let spec = format!("HEAD:{}", rel.to_string_lossy().replace('\\', "/"));
+    let verify = crate::native::ob::git_command(bob_dir, child_env)
+        .arg("rev-parse")
+        .arg("--verify")
+        .arg("--quiet")
+        .arg(&spec)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map_err(|error| {
+            format!("failed to run git rev-parse --verify {spec}: {error}")
+        })?;
+    match verify.code() {
+        Some(0) => {}
+        Some(1) => return Ok(false),
+        Some(code) => {
+            return Err(format!(
+                "git rev-parse --verify {spec} failed (exit {code})"
+            ));
+        }
+        None => {
+            return Err(format!(
+                "git rev-parse --verify {spec} terminated by signal"
+            ));
+        }
+    }
+    let head = crate::native::ob::git_command(bob_dir, child_env)
+        .arg("rev-parse")
+        .arg("--verify")
+        .arg(&spec)
+        .output()
+        .map_err(|error| {
+            format!("failed to run git rev-parse {spec}: {error}")
+        })?;
+    if !head.status.success() {
+        return Err(format!(
+            "git rev-parse {spec} failed: {}",
+            String::from_utf8_lossy(&head.stderr).trim()
+        ));
+    }
+    let worktree = crate::native::ob::git_command(bob_dir, child_env)
+        .arg("hash-object")
+        .arg("--")
+        .arg(rel)
+        .output()
+        .map_err(|error| {
+            format!(
+                "failed to run git hash-object -- {}: {error}",
+                rel.display()
+            )
+        })?;
+    if !worktree.status.success() {
+        return Err(format!(
+            "git hash-object -- {} failed: {}",
+            rel.display(),
+            String::from_utf8_lossy(&worktree.stderr).trim()
+        ));
+    }
+    Ok(String::from_utf8_lossy(&head.stdout).trim()
+        == String::from_utf8_lossy(&worktree.stdout).trim())
+}
+
+fn check_ignore_quiet(
+    bob_dir: &Path,
+    child_env: &crate::native::ob::ChildEnv,
+    rel: &Path,
+) -> Result<IgnoreQuiet, TrackError> {
+    let output = crate::native::ob::git_command(bob_dir, child_env)
+        .arg("check-ignore")
+        .arg("--quiet")
+        .arg("--")
+        .arg(rel)
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|error| {
+            TrackError::new(
+                format!("failed to run git check-ignore: {error}"),
+                None,
+            )
+        })?;
+    match output.status.code() {
+        Some(0) => Ok(IgnoreQuiet::Ignored),
+        Some(1) => Ok(IgnoreQuiet::Trackable),
+        Some(code) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let detail = stderr.trim();
+            let message = if detail.is_empty() {
+                format!(
+                    "cannot inspect Git ignore rules for {}: git check-ignore exited {code}",
+                    rel.display()
+                )
+            } else {
+                format!(
+                    "cannot inspect Git ignore rules for {}: {detail}",
+                    rel.display()
+                )
+            };
+            Err(TrackError::new(message, Some(inspect_hint(bob_dir, rel))))
+        }
+        None => Err(TrackError::new(
+            format!(
+                "cannot inspect Git ignore rules for {}: git check-ignore terminated by signal",
+                rel.display()
+            ),
+            Some(inspect_hint(bob_dir, rel)),
+        )),
+    }
+}
+
+fn ignored_path_error(
+    bob_dir: &Path,
+    child_env: &crate::native::ob::ChildEnv,
+    rel: &Path,
+) -> TrackError {
+    let inspect = inspect_hint(bob_dir, rel);
+    let fallback = TrackError::new(
+        format!(
+            "{}\nGit ignore inspection failed after the path was ignored; run: {inspect}",
+            cannot_track_line(rel)
+        ),
+        Some(repair_hint(bob_dir, rel, None)),
+    );
+    match check_ignore_verbose(bob_dir, child_env, rel) {
+        Ok(Some(diag)) => {
+            if diag.pattern.starts_with('!') {
+                // Quiet said ignored; a negated last match means the
+                // rule changed between queries. Stay failed.
+                return fallback;
+            }
+            let message = format!(
+                "{}\nignored by {}:{} (pattern: {})",
+                cannot_track_line(rel),
+                diag.source,
+                diag.line,
+                diag.pattern
+            );
+            TrackError::new(
+                message,
+                Some(repair_hint(bob_dir, rel, Some(&diag))),
+            )
+        }
+        Ok(None) | Err(_) => fallback,
+    }
+}
+
+struct IgnoreDiag {
+    source: String,
+    line: String,
+    pattern: String,
+}
+
+fn check_ignore_verbose(
+    bob_dir: &Path,
+    child_env: &crate::native::ob::ChildEnv,
+    rel: &Path,
+) -> Result<Option<IgnoreDiag>, TrackError> {
+    let mut child = crate::native::ob::git_command(bob_dir, child_env)
+        .arg("check-ignore")
+        .arg("--stdin")
+        .arg("-z")
+        .arg("-v")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| {
+            TrackError::new(
+                format!("failed to run git check-ignore: {error}"),
+                None,
+            )
+        })?;
+    {
+        let stdin = child.stdin.as_mut().ok_or_else(|| {
+            TrackError::new("git check-ignore has no stdin".to_string(), None)
+        })?;
+        let mut payload = rel.to_string_lossy().into_owned().into_bytes();
+        payload.push(0);
+        stdin.write_all(&payload).map_err(|error| {
+            TrackError::new(
+                format!("write git check-ignore stdin: {error}"),
+                None,
+            )
+        })?;
+    }
+    let output = child.wait_with_output().map_err(|error| {
+        TrackError::new(
+            format!("failed to wait for git check-ignore: {error}"),
+            None,
+        )
+    })?;
+    match output.status.code() {
+        Some(0) => Ok(parse_check_ignore_z(&output.stdout)),
+        Some(1) => Ok(None),
+        _ => Ok(None),
+    }
+}
+
+/// Parse NUL-delimited `git check-ignore --stdin -z -v` output:
+/// `source NUL linenum NUL pattern NUL pathname NUL`.
+fn parse_check_ignore_z(stdout: &[u8]) -> Option<IgnoreDiag> {
+    let mut fields = stdout.split(|byte| *byte == 0);
+    let source = std::str::from_utf8(fields.next()?).ok()?.to_string();
+    let line = std::str::from_utf8(fields.next()?).ok()?.to_string();
+    let pattern = std::str::from_utf8(fields.next()?).ok()?.to_string();
+    let pathname = std::str::from_utf8(fields.next()?).ok()?.to_string();
+    if source.is_empty() || line.is_empty() || pathname.is_empty() {
+        return None;
+    }
+    if !line.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    Some(IgnoreDiag {
+        source,
+        line,
+        pattern,
+    })
+}
+
+fn is_import_receipt_path(rel: &Path) -> bool {
+    let text = rel.to_string_lossy().replace('\\', "/");
+    text.starts_with(".bob/gkeep/imports/") && text.ends_with(".json")
+}
+
+fn cannot_track_line(rel: &Path) -> String {
+    if is_import_receipt_path(rel) {
+        format!("cannot track GKeep import history: {}", rel.display())
+    } else {
+        format!("cannot track GKeep target note: {}", rel.display())
+    }
+}
+
+fn inspect_hint(bob_dir: &Path, rel: &Path) -> String {
+    format!(
+        "git -C {} check-ignore -v -- {}",
+        shell_quote(&bob_dir.display().to_string()),
+        shell_quote(&rel.display().to_string())
+    )
+}
+
+fn repair_hint(
+    bob_dir: &Path,
+    rel: &Path,
+    diag: Option<&IgnoreDiag>,
+) -> String {
+    let inspect = inspect_hint(bob_dir, rel);
+    if is_import_receipt_path(rel) {
+        if let Some(diag) = diag {
+            if gitignore_star_rule(diag) {
+                return "Allow /.bob/gkeep/imports/*.json in the vault's .gitignore, then retry. Import history must sync with the imported tasks.".to_string();
+            }
+            if pattern_excludes_ancestor(&diag.pattern, rel) {
+                return format!(
+                    "{} excludes a parent directory; add traversal exceptions for each ancestor before allowing the receipt files. A leaf *.json exception alone is not enough. Import history must sync with the imported tasks. Inspect with: {inspect}",
+                    diag.pattern
+                );
+            }
+            return format!(
+                "Allow the path in {}, then retry. Import history must sync with the imported tasks. Inspect with: {inspect}",
+                diag.source
+            );
+        }
+        return "Allow /.bob/gkeep/imports/*.json in the vault's .gitignore, then retry. Import history must sync with the imported tasks.".to_string();
+    }
+    if let Some(diag) = diag {
+        format!(
+            "Allow the target note in {}, then retry. Inspect with: {inspect}",
+            diag.source
+        )
+    } else {
+        format!(
+            "Allow the target note in the vault's Git ignore rules, then retry. Inspect with: {inspect}"
+        )
+    }
+}
+
+fn gitignore_star_rule(diag: &IgnoreDiag) -> bool {
+    diag.pattern == "*"
+        && Path::new(&diag.source)
+            .file_name()
+            .is_some_and(|name| name == ".gitignore")
+}
+
+fn pattern_excludes_ancestor(pattern: &str, rel: &Path) -> bool {
+    let trimmed = pattern
+        .trim_start_matches('!')
+        .trim_start_matches('/')
+        .trim_end_matches('/');
+    if trimmed.is_empty() || trimmed.contains('*') || trimmed.contains('?') {
+        return false;
+    }
+    let rel = rel.to_string_lossy().replace('\\', "/");
+    rel == trimmed || rel.starts_with(&format!("{trimmed}/"))
+}
+
+/// Quote one value for `sh`: bare when every byte is shell-safe,
+/// otherwise single-quoted with embedded quotes escaped.
+fn shell_quote(value: &str) -> String {
+    let is_safe = !value.is_empty()
+        && value.bytes().all(|byte| {
+            matches!(
+                byte,
+                b'A'..=b'Z'
+                    | b'a'..=b'z'
+                    | b'0'..=b'9'
+                    | b'_'
+                    | b'.'
+                    | b'/'
+                    | b':'
+                    | b'@'
+                    | b'%'
+                    | b'+'
+                    | b'='
+                    | b','
+                    | b'-'
+            )
+        });
+    if is_safe {
+        return value.to_string();
+    }
+    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 #[cfg(test)]
@@ -607,5 +979,208 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp");
         let loaded = read_all(dir.path()).expect("absent ok");
         assert!(loaded.is_empty());
+    }
+
+    fn isolated_env() -> crate::native::ob::ChildEnv {
+        vec![
+            ("GIT_CONFIG_NOSYSTEM".into(), "1".into()),
+            ("GIT_CONFIG_GLOBAL".into(), "/dev/null".into()),
+            ("GIT_CONFIG_SYSTEM".into(), "/dev/null".into()),
+        ]
+    }
+
+    fn git(dir: &Path, args: &[&str]) {
+        let status = crate::native::ob::git_command(dir, &isolated_env())
+            .args(args)
+            .status()
+            .expect("run git");
+        assert!(status.success(), "git {args:?} failed");
+    }
+
+    fn init_git_repo(dir: &Path) {
+        git(dir, &["init"]);
+        git(dir, &["config", "user.email", "test@example.com"]);
+        git(dir, &["config", "user.name", "Test"]);
+        git(dir, &["config", "commit.gpgsign", "false"]);
+        git(dir, &["config", "core.excludesFile", "/dev/null"]);
+    }
+
+    fn production_allowlist() -> &'static str {
+        "*\n!.gitignore\n!*/\n!*.md\n!.obsidian/\n!.obsidian/**/*.json\n"
+    }
+
+    #[test]
+    fn parse_nul_verbose_ignore_handles_spaces_and_colons() {
+        let mut raw = Vec::new();
+        for field in [".gitignore", "3", "*", ".bob/gkeep/imports/a: b.json"] {
+            raw.extend(field.as_bytes());
+            raw.push(0);
+        }
+        let diag = parse_check_ignore_z(&raw).expect("parse");
+        assert_eq!(diag.source, ".gitignore");
+        assert_eq!(diag.line, "3");
+        assert_eq!(diag.pattern, "*");
+    }
+
+    #[test]
+    fn preflight_names_star_gitignore_rule() {
+        let dir = tempfile::tempdir().expect("temp");
+        init_git_repo(dir.path());
+        fs::write(dir.path().join(".gitignore"), production_allowlist())
+            .expect("gitignore");
+        let rel = PathBuf::from(".bob/gkeep/imports/09b30c84e9c330f2.json");
+        let error = preflight_trackable(dir.path(), &isolated_env(), &[rel])
+            .expect_err("ignored");
+        assert!(
+            error.message.contains("cannot track GKeep import history"),
+            "{}",
+            error.message
+        );
+        assert!(
+            error.message.contains("ignored by .gitignore:"),
+            "{}",
+            error.message
+        );
+        assert!(error.message.contains("pattern: *"), "{}", error.message);
+        let hint = error.hint.expect("hint");
+        assert!(hint.contains("Allow /.bob/gkeep/imports/*.json"), "{hint}");
+        assert!(hint.contains("must sync"), "{hint}");
+    }
+
+    #[test]
+    fn preflight_allows_receipts_after_star_exception() {
+        let dir = tempfile::tempdir().expect("temp");
+        init_git_repo(dir.path());
+        fs::write(
+            dir.path().join(".gitignore"),
+            format!("{}!/.bob/gkeep/imports/*.json\n", production_allowlist()),
+        )
+        .expect("gitignore");
+        let rel = PathBuf::from(".bob/gkeep/imports/09b30c84e9c330f2.json");
+        preflight_trackable(dir.path(), &isolated_env(), &[rel])
+            .expect("trackable");
+    }
+
+    #[test]
+    fn preflight_negated_allowance_is_trackable() {
+        let dir = tempfile::tempdir().expect("temp");
+        init_git_repo(dir.path());
+        fs::write(
+            dir.path().join(".gitignore"),
+            "*.json\n!/.bob/gkeep/imports/*.json\n",
+        )
+        .expect("gitignore");
+        let rel = PathBuf::from(".bob/gkeep/imports/abc.json");
+        preflight_trackable(dir.path(), &isolated_env(), &[rel])
+            .expect("negated allowance is not ignored");
+    }
+
+    #[test]
+    fn preflight_tracked_path_is_trackable_despite_ignore() {
+        let dir = tempfile::tempdir().expect("temp");
+        init_git_repo(dir.path());
+        let rel = PathBuf::from(".bob/gkeep/imports/tracked.json");
+        fs::create_dir_all(dir.path().join(".bob/gkeep/imports"))
+            .expect("mkdir");
+        fs::write(dir.path().join(&rel), "{}\n").expect("write");
+        git(dir.path(), &["add", "-f", rel.to_str().unwrap()]);
+        git(dir.path(), &["commit", "-m", "track"]);
+        fs::write(dir.path().join(".gitignore"), "*.json\n").expect("ignore");
+        preflight_trackable(dir.path(), &isolated_env(), &[rel])
+            .expect("tracked remains trackable");
+    }
+
+    #[test]
+    fn preflight_fatal_is_an_error() {
+        let dir = tempfile::tempdir().expect("temp");
+        let rel = PathBuf::from(".bob/gkeep/imports/abc.json");
+        let error = preflight_trackable(dir.path(), &isolated_env(), &[rel])
+            .expect_err("not a repo");
+        assert!(
+            error.message.contains("cannot inspect Git ignore rules"),
+            "{}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn preflight_parent_exclusion_names_the_rule() {
+        let dir = tempfile::tempdir().expect("temp");
+        init_git_repo(dir.path());
+        fs::write(dir.path().join(".gitignore"), ".bob/\n").expect("gitignore");
+        let rel = PathBuf::from(".bob/gkeep/imports/abc.json");
+        let error = preflight_trackable(dir.path(), &isolated_env(), &[rel])
+            .expect_err("ignored");
+        assert!(
+            error.message.contains("pattern: .bob/"),
+            "{}",
+            error.message
+        );
+        let hint = error.hint.expect("hint");
+        assert!(hint.contains("parent directory"), "{hint}");
+        assert!(hint.contains("leaf"), "{hint}");
+    }
+
+    #[test]
+    fn preflight_ignored_target_is_called_a_note() {
+        let dir = tempfile::tempdir().expect("temp");
+        init_git_repo(dir.path());
+        fs::write(dir.path().join(".gitignore"), "inbox.md\n")
+            .expect("gitignore");
+        let rel = PathBuf::from("inbox.md");
+        let error = preflight_trackable(dir.path(), &isolated_env(), &[rel])
+            .expect_err("ignored");
+        assert!(
+            error.message.contains("cannot track GKeep target note"),
+            "{}",
+            error.message
+        );
+        assert!(
+            !error.message.contains("import history"),
+            "{}",
+            error.message
+        );
+        let hint = error.hint.expect("hint");
+        assert!(hint.contains("target note"), "{hint}");
+    }
+
+    #[test]
+    fn preflight_custom_excludes_file_is_named() {
+        let dir = tempfile::tempdir().expect("temp");
+        init_git_repo(dir.path());
+        let excludes = dir.path().join("custom.excludes");
+        fs::write(&excludes, "secret.md\n").expect("excludes");
+        git(
+            dir.path(),
+            &["config", "core.excludesFile", excludes.to_str().unwrap()],
+        );
+        let rel = PathBuf::from("secret.md");
+        let error = preflight_trackable(dir.path(), &isolated_env(), &[rel])
+            .expect_err("ignored");
+        assert!(
+            error.message.contains("custom.excludes"),
+            "{}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn matches_head_detects_committed_unchanged_receipt() {
+        let dir = tempfile::tempdir().expect("temp");
+        init_git_repo(dir.path());
+        let rel = PathBuf::from(".bob/gkeep/imports/abc.json");
+        fs::create_dir_all(dir.path().join(".bob/gkeep/imports"))
+            .expect("mkdir");
+        fs::write(dir.path().join(&rel), "{}\n").expect("write");
+        git(dir.path(), &["add", "-f", rel.to_str().unwrap()]);
+        git(dir.path(), &["commit", "-m", "receipt"]);
+        assert!(matches_head(dir.path(), &isolated_env(), &rel).expect("head"));
+        fs::write(dir.path().join(&rel), "{changed}\n").expect("edit");
+        assert!(
+            !matches_head(dir.path(), &isolated_env(), &rel).expect("dirty")
+        );
+        let missing = PathBuf::from(".bob/gkeep/imports/nope.json");
+        assert!(!matches_head(dir.path(), &isolated_env(), &missing)
+            .expect("missing"));
     }
 }
