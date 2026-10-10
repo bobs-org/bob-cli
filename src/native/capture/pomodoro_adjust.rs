@@ -726,7 +726,7 @@ pub(crate) fn adjustment_duration_for_range(range: &AdjustRange) -> u64 {
     })
 }
 
-pub(super) fn duration_from_range_text(range_text: &str) -> Option<u64> {
+pub(crate) fn duration_from_range_text(range_text: &str) -> Option<u64> {
     if let Some(value) = duration_field_value(range_text)
         && let Some(minutes) = parse_adjustment_duration(&value)
     {

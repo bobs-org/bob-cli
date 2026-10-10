@@ -32,6 +32,7 @@ use super::{
         NumberedTaskLink, TaskLinkMarker,
     },
     capture_pomodoro_start::list_queued_links,
+    capture_pomodoros::bounded_warning,
     capture_tasks::status_type_label,
     collect_done::trailing_block_id_in_line,
     env as bob_env, markdown, note_tasks, pomodoro,
@@ -259,7 +260,13 @@ impl<'a> AgendaNotes<'a> {
         {
             self.reads += 1;
         }
-        let contents = fs::read_to_string(path).ok()?;
+        let contents = match fs::read_to_string(path) {
+            Ok(contents) => contents,
+            Err(_) => {
+                self.cache.insert(key, None);
+                return None;
+            }
+        };
         let scan =
             note_tasks::scan(&contents, self.settings_for(filter_cleared));
         self.cache
@@ -336,7 +343,7 @@ impl<'a> AgendaNotes<'a> {
                     return unresolved(
                         AgendaResolution::AmbiguousNote,
                         None,
-                        Some(bounded(format!(
+                        Some(bounded_warning(format!(
                             "{block_link} has an ambiguous note basename"
                         ))),
                     );
@@ -345,7 +352,7 @@ impl<'a> AgendaNotes<'a> {
                     return unresolved(
                         AgendaResolution::MissingNote,
                         None,
-                        Some(bounded(format!(
+                        Some(bounded_warning(format!(
                             "{block_link} does not resolve to a vault note"
                         ))),
                     );
@@ -358,7 +365,7 @@ impl<'a> AgendaNotes<'a> {
             return unresolved(
                 AgendaResolution::Unreadable,
                 Some(relative_target.clone()),
-                Some(bounded(format!(
+                Some(bounded_warning(format!(
                     "{block_link} resolves to {relative_target}, which cannot be read"
                 ))),
             );
@@ -404,7 +411,7 @@ impl<'a> AgendaNotes<'a> {
             } => unresolved(
                 AgendaResolution::NotATask,
                 Some(relative_target.clone()),
-                Some(bounded(format!(
+                Some(bounded_warning(format!(
                     "{relative_target} contains ^{block_id} on a non-task line {} ({excerpt})",
                     line_index + 1
                 ))),
@@ -412,14 +419,14 @@ impl<'a> AgendaNotes<'a> {
             note_tasks::BlockIdLookup::Duplicate(count) => unresolved(
                 AgendaResolution::DuplicateBlock,
                 Some(relative_target.clone()),
-                Some(bounded(format!(
+                Some(bounded_warning(format!(
                     "{relative_target} contains duplicate ^{block_id} IDs ({count} lines)"
                 ))),
             ),
             note_tasks::BlockIdLookup::Missing => unresolved(
                 AgendaResolution::MissingBlock,
                 Some(relative_target.clone()),
-                Some(bounded(format!(
+                Some(bounded_warning(format!(
                     "{relative_target} has no task with block ID ^{block_id}"
                 ))),
             ),
@@ -516,8 +523,7 @@ impl<'a> AgendaNotes<'a> {
         let end = raw.last().copied().unwrap_or(link_index) + 1;
         let depths = block_depths(line_text, link_index, start..end);
         let mut lines = Vec::new();
-        for (offset, index) in raw.into_iter().enumerate() {
-            let _ = offset;
+        for index in raw.into_iter() {
             let depth = depths
                 .get(index.saturating_sub(start))
                 .copied()
@@ -768,7 +774,6 @@ fn is_retired_link(line: &str) -> bool {
     if let Some(bare) = trimmed.strip_suffix('#') {
         return bare_plain_link(bare.trim_end()).is_some();
     }
-    let _ = strike_spans;
     false
 }
 
@@ -970,24 +975,18 @@ fn tag_log_subtrees(lines: &mut [AgendaLine]) {
         while stack.last().is_some_and(|(depth, _)| *depth >= line.depth) {
             stack.pop();
         }
+        let own_kind = (line.kind == AgendaLineKind::LogMarker)
+            .then_some(line.log)
+            .flatten();
         if let Some((_, kind)) = stack.last() {
             line.log = Some(*kind);
         }
         if line.kind == AgendaLineKind::LogMarker {
-            let kind = line.log.unwrap_or(AgendaLog::Work);
+            let kind = own_kind.or(line.log).unwrap_or(AgendaLog::Work);
+            line.log = Some(kind);
             stack.push((line.depth, kind));
         }
     }
-}
-
-fn bounded(message: String) -> String {
-    const LIMIT: usize = 300;
-    if message.chars().count() <= LIMIT {
-        return message;
-    }
-    let mut truncated = message.chars().take(LIMIT - 3).collect::<String>();
-    truncated.push_str("...");
-    truncated
 }
 
 #[cfg(test)]
@@ -1307,6 +1306,87 @@ mod tests {
             .find(|line| line.text.contains("mentions work log"))
             .expect("prose line");
         assert_eq!(prose.log, None);
+    }
+
+    #[test]
+    fn nested_log_markers_keep_their_own_kind() {
+        let temp = TempDir::new("bob-cli-agenda-nested-log");
+        let vault = temp.path().to_path_buf();
+        write_settings(&vault);
+        write_file(
+            &vault.join("tasks.md"),
+            concat!(
+                "## Tasks\n",
+                "- [ ] #task Outer ^outer\n",
+                "\t- \u{1F6E0}\u{FE0F} **Work log**\n",
+                "\t\t- [ ] #task inner ^inner\n",
+                "\t\t\t- **Schedule log**\n",
+                "\t\t\t\t- Oct 9 — scheduled\n",
+            ),
+        );
+        let day = concat!(
+            "## Pomodoros\n",
+            "- [ ] (0900-0930) — FIX\n",
+            "\t- [[tasks#^outer]]\n",
+        );
+        let (_, entries) = agenda_for(&vault, day);
+        let lines = &entries[0].items[0].lines;
+        let marker = lines
+            .iter()
+            .find(|line| {
+                line.kind == AgendaLineKind::LogMarker
+                    && line.text == "**Schedule log**"
+            })
+            .expect("schedule marker");
+        assert_eq!(marker.log, Some(AgendaLog::Schedule));
+        let entry = lines
+            .iter()
+            .find(|line| line.text == "Oct 9 — scheduled")
+            .expect("schedule entry");
+        assert_eq!(entry.log, Some(AgendaLog::Schedule));
+    }
+
+    #[test]
+    fn resolved_items_carry_ledger_notes() {
+        let temp = TempDir::new("bob-cli-agenda-ledger-notes");
+        let vault = temp.path().to_path_buf();
+        write_settings(&vault);
+        write_file(
+            &vault.join("tasks.md"),
+            concat!("## Tasks\n", "- [ ] #task Alpha ^alpha\n",),
+        );
+        let day = concat!(
+            "## Pomodoros\n",
+            "- [ ] (0900-0930) — FIX\n",
+            "\t- [[tasks#^alpha]]\n",
+            "\t\t- ledger detail\n",
+        );
+        let (_, entries) = agenda_for(&vault, day);
+        let notes = &entries[0].items[0].ledger_notes;
+        assert!(!notes.is_empty());
+        assert!(notes.iter().any(|line| line.text == "ledger detail"));
+    }
+
+    #[test]
+    fn open_entries_can_link_done_tasks() {
+        let temp = TempDir::new("bob-cli-agenda-done-link");
+        let vault = temp.path().to_path_buf();
+        write_settings(&vault);
+        write_file(
+            &vault.join("tasks.md"),
+            concat!("## Tasks\n", "- [x] #task Finished ^done\n",),
+        );
+        let day = concat!(
+            "## Pomodoros\n",
+            "- [ ] (0900-0930) — FIX\n",
+            "\t- [[tasks#^done]]\n",
+        );
+        let (_, entries) = agenda_for(&vault, day);
+        let item = &entries[0].items[0];
+        assert_eq!(item.resolution, AgendaResolution::Resolved);
+        assert_eq!(item.text.as_deref(), Some("Finished"));
+        assert_eq!(item.status_symbol, Some('x'));
+        assert_eq!(item.status_type.as_deref(), Some("DONE"));
     }
 
     #[test]

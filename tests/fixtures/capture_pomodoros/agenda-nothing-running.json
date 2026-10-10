@@ -10,6 +10,7 @@
   "pomodoros": [
     {
       "child_count": 1,
+      "ends_at": null,
       "is_current": false,
       "items": [
         {
@@ -63,6 +64,7 @@
       "role": "next",
       "selectable": true,
       "slug": "sase",
+      "starts_at": null,
       "state": "open",
       "status_symbol": " ",
       "task_link_count": null,
@@ -70,6 +72,7 @@
     },
     {
       "child_count": 0,
+      "ends_at": null,
       "is_current": false,
       "items": [],
       "line": 5,
@@ -81,6 +84,7 @@
       "role": "later",
       "selectable": true,
       "slug": "bob",
+      "starts_at": null,
       "state": "open",
       "status_symbol": " ",
       "task_link_count": null,

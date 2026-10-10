@@ -140,6 +140,7 @@
     },
     {
       "child_count": 2,
+      "ends_at": null,
       "is_current": false,
       "items": [
         {
@@ -231,6 +232,7 @@
       "role": "next",
       "selectable": true,
       "slug": "sase",
+      "starts_at": null,
       "state": "open",
       "status_symbol": " ",
       "task_link_count": null,
@@ -238,6 +240,7 @@
     },
     {
       "child_count": 1,
+      "ends_at": null,
       "is_current": false,
       "items": [
         {
@@ -291,6 +294,7 @@
       "role": "later",
       "selectable": true,
       "slug": "later-work",
+      "starts_at": null,
       "state": "open",
       "status_symbol": " ",
       "task_link_count": null,
@@ -298,6 +302,7 @@
     },
     {
       "child_count": 0,
+      "ends_at": null,
       "is_current": false,
       "items": [],
       "line": 17,
@@ -309,6 +314,7 @@
       "role": "later",
       "selectable": false,
       "slug": "",
+      "starts_at": null,
       "state": "open",
       "status_symbol": " ",
       "task_link_count": null,

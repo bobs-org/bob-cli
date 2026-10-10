@@ -16,8 +16,8 @@ use serde_json::json;
 
 use super::{
     capture::{
-        leading_spaces_or_tabs_len, line_spans, list_item_body,
-        nearest_shallower_list_item_parent, LineSpan,
+        duration_from_range_text, leading_spaces_or_tabs_len, line_spans,
+        list_item_body, nearest_shallower_list_item_parent, LineSpan,
     },
     capture_language, capture_pomodoro_close, capture_pomodoros_agenda,
     capture_task_sections, env as bob_env, markdown, note_tasks, pomodoro,
@@ -204,9 +204,9 @@ struct CapturePomodorosOutputEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     role: Option<capture_pomodoros_agenda::AgendaRole>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    starts_at: Option<String>,
+    starts_at: Option<Option<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    ends_at: Option<String>,
+    ends_at: Option<Option<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     retired_link_count: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -294,7 +294,7 @@ fn list_capture_pomodoros(
     };
     let completed_summary = request
         .include_tasks
-        .then(|| completed_summary_for(&scan.entries));
+        .then(|| completed_summary_for(&scan.entries, &contents));
     let mut pomodoros = Vec::with_capacity(listed.len());
     for (position, entry) in listed.into_iter().enumerate() {
         let task_link_count = if entry.is_current {
@@ -308,8 +308,8 @@ fn list_capture_pomodoros(
             entry,
             task_link_count,
             role: agenda_entry.map(|agenda| agenda.role),
-            starts_at: agenda_entry.and_then(|agenda| agenda.starts_at.clone()),
-            ends_at: agenda_entry.and_then(|agenda| agenda.ends_at.clone()),
+            starts_at: agenda_entry.map(|agenda| agenda.starts_at.clone()),
+            ends_at: agenda_entry.map(|agenda| agenda.ends_at.clone()),
             retired_link_count: agenda_entry
                 .map(|agenda| agenda.retired_link_count),
             notes: agenda_entry.map(|agenda| agenda.notes.clone()),
@@ -332,7 +332,9 @@ fn list_capture_pomodoros(
 
 fn completed_summary_for(
     entries: &[PomodoroEntry],
+    contents: &str,
 ) -> capture_pomodoros_agenda::CompletedSummary {
+    let ledger_lines: Vec<&str> = contents.lines().collect();
     let mut count = 0;
     let mut minutes = 0;
     for entry in entries {
@@ -340,7 +342,14 @@ fn completed_summary_for(
             continue;
         }
         count += 1;
-        if let Some(range) = entry.time_range.as_deref()
+        let raw_line = entry
+            .line
+            .checked_sub(1)
+            .and_then(|index| ledger_lines.get(index).copied())
+            .unwrap_or("");
+        if let Some(duration) = duration_from_range_text(raw_line) {
+            minutes += duration;
+        } else if let Some(range) = entry.time_range.as_deref()
             && let Some(duration) =
                 capture_pomodoros_agenda::range_minutes(range)
         {
@@ -862,9 +871,10 @@ fn human_success(result: &CapturePomodorosResult, styler: &Styler) -> String {
         (result.date.as_deref(), result.completed_summary.as_ref())
     {
         header.push_str(&format!(
-            " {} {} {}",
+            " {} {} {} {}",
             styler.separator(),
             agenda_day_label(date),
+            styler.separator(),
             styler.dim(&format!(
                 "{} done ({})",
                 summary.count,
@@ -1040,14 +1050,21 @@ fn human_agenda_entry(
             if agenda_item.resolution
                 != capture_pomodoros_agenda::AgendaResolution::Resolved
             {
-                output.push_str(&format!(
-                    "    {} {} {}\n",
-                    styler.yellow("!"),
-                    agenda_item.block_link,
-                    styler.dim(
-                        agenda_item.warning.as_deref().unwrap_or("unresolved")
-                    ),
-                ));
+                let detail = agenda_item.warning.as_deref().unwrap_or("");
+                if detail.is_empty() {
+                    output.push_str(&format!(
+                        "    {} {} {}\n",
+                        styler.yellow("!"),
+                        agenda_item.block_link,
+                        styler.dim("unresolved"),
+                    ));
+                } else {
+                    output.push_str(&format!(
+                        "    {} {}\n",
+                        styler.yellow("!"),
+                        styler.dim(detail),
+                    ));
+                }
             } else {
                 let number = agenda_item
                     .index
@@ -1829,6 +1846,76 @@ mod tests {
             .find(|output| output.entry.is_current)
             .expect("current entry");
         assert_eq!(current.task_link_count, Some(2));
+    }
+
+    #[test]
+    fn completed_summary_prefers_recorded_duration() {
+        let contents = concat!(
+            "## Pomodoros\n",
+            "- [x] (**08:00 - 09:00** [t:: 25m]) — FIX\n",
+            "- [x] (0900-0930) — PLAIN\n",
+        );
+        let found = scan(contents);
+        let summary = completed_summary_for(&found.entries, contents);
+        assert_eq!(summary.count, 2);
+        assert_eq!(summary.minutes, 25 + 30);
+    }
+
+    #[test]
+    fn tasks_human_output_has_agenda_rows() {
+        let temp = TempDir::new("bob-cli-capture-pomodoros-tasks-human");
+        write_file(
+            &temp
+                .path()
+                .join(".obsidian/plugins/obsidian-tasks-plugin/data.json"),
+            r##"{
+      "globalFilter": "#task",
+      "statusSettings": {
+        "coreStatuses": [
+          {"symbol":" ","name":"Todo","type":"TODO"},
+          {"symbol":"x","name":"Done","type":"DONE"}
+        ],
+        "customStatuses": []
+      }
+    }"##,
+        );
+        write_file(
+            &temp.path().join("tasks.md"),
+            concat!(
+                "## Tasks\n",
+                "- [ ] #task Alpha ^alpha\n",
+                "- [ ] #task Beta ^beta\n",
+            ),
+        );
+        let day_path = temp.path().join("2026/20260828.md");
+        write_file(
+            &day_path,
+            concat!(
+                "## Pomodoros\n",
+                "- [x] (0700-0730) — EARLY\n",
+                "- [ ] (**08:00 - 08:30** [t:: 30m]) — FIX\n",
+                "\t- [[tasks#^alpha]]\n",
+                "\t- [[missing#^nope]]\n",
+                "\t- ~~[[tasks#^alpha]]~~\n",
+            ),
+        );
+        let result =
+            crate::native::env::with_var("BOB_DAY_FILE", &day_path, || {
+                list_capture_pomodoros(&CapturePomodorosRequest {
+                    bob_dir: temp.path().to_path_buf(),
+                    include_all: false,
+                    include_tasks: true,
+                })
+            })
+            .expect("tasks human success");
+        let human = human_success(&result, &Styler::plain());
+        assert!(human.contains("- Fri 2026-08-28 - 1 done (30m)"), "{human}");
+        assert!(human.contains("▶ FIX 08:00-08:30 now"), "{human}");
+        assert!(human.contains("[ ] Alpha"), "{human}");
+        assert!(human.contains("! [[missing#^nope]]"), "{human}");
+        assert!(!human.contains("[[missing#^nope]] [[missing#^nope]]"));
+        assert!(human.contains("✓ 1 done"), "{human}");
+        assert!(!human.contains('\u{1b}'));
     }
 
     fn write_file(path: &Path, contents: &str) {

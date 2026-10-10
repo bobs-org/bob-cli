@@ -112,6 +112,7 @@
     },
     {
       "child_count": 0,
+      "ends_at": null,
       "is_current": false,
       "items": [],
       "line": 7,
@@ -123,6 +124,7 @@
       "role": "next",
       "selectable": true,
       "slug": "next-up",
+      "starts_at": null,
       "state": "open",
       "status_symbol": " ",
       "task_link_count": null,

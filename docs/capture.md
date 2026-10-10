@@ -4572,9 +4572,12 @@ untypeable slugs stay in the list with `selectable: false`.
 With `-t/--tasks`, `capture-pomodoros` resolves each listed entry's Task Links
 into agenda views. The top level adds `date` (`YYYY-MM-DD`, from the day file's
 name or today) and `completed_summary` (`count` of completed ledger entries and
-their summed time-range `minutes`). Each entry adds `role` (`current`, `next`,
-`later`, `open`, or `completed`), naive `starts_at`/`ends_at` datetimes for timed
-entries (an end before the start rolls to the next day), `retired_link_count`
+their summed `minutes`: each entry's recorded `[t:: Nm]` or stopwatch duration
+when present, else its time-range span). Each entry adds `role` (`current`, `next`,
+`later`, `open`, or `completed`), naive `starts_at`/`ends_at` datetimes
+(`"YYYY-MM-DDTHH:MM"` for timed entries, `null` otherwise; both keys are always
+present with `--tasks`, and an end before the start rolls to the next day),
+`retired_link_count`
 (struck single-link lines), `notes` (session notes: sub-bullet lines that are
 neither items nor retired links nor descendants of an item), and `items` (every
 line the `=x` recognizer accepts: any depth, plain, deferred `[[T]]#`, or
