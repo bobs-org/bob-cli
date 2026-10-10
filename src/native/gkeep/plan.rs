@@ -116,7 +116,14 @@ pub(super) struct PlanSummary {
     pub(super) archived: usize,
 }
 
-/// Classify `notes` against the ledger and journal.
+/// Classify `notes` against combined import history.
+///
+/// Checks an exact `(id, fp)` match in either verified receipts or
+/// legacy markers before checking whether either knows another revision
+/// of the id; a stale legacy marker never outranks a newer exact
+/// receipt. Prepared records never authorize archive-only. Then the
+/// existing lower-priority local `written`/`ref_created` fallbacks apply.
+/// Multiple proofs of one import are one history entry.
 ///
 /// Notes are ordered oldest first by Keep `created`, ties broken by id.
 /// When `opts.ids` is non-empty the plan narrows to the selected notes
@@ -128,6 +135,17 @@ pub(super) fn classify(
     notes: &[KeepNote],
     ledger: &Ledger,
     journal: &Journal,
+    opts: &PlanOptions,
+) -> Plan {
+    classify_with_imports(notes, ledger, journal, &[], opts)
+}
+
+/// Same as [`classify`] with vault import history.
+pub(super) fn classify_with_imports(
+    notes: &[KeepNote],
+    ledger: &Ledger,
+    journal: &Journal,
+    imports: &[(std::path::PathBuf, super::imports::TransactionFile)],
     opts: &PlanOptions,
 ) -> Plan {
     let mut order: Vec<usize> = (0..notes.len()).collect();
@@ -142,7 +160,14 @@ pub(super) fn classify(
         .filter(|index| selected.as_ref().is_none_or(|set| set.contains(index)))
         .map(|index| {
             let explicit = selected.is_some();
-            classify_one(&notes[index], explicit, ledger, journal, opts)
+            classify_one_with_imports(
+                &notes[index],
+                explicit,
+                ledger,
+                journal,
+                imports,
+                opts,
+            )
         })
         .collect();
 
@@ -187,6 +212,17 @@ fn classify_one(
     journal: &Journal,
     opts: &PlanOptions,
 ) -> PlannedNote {
+    classify_one_with_imports(note, selected, ledger, journal, &[], opts)
+}
+
+fn classify_one_with_imports(
+    note: &KeepNote,
+    selected: bool,
+    ledger: &Ledger,
+    journal: &Journal,
+    imports: &[(std::path::PathBuf, super::imports::TransactionFile)],
+    opts: &PlanOptions,
+) -> PlannedNote {
     let mut planned = PlannedNote {
         note: note.clone(),
         ref_: note_ref(&note.id),
@@ -216,12 +252,19 @@ fn classify_one(
         return skip(NoteState::Shared);
     }
     let fp = note.content.fingerprint();
-    if ledger.has(&note.id, &fp) {
+    // Exact match in either verified receipts or legacy markers comes
+    // before any revision check in either; a stale marker never outranks
+    // a newer exact receipt. Prepared records never authorize archive.
+    if ledger.has(&note.id, &fp)
+        || super::imports::has_verified(imports, &note.id, &fp)
+    {
         planned.state = NoteState::Pending;
         planned.action = PlanAction::ArchiveOnly;
         return planned;
     }
-    if ledger.has_id(&note.id) {
+    if ledger.has_id(&note.id)
+        || super::imports::has_verified_id(imports, &note.id)
+    {
         planned.state = NoteState::Revised;
         planned.action = PlanAction::WriteRevision;
         return planned;

@@ -37,6 +37,7 @@ pub(crate) fn build_cli() -> ClapCommand {
         .subcommand(doctor_command())
         .subcommand(list_command())
         .subcommand(login_command())
+        .subcommand(migrate_markers_command())
         .subcommand(pull_command())
 }
 
@@ -98,6 +99,23 @@ fn login_command() -> ClapCommand {
 
 fn login_after_help() -> &'static str {
     "Examples:\n  bob gkeep login\n  bob gkeep login -e bryanbugyi34@gmail.com\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob\n  BOB_CONFIG_FILE    gkeep config; defaults to ~/.config/bob/config.yml\n  BOB_GKEEP_ADAPTER  adapter executable replacing `uv run --script …`"
+}
+
+fn migrate_markers_command() -> ClapCommand {
+    ClapCommand::new("migrate-markers")
+        .about("Remove Google Keep bookkeeping markers from task Markdown (offline)")
+        .disable_help_flag(true)
+        .arg(bob_dir_arg())
+        .arg(dry_run_arg())
+        .arg(human_format_arg())
+        .arg(help_arg())
+        .arg(no_commit_arg())
+        .arg(quiet_arg())
+        .after_help(migrate_markers_after_help())
+}
+
+fn migrate_markers_after_help() -> &'static str {
+    "Offline migration: removes supported `%%gkeep:…%%` markers from task Markdown while preserving import evidence in `.bob/gkeep/imports/`. Needs no credentials, adapter, Keep snapshot, or network access, and does not require a configured target note.\n\nExamples:\n  bob gkeep migrate-markers --dry-run\n  bob gkeep migrate-markers\n  bob gkeep migrate-markers -d -f json\n\nEnvironment:\n  BOB_DIR            Bob vault root; defaults to ~/bob"
 }
 
 fn pull_command() -> ClapCommand {
@@ -452,6 +470,43 @@ impl PullArgs {
             parent: matches
                 .get_one::<OsString>("parent")
                 .map(|value| value.to_string_lossy().into_owned()),
+            quiet: matches.get_flag("quiet"),
+        }
+    }
+
+    /// The vault root: `--bob-dir`, else `BOB_DIR` or `~/bob`.
+    pub(crate) fn bob_dir(&self) -> PathBuf {
+        self.bob_dir.clone().unwrap_or_else(bob_env::bob_dir)
+    }
+
+    /// The error-reporting format name.
+    pub(crate) fn error_format(&self) -> &'static str {
+        self.format.as_str()
+    }
+}
+
+/// Typed `migrate-markers` arguments.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct MigrateArgs {
+    /// Vault root override before `BOB_DIR` fallback.
+    pub bob_dir: Option<PathBuf>,
+    /// Report exact proposed removals with zero writes.
+    pub dry_run: bool,
+    /// Output format.
+    pub format: HumanFormat,
+    /// Skip the vault Git commit after migrating.
+    pub no_commit: bool,
+    /// Print only errors.
+    pub quiet: bool,
+}
+
+impl MigrateArgs {
+    pub(crate) fn from_matches(matches: &ArgMatches) -> Self {
+        Self {
+            bob_dir: raw_bob_dir(matches),
+            dry_run: matches.get_flag("dry-run"),
+            format: HumanFormat::from_matches(matches),
+            no_commit: matches.get_flag("no-commit"),
             quiet: matches.get_flag("quiet"),
         }
     }

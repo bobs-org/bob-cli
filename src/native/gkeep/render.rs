@@ -9,7 +9,6 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
-use super::ledger::format_marker;
 use super::model::{AttachmentKind, KeepNote};
 use crate::native::capture;
 
@@ -103,10 +102,6 @@ where
     if let Some(extra) = extra_last_child {
         lines.push(format!("{child_prefix}- {extra}"));
     }
-    lines.push(format!(
-        "{child_prefix}{}",
-        format_marker(&note.id, &note.content.fingerprint())
-    ));
 
     RenderedBlock {
         markdown: lines.join("\n"),
@@ -453,7 +448,11 @@ fn ocr_children(note: &KeepNote) -> Vec<String> {
 /// Percent-encode Markdown delimiters and whitespace in a source URL,
 /// so a crafted id inside the URL cannot plant a
 /// parseable `%%gkeep:v1:…%%` marker before the real one.
-fn encode_source_url(url: &str) -> String {
+///
+/// Shared by the renderer and the source-identity lookup: emitted URLs
+/// and parsed task links round-trip through this exact encoding,
+/// including percent-encoded destinations.
+pub(super) fn encode_source_url(url: &str) -> String {
     let mut out = String::with_capacity(url.len());
     for c in url.chars() {
         if c == '%'
@@ -475,6 +474,21 @@ fn encode_source_url(url: &str) -> String {
         }
     }
     out
+}
+
+/// Extract the generated Keep source URL from a task description, when
+/// it matches the exact emitted `[💡](<url> "Open in Google Keep")`
+/// shape. Returns the raw (still percent-encoded) destination. Ordinary
+/// user-authored links never match: only this tooltip shape counts, so
+/// link recognition never creates import history.
+pub(super) fn parse_source_url(description: &str) -> Option<String> {
+    static RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
+        Regex::new(r#"\[💡\]\(([^()\s"<>]+) "Open in Google Keep"\)"#)
+            .expect("valid keep source-link regex")
+    });
+    RE.captures(description)
+        .and_then(|captures| captures.get(1))
+        .map(|group| group.as_str().to_string())
 }
 
 /// Whether normalized text is blank: empty after the renderer's
@@ -547,10 +561,6 @@ mod tests {
         }
     }
 
-    fn marker_fp(note: &KeepNote) -> String {
-        format_marker(&note.id, &note.content.fingerprint())
-    }
-
     #[test]
     fn titled_note_renders_task_line_and_children() {
         let mut note = test_note();
@@ -563,30 +573,28 @@ mod tests {
             .starts_with("- [ ] #task Call dentist about crown "));
         assert_eq!(
             block.markdown,
-            format!(
-                "- [ ] #task Call dentist about crown [💡](https://keep.google.com/u/0/#NOTE/note-abc-1 \"Open in Google Keep\") [created::2026-09-27]\n\
-                 \t- They close at 5 on Fridays\n\
-                 \t{}",
-                marker_fp(&note),
-            ),
+            "- [ ] #task Call dentist about crown [💡](https://keep.google.com/u/0/#NOTE/note-abc-1 \"Open in Google Keep\") [created::2026-09-27]\n\
+             \t- They close at 5 on Fridays",
         );
+        assert!(!block.markdown.contains("%%gkeep:"));
     }
 
     #[test]
-    fn fallback_child_precedes_hidden_marker() {
+    fn fallback_child_is_last_without_markers() {
         let mut note = test_note();
         note.content.text = "https://example.com/post".to_string();
         let fallback = "⚠️ Clip failed (blocked): wall · retry: bob ref create https://example.com/post";
 
         let block = render_note_with_fallback(&note, "\t", false, fallback);
         let lines: Vec<&str> = block.markdown.lines().collect();
-        assert_eq!(lines.len(), 3);
+        assert_eq!(lines.len(), 2);
         assert!(lines[0].starts_with("- [ ] #task https://example.com/post "));
         assert_eq!(lines[1], format!("\t- {fallback}"));
-        assert_eq!(lines[2], format!("\t{}", marker_fp(&note)));
-        // Without a fallback the block has no middle child.
+        assert!(!block.markdown.contains("%%gkeep:"));
+        // Without a fallback the block is a single task line.
         let plain = render_note(&note, "\t", false);
-        assert_eq!(plain.markdown.lines().count(), 2);
+        assert_eq!(plain.markdown.lines().count(), 1);
+        assert!(!plain.markdown.contains("%%gkeep:"));
     }
 
     #[test]
@@ -600,14 +608,11 @@ mod tests {
         assert!(block.markdown.starts_with("- [ ] #task Buy oat milk "));
         assert_eq!(
             block.markdown,
-            format!(
-                "- [ ] #task Buy oat milk [created::2026-09-27]\n\
-                 \t- end caps are on sale\n\
-                 \t- limit two\n\
-                 \t{}",
-                marker_fp(&note),
-            ),
+            "- [ ] #task Buy oat milk [created::2026-09-27]\n\
+             \t- end caps are on sale\n\
+             \t- limit two",
         );
+        assert!(!block.markdown.contains("%%gkeep:"));
     }
 
     #[test]
@@ -622,13 +627,10 @@ mod tests {
             .starts_with("- [ ] #task Hardware store #8 × 1¼″ 🧰 "));
         assert_eq!(
             block.markdown,
-            format!(
-                "- [ ] #task Hardware store #8 × 1¼″ 🧰 [💡](https://keep.google.com/u/0/#NOTE/note-abc-1 \"Open in Google Keep\") [created::2026-09-27]\n\
-                 \t- 木材とネジ — café naïve\n\
-                 \t{}",
-                marker_fp(&note),
-            ),
+            "- [ ] #task Hardware store #8 × 1¼″ 🧰 [💡](https://keep.google.com/u/0/#NOTE/note-abc-1 \"Open in Google Keep\") [created::2026-09-27]\n\
+             \t- 木材とネジ — café naïve",
         );
+        assert!(!block.markdown.contains("%%gkeep:"));
     }
 
     #[test]
@@ -642,19 +644,16 @@ mod tests {
         let block = render_note_in(&note, "\t", false, None, &chrono::Utc);
         assert_eq!(
             block.markdown,
-            format!(
-                "- [ ] #task Notes [💡](https://keep.google.com/u/0/#NOTE/note-abc-1 \"Open in Google Keep\") [created::2026-09-27]\n\
-                 \t- \\# heading\n\
-                 \t- \\> quote\n\
-                 \t- \\1. ordered\n\
-                 \t- \\| table |\n\
-                 \t- \\+ plus\n\
-                 \t- dash\n\
-                 \t- star\n\
-                 \t{}",
-                marker_fp(&note),
-            ),
+            "- [ ] #task Notes [💡](https://keep.google.com/u/0/#NOTE/note-abc-1 \"Open in Google Keep\") [created::2026-09-27]\n\
+             \t- \\# heading\n\
+             \t- \\> quote\n\
+             \t- \\1. ordered\n\
+             \t- \\| table |\n\
+             \t- \\+ plus\n\
+             \t- dash\n\
+             \t- star",
         );
+        assert!(!block.markdown.contains("%%gkeep:"));
     }
 
     #[test]
@@ -682,13 +681,10 @@ mod tests {
             .starts_with("- [ ] #task Fix \\#task before Friday \\^abc123 "));
         assert_eq!(
             block.markdown,
-            format!(
-                "- [ ] #task Fix \\#task before Friday \\^abc123 [💡](https://keep.google.com/u/0/#NOTE/note-abc-1 \"Open in Google Keep\") [created::2026-09-27]\n\
-                 \t- See [due\\:\\: tomorrow] and (x\\:\\: y) plus 100%&#37; sure\n\
-                 \t{}",
-                marker_fp(&note),
-            ),
+            "- [ ] #task Fix \\#task before Friday \\^abc123 [💡](https://keep.google.com/u/0/#NOTE/note-abc-1 \"Open in Google Keep\") [created::2026-09-27]\n\
+             \t- See [due\\:\\: tomorrow] and (x\\:\\: y) plus 100%&#37; sure",
         );
+        assert!(!block.markdown.contains("%%gkeep:"));
     }
 
     #[test]
@@ -706,15 +702,12 @@ mod tests {
         let block = render_note_in(&note, "\t", false, None, &chrono::Utc);
         assert_eq!(
             block.markdown,
-            format!(
-                "- [ ] #task Hardware store [💡](https://keep.google.com/u/0/#NOTE/note-abc-1 \"Open in Google Keep\") [created::2026-09-27]\n\
-                 \t- [ ] wood screws\n\
-                 \t\t- [ ] #8 × 1¼″\n\
-                 \t- [x] sandpaper\n\
-                 \t{}",
-                marker_fp(&note),
-            ),
+            "- [ ] #task Hardware store [💡](https://keep.google.com/u/0/#NOTE/note-abc-1 \"Open in Google Keep\") [created::2026-09-27]\n\
+             \t- [ ] wood screws\n\
+             \t\t- [ ] #8 × 1¼″\n\
+             \t- [x] sandpaper",
         );
+        assert!(!block.markdown.contains("%%gkeep:"));
     }
 
     #[test]
@@ -731,14 +724,11 @@ mod tests {
         // The title item stays in the children: it is still unchecked.
         assert_eq!(
             block.markdown,
-            format!(
-                "- [ ] #task peanut butter [💡](https://keep.google.com/u/0/#NOTE/note-abc-1 \"Open in Google Keep\") [created::2026-09-27]\n\
-                 \t- [ ] peanut butter\n\
-                 \t- [x] jam\n\
-                 \t{}",
-                marker_fp(&note),
-            ),
+            "- [ ] #task peanut butter [💡](https://keep.google.com/u/0/#NOTE/note-abc-1 \"Open in Google Keep\") [created::2026-09-27]\n\
+             \t- [ ] peanut butter\n\
+             \t- [x] jam",
         );
+        assert!(!block.markdown.contains("%%gkeep:"));
         assert_eq!(display_title(&note), "peanut butter");
     }
 
@@ -779,12 +769,12 @@ mod tests {
         let source = block.markdown.lines().next().expect("task line exists");
         assert!(!source.contains("%%gkeep:v1:spoof:"));
         assert!(source.contains("%25%25gkeep:v1:spoof"));
+        // Marker-free output emits no markers at all, even though Keep
+        // text escaping still neutralizes spoofed marker text.
         let markers: Vec<(String, String)> =
             block.markdown.lines().flat_map(parse_markers).collect();
-        assert_eq!(
-            markers,
-            vec![(note.id.clone(), note.content.fingerprint(),)]
-        );
+        assert!(markers.is_empty(), "{markers:?}");
+        assert!(!block.markdown.contains("%%gkeep:v1:"));
     }
 
     #[test]
@@ -795,17 +785,14 @@ mod tests {
         assert!(block.markdown.contains(
             "[💡](https://example.test/a%28%22b%5Cc%29?q=x#frag \"Open in Google Keep\")"
         ), "{}", block.markdown);
-        let marker = format!("  {}", marker_fp(&note));
-        assert_eq!(block.markdown.lines().last(), Some(marker.as_str()));
+        assert!(!block.markdown.contains("%%gkeep:"));
 
         for url in [None, Some(""), Some(" \t\n ")] {
             note.url = url.map(str::to_string);
             let block = render_note_in(&note, "\t", false, None, &chrono::Utc);
             assert!(!block.markdown.contains("[💡]"), "{}", block.markdown);
             assert!(block.markdown.contains("[created::2026-09-27]"));
-            assert!(block
-                .markdown
-                .ends_with(&format!("\t{}", marker_fp(&note))));
+            assert!(!block.markdown.contains("%%gkeep:"));
         }
     }
 
@@ -861,12 +848,10 @@ mod tests {
         let block = render_note_in(&note, "\t", false, None, &chrono::Utc);
         assert_eq!(
             block.markdown,
-            format!(
-                "- [ ] #task Pick up parcel [💡](https://keep.google.com/u/0/#NOTE/note-abc-1 \"Open in Google Keep\") [created::2026-09-27]\n\
-                 \t- 🏷 errands, weekend\n\t{}",
-                marker_fp(&note),
-            ),
+            "- [ ] #task Pick up parcel [💡](https://keep.google.com/u/0/#NOTE/note-abc-1 \"Open in Google Keep\") [created::2026-09-27]\n\
+             \t- 🏷 errands, weekend",
         );
+        assert!(!block.markdown.contains("%%gkeep:"));
     }
 
     #[test]
@@ -879,16 +864,13 @@ mod tests {
         let block = render_note_in(&note, "\t", false, None, &chrono::Utc);
         assert_eq!(
             block.markdown,
-            format!(
-                "- [ ] #task Hardware store [💡](https://keep.google.com/u/0/#NOTE/note-abc-1 \"Open in Google Keep\") [created::2026-09-27]\n\
-                 \t- [ ] wood screws\n\
-                 \t- 📎 1 image stays in Google Keep\n\
-                 \t\t- RECEIPT\n\
-                 \t\t- TOTAL 12.99\n\
-                 \t{}",
-                marker_fp(&note),
-            ),
+            "- [ ] #task Hardware store [💡](https://keep.google.com/u/0/#NOTE/note-abc-1 \"Open in Google Keep\") [created::2026-09-27]\n\
+             \t- [ ] wood screws\n\
+             \t- 📎 1 image stays in Google Keep\n\
+             \t\t- RECEIPT\n\
+             \t\t- TOTAL 12.99",
         );
+        assert!(!block.markdown.contains("%%gkeep:"));
     }
 
     #[test]
@@ -923,12 +905,9 @@ mod tests {
         let block = render_note_in(&note, "\t", true, None, &chrono::Utc);
         assert_eq!(
             block.markdown,
-            format!(
-                "- [ ] #task Call dentist · revised [💡](https://keep.google.com/u/0/#NOTE/note-abc-1 \"Open in Google Keep\") [created::2026-09-27]\n\
-                 \t{}",
-                marker_fp(&note),
-            ),
+            "- [ ] #task Call dentist · revised [💡](https://keep.google.com/u/0/#NOTE/note-abc-1 \"Open in Google Keep\") [created::2026-09-27]",
         );
+        assert!(!block.markdown.contains("%%gkeep:"));
     }
 
     #[test]
@@ -941,14 +920,11 @@ mod tests {
         assert!(block.markdown.starts_with("- [ ] #task Call dentist "));
         assert_eq!(
             block.markdown,
-            format!(
-                "- [ ] #task Call dentist [💡](https://keep.google.com/u/0/#NOTE/note-abc-1 \"Open in Google Keep\") [created::2026-09-27]\n\
-                 \t- They close at 5\n\
-                 \t- Fridays\n\
-                 \t{}",
-                marker_fp(&note),
-            ),
+            "- [ ] #task Call dentist [💡](https://keep.google.com/u/0/#NOTE/note-abc-1 \"Open in Google Keep\") [created::2026-09-27]\n\
+             \t- They close at 5\n\
+             \t- Fridays",
         );
+        assert!(!block.markdown.contains("%%gkeep:"));
     }
 
     #[test]
@@ -960,15 +936,10 @@ mod tests {
         let block = render_note_in(&note, "  ", false, None, &chrono::Utc);
         assert_eq!(
             block.markdown,
-            format!(
-                "- [ ] #task Call dentist [💡](https://keep.google.com/u/0/#NOTE/note-abc-1 \"Open in Google Keep\") [created::2026-09-27]\n\
-                 {}- They close at 5\n\
-                 {}{}",
-                "  ",
-                "  ",
-                marker_fp(&note),
-            ),
+            "- [ ] #task Call dentist [💡](https://keep.google.com/u/0/#NOTE/note-abc-1 \"Open in Google Keep\") [created::2026-09-27]\n\
+             \x20\x20- They close at 5",
         );
+        assert!(!block.markdown.contains("%%gkeep:"));
     }
 
     #[test]
@@ -983,13 +954,10 @@ mod tests {
         assert!(block
             .markdown
             .contains("%&#37;gkeep:v1:x:000000000000%&#37;"));
-        // Only the real marker parses back out of the block.
+        // Marker-free output emits no markers at all.
         let markers: Vec<(String, String)> =
             block.markdown.lines().flat_map(parse_markers).collect();
-        assert_eq!(
-            markers,
-            vec![(note.id.clone(), note.content.fingerprint(),)],
-        );
+        assert!(markers.is_empty(), "{markers:?}");
     }
 
     #[test]

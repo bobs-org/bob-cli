@@ -20,7 +20,8 @@ setup. Tests never touch live Keep: set `BOB_GKEEP_ADAPTER` to a fake adapter.
 - [List](#list)
 - [Pull](#pull)
 - [Rendering and escaping](#rendering-and-escaping)
-- [Marker, ledger, and journal](#marker-ledger-and-journal)
+- [Import history, ledger, and journal](#import-history-ledger-and-journal)
+- [Migration](#migration)
 - [Exit status](#exit-status)
 - [JSON output](#json-output)
 - [Security](#security)
@@ -33,9 +34,13 @@ setup. Tests never touch live Keep: set `BOB_GKEEP_ADAPTER` to a fake adapter.
 bob gkeep [-a|--all] [-b|--bob-dir DIR] [-f|--format table|json] [-s|--source both|keep|vault]
 bob gkeep list [-a|--all] [-b|--bob-dir DIR] [-f|--format table|json] [-s|--source both|keep|vault]
 bob gkeep pull [-b|--bob-dir DIR] [-d|--dry-run] [-f|--format human|json] [-i|--id REF]... [-p|--include-pinned] [-S|--include-shared] [-l|--limit N] [-n|--no-archive] [-C|--no-commit] [-q|--quiet] [-R|--no-ref]
+bob gkeep migrate-markers [-b|--bob-dir DIR] [-d|--dry-run] [-f|--format human|json] [-C|--no-commit] [-q|--quiet]
 bob gkeep login [-e|--email EMAIL]
 bob gkeep doctor [-b|--bob-dir DIR] [-f|--format human|json]
 ```
+
+Upgrade every host that runs pulls before relying on marker-free imports:
+old binaries cannot read `.bob/gkeep/imports/` history.
 
 Running `bob gkeep` with no subcommand runs `bob gkeep list` with the same
 options, so `bob gkeep -s vault` works.
@@ -50,15 +55,25 @@ ops); the Rust side spawns it with `uv run --script`, which fetches a pinned
 Python and pinned dependencies on first run. `BOB_GKEEP_ADAPTER` replaces that
 spawn with any executable speaking the same protocol, which is the test hook.
 
-The pipeline is: snapshot Keep, scan the vault for `%%gkeep:…%%` markers
-(the ledger) plus the append-only journal, classify each note
-(new / pending / revised / skipped), render new and revised notes as Markdown
-blocks, append them to the target note with a durable atomic write, re-read
-and parse-verify the write, commit when the vault is a Git worktree, and only
-then archive each note in Keep with a content guard: the adapter re-reads the
-note and archives it only when its current content still equals what Rust saw.
-Notes edited in Keep during a pull stay in Keep; the next pull writes the
-revision. Nothing is ever deleted from Keep.
+The pipeline is: snapshot Keep, scan combined import history (vault
+`.bob/gkeep/imports/` receipts plus legacy `%%gkeep:…%%` markers plus the
+append-only journal), classify each note (new / pending / revised /
+skipped), render new and revised notes as marker-free Markdown blocks,
+persist a prepared import record before installing the target bytes,
+append them to the target note with a durable atomic write, re-read and
+parse-verify complete blocks at task boundaries with
+baseline-plus-inserted multiplicity, persist compact verified receipts,
+commit the target plus its import records when the vault is a Git worktree,
+and only then archive each note in Keep with a content guard: the adapter
+re-reads the note and archives it only when its current content still equals
+what Rust saw. Notes edited in Keep during a pull stay in Keep; the next
+pull writes the revision. Nothing is ever deleted from Keep. Import history
+lives in the vault so Git sync carries it between machines; back up and sync
+the vault. Recovery re-reads history under the vault lock: a prepared write
+that never landed retries, an installed-but-unreceipted write finalizes
+without appending again, a verified-but-uncommitted batch commits before any
+archive, and an edited/moved target that cannot be proven stops with its
+evidence retained.
 
 The adapter runs in its own process group so a timeout can kill the whole
 tree. `BOB_GKEEP_PARENT_PID` carries the Rust parent pid to the adapter;
@@ -287,10 +302,12 @@ or checked; OCR text nests under an attachment summary line
 (`📎 N image(s)/drawing(s)/audio clip(s)/file(s) stay(s) in Google Keep`,
 with unknown kinds as `other` → `file(s)`). Labels appear as one ordinary
 `- 🏷 label, ...` child. Revisions append `· revised` to the task description.
-The final indented continuation is the hidden `%%gkeep:...%%` marker; it is
-not a list item. Source URLs percent-encode Markdown delimiters, quotes,
-backslashes, and whitespace, so crafted destinations cannot break the link or
-plant a marker.
+There is no bookkeeping in the Markdown: no replacement comment, hidden
+field, encoded block ID, or marker in the link URL/tooltip. Ordinary pulls
+never rewrite existing tasks. Source URLs percent-encode Markdown delimiters,
+quotes, backslashes, and whitespace, so crafted destinations cannot break
+the link. Keep text escaping still neutralizes spoofed `%%gkeep:…%%` text
+even though Bob emits no markers.
 
 Escaping: `#task` tokens → `\#task`; trailing ` ^id` block ids (including a
 caret starting the text or following Unicode whitespace/NBSP) → `\^id`;
@@ -301,27 +318,37 @@ child), thematic breaks (`---`/`***`/`___`, spaces allowed), and code fences
 (leading ` ``` `/`~~~`) gain a leading backslash.
 
 ```markdown
-- [ ] #task Call dentist about crown [💡](https://keep.google.com/u/0/#NOTE/… "Open in Google Keep") [created::2026-09-27]
-	- They close at 5 on Fridays
-	%%gkeep:v1:<id>:3f9c2e1d0a7b%%
-- [ ] #task Hardware store [💡](https://keep.google.com/u/0/#NOTE/… "Open in Google Keep") [created::2026-09-26]
-	- [ ] wood screws
-		- [ ] #8 × 1¼"
-	- [x] sandpaper
-	- 📎 1 image stays in Google Keep
-		- RECEIPT TOTAL 12.99
-	- 🏷 errands
-	%%gkeep:v1:<id>:9b1e44c07a2d%%
+- [ ] #task Call dentist
+      [💡](https://keep.google.com/u/0/#NOTE/example "Open in Google Keep")
+      [created::2026-10-10]
+  - Ask about the crown
 ```
 
-## Marker, ledger, and journal
+## Import history, ledger, and journal
 
-**Marker.** `%%gkeep:v1:<id>:<fp12>%%`, on an indented, non-bullet final
-continuation of the task block. Obsidian hides `%%…%%` comments in Live Preview
-and Reading view. The source link is a normal Markdown link; the hidden marker
-stays separate so it does not leak into task descriptions.
-Ids are percent-encoded outside `[A-Za-z0-9._-]`; the raw id never goes into
-a block id. Parse regex: `%%gkeep:v1:([A-Za-z0-9._%-]+):([0-9a-f]{12})%%`.
+New imports emit no markers. Import history lives in versioned
+`.bob/gkeep/imports/<transaction-id>.json` files inside the vault (ordinary
+tracked vault data, unique filename per batch, immutable completed records).
+A prepared entry holds the intended marker-free block plus source
+id/fingerprint/URL; the transaction carries before/after file SHA-256 values
+and baseline occurrence counts. Verified receipts are compact (ids,
+fingerprints, source URLs, original paths, initial block digests, destination
+digest) with intended text removed. Malformed store files fail before any
+task write or archive; an absent store is valid for a pre-upgrade vault.
+Read-only commands never create the store. In a Git vault the target and its
+records commit together (ignored metadata fails instead of force-adding);
+non-Git and `--no-commit` still require durable receipts before archival.
+
+**Legacy marker (read-only).** `%%gkeep:v1:<id>:<fp12>%%`, formerly on an
+indented, non-bullet final continuation of the task block. Bob no longer
+emits markers; existing markers are removed by `bob gkeep migrate-markers`.
+Legacy reads remain: a marker stays authoritative for its task. Ids are
+percent-encoded outside `[A-Za-z0-9._-]`; parse regex:
+`%%gkeep:v1:([A-Za-z0-9._%-]+):([0-9a-f]{12})%%`. History checks an exact
+`(id, fp)` in either receipts or markers before checking either for another
+revision; a stale marker never outranks a newer exact receipt. Prepared
+records never authorize archive. A bare hand-written Keep link without
+history neither suppresses an import nor authorizes archival.
 
 **Fingerprint.** `KeepContent {title, text, items: [KeepItem {text, checked,
 indented}]}` serializes with `serde_json::to_string` in exactly that field
@@ -329,14 +356,16 @@ order; `fp` is the first 12 lowercase hex digits of its SHA-256. Attachment
 OCR text is excluded, because it can arrive asynchronously and must not make
 a note look revised.
 
-**Ledger.** A scan over every `.md` file in the vault, including `done/`,
-skipping the always-excluded note directories. A cheap
+**Ledger (legacy markers).** A scan over every `.md` file in the vault,
+including `done/`, skipping the always-excluded note directories. A cheap
 `contents.contains("%%gkeep:")` pre-filter skips files without markers; each
-hit records `{id, fp, path, line}`. Tasks keep the marker continuation through
-triage and `task archive` (formerly `move-done-tasks`, still accepted), so
-re-runs are idempotent across hosts with no
-local state. More than one ledger entry with the same `(id, fp)` warns,
-naming each `path:line`.
+hit records `{id, fp, path, line}`. Verified receipts plus markers stay
+idempotent across hosts with no local state: copy or clone the whole vault
+including `.bob/gkeep/imports/` to a second host with empty local state and
+a pull adds nothing; the same holds after task movement/completion, while a
+changed Keep revision writes anew. More than one ledger entry with the same
+`(id, fp)` warns, naming each `path:line`. Multiple proofs of one import are
+one history entry, not a duplicate warning.
 
 **Journal.** `$XDG_STATE_HOME/bob-cli/gkeep/journal.jsonl` (directory `0700`,
 file `0600`), append-only and fsynced per batch. Records look like
@@ -355,6 +384,33 @@ warns.
 live attachment count (`expect_attachments`). The adapter refuses the
 archive with `changed` when either differs, so an attachment added mid-pull
 keeps the note in Keep.
+
+**Presentation.** A legacy marker stays authoritative for its task.
+Otherwise the task's generated 💡 link is matched to the exact emitted URL
+in import history (shared encoder/parser, adapter id stored separately); an
+unambiguous initial block-digest match may identify a URL-less task. Edited
+or ambiguous tasks keep `keep_id`/`keep_state` null rather than attributing
+another note's identity. The human table collapses the generated link to 💡
+and shows `↺ still in Keep` when identity is known; JSON keeps the full link
+and existing field names. Link recognition never creates history.
+
+## Migration
+
+`bob gkeep migrate-markers` is the explicit offline migration for existing
+markers. It needs no credentials, adapter, snapshot, network, or configured
+target; it walks eligible vault task blocks (including completed and moved
+tasks, skipping excluded dirs). Default applies the migration; `-d` reports
+exact proposed removals and affected paths with zero writes and no metadata.
+It deletes standalone indented marker-only lines entirely and, for the older
+`- Source: … %%gkeep:…%%` child, removes only the valid marker token and its
+generated separator space, preserving links and text. User comments, code
+examples, malformed markers, and tokens outside recognized positions stay;
+ambiguous or conflicting markers are retained and reported. Every other byte
+(task state, links, children, indentation, CRLF/LF, final newline,
+permissions) is preserved. Evidence persists before its marker is removed, so
+a crash before cleanup is safe to rerun with no extra import; races leave the
+marker recoverable. Only changed notes and generated records commit; a clean
+rerun writes nothing and creates no commit.
 
 ## Exit status
 

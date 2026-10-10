@@ -57,6 +57,7 @@ fn top_help_pins_the_command_surface() {
         ("doctor", "Check the Keep setup"),
         ("list", "side by side"),
         ("login", "stored Keep master token"),
+        ("migrate-markers", "offline"),
         ("pull", "then archive them"),
     ] {
         assert!(
@@ -175,6 +176,10 @@ fn subcommand_help_blocks_carry_examples_and_environment() {
             ],
         ),
         (
+            &["gkeep", "migrate-markers", "--help"],
+            &["offline", "bob gkeep migrate-markers", "BOB_DIR"],
+        ),
+        (
             &["gkeep", "pull", "--help"],
             &[
                 "then archive them",
@@ -240,6 +245,17 @@ fn subcommand_options_are_alphabetical() {
         (
             &["gkeep", "login", "--help"],
             &["-e, --email", "-h, --help"],
+        ),
+        (
+            &["gkeep", "migrate-markers", "--help"],
+            &[
+                "-b, --bob-dir",
+                "-d, --dry-run",
+                "-f, --format",
+                "-h, --help",
+                "-C, --no-commit",
+                "-q, --quiet",
+            ],
         ),
         (
             &["gkeep", "pull", "--help"],

@@ -15,9 +15,9 @@ use super::{
     adapter::{AdapterClient, Credentials},
     cli::ListSource,
     config::{GkeepConfig, DEFAULT_TARGET},
-    ledger::{read_target_tasks, Journal, Ledger, VaultTask},
+    ledger::{Journal, Ledger, VaultTask},
     model::{KeepNote, KeepNoteKind},
-    plan::{classify, NoteState, Plan, PlanAction, PlanOptions},
+    plan::{NoteState, Plan, PlanAction, PlanOptions},
     render::{display_title, note_counts},
     ui::{format_age, report_error, warn},
 };
@@ -112,10 +112,11 @@ pub(crate) fn run(args: &ListArgs) -> i32 {
             None
         }
     };
-    let plan = classify(
+    let plan = super::plan::classify_with_imports(
         &visible,
         &vault.ledger,
         &vault.journal,
+        &vault.store_files,
         &PlanOptions {
             routing,
             ..PlanOptions::default()
@@ -207,26 +208,43 @@ fn ref_hint_map(bob_dir: &std::path::Path, plan: &Plan) -> RefHints {
         .collect()
 }
 
-/// The vault side: target tasks plus the ledger and journal behind them.
+/// The vault side: target tasks plus the ledger, import store, and
+/// journal behind them.
 struct VaultData {
     target_rel: String,
     target_path: PathBuf,
     tasks: Vec<VaultTask>,
     ledger: Ledger,
+    store_files: Vec<(PathBuf, super::imports::TransactionFile)>,
     journal: Journal,
     missing_target: bool,
 }
 
-/// Scan the ledger and journal, warn about integrity issues, and read
-/// the target note's tasks (open only, unless `--all`).
+/// Scan the ledger, vault import store, and journal, warn about
+/// integrity issues, and read the target note's tasks (open only, unless
+/// `--all`). Read-only: never creates the store directory, writes
+/// receipts, takes mutation locks, or cleans old markers. An unresolved
+/// transaction is explained, never presented as safely archived.
 fn read_vault(
     bob_dir: &std::path::Path,
     target_rel: &str,
     show_all: bool,
 ) -> Result<VaultData, GkeepError> {
+    use super::ledger::read_target_tasks_with_imports;
     let ledger = Ledger::scan(bob_dir).map_err(|error| {
         GkeepError::setup("vault", format!("scan the vault: {error}"))
     })?;
+    let store_files = super::imports::read_all(bob_dir).map_err(|error| {
+        GkeepError::setup(
+            "vault",
+            format!("read the gkeep import store: {error}"),
+        )
+    })?;
+    if !super::imports::unfinished(&store_files).is_empty() {
+        warn(
+            "unresolved gkeep import transaction(s) present; a real pull recovers them (list changes nothing)",
+        );
+    }
     let journal_path = bob_env::bob_cli_state_dir()
         .join("gkeep")
         .join("journal.jsonl");
@@ -257,7 +275,8 @@ fn read_vault(
         Err(_) => (String::new(), false),
     };
     let settings = note_tasks::read_settings(bob_dir);
-    let mut tasks = read_target_tasks(&contents, &settings);
+    let mut tasks =
+        read_target_tasks_with_imports(&contents, &settings, &store_files);
     if !show_all {
         tasks.retain(|task| is_open_status(task.status_symbol));
     }
@@ -274,6 +293,7 @@ fn read_vault(
         target_path,
         tasks,
         ledger,
+        store_files,
         journal,
         missing_target,
     })
@@ -541,7 +561,7 @@ fn print_vault_table(
             hints.push(boxes.join(" "));
         }
         if active
-            .get(task.marker.as_ref().map_or("", |(id, _)| id.as_str()))
+            .get(task.source_id().unwrap_or(""))
             .is_some_and(|state| *state != NoteState::Archived)
         {
             hints.push("↺ still in Keep".to_string());
@@ -551,7 +571,7 @@ fn print_vault_table(
         } else {
             format!("  {}", hints.join("  "))
         };
-        let description = if task.marker.is_some() {
+        let description = if task.source_id().is_some() {
             collapse_keep_source_link(&task.description)
         } else {
             task.description.clone()
@@ -796,11 +816,15 @@ fn print_json(
             .tasks
             .iter()
             .map(|task| {
+                // Legacy markers stay authoritative; otherwise the
+                // receipt-backed source identity supplies keep_id, and
+                // unknown/ambiguous associations stay null (never
+                // guessed). Link recognition never creates history.
                 let (keep_id, keep_state): (Option<&str>, Option<&str>) =
-                    match &task.marker {
-                        Some((id, _)) => (
-                            Some(id.as_str()),
-                            states.get(id.as_str()).copied(),
+                    match task.source_id() {
+                        Some(id) => (
+                            Some(id),
+                            states.get(id).copied(),
                         ),
                         None => (None, None),
                     };

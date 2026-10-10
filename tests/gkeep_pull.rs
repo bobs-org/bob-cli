@@ -203,8 +203,8 @@ fn normal_pull_writes_verifies_commits_and_archives() {
     let target = read_target(env.vault());
     assert!(target.contains("Call dentist about crown"), "{target}");
     assert!(target.contains("Hardware store"), "{target}");
-    assert!(target.contains("%%gkeep:v1:note-1:"), "{target}");
-    assert!(target.contains("%%gkeep:v1:note-2:"), "{target}");
+    // Marker-free output: no GKeep bookkeeping in task Markdown.
+    assert!(!target.contains("%%gkeep:"), "{target}");
     // Pinned notes stay in Keep and out of the vault.
     assert!(!target.contains("Wi-Fi guest password"), "{target}");
 
@@ -223,18 +223,42 @@ fn normal_pull_writes_verifies_commits_and_archives() {
     titles.sort();
     assert_eq!(titles, vec!["Call dentist about crown", "Hardware store"]);
 
-    // Exactly one new commit touching only the target.
+    // Exactly one new commit touching the target plus import history.
     assert_eq!(git_rev_list_count(env.vault()), 1);
-    assert_eq!(git_log_names(env.vault()), vec!["gkeep_inbox.md"]);
-    // Byte-exact: both markers present exactly once, in oldest-first order.
-    assert_eq!(target.matches("%%gkeep:v1:note-1:").count(), 1);
-    assert_eq!(target.matches("%%gkeep:v1:note-2:").count(), 1);
-    let pos1 = target.find("%%gkeep:v1:note-2:").unwrap();
-    let pos2 = target.find("%%gkeep:v1:note-1:").unwrap();
+    let names = git_log_names(env.vault());
+    assert!(names.contains(&"gkeep_inbox.md".to_string()), "{names:?}");
+    assert!(
+        names
+            .iter()
+            .any(|name| name.starts_with(".bob/gkeep/imports/")),
+        "import history committed: {names:?}"
+    );
+    // Byte-exact oldest-first, marker-free (TZ=UTC).
+    let pos1 = target.find("Hardware store").unwrap();
+    let pos2 = target.find("Call dentist about crown").unwrap();
     assert!(pos1 < pos2, "oldest first:\n{target}");
-    // Byte-exact whole file (TZ=UTC; rendering uses only created dates).
-    let expected = "---\nkey: value\n---\n- intro bullet one\n- The tasks below are pulled in by the `bob gkeep` command.\n## Tasks\n\n- [ ] #task Hardware store [created::2026-09-26]\n\t- [ ] wood screws\n\t- [x] sandpaper\n\t%%gkeep:v1:note-2:32a5e5e2fd2c%%\n- [ ] #task Call dentist about crown [💡](https://keep.google.com/u/0/#NOTE/note-1 \"Open in Google Keep\") [created::2026-09-27]\n\t- They close at 5 on Fridays\n\t%%gkeep:v1:note-1:47582521e307%%\n";
+    let expected = "---\nkey: value\n---\n- intro bullet one\n- The tasks below are pulled in by the `bob gkeep` command.\n## Tasks\n\n- [ ] #task Hardware store [created::2026-09-26]\n\t- [ ] wood screws\n\t- [x] sandpaper\n- [ ] #task Call dentist about crown [💡](https://keep.google.com/u/0/#NOTE/note-1 \"Open in Google Keep\") [created::2026-09-27]\n\t- They close at 5 on Fridays\n";
     assert_eq!(target, expected, "byte-exact target:\n{target}");
+
+    // Vault import history carries verified receipts with no intended text.
+    let store_dir = env.vault().join(".bob/gkeep/imports");
+    let tx_files: Vec<_> = std::fs::read_dir(&store_dir)
+        .expect("import store exists")
+        .filter_map(|entry| entry.ok())
+        .collect();
+    assert_eq!(tx_files.len(), 1, "one batch file");
+    let tx_text = std::fs::read_to_string(tx_files[0].path()).expect("read tx");
+    let tx: serde_json::Value =
+        serde_json::from_str(&tx_text).expect("tx json");
+    assert_eq!(tx["schema_version"], serde_json::json!(1));
+    assert_eq!(tx["destination"], serde_json::json!("gkeep_inbox.md"));
+    let entries = tx["entries"].as_array().expect("entries");
+    assert_eq!(entries.len(), 2);
+    for entry in entries {
+        assert_eq!(entry["state"], serde_json::json!("verified"));
+        assert!(entry.get("intended").is_none(), "{entry}");
+        assert!(entry.get("dest_digest").is_some(), "{entry}");
+    }
 
     let journal = journal_records(&state);
     assert!(
@@ -697,8 +721,10 @@ fn crlf_endings_preserved_and_space_indent_used() {
         }
     }
     let text = String::from_utf8_lossy(&raw).into_owned();
-    // The space-indented target uses two spaces for the new children.
-    assert!(text.contains("\n  %%gkeep:v1:note-1:"), "{text}");
+    // The space-indented target uses two spaces for the new children, with
+    // no markers in marker-free output.
+    assert!(!text.contains("%%gkeep:"), "{text}");
+    assert!(text.contains("\n  - "), "{text}");
     assert!(!text.contains("Source:"), "{text}");
 }
 

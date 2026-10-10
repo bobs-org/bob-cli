@@ -812,17 +812,27 @@ The full command contract lives in [`docs/plugins.md`](docs/plugins.md).
 bob gkeep [-a|--all] [-b|--bob-dir DIR] [-f|--format table|json] [-s|--source both|keep|vault]
 bob gkeep list [-a|--all] [-b|--bob-dir DIR] [-f|--format table|json] [-s|--source both|keep|vault]
 bob gkeep pull [-b|--bob-dir DIR] [-d|--dry-run] [-f|--format human|json] [-i|--id REF]... [-p|--include-pinned] [-S|--include-shared] [-l|--limit N] [-n|--no-archive] [-C|--no-commit] [-q|--quiet] [-R|--no-ref]
+bob gkeep migrate-markers [-b|--bob-dir DIR] [-d|--dry-run] [-f|--format human|json] [-C|--no-commit] [-q|--quiet]
 bob gkeep login [-e|--email EMAIL]
 bob gkeep doctor [-b|--bob-dir DIR] [-f|--format human|json]
 ```
 
-Imports Google Keep inbox notes into `gkeep_inbox.md` as Obsidian tasks.
+Imports Google Keep inbox notes into `gkeep_inbox.md` as Obsidian tasks
+with no bookkeeping in the Markdown: tasks carry only the linked 💡, the
+created field, labels, revision indication, and useful note children.
+Import history lives in versioned `.bob/gkeep/imports/*.json` files inside
+the vault, so vault Git sync carries it between machines (back up and sync
+the vault; old binaries cannot read the new history, so upgrade every host
+that pulls before relying on marker-free imports). Run the explicit offline
+`bob gkeep migrate-markers` once to clean existing `%%gkeep:…%%` markers.
 Eligible URL-only notes are clipped inline to intake PDFs during `pull`;
 `bob ref scan` writes the notes `bob ref list` shows. `bob capture` queues
 the same kind of link as a background job instead. `pull -R` keeps links as
 tasks. Each note is archived in Keep only after its current content is
 verified in the vault (unless `--no-archive`). A pull that only clips skips
-the inbox write and the Git commit.
+the inbox write and the Git commit. Unidentifiable URL-less edited tasks
+keep `keep_id`/`keep_state` null rather than guessing another note's
+identity.
 Running `bob gkeep` with no subcommand runs `list`: Keep notes
 and vault tasks side by side with per-note pull states. `pull -d` previews
 the exact Markdown, `pull -n` writes without archiving, and `pull` writes,

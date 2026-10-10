@@ -18,6 +18,7 @@ use serde_json::json;
 use super::{
     adapter::{AdapterClient, Credentials},
     config::GkeepConfig,
+    imports::{self, EntryState, ImportEntry, TransactionFile},
     ledger::{Journal, JournalEvent, JournalRecord, Ledger},
     model::{note_ref, ArchiveStatus, KeepContent, KeepNote},
     plan::{NoteState, Plan, PlanAction, PlanOptions, PlannedNote},
@@ -233,9 +234,10 @@ pub(crate) fn run(args: &PullArgs) -> i32 {
     let target_rel = PathBuf::from(config.target());
     let target_path = config.target_path(&bob_dir);
 
-    // Scan the ledger and journal before the vault lock: the clip
-    // pre-pass below runs under the pull lock but outside the vault
-    // lock, so long clips never block vault maintenance.
+    // Scan the ledger, vault import store, and journal before the vault
+    // lock: the clip pre-pass below runs under the pull lock but outside
+    // the vault lock, so long clips never block vault maintenance.
+    // Malformed store files fail before any task write or archive call.
     let ledger = match Ledger::scan(&bob_dir) {
         Ok(ledger) => ledger,
         Err(error) => {
@@ -244,6 +246,19 @@ pub(crate) fn run(args: &PullArgs) -> i32 {
                 &GkeepError::runtime(
                     "vault",
                     format!("scan the vault ledger: {error}"),
+                ),
+                format_name,
+            );
+        }
+    };
+    let store_files = match imports::read_all(&bob_dir) {
+        Ok(files) => files,
+        Err(error) => {
+            return ui::report_error(
+                "pull",
+                &GkeepError::runtime(
+                    "vault",
+                    format!("read the gkeep import store: {error}"),
                 ),
                 format_name,
             );
@@ -277,6 +292,11 @@ pub(crate) fn run(args: &PullArgs) -> i32 {
             group.locations.join(", ")
         );
     }
+    if !imports::unfinished(&store_files).is_empty() && !args.dry_run {
+        ui::warn(
+            "unfinished gkeep import transaction(s) present; recovery runs under the vault lock",
+        );
+    }
 
     let routing = load_gkeep_routing(args.no_ref);
     let plan_opts = PlanOptions {
@@ -286,7 +306,13 @@ pub(crate) fn run(args: &PullArgs) -> i32 {
         limit: args.limit.map(|value| value as usize),
         routing,
     };
-    let plan = super::plan::classify(&notes, &ledger, &journal, &plan_opts);
+    let plan = super::plan::classify_with_imports(
+        &notes,
+        &ledger,
+        &journal,
+        &store_files,
+        &plan_opts,
+    );
 
     // Select and remember Keep parents before clipping: note `@route`,
     // explicit `-P`, an interactive answer, then `gkeep_inbox`. An
@@ -314,9 +340,16 @@ pub(crate) fn run(args: &PullArgs) -> i32 {
     );
 
     // Dry runs stop at the plan: no locks, no clips, no writes, no
-    // archive calls. The indent comes from the target when it reads,
-    // else the default.
+    // archive calls, no receipt writes, no marker cleanup. The indent
+    // comes from the target when it reads, else the default. An
+    // unresolved transaction is explained, never presented as safely
+    // archived.
     if args.dry_run {
+        if !imports::unfinished(&store_files).is_empty() {
+            ui::warn(
+                "unresolved gkeep import transaction(s) present; a real pull recovers them under the vault lock (dry-run changes nothing)",
+            );
+        }
         let indent = fs::read(&target_path)
             .ok()
             .map(|bytes| {
@@ -385,8 +418,9 @@ pub(crate) fn run(args: &PullArgs) -> i32 {
 
     // Nothing to write (only pending/skipped, or clips alone): skip
     // write, verify, and commit, take no vault lock, and go straight
-    // to the guarded archive.
-    if !needs_target {
+    // to the guarded archive — unless an unfinished transaction needs
+    // vault-lock recovery first.
+    if !needs_target && imports::unfinished(&store_files).is_empty() {
         return finish_with_archive(
             args,
             &config,
@@ -401,8 +435,11 @@ pub(crate) fn run(args: &PullArgs) -> i32 {
         );
     }
 
-    // Take `bob_sync.lock` before reading the target. (Obsidian ignores
-    // the lock, so CAS still guards the write.)
+    // Take `bob_sync.lock` before re-reading import evidence and the
+    // target. (Obsidian ignores the lock, so CAS still guards the
+    // write.) Newly synced vault records cannot bypass planning: history
+    // is re-read under this lock and unfinished transactions resolve
+    // before any fresh import is classified.
     let _vault_guard = {
         let waiting = format!(
             "  {}",
@@ -434,6 +471,142 @@ pub(crate) fn run(args: &PullArgs) -> i32 {
         }
     };
 
+    // Re-read import evidence under the vault lock and resolve
+    // unfinished transactions before classifying fresh imports. Slow
+    // clipping stays outside the lock; completed clips are reused.
+    let settings_for_recovery = note_tasks::read_settings(&bob_dir);
+    let fresh_store =
+        match resolve_unfinished(&bob_dir, &target_rel, &settings_for_recovery)
+        {
+            Ok(files) => files,
+            Err(error) => return ui::report_error("pull", &error, format_name),
+        };
+    let fresh_ledger = match Ledger::scan(&bob_dir) {
+        Ok(ledger) => ledger,
+        Err(error) => {
+            return ui::report_error(
+                "pull",
+                &GkeepError::runtime(
+                    "vault",
+                    format!("scan the vault ledger: {error}"),
+                ),
+                format_name,
+            );
+        }
+    };
+    let fresh_journal = match Journal::read(&journal_file) {
+        Ok(journal) => journal,
+        Err(error) => {
+            return ui::report_error(
+                "pull",
+                &GkeepError::runtime(
+                    "vault",
+                    format!("read the gkeep journal: {error}"),
+                ),
+                format_name,
+            );
+        }
+    };
+    // Refresh the plan with newly synced history; clips are reused, never
+    // redone. `plan` stays for reporting; `fresh_plan` drives writes.
+    let fresh_plan = super::plan::classify_with_imports(
+        &notes,
+        &fresh_ledger,
+        &fresh_journal,
+        &fresh_store,
+        &plan_opts,
+    );
+    let fresh_needs_target = fresh_plan.notes.iter().any(|planned| {
+        matches!(
+            planned.action,
+            PlanAction::Write | PlanAction::WriteRevision
+        )
+    }) || clips.reports.iter().any(|report| {
+        matches!(report.outcome, ClipOutcome::FailedPermanent { .. })
+    });
+    if !fresh_needs_target {
+        // Archive-only recovery: a verified working-tree record alone must
+        // not bypass the commit requirement. Complete the scoped commit
+        // before any archive.
+        if !args.no_commit {
+            let child_env = ob::child_env();
+            let worktree = match ob::detect_git_worktree(&bob_dir, &child_env) {
+                Ok(inside) => inside,
+                Err(error) => {
+                    if has_git_ancestor(&bob_dir) {
+                        return ui::report_error(
+                            "pull",
+                            &GkeepError::runtime(
+                                "commit",
+                                format!(
+                                    "detect the vault Git worktree: {error}"
+                                ),
+                            ),
+                            format_name,
+                        );
+                    }
+                    false
+                }
+            };
+            if worktree {
+                let tx_rel_paths: Vec<PathBuf> = fresh_store
+                    .iter()
+                    .filter(|(_, file)| {
+                        file.destination
+                            == target_rel.to_string_lossy().replace('\\', "/")
+                    })
+                    .map(|(path, _)| {
+                        path.strip_prefix(&bob_dir)
+                            .map(|relative| relative.to_path_buf())
+                            .unwrap_or_else(|_| {
+                                PathBuf::from(imports::IMPORTS_DIR)
+                                    .join(path.file_name().unwrap_or_default())
+                            })
+                    })
+                    .collect();
+                let message =
+                    "bob gkeep pull: recover verified imports".to_string();
+                match commit_target_and_metadata(
+                    &bob_dir,
+                    &child_env,
+                    &message,
+                    &target_rel,
+                    &tx_rel_paths,
+                ) {
+                    Ok(sha) => {
+                        return finish_with_archive(
+                            args,
+                            &config,
+                            &client,
+                            &creds,
+                            &target_rel,
+                            &fresh_plan,
+                            &[],
+                            sha,
+                            &clips,
+                            &styler,
+                        );
+                    }
+                    Err(error) => {
+                        return ui::report_error("pull", &error, format_name);
+                    }
+                }
+            }
+        }
+        return finish_with_archive(
+            args,
+            &config,
+            &client,
+            &creds,
+            &target_rel,
+            &fresh_plan,
+            &[],
+            None,
+            &clips,
+            &styler,
+        );
+    }
+
     let target_bytes = match fs::read(&target_path) {
         Ok(bytes) => bytes,
         Err(error) => {
@@ -451,12 +624,84 @@ pub(crate) fn run(args: &PullArgs) -> i32 {
 
     // Render new and revised notes with the target indent unit.
     // Permanent clip failures render as tasks with a ⚠️ child.
+    // Fresh planning drives writes; the pre-lock `plan` stays for
+    // reporting context where the two agree.
     let indent =
         capture::dominant_indent_unit(&capture::line_spans(&target_contents))
             .unwrap_or("\t")
             .to_string();
-    let mut writes: Vec<WriteItem> = build_writes(&plan, &clips, &indent);
+    let mut writes: Vec<WriteItem> = build_writes(&fresh_plan, &clips, &indent);
 
+    // Marker-free transaction: persist a prepared record before
+    // installing the target bytes. The record carries the intended
+    // blocks, before/after SHAs, and baseline multiplicity counts.
+    let settings = note_tasks::read_settings(&bob_dir);
+    let base_counts = baseline_counts(&target_contents, &settings, &writes);
+    let (first_contents, _) = {
+        let joined = writes
+            .iter()
+            .map(|item| item.markdown.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        capture::insert_task_line(&target_contents, &joined)
+    };
+    let mut prepared = build_prepared_transaction(
+        &writes,
+        &target_rel,
+        &target_bytes,
+        &first_contents,
+        &base_counts,
+    );
+    // CAS retry must update this record to describe the fresh input and
+    // freshly indented output before rename; an aborted CAS never leaves
+    // a verified record (we have not verified yet).
+    if fault_injected("BOB_GKEEP_TEST_FAIL_AFTER_PREPARE") {
+        return ui::report_error(
+            "pull",
+            &GkeepError::runtime(
+                "vault",
+                "injected failure after prepare".to_string(),
+            ),
+            format_name,
+        );
+    }
+    let tx_rel_preview = PathBuf::from(imports::IMPORTS_DIR)
+        .join(format!("{}.json", prepared.transaction_id));
+    if !args.no_commit {
+        let child_env = ob::child_env();
+        // Preflight only when the vault is a worktree; non-Git vaults
+        // still require durable verified records before archival.
+        if ob::detect_git_worktree(&bob_dir, &child_env).unwrap_or(false)
+            && let Err(message) = imports::preflight_trackable(
+                &bob_dir,
+                &child_env,
+                &[target_rel.clone(), tx_rel_preview.clone()],
+            )
+        {
+            return ui::report_error(
+                "pull",
+                &GkeepError::runtime("commit", message),
+                format_name,
+            );
+        }
+    }
+    let tx_path = match imports::persist_prepared(&bob_dir, &prepared) {
+        Ok(path) => path,
+        Err(error) => {
+            return ui::report_error(
+                "pull",
+                &GkeepError::runtime(
+                    "vault",
+                    format!("persist the gkeep import store: {error}"),
+                ),
+                format_name,
+            );
+        }
+    };
+    let tx_rel: PathBuf = tx_path
+        .strip_prefix(&bob_dir)
+        .map(|relative| relative.to_path_buf())
+        .unwrap_or_else(|_| tx_rel_preview.clone());
     // Build the insertion once; CAS re-reads immediately before the
     // rename, after the temp file is written and synced.
     let joined = writes
@@ -508,7 +753,10 @@ pub(crate) fn run(args: &PullArgs) -> i32 {
         }
     };
     if current_bytes != target_bytes {
-        // The vault changed under us: delete the temp, re-plan once.
+        // The vault changed under us: delete the temp, re-render with the
+        // fresh indent, and update the prepared record to describe the
+        // fresh input and freshly indented output before rename. An
+        // aborted CAS never leaves a verified record.
         let _ = fs::remove_file(&temp);
         let fresh = String::from_utf8_lossy(&current_bytes).into_owned();
         let fresh_indent =
@@ -552,6 +800,51 @@ pub(crate) fn run(args: &PullArgs) -> i32 {
             .collect::<Vec<_>>()
             .join("\n");
         let (replanned, _) = capture::insert_task_line(&fresh, &fresh_joined);
+        // Update the prepared record to the fresh input/output before the
+        // second rename attempt, keeping the original transaction id so
+        // recovery sees one batch, not two. An aborted CAS never leaves a
+        // verified record.
+        {
+            let fresh_base = baseline_counts(&fresh, &settings, &fresh_writes);
+            let fresh_after = imports::sha256_hex(replanned.as_bytes());
+            prepared.before_sha256 = imports::sha256_hex(&current_bytes);
+            prepared.after_sha256 = Some(fresh_after);
+            prepared.baseline_counts = fresh_base;
+            prepared.entries = fresh_writes
+                .iter()
+                .map(|item| {
+                    let url = item
+                        .planned
+                        .note
+                        .url
+                        .clone()
+                        .filter(|url| !url.trim().is_empty());
+                    ImportEntry {
+                        id: item.planned.note.id.clone(),
+                        fp: item.fp.clone(),
+                        url,
+                        path: target_rel.to_string_lossy().replace('\\', "/"),
+                        block_digest: imports::block_digest(&item.markdown),
+                        intended: Some(item.markdown.clone()),
+                        state: EntryState::Prepared,
+                        dest_digest: None,
+                    }
+                })
+                .collect();
+            prepared.destination =
+                target_rel.to_string_lossy().replace('\\', "/");
+            if let Err(error) = imports::persist_verified(&tx_path, &prepared) {
+                let _ = fs::remove_file(&temp);
+                return ui::report_error(
+                    "pull",
+                    &GkeepError::runtime(
+                        "vault",
+                        format!("update the gkeep import store: {error}"),
+                    ),
+                    format_name,
+                );
+            }
+        }
         temp = match write_temp(&target_path, &replanned, &perms) {
             Ok(temp) => temp,
             Err(error) => {
@@ -607,8 +900,19 @@ pub(crate) fn run(args: &PullArgs) -> i32 {
             format_name,
         );
     }
-    // Verify: each block exactly once, open top-level #task, marker.
-    let settings = note_tasks::read_settings(&bob_dir);
+    if fault_injected("BOB_GKEEP_TEST_FAIL_AFTER_TARGET") {
+        return ui::report_error(
+            "pull",
+            &GkeepError::runtime(
+                "vault",
+                "injected failure after target install".to_string(),
+            ),
+            format_name,
+        );
+    }
+    // Verify: complete parsed blocks at task boundaries, open top-level
+    // tasks, baseline-plus-inserted multiplicity. Never URL, substring,
+    // or fingerprint presence alone.
     let verified_contents = match fs::read_to_string(&target_path) {
         Ok(text) => text,
         Err(error) => {
@@ -622,7 +926,12 @@ pub(crate) fn run(args: &PullArgs) -> i32 {
             );
         }
     };
-    let verify_outcome = verify_writes(&verified_contents, &writes, &settings);
+    let verify_outcome = verify_writes(
+        &verified_contents,
+        &writes,
+        &settings,
+        &prepared.baseline_counts,
+    );
     let verified: Vec<WriteItem> = writes
         .iter()
         .enumerate()
@@ -630,10 +939,68 @@ pub(crate) fn run(args: &PullArgs) -> i32 {
         .map(|(_, item)| item.clone())
         .collect();
     let verify_failed = writes.len() - verified.len();
+    let verified_ids: std::collections::BTreeSet<String> = verified
+        .iter()
+        .map(|item| item.planned.note.id.clone())
+        .collect();
+
+    // Persist verified receipts only for successful imports. Distinct
+    // Keep ids that render identical Markdown share one multiplicity
+    // check; failed entries retain prepared evidence and never inherit a
+    // sibling's state. Completed entries never change.
+    {
+        let dest_sha = imports::sha256_hex(verified_contents.as_bytes());
+        let mut finalized = prepared.clone();
+        finalized.after_sha256 = Some(dest_sha.clone());
+        for entry in &mut finalized.entries {
+            let ok = verified_ids.contains(&entry.id)
+                && verified.iter().any(|item| {
+                    item.planned.note.id == entry.id && item.fp == entry.fp
+                });
+            if ok {
+                entry.state = EntryState::Verified;
+                entry.intended = None;
+                entry.dest_digest = Some(dest_sha.clone());
+            }
+        }
+        if fault_injected("BOB_GKEEP_TEST_FAIL_AFTER_VERIFY") {
+            return ui::report_error(
+                "pull",
+                &GkeepError::runtime(
+                    "vault",
+                    "injected failure after verify".to_string(),
+                ),
+                format_name,
+            );
+        }
+        if let Err(error) = imports::persist_verified(&tx_path, &finalized) {
+            return ui::report_error(
+                "pull",
+                &GkeepError::runtime(
+                    "vault",
+                    format!("persist the gkeep import store: {error}"),
+                ),
+                format_name,
+            );
+        }
+        prepared = finalized;
+        if fault_injected("BOB_GKEEP_TEST_FAIL_AFTER_RECEIPT") {
+            return ui::report_error(
+                "pull",
+                &GkeepError::runtime(
+                    "vault",
+                    "injected failure after receipt".to_string(),
+                ),
+                format_name,
+            );
+        }
+    }
 
     // Commit when the vault is a Git worktree, unless --no-commit.
-    // When `git` cannot be started, only vaults that really are repos
-    // fail: without a `.git` ancestor the vault simply is not a worktree.
+    // Non-Git and --no-commit paths still require durable verified
+    // records before archival (persisted above). When `git` cannot be
+    // started, only vaults that really are repos fail: without a `.git`
+    // ancestor the vault simply is not a worktree.
     let mut commit_sha: Option<String> = None;
     if !args.no_commit {
         let child_env = ob::child_env();
@@ -654,25 +1021,98 @@ pub(crate) fn run(args: &PullArgs) -> i32 {
             }
         };
         if worktree {
+            // Finish the scoped commit of the affected target and this
+            // operation's metadata before archiving. Other dirty or staged
+            // files remain untouched. A failed commit leaves Keep
+            // untouched for the affected imports.
+            if fault_injected("BOB_GKEEP_TEST_FAIL_AFTER_COMMIT") {
+                return ui::report_error(
+                    "pull",
+                    &GkeepError::runtime(
+                        "commit",
+                        "injected commit failure".to_string(),
+                    ),
+                    format_name,
+                );
+            }
             let count = verified.len();
             let message =
                 format!("bob gkeep pull: {count} notes from Google Keep");
-            match ob::commit_paths(
+            // Include previously verified-but-uncommitted batches for the
+            // same destination so one commit finishes recovery.
+            let mut tx_rel_paths = vec![tx_rel.clone()];
+            if let Ok(all) = imports::read_all(&bob_dir) {
+                for (path, file) in &all {
+                    if *path == tx_path {
+                        continue;
+                    }
+                    if file.destination
+                        != target_rel.to_string_lossy().replace('\\', "/")
+                    {
+                        continue;
+                    }
+                    if file
+                        .entries
+                        .iter()
+                        .any(|entry| entry.state == EntryState::Verified)
+                    {
+                        if let Ok(rel) = path.strip_prefix(&bob_dir) {
+                            if !tx_rel_paths.contains(&rel.to_path_buf()) {
+                                tx_rel_paths.push(rel.to_path_buf());
+                            }
+                        }
+                    }
+                }
+            }
+            match commit_target_and_metadata(
                 &bob_dir,
                 &child_env,
                 &message,
-                std::slice::from_ref(&target_rel),
+                &target_rel,
+                &tx_rel_paths,
             ) {
-                Ok(sha) => commit_sha = sha,
+                Ok(sha) => {
+                    commit_sha = sha;
+                    // Re-read the committed target evidence so an
+                    // intervening editor save cannot be accepted as the
+                    // verified write. If the committed content cannot be
+                    // established, stop and preserve evidence.
+                    if commit_sha.is_some() {
+                        let committed = std::process::Command::new("git")
+                            .arg("-C")
+                            .arg(&bob_dir)
+                            .arg("show")
+                            .arg(format!(
+                                "HEAD:{}",
+                                target_rel.to_string_lossy().replace('\\', "/")
+                            ))
+                            .output();
+                        if let Ok(output) = committed
+                            && output.status.success()
+                        {
+                            let text = String::from_utf8_lossy(&output.stdout)
+                                .into_owned();
+                            let committed_outcome = verify_writes(
+                                &text,
+                                &verified,
+                                &settings,
+                                &prepared.baseline_counts,
+                            );
+                            if committed_outcome.ok.iter().any(|ok| !ok) {
+                                return ui::report_error(
+                                    "pull",
+                                    &GkeepError::runtime(
+                                        "vault",
+                                        "the target note changed during commit and the verified content cannot be established; evidence retained, Keep untouched".to_string(),
+                                    ),
+                                    format_name,
+                                );
+                            }
+                        }
+                    }
+                }
                 Err(error) => {
-                    return ui::report_error(
-                        "pull",
-                        &GkeepError::runtime(
-                            "commit",
-                            format!("commit the vault: {error}"),
-                        ),
-                        format_name,
-                    );
+                    return ui::report_error("pull", &error, format_name);
                 }
             }
         }
@@ -681,27 +1121,23 @@ pub(crate) fn run(args: &PullArgs) -> i32 {
 
     if verify_failed > 0 {
         // Verified notes still archive; failures are reported with exit 1.
+        // Failed entries remain recoverable and cannot become
+        // archive-only on the next run (they stay prepared).
         let code = finish_with_archive(
             args,
             &config,
             &client,
             &creds,
             &target_rel,
-            &plan,
+            &fresh_plan,
             &verified,
             commit_sha.clone(),
             &clips,
             &styler,
         );
         if !args.quiet {
-            for item in &writes {
-                let idx = writes
-                    .iter()
-                    .position(|other| {
-                        other.planned.note.id == item.planned.note.id
-                    })
-                    .unwrap_or(0);
-                if !verify_outcome.ok[idx] {
+            for (index, item) in writes.iter().enumerate() {
+                if !verify_outcome.ok[index] {
                     eprintln!(
                         "bob gkeep pull: verification failed for {}",
                         item.planned.note.id
@@ -718,7 +1154,7 @@ pub(crate) fn run(args: &PullArgs) -> i32 {
         &client,
         &creds,
         &target_rel,
-        &plan,
+        &fresh_plan,
         &verified,
         commit_sha,
         &clips,
@@ -1228,62 +1664,364 @@ fn finish_rename(temp: &Path, target: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// Build a prepared transaction for the current batch.
+///
+/// `before_bytes` is the target's current bytes; `intended_after` is the
+/// bytes about to be installed. Baseline counts cover the distinct write
+/// digests in the before-image for identical-rendering verification.
+fn build_prepared_transaction(
+    writes: &[WriteItem],
+    target_rel: &Path,
+    before_bytes: &[u8],
+    intended_after: &str,
+    baseline: &std::collections::BTreeMap<String, usize>,
+) -> TransactionFile {
+    let entries = writes
+        .iter()
+        .map(|item| {
+            let url = item
+                .planned
+                .note
+                .url
+                .clone()
+                .filter(|url| !url.trim().is_empty());
+            ImportEntry {
+                id: item.planned.note.id.clone(),
+                fp: item.fp.clone(),
+                url,
+                path: target_rel.to_string_lossy().replace('\\', "/"),
+                block_digest: imports::block_digest(&item.markdown),
+                intended: Some(item.markdown.clone()),
+                state: EntryState::Prepared,
+                dest_digest: None,
+            }
+        })
+        .collect();
+    TransactionFile {
+        schema_version: imports::SCHEMA_VERSION,
+        transaction_id: imports::new_transaction_id(),
+        destination: target_rel.to_string_lossy().replace('\\', "/"),
+        before_sha256: imports::sha256_hex(before_bytes),
+        after_sha256: Some(imports::sha256_hex(intended_after.as_bytes())),
+        baseline_counts: baseline.clone(),
+        entries,
+    }
+}
+
+/// Resolve unfinished transactions under the vault lock.
+///
+/// Returns the fresh store listing after recovery. Each boundary:
+/// - prepared + target still equals before-image: no import happened;
+///   the stale prepared file is removed so the batch safely retries.
+/// - target installed + record still prepared: parse-verify the recorded
+///   intended result and finalize without appending again.
+/// - verified + commit pending: the caller commits before any archive
+///   (handled by the commit step, not here).
+/// - target edited/moved and the intended result cannot be proven: stop
+///   with a precise diagnostic, retaining evidence and Keep content.
+fn resolve_unfinished(
+    bob_dir: &Path,
+    target_rel: &Path,
+    settings: &note_tasks::NoteTaskSettings,
+) -> Result<Vec<(PathBuf, TransactionFile)>, GkeepError> {
+    let mut files = imports::read_all(bob_dir).map_err(|error| {
+        GkeepError::runtime(
+            "vault",
+            format!("read the gkeep import store: {error}"),
+        )
+    })?;
+    // Work on a snapshot of unfinished paths; mutation updates `files`.
+    let unfinished_paths: Vec<PathBuf> = imports::unfinished(&files)
+        .iter()
+        .map(|(path, _)| (*path).clone())
+        .collect();
+    for tx_path in unfinished_paths {
+        let index = files.iter().position(|(path, _)| *path == tx_path);
+        let Some(index) = index else {
+            continue;
+        };
+        let file = files[index].1.clone();
+        // Only transactions for this destination participate; other
+        // destinations (migration batches for other notes) are left for
+        // their own command.
+        if Path::new(&file.destination) != target_rel
+            && file.destination
+                != target_rel.to_string_lossy().replace('\\', "/")
+        {
+            continue;
+        }
+        let dest_path = bob_dir.join(&file.destination);
+        let current_bytes = match fs::read(&dest_path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return Err(GkeepError::runtime(
+                    "vault",
+                    format!(
+                        "unresolved gkeep import {}: destination {} is missing ({}); evidence retained at {}; Keep content untouched",
+                        file.transaction_id,
+                        file.destination,
+                        error,
+                        tx_path.display()
+                    ),
+                ));
+            }
+            Err(error) => {
+                return Err(GkeepError::runtime(
+                    "vault",
+                    format!("read {}: {error}", dest_path.display()),
+                ));
+            }
+        };
+        let current_sha = imports::sha256_hex(&current_bytes);
+        if current_sha == file.before_sha256 {
+            // No import happened; safely retry with current inputs.
+            if let Err(error) = fs::remove_file(&tx_path) {
+                return Err(GkeepError::runtime(
+                    "vault",
+                    format!(
+                        "remove stale gkeep import {}: {error}",
+                        tx_path.display()
+                    ),
+                ));
+            }
+            files.remove(index);
+            continue;
+        }
+        // Target installed but record still prepared: verify recorded
+        // intended blocks at task boundaries without appending again.
+        let current_contents =
+            String::from_utf8_lossy(&current_bytes).into_owned();
+        let mut block_by_digest = std::collections::BTreeMap::new();
+        for entry in &file.entries {
+            if entry.state != EntryState::Prepared {
+                continue;
+            }
+            let Some(intended) = entry.intended.as_deref() else {
+                continue;
+            };
+            block_by_digest
+                .entry(entry.block_digest.clone())
+                .or_insert_with(|| intended.to_string());
+        }
+        if block_by_digest.is_empty() {
+            continue;
+        }
+        let current_counts =
+            task_boundary_counts(&current_contents, settings, &block_by_digest);
+        // Group prepared indices by digest for multiplicity.
+        let mut need: std::collections::BTreeMap<String, usize> =
+            std::collections::BTreeMap::new();
+        for entry in &file.entries {
+            if entry.state == EntryState::Prepared {
+                *need.entry(entry.block_digest.clone()).or_default() += 1;
+            }
+        }
+        let mut all_ok = true;
+        for (digest, want) in &need {
+            let base = file.baseline_counts.get(digest).copied().unwrap_or(0);
+            let found = current_counts.get(digest).copied().unwrap_or(0);
+            if found != base + *want {
+                all_ok = false;
+                break;
+            }
+        }
+        if all_ok {
+            // Finalize without appending: only successful entries become
+            // verified receipts; intended text is removed.
+            let mut finalized = file.clone();
+            for entry in &mut finalized.entries {
+                if entry.state == EntryState::Prepared {
+                    entry.state = EntryState::Verified;
+                    entry.intended = None;
+                    entry.dest_digest = Some(current_sha.clone());
+                }
+            }
+            finalized.after_sha256 = Some(current_sha.clone());
+            if let Err(error) = imports::persist_verified(&tx_path, &finalized)
+            {
+                return Err(GkeepError::runtime(
+                    "vault",
+                    format!("finalize the gkeep import store: {error}"),
+                ));
+            }
+            files[index].1 = finalized;
+            continue;
+        }
+        // Prepared target was edited or moved and the intended result
+        // cannot be proven: stop, retain evidence and Keep content. Never
+        // overwrite edits or guess that the URL proves the write.
+        return Err(GkeepError::runtime(
+            "vault",
+            format!(
+                "unresolved gkeep import {}: destination {} changed and the intended task blocks cannot be proven (expected baseline-plus-inserted multiplicity not found); evidence retained at {}; resolve manually and re-run `bob gkeep pull`",
+                file.transaction_id,
+                file.destination,
+                tx_path.display()
+            ),
+        ));
+    }
+    Ok(files)
+}
+
+/// Commit the target and this operation's metadata with the existing
+/// scoped helper. Other dirty or staged files remain untouched. After a
+/// successful commit, re-read the committed target evidence so an
+/// intervening editor save cannot be accepted as the verified write.
+fn commit_target_and_metadata(
+    bob_dir: &Path,
+    child_env: &ob::ChildEnv,
+    message: &str,
+    target_rel: &Path,
+    tx_rel_paths: &[PathBuf],
+) -> Result<Option<String>, GkeepError> {
+    // Preflight: metadata paths must be trackable, never force-added.
+    let mut check: Vec<PathBuf> = vec![target_rel.to_path_buf()];
+    check.extend(tx_rel_paths.iter().cloned());
+    if let Err(message) =
+        imports::preflight_trackable(bob_dir, child_env, &check)
+    {
+        return Err(GkeepError::runtime("commit", message));
+    }
+    match ob::commit_paths(bob_dir, child_env, message, &check) {
+        Ok(sha) => Ok(sha),
+        Err(error) => Err(GkeepError::runtime(
+            "commit",
+            format!("commit the vault: {error}"),
+        )),
+    }
+}
+
 struct VerifyOutcome {
     ok: Vec<bool>,
+}
+
+/// Count task-boundary occurrences of each distinct block digest.
+///
+/// Only open top-level tasks count: the block's lines must exactly match
+/// the file lines starting at a top-level open task. This proves complete
+/// parsed blocks at task boundaries, not URL/substring/fingerprint
+/// presence.
+fn task_boundary_counts(
+    file_contents: &str,
+    settings: &note_tasks::NoteTaskSettings,
+    block_by_digest: &std::collections::BTreeMap<String, String>,
+) -> std::collections::BTreeMap<String, usize> {
+    let normalized = file_contents.replace("\r\n", "\n");
+    let lines: Vec<&str> = normalized.lines().collect();
+    let scan = note_tasks::scan(file_contents, settings);
+    // Index open top-level tasks by line.
+    let open_tops: std::collections::BTreeSet<usize> = scan
+        .tasks()
+        .iter()
+        .filter(|task| {
+            task.indentation.is_empty() && task.status_type.is_open()
+        })
+        .map(|task| task.line_index)
+        .collect();
+    // Pre-split distinct blocks (owned strings so lifetimes hold).
+    let normalized_blocks: Vec<(String, String)> = block_by_digest
+        .iter()
+        .map(|(digest, block)| (digest.clone(), block.replace("\r\n", "\n")))
+        .collect();
+    let split: Vec<(String, Vec<String>)> = normalized_blocks
+        .iter()
+        .map(|(digest, normalized)| {
+            (
+                digest.clone(),
+                normalized.lines().map(str::to_string).collect::<Vec<_>>(),
+            )
+        })
+        .collect();
+    let mut counts: std::collections::BTreeMap<String, usize> = block_by_digest
+        .keys()
+        .map(|digest| (digest.clone(), 0))
+        .collect();
+    for line_index in open_tops {
+        for (digest, block_lines) in &split {
+            if line_index + block_lines.len() > lines.len() {
+                continue;
+            }
+            if lines[line_index..line_index + block_lines.len()]
+                .iter()
+                .zip(block_lines.iter())
+                .all(|(file, want)| *file == want.as_str())
+            {
+                *counts.get_mut(digest).expect("digest present") += 1;
+            }
+        }
+    }
+    counts
+}
+
+/// Baseline occurrence counts for the distinct write digests in the
+/// before-image, needed to verify identical-rendering insertion.
+fn baseline_counts(
+    before_contents: &str,
+    settings: &note_tasks::NoteTaskSettings,
+    writes: &[WriteItem],
+) -> std::collections::BTreeMap<String, usize> {
+    let mut block_by_digest = std::collections::BTreeMap::new();
+    for item in writes {
+        let digest = imports::block_digest(&item.markdown);
+        block_by_digest
+            .entry(digest)
+            .or_insert_with(|| item.markdown.clone());
+    }
+    task_boundary_counts(before_contents, settings, &block_by_digest)
 }
 
 fn verify_writes(
     file_contents: &str,
     writes: &[WriteItem],
     settings: &note_tasks::NoteTaskSettings,
+    baseline: &std::collections::BTreeMap<String, usize>,
 ) -> VerifyOutcome {
-    let normalized = file_contents.replace("\r\n", "\n");
-    let normalized_lines: Vec<&str> = normalized.lines().collect();
-    let scan = note_tasks::scan(file_contents, settings);
-    // Collect every marker in the file for the marker check.
-    let mut file_markers = Vec::new();
-    for line in normalized_lines.iter() {
-        for pair in super::ledger::parse_markers(line) {
-            file_markers.push(pair);
-        }
+    use std::collections::BTreeMap;
+    // Group write indices by block digest: identical Markdown (distinct
+    // Keep ids, especially URL-less) shares one multiplicity check. One
+    // preexisting identical task must not prove two new imports.
+    let mut by_digest: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    let mut block_by_digest: BTreeMap<String, String> = BTreeMap::new();
+    for (index, item) in writes.iter().enumerate() {
+        let digest = imports::block_digest(&item.markdown);
+        by_digest.entry(digest.clone()).or_default().push(index);
+        block_by_digest
+            .entry(digest)
+            .or_insert_with(|| item.markdown.clone());
     }
-    let mut ok = Vec::with_capacity(writes.len());
-    for item in writes {
-        let block_norm = item.markdown.replace("\r\n", "\n");
-        let count = normalized.matches(block_norm.as_str()).count();
-        if count != 1 {
-            ok.push(false);
-            continue;
+    let current =
+        task_boundary_counts(file_contents, settings, &block_by_digest);
+    let mut ok = vec![false; writes.len()];
+    for (digest, indices) in &by_digest {
+        let base = baseline.get(digest).copied().unwrap_or(0);
+        let inserted = indices.len();
+        let found = current.get(digest).copied().unwrap_or(0);
+        if found == base + inserted {
+            for index in indices {
+                ok[*index] = true;
+            }
         }
-        // First line of the block must be an open top-level #task.
-        let first = block_norm.lines().next().unwrap_or_default();
-        let line_index =
-            normalized_lines.iter().position(|line| *line == first);
-        let Some(line_index) = line_index else {
-            ok.push(false);
-            continue;
-        };
-        let task_ok = scan
-            .tasks()
-            .iter()
-            .find(|task| task.line_index == line_index)
-            .is_some_and(|task| {
-                task.indentation.is_empty() && task.status_type.is_open()
-            });
-        if !task_ok {
-            ok.push(false);
-            continue;
-        }
-        if !file_markers
-            .iter()
-            .any(|(id, fp)| *id == item.planned.note.id && *fp == item.fp)
-        {
-            ok.push(false);
-            continue;
-        }
-        ok.push(true);
     }
     VerifyOutcome { ok }
+}
+
+/// Debug-only fault injection for transaction/recovery tests.
+///
+/// When the named env var is set to `1`, the caller fails with a
+/// deterministic error before doing the step, so a retry can prove no
+/// duplicate append and no lost history.
+fn fault_injected(name: &str) -> bool {
+    #[cfg(debug_assertions)]
+    {
+        bob_env::var(name)
+            .map(|value| value.trim() == "1")
+            .unwrap_or(false)
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        let _ = name;
+        false
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

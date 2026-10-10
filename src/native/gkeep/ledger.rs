@@ -374,6 +374,22 @@ impl Journal {
     }
 }
 
+/// Explicit optional source identity for a vault task.
+///
+/// A legacy marker remains authoritative for its task. Otherwise a task's
+/// generated source link is associated with the exact emitted URL
+/// recorded in import history (one shared encoder/parser, including
+/// percent-encoded destinations); the adapter id is stored separately.
+/// An unambiguous initial block-digest match may identify a URL-less
+/// task. Uncertain associations stay `None` rather than attributing
+/// another note's identity. Import-history deduplication is independent
+/// of this presentation lookup.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct SourceIdentity {
+    pub(super) id: String,
+    pub(super) fp: Option<String>,
+}
+
 /// One top-level vault task in the target note.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct VaultTask {
@@ -387,8 +403,21 @@ pub(super) struct VaultTask {
     pub(super) open_items: usize,
     /// Checked checkbox descendants.
     pub(super) checked_items: usize,
-    /// The first gkeep marker inside the task's block, if any.
+    /// The first gkeep marker inside the task's block, if any (legacy,
+    /// authoritative for its task).
     pub(super) marker: Option<(String, String)>,
+    /// Receipt-backed identity when there is no legacy marker.
+    pub(super) source: Option<SourceIdentity>,
+}
+
+impl VaultTask {
+    /// The Keep id for presentation (`marker` first, else receipt).
+    pub(super) fn source_id(&self) -> Option<&str> {
+        self.marker
+            .as_ref()
+            .map(|(id, _)| id.as_str())
+            .or_else(|| self.source.as_ref().map(|s| s.id.as_str()))
+    }
 }
 
 static CHECKBOX_RE: LazyLock<Regex> = LazyLock::new(|| {
@@ -399,17 +428,64 @@ static CHECKBOX_RE: LazyLock<Regex> = LazyLock::new(|| {
 ///
 /// Done and cancelled tasks are included: `list --all` shows them.
 /// Checkbox counts cover every descendant line; the marker is the first
-/// gkeep marker anywhere in the task's block.
+/// gkeep marker anywhere in the task's block (legacy, authoritative).
+/// When `imports` are supplied, marker-free tasks gain a receipt-backed
+/// `source` via exact emitted-URL match, else unambiguous URL-less
+/// block-digest match; uncertain cases stay `None`.
 pub(super) fn read_target_tasks(
     contents: &str,
     settings: &NoteTaskSettings,
 ) -> Vec<VaultTask> {
+    read_target_tasks_with_imports(contents, settings, &[])
+}
+
+/// Same as [`read_target_tasks`] with vault import history for
+/// marker-free identity.
+pub(super) fn read_target_tasks_with_imports(
+    contents: &str,
+    settings: &NoteTaskSettings,
+    imports: &[(PathBuf, super::imports::TransactionFile)],
+) -> Vec<VaultTask> {
+    use std::collections::{BTreeMap, BTreeSet};
+    // Verified URL map: encoded emitted URL -> (id, fp). Adapter ids are
+    // stored separately in receipts; never recovered from the URL.
+    let mut url_map: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
+    // Verified URL-less block digests -> ids.
+    let mut digest_map: BTreeMap<String, Vec<(String, String)>> =
+        BTreeMap::new();
+    for (_, file) in imports {
+        for entry in &file.entries {
+            if entry.state != super::imports::EntryState::Verified {
+                continue;
+            }
+            if let Some(url) = entry.url.as_deref() {
+                let encoded = super::render::encode_source_url(url);
+                url_map
+                    .entry(encoded)
+                    .or_default()
+                    .push((entry.id.clone(), entry.fp.clone()));
+            } else {
+                digest_map
+                    .entry(entry.block_digest.clone())
+                    .or_default()
+                    .push((entry.id.clone(), entry.fp.clone()));
+            }
+        }
+    }
+    // Deduplicate identical (id, fp) proofs: multiple proofs of one
+    // import are one history entry, not ambiguity.
+    for ids in url_map.values_mut().chain(digest_map.values_mut()) {
+        let mut seen = BTreeSet::new();
+        ids.retain(|pair| seen.insert(pair.clone()));
+    }
+
     let scan = note_tasks::scan(contents, settings);
     let lines: Vec<&str> = contents
         .split_terminator('\n')
         .map(|line| line.strip_suffix('\r').unwrap_or(line))
         .collect();
-    scan.tasks()
+    let mut tasks: Vec<VaultTask> = scan
+        .tasks()
         .iter()
         .filter(|task| task.indentation.is_empty())
         .map(|task| {
@@ -427,9 +503,52 @@ pub(super) fn read_target_tasks(
                 open_items,
                 checked_items,
                 marker,
+                source: None,
             }
         })
-        .collect()
+        .collect();
+    // Resolve URL-backed identity first; URL-less digest matching
+    // runs in the pass below with real block extents.
+    for task in tasks.iter_mut() {
+        if task.marker.is_some() {
+            continue;
+        }
+        if let Some(parsed) = super::render::parse_source_url(&task.description)
+            && let Some(candidates) = url_map.get(&parsed)
+            && candidates.len() == 1
+        {
+            task.source = Some(SourceIdentity {
+                id: candidates[0].0.clone(),
+                fp: Some(candidates[0].1.clone()),
+            });
+        }
+        // Ambiguous or unknown URLs stay None: never guess.
+    }
+    let top_lines: Vec<usize> = scan
+        .tasks()
+        .iter()
+        .filter(|task| task.indentation.is_empty())
+        .map(|task| task.line_index)
+        .collect();
+    for (task, line_index) in tasks.iter_mut().zip(top_lines) {
+        if task.marker.is_some() || task.source.is_some() {
+            continue;
+        }
+        if super::render::parse_source_url(&task.description).is_some() {
+            continue;
+        }
+        let block = task_block(&lines, line_index);
+        let digest = super::imports::block_digest(&block.join("\n"));
+        if let Some(candidates) = digest_map.get(&digest)
+            && candidates.len() == 1
+        {
+            task.source = Some(SourceIdentity {
+                id: candidates[0].0.clone(),
+                fp: Some(candidates[0].1.clone()),
+            });
+        }
+    }
+    tasks
 }
 
 /// The task line plus its indented descendants, mirroring the block
