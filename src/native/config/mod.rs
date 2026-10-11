@@ -9,9 +9,12 @@ use super::env as bob_env;
 
 pub(crate) mod freshness;
 pub(crate) mod plan;
+pub(crate) mod stats;
 
 pub(crate) use freshness::{load_freshness_config, FreshnessConfig};
 pub(crate) use plan::{load_plan_config, PlanConfig};
+#[allow(unused_imports)]
+pub(crate) use stats::{load_stats_config, parse_stats_config, StatsConfig};
 
 const CONFIG_RELATIVE_PATH: &str = "bob/config.yml";
 
@@ -352,6 +355,9 @@ pub(crate) struct RawConfig {
     pub(crate) plan: Option<serde_yaml::Value>,
     #[serde(default)]
     pub(crate) freshness: Option<serde_yaml::Value>,
+    #[allow(dead_code)]
+    #[serde(default)]
+    pub(crate) stats: Option<serde_yaml::Value>,
 }
 
 #[derive(Debug, Deserialize)]

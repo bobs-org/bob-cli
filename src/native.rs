@@ -64,6 +64,7 @@ mod randomize_plan;
 mod ref_jobs;
 pub(crate) mod ref_library;
 pub(crate) mod ref_tasks;
+mod stats;
 mod style;
 mod task_complete;
 pub(crate) mod task_dependencies;
