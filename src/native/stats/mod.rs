@@ -9,6 +9,7 @@ pub(crate) mod range;
 pub(crate) mod registry;
 pub(crate) mod report;
 pub(crate) mod request;
+pub(crate) mod series;
 pub(crate) mod value;
 
 #[allow(unused_imports)]
