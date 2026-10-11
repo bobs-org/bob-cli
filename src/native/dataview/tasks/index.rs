@@ -62,6 +62,81 @@ impl TaskIndex {
     }
 }
 
+/// Minimal task facts needed by Daily Stats, parsed by the same Tasks
+/// parser and settings context used by vault queries.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct StatsTaskRecord {
+    pub(crate) path: String,
+    pub(crate) status_type: String,
+    pub(crate) created: Option<String>,
+    pub(crate) done: Option<String>,
+    pub(crate) cancelled: Option<String>,
+    pub(crate) scheduled: Option<String>,
+    pub(crate) recurring: bool,
+    pub(crate) tags: Vec<String>,
+    pub(crate) block_id: Option<String>,
+    pub(crate) description: String,
+}
+
+/// Reusable one-file parser context. Settings and status configuration are
+/// loaded once for the whole stats input pass, while each already-read file
+/// is parsed through the canonical Tasks implementation.
+pub(crate) struct StatsTaskParser {
+    settings: TasksSettings,
+    statuses: StatusRegistry,
+    now: NaiveDateTime,
+}
+
+impl StatsTaskParser {
+    pub(crate) fn read_settings(
+        vault: &Path,
+        now: NaiveDateTime,
+    ) -> Result<Self, DataviewError> {
+        let settings = TasksSettings::read(vault)?;
+        let statuses = StatusRegistry::new(&settings.status_settings);
+        Ok(Self {
+            settings,
+            statuses,
+            now,
+        })
+    }
+
+    pub(crate) fn is_dataview(&self) -> bool {
+        self.settings.task_format == super::settings::TaskFormat::Dataview
+    }
+
+    pub(crate) fn parse_file(
+        &self,
+        contents: &str,
+        relative_path: String,
+    ) -> Vec<StatsTaskRecord> {
+        let mut tasks = Vec::new();
+        parse_file(
+            contents,
+            TaskFile::new(relative_path),
+            &self.settings,
+            &self.statuses,
+            self.now,
+            &mut tasks,
+        );
+        tasks
+            .into_iter()
+            .map(|task| StatsTaskRecord {
+                path: task.path,
+                status_type: task.status.status_type.as_str().to_string(),
+                created: task.created.map(|date| date.raw),
+                done: task.done.map(|date| date.raw),
+                cancelled: task.cancelled.map(|date| date.raw),
+                scheduled: task.scheduled.map(|date| date.raw),
+                recurring: task.is_recurring,
+                tags: task.tags,
+                block_id: task.block_id,
+                description: task.description,
+            })
+            .collect()
+    }
+}
+
 fn collect_markdown_paths(
     directory: &Path,
     paths: &mut Vec<PathBuf>,

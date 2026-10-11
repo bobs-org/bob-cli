@@ -44,8 +44,9 @@ use sources::{
 pub(crate) use tasks::{parse_details, TaskDetails};
 pub(crate) use tasks::{
     query_matching_descriptions, query_rich_tasks, read_task_format,
-    scan_all_rich_tasks, tasks_fingerprint, RichTask, TaskFormat, NEXT_QUERY,
-    OPEN_QUERY, PENDING_QUERY, READY_QUERY,
+    scan_all_rich_tasks, tasks_fingerprint, RichTask, StatsTaskParser,
+    StatsTaskRecord, TaskFormat, NEXT_QUERY, OPEN_QUERY, PENDING_QUERY,
+    READY_QUERY,
 };
 
 const COMMAND_NAME: &str = "bob query";

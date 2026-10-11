@@ -372,7 +372,7 @@ pub(super) fn note_contents(
     let path = vault.join(relative_path);
     fs::read_to_string(&path).map_err(|error| fs_error("read", &path, error))
 }
-pub(super) fn source_relative_path_from_archive(
+pub(crate) fn source_relative_path_from_archive(
     archive_relative_path: &Path,
 ) -> Option<PathBuf> {
     let archive_note_path =
