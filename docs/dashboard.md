@@ -81,7 +81,10 @@ Root-level notes with hierarchy from frontmatter `parent: "[[dash]]"`:
   `[[dash|← Dashboard]]`, one short derived-metrics description, and one
   empty ` ```bob-stats ` fence. The Browse row ends with a label-only
   `STATS ↗` chip (no count) with the same chip chrome, hover preview,
-  and click/Enter/Ctrl-click behavior as the other Browse chips.
+  and click/Enter/Ctrl-click behavior as the other Browse chips. The
+  block draws the schema-1 report from `bob stats`; metric meanings,
+  the review journal, and CLI options live in
+  [stats.md](stats.md).
 
 Neither child carries `type: [[project]]`, and no project or reference
 note moves. The two `.base` files keep all views, filters, columns,

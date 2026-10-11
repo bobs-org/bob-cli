@@ -777,8 +777,13 @@ bob stats metrics [-b|--bob-dir DIR] [-f|--format human|json]
 overview metrics. `show` draws one metric (or `-a` every visible metric)
 as a detail chart. `metrics` lists the catalog. JSON is one line;
 CSV is tidy `date,end,metric,value,display,quality,provisional,num,den`
-rows. `BOB_NOW` pins today. The catalog, JSON contract, human layout,
-and known limits live in [`docs/stats.md`](docs/stats.md).
+rows. `BOB_NOW` pins today. The Obsidian Stats page (`dash_stats.md`,
+STATS chip on the dashboard) draws the same JSON via a `bob-stats`
+block; see [`docs/dashboard.md`](docs/dashboard.md#child-pages). Review
+journal files under `.bob/stats/review/` sync with the vault
+([`docs/vault-git-sync.md`](docs/vault-git-sync.md#stats-review-journal)).
+The catalog, JSON contract, human layout, and known limits live in
+[`docs/stats.md`](docs/stats.md).
 
 ## Projects
 
@@ -1012,7 +1017,10 @@ If another maintenance command already holds the lock, `bob vault-sync run`
 exits 0 silently.
 
 The operational runbook for the two-machine Bob vault sync channel lives in
-[`docs/vault-git-sync.md`](docs/vault-git-sync.md).
+[`docs/vault-git-sync.md`](docs/vault-git-sync.md). Tracked machine data
+under `.bob/` includes Keep import receipts and the Stats review journal
+(`.bob/stats/review/*.jsonl`); see
+[`docs/stats.md`](docs/stats.md#review-journal).
 
 ## Pomodoro
 
@@ -1419,7 +1427,7 @@ blocks point at `done/..._done#^block-id`, and the vault Git commit was pushed.
 | Task date marks and calendar labels | [`docs/date-marks.md`](docs/date-marks.md) |
 | Task tag marks for the #task tag | [`docs/task-tag-marks.md`](docs/task-tag-marks.md) |
 | Today's plan, sticky lanes, dashboard READY, and per-note Ready caps | [`docs/plan.md`](docs/plan.md) |
-| Daily Stats metrics, `bob stats`, JSON, and the review journal | [`docs/stats.md`](docs/stats.md) |
+| Daily Stats metrics, `bob stats`, JSON, the review journal, and the Obsidian Stats page | [`docs/stats.md`](docs/stats.md) |
 | Highlights PDF intake and reference notes | [`docs/highlights-ref-sync.md`](docs/highlights-ref-sync.md) |
 | `bob ref create` Markdown, PDF, and URL targets | [`docs/highlights-create.md`](docs/highlights-create.md) |
 | Web article capture into Highlights intake PDFs | [`docs/highlights-clip.md`](docs/highlights-clip.md) |

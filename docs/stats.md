@@ -4,6 +4,13 @@ Stats derives durable daily values from the vault and records only review-walk
 answers, which freshness stamps cannot recover. bob-cli owns the metric meanings;
 the terminal and Obsidian views consume the same JSON model.
 
+`bob stats` is the terminal glance. The Obsidian Stats page
+(`dash_stats.md`, STATS chip on the dashboard) is the same report drawn
+by the `bob-stats` block; see [dashboard.md](dashboard.md#child-pages).
+Journal files under `.bob/stats/review/` travel with the vault; see
+[vault-git-sync.md](vault-git-sync.md#stats-review-journal). The root
+[README](../README.md#stats) indexes the command.
+
 This document defines the v1 review journal written by `bob-ledger-tools` and
 `bob-navigation-hotkeys`. The journal is append-only and per host. It contains no
 task text or derived metric values.
@@ -17,9 +24,11 @@ Each host appends to its own monthly file:
 ```
 
 The vault `.gitignore` must allow `!/.bob/stats/**/*.jsonl`, following the
-`.bob/gkeep/imports/*.json` exception. Readers union the host files; they never
-rewrite them. Duplicate events are harmless because `reviewed` counts distinct
-row keys per day.
+`.bob/gkeep/imports/*.json` exception. That allowance is part of the Git
+sync runbook
+([vault-git-sync.md](vault-git-sync.md#stats-review-journal)). Readers
+union the host files; they never rewrite them. Duplicate events are
+harmless because `reviewed` counts distinct row keys per day.
 
 One line records one row answered by a committed review gesture:
 
@@ -547,6 +556,16 @@ pre-tracking dates.
   report `null` medians.
 - The `^gtd` exclusion applies to the canonical daily note's own `^gtd` row
   (including archived rows mapped back to it).
+- Until the first counted `]s` answer, `.bob/stats/review/` does not
+  exist and Reviewed / Keep rate stay `not_tracked` ("no review answers
+  have been recorded") rather than a silent zero. On 2026-10-11 that was
+  still true on apollo, athena, and the MacBook.
+- A live-vault snapshot on 2026-10-11 reported
+  `health.tasks.invalid_dates: 1`, `closed_without_date: 230`, and
+  `missing_created: 647`. Those counts are vault data quality, not
+  engine errors; they do not change the headline metrics.
+- Release-mode `bob stats` on this vault is about 340–370 ms, above the
+  original ≤300 ms target. See [Performance](#performance).
 
 ## Later and rejected
 
@@ -563,29 +582,41 @@ Rejected: stamp counts, productivity scores, tasks per hour, automated
 ## Performance
 
 One vault pass feeds every metric; only `.bob/stats/review/*.jsonl` is read
-besides Markdown. Measured in release mode on the live vault (BOB_NOW pinned
-to 2026-10-11): this landing-fixes run recorded 573 ms for the full read
-plus a 7-day report (the land agent recorded 365–378 ms at f9324da). The
-≤300 ms target is rollout/CLI acceptance
-(bob-cli-6l.6 / bob-cli-6l.3). An opt-in parity test
+besides Markdown. An opt-in parity test
 (`BOB_STATS_REAL_VAULT_PARITY=1` with `BOB_NOW`, vault from `BOB_DIR` or
 `~/bob`) re-checks sessions, worked, done, created, and dropped against
 independent line-regex oracles on every live run and also runs
-`bob stats show worked -c -f json`; on 2026-10-11 it also reconciled
+`bob stats show worked -c -f json`. On 2026-10-11 it reconciled
 `done` Oct 10 exactly (engine 37 = Dataview 45 − 7 recurring − 1 daily
 `^gtd` row).
 
-Measured CLI runtime (release binary, live `~/bob`, `BOB_NOW=2026-10-11
-12:00:00`, `NO_COLOR=1`, `/usr/bin/time -f %e`, against the engine at
-f9324da): `bob stats -f json` 420 ms (stdout `.ok` true); `bob stats
-show worked -c` 380 ms; `bob stats metrics` 390 ms. The CLI is ~15–45 ms
-above that engine's 365–378 ms; the landing-fixes engine is slower
-(573 ms). The ≤300 ms budget stays with rollout (`bob-cli-6l.6`).
+Rollout measurement (apollo, live `~/bob`, HEAD `efc5593`,
+`BOB_NOW=2026-10-11 12:00:00`, `NO_COLOR=1`, release binary):
+
+| Path | Time |
+| --- | --- |
+| Engine 7-day five-metric `compute` (parity test) | 371 ms |
+| `bob stats` (human overview) | 340 ms |
+| `bob stats -f json` (stdout `.ok` true) | 370 ms |
+| `bob stats show worked -c` | 360 ms (CLI parity test 350 ms) |
+| `bob stats metrics` | 340 ms |
+| `bob stats -f csv` | 360 ms |
+
+CLI wall time is within ~20 ms of the engine pass. Earlier debug-test
+numbers (~2.4 s) and a landing-fixes 573 ms read were measurement
+artifacts; the land-agent release figure at `f9324da` was 365–378 ms
+and matches this rollout. The original ≤300 ms target is not met on
+this vault (~15–25% over). The extra time is the Markdown pass, not
+journal I/O (no journal files exist yet). Treat 370 ms as the recorded
+budget unless a later pass shrinks the index.
 
 ## Obsidian Stats block
 
-The `bob-stats` code block reads the same schema-1 report as `bob stats`. It keeps
-metric values, labels, quality, definitions, and formatted parts from Bob; the plugin
+The `bob-stats` code block on `dash_stats.md` reads the same schema-1
+report as `bob stats`. Open it from the dashboard STATS chip or the
+Open Stats command; the page contract is in
+[dashboard.md](dashboard.md#child-pages). The block keeps metric values,
+labels, quality, definitions, and formatted parts from Bob; the plugin
 only lays them out and manages the current view.
 
 The focus chart groups its bars by the report's selected day, week, or month bucket.

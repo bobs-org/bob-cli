@@ -191,6 +191,31 @@ allowance has to reach each host through this Git sync workflow. After the
 change is on `origin/master`, `bob vault-sync` on the MacBook is the path that
 makes `bob gkeep pull` able to track a new receipt.
 
+## Stats review journal
+
+`.bob/stats/review/*.jsonl` is the per-host review-walk journal. Each
+host appends to its own monthly file; readers union the files and never
+rewrite them. The files contain no task text and no derived metric
+values. They travel with the vault on every host that runs
+`bob vault-sync`, including the MacBook. JSON is otherwise allowed only
+under `.obsidian`, so the vault root `.gitignore` also carries:
+
+```gitignore
+!/.bob/stats/**/*.jsonl
+```
+
+Verify the path is not ignored:
+
+```bash
+git -C ~/bob check-ignore -v .bob/stats/review/2026-10.probe.jsonl
+```
+
+A negated last match (`!/.bob/stats/**/*.jsonl`) means the file is
+trackable. The directory is created on the first counted `]s` answer;
+its absence is expected until then. Do not move or delete host files to
+make a metric look complete. The journal contract lives in
+[stats.md](stats.md#review-journal).
+
 ## Highlights bridge
 
 `lit_review/` and `xlib/` are gitignored. `lit_review/` is out-of-band storage: copy it
