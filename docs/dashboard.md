@@ -10,7 +10,7 @@ Browse.
 | --- | --- | --- |
 | Review | NEW · ROTTEN · CROWDED | Intake, aging work, crowded notes |
 | Work | TODAY · PENDING · NEXT · READY | Today's plan and the actionable lanes |
-| Browse | PROJECTS · REFERENCES · BLOCKED | Open supporting collection and task pages |
+| Browse | PROJECTS · REFERENCES · BLOCKED · STATS ↗ | Open supporting collection and task pages |
 
 Grouping is navigation only. It never changes the freshness walk, lane
 semantics, caps, or review sequence, and the Projects collection badge
@@ -77,6 +77,11 @@ Root-level notes with hierarchy from frontmatter `parent: "[[dash]]"`:
 - `dash_references.md` (alias Dashboard References): `# References`,
   `[[dash|← Dashboard]]`, one short reading-queue description, and
   `![[refs.base#🔖 Reading Queue]]`.
+- `dash_stats.md` (aliases Stats, Dashboard Stats): `# Stats`,
+  `[[dash|← Dashboard]]`, one short derived-metrics description, and one
+  empty ` ```bob-stats ` fence. The Browse row ends with a label-only
+  `STATS ↗` chip (no count) with the same chip chrome, hover preview,
+  and click/Enter/Ctrl-click behavior as the other Browse chips.
 
 Neither child carries `type: [[project]]`, and no project or reference
 note moves. The two `.base` files keep all views, filters, columns,
