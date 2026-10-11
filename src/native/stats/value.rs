@@ -15,6 +15,8 @@ pub(crate) struct DailyValue {
     pub(crate) reason: Option<String>,
     pub(crate) provisional: bool,
     pub(crate) parts: BTreeMap<String, BTreeMap<String, i64>>,
+    /// Checklist calendar state, set only by checklist evaluators.
+    pub(crate) checklist_state: Option<ChecklistState>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -22,6 +24,17 @@ pub(crate) struct DailyValue {
 pub(crate) enum DataQuality {
     Ok,
     Partial,
+    Missing,
+    NotTracked,
+}
+
+/// Daily checklist calendar mark. Aggregated buckets never carry this.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ChecklistState {
+    Met,
+    Missed,
+    NotDue,
     Missing,
     NotTracked,
 }
@@ -52,6 +65,7 @@ mod tests {
             reason: None,
             provisional: true,
             parts,
+            checklist_state: None,
         };
         assert!(value.provisional);
         assert_eq!(value.parts["theme"]["GTD"], 25);

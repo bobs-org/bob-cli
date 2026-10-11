@@ -96,6 +96,7 @@ mod tests {
             reason: Some("untracked".to_string()),
             provisional: false,
             parts: Default::default(),
+            checklist_state: None,
         };
         let missing = load_stats_config(
             PathBuf::from("/definitely/missing.yml").as_path(),

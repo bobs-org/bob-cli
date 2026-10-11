@@ -89,6 +89,7 @@ fn closed_on(
             reason: None,
             provisional: false,
             parts: BTreeMap::new(),
+            checklist_state: None,
         })
         .collect();
     BTreeMap::from([(

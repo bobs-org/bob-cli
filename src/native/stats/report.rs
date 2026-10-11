@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use chrono::NaiveDate;
 use serde::Serialize;
 
-use super::value::DataQuality;
+use super::value::{ChecklistState, DataQuality};
 
 pub(crate) const SCHEMA_VERSION: u32 = 1;
 
@@ -72,11 +72,33 @@ pub(crate) struct MetricReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) parameters: Option<MetricParameters>,
     pub(crate) summary: MetricSummary,
+    pub(crate) chart: ChartBand,
     pub(crate) points: Vec<SeriesPoint>,
     pub(crate) prior_points: Vec<SeriesPoint>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) daily_points: Vec<SeriesPoint>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub(crate) parts_summary: BTreeMap<String, Vec<PartSummary>>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) chores: Vec<ChoreSummary>,
     pub(crate) warnings: Vec<StatsWarning>,
+}
+
+/// Quartiles of the displayed chart buckets, labeled by grouping.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct ChartBand {
+    pub(crate) group: GroupName,
+    pub(crate) p25: Option<i64>,
+    pub(crate) p75: Option<i64>,
+}
+
+/// Per-chore period totals over complete visible days.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct ChoreSummary {
+    pub(crate) key: String,
+    pub(crate) met: u32,
+    pub(crate) due: u32,
+    pub(crate) display: String,
 }
 
 /// Kind-specific validated parameters retained for the metrics catalog.
@@ -189,6 +211,10 @@ pub(crate) struct SeriesPoint {
     pub(crate) partial: Option<bool>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub(crate) parts: BTreeMap<String, BTreeMap<String, i64>>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) parts_display: BTreeMap<String, BTreeMap<String, String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) checklist_state: Option<ChecklistState>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -382,6 +408,11 @@ mod tests {
                         sign: 1,
                     }),
                 },
+                chart: ChartBand {
+                    group: GroupName::Day,
+                    p25: Some(220),
+                    p75: Some(330),
+                },
                 points: vec![
                     SeriesPoint {
                         date: date(2026, 9, 14),
@@ -396,6 +427,8 @@ mod tests {
                         den: None,
                         partial: None,
                         parts: BTreeMap::new(),
+                        parts_display: BTreeMap::new(),
+                        checklist_state: None,
                     },
                     SeriesPoint {
                         date: date(2026, 10, 11),
@@ -410,10 +443,20 @@ mod tests {
                         den: None,
                         partial: None,
                         parts,
+                        parts_display: BTreeMap::from([(
+                            "theme".to_string(),
+                            BTreeMap::from([(
+                                "GTD".to_string(),
+                                "25m".to_string(),
+                            )]),
+                        )]),
+                        checklist_state: None,
                     },
                 ],
                 prior_points: Vec::new(),
+                daily_points: Vec::new(),
                 parts_summary,
+                chores: Vec::new(),
                 warnings: Vec::new(),
             }],
             health: HealthReport {
@@ -466,6 +509,18 @@ mod tests {
             serde_json::Value::Null
         );
         assert!(json["metrics"][0]["points"][0].get("partial").is_none());
+        assert_eq!(json["metrics"][0]["chart"]["group"], "day");
+        assert_eq!(json["metrics"][0]["chart"]["p25"], 220);
+        assert_eq!(json["metrics"][0]["chart"]["p75"], 330);
+        assert!(json["metrics"][0].get("daily_points").is_none());
+        assert!(json["metrics"][0].get("chores").is_none());
+        assert_eq!(
+            json["metrics"][0]["points"][1]["parts_display"]["theme"]["GTD"],
+            "25m"
+        );
+        assert!(json["metrics"][0]["points"][0]
+            .get("checklist_state")
+            .is_none());
         assert_eq!(json["health"]["tasks"]["invalid_dates"], 3);
         assert!(json["health"]["tasks"].get("missing_created").is_none());
         assert_eq!(json["warnings"][0]["date"], "2026-10-09");
@@ -486,6 +541,8 @@ mod tests {
             den: Some(10),
             partial: Some(true),
             parts: BTreeMap::new(),
+            parts_display: BTreeMap::new(),
+            checklist_state: None,
         };
         let json = serde_json::to_value(&point).unwrap();
         assert_eq!(json["num"], 1);

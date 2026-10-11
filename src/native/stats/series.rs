@@ -5,8 +5,9 @@ use chrono::{Datelike, Days, NaiveDate, TimeDelta};
 use super::range::RangeSpec;
 use super::registry::MetricUnit;
 use super::report::{
-    Delta, GroupName, Headline, MetricSummary, PartSummary, PriorHeadline,
-    PriorRange, RangeReport, SeriesPoint, ValueDisplay,
+    ChartBand, ChoreSummary, Delta, GroupName, Headline, MetricSummary,
+    PartSummary, PriorHeadline, PriorRange, RangeReport, SeriesPoint,
+    ValueDisplay,
 };
 use super::value::{DailyValue, DataQuality};
 
@@ -57,9 +58,12 @@ impl ResolvedRange {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct MetricSeries {
     pub(crate) summary: MetricSummary,
+    pub(crate) chart: ChartBand,
     pub(crate) points: Vec<SeriesPoint>,
     pub(crate) prior_points: Vec<SeriesPoint>,
+    pub(crate) daily_points: Vec<SeriesPoint>,
     pub(crate) parts_summary: BTreeMap<String, Vec<PartSummary>>,
+    pub(crate) chores: Vec<ChoreSummary>,
 }
 
 /// Resolve a user/config range using a fixed local date. For an all-range,
@@ -340,6 +344,7 @@ pub(crate) fn build_metric_series(
     metric_id: &str,
     unit: MetricUnit,
     range: &ResolvedRange,
+    is_checklist: bool,
 ) -> MetricSeries {
     let current_span = range.display_span();
     let current_daily = normalize(
@@ -397,11 +402,21 @@ pub(crate) fn build_metric_series(
         metric_id == "net",
     );
     let parts_summary = summarize_parts(&complete_daily, unit);
+    let daily_points = display_daily_points(&current_daily, unit, range);
+    let chart = chart_band(&points, range.group);
+    let chores = if is_checklist {
+        summarize_chores(&complete_daily)
+    } else {
+        Vec::new()
+    };
     MetricSeries {
         summary,
+        chart,
         points,
         prior_points,
+        daily_points,
         parts_summary,
+        chores,
     }
 }
 
@@ -437,6 +452,7 @@ fn normalize(
                 reason: Some("no data".to_string()),
                 provisional,
                 parts: BTreeMap::new(),
+                checklist_state: None,
             });
         }
         if date == span.end {
@@ -503,6 +519,8 @@ fn daily_point(value: &DailyValue, unit: MetricUnit) -> SeriesPoint {
         den: value.den,
         partial: None,
         parts: value.parts.clone(),
+        parts_display: format_parts(&value.parts, unit),
+        checklist_state: value.checklist_state,
     }
 }
 
@@ -650,7 +668,9 @@ fn aggregate_bucket(
         num,
         den,
         partial: partial_bucket.then_some(true),
+        parts_display: format_parts(&parts, unit),
         parts,
+        checklist_state: None,
     }
 }
 
@@ -1076,6 +1096,99 @@ fn summarize_parts(
         .collect()
 }
 
+fn display_daily_points(
+    values: &[DailyValue],
+    unit: MetricUnit,
+    range: &ResolvedRange,
+) -> Vec<SeriesPoint> {
+    match range.group {
+        GroupName::Day => Vec::new(),
+        GroupName::Week | GroupName::Month => values
+            .iter()
+            .filter(|value| in_display_window(value.date, range))
+            .map(|value| daily_point(value, unit))
+            .collect(),
+    }
+}
+
+fn in_display_window(date: NaiveDate, range: &ResolvedRange) -> bool {
+    if range.includes_today && date == range.today {
+        return true;
+    }
+    range
+        .complete
+        .is_some_and(|span| span.start <= date && date <= span.end)
+}
+
+fn chart_band(points: &[SeriesPoint], group: GroupName) -> ChartBand {
+    let numbers: Vec<i64> = points
+        .iter()
+        .filter(|point| !point.provisional)
+        .filter_map(|point| point.value)
+        .collect();
+    ChartBand {
+        group,
+        p25: percentile_quarters(&numbers, 1),
+        p75: percentile_quarters(&numbers, 3),
+    }
+}
+
+fn summarize_chores(values: &[DailyValue]) -> Vec<ChoreSummary> {
+    let mut roster = BTreeMap::<String, (u32, u32)>::new();
+    for day in values {
+        if let Some(met) = day.parts.get("met") {
+            for key in met.keys() {
+                let entry = roster.entry(key.clone()).or_default();
+                entry.0 = entry.0.saturating_add(1);
+                entry.1 = entry.1.saturating_add(1);
+            }
+        }
+        if let Some(missed) = day.parts.get("missed") {
+            for key in missed.keys() {
+                let entry = roster.entry(key.clone()).or_default();
+                entry.1 = entry.1.saturating_add(1);
+            }
+        }
+    }
+    roster
+        .into_iter()
+        .map(|(key, (met, due))| ChoreSummary {
+            key,
+            met,
+            due,
+            display: format!("{met} of {due} days"),
+        })
+        .collect()
+}
+
+fn format_parts(
+    parts: &BTreeMap<String, BTreeMap<String, i64>>,
+    unit: MetricUnit,
+) -> BTreeMap<String, BTreeMap<String, String>> {
+    parts
+        .iter()
+        .map(|(dimension, entries)| {
+            (
+                dimension.clone(),
+                entries
+                    .iter()
+                    .map(|(key, value)| {
+                        (key.clone(), format_part_display(*value, unit))
+                    })
+                    .collect(),
+            )
+        })
+        .collect()
+}
+
+fn format_part_display(value: i64, unit: MetricUnit) -> String {
+    if unit == MetricUnit::Minutes {
+        format_value(Some(value), unit)
+    } else {
+        value.to_string()
+    }
+}
+
 fn format_value(value: Option<i64>, unit: MetricUnit) -> String {
     let Some(value) = value else {
         return "–".to_string();
@@ -1197,6 +1310,7 @@ mod tests {
 
     use super::*;
     use crate::native::stats::request::Grouping;
+    use crate::native::stats::value::ChecklistState;
 
     fn date(year: i32, month: u32, day: u32) -> NaiveDate {
         NaiveDate::from_ymd_opt(year, month, day).unwrap()
@@ -1216,6 +1330,7 @@ mod tests {
             reason: value.is_none().then(|| "missing".to_string()),
             provisional: false,
             parts: BTreeMap::new(),
+            checklist_state: None,
         }
     }
 
@@ -1426,8 +1541,13 @@ mod tests {
             values.push(daily(date, Some(2)));
         }
         values.push(daily(today, Some(500)));
-        let built =
-            build_metric_series(&values, "tasks", MetricUnit::Count, &range);
+        let built = build_metric_series(
+            &values,
+            "tasks",
+            MetricUnit::Count,
+            &range,
+            false,
+        );
         assert_eq!(built.summary.headline.value, Some(4));
         assert_eq!(built.summary.headline.display, "4");
         assert_eq!(built.summary.total.as_ref().unwrap().value, Some(121));
@@ -1881,5 +2001,416 @@ mod tests {
         assert_eq!(summary["note"].len(), 6);
         assert_eq!(summary["note"][5].key, "other");
         assert_eq!(summary["note"][5].display, "1");
+    }
+
+    fn grouped_range(
+        text: &str,
+        today: NaiveDate,
+        grouping: Grouping,
+    ) -> ResolvedRange {
+        resolve_range(
+            &RangeSpec::parse(text).unwrap(),
+            today,
+            0,
+            grouping,
+            false,
+            None,
+        )
+        .unwrap()
+    }
+
+    fn checklist_day(
+        date: NaiveDate,
+        state: ChecklistState,
+        met: &[&str],
+        missed: &[&str],
+    ) -> DailyValue {
+        let mut value = daily(
+            date,
+            match state {
+                ChecklistState::Met => Some(10_000),
+                ChecklistState::Missed => Some(0),
+                _ => None,
+            },
+        );
+        value.quality = match state {
+            ChecklistState::NotTracked => DataQuality::NotTracked,
+            ChecklistState::Missing | ChecklistState::NotDue => {
+                DataQuality::Missing
+            }
+            ChecklistState::Met | ChecklistState::Missed => DataQuality::Ok,
+        };
+        value.reason = match state {
+            ChecklistState::NotDue => Some("nothing due".to_string()),
+            ChecklistState::Missing => Some("no data".to_string()),
+            ChecklistState::NotTracked => {
+                Some("before tracking began".to_string())
+            }
+            _ => None,
+        };
+        if !met.is_empty() {
+            value.parts.insert(
+                "met".to_string(),
+                met.iter().map(|key| (key.to_string(), 1)).collect(),
+            );
+        }
+        if !missed.is_empty() {
+            value.parts.insert(
+                "missed".to_string(),
+                missed.iter().map(|key| (key.to_string(), 1)).collect(),
+            );
+        }
+        value.num = (!met.is_empty() || !missed.is_empty())
+            .then_some(i64::try_from(met.len()).unwrap_or(0));
+        value.den = (!met.is_empty() || !missed.is_empty())
+            .then_some(i64::try_from(met.len() + missed.len()).unwrap_or(0));
+        value.checklist_state = Some(state);
+        value
+    }
+
+    #[test]
+    fn day_chart_quartiles_match_the_daily_summary() {
+        let today = date(2026, 10, 11);
+        let range = grouped_range("7d", today, Grouping::Day);
+        let values: Vec<_> = (0..7)
+            .map(|offset| {
+                daily(
+                    date(2026, 10, 4) + Duration::days(offset),
+                    Some(offset * 10),
+                )
+            })
+            .collect();
+        let built = build_metric_series(
+            &values,
+            "worked",
+            MetricUnit::Minutes,
+            &range,
+            false,
+        );
+        assert_eq!(built.chart.group, GroupName::Day);
+        assert_eq!(built.chart.p25, built.summary.p25);
+        assert_eq!(built.chart.p75, built.summary.p75);
+        assert!(built.daily_points.is_empty());
+        // Hand: complete values 0,10,20,30,40,50,60; p25 at (6)*1/4 = 1.5
+        // interpolates 10 and 20 → 15. p75 at 4.5 interpolates 40 and 50 → 45.
+        assert_eq!(built.chart.p25, Some(15));
+        assert_eq!(built.chart.p75, Some(45));
+    }
+
+    #[test]
+    fn week_and_month_chart_bands_use_bucket_values() {
+        let today = date(2026, 10, 11);
+        let mut values = Vec::new();
+        // Two complete ISO weeks of constant daily 1, then 2, plus today.
+        for offset in 0..14 {
+            let day = date(2026, 9, 27) + Duration::days(offset);
+            let value = if offset < 7 { 1 } else { 10 };
+            values.push(daily(day, Some(value)));
+        }
+        values.push(daily(today, Some(100)));
+        let week =
+            grouped_range("2026-09-27..2026-10-11", today, Grouping::Week);
+        let built = build_metric_series(
+            &values,
+            "tasks",
+            MetricUnit::Count,
+            &week,
+            false,
+        );
+        assert_eq!(built.chart.group, GroupName::Week);
+        // Displayed weeks: Sep 27 only (1); Sep 28–Oct 4 (6×1 + 10 = 16);
+        // Oct 5–10 (6×10 = 60). Today is provisional and excluded.
+        let complete: Vec<_> = built
+            .points
+            .iter()
+            .filter(|point| !point.provisional)
+            .filter_map(|point| point.value)
+            .collect();
+        assert_eq!(complete, vec![1, 16, 60]);
+        assert_eq!(built.chart.p25, percentile_quarters(&[1, 16, 60], 1));
+        assert_eq!(built.chart.p75, percentile_quarters(&[1, 16, 60], 3));
+        assert_ne!(built.chart.p25, built.summary.p25);
+
+        let month =
+            grouped_range("2026-09-27..2026-10-11", today, Grouping::Month);
+        let built = build_metric_series(
+            &values,
+            "tasks",
+            MetricUnit::Count,
+            &month,
+            false,
+        );
+        assert_eq!(built.chart.group, GroupName::Month);
+        let complete: Vec<_> = built
+            .points
+            .iter()
+            .filter(|point| !point.provisional)
+            .filter_map(|point| point.value)
+            .collect();
+        // Sep 27–30: 4 days of 1 = 4; Oct 1–10: 3 days of 1 + 7 days of 10 = 73.
+        assert_eq!(complete, vec![4, 73]);
+        assert_eq!(built.chart.p25, percentile_quarters(&[4, 73], 1));
+        assert_eq!(built.chart.p75, percentile_quarters(&[4, 73], 3));
+    }
+
+    #[test]
+    fn chart_bands_cover_signed_values_and_all_null_windows() {
+        let today = date(2026, 10, 11);
+        let range = grouped_range("7d", today, Grouping::Day);
+        let signed: Vec<_> = [-6, -2, 0, 4, 9, -1, 3]
+            .into_iter()
+            .enumerate()
+            .map(|(offset, value)| {
+                daily(
+                    date(2026, 10, 4) + Duration::days(offset as i64),
+                    Some(value),
+                )
+            })
+            .collect();
+        let built = build_metric_series(
+            &signed,
+            "net",
+            MetricUnit::Signed,
+            &range,
+            false,
+        );
+        // Sorted: -6,-2,-1,0,3,4,9. p25 at 1.5 → (-2 + -1)/2 = -2 (half-away
+        // on -1.5 is -2). p75 at 4.5 → (3+4)/2 = 4.
+        assert_eq!(built.chart.p25, Some(-2));
+        assert_eq!(built.chart.p75, Some(4));
+
+        let nulls: Vec<_> = (0..7)
+            .map(|offset| {
+                daily(date(2026, 10, 4) + Duration::days(offset), None)
+            })
+            .collect();
+        let built = build_metric_series(
+            &nulls,
+            "worked",
+            MetricUnit::Minutes,
+            &range,
+            false,
+        );
+        assert_eq!(built.chart.p25, None);
+        assert_eq!(built.chart.p75, None);
+        assert_eq!(built.summary.p25, None);
+        assert_eq!(built.summary.p75, None);
+    }
+
+    #[test]
+    fn chart_and_daily_points_exclude_today_and_lead_in() {
+        let today = date(2026, 10, 11);
+        let range = grouped_range("7d", today, Grouping::Week);
+        let start = range.complete.unwrap().start;
+        let lead = lead_in_start(start, GroupName::Week).unwrap();
+        let mut values = Vec::new();
+        let mut date = lead;
+        while date <= today {
+            let mut value = daily(date, Some(5));
+            value.provisional = date == today;
+            values.push(value);
+            date += Duration::days(1);
+        }
+        let built = build_metric_series(
+            &values,
+            "tasks",
+            MetricUnit::Count,
+            &range,
+            false,
+        );
+        assert!(built.points.iter().all(|point| point.date >= start));
+        assert!(built
+            .chart
+            .p25
+            .is_some_and(|_| built.points.iter().any(|p| !p.provisional)));
+        assert!(built.daily_points.iter().all(|point| {
+            point.date >= start
+                && (point.date <= range.complete.unwrap().end
+                    || point.date == today)
+        }));
+        assert!(built.daily_points.iter().all(|point| point.date >= start));
+        assert!(!built.daily_points.iter().any(|point| point.date < start));
+        assert_eq!(built.daily_points.last().unwrap().date, today);
+        assert!(built.daily_points.last().unwrap().provisional);
+        assert_eq!(
+            built.daily_points.len(),
+            usize::try_from(range.report.days).unwrap() + 1
+        );
+    }
+
+    #[test]
+    fn grouped_daily_points_clip_to_the_display_window() {
+        let today = date(2026, 10, 11);
+        let range =
+            grouped_range("2026-10-08..2026-10-11", today, Grouping::Month);
+        let mut values = Vec::new();
+        for offset in 0..10 {
+            let day = date(2026, 10, 2) + Duration::days(offset);
+            let mut value = daily(day, Some(1));
+            value.provisional = day == today;
+            values.push(value);
+        }
+        let built = build_metric_series(
+            &values,
+            "tasks",
+            MetricUnit::Count,
+            &range,
+            false,
+        );
+        let dates: Vec<_> =
+            built.daily_points.iter().map(|point| point.date).collect();
+        assert_eq!(
+            dates,
+            vec![
+                date(2026, 10, 8),
+                date(2026, 10, 9),
+                date(2026, 10, 10),
+                date(2026, 10, 11),
+            ]
+        );
+        assert!(built.daily_points[3].provisional);
+        assert!(built.points[0].checklist_state.is_none());
+        assert_eq!(built.chart.group, GroupName::Month);
+    }
+
+    #[test]
+    fn checklist_states_and_chore_denominators_use_complete_days() {
+        let today = date(2026, 10, 11);
+        let range =
+            grouped_range("2026-10-08..2026-10-11", today, Grouping::Day);
+        let mut values = vec![
+            checklist_day(
+                date(2026, 10, 8),
+                ChecklistState::NotTracked,
+                &[],
+                &[],
+            ),
+            checklist_day(
+                date(2026, 10, 9),
+                ChecklistState::Missed,
+                &[],
+                &["journal", "meditate"],
+            ),
+            checklist_day(
+                date(2026, 10, 10),
+                ChecklistState::Missed,
+                &["meditate"],
+                &["journal"],
+            ),
+            checklist_day(
+                date(2026, 10, 11),
+                ChecklistState::Missed,
+                &[],
+                &["journal", "meditate"],
+            ),
+        ];
+        values[3].provisional = true;
+        let built = build_metric_series(
+            &values,
+            "habits",
+            MetricUnit::Ratio,
+            &range,
+            true,
+        );
+        assert_eq!(
+            built.points[0].checklist_state,
+            Some(ChecklistState::NotTracked)
+        );
+        assert_eq!(
+            built.points[1].checklist_state,
+            Some(ChecklistState::Missed)
+        );
+        assert_eq!(
+            built.points[2].checklist_state,
+            Some(ChecklistState::Missed)
+        );
+        assert_eq!(
+            built.points[3].checklist_state,
+            Some(ChecklistState::Missed)
+        );
+        assert_eq!(built.chores.len(), 2);
+        assert_eq!(built.chores[0].key, "journal");
+        assert_eq!(built.chores[0].met, 0);
+        assert_eq!(built.chores[0].due, 2);
+        assert_eq!(built.chores[0].display, "0 of 2 days");
+        assert_eq!(built.chores[1].key, "meditate");
+        assert_eq!(built.chores[1].met, 1);
+        assert_eq!(built.chores[1].due, 2);
+        assert_eq!(built.chores[1].display, "1 of 2 days");
+
+        let mut not_due =
+            checklist_day(date(2026, 10, 9), ChecklistState::NotDue, &[], &[]);
+        not_due.reason = Some("nothing due".to_string());
+        let missing = checklist_day(
+            date(2026, 10, 10),
+            ChecklistState::Missing,
+            &[],
+            &[],
+        );
+        let built = build_metric_series(
+            &[
+                checklist_day(
+                    date(2026, 10, 8),
+                    ChecklistState::Met,
+                    &["journal"],
+                    &[],
+                ),
+                not_due,
+                missing,
+            ],
+            "habits",
+            MetricUnit::Ratio,
+            &range,
+            true,
+        );
+        assert_eq!(built.points[0].checklist_state, Some(ChecklistState::Met));
+        assert_eq!(
+            built.points[1].checklist_state,
+            Some(ChecklistState::NotDue)
+        );
+        assert_eq!(
+            built.points[2].checklist_state,
+            Some(ChecklistState::Missing)
+        );
+        assert_eq!(built.chores.len(), 1);
+        assert_eq!(built.chores[0].key, "journal");
+        assert_eq!(built.chores[0].due, 1);
+        assert_eq!(built.chores[0].met, 1);
+    }
+
+    #[test]
+    fn parts_display_formats_minutes_and_leaves_counts() {
+        let today = date(2026, 10, 11);
+        let range =
+            grouped_range("2026-10-08..2026-10-11", today, Grouping::Day);
+        let mut minutes = daily(date(2026, 10, 9), Some(32));
+        minutes.parts.insert(
+            "theme".to_string(),
+            BTreeMap::from([("GTD".to_string(), 29), ("SASE".to_string(), 3)]),
+        );
+        let built = build_metric_series(
+            &[minutes],
+            "worked",
+            MetricUnit::Minutes,
+            &range,
+            false,
+        );
+        assert_eq!(built.points[1].parts_display["theme"]["GTD"], "29m");
+        assert_eq!(built.points[1].parts_display["theme"]["SASE"], "3m");
+
+        let mut counts = daily(date(2026, 10, 9), Some(5));
+        counts.parts.insert(
+            "kind".to_string(),
+            BTreeMap::from([("task".to_string(), 4), ("ref".to_string(), 1)]),
+        );
+        let built = build_metric_series(
+            &[counts],
+            "done",
+            MetricUnit::Count,
+            &range,
+            false,
+        );
+        assert_eq!(built.points[1].parts_display["kind"]["task"], "4");
+        assert_eq!(built.points[1].parts_display["kind"]["ref"], "1");
     }
 }

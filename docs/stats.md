@@ -318,11 +318,41 @@ the daily median (`/day` suffix), bool is met days over days with data
 (`–` when that is 0 of 0), and ratios pool across days. Totals, means,
 linearly interpolated `p25`/`p75` (index `(n-1)*p`, half-away rounding),
 `days_with_data`, `days_met`, the prior headline, and a delta round it out.
-Parts summaries rank dimensions by total; only `note` and `theme` collapse
-to top five plus `other`. Rolling medians span 7 day points, 4 week buckets,
-or 3 month buckets, with a 6-day / 3-week / 2-month lead-in so the first
-displayed point can fill, need half the window in real observations, and
-stay `null` for today.
+`summary.p25`/`p75` stay daily even when the chart is grouped. Parts
+summaries rank dimensions by total; only `note` and `theme` collapse to top
+five plus `other`. Rolling medians span 7 day points, 4 week buckets, or 3
+month buckets, with a 6-day / 3-week / 2-month lead-in so the first displayed
+point can fill, need half the window in real observations, and stay `null`
+for today.
+
+**Chart band.** Each metric includes `chart: {group, p25, p75}`. Quartiles
+reuse the summary helper but run over displayed, non-null, non-provisional
+**bucket values** (the same units as the bars: daily values, weekly/monthly
+sums, pooled ratio buckets, or bool met-day counts). Today and rolling
+lead-in never enter the band. Day grouping therefore matches
+`summary.p25`/`p75`; week and month bands differ and `chart.group` names
+which. An all-null window serializes `p25`/`p75` as JSON `null`.
+
+**Daily points.** Grouped reports add `daily_points` for the requested
+display window only, in the same `SeriesPoint` shape with daily displays and
+quality. They exclude rolling lead-in and prior days and include today once
+when the window includes it. Day-grouped consumers use `points`;
+`daily_points` is omitted so the payload is not duplicated.
+
+**Checklist presentation.** Daily checklist points (never aggregated
+buckets) carry `checklist_state`: `met` (every due chore met), `missed`
+(any due chore unmet, including a partial ratio), `not_due`, `missing`, or
+`not_tracked`. Quality, reason, and numeric value stay unchanged. Checklist
+metrics also add `chores` over complete visible days: stable key, met-day
+count, due-day count, and display `N of M days`, with the full roster (no
+top-five truncation). Today is excluded. A chore absent on a known day is
+not due; globally missing or untracked points stay out of those
+denominators. The daily grid still uses each point's `met`/`missed` parts.
+
+**Part display.** Points and `daily_points` add `parts_display` beside
+numeric `parts` (same dimension/key shape). Each value uses the existing
+parts formatter: minutes as `29m` / `4h 05m`, other units as the raw count
+string. Empty maps are omitted.
 
 **Display.** Minutes render `4h 05m` / `45m` / `0m`, counts plain, signed
 values `−6` / `+9` / `0`, bools `met` / `missed`, ratios whole percentages,
@@ -340,13 +370,20 @@ yesterday, zero days) and still includes today as provisional.
 ## Schema-1 contract
 
 Reports serialize with `ok: true`, `schema_version: 1`, ISO dates, the range
-(with prior metadata), per-metric definitions/summaries/points/parts/warnings,
-health, and global warnings. Ratio points add `num`/`den`, grouped points
-add `partial`, and empty maps (`parts`, `parts_summary`) are omitted.
-`definition`, `limits`, `parameters`, and `total` are always present (total
-may be JSON `null`). Optional fields that appear when present: `since`,
-`reason`, `prior`, `delta`, `suffix`, `stat`, `journal.since`, and
-`missing_created`.
+(with prior metadata), per-metric definitions/summaries/chart/points/parts/
+warnings, health, and global warnings. Ratio points add `num`/`den`, grouped
+points add `partial`, and empty maps (`parts`, `parts_summary`,
+`parts_display`) and empty lists (`daily_points`, `chores`) are omitted.
+`definition`, `limits`, `parameters`, `chart`, and `total` are always present
+(total and chart quartiles may be JSON `null`). Optional fields that appear
+when present: `since`, `reason`, `prior`, `delta`, `suffix`, `stat`,
+`journal.since`, `missing_created`, `checklist_state`, `daily_points`,
+`chores`, and `parts_display`.
+
+Older schema-1 reports remain renderable: use `summary` quartiles only for
+day grouping; omit an unavailable grouped band or calendar with a short
+explanatory label; use numeric part text when `parts_display` is absent;
+keep table access. Never fake daily history from grouped totals.
 
 ```json
 {
@@ -372,13 +409,21 @@ may be JSON `null`). Optional fields that appear when present: `since`,
         "total": null, "mean": 2500, "p25": 1250, "p75": 3750,
         "days_with_data": 2, "days_met": null
       },
+      "chart": {"group": "day", "p25": 1250, "p75": 3750},
       "points": [
         {"date": "2026-10-09", "end": "2026-10-09", "value": 0,
          "display": "0%", "quality": "ok", "provisional": false,
          "rolling_median": null, "num": 0, "den": 2,
-         "parts": {"missed": {"journal": 1, "meditate": 1}}}
+         "parts": {"missed": {"journal": 1, "meditate": 1}},
+         "parts_display": {"missed": {"journal": "1", "meditate": "1"}},
+         "checklist_state": "missed"}
       ],
-      "prior_points": [], "warnings": []
+      "prior_points": [],
+      "chores": [
+        {"key": "journal", "met": 0, "due": 2, "display": "0 of 2 days"},
+        {"key": "meditate", "met": 1, "due": 2, "display": "1 of 2 days"}
+      ],
+      "warnings": []
     }
   ],
   "health": {"journal": {"since": "2026-10-08", "malformed_lines": 1, "hosts": []},

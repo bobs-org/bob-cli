@@ -397,6 +397,8 @@ fn collapse_points<'a>(
         den: None,
         partial: None,
         parts: Default::default(),
+        parts_display: Default::default(),
+        checklist_state: None,
     }
 }
 
@@ -864,6 +866,8 @@ mod tests {
             den: None,
             partial: None,
             parts: BTreeMap::new(),
+            parts_display: BTreeMap::new(),
+            checklist_state: None,
         }
     }
 
@@ -912,9 +916,16 @@ mod tests {
                     prior: None,
                     delta: None,
                 },
+                chart: crate::native::stats::report::ChartBand {
+                    group: GroupName::Day,
+                    p25: Some(0),
+                    p75: Some(32),
+                },
                 points,
                 prior_points: Vec::new(),
+                daily_points: Vec::new(),
                 parts_summary: BTreeMap::new(),
+                chores: Vec::new(),
                 warnings: Vec::new(),
             }],
             health: HealthReport {

@@ -48,10 +48,13 @@ fn overview_json_is_ok_schema_one() {
     assert_eq!(value["schema_version"], 1);
     assert_eq!(value["today"], "2026-10-11");
     let metrics = value["metrics"].as_array().expect("metrics");
-    assert!(
-        metrics.iter().any(|metric| metric["id"] == "worked"),
-        "missing worked:\n{value}"
-    );
+    let worked = metrics
+        .iter()
+        .find(|metric| metric["id"] == "worked")
+        .expect("worked");
+    assert_eq!(worked["chart"]["group"], "day");
+    assert!(worked.get("daily_points").is_none());
+    assert_eq!(worked["points"][1]["parts_display"]["theme"]["GTD"], "29m");
     assert!(!stdout(&output).trim().contains('\n'));
 }
 
@@ -100,6 +103,15 @@ fn show_all_json_lists_visible_metrics() {
         .collect();
     assert!(ids.contains(&"worked"));
     assert!(ids.contains(&"done"));
+    let habits = value["metrics"]
+        .as_array()
+        .expect("metrics")
+        .iter()
+        .find(|metric| metric["id"] == "habits")
+        .expect("habits");
+    assert_eq!(habits["points"][1]["checklist_state"], "missed");
+    assert_eq!(habits["chores"][0]["display"], "0 of 2 days");
+    assert_eq!(habits["chores"][1]["display"], "1 of 2 days");
 }
 
 #[test]

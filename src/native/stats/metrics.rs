@@ -17,7 +17,7 @@ use super::{
         PomodoroMeasure, RecurringFilter, TaskEvent, TaskKindFilter,
     },
     report::StatsWarning,
-    value::{DailyValue, DataQuality},
+    value::{ChecklistState, DailyValue, DataQuality},
 };
 
 /// Evaluated daily facts for a single non-journal, non-formula metric.
@@ -82,6 +82,9 @@ pub(crate) fn evaluate_metric(
                 value.quality = DataQuality::NotTracked;
                 value.reason = Some("before tracking began".to_string());
                 value.parts.clear();
+                if value.checklist_state.is_some() {
+                    value.checklist_state = Some(ChecklistState::NotTracked);
+                }
             }
             value
         })
@@ -596,7 +599,7 @@ fn evaluate_checklist(
         .map(|date| {
             let provisional = *date == today;
             if since.is_some_and(|start| *date < start) {
-                return daily(
+                let mut value = daily(
                     *date,
                     None,
                     None,
@@ -606,13 +609,20 @@ fn evaluate_checklist(
                     provisional,
                     BTreeMap::new(),
                 );
+                value.checklist_state = Some(ChecklistState::NotTracked);
+                return value;
             }
             let due = due_by_day.get(date);
             let met = met_by_day.get(date);
             let due_count = due.map_or(0, BTreeSet::len);
             let met_count = met.map_or(0, BTreeSet::len);
             if due_count == 0 {
-                return daily(
+                let state = if since.is_none() {
+                    ChecklistState::Missing
+                } else {
+                    ChecklistState::NotDue
+                };
+                let mut value = daily(
                     *date,
                     None,
                     None,
@@ -627,6 +637,8 @@ fn evaluate_checklist(
                     provisional,
                     BTreeMap::new(),
                 );
+                value.checklist_state = Some(state);
+                return value;
             }
 
             let due_i64 = i64::try_from(due_count).unwrap_or(i64::MAX);
@@ -656,7 +668,7 @@ fn evaluate_checklist(
                 };
                 add_dimension_part(&mut parts, dimension, chore, 1);
             }
-            daily(
+            let mut point = daily(
                 *date,
                 value,
                 num,
@@ -665,7 +677,13 @@ fn evaluate_checklist(
                 None,
                 provisional,
                 parts,
-            )
+            );
+            point.checklist_state = Some(if met_count == due_count {
+                ChecklistState::Met
+            } else {
+                ChecklistState::Missed
+            });
+            point
         })
         .collect();
 
@@ -994,6 +1012,7 @@ fn daily(
         reason,
         provisional,
         parts,
+        checklist_state: None,
     }
 }
 
@@ -1354,14 +1373,27 @@ mod tests {
         .unwrap();
         assert_eq!(result.since, Some(date(9)));
         assert_eq!(result.values[0].quality, DataQuality::NotTracked);
+        assert_eq!(
+            result.values[0].checklist_state,
+            Some(ChecklistState::NotTracked)
+        );
         assert_eq!(result.values[1].num, Some(0));
         assert_eq!(result.values[1].den, Some(1));
         assert_eq!(result.values[1].parts["missed"]["meditate"], 1);
+        assert_eq!(
+            result.values[1].checklist_state,
+            Some(ChecklistState::Missed)
+        );
         assert_eq!(result.values[2].num, Some(0));
         assert_eq!(result.values[2].den, Some(1));
+        assert_eq!(
+            result.values[2].checklist_state,
+            Some(ChecklistState::Missed)
+        );
         assert_eq!(result.values[3].num, Some(1));
         assert_eq!(result.values[3].den, Some(1));
         assert_eq!(result.values[3].parts["met"]["meditate"], 1);
+        assert_eq!(result.values[3].checklist_state, Some(ChecklistState::Met));
         assert_eq!(result.warnings.len(), 1);
         assert!(result.warnings[0].message.contains("cancelled"));
 
@@ -1404,6 +1436,10 @@ mod tests {
         // The scheduled date is after today, so this is not yet tracking.
         assert_eq!(result.since, None);
         assert_eq!(result.values[0].quality, DataQuality::Missing);
+        assert_eq!(
+            result.values[0].checklist_state,
+            Some(ChecklistState::Missing)
+        );
         assert_eq!(
             result.values[1].reason.as_deref(),
             Some("no matching checklist instance has been recorded")
@@ -1693,8 +1729,13 @@ mod tests {
         assert_eq!(result.since, Some(date(9)));
         assert_eq!(result.values[0].num, Some(1));
         assert_eq!(result.values[0].den, Some(1));
+        assert_eq!(result.values[0].checklist_state, Some(ChecklistState::Met));
         assert_eq!(result.values[1].quality, DataQuality::Missing);
         assert_eq!(result.values[1].reason.as_deref(), Some("nothing due"));
+        assert_eq!(
+            result.values[1].checklist_state,
+            Some(ChecklistState::NotDue)
+        );
     }
 
     #[test]

@@ -422,6 +422,7 @@ fn daily_value(
         reason,
         provisional,
         parts,
+        checklist_state: None,
     }
 }
 

@@ -112,6 +112,7 @@ pub(crate) fn compute(
             &def.id,
             def.unit,
             &resolved,
+            def.kind_name() == "checklist",
         );
         metrics.push(MetricReport {
             id: def.id.clone(),
@@ -127,13 +128,16 @@ pub(crate) fn compute(
             limits: def.limits.clone(),
             parameters: Some(def.parameters()),
             summary: series.summary,
+            chart: series.chart,
             points: series.points,
             prior_points: if request.compare {
                 series.prior_points
             } else {
                 Vec::new()
             },
+            daily_points: series.daily_points,
             parts_summary: series.parts_summary,
+            chores: series.chores,
             warnings: evaluation.warnings.clone(),
         });
     }
@@ -294,7 +298,7 @@ mod tests {
     use crate::native::stats::request::{
         Grouping, MetricSelection, StatsRequest,
     };
-    use crate::native::stats::value::DataQuality;
+    use crate::native::stats::value::{ChecklistState, DataQuality};
 
     /// Fixed clock for the golden vault: Sunday 2026-10-11 at noon.
     fn fixed_now() -> NaiveDateTime {
@@ -546,6 +550,15 @@ mod tests {
         assert_eq!(worked.summary.p75, Some(24));
         assert_eq!(worked.summary.days_with_data, 2);
         assert_eq!(worked.summary.delta.as_ref().unwrap().display, "–");
+        assert_eq!(
+            worked.chart.group,
+            crate::native::stats::report::GroupName::Day
+        );
+        assert_eq!(worked.chart.p25, worked.summary.p25);
+        assert_eq!(worked.chart.p75, worked.summary.p75);
+        assert!(worked.daily_points.is_empty());
+        assert_eq!(worked.points[1].parts_display["theme"]["GTD"], "29m");
+        assert_eq!(worked.points[1].parts_display["theme"]["SASE"], "3m");
         let theme = &worked.parts_summary["theme"];
         assert_eq!(theme[0].key, "GTD");
         assert_eq!(theme[0].value, 29);
@@ -780,6 +793,21 @@ mod tests {
         assert_eq!(closed.summary.headline.display, "2 of 2 days");
         assert_eq!(closed.summary.days_with_data, 2);
         assert_eq!(closed.summary.days_met, Some(2));
+        assert_eq!(
+            closed.points[0].checklist_state,
+            Some(ChecklistState::NotTracked)
+        );
+        assert_eq!(closed.points[1].checklist_state, Some(ChecklistState::Met));
+        assert_eq!(closed.points[2].checklist_state, Some(ChecklistState::Met));
+        assert_eq!(
+            closed.points[3].checklist_state,
+            Some(ChecklistState::Missed)
+        );
+        assert_eq!(closed.chores.len(), 1);
+        assert_eq!(closed.chores[0].key, "morning review");
+        assert_eq!(closed.chores[0].met, 2);
+        assert_eq!(closed.chores[0].due, 2);
+        assert_eq!(closed.chores[0].display, "2 of 2 days");
         let delta = closed.summary.delta.as_ref().expect("bool delta");
         assert_eq!(delta.display, "–");
         assert_eq!(delta.sign, 0);
@@ -868,6 +896,34 @@ mod tests {
         assert_eq!(habits.summary.p25, Some(1250));
         assert_eq!(habits.summary.p75, Some(3750));
         assert_eq!(habits.summary.days_with_data, 2);
+        assert_eq!(habits.chart.p25, Some(1250));
+        assert_eq!(habits.chart.p75, Some(3750));
+        assert_eq!(
+            habits.points[0].checklist_state,
+            Some(ChecklistState::NotTracked)
+        );
+        assert_eq!(
+            habits.points[1].checklist_state,
+            Some(ChecklistState::Missed)
+        );
+        assert_eq!(
+            habits.points[2].checklist_state,
+            Some(ChecklistState::Missed)
+        );
+        assert_eq!(
+            habits.points[3].checklist_state,
+            Some(ChecklistState::Missed)
+        );
+        assert_eq!(habits.chores.len(), 2);
+        assert_eq!(habits.chores[0].key, "journal");
+        assert_eq!(habits.chores[0].met, 0);
+        assert_eq!(habits.chores[0].due, 2);
+        assert_eq!(habits.chores[0].display, "0 of 2 days");
+        assert_eq!(habits.chores[1].key, "meditate");
+        assert_eq!(habits.chores[1].met, 1);
+        assert_eq!(habits.chores[1].due, 2);
+        assert_eq!(habits.chores[1].display, "1 of 2 days");
+        assert_eq!(habits.points[1].parts_display["missed"]["journal"], "1");
 
         // M9 keep_rate: one keep of two answers on Oct 10; the gap day and
         // the pre-only day carry no denominator.
@@ -1176,6 +1232,11 @@ mod tests {
             serde_json::Value::Null
         );
         assert_eq!(worked["points"][3]["provisional"], true);
+        assert_eq!(worked["chart"]["group"], "day");
+        assert_eq!(worked["chart"]["p25"], 8);
+        assert_eq!(worked["chart"]["p75"], 24);
+        assert!(worked.get("daily_points").is_none());
+        assert_eq!(worked["points"][1]["parts_display"]["theme"]["GTD"], "29m");
 
         // Ratio points carry pooled num/den; bool points read as met days.
         let habits = &json["metrics"][7];
@@ -1183,8 +1244,14 @@ mod tests {
         assert_eq!(habits["points"][2]["num"], 1);
         assert_eq!(habits["points"][2]["den"], 2);
         assert_eq!(habits["points"][2]["value"], 5000);
+        assert_eq!(habits["points"][1]["checklist_state"], "missed");
+        assert_eq!(habits["chores"][0]["key"], "journal");
+        assert_eq!(habits["chores"][0]["display"], "0 of 2 days");
+        assert_eq!(habits["chores"][1]["key"], "meditate");
+        assert_eq!(habits["chores"][1]["display"], "1 of 2 days");
         let closed = &json["metrics"][5];
         assert_eq!(closed["points"][1]["display"], "met");
+        assert_eq!(closed["points"][1]["checklist_state"], "met");
 
         // Health keeps the schema counters; the gap warning names its day.
         assert_eq!(json["health"]["tasks"]["invalid_dates"], 1);
@@ -1399,6 +1466,65 @@ mod tests {
         assert_eq!(worked.points[0].value, Some(32));
         assert_eq!(worked.points[0].display, "32m");
         assert_eq!(worked.points[0].parts["theme"]["GTD"], 29);
+        assert!(worked.points[0].checklist_state.is_none());
+        assert_eq!(worked.points[0].parts_display["theme"]["GTD"], "29m");
+        assert_eq!(
+            worked.chart.group,
+            crate::native::stats::report::GroupName::Month
+        );
+        // One displayed bucket (32) plus provisional today; quartiles of [32].
+        assert_eq!(worked.chart.p25, Some(32));
+        assert_eq!(worked.chart.p75, Some(32));
+        assert_ne!(worked.chart.p25, worked.summary.p25);
+        let daily_dates: Vec<_> =
+            worked.daily_points.iter().map(|p| p.date).collect();
+        assert_eq!(daily_dates, vec![day(8), day(9), day(10), day(11)]);
+        assert!(worked.daily_points[3].provisional);
+        assert_eq!(
+            habits.daily_points[1].checklist_state,
+            Some(ChecklistState::Missed)
+        );
+        assert_eq!(habits.chart.p25, Some(2500));
+        assert_eq!(habits.chart.p75, Some(2500));
+        assert_eq!(habits.summary.p25, Some(1250));
+        assert_eq!(habits.chores[1].display, "1 of 2 days");
+    }
+
+    #[test]
+    fn week_grouping_adds_daily_points_and_a_week_chart_band() {
+        let dir = TempDir::new().unwrap();
+        let config = write_config(&dir, &golden_config());
+        let mut request = golden_request(fixture_vault(), config);
+        request.grouping = Grouping::Week;
+        request.compare = false;
+        let report = compute(&request).expect("week grouped compute");
+        assert_eq!(
+            report.range.group,
+            crate::native::stats::report::GroupName::Week
+        );
+        let habits = metric(&report, "habits");
+        assert_eq!(
+            habits.chart.group,
+            crate::native::stats::report::GroupName::Week
+        );
+        // One clipped week bucket pools 0/2 + 1/2; today stays separate.
+        assert_eq!(habits.points.len(), 2);
+        assert_eq!(habits.points[0].value, Some(2500));
+        assert!(habits.points[0].checklist_state.is_none());
+        assert_eq!(habits.chart.p25, Some(2500));
+        assert_eq!(habits.chart.p75, Some(2500));
+        assert_eq!(habits.summary.p25, Some(1250));
+        let daily_dates: Vec<_> =
+            habits.daily_points.iter().map(|p| p.date).collect();
+        assert_eq!(daily_dates, vec![day(8), day(9), day(10), day(11)]);
+        assert_eq!(
+            habits.daily_points[0].checklist_state,
+            Some(ChecklistState::NotTracked)
+        );
+        let net = metric(&report, "net");
+        assert_eq!(net.chart.p25, Some(-1));
+        assert_eq!(net.chart.p75, Some(-1));
+        assert!(metric(&report, "worked").chores.is_empty());
     }
 
     /// Opt-in live-vault parity: with BOB_STATS_REAL_VAULT_PARITY=1 (and
