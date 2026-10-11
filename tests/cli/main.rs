@@ -16,6 +16,7 @@ mod pomodoro;
 mod projects;
 mod ready;
 mod ref_library;
+mod stats;
 mod support;
 mod task_status_hooks;
 mod vault_sync;

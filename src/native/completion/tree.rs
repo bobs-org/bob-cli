@@ -80,6 +80,15 @@ impl NativeCommand {
             }
             NativeCommand::Projects => crate::native::projects::build_cli(),
             NativeCommand::Randomize => crate::native::randomize::build_cli(),
+            NativeCommand::Stats => {
+                crate::native::stats::cli::overview_command()
+            }
+            NativeCommand::StatsMetrics => {
+                crate::native::stats::cli::metrics_command()
+            }
+            NativeCommand::StatsShow => {
+                crate::native::stats::cli::show_command()
+            }
             NativeCommand::TaskStatusHooks => {
                 crate::native::task_status_hooks::build_cli()
             }
@@ -228,6 +237,11 @@ mod tests {
         assert!(parses(&["bob", "pomodoro", "notify", "-vv", "5", "10"]));
         assert!(parses(&["bob", "pomodoro", "-s"]));
         assert!(parses(&["bob", "pomodoro", "status", "-s"]));
+        assert!(parses(&["bob", "stats", "-f", "json"]));
+        assert!(parses(&["bob", "stats", "overview", "-c"]));
+        assert!(parses(&["bob", "stats", "show", "worked", "-c"]));
+        assert!(parses(&["bob", "stats", "show", "-a"]));
+        assert!(parses(&["bob", "stats", "metrics"]));
     }
 
     #[test]

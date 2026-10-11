@@ -222,6 +222,46 @@ Examples:
 
 Run 'bob pomodoro <command> --help' for more information on a command.";
 
+const STATS_MEMBERS: &[Member] = &[
+    Member {
+        name: "metrics",
+        about: "List metric ids, kinds, and definitions",
+        leaf: Leaf {
+            native_command: NativeCommand::StatsMetrics,
+            script_command: None,
+        },
+    },
+    Member {
+        name: "overview",
+        about: "Show the weekly glance (default)",
+        leaf: Leaf {
+            native_command: NativeCommand::Stats,
+            script_command: None,
+        },
+    },
+    Member {
+        name: "show",
+        about: "Show one or more metrics in detail",
+        leaf: Leaf {
+            native_command: NativeCommand::StatsShow,
+            script_command: None,
+        },
+    },
+];
+
+const STATS_AFTER_HELP: &str = "\
+Bare `bob stats` runs the read-only overview glance.
+
+Examples:
+  bob stats                    Weekly glance of the overview metrics
+  bob stats -r 7d -c           Last 7 days, with the prior period
+  bob stats show worked -c     Detail chart for Worked, with prior ticks
+  bob stats show -a -f json    Every visible metric as one JSON object
+  bob stats metrics            The metric catalog
+
+See docs/stats.md for the catalog, JSON contract, and display rules.
+Run 'bob stats <command> --help' for more information on a command.";
+
 const GROUP_HELP_TEMPLATE: &str = "\
 {about-with-newline}
 {usage-heading} {usage}
@@ -304,6 +344,21 @@ const SUBCOMMANDS: &[Subcommand] = &[
         target: Target::Leaf(Leaf {
             native_command: NativeCommand::NoteReady,
             script_command: None,
+        }),
+    },
+    Subcommand {
+        name: "stats",
+        about:
+            "Show derived daily metrics as a glance, detail chart, or catalog",
+        section: Section::DailyWorkflow,
+        target: Target::Group(Group {
+            members: STATS_MEMBERS,
+            default: Some("overview"),
+            extra_about: Some(
+                "The command is read-only. Bare `bob stats` runs overview.",
+            ),
+            after_help: STATS_AFTER_HELP,
+            usage: "bob stats [COMMAND]",
         }),
     },
     Subcommand {
@@ -771,7 +826,7 @@ const ABOUT: &str =
 const LONG_ABOUT: &str =
     "Bob tracks a daily Pomodoro ledger inside an Obsidian vault and keeps that\n\
 vault synced through Git. Commands follow the daily workflow: capture, review\n\
-(plan, freshness, ready), run Pomodoros, reconcile tasks, and nightly\n\
+(plan, freshness, ready), stats, run Pomodoros, reconcile tasks, and nightly\n\
 maintenance. Pass `--help` to any command, or run `bob help <command>`, for\n\
 its own options.";
 
@@ -788,6 +843,7 @@ Examples:
   bob plan                          Show today's plan budget and lanes
   bob freshness                     List the review queue
   bob ready                         Show Ready lanes against the per-note cap
+  bob stats                         Glance at derived daily metrics
   bob task reconcile --dry-run      Preview task status reconciliation
   bob query --source '#project'     Print matching note paths
   bob vault-sync status --json      Print the last vault Git sync status
@@ -1371,6 +1427,9 @@ mod tests {
             NativeCommand::Pomodoro,
             NativeCommand::Projects,
             NativeCommand::Randomize,
+            NativeCommand::Stats,
+            NativeCommand::StatsMetrics,
+            NativeCommand::StatsShow,
             NativeCommand::TaskStatusHooks,
             NativeCommand::TmuxPomodoro,
             NativeCommand::VaultSync,

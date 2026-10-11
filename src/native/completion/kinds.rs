@@ -43,6 +43,8 @@ pub(crate) enum Kind {
     Plugin,
     /// A configured `randomize` priority label.
     Level,
+    /// A Daily Stats metric id from the live config registry.
+    Metric,
     /// A vault note, completed as a path relative to the vault root.
     VaultNote,
 }
@@ -264,6 +266,21 @@ const TABLE: &[Entry] = &[
         kind: Kind::Level,
     },
     Entry {
+        path: &["stats", "show"],
+        arg: "metrics",
+        kind: Kind::Metric,
+    },
+    Entry {
+        path: &[],
+        arg: "range",
+        kind: Kind::FreeText,
+    },
+    Entry {
+        path: &[],
+        arg: "offset",
+        kind: Kind::FreeText,
+    },
+    Entry {
         path: &[],
         arg: "tasks-note",
         kind: Kind::VaultNote,
@@ -431,6 +448,7 @@ pub(crate) fn choice_description(
     match (arg, value) {
         ("format", "human") => Some("Colored text for people"),
         ("format", "json") => Some("Machine-readable JSON"),
+        ("format", "csv") => Some("Tidy date-metric rows"),
         ("format", "table") => Some("Human-readable table"),
         ("format", "markdown") => Some("Rendered Markdown"),
         ("format", "paths") => Some("Matching note paths"),
@@ -441,6 +459,10 @@ pub(crate) fn choice_description(
         ("source", "vault") => Some("The vault only"),
         ("prefer", "marker") => Some("Use the marker side"),
         ("prefer", "frontmatter") => Some("Use the frontmatter side"),
+        ("group", "auto") => Some("Day, week, or month from the window"),
+        ("group", "day") => Some("One point per calendar day"),
+        ("group", "week") => Some("One point per ISO week"),
+        ("group", "month") => Some("One point per calendar month"),
         _ => None,
     }
 }

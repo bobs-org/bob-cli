@@ -119,3 +119,42 @@ pub(crate) fn truncate(text: &str, width: usize) -> String {
     let kept: String = text.chars().take(width.saturating_sub(1)).collect();
     format!("{kept}\u{2026}")
 }
+
+/// Eighth-block sparkline alphabet, low to high.
+pub(crate) const SPARK_BLOCKS: &[char] =
+    &['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+
+/// Map non-negative counts onto [`SPARK_BLOCKS`].
+///
+/// Returns the sparkline, the peak count, and the first index of that
+/// peak. An empty window renders empty; a zero window renders a flat
+/// underline. `max(1)` keeps the ratio finite without a zero check.
+pub(crate) fn sparkline(counts: &[usize]) -> (String, usize, usize) {
+    let peak = counts.iter().copied().max().unwrap_or(0);
+    let peak_index =
+        counts.iter().position(|count| *count == peak).unwrap_or(0);
+    let cells = counts
+        .iter()
+        .map(|count| {
+            let ratio = *count as f64 / peak.max(1) as f64;
+            let index = (ratio * 7.0).round() as usize;
+            SPARK_BLOCKS[index.min(7)]
+        })
+        .collect::<String>();
+    (cells, peak, peak_index)
+}
+
+impl Styler {
+    /// Paint `text` in a stats palette slot (256-color hues).
+    pub(crate) fn metric_hue(self, color: &str, text: &str) -> String {
+        let code = match color {
+            "orange" => "38;5;208",
+            "violet" => "38;5;141",
+            "green" => "38;5;36",
+            "blue" => "38;5;33",
+            "gray" => "2",
+            _ => return text.to_string(),
+        };
+        self.paint(code, text)
+    }
+}

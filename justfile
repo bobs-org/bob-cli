@@ -110,6 +110,10 @@ install-smoke:
     "${root}/bin/bob" query --help >/dev/null
     "${root}/bin/bob" randomize --help >/dev/null
     "${root}/bin/bob" ready --help >/dev/null
+    "${root}/bin/bob" stats --help >/dev/null
+    "${root}/bin/bob" stats overview --help >/dev/null
+    "${root}/bin/bob" stats show --help >/dev/null
+    "${root}/bin/bob" stats metrics --help >/dev/null
     "${root}/bin/bob" ref --help >/dev/null
     "${root}/bin/bob" ref clip --help >/dev/null # hidden alias smoke: clip == create
     "${root}/bin/bob" ref create --help >/dev/null

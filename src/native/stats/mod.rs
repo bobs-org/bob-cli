@@ -1,8 +1,8 @@
 //! Read-only Daily Stats engine: index, registry, evaluators, series, and
-//! [`compute`]. The `bob stats` CLI phase (bob-cli-6l.3) is the first
-//! non-test consumer of this surface.
-#![allow(dead_code)] // bob-cli-6l.3 is the first non-test consumer.
+//! [`compute`], plus the `bob stats` CLI.
+#![allow(dead_code)]
 
+pub(crate) mod cli;
 pub(crate) mod compute;
 pub(crate) mod error;
 pub(crate) mod formula;
@@ -11,6 +11,7 @@ pub(crate) mod journal;
 pub(crate) mod metrics;
 pub(crate) mod range;
 pub(crate) mod registry;
+mod render;
 pub(crate) mod report;
 pub(crate) mod request;
 pub(crate) mod series;

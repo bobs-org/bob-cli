@@ -945,3 +945,61 @@ fn ready_help_lists_options_alphabetically() {
     );
     assert_stdout_has_no_ansi(&output);
 }
+
+#[test]
+fn stats_help_lists_options_alphabetically() {
+    let overview = bob_command()
+        .args(["stats", "overview", "--help"])
+        .output()
+        .expect("run bob stats overview --help");
+    assert_success(&overview);
+    let help = stdout(&overview);
+    assert!(
+        help.contains("weekly glance") && help.contains("docs/stats.md"),
+        "expected stats overview help:\n{help}"
+    );
+    assert_text_order(
+        &help,
+        &[
+            "-b, --bob-dir",
+            "-c, --compare",
+            "-f, --format",
+            "-g, --group",
+            "-h, --help",
+            "-o, --offset",
+            "-r, --range",
+        ],
+    );
+    assert_stdout_has_no_ansi(&overview);
+
+    let show = bob_command()
+        .args(["stats", "show", "--help"])
+        .output()
+        .expect("run bob stats show --help");
+    assert_success(&show);
+    let show_help = stdout(&show);
+    assert_text_order(
+        &show_help,
+        &[
+            "-a, --all",
+            "-b, --bob-dir",
+            "-c, --compare",
+            "-f, --format",
+            "-g, --group",
+            "-h, --help",
+            "-o, --offset",
+            "-r, --range",
+        ],
+    );
+    assert!(show_help.contains("[METRIC]"));
+
+    let metrics = bob_command()
+        .args(["stats", "metrics", "--help"])
+        .output()
+        .expect("run bob stats metrics --help");
+    assert_success(&metrics);
+    assert_text_order(
+        &stdout(&metrics),
+        &["-b, --bob-dir", "-f, --format", "-h, --help"],
+    );
+}

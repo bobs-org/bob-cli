@@ -497,6 +497,10 @@ fn all_top_level_subcommand_help_is_safe_and_plain() {
         (&["pomodoro", "--help"], "Usage: bob pomodoro"),
         (&["projects", "--help"], "bob projects"),
         (&["ready", "--help"], "Usage: bob ready"),
+        (&["stats", "--help"], "Usage: bob stats"),
+        (&["stats", "overview", "--help"], "bob stats overview"),
+        (&["stats", "show", "--help"], "bob stats show"),
+        (&["stats", "metrics", "--help"], "bob stats metrics"),
         (&["pomodoro", "tmux", "--help"], "usage: bob pomodoro tmux"),
     ];
 
@@ -1035,6 +1039,7 @@ fn help_routes_match_direct_help_for_root_and_nested_commands() {
         "plan",
         "pomodoro",
         "ready",
+        "stats",
         "task",
         "projects",
         "nightly",

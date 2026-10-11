@@ -388,10 +388,53 @@ may be JSON `null`). Optional fields that appear when present: `since`,
 ```
 
 **Errors** use a matching envelope (`ok: false`, `schema_version: 1`,
-`error: {code, message}`). Vault I/O failures (unreadable vault) map to the
-future CLI exit 1; configuration, request/unknown-metric, and non-Dataview
-format failures map to exit 2. No `bob stats` command exists yet — these
-codes reserve the contract the CLI phase will implement.
+`error: {code, message}`). Vault I/O failures (unreadable vault) map to
+CLI exit 1; configuration, request/unknown-metric, and non-Dataview
+format failures map to exit 2. JSON errors print that envelope on
+stdout; human and CSV errors print the message on stderr.
+
+## `bob stats`
+
+Read-only Daily workflow command after `ready`. Bare `bob stats` runs
+the flag-only `overview` glance.
+
+```text
+bob stats [overview] [-b DIR] [-c] [-f human|json|csv] [-g auto|day|week|month] [-o N] [-r RANGE]
+bob stats show <METRIC>... | -a   [same options]
+bob stats metrics [-b DIR] [-f human|json]
+```
+
+Options (alphabetical; every long option has a short alias):
+`-a/--all` (show: every visible metric), `-b/--bob-dir`, `-c/--compare`
+(include the prior period's points; human `show` draws its ticks),
+`-f/--format`, `-g/--group`, `-h/--help`, `-o/--offset`, `-r/--range`.
+
+Environment: `BOB_CONFIG_FILE`, `BOB_DIR`, `BOB_NOW`, `NO_COLOR`.
+
+Exit codes: 0 report; 1 vault I/O failure; 2 usage, unknown metric,
+config error, or non-Dataview task format.
+
+### Human output
+
+Overview is a header, a sparkline table in each metric's 256-color hue
+(orange 208, violet 141, green 36, blue 33, gray dim), today's
+in-progress values, journal hosts, then `warning <message>  <code>`
+lines. `·` marks null days; booleans use `●` met / `○` missed. Detail
+(`bob stats show`) draws eighth-block columns, a hollow `▯` today
+column, and a weekday × week grid for booleans. Metrics is a catalog
+table with a dim definition line per id.
+
+Plain text under `NO_COLOR` or a non-TTY (`Styler::detect()`).
+
+### CSV
+
+Tidy rows `date,end,metric,value,display,quality,provisional,num,den`
+(empty `num`/`den` when not a ratio).
+
+### JSON
+
+One line. Overview and show print the schema-1 report. `bob stats
+metrics -f json` prints definitions and parameters without points.
 
 ## Golden fixture and M-vector table
 
@@ -482,4 +525,14 @@ plus a 7-day report (the land agent recorded 365–378 ms at f9324da). The
 (bob-cli-6l.6 / bob-cli-6l.3). An opt-in parity test
 (`BOB_STATS_REAL_VAULT_PARITY=1` with `BOB_NOW`, vault from `BOB_DIR` or
 `~/bob`) re-checks sessions, worked, done, created, and dropped against
-independent line-regex oracles on every live run.
+independent line-regex oracles on every live run and also runs
+`bob stats show worked -c -f json`; on 2026-10-11 it also reconciled
+`done` Oct 10 exactly (engine 37 = Dataview 45 − 7 recurring − 1 daily
+`^gtd` row).
+
+Measured CLI runtime (release binary, live `~/bob`, `BOB_NOW=2026-10-11
+12:00:00`, `NO_COLOR=1`, `/usr/bin/time -f %e`, against the engine at
+f9324da): `bob stats -f json` 420 ms (stdout `.ok` true); `bob stats
+show worked -c` 380 ms; `bob stats metrics` 390 ms. The CLI is ~15–45 ms
+above that engine's 365–378 ms; the landing-fixes engine is slower
+(573 ms). The ≤300 ms budget stays with rollout (`bob-cli-6l.6`).

@@ -8,6 +8,7 @@ Daily workflow:
   plan        Show today's plan budget, Today's tasks, and NEXT/PENDING lanes
   pomodoro    Show Pomodoro status, print the tmux line, or notify on completion
   ready       Show each area/project note's Ready lane against the per-note cap
+  stats       Show derived daily metrics as a glance, detail chart, or catalog
 
 Tasks and projects:
   projects    List and sync project notes via their ^prj tasks
@@ -41,6 +42,7 @@ Examples:
   bob plan                          Show today's plan budget and lanes
   bob freshness                     List the review queue
   bob ready                         Show Ready lanes against the per-note cap
+  bob stats                         Glance at derived daily metrics
   bob task reconcile --dry-run      Preview task status reconciliation
   bob query --source '#project'     Print matching note paths
   bob vault-sync status --json      Print the last vault Git sync status

@@ -28,6 +28,7 @@ sync files. The [guide index](docs/README.md) points to the detailed contracts.
 - [Plan budget](#plan-budget)
 - [Task freshness](#task-freshness)
 - [Ready cap](#ready-cap)
+- [Stats](#stats)
 - [Projects](#projects)
 - [Plugins](#plugins)
 - [Gkeep](#gkeep)
@@ -139,7 +140,7 @@ bob projects list
 ```
 
 Priority rolls (`p:<N>`), `bob task reroll`, Highlights pre-scan hooks,
-`bob gkeep`, and `bob plan` read `~/.config/bob/config.yml`. Override
+`bob gkeep`, `bob plan`, and `bob stats` read `~/.config/bob/config.yml`. Override
 that path with `BOB_CONFIG_FILE` or `XDG_CONFIG_HOME`; see
 [Environment](#environment).
 
@@ -241,6 +242,7 @@ Bob's workflow commands are:
 | [`plan`](#plan-budget) | Show today's plan budget, Today's tasks, and the NEXT/PENDING lanes |
 | [`pomodoro`](#pomodoro) | Show Pomodoro status, print the tmux line, or notify on completion |
 | [`ready`](#ready-cap) | Show each area/project note's Ready lane against the per-note cap |
+| [`stats`](#stats) | Show derived daily metrics as a glance, detail chart, or catalog |
 
 ### Tasks and projects
 
@@ -763,6 +765,21 @@ exits 3 when any note is crowded; `--cap N` previews a different
 default for one run. The full definition, JSON contract, and
 conformance vectors live in [`docs/plan.md`](docs/plan.md).
 
+## Stats
+
+```bash
+bob stats [overview] [-b|--bob-dir DIR] [-c|--compare] [-f|--format human|json|csv] [-g|--group auto|day|week|month] [-o|--offset N] [-r|--range RANGE]
+bob stats show <METRIC>... | -a   [same options]
+bob stats metrics [-b|--bob-dir DIR] [-f|--format human|json]
+```
+
+`bob stats` is read-only. Bare `bob stats` is the weekly glance of the
+overview metrics. `show` draws one metric (or `-a` every visible metric)
+as a detail chart. `metrics` lists the catalog. JSON is one line;
+CSV is tidy `date,end,metric,value,display,quality,provisional,num,den`
+rows. `BOB_NOW` pins today. The catalog, JSON contract, human layout,
+and known limits live in [`docs/stats.md`](docs/stats.md).
+
 ## Projects
 
 ```bash
@@ -1239,7 +1256,7 @@ to process them. The spool lives under
 
 `BOB_NOW` overrides the local date and time used for Pomodoro status and default
 daily-note selection by `bob pomodoro`, Pomodoro-linked capture, and
-`bob task reconcile`. It also controls capture created/scheduled dates and
+`bob task reconcile`. It pins today for `bob stats`. It also controls capture created/scheduled dates and
 clipboard-snippet names, native Tasks-query date calculations, the default
 `bob task archive YYYY-MM-DD` commit-message date, scheduled-project
 visibility, plan/freshness/Ready evaluation, and the timestamped directory name
@@ -1402,6 +1419,7 @@ blocks point at `done/..._done#^block-id`, and the vault Git commit was pushed.
 | Task date marks and calendar labels | [`docs/date-marks.md`](docs/date-marks.md) |
 | Task tag marks for the #task tag | [`docs/task-tag-marks.md`](docs/task-tag-marks.md) |
 | Today's plan, sticky lanes, dashboard READY, and per-note Ready caps | [`docs/plan.md`](docs/plan.md) |
+| Daily Stats metrics, `bob stats`, JSON, and the review journal | [`docs/stats.md`](docs/stats.md) |
 | Highlights PDF intake and reference notes | [`docs/highlights-ref-sync.md`](docs/highlights-ref-sync.md) |
 | `bob ref create` Markdown, PDF, and URL targets | [`docs/highlights-create.md`](docs/highlights-create.md) |
 | Web article capture into Highlights intake PDFs | [`docs/highlights-clip.md`](docs/highlights-clip.md) |

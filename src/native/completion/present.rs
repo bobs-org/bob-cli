@@ -509,6 +509,7 @@ impl<'a> Walk<'a> {
             | Kind::PomodoroRef
             | Kind::Plugin
             | Kind::Level
+            | Kind::Metric
             | Kind::VaultNote => {
                 // Vault slots read the words before the cursor for
                 // `--bob-dir`, `--route`, `--task`, and `--repo`, so

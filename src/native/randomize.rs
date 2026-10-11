@@ -23,7 +23,7 @@ use serde_json::json;
 use super::{
     config, env as bob_env, ob, pomodoro,
     randomize_plan::{self, NoteSnapshot, Plan, PlanContext, Reroll},
-    style::{display_width, pad_right, Styler},
+    style::{display_width, pad_right, sparkline, Styler},
     task_status_hooks::{
         daily_anchor_date, markdown_files, read_tasks_settings,
         validate_blocked_status,
@@ -39,7 +39,6 @@ use super::{
 const COMMAND_NAME: &str = "bob task reroll";
 const DEFAULT_RETRY_TIMEOUT_SECS: u64 = 60;
 const RANDOMIZE_TOOL: &str = "randomize";
-const SPARK_BLOCKS: &[char] = &['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
 
 pub(crate) fn run(args: Vec<OsString>) -> i32 {
     let mut command = build_cli();
@@ -1281,23 +1280,6 @@ fn truncate_description(description: &str, used_width: usize) -> String {
         .take(available.saturating_sub(1))
         .collect::<String>();
     format!("{kept}…")
-}
-
-fn sparkline(counts: &[usize]) -> (String, usize, usize) {
-    let peak = counts.iter().copied().max().unwrap_or(0);
-    let peak_index =
-        counts.iter().position(|count| *count == peak).unwrap_or(0);
-    // `max(1)` keeps the ratio finite without a zero check: an empty
-    // window renders flat, and every other window has a nonzero peak.
-    let cells = counts
-        .iter()
-        .map(|count| {
-            let ratio = *count as f64 / peak.max(1) as f64;
-            let index = (ratio * 7.0).round() as usize;
-            SPARK_BLOCKS[index.min(7)]
-        })
-        .collect::<String>();
-    (cells, peak, peak_index)
 }
 
 fn skip_reason_text(

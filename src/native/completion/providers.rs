@@ -38,6 +38,7 @@ pub(crate) fn vault_lines(
         Kind::PomodoroRef => Some(pomodoros(context)),
         Kind::Plugin => Some(plugins(context)),
         Kind::Level => Some(levels()),
+        Kind::Metric => Some(metrics()),
         Kind::VaultNote => Some(vault_notes(context)),
         Kind::Choices | Kind::Dirs | Kind::Files(_) | Kind::FreeText => None,
     }
@@ -232,6 +233,33 @@ fn plugins(context: &Context) -> Vec<String> {
         .iter()
         .filter_map(|name| {
             protocol::candidate_line(OsStr::new(name), "", "plugins", false)
+        })
+        .collect()
+}
+
+/// Live metric ids from the stats registry. Hidden ids stay completable
+/// so `bob stats show` can name them explicitly.
+fn metrics() -> Vec<String> {
+    let config = match config::load_stats_config(&config::config_path()) {
+        Ok(config) => config,
+        Err(_) => return Vec::new(),
+    };
+    let registry = crate::native::stats::build_registry(&config);
+    registry
+        .defs
+        .iter()
+        .filter_map(|def| {
+            let group = if registry.is_hidden(&def.id) {
+                "hidden"
+            } else {
+                "metrics"
+            };
+            protocol::candidate_line(
+                OsStr::new(&def.id),
+                def.kind_name(),
+                group,
+                false,
+            )
         })
         .collect()
 }
