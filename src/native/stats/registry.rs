@@ -181,7 +181,7 @@ impl MetricSpec {
 }
 
 impl MetricUnit {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Count => "count",
             Self::Signed => "signed",
@@ -193,7 +193,7 @@ impl MetricUnit {
 }
 
 impl Direction {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Up => "up",
             Self::Down => "down",
@@ -203,7 +203,7 @@ impl Direction {
 }
 
 impl PaletteSlot {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Orange => "orange",
             Self::Violet => "violet",
@@ -215,7 +215,7 @@ impl PaletteSlot {
 }
 
 impl MetricSource {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Derived => "derived",
             Self::Recorded => "recorded",
@@ -224,7 +224,7 @@ impl MetricSource {
 }
 
 impl MetricOrigin {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Builtin => "builtin",
             Self::Custom => "custom",

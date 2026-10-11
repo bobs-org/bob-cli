@@ -2,6 +2,7 @@
 //! evaluators. The integration phase wires these into `compute`.
 #![allow(dead_code)]
 
+pub(crate) mod compute;
 pub(crate) mod error;
 pub(crate) mod formula;
 pub(crate) mod index;
@@ -14,6 +15,8 @@ pub(crate) mod request;
 pub(crate) mod series;
 pub(crate) mod value;
 
+#[allow(unused_imports)]
+pub(crate) use compute::compute;
 #[allow(unused_imports)]
 pub(crate) use error::StatsError;
 #[allow(unused_imports)]

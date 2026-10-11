@@ -135,6 +135,12 @@ impl StatsIndex {
     where
         F: Fn(&Path) -> io::Result<String> + Sync,
     {
+        // Probe the vault directory first so a missing or unreadable vault
+        // surfaces as vault I/O instead of masquerading as a format refusal
+        // when the default (non-Dataview) settings kick in.
+        fs::read_dir(vault).map_err(|error| {
+            StatsError::io(format!("read {}: {error}", vault.display()))
+        })?;
         let parser = dataview::StatsTaskParser::read_settings(vault, now)
             .map_err(stats_settings_error)?;
         if !parser.is_dataview() {
@@ -205,10 +211,9 @@ impl StatsIndex {
                     .block_id
                     .as_deref()
                     .is_some_and(|id| id.eq_ignore_ascii_case("ref"))
-                    || task
-                        .tags
-                        .iter()
-                        .any(|tag| tag.eq_ignore_ascii_case("ref"))
+                    || task.tags.iter().any(|tag| {
+                        tag.trim_start_matches('#').eq_ignore_ascii_case("ref")
+                    })
                 {
                     TaskKindPart::Ref
                 } else {
@@ -1267,6 +1272,44 @@ mod tests {
         fs::create_dir_all(settings_path).unwrap();
         assert!(matches!(
             StatsIndex::read(unreadable.path(), fixed_now()),
+            Err(StatsError::Io { .. })
+        ));
+    }
+
+    #[test]
+    fn ref_tag_without_block_id_classifies_as_ref_kind() {
+        let vault = TempDir::new().unwrap();
+        settings(vault.path(), "dataview");
+        write_note(
+            vault.path(),
+            "tasks.md",
+            concat!(
+                "- [x] #task Read paper #ref [created:: 2026-10-09] ",
+                "[completion:: 2026-10-09]\n",
+                "- [x] #task Plain chore [created:: 2026-10-09] ",
+                "[completion:: 2026-10-09]\n",
+            ),
+        );
+        let index = StatsIndex::read(vault.path(), fixed_now()).unwrap();
+        let tagged = index
+            .tasks
+            .iter()
+            .find(|task| task.description.contains("Read paper"))
+            .unwrap();
+        assert_eq!(tagged.task_kind, TaskKindPart::Ref);
+        let plain = index
+            .tasks
+            .iter()
+            .find(|task| task.description.contains("Plain chore"))
+            .unwrap();
+        assert_eq!(plain.task_kind, TaskKindPart::Task);
+    }
+
+    #[test]
+    fn missing_vault_directory_fails_as_io() {
+        let missing = TempDir::new().unwrap().path().join("no-such-vault");
+        assert!(matches!(
+            StatsIndex::read(&missing, fixed_now()),
             Err(StatsError::Io { .. })
         ));
     }

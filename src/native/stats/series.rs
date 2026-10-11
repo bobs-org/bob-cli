@@ -414,16 +414,21 @@ fn grouped_points(
     unit: MetricUnit,
     group: GroupName,
 ) -> Vec<SeriesPoint> {
-    let Some(first) = values.first() else {
+    // The provisional today point stays out of grouped buckets so it can
+    // never contaminate a completed-bucket aggregate. Day grouping still
+    // reports today as its own point; summaries already exclude it.
+    let complete: Vec<&DailyValue> =
+        values.iter().filter(|value| !value.provisional).collect();
+    let Some(first) = complete.first() else {
         return Vec::new();
     };
-    let Some(last) = values.last() else {
+    let Some(last) = complete.last() else {
         return Vec::new();
     };
     let range_start = first.date;
     let range_end = last.date;
     let mut buckets: BTreeMap<NaiveDate, Vec<&DailyValue>> = BTreeMap::new();
-    for value in values {
+    for value in complete {
         buckets
             .entry(bucket_start(value.date, group))
             .or_default()
@@ -1230,6 +1235,25 @@ mod tests {
                 .remove(0);
         assert_eq!(bool_point.value, Some(4));
         assert_eq!(bool_point.display, "4 of 7");
+    }
+
+    #[test]
+    fn grouped_buckets_exclude_the_provisional_today_point() {
+        let today = date(2026, 10, 11);
+        let mut values = vec![
+            daily(date(2026, 10, 9), Some(4)),
+            daily(date(2026, 10, 10), Some(6)),
+            daily(today, Some(100)),
+        ];
+        values.last_mut().unwrap().provisional = true;
+        let points =
+            grouped_points(&values, MetricUnit::Count, GroupName::Week);
+        assert_eq!(points.len(), 1);
+        assert_eq!(points[0].value, Some(10));
+        assert_eq!(points[0].display, "10");
+        assert_eq!(points[0].end, date(2026, 10, 10));
+        assert!(!points[0].provisional);
+        assert_eq!(points[0].partial, Some(true));
     }
 
     #[test]

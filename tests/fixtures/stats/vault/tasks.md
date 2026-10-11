@@ -1,0 +1,6 @@
+- [x] #task Write draft [created:: 2026-10-08] [completion:: 2026-10-09]
+- [x] #task Read paper #ref [created:: 2026-10-09] [completion:: 2026-10-09]
+- [x] #task Bad dates [created:: 2026-02-30] [completion:: 2026-10-09]
+- [x] #task Weekly review [created:: 2026-10-09] [completion:: 2026-10-09] [repeat:: every week]
+- [ ] #task Undated idea
+- [ ] #task Future plan [scheduled:: 2026-10-20] [created:: 2026-10-10]
