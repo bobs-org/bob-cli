@@ -37,6 +37,7 @@ then creates the notes that `bob ref list` shows. The
 | [randomize.md](randomize.md) | `bob task reroll` bulk re-roll of due prioritized tasks |
 | [ref.md](ref.md) | Reference-library lookup and views, reading state, URL routing, JSON, and `migrate-tasks`/`migrate-zorg` migration/rollback |
 | [ref-jobs.md](ref-jobs.md) | `bob ref jobs` background capture progress, worker, fallback, and recovery |
+| [stats.md](stats.md) | Daily Stats metrics and the v1 review journal contract |
 | [task-dependencies.md](task-dependencies.md) | Task dependency links: Depends-On line contract and conformance vectors |
 | [task-status-hooks.md](task-status-hooks.md) | `bob task reconcile` Pomodoro-driven task status |
 | [task-tag-marks.md](task-tag-marks.md) | Task tag marks: the teal hash glyph that replaces the `#task` pill |

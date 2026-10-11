@@ -1,0 +1,24 @@
+{
+  "schema": 1,
+  "vectors": [
+    {"id":"R1-complete-next","path":"continue","tier":"next","input":"complete","committed":true,"landed":true,"outcome":"done","recorded":true,"reviewed":true},
+    {"id":"R2-lane-pending","path":"continue","tier":"pending","input":"lane","committed":true,"landed":true,"outcome":"lane","recorded":true,"reviewed":true},
+    {"id":"R3-route-new","path":"continue","tier":"new","input":"route","committed":true,"landed":true,"outcome":"route","recorded":true,"reviewed":true},
+    {"id":"R4-link-today","path":"continue","tier":"projects","input":"link-today","committed":true,"landed":true,"outcome":"today","recorded":true,"reviewed":true},
+    {"id":"R5-task-card","path":"continue","tier":"rotten","input":"card","committed":true,"landed":true,"outcome":"card","recorded":true,"reviewed":true},
+    {"id":"R6-stay-keep","path":"stamp","tier":"ready","input":"keep","committed":true,"landed":true,"outcome":"keep","recorded":true,"reviewed":true},
+    {"id":"R7-decay-not-now","path":"decay","tier":"rotten","input":"notNow","committed":true,"landed":true,"outcome":"decay:notNow","recorded":true,"reviewed":true},
+    {"id":"R8-decay-level","path":"decay","tier":"rotten","input":"level:0","committed":true,"landed":true,"outcome":"decay:level:0","recorded":true,"reviewed":true},
+    {"id":"R9-decay-less-often","path":"decay","tier":"rotten","input":"lessOften","committed":true,"landed":true,"outcome":"decay:lessOften","recorded":true,"reviewed":true},
+    {"id":"R10-decay-reword","path":"decay","tier":"rotten","input":"reword","committed":true,"landed":true,"outcome":"decay:reword","recorded":true,"reviewed":true},
+    {"id":"R11-decay-drop","path":"decay","tier":"rotten","input":"drop","committed":true,"landed":true,"outcome":"decay:drop","recorded":true,"reviewed":true},
+    {"id":"R12-decay-keep","path":"decay","tier":"rotten","input":"keep","committed":true,"landed":true,"outcome":"decay:keep","recorded":true,"reviewed":true},
+    {"id":"R13-checklist-pre","path":"checklist","tier":"pre","input":"checklist","committed":true,"landed":true,"outcome":"checklist","recorded":true,"reviewed":false},
+    {"id":"R14-checklist-post","path":"checklist","tier":"post","input":"checklist","committed":true,"landed":true,"outcome":"checklist","recorded":true,"reviewed":false},
+    {"id":"R15-navigation","path":"continue","tier":"new","input":"skip","committed":false,"landed":true,"recorded":false,"reviewed":false},
+    {"id":"R16-move","path":"move","tier":"new","input":"move","committed":true,"landed":true,"recorded":false,"reviewed":false},
+    {"id":"R17-off-landing-stamp","path":"stamp","tier":"new","input":"keep","committed":true,"landed":false,"recorded":false,"reviewed":false},
+    {"id":"R18-no-op","path":"continue","tier":"next","input":"complete","committed":false,"landed":true,"recorded":false,"reviewed":false},
+    {"id":"R19-refusal","path":"decay","tier":"rotten","input":"drop","committed":false,"landed":true,"recorded":false,"reviewed":false}
+  ]
+}
