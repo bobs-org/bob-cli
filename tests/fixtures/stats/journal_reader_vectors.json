@@ -1,0 +1,232 @@
+{
+  "schema": 1,
+  "note": "Hand-authored journal reader vectors for the Daily Stats engine. Each case lists raw journal lines (multi-host, duplicate keys, out-of-order timestamps, offset Mix, equal-timestamp ties, unknown outcomes/tiers, pre/post-only days, gap days) plus the days the registry review_closed definition reports as met. Malformed and truncated lines never reach the evaluator; index.rs covers that layer. Expected values pin the reviewed (count) and keep_rate (ratio) built-ins: value, quality, num/den, tier/outcome parts, inferred since, and journal_gap days.",
+  "cases": [
+    {
+      "id": "J1-duplicate-key-keeps-last",
+      "description": "One row answered twice on one host; the later timestamp wins and the day counts once.",
+      "today": "2026-10-12",
+      "dates": ["2026-10-10", "2026-10-11", "2026-10-12"],
+      "review_closed": [],
+      "events": [
+        {"ts": "2026-10-10T05:41:07-04:00", "day": "2026-10-10", "host": "apollo", "tier": "next", "outcome": "keep", "key": "sase.md#^fix"},
+        {"ts": "2026-10-10T05:42:00-04:00", "day": "2026-10-10", "host": "apollo", "tier": "next", "outcome": "done", "key": "sase.md#^fix"}
+      ],
+      "expect": {
+        "since": "2026-10-10",
+        "reviewed": {
+          "2026-10-10": {"value": 1, "quality": "ok", "outcome": {"done": 1}, "tier": {"next": 1}},
+          "2026-10-11": {"value": 0, "quality": "ok", "outcome": {}, "tier": {}},
+          "2026-10-12": {"value": 0, "quality": "ok", "outcome": {}, "tier": {}}
+        },
+        "keep_rate": {
+          "2026-10-10": {"value": 0, "quality": "ok", "num": 0, "den": 1, "outcome": {"done": 1}, "tier": {"next": 1}},
+          "2026-10-11": {"value": null, "quality": "missing", "outcome": {}, "tier": {}},
+          "2026-10-12": {"value": null, "quality": "missing", "outcome": {}, "tier": {}}
+        },
+        "gaps": {"reviewed": [], "keep_rate": []}
+      }
+    },
+    {
+      "id": "J2-two-hosts-share-keys",
+      "description": "Two hosts answer the same row; the later instant wins and duplicate lines never inflate the total.",
+      "today": "2026-10-12",
+      "dates": ["2026-10-10"],
+      "review_closed": [],
+      "events": [
+        {"ts": "2026-10-10T09:00:00+00:00", "day": "2026-10-10", "host": "apollo", "tier": "next", "outcome": "keep", "key": "sase.md#^shared"},
+        {"ts": "2026-10-10T10:00:00-04:00", "day": "2026-10-10", "host": "mac", "tier": "next", "outcome": "done", "key": "sase.md#^shared"},
+        {"ts": "2026-10-10T10:00:00-04:00", "day": "2026-10-10", "host": "mac", "tier": "pending", "outcome": "keep", "key": "inbox.md#^other"}
+      ],
+      "expect": {
+        "since": "2026-10-10",
+        "reviewed": {
+          "2026-10-10": {"value": 2, "quality": "ok", "outcome": {"done": 1, "keep": 1}, "tier": {"next": 1, "pending": 1}}
+        },
+        "keep_rate": {
+          "2026-10-10": {"value": 5000, "quality": "ok", "num": 1, "den": 2, "outcome": {"done": 1, "keep": 1}, "tier": {"next": 1, "pending": 1}}
+        },
+        "gaps": {"reviewed": [], "keep_rate": []}
+      }
+    },
+    {
+      "id": "J3-out-of-order-timestamps-and-offsets",
+      "description": "File order means nothing; the earlier instant wins even when its line comes last and its offset differs.",
+      "today": "2026-10-12",
+      "dates": ["2026-10-10"],
+      "review_closed": [],
+      "events": [
+        {"ts": "2026-10-10T12:00:00+00:00", "day": "2026-10-10", "host": "apollo", "tier": "next", "outcome": "keep", "key": "sase.md#^late-line-early-instant"},
+        {"ts": "2026-10-10T06:00:00-04:00", "day": "2026-10-10", "host": "mac", "tier": "next", "outcome": "done", "key": "sase.md#^late-line-early-instant"}
+      ],
+      "expect": {
+        "since": "2026-10-10",
+        "reviewed": {
+          "2026-10-10": {"value": 1, "quality": "ok", "outcome": {"keep": 1}, "tier": {"next": 1}}
+        },
+        "keep_rate": {
+          "2026-10-10": {"value": 10000, "quality": "ok", "num": 1, "den": 1, "outcome": {"keep": 1}, "tier": {"next": 1}}
+        },
+        "gaps": {"reviewed": [], "keep_rate": []}
+      }
+    },
+    {
+      "id": "J4-equal-timestamp-tie-breaks-by-path-then-line",
+      "description": "Identical timestamps resolve by file path then line number, deterministically.",
+      "today": "2026-10-12",
+      "dates": ["2026-10-10"],
+      "review_closed": [],
+      "events": [
+        {"ts": "2026-10-10T05:00:00-04:00", "day": "2026-10-10", "host": "apollo", "tier": "next", "outcome": "keep", "key": "sase.md#^tie", "path": ".bob/stats/review/2026-10.b.jsonl", "line": 1},
+        {"ts": "2026-10-10T05:00:00-04:00", "day": "2026-10-10", "host": "apollo", "tier": "next", "outcome": "done", "key": "sase.md#^tie", "path": ".bob/stats/review/2026-10.a.jsonl", "line": 9}
+      ],
+      "expect": {
+        "since": "2026-10-10",
+        "reviewed": {
+          "2026-10-10": {"value": 1, "quality": "ok", "outcome": {"keep": 1}, "tier": {"next": 1}}
+        },
+        "keep_rate": {
+          "2026-10-10": {"value": 10000, "quality": "ok", "num": 1, "den": 1, "outcome": {"keep": 1}, "tier": {"next": 1}}
+        },
+        "gaps": {"reviewed": [], "keep_rate": []}
+      }
+    },
+    {
+      "id": "J5-unknown-outcome-under-other-unknown-tier-counts",
+      "description": "An unrecognized outcome lands under other; an unrecognized non-pre/post tier still counts under decision.",
+      "today": "2026-10-12",
+      "dates": ["2026-10-10"],
+      "review_closed": [],
+      "events": [
+        {"ts": "2026-10-10T05:00:00-04:00", "day": "2026-10-10", "host": "apollo", "tier": "next", "outcome": "bogus", "key": "sase.md#^weird"},
+        {"ts": "2026-10-10T06:00:00-04:00", "day": "2026-10-10", "host": "apollo", "tier": "limbo", "outcome": "keep", "key": "sase.md#^new-tier"}
+      ],
+      "expect": {
+        "since": "2026-10-10",
+        "reviewed": {
+          "2026-10-10": {"value": 2, "quality": "ok", "outcome": {"keep": 1, "other": 1}, "tier": {"limbo": 1, "next": 1}}
+        },
+        "keep_rate": {
+          "2026-10-10": {"value": 0, "quality": "ok", "num": 0, "den": 1, "outcome": {"other": 1}, "tier": {"next": 1}}
+        },
+        "gaps": {"reviewed": [], "keep_rate": []}
+      }
+    },
+    {
+      "id": "J6-pre-post-only-day-is-real-zero-not-a-gap",
+      "description": "PRE/POST checklist answers are journaled but excluded from decision tiers; with the Morning review met the day is a real zero, not a gap.",
+      "today": "2026-10-12",
+      "dates": ["2026-10-10"],
+      "review_closed": ["2026-10-10"],
+      "events": [
+        {"ts": "2026-10-10T05:00:00-04:00", "day": "2026-10-10", "host": "apollo", "tier": "pre", "outcome": "checklist", "key": "2026/20261010.md#^one"},
+        {"ts": "2026-10-10T06:00:00-04:00", "day": "2026-10-10", "host": "apollo", "tier": "post", "outcome": "checklist", "key": "2026/20261010.md#^two"}
+      ],
+      "expect": {
+        "since": "2026-10-10",
+        "reviewed": {
+          "2026-10-10": {"value": 0, "quality": "ok", "outcome": {}, "tier": {}}
+        },
+        "keep_rate": {
+          "2026-10-10": {"value": null, "quality": "missing", "outcome": {}, "tier": {}}
+        },
+        "gaps": {"reviewed": [], "keep_rate": []}
+      }
+    },
+    {
+      "id": "J7-keep-then-done-and-basis-points",
+      "description": "Keep rate uses each key's last answer among pending/next rows; 1 of 2 keeps is 5000 basis points.",
+      "today": "2026-10-12",
+      "dates": ["2026-10-10"],
+      "review_closed": [],
+      "events": [
+        {"ts": "2026-10-10T05:00:00-04:00", "day": "2026-10-10", "host": "apollo", "tier": "pending", "outcome": "keep", "key": "a.md#^x"},
+        {"ts": "2026-10-10T06:00:00-04:00", "day": "2026-10-10", "host": "apollo", "tier": "pending", "outcome": "done", "key": "a.md#^x"},
+        {"ts": "2026-10-10T07:00:00-04:00", "day": "2026-10-10", "host": "mac", "tier": "next", "outcome": "keep", "key": "b.md#^y"},
+        {"ts": "2026-10-10T08:00:00-04:00", "day": "2026-10-10", "host": "mac", "tier": "rotten", "outcome": "keep", "key": "c.md#^z"}
+      ],
+      "expect": {
+        "since": "2026-10-10",
+        "reviewed": {
+          "2026-10-10": {"value": 3, "quality": "ok", "outcome": {"done": 1, "keep": 2}, "tier": {"next": 1, "pending": 1, "rotten": 1}}
+        },
+        "keep_rate": {
+          "2026-10-10": {"value": 5000, "quality": "ok", "num": 1, "den": 2, "outcome": {"done": 1, "keep": 1}, "tier": {"next": 1, "pending": 1}}
+        },
+        "gaps": {"reviewed": [], "keep_rate": []}
+      }
+    },
+    {
+      "id": "J8-closed-review-with-no-events-is-a-gap",
+      "description": "Review closed on 2026-10-10 but no host journaled anything that day: both selectors report missing with a journal_gap, never zero.",
+      "today": "2026-10-12",
+      "dates": ["2026-10-09", "2026-10-10", "2026-10-11"],
+      "review_closed": ["2026-10-10"],
+      "events": [
+        {"ts": "2026-10-09T05:00:00-04:00", "day": "2026-10-09", "host": "apollo", "tier": "next", "outcome": "keep", "key": "sase.md#^x"}
+      ],
+      "expect": {
+        "since": "2026-10-09",
+        "reviewed": {
+          "2026-10-09": {"value": 1, "quality": "ok", "outcome": {"keep": 1}, "tier": {"next": 1}},
+          "2026-10-10": {"value": null, "quality": "missing", "outcome": {}, "tier": {}},
+          "2026-10-11": {"value": 0, "quality": "ok", "outcome": {}, "tier": {}}
+        },
+        "keep_rate": {
+          "2026-10-09": {"value": 10000, "quality": "ok", "num": 1, "den": 1, "outcome": {"keep": 1}, "tier": {"next": 1}},
+          "2026-10-10": {"value": null, "quality": "missing", "outcome": {}, "tier": {}},
+          "2026-10-11": {"value": null, "quality": "missing", "outcome": {}, "tier": {}}
+        },
+        "gaps": {"reviewed": ["2026-10-10"], "keep_rate": ["2026-10-10"]}
+      }
+    },
+    {
+      "id": "J9-pre-tracking-day-stays-not-tracked",
+      "description": "Days before the earliest journal event stay not_tracked even when the review was closed; historical plugin gaps are never flagged.",
+      "today": "2026-10-12",
+      "dates": ["2026-10-09", "2026-10-10"],
+      "review_closed": ["2026-10-09", "2026-10-10"],
+      "events": [
+        {"ts": "2026-10-10T05:00:00-04:00", "day": "2026-10-10", "host": "apollo", "tier": "next", "outcome": "keep", "key": "sase.md#^x"}
+      ],
+      "expect": {
+        "since": "2026-10-10",
+        "reviewed": {
+          "2026-10-09": {"value": null, "quality": "not_tracked", "outcome": {}, "tier": {}},
+          "2026-10-10": {"value": 1, "quality": "ok", "outcome": {"keep": 1}, "tier": {"next": 1}}
+        },
+        "keep_rate": {
+          "2026-10-09": {"value": null, "quality": "not_tracked", "outcome": {}, "tier": {}},
+          "2026-10-10": {"value": 10000, "quality": "ok", "num": 1, "den": 1, "outcome": {"keep": 1}, "tier": {"next": 1}}
+        },
+        "gaps": {"reviewed": [], "keep_rate": []}
+      }
+    },
+    {
+      "id": "J10-shipped-and-normalized-decay-spellings-are-recognized",
+      "description": "Both the shipped decay spellings and the design's normalized spellings count as recognized outcomes, never other.",
+      "today": "2026-10-12",
+      "dates": ["2026-10-10"],
+      "review_closed": [],
+      "events": [
+        {"ts": "2026-10-10T05:00:00-04:00", "day": "2026-10-10", "host": "apollo", "tier": "rotten", "outcome": "decay:notNow", "key": "a.md#^1"},
+        {"ts": "2026-10-10T05:01:00-04:00", "day": "2026-10-10", "host": "apollo", "tier": "rotten", "outcome": "decay:level:0", "key": "a.md#^2"},
+        {"ts": "2026-10-10T05:02:00-04:00", "day": "2026-10-10", "host": "apollo", "tier": "rotten", "outcome": "decay:lessOften", "key": "a.md#^3"},
+        {"ts": "2026-10-10T05:03:00-04:00", "day": "2026-10-10", "host": "apollo", "tier": "rotten", "outcome": "decay:not_now", "key": "a.md#^4"},
+        {"ts": "2026-10-10T05:04:00-04:00", "day": "2026-10-10", "host": "apollo", "tier": "rotten", "outcome": "decay:less_often", "key": "a.md#^5"},
+        {"ts": "2026-10-10T05:05:00-04:00", "day": "2026-10-10", "host": "apollo", "tier": "rotten", "outcome": "decay:reword", "key": "a.md#^6"},
+        {"ts": "2026-10-10T05:06:00-04:00", "day": "2026-10-10", "host": "apollo", "tier": "rotten", "outcome": "decay:keep", "key": "a.md#^7"}
+      ],
+      "expect": {
+        "since": "2026-10-10",
+        "reviewed": {
+          "2026-10-10": {"value": 7, "quality": "ok", "outcome": {"decay:keep": 1, "decay:lessOften": 1, "decay:less_often": 1, "decay:level:0": 1, "decay:notNow": 1, "decay:not_now": 1, "decay:reword": 1}, "tier": {"rotten": 7}}
+        },
+        "keep_rate": {
+          "2026-10-10": {"value": null, "quality": "missing", "outcome": {}, "tier": {}}
+        },
+        "gaps": {"reviewed": [], "keep_rate": []}
+      }
+    }
+  ]
+}

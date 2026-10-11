@@ -1,10 +1,11 @@
-//! Read-only Daily Stats engine types, config registry, and formula
-//! parsing. Later phases fill the index, evaluators, and `compute`.
+//! Read-only Daily Stats engine types, config registry, index, and metric
+//! evaluators. The integration phase wires these into `compute`.
 #![allow(dead_code)]
 
 pub(crate) mod error;
 pub(crate) mod formula;
 pub(crate) mod index;
+pub(crate) mod journal;
 pub(crate) mod metrics;
 pub(crate) mod range;
 pub(crate) mod registry;
@@ -15,6 +16,10 @@ pub(crate) mod value;
 
 #[allow(unused_imports)]
 pub(crate) use error::StatsError;
+#[allow(unused_imports)]
+pub(crate) use formula::evaluate_formula;
+#[allow(unused_imports)]
+pub(crate) use journal::evaluate_journal;
 #[allow(unused_imports)]
 pub(crate) use metrics::{evaluate_metric, MetricEvaluation};
 #[allow(unused_imports)]

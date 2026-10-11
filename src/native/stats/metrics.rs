@@ -91,7 +91,7 @@ pub(crate) fn evaluate_metric(
     })
 }
 
-fn effective_since(
+pub(crate) fn effective_since(
     metric: &MetricDef,
     inferred_since: Option<NaiveDate>,
     global_since: Option<NaiveDate>,
