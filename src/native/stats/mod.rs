@@ -5,6 +5,7 @@
 pub(crate) mod error;
 pub(crate) mod formula;
 pub(crate) mod index;
+pub(crate) mod metrics;
 pub(crate) mod range;
 pub(crate) mod registry;
 pub(crate) mod report;
@@ -14,6 +15,8 @@ pub(crate) mod value;
 
 #[allow(unused_imports)]
 pub(crate) use error::StatsError;
+#[allow(unused_imports)]
+pub(crate) use metrics::{evaluate_metric, MetricEvaluation};
 #[allow(unused_imports)]
 pub(crate) use range::RangeSpec;
 #[allow(unused_imports)]
