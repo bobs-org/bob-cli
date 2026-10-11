@@ -19,6 +19,19 @@
     {"id":"R16-move","path":"move","tier":"new","input":"move","committed":true,"landed":true,"recorded":false,"reviewed":false},
     {"id":"R17-off-landing-stamp","path":"stamp","tier":"new","input":"keep","committed":true,"landed":false,"recorded":false,"reviewed":false},
     {"id":"R18-no-op","path":"continue","tier":"next","input":"complete","committed":false,"landed":true,"recorded":false,"reviewed":false},
-    {"id":"R19-refusal","path":"decay","tier":"rotten","input":"drop","committed":false,"landed":true,"recorded":false,"reviewed":false}
+    {"id":"R19-refusal","path":"decay","tier":"rotten","input":"drop","committed":false,"landed":true,"recorded":false,"reviewed":false},
+    {"id":"R20-card-done","path":"continue","tier":"next","input":"card","committed":true,"landed":true,"outcome":"done","recorded":true,"reviewed":true,"before":"- [ ] #task Task","after":"- [x] #task Task"},
+    {"id":"R21-card-drop","path":"continue","tier":"next","input":"card","committed":true,"landed":true,"outcome":"drop","recorded":true,"reviewed":true,"before":"- [ ] #task Task","after":"- [-] #task Task"},
+    {"id":"R22-card-defer","path":"continue","tier":"next","input":"card","committed":true,"landed":true,"outcome":"defer","recorded":true,"reviewed":true,"before":"- [ ] #task Task [scheduled:: 2026-10-11]","after":"- [ ] #task Task [scheduled:: 2026-10-18]"},
+    {"id":"R23-card-sequence","path":"continue","tier":"next","input":"card","committed":true,"landed":true,"outcome":"sequence","recorded":true,"reviewed":true,"before":"- [ ] #task Task","after":"- [ ] #task Task [dependsOn:: abc]"},
+    {"id":"R24-card-plain","path":"continue","tier":"next","input":"card","committed":true,"landed":true,"outcome":"card","recorded":true,"reviewed":true,"before":"- [ ] #task Task","after":"- [ ] #task Task [fresh:: 2026-10-11]"}
+  ],
+  "hosts": [
+    {"raw":"Kellys-MBP","host":"kellys-mbp"},
+    {"raw":"apollo","host":"apollo"},
+    {"raw":"athena.tail297af1.ts.net","host":"athena"},
+    {"raw":"My Mac_2.local","host":"my-mac-2"},
+    {"raw":".local","host":"host"},
+    {"raw":"","host":"host"}
   ]
 }

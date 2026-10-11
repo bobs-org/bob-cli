@@ -2,7 +2,7 @@
 //!
 //! The data-driven cases live in
 //! `tests/fixtures/stats/journal_reader_vectors.json` (kept stable and
-//! additive); the R1-R19 writer vectors in `review_answers.json` prove the
+//! additive); the R1-R24 writer vectors in `review_answers.json` prove the
 //! recorded/countable writer cases feed the reader. Inline tests cover
 //! custom tier filters and the review-closed wiring.
 
@@ -294,7 +294,7 @@ fn recorded_writer_vectors_feed_the_reader() {
     let fixture: Value = serde_json::from_str(&raw).unwrap();
     assert_eq!(fixture["schema"], 1);
     let vectors = fixture["vectors"].as_array().unwrap();
-    assert_eq!(vectors.len(), 19);
+    assert_eq!(vectors.len(), 24);
 
     let mut events = Vec::new();
     let mut expected_reviewed = 0;
@@ -314,7 +314,7 @@ fn recorded_writer_vectors_feed_the_reader() {
             vector["id"].as_str().unwrap(),
         ));
     }
-    assert_eq!(expected_reviewed, 12);
+    assert_eq!(expected_reviewed, 17);
 
     let expected_keys: BTreeSet<String> = vectors
         .iter()
@@ -324,7 +324,7 @@ fn recorded_writer_vectors_feed_the_reader() {
         })
         .map(|vector| vector["id"].as_str().unwrap().to_string())
         .collect();
-    assert_eq!(expected_keys.len(), 12);
+    assert_eq!(expected_keys.len(), 17);
 
     let index = journal_index(events);
     let evaluations = closed_on(&[date(10)], &[]);
@@ -337,7 +337,7 @@ fn recorded_writer_vectors_feed_the_reader() {
         &evaluations,
     )
     .unwrap();
-    assert_eq!(reviewed.values[0].value, Some(12));
+    assert_eq!(reviewed.values[0].value, Some(17));
     let MetricSpec::Journal { select, tiers } = &builtin("reviewed").spec
     else {
         panic!("reviewed is a journal metric");
@@ -371,7 +371,7 @@ fn recorded_writer_vectors_feed_the_reader() {
     .unwrap();
     assert_eq!(keep_rate.values[0].value, Some(0));
     assert_eq!(keep_rate.values[0].num, Some(0));
-    assert_eq!(keep_rate.values[0].den, Some(2));
+    assert_eq!(keep_rate.values[0].den, Some(7));
 }
 
 #[test]

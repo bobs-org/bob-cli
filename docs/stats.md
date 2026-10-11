@@ -33,7 +33,7 @@ harmless because `reviewed` counts distinct row keys per day.
 One line records one row answered by a committed review gesture:
 
 ```json
-{"v":1,"ts":"2026-10-12T05:41:07-04:00","day":"2026-10-12","host":"apollo","kind":"review.answer","tier":"next","outcome":"keep","key":"sase.md#^fix-failed-agents","plugin":"bob-navigation-hotkeys@2.x"}
+{"v":1,"ts":"2026-10-12T05:41:07-04:00","day":"2026-10-12","host":"apollo","kind":"review.answer","tier":"next","outcome":"keep","key":"sase.md#^fix-failed-agents","plugin":"bob-navigation-hotkeys@2.19.0"}
 ```
 
 | Field | Meaning |
@@ -41,12 +41,12 @@ One line records one row answered by a committed review gesture:
 | `v` | Event schema version, currently `1`. |
 | `ts` | Local timestamp with an explicit UTC offset. |
 | `day` | Local calendar day of the review landing, `YYYY-MM-DD`. |
-| `host` | Sanitized `os.hostname()` value. It also identifies the file owner. |
+| `host` | Sanitized `os.hostname()`: lowercase, cut at the first `.`, non-`[a-z0-9-]` → `-`, trimmed; fallback `host`. `Kellys-MBP` becomes `kellys-mbp`, matching the `vault(kellys-mbp)` label. |
 | `kind` | `review.answer`. |
 | `tier` | The freshness evaluator's tier string, copied verbatim. |
-| `outcome` | `keep`, `done`, `drop`, `defer`, `lane`, `route`, `today`, `sequence`, `card`, `checklist`, or `decay:<action>`. |
+| `outcome` | `keep`, `done`, `drop`, `defer`, `lane`, `route`, `today`, `sequence`, `card`, `checklist`, or `decay:<action>`. A Task Card answer maps from the after-line: `[x]`/`[X]` → `done`, `[-]` → `drop`, scheduled date moved past today → `defer`, a new `dependsOn` id → `sequence`, otherwise `card`. |
 | `key` | The review walk's stable row key. |
-| `plugin` | Writer identity and compatible major version. |
+| `plugin` | `<writer>@<manifest version>`, for example `bob-navigation-hotkeys@2.19.0`. Earlier lines may carry `@2.x`. |
 
 Readers accept both the shipped decay spellings (`decay:notNow`,
 `decay:level:0`, `decay:lessOften`) and the normalized forms
@@ -56,11 +56,18 @@ actions stay additive and journal files are never rewritten. Any other
 unknown outcome lands under `other` in the per-day outcome parts.
 
 The versioned `api.stats` namespace on bob-ledger-tools exposes
-`append(event)`. It serializes appends through one queue, creates the journal
-directory and file when needed, and rejects failed writes. Navigation calls it
-only after a successful task write. A journal failure never fails the answer:
-the event stays in an in-memory retry queue, and the plugin shows
-“Review answer not recorded.”
+`append(event)` and `host()`. `host()` returns the sanitized hostname used
+for both the file name and the event `host` field. `append` serializes through
+one queue, creates the journal directory and file when needed, and rejects
+failed writes (validation errors carry `code: "invalid_review_event"`).
+Navigation calls it only after a successful task write. A journal failure
+never fails the answer: the event stays in an in-memory retry queue (cap 500;
+oldest dropped with a counted warning). Missing or old `api.stats` shows one
+Notice per session, “Update Bob Ledger Tools to record review stats”, and
+keeps retrying quietly. A write-failure burst shows one Notice, “Review
+answer not recorded — will retry”; a later successful drain shows “Review
+journal recovered: N answers written”. Validation rejects are dropped with a
+console warning instead of retrying forever.
 
 ## What gets recorded
 
@@ -532,8 +539,9 @@ byte-identical JSON without touching vault or config; an independent
 one clipped October bucket plus a separate provisional today point; the
 default request reports 4 weeks, six overview metrics, and 29 day points.
 
-Writer vectors in `tests/fixtures/stats/review_answers.json` (R1–R19) pin
-the plugin outcome mapping and which recorded events contribute to
+Writer vectors in `tests/fixtures/stats/review_answers.json` (R1–R24 plus
+the `hosts` sanitizer vectors) pin the plugin outcome mapping, Card
+after-line outcomes, host naming, and which recorded events contribute to
 `reviewed`; navigation tests mirror the same cases. Reader vectors in
 `tests/fixtures/stats/journal_reader_vectors.json` pin last-answer order
 (instant, then path, then line — including when string order and instant
