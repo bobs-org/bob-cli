@@ -122,13 +122,16 @@ Six configurable kinds share the common `label`, `unit`, `direction`, `color`,
   `#ref`/`^ref`, then task); `in:` matches note paths, basenames, or parent
   ancestry. The canonical daily note's `^gtd` row is always excluded.
 - `checklist`: chores matched by all `tags` (exact case-insensitive tokens)
-  plus an optional normalized `match` description substring. Chore identity
-  strips inline fields, tags, and block IDs, collapses whitespace, and
-  lowercases. An instance is outstanding on
-  [`scheduled` else `created`, `completion`]; `measure: ratio` (default)
-  reports met/due in basis points with pooled `num`/`den`, `count` reports
-  chores met, `bool` reports whether every due chore was met. Nothing due is
-  `null`/`missing`, never zero.
+  plus an optional normalized `match` description substring, read from any
+  indexed note (including archive rows mapped to their source residence).
+  Recurring instances count. Chore identity strips inline fields, tags, and
+  block IDs, collapses whitespace, and lowercases. An instance is outstanding
+  on [`min(scheduled else created, completion)`, `completion`] so an early
+  completion is met on its completion day. `measure: ratio` (default) reports
+  met/due in basis points with pooled `num`/`den`, `count` reports chores
+  met, `bool` reports whether every due chore was met. Nothing due is
+  `null`/`missing`, never zero. A reopened row with a stale `[completion::]`
+  is outstanding.
 - `field`: one typed daily value from the day's canonical daily note.
   `field` names the key; `source` (default `either`) picks YAML frontmatter,
   `key:: value` body lines, or frontmatter-first with inline fallback only
@@ -176,16 +179,37 @@ stats:
   hide: []            # suppresses lists and default selection, never evaluation
   since: 2026-06-01   # optional global floor for inferred tracking starts
   metrics:
-    sase_time:        # a custom pomodoro metric
+    sase_time:        # pomodoro
       label: SASE time
       kind: pomodoro
       measure: minutes
       themes: [SASE]
-    ref_done:         # note task_kind, not kind: the kind key is taken
+    ref_done:         # tasks — note task_kind, not kind
       label: Ref done
       kind: tasks
       event: done
       task_kind: ref
+    habit_count:      # checklist
+      label: Habit count
+      kind: checklist
+      tags: [gtd, pre]
+      measure: count
+    energy:           # field
+      label: Energy
+      kind: field
+      field: energy
+      source: either
+      unit: count
+    all_reviewed:     # journal
+      label: All reviewed
+      kind: journal
+      select: reviewed
+      tiers: all
+    done_and_dropped: # formula
+      label: Done and dropped
+      kind: formula
+      expr: done + dropped
+      unit: signed
 ```
 
 **Defaults.** Missing config file, absent `stats:` block, and unknown keys
@@ -208,8 +232,9 @@ definitions (plus downstream dependents) with local warnings.
 
 - Unknown overview/hide names produce warnings, not errors.
 - Unknown explicit metric IDs in a request are usage errors.
-- Incompatible `unit` values for a kind fall back to the kind default with a
-  warning (`signed` is accepted for formulas, e.g. `net`).
+- Incompatible `unit` values for a kind drop that entry with a warning
+  (`signed` is accepted for formulas, e.g. `net`; `unit: ratio` is rejected
+  for formulas because they have no num/den). There is no unit fallback.
 - Missing required fields (`label`, `kind`, task `event`, field `field`,
   formula `expr`, journal `select`) invalidate that metric entry only.
 
@@ -228,6 +253,9 @@ percentage, or delta — the report carries them all.
 - `missing`: no value and no history claim (no daily note, no matching
   instance, a journal gap, an invalid field).
 - `not_tracked`: before tracking began. Never a silent zero.
+
+Quality precedence is `ok` < `partial` < `missing` < `not_tracked`: combining
+inputs (formulas, grouped buckets) takes the worst.
 
 **Since.** Dates before the effective start are `not_tracked`. An explicit
 metric `since` wins; otherwise the start is inferred from the earliest
@@ -254,7 +282,13 @@ invalid, journal metrics report a `journal_limitation` instead.
 `closed_without_date`, and `missing_created` when nonzero — every affected
 task counts once per limitation, never once per metric or day) and
 `health.journal` (tracking start, malformed-line count, and per-host event
-counts with the latest timestamp and day).
+counts with the latest timestamp and day). `invalid_dates` counts a task
+when created, done, or cancelled is malformed or future, or when scheduled
+is malformed. A future `scheduled` date is ordinary planning data and does
+not count. Daily-note field extraction skips task lines and ordered-list
+task lines (`1. [ ] …`) so task fields never leak in as daily fields; quoted
+lines are skipped the same way. YAML null frontmatter (`energy:`) is absent,
+never the string `"null"`.
 
 ## Ranges, grouping, summaries, display
 
@@ -274,31 +308,45 @@ month beyond; weeks start Monday (ISO year boundaries included) and months
 are calendar months. Edge-clipped buckets carry `partial: true`. Count,
 minutes, and signed values sum; ratios pool `num`/`den` (periods never
 average daily percentages); bools count met days as `N of M`, where M is
-days with data. All-null buckets stay null.
+days with data. All-null buckets stay null. Week and month grouping keep
+today as a separate final provisional point (date = end = today,
+`rolling_median` null) whenever the window includes today; it is never
+merged into a bucket.
 
 **Summaries** always use raw complete daily values: the numeric headline is
-the daily median (`/day` suffix), bool is met days over days with data, and
-ratios pool across days. Totals, means, linearly interpolated `p25`/`p75`
-(index `(n-1)*p`, half-away rounding), `days_with_data`, `days_met`, the
-prior headline, and a delta round it out. Parts summaries rank dimensions by
-total (top five plus `other`) with preformatted shares. Rolling medians span
-7 day points, 4 week buckets, or 3 month buckets, need half the window in
-real observations, and stay `null` for today.
+the daily median (`/day` suffix), bool is met days over days with data
+(`–` when that is 0 of 0), and ratios pool across days. Totals, means,
+linearly interpolated `p25`/`p75` (index `(n-1)*p`, half-away rounding),
+`days_with_data`, `days_met`, the prior headline, and a delta round it out.
+Parts summaries rank dimensions by total; only `note` and `theme` collapse
+to top five plus `other`. Rolling medians span 7 day points, 4 week buckets,
+or 3 month buckets, with a 6-day / 3-week / 2-month lead-in so the first
+displayed point can fill, need half the window in real observations, and
+stay `null` for today.
 
 **Display.** Minutes render `4h 05m` / `45m` / `0m`, counts plain, signed
 values `−6` / `+9` / `0`, bools `met` / `missed`, ratios whole percentages,
-null `–`. Deltas read `≈ same` within ±1%, multipliers at ≥2× or ≤0.5×,
-`new` against an empty prior, percentage points for ratios, days for bools;
-`net` instead reads shrinking/growing/flat by total sign. Every delta names
-the prior period in words.
+null `–`. Deltas read `≈ same` within ±1% (and when a ratio difference
+rounds to 0 pts), multipliers at ≥2× or ≤0.5×, `new` against a zero prior
+(sign −1 when the current value is negative), `–` against a null prior,
+`▼ 100%` for a drop to zero, percentage points for ratios, days for bools;
+sign-crossing uses a raw amount. `net` instead reads shrinking/growing/flat
+by total sign. Every delta names the prior period in words. Parts summary
+values use minutes formatting only when the metric unit is minutes.
+
+`all` with no history uses the same end convention as presets (end =
+yesterday, zero days) and still includes today as provisional.
 
 ## Schema-1 contract
 
 Reports serialize with `ok: true`, `schema_version: 1`, ISO dates, the range
 (with prior metadata), per-metric definitions/summaries/points/parts/warnings,
 health, and global warnings. Ratio points add `num`/`den`, grouped points
-add `partial`, and empty maps are omitted — no consumer must handle an
-absent shape beyond those documented optionals:
+add `partial`, and empty maps (`parts`, `parts_summary`) are omitted.
+`definition`, `limits`, `parameters`, and `total` are always present (total
+may be JSON `null`). Optional fields that appear when present: `since`,
+`reason`, `prior`, `delta`, `suffix`, `stat`, `journal.since`, and
+`missing_created`.
 
 ```json
 {
@@ -316,22 +364,25 @@ absent shape beyond those documented optionals:
       "id": "habits", "label": "Habits", "kind": "checklist",
       "unit": "ratio", "direction": "up", "color": "green",
       "source": "derived", "origin": "builtin", "since": "2026-10-09",
+      "definition": "#gtd #pre checklist chores met on D divided by chores due on D.",
+      "limits": ["Renaming a chore changes its identity."],
+      "parameters": {"measure": "ratio", "tags": ["gtd", "pre"]},
       "summary": {
-        "headline": {"value": 5000, "display": "50%", "stat": "pooled"},
-        "mean": 5000, "p25": 2500, "p75": 7500,
+        "headline": {"value": 2500, "display": "25%", "stat": "pooled"},
+        "total": null, "mean": 2500, "p25": 1250, "p75": 3750,
         "days_with_data": 2, "days_met": null
       },
       "points": [
         {"date": "2026-10-09", "end": "2026-10-09", "value": 0,
          "display": "0%", "quality": "ok", "provisional": false,
-         "rolling_median": null, "num": 0, "den": 1,
-         "parts": {"missed": {"meditate": 1}}}
+         "rolling_median": null, "num": 0, "den": 2,
+         "parts": {"missed": {"journal": 1, "meditate": 1}}}
       ],
-      "prior_points": [], "parts_summary": {}, "warnings": []
+      "prior_points": [], "warnings": []
     }
   ],
-  "health": {"journal": {"since": "2026-10-08", "malformed_lines": 0, "hosts": []},
-             "tasks": {"invalid_dates": 2, "closed_without_date": 0, "missing_created": 1}},
+  "health": {"journal": {"since": "2026-10-08", "malformed_lines": 1, "hosts": []},
+             "tasks": {"invalid_dates": 1, "closed_without_date": 0, "missing_created": 1}},
   "warnings": []
 }
 ```
@@ -356,12 +407,12 @@ field in `src/native/stats/compute.rs`. Legend: plain numbers are `ok`;
 | --- | --- | --- | --- | --- | --- | --- |
 | M1 | worked | U | 32 | 0 | 10·prov | Odd 7m composite splits 4/3; empty section is a real zero |
 | M2 | reviewed | 0 | G | 2, last-wins | 1·prov | Pre-only day is a real zero; duplicate keys count once |
-| M3 | done | U | 5, ref 1 | 3 | 1·prov | `^gtd`, recurring, and reopened rows never count; archive maps to source |
-| M4 | created | 2 | 5 | 3 | 1·prov | Archived creation surfaces on Oct 7 in the prior window |
-| M5 | net | U | U | −1 shrinking | 0·prov | Nulls stay null before the latest dependency start |
-| M6 | review_closed | U | met | met | M·prov | Nothing due reads missing, never missed |
-| M7 | dropped | U | U | 1 | 0·prov | Only `[!]` CANCELLED with a cancelled date counts |
-| M8 | habits | U | 0/1 missed | 1/1 met | 0/1·prov | Late completion; ratios pool (50% headline, never averaged) |
+| M3 | done | U | 5, ref 1 | 4, prj 1 | 1·prov | `^gtd`, recurring, and reopened rows never count; archive maps to source |
+| M4 | created | 2 | 5 | 5 | 1·prov | Archived creation surfaces on Oct 7; `^prj` and `[-]` add Oct 10 |
+| M5 | net | U | U | −1 shrinking | 0·prov | Nulls stay null before the latest dependency start; 5−4−2 |
+| M6 | review_closed | U | met | met | missed·prov | Today's POST TODO in `gtd_daily.md` is due and missed |
+| M7 | dropped | U | U | 2 | 0·prov | `[!]` and `[-]` CANCELLED rows with cancelled dates |
+| M8 | habits | U | 0/2 missed | 1/2 met | 0/2·prov | Skipped Journal, late Meditate, deferred Stretch; ratios pool 25% |
 | M9 | keep_rate | M, no denom | G | 1/2 → 50% | 1/1·prov | Keep share with pooled basis points |
 | M10 | review_time | U | 29 | 0 | 0·prov | GTD-only filter; SASE-only today scores zero, not missing |
 | M11 | sessions | U | 2 | 0 | 1·prov | Count mode counts rows once; parts still attribute GTD |
@@ -370,29 +421,28 @@ field in `src/native/stats/compute.rs`. Legend: plain numbers are `ok`;
 | M14 | habit_count (custom checklist) | U | 0 | 1 | 0·prov | Count measure returns chores met |
 | M15 | energy (custom field) | 3 frontmatter | 5 inline | M absent | M·prov | `either` source precedence and fallback |
 | M16 | all_reviewed (custom journal) | 1, pre tier | G | 2 | 1·prov | `tiers: all` sees PRE/POST answers; gaps apply to customs too |
-| M17 | done_and_dropped (custom formula) | U | U | +4 | +1·prov | Signed display; dependency-order evaluation |
+| M17 | done_and_dropped (custom formula) | U | U | +6 | +1·prov | Signed display; dependency-order evaluation |
 
 Fixture edge coverage beyond the table: the malformed `2026-02-30` created
-date and the future scheduled date each count once in `health.tasks`
-(`invalid_dates: 2`); the undated open task counts once as `missing_created`;
-the reopened open-status row with a completion date leaves Done; repeated
-`compute` calls return byte-identical JSON without touching vault or config;
-an independent `[t:: Nm]` text scan sums to the Oct 9 worked total; month
-grouping pools one clipped October bucket (`partial: true`, provisional
-today excluded); the default request reports 4 weeks, six overview metrics,
-and 29 day points.
+date counts once in `health.tasks` (`invalid_dates: 1`); future scheduled
+dates are valid planning data; the undated open task counts once as
+`missing_created`; the reopened open-status row with a completion date
+leaves Done; `gtd_daily.md` plus `done/gtd_daily_done.md` drive checklist
+chores from any note; a second journal host (`hermes`) carries an earlier
+duplicate key and one malformed line; repeated `compute` calls return
+byte-identical JSON without touching vault or config; an independent
+`[t:: Nm]` text scan sums to the Oct 9 worked total; month grouping pools
+one clipped October bucket plus a separate provisional today point; the
+default request reports 4 weeks, six overview metrics, and 29 day points.
 
-## Conformance vectors
-
-- Writer vectors: `tests/fixtures/stats/review_answers.json` (R1–R19) pin
-  the plugin outcome mapping and which recorded events contribute to
-  `reviewed`; navigation tests mirror the same cases.
-- Reader vectors: `tests/fixtures/stats/journal_reader_vectors.json`
-  (duplicate keys, two hosts, out-of-order timestamps and offsets,
-  equal-timestamp ties, malformed and truncated lines, unknown
-  outcomes/tiers, pre/post-only days, keep-then-done, gap days, pre-tracking
-  dates, formula null/cycle/division cases) pin the Rust reader against the
-  same fixture the plugins mirror.
+Writer vectors in `tests/fixtures/stats/review_answers.json` (R1–R19) pin
+the plugin outcome mapping and which recorded events contribute to
+`reviewed`; navigation tests mirror the same cases. Reader vectors in
+`tests/fixtures/stats/journal_reader_vectors.json` pin last-answer order
+(instant, then path, then line — including when string order and instant
+order disagree), duplicate keys, two hosts, malformed and truncated lines,
+unknown outcomes/tiers, pre/post-only days, keep-then-done, gap days, and
+pre-tracking dates.
 
 ## Limitations
 
@@ -404,7 +454,7 @@ and 29 day points.
   checklist instances report a `checklist_limitation`, never invented
   intervals.
 - Grouped points cover complete days only; the provisional today point
-  appears in day grouping but never pools into a week/month bucket.
+  appears as a separate final point and never pools into a week/month bucket.
 - Rolling medians need half a window of real observations, so short windows
   report `null` medians.
 - The `^gtd` exclusion applies to the canonical daily note's own `^gtd` row
@@ -425,11 +475,11 @@ Rejected: stamp counts, productivity scores, tasks per hour, automated
 ## Performance
 
 One vault pass feeds every metric; only `.bob/stats/review/*.jsonl` is read
-besides Markdown. Measured on the live vault (BOB_NOW pinned to
-2026-10-11): ~2.4 s for the full read plus a 7-day two-metric report —
-above the ≤300 ms rollout target, so the CLI phase owns either the budget
-or the optimization. An opt-in parity test
+besides Markdown. Measured in release mode on the live vault (BOB_NOW pinned
+to 2026-10-11): this landing-fixes run recorded 573 ms for the full read
+plus a 7-day report (the land agent recorded 365–378 ms at f9324da). The
+≤300 ms target is rollout/CLI acceptance
+(bob-cli-6l.6 / bob-cli-6l.3). An opt-in parity test
 (`BOB_STATS_REAL_VAULT_PARITY=1` with `BOB_NOW`, vault from `BOB_DIR` or
-`~/bob`) re-checks the sessions total against an independent closed-row
-count on every live run; on 2026-10-11 it also reconciled `done` Oct 10
-exactly (engine 37 = Dataview 45 − 7 recurring − 1 daily `^gtd` row).
+`~/bob`) re-checks sessions, worked, done, created, and dropped against
+independent line-regex oracles on every live run.

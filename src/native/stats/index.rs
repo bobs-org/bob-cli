@@ -23,6 +23,7 @@ pub(crate) struct StatsIndex {
     pub(crate) daily_notes: BTreeMap<NaiveDate, DailyNoteInputs>,
     pub(crate) parent_of: BTreeMap<String, String>,
     pub(crate) journal_events: Vec<IndexedJournalEvent>,
+    pub(crate) note_index: crate::native::vault_links::NoteIndex,
     pub(crate) health: IndexHealth,
 }
 
@@ -178,17 +179,9 @@ impl StatsIndex {
                 let cancelled = dated_value(task.cancelled, now.date());
                 let scheduled = dated_value(task.scheduled, now.date());
 
-                let has_invalid_date =
-                    [&created, &done, &cancelled, &scheduled].into_iter().any(
-                        |date| {
-                            matches!(
-                                date.diagnostic,
-                                DateDiagnostic::Malformed
-                                    | DateDiagnostic::Future
-                            )
-                        },
-                    );
-                if has_invalid_date {
+                if date_counts_as_invalid(
+                    &created, &done, &cancelled, &scheduled,
+                ) {
                     index.health.invalid_dates += 1;
                 }
                 if task.status_type == "DONE" && done.raw.is_none()
@@ -271,6 +264,7 @@ impl StatsIndex {
                 index.parent_of.entry(child).or_insert(parent);
             }
         }
+        index.note_index = note_index;
         index.journal_events = read_journal(vault, &mut index.health.journal)?;
         Ok(index)
     }
@@ -293,6 +287,8 @@ impl StatsIndex {
 }
 
 fn stats_settings_error(error: dataview::DataviewError) -> StatsError {
+    // Match `bob ready` (`freshness/scan.rs`): settings read and parse
+    // failures are vault I/O (exit 1), with Display-formatted messages.
     match error {
         dataview::DataviewError::TasksSettingsRead { path, error } => {
             StatsError::io(format!(
@@ -301,12 +297,12 @@ fn stats_settings_error(error: dataview::DataviewError) -> StatsError {
             ))
         }
         dataview::DataviewError::TasksSettingsParse { path, error } => {
-            StatsError::config(format!(
+            StatsError::io(format!(
                 "parse Tasks settings {}: {error}",
                 path.display()
             ))
         }
-        other => StatsError::io(format!("read Tasks settings: {other:?}")),
+        other => StatsError::io(format!("read Tasks settings: {other}")),
     }
 }
 
@@ -329,6 +325,9 @@ fn collect_markdown_paths(
         let file_type = entry.file_type().map_err(|error| {
             StatsError::io(format!("inspect {}: {error}", path.display()))
         })?;
+        if file_type.is_symlink() {
+            continue;
+        }
         if file_type.is_dir() {
             let name = entry.file_name();
             if excluded_directory(&name) {
@@ -422,6 +421,24 @@ fn path_string(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
 
+fn date_counts_as_invalid(
+    created: &DatedValue,
+    done: &DatedValue,
+    cancelled: &DatedValue,
+    scheduled: &DatedValue,
+) -> bool {
+    let event_invalid = |date: &DatedValue| {
+        matches!(
+            date.diagnostic,
+            DateDiagnostic::Malformed | DateDiagnostic::Future
+        )
+    };
+    event_invalid(created)
+        || event_invalid(done)
+        || event_invalid(cancelled)
+        || scheduled.diagnostic == DateDiagnostic::Malformed
+}
+
 fn dated_value(raw: Option<String>, today: NaiveDate) -> DatedValue {
     let Some(raw) = raw else {
         return DatedValue::default();
@@ -439,7 +456,7 @@ fn dated_value(raw: Option<String>, today: NaiveDate) -> DatedValue {
     }
 }
 
-fn canonical_daily_date(relative: &str) -> Option<NaiveDate> {
+pub(crate) fn canonical_daily_date(relative: &str) -> Option<NaiveDate> {
     let mut components = relative.split('/');
     let year = components.next()?;
     let filename = components.next()?;
@@ -548,7 +565,7 @@ fn parse_frontmatter_fields(
 fn yaml_scalar_text(value: &YamlValue) -> Option<String> {
     match value {
         YamlValue::String(value) => Some(value.clone()),
-        YamlValue::Null => Some("null".to_string()),
+        YamlValue::Null => None,
         YamlValue::Number(value) => Some(value.to_string()),
         YamlValue::Bool(value) => Some(value.to_string()),
         YamlValue::Sequence(_) | YamlValue::Mapping(_) => {
@@ -584,11 +601,7 @@ fn parse_inline_fields(lines: &[&str]) -> BTreeMap<String, String> {
             continue;
         }
         let trimmed = line.trim_start();
-        if trimmed
-            .chars()
-            .next()
-            .is_some_and(|first| matches!(first, '-' | '*' | '+' | '>'))
-        {
+        if is_list_or_quote_line(trimmed) {
             continue;
         }
         for captures in BRACKET_FIELD.captures_iter(&line) {
@@ -610,6 +623,21 @@ fn parse_inline_fields(lines: &[&str]) -> BTreeMap<String, String> {
         }
     }
     fields
+}
+
+fn is_list_or_quote_line(trimmed: &str) -> bool {
+    let Some(first) = trimmed.chars().next() else {
+        return false;
+    };
+    if matches!(first, '-' | '*' | '+' | '>') {
+        return true;
+    }
+    if !first.is_ascii_digit() {
+        return false;
+    }
+    let after_digits =
+        trimmed.trim_start_matches(|ch: char| ch.is_ascii_digit());
+    after_digits.starts_with('.')
 }
 
 fn without_html_comments(line: &str, in_comment: &mut bool) -> String {
@@ -684,19 +712,25 @@ fn read_journal(
     let mut events = Vec::new();
     let mut hosts = BTreeMap::<String, HostAccumulator>::new();
     for path in paths {
-        let contents = fs::read_to_string(&path).map_err(|error| {
+        let bytes = fs::read(&path).map_err(|error| {
             StatsError::io(format!("read {}: {error}", path.display()))
         })?;
         let relative = path
             .strip_prefix(vault)
             .map(path_string)
             .unwrap_or_else(|_| path_string(&path));
-        for (line_index, line) in contents.lines().enumerate() {
+        for (line_index, line) in
+            journal_file_lines(&bytes).into_iter().enumerate()
+        {
+            let Ok(line) = line else {
+                health.malformed_lines += 1;
+                continue;
+            };
             if line.trim().is_empty() {
                 continue;
             }
             let Some((event, timestamp)) = parse_journal_line(
-                line,
+                &line,
                 &relative,
                 u32::try_from(line_index + 1).unwrap_or(u32::MAX),
             ) else {
@@ -819,6 +853,38 @@ fn collect_journal_paths(vault: &Path) -> Result<Vec<PathBuf>, StatsError> {
     Ok(paths)
 }
 
+fn journal_file_lines(bytes: &[u8]) -> Vec<Result<String, ()>> {
+    let mut lines = Vec::new();
+    let mut start = 0usize;
+    for (index, byte) in bytes.iter().enumerate() {
+        if *byte != b'\n' {
+            continue;
+        }
+        let mut end = index;
+        if end > start && bytes[end - 1] == b'\r' {
+            end -= 1;
+        }
+        lines.push(
+            std::str::from_utf8(&bytes[start..end])
+                .map(str::to_string)
+                .map_err(|_| ()),
+        );
+        start = index + 1;
+    }
+    if start < bytes.len() {
+        let mut end = bytes.len();
+        if end > start && bytes[end - 1] == b'\r' {
+            end -= 1;
+        }
+        lines.push(
+            std::str::from_utf8(&bytes[start..end])
+                .map(str::to_string)
+                .map_err(|_| ()),
+        );
+    }
+    lines
+}
+
 fn parse_journal_line(
     line: &str,
     path: &str,
@@ -878,7 +944,7 @@ fn is_iso_day(value: &str) -> bool {
 mod tests {
     use std::{
         collections::BTreeMap,
-        fs,
+        fs, io,
         path::Path,
         sync::atomic::{AtomicUsize, Ordering},
     };
@@ -1074,9 +1140,41 @@ mod tests {
             .unwrap();
         assert_eq!(future.created.diagnostic, DateDiagnostic::Future);
         assert_eq!(index.tasks.len(), 5);
+        let non_task = index
+            .tasks
+            .iter()
+            .find(|task| task.description.contains("Non task"))
+            .unwrap();
+        assert_eq!(non_task.status_type, "NON_TASK");
+        // Future created counts; future scheduled on a different task does
+        // not. The malformed created date is the other invalid date.
         assert_eq!(index.health.invalid_dates, 2);
         assert_eq!(index.health.closed_without_date, 2);
         assert_eq!(index.health.missing_created, 2);
+    }
+
+    #[test]
+    fn future_scheduled_dates_are_not_invalid() {
+        let vault = TempDir::new().unwrap();
+        settings(vault.path(), "dataview");
+        write_note(
+            vault.path(),
+            "tasks.md",
+            concat!(
+                "- [ ] #task Deferred [created:: 2026-10-10] ",
+                "[scheduled:: 2026-10-20]\n",
+                "- [ ] #task Bad schedule [created:: 2026-10-10] ",
+                "[scheduled:: 2026-13-01]\n",
+            ),
+        );
+        let index = StatsIndex::read(vault.path(), fixed_now()).unwrap();
+        assert_eq!(index.health.invalid_dates, 1);
+        let deferred = index
+            .tasks
+            .iter()
+            .find(|task| task.description.contains("Deferred"))
+            .unwrap();
+        assert_eq!(deferred.scheduled.diagnostic, DateDiagnostic::Future);
     }
 
     #[test]
@@ -1260,10 +1358,14 @@ mod tests {
             .join(".obsidian/plugins/obsidian-tasks-plugin/data.json");
         fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
         fs::write(settings_path, "{").unwrap();
-        assert!(matches!(
-            StatsIndex::read(malformed.path(), fixed_now()),
-            Err(StatsError::Config { .. })
-        ));
+        let error = StatsIndex::read(malformed.path(), fixed_now())
+            .expect_err("malformed Tasks settings is I/O like bob ready");
+        assert!(matches!(error, StatsError::Io { .. }));
+        assert!(
+            error.message().contains("parse Tasks settings"),
+            "settings error uses Display, got {}",
+            error.message()
+        );
 
         let unreadable = TempDir::new().unwrap();
         let settings_path = unreadable
@@ -1312,5 +1414,160 @@ mod tests {
             StatsIndex::read(&missing, fixed_now()),
             Err(StatsError::Io { .. })
         ));
+    }
+
+    #[test]
+    fn invalid_utf8_journal_lines_are_malformed_not_io() {
+        let vault = TempDir::new().unwrap();
+        settings(vault.path(), "dataview");
+        let directory = vault.path().join(".bob/stats/review");
+        fs::create_dir_all(&directory).unwrap();
+        let mut bytes = Vec::from(
+            r#"{"v":1,"ts":"2026-10-11T09:00:00+00:00","day":"2026-10-11","host":"apollo","kind":"review.answer","tier":"next","outcome":"keep","key":"task#x"}"#,
+        );
+        bytes.push(b'\n');
+        bytes.extend_from_slice(&[0xff, 0xfe, 0xfd]);
+        fs::write(directory.join("2026-10.apollo.jsonl"), bytes).unwrap();
+        let index = StatsIndex::read(vault.path(), fixed_now()).unwrap();
+        assert_eq!(index.journal_events.len(), 1);
+        assert_eq!(index.health.journal.malformed_lines, 1);
+    }
+
+    #[test]
+    fn ordered_list_task_fields_do_not_leak_into_daily_fields() {
+        let vault = TempDir::new().unwrap();
+        settings(vault.path(), "dataview");
+        write_note(
+            vault.path(),
+            "2026/20261011.md",
+            concat!(
+                "energy:: 4\n",
+                "1. [ ] #task Ordered [created:: 2026-10-01]\n",
+                "- [ ] #task Bullet [created:: 2026-10-02]\n",
+            ),
+        );
+        let index = StatsIndex::read(vault.path(), fixed_now()).unwrap();
+        let note = index
+            .daily_notes
+            .get(&NaiveDate::from_ymd_opt(2026, 10, 11).unwrap())
+            .unwrap();
+        assert_eq!(
+            note.inline_fields.get("energy").map(String::as_str),
+            Some("4")
+        );
+        assert!(!note.inline_fields.contains_key("created"));
+    }
+
+    #[test]
+    fn yaml_null_frontmatter_fields_are_absent() {
+        let vault = TempDir::new().unwrap();
+        settings(vault.path(), "dataview");
+        write_note(
+            vault.path(),
+            "2026/20261011.md",
+            "---\nenergy:\nmood: ok\n---\nenergy:: 3\n",
+        );
+        let index = StatsIndex::read(vault.path(), fixed_now()).unwrap();
+        let note = index
+            .daily_notes
+            .get(&NaiveDate::from_ymd_opt(2026, 10, 11).unwrap())
+            .unwrap();
+        assert!(!note.frontmatter_fields.contains_key("energy"));
+        assert_eq!(
+            note.frontmatter_fields.get("mood").map(String::as_str),
+            Some("ok")
+        );
+        assert_eq!(
+            note.inline_fields.get("energy").map(String::as_str),
+            Some("3")
+        );
+    }
+
+    #[test]
+    fn excluded_directories_are_skipped_and_done_is_included() {
+        let vault = TempDir::new().unwrap();
+        settings(vault.path(), "dataview");
+        write_note(
+            vault.path(),
+            ".obsidian/hidden.md",
+            "- [ ] #task Hidden obsidian\n",
+        );
+        write_note(
+            vault.path(),
+            "_conflicts/conflict.md",
+            "- [ ] #task Hidden conflict\n",
+        );
+        write_note(
+            vault.path(),
+            "_generated/gen.md",
+            "- [ ] #task Hidden generated\n",
+        );
+        write_note(
+            vault.path(),
+            "_templates/template.md",
+            "- [ ] #task Hidden template\n",
+        );
+        write_note(
+            vault.path(),
+            "done/tasks_done.md",
+            "- [x] #task Archived [created:: 2026-10-09] [completion:: 2026-10-09]\n",
+        );
+        write_note(vault.path(), "tasks.md", "- [ ] #task Visible\n");
+        let index = StatsIndex::read(vault.path(), fixed_now()).unwrap();
+        let paths: Vec<_> = index
+            .tasks
+            .iter()
+            .map(|task| task.source_path.as_str())
+            .collect();
+        assert!(paths.contains(&"tasks.md"));
+        assert!(
+            paths.contains(&"tasks.md")
+                || paths.iter().any(|path| path.contains("done"))
+        );
+        assert!(index
+            .tasks
+            .iter()
+            .any(|task| task.description.contains("Archived")));
+        assert!(index
+            .tasks
+            .iter()
+            .all(|task| { !task.description.contains("Hidden") }));
+    }
+
+    #[test]
+    fn symlinked_directories_are_not_followed() {
+        let vault = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+        settings(vault.path(), "dataview");
+        write_note(vault.path(), "real/note.md", "- [ ] #task Real\n");
+        write_note(outside.path(), "hidden.md", "- [ ] #task Hidden link\n");
+        std::os::unix::fs::symlink(outside.path(), vault.path().join("linked"))
+            .unwrap();
+        let index = StatsIndex::read(vault.path(), fixed_now()).unwrap();
+        assert!(index
+            .tasks
+            .iter()
+            .any(|task| task.description.contains("Real")));
+        assert!(index
+            .tasks
+            .iter()
+            .all(|task| !task.description.contains("Hidden link")));
+    }
+
+    #[test]
+    fn unreadable_markdown_surfaces_io() {
+        let vault = TempDir::new().unwrap();
+        settings(vault.path(), "dataview");
+        write_note(vault.path(), "tasks.md", "- [ ] #task Visible\n");
+        let error = StatsIndex::read_with(vault.path(), fixed_now(), |path| {
+            if path.ends_with("tasks.md") {
+                Err(io::Error::new(io::ErrorKind::PermissionDenied, "denied"))
+            } else {
+                fs::read_to_string(path)
+            }
+        })
+        .expect_err("unreadable markdown is Io");
+        assert!(matches!(error, StatsError::Io { .. }));
+        assert!(error.message().contains("denied"));
     }
 }

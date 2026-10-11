@@ -1,7 +1,7 @@
 use chrono::NaiveDate;
 
-/// A configured or requested stats window. Resolving this into
-/// complete-day bounds is the series phase.
+/// A configured or requested stats window. [`super::series::resolve_range`]
+/// turns this into complete-day bounds, grouping, and the prior window.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum RangeSpec {
     Days(u32),

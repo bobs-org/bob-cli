@@ -2,7 +2,7 @@
 
 use super::super::env as bob_env;
 use super::*;
-use std::{ffi::OsString, io, path::PathBuf};
+use std::{ffi::OsString, fmt, io, path::PathBuf};
 
 #[derive(Debug)]
 pub(crate) enum DataviewError {
@@ -206,6 +206,68 @@ impl DataviewError {
             Self::ObsidianFailed { exit_code, .. }
             | Self::ObsidianNotRunning { exit_code, .. } => *exit_code,
             _ => 1,
+        }
+    }
+}
+
+impl fmt::Display for DataviewError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::DataviewMissing { message }
+            | Self::DataviewQuery { message }
+            | Self::NativeQuery { message }
+            | Self::TasksQuery { message } => write!(f, "{message}"),
+            Self::MalformedProtocolResponse { reason } => write!(f, "{reason}"),
+            Self::MissingObsidianCommand { command } => {
+                write!(
+                    f,
+                    "Obsidian command not found: {}",
+                    bob_env::os_to_string(command)
+                )
+            }
+            Self::MissingProtocolSentinel { output } => {
+                write!(f, "missing Obsidian protocol response: {output}")
+            }
+            Self::NativeVaultRead { path, error } => {
+                write!(f, "read {}: {error}", path.display())
+            }
+            Self::ObsidianFailed { exit_code, output } => {
+                write!(
+                    f,
+                    "Obsidian CLI failed with exit code {exit_code}: {output}"
+                )
+            }
+            Self::ObsidianNotRunning { exit_code, output } => {
+                write!(
+                    f,
+                    "Obsidian is not running (exit code {exit_code}): {output}"
+                )
+            }
+            Self::ProtocolEngine { code, message } => {
+                write!(f, "{code}: {message}")
+            }
+            Self::QueryRead {
+                path: Some(path),
+                error,
+            } => write!(f, "read {}: {error}", path.display()),
+            Self::QueryRead { path: None, error } => {
+                write!(f, "read query from stdin: {error}")
+            }
+            Self::RunObsidian { command, error } => {
+                write!(f, "run {}: {error}", bob_env::os_to_string(command))
+            }
+            Self::SerializeOutput(error) | Self::SerializeRequest(error) => {
+                write!(f, "{error}")
+            }
+            Self::StrictPaths { warnings } => {
+                write!(f, "strict paths: {}", warnings.join("; "))
+            }
+            Self::TasksSettingsParse { path, error } => {
+                write!(f, "parse Tasks settings {}: {error}", path.display())
+            }
+            Self::TasksSettingsRead { path, error } => {
+                write!(f, "read Tasks settings {}: {error}", path.display())
+            }
         }
     }
 }

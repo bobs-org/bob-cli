@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use chrono::NaiveDate;
@@ -176,7 +177,7 @@ fn parse_id_list(
             path.display()
         )));
     };
-    items
+    let ids = items
         .iter()
         .map(|item| {
             item.as_str()
@@ -190,7 +191,12 @@ fn parse_id_list(
                     ))
                 })
         })
-        .collect()
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut seen = HashSet::new();
+    Ok(ids
+        .into_iter()
+        .filter(|id| seen.insert(id.clone()))
+        .collect())
 }
 
 fn parse_metrics_container(
@@ -211,8 +217,12 @@ fn parse_metrics_container(
     };
     Ok(mapping
         .iter()
-        .filter_map(|(key, entry)| {
-            key.as_str().map(|id| (id.to_string(), entry.clone()))
+        .map(|(key, entry)| {
+            let id = key
+                .as_str()
+                .map(str::to_string)
+                .unwrap_or_else(|| render_scalar(key));
+            (id, entry.clone())
         })
         .collect())
 }
@@ -406,5 +416,31 @@ stats:
 ",
         );
         assert_eq!(config.user_metrics.len(), 3);
+    }
+
+    #[test]
+    fn duplicate_overview_and_hide_names_are_deduped() {
+        let config = parse(
+            "
+stats:
+  overview: [worked, done, worked]
+  hide: [sessions, sessions]
+",
+        );
+        assert_eq!(config.overview, ["worked", "done"]);
+        assert_eq!(config.hide, ["sessions"]);
+    }
+
+    #[test]
+    fn non_string_metric_key_is_stringified() {
+        let config = parse(
+            "
+stats:
+  metrics:
+    2026: { label: Year, kind: formula, expr: 1 }
+",
+        );
+        assert_eq!(config.user_metrics.len(), 1);
+        assert_eq!(config.user_metrics[0].0, "2026");
     }
 }

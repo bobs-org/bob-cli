@@ -180,6 +180,20 @@ impl MetricSpec {
     }
 }
 
+impl MetricDef {
+    fn evaluation_dependencies(&self) -> Vec<&str> {
+        match &self.spec {
+            MetricSpec::Formula { dependencies, .. } => {
+                dependencies.iter().map(String::as_str).collect()
+            }
+            MetricSpec::Journal { .. } if self.id != "review_closed" => {
+                vec!["review_closed"]
+            }
+            _ => Vec::new(),
+        }
+    }
+}
+
 impl MetricUnit {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
@@ -382,6 +396,19 @@ impl MetricRegistry {
                 let mut selected = Vec::new();
                 for id in ids {
                     let Some(def) = self.get(id) else {
+                        if let Some(warning) =
+                            self.warnings.iter().find(|warning| {
+                                warning.metric.as_deref() == Some(id)
+                            })
+                        {
+                            return Err(StatsError::Request {
+                                code: "unknown_metric",
+                                message: format!(
+                                    "unknown metric {id:?}: {}",
+                                    warning.message
+                                ),
+                            });
+                        }
                         return Err(StatsError::unknown_metric(id));
                     };
                     selected.push(def);
@@ -391,7 +418,9 @@ impl MetricRegistry {
         }
     }
 
-    /// Selected metrics plus formula dependencies, in evaluation order.
+    /// Selected metrics plus formula and journal-gate dependencies, in
+    /// evaluation order. Journal metrics pull `review_closed` so gap
+    /// detection evaluates first, even when that gate is hidden.
     pub(crate) fn with_dependencies(
         &self,
         selected: &[&MetricDef],
@@ -404,7 +433,7 @@ impl MetricRegistry {
                 continue;
             }
             if let Some(def) = self.get(id) {
-                for dep in def.spec.dependencies() {
+                for dep in def.evaluation_dependencies() {
                     stack.push(dep);
                 }
             }
@@ -443,6 +472,8 @@ unit: count
 direction: up
 color: violet
 description: "Distinct walk row keys with at least one journaled answer on day D in decision tiers (every tier except pre and post)."
+limits:
+  - Tracking starts at the first recorded answer.
 "##,
     ),
     (
@@ -456,6 +487,11 @@ unit: count
 direction: up
 color: green
 description: "Non-recurring tasks whose status type is DONE and whose completion date is D, excluding the daily-note ^gtd Task Link. Includes #ref / ^ref reading tasks as the ref part."
+limits:
+  - Reopened tasks leave Done.
+  - Deleted tasks disappear from Created.
+  - Recurring rows and the daily-note ^gtd row are excluded.
+  - Missing dates are never imputed.
 "##,
     ),
     (
@@ -469,6 +505,11 @@ unit: count
 direction: neutral
 color: blue
 description: "Non-recurring tasks whose created date is D, any status, same exclusions as Done. Includes #ref / ^ref reading tasks as the ref part."
+limits:
+  - Reopened tasks leave Done.
+  - Deleted tasks disappear from Created.
+  - Recurring rows and the daily-note ^gtd row are excluded.
+  - Missing dates are never imputed.
 "##,
     ),
     (
@@ -495,6 +536,8 @@ unit: bool
 direction: up
 color: violet
 description: "The #gtd #post Morning review checklist chore was completed on D."
+limits:
+  - Renaming a chore changes its identity.
 "##,
     ),
     (
@@ -508,6 +551,11 @@ unit: count
 direction: neutral
 color: gray
 description: "Non-recurring tasks with status type CANCELLED and cancelled date D, same exclusions as Done. Includes #ref / ^ref reading tasks as the ref part."
+limits:
+  - Reopened tasks leave Done.
+  - Deleted tasks disappear from Created.
+  - Recurring rows and the daily-note ^gtd row are excluded.
+  - Missing dates are never imputed.
 "##,
     ),
     (
@@ -521,6 +569,8 @@ unit: ratio
 direction: up
 color: green
 description: "#gtd #pre checklist chores met on D divided by chores due on D."
+limits:
+  - Renaming a chore changes its identity.
 "##,
     ),
     (
@@ -534,6 +584,8 @@ unit: ratio
 direction: neutral
 color: violet
 description: "Among PENDING and NEXT rows answered on D (last answer per key), the share whose answer was keep."
+limits:
+  - Tracking starts at the first recorded answer.
 "##,
     ),
     (
@@ -686,7 +738,7 @@ fn invalidate_formulas(
                 drop.push((
                     id.clone(),
                     format!(
-                        "stats.metrics.{id}.expr in {} references unknown metric {missing}",
+                        "stats.metrics.{id}.expr in {} references unknown or invalid metric {missing}",
                         path.display()
                     ),
                 ));
@@ -769,7 +821,7 @@ fn evaluation_order(
     let mut indegree: BTreeMap<&str, usize> =
         by_id.keys().map(|id| (id.as_str(), 0usize)).collect();
     for def in by_id.values() {
-        for dep in def.spec.dependencies() {
+        for dep in def.evaluation_dependencies() {
             if by_id.contains_key(dep) {
                 *indegree.entry(def.id.as_str()).or_insert(0) += 1;
             }
@@ -789,7 +841,7 @@ fn evaluation_order(
         remaining.remove(id);
         ordered.push(id.to_string());
         for other in by_id.values() {
-            if other.spec.dependencies().iter().any(|dep| dep == id)
+            if other.evaluation_dependencies().contains(&id)
                 && let Some(value) = indegree.get_mut(other.id.as_str())
             {
                 *value = value.saturating_sub(1);
@@ -838,7 +890,7 @@ fn parse_metric(
                 path.display(),
                 spec.kind_name()
             ));
-            default_unit(&spec)
+            unit
         }
         Some(unit) => unit,
         None => default_unit(&spec),
@@ -1273,7 +1325,7 @@ fn unit_compatible(spec: &MetricSpec, unit: MetricUnit) -> bool {
                 MetricUnit::Count | MetricUnit::Minutes | MetricUnit::Bool
             )
         }
-        MetricSpec::Formula { .. } => true,
+        MetricSpec::Formula { .. } => unit != MetricUnit::Ratio,
         MetricSpec::Journal {
             select: JournalSelect::Reviewed,
             ..
@@ -1532,6 +1584,7 @@ fn metric_warning(id: &str, message: String) -> StatsWarning {
 mod tests {
     use super::*;
     use crate::native::config::parse_stats_config;
+    use crate::native::stats::request::MetricSelection;
     use std::path::Path;
 
     fn registry(text: &str) -> MetricRegistry {
@@ -1575,6 +1628,88 @@ mod tests {
             assert!(!def.source.as_str().is_empty());
             assert_eq!(def.origin.as_str(), "builtin");
         }
+
+        let table = [
+            (
+                "worked",
+                MetricUnit::Minutes,
+                Direction::Up,
+                PaletteSlot::Orange,
+            ),
+            (
+                "reviewed",
+                MetricUnit::Count,
+                Direction::Up,
+                PaletteSlot::Violet,
+            ),
+            ("done", MetricUnit::Count, Direction::Up, PaletteSlot::Green),
+            (
+                "created",
+                MetricUnit::Count,
+                Direction::Neutral,
+                PaletteSlot::Blue,
+            ),
+            (
+                "net",
+                MetricUnit::Signed,
+                Direction::Down,
+                PaletteSlot::Gray,
+            ),
+            (
+                "review_closed",
+                MetricUnit::Bool,
+                Direction::Up,
+                PaletteSlot::Violet,
+            ),
+            (
+                "dropped",
+                MetricUnit::Count,
+                Direction::Neutral,
+                PaletteSlot::Gray,
+            ),
+            (
+                "habits",
+                MetricUnit::Ratio,
+                Direction::Up,
+                PaletteSlot::Green,
+            ),
+            (
+                "keep_rate",
+                MetricUnit::Ratio,
+                Direction::Neutral,
+                PaletteSlot::Violet,
+            ),
+            (
+                "review_time",
+                MetricUnit::Minutes,
+                Direction::Neutral,
+                PaletteSlot::Orange,
+            ),
+            (
+                "sessions",
+                MetricUnit::Count,
+                Direction::Neutral,
+                PaletteSlot::Orange,
+            ),
+        ];
+        for (id, unit, direction, color) in table {
+            let def = registry.get(id).unwrap();
+            assert_eq!(def.unit, unit, "{id} unit");
+            assert_eq!(def.direction, direction, "{id} direction");
+            assert_eq!(def.color, color, "{id} color");
+        }
+        assert!(
+            registry
+                .evaluation_order
+                .iter()
+                .position(|id| id == "review_closed")
+                .unwrap()
+                < registry
+                    .evaluation_order
+                    .iter()
+                    .position(|id| id == "reviewed")
+                    .unwrap()
+        );
 
         let worked = registry.get("worked").unwrap();
         assert_eq!(worked.unit, MetricUnit::Minutes);
@@ -1791,9 +1926,9 @@ stats:
             .iter()
             .map(|warning| warning.message.as_str())
             .collect();
-        assert!(messages
-            .iter()
-            .any(|message| message.contains("unknown metric missing")));
+        assert!(messages.iter().any(
+            |message| message.contains("unknown or invalid metric missing")
+        ));
         assert!(messages
             .iter()
             .any(|message| message.contains("dependency cycle")));
@@ -1871,5 +2006,88 @@ stats:
         assert!(registry.get("net").is_none());
         assert!(registry.get("created").is_some());
         assert!(registry.get("done").is_some());
+    }
+
+    #[test]
+    fn rejects_bad_task_kind_hex_color_and_formula_ratio_unit() {
+        let registry = registry(
+            "
+stats:
+  metrics:
+    books:
+      label: Books
+      kind: tasks
+      event: done
+      task_kind: book
+    painted:
+      label: Painted
+      kind: pomodoro
+      color: '#ff00aa'
+    ratioed:
+      label: Ratioed
+      kind: formula
+      expr: 1 + 1
+      unit: ratio
+",
+        );
+        assert!(registry.get("books").is_none());
+        assert!(registry.get("painted").is_none());
+        assert!(registry.get("ratioed").is_none());
+        let messages: Vec<_> = registry
+            .warnings
+            .iter()
+            .map(|warning| warning.message.as_str())
+            .collect();
+        assert!(messages.iter().any(|message| {
+            message.contains("stats.metrics.books.task_kind")
+                && message.contains("task, prj, or ref")
+        }));
+        assert!(messages.iter().any(|message| {
+            message.contains("stats.metrics.painted.color")
+                && message.contains("orange, violet, green, blue, or gray")
+        }));
+        assert!(messages.iter().any(|message| {
+            message.contains("stats.metrics.ratioed.unit")
+                && message.contains("incompatible with kind formula")
+        }));
+    }
+
+    #[test]
+    fn non_string_metric_key_is_an_invalid_id() {
+        let registry = registry(
+            "
+stats:
+  metrics:
+    2026:
+      label: Year
+      kind: formula
+      expr: 1
+",
+        );
+        assert!(registry.get("2026").is_none());
+        assert!(registry.warnings.iter().any(|warning| {
+            warning.metric.as_deref() == Some("2026")
+                && warning
+                    .message
+                    .contains("must be a lowercase id matching [a-z][a-z0-9_]*")
+        }));
+    }
+
+    #[test]
+    fn selecting_an_invalidated_metric_includes_the_registry_warning() {
+        let registry = registry(
+            "
+stats:
+  metrics:
+    dropped:
+      label: Broken
+      kind: nope
+",
+        );
+        let error = registry
+            .select(&MetricSelection::Explicit(vec!["dropped".to_string()]))
+            .unwrap_err();
+        assert_eq!(error.code(), "unknown_metric");
+        assert!(error.message().contains("stats.metrics.dropped.kind"));
     }
 }

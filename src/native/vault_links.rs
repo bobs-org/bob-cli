@@ -14,6 +14,12 @@ pub(crate) struct NoteIndex {
     basename_paths: BTreeMap<String, Option<PathBuf>>,
 }
 
+impl Default for NoteIndex {
+    fn default() -> Self {
+        Self::from_paths(std::iter::empty())
+    }
+}
+
 impl NoteIndex {
     pub(crate) fn from_paths<I>(paths: I) -> Self
     where

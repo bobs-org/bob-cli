@@ -1,0 +1,3 @@
+- [x] #task Morning review #gtd #post [created:: 2026-10-09] [completion:: 2026-10-09] [repeat:: every day when done]
+- [x] #task Morning review #gtd #post [created:: 2026-10-10] [completion:: 2026-10-10] [repeat:: every day when done]
+- [x] #task Meditate #gtd #pre [created:: 2026-10-09] [scheduled:: 2026-10-09] [completion:: 2026-10-10] [repeat:: every day when done]

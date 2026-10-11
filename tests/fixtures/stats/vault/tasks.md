@@ -4,3 +4,5 @@
 - [x] #task Weekly review [created:: 2026-10-09] [completion:: 2026-10-09] [repeat:: every week]
 - [ ] #task Undated idea
 - [ ] #task Future plan [scheduled:: 2026-10-20] [created:: 2026-10-10]
+- [x] #task Project win [created:: 2026-10-10] [completion:: 2026-10-10] ^prj
+- [-] #task Dash cancel [created:: 2026-10-10] [cancelled:: 2026-10-10]

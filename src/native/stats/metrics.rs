@@ -4,13 +4,13 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use chrono::{Datelike, NaiveDate};
+use chrono::NaiveDate;
 use regex::Regex;
 
 use super::{
     index::{
-        DailyNoteInputs, DateDiagnostic, DatedValue, IndexedTask, StatsIndex,
-        TaskKindPart,
+        canonical_daily_date, DailyNoteInputs, DateDiagnostic, DatedValue,
+        IndexedTask, StatsIndex, TaskKindPart,
     },
     registry::{
         ChecklistMeasure, FieldSource, MetricDef, MetricSpec, MetricUnit,
@@ -53,13 +53,16 @@ pub(crate) fn evaluate_metric(
             (since, values, Vec::new())
         }
         MetricSpec::Checklist { .. } => {
-            let result = evaluate_checklist(metric, index, dates, today);
-            (result.since, result.values, result.warnings)
+            let inferred = checklist_since(metric, index, today);
+            let since = effective_since(metric, inferred, global_since);
+            let result = evaluate_checklist(metric, index, dates, today, since);
+            (inferred, result.values, result.warnings)
         }
         MetricSpec::Field { .. } => {
-            let since = field_since(metric, index);
+            let inferred = field_since(metric, index);
+            let since = effective_since(metric, inferred, global_since);
             let values = evaluate_fields(metric, index, dates, today, since);
-            (since, values, Vec::new())
+            (inferred, values, Vec::new())
         }
         MetricSpec::Formula { .. } | MetricSpec::Journal { .. } => {
             return None;
@@ -96,10 +99,22 @@ pub(crate) fn effective_since(
     inferred_since: Option<NaiveDate>,
     global_since: Option<NaiveDate>,
 ) -> Option<NaiveDate> {
-    let metric_since = metric.since.or(inferred_since);
-    global_since
-        .map(|floor| metric_since.map_or(floor, |value| value.max(floor)))
-        .or(metric_since)
+    let start = metric.since.or(inferred_since)?;
+    Some(global_since.map_or(start, |floor| start.max(floor)))
+}
+
+/// Explicit metric since, else the global floor. Used by literal-only
+/// formulas, which have no inferred start to floor against.
+pub(crate) fn explicit_or_global_since(
+    metric: &MetricDef,
+    global_since: Option<NaiveDate>,
+) -> Option<NaiveDate> {
+    match (metric.since, global_since) {
+        (Some(start), Some(floor)) => Some(start.max(floor)),
+        (Some(start), None) => Some(start),
+        (None, Some(floor)) => Some(floor),
+        (None, None) => None,
+    }
 }
 
 fn pomodoro_since(index: &StatsIndex) -> Option<NaiveDate> {
@@ -459,32 +474,17 @@ fn task_matches(
     let ancestors = index.parent_ancestors(&task.source_path);
     paths.extend(ancestors.iter().map(String::as_str));
     in_notes.iter().any(|target| {
-        paths.iter().any(|path| note_target_matches(target, path))
+        paths
+            .iter()
+            .any(|path| note_target_matches(index, target, path))
     })
 }
 
 fn is_daily_gtd_task(task: &IndexedTask) -> bool {
-    if !task
-        .block_id
+    task.block_id
         .as_deref()
         .is_some_and(|id| id.eq_ignore_ascii_case("gtd"))
-    {
-        return false;
-    }
-    let mut parts = task.source_path.split('/');
-    let (Some(year), Some(filename), None) =
-        (parts.next(), parts.next(), parts.next())
-    else {
-        return false;
-    };
-    if filename.len() != 11 || !filename.ends_with(".md") {
-        return false;
-    }
-    let Ok(expected_year) = year.parse::<i32>() else {
-        return false;
-    };
-    NaiveDate::parse_from_str(&filename[..8], "%Y%m%d")
-        .is_ok_and(|date| date.year() == expected_year)
+        && canonical_daily_date(&task.source_path).is_some()
 }
 
 fn kind_matches(filter: TaskKindFilter, kind: TaskKindPart) -> bool {
@@ -496,7 +496,7 @@ fn kind_matches(filter: TaskKindFilter, kind: TaskKindPart) -> bool {
     )
 }
 
-fn note_target_matches(target: &str, path: &str) -> bool {
+fn note_target_matches(index: &StatsIndex, target: &str, path: &str) -> bool {
     let normalize = |value: &str| {
         let value = value.trim();
         let value = value
@@ -510,8 +510,17 @@ fn note_target_matches(target: &str, path: &str) -> bool {
     };
     let target = normalize(target);
     let path_normalized = normalize(path);
-    target == path_normalized
-        || target.rsplit('/').next() == path_normalized.rsplit('/').next()
+    if target == path_normalized {
+        return true;
+    }
+    if target.contains('/') {
+        let resolved = index
+            .note_index
+            .resolve(None, &target)
+            .map(|resolved| normalize(&resolved.to_string_lossy()));
+        return resolved.as_deref() == Some(path_normalized.as_str());
+    }
+    target.rsplit('/').next() == path_normalized.rsplit('/').next()
 }
 
 struct ChecklistResult {
@@ -523,8 +532,21 @@ struct ChecklistResult {
 #[derive(Debug)]
 struct ChecklistInstance {
     chore: String,
-    start: NaiveDate,
+    interval_start: NaiveDate,
     completion: Option<NaiveDate>,
+}
+
+fn checklist_since(
+    metric: &MetricDef,
+    index: &StatsIndex,
+    today: NaiveDate,
+) -> Option<NaiveDate> {
+    collect_checklist_instances(metric, index)
+        .0
+        .into_iter()
+        .map(|instance| instance.interval_start)
+        .filter(|date| *date <= today)
+        .min()
 }
 
 fn evaluate_checklist(
@@ -532,99 +554,25 @@ fn evaluate_checklist(
     index: &StatsIndex,
     dates: &[NaiveDate],
     today: NaiveDate,
+    since: Option<NaiveDate>,
 ) -> ChecklistResult {
-    let MetricSpec::Checklist {
-        tags,
-        match_text,
-        measure,
-    } = &metric.spec
-    else {
+    let MetricSpec::Checklist { measure, .. } = &metric.spec else {
         return ChecklistResult {
             since: None,
             values: Vec::new(),
             warnings: Vec::new(),
         };
     };
-    let match_text = match_text.as_deref().map(normalize_text);
-    let mut instances = Vec::new();
-    let mut undatable = 0usize;
-    let mut cancelled = 0usize;
-    for task in index
-        .tasks
-        .iter()
-        .filter(|task| is_canonical_daily(&task.source_path))
-    {
-        let task_tags = task
-            .tags
-            .iter()
-            .map(|tag| tag.trim_start_matches('#'))
-            .collect::<Vec<_>>();
-        if !tags.iter().all(|tag| {
-            task_tags.iter().any(|task_tag| {
-                task_tag
-                    .eq_ignore_ascii_case(tag.trim().trim_start_matches('#'))
-            })
-        }) {
-            continue;
-        }
-        let chore = chore_identity(task);
-        if match_text
-            .as_deref()
-            .is_some_and(|needle| !chore.contains(needle))
-        {
-            continue;
-        }
-        if task.status_type == "CANCELLED" {
-            cancelled += 1;
-            continue;
-        }
-        let start_field = if task.scheduled.raw.is_some() {
-            &task.scheduled
-        } else {
-            &task.created
-        };
-        let Some(start) = start_field.date else {
-            undatable += 1;
-            continue;
-        };
-        if start_field.diagnostic == DateDiagnostic::Malformed {
-            undatable += 1;
-            continue;
-        }
-        let completion = match task.done.date {
-            Some(date) if task.done.diagnostic == DateDiagnostic::Ok => {
-                Some(date)
-            }
-            _ if task.status_type == "DONE" => {
-                undatable += 1;
-                continue;
-            }
-            _ => None,
-        };
-        if completion.is_some_and(|completion| completion < start) {
-            undatable += 1;
-            continue;
-        }
-        instances.push(ChecklistInstance {
-            chore,
-            start,
-            completion,
-        });
-    }
-
-    let since = instances
-        .iter()
-        .map(|instance| instance.start)
-        .filter(|date| *date <= today)
-        .min();
+    let (instances, undatable, cancelled) =
+        collect_checklist_instances(metric, index);
     let mut due_by_day = BTreeMap::<NaiveDate, BTreeSet<String>>::new();
     let mut met_by_day = BTreeMap::<NaiveDate, BTreeSet<String>>::new();
     for instance in &instances {
-        if instance.start > today {
+        if instance.interval_start > today {
             continue;
         }
         for date in dates.iter().copied().filter(|date| {
-            *date >= instance.start
+            *date >= instance.interval_start
                 && *date <= today
                 && instance
                     .completion
@@ -748,19 +696,79 @@ fn evaluate_checklist(
     }
 }
 
-fn is_canonical_daily(path: &str) -> bool {
-    let mut parts = path.split('/');
-    let (Some(year), Some(filename), None) =
-        (parts.next(), parts.next(), parts.next())
+fn collect_checklist_instances(
+    metric: &MetricDef,
+    index: &StatsIndex,
+) -> (Vec<ChecklistInstance>, usize, usize) {
+    let MetricSpec::Checklist {
+        tags, match_text, ..
+    } = &metric.spec
     else {
-        return false;
+        return (Vec::new(), 0, 0);
     };
-    filename.len() == 11
-        && filename.ends_with(".md")
-        && year.parse::<i32>().is_ok_and(|expected_year| {
-            NaiveDate::parse_from_str(&filename[..8], "%Y%m%d")
-                .is_ok_and(|date| date.year() == expected_year)
-        })
+    let match_text = match_text.as_deref().map(normalize_text);
+    let mut instances = Vec::new();
+    let mut undatable = 0usize;
+    let mut cancelled = 0usize;
+    for task in &index.tasks {
+        let task_tags = task
+            .tags
+            .iter()
+            .map(|tag| tag.trim_start_matches('#'))
+            .collect::<Vec<_>>();
+        if !tags.iter().all(|tag| {
+            task_tags.iter().any(|task_tag| {
+                task_tag
+                    .eq_ignore_ascii_case(tag.trim().trim_start_matches('#'))
+            })
+        }) {
+            continue;
+        }
+        let chore = chore_identity(task);
+        if match_text
+            .as_deref()
+            .is_some_and(|needle| !chore.contains(needle))
+        {
+            continue;
+        }
+        if task.status_type == "CANCELLED" {
+            cancelled += 1;
+            continue;
+        }
+        let start_field = if task.scheduled.raw.is_some() {
+            &task.scheduled
+        } else {
+            &task.created
+        };
+        let Some(start) = start_field.date else {
+            undatable += 1;
+            continue;
+        };
+        if start_field.diagnostic == DateDiagnostic::Malformed {
+            undatable += 1;
+            continue;
+        }
+        let completion = if task.status_type == "DONE"
+            && task.done.diagnostic == DateDiagnostic::Ok
+        {
+            task.done.date
+        } else if task.status_type == "DONE" {
+            undatable += 1;
+            continue;
+        } else {
+            None
+        };
+        let interval_start = match completion {
+            Some(completion) if completion < start => completion,
+            _ => start,
+        };
+        instances.push(ChecklistInstance {
+            chore,
+            interval_start,
+            completion,
+        });
+    }
+    (instances, undatable, cancelled)
 }
 
 fn chore_identity(task: &IndexedTask) -> String {
@@ -929,20 +937,20 @@ fn parse_minutes(value: &str) -> Option<i64> {
                 .expect("valid duration regex")
         });
     let captures = DURATION.captures(value)?;
-    let hours = captures
-        .get(1)
-        .map(|value| value.as_str().parse::<i64>().ok())
-        .flatten()
-        .unwrap_or(0);
-    let minutes = captures
-        .get(2)
-        .map(|value| value.as_str().parse::<i64>().ok())
-        .flatten()
-        .unwrap_or(0);
-    if captures.get(1).is_none() && captures.get(2).is_none() {
+    let hours_part = captures.get(1);
+    let minutes_part = captures.get(2);
+    if hours_part.is_none() && minutes_part.is_none() {
         return None;
     }
-    if minutes >= 60 {
+    let hours = match hours_part {
+        Some(part) => part.as_str().parse::<i64>().ok()?,
+        None => 0,
+    };
+    let minutes = match minutes_part {
+        Some(part) => part.as_str().parse::<i64>().ok()?,
+        None => 0,
+    };
+    if hours_part.is_some() && minutes >= 60 {
         return None;
     }
     hours.checked_mul(60)?.checked_add(minutes)
@@ -966,6 +974,7 @@ fn unit_name(unit: MetricUnit) -> &'static str {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn daily(
     date: NaiveDate,
     value: Option<i64>,
@@ -1006,6 +1015,7 @@ fn add_dimension_part(
 }
 
 #[cfg(test)]
+#[allow(clippy::field_reassign_with_default)]
 mod tests {
     use std::{collections::BTreeMap, path::Path};
 
@@ -1039,6 +1049,7 @@ mod tests {
         yaml.lines().map(|line| format!("      {line}\n")).collect()
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn task(
         path: &str,
         status: &str,
@@ -1456,5 +1467,381 @@ mod tests {
         assert_eq!(parse_field_value("false", MetricUnit::Bool), Some(0));
         assert_eq!(parse_field_value("2h 05m", MetricUnit::Minutes), Some(125));
         assert_eq!(parse_field_value("2h 90m", MetricUnit::Minutes), None);
+        assert_eq!(parse_minutes("90m"), Some(90));
+        assert_eq!(parse_minutes("1h"), Some(60));
+        assert_eq!(parse_minutes("90"), Some(90));
+        assert_eq!(
+            parse_minutes("9223372036854775808m"),
+            None,
+            "overflow is invalid, never 0"
+        );
+    }
+
+    #[test]
+    fn overnight_pomodoro_range_counts_its_minutes() {
+        let mut index = StatsIndex::default();
+        index.daily_notes.insert(
+            date(10),
+            DailyNoteInputs {
+                path: "2026/20261010.md".to_string(),
+                has_pomodoros_heading: true,
+                closed_pomodoros: vec![super::super::index::PomodoroSession {
+                    name: Some("GTD".to_string()),
+                    recorded_minutes: None,
+                    range_minutes: Some(180),
+                    line: 2,
+                }],
+                ..DailyNoteInputs::default()
+            },
+        );
+        let metric = builtin("worked");
+        let result =
+            evaluate_metric(&metric, &index, &[date(10)], date(11), None)
+                .unwrap();
+        assert_eq!(result.values[0].value, Some(180));
+        assert_eq!(result.values[0].quality, DataQuality::Partial);
+    }
+
+    #[test]
+    fn path_qualified_in_does_not_match_a_same_basename_elsewhere() {
+        use std::path::PathBuf;
+        let mut index = StatsIndex::default();
+        index.note_index = crate::native::vault_links::NoteIndex::from_paths([
+            PathBuf::from("projects/foo.md"),
+            PathBuf::from("archive/foo.md"),
+        ]);
+        index.tasks = vec![
+            task(
+                "projects/foo.md",
+                "DONE",
+                Some("2026-10-10"),
+                Some("2026-10-10"),
+                None,
+                None,
+                "Project work",
+                &[],
+                None,
+                TaskKindPart::Task,
+            ),
+            task(
+                "archive/foo.md",
+                "DONE",
+                Some("2026-10-10"),
+                Some("2026-10-10"),
+                None,
+                None,
+                "Archived twin",
+                &[],
+                None,
+                TaskKindPart::Task,
+            ),
+        ];
+        let qualified = custom_metric(
+            "label: In project\nkind: tasks\nevent: done\nin: [projects/foo]\nunit: count",
+            "in_project",
+        );
+        let result =
+            evaluate_metric(&qualified, &index, &[date(10)], date(11), None)
+                .unwrap();
+        assert_eq!(result.values[0].value, Some(1));
+        assert_eq!(result.values[0].parts["note"]["projects/foo.md"], 1);
+
+        let bare = custom_metric(
+            "label: Bare foo\nkind: tasks\nevent: done\nin: [foo]\nunit: count",
+            "bare_foo",
+        );
+        let result =
+            evaluate_metric(&bare, &index, &[date(10)], date(11), None)
+                .unwrap();
+        assert_eq!(result.values[0].value, Some(2));
+    }
+
+    #[test]
+    fn recurring_modes_and_prj_kind_are_honored() {
+        let mut index = StatsIndex::default();
+        let mut recurring = task(
+            "tasks.md",
+            "DONE",
+            Some("2026-10-10"),
+            Some("2026-10-10"),
+            None,
+            None,
+            "Weekly",
+            &[],
+            None,
+            TaskKindPart::Task,
+        );
+        recurring.recurring = true;
+        index.tasks = vec![
+            recurring,
+            task(
+                "tasks.md",
+                "DONE",
+                Some("2026-10-10"),
+                Some("2026-10-10"),
+                None,
+                None,
+                "One-shot project",
+                &[],
+                Some("prj"),
+                TaskKindPart::Prj,
+            ),
+        ];
+        let only = custom_metric(
+            "label: Recurring only\nkind: tasks\nevent: done\nrecurring: only\nunit: count",
+            "recurring_only",
+        );
+        let include = custom_metric(
+            "label: Recurring include\nkind: tasks\nevent: done\nrecurring: include\nunit: count",
+            "recurring_include",
+        );
+        let prj = custom_metric(
+            "label: Prj done\nkind: tasks\nevent: done\ntask_kind: prj\nunit: count",
+            "prj_done",
+        );
+        assert_eq!(
+            evaluate_metric(&only, &index, &[date(10)], date(11), None)
+                .unwrap()
+                .values[0]
+                .value,
+            Some(1)
+        );
+        assert_eq!(
+            evaluate_metric(&include, &index, &[date(10)], date(11), None)
+                .unwrap()
+                .values[0]
+                .value,
+            Some(2)
+        );
+        let prj_result =
+            evaluate_metric(&prj, &index, &[date(10)], date(11), None).unwrap();
+        assert_eq!(prj_result.values[0].value, Some(1));
+        assert_eq!(prj_result.values[0].parts["kind"]["prj"], 1);
+    }
+
+    #[test]
+    fn checklist_reads_archive_rows_and_requires_done_plus_completion() {
+        let mut index = StatsIndex::default();
+        let mut late = task(
+            "done/gtd_daily_done.md",
+            "DONE",
+            Some("2026-10-09"),
+            Some("2026-10-10"),
+            None,
+            Some("2026-10-09"),
+            "Meditate #gtd #pre",
+            &["gtd", "pre"],
+            None,
+            TaskKindPart::Task,
+        );
+        late.recurring = true;
+        let mut reopened = task(
+            "gtd_daily.md",
+            "TODO",
+            Some("2026-10-10"),
+            Some("2026-10-10"),
+            None,
+            Some("2026-10-10"),
+            "Journal #gtd #pre",
+            &["gtd", "pre"],
+            None,
+            TaskKindPart::Task,
+        );
+        reopened.recurring = true;
+        index.tasks = vec![late, reopened];
+        let metric = builtin("habits");
+        let result = evaluate_metric(
+            &metric,
+            &index,
+            &[date(9), date(10)],
+            date(11),
+            None,
+        )
+        .unwrap();
+        assert_eq!(result.values[0].num, Some(0));
+        assert_eq!(result.values[0].den, Some(1));
+        assert_eq!(result.values[1].num, Some(1));
+        assert_eq!(result.values[1].den, Some(2));
+        assert_eq!(result.values[1].parts["met"]["meditate"], 1);
+        assert_eq!(result.values[1].parts["missed"]["journal"], 1);
+    }
+
+    #[test]
+    fn checklist_early_completion_uses_the_completion_day() {
+        let mut index = StatsIndex::default();
+        index.tasks.push(task(
+            "gtd_daily.md",
+            "DONE",
+            Some("2026-10-10"),
+            Some("2026-10-09"),
+            None,
+            Some("2026-10-10"),
+            "Meditate #gtd #pre",
+            &["gtd", "pre"],
+            None,
+            TaskKindPart::Task,
+        ));
+        let metric = builtin("habits");
+        let result = evaluate_metric(
+            &metric,
+            &index,
+            &[date(9), date(10)],
+            date(11),
+            None,
+        )
+        .unwrap();
+        assert_eq!(result.since, Some(date(9)));
+        assert_eq!(result.values[0].num, Some(1));
+        assert_eq!(result.values[0].den, Some(1));
+        assert_eq!(result.values[1].quality, DataQuality::Missing);
+        assert_eq!(result.values[1].reason.as_deref(), Some("nothing due"));
+    }
+
+    #[test]
+    fn checklist_tag_prefixes_do_not_match() {
+        let mut index = StatsIndex::default();
+        index.tasks = vec![
+            task(
+                "gtd_daily.md",
+                "DONE",
+                Some("2026-10-10"),
+                Some("2026-10-10"),
+                None,
+                None,
+                "Lookalike #gtdx #pre",
+                &["gtdx", "pre"],
+                None,
+                TaskKindPart::Task,
+            ),
+            task(
+                "gtd_daily.md",
+                "DONE",
+                Some("2026-10-10"),
+                Some("2026-10-10"),
+                None,
+                None,
+                "Nested #gtd/pre",
+                &["gtd/pre"],
+                None,
+                TaskKindPart::Task,
+            ),
+        ];
+        let metric = builtin("habits");
+        let result =
+            evaluate_metric(&metric, &index, &[date(10)], date(11), None)
+                .unwrap();
+        assert_eq!(result.since, None);
+        assert_eq!(result.values[0].quality, DataQuality::Missing);
+    }
+
+    #[test]
+    fn explicit_since_earlier_than_first_input_is_tracked() {
+        let mut index = StatsIndex::default();
+        index.tasks.push(task(
+            "gtd_daily.md",
+            "DONE",
+            Some("2026-10-10"),
+            Some("2026-10-10"),
+            None,
+            None,
+            "Meditate #gtd #pre",
+            &["gtd", "pre"],
+            None,
+            TaskKindPart::Task,
+        ));
+        let mut metric = builtin("habits");
+        metric.since = Some(date(9));
+        let result = evaluate_metric(
+            &metric,
+            &index,
+            &[date(8), date(9), date(10)],
+            date(11),
+            None,
+        )
+        .unwrap();
+        assert_eq!(result.since, Some(date(9)));
+        assert_eq!(result.values[0].quality, DataQuality::NotTracked);
+        assert_eq!(result.values[1].quality, DataQuality::Missing);
+        assert_eq!(result.values[1].reason.as_deref(), Some("nothing due"));
+        assert_eq!(result.values[2].num, Some(1));
+    }
+
+    #[test]
+    fn global_since_does_not_fabricate_a_start() {
+        let metric = builtin("done");
+        let result = evaluate_metric(
+            &metric,
+            &StatsIndex::default(),
+            &[date(10)],
+            date(11),
+            Some(date(1)),
+        )
+        .unwrap();
+        assert_eq!(result.since, None);
+        assert_eq!(result.values[0].quality, DataQuality::Missing);
+    }
+
+    #[test]
+    fn non_canonical_daily_gtd_row_is_not_excluded() {
+        let mut index = StatsIndex::default();
+        index.tasks = vec![
+            task(
+                "02026/20261010.md",
+                "DONE",
+                Some("2026-10-10"),
+                Some("2026-10-10"),
+                None,
+                None,
+                "Lookalike gtd",
+                &[],
+                Some("gtd"),
+                TaskKindPart::Task,
+            ),
+            task(
+                "2026/20261010.md",
+                "DONE",
+                Some("2026-10-10"),
+                Some("2026-10-10"),
+                None,
+                None,
+                "Real daily gtd",
+                &[],
+                Some("gtd"),
+                TaskKindPart::Task,
+            ),
+        ];
+        let result = evaluate_metric(
+            &builtin("done"),
+            &index,
+            &[date(10)],
+            date(11),
+            None,
+        )
+        .unwrap();
+        assert_eq!(result.values[0].value, Some(1));
+    }
+
+    #[test]
+    fn field_bracket_values_evaluate_as_minutes() {
+        let mut index = StatsIndex::default();
+        index.daily_notes.insert(
+            date(10),
+            DailyNoteInputs {
+                path: "2026/20261010.md".to_string(),
+                inline_fields: BTreeMap::from([(
+                    "focus".to_string(),
+                    "90m".to_string(),
+                )]),
+                ..DailyNoteInputs::default()
+            },
+        );
+        let metric = custom_metric(
+            "label: Focus\nkind: field\nfield: focus\nsource: inline\nunit: minutes",
+            "focus",
+        );
+        let result =
+            evaluate_metric(&metric, &index, &[date(10)], date(11), None)
+                .unwrap();
+        assert_eq!(result.values[0].value, Some(90));
     }
 }

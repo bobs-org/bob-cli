@@ -8,13 +8,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use chrono::NaiveDate;
 
 use super::{
-    metrics::{effective_since, MetricEvaluation},
+    metrics::{effective_since, explicit_or_global_since, MetricEvaluation},
     registry::MetricDef,
     report::StatsWarning,
     value::{DailyValue, DataQuality},
 };
 
-/// A parsed formula. Evaluation happens in a later phase.
+/// A parsed formula. Evaluation is integer arithmetic over already-evaluated
+/// dependencies plus integer literals.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum FormulaExpr {
     Literal(i64),
@@ -61,8 +62,14 @@ impl FormulaExpr {
     }
 }
 
+const MAX_PARSE_DEPTH: u8 = 64;
+
 pub(crate) fn parse_formula(expr: &str) -> Result<FormulaExpr, String> {
-    let mut parser = Parser { src: expr, pos: 0 };
+    let mut parser = Parser {
+        src: expr,
+        pos: 0,
+        depth: 0,
+    };
     parser.skip_ws();
     if parser.peek().is_none() {
         return Err("must be a non-empty formula".to_string());
@@ -81,6 +88,7 @@ pub(crate) fn parse_formula(expr: &str) -> Result<FormulaExpr, String> {
 struct Parser<'a> {
     src: &'a str,
     pos: usize,
+    depth: u8,
 }
 
 impl<'a> Parser<'a> {
@@ -145,12 +153,29 @@ impl<'a> Parser<'a> {
         Ok(left)
     }
 
+    fn enter_nest(&mut self) -> Result<(), String> {
+        if self.depth >= MAX_PARSE_DEPTH {
+            return Err(
+                "must not nest formulas more than 64 levels deep".to_string()
+            );
+        }
+        self.depth += 1;
+        Ok(())
+    }
+
+    fn exit_nest(&mut self) {
+        self.depth = self.depth.saturating_sub(1);
+    }
+
     fn parse_unary(&mut self) -> Result<FormulaExpr, String> {
         self.skip_ws();
         match self.peek() {
             Some('-' | '\u{2212}') => {
+                self.enter_nest()?;
                 self.bump();
-                Ok(FormulaExpr::UnaryMinus(Box::new(self.parse_unary()?)))
+                let inner = self.parse_unary()?;
+                self.exit_nest();
+                Ok(FormulaExpr::UnaryMinus(Box::new(inner)))
             }
             _ => self.parse_primary(),
         }
@@ -160,13 +185,16 @@ impl<'a> Parser<'a> {
         self.skip_ws();
         match self.peek() {
             Some('(') => {
+                self.enter_nest()?;
                 self.bump();
                 let inner = self.parse_expr()?;
                 self.skip_ws();
                 if self.peek() != Some(')') {
+                    self.exit_nest();
                     return Err("must close every '(' with ')'".to_string());
                 }
                 self.bump();
+                self.exit_nest();
                 Ok(inner)
             }
             Some(ch) if ch.is_ascii_digit() => self.parse_number(),
@@ -225,16 +253,19 @@ enum FormulaFailure {
 /// null inputs plus one `formula_limitation` warning.
 ///
 /// Semantics: a null input propagates null; quality is always the worst
-/// input quality; division rounds half away from zero and `/0` is null.
+/// input quality; division rounds half away from zero and `/0` is null
+/// whose quality is the worse of the input quality and `missing`.
 /// Inferred since is the latest dependency since (every input must be
-/// tracked); a literal-only formula falls back to explicit/global since,
-/// otherwise the requested range start.
+/// tracked); a literal-only formula uses explicit/global since, else the
+/// requested range start passed in by compute — never `dates.first()`,
+/// which is the prior-window start when compare is on.
 pub(crate) fn evaluate_formula(
     metric: &MetricDef,
     evaluations: &BTreeMap<String, MetricEvaluation>,
     dates: &[NaiveDate],
     today: NaiveDate,
     global_since: Option<NaiveDate>,
+    range_start: Option<NaiveDate>,
 ) -> Option<MetricEvaluation> {
     let MetricSpecRef::Formula { ast, dependencies } = metric_spec(metric)
     else {
@@ -245,10 +276,11 @@ pub(crate) fn evaluate_formula(
         .filter_map(|id| evaluations.get(id))
         .filter_map(|evaluation| evaluation.since)
         .max();
-    let mut since = effective_since(metric, inferred_since, global_since);
-    if dependencies.is_empty() && since.is_none() {
-        since = dates.first().copied();
-    }
+    let since = if dependencies.is_empty() {
+        explicit_or_global_since(metric, global_since).or(range_start)
+    } else {
+        effective_since(metric, inferred_since, global_since)
+    };
 
     let mut warnings = Vec::new();
     let missing: Vec<&str> = dependencies
@@ -338,13 +370,13 @@ pub(crate) fn evaluate_formula(
                 ),
                 Err(FormulaFailure::DivisionByZero) => null_value(
                     *date,
-                    quality,
+                    worse_quality(quality, DataQuality::Missing),
                     "division by zero".to_string(),
                     provisional,
                 ),
                 Err(FormulaFailure::Overflow) => null_value(
                     *date,
-                    quality,
+                    worse_quality(quality, DataQuality::Missing),
                     "arithmetic overflow".to_string(),
                     provisional,
                 ),
@@ -637,6 +669,7 @@ mod tests {
             &[date(9), date(10)],
             date(11),
             None,
+            None,
         )
         .unwrap();
         assert_eq!(result.since, Some(date(10)));
@@ -671,6 +704,7 @@ mod tests {
             &[date(10)],
             date(11),
             None,
+            None,
         )
         .unwrap();
         assert_eq!(result.values[0].value, None);
@@ -694,10 +728,17 @@ mod tests {
                 dep_eval(Some(date(9)), &[(10, Some(0), DataQuality::Ok)]),
             ),
         ]);
-        let result =
-            evaluate_formula(&div, &evaluations, &[date(10)], date(11), None)
-                .unwrap();
+        let result = evaluate_formula(
+            &div,
+            &evaluations,
+            &[date(10)],
+            date(11),
+            None,
+            None,
+        )
+        .unwrap();
         assert_eq!(result.values[0].value, None);
+        assert_eq!(result.values[0].quality, DataQuality::Missing);
         assert_eq!(
             result.values[0].reason.as_deref(),
             Some("division by zero")
@@ -750,6 +791,7 @@ mod tests {
                 &[date(10)],
                 date(11),
                 None,
+                None,
             )
             .unwrap();
             assert_eq!(result.values[0].value, None, "{expr}");
@@ -799,6 +841,7 @@ mod tests {
                 &[date(10)],
                 date(11),
                 None,
+                None,
             )
             .unwrap();
             assert_eq!(
@@ -828,6 +871,7 @@ mod tests {
             &[date(8), date(9), date(10)],
             date(11),
             None,
+            None,
         )
         .unwrap();
         assert_eq!(result.since, Some(date(10)));
@@ -843,6 +887,7 @@ mod tests {
             &[date(8), date(9), date(10)],
             date(11),
             None,
+            None,
         )
         .unwrap();
         assert_eq!(result.since, Some(date(9)));
@@ -853,14 +898,16 @@ mod tests {
         let result = evaluate_formula(
             &literal,
             &BTreeMap::new(),
-            &[date(9), date(10)],
+            &[date(8), date(9), date(10)],
             date(11),
             None,
+            Some(date(9)),
         )
         .unwrap();
         assert_eq!(result.since, Some(date(9)));
-        assert_eq!(result.values[0].value, Some(42));
-        assert_eq!(result.values[0].quality, DataQuality::Ok);
+        assert_eq!(result.values[0].quality, DataQuality::NotTracked);
+        assert_eq!(result.values[1].value, Some(42));
+        assert_eq!(result.values[1].quality, DataQuality::Ok);
     }
 
     #[test]
@@ -878,6 +925,7 @@ mod tests {
             &evaluations,
             &[date(10)],
             date(11),
+            None,
             None,
         )
         .unwrap();
@@ -902,7 +950,22 @@ mod tests {
             &[date(10)],
             date(11),
             None,
+            None,
         )
         .is_none());
+    }
+
+    #[test]
+    fn parser_rejects_nesting_deeper_than_sixty_four() {
+        let nested_ok = format!("{}1{}", "(".repeat(64), ")".repeat(64));
+        parse_formula(&nested_ok).expect("64 parens is allowed");
+        let nested_too_deep = format!("{}1{}", "(".repeat(65), ")".repeat(65));
+        let error = parse_formula(&nested_too_deep).expect_err("65 parens");
+        assert!(error.contains("64"), "{error}");
+
+        let unary_ok = format!("{}1", "-".repeat(64));
+        parse_formula(&unary_ok).expect("64 unary minuses is allowed");
+        let unary_too_deep = format!("{}1", "-".repeat(65));
+        parse_formula(&unary_too_deep).expect_err("65 unary minuses");
     }
 }

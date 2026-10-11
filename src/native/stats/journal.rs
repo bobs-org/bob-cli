@@ -52,7 +52,9 @@ pub(crate) fn evaluate_journal(
     let inferred_since = index.health.journal.since;
     let since = effective_since(metric, inferred_since, global_since);
     let closed_days = review_closed_days(evaluations);
-    let days_with_events = days_with_any_event(index);
+    let events_by_day = events_by_day(index);
+    let days_with_events: BTreeSet<NaiveDate> =
+        events_by_day.keys().copied().collect();
 
     let mut warnings = Vec::new();
     if closed_days.is_none() {
@@ -60,11 +62,9 @@ pub(crate) fn evaluate_journal(
             code: "journal_limitation".to_string(),
             metric: Some(metric.id.clone()),
             date: None,
-            message: format!(
-                "review_closed is not available ({}), so journal gaps cannot \
-                 be detected",
-                review_closed_unavailable_reason(evaluations),
-            ),
+            message: "review_closed is not available (its definition is \
+                 invalid or removed), so journal gaps cannot be detected"
+                .to_string(),
         });
     }
 
@@ -72,6 +72,18 @@ pub(crate) fn evaluate_journal(
         .iter()
         .map(|date| {
             let provisional = *date == today;
+            if since.is_none() {
+                return daily_value(
+                    *date,
+                    None,
+                    None,
+                    None,
+                    DataQuality::NotTracked,
+                    Some("no review answers have been recorded".to_string()),
+                    provisional,
+                    BTreeMap::new(),
+                );
+            }
             if since.is_some_and(|start| *date < start) {
                 return daily_value(
                     *date,
@@ -86,7 +98,8 @@ pub(crate) fn evaluate_journal(
             }
             // A known closed review with no journaled event in any tier from
             // any host is a plugin gap, never a silent zero. Days before the
-            // journal started keep not_tracked above instead.
+            // journal started keep not_tracked above instead. Malformed-only
+            // days are gaps: they never enter `journal_events`.
             if closed_days
                 .as_ref()
                 .is_some_and(|closed| closed.contains(date))
@@ -116,7 +129,11 @@ pub(crate) fn evaluate_journal(
                     BTreeMap::new(),
                 );
             }
-            let selection = select_day(index, *select, tiers, *date);
+            let selection = select_day(
+                events_by_day.get(date).into_iter().flatten().copied(),
+                *select,
+                tiers,
+            );
             match select {
                 JournalSelect::Reviewed => {
                     reviewed_value(*date, provisional, &selection)
@@ -151,30 +168,24 @@ fn review_closed_days(
     )
 }
 
-fn review_closed_unavailable_reason(
-    evaluations: &BTreeMap<String, MetricEvaluation>,
-) -> String {
-    if evaluations.contains_key("review_closed") {
-        "it was not evaluated before its journal dependents".to_string()
-    } else {
-        "its definition is invalid or removed".to_string()
+fn events_by_day(
+    index: &StatsIndex,
+) -> BTreeMap<NaiveDate, Vec<&super::index::IndexedJournalEvent>> {
+    let mut by_day =
+        BTreeMap::<NaiveDate, Vec<&super::index::IndexedJournalEvent>>::new();
+    for event in &index.journal_events {
+        by_day.entry(event.day).or_default().push(event);
     }
-}
-
-fn days_with_any_event(index: &StatsIndex) -> BTreeSet<NaiveDate> {
-    index.journal_events.iter().map(|event| event.day).collect()
+    by_day
 }
 
 fn select_day<'a>(
-    index: &'a StatsIndex,
+    events: impl Iterator<Item = &'a super::index::IndexedJournalEvent>,
     select: JournalSelect,
     tiers: &JournalTiers,
-    date: NaiveDate,
 ) -> DaySelection<'a> {
     let mut selection = DaySelection::default();
-    for event in index.journal_events.iter().filter(|event| {
-        event.day == date && event_selected(select, tiers, event)
-    }) {
+    for event in events.filter(|event| event_selected(select, tiers, event)) {
         selection
             .keys_by_tier
             .entry(event.tier.clone())
@@ -196,14 +207,12 @@ fn select_day<'a>(
 
 /// Comparable sort key matching the index reader: by instant, then path,
 /// then line. Offsets differ between hosts, so timestamps compare by
-/// instant; unparseable timestamps (never produced by the reader) fall back
-/// to string order and stay deterministic.
+/// instant; unparseable timestamps fall back to path then line.
 fn event_sort_key(
     event: &super::index::IndexedJournalEvent,
-) -> (Option<DateTime<FixedOffset>>, &str, &str, u32) {
+) -> (Option<DateTime<FixedOffset>>, &str, u32) {
     (
         DateTime::parse_from_rfc3339(&event.ts).ok(),
-        event.ts.as_str(),
         event.path.as_str(),
         event.line,
     )
@@ -368,10 +377,12 @@ fn normalized_outcome(outcome: &str) -> String {
     if BASE.contains(&outcome) {
         return outcome.to_string();
     }
-    if outcome.len() > "decay:".len()
-        && outcome[..6].eq_ignore_ascii_case("decay:")
-        && !outcome[6..].trim().is_empty()
-        && !outcome[6..].chars().any(char::is_whitespace)
+    if let Some(rest) = outcome
+        .get(..6)
+        .filter(|prefix| prefix.eq_ignore_ascii_case("decay:"))
+        .and_then(|_| outcome.get(6..))
+        && !rest.trim().is_empty()
+        && !rest.chars().any(char::is_whitespace)
     {
         return outcome.to_string();
     }
@@ -412,6 +423,27 @@ fn daily_value(
         provisional,
         parts,
     }
+}
+
+#[cfg(test)]
+fn reviewed_keys_on(
+    index: &StatsIndex,
+    date: NaiveDate,
+    select: JournalSelect,
+    tiers: &JournalTiers,
+) -> BTreeSet<String> {
+    select_day(
+        index
+            .journal_events
+            .iter()
+            .filter(|event| event.day == date),
+        select,
+        tiers,
+    )
+    .last_by_key
+    .keys()
+    .cloned()
+    .collect()
 }
 
 #[cfg(test)]

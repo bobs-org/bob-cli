@@ -6,7 +6,10 @@
 //! recorded/countable writer cases feed the reader. Inline tests cover
 //! custom tier filters and the review-closed wiring.
 
-use std::{collections::BTreeMap, path::Path};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+};
 
 use chrono::NaiveDate;
 use serde_json::Value;
@@ -312,6 +315,16 @@ fn recorded_writer_vectors_feed_the_reader() {
     }
     assert_eq!(expected_reviewed, 12);
 
+    let expected_keys: BTreeSet<String> = vectors
+        .iter()
+        .filter(|vector| {
+            vector["recorded"].as_bool().unwrap()
+                && vector["reviewed"].as_bool().unwrap()
+        })
+        .map(|vector| vector["id"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(expected_keys.len(), 12);
+
     let index = journal_index(events);
     let evaluations = closed_on(&[date(10)], &[]);
     let reviewed = evaluate_journal(
@@ -324,6 +337,12 @@ fn recorded_writer_vectors_feed_the_reader() {
     )
     .unwrap();
     assert_eq!(reviewed.values[0].value, Some(12));
+    let MetricSpec::Journal { select, tiers } = &builtin("reviewed").spec
+    else {
+        panic!("reviewed is a journal metric");
+    };
+    let counted = reviewed_keys_on(&index, date(10), *select, tiers);
+    assert_eq!(counted, expected_keys);
     // Both the shipped decay spellings and the normalized ones are
     // recognized outcomes, never `other`.
     let outcome = &reviewed.values[0].parts["outcome"];
@@ -490,8 +509,40 @@ fn gap_uses_the_registry_review_closed_evaluation() {
     assert_eq!(closed.values[1].value, Some(1));
     let evaluations = BTreeMap::from([("review_closed".to_string(), closed)]);
 
-    // No journal events at all: the closed day gaps, the open day is zero.
-    let index = journal_index(Vec::new());
+    // No journal events at all: every day is not_tracked and gap
+    // detection does not fire (there is no journal start).
+    let empty = journal_index(Vec::new());
+    let reviewed = evaluate_journal(
+        &builtin("reviewed"),
+        &empty,
+        &[date(9), date(10)],
+        date(11),
+        None,
+        &evaluations,
+    )
+    .unwrap();
+    assert_eq!(reviewed.since, None);
+    assert_eq!(reviewed.values[0].quality, DataQuality::NotTracked);
+    assert_eq!(
+        reviewed.values[0].reason.as_deref(),
+        Some("no review answers have been recorded")
+    );
+    assert_eq!(reviewed.values[1].quality, DataQuality::NotTracked);
+    assert!(reviewed
+        .warnings
+        .iter()
+        .all(|warning| warning.code != "journal_gap"));
+
+    // Tracking has started (an unrelated day has an event) so a closed
+    // review with no events is a plugin gap.
+    let index = journal_index(vec![event(
+        "apollo",
+        date(8),
+        "2026-10-08T09:00:00-04:00",
+        "pre",
+        "keep",
+        "warmup",
+    )]);
     let reviewed = evaluate_journal(
         &builtin("reviewed"),
         &index,
@@ -501,7 +552,7 @@ fn gap_uses_the_registry_review_closed_evaluation() {
         &evaluations,
     )
     .unwrap();
-    assert_eq!(reviewed.since, None);
+    assert_eq!(reviewed.since, Some(date(8)));
     assert_eq!(reviewed.values[0].value, Some(0));
     assert_eq!(reviewed.values[1].value, None);
     assert_eq!(reviewed.values[1].quality, DataQuality::Missing);
@@ -585,6 +636,99 @@ fn non_journal_metrics_evaluate_elsewhere() {
         &[date(10)],
         date(11),
         None,
+        None,
     )
     .is_none());
+}
+
+#[test]
+fn unknown_outcome_including_checkmark_suffix_is_other() {
+    let index = journal_index(vec![event(
+        "apollo",
+        date(10),
+        "2026-10-10T09:00:00-04:00",
+        "next",
+        "done ✓",
+        "row",
+    )]);
+    let evaluations = closed_on(&[date(10)], &[]);
+    let reviewed = evaluate_journal(
+        &builtin("reviewed"),
+        &index,
+        &[date(10)],
+        date(11),
+        None,
+        &evaluations,
+    )
+    .unwrap();
+    assert_eq!(reviewed.values[0].parts["outcome"]["other"], 1);
+    assert!(!reviewed.values[0].parts["outcome"].contains_key("done"));
+}
+
+#[test]
+fn last_answer_follows_instant_not_timestamp_string() {
+    // 09:00Z is 09:00 UTC; 06:00-04:00 is 10:00 UTC, so the second event
+    // is later even though its timestamp string sorts first.
+    let mut first = event(
+        "apollo",
+        date(9),
+        "2026-10-09T09:00:00+00:00",
+        "next",
+        "keep",
+        "row",
+    );
+    first.path = ".bob/stats/review/2026-10.apollo.jsonl".to_string();
+    first.line = 1;
+    let mut second = event(
+        "mac",
+        date(9),
+        "2026-10-09T06:00:00-04:00",
+        "next",
+        "done",
+        "row",
+    );
+    second.path = ".bob/stats/review/2026-10.mac.jsonl".to_string();
+    second.line = 1;
+    let index = journal_index(vec![first, second]);
+    let evaluations = closed_on(&[date(9)], &[]);
+    let reviewed = evaluate_journal(
+        &builtin("reviewed"),
+        &index,
+        &[date(9)],
+        date(11),
+        None,
+        &evaluations,
+    )
+    .unwrap();
+    assert_eq!(reviewed.values[0].parts["outcome"]["done"], 1);
+    assert!(!reviewed.values[0].parts["outcome"].contains_key("keep"));
+}
+
+#[test]
+fn malformed_only_closed_review_day_is_a_gap() {
+    let index = journal_index(vec![event(
+        "apollo",
+        date(8),
+        "2026-10-08T09:00:00-04:00",
+        "next",
+        "keep",
+        "start",
+    )]);
+    let evaluations = closed_on(&[date(8), date(9)], &[date(9)]);
+    let reviewed = evaluate_journal(
+        &builtin("reviewed"),
+        &index,
+        &[date(8), date(9)],
+        date(11),
+        None,
+        &evaluations,
+    )
+    .unwrap();
+    assert_eq!(reviewed.values[1].quality, DataQuality::Missing);
+    assert_eq!(
+        reviewed.values[1].reason.as_deref(),
+        Some("review closed but no answers were recorded")
+    );
+    assert_eq!(reviewed.warnings[0].code, "journal_gap");
+    assert_eq!(reviewed.warnings[0].date, Some(date(9)));
 }

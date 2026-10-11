@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use chrono::{Datelike, Duration, NaiveDate};
+use chrono::{Datelike, Days, NaiveDate, TimeDelta};
 
 use super::range::RangeSpec;
 use super::registry::MetricUnit;
@@ -113,11 +113,13 @@ pub(crate) fn resolve_range(
                 return Err("stats.range=all cannot be shifted with an offset"
                     .to_string());
             }
-            let start = all_since.unwrap_or(today).min(today);
             let yesterday = checked_add_days(today, -1)?;
-            let complete = (start <= yesterday).then_some(DateSpan {
-                start,
-                end: yesterday,
+            let complete = all_since.and_then(|since| {
+                let start = since.min(today);
+                (start <= yesterday).then_some(DateSpan {
+                    start,
+                    end: yesterday,
+                })
             });
             let days = complete
                 .map(|span| {
@@ -177,8 +179,14 @@ pub(crate) fn resolve_range(
         super::request::Grouping::Auto => GroupName::Month,
     };
 
-    let start = complete.map_or(today, |span| span.start);
-    let end = complete.map_or(today, |span| span.end);
+    let (start, end) = match complete {
+        Some(span) => (span.start, span.end),
+        None if matches!(spec, RangeSpec::All) => {
+            let yesterday = checked_add_days(today, -1)?;
+            (yesterday, yesterday)
+        }
+        None => (today, today),
+    };
     let prior = if compare && days > 0 {
         let prior_end = checked_add_days(start, -1)?;
         let prior_start = checked_add_days(prior_end, -(i64::from(days) - 1))?;
@@ -260,8 +268,40 @@ fn shift_span(
 }
 
 fn checked_add_days(date: NaiveDate, days: i64) -> Result<NaiveDate, String> {
-    date.checked_add_signed(Duration::days(days))
+    let delta = TimeDelta::try_days(days)
+        .ok_or_else(|| "stats range is too large".to_string())?;
+    date.checked_add_signed(delta)
         .ok_or_else(|| "stats range exceeds the supported calendar".to_string())
+}
+
+/// Earliest date whose values feed the first displayed point's rolling
+/// median: 6 days, 3 ISO weeks, or 2 calendar months before `start`.
+pub(crate) fn lead_in_start(
+    start: NaiveDate,
+    group: GroupName,
+) -> Option<NaiveDate> {
+    match group {
+        GroupName::Day => start.checked_sub_days(Days::new(6)),
+        GroupName::Week => {
+            let week_start = bucket_start(start, GroupName::Week);
+            week_start.checked_sub_days(Days::new(21))
+        }
+        GroupName::Month => shift_calendar_months(start, -2).and_then(|date| {
+            NaiveDate::from_ymd_opt(date.year(), date.month(), 1)
+        }),
+    }
+}
+
+fn shift_calendar_months(date: NaiveDate, months: i32) -> Option<NaiveDate> {
+    let month0 = i32::try_from(date.month0()).ok()?.checked_add(months)?;
+    let year = date.year().checked_add(month0.div_euclid(12))?;
+    let month = u32::try_from(month0.rem_euclid(12)).ok()? + 1;
+    NaiveDate::from_ymd_opt(year, month, date.day()).or_else(|| {
+        NaiveDate::from_ymd_opt(year, month, 1).and_then(|first| {
+            let next = shift_calendar_months(first, 1)?;
+            next.pred_opt()
+        })
+    })
 }
 
 fn format_date_span(span: DateSpan) -> String {
@@ -302,17 +342,53 @@ pub(crate) fn build_metric_series(
     range: &ResolvedRange,
 ) -> MetricSeries {
     let current_span = range.display_span();
-    let current_daily =
-        normalize(values, current_span, range.today, range.includes_today);
-    let prior_daily = normalize(values, range.prior, range.today, false);
-    let points = make_points(&current_daily, unit, range.group);
-    let prior_points = make_points(&prior_daily, unit, range.group);
+    let current_daily = normalize(
+        values,
+        span_with_lead_in(current_span, range.group),
+        range.today,
+        range.includes_today,
+    );
+    let prior_daily = normalize(
+        values,
+        span_with_lead_in(range.prior, range.group),
+        range.today,
+        false,
+    );
+    let points = make_points(
+        &current_daily,
+        unit,
+        range.group,
+        range.complete,
+        current_span.map(|span| span.start),
+    );
+    let prior_points = make_points(
+        &prior_daily,
+        unit,
+        range.group,
+        range.prior,
+        range.prior.map(|span| span.start),
+    );
     let complete_daily: Vec<_> = current_daily
         .iter()
         .filter(|value| !value.provisional)
+        .filter(|value| {
+            range.complete.is_some_and(|span| {
+                span.start <= value.date && value.date <= span.end
+            })
+        })
         .cloned()
         .collect();
-    let prior_summary = range.prior.map(|_| summarize(&prior_daily, unit));
+    let prior_for_summary: Vec<_> = prior_daily
+        .iter()
+        .filter(|value| {
+            range.prior.is_some_and(|span| {
+                span.start <= value.date && value.date <= span.end
+            })
+        })
+        .cloned()
+        .collect();
+    let prior_summary =
+        range.prior.map(|_| summarize(&prior_for_summary, unit));
     let summary = summarize_with_prior(
         &complete_daily,
         unit,
@@ -374,10 +450,24 @@ fn normalize(
     normalized
 }
 
+fn span_with_lead_in(
+    span: Option<DateSpan>,
+    group: GroupName,
+) -> Option<DateSpan> {
+    let span = span?;
+    let start = lead_in_start(span.start, group).unwrap_or(span.start);
+    Some(DateSpan {
+        start: start.min(span.start),
+        end: span.end,
+    })
+}
+
 fn make_points(
     values: &[DailyValue],
     unit: MetricUnit,
     group: GroupName,
+    clip: Option<DateSpan>,
+    drop_before: Option<NaiveDate>,
 ) -> Vec<SeriesPoint> {
     let mut points = match group {
         GroupName::Day => values
@@ -385,10 +475,17 @@ fn make_points(
             .map(|value| daily_point(value, unit))
             .collect(),
         GroupName::Week | GroupName::Month => {
-            grouped_points(values, unit, group)
+            let mut points = grouped_points(values, unit, group, clip);
+            if let Some(today) = values.iter().find(|value| value.provisional) {
+                points.push(daily_point(today, unit));
+            }
+            points
         }
     };
     add_rolling_medians(&mut points, group);
+    if let Some(start) = drop_before {
+        points.retain(|point| point.end >= start);
+    }
     points
 }
 
@@ -413,6 +510,7 @@ fn grouped_points(
     values: &[DailyValue],
     unit: MetricUnit,
     group: GroupName,
+    clip: Option<DateSpan>,
 ) -> Vec<SeriesPoint> {
     // The provisional today point stays out of grouped buckets so it can
     // never contaminate a completed-bucket aggregate. Day grouping still
@@ -425,8 +523,8 @@ fn grouped_points(
     let Some(last) = complete.last() else {
         return Vec::new();
     };
-    let range_start = first.date;
-    let range_end = last.date;
+    let data_start = first.date;
+    let data_end = last.date;
     let mut buckets: BTreeMap<NaiveDate, Vec<&DailyValue>> = BTreeMap::new();
     for value in complete {
         buckets
@@ -438,9 +536,21 @@ fn grouped_points(
         .into_iter()
         .map(|(natural_start, days)| {
             let natural_end = bucket_end(natural_start, group);
-            let start = natural_start.max(range_start);
-            let end = natural_end.min(range_end);
+            let displayed = clip.filter(|span| {
+                natural_end >= span.start && natural_start <= span.end
+            });
+            let start = displayed
+                .map_or(natural_start.max(data_start), |span| {
+                    natural_start.max(span.start)
+                });
+            let end = displayed.map_or(natural_end.min(data_end), |span| {
+                natural_end.min(span.end)
+            });
             let partial = start != natural_start || end != natural_end;
+            let days: Vec<&DailyValue> = days
+                .into_iter()
+                .filter(|day| day.date >= start && day.date <= end)
+                .collect();
             aggregate_bucket(start, end, &days, unit, partial)
         })
         .collect()
@@ -450,13 +560,12 @@ fn bucket_start(date: NaiveDate, group: GroupName) -> NaiveDate {
     match group {
         GroupName::Day => date,
         GroupName::Week => {
-            date - Duration::days(i64::from(
-                date.weekday().num_days_from_monday(),
-            ))
+            let offset = u64::from(date.weekday().num_days_from_monday());
+            date.checked_sub_days(Days::new(offset)).unwrap_or(date)
         }
         GroupName::Month => {
             NaiveDate::from_ymd_opt(date.year(), date.month(), 1)
-                .expect("a date has a valid first of month")
+                .unwrap_or(date)
         }
     }
 }
@@ -464,15 +573,12 @@ fn bucket_start(date: NaiveDate, group: GroupName) -> NaiveDate {
 fn bucket_end(start: NaiveDate, group: GroupName) -> NaiveDate {
     match group {
         GroupName::Day => start,
-        GroupName::Week => start + Duration::days(6),
-        GroupName::Month => {
-            let next_month = if start.month() == 12 {
-                NaiveDate::from_ymd_opt(start.year() + 1, 1, 1)
-            } else {
-                NaiveDate::from_ymd_opt(start.year(), start.month() + 1, 1)
-            };
-            next_month.and_then(|date| date.pred_opt()).unwrap_or(start)
+        GroupName::Week => {
+            start.checked_add_days(Days::new(6)).unwrap_or(start)
         }
+        GroupName::Month => shift_calendar_months(start, 1)
+            .and_then(|date| date.pred_opt())
+            .unwrap_or(start),
     }
 }
 
@@ -523,8 +629,12 @@ fn aggregate_bucket(
     };
     let (quality, reason) = aggregate_quality(days, valid.len());
     let display = if unit == MetricUnit::Bool {
-        let met = bool_total.unwrap_or_default();
-        format!("{met} of {}", valid.len())
+        if valid.is_empty() {
+            "–".to_string()
+        } else {
+            let met = bool_total.unwrap_or_default();
+            format!("{met} of {}", valid.len())
+        }
     } else {
         format_value(value, unit)
     };
@@ -645,6 +755,12 @@ fn summarize(values: &[DailyValue], unit: MetricUnit) -> MetricSummary {
     });
 
     let headline = match unit {
+        MetricUnit::Bool if days_with_data == 0 => Headline {
+            value: None,
+            display: "–".to_string(),
+            suffix: None,
+            stat: Some("days".to_string()),
+        },
         MetricUnit::Bool => {
             let met = days_met.unwrap_or_default();
             Headline {
@@ -741,6 +857,9 @@ fn make_delta(
         };
     }
 
+    if current.days_with_data == 0 || prior.days_with_data == 0 {
+        return empty_delta();
+    }
     let (current_value, prior_value) = if unit == MetricUnit::Bool {
         (
             current.days_met.map(i64::from),
@@ -753,11 +872,7 @@ fn make_delta(
         return empty_delta();
     };
     let Some(prior_value) = prior_value else {
-        return if current_value != 0 {
-            new_delta(comparison_label)
-        } else {
-            empty_delta()
-        };
+        return empty_delta();
     };
     let difference = current_value.saturating_sub(prior_value);
     if difference == 0 {
@@ -765,6 +880,9 @@ fn make_delta(
     }
     if unit == MetricUnit::Ratio {
         let amount = format_points(difference.unsigned_abs() as i64);
+        if amount == "0" {
+            return same_delta(comparison_label);
+        }
         let (display, direction, sign) = if difference > 0 {
             (format!("▲ {amount} pts"), "up", 1)
         } else {
@@ -792,7 +910,30 @@ fn make_delta(
         };
     }
     if prior_value == 0 {
-        return new_delta(comparison_label);
+        let sign = if current_value < 0 { -1 } else { 1 };
+        return new_delta(comparison_label, sign);
+    }
+    if current_value == 0 {
+        return Delta {
+            display: "▼ 100%".to_string(),
+            words: format!("down 100% vs the prior {comparison_label}"),
+            sign: -1,
+        };
+    }
+    if prior_value < 0 || current_value.signum() != prior_value.signum() {
+        let amount = difference.unsigned_abs();
+        let (display, direction, sign) = if difference > 0 {
+            (format!("▲ {amount}"), "up", 1)
+        } else {
+            (format!("▼ {amount}"), "down", -1)
+        };
+        return Delta {
+            display,
+            words: format!(
+                "{direction} {amount} vs the prior {comparison_label}"
+            ),
+            sign,
+        };
     }
     let abs_current = i128::from(current_value).abs();
     let denominator = i128::from(prior_value).abs();
@@ -849,11 +990,11 @@ fn same_delta(comparison_label: &str) -> Delta {
     }
 }
 
-fn new_delta(comparison_label: &str) -> Delta {
+fn new_delta(comparison_label: &str, sign: i8) -> Delta {
     Delta {
         display: "new".to_string(),
         words: format!("new vs the prior {comparison_label}"),
-        sign: 1,
+        sign,
     }
 }
 
@@ -889,12 +1030,21 @@ fn summarize_parts(
                         .then_with(|| left_key.cmp(right_key))
                 },
             );
-            let overflow = ranked.split_off(ranked.len().min(5));
-            if !overflow.is_empty() {
-                let other = overflow
-                    .iter()
-                    .fold(0_i64, |sum, (_, value)| sum.saturating_add(*value));
-                ranked.push(("other".to_string(), other));
+            if dimension == "note" || dimension == "theme" {
+                let overflow = ranked.split_off(ranked.len().min(5));
+                if !overflow.is_empty() {
+                    let other =
+                        overflow.iter().fold(0_i64, |sum, (_, value)| {
+                            sum.saturating_add(*value)
+                        });
+                    if let Some(existing) =
+                        ranked.iter_mut().find(|(key, _)| key == "other")
+                    {
+                        existing.1 = existing.1.saturating_add(other);
+                    } else {
+                        ranked.push(("other".to_string(), other));
+                    }
+                }
             }
             Some((
                 dimension,
@@ -912,7 +1062,11 @@ fn summarize_parts(
                         PartSummary {
                             key,
                             value,
-                            display: format_value(Some(value), unit),
+                            display: if unit == MetricUnit::Minutes {
+                                format_value(Some(value), unit)
+                            } else {
+                                value.to_string()
+                            },
                             share: format!("{share}%"),
                         }
                     })
@@ -1039,7 +1193,7 @@ fn round_div(numerator: i128, denominator: i128) -> i128 {
 
 #[cfg(test)]
 mod tests {
-    use chrono::NaiveDate;
+    use chrono::{Duration, NaiveDate};
 
     use super::*;
     use crate::native::stats::request::Grouping;
@@ -1224,14 +1378,14 @@ mod tests {
             boolean.push(daily(day, Some(met)));
         }
         let ratio_point =
-            grouped_points(&ratio, MetricUnit::Ratio, GroupName::Week)
+            grouped_points(&ratio, MetricUnit::Ratio, GroupName::Week, None)
                 .remove(0);
         assert_eq!(ratio_point.num, Some(7));
         assert_eq!(ratio_point.den, Some(14));
         assert_eq!(ratio_point.value, Some(5_000));
         assert_eq!(ratio_point.display, "50%");
         let bool_point =
-            grouped_points(&boolean, MetricUnit::Bool, GroupName::Week)
+            grouped_points(&boolean, MetricUnit::Bool, GroupName::Week, None)
                 .remove(0);
         assert_eq!(bool_point.value, Some(4));
         assert_eq!(bool_point.display, "4 of 7");
@@ -1247,7 +1401,7 @@ mod tests {
         ];
         values.last_mut().unwrap().provisional = true;
         let points =
-            grouped_points(&values, MetricUnit::Count, GroupName::Week);
+            grouped_points(&values, MetricUnit::Count, GroupName::Week, None);
         assert_eq!(points.len(), 1);
         assert_eq!(points[0].value, Some(10));
         assert_eq!(points[0].display, "10");
@@ -1296,7 +1450,8 @@ mod tests {
             .collect();
         values.push(daily(start + Duration::days(7), Some(100)));
         values.last_mut().unwrap().provisional = true;
-        let points = make_points(&values, MetricUnit::Count, GroupName::Day);
+        let points =
+            make_points(&values, MetricUnit::Count, GroupName::Day, None, None);
         assert_eq!(points[2].rolling_median, None);
         assert_eq!(points[3].rolling_median, Some(2));
         assert_eq!(points[6].rolling_median, Some(3));
@@ -1422,7 +1577,7 @@ mod tests {
             daily(start + Duration::days(1), None),
         ];
         let points =
-            grouped_points(&values, MetricUnit::Count, GroupName::Week);
+            grouped_points(&values, MetricUnit::Count, GroupName::Week, None);
         assert_eq!(points.len(), 1);
         assert_eq!(points[0].date, start);
         assert_eq!(points[0].end, date(2026, 1, 3));
@@ -1431,7 +1586,7 @@ mod tests {
         assert_eq!(points[0].value, Some(2));
 
         let month =
-            grouped_points(&values, MetricUnit::Count, GroupName::Month);
+            grouped_points(&values, MetricUnit::Count, GroupName::Month, None);
         assert_eq!(month[0].date, start);
         assert_eq!(month[0].end, date(2026, 1, 3));
         assert_eq!(month[0].partial, Some(true));
@@ -1464,5 +1619,267 @@ mod tests {
         assert_eq!(median(&[-2, -1]), Some(-2));
         assert_eq!(percentile_quarters(&[1, 2, 3, 4], 1), Some(2));
         assert_eq!(percentile_quarters(&[-4, -3, -2, -1], 3), Some(-2));
+    }
+
+    #[test]
+    fn leap_day_is_a_valid_range_day_and_month_bucket() {
+        let leap = date(2028, 2, 29);
+        let range = resolve_range(
+            &RangeSpec::parse("2028-02-28..2028-03-01").unwrap(),
+            date(2028, 3, 2),
+            0,
+            Grouping::Month,
+            false,
+            None,
+        )
+        .unwrap();
+        let complete = range.complete.expect("complete days");
+        assert!(complete.start <= leap && leap <= complete.end);
+
+        let values = vec![
+            daily(date(2028, 2, 28), Some(1)),
+            daily(leap, Some(2)),
+            daily(date(2028, 3, 1), Some(4)),
+        ];
+        let points =
+            grouped_points(&values, MetricUnit::Count, GroupName::Month, None);
+        assert_eq!(points.len(), 2);
+        assert_eq!(points[0].date, date(2028, 2, 28));
+        assert_eq!(points[0].end, leap);
+        assert_eq!(points[0].value, Some(3));
+        assert_eq!(points[1].date, date(2028, 3, 1));
+        assert_eq!(points[1].value, Some(4));
+    }
+
+    #[test]
+    fn pooled_one_of_one_and_zero_of_nine_is_ten_percent() {
+        let mut first = daily(date(2026, 1, 1), Some(10_000));
+        first.num = Some(1);
+        first.den = Some(1);
+        let mut second = daily(date(2026, 1, 2), Some(0));
+        second.num = Some(0);
+        second.den = Some(9);
+        let summary = summarize(&[first, second], MetricUnit::Ratio);
+        assert_eq!(summary.headline.value, Some(1_000));
+        assert_eq!(summary.headline.display, "10%");
+    }
+
+    #[test]
+    fn auto_grouping_thresholds_at_ninety_two_three_seventy_one_and_two() {
+        assert_eq!(
+            request_range("92d", date(2026, 10, 11), false).group,
+            GroupName::Week
+        );
+        assert_eq!(
+            request_range("371d", date(2026, 10, 11), false).group,
+            GroupName::Week
+        );
+        assert_eq!(
+            request_range("372d", date(2026, 10, 11), false).group,
+            GroupName::Month
+        );
+    }
+
+    #[test]
+    fn month_buckets_split_december_and_january() {
+        let values = vec![
+            daily(date(2026, 12, 31), Some(1)),
+            daily(date(2027, 1, 1), Some(2)),
+        ];
+        let points =
+            grouped_points(&values, MetricUnit::Count, GroupName::Month, None);
+        assert_eq!(points.len(), 2);
+        assert_eq!(points[0].date, date(2026, 12, 31));
+        assert_eq!(points[0].end, date(2026, 12, 31));
+        assert_eq!(points[1].date, date(2027, 1, 1));
+    }
+
+    #[test]
+    fn iso_week_spanning_a_year_end_is_one_grouped_bucket() {
+        let start = date(2026, 12, 28);
+        let values: Vec<_> = (0..7)
+            .map(|offset| daily(start + Duration::days(offset), Some(1)))
+            .collect();
+        let points =
+            grouped_points(&values, MetricUnit::Count, GroupName::Week, None);
+        assert_eq!(points.len(), 1);
+        assert_eq!(points[0].date, start);
+        assert_eq!(points[0].end, date(2027, 1, 3));
+        assert_eq!(points[0].value, Some(7));
+    }
+
+    fn count_delta(current: Option<i64>, prior: Option<i64>) -> Delta {
+        make_delta(
+            &summarize(&[daily(date(2026, 1, 1), current)], MetricUnit::Count),
+            &summarize(&[daily(date(2025, 12, 1), prior)], MetricUnit::Count),
+            MetricUnit::Count,
+            "4 weeks",
+            false,
+        )
+    }
+
+    #[test]
+    fn every_delta_rule_has_a_hand_derived_case() {
+        assert_eq!(count_delta(Some(100), Some(100)).display, "≈ same");
+        assert_eq!(count_delta(Some(101), Some(100)).display, "≈ same");
+        assert_eq!(count_delta(Some(110), Some(100)).display, "▲ 10%");
+        assert_eq!(count_delta(Some(5), Some(2)).display, "▲ 2.5×");
+        assert_eq!(count_delta(Some(1), Some(2)).display, "▼ 0.5×");
+        assert_eq!(count_delta(Some(5), Some(0)).display, "new");
+        assert_eq!(count_delta(Some(5), Some(0)).sign, 1);
+        let negative_new = count_delta(Some(-3), Some(0));
+        assert_eq!(negative_new.display, "new");
+        assert_eq!(negative_new.sign, -1);
+        assert_eq!(count_delta(Some(5), None).display, "–");
+        assert_eq!(count_delta(Some(0), Some(5)).display, "▼ 100%");
+        let crossing = count_delta(Some(5), Some(-3));
+        assert_eq!(crossing.display, "▲ 8");
+        assert_eq!(crossing.sign, 1);
+
+        let mut current_day = daily(date(2026, 1, 1), Some(5_000));
+        current_day.num = Some(1);
+        current_day.den = Some(2);
+        let mut prior_day = daily(date(2025, 12, 1), Some(5_004));
+        prior_day.num = Some(1251);
+        prior_day.den = Some(2500);
+        let ratio = make_delta(
+            &summarize(&[current_day], MetricUnit::Ratio),
+            &summarize(&[prior_day], MetricUnit::Ratio),
+            MetricUnit::Ratio,
+            "4 weeks",
+            false,
+        );
+        assert_eq!(ratio.display, "≈ same");
+
+        let bool_delta = make_delta(
+            &summarize(&[daily(date(2026, 1, 1), Some(1))], MetricUnit::Bool),
+            &summarize(&[daily(date(2025, 12, 1), Some(0))], MetricUnit::Bool),
+            MetricUnit::Bool,
+            "4 weeks",
+            false,
+        );
+        assert_eq!(bool_delta.display, "▲ 1 days");
+
+        let empty_bool = summarize(&[], MetricUnit::Bool);
+        assert_eq!(empty_bool.headline.display, "–");
+        assert_eq!(empty_bool.headline.value, None);
+    }
+
+    #[test]
+    fn huge_offset_is_a_range_error_not_a_panic() {
+        assert!(resolve_range(
+            &RangeSpec::Days(7),
+            date(2026, 10, 11),
+            u32::MAX,
+            Grouping::Day,
+            false,
+            None,
+        )
+        .is_err());
+        assert!(resolve_range(
+            &RangeSpec::Days(u32::MAX),
+            date(2026, 10, 11),
+            u32::MAX,
+            Grouping::Day,
+            false,
+            None,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn all_with_no_history_matches_preset_end_convention() {
+        let range = resolve_range(
+            &RangeSpec::All,
+            date(2026, 10, 11),
+            0,
+            Grouping::Auto,
+            false,
+            None,
+        )
+        .unwrap();
+        assert_eq!(range.report.start, date(2026, 10, 10));
+        assert_eq!(range.report.end, date(2026, 10, 10));
+        assert_eq!(range.report.days, 0);
+        assert!(range.includes_today);
+        assert!(range.complete.is_none());
+    }
+
+    #[test]
+    fn grouped_today_is_a_separate_provisional_point() {
+        let today = date(2026, 10, 11);
+        let mut values = vec![
+            daily(date(2026, 10, 8), Some(1)),
+            daily(date(2026, 10, 9), Some(2)),
+            daily(date(2026, 10, 10), Some(3)),
+            daily(today, Some(99)),
+        ];
+        values.last_mut().unwrap().provisional = true;
+        let clip = DateSpan {
+            start: date(2026, 10, 8),
+            end: date(2026, 10, 10),
+        };
+        let points = make_points(
+            &values,
+            MetricUnit::Count,
+            GroupName::Month,
+            Some(clip),
+            Some(date(2026, 10, 8)),
+        );
+        assert_eq!(points.len(), 2);
+        assert!(!points[0].provisional);
+        assert_eq!(points[0].end, date(2026, 10, 10));
+        assert_eq!(points[0].value, Some(6));
+        assert!(points[1].provisional);
+        assert_eq!(points[1].date, today);
+        assert_eq!(points[1].value, Some(99));
+        assert_eq!(points[1].rolling_median, None);
+    }
+
+    #[test]
+    fn first_displayed_point_uses_lead_in_for_rolling_median() {
+        let start = date(2026, 1, 7);
+        let values: Vec<_> = (0..14)
+            .map(|offset| {
+                daily(date(2026, 1, 1) + Duration::days(offset), Some(offset))
+            })
+            .collect();
+        let clip = DateSpan {
+            start,
+            end: date(2026, 1, 13),
+        };
+        let points = make_points(
+            &values,
+            MetricUnit::Count,
+            GroupName::Day,
+            Some(clip),
+            Some(start),
+        );
+        assert_eq!(points[0].date, start);
+        assert_eq!(points[0].rolling_median, Some(3));
+    }
+
+    #[test]
+    fn parts_collapse_only_note_and_theme() {
+        let mut value = daily(date(2026, 1, 1), Some(21));
+        let six = [("a", 6), ("b", 5), ("c", 4), ("d", 3), ("e", 2), ("f", 1)];
+        value.parts.insert(
+            "kind".to_string(),
+            six.into_iter()
+                .map(|(key, count)| (key.to_string(), count))
+                .collect(),
+        );
+        value.parts.insert(
+            "note".to_string(),
+            six.into_iter()
+                .map(|(key, count)| (key.to_string(), count))
+                .collect(),
+        );
+        let summary = summarize_parts(&[value], MetricUnit::Count);
+        assert_eq!(summary["kind"].len(), 6);
+        assert!(summary["kind"].iter().all(|part| part.key != "other"));
+        assert_eq!(summary["note"].len(), 6);
+        assert_eq!(summary["note"][5].key, "other");
+        assert_eq!(summary["note"][5].display, "1");
     }
 }

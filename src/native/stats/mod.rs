@@ -1,6 +1,7 @@
-//! Read-only Daily Stats engine types, config registry, index, and metric
-//! evaluators. The integration phase wires these into `compute`.
-#![allow(dead_code)]
+//! Read-only Daily Stats engine: index, registry, evaluators, series, and
+//! [`compute`]. The `bob stats` CLI phase (bob-cli-6l.3) is the first
+//! non-test consumer of this surface.
+#![allow(dead_code)] // bob-cli-6l.3 is the first non-test consumer.
 
 pub(crate) mod compute;
 pub(crate) mod error;

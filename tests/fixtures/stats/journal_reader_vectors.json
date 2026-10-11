@@ -51,7 +51,7 @@
     },
     {
       "id": "J3-out-of-order-timestamps-and-offsets",
-      "description": "File order means nothing; the earlier instant wins even when its line comes last and its offset differs.",
+      "description": "File order means nothing; the later instant wins even when its line comes first and its offset differs.",
       "today": "2026-10-12",
       "dates": ["2026-10-10"],
       "review_closed": [],

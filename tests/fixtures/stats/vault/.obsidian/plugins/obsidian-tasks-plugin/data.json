@@ -5,7 +5,8 @@
     "customStatuses": [
       {"symbol": "*", "name": "Custom done", "type": "DONE"},
       {"symbol": "~", "name": "Not a task", "type": "NON_TASK"},
-      {"symbol": "!", "name": "Canceled", "type": "CANCELLED"}
+      {"symbol": "!", "name": "Canceled", "type": "CANCELLED"},
+      {"symbol": "-", "name": "Canceled", "type": "CANCELLED"}
     ]
   }
 }
