@@ -581,3 +581,72 @@ f9324da): `bob stats -f json` 420 ms (stdout `.ok` true); `bob stats
 show worked -c` 380 ms; `bob stats metrics` 390 ms. The CLI is ~15–45 ms
 above that engine's 365–378 ms; the landing-fixes engine is slower
 (573 ms). The ≤300 ms budget stays with rollout (`bob-cli-6l.6`).
+
+## Obsidian Stats block
+
+The `bob-stats` code block reads the same schema-1 report as `bob stats`. It keeps
+metric values, labels, quality, definitions, and formatted parts from Bob; the plugin
+only lays them out and manages the current view.
+
+The focus chart groups its bars by the report's selected day, week, or month bucket.
+Its legend names that grouping and, when supplied, the 25th–75th percentile range for
+those displayed buckets. The rolling-median line uses Bob's supplied daily rolling
+median. Optional prior-period ticks align by elapsed position across the two windows.
+Today is outlined as provisional; partial buckets, missing observations, and the
+tracking start are labeled separately. Metric colors identify the selected series while
+labels and values use Obsidian text colors.
+
+The context panel follows the focused metric family:
+
+- Pomodoro metrics show the supplied theme breakdown and period total.
+- Task metrics show the Created, Done, Dropped, and Net flow series when those metrics
+  are present.
+- Review metrics show supplied answers by tier and outcome; Keep rate also shows its
+  90% reference line and the review-time context.
+- Checklist metrics show a daily state calendar and, when supplied, the full chore
+  summary/grid. Filled cells mean met, outlined cells mean missed, blank cells mean not
+  due, and crossed cells mean missing or not tracked.
+
+The **Focus metric** selector includes every metric returned in the report, even when a
+metric is not in the overview tiles. Selecting a tile or metric keeps the chart and its
+family panel together. Range chips select a window; the previous/next controls move
+through windows, **vs prior** requests the comparison series, **Custom…** selects
+inclusive dates, and **Table** toggles the point table. These view-only changes reuse the
+report already loaded for that selection. A range, offset, or comparison change loads
+the corresponding report.
+
+Hovering or focusing a chart column displays its value, date or bucket span, quality,
+and top parts. Click or Enter pins the day; the separate **Open daily note** control
+opens the selected existing day, and Ctrl/Cmd activation opens it in a new leaf. For a
+week or month bar, the tooltip continues to describe the whole bucket. The day selector
+under Day detail chooses a supplied daily point inside that bucket; grouped totals are
+never presented as daily values. Left/Right moves the daily cursor, j/k changes the
+focused metric, h/l shifts the window, t toggles the table, and Esc clears the pin or
+closes the definition panel. Inputs and native controls keep their normal key behavior.
+
+**Definition** discloses the metric's report-provided definition, unit, source, tracking
+start, and limits. No definition or metric value is reconstructed by the renderer.
+
+### Browser preview and fixtures
+
+The fixture-driven real-browser preview exercises the production `bob-stats` block
+renderer, SVG chart helpers, context panels, stylesheet, and event handlers. From the
+bob-plugins checkout, run:
+
+```sh
+npm run build
+node scripts/preview-stats-block.cjs --out /tmp/bob-stats-preview
+```
+
+The script discovers an installed headless Chromium, creates a standalone
+`index.html`, captures the light/dark and narrow/wide matrix under the output directory,
+and writes `matrix-report.md` with the browser and renderer versions plus interaction
+checks. The HTML embeds the built renderer, stylesheet, and fixtures; it opens directly
+from disk without a server. These preview outputs are not part of `npm test` or
+`npm run validate`.
+
+`scripts/fixtures/stats/README.md` records how to regenerate `canonical.json` from the
+bob-cli golden vault with a pinned `BOB_NOW`. The `synthetic-*.json` files are clearly
+labeled presentation-only cases for grouped buckets, signed values, medians, long labels,
+and empty or all-null states. They do not describe vault data or validate metric
+semantics.
