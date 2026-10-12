@@ -443,6 +443,9 @@ pub(super) struct PrjCandidate<'a> {
 
 #[derive(Debug, Clone)]
 pub(crate) struct Frontmatter<'a> {
-    pub(super) lines: Vec<&'a str>,
-    pub(super) body_start_line: usize,
+    // Crate-visible so the shared project-dependency model
+    // (`native::project_dependencies`) can read any key's span
+    // without copying the frontmatter parser.
+    pub(crate) lines: Vec<&'a str>,
+    pub(crate) body_start_line: usize,
 }

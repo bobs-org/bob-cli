@@ -698,10 +698,9 @@ pub(crate) struct TaskDependencyState {
     pub(crate) unresolved_dependency_ids: Vec<String>,
 }
 
-pub(crate) fn task_dependency_states(
-    files: &[FileScan],
-    archive_closed_ids: &BTreeSet<String>,
-) -> BTreeMap<(usize, usize), TaskDependencyState> {
+/// `[id::]` → open map shared by [`task_dependency_states`] and
+/// the project-dependency model (`docs/task-dependencies.md` §13.3).
+pub(crate) fn task_id_openness(files: &[FileScan]) -> BTreeMap<String, bool> {
     let mut identities = BTreeMap::<String, bool>::new();
     for file in files {
         for task in &file.tasks {
@@ -712,6 +711,14 @@ pub(crate) fn task_dependency_states(
             *is_open |= task.status_recognized && task.status_type.is_open();
         }
     }
+    identities
+}
+
+pub(crate) fn task_dependency_states(
+    files: &[FileScan],
+    archive_closed_ids: &BTreeSet<String>,
+) -> BTreeMap<(usize, usize), TaskDependencyState> {
+    let identities = task_id_openness(files);
 
     let mut states = BTreeMap::new();
     for (file_index, file) in files.iter().enumerate() {

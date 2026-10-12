@@ -197,6 +197,7 @@ use tags::*;
 pub(crate) use model::{Frontmatter, ProjectStatus};
 pub(crate) use scan::{
     frontmatter_is_area, frontmatter_is_project, frontmatter_value,
-    is_markdown_file, parse_frontmatter, project_name_aliases,
-    trim_yaml_scalar, walk_typed_notes,
+    is_frontmatter_list_item, is_markdown_file, parse_frontmatter,
+    project_name_aliases, project_schedule_date, read_frontmatter_list,
+    trim_yaml_scalar, walk_typed_notes, FrontmatterList,
 };

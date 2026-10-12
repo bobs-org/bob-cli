@@ -58,6 +58,7 @@ pub(crate) mod parent_notes;
 mod plan_budget;
 mod plugins;
 mod pomodoro;
+mod project_dependencies;
 mod projects;
 mod randomize;
 mod randomize_plan;

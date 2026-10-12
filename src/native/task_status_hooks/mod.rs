@@ -294,4 +294,6 @@ pub(crate) use pomodoro::{
     apply_empty_pomodoro_plan, plan_empty_pomodoro_removals, scan_pomodoros,
 };
 pub(crate) use structure::{apply_structural_plan, plan_structural_changes};
-pub(crate) use sync::{task_dependency_states, TaskDependencyState};
+pub(crate) use sync::{
+    task_dependency_states, task_id_openness, TaskDependencyState,
+};

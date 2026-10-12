@@ -250,6 +250,21 @@ pub(super) fn parse_project_schedule(
     })
 }
 
+/// Issue-free project `scheduled` date for the shared
+/// project-dependency model: the parsed date when exactly one
+/// well-formed `scheduled` key exists, otherwise `None`.
+pub(crate) fn project_schedule_date(
+    relative_path: &Path,
+    frontmatter: &Frontmatter<'_>,
+) -> Option<NaiveDate> {
+    let mut issues = Vec::new();
+    let schedule =
+        parse_project_schedule(relative_path, frontmatter, &mut issues);
+    schedule
+        .filter(|_| issues.is_empty())
+        .map(|schedule| schedule.date)
+}
+
 pub(super) fn is_exact_date_shape(value: &str) -> bool {
     value.len() == 10
         && value.bytes().enumerate().all(|(index, byte)| match index {
@@ -398,125 +413,212 @@ pub(crate) fn trim_yaml_scalar(value: &str) -> &str {
     value
 }
 
+/// One raw item of a key-parameterised frontmatter list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FrontmatterListItem {
+    /// Item text as written (still quoted for quoted scalars).
+    pub(crate) text: String,
+    /// 1-based file line of the item (the key line for flow lists).
+    pub(crate) line_number: usize,
+}
+
+/// Shape of one frontmatter key's value (`read_frontmatter_list`).
+///
+/// `Empty` is only the block form with no `- ` items; an empty flow
+/// list (`[]`) reports as `Items` with no entries, matching the
+/// historical alias reader.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum FrontmatterList {
+    Absent,
+    Empty,
+    Scalar {
+        text: String,
+        line_number: usize,
+    },
+    Items(Vec<FrontmatterListItem>),
+    Malformed {
+        reason: String,
+        line_number: Option<usize>,
+    },
+}
+
+/// Key-parameterised frontmatter list reader.
+///
+/// Returns the key's shape with 1-based line spans; entry
+/// classification stays with the caller. Flow splitting is
+/// bracket-aware: commas inside quotes or `[[...]]` never split, so
+/// an unquoted `[[a#^b]]` item survives whole for the caller to
+/// reject as a YAML nested array. Duplicate keys are malformed.
+pub(crate) fn read_frontmatter_list(
+    frontmatter: &Frontmatter<'_>,
+    key: &str,
+) -> FrontmatterList {
+    let hits = frontmatter
+        .lines
+        .iter()
+        .enumerate()
+        .filter_map(|(index, line)| {
+            frontmatter_key_rest(line, key).map(|rest| (index, rest.trim()))
+        })
+        .collect::<Vec<_>>();
+    let Some(&(key_index, rest)) = hits.first() else {
+        return FrontmatterList::Absent;
+    };
+    if hits.len() > 1 {
+        return FrontmatterList::Malformed {
+            reason: format!("duplicate `{key}` keys; keeping none"),
+            line_number: Some(hits[1].0 + 2),
+        };
+    }
+    let key_line = key_index + 2;
+    if rest.is_empty() {
+        let mut items = Vec::new();
+        for (offset, line) in
+            frontmatter.lines[key_index + 1..].iter().enumerate()
+        {
+            let trimmed = line.trim_start();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let Some(item) = list_item_text(trimmed) else {
+                break;
+            };
+            items.push(FrontmatterListItem {
+                // One optional space after `- ` is not content.
+                text: item.strip_prefix(' ').unwrap_or(item).to_string(),
+                line_number: key_index + offset + 3,
+            });
+        }
+        if items.is_empty() {
+            return FrontmatterList::Empty;
+        }
+        return FrontmatterList::Items(items);
+    }
+    if rest.starts_with('[') {
+        let Some(inner) = rest
+            .strip_prefix('[')
+            .and_then(|tail| tail.rfind(']').map(|end| &tail[..end]))
+        else {
+            return FrontmatterList::Malformed {
+                reason: "list is not closed with ']'; ignoring it".to_string(),
+                line_number: Some(key_line),
+            };
+        };
+        if inner.trim().is_empty() {
+            return FrontmatterList::Items(Vec::new());
+        }
+        return FrontmatterList::Items(
+            split_flow_items(inner)
+                .into_iter()
+                .map(|item| FrontmatterListItem {
+                    text: item.to_string(),
+                    line_number: key_line,
+                })
+                .collect(),
+        );
+    }
+    FrontmatterList::Scalar {
+        text: rest.to_string(),
+        line_number: key_line,
+    }
+}
+
+/// Value after `key:` at the start of a frontmatter line.
+fn frontmatter_key_rest<'a>(line: &'a str, key: &str) -> Option<&'a str> {
+    line.strip_prefix(key)?.strip_prefix(':')
+}
+
+/// Whether a frontmatter line opens a block-list item (`- `, a bare
+/// `-`, or the historical `-text` form the alias reader accepted).
+pub(crate) fn is_frontmatter_list_item(line: &str) -> bool {
+    list_item_text(line.trim_start()).is_some()
+}
+
+/// Item text after the `-` marker, if the trimmed line opens one.
+fn list_item_text(trimmed: &str) -> Option<&str> {
+    trimmed
+        .strip_prefix("- ")
+        .or_else(|| trimmed.strip_prefix('-'))
+}
+
 /// External names for an area or project note (`project_name_aliases`).
 ///
 /// Reads the line-based frontmatter form in flow (`["bob-cli"]`) or block
 /// (`- bob-cli`) shape. Returns the accepted aliases in file order plus one
 /// warning per ignored entry; a non-list value warns once and yields none.
+/// Duplicate keys warn and yield none (previously the first key won
+/// silently); every other shape keeps its historical warning text.
 pub(crate) fn project_name_aliases(
     frontmatter: &Frontmatter<'_>,
 ) -> (Vec<String>, Vec<String>) {
-    let key_index = frontmatter.lines.iter().position(|line| {
-        line.strip_prefix("project_name_aliases")
-            .and_then(|rest| rest.strip_prefix(':'))
-            .is_some()
-    });
-    let Some(key_index) = key_index else {
-        return (Vec::new(), Vec::new());
-    };
-    let raw = frontmatter.lines[key_index]
-        .strip_prefix("project_name_aliases")
-        .and_then(|rest| rest.strip_prefix(':'))
-        .unwrap_or("")
-        .trim();
-    if raw.is_empty() {
-        return parse_alias_block_list(&frontmatter.lines[key_index + 1..]);
-    }
-    if raw.starts_with('[') {
-        return parse_alias_flow_list(raw);
-    }
-    (
-        Vec::new(),
-        vec![
-            "project_name_aliases is not a list; expected flow ([\"name\"]) or block (\"- name\") form"
-                .to_string(),
-        ],
-    )
-}
-
-fn parse_alias_flow_list(raw: &str) -> (Vec<String>, Vec<String>) {
-    let Some(inner) = raw
-        .strip_prefix('[')
-        .and_then(|rest| rest.rfind(']').map(|end| &rest[..end]))
-    else {
-        return (
+    const KEY: &str = "project_name_aliases";
+    match read_frontmatter_list(frontmatter, KEY) {
+        FrontmatterList::Absent => (Vec::new(), Vec::new()),
+        FrontmatterList::Empty => (
             Vec::new(),
-            vec![
-                "project_name_aliases list is not closed with ']'; ignoring it"
-                    .to_string(),
-            ],
-        );
-    };
-    let mut aliases = Vec::new();
-    let mut warnings = Vec::new();
-    if inner.trim().is_empty() {
-        return (aliases, warnings);
-    }
-    for item in split_flow_items(inner) {
-        match classify_alias_entry(item) {
-            Ok(alias) => {
-                if !aliases.iter().any(|seen| seen == &alias) {
-                    aliases.push(alias);
+            vec![format!("{KEY} has no list items; ignoring it")],
+        ),
+        FrontmatterList::Scalar { .. } => (
+            Vec::new(),
+            vec![format!(
+                "{KEY} is not a list; expected flow ([\"name\"]) or block (\"- name\") form"
+            )],
+        ),
+        FrontmatterList::Items(items) => {
+            let mut aliases = Vec::new();
+            let mut warnings = Vec::new();
+            for item in &items {
+                match classify_alias_entry(&item.text) {
+                    Ok(alias) => {
+                        if !aliases.iter().any(|seen| seen == &alias) {
+                            aliases.push(alias);
+                        }
+                    }
+                    Err(warning) => warnings.push(warning),
                 }
             }
-            Err(warning) => warnings.push(warning),
+            (aliases, warnings)
+        }
+        FrontmatterList::Malformed { reason, .. } => {
+            (Vec::new(), vec![format!("{KEY} {reason}")])
         }
     }
-    (aliases, warnings)
 }
 
-fn parse_alias_block_list(lines: &[&str]) -> (Vec<String>, Vec<String>) {
-    let mut aliases = Vec::new();
-    let mut warnings = Vec::new();
-    let mut saw_item = false;
-    for line in lines {
-        let trimmed = line.trim_start();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let Some(item) = trimmed
-            .strip_prefix("- ")
-            .or_else(|| trimmed.strip_prefix('-'))
-        else {
-            break;
-        };
-        saw_item = true;
-        // A `-` with no text after it is an empty entry.
-        let item = item.strip_prefix(' ').unwrap_or(item);
-        match classify_alias_entry(item) {
-            Ok(alias) => {
-                if !aliases.iter().any(|seen| seen == &alias) {
-                    aliases.push(alias);
-                }
-            }
-            Err(warning) => warnings.push(warning),
-        }
-    }
-    if !saw_item {
-        warnings.push(
-            "project_name_aliases has no list items; ignoring it".to_string(),
-        );
-    }
-    (aliases, warnings)
-}
-
-/// Split flow-list items on commas that sit outside quotes.
+/// Split flow-list items on commas outside quotes and `[[...]]`.
+///
+/// Bracket-awareness keeps an unquoted `[[a#^b]]` item whole so the
+/// caller can reject it as a YAML nested array; quoted commas split
+/// exactly as before.
 fn split_flow_items(inner: &str) -> Vec<&str> {
     let mut items = Vec::new();
     let mut start = 0;
-    let mut quote = None;
-    for (index, byte) in inner.char_indices() {
-        match quote {
-            Some(active) if byte == active => quote = None,
-            Some(_) => {}
-            None => {
-                if byte == '"' || byte == '\'' {
-                    quote = Some(byte);
-                } else if byte == ',' {
-                    items.push(inner[start..index].trim());
-                    start = index + 1;
-                }
+    let mut quote: Option<u8> = None;
+    let mut bracket_depth = 0usize;
+    let bytes = inner.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if let Some(active) = quote {
+            if byte == active {
+                quote = None;
             }
+            index += 1;
+        } else if byte == b'"' || byte == b'\'' {
+            quote = Some(byte);
+            index += 1;
+        } else if byte == b'[' && bytes.get(index + 1) == Some(&b'[') {
+            bracket_depth += 1;
+            index += 2;
+        } else if byte == b']' && bytes.get(index + 1) == Some(&b']') {
+            bracket_depth = bracket_depth.saturating_sub(1);
+            index += 2;
+        } else {
+            if byte == b',' && bracket_depth == 0 {
+                items.push(inner[start..index].trim());
+                start = index + 1;
+            }
+            index += 1;
         }
     }
     items.push(inner[start..].trim());
