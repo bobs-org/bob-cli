@@ -281,7 +281,8 @@ the same kind of project note directly, with no Obsidian window open: see
 name their IDs with a trailing ` ^<id>`, or name them and link them into the
 Pomodoro with a trailing ` :<id>`. In the `<ctrl+=>` child
 note picker, future-scheduled projects show a `calendar-clock` chip immediately
-before the status pill; the chip says `Tomorrow`, `Jul 16`, or `Jul 16, 2027`
+before the status pill; its date comes from the child's `^prj` inline
+`[scheduled::]` field, not project frontmatter. The chip says `Tomorrow`, `Jul 16`, or `Jul 16, 2027`
 while its tooltip and accessible label expose the full date. Today, past,
 missing, and invalid dates do not receive a chip. The compact `🗓️` in the
 generated parent ledger represents the same future-only state without the
@@ -382,13 +383,16 @@ More use the strict parser: ISO, `M/D`, `M-D`, `+Nd/w/m`, and preset forms.
 With the cursor on a valid `#task ... ^prj` lifecycle task, Bob Navigation
 Hotkeys' `Ctrl+Shift+P` Task Card **Schedule** action writes canonical
 `[scheduled:: YYYY-MM-DD]` on `^prj` and immediately propagates task-level
-schedules. It also applies the derived status decision in the same guarded
-editor transaction: future-scheduled tasks become Blocked, while due tasks
-recover to a safely proven Ready, Next, or In Progress rank. A later
-task-owned schedule is preserved and remains Blocked. When the vault snapshot
-cannot prove recovery, the property edit proceeds and `[?]` is left for
-`bob task reconcile`. Other picker properties remain inline Dataview fields
-on the task. `dependsOn` is not one of them: it is derived from the task's
+schedules. A future project date blocks every open resident, adds
+`#prj_is_blocked`, and removes their live Task Links from today's open
+Pomodoros, deleting entries left empty. A due date recovers residents with no
+remaining block reason to a safely proven Ready, Next, or In Progress rank,
+records `[unblocked::]`, and removes the project-blocked tag. The same recovery
+applies when `Ctrl+D` deletes the date. `^prj` is stamped through the normal
+freshness rule. A later task-owned schedule is preserved and remains Blocked.
+When the vault snapshot cannot prove recovery, the property edit proceeds and
+`[?]` is left for `bob task reconcile`. Other picker properties remain inline
+Dataview fields on the task. `dependsOn` is not one of them: it is derived from the task's
 Depends-On line (`docs/task-dependencies.md`), never written by hand. On
 `^prj` that line is the project's prerequisites; while it or `^prj`'s
 inline `scheduled` blocks the project, every open resident is Blocked. See
@@ -439,8 +443,8 @@ inside that level's configured window in one guarded edit. Counted sessions
 (`N<Ctrl+Shift+P>`) apply the same priority to each selected task while rolling
 an independent scheduled date per task, and each generated schedule-log reason
 records that task's own selected offset. On a `^prj` lifecycle task, priority
-stays inline and the rolled date goes to project frontmatter, matching ordinary
-`scheduled` picker behavior for project notes.
+and the rolled date stay inline on `^prj`, using the same project schedule
+propagation and blocking behavior as the Schedule action.
 
 The write also records a `🗓️ **SCHEDULE LOG**` entry naming the priority
 transition, the exact selected relative day, and the configured roll window,
