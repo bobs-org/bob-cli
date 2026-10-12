@@ -25,6 +25,7 @@ use crate::native::{
         ParsedCaptureText, ParsedDependency, ParsedDependencyTarget,
     },
     freshness::placement::stamp_fresh,
+    project_dependencies::ProjectContext,
     task_dependencies::{
         self, format as dependency_format, parse as dependency_parse,
     },
@@ -543,7 +544,10 @@ fn cancel_log_aware_slot(note: &EditableNote, task_at: usize) -> usize {
 
 /// Replace one task line's status box (`- [X]`) with `replacement`.
 /// The first `[...]` group on a scanned task line is its status box.
-fn replace_status_char(line: &str, replacement: char) -> Option<String> {
+pub(super) fn replace_status_char(
+    line: &str,
+    replacement: char,
+) -> Option<String> {
     let open = line.find('[')?;
     let close = line[open + 1..].find(']')?;
     if close != 1 {
@@ -556,7 +560,7 @@ fn replace_status_char(line: &str, replacement: char) -> Option<String> {
 
 /// Numeric lane for promotion: Ready 0, Next 1, In Progress 2. Blocked,
 /// custom, and unrecognized statuses never promote.
-fn lane_for_status(status: char) -> Option<u8> {
+pub(super) fn lane_for_status(status: char) -> Option<u8> {
     match status {
         ' ' => Some(0),
         '*' => Some(1),
@@ -683,10 +687,10 @@ pub(super) fn resolve_staged_note(
 
 /// One resolved prerequisite: its staged note identity plus the vault
 /// id its Depends-On link projects.
-struct ResolvedPrerequisite {
+pub(super) struct ResolvedPrerequisite {
     /// Vault-relative note path with extension.
-    relative: PathBuf,
-    block_id: String,
+    pub(super) relative: PathBuf,
+    pub(super) block_id: String,
     /// Existing `[id::]`, canonical id, or archive id: the
     /// `[dependsOn::]` value for this prerequisite.
     projected_id: String,
@@ -942,6 +946,10 @@ struct DependencyGraph {
     scheduled: HashMap<(String, String), Option<NaiveDate>>,
     /// Status symbol per identity, for promotion lanes.
     status: HashMap<(String, String), char>,
+    /// Identities promotion must walk through but never raise (§13.4):
+    /// every recognised `^prj` task plus the residents of blocked
+    /// projects (PDB9).
+    never_raise: BTreeSet<(String, String)>,
 }
 
 impl DependencyGraph {
@@ -956,6 +964,7 @@ impl DependencyGraph {
             open: HashMap::new(),
             scheduled: HashMap::new(),
             status: HashMap::new(),
+            never_raise: BTreeSet::new(),
         };
         let mut rels: BTreeSet<PathBuf> = ctx
             .catalog()
@@ -977,7 +986,7 @@ impl DependencyGraph {
         // decisively in its own resolution path).
         let mut scans: BTreeMap<
             PathBuf,
-            (Vec<String>, note_tasks::NoteTaskScan),
+            (String, Vec<String>, note_tasks::NoteTaskScan),
         > = BTreeMap::new();
         for relative in &rels {
             let absolute = absolute_note(bob_dir, relative);
@@ -991,10 +1000,14 @@ impl DependencyGraph {
             let scan = note_tasks::scan(&contents, ctx.settings());
             scans.insert(
                 relative.clone(),
-                (contents.lines().map(str::to_string).collect(), scan),
+                (
+                    contents.clone(),
+                    contents.lines().map(str::to_string).collect(),
+                    scan,
+                ),
             );
         }
-        for (relative, (lines, scan)) in &scans {
+        for (relative, (_, lines, scan)) in &scans {
             for task in scan.tasks() {
                 let Some(block_id) = task.block_id.as_deref() else {
                     continue;
@@ -1048,7 +1061,7 @@ impl DependencyGraph {
                     let target_key =
                         (display_relative(&target_rel), link.block_id.clone());
                     let target_known = scans.get(&target_rel).is_some_and(
-                        |(_, target_scan)| {
+                        |(_, _, target_scan)| {
                             matches!(
                                 target_scan.by_block_id(&link.block_id),
                                 note_tasks::BlockIdLookup::Found(_)
@@ -1062,6 +1075,74 @@ impl DependencyGraph {
                             .or_default()
                             .insert(target_key);
                     }
+                }
+            }
+        }
+        // Project blocking inputs (§13.3, §13.4): residents inherit
+        // `^prj`'s projected links as implicit edges (PDR8), and
+        // promotion walks through — but never raises — `^prj` tasks and
+        // the residents of blocked projects (PDB9). A `^prj` same-note
+        // link is internal and never projected (§13.6).
+        for (relative, (contents, _, _)) in &scans {
+            let file_tasks =
+                task_status_hooks::parse_tasks(contents, ctx.settings());
+            let context =
+                ProjectContext::for_note(&task_status_hooks::FileScan {
+                    path: absolute_note(bob_dir, relative),
+                    relative_path: relative.clone(),
+                    contents: contents.clone(),
+                    tasks: file_tasks.clone(),
+                });
+            if !context.recognised {
+                continue;
+            }
+            let note_display = display_relative(relative);
+            let Some(prj_block) =
+                context.project_task_index().and_then(|index| {
+                    file_tasks.get(index).and_then(|task| task.block_id.clone())
+                })
+            else {
+                continue;
+            };
+            let prj_identity = (note_display.clone(), prj_block);
+            if let Some(edges) = graph.edges.get_mut(&prj_identity) {
+                edges.retain(|target| target.0 != note_display);
+            }
+            graph.never_raise.insert(prj_identity.clone());
+            let prj_targets: Vec<(String, String)> = graph
+                .edges
+                .get(&prj_identity)
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .collect();
+            let mut blocked = prj_targets
+                .iter()
+                .any(|target| graph.open.get(target).copied().unwrap_or(false));
+            if !blocked
+                && let Some(date) =
+                    graph.scheduled.get(&prj_identity).copied().flatten()
+                && date > ctx.anchor
+            {
+                blocked = true;
+            }
+            for task in &file_tasks {
+                if !context.is_resident(task) {
+                    continue;
+                }
+                let Some(block_id) = task.block_id.clone() else {
+                    continue;
+                };
+                let resident = (note_display.clone(), block_id);
+                for target in &prj_targets {
+                    graph
+                        .edges
+                        .entry(resident.clone())
+                        .or_default()
+                        .insert(target.clone());
+                }
+                if blocked {
+                    graph.never_raise.insert(resident);
                 }
             }
         }
@@ -1358,6 +1439,11 @@ fn plan_promotions(
     }
     let mut touches = Vec::new();
     for (identity, lane) in desired {
+        // §13.4: promotion walks through `^prj` tasks and blocked
+        // residents to their prerequisites but never raises them (PDB9).
+        if graph.never_raise.contains(&identity) {
+            continue;
+        }
         let current = graph.status.get(&identity).copied().unwrap_or(' ');
         if lane_for_status(current).is_some_and(|known| known >= lane) {
             continue;
@@ -1455,11 +1541,11 @@ fn find_task_by_field_id(
 
 /// One merged Depends-On member: its identity, canonical link text,
 /// and projected field id (`None` for kept-verbatim links that never
-/// project).
-struct MergedMember {
-    identity: (String, String),
+/// project, including `^prj` same-note internal targets).
+pub(super) struct MergedMember {
+    pub(super) identity: (String, String),
     link_text: String,
-    projected_id: Option<String>,
+    pub(super) projected_id: Option<String>,
 }
 
 /// What one managed-line link resolves to against staged contents.
@@ -1935,6 +2021,18 @@ pub(super) fn plan_existing_task_dependencies(
             task.status_name
         )));
     }
+    // A `^prj` dependent in a recognised project refuses same-note
+    // targets: a project cannot wait on its own tasks (§13.6).
+    let prj_project = prj_context_for_dependent(
+        ctx,
+        &dep_rel,
+        &dep_abs,
+        &contents,
+        dependent_block_id,
+    );
+    if prj_project.is_some() {
+        refuse_internal_prj_targets(&dep_rel, &dep_desc, &prereqs)?;
+    }
     let dependent_lane = lane_for_status(task.status_symbol);
     let dependent_text = task.description.clone();
     let dependent_line_index = task.line_index;
@@ -1981,7 +2079,7 @@ pub(super) fn plan_existing_task_dependencies(
     };
     let legacy_all =
         legacy_children(&lines, &fenced, dependent_line_index, managed_at);
-    let (merged, pre_existing, kept_unresolved, remove_lines) =
+    let (mut merged, pre_existing, kept_unresolved, remove_lines) =
         merge_existing_members(
             ctx,
             planner,
@@ -1998,6 +2096,16 @@ pub(super) fn plan_existing_task_dependencies(
             warnings,
             &mut touches,
         )?;
+    // Hand-authored same-note links on a `^prj` line stay on the line
+    // but are never projected into `[dependsOn::]` (§13.6).
+    if prj_project.is_some() {
+        let internal = deproject_internal_prj_links(&dep_rel, &mut merged);
+        if internal > 0 {
+            warnings.push(format!(
+                "project_internal_dependency: kept {internal} same-note link(s) on the ^prj line without projecting into [dependsOn::]"
+            ));
+        }
+    }
     // New edges refuse self-dependencies and fresh cycles; no-op
     // repeats skip validation so unrelated graph problems never fail
     // them.
@@ -2158,11 +2266,80 @@ pub(super) fn plan_existing_task_dependencies(
     }
     note.lines[joined_task.line_index] = next_line.clone();
     planner.stage(&dep_abs, note.join())?;
-    // Promote open prerequisites to the dependent's pre-capture lane.
-    if let Some(lane) = dependent_lane
+    // A `^prj` write with an open target blocks the whole note in the
+    // same write (§13.10): residents flip and tag, and every newly
+    // Blocked identity is unlinked from today's open Pomodoros (§13.5).
+    // Any `&` that leaves its dependent Blocked consumes the
+    // dependent's own live links the same way.
+    if status_char == '?' && open_count > 0 {
+        let mut blocked_ids = vec![dependent_block_id.to_string()];
+        if let Some((context, _)) = &prj_project {
+            let staged = current_note_text(planner, &dep_abs)?;
+            let staged_tasks =
+                task_status_hooks::parse_tasks(&staged, ctx.settings());
+            let staged_lines: Vec<String> =
+                staged.lines().map(str::to_string).collect();
+            let (edits, residents) =
+                plan_resident_block(context, &staged_tasks, &staged_lines);
+            if !edits.is_empty() {
+                let mut residents_note = EditableNote::new(&staged);
+                for edit in &edits {
+                    if let Some(line) = residents_note.lines.get_mut(edit.line)
+                    {
+                        *line = edit.text.clone();
+                    }
+                    touches.push(TargetTouch {
+                        absolute: dep_abs.clone(),
+                        relative: dep_rel.clone(),
+                        block_id: edit.block_id.clone(),
+                        line: edit.line,
+                    });
+                }
+                planner.stage(&dep_abs, residents_note.join())?;
+            }
+            for resident in residents {
+                if !blocked_ids.contains(&resident) {
+                    blocked_ids.push(resident);
+                }
+            }
+        }
+        let removed = consume_live_links(
+            planner,
+            bob_dir,
+            dependent_route,
+            &blocked_ids,
+        )?;
+        if removed > 0 {
+            warnings.push(format!(
+                "removed {removed} live Pomodoro link(s) to newly Blocked task(s)"
+            ));
+        }
+    }
+    // Promote open prerequisites to the dependent's pre-capture lane —
+    // or, for a `^prj` write, to the strongest lane among `^prj` and its
+    // residents (commitment transfer, §13.4; never onto a `^prj` target).
+    let transfer_lane = match &prj_project {
+        Some((context, pre_tasks)) => {
+            strongest_project_lane(context, pre_tasks)
+        }
+        None => dependent_lane,
+    };
+    if let Some(lane) = transfer_lane
         && lane > 0
     {
-        let seeds: Vec<(String, String)> = merged_identities.clone();
+        let here = display_relative(&dep_rel);
+        let seeds: Vec<(String, String)> = if prj_project.is_some() {
+            merged_identities
+                .iter()
+                .filter(|identity| {
+                    identity.0 != here
+                        && graph.open.get(*identity).copied().unwrap_or(false)
+                })
+                .cloned()
+                .collect()
+        } else {
+            merged_identities.clone()
+        };
         let promoted = plan_promotions(
             ctx, planner, bob_dir, &graph, &extra, lane, &seeds, &dep_desc,
         )?;

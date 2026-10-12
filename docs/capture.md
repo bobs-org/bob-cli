@@ -1195,6 +1195,20 @@ dependency-only owners; missing notes, missing block IDs,
 self-dependencies, and batch cycles fail with an actionable error and
 leave the vault intact.
 
+`&` aimed at a project's `^prj` writes the same Depends-On line and
+field, plus the project side effects (`docs/task-dependencies.md`
+§13.10): targets inside the same project note refuse (a project cannot
+wait on its own tasks), while pre-existing hand-authored same-note
+links stay on the line unprojected. When any target is open, `^prj`
+and every open resident flip to `[?]` in the same write, residents
+gain exactly one `#prj_is_blocked`, and their live links leave
+today's open Pomodoros (emptied entries go with them). Open
+prerequisites rise to at least the strongest lane among `^prj` and its
+residents — never onto a `^prj` target, which the walk passes through
+to that project's own prerequisites. More generally, any `&` that
+leaves its dependent Blocked consumes that dependent's live links in
+the same write.
+
 ### Completing tasks with '!'
 
 A capture item that is exactly `!note:block-id` marks that existing open

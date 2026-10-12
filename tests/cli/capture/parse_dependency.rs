@@ -636,6 +636,289 @@ fn block_id_intent_follows_dependency_ownership() {
     assert_eq!(new["block_id"]["body"], "New task");
 }
 
+fn write_project_note(vault: &std::path::Path, name: &str, body: &str) {
+    write_file(
+        &vault.join(name),
+        &format!("---\ntype: [[project]]\nstatus: wip\n---\n{body}"),
+    );
+}
+
+fn capture_prj_with_day_file(
+    vault: &std::path::Path,
+    day_file: &std::path::Path,
+    draft: &str,
+) -> std::process::Output {
+    bob_command()
+        .env("BOB_NOW", DEPENDENCY_NOW)
+        .env("BOB_DAY_FILE", day_file)
+        .arg("capture")
+        .arg("-b")
+        .arg(vault)
+        .arg("--")
+        .arg(draft)
+        .output()
+        .expect("run bob capture")
+}
+
+// PDG7 (§13.15): `&` on `^prj` adding an open target blocks the whole
+// project note in the same write: `^prj` and every open resident flip to
+// `[?]`, residents gain exactly one `#prj_is_blocked`, their live links
+// leave today's open Pomodoros, and commitment transfers onto the open
+// prerequisite (never onto a `^prj` target).
+#[test]
+fn capture_prj_dependency_blocks_tags_and_unlinks_residents() {
+    let temp = TempDir::new("bob-cli-capture-prj-deps");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    write_blocked_tasks_settings(&vault);
+    write_file(&vault.join("cash.md"), "- [ ] #task Fund ^fund\n");
+    write_project_note(
+        &vault,
+        "proj.md",
+        concat!(
+            "- [ ] #task Ship #hide ^prj\n",
+            "- [ ] #task Work ^work\n",
+            "- [/] #task Grind ^grind\n",
+        ),
+    );
+    let day_file = vault.join("day.md");
+    write_file(
+        &day_file,
+        concat!(
+            "## Pomodoros\n",
+            "- [ ] (0900-0930) Morning\n",
+            "  - [[proj#^work]]\n",
+            "  - [[proj#^grind]]\n",
+            "  - other context\n",
+        ),
+    );
+
+    let output =
+        capture_prj_with_day_file(&vault, &day_file, "&cash:fund @proj+prj");
+    assert_success(&output);
+    let after =
+        fs::read_to_string(vault.join("proj.md")).expect("read project");
+    let prj_line = after
+        .lines()
+        .find(|line| line.contains("^prj"))
+        .expect("one ^prj line");
+    assert!(
+        prj_line.starts_with("- [?] #task Ship"),
+        "^prj flips to Blocked:\n{after}"
+    );
+    assert!(
+        !after.contains("#prj_is_blocked ^prj")
+            && !after.lines().any(|line| line.contains("^prj")
+                && line.contains("#prj_is_blocked")),
+        "^prj never carries the tag:\n{after}"
+    );
+    for block in ["work", "grind"] {
+        let lines: Vec<&str> = after
+            .lines()
+            .filter(|line| line.contains(&format!("^{block}")))
+            .collect();
+        assert_eq!(lines.len(), 1, "one ^{block} line:\n{after}");
+        assert!(
+            lines[0].starts_with("- [?] "),
+            "resident ^{block} flips to Blocked:\n{after}"
+        );
+        assert_eq!(
+            lines[0].matches("#prj_is_blocked").count(),
+            1,
+            "resident ^{block} carries exactly one tag:\n{after}"
+        );
+    }
+    assert!(
+        after.contains("⛓️ **DEPENDS ON:** [[cash#^fund]]"),
+        "^prj keeps the ordinary managed line:\n{after}"
+    );
+    assert!(
+        after.contains("[dependsOn:: cash__fund]"),
+        "^prj keeps the ordinary field:\n{after}"
+    );
+    let day = fs::read_to_string(&day_file).expect("read day file");
+    assert!(
+        !day.contains("[[proj#^work]]") && !day.contains("[[proj#^grind]]"),
+        "resident live links are consumed:\n{day}"
+    );
+    assert!(
+        day.contains("other context"),
+        "the entry survives on its other children:\n{day}"
+    );
+    let cash = fs::read_to_string(vault.join("cash.md")).expect("read cash");
+    assert!(
+        cash.contains("- [/] #task Fund"),
+        "commitment transfers the strongest resident lane:\n{cash}"
+    );
+
+    // Repeating the same prerequisite is idempotent: no duplicate tags.
+    let repeat =
+        capture_prj_with_day_file(&vault, &day_file, "&cash:fund @proj+prj");
+    assert_success(&repeat);
+    let again =
+        fs::read_to_string(vault.join("proj.md")).expect("read project");
+    assert_eq!(
+        again.matches("#prj_is_blocked").count(),
+        2,
+        "repeat adds no duplicate tags:\n{again}"
+    );
+}
+
+// §13.6: a `^prj` dependent refuses same-note targets: a project cannot
+// wait on its own tasks.
+#[test]
+fn capture_prj_dependency_refuses_same_note_targets() {
+    let temp = TempDir::new("bob-cli-capture-prj-internal");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    write_blocked_tasks_settings(&vault);
+    let before = concat!(
+        "---\ntype: [[project]]\nstatus: wip\n---\n",
+        "- [ ] #task Ship #hide ^prj\n",
+        "- [ ] #task Work ^work\n",
+    );
+    write_file(&vault.join("proj.md"), before);
+
+    let output = capture_with_now(&vault, "&proj:work @proj+prj");
+    assert!(
+        !output.status.success(),
+        "same-note ^prj targets must fail:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        !stderr(&output).trim().is_empty(),
+        "the refusal explains itself"
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("proj.md")).expect("read project"),
+        before,
+        "refusals leave the vault intact"
+    );
+}
+
+// §13.5: `&` that newly Blocks an existing linked dependent consumes its
+// live links in the same write.
+#[test]
+fn capture_dependency_consumes_links_when_newly_blocked() {
+    let temp = TempDir::new("bob-cli-capture-dep-consume");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    write_blocked_tasks_settings(&vault);
+    write_file(&vault.join("cash.md"), "- [ ] #task Fund ^fund\n");
+    write_file(&vault.join("body.md"), "- [*] #task Exercise ^excercise\n");
+    let day_file = vault.join("day.md");
+    write_file(
+        &day_file,
+        concat!(
+            "## Pomodoros\n",
+            "- [ ] (0900-0930) Morning\n",
+            "  - [[body#^excercise]]\n",
+            "  - other context\n",
+        ),
+    );
+
+    let output = capture_prj_with_day_file(
+        &vault,
+        &day_file,
+        "&cash:fund @body+excercise",
+    );
+    assert_success(&output);
+    let body = fs::read_to_string(vault.join("body.md")).expect("read body");
+    assert!(
+        body.contains("- [?] #task Exercise"),
+        "the dependent flips to Blocked:\n{body}"
+    );
+    let day = fs::read_to_string(&day_file).expect("read day file");
+    assert!(
+        !day.contains("[[body#^excercise]]"),
+        "the newly Blocked dependent is unlinked:\n{day}"
+    );
+    assert!(
+        day.contains("other context"),
+        "the entry survives on its other children:\n{day}"
+    );
+}
+
+// PDB9 (§13.13): promotion never raises a `^prj` target into a lane; the
+// walk continues through it to that project's open prerequisites.
+#[test]
+fn capture_promotion_walks_through_prj_without_raising_it() {
+    let temp = TempDir::new("bob-cli-capture-prj-promotion");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    write_blocked_tasks_settings(&vault);
+    write_file(&vault.join("zeta.md"), "- [ ] #task Zed ^zed\n");
+    write_project_note(
+        &vault,
+        "proj.md",
+        concat!(
+            "- [ ] #task Ship #hide [dependsOn:: zeta__zed] ^prj\n",
+            "\t- ⛓️ **DEPENDS ON:** [[zeta#^zed]]\n",
+        ),
+    );
+    write_file(&vault.join("why.md"), "- [*] #task Reason ^reason\n");
+
+    let output = capture_with_now(&vault, "&proj:prj @why+reason");
+    assert_success(&output);
+    let proj = fs::read_to_string(vault.join("proj.md")).expect("read proj");
+    assert!(
+        proj.lines()
+            .any(|line| line.starts_with("- [ ] #task Ship")),
+        "^prj is never raised into a lane:\n{proj}"
+    );
+    let zeta = fs::read_to_string(vault.join("zeta.md")).expect("read zeta");
+    assert!(
+        zeta.contains("- [*] #task Zed"),
+        "the walk continues to the project's prerequisites:\n{zeta}"
+    );
+}
+
+// §13.6: cycle detection includes the implicit resident → `^prj`
+// edges. Here `work` reaches `dee` only through its implicit edge to
+// `^prj`'s target `tee`, so depending `dee` on `work` must refuse.
+#[test]
+fn capture_prj_dependency_sees_implicit_resident_cycles() {
+    let temp = TempDir::new("bob-cli-capture-prj-cycle");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    write_blocked_tasks_settings(&vault);
+    write_project_note(
+        &vault,
+        "proj.md",
+        concat!(
+            "- [ ] #task Ship #hide [dependsOn:: ext__tee] ^prj\n",
+            "\t- ⛓️ **DEPENDS ON:** [[ext#^tee]]\n",
+            "- [ ] #task Work ^work\n",
+        ),
+    );
+    write_file(
+        &vault.join("ext.md"),
+        concat!(
+            "- [ ] #task Tee [dependsOn:: dee__dee] ^tee\n",
+            "\t- ⛓️ **DEPENDS ON:** [[dee#^dee]]\n",
+        ),
+    );
+    let before = "- [ ] #task Dee ^dee\n";
+    write_file(&vault.join("dee.md"), before);
+
+    let output = capture_with_now(&vault, "&proj:work @dee+dee");
+    assert!(
+        !output.status.success(),
+        "the implicit resident cycle must fail:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        stderr(&output).contains("cycle"),
+        "the refusal names the cycle:\n{}",
+        format_output(&output)
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("dee.md")).expect("read dee"),
+        before,
+        "refusals leave the vault intact"
+    );
+}
+
 #[test]
 fn rewrite_never_absorbs_ampersands_or_the_colon_alias() {
     // A bare `@@` with a dependency-only item has no absorbable marker:
