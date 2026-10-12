@@ -333,15 +333,35 @@ unchanged.
 2. **Commit the dependent's note** in **one editor transaction** (one
    Ctrl+Z): the line, the field, same-note target ids, status effects,
    folding of legacy children, and `[fresh:: today]` via
-   `api.freshness.stampLine`.
-3. **If preparation fails**, the dependent is untouched. An unused
+   `api.freshness.stampLine`. On `^prj` the same transaction also sets
+   every open resident `[?]` with `#prj_is_blocked` when any added
+   target is open, and transfers the strongest lane among `^prj` and
+   its residents onto each open prerequisite (never onto a `^prj`
+   target, §13). Nav never regroups lines between sections; reconcile
+   does that within one interval.
+3. **Consume Pomodoro links after a `^prj` block.** The live links of
+   `^prj` and its newly Blocked residents are removed from today's open
+   Pomodoros with `removeEmptiedEntries`, in the same write when the
+   daily note is the edited note and in a follow-up write otherwise. A
+   cleanup failure shows the `Pomodoro links not removed` chip and is
+   never rolled back; reconcile repairs it.
+4. **If preparation fails**, the dependent is untouched. An unused
    target id is acceptable; a link to an unprepared target is not.
+
+Removing `^prj`'s last reason (the stage, Ctrl+D on the row, or api
+v3) recovers `^prj` and every resident without its own remaining
+reason through the gate in the same write: the tag is stripped and
+`[unblocked::]` is written on Ready recoveries. Hand edits to `^prj`'s
+Depends-On line keep the mirror's field behavior; resident side
+effects of hand edits are reconcile's.
 
 ### 6.7 Notices
 
 - `⛓ Now waits on "File for unemployment" · Blocked`
 - `⛓ No longer waits on "Launch swarm…" · Ready again`
 - `⛓ 2 added · 1 removed · Blocked (1 open)`
+- `⛓ Project waits on "Fix LinkedIn now" · 2 tasks Blocked · removed 2 Pomodoro links`
+- `⛓ Project no longer waits on "Fix LinkedIn now" · 2 tasks Ready again`
 
 ## 7. Chips (bob-ledger-tools)
 
