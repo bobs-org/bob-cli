@@ -272,10 +272,16 @@ When a project has no `status:` line and the `^prj` task is checked or canceled,
 `type:` line.
 
 The Bob Navigation Hotkeys "Create project note from task" command
-(`<ctrl+shift+option+n`) transfers a
-valid `[scheduled:: YYYY-MM-DD]` source-task field into the new project's
-frontmatter and removes it from the completion criteria. Invalid or duplicate
-schedule fields stop creation with a focused notice. `bob capture` can create
+(`<ctrl+shift+option+n`) transfers a valid `[scheduled:: YYYY-MM-DD]` source-task
+field onto the new project's `^prj` task line and removes it from the completion
+criteria. The date remains inline; conversion does not write schedule frontmatter.
+Invalid or duplicate schedule fields stop creation with a focused notice. The
+source task's managed Depends-On line moves to be the first child of `^prj`, with
+same-note links rebased to the source note. It is not copied into `## Tasks`, and
+the machine-owned Sub-projects child is skipped on reverse conversion. A blocked
+source (`[?]`) is accepted. If the new project is blocked, its open residents are
+tagged `#prj_is_blocked` and their live links are removed from today's open
+Pomodoros. `bob capture` can create
 the same kind of project note directly, with no Obsidian window open: see
 [Project notes](capture.md#project-notes). Task bullets in that capture can
 name their IDs with a trailing ` ^<id>`, or name them and link them into the
@@ -304,13 +310,15 @@ re-indented but otherwise untouched — no `#task` token and no `[created::]`
 field — so they read as reference notes rather than tasks.
 
 The same hotkey on a project note's `^prj` task restores that project as a
-single task in the parent note's `## Tasks` section. Tasks, uppercased
-section bullets, and the `^prj` task's own sub-bullets — including managed
-schedule and work logs — come back as children; `scheduled` and `created`
-return as inline fields, and a block ID is derived from the project note
-name. Inbound `#^prj` links are repointed at the restored task and the
-project note is moved to the trash. Content outside that expected format
-fails with a notice and changes nothing.
+single task in the parent note's `## Tasks` section. Its inline `scheduled`
+date stays on the restored task. The Depends-On line becomes the restored
+task's first child, with links re-formed relative to the parent note. Ordinary
+tasks, qualifying section bullets, and other `^prj` children — including
+managed schedule and work logs — come back after it; the generated Sub-projects
+child and its subtree are omitted. A block ID is derived from the project note
+name. Inbound `#^prj` links are repointed at the restored task and the project
+note is moved to the trash. Content outside that expected format fails with a
+notice and changes nothing.
 
 A managed source-task log of either kind — schedule (`🗓️ **SCHEDULE LOG**`,
 `**SCHEDULE LOG**`, or legacy `**Schedule log:**`) or work (`🛠️ **WORK LOG**`,
