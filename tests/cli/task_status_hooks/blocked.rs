@@ -126,13 +126,10 @@ fn task_status_hooks_reconciles_future_schedules_and_combined_blocking_reasons()
     let daily = vault.join("2026/20260716.md");
     let tasks = vault.join("tasks.md");
     write_file(&daily, "## Pomodoros\n\n- [ ] Current (0900-0930)\n");
+    let project = vault.join("proj.md");
     write_file(
         &tasks,
         concat!(
-            "---\n",
-            "type: [[project]]\n",
-            "scheduled: 2099-01-01\n",
-            "---\n",
             "- [ ] #task Open root [id:: root] ^root\n",
             "- [x] #task Closed root [id:: closed] ^closed\n",
             "- [ ] #task Yesterday [scheduled:: 2026-07-15] ^yesterday\n",
@@ -149,7 +146,18 @@ fn task_status_hooks_reconciles_future_schedules_and_combined_blocking_reasons()
             "- [?] #task Mature but still dependent [dependsOn:: root] [scheduled:: 2026-07-16] ^still-dependent\n",
             "- [ ] #task Future with closed dependency [dependsOn:: closed] [scheduled:: 2026-07-22] ^future-closed\n",
             "- [?] #task Mature recovery [scheduled:: 2026-07-16] ^recover\n",
+        ),
+    );
+    write_file(
+        &project,
+        concat!(
+            "---\n",
+            "type: [[project]]\n",
+            "status: wip\n",
+            "scheduled: 2099-01-01\n",
+            "---\n",
             "- [ ] #task Project inline schedule [scheduled:: 2026-07-23] ^prj\n",
+            "- [ ] #task Project resident ^resident\n",
         ),
     );
     write_blocked_tasks_settings(&vault);
@@ -170,12 +178,8 @@ fn task_status_hooks_reconciles_future_schedules_and_combined_blocking_reasons()
     assert_eq!(fs::read_to_string(&tasks).unwrap(), before);
     let json: serde_json::Value =
         serde_json::from_str(stdout(&dry_run).trim()).unwrap();
-    assert_eq!(
-        json["marked_blocked"].as_array().unwrap().len(),
-        11,
-        "{json}"
-    );
-    assert_eq!(json["unblocked"].as_array().unwrap().len(), 0, "{json}");
+    assert_eq!(json["marked_blocked"].as_array().unwrap().len(), 8);
+    assert_eq!(json["unblocked"].as_array().unwrap().len(), 1);
 
     let marked = json["marked_blocked"].as_array().unwrap();
     let scheduled_only = marked
@@ -199,6 +203,26 @@ fn task_status_hooks_reconciles_future_schedules_and_combined_blocking_reasons()
         .expect("combined change");
     assert_eq!(combined["future_scheduled_date"], "2026-07-21");
     assert_eq!(combined["open_dependency_ids"], serde_json::json!(["root"]));
+    assert!(json["unblocked"][0]["future_scheduled_date"].is_null());
+    assert_eq!(json["unblocked"][0]["block_id"], "recover");
+    let prj = marked
+        .iter()
+        .find(|item| item["block_id"] == "prj")
+        .expect("project task schedule change");
+    assert_eq!(prj["reason_kinds"], serde_json::json!(["local_schedule"]));
+    assert_eq!(prj["future_scheduled_date"], "2026-07-23");
+    let resident = marked
+        .iter()
+        .find(|item| item["block_id"] == "resident")
+        .expect("project resident schedule change");
+    assert_eq!(
+        resident["reason_kinds"],
+        serde_json::json!(["project_schedule"])
+    );
+    assert_eq!(
+        json["prj_is_blocked_tags_added"].as_array().unwrap().len(),
+        1
+    );
 
     let applied = bob_command()
         .args(["task", "reconcile"])
@@ -211,35 +235,27 @@ fn task_status_hooks_reconciles_future_schedules_and_combined_blocking_reasons()
     assert_success(&applied);
     let report = stdout(&applied);
     assert!(
-        report.contains(
-            "(local_schedule+project_schedule; scheduled: 2026-07-17; project: tasks.md scheduled: 2026-07-23)"
-        ),
+        report.contains("(local_schedule; scheduled: 2026-07-17)"),
         "{report}"
     );
     assert!(
         report.contains(
-            "(local_dependency+local_schedule+project_schedule; scheduled: 2026-07-21; open: root; project: tasks.md scheduled: 2026-07-23)"
+            "(local_dependency+local_schedule; scheduled: 2026-07-21; open: root)"
         ),
         "{report}"
     );
-    assert!(report.contains("11 blocked, 0 unblocked"), "{report}");
+    assert!(report.contains("8 blocked, 1 unblocked"), "{report}");
 
     let contents = fs::read_to_string(&tasks).unwrap();
     for block_id in [
-        "root",
-        "yesterday",
-        "today",
         "future-ready",
         "future-next",
         "future-working",
         "already",
-        "impossible",
         "dependency",
         "combined",
         "still-dependent",
         "future-closed",
-        "prj",
-        "recover",
     ] {
         assert!(
             contents.lines().any(|line| line.contains("- [?]")
@@ -248,18 +264,31 @@ fn task_status_hooks_reconciles_future_schedules_and_combined_blocking_reasons()
         );
     }
     for expected in [
-        "- [?] #task Yesterday",
-        "- [?] #task Today",
+        "- [ ] #task Yesterday",
+        "- [ ] #task Today",
         "- [x] #task Done future",
         "- [!] #task Unknown future",
-        "- [?] #task Impossible",
-        "- [?] #task Mature recovery",
+        "- [ ] #task Impossible",
+        "- [ ] #task Mature recovery",
     ] {
         assert!(
             contents.contains(expected),
             "missing {expected}:\n{contents}"
         );
     }
+    let project_contents = fs::read_to_string(&project).unwrap();
+    assert!(
+        project_contents
+            .lines()
+            .any(|line| { line.contains("- [?]") && line.ends_with("^prj") }),
+        "missing blocked prj:\n{project_contents}"
+    );
+    assert!(
+        project_contents.contains(
+            "- [?] #task Project resident #prj_is_blocked ^resident"
+        ),
+        "resident must inherit the project schedule and the tag:\n{project_contents}"
+    );
 
     let second = bob_command()
         .args(["task", "reconcile"])
@@ -838,5 +867,428 @@ fn reconcile_ignores_terminal_projects() {
             .unwrap()
             .len(),
         1
+    );
+}
+
+// PDF1: both `#ref` residents go `[*]` → `[?]` plus the tag and
+// regroup under `### Blocked`; their live links are consumed.
+#[test]
+fn reconcile_pdf1_databricks_ref_residents() {
+    let temp = TempDir::new("bob-cli-task-status-hooks-pdf1");
+    let vault = temp.path().join("vault");
+    let daily = vault.join("2026/20260716.md");
+    let job = vault.join("job.md");
+    let apply = vault.join("job_apply_to_databricks.md");
+    write_file(
+        &daily,
+        concat!(
+            "## Pomodoros\n\n",
+            "- [ ] JOB (0645-0710)\n",
+            "  - [[job_apply_to_databricks#^ref-cv]]\n",
+            "  - [[job_apply_to_databricks#^ref-pitch]]\n",
+            "  - [[job#^update-linkedin]]\n",
+        ),
+    );
+    write_file(
+        &job,
+        "- [ ] #task Update LinkedIn [id:: job__update-linkedin] ^update-linkedin\n",
+    );
+    write_file(
+        &apply,
+        concat!(
+            "---\n",
+            "type: \"[[project]]\"\n",
+            "status: wip\n",
+            "---\n",
+            "# Databricks\n\n",
+            "- [?] #task #prj Apply to DataBricks [dependsOn:: job__update-linkedin] ^prj\n",
+            "  - ⛓️ **DEPENDS ON:** [[job#^update-linkedin]]\n",
+            "\n",
+            "## Tasks\n\n",
+            "### Next & In Progress\n\n",
+            "- [*] #task #ref CV work ^ref-cv\n",
+            "- [*] #task #ref Role pitches ^ref-pitch\n",
+        ),
+    );
+    write_blocked_tasks_settings(&vault);
+
+    let applied = bob_command()
+        .args(["task", "reconcile"])
+        .arg("--format")
+        .arg("json")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("apply PDF1");
+    assert_success(&applied);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&applied).trim()).unwrap();
+    let contents = fs::read_to_string(&apply).unwrap();
+    assert!(
+        contents.contains("- [?] #task #ref CV work #prj_is_blocked ^ref-cv"),
+        "{contents}"
+    );
+    assert!(
+        contents.contains(
+            "- [?] #task #ref Role pitches #prj_is_blocked ^ref-pitch"
+        ),
+        "{contents}"
+    );
+    assert!(contents.contains("### Blocked"), "{contents}");
+    assert_eq!(
+        json["consumed_blocked_references"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    let job_contents = fs::read_to_string(&job).unwrap();
+    assert!(
+        job_contents.contains("- [*] #task Update LinkedIn"),
+        "{job_contents}"
+    );
+
+    let rerun = bob_command()
+        .args(["task", "reconcile"])
+        .arg("--dry-run")
+        .arg("--format")
+        .arg("json")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("PDF1 rerun");
+    assert_success(&rerun);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&rerun).trim()).unwrap();
+    assert_eq!(json["marked_blocked"], serde_json::json!([]));
+    assert_eq!(json["consumed_blocked_references"], serde_json::json!([]));
+}
+
+// PDB5: a child project is not blocked by its parent.
+#[test]
+fn reconcile_does_not_cascade_to_child_projects() {
+    let temp = TempDir::new("bob-cli-task-status-hooks-pdb5");
+    let vault = temp.path().join("vault");
+    let daily = vault.join("2026/20260716.md");
+    write_file(&daily, "## Pomodoros\n\n- [ ] Current (0900-0930)\n");
+    write_file(
+        &vault.join("parent.md"),
+        concat!(
+            "---\n",
+            "type: \"[[project]]\"\n",
+            "status: wip\n",
+            "---\n",
+            "- [ ] #task #prj Parent [dependsOn:: tasks__pre] ^prj\n",
+            "  - ⛓️ **DEPENDS ON:** [[tasks#^pre]]\n",
+            "- [ ] #task Parent resident ^parent-res\n",
+        ),
+    );
+    write_file(
+        &vault.join("child.md"),
+        concat!(
+            "---\n",
+            "type: \"[[project]]\"\n",
+            "status: wip\n",
+            "parent: \"[[parent]]\"\n",
+            "---\n",
+            "- [ ] #task #prj Child ^prj\n",
+            "- [ ] #task Child resident ^child-res\n",
+        ),
+    );
+    write_file(&vault.join("tasks.md"), "- [ ] #task Prerequisite ^pre\n");
+    write_blocked_tasks_settings(&vault);
+
+    let dry_run = bob_command()
+        .args(["task", "reconcile"])
+        .arg("--dry-run")
+        .arg("--format")
+        .arg("json")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("dry-run PDB5");
+    assert_success(&dry_run);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&dry_run).trim()).unwrap();
+    let marked = json["marked_blocked"].as_array().unwrap();
+    assert!(
+        marked.iter().all(|item| {
+            item["path"] != "child.md"
+                || (item["block_id"] != "prj"
+                    && item["block_id"] != "child-res")
+        }),
+        "{}",
+        stdout(&dry_run)
+    );
+}
+
+// PDB6: two open `^prj` lines means the note is not `project(T)`.
+#[test]
+fn reconcile_ignores_notes_with_two_open_prj_lines() {
+    let temp = TempDir::new("bob-cli-task-status-hooks-pdb6");
+    let vault = temp.path().join("vault");
+    let daily = vault.join("2026/20260716.md");
+    let proj = vault.join("proj.md");
+    write_file(&daily, "## Pomodoros\n\n- [ ] Current (0900-0930)\n");
+    write_file(
+        &proj,
+        concat!(
+            "---\n",
+            "type: \"[[project]]\"\n",
+            "status: wip\n",
+            "---\n",
+            "- [ ] #task #prj First [scheduled:: 2026-07-20] ^prj\n",
+            "- [ ] #task #prj Second [scheduled:: 2026-07-20] ^prj\n",
+            "- [ ] #task Resident work ^r1\n",
+        ),
+    );
+    write_blocked_tasks_settings(&vault);
+
+    let dry_run = bob_command()
+        .args(["task", "reconcile"])
+        .arg("--dry-run")
+        .arg("--format")
+        .arg("json")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("dry-run PDB6");
+    assert_success(&dry_run);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&dry_run).trim()).unwrap();
+    assert!(json["marked_blocked"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|item| item["block_id"] != "r1"));
+    assert!(json["prj_is_blocked_tags_added"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+}
+
+// PDB8: a canonical daily note typed `project` is ignored.
+#[test]
+fn reconcile_ignores_canonical_daily_note_projects() {
+    let temp = TempDir::new("bob-cli-task-status-hooks-pdb8");
+    let vault = temp.path().join("vault");
+    let daily = vault.join("2026/20260716.md");
+    write_file(
+        &daily,
+        concat!(
+            "---\n",
+            "type: \"[[project]]\"\n",
+            "status: wip\n",
+            "---\n",
+            "## Pomodoros\n\n",
+            "- [ ] Current (0900-0930)\n",
+            "\n",
+            "- [ ] #task #prj Daily project [dependsOn:: tasks__pre] ^prj\n",
+            "  - ⛓️ **DEPENDS ON:** [[tasks#^pre]]\n",
+            "- [ ] #task Daily resident ^r1\n",
+        ),
+    );
+    write_file(&vault.join("tasks.md"), "- [ ] #task Prerequisite ^pre\n");
+    write_blocked_tasks_settings(&vault);
+
+    let dry_run = bob_command()
+        .args(["task", "reconcile"])
+        .arg("--dry-run")
+        .arg("--format")
+        .arg("json")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("dry-run PDB8");
+    assert_success(&dry_run);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&dry_run).trim()).unwrap();
+    assert!(json["marked_blocked"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|item| item["block_id"] != "r1"));
+}
+
+// PDR8: an inherited cycle through a resident → `^prj` edge warns.
+#[test]
+fn reconcile_warns_inherited_resident_cycle() {
+    let temp = TempDir::new("bob-cli-task-status-hooks-pdr8");
+    let vault = temp.path().join("vault");
+    let daily = vault.join("2026/20260716.md");
+    write_file(&daily, "## Pomodoros\n\n- [ ] Current (0900-0930)\n");
+    write_file(
+        &vault.join("proj.md"),
+        concat!(
+            "---\n",
+            "type: \"[[project]]\"\n",
+            "status: wip\n",
+            "---\n",
+            "- [ ] #task #prj Ship ^prj\n",
+            "  - ⛓️ **DEPENDS ON:** [[ext#^tee]]\n",
+            "- [ ] #task Resident work [id:: res] ^res\n",
+        ),
+    );
+    write_file(
+        &vault.join("ext.md"),
+        "- [ ] #task External [dependsOn:: res] ^tee\n",
+    );
+    write_blocked_tasks_settings(&vault);
+
+    let dry_run = bob_command()
+        .args(["task", "reconcile"])
+        .arg("--dry-run")
+        .arg("--format")
+        .arg("json")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("dry-run PDR8");
+    assert_success(&dry_run);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&dry_run).trim()).unwrap();
+    assert!(
+        json["dependency_warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| warning["kind"] == "dependency_cycle"),
+        "{}",
+        stdout(&dry_run)
+    );
+}
+
+// PDT10: a tag rewrite keeps the note's CRLF endings.
+#[test]
+fn reconcile_preserves_crlf_on_tag_rewrite() {
+    let temp = TempDir::new("bob-cli-task-status-hooks-pdt10");
+    let vault = temp.path().join("vault");
+    let daily = vault.join("2026/20260716.md");
+    let proj = vault.join("proj.md");
+    write_file(&daily, "## Pomodoros\r\n\r\n- [ ] Current (0900-0930)\r\n");
+    write_file(
+        &proj,
+        concat!(
+            "---\r\n",
+            "type: \"[[project]]\"\r\n",
+            "status: wip\r\n",
+            "---\r\n",
+            "- [ ] #task #prj Ship the thing [scheduled:: 2026-07-20] ^prj\r\n",
+            "- [ ] #task Resident work ^r1\r\n",
+        ),
+    );
+    write_blocked_tasks_settings(&vault);
+
+    let applied = bob_command()
+        .args(["task", "reconcile"])
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("apply PDT10");
+    assert_success(&applied);
+    let contents = fs::read_to_string(&proj).unwrap();
+    assert!(contents.contains("\r\n"), "{contents:?}");
+    assert!(contents.contains("#prj_is_blocked ^r1"), "{contents}");
+    assert!(!contents.contains("\n- [ ] #task Resident work ^r1\n"));
+}
+
+// PDR7 on the R2 adoption path: a field-only same-note id stays in
+// the field, is not projected, and does not block the project.
+#[test]
+fn reconcile_keeps_field_only_internal_prj_ids_unprojected() {
+    let temp = TempDir::new("bob-cli-task-status-hooks-prj-internal-field");
+    let vault = temp.path().join("vault");
+    let daily = vault.join("2026/20260716.md");
+    let proj = vault.join("proj.md");
+    write_file(&daily, "## Pomodoros\n\n- [ ] Current (0900-0930)\n");
+    write_file(
+        &proj,
+        concat!(
+            "---\n",
+            "type: \"[[project]]\"\n",
+            "status: wip\n",
+            "---\n",
+            "- [ ] #task #prj Ship the thing [dependsOn:: local] ^prj\n",
+            "- [ ] #task Local work [id:: local] ^local\n",
+        ),
+    );
+    write_blocked_tasks_settings(&vault);
+
+    let dry_run = bob_command()
+        .args(["task", "reconcile"])
+        .arg("--dry-run")
+        .arg("--format")
+        .arg("json")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("dry-run field-only internal");
+    assert_success(&dry_run);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&dry_run).trim()).unwrap();
+    assert!(
+        json["dependency_warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| warning["kind"] == "project_internal_dependency"),
+        "{}",
+        stdout(&dry_run)
+    );
+    assert!(
+        json["marked_blocked"].as_array().unwrap().is_empty(),
+        "{}",
+        stdout(&dry_run)
+    );
+}
+
+// direct_prj_link = raise: a `^prj` with its own live Task Link today
+// rises to Next, matching the close-path landing.
+#[test]
+fn reconcile_raises_directly_linked_prj() {
+    let temp = TempDir::new("bob-cli-task-status-hooks-direct-prj");
+    let vault = temp.path().join("vault");
+    let daily = vault.join("2026/20260716.md");
+    let proj = vault.join("proj.md");
+    write_file(
+        &daily,
+        concat!(
+            "## Pomodoros\n\n",
+            "- [ ] Current (0900-0930)\n",
+            "  - [[proj#^prj]]\n",
+        ),
+    );
+    write_file(
+        &proj,
+        concat!(
+            "---\n",
+            "type: \"[[project]]\"\n",
+            "status: wip\n",
+            "---\n",
+            "- [ ] #task #prj Ship the thing ^prj\n",
+        ),
+    );
+    write_blocked_tasks_settings(&vault);
+
+    let applied = bob_command()
+        .args(["task", "reconcile"])
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("apply direct prj link");
+    assert_success(&applied);
+    let contents = fs::read_to_string(&proj).unwrap();
+    assert!(
+        contents.contains("- [*] #task #prj Ship the thing ^prj"),
+        "{contents}"
     );
 }

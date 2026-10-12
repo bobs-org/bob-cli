@@ -18,9 +18,11 @@ use std::path::PathBuf;
 
 use chrono::NaiveDate;
 
-use super::super::capture_language::is_reserved_project_task_id;
 use super::super::{
+    capture_language::is_reserved_project_task_id,
     capture_task_toggle::set_task_line_status,
+    project_dependencies::blocking_open_dependency_ids,
+    projects::edits::normalize_prj_is_blocked_tag,
     task_status_hooks::{
         parse_tasks, task_dependency_states, FileScan, TasksSettings,
     },
@@ -95,10 +97,15 @@ where
             {
                 continue;
             }
-            let open_count = states
-                .get(&(file_index, task_index))
-                .map(|state| state.open_dependency_ids.len())
-                .unwrap_or(0);
+            let open_count = blocking_open_dependency_ids(
+                file,
+                task,
+                states
+                    .get(&(file_index, task_index))
+                    .map(|state| state.open_dependency_ids.as_slice())
+                    .unwrap_or(&[]),
+            )
+            .len();
             if has_own_remaining_reason(task, open_count, today) {
                 continue;
             }
@@ -120,6 +127,37 @@ where
     // residents with no own remaining reason. The project's reasons
     // are empty whenever its `^prj` recovered (they are the `^prj`'s
     // own reasons); the guard below keeps that invariant explicit.
+    for file_index in &recovering_projects {
+        let Some((context, reasons)) = project_states.get(*file_index) else {
+            continue;
+        };
+        if !reasons.is_empty() {
+            continue;
+        }
+        let file = &files[*file_index];
+        for (task_index, task) in file.tasks.iter().enumerate() {
+            if !context.is_resident(task) || task.status != '?' {
+                continue;
+            }
+            let open_count = blocking_open_dependency_ids(
+                file,
+                task,
+                states
+                    .get(&(*file_index, task_index))
+                    .map(|state| state.open_dependency_ids.as_slice())
+                    .unwrap_or(&[]),
+            )
+            .len();
+            if has_own_remaining_reason(task, open_count, today) {
+                continue;
+            }
+            recover.insert((*file_index, task_index));
+        }
+    }
+    // PDC3: remaining open residents of a recovered project still lose
+    // `#prj_is_blocked`, including rows that stay `[?]` for their own
+    // reasons and open rows that were never `[?]`.
+    let mut strip_only: BTreeSet<(usize, usize)> = BTreeSet::new();
     for file_index in recovering_projects {
         let Some((context, reasons)) = project_states.get(file_index) else {
             continue;
@@ -129,30 +167,34 @@ where
         }
         let file = &files[file_index];
         for (task_index, task) in file.tasks.iter().enumerate() {
-            if !context.is_resident(task) || task.status != '?' {
+            if !context.is_resident(task)
+                || recover.contains(&(file_index, task_index))
+            {
                 continue;
             }
-            let open_count = states
-                .get(&(file_index, task_index))
-                .map(|state| state.open_dependency_ids.len())
-                .unwrap_or(0);
-            if has_own_remaining_reason(task, open_count, today) {
-                continue;
-            }
-            recover.insert((file_index, task_index));
+            strip_only.insert((file_index, task_index));
         }
     }
     let mut changed_files = BTreeMap::new();
     let mut recovered = Vec::new();
-    let mut by_file: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+    let mut by_file: BTreeMap<usize, Vec<(usize, bool)>> = BTreeMap::new();
     for (file_index, task_index) in recover {
-        by_file.entry(file_index).or_default().push(task_index);
+        by_file
+            .entry(file_index)
+            .or_default()
+            .push((task_index, true));
+    }
+    for (file_index, task_index) in strip_only {
+        by_file
+            .entry(file_index)
+            .or_default()
+            .push((task_index, false));
     }
     for (file_index, mut task_indices) in by_file {
         task_indices.sort_unstable();
         let file = &files[file_index];
         let mut updated: Option<String> = None;
-        for task_index in task_indices {
+        for (task_index, recover_row) in task_indices {
             let task = &file.tasks[task_index];
             let contents = updated.as_ref().unwrap_or(&file.contents);
             let Some(line) = contents
@@ -164,30 +206,46 @@ where
             else {
                 continue;
             };
-            let Some(flipped) = set_task_line_status(&line, ' ') else {
-                continue;
+            let had_cr = line.ends_with('\r');
+            let trimmed =
+                line.strip_suffix('\r').unwrap_or(line.as_str()).to_string();
+            let mut replacement = if recover_row {
+                let Some(flipped) = set_task_line_status(&trimmed, ' ') else {
+                    continue;
+                };
+                // This engine never observes the day text, so every
+                // recovery lands Ready and `is_today` scope reads false:
+                // the UB4 landing skip still applies structurally through
+                // the recovered status.
+                let scope =
+                    unblock_scope_for(&file.relative_path, &flipped, false);
+                apply_recovery_writes(&flipped, today, ' ', &scope)
+            } else {
+                let stripped = normalize_prj_is_blocked_tag(&trimmed, false);
+                if stripped == trimmed {
+                    continue;
+                }
+                stripped
             };
-            // This engine never observes the day text, so every
-            // recovery lands Ready and `is_today` scope reads false:
-            // the UB4 landing skip still applies structurally through
-            // the recovered status.
-            let scope = unblock_scope_for(&file.relative_path, &flipped, false);
-            let replacement =
-                apply_recovery_writes(&flipped, today, ' ', &scope);
+            if had_cr {
+                replacement.push('\r');
+            }
             let base = updated.take().unwrap_or_else(|| file.contents.clone());
             let start = line_start_offset(&base, task.line_index);
             let end = start + line.len();
             let mut next = base;
             next.replace_range(start..end, &replacement);
             updated = Some(next);
-            recovered.push(RecoveredDependent {
-                relative_path: file.relative_path.clone(),
-                line: task.line_index + 1,
-                block_id: task.block_id.clone(),
-                text: task.description.clone(),
-                previous_status_symbol: task.status,
-                status_symbol: ' ',
-            });
+            if recover_row {
+                recovered.push(RecoveredDependent {
+                    relative_path: file.relative_path.clone(),
+                    line: task.line_index + 1,
+                    block_id: task.block_id.clone(),
+                    text: task.description.clone(),
+                    previous_status_symbol: task.status,
+                    status_symbol: ' ',
+                });
+            }
         }
         if let Some(contents) = updated
             && contents != file.contents

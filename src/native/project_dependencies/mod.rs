@@ -7,6 +7,7 @@ mod blocking;
 mod tests;
 
 pub(crate) use blocking::{
-    effective_block_reasons, project_block_reasons, BlockReason,
+    blocking_open_dependency_ids, effective_block_reasons,
+    filter_internal_project_ids, project_block_reasons, BlockReason,
     ProjectBlockReasons, ProjectContext,
 };

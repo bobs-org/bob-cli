@@ -13,6 +13,7 @@ use chrono::NaiveDate;
 use super::super::projects::{
     frontmatter_is_project, frontmatter_value, parse_frontmatter, ProjectStatus,
 };
+use super::super::task_dependencies;
 use super::super::task_status_hooks::{
     canonical_daily_date, fenced_lines, logical_lines, FileScan, TaskLine,
 };
@@ -122,6 +123,58 @@ impl ProjectBlockReasons {
     pub(crate) fn is_empty(&self) -> bool {
         self.open_dependency_ids.is_empty() && self.future_scheduled.is_none()
     }
+}
+
+/// Open ids that may block `task`. Internal same-note ids on a `^prj`
+/// never count (PDR7), even when a dirty `[dependsOn::]` still lists
+/// them.
+pub(crate) fn blocking_open_dependency_ids(
+    file: &FileScan,
+    task: &TaskLine,
+    open_ids: &[String],
+) -> Vec<String> {
+    if task.block_id.as_deref() == Some(PRJ_BLOCK_ID) {
+        filter_internal_project_ids(file, open_ids)
+    } else {
+        open_ids.to_vec()
+    }
+}
+
+/// Drop ids that name a task in `file` itself. Internal `^prj` targets
+/// never project (PDR7), so they must not become project reasons even
+/// when a field-only adoption or legacy child left them in
+/// `[dependsOn::]`.
+pub(crate) fn filter_internal_project_ids(
+    file: &FileScan,
+    open_ids: &[String],
+) -> Vec<String> {
+    if open_ids.is_empty() {
+        return Vec::new();
+    }
+    let internal = same_note_dependency_ids(file);
+    open_ids
+        .iter()
+        .filter(|id| !internal.contains(id.as_str()))
+        .cloned()
+        .collect()
+}
+
+fn same_note_dependency_ids(file: &FileScan) -> BTreeSet<String> {
+    let mut ids = BTreeSet::new();
+    for task in &file.tasks {
+        if let Some(id) = &task.task_id {
+            ids.insert(id.clone());
+        }
+        if let Some(block) = &task.block_id {
+            ids.insert(block.clone());
+            if let Ok(canonical) =
+                task_dependencies::dependency_id(&file.relative_path, block)
+            {
+                ids.insert(canonical);
+            }
+        }
+    }
+    ids
 }
 
 /// Pure project reasons for one recognised project. Open dependency ids are

@@ -502,12 +502,12 @@ impl ReconcileWorker<'_> {
             view.task.line_index,
         );
         let child_index = child.as_ref().map(|child| child.line_index);
-        let legacy = self.plan_legacy(view, child_index, inputs);
+        let legacy = self.plan_legacy(view, files, child_index, inputs);
         match child.map(|child| child.parsed) {
             // `dependency_child_of` never returns `NotALine`, but the
             // type says it can; both mean "no managed line" (R2).
             None | Some(task_dependencies::DependencyLine::NotALine) => {
-                self.plan_adoption(view, &legacy, None);
+                self.plan_adoption(view, files, &legacy, None);
             }
             Some(task_dependencies::DependencyLine::Malformed) => {
                 self.warn(
@@ -520,7 +520,7 @@ impl ReconcileWorker<'_> {
                 let Some(child_index) = child_index else {
                     return;
                 };
-                self.plan_empty(view, &legacy, child_index);
+                self.plan_empty(view, files, &legacy, child_index);
             }
             Some(task_dependencies::DependencyLine::Accepted {
                 links,
@@ -540,6 +540,33 @@ impl ReconcileWorker<'_> {
                 );
             }
         }
+    }
+}
+
+impl ReconcileWorker<'_> {
+    /// PDR7: warn and skip projecting a same-note `^prj` target.
+    /// Returns true when the target is internal so the caller keeps it
+    /// off `[dependsOn::]` and off the live graph.
+    fn warn_project_internal_target(
+        &mut self,
+        view: &TaskView<'_>,
+        files: &[FileScan],
+        path: &Path,
+        block: &str,
+    ) -> bool {
+        if !is_open_project_task(view, files) || path != view.relative_path {
+            return false;
+        }
+        self.warn(
+            view,
+            "project_internal_dependency",
+            &format!(
+                "link to {}#^{} lives in the project's own note; kept, not projected",
+                display_path(path),
+                block
+            ),
+        );
+        true
     }
 }
 
@@ -593,6 +620,7 @@ impl ReconcileWorker<'_> {
     fn plan_legacy(
         &mut self,
         view: &TaskView<'_>,
+        files: &[FileScan],
         dependency_line: Option<usize>,
         inputs: &mut Vec<InputSnapshot>,
     ) -> Vec<LegacyMember> {
@@ -652,6 +680,11 @@ impl ReconcileWorker<'_> {
                 LinkTarget::Task {
                     path, block, id, ..
                 } => {
+                    if self.warn_project_internal_target(
+                        view, files, &path, &block,
+                    ) {
+                        continue;
+                    }
                     let Some(matched) =
                         self.legacy_cover(view, &path, &block, id.as_deref())
                     else {
@@ -829,7 +862,6 @@ impl ReconcileWorker<'_> {
         let mut set: Vec<(PathBuf, String, String, bool)> = Vec::new();
         let mut seen = BTreeSet::new();
         let mut line_links: Vec<String> = Vec::new();
-        let dependent_is_project_task = is_open_project_task(view, files);
         for link in &mut planned {
             // A resolved target that cannot project (a previous-daily
             // or unencodable target with no `[id::]`) keeps its link
@@ -838,20 +870,13 @@ impl ReconcileWorker<'_> {
             // PDR7: a `^prj` link to a task in its own note is a
             // guaranteed deadlock: kept on the line, never projected
             // into `[dependsOn::]`, warned once per link.
-            if dependent_is_project_task
-                && let LinkTarget::Task { path, block, .. } = &link.resolved
-                && path == view.relative_path
-            {
-                self.warn(
-                    view,
-                    "project_internal_dependency",
-                    &format!(
-                        "link to {}#^{} lives in the project's own note; kept, not projected",
-                        display_path(path),
-                        block
-                    ),
-                );
-                keep_verbatim = true;
+            if let LinkTarget::Task { path, block, .. } = &link.resolved {
+                let path = path.clone();
+                let block = block.clone();
+                if self.warn_project_internal_target(view, files, &path, &block)
+                {
+                    keep_verbatim = true;
+                }
             }
             match &link.resolved {
                 LinkTarget::Task { id, .. } => {
@@ -1218,6 +1243,7 @@ impl ReconcileWorker<'_> {
     fn plan_empty(
         &mut self,
         view: &TaskView<'_>,
+        files: &[FileScan],
         legacy: &[LegacyMember],
         child_index: usize,
     ) {
@@ -1225,7 +1251,7 @@ impl ReconcileWorker<'_> {
             self.remove_label_only_line(view, child_index);
             return;
         }
-        self.plan_adoption(view, legacy, Some(child_index));
+        self.plan_adoption(view, files, legacy, Some(child_index));
     }
 
     /// Report a deleted label-only Depends-On line.
@@ -1338,6 +1364,7 @@ impl ReconcileWorker<'_> {
     fn plan_adoption(
         &mut self,
         view: &TaskView<'_>,
+        files: &[FileScan],
         legacy: &[LegacyMember],
         empty_line: Option<usize>,
     ) {
@@ -1421,6 +1448,9 @@ impl ReconcileWorker<'_> {
             }
             // Deterministic choice: first in vault scan order.
             let (path, block) = targets[0].clone();
+            if self.warn_project_internal_target(view, files, &path, &block) {
+                continue;
+            }
             adopted.push((path, block, id.clone()));
         }
         // Set order mirrors the line the adoption writes (adopted

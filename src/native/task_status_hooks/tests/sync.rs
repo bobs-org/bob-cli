@@ -795,6 +795,26 @@ fn desired_statuses_walk_through_project_tasks_without_raising_them() {
     assert!(!desired.contains_key(&prj));
 }
 
+// direct_prj_link = raise: a `^prj` with its own live Task Link today
+// is desired at Next like any linked task, and the walk still
+// continues through it.
+#[test]
+fn desired_statuses_raise_a_directly_linked_prj() {
+    let prj = (PathBuf::from("proj.md"), "prj".to_string());
+    let pre = identity("pre");
+    let direct = BTreeSet::from([prj.clone()]);
+    let edges = BTreeMap::from([(prj.clone(), BTreeSet::from([pre.clone()]))]);
+    let task_blocks =
+        BTreeMap::from([(prj.clone(), vec!['?']), (pre.clone(), vec![' '])]);
+    let project_tasks = BTreeSet::from([prj.clone()]);
+
+    let desired =
+        desired_statuses(&direct, &edges, &task_blocks, &project_tasks);
+
+    assert_eq!(desired.get(&prj), Some(&RankedStatus::Next));
+    assert_eq!(desired.get(&pre), Some(&RankedStatus::Next));
+}
+
 // §13.3: residents inherit `^prj` links as implicit promotion edges;
 // residents of unblocked projects and non-residents gain none.
 #[test]
@@ -1056,5 +1076,84 @@ fn hand_copied_tag_outside_blocked_projects_is_stripped() {
     .expect("hand-copied tag is stripped");
     assert_eq!(rewritten, "- [ ] #task Lone ^lone");
     assert!(added.is_empty());
+    assert_eq!(stripped.len(), 1);
+}
+
+// A misplaced existing tag is rewritten into place and is not counted
+// as a tag addition.
+#[test]
+fn misplaced_existing_tag_is_not_counted_as_added() {
+    let file = project_file(
+        "proj.md",
+        "- [?] #task #prj Ship [dependsOn:: t__pre] ^prj\n- [?] #task Resident #prj_is_blocked [fresh:: 2026-07-16] ^r1\n",
+    );
+    let context = ProjectContext::for_note(&file);
+    let reasons = project_block_reasons(
+        &context,
+        &["t__pre".to_string()],
+        date(2026, 7, 16),
+    );
+    let (mut added, mut stripped, mut written, mut pruned) = empty_reports();
+    let resident = &file.tasks[1];
+    let lines = logical_lines(&file.contents);
+    let rewritten = plan_task_line_rewrite(
+        &file,
+        resident,
+        lines[resident.line_index],
+        None,
+        &context,
+        &reasons,
+        Transition::Unchanged,
+        date(2026, 7, 16),
+        false,
+        &BTreeSet::new(),
+        &mut added,
+        &mut stripped,
+        &mut written,
+        &mut pruned,
+    )
+    .expect("misplaced tag is moved");
+    assert_eq!(
+        rewritten,
+        "- [?] #task Resident [fresh:: 2026-07-16] #prj_is_blocked ^r1"
+    );
+    assert!(added.is_empty(), "moving a tag is not an add: {added:?}");
+    assert!(stripped.is_empty());
+}
+
+// UB5: `(repeat:: …)` is a recurring skip, matching the shared check.
+#[test]
+fn parenthesized_repeat_skips_unblocked_write() {
+    let file = project_file(
+        "proj.md",
+        "- [ ] #task #prj Ship ^prj\n- [?] #task Resident [fresh:: 2026-07-16] #prj_is_blocked (repeat:: 1) ^r1\n",
+    );
+    let context = ProjectContext::for_note(&file);
+    let reasons = ProjectBlockReasons::default();
+    let (mut added, mut stripped, mut written, mut pruned) = empty_reports();
+    let resident = &file.tasks[1];
+    let lines = logical_lines(&file.contents);
+    let rewritten = plan_task_line_rewrite(
+        &file,
+        resident,
+        lines[resident.line_index],
+        Some(' '),
+        &context,
+        &reasons,
+        Transition::Unblock(RankedStatus::Ready),
+        date(2026, 7, 16),
+        false,
+        &BTreeSet::new(),
+        &mut added,
+        &mut stripped,
+        &mut written,
+        &mut pruned,
+    )
+    .expect("recurring recovery still rewrites the tag");
+    assert_eq!(
+        rewritten,
+        "- [ ] #task Resident [fresh:: 2026-07-16] (repeat:: 1) ^r1"
+    );
+    assert!(written.is_empty(), "UB5: no [unblocked::] on recurring");
     assert_eq!(stripped.len(), 1);
 }

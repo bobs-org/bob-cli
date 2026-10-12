@@ -26,6 +26,8 @@ use super::super::{
     note_tasks::clean_description,
     note_tasks::NoteTaskSettings,
     pomodoro::pomodoros_section_range,
+    project_dependencies::blocking_open_dependency_ids,
+    projects::edits::normalize_prj_is_blocked_tag,
     task_dependencies::format::canonical_link,
     task_status_hooks::{
         logical_lines, scan_pomodoros, task_dependency_states, FileScan,
@@ -35,7 +37,8 @@ use super::super::{
 };
 use super::project_close::{
     apply_recovery_writes, project_states_for_files, project_still_blocks,
-    recover_project_members, unblock_scope_for,
+    recover_project_members, recovered_unblocked_project_files,
+    unblock_scope_for,
 };
 use crate::native::capture_dependency_tasks::has_hide_tag;
 
@@ -581,10 +584,15 @@ pub(crate) fn plan_successors(input: SuccessorInput) -> SuccessorPlan {
             if preds.is_empty() {
                 continue;
             }
-            let open_count = states
-                .get(&(file_index, task_index))
-                .map(|state| state.open_dependency_ids.len())
-                .unwrap_or(0);
+            let open_count = blocking_open_dependency_ids(
+                file,
+                task,
+                states
+                    .get(&(file_index, task_index))
+                    .map(|state| state.open_dependency_ids.as_slice())
+                    .unwrap_or(&[]),
+            )
+            .len();
             let kind = if open_count > 0 {
                 VerdictKind::StillBlockedWaitsOn
             } else if task.scheduled.is_some_and(|date| date > input.today) {
@@ -669,7 +677,14 @@ pub(crate) fn plan_successors(input: SuccessorInput) -> SuccessorPlan {
         successor_positions.clear();
     }
 
-    apply_verdicts(input, files, verdicts, successor_positions, day)
+    apply_verdicts(
+        input,
+        files,
+        verdicts,
+        successor_positions,
+        day,
+        &project_states,
+    )
 }
 
 /// One resolved closing target (`docs/task-dependencies.md` §12.3):
@@ -866,6 +881,7 @@ fn apply_verdicts(
     verdicts: Vec<DependentVerdict>,
     successor_positions: Vec<usize>,
     day: DayView,
+    project_states: &super::project_close::ProjectCloseStates,
 ) -> SuccessorPlan {
     let mut plan = SuccessorPlan {
         ran_lookup: true,
@@ -995,48 +1011,50 @@ fn apply_verdicts(
     // (in-place status swaps plus field and tag edits), so snapshot
     // line numbers stay valid.
     let mut edited: BTreeMap<PathBuf, String> = BTreeMap::new();
-    let mut edit_line =
-        |relative: &PathBuf,
-         line_index: usize,
-         new_status: Option<char>,
-         mint: Option<&str>,
-         recovery: Option<(NaiveDate, UnblockScope)>| {
-            let staged = edited.get(relative).cloned().unwrap_or_else(|| {
-                files
-                    .iter()
-                    .find(|file| &file.relative_path == relative)
-                    .map(|file| file.contents.clone())
-                    .unwrap_or_default()
-            });
-            let mut lines: Vec<String> =
-                staged.split('\n').map(str::to_string).collect();
-            if let Some(line) = lines.get_mut(line_index) {
-                let trimmed_end =
-                    line.strip_suffix('\r').unwrap_or(line).to_string();
-                let mut updated = match new_status {
-                    Some(status) => set_task_line_status(&trimmed_end, status)
-                        .unwrap_or(trimmed_end.clone()),
-                    None => trimmed_end,
-                };
-                if let Some(id) = mint {
-                    updated.push_str(" ^");
-                    updated.push_str(id);
-                }
-                if let Some((today, scope)) = recovery {
-                    // PDC2/UB1 (§13.16, freshness.md §10b): recovered rows
-                    // lose `#prj_is_blocked`, and Ready landings write
-                    // `[unblocked::]`. Successor links never reach here.
-                    let landed = new_status.unwrap_or(' ');
-                    updated =
-                        apply_recovery_writes(&updated, today, landed, &scope);
-                }
-                if line.ends_with('\r') {
-                    updated.push('\r');
-                }
-                *line = updated;
+    let mut edit_line = |relative: &PathBuf,
+                         line_index: usize,
+                         new_status: Option<char>,
+                         mint: Option<&str>,
+                         recovery: Option<(NaiveDate, UnblockScope)>,
+                         strip_tag: bool| {
+        let staged = edited.get(relative).cloned().unwrap_or_else(|| {
+            files
+                .iter()
+                .find(|file| &file.relative_path == relative)
+                .map(|file| file.contents.clone())
+                .unwrap_or_default()
+        });
+        let mut lines: Vec<String> =
+            staged.split('\n').map(str::to_string).collect();
+        if let Some(line) = lines.get_mut(line_index) {
+            let trimmed_end =
+                line.strip_suffix('\r').unwrap_or(line).to_string();
+            let mut updated = match new_status {
+                Some(status) => set_task_line_status(&trimmed_end, status)
+                    .unwrap_or(trimmed_end.clone()),
+                None => trimmed_end,
+            };
+            if let Some(id) = mint {
+                updated.push_str(" ^");
+                updated.push_str(id);
             }
-            edited.insert(relative.clone(), lines.join("\n"));
-        };
+            if let Some((today, scope)) = recovery {
+                // PDC2/UB1 (§13.16, freshness.md §10b): recovered rows
+                // lose `#prj_is_blocked`, and Ready landings write
+                // `[unblocked::]`. Successor links never reach here.
+                let landed = new_status.unwrap_or(' ');
+                updated =
+                    apply_recovery_writes(&updated, today, landed, &scope);
+            } else if strip_tag {
+                updated = normalize_prj_is_blocked_tag(&updated, false);
+            }
+            if line.ends_with('\r') {
+                updated.push('\r');
+            }
+            *line = updated;
+        }
+        edited.insert(relative.clone(), lines.join("\n"));
+    };
     let successor_new_status = |previous: char| match previous {
         '?' | ' ' => '*',
         _ => previous,
@@ -1054,6 +1072,7 @@ fn apply_verdicts(
             Some(successor_new_status(task.status)),
             mint,
             None,
+            false,
         );
     }
     // Recovered ranks derive from the post-gesture day text: `*` when the
@@ -1086,7 +1105,42 @@ fn apply_verdicts(
             Some(landed),
             None,
             Some((input.today, scope)),
+            false,
         );
+    }
+    // PDC3: remaining open residents of a recovered project lose
+    // `#prj_is_blocked` even when they keep their own status.
+    let recovered_files =
+        recovered_unblocked_project_files(&verdicts, &files, &project_states);
+    for file_index in recovered_files {
+        let Some((context, _)) = project_states.get(file_index) else {
+            continue;
+        };
+        let file = &files[file_index];
+        for (task_index, task) in file.tasks.iter().enumerate() {
+            if !context.is_resident(task) {
+                continue;
+            }
+            if verdicts.iter().any(|verdict| {
+                verdict.file == file_index
+                    && verdict.task == task_index
+                    && matches!(verdict.kind, VerdictKind::Recover(_))
+            }) {
+                continue;
+            }
+            let current = raw_task_line(&file.contents, task.line_index);
+            if normalize_prj_is_blocked_tag(&current, false) == current {
+                continue;
+            }
+            edit_line(
+                &file.relative_path,
+                task.line_index,
+                None,
+                None,
+                None,
+                true,
+            );
+        }
     }
     // Compose one coherent day post-image when successor bullets were
     // inserted AND the day file itself carries task edits (a successor

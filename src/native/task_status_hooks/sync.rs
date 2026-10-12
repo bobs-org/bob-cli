@@ -5,10 +5,12 @@ use super::super::freshness::placement::{
     mark_unblocked, prune_unblocked, UnblockScope,
 };
 use super::super::project_dependencies::{
-    effective_block_reasons, project_block_reasons, BlockReason,
+    blocking_open_dependency_ids, effective_block_reasons,
+    filter_internal_project_ids, project_block_reasons, BlockReason,
     ProjectBlockReasons, ProjectContext,
 };
 use super::super::projects::edits::normalize_prj_is_blocked_tag;
+use super::super::task_complete::is_recurring_task_line;
 
 pub(crate) fn daily_anchor_date(
     daily_path: &Path,
@@ -454,8 +456,10 @@ pub(super) fn sync_task_statuses(
             })
         })
         .collect::<BTreeSet<_>>();
-    // ADJ-11: recognised `^prj` tasks never rise into a lane, but
-    // the walk continues through them to their prerequisites.
+    // ADJ-11 limits dependency promotion: a `^prj` target reached
+    // through a dep edge is never raised, but a directly linked `^prj`
+    // is desired at Next like any linked task. The walk continues
+    // through it either way.
     let project_task_identities = project_task_identities(&files);
     let desired = desired_statuses(
         &direct_desired,
@@ -494,15 +498,15 @@ pub(super) fn sync_task_statuses(
     let task_dependency_states =
         task_dependency_states(&files, &reconcile.archive_closed_ids);
     // Project blocking (`docs/task-dependencies.md` §13.3): each
-    // project's `^prj` own reasons first (same-note internal links
-    // never project, so the field-derived ids are already clean),
-    // then residents inherit them below.
+    // project's `^prj` own reasons first. Same-note internal ids are
+    // filtered here so a dirty `[dependsOn::]` cannot deadlock the
+    // project (PDR7).
     let project_contexts: Vec<ProjectContext> =
         files.iter().map(ProjectContext::for_note).collect();
     let project_reasons: Vec<ProjectBlockReasons> = files
         .iter()
         .enumerate()
-        .map(|(file_index, _)| {
+        .map(|(file_index, file)| {
             let context = &project_contexts[file_index];
             if !context.recognised {
                 return ProjectBlockReasons::default();
@@ -514,6 +518,7 @@ pub(super) fn sync_task_statuses(
                 })
                 .map(|state| state.open_dependency_ids.clone())
                 .unwrap_or_default();
+            let open_ids = filter_internal_project_ids(file, &open_ids);
             project_block_reasons(context, &open_ids, anchor)
         })
         .collect();
@@ -575,10 +580,16 @@ pub(super) fn sync_task_statuses(
             // Effective blocking (§13.3): the task's own reasons plus
             // its project's `^prj` reasons when it is a resident. A
             // hand-set `[?]` on `^prj` is not a reason and blocks
-            // nobody; recovery needs every reason gone.
-            let block_reasons = effective_block_reasons(
+            // nobody; recovery needs every reason gone. Same-note
+            // ids on `^prj` stay off the live graph (PDR7).
+            let open_ids = blocking_open_dependency_ids(
+                file,
                 task,
                 &dependency_state.open_dependency_ids,
+            );
+            let block_reasons = effective_block_reasons(
+                task,
+                &open_ids,
                 &project_contexts[file_index],
                 &project_reasons[file_index],
                 anchor,
@@ -687,7 +698,15 @@ pub(super) fn sync_task_statuses(
                 None
             };
             if let Some(replacement) = replacement {
-                if new_line.is_some() {
+                // Status-only flips are the plain checkbox swap. Tag,
+                // `[unblocked::]`, and prune rewrites are structural
+                // and wait out the quiet period.
+                let status_only = swap_status_byte(
+                    file_lines.get(task.line_index).copied().unwrap_or(""),
+                    task.status,
+                    replacement,
+                );
+                if new_line.as_ref().is_some_and(|line| line != &status_only) {
                     line_rewrite_files.insert(file_index);
                 }
                 changes.push(PlannedChange {
@@ -916,7 +935,11 @@ pub(super) fn plan_task_line_rewrite(
                 block_id: task.block_id.clone().unwrap_or_default(),
             };
             if want_tag {
-                tags_added.push(change);
+                // Count only real additions: moving a misplaced
+                // existing tag is a rewrite, not an add.
+                if !has_tag_token(raw_line, "#prj_is_blocked") {
+                    tags_added.push(change);
+                }
             } else {
                 tags_stripped.push(change);
             }
@@ -930,7 +953,7 @@ pub(super) fn plan_task_line_rewrite(
                 .contains(&(file.relative_path.clone(), block_id.clone()))
         });
         let scope = UnblockScope {
-            recurring: line_is_recurring(&line),
+            recurring: is_recurring_task_line(&line),
             hidden: has_tag_token(&line, "#hide"),
             is_daily_note,
             is_today,
@@ -986,12 +1009,6 @@ fn swap_status_byte(line: &str, from: char, to: char) -> String {
 /// and vice versa (PDT12).
 fn has_tag_token(line: &str, tag: &str) -> bool {
     line.split(char::is_whitespace).any(|token| token == tag)
-}
-
-/// Tasks recurrence signals on one raw line: the `🔁` emoji or a
-/// `[repeat:: …]` field.
-fn line_is_recurring(line: &str) -> bool {
-    line.contains('🔁') || line.contains("[repeat::")
 }
 
 /// The date carried by the first `[unblocked:: …]` field on the line.

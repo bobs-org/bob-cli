@@ -1,4 +1,5 @@
 //! Pomodoro, duplicate, strike, move, cancel, and empty-block tests.
+use super::super::structure::BlockedConsumption;
 use super::*;
 
 #[test]
@@ -950,26 +951,12 @@ fn blocked_set(ids: &[&str]) -> BTreeSet<(PathBuf, String)> {
         .collect()
 }
 
-fn plan_blocked(
+fn consume_blocked(
     contents: &str,
     resolved: &BTreeMap<RawReference, ResolvedReference>,
     ids: &[&str],
-) -> (StructuralPlan, String) {
-    let lines = logical_lines(contents);
-    let model = scan_pomodoros(&lines, 0..lines.len());
-    let settings = test_settings();
-    let plan = plan_structural_changes_with_blocked(
-        &model,
-        resolved,
-        &settings.done_statuses,
-        &settings.status_types,
-        &BTreeSet::new(),
-        false,
-        &lines,
-        &blocked_set(ids),
-    );
-    let updated = apply_structural_plan(contents, &model, &plan);
-    (plan, updated)
+) -> BlockedConsumption {
+    apply_blocked_consumption(contents, resolved, &blocked_set(ids))
 }
 
 // PDL1: live link to a Blocked task under an open entry that has other
@@ -977,6 +964,7 @@ fn plan_blocked(
 #[test]
 fn consumes_blocked_live_link_and_keeps_the_entry() {
     let contents = concat!(
+        "## Pomodoros\n\n",
         "- [ ] Current (0900-0930)\n",
         "  - [[tasks#^blocked]]\n",
         "  - [[tasks#^keep]]\n",
@@ -985,14 +973,18 @@ fn consumes_blocked_live_link_and_keeps_the_entry() {
         ("tasks", "blocked", vec!['?']),
         ("tasks", "keep", vec![' ']),
     ]);
-    let (plan, updated) = plan_blocked(contents, &resolved, &["blocked"]);
+    let consumption = consume_blocked(contents, &resolved, &["blocked"]);
 
-    assert_eq!(plan.removed_blocked.len(), 1);
-    assert_eq!(plan.removed_blocked[0].block_id, "blocked");
-    assert_eq!(plan.removed_blocked[0].line_number, 2);
+    assert_eq!(consumption.consumed.len(), 1);
+    assert_eq!(consumption.consumed[0].block_id, "blocked");
+    assert_eq!(consumption.consumed[0].line_number, 4);
     assert_eq!(
-        updated,
-        concat!("- [ ] Current (0900-0930)\n", "  - [[tasks#^keep]]\n",)
+        consumption.contents,
+        concat!(
+            "## Pomodoros\n\n",
+            "- [ ] Current (0900-0930)\n",
+            "  - [[tasks#^keep]]\n",
+        )
     );
 }
 
@@ -1035,6 +1027,7 @@ fn consuming_last_child_empties_the_pomodoro() {
 #[test]
 fn consumption_skips_closed_entries_and_struck_links() {
     let contents = concat!(
+        "## Pomodoros\n\n",
         "- [ ] Open (0900-0930)\n",
         "  - ~~[[tasks#^blocked]]~~\n",
         "  - [[tasks#^keep]]\n",
@@ -1045,15 +1038,8 @@ fn consumption_skips_closed_entries_and_struck_links() {
         ("tasks", "blocked", vec!['?']),
         ("tasks", "keep", vec![' ']),
     ]);
-    let (plan, updated) = plan_blocked(contents, &resolved, &["blocked"]);
-    let consumption = apply_blocked_consumption(
-        contents,
-        &resolved,
-        &blocked_set(&["blocked"]),
-    );
+    let consumption = consume_blocked(contents, &resolved, &["blocked"]);
 
-    assert!(plan.removed_blocked.is_empty());
-    assert_eq!(updated, contents);
     assert!(consumption.consumed.is_empty());
     assert_eq!(consumption.contents, contents);
 }
@@ -1063,16 +1049,21 @@ fn consumption_skips_closed_entries_and_struck_links() {
 #[test]
 fn consumption_strips_the_token_from_a_prose_bullet() {
     let contents = concat!(
+        "## Pomodoros\n\n",
         "- [ ] Current (0900-0930)\n",
         "  - notes [[tasks#^blocked]] kept\n",
     );
     let resolved = resolved(&[("tasks", "blocked", vec!['?'])]);
-    let (plan, updated) = plan_blocked(contents, &resolved, &["blocked"]);
+    let consumption = consume_blocked(contents, &resolved, &["blocked"]);
 
-    assert_eq!(plan.removed_blocked.len(), 1);
+    assert_eq!(consumption.consumed.len(), 1);
     assert_eq!(
-        updated,
-        concat!("- [ ] Current (0900-0930)\n", "  - notes  kept\n",)
+        consumption.contents,
+        concat!(
+            "## Pomodoros\n\n",
+            "- [ ] Current (0900-0930)\n",
+            "  - notes  kept\n",
+        )
     );
 }
 
@@ -1081,6 +1072,7 @@ fn consumption_strips_the_token_from_a_prose_bullet() {
 #[test]
 fn consumption_removes_link_only_subtree_with_child_notes() {
     let contents = concat!(
+        "## Pomodoros\r\n\r\n",
         "- [ ] Current (0900-0930)\r\n",
         "  - [[tasks#^blocked]]\r\n",
         "    - authored child note\r\n",
@@ -1090,12 +1082,16 @@ fn consumption_removes_link_only_subtree_with_child_notes() {
         ("tasks", "blocked", vec!['?']),
         ("tasks", "keep", vec![' ']),
     ]);
-    let (plan, updated) = plan_blocked(contents, &resolved, &["blocked"]);
+    let consumption = consume_blocked(contents, &resolved, &["blocked"]);
 
-    assert_eq!(plan.removed_blocked.len(), 1);
+    assert_eq!(consumption.consumed.len(), 1);
     assert_eq!(
-        updated,
-        concat!("- [ ] Current (0900-0930)\r\n", "  - [[tasks#^keep]]\r\n",)
+        consumption.contents,
+        concat!(
+            "## Pomodoros\r\n\r\n",
+            "- [ ] Current (0900-0930)\r\n",
+            "  - [[tasks#^keep]]\r\n",
+        )
     );
 }
 

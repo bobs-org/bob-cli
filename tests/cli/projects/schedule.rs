@@ -152,9 +152,14 @@ fn projects_sync_then_task_status_hooks_blocks_and_recovers_propagated_tasks() {
         .output()
         .expect("recover matured project task");
     assert_success(&recovered);
-    assert!(fs::read_to_string(&project).unwrap().contains(
+    let recovered_note = fs::read_to_string(&project).unwrap();
+    assert!(recovered_note.contains(
         "- [ ] #task Implement milestone [scheduled:: 2026-07-17] ^milestone"
     ));
+    assert!(
+        !recovered_note.contains("#prj_is_blocked"),
+        "tag must strip once the date matures:\n{recovered_note}"
+    );
 }
 
 #[test]
@@ -195,6 +200,9 @@ fn project_schedule_tasks_flip_between_dash_and_blocked_queries_when_due() {
         .output()
         .expect("derive Blocked status before query verification");
     assert_success(&hooks);
+    assert!(fs::read_to_string(&project).unwrap().contains(
+        "- [?] #task Implement query transition [scheduled:: 2026-07-17] #prj_is_blocked ^transition"
+    ));
 
     let run_tasks_note = |note: &str, now: &str| {
         bob_command()
@@ -254,6 +262,14 @@ fn project_schedule_tasks_flip_between_dash_and_blocked_queries_when_due() {
         .output()
         .expect("recover due task before query verification");
     assert_success(&mature_hooks);
+    let matured = fs::read_to_string(&project).unwrap();
+    assert!(matured.contains(
+        "- [ ] #task Implement query transition [scheduled:: 2026-07-17] ^transition"
+    ));
+    assert!(
+        !matured.contains("#prj_is_blocked"),
+        "tag must strip once the date matures:\n{matured}"
+    );
 
     let due_dash = run_tasks_note("dash.md", "2026-07-17");
     let due_blocked = run_tasks_note("blocked.md", "2026-07-17");

@@ -92,9 +92,6 @@ pub(crate) struct FreshRead {
 }
 
 /// Freshness scope inputs for [`mark_unblocked`]: the recovered line
-/// must be an in-scope Ready row or the write is skipped.
-///
-/// Freshness scope inputs for [`mark_unblocked`]: the recovered line
 /// must be an in-scope Ready row or the write is skipped (UB5, UB6).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct UnblockScope {
@@ -276,14 +273,6 @@ pub(crate) fn mark_unblocked(
         output.push_str(suffix);
     }
     Some(output)
-}
-
-/// Remove every `[unblocked:: …]` field from `line`, collapsing the
-/// whitespace each removal leaves to a single space. Returns the line
-/// unchanged when it carries none.
-#[cfg_attr(not(test), allow(dead_code))]
-pub(crate) fn clear_unblocked(line: &str) -> String {
-    remove_unblocked_field(line)
 }
 
 /// Drop a stale `[unblocked:: U]` when `fresh > U` (UB8): returns the

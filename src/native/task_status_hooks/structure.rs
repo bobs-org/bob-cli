@@ -161,31 +161,6 @@ pub(crate) fn plan_structural_changes(
     duplicate_deleted_lines: &BTreeSet<usize>,
     dedupe_into_destination: bool,
 ) -> StructuralPlan {
-    plan_structural_changes_with_blocked(
-        model,
-        resolved,
-        done_statuses,
-        status_types,
-        duplicate_deleted_lines,
-        dedupe_into_destination,
-        &[],
-        &BTreeSet::new(),
-    )
-}
-
-/// Like [`plan_structural_changes`], with an explicit Blocked identity set
-/// (`docs/task-dependencies.md` §13.5). Never keys consumption off `'?'`:
-/// `task_complete` retirement passes an empty set so `Live{'?'}` stays.
-pub(crate) fn plan_structural_changes_with_blocked(
-    model: &PomodoroModel,
-    resolved: &BTreeMap<RawReference, ResolvedReference>,
-    done_statuses: &BTreeSet<char>,
-    status_types: &BTreeMap<char, TaskStatusType>,
-    duplicate_deleted_lines: &BTreeSet<usize>,
-    dedupe_into_destination: bool,
-    lines: &[&str],
-    blocked: &BTreeSet<(PathBuf, String)>,
-) -> StructuralPlan {
     let current = model
         .entries
         .iter()
@@ -264,19 +239,6 @@ pub(crate) fn plan_structural_changes_with_blocked(
         deleted_lines.extend(bullet.line_index..bullet.end_line);
     }
 
-    let (blocked_edits, blocked_deleted, removed_blocked) =
-        plan_blocked_link_removals(
-            model,
-            resolved,
-            lines,
-            blocked,
-            &deleted_lines,
-        );
-    deleted_lines.extend(blocked_deleted);
-    for (line_index, edits) in blocked_edits {
-        token_edits.entry(line_index).or_default().extend(edits);
-    }
-
     for bullet in &model.bullets {
         if deleted_lines.contains(&bullet.line_index) {
             continue;
@@ -335,14 +297,6 @@ pub(crate) fn plan_structural_changes_with_blocked(
         }
         let final_entry = move_target.unwrap_or(bullet.entry_index);
         for link in &bullet.links {
-            if resolved.get(&link.reference).is_some_and(|reference| {
-                blocked.contains(&(
-                    reference.path.clone(),
-                    link.reference.block_id.clone(),
-                ))
-            }) {
-                continue;
-            }
             let retire = completed_links
                 .iter()
                 .any(|completed| std::ptr::eq(*completed, link));
@@ -424,7 +378,7 @@ pub(crate) fn plan_structural_changes_with_blocked(
         marker_added,
         marker_removed,
         removed_canceled,
-        removed_blocked,
+        removed_blocked: Vec::new(),
     }
 }
 

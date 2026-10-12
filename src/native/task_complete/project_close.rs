@@ -18,12 +18,12 @@ use chrono::NaiveDate;
 use super::super::capture_dependency_tasks::has_hide_tag;
 use super::super::freshness::placement::{mark_unblocked, UnblockScope};
 use super::super::project_dependencies::{
+    blocking_open_dependency_ids, filter_internal_project_ids,
     project_block_reasons, ProjectBlockReasons, ProjectContext,
 };
 use super::super::projects::edits::normalize_prj_is_blocked_tag;
 use super::super::task_status_hooks::{
-    canonical_daily_date, task_dependency_states, FileScan,
-    TaskDependencyState, TaskLine,
+    canonical_daily_date, FileScan, TaskDependencyState, TaskLine,
 };
 use super::is_recurring_task_line;
 
@@ -52,6 +52,7 @@ pub(crate) fn project_states_for_files(
                         .map(|state| state.open_dependency_ids.clone())
                 })
                 .unwrap_or_default();
+            let open_ids = filter_internal_project_ids(file, &open_ids);
             let reasons = project_block_reasons(&context, &open_ids, today);
             (context, reasons)
         })
@@ -103,6 +104,47 @@ pub(crate) fn unblock_scope_for(
     }
 }
 
+/// File indices whose `^prj` is recovering and whose project has no
+/// remaining reason: every open resident loses `#prj_is_blocked`
+/// (PDC2/PDC3), including residents that keep their own status.
+pub(crate) fn recovered_unblocked_project_files(
+    verdicts: &[super::successors::DependentVerdict],
+    files: &[FileScan],
+    project_states: &ProjectCloseStates,
+) -> Vec<usize> {
+    use super::successors::VerdictKind;
+    use crate::native::capture_language::is_reserved_project_task_id;
+
+    let mut files_out = Vec::new();
+    for verdict in verdicts {
+        if !matches!(verdict.kind, VerdictKind::Recover(_)) {
+            continue;
+        }
+        let Some(task) = files
+            .get(verdict.file)
+            .and_then(|file| file.tasks.get(verdict.task))
+        else {
+            continue;
+        };
+        if !task
+            .block_id
+            .as_deref()
+            .is_some_and(is_reserved_project_task_id)
+        {
+            continue;
+        }
+        let Some((_, reasons)) = project_states.get(verdict.file) else {
+            continue;
+        };
+        if reasons.is_empty() {
+            files_out.push(verdict.file);
+        }
+    }
+    files_out.sort_unstable();
+    files_out.dedup();
+    files_out
+}
+
 /// When a `^prj` dependent recovers, recover every `[?]`
 /// resident of its project that has no own remaining reason as
 /// `Recover("project_member")` (PDC2): recover-only, never
@@ -146,10 +188,15 @@ pub(crate) fn recover_project_members(
             if !context.is_resident(task) || task.status != '?' {
                 continue;
             }
-            let open_count = states
-                .get(&(file_index, task_index))
-                .map(|state| state.open_dependency_ids.len())
-                .unwrap_or(0);
+            let open_count = blocking_open_dependency_ids(
+                file,
+                task,
+                states
+                    .get(&(file_index, task_index))
+                    .map(|state| state.open_dependency_ids.as_slice())
+                    .unwrap_or(&[]),
+            )
+            .len();
             if has_own_remaining_reason(task, open_count, today) {
                 continue;
             }

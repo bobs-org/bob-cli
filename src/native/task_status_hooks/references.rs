@@ -623,10 +623,12 @@ pub(super) fn desired_statuses(
     project_tasks: &BTreeSet<(PathBuf, String)>,
 ) -> BTreeMap<(PathBuf, String), RankedStatus> {
     let mut desired = BTreeMap::new();
-    // ADJ-11: a `^prj` target is never raised into a lane, but the
-    // walk continues through it to that project's prerequisites.
-    // `propagated` carries the strongest status pushed through each
-    // project task so the walk still terminates.
+    // ADJ-11 limits dependency promotion: a `^prj` target reached
+    // through a dep edge is never raised into a lane, but a directly
+    // linked `^prj` is desired at Next like any linked task. The walk
+    // continues through it either way. `propagated` carries the
+    // strongest status pushed through each project-task *target* so
+    // the walk still terminates.
     let mut propagated: BTreeMap<(PathBuf, String), RankedStatus> =
         BTreeMap::new();
     let mut queue = VecDeque::new();
@@ -636,11 +638,7 @@ pub(super) fn desired_statuses(
         )
         .unwrap_or(RankedStatus::Next)
         .max(RankedStatus::Next);
-        if project_tasks.contains(identity) {
-            propagated.insert(identity.clone(), status);
-        } else {
-            desired.insert(identity.clone(), status);
-        }
+        desired.insert(identity.clone(), status);
         queue.push_back((identity.clone(), status));
     }
     while let Some((source, pushed)) = queue.pop_front() {
@@ -680,8 +678,9 @@ pub(super) fn desired_statuses(
     desired
 }
 
-/// Vault identities of every recognised open `^prj` task: promotion
-/// never raises these targets (ADJ-11).
+/// Vault identities of every recognised open `^prj` task: dependency
+/// promotion never raises these targets (ADJ-11). A direct link still
+/// raises them like any task.
 pub(super) fn project_task_identities(
     files: &[FileScan],
 ) -> BTreeSet<(PathBuf, String)> {

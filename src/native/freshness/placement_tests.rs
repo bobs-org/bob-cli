@@ -5,9 +5,8 @@
 use chrono::NaiveDate;
 
 use super::{
-    clear_unblocked, mark_unblocked, prune_unblocked, read_freshness,
-    set_refresh, stamp_fresh, stamp_fresh_preserve_keeps, tasks_suffix_start,
-    Refusal, UnblockScope,
+    mark_unblocked, prune_unblocked, read_freshness, set_refresh, stamp_fresh,
+    stamp_fresh_preserve_keeps, tasks_suffix_start, Refusal, UnblockScope,
 };
 use crate::native::config::freshness::FreshnessConfig;
 
@@ -857,10 +856,6 @@ fn ub7_stamps_clear_unblocked() {
     assert_eq!(
         preserved.line,
         "- [ ] #task Recovered [fresh:: 2026-10-08] [created:: 2026-09-01]"
-    );
-    assert_eq!(
-        clear_unblocked(input),
-        "- [ ] #task Recovered [fresh:: 2026-10-01] [created:: 2026-09-01]"
     );
 }
 

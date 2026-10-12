@@ -208,7 +208,7 @@ fn pdc2_prj_recovery_recovers_residents() {
 }
 
 // PDC3 (§13.16): a resident with its own open prerequisite stays
-// Blocked when its `^prj` recovers.
+// Blocked when its `^prj` recovers, and still loses `#prj_is_blocked`.
 #[test]
 fn pdc3_resident_with_own_prerequisite_stays_blocked() {
     let recovery = recover_blocked_dependents(
@@ -222,7 +222,8 @@ fn pdc3_resident_with_own_prerequisite_stays_blocked() {
                 &project_note(concat!(
                     "- [?] #task Apply [dependsOn:: done-p] [id:: apply] ^prj\n",
                     "- [?] #task Pitch [id:: pitch] ^pitch\n",
-                    "- [?] #task Sequenced [dependsOn:: extra] [id:: seq] ^seq\n",
+                    "- [?] #task Sequenced [dependsOn:: extra] #prj_is_blocked [id:: seq] ^seq\n",
+                    "- [ ] #task Ready leftover #prj_is_blocked [id:: ready] ^ready\n",
                 )),
             ),
         ]),
@@ -233,4 +234,44 @@ fn pdc3_resident_with_own_prerequisite_stays_blocked() {
     let ids = recovered_ids(&recovery);
     assert_eq!(ids, BTreeSet::from(["prj", "pitch"]));
     assert!(!ids.contains("seq"));
+    let updated = recovery
+        .changed_files
+        .get(&PathBuf::from("proj.md"))
+        .expect("proj.md changed");
+    assert!(!updated.contains("#prj_is_blocked"), "{updated}");
+    assert!(updated.contains("- [?] #task Sequenced"), "{updated}");
+    assert!(updated.contains("- [ ] #task Ready leftover"), "{updated}");
+}
+
+#[test]
+fn recovery_preserves_crlf_when_writing_unblocked() {
+    let recovery = recover_blocked_dependents(
+        snapshot(&[
+            (
+                "sase.md",
+                "- [x] #task Done P [id:: done-p] ^done-p\r\n",
+            ),
+            (
+                "proj.md",
+                concat!(
+                    "---\r\n",
+                    "type: [[project]]\r\n",
+                    "status: wip\r\n",
+                    "---\r\n",
+                    "- [?] #task Apply [fresh:: 2026-10-01] [dependsOn:: done-p] [id:: apply] ^prj\r\n",
+                    "- [?] #task Pitch [fresh:: 2026-10-01] #prj_is_blocked [id:: pitch] ^pitch\r\n",
+                ),
+            ),
+        ]),
+        &completed(&["done-p"]),
+        today(),
+        &test_settings(),
+    );
+    let updated = recovery
+        .changed_files
+        .get(&PathBuf::from("proj.md"))
+        .expect("proj.md changed");
+    assert!(updated.contains("\r\n"), "{updated:?}");
+    assert!(updated.contains("[unblocked:: 2026-10-05]"), "{updated}");
+    assert!(!updated.contains("#prj_is_blocked"), "{updated}");
 }

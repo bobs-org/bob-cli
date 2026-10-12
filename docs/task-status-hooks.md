@@ -1210,8 +1210,11 @@ consumption seed. Each
 one-based original `line_number`, original `line`, owning `pomodoro`, and one or
 more canonical path-plus-block `duplicate_tasks`.
 `removed_empty_pomodoros` contains one item per deleted Pomodoro entry in source
-document order. Each item reports the original one-based `line_number` and the
-original Pomodoro entry `line`; compatibility counters such as
+document order. First-pass deletions (canceled links, completed-link
+retirement) report the original daily-note `line_number` and `line`.
+Consumption-pass deletions (emptied after blocked-link removal) report
+the composed daily-note text after that first rewrite pass. Compatibility
+counters such as
 `open_pomodoros` and `references` keep their input-count meaning and are not
 decremented by this cleanup. Each unresolved reference
 contains `target`, `block_id`, and `reason`; marker-reference entries contain

@@ -949,7 +949,8 @@ fn pdc3_resident_with_own_prerequisite_stays_blocked() {
                 &project_note(concat!(
                     "- [?] #task Apply [fresh:: 2026-10-01] [dependsOn:: done-p] [id:: apply] ^prj\n",
                     "- [?] #task Pitch [fresh:: 2026-10-01] [id:: pitch] ^pitch\n",
-                    "- [?] #task Sequenced [fresh:: 2026-10-01] [dependsOn:: extra] [id:: seq] ^seq\n",
+                    "- [?] #task Sequenced [fresh:: 2026-10-01] [dependsOn:: extra] #prj_is_blocked [id:: seq] ^seq\n",
+                    "- [ ] #task Ready leftover #prj_is_blocked [id:: ready] ^ready\n",
                 )),
             ),
         ],
@@ -980,6 +981,53 @@ fn pdc3_resident_with_own_prerequisite_stays_blocked() {
         .expect("proj.md changed");
     assert!(updated.contains("- [?] #task Sequenced"), "{updated}");
     assert!(updated.contains("- [ ] #task Pitch"), "{updated}");
+    assert!(!updated.contains("#prj_is_blocked"), "{updated}");
+    assert!(updated.contains("- [ ] #task Ready leftover"), "{updated}");
+}
+
+// direct_prj_link = raise: a `^prj` that keeps a live Task Link
+// recovers to Next, matching reconcile.
+#[test]
+fn linked_prj_recovery_lands_next() {
+    let vault_index = index(&["sase.md", "proj.md", "20261005.md"]);
+    let day = concat!(
+        "## Pomodoros\n",
+        "- [ ] (**0920-0950**) \u{2014} CAPTURE\n",
+        "  - [[sase#^other]]\n",
+        "- [ ] () \u{2014} FIX\n",
+        "  - [[proj#^prj]]\n",
+    );
+    let plan = run(
+        vec![pred("sase.md", "done-p", "done-p", "Done P", true)],
+        &[
+            (
+                "sase.md",
+                "- [x] #task Done P [id:: done-p] ^done-p\n",
+            ),
+            (
+                "proj.md",
+                &project_note(
+                    "- [?] #task Apply [dependsOn:: done-p] [id:: apply] ^prj\n",
+                ),
+            ),
+        ],
+        Some(day),
+        "20261005.md",
+        true,
+        &vault_index,
+    );
+    let prj = plan
+        .unblocked
+        .iter()
+        .find(|row| row.block_id == "prj")
+        .expect("prj recovered");
+    assert_eq!(prj.not_linked, Some("project_task"));
+    assert_eq!(prj.status_symbol, '*');
+    let updated = plan
+        .changed_files
+        .get(&PathBuf::from("proj.md"))
+        .expect("proj.md changed");
+    assert!(updated.contains("- [*] #task Apply"), "{updated}");
 }
 
 // UB1 at close level (`docs/freshness.md` §10b): a Ready recovery
