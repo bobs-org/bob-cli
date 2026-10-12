@@ -72,7 +72,8 @@ around `::`. Each task is classified in this order:
    - it is not an open task by Tasks status type;
    - it has no `priority` field;
    - it has no `scheduled` field;
-   - its block ID is `prj` (`bob projects sync` owns `^prj` scheduling).
+   - its block ID is `prj` (`bob projects sync` owns the inline `^prj`
+     `[scheduled::]` project date).
 
    One exception: an open task with no `priority` and exactly one valid
    `scheduled` on or before today increments the summary's **still due P0**

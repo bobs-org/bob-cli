@@ -1,4 +1,4 @@
-//! Schedule propagation, dash-blocked parity, per-file errors.
+//! Schedule propagation, hoist, dash-blocked parity, per-file errors.
 
 use crate::support::*;
 use std::fs;
@@ -9,7 +9,7 @@ fn projects_sync_propagates_scheduled_task_properties_at_date_boundary() {
     let temp = TempDir::new("bob-cli-projects-scheduled-properties");
     let vault = temp.path().join("vault");
     let project = vault.join("Future.md");
-    let original = "---\r\ntype: [[project]]\r\nstatus: wip\r\nscheduled: 2026-07-11\r\n---\r\n- [ ] #task Ship [p:: 1] ^prj\r\n  - [/] #task Nested work ^nested\r\n1. [x] Completed #hide\r\n- [-] Canceled #hidden\r\n```md\r\n- [ ] fenced example\r\n```\r\nThis mentions - [ ] checkbox prose\r\n";
+    let original = "---\r\ntype: [[project]]\r\nstatus: wip\r\nscheduled: 2026-07-11\r\n---\r\n- [ ] #task Ship [p:: 1] [scheduled:: 2026-06-01] ^prj\r\n  - [/] #task Nested work ^nested\r\n1. [x] Completed #hide\r\n- [-] Canceled #hidden\r\n```md\r\n- [ ] fenced example\r\n```\r\nThis mentions - [ ] checkbox prose\r\n";
     write_file(&project, original);
 
     let preview = bob_command()
@@ -22,12 +22,16 @@ fn projects_sync_propagates_scheduled_task_properties_at_date_boundary() {
     assert_eq!(fs::read_to_string(&project).unwrap(), original);
     assert!(
         stdout(&preview).contains(
-            "would schedule 1 task 2026-07-11  frontmatter scheduled is future"
+            "would schedule 1 task 2026-07-11  ^prj scheduled is future"
         ) && stdout(&preview).contains(
             "would remove #hide from 1 task  task schedules replace #hide"
         ) && stdout(&preview)
             .contains("would normalize #hide on ^prj  scheduled 2026-07-11")
+            && stdout(&preview).contains(
+                "would hoist scheduled 2026-07-11 onto ^prj  leftover frontmatter"
+            )
             && stdout(&preview).contains("1 task schedules updated")
+            && stdout(&preview).contains("1 schedules hoisted")
             && stdout(&preview).contains("bob task reconcile"),
         "unexpected preview:\n{}",
         format_output(&preview)
@@ -41,16 +45,16 @@ fn projects_sync_propagates_scheduled_task_properties_at_date_boundary() {
         .expect("apply future scheduled project");
     assert_success(&applied);
     assert!(
-        stdout(&applied).contains(
-            "scheduled 1 task 2026-07-11  frontmatter scheduled is future"
-        ),
+        stdout(&applied)
+            .contains("scheduled 1 task 2026-07-11  ^prj scheduled is future")
+            && stdout(&applied).contains(
+                "hoisted scheduled 2026-07-11 onto ^prj  leftover frontmatter"
+            ),
         "unexpected sync output:\n{}",
         format_output(&applied)
     );
-    assert_eq!(
-        fs::read_to_string(&project).unwrap(),
-        "---\r\ntype: [[project]]\r\nstatus: wip\r\nscheduled: 2026-07-11\r\n---\r\n- [ ] #task Ship [p:: 1] #hide ^prj\r\n  - [/] #task Nested work [scheduled:: 2026-07-11] ^nested\r\n1. [x] Completed\r\n- [-] Canceled #hidden\r\n```md\r\n- [ ] fenced example\r\n```\r\nThis mentions - [ ] checkbox prose\r\n"
-    );
+    let hoisted = "---\r\ntype: [[project]]\r\nstatus: wip\r\n---\r\n- [ ] #task Ship [p:: 1] [scheduled:: 2026-07-11] #hide ^prj\r\n  - [/] #task Nested work [scheduled:: 2026-07-11] ^nested\r\n1. [x] Completed\r\n- [-] Canceled #hidden\r\n```md\r\n- [ ] fenced example\r\n```\r\nThis mentions - [ ] checkbox prose\r\n";
+    assert_eq!(fs::read_to_string(&project).unwrap(), hoisted);
 
     let due = bob_command()
         .args(["projects", "sync", "--bob-dir"])
@@ -60,14 +64,12 @@ fn projects_sync_propagates_scheduled_task_properties_at_date_boundary() {
         .expect("advance to scheduled day");
     assert_success(&due);
     assert!(
-        stdout(&due).contains("0 task schedules updated"),
+        stdout(&due).contains("0 task schedules updated")
+            && !stdout(&due).contains("schedules hoisted"),
         "unexpected due output:\n{}",
         format_output(&due)
     );
-    assert_eq!(
-        fs::read_to_string(&project).unwrap(),
-        "---\r\ntype: [[project]]\r\nstatus: wip\r\nscheduled: 2026-07-11\r\n---\r\n- [ ] #task Ship [p:: 1] #hide ^prj\r\n  - [/] #task Nested work [scheduled:: 2026-07-11] ^nested\r\n1. [x] Completed\r\n- [-] Canceled #hidden\r\n```md\r\n- [ ] fenced example\r\n```\r\nThis mentions - [ ] checkbox prose\r\n"
-    );
+    assert_eq!(fs::read_to_string(&project).unwrap(), hoisted);
 
     let second = bob_command()
         .args(["projects", "sync", "--bob-dir"])
@@ -106,6 +108,13 @@ fn projects_sync_then_task_status_hooks_blocks_and_recovers_propagated_tasks() {
         .expect("propagate project schedule");
     assert_success(&synced);
     let propagated = fs::read_to_string(&project).unwrap();
+    assert!(
+        !propagated.contains("\nscheduled:"),
+        "hoist must delete leftover YAML:\n{propagated}"
+    );
+    assert!(propagated.contains(
+        "- [ ] #task Ship roadmap [scheduled:: 2026-07-17] #hide ^prj"
+    ));
     assert!(propagated.contains(
         "- [/] #task Implement milestone [scheduled:: 2026-07-17] ^milestone"
     ));
@@ -276,16 +285,19 @@ fn projects_sync_shows_sole_prj_task_when_schedule_is_due() {
     assert!(
         stdout(&output)
             .contains("removed #hide from ^prj  no non-hidden open tasks")
-            && stdout(&output).contains("0 task schedules updated"),
-        "due sole ^prj must surface through the normal rule:\n{}",
+            && stdout(&output).contains(
+                "hoisted scheduled 2026-07-11 onto ^prj  leftover frontmatter"
+            )
+            && stdout(&output).contains("0 task schedules updated")
+            && stdout(&output).contains("1 schedules hoisted"),
+        "due sole ^prj must hoist and surface through the normal rule:\n{}",
         format_output(&output)
     );
     assert_eq!(
         fs::read_to_string(project).unwrap(),
-        "---\ntype: [[project]]\nscheduled: 2026-07-11\n---\n- [ ] #task Ship ^prj\n"
+        "---\ntype: [[project]]\n---\n- [ ] #task Ship [scheduled:: 2026-07-11] ^prj\n"
     );
 
-    // A second run changes nothing.
     let again = bob_command()
         .args(["projects", "sync", "--bob-dir"])
         .arg(&vault)
@@ -294,7 +306,8 @@ fn projects_sync_shows_sole_prj_task_when_schedule_is_due() {
         .expect("rerun sync is a no-op");
     assert_success(&again);
     assert!(
-        stdout(&again).contains("0 ^prj edited"),
+        stdout(&again).contains("0 ^prj edited")
+            && !stdout(&again).contains("schedules hoisted"),
         "second run must be a no-op:\n{}",
         format_output(&again)
     );
@@ -302,12 +315,12 @@ fn projects_sync_shows_sole_prj_task_when_schedule_is_due() {
 
 #[test]
 fn projects_sync_surfaces_due_scheduled_project_with_only_closed_tasks() {
-    // The `sase_sites` shape: past frontmatter date, hidden `^prj`,
-    // only closed tasks besides it.
+    // Inline-only source: past ^prj date, hidden `^prj`, only closed
+    // tasks besides it. No leftover YAML to hoist.
     let temp = TempDir::new("bob-cli-projects-scheduled-sites");
     let vault = temp.path().join("vault");
     let project = vault.join("Sites.md");
-    let original = "---\ntype: [[project]]\nscheduled: 2026-08-08\n---\n- [ ] #task Ship #hide ^prj\n- [x] #task Done\n";
+    let original = "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide [scheduled:: 2026-08-08] ^prj\n- [x] #task Done\n";
     write_file(&project, original);
 
     let preview = bob_command()
@@ -319,8 +332,9 @@ fn projects_sync_surfaces_due_scheduled_project_with_only_closed_tasks() {
     assert_success(&preview);
     assert_eq!(fs::read_to_string(&project).unwrap(), original);
     assert!(
-        stdout(&preview).contains("would remove #hide from ^prj"),
-        "dry run must surface the ^prj:\n{}",
+        stdout(&preview).contains("would remove #hide from ^prj")
+            && !stdout(&preview).contains("schedules hoisted"),
+        "dry run must surface the ^prj from its inline date:\n{}",
         format_output(&preview)
     );
 
@@ -333,7 +347,7 @@ fn projects_sync_surfaces_due_scheduled_project_with_only_closed_tasks() {
     assert_success(&applied);
     assert_eq!(
         fs::read_to_string(&project).unwrap(),
-        "---\ntype: [[project]]\nscheduled: 2026-08-08\n---\n- [ ] #task Ship ^prj\n- [x] #task Done\n"
+        "---\ntype: [[project]]\n---\n- [ ] #task Ship [scheduled:: 2026-08-08] ^prj\n- [x] #task Done\n"
     );
 
     let again = bob_command()
@@ -362,6 +376,8 @@ fn projects_schedule_errors_are_per_file_and_leave_invalid_file_untouched() {
         &vault.join("Quoted.md"),
         "---\ntype: [[project]]\nscheduled: \"2026-07-11\"\n---\n- [ ] #task Quoted ^prj\n",
     );
+    let terminal_contents = "---\ntype: [[project]]\nstatus: done\nscheduled: 2026-07-11\n---\n- [x] #task Closed #hide ^prj\n";
+    write_file(&vault.join("Closed.md"), terminal_contents);
 
     let listed = bob_command()
         .args(["projects", "list", "--bob-dir"])
@@ -373,6 +389,7 @@ fn projects_schedule_errors_are_per_file_and_leave_invalid_file_untouched() {
     assert!(
         stdout(&listed).contains("Invalid")
             && stdout(&listed).contains("Quoted")
+            && stdout(&listed).contains("Closed")
     );
     assert!(
         stderr(&listed).contains(
@@ -390,11 +407,21 @@ fn projects_schedule_errors_are_per_file_and_leave_invalid_file_untouched() {
         .expect("sync scheduled projects with one error");
     assert_eq!(synced.status.code(), Some(1));
     assert_eq!(fs::read_to_string(&invalid).unwrap(), invalid_contents);
-    assert!(
-        fs::read_to_string(vault.join("Quoted.md"))
-            .unwrap()
-            .contains("#hide ^prj"),
-        "valid quoted schedule should still sync"
+    assert_eq!(
+        fs::read_to_string(vault.join("Closed.md")).unwrap(),
+        terminal_contents,
+        "terminal leftover frontmatter must stay put"
     );
-    assert!(stdout(&synced).contains("0 task schedules updated"));
+    let quoted = fs::read_to_string(vault.join("Quoted.md")).unwrap();
+    assert!(
+        quoted.contains("[scheduled:: 2026-07-11] #hide ^prj")
+            && !quoted.contains("\nscheduled:"),
+        "valid quoted schedule should hoist onto ^prj:\n{quoted}"
+    );
+    assert!(
+        stdout(&synced).contains("0 task schedules updated")
+            && stdout(&synced).contains("1 schedules hoisted"),
+        "unexpected sync output:\n{}",
+        format_output(&synced)
+    );
 }

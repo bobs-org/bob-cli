@@ -565,6 +565,7 @@ fn projects_help_lists_subcommands_and_options() {
             && help.contains("-d, --dry-run")
             && help.contains("Future dates")
             && help.contains("[scheduled:: YYYY-MM-DD]")
+            && help.contains("hoisted")
             && help.contains("bob task reconcile")
             && help.contains("Invalid dates"),
         "expected sync short and long options:\n{help}"

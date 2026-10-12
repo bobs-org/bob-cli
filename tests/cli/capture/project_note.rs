@@ -259,7 +259,7 @@ fn capture_project_note_renders_authored_tasks_sections_and_tasks_merge() {
 }
 
 #[test]
-fn capture_project_note_schedule_and_priority_write_frontmatter_and_log() {
+fn capture_project_note_schedule_and_priority_write_inline_date_and_log() {
     let temp = TempDir::new("bob-cli-capture-project-note-schedule");
     let vault = temp.path().join("vault");
     write_file(&vault.join("cash.md"), "---\ntype: \"[[area]]\"\n---\n");
@@ -288,7 +288,14 @@ fn capture_project_note_schedule_and_priority_write_frontmatter_and_log() {
     );
     let contents = fs::read_to_string(vault.join("cash_sched1.md"))
         .expect("read scheduled note");
-    assert!(contents.contains("scheduled: 2026-09-22"), "{contents}");
+    assert!(
+        contents.contains("[scheduled:: 2026-09-22] #hide ^prj"),
+        "{contents}"
+    );
+    assert!(
+        !contents.contains("\nscheduled:"),
+        "capture must not write frontmatter scheduled:\n{contents}"
+    );
 
     let config = temp.path().join("config.yml");
     write_priority_config(&config);
@@ -317,7 +324,10 @@ fn capture_project_note_schedule_and_priority_write_frontmatter_and_log() {
     let prio_contents = fs::read_to_string(vault.join("cash_prio1.md"))
         .expect("read priority note");
     assert!(
-        prio_contents.contains("[priority::lowest] #hide ^prj"),
+        prio_contents.contains(&format!(
+            "[priority::lowest] [scheduled:: {}] #hide ^prj",
+            prio_json["scheduled"].as_str().unwrap()
+        )),
         "{prio_contents}"
     );
     assert!(
@@ -325,11 +335,8 @@ fn capture_project_note_schedule_and_priority_write_frontmatter_and_log() {
         "{prio_contents}"
     );
     assert!(
-        prio_contents.contains(&format!(
-            "scheduled: {}",
-            prio_json["scheduled"].as_str().unwrap()
-        )),
-        "{prio_contents}"
+        !prio_contents.contains("\nscheduled:"),
+        "priority capture must not write frontmatter scheduled:\n{prio_contents}"
     );
 }
 

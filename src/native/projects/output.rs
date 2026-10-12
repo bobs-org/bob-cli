@@ -69,6 +69,10 @@ pub(super) fn print_sync_report(
         report.task_schedule_count(),
         report.warning_count()
     );
+    let hoisted = report.hoisted_project_schedules();
+    if hoisted > 0 {
+        summary.push_str(&format!(" {separator} {hoisted} schedules hoisted"));
+    }
     if !report.issues.is_empty() {
         summary
             .push_str(&format!(" {separator} {} errors", report.issues.len()));
@@ -82,6 +86,7 @@ impl SyncEvent {
             Self::Status { project_name, .. }
             | Self::PrjEdit { project_name, .. }
             | Self::TaskSchedules { project_name, .. }
+            | Self::HoistedSchedule { project_name, .. }
             | Self::Warning { project_name, .. } => project_name,
         }
     }
@@ -150,7 +155,7 @@ impl SyncEvent {
                     };
                     let direction = if *future { "future" } else { "due" };
                     lines.push(format!(
-                        "  {prefix} {project_name}  {verb} {scheduled_task_count} {noun} {scheduled}  frontmatter scheduled is {direction}"
+                        "  {prefix} {project_name}  {verb} {scheduled_task_count} {noun} {scheduled}  ^prj scheduled is {direction}"
                     ));
                 }
                 if *removed_hide_count > 0 {
@@ -175,6 +180,13 @@ impl SyncEvent {
                     ));
                 }
                 lines.join("\n")
+            }
+            Self::HoistedSchedule { scheduled, .. } => {
+                let prefix = styler.success_prefix(dry_run);
+                let verb = if dry_run { "would hoist" } else { "hoisted" };
+                format!(
+                    "  {prefix} {project_name}  {verb} scheduled {scheduled} onto ^prj  leftover frontmatter"
+                )
             }
             Self::Warning {
                 message, detail, ..

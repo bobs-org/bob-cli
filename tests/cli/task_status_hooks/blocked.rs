@@ -149,7 +149,7 @@ fn task_status_hooks_reconciles_future_schedules_and_combined_blocking_reasons()
             "- [?] #task Mature but still dependent [dependsOn:: root] [scheduled:: 2026-07-16] ^still-dependent\n",
             "- [ ] #task Future with closed dependency [dependsOn:: closed] [scheduled:: 2026-07-22] ^future-closed\n",
             "- [?] #task Mature recovery [scheduled:: 2026-07-16] ^recover\n",
-            "- [ ] #task Project frontmatter only ^prj\n",
+            "- [ ] #task Project inline schedule [scheduled:: 2026-07-23] ^prj\n",
         ),
     );
     write_blocked_tasks_settings(&vault);
@@ -170,7 +170,7 @@ fn task_status_hooks_reconciles_future_schedules_and_combined_blocking_reasons()
     assert_eq!(fs::read_to_string(&tasks).unwrap(), before);
     let json: serde_json::Value =
         serde_json::from_str(stdout(&dry_run).trim()).unwrap();
-    assert_eq!(json["marked_blocked"].as_array().unwrap().len(), 6);
+    assert_eq!(json["marked_blocked"].as_array().unwrap().len(), 7);
     assert_eq!(json["unblocked"].as_array().unwrap().len(), 1);
 
     let marked = json["marked_blocked"].as_array().unwrap();
@@ -218,7 +218,7 @@ fn task_status_hooks_reconciles_future_schedules_and_combined_blocking_reasons()
         ),
         "{report}"
     );
-    assert!(report.contains("6 blocked, 1 unblocked"), "{report}");
+    assert!(report.contains("7 blocked, 1 unblocked"), "{report}");
 
     let contents = fs::read_to_string(&tasks).unwrap();
     for block_id in [
@@ -230,6 +230,7 @@ fn task_status_hooks_reconciles_future_schedules_and_combined_blocking_reasons()
         "combined",
         "still-dependent",
         "future-closed",
+        "prj",
     ] {
         assert!(
             contents.lines().any(|line| line.contains("- [?]")
@@ -244,7 +245,6 @@ fn task_status_hooks_reconciles_future_schedules_and_combined_blocking_reasons()
         "- [!] #task Unknown future",
         "- [ ] #task Impossible",
         "- [ ] #task Mature recovery",
-        "- [ ] #task Project frontmatter only",
     ] {
         assert!(
             contents.contains(expected),

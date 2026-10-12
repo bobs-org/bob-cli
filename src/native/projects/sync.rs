@@ -36,6 +36,13 @@ impl SyncReport {
             .sum()
     }
 
+    pub(super) fn hoisted_project_schedules(&self) -> usize {
+        self.events
+            .iter()
+            .filter(|event| matches!(event, SyncEvent::HoistedSchedule { .. }))
+            .count()
+    }
+
     pub(super) fn warning_count(&self) -> usize {
         self.events
             .iter()
@@ -81,6 +88,10 @@ pub(super) enum SyncEvent {
         removed_hide_count: usize,
         prj_hide_changed: bool,
     },
+    HoistedSchedule {
+        project_name: String,
+        scheduled: String,
+    },
     Warning {
         project_name: String,
         message: String,
@@ -119,7 +130,7 @@ pub(super) enum ProjectChange {
         removed_hide_count: usize,
         prj_hide_changed: bool,
     },
-    RemoveScheduled {
+    HoistScheduled {
         scheduled: String,
     },
     AddSubprojectLink {
@@ -193,11 +204,9 @@ impl ProjectChange {
                 removed_hide_count: *removed_hide_count,
                 prj_hide_changed: *prj_hide_changed,
             },
-            Self::RemoveScheduled { scheduled } => SyncEvent::PrjEdit {
+            Self::HoistScheduled { scheduled } => SyncEvent::HoistedSchedule {
                 project_name: project_name.to_string(),
-                action: PrjEditAction::Remove,
-                field: format!("[scheduled::{scheduled}]"),
-                reason: "scheduled is no longer used".to_string(),
+                scheduled: scheduled.clone(),
             },
             Self::AddSubprojectLink { stem, state } => SyncEvent::PrjEdit {
                 project_name: project_name.to_string(),
@@ -375,6 +384,7 @@ pub(super) fn issues_allow_subproject(issues: &[ScanIssue]) -> bool {
         && issues.iter().all(|issue| {
             issue.message.starts_with("scheduled ")
                 || issue.message.starts_with("multiple scheduled ")
+                || issue.message.starts_with("^prj scheduled ")
         })
 }
 
@@ -459,10 +469,7 @@ pub(super) fn subproject_children_by_parent_link_name<'a>(
                 link_name: project.link_name.clone(),
                 stem: project.link_stem.clone(),
                 state,
-                future_scheduled: project
-                    .scheduled
-                    .as_ref()
-                    .is_some_and(|scheduled| scheduled.date > today),
+                future_scheduled: child_future_scheduled(project, today, state),
             });
     }
 
@@ -514,10 +521,17 @@ pub(super) fn plan_project_sync_at(
     // Effective post-reconcile unhidden count for the surfacing rule
     // below. When a schedule policy applies, an open ordinary task that
     // is hidden now but will be unhidden this run counts as unhidden.
-    let mut effective_unhidden = project.open_unhidden_count;
     if !effective_status.is_terminal()
         && let Some(scheduled) = &project.scheduled
     {
+        plan.changes.push(ProjectChange::HoistScheduled {
+            scheduled: scheduled.raw.clone(),
+        });
+    }
+
+    let sync_schedule = project_schedule_for_sync(project, &effective_status);
+    let mut effective_unhidden = project.open_unhidden_count;
+    if let Some(scheduled) = &sync_schedule {
         let policy = TaskSchedulePolicy::for_schedule(scheduled.date, today);
         let scheduled_task_count = project
             .task_lines
@@ -579,7 +593,7 @@ pub(super) fn plan_project_sync_at(
             .iter()
             .any(|child| child.state.is_open());
         let should_surface = effective_unhidden == 0 && !has_open_subprojects;
-        if project.scheduled.as_ref().is_none_or(|s| s.date <= today) {
+        if sync_schedule.as_ref().is_none_or(|s| s.date <= today) {
             if should_surface {
                 if project.prj_task.hidden {
                     plan.changes.push(ProjectChange::RemoveHideTag);
@@ -677,15 +691,51 @@ pub(super) fn plan_project_sync_at(
         if plan.changes.len() > subproject_change_start {
             plan.desired_subprojects = Some(desired_subprojects);
         }
-
-        if let Some(scheduled) = &project.prj_task.scheduled {
-            plan.changes.push(ProjectChange::RemoveScheduled {
-                scheduled: scheduled.clone(),
-            });
-        }
     }
 
     plan
+}
+
+pub(super) fn prj_inline_schedule_date(project: &Project) -> Option<NaiveDate> {
+    project
+        .task_lines
+        .iter()
+        .find(|task| task.is_prj)
+        .and_then(|task| task.scheduled_date)
+}
+
+fn project_schedule_for_sync(
+    project: &Project,
+    effective_status: &ProjectStatus,
+) -> Option<ProjectSchedule> {
+    if effective_status.is_terminal() {
+        return None;
+    }
+    if let Some(scheduled) = &project.scheduled {
+        return Some(scheduled.clone());
+    }
+    let date = prj_inline_schedule_date(project)?;
+    Some(ProjectSchedule {
+        raw: date.format("%Y-%m-%d").to_string(),
+        date,
+    })
+}
+
+fn child_future_scheduled(
+    project: &Project,
+    today: NaiveDate,
+    state: SubprojectState,
+) -> bool {
+    let date = if state.is_terminal() {
+        prj_inline_schedule_date(project)
+    } else {
+        project
+            .scheduled
+            .as_ref()
+            .map(|scheduled| scheduled.date)
+            .or_else(|| prj_inline_schedule_date(project))
+    };
+    date.is_some_and(|date| date > today)
 }
 
 pub(super) fn desired_subproject_entries(
@@ -772,4 +822,46 @@ pub(super) fn subprojects_need_normalization(
     marker_count > 1
         || marker_line.indentation != expected_indent
         || marker_line.trimmed_text != expected_text
+        || subprojects_marker_precedes_depends_on(sub_block, marker_line)
+}
+
+pub(super) fn is_depends_on_child(line: &str) -> bool {
+    let Some(content) = list_item_content(line) else {
+        return false;
+    };
+    let trimmed = content.trim_start();
+    trimmed.contains("**DEPENDS ON") || trimmed.contains("**DEPENDENCIES")
+}
+
+pub(super) fn is_cancel_log_child(line: &str) -> bool {
+    let Some(content) = list_item_content(line) else {
+        return false;
+    };
+    let trimmed = content.trim_start();
+    trimmed.starts_with('❌') && trimmed.contains("CANCEL LOG")
+}
+
+pub(super) fn subprojects_anchor_child(
+    sub_block: &PrjSubBlock,
+) -> Option<&PrjSubBlockLine> {
+    if let Some(depends) = sub_block
+        .lines
+        .iter()
+        .find(|line| !line.is_marker && is_depends_on_child(&line.trimmed_text))
+    {
+        return Some(depends);
+    }
+    let first_user = sub_block.lines.iter().find(|line| !line.is_marker)?;
+    is_cancel_log_child(&first_user.trimmed_text).then_some(first_user)
+}
+
+pub(super) fn subprojects_marker_precedes_depends_on(
+    sub_block: &PrjSubBlock,
+    marker_line: &PrjSubBlockLine,
+) -> bool {
+    sub_block.lines.iter().any(|line| {
+        !line.is_marker
+            && is_depends_on_child(&line.trimmed_text)
+            && marker_line.line_number < line.line_number
+    })
 }

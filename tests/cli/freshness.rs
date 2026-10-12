@@ -1184,7 +1184,7 @@ fn list_walks_projects_after_new_with_decoupled_counts() {
         "- [ ] #task Full project ^prj\n- [ ] #task Real work\n",
     );
     write_file(&vault.join("r.md"), "- [ ] #task Read me ^ref\n");
-    // Frontmatter schedules no longer gate tracker review: both walk.
+    // Leftover frontmatter schedules no longer gate tracker review: both walk.
     write_file(
         &vault.join("fut.md"),
         "---\nscheduled: 2026-10-20\n---\n- [ ] #task Future project ^prj\n",

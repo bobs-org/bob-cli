@@ -36,19 +36,42 @@ fn project_changes_replace_status_append_missing_status_and_add_hide_tag() {
 }
 
 #[test]
-fn project_changes_remove_prj_fields_with_adjacent_whitespace() {
+fn project_changes_keep_inline_prj_scheduled_when_removing_hide() {
     let output = apply_changes(
         "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide [scheduled::2026-06-01] ^prj\n",
-        &[
-            ProjectChange::RemoveHideTag,
-            ProjectChange::RemoveScheduled {
-                scheduled: "2026-06-01".to_string(),
-            },
-        ],
+        &[ProjectChange::RemoveHideTag],
     );
     assert_eq!(
         output,
-        "---\ntype: [[project]]\n---\n- [ ] #task Ship ^prj\n"
+        "---\ntype: [[project]]\n---\n- [ ] #task Ship [scheduled::2026-06-01] ^prj\n"
+    );
+}
+
+#[test]
+fn project_changes_hoist_frontmatter_scheduled_onto_prj_and_delete_the_key() {
+    let output = apply_changes(
+        "---\ntype: [[project]]\nstatus: wip\nscheduled: 2026-07-11\ncreated: 2026-07-01\n---\n- [ ] #task Ship #hide [scheduled:: 2026-06-01] ^prj\n",
+        &[ProjectChange::HoistScheduled {
+            scheduled: "2026-07-11".to_string(),
+        }],
+    );
+    assert_eq!(
+        output,
+        "---\ntype: [[project]]\nstatus: wip\ncreated: 2026-07-01\n---\n- [ ] #task Ship #hide [scheduled:: 2026-07-11] ^prj\n"
+    );
+}
+
+#[test]
+fn project_changes_hoist_scheduled_preserves_crlf_and_unrelated_yaml() {
+    let output = apply_changes(
+        "---\r\ntype: [[project]]\r\nstatus: wip\r\nscheduled: 2026-07-11\r\n---\r\n- [ ] #task Ship ^prj\r\n",
+        &[ProjectChange::HoistScheduled {
+            scheduled: "2026-07-11".to_string(),
+        }],
+    );
+    assert_eq!(
+        output,
+        "---\r\ntype: [[project]]\r\nstatus: wip\r\n---\r\n- [ ] #task Ship [scheduled:: 2026-07-11] ^prj\r\n"
     );
 }
 
@@ -119,6 +142,37 @@ fn project_changes_insert_subproject_links_after_prj_with_tab_indent() {
     assert_eq!(
         output,
         "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n\t- 🧩 **Sub-projects:** [[Child]]\n## Tasks\n"
+    );
+}
+
+#[test]
+fn project_changes_insert_subproject_line_after_depends_on_and_cancel_log() {
+    let desired = [open_subproject("Child")];
+    let output = apply_subproject_changes(
+        "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n  - ❌ **CANCEL LOG**\n  - ⛓️ **DEPENDS ON:** [[job#^update-linkedin]]\n  - user notes\n",
+        &[ProjectChange::AddSubprojectLink {
+            stem: "Child".to_string(),
+            state: SubprojectState::Open,
+        }],
+        &desired,
+    );
+    assert_eq!(
+        output,
+        "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n  - ❌ **CANCEL LOG**\n  - ⛓️ **DEPENDS ON:** [[job#^update-linkedin]]\n\t- 🧩 **Sub-projects:** [[Child]]\n  - user notes\n"
+    );
+}
+
+#[test]
+fn project_changes_move_subproject_marker_after_depends_on() {
+    let desired = [open_subproject("Child")];
+    let output = apply_subproject_changes(
+        "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n\t- 🧩 **Sub-projects:** [[Child]]\n\t- ⛓️ **DEPENDS ON:** [[job#^update-linkedin]]\n",
+        &[ProjectChange::NormalizeSubprojects],
+        &desired,
+    );
+    assert_eq!(
+        output,
+        "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n\t- ⛓️ **DEPENDS ON:** [[job#^update-linkedin]]\n\t- 🧩 **Sub-projects:** [[Child]]\n"
     );
 }
 
@@ -317,6 +371,11 @@ fn schedule_only_issues_still_allow_subproject_aggregation() {
         4,
         "scheduled must be a calendar date in YYYY-MM-DD format",
     )]));
+    assert!(issues_allow_subproject(&[ScanIssue::line(
+        "Child.md",
+        6,
+        "^prj scheduled is not a valid calendar date: 2026-02-30",
+    )]));
     assert!(!issues_allow_subproject(&[ScanIssue::line(
         "Child.md",
         5,
@@ -333,16 +392,21 @@ fn scheduled_tasks_precede_prj_surfacing_at_local_date_boundary() {
     let today = NaiveDate::from_ymd_opt(2026, 7, 10).unwrap();
     assert_eq!(
         plan_project_sync_at(&future, &[], today).changes,
-        vec![ProjectChange::ReconcileTaskSchedules {
-            scheduled: "2026-07-11".to_string(),
-            policy: TaskSchedulePolicy::for_schedule(
-                NaiveDate::from_ymd_opt(2026, 7, 11).unwrap(),
-                today,
-            ),
-            scheduled_task_count: 1,
-            removed_hide_count: 0,
-            prj_hide_changed: true,
-        }]
+        vec![
+            ProjectChange::HoistScheduled {
+                scheduled: "2026-07-11".to_string(),
+            },
+            ProjectChange::ReconcileTaskSchedules {
+                scheduled: "2026-07-11".to_string(),
+                policy: TaskSchedulePolicy::for_schedule(
+                    NaiveDate::from_ymd_opt(2026, 7, 11).unwrap(),
+                    today,
+                ),
+                scheduled_task_count: 1,
+                removed_hide_count: 0,
+                prj_hide_changed: true,
+            },
+        ]
     );
 
     // Today/past schedules follow the normal surfacing rule: the
@@ -359,6 +423,9 @@ fn scheduled_tasks_precede_prj_surfacing_at_local_date_boundary() {
         assert_eq!(
             plan_project_sync_at(&due, &[], due_today).changes,
             vec![
+                ProjectChange::HoistScheduled {
+                    scheduled: "2026-07-11".to_string(),
+                },
                 ProjectChange::ReconcileTaskSchedules {
                     scheduled: "2026-07-11".to_string(),
                     policy: TaskSchedulePolicy::for_schedule(
@@ -386,7 +453,12 @@ fn scheduled_tasks_precede_prj_surfacing_at_local_date_boundary() {
             NaiveDate::from_ymd_opt(2026, 7, 11).unwrap(),
         )
         .changes,
-        vec![ProjectChange::RemoveHideTag]
+        vec![
+            ProjectChange::HoistScheduled {
+                scheduled: "2026-07-11".to_string(),
+            },
+            ProjectChange::RemoveHideTag,
+        ]
     );
 }
 
@@ -535,6 +607,9 @@ fn task_schedule_edits_cover_contract_and_preserve_markdown() {
     let future = apply_changes(
         contents,
         &[
+            ProjectChange::HoistScheduled {
+                scheduled: "2026-07-11".to_string(),
+            },
             ProjectChange::ReconcileTaskSchedules {
                 scheduled: "2026-07-11".to_string(),
                 policy: TaskSchedulePolicy::for_schedule(
@@ -545,14 +620,11 @@ fn task_schedule_edits_cover_contract_and_preserve_markdown() {
                 removed_hide_count: 8,
                 prj_hide_changed: true,
             },
-            ProjectChange::RemoveScheduled {
-                scheduled: "stale".to_string(),
-            },
         ],
     );
     assert_eq!(
         future,
-        "---\r\ntype: [[project]]\r\nscheduled: 2026-07-11\r\n---\r\n- [ ] #task Ship [p:: 1] #hide ^prj\r\n  1. [ ] Nested missing [scheduled:: 2026-07-11] ^nested\r\n> - [*] Equal (scheduled:: 2026-07-11)\r\n- [/] Later [scheduled:: 2026-07-12] #hideaway\r\n- [?] Earlier [scheduled:: 2026-07-11]\r\n- [x] Done\r\n- [X] Done upper\r\n- [-] Canceled #hidden\r\n- [!] Custom\r\n- [ ] Duplicate [scheduled:: 2026-07-09] (scheduled:: 2026-07-12) #hide\r\n```md\r\n- [ ] fenced example #hide\r\n```\r\nThis mentions - [ ] checkbox prose\r\n"
+        "---\r\ntype: [[project]]\r\n---\r\n- [ ] #task Ship [p:: 1] [scheduled:: 2026-07-11] #hide ^prj\r\n  1. [ ] Nested missing [scheduled:: 2026-07-11] ^nested\r\n> - [*] Equal (scheduled:: 2026-07-11)\r\n- [/] Later [scheduled:: 2026-07-12] #hideaway\r\n- [?] Earlier [scheduled:: 2026-07-11]\r\n- [x] Done\r\n- [X] Done upper\r\n- [-] Canceled #hidden\r\n- [!] Custom\r\n- [ ] Duplicate [scheduled:: 2026-07-09] (scheduled:: 2026-07-12) #hide\r\n```md\r\n- [ ] fenced example #hide\r\n```\r\nThis mentions - [ ] checkbox prose\r\n"
     );
 
     assert_eq!(

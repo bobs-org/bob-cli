@@ -45,10 +45,6 @@ pub(super) fn tag_span(text: &str, tag: &str) -> Option<(usize, usize)> {
     None
 }
 
-pub(super) fn hide_tag_span(line_text: &str) -> Option<(usize, usize)> {
-    tag_span(line_text, HIDE_TAG)
-}
-
 pub(super) fn is_task_tag_left_boundary(character: char) -> bool {
     character.is_whitespace() || matches!(character, '(' | '[' | '{')
 }

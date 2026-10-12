@@ -517,8 +517,8 @@ fn subproject_aggregation_marks_only_schedules_after_shared_today() {
     let absent = project("Absent", None, "- [ ] #task Ship absent ^prj");
     let closed_future = project(
         "ClosedFuture",
-        Some("2026-07-12"),
-        "- [x] #task Ship closed #hide ^prj",
+        None,
+        "- [x] #task Ship closed #hide [scheduled:: 2026-07-12] ^prj",
     );
 
     let children = subproject_children_by_parent_link_name(
@@ -538,7 +538,7 @@ fn subproject_aggregation_marks_only_schedules_after_shared_today() {
 }
 
 #[test]
-fn project_sync_plan_removes_stale_scheduled_field() {
+fn project_sync_plan_keeps_inline_prj_scheduled_and_surfaces() {
     let mut issues = Vec::new();
     let project = parse_project(
         Path::new("Scheduled.md"),
@@ -549,14 +549,48 @@ fn project_sync_plan_removes_stale_scheduled_field() {
 
     assert!(issues.is_empty());
     assert_eq!(
-        plan_project_sync(&project, &[]).changes,
-        vec![
-            ProjectChange::RemoveHideTag,
-            ProjectChange::RemoveScheduled {
-                scheduled: "2026-06-01".to_string(),
-            },
-        ]
+        plan_project_sync_at(
+            &project,
+            &[],
+            NaiveDate::from_ymd_opt(2026, 7, 10).unwrap(),
+        )
+        .changes,
+        vec![ProjectChange::RemoveHideTag]
     );
+}
+
+#[test]
+fn project_sync_plan_hoists_frontmatter_scheduled_onto_prj() {
+    let project = parse_clean_project(
+        "Hoist.md",
+        "---\ntype: [[project]]\nscheduled: 2026-07-11\n---\n- [ ] #task Ship #hide [scheduled:: 2026-06-01] ^prj\n",
+    );
+    let today = NaiveDate::from_ymd_opt(2026, 7, 10).unwrap();
+    let plan = plan_project_sync_at(&project, &[], today);
+    assert_eq!(
+        plan.changes,
+        vec![ProjectChange::HoistScheduled {
+            scheduled: "2026-07-11".to_string(),
+        }]
+    );
+}
+
+#[test]
+fn project_sync_plan_leaves_terminal_frontmatter_scheduled_untouched() {
+    let project = parse_clean_project(
+        "Done.md",
+        "---\ntype: [[project]]\nstatus: done\nscheduled: 2026-07-11\n---\n- [x] #task Ship #hide ^prj\n",
+    );
+    let plan = plan_project_sync_at(
+        &project,
+        &[],
+        NaiveDate::from_ymd_opt(2026, 7, 10).unwrap(),
+    );
+    assert!(!plan.changes.iter().any(|change| matches!(
+        change,
+        ProjectChange::HoistScheduled { .. }
+            | ProjectChange::ReconcileTaskSchedules { .. }
+    )));
 }
 
 #[test]

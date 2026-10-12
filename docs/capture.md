@@ -2798,10 +2798,9 @@ does for every other capture.
 `p:<N>` writes `[priority::<value>]` inline on the `^prj` line, before
 `#hide ^prj`, and a rolled `p:<N>` date still writes its
 `🗓️ **SCHEDULE LOG**` child under `^prj`. A resolved scheduled date itself
-lands in frontmatter as `scheduled: YYYY-MM-DD`, immediately after `status` —
-frontmatter is the sole project schedule, and `bob projects sync` strips
-inline `scheduled` fields from open `^prj` tasks, so an inline field would be
-deleted on the next sync.
+lands as `[scheduled:: YYYY-MM-DD]` on the `^prj` line, with the other task
+metadata, and `^prj` keeps capture's documented `s:<N>` `[?]` rule.
+`bob projects sync` never writes frontmatter `scheduled`.
 
 Authored child bullets are re-routed into the new note rather than nested
 under the captured line. A first-level authored bullet with at least one

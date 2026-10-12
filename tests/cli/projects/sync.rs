@@ -78,11 +78,11 @@ fn projects_sync_updates_status_prj_hide_tag_warns_and_is_idempotent() {
             && out.contains("^prj task opened")
             && out.contains("would remove #hide from ^prj")
             && out.contains("would add #hide to ^prj")
-            && out.contains("would remove [scheduled::2026-06-01] from ^prj")
+            && !out.contains("would remove [scheduled::2026-06-01]")
             && out.contains("active project has no ^prj task")
             && out.contains("template placeholder")
             && out.contains(
-                "11 projects - 4 status updated - 6 ^prj edited - 0 task schedules updated - 2 warnings"
+                "11 projects - 4 status updated - 5 ^prj edited - 0 task schedules updated - 2 warnings"
             ),
         "unexpected dry-run output:\n{out}"
     );
@@ -113,9 +113,9 @@ fn projects_sync_updates_status_prj_hide_tag_warns_and_is_idempotent() {
             && out.contains("status: done -> wip")
             && out.contains("removed #hide from ^prj")
             && out.contains("added #hide to ^prj")
-            && out.contains("removed [scheduled::2026-06-01] from ^prj")
+            && !out.contains("removed [scheduled::2026-06-01]")
             && out.contains(
-                "11 projects - 4 status updated - 6 ^prj edited - 0 task schedules updated - 2 warnings"
+                "11 projects - 4 status updated - 5 ^prj edited - 0 task schedules updated - 2 warnings"
             ),
         "unexpected sync output:\n{out}"
     );
@@ -150,7 +150,7 @@ fn projects_sync_updates_status_prj_hide_tag_warns_and_is_idempotent() {
     );
     assert_eq!(
         fs::read_to_string(vault.join("ExistingScheduled.md")).expect("read scheduled"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish already scheduled ^prj\n"
+        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Finish already scheduled [scheduled::2026-06-01] ^prj\n"
     );
     assert_eq!(
         fs::read_to_string(vault.join("TerminalOpen.md")).expect("read terminal open"),
@@ -302,7 +302,7 @@ fn projects_sync_reconciles_future_subproject_markers_at_date_boundary() {
     );
     write_file(
         &vault.join("FutureClosed.md"),
-        "---\ntype: [[project]]\nstatus: done\nparent: [[Parent]]\nscheduled: 2026-07-11\n---\n- [x] #task Finish closed #hide ^prj\n",
+        "---\ntype: [[project]]\nstatus: done\nparent: [[Parent]]\n---\n- [x] #task Finish closed #hide [scheduled:: 2026-07-11] ^prj\n",
     );
 
     let parent_before =
@@ -325,7 +325,7 @@ fn projects_sync_reconciles_future_subproject_markers_at_date_boundary() {
         ) && out.contains(
             "would add 🗓️ [[FutureClosed]] to ^prj  sub-project scheduled in future"
         ) && out.contains(
-            "5 projects - 0 status updated - 2 ^prj edited - 0 task schedules updated - 0 warnings"
+            "5 projects - 0 status updated - 2 ^prj edited - 0 task schedules updated - 0 warnings - 2 schedules hoisted"
         ),
         "unexpected dry-run output:\n{out}"
     );
@@ -401,7 +401,7 @@ fn projects_sync_reconciles_future_subproject_markers_at_date_boundary() {
     // A today-scheduled empty project surfaces through the normal rule.
     assert_eq!(
         fs::read_to_string(vault.join("FutureOpen.md")).expect("read child"),
-        "---\ntype: [[project]]\nstatus: wip\nparent: [[Parent]]\nscheduled: 2026-07-11\n---\n- [ ] #task Finish future ^prj\n"
+        "---\ntype: [[project]]\nstatus: wip\nparent: [[Parent]]\n---\n- [ ] #task Finish future [scheduled:: 2026-07-11] ^prj\n"
     );
 
     let output = bob_command()

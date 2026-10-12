@@ -8,50 +8,39 @@ pub(super) fn apply_project_changes(
 ) -> Result<String, String> {
     let mut edits = Vec::new();
     let mut sync_subprojects = false;
-    let reconcile_task_schedules = changes.iter().any(|change| {
-        matches!(change, ProjectChange::ReconcileTaskSchedules { .. })
+    let hoist_scheduled = changes.iter().find_map(|change| match change {
+        ProjectChange::HoistScheduled { scheduled } => Some(scheduled.as_str()),
+        _ => None,
     });
-    let remove_prj_scheduled = changes
-        .iter()
-        .any(|change| matches!(change, ProjectChange::RemoveScheduled { .. }));
+    let reconcile_policy = changes.iter().find_map(|change| match change {
+        ProjectChange::ReconcileTaskSchedules {
+            scheduled, policy, ..
+        } => Some((scheduled.as_str(), *policy)),
+        _ => None,
+    });
     let prj_hide_action = changes.iter().find_map(|change| match change {
         ProjectChange::RemoveHideTag => Some(false),
         ProjectChange::AddHideTag { .. } => Some(true),
         _ => None,
     });
+    let policy_hide = reconcile_policy
+        .and_then(|(_, policy)| policy.include_prj.then_some(policy.future));
+    let prj_hide = policy_hide.or(prj_hide_action);
     for change in changes {
         match change {
             ProjectChange::Status { to, .. } => {
                 edits.push(status_edit(contents, to.label())?);
             }
-            ProjectChange::RemoveHideTag => {
-                if !remove_prj_scheduled {
-                    edits.push(remove_prj_hide_tag_edit(contents)?);
-                }
-            }
-            ProjectChange::AddHideTag { .. } => {
-                if !remove_prj_scheduled {
-                    edits.push(add_hide_tag_edit(contents)?);
-                }
+            ProjectChange::RemoveHideTag | ProjectChange::AddHideTag { .. } => {
             }
             ProjectChange::ReconcileTaskSchedules {
                 scheduled, policy, ..
             } => {
-                edits.extend(task_schedule_edits(
-                    contents,
-                    scheduled,
-                    *policy,
-                    remove_prj_scheduled,
-                )?);
+                edits
+                    .extend(task_schedule_edits(contents, scheduled, *policy)?);
             }
-            ProjectChange::RemoveScheduled { .. } => {
-                if !reconcile_task_schedules {
-                    edits.push(prj_metadata_edit(
-                        contents,
-                        true,
-                        prj_hide_action,
-                    )?);
-                }
+            ProjectChange::HoistScheduled { .. } => {
+                edits.push(remove_frontmatter_scheduled_key(contents)?);
             }
             ProjectChange::AddSubprojectLink { .. }
             | ProjectChange::RemoveSubprojectLink { .. }
@@ -62,6 +51,9 @@ pub(super) fn apply_project_changes(
                 sync_subprojects = true;
             }
         }
+    }
+    if hoist_scheduled.is_some() || prj_hide.is_some() {
+        edits.push(prj_line_edit(contents, hoist_scheduled, prj_hide)?);
     }
     if sync_subprojects {
         let desired_subprojects = desired_subprojects.ok_or_else(|| {
@@ -102,7 +94,6 @@ pub(super) fn task_schedule_edits(
     contents: &str,
     scheduled: &str,
     policy: TaskSchedulePolicy,
-    remove_prj_scheduled: bool,
 ) -> Result<Vec<TextEdit>, String> {
     let frontmatter = parse_frontmatter(contents)
         .ok_or_else(|| "failed to locate project frontmatter".to_string())?;
@@ -121,31 +112,20 @@ pub(super) fn task_schedule_edits(
         let Some(task) = parse_task_line(line_text) else {
             continue;
         };
-        let is_prj = is_valid_prj_task_line(line_text, task);
-        let scheduled_fields = inline_field_spans(task.text, "scheduled");
-        if !is_prj && scheduled_fields.len() > 1 {
+        if is_valid_prj_task_line(line_text, task) {
             continue;
         }
-        let mut replacement = line_text.to_string();
-        if is_prj {
-            replacement = normalize_task_hide_tag(
+        let scheduled_fields = inline_field_spans(task.text, "scheduled");
+        if scheduled_fields.len() > 1 {
+            continue;
+        }
+        let mut replacement = remove_all_task_tags(line_text, HIDE_TAG);
+        if is_propagated_schedule_mark(task.mark) {
+            replacement = upsert_task_scheduled(
                 &replacement,
-                policy.future,
-                policy.include_prj,
+                scheduled,
+                policy.scheduled,
             );
-            if remove_prj_scheduled {
-                replacement =
-                    remove_all_inline_fields(&replacement, "scheduled");
-            }
-        } else {
-            replacement = remove_all_task_tags(&replacement, HIDE_TAG);
-            if is_propagated_schedule_mark(task.mark) {
-                replacement = upsert_task_scheduled(
-                    &replacement,
-                    scheduled,
-                    policy.scheduled,
-                );
-            }
         }
         if replacement != line_text {
             if contents[line.start..line.end].ends_with('\r') {
@@ -229,6 +209,15 @@ pub(super) fn remove_all_task_tags(line: &str, tag: &str) -> String {
     } else {
         output
     }
+}
+
+pub(super) fn set_task_scheduled(line: &str, scheduled: &str) -> String {
+    let field_text = format!("[scheduled:: {scheduled}]");
+    let without = remove_all_inline_fields(line, "scheduled");
+    let insertion = task_metadata_insertion_offset(&without);
+    let before = without[..insertion].trim_end();
+    let after = &without[insertion..];
+    format!("{before} {field_text}{after}")
 }
 
 fn upsert_task_scheduled(
@@ -372,61 +361,9 @@ pub(super) fn status_value_edit(
     })
 }
 
-pub(super) fn add_hide_tag_edit(contents: &str) -> Result<TextEdit, String> {
-    let frontmatter = parse_frontmatter(contents)
-        .ok_or_else(|| "failed to locate project frontmatter".to_string())?;
-    for line in line_spans(contents) {
-        if line.line_number <= frontmatter.body_start_line {
-            continue;
-        }
-        let line_text = &contents[line.start..line.end];
-        if !has_trailing_prj_anchor(line_text) {
-            continue;
-        }
-        let anchor_start = line_text
-            .rfind("^prj")
-            .ok_or_else(|| "failed to locate ^prj anchor".to_string())?;
-        return Ok(TextEdit {
-            start: line.start + anchor_start,
-            end: line.start + anchor_start,
-            replacement: format!("{HIDE_TAG} "),
-        });
-    }
-
-    Err("failed to locate ^prj task".to_string())
-}
-
-pub(super) fn remove_prj_hide_tag_edit(
+pub(super) fn prj_line_edit(
     contents: &str,
-) -> Result<TextEdit, String> {
-    let frontmatter = parse_frontmatter(contents)
-        .ok_or_else(|| "failed to locate project frontmatter".to_string())?;
-    for line in line_spans(contents) {
-        if line.line_number <= frontmatter.body_start_line {
-            continue;
-        }
-        let line_text = &contents[line.start..line.end];
-        if !has_trailing_prj_anchor(line_text) {
-            continue;
-        }
-        let Some((tag_start, tag_end)) = hide_tag_span(line_text) else {
-            continue;
-        };
-        let (start, end) =
-            inline_field_removal_range(line_text, tag_start, tag_end);
-        return Ok(TextEdit {
-            start: line.start + start,
-            end: line.start + end,
-            replacement: String::new(),
-        });
-    }
-
-    Err("failed to locate #hide tag on ^prj task".to_string())
-}
-
-pub(super) fn prj_metadata_edit(
-    contents: &str,
-    remove_scheduled: bool,
+    scheduled: Option<&str>,
     hide: Option<bool>,
 ) -> Result<TextEdit, String> {
     let frontmatter = parse_frontmatter(contents)
@@ -439,14 +376,16 @@ pub(super) fn prj_metadata_edit(
         if !has_trailing_prj_anchor(line_text) {
             continue;
         }
-        let mut replacement = line_text.to_string();
-        if remove_scheduled {
-            replacement = remove_all_inline_fields(&replacement, "scheduled");
+        let had_cr = line_text.ends_with('\r');
+        let body = trim_cr(line_text);
+        let mut replacement = body.to_string();
+        if let Some(scheduled) = scheduled {
+            replacement = set_task_scheduled(&replacement, scheduled);
         }
         if let Some(hide) = hide {
             replacement = normalize_task_hide_tag(&replacement, hide, true);
         }
-        if contents[line.start..line.end].ends_with('\r') {
+        if had_cr {
             replacement.push('\r');
         }
         return Ok(TextEdit {
@@ -457,6 +396,28 @@ pub(super) fn prj_metadata_edit(
     }
 
     Err("failed to locate ^prj task".to_string())
+}
+
+pub(super) fn remove_frontmatter_scheduled_key(
+    contents: &str,
+) -> Result<TextEdit, String> {
+    let layout = frontmatter_layout(contents)
+        .ok_or_else(|| "failed to locate project frontmatter".to_string())?;
+    for line in line_spans(contents) {
+        if line.line_number <= 1 || line.line_number >= layout.body_start_line {
+            continue;
+        }
+        let line_text = trim_cr(&contents[line.start..line.end]);
+        if frontmatter_line_has_key(line_text, "scheduled") {
+            return Ok(TextEdit {
+                start: line.start,
+                end: line.next_start,
+                replacement: String::new(),
+            });
+        }
+    }
+
+    Err("failed to locate scheduled frontmatter key".to_string())
 }
 
 pub(super) fn sync_subprojects_line_edits(
@@ -488,8 +449,14 @@ pub(super) fn sync_subprojects_line_edits(
     }
 
     let rendered = render_subprojects_line(&layout.prj_indent, desired_entries);
+    let anchor = subprojects_insert_anchor(&layout);
+    let marker_needs_move = first_marker.is_some_and(|marker_line| {
+        subprojects_marker_precedes_depends_on(&layout.sub_block, marker_line)
+    });
+    let marker_correctly_placed = first_marker.is_some() && !marker_needs_move;
 
-    if let Some(marker_line) = first_marker {
+    if let Some(marker_line) = first_marker.filter(|_| marker_correctly_placed)
+    {
         let line = line_by_number(&layout.lines, marker_line.line_number)?;
         edits.push(TextEdit {
             start: line.start,
@@ -508,21 +475,35 @@ pub(super) fn sync_subprojects_line_edits(
             });
         }
     } else {
-        let ending = line_ending(contents, layout.prj_line);
-        let prj_has_ending = layout.prj_line.next_start > layout.prj_line.end;
-        let replacement = if prj_has_ending {
+        for line_number in marker_line_numbers {
+            let line = line_by_number(&layout.lines, line_number)?;
+            edits.push(TextEdit {
+                start: line.start,
+                end: line.next_start,
+                replacement: String::new(),
+            });
+        }
+        let ending = line_ending(contents, anchor);
+        let anchor_has_ending = anchor.next_start > anchor.end;
+        let replacement = if anchor_has_ending {
             format!("{rendered}{ending}")
         } else {
             format!("{ending}{rendered}")
         };
         edits.push(TextEdit {
-            start: layout.prj_line.next_start,
-            end: layout.prj_line.next_start,
+            start: anchor.next_start,
+            end: anchor.next_start,
             replacement,
         });
     }
 
     Ok(edits)
+}
+
+fn subprojects_insert_anchor(layout: &PrjSubBlockLayout) -> LineSpan {
+    subprojects_anchor_child(&layout.sub_block)
+        .and_then(|child| line_by_number(&layout.lines, child.line_number).ok())
+        .unwrap_or(layout.prj_line)
 }
 
 pub(super) fn line_by_number(

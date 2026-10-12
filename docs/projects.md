@@ -9,8 +9,9 @@ anchored with `^prj`. Typical CLI order:
 4. `bob task reconcile` (formerly `bob task-status-hooks`, still accepted)
    — derive `[?]` Blocked markers for any schedules just written
 
-`sync` writes frontmatter, `#hide`, Sub-projects lines, and inline
-`[scheduled::]` fields. It does not change checkboxes. The Bob Navigation
+`sync` writes `#hide`, Sub-projects lines, and inline `[scheduled::]`
+fields, and hoists leftover frontmatter `scheduled` onto `^prj`. It does
+not change checkboxes. The Bob Navigation
 Hotkeys Task Card in Obsidian can write schedules or priorities and reconcile
 Blocked in one editor transaction; those gestures are not part of the CLI
 command. See [Task Card](#task-card) and
@@ -96,13 +97,16 @@ alias equal to another note's stem is shadowed by that stem. Empty and
 non-string entries are ignored with a warning, visible with
 `bob capture-targets -v` alongside the duplicate and shadow warnings.
 
-Project scheduling is an optional frontmatter date:
+Project scheduling lives on the `^prj` task as an inline Dataview field:
 
-```yaml
-scheduled: 2026-07-16
+```markdown
+- [ ] #task #prj Ship the project outcome! [scheduled:: 2026-07-16] #hide ^prj
 ```
 
-Quoted values such as `scheduled: "2026-07-16"` are also accepted. The value
+Leftover YAML `scheduled: 2026-07-16` (quoted values such as
+`scheduled: "2026-07-16"` included) is still scanned: `bob projects sync`
+hoists a valid leftover date onto `^prj` — frontmatter wins when both exist —
+and deletes only that YAML key. Terminal projects are left alone. The value
 must be exactly `YYYY-MM-DD` and must be a real calendar date. Empty values,
 timestamps, shortened dates, and impossible dates such as `2026-02-30` are
 per-file scan errors for both `list` and `sync`. `sync` leaves a project with an
@@ -158,24 +162,30 @@ Task statuses follow the Tasks plugin convention:
   with that state: a later run reports no change for that project.
 - Active projects with non-hidden open tasks or open sub-projects get
   `#hide` added back to their open `^prj` task immediately before `^prj`.
-- A valid `scheduled: P` frontmatter date overrides surfacing only when
-  it is in the future. Every ordinary task with an open marker (`[ ]`,
+- A valid project date `P` on `^prj` (`[scheduled:: P]`, or leftover
+  frontmatter `scheduled: P` that this run hoists) overrides surfacing only
+  when it is in the future. Every ordinary task with an open marker (`[ ]`,
   `[*]`, `[/]`, or `[?]`) receives `[scheduled:: P]`, unless its one
   existing square-bracket or parenthesized `scheduled` field is a valid
   date equal to or later than `P`. Missing, malformed, and earlier
   values are written in the canonical square-bracket form. Emoji Tasks
   dates such as `⏳ 2026-08-01` are not inline Dataview fields and are
-  not considered. On a today/past date — or with no `scheduled` at all
+  not considered. On a today/past date — or with no project date at all
   — the normal surfacing rule below applies.
 - Ordinary tasks lose all whole-token `#hide` tags at every checkbox status;
   near-matches such as `#hidden` and `#hideaway` remain. An ordinary task with
   multiple `scheduled` fields is left completely unchanged and reported as a
   non-fatal warning. Done, canceled, and unknown/custom-status tasks otherwise
   receive no schedule field.
-- The `^prj` lifecycle task never receives an inline schedule. A future
-  project date forces exactly one `#hide` on it. `#hide` therefore
-  remains the lifecycle surfacing mechanism for `^prj`, not for
-  scheduled ordinary tasks.
+- The `^prj` lifecycle task holds the project date as inline
+  `[scheduled:: P]`. A future project date forces exactly one `#hide` on it.
+  `#hide` therefore remains the lifecycle surfacing mechanism for `^prj`,
+  not for scheduled ordinary tasks.
+- Leftover frontmatter `scheduled` on a non-terminal project is written onto
+  `^prj` (replacing any existing inline date; frontmatter wins) and the YAML
+  key is deleted. Unrelated YAML, CRLF, and the final-newline state stay
+  byte-identical. Terminal projects are left alone. The hoist counts as a
+  `--dry-run` change and is reported as `N schedules hoisted`.
 - Schedule propagation applies only to non-terminal projects. It preserves
   list markers, indentation, descriptions, other inline fields, trailing block
   IDs, CRLF line endings, and unrelated tags. Frontmatter, fenced examples,
@@ -191,16 +201,21 @@ For a valid project date `P`, the ordinary-task contract is:
 | Open, one valid schedule on/after `P` | Keep that schedule; remove `#hide` |
 | Open, multiple `scheduled` fields | Leave the line unchanged; warn |
 | Done, canceled, or unknown/custom | Remove `#hide` only |
-| `^prj`, `P` in the future | Force exactly one `#hide`; never add an inline schedule |
-| `^prj`, `P` due/past | Normal surfacing rule (rows above): remove `#hide` when there are no unhidden open tasks and no open sub-projects, add it back otherwise |
+| `^prj`, `P` in the future | Force exactly one `#hide`; keep or write `[scheduled:: P]` |
+| `^prj`, `P` due/past | Normal surfacing rule (rows above): remove `#hide` when there are no unhidden open tasks and no open sub-projects, add it back otherwise; keep the inline date |
 - Active projects with open `^prj` tasks get one generated Sub-projects line
-  nested directly under `^prj`, such as
-  `- 🧩 **Sub-projects:** [[alpha_child]] • [[beta_child]]`.
-- A child with a valid `scheduled` frontmatter date later than the machine's
-  local current date is prefixed with `🗓️`, such as
+  nested under `^prj` after a Depends-On child (which itself follows a Cancel
+  Log occupying the first slot), such as
+  `- 🧩 **Sub-projects:** [[alpha_child]] • [[beta_child]]`. A new marker
+  inserts there; an existing marker sitting before Depends-On is moved after
+  it; otherwise the marker is rewritten in place.
+- A child with a valid future date on `^prj` — or leftover frontmatter
+  `scheduled` that this run will hoist onto a non-terminal child — is
+  prefixed with `🗓️`, such as
   `- 🧩 **Sub-projects:** 🗓️ [[future_child]] • [[ordinary_child]]`.
-  Today, past, absent, and invalid schedules do not receive the marker.
-  `BOB_NOW` controls this date boundary as it does for task schedules.
+  Terminal children read only the inline date. Today, past, absent, and
+  invalid schedules do not receive the marker. `BOB_NOW` controls this date
+  boundary as it does for task schedules.
 - The marker-prefixed Sub-projects line is fully machine-owned and rewritten
   into canonical form. Duplicate marker lines are removed. The line is deleted
   only when there are no open sub-projects and no tracked closed sub-projects
@@ -214,8 +229,6 @@ For a valid project date `P`, the ordinary-task contract is:
 - Every other sub-bullet under `^prj` is user-owned, including bare wikilinks
   like `- [[scratch_note]]`; `sync` never removes or uses them to suppress the
   generated line.
-- Existing inline `scheduled` fields are removed from open `^prj` tasks on
-  active projects. Frontmatter `scheduled` is the sole project schedule.
 - Terminal projects, `status: done` or `status: canceled`, get no `^prj` line
   edits while their `^prj` task stays closed or missing. Reopening the `^prj`
   task makes the project active again in the same run, so the surfacing,
@@ -367,28 +380,27 @@ More use the strict parser: ISO, `M/D`, `M-D`, `+Nd/w/m`, and preset forms.
 ### Scheduling from the `^prj` task
 
 With the cursor on a valid `#task ... ^prj` lifecycle task, Bob Navigation
-Hotkeys' `Ctrl+Shift+P` Task Card **Schedule** action treats
-`scheduled` as a project-note property. Choosing a date writes canonical `scheduled: YYYY-MM-DD`
-YAML, removes any stale inline `[scheduled:: ...]` field from `^prj`, and
-immediately propagates task-level schedules. It also applies the derived status
-decision in the same guarded editor transaction: future-scheduled tasks become
-Blocked, while due tasks recover to a safely proven Ready, Next, or In Progress
-rank. A later task-owned schedule is preserved and remains Blocked. When the
-vault snapshot cannot prove recovery, the property edit proceeds and `[?]` is
-left for `bob task reconcile`. Other picker properties remain inline Dataview fields on the task.
-`dependsOn` is not one of them: it is derived from the task's Depends-On
-line (`docs/task-dependencies.md`), never written by hand. On `^prj`
-that line is the project's prerequisites; while it or `^prj`'s inline
-`scheduled` blocks the project, every open resident is Blocked. See
+Hotkeys' `Ctrl+Shift+P` Task Card **Schedule** action writes canonical
+`[scheduled:: YYYY-MM-DD]` on `^prj` and immediately propagates task-level
+schedules. It also applies the derived status decision in the same guarded
+editor transaction: future-scheduled tasks become Blocked, while due tasks
+recover to a safely proven Ready, Next, or In Progress rank. A later
+task-owned schedule is preserved and remains Blocked. When the vault snapshot
+cannot prove recovery, the property edit proceeds and `[?]` is left for
+`bob task reconcile`. Other picker properties remain inline Dataview fields
+on the task. `dependsOn` is not one of them: it is derived from the task's
+Depends-On line (`docs/task-dependencies.md`), never written by hand. On
+`^prj` that line is the project's prerequisites; while it or `^prj`'s
+inline `scheduled` blocks the project, every open resident is Blocked. See
 [task-dependencies.md §13](task-dependencies.md#13-project-dependencies).
 
-Pressing `Ctrl+D` on the project-backed `scheduled` item removes the YAML
-property, removes inline schedules exactly equal to that project date from
-ordinary open tasks, and reconciles their Blocked markers. Other task-owned
-schedule values remain. The `^prj` `#hide` surfacing decision remains owned by
-`bob projects sync`.
+Pressing `Ctrl+D` on the project-backed `scheduled` item removes the inline
+date from `^prj`, removes inline schedules exactly equal to that project date
+from ordinary open tasks, and reconciles their Blocked markers. Other
+task-owned schedule values remain. The `^prj` `#hide` surfacing decision
+remains owned by `bob projects sync`.
 
-Removing or editing project frontmatter outside `Ctrl+D` cannot identify which
+Removing or editing the `^prj` date outside `Ctrl+D` cannot identify which
 task fields were propagated, so those fields remain. Prefer `Ctrl+D` when
 unscheduling a project.
 
@@ -1203,12 +1215,13 @@ Typical action output:
   ok athena     added 🗓️ [[future_child]] to ^prj  sub-project scheduled in future
   ok athena     removed 🗓️ [[due_child]] from ^prj  sub-project no longer scheduled in future
   ok athena     updated sub-projects on ^prj  canonical format
-  ok roadmap    scheduled 4 tasks 2026-07-16  frontmatter scheduled is future
+  ok roadmap    hoisted scheduled 2026-07-16 onto ^prj  leftover frontmatter
+  ok roadmap    scheduled 4 tasks 2026-07-16  ^prj scheduled is future
   ok roadmap    removed #hide from 4 tasks  task schedules replace #hide
   hint: run `bob task reconcile` to reconcile derived [?] Blocked markers
   warning outlive  active project has no ^prj task  add `- [ ] #task #prj <completion criteria> #hide ^prj`
 
-11 projects - 1 status updated - 9 ^prj edited - 4 task schedules updated - 1 warnings
+11 projects - 1 status updated - 9 ^prj edited - 4 task schedules updated - 1 warnings - 1 schedules hoisted
 ```
 
 Schedule propagation is reported once per project rather than once per task.

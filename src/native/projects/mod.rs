@@ -66,11 +66,12 @@ pub(crate) fn build_cli() -> ClapCommand {
         .long_about(
             "Manage Bob project notes through the completion-criteria task \
 anchored with ^prj.\n\n\
-The list subcommand is read-only: it scans project notes, validates optional \
-scheduled: YYYY-MM-DD frontmatter, counts open #task items, counts open \
-non-hidden tasks, and shows the current ^prj state. The sync subcommand \
-updates project status, propagates task schedules, and manages the single \
-Sub-projects line from the ^prj task.",
+The list subcommand is read-only: it scans project notes, validates leftover \
+scheduled: YYYY-MM-DD frontmatter and inline [scheduled:: YYYY-MM-DD] on \
+^prj, counts open #task items, counts open non-hidden tasks, and shows the \
+current ^prj state. The sync subcommand updates project status, hoists leftover \
+frontmatter scheduled onto ^prj, propagates that date onto ordinary tasks, \
+and manages the single Sub-projects line from the ^prj task.",
         )
         .after_help(
             "Examples:\n  bob projects list\n  bob projects sync --dry-run\n  bob projects sync -b ~/bob",
@@ -101,13 +102,16 @@ status to canceled. Active projects with no non-hidden open tasks and no \
 open sub-projects have the #hide tag removed from their open ^prj task so \
 it surfaces in dash.md's Tasks section; projects with non-hidden open tasks \
 or open sub-projects get #hide added back. Sync also maintains a single \
-Sub-projects line nested directly under open ^prj tasks. When valid scheduled \
-frontmatter is present, it overrides the normal surfacing rule: every open \
-ordinary task receives a matching [scheduled:: YYYY-MM-DD] field unless it \
-already has a valid equal or later schedule, and ordinary-task #hide tags are \
-removed. Future dates keep exactly one #hide on ^prj; today and past dates \
-preserve ^prj visibility unless it is the note's only task. Run \
-`bob task reconcile` afterward to reconcile derived [?] Blocked markers. \
+Sub-projects line nested under open ^prj tasks after a Depends-On child (or \
+after a Cancel Log occupying the first slot). Leftover scheduled: YYYY-MM-DD \
+frontmatter is hoisted onto ^prj as [scheduled:: YYYY-MM-DD] and the key is \
+deleted (frontmatter wins when both exist; terminal projects are left alone). \
+When ^prj has a valid inline date, it overrides the normal surfacing rule: \
+every open ordinary task receives a matching [scheduled:: YYYY-MM-DD] field \
+unless it already has a valid equal or later schedule, and ordinary-task \
+#hide tags are removed. Future dates keep exactly one #hide on ^prj; today \
+and past dates preserve ^prj visibility unless it is the note's only task. \
+Run `bob task reconcile` afterward to reconcile derived [?] Blocked markers. \
 Invalid dates are reported and that file is left untouched.",
         )
         .after_help(

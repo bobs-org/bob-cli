@@ -285,6 +285,9 @@ pub(crate) fn render_project_note(
     if let Some((name, value)) = input.priority {
         task_line.push_str(&format!(" [{name}::{value}]"));
     }
+    if let Some(scheduled) = input.scheduled {
+        task_line.push_str(&format!(" [scheduled:: {scheduled}]"));
+    }
     task_line.push_str(" #hide ^prj");
 
     let mut groups: Vec<FirstGroup<'_>> = Vec::new();
@@ -386,9 +389,6 @@ pub(crate) fn render_project_note(
     contents.push_str("template: \"[[new_project]]\"\n");
     contents.push_str("type: \"[[project]]\"\n");
     contents.push_str("status: wip\n");
-    if let Some(scheduled) = input.scheduled {
-        contents.push_str(&format!("scheduled: {scheduled}\n"));
-    }
     contents.push_str(&format!("created: {created_timestamp}\n"));
     contents.push_str("---\n\n");
     contents.push_str(&task_line);
@@ -548,14 +548,21 @@ mod tests {
     }
 
     #[test]
-    fn scheduled_date_lands_in_frontmatter_with_a_blocked_checkbox() {
+    fn scheduled_date_lands_inline_on_prj_with_a_blocked_checkbox() {
         pin_utc();
         let mut input = base_input(&[]);
         input.scheduled = Some("2026-10-04");
         let rendered = render_project_note(&input);
-        assert!(rendered
-            .contents
-            .contains("status: wip\nscheduled: 2026-10-04\n"));
+        assert!(
+            !rendered.contents.contains("\nscheduled:"),
+            "{}",
+            rendered.contents
+        );
+        assert_eq!(
+            rendered.task_line,
+            "- [?] #task #prj Finish the Google exit packet! \
+             [scheduled:: 2026-10-04] #hide ^prj"
+        );
         assert!(rendered.task_line.starts_with("- [?] "));
     }
 

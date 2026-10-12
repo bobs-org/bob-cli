@@ -73,6 +73,24 @@ status: wip
 }
 
 #[test]
+fn prj_tag_is_token_bounded_and_does_not_match_prj_is_blocked() {
+    assert!(contains_tag("#prj", PROJECT_TASK_TAG));
+    assert!(contains_tag(" #prj ", PROJECT_TASK_TAG));
+    assert!(contains_tag("(#prj)", PROJECT_TASK_TAG));
+    assert!(!contains_tag("#prj_is_blocked", PROJECT_TASK_TAG));
+    assert!(!contains_tag("#prjish", PROJECT_TASK_TAG));
+    assert!(!contains_tag("prefix#prj", PROJECT_TASK_TAG));
+    assert!(contains_tag("#prj_is_blocked", PROJECT_BLOCKED_TAG));
+    assert!(!contains_tag("#prj", PROJECT_BLOCKED_TAG));
+    assert_eq!(
+        task_description(
+            "#task #prj Ship the outcome #prj_is_blocked #hide ^prj"
+        ),
+        "Ship the outcome"
+    );
+}
+
+#[test]
 fn project_parser_accepts_prj_tag_and_strips_it_from_description() {
     let mut issues = Vec::new();
     let tagged = parse_project(

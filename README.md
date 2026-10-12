@@ -800,10 +800,12 @@ Scans notes whose frontmatter declares `type: "[[project]]"`. `list` prints
 frontmatter status, open `#task` counts, and the `^prj` lifecycle task. `sync`
 reconciles `status` from that task (`done`, `canceled`, or reopen to `wip`),
 manages `#hide` so `^prj` surfaces on `dash.md` only when nothing else is open,
-maintains the machine-owned Sub-projects ledger, and propagates optional
-`scheduled: YYYY-MM-DD` frontmatter onto ordinary open tasks.
+maintains the machine-owned Sub-projects ledger after Depends-On, hoists leftover
+frontmatter `scheduled` onto `^prj`, and propagates that inline date onto ordinary
+open tasks.
 
-`sync` writes frontmatter, `#hide`, Sub-projects lines, and inline schedules;
+`sync` writes `#hide`, Sub-projects lines, inline schedules, and leftover
+frontmatter hoists;
 it does not change checkboxes. Run `bob task reconcile` afterward to derive
 or recover `[?]` Blocked markers. The property picker in Bob Navigation
 Hotkeys can propagate schedules and reconcile Blocked in the same editor

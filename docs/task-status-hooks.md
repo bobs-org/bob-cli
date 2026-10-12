@@ -383,10 +383,10 @@ calendar date. It blocks only when it is strictly later than the effective
 daily anchor, so yesterday and today do not block while tomorrow and later do.
 The project date lives as inline `[scheduled::]` on `^prj`;
 `bob projects sync` and Bob Navigation Hotkeys propagate it into ordinary
-task-level `scheduled` fields. From that point this command treats the
-fields exactly like any other inline task schedule. The `^prj` lifecycle
-task remains excluded from propagation and keeps its separate `#hide`
-surfacing contract.
+task-level `scheduled` fields. From that point this command treats those
+fields, and the `^prj` date itself, exactly like any other inline task
+schedule. The `^prj` lifecycle task keeps its separate `#hide` surfacing
+contract.
 
 Blocked is derived state: a recognized open task is blocked when it has at
 least one open dependency, a valid future schedule, or both. A task that
@@ -449,7 +449,8 @@ Hand-unblocking with the Task Status Cycler plugin's option-bracket cycle
 future schedule that caused the Blocked marker, which is what keeps this
 command from immediately re-deriving `[?]` on its next run. A remaining open
 dependency, or a project-level date on `^prj` that
-`bob projects sync` re-propagates, still re-blocks the task on the next run.
+`bob projects sync` re-propagates onto residents, still re-blocks the task
+on the next run.
 Cycling any task into Done through the same keys runs the same immediate
 recover-and-link pass as Ctrl+Enter above (linking what the close unblocked);
 cycling into Cancelled runs recovery only and never links. Reopening the
