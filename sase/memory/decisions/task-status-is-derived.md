@@ -14,6 +14,7 @@ metadata:
   superseded_by:
     - decisions/task-lanes-are-sticky
     - decisions/task-deps-are-depends-on-links
+    - decisions/projects-block-from-prj-line
 ---
 
 **Applies to.** bob-cli, bob-plugins, vault.
@@ -57,4 +58,5 @@ transactional vault service).
 Superseded in part: Next and In Progress are no longer derived — see
 [[decisions/task-lanes-are-sticky]]. The transcluded-dependency path and the `!`
 removal rationale are retired by [[decisions/task-deps-are-depends-on-links]];
-the Blocked rule stands.
+the Blocked rule stands. The Blocked rule also inherits from the project —
+see [[decisions/projects-block-from-prj-line]].

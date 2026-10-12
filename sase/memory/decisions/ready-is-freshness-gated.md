@@ -17,6 +17,7 @@ metadata:
     - decisions/note-ready-cap-counts-the-lane
     - decisions/review-walk-is-tiered
     - decisions/rotten-keeps-use-priority-decay
+    - decisions/unblocked-tasks-resurface-as-ticklers
 ---
 
 **Applies to.** bob-cli, bob-plugins, vault, dash.
@@ -74,3 +75,7 @@ decision card invokes separate existing writers on explicit approval, see
 [[decisions/rotten-keeps-use-priority-decay]].
 
 Amended in place 2026-10-07 at Bryan's request: the RETURNED walk tier is renamed TICKLER (machine tier `tickler`, footer label TICKS); the Ready state stays `resurfaced`.
+
+Superseded in part: `[unblocked::]` is a stored input that makes a task
+due, while classification stays read-time — see
+[[decisions/unblocked-tasks-resurface-as-ticklers]].

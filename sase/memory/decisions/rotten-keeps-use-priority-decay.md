@@ -10,7 +10,9 @@ summary:
 metadata:
   status: superseded-in-part
   decided: 2026-10-03
-  superseded_by: decisions/decay-decisions-are-available-immediately
+  superseded_by:
+    - decisions/decay-decisions-are-available-immediately
+    - decisions/unblocked-tasks-resurface-as-ticklers
 ---
 
 **Applies to.** bob-cli, bob-plugins, vault.
@@ -69,3 +71,6 @@ trial-extension reopening condition only — see
 explicit consent, priority/log writers, and exclusion rules stand.
 
 Amended in place 2026-10-07 at Bryan's request: the RETURNED walk tier is renamed TICKLER (machine tier `tickler`, footer label TICKS); the Ready state stays `resurfaced`.
+
+Superseded in part: a keep on an unblock tickler leaves the streak
+unchanged — see [[decisions/unblocked-tasks-resurface-as-ticklers]].

@@ -1361,7 +1361,10 @@ project_task row):
                                     closing / inherit); ' ' / '?' → '*';
                                     '*' and '/' unchanged
 recover rank : '?' → '*' if R has a live link in the post-gesture day
-               text, else ' '; other statuses unchanged
+               text, else ' '; other statuses unchanged. A Ready
+               landing (`' '`) writes `[unblocked::]` when
+               freshness.md §4's WRITE rule applies; a Next landing
+               skips it (UB4).
 BREAKER      : pull-ins never count toward the 5-successor breaker and
                are never broken
 ORDER        : pull-ins sort with successors (§12.2 ORDER: anchor, note
@@ -1398,9 +1401,10 @@ are unchanged. A Pending `^prj` is never demoted
   - Whitespace is byte-identical to sync: Rust calls
     `projects::edits::normalize_task_hide_tag(line, false, true)`. The
     cycler mirrors it. PP22 pins the bytes.
-  - Nothing else changes: no freshness stamp, no schedule, no `[id::]`
-    / `[dependsOn::]`. `^prj` already has its block ID, so nothing is
-    minted.
+  - Nothing else changes except a Ready recover-rank landing, which
+    writes `[unblocked::]` when freshness.md §4's WRITE rule applies.
+    No freshness stamp, no schedule, no `[id::]` / `[dependsOn::]`.
+    `^prj` already has its block ID, so nothing is minted.
 - **Day file.** One `<indent>- [[N#^prj]]` bullet, placed per §12.3.
   The link form follows §12.4, so it is never `[[#^prj]]`.
 

@@ -10,8 +10,9 @@ summary:
   unlink, hooks run, or capture drop lowers them; only Alt+N release returns a
   task to Ready; Blocked stays derived."
 metadata:
-  status: accepted
+  status: superseded-in-part
   decided: 2026-09-30
+  superseded_by: decisions/projects-block-from-prj-line
 ---
 
 **Applies to.** bob-cli, bob-plugins, Bob Mac Capture, vault.
@@ -64,3 +65,7 @@ statuses need one-time triage.
 **Reopens when.** Lanes must survive Blocked (then Blocked becomes an overlay).
 
 Amended in place 2026-10-04 at Bryan's request: the freshness trial was removed; nothing waits on it.
+
+Superseded in part: claim 1 no longer raises a Blocked task (its link is
+consumed and its prerequisites rise), and "lanes don't survive Blocked"
+is now project-wide — see [[decisions/projects-block-from-prj-line]].
