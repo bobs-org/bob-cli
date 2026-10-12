@@ -14,6 +14,7 @@ mod complete_task_complete;
 mod complete_task_link;
 mod ensure_next;
 mod freshness_stamps;
+mod link_guard;
 mod parse;
 mod parse_dependency;
 mod parse_pomodoro;

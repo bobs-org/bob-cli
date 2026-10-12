@@ -333,22 +333,27 @@ fn remove_matching_links(
                 continue;
             }
             let text = lines[line_index].text;
-            if !text.contains(block_link) {
+            let live_links = unstruck_link_ranges(text, block_link);
+            if live_links.is_empty() {
                 continue;
             }
-            removed_count += 1;
             let sole_content =
                 list_item_body(text).map(str::trim_end) == Some(block_link);
             if sole_content {
+                removed_count += live_links.len();
                 let subtree_end = child_block_end_line(&lines, line_index);
                 for covered in &mut covered[line_index..=subtree_end] {
                     *covered = true;
                 }
                 removed_line_ranges.push((line_index, subtree_end));
             } else {
+                removed_count += live_links.len();
                 covered[line_index] = true;
-                token_edits
-                    .push((line_index, text.replacen(block_link, "", 1)));
+                let mut replacement = text.to_string();
+                for range in live_links.iter().rev() {
+                    replacement.replace_range(range.clone(), "");
+                }
+                token_edits.push((line_index, replacement));
             }
         }
     }
@@ -385,4 +390,24 @@ fn remove_matching_links(
     result.push_str(&contents[cursor..]);
 
     (result, removed_count)
+}
+
+/// Byte ranges for live, unstruck occurrences of a block link on one
+/// line. Strikethrough is paired on the line, so an odd number of `~~`
+/// markers before the link means that occurrence is historical.
+fn unstruck_link_ranges(
+    text: &str,
+    block_link: &str,
+) -> Vec<std::ops::Range<usize>> {
+    let mut ranges = Vec::new();
+    let mut cursor = 0;
+    while let Some(relative) = text[cursor..].find(block_link) {
+        let start = cursor + relative;
+        let struck = text[..start].match_indices("~~").count() % 2 == 1;
+        if !struck {
+            ranges.push(start..start + block_link.len());
+        }
+        cursor = start + block_link.len();
+    }
+    ranges
 }

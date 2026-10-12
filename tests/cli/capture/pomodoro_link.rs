@@ -126,7 +126,12 @@ fn capture_pomodoro_dry_run_validates_and_changes_neither_note() {
     let target = vault.join("dev.md");
     let day_file = vault.join("day.md");
     let target_before = "## Tasks\n- [ ] #task Existing\n";
-    let day_before = "## Pomodoros\n- [ ] (1330-1400 [t:: 30m]) Work\n";
+    let day_before = concat!(
+        "## Pomodoros\n",
+        "- [ ] (1330-1400 [t:: 30m]) Work\n",
+        "  - context\n",
+        "  - [[cash#^blocked]]\n",
+    );
     write_file(&target, target_before);
     write_file(&day_file, day_before);
 
@@ -791,7 +796,13 @@ fn capture_pomodoro_link_on_blocked_target_consumes_and_promotes() {
     );
     write_file(&target, target_before);
     write_file(&vault.join("job.md"), "- [ ] #task Prep work ^prep\n");
-    let day_before = "## Pomodoros\n- [ ] (1330-1400 [t:: 30m]) Work\n";
+    let day_before = concat!(
+        "## Pomodoros\n",
+        "- [ ] (**0900-0930**) — CURRENT\n",
+        "  - context\n",
+        "- [ ] () — LATER\n",
+        "  - [[cash#^blocked]]\n",
+    );
     write_file(&day_file, day_before);
 
     let output = bob_command()
@@ -808,10 +819,12 @@ fn capture_pomodoro_link_on_blocked_target_consumes_and_promotes() {
     assert_success(&output);
     let json: serde_json::Value =
         serde_json::from_str(stdout(&output).trim()).expect("link JSON");
-    assert_eq!(json["kind"], "pomodoro_link", "{json}");
+    assert_eq!(json["kind"], "link_guard", "{json}");
     assert_eq!(json["status_changed"], false, "{json}");
     assert_eq!(json["status_symbol"], "?", "{json}");
-    assert_eq!(json["pomodoro_link_action"], "not_linked", "{json}");
+    assert!(json.get("pomodoro_link_action").is_none(), "{json}");
+    assert!(json.get("block_link").is_none(), "{json}");
+    assert!(json.get("day_file").is_none(), "{json}");
     assert_eq!(
         json["link_guard"]["reasons"],
         serde_json::json!(["local_dependency"]),
@@ -826,7 +839,10 @@ fn capture_pomodoro_link_on_blocked_target_consumes_and_promotes() {
         fs::read_to_string(&target).expect("read target"),
         target_before
     );
-    assert_eq!(fs::read_to_string(&day_file).expect("read day"), day_before);
+    let day_after = fs::read_to_string(&day_file).expect("read day");
+    assert!(!day_after.contains("[[cash#^blocked]]"), "{day_after}");
+    assert!(day_after.contains("context"), "{day_after}");
+    assert!(!day_after.contains("LATER"), "{day_after}");
     assert_eq!(
         fs::read_to_string(vault.join("job.md")).expect("read prereq"),
         "- [*] #task Prep work ^prep\n"

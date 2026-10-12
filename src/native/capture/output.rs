@@ -935,7 +935,9 @@ pub(super) fn print_human_item_success(
         );
         return;
     }
-    if result.toggle_direction.is_some() {
+    if result.kind == "task_toggle"
+        && (result.toggle_direction.is_some() || result.link_guard.is_some())
+    {
         print_human_task_toggle_success(
             result,
             &styler,
@@ -1279,7 +1281,7 @@ pub(super) fn print_human_pomodoro_close_success(
             ))
         );
     }
-    print_human_link_guard(result, &styler);
+    print_human_link_guard(result, styler);
     // Numbered index column: width of the highest numbered row, plus one
     // space. Unnumbered rows get blanks so text stays aligned; with zero
     // numbered rows the output below is byte-identical to before.
@@ -1575,9 +1577,6 @@ pub(super) fn print_human_pomodoro_shift_success(
     println!("  {}", styler.dim(&result.task_line));
 }
 
-/// Second line for the `@route+block-id!` link-presence toggle:
-/// `linked ^id under NAME · set Next`, `linked ^id under NAME · stays In
-/// Progress`, or `unlinked ^id from N open Pomodoros · stays Next`.
 /// Link-guard trailer (§13.5): one plain line naming why the target
 /// stayed unlinked and which prerequisites rose instead. Called by
 /// every printer for a gesture that can suppress a link.
@@ -1593,6 +1592,9 @@ pub(super) fn print_human_link_guard(
     }
 }
 
+/// Summary for the `@route+block-id!` link-presence toggle:
+/// `linked ^id under NAME · set Next`, `linked ^id under NAME · stays In
+/// Progress`, or `unlinked ^id from N open Pomodoros · stays Next`.
 fn print_human_link_toggle_summary(
     result: &CaptureItemResult,
     styler: &Styler,

@@ -58,6 +58,46 @@ pub(super) struct ConsumePlan {
     pub(super) graph: DependencyGraph,
 }
 
+/// Whether this task has any local dependency input that needs openness
+/// resolution. A non-empty field or a managed Depends-On link makes the
+/// full graph necessary; no such input proves the task has no local
+/// dependency blocker.
+fn has_dependency_inputs(
+    contents: &str,
+    task: &task_status_hooks::TaskLine,
+) -> bool {
+    let lines: Vec<&str> = contents.lines().collect();
+    let Some(line) = lines.get(task.line_index).copied() else {
+        return true;
+    };
+    let metadata =
+        task_status_hooks::task_metadata(line, task.block_id.as_deref());
+    if !metadata.depends_on.is_empty() {
+        return true;
+    }
+    let fenced = task_status_hooks::fenced_lines(&lines, 0..lines.len());
+    let Some(child) =
+        crate::native::task_dependencies::parse::dependency_child_of(
+            &lines,
+            &fenced,
+            task.line_index,
+        )
+    else {
+        return false;
+    };
+    match &child.parsed {
+        crate::native::task_dependencies::parse::DependencyLine::Accepted {
+            links,
+            ..
+        } => !links.is_empty(),
+        crate::native::task_dependencies::parse::DependencyLine::Empty => false,
+        crate::native::task_dependencies::parse::DependencyLine::Malformed
+        | crate::native::task_dependencies::parse::DependencyLine::NotALine => {
+            true
+        }
+    }
+}
+
 /// Assess one link target's effective reasons against the staged
 /// capture graph. Returns `Link` when nothing blocks the target,
 /// `PullForward` when only its own future schedule does (and the
@@ -71,8 +111,6 @@ pub(super) fn assess_link_target(
     block_id: &str,
     today: NaiveDate,
 ) -> Result<LinkGuardVerdict, CaptureError> {
-    let index = super::dependencies::staged_note_index(ctx, planner, bob_dir);
-    let graph = DependencyGraph::build(ctx, planner, bob_dir, &index)?;
     let note_display = display_relative(target_rel);
     let identity = (note_display.clone(), block_id.to_string());
 
@@ -90,6 +128,30 @@ pub(super) fn assess_link_target(
 
     let is_prj = block_id == "prj" && context.recognised;
     let is_resident = target_task.is_some_and(|task| context.is_resident(task));
+
+    // Most link gestures target an ordinary, unblocked task. Check its
+    // own note first so those previews do not build a vault-wide graph.
+    // A resident also inherits the local inputs on its note's ^prj line.
+    let task_has_local_inputs = target_task.is_none_or(|task| {
+        task.status == '?'
+            || has_dependency_inputs(&contents, task)
+            || task.scheduled.is_some_and(|date| date > today)
+    });
+    let prj_task = context
+        .project_task_index()
+        .and_then(|index| file_tasks.get(index));
+    let project_has_local_inputs = is_resident
+        && prj_task.is_none_or(|task| {
+            task.status == '?'
+                || has_dependency_inputs(&contents, task)
+                || task.scheduled.is_some_and(|date| date > today)
+        });
+    if !task_has_local_inputs && !project_has_local_inputs {
+        return Ok(LinkGuardVerdict::Link);
+    }
+
+    let index = super::dependencies::staged_note_index(ctx, planner, bob_dir);
+    let graph = DependencyGraph::build(ctx, planner, bob_dir, &index)?;
 
     // Own open prerequisites: the target's staged line links. A
     // resident inherits `^prj`'s projected links as implicit edges in
@@ -206,8 +268,10 @@ pub(super) fn assess_link_target(
     // not a `^prj`: the pull-forward retires that single field. The
     // single-field shape gates it: with several `scheduled` fields
     // the toggle retires nothing, so that stays a consumption.
-    let only_own_date =
-        own_scheduled.is_some() && own_open.is_empty() && !is_resident;
+    let only_own_date = own_scheduled.is_some()
+        && own_open.is_empty()
+        && inherited_open.is_empty()
+        && prj_scheduled.is_none();
     if only_own_date {
         if is_prj {
             // PDG6: refusing a date-only `^prj` is never a
@@ -270,9 +334,21 @@ pub(super) fn assess_destination_project(
         path: absolute,
         relative_path: target_rel.to_path_buf(),
         contents: contents.clone(),
-        tasks: file_tasks,
+        tasks: file_tasks.clone(),
     });
     if !context.recognised {
+        return Ok(None);
+    }
+    let Some(prj_task) = context
+        .project_task_index()
+        .and_then(|index| file_tasks.get(index))
+    else {
+        return Ok(None);
+    };
+    if prj_task.status != '?'
+        && !has_dependency_inputs(&contents, prj_task)
+        && prj_task.scheduled.is_none_or(|date| date <= today)
+    {
         return Ok(None);
     }
     let index = super::dependencies::staged_note_index(ctx, planner, bob_dir);
@@ -366,6 +442,81 @@ pub(super) fn promote_consume_plan(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+
+    fn assess_simple_target(contents: &str, block_id: &str) -> usize {
+        let vault = tempfile::tempdir().expect("temporary vault");
+        fs::write(vault.path().join("cash.md"), contents)
+            .expect("write target note");
+        let today = NaiveDate::from_ymd_opt(2026, 10, 12).unwrap();
+        let context = DependencyContext::new(vault.path(), today);
+        let mut planner = CaptureBatchPlanner::default();
+        let verdict = assess_link_target(
+            &context,
+            &mut planner,
+            vault.path(),
+            Path::new("cash.md"),
+            block_id,
+            today,
+        )
+        .expect("assess link target");
+        assert!(matches!(verdict, LinkGuardVerdict::Link));
+        context.graph_build_count()
+    }
+
+    #[test]
+    fn ordinary_unblocked_target_skips_the_vault_graph() {
+        assert_eq!(
+            assess_simple_target("- [ ] #task Work ^work\n", "work"),
+            0,
+            "the target note is sufficient for an unblocked task"
+        );
+    }
+
+    #[test]
+    fn unblocked_project_resident_skips_the_vault_graph() {
+        let contents = concat!(
+            "---\n",
+            "type: \"[[project]]\"\n",
+            "status: wip\n",
+            "---\n\n",
+            "- [ ] #task Ship project #prj #hide ^prj\n",
+            "- [ ] #task Work ^work\n",
+        );
+        assert_eq!(
+            assess_simple_target(contents, "work"),
+            0,
+            "the local ^prj line proves this resident is not inherited-Blocked"
+        );
+    }
+
+    #[test]
+    fn capture_into_unblocked_project_skips_the_vault_graph() {
+        let vault = tempfile::tempdir().expect("temporary vault");
+        let contents = concat!(
+            "---\n",
+            "type: \"[[project]]\"\n",
+            "status: wip\n",
+            "---\n\n",
+            "- [ ] #task Ship project #prj #hide ^prj\n",
+            "- [ ] #task Work ^work\n",
+        );
+        fs::write(vault.path().join("cash.md"), contents)
+            .expect("write project note");
+        let today = NaiveDate::from_ymd_opt(2026, 10, 12).unwrap();
+        let context = DependencyContext::new(vault.path(), today);
+        let mut planner = CaptureBatchPlanner::default();
+        let blocked = assess_destination_project(
+            &context,
+            &mut planner,
+            vault.path(),
+            Path::new("cash.md"),
+            today,
+        )
+        .expect("assess project destination");
+        assert!(blocked.is_none());
+        assert_eq!(context.graph_build_count(), 0);
+    }
 
     #[test]
     fn new_task_flip_blocks_open_lines_tags_blocked_and_skips_closed() {

@@ -881,8 +881,11 @@ fn capture_ensure_next_on_blocked_target_consumes_and_promotes() {
     let json: serde_json::Value =
         serde_json::from_str(stdout(&output).trim()).expect("json");
     assert_eq!(json["toggle_behavior"], "ensure_next", "{json}");
+    assert!(json.get("toggle_direction").is_none(), "{json}");
+    assert!(json.get("block_link").is_none(), "{json}");
     assert_eq!(json["status_changed"], false, "{json}");
     assert_eq!(json["status_symbol"], "?", "{json}");
+    assert_eq!(json["removed_pomodoro_links"], 1, "{json}");
     assert!(json.get("pomodoro_link_action").is_none(), "{json}");
     assert_eq!(
         json["link_guard"]["reasons"],
@@ -895,7 +898,13 @@ fn capture_ensure_next_on_blocked_target_consumes_and_promotes() {
         "{json}"
     );
     assert_eq!(fs::read_to_string(&target).expect("target"), target_before);
-    assert_eq!(fs::read_to_string(&day_file).expect("day"), day_before);
+    let day_after = fs::read_to_string(&day_file).expect("day");
+    assert!(!day_after.contains("[[cash#^blocked]]"), "{day_after}");
+    assert!(
+        !day_after.contains("LATER"),
+        "empty Pomodoro is removed: {day_after}"
+    );
+    assert!(day_after.contains("context"), "{day_after}");
     assert_eq!(
         fs::read_to_string(vault.join("job.md")).expect("read prereq"),
         "- [*] #task Prep work ^prep\n"

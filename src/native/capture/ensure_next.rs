@@ -40,6 +40,13 @@ pub(super) fn plan_ensure_next_capture(
     {
         let dependent_desc = format!("ensure next ^{block_id}");
         let reasons = plan.reasons.clone();
+        let consumption = consume_live_links(
+            planner,
+            bob_dir,
+            route,
+            &[block_id.to_string()],
+        )?;
+        let removed_pomodoro_links = consumption.removed_links;
         let promoted = promote_consume_plan(
             ctx,
             planner,
@@ -73,7 +80,7 @@ pub(super) fn plan_ensure_next_capture(
                     pomodoro_name: None,
                     creates_pomodoro: false,
                     pomodoro_already_linked: false,
-                    removed_pomodoro_links: 0,
+                    removed_pomodoro_links,
                     removed_scheduled: None,
                     schedule_log: None,
                     pomodoro_selector_unused: false,
@@ -84,7 +91,7 @@ pub(super) fn plan_ensure_next_capture(
                     pomodoro_link_destination: None,
                 }),
                 pomodoro_link: None,
-                pomodoro_refs: Vec::new(),
+                pomodoro_refs: consumption.pomodoro_refs,
             },
             Some(link_guard),
         ));

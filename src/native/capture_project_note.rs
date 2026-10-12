@@ -303,9 +303,9 @@ pub(crate) fn render_project_note(
         }
     }
 
-    // A future project date blocks the whole note (§13.3, PDG5):
-    // `:` tasks land `[?]` plus the machine-owned tag, and the
-    // planner leaves them unlinked with a `not_linked` report.
+    // A future project date blocks the whole note (§13.3, PDG5): every
+    // open resident lands `[?]` plus the machine-owned tag. Only `:`
+    // tasks also request a Task Link, which the planner leaves unlinked.
     let project_blocked = input.scheduled.is_some_and(|date| {
         NaiveDate::parse_from_str(date, "%Y-%m-%d")
             .is_ok_and(|parsed| parsed > input.now.date())
@@ -346,7 +346,7 @@ pub(crate) fn render_project_note(
                 }
             }
         } else {
-            let task_status = match named {
+            let authored_status = match named {
                 Some(task) if task.link => {
                     if input.scheduled.is_some() {
                         '?'
@@ -356,6 +356,12 @@ pub(crate) fn render_project_note(
                 }
                 _ => checkbox.unwrap_or(' '),
             };
+            let open = !matches!(authored_status, 'x' | 'X' | '-');
+            let task_status = if project_blocked && open {
+                '?'
+            } else {
+                authored_status
+            };
             let task_id_suffix = named.map(|task| task.block_id.as_str());
             let task_line = render_authored_task(
                 task_status,
@@ -363,11 +369,10 @@ pub(crate) fn render_project_note(
                 &created_date,
                 task_id_suffix,
             );
-            let task_line = match named {
-                Some(task) if task.link && project_blocked => {
-                    normalize_prj_is_blocked_tag(&task_line, true)
-                }
-                _ => task_line,
+            let task_line = if project_blocked && open {
+                normalize_prj_is_blocked_tag(&task_line, true)
+            } else {
+                task_line
             };
             tasks_block.push(task_line.clone());
             task_entries += 1;
@@ -829,14 +834,13 @@ mod tests {
         let mut input = base_input(&sub_bullets);
         input.scheduled = Some("2026-09-22");
         let rendered = render_project_note(&input);
-        // PDG5: a future project date blocks the note, so the linked
-        // task lands `[?]` plus the machine-owned tag (the planner
-        // leaves it unlinked).
+        // PDG5: a future project date blocks every open task in the
+        // note; only the linked task also asks for a Task Link.
         assert!(rendered.contents.contains(
             "- [?] #task Draft the memo [created::2026-09-20] #prj_is_blocked ^draft\n"
         ));
         assert!(rendered.contents.contains(
-            "- [ ] #task File the memo [created::2026-09-20] ^file\n"
+            "- [?] #task File the memo [created::2026-09-20] #prj_is_blocked ^file\n"
         ));
         assert!(rendered.task_line.starts_with("- [?] "));
         assert!(!rendered.task_line.contains("#prj_is_blocked"));

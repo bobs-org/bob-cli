@@ -1004,7 +1004,9 @@ fn capture_task_toggle_on_blocked_target_consumes_and_promotes() {
     assert_success(&output);
     let json: serde_json::Value =
         serde_json::from_str(stdout(&output).trim()).expect("toggle JSON");
-    assert_eq!(json["toggle_direction"], "link", "{json}");
+    assert!(json.get("toggle_direction").is_none(), "{json}");
+    assert!(json.get("block_link").is_none(), "{json}");
+    assert!(json.get("day_file").is_none(), "{json}");
     assert_eq!(json["status_changed"], false, "{json}");
     assert_eq!(json["status_symbol"], "?", "{json}");
     assert_eq!(
@@ -1031,6 +1033,60 @@ fn capture_task_toggle_on_blocked_target_consumes_and_promotes() {
         fs::read_to_string(vault.join("job.md")).expect("read prereq"),
         "- [*] #task Prep work ^prep\n"
     );
+}
+
+#[test]
+fn promotion_walks_through_a_blocked_seed_without_raising_it() {
+    let temp = TempDir::new("bob-cli-capture-promotion-blocked-seed");
+    let vault = temp.path().join("vault");
+    let target = vault.join("cash.md");
+    let day_file = vault.join("day.md");
+    write_toggle_task_settings(&vault);
+    write_file(
+        &target,
+        concat!(
+            "---\n",
+            "type: \"[[project]]\"\n",
+            "status: wip\n",
+            "---\n\n",
+            "- [ ] #task Ship project #prj #hide [dependsOn:: job__x] ^prj\n",
+            "\t- ⛓️ **DEPENDS ON:** [[job#^x]]\n",
+            "- [ ] #task Resident work ^resident\n",
+        ),
+    );
+    write_file(
+        &vault.join("job.md"),
+        concat!(
+            "- [?] #task Blocked seed ^x\n",
+            "\t- ⛓️ **DEPENDS ON:** [[job#^y]]\n",
+            "- [ ] #task Open prerequisite ^y\n",
+        ),
+    );
+    write_file(&day_file, "## Pomodoros\n- [ ] () — CURRENT\n");
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("@cash+resident!")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-10-12 10:00:00")
+        .output()
+        .expect("toggle project resident");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("toggle JSON");
+    assert_eq!(
+        json["link_guard"]["promoted"],
+        serde_json::json!(["job.md#^y"]),
+        "{json}"
+    );
+    let job = fs::read_to_string(vault.join("job.md")).expect("read job");
+    assert!(job.contains("- [?] #task Blocked seed ^x"), "{job}");
+    assert!(job.contains("- [*] #task Open prerequisite ^y"), "{job}");
 }
 
 // PDG3 (§13.15): a toggle on a resident blocked only by its project's

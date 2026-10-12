@@ -1034,15 +1034,21 @@ fn capture_project_note_task_links_need_the_day_file_only_for_links() {
     assert_success(&output);
     assert_eq!(fs::read_to_string(&day_file).expect("read day"), day_before);
 
-    // A scheduled project never links its `:` tasks: with P > today
-    // the note is blocked, so they land `[?]` plus the tag, unlinked,
-    // with a `not_linked` report (PDG5).
+    // A scheduled project blocks every open resident. `:` tasks also
+    // remain unlinked, while `^` and plain task rows still get the same
+    // immediate status/tag write (PDG5, PDT1).
     let scheduled = TempDir::new("bob-cli-capture-project-note-link-sched");
     let vault = scheduled.path().join("vault");
     let day_file = vault.join("day.md");
     write_file(&vault.join("cash.md"), "---\ntype: \"[[area]]\"\n---\n");
     write_file(&day_file, "## Pomodoros\n- [ ] (1330-1400) Work\n");
-    let input = "Body @cash^schedlink1+ s:2\n- Draft the memo :draft-memo\n";
+    let input = concat!(
+        "Body @cash^schedlink1+ s:2\n",
+        "- Draft the memo :draft-memo\n",
+        "- Review blocker ^review-blocker\n",
+        "- Plain follow-up\n",
+        "- [x] Already done\n",
+    );
     let output = run_with_stdin(
         bob_command()
             .arg("capture")
@@ -1077,6 +1083,27 @@ fn capture_project_note_task_links_need_the_day_file_only_for_links() {
             "- [?] #task Draft the memo [created::2026-09-20] #prj_is_blocked ^draft-memo"
         ),
         "{contents}"
+    );
+    assert!(
+        contents.contains(
+            "- [?] #task Review blocker [created::2026-09-20] #prj_is_blocked ^review-blocker"
+        ),
+        "{contents}"
+    );
+    assert!(
+        contents.contains(
+            "- [?] #task Plain follow-up [created::2026-09-20] #prj_is_blocked"
+        ),
+        "{contents}"
+    );
+    assert!(
+        contents.contains("- [x] #task Already done [created::2026-09-20]"),
+        "closed resident must keep its state: {contents}"
+    );
+    assert!(
+        !contents
+            .contains("Already done [created::2026-09-20] #prj_is_blocked"),
+        "closed resident is not tagged: {contents}"
     );
     let day_after = fs::read_to_string(&day_file).expect("read day");
     assert!(

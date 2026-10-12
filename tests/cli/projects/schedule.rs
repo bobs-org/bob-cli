@@ -128,9 +128,13 @@ fn projects_sync_then_task_status_hooks_blocks_and_recovers_propagated_tasks() {
         .output()
         .expect("derive future scheduled Blocked status");
     assert_success(&blocked);
-    assert!(fs::read_to_string(&project).unwrap().contains(
-        "- [?] #task Implement milestone [scheduled:: 2026-07-17] ^milestone"
-    ));
+    let blocked_project = fs::read_to_string(&project).unwrap();
+    assert!(
+        blocked_project.contains(
+            "- [?] #task Implement milestone [scheduled:: 2026-07-17] #prj_is_blocked ^milestone"
+        ),
+        "{blocked_project}"
+    );
 
     let mature_sync = bob_command()
         .args(["projects", "sync", "--bob-dir"])

@@ -946,19 +946,24 @@ entry, while `sase.md` holds `[*] ^deep-fix`, `[/] ^outline`, and `[ ]
 | `@sase:ready`            | `[ ]` → `[*]`; new link under BUGS                           |
 | `@sase:ready#bugs=-`     | `[ ]` → `[*]`; BUGS starts 0900-0925; link appended           |
 
-JSON reports kind `"pomodoro_link"` with `text: ""`, the post-image
+Successful JSON reports kind `"pomodoro_link"` with `text: ""`, the post-image
 `task_line`, `placement: "linked"`, the task-toggle vocabulary (`block_id`,
 `day_file`, `block_link`, `previous_task_line`, `previous_status_symbol` /
 `_name`, `status_symbol` / `_name`, `status_changed`, `removed_scheduled`,
 `schedule_log` when written, `pomodoro_name`, `creates_pomodoro`),
-`pomodoro_link_action` (`"linked"`, `"moved"`, `"already_current"`, or
-`"not_linked"` when the guard consumed the link),
+`pomodoro_link_action` (`"linked"`, `"moved"`, or `"already_current"`),
 pre-image `pomodoro_link_source` (only when a link existed), post-image
 `pomodoro_link_destination`, `pomodoro_link_placement` (when a link was
 inserted or moved), and the exact `pomodoro_start` object `pomodoro_task`
 uses (only with `=<X>`). It emits no `toggle_direction`/`toggle_behavior`.
-A consumed link adds `link_guard` (`reasons`, `promoted`, `detail`).
-Human output follows the Ensure Next style: a `link`/`would link` or
+When the guard consumes the gesture, JSON uses the additive kind
+`"link_guard"`, omits link-only fields such as `block_link`, `day_file`, and
+`pomodoro_link_action`, and reports `link_guard` (`reasons`, `promoted`,
+`detail`). This neutral kind lets older clients show a generic preview instead
+of a false link confirmation; newer clients can render the guard details.
+Any live links removed from today's open Pomodoros appear in the batch-level
+`pomodoro_blocks` diff. Human output reports the guard detail without a link
+confirmation. Successful human output follows the Ensure Next style: a `link`/`would link` or
 `start`/`would start` header, a status line (`[ ] → [*]`, `[*] already
 Next`, `[/] stays In Progress`), a ledger line (`Linked … under BUGS`,
 `Moved Task Link BUGS → FOCUS (created FOCUS)`, `Task Link already in
@@ -3141,10 +3146,12 @@ Human output says `would toggle` / `toggled` and prints a link summary:
 `linked ^id under NAME · stays In Progress`, `not linked ^id · stays
 <Status>` plus the guard sentence when consumption replaced the link, or
 `unlinked ^id from N open Pomodoros · stays <Status>`, followed by the day
-file and ledger lines. JSON stays schema version 1 and kind `"task_toggle"`
-with `toggle_direction: "link"` or `"unlink"`, `status_changed`,
-`removed_pomodoro_links` for unlink, the existing insertion fields for link,
-and `link_guard` (`reasons`, `promoted`, `detail`) for a consumed link. A
+file and ledger lines. JSON stays schema version 1 and kind `"task_toggle"`.
+Successful link and unlink actions include `toggle_direction: "link"` or
+`"unlink"`, `status_changed`, `removed_pomodoro_links` for unlink, and the
+existing insertion fields for link. A consumed link keeps the same kind but
+omits `toggle_direction` and `block_link`, and reports `link_guard`
+(`reasons`, `promoted`, `detail`). A
 `^prj` whose only reason is its own future schedule is refused with "move
 the project date from the `^prj` Schedule action".
 
@@ -3336,7 +3343,7 @@ and `pomodoro_link_destination` (with its `role`; see
 Pomodoro also appears in the batch-level `pomodoro_blocks` array; see
 [Pomodoro blocks](#pomodoro-blocks).
 
-Solo-link results use kind `"pomodoro_link"` with `placement: "linked"`,
+Successful solo-link results use kind `"pomodoro_link"` with `placement: "linked"`,
 `routed: true`, and `text: ""`. They carry the post-image `task_line`, the
 `block_id`, `day_file`, `block_link`, `previous_task_line`,
 `previous_status_symbol` / `previous_status_name`, `status_symbol` /
@@ -3352,6 +3359,10 @@ inserted or moved), and `pomodoro_start` (only with `=<X>`). They emit no
 preview instead of a wrong one. Every touched Pomodoro also appears in the
 batch-level `pomodoro_blocks` array; see
 [Pomodoro blocks](#pomodoro-blocks).
+When the guard consumes the gesture, the result instead uses kind
+`"link_guard"` and omits `day_file`, `block_link`, and the link action and
+destination fields. The `link_guard` object carries the outcome; any existing
+live-link cleanup appears in `pomodoro_blocks`.
 
 Project-note results use kind `"project_note"` with `placement: "created"`.
 `route` stays the parent route (`cash` for `@cash^goog-exit+`), so
@@ -3415,6 +3426,14 @@ source/destination endpoint objects described under
 any Pomodoro a link-direction toggle insert or unlink cleanup touches — also
 appears in the batch-level `pomodoro_blocks` array;
 see [Pomodoro blocks](#pomodoro-blocks).
+
+When the link guard consumes a link or Ensure Next gesture, `link_guard`
+describes why the target stayed unlinked and which prerequisites rose. The
+result omits `toggle_direction` and `block_link`, so a client that does not
+understand `link_guard` cannot show a false `+ [[link]]` confirmation. An
+Ensure Next request keeps `toggle_behavior: "ensure_next"`; if consumption
+removes existing live links, `removed_pomodoro_links`, `day_file`, and the
+batch-level `pomodoro_blocks` diff report that cleanup.
 
 Task-complete results use kind `"task_complete"` with `placement:
 "completed"`, `routed: true`, `route: null`, and `text: ""`.

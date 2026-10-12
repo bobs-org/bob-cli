@@ -1872,7 +1872,7 @@ Only today's open Pomodoros. `promoted[]` is the consumption seed.
 | # | gesture | outcome |
 | --- | --- | --- |
 | PDG1 | link toggle (capture or Ctrl+Shift+Enter) on a dependency-blocked target | not linked; open prerequisites (own plus inherited) promoted; reported |
-| PDG2 | same toggle; only the target's own future `scheduled` blocks it | pulled forward as today and linked |
+| PDG2 | same link intent through `!`, Pomodoro-link insertion, Ensure Next, or link-then-close; only the target's own future `scheduled` blocks it | pulled forward as today and linked |
 | PDG3 | same toggle; only a project schedule blocks a resident | refused; project date reported; not linked |
 | PDG4 | `@route:id s:N` with N ≥ 1 | created unlinked |
 | PDG5 | new task captured into a blocked project | `[?]`, `#prj_is_blocked`, unlinked, `not_linked` with the project reasons |

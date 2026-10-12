@@ -170,8 +170,12 @@ fn task_status_hooks_reconciles_future_schedules_and_combined_blocking_reasons()
     assert_eq!(fs::read_to_string(&tasks).unwrap(), before);
     let json: serde_json::Value =
         serde_json::from_str(stdout(&dry_run).trim()).unwrap();
-    assert_eq!(json["marked_blocked"].as_array().unwrap().len(), 7);
-    assert_eq!(json["unblocked"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        json["marked_blocked"].as_array().unwrap().len(),
+        11,
+        "{json}"
+    );
+    assert_eq!(json["unblocked"].as_array().unwrap().len(), 0, "{json}");
 
     let marked = json["marked_blocked"].as_array().unwrap();
     let scheduled_only = marked
@@ -195,8 +199,6 @@ fn task_status_hooks_reconciles_future_schedules_and_combined_blocking_reasons()
         .expect("combined change");
     assert_eq!(combined["future_scheduled_date"], "2026-07-21");
     assert_eq!(combined["open_dependency_ids"], serde_json::json!(["root"]));
-    assert!(json["unblocked"][0]["future_scheduled_date"].is_null());
-    assert_eq!(json["unblocked"][0]["block_id"], "recover");
 
     let applied = bob_command()
         .args(["task", "reconcile"])
@@ -209,28 +211,35 @@ fn task_status_hooks_reconciles_future_schedules_and_combined_blocking_reasons()
     assert_success(&applied);
     let report = stdout(&applied);
     assert!(
-        report.contains("(local_schedule; scheduled: 2026-07-17)"),
+        report.contains(
+            "(local_schedule+project_schedule; scheduled: 2026-07-17; project: tasks.md scheduled: 2026-07-23)"
+        ),
         "{report}"
     );
     assert!(
         report.contains(
-            "(local_dependency+local_schedule; scheduled: 2026-07-21; open: root)"
+            "(local_dependency+local_schedule+project_schedule; scheduled: 2026-07-21; open: root; project: tasks.md scheduled: 2026-07-23)"
         ),
         "{report}"
     );
-    assert!(report.contains("7 blocked, 1 unblocked"), "{report}");
+    assert!(report.contains("11 blocked, 0 unblocked"), "{report}");
 
     let contents = fs::read_to_string(&tasks).unwrap();
     for block_id in [
+        "root",
+        "yesterday",
+        "today",
         "future-ready",
         "future-next",
         "future-working",
         "already",
+        "impossible",
         "dependency",
         "combined",
         "still-dependent",
         "future-closed",
         "prj",
+        "recover",
     ] {
         assert!(
             contents.lines().any(|line| line.contains("- [?]")
@@ -239,12 +248,12 @@ fn task_status_hooks_reconciles_future_schedules_and_combined_blocking_reasons()
         );
     }
     for expected in [
-        "- [ ] #task Yesterday",
-        "- [ ] #task Today",
+        "- [?] #task Yesterday",
+        "- [?] #task Today",
         "- [x] #task Done future",
         "- [!] #task Unknown future",
-        "- [ ] #task Impossible",
-        "- [ ] #task Mature recovery",
+        "- [?] #task Impossible",
+        "- [?] #task Mature recovery",
     ] {
         assert!(
             contents.contains(expected),

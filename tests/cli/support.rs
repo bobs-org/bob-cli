@@ -94,6 +94,25 @@ pub(crate) fn write_toggle_task_settings(vault: &Path) {
     );
 }
 
+pub(crate) fn write_unblocked_project_with_future_resident(
+    vault: &Path,
+    day_file: &Path,
+) {
+    write_toggle_task_settings(vault);
+    write_file(
+        &vault.join("cash.md"),
+        concat!(
+            "---\n",
+            "type: \"[[project]]\"\n",
+            "status: wip\n",
+            "---\n\n",
+            "- [ ] #task Ship project #prj #hide ^prj\n",
+            "- [?] #task Scheduled resident [scheduled:: 2026-10-20] ^resident\n",
+        ),
+    );
+    write_file(day_file, "## Pomodoros\n- [ ] () — CURRENT\n  - context\n");
+}
+
 pub(crate) fn capture_pomodoro_ref(line: &str, line_number: usize) -> String {
     let digest = hex::encode(Sha256::digest(line.trim_end().as_bytes()));
     format!("{line_number}:{}", &digest[..8])

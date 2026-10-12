@@ -323,6 +323,27 @@ fn removal_only_strips_the_link_when_bullet_has_other_text() {
 }
 
 #[test]
+fn removal_preserves_struck_links_and_removes_only_live_occurrences() {
+    let contents = concat!(
+        "## Pomodoros\n",
+        "- [ ] () — OPEN\n",
+        "\t- retired ~~[[cash#^id]]~~\n",
+        "\t- [[cash#^id]] and ~~[[cash#^id]]~~\n",
+    );
+    let plan = plan_link_removal(contents, "[[cash#^id]]");
+    assert_eq!(plan.removed_links, 1);
+    assert_eq!(
+        plan.content,
+        concat!(
+            "## Pomodoros\n",
+            "- [ ] () — OPEN\n",
+            "\t- retired ~~[[cash#^id]]~~\n",
+            "\t-  and ~~[[cash#^id]]~~\n",
+        )
+    );
+}
+
+#[test]
 fn removal_reports_no_changes_when_nothing_matches() {
     let contents = "## Pomodoros\n- [ ] () — OPEN\n";
     let plan = plan_link_removal(contents, "[[cash#^id]]");

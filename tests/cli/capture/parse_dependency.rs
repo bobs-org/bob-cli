@@ -677,8 +677,12 @@ fn capture_prj_dependency_blocks_tags_and_unlinks_residents() {
         "proj.md",
         concat!(
             "- [ ] #task Ship #hide ^prj\n",
+            "```md\n",
+            "- [ ] #task Fenced example ^fenced\n",
+            "```\n",
             "- [ ] #task Work ^work\n",
             "- [/] #task Grind ^grind\n",
+            "- [ ] #task Id-less resident\n",
         ),
     );
     let day_file = vault.join("day.md");
@@ -729,6 +733,14 @@ fn capture_prj_dependency_blocks_tags_and_unlinks_residents() {
         );
     }
     assert!(
+        after.contains("- [?] #task Id-less resident #prj_is_blocked"),
+        "id-less resident still receives the status/tag write:\n{after}"
+    );
+    assert!(
+        after.contains("- [ ] #task Fenced example ^fenced"),
+        "fenced tasks stay untouched after Depends-On insertion:\n{after}"
+    );
+    assert!(
         after.contains("⛓️ **DEPENDS ON:** [[cash#^fund]]"),
         "^prj keeps the ordinary managed line:\n{after}"
     );
@@ -759,8 +771,8 @@ fn capture_prj_dependency_blocks_tags_and_unlinks_residents() {
         fs::read_to_string(vault.join("proj.md")).expect("read project");
     assert_eq!(
         again.matches("#prj_is_blocked").count(),
-        2,
-        "repeat adds no duplicate tags:\n{again}"
+        3,
+        "repeat adds no duplicate tags; id-less open residents stay tagged:\n{again}"
     );
 }
 

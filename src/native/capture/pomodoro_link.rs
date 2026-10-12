@@ -292,6 +292,12 @@ pub(super) fn plan_pomodoro_link_capture(
     {
         let dependent_desc = format!("pomodoro link ^{block_id}");
         let reasons = plan.reasons.clone();
+        let consumption = consume_live_links(
+            planner,
+            bob_dir,
+            route,
+            &[block_id.to_string()],
+        )?;
         let promoted = promote_consume_plan(
             ctx,
             planner,
@@ -332,7 +338,7 @@ pub(super) fn plan_pomodoro_link_capture(
                     status_changed: false,
                     pomodoro_start: None,
                 }),
-                pomodoro_refs: Vec::new(),
+                pomodoro_refs: consumption.pomodoro_refs,
             },
             Some(link_guard),
         ));

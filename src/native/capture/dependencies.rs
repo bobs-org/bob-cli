@@ -50,6 +50,8 @@ pub(super) struct DependencyContext {
     previous_daily: OnceLock<Option<PathBuf>>,
     dependents: OnceLock<DependentsSnapshot>,
     link_unblocked: OnceLock<bool>,
+    #[cfg(test)]
+    graph_builds: AtomicUsize,
 }
 
 impl DependencyContext {
@@ -69,6 +71,8 @@ impl DependencyContext {
             previous_daily: OnceLock::new(),
             dependents: OnceLock::new(),
             link_unblocked: OnceLock::new(),
+            #[cfg(test)]
+            graph_builds: AtomicUsize::new(0),
         }
     }
 
@@ -125,6 +129,11 @@ impl DependencyContext {
                 .map(|loaded| loaded.link_unblocked())
                 .unwrap_or(true)
         })
+    }
+
+    #[cfg(test)]
+    pub(super) fn graph_build_count(&self) -> usize {
+        self.graph_builds.load(Ordering::Relaxed)
     }
 }
 
@@ -947,9 +956,12 @@ pub(super) struct DependencyGraph {
     /// Status symbol per identity, for promotion lanes.
     pub(super) status: HashMap<(String, String), char>,
     /// Identities promotion must walk through but never raise (§13.4):
-    /// every recognised `^prj` task plus the residents of blocked
-    /// projects (PDB9).
+    /// every recognised `^prj` task and every effectively Blocked task.
     pub(super) never_raise: BTreeSet<(String, String)>,
+    /// Open resident identities whose implicit edges mirror a
+    /// recognised project's `^prj` dependencies.
+    pub(super) project_residents:
+        BTreeMap<(String, String), BTreeSet<(String, String)>>,
 }
 
 impl DependencyGraph {
@@ -959,12 +971,15 @@ impl DependencyGraph {
         bob_dir: &Path,
         index: &NoteIndex,
     ) -> Result<Self, CaptureError> {
+        #[cfg(test)]
+        ctx.graph_builds.fetch_add(1, Ordering::Relaxed);
         let mut graph = Self {
             edges: BTreeMap::new(),
             open: HashMap::new(),
             scheduled: HashMap::new(),
             status: HashMap::new(),
             never_raise: BTreeSet::new(),
+            project_residents: BTreeMap::new(),
         };
         let mut rels: BTreeSet<PathBuf> = ctx
             .catalog()
@@ -1134,6 +1149,11 @@ impl DependencyGraph {
                     continue;
                 };
                 let resident = (note_display.clone(), block_id);
+                graph
+                    .project_residents
+                    .entry(prj_identity.clone())
+                    .or_default()
+                    .insert(resident.clone());
                 for target in &prj_targets {
                     graph
                         .edges
@@ -1144,6 +1164,26 @@ impl DependencyGraph {
                 if blocked {
                     graph.never_raise.insert(resident);
                 }
+            }
+        }
+        // Promotion must walk through every effectively Blocked task,
+        // even when its own prerequisite links can raise further tasks.
+        // `[?]` alone is not a reason; use open edges and future dates.
+        for identity in graph.open.keys() {
+            let has_open_prerequisite =
+                graph.edges.get(identity).is_some_and(|targets| {
+                    targets.iter().any(|target| {
+                        graph.open.get(target).copied().unwrap_or(false)
+                    })
+                });
+            let has_future_schedule = graph
+                .scheduled
+                .get(identity)
+                .copied()
+                .flatten()
+                .is_some_and(|scheduled| scheduled > ctx.anchor);
+            if has_open_prerequisite || has_future_schedule {
+                graph.never_raise.insert(identity.clone());
             }
         }
         Ok(graph)
@@ -1326,21 +1366,53 @@ fn reject_new_cycles(
     if new_edges.is_empty() {
         return Ok(());
     }
-    for target in new_edges {
-        if target == dependent {
-            return Err(CaptureError::usage(format!(
-                "task dependency on itself: {} cannot depend on itself",
-                format_identity(dependent)
-            )));
+    let mut sources = BTreeSet::from([dependent.clone()]);
+    if dependent.1 == "prj"
+        && let Some(residents) = graph.project_residents.get(dependent)
+    {
+        sources.extend(residents.iter().cloned());
+    }
+    for target in &new_edges {
+        for source in &sources {
+            // A resident may already name this task explicitly. That
+            // edge is not new and cannot make an unrelated old cycle a
+            // reason to reject this project edit.
+            if graph
+                .edges
+                .get(source)
+                .is_some_and(|edges| edges.contains(*target))
+            {
+                continue;
+            }
+            extra
+                .entry(source.clone())
+                .or_default()
+                .insert((*target).clone());
         }
-        if let Some(path) = graph.reaches(target, dependent, &extra) {
-            let mut readable: Vec<String> =
-                path.iter().map(format_identity).collect();
-            readable.push(format_identity(dependent));
-            return Err(CaptureError::usage(format!(
-                "task dependency cycle: {} (a task cannot depend on itself, directly or transitively)",
-                readable.join(" -> ")
-            )));
+    }
+    for target in new_edges {
+        for source in &sources {
+            if extra
+                .get(source)
+                .is_none_or(|edges| !edges.contains(target))
+            {
+                continue;
+            }
+            if target == source {
+                return Err(CaptureError::usage(format!(
+                    "task dependency on itself: {} cannot depend on itself",
+                    format_identity(source)
+                )));
+            }
+            if let Some(path) = graph.reaches(target, source, &extra) {
+                let mut readable: Vec<String> =
+                    path.iter().map(format_identity).collect();
+                readable.push(format_identity(source));
+                return Err(CaptureError::usage(format!(
+                    "task dependency cycle: {} (a task cannot depend on itself, directly or transitively)",
+                    readable.join(" -> ")
+                )));
+            }
         }
     }
     Ok(())
@@ -1352,6 +1424,7 @@ pub(super) struct PlannedDependencyUpdate {
     pub(super) summary: DependencyUpdateJson,
     pub(super) dependent_ref: TaskBlockRef,
     pub(super) target_refs: Vec<TaskBlockRef>,
+    pub(super) pomodoro_refs: Vec<PomodoroBlockRef>,
 }
 
 fn prerequisite_json(prereq: &ResolvedPrerequisite) -> PrerequisiteJson {
@@ -1380,9 +1453,9 @@ fn target_block_ref(touch: &TargetTouch) -> TaskBlockRef {
 }
 
 /// Raise open prerequisites to at least the dependent's lane (Ready 0,
-/// Next 1, In Progress 2), transitively along staged edges. Blocked,
-/// future-scheduled, closed, and unrecognized statuses are respected
-/// and never rewritten; lanes are never lowered.
+/// Next 1, In Progress 2), transitively along staged edges. Effectively
+/// Blocked nodes are never rewritten, but promotion walks through them
+/// to their own open prerequisites; lanes are never lowered.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn plan_promotions(
     ctx: &DependencyContext,
@@ -1414,20 +1487,11 @@ pub(super) fn plan_promotions(
             if !graph.open.get(&target).copied().unwrap_or(false) {
                 continue;
             }
-            if graph
-                .scheduled
-                .get(&target)
-                .copied()
-                .flatten()
-                .is_some_and(|scheduled| scheduled > ctx.anchor)
-            {
-                continue;
-            }
             let current = graph.status.get(&target).copied().unwrap_or(' ');
-            let Some(current_lane) = lane_for_status(current) else {
-                continue;
-            };
-            if current_lane >= lane {
+            let walk_through = graph.never_raise.contains(&target);
+            let needs_raise = lane_for_status(current)
+                .is_some_and(|current_lane| current_lane < lane);
+            if !walk_through && !needs_raise {
                 continue;
             }
             let should = desired.get(&target).is_none_or(|known| *known < lane);
@@ -2271,6 +2335,7 @@ pub(super) fn plan_existing_task_dependencies(
     // Blocked identity is unlinked from today's open Pomodoros (§13.5).
     // Any `&` that leaves its dependent Blocked consumes the
     // dependent's own live links the same way.
+    let mut pomodoro_refs = Vec::new();
     if status_char == '?' && open_count > 0 {
         let mut blocked_ids = vec![dependent_block_id.to_string()];
         if let Some((context, _)) = &prj_project {
@@ -2288,12 +2353,14 @@ pub(super) fn plan_existing_task_dependencies(
                     {
                         *line = edit.text.clone();
                     }
-                    touches.push(TargetTouch {
-                        absolute: dep_abs.clone(),
-                        relative: dep_rel.clone(),
-                        block_id: edit.block_id.clone(),
-                        line: edit.line,
-                    });
+                    if let Some(block_id) = &edit.block_id {
+                        touches.push(TargetTouch {
+                            absolute: dep_abs.clone(),
+                            relative: dep_rel.clone(),
+                            block_id: block_id.clone(),
+                            line: edit.line,
+                        });
+                    }
                 }
                 planner.stage(&dep_abs, residents_note.join())?;
             }
@@ -2303,17 +2370,19 @@ pub(super) fn plan_existing_task_dependencies(
                 }
             }
         }
-        let removed = consume_live_links(
+        let consumption = consume_live_links(
             planner,
             bob_dir,
             dependent_route,
             &blocked_ids,
         )?;
-        if removed > 0 {
+        if consumption.removed_links > 0 {
             warnings.push(format!(
-                "removed {removed} live Pomodoro link(s) to newly Blocked task(s)"
+                "removed {} live Pomodoro link(s) to newly Blocked task(s)",
+                consumption.removed_links
             ));
         }
+        pomodoro_refs = consumption.pomodoro_refs;
     }
     // Promote open prerequisites to the dependent's pre-capture lane —
     // or, for a `^prj` write, to the strongest lane among `^prj` and its
@@ -2392,6 +2461,7 @@ pub(super) fn plan_existing_task_dependencies(
             .into_iter()
             .map(|touch| target_block_ref(&touch))
             .collect(),
+        pomodoro_refs,
     })
 }
 
@@ -2553,6 +2623,7 @@ pub(super) fn plan_new_task_dependencies(
                 .into_iter()
                 .map(|touch| target_block_ref(&touch))
                 .collect(),
+            pomodoro_refs: Vec::new(),
             relative_target: display_relative(&dep_rel),
             route: dependent_route.map(str::to_string).unwrap_or_default(),
             block_id: new_block_id.map(str::to_string),
@@ -2566,6 +2637,7 @@ pub(super) fn plan_new_task_dependencies(
 pub(super) struct PlannedDependencyUpdateParts {
     pub(super) summary: DependencyUpdateJson,
     pub(super) target_refs: Vec<TaskBlockRef>,
+    pub(super) pomodoro_refs: Vec<PomodoroBlockRef>,
     pub(super) relative_target: String,
     pub(super) route: String,
     pub(super) block_id: Option<String>,
@@ -2736,7 +2808,7 @@ pub(super) fn plan_dependency_only_item(
             link_guard: None,
         },
         clip_plan: None,
-        pomodoro_refs: Vec::new(),
+        pomodoro_refs: update.pomodoro_refs,
         task_block_refs,
     })
 }
@@ -2964,5 +3036,35 @@ mod tests {
             !recovered.contains("sched-member"),
             "a resident of a still-blocked project never recovers"
         );
+    }
+
+    #[test]
+    fn new_prj_edges_check_implicit_resident_cycles() {
+        let project = ("proj.md".to_string(), "prj".to_string());
+        let resident = ("proj.md".to_string(), "work".to_string());
+        let target = ("ext.md".to_string(), "tee".to_string());
+        let graph = DependencyGraph {
+            edges: BTreeMap::from([(
+                target.clone(),
+                BTreeSet::from([resident.clone()]),
+            )]),
+            open: HashMap::from([
+                (project.clone(), true),
+                (resident.clone(), true),
+                (target.clone(), true),
+            ]),
+            scheduled: HashMap::new(),
+            status: HashMap::new(),
+            never_raise: BTreeSet::new(),
+            project_residents: BTreeMap::from([(
+                project.clone(),
+                BTreeSet::from([resident.clone()]),
+            )]),
+        };
+        let error =
+            reject_new_cycles(&graph, &project, &BTreeSet::new(), &[target])
+                .expect_err("the new project edge adds resident → target");
+        assert!(error.message.contains("cycle"), "{error:?}");
+        assert!(error.message.contains("work"), "{error:?}");
     }
 }

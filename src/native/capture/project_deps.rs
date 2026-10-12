@@ -111,7 +111,7 @@ pub(super) fn strongest_project_lane(
 
 /// One staged resident edit: the resident id plus its rebuilt line.
 pub(super) struct ResidentEdit {
-    pub(super) block_id: String,
+    pub(super) block_id: Option<String>,
     pub(super) line: usize,
     pub(super) text: String,
 }
@@ -128,14 +128,24 @@ pub(super) fn plan_resident_block(
 ) -> (Vec<ResidentEdit>, Vec<String>) {
     let mut edits = Vec::new();
     let mut residents = Vec::new();
+    // The caller may have inserted or removed a Depends-On child before
+    // these lines. Rebuild the project context from the text being edited
+    // so its fenced-line indices describe the same line numbering.
+    let staged_contents = staged_lines.join("\n");
+    let staged_context = ProjectContext::for_note(&FileScan {
+        path: context.relative_path.clone(),
+        relative_path: context.relative_path.clone(),
+        contents: staged_contents,
+        tasks: tasks.to_vec(),
+    });
     for task in tasks {
-        if !context.is_resident(task) {
+        if !staged_context.is_resident(task) {
             continue;
         }
-        let Some(block_id) = task.block_id.clone() else {
-            continue;
-        };
-        residents.push(block_id.clone());
+        let block_id = task.block_id.clone();
+        if let Some(block_id) = &block_id {
+            residents.push(block_id.clone());
+        }
         let Some(line) = staged_lines.get(task.line_index) else {
             continue;
         };
@@ -153,24 +163,30 @@ pub(super) fn plan_resident_block(
     (edits, residents)
 }
 
+#[derive(Debug, Default)]
+pub(super) struct LiveLinkConsumption {
+    pub(super) removed_links: usize,
+    pub(super) pomodoro_refs: Vec<PomodoroBlockRef>,
+}
+
 /// Remove every `[[route#^id]]` live link from today's open Pomodoros,
 /// then drop emptied entries (§13.5). A missing day file is nothing to
-/// consume. Returns the removed link count.
+/// consume. Returns the removed link count and refs for emptied entries.
 pub(super) fn consume_live_links(
     planner: &mut CaptureBatchPlanner,
     bob_dir: &Path,
     route: &str,
     block_ids: &[String],
-) -> Result<usize, CaptureError> {
+) -> Result<LiveLinkConsumption, CaptureError> {
     if block_ids.is_empty() {
-        return Ok(0);
+        return Ok(LiveLinkConsumption::default());
     }
     let day_absolute = pomodoro::day_file_for(bob_dir);
     let before = match planner.current_contents(&day_absolute)? {
         Some(staged) => staged,
         None => match fs::read_to_string(&day_absolute) {
             Ok(disk) => disk,
-            Err(_) => return Ok(0),
+            Err(_) => return Ok(LiveLinkConsumption::default()),
         },
     };
     let mut contents = before.clone();
@@ -183,20 +199,30 @@ pub(super) fn consume_live_links(
         removed += plan.removed_links;
     }
     if contents == before {
-        return Ok(removed);
+        return Ok(LiveLinkConsumption {
+            removed_links: removed,
+            pomodoro_refs: Vec::new(),
+        });
     }
     let before_lines = task_status_hooks::logical_lines(&before);
+    let mut pomodoro_refs = Vec::new();
     if let Some(section) = pomodoro::pomodoros_section_range(&before_lines) {
         let original =
             task_status_hooks::scan_pomodoros(&before_lines, section);
         let emptied = task_status_hooks::plan_empty_pomodoro_removals(
             &contents, &original,
         );
+        pomodoro_refs.extend(emptied.removed.iter().map(|entry| {
+            PomodoroBlockRef::removed(entry.line_number.saturating_sub(1))
+        }));
         contents =
             task_status_hooks::apply_empty_pomodoro_plan(&contents, &emptied);
     }
     planner.stage(&day_absolute, contents)?;
-    Ok(removed)
+    Ok(LiveLinkConsumption {
+        removed_links: removed,
+        pomodoro_refs,
+    })
 }
 
 #[cfg(test)]
@@ -256,7 +282,7 @@ mod tests {
             "open residents only: no ^prj, no closed lines"
         );
         assert_eq!(edits.len(), 1, "only the untagged resident changes");
-        assert_eq!(edits[0].block_id, "work");
+        assert_eq!(edits[0].block_id.as_deref(), Some("work"));
         assert!(
             edits[0].text.starts_with("- [?] "),
             "resident flips to Blocked: {}",
@@ -273,6 +299,42 @@ mod tests {
             "the tag lands before the block id: {}",
             edits[0].text
         );
+    }
+
+    #[test]
+    fn resident_block_edits_idless_rows_and_rechecks_shifted_fences() {
+        // PDT1/PDT7 (§13.18): id-less open residents still receive their
+        // immediate status/tag write; IDs are only needed for link cleanup.
+        let body = concat!(
+            "- [ ] #task Ship #hide ^prj\n",
+            "```md\n",
+            "- [ ] #task Fenced example ^fenced\n",
+            "```\n",
+            "- [ ] #task Unnamed resident\n",
+            "- [ ] #task Named resident ^named\n",
+        );
+        let (context, _) = project_context(body);
+        let contents =
+            format!("---\ntype: [[project]]\nstatus: wip\n---\n{body}");
+        let mut staged =
+            contents.lines().map(str::to_string).collect::<Vec<_>>();
+        staged.insert(1, "\t- ⛓️ **DEPENDS ON:** [[job#^prep]]".to_string());
+        let staged_text = staged.join("\n");
+        let staged_tasks =
+            task_status_hooks::parse_tasks(&staged_text, &settings());
+        let (edits, residents) =
+            plan_resident_block(&context, &staged_tasks, &staged);
+        assert_eq!(residents, vec!["named".to_string()]);
+        assert_eq!(edits.len(), 2);
+        assert_eq!(edits[0].block_id, None);
+        assert_eq!(edits[1].block_id.as_deref(), Some("named"));
+        assert!(edits.iter().all(|edit| edit.text.starts_with("- [?] ")));
+        assert!(edits
+            .iter()
+            .all(|edit| edit.text.contains("#prj_is_blocked")));
+        assert!(!edits
+            .iter()
+            .any(|edit| edit.text.contains("Fenced example")));
     }
 
     #[test]

@@ -620,6 +620,7 @@ pub(super) fn plan_capture_item(
                 "task toggle capture invariant failed: missing toggle details",
             )
         })?;
+        let link_consumed = link_guard.is_some();
         return Ok(PlannedCaptureItem {
             result: CaptureItemResult {
                 ok: true,
@@ -641,26 +642,31 @@ pub(super) fn plan_capture_item(
                 clip: None,
                 schedule_log: toggle.schedule_log.clone(),
                 block_id: Some(toggle.block_id.clone()),
-                day_file: Some(toggle.day_file.clone()),
-                block_link: Some(toggle.block_link.clone()),
+                day_file: (!link_consumed || toggle.removed_pomodoro_links > 0)
+                    .then(|| toggle.day_file.clone()),
+                block_link: (!link_consumed).then(|| toggle.block_link.clone()),
                 pomodoro_link_placement: toggle.pomodoro_link_placement,
                 parent_line: None,
                 parent_text: None,
                 parent_section: None,
                 parent_status_symbol: None,
                 parent_status_name: None,
-                toggle_direction: Some(toggle.direction.label()),
+                toggle_direction: (!link_consumed)
+                    .then(|| toggle.direction.label()),
                 previous_task_line: Some(toggle.previous_task_line.clone()),
                 status_symbol: Some(toggle.status_symbol),
                 status_name: Some(toggle.status_name.clone()),
                 previous_status_symbol: Some(toggle.previous_status_symbol),
                 previous_status_name: Some(toggle.previous_status_name.clone()),
                 pomodoro_name: toggle.pomodoro_name.clone(),
-                creates_pomodoro: Some(toggle.creates_pomodoro),
-                pomodoro_already_linked: Some(toggle.pomodoro_already_linked),
+                creates_pomodoro: (!link_consumed)
+                    .then_some(toggle.creates_pomodoro),
+                pomodoro_already_linked: (!link_consumed)
+                    .then_some(toggle.pomodoro_already_linked),
                 removed_pomodoro_links: Some(toggle.removed_pomodoro_links),
                 removed_scheduled: toggle.removed_scheduled.clone(),
-                pomodoro_selector_unused: Some(toggle.pomodoro_selector_unused),
+                pomodoro_selector_unused: (!link_consumed)
+                    .then_some(toggle.pomodoro_selector_unused),
                 toggle_behavior: toggle.toggle_behavior,
                 status_changed: toggle.status_changed,
                 pomodoro_link_action: toggle.pomodoro_link_action,
@@ -734,6 +740,7 @@ pub(super) fn plan_capture_item(
                 "pomodoro link capture invariant failed: missing link details",
             )
         })?;
+        let link_consumed = link_guard.is_some();
         return Ok(PlannedCaptureItem {
             result: CaptureItemResult {
                 ok: true,
@@ -745,7 +752,14 @@ pub(super) fn plan_capture_item(
                 target: target.display().to_string(),
                 text: String::new(),
                 task_line: link.task_line.clone(),
-                kind: capture_kind_label(&parsed.kind),
+                // Unknown kinds fall back to a neutral preview in older
+                // clients. A consumed gesture must not be presented as a
+                // successful Pomodoro link.
+                kind: if link_consumed {
+                    "link_guard"
+                } else {
+                    capture_kind_label(&parsed.kind)
+                },
                 created,
                 scheduled: None,
                 priority: None,
@@ -755,8 +769,8 @@ pub(super) fn plan_capture_item(
                 clip: None,
                 schedule_log: link.schedule_log.clone(),
                 block_id: Some(link.block_id.clone()),
-                day_file: Some(link.day_file.clone()),
-                block_link: Some(link.block_link.clone()),
+                day_file: (!link_consumed).then(|| link.day_file.clone()),
+                block_link: (!link_consumed).then(|| link.block_link.clone()),
                 pomodoro_link_placement: link.pomodoro_link_placement,
                 parent_line: None,
                 parent_text: None,
@@ -770,14 +784,16 @@ pub(super) fn plan_capture_item(
                 previous_status_symbol: Some(link.previous_status_symbol),
                 previous_status_name: Some(link.previous_status_name.clone()),
                 pomodoro_name: link.pomodoro_name.clone(),
-                creates_pomodoro: Some(link.creates_pomodoro),
+                creates_pomodoro: (!link_consumed)
+                    .then_some(link.creates_pomodoro),
                 pomodoro_already_linked: None,
                 removed_pomodoro_links: None,
                 removed_scheduled: link.removed_scheduled.clone(),
                 pomodoro_selector_unused: None,
                 toggle_behavior: None,
                 status_changed: Some(link.status_changed),
-                pomodoro_link_action: Some(link.pomodoro_link_action),
+                pomodoro_link_action: (!link_consumed)
+                    .then_some(link.pomodoro_link_action),
                 pomodoro_link_source: link.pomodoro_link_source.clone(),
                 pomodoro_link_destination: link
                     .pomodoro_link_destination
@@ -1239,7 +1255,7 @@ pub(super) fn plan_capture_item(
             &parsed.kind,
         )?,
     };
-    let pomodoro_refs = std::mem::take(&mut note_plan.pomodoro_refs);
+    let mut pomodoro_refs = std::mem::take(&mut note_plan.pomodoro_refs);
     let special = note_plan.pomodoro.as_ref();
     let sub_bullet = note_plan.sub_bullet.as_ref();
     let pomodoro_note = note_plan.pomodoro_note.as_ref();
@@ -1260,6 +1276,7 @@ pub(super) fn plan_capture_item(
                     dependency_block_refs.push(tracked);
                 }
                 dependency_block_refs.extend(parts.target_refs.clone());
+                pomodoro_refs.extend(parts.pomodoro_refs.iter().copied());
                 dependency_update = Some(parts.summary.clone());
             }
         }
@@ -1292,6 +1309,7 @@ pub(super) fn plan_capture_item(
             )?;
             dependency_block_refs.push(update.dependent_ref);
             dependency_block_refs.extend(update.target_refs);
+            pomodoro_refs.extend(update.pomodoro_refs);
             dependency_update = Some(update.summary);
         }
         _ => {}
