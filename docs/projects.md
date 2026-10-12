@@ -153,6 +153,9 @@ Task statuses follow the Tasks plugin convention:
 - Active projects with zero non-hidden open tasks and no open sub-projects
   have `#hide` removed from their open `^prj` task so they surface in
   `dash.md`'s Tasks section.
+- Close gestures that empty a project remove `#hide` at once and may
+  link `^prj` as Next (`docs/task-dependencies.md` §12.10). Sync agrees
+  with that state: a later run reports no change for that project.
 - Active projects with non-hidden open tasks or open sub-projects get
   `#hide` added back to their open `^prj` task immediately before `^prj`.
 - A valid `scheduled: P` frontmatter date overrides surfacing only when

@@ -594,7 +594,7 @@ plan:
   max_ready: 100 # soft limit for dashboard READY tasks, excluding Today (see above)
   max_ready_per_note: 5 # soft cap per area/project note; frontmatter ready_cap overrides
   strict: false # refuse #NAME captures that would create a theme past max_themes
-  link_unblocked: true # link a closed planned task's unblocked dependents into its slot (docs/task-dependencies.md §12)
+  link_unblocked: true # link a closed planned task's unblocked dependents into its slot, including project pull-ins (docs/task-dependencies.md §12, §12.10)
   exempt: [GTD] # open entries that never count as themes
   inventory_labels: [LATER, MISC, NEW FEATURES, SASE] # open names that are storage, not themes
 ```

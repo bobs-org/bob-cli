@@ -803,7 +803,10 @@ maintains the machine-owned Sub-projects ledger, and propagates optional
 it does not change checkboxes. Run `bob task reconcile` afterward to derive
 or recover `[?]` Blocked markers. The property picker in Bob Navigation
 Hotkeys can propagate schedules and reconcile Blocked in the same editor
-transaction. The full project task contract lives in
+transaction. A close that empties a project also un-hides `^prj` at once
+and may link it as Next
+([`docs/task-dependencies.md`](docs/task-dependencies.md) §12.10). The
+full project task contract lives in
 [`docs/projects.md`](docs/projects.md).
 
 ## Plugins

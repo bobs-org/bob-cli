@@ -686,7 +686,7 @@ helpers.
 | SL8 | `=x` close with carried links; an embed P completes | D appended after the carried lines in the continuation |
 | SL9 | P has no live link today | D `[?]`→`[ ]`; `not_planned_today`; successor logic leaves the ledger alone |
 | SL10 | D has no `^block-id` | ` ^<mint>` appended (SB rule); `block_id_created: true`; `block_id` is the mint |
-| SL11 | D is `^prj` / carries `#hide` | recover only; `project_task` / `hidden` |
+| SL11 | D is `^prj` / carries `#hide` | recover only; `project_task` / `hidden` (except §12.10) |
 | SL12 | One gesture closes P1 and P2; D depends on both | D linked once, after the earlier anchor; `unblocked_by: [P1, P2]` |
 | SL13 | Chain P → D → E | D linked; E untouched and not reported |
 | SL14 | D's basename is ambiguous | `[[dir/note#^id]]` |
@@ -737,7 +737,9 @@ no words. SB9 walks the `task-N` fallback past taken IDs.
 
 When a Bob close gesture completes a task planned in today's ledger,
 every direct dependent that this close fully unblocked is linked into
-the predecessor's slot and becomes Next in the same write.
+the predecessor's slot and becomes Next in the same write. When that
+close also empties the predecessor's project note, the project's `^prj`
+task is pulled in the same way and loses `#hide` (§12.10).
 
 - **Gesture.** One Obsidian Ctrl+Enter, or one capture **item**. A
   multi-item draft is several gestures, planned in order against the
@@ -770,6 +772,8 @@ Successor linking runs inside these gestures, and only when they
 | `bob capture` closes that complete links: `=x` with embeds, `=x!M`, `=!`, `^route:id=x…` | bob-cli |
 | Alt+] / Alt+[ status cycling into Done | task-status-cycler |
 
+The same complete gestures trigger project pull-in (§12.10).
+
 It **never** runs on any of the following:
 
 - cancel (the nav Ctrl+Shift+P cancel, Alt+[ into Cancelled);
@@ -779,7 +783,9 @@ It **never** runs on any of the following:
 - `=*` parks;
 - Ctrl+Enter on a Depends-On line.
 
-Cancels still recover dependents exactly as today.
+Cancels still recover dependents exactly as today. Cancel never links
+a successor or a pull-in; it still un-hides an emptied project's
+`^prj` (surfaces only, §12.10).
 
 ### 12.2 Rule
 
@@ -788,8 +794,9 @@ One definition, two engines (Rust capture and the JS cycler):
 ```text
 C        = tasks this gesture moved open → Done (roots + closed embedded subtasks),
            read from the staged post-close text
-GATE     : if no c ∈ C carries an [id::] field → stop. No dependents lookup and no extra
-           reads. unblocked_check = "checked"; unblocked = still_blocked = [].
+GATE     : if no c ∈ C carries an [id::] field → skip the dependents lookup and extra
+           vault reads. unblocked_check = "checked". Project pull-in (§12.10) still
+           runs from the staged text of C's notes.
 match(c) = c's [id::] value
 
 ANCHORS (computed on today's day text BEFORE this gesture's strikes, moves, or retirement,
@@ -811,6 +818,8 @@ FOR EACH D, in this order:
   3. D is a resident of a still-blocked project
                                   → still_blocked{reason: project}  (PDC1; D stays [?])
   4. D's block id is prj          → recover; not_linked: project_task
+                                    (except §12.10: a ^prj of an emptied
+                                    project is a pull-in, not project_task)
   5. D carries #hide              → recover; not_linked: hidden
   6. D had a live link before this gesture
                                   → recover; not_linked: already_planned
@@ -915,6 +924,8 @@ planned pass in Obsidian.
 
 - **Successor's note.** Its status changes per the rule. A missing
   `^block-id` is appended as ` ^<mint>` at the end of the task line.
+  Removing whole-token `#hide` from a pulled-in `^prj` is the one
+  non-status line edit (§12.10). `#hidden` and `#hideaway` stay.
 - **Day file.** Successor bullets are inserted, plus the created
   placeholder when one is needed.
 - **Freshness.** Never touched: no `[fresh::]` stamp, and an existing
@@ -974,6 +985,8 @@ fields:
   "previous_status_symbol": "?", "previous_status_name": "Blocked",
   "status_symbol": "*", "status_name": "Next",
   "inbox": false,
+  "trigger": "dependency",
+  "hide_removed": false,
   "unblocked_by": [{"note_path": "sase.md", "block_id": "fix-apollo",
                     "text": "Fix apollo machine!"}],
   "link": {"day_file": "2026/20261009.md", "entry_name": "FIX", "entry_line": 37,
@@ -984,7 +997,8 @@ fields:
 }],
 "still_blocked": [{"note_path": "sase_agents_repo.md", "block_id": "badges", "line": 21,
   "text": "Start adding sase--<name> badges", "status_symbol": "?",
-  "reason": "scheduled", "waits_on": 0, "scheduled": "2026-10-13"}],
+  "reason": "scheduled", "waits_on": 0, "scheduled": "2026-10-13",
+  "trigger": "dependency"}],
 "unblocked_check": "checked"
 ```
 
@@ -992,6 +1006,15 @@ fields:
 
 - The existing fields keep their meaning; `unblocked` stays on
   `task_complete` and is new on `pomodoro_close`.
+- `trigger` is `"dependency"` or `"project_empty"`. Every existing
+  successor row says `"dependency"`; a missing key means an older bob.
+  Project pull-in rows say `"project_empty"` (§12.10).
+- `hide_removed` is true when this gesture removed a whole-token
+  `#hide` from the row's task. Existing successor rows send `false`.
+- The row `text` of a project (`^prj`) row is the post-write
+  description with `#prj` and `#hide` dropped (display only).
+- Human output uses `surfaced` / `would surface` for a pull-in that
+  removed `#hide` without linking or changing status (§12.6, §12.10).
 - `block_id` holds the minted ID when one was minted, and `""` when D
   has none and none was minted.
 - `link` is non-null exactly when this gesture linked D.
@@ -1010,6 +1033,8 @@ fields:
 - `scheduled` is set only for `scheduled`, otherwise `null`.
 - `project` is a resident (or `^prj`) whose project still has an open
   prerequisite or a future `scheduled` date after this gesture (§13).
+- `trigger` is `"dependency"` or `"project_empty"`, same rule as
+  `unblocked[]`.
 
 **`unblocked_check`**
 
@@ -1076,6 +1101,8 @@ notification line). This is the plain fallback and walk-toast form:
 | Created continuation | `🔓 Next in new BOB session (next up): Re-launch…` |
 | Breaker | `🔓 7 unblocked · not linked (more than 5)` |
 | Recovered only | `🔓 Unblocked: Book flights (Ready)` |
+| One linked pull-in | `🔓 Next in FIX: Ship the outcome! · project has no open tasks` |
+| Surfaced only | `🔓 Surfaced: Ship the outcome! (Ready) · project has no open tasks` |
 | Partial failure (Obsidian) | `⚠ Closed Fix apollo machine! — couldn't link 1 successor (daily note changed)` |
 
 **Obsidian: the `Unblocked` card** (nav's notice family,
@@ -1093,7 +1120,8 @@ notification line). This is the plain fallback and walk-toast form:
 
 - **Header.**
   - 🔓 sits in the existing glyph slot.
-  - The title is `Unblocked`.
+  - The title is `Project empty` when every row is a project pull-in
+    row (`trigger: "project_empty"`), otherwise `Unblocked`.
   - The count chip reads `n → NAME` / `n → new NAME session` /
     `n linked`, plus `· next up` when it applies.
   - The right-aligned muted receipt reads `✓ <predecessor>`, or
@@ -1101,13 +1129,17 @@ notification line). This is the plain fallback and walk-toast form:
 - **Rows.**
   - **Linked rows** show `＋ text`, a lane pill (`Next`), `↗ <note>`
     when D lives in a different note than its first predecessor, and
-    `inbox` when D lives in an inbox file.
+    `inbox` when D lives in an inbox file. Project pull-in rows add a
+    muted `no open tasks` chip after the lane pill.
   - **Not-linked rows** show the text, a lane pill (`Ready`/`Next`), and
     a muted reason: `already planned`, `not planned today`,
     `not linked · more than 5`, `project task`, `hidden`, `linking off`,
-    `couldn't link`, or `cancelled`.
+    `couldn't link`, or `cancelled`. Project pull-in rows add the same
+    `no open tasks` chip.
   - **Still-blocked rows** are muted: `🔒 text · waits on N more` or
-    `· waits until Oct 13`.
+    `· waits until Oct 13`. A `reason: "project"` row reads
+    `· blocked by project` (`· project until <date>` when `scheduled`
+    is set). Still-blocked pull-in rows add `· no open tasks`.
   - Clicking a row opens that task (`app.workspace.openLinkText`).
 - **Footer chips.**
   - The plan meter on the post-write daily content, which turns warn/🔴
@@ -1126,7 +1158,9 @@ notification line). This is the plain fallback and walk-toast form:
   focus or cause a second advance.
 
 **Bob Mac Capture: preview first, notification second.** Preview is the
-primary surface because it explains before anything is written.
+primary surface because it explains before anything is written. Mac
+needs no change for project pull-in (`decisions:mac-capture-is-a-thin-client`;
+the JSON is additive). Pull-in rows render as linked successors.
 
 - **`!` card unblocked rows.**
   - **Linked.** `lock.open.fill` in the Next tint, monospaced
@@ -1158,7 +1192,10 @@ task rows and before `next:` for closes:
   ledger  Task Link struck in FIX · 2026/20261009.md
   linked [?] → [*] Re-launch all failed agents on apollo!  sase.md ^relaunch-failed-agents → FIX · added ^relaunch-failed-agents
   unblocked [?] → [ ] Book flights  travel.md ^book-flights · not planned today
+  linked [ ] → [*] Ship the outcome!  proj.md ^prj → FIX · project has no open tasks
+  surfaced  Ship the outcome!  proj.md ^prj · project has no open tasks
   still blocked  Start adding sase--<name> badges  sase_agents_repo.md ^badges · until 2026-10-13
+  still blocked  Ship the outcome!  proj.md ^prj · project has no open tasks · waits on 1 more
 plan 3/3 themes · 10/10 links
 ```
 
@@ -1175,6 +1212,10 @@ plan 3/3 themes · 10/10 links
   - `· hidden`
   - `· not linked, more than 5`
   - `· linking off`
+- **Project pull-in.** A pull-in that linked R uses `linked` / `would
+  link`. A pull-in with no link and no status change uses `surfaced` /
+  `would surface`. Every project row puts `· project has no open tasks`
+  before any reason suffix.
 - **Still-blocked suffixes:** `· waits on N more`, `· until YYYY-MM-DD`,
   `· blocked by project`.
 - A row with no block ID omits ` ^`, as today.
@@ -1204,7 +1245,10 @@ read by Rust and the cycler. Setting it to `false` turns off **linking
 and minting only**:
 
 - close-time recovery still runs and still uses the derived rank;
-- each unblocked row reports `not_linked: "disabled"`.
+- each unblocked row reports `not_linked: "disabled"`;
+- project pull-ins obey the same kill switch: no link, status
+  unchanged, `not_linked: "disabled"`; un-hiding still happens
+  (§12.10).
 
 Recovery is the honest half of the feature and costs nothing extra once
 the dependents are found. An invalid value falls back to `true` and
@@ -1217,9 +1261,222 @@ surfaces through the existing invalid-plan-config warning paths
   what was written. The card's chip teaches this.
 - **The whole gesture, in Obsidian.** Reopening the predecessor the same
   day takes back its successor links if they are untouched. This uses an
-  in-memory receipt; nothing is stored in Markdown.
+  in-memory receipt; nothing is stored in Markdown. For a project
+  pull-in, the receipt also stores R's full pre-edit line and restores
+  that line byte-for-byte (status and `#hide`) when R's current line is
+  still the line the pass wrote (§12.10).
 - **Not undo.** Deleting the bullet or pressing `u` in the editor leaves
   the sticky Next. That is the general sticky-lane cost.
+
+### 12.10 Project pull-in
+
+When a close gesture empties a project, do immediately and visibly what
+`bob projects sync` would do within 15 minutes, and also link `^prj` as
+Next. "Empties" uses sync's own predicate, so sync never re-hides a
+pulled-in `^prj`. Implementations copy the PP table (§12.11) into their
+tests, citing the vector id in a comment. If an implementation disagrees
+with a vector, fix this section first in the same change.
+
+A pulled-in `^prj` is never Blocked when linked (Rule steps 1–3), so
+§13.5 consumption and "never link a Blocked task" hold. ADJ-11
+(§13.4) still governs dependency promotion; this close-gesture rule is
+the one path that makes `^prj` Next.
+
+**Terms**
+
+```text
+C           = tasks this gesture moved open → Done (§12.2)
+N           = a project note: outside done/, not a canonical daily note,
+              frontmatter type project, non-terminal status, exactly one
+              open ^prj task R (bob projects sync's recognition)
+REMAINING(N)= #task checkbox lines in N's body, outside fenced code,
+              other than R, whose mark is not x / X / -, carrying no
+              whole-token #hide
+              (= sync's open_unhidden_count: [?], custom marks, nested,
+              #ref and blockquoted lines count)
+SUBOPEN(N)  = R's machine-owned "🧩 **Sub-projects:**" line lists a
+              child link that is not struck (~~[[child]]~~)
+EMPTY(N)    = REMAINING(N) = ∅ and not SUBOPEN(N), on the staged
+              post-gesture text
+```
+
+**Trigger**
+
+A pull-in candidate is the open `^prj` R of a project N such that
+EMPTY(N), R ∉ C, and one of:
+
+- (a) C contains a task in N other than R: the gesture closed N's last
+  task.
+- (b) R is a dependent candidate of C (its `[dependsOn::]` names a task
+  in C, including the derived field for a `depends_on` property). This
+  gesture removed R's last blocker.
+
+Closing a sub-project's `^prj` never pulls in its parent. `bob projects
+sync` surfaces the parent on its next run.
+
+`preds(R)` is the set of tasks in C that triggered R: N's closed tasks,
+or R's closed prerequisites.
+
+**Rule** (both engines)
+
+```text
+FOR EACH candidate R (one row per R; a pull-in replaces R's SL11
+project_task row):
+  1. R has open prerequisites after the gesture
+                                  → still_blocked{reason: waits_on}
+  2. R.scheduled > today          → still_blocked{reason: scheduled}
+  3. N has project reasons (§13.3)
+                                  → still_blocked{reason: project}
+     (steps 1–3 leave R's line byte-identical, #hide included)
+  4. From here on, remove every whole-token #hide from R.
+  5. R had a live link before the gesture
+                                  → not_linked: already_planned;
+                                    ' ' / '?' → '*'
+  6. no task in preds(R) has an anchor
+                                  → not_linked: not_planned_today;
+                                    recover rank
+  7. cancelled close (cycler only)
+                                  → not_linked: cancelled; recover rank
+  8. plan.link_unblocked is false → not_linked: disabled; recover rank
+  9. otherwise                    → PULL-IN: link R at the earliest
+                                    anchor among preds(R) (§12.3 slot /
+                                    closing / inherit); ' ' / '?' → '*';
+                                    '*' and '/' unchanged
+recover rank : '?' → '*' if R has a live link in the post-gesture day
+               text, else ' '; other statuses unchanged
+BREAKER      : pull-ins never count toward the 5-successor breaker and
+               are never broken
+ORDER        : pull-ins sort with successors (§12.2 ORDER: anchor, note
+               path, line)
+ROWS         : unblocked[] gets a row when the gesture changed R's
+               status, removed #hide, or linked R. still_blocked[]
+               always gets a row for steps 1–3. An already-Next,
+               already-linked, visible R produces nothing.
+```
+
+Status follows the successor rule: ` ` and `?` become `*`; `*` and `/`
+are unchanged. A Pending `^prj` is never demoted
+(`decisions:task-lanes-are-sticky`).
+
+**Gate.** The `[id::]` gate still guards the dependents lookup only.
+
+- Detecting (a) reads only the staged post-gesture text of C's own
+  notes. Both engines already hold that text.
+- The vault-wide dependents snapshot is built only when needed:
+  - some task in C carries `[id::]` (as today); or
+  - a candidate R carries `[dependsOn::]`, or N has a non-empty
+    `depends_on` key. Steps 1 and 3 need vault-wide openness in that
+    case.
+- If the snapshot is unavailable, set `unblocked_check: "unavailable"`
+  and write no pull-in.
+- Closes outside project notes cost nothing extra. The cycler's
+  zero-read wiring test must keep passing.
+
+**Writes**
+
+- **R's line.**
+  - The status changes per the Rule.
+  - Every whole-token `#hide` is removed. `#hidden` and `#hideaway`
+    stay.
+  - Whitespace is byte-identical to sync: Rust calls
+    `projects::edits::normalize_task_hide_tag(line, false, true)`. The
+    cycler mirrors it. PP22 pins the bytes.
+  - Nothing else changes: no freshness stamp, no schedule, no `[id::]`
+    / `[dependsOn::]`. `^prj` already has its block ID, so nothing is
+    minted.
+- **Day file.** One `<indent>- [[N#^prj]]` bullet, placed per §12.3.
+  The link form follows §12.4, so it is never `[[#^prj]]`.
+
+**Reporting** (additive, capture schema v1)
+
+- Every `unblocked[]` and `still_blocked[]` row carries
+  `trigger: "dependency" | "project_empty"`. Every existing row says
+  `"dependency"`; a missing key means an older bob. Pull-in rows say
+  `"project_empty"`.
+- `unblocked[]` rows carry `hide_removed` (bool).
+- The row text of a project row is the post-write description with
+  `#prj` and `#hide` dropped (display only).
+- `unblocked_by` lists `preds(R)`.
+- **Human output (Rust).**
+  - A pull-in that linked R uses `linked` / `would link`.
+  - A pull-in with no link and no status change uses `surfaced` /
+    `would surface`.
+  - Every project row puts `· project has no open tasks` before any
+    reason suffix.
+- **Notice text** (cycler `successorNoticeText`, nav fallback, Mac
+  notification line).
+  - One linked pull-in:
+    `🔓 Next in FIX: Ship the outcome! · project has no open tasks`.
+  - Surfaced only:
+    `🔓 Surfaced: Ship the outcome! (Ready) · project has no open tasks`.
+  - Mixed notices keep §12.6's count forms, and a pull-in counts as
+    linked.
+  - Only existing glyphs are used.
+- **Nav `Unblocked` card.**
+  - Project rows get a muted `no open tasks` chip after the lane pill.
+  - The title is `Project empty` when every row is a project row,
+    otherwise `Unblocked`.
+  - Still-blocked project rows add `· no open tasks`.
+- **Bob Mac Capture** needs no change. Pull-in rows render as linked
+  successors.
+
+**Undo (Obsidian)**
+
+The successor receipt also stores R's full pre-edit line. A same-day
+Ctrl+Enter reopen of a predecessor that owns the row does two things,
+as long as R's current line is still the line the pass wrote:
+
+- takes back R's link, as §12.9 does today;
+- restores R's whole line (status and `#hide`).
+
+Rust has no reopen take-back, as today.
+
+**Interplay**
+
+- **`bob projects sync`.** After a pull-in it changes nothing for N
+  (same predicate). When Bryan then adds a task to N, sync re-adds
+  `#hide`. R stays Next with its link under sticky lanes, and Alt+N
+  releases it, or Bryan closes R.
+- **`bob task reconcile`.** A linked `[*]` R is stable. If N later
+  becomes Blocked, §13.5 consumption removes R's link.
+- **Freshness / walk.** Untouched (§12.4). A visible R walks in the
+  PROJECTS tier as today.
+- **Multi-item drafts.** SL20's net pass drops a pull-in row whose R is
+  closed later in the same batch.
+
+### 12.11 PP — project pull-in vectors
+
+Outcomes of the shared project pull-in rule (§12.10). Rust tests run
+them through capture (`!` and close); cycler tests run them through the
+pure helpers. Copy the rows you implement into tests, citing this
+section in a comment.
+
+| # | Situation | Outcome |
+| --- | --- | --- |
+| PP1 | N has one open task A, linked in FIX; R is ` ` with `#hide`; close A | R is linked right after A's bullet; ` `→`*`; `#hide` removed; `trigger: project_empty`; `hide_removed: true`; `unblocked_by: [A]` |
+| PP2 | A and B are open; close A | nothing |
+| PP3 | B is `[?]` | nothing (Blocked tasks are remaining work) |
+| PP4 | B carries `#hide` | pull-in |
+| PP5 | B is fenced | pull-in. B is blockquoted or custom `[>]` → nothing |
+| PP6 | Sub-projects line with an unstruck child | nothing. Only struck children → pull-in |
+| PP7 | future project `scheduled` | `still_blocked{reason: project}` with the date; `trigger: project_empty`; R byte-identical |
+| PP8 | R has an open prerequisite (own `[dependsOn::]` or project `depends_on`) | `still_blocked`; R byte-identical |
+| PP9 | R already linked today | no new link; ` `→`*`; `#hide` removed; `already_planned` |
+| PP10 | A not planned today | no link; status unchanged; `#hide` removed; `not_planned_today`; row reported (verb `surfaced`) |
+| PP11 | `plan.link_unblocked: false` | as PP10 with `disabled` |
+| PP12 | R is `[/]` | linked; stays `[/]` |
+| PP13 | R is `[*]`, visible and already linked | no write, no row |
+| PP14 | A has no `[id::]` | the gate does not suppress the pull-in, and the dependents snapshot is not built |
+| PP15 | a dependency successor D and R in one gesture | both linked after A's bullet in ORDER. With six dependents plus R → six `breaker` rows, and R still linked |
+| PP16 | `=x` completes embedded A | R joins the closing target (continuation, same-name entry, or created placeholder) |
+| PP17 | R depends on A through a legacy internal Depends-On line | one row, and the pull-in wins over `project_task` |
+| PP18 | cycler cancel of A | no link; `#hide` removed; `cancelled` |
+| PP19 | same-day reopen of A (Obsidian) | R's link taken back and R's line restored byte-for-byte |
+| PP20 | terminal project, two `^prj`, N under `done/`, or a canonical daily note | nothing |
+| PP21 | draft `!N:a !N:b` | only the second item reports R. Draft `!N:b !N:prj` → the net pass drops R's row |
+| PP22 | `#hide` bytes via `normalize_task_hide_tag(line, false, true)` | `- [ ] #task #prj Ship it! #hide ^prj` → `- [ ] #task #prj Ship it! ^prj` (pull-in then writes `[*]`); `- [ ] #task #prj Ship it! #hide [priority:: high] ^prj` → `- [ ] #task #prj Ship it! [priority:: high] ^prj`; `- [ ] #task #prj Ship it! #hidden #hide ^prj` → `- [ ] #task #prj Ship it! #hidden ^prj` (`#hidden` untouched) |
+| PP23 | after a pull-in, `bob projects sync --dry-run` | reports no change for N |
+| PP24 | closing P in another note when R depended only on P and N is empty | R pulled in after P's bullet. If N is not empty → `project_task` (unchanged) |
 
 ## 13. Project dependencies
 
@@ -1335,7 +1592,9 @@ edges(T)         = T's own dep links ∪ (T is a resident ? project's depends_on
 
 `edges(T)` is the promotion, recovery, and R7 graph.
 
-- Promotion never raises a `^prj` target into a lane.
+- Promotion never raises a `^prj` target into a lane. ADJ-11 governs
+  that dependency-promotion rule. The §12.10 close-gesture pull-in is
+  the one path that makes `^prj` Next.
 - The walk continues through that `^prj` to the depended-on project's
   own `depends_on`.
 - Residents of a depended-on project are not promoted.
@@ -1586,7 +1845,7 @@ Outcomes of the successor-link rule (§12.2) once project reasons exist.
 | # | situation | outcome |
 | --- | --- | --- |
 | PDC1 | dependent D lives in a still-blocked project; this close removed D's last *own* prerequisite | D stays `[?]`; `still_blocked{reason: project}`; no successor link |
-| PDC2 | this close fully unblocks a `^prj`; residents have no own remaining reason | `^prj` recovers (`not_linked: project_task`); residents recover-only (never successor-linked); those recoveries are outside the breaker |
+| PDC2 | this close fully unblocks a `^prj`; residents have no own remaining reason | `^prj` recovers (`not_linked: project_task`); residents recover-only (never successor-linked); those recoveries are outside the breaker (except §12.10) |
 | PDC3 | same as PDC2, but one resident still has an open prerequisite of its own | that resident stays `[?]` |
 
 ### 13.18 PDF — Databricks fixtures

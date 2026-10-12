@@ -2143,8 +2143,9 @@ Field notes:
 - `pomodoro_close` carries the same `unblocked[]`, `still_blocked[]`,
   and `unblocked_check` fields as `task_complete` (see the
   task-complete result contract above): the same row shapes, the same
-  `not_linked` reasons, and the same gate semantics over the close's
-  completed set. Dry-run JSON equals real-run JSON except for `dry_run`.
+  `not_linked` reasons, the same `trigger` / `hide_removed` fields, and
+  the same gate semantics over the close's completed set. Dry-run JSON
+  equals real-run JSON except for `dry_run`.
 - When the successor logic created the continuation, `next_pomodoro`
   reports it (`{line, name, time_range: None, created: true}`); the
   successors count as carried.
@@ -3398,12 +3399,15 @@ deduplicated bullet, and `removed_placeholders`), the extended
 `link` with `day_file` (vault-relative), `entry_name` (`""` when
 unnamed), 1-based `entry_line` and `line`, `entry_created`, `next_up`,
 `block_link`, and `block_id_created` — non-null exactly when this item
-linked the dependent — and `not_linked` with one of `already_planned`,
+linked the dependent — `not_linked` with one of `already_planned`,
 `not_planned_today`, `breaker`, `project_task`, `hidden`, or `disabled`,
-null when linked), `still_blocked[]` (one `note_path`/`block_id`/`line`/
-`text`/`status_symbol` row per open dependent that stays blocked, with
-`reason` `waits_on` or `scheduled`, `waits_on` counting the open
-prerequisites left, and `scheduled` set only for `scheduled`), and
+null when linked, `trigger` `"dependency"` or `"project_empty"` (a
+missing key means an older bob), and `hide_removed` true when this item
+removed a whole-token `#hide`), `still_blocked[]` (one `note_path`/
+`block_id`/`line`/`text`/`status_symbol` row per open dependent that
+stays blocked, with `reason` `waits_on` or `scheduled`, `waits_on`
+counting the open prerequisites left, `scheduled` set only for
+`scheduled`, and the same `trigger` field), and
 `unblocked_check` (`"checked"` when the lookup ran or the `[id::]` gate
 proved it unnecessary, `"unavailable"` when the dependents snapshot
 could not be built). `block_id` holds the minted ID when one was minted
@@ -3431,8 +3435,12 @@ dry-run: `would link`, with destinations `→ FIX`, `→ FIX (next up)`,
 `· added ^<id>` when an ID was minted), one `unblocked` row per
 recovered-but-unlinked dependent (with suffixes `· already planned`,
 `· not planned today`, `· project task`, `· hidden`,
-`· not linked, more than 5`, `· linking off`), and one `still blocked`
-row per remaining blocked dependent (`· waits on N more`,
+`· not linked, more than 5`, `· linking off`), one `surfaced` row per
+project pull-in that removed `#hide` without linking or changing status
+(dry-run: `would surface`; every project row puts `· project has no
+open tasks` before any reason suffix; see
+[`docs/task-dependencies.md`](task-dependencies.md) §12.10), and one
+`still blocked` row per remaining blocked dependent (`· waits on N more`,
 `· until YYYY-MM-DD`). A left-open descendant or unblocked dependent with no
 block ID prints only its note path with no trailing ` ^`. Already-done
 tasks print `✓ already done [x] <text>  <note> ^<id> · nothing to change`.
