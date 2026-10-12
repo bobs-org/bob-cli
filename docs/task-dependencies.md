@@ -191,9 +191,10 @@ and no R2 exception.
   Next/In Progress along the reconciled set: line links plus R8 legacy
   children, plus a resident's inherited `^prj` Depends-On links (§13).
   Strongest rank wins, the walk is cycle-safe, and recovery uses the
-  same edges. A `^prj` target is never raised into a lane; the walk
-  continues through it to that project's own Depends-On links. Lanes
-  are sticky, and they do not survive Blocked.
+  same edges. Dependency promotion never raises a `^prj` target into a
+  lane; a direct Task Link raises `^prj` to Next like any other task.
+  The walk continues through it to that project's own Depends-On links.
+  Lanes are sticky, and they do not survive Blocked.
 - **Consumption.** A Blocked task keeps no live Task Link under
   today's open Pomodoros. A gesture that would create or keep such a
   link promotes the task's open prerequisites (own plus inherited)
@@ -1626,9 +1627,9 @@ edges(T)        = T's own dep links ∪ (T is a resident ? ^prj's projected link
 
 `edges(T)` is the promotion, recovery, and R7 graph.
 
-- Promotion never raises a `^prj` target into a lane. ADJ-11 governs
-  that dependency-promotion rule. The §12.10 close-gesture pull-in is
-  the one path that makes `^prj` Next.
+- Dependency promotion never raises a `^prj` target into a lane.
+  ADJ-11 governs that rule. A direct Task Link raises a `^prj` to
+  Next like any other task, including the §12.10 close-gesture pull-in.
 - The walk continues through that `^prj` to the depended-on project's
   own Depends-On links.
 - Residents of a depended-on project are not promoted.
