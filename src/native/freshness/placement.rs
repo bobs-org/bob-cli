@@ -1,12 +1,13 @@
 //! Canonical placement for `[fresh:: YYYY-MM-DD]`, `[refresh:: N]`,
-//! and `[keeps:: N]`.
+//! `[keeps:: N]`, and `[unblocked:: YYYY-MM-DD]`.
 //!
 //! This is the Rust half of the one-helper-per-language rule owned by
 //! `docs/freshness.md`. The JavaScript mirror is
-//! `api.freshness.stampLine` / `setRefreshLine` / `keepLine` in
-//! bob-ledger-tools. Both sides run the placement conformance vectors
-//! in that doc verbatim. Rust reads, clears, and reports `keeps`; it
-//! has no increment path — the sole increment helper is JavaScript
+//! `api.freshness.stampLine` / `setRefreshLine` / `keepLine` /
+//! `markUnblockedLine` in bob-ledger-tools. Both sides run the
+//! placement conformance vectors in that doc verbatim. Rust reads,
+//! clears, and reports `keeps` and `unblocked`; it has no increment
+//! path — the sole increment helper is JavaScript
 //! `api.freshness.keepLine`.
 //!
 //! The vault uses Tasks' Dataview format, and both Rust parsers read
@@ -15,7 +16,8 @@
 //! `created`, `priority`, `scheduled`, `id` and `dependsOn`. The helper
 //! inserts `fresh` (and `refresh`) immediately before the trailing
 //! Tasks suffix instead, and never changes the suffix bytes themselves
-//! except to remove a misplaced `fresh` / `refresh`.
+//! except to remove a misplaced `fresh` / `refresh` / `keeps` /
+//! `unblocked`.
 
 use chrono::NaiveDate;
 
@@ -80,19 +82,39 @@ pub(crate) struct FreshRead {
     /// The first valid `[keeps:: N]` (1–999) as a semantic count.
     /// Absence — or no valid value — means 0, and writers omit zero.
     pub(crate) keeps: u32,
+    /// The latest valid `[unblocked:: YYYY-MM-DD]` date, if any.
+    /// Unlike `fresh`, a future date is kept as written (plus no
+    /// lint): the evaluator only treats dates on or before `today`
+    /// as a return. Malformed values are ignored (plus a lint).
+    pub(crate) unblocked: Option<NaiveDate>,
     /// Lint codes in first-seen order.
     pub(crate) lints: Vec<String>,
+}
+
+/// Freshness scope inputs for [`mark_unblocked`]: the recovered line
+/// must be an in-scope Ready row or the write is skipped.
+///
+/// UB vector helper: only the conformance tests exercise unblock
+/// writes until the reconcile phase wires them as production callers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) struct UnblockScope {
+    pub(crate) recurring: bool,
+    pub(crate) hidden: bool,
+    pub(crate) is_daily_note: bool,
+    pub(crate) is_today: bool,
 }
 
 /// Stamp `line` with `date`, keeping the first valid existing
 /// `[refresh:: N]` if there is one.
 ///
-/// Every generic human stamp clears `keeps`: the line is rewritten
-/// without any `keeps` field, even when `date` already equals today.
-/// Refusals (not a task, recurring, done/cancelled) return the line
-/// unchanged with a reason. A line already stamped with `date` in
-/// canonical position — and with no `keeps` to clear — is
-/// byte-identical with `changed: false`.
+/// Every generic human stamp clears `keeps` and `unblocked`: the line
+/// is rewritten without any `keeps` or `[unblocked::]` field, even
+/// when `date` already equals today. Refusals (not a task, recurring,
+/// done/cancelled) return the line unchanged with a reason. A line
+/// already stamped with `date` in canonical position — and with no
+/// `keeps` or `unblocked` to clear — is byte-identical with
+/// `changed: false`.
 pub(crate) fn stamp_fresh(line: &str, date: NaiveDate) -> Stamp {
     stamp_inner(line, date, RefreshEdit::Keep, KeepsEdit::Clear)
 }
@@ -104,7 +126,8 @@ pub(crate) fn stamp_fresh(line: &str, date: NaiveDate) -> Stamp {
 /// only (`seed.rs::stamp_change`): the seed must never turn into a
 /// resetter when the default stamp clears keeps. The preserved count
 /// is canonicalized (first valid value, re-emitted in canonical
-/// position and order); absent or invalid stays omitted.
+/// position and order); absent or invalid stays omitted. Like every
+/// stamp, preserve mode still clears `[unblocked::]`.
 pub(crate) fn stamp_fresh_preserve_keeps(line: &str, date: NaiveDate) -> Stamp {
     stamp_inner(line, date, RefreshEdit::Keep, KeepsEdit::Preserve)
 }
@@ -196,25 +219,162 @@ fn stamp_inner(
     }
 }
 
-/// Read the `fresh` / `refresh` / `keeps` fields on `line`.
+/// Set `[unblocked:: today]` on a recovered Blocked → Ready line.
+///
+/// Implements the `docs/freshness.md` §5 WRITE rule: returns `None`
+/// (no write) when any skip holds — the row is outside freshness
+/// scope, the line has no `[fresh::]` (UB2: NEW is already due), the
+/// task is already a scheduled tickler (`fresh < scheduled ≤ today`,
+/// UB3), or the recovery lands in Next or Pending (UB4) — and
+/// otherwise returns the line with `[unblocked:: today]`, replacing
+/// any older value. The existing `fresh` / `refresh` / `keeps` group
+/// is preserved as written; in particular this never writes
+/// `[fresh::]`. Closed recoveries never reach here as Ready rows, but
+/// a closed `recovered_status` is still refused defensively.
+///
+/// `recovered_status` is the Tasks status symbol after recovery
+/// (`' '` Ready, `'/'` Pending, `'*'` Next). `scope` carries the
+/// freshness out-of-scope signals (UB5 recurring, UB6 hidden, plus
+/// daily-note and Today membership).
+// UB vector helper: only the conformance tests exercise unblock
+// writes until the reconcile phase wires them as production callers.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn mark_unblocked(
+    line: &str,
+    today: NaiveDate,
+    recovered_status: char,
+    scope: &UnblockScope,
+) -> Option<String> {
+    if scope.recurring || scope.hidden || scope.is_daily_note || scope.is_today
+    {
+        return None;
+    }
+    if matches!(recovered_status, '/' | '*' | 'x' | 'X' | '-') {
+        return None;
+    }
+    let read = read_freshness(line, today);
+    let fresh = read.fresh?;
+    if let Some(scheduled) = first_valid_scheduled(line)
+        && fresh < scheduled
+        && scheduled <= today
+    {
+        return None;
+    }
+    let stripped = remove_unblocked_field(line);
+    let suffix_start = tasks_suffix_start(&stripped);
+    let trimmed_len = stripped.trim_end().len();
+    let suffix_start = suffix_start.min(trimmed_len);
+    let head = stripped[..suffix_start].trim_end();
+    let suffix = stripped[suffix_start..trimmed_len]
+        .trim()
+        .trim_start_matches([' ', '\t']);
+
+    let mut output = String::with_capacity(stripped.len() + 24);
+    output.push_str(head);
+    output.push(' ');
+    output.push_str("[unblocked:: ");
+    output.push_str(&format_calendar_date(today));
+    output.push(']');
+    if !suffix.is_empty() {
+        output.push(' ');
+        output.push_str(suffix);
+    }
+    Some(output)
+}
+
+/// Remove every `[unblocked:: …]` field from `line`, collapsing the
+/// whitespace each removal leaves to a single space. Returns the line
+/// unchanged when it carries none.
+// UB vector helper: only the conformance tests exercise it until the
+// reconcile phase wires it as a production caller.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn clear_unblocked(line: &str) -> String {
+    remove_unblocked_field(line)
+}
+
+/// Drop a stale `[unblocked:: U]` when `fresh > U` (UB8): returns the
+/// pruned line, or `None` when there is nothing to prune.
+// UB vector helper: only the conformance tests exercise it until the
+// reconcile phase wires it as a production caller.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn prune_unblocked(line: &str, today: NaiveDate) -> Option<String> {
+    let read = read_freshness(line, today);
+    match (read.fresh, read.unblocked) {
+        (Some(fresh), Some(unblocked)) if fresh > unblocked => {
+            Some(remove_unblocked_field(line))
+        }
+        _ => None,
+    }
+}
+
+/// The first valid `[scheduled:: YYYY-MM-DD]` date on `line` in line
+/// order, approximating what both Rust Tasks parsers extract from a
+/// well-formed line. `mark_unblocked` only needs the UB3 comparison,
+/// where well-formed lines carry exactly one schedule.
+fn first_valid_scheduled(line: &str) -> Option<NaiveDate> {
+    inline_fields(line, "scheduled")
+        .iter()
+        .find_map(|field| parse_strict_calendar_date(&field.value))
+}
+
+/// Remove every `unblocked` field from `text`, collapsing the
+/// whitespace each removal leaves to a single space.
+fn remove_unblocked_field(text: &str) -> String {
+    let mut ranges: Vec<(usize, usize)> = inline_fields(text, "unblocked")
+        .iter()
+        .map(|field| (field.start, field.end))
+        .collect();
+    if ranges.is_empty() {
+        return text.to_string();
+    }
+    ranges.sort();
+
+    let mut output = String::new();
+    let mut cursor = 0;
+    for (start, end) in ranges {
+        let before = &text[cursor..start];
+        let before_trimmed = before.trim_end_matches([' ', '\t']);
+        output.push_str(before_trimmed);
+        let mut next = end;
+        while text[next..]
+            .chars()
+            .next()
+            .is_some_and(|c| c == ' ' || c == '\t')
+        {
+            next += 1;
+        }
+        if !output.is_empty() && next < text.len() {
+            output.push(' ');
+        }
+        cursor = next;
+    }
+    output.push_str(&text[cursor..]);
+    output
+}
+
+/// Read the `fresh` / `refresh` / `keeps` / `unblocked` fields on `line`.
 ///
 /// - Malformed `fresh` values report `fresh_malformed`.
 /// - `fresh` dates after `today` report `fresh_future` and are treated
 ///   as none.
 /// - More than one `fresh` field reports `fresh_duplicate`; the latest
 ///   valid date wins.
-/// - A `fresh` / `refresh` / `keeps` field inside the Tasks suffix
-///   reports `fresh_misplaced`; the next stamp repairs it.
+/// - A `fresh` / `refresh` / `keeps` / `unblocked` field inside the
+///   Tasks suffix reports `fresh_misplaced`; the next stamp repairs it.
 /// - An invalid `[refresh:: N]` reports `refresh_invalid` and falls
 ///   through.
 /// - `keeps` is a decimal integer 1–999; absence — or no valid value
 ///   — means 0 and writers omit zero. The first valid value wins; an
 ///   invalid value reports `keeps_invalid`, and more than one `keeps`
 ///   field reports `keeps_duplicate`.
+/// - A malformed `[unblocked:: …]` reports `unblocked_malformed` and
+///   is ignored. More than one `unblocked` field reports
+///   `unblocked_duplicate`; the latest valid date wins.
 pub(crate) fn read_freshness(line: &str, today: NaiveDate) -> FreshRead {
     let fresh_fields = inline_fields(line, "fresh");
     let refresh_fields = inline_fields(line, "refresh");
     let keeps_fields = inline_fields(line, "keeps");
+    let unblocked_fields = inline_fields(line, "unblocked");
     let mut lints = Vec::new();
 
     let mut best: Option<NaiveDate> = None;
@@ -279,6 +439,27 @@ pub(crate) fn read_freshness(line: &str, today: NaiveDate) -> FreshRead {
         push_lint(&mut lints, "keeps_duplicate");
     }
 
+    let mut unblocked: Option<NaiveDate> = None;
+    let mut unblocked_invalid_seen = false;
+    for field in &unblocked_fields {
+        match parse_strict_calendar_date(&field.value) {
+            Some(date) => {
+                if unblocked.is_none_or(|current| date > current) {
+                    unblocked = Some(date);
+                }
+            }
+            None => {
+                unblocked_invalid_seen = true;
+            }
+        }
+    }
+    if unblocked_invalid_seen {
+        push_lint(&mut lints, "unblocked_malformed");
+    }
+    if unblocked_fields.len() > 1 {
+        push_lint(&mut lints, "unblocked_duplicate");
+    }
+
     if has_misplaced_field(line) {
         push_lint(&mut lints, "fresh_misplaced");
     }
@@ -287,6 +468,7 @@ pub(crate) fn read_freshness(line: &str, today: NaiveDate) -> FreshRead {
         fresh: best,
         refresh,
         keeps: keeps.unwrap_or(0),
+        unblocked,
         lints,
     }
 }
@@ -295,10 +477,10 @@ pub(crate) fn read_freshness(line: &str, today: NaiveDate) -> FreshRead {
 ///
 /// The suffix starts at the leftmost Tasks element (a Tasks-key field,
 /// a trailing tag, or `^id`) of the run scanned from the end of the
-/// line. `fresh` / `refresh` / `keeps` fields extend the run but are
-/// not part of the suffix. `keeps` is a run-extending non-Tasks key:
-/// it is never added to the Tasks key registry. Returns `trimmed_len`
-/// when there is no suffix.
+/// line. `fresh` / `refresh` / `keeps` / `unblocked` fields extend the
+/// run but are not part of the suffix. `keeps` and `unblocked` are
+/// run-extending non-Tasks keys: they are never added to the Tasks key
+/// registry. Returns `trimmed_len` when there is no suffix.
 pub(crate) fn tasks_suffix_start(line: &str) -> usize {
     suffix_start_inner(line).unwrap_or_else(|| line.trim_end().len())
 }
@@ -336,7 +518,8 @@ fn suffix_start_inner(line: &str) -> Option<usize> {
             continue;
         }
         // A trailing inline field continues the run. Tasks keys are
-        // suffix elements; fresh/refresh/keeps only extend the run.
+        // suffix elements; fresh/refresh/keeps/unblocked only extend
+        // the run.
         let Some((field_start, key)) = trailing_field_key(trimmed) else {
             break;
         };
@@ -349,7 +532,11 @@ fn suffix_start_inner(line: &str) -> Option<usize> {
             cursor = trim_end_to(&line[..cursor], cursor);
             continue;
         }
-        if key == "fresh" || key == "refresh" || key == "keeps" {
+        if key == "fresh"
+            || key == "refresh"
+            || key == "keeps"
+            || key == "unblocked"
+        {
             cursor = field_start;
             cursor = trim_end_to(&line[..cursor], cursor);
             continue;
@@ -361,7 +548,8 @@ fn suffix_start_inner(line: &str) -> Option<usize> {
 }
 
 /// Rebuild `line` with `fresh:: date_text` (plus `refresh` and
-/// `keeps` when kept) immediately before the Tasks suffix.
+/// `keeps` when kept) immediately before the Tasks suffix. Stamps
+/// never keep `unblocked`: every stamp clears the field.
 ///
 /// Output order is `fresh`, optional `refresh`, optional `keeps`,
 /// then the existing Tasks suffix, tags, and block ID.
@@ -406,8 +594,9 @@ fn rebuild_without_fields(
     output
 }
 
-/// Remove every `fresh`, `refresh`, and `keeps` field from `text`,
-/// collapsing the whitespace each removal leaves to a single space.
+/// Remove every `fresh`, `refresh`, `keeps`, and `unblocked` field
+/// from `text`, collapsing the whitespace each removal leaves to a
+/// single space.
 fn remove_fields(text: &str) -> String {
     let mut ranges = Vec::new();
     for field in inline_fields(text, "fresh") {
@@ -417,6 +606,9 @@ fn remove_fields(text: &str) -> String {
         ranges.push((field.start, field.end));
     }
     for field in inline_fields(text, "keeps") {
+        ranges.push((field.start, field.end));
+    }
+    for field in inline_fields(text, "unblocked") {
         ranges.push((field.start, field.end));
     }
     if ranges.is_empty() {
@@ -571,8 +763,8 @@ fn parse_refresh_value(value: &str) -> Option<u16> {
     }
 }
 
-/// Whether any `fresh` / `refresh` / `keeps` field sits at or after
-/// the suffix start (inside the Tasks suffix run).
+/// Whether any `fresh` / `refresh` / `keeps` / `unblocked` field
+/// sits at or after the suffix start (inside the Tasks suffix run).
 fn has_misplaced_field(line: &str) -> bool {
     let start = tasks_suffix_start(line);
     let trimmed_len = line.trim_end().len();
@@ -583,6 +775,7 @@ fn has_misplaced_field(line: &str) -> bool {
         .iter()
         .chain(inline_fields(line, "refresh").iter())
         .chain(inline_fields(line, "keeps").iter())
+        .chain(inline_fields(line, "unblocked").iter())
         .any(|field| field.start >= start)
 }
 

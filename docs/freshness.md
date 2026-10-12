@@ -519,7 +519,10 @@ Line numbers are 1-based in JSON and docs. Tasks' `lineNumber` is
 suffix; the next stamp repairs it), `refresh_invalid` (per task),
 `keeps_invalid` (a `keeps` value that is not a decimal integer 1–999;
 ignored) and `keeps_duplicate` (more than one `keeps` field; the
-first valid one wins), and `task_refresh_invalid` (per note),
+first valid one wins), `unblocked_malformed` (an `[unblocked:: …]`
+value that is not a valid `YYYY-MM-DD` date; ignored) and
+`unblocked_duplicate` (more than one `unblocked` field; the latest
+valid one wins), and `task_refresh_invalid` (per note),
 `freshness_stale_daily_budget_deprecated` (once per loaded config
 when the removed `stale_daily_budget` key is present; see above).
 `today_link_unresolved` passes through unchanged from the Today

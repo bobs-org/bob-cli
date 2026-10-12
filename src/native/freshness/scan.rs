@@ -485,7 +485,15 @@ pub(crate) fn lint_message(code: &str) -> String {
                 .to_string()
         }
         "fresh_misplaced" => {
-            "fresh, refresh, or keeps sits inside the Tasks suffix; the next stamp repairs it"
+            "fresh, refresh, keeps, or unblocked sits inside the Tasks suffix; the next stamp repairs it"
+                .to_string()
+        }
+        "unblocked_malformed" => {
+            "unblocked date is not a valid YYYY-MM-DD date; ignored"
+                .to_string()
+        }
+        "unblocked_duplicate" => {
+            "more than one unblocked field; the latest valid one wins"
                 .to_string()
         }
         "refresh_invalid" => {

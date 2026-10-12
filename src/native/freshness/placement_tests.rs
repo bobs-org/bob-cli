@@ -5,8 +5,9 @@
 use chrono::NaiveDate;
 
 use super::{
-    read_freshness, set_refresh, stamp_fresh, stamp_fresh_preserve_keeps,
-    tasks_suffix_start, Refusal,
+    clear_unblocked, mark_unblocked, prune_unblocked, read_freshness,
+    set_refresh, stamp_fresh, stamp_fresh_preserve_keeps, tasks_suffix_start,
+    Refusal, UnblockScope,
 };
 use crate::native::config::freshness::FreshnessConfig;
 
@@ -720,4 +721,190 @@ fn keeps_fixture_vectors_match_rust() {
             mode => panic!("{id}: unknown fixture mode {mode:?}"),
         }
     }
+}
+
+/// UB vectors for `[unblocked::]` placement (`docs/freshness.md`
+/// §10b). D = `2026-10-08`.
+fn unblock_scope() -> UnblockScope {
+    UnblockScope {
+        recurring: false,
+        hidden: false,
+        is_daily_note: false,
+        is_today: false,
+    }
+}
+
+#[test]
+fn ub1_mark_unblocked_writes_and_replaces_older_value() {
+    let marked = mark_unblocked(
+        "- [ ] #task Recovered [fresh:: 2026-10-01] [unblocked:: 2026-10-05] [created:: 2026-09-01]",
+        day(),
+        ' ',
+        &unblock_scope(),
+    )
+    .expect("UB1 writes");
+    assert_eq!(
+        marked,
+        "- [ ] #task Recovered [fresh:: 2026-10-01] [unblocked:: 2026-10-08] [created:: 2026-09-01]"
+    );
+    // The write preserves the fresh group and never writes fresh.
+    let read = read_freshness(&marked, day());
+    assert_eq!(read.fresh, Some(date(2026, 10, 1)));
+    assert_eq!(read.unblocked, Some(day()));
+}
+
+#[test]
+fn ub1_mark_unblocked_keeps_refresh_and_keeps_in_order() {
+    let marked = mark_unblocked(
+        "- [ ] #task Recovered [fresh:: 2026-10-01] [refresh:: 14] [keeps:: 2] [scheduled:: 2026-10-09]",
+        day(),
+        ' ',
+        &unblock_scope(),
+    )
+    .expect("UB1 writes with a future schedule");
+    assert_eq!(
+        marked,
+        "- [ ] #task Recovered [fresh:: 2026-10-01] [refresh:: 14] [keeps:: 2] [unblocked:: 2026-10-08] [scheduled:: 2026-10-09]"
+    );
+}
+
+#[test]
+fn ub2_mark_unblocked_skips_new_without_fresh() {
+    assert_eq!(
+        mark_unblocked(
+            "- [ ] #task New capture [created:: 2026-09-30]",
+            day(),
+            ' ',
+            &unblock_scope(),
+        ),
+        None,
+        "UB2: no fresh means already due as NEW"
+    );
+}
+
+#[test]
+fn ub3_mark_unblocked_skips_scheduled_tickler() {
+    assert_eq!(
+        mark_unblocked(
+            "- [ ] #task Deferred [fresh:: 2026-10-01] [scheduled:: 2026-10-07]",
+            day(),
+            ' ',
+            &unblock_scope(),
+        ),
+        None,
+        "UB3: already RESURFACED from scheduled"
+    );
+}
+
+#[test]
+fn ub4_mark_unblocked_skips_lane_landings() {
+    let line = "- [ ] #task Recovered [fresh:: 2026-10-01]";
+    assert_eq!(
+        mark_unblocked(line, day(), '*', &unblock_scope()),
+        None,
+        "UB4: Next landing is covered by the lane walk"
+    );
+    assert_eq!(
+        mark_unblocked(line, day(), '/', &unblock_scope()),
+        None,
+        "UB4: Pending landing is covered by the lane walk"
+    );
+}
+
+#[test]
+fn ub5_ub6_mark_unblocked_skips_out_of_scope_rows() {
+    let line = "- [ ] #task Recovered [fresh:: 2026-10-01]";
+    for scope in [
+        UnblockScope {
+            recurring: true,
+            ..unblock_scope()
+        },
+        UnblockScope {
+            hidden: true,
+            ..unblock_scope()
+        },
+        UnblockScope {
+            is_daily_note: true,
+            ..unblock_scope()
+        },
+        UnblockScope {
+            is_today: true,
+            ..unblock_scope()
+        },
+    ] {
+        assert_eq!(
+            mark_unblocked(line, day(), ' ', &scope),
+            None,
+            "UB5/UB6: outside freshness scope"
+        );
+    }
+}
+
+#[test]
+fn ub7_stamps_clear_unblocked() {
+    let input =
+        "- [ ] #task Recovered [fresh:: 2026-10-01] [unblocked:: 2026-10-08] [created:: 2026-09-01]";
+    let stamped = stamp(input);
+    assert_eq!(
+        stamped.line,
+        "- [ ] #task Recovered [fresh:: 2026-10-08] [created:: 2026-09-01]"
+    );
+    assert!(stamped.changed);
+    // The seed preserve mode clears it too: it never writes unblocked.
+    let preserved = stamp_fresh_preserve_keeps(input, day());
+    assert_eq!(
+        preserved.line,
+        "- [ ] #task Recovered [fresh:: 2026-10-08] [created:: 2026-09-01]"
+    );
+    assert_eq!(
+        clear_unblocked(input),
+        "- [ ] #task Recovered [fresh:: 2026-10-01] [created:: 2026-09-01]"
+    );
+}
+
+#[test]
+fn ub8_prune_drops_unblocked_when_fresh_passes_it() {
+    let stale =
+        "- [ ] #task Recovered [fresh:: 2026-10-08] [unblocked:: 2026-10-07]";
+    assert_eq!(
+        prune_unblocked(stale, day()),
+        Some("- [ ] #task Recovered [fresh:: 2026-10-08]".to_string()),
+        "UB8: fresh > U prunes"
+    );
+    // The fresh == U tie still resurfaces (UB9): nothing to prune.
+    let tie =
+        "- [ ] #task Recovered [fresh:: 2026-10-08] [unblocked:: 2026-10-08]";
+    assert_eq!(prune_unblocked(tie, day()), None);
+}
+
+#[test]
+fn ub_read_reports_unblocked_lints_and_latest_wins() {
+    let malformed = read_freshness(
+        "- [ ] #task Recovered [fresh:: 2026-10-01] [unblocked:: 2026-13-01]",
+        day(),
+    );
+    assert_eq!(malformed.unblocked, None);
+    assert!(malformed.lints.contains(&"unblocked_malformed".to_string()));
+    let duplicate = read_freshness(
+        "- [ ] #task Recovered [fresh:: 2026-10-01] [unblocked:: 2026-10-05] [unblocked:: 2026-10-07]",
+        day(),
+    );
+    assert_eq!(duplicate.unblocked, Some(date(2026, 10, 7)));
+    assert!(duplicate.lints.contains(&"unblocked_duplicate".to_string()));
+}
+
+/// UB12: a canonical line carries `[unblocked::]` before the Tasks
+/// fields, so both Rust parsers still extract `scheduled`,
+/// `dependsOn`, and `id` identically before and after the write.
+#[test]
+fn ub12_unblocked_before_tasks_fields_parses_invariantly() {
+    let before = "- [ ] #task Recovered [fresh:: 2026-10-01] [scheduled:: 2026-10-09] [dependsOn:: lane-root] [id:: lane-task] ^lane-task";
+    let marked = mark_unblocked(before, day(), ' ', &unblock_scope())
+        .expect("UB12 setup writes");
+    assert_eq!(
+        marked,
+        "- [ ] #task Recovered [fresh:: 2026-10-01] [unblocked:: 2026-10-08] [scheduled:: 2026-10-09] [dependsOn:: lane-root] [id:: lane-task] ^lane-task"
+    );
+    assert_dataview_fields_equal(before, &marked);
+    assert_hooks_fields_equal(before, &marked);
 }

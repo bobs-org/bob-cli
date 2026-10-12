@@ -34,17 +34,20 @@ const COMMAND_NAME: &str = "bob freshness";
 /// Bump only for a breaking change to the JSON objects below; new
 /// optional fields keep the current version.
 ///
-/// Schema 13 removes reference cadence, tier, and count fields; references
-/// now use ordinary freshness and review groups. Schema 12 re-keyed ref
-/// identity while reference-specific review was active. Schemas 7–12
-/// historically carried a REFERENCES tier; schema 13 removes it.
+/// Schema 14 adds the `[unblocked::]` tickler: queue rows gain
+/// `returned_by` (`scheduled` | `unblocked`) and, when present,
+/// `unblocked_on`. Schema 13 removes reference cadence, tier, and
+/// count fields; references now use ordinary freshness and review
+/// groups. Schema 12 re-keyed ref identity while reference-specific
+/// review was active. Schemas 7–12 historically carried a REFERENCES
+/// tier; schema 13 removes it.
 ///
 /// Schema 11 adds recurring review, schema 10 renames returned to tickler,
 /// and schema 9 adds PRE/POST checklist tiers. Schema 8 removes the decay
 /// calendar gate. Earlier versions introduced project tracking and decoupled
 /// state totals from tier totals. The seed envelope shares this constant;
 /// seed contents are otherwise unchanged.
-const SCHEMA_VERSION: u32 = 13;
+const SCHEMA_VERSION: u32 = 14;
 
 pub(crate) fn run(args: Vec<OsString>) -> i32 {
     let argv: Vec<OsString> = iter::once(OsString::from(COMMAND_NAME))
@@ -146,7 +149,9 @@ fn list_command_inner() -> ClapCommand {
             "List the tiered freshness review queue: every task with a \
             walk tier, ordered PRE → NEW → PROJECTS → PENDING → NEXT → \
             RECURRING → TICKLER → ROTTEN → POST with each tier's comparator, with \
-            whole-vault counts. The command is read-only. Counts always \
+            whole-vault counts. TICKLER covers scheduled returns and \
+            automatic Blocked → Ready recoveries (unblocked date). The \
+            command is read-only. Counts always \
             cover the whole vault; --limit truncates the queue rows \
             only. See docs/freshness.md for the full definition.",
         )
@@ -304,6 +309,10 @@ struct ListedRow {
     keeps: u32,
     /// A choice is due for this row — not permission to act.
     decide: bool,
+    /// The return source for RESURFACED rows (`scheduled` | `unblocked`).
+    returned_by: Option<String>,
+    /// The valid `[unblocked::]` date on the line, when present.
+    unblocked_on: Option<String>,
 }
 
 struct ListReport {
@@ -402,6 +411,12 @@ fn collect_list(snapshot: &Snapshot) -> ListReport {
                     .map(|date| date.format("%Y-%m-%d").to_string()),
                 keeps: evaluated.keeps,
                 decide: evaluated.decide,
+                returned_by: evaluated
+                    .returned_by
+                    .map(|source| source.as_str().to_string()),
+                unblocked_on: evaluated
+                    .unblocked_on
+                    .map(|date| date.format("%Y-%m-%d").to_string()),
             });
         }
     }
@@ -664,11 +679,18 @@ fn human_row(row: &ListedRow, styler: &Styler) -> String {
                 format!("{lead} {sep} fresh {fresh}{every}")
             }
         },
-        "tickler" => format!(
-            "tickler {sep} scheduled {scheduled} {sep} fresh {fresh}",
-            scheduled = row.scheduled.as_deref().unwrap_or("?"),
-            fresh = row.fresh.as_deref().unwrap_or("?"),
-        ),
+        "tickler" => match row.returned_by.as_deref() {
+            Some("unblocked") => format!(
+                "tickler {sep} unblocked {unblocked} {sep} fresh {fresh}",
+                unblocked = row.unblocked_on.as_deref().unwrap_or("?"),
+                fresh = row.fresh.as_deref().unwrap_or("?"),
+            ),
+            _ => format!(
+                "tickler {sep} scheduled {scheduled} {sep} fresh {fresh}",
+                scheduled = row.scheduled.as_deref().unwrap_or("?"),
+                fresh = row.fresh.as_deref().unwrap_or("?"),
+            ),
+        },
         "recurring" => match row.days_overdue {
             Some(0) => "Recurring · due today".to_string(),
             Some(days) => format!(
@@ -790,6 +812,8 @@ fn json_list(report: &ListReport) -> serde_json::Value {
             "scheduled": row.scheduled,
             "keeps": row.keeps,
             "decide": row.decide,
+            "returned_by": row.returned_by,
+            "unblocked_on": row.unblocked_on,
         })).collect::<Vec<_>>(),
         "warnings": report.warnings.iter().map(|warning| json!({
             "code": warning.code,

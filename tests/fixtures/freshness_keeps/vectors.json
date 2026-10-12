@@ -572,6 +572,44 @@
     "js"
    ],
    "why": "readers accept bracket or paren field syntax"
+  },
+  {
+   "id": "U1-stamp-clears-unblocked",
+   "input": "- [ ] #task Recovered [fresh:: 2026-10-01] [unblocked:: 2026-10-07] [created:: 2026-09-01]",
+   "mode": "stamp",
+   "expected_line": "- [ ] #task Recovered [fresh:: 2026-10-08] [created:: 2026-09-01]",
+   "expected_changed": true,
+   "runners": [
+    "rust",
+    "js"
+   ],
+   "why": "every stamp removes [unblocked::] (UB7)"
+  },
+  {
+   "id": "U2-preserve-clears-unblocked",
+   "input": "- [ ] #task Recovered [fresh:: 2026-10-01] [keeps:: 2] [unblocked:: 2026-10-07] [created:: 2026-09-01]",
+   "mode": "preserve",
+   "expected_line": "- [ ] #task Recovered [fresh:: 2026-10-08] [keeps:: 2] [created:: 2026-09-01]",
+   "expected_changed": true,
+   "runners": [
+    "rust",
+    "js"
+   ],
+   "why": "the seed preserve mode keeps keeps but never writes [unblocked::]"
+  },
+  {
+   "id": "U3-malformed-unblocked-lint",
+   "input": "- [ ] #task Recovered [fresh:: 2026-10-01] [unblocked:: 2026-13-01]",
+   "mode": "read",
+   "expected_keeps": 0,
+   "expected_lints": [
+    "unblocked_malformed"
+   ],
+   "runners": [
+    "rust",
+    "js"
+   ],
+   "why": "malformed [unblocked::] is ignored with a lint"
   }
  ],
  "schema": 4,

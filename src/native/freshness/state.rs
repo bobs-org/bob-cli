@@ -221,6 +221,24 @@ pub(crate) fn is_counted_ready_row(
     !is_recurring && block_id != Some("prj")
 }
 
+/// Which return source resurfaced a TICKLER row
+/// (`docs/freshness.md` §4): the inline schedule or an automatic
+/// `[unblocked::]` recovery. Present only on RESURFACED rows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReturnedBy {
+    Scheduled,
+    Unblocked,
+}
+
+impl ReturnedBy {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Scheduled => "scheduled",
+            Self::Unblocked => "unblocked",
+        }
+    }
+}
+
 /// The evaluated result for one row.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Evaluated {
@@ -241,17 +259,27 @@ pub(crate) struct Evaluated {
     /// A choice is due — not permission to execute an action:
     /// `enabled && lane ready && tier rotten/tickler && keeps >= limit`.
     pub(crate) decide: bool,
+    /// The return source for RESURFACED rows; `None` otherwise.
+    pub(crate) returned_by: Option<ReturnedBy>,
+    /// The valid `[unblocked::]` date on the line, when present.
+    pub(crate) unblocked_on: Option<NaiveDate>,
     pub(crate) lints: Vec<String>,
 }
 
 /// Whether a decision is due for a Ready-lane row in `tier` with
-/// `keeps` counted keeps under `config`.
+/// `keeps` counted keeps under `config`. An unblock tickler never
+/// decides: a keep there neither increments nor resets the streak
+/// (`unblock_keeps`), so no choice is ever due for it.
 pub(crate) fn decide_for(
     lane: Option<Lane>,
     tier: Option<Tier>,
     keeps: u32,
+    returned_by: Option<ReturnedBy>,
     config: &FreshnessConfig,
 ) -> bool {
+    if returned_by == Some(ReturnedBy::Unblocked) {
+        return false;
+    }
     let due_tier = matches!(tier, Some(Tier::Rotten) | Some(Tier::Tickler));
     config.decay.enabled
         && lane == Some(Lane::Ready)
@@ -446,10 +474,13 @@ fn evaluate_without_checklist(
         && !row.is_daily_note
         && !row.is_today;
 
-    // Effective resurfacing schedule: the inline schedule, once due,
-    // participates in the existing resurfacing rule. Tracker rows use
-    // the same ordinary inline handling as every other row.
-    let resurfaced_on: Option<NaiveDate> = if !in_scope {
+    // Effective return date: the latest of the inline schedule
+    // (`fresh < scheduled ≤ today`) and the recorded unblock date
+    // (`fresh ≤ unblocked ≤ today`, which needs a stamp to return
+    // from). Tracker rows use the same ordinary handling as every
+    // other row. A tie resolves to the schedule. NEW rows (no fresh)
+    // never return from either source.
+    let scheduled_return: Option<NaiveDate> = if !in_scope {
         None
     } else if let Some(scheduled) = row.scheduled
         && read
@@ -460,6 +491,30 @@ fn evaluate_without_checklist(
     } else {
         None
     };
+    let unblocked_return: Option<NaiveDate> = if !in_scope {
+        None
+    } else if let Some(unblocked) = read.unblocked
+        && read
+            .fresh
+            .is_some_and(|fresh| fresh <= unblocked && unblocked <= today)
+    {
+        Some(unblocked)
+    } else {
+        None
+    };
+    let (returned_on, returned_by): (Option<NaiveDate>, Option<ReturnedBy>) =
+        match (scheduled_return, unblocked_return) {
+            (Some(scheduled), Some(unblocked)) if unblocked > scheduled => {
+                (Some(unblocked), Some(ReturnedBy::Unblocked))
+            }
+            (Some(scheduled), _) => {
+                (Some(scheduled), Some(ReturnedBy::Scheduled))
+            }
+            (None, Some(unblocked)) => {
+                (Some(unblocked), Some(ReturnedBy::Unblocked))
+            }
+            (None, None) => (None, None),
+        };
 
     // Ready state: lane rows keep a null state (the lane early-return
     // below reports it); Ready rows evaluate normally, trackers
@@ -473,7 +528,7 @@ fn evaluate_without_checklist(
         match read.fresh {
             None => Some(FreshState::New),
             Some(fresh) => {
-                if resurfaced_on.is_some() {
+                if returned_on.is_some() {
                     Some(FreshState::Resurfaced)
                 } else {
                     let due = fresh
@@ -499,7 +554,7 @@ fn evaluate_without_checklist(
         && walk_scope;
     let tracker_lane_due = tracker_lane_eligible
         && (read.fresh.is_none()
-            || resurfaced_on.is_some()
+            || returned_on.is_some()
             || read.fresh.is_some_and(|fresh| {
                 let due = fresh
                     .checked_add_days(chrono::Days::new(u64::from(
@@ -510,8 +565,8 @@ fn evaluate_without_checklist(
             }));
     let tracker_lane_due_on: Option<NaiveDate> = if !tracker_lane_due {
         None
-    } else if let Some(scheduled) = resurfaced_on {
-        Some(scheduled)
+    } else if let Some(returned) = returned_on {
+        Some(returned)
     } else {
         read.fresh.map(|fresh| {
             fresh
@@ -559,9 +614,9 @@ fn evaluate_without_checklist(
     };
 
     // A choice is due — never permission to act — for Ready due
-    // rows at or over the keep limit.
+    // rows at or over the keep limit. Unblock ticklers never decide.
     let keeps = read.keeps;
-    let decide = decide_for(lane, tier, keeps, config);
+    let decide = decide_for(lane, tier, keeps, returned_by, config);
 
     // Per-row dates: lane rows use the lane due date; Ready rows use
     // the state due date. Lane tracker rows keep their actual lane
@@ -586,6 +641,8 @@ fn evaluate_without_checklist(
                 days_overdue,
                 keeps,
                 decide,
+                returned_by: None,
+                unblocked_on: read.unblocked,
                 lints,
             };
         }
@@ -614,6 +671,8 @@ fn evaluate_without_checklist(
             days_overdue,
             keeps,
             decide,
+            returned_by: None,
+            unblocked_on: read.unblocked,
             lints,
         };
     }
@@ -630,6 +689,8 @@ fn evaluate_without_checklist(
             days_overdue: None,
             keeps,
             decide,
+            returned_by: None,
+            unblocked_on: read.unblocked,
             lints,
         },
         Some(FreshState::New) => Evaluated {
@@ -643,15 +704,14 @@ fn evaluate_without_checklist(
             days_overdue: None,
             keeps,
             decide,
+            returned_by: None,
+            unblocked_on: read.unblocked,
             lints,
         },
         Some(FreshState::Resurfaced) => {
             let fresh = read.fresh.expect("resurfaced has fresh");
-            let scheduled = resurfaced_on
-                .or(row.scheduled)
-                .expect("resurfaced has schedule");
-            let days_overdue =
-                today.signed_duration_since(scheduled).num_days();
+            let returned = returned_on.expect("resurfaced has return");
+            let days_overdue = today.signed_duration_since(returned).num_days();
             Evaluated {
                 state,
                 tier,
@@ -659,10 +719,12 @@ fn evaluate_without_checklist(
                 fresh: Some(fresh),
                 interval_days,
                 interval_source,
-                due_on: Some(scheduled),
+                due_on: Some(returned),
                 days_overdue: Some(days_overdue),
                 keeps,
                 decide,
+                returned_by,
+                unblocked_on: read.unblocked,
                 lints,
             }
         }
@@ -683,6 +745,8 @@ fn evaluate_without_checklist(
                 days_overdue: Some(days_overdue),
                 keeps,
                 decide,
+                returned_by: None,
+                unblocked_on: read.unblocked,
                 lints,
             }
         }
@@ -702,6 +766,8 @@ fn evaluate_without_checklist(
                 days_overdue: None,
                 keeps,
                 decide,
+                returned_by: None,
+                unblocked_on: read.unblocked,
                 lints,
             }
         }
@@ -845,10 +911,12 @@ pub(crate) fn queue(
                     .then(a.path.cmp(&b.path))
                     .then(a.line.cmp(&b.line))
             }
+            // TICKLER sorts by return date, then path and line, so
+            // one project's residents stay contiguous; `created` is
+            // not a key (UB14).
             Tier::Tickler => a
                 .due_on
                 .cmp(&b.due_on)
-                .then(compare_created(a.created, b.created, true))
                 .then(a.path.cmp(&b.path))
                 .then(a.line.cmp(&b.line)),
             Tier::Rotten => a

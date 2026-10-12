@@ -6,7 +6,7 @@ use chrono::NaiveDate;
 use super::{
     bucket_for_state, checklist_from_tags, counts, evaluate, queue,
     ChecklistKind, Counts, FreshState, FreshnessRow, IntervalSource, Lane,
-    Tier, TrackerKind,
+    ReturnedBy, Tier, TrackerKind,
 };
 use crate::native::config::freshness::{DecayConfig, FreshnessConfig};
 use crate::native::freshness::placement::{stamp_fresh, Refusal};
@@ -1723,4 +1723,143 @@ fn rc12_order_and_counts() {
     assert_eq!(report.walk, report.by_tier.sum());
     assert_eq!(report.due, 2);
     assert_eq!(report.upkeep_today, 0);
+}
+
+/// UB vectors for `[unblocked::]` evaluation (`docs/freshness.md`
+/// §10b). Today `2026-10-08`.
+fn unblocked_row(line: &str) -> FreshnessRow {
+    row(line)
+}
+
+/// UB1: an in-scope Ready recovery with a stamp resurfaces from the
+/// recorded unblock date.
+#[test]
+fn ub1_unblocked_recovery_is_tickler() {
+    let evaluated = evaluate(
+        &unblocked_row(
+            "- [ ] #task Recovered [fresh:: 2026-10-01] [unblocked:: 2026-10-08]",
+        ),
+        today(),
+        &default_config(),
+    );
+    assert_eq!(evaluated.state, Some(FreshState::Resurfaced));
+    assert_eq!(evaluated.tier, Some(Tier::Tickler));
+    assert_eq!(evaluated.due_on, Some(date(2026, 10, 8)));
+    assert_eq!(evaluated.days_overdue, Some(0));
+    assert_eq!(evaluated.returned_by, Some(ReturnedBy::Unblocked));
+    assert_eq!(evaluated.unblocked_on, Some(date(2026, 10, 8)));
+    assert_eq!(bucket_for_state(evaluated.state), Some("rotten"));
+}
+
+/// UB9: the `fresh == U` tie still resurfaces via the
+/// `fresh ≤ unblocked` rule.
+#[test]
+fn ub9_fresh_equals_unblocked_still_resurfaces() {
+    let evaluated = evaluate(
+        &unblocked_row(
+            "- [ ] #task Recovered [fresh:: 2026-10-08] [unblocked:: 2026-10-08]",
+        ),
+        today(),
+        &default_config(),
+    );
+    assert_eq!(evaluated.state, Some(FreshState::Resurfaced));
+    assert_eq!(evaluated.returned_by, Some(ReturnedBy::Unblocked));
+    assert_eq!(evaluated.due_on, Some(date(2026, 10, 8)));
+}
+
+/// UB10: with both sources the later return wins.
+#[test]
+fn ub10_latest_source_wins_due_on() {
+    let mut both = unblocked_row(
+        "- [ ] #task Recovered [fresh:: 2026-10-01] [unblocked:: 2026-10-07]",
+    );
+    both.scheduled = Some(date(2026, 10, 6));
+    let evaluated = evaluate(&both, today(), &default_config());
+    assert_eq!(evaluated.state, Some(FreshState::Resurfaced));
+    assert_eq!(evaluated.due_on, Some(date(2026, 10, 7)));
+    assert_eq!(evaluated.returned_by, Some(ReturnedBy::Unblocked));
+}
+
+/// UB11: both sources on the same date resolve to the schedule.
+#[test]
+fn ub11_same_date_tie_resolves_to_scheduled() {
+    let mut both = unblocked_row(
+        "- [ ] #task Recovered [fresh:: 2026-10-01] [unblocked:: 2026-10-07]",
+    );
+    both.scheduled = Some(date(2026, 10, 7));
+    let evaluated = evaluate(&both, today(), &default_config());
+    assert_eq!(evaluated.state, Some(FreshState::Resurfaced));
+    assert_eq!(evaluated.due_on, Some(date(2026, 10, 7)));
+    assert_eq!(evaluated.returned_by, Some(ReturnedBy::Scheduled));
+}
+
+/// UB13: a keep on an unblock tickler never opens the decision card,
+/// even at the keep limit.
+#[test]
+fn ub13_unblock_tickler_never_decides() {
+    let config = decay_config(3, true);
+    let kept = unblocked_row(
+        "- [ ] #task Recovered [fresh:: 2026-10-01] [unblocked:: 2026-10-08] [keeps:: 5]",
+    );
+    let evaluated = evaluate(&kept, active_day(), &config);
+    assert_eq!(evaluated.tier, Some(Tier::Tickler));
+    assert_eq!(evaluated.keeps, 5);
+    assert!(!evaluated.decide);
+    // A scheduled tickler at the same streak still decides.
+    let mut scheduled = row(
+        "- [ ] #task Week habits [fresh:: 2026-10-05] [scheduled:: 2026-10-07] [keeps:: 5]",
+    );
+    scheduled.scheduled = Some(date(2026, 10, 7));
+    let decided = evaluate(&scheduled, active_day(), &config);
+    assert_eq!(decided.tier, Some(Tier::Tickler));
+    assert!(decided.decide);
+}
+
+/// UB14: unblock ticklers with the same `due_on` sort by path, then
+/// line; `created` is not a key.
+#[test]
+fn ub14_tickler_tie_orders_by_path_then_line() {
+    let config = default_config();
+    // b.md is newer by created, but path order puts a.md first.
+    let mut newer =
+        ready_row("b.md", 2, Some("2026-10-01"), Some(date(2026, 9, 5)));
+    newer.raw_line =
+        "- [ ] #task Bee [fresh:: 2026-10-01] [unblocked:: 2026-10-08]"
+            .to_string();
+    let mut older =
+        ready_row("a.md", 1, Some("2026-10-01"), Some(date(2026, 9, 1)));
+    older.raw_line =
+        "- [ ] #task Aye [fresh:: 2026-10-01] [unblocked:: 2026-10-08]"
+            .to_string();
+    let mut same_path =
+        ready_row("a.md", 3, Some("2026-10-01"), Some(date(2026, 9, 9)));
+    same_path.raw_line =
+        "- [ ] #task Aye again [fresh:: 2026-10-01] [unblocked:: 2026-10-08]"
+            .to_string();
+    let ordered = queue(&[newer, same_path, older], today(), &config);
+    assert_eq!(queue_tiers(&ordered), vec!["tickler"; 3]);
+    assert_eq!(
+        queue_keys(&ordered),
+        vec![
+            ("a.md".to_string(), 1),
+            ("a.md".to_string(), 3),
+            ("b.md".to_string(), 2),
+        ]
+    );
+}
+
+/// UB15: a `^prj` whose inline date arrived after its stamp is
+/// PROJECTS, not TICKLER.
+#[test]
+fn ub15_prj_schedule_return_walks_projects() {
+    let mut prj = row(
+        "- [ ] #task Project [fresh:: 2026-10-01] [scheduled:: 2026-10-07] ^prj",
+    );
+    prj.tracker = Some(TrackerKind::Prj);
+    prj.scheduled = Some(date(2026, 10, 7));
+    let evaluated = evaluate(&prj, today(), &default_config());
+    assert_eq!(evaluated.state, Some(FreshState::Resurfaced));
+    assert_eq!(evaluated.tier, Some(Tier::Projects));
+    assert_eq!(evaluated.due_on, Some(date(2026, 10, 7)));
+    assert_eq!(evaluated.returned_by, Some(ReturnedBy::Scheduled));
 }
