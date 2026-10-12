@@ -514,7 +514,11 @@ no checkbox edits are still grouped when their current layout needs it.
 Ready `[ ]` tasks remain in the unheaded intake directly under `Tasks`, along
 with introductory prose and new ordinary captures. Decorated containers also
 get a generated status-count badge row before the intake. The generated groups
-are plain child headings with hidden ownership comments:
+are plain child headings owned by title and shape: a heading directly under a
+`Tasks` container (or under an authored topic inside one) is managed if and
+only if its title is exactly `Next & In Progress`, `Blocked`, or
+`Done & Canceled` **and** its body holds only movable task blocks and blank
+lines:
 
 ```markdown
 # Project
@@ -527,32 +531,39 @@ Project context.
 - [ ] #task Later idea ^idea
 
 ### Next & In Progress
-<!-- bob:task-status-group:v1:active -->
 
 - [/] #task Finish implementation ^finish
 - [*] #task Review ^review
 
 ### Blocked
-<!-- bob:task-status-group:v1:blocked -->
 
 - [?] #task Wait for dependency ^wait
 
 ### Done & Canceled
-<!-- bob:task-status-group:v1:closed -->
 
 - [x] #task Agreed scope ^scope
 - [-] #task Superseded option
 ```
 
+A group exists only while it holds a task: empty groups are never emitted,
+and group order stays fixed (`Next & In Progress`, `Blocked`,
+`Done & Canceled`), so a returning group always lands in the same place. A
+container is decorated (badge row plus groups) if and only if it holds at
+least one groupable task (Next, In Progress, Blocked, Done, or Canceled).
+When it holds none, the badge row and every group heading go, and any Ready
+task found inside an old group returns to the intake. Nothing is remembered
+between runs: the layout is a pure function of note content.
+
 The badge row has four fixed-order chips: open, next/wip, blocked, and
 done/canceled. Counts are per-container and non-recursive: the open chip counts
 root task blocks that remain in that container's intake, while the other chips
-count that container's three generated status groups. Empty buckets still show
-`0` so the row keeps stable link targets. Each chip links to the counted
-heading using Obsidian's nested heading path form, such as
+count that container's generated status groups. A chip whose group does not
+exist renders as a plain unlinked code span (`` `🔴 0 blocked` ``); the `open`
+chip always links to the container heading. Each linked chip points at the
+counted heading using Obsidian's nested heading path form, such as
 `#Project#Tasks#Blocked`; if any heading segment in the container ancestry
-contains `#`, the row is rendered as unlinked code-span chips because that
-path cannot be represented safely.
+contains `#`, the whole row is rendered as unlinked code-span chips because
+that path cannot be represented safely.
 
 The row is recognized by its exact generated grammar: four fixed-order
 code-span chips (`open`, `next/wip`, `blocked`, `done/canceled`), each
@@ -573,19 +584,24 @@ manual checkbox edits, and `bob task archive` can make them stale; the next
 The command preserves authored topic headings under a `Tasks` section. Direct
 task blocks are grouped locally inside the container where they already live,
 so a custom `### Backend` topic receives its own generated child groups rather
-than losing its context. Once a container has generated groups, all three
-headings are retained even when one is empty, preserving Obsidian heading links
-and fold targets. Re-running on unchanged semantic input is byte-identical.
+than losing its context. Re-running on unchanged semantic input is
+byte-identical.
 
 Only root task blocks accepted by the configured Tasks `globalFilter` move.
 The parent root's final status chooses the destination; nested children, notes,
 links, block IDs, metadata, continuations, and internal fenced snippets travel
 with that root. Ordered-list task roots and tasks nested under ordinary list
 items are reported as unsupported for grouping and left intact. H6 `Tasks`
-containers, ambiguous Markdown boundaries, unmarked heading collisions, renamed
-or malformed generated markers, duplicate group headings, and authored child
-headings inside a managed group are warnings; the affected container is left
-unchanged, but other safe containers may still be written.
+containers, ambiguous Markdown boundaries, group-title headings holding
+non-task content (`ownership_collision`), legacy comments with an unknown kind
+or in the intake (`malformed_ownership`), legacy comments under the wrong
+title (`renamed_marked_heading`), duplicate group headings, badge rows inside
+groups (`misplaced_badge_row`), and authored child headings inside a managed
+group are warnings; the affected container is left unchanged, but other safe
+containers may still be written. Legacy
+`<!-- bob:task-status-group:v1:* -->` comments are removed on the next
+rewrite. An older `bob` re-adds the comments and empty groups (losslessly), so
+upgrade every host that runs reconcile or reroll together.
 
 Grouping never creates a missing `Tasks` section. It excludes canonical daily
 notes, the selected current daily ledger even when `BOB_DAY_FILE` points
@@ -995,7 +1011,7 @@ JSON mode prints one object on stdout with these stable fields:
       "original_heading_line": 20,
       "heading_ancestry": ["Beta", "Tasks"],
       "code": "ownership_collision",
-      "message": "unmarked status-group heading in \"Tasks\" at line 20 contains authored context"
+      "message": "status-group heading in \"Tasks\" at line 20 contains non-task content"
     }
   ],
   "dependency_projection_updates": [
@@ -1101,9 +1117,10 @@ contains `target`, `block_id`, and `reason`; marker-reference entries contain
 `target`, `block_id`, and the owning `pomodoro` line.
 `grouped_task_sections` contains only containers whose bytes changed for
 grouping, with original source heading lines and moved-block destinations
-reported from the pre-move source. Its `open` count is the number of root task
-blocks emitted into that container's intake after the transform, including
-recovered or structurally ineligible tasks that remain there.
+reported from the pre-move source. It now includes containers that returned
+to a plain layout, with all group counts at 0. Its `open` count is the number
+of root task blocks emitted into that container's intake after the transform,
+including recovered or structurally ineligible tasks that remain there.
 `grouping_warnings` contains safe-to-report container diagnostics; warnings do
 not by themselves make `ok` false.
 `dependency_projection_updates` lists every reconciled field, target-id, and

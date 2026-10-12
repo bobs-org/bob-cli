@@ -165,7 +165,6 @@ After (rolled 21 days into the P2 8–30 window):
 [`⚪ 0 open`](#Note#Tasks) · ... · [`🔴 1 blocked`](#Note#Tasks#Blocked) · ...
 
 ### Blocked
-<!-- bob:task-status-group:v1:blocked -->
 
 - [?] #task Review the onboarding draft [priority:: medium] [scheduled:: 2026-10-19] ^onboard-review
   - 🗓️ **SCHEDULE LOG**

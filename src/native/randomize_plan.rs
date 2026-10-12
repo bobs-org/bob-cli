@@ -1332,20 +1332,13 @@ properties:
                 "# Project\n",
                 "\n",
                 "## Tasks\n",
-                "[`⚪ 0 open`](#Project#Tasks) · [`🔵 0 next/wip`](#Project#Tasks#Next%20&%20In%20Progress) · [`🔴 1 blocked`](#Project#Tasks#Blocked) · [`🟢 0 done/canceled`](#Project#Tasks#Done%20&%20Canceled)\n",
-                "\n",
-                "### Next & In Progress\n",
-                "<!-- bob:task-status-group:v1:active -->\n",
+                "[`⚪ 0 open`](#Project#Tasks) · `🔵 0 next/wip` · [`🔴 1 blocked`](#Project#Tasks#Blocked) · `🟢 0 done/canceled`\n",
                 "\n",
                 "### Blocked\n",
-                "<!-- bob:task-status-group:v1:blocked -->\n",
                 "\n",
                 "- [?] Ship it [priority:: medium] [scheduled:: 2026-10-14] #task\n",
                 "\t- 🗓️ **SCHEDULE LOG**\n",
                 "\t\t- *2026-09-10 → 2026-10-14* — 🎲 P2 randomize · in **16** (8–30) days\n",
-                "\n",
-                "### Done & Canceled\n",
-                "<!-- bob:task-status-group:v1:closed -->\n",
             )
         );
     }

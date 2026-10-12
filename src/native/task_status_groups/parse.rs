@@ -1,4 +1,8 @@
-//! Marker and badge parsing for task status grouping.
+//! Legacy marker and badge parsing for task status grouping.
+//!
+//! Group markers are legacy-only: the emitter never writes them, and the
+//! classifier recognizes them only to drop the one in its slot so old
+//! backups and unsynced machines self-heal.
 use super::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,7 +35,7 @@ pub(super) fn group_marker_state(
 
 fn parse_group_marker(line: &str) -> Option<Result<GroupKind, ()>> {
     let inner = markdown::standalone_html_comment(line)?;
-    let rest = inner.strip_prefix(MARKER_PREFIX)?;
+    let rest = inner.strip_prefix(LEGACY_GROUP_MARKER_PREFIX)?;
     match GroupKind::from_marker_id(rest) {
         Some(kind) => Some(Ok(kind)),
         None => Some(Err(())),
@@ -163,9 +167,10 @@ pub(super) fn adoptable_group_body(
     if !node.children.is_empty() {
         return false;
     }
+    let body_start = group_body_start(node, ctx.lines);
     let Ok(pieces) = parse_direct_pieces(
         ctx,
-        node.body_span.clone(),
+        body_start..node.body_span.end,
         node,
         &mut Vec::new(),
         false,
@@ -203,8 +208,6 @@ pub(super) struct ParsedContainer<'a> {
 }
 
 pub(super) struct ParsedGroup<'a> {
-    pub(super) leading: &'a str,
-    pub(super) trailing: &'a str,
     pub(super) pieces: Vec<DirectPiece<'a>>,
 }
 
@@ -263,15 +266,7 @@ pub(super) fn parse_container_regions<'a>(
             true,
             false,
         )?;
-        let (leading, trailing) = split_group_prose(ctx.contents, &pieces);
-        groups.insert(
-            *kind,
-            ParsedGroup {
-                leading,
-                trailing,
-                pieces,
-            },
-        );
+        groups.insert(*kind, ParsedGroup { pieces });
     }
 
     Ok(ParsedContainer {
@@ -290,66 +285,6 @@ fn group_body_start(node: &HeadingNode, lines: &[SourceLine<'_>]) -> usize {
         lines[index].byte_range.end
     } else {
         node.body_span.start
-    }
-}
-
-fn split_group_prose<'a>(
-    contents: &'a str,
-    pieces: &[DirectPiece<'a>],
-) -> (&'a str, &'a str) {
-    let first_task = pieces.iter().find_map(|piece| match piece {
-        DirectPiece::Task(task) => Some(task.byte_range.start),
-        DirectPiece::Other { .. } | DirectPiece::Badges { .. } => None,
-    });
-    let Some(first_task) = first_task else {
-        if pieces.is_empty() {
-            return ("", "");
-        }
-        let start = piece_start(&pieces[0]);
-        let end = piece_end(pieces.last().expect("non-empty pieces"));
-        return (&contents[start..end], "");
-    };
-    let leading_end = pieces
-        .iter()
-        .take_while(|piece| matches!(piece, DirectPiece::Other { .. }))
-        .last()
-        .map(piece_end)
-        .unwrap_or(first_task);
-    let leading_start = pieces.first().map(piece_start).unwrap_or(first_task);
-    let trailing_start = pieces
-        .iter()
-        .rev()
-        .take_while(|piece| matches!(piece, DirectPiece::Other { .. }))
-        .last()
-        .map(piece_start);
-    let trailing_end = pieces.last().map(piece_end);
-    let leading = if leading_start < leading_end && leading_end <= first_task {
-        &contents[leading_start..leading_end]
-    } else {
-        ""
-    };
-    let trailing = match (trailing_start, trailing_end) {
-        (Some(start), Some(end)) if start >= first_task && start < end => {
-            &contents[start..end]
-        }
-        _ => "",
-    };
-    (leading, trailing)
-}
-
-fn piece_start(piece: &DirectPiece<'_>) -> usize {
-    match piece {
-        DirectPiece::Task(task) => task.byte_range.start,
-        DirectPiece::Other { byte_range, .. } => byte_range.start,
-        DirectPiece::Badges { byte_range } => byte_range.start,
-    }
-}
-
-fn piece_end(piece: &DirectPiece<'_>) -> usize {
-    match piece {
-        DirectPiece::Task(task) => task.byte_range.end,
-        DirectPiece::Other { byte_range, .. } => byte_range.end,
-        DirectPiece::Badges { byte_range } => byte_range.end,
     }
 }
 

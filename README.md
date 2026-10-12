@@ -594,8 +594,8 @@ Pomodoro, repairs Pomodoro markers, de-duplicates the same task under later
 open Pomodoros, removes list items that only point at canceled tasks, deletes
 childless current-daily Pomodoro entries, and
 groups area/project `Tasks` sections into `Next & In Progress`, `Blocked`, and
-`Done & Canceled` child headings with a linked status-count badge row while
-keeping Ready tasks in the intake. Human and JSON reports include the
+`Done & Canceled` child headings, emitting only non-empty groups with a
+linked status-count badge row while keeping Ready tasks in the intake. Human and JSON reports include the
 dependency projection counts (`Dependencies:` plus the trailing `Summary:`
 counts).
 

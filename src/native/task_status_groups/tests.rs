@@ -63,19 +63,16 @@ Short context for this project.
 - [ ] #task An idea to pick up later ^idea
 
 ### Next & In Progress
-<!-- bob:task-status-group:v1:active -->
 
 - [/] #task Finish the design ^design
   - Keep the keyboard interaction simple.
 - [*] #task Review the implementation ^review
 
 ### Blocked
-<!-- bob:task-status-group:v1:blocked -->
 
 - [?] #task Ship when the dependency is ready ^ship
 
 ### Done & Canceled
-<!-- bob:task-status-group:v1:closed -->
 
 - [x] #task Agree on the scope ^scope
 - [-] #task Superseded experiment ^experiment
@@ -164,7 +161,7 @@ fn authored_child_containers_get_independent_badges_and_anchors() {
             "[`⚪ 1 open`](#Alpha#Tasks#Backend) · [`🔵 1 next/wip`](#Alpha#Tasks#Backend#Next%20&%20In%20Progress)"
         ));
     assert!(result.contents.contains(
-            "[`⚪ 0 open`](#Alpha#Tasks#Frontend) · [`🔵 0 next/wip`](#Alpha#Tasks#Frontend#Next%20&%20In%20Progress) · [`🔴 1 blocked`](#Alpha#Tasks#Frontend#Blocked)"
+            "[`⚪ 0 open`](#Alpha#Tasks#Frontend) · `🔵 0 next/wip` · [`🔴 1 blocked`](#Alpha#Tasks#Frontend#Blocked)"
         ));
     assert_idempotent(input);
 }
@@ -382,7 +379,12 @@ fn orphaned_badge_block_is_removed_without_creating_groups() {
     let result = grouped(&input);
 
     assert!(result.changed);
-    assert_eq!(result.grouped_sections, Vec::new());
+    assert_eq!(result.grouped_sections.len(), 1);
+    let section = &result.grouped_sections[0];
+    assert_eq!(section.next_and_in_progress, 0);
+    assert_eq!(section.blocked, 0);
+    assert_eq!(section.done_and_canceled, 0);
+    assert_eq!(section.open, 1);
     assert!(!result.contents.contains("task-status-badges"));
     assert!(!result.contents.lines().any(is_badge_row));
     assert!(!result.contents.contains("Next & In Progress"));
@@ -446,6 +448,24 @@ fn misplaced_badge_rows_fail_closed() {
 ";
     let result = grouped(marker_in_group);
     assert_eq!(result.contents, marker_in_group);
+    assert!(result
+        .warnings
+        .iter()
+        .any(|warning| warning.code == GroupingSkipCode::MisplacedBadgeRow));
+
+    let marker_free = format!(
+        "\
+## Tasks
+
+### Next & In Progress
+
+{row}
+
+- [*] #task next
+"
+    );
+    let result = grouped(&marker_free);
+    assert_eq!(result.contents, marker_free);
     assert!(result
         .warnings
         .iter()
@@ -635,12 +655,7 @@ fn nested_children_travel_with_parent_status() {
     assert!(active.contains("- [*] #task Parent"));
     assert!(active.contains("- [x] #task Child done"));
     assert!(active.contains("- [?] #task Child blocked"));
-    assert!(!result
-        .contents
-        .split(TITLE_CLOSED)
-        .nth(1)
-        .unwrap()
-        .contains("Child done"));
+    assert!(!result.contents.contains(TITLE_CLOSED));
     assert_eq!(result.grouped_sections[0].next_and_in_progress, 1);
     assert_eq!(result.grouped_sections[0].done_and_canceled, 0);
     assert_idempotent(input);
@@ -827,7 +842,7 @@ fn crlf_mixed_endings_unicode_and_missing_final_newline() {
 }
 
 #[test]
-fn safe_legacy_adoption_completes_a_partial_set() {
+fn unmarked_groups_emit_only_non_empty_groups_without_comments() {
     let input = "\
 ## Tasks
 
@@ -838,9 +853,11 @@ fn safe_legacy_adoption_completes_a_partial_set() {
 - [?] #task Already
 ";
     let result = grouped(input);
-    assert!(result.contents.contains(MARKER_ACTIVE));
-    assert!(result.contents.contains(MARKER_BLOCKED));
-    assert!(result.contents.contains(MARKER_CLOSED));
+    assert!(result.contents.contains("### Next & In Progress"));
+    assert!(result.contents.contains("### Blocked"));
+    assert!(!result.contents.contains("### Done & Canceled"));
+    assert!(!result.contents.contains("task-status-group"));
+    assert!(!result.contents.contains("<!--"));
     assert!(result.contents.contains("- [?] #task Already"));
     assert_idempotent(input);
 }
@@ -868,33 +885,63 @@ This is my own notes section.
 }
 
 #[test]
-fn prose_inside_managed_groups_is_preserved() {
-    let input = "\
-## Tasks
+fn interior_content_in_groups_fails_closed() {
+    let cases = [
+        ("plain bullet between tasks", "- remember to email Alice\n"),
+        (
+            "prose paragraph between tasks",
+            "\nRemember to email Alice.\n\n",
+        ),
+        ("html comment between tasks", "<!-- a note -->\n"),
+        (
+            "legacy marker between tasks",
+            "<!-- bob:task-status-group:v1:active -->\n",
+        ),
+    ];
+    for (label, middle) in cases {
+        for legacy in [false, true] {
+            let heading = if legacy {
+                "### Next & In Progress\n<!-- bob:task-status-group:v1:active -->\n"
+            } else {
+                "### Next & In Progress\n"
+            };
+            let input = format!(
+                "## Tasks\n\n{heading}\n- [*] #task a\n{middle}- [*] #task b\n"
+            );
+            let result = grouped(&input);
+            assert_eq!(result.contents, input, "{label} legacy={legacy}");
+            assert!(
+                result.warnings.iter().any(|warning| warning.code
+                    == GroupingSkipCode::OwnershipCollision),
+                "{label} legacy={legacy}"
+            );
+        }
+    }
 
-- [ ] #task ready
+    for legacy in [false, true] {
+        let heading = if legacy {
+            "### Next & In Progress\n<!-- bob:task-status-group:v1:active -->\n"
+        } else {
+            "### Next & In Progress\n"
+        };
+        let leading = format!(
+            "## Tasks\n\n{heading}\nFocus first.\n\n- [*] #task next\n"
+        );
+        let result = grouped(&leading);
+        assert_eq!(result.contents, leading, "leading prose legacy={legacy}");
+        assert!(result.warnings.iter().any(
+            |warning| warning.code == GroupingSkipCode::OwnershipCollision
+        ));
 
-### Next & In Progress
-<!-- bob:task-status-group:v1:active -->
-
-Focus on these first.
-
-- [*] #task next
-- [ ] #task reopened
-
-### Blocked
-<!-- bob:task-status-group:v1:blocked -->
-
-### Done & Canceled
-<!-- bob:task-status-group:v1:closed -->
-";
-    let result = grouped(input);
-    assert!(result.contents.contains("Focus on these first."));
-    let intake = result.contents.split("### Next").next().unwrap();
-    assert!(intake.contains("- [ ] #task ready"));
-    assert!(intake.contains("- [ ] #task reopened"));
-    assert!(!intake.contains("- [*] #task next"));
-    assert_idempotent(&result.contents);
+        let trailing = format!(
+            "## Tasks\n\n{heading}\n- [*] #task next\n\nTrailing note.\n"
+        );
+        let result = grouped(&trailing);
+        assert_eq!(result.contents, trailing, "trailing prose legacy={legacy}");
+        assert!(result.warnings.iter().any(
+            |warning| warning.code == GroupingSkipCode::OwnershipCollision
+        ));
+    }
 }
 
 #[test]
@@ -951,6 +998,26 @@ fn malformed_and_duplicate_markers_fail_closed() {
         .warnings
         .iter()
         .any(|warning| warning.code == GroupingSkipCode::RenamedMarkedHeading));
+    let marker_free_duplicate = "\
+## Tasks
+
+### Next & In Progress
+
+- [*] #task a
+
+### Next & In Progress
+
+- [/] #task b
+";
+    let result = grouped(marker_free_duplicate);
+    assert_eq!(result.contents, marker_free_duplicate);
+    assert!(
+        result
+            .warnings
+            .iter()
+            .any(|warning| warning.code
+                == GroupingSkipCode::DuplicateGroupHeading)
+    );
 }
 
 #[test]
@@ -971,18 +1038,63 @@ details
     assert!(result.warnings.iter().any(
         |warning| warning.code == GroupingSkipCode::AuthoredHeadingInGroup
     ));
+
+    let marker_free = "\
+## Tasks
+
+### Next & In Progress
+
+- [*] #task next
+
+#### Notes
+details
+";
+    let result = grouped(marker_free);
+    assert_eq!(result.contents, marker_free);
+    assert!(result.warnings.iter().any(
+        |warning| warning.code == GroupingSkipCode::AuthoredHeadingInGroup
+    ));
 }
 
 #[test]
-fn empty_groups_are_retained_once_created() {
+fn empty_groups_vanish_and_return_in_fixed_order() {
     let input = GOLDEN_OUTPUT
         .replace("- [?] #task Ship when the dependency is ready ^ship\n", "");
     let result = grouped(&input);
-    assert!(result.contents.contains("[`🔴 0 blocked`](#Tasks#Blocked)"));
-    assert!(result
-        .contents
-        .contains("### Blocked\n<!-- bob:task-status-group:v1:blocked -->"));
-    assert_idempotent(&input);
+    assert!(!result.contents.contains("### Blocked"));
+    assert!(result.contents.contains("`🔴 0 blocked`"));
+    assert!(!result.contents.contains("[`🔴 0 blocked`]"));
+    assert!(result.contents.contains("### Next & In Progress"));
+    assert!(result.contents.contains("### Done & Canceled"));
+    assert!(!result.contents.contains("task-status-group"));
+    assert_idempotent(&result.contents);
+
+    let note = "\
+## Tasks
+
+- [ ] #task ready
+- [*] #task next
+- [x] #task done
+";
+    let base = grouped(note).contents;
+    assert_text_order(
+        &base,
+        &["### Next & In Progress", "### Done & Canceled"],
+    );
+    assert!(!base.contains("### Blocked"));
+    let with_blocked_task = format!("{note}- [?] #task blocked\n");
+    let rerun = grouped(&with_blocked_task).contents;
+    assert_text_order(
+        &rerun,
+        &[
+            "### Next & In Progress",
+            "### Blocked",
+            "### Done & Canceled",
+        ],
+    );
+    assert!(rerun.contains("[`🔴 1 blocked`](#Tasks#Blocked)"));
+    assert!(!rerun.contains("task-status-group"));
+    assert_idempotent(&with_blocked_task);
 }
 
 #[test]
@@ -1118,10 +1230,234 @@ fn heading_only_first_setup_is_a_change() {
 ";
     let result = grouped(input);
     assert!(result.changed);
-    assert!(result.contents.contains(MARKER_ACTIVE));
-    assert!(result.contents.contains(MARKER_CLOSED));
-    assert!(
-        result.grouped_sections[0].moved_block_count == 0
-            || result.contents.contains("- [?] #task already")
-    );
+    assert!(result.contents.contains("### Blocked"));
+    assert!(!result.contents.contains("### Next & In Progress"));
+    assert!(!result.contents.contains("### Done & Canceled"));
+    assert!(!result.contents.contains("task-status-group"));
+    assert!(result.contents.contains("- [?] #task already"));
+    assert_eq!(result.grouped_sections[0].moved_block_count, 0);
+}
+
+#[test]
+fn legacy_migration_drops_markers_and_empty_groups_lf_and_crlf() {
+    for newline in ["\n", "\r\n"] {
+        let join = |lines: &[&str]| lines.join(newline) + newline;
+        let input = join(&[
+            "## Tasks",
+            "",
+            "### Next & In Progress",
+            "<!-- bob:task-status-group:v1:active -->",
+            "",
+            "- [*] #task next",
+            "",
+            "### Blocked",
+            "<!-- bob:task-status-group:v1:blocked -->",
+            "",
+            "### Done & Canceled",
+            "<!-- bob:task-status-group:v1:closed -->",
+            "",
+            "- [x] #task done",
+        ]);
+        let result = grouped(&input);
+        assert!(result.changed, "newline={newline:?}");
+        assert!(!result.contents.contains("task-status-group"));
+        assert!(!result.contents.contains("### Blocked"));
+        assert!(result.contents.contains("- [*] #task next"));
+        assert!(result.contents.contains("- [x] #task done"));
+        assert!(result.contents.contains("### Next & In Progress"));
+        assert!(result.contents.contains("### Done & Canceled"));
+        assert_idempotent(&result.contents);
+        let crlf_check = grouped(&result.contents);
+        assert!(!crlf_check.changed);
+    }
+}
+
+#[test]
+fn fresh_grouping_emits_no_comments() {
+    let result = grouped(GOLDEN_INPUT);
+    assert!(!result.contents.contains("<!--"));
+    assert!(!result.contents.contains("task-status-group"));
+    assert_idempotent(GOLDEN_INPUT);
+}
+
+#[test]
+fn un_decoration_returns_to_plain_layout_with_zero_counts() {
+    let input = "\
+## Tasks
+[`⚪ 0 open`](#Tasks) · `🔵 0 next/wip` · `🔴 0 blocked` · `🟢 1 done/canceled`
+
+### Done & Canceled
+
+- [ ] #task reopened
+";
+    let result = grouped(input);
+    assert!(result.changed);
+    assert!(!result.contents.lines().any(is_badge_row));
+    assert!(!result.contents.contains("### "));
+    assert!(result.contents.contains("- [ ] #task reopened"));
+    assert_eq!(result.grouped_sections.len(), 1);
+    let section = &result.grouped_sections[0];
+    assert_eq!(section.next_and_in_progress, 0);
+    assert_eq!(section.blocked, 0);
+    assert_eq!(section.done_and_canceled, 0);
+    assert_eq!(section.open, 1);
+    assert_eq!(section.moved_block_count, 1);
+    let rerun = grouped(&result.contents);
+    assert!(!rerun.changed);
+    assert!(rerun.grouped_sections.is_empty());
+}
+
+#[test]
+fn zero_chips_render_unlinked_while_open_stays_linked() {
+    let input = "## Tasks\n\n- [*] #task next\n";
+    let result = grouped(input);
+    let row = result
+        .contents
+        .lines()
+        .find(|line| line.contains("next/wip"))
+        .expect("badge row");
+    assert!(row.contains("[`⚪ 0 open`](#Tasks)"));
+    assert!(row.contains("[`🔵 1 next/wip`](#Tasks#Next%20&%20In%20Progress)"));
+    assert!(row.contains("`🔴 0 blocked`"));
+    assert!(!row.contains("#Tasks#Blocked"));
+    assert!(row.contains("`🟢 0 done/canceled`"));
+    assert!(!row.contains("#Tasks#Done"));
+    assert!(is_badge_row(row));
+}
+
+#[test]
+fn legacy_comment_out_of_slot_fails_closed() {
+    let in_intake = "\
+## Tasks
+
+<!-- bob:task-status-group:v1:active -->
+
+- [*] #task next
+";
+    let result = grouped(in_intake);
+    assert_eq!(result.contents, in_intake);
+    assert!(result
+        .warnings
+        .iter()
+        .any(|warning| warning.code == GroupingSkipCode::MalformedOwnership));
+
+    let wrong_title = "\
+## Tasks
+
+### Blocked
+<!-- bob:task-status-group:v1:active -->
+
+- [*] #task next
+";
+    let result = grouped(wrong_title);
+    assert_eq!(result.contents, wrong_title);
+    assert!(result
+        .warnings
+        .iter()
+        .any(|warning| warning.code == GroupingSkipCode::RenamedMarkedHeading));
+
+    let non_group = "\
+## Tasks
+
+### Waiting
+<!-- bob:task-status-group:v1:active -->
+
+- [*] #task next
+";
+    let result = grouped(non_group);
+    assert_eq!(result.contents, non_group);
+    assert!(result
+        .warnings
+        .iter()
+        .any(|warning| warning.code == GroupingSkipCode::RenamedMarkedHeading));
+}
+
+#[test]
+fn hand_typed_empty_group_heading_is_removed() {
+    let decorated = "\
+## Tasks
+
+- [*] #task next
+
+### Blocked
+";
+    let result = grouped(decorated);
+    assert!(result.changed);
+    assert!(!result.contents.contains("### Blocked"));
+    assert!(result.contents.contains("### Next & In Progress"));
+    assert_idempotent(&result.contents);
+
+    let ready_only = "## Tasks\n\n- [ ] #task ready\n\n### Blocked\n";
+    let result = grouped(ready_only);
+    assert!(result.changed);
+    assert!(!result.contents.contains("### Blocked"));
+    assert!(!result.contents.lines().any(is_badge_row));
+    assert!(result.contents.contains("- [ ] #task ready"));
+    let rerun = grouped(&result.contents);
+    assert!(!rerun.changed);
+}
+
+#[test]
+fn renamed_heading_becomes_an_authored_topic() {
+    let input = "\
+## Tasks
+
+### Waiting
+
+- [?] #task waiting
+";
+    let result = grouped(input);
+    assert!(result.changed);
+    assert!(result.contents.contains("### Waiting"));
+    assert!(result.contents.contains("#### Blocked"));
+    assert!(!result.contents.contains("\n### Blocked\n"));
+    assert_idempotent(&result.contents);
+}
+
+#[test]
+fn section_end_rule_preserves_trailing_whitespace() {
+    let with_notes = "\
+## Tasks
+
+- [*] #task next
+
+## Notes
+
+Body.
+";
+    let result = grouped(with_notes);
+    assert!(result.contents.contains("- [*] #task next\n\n## Notes"));
+    assert_idempotent(&result.contents);
+
+    let at_eof = "## Tasks\n\n- [*] #task next";
+    let result = grouped(at_eof);
+    assert!(!result.contents.ends_with('\n'));
+    assert!(!result.contents.contains("task-status-group"));
+    assert_idempotent(at_eof);
+
+    let crlf =
+        "## Tasks\r\n\r\n- [*] #task next\r\n\r\n## Notes\r\n\r\nBody.\r\n";
+    let result = grouped(crlf);
+    assert!(result.contents.contains("- [*] #task next\r\n\r\n## Notes"));
+    assert!(result.contents.contains("\r\n"));
+    assert_idempotent(&crlf);
+}
+
+#[test]
+fn blank_lines_between_tasks_normalize_away() {
+    let input = "\
+## Tasks
+
+### Next & In Progress
+
+- [*] #task a
+
+
+- [*] #task b
+";
+    let result = grouped(input);
+    assert!(result.changed);
+    assert!(result.contents.contains("- [*] #task a\n- [*] #task b"));
+    assert!(!result.contents.contains("task-status-group"));
+    assert_idempotent(&result.contents);
 }

@@ -500,7 +500,6 @@ fn task_status_hooks_groups_area_project_tasks_after_final_statuses() {
             "Project context.",
             "- [ ] #task Keep in intake ^ready",
             "### Next & In Progress",
-            "<!-- bob:task-status-group:v1:active -->",
             "- [*] #task Promote from Pomodoro ^promote",
             "- [/] #task Stale work clears ^stale",
             "### Blocked",
@@ -512,6 +511,10 @@ fn task_status_hooks_groups_area_project_tasks_after_final_statuses() {
             "- [x] #task Outside Tasks is not grouped ^outside",
         ],
     );
+    assert!(
+        !project_after.contains("bob:task-status-group"),
+        "written project note must not contain group markers"
+    );
     let area_after = fs::read_to_string(&area).unwrap();
     assert_text_order(
         &area_after,
@@ -522,6 +525,15 @@ fn task_status_hooks_groups_area_project_tasks_after_final_statuses() {
             "- [*] #task Already next ^already",
             "- [/] #task Keep working ^working",
         ],
+    );
+    assert!(
+        !area_after.contains("### Blocked")
+            && !area_after.contains("### Done & Canceled"),
+        "area note with only Next tasks must not emit empty groups:\n{area_after}"
+    );
+    assert!(
+        !area_after.contains("bob:task-status-group"),
+        "written area note must not contain group markers"
     );
     for path in [&daily, &ordinary, &archived, &generated, &template] {
         let contents = fs::read_to_string(path).unwrap();
@@ -651,17 +663,10 @@ fn task_status_hooks_reports_grouping_warnings_without_noop_text() {
         "## Tasks\n",
         "\n",
         "### Next & In Progress\n",
-        "<!-- bob:task-status-group:v1:active -->\n",
         "\n",
         "[`⚪ 0 open`](#Badges#Tasks) · [`🔵 1 next/wip`](#Badges#Tasks#Next%20&%20In%20Progress) · [`🔴 0 blocked`](#Badges#Tasks#Blocked) · [`🟢 0 done/canceled`](#Badges#Tasks#Done%20&%20Canceled)\n",
         "\n",
         "- [*] #task Next task ^next\n",
-        "\n",
-        "### Blocked\n",
-        "<!-- bob:task-status-group:v1:blocked -->\n",
-        "\n",
-        "### Done & Canceled\n",
-        "<!-- bob:task-status-group:v1:closed -->\n",
     );
     write_file(&duplicate_badges, duplicate_badges_original);
 
@@ -724,6 +729,96 @@ fn task_status_hooks_reports_grouping_warnings_without_noop_text() {
         "expected human stderr warning:\n{}",
         format_output(&human_output)
     );
+}
+
+#[test]
+fn task_status_hooks_un_decorates_legacy_groups_holding_only_ready() {
+    let temp = TempDir::new("bob-cli-task-status-hooks-undecorate");
+    let vault = temp.path().join("vault");
+    let daily = vault.join("2026/20260710.md");
+    let note = vault.join("proj.md");
+    let state = temp.path().join("state");
+    let lock = temp.path().join("task-status-hooks.lock");
+
+    write_blocked_tasks_settings(&vault);
+    write_file(
+        &daily,
+        concat!("# Today\n\n", "## Pomodoros\n\n", "- [ ] Current\n"),
+    );
+    write_file(
+        &note,
+        concat!(
+            "---\n",
+            "type: [[project]]\n",
+            "---\n",
+            "# Proj\n\n",
+            "## Tasks\n",
+            "[`⚪ 0 open`](#Proj#Tasks) · [`🔵 0 next/wip`](#Proj#Tasks#Next%20&%20In%20Progress) · [`🔴 0 blocked`](#Proj#Tasks#Blocked) · [`🟢 1 done/canceled`](#Proj#Tasks#Done%20&%20Canceled)\n",
+            "\n",
+            "### Done & Canceled\n",
+            "<!-- bob:task-status-group:v1:closed -->\n",
+            "\n",
+            "- [ ] #task reopened ^ready\n",
+        ),
+    );
+
+    let dry = bob_command()
+        .args(["task", "reconcile"])
+        .arg("--dry-run")
+        .arg("--format")
+        .arg("json")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .env("BOB_VAULT_SYNC_LOCK_FILE", &lock)
+        .env("XDG_STATE_HOME", &state)
+        .output()
+        .expect("dry-run undecorate");
+    assert_success(&dry);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&dry).trim()).expect("undecorate JSON");
+    let sections = json["grouped_task_sections"].as_array().unwrap();
+    assert_eq!(sections.len(), 1);
+    assert_eq!(sections[0]["path"], "proj.md");
+    assert_eq!(sections[0]["next_and_in_progress"], 0);
+    assert_eq!(sections[0]["blocked"], 0);
+    assert_eq!(sections[0]["done_and_canceled"], 0);
+
+    let human = bob_command()
+        .args(["task", "reconcile"])
+        .arg("--dry-run")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .env("BOB_VAULT_SYNC_LOCK_FILE", &lock)
+        .env("XDG_STATE_HOME", &state)
+        .output()
+        .expect("human dry-run undecorate");
+    assert_success(&human);
+    assert!(
+        !stdout(&human).contains("already in sync"),
+        "un-decoration must not report a clean no-op:\n{}",
+        format_output(&human)
+    );
+
+    let applied = bob_command()
+        .args(["task", "reconcile"])
+        .arg("--format")
+        .arg("json")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .env("BOB_VAULT_SYNC_LOCK_FILE", &lock)
+        .env("XDG_STATE_HOME", &state)
+        .output()
+        .expect("apply undecorate");
+    assert_success(&applied);
+    let written = fs::read_to_string(&note).unwrap();
+    assert!(written.contains("## Tasks"));
+    assert!(written.contains("- [ ] #task reopened ^ready"));
+    assert!(!written.contains("### "));
+    assert!(!written.lines().any(|line| line.contains("next/wip")));
+    assert!(!written.contains("bob:task-status-group"));
 }
 
 #[test]

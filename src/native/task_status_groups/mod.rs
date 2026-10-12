@@ -15,14 +15,22 @@ pub(crate) const TITLE_ACTIVE: &str = "Next & In Progress";
 pub(crate) const TITLE_BLOCKED: &str = "Blocked";
 pub(crate) const TITLE_CLOSED: &str = "Done & Canceled";
 
+/// Legacy group-ownership comment prefix.
+///
+/// Kept permanently so old backups and unsynced machines self-heal on the
+/// next rewrite: the classifier recognizes these comments only to drop the
+/// one in its slot, and the emitter never writes them.
+const LEGACY_GROUP_MARKER_PREFIX: &str = "bob:task-status-group:v1:";
+
+#[cfg(test)]
 pub(crate) const MARKER_ACTIVE: &str =
     "<!-- bob:task-status-group:v1:active -->";
+#[cfg(test)]
 pub(crate) const MARKER_BLOCKED: &str =
     "<!-- bob:task-status-group:v1:blocked -->";
+#[cfg(test)]
 pub(crate) const MARKER_CLOSED: &str =
     "<!-- bob:task-status-group:v1:closed -->";
-
-const MARKER_PREFIX: &str = "bob:task-status-group:v1:";
 
 /// Shared badge-row grammar: the four fixed-order `(emoji, label)` chips.
 /// Both the emitter (`render_badges`) and the recognizer (`is_badge_row`)
@@ -98,14 +106,6 @@ impl GroupKind {
         }
     }
 
-    fn marker(self) -> &'static str {
-        match self {
-            Self::Active => MARKER_ACTIVE,
-            Self::Blocked => MARKER_BLOCKED,
-            Self::Closed => MARKER_CLOSED,
-        }
-    }
-
     fn from_title(title: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|kind| kind.title() == title)
     }
@@ -159,7 +159,7 @@ impl GroupingSkipCode {
                 "ambiguous Markdown boundary in {title:?} at line {line}; skipped grouping"
             ),
             Self::OwnershipCollision => format!(
-                "unmarked status-group heading in {title:?} at line {line} contains authored context"
+                "status-group heading in {title:?} at line {line} contains non-task content"
             ),
             Self::MalformedOwnership => format!(
                 "malformed task-status-group marker in {title:?} at line {line}"
@@ -497,8 +497,9 @@ fn rewrite_container(
     warnings.extend(parsed.item_warnings.iter().cloned());
 
     let newline = section_newline(node, ctx.lines);
-    let should_decorate = parsed.has_groupable() || classified.has_groups();
-    let should_rewrite = should_decorate || parsed.has_badges;
+    let should_decorate = parsed.has_groupable();
+    let should_rewrite =
+        should_decorate || parsed.has_badges || classified.has_groups();
     if !should_rewrite {
         let mut section = original;
         apply_child_rewrites(&mut section, node, &child_rewrites);
@@ -520,9 +521,10 @@ fn rewrite_container(
         should_decorate,
         heading_raw.ends_with('\n'),
     );
-    let section = format!("{heading_raw}{body}");
+    let raw_section = format!("{heading_raw}{body}");
+    let section = apply_section_end_rule(raw_section, &original);
     let grouping_changed = section != original;
-    if grouping_changed && should_decorate {
+    if grouping_changed {
         grouped_sections.insert(
             0,
             GroupedSection {
@@ -655,28 +657,26 @@ fn classify_children<'a>(
         }
 
         if let Some(kind) = GroupKind::from_title(&child.title) {
-            if badge_row_in_span(ctx.lines, child.body_span.clone()) {
+            let misplaced_here =
+                badge_row_in_span(ctx.lines, child.body_span.clone());
+            if misplaced_here {
                 fail = Some(GroupingSkipCode::MisplacedBadgeRow);
             }
             if !child.children.is_empty() {
                 fail = Some(GroupingSkipCode::AuthoredHeadingInGroup);
-                items.push(ClassifiedChild::Authored(child));
                 continue;
             }
             match group_marker_state(child, ctx.lines) {
-                MarkerState::Valid(found) if found == kind => {
-                    if seen_groups.insert(kind, child.heading_line).is_some() {
-                        fail = Some(GroupingSkipCode::DuplicateGroupHeading);
-                    }
-                    items.push(ClassifiedChild::Group { kind, node: child });
+                MarkerState::Valid(found) if found != kind => {
+                    fail = Some(GroupingSkipCode::RenamedMarkedHeading);
                 }
-                MarkerState::Valid(_) | MarkerState::Mismatch => {
+                MarkerState::Mismatch => {
                     fail = Some(GroupingSkipCode::RenamedMarkedHeading);
                 }
                 MarkerState::Malformed => {
                     fail = Some(GroupingSkipCode::MalformedOwnership);
                 }
-                MarkerState::Missing => {
+                MarkerState::Valid(_) | MarkerState::Missing => {
                     if adoptable_group_body(child, ctx) {
                         if seen_groups
                             .insert(kind, child.heading_line)
@@ -687,7 +687,7 @@ fn classify_children<'a>(
                         }
                         items
                             .push(ClassifiedChild::Group { kind, node: child });
-                    } else {
+                    } else if !misplaced_here {
                         fail = Some(GroupingSkipCode::OwnershipCollision);
                     }
                 }

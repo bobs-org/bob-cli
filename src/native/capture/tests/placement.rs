@@ -237,7 +237,6 @@ fn tasks_section_inserts_below_generated_status_badges() {
     const GROUP: &str = concat!(
         "\n",
         "### Next & In Progress\n",
-        "<!-- bob:task-status-group:v1:active -->\n",
         "\n",
         "- [*] #task active\n",
     );
@@ -267,6 +266,17 @@ fn tasks_section_inserts_below_generated_status_badges() {
         insert_task_line(legacy_prose, TASK),
         (
             format!("## Tasks\n<!-- bob:task-status-badges:v1 -->\n\n{TASK}\nProject context.\n"),
+            Placement::Inserted,
+        )
+    );
+
+    let unlinked_row = "[`⚪ 0 open`](#Tasks) · `🔵 0 next/wip` · `🔴 0 blocked` · `🟢 1 done/canceled`\n";
+    let unlinked_group = "\n### Done & Canceled\n\n- [x] #task done\n";
+    let unlinked = format!("## Tasks\n{unlinked_row}{unlinked_group}");
+    assert_eq!(
+        insert_task_line(&unlinked, TASK),
+        (
+            format!("## Tasks\n{unlinked_row}\n{TASK}\n{unlinked_group}"),
             Placement::Inserted,
         )
     );

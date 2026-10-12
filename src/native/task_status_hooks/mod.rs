@@ -131,8 +131,8 @@ area/project Tasks sections are grouped into generated child headings: \
 Next & In Progress, Blocked, and Done & Canceled. Ready [ ] tasks and \
 introductory prose stay in the unheaded intake where ordinary capture adds \
 new tasks. Decorated containers carry a linked status-count badge row, authored \
-topic headings keep their local context, generated groups use hidden ownership \
-comments, and unsupported containers are warned and left \
+topic headings keep their local context, generated groups exist \
+only while they hold a task, and unsupported containers are warned and left \
 unchanged. Grouping excludes daily notes, the selected previous daily, \
 ordinary notes, archives, generated notes, and templates.\n\n\
 Only Markdown checkbox lines allowed by the Obsidian Tasks globalFilter are \

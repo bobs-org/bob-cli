@@ -5,8 +5,6 @@ pub(super) struct GroupingPlan<'a> {
     pub(super) intake_staying: Vec<DirectPiece<'a>>,
     pub(super) recovered: Vec<&'a TaskBlock<'a>>,
     pub(super) groups: BTreeMap<GroupKind, Vec<&'a TaskBlock<'a>>>,
-    pub(super) group_leading: BTreeMap<GroupKind, &'a str>,
-    pub(super) group_trailing: BTreeMap<GroupKind, &'a str>,
     pub(super) open_count: usize,
     pub(super) counts: [usize; 3],
     pub(super) moved_blocks: Vec<MovedBlock>,
@@ -75,15 +73,6 @@ pub(super) fn grouping_plan<'a>(
         }
     }
 
-    let mut group_leading = BTreeMap::new();
-    let mut group_trailing = BTreeMap::new();
-    for kind in GroupKind::ALL {
-        if let Some(group) = parsed.groups.get(&kind) {
-            group_leading.insert(kind, group.leading);
-            group_trailing.insert(kind, group.trailing);
-        }
-    }
-
     let counts = [
         groups.get(&GroupKind::Active).map_or(0, Vec::len),
         groups.get(&GroupKind::Blocked).map_or(0, Vec::len),
@@ -97,8 +86,6 @@ pub(super) fn grouping_plan<'a>(
         intake_staying,
         recovered,
         groups,
-        group_leading,
-        group_trailing,
         open_count,
         counts,
         moved_blocks,
@@ -152,6 +139,10 @@ pub(super) fn emit_grouped_body(
 
     if emit_decorations {
         for kind in GroupKind::ALL {
+            let tasks = plan.groups.get(&kind).map_or(&[][..], Vec::as_slice);
+            if tasks.is_empty() {
+                continue;
+            }
             let group = emit_group(node.level + 1, kind, plan, newline);
             push_block(&mut body, &group, newline);
         }
@@ -188,7 +179,7 @@ fn render_badges(
         .zip(counts.iter())
         .map(|((emoji, label), (count, group))| {
             let label = format!("`{emoji} {count} {label}`");
-            if !linked {
+            if !linked || (group.is_some() && *count == 0) {
                 return label;
             }
             let anchor = match group {
@@ -290,39 +281,89 @@ fn emit_group(
     newline: &str,
 ) -> String {
     let hashes = "#".repeat(level);
-    let mut buf = format!(
-        "{hashes} {title}{newline}{marker}{newline}",
-        title = kind.title(),
-        marker = kind.marker()
-    );
-    let leading = plan.group_leading.get(&kind).copied().unwrap_or("");
-    let trailing = plan.group_trailing.get(&kind).copied().unwrap_or("");
+    let mut buf =
+        format!("{hashes} {title}{newline}{newline}", title = kind.title(),);
     let tasks = plan.groups.get(&kind).map_or(&[][..], Vec::as_slice);
-    let leading = trim_blank_edges(leading, newline);
-    let trailing = trim_blank_edges(trailing, newline);
-    if !leading.is_empty() || !tasks.is_empty() || !trailing.is_empty() {
-        buf.push_str(newline);
-    }
-    if !leading.is_empty() {
-        buf.push_str(leading);
-        if !leading.ends_with('\n') {
-            buf.push_str(newline);
-        }
-        if !tasks.is_empty() {
-            ensure_single_trailing_newline(&mut buf, newline);
-        }
-    }
     for task in tasks {
         push_task(&mut buf, task.raw, newline);
     }
-    if !trailing.is_empty() {
-        ensure_trailing_blank(&mut buf, newline);
-        buf.push_str(trailing);
-        if !trailing.ends_with('\n') {
-            buf.push_str(newline);
-        }
-    }
     buf
+}
+
+pub(super) fn apply_section_end_rule(
+    emitted: String,
+    original: &str,
+) -> String {
+    let trailing = trailing_whitespace_run(original);
+    let stripped = strip_trailing_whitespace_lines(&emitted);
+    format!("{stripped}{trailing}")
+}
+
+fn split_preserved_lines(value: &str) -> Vec<(&str, &str)> {
+    let mut lines = Vec::new();
+    let mut start = 0;
+    for (offset, byte) in value.bytes().enumerate() {
+        if byte != b'\n' {
+            continue;
+        }
+        let end = offset + 1;
+        let raw = &value[start..end];
+        let (content, ending) = markdown::split_line_ending(raw);
+        lines.push((content, ending));
+        start = end;
+    }
+    if start < value.len() {
+        let raw = &value[start..];
+        let (content, ending) = markdown::split_line_ending(raw);
+        lines.push((content, ending));
+    } else if value.is_empty() {
+        // No lines.
+    }
+    lines
+}
+
+fn trailing_whitespace_run(section: &str) -> &str {
+    let lines = split_preserved_lines(section);
+    let mut start = section.len();
+    let mut offset = section.len();
+    // Walk backwards over raw line lengths.
+    let mut raws: Vec<&str> = Vec::new();
+    let mut cursor = 0;
+    for (content, ending) in &lines {
+        let len = content.len() + ending.len();
+        raws.push(&section[cursor..cursor + len]);
+        cursor += len;
+    }
+    for (index, (content, _)) in lines.iter().enumerate().rev() {
+        if !content.trim().is_empty() {
+            break;
+        }
+        start -= raws[index].len();
+        offset = start;
+    }
+    &section[offset..]
+}
+
+fn strip_trailing_whitespace_lines(emitted: &str) -> &str {
+    let lines = split_preserved_lines(emitted);
+    if lines.is_empty() {
+        return emitted;
+    }
+    let mut raws: Vec<&str> = Vec::new();
+    let mut cursor = 0;
+    for (content, ending) in &lines {
+        let len = content.len() + ending.len();
+        raws.push(&emitted[cursor..cursor + len]);
+        cursor += len;
+    }
+    let mut end = emitted.len();
+    for (index, (content, _)) in lines.iter().enumerate().rev() {
+        if !content.trim().is_empty() {
+            break;
+        }
+        end -= raws[index].len();
+    }
+    &emitted[..end]
 }
 
 fn push_task(buf: &mut String, raw: &str, newline: &str) {
@@ -362,21 +403,6 @@ fn ensure_single_trailing_newline(buf: &mut String, newline: &str) {
     if !buf.ends_with('\n') {
         buf.push_str(newline);
     }
-}
-
-fn trim_blank_edges<'a>(raw: &'a str, newline: &str) -> &'a str {
-    let mut value = raw;
-    while let Some(stripped) = value.strip_prefix(newline) {
-        value = stripped;
-    }
-    while let Some(stripped) = value.strip_suffix(newline) {
-        if stripped.ends_with('\n') || stripped.is_empty() {
-            value = stripped;
-        } else {
-            break;
-        }
-    }
-    value
 }
 
 fn collapse_internal_blank_runs(buf: &mut String, newline: &str) {
