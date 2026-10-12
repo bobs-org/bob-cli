@@ -814,6 +814,10 @@ fn plan_close_successors(
             reason: blocked.reason,
             waits_on: blocked.waits_on,
             scheduled: blocked.scheduled.clone(),
+            project: blocked
+                .project
+                .as_ref()
+                .map(|path| display_relative(path)),
         })
         .collect::<Vec<_>>();
     // Task blocks: successors keep the unblocked role, as for `!`.

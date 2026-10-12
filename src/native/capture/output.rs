@@ -567,6 +567,8 @@ pub(super) struct TaskCompleteStillBlockedJson {
     pub(super) waits_on: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) scheduled: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) project: Option<String>,
 }
 
 /// Summary JSON for one item's dependency effects, reported as
@@ -2135,6 +2137,11 @@ pub(super) fn print_human_successor_rows(
                 .as_deref()
                 .map(|date| format!("until {date}"))
                 .unwrap_or_else(|| "scheduled".to_string()),
+            "project" => blocked
+                .project
+                .as_deref()
+                .map(|path| format!("project {path}"))
+                .unwrap_or_else(|| "project".to_string()),
             _ => format!("waits on {} more", blocked.waits_on),
         };
         if blocked.text.is_empty() {
@@ -2173,6 +2180,7 @@ fn not_linked_reason(reason: &str) -> &str {
         "not_planned_today" => "not planned today",
         "breaker" => "not linked, more than 5",
         "project_task" => "project task",
+        "project_member" => "project member",
         "hidden" => "hidden",
         "disabled" => "linking off",
         _ => reason,

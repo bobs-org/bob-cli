@@ -16,6 +16,7 @@ use std::path::{Component, Path, PathBuf};
 
 use chrono::NaiveDate;
 
+use super::super::freshness::placement::UnblockScope;
 use super::super::{
     capture_block_ids::mint_block_id,
     capture_language::is_reserved_project_task_id,
@@ -31,6 +32,10 @@ use super::super::{
         TasksSettings,
     },
     vault_links::NoteIndex,
+};
+use super::project_close::{
+    apply_recovery_writes, project_states_for_files, project_still_blocks,
+    recover_project_members, unblock_scope_for,
 };
 use crate::native::capture_dependency_tasks::has_hide_tag;
 
@@ -146,6 +151,8 @@ pub(crate) struct StillBlockedRow {
     pub reason: &'static str,
     pub waits_on: usize,
     pub scheduled: Option<String>,
+    /// Vault-relative project note when `reason` is `project`.
+    pub project: Option<PathBuf>,
 }
 
 /// Output of [`plan_successors`].
@@ -357,7 +364,7 @@ struct DayEntry {
 
 /// Slot anchor: insert after an anchor bullet's subtree.
 #[derive(Debug, Clone)]
-struct SlotAnchor {
+pub(crate) struct SlotAnchor {
     entry_index: usize,
     bullet_end: usize,
     indent: String,
@@ -490,19 +497,21 @@ fn successor_link_text(
 }
 
 /// One dependent's verdict before row filtering.
-struct DependentVerdict {
-    file: usize,
-    task: usize,
-    preds: Vec<usize>,
-    anchor: Option<SlotAnchor>,
-    kind: VerdictKind,
-    open_count: usize,
+#[derive(Debug, Clone)]
+pub(crate) struct DependentVerdict {
+    pub(crate) file: usize,
+    pub(crate) task: usize,
+    pub(crate) preds: Vec<usize>,
+    pub(crate) anchor: Option<SlotAnchor>,
+    pub(crate) kind: VerdictKind,
+    pub(crate) open_count: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum VerdictKind {
+pub(crate) enum VerdictKind {
     StillBlockedWaitsOn,
     StillBlockedScheduled,
+    StillBlockedProject,
     Recover(&'static str),
     Successor,
 }
@@ -527,6 +536,7 @@ pub(crate) fn plan_successors(input: SuccessorInput) -> SuccessorPlan {
         });
     }
     let states = task_dependency_states(&files, &BTreeSet::new());
+    let project_states = project_states_for_files(&files, &states, input.today);
     let day = match input.pre_day.as_deref() {
         Some(text) => DayView::parse(text, &input.day_relative, input.index),
         None => DayView::empty(),
@@ -579,6 +589,11 @@ pub(crate) fn plan_successors(input: SuccessorInput) -> SuccessorPlan {
                 VerdictKind::StillBlockedWaitsOn
             } else if task.scheduled.is_some_and(|date| date > input.today) {
                 VerdictKind::StillBlockedScheduled
+            } else if project_still_blocks(file_index, task, &project_states)
+                .is_some()
+            {
+                // PDC1 (§13.16): own reasons gone, project reasons remain.
+                VerdictKind::StillBlockedProject
             } else if task
                 .block_id
                 .as_deref()
@@ -620,6 +635,16 @@ pub(crate) fn plan_successors(input: SuccessorInput) -> SuccessorPlan {
             });
         }
     }
+
+    // PDC2/PDC3 (§13.16): a recovering `^prj` recovers its
+    // residents recover-only, outside the breaker.
+    recover_project_members(
+        &mut verdicts,
+        &files,
+        &states,
+        &project_states,
+        input.today,
+    );
 
     // Order successors by anchor ledger position, then note path, then
     // line (§12.2 ORDER).
@@ -966,41 +991,52 @@ fn apply_verdicts(
         DayView::parse(&inserted_base, &input.day_relative, input.index);
 
     // Apply note edits: successor statuses plus mints, then recovered
-    // ranks. Line layout never changes (in-place status swaps and
-    // end-of-line appends), so snapshot line numbers stay valid.
+    // ranks with project-close writes. No line is added or removed
+    // (in-place status swaps plus field and tag edits), so snapshot
+    // line numbers stay valid.
     let mut edited: BTreeMap<PathBuf, String> = BTreeMap::new();
-    let mut edit_line = |relative: &PathBuf,
-                         line_index: usize,
-                         new_status: Option<char>,
-                         mint: Option<&str>| {
-        let staged = edited.get(relative).cloned().unwrap_or_else(|| {
-            files
-                .iter()
-                .find(|file| &file.relative_path == relative)
-                .map(|file| file.contents.clone())
-                .unwrap_or_default()
-        });
-        let mut lines: Vec<String> =
-            staged.split('\n').map(str::to_string).collect();
-        if let Some(line) = lines.get_mut(line_index) {
-            let trimmed_end =
-                line.strip_suffix('\r').unwrap_or(line).to_string();
-            let mut updated = match new_status {
-                Some(status) => set_task_line_status(&trimmed_end, status)
-                    .unwrap_or(trimmed_end.clone()),
-                None => trimmed_end,
-            };
-            if let Some(id) = mint {
-                updated.push_str(" ^");
-                updated.push_str(id);
+    let mut edit_line =
+        |relative: &PathBuf,
+         line_index: usize,
+         new_status: Option<char>,
+         mint: Option<&str>,
+         recovery: Option<(NaiveDate, UnblockScope)>| {
+            let staged = edited.get(relative).cloned().unwrap_or_else(|| {
+                files
+                    .iter()
+                    .find(|file| &file.relative_path == relative)
+                    .map(|file| file.contents.clone())
+                    .unwrap_or_default()
+            });
+            let mut lines: Vec<String> =
+                staged.split('\n').map(str::to_string).collect();
+            if let Some(line) = lines.get_mut(line_index) {
+                let trimmed_end =
+                    line.strip_suffix('\r').unwrap_or(line).to_string();
+                let mut updated = match new_status {
+                    Some(status) => set_task_line_status(&trimmed_end, status)
+                        .unwrap_or(trimmed_end.clone()),
+                    None => trimmed_end,
+                };
+                if let Some(id) = mint {
+                    updated.push_str(" ^");
+                    updated.push_str(id);
+                }
+                if let Some((today, scope)) = recovery {
+                    // PDC2/UB1 (§13.16, freshness.md §10b): recovered rows
+                    // lose `#prj_is_blocked`, and Ready landings write
+                    // `[unblocked::]`. Successor links never reach here.
+                    let landed = new_status.unwrap_or(' ');
+                    updated =
+                        apply_recovery_writes(&updated, today, landed, &scope);
+                }
+                if line.ends_with('\r') {
+                    updated.push('\r');
+                }
+                *line = updated;
             }
-            if line.ends_with('\r') {
-                updated.push('\r');
-            }
-            *line = updated;
-        }
-        edited.insert(relative.clone(), lines.join("\n"));
-    };
+            edited.insert(relative.clone(), lines.join("\n"));
+        };
     let successor_new_status = |previous: char| match previous {
         '?' | ' ' => '*',
         _ => previous,
@@ -1017,10 +1053,13 @@ fn apply_verdicts(
             task.line_index,
             Some(successor_new_status(task.status)),
             mint,
+            None,
         );
     }
     // Recovered ranks derive from the post-gesture day text: `*` when the
     // dependent keeps a live link there, else ` `; only `?` moves.
+    // Recovered rows also take the project-close writes (tag strip plus
+    // `[unblocked::]` on Ready landings).
     for verdict in verdicts.iter() {
         let VerdictKind::Recover(_) = verdict.kind else {
             continue;
@@ -1035,11 +1074,18 @@ fn apply_verdicts(
                 .live
                 .contains_key(&(file.relative_path.clone(), id.clone()))
         });
+        let landed = if live { '*' } else { ' ' };
+        let scope = unblock_scope_for(
+            &file.relative_path,
+            &raw_task_line(&file.contents, task.line_index),
+            live,
+        );
         edit_line(
             &file.relative_path,
             task.line_index,
-            Some(if live { '*' } else { ' ' }),
+            Some(landed),
             None,
+            Some((input.today, scope)),
         );
     }
     // Compose one coherent day post-image when successor bullets were
@@ -1198,6 +1244,7 @@ fn apply_verdicts(
                     reason: "waits_on",
                     waits_on: verdict.open_count,
                     scheduled: None,
+                    project: None,
                 });
             }
             VerdictKind::StillBlockedScheduled => {
@@ -1218,6 +1265,26 @@ fn apply_verdicts(
                     scheduled: task
                         .scheduled
                         .map(|date| date.format("%Y-%m-%d").to_string()),
+                    project: None,
+                });
+            }
+            VerdictKind::StillBlockedProject => {
+                let block_id = task.block_id.clone().unwrap_or_default();
+                let line = day_line(
+                    &file.relative_path,
+                    &block_id,
+                    task.line_index + 1,
+                );
+                plan.still_blocked.push(StillBlockedRow {
+                    note_path: file.relative_path.clone(),
+                    block_id,
+                    line,
+                    text: task.description.clone(),
+                    status_symbol: task.status,
+                    reason: "project",
+                    waits_on: 0,
+                    scheduled: None,
+                    project: Some(file.relative_path.clone()),
                 });
             }
             VerdictKind::Recover(reason) => {

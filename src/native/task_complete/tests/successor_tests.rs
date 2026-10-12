@@ -812,3 +812,343 @@ fn closing_placement_takes_lone_stub() {
     assert!(text.contains("- [ ] () \u{2014} BOB\n\t- [[sase#^next]]\n"));
     assert!(!text.contains("\t- \n"));
 }
+
+fn project_note(body: &str) -> String {
+    format!("---\ntype: [[project]]\nstatus: wip\n---\n{body}")
+}
+
+// PDC1 (§13.16): D lives in a still-blocked project; this close
+// removed D's last own prerequisite. D stays `[?]`;
+// `still_blocked{reason: project}` with the project path; no
+// successor link and no note edit.
+#[test]
+fn pdc1_dependent_in_still_blocked_project_stays_blocked() {
+    let vault_index = index(&["sase.md", "job.md", "proj.md", "20261005.md"]);
+    let plan = run(
+        vec![pred("sase.md", "done-p", "done-p", "Done P", true)],
+        &[
+            (
+                "sase.md",
+                "- [x] #task Done P [id:: done-p] ^done-p\n",
+            ),
+            (
+                "job.md",
+                "- [ ] #task LinkedIn [id:: job__linkedin] ^linkedin\n",
+            ),
+            (
+                "proj.md",
+                &project_note(concat!(
+                    "- [?] #task Apply [dependsOn:: job__linkedin] [id:: apply] ^prj\n",
+                    "- [?] #task Resident [dependsOn:: done-p] [id:: res] ^res\n",
+                )),
+            ),
+        ],
+        Some(&day_with_fix_link()),
+        "20261005.md",
+        true,
+        &vault_index,
+    );
+    assert!(plan.unblocked.is_empty(), "{:?}", plan.unblocked);
+    assert_eq!(plan.still_blocked.len(), 1);
+    let row = &plan.still_blocked[0];
+    assert_eq!(row.block_id, "res");
+    assert_eq!(row.reason, "project");
+    assert_eq!(row.status_symbol, '?');
+    assert_eq!(row.project, Some(PathBuf::from("proj.md")));
+    assert!(plan.new_day_text.is_none());
+    assert!(plan.changed_files.is_empty());
+}
+
+// PDC2 (§13.16): closing P fully unblocks `^prj`; residents with no
+// own remaining reason recover-only (`project_member`), never
+// successor-linked, outside the breaker, losing `#prj_is_blocked`
+// and gaining `[unblocked::]` (UB1). Six residents that also depend
+// on P would have tripped the breaker as successors.
+#[test]
+fn pdc2_prj_recovery_recovers_residents_outside_breaker() {
+    let vault_index = index(&["sase.md", "proj.md", "20261005.md"]);
+    let mut body =
+        "- [?] #task Apply [fresh:: 2026-10-01] [dependsOn:: done-p] [id:: apply] ^prj\n"
+            .to_string();
+    for n in 1..=6 {
+        body.push_str(&format!(
+            "- [?] #task Pitch {n} [fresh:: 2026-10-01] #prj_is_blocked [id:: pitch-{n}] ^pitch-{n}\n"
+        ));
+    }
+    let day =
+        day_with_fix_link().replace("[[sase#^fix-apollo]]", "[[sase#^done-p]]");
+    let plan = run(
+        vec![pred("sase.md", "done-p", "done-p", "Done P", true)],
+        &[
+            (
+                "sase.md",
+                concat!(
+                    "- [x] #task Done P [id:: done-p] ^done-p\n",
+                    "- [?] #task Outside [fresh:: 2026-10-01] [dependsOn:: done-p] [id:: outside] ^outside\n",
+                ),
+            ),
+            ("proj.md", &project_note(&body)),
+        ],
+        Some(&day),
+        "20261005.md",
+        true,
+        &vault_index,
+    );
+    let members: Vec<_> = plan
+        .unblocked
+        .iter()
+        .filter(|row| row.not_linked == Some("project_member"))
+        .collect();
+    assert_eq!(members.len(), 6, "{:?}", plan.unblocked);
+    for row in &members {
+        assert_eq!(row.previous_status_symbol, '?');
+        assert_eq!(row.status_symbol, ' ');
+        assert!(row.link.is_none());
+    }
+    let prj = plan
+        .unblocked
+        .iter()
+        .find(|row| row.block_id == "prj")
+        .expect("prj recovered");
+    assert_eq!(prj.not_linked, Some("project_task"));
+    assert!(prj.link.is_none());
+    // The one genuine successor still links: the member recoveries
+    // sit outside the breaker.
+    let outside = plan
+        .unblocked
+        .iter()
+        .find(|row| row.block_id == "outside")
+        .expect("outside successor");
+    assert!(outside.link.is_some());
+    assert_eq!(outside.not_linked, None);
+    assert!(plan.still_blocked.is_empty());
+    let updated = plan
+        .changed_files
+        .get(&PathBuf::from("proj.md"))
+        .expect("proj.md changed");
+    assert!(!updated.contains("#prj_is_blocked"), "{updated}");
+    assert!(updated.contains("- [ ] #task Apply"), "{updated}");
+    assert!(updated.contains("- [ ] #task Pitch 1"), "{updated}");
+    assert!(updated.contains("[unblocked:: 2026-10-05]"), "{updated}");
+}
+
+// PDC3 (§13.16): same as PDC2, but a resident with its own open
+// prerequisite stays Blocked.
+#[test]
+fn pdc3_resident_with_own_prerequisite_stays_blocked() {
+    let vault_index = index(&["sase.md", "proj.md", "20261005.md"]);
+    let plan = run(
+        vec![pred("sase.md", "done-p", "done-p", "Done P", true)],
+        &[
+            (
+                "sase.md",
+                "- [x] #task Done P [id:: done-p] ^done-p\n- [ ] #task Extra [id:: extra] ^extra\n",
+            ),
+            (
+                "proj.md",
+                &project_note(concat!(
+                    "- [?] #task Apply [fresh:: 2026-10-01] [dependsOn:: done-p] [id:: apply] ^prj\n",
+                    "- [?] #task Pitch [fresh:: 2026-10-01] [id:: pitch] ^pitch\n",
+                    "- [?] #task Sequenced [fresh:: 2026-10-01] [dependsOn:: extra] [id:: seq] ^seq\n",
+                )),
+            ),
+        ],
+        Some(&day_with_fix_link()),
+        "20261005.md",
+        true,
+        &vault_index,
+    );
+    let ids: Vec<&str> = plan
+        .unblocked
+        .iter()
+        .map(|row| row.block_id.as_str())
+        .collect();
+    assert!(ids.contains(&"prj"), "{ids:?}");
+    assert!(ids.contains(&"pitch"), "{ids:?}");
+    assert!(!ids.contains(&"seq"), "{ids:?}");
+    let pitch = plan
+        .unblocked
+        .iter()
+        .find(|row| row.block_id == "pitch")
+        .expect("pitch");
+    assert_eq!(pitch.not_linked, Some("project_member"));
+    assert!(pitch.link.is_none());
+    assert!(plan.still_blocked.is_empty());
+    let updated = plan
+        .changed_files
+        .get(&PathBuf::from("proj.md"))
+        .expect("proj.md changed");
+    assert!(updated.contains("- [?] #task Sequenced"), "{updated}");
+    assert!(updated.contains("- [ ] #task Pitch"), "{updated}");
+}
+
+// UB1 at close level (`docs/freshness.md` §10b): a Ready recovery
+// with `[fresh::]` writes `[unblocked:: today]`.
+#[test]
+fn ub_close_ready_recovery_writes_unblocked() {
+    let vault_index = index(&["sase.md", "20261005.md"]);
+    let plan = run(
+        vec![pred("sase.md", "p", "p", "P", true)],
+        &[(
+            "sase.md",
+            concat!(
+                "- [x] #task P [id:: p] ^p\n",
+                "- [?] #task D [fresh:: 2026-10-01] [dependsOn:: p] [id:: d] ^d\n",
+            ),
+        )],
+        Some(&day_with_fix_link()),
+        "20261005.md",
+        true,
+        &vault_index,
+    );
+    // No anchor for P: D recovers `not_planned_today` to Ready.
+    let row = plan
+        .unblocked
+        .iter()
+        .find(|row| row.block_id == "d")
+        .expect("d recovered");
+    assert_eq!(row.status_symbol, ' ');
+    let updated = plan
+        .changed_files
+        .get(&PathBuf::from("sase.md"))
+        .expect("sase.md changed");
+    assert!(updated.contains("[unblocked:: 2026-10-05]"), "{updated}");
+}
+
+// UB2 at close level: a recovered NEW row (no `[fresh::]`) writes no
+// `[unblocked::]`.
+#[test]
+fn ub_close_new_recovery_skips_unblocked() {
+    let vault_index = index(&["sase.md", "20261005.md"]);
+    let plan = run(
+        vec![pred("sase.md", "p", "p", "P", true)],
+        &[(
+            "sase.md",
+            concat!(
+                "- [x] #task P [id:: p] ^p\n",
+                "- [?] #task D [dependsOn:: p] [id:: d] ^d\n",
+            ),
+        )],
+        Some(&day_with_fix_link()),
+        "20261005.md",
+        true,
+        &vault_index,
+    );
+    let updated = plan
+        .changed_files
+        .get(&PathBuf::from("sase.md"))
+        .expect("sase.md changed");
+    assert!(updated.contains("- [ ] #task D"), "{updated}");
+    assert!(!updated.contains("[unblocked::"), "{updated}");
+}
+
+// UB3 at close level: a recovered scheduled tickler
+// (`fresh < scheduled ≤ today`) writes no `[unblocked::]`.
+#[test]
+fn ub_close_scheduled_tickler_skips_unblocked() {
+    let vault_index = index(&["sase.md", "20261005.md"]);
+    let plan = run(
+        vec![pred("sase.md", "p", "p", "P", true)],
+        &[(
+            "sase.md",
+            concat!(
+                "- [x] #task P [id:: p] ^p\n",
+                "- [?] #task D [fresh:: 2026-10-01] [dependsOn:: p] [scheduled:: 2026-10-04] [id:: d] ^d\n",
+            ),
+        )],
+        Some(&day_with_fix_link()),
+        "20261005.md",
+        true,
+        &vault_index,
+    );
+    let updated = plan
+        .changed_files
+        .get(&PathBuf::from("sase.md"))
+        .expect("sase.md changed");
+    assert!(updated.contains("- [ ] #task D"), "{updated}");
+    assert!(!updated.contains("[unblocked::"), "{updated}");
+}
+
+// UB4 at close level: a recovery that lands in Next (a kept live
+// link) writes no `[unblocked::]`; the lane walk covers it.
+#[test]
+fn ub_close_next_landing_skips_unblocked() {
+    let vault_index = index(&["sase.md", "20261005.md"]);
+    let day = concat!(
+        "## Pomodoros\n",
+        "- [ ] (**0920-0950**) \u{2014} CAPTURE\n",
+        "  - [[sase#^p]]\n",
+        "- [ ] () \u{2014} FIX\n",
+        "  - [[sase#^d]]\n",
+    );
+    let plan = run(
+        vec![pred("sase.md", "p", "p", "P", true)],
+        &[(
+            "sase.md",
+            concat!(
+                "- [x] #task P [id:: p] ^p\n",
+                "- [?] #task D [fresh:: 2026-10-01] [dependsOn:: p] [id:: d] ^d\n",
+            ),
+        )],
+        Some(&day),
+        "20261005.md",
+        true,
+        &vault_index,
+    );
+    let row = plan
+        .unblocked
+        .iter()
+        .find(|row| row.block_id == "d")
+        .expect("d recovered");
+    assert_eq!(row.not_linked, Some("already_planned"));
+    assert_eq!(row.status_symbol, '*');
+    let updated = plan
+        .changed_files
+        .get(&PathBuf::from("sase.md"))
+        .expect("sase.md changed");
+    assert!(!updated.contains("[unblocked::"), "{updated}");
+}
+
+// UB6 at close level: a hidden resident still recovers with its
+// `^prj`, but the hidden scope skips `[unblocked::]`.
+#[test]
+fn ub_close_hidden_resident_recovers_without_unblocked() {
+    let vault_index = index(&["sase.md", "proj.md", "20261005.md"]);
+    let plan = run(
+        vec![pred("sase.md", "done-p", "done-p", "Done P", true)],
+        &[
+            (
+                "sase.md",
+                "- [x] #task Done P [id:: done-p] ^done-p\n",
+            ),
+            (
+                "proj.md",
+                &project_note(concat!(
+                    "- [?] #task Apply [fresh:: 2026-10-01] [dependsOn:: done-p] [id:: apply] ^prj\n",
+                    "- [?] #task Quiet [fresh:: 2026-10-01] #hide [id:: quiet] ^quiet\n",
+                )),
+            ),
+        ],
+        Some(&day_with_fix_link()),
+        "20261005.md",
+        true,
+        &vault_index,
+    );
+    let quiet = plan
+        .unblocked
+        .iter()
+        .find(|row| row.block_id == "quiet")
+        .expect("quiet recovered");
+    assert_eq!(quiet.not_linked, Some("project_member"));
+    assert_eq!(quiet.status_symbol, ' ');
+    let updated = plan
+        .changed_files
+        .get(&PathBuf::from("proj.md"))
+        .expect("proj.md changed");
+    let quiet_line = updated
+        .lines()
+        .find(|line| line.contains("^quiet"))
+        .expect("quiet line");
+    assert!(quiet_line.contains("- [ ] #task Quiet"), "{quiet_line}");
+    assert!(!quiet_line.contains("[unblocked::"), "{quiet_line}");
+}

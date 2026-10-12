@@ -403,6 +403,10 @@ pub(super) fn plan_task_complete_item(
             reason: blocked.reason,
             waits_on: blocked.waits_on,
             scheduled: blocked.scheduled.clone(),
+            project: blocked
+                .project
+                .as_ref()
+                .map(|path| display_relative(path)),
         })
         .collect::<Vec<_>>();
     // Clean display text for the root task with the configured global

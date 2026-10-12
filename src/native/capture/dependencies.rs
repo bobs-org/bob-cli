@@ -2670,6 +2670,14 @@ mod tests {
             "done.md",
             "- [x] #task Named done [id:: donename] ^donename\n",
         );
+        // A project note whose `^prj` carries only an inline future
+        // date matters only through residents that have their own
+        // markers, which keep the note in the snapshot.
+        write_note(
+            root,
+            "proj-sched.md",
+            "---\ntype: [[project]]\nstatus: wip\n---\n- [?] #task Ship [scheduled:: 2099-01-01] ^prj\n- [?] #task Member [dependsOn:: done-root] [id:: sched-member] ^sched-member\n",
+        );
         let settings = note_tasks::read_settings(root);
         let today = chrono::NaiveDate::from_ymd_opt(2026, 10, 5).expect("date");
         let completed: BTreeSet<String> = ["done-root", "paren-root"]
@@ -2734,6 +2742,10 @@ mod tests {
             base.base.contains_key(Path::new("done.md")),
             "a note merely named done.md still counts"
         );
+        assert!(
+            base.base.contains_key(Path::new("proj-sched.md")),
+            "a project note with an inline-date `^prj` stays via its resident's markers"
+        );
         let filtered_snapshot = base.overlaid(staged);
 
         // The prefiltered snapshot is smaller by design (prose.md is
@@ -2768,5 +2780,11 @@ mod tests {
             .filter_map(|dependent| dependent.block_id.as_deref())
             .collect();
         assert_eq!(recovered, BTreeSet::from(["waiter", "pwaiter", "staged"]));
+        // PDC1 in recovery: the date-blocked project's resident lost
+        // its last own prerequisite but stays `[?]`.
+        assert!(
+            !recovered.contains("sched-member"),
+            "a resident of a still-blocked project never recovers"
+        );
     }
 }

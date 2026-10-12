@@ -1016,7 +1016,7 @@ fields:
   - `day_file` is vault-relative.
   - `entry_name` is `""` when the entry is unnamed.
 - `not_linked` is one of `already_planned`, `not_planned_today`,
-  `breaker`, `project_task`, `hidden`, `disabled`.
+  `breaker`, `project_task`, `project_member`, `hidden`, `disabled`.
   - The cycler-only model adds `failed` and `cancelled`; Rust never
     emits them.
 
@@ -1025,9 +1025,11 @@ fields:
 - `reason` is `waits_on`, `scheduled`, or `project`.
 - `waits_on` counts the open prerequisites left.
 - `scheduled` is set only for `scheduled`, otherwise `null`.
-- `project` is a resident whose project still has an open
-  prerequisite or a future `scheduled` date after this gesture (§13).
-  `^prj` reports only its own reasons, never a `project_*` reason.
+- `project` (the reason) is a resident whose project still has an
+  open prerequisite or a future `scheduled` date after this gesture
+  (§13). The optional `project` field is that note's vault-relative
+  path. `^prj` reports only its own reasons, never a `project_*`
+  reason.
 - `trigger` is `"dependency"` or `"project_empty"`, same rule as
   `unblocked[]`.
 

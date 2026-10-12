@@ -5,6 +5,7 @@
 //! No user-visible behavior changes here; later phases call into this
 //! module. Keep everything `pub(crate)`.
 
+pub(crate) mod project_close;
 pub(crate) mod recovery;
 pub(crate) mod retirement;
 pub(crate) mod successors;

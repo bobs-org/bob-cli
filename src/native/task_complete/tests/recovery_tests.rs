@@ -118,3 +118,119 @@ fn dependent_without_completed_prerequisite_stays_blocked() {
     assert!(recovery.recovered.is_empty());
     assert!(recovery.changed_files.is_empty());
 }
+
+fn project_note(body: &str) -> String {
+    format!("---\ntype: [[project]]\nstatus: wip\n---\n{body}")
+}
+
+fn recovered_ids(
+    recovery: &super::super::recovery::DependentRecovery,
+) -> BTreeSet<&str> {
+    recovery
+        .recovered
+        .iter()
+        .filter_map(|row| row.block_id.as_deref())
+        .collect()
+}
+
+// PDC1 (§13.16): a resident whose project is still blocked stays
+// `[?]`, even though this completion removed its last own reason.
+#[test]
+fn pdc1_project_resident_stays_blocked() {
+    let recovery = recover_blocked_dependents(
+        snapshot(&[
+            (
+                "sase.md",
+                "- [x] #task Done P [id:: done-p] ^done-p\n",
+            ),
+            (
+                "job.md",
+                "- [ ] #task LinkedIn [id:: job__linkedin] ^linkedin\n",
+            ),
+            (
+                "proj.md",
+                &project_note(concat!(
+                    "- [?] #task Apply [dependsOn:: job__linkedin] [id:: apply] ^prj\n",
+                    "- [?] #task Resident [dependsOn:: done-p] [id:: res] ^res\n",
+                )),
+            ),
+        ]),
+        &completed(&["done-p"]),
+        today(),
+        &test_settings(),
+    );
+    assert!(!recovered_ids(&recovery).contains("res"), "{recovery:?}");
+    assert!(recovery.changed_files.is_empty());
+}
+
+// PDC2 (§12.2 PROJECT RECOVERY): a recovered `^prj` recovers its
+// residents with no own reason; Ready recoveries strip
+// `#prj_is_blocked` and write `[unblocked::]` (UB1).
+#[test]
+fn pdc2_prj_recovery_recovers_residents() {
+    let recovery = recover_blocked_dependents(
+        snapshot(&[
+            (
+                "sase.md",
+                "- [x] #task Done P [id:: done-p] ^done-p\n",
+            ),
+            (
+                "proj.md",
+                &project_note(concat!(
+                    "- [?] #task Apply [fresh:: 2026-10-01] [dependsOn:: done-p] [id:: apply] ^prj\n",
+                    "- [?] #task Pitch one [fresh:: 2026-10-01] #prj_is_blocked [id:: pitch-1] ^pitch-1\n",
+                    "- [?] #task Pitch two [id:: pitch-2] ^pitch-2\n",
+                )),
+            ),
+        ]),
+        &completed(&["done-p"]),
+        today(),
+        &test_settings(),
+    );
+    assert_eq!(
+        recovered_ids(&recovery),
+        BTreeSet::from(["prj", "pitch-1", "pitch-2"])
+    );
+    let updated = recovery
+        .changed_files
+        .get(&PathBuf::from("proj.md"))
+        .expect("proj.md changed");
+    assert!(!updated.contains("#prj_is_blocked"), "{updated}");
+    assert!(updated.contains("- [ ] #task Apply"), "{updated}");
+    assert!(updated.contains("- [ ] #task Pitch one"), "{updated}");
+    assert!(updated.contains("[unblocked:: 2026-10-05]"), "{updated}");
+    // UB2: the NEW resident (no `[fresh::]`) recovers without the field.
+    let pitch_two = updated
+        .lines()
+        .find(|line| line.contains("^pitch-2"))
+        .expect("pitch two line");
+    assert!(!pitch_two.contains("[unblocked::"), "{pitch_two}");
+}
+
+// PDC3 (§13.16): a resident with its own open prerequisite stays
+// Blocked when its `^prj` recovers.
+#[test]
+fn pdc3_resident_with_own_prerequisite_stays_blocked() {
+    let recovery = recover_blocked_dependents(
+        snapshot(&[
+            (
+                "sase.md",
+                "- [x] #task Done P [id:: done-p] ^done-p\n- [ ] #task Extra [id:: extra] ^extra\n",
+            ),
+            (
+                "proj.md",
+                &project_note(concat!(
+                    "- [?] #task Apply [dependsOn:: done-p] [id:: apply] ^prj\n",
+                    "- [?] #task Pitch [id:: pitch] ^pitch\n",
+                    "- [?] #task Sequenced [dependsOn:: extra] [id:: seq] ^seq\n",
+                )),
+            ),
+        ]),
+        &completed(&["done-p"]),
+        today(),
+        &test_settings(),
+    );
+    let ids = recovered_ids(&recovery);
+    assert_eq!(ids, BTreeSet::from(["prj", "pitch"]));
+    assert!(!ids.contains("seq"));
+}

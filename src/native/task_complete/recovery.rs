@@ -5,19 +5,29 @@
 //! one definition of "open dependency". This matches the Ctrl+Enter
 //! recovery paragraph in `docs/task-status-hooks.md`: only Blocked
 //! dependents that directly name a completed task, have no other open
-//! dependency in the post-completion snapshot, and have no strictly
-//! future `scheduled` date recover, and they always recover to Ready.
+//! dependency in the post-completion snapshot, have no strictly
+//! future `scheduled` date, and are not still blocked by their
+//! project recover, and they always recover to Ready. When a `^prj`
+//! recovers, residents with no remaining own reason recover with it
+//! (`docs/task-dependencies.md` §12.2 PROJECT RECOVERY); every Ready
+//! recovery takes the project-close writes (tag strip plus
+//! `[unblocked::]`).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use chrono::NaiveDate;
 
+use super::super::capture_language::is_reserved_project_task_id;
 use super::super::{
     capture_task_toggle::set_task_line_status,
     task_status_hooks::{
         parse_tasks, task_dependency_states, FileScan, TasksSettings,
     },
+};
+use super::project_close::{
+    apply_recovery_writes, has_own_remaining_reason, project_states_for_files,
+    project_still_blocks, unblock_scope_for,
 };
 
 /// One recovered dependent.
@@ -46,8 +56,10 @@ pub(crate) struct DependentRecovery {
 /// batch's overlays applied. `completed_ids` holds the batch's completed
 /// task `[id::]` values. A dependent recovers to Ready via
 /// `set_task_line_status` when it is Blocked, names a completed id in its
-/// `dependsOn`, has no other open dependency, and has no strictly future
-/// `scheduled` date. Unresolved ids never block.
+/// `dependsOn`, has no other open dependency, has no strictly future
+/// `scheduled` date, and is not still blocked by its project. When a
+/// `^prj` recovers, residents with no remaining own reason recover too.
+/// Unresolved ids never block.
 pub(crate) fn recover_blocked_dependents<I>(
     snapshot: I,
     completed_ids: &BTreeSet<String>,
@@ -68,10 +80,10 @@ where
         });
     }
     let states = task_dependency_states(&files, &BTreeSet::new());
-    let mut changed_files = BTreeMap::new();
-    let mut recovered = Vec::new();
+    let project_states = project_states_for_files(&files, &states, today);
+    let mut recover: BTreeSet<(usize, usize)> = BTreeSet::new();
+    let mut recovering_projects: BTreeSet<usize> = BTreeSet::new();
     for (file_index, file) in files.iter().enumerate() {
-        let mut updated: Option<String> = None;
         for (task_index, task) in file.tasks.iter().enumerate() {
             if task.status != '?' || !task.status_recognized {
                 continue;
@@ -83,16 +95,65 @@ where
             {
                 continue;
             }
-            let open = states
+            let open_count = states
                 .get(&(file_index, task_index))
-                .map(|state| !state.open_dependency_ids.is_empty())
-                .unwrap_or(false);
-            if open {
+                .map(|state| state.open_dependency_ids.len())
+                .unwrap_or(0);
+            if has_own_remaining_reason(task, open_count, today) {
                 continue;
             }
-            if task.scheduled.is_some_and(|date| date > today) {
+            if project_still_blocks(file_index, task, &project_states).is_some()
+            {
                 continue;
             }
+            recover.insert((file_index, task_index));
+            if task
+                .block_id
+                .as_deref()
+                .is_some_and(is_reserved_project_task_id)
+            {
+                recovering_projects.insert(file_index);
+            }
+        }
+    }
+    // PROJECT RECOVERY (§12.2): a recovered `^prj` recovers its
+    // residents with no own remaining reason. The project's reasons
+    // are empty whenever its `^prj` recovered (they are the `^prj`'s
+    // own reasons); the guard below keeps that invariant explicit.
+    for file_index in recovering_projects {
+        let Some((context, reasons)) = project_states.get(file_index) else {
+            continue;
+        };
+        if !reasons.is_empty() {
+            continue;
+        }
+        let file = &files[file_index];
+        for (task_index, task) in file.tasks.iter().enumerate() {
+            if !context.is_resident(task) || task.status != '?' {
+                continue;
+            }
+            let open_count = states
+                .get(&(file_index, task_index))
+                .map(|state| state.open_dependency_ids.len())
+                .unwrap_or(0);
+            if has_own_remaining_reason(task, open_count, today) {
+                continue;
+            }
+            recover.insert((file_index, task_index));
+        }
+    }
+    let mut changed_files = BTreeMap::new();
+    let mut recovered = Vec::new();
+    let mut by_file: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+    for (file_index, task_index) in recover {
+        by_file.entry(file_index).or_default().push(task_index);
+    }
+    for (file_index, mut task_indices) in by_file {
+        task_indices.sort_unstable();
+        let file = &files[file_index];
+        let mut updated: Option<String> = None;
+        for task_index in task_indices {
+            let task = &file.tasks[task_index];
             let contents = updated.as_ref().unwrap_or(&file.contents);
             let Some(line) = contents
                 .split_inclusive('\n')
@@ -103,9 +164,16 @@ where
             else {
                 continue;
             };
-            let Some(replacement) = set_task_line_status(&line, ' ') else {
+            let Some(flipped) = set_task_line_status(&line, ' ') else {
                 continue;
             };
+            // This engine never observes the day text, so every
+            // recovery lands Ready and `is_today` scope reads false:
+            // the UB4 landing skip still applies structurally through
+            // the recovered status.
+            let scope = unblock_scope_for(&file.relative_path, &flipped, false);
+            let replacement =
+                apply_recovery_writes(&flipped, today, ' ', &scope);
             let base = updated.take().unwrap_or_else(|| file.contents.clone());
             let start = line_start_offset(&base, task.line_index);
             let end = start + line.len();
