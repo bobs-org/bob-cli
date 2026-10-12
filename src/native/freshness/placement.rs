@@ -94,10 +94,9 @@ pub(crate) struct FreshRead {
 /// Freshness scope inputs for [`mark_unblocked`]: the recovered line
 /// must be an in-scope Ready row or the write is skipped.
 ///
-/// UB vector helper: only the conformance tests exercise unblock
-/// writes until the reconcile phase wires them as production callers.
+/// Freshness scope inputs for [`mark_unblocked`]: the recovered line
+/// must be an in-scope Ready row or the write is skipped (UB5, UB6).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct UnblockScope {
     pub(crate) recurring: bool,
     pub(crate) hidden: bool,
@@ -236,9 +235,6 @@ fn stamp_inner(
 /// (`' '` Ready, `'/'` Pending, `'*'` Next). `scope` carries the
 /// freshness out-of-scope signals (UB5 recurring, UB6 hidden, plus
 /// daily-note and Today membership).
-// UB vector helper: only the conformance tests exercise unblock
-// writes until the reconcile phase wires them as production callers.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn mark_unblocked(
     line: &str,
     today: NaiveDate,
@@ -285,8 +281,6 @@ pub(crate) fn mark_unblocked(
 /// Remove every `[unblocked:: …]` field from `line`, collapsing the
 /// whitespace each removal leaves to a single space. Returns the line
 /// unchanged when it carries none.
-// UB vector helper: only the conformance tests exercise it until the
-// reconcile phase wires it as a production caller.
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn clear_unblocked(line: &str) -> String {
     remove_unblocked_field(line)
@@ -294,9 +288,6 @@ pub(crate) fn clear_unblocked(line: &str) -> String {
 
 /// Drop a stale `[unblocked:: U]` when `fresh > U` (UB8): returns the
 /// pruned line, or `None` when there is nothing to prune.
-// UB vector helper: only the conformance tests exercise it until the
-// reconcile phase wires it as a production caller.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn prune_unblocked(line: &str, today: NaiveDate) -> Option<String> {
     let read = read_freshness(line, today);
     match (read.fresh, read.unblocked) {

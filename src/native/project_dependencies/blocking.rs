@@ -80,6 +80,13 @@ impl ProjectContext {
         self.recognised.then_some(self.project_task_index).flatten()
     }
 
+    /// Whether a logical line sits inside a fenced block: fenced
+    /// task-looking lines are never residents and reconcile never
+    /// edits them.
+    pub(crate) fn is_fenced(&self, line_index: usize) -> bool {
+        self.fenced.contains(&line_index)
+    }
+
     /// Whether `task` is an open resident: physically in the note except
     /// `^prj`, including nested and `#ref` tasks; fenced and unrecognised
     /// status lines are excluded (§13.1).

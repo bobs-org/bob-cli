@@ -21,6 +21,34 @@ pub(super) struct DependencyStatusChange {
     pub(super) open_dependency_ids: Vec<String>,
     pub(super) unresolved_dependency_ids: Vec<String>,
     pub(super) future_scheduled_date: Option<String>,
+    /// §13.9 reason kinds behind this transition (`local_dependency`,
+    /// `local_schedule`, `project_dependency`, `project_schedule`).
+    pub(super) reason_kinds: Vec<String>,
+    /// Project note carrying the inherited reason, when any.
+    pub(super) project_path: Option<String>,
+    /// Open `^prj` prerequisite ids behind a `project_dependency` reason.
+    pub(super) project_open_dependency_ids: Vec<String>,
+    /// `^prj` inline schedule behind a `project_schedule` reason.
+    pub(super) project_scheduled_date: Option<String>,
+}
+
+/// One `#prj_is_blocked` tag write (`contract` §13.9): `kind` is
+/// `prj_is_blocked_tags_added` or `prj_is_blocked_tags_stripped`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct ProjectBlockedTagChange {
+    pub(super) path: String,
+    pub(super) line_number: usize,
+    pub(super) block_id: String,
+}
+
+/// One `[unblocked::]` field write (`contract` §13.9): `kind` is
+/// `unblocked_fields_written` or `unblocked_fields_pruned`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct UnblockedFieldChange {
+    pub(super) path: String,
+    pub(super) line_number: usize,
+    pub(super) block_id: String,
+    pub(super) date: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -198,6 +226,10 @@ pub(super) struct SyncResult {
     pub(super) canonicalized_dependency_lines: Vec<DependencyLineReport>,
     pub(super) legacy_dependency_children: usize,
     pub(super) dependency_warnings: Vec<DependencyWarning>,
+    pub(super) prj_is_blocked_tags_added: Vec<ProjectBlockedTagChange>,
+    pub(super) prj_is_blocked_tags_stripped: Vec<ProjectBlockedTagChange>,
+    pub(super) unblocked_fields_written: Vec<UnblockedFieldChange>,
+    pub(super) unblocked_fields_pruned: Vec<UnblockedFieldChange>,
     pub(super) plan_budget: Option<plan_budget::PlanReport>,
 }
 
@@ -247,6 +279,13 @@ pub(super) struct PlannedChange {
     pub(super) file_index: usize,
     pub(super) status_byte_offset: usize,
     pub(super) replacement: char,
+    /// Zero-based logical line carrying the status byte, so a full
+    /// line rewrite (status plus `#prj_is_blocked` / `[unblocked::]`)
+    /// can replace the same line after the byte swap.
+    pub(super) line_index: usize,
+    /// Full replacement line text without its line ending, or `None`
+    /// when only the checkbox byte changes.
+    pub(super) new_line: Option<String>,
 }
 
 #[derive(Debug, Clone)]

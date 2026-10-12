@@ -452,7 +452,76 @@ pub(super) fn dependency_edges(
             }
         }
     }
+    add_resident_implicit_edges(files, &mut edges);
     edges
+}
+
+/// Resident → `^prj`-link implicit edges (`docs/task-dependencies.md`
+/// §13.3): every open resident inherits its project's prerequisites
+/// for promotion and recovery rank. Targets resolve through the
+/// `^prj` task's projected `[dependsOn::]` field, so same-note
+/// internal links (never projected) contribute no edge.
+fn add_resident_implicit_edges(
+    files: &[FileScan],
+    edges: &mut BTreeMap<(PathBuf, String), BTreeSet<(PathBuf, String)>>,
+) {
+    let mut task_ids: BTreeMap<String, Vec<(PathBuf, String)>> =
+        BTreeMap::new();
+    for file in files {
+        for task in &file.tasks {
+            let (Some(task_id), Some(block_id)) =
+                (task.task_id.clone(), task.block_id.clone())
+            else {
+                continue;
+            };
+            task_ids
+                .entry(task_id)
+                .or_default()
+                .push((file.relative_path.clone(), block_id));
+        }
+    }
+    for file in files {
+        let context =
+            super::super::project_dependencies::ProjectContext::for_note(file);
+        if !context.recognised {
+            continue;
+        }
+        let Some(prj) = context
+            .project_task_index()
+            .and_then(|index| file.tasks.get(index))
+        else {
+            continue;
+        };
+        if prj.depends_on.is_empty() {
+            continue;
+        }
+        let mut targets = BTreeSet::new();
+        for id in &prj.depends_on {
+            if let Some(identities) = task_ids.get(id) {
+                targets.extend(identities.iter().cloned());
+            }
+        }
+        if targets.is_empty() {
+            continue;
+        }
+        for task in &file.tasks {
+            let Some(block_id) = &task.block_id else {
+                continue;
+            };
+            if !context.is_resident(task) {
+                continue;
+            }
+            let source = (file.relative_path.clone(), block_id.clone());
+            for target in &targets {
+                if target != &source {
+                    edges
+                        .entry(source.clone())
+                        .or_default()
+                        .insert(target.clone());
+                }
+            }
+        }
+    }
 }
 
 fn push_unresolved(
@@ -551,21 +620,35 @@ pub(super) fn desired_statuses(
     direct: &BTreeSet<(PathBuf, String)>,
     edges: &BTreeMap<(PathBuf, String), BTreeSet<(PathBuf, String)>>,
     task_blocks: &BTreeMap<(PathBuf, String), Vec<char>>,
+    project_tasks: &BTreeSet<(PathBuf, String)>,
 ) -> BTreeMap<(PathBuf, String), RankedStatus> {
     let mut desired = BTreeMap::new();
-    let mut queue = direct.iter().cloned().collect::<VecDeque<_>>();
+    // ADJ-11: a `^prj` target is never raised into a lane, but the
+    // walk continues through it to that project's prerequisites.
+    // `propagated` carries the strongest status pushed through each
+    // project task so the walk still terminates.
+    let mut propagated: BTreeMap<(PathBuf, String), RankedStatus> =
+        BTreeMap::new();
+    let mut queue = VecDeque::new();
     for identity in direct {
-        desired.insert(
-            identity.clone(),
-            strongest_current_status(
-                task_blocks.get(identity).map(Vec::as_slice),
-            )
-            .unwrap_or(RankedStatus::Next)
-            .max(RankedStatus::Next),
-        );
+        let status = strongest_current_status(
+            task_blocks.get(identity).map(Vec::as_slice),
+        )
+        .unwrap_or(RankedStatus::Next)
+        .max(RankedStatus::Next);
+        if project_tasks.contains(identity) {
+            propagated.insert(identity.clone(), status);
+        } else {
+            desired.insert(identity.clone(), status);
+        }
+        queue.push_back((identity.clone(), status));
     }
-    while let Some(source) = queue.pop_front() {
-        let source_status = desired[&source];
+    while let Some((source, pushed)) = queue.pop_front() {
+        let source_status = if project_tasks.contains(&source) {
+            propagated.get(&source).copied().unwrap_or(pushed)
+        } else {
+            desired.get(&source).copied().unwrap_or(pushed)
+        };
         let Some(targets) = edges.get(&source) else {
             continue;
         };
@@ -575,16 +658,51 @@ pub(super) fn desired_statuses(
             )
             .unwrap_or(source_status)
             .max(source_status);
+            if project_tasks.contains(target) {
+                let should_update = propagated
+                    .get(target)
+                    .is_none_or(|current| *current < target_status);
+                if should_update {
+                    propagated.insert(target.clone(), target_status);
+                    queue.push_back((target.clone(), target_status));
+                }
+                continue;
+            }
             let should_update = desired
                 .get(target)
                 .is_none_or(|current| *current < target_status);
             if should_update {
                 desired.insert(target.clone(), target_status);
-                queue.push_back(target.clone());
+                queue.push_back((target.clone(), target_status));
             }
         }
     }
     desired
+}
+
+/// Vault identities of every recognised open `^prj` task: promotion
+/// never raises these targets (ADJ-11).
+pub(super) fn project_task_identities(
+    files: &[FileScan],
+) -> BTreeSet<(PathBuf, String)> {
+    files
+        .iter()
+        .filter_map(|file| {
+            let context =
+                super::super::project_dependencies::ProjectContext::for_note(
+                    file,
+                );
+            if !context.recognised {
+                return None;
+            }
+            let task = context
+                .project_task_index()
+                .and_then(|index| file.tasks.get(index))?;
+            task.block_id
+                .clone()
+                .map(|block_id| (file.relative_path.clone(), block_id))
+        })
+        .collect()
 }
 
 pub(super) fn strongest_current_status(
@@ -651,8 +769,52 @@ pub(super) fn dependency_status_change(
     task: &TaskLine,
     to: char,
     state: &TaskDependencyState,
-    future_scheduled_date: Option<NaiveDate>,
+    reasons: &[super::super::project_dependencies::BlockReason],
 ) -> DependencyStatusChange {
+    let mut project_path = None;
+    let mut project_open_dependency_ids = Vec::new();
+    let mut project_scheduled_date = None;
+    let reason_kinds = reasons
+        .iter()
+        .map(|reason| {
+            match reason {
+                super::super::project_dependencies::BlockReason::ProjectDependency {
+                    project,
+                    open_ids,
+                } => {
+                    project_path =
+                        Some(display_path(project));
+                    project_open_dependency_ids = open_ids.clone();
+                }
+                super::super::project_dependencies::BlockReason::ProjectSchedule {
+                    project,
+                    date,
+                } => {
+                    project_path =
+                        Some(display_path(project));
+                    project_scheduled_date =
+                        Some(date.to_string());
+                }
+                super::super::project_dependencies::BlockReason::LocalDependency { .. }
+                | super::super::project_dependencies::BlockReason::LocalSchedule { .. } => {}
+            }
+            reason.kind().to_string()
+        })
+        .collect();
+    // The legacy own-reason fields stay populated from the same
+    // reasons so existing readers keep working.
+    let mut open_dependency_ids = state.open_dependency_ids.clone();
+    open_dependency_ids.sort();
+    open_dependency_ids.dedup();
+    let future_scheduled_date = task.scheduled.filter(|scheduled| {
+        reasons.iter().any(|reason| {
+            matches!(
+                reason,
+                super::super::project_dependencies::BlockReason::LocalSchedule { date }
+                if date == scheduled
+            )
+        })
+    });
     DependencyStatusChange {
         path: display_path(&file.relative_path),
         line_number: task.line_index + 1,
@@ -660,10 +822,14 @@ pub(super) fn dependency_status_change(
         description: task.description.clone(),
         from: task.status,
         to,
-        open_dependency_ids: state.open_dependency_ids.clone(),
+        open_dependency_ids,
         unresolved_dependency_ids: state.unresolved_dependency_ids.clone(),
         future_scheduled_date: future_scheduled_date
             .map(|scheduled| scheduled.to_string()),
+        reason_kinds,
+        project_path,
+        project_open_dependency_ids,
+        project_scheduled_date,
     }
 }
 

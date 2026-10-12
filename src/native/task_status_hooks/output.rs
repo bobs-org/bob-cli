@@ -33,7 +33,11 @@ pub(super) fn print_human_result(result: &SyncResult) {
         + result.dependency_projection_updates.len()
         + result.adopted_dependency_lines.len()
         + result.healed_dependency_links.len()
-        + result.canonicalized_dependency_lines.len();
+        + result.canonicalized_dependency_lines.len()
+        + result.prj_is_blocked_tags_added.len()
+        + result.prj_is_blocked_tags_stripped.len()
+        + result.unblocked_fields_written.len()
+        + result.unblocked_fields_pruned.len();
     let prefix = if result.dry_run {
         styler.success_prefix(true)
     } else {
@@ -140,6 +144,8 @@ pub(super) fn print_human_result(result: &SyncResult) {
     print_duplicate_line_section(result);
     print_empty_pomodoro_section(result);
     print_dependency_projection_sections(&styler, result);
+    print_project_blocked_tag_sections(&styler, result);
+    print_unblocked_field_sections(&styler, result);
     print_grouped_task_sections(&styler, result);
     if result.kept_next > 0 || result.kept_in_progress > 0 {
         println!();
@@ -164,7 +170,7 @@ pub(super) fn print_human_result(result: &SyncResult) {
         result.dependency_warnings.len()
     );
     println!(
-        "Summary: {} marked next, {} marked in progress, {} cleared, {} cleared in progress, {} blocked, {} unblocked, {} struck, {} moved, {} marked, {} unmarked, {} canceled-reference triggers, {} duplicate-line removals, {} empty Pomodoros removed, {} grouped sections, {} dependency projected, {} adopted, {} healed, {} canonicalized, {} legacy children, {} warnings",
+        "Summary: {} marked next, {} marked in progress, {} cleared, {} cleared in progress, {} blocked, {} unblocked, {} struck, {} moved, {} marked, {} unmarked, {} canceled-reference triggers, {} duplicate-line removals, {} empty Pomodoros removed, {} grouped sections, {} dependency projected, {} adopted, {} healed, {} canonicalized, {} legacy children, {} warnings, {} project-blocked tags added, {} stripped, {} unblocked fields written, {} pruned",
         result.marked_next.len(),
         result.marked_in_progress.len(),
         result.cleared.len(),
@@ -184,7 +190,11 @@ pub(super) fn print_human_result(result: &SyncResult) {
         result.healed_dependency_links.len(),
         result.canonicalized_dependency_lines.len(),
         result.legacy_dependency_children,
-        result.dependency_warnings.len()
+        result.dependency_warnings.len(),
+        result.prj_is_blocked_tags_added.len(),
+        result.prj_is_blocked_tags_stripped.len(),
+        result.unblocked_fields_written.len(),
+        result.unblocked_fields_pruned.len()
     );
 }
 
@@ -257,6 +267,79 @@ pub(super) fn print_dependency_projection_sections(
     }
 }
 
+pub(super) fn print_project_blocked_tag_sections(
+    styler: &Styler,
+    result: &SyncResult,
+) {
+    for (entries, dry_heading, heading) in [
+        (
+            &result.prj_is_blocked_tags_added,
+            "would add project-blocked tags",
+            "added project-blocked tags",
+        ),
+        (
+            &result.prj_is_blocked_tags_stripped,
+            "would strip project-blocked tags",
+            "stripped project-blocked tags",
+        ),
+    ] {
+        if entries.is_empty() {
+            continue;
+        }
+        println!();
+        println!("  {}", if result.dry_run { dry_heading } else { heading });
+        for entry in entries {
+            println!(
+                "    {}  line {}  #prj_is_blocked  {}",
+                styler.cyan(&entry.path),
+                entry.line_number,
+                if entry.block_id.is_empty() {
+                    String::new()
+                } else {
+                    format!("^{}", entry.block_id)
+                }
+            );
+        }
+    }
+}
+
+pub(super) fn print_unblocked_field_sections(
+    styler: &Styler,
+    result: &SyncResult,
+) {
+    for (entries, dry_heading, heading) in [
+        (
+            &result.unblocked_fields_written,
+            "would write unblocked fields",
+            "wrote unblocked fields",
+        ),
+        (
+            &result.unblocked_fields_pruned,
+            "would prune unblocked fields",
+            "pruned unblocked fields",
+        ),
+    ] {
+        if entries.is_empty() {
+            continue;
+        }
+        println!();
+        println!("  {}", if result.dry_run { dry_heading } else { heading });
+        for entry in entries {
+            println!(
+                "    {}  line {}  [unblocked:: {}]  {}",
+                styler.cyan(&entry.path),
+                entry.line_number,
+                entry.date,
+                if entry.block_id.is_empty() {
+                    String::new()
+                } else {
+                    format!("^{}", entry.block_id)
+                }
+            );
+        }
+    }
+}
+
 pub(super) fn print_grouped_task_sections(
     styler: &Styler,
     result: &SyncResult,
@@ -314,6 +397,9 @@ pub(super) fn print_dependency_status_section(
         let description = pad_right(&change.description, description_width);
         let reasons = if blocking {
             let mut reasons = Vec::new();
+            if !change.reason_kinds.is_empty() {
+                reasons.push(change.reason_kinds.join("+"));
+            }
             if let Some(scheduled) = &change.future_scheduled_date {
                 reasons.push(format!("scheduled: {scheduled}"));
             }
@@ -322,6 +408,20 @@ pub(super) fn print_dependency_status_section(
                     "open: {}",
                     change.open_dependency_ids.join(", ")
                 ));
+            }
+            if let Some(project) = &change.project_path {
+                let mut project_reasons = format!("project: {project}");
+                if !change.project_open_dependency_ids.is_empty() {
+                    project_reasons.push_str(&format!(
+                        " open: {}",
+                        change.project_open_dependency_ids.join(", ")
+                    ));
+                }
+                if let Some(scheduled) = &change.project_scheduled_date {
+                    project_reasons
+                        .push_str(&format!(" scheduled: {scheduled}"));
+                }
+                reasons.push(project_reasons);
             }
             if reasons.is_empty() {
                 String::new()

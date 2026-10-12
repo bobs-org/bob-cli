@@ -580,7 +580,8 @@ fn desired_statuses_merge_parents_and_propagate_stronger_intermediates_through_c
         (leaf.clone(), vec!['*']),
     ]);
 
-    let desired = desired_statuses(&direct, &edges, &task_blocks);
+    let desired =
+        desired_statuses(&direct, &edges, &task_blocks, &BTreeSet::new());
 
     assert_eq!(desired[&ready_root], RankedStatus::Next);
     assert_eq!(desired[&working_root], RankedStatus::Next);
@@ -614,6 +615,7 @@ fn recovery_rank_defaults_blocked_roots_to_next_and_propagates_in_progress() {
         &BTreeSet::from([blocked_root.clone()]),
         &edges,
         &task_blocks,
+        &BTreeSet::new(),
     );
 
     assert_eq!(recovery[&blocked_root], RankedStatus::Next);
@@ -734,4 +736,325 @@ fn archive_targets_are_not_promotion_edges() {
     )]);
     assert!(scanned.edges.get(&edge("a.md", "dep")).is_none());
     assert!(scanned.unresolved.is_empty());
+}
+
+// ---- cli-reconcile-block (`docs/task-dependencies.md` §13) ----
+
+use crate::native::project_dependencies::{
+    effective_block_reasons, project_block_reasons, BlockReason,
+    ProjectBlockReasons, ProjectContext,
+};
+
+const PROJECT_FRONTMATTER: &str =
+    "---\ntype: \"[[project]]\"\nstatus: wip\n---\n";
+
+fn project_file(path: &str, body: &str) -> FileScan {
+    let settings = test_settings();
+    let contents = format!("{PROJECT_FRONTMATTER}{body}");
+    FileScan {
+        path: PathBuf::from(path),
+        relative_path: PathBuf::from(path),
+        tasks: parse_tasks(&contents, &settings),
+        contents,
+    }
+}
+
+fn empty_reports() -> (
+    Vec<ProjectBlockedTagChange>,
+    Vec<ProjectBlockedTagChange>,
+    Vec<UnblockedFieldChange>,
+    Vec<UnblockedFieldChange>,
+) {
+    (Vec::new(), Vec::new(), Vec::new(), Vec::new())
+}
+
+// ADJ-11 / PDB9: a `^prj` target is never raised into a lane, but the
+// walk continues through it to that project's prerequisites.
+#[test]
+fn desired_statuses_walk_through_project_tasks_without_raising_them() {
+    let dep = identity("dep");
+    let prj = (PathBuf::from("proj.md"), "prj".to_string());
+    let pre = identity("pre");
+    let direct = BTreeSet::from([dep.clone()]);
+    let edges = BTreeMap::from([
+        (dep.clone(), BTreeSet::from([prj.clone()])),
+        (prj.clone(), BTreeSet::from([pre.clone()])),
+    ]);
+    let task_blocks = BTreeMap::from([
+        (dep.clone(), vec![' ']),
+        (prj.clone(), vec!['?']),
+        (pre.clone(), vec![' ']),
+    ]);
+    let project_tasks = BTreeSet::from([prj.clone()]);
+
+    let desired =
+        desired_statuses(&direct, &edges, &task_blocks, &project_tasks);
+
+    assert_eq!(desired.get(&dep), Some(&RankedStatus::Next));
+    assert_eq!(desired.get(&pre), Some(&RankedStatus::Next));
+    assert!(!desired.contains_key(&prj));
+}
+
+// §13.3: residents inherit `^prj` links as implicit promotion edges;
+// residents of unblocked projects and non-residents gain none.
+#[test]
+fn residents_inherit_prj_links_as_implicit_edges() {
+    let proj = format!(
+        "{PROJECT_FRONTMATTER}- [?] #task #prj Ship [dependsOn:: t__pre] ^prj\n- [ ] #task Resident ^r1\n"
+    );
+    let scanned = edge_scan(&[
+        ("proj.md", proj.as_str()),
+        ("t.md", "- [ ] #task Prerequisite [id:: t__pre] ^pre\n"),
+    ]);
+    assert!(scanned.unresolved.is_empty());
+    assert_eq!(
+        scanned.edges.get(&edge("proj.md", "r1")),
+        Some(&BTreeSet::from([edge("t.md", "pre")])),
+    );
+    assert!(scanned.edges.get(&edge("proj.md", "prj")).is_none());
+}
+
+// PDB2: `^prj` reports only its own reasons, never a `project_*`
+// reason pointing at itself.
+#[test]
+fn prj_reports_only_own_reasons() {
+    let file = project_file(
+        "proj.md",
+        "- [?] #task #prj Ship [dependsOn:: t__pre] ^prj\n",
+    );
+    let context = ProjectContext::for_note(&file);
+    assert!(context.recognised);
+    let prj = &file.tasks[0];
+    let reasons =
+        project_block_reasons(&context, &prj.depends_on, date(2026, 7, 16));
+    assert!(!reasons.is_empty());
+    let effective = effective_block_reasons(
+        prj,
+        &prj.depends_on,
+        &context,
+        &reasons,
+        date(2026, 7, 16),
+    );
+    assert_eq!(
+        effective.iter().map(BlockReason::kind).collect::<Vec<_>>(),
+        ["local_dependency"]
+    );
+}
+
+// A hand-set `[?]` on `^prj` blocks nobody: with no own reasons the
+// transition recovers instead of staying Blocked.
+#[test]
+fn hand_blocked_prj_with_no_reasons_recovers() {
+    let file = project_file(
+        "proj.md",
+        "- [?] #task #prj Ship ^prj\n- [ ] #task Resident ^r1\n",
+    );
+    let context = ProjectContext::for_note(&file);
+    assert!(context.recognised);
+    let reasons = project_block_reasons(&context, &[], date(2026, 7, 16));
+    assert!(reasons.is_empty());
+    let prj = &file.tasks[0];
+    let effective = effective_block_reasons(
+        prj,
+        &[],
+        &context,
+        &reasons,
+        date(2026, 7, 16),
+    );
+    assert!(effective.is_empty());
+    assert_eq!(
+        task_transition(prj, None, None, false, false, false),
+        Transition::Unblock(RankedStatus::Ready)
+    );
+    // The resident stays Ready too: no project reason exists.
+    let resident = &file.tasks[1];
+    let resident_effective = effective_block_reasons(
+        resident,
+        &[],
+        &context,
+        &reasons,
+        date(2026, 7, 16),
+    );
+    assert!(resident_effective.is_empty());
+}
+
+// PDB1 / PDT1: a blocked project marks its residents `[?]` and tags
+// each open resident exactly once; `^prj` is never tagged.
+#[test]
+fn blocked_project_marks_and_tags_residents() {
+    let file = project_file(
+        "proj.md",
+        "- [?] #task #prj Ship [dependsOn:: t__pre] ^prj\n- [ ] #task Resident [fresh:: 2026-07-16] ^r1\n",
+    );
+    let context = ProjectContext::for_note(&file);
+    let reasons = project_block_reasons(
+        &context,
+        &["t__pre".to_string()],
+        date(2026, 7, 16),
+    );
+    assert!(!reasons.is_empty());
+    let (mut added, mut stripped, mut written, mut pruned) = empty_reports();
+    let resident = &file.tasks[1];
+    let effective = effective_block_reasons(
+        resident,
+        &[],
+        &context,
+        &reasons,
+        date(2026, 7, 16),
+    );
+    assert_eq!(
+        effective.iter().map(BlockReason::kind).collect::<Vec<_>>(),
+        ["project_dependency"]
+    );
+    assert_eq!(
+        task_transition(resident, None, None, false, true, false),
+        Transition::MarkBlocked
+    );
+    let lines = logical_lines(&file.contents);
+    let rewritten = plan_task_line_rewrite(
+        &file,
+        resident,
+        lines[resident.line_index],
+        Some('?'),
+        &context,
+        &reasons,
+        Transition::MarkBlocked,
+        date(2026, 7, 16),
+        false,
+        &BTreeSet::new(),
+        &mut added,
+        &mut stripped,
+        &mut written,
+        &mut pruned,
+    )
+    .expect("blocked resident gains a rewrite");
+    assert_eq!(
+        rewritten,
+        "- [?] #task Resident [fresh:: 2026-07-16] #prj_is_blocked ^r1"
+    );
+    assert_eq!(added.len(), 1);
+    assert_eq!(added[0].block_id, "r1");
+    assert!(stripped.is_empty());
+    assert!(written.is_empty());
+    assert!(pruned.is_empty());
+}
+
+// PDT2 / UB: recovery strips the tag and writes `[unblocked::]` on a
+// stamped resident that lands Ready.
+#[test]
+fn recovery_strips_tag_and_writes_unblocked() {
+    let file = project_file(
+        "proj.md",
+        "- [ ] #task #prj Ship ^prj\n- [?] #task Resident [fresh:: 2026-07-16] #prj_is_blocked ^r1\n",
+    );
+    let context = ProjectContext::for_note(&file);
+    let reasons = ProjectBlockReasons::default();
+    let (mut added, mut stripped, mut written, mut pruned) = empty_reports();
+    let resident = &file.tasks[1];
+    assert_eq!(
+        task_transition(resident, None, None, false, false, false),
+        Transition::Unblock(RankedStatus::Ready)
+    );
+    let lines = logical_lines(&file.contents);
+    let rewritten = plan_task_line_rewrite(
+        &file,
+        resident,
+        lines[resident.line_index],
+        Some(' '),
+        &context,
+        &reasons,
+        Transition::Unblock(RankedStatus::Ready),
+        date(2026, 7, 16),
+        false,
+        &BTreeSet::new(),
+        &mut added,
+        &mut stripped,
+        &mut written,
+        &mut pruned,
+    )
+    .expect("recovered resident gains a rewrite");
+    assert_eq!(
+        rewritten,
+        "- [ ] #task Resident [fresh:: 2026-07-16] [unblocked:: 2026-07-16] ^r1"
+    );
+    assert!(added.is_empty());
+    assert_eq!(stripped.len(), 1);
+    assert_eq!(written.len(), 1);
+    assert_eq!(written[0].date, "2026-07-16");
+    assert!(pruned.is_empty());
+}
+
+// UB8: a stale `[unblocked:: U]` (`fresh > U`) is pruned from an open
+// line with no status change.
+#[test]
+fn stale_unblocked_field_is_pruned_without_status_change() {
+    let file = project_file(
+        "proj.md",
+        "- [ ] #task #prj Ship ^prj\n- [ ] #task Resident [fresh:: 2026-07-20] [unblocked:: 2026-07-10] ^r1\n",
+    );
+    let context = ProjectContext::for_note(&file);
+    let reasons = ProjectBlockReasons::default();
+    let (mut added, mut stripped, mut written, mut pruned) = empty_reports();
+    let resident = &file.tasks[1];
+    let lines = logical_lines(&file.contents);
+    let rewritten = plan_task_line_rewrite(
+        &file,
+        resident,
+        lines[resident.line_index],
+        None,
+        &context,
+        &reasons,
+        Transition::Unchanged,
+        date(2026, 7, 20),
+        false,
+        &BTreeSet::new(),
+        &mut added,
+        &mut stripped,
+        &mut written,
+        &mut pruned,
+    )
+    .expect("stale unblocked field is pruned");
+    assert_eq!(rewritten, "- [ ] #task Resident [fresh:: 2026-07-20] ^r1");
+    assert!(added.is_empty() && stripped.is_empty() && written.is_empty());
+    assert_eq!(pruned.len(), 1);
+    assert_eq!(pruned[0].date, "2026-07-10");
+}
+
+// PDT5: a hand-copied tag on an open task outside any blocked project
+// is stripped.
+#[test]
+fn hand_copied_tag_outside_blocked_projects_is_stripped() {
+    let settings = test_settings();
+    let contents = "- [ ] #task Lone #prj_is_blocked ^lone\n".to_string();
+    let file = FileScan {
+        path: PathBuf::from("tasks.md"),
+        relative_path: PathBuf::from("tasks.md"),
+        tasks: parse_tasks(&contents, &settings),
+        contents,
+    };
+    let context = ProjectContext::for_note(&file);
+    assert!(!context.recognised);
+    let (mut added, mut stripped, mut written, mut pruned) = empty_reports();
+    let task = &file.tasks[0];
+    let lines = logical_lines(&file.contents);
+    let rewritten = plan_task_line_rewrite(
+        &file,
+        task,
+        lines[task.line_index],
+        None,
+        &context,
+        &ProjectBlockReasons::default(),
+        Transition::Unchanged,
+        date(2026, 7, 16),
+        false,
+        &BTreeSet::new(),
+        &mut added,
+        &mut stripped,
+        &mut written,
+        &mut pruned,
+    )
+    .expect("hand-copied tag is stripped");
+    assert_eq!(rewritten, "- [ ] #task Lone ^lone");
+    assert!(added.is_empty());
+    assert_eq!(stripped.len(), 1);
 }

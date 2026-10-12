@@ -1,6 +1,15 @@
 //! Daily-note selection and task-status sync orchestration.
 use super::*;
 
+use super::super::freshness::placement::{
+    mark_unblocked, prune_unblocked, UnblockScope,
+};
+use super::super::project_dependencies::{
+    effective_block_reasons, project_block_reasons, ProjectBlockReasons,
+    ProjectContext,
+};
+use super::super::projects::edits::normalize_prj_is_blocked_tag;
+
 pub(crate) fn daily_anchor_date(
     daily_path: &Path,
     effective_date: NaiveDate,
@@ -445,8 +454,15 @@ pub(super) fn sync_task_statuses(
             })
         })
         .collect::<BTreeSet<_>>();
-    let desired =
-        desired_statuses(&direct_desired, &dependency_edges, &task_blocks);
+    // ADJ-11: recognised `^prj` tasks never rise into a lane, but
+    // the walk continues through them to their prerequisites.
+    let project_task_identities = project_task_identities(&files);
+    let desired = desired_statuses(
+        &direct_desired,
+        &dependency_edges,
+        &task_blocks,
+        &project_task_identities,
+    );
     let dependency_desired = desired
         .keys()
         .filter(|identity| !direct_desired.contains(*identity))
@@ -473,9 +489,34 @@ pub(super) fn sync_task_statuses(
         &recent_activity_roots,
         &dependency_edges,
         &task_blocks,
+        &project_task_identities,
     );
     let task_dependency_states =
         task_dependency_states(&files, &reconcile.archive_closed_ids);
+    // Project blocking (`docs/task-dependencies.md` §13.3): each
+    // project's `^prj` own reasons first (same-note internal links
+    // never project, so the field-derived ids are already clean),
+    // then residents inherit them below.
+    let project_contexts: Vec<ProjectContext> =
+        files.iter().map(ProjectContext::for_note).collect();
+    let project_reasons: Vec<ProjectBlockReasons> = files
+        .iter()
+        .enumerate()
+        .map(|(file_index, _)| {
+            let context = &project_contexts[file_index];
+            if !context.recognised {
+                return ProjectBlockReasons::default();
+            }
+            let open_ids = context
+                .project_task_index()
+                .and_then(|task_index| {
+                    task_dependency_states.get(&(file_index, task_index))
+                })
+                .map(|state| state.open_dependency_ids.clone())
+                .unwrap_or_default();
+            project_block_reasons(context, &open_ids, anchor)
+        })
+        .collect();
 
     let mut marked_next = Vec::new();
     let mut marked_in_progress = Vec::new();
@@ -484,7 +525,12 @@ pub(super) fn sync_task_statuses(
     let cleared_in_progress: Vec<ChangeItem> = Vec::new();
     let mut marked_blocked = Vec::new();
     let mut unblocked = Vec::new();
+    let mut prj_is_blocked_tags_added = Vec::new();
+    let mut prj_is_blocked_tags_stripped = Vec::new();
+    let mut unblocked_fields_written = Vec::new();
+    let mut unblocked_fields_pruned = Vec::new();
     let mut changes = Vec::new();
+    let mut line_rewrite_files = BTreeSet::new();
     let mut kept_next = 0;
     let mut kept_in_progress = 0;
     for (file_index, file) in files.iter().enumerate() {
@@ -496,6 +542,7 @@ pub(super) fn sync_task_statuses(
         }
         let is_daily_note = canonical_daily_date(&file.relative_path).is_some()
             || file.path == daily_path;
+        let file_lines = logical_lines(&file.contents);
         for (task_index, task) in file.tasks.iter().enumerate() {
             let desired_status = task.block_id.as_ref().and_then(|block_id| {
                 desired
@@ -522,19 +569,37 @@ pub(super) fn sync_task_statuses(
                 .get(&(file_index, task_index))
                 .cloned()
                 .unwrap_or_default();
-            let future_scheduled_date =
-                task.scheduled.filter(|scheduled| *scheduled > anchor);
-            let has_derived_block =
-                !dependency_state.open_dependency_ids.is_empty()
-                    || future_scheduled_date.is_some();
-            match task_transition(
+            // Effective blocking (§13.3): the task's own reasons plus
+            // its project's `^prj` reasons when it is a resident. A
+            // hand-set `[?]` on `^prj` is not a reason and blocks
+            // nobody; recovery needs every reason gone.
+            let block_reasons = effective_block_reasons(
+                task,
+                &dependency_state.open_dependency_ids,
+                &project_contexts[file_index],
+                &project_reasons[file_index],
+                anchor,
+            );
+            let has_derived_block = !block_reasons.is_empty();
+            let transition = task_transition(
                 task,
                 desired_status,
                 recovery_status,
                 directly_recent,
                 has_derived_block,
                 is_daily_note,
-            ) {
+            );
+            let replacement = match transition {
+                Transition::MarkNext => Some('*'),
+                Transition::MarkInProgress => Some('/'),
+                Transition::Clear => Some(' '),
+                Transition::MarkBlocked => Some('?'),
+                Transition::Unblock(status) => Some(status.checkbox()),
+                Transition::KeptNext
+                | Transition::KeptInProgress
+                | Transition::Unchanged => None,
+            };
+            match transition {
                 Transition::MarkNext => {
                     let dependency =
                         task.block_id.as_ref().is_some_and(|block_id| {
@@ -544,11 +609,6 @@ pub(super) fn sync_task_statuses(
                             ))
                         });
                     marked_next.push(change_item(file, task, dependency));
-                    changes.push(PlannedChange {
-                        file_index,
-                        status_byte_offset: task.status_byte_offset,
-                        replacement: '*',
-                    });
                 }
                 Transition::MarkInProgress => {
                     let dependency =
@@ -560,19 +620,9 @@ pub(super) fn sync_task_statuses(
                         });
                     marked_in_progress
                         .push(change_item(file, task, dependency));
-                    changes.push(PlannedChange {
-                        file_index,
-                        status_byte_offset: task.status_byte_offset,
-                        replacement: '/',
-                    });
                 }
                 Transition::Clear => {
                     cleared.push(change_item(file, task, false));
-                    changes.push(PlannedChange {
-                        file_index,
-                        status_byte_offset: task.status_byte_offset,
-                        replacement: ' ',
-                    });
                 }
                 Transition::MarkBlocked => {
                     marked_blocked.push(dependency_status_change(
@@ -580,32 +630,70 @@ pub(super) fn sync_task_statuses(
                         task,
                         '?',
                         &dependency_state,
-                        future_scheduled_date,
+                        &block_reasons,
                     ));
-                    changes.push(PlannedChange {
-                        file_index,
-                        status_byte_offset: task.status_byte_offset,
-                        replacement: '?',
-                    });
                 }
                 Transition::Unblock(status) => {
-                    let replacement = status.checkbox();
                     unblocked.push(dependency_status_change(
                         file,
                         task,
-                        replacement,
+                        status.checkbox(),
                         &dependency_state,
-                        future_scheduled_date,
+                        &block_reasons,
                     ));
-                    changes.push(PlannedChange {
-                        file_index,
-                        status_byte_offset: task.status_byte_offset,
-                        replacement,
-                    });
                 }
                 Transition::KeptNext => kept_next += 1,
                 Transition::KeptInProgress => kept_in_progress += 1,
                 Transition::Unchanged => {}
+            }
+            // One line rewrite carries the status plus the derived
+            // tag and `[unblocked::]` edits (§13.3, §13.7, UB vectors).
+            // Closed lines are never edited.
+            let task_open =
+                task.status_recognized && task.status_type.is_open();
+            let new_line = if task_open {
+                plan_task_line_rewrite(
+                    file,
+                    task,
+                    file_lines.get(task.line_index).copied().unwrap_or(""),
+                    replacement,
+                    &project_contexts[file_index],
+                    &project_reasons[file_index],
+                    transition,
+                    anchor,
+                    is_daily_note,
+                    &direct_desired,
+                    &mut prj_is_blocked_tags_added,
+                    &mut prj_is_blocked_tags_stripped,
+                    &mut unblocked_fields_written,
+                    &mut unblocked_fields_pruned,
+                )
+            } else {
+                None
+            };
+            if let Some(replacement) = replacement {
+                if new_line.is_some() {
+                    line_rewrite_files.insert(file_index);
+                }
+                changes.push(PlannedChange {
+                    file_index,
+                    status_byte_offset: task.status_byte_offset,
+                    replacement,
+                    line_index: task.line_index,
+                    new_line,
+                });
+            } else if let Some(new_line) = new_line {
+                // Tag or prune edits with no status change still need
+                // a plan entry so the rewrite reaches the write.
+                // The byte swap is a no-op on the current status.
+                line_rewrite_files.insert(file_index);
+                changes.push(PlannedChange {
+                    file_index,
+                    status_byte_offset: task.status_byte_offset,
+                    replacement: task.status,
+                    line_index: task.line_index,
+                    new_line: Some(new_line),
+                });
             }
         }
     }
@@ -614,6 +702,11 @@ pub(super) fn sync_task_statuses(
         validate_blocked_status(&settings)?;
     }
 
+    // Line rewrites (tag and `[unblocked::]` edits) are structural,
+    // so their notes join the reconciled set for the quiet-period
+    // guarded write.
+    let mut structural_files = reconcile.touched_files.clone();
+    structural_files.extend(line_rewrite_files);
     let compose = compose_outputs(
         &files,
         &changes,
@@ -624,7 +717,7 @@ pub(super) fn sync_task_statuses(
             normalized_daily_contents: &normalized_daily,
             settings: &settings,
         },
-        &reconcile.touched_files,
+        &structural_files,
         pre_reconcile,
     );
     let apply_report = if request.dry_run {
@@ -688,6 +781,10 @@ pub(super) fn sync_task_statuses(
         canonicalized_dependency_lines: reconcile.canonicalized,
         legacy_dependency_children: reconcile.legacy_children,
         dependency_warnings: reconcile.warnings,
+        prj_is_blocked_tags_added,
+        prj_is_blocked_tags_stripped,
+        unblocked_fields_written,
+        unblocked_fields_pruned,
         plan_budget,
     })
 }
@@ -741,6 +838,129 @@ pub(crate) fn task_dependency_states(
         }
     }
     states
+}
+
+/// One full line rewrite for an open task: the status swap plus the
+/// derived `#prj_is_blocked` tag edit and the `[unblocked::]` write or
+/// prune (`docs/task-dependencies.md` §13.3, §13.7, UB vectors).
+/// Returns `None` when the line is already right. Closed lines never
+/// reach here; fenced lines keep their tag state untouched.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn plan_task_line_rewrite(
+    file: &FileScan,
+    task: &TaskLine,
+    raw_line: &str,
+    replacement: Option<char>,
+    context: &ProjectContext,
+    project_reasons: &ProjectBlockReasons,
+    transition: Transition,
+    anchor: NaiveDate,
+    is_daily_note: bool,
+    direct_desired: &BTreeSet<(PathBuf, String)>,
+    tags_added: &mut Vec<ProjectBlockedTagChange>,
+    tags_stripped: &mut Vec<ProjectBlockedTagChange>,
+    fields_written: &mut Vec<UnblockedFieldChange>,
+    fields_pruned: &mut Vec<UnblockedFieldChange>,
+) -> Option<String> {
+    let mut line = raw_line.to_string();
+    if let Some(to) = replacement {
+        line = swap_status_byte(&line, task.status, to);
+    }
+    // `tag_scope = every_resident`: every open resident of a blocked
+    // project carries the tag; every other open line loses it.
+    if !context.is_fenced(task.line_index) {
+        let want_tag = !project_reasons.is_empty() && context.is_resident(task);
+        let tagged = normalize_prj_is_blocked_tag(&line, want_tag);
+        if tagged != line {
+            let change = ProjectBlockedTagChange {
+                path: display_path(&file.relative_path),
+                line_number: task.line_index + 1,
+                block_id: task.block_id.clone().unwrap_or_default(),
+            };
+            if want_tag {
+                tags_added.push(change);
+            } else {
+                tags_stripped.push(change);
+            }
+            line = tagged;
+        }
+    }
+    let mut wrote_unblocked = false;
+    if matches!(transition, Transition::Unblock(RankedStatus::Ready)) {
+        let is_today = task.block_id.as_ref().is_some_and(|block_id| {
+            direct_desired
+                .contains(&(file.relative_path.clone(), block_id.clone()))
+        });
+        let scope = UnblockScope {
+            recurring: line_is_recurring(&line),
+            hidden: has_tag_token(&line, "#hide"),
+            is_daily_note,
+            is_today,
+        };
+        if let Some(marked) = mark_unblocked(
+            &line,
+            anchor,
+            RankedStatus::Ready.checkbox(),
+            &scope,
+        ) {
+            fields_written.push(UnblockedFieldChange {
+                path: display_path(&file.relative_path),
+                line_number: task.line_index + 1,
+                block_id: task.block_id.clone().unwrap_or_default(),
+                date: anchor.to_string(),
+            });
+            line = marked;
+            wrote_unblocked = true;
+        }
+    }
+    if !wrote_unblocked && let Some(pruned) = prune_unblocked(&line, anchor) {
+        fields_pruned.push(UnblockedFieldChange {
+            path: display_path(&file.relative_path),
+            line_number: task.line_index + 1,
+            block_id: task.block_id.clone().unwrap_or_default(),
+            date: unblocked_field_date(&line)
+                .unwrap_or_else(|| anchor.to_string()),
+        });
+        line = pruned;
+    }
+    (line != raw_line).then_some(line)
+}
+
+/// Swap the checkbox byte on a parsed task line. The checkbox is the
+/// first `[<status>]` group on the line, so a first-occurrence swap
+/// hits it and never body text.
+fn swap_status_byte(line: &str, from: char, to: char) -> String {
+    if from == to {
+        return line.to_string();
+    }
+    let mut output = line.to_string();
+    let needle = format!("[{from}]");
+    if let Some(start) = output.find(&needle) {
+        output.replace_range(
+            start + 1..start + 1 + from.len_utf8(),
+            &to.to_string(),
+        );
+    }
+    output
+}
+
+/// Token-bounded tag check: `#prj` never matches `#prj_is_blocked`
+/// and vice versa (PDT12).
+fn has_tag_token(line: &str, tag: &str) -> bool {
+    line.split(char::is_whitespace).any(|token| token == tag)
+}
+
+/// Tasks recurrence signals on one raw line: the `🔁` emoji or a
+/// `[repeat:: …]` field.
+fn line_is_recurring(line: &str) -> bool {
+    line.contains('🔁') || line.contains("[repeat::")
+}
+
+/// The date carried by the first `[unblocked:: …]` field on the line.
+fn unblocked_field_date(line: &str) -> Option<String> {
+    let start = line.find("[unblocked::")? + "[unblocked::".len();
+    let end = line[start..].find(']')?;
+    Some(line[start..start + end].trim().to_string())
 }
 
 pub(super) fn task_transition(

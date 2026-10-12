@@ -390,16 +390,30 @@ surfacing contract.
 
 Blocked is derived state: a recognized open task is blocked when it has at
 least one open dependency, a valid future schedule, or both. A task that
-lives in a blocked project is Blocked too; the `^prj` line-model rule,
-`#prj_is_blocked`, `[unblocked::]`, reason kinds, and consumption of
-links to Blocked tasks are in
+lives in a blocked project is Blocked too. Project blocking comes from the
+project's open `^prj` task alone: its projected Depends-On prerequisites and
+its inline `[scheduled::]` date (same-note `^prj` links never project and
+warn `project_internal_dependency`). While `^prj` carries any such reason,
+every open resident of the note — nested and `#ref` tasks included, fenced
+lines excluded — is Blocked with a `project_dependency` or `project_schedule`
+reason, and carries exactly one machine-owned `#prj_is_blocked` tag; `^prj`
+itself reports only its own `local_*` reasons and is never tagged. A hand-set
+`[?]` on `^prj` is not a reason and blocks nobody. Residents inherit `^prj`
+links as implicit promotion edges, and promotion never raises a `^prj`
+target into a lane — the walk continues through it to that project's
+prerequisites. The full `^prj` line-model rule, tag placement, and
+consumption of links to Blocked tasks are in
 [task-dependencies.md §13](task-dependencies.md#13-project-dependencies). This combined
 state overrides Ready (`[ ]`), Next (`[*]`), and In Progress (`[/]`), including
 Pomodoro promotion for a task inherited from a scheduled project. A task
 already `[?]` remains Blocked until every reason is gone. Only then does it
 return to the stronger of the active and recovery-only ranks: Next when
 directly recent, In Progress only when a stronger eligible dependency path
-requests it, or Ready when unreachable. A directly referenced Blocked task
+requests it, or Ready when unreachable. Every automatic Blocked-to-Ready
+recovery writes `[unblocked:: today]` on the recovered line unless the row is
+out of freshness scope, unstamped, already a scheduled tickler, or landing in
+Next/Pending; stale `[unblocked::]` fields (`fresh` newer than the field) are
+pruned from open lines. A directly referenced Blocked task
 does not recover to its status from before blocking because no hidden
 previous-status field is stored. Terminal parents and unknown/custom parent
 statuses remain untouched even when they retain dependency or scheduled
@@ -844,8 +858,13 @@ previous daily path and its reference count appear in changed and no-op
 reports.
 Canceled-reference rows show the target, block ID, original one-based line
 number, and owning Pomodoro that triggered complete list-item deletion. Blocked
-rows identify the future scheduled date, open dependency IDs, or both;
-unblocked rows include unresolved IDs when present. Duplicate removals show the
+rows identify the reason kinds (`local_dependency`, `local_schedule`,
+`project_dependency`, `project_schedule`), the future scheduled date, open
+dependency IDs, and — for inherited reasons — the project path with its open
+prerequisite IDs or schedule date; unblocked rows include unresolved IDs when
+present. Tag writes appear under `added/stripped project-blocked tags` and
+`[unblocked::]` writes and prunes under `wrote/pruned unblocked fields`, each
+with its own trailing `Summary:` counts. Duplicate removals show the
 original daily-note line number, text, owning Pomodoro, and canonical task
 identities. Marker additions and removals have their own
 `marked`/`unmarked` sections and summary counts. Dependency-derived promotions
@@ -923,7 +942,11 @@ JSON mode prints one object on stdout with these stable fields:
       "to": "?",
       "open_dependency_ids": ["dev__review"],
       "unresolved_dependency_ids": [],
-      "future_scheduled_date": "2026-07-12"
+      "future_scheduled_date": "2026-07-12",
+      "reason_kinds": ["local_dependency", "local_schedule"],
+      "project_path": null,
+      "project_open_dependency_ids": [],
+      "project_scheduled_date": null
     }
   ],
   "unblocked": [
@@ -936,9 +959,30 @@ JSON mode prints one object on stdout with these stable fields:
       "to": "*",
       "open_dependency_ids": [],
       "unresolved_dependency_ids": ["deleted_task"],
-      "future_scheduled_date": null
+      "future_scheduled_date": null,
+      "reason_kinds": [],
+      "project_path": null,
+      "project_open_dependency_ids": [],
+      "project_scheduled_date": null
     }
   ],
+  "prj_is_blocked_tags_added": [
+    {
+      "path": "Projects/Alpha.md",
+      "line_number": 12,
+      "block_id": "write-tests"
+    }
+  ],
+  "prj_is_blocked_tags_stripped": [],
+  "unblocked_fields_written": [
+    {
+      "path": "dev.md",
+      "line_number": 44,
+      "block_id": "polish",
+      "date": "2026-07-16"
+    }
+  ],
+  "unblocked_fields_pruned": [],
   "struck_completed_references": [
     {
       "target": "dev",

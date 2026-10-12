@@ -104,8 +104,11 @@ Ready, Next, and In Progress. A schedule on the anchor date or earlier is not \
 future. When every derived blocking reason clears, Blocked tasks recover to \
 Next when directly recent, In Progress only through a stronger eligible \
 transclusion path, or Ready when unreachable. No pre-Blocked status is stored. \
-Project scheduled frontmatter is not task-level metadata and is ignored by \
-this rule. \
+A project's own blocking comes from its open `^prj` task's ordinary \
+Depends-On line and inline schedule: while those give a reason, every open \
+resident of the note is Blocked and carries `#prj_is_blocked`, and every \
+automatic Blocked-to-Ready recovery writes `[unblocked::]` (see \
+docs/task-dependencies.md §13). \
 Completed linked-task references \
 are retired as struck, non-embedded links. References found under open \
 Pomodoros keep the existing policy of moving their containing bullets beneath \

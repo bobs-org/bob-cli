@@ -301,7 +301,58 @@ impl<'a> ReconcileWorker<'a> {
             };
             self.plan_dependent(&view, files, inputs);
         }
+        self.add_resident_implicit_edges(files);
         self.plan_cycles(files);
+    }
+
+    /// Resident → `^prj`-link implicit edges for R7 cycle detection
+    /// (`docs/task-dependencies.md` §13.3, PDR8): every open resident
+    /// inherits its project's projected prerequisites, so an inherited
+    /// cycle through a resident warns `dependency_cycle` like a direct
+    /// one. Same-note internal links never project, so they contribute
+    /// no edge.
+    fn add_resident_implicit_edges(&mut self, files: &[FileScan]) {
+        for (file_index, file) in files.iter().enumerate() {
+            let context =
+                super::super::project_dependencies::ProjectContext::for_note(
+                    file,
+                );
+            if !context.recognised {
+                continue;
+            }
+            let targets = self
+                .graph
+                .get(&(file.relative_path.clone(), "prj".to_string()))
+                .cloned()
+                .unwrap_or_default();
+            if targets.is_empty() {
+                continue;
+            }
+            for task in &file.tasks {
+                let Some(block_id) = &task.block_id else {
+                    continue;
+                };
+                if !context.is_resident(task) {
+                    continue;
+                }
+                let source = (file.relative_path.clone(), block_id.clone());
+                let resident_targets: BTreeSet<(PathBuf, String)> = targets
+                    .iter()
+                    .filter(|target| *target != &source)
+                    .cloned()
+                    .collect();
+                if resident_targets.is_empty() {
+                    continue;
+                }
+                self.graph_nodes
+                    .entry(source.clone())
+                    .or_insert((file_index, task.line_index));
+                self.graph
+                    .entry(source)
+                    .or_default()
+                    .extend(resident_targets);
+            }
+        }
     }
 
     /// Resolution of one Depends-On link or legacy child target.
@@ -490,6 +541,25 @@ impl ReconcileWorker<'_> {
             }
         }
     }
+}
+
+/// Whether the dependent is the open `^prj` task of a recognised
+/// project note (`docs/task-dependencies.md` §13.1): only then does
+/// the same-note link guard (PDR7) apply.
+fn is_open_project_task(view: &TaskView<'_>, files: &[FileScan]) -> bool {
+    if view.task.block_id.as_deref() != Some("prj") {
+        return false;
+    }
+    let context = super::super::project_dependencies::ProjectContext::for_note(
+        &files[view.file_index],
+    );
+    context.recognised
+        && context.project_task_index().is_some_and(|index| {
+            files[view.file_index]
+                .tasks
+                .get(index)
+                .is_some_and(|task| task.line_index == view.task.line_index)
+        })
 }
 
 impl LinkTarget {
@@ -759,18 +829,37 @@ impl ReconcileWorker<'_> {
         let mut set: Vec<(PathBuf, String, String, bool)> = Vec::new();
         let mut seen = BTreeSet::new();
         let mut line_links: Vec<String> = Vec::new();
+        let dependent_is_project_task = is_open_project_task(view, files);
         for link in &mut planned {
             // A resolved target that cannot project (a previous-daily
             // or unencodable target with no `[id::]`) keeps its link
             // verbatim, like R4–R6 keeps.
             let mut keep_verbatim = false;
+            // PDR7: a `^prj` link to a task in its own note is a
+            // guaranteed deadlock: kept on the line, never projected
+            // into `[dependsOn::]`, warned once per link.
+            if dependent_is_project_task
+                && let LinkTarget::Task { path, block, .. } = &link.resolved
+                && path == view.relative_path
+            {
+                self.warn(
+                    view,
+                    "project_internal_dependency",
+                    &format!(
+                        "link to {}#^{} lives in the project's own note; kept, not projected",
+                        display_path(path),
+                        block
+                    ),
+                );
+                keep_verbatim = true;
+            }
             match &link.resolved {
                 LinkTarget::Task { id, .. } => {
                     let identity = link
                         .resolved
                         .block_identity()
                         .expect("task target has an identity");
-                    if seen.insert(identity.clone()) {
+                    if seen.insert(identity.clone()) && !keep_verbatim {
                         match self.project_id(
                             view,
                             files,

@@ -588,7 +588,10 @@ Lanes are sticky: removing a link never lowers Next or
 In Progress — only a Next task inside a canonical daily note (or the current
 ledger) still clears back to Ready once unlinked and stale. Independently,
 open Dataview dependencies and future `[scheduled:: YYYY-MM-DD]` dates mark a
-task Blocked (`[?]`). The command
+task Blocked (`[?]`). A project's own blocking comes from its open `^prj`
+task's Depends-On line and inline schedule: while either gives a reason,
+every open resident of the note is Blocked and carries `#prj_is_blocked`,
+and every automatic Blocked-to-Ready recovery writes `[unblocked::]`. The command
 also retires completed references, moves stray bullets onto the current
 Pomodoro, repairs Pomodoro markers, de-duplicates the same task under later
 open Pomodoros, removes list items that only point at canceled tasks, deletes
@@ -597,7 +600,8 @@ groups area/project `Tasks` sections into `Next & In Progress`, `Blocked`, and
 `Done & Canceled` child headings, emitting only non-empty groups with a
 linked status-count badge row while keeping Ready tasks in the intake. Human and JSON reports include the
 dependency projection counts (`Dependencies:` plus the trailing `Summary:`
-counts).
+counts) as well as the project-blocked tag and unblocked-field writes
+with their own trailing `Summary:` counts.
 
 ```bash
 bob task reconcile --dry-run

@@ -29,6 +29,26 @@ pub(super) fn compose_outputs(
                 &change.replacement.to_string(),
             );
         }
+        // Full line rewrites land after the byte swaps (which never
+        // change lengths, so offsets stay valid): one rewrite carries
+        // the status plus `#prj_is_blocked` / `[unblocked::]` edits for
+        // its line. The stored line has no ending; the file's own
+        // `\r\n` or `\n` terminator is preserved.
+        let mut rewrites: Vec<(usize, &str)> = changes
+            .iter()
+            .filter(|change| change.file_index == file_index)
+            .filter_map(|change| {
+                change
+                    .new_line
+                    .as_deref()
+                    .map(|new| (change.line_index, new))
+            })
+            .collect();
+        rewrites.sort_by_key(|(line_index, _)| *line_index);
+        rewrites.dedup_by_key(|(line_index, _)| *line_index);
+        for (line_index, new_line) in rewrites.into_iter().rev() {
+            contents = replace_logical_line(&contents, line_index, new_line);
+        }
         updated.insert(file_index, contents);
     }
 
@@ -138,6 +158,33 @@ pub(super) fn compose_outputs(
         grouped_task_sections,
         grouping_warnings,
     }
+}
+
+/// Replace one logical line's text, preserving its own line ending
+/// (`\r\n`, `\n`, or none on the final line). Out-of-range indices
+/// leave the contents unchanged.
+fn replace_logical_line(
+    contents: &str,
+    line_index: usize,
+    new_line: &str,
+) -> String {
+    let mut output = String::with_capacity(contents.len() + new_line.len());
+    for (index, segment) in contents.split_inclusive('\n').enumerate() {
+        if index == line_index {
+            let ending = if segment.ends_with("\r\n") {
+                "\r\n"
+            } else if segment.ends_with('\n') {
+                "\n"
+            } else {
+                ""
+            };
+            output.push_str(new_line);
+            output.push_str(ending);
+        } else {
+            output.push_str(segment);
+        }
+    }
+    output
 }
 
 pub(crate) fn task_group_classification(

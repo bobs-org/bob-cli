@@ -442,8 +442,9 @@ fn trailing_block_id(body: &str) -> Option<String> {
 }
 
 /// A stamped `[?]` task with `dependsOn` or a future `scheduled` still
-/// parses identically (so hooks still derives Blocked), and swapping
-/// the checkbox byte preserves `[fresh:: …]`.
+/// parses identically (so hooks still derives Blocked), and a hooks
+/// line rewrite (status plus `#prj_is_blocked` / `[unblocked::]`
+/// edits) preserves `[fresh:: …]`.
 #[test]
 fn hooks_blocked_signals_survive_and_checkbox_swap_preserves_fresh() {
     use crate::native::task_status_hooks::task_metadata;
@@ -463,7 +464,8 @@ fn hooks_blocked_signals_survive_and_checkbox_swap_preserves_fresh() {
             task_metadata(&after_body, after_block.as_deref()),
             "hooks must still see the Blocked signal in {input:?}"
         );
-        // The hooks only swap the checkbox byte: simulate it and show
+        // The hooks rewrite the whole line (status plus derived tag
+        // and `[unblocked::]` edits): simulate the status swap and show
         // the stamp survives.
         let reopened = stamped.line.replacen("[?]", "[ ]", 1);
         assert!(
