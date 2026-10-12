@@ -117,7 +117,11 @@ there is no current one. A link to an unambiguously cancelled Tasks task \
 removes its complete Markdown list-item subtree from an open Pomodoro, \
 including for custom single-character statuses whose Tasks type is CANCELLED; \
 the cancelled task status itself is left unchanged. \
-After duplicate, canceled, completed-reference, and marker repairs are \
+A live Task Link to an effectively Blocked task under today's open \
+Pomodoros is consumed: it seeds promotion along the task's dependency \
+edges, then the link is removed (a link-only bullet with its subtree; \
+otherwise only the token). After duplicate, canceled, blocked-link \
+consumption, completed-reference, and marker repairs are \
 composed, childless open or completed Pomodoro entries in the current daily \
 ledger are removed with their full entry blocks. \
 Done, cancelled, non-task, and unknown task statuses are never transitioned.\n\n\
@@ -296,5 +300,7 @@ pub(crate) use parse::parse_tasks;
 pub(crate) use pomodoro::{
     apply_empty_pomodoro_plan, plan_empty_pomodoro_removals, scan_pomodoros,
 };
-pub(crate) use structure::{apply_structural_plan, plan_structural_changes};
+pub(crate) use structure::{
+    apply_blocked_consumption, apply_structural_plan, plan_structural_changes,
+};
 pub(crate) use sync::{task_dependency_states, TaskDependencyState};

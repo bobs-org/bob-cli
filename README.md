@@ -594,14 +594,16 @@ every open resident of the note is Blocked and carries `#prj_is_blocked`,
 and every automatic Blocked-to-Ready recovery writes `[unblocked::]`. The command
 also retires completed references, moves stray bullets onto the current
 Pomodoro, repairs Pomodoro markers, de-duplicates the same task under later
-open Pomodoros, removes list items that only point at canceled tasks, deletes
+open Pomodoros, removes list items that only point at canceled tasks, consumes
+live Task Links to effectively Blocked tasks under today's open Pomodoros
+(promoting open prerequisites first), deletes
 childless current-daily Pomodoro entries, and
 groups area/project `Tasks` sections into `Next & In Progress`, `Blocked`, and
 `Done & Canceled` child headings, emitting only non-empty groups with a
 linked status-count badge row while keeping Ready tasks in the intake. Human and JSON reports include the
 dependency projection counts (`Dependencies:` plus the trailing `Summary:`
-counts) as well as the project-blocked tag and unblocked-field writes
-with their own trailing `Summary:` counts.
+counts) as well as consumed blocked links, the project-blocked tag, and
+unblocked-field writes with their own trailing `Summary:` counts.
 
 ```bash
 bob task reconcile --dry-run

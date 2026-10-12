@@ -122,6 +122,15 @@ fn task_status_hooks_syncs_fixture_and_is_idempotent() {
         2
     );
     assert_eq!(json["removed_duplicate_lines"].as_array().unwrap().len(), 1);
+    let consumed = json["consumed_blocked_references"].as_array().unwrap();
+    assert_eq!(consumed.len(), 1, "{consumed:?}");
+    assert_eq!(consumed[0]["path"], "2026/20260710.md");
+    assert_eq!(consumed[0]["task"]["path"], "dev.md");
+    assert_eq!(consumed[0]["task"]["block_id"], "promote");
+    assert_eq!(
+        consumed[0]["reasons"],
+        serde_json::json!(["local_dependency"])
+    );
     assert_eq!(json["removed_duplicate_lines"][0]["line_number"], 10);
     assert_eq!(
         json["removed_duplicate_lines"][0]["pomodoro"],
@@ -199,8 +208,11 @@ fn task_status_hooks_syncs_fixture_and_is_idempotent() {
     assert!(dev_contents.contains("- [*] Not a Tasks task ^not-a-task"));
     let daily_contents =
         fs::read_to_string(&daily).expect("read updated daily");
+    assert!(
+        !daily_contents.contains("[[dev#^promote]]"),
+        "blocked promote link is consumed:\n{daily_contents}"
+    );
     assert!(daily_contents.contains(concat!(
-        "  - [[dev#^promote]]\n",
         "  - Work on [[Projects/Alpha#^working]] and [[dev#^already]]\n",
         "  - ~~[[dev#^done|already embedded]]~~\n",
         "- [ ] Future session\n",

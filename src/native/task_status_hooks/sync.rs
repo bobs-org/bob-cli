@@ -5,8 +5,8 @@ use super::super::freshness::placement::{
     mark_unblocked, prune_unblocked, UnblockScope,
 };
 use super::super::project_dependencies::{
-    effective_block_reasons, project_block_reasons, ProjectBlockReasons,
-    ProjectContext,
+    effective_block_reasons, project_block_reasons, BlockReason,
+    ProjectBlockReasons, ProjectContext,
 };
 use super::super::projects::edits::normalize_prj_is_blocked_tag;
 
@@ -529,6 +529,9 @@ pub(super) fn sync_task_statuses(
     let mut prj_is_blocked_tags_stripped = Vec::new();
     let mut unblocked_fields_written = Vec::new();
     let mut unblocked_fields_pruned = Vec::new();
+    let mut blocked_identities = BTreeSet::<(PathBuf, String)>::new();
+    let mut blocked_reason_map =
+        BTreeMap::<(PathBuf, String), Vec<BlockReason>>::new();
     let mut changes = Vec::new();
     let mut line_rewrite_files = BTreeSet::new();
     let mut kept_next = 0;
@@ -581,6 +584,18 @@ pub(super) fn sync_task_statuses(
                 anchor,
             );
             let has_derived_block = !block_reasons.is_empty();
+            // Final Blocked set for consumption (§13.5): newly blocked
+            // plus unchanged `[?]` with a remaining reason. Keyed by
+            // identity, never by the `'?'` cache.
+            if has_derived_block
+                && task.status_recognized
+                && task.status_type.is_open()
+                && let Some(block_id) = &task.block_id
+            {
+                let identity = (file.relative_path.clone(), block_id.clone());
+                blocked_identities.insert(identity.clone());
+                blocked_reason_map.insert(identity, block_reasons.clone());
+            }
             let transition = task_transition(
                 task,
                 desired_status,
@@ -707,7 +722,7 @@ pub(super) fn sync_task_statuses(
     // guarded write.
     let mut structural_files = reconcile.touched_files.clone();
     structural_files.extend(line_rewrite_files);
-    let compose = compose_outputs(
+    let mut compose = compose_outputs(
         &files,
         &changes,
         ComposeContext {
@@ -720,6 +735,28 @@ pub(super) fn sync_task_statuses(
         &structural_files,
         pre_reconcile,
     );
+    // Second rewrite pass after transitions (§13.5): consume live
+    // links to the final Blocked set, then empty Pomodoros. Promotion
+    // already seeded from those links via `direct_desired`.
+    let (consumed_blocked_references, consumed_empty_pomodoros) =
+        consume_blocked_links_after_compose(
+            &mut compose,
+            &files,
+            &daily_path,
+            canonical_daily_path.as_ref(),
+            &daily_contents,
+            &normalized_daily,
+            daily_relative,
+            &reference_resolver,
+            &settings,
+            &blocked_identities,
+            &blocked_reason_map,
+            &dependency_edges,
+            &task_blocks,
+            &project_task_identities,
+        );
+    let mut removed_empty_pomodoros = empty_pomodoro_plan.removed;
+    removed_empty_pomodoros.extend(consumed_empty_pomodoros);
     let apply_report = if request.dry_run {
         ApplyReport::default()
     } else {
@@ -765,8 +802,9 @@ pub(super) fn sync_task_statuses(
         marker_added_references: structural_plan.marker_added,
         marker_removed_references: structural_plan.marker_removed,
         removed_canceled_references: structural_plan.removed_canceled,
+        consumed_blocked_references,
         removed_duplicate_lines,
-        removed_empty_pomodoros: empty_pomodoro_plan.removed,
+        removed_empty_pomodoros,
         grouped_task_sections: compose.grouped_task_sections,
         grouping_warnings: compose.grouping_warnings,
         applied_files: apply_report.applied_files,
@@ -1029,4 +1067,134 @@ pub(super) fn transition(
         RankedStatus::InProgress => Transition::KeptInProgress,
         RankedStatus::Ready => Transition::Unchanged,
     }
+}
+
+fn consume_blocked_links_after_compose(
+    compose: &mut ComposeResult,
+    files: &[FileScan],
+    daily_path: &Path,
+    canonical_daily_path: Option<&PathBuf>,
+    daily_contents: &str,
+    normalized_daily: &str,
+    daily_relative: Option<&Path>,
+    reference_resolver: &TaskReferenceResolver<'_>,
+    settings: &TasksSettings,
+    blocked: &BTreeSet<(PathBuf, String)>,
+    blocked_reasons: &BTreeMap<(PathBuf, String), Vec<BlockReason>>,
+    edges: &BTreeMap<(PathBuf, String), BTreeSet<(PathBuf, String)>>,
+    task_blocks: &BTreeMap<(PathBuf, String), Vec<char>>,
+    project_tasks: &BTreeSet<(PathBuf, String)>,
+) -> (Vec<ConsumedBlockedReference>, Vec<RemovedEmptyPomodoro>) {
+    if blocked.is_empty() {
+        return (Vec::new(), Vec::new());
+    }
+    let daily_output_index = compose.outputs.iter().position(|output| {
+        output.path == daily_path
+            || canonical_daily_path.is_some_and(|daily| {
+                output.path.canonicalize().ok().as_ref() == Some(daily)
+            })
+    });
+    let daily_text = daily_output_index
+        .map(|index| compose.outputs[index].contents.clone())
+        .or_else(|| {
+            files.iter().find_map(|file| {
+                (file.path == daily_path
+                    || canonical_daily_path.is_some_and(|daily| {
+                        file.path.canonicalize().ok().as_ref() == Some(daily)
+                    }))
+                .then(|| file.contents.clone())
+            })
+        })
+        .unwrap_or_else(|| normalized_daily.to_string());
+    let consume_lines = logical_lines(&daily_text);
+    let mut consume_resolved = BTreeMap::new();
+    let mut consume_unresolved = Vec::new();
+    if let Some(section) =
+        native_pomodoro::pomodoros_section_range(&consume_lines)
+    {
+        let consume_model = scan_pomodoros(&consume_lines, section);
+        for reference in &consume_model.all_references {
+            if let Some(resolved) = resolve_task_reference(
+                reference,
+                daily_relative,
+                reference_resolver,
+                ReferenceContext::CurrentDaily,
+                settings,
+                &mut consume_unresolved,
+            ) {
+                consume_resolved.insert(reference.clone(), resolved);
+            }
+        }
+    }
+    let consumption =
+        apply_blocked_consumption(&daily_text, &consume_resolved, blocked);
+    if consumption.contents != daily_text {
+        if let Some(index) = daily_output_index {
+            compose.outputs[index].contents = consumption.contents;
+        } else if consumption.contents != daily_contents {
+            compose.outputs.push(ComposedOutput {
+                path: daily_path.to_path_buf(),
+                contents: consumption.contents,
+                structural_regrouping: false,
+            });
+        }
+    }
+    let daily_display = daily_relative
+        .map(display_path)
+        .unwrap_or_else(|| daily_path.to_string_lossy().into_owned());
+    let consumed = enrich_consumed_blocked(
+        &daily_display,
+        consumption.consumed,
+        blocked_reasons,
+        edges,
+        task_blocks,
+        project_tasks,
+    );
+    (consumed, consumption.removed_empty)
+}
+
+fn enrich_consumed_blocked(
+    daily_path: &str,
+    consumed: Vec<RemovedBlockedReference>,
+    blocked_reasons: &BTreeMap<(PathBuf, String), Vec<BlockReason>>,
+    edges: &BTreeMap<(PathBuf, String), BTreeSet<(PathBuf, String)>>,
+    task_blocks: &BTreeMap<(PathBuf, String), Vec<char>>,
+    project_tasks: &BTreeSet<(PathBuf, String)>,
+) -> Vec<ConsumedBlockedReference> {
+    consumed
+        .into_iter()
+        .map(|item| {
+            let identity = (item.task_path.clone(), item.block_id.clone());
+            let reasons = blocked_reasons
+                .get(&identity)
+                .map(|reasons| {
+                    reasons
+                        .iter()
+                        .map(|reason| reason.kind().to_string())
+                        .collect()
+                })
+                .unwrap_or_default();
+            let seed = BTreeSet::from([identity.clone()]);
+            let promoted =
+                desired_statuses(&seed, edges, task_blocks, project_tasks)
+                    .into_keys()
+                    .filter(|promoted| promoted != &identity)
+                    .map(|(path, block_id)| DuplicateTaskIdentity {
+                        path: display_path(&path),
+                        block_id,
+                    })
+                    .collect();
+            ConsumedBlockedReference {
+                path: daily_path.to_string(),
+                line: item.line_number,
+                pomodoro: item.pomodoro,
+                task: DuplicateTaskIdentity {
+                    path: display_path(&item.task_path),
+                    block_id: item.block_id,
+                },
+                reasons,
+                promoted,
+            }
+        })
+        .collect()
 }

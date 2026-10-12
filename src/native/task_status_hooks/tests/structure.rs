@@ -943,3 +943,181 @@ fn cancellation_classification_uses_recognized_tasks_status_types() {
         assert!(!is_canceled_status(status, &status_types));
     }
 }
+
+fn blocked_set(ids: &[&str]) -> BTreeSet<(PathBuf, String)> {
+    ids.iter()
+        .map(|id| (PathBuf::from("tasks.md"), (*id).to_string()))
+        .collect()
+}
+
+fn plan_blocked(
+    contents: &str,
+    resolved: &BTreeMap<RawReference, ResolvedReference>,
+    ids: &[&str],
+) -> (StructuralPlan, String) {
+    let lines = logical_lines(contents);
+    let model = scan_pomodoros(&lines, 0..lines.len());
+    let settings = test_settings();
+    let plan = plan_structural_changes_with_blocked(
+        &model,
+        resolved,
+        &settings.done_statuses,
+        &settings.status_types,
+        &BTreeSet::new(),
+        false,
+        &lines,
+        &blocked_set(ids),
+    );
+    let updated = apply_structural_plan(contents, &model, &plan);
+    (plan, updated)
+}
+
+// PDL1: live link to a Blocked task under an open entry that has other
+// children — link consumed; entry kept.
+#[test]
+fn consumes_blocked_live_link_and_keeps_the_entry() {
+    let contents = concat!(
+        "- [ ] Current (0900-0930)\n",
+        "  - [[tasks#^blocked]]\n",
+        "  - [[tasks#^keep]]\n",
+    );
+    let resolved = resolved(&[
+        ("tasks", "blocked", vec!['?']),
+        ("tasks", "keep", vec![' ']),
+    ]);
+    let (plan, updated) = plan_blocked(contents, &resolved, &["blocked"]);
+
+    assert_eq!(plan.removed_blocked.len(), 1);
+    assert_eq!(plan.removed_blocked[0].block_id, "blocked");
+    assert_eq!(plan.removed_blocked[0].line_number, 2);
+    assert_eq!(
+        updated,
+        concat!("- [ ] Current (0900-0930)\n", "  - [[tasks#^keep]]\n",)
+    );
+}
+
+// PDL2: that consumed link was the entry's last child — entry deleted.
+#[test]
+fn consuming_last_child_empties_the_pomodoro() {
+    let contents = concat!(
+        "## Pomodoros\n\n",
+        "- [ ] Current (0900-0930)\n",
+        "  - [[tasks#^blocked]]\n",
+        "- [ ] Later\n",
+        "  - [[tasks#^keep]]\n",
+    );
+    let resolved = resolved(&[
+        ("tasks", "blocked", vec!['?']),
+        ("tasks", "keep", vec![' ']),
+    ]);
+    let consumption = apply_blocked_consumption(
+        contents,
+        &resolved,
+        &blocked_set(&["blocked"]),
+    );
+
+    assert_eq!(consumption.consumed.len(), 1);
+    assert_eq!(
+        consumption.removed_empty,
+        vec![RemovedEmptyPomodoro {
+            line_number: 3,
+            line: "- [ ] Current (0900-0930)".to_string(),
+        }]
+    );
+    assert_eq!(
+        consumption.contents,
+        concat!("## Pomodoros\n\n", "- [ ] Later\n", "  - [[tasks#^keep]]\n",)
+    );
+}
+
+// PDL4: closed entries in the same day file stay byte-identical.
+// PDL5: a struck link under an open entry is untouched.
+#[test]
+fn consumption_skips_closed_entries_and_struck_links() {
+    let contents = concat!(
+        "- [ ] Open (0900-0930)\n",
+        "  - ~~[[tasks#^blocked]]~~\n",
+        "  - [[tasks#^keep]]\n",
+        "- [x] Closed (0800-0830)\n",
+        "  - [[tasks#^blocked]]\n",
+    );
+    let resolved = resolved(&[
+        ("tasks", "blocked", vec!['?']),
+        ("tasks", "keep", vec![' ']),
+    ]);
+    let (plan, updated) = plan_blocked(contents, &resolved, &["blocked"]);
+    let consumption = apply_blocked_consumption(
+        contents,
+        &resolved,
+        &blocked_set(&["blocked"]),
+    );
+
+    assert!(plan.removed_blocked.is_empty());
+    assert_eq!(updated, contents);
+    assert!(consumption.consumed.is_empty());
+    assert_eq!(consumption.contents, contents);
+}
+
+// PDL6: prose bullet whose only Task Link token is the Blocked target —
+// token removed; the rest of the bullet kept.
+#[test]
+fn consumption_strips_the_token_from_a_prose_bullet() {
+    let contents = concat!(
+        "- [ ] Current (0900-0930)\n",
+        "  - notes [[tasks#^blocked]] kept\n",
+    );
+    let resolved = resolved(&[("tasks", "blocked", vec!['?'])]);
+    let (plan, updated) = plan_blocked(contents, &resolved, &["blocked"]);
+
+    assert_eq!(plan.removed_blocked.len(), 1);
+    assert_eq!(
+        updated,
+        concat!("- [ ] Current (0900-0930)\n", "  - notes  kept\n",)
+    );
+}
+
+// PDL7: planned link-only bullet with authored child notes — whole
+// subtree removed.
+#[test]
+fn consumption_removes_link_only_subtree_with_child_notes() {
+    let contents = concat!(
+        "- [ ] Current (0900-0930)\r\n",
+        "  - [[tasks#^blocked]]\r\n",
+        "    - authored child note\r\n",
+        "  - [[tasks#^keep]]\r\n",
+    );
+    let resolved = resolved(&[
+        ("tasks", "blocked", vec!['?']),
+        ("tasks", "keep", vec![' ']),
+    ]);
+    let (plan, updated) = plan_blocked(contents, &resolved, &["blocked"]);
+
+    assert_eq!(plan.removed_blocked.len(), 1);
+    assert_eq!(
+        updated,
+        concat!("- [ ] Current (0900-0930)\r\n", "  - [[tasks#^keep]]\r\n",)
+    );
+}
+
+// Never key removal off `'?'`: an empty Blocked set leaves `[?]` links
+// in place so `task_complete` retirement (`Live{'?'}`) is unchanged.
+#[test]
+fn empty_blocked_set_does_not_consume_question_status_links() {
+    let contents =
+        concat!("- [ ] Current (0900-0930)\n", "  - [[tasks#^blocked]]\n",);
+    let resolved = resolved(&[("tasks", "blocked", vec!['?'])]);
+    let lines = logical_lines(contents);
+    let model = scan_pomodoros(&lines, 0..lines.len());
+    let settings = test_settings();
+    let plan = plan_structural_changes(
+        &model,
+        &resolved,
+        &settings.done_statuses,
+        &settings.status_types,
+        &BTreeSet::new(),
+        false,
+    );
+
+    assert!(plan.removed_blocked.is_empty());
+    assert_eq!(apply_structural_plan(contents, &model, &plan), contents);
+}

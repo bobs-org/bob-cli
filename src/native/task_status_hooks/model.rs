@@ -136,6 +136,34 @@ pub(crate) struct RemovedCanceledReference {
     pub(crate) pomodoro: String,
 }
 
+/// One live Task Link removed because its target is effectively Blocked
+/// (`docs/task-dependencies.md` §13.5, §13.9).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct ConsumedBlockedReference {
+    /// Vault-relative daily note that held the live link.
+    pub(crate) path: String,
+    /// 1-based line of the consumed occurrence in the daily note.
+    pub(crate) line: usize,
+    pub(crate) pomodoro: String,
+    pub(crate) task: DuplicateTaskIdentity,
+    /// §13.9 reason kinds (`local_dependency`, `local_schedule`,
+    /// `project_dependency`, `project_schedule`).
+    pub(crate) reasons: Vec<String>,
+    /// Identities raised along `edges(T)` by this consumption seed.
+    pub(crate) promoted: Vec<DuplicateTaskIdentity>,
+}
+
+/// Planner-local record of one consumed blocked occurrence, before
+/// reconcile enriches it with reasons and the promotion walk.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RemovedBlockedReference {
+    pub(crate) target: String,
+    pub(crate) block_id: String,
+    pub(crate) line_number: usize,
+    pub(crate) pomodoro: String,
+    pub(crate) task_path: PathBuf,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub(super) struct DuplicateTaskIdentity {
     pub(super) path: String,
@@ -210,6 +238,7 @@ pub(super) struct SyncResult {
     pub(super) marker_added_references: Vec<MarkerReference>,
     pub(super) marker_removed_references: Vec<MarkerReference>,
     pub(super) removed_canceled_references: Vec<RemovedCanceledReference>,
+    pub(super) consumed_blocked_references: Vec<ConsumedBlockedReference>,
     pub(super) removed_duplicate_lines: Vec<RemovedDuplicateLine>,
     pub(super) removed_empty_pomodoros: Vec<RemovedEmptyPomodoro>,
     pub(super) grouped_task_sections: Vec<GroupedTaskSectionReport>,
@@ -469,6 +498,7 @@ pub(crate) struct StructuralPlan {
     pub(crate) marker_added: Vec<MarkerReference>,
     pub(crate) marker_removed: Vec<MarkerReference>,
     pub(crate) removed_canceled: Vec<RemovedCanceledReference>,
+    pub(crate) removed_blocked: Vec<RemovedBlockedReference>,
 }
 
 #[derive(Debug, Clone, Default)]

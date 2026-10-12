@@ -653,6 +653,7 @@ fn reconcile_derives_project_blocking_tag_and_unblocked() {
         "prj_is_blocked_tags_stripped",
         "unblocked_fields_written",
         "unblocked_fields_pruned",
+        "consumed_blocked_references",
     ] {
         assert_eq!(json[key], serde_json::json!([]), "key {key}");
     }

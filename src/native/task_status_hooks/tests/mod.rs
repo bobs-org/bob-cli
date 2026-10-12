@@ -1,4 +1,5 @@
 //! Shared fixtures for task-status hook tests.
+pub(super) use super::structure::plan_structural_changes_with_blocked;
 pub(super) use super::*;
 
 fn reference(target: &str, block_id: &str) -> RawReference {

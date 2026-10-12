@@ -27,8 +27,9 @@ In practice it:
 - Marks a task Blocked (`[?]`) when it has an open Dataview dependency or a
   future `[scheduled:: YYYY-MM-DD]` date
 - Cleans the ledger: de-duplicates links across open Pomodoros, retires
-  completed references, removes canceled-task bullets, deletes childless
-  Pomodoros, and repairs `🍅` markers
+  completed references, removes canceled-task bullets, consumes live Task
+  Links to effectively Blocked tasks under today's open Pomodoros, deletes
+  childless Pomodoros, and repairs `🍅` markers
 
 The latest existing earlier daily note is a read-only recent-activity source:
 it supplies the rank an otherwise-unblocked Blocked task recovers to and the
@@ -46,6 +47,7 @@ subtree from an open Pomodoro without changing the canceled task itself.
 - [Sync rules](#sync-rules)
 - [Dependency lines](#dependency-lines)
 - [Derived Blocked status](#derived-blocked-status)
+- [Blocked task links are consumed](#blocked-task-links-are-consumed)
 - [Status grouping](#status-grouping)
 - [Pomodoro marker](#pomodoro-marker)
 - [Guard rails](#guard-rails)
@@ -188,10 +190,10 @@ same cleanup on its next run.
 
 ### Empty Pomodoros
 
-After duplicate-line removal, canceled-reference subtree removal,
-completed-reference retirement or relocation, and marker repair have been
-composed, the command removes childless Pomodoro entries from the selected
-current daily note. The cleanup is limited to recognized column-zero open or
+After duplicate-line removal, canceled-reference subtree removal, blocked-link
+consumption, completed-reference retirement or relocation, and marker repair
+have been composed, the command removes childless Pomodoro entries from the
+selected current daily note. The cleanup is limited to recognized column-zero open or
 completed ledger entries in the real `## Pomodoros` section; nested checkbox
 lookalikes, fenced examples, entries outside the section, and statuses that
 the Pomodoro parser does not recognize are left alone.
@@ -217,7 +219,9 @@ A second run after a successful cleanup is a no-op.
 The rewritten Pomodoro section is scanned again after duplicate removal,
 canceled/completed-reference structural rewrites, marker repair, and empty
 Pomodoro cleanup. Only references that will actually be written contribute to
-the direct desired-status map and dependency graph. Thus an otherwise-live task
+the direct desired-status map and dependency graph, except that live links to
+effectively Blocked tasks still seed promotion in the same run and are
+consumed afterwards. Thus an otherwise-live task
 mentioned only as sibling or nested content in a removed item, a removed
 canceled root, a removed empty Pomodoro, and any otherwise-unreachable
 dependency chain stop contributing desired Next or In-Progress state in that
@@ -520,6 +524,31 @@ Completion is classified separately from Next synchronization. Conventional
 when its entry in `statusSettings.coreStatuses` or
 `statusSettings.customStatuses` has type `DONE`. `CANCELLED`, `IN_PROGRESS`,
 `ON_HOLD`, `NON_TASK`, unknown, and unchecked statuses are not complete.
+
+## Blocked task links are consumed
+
+After transitions compute the final Blocked set (newly blocked tasks plus
+unchanged `[?]` rows that still have a reason), the command removes those
+tasks' live, unstruck Task Links under **today's open** Pomodoros. Closed
+entries, `🍅` history, other days, and Depends-On links are never touched.
+
+A link-only bullet is removed with its subtree; otherwise only the link
+token is removed. The empty-Pomodoro rule then runs and may delete a running
+timed entry (accepted; matches cancel). Before removal, the link seeds
+promotion along `edges(T)` exactly as a surviving link would, so open
+prerequisites (own plus inherited) rise to at least Next. A link whose
+target's last reason clears in the same run is kept.
+
+Human and JSON output report each occurrence as
+`consumed_blocked_references`
+(`{path, line, pomodoro, task, reasons, promoted[]}`). Emptied entries fold
+into `removed_empty_pomodoros`. Dry-run output equals the live write, and a
+second run changes nothing except the documented daily-note exception: a
+prerequisite in a canonical daily note promoted only by consumption follows
+the sticky-lanes R9 carve-out and may clear on the next run.
+
+See [task-dependencies.md §13.5](task-dependencies.md#135-consumption) and
+the PDL vectors.
 
 ## Status Grouping
 
@@ -1017,6 +1046,24 @@ JSON mode prints one object on stdout with these stable fields:
       "pomodoro": "- [ ] Current work (0900-0930)"
     }
   ],
+  "consumed_blocked_references": [
+    {
+      "path": "2026/20260710.md",
+      "line": 12,
+      "pomodoro": "- [ ] Current work (0900-0930)",
+      "task": {
+        "path": "Projects/Alpha.md",
+        "block_id": "ship"
+      },
+      "reasons": ["project_dependency"],
+      "promoted": [
+        {
+          "path": "dev.md",
+          "block_id": "write-design"
+        }
+      ]
+    }
+  ],
   "removed_duplicate_lines": [
     {
       "line_number": 9,
@@ -1154,6 +1201,11 @@ owning `pomodoro`. This stable compatibility field reports the qualifying
 references that triggered list-item deletion; multiple qualifying occurrences
 on one deleted item remain separate entries. The array follows deterministic
 file/occurrence order. Each
+`consumed_blocked_references` item is one live Task Link removed because its
+target is effectively Blocked: the daily-note `path`, one-based `line`, owning
+`pomodoro`, the blocked `task` `{path, block_id}`, `reasons` (the §13.9
+kinds), and `promoted[]` identities raised along `edges(T)` by that
+consumption seed. Each
 `removed_duplicate_lines` item represents one physical line and contains its
 one-based original `line_number`, original `line`, owning `pomodoro`, and one or
 more canonical path-plus-block `duplicate_tasks`.

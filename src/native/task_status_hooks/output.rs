@@ -27,6 +27,7 @@ pub(super) fn print_human_result(result: &SyncResult) {
         + result.marker_added_references.len()
         + result.marker_removed_references.len()
         + result.removed_canceled_references.len()
+        + result.consumed_blocked_references.len()
         + result.removed_duplicate_lines.len()
         + result.removed_empty_pomodoros.len()
         + result.grouped_task_sections.len()
@@ -141,6 +142,7 @@ pub(super) fn print_human_result(result: &SyncResult) {
     print_completed_reference_sections(result);
     print_marker_reference_sections(result);
     print_canceled_reference_section(result);
+    print_consumed_blocked_section(result);
     print_duplicate_line_section(result);
     print_empty_pomodoro_section(result);
     print_dependency_projection_sections(&styler, result);
@@ -170,7 +172,7 @@ pub(super) fn print_human_result(result: &SyncResult) {
         result.dependency_warnings.len()
     );
     println!(
-        "Summary: {} marked next, {} marked in progress, {} cleared, {} cleared in progress, {} blocked, {} unblocked, {} struck, {} moved, {} marked, {} unmarked, {} canceled-reference triggers, {} duplicate-line removals, {} empty Pomodoros removed, {} grouped sections, {} dependency projected, {} adopted, {} healed, {} canonicalized, {} legacy children, {} warnings, {} project-blocked tags added, {} stripped, {} unblocked fields written, {} pruned",
+        "Summary: {} marked next, {} marked in progress, {} cleared, {} cleared in progress, {} blocked, {} unblocked, {} struck, {} moved, {} marked, {} unmarked, {} canceled-reference triggers, {} duplicate-line removals, {} empty Pomodoros removed, {} grouped sections, {} dependency projected, {} adopted, {} healed, {} canonicalized, {} legacy children, {} warnings, {} project-blocked tags added, {} stripped, {} unblocked fields written, {} pruned, {} blocked-reference consumptions",
         result.marked_next.len(),
         result.marked_in_progress.len(),
         result.cleared.len(),
@@ -194,7 +196,8 @@ pub(super) fn print_human_result(result: &SyncResult) {
         result.prj_is_blocked_tags_added.len(),
         result.prj_is_blocked_tags_stripped.len(),
         result.unblocked_fields_written.len(),
-        result.unblocked_fields_pruned.len()
+        result.unblocked_fields_pruned.len(),
+        result.consumed_blocked_references.len()
     );
 }
 
@@ -494,6 +497,44 @@ pub(super) fn print_empty_pomodoro_section(result: &SyncResult) {
     );
     for item in &result.removed_empty_pomodoros {
         println!("    line {}  {}", item.line_number, item.line);
+    }
+}
+
+pub(super) fn print_consumed_blocked_section(result: &SyncResult) {
+    if result.consumed_blocked_references.is_empty() {
+        return;
+    }
+    println!();
+    println!(
+        "  {} blocked task links",
+        if result.dry_run {
+            "would consume"
+        } else {
+            "consumed"
+        }
+    );
+    for item in &result.consumed_blocked_references {
+        let promoted = if item.promoted.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "  promoted {}",
+                item.promoted
+                    .iter()
+                    .map(|task| format!("{}#^{}", task.path, task.block_id))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        };
+        let reasons = if item.reasons.is_empty() {
+            String::new()
+        } else {
+            format!("  {}", item.reasons.join(", "))
+        };
+        println!(
+            "    {}#^{}  line {}  {}{reasons}{promoted}",
+            item.task.path, item.task.block_id, item.line, item.pomodoro
+        );
     }
 }
 

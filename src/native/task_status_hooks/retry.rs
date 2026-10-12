@@ -266,6 +266,7 @@ mod tests {
             marker_added_references: Vec::new(),
             marker_removed_references: Vec::new(),
             removed_canceled_references: Vec::new(),
+            consumed_blocked_references: Vec::new(),
             removed_duplicate_lines: Vec::new(),
             removed_empty_pomodoros: Vec::new(),
             grouped_task_sections: Vec::new(),

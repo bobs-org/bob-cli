@@ -161,6 +161,31 @@ pub(crate) fn plan_structural_changes(
     duplicate_deleted_lines: &BTreeSet<usize>,
     dedupe_into_destination: bool,
 ) -> StructuralPlan {
+    plan_structural_changes_with_blocked(
+        model,
+        resolved,
+        done_statuses,
+        status_types,
+        duplicate_deleted_lines,
+        dedupe_into_destination,
+        &[],
+        &BTreeSet::new(),
+    )
+}
+
+/// Like [`plan_structural_changes`], with an explicit Blocked identity set
+/// (`docs/task-dependencies.md` §13.5). Never keys consumption off `'?'`:
+/// `task_complete` retirement passes an empty set so `Live{'?'}` stays.
+pub(crate) fn plan_structural_changes_with_blocked(
+    model: &PomodoroModel,
+    resolved: &BTreeMap<RawReference, ResolvedReference>,
+    done_statuses: &BTreeSet<char>,
+    status_types: &BTreeMap<char, TaskStatusType>,
+    duplicate_deleted_lines: &BTreeSet<usize>,
+    dedupe_into_destination: bool,
+    lines: &[&str],
+    blocked: &BTreeSet<(PathBuf, String)>,
+) -> StructuralPlan {
     let current = model
         .entries
         .iter()
@@ -239,6 +264,19 @@ pub(crate) fn plan_structural_changes(
         deleted_lines.extend(bullet.line_index..bullet.end_line);
     }
 
+    let (blocked_edits, blocked_deleted, removed_blocked) =
+        plan_blocked_link_removals(
+            model,
+            resolved,
+            lines,
+            blocked,
+            &deleted_lines,
+        );
+    deleted_lines.extend(blocked_deleted);
+    for (line_index, edits) in blocked_edits {
+        token_edits.entry(line_index).or_default().extend(edits);
+    }
+
     for bullet in &model.bullets {
         if deleted_lines.contains(&bullet.line_index) {
             continue;
@@ -297,6 +335,14 @@ pub(crate) fn plan_structural_changes(
         }
         let final_entry = move_target.unwrap_or(bullet.entry_index);
         for link in &bullet.links {
+            if resolved.get(&link.reference).is_some_and(|reference| {
+                blocked.contains(&(
+                    reference.path.clone(),
+                    link.reference.block_id.clone(),
+                ))
+            }) {
+                continue;
+            }
             let retire = completed_links
                 .iter()
                 .any(|completed| std::ptr::eq(*completed, link));
@@ -378,6 +424,164 @@ pub(crate) fn plan_structural_changes(
         marker_added,
         marker_removed,
         removed_canceled,
+        removed_blocked,
+    }
+}
+
+/// Plan live-link consumption for `blocked` identities under open
+/// Pomodoros. Does not retire completed links or repair `🍅` markers:
+/// the second rewrite pass applies only these edits plus empty
+/// Pomodoros (`docs/task-dependencies.md` §13.5).
+fn plan_blocked_link_removals(
+    model: &PomodoroModel,
+    resolved: &BTreeMap<RawReference, ResolvedReference>,
+    lines: &[&str],
+    blocked: &BTreeSet<(PathBuf, String)>,
+    already_deleted: &BTreeSet<usize>,
+) -> (
+    BTreeMap<usize, Vec<TokenEdit>>,
+    BTreeSet<usize>,
+    Vec<RemovedBlockedReference>,
+) {
+    let mut token_edits: BTreeMap<usize, Vec<TokenEdit>> = BTreeMap::new();
+    let mut deleted_lines = BTreeSet::new();
+    let mut removed_blocked = Vec::new();
+    if blocked.is_empty() {
+        return (token_edits, deleted_lines, removed_blocked);
+    }
+    for bullet in &model.bullets {
+        if already_deleted.contains(&bullet.line_index)
+            || deleted_lines.contains(&bullet.line_index)
+        {
+            continue;
+        }
+        let source = &model.entries[bullet.entry_index];
+        if !source.open {
+            continue;
+        }
+        let blocked_links = bullet
+            .links
+            .iter()
+            .filter(|link| {
+                !link.struck
+                    && resolved.get(&link.reference).is_some_and(|reference| {
+                        blocked.contains(&(
+                            reference.path.clone(),
+                            link.reference.block_id.clone(),
+                        ))
+                    })
+            })
+            .collect::<Vec<_>>();
+        if blocked_links.is_empty() {
+            continue;
+        }
+        let line = lines.get(bullet.line_index).copied().unwrap_or("");
+        for link in &blocked_links {
+            let resolved_path = resolved
+                .get(&link.reference)
+                .map(|reference| reference.path.clone())
+                .expect("blocked links are resolved");
+            removed_blocked.push(RemovedBlockedReference {
+                target: link.reference.target.clone(),
+                block_id: link.reference.block_id.clone(),
+                line_number: bullet.line_index + 1,
+                pomodoro: source.context.clone(),
+                task_path: resolved_path,
+            });
+        }
+        // A link-only bullet (body is exactly one blocked live token)
+        // goes with its subtree; otherwise only each blocked token
+        // is removed (PDL1, PDL6, PDL7).
+        let link_only = blocked_links
+            .iter()
+            .any(|link| is_link_only_bullet(line, link));
+        if link_only {
+            deleted_lines.extend(bullet.line_index..bullet.end_line);
+        } else {
+            for link in blocked_links {
+                token_edits.entry(bullet.line_index).or_default().push(
+                    TokenEdit {
+                        start: link.edit_start,
+                        end: link.edit_end,
+                        replacement: String::new(),
+                    },
+                );
+            }
+        }
+    }
+    (token_edits, deleted_lines, removed_blocked)
+}
+
+fn is_link_only_bullet(line: &str, link: &LinkOccurrence) -> bool {
+    let indent = leading_indentation_len(line);
+    let Some(after) = after_list_marker(line, indent) else {
+        return false;
+    };
+    let body = line[after..].trim();
+    let token = line
+        .get(link.edit_start..link.edit_end)
+        .unwrap_or("")
+        .trim();
+    !token.is_empty() && body == token
+}
+
+/// Consume live links to `blocked` identities under today's open
+/// Pomodoros, then run the empty-Pomodoro rule against the matching
+/// pre-consumption model (`docs/task-dependencies.md` §13.5).
+pub(crate) struct BlockedConsumption {
+    pub(crate) contents: String,
+    pub(crate) consumed: Vec<RemovedBlockedReference>,
+    pub(crate) removed_empty: Vec<RemovedEmptyPomodoro>,
+}
+
+pub(crate) fn apply_blocked_consumption(
+    contents: &str,
+    resolved: &BTreeMap<RawReference, ResolvedReference>,
+    blocked: &BTreeSet<(PathBuf, String)>,
+) -> BlockedConsumption {
+    let unchanged = BlockedConsumption {
+        contents: contents.to_string(),
+        consumed: Vec::new(),
+        removed_empty: Vec::new(),
+    };
+    if blocked.is_empty() {
+        return unchanged;
+    }
+    let lines = logical_lines(contents);
+    let Some(section) = native_pomodoro::pomodoros_section_range(&lines) else {
+        return unchanged;
+    };
+    let model = scan_pomodoros(&lines, section);
+    let (token_edits, deleted_lines, consumed) = plan_blocked_link_removals(
+        &model,
+        resolved,
+        &lines,
+        blocked,
+        &BTreeSet::new(),
+    );
+    if consumed.is_empty() {
+        return unchanged;
+    }
+    let plan = StructuralPlan {
+        token_edits,
+        moves: Vec::new(),
+        deleted_lines,
+        target_entry: None,
+        struck: Vec::new(),
+        moved: Vec::new(),
+        deduplicated: Vec::new(),
+        marker_added: Vec::new(),
+        marker_removed: Vec::new(),
+        removed_canceled: Vec::new(),
+        removed_blocked: consumed,
+    };
+    let updated = apply_structural_plan(contents, &model, &plan);
+    let empty_plan = plan_empty_pomodoro_removals(&updated, &model);
+    let text = apply_empty_pomodoro_plan(&updated, &empty_plan);
+    BlockedConsumption {
+        contents: text,
+        consumed: plan.removed_blocked,
+        removed_empty: empty_plan.removed,
     }
 }
 
