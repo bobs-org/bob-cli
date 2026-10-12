@@ -389,7 +389,10 @@ command treats the fields exactly like any other inline task schedule. The
 `#hide` surfacing contract.
 
 Blocked is derived state: a recognized open task is blocked when it has at
-least one open dependency, a valid future schedule, or both. This combined
+least one open dependency, a valid future schedule, or both. A task that
+lives in a blocked project is Blocked too; the project-dependency rule,
+reason kinds, and consumption of links to Blocked tasks are in
+[task-dependencies.md §13](task-dependencies.md#13-project-dependencies). This combined
 state overrides Ready (`[ ]`), Next (`[*]`), and In Progress (`[/]`), including
 Pomodoro promotion for a task inherited from a scheduled project. A task
 already `[?]` remains Blocked until every reason is gone. Only then does it
