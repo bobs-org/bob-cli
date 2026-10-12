@@ -304,7 +304,8 @@ The stage ports `capture_link_tasks.rs::rank`:
 Guarded rows are disabled and show their reason: the dependent itself;
 a cycle (`⟲`), checked on the graph _after_ the whole batch, with the
 path in a tooltip (the graph includes implicit resident → `^prj`
-edges, §13); a `^prj` target inside the same project note
+edges, and trialing a `^prj` add also trials resident → target for
+every open resident, §13); a `^prj` target inside the same project note
 (`inside this project`); a target with no `[id::]` whose path can't be
 encoded; a target or dependent that changed since the stage opened
 (refuse, then reopen fresh). Removing a link is always allowed.
@@ -441,8 +442,8 @@ chips. The ⚠ chip is the signal for those; the summary tracks blocking.
 | Ctrl+D on the Depends on row | Deletes the line, the field, and any legacy children, with immediate recovery. |
 | Hand edits in Obsidian | Once the cursor leaves the edited line (short debounce), nav applies R1/R9 to that task. Deleting the whole line clears the field. Malformed lines are left alone. |
 | `bob capture` `&note:id` (and the Bob Mac Capture `&` picker) | Adds prerequisites to a new task or an explicit `@note+id` dependent through the staged capture writer: new links append in typed order (repeats are no-ops), legacy children fold and field-only dependencies are adopted, fields are derived, and §5 Blocked/promotion applies in the same batch. On `^prj`, `&` writes the Depends-On line and applies resident side effects (§13). It never removes or reorders links; removal stays with Ctrl+Shift+P and Ctrl+D. See `docs/capture.md`. |
-| Ctrl+Shift+M, `task archive` | The line moves with its task. Same-note links inside a moved block whose target stayed behind gain the source note path. Moving open tasks **into** a blocked project sets them `[?]`, tags them `#prj_is_blocked`, and removes their live links from today's open Pomodoros in the move write. Moving them **out** strips the tag and recovers those without own reasons, writing `[unblocked::]` when [freshness.md §4](freshness.md#4-evaluation) says to. |
-| Ctrl+Alt+Shift+N (`create-project-note-from-task`) | Forward: the source's Depends-On line becomes the first child of `^prj`, and its inline `scheduled` stays on `^prj` (rebase same-note links to the source note; never seed that line as a Tasks row; skip the machine-owned Sub-projects child). Reverse: the line becomes the restored task's first child and the date stays inline on its root task (links re-formed relative to the destination). `[?]` sources are accepted; blocked residents are tagged/recovered through the shared gate and live links are consumed when they enter a blocked project. Details in §13. |
+| Ctrl+Shift+M, `task archive` | The line moves with its task. Same-note links inside a moved block whose target stayed behind gain the source note path. Moving open tasks **into** a blocked project sets them `[?]`, tags them `#prj_is_blocked`, promotes verifiably open prerequisites to the strongest moved lane, and removes their live links from today's open Pomodoros in the move write. Moving them **out** strips the tag and recovers those without own reasons, writing `[unblocked::]` when [freshness.md §4](freshness.md#4-evaluation) says to. Closed lines are never edited. |
+| Ctrl+Alt+Shift+N (`create-project-note-from-task`) | Forward: the source's Depends-On line becomes the first child of `^prj`, and its inline `scheduled` stays on `^prj` (rebase same-note links to the source note; never seed that line as a Tasks row; skip the machine-owned Sub-projects child); the project lands blocked only for a carried open prerequisite or a future inline date. Reverse: the line becomes the restored task's first child and the date stays inline on its root task (links re-formed relative to the destination), with `#^prj` links repointed before Pomodoro cleanup so live links are consumed. `[?]` sources are accepted; blocked residents are tagged/recovered through the shared gate and live links are consumed when they enter a blocked project. Details in §13. |
 | "Rewrite dependency navigation links" command, `migrate-dependency-bullets.mjs` | Deleted. They emit embeds. |
 
 ## 9. Plugin api v3 (navigation-hotkeys)
@@ -1744,6 +1745,10 @@ as structural, so the quiet period applies.
 - **`#hide` forcing** for a future date stays in sync.
 - **Stamps:** `^prj` follows the normal stamp rule. The
   "project-frontmatter edits never stamp" carve-out is gone.
+- **Due or deleted dates keep the tag while `^prj` holds Depends-On
+  links.** Residents lose `#prj_is_blocked` only when the project has
+  no remaining reason (or the recovery snapshot proves them ready);
+  reconcile repairs the tag once the last prerequisite closes.
 
 ### 13.9 Outputs and warning kinds
 
@@ -1770,10 +1775,13 @@ Ctrl+Shift+P → Depends on on `^prj` (and a Task Link to `^prj`) edits
 its Depends-On line plus resident side effects. One write: the line,
 the `^prj` `[dependsOn::]` field, set `^prj` and every open resident
 to `[?]` when any target is open, tag residents `#prj_is_blocked`,
-consume their live links, transfer commitment, and recover everyone
+consume their live links, transfer commitment, and — only when `^prj`
+itself was `[?]` before the gesture — recover the tagged residents
 with no remaining reason when the last reason clears (strip the tag;
-write `[unblocked::]` when freshness.md §4 says to). Ctrl+D on the
-Depends on row deletes the line and the field.
+write `[unblocked::]` when freshness.md §4 says to). Removing a link
+from an unblocked `^prj` leaves untagged residents and their own
+reasons alone. Ctrl+D on the Depends on row deletes the line and the
+field.
 
 Schedule on `^prj` writes the inline `[scheduled::]` field. Conversion
 is line ↔ line both ways. Capture `&` on `^prj` writes the line.
@@ -1781,18 +1789,26 @@ is line ↔ line both ways. Capture `&` on `^prj` writes the line.
 `create-project-note-from-task` (Ctrl+Alt+Shift+N) keeps the source's
 Depends-On line as the first child of `^prj` and its inline date on `^prj`
 on the way forward (rebase `[[#^a]]` → `[[source#^a]]`; never seed that line
-as a Tasks row; skip the machine-owned Sub-projects child). On reverse, the
-line becomes the restored task's first child and the date stays inline on the
+as a Tasks row; skip the machine-owned Sub-projects child). The new
+project lands blocked only for a carried open prerequisite or a future
+inline date — a `[?]` source alone seeds Ready. Commitment transfers
+the residents' pre-seed lanes. On reverse, the line becomes the
+restored task's first child and the date stays inline on the
 root task (links re-formed relative to the destination). `[?]` sources are
 accepted. Residents blocked by the project are tagged or recovered through the
 shared recovery gate; entering a blocked project consumes their live Pomodoro
-links in today's open entries.
+links in today's open entries. Reversal repoints `#^prj` links to the
+restored block id before planning that cleanup, so the live links are
+consumed rather than left behind.
 
 Ctrl+Shift+M into a blocked project sets the moved open tasks `[?]`,
-tags them `#prj_is_blocked`, and removes their live links from today's open
+tags them `#prj_is_blocked`, promotes their verifiably open
+prerequisites (the destination project's and their own carried ones) to
+the strongest moved lane, and removes their live links from today's open
 Pomodoros in the same move write; moving them out strips the tag and recovers
 those without own reasons, writing `[unblocked::]` when required by the
-freshness gate.
+freshness gate. Move, inbox-route, and reversal notices report the
+blocked and recovered counts (`· N Blocked · M Ready again`).
 
 Capture `&` aimed at `^prj` writes the Depends-On line. Capture of a
 new task into a blocked project lands `[?]`, `#prj_is_blocked`, and
