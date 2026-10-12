@@ -187,6 +187,33 @@ pub(super) fn normalize_task_hide_tag(
     remove_tag_spans_from_line(line, task_text_offset, &spans[1..])
 }
 
+/// Maintain the machine-owned project-blocked tag as a single whole token.
+/// When present, it is inserted with the other task metadata before `^id`.
+pub(crate) fn normalize_prj_is_blocked_tag(
+    line: &str,
+    blocked: bool,
+) -> String {
+    let Some(task) = parse_task_line(line) else {
+        return line.to_string();
+    };
+    let task_text_offset = task.text.as_ptr() as usize - line.as_ptr() as usize;
+    let spans = tag_spans(task.text, PROJECT_BLOCKED_TAG);
+    if !blocked && spans.is_empty() {
+        return line.to_string();
+    }
+
+    let mut output = remove_tag_spans_from_line(line, task_text_offset, &spans);
+    if blocked {
+        let insertion = task_metadata_insertion_offset(&output);
+        output.insert_str(insertion, &format!(" {PROJECT_BLOCKED_TAG}"));
+    }
+    if output == line {
+        line.to_string()
+    } else {
+        output
+    }
+}
+
 pub(super) fn remove_all_task_tags(line: &str, tag: &str) -> String {
     let Some(task) = parse_task_line(line) else {
         return line.to_string();

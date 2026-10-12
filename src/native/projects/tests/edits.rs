@@ -53,6 +53,31 @@ fn project_changes_remove_prj_fields_with_adjacent_whitespace() {
 }
 
 #[test]
+fn project_blocked_tag_uses_metadata_position_and_is_idempotent() {
+    let line = "- [ ] #task Work [scheduled:: 2026-10-12] ^work";
+    let tagged = normalize_prj_is_blocked_tag(line, true);
+    assert_eq!(
+        tagged,
+        "- [ ] #task Work [scheduled:: 2026-10-12] #prj_is_blocked ^work"
+    );
+    assert_eq!(normalize_prj_is_blocked_tag(&tagged, true), tagged);
+    assert_eq!(normalize_prj_is_blocked_tag(&tagged, false), line);
+}
+
+#[test]
+fn project_blocked_tag_normalizer_deduplicates_only_the_exact_tag() {
+    let line = "- [ ] #task Work #prj_is_blocked #prj_is_blocked_extra ^work";
+    assert_eq!(
+        normalize_prj_is_blocked_tag(line, true),
+        "- [ ] #task Work #prj_is_blocked_extra #prj_is_blocked ^work"
+    );
+    assert_eq!(
+        normalize_prj_is_blocked_tag(line, false),
+        "- [ ] #task Work #prj_is_blocked_extra ^work"
+    );
+}
+
+#[test]
 fn project_changes_remove_prj_hide_tag_with_crlf() {
     let output = apply_changes(
         "---\r\ntype: [[project]]\r\n---\r\n- [ ] #task Ship #hide ^prj\r\n",

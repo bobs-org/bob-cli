@@ -23,6 +23,7 @@ const PROJECT_TASK_SHAPE: &str =
     "- [ ] #task #prj <completion criteria> #hide ^prj";
 const HIDE_TAG: &str = "#hide";
 const PROJECT_TASK_TAG: &str = "#prj";
+const PROJECT_BLOCKED_TAG: &str = "#prj_is_blocked";
 const SUBPROJECTS_MARKER_PREFIX: &str = "🧩 **Sub-projects:**";
 const SUBPROJECTS_SEPARATOR: &str = "•";
 const SUBPROJECT_FUTURE_SCHEDULE_MARKER: &str = "🗓️";
@@ -197,7 +198,6 @@ use tags::*;
 pub(crate) use model::{Frontmatter, ProjectStatus};
 pub(crate) use scan::{
     frontmatter_is_area, frontmatter_is_project, frontmatter_value,
-    is_frontmatter_list_item, is_markdown_file, parse_frontmatter,
-    project_name_aliases, project_schedule_date, read_frontmatter_list,
-    trim_yaml_scalar, walk_typed_notes, FrontmatterList,
+    is_markdown_file, parse_frontmatter, project_name_aliases,
+    trim_yaml_scalar, walk_typed_notes,
 };

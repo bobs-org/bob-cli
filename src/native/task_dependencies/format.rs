@@ -50,9 +50,7 @@ pub(crate) fn canonical_link(
     format!("[[{}#^{block_id}]]", path_without_extension(target))
 }
 
-/// Vault-relative note path without `.md` (`note/sub` for
-/// `note/sub.md`), shared with the project-dependency writer form.
-pub(crate) fn path_without_extension(path: &Path) -> String {
+fn path_without_extension(path: &Path) -> String {
     let mut without_extension = path.to_path_buf();
     without_extension.set_extension("");
     without_extension

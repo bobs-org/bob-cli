@@ -1,48 +1,38 @@
 //! Project recognition and effective-blocking reasons
 //! (`docs/task-dependencies.md` §13.1, §13.3).
 //!
-//! Pure model shared by reconcile, close, and capture: which notes
-//! count as projects, which tasks live in them, which `depends_on`
-//! targets are open, and why a task is Blocked. Nothing here writes.
+//! Project prerequisites are ordinary Depends-On links on the open `^prj`
+//! task. Their projected task ids and openness come from the existing task
+//! dependency model; this module only adds the project-resident rule.
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use std::collections::BTreeSet;
+use std::path::PathBuf;
 
 use chrono::NaiveDate;
 
 use super::super::projects::{
-    frontmatter_is_project, frontmatter_value, parse_frontmatter,
-    project_schedule_date, ProjectStatus,
+    frontmatter_is_project, frontmatter_value, parse_frontmatter, ProjectStatus,
 };
-use super::super::task_dependencies::{dependency_id, is_archive_path};
 use super::super::task_status_hooks::{
-    canonical_daily_date, fenced_lines, logical_lines, task_id_openness,
-    FileScan, TaskLine,
+    canonical_daily_date, fenced_lines, logical_lines, FileScan, TaskLine,
 };
-use super::super::vault_links::NoteIndex;
-use super::parse::{parse_depends_on, DependsOnItem, DependsOnProperty};
 
 /// Block id of the project completion-criteria task.
 const PRJ_BLOCK_ID: &str = "prj";
 
-/// A note's project shape: `project(T)` without the reasons
-/// (`docs/task-dependencies.md` §13.3).
+/// A note's project shape and the location of its sole open `^prj` task.
 #[derive(Debug, Clone)]
 pub(crate) struct ProjectContext {
     /// Vault-relative note path.
     pub(crate) relative_path: PathBuf,
-    /// Whether the note is `project(T)`: `type: project`,
-    /// non-terminal status, exactly one open `^prj`, and not a
-    /// canonical daily note.
+    /// Whether the note satisfies `project(T)` in §13.1.
     pub(crate) recognised: bool,
-    /// Project `scheduled` frontmatter date, if exactly one
-    /// well-formed key exists.
+    /// Index into `FileScan::tasks` for the project's open `^prj` task.
+    project_task_index: Option<usize>,
+    /// The project's own inline `scheduled` value.
     pub(crate) scheduled: Option<NaiveDate>,
-    /// Parsed `depends_on` property (kept even when malformed so
-    /// callers can warn).
-    pub(crate) depends_on: DependsOnProperty,
-    /// Fenced logical-line indices: fenced `#task` lines parse as
-    /// tasks but are never residents (§13.1).
+    /// Fenced logical-line indices; fenced task-looking lines are not
+    /// project residents (§13.1).
     fenced: BTreeSet<usize>,
 }
 
@@ -53,58 +43,51 @@ impl ProjectContext {
         let mut context = Self {
             relative_path: file.relative_path.clone(),
             recognised: false,
+            project_task_index: None,
             scheduled: None,
-            depends_on: DependsOnProperty::Absent,
             fenced: fenced_lines(&lines, 0..lines.len()),
         };
         let Some(frontmatter) = parse_frontmatter(&file.contents) else {
             return context;
         };
-        if !frontmatter_is_project(&frontmatter) {
-            return context;
-        }
-        if ProjectStatus::parse(frontmatter_value(&frontmatter, "status"))
-            .is_terminal()
+        if !frontmatter_is_project(&frontmatter)
+            || ProjectStatus::parse(frontmatter_value(&frontmatter, "status"))
+                .is_terminal()
+            || canonical_daily_date(&file.relative_path).is_some()
         {
             return context;
         }
-        if canonical_daily_date(&file.relative_path).is_some() {
-            return context;
-        }
-        if file
+
+        let open_prj = file
             .tasks
             .iter()
-            .filter(|task| is_open_prj_task(task, &context.fenced))
-            .count()
-            != 1
-        {
+            .enumerate()
+            .filter(|(_, task)| is_open_prj_task(task, &context.fenced))
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        let [project_task_index] = open_prj.as_slice() else {
             return context;
-        }
+        };
+
         context.recognised = true;
-        context.scheduled =
-            project_schedule_date(&file.relative_path, &frontmatter);
-        context.depends_on = parse_depends_on(&frontmatter);
+        context.project_task_index = Some(*project_task_index);
+        context.scheduled = file.tasks[*project_task_index].scheduled;
         context
     }
 
-    /// Whether `task` is a resident: a recognised open `#task` line
-    /// physically in the note except `^prj`, including nested and
-    /// `#ref` tasks; fenced, blockquoted, and custom-status lines are
-    /// excluded (§13.1). Blockquoted lines never parse, so only the
-    /// fence set needs checking here.
-    pub(crate) fn is_resident(&self, task: &TaskLine) -> bool {
-        task.status_recognized
-            && task.status_type.is_open()
-            && task.block_id.as_deref() != Some(PRJ_BLOCK_ID)
-            && !self.fenced.contains(&task.line_index)
+    /// Index of the `^prj` task in the scanned note, when this is a project.
+    pub(crate) fn project_task_index(&self) -> Option<usize> {
+        self.recognised.then_some(self.project_task_index).flatten()
     }
 
-    /// Whether the project's reasons attach to `task`: `^prj` and
-    /// residents alike (§13.3: the rule applies to `^prj` too).
-    /// Openness-independent; callers decide what a closed task needs.
-    pub(crate) fn covers(&self, task: &TaskLine) -> bool {
+    /// Whether `task` is an open resident: physically in the note except
+    /// `^prj`, including nested and `#ref` tasks; fenced and unrecognised
+    /// status lines are excluded (§13.1).
+    pub(crate) fn is_resident(&self, task: &TaskLine) -> bool {
         self.recognised
             && task.status_recognized
+            && task.status_type.is_open()
+            && task.block_id.as_deref() != Some(PRJ_BLOCK_ID)
             && !self.fenced.contains(&task.line_index)
     }
 }
@@ -117,129 +100,12 @@ fn is_open_prj_task(task: &TaskLine, fenced: &BTreeSet<usize>) -> bool {
         && !fenced.contains(&task.line_index)
 }
 
-/// Vault-wide task openness: `[id::]` identities plus `(note,
-/// block-id)` locations. A `depends_on` target is open when its
-/// resolved task is open by location, falling back to its `[id::]`.
-#[derive(Debug, Clone, Default)]
-pub(crate) struct Openness {
-    /// `[id::]` → open, split out of `task_dependency_states`.
-    pub(crate) ids: BTreeMap<String, bool>,
-    /// `(note, block-id)` → open for resolved-target lookup.
-    pub(crate) locations: BTreeMap<(PathBuf, String), bool>,
-}
-
-impl Openness {
-    /// Build both openness maps over one scan.
-    pub(crate) fn for_files(files: &[FileScan]) -> Self {
-        let ids = task_id_openness(files);
-        let mut locations = BTreeMap::new();
-        for file in files {
-            for task in &file.tasks {
-                let Some(block_id) = &task.block_id else {
-                    continue;
-                };
-                let open = locations
-                    .entry((file.relative_path.clone(), block_id.clone()))
-                    .or_insert(false);
-                *open |= task.status_recognized && task.status_type.is_open();
-            }
-        }
-        Self { ids, locations }
-    }
-
-    /// Openness of one `(note, block-id)` target: the location when
-    /// the resolved note carries that block, else its `[id::]`.
-    fn target_open(&self, path: &Path, block_id: &str) -> bool {
-        if let Some(open) = self
-            .locations
-            .get(&(path.to_path_buf(), block_id.to_string()))
-        {
-            return *open;
-        }
-        dependency_id(path, block_id)
-            .ok()
-            .and_then(|id| self.ids.get(&id).copied())
-            .unwrap_or(false)
-    }
-}
-
-/// One resolved `depends_on` entry.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ResolvedDependency {
-    /// Canonical link text (`[[target#^block]]`).
-    pub(crate) link: String,
-    /// Resolved note path, if the target resolved.
-    pub(crate) path: Option<PathBuf>,
-    /// Same-note target: kept in YAML, never projected, never
-    /// blocking (§13.6).
-    pub(crate) internal: bool,
-    /// Archive target: closed history, never blocking.
-    pub(crate) archive: bool,
-    /// Whether the target is open (and hence blocking).
-    pub(crate) open: bool,
-}
-
-/// Resolve parsed entries against the vault: internal targets stay
-/// internal, unresolved targets never block (R4 parity), and archive
-/// targets are closed.
-pub(crate) fn resolve_dependencies(
-    items: &[DependsOnItem],
-    project_path: &Path,
-    index: &NoteIndex,
-    openness: &Openness,
-) -> Vec<ResolvedDependency> {
-    items
-        .iter()
-        .map(|item| {
-            let unresolved = || ResolvedDependency {
-                link: item.link.clone(),
-                path: None,
-                internal: item.internal,
-                archive: false,
-                open: false,
-            };
-            if item.internal {
-                return ResolvedDependency {
-                    path: Some(project_path.to_path_buf()),
-                    internal: true,
-                    ..unresolved()
-                };
-            }
-            let Some(path) = index.resolve(Some(project_path), &item.target)
-            else {
-                return unresolved();
-            };
-            if path == project_path {
-                return ResolvedDependency {
-                    path: Some(path),
-                    internal: true,
-                    ..unresolved()
-                };
-            }
-            if is_archive_path(&path) {
-                return ResolvedDependency {
-                    path: Some(path),
-                    archive: true,
-                    ..unresolved()
-                };
-            }
-            let open = openness.target_open(&path, &item.block_id);
-            ResolvedDependency {
-                link: item.link.clone(),
-                path: Some(path),
-                internal: false,
-                archive: false,
-                open,
-            }
-        })
-        .collect()
-}
-
-/// A project's own blocking inputs (§13.3).
+/// A project's own blocking inputs (§13.3), derived from the ordinary
+/// Depends-On line and inline schedule on its `^prj` task.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct ProjectBlockReasons {
-    /// Open `depends_on` targets (internal targets excluded).
-    pub(crate) open_dependencies: Vec<ResolvedDependency>,
+    /// Open prerequisite ids projected from the `^prj` Depends-On line.
+    pub(crate) open_dependency_ids: Vec<String>,
     /// Project `scheduled` date when strictly later than today.
     pub(crate) future_scheduled: Option<NaiveDate>,
 }
@@ -247,57 +113,47 @@ pub(crate) struct ProjectBlockReasons {
 impl ProjectBlockReasons {
     /// Whether the project contributes no reason.
     pub(crate) fn is_empty(&self) -> bool {
-        self.open_dependencies.is_empty() && self.future_scheduled.is_none()
+        self.open_dependency_ids.is_empty() && self.future_scheduled.is_none()
     }
 }
 
-/// Pure project reasons for one recognised project: the open
-/// `depends_on` targets plus a future project `scheduled`. A
-/// malformed property contributes no known target (it warns and
-/// skips destructive edits instead).
+/// Pure project reasons for one recognised project. Open dependency ids are
+/// supplied by the existing task dependency projection for the `^prj` line.
 pub(crate) fn project_block_reasons(
     context: &ProjectContext,
-    index: &NoteIndex,
+    project_open_dependency_ids: &[String],
     today: NaiveDate,
-    openness: &Openness,
 ) -> ProjectBlockReasons {
     if !context.recognised {
         return ProjectBlockReasons::default();
     }
-    let open_dependencies = match &context.depends_on {
-        DependsOnProperty::Items(items) => {
-            resolve_dependencies(items, &context.relative_path, index, openness)
-                .into_iter()
-                .filter(|resolved| resolved.open)
-                .collect()
-        }
-        DependsOnProperty::Absent | DependsOnProperty::Empty => Vec::new(),
-        DependsOnProperty::Malformed(_) => Vec::new(),
-    };
+    let mut open_dependency_ids = project_open_dependency_ids.to_vec();
+    open_dependency_ids.sort();
+    open_dependency_ids.dedup();
     ProjectBlockReasons {
-        open_dependencies,
+        open_dependency_ids,
         future_scheduled: context.scheduled.filter(|date| *date > today),
     }
 }
 
-/// Why a task is Blocked, with the §13.8 reason kinds.
+/// Why a task is Blocked, with the §13.9 reason kinds.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum BlockReason {
     /// The task's own Depends-On line has an open prerequisite.
     LocalDependency { open_ids: Vec<String> },
     /// The task's own `scheduled` is after today.
     LocalSchedule { date: NaiveDate },
-    /// The task's project has open `depends_on` targets.
+    /// The task's project has open prerequisites on `^prj`.
     ProjectDependency {
         project: PathBuf,
-        open_links: Vec<String>,
+        open_ids: Vec<String>,
     },
-    /// The task's project `scheduled` is after today.
+    /// The task's project `^prj` schedule is after today.
     ProjectSchedule { project: PathBuf, date: NaiveDate },
 }
 
 impl BlockReason {
-    /// The §13.8 reason kind for reconcile, capture, and plugin JSON.
+    /// The §13.9 reason kind for reconcile, capture, and plugin JSON.
     pub(crate) fn kind(&self) -> &'static str {
         match self {
             Self::LocalDependency { .. } => "local_dependency",
@@ -309,9 +165,8 @@ impl BlockReason {
 }
 
 /// Pure effective-blocking reasons for one task (§13.3): its own open
-/// prerequisites and future schedule, plus its project's reasons
-/// when the project covers it. A task recovers only when every
-/// reason here is gone.
+/// prerequisites and future schedule, plus its project's reasons when it is
+/// a resident. The `^prj` task reports only its own reasons.
 pub(crate) fn effective_block_reasons(
     task: &TaskLine,
     local_open_dependency_ids: &[String],
@@ -331,15 +186,11 @@ pub(crate) fn effective_block_reasons(
     {
         reasons.push(BlockReason::LocalSchedule { date });
     }
-    if context.covers(task) {
-        if !project_reasons.open_dependencies.is_empty() {
+    if context.is_resident(task) {
+        if !project_reasons.open_dependency_ids.is_empty() {
             reasons.push(BlockReason::ProjectDependency {
                 project: context.relative_path.clone(),
-                open_links: project_reasons
-                    .open_dependencies
-                    .iter()
-                    .map(|resolved| resolved.link.clone())
-                    .collect(),
+                open_ids: project_reasons.open_dependency_ids.clone(),
             });
         }
         if let Some(date) = project_reasons.future_scheduled {

@@ -177,6 +177,7 @@ pub(super) fn task_description(text: &str) -> String {
         .filter(|token| {
             *token != "#task"
                 && *token != PROJECT_TASK_TAG
+                && *token != PROJECT_BLOCKED_TAG
                 && *token != HIDE_TAG
         })
         .collect::<Vec<_>>()
