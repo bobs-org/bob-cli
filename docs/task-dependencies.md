@@ -1,12 +1,12 @@
 # Task dependency links
 
-A task's prerequisites live as plain task dependency links. Ordinary
-tasks keep them on one managed `⛓️ **DEPENDS ON:**` first-child line.
-A Project Task (`^prj`) keeps them in its note's `depends_on`
-frontmatter list instead, and never has a Depends-On child. The line
-or property is the source of truth; the `[dependsOn::]` / `[id::]`
-fields are derived from it. Project storage, inherited Blocked, and
-blocked-link consumption are in §13.
+A task's prerequisites live as plain task dependency links on one
+managed `⛓️ **DEPENDS ON:**` first-child line. That line is the source
+of truth; the `[dependsOn::]` / `[id::]` fields are derived from it.
+A Project Task (`^prj`) uses the same line. While `^prj` has its own
+reason to be Blocked, every open task in its note is Blocked; that
+inheritance, `#prj_is_blocked`, and blocked-link consumption are in
+§13.
 
 This file is the contract every implementation cites. The Rust side is
 `src/native/task_dependencies/` (parser, formatter, link form, legacy
@@ -22,13 +22,11 @@ this doc first in the same change.
 ## 1. Vocabulary
 
 - **Task Dependency Link** (aka **task dep link**, **dep link**): a
-  plain, never transcluded Task Link to a prerequisite. Ordinary
-  tasks place them on the Depends-On line; a Project Task stores
-  them in `depends_on` (§13).
-- **Depends-On line**: the single managed first-child line that holds
-  an ordinary task's dep links. `^prj` never has one.
-- **Dependent**: the task that owns the line or, for `^prj`, the
-  property.
+  plain, never transcluded Task Link to a prerequisite, placed on its
+  dependent's Depends-On line, including a Project Task's.
+- **Depends-On line**: the single managed first-child line that holds a
+  task's dep links.
+- **Dependent**: the task that owns the line.
 - **Prerequisite**: a link target.
 - **Blocked** stays the name of the derived `[?]` state.
 - **Project dependency**, **project reasons**, **resident task**, and
@@ -58,8 +56,8 @@ Example:
   - Reuse the task's existing child indent; otherwise use the parent's
     indent plus one tab.
   - Preserve the note's line endings and its final-newline state.
-  - A Project Task (`^prj`) never has a Depends-On line. Its
-    prerequisites live in the note's `depends_on` property (§13).
+  - On `^prj`, the machine-owned `🧩 **Sub-projects:**` line follows
+    the Depends-On line (§13.2).
 - **Empty list:** delete the line and remove the field. There is no
   placeholder.
 
@@ -114,8 +112,10 @@ nor a section title, nor a managed log (`🗓️ SCHEDULE LOG`,
      search `done/`, so the short form would stop resolving.
 - **Field placement.** `[dependsOn:: a, b]` (comma-space) and `[id:: x]`
   go inside the Tasks suffix:
-  - to the right of any `[fresh::]`, because the hooks'
-    trailing-field parser stops at `fresh`;
+  - to the right of the freshness group
+    (`[fresh::] [refresh::] [keeps::] [unblocked::]`), because both
+    Rust Tasks parsers stop at the first unknown key, and those four
+    are run-extending non-Tasks keys;
   - before a trailing `^block-id`;
   - in Tasks key order (`id` before `dependsOn`).
 - **Field order.** The field mirrors the line's order.
@@ -138,8 +138,8 @@ nor a section title, nor a managed log (`🗓️ SCHEDULE LOG`,
 
 The dependency set is the line's links followed by any **legacy
 children** (R8) not already on the line, deduplicated by (path,
-block id). Ordinary tasks use this table. `^prj` uses the `depends_on`
-property as the line; see §13.7.
+block id). `^prj` uses this same table: R1–R10, with no R0, no D3,
+and no R2 exception.
 
 | # | Situation | Resolution |
 | --- | --- | --- |
@@ -166,9 +166,7 @@ property as the line; see §13.7.
   form the hooks re-resolve, and it binds the JS canonicalisers too.
 - **Removals.** Never infer a removal from a _missing_ line (R2 adopts
   instead). Do infer removals from a _present_ line.
-- **No moves.** The hooks never move or reorder lines, except R0
-  (§13): hoisting a well-formed Depends-On child of `^prj` into
-  `depends_on` and deleting the line.
+- **No moves.** The hooks never move or reorder lines.
 - **Output.** Report every change:
   - `dependency_projection_updates`, entries of kind
     `dependent_field`, `target_id`, or `line_removed`;
@@ -191,11 +189,11 @@ property as the line; see §13.7.
   prerequisites stop blocking.
 - **Promotion.** Pomodoro roots promote their prerequisites to
   Next/In Progress along the reconciled set: line links plus R8 legacy
-  children, plus a resident's inherited project `depends_on` (§13).
+  children, plus a resident's inherited `^prj` Depends-On links (§13).
   Strongest rank wins, the walk is cycle-safe, and recovery uses the
   same edges. A `^prj` target is never raised into a lane; the walk
-  continues through it to that project's own `depends_on`. Lanes are
-  sticky, and they do not survive Blocked.
+  continues through it to that project's own Depends-On links. Lanes
+  are sticky, and they do not survive Blocked.
 - **Consumption.** A Blocked task keeps no live Task Link under
   today's open Pomodoros. A gesture that would create or keep such a
   link promotes the task's open prerequisites (own plus inherited)
@@ -228,14 +226,12 @@ property as the line; see §13.7.
 
 | Cursor | Gesture | Edits |
 | --- | --- | --- |
-| A `#task` line | Ctrl+Shift+P then `b` on the Task Card (Blocked by) | this task |
-| A `^prj` line | Ctrl+Shift+P then `b` | the note's `depends_on` property (§13), never a Depends-On child |
+| A `#task` line | Ctrl+Shift+P then `b` on the Task Card (Blocked by) | this task; on `^prj`, the line plus resident side effects (§13) |
 | Anywhere on a Depends-On line, including inside a link | Ctrl+Shift+P (skips the card and the property step) | the **owning** task, never the link under the cursor |
-| A leftover Depends-On line under `^prj` | Ctrl+Shift+P | the owning project's property; the line is folded on commit |
-| A dedicated Task Link | Ctrl+Shift+P then `b` | the **linked** task in its own note, named in the title; a link to `^prj` edits that project's property |
-| A task line, counted | `N<Ctrl+Shift+P>` then `b` | this task plus the next N (existing add-to-all/remove-from-all, `k/n` badges, no Tab marks). A counted session that mixes `^prj` with ordinary tasks is refused |
+| A dedicated Task Link | Ctrl+Shift+P then `b` | the **linked** task in its own note, named in the title |
+| A task line, counted | `N<Ctrl+Shift+P>` then `b` | this task plus the next N (existing add-to-all/remove-from-all, `k/n` badges, no Tab marks) |
 | A chip | `＋` / hover `×` | opens the stage / removes that prerequisite |
-| Anywhere | palette command **Edit task dependencies** (`edit-task-dependencies`, no default hotkey) | the task under the cursor; on `^prj`, the property |
+| Anywhere | palette command **Edit task dependencies** (`edit-task-dependencies`, no default hotkey) | the task under the cursor |
 | Prose with several links, or a selection spanning tasks | any | refused with a short reason |
 
 Layout reuses the `bob-cnp` modal styling, with `CURRENT`,
@@ -306,8 +302,8 @@ The stage ports `capture_link_tasks.rs::rank`:
 
 Guarded rows are disabled and show their reason: the dependent itself;
 a cycle (`⟲`), checked on the graph _after_ the whole batch, with the
-path in a tooltip (the graph includes implicit resident → project
-`depends_on` edges, §13); a `^prj` target inside the same project note
+path in a tooltip (the graph includes implicit resident → `^prj`
+edges, §13); a `^prj` target inside the same project note
 (`inside this project`); a target with no `[id::]` whose path can't be
 encoded; a target or dependent that changed since the stage opened
 (refuse, then reopen fresh). Removing a link is always allowed.
@@ -423,9 +419,9 @@ chips. The ⚠ chip is the signal for those; the summary tracks blocking.
 | Ctrl+Shift+Enter on the line | Refused, with a notice pointing to Ctrl+Shift+P. |
 | Ctrl+D on the Depends on row | Deletes the line, the field, and any legacy children, with immediate recovery. |
 | Hand edits in Obsidian | Once the cursor leaves the edited line (short debounce), nav applies R1/R9 to that task. Deleting the whole line clears the field. Malformed lines are left alone. |
-| `bob capture` `&note:id` (and the Bob Mac Capture `&` picker) | Adds prerequisites to a new task or an explicit `@note+id` dependent through the staged capture writer: new links append in typed order (repeats are no-ops), legacy children fold and field-only dependencies are adopted, fields are derived, and §5 Blocked/promotion applies in the same batch. On `^prj`, `&` writes the `depends_on` property. It never removes or reorders links; removal stays with Ctrl+Shift+P and Ctrl+D. See `docs/capture.md`. |
-| Ctrl+Shift+M, `task archive` | The line moves with its task. Same-note links inside a moved block whose target stayed behind gain the source note path. Moving open tasks **into** a blocked project sets them `[?]` and removes their live links from today's open Pomodoros. Moving them **out** recovers those without own reasons. |
-| Ctrl+Alt+Shift+N (`create-project-note-from-task`) | Forward: extract the source's Depends-On line (and R8 children) into `depends_on`, rebase same-note links to the source note, never seed that line as a Tasks row; `[?]` sources are accepted. Reverse: restore `depends_on` as a first-child Depends-On line plus field, skip the machine-owned Sub-projects child. Details in §13. |
+| `bob capture` `&note:id` (and the Bob Mac Capture `&` picker) | Adds prerequisites to a new task or an explicit `@note+id` dependent through the staged capture writer: new links append in typed order (repeats are no-ops), legacy children fold and field-only dependencies are adopted, fields are derived, and §5 Blocked/promotion applies in the same batch. On `^prj`, `&` writes the Depends-On line and applies resident side effects (§13). It never removes or reorders links; removal stays with Ctrl+Shift+P and Ctrl+D. See `docs/capture.md`. |
+| Ctrl+Shift+M, `task archive` | The line moves with its task. Same-note links inside a moved block whose target stayed behind gain the source note path. Moving open tasks **into** a blocked project sets them `[?]`, tags them `#prj_is_blocked`, and removes their live links from today's open Pomodoros. Moving them **out** strips the tag and recovers those without own reasons, writing `[unblocked::]` when [freshness.md §4](freshness.md#4-evaluation) says to. |
+| Ctrl+Alt+Shift+N (`create-project-note-from-task`) | Forward: the source's Depends-On line and inline `scheduled` stay on `^prj` (rebase same-note links to the source note; never seed that line as a Tasks row; skip the machine-owned Sub-projects child). Reverse: the same line and date move with `^prj`. `[?]` sources are accepted. Details in §13. |
 | "Rewrite dependency navigation links" command, `migrate-dependency-bullets.mjs` | Deleted. They emit embeds. |
 
 ## 9. Plugin api v3 (navigation-hotkeys)
@@ -509,12 +505,7 @@ app.plugins.plugins["bob-navigation-hotkeys"].api = Object.freeze({
 - **The MacBook.** Its cron is the only hooks runner. Until it is
   updated, it keeps Blocked correct from the fields but loses
   dependency promotion for parents that already have a line.
-- **Project dependencies.** A reconcile that predates §13 adopts a
-  field-only `^prj` back into a Depends-On line (R2). Install the new
-  `bob` on the MacBook before syncing the plugins that write
-  `depends_on`. Plugin hosts that do not run reconcile may deploy as
-  usual. Live `bob task reconcile` is reserved for that rollout; a
-  `--dry-run` is always fine.
+  Project-blocking rollout is in §13.11.
 
 ## 11. Conformance vectors
 
@@ -522,8 +513,9 @@ Implementations copy the tables they need into their tests, citing the
 section in a comment. `line` below is the candidate Depends-On line on
 its own; `context` names what surrounds it. `verdict` is one of
 `accept(n)` (a line with n targets), `empty` (label but no links),
-`malformed`, or `not-a-line`. Project-dependency vectors (PDP, PDW,
-PDR, PDB, PDL, PDG, PDC, PDF) live in §13.
+`malformed`, or `not-a-line`. Project-dependency vectors (PDR, PDB,
+PDL, PDG, PDC, PDF, PDT) live in §13. Unblock (`[unblocked::]`)
+vectors (UB) live in [freshness.md §10b](freshness.md#10b-ub--unblocked-vectors).
 
 ### 11.1 DP — parse vectors
 
@@ -830,8 +822,10 @@ FOR EACH D, in this order:
                                     anchor among D's predecessors in C
 
 PROJECT RECOVERY: when a `^prj` recovers (step 4), every resident of
-           that project with no remaining own reason recovers too
-           (recover-only, never successor-linked). Those recoveries
+           that project loses `#prj_is_blocked`. Residents with no
+           remaining own reason recover too (recover-only, never
+           successor-linked) and receive `[unblocked::]` when
+           freshness.md §4's WRITE rule applies. Those recoveries
            do not count toward the breaker (PDC2). A resident that
            still has an open prerequisite of its own stays Blocked
            (PDC3).
@@ -1031,8 +1025,9 @@ fields:
 - `reason` is `waits_on`, `scheduled`, or `project`.
 - `waits_on` counts the open prerequisites left.
 - `scheduled` is set only for `scheduled`, otherwise `null`.
-- `project` is a resident (or `^prj`) whose project still has an open
+- `project` is a resident whose project still has an open
   prerequisite or a future `scheduled` date after this gesture (§13).
+  `^prj` reports only its own reasons, never a `project_*` reason.
 - `trigger` is `"dependency"` or `"project_empty"`, same rule as
   `unblocked[]`.
 
@@ -1308,8 +1303,7 @@ EMPTY(N), R ∉ C, and one of:
 - (a) C contains a task in N other than R: the gesture closed N's last
   task.
 - (b) R is a dependent candidate of C (its `[dependsOn::]` names a task
-  in C, including the derived field for a `depends_on` property). This
-  gesture removed R's last blocker.
+  in C). This gesture removed R's last blocker.
 
 Closing a sub-project's `^prj` never pulls in its parent. `bob projects
 sync` surfaces the parent on its next run.
@@ -1325,9 +1319,11 @@ project_task row):
   1. R has open prerequisites after the gesture
                                   → still_blocked{reason: waits_on}
   2. R.scheduled > today          → still_blocked{reason: scheduled}
-  3. N has project reasons (§13.3)
+  3. N has remaining project reasons (§13.3) after 1–2
                                   → still_blocked{reason: project}
-     (steps 1–3 leave R's line byte-identical, #hide included)
+     (the project date is R's own inline scheduled, so a future
+     date hits step 2. steps 1–3 leave R's line byte-identical,
+     #hide included)
   4. From here on, remove every whole-token #hide from R.
   5. R had a live link before the gesture
                                   → not_linked: already_planned;
@@ -1364,9 +1360,8 @@ are unchanged. A Pending `^prj` is never demoted
   notes. Both engines already hold that text.
 - The vault-wide dependents snapshot is built only when needed:
   - some task in C carries `[id::]` (as today); or
-  - a candidate R carries `[dependsOn::]`, or N has a non-empty
-    `depends_on` key. Steps 1 and 3 need vault-wide openness in that
-    case.
+  - a candidate R carries `[dependsOn::]`. Steps 1 and 3 need
+    vault-wide openness in that case.
 - If the snapshot is unavailable, set `unblocked_check: "unavailable"`
   and write no pull-in.
 - Closes outside project notes cost nothing extra. The cycler's
@@ -1459,8 +1454,8 @@ section in a comment.
 | PP4 | B carries `#hide` | pull-in |
 | PP5 | B is fenced | pull-in. B is blockquoted or custom `[>]` → nothing |
 | PP6 | Sub-projects line with an unstruck child | nothing. Only struck children → pull-in |
-| PP7 | future project `scheduled` | `still_blocked{reason: project}` with the date; `trigger: project_empty`; R byte-identical |
-| PP8 | R has an open prerequisite (own `[dependsOn::]` or project `depends_on`) | `still_blocked`; R byte-identical |
+| PP7 | future project `scheduled` on `^prj` | `still_blocked{reason: scheduled}` with the date; `trigger: project_empty`; R byte-identical |
+| PP8 | R has an open prerequisite on its Depends-On line | `still_blocked`; R byte-identical |
 | PP9 | R already linked today | no new link; ` `→`*`; `#hide` removed; `already_planned` |
 | PP10 | A not planned today | no link; status unchanged; `#hide` removed; `not_planned_today`; row reported (verb `surfaced`) |
 | PP11 | `plan.link_unblocked: false` | as PP10 with `disabled` |
@@ -1480,23 +1475,26 @@ section in a comment.
 
 ## 13. Project dependencies
 
-A project's (`^prj`) dependency links live in its note's `depends_on`
-frontmatter list. While the project has an open prerequisite or a
-future `scheduled` date, `^prj` and every open task in its note are
-Blocked `[?]`. No Blocked task keeps a Task Link under today's open
-Pomodoros: the link is consumed (prerequisites promoted, link removed,
-emptied Pomodoro deleted). Ordinary tasks, including ordinary tasks
-inside project notes, keep the Depends-On line and R1–R10 unchanged.
+A project's (`^prj`) prerequisites live on its ordinary Depends-On
+first-child line, and its date as an inline `[scheduled::]` on `^prj`.
+While `^prj` has its own reason to be Blocked — an open projected
+prerequisite, or a future inline `scheduled` — every open task in its
+note is Blocked `[?]` and tagged `#prj_is_blocked`. No Blocked task
+keeps a Task Link under today's open Pomodoros: the link is consumed
+(prerequisites promoted, link removed, emptied Pomodoro deleted).
+Ordinary tasks, including ordinary tasks inside project notes, keep
+the Depends-On line and R1–R10 unchanged. `^prj` uses those same
+R-rules: no R0, no D3, and no R2 exception.
 
 Implementations copy the PD tables in this section into their tests,
 citing the vector id in a comment. If an implementation disagrees with
-a vector, fix this section first in the same change.
+a vector, fix this section first in the same change. `[unblocked::]`
+vectors live in [freshness.md §10b](freshness.md#10b-ub--unblocked-vectors).
 
 ### 13.1 Vocabulary
 
-- **Project dependency:** a dep link whose dependent is a Project Task
-  (`^prj`). It is stored in the project note's `depends_on` property,
-  never on a Depends-On child of `^prj`.
+- **Project dependency:** a dep link on a Project Task's (`^prj`)
+  Depends-On line. Project reasons are `^prj`'s own reasons.
 - **Project (`project(T)`):** the note T lives in, when that note is
   `type: project`, has a non-terminal status, has exactly one open
   `^prj`, and is not a canonical daily note (`YYYY/YYYYMMDD.md`).
@@ -1504,85 +1502,95 @@ a vector, fix this section first in the same change.
   the project note except `^prj`, including nested and `#ref` tasks.
   Fenced, blockquoted, and custom-status lines are excluded. Residence
   is physical: there is no cascade through `parent`.
-- **Project reasons (`project_reasons`):** the project's open
-  `depends_on` targets (internal targets excluded) union a project
-  `scheduled` date strictly later than today.
+- **Project reasons (`project_reasons` / `blocked(P)`):** `own_reasons`
+  of P's `^prj`. Internal targets are never projected, so they never
+  contribute.
+- **Own reasons (`own_reasons(T)`):** open prerequisites projected from
+  T's Depends-On line (`local_dependency`) union `{ T.scheduled > today }`
+  (`local_schedule`).
 - **Consumption:** promoting a Blocked task's open prerequisites along
   `edges(T)`, then removing its live Task Links under today's open
   Pomodoros, then running the empty-Pomodoro rule.
+- **`#prj_is_blocked`:** machine-owned tag on every open resident of a
+  blocked project (§13.7). `^prj` never carries it.
 
 ### 13.2 Storage
 
-```yaml
+The `^prj` line is an ordinary task:
+
+```markdown
 ---
 type: "[[project]]"
 status: wip
-depends_on:
-  - "[[job#^update-linkedin]]"
-  - "[[job_update_cv#^prj]]"
 ---
-- [?] #task #prj Apply to DataBricks NYC role(s)! … #hide [dependsOn:: job__update-linkedin, job_update_cv__prj] ^prj
+
+- [?] #task #prj Apply to DataBricks NYC role(s)! [fresh:: 2026-10-12] [scheduled:: 2026-10-20] #hide [dependsOn:: job__update-linkedin] ^prj
+  - ⛓️ **DEPENDS ON:** [[job#^update-linkedin]]
+  - 🧩 **Sub-projects:** …
+
+## Tasks
+
+### Blocked
+
+- [?] #task #ref [[…|…]] #prj_is_blocked ^ref-databricks-nyc-cv-and-role-pitches
 ```
 
-**Writer form.** A YAML block list of double-quoted plain task block
-links (no alias, embed, or strike). Link form is the shortest
-unambiguous form per §3, with two exceptions: never the same-note
-`[[#^x]]` form (always `[[note#^x]]`), and archive targets always keep
-the explicit `done/` path. Authored order: append; a re-add moves to
-the end; never re-sort. Delete the key when the list is empty. Edit
-only the key's span as a text splice; never reformat unrelated YAML.
+- **Prerequisites.** `^prj`'s prerequisites sit on its ordinary
+  Depends-On first-child line, exactly as on any task. They are
+  reconciled by R1–R10. That line is first, or second after a
+  `❌ **CANCEL LOG**` child. The machine-owned `🧩 **Sub-projects:**`
+  line follows it.
+- **Date.** The project date is `^prj`'s inline `[scheduled:: YYYY-MM-DD]`,
+  placed like any task's schedule. Neither field lives in frontmatter.
+- **Hoist.** `bob projects sync` hoists any leftover frontmatter
+  `scheduled` onto `^prj` and deletes the key:
+  - frontmatter wins when both exist;
+  - terminal projects are left alone;
+  - an invalid value stays in place with a warning.
 
-**Reader tolerance.** Writers canonicalise all of these:
-
-- a flow list;
-- one quoted scalar;
-- aliased or `!`-embedded links (canonicalised away);
-- `null`, `[]`, or an empty value (meaning none).
-
-A bare project link `[[other_project]]` canonicalises to
-`[[other_project#^prj]]`. Malformed shapes (for example an unquoted
-flow item, which YAML reads as a nested array) and duplicate keys get
-a per-project warning, skip any destructive edit, and never count as
-safely empty.
-
-**Derived values.** `^prj` keeps a derived `[dependsOn::]` (list
-order, internal targets excluded) and targets keep their `[id::]`,
-both as §3/§4. `^prj` never has a Depends-On child.
-
-**D3.** For `^prj`, a missing property means empty. A `^prj` with a
-`[dependsOn::]` field but no property and no Depends-On line drops the
-field ids with warning `project_dependency_field_dropped`; it is never
-re-adopted into a line or into the property.
-
-Properties-pane edits bypass the keymap's hand-edit mirror. Reconcile
-is the authority every 15 minutes; a malformed property is left alone.
+  The hoist is permanent, which also makes it a shim for old nav
+  builds and Properties edits. Report it as
+  `hoisted_project_schedules`.
+- **Internal targets.** A `^prj` link to a task in its own note is a
+  guaranteed deadlock: pickers refuse it; reconcile keeps the link on
+  the line but does not project it into `[dependsOn::]`, and warns
+  `project_internal_dependency`; JS project tests already ignore the
+  project's own ids.
 
 ### 13.3 Effective blocking
 
 ```text
-project(T)       = the note T lives in, when it is a project: type project,
-                   non-terminal status, exactly one open ^prj, and not a
-                   canonical daily note
-project_reasons  = { open depends_on targets (internal targets excluded) }
-                 ∪ { project scheduled > today }
-T is Blocked     = T has an open prerequisite                (unchanged)
-                OR T.scheduled > today                       (unchanged)
-                OR project(T) exists AND project_reasons ≠ ∅ (new; applies to ^prj too)
-edges(T)         = T's own dep links ∪ (T is a resident ? project's depends_on : ∅)
+own_reasons(T)  = open prerequisites projected from T's Depends-On line   (local_dependency)
+                ∪ { T.scheduled > today }                                 (local_schedule)
+project(T)      = the note T lives in when: type project, non-terminal status, exactly
+                  one open ^prj, not a canonical daily note
+blocked(P)      = own_reasons(^prj of P) ≠ ∅   (internal targets never projected)
+T is Blocked    = own_reasons(T) ≠ ∅
+               OR (T is a resident of P AND blocked(P))   → project_dependency / project_schedule
+edges(T)        = T's own dep links ∪ (T is a resident ? ^prj's projected links : ∅)
 ```
 
-- Derived at read time. Nothing is copied onto residents except the
-  `[?]` checkbox. `status: waiting` and a cached `[?]` are not reasons.
-- **Recovery:** a task recovers only when every reason (own and
-  inherited) is gone, to its existing derived rank. No previous status
-  is stored. Lanes do not survive Blocked, now project-wide.
-- **Reasons are reported, not stored:** `local_dependency`,
-  `local_schedule`, `project_dependency`, `project_schedule`, with the
-  project path, open target ids, and project date, in reconcile JSON,
-  capture JSON, and plugin notices.
-- **JS shortcut:** an immediate JS path may treat "this note's `^prj`
-  is `[?]`" as the project test. Every writer that changes the inputs
-  updates `^prj` in the same write; reconcile fixes hand edits.
+- **Residents** are every recognised open `#task` line physically in
+  the note except `^prj`, nested and `#ref` tasks included. Fenced,
+  blockquoted, and custom-status lines are excluded.
+- **`^prj` reports only its own reasons.** It never gets a `project_*`
+  reason that points at itself.
+- **Derive from reasons, never from the `[?]` cache.** A hand-set `[?]`
+  on `^prj` blocks nobody.
+  - JS immediate paths may use `^prj`'s `[?]` as the "will the project
+    still be blocked" shortcut.
+  - JS paths use the resident's own `#prj_is_blocked` tag as the "this
+    resident is project-blocked now" signal.
+- **Recovery** happens only when every reason, own and inherited, is
+  gone. The task returns to its existing derived rank. No previous
+  status is stored. Lanes do not survive Blocked, now project-wide.
+- **Reasons are reported, not stored.** The kinds are
+  `local_dependency`, `local_schedule`, `project_dependency`, and
+  `project_schedule`, with project path, open ids, and date. They
+  appear in reconcile JSON, capture JSON, and plugin notices.
+- **ADJ-11.** Promotion never raises a `^prj` target into a lane, but
+  the walk continues through it to that project's prerequisites.
+  Residents of a depended-on project are not promoted.
 - A terminal project (`status: done` or `canceled`) is not
   `project(T)`. A child project is not blocked by its parent's
   reasons. A note with more than one open `^prj` is not a project
@@ -1596,7 +1604,7 @@ edges(T)         = T's own dep links ∪ (T is a resident ? project's depends_on
   that dependency-promotion rule. The §12.10 close-gesture pull-in is
   the one path that makes `^prj` Next.
 - The walk continues through that `^prj` to the depended-on project's
-  own `depends_on`.
+  own Depends-On links.
 - Residents of a depended-on project are not promoted.
 - Adding a project dependency from the keymap **transfers
   commitment:** each open prerequisite rises to at least the strongest
@@ -1628,12 +1636,24 @@ a task that is Blocked after the gesture follows one rule:
   as today (retire the schedule, link it);
 - any dependency or project-dependency reason → do not link; promote
   the open prerequisites (own plus inherited); report it;
-- only a **project** schedule blocks it → do not link; report the
-  project date (move it from the `^prj` Schedule action instead).
+- a `project_schedule` reason without a dependency reason → do not
+  link; report the project date;
+- **refinement: a `^prj` target whose only reason is its own date** →
+  refuse, with "move the project date from the `^prj` Schedule
+  action". This is never a pull-forward, which would silently unblock
+  the project and strand residents' copies.
 
 Capture never creates a linked `[?]` task: it creates it unlinked and
 reports `not_linked` with the reasons. Links under a Pomodoro the same
 gesture closes are history, not live links.
+
+**Pipeline.** Compute the final Blocked set (with project reasons),
+then plan the ledger in this order: dedupe, remove canceled links,
+**consume blocked links**, retire completed links and repair markers,
+remove empty Pomodoros. A second rewrite pass after transitions is an
+accepted alternative. Either way: dry-run output equals the live
+write, and a second run changes nothing (except the daily-note
+exception below).
 
 **Known exception.** A prerequisite in a canonical daily note promoted
 only by consumption follows the sticky-lanes R9 carve-out and may
@@ -1642,179 +1662,150 @@ clear on the next run.
 ### 13.6 Guards
 
 - Pickers refuse `^prj` targets inside the same project note. A
-  hand-authored internal target stays in YAML, is not projected onto
-  `[dependsOn::]`, and warns `project_internal_dependency`.
+  hand-authored internal target stays on the line, is not projected
+  onto `[dependsOn::]`, and warns `project_internal_dependency`.
 - Cycle detection (reconcile R7, capture, nav stage) includes the
-  implicit resident → project `depends_on` edges. Longer cycles keep
-  the R7 behavior (keep and warn).
-- Counted Ctrl+Shift+P sessions that mix `^prj` with ordinary tasks
-  are refused with a one-line notice.
+  implicit resident → `^prj` edges. Longer cycles keep the R7
+  behavior (keep and warn).
 
-### 13.7 R0 hoist and `^prj` R-rules
+### 13.7 `#prj_is_blocked`
 
-**R0 hoist** is a documented exception to "hooks never move lines".
-For each project whose open `^prj` has a well-formed Depends-On line
-(plus any R8 legacy children counted for it):
+**Rule.** An open resident of a blocked project carries exactly one
+`#prj_is_blocked`, and no other open task carries it.
 
-1. merge its links into `depends_on` (dedupe by path and block id;
-   property entries first, line entries appended);
-2. delete the line.
+- `^prj` never carries it.
+- Closed lines are never edited; a tag left on a closed line is
+  accurate history.
+- Every open resident is tagged, including residents that also have
+  their own reasons (`tag_scope = every_resident`).
 
-A property that disagrees with the line is unioned and both sources
-are reported (`project_dependency_line_conflict`). A malformed line is
-left alone with a warning, and that project's property is not written.
+**It is machine-owned derived state,** like `[?]` and `#hide`.
 
-**`^prj` R-rules.** The property plays the line. Ordinary tasks,
-including ordinary tasks inside project notes, keep R1–R10 unchanged.
+- **Reconcile is the authority.** It adds the tag, and strips it from
+  open lines that no longer qualify (moved out, project unblocked,
+  project terminal, hand-copied).
+- **Immediate writers keep it current in the same write** wherever
+  they flip a resident: capture (`&` on `^prj`, new tasks into a
+  blocked project); nav (`^prj` Schedule or Ctrl+D, the Depends on
+  stage on `^prj`, Ctrl+Shift+M, conversion); and cycler/capture
+  recovery of residents.
+- A missed immediate write is repaired within one reconcile interval.
 
-| # | Situation | Resolution |
-| --- | --- | --- |
-| R1 | Well-formed property | `[dependsOn::]` := the ids of the set's resolved task targets, in property order, internal targets excluded. Targets without `[id::]` get one. Field ids not accounted for are dropped as today, except breadcrumbs (R4). |
-| R2 | No property, field present | **Do not adopt.** Drop the field ids with `project_dependency_field_dropped`. Never write a Depends-On line. A missing property means empty (D3). |
-| R3 | A link doesn't resolve | **Heal** it when exactly one scanned task has both the link's block id and one of the dependent's unaccounted field ids. Rewrite the property entry to that task's location in the writer form, then apply R1. |
-| R4 | A link doesn't resolve and can't be healed | Keep it verbatim and warn (`unresolved_dependency_link`). It never blocks. Unaccounted field ids stay as heal breadcrumbs. |
-| R5 | Resolves to a non-task block | Keep it and warn (`non_task_dependency`). It is not projected. |
-| R6 | Points to its own task | Not projected; warn (`self_dependency`). |
-| R7 | Cycle | Keep it (every member stays Blocked) and warn (`dependency_cycle`) with the path. The graph includes implicit resident → project edges. |
-| R8 | Legacy child under `^prj` | Counts for R0 hoist only. After hoist, `^prj` has no dependency children. |
-| R9 | Empty property, and no hoistable line | Delete the key and remove the field. |
-| R10 | Malformed property | No destructive edit for that project; warn `malformed_project_dependencies`. The property never counts as safely empty. |
+**Placement.** Use `projects/edits.rs` `task_metadata_insertion_offset`,
+which puts it after the fields and before `^id`. Both Rust parsers and
+the freshness placement rule already treat trailing tags as part of
+the Tasks suffix. In reconcile, tag edits are line rewrites and count
+as structural, so the quiet period applies.
 
-A well-formed but non-canonical property is rewritten to the writer
-form with the same targets.
+**Matching hazards.**
 
-**Pipeline.** Compute the final Blocked set (with project reasons),
-then plan the ledger in this order: dedupe, remove canceled links,
-**consume blocked links**, retire completed links and repair markers,
-remove empty Pomodoros. A second rewrite pass after transitions is an
-accepted alternative. Either way: dry-run output equals the live
-write, and a second run changes nothing (except the daily-note
-exception in §13.5).
+- Tasks and Dataview `tags include #prj` is a substring match.
+  Document it; no vault query depends on it today.
+- Every engine's own `#prj` / `#prj_is_blocked` matching must be
+  token-bounded. Each phase audits its engine.
+- Add the tag to `projects/tags.rs`' description strip list.
 
-### 13.8 Outputs and warning kinds
+### 13.8 Project schedule side effects
+
+- **Propagation stays.** Sync and nav still copy the date onto
+  residents, raise-only, but now read it from `^prj` inline.
+- **Move-earlier fix (nav only):** when a gesture changes `^prj`'s
+  date from P_old to P_new, also replace residents' copies that are
+  exactly P_old. Ctrl+D already removes copies by exact value.
+  - Rust sync cannot know P_old. A hand edit that moves the date
+    earlier keeps the old copies; that is a known limit.
+- **`#hide` forcing** for a future date stays in sync.
+- **Stamps:** `^prj` follows the normal stamp rule. The
+  "project-frontmatter edits never stamp" carve-out is gone.
+
+### 13.9 Outputs and warning kinds
 
 Additive reconcile output:
 
-- `hoisted_project_dependency_lines`
-- `project_dependency_updates`
 - `consumed_blocked_references`: `{path, line, pomodoro, task, reasons, promoted[]}`
 - reason kinds on `marked_blocked` / `unblocked`:
   `local_dependency`, `local_schedule`, `project_dependency`,
   `project_schedule`
+- `prj_is_blocked_tags_added`, `prj_is_blocked_tags_stripped`
+- `unblocked_fields_written`, `unblocked_fields_pruned`
 
-New warning kinds:
+Additive `bob projects sync` output:
+
+- `hoisted_project_schedules`
+
+Warning kinds:
 
 - `project_internal_dependency`
-- `project_dependency_field_dropped`
-- `malformed_project_dependencies`
-- `project_dependency_line_conflict`
 
-### 13.9 Gestures on `^prj`
+### 13.10 Gestures on `^prj`
 
-Ctrl+Shift+P → Depends on on `^prj` (and a leftover Depends-On child,
-and a Task Link to `^prj`) edits the property. One write: splice the
-property, write the `^prj` `[dependsOn::]` field, set `^prj` and every
-open resident to `[?]` when any target is open, fold any leftover
-line, consume their live links, transfer commitment, and recover
-everyone with no remaining reason when the last reason clears.
-Ctrl+D on the Depends on row deletes the key.
+Ctrl+Shift+P → Depends on on `^prj` (and a Task Link to `^prj`) edits
+its Depends-On line plus resident side effects. One write: the line,
+the `^prj` `[dependsOn::]` field, set `^prj` and every open resident
+to `[?]` when any target is open, tag residents `#prj_is_blocked`,
+consume their live links, transfer commitment, and recover everyone
+with no remaining reason when the last reason clears (strip the tag;
+write `[unblocked::]` when freshness.md §4 says to). Ctrl+D on the
+Depends on row deletes the line and the field.
 
-`create-project-note-from-task` (Ctrl+Alt+Shift+N) maps a source
-Depends-On line to `depends_on` on the way forward (rebase
-`[[#^a]]` → `[[source#^a]]`; never seed that line as a Tasks row) and
-maps `depends_on` back to a first-child Depends-On line on reverse
-(links re-formed relative to the destination; skip the machine-owned
-Sub-projects child). `[?]` sources are accepted.
+Schedule on `^prj` writes the inline `[scheduled::]` field. Conversion
+is line ↔ line both ways. Capture `&` on `^prj` writes the line.
 
-Ctrl+Shift+M into a blocked project sets the moved open tasks `[?]`
-and removes their live links; moving them out recovers those without
-own reasons.
+`create-project-note-from-task` (Ctrl+Alt+Shift+N) keeps the source's
+Depends-On line and inline date on `^prj` on the way forward (rebase
+`[[#^a]]` → `[[source#^a]]`; never seed that line as a Tasks row;
+skip the machine-owned Sub-projects child) and keeps them on reverse
+(links re-formed relative to the destination). `[?]` sources are
+accepted.
 
-Capture `&` aimed at `^prj` writes `depends_on`. Capture of a new
-task into a blocked project lands `[?]` and unlinked. `@route:id s:N`
-with N ≥ 1 creates the task unlinked.
+Ctrl+Shift+M into a blocked project sets the moved open tasks `[?]`,
+tags them `#prj_is_blocked`, and removes their live links; moving them
+out strips the tag and recovers those without own reasons.
 
-### 13.10 Rollout
+Capture `&` aimed at `^prj` writes the Depends-On line. Capture of a
+new task into a blocked project lands `[?]`, `#prj_is_blocked`, and
+unlinked. `@route:id s:N` with N ≥ 1 creates the task unlinked.
 
-A reconcile that predates this section adopts a field-only `^prj`
-back into a Depends-On line (R2). The new `bob` must be installed on
-the MacBook (the only hooks host) before plugins that write
-`depends_on` are synced there. Plugin hosts that do not run reconcile
-may deploy as usual. Live `bob task reconcile` is reserved for that
-rollout; `--dry-run` is always fine.
+### 13.11 Rollout
 
-### 13.11 PDP — parse vectors
+An old `bob projects sync` on the MacBook cron (`:05/:20/:35/:50`)
+**deletes** inline `^prj` dates. So:
 
-`verdict` is `items(n)` (n canonical links), `empty` (none),
-`internal` (kept, not projected), or `malformed`.
+1. bob-cli on the MacBook first;
+2. then this host;
+3. then plugins on the MacBook.
 
-| # | input | verdict |
-| --- | --- | --- |
-| PDP1 | block list of two double-quoted links | items(2) |
-| PDP2 | flow list of the same two links | items(2), rewrite as block |
-| PDP3 | one quoted scalar `"[[job#^update-linkedin]]"` | items(1) |
-| PDP4 | `depends_on: null` | empty |
-| PDP5 | `depends_on: []` | empty |
-| PDP6 | key present, no items | empty |
-| PDP7 | aliased `"[[job#^update-linkedin\\|LinkedIn]]"` | items(1), canonicalise away alias |
-| PDP8 | `!` embed `"![[job#^update-linkedin]]"` | items(1), canonicalise away embed |
-| PDP9 | bare project link `"[[job_update_cv]]"` | items(1) as `[[job_update_cv#^prj]]` |
-| PDP10 | unquoted flow item `depends_on: [[job#^x]]` (YAML nested array) | malformed |
-| PDP11 | duplicate `depends_on` keys | malformed |
-| PDP12 | same-note `"[[#^x]]"` inside this project | internal (`project_internal_dependency`) |
-| PDP13 | archive `"[[done/note#^x]]"` | items(1), keep explicit `done/` path |
-| PDP14 | key absent | empty (D3) |
+Obsidian does not run on this host, so plugin phases deploy here as
+usual. Phases never run a live `bob task reconcile` or a live
+`bob projects sync`. Dry runs are always fine.
 
-### 13.12 PDW — write vectors
+### 13.12 PDR — reconcile vectors
 
-`→` separates before and after. Unrelated YAML outside the key's span
-stays byte-identical.
-
-| # | operation | before | after |
-| --- | --- | --- | --- |
-| PDW1 | create the key | no `depends_on`; closing `---` present | block list inserted before the closing `---` |
-| PDW2 | append | `[[job#^a]]` | `[[job#^a]]` then `[[job#^b]]` |
-| PDW3 | remove the middle link | `a`, `b`, `c` | `a`, `c` |
-| PDW4 | remove the last link | one item | key deleted |
-| PDW5 | re-add moves to the end | `a`, `b`; re-add `a` | `b`, `a` |
-| PDW6 | rewrite a flow list | `depends_on: ["[[job#^a]]"]` | block list of that one link |
-| PDW7 | CRLF preserved | note uses CRLF | splice uses CRLF |
-| PDW8 | no final newline preserved | note has no trailing newline | edit adds none |
-| PDW9 | unrelated YAML byte-identical | comments, other keys, spacing | unchanged outside the key span |
-| PDW10 | same-note target | target `^x` in this note | written `[[this-note#^x]]`, never `[[#^x]]` |
-
-### 13.13 PDR — reconcile vectors
-
-Each vector names the rule under test.
+Each vector names the rule under test. `^prj` uses plain R1–R10.
 
 | # | rule | situation | outcome |
 | --- | --- | --- | --- |
-| PDR1 | R0 | open `^prj` with a well-formed Depends-On child, no property | links merged into `depends_on`; line deleted (`hoisted_project_dependency_lines`) |
-| PDR2 | R0 | line and property disagree | union (property first, line appended, deduped); both sources reported (`project_dependency_line_conflict`); line deleted |
-| PDR3 | R0 | malformed Depends-On child | line left; property not written; warn |
-| PDR4 | R1 | well-formed property, two resolved open targets | `[dependsOn::]` set to both ids in property order; targets stamped |
-| PDR5 | R2 / D3 | field-only `^prj`, no property, no line | field ids dropped (`project_dependency_field_dropped`); no line written |
-| PDR6 | R9 | empty property | key deleted; field removed |
-| PDR7 | ADJ-8 | internal same-note `^prj` target in the property | kept in YAML; not projected; `project_internal_dependency` |
-| PDR8 | R7 | inherited cycle via a resident → project edge | keep; warn `dependency_cycle` with the path |
-| PDR9 | scope | closed (`[x]`) `^prj` with a stale line or property | untouched |
+| PDR4 | R1 | well-formed Depends-On line on open `^prj`, two resolved open targets | `[dependsOn::]` set to both ids in line order; targets stamped; same as DR1 |
+| PDR7 | internal | `^prj` Depends-On link to a task in its own note | kept on the line; not projected into `[dependsOn::]`; warn `project_internal_dependency` |
+| PDR8 | R7 | inherited cycle via a resident → `^prj` edge | keep; warn `dependency_cycle` with the path |
+| PDR9 | scope | closed (`[x]`) `^prj` with a stale Depends-On line | untouched (DR18) |
 | PDR10 | idempotence | second run over a reconciled vault | zero changes (except the daily-note exception in §13.5) |
 
-### 13.14 PDB — blocking vectors
+### 13.13 PDB — blocking vectors
 
 | # | situation | outcome |
 | --- | --- | --- |
-| PDB1 | project has one open `depends_on` target; note holds a `#ref` task, a nested `#task`, and a fenced `#task` example | `#ref` and nested residents `[?]`; fenced line unchanged |
-| PDB2 | same project | `^prj` is `[?]` with `project_dependency` (and `local_dependency` when the field projects) |
-| PDB3 | last open target closes; a resident still has its own future `scheduled` | that resident stays `[?]`; others recover to derived rank |
-| PDB4 | `status: done` (or `canceled`) project with a still-open `depends_on` | not `project(T)`; residents are not inherited-Blocked |
+| PDB1 | `^prj` has one open Depends-On target; note holds a `#ref` task, a nested `#task`, and a fenced `#task` example | `#ref` and nested residents `[?]` with `#prj_is_blocked`; fenced line unchanged |
+| PDB2 | same project | `^prj` is `[?]` with `local_dependency` only (never `project_dependency`) |
+| PDB3 | last open target closes; a resident still has its own future `scheduled` | that resident stays `[?]` (own reason); others recover to derived rank; `#prj_is_blocked` stripped from all |
+| PDB4 | `status: done` (or `canceled`) project with a still-open `^prj` prerequisite | not `project(T)`; residents are not inherited-Blocked; tag stripped |
 | PDB5 | child project `parent: "[[blocked-parent]]"`; child has no own project reasons | child `^prj` and residents are not inherited-Blocked |
 | PDB6 | two open `^prj` lines in one note | not `project(T)` |
-| PDB7 | project `scheduled` strictly later than today; no open `depends_on` | `^prj` and residents `[?]` with `project_schedule` |
-| PDB8 | canonical daily note typed `project` with `depends_on` | ignored; not `project(T)` |
-| PDB9 | ADJ-11: a dependent's open prerequisite is another project's `^prj`, which itself depends on an ordinary task | the `^prj` target is never raised into a lane; the walk continues and raises that project's open `depends_on` targets; residents of the depended-on project are not promoted |
+| PDB7 | `^prj` `[scheduled::]` strictly later than today; no open Depends-On target | `^prj` `[?]` with `local_schedule`; residents `[?]` with `project_schedule` and `#prj_is_blocked` |
+| PDB8 | canonical daily note typed `project` with a `^prj` Depends-On line | ignored; not `project(T)` |
+| PDB9 | ADJ-11: a dependent's open prerequisite is another project's `^prj`, which itself depends on an ordinary task | the `^prj` target is never raised into a lane; the walk continues and raises that project's open Depends-On targets; residents of the depended-on project are not promoted |
 
-### 13.15 PDL — ledger vectors
+### 13.14 PDL — ledger vectors
 
 Only today's open Pomodoros. `promoted[]` is the consumption seed.
 
@@ -1828,30 +1819,33 @@ Only today's open Pomodoros. `promoted[]` is the consumption seed.
 | PDL6 | prose bullet whose only Task Link token is the Blocked target | token removed; the rest of the bullet kept |
 | PDL7 | planned link-only bullet with authored child notes | whole subtree removed |
 
-### 13.16 PDG — gesture vectors
+### 13.15 PDG — gesture vectors
 
 | # | gesture | outcome |
 | --- | --- | --- |
 | PDG1 | link toggle (capture or Ctrl+Shift+Enter) on a dependency-blocked target | not linked; open prerequisites (own plus inherited) promoted; reported |
 | PDG2 | same toggle; only the target's own future `scheduled` blocks it | pulled forward as today and linked |
-| PDG3 | same toggle; only a project schedule blocks it | refused; project date reported; not linked |
+| PDG3 | same toggle; only a project schedule blocks a resident | refused; project date reported; not linked |
 | PDG4 | `@route:id s:N` with N ≥ 1 | created unlinked |
-| PDG5 | new task captured into a blocked project | `[?]`, unlinked, `not_linked` with the project reasons |
+| PDG5 | new task captured into a blocked project | `[?]`, `#prj_is_blocked`, unlinked, `not_linked` with the project reasons |
+| PDG6 | link toggle on a `^prj` whose only reason is its own future `scheduled` | refused; "move the project date from the `^prj` Schedule action"; never a pull-forward |
+| PDG7 | capture `&` on `^prj` adding an open target | residents `[?]` + `#prj_is_blocked`; their live links consumed; commitment transferred onto the open prerequisite (never onto a `^prj` target) |
 
-### 13.17 PDC — close vectors
+### 13.16 PDC — close vectors
 
 Outcomes of the successor-link rule (§12.2) once project reasons exist.
 
 | # | situation | outcome |
 | --- | --- | --- |
 | PDC1 | dependent D lives in a still-blocked project; this close removed D's last *own* prerequisite | D stays `[?]`; `still_blocked{reason: project}`; no successor link |
-| PDC2 | this close fully unblocks a `^prj`; residents have no own remaining reason | `^prj` recovers (`not_linked: project_task`); residents recover-only (never successor-linked); those recoveries are outside the breaker (except §12.10) |
-| PDC3 | same as PDC2, but one resident still has an open prerequisite of its own | that resident stays `[?]` |
+| PDC2 | this close fully unblocks a `^prj`; residents have no own remaining reason | `^prj` recovers (`not_linked: project_task`); residents recover-only (never successor-linked), lose `#prj_is_blocked`, and receive `[unblocked::]` when freshness.md §4's WRITE rule applies; those recoveries are outside the breaker (except §12.10) |
+| PDC3 | same as PDC2, but one resident still has an open prerequisite of its own | that resident stays `[?]`; `#prj_is_blocked` is still stripped |
 
-### 13.18 PDF — Databricks fixtures
+### 13.17 PDF — Databricks fixtures
 
 Use these two vault states as end-to-end fixtures. Adapt descriptions
-if the notes have been edited since.
+if the notes have been edited since. The Depends-On child stays; there
+is no R0 hoist.
 
 **PDF1 — pre-06:57 (links still in the ledger).**
 `job_apply_to_databricks.md` has a Depends-On child
@@ -1862,10 +1856,9 @@ open timed `0645-0710 — JOB` Pomodoro, which has other children.
 
 After one reconcile:
 
-- `depends_on` is a block list of `"[[job#^update-linkedin]]"`;
-- the Depends-On child is gone;
+- the Depends-On child stays;
 - `[dependsOn:: job__update-linkedin]` remains on a `[?]` `^prj`;
-- both `#ref` tasks are `[?]` (PDB1);
+- both `#ref` tasks are `[?]` with `#prj_is_blocked` (PDB1);
 - exactly those two links are consumed (PDL1); the JOB entry is kept
   because other children remain;
 - LinkedIn (the prerequisite) is promoted;
@@ -1877,7 +1870,27 @@ their entry expects that entry deleted (PDL2).
 **PDF2 — current (links already removed by hand).** Same project note
 and field, no live `#ref` links under today's open Pomodoros.
 
-After one reconcile: the R0 hoist and inherited Blocked of PDF1, and
+After one reconcile: the inherited Blocked and tags of PDF1, and
 **no** ledger change (`consumed_blocked_references` empty for those
 two tasks). `job.md`'s LinkedIn task stays `[?]` from its own
 dependency. `job_update_cv`'s `^prj` is not raised (PDB9).
+
+### 13.18 PDT — `#prj_is_blocked` tag vectors
+
+`tag_scope = every_resident`: every open resident of a blocked
+project carries the tag.
+
+| # | situation | outcome |
+| --- | --- | --- |
+| PDT1 | project becomes blocked (open projected prereq or future `^prj` scheduled); note holds open residents | each open resident gains exactly one `#prj_is_blocked`; `^prj` does not |
+| PDT2 | project recovers (last reason gone) | tag stripped from every open resident |
+| PDT3 | resident moved out of a blocked project | tag stripped from the moved task |
+| PDT4 | project becomes terminal (`status: done` / `canceled`) | tag stripped from every open resident |
+| PDT5 | hand-copied `#prj_is_blocked` on an open task that is not a resident of a blocked project | stripped |
+| PDT6 | `#prj_is_blocked` on an open `^prj` | never added; if present, stripped |
+| PDT7 | closed (`[x]` / `[-]`) line carrying `#prj_is_blocked` | untouched (history) |
+| PDT8 | resident already tagged, project still blocked | exactly one tag (no duplicate) |
+| PDT9 | placement | tag lands after the fields and `#hide`, before `^id` (`task_metadata_insertion_offset`) |
+| PDT10 | CRLF preserved | tag edit uses the note's line endings |
+| PDT11 | resident with its own open prerequisite, in a blocked project | still tagged `#prj_is_blocked` (and stays `[?]` for both reasons) |
+| PDT12 | token-bounded matching | `#prj_is_blocked` is never matched as `#prj`; `#prj` is never matched as `#prj_is_blocked` |

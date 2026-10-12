@@ -376,9 +376,10 @@ Blocked, while due tasks recover to a safely proven Ready, Next, or In Progress
 rank. A later task-owned schedule is preserved and remains Blocked. When the
 vault snapshot cannot prove recovery, the property edit proceeds and `[?]` is
 left for `bob task reconcile`. Other picker properties remain inline Dataview fields on the task.
-On `^prj`, Ctrl+Shift+P → Depends on writes the note's `depends_on`
-property instead of a Depends-On line; `[dependsOn::]` on `^prj` is
-still derived. See
+`dependsOn` is not one of them: it is derived from the task's Depends-On
+line (`docs/task-dependencies.md`), never written by hand. On `^prj`
+that line is the project's prerequisites; while it or `^prj`'s inline
+`scheduled` blocks the project, every open resident is Blocked. See
 [task-dependencies.md §13](task-dependencies.md#13-project-dependencies).
 
 Pressing `Ctrl+D` on the project-backed `scheduled` item removes the YAML

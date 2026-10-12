@@ -4,7 +4,8 @@ Confirmed tasks carry `[fresh:: YYYY-MM-DD]`: the local calendar date a human
 last confirmed that the task still needs doing as written — its wording,
 priority, project, schedule, and dependencies. A visible, non-recurring Ready
 task that was never confirmed, whose scheduled deferral returned after its
-last confirmation, or whose review interval expired is due for review.
+last confirmation, which was automatically unblocked after its stamp, or
+whose review interval expired is due for review.
 Today-linked tasks and canonical daily-note tasks are outside this review
 scope. The morning review then costs roughly "pool ÷ interval +
 arrivals" glances instead of the whole pool. Recurring
@@ -21,7 +22,8 @@ This file is the contract both implementations cite. The Rust side is
 `src/native/freshness/` (`placement.rs`, `state.rs`) with the
 `freshness:` config block in `src/native/config/freshness.rs`; the
 JavaScript mirror is `api.freshness` in bob-ledger-tools (top-level
-api v3, freshness namespace v11 with the `recurringTier` capability). The bob-ledger-tools JavaScript
+api v3, freshness namespace v12 with the `recurringTier` capability
+and `markUnblockedLine`). The bob-ledger-tools JavaScript
 tests use the conformance vectors below verbatim.
 
 The keep-streak contract (`keeps`, `decay`, introduced in schema 4) is specified
@@ -67,6 +69,7 @@ as NEW until a human confirms it.
 | `[fresh:: YYYY-MM-DD]`         | task line, before the trailing Tasks suffix    | optional; absence means "never confirmed" |
 | `[refresh:: N]`                | task line, immediately after `fresh`           | optional integer days, 1–365             |
 | `[keeps:: N]`                  | task line, immediately after `refresh`         | optional streak of due-Ready keeps, 1–999; absence means 0 (§2a) |
+| `[unblocked:: YYYY-MM-DD]`     | task line, immediately after `keeps`           | optional recorded date of an automatic Blocked → Ready recovery; absence means none (§4) |
 | `task_refresh: N`              | frontmatter of the note containing the task    | optional integer days, 1–365             |
 | `freshness.interval`           | `~/.config/bob/config.yml`                     | integer days, 1–365, default 7           |
 | `freshness.pending_interval`   | `~/.config/bob/config.yml`                     | integer days, 1–365, or `false`; default 1 |
@@ -123,9 +126,9 @@ omit zero. Increment saturates at 999 and never wraps. Readers
 accept existing bracket or paren field syntax, select the first
 valid value, and emit `keeps_invalid` and `keeps_duplicate` as
 appropriate; if none is valid, they report 0. `fresh_misplaced` also
-covers `keeps` inside the Tasks suffix. A successful keep
+covers `keeps` and `unblocked` inside the Tasks suffix. A successful keep
 canonicalizes and repairs malformed/duplicate placement. Generic
-stamps remove all `keeps` fields. An uncounted keep preserves the
+stamps remove all `keeps` fields and all `unblocked` fields. An uncounted keep preserves the
 valid semantic value while canonicalizing it. Do not introduce a
 second lifetime counter or alias.
 
@@ -133,17 +136,20 @@ Canonical form:
 
 ```markdown
 - [ ] #task Rename queue input [fresh:: 2026-10-08] [refresh:: 14] [keeps:: 2]
-      [created:: 2026-09-12] [priority:: medium] ^rq
+      [unblocked:: 2026-10-08] [created:: 2026-09-12] [priority:: medium] ^rq
 ```
 
-Output order is `fresh`, optional `refresh`, optional `keeps`, then
-the existing Tasks suffix, tags, and block ID. `keeps` extends the
-suffix scan as a run-extending **non-Tasks** key; it is never added
-to the Tasks key registry. Both Rust parsers see the same Tasks
-fields before and after writes. Task body, child blocks, quote
-prefixes, CRLF, and final-newline state follow the existing writer
-rules. No metadata leaks into clean task descriptions or capture
-previews.
+Output order is `fresh`, optional `refresh`, optional `keeps`,
+optional `unblocked`, then the existing Tasks suffix, tags, and
+block ID. `keeps` and `unblocked` extend the suffix scan as
+run-extending **non-Tasks** keys; they are never added to the Tasks
+key registry. `unblocked` must never be appended after the Tasks
+suffix: both Rust Tasks parsers stop at the first unknown key, so
+they would lose `scheduled`, `dependsOn`, and `id`. Both Rust
+parsers see the same Tasks fields before and after writes. Task
+body, child blocks, quote prefixes, CRLF, and final-newline state
+follow the existing writer rules. No metadata leaks into clean task
+descriptions or capture previews.
 
 **Counting, clearing, and storage.** Exact eligibility authorizes counting
 only for an exact due-Ready ROTTEN/TICKLER row: the pre-write queue holds
@@ -171,6 +177,10 @@ uncounted old stamper. The event table:
   Due Ready references use ordinary keep counting and can reach the
   approved-decay decision at the keep limit. Dependency capture (`bob
   capture` `&`) is a generic stamp that clears `keeps`.
+- A keep on a `returned_by: unblocked` TICKLER row neither increments
+  nor resets `[keeps::]`, and `decide_for` never opens the decision
+  card for it (`unblock_keeps`). The row is still due and still
+  stamps `[fresh:: today]`, which clears `[unblocked::]`.
 
 What Rust guarantees today:
 
@@ -239,12 +249,15 @@ decision-card phase.
 ## 3. Placement rule
 
 The Rust helper is `stamp_fresh` / `set_refresh`; the JavaScript
-ones are `api.freshness.stampLine` / `setRefreshLine` / `keepLine` in
-bob-ledger-tools (`keepLine` is the sole increment helper and landed
-with the ledger-marks phase). One helper per language, pinned by the
-shared vectors below. Rust reads, clears, and reports `keeps`; the
-seed's private preserve-mode primitive is the only Rust path that
-keeps a streak while stamping.
+ones are `api.freshness.stampLine` / `setRefreshLine` / `keepLine` /
+`markUnblockedLine` in bob-ledger-tools (`keepLine` is the sole
+increment helper and landed with the ledger-marks phase;
+`markUnblockedLine` is the sole `[unblocked::]` writer, namespace
+≥ v12). One helper per language, pinned by the shared vectors below.
+Rust reads, clears, and reports `keeps` and `unblocked`; the seed's
+private preserve-mode primitive is the only Rust path that keeps a
+streak while stamping. Every stamp (Rust stamp helpers; JS
+`stampLine` / `keepLine`) removes `[unblocked::]`.
 
 1. **Scope.** The helpers handle Tasks' Dataview format only, which is
    the vault's format. `bob freshness` refuses to run when the vault's
@@ -260,7 +273,7 @@ keeps a streak while stamping.
        (`priority start created scheduled due completion cancelled
        repeat onCompletion id dependsOn`), whatever its value,
        following `trailing_inline_field`'s grammar;
-     - a `fresh`, `refresh`, or `keeps` field;
+     - a `fresh`, `refresh`, `keeps`, or `unblocked` field;
      - a trailing tag (the `HASH_TAG_AT_END` grammar).
    - Never scan past the start of the task body. If the body begins
      with the global filter token `#task`, never scan past the end of
@@ -268,18 +281,24 @@ keeps a streak while stamping.
 
    The **Tasks suffix** starts at the leftmost Tasks element of that
    run (a Tasks-key field, a tag, or `^id`). `fresh` / `refresh` /
-   `keeps` fields at the run's left edge are not part of it.
+   `keeps` / `unblocked` fields at the run's left edge are not part
+   of it.
 3. **Canonical output.**
-   - Remove every `fresh`, `refresh`, and `keeps` field on the line.
-     Each removal also collapses the whitespace it leaves to a single
-     space.
+   - Remove every `fresh`, `refresh`, `keeps`, and `unblocked` field
+     on the line. Each removal also collapses the whitespace it
+     leaves to a single space.
    - Rebuild as `head.trim_end() + " " + "[fresh:: D]" + ("
      [refresh:: N]" if a refresh value is kept) + (" [keeps:: K]" if
-     a keeps value is kept) + (" " + suffix if there is a suffix)`.
+     a keeps value is kept) + (" [unblocked:: U]" if an unblocked
+     value is kept) + (" " + suffix if there is a suffix)`.
    - The kept refresh value is the first valid existing one;
      `set_refresh` replaces or removes it. Generic stamps keep no
-     `keeps` value (they clear the streak); the seed preserve-mode
-     keeps the first valid existing one and omits zero.
+     `keeps` value (they clear the streak) and no `unblocked` value
+     (they clear the field); the seed preserve-mode keeps the first
+     valid existing `keeps` and omits zero, and never writes
+     `unblocked`. `markUnblockedLine` keeps existing `fresh` /
+     `refresh` / `keeps` and sets `[unblocked:: today]`, replacing
+     any older value.
    - The suffix bytes themselves are never changed.
 4. **No churn.** If the canonical output equals the input byte-for-byte
    (the line is already stamped today and canonical), report `changed:
@@ -292,7 +311,9 @@ keeps a streak while stamping.
 6. **Invariance.** For every vector, the Tasks fields both Rust parsers
    extract are identical before and after: status, dates, priority,
    recurrence, `id`, `dependsOn`, tags, block ID. So are the Obsidian
-   Tasks fields the JavaScript tests can check.
+   Tasks fields the JavaScript tests can check. `[unblocked::]` is a
+   run-extending non-Tasks key, so `scheduled`, `dependsOn`, and `id`
+   after it still parse (UB12).
 
 ## 4. Evaluation
 
@@ -322,8 +343,14 @@ identity(t)   = exact trailing ^prj → prj; else none
                 (^prj-extra, description text, and links/embeds never qualify)
 fresh(t)      = latest valid fresh date on the line; none if absent
                 (malformed ⇒ ignored + lint; future date ⇒ none + lint)
+unblocked(t)  = latest valid unblocked date on the line; none if absent
+                (malformed ⇒ ignored + lint)
+returned_on(t)= latest of
+                  scheduled(t)  if fresh(t) < scheduled(t) ≤ today
+                  unblocked(t)  if fresh(t) exists ∧ fresh(t) ≤ unblocked(t) ≤ today
+returned_by(t)= scheduled | unblocked  (the source of returned_on; scheduled on a tie)
 state(t)      = NEW         if no fresh(t)
-              | RESURFACED  if scheduled(t) exists ∧ fresh(t) < scheduled(t) ≤ today
+              | RESURFACED  if returned_on(t)
               | ROTTEN      if today ≥ fresh(t) + interval(t)
               | FRESH       otherwise
                 (Ready only; lane rows keep a null state)
@@ -345,7 +372,7 @@ tracker_due(t)= ^prj lane ∧ walk_scope ∧ (no fresh(t) ∨ resurfaced
 due_on(t)     = checklist: none
                 ordinary lane row: fresh(t) + lane_interval, or none when unstamped
                 ^prj lane row: effective tracker due date, or none when unstamped
-                RESURFACED: scheduled(t); ROTTEN/FRESH: fresh(t) + interval(t); NEW: none
+                RESURFACED: returned_on(t); ROTTEN/FRESH: fresh(t) + interval(t); NEW: none
 due(t)        = checklist_scope(t) ∨ (in_scope(t) ∧ state(t) ≠ FRESH)
 tier(t)       = checklist(t) if checklist_scope(t)
               | recurring if recurring_due(t)
@@ -394,7 +421,7 @@ The queue holds every row with a tier, in order PRE → NEW → PROJECTS → PEN
 | pending | never-stamped first, due_on ↑, created ↑, path ↑, line ↑ |
 | next | same as pending |
 | recurring | due_on ↑, path ↑, line ↑ |
-| tickler | due_on (= scheduled) ↑, created ↓, path ↑, line ↑ |
+| tickler | due_on ↑, path ↑, line ↑ |
 | rotten | interval ↑, due_on ↑, created ↓, path ↑, line ↑ |
 | post | path ↑, line ↑ |
 
@@ -421,11 +448,18 @@ Counts keep state and tier distinct:
 Every `✓` meter displays `upkeep_today`: `✓ N today`, or `✓ N/B
 today` with a budget.
 
-RESURFACED beats ROTTEN when both hold: a deferral that returned is
-due as soon as it returns. The tickler makes a short deferral (for
-example a P1 roll of 2–7 days) due as soon as it returns, without any
-hooks write. Tiers never feed buckets or chips: `state`/`bucket` and
-the partition text below are unchanged.
+RESURFACED beats ROTTEN when both hold: a deferral that returned, or
+an automatic unblock, is due as soon as it returns. The tickler makes
+a short deferral (for example a P1 roll of 2–7 days) due as soon as
+it returns, without any hooks write. The `fresh ≤ unblocked` tie is
+deliberate: a task blocked by a stamped gesture in the morning and
+unblocked that afternoon still resurfaces. TICKLER rows with the same
+`due_on` sort by path, then line, so one project's residents are
+contiguous. An unblock tickler is bucket `rotten` like any tickler, so
+the `NEW ∪ TICKLER ∪ ROTTEN ∪ READY` partition is unchanged. Tiers
+never feed buckets or chips: `state`/`bucket` and the partition text
+below are unchanged. A due `^prj` whose inline date arrived after its
+stamp is PROJECTS, not TICKLER (PROJECTS beats TICKLER).
 
 **Buckets.** The stable read-time bucket contract for dashboard
 gating:
@@ -458,11 +492,11 @@ null.
 
 Reference conformance compares tag-only #ref and legacy ^ref tasks against an otherwise-identical ordinary task: interval/source, state, bucket, tier, due date, overdue days, keeps, and decision eligibility match. An unstamped Ready ref is NEW; a resurfaced ref is TICKLER; an expired Ready ref is ROTTEN and can decide at the keep limit. Lane refs use PENDING/NEXT cadence with null state/bucket; disabled lanes suppress them like ordinary lane tasks. Hidden, blocked, Today-linked, daily-note, template/conflict, and future-scheduled refs remain excluded. ^prj remains the only freshness tracker exception and keeps its project cadence and PROJECTS tier.
 
-**Machine vocabulary (schema 13).** Human and machine output use the nine current groups PRE → NEW → PROJECTS → PENDING → NEXT → RECURRING → TICKLER → ROTTEN → POST. The current JSON contract is schema 13. It contains no reference cadence, interval source, tier, or convenience counter. The histogram has exactly these nine keys, including zero values; walk equals the sum of by_tier before --limit. References remain ordinary tasks in the existing state and tier counts.
+**Machine vocabulary (schema 14).** Human and machine output use the nine current groups PRE → NEW → PROJECTS → PENDING → NEXT → RECURRING → TICKLER → ROTTEN → POST. The current JSON contract is schema 14. Queue rows gain `returned_by` (`scheduled` | `unblocked`) and, when present, `unblocked_on`. It contains no reference cadence, interval source, tier, or convenience counter. The histogram has exactly these nine keys, including zero values; walk equals the sum of by_tier before --limit. References remain ordinary tasks in the existing state and tier counts.
 
-Schema history is historical: schemas 6–12 accepted a project and/or reference cadence, and schemas 7–12 included a REFERENCES tier. Schema 13 removes the reference-specific fields and redistributes those tasks through the ordinary evaluator. Schema 12 re-keyed ref review identity from exact ^ref to the #ref tag; schema 11 added recurring, schema 10 renamed returned to tickler, schema 9 added PRE/POST, schema 8 removed the decay calendar gate, and earlier schemas introduced tracker and project fields. Those historical shapes do not describe current output. The shared seed envelope advances with the schema constant; seed behavior is unchanged.
+Schema history is historical: schemas 6–12 accepted a project and/or reference cadence, and schemas 7–12 included a REFERENCES tier. Schema 14 adds `returned_by` / `unblocked_on` for the unblock tickler. Schema 13 removes the reference-specific fields and redistributes those tasks through the ordinary evaluator. Schema 12 re-keyed ref review identity from exact ^ref to the #ref tag; schema 11 added recurring, schema 10 renamed returned to tickler, schema 9 added PRE/POST, schema 8 removed the decay calendar gate, and earlier schemas introduced tracker and project fields. Those historical shapes do not describe current output. The shared seed envelope advances with the schema constant; seed behavior is unchanged.
 
-Bob-ledger-tools keeps top-level api v3 and advances api.freshness.version to 11. The current namespace advertises trackerReview, recurringTier, and checklistTiers; it no longer advertises referenceReview or refTagIdentity. Its queue and footer use the nine current groups, and public config/count fallbacks match warm snapshots. Navigation may present a REFERENCES entry only when explicitly marked as legacy from a freshness namespace <=10; the new producer never creates one, and the compatibility path preserves old loaded-provider rows until plugin reload.
+Bob-ledger-tools keeps top-level api v3 and advances api.freshness.version to 12. The current namespace advertises trackerReview, recurringTier, checklistTiers, and `markUnblockedLine`; it no longer advertises referenceReview or refTagIdentity. JS writers call `api.freshness.markUnblockedLine` (namespace ≥ v12). When it is missing, they recover without the field and `console.warn`. Its queue and footer use the nine current groups, and public config/count fallbacks match warm snapshots. Navigation may present a REFERENCES entry only when explicitly marked as legacy from a freshness namespace <=10; the new producer never creates one, and the compatibility path preserves old loaded-provider rows until plugin reload.
 
 Dashboard freshness.reviewModel NEW/ROTTEN chips still project memoized evaluated states onto the existing visible Ready pool. Hidden review-only rows never feed a badge for a section that excludes them. The status bar footer, ]s, and CLI use the full review counts. The desktop footer shows nonempty groups in walk order with short labels WIP for PENDING, RECUR for RECURRING, and TICKS for TICKLER; it splits TICKLER from ROTTEN so the commitment/upkeep boundary is visible. Dashboard ROTTEN chips still fold TICKLER plus ROTTEN. Review r/N and TIER i/M are queue positions, not completed-task counts. Jump notices and CLI output use full tier names.
 
@@ -481,7 +515,7 @@ Line numbers are 1-based in JSON and docs. Tasks' `lineNumber` is
 0-based, so convert it.
 
 **Lints:** `fresh_malformed`, `fresh_future`, `fresh_duplicate`,
-`fresh_misplaced` (a `fresh`/`refresh`/`keeps` inside the Tasks
+`fresh_misplaced` (a `fresh`/`refresh`/`keeps`/`unblocked` inside the Tasks
 suffix; the next stamp repairs it), `refresh_invalid` (per task),
 `keeps_invalid` (a `keeps` value that is not a decimal integer 1–999;
 ignored) and `keeps_duplicate` (more than one `keeps` field; the
@@ -510,7 +544,7 @@ today on a canonical line is a no-op.
 
 | Surface                | Stamps | Never stamps |
 | ---------------------- | ------ | ------------ |
-| bob-navigation-hotkeys | Alt+F and Ctrl+Alt+F stamp through `api.freshness.keepLine` (counted only under exact eligibility); Alt+N commit and release; the Ctrl+Shift+P Task Card (`1`–`4`, `0`, Enter/Schedule, `b`, `f`, `x`, Ctrl+D) and the stages its actions open, in single, counted and Task Link mode; each open task moved by Ctrl+Shift+M; routed moves stamp like Ctrl+Shift+M; the Ctrl+Enter recommended roll and decay; decision-card outcomes write through the existing writers (Not now and levels through the priority writer, Less often through set-refresh, Reword through the generic stamp, Drop through the cancel row, which never stamps) | the cancel row (including the decay cancel), project-frontmatter edits, create-project-note-from-task, the `!` transclusion toggle (a pure toggle that never rewrites a task line) |
+| bob-navigation-hotkeys | Alt+F and Ctrl+Alt+F stamp through `api.freshness.keepLine` (counted only under exact eligibility); Alt+N commit and release; the Ctrl+Shift+P Task Card (`1`–`4`, `0`, Enter/Schedule, `b`, `f`, `x`, Ctrl+D) and the stages its actions open, in single, counted and Task Link mode; each open task moved by Ctrl+Shift+M; routed moves stamp like Ctrl+Shift+M; the Ctrl+Enter recommended roll and decay; decision-card outcomes write through the existing writers (Not now and levels through the priority writer, Less often through set-refresh, Reword through the generic stamp, Drop through the cancel row, which never stamps) | the cancel row (including the decay cancel), create-project-note-from-task, the `!` transclusion toggle (a pure toggle that never rewrites a task line) |
 | task-status-cycler     | Alt+[ / Alt+] (including counted and transcluded targets) when the result is an open status, including leaving Blocked by hand; Ctrl+Enter reopening a done task | closing (done or cancelled), Ctrl+Shift+] bullet → `#task` (that is creation), the dependency-ID normalizer, `recoverBlockedDependents` |
 | block-id-prompt        | Ctrl+Shift+Enter and `^^` when they rewrite the task line (Ready/Blocked → Next, a new block ID) | unlink, Task Link removal, Ctrl+6 rename |
 | `bob capture`          | `plan_task_link` (the link direction of `@route+id!`, Ensure Next, solo `@route:id` / `^route:id`, link-then-close), the `=x` rows that set `[/]`, and an `&note:id` dependency capture that edits an existing open dependent (its Depends-On line, derived fields, or Blocked status) | new tasks on any route (including new tasks with `&` prerequisites), `=x` complete, unlink, start rows, sub-bullets, prerequisite target-ID and lane promotion edits, an unchanged repeat `&` |
@@ -520,7 +554,24 @@ today on a canonical line is a no-op.
 
 Deferrals: scheduling a task into the future stamps it, and it becomes
 Blocked. When it returns it is RESURFACED. Automatic Blocked → Ready
-returns through the hooks never stamp.
+returns never stamp: `[unblocked::]` is a freshness input, not a stamp.
+Automation still never stamps.
+
+**Who writes `[unblocked::]`.** On every automatic transition of an
+open task from Blocked `[?]` to Ready `[ ]` — reconcile Unblock;
+capture/cycler close recovery (including `project_member`); nav/cycler
+project recovery of residents; nav recoveries of lines other than the
+gesture's own line (the gesture stamps its own line) — evaluated on
+the recovered line. Skip when any of:
+
+- the row is outside freshness scope (recurring, hidden, daily note, …);
+- it has no `[fresh::]` (NEW is already due);
+- `fresh(t) < scheduled(t) ≤ today` (already a scheduled tickler);
+- the recovery lands in Next or Pending (the lane walk covers it).
+
+Else set `[unblocked:: today]`, replacing any older value. Reconcile
+prunes `[unblocked:: U]` when `fresh > U`. JS writers call
+`api.freshness.markUnblockedLine` (namespace ≥ v12).
 
 Placement is the exception to the copy-small-helpers rule: nav,
 task-status-cycler, and block-id-prompt call
@@ -677,6 +728,7 @@ bob freshness · Thu 2026-10-08 · every 7d · pending 1d · next 1d · keeps 3
     cash.md:9           Apply for unemployment  Recurring · due today
   TICKLER 14
     b.md:40             Week habits             tickler · scheduled 2026-10-07 · fresh 2026-10-05
+    p.md:12             Draft the pitch         tickler · unblocked 2026-10-08 · fresh 2026-10-01
   ── commitments done above · upkeep below ──
   ROTTEN 26
     d.md:1              Water the herbs         due today · fresh 2026-10-07 · every 1d (task)
@@ -688,7 +740,9 @@ bob freshness · Thu 2026-10-08 · every 7d · pending 1d · next 1d · keeps 3
 
 - The `REVIEW N due` total is `walk`.
 - Human vocabulary says "tickler"; the machine `state` stays
-  `resurfaced`.
+  `resurfaced`. A TICKLER row reads `unblocked YYYY-MM-DD` when
+  `returned_by` is `unblocked`, else `scheduled YYYY-MM-DD`. There is
+  no reason suffix: the reason is not stored.
 - A disabled lane shows `pending off` in the header.
 - The header always shows the keep threshold: `keeps 3` when enabled,
   `keeps 3 · decay off` with decay off, and `keeps 0 · asks every
@@ -713,7 +767,7 @@ render empty, and NEW/ROTTEN badges show `–` (never zero). Native
 and READY is ungated there; `bob freshness list` is the headless
 review interface.
 
-The current JSON contract is schema_version 13. It includes config interval, pending_interval/next_interval, project_interval, rotten_daily_budget, and normalized decay; counts due/new/resurfaced/rotten/fresh, pending_due/next_due/projects_due/pre_due/post_due/recurring_due, a nine-key by_tier histogram, walk, decide, refreshed_today, upkeep_today, budget, and budget_met; queue rows with the nine current tiers, lane/state/bucket, interval_source task/note/config/default/pending/next/project, due metadata, keeps, and decide; and warnings. It has no reference interval, references_due, references tier, or reference interval source. Counts cover the whole vault regardless of --limit. The Obsidian footer abbreviates PENDING as WIP, RECURRING as RECUR, and TICKLER as TICKS; it omits empty groups and the current group. A NEW project counts once in PROJECTS. References follow their ordinary state and lane groups.
+The current JSON contract is schema_version 14. It includes config interval, pending_interval/next_interval, project_interval, rotten_daily_budget, and normalized decay; counts due/new/resurfaced/rotten/fresh, pending_due/next_due/projects_due/pre_due/post_due/recurring_due, a nine-key by_tier histogram, walk, decide, refreshed_today, upkeep_today, budget, and budget_met; queue rows with the nine current tiers, lane/state/bucket, interval_source task/note/config/default/pending/next/project, due metadata, keeps, decide, `returned_by`, and `unblocked_on` when present; and warnings. It has no reference interval, references_due, references tier, or reference interval source. Counts cover the whole vault regardless of --limit. The Obsidian footer abbreviates PENDING as WIP, RECURRING as RECUR, and TICKLER as TICKS; it omits empty groups and the current group. A NEW project counts once in PROJECTS. References follow their ordinary state and lane groups.
 
 Seed options: -d/--dry-run, -F/--force, -f/--format human|json. Ready tasks without a valid `fresh` are grouped by note
 and bin-packed largest-note-first into 7 buckets; a note bigger than
@@ -739,7 +793,7 @@ differently under either Rust parser. A writing run then re-reads all touched
 files before the first write and refuses if one changed; `--dry-run` stops
 after planning and parse validation, without that file recheck. Each file is
 written through a temp file plus rename. The JSON contract is
-`schema_version: 13` with `ok`, `date`, `dry_run`,
+`schema_version: 14` with `ok`, `date`, `dry_run`,
 `stamped` (`ready`, `other`), `buckets` (`fresh`, `due_on`, `count`,
 `notes`), `skipped` (`already_stamped`, `recurring`,
 `out_of_scope`), `files`, and `warnings`. The shared schema constant
@@ -764,7 +818,7 @@ an invalid `freshness:` block or a non-Dataview task format.
 
 | Surface | Phase |
 | ------- | ----- |
-| bob freshness | fresh-cli: schema 13 tiered walk PRE → NEW → PROJECTS → PENDING → NEXT → RECURRING → TICKLER → ROTTEN → POST; ordinary reference freshness, project cadence for ^prj, recurring occurrences, PRE/POST checklists, and approved-decay policy. |
+| bob freshness | fresh-cli: schema 14 tiered walk PRE → NEW → PROJECTS → PENDING → NEXT → RECURRING → TICKLER → ROTTEN → POST; ordinary reference freshness, project cadence for ^prj, recurring occurrences, PRE/POST checklists, approved-decay policy, and `[unblocked::]` ticklers. |
 | `bob capture` | capture-stamps (landed: plan_task_link + `=x` close stamp via `stamp_fresh`; existing-dependent `&` dependency stamp via the same helper; capture never stamps trackers) |
 | bob-ledger-tools | ledger-freshness (landed: api v3 `api.freshness` + status bar in 1.8.0; tracking review under namespace v6 with the `trackerReview` capability; persistent review footer with additive `reviewEntryView`) |
 | bob-navigation-hotkeys | nav-review, nav-stamps (landed: Alt+N + Ctrl+Shift+P/Ctrl+Shift+M/! stamping + refresh row in 1.44.0; PROJECTS tier walk with `trackerReview` capability and legacy v3/v4 fallback; notices feature-detect `reviewEntryView`) |
@@ -1045,7 +1099,7 @@ increment API; the JS side runs the increment vectors through
   is no write.
 - **K12 parser invariance:** for every vector, the Tasks fields both
   Rust parsers extract are identical before and after, exactly as §9
-  requires for `fresh`/`refresh`.
+  requires for `fresh`/`refresh`/`keeps`/`unblocked`.
 - **K13 exact keys:** similarly named keys (`keep`, `Keep`,
   `keepsx`) are not `keeps`; the key match is exact and
   case-sensitive. Readers accept bracket and paren field syntax.
@@ -1058,11 +1112,41 @@ never, `keeps: 0` asking on every due Ready re-confirmation,
 `decay: false` never asking, and lane rows never deciding. Boundary
 vectors B1–B5 pin immediate availability on 2026-10-04, 2026-10-08,
 2026-10-18, 2026-10-19, and 2026-10-20. Rows have carried
-`keeps`/`decide` since schema 4, and the current schema is 12; counts
+`keeps`/`decide` since schema 4, and the current schema is 14; counts
 carry `decide`; `config.decay` reports normalized `enabled`,
 `keeps`, and `enter`. CLI human rows show `kept N×` and `· decide`
 where true; the header explains the threshold or the off state.
 Counts cover the full queue regardless of `--limit`.
+
+## 10b. UB — unblocked vectors
+
+Today `2026-10-08`. Implementations copy these rows into tests, citing
+the vector id in a comment. `[unblocked::]` is a run-extending
+non-Tasks key in the freshness group
+`[fresh::] [refresh::] [keeps::] [unblocked::]`, then the Tasks suffix.
+
+| # | situation | outcome |
+| --- | --- | --- |
+| UB1 | reconcile Unblock of an in-scope Ready recovery with `[fresh:: 2026-10-01]` | writes `[unblocked:: 2026-10-08]`, replacing any older value; `returned_by: unblocked`; `due_on` 2026-10-08; tier TICKLER |
+| UB2 | skip NEW: recovered line has no `[fresh::]` | no `[unblocked::]`; already due as NEW |
+| UB3 | skip scheduled tickler: `fresh 2026-10-01`, `scheduled 2026-10-07` | no `[unblocked::]`; already RESURFACED from scheduled |
+| UB4 | skip Next/Pending landing: recovery lands `[*]` or `[/]` | no `[unblocked::]`; the lane walk covers it |
+| UB5 | skip recurring | no `[unblocked::]`; outside freshness scope |
+| UB6 | skip hidden (`#hide`) | no `[unblocked::]`; outside freshness scope |
+| UB7 | stamp (Alt+F, `stampLine`, `keepLine`, capture `&`) on a line with `[unblocked:: 2026-10-08]` | field removed |
+| UB8 | prune: `[fresh:: 2026-10-08] [unblocked:: 2026-10-07]` | reconcile drops `[unblocked::]` (`fresh > U`) |
+| UB9 | tie `fresh == U`: `[fresh:: 2026-10-08] [unblocked:: 2026-10-08]` | RESURFACED, `returned_by: unblocked`, `due_on` 2026-10-08 (the `fresh ≤ unblocked` rule) |
+| UB10 | both sources: `fresh 2026-10-01`, `scheduled 2026-10-06`, `unblocked 2026-10-07` | `due_on` is the latest (2026-10-07); `returned_by: unblocked` |
+| UB11 | both sources tie: `fresh 2026-10-01`, `scheduled 2026-10-07`, `unblocked 2026-10-07` | `due_on` 2026-10-07; `returned_by: scheduled` |
+| UB12 | parser invariance | a line with `[unblocked:: 2026-10-08]` before `[scheduled::]`, `[dependsOn::]`, and `[id::]` still parses those Tasks fields identically before and after |
+| UB13 | keep on an unblock tickler (`returned_by: unblocked`) | stamps `[fresh:: today]`; `[keeps::]` unchanged (neither increment nor reset); `decide` stays false; `[unblocked::]` cleared by the stamp |
+| UB14 | TICKLER tie order | two unblock ticklers with the same `due_on` sort by path ↑, then line ↑ (one project's residents are contiguous); `created` is not a key |
+| UB15 | `^prj` whose inline `[scheduled:: 2026-10-07]` arrived after `[fresh:: 2026-10-01]` | RESURFACED into PROJECTS, not TICKLER |
+
+WRITE skips that the recovered line is a canonical daily-note task
+follow UB5/UB6 (outside freshness scope). Capture/cycler close
+recovery and nav/cycler project recovery of residents follow UB1
+with the same skips.
 
 ## 11. Display: the freshness mark
 
@@ -1386,6 +1470,7 @@ There is no freshness trial: no ritual change, release, or tuning waits on a tri
 - 2026-10-09: ref review re-keyed from the exact `^ref` block ID to the `#ref` tag (schema 12, ledger 1.37.0 / namespace v10 with `refTagIdentity`): Ready `#ref` rows keep REFERENCES on the reference cadence (never NEW, never decide); `[*]`/`[/]` refs walk PENDING/NEXT as ordinary lane tasks; the `#hide` bypass survives only for exact `^ref` rows until closeout.
 - 2026-10-10: closeout removed the transitional hidden-tag bypass for exact reference rows (schema 12, historical shape; ledger 1.39.0 / namespace v10): hidden rows stay out of the walk like any hidden task.
 - 2026-10-10: schema 13 and freshness namespace v11 removed the reference cadence and REFERENCES review group. References now use ordinary freshness, lane groups, keep/decay eligibility, and commitment/upkeep rules.
+- 2026-10-12: schema 14 and freshness namespace v12 add `[unblocked::]` (returned_by / unblocked_on, `markUnblockedLine`). Automatic Blocked → Ready recoveries resurface as TICKLER.
 
 ## 14. Keep-streak rollout, rollback, and calibration
 

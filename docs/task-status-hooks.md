@@ -381,17 +381,18 @@ Whitespace and other supported trailing Tasks metadata may appear in either
 order. The value must have the exact `YYYY-MM-DD` shape and name a real
 calendar date. It blocks only when it is strictly later than the effective
 daily anchor, so yesterday and today do not block while tomorrow and later do.
-YAML `scheduled: YYYY-MM-DD` project frontmatter participates indirectly:
-`bob projects sync` and Bob Navigation Hotkeys' project property picker
-propagate it into ordinary task-level `scheduled` fields. From that point this
-command treats the fields exactly like any other inline task schedule. The
-`^prj` lifecycle task remains excluded from propagation and keeps its separate
-`#hide` surfacing contract.
+The project date lives as inline `[scheduled::]` on `^prj`;
+`bob projects sync` and Bob Navigation Hotkeys propagate it into ordinary
+task-level `scheduled` fields. From that point this command treats the
+fields exactly like any other inline task schedule. The `^prj` lifecycle
+task remains excluded from propagation and keeps its separate `#hide`
+surfacing contract.
 
 Blocked is derived state: a recognized open task is blocked when it has at
 least one open dependency, a valid future schedule, or both. A task that
-lives in a blocked project is Blocked too; the project-dependency rule,
-reason kinds, and consumption of links to Blocked tasks are in
+lives in a blocked project is Blocked too; the `^prj` line-model rule,
+`#prj_is_blocked`, `[unblocked::]`, reason kinds, and consumption of
+links to Blocked tasks are in
 [task-dependencies.md §13](task-dependencies.md#13-project-dependencies). This combined
 state overrides Ready (`[ ]`), Next (`[*]`), and In Progress (`[/]`), including
 Pomodoro promotion for a task inherited from a scheduled project. A task
@@ -433,7 +434,7 @@ Hand-unblocking with the Task Status Cycler plugin's option-bracket cycle
 (`<option+]>`/`<option+[>` on a `[?]` task, to Ready or Cancelled) retires the
 future schedule that caused the Blocked marker, which is what keeps this
 command from immediately re-deriving `[?]` on its next run. A remaining open
-dependency, or a project-level `scheduled` frontmatter date that
+dependency, or a project-level date on `^prj` that
 `bob projects sync` re-propagates, still re-blocks the task on the next run.
 Cycling any task into Done through the same keys runs the same immediate
 recover-and-link pass as Ctrl+Enter above (linking what the close unblocked);
