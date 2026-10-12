@@ -145,11 +145,21 @@ pub(super) fn parse_project(
                 )
             })
             .flatten();
+        let is_prj = is_valid_prj_task_line(line, task);
+        if is_prj {
+            report_prj_inline_schedule_issues(
+                relative_path,
+                line_span.line_number,
+                task.text,
+                &scheduled_fields,
+                issues,
+            );
+        }
         task_lines.push(ProjectTaskLine {
             line_number: line_span.line_number,
             mark: task.mark,
             hide_tag_count: tag_spans(task.text, HIDE_TAG).len(),
-            is_prj: is_valid_prj_task_line(line, task),
+            is_prj,
             is_open_task: contains_task_tag(task.text) && task.status.is_open(),
             scheduled_field_count: scheduled_fields.len(),
             scheduled_date,
@@ -256,6 +266,45 @@ pub(super) fn is_exact_date_shape(value: &str) -> bool {
             4 | 7 => byte == b'-',
             _ => byte.is_ascii_digit(),
         })
+}
+
+fn report_prj_inline_schedule_issues(
+    relative_path: &Path,
+    line_number: usize,
+    task_text: &str,
+    scheduled_fields: &[InlineFieldSpan],
+    issues: &mut Vec<ScanIssue>,
+) {
+    if scheduled_fields.is_empty() {
+        return;
+    }
+    if scheduled_fields.len() > 1 {
+        issues.push(ScanIssue::line(
+            relative_path,
+            line_number,
+            "multiple ^prj scheduled fields found; keep exactly one",
+        ));
+        return;
+    }
+    let value = task_text
+        [scheduled_fields[0].value_start..scheduled_fields[0].value_end]
+        .trim();
+    if parse_inline_schedule_date(value).is_some() {
+        return;
+    }
+    if !is_exact_date_shape(value) {
+        issues.push(ScanIssue::line(
+            relative_path,
+            line_number,
+            "^prj scheduled must be a calendar date in YYYY-MM-DD format",
+        ));
+        return;
+    }
+    issues.push(ScanIssue::line(
+        relative_path,
+        line_number,
+        format!("^prj scheduled is not a valid calendar date: {value}"),
+    ));
 }
 
 pub(crate) fn parse_frontmatter(contents: &str) -> Option<Frontmatter<'_>> {

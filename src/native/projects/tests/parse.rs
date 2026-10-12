@@ -301,3 +301,46 @@ fn project_parser_stops_prj_sub_block_at_blank_line() {
 
     assert!(project.prj_task.sub_block.lines.is_empty());
 }
+
+#[test]
+fn project_parser_reports_invalid_and_duplicate_inline_prj_scheduled() {
+    let mut issues = Vec::new();
+    let invalid = parse_project(
+        Path::new("Invalid.md"),
+        "---\ntype: [[project]]\n---\n- [ ] #task Ship [scheduled:: 2026-02-30] ^prj\n",
+        &mut issues,
+    )
+    .expect("project");
+    assert!(invalid.scheduled.is_none());
+    assert_eq!(issues.len(), 1);
+    assert_eq!(issues[0].line_number, Some(4));
+    assert_eq!(
+        issues[0].message,
+        "^prj scheduled is not a valid calendar date: 2026-02-30"
+    );
+
+    issues.clear();
+    let malformed = parse_project(
+        Path::new("Malformed.md"),
+        "---\ntype: [[project]]\n---\n- [ ] #task Ship [scheduled:: 2026-7-11] ^prj\n",
+        &mut issues,
+    )
+    .expect("project");
+    assert!(malformed.prj_task.scheduled.as_deref() == Some("2026-7-11"));
+    assert_eq!(
+        issues[0].message,
+        "^prj scheduled must be a calendar date in YYYY-MM-DD format"
+    );
+
+    issues.clear();
+    parse_project(
+        Path::new("Duplicate.md"),
+        "---\ntype: [[project]]\n---\n- [ ] #task Ship [scheduled:: 2026-07-11] [scheduled:: 2026-07-12] ^prj\n",
+        &mut issues,
+    )
+    .expect("project");
+    assert_eq!(
+        issues[0].message,
+        "multiple ^prj scheduled fields found; keep exactly one"
+    );
+}

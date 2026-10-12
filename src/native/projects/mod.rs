@@ -102,10 +102,11 @@ status to canceled. Active projects with no non-hidden open tasks and no \
 open sub-projects have the #hide tag removed from their open ^prj task so \
 it surfaces in dash.md's Tasks section; projects with non-hidden open tasks \
 or open sub-projects get #hide added back. Sync also maintains a single \
-Sub-projects line nested under open ^prj tasks after a Depends-On child (or \
-after a Cancel Log occupying the first slot). Leftover scheduled: YYYY-MM-DD \
-frontmatter is hoisted onto ^prj as [scheduled:: YYYY-MM-DD] and the key is \
-deleted (frontmatter wins when both exist; terminal projects are left alone). \
+Sub-projects line nested under open ^prj tasks after the whole Depends-On or \
+Cancel Log subtree. Leftover scheduled: YYYY-MM-DD frontmatter is hoisted onto \
+^prj as [scheduled:: YYYY-MM-DD] and the key is deleted when ^prj is open \
+(frontmatter wins when both exist; terminal projects, and notes without an \
+open ^prj, leave the key in place with a warning). \
 When ^prj has a valid inline date, it overrides the normal surfacing rule: \
 every open ordinary task receives a matching [scheduled:: YYYY-MM-DD] field \
 unless it already has a valid equal or later schedule, and ordinary-task \

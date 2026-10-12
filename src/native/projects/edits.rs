@@ -368,11 +368,15 @@ pub(super) fn prj_line_edit(
 ) -> Result<TextEdit, String> {
     let frontmatter = parse_frontmatter(contents)
         .ok_or_else(|| "failed to locate project frontmatter".to_string())?;
+    let mut fence = None;
     for line in line_spans(contents) {
         if line.line_number <= frontmatter.body_start_line {
             continue;
         }
         let line_text = &contents[line.start..line.end];
+        if markdown_fence_line(trim_cr(line_text), &mut fence) {
+            continue;
+        }
         if !has_trailing_prj_anchor(line_text) {
             continue;
         }
@@ -502,7 +506,10 @@ pub(super) fn sync_subprojects_line_edits(
 
 fn subprojects_insert_anchor(layout: &PrjSubBlockLayout) -> LineSpan {
     subprojects_anchor_child(&layout.sub_block)
-        .and_then(|child| line_by_number(&layout.lines, child.line_number).ok())
+        .and_then(|child| {
+            let end = subprojects_subtree_end(&layout.sub_block, child);
+            line_by_number(&layout.lines, end.line_number).ok()
+        })
         .unwrap_or(layout.prj_line)
 }
 
@@ -586,11 +593,15 @@ pub(super) fn prj_sub_block_layout(
     let frontmatter = parse_frontmatter(contents)
         .ok_or_else(|| "failed to locate project frontmatter".to_string())?;
     let lines = line_spans(contents);
+    let mut fence = None;
     for (index, line) in lines.iter().enumerate() {
         if line.line_number <= frontmatter.body_start_line {
             continue;
         }
         let line_text = trim_cr(&contents[line.start..line.end]);
+        if markdown_fence_line(line_text, &mut fence) {
+            continue;
+        }
         if !has_trailing_prj_anchor(line_text) {
             continue;
         }

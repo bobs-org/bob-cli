@@ -76,7 +76,23 @@ fn project_changes_hoist_scheduled_preserves_crlf_and_unrelated_yaml() {
 }
 
 #[test]
+fn project_changes_hoist_skips_fenced_prj_example() {
+    let output = apply_changes(
+        "---\ntype: [[project]]\nstatus: wip\nscheduled: 2026-07-11\n---\n```md\n- [ ] #task Example ^prj\n```\n- [ ] #task Ship ^prj\n",
+        &[ProjectChange::HoistScheduled {
+            scheduled: "2026-07-11".to_string(),
+        }],
+    );
+    assert_eq!(
+        output,
+        "---\ntype: [[project]]\nstatus: wip\n---\n```md\n- [ ] #task Example ^prj\n```\n- [ ] #task Ship [scheduled:: 2026-07-11] ^prj\n"
+    );
+}
+
+#[test]
 fn project_blocked_tag_uses_metadata_position_and_is_idempotent() {
+    // PDT9: tag lands after fields and `#hide`, before `^id`.
+    // PDT8: already tagged stays a single token.
     let line = "- [ ] #task Work [scheduled:: 2026-10-12] ^work";
     let tagged = normalize_prj_is_blocked_tag(line, true);
     assert_eq!(
@@ -89,6 +105,7 @@ fn project_blocked_tag_uses_metadata_position_and_is_idempotent() {
 
 #[test]
 fn project_blocked_tag_normalizer_deduplicates_only_the_exact_tag() {
+    // PDT12: token-bounded matching; `#prj_is_blocked_extra` is not the tag.
     let line = "- [ ] #task Work #prj_is_blocked #prj_is_blocked_extra ^work";
     assert_eq!(
         normalize_prj_is_blocked_tag(line, true),
@@ -98,6 +115,18 @@ fn project_blocked_tag_normalizer_deduplicates_only_the_exact_tag() {
         normalize_prj_is_blocked_tag(line, false),
         "- [ ] #task Work #prj_is_blocked_extra ^work"
     );
+}
+
+#[test]
+fn project_blocked_tag_preserves_crlf() {
+    // PDT10: tag rewrite keeps the note's line ending.
+    let line = "- [ ] #task Work [scheduled:: 2026-10-12] ^work\r";
+    let tagged = normalize_prj_is_blocked_tag(line, true);
+    assert_eq!(
+        tagged,
+        "- [ ] #task Work [scheduled:: 2026-10-12] #prj_is_blocked ^work\r"
+    );
+    assert_eq!(normalize_prj_is_blocked_tag(&tagged, false), line);
 }
 
 #[test]
@@ -149,7 +178,7 @@ fn project_changes_insert_subproject_links_after_prj_with_tab_indent() {
 fn project_changes_insert_subproject_line_after_depends_on_and_cancel_log() {
     let desired = [open_subproject("Child")];
     let output = apply_subproject_changes(
-        "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n  - ❌ **CANCEL LOG**\n  - ⛓️ **DEPENDS ON:** [[job#^update-linkedin]]\n  - user notes\n",
+        "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n  - ❌ **CANCEL LOG**\n    - [-] old work\n  - ⛓️ **DEPENDS ON:** [[job#^update-linkedin]]\n  - user notes\n",
         &[ProjectChange::AddSubprojectLink {
             stem: "Child".to_string(),
             state: SubprojectState::Open,
@@ -158,7 +187,41 @@ fn project_changes_insert_subproject_line_after_depends_on_and_cancel_log() {
     );
     assert_eq!(
         output,
-        "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n  - ❌ **CANCEL LOG**\n  - ⛓️ **DEPENDS ON:** [[job#^update-linkedin]]\n\t- 🧩 **Sub-projects:** [[Child]]\n  - user notes\n"
+        "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n  - ❌ **CANCEL LOG**\n    - [-] old work\n  - ⛓️ **DEPENDS ON:** [[job#^update-linkedin]]\n\t- 🧩 **Sub-projects:** [[Child]]\n  - user notes\n"
+    );
+}
+
+#[test]
+fn project_changes_insert_subproject_line_after_cancel_log_subtree() {
+    let desired = [open_subproject("Child")];
+    let output = apply_subproject_changes(
+        "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n  - ❌ **CANCEL LOG**\n    - [-] old work\n  - user notes\n",
+        &[ProjectChange::AddSubprojectLink {
+            stem: "Child".to_string(),
+            state: SubprojectState::Open,
+        }],
+        &desired,
+    );
+    assert_eq!(
+        output,
+        "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n  - ❌ **CANCEL LOG**\n    - [-] old work\n\t- 🧩 **Sub-projects:** [[Child]]\n  - user notes\n"
+    );
+}
+
+#[test]
+fn project_changes_ignore_nested_depends_on_when_inserting_subprojects() {
+    let desired = [open_subproject("Child")];
+    let output = apply_subproject_changes(
+        "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n  - user notes\n    - ⛓️ **DEPENDS ON:** [[nested#^dep]]\n",
+        &[ProjectChange::AddSubprojectLink {
+            stem: "Child".to_string(),
+            state: SubprojectState::Open,
+        }],
+        &desired,
+    );
+    assert_eq!(
+        output,
+        "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n\t- 🧩 **Sub-projects:** [[Child]]\n  - user notes\n    - ⛓️ **DEPENDS ON:** [[nested#^dep]]\n"
     );
 }
 
@@ -375,6 +438,16 @@ fn schedule_only_issues_still_allow_subproject_aggregation() {
         "Child.md",
         6,
         "^prj scheduled is not a valid calendar date: 2026-02-30",
+    )]));
+    assert!(issues_allow_subproject(&[ScanIssue::line(
+        "Child.md",
+        6,
+        "multiple ^prj scheduled fields found; keep exactly one",
+    )]));
+    assert!(issues_allow_subproject(&[ScanIssue::line(
+        "Child.md",
+        6,
+        "^prj scheduled must be a calendar date in YYYY-MM-DD format",
     )]));
     assert!(!issues_allow_subproject(&[ScanIssue::line(
         "Child.md",

@@ -10,6 +10,7 @@ use std::path::PathBuf;
 
 use chrono::NaiveDate;
 
+use super::super::capture_language::is_reserved_project_task_id;
 use super::super::projects::{
     frontmatter_is_project, frontmatter_value, parse_frontmatter, ProjectStatus,
 };
@@ -18,8 +19,9 @@ use super::super::task_status_hooks::{
     canonical_daily_date, fenced_lines, logical_lines, FileScan, TaskLine,
 };
 
-/// Block id of the project completion-criteria task.
-const PRJ_BLOCK_ID: &str = "prj";
+fn is_prj_block_id(block_id: Option<&str>) -> bool {
+    block_id.is_some_and(is_reserved_project_task_id)
+}
 
 /// A note's project shape and the location of its sole open `^prj` task.
 #[derive(Debug, Clone)]
@@ -95,14 +97,14 @@ impl ProjectContext {
         self.recognised
             && task.status_recognized
             && task.status_type.is_open()
-            && task.block_id.as_deref() != Some(PRJ_BLOCK_ID)
+            && !is_prj_block_id(task.block_id.as_deref())
             && !self.fenced.contains(&task.line_index)
     }
 }
 
 /// Whether `task` is an open `^prj` completion-criteria task.
 fn is_open_prj_task(task: &TaskLine, fenced: &BTreeSet<usize>) -> bool {
-    task.block_id.as_deref() == Some(PRJ_BLOCK_ID)
+    is_prj_block_id(task.block_id.as_deref())
         && task.status_recognized
         && task.status_type.is_open()
         && !fenced.contains(&task.line_index)
@@ -133,7 +135,7 @@ pub(crate) fn blocking_open_dependency_ids(
     task: &TaskLine,
     open_ids: &[String],
 ) -> Vec<String> {
-    if task.block_id.as_deref() == Some(PRJ_BLOCK_ID) {
+    if is_prj_block_id(task.block_id.as_deref()) {
         filter_internal_project_ids(file, open_ids)
     } else {
         open_ids.to_vec()

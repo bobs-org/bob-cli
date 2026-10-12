@@ -385,6 +385,7 @@ pub(super) fn issues_allow_subproject(issues: &[ScanIssue]) -> bool {
             issue.message.starts_with("scheduled ")
                 || issue.message.starts_with("multiple scheduled ")
                 || issue.message.starts_with("^prj scheduled ")
+                || issue.message.starts_with("multiple ^prj scheduled ")
         })
 }
 
@@ -524,9 +525,19 @@ pub(super) fn plan_project_sync_at(
     if !effective_status.is_terminal()
         && let Some(scheduled) = &project.scheduled
     {
-        plan.changes.push(ProjectChange::HoistScheduled {
-            scheduled: scheduled.raw.clone(),
-        });
+        if project.prj_task.state == PrjTaskState::Open {
+            plan.changes.push(ProjectChange::HoistScheduled {
+                scheduled: scheduled.raw.clone(),
+            });
+        } else {
+            plan.warnings.push(SyncEvent::Warning {
+                project_name: project.name.clone(),
+                message: "cannot hoist leftover scheduled onto ^prj"
+                    .to_string(),
+                detail: "frontmatter scheduled left in place; hoist requires an open ^prj task"
+                    .to_string(),
+            });
+        }
     }
 
     let sync_schedule = project_schedule_for_sync(project, &effective_status);
@@ -826,11 +837,7 @@ pub(super) fn subprojects_need_normalization(
 }
 
 pub(super) fn is_depends_on_child(line: &str) -> bool {
-    let Some(content) = list_item_content(line) else {
-        return false;
-    };
-    let trimmed = content.trim_start();
-    trimmed.contains("**DEPENDS ON") || trimmed.contains("**DEPENDENCIES")
+    crate::native::task_dependencies::is_dependency_line(line)
 }
 
 pub(super) fn is_cancel_log_child(line: &str) -> bool {
@@ -841,13 +848,38 @@ pub(super) fn is_cancel_log_child(line: &str) -> bool {
     trimmed.starts_with('❌') && trimmed.contains("CANCEL LOG")
 }
 
+fn is_direct_prj_child(
+    sub_block: &PrjSubBlock,
+    line: &PrjSubBlockLine,
+) -> bool {
+    if line.indentation.len() <= sub_block.prj_indent.len()
+        || !line.indentation.starts_with(&sub_block.prj_indent)
+    {
+        return false;
+    }
+    !sub_block.lines.iter().any(|previous| {
+        previous.line_number < line.line_number
+            && line.indentation.starts_with(&previous.indentation)
+            && line.indentation.len() > previous.indentation.len()
+    })
+}
+
+fn is_direct_prj_depends_on(
+    sub_block: &PrjSubBlock,
+    line: &PrjSubBlockLine,
+) -> bool {
+    !line.is_marker
+        && is_direct_prj_child(sub_block, line)
+        && is_depends_on_child(&line.trimmed_text)
+}
+
 pub(super) fn subprojects_anchor_child(
     sub_block: &PrjSubBlock,
 ) -> Option<&PrjSubBlockLine> {
     if let Some(depends) = sub_block
         .lines
         .iter()
-        .find(|line| !line.is_marker && is_depends_on_child(&line.trimmed_text))
+        .find(|line| is_direct_prj_depends_on(sub_block, line))
     {
         return Some(depends);
     }
@@ -855,13 +887,31 @@ pub(super) fn subprojects_anchor_child(
     is_cancel_log_child(&first_user.trimmed_text).then_some(first_user)
 }
 
+pub(super) fn subprojects_subtree_end<'a>(
+    sub_block: &'a PrjSubBlock,
+    anchor: &'a PrjSubBlockLine,
+) -> &'a PrjSubBlockLine {
+    let mut last = anchor;
+    for line in &sub_block.lines {
+        if line.line_number <= anchor.line_number {
+            continue;
+        }
+        if line.indentation.len() <= anchor.indentation.len()
+            || !line.indentation.starts_with(&anchor.indentation)
+        {
+            break;
+        }
+        last = line;
+    }
+    last
+}
+
 pub(super) fn subprojects_marker_precedes_depends_on(
     sub_block: &PrjSubBlock,
     marker_line: &PrjSubBlockLine,
 ) -> bool {
     sub_block.lines.iter().any(|line| {
-        !line.is_marker
-            && is_depends_on_child(&line.trimmed_text)
+        is_direct_prj_depends_on(sub_block, line)
             && marker_line.line_number < line.line_number
     })
 }

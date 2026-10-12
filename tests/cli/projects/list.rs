@@ -192,3 +192,49 @@ fn projects_list_reports_prj_errors_without_aborting_scan() {
     );
     assert_stdout_has_no_ansi(&output);
 }
+
+#[test]
+fn projects_list_reports_invalid_and_duplicate_inline_prj_scheduled() {
+    let temp = TempDir::new("bob-cli-projects-list-prj-scheduled");
+    let vault = temp.path().join("vault");
+    write_file(
+        &vault.join("Invalid.md"),
+        "---\ntype: [[project]]\n---\n- [ ] #task Ship [scheduled:: 2026-02-30] ^prj\n",
+    );
+    write_file(
+        &vault.join("Duplicate.md"),
+        "---\ntype: [[project]]\n---\n- [ ] #task Ship [scheduled:: 2026-07-11] [scheduled:: 2026-07-12] ^prj\n",
+    );
+    write_file(
+        &vault.join("Good.md"),
+        "---\ntype: [[project]]\n---\n- [ ] #task Ship [scheduled:: 2026-07-11] ^prj\n",
+    );
+
+    let output = bob_command()
+        .args(["projects", "list", "-b"])
+        .arg(&vault)
+        .output()
+        .expect("list inline ^prj scheduled issues");
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "invalid inline ^prj scheduled should exit 1:\n{}",
+        format_output(&output)
+    );
+    let out = stdout(&output);
+    assert!(
+        out.contains("Invalid")
+            && out.contains("Duplicate")
+            && out.contains("Good"),
+        "list should still render every project row:\n{out}"
+    );
+    let err = stderr(&output);
+    assert!(
+        err.contains(
+            "Invalid.md:4: ^prj scheduled is not a valid calendar date: 2026-02-30"
+        ) && err.contains(
+            "Duplicate.md:4: multiple ^prj scheduled fields found; keep exactly one"
+        ),
+        "expected inline ^prj scheduled errors:\n{err}"
+    );
+}

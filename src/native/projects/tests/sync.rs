@@ -576,6 +576,28 @@ fn project_sync_plan_hoists_frontmatter_scheduled_onto_prj() {
 }
 
 #[test]
+fn project_sync_plan_does_not_hoist_without_open_prj() {
+    let project = parse_clean_project(
+        "Missing.md",
+        "---\ntype: [[project]]\nstatus: wip\nscheduled: 2026-07-11\n---\n- [ ] #task Needs completion task\n",
+    );
+    let plan = plan_project_sync_at(
+        &project,
+        &[],
+        NaiveDate::from_ymd_opt(2026, 7, 10).unwrap(),
+    );
+    assert!(!plan
+        .changes
+        .iter()
+        .any(|change| matches!(change, ProjectChange::HoistScheduled { .. })));
+    assert!(plan.warnings.iter().any(|event| matches!(
+        event,
+        SyncEvent::Warning { message, .. }
+            if message.contains("cannot hoist leftover scheduled")
+    )));
+}
+
+#[test]
 fn project_sync_plan_leaves_terminal_frontmatter_scheduled_untouched() {
     let project = parse_clean_project(
         "Done.md",

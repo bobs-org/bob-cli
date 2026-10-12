@@ -970,3 +970,53 @@ fn projects_sync_reports_prj_errors_without_aborting_scan() {
         "---\ntype: [[project]]\nstatus: done\n---\n- [x] #task Good project #hide ^prj\n"
     );
 }
+
+#[test]
+fn projects_sync_does_not_hoist_without_open_prj() {
+    let temp = TempDir::new("bob-cli-projects-sync-hoist-gate");
+    let vault = temp.path().join("vault");
+    let missing = vault.join("Missing.md");
+    let contents = "---\ntype: [[project]]\nstatus: wip\nscheduled: 2026-07-11\n---\n- [ ] #task Needs completion task\n";
+    write_file(&missing, contents);
+
+    let dry_run = bob_command()
+        .args(["projects", "sync", "-d", "-b"])
+        .arg(&vault)
+        .output()
+        .expect("dry-run hoist without ^prj");
+    assert_success(&dry_run);
+    let dry_out = stdout(&dry_run);
+    assert!(
+        dry_out.contains("cannot hoist leftover scheduled onto ^prj")
+            && !dry_out.contains("would hoist scheduled"),
+        "dry-run must warn instead of planning a hoist:\n{dry_out}"
+    );
+    assert_eq!(
+        fs::read_to_string(&missing).expect("read missing"),
+        contents,
+        "dry-run must leave leftover scheduled in place"
+    );
+
+    let synced = bob_command()
+        .args(["projects", "sync", "-b"])
+        .arg(&vault)
+        .output()
+        .expect("sync hoist without ^prj");
+    assert_success(&synced);
+    let synced_out = stdout(&synced);
+    assert!(
+        synced_out.contains("cannot hoist leftover scheduled onto ^prj")
+            && !synced_out.contains("hoisted scheduled"),
+        "sync must warn instead of hoisting:\n{}",
+        format_output(&synced)
+    );
+    let after = fs::read_to_string(&missing).expect("read missing after sync");
+    assert!(
+        after.contains("scheduled: 2026-07-11"),
+        "live sync must leave leftover frontmatter scheduled in place:\n{after}"
+    );
+    assert!(
+        !after.contains("^prj"),
+        "live sync must not invent a ^prj task:\n{after}"
+    );
+}

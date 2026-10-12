@@ -183,9 +183,15 @@ Task statuses follow the Tasks plugin convention:
   not for scheduled ordinary tasks.
 - Leftover frontmatter `scheduled` on a non-terminal project is written onto
   `^prj` (replacing any existing inline date; frontmatter wins) and the YAML
-  key is deleted. Unrelated YAML, CRLF, and the final-newline state stay
-  byte-identical. Terminal projects are left alone. The hoist counts as a
-  `--dry-run` change and is reported as `N schedules hoisted`.
+  key is deleted, but only when `^prj` is open. Unrelated YAML, CRLF, and the
+  final-newline state stay byte-identical. Terminal projects are left alone.
+  A missing, malformed, or non-open `^prj` leaves the key in place and reports
+  a per-file warning. The hoist counts as a `--dry-run` change and is reported
+  as `N schedules hoisted`.
+- Invalid or duplicate inline `[scheduled::]` on `^prj` is reported the same
+  way as leftover frontmatter `scheduled` (multiple or invalid calendar
+  dates). `bob projects list` and `bob projects sync` both surface the issue,
+  and sync leaves that file untouched.
 - Schedule propagation applies only to non-terminal projects. It preserves
   list markers, indentation, descriptions, other inline fields, trailing block
   IDs, CRLF line endings, and unrelated tags. Frontmatter, fenced examples,
@@ -204,11 +210,14 @@ For a valid project date `P`, the ordinary-task contract is:
 | `^prj`, `P` in the future | Force exactly one `#hide`; keep or write `[scheduled:: P]` |
 | `^prj`, `P` due/past | Normal surfacing rule (rows above): remove `#hide` when there are no unhidden open tasks and no open sub-projects, add it back otherwise; keep the inline date |
 - Active projects with open `^prj` tasks get one generated Sub-projects line
-  nested under `^prj` after a Depends-On child (which itself follows a Cancel
-  Log occupying the first slot), such as
-  `- 🧩 **Sub-projects:** [[alpha_child]] • [[beta_child]]`. A new marker
-  inserts there; an existing marker sitting before Depends-On is moved after
-  it; otherwise the marker is rewritten in place.
+  nested under `^prj` after the whole Depends-On subtree (or, when there is
+  no direct Depends-On child, after a Cancel Log occupying the first slot,
+  including its nested entries), such as
+  `- 🧩 **Sub-projects:** [[alpha_child]] • [[beta_child]]`. Only a direct
+  child of `^prj` that starts with the Depends-On marker counts; nested
+  tasks' own Depends-On lines do not. A new marker inserts after that
+  subtree; an existing marker sitting before Depends-On is moved after it;
+  otherwise the marker is rewritten in place.
 - A child with a valid future date on `^prj` — or leftover frontmatter
   `scheduled` that this run will hoist onto a non-terminal child — is
   prefixed with `🗓️`, such as
