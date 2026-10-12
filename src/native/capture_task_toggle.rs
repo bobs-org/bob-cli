@@ -35,5 +35,8 @@ pub(crate) use relocation::{
     plan_link_relocation, LinkRelocationAction, LinkRelocationError,
     PomodoroEndpoint,
 };
-pub(crate) use task_update::{plan_task_link, set_task_line_status};
+pub(crate) use task_update::{
+    plan_task_link, set_task_line_status,
+    task_update_has_single_future_scheduled, TaskTogglePlan,
+};
 pub(crate) use text::child_block_end_line;

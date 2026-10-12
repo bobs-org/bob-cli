@@ -868,6 +868,7 @@ pub(super) fn plan_pomodoro_start_item(
             task_complete: None,
             toggle_task_description: None,
             r#ref: None,
+            link_guard: None,
         },
         clip_plan: None,
         pomodoro_refs: vec![PomodoroBlockRef::at(
@@ -1042,6 +1043,7 @@ fn plan_override_restart_item(
             task_complete: None,
             toggle_task_description: None,
             r#ref: None,
+            link_guard: None,
         },
         clip_plan: None,
         pomodoro_refs: vec![PomodoroBlockRef::at(
@@ -1548,6 +1550,7 @@ fn plan_override_swap_item(
             task_complete: None,
             toggle_task_description: None,
             r#ref: None,
+            link_guard: None,
         },
         clip_plan: None,
         pomodoro_refs: vec![
@@ -2176,6 +2179,7 @@ fn plan_named_pomodoro_start_item(
             task_complete: None,
             toggle_task_description: None,
             r#ref: None,
+            link_guard: None,
         },
         clip_plan: None,
         pomodoro_refs: vec![PomodoroBlockRef {

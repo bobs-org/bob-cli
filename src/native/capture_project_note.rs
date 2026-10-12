@@ -24,11 +24,12 @@
 
 use std::collections::HashMap;
 
-use chrono::{Local, LocalResult, NaiveDateTime, TimeZone};
+use chrono::{Local, LocalResult, NaiveDate, NaiveDateTime, TimeZone};
 
 use super::capture_language::{
     split_leading_checkbox, AuthoredDepth, AuthoredSubBullet,
 };
+use super::projects::edits::normalize_prj_is_blocked_tag;
 
 /// Placeholder task kept under `## Tasks` when no authored task children were
 /// rendered. Matches the template's `(REPLACE WITH TASK DESCRIPTION)` line
@@ -302,6 +303,14 @@ pub(crate) fn render_project_note(
         }
     }
 
+    // A future project date blocks the whole note (§13.3, PDG5):
+    // `:` tasks land `[?]` plus the machine-owned tag, and the
+    // planner leaves them unlinked with a `not_linked` report.
+    let project_blocked = input.scheduled.is_some_and(|date| {
+        NaiveDate::parse_from_str(date, "%Y-%m-%d")
+            .is_ok_and(|parsed| parsed > input.now.date())
+    });
+
     let mut tasks_block: Vec<String> = Vec::new();
     let mut task_entries: usize = 0;
     let mut named_tasks: Vec<RenderedNamedTask> = Vec::new();
@@ -354,6 +363,12 @@ pub(crate) fn render_project_note(
                 &created_date,
                 task_id_suffix,
             );
+            let task_line = match named {
+                Some(task) if task.link && project_blocked => {
+                    normalize_prj_is_blocked_tag(&task_line, true)
+                }
+                _ => task_line,
+            };
             tasks_block.push(task_line.clone());
             task_entries += 1;
             if let Some(task) = named {
@@ -814,13 +829,17 @@ mod tests {
         let mut input = base_input(&sub_bullets);
         input.scheduled = Some("2026-09-22");
         let rendered = render_project_note(&input);
+        // PDG5: a future project date blocks the note, so the linked
+        // task lands `[?]` plus the machine-owned tag (the planner
+        // leaves it unlinked).
         assert!(rendered.contents.contains(
-            "- [?] #task Draft the memo [created::2026-09-20] ^draft\n"
+            "- [?] #task Draft the memo [created::2026-09-20] #prj_is_blocked ^draft\n"
         ));
         assert!(rendered.contents.contains(
             "- [ ] #task File the memo [created::2026-09-20] ^file\n"
         ));
         assert!(rendered.task_line.starts_with("- [?] "));
+        assert!(!rendered.task_line.contains("#prj_is_blocked"));
     }
 
     #[test]

@@ -12,7 +12,8 @@ pub(super) fn plan_task_toggle_capture(
     intent: TaskToggleIntent,
     today: NaiveDate,
     warnings: &mut Vec<String>,
-) -> Result<CaptureWritePlan, CaptureError> {
+    ctx: &mut DependencyContext,
+) -> Result<(CaptureWritePlan, Option<LinkGuardJson>), CaptureError> {
     let contents = planner.read_existing(target)?;
     let settings = note_tasks::read_settings(bob_dir);
     let scan = note_tasks::scan(&contents, &settings);
@@ -69,6 +70,7 @@ pub(super) fn plan_task_toggle_capture(
             today,
             warnings,
             &settings,
+            ctx,
         );
     }
 
@@ -102,42 +104,105 @@ pub(super) fn plan_task_toggle_capture(
         capture_task_toggle::plan_link_removal(&day_contents, &block_link);
     if removal.has_changes {
         planner.stage(&day_file, removal.content)?;
-        return Ok(CaptureWritePlan {
-            placement: Placement::Toggled,
-            pomodoro: None,
-            sub_bullet: None,
-            pomodoro_note: None,
-            toggle: Some(TaskToggleCaptureDetails {
-                direction: TaskToggleDirection::Unlink,
-                previous_task_line: previous_task_line.clone(),
-                task_line: previous_task_line,
-                task_description,
-                previous_status_symbol,
-                previous_status_name: previous_status_name.clone(),
-                status_symbol: previous_status_symbol,
-                status_name: previous_status_name,
-                block_id: block_id.to_string(),
-                day_file: day_file_label,
-                block_link,
-                pomodoro_link_placement: None,
-                pomodoro_name: None,
-                creates_pomodoro: false,
-                pomodoro_already_linked: false,
-                removed_pomodoro_links: removal.removed_links,
-                removed_scheduled: None,
-                schedule_log: None,
-                pomodoro_selector_unused: false,
-                toggle_behavior: None,
-                status_changed: Some(false),
-                pomodoro_link_action: None,
-                pomodoro_link_source: None,
-                pomodoro_link_destination: None,
-            }),
-            pomodoro_link: None,
-            // Two-way toggles rely on block auto-detection; see
-            // `PomodoroBlockTracker::track_item`.
-            pomodoro_refs: Vec::new(),
-        });
+        return Ok((
+            CaptureWritePlan {
+                placement: Placement::Toggled,
+                pomodoro: None,
+                sub_bullet: None,
+                pomodoro_note: None,
+                toggle: Some(TaskToggleCaptureDetails {
+                    direction: TaskToggleDirection::Unlink,
+                    previous_task_line: previous_task_line.clone(),
+                    task_line: previous_task_line,
+                    task_description,
+                    previous_status_symbol,
+                    previous_status_name: previous_status_name.clone(),
+                    status_symbol: previous_status_symbol,
+                    status_name: previous_status_name,
+                    block_id: block_id.to_string(),
+                    day_file: day_file_label,
+                    block_link,
+                    pomodoro_link_placement: None,
+                    pomodoro_name: None,
+                    creates_pomodoro: false,
+                    pomodoro_already_linked: false,
+                    removed_pomodoro_links: removal.removed_links,
+                    removed_scheduled: None,
+                    schedule_log: None,
+                    pomodoro_selector_unused: false,
+                    toggle_behavior: None,
+                    status_changed: Some(false),
+                    pomodoro_link_action: None,
+                    pomodoro_link_source: None,
+                    pomodoro_link_destination: None,
+                }),
+                pomodoro_link: None,
+                // Two-way toggles rely on block auto-detection; see
+                // `PomodoroBlockTracker::track_item`.
+                pomodoro_refs: Vec::new(),
+            },
+            None,
+        ));
+    }
+
+    // Link guard (§13.5 gesture rule, PDG1–PDG3, PDG6): a toggle that
+    // would link a Blocked target consumes instead of linking. The
+    // guard replaces the old `[dependsOn::` text warning: its verdict
+    // is authoritative for this instant, so a link that proceeds needs
+    // no warning.
+    let target_rel = relative_target(Some(route));
+    if let LinkGuardVerdict::Consume(plan) =
+        assess_link_target(ctx, planner, bob_dir, &target_rel, block_id, today)?
+    {
+        // PDG1/PDG3: the target stays Blocked, so the task line and
+        // the ledger stay untouched; only the open prerequisites rise.
+        let dependent_desc = format!("link toggle ^{block_id}");
+        let reasons = plan.reasons.clone();
+        let promoted = promote_consume_plan(
+            ctx,
+            planner,
+            bob_dir,
+            *plan,
+            &dependent_desc,
+        )?;
+        let link_guard = LinkGuardJson::not_linked(&reasons, promoted);
+        return Ok((
+            CaptureWritePlan {
+                placement: Placement::Toggled,
+                pomodoro: None,
+                sub_bullet: None,
+                pomodoro_note: None,
+                toggle: Some(TaskToggleCaptureDetails {
+                    direction: TaskToggleDirection::Link,
+                    previous_task_line: previous_task_line.clone(),
+                    task_line: previous_task_line,
+                    task_description,
+                    previous_status_symbol,
+                    previous_status_name: previous_status_name.clone(),
+                    status_symbol: previous_status_symbol,
+                    status_name: previous_status_name,
+                    block_id: block_id.to_string(),
+                    day_file: day_file_label,
+                    block_link,
+                    pomodoro_link_placement: None,
+                    pomodoro_name: None,
+                    creates_pomodoro: false,
+                    pomodoro_already_linked: false,
+                    removed_pomodoro_links: 0,
+                    removed_scheduled: None,
+                    schedule_log: None,
+                    pomodoro_selector_unused: false,
+                    toggle_behavior: None,
+                    status_changed: Some(false),
+                    pomodoro_link_action: None,
+                    pomodoro_link_source: None,
+                    pomodoro_link_destination: None,
+                }),
+                pomodoro_link: None,
+                pomodoro_refs: Vec::new(),
+            },
+            Some(link_guard),
+        ));
     }
 
     let task_plan =
@@ -161,14 +226,11 @@ pub(super) fn plan_task_toggle_capture(
     };
     let status_changed = previous_status_symbol != updated_task.status_symbol;
 
-    if updated_task.status_symbol == '*'
-        && previous_status_symbol != '*'
-        && task_line_declares_dependencies(&previous_task_line)
-    {
-        warnings.push(format!(
-            "^{block_id} still declares dependencies; bob task reconcile may return it to Blocked"
-        ));
-    }
+    // No `[dependsOn::` text warning here: the link guard above is
+    // authoritative for this instant. A Blocked target never reaches
+    // this path (consumed instead), and a linked target has no open
+    // reason left for reconcile to re-block on.
+    let _ = warnings;
 
     planner.stage(target, task_plan.content)?;
 
@@ -237,40 +299,43 @@ pub(super) fn plan_task_toggle_capture(
         }
     }
 
-    Ok(CaptureWritePlan {
-        placement: Placement::Toggled,
-        pomodoro: None,
-        sub_bullet: None,
-        pomodoro_note: None,
-        toggle: Some(TaskToggleCaptureDetails {
-            direction: TaskToggleDirection::Link,
-            previous_task_line,
-            task_line,
-            task_description,
-            previous_status_symbol,
-            previous_status_name,
-            status_symbol: updated_task.status_symbol,
-            status_name: updated_task.status_name.clone(),
-            block_id: block_id.to_string(),
-            day_file: day_file_label,
-            block_link,
-            pomodoro_link_placement,
-            pomodoro_name: resolved_pomodoro_name,
-            creates_pomodoro,
-            pomodoro_already_linked,
-            removed_pomodoro_links,
-            removed_scheduled: task_plan.removed_scheduled,
-            schedule_log: task_plan.schedule_log,
-            pomodoro_selector_unused,
-            toggle_behavior: None,
-            status_changed: Some(status_changed),
-            pomodoro_link_action: None,
-            pomodoro_link_source: None,
-            pomodoro_link_destination: None,
-        }),
-        pomodoro_link: None,
-        // Two-way toggles rely on block auto-detection; see
-        // `PomodoroBlockTracker::track_item`.
-        pomodoro_refs: Vec::new(),
-    })
+    Ok((
+        CaptureWritePlan {
+            placement: Placement::Toggled,
+            pomodoro: None,
+            sub_bullet: None,
+            pomodoro_note: None,
+            toggle: Some(TaskToggleCaptureDetails {
+                direction: TaskToggleDirection::Link,
+                previous_task_line,
+                task_line,
+                task_description,
+                previous_status_symbol,
+                previous_status_name,
+                status_symbol: updated_task.status_symbol,
+                status_name: updated_task.status_name.clone(),
+                block_id: block_id.to_string(),
+                day_file: day_file_label,
+                block_link,
+                pomodoro_link_placement,
+                pomodoro_name: resolved_pomodoro_name,
+                creates_pomodoro,
+                pomodoro_already_linked,
+                removed_pomodoro_links,
+                removed_scheduled: task_plan.removed_scheduled,
+                schedule_log: task_plan.schedule_log,
+                pomodoro_selector_unused,
+                toggle_behavior: None,
+                status_changed: Some(status_changed),
+                pomodoro_link_action: None,
+                pomodoro_link_source: None,
+                pomodoro_link_destination: None,
+            }),
+            pomodoro_link: None,
+            // Two-way toggles rely on block auto-detection; see
+            // `PomodoroBlockTracker::track_item`.
+            pomodoro_refs: Vec::new(),
+        },
+        None,
+    ))
 }

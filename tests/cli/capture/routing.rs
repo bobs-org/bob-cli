@@ -127,6 +127,55 @@ fn capture_unrouted_prefers_tasks_section_in_existing_inbox() {
 }
 
 #[test]
+// PDG5 (§13.15): a plain task captured into a blocked project lands
+// `[?]` plus the machine-owned tag. No link is involved, so no
+// `link_guard` is reported; reconcile owns the rest.
+#[test]
+fn capture_routed_task_into_blocked_project_lands_blocked_and_tagged() {
+    let temp = TempDir::new("bob-cli-capture-routed-blocked-project");
+    let vault = temp.path().join("vault");
+    write_toggle_task_settings(&vault);
+    write_file(
+        &vault.join("proj.md"),
+        concat!(
+            "---\ntype: \"[[project]]\"\nstatus: wip\n---\n",
+            "- [?] #task Ship it [scheduled:: 2026-07-20] ^prj\n",
+        ),
+    );
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("@proj")
+        .arg("Grind")
+        .arg("more")
+        .env("BOB_NOW", "2026-07-10 10:00:00")
+        .output()
+        .expect("run routed capture into blocked project");
+
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("routing JSON");
+    assert!(json.get("link_guard").is_none(), "{json}");
+    assert!(
+        json["task_line"]
+            .as_str()
+            .is_some_and(|line| line.starts_with("- [?] ")
+                && line.contains("#prj_is_blocked")),
+        "{json}"
+    );
+    assert!(
+        fs::read_to_string(vault.join("proj.md"))
+            .expect("read project")
+            .contains("#prj_is_blocked"),
+        "resident carries the tag"
+    );
+}
+
+#[test]
 fn capture_routed_prefix_inserts_and_suffix_creates_file() {
     let temp = TempDir::new("bob-cli-capture-routed");
     let vault = temp.path().join("vault");

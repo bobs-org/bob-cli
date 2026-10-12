@@ -415,6 +415,54 @@ pub(super) struct CaptureItemResult {
     pub(super) r#ref: Option<RefItemJson>,
     #[serde(skip)]
     pub(super) toggle_task_description: Option<String>,
+    /// Link-guard report (§13.5, PDG vectors): present exactly when a
+    /// gesture that would create a live Task Link found its target
+    /// Blocked and created it unlinked instead. Additive: older
+    /// clients ignore it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) link_guard: Option<LinkGuardJson>,
+}
+
+/// Why a link gesture left its target unlinked (§13.5 gesture rule):
+/// the §13.9 reason kinds for machines, the promoted prerequisite
+/// identities (`route#^block`) for machines, and one sentence for
+/// humans (Mac Capture renders it).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct LinkGuardJson {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) reasons: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) promoted: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) detail: Option<String>,
+}
+
+impl LinkGuardJson {
+    pub(super) fn not_linked(
+        reasons: &[BlockedReason],
+        promoted: Vec<String>,
+    ) -> Self {
+        let promoted_text = if promoted.is_empty() {
+            String::new()
+        } else {
+            format!(" · promoted {}", promoted.join(", "))
+        };
+        Self {
+            reasons: reasons
+                .iter()
+                .map(|reason| reason.kind.to_string())
+                .collect(),
+            detail: Some(format!(
+                "not linked ({}){promoted_text}",
+                reasons
+                    .iter()
+                    .map(|reason| reason.label.as_str())
+                    .collect::<Vec<_>>()
+                    .join("; "),
+            )),
+            promoted,
+        }
+    }
 }
 
 /// One `task_complete` result: what completing a whole-item `!` wrote.
@@ -994,6 +1042,7 @@ pub(super) fn print_human_item_success(
     if let Some(update) = result.dependency_update.as_ref() {
         print_human_dependency_line(update, &styler);
     }
+    print_human_link_guard(result, &styler);
     if result.kind == "pomodoro_task"
         && let Some(destination) = result.pomodoro_link_destination.as_ref()
     {
@@ -1230,6 +1279,7 @@ pub(super) fn print_human_pomodoro_close_success(
             ))
         );
     }
+    print_human_link_guard(result, &styler);
     // Numbered index column: width of the highest numbered row, plus one
     // space. Unnumbered rows get blanks so text stays aligned; with zero
     // numbered rows the output below is byte-identical to before.
@@ -1528,6 +1578,21 @@ pub(super) fn print_human_pomodoro_shift_success(
 /// Second line for the `@route+block-id!` link-presence toggle:
 /// `linked ^id under NAME · set Next`, `linked ^id under NAME · stays In
 /// Progress`, or `unlinked ^id from N open Pomodoros · stays Next`.
+/// Link-guard trailer (§13.5): one plain line naming why the target
+/// stayed unlinked and which prerequisites rose instead. Called by
+/// every printer for a gesture that can suppress a link.
+pub(super) fn print_human_link_guard(
+    result: &CaptureItemResult,
+    styler: &Styler,
+) {
+    let Some(guard) = result.link_guard.as_ref() else {
+        return;
+    };
+    if let Some(detail) = guard.detail.as_deref() {
+        println!("  {}", styler.dim(&format!("⛔ {detail}")));
+    }
+}
+
 fn print_human_link_toggle_summary(
     result: &CaptureItemResult,
     styler: &Styler,
@@ -1554,6 +1619,19 @@ fn print_human_link_toggle_summary(
             },
         );
         println!("  unlinked {id} from {source} · stays {status}");
+        return;
+    }
+    if result.link_guard.is_some() {
+        let status = result.status_name.as_deref().unwrap_or(
+            match result.status_symbol {
+                Some('/') => "In Progress",
+                Some('*') => "Next",
+                Some('?') => "Blocked",
+                _ => "Ready",
+            },
+        );
+        println!("  not linked {id} · stays {status}");
+        print_human_link_guard(result, styler);
         return;
     }
     let destination = result
@@ -1664,6 +1742,9 @@ pub(super) fn print_human_task_toggle_success(
         .unwrap_or_default();
     if !ensure_next {
         print_human_link_toggle_summary(result, styler);
+    } else if result.link_guard.is_some() {
+        let status = result.status_name.as_deref().unwrap_or("Blocked");
+        println!("  {next_marker} stays {status}  {description}{block_id}");
     } else if result.status_changed == Some(false)
         && result.status_symbol == Some('/')
     {
@@ -1715,7 +1796,9 @@ pub(super) fn print_human_task_toggle_success(
 
     match result.toggle_direction {
         Some("link") => {
-            if let Some(block_link) = result.block_link.as_deref() {
+            if result.link_guard.is_none()
+                && let Some(block_link) = result.block_link.as_deref()
+            {
                 let marker = styler.green("+");
                 println!("  {marker} {block_link}");
             }
@@ -1742,6 +1825,10 @@ pub(super) fn print_human_ensure_next_ledger(
     result: &CaptureItemResult,
     styler: &Styler,
 ) {
+    if result.link_guard.is_some() {
+        print_human_link_guard(result, styler);
+        return;
+    }
     match result.pomodoro_link_action {
         Some("moved") => {
             if let Some(day_file) = result.day_file.as_deref() {
@@ -1863,46 +1950,52 @@ pub(super) fn print_human_pomodoro_link_success(
         println!("  {}", styler.dim(&chips.join(" · ")));
     }
 
-    match result.pomodoro_link_action {
-        Some("moved") => {
-            let source = result
-                .pomodoro_link_source
-                .as_ref()
-                .map(format_pomodoro_endpoint)
-                .unwrap_or_else(|| "source".to_string());
-            let destination = result
-                .pomodoro_link_destination
-                .as_ref()
-                .map(format_pomodoro_endpoint)
-                .unwrap_or_else(|| "current/next".to_string());
-            let created = if result.creates_pomodoro == Some(true) {
-                format!(" (created {destination})")
-            } else {
-                String::new()
-            };
-            println!(
-                "  {}",
-                styler.dim(&format!(
-                    "Moved Task Link {source} → {destination}{created}"
-                ))
-            );
-        }
-        Some("linked") => {
-            let destination = result
-                .pomodoro_link_destination
-                .as_ref()
-                .map(format_pomodoro_endpoint)
-                .unwrap_or_else(|| "current/next".to_string());
-            println!(
-                "  {}",
-                styler.dim(&format!("Linked under {destination}"))
-            );
-            if result.creates_pomodoro == Some(true) {
-                println!("  {}", styler.dim(&format!("created {destination}")));
+    if result.link_guard.is_some() {
+        print_human_link_guard(result, styler);
+    } else {
+        match result.pomodoro_link_action {
+            Some("moved") => {
+                let source = result
+                    .pomodoro_link_source
+                    .as_ref()
+                    .map(format_pomodoro_endpoint)
+                    .unwrap_or_else(|| "source".to_string());
+                let destination = result
+                    .pomodoro_link_destination
+                    .as_ref()
+                    .map(format_pomodoro_endpoint)
+                    .unwrap_or_else(|| "current/next".to_string());
+                let created = if result.creates_pomodoro == Some(true) {
+                    format!(" (created {destination})")
+                } else {
+                    String::new()
+                };
+                println!(
+                    "  {}",
+                    styler.dim(&format!(
+                        "Moved Task Link {source} → {destination}{created}"
+                    ))
+                );
             }
-        }
-        _ => {
-            let already = result
+            Some("linked") => {
+                let destination = result
+                    .pomodoro_link_destination
+                    .as_ref()
+                    .map(format_pomodoro_endpoint)
+                    .unwrap_or_else(|| "current/next".to_string());
+                println!(
+                    "  {}",
+                    styler.dim(&format!("Linked under {destination}"))
+                );
+                if result.creates_pomodoro == Some(true) {
+                    println!(
+                        "  {}",
+                        styler.dim(&format!("created {destination}"))
+                    );
+                }
+            }
+            _ => {
+                let already = result
                 .pomodoro_name
                 .as_deref()
                 .or_else(|| {
@@ -1915,7 +2008,8 @@ pub(super) fn print_human_pomodoro_link_success(
                 .unwrap_or_else(|| {
                     "Task Link already in current/next Pomodoro; no ledger change.".to_string()
                 });
-            println!("  {}", styler.dim(&already));
+                println!("  {}", styler.dim(&already));
+            }
         }
     }
 

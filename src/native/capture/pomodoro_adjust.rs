@@ -437,6 +437,7 @@ pub(super) fn plan_pomodoro_adjust_item(
             task_complete: None,
             toggle_task_description: None,
             r#ref: None,
+            link_guard: None,
         },
         clip_plan: None,
         pomodoro_refs: vec![PomodoroBlockRef::at(
@@ -605,6 +606,7 @@ pub(super) fn plan_pomodoro_shift_item(
             task_complete: None,
             toggle_task_description: None,
             r#ref: None,
+            link_guard: None,
         },
         clip_plan: None,
         pomodoro_refs: vec![PomodoroBlockRef::at(

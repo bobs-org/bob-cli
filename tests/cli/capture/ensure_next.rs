@@ -78,12 +78,10 @@ fn capture_task_toggle_ensure_next_moves_link_and_sets_next() {
     assert_eq!(json["pomodoro_link_destination"]["name"], "CURRENT");
     assert_eq!(json["pomodoro_link_destination"]["time_range"], "0900-0930");
     assert!(json.get("pomodoro_link_placement").is_some(), "{json}");
-    assert!(
-        json["warnings"][0]
-            .as_str()
-            .is_some_and(|warning| warning.contains("declares dependencies")),
-        "{json}"
-    );
+    // No dependency warning: the link guard verified the field-only
+    // `[dependsOn::root]` leaves no open reason (PDG1).
+    assert!(json.get("warnings").is_none(), "{json}");
+    assert!(json.get("link_guard").is_none(), "{json}");
     assert_eq!(
         fs::read_to_string(&target).expect("target"),
         "- [*] #task Finish packet [fresh:: 2026-07-10] [dependsOn::root] ^goog-exit\n"
@@ -839,5 +837,67 @@ fn capture_task_toggle_ensure_next_keeps_in_progress() {
             "  - [[cash#^busy]]\n",
             "- [ ] () — LATER\n",
         )
+    );
+}
+
+// PDG1 (§13.15): ensure-next on a dependency-blocked target neither
+// relocates nor links; the open prerequisites rise and the result
+// reports `not_linked` with the reasons.
+#[test]
+fn capture_ensure_next_on_blocked_target_consumes_and_promotes() {
+    let temp = TempDir::new("bob-cli-capture-ensure-next-consume");
+    let vault = temp.path().join("vault");
+    let target = vault.join("cash.md");
+    let day_file = vault.join("day.md");
+    write_toggle_task_settings(&vault);
+    let target_before = concat!(
+        "- [?] #task Blocked work ^blocked\n",
+        "\t- ⛓️ **DEPENDS ON:** [[job#^prep]]\n",
+    );
+    write_file(&target, target_before);
+    write_file(&vault.join("job.md"), "- [ ] #task Prep work ^prep\n");
+    let day_before = concat!(
+        "## Pomodoros\n",
+        "- [ ] (**0900-0930**) — CURRENT\n",
+        "  - context\n",
+        "- [ ] () — LATER\n",
+        "  - [[cash#^blocked]]\n",
+    );
+    write_file(&day_file, day_before);
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("@cash+blocked")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 10:00:00")
+        .output()
+        .expect("ensure-next blocked task");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("json");
+    assert_eq!(json["toggle_behavior"], "ensure_next", "{json}");
+    assert_eq!(json["status_changed"], false, "{json}");
+    assert_eq!(json["status_symbol"], "?", "{json}");
+    assert!(json.get("pomodoro_link_action").is_none(), "{json}");
+    assert_eq!(
+        json["link_guard"]["reasons"],
+        serde_json::json!(["local_dependency"]),
+        "{json}"
+    );
+    assert_eq!(
+        json["link_guard"]["promoted"],
+        serde_json::json!(["job.md#^prep"]),
+        "{json}"
+    );
+    assert_eq!(fs::read_to_string(&target).expect("target"), target_before);
+    assert_eq!(fs::read_to_string(&day_file).expect("day"), day_before);
+    assert_eq!(
+        fs::read_to_string(vault.join("job.md")).expect("read prereq"),
+        "- [*] #task Prep work ^prep\n"
     );
 }

@@ -18,7 +18,8 @@ pub(super) fn plan_ensure_next_capture(
     today: NaiveDate,
     warnings: &mut Vec<String>,
     settings: &note_tasks::NoteTaskSettings,
-) -> Result<CaptureWritePlan, CaptureError> {
+    ctx: &mut DependencyContext,
+) -> Result<(CaptureWritePlan, Option<LinkGuardJson>), CaptureError> {
     match previous_status_symbol {
         ' ' | '?' | '/' | '*' => {}
         _ => {
@@ -30,6 +31,64 @@ pub(super) fn plan_ensure_next_capture(
 
     // Link semantics: Ready/Blocked rise to Next, while Next and In
     // Progress keep their lane (sticky lanes: no capture path demotes).
+    // Link guard (§13.5 gesture rule): a Blocked target consumes
+    // instead of linking or relocating; the guard replaces the old
+    // `[dependsOn::` text warning.
+    let target_rel = relative_target(Some(route));
+    if let LinkGuardVerdict::Consume(plan) =
+        assess_link_target(ctx, planner, bob_dir, &target_rel, block_id, today)?
+    {
+        let dependent_desc = format!("ensure next ^{block_id}");
+        let reasons = plan.reasons.clone();
+        let promoted = promote_consume_plan(
+            ctx,
+            planner,
+            bob_dir,
+            *plan,
+            &dependent_desc,
+        )?;
+        let link_guard = LinkGuardJson::not_linked(&reasons, promoted);
+        let _ = warnings;
+        return Ok((
+            CaptureWritePlan {
+                placement: Placement::Toggled,
+                pomodoro: None,
+                sub_bullet: None,
+                pomodoro_note: None,
+                toggle: Some(TaskToggleCaptureDetails {
+                    direction: TaskToggleDirection::Next,
+                    previous_task_line: previous_task_line.clone(),
+                    task_line: previous_task_line,
+                    task_description,
+                    previous_status_symbol,
+                    previous_status_name: previous_status_name.clone(),
+                    status_symbol: previous_status_symbol,
+                    status_name: previous_status_name,
+                    block_id: block_id.to_string(),
+                    day_file: pomodoro::day_file_for(bob_dir)
+                        .display()
+                        .to_string(),
+                    block_link: format!("[[{route}#^{block_id}]]"),
+                    pomodoro_link_placement: None,
+                    pomodoro_name: None,
+                    creates_pomodoro: false,
+                    pomodoro_already_linked: false,
+                    removed_pomodoro_links: 0,
+                    removed_scheduled: None,
+                    schedule_log: None,
+                    pomodoro_selector_unused: false,
+                    toggle_behavior: Some("ensure_next"),
+                    status_changed: Some(false),
+                    pomodoro_link_action: None,
+                    pomodoro_link_source: None,
+                    pomodoro_link_destination: None,
+                }),
+                pomodoro_link: None,
+                pomodoro_refs: Vec::new(),
+            },
+            Some(link_guard),
+        ));
+    }
     let task_plan = capture_task_toggle::plan_task_link(contents, task_line_index, today)
         .ok_or_else(|| {
             CaptureError::io("task toggle capture invariant failed: task line could not be updated")
@@ -46,11 +105,9 @@ pub(super) fn plan_ensure_next_capture(
         }
     };
     let status_changed = previous_status_symbol != updated_task.status_symbol;
-    if status_changed && task_line_declares_dependencies(&previous_task_line) {
-        warnings.push(format!(
-            "^{block_id} still declares dependencies; bob task reconcile may return it to Blocked"
-        ));
-    }
+    // No `[dependsOn::` text warning: the link guard above is
+    // authoritative (see `plan_task_toggle_capture`).
+    let _ = warnings;
 
     if task_plan.content != contents {
         planner.stage(target, task_plan.content.clone())?;
@@ -112,42 +169,45 @@ pub(super) fn plan_ensure_next_capture(
         ));
     }
 
-    Ok(CaptureWritePlan {
-        placement: Placement::Toggled,
-        pomodoro: None,
-        sub_bullet: None,
-        pomodoro_note: None,
-        toggle: Some(TaskToggleCaptureDetails {
-            direction: TaskToggleDirection::Next,
-            previous_task_line,
-            task_line,
-            task_description,
-            previous_status_symbol,
-            previous_status_name,
-            status_symbol: updated_task.status_symbol,
-            status_name: updated_task.status_name.clone(),
-            block_id: block_id.to_string(),
-            day_file: day_file.display().to_string(),
-            block_link,
-            pomodoro_link_placement,
-            pomodoro_name,
-            creates_pomodoro: relocation.creates_pomodoro,
-            pomodoro_already_linked,
-            removed_pomodoro_links: 0,
-            removed_scheduled: task_plan.removed_scheduled,
-            schedule_log: task_plan.schedule_log,
-            pomodoro_selector_unused: false,
-            toggle_behavior: Some("ensure_next"),
-            status_changed: Some(status_changed),
-            pomodoro_link_action: Some(pomodoro_link_action),
-            pomodoro_link_source: Some(endpoint_json(&relocation.source)),
-            pomodoro_link_destination: Some(destination_json(
-                &relocation.destination,
-                relocation.creates_pomodoro,
-                selector,
-            )),
-        }),
-        pomodoro_link: None,
-        pomodoro_refs,
-    })
+    Ok((
+        CaptureWritePlan {
+            placement: Placement::Toggled,
+            pomodoro: None,
+            sub_bullet: None,
+            pomodoro_note: None,
+            toggle: Some(TaskToggleCaptureDetails {
+                direction: TaskToggleDirection::Next,
+                previous_task_line,
+                task_line,
+                task_description,
+                previous_status_symbol,
+                previous_status_name,
+                status_symbol: updated_task.status_symbol,
+                status_name: updated_task.status_name.clone(),
+                block_id: block_id.to_string(),
+                day_file: day_file.display().to_string(),
+                block_link,
+                pomodoro_link_placement,
+                pomodoro_name,
+                creates_pomodoro: relocation.creates_pomodoro,
+                pomodoro_already_linked,
+                removed_pomodoro_links: 0,
+                removed_scheduled: task_plan.removed_scheduled,
+                schedule_log: task_plan.schedule_log,
+                pomodoro_selector_unused: false,
+                toggle_behavior: Some("ensure_next"),
+                status_changed: Some(status_changed),
+                pomodoro_link_action: Some(pomodoro_link_action),
+                pomodoro_link_source: Some(endpoint_json(&relocation.source)),
+                pomodoro_link_destination: Some(destination_json(
+                    &relocation.destination,
+                    relocation.creates_pomodoro,
+                    selector,
+                )),
+            }),
+            pomodoro_link: None,
+            pomodoro_refs,
+        },
+        None,
+    ))
 }

@@ -112,12 +112,11 @@ fn capture_task_toggle_link_and_unlink_updates_notes_and_reports_json() {
     assert_eq!(json["pomodoro_selector_unused"], false);
     assert!(json.get("toggle_behavior").is_none(), "{json}");
     assert!(json.get("pomodoro_link_action").is_none(), "{json}");
-    assert!(
-        json["warnings"][0]
-            .as_str()
-            .is_some_and(|warning| warning.contains("declares dependencies")),
-        "{json}"
-    );
+    // No dependency warning: the link guard verified the field-only
+    // `[dependsOn::root]` (no Depends-On line, unresolvable id) leaves
+    // no open reason, so reconcile has nothing to re-block on (PDG1).
+    assert!(json.get("warnings").is_none(), "{json}");
+    assert!(json.get("link_guard").is_none(), "{json}");
     assert_eq!(
         fs::read_to_string(&target).expect("read linked target"),
         "- [*] #task Finish packet [fresh:: 2026-07-10] [dependsOn::root] ^goog-exit\n"
@@ -966,5 +965,162 @@ fn capture_task_toggle_unlink_keeps_every_lane() {
     assert_eq!(
         fs::read_to_string(&day_file).expect("read unlinked day"),
         "## Pomodoros\n- [ ] () — CURRENT\n"
+    );
+}
+
+// PDG1 (§13.15): a link toggle on a dependency-blocked target does not
+// link; the open prerequisites rise along edges(T) and the result
+// reports `not_linked` with the reasons.
+#[test]
+fn capture_task_toggle_on_blocked_target_consumes_and_promotes() {
+    let temp = TempDir::new("bob-cli-capture-toggle-blocked-consume");
+    let vault = temp.path().join("vault");
+    let target = vault.join("cash.md");
+    let day_file = vault.join("day.md");
+    write_toggle_task_settings(&vault);
+    write_file(
+        &target,
+        concat!(
+            "- [?] #task Blocked work ^blocked\n",
+            "\t- ⛓️ **DEPENDS ON:** [[job#^prep]]\n",
+        ),
+    );
+    write_file(&vault.join("job.md"), "- [ ] #task Prep work ^prep\n");
+    let day_before = "## Pomodoros\n- [ ] (**0900-0930**) — CURRENT\n";
+    write_file(&day_file, day_before);
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("@cash+blocked!")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 10:00:00")
+        .output()
+        .expect("toggle blocked task");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("toggle JSON");
+    assert_eq!(json["toggle_direction"], "link", "{json}");
+    assert_eq!(json["status_changed"], false, "{json}");
+    assert_eq!(json["status_symbol"], "?", "{json}");
+    assert_eq!(
+        json["link_guard"]["reasons"],
+        serde_json::json!(["local_dependency"]),
+        "{json}"
+    );
+    assert_eq!(
+        json["link_guard"]["promoted"],
+        serde_json::json!(["job.md#^prep"]),
+        "{json}"
+    );
+    // Neither the task line nor the ledger changed; the open
+    // prerequisite rose to Next.
+    assert_eq!(
+        fs::read_to_string(&target).expect("read target"),
+        concat!(
+            "- [?] #task Blocked work ^blocked\n",
+            "\t- ⛓️ **DEPENDS ON:** [[job#^prep]]\n",
+        )
+    );
+    assert_eq!(fs::read_to_string(&day_file).expect("read day"), day_before);
+    assert_eq!(
+        fs::read_to_string(vault.join("job.md")).expect("read prereq"),
+        "- [*] #task Prep work ^prep\n"
+    );
+}
+
+// PDG3 (§13.15): a toggle on a resident blocked only by its project's
+// schedule is refused as a link; the project date is reported and
+// nothing is staged for the target or the ledger.
+#[test]
+fn capture_task_toggle_on_project_scheduled_resident_reports_date() {
+    let temp = TempDir::new("bob-cli-capture-toggle-project-schedule");
+    let vault = temp.path().join("vault");
+    let target = vault.join("proj.md");
+    let day_file = vault.join("day.md");
+    write_toggle_task_settings(&vault);
+    write_file(
+        &target,
+        concat!(
+            "---\ntype: \"[[project]]\"\nstatus: wip\n---\n",
+            "- [?] #task Ship it [scheduled:: 2026-07-20] ^prj\n",
+            "- [?] #task Grind #prj_is_blocked ^grind\n",
+        ),
+    );
+    let day_before = "## Pomodoros\n- [ ] (**0900-0930**) — CURRENT\n";
+    write_file(&day_file, day_before);
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("@proj+grind!")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 10:00:00")
+        .output()
+        .expect("toggle project-blocked resident");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("toggle JSON");
+    assert_eq!(json["status_changed"], false, "{json}");
+    assert_eq!(json["status_symbol"], "?", "{json}");
+    assert_eq!(
+        json["link_guard"]["reasons"],
+        serde_json::json!(["project_schedule"]),
+        "{json}"
+    );
+    assert!(
+        json["link_guard"]["detail"]
+            .as_str()
+            .is_some_and(|detail| detail.contains("2026-07-20")),
+        "{json}"
+    );
+    assert_eq!(fs::read_to_string(&day_file).expect("read day"), day_before);
+}
+
+// PDG6 (§13.15): a toggle on a `^prj` whose only reason is its own
+// future schedule is refused outright: pulling the date forward would
+// silently unblock the project and strand residents' copies.
+#[test]
+fn capture_task_toggle_on_date_blocked_prj_is_refused() {
+    let temp = TempDir::new("bob-cli-capture-toggle-prj-date");
+    let vault = temp.path().join("vault");
+    let target = vault.join("proj.md");
+    let day_file = vault.join("day.md");
+    write_toggle_task_settings(&vault);
+    let target_before = concat!(
+        "---\ntype: \"[[project]]\"\nstatus: wip\n---\n",
+        "- [?] #task Ship it [scheduled:: 2026-07-20] ^prj\n",
+    );
+    write_file(&target, target_before);
+    write_file(&day_file, "## Pomodoros\n- [ ] (**0900-0930**) — CURRENT\n");
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("--")
+        .arg("@proj+prj!")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 10:00:00")
+        .output()
+        .expect("toggle date-blocked ^prj");
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+    assert!(
+        stderr(&output)
+            .contains("move the project date from the `^prj` Schedule action"),
+        "{}",
+        format_output(&output)
+    );
+    assert_eq!(
+        fs::read_to_string(&target).expect("read target"),
+        target_before
     );
 }

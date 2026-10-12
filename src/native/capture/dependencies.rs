@@ -436,7 +436,7 @@ pub(super) fn display_relative(path: &Path) -> String {
 }
 
 /// Absolute path for a vault-relative note.
-fn absolute_note(bob_dir: &Path, relative: &Path) -> PathBuf {
+pub(super) fn absolute_note(bob_dir: &Path, relative: &Path) -> PathBuf {
     bob_dir.join(relative)
 }
 
@@ -580,7 +580,7 @@ fn lane_checkbox(lane: u8) -> char {
 /// Note index over on-disk notes plus batch-staged new notes, so a
 /// prerequisite in a note created earlier in the same batch resolves
 /// and canonical links stay shortest-unambiguous.
-fn staged_note_index(
+pub(super) fn staged_note_index(
     ctx: &DependencyContext,
     planner: &CaptureBatchPlanner,
     bob_dir: &Path,
@@ -741,11 +741,11 @@ pub(super) fn lookup_staged_task<'a>(
 
 /// One note the writer changed as a side effect (target-ID stamp or
 /// promotion): carried for `dependency_target` task blocks.
-struct TargetTouch {
-    absolute: PathBuf,
-    relative: PathBuf,
-    block_id: String,
-    line: usize,
+pub(super) struct TargetTouch {
+    pub(super) absolute: PathBuf,
+    pub(super) relative: PathBuf,
+    pub(super) block_id: String,
+    pub(super) line: usize,
 }
 
 /// Project one prerequisite target to its vault id: the existing valid
@@ -938,22 +938,22 @@ fn resolve_prerequisites(
 /// children, resolved against staged contents: `(note, block)` pairs
 /// with the prerequisite pairs their lines name. Unresolvable links
 /// contribute no edges (R4 keeps them verbatim; they never block).
-struct DependencyGraph {
-    edges: BTreeMap<(String, String), BTreeSet<(String, String)>>,
+pub(super) struct DependencyGraph {
+    pub(super) edges: BTreeMap<(String, String), BTreeSet<(String, String)>>,
     /// Live openness per identity, from the same staged scans.
-    open: HashMap<(String, String), bool>,
+    pub(super) open: HashMap<(String, String), bool>,
     /// Scheduled date per identity, for the future-schedule guard.
-    scheduled: HashMap<(String, String), Option<NaiveDate>>,
+    pub(super) scheduled: HashMap<(String, String), Option<NaiveDate>>,
     /// Status symbol per identity, for promotion lanes.
-    status: HashMap<(String, String), char>,
+    pub(super) status: HashMap<(String, String), char>,
     /// Identities promotion must walk through but never raise (§13.4):
     /// every recognised `^prj` task plus the residents of blocked
     /// projects (PDB9).
-    never_raise: BTreeSet<(String, String)>,
+    pub(super) never_raise: BTreeSet<(String, String)>,
 }
 
 impl DependencyGraph {
-    fn build(
+    pub(super) fn build(
         ctx: &DependencyContext,
         planner: &mut CaptureBatchPlanner,
         bob_dir: &Path,
@@ -1384,7 +1384,7 @@ fn target_block_ref(touch: &TargetTouch) -> TaskBlockRef {
 /// future-scheduled, closed, and unrecognized statuses are respected
 /// and never rewritten; lanes are never lowered.
 #[allow(clippy::too_many_arguments)]
-fn plan_promotions(
+pub(super) fn plan_promotions(
     ctx: &DependencyContext,
     planner: &mut CaptureBatchPlanner,
     bob_dir: &Path,
@@ -2733,6 +2733,7 @@ pub(super) fn plan_dependency_only_item(
             task_complete: None,
             toggle_task_description: None,
             r#ref: None,
+            link_guard: None,
         },
         clip_plan: None,
         pomodoro_refs: Vec::new(),

@@ -293,6 +293,17 @@ fn scheduled_field_matches(line: &str) -> Vec<ScheduledFieldMatch> {
         .collect()
 }
 
+/// Whether the line carries exactly one recognized future `scheduled`
+/// field: the pull-forward shape [`plan_task_link`] retires. The link
+/// guard (§13.5) uses it to tell a retiring pull-forward from a
+/// consumption with a `local_schedule` reason.
+pub(crate) fn task_update_has_single_future_scheduled(
+    line: &str,
+    today: NaiveDate,
+) -> bool {
+    find_single_future_scheduled_field(line, today).is_some()
+}
+
 /// Exactly one recognized `scheduled` field, syntactically valid, and
 /// strictly later than `today` -- the only shape that qualifies for
 /// future-schedule removal.

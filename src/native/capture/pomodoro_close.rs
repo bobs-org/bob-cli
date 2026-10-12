@@ -707,7 +707,11 @@ fn plan_close_successors(
     let post_day = planner.current_contents(day_file)?;
     let snapshot =
         staged_snapshot_for_recovery(bob_dir, planner, dependency_ctx);
-    let note_index = staged_note_index(bob_dir, planner, dependency_ctx);
+    let note_index = super::task_complete::staged_note_index(
+        bob_dir,
+        planner,
+        dependency_ctx,
+    );
     let running = &plan.summary.running;
     let closed_name = running.name.clone().unwrap_or_default();
     let closed_line = close_entry_line(
@@ -1009,6 +1013,7 @@ fn plan_reset_link_item(
             task_complete: None,
             toggle_task_description: Some(task_description),
             r#ref: None,
+            link_guard: None,
         },
         clip_plan: None,
         pomodoro_refs,
@@ -1138,6 +1143,7 @@ fn plan_reset_task_item(
             task_complete: None,
             toggle_task_description: None,
             r#ref: None,
+            link_guard: None,
         },
         clip_plan: None,
         pomodoro_refs,
@@ -1238,6 +1244,7 @@ fn plan_reset_whole_item(
             task_complete: None,
             toggle_task_description: None,
             r#ref: None,
+            link_guard: None,
         },
         clip_plan: None,
         pomodoro_refs,
@@ -1442,6 +1449,7 @@ pub(super) fn plan_pomodoro_close_item(
             task_complete: None,
             toggle_task_description: None,
             r#ref: None,
+            link_guard: None,
         },
         clip_plan: None,
         pomodoro_refs,
@@ -1776,13 +1784,52 @@ pub(super) fn plan_pomodoro_close_link_item(
             )));
         }
     }
-    let task_plan =
+    // Link guard (§13.5 gesture rule, PDG1–PDG3, PDG6): a Blocked
+    // target keeps its status (no Next flip) but the link still lands
+    // under the closing entry: links under a Pomodoro the same gesture
+    // closes are history, not live links. Only the seeds rise, and the
+    // result reports `not_linked`.
+    let target_rel = relative_target(Some(&route));
+    let close_link_guard: Option<LinkGuardJson> = match assess_link_target(
+        dependency_ctx,
+        planner,
+        &request.bob_dir,
+        &target_rel,
+        block_id,
+        today,
+    )? {
+        LinkGuardVerdict::Consume(plan) => {
+            let dependent_desc = format!("pomodoro close link ^{block_id}");
+            let reasons = plan.reasons.clone();
+            let promoted = promote_consume_plan(
+                dependency_ctx,
+                planner,
+                &request.bob_dir,
+                *plan,
+                &dependent_desc,
+            )?;
+            Some(LinkGuardJson::not_linked(&reasons, promoted))
+        }
+        LinkGuardVerdict::Link | LinkGuardVerdict::PullForward => None,
+    };
+    let task_plan = if close_link_guard.is_some() {
+        // Keep `[?]` (and any future schedule): the history link must
+        // never promote a Blocked task into a lane.
+        capture_task_toggle::TaskTogglePlan {
+            content: contents.clone(),
+            previous_status_symbol,
+            new_status_symbol: previous_status_symbol,
+            removed_scheduled: None,
+            schedule_log: None,
+        }
+    } else {
         capture_task_toggle::plan_task_link(&contents, task.line_index, today)
             .ok_or_else(|| {
                 CaptureError::io(
                     "pomodoro link capture invariant failed: task line could not be updated",
                 )
-            })?;
+            })?
+    };
     let staged_task_contents = task_plan.content.clone();
     let updated_scan = note_tasks::scan(&staged_task_contents, &settings);
     let updated_task = match updated_scan.by_block_id(block_id) {
@@ -1793,13 +1840,10 @@ pub(super) fn plan_pomodoro_close_link_item(
             ));
         }
     };
-    if previous_status_symbol != updated_task.status_symbol
-        && task_line_declares_dependencies(&previous_task_line)
-    {
-        warnings.push(format!(
-            "^{block_id} still declares dependencies; bob task reconcile may return it to Blocked"
-        ));
-    }
+    // No `[dependsOn::` text warning: the link guard above is
+    // authoritative (see `plan_task_toggle_capture`). A Blocked target
+    // keeps `[?]` with no status change, so there is nothing to warn
+    // about either way.
     if staged_task_contents != contents {
         planner.stage(&target, staged_task_contents.clone())?;
     }
@@ -2054,6 +2098,7 @@ pub(super) fn plan_pomodoro_close_link_item(
             task_complete: None,
             toggle_task_description: Some(task_description),
             r#ref: None,
+            link_guard: close_link_guard,
         },
         clip_plan: None,
         pomodoro_refs,
@@ -2348,6 +2393,7 @@ pub(super) fn plan_pomodoro_close_task_item(
             task_complete: None,
             toggle_task_description: None,
             r#ref: None,
+            link_guard: None,
         },
         clip_plan: None,
         pomodoro_refs,

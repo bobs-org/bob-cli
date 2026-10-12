@@ -74,7 +74,7 @@ anything is written, and any failure rolls the whole batch back.
 | `@route#Section` | Write an ordinary bullet into a matching non-`Tasks` heading |
 | `@route#` | Write an ordinary bullet into any non-`Tasks` heading |
 | `@route^block-id` | Ordinary open task with a user-authored block ID |
-| `@route:block-id` | Next-status (`[*]`) task plus a Pomodoro task link; scheduled tasks start Blocked (`[?]`) |
+| `@route:block-id` | Next-status (`[*]`) task plus a Pomodoro task link; a future schedule (`s:<N>`, N ≥ 1) starts Blocked (`[?]`) and unlinked |
 | `@route:block-id#pomodoro` | Same, linked under a matching named open Pomodoro or a new named future Pomodoro |
 | `@route:block-id=<X>` | Same, and atomically start the selected session; `<X>` mirrors the `se<X>` snippet (empty is 25 minutes) |
 | `@route:block-id#pomodoro=<X>` | Same under the named Pomodoro, starting that session |
@@ -784,6 +784,13 @@ digits, `_`, and `-`. The block ID may contain letters, digits, and `-`,
 the same rule as `@route^id`. Scheduled offsets work in either
 terminal order; a scheduled Pomodoro-linked task starts `[?]`, and the block ID
 remains the final task token after any `[scheduled::YYYY-MM-DD]` property.
+A task that is Blocked after the gesture is never linked (`docs/task-dependencies.md`
+§13.5): a future `s:<N>` (N ≥ 1), open `&` prerequisites, or a blocked
+destination project lands the new task `[?]` (plus `#prj_is_blocked` in a
+blocked project) with no Task Link. The open prerequisites rise along the
+task's edges instead, and JSON reports `link_guard` (`reasons` with the §13.9
+kinds, `promoted` with `route#^block` identities, and a one-sentence
+`detail`); human output prints the same sentence after the task line.
 
 The daily note is selected from `BOB_DAY_FILE` when set, otherwise from
 `<bob-dir>/YYYY/YYYYMMDD.md` using `BOB_NOW` or the local date. Within its
@@ -899,9 +906,13 @@ Pomodoro-linked task), duplicate IDs, and non-task block IDs reuse those
 errors. Ready `[ ]` and Blocked `[?]` tasks become Next `[*]`; Next stays
 Next and In Progress `[/]` is never demoted. A single valid future
 `[scheduled::]` is retired with the pull-forward Schedule Log entry when a log
-already exists, and `dependsOn` still warns — all under the existing Ensure
-Next rules. Done, canceled, and unknown statuses fail: only Ready, Blocked,
-Next, and In Progress tasks can be linked.
+already exists — all under the existing Ensure Next rules, plus the §13.5
+link guard: a target that is Blocked after the gesture stays unlinked while
+its open prerequisites (own plus inherited) rise, and the result reports
+`link_guard`. The one refusal is a `^prj` whose only reason is its own future
+schedule: it fails with "move the project date from the `^prj` Schedule
+action" instead of pulling the date forward. Done, canceled, and unknown
+statuses fail: only Ready, Blocked, Next, and In Progress tasks can be linked.
 
 Let _Q_ be the open Pomodoro whose children hold the task's dedicated
 `[[route#^id]]` Task Link (links under completed Pomodoros are history and are
@@ -940,16 +951,19 @@ JSON reports kind `"pomodoro_link"` with `text: ""`, the post-image
 `day_file`, `block_link`, `previous_task_line`, `previous_status_symbol` /
 `_name`, `status_symbol` / `_name`, `status_changed`, `removed_scheduled`,
 `schedule_log` when written, `pomodoro_name`, `creates_pomodoro`),
-`pomodoro_link_action` (`"linked"`, `"moved"`, or `"already_current"`),
+`pomodoro_link_action` (`"linked"`, `"moved"`, `"already_current"`, or
+`"not_linked"` when the guard consumed the link),
 pre-image `pomodoro_link_source` (only when a link existed), post-image
 `pomodoro_link_destination`, `pomodoro_link_placement` (when a link was
 inserted or moved), and the exact `pomodoro_start` object `pomodoro_task`
 uses (only with `=<X>`). It emits no `toggle_direction`/`toggle_behavior`.
+A consumed link adds `link_guard` (`reasons`, `promoted`, `detail`).
 Human output follows the Ensure Next style: a `link`/`would link` or
 `start`/`would start` header, a status line (`[ ] → [*]`, `[*] already
 Next`, `[/] stays In Progress`), a ledger line (`Linked … under BUGS`,
-`Moved Task Link BUGS → FOCUS (created FOCUS)`, or `Task Link already in
-BUGS; no ledger change.`), and the existing start phrasing.
+`Moved Task Link BUGS → FOCUS (created FOCUS)`, `Task Link already in
+BUGS; no ledger change.`, or the `⛔ not linked (…) · promoted …` guard
+sentence), and the existing start phrasing.
 
 ### Picking any open task with ':'
 
@@ -2048,7 +2062,10 @@ running but a future Pomodoro exists, the close diagnostic names it with a
 (Ready/Blocked become Next; the Task Link moves or is appended into the
 session's sub-bullet range) then close it; `<text>
 @route:block-id=x…` creates the new Next task in the running session then
-closes it. `#pomodoro` with a close fails (`` `=x` always closes the running
+closes it. When the §13.5 link guard finds the existing-task target Blocked,
+the status stays as-is (a Blocked task never rises on a history link) while
+the link still lands under the closing entry as history; the open
+prerequisites rise and the result reports `link_guard`. `#pomodoro` with a close fails (`` `=x` always closes the running
 Pomodoro; remove `#name` ``), as do `s:<N>`/`p:<N>`, project-note `+` forms,
 and forced flags on a whole-item close. A `@@` declaration never applies to
 close items.
@@ -2834,8 +2851,11 @@ item-wide markers (`s:<N>`, `p:<N>`, `%…`, trailing `@route…`) are set aside
 leaves `s:2` as literal text. The token is stripped from the rendered body
 and appended as the last token of the rendered task, after `[created::…]`.
 A `:` task renders as `[*]`, or `[?]` when the project resolved a scheduled
-date, and gets its `[[<stem>#^<id>]]` Task Link; a `^` task keeps an authored
-checkbox status, or `[ ]` without one. The ID must satisfy the shared
+date, and gets its `[[<stem>#^<id>]]` Task Link — unless that date is in the
+future, in which case the note is blocked (§13.3): the task renders `[?]`
+plus `#prj_is_blocked` and stays unlinked, with a `not_linked`
+(`project_schedule`) report; a `^` task keeps an authored checkbox status,
+or `[ ]` without one. The ID must satisfy the shared
 block-ID rule (`A-Z`, `a-z`, `0-9`, `-`); `prj` in any letter case is
 reserved. A bare trailing `:` or `^` is an unfinished ID and fails with a
 message naming the ` :<block-id>` / ` ^<block-id>` spelling.
@@ -3004,7 +3024,7 @@ Link presence for `@route+block-id!` is:
 
 | Linked under an open Pomodoro today? | Status | Result |
 | --- | --- | --- |
-| no | Ready `[ ]` / Blocked `[?]` | Next `[*]`, with `[[route#^block-id]]` linked under the implicit current/next open Pomodoro; `dependsOn` on the task line also emits a warning, and only when the task became Next |
+| no | Ready `[ ]` / Blocked `[?]` | Next `[*]`, with `[[route#^block-id]]` linked under the implicit current/next open Pomodoro — unless the §13.5 link guard finds the target Blocked, in which case nothing links, the open prerequisites rise, and JSON reports `link_guard` |
 | no | Next `[*]` / In Progress `[/]` | Link inserted under the implicit current/next open Pomodoro; status unchanged |
 | yes | any open status | Every matching link under every open Pomodoro removed; status unchanged |
 | — | done, canceled, or unknown | Error: `task ^<id> is <Status Name>; only Ready, Blocked, Next, and In Progress tasks can be toggled` |
@@ -3077,7 +3097,10 @@ a dedicated Task Link.
 When the sole link is already under the selected destination, the daily file
 is left byte-for-byte unchanged. The task-side plan is independent: a Ready
 or Blocked status still becomes Next and a single future schedule is still
-retired when an existing Schedule Log is present. An already-Next task whose
+retired when an existing Schedule Log is present — unless the §13.5 link
+guard finds the target Blocked, in which case neither the task line nor the
+ledger changes, the open prerequisites rise, and the result reports
+`link_guard` (human output prints `stays <Status>` plus the guard sentence). An already-Next task whose
 link is already at the destination is a true no-op. When relocation is
 needed, Bob moves the dedicated link bullet and its complete descendant
 subtree, adapting only the root indentation to the destination's established
@@ -3115,11 +3138,15 @@ Done, canceled, and unknown states keep the normal toggle errors.
 
 Human output says `would toggle` / `toggled` and prints a link summary:
 `linked ^id under NAME · set Next`, `linked ^id under NAME · stays Next`,
-`linked ^id under NAME · stays In Progress`, or `unlinked ^id from N open
-Pomodoros · stays <Status>`, followed by the day file and ledger lines. JSON
-stays schema version 1 and kind `"task_toggle"` with `toggle_direction:
-"link"` or `"unlink"`, `status_changed`, `removed_pomodoro_links` for unlink,
-and the existing insertion fields for link.
+`linked ^id under NAME · stays In Progress`, `not linked ^id · stays
+<Status>` plus the guard sentence when consumption replaced the link, or
+`unlinked ^id from N open Pomodoros · stays <Status>`, followed by the day
+file and ledger lines. JSON stays schema version 1 and kind `"task_toggle"`
+with `toggle_direction: "link"` or `"unlink"`, `status_changed`,
+`removed_pomodoro_links` for unlink, the existing insertion fields for link,
+and `link_guard` (`reasons`, `promoted`, `detail`) for a consumed link. A
+`^prj` whose only reason is its own future schedule is refused with "move
+the project date from the `^prj` Schedule action".
 
 Compatibility fields: `pomodoro_name` is the resolved destination name when
 one exists, `creates_pomodoro` is `true` only when this Ensure Next created

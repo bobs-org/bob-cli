@@ -150,7 +150,20 @@ fn capture_pomodoro_dry_run_validates_and_changes_neither_note() {
         serde_json::from_str(stdout(&output).trim()).expect("dry-run JSON");
     assert_eq!(json["dry_run"], true);
     assert_eq!(json["scheduled"], "2026-07-11");
-    assert_eq!(json["block_link"], "[[dev#^preview]]");
+    // PDG4: a new `:` task with s:N (N ≥ 1) is Blocked by its own
+    // future schedule, so it is created unlinked with a report.
+    assert!(json.get("block_link").is_none(), "{json}");
+    assert_eq!(
+        json["link_guard"]["reasons"],
+        serde_json::json!(["local_schedule"]),
+        "{json}"
+    );
+    assert!(
+        json["task_line"]
+            .as_str()
+            .is_some_and(|line| line.starts_with("- [?] ")),
+        "{json}"
+    );
     assert_eq!(
         fs::read_to_string(&target).expect("read untouched route"),
         target_before
@@ -760,4 +773,111 @@ fn capture_pomodoro_link_reports_created_named_destination() {
         )
     );
     assert_pomodoro_blocks_cover_changes(day_before, &day_after, &json);
+}
+
+// PDG1 (§13.15): `@route:block-id` on a dependency-blocked target does
+// not link; the open prerequisites rise and the result reports
+// `not_linked` with the reasons.
+#[test]
+fn capture_pomodoro_link_on_blocked_target_consumes_and_promotes() {
+    let temp = TempDir::new("bob-cli-capture-pomodoro-link-consume");
+    let vault = temp.path().join("vault");
+    let target = vault.join("cash.md");
+    let day_file = vault.join("day.md");
+    write_toggle_task_settings(&vault);
+    let target_before = concat!(
+        "- [?] #task Blocked work ^blocked\n",
+        "\t- ⛓️ **DEPENDS ON:** [[job#^prep]]\n",
+    );
+    write_file(&target, target_before);
+    write_file(&vault.join("job.md"), "- [ ] #task Prep work ^prep\n");
+    let day_before = "## Pomodoros\n- [ ] (1330-1400 [t:: 30m]) Work\n";
+    write_file(&day_file, day_before);
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("@cash:blocked")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 13:40:00")
+        .output()
+        .expect("link blocked task");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("link JSON");
+    assert_eq!(json["kind"], "pomodoro_link", "{json}");
+    assert_eq!(json["status_changed"], false, "{json}");
+    assert_eq!(json["status_symbol"], "?", "{json}");
+    assert_eq!(json["pomodoro_link_action"], "not_linked", "{json}");
+    assert_eq!(
+        json["link_guard"]["reasons"],
+        serde_json::json!(["local_dependency"]),
+        "{json}"
+    );
+    assert_eq!(
+        json["link_guard"]["promoted"],
+        serde_json::json!(["job.md#^prep"]),
+        "{json}"
+    );
+    assert_eq!(
+        fs::read_to_string(&target).expect("read target"),
+        target_before
+    );
+    assert_eq!(fs::read_to_string(&day_file).expect("read day"), day_before);
+    assert_eq!(
+        fs::read_to_string(vault.join("job.md")).expect("read prereq"),
+        "- [*] #task Prep work ^prep\n"
+    );
+}
+
+// A new `:` task with an open `&` prerequisite lands `[?]` unlinked:
+// the prerequisite rises and the result reports `not_linked` (§13.5).
+#[test]
+fn capture_pomodoro_task_with_open_dependency_is_created_unlinked() {
+    let temp = TempDir::new("bob-cli-capture-pomodoro-task-dep-unlinked");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("day.md");
+    write_blocked_tasks_settings(&vault);
+    write_file(&vault.join("cash.md"), "- [ ] #task Seed work ^seed\n");
+    let day_before = "## Pomodoros\n- [ ] (1330-1400 [t:: 30m]) Work\n";
+    write_file(&day_file, day_before);
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("Water fern")
+        .arg("@dev:fern")
+        .arg("&cash:seed")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 13:40:00")
+        .output()
+        .expect("capture : task with open dep");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("link JSON");
+    assert_eq!(json["kind"], "pomodoro_task", "{json}");
+    assert_eq!(json["block_id"], "fern", "{json}");
+    assert!(json.get("block_link").is_none(), "{json}");
+    assert_eq!(
+        json["link_guard"]["reasons"],
+        serde_json::json!(["local_dependency"]),
+        "{json}"
+    );
+    let task_line = json["task_line"].as_str().unwrap_or_default();
+    assert!(task_line.starts_with("- [?] "), "{json}");
+    assert!(task_line.ends_with("^fern"), "{json}");
+    let contents =
+        fs::read_to_string(vault.join("dev.md")).expect("read new note");
+    assert!(contents.contains(task_line), "{contents}");
+    assert_eq!(fs::read_to_string(&day_file).expect("read day"), day_before);
+    assert_eq!(
+        fs::read_to_string(vault.join("cash.md")).expect("read prereq"),
+        "- [*] #task Seed work [id:: cash__seed] ^seed\n"
+    );
 }

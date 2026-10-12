@@ -1034,7 +1034,9 @@ fn capture_project_note_task_links_need_the_day_file_only_for_links() {
     assert_success(&output);
     assert_eq!(fs::read_to_string(&day_file).expect("read day"), day_before);
 
-    // A scheduled project still links its `:` tasks as `[?]`.
+    // A scheduled project never links its `:` tasks: with P > today
+    // the note is blocked, so they land `[?]` plus the tag, unlinked,
+    // with a `not_linked` report (PDG5).
     let scheduled = TempDir::new("bob-cli-capture-project-note-link-sched");
     let vault = scheduled.path().join("vault");
     let day_file = vault.join("day.md");
@@ -1058,23 +1060,27 @@ fn capture_project_note_task_links_need_the_day_file_only_for_links() {
         serde_json::from_str(stdout(&output).trim()).expect("scheduled JSON");
     assert_eq!(json["scheduled"], "2026-09-22", "{json}");
     assert!(
-        json["project_note"]["task_links"][0]["task_line"]
-            .as_str()
-            .unwrap()
-            .starts_with("- [?] "),
+        json["project_note"]["task_links"]
+            .as_array()
+            .is_none_or(Vec::is_empty),
+        "{json}"
+    );
+    assert_eq!(
+        json["link_guard"]["reasons"],
+        serde_json::json!(["project_schedule"]),
         "{json}"
     );
     let contents = fs::read_to_string(vault.join("cash_schedlink1.md"))
         .expect("read scheduled note");
     assert!(
         contents.contains(
-            "- [?] #task Draft the memo [created::2026-09-20] ^draft-memo"
+            "- [?] #task Draft the memo [created::2026-09-20] #prj_is_blocked ^draft-memo"
         ),
         "{contents}"
     );
     let day_after = fs::read_to_string(&day_file).expect("read day");
     assert!(
-        day_after.contains("[[cash_schedlink1#^draft-memo]]"),
+        !day_after.contains("[[cash_schedlink1#^draft-memo]]"),
         "{day_after}"
     );
 }

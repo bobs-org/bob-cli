@@ -445,6 +445,7 @@ fn plan_ref_item(
                 listen_hint,
             }),
             toggle_task_description: None,
+            link_guard: None,
         },
         clip_plan: None,
         pomodoro_refs: Vec::new(),
@@ -601,7 +602,7 @@ pub(super) fn plan_capture_item(
         let created = date_string(today);
         let relative_target = relative_target(Some(route));
         let target = request.bob_dir.join(&relative_target);
-        let mut note_plan = plan_task_toggle_capture(
+        let (mut note_plan, link_guard) = plan_task_toggle_capture(
             planner,
             &request.bob_dir,
             &target,
@@ -611,6 +612,7 @@ pub(super) fn plan_capture_item(
             *intent,
             today,
             warnings,
+            dependency_ctx,
         )?;
         let pomodoro_refs = std::mem::take(&mut note_plan.pomodoro_refs);
         let toggle = note_plan.toggle.as_ref().ok_or_else(|| {
@@ -676,6 +678,7 @@ pub(super) fn plan_capture_item(
                 task_complete: None,
                 toggle_task_description: Some(toggle.task_description.clone()),
                 r#ref: None,
+                link_guard,
             },
             clip_plan: None,
             pomodoro_refs,
@@ -712,7 +715,7 @@ pub(super) fn plan_capture_item(
         let created = date_string(today);
         let relative_target = relative_target(Some(route));
         let target = request.bob_dir.join(&relative_target);
-        let mut note_plan = plan_pomodoro_link_capture(
+        let (mut note_plan, link_guard) = plan_pomodoro_link_capture(
             planner,
             &request.bob_dir,
             &target,
@@ -723,6 +726,7 @@ pub(super) fn plan_capture_item(
             now,
             today,
             warnings,
+            dependency_ctx,
         )?;
         let pomodoro_refs = std::mem::take(&mut note_plan.pomodoro_refs);
         let link = note_plan.pomodoro_link.as_ref().ok_or_else(|| {
@@ -788,6 +792,7 @@ pub(super) fn plan_capture_item(
                 task_complete: None,
                 toggle_task_description: Some(link.task_description.clone()),
                 r#ref: None,
+                link_guard,
             },
             clip_plan: None,
             pomodoro_refs,
@@ -908,6 +913,9 @@ pub(super) fn plan_capture_item(
     let kind_label = capture_kind_label(&parsed.kind);
     let task_block_id = match &parsed.kind {
         CaptureKind::TaskWithBlockId { block_id } => Some(block_id.clone()),
+        // A `:` task reports its id even when the guard creates it
+        // unlinked (no Pomodoro write to read it back from).
+        CaptureKind::Pomodoro { block_id, .. } => Some(block_id.clone()),
         _ => None,
     };
     let (relative_target, target) = match &parsed.kind {
@@ -1031,13 +1039,60 @@ pub(super) fn plan_capture_item(
         }
         _ => None,
     };
+    // Link guard for new tasks (§13.5, PDG4–PDG5): a task captured
+    // into a blocked project lands `[?]` plus `#prj_is_blocked`, and
+    // a `:` task that is Blocked after the gesture (own future
+    // schedule, open `&` prerequisites, or project reasons) is
+    // created unlinked with its seeds promoted.
+    let mut new_task_dependencies = new_task_dependencies;
+    let mut new_task_project_block: Option<ConsumePlan> = None;
+    if matches!(
+        parsed.kind,
+        CaptureKind::Task
+            | CaptureKind::TaskWithBlockId { .. }
+            | CaptureKind::Pomodoro { .. }
+    ) {
+        // The `relative_target` binding below shadows the helper
+        // of the same name; this inlines `relative_target(route)`.
+        let dest_rel = parsed
+            .route
+            .as_deref()
+            .map(|route| PathBuf::from(route_label(route)))
+            .unwrap_or_else(|| PathBuf::from(INBOX_FILE));
+        new_task_project_block = assess_destination_project(
+            dependency_ctx,
+            planner,
+            &request.bob_dir,
+            &dest_rel,
+            today,
+        )?;
+        if new_task_project_block.is_some() {
+            let flip = |line: &str| {
+                apply_new_task_project_block(line)
+                    .unwrap_or_else(|| line.to_string())
+            };
+            if let Some((augmented, _)) = &mut new_task_dependencies {
+                augmented.task_line = flip(&augmented.task_line);
+            }
+            // Without `&` dependencies the plain capture line flips
+            // below via `flipped_capture_line`.
+        }
+    }
+    // Plain capture lines (no augmented dependency block) flip here;
+    // augmented lines flipped above.
+    let flipped_capture_line =
+        match (&new_task_dependencies, &new_task_project_block) {
+            (None, Some(_)) => apply_new_task_project_block(&capture_line)
+                .unwrap_or_else(|| capture_line.clone()),
+            _ => capture_line.clone(),
+        };
     let (block_first_line, block_child_lines) = match &new_task_dependencies {
         Some((augmented, _)) => {
             let mut children = vec![augmented.dep_child.clone()];
             children.extend(sub_bullet_lines.iter().cloned());
             (augmented.task_line.clone(), children)
         }
-        None => (capture_line.clone(), sub_bullet_lines.clone()),
+        None => (flipped_capture_line.clone(), sub_bullet_lines.clone()),
     };
     let capture_block = assemble_capture_block(
         &block_first_line,
@@ -1045,6 +1100,8 @@ pub(super) fn plan_capture_item(
         clip_plan.as_ref().map(|plan| plan.output.lines.as_slice()),
         schedule_log.as_ref().map(|log| log.lines.as_slice()),
     );
+    // Set when a `:` task is created unlinked below (PDG4/PDG5).
+    let mut new_task_link_guard: Option<LinkGuardJson> = None;
     let mut note_plan = match &parsed.kind {
         CaptureKind::SubBullet {
             target: sub_bullet_target,
@@ -1098,17 +1155,74 @@ pub(super) fn plan_capture_item(
                     dependency_ctx,
                 );
             }
-            plan_capture_with_pomodoro_link(
-                planner,
-                &request.bob_dir,
-                &target,
-                route,
-                block_id,
-                pomodoro_name.as_deref(),
-                start.as_ref(),
-                &capture_block,
-                now,
-            )?
+            // PDG4/PDG5: a `:` task that is Blocked after the
+            // gesture is created unlinked; its seeds rise instead.
+            // (The close arm above is exempt: links under the
+            // Pomodoro the same gesture closes are history.)
+            let mut blocked_reasons: Vec<BlockedReason> = Vec::new();
+            if let Some(date) = scheduled.as_deref()
+                && date > date_string(today).as_str()
+            {
+                blocked_reasons.push(BlockedReason {
+                    kind: "local_schedule",
+                    label: format!("scheduled {date}"),
+                });
+            }
+            if let Some((_, parts)) = new_task_dependencies.as_ref() {
+                let open: Vec<String> = parts
+                    .summary
+                    .prerequisites
+                    .iter()
+                    .filter(|prereq| prereq.open)
+                    .map(|prereq| {
+                        format!("[[{}#^{}]]", prereq.note, prereq.block_id)
+                    })
+                    .collect();
+                if !open.is_empty() {
+                    blocked_reasons.push(BlockedReason {
+                        kind: "local_dependency",
+                        label: format!("waits on {}", open.join(", ")),
+                    });
+                }
+            }
+            if let Some(project) = &new_task_project_block {
+                blocked_reasons.extend(project.reasons.iter().cloned());
+            }
+            if blocked_reasons.is_empty() {
+                plan_capture_with_pomodoro_link(
+                    planner,
+                    &request.bob_dir,
+                    &target,
+                    route,
+                    block_id,
+                    pomodoro_name.as_deref(),
+                    start.as_ref(),
+                    &capture_block,
+                    now,
+                )?
+            } else {
+                let mut promoted = Vec::new();
+                if let Some(project) = new_task_project_block {
+                    // `&` seeds already rose inside
+                    // `plan_new_task_dependencies`; only the project's
+                    // seeds still need promotion.
+                    promoted = promote_consume_plan(
+                        dependency_ctx,
+                        planner,
+                        &request.bob_dir,
+                        project,
+                        &format!("new task ^{block_id}"),
+                    )?;
+                }
+                new_task_link_guard =
+                    Some(LinkGuardJson::not_linked(&blocked_reasons, promoted));
+                plan_capture_to_target(
+                    planner,
+                    &target,
+                    &capture_block,
+                    &parsed.kind,
+                )?
+            }
         }
         CaptureKind::PomodoroNote => {
             plan_pomodoro_note_capture(planner, &target, &capture_block)?
@@ -1306,6 +1420,7 @@ pub(super) fn plan_capture_item(
             task_complete: None,
             toggle_task_description: None,
             r#ref: None,
+            link_guard: new_task_link_guard,
         },
         clip_plan,
         pomodoro_refs,

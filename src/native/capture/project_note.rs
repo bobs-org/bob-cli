@@ -157,6 +157,26 @@ pub(super) fn plan_project_note_item(
     };
     let rendered = capture_project_note::render_project_note(&render_input);
 
+    // A future project date blocks the whole note (§13.3, PDG5):
+    // `:` tasks render `[?]` plus the tag and stay unlinked, with a
+    // `not_linked` report. Only the unblocked `:` tasks link below.
+    let project_blocked = scheduled
+        .as_deref()
+        .is_some_and(|date| date > date_string(today).as_str());
+    let project_link_guard: Option<LinkGuardJson> = if project_blocked
+        && rendered.named_tasks.iter().any(|task| task.link)
+    {
+        Some(LinkGuardJson {
+            reasons: vec!["project_schedule".to_string()],
+            promoted: Vec::new(),
+            detail: Some(format!(
+                "not linked (project scheduled {})",
+                scheduled.as_deref().unwrap_or_default(),
+            )),
+        })
+    } else {
+        None
+    };
     // One Task Link per `:` task, in source order. With no links the daily
     // note is never read; otherwise the note and the day file are staged
     // together so any failure writes nothing.
@@ -168,7 +188,7 @@ pub(super) fn plan_project_note_item(
     let linked: Vec<&capture_project_note::RenderedNamedTask> = rendered
         .named_tasks
         .iter()
-        .filter(|task| task.link)
+        .filter(|task| task.link && !project_blocked)
         .collect();
     let (
         day_file,
@@ -329,6 +349,7 @@ pub(super) fn plan_project_note_item(
             task_complete: None,
             toggle_task_description: None,
             r#ref: None,
+            link_guard: project_link_guard,
         },
         clip_plan: None,
         pomodoro_refs: Vec::new(),

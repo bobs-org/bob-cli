@@ -352,6 +352,7 @@ fn json_success_shape_is_stable() {
             task_complete: None,
             r#ref: None,
             toggle_task_description: None,
+            link_guard: None,
         }],
         None,
         Vec::new(),
@@ -417,6 +418,7 @@ fn json_success_shape_is_stable() {
         "plan_budget",
         "pomodoro_blocks",
         "task_blocks",
+        "link_guard",
     ] {
         assert!(value.get(special_field).is_none(), "{value}");
     }

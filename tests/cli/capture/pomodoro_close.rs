@@ -1609,6 +1609,61 @@ fn capture_pomodoro_close_link_reports_already_current() {
 }
 
 #[test]
+fn capture_pomodoro_close_link_on_blocked_target_keeps_history() {
+    // Close-link on a Blocked target (§13.5): the task keeps `[?]`
+    // (never rises on a history link), the link still lands under the
+    // closing entry as history, the open prerequisites rise, and the
+    // result reports `not_linked` with the reasons.
+    let (_temp, vault, day_file) =
+        close_worked_vault("bob-cli-close-link-blocked");
+    write_file(
+        &vault.join("cash.md"),
+        concat!(
+            "- [?] #task Blocked work ^blocked\n",
+            "\t- ⛓️ **DEPENDS ON:** [[job#^prep]]\n",
+        ),
+    );
+    write_file(&vault.join("job.md"), "- [ ] #task Prep work ^prep\n");
+    let day_before = fs::read_to_string(&day_file).expect("read day before");
+    let json = capture_json_dry_run_matches_real(
+        &vault,
+        &day_file,
+        "2026-09-28 09:37:00",
+        &["@cash:blocked=x"],
+    );
+    let day_after = fs::read_to_string(&day_file).expect("read day after");
+    assert_pomodoro_blocks_cover_changes(&day_before, &day_after, &json);
+    assert_eq!(json["status_symbol"], "?", "{json}");
+    assert_eq!(json["status_changed"], false, "{json}");
+    assert!(json.get("pomodoro_close").is_some(), "{json}");
+    assert_eq!(
+        json["link_guard"]["reasons"],
+        serde_json::json!(["local_dependency"]),
+        "{json}"
+    );
+    assert_eq!(
+        json["link_guard"]["promoted"],
+        serde_json::json!(["job.md#^prep"]),
+        "{json}"
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("cash.md")).expect("read target"),
+        concat!(
+            "- [?] #task Blocked work ^blocked\n",
+            "\t- ⛓️ **DEPENDS ON:** [[job#^prep]]\n",
+        )
+    );
+    assert!(
+        day_after.contains("[[cash#^blocked]]"),
+        "history link lands under the closing entry:\n{day_after}"
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("job.md")).expect("read prereq"),
+        "- [*] #task Prep work ^prep\n"
+    );
+}
+
+#[test]
 fn capture_pomodoro_close_task_reports_closed_and_next() {
     // Body-bearing close (`<text> @route:block-id=x`): the new task links
     // into the running entry before it closes, so the closed and next

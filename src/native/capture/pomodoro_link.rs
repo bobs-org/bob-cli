@@ -227,7 +227,8 @@ pub(super) fn plan_pomodoro_link_capture(
     now: chrono::NaiveDateTime,
     today: NaiveDate,
     warnings: &mut Vec<String>,
-) -> Result<CaptureWritePlan, CaptureError> {
+    ctx: &mut DependencyContext,
+) -> Result<(CaptureWritePlan, Option<LinkGuardJson>), CaptureError> {
     let contents = planner.read_existing(target)?;
     let settings = note_tasks::read_settings(bob_dir);
     let scan = note_tasks::scan(&contents, &settings);
@@ -280,6 +281,63 @@ pub(super) fn plan_pomodoro_link_capture(
         )));
     }
 
+    // Link guard (§13.5 gesture rule, PDG1–PDG3, PDG6): a Blocked
+    // target stays unlinked; only its open prerequisites rise. With a
+    // start spec the session is not started either: the start exists
+    // to hold the link, and an empty auto-started session would be
+    // deleted by the empty-Pomodoro rule anyway.
+    let target_rel = relative_target(Some(route));
+    if let LinkGuardVerdict::Consume(plan) =
+        assess_link_target(ctx, planner, bob_dir, &target_rel, block_id, today)?
+    {
+        let dependent_desc = format!("pomodoro link ^{block_id}");
+        let reasons = plan.reasons.clone();
+        let promoted = promote_consume_plan(
+            ctx,
+            planner,
+            bob_dir,
+            *plan,
+            &dependent_desc,
+        )?;
+        let link_guard = LinkGuardJson::not_linked(&reasons, promoted);
+        let _ = warnings;
+        return Ok((
+            CaptureWritePlan {
+                placement: Placement::Unchanged,
+                pomodoro: None,
+                sub_bullet: None,
+                pomodoro_note: None,
+                toggle: None,
+                pomodoro_link: Some(PomodoroLinkCaptureDetails {
+                    previous_task_line: previous_task_line.clone(),
+                    task_line: previous_task_line,
+                    task_description,
+                    previous_status_symbol,
+                    previous_status_name: previous_status_name.clone(),
+                    status_symbol: previous_status_symbol,
+                    status_name: previous_status_name,
+                    block_id: block_id.to_string(),
+                    day_file: pomodoro::day_file_for(bob_dir)
+                        .display()
+                        .to_string(),
+                    block_link: format!("[[{route}#^{block_id}]]"),
+                    pomodoro_link_placement: None,
+                    pomodoro_name: None,
+                    creates_pomodoro: false,
+                    pomodoro_link_action: "not_linked",
+                    pomodoro_link_source: None,
+                    pomodoro_link_destination: None,
+                    removed_scheduled: None,
+                    schedule_log: None,
+                    status_changed: false,
+                    pomodoro_start: None,
+                }),
+                pomodoro_refs: Vec::new(),
+            },
+            Some(link_guard),
+        ));
+    }
+
     let task_plan =
         capture_task_toggle::plan_task_link(&contents, task_line_index, today)
             .ok_or_else(|| {
@@ -299,11 +357,9 @@ pub(super) fn plan_pomodoro_link_capture(
         }
     };
     let status_changed = previous_status_symbol != updated_task.status_symbol;
-    if status_changed && task_line_declares_dependencies(&previous_task_line) {
-        warnings.push(format!(
-            "^{block_id} still declares dependencies; bob task reconcile may return it to Blocked"
-        ));
-    }
+    // No `[dependsOn::` text warning: the link guard above is
+    // authoritative (see `plan_task_toggle_capture`).
+    let _ = warnings;
     if task_plan.content != contents {
         planner.stage(target, task_plan.content.clone())?;
     }
@@ -346,7 +402,8 @@ pub(super) fn plan_pomodoro_link_capture(
             status_changed,
             task_plan.removed_scheduled,
             task_plan.schedule_log,
-        );
+        )
+        .map(|plan| (plan, None));
     }
 
     let relocation = capture_task_toggle::plan_pomodoro_link_ledger(
@@ -389,40 +446,46 @@ pub(super) fn plan_pomodoro_link_capture(
     {
         pomodoro_refs.push(PomodoroBlockRef::unlinked_before(source.line - 1));
     }
-    Ok(CaptureWritePlan {
-        placement: Placement::Linked,
-        pomodoro: None,
-        sub_bullet: None,
-        pomodoro_note: None,
-        toggle: None,
-        pomodoro_link: Some(PomodoroLinkCaptureDetails {
-            previous_task_line,
-            task_line,
-            task_description,
-            previous_status_symbol,
-            previous_status_name,
-            status_symbol: updated_task.status_symbol,
-            status_name: updated_task.status_name.clone(),
-            block_id: block_id.to_string(),
-            day_file: day_file_label,
-            block_link,
-            pomodoro_link_placement: placement,
-            pomodoro_name: relocation.destination.name.clone(),
-            creates_pomodoro: relocation.creates_pomodoro,
-            pomodoro_link_action: action,
-            pomodoro_link_source: relocation.source.as_ref().map(endpoint_json),
-            pomodoro_link_destination: Some(destination_json(
-                &relocation.destination,
-                relocation.creates_pomodoro,
-                pomodoro_name,
-            )),
-            removed_scheduled: task_plan.removed_scheduled,
-            schedule_log: task_plan.schedule_log,
-            status_changed,
-            pomodoro_start: None,
-        }),
-        pomodoro_refs,
-    })
+    Ok((
+        CaptureWritePlan {
+            placement: Placement::Linked,
+            pomodoro: None,
+            sub_bullet: None,
+            pomodoro_note: None,
+            toggle: None,
+            pomodoro_link: Some(PomodoroLinkCaptureDetails {
+                previous_task_line,
+                task_line,
+                task_description,
+                previous_status_symbol,
+                previous_status_name,
+                status_symbol: updated_task.status_symbol,
+                status_name: updated_task.status_name.clone(),
+                block_id: block_id.to_string(),
+                day_file: day_file_label,
+                block_link,
+                pomodoro_link_placement: placement,
+                pomodoro_name: relocation.destination.name.clone(),
+                creates_pomodoro: relocation.creates_pomodoro,
+                pomodoro_link_action: action,
+                pomodoro_link_source: relocation
+                    .source
+                    .as_ref()
+                    .map(endpoint_json),
+                pomodoro_link_destination: Some(destination_json(
+                    &relocation.destination,
+                    relocation.creates_pomodoro,
+                    pomodoro_name,
+                )),
+                removed_scheduled: task_plan.removed_scheduled,
+                schedule_log: task_plan.schedule_log,
+                status_changed,
+                pomodoro_start: None,
+            }),
+            pomodoro_refs,
+        },
+        None,
+    ))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1092,10 +1155,6 @@ pub(super) fn line_text_at(
                 "task toggle capture invariant failed: task line index is out of range",
             )
         })
-}
-
-pub(super) fn task_line_declares_dependencies(line: &str) -> bool {
-    line.contains("[dependsOn::") || line.contains("(dependsOn::")
 }
 
 pub(super) fn link_plan_error(

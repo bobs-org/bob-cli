@@ -943,17 +943,15 @@ fn capture_pomodoro_link_solo_grammar_and_atomic_execution() {
         serde_json::from_str(stdout(&output).trim()).expect("json");
     assert_eq!(json["removed_scheduled"], "2026-07-20");
     assert!(json.get("schedule_log").is_some());
-    // Schedule retirement promotes Blocked to Next, and the kept
-    // `[dependsOn::root]` must warn that reconcile may return it to
-    // Blocked (bob-cli-28): no tautology may stand in for this.
+    // Schedule retirement promotes Blocked to Next (bob-cli-28 keeps
+    // asserting the retire + log + promotion, not the old text
+    // warning): the link guard verified no open prerequisite remains,
+    // so the kept field-only `[dependsOn::root]` earns no warning and
+    // no `link_guard` report (PDG2).
     assert_eq!(json["previous_status_symbol"], "?");
     assert_eq!(json["status_symbol"], "*");
-    assert_eq!(
-        json["warnings"],
-        serde_json::json!([
-            "^sched still declares dependencies; bob task reconcile may return it to Blocked"
-        ])
-    );
+    assert!(json.get("warnings").is_none(), "{json}");
+    assert!(json.get("link_guard").is_none(), "{json}");
     assert!(fs::read_to_string(&target).expect("t").contains("- [*]"));
 
     // Errors: done, missing with hint, duplicate, non-task, multiple links.
