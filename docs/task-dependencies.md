@@ -1898,9 +1898,18 @@ successors: {
   or a second call while one picker is already open).
 - One picker at a time: a second call while one is open resolves
   `null`.
-- `destination` on a pick is reserved for the per-row override
-  (`obsidian_destination`):
-  `{kind: "existing", entryLine, entryText} | {kind: "new", name}`.
+- `destination` on a pick is the per-row override: `Ctrl+Shift+Enter`
+  on the marked (or highlighted) rows opens block-id-prompt's Pomodoro
+  link picker (`api.pomodoroLinkPicker` v1: `pick()` resolves
+  `{kind: "existing", entryLine, entryText, title} | {kind: "new", name} |
+  null`, never rejects, one picker at a time) and records the choice on
+  those rows, shown as `→ NAME`; a cancelled pick changes nothing, and
+  the hint is hidden when the picker is unavailable. The cycler inserts
+  an overridden pick at the existing open entry verified by entry line +
+  text preimage (a moved or closed entry fails that row loudly) or, for
+  a new name, at a created `- [ ] () — NAME` placeholder in the same
+  position block-id-prompt uses for new entries (an open same-name entry
+  wins the race); created entries join the reopen receipt.
 - The cycler plans without a selection, awaits `pick(model)` when
   offers exist, re-reads the daily note and affected notes, re-plans
   with the selection, and applies.
