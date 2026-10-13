@@ -177,12 +177,18 @@ pub(super) fn plan_task_complete_item(
             is_root,
         });
     }
-    // The `[id::]` gate: without an explicit identity on any completed
-    // task no dependent can name this close, so drop the whole set with
-    // no dependents lookup and no extra reads.
-    if !predecessors.iter().any(|task| !task.task_id.is_empty()) {
-        predecessors.clear();
-    }
+    // Trigger (a) reads the staged post-close text of C's notes, including
+    // project notes that the filtered dependents snapshot omits.
+    let note_texts =
+        staged_completed_note_texts(bob_dir, planner, &predecessors)?;
+    let tasks_settings =
+        crate::native::task_status_hooks::read_tasks_settings(bob_dir);
+    let gate = engine::inspect_pull_ins(
+        &predecessors,
+        &note_texts,
+        &tasks_settings,
+        today,
+    );
     // Day text before this gesture's strikes, moves, or retirement: the
     // already-planned baseline for anchors and derived ranks. The tree
     // close never rewrites Pomodoro bullets, so the post-tree staged
@@ -194,34 +200,41 @@ pub(super) fn plan_task_complete_item(
     };
     let mut successor_plan = engine::SuccessorPlan::default();
     let mut unblocked_check = "checked";
-    if !predecessors.is_empty() {
-        let overlay = staged_overlay_map(bob_dir, planner);
-        let snapshot_ready = dependency_ctx
-            .dependents_snapshot()
-            .snapshot_complete(&overlay);
-        if !snapshot_ready {
-            // An incomplete snapshot is non-fatal: the close still
-            // succeeds and nothing is linked.
-            unblocked_check = "unavailable";
+    if gate.has_candidates || gate.needs_dependents {
+        let snapshot = if gate.needs_dependents {
+            let overlay = staged_overlay_map(bob_dir, planner);
+            let snapshot_ready = dependency_ctx
+                .dependents_snapshot()
+                .snapshot_complete(&overlay);
+            if !snapshot_ready {
+                // An incomplete snapshot is non-fatal: the close still
+                // succeeds and nothing is linked or pulled in.
+                unblocked_check = "unavailable";
+                Vec::new()
+            } else {
+                staged_snapshot_for_recovery(bob_dir, planner, dependency_ctx)
+            }
         } else {
-            let snapshot =
-                staged_snapshot_for_recovery(bob_dir, planner, dependency_ctx);
+            // Trigger (a) with no dependency fields needs only the staged
+            // project text, so do not build the vault-wide snapshot.
+            Vec::new()
+        };
+        if unblocked_check == "unavailable" {
+            // The project rule explicitly suppresses all writes when the
+            // required dependents snapshot is incomplete.
+        } else {
             let note_index =
                 staged_note_index(bob_dir, planner, dependency_ctx);
             successor_plan = engine::plan_successors(engine::SuccessorInput {
                 completed: predecessors,
                 snapshot,
-                // Project pull-in staged texts are wired by `cli-capture`.
-                note_texts: Vec::new(),
+                note_texts,
                 pre_day: pre_day_text.clone(),
                 post_day: None,
                 closing: None,
                 day_relative: PathBuf::from(day_relative.clone()),
                 today,
-                tasks_settings:
-                    &crate::native::task_status_hooks::read_tasks_settings(
-                        bob_dir,
-                    ),
+                tasks_settings: &tasks_settings,
                 note_settings: &settings,
                 link_unblocked: dependency_ctx.link_unblocked(),
                 index: &note_index,
@@ -390,6 +403,8 @@ pub(super) fn plan_task_complete_item(
                 }
             }),
             not_linked: dependent.not_linked.map(str::to_string),
+            trigger: dependent.trigger,
+            hide_removed: dependent.hide_removed,
         })
         .collect::<Vec<_>>();
     let still_blocked = successor_plan
@@ -409,6 +424,7 @@ pub(super) fn plan_task_complete_item(
                 .project
                 .as_ref()
                 .map(|path| display_relative(path)),
+            trigger: blocked.trigger,
         })
         .collect::<Vec<_>>();
     // Clean display text for the root task with the configured global
@@ -924,6 +940,28 @@ pub(super) fn staged_note_index(
     dependency_ctx.catalog().index.with_additional(staged)
 }
 
+/// Staged post-gesture texts for the notes containing C. Project pull-in
+/// trigger (a) must inspect these even when the dependents catalog would
+/// omit a project note with no `[id::]` / `[dependsOn::]` markers.
+pub(super) fn staged_completed_note_texts(
+    bob_dir: &Path,
+    planner: &mut CaptureBatchPlanner,
+    completed: &[engine::CompletedTask],
+) -> Result<Vec<(PathBuf, String)>, CaptureError> {
+    let paths: BTreeSet<PathBuf> = completed
+        .iter()
+        .map(|task| task.relative_path.clone())
+        .collect();
+    let mut texts = Vec::new();
+    for relative in paths {
+        let absolute = bob_dir.join(&relative);
+        if let Some(contents) = planner.current_contents(&absolute)? {
+            texts.push((relative, contents));
+        }
+    }
+    Ok(texts)
+}
+
 /// Net batch post-pass for successor rows (`docs/task-dependencies.md`
 /// §12.5 SL20): after every item is planned, drop each linked row whose
 /// bullet no longer survives live in the final staged day text, or whose
@@ -943,43 +981,102 @@ pub(super) fn apply_successor_net_post_pass(
             summary.unblocked.iter().any(|row| row.link.is_some())
         })
     });
-    if !any_linked {
+    let any_pull_in = items.iter().any(|item| {
+        item.result.task_complete.as_ref().is_some_and(|summary| {
+            summary
+                .unblocked
+                .iter()
+                .any(|row| row.trigger == "project_empty")
+        }) || item.result.pomodoro_close.as_ref().is_some_and(|summary| {
+            summary
+                .unblocked
+                .iter()
+                .any(|row| row.trigger == "project_empty")
+        })
+    });
+    if !any_linked && !any_pull_in {
         return;
     }
     let day_file = pomodoro::day_file_for(bob_dir);
     let day_relative = capture_pomodoros::relative_day_file(&day_file, bob_dir);
-    let live = planner
-        .peek_text(&day_file)
-        .map(|final_day| {
-            let index = staged_note_index(bob_dir, planner, dependency_ctx);
-            engine::live_link_keys(&final_day, Path::new(&day_relative), &index)
-        })
-        .unwrap_or_default();
+    let live = if any_linked {
+        planner
+            .peek_text(&day_file)
+            .map(|final_day| {
+                let index = staged_note_index(bob_dir, planner, dependency_ctx);
+                engine::live_link_keys(
+                    &final_day,
+                    Path::new(&day_relative),
+                    &index,
+                )
+            })
+            .unwrap_or_default()
+    } else {
+        BTreeSet::new()
+    };
     let tasks_settings =
         crate::native::task_status_hooks::read_tasks_settings(bob_dir);
     for item in items.iter_mut() {
         if let Some(summary) = item.result.task_complete.as_mut() {
             summary.unblocked.retain(|row| {
-                row.link.is_none()
-                    || successor_row_survives(
-                        row,
-                        &live,
-                        planner,
-                        bob_dir,
-                        &tasks_settings,
-                    )
+                if row.trigger == "project_empty" {
+                    if row.link.is_some() {
+                        successor_row_survives(
+                            row,
+                            &live,
+                            planner,
+                            bob_dir,
+                            &tasks_settings,
+                        )
+                    } else {
+                        successor_task_is_open(
+                            row,
+                            planner,
+                            bob_dir,
+                            &tasks_settings,
+                        )
+                    }
+                } else {
+                    row.link.is_none()
+                        || successor_row_survives(
+                            row,
+                            &live,
+                            planner,
+                            bob_dir,
+                            &tasks_settings,
+                        )
+                }
             });
         }
         if let Some(summary) = item.result.pomodoro_close.as_mut() {
             summary.unblocked.retain(|row| {
-                row.link.is_none()
-                    || successor_row_survives(
-                        row,
-                        &live,
-                        planner,
-                        bob_dir,
-                        &tasks_settings,
-                    )
+                if row.trigger == "project_empty" {
+                    if row.link.is_some() {
+                        successor_row_survives(
+                            row,
+                            &live,
+                            planner,
+                            bob_dir,
+                            &tasks_settings,
+                        )
+                    } else {
+                        successor_task_is_open(
+                            row,
+                            planner,
+                            bob_dir,
+                            &tasks_settings,
+                        )
+                    }
+                } else {
+                    row.link.is_none()
+                        || successor_row_survives(
+                            row,
+                            &live,
+                            planner,
+                            bob_dir,
+                            &tasks_settings,
+                        )
+                }
             });
         }
     }
@@ -997,6 +1094,18 @@ fn successor_row_survives(
     if !live.contains(&(PathBuf::from(&row.note_path), row.block_id.clone())) {
         return false;
     }
+    successor_task_is_open(row, planner, bob_dir, tasks_settings)
+}
+
+/// Whether a reported pull-in task still exists open after every draft
+/// item has been planned. Surfaced rows have no link but must also be
+/// dropped when a later item closes their `^prj` task (SL20).
+fn successor_task_is_open(
+    row: &TaskCompleteUnblockedJson,
+    planner: &mut CaptureBatchPlanner,
+    bob_dir: &Path,
+    tasks_settings: &crate::native::task_status_hooks::TasksSettings,
+) -> bool {
     let absolute = bob_dir.join(&row.note_path);
     let Ok(Some(contents)) = planner.current_contents(&absolute) else {
         return false;

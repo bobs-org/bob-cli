@@ -689,24 +689,42 @@ fn plan_close_successors(
             is_root: task.role.as_str() == "embedded",
         });
     }
-    // The `[id::]` gate: without an explicit identity on any completed
-    // task no dependent can name this close, so skip with no dependents
-    // lookup and no extra reads.
-    if !predecessors.iter().any(|task| !task.task_id.is_empty()) {
+    // Trigger (a) reads the staged post-close text of C's notes; the
+    // project note may not be in the filtered dependents snapshot.
+    let note_texts = super::task_complete::staged_completed_note_texts(
+        bob_dir,
+        planner,
+        &predecessors,
+    )?;
+    let tasks_settings =
+        crate::native::task_status_hooks::read_tasks_settings(bob_dir);
+    let gate = engine::inspect_pull_ins(
+        &predecessors,
+        &note_texts,
+        &tasks_settings,
+        today,
+    );
+    if !gate.has_candidates && !gate.needs_dependents {
         return Ok(empty("checked"));
     }
-    let overlay = super::task_complete::staged_overlay_map(bob_dir, planner);
-    if !dependency_ctx
-        .dependents_snapshot()
-        .snapshot_complete(&overlay)
-    {
-        // An incomplete snapshot is non-fatal: the close still succeeds
-        // and nothing is linked.
-        return Ok(empty("unavailable"));
-    }
+    let snapshot = if gate.needs_dependents {
+        let overlay =
+            super::task_complete::staged_overlay_map(bob_dir, planner);
+        if !dependency_ctx
+            .dependents_snapshot()
+            .snapshot_complete(&overlay)
+        {
+            // An incomplete snapshot is non-fatal: the close still
+            // succeeds and nothing is linked or pulled in.
+            return Ok(empty("unavailable"));
+        }
+        staged_snapshot_for_recovery(bob_dir, planner, dependency_ctx)
+    } else {
+        // Trigger (a) with no dependency fields needs only C's staged
+        // project text, so skip the dependents snapshot entirely.
+        Vec::new()
+    };
     let post_day = planner.current_contents(day_file)?;
-    let snapshot =
-        staged_snapshot_for_recovery(bob_dir, planner, dependency_ctx);
     let note_index = super::task_complete::staged_note_index(
         bob_dir,
         planner,
@@ -732,8 +750,7 @@ fn plan_close_successors(
     let successor_plan = engine::plan_successors(engine::SuccessorInput {
         completed: predecessors,
         snapshot,
-        // Project pull-in staged texts are wired by `cli-capture`.
-        note_texts: Vec::new(),
+        note_texts,
         pre_day: pre_day.clone(),
         post_day: post_day.clone(),
         closing: Some(engine::ClosingContext {
@@ -743,9 +760,7 @@ fn plan_close_successors(
         }),
         day_relative: PathBuf::from(day_relative),
         today,
-        tasks_settings: &crate::native::task_status_hooks::read_tasks_settings(
-            bob_dir,
-        ),
+        tasks_settings: &tasks_settings,
         note_settings: &settings,
         link_unblocked: dependency_ctx.link_unblocked(),
         index: &note_index,
@@ -805,6 +820,8 @@ fn plan_close_successors(
                 }
             }),
             not_linked: dependent.not_linked.map(str::to_string),
+            trigger: dependent.trigger,
+            hide_removed: dependent.hide_removed,
         })
         .collect::<Vec<_>>();
     let still_blocked = successor_plan
@@ -824,6 +841,7 @@ fn plan_close_successors(
                 .project
                 .as_ref()
                 .map(|path| display_relative(path)),
+            trigger: blocked.trigger,
         })
         .collect::<Vec<_>>();
     // Task blocks: successors keep the unblocked role, as for `!`.

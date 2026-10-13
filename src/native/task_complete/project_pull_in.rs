@@ -41,6 +41,13 @@ pub(crate) const PULL_IN_TRIGGER: &str = "project_empty";
 /// Trigger value every existing dependency row reports.
 pub(crate) const DEPENDENCY_TRIGGER: &str = "dependency";
 
+/// The capture-side cost gate discovered from the staged close texts.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct PullInGate {
+    pub(crate) has_candidates: bool,
+    pub(crate) needs_dependents: bool,
+}
+
 /// One pull-in candidate R with the C tasks that triggered it.
 #[derive(Debug, Clone)]
 pub(crate) struct PullInCandidate {
@@ -60,11 +67,27 @@ pub(crate) fn pull_in_needs_dependents(
     tasks_settings: &TasksSettings,
     today: NaiveDate,
 ) -> bool {
-    if completed.iter().any(|task| !task.task_id.is_empty()) {
-        return true;
-    }
+    inspect_pull_ins(completed, note_texts, tasks_settings, today)
+        .needs_dependents
+}
+
+/// Detect trigger-(a) candidates from staged C-note texts and decide
+/// whether the vault-wide dependents snapshot is required (§12.10 Gate).
+/// Trigger (b) necessarily has an `[id::]` predecessor, so it is covered
+/// by the same gate even though it is discovered in that snapshot.
+pub(crate) fn inspect_pull_ins(
+    completed: &[CompletedTask],
+    note_texts: &[(PathBuf, String)],
+    tasks_settings: &TasksSettings,
+    today: NaiveDate,
+) -> PullInGate {
+    let has_completed_ids =
+        completed.iter().any(|task| !task.task_id.is_empty());
     if note_texts.is_empty() {
-        return false;
+        return PullInGate {
+            has_candidates: false,
+            needs_dependents: has_completed_ids,
+        };
     }
     let files: Vec<FileScan> = note_texts
         .iter()
@@ -81,14 +104,17 @@ pub(crate) fn pull_in_needs_dependents(
         .collect();
     let staged: BTreeSet<PathBuf> =
         note_texts.iter().map(|(path, _)| path.clone()).collect();
-    detect_pull_ins(completed, &files, &surfaces, &staged)
-        .iter()
-        .any(|candidate| {
-            files[candidate.file].tasks[candidate.task]
-                .depends_on
-                .iter()
-                .any(|dependency| !dependency.is_empty())
-        })
+    let candidates = detect_pull_ins(completed, &files, &surfaces, &staged);
+    let needs_candidate_dependencies = candidates.iter().any(|candidate| {
+        files[candidate.file].tasks[candidate.task]
+            .depends_on
+            .iter()
+            .any(|dependency| !dependency.is_empty())
+    });
+    PullInGate {
+        has_candidates: !candidates.is_empty(),
+        needs_dependents: has_completed_ids || needs_candidate_dependencies,
+    }
 }
 
 /// Find every pull-in candidate R over staged files with their surfaces.

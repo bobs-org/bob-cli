@@ -583,6 +583,8 @@ pub(super) struct TaskCompleteUnblockedJson {
     pub(super) link: Option<TaskCompleteSuccessorLinkJson>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) not_linked: Option<String>,
+    pub(super) trigger: &'static str,
+    pub(super) hide_removed: bool,
 }
 
 /// One predecessor behind an unblocked row.
@@ -623,6 +625,7 @@ pub(super) struct TaskCompleteStillBlockedJson {
     pub(super) scheduled: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) project: Option<String>,
+    pub(super) trigger: &'static str,
 }
 
 /// Summary JSON for one item's dependency effects, reported as
@@ -2223,6 +2226,12 @@ pub(super) fn print_human_successor_rows(
         let current = style_task_status_marker(styler, unblocked.status_symbol);
         let locator =
             task_complete_locator(&unblocked.note_path, &unblocked.block_id);
+        let project_empty = unblocked.trigger == "project_empty";
+        let project_label = if project_empty {
+            " · project has no open tasks"
+        } else {
+            ""
+        };
         let head = if unblocked.text.is_empty() {
             format!("{previous} → {current}")
         } else {
@@ -2237,14 +2246,28 @@ pub(super) fn print_human_successor_rows(
                 .filter(|_| link.block_id_created)
                 .map(|(_, id)| format!(" · added ^{id}"))
                 .unwrap_or_default();
-            println!("  {verb} {head}  {locator} → {destination}{minted}");
+            println!(
+                "  {verb} {head}  {locator} → {destination}{minted}{project_label}"
+            );
+        } else if project_empty
+            && unblocked.hide_removed
+            && unblocked.previous_status_symbol == unblocked.status_symbol
+        {
+            let verb = if dry_run { "would surface" } else { "surfaced" };
+            println!("  {verb} {}  {locator}{project_label}", unblocked.text);
         } else {
             let reason = unblocked
                 .not_linked
                 .as_deref()
                 .map(not_linked_reason)
                 .unwrap_or_default();
-            println!("  unblocked {head}  {locator} · {reason}");
+            if reason.is_empty() {
+                println!("  unblocked {head}  {locator}{project_label}");
+            } else {
+                println!(
+                    "  unblocked {head}  {locator}{project_label} · {reason}"
+                );
+            }
         }
     }
     for blocked in still_blocked {
@@ -2263,10 +2286,18 @@ pub(super) fn print_human_successor_rows(
                 .unwrap_or_else(|| "project".to_string()),
             _ => format!("waits on {} more", blocked.waits_on),
         };
-        if blocked.text.is_empty() {
-            println!("  still blocked  {locator} · {detail}");
+        let project_label = if blocked.trigger == "project_empty" {
+            " · project has no open tasks"
         } else {
-            println!("  still blocked  {}  {locator} · {detail}", blocked.text);
+            ""
+        };
+        if blocked.text.is_empty() {
+            println!("  still blocked  {locator}{project_label} · {detail}");
+        } else {
+            println!(
+                "  still blocked  {}  {locator}{project_label} · {detail}",
+                blocked.text
+            );
         }
     }
 }
