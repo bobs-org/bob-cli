@@ -3,10 +3,13 @@
 A task's prerequisites live as plain task dependency links on one
 managed `⛓️ **DEPENDS ON:**` first-child line. That line is the source
 of truth; the `[dependsOn::]` / `[id::]` fields are derived from it.
-A Project Task (`^prj`) uses the same line. While `^prj` has its own
-reason to be Blocked, every open task in its note is Blocked; that
-inheritance, `#prj_is_blocked`, and blocked-link consumption are in
-§13.
+Each open prerequisite that other open tasks depend on carries a
+generated `🧱 **BLOCKS:**` child listing those dependents (§14). Bob
+maintains that line from Depends-On edges and never reads it back.
+A Project Task (`^prj`) uses the same Depends-On line. While `^prj`
+has its own reason to be Blocked, every open task in its note is
+Blocked; that inheritance, `#prj_is_blocked`, and blocked-link
+consumption are in §13.
 
 This file is the contract every implementation cites. The Rust side is
 `src/native/task_dependencies/` (parser, formatter, link form, legacy
@@ -32,6 +35,7 @@ this doc first in the same change.
 - **Project dependency**, **project reasons**, **resident task**, and
   **consumption** are defined in §13. Ordinary tasks, including
   ordinary tasks inside project notes, keep the terms above.
+- **Blocks line**, **owner**, and **frozen line** are defined in §14.
 
 ## 2. Grammar
 
@@ -57,7 +61,8 @@ Example:
     indent plus one tab.
   - Preserve the note's line endings and its final-newline state.
   - On `^prj`, the machine-owned `🧩 **Sub-projects:**` line follows
-    the Depends-On line (§13.2).
+    the Depends-On line (§13.2); a BLOCKS line, when present, sits
+    between them (§14.5).
 - **Empty list:** delete the line and remove the field. There is no
   placeholder.
 
@@ -84,13 +89,27 @@ Writers canonicalise all of these:
    lines, and blockquoted lines never count: a blockquoted task cannot
    own a Depends-On line (DP29; nav refuses dependency gestures there).
 
-### 2.4 Recognisers that must reject the line
+### 2.4 Managed child lines
 
-Dedicated Task Link and Pomodoro link recognisers, section titles, and
-managed-log parsers in every repo must not claim a Depends-On line as
-their own. The line is neither a Task Link bullet, nor a Pomodoro link,
-nor a section title, nor a managed log (`🗓️ SCHEDULE LOG`,
-`❌ CANCEL LOG`, Work Log entries).
+Machine-owned direct children of a `#task` are a closed registry.
+Every engine's Task Link, Pomodoro, section-title, tree-close,
+strike/restore, R8 legacy-child, and managed-line parsers must reject
+every other row. The MC vectors in §11.8 pin that isolation.
+
+Neither managed dependency line is ever a Task Link. That covers
+Pomodoro promotion, consumption, successor anchors, the plan budget
+(Rust and JS), completable sightings, Pomodoro close / cleanup, and
+Task Link opening. Neither line is a tree-close or strike/restore
+target.
+
+| Line | Owner | Writer | Slot | Recognisers that reject it |
+| --- | --- | --- | --- | --- |
+| `❌ **CANCEL LOG**` | any `#task` with a cancel history | nav cancel / decay cancel | first direct child | Task Link and Pomodoro scanners; section titles; Depends-On, BLOCKS, Sub-projects, Schedule Log, and Work Log parsers; R8 legacy-child |
+| `⛓️ **DEPENDS ON:**` | any `#task` with prerequisites | nav Depends on stage, capture `&` and §13.5.1 drops, reconcile R1–R10 | first direct child, or second after a first-child Cancel Log | Task Link and Pomodoro scanners; section titles; BLOCKS, Sub-projects, Schedule Log, Work Log, and Cancel Log parsers; tree-close and strike/restore; R8 legacy-child |
+| `🧱 **BLOCKS:**` | any open `#task` that other open tasks depend on (§14) | reconcile (authority); nav Depends-On writers; capture `&` and §13.5.1 drops | after the Depends-On subtree, else the Depends-On slot | same as Depends-On, plus the Depends-On parser (BK20) |
+| `🧩 **Sub-projects:**` | an active project's `^prj` | `bob projects sync` | after the Depends-On and BLOCKS subtrees | Task Link and Pomodoro scanners; section titles; Depends-On, BLOCKS, Schedule Log, Work Log, and Cancel Log parsers |
+| `🗓️ **SCHEDULE LOG**` | any `#task` with a schedule history | nav Task Card / Schedule, capture `p:` / `s:`, `bob task reroll` | after the managed-dependency lines (and Sub-projects on `^prj`) | Task Link and Pomodoro scanners; section titles; Depends-On, BLOCKS, Sub-projects, Cancel Log, and Work Log parsers |
+| `🛠️ **WORK LOG**` and its dated entries | any `#task` with work history | capture `=x`, Alt+N, Ctrl+Shift+Enter unlink | after the managed-dependency lines (and Sub-projects on `^prj`) | Task Link and Pomodoro scanners; section titles; Depends-On, BLOCKS, Sub-projects, Cancel Log, and Schedule Log parsers |
 
 ## 3. Identity and link form
 
@@ -202,6 +221,12 @@ and no R2 exception.
   pull-forward in §13 and capture's own-prerequisite drop in §13.5.
   `bob task reconcile` does the same for stale links.
 - **Not edges:** `#^ref` embeds and archived targets.
+- **Visibility.** An open prerequisite that other open tasks depend on
+  carries a generated `🧱 **BLOCKS:**` child listing those dependents
+  (§14). The line is never a dependency edge: deleting every BLOCKS
+  line changes nothing about blocking, promotion, scheduling,
+  successor offers, fields, or authored edges. Chips on it show what
+  finishing the task would free.
 - **Closing.** Closing a dependent **never** closes its prerequisites.
   Embedded-tree closes in capture `=x` and the cycler ignore
   Depends-On lines.
@@ -430,6 +455,9 @@ chips. The ⚠ chip is the signal for those; the summary tracks blocking.
 - Without the plugin, the line still reads:
   `⛓️ DEPENDS ON: ^hospital-swarm • sase_bug_bash > ^e2e-sase-8v`.
 
+BLOCKS rows reuse this chip family with a reverse index, a 🔑
+last-blocker badge, and `frees N` summaries (§14.9).
+
 ## 8. Other gestures
 
 | Gesture | Behaviour |
@@ -445,6 +473,10 @@ chips. The ⚠ chip is the signal for those; the summary tracks blocking.
 | Ctrl+Shift+M, `task archive` | The line moves with its task. Same-note links inside a moved block whose target stayed behind gain the source note path. Moving open tasks **into** a blocked project sets them `[?]`, tags them `#prj_is_blocked`, promotes verifiably open prerequisites to the strongest moved lane, and removes their live links from today's open Pomodoros in the move write. Moving them **out** strips the tag and recovers those without own reasons, writing `[unblocked::]` when [freshness.md §5](freshness.md#5-who-stamps) says to. Closed lines are never edited. |
 | Ctrl+Alt+Shift+N (`create-project-note-from-task`) | Forward: the source's Depends-On line becomes the first child of `^prj`, and its inline `scheduled` stays on `^prj` (rebase same-note links to the source note; never seed that line as a Tasks row; skip the machine-owned Sub-projects child); the project lands blocked only for a carried open prerequisite or a future inline date. Reverse: the line becomes the restored task's first child and the date stays inline on its root task (links re-formed relative to the destination), with `#^prj` links repointed before Pomodoro cleanup so live links are consumed. `[?]` sources are accepted; blocked residents are tagged/recovered through the shared gate and live links are consumed when they enter a blocked project. Details in §13. |
 | "Rewrite dependency navigation links" command, `migrate-dependency-bullets.mjs` | Deleted. They emit embeds. |
+
+Gestures on a BLOCKS line — including the generated-line notice,
+refused `!` / Ctrl+Shift+Enter, and Ctrl+Shift+P acting on the owning
+task — are in §14.8.
 
 ## 9. Plugin api v3 (navigation-hotkeys)
 
@@ -549,6 +581,8 @@ its own; `context` names what surrounds it. `verdict` is one of
 `malformed`, or `not-a-line`. Project-dependency vectors (PDR, PDB,
 PDL, PDG, PDC, PDF, PDT) live in §13. Unblock (`[unblocked::]`)
 vectors (UB) live in [freshness.md §10b](freshness.md#10b-ub--unblocked-vectors).
+BLOCKS parse, reconcile, write, and chip vectors (BK, BR, BW, BC) live
+in §14. Managed-child-line vectors (MC) live in §11.8.
 
 ### 11.1 DP — parse vectors
 
@@ -759,6 +793,23 @@ strips the inline field and both `#task` tags. SB6 takes the `-2`
 suffix on collision. SB7 falls back to `task` when every suggestion and
 every `-2`…`-9` suffix is taken. SB8 falls back on non-ASCII text with
 no words. SB9 walks the `task-N` fallback past taken IDs.
+
+### 11.8 MC — managed child lines
+
+Outcomes of the registry in §2.4. Copy these into every engine's
+tests.
+
+| # | situation | outcome |
+| --- | --- | --- |
+| MC1 | a task nested under an open Pomodoro entry has a BLOCKS line | no Task Link: no promotion, consumption, successor anchor, plan-budget link, completable sighting, or close / cleanup target (Rust and JS) |
+| MC2 | the same with a Depends-On line | same (fixes the latent miscount) |
+| MC3 | `🧱 **BLOCKS:** ![[#^d]]` under T; T closes by capture `=x` or Ctrl+Enter | D is never closed (tree close skips both lines) |
+| MC4 | T closes or reopens elsewhere | cycler strike/restore never touches a BLOCKS line |
+| MC5 | `!`, Ctrl+Shift+Enter on a BLOCKS line | refused with the generated-line notice |
+| MC6 | R8 legacy-child recogniser on a BLOCKS line | not a legacy child |
+| MC7 | section titles, Schedule / Cancel / Work Log, and Sub-projects recognisers | never claim a BLOCKS line; the BLOCKS parser never claims theirs |
+| MC8 | `bob projects sync` on `^prj` with Depends-On and BLOCKS | marker after both subtrees; a marker before BLOCKS moves after it |
+| MC9 | `bob task archive` of a closed T with a frozen `[[#^d]]` | link qualified to `[[note#^d]]` |
 
 ## 12. Successor offers
 
@@ -1993,8 +2044,9 @@ status: wip
 - **Prerequisites.** `^prj`'s prerequisites sit on its ordinary
   Depends-On first-child line, exactly as on any task. They are
   reconciled by R1–R10. That line is first, or second after a
-  `❌ **CANCEL LOG**` child. The machine-owned `🧩 **Sub-projects:**`
-  line follows it.
+  `❌ **CANCEL LOG**` child. A BLOCKS line, when present, sits after
+  the Depends-On subtree. The machine-owned `🧩 **Sub-projects:**`
+  line follows both (§14.5).
 - **Date.** The project date is `^prj`'s inline `[scheduled:: YYYY-MM-DD]`,
   placed like any task's schedule. Neither field lives in frontmatter.
 - **Hoist.** `bob projects sync` hoists any leftover frontmatter
@@ -2148,9 +2200,10 @@ were kept.
 
 The writer removes every link to each open own prerequisite, including
 duplicate links. Kept links remain verbatim and in order; prerequisite
-tasks are never edited. Their corresponding IDs are removed from the
-dependent's `[dependsOn::]` field, while unrelated and historical IDs
-remain. An empty Depends-On line and field are removed. The dependent is
+task lines are never edited; the drop removes the dependent from each
+prerequisite's BLOCKS line (§14). Their corresponding IDs are removed
+from the dependent's `[dependsOn::]` field, while unrelated and
+historical IDs remain. An empty Depends-On line and field are removed. The dependent is
 stamped fresh, then the ordinary capture link write runs in the same
 staged batch; a later failure leaves the drop unapplied. No
 `[unblocked::]` is written because a successful link puts the task in
@@ -2538,3 +2591,474 @@ so the cascade costs no extra file reads.
 | PDS13 | K's `^prj` was `[*]` and linked today when N became blocked | `[?]`; the link is consumed; the lane is lost |
 | PDS14 | `bob projects sync --dry-run` on a cascade-blocked tree | no change caused by the tags: descriptions drop the tag, marker states are unchanged, and a `[?]` child still counts as an open sub-project |
 | PDS15 | `parent: "[[N\|Alias]]"`, `"[[dir/N]]"`, `"[[N#Heading]]"` | all resolve to N |
+
+## 14. Blocks lines
+
+Every open task that other open tasks depend on carries one
+machine-owned `🧱 **BLOCKS:**` child listing those dependents. The line
+is a projection of Depends-On: `bob task reconcile` is the authority,
+every forward-edge writer keeps it current, a closed owner's line
+freezes as history, and nothing reads it back as dependency input.
+
+```markdown
+- [?] #task Did enrolling for unemployment work! [id:: cash__unemployment] [scheduled::
+  2026-10-14] ^unemployment
+  - 🧱 **BLOCKS:** [[#^audit-subscriptions]] • [[#^call-north-face]] •
+    [[#^get-access-money]] • [[#^save-verizon-router-pwd]]
+  - Kelly just needs 2 pay stubs and/or my W2!
+```
+
+A chain node reads upstream, then downstream:
+
+```markdown
+- [?] #task Make appt w/ Rahway Hospital for CT scan! ^rahway
+  - ⛓️ **DEPENDS ON:** [[#^hospital-swarm]]
+  - 🧱 **BLOCKS:** [[#^appt-7d-after]]
+  - 🗓️ **SCHEDULE LOG**
+```
+
+In Obsidian the line renders as chips from the same family as the
+Depends-On chips. A 🔑 marks each dependent for which this task is the
+last thing in the way:
+
+```text
+[?] Did enrolling for unemployment work!
+    🧱 blocks  ( ? Audit monthly subscriptions 🔑 )  ( ? Dispute North Face… 🔑 )  ( ? Get access… 🔑 )  ( ? Save Verizon… 🔑 )   frees 4
+[ ] The first SASE launch post: introduction
+    🧱 blocks  ( ? Review outline and intro proposal )                                       frees 0 of 1
+[x] (a closed prerequisite: the frozen line)
+    🧱 was blocking  ( ✓ … )  ( ? … )                                                         ✓ freed 2
+```
+
+### 14.1 Vocabulary
+
+- **Blocks line:** the single managed child `🧱 **BLOCKS:**` that lists
+  the owner's open direct dependents as plain Task Links.
+- **Owner:** the prerequisite task that carries the line.
+- **Frozen line:** a Blocks line on a closed owner. Reconcile and
+  writers never touch it.
+
+`⛓️ **DEPENDS ON:**` on the dependent remains the only place a
+dependency is authored. No engine reads a Blocks line as dependency
+input: not Blocked derivation, promotion, consumption, successor
+offers, fields, R2 adoption, or R8 legacy children. A hand edit of a
+Blocks line never adds or removes an edge; reconcile restores the
+canonical line.
+
+**Key invariant (BR26, BR27):** deleting every BLOCKS line in the vault
+changes nothing about blocking, promotion, scheduling, successor
+offers, fields, or authored edges. The next reconcile rebuilds
+identical bytes, and a second run makes zero changes.
+
+### 14.2 Grammar
+
+```text
+<indent>- 🧱 **BLOCKS:** <link> • <link> • …
+```
+
+- **Writer form.** `🧱` (U+1F9F1, one code point, no VS16), one space,
+  `**BLOCKS:**`, one space, then links joined by `•` (U+2022 with one
+  space on each side).
+  - No aliases, embeds, strikes, or duplicate entries.
+  - The line is deleted when it would be empty; there is no
+    placeholder.
+- **Link form.** Same as §3: the shortest unambiguous form from the
+  owner's note (`canonical_link` / nav `canonicalDependencyLink`), so
+  `[[#^id]]`, then `[[basename#^id]]`, then `[[dir/note#^id]]`.
+- **Reader tolerance.** All of these canonicalise:
+  - the emoji is missing, or is `🚧`, `⛓️`, or `⛓`;
+  - the label is `BLOCKING`;
+  - the separator is `·`, `,`, or whitespace;
+  - a link is aliased, struck, or embedded;
+  - the order is not canonical;
+  - an entry is duplicated;
+  - the line is a direct child in any slot.
+- **Not a line:**
+  - a lowercase label;
+  - the label `BLOCKED BY` (it names the opposite direction);
+  - a fenced, nested, blockquoted, or marker-less line.
+- **Parse algorithm.** Use the §2.3 algorithm, keyed on its own label:
+  link scanner first, never split on separators, and only a direct
+  child of a `#task` counts. The Depends-On and BLOCKS parsers each
+  return not-a-line for the other's line (BK20).
+- **Malformed** means prose after the links, a half-typed link, a bare
+  note link, a heading link, or separators only. A malformed line is
+  left alone and warns `malformed_blocks_line`. Writers insert no
+  second line beside it.
+
+### 14.3 Membership
+
+```text
+open(t)    = status type Todo | In Progress | On Hold (includes [?])            (§4.1)
+edges      = the accepted explicit edges R1–R10 project: resolved scanned-task targets
+             of the line, plus R8 legacy-child targets during the legacy window, plus
+             R2-adopted links. Excluded: R4 unresolved, R5 non-task, R6 self, archive
+             (done/) targets, previous-daily or unencodable targets kept verbatim, and
+             ^prj internal or descendant targets. Implicit resident → ^prj edges and
+             transitive chains are never edges here.
+blocks(T)  = { D : (D → T) ∈ edges ∧ open(D) ∧ D not in the previous daily note }
+T owns a line ⇔ open(T) ∧ blocks(T) ≠ ∅ ∧ T is writable (not the previous daily note)
+closed T   → its line is never touched: frozen history
+```
+
+- A `^prj` dependent is listed once, as its own `^prj` line. Its
+  residents are never listed.
+- A cycle A ↔ B lists each task on the other's line. R7 already warns
+  about the cycle.
+- `#hide`, `ref/`, inbox, and today's daily-note tasks are in scope on
+  both sides.
+
+### 14.4 Identity and minting
+
+- A dependent with no `^block-id` gets one appended, minted with
+  `mint_block_id(description, used)`. This is the SB pipeline of
+  §11.7: the body after the status box, cleaned with the `#task`
+  global filter. `used` is every block id in the dependent's note plus
+  this gesture's or run's reservations.
+- The mint happens once per dependent. Existing ids stay stable.
+- Minting never adds `[id::]`, because `[id::]` means "is a
+  prerequisite".
+- BLOCKS writes never stamp `[fresh::]`, never change a status, lane,
+  tag, or field, and never touch the owner's task line. They write
+  only the child line, plus the dependent's minted `^id`.
+- **Never emit a link to an id that will not exist on disk after the
+  write.**
+  - nav mints inside the dependent's own transaction, before any
+    cross-note follow-up.
+  - capture mints inside its atomic staged batch.
+  - Reconcile skips listing a dependent whose mint lands in a note
+    that the quiet interval will defer this run (same predicate as the
+    guarded write). The next run lists it.
+- Dry-run and Escape mint nothing.
+
+### 14.5 Order and position
+
+- **Order.** Sort entries by canonical link text after ASCII
+  case-folding, comparing by Unicode code point. Raw code-point order
+  breaks ties.
+  - Same-note `[[#^…]]` entries therefore come first, then cross-note
+    entries grouped by note.
+  - JS must compare code points, never UTF-16 units, so nav, ledger,
+    and Rust emit identical bytes (BK21, BW17).
+  - Because the order is a projection, it is independent of document
+    order, which reconcile regroups every run.
+- **Position.** Insert after the Depends-On subtree when there is one.
+  Otherwise use the Depends-On slot: the first direct child, or the
+  second after a first-child `❌ **CANCEL LOG**`.
+
+  ```text
+  - [ ] #task T ^t
+    - ❌ **CANCEL LOG**        (if present; stays first)
+    - ⛓️ **DEPENDS ON:** …     upstream: what T waits on
+    - 🧱 **BLOCKS:** …         downstream: what waits on T
+    - 🧩 **Sub-projects:** …   structure (^prj only)
+    - user children, 🗓️ SCHEDULE LOG, Work Log …
+  ```
+
+  - Reuse the task's existing child indent; otherwise use the parent
+    indent plus one tab.
+  - Preserve CRLF and the final-newline state.
+  - **Never move an existing BLOCKS line.** Rewrite it in place and
+    delete duplicates after the first.
+  - A task that later gains a Depends-On line gets it in the first
+    slot, so the order still reads upstream, then downstream.
+
+- **`bob projects sync`.** Sub-projects anchors after the Depends-On
+  and BLOCKS subtrees. Its move rule is: a marker before a direct
+  Depends-On or BLOCKS child moves after them (MC8).
+
+### 14.6 Reconciliation
+
+Reconcile is the authority. Gestures are early courtesy writes, and
+closes, vim edits, agent edits, and moves are repaired only by
+reconcile.
+
+1. **Export the edge set.** `ReconcileWorker` records each open
+   dependent's accepted explicit targets (§14.3) in
+   `ReconcileOutcome`.
+   - Record at the same points as `record_graph`, but before its
+     block-id early return, so id-less dependents are included.
+   - Record before `add_resident_implicit_edges`.
+   - Also record the dependents whose Depends-On line is malformed
+     (R10), as the uncertain set.
+   - Key dependents by `(file_index, task_index)`. Reconcile never
+     adds or removes task lines, so those keys survive its edits;
+     debug-assert this after the re-parse.
+2. **New pass `reconcile_blocks_lines`.** It runs right after the
+   R1–R10 re-parse loop and before `task_blocks` / `dependency_edges`,
+   over the re-parsed text. It is a separate pass, so a task that
+   gains an R2 Depends-On line and a BLOCKS line in one run cannot
+   have two inserts at one index flip their order.
+3. **Owners to check.** These are every T in `blocks(T)`, plus every
+   open, writable task that already has a BLOCKS child. To find the
+   latter, byte-prefilter notes for `BLOCKS` / `BLOCKING`. Never walk
+   every task's children.
+4. **Steps for each owner.** Mint, then render against the post-mint
+   state, then call the shared planner with the desired link set:
+
+   | Existing line | Result |
+   | --- | --- |
+   | missing | insert |
+   | different entries | rewrite in place |
+   | same entries, non-canonical | canonicalise |
+   | not desired | delete |
+   | duplicates | keep the first, delete the rest |
+   | any malformed BLOCKS child | leave every BLOCKS child of that owner alone and warn |
+
+5. **Never prune on uncertainty.** An existing entry that resolves to
+   an uncertain dependent is kept, but an uncertain dependent is never
+   newly added.
+6. **Guarded output.** Edits are structural, so they join the
+   reconciled set: the 2 s quiet interval, preimage checks, and
+   recovery snapshots apply. Originals merge into `pre_reconcile`,
+   keeping the earliest copy.
+7. **Preconditions.** The pass inherits today's preconditions: the
+   daily note exists and has a Pomodoros section. Live gestures do not
+   depend on reconcile.
+
+### 14.7 Immediate writers
+
+| Writer | BLOCKS behaviour |
+| --- | --- |
+| nav Depends on stage (Task Card `b`, Ctrl+Shift+P on the line, counted, palette, marked batches) | **Same-note targets:** the owner's BLOCKS edit and any minted dependent id go into the dependent's one transaction, so one Ctrl+Z undoes both. **Cross-note targets:** after the commit, a best-effort follow-up per target note, for old ∪ new targets. It uses the open editor (its own undo entry), otherwise a preimage-checked `vault.process`. On failure the notice gains `· 🧱 BLOCKS not updated`; nothing rolls back. Preparation never writes a reverse entry. |
+| nav removals (chip ×, api v3 `removeDependency`, Ctrl+D on the Depends on row, counted Ctrl+D) | Remove the dependent from each removed target's line, deleting the line when it empties. |
+| nav hand-edit mirror (cursor leaves an edited Depends-On line; undo re-arms it) | Diff the burst baseline's targets against the final targets and mirror the difference. Clearing the whole line removes every old target. This keeps cross-note undo honest. |
+| capture `&` (and Bob Mac Capture through bob) | Stage each added target's BLOCKS entry and the dependent's minted `^id` in the same batch, using the shared Rust planner. The target's block is reported as a `dependency_target` task block. |
+| capture dependency drop (§13.5.1) | Stage the dependent's removal from each dropped prerequisite's line. Prerequisite task lines are still never edited. |
+| Ctrl+Shift+M, `bob task archive`, project conversion | The moved owner's line moves with it; generic link rebasing applies. Conversion never copies a BLOCKS line as a user child. Links into a moved or converted dependent are left to reconcile. |
+| Closes, cancels, reopens (capture `=x` / `!`, Ctrl+Enter, Alt+], Mac Capture, hand edits) | **None.** The owner's line freezes; a closed dependent drops off at the next reconcile. Chips hide the lag. |
+
+All writers share one planner, implemented as a Rust function with a
+JS twin and pinned by the same vectors.
+
+- A writer computes the desired entries and the planner turns them
+  into edits:
+  - reconcile computes the full projection;
+  - gestures compute (existing entries resolved to identities) ∪ added
+    − removed.
+- Writers compare canonical output before writing, so no-ops write
+  nothing and add no undo entries.
+- Machine writes are annotated, so nav's listeners ignore them.
+
+### 14.8 Gestures
+
+| Gesture | Behaviour |
+| --- | --- |
+| Hand edit (typing, deleting an entry, deleting the line) | Never an edge change. Once per burst, nav shows `🧱 BLOCKS is generated from DEPENDS ON lines · change it on the dependent (Ctrl+Shift+P)`. Reconcile restores the line. |
+| `!` / `N!`, Ctrl+Shift+Enter | Refused with the same notice. |
+| Ctrl+Enter on a link | Closes or reopens the linked dependent: root-only, with no strike, no re-embed, and no tree close (as §8 for Depends-On links). |
+| Alt+] / Alt+[ on the line | Cycles the dependent under the cursor; never reformats the bullet. |
+| Ctrl+Shift+P on the line, palette Edit task dependencies | Acts on the owning task (its Task Card or Depends on stage), never on the chip under the cursor. |
+
+### 14.9 Chips
+
+- **Data.** A reverse index `id → open dependents`, built from the
+  in-memory Tasks memo (`dependsOn` / `id`, the same source as the
+  Depends-On chips).
+  - It is shared infrastructure, so later features can reuse it:
+    bob-cli-3p, bob-cli-3q, review cards, and the close preview.
+  - Chips render the **live** set in the stored line's order. A live
+    dependent missing from the text is appended in canonical order and
+    counted.
+  - A stored entry that is no longer live renders dashed, with the
+    tooltip `No longer waiting on this task · refreshes on the next reconcile`,
+    and is not counted.
+- **Anatomy.** Reuse the `bob-dep-row` / `bob-dep-chip` family and the
+  `--task-status-*` tokens:
+  - miniature checkbox, a ~40-character description, `↗ note` for
+    cross-note entries, hover preview, click / Mod-click;
+  - a `^prj` chip shows 🧩 and the project note name;
+  - `#hide` chips are muted.
+
+  There is no new palette. Chips never change line height and wrap
+  between chips, never inside one.
+
+- **🔑 badge.** T is D's only remaining reason to be Blocked: no other
+  open prerequisite (by D's `dependsOn` ids), no future `scheduled`,
+  and no `#prj_is_blocked`.
+  - The tooltip lists the other reasons:
+    `also waits on "Outline" · 2026-11-02 · project sase`.
+  - Each badge has `aria-label` text, and colour is never the only
+    signal. Every live dependent is `[?]`, so status colour cannot
+    tell chips apart; the badge carries that signal.
+- **Label and summary.** The summary is never written to Markdown.
+
+  | Owner | Label | Summary |
+  | --- | --- | --- |
+  | open | `🧱 blocks` | `frees N` when every live chip has 🔑, else `frees N of M` |
+  | closed (frozen line) | `🧱 was blocking`, muted, no badges | `✓ freed M` |
+
+- **No × or ＋ in v1.** The row tooltip reads
+  `Generated from DEPENDS ON lines · edit on the dependent`.
+- **Toggle.** `toggle-dependency-chips` toggles Depends-On and BLOCKS
+  rows together.
+- **Without the plugin**, the line still reads as plain links.
+- **Implementation.** Write new fragments with an explicit relation
+  direction. Never reuse the incoming row's `waiting on` copy, action
+  callbacks, or aria labels from 140, 150, or 280.
+
+### 14.10 Kill switch
+
+```yaml
+dependencies:
+  blocks_lines: true # write 🧱 BLOCKS lines on prerequisites (docs/task-dependencies.md §14)
+```
+
+The key lives in `~/.config/bob/config.yml` (`BOB_CONFIG_FILE` /
+`XDG_CONFIG_HOME` apply). Rust and nav read it.
+
+- An invalid value falls back to `true` and warns through the existing
+  paths: reconcile stderr, and a capture warning string.
+- With `false`, reconcile's desired set is empty: it removes every
+  BLOCKS line on open tasks, mints nothing, and leaves frozen lines
+  alone. Gestures write no BLOCKS edits.
+
+### 14.11 Outputs and warning kinds
+
+**Reconcile JSON (additive).** These use the same line convention as
+`adopted_dependency_lines`:
+
+- `blocks_line_updates`: `{path, line, task, kind, added[], removed[]}`,
+  where `kind` is one of `inserted`, `rewritten`, `canonicalized`,
+  `removed`, or `deduplicated`;
+- `minted_dependent_block_ids`: `{path, line, block_id}`;
+- the new warning kind `malformed_blocks_line` in
+  `dependency_warnings`.
+
+Human output gets a `🧱` group in the existing dependency style.
+`--dry-run` previews all of it.
+
+**Capture JSON (additive, omitted when empty).** Each item gets
+`blocks_line_updates` rows of the same shape, and
+`minted_dependent_block_id`. Human output stays quiet when the mirror
+works.
+
+No new subcommand, flag, or Tasks field.
+`bob query --tasks "(not done) AND (is blocking)"` already answers
+read-only questions.
+
+### 14.12 Rollout
+
+- **Guards and chips ship before any writer emits lines.** That is why
+  `cli-reconcile` depends on `plugin-guards` and `chips`.
+- **Reconcile is the first vault-wide writer.** Gestures are courtesy
+  writes on top of it.
+- **Kill switch.** `dependencies.blocks_lines: false` removes every
+  BLOCKS line on an open task losslessly; frozen lines stay.
+- **The MacBook.** Its cron is the only hooks runner. Until it is
+  updated, live Obsidian gestures still write courtesy lines, and the
+  next reconcile on an updated bob repairs the rest. Plugin guards
+  must land before writers so an old recogniser never treats a BLOCKS
+  line as a Task Link.
+- **Phase 2.** Editing from the prerequisite (chip × / ＋ on BLOCKS
+  rows, a Task Card Blocks row, a Blocks… stage) is a later epic
+  (bob-cli-3p).
+
+### 14.13 BK — parse vectors
+
+`line` is the candidate BLOCKS line on its own; `context` names what
+surrounds it. `verdict` is one of `accept(n)` (a line with n entries),
+`empty` (label but no links), `malformed`, or `not-a-line`.
+`canonical` also requires sorted, duplicate-free writer-form entries.
+
+| # | line | context | verdict |
+| --- | --- | --- | --- |
+| BK1 | `🧱 **BLOCKS:** [[#^a]]` | direct child of a `#task` | accept(1), canonical |
+| BK2 | `🧱 **BLOCKS:** [[#^a]] • [[cash#^b]] • [[money/cash#^c]]` | direct child | accept(3), canonical |
+| BK3 | `🧱 **BLOCKS:** [[#^a\\|b • c]]` | alias contains `•` | accept(1), canonicalise |
+| BK4 | `**BLOCKS:** [[#^a]]` | emoji missing | accept(1), canonicalise |
+| BK5 | `🚧 **BLOCKS:** [[#^a]]` | WIP emoji | accept(1), canonicalise |
+| BK6 | `⛓️ **BLOCKS:** [[#^a]]` and `⛓ **BLOCKS:** [[#^a]]` | chain emoji | accept(1), canonicalise |
+| BK7 | `🧱 **BLOCKING:** [[#^a]]` | legacy label | accept(1), canonicalise |
+| BK8 | `🧱 **BLOCKS:** [[#^a]] · [[#^b]]` / `[[#^a]], [[#^b]]` / `[[#^a]] [[#^b]]` | separators | accept(2), canonicalise |
+| BK9 | `🧱 **BLOCKS:** ~~[[#^a]]~~` / `![[#^a]]` | struck / embedded | accept(1), canonicalise |
+| BK10 | `🧱 **BLOCKS:** [[cash#^b]] • [[#^a]]` | out of order | accept(2), canonicalise to `[[#^a]] • [[cash#^b]]` |
+| BK11 | `🧱 **BLOCKS:** [[#^a]] • [[#^a]]` | duplicate entry | accept(2), canonicalise to one entry |
+| BK12 | `🧱 **BLOCKS:**` | label only | empty |
+| BK13 | `🧱 **BLOCKS:** [[#^a` | half-typed | malformed |
+| BK14 | `🧱 **BLOCKS:** [[#^a]] until Friday` | trailing prose | malformed |
+| BK15 | `🧱 **BLOCKS:** [[note]]` / `[[note#Heading]]` / `• ,` | no block id / separators only | malformed |
+| BK16 | `🧱 **blocks:** [[#^a]]` | lowercase | not-a-line |
+| BK17 | `🧱 **BLOCKED BY:** [[#^a]]` | inverse label | not-a-line |
+| BK18 | `🧱 **BLOCKS:** [[#^a]]` | fenced / grandchild / hangs off a Work Log entry / blockquoted / no list marker | not-a-line |
+| BK19 | `🧱 **BLOCKS:** [[#^a]]` | third direct child after prose | accept(1) (no slot is enforced on read) |
+| BK20 | BK1 through the Depends-On parser; DP1 through the BLOCKS parser | cross-parse | not-a-line both ways |
+| BK21 | entries `[[zeta#^e]]`, `[[élan#^d]]`, `[[cash#^c]]`, `[[Cash#^a]]`, `[[#^b]]` | sort | `[[#^b]] • [[Cash#^a]] • [[cash#^c]] • [[zeta#^e]] • [[élan#^d]]` |
+
+### 14.14 BR — reconcile vectors
+
+| # | situation | outcome |
+| --- | --- | --- |
+| BR1 | open D `^d` depends on open T, same note | T gains `🧱 **BLOCKS:** [[#^d]]` (`inserted`) |
+| BR2 | D in `cash.md` (unique basename), T elsewhere | entry `[[cash#^d]]`; ambiguous basename → `[[money/cash#^d]]` |
+| BR3 | three dependents, same-note and cross-note | one line, sorted per BK21 |
+| BR4 | D has no `^block-id` | D gains ` ^<mint>` (SB); no `[id::]` and no `[fresh::]`; T lists it; a `minted_dependent_block_ids` row |
+| BR5 | D's note is inside the quiet interval and D needs a mint | D not listed this run; next run mints and lists it; then zero changes |
+| BR6 | T has Depends-On (with a nested child) and a Schedule Log | BLOCKS inserted right after the Depends-On subtree |
+| BR7 | T has a first-child Cancel Log and no Depends-On | BLOCKS inserted second |
+| BR8 | T is `^prj` with Depends-On and Sub-projects | order Depends-On, BLOCKS, Sub-projects; `bob projects sync --dry-run` then changes nothing |
+| BR9 | T's only listed D closes | entry dropped; line deleted (`removed`) |
+| BR10 | T closed, line lists open D | untouched (frozen) |
+| BR11 | T reopens | line re-projected |
+| BR12 | T or D in the previous daily note | T never written; D never listed or minted |
+| BR13 | hand-added entry with no forward edge | removed (`rewritten`) |
+| BR14 | any BK3–BK11 variant with the right entries | `canonicalized` |
+| BR15 | two BLOCKS lines under T | first rewritten, the rest deleted (`deduplicated`); copy-paste under a task with no dependents → deleted |
+| BR16 | malformed BLOCKS line under T | every BLOCKS child of T untouched; warn `malformed_blocks_line`; no second line |
+| BR17 | D's Depends-On line malformed (R10) | existing entries naming D on any T kept; D never newly added |
+| BR18 | D's link is R4 / R5 / R6, an archive target, or a previous-daily / unencodable target kept verbatim | no entry for that link |
+| BR19 | `^prj` P depends on T; P has residents | T lists `[[p#^prj]]` only |
+| BR20 | `^prj` internal or descendant target | no entry |
+| BR21 | R8 legacy-child edge | listed |
+| BR22 | cycle A ↔ B | each lists the other |
+| BR23 | `#hide`, `ref/`, inbox, and today's daily-note tasks on either side | listed normally |
+| BR24 | `dependencies.blocks_lines: false` | every BLOCKS line on an open task removed; frozen lines stay; no mints |
+| BR25 | invalid `dependencies.blocks_lines` | behaves as `true`; stderr warning |
+| BR26 | delete every BLOCKS line in a reconciled vault | one run rebuilds identical bytes; fields, statuses, edges, promotion unchanged |
+| BR27 | second run over a reconciled vault | zero changes |
+| BR28 | owner's note modified < 2 s ago | edits deferred (structural) |
+| BR29 | `--dry-run -f json` | identical rows; nothing written; no mints persisted |
+
+### 14.15 BW — write vectors
+
+| # | gesture | outcome |
+| --- | --- | --- |
+| BW1 | stage adds same-note T to D | D's line and T's BLOCKS change in one transaction; one Ctrl+Z restores both |
+| BW2 | stage adds cross-note T | D commits; then T's note gains or updates its line (open editor, else preimage-checked `vault.process`) |
+| BW3 | the cross-note follow-up finds T changed or unreadable | D's write stands; notice suffix `· 🧱 BLOCKS not updated`; no rollback |
+| BW4 | D lacks `^block-id` | mint in D's own transaction, before any follow-up; no `[id::]` |
+| BW5 | removal via stage, chip ×, api `removeDependency`, or Ctrl+D on the Depends on row | D's entry leaves T's line; empty line deleted |
+| BW6 | add to a T that already lists D | byte-identical; no write; no undo entry |
+| BW7 | T closed, or in the previous daily note | T not written |
+| BW8 | T's BLOCKS line malformed | left alone; D's write stands; suffix `· 🧱 BLOCKS not updated` |
+| BW9 | counted `N<Ctrl+Shift+P>` add-to-all on k dependents | T's single line lists all k, sorted |
+| BW10 | hand edit adds / removes a link on D's line (cursor leaves) | T lines updated from the diff |
+| BW11 | Ctrl+Z of a cross-note add in D's editor | the mirror re-fires and removes D from T's line |
+| BW12 | hand edit confined to a BLOCKS line | no graph change; the generated-line notice once |
+| BW13 | capture `&cash:t` on a new task or an explicit dependent | T's line updated in the same staged batch; row reported; T reported as a `dependency_target` task block |
+| BW14 | capture dependency drop of T1 and T2 | D removed from both lines in the same batch |
+| BW15 | kill switch off | no writer writes BLOCKS or mints for it |
+| BW16 | capture `--dry-run` | rows reported; nothing written |
+| BW17 | the same input rendered by Rust and nav | byte-identical line (BK21 included) |
+| BW18 | project conversion forward / reverse | a BLOCKS line is never copied as a user child |
+| BW19 | Ctrl+Shift+M of T | T's line moves with rebased links; never two BLOCKS lines |
+
+### 14.16 BC — chip vectors
+
+| # | situation | render |
+| --- | --- | --- |
+| BC1 | open T; one open D whose only reason is T | `🧱 blocks ( ? D 🔑 ) frees 1` |
+| BC2 | D also waits on open U | no 🔑; `frees 0 of 1`; tooltip `also waits on "U"` |
+| BC3 | D's only other reason is a future `scheduled` | no 🔑; the tooltip names the date |
+| BC4 | D carries `#prj_is_blocked` | no 🔑; the tooltip names the project |
+| BC5 | four dependents, all 🔑 | `frees 4` |
+| BC6 | cross-note D | `↗ note` |
+| BC7 | `^prj` D | 🧩 plus the project note name |
+| BC8 | stored entry no longer live (open owner) | dashed; the refresh tooltip; not counted; with no live chip left, the summary is omitted |
+| BC9 | live D missing from the stored line | appended in canonical order; counted |
+| BC10 | closed owner | `🧱 was blocking`, muted, no 🔑, `✓ freed M` (M = stored entries); entries show their current status and are never dashed as stale; a missing target shows `⚠ ^id not found` |
+| BC11 | D carries `#hide` | muted chip |
+| BC12 | interaction | click opens D, Mod-click opens a new tab, hover previews; no × / ＋ |
+| BC13 | 60-character description | cut at about 40; full text in the tooltip |
+| BC14 | `toggle-dependency-chips` | toggles Depends-On and BLOCKS rows together |
+| BC15 | malformed or not-a-line BLOCKS row | no chips |

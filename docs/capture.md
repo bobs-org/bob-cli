@@ -1283,10 +1283,16 @@ executes the modifiers through the staged batch writer: the dependent
 gains (or merges into) the managed `⛓️ **DEPENDS ON:**` child line plus
 the derived `[dependsOn:: …]` field, open prerequisites flip it to
 `[?]` Blocked, existing dependents are freshness-stamped, and repeats
-are idempotent (`0 added`). Multi-note batches plan every note before
-writing anything; a failed preimage check or write aborts the batch and
-rolls back notes already staged, and dry runs plan through the same
-planner without touching the vault. A draft with prerequisites never
+are idempotent (`0 added`). Each added prerequisite's `🧱 **BLOCKS:**`
+line is staged in the same batch (the dependent's minted `^id` when it
+has none), reported as `blocks_line_updates` plus
+`minted_dependent_block_id` when a mint happens; the prerequisite is
+reported as a `dependency_target` task block
+([task-dependencies.md §14](task-dependencies.md#14-blocks-lines)).
+Multi-note batches plan every note before writing anything; a failed
+preimage check or write aborts the batch and rolls back notes already
+staged, and dry runs plan through the same planner without touching the
+vault. A draft with prerequisites never
 captures without them. Section bullets, project/note constructions,
 Pomodoro ledger links, and session operators reject the modifiers with
 a targeted diagnostic, as do suffixed (`#name`, `=…`) or `!`-toggled
@@ -3268,7 +3274,8 @@ existing insertion fields for link. A consumed `@route+block-id!` keeps kind
 its source/destination endpoints. It reports `link_guard` (`reasons`,
 `promoted`, `detail`, and `drop_refused` when an own dependency reason kept
 the prerequisites); successful drops report `dropped_dependencies` in line
-order. `removed_pomodoro_links` remains present, and
+order and stage the dependent's removal from each dropped prerequisite's
+BLOCKS line (`blocks_line_updates`). `removed_pomodoro_links` remains present, and
 `day_file` is present only when cleanup removed at least one live link. A
 `^prj` whose only reason is its own future schedule is refused with "move
 the project date from the `^prj` Schedule action".
@@ -3498,7 +3505,10 @@ existing live-link cleanup also appears in `pomodoro_blocks`.
 A successful dependency drop keeps kind `"pomodoro_link"` and adds
 `dropped_dependencies` in Depends-On line order. Each row has the prerequisite
 `note_path`, `block_id`, exact `link`, clean `text`, `status_symbol`, and
-`status_name`. Human output prints `⛓️ dropped dependency on [[route#^id]]`
+`status_name`. The same staged batch removes the dependent from each dropped
+prerequisite's `🧱 **BLOCKS:**` line (`blocks_line_updates`; see
+[task-dependencies.md §14](task-dependencies.md#14-blocks-lines)). Human
+output prints `⛓️ dropped dependency on [[route#^id]]`
 or `⛓️ dropped N dependencies: …` after the status line (`would drop` in a
 dry run). The batch-level `task_blocks` entry for the dependent includes role
 `"dependency_dropped"` and shows the changed task and Depends-On lines.
@@ -3789,7 +3799,10 @@ Field rules:
   `"dependency_dropped"` when a capture link drops the task's own prerequisites,
   and `"completed"` (the completed root and each closed subtask) /
   `"unblocked"` (each recovered dependent) for whole-item `!` completions.
-  Clients must not depend on it.
+  Clients must not depend on it. A `dependency_target` block's `lines` include
+  the staged BLOCKS child when that mirror changes; the item also carries
+  additive `blocks_line_updates` and `minted_dependent_block_id` when a
+  mint happens ([task-dependencies.md §14.11](task-dependencies.md#1411-outputs-and-warning-kinds)).
 - `lines` uses exactly the `pomodoro_blocks` line schema: `text`
   (verbatim, no terminator), `depth` (relative to the task line, computed
   by the same helper), `change` (`unchanged` / `added` / `removed` /

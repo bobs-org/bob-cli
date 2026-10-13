@@ -39,7 +39,7 @@ then creates the notes that `bob ref list` shows. The
 | [ref.md](ref.md) | Reference-library lookup and views, reading state, URL routing, JSON, and `migrate-tasks`/`migrate-zorg` migration/rollback |
 | [ref-jobs.md](ref-jobs.md) | `bob ref jobs` background capture progress, worker, fallback, and recovery |
 | [stats.md](stats.md) | Daily Stats metrics, `bob stats`, JSON, the v1 review journal, and the Obsidian Stats page |
-| [task-dependencies.md](task-dependencies.md) | Task dependency links: Depends-On line, successor offers, project-dependency contract, plus conformance vectors |
+| [task-dependencies.md](task-dependencies.md) | Task dependency links: Depends-On line, BLOCKS mirror, successor offers, project-dependency contract, plus conformance vectors |
 | [task-status-hooks.md](task-status-hooks.md) | `bob task reconcile` Pomodoro-driven task status |
 | [task-tag-marks.md](task-tag-marks.md) | Task tag marks: the teal hash glyph that replaces the `#task` pill |
 | [vault-git-sync.md](vault-git-sync.md) | Git-only Bob vault sync operations, triggers, conflict copies, Keep receipts, and the Stats review journal |

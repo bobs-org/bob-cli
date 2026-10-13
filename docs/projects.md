@@ -217,14 +217,17 @@ For a valid project date `P`, the ordinary-task contract is:
 | `^prj`, `P` in the future | Force exactly one `#hide`; keep or write `[scheduled:: P]` |
 | `^prj`, `P` due/past | Normal surfacing rule (rows above): remove `#hide` when there are no unhidden open tasks and no open sub-projects, add it back otherwise; keep the inline date |
 - Active projects with open `^prj` tasks get one generated Sub-projects line
-  nested under `^prj` after the whole Depends-On subtree (or, when there is
-  no direct Depends-On child, after a Cancel Log occupying the first slot,
-  including its nested entries), such as
+  nested under `^prj` after the whole Depends-On subtree and a following
+  BLOCKS subtree (or, when there is no direct Depends-On or BLOCKS child,
+  after a Cancel Log occupying the first slot, including its nested
+  entries), such as
   `- 🧩 **Sub-projects:** [[alpha_child]] • [[beta_child]]`. Only a direct
-  child of `^prj` that starts with the Depends-On marker counts; nested
-  tasks' own Depends-On lines do not. A new marker inserts after that
-  subtree; an existing marker sitting before Depends-On is moved after it;
-  otherwise the marker is rewritten in place.
+  child of `^prj` that starts with the Depends-On or BLOCKS marker counts;
+  nested tasks' own lines do not. A new marker inserts after those
+  subtrees; an existing marker sitting before a direct Depends-On or
+  BLOCKS child is moved after them; otherwise the marker is rewritten in
+  place. See [task-dependencies.md §14.5](task-dependencies.md#145-order-and-position)
+  and MC8.
 - A child with a valid future date on `^prj` — or leftover frontmatter
   `scheduled` that this run will hoist onto a non-terminal child — is
   prefixed with `🗓️`, such as
