@@ -175,6 +175,55 @@ fn capture_routed_task_into_blocked_project_lands_blocked_and_tagged() {
     );
 }
 
+// PDG16 (§13.15): a plain task captured into a tagged child project
+// lands `[?]` plus the machine-owned tag.
+#[test]
+fn capture_routed_task_into_tagged_project_lands_blocked_and_tagged() {
+    let temp = TempDir::new("bob-cli-capture-routed-tagged-project");
+    let vault = temp.path().join("vault");
+    write_toggle_task_settings(&vault);
+    write_file(
+        &vault.join("parent.md"),
+        concat!(
+            "---\ntype: \"[[project]]\"\nstatus: wip\n---\n",
+            "- [?] #task Parent [dependsOn:: job__prep] ^prj\n",
+            "\t- ⛓️ **DEPENDS ON:** [[job#^prep]]\n",
+        ),
+    );
+    write_file(&vault.join("job.md"), "- [ ] #task Prep ^prep\n");
+    write_file(
+        &vault.join("child.md"),
+        concat!(
+            "---\ntype: \"[[project]]\"\nstatus: wip\nparent: \"[[parent]]\"\n---\n",
+            "- [?] #task Child #prj #hide #prj_is_blocked ^prj\n",
+        ),
+    );
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("@child")
+        .arg("Grind")
+        .arg("more")
+        .env("BOB_NOW", "2026-10-12 10:00:00")
+        .output()
+        .expect("run routed capture into tagged project");
+
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("routing JSON");
+    assert!(
+        json["task_line"]
+            .as_str()
+            .is_some_and(|line| line.starts_with("- [?] ")
+                && line.contains("#prj_is_blocked")),
+        "{json}"
+    );
+}
+
 #[test]
 fn capture_routed_prefix_inserts_and_suffix_creates_file() {
     let temp = TempDir::new("bob-cli-capture-routed");

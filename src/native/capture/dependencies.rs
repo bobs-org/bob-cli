@@ -20,7 +20,9 @@ use std::{
 
 use super::*;
 use crate::native::{
-    capture_dependency_tasks::{self, DependencyTaskResult, LocatorError},
+    capture_dependency_tasks::{
+        self, has_prj_is_blocked_tag, DependencyTaskResult, LocatorError,
+    },
     capture_language::{
         ParsedCaptureText, ParsedDependency, ParsedDependencyTarget,
     },
@@ -1141,6 +1143,22 @@ impl DependencyGraph {
             {
                 blocked = true;
             }
+            // Tag proxy: a tagged `^prj` inherits a parent reason even
+            // when this note has no own open target or future date.
+            if !blocked {
+                let tagged =
+                    context.project_task_index().is_some_and(|index| {
+                        file_tasks.get(index).is_some_and(|task| {
+                            contents
+                                .lines()
+                                .nth(task.line_index)
+                                .is_some_and(has_prj_is_blocked_tag)
+                        })
+                    });
+                if tagged {
+                    blocked = true;
+                }
+            }
             for task in &file_tasks {
                 if !context.is_resident(task) {
                     continue;
@@ -2095,7 +2113,21 @@ pub(super) fn plan_existing_task_dependencies(
         dependent_block_id,
     );
     if prj_project.is_some() {
-        refuse_internal_prj_targets(&dep_rel, &dep_desc, &prereqs)?;
+        refuse_internal_prj_targets(
+            &dep_rel,
+            &dep_desc,
+            &prereqs,
+            &index,
+            ctx.settings(),
+            |relative| {
+                let absolute = absolute_note(bob_dir, relative);
+                planner
+                    .current_contents(&absolute)
+                    .ok()
+                    .flatten()
+                    .or_else(|| std::fs::read_to_string(absolute).ok())
+            },
+        )?;
     }
     let dependent_lane = lane_for_status(task.status_symbol);
     let dependent_text = task.description.clone();
@@ -2160,14 +2192,35 @@ pub(super) fn plan_existing_task_dependencies(
             warnings,
             &mut touches,
         )?;
-    // Hand-authored same-note links on a `^prj` line stay on the line
-    // but are never projected into `[dependsOn::]` (§13.6).
+    // Hand-authored same-note and descendant links on a `^prj` line stay
+    // on the line but are never projected into `[dependsOn::]` (§13.6).
     if prj_project.is_some() {
-        let internal = deproject_internal_prj_links(&dep_rel, &mut merged);
-        if internal > 0 {
-            warnings.push(format!(
-                "project_internal_dependency: kept {internal} same-note link(s) on the ^prj line without projecting into [dependsOn::]"
-            ));
+        let internal = deproject_internal_prj_links(
+            &dep_rel,
+            &mut merged,
+            &index,
+            ctx.settings(),
+            |relative| {
+                let absolute = absolute_note(bob_dir, relative);
+                planner
+                    .current_contents(&absolute)
+                    .ok()
+                    .flatten()
+                    .or_else(|| std::fs::read_to_string(absolute).ok())
+            },
+        );
+        if internal.kept > 0 {
+            let mut warning = format!(
+                "project_internal_dependency: kept {} link(s) on the ^prj line without projecting into [dependsOn::]",
+                internal.kept
+            );
+            if !internal.descendants.is_empty() {
+                warning.push_str(&format!(
+                    " (inside a sub-project of this project: {})",
+                    internal.descendants.join(", ")
+                ));
+            }
+            warnings.push(warning);
         }
     }
     // New edges refuse self-dependencies and fresh cycles; no-op

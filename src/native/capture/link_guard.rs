@@ -14,6 +14,10 @@
 //!   "move the project date from the `^prj` Schedule action": never a
 //!   pull-forward, which would silently unblock the project and strand
 //!   residents' copies (PDG6).
+//! - a tagged `^prj` or a resident of a note whose `^prj` is tagged →
+//!   do not link; the `project` reason names the owning ancestor and
+//!   the seeds are that ancestor chain's open projected prerequisites
+//!   (PDG15). PDG2/PDG6 never apply while the inherited reason exists.
 //!
 //! Reasons derive from the staged capture graph (line links plus
 //! openness plus inline dates), never from the `[?]` cache (§13.3).
@@ -23,9 +27,14 @@
 use std::collections::BTreeMap;
 
 use super::*;
-use crate::native::project_dependencies::{BlockReason, ProjectContext};
+use crate::native::capture_dependency_tasks::has_prj_is_blocked_tag;
+use crate::native::project_dependencies::{
+    project_ancestors, project_parent_target, resolve_project_parent,
+    BlockReason, ProjectContext,
+};
 use crate::native::projects::edits::normalize_prj_is_blocked_tag;
 use crate::native::task_status_hooks;
+use crate::native::vault_links::NoteIndex;
 
 /// One effective-blocking reason behind a guard verdict: its §13.9
 /// kind for JSON plus a human label for terminal output.
@@ -98,6 +107,195 @@ fn has_dependency_inputs(
     }
 }
 
+/// The `^prj` line of a recognised project, when present.
+fn project_task_line<'a>(
+    contents: &'a str,
+    context: &ProjectContext,
+    tasks: &[task_status_hooks::TaskLine],
+) -> Option<&'a str> {
+    let index = context.project_task_index()?;
+    let task = tasks.get(index)?;
+    contents.lines().nth(task.line_index)
+}
+
+/// Tag proxy: `#prj_is_blocked` on `^prj` means this project inherits.
+fn project_task_is_tagged(
+    contents: &str,
+    context: &ProjectContext,
+    tasks: &[task_status_hooks::TaskLine],
+) -> bool {
+    project_task_line(contents, context, tasks)
+        .is_some_and(has_prj_is_blocked_tag)
+}
+
+fn note_is_recognised_project(
+    relative: &Path,
+    contents: &str,
+    settings: &note_tasks::NoteTaskSettings,
+) -> bool {
+    let tasks = task_status_hooks::parse_tasks(contents, settings);
+    ProjectContext::for_note(&task_status_hooks::FileScan {
+        path: relative.to_path_buf(),
+        relative_path: relative.to_path_buf(),
+        contents: contents.to_string(),
+        tasks,
+    })
+    .recognised
+}
+
+fn optional_note_text(
+    planner: &mut CaptureBatchPlanner,
+    bob_dir: &Path,
+    relative: &Path,
+) -> Option<String> {
+    let absolute = absolute_note(bob_dir, relative);
+    planner
+        .current_contents(&absolute)
+        .ok()
+        .flatten()
+        .or_else(|| std::fs::read_to_string(absolute).ok())
+}
+
+/// Inherited cascade block for a tagged `^prj` (PDG15, PDG16): walk
+/// recognised ancestors, stop after the first untagged one, and collect
+/// that chain's open projected prerequisites plus the nearest owning
+/// ancestor.
+struct InheritedProjectBlock {
+    owner: PathBuf,
+    open: Vec<(String, String)>,
+    scheduled: Option<NaiveDate>,
+}
+
+fn collect_inherited_project_block(
+    ctx: &DependencyContext,
+    planner: &mut CaptureBatchPlanner,
+    bob_dir: &Path,
+    index: &NoteIndex,
+    child_rel: &Path,
+    contents: &str,
+    graph: &DependencyGraph,
+) -> InheritedProjectBlock {
+    let settings = ctx.settings();
+    let today = ctx.today;
+    let ancestors = project_ancestors(
+        child_rel,
+        contents,
+        index,
+        |relative| optional_note_text(planner, bob_dir, relative),
+        |relative, ancestor_contents| {
+            note_is_recognised_project(relative, ancestor_contents, settings)
+        },
+    );
+    let fallback = resolve_project_parent(child_rel, contents, index)
+        .or_else(|| project_parent_target(contents).map(PathBuf::from))
+        .or_else(|| ancestors.first().cloned())
+        .unwrap_or_else(|| child_rel.to_path_buf());
+    let mut owner: Option<PathBuf> = None;
+    let mut open = Vec::new();
+    let mut scheduled: Option<NaiveDate> = None;
+    for ancestor in &ancestors {
+        let identity = (display_relative(ancestor), "prj".to_string());
+        let mut ancestor_open: Vec<(String, String)> = graph
+            .edges
+            .get(&identity)
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|id| graph.open.get(id).copied().unwrap_or(false))
+            .collect();
+        ancestor_open.sort();
+        ancestor_open.dedup();
+        let ancestor_scheduled = graph
+            .scheduled
+            .get(&identity)
+            .copied()
+            .flatten()
+            .filter(|date| *date > today);
+        if owner.is_none()
+            && (!ancestor_open.is_empty() || ancestor_scheduled.is_some())
+        {
+            owner = Some(ancestor.clone());
+        }
+        open.extend(ancestor_open);
+        if scheduled.is_none() {
+            scheduled = ancestor_scheduled;
+        }
+        let tagged = optional_note_text(planner, bob_dir, ancestor)
+            .is_some_and(|ancestor_contents| {
+                let tasks = task_status_hooks::parse_tasks(
+                    &ancestor_contents,
+                    settings,
+                );
+                let context =
+                    ProjectContext::for_note(&task_status_hooks::FileScan {
+                        path: ancestor.clone(),
+                        relative_path: ancestor.clone(),
+                        contents: ancestor_contents.clone(),
+                        tasks: tasks.clone(),
+                    });
+                project_task_is_tagged(&ancestor_contents, &context, &tasks)
+            });
+        if !tagged {
+            break;
+        }
+    }
+    open.sort();
+    open.dedup();
+    InheritedProjectBlock {
+        owner: owner.unwrap_or(fallback),
+        open,
+        scheduled,
+    }
+}
+
+fn push_inherited_reasons(
+    reasons: &mut Vec<BlockedReason>,
+    inherited: &InheritedProjectBlock,
+) {
+    if !inherited.open.is_empty() {
+        reasons.push(BlockedReason {
+            kind: BlockReason::ProjectDependency {
+                project: inherited.owner.clone(),
+                open_ids: Vec::new(),
+            }
+            .kind(),
+            label: format!(
+                "project {} waits on {}",
+                display_relative(&inherited.owner),
+                inherited
+                    .open
+                    .iter()
+                    .map(|id| format!("[[{}#^{}]]", id.0, id.1))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        });
+    }
+    if let Some(date) = inherited.scheduled {
+        reasons.push(BlockedReason {
+            kind: BlockReason::ProjectSchedule {
+                project: inherited.owner.clone(),
+                date,
+            }
+            .kind(),
+            label: format!(
+                "project {} scheduled {date}",
+                display_relative(&inherited.owner)
+            ),
+        });
+    }
+    if inherited.open.is_empty() && inherited.scheduled.is_none() {
+        reasons.push(BlockedReason {
+            kind: BlockReason::ProjectDependency {
+                project: inherited.owner.clone(),
+                open_ids: Vec::new(),
+            }
+            .kind(),
+            label: format!("project {}", display_relative(&inherited.owner)),
+        });
+    }
+}
+
 /// Assess one link target's effective reasons against the staged
 /// capture graph. Returns `Link` when nothing blocks the target,
 /// `PullForward` when only its own future schedule does (and the
@@ -128,6 +326,10 @@ pub(super) fn assess_link_target(
 
     let is_prj = block_id == "prj" && context.recognised;
     let is_resident = target_task.is_some_and(|task| context.is_resident(task));
+    let prj_tagged = project_task_is_tagged(&contents, &context, &file_tasks);
+    // PDG15: a tagged `^prj` or a resident of a tagged project inherits
+    // an ancestor reason. Untagged targets stay on the graph-free path.
+    let inherit_blocks = prj_tagged && (is_prj || is_resident);
 
     // Most link gestures target an ordinary, unblocked task. Check its
     // own note first so those previews do not build a vault-wide graph.
@@ -146,7 +348,7 @@ pub(super) fn assess_link_target(
                 || has_dependency_inputs(&contents, task)
                 || task.scheduled.is_some_and(|date| date > today)
         });
-    if !task_has_local_inputs && !project_has_local_inputs {
+    if !task_has_local_inputs && !project_has_local_inputs && !inherit_blocks {
         return Ok(LinkGuardVerdict::Link);
     }
 
@@ -260,6 +462,15 @@ pub(super) fn assess_link_target(
         });
     }
 
+    let mut ancestor_open: Vec<(String, String)> = Vec::new();
+    if inherit_blocks {
+        let inherited = collect_inherited_project_block(
+            ctx, planner, bob_dir, &index, target_rel, &contents, &graph,
+        );
+        ancestor_open = inherited.open.clone();
+        push_inherited_reasons(&mut reasons, &inherited);
+    }
+
     if reasons.is_empty() {
         return Ok(LinkGuardVerdict::Link);
     }
@@ -268,10 +479,12 @@ pub(super) fn assess_link_target(
     // not a `^prj`: the pull-forward retires that single field. The
     // single-field shape gates it: with several `scheduled` fields
     // the toggle retires nothing, so that stays a consumption.
+    // PDG2/PDG6 never apply while an inherited reason exists (PDG15).
     let only_own_date = own_scheduled.is_some()
         && own_open.is_empty()
         && inherited_open.is_empty()
-        && prj_scheduled.is_none();
+        && prj_scheduled.is_none()
+        && !inherit_blocks;
     if only_own_date {
         if is_prj {
             // PDG6: refusing a date-only `^prj` is never a
@@ -297,6 +510,7 @@ pub(super) fn assess_link_target(
 
     let mut seeds = own_open;
     seeds.extend(inherited_open);
+    seeds.extend(ancestor_open);
     seeds.sort();
     seeds.dedup();
     let status = graph.status.get(&identity).copied().unwrap_or(' ');
@@ -345,9 +559,11 @@ pub(super) fn assess_destination_project(
     else {
         return Ok(None);
     };
+    let prj_tagged = project_task_is_tagged(&contents, &context, &file_tasks);
     if prj_task.status != '?'
         && !has_dependency_inputs(&contents, prj_task)
         && prj_task.scheduled.is_none_or(|date| date <= today)
+        && !prj_tagged
     {
         return Ok(None);
     }
@@ -371,7 +587,7 @@ pub(super) fn assess_destination_project(
         .copied()
         .flatten()
         .filter(|date| *date > today);
-    if open.is_empty() && scheduled.is_none() {
+    if open.is_empty() && scheduled.is_none() && !prj_tagged {
         return Ok(None);
     }
     let mut reasons = Vec::new();
@@ -400,6 +616,18 @@ pub(super) fn assess_destination_project(
             .kind(),
             label: format!("project scheduled {date}"),
         });
+    }
+    if prj_tagged {
+        let inherited = collect_inherited_project_block(
+            ctx, planner, bob_dir, &index, target_rel, &contents, &graph,
+        );
+        open.extend(inherited.open.iter().cloned());
+        open.sort();
+        open.dedup();
+        push_inherited_reasons(&mut reasons, &inherited);
+    }
+    if reasons.is_empty() {
+        return Ok(None);
     }
     Ok(Some(ConsumePlan {
         reasons,
@@ -516,6 +744,196 @@ mod tests {
         .expect("assess project destination");
         assert!(blocked.is_none());
         assert_eq!(context.graph_build_count(), 0);
+    }
+
+    fn write_tagged_child_vault(vault: &Path) {
+        fs::create_dir_all(
+            vault.join(".obsidian/plugins/obsidian-tasks-plugin"),
+        )
+        .expect("create tasks settings dir");
+        fs::write(
+            vault.join(".obsidian/plugins/obsidian-tasks-plugin/data.json"),
+            r##"{
+              "globalFilter": "#task",
+              "statusSettings": {
+                "coreStatuses": [
+                  {"symbol":" ","name":"Ready","type":"TODO"},
+                  {"symbol":"x","name":"Done","type":"DONE"}
+                ],
+                "customStatuses": [
+                  {"symbol":"*","name":"Next","type":"ON_HOLD"},
+                  {"symbol":"?","name":"Blocked","type":"TODO"},
+                  {"symbol":"/","name":"In Progress","type":"IN_PROGRESS"},
+                  {"symbol":"-","name":"Canceled","type":"CANCELLED"}
+                ]
+              }
+            }"##,
+        )
+        .expect("write tasks settings");
+        fs::write(
+            vault.join("job.md"),
+            "- [ ] #task Prep work [id:: job__prep] ^prep\n",
+        )
+        .expect("write job");
+        fs::write(
+            vault.join("parent.md"),
+            concat!(
+                "---\n",
+                "type: \"[[project]]\"\n",
+                "status: wip\n",
+                "---\n\n",
+                "- [ ] #task Parent #prj #hide [dependsOn:: job__prep] ^prj\n",
+                "\t- ⛓️ **DEPENDS ON:** [[job#^prep]]\n",
+            ),
+        )
+        .expect("write parent");
+        fs::write(
+            vault.join("child.md"),
+            concat!(
+                "---\n",
+                "type: \"[[project]]\"\n",
+                "status: wip\n",
+                "parent: \"[[parent]]\"\n",
+                "---\n\n",
+                "- [?] #task Child #prj #hide #prj_is_blocked ^prj\n",
+                "- [?] #task Work #prj_is_blocked ^work\n",
+            ),
+        )
+        .expect("write child");
+    }
+
+    fn assess_child(block_id: &str) -> (LinkGuardVerdict, usize) {
+        let vault = tempfile::tempdir().expect("temporary vault");
+        write_tagged_child_vault(vault.path());
+        let today = NaiveDate::from_ymd_opt(2026, 10, 12).unwrap();
+        let context = DependencyContext::new(vault.path(), today);
+        let mut planner = CaptureBatchPlanner::default();
+        let verdict = assess_link_target(
+            &context,
+            &mut planner,
+            vault.path(),
+            Path::new("child.md"),
+            block_id,
+            today,
+        )
+        .expect("assess tagged child");
+        (verdict, context.graph_build_count())
+    }
+
+    fn consume_plan(verdict: LinkGuardVerdict) -> ConsumePlan {
+        match verdict {
+            LinkGuardVerdict::Consume(plan) => *plan,
+            LinkGuardVerdict::Link => panic!("expected Consume, got Link"),
+            LinkGuardVerdict::PullForward => {
+                panic!("expected Consume, got PullForward")
+            }
+        }
+    }
+
+    #[test]
+    fn tagged_prj_forces_the_vault_graph() {
+        // PDG15: a tagged ^prj is never graph-free.
+        let (verdict, builds) = assess_child("prj");
+        assert_eq!(builds, 1);
+        let plan = consume_plan(verdict);
+        assert_eq!(
+            plan.reasons
+                .iter()
+                .map(|reason| reason.kind)
+                .collect::<Vec<_>>(),
+            ["project_dependency"]
+        );
+        assert!(
+            plan.reasons
+                .iter()
+                .any(|reason| reason.label.contains("parent.md")),
+            "{:?}",
+            plan.reasons
+        );
+        assert_eq!(plan.seeds, vec![("job.md".into(), "prep".into())]);
+    }
+
+    #[test]
+    fn tagged_project_resident_forces_the_vault_graph() {
+        // PDG15: a resident of a tagged project is never graph-free.
+        let (verdict, builds) = assess_child("work");
+        assert_eq!(builds, 1);
+        let plan = consume_plan(verdict);
+        assert!(
+            plan.reasons
+                .iter()
+                .any(|reason| reason.kind == "project_dependency"
+                    && reason.label.contains("parent.md")),
+            "{:?}",
+            plan.reasons
+        );
+        assert_eq!(plan.seeds, vec![("job.md".into(), "prep".into())]);
+    }
+
+    #[test]
+    fn tagged_destination_blocks_a_new_task() {
+        // PDG16: a tagged destination ^prj blocks a newly captured task.
+        let vault = tempfile::tempdir().expect("temporary vault");
+        write_tagged_child_vault(vault.path());
+        let today = NaiveDate::from_ymd_opt(2026, 10, 12).unwrap();
+        let context = DependencyContext::new(vault.path(), today);
+        let mut planner = CaptureBatchPlanner::default();
+        let blocked = assess_destination_project(
+            &context,
+            &mut planner,
+            vault.path(),
+            Path::new("child.md"),
+            today,
+        )
+        .expect("assess tagged destination")
+        .expect("tagged destination is blocked");
+        assert_eq!(context.graph_build_count(), 1);
+        assert!(
+            blocked
+                .reasons
+                .iter()
+                .any(|reason| reason.kind == "project_dependency"
+                    && reason.label.contains("parent.md")),
+            "{:?}",
+            blocked.reasons
+        );
+        assert_eq!(blocked.seeds, vec![("job.md".into(), "prep".into())]);
+    }
+
+    #[test]
+    fn inherited_reason_blocks_pull_forward() {
+        // PDG2 never applies while an inherited reason exists.
+        let vault = tempfile::tempdir().expect("temporary vault");
+        write_tagged_child_vault(vault.path());
+        fs::write(
+            vault.path().join("child.md"),
+            concat!(
+                "---\n",
+                "type: \"[[project]]\"\n",
+                "status: wip\n",
+                "parent: \"[[parent]]\"\n",
+                "---\n\n",
+                "- [?] #task Child #prj #hide #prj_is_blocked ^prj\n",
+                "- [?] #task Work [scheduled:: 2026-10-20] #prj_is_blocked ^work\n",
+            ),
+        )
+        .expect("write scheduled tagged resident");
+        let today = NaiveDate::from_ymd_opt(2026, 10, 12).unwrap();
+        let context = DependencyContext::new(vault.path(), today);
+        let mut planner = CaptureBatchPlanner::default();
+        let verdict = assess_link_target(
+            &context,
+            &mut planner,
+            vault.path(),
+            Path::new("child.md"),
+            "work",
+            today,
+        )
+        .expect("assess scheduled tagged resident");
+        assert!(
+            matches!(verdict, LinkGuardVerdict::Consume(_)),
+            "tagged inherited block is never a pull-forward"
+        );
     }
 
     #[test]

@@ -808,6 +808,108 @@ fn capture_prj_dependency_refuses_same_note_targets() {
     );
 }
 
+// PDG13 (§13.15): capture `&` on `^prj` targeting a descendant is refused.
+#[test]
+fn capture_prj_dependency_refuses_descendant_targets() {
+    let temp = TempDir::new("bob-cli-capture-prj-descendant");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    write_blocked_tasks_settings(&vault);
+    write_project_note(&vault, "parent.md", "- [ ] #task Parent #hide ^prj\n");
+    write_file(
+        &vault.join("child.md"),
+        concat!(
+            "---\ntype: [[project]]\nstatus: wip\nparent: [[parent]]\n---\n",
+            "- [ ] #task Child #hide ^prj\n",
+            "- [ ] #task Work ^work\n",
+        ),
+    );
+    let before =
+        fs::read_to_string(vault.join("parent.md")).expect("read parent");
+
+    let output = capture_with_now(&vault, "&child:work @parent+prj");
+    assert!(
+        !output.status.success(),
+        "descendant ^prj targets must fail:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        stderr(&output).contains("inside a sub-project of this project"),
+        "the refusal names the sub-project:\n{}",
+        format_output(&output)
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("parent.md")).expect("read parent"),
+        before,
+        "refusals leave the vault intact"
+    );
+}
+
+// PDG13 (§13.6): a hand-authored descendant link on `^prj` stays on the
+// line and is not projected into `[dependsOn::]`.
+#[test]
+fn capture_prj_dependency_deprojects_existing_descendant_links() {
+    let temp = TempDir::new("bob-cli-capture-prj-deproject-descendant");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    write_blocked_tasks_settings(&vault);
+    write_file(&vault.join("job.md"), "- [ ] #task Prep ^prep\n");
+    write_file(
+        &vault.join("parent.md"),
+        concat!(
+            "---\ntype: [[project]]\nstatus: wip\n---\n",
+            "- [ ] #task Parent #hide [dependsOn:: child__work] ^prj\n",
+            "\t- ⛓️ **DEPENDS ON:** [[child#^work]]\n",
+        ),
+    );
+    write_file(
+        &vault.join("child.md"),
+        concat!(
+            "---\ntype: [[project]]\nstatus: wip\nparent: [[parent]]\n---\n",
+            "- [ ] #task Child #hide ^prj\n",
+            "- [ ] #task Work [id:: child__work] ^work\n",
+        ),
+    );
+
+    let output = bob_command()
+        .env("BOB_NOW", DEPENDENCY_NOW)
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("&job:prep @parent+prj")
+        .output()
+        .expect("run capture with existing descendant link");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture JSON");
+    let warnings = json["warnings"].as_array().cloned().unwrap_or_default();
+    assert!(
+        warnings
+            .iter()
+            .any(|warning| warning.as_str().is_some_and(|text| text
+                .contains("project_internal_dependency")
+                && text.contains("inside a sub-project of this project"))),
+        "{json}"
+    );
+    let parent =
+        fs::read_to_string(vault.join("parent.md")).expect("read parent");
+    assert!(
+        parent.contains("[[child#^work]]"),
+        "the descendant link stays on the line:\n{parent}"
+    );
+    assert!(
+        parent.contains("[[job#^prep]]"),
+        "the new external link is added:\n{parent}"
+    );
+    assert!(
+        !parent.contains("child__work"),
+        "the descendant id is not projected:\n{parent}"
+    );
+}
+
 // §13.5: `&` that newly Blocks an existing linked dependent consumes its
 // live links in the same write.
 #[test]

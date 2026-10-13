@@ -10,9 +10,10 @@
 
 use super::*;
 use crate::native::{
-    project_dependencies::ProjectContext,
+    project_dependencies::{project_ancestors, ProjectContext},
     projects::edits::normalize_prj_is_blocked_tag,
     task_status_hooks::{self, FileScan, TaskLine},
+    vault_links::NoteIndex,
 };
 
 /// The exact `^prj` block id the line model recognises. Matching stays
@@ -51,13 +52,55 @@ pub(super) fn prj_context_for_dependent(
     Some((context, tasks))
 }
 
-/// Refuse same-note targets for a `^prj` dependent (§13.6): a project
-/// cannot wait on its own tasks. Only new links refuse; pre-existing
+fn note_is_recognised_project(
+    relative: &Path,
+    contents: &str,
+    settings: &note_tasks::NoteTaskSettings,
+) -> bool {
+    let tasks = task_status_hooks::parse_tasks(contents, settings);
+    ProjectContext::for_note(&FileScan {
+        path: relative.to_path_buf(),
+        relative_path: relative.to_path_buf(),
+        contents: contents.to_string(),
+        tasks,
+    })
+    .recognised
+}
+
+/// Whether `target_rel`'s recognised-project ancestor chain reaches
+/// `dep_rel` (PDG13): the target lives in a sub-project of the dependent.
+fn target_is_descendant_of(
+    dep_rel: &Path,
+    target_rel: &Path,
+    target_contents: &str,
+    index: &NoteIndex,
+    settings: &note_tasks::NoteTaskSettings,
+    read: &mut impl FnMut(&Path) -> Option<String>,
+) -> bool {
+    project_ancestors(
+        target_rel,
+        target_contents,
+        index,
+        read,
+        |relative, contents| {
+            note_is_recognised_project(relative, contents, settings)
+        },
+    )
+    .iter()
+    .any(|ancestor| ancestor.as_path() == dep_rel)
+}
+
+/// Refuse same-note and descendant targets for a `^prj` dependent
+/// (§13.6, PDG13): a project cannot wait on its own tasks or on a task
+/// inside one of its sub-projects. Only new links refuse; pre-existing
 /// hand-authored internal links stay on the line unprojected.
 pub(super) fn refuse_internal_prj_targets(
     dep_rel: &Path,
     dep_desc: &str,
     prereqs: &[ResolvedPrerequisite],
+    index: &NoteIndex,
+    settings: &note_tasks::NoteTaskSettings,
+    mut read: impl FnMut(&Path) -> Option<String>,
 ) -> Result<(), CaptureError> {
     for prereq in prereqs {
         if prereq.relative.as_path() == dep_rel {
@@ -66,27 +109,75 @@ pub(super) fn refuse_internal_prj_targets(
                 block = prereq.block_id,
             )));
         }
+        let Some(target_contents) = read(&prereq.relative) else {
+            continue;
+        };
+        if target_is_descendant_of(
+            dep_rel,
+            &prereq.relative,
+            &target_contents,
+            index,
+            settings,
+            &mut read,
+        ) {
+            return Err(CaptureError::usage(format!(
+                "cannot add dependency for {dep_desc}: ^{block} lives inside a sub-project of this project; a project cannot wait on its own tasks",
+                block = prereq.block_id,
+            )));
+        }
     }
     Ok(())
 }
 
-/// Drop the field projection of pre-existing same-note links on a `^prj`
-/// line (§13.6): hand-authored internal targets stay on the line but are
-/// never projected into `[dependsOn::]`. Returns the kept count for the
-/// `project_internal_dependency` warning.
+/// Drop the field projection of pre-existing same-note and descendant
+/// links on a `^prj` line (§13.6, PDG13): hand-authored internal
+/// targets stay on the line but are never projected into
+/// `[dependsOn::]`. Returns the kept count and any descendant note
+/// paths for the `project_internal_dependency` warning.
+pub(super) struct InternalPrjDeproject {
+    pub(super) kept: usize,
+    pub(super) descendants: Vec<String>,
+}
+
 pub(super) fn deproject_internal_prj_links(
     dep_rel: &Path,
     merged: &mut [MergedMember],
-) -> usize {
+    index: &NoteIndex,
+    settings: &note_tasks::NoteTaskSettings,
+    mut read: impl FnMut(&Path) -> Option<String>,
+) -> InternalPrjDeproject {
     let here = display_relative(dep_rel);
     let mut kept = 0usize;
+    let mut descendants = Vec::new();
     for member in merged.iter_mut() {
-        if member.identity.0 == here && member.projected_id.is_some() {
+        if member.projected_id.is_none() {
+            continue;
+        }
+        if member.identity.0 == here {
             member.projected_id = None;
             kept += 1;
+            continue;
+        }
+        let target_rel = PathBuf::from(&member.identity.0);
+        let Some(target_contents) = read(&target_rel) else {
+            continue;
+        };
+        if target_is_descendant_of(
+            dep_rel,
+            &target_rel,
+            &target_contents,
+            index,
+            settings,
+            &mut read,
+        ) {
+            member.projected_id = None;
+            kept += 1;
+            descendants.push(member.identity.0.clone());
         }
     }
-    kept
+    descendants.sort();
+    descendants.dedup();
+    InternalPrjDeproject { kept, descendants }
 }
 
 /// Strongest pre-capture lane among `^prj` and its open residents (§13.4
@@ -415,5 +506,44 @@ mod tests {
         // Case variants are not line-model projects: the capture
         // picker's wider reservation does not drive side effects.
         assert!(!is_prj_dependent("PRJ"));
+    }
+
+    fn cascade_notes() -> BTreeMap<PathBuf, String> {
+        BTreeMap::from([
+            (
+                PathBuf::from("parent.md"),
+                "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Parent #hide ^prj\n".to_string(),
+            ),
+            (
+                PathBuf::from("child.md"),
+                "---\ntype: [[project]]\nstatus: wip\nparent: [[parent]]\n---\n- [ ] #task Child #hide ^prj\n- [ ] #task Work ^work\n".to_string(),
+            ),
+        ])
+    }
+
+    #[test]
+    fn descendant_notes_are_internal_prj_targets() {
+        // PDG13: a target whose ancestor chain reaches the dependent.
+        let notes = cascade_notes();
+        let index = crate::native::vault_links::NoteIndex::from_paths(
+            notes.keys().cloned(),
+        );
+        let child = notes.get(Path::new("child.md")).cloned().unwrap();
+        assert!(target_is_descendant_of(
+            Path::new("parent.md"),
+            Path::new("child.md"),
+            &child,
+            &index,
+            &settings(),
+            &mut |relative| notes.get(relative).cloned(),
+        ));
+        assert!(!target_is_descendant_of(
+            Path::new("parent.md"),
+            Path::new("parent.md"),
+            notes.get(Path::new("parent.md")).unwrap(),
+            &index,
+            &settings(),
+            &mut |relative| notes.get(relative).cloned(),
+        ));
     }
 }

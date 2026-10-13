@@ -40,7 +40,6 @@ pub(crate) fn resolve_project_parent(
 /// unresolved parents, and walks deeper than the project limit stop cleanly.
 /// Project recognition remains with the caller, which has the task settings
 /// needed to apply §13.1's exact `project(T)` predicate.
-#[allow(dead_code)] // Shared with the capture guard phase.
 pub(crate) fn ancestor_chain<F>(
     child_rel: &Path,
     contents: &str,
@@ -72,6 +71,40 @@ where
         };
         current_path = parent;
         current_contents = parent_contents;
+    }
+    ancestors
+}
+
+/// Recognised-project ancestors of `child_rel`, nearest first. The walk
+/// follows [`ancestor_chain`] and stops at the first note that is not a
+/// project (PDS6, PDS7).
+pub(crate) fn project_ancestors<F, P>(
+    child_rel: &Path,
+    contents: &str,
+    note_index: &NoteIndex,
+    mut read: F,
+    mut is_project: P,
+) -> Vec<PathBuf>
+where
+    F: FnMut(&Path) -> Option<String>,
+    P: FnMut(&Path, &str) -> bool,
+{
+    let chain = ancestor_chain(
+        child_rel,
+        contents,
+        note_index,
+        &mut read,
+        MAX_PROJECT_DEPTH,
+    );
+    let mut ancestors = Vec::new();
+    for ancestor in chain {
+        let Some(ancestor_contents) = read(&ancestor) else {
+            break;
+        };
+        if !is_project(&ancestor, &ancestor_contents) {
+            break;
+        }
+        ancestors.push(ancestor);
     }
     ancestors
 }

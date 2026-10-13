@@ -10,7 +10,8 @@ use super::super::task_status_hooks::{
     TasksSettings,
 };
 use super::tree::{
-    ancestor_chain, project_parent_target, resolve_project_parent,
+    ancestor_chain, project_ancestors, project_parent_target,
+    resolve_project_parent,
 };
 use super::*;
 use crate::native::vault_links::NoteIndex;
@@ -491,4 +492,32 @@ fn ancestor_chain_is_read_on_demand_cycle_safe_and_depth_limited() {
         1,
     );
     assert_eq!(chain, [PathBuf::from("parent.md")]);
+}
+
+#[test]
+fn project_ancestors_stop_at_the_first_non_project() {
+    // PDS7: a terminal or area parent breaks the chain.
+    let index = NoteIndex::from_paths([
+        PathBuf::from("child.md"),
+        PathBuf::from("area.md"),
+        PathBuf::from("root.md"),
+    ]);
+    let child = "---\ntype: [[project]]\nstatus: wip\nparent: [[area]]\n---\n- [ ] #task Child ^prj\n";
+    let area = "---\ntype: [[area]]\n---\n".to_string();
+    let root = project_note("- [ ] #task Root ^prj\n");
+    let chain = project_ancestors(
+        Path::new("child.md"),
+        child,
+        &index,
+        |path| match path.to_str() {
+            Some("area.md") => Some(area.clone()),
+            Some("root.md") => Some(root.clone()),
+            _ => None,
+        },
+        |path, contents| {
+            let file = scan_note(path.to_str().unwrap_or_default(), contents);
+            ProjectContext::for_note(&file).recognised
+        },
+    );
+    assert!(chain.is_empty(), "{chain:?}");
 }
