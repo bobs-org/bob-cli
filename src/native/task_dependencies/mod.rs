@@ -14,6 +14,7 @@ use std::{
     path::{Component, Path},
 };
 
+pub(crate) mod blocks;
 pub(crate) mod format;
 pub(crate) mod legacy;
 pub(crate) mod parse;
@@ -23,6 +24,12 @@ mod tests;
 
 pub(crate) use legacy::legacy_child_reference;
 pub(crate) use parse::{is_dependency_line, DependencyLine};
+
+/// Whether `line` is either machine-owned dependency child line. Keep
+/// both managed lines out of Task Link and embedded-tree scans.
+pub(crate) fn is_managed_dependency_line(line: &str) -> bool {
+    is_dependency_line(line) || blocks::is_blocks_line(line)
+}
 
 /// One `[[...]]` occurrence in a line of Markdown.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -11,7 +11,7 @@ use super::super::{
         list_marker_len, nearest_shallower_list_item_parent,
         parse_adjustment_range, AdjustRange, LineSpan,
     },
-    capture_pomodoros, markdown, pomodoro,
+    capture_pomodoros, markdown, pomodoro, task_dependencies,
 };
 use super::links::{move_only_destination, rewrite_completed_markers};
 use super::{
@@ -582,6 +582,16 @@ fn classify_sub_bullets(
             });
             continue;
         }
+        if task_dependencies::is_managed_dependency_line(&stripped) {
+            bullets.push(ClassifiedBullet {
+                line: index,
+                kind: BulletKind::Note,
+                stripped,
+                deferred_destination: None,
+                startable: false,
+            });
+            continue;
+        }
         let tokens = wikilink_tokens(&stripped);
         if tokens.iter().any(|token| token.embedded) {
             bullets.push(ClassifiedBullet {
@@ -899,6 +909,36 @@ fn collect_descendant_tree(
         }
     }
     stack.pop().map(|frame| frame.nodes).unwrap_or_default()
+}
+
+#[cfg(test)]
+mod managed_dependency_tests {
+    use super::*;
+
+    #[test]
+    fn dependency_lines_are_notes_not_close_targets() {
+        let lines = [
+            "  - ⛓️ **DEPENDS ON:** [[#^prerequisite]]",
+            "  - 🧱 **BLOCKS:** ![[#^dependent]]",
+        ];
+        let bullets =
+            classify_sub_bullets(&lines, &(0..lines.len()), &BTreeSet::new());
+        let mut classified_links = Vec::new();
+        let mut startable_targets = Vec::new();
+        let mut embedded_targets = Vec::new();
+        for bullet in &bullets {
+            assert_eq!(bullet.kind, BulletKind::Note);
+            collect_links_from_bullet(
+                bullet,
+                &mut classified_links,
+                &mut startable_targets,
+                &mut embedded_targets,
+            );
+        }
+        assert!(classified_links.is_empty());
+        assert!(startable_targets.is_empty());
+        assert!(embedded_targets.is_empty());
+    }
 }
 
 fn collect_work_log_note_groups(

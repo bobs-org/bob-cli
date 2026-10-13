@@ -7,10 +7,14 @@ use serde::Deserialize;
 
 use super::env as bob_env;
 
+#[allow(dead_code)]
+pub(crate) mod dependencies;
 pub(crate) mod freshness;
 pub(crate) mod plan;
 pub(crate) mod stats;
 
+#[allow(unused_imports)]
+pub(crate) use dependencies::{load_dependencies_config, DependenciesConfig};
 pub(crate) use freshness::{load_freshness_config, FreshnessConfig};
 pub(crate) use plan::{load_plan_config, PlanConfig};
 #[allow(unused_imports)]
@@ -353,6 +357,8 @@ pub(crate) struct RawConfig {
     gkeep: Option<RawGkeep>,
     #[serde(default)]
     pub(crate) plan: Option<serde_yaml::Value>,
+    #[serde(default)]
+    pub(crate) dependencies: Option<serde_yaml::Value>,
     #[serde(default)]
     pub(crate) freshness: Option<serde_yaml::Value>,
     #[allow(dead_code)]

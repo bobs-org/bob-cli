@@ -289,6 +289,50 @@ fn dependency_lines_are_not_legacy_children() {
 }
 
 #[test]
+fn both_managed_dependency_lines_are_not_pomodoro_task_links() {
+    let lines = [
+        "- [ ] Open (0900-0930)",
+        "  - ⛓️ **DEPENDS ON:** [[#^prerequisite]]",
+        "  - 🧱 **BLOCKS:** [[#^dependent]]",
+        "  - [[#^worked]]",
+    ];
+    let model = scan_pomodoros(&lines, 0..lines.len());
+    assert_eq!(
+        model.raw_references,
+        BTreeSet::from([reference("", "worked")])
+    );
+}
+
+#[test]
+fn blocks_lines_are_recognized_as_managed_not_legacy_children() {
+    for line in [
+        "  - 🧱 **BLOCKS:** [[#^dependent]]",
+        "  - **BLOCKING:** ![[#^dependent]]",
+        "  - 🧱 **BLOCKS:** [[#^dependent",
+    ] {
+        assert_eq!(task_dependencies::legacy_child_reference(line), None);
+        assert!(task_dependencies::blocks::is_blocks_line(line));
+        assert!(task_dependencies::is_managed_dependency_line(line));
+    }
+}
+
+#[test]
+fn blocks_parser_does_not_claim_other_managed_child_lines() {
+    for line in [
+        "  - ❌ **CANCEL LOG**",
+        "  - 🧩 **Sub-projects:** [[Child]]",
+        "  - 🗓️ **SCHEDULE LOG**",
+        "  - 🛠️ **WORK LOG**",
+    ] {
+        assert!(!task_dependencies::blocks::is_blocks_line(line), "{line}");
+        assert!(
+            !task_dependencies::is_managed_dependency_line(line),
+            "{line}"
+        );
+    }
+}
+
+#[test]
 fn moves_completed_mixed_bullet_subtree_to_current_and_strikes_only_done() {
     let contents = concat!(
         "- [ ] Current (0900-0930)\n",

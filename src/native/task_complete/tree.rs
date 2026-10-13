@@ -18,7 +18,7 @@ use super::super::{
     },
     capture_task_toggle::set_task_line_status,
     note_tasks::{self, NoteTask, NoteTaskSettings, TaskStatusType},
-    task_dependencies::is_dependency_line,
+    task_dependencies::is_managed_dependency_line,
 };
 
 use super::is_recurring_task_line;
@@ -189,7 +189,7 @@ pub(crate) fn embedded_children(
         // Closing a dependent never closes its prerequisites: Depends-On
         // lines are not embedded-tree edges
         // (`docs/task-dependencies.md` §5).
-        if is_dependency_line(span.text) {
+        if is_managed_dependency_line(span.text) {
             continue;
         }
         children.extend(
@@ -826,6 +826,43 @@ pub(crate) fn complete_task_tree<V: CloseVault>(
         left_open: work.left_open,
         warnings: work.warnings,
     })
+}
+
+#[cfg(test)]
+mod managed_dependency_tests {
+    use super::*;
+
+    #[test]
+    fn embedded_tree_skips_both_managed_dependency_lines() {
+        let contents = concat!(
+            "- [ ] #task Root ^root\n",
+            "  - ⛓️ **DEPENDS ON:** ![[#^prerequisite]]\n",
+            "  - 🧱 **BLOCKS:** ![[#^dependent]]\n",
+            "  - user child ![[#^subtask]]\n",
+        );
+        let task = NoteTask {
+            line_index: 0,
+            indentation: String::new(),
+            status_symbol: ' ',
+            status_name: "Todo".to_string(),
+            status_type: TaskStatusType::Todo,
+            description: "Root".to_string(),
+            block_id: Some("root".to_string()),
+            section: None,
+            child_count: 3,
+            block_end: contents.len(),
+            digest: "00000000".to_string(),
+            task_kind: Some("task"),
+        };
+        let children = embedded_children(contents, &task);
+        assert_eq!(
+            children
+                .iter()
+                .map(|child| child.block_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["subtask"]
+        );
+    }
 }
 
 /// Close every `=x` embedded tree in one shared traversal.

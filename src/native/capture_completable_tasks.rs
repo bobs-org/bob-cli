@@ -326,7 +326,7 @@ fn annotate_today(
             continue;
         }
         let stripped = strip_pomodoro_markers(line);
-        if task_dependencies::is_dependency_line(&stripped) {
+        if task_dependencies::is_managed_dependency_line(&stripped) {
             continue;
         }
         let owner = section.as_ref().and_then(|range| {

@@ -177,6 +177,18 @@ fn numbers_the_worked_example() {
 }
 
 #[test]
+fn managed_dependency_lines_are_not_numbered_for_close_or_agenda() {
+    let contents = note(&[
+        "## Pomodoros",
+        "- [ ] (**0920-0950** [t:: 30m]) — CAPTURE",
+        "\t- ⛓️ **DEPENDS ON:** [[bob#^prerequisite]]",
+        "\t- 🧱 **BLOCKS:** [[bob#^dependent]]",
+    ]);
+    let running = running_of(&contents);
+    assert!(number_task_links(&contents, &running).is_empty());
+}
+
+#[test]
 fn nested_bare_links_are_numbered() {
     let contents = note(&[
         "## Pomodoros",

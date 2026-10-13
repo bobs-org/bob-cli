@@ -424,19 +424,26 @@ fn block_id_deduplication_preserves_crlf_line_endings() {
 #[test]
 fn pathless_archive_links_gain_the_source_note_path() {
     // A pathless [[#^x]] inside an archived block whose target stayed
-    // behind gains the source note path — on Depends-On lines and on
-    // legacy children alike. Fenced code, inline code, moved blocks,
-    // and already-pathed links are untouched.
-    let stayed = BTreeSet::from(["open".to_string(), "held".to_string()]);
+    // behind gains the source note path — on both managed dependency
+    // lines and legacy children alike. Fenced code, inline code, moved
+    // blocks, and already-pathed links are untouched.
+    let stayed = BTreeSet::from([
+        "open".to_string(),
+        "held".to_string(),
+        "blocks".to_string(),
+    ]);
     let repair = repair_pathless_archive_links(
-        "- [x] #task Archived ^moved\n  - ⛓️ **DEPENDS ON:** [[#^open]] • [[#^moved]]\n  - ![[#^held]]\n  - [[other#^open]]\n```\n- [[#^open]]\n```\n`[[#^open]]`\n",
+        "- [x] #task Archived ^moved\n  - ⛓️ **DEPENDS ON:** [[#^open]] • [[#^moved]]\n  - 🧱 **BLOCKS:** [[#^blocks]]\n  - ![[#^held]]\n  - [[other#^open]]\n```\n- [[#^open]]\n```\n`[[#^open]]`\n",
         "projects/Work",
         &stayed,
     );
-    assert_eq!(repair.link_count, 2);
+    assert_eq!(repair.link_count, 3);
     assert!(repair.contents.contains(
         "- ⛓️ **DEPENDS ON:** [[projects/Work#^open]] • [[#^moved]]"
     ));
+    assert!(repair
+        .contents
+        .contains("- 🧱 **BLOCKS:** [[projects/Work#^blocks]]"));
     assert!(repair.contents.contains("- ![[projects/Work#^held]]"));
     assert!(repair.contents.contains("- [[other#^open]]"));
     assert!(repair.contents.contains("```\n- [[#^open]]\n```"));

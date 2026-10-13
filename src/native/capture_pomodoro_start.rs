@@ -542,6 +542,25 @@ mod lineup_tests {
     }
 
     #[test]
+    fn managed_dependency_lines_are_not_start_lineup_items() {
+        let contents = concat!(
+            "## Pomodoros\n",
+            "- [ ] (**0945-1010** [t:: 25m]) — CAPTURE\n",
+            "\t- ⛓️ **DEPENDS ON:** [[bob#^prerequisite]]\n",
+            "\t- 🧱 **BLOCKS:** [[bob#^dependent]]\n",
+            "\t- [[bob#^real-task]]\n",
+        );
+        let links = list_queued_links(contents, 1);
+        assert_eq!(
+            links
+                .iter()
+                .map(|link| link.block_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["real-task"]
+        );
+    }
+
+    #[test]
     fn skips_deeper_descendants_embeds_and_struck_lines() {
         let contents = concat!(
             "## Pomodoros\n",

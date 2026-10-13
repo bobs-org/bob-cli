@@ -60,6 +60,11 @@ pub(crate) fn scan_pomodoros(
             if fenced_lines.contains(&line_index) {
                 continue;
             }
+            if crate::native::task_dependencies::is_managed_dependency_line(
+                lines[line_index],
+            ) {
+                continue;
+            }
             let Some(indentation) =
                 pomodoro_bullet_indentation(lines[line_index])
             else {

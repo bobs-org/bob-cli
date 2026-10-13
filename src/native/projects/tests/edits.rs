@@ -178,7 +178,7 @@ fn project_changes_insert_subproject_links_after_prj_with_tab_indent() {
 fn project_changes_insert_subproject_line_after_depends_on_and_cancel_log() {
     let desired = [open_subproject("Child")];
     let output = apply_subproject_changes(
-        "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n  - ❌ **CANCEL LOG**\n    - [-] old work\n  - ⛓️ **DEPENDS ON:** [[job#^update-linkedin]]\n    - Dependency note\n  - user notes\n",
+        "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n  - ❌ **CANCEL LOG**\n    - [-] old work\n  - ⛓️ **DEPENDS ON:** [[job#^update-linkedin]]\n    - Dependency note\n  - 🧱 **BLOCKS:** [[#^dependent]]\n  - user notes\n",
         &[ProjectChange::AddSubprojectLink {
             stem: "Child".to_string(),
             state: SubprojectState::Open,
@@ -187,7 +187,7 @@ fn project_changes_insert_subproject_line_after_depends_on_and_cancel_log() {
     );
     assert_eq!(
         output,
-        "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n  - ❌ **CANCEL LOG**\n    - [-] old work\n  - ⛓️ **DEPENDS ON:** [[job#^update-linkedin]]\n    - Dependency note\n\t- 🧩 **Sub-projects:** [[Child]]\n  - user notes\n"
+        "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n  - ❌ **CANCEL LOG**\n    - [-] old work\n  - ⛓️ **DEPENDS ON:** [[job#^update-linkedin]]\n    - Dependency note\n  - 🧱 **BLOCKS:** [[#^dependent]]\n\t- 🧩 **Sub-projects:** [[Child]]\n  - user notes\n"
     );
 }
 
@@ -265,13 +265,13 @@ fn project_changes_ignore_nested_depends_on_when_inserting_subprojects() {
 fn project_changes_move_subproject_marker_after_depends_on() {
     let desired = [open_subproject("Child")];
     let output = apply_subproject_changes(
-        "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n\t- 🧩 **Sub-projects:** [[Child]]\n\t- ⛓️ **DEPENDS ON:** [[job#^update-linkedin]]\n",
+        "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n\t- 🧩 **Sub-projects:** [[Child]]\n\t- ⛓️ **DEPENDS ON:** [[job#^update-linkedin]]\n\t- 🧱 **BLOCKS:** [[#^dependent]]\n",
         &[ProjectChange::NormalizeSubprojects],
         &desired,
     );
     assert_eq!(
         output,
-        "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n\t- ⛓️ **DEPENDS ON:** [[job#^update-linkedin]]\n\t- 🧩 **Sub-projects:** [[Child]]\n"
+        "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n\t- ⛓️ **DEPENDS ON:** [[job#^update-linkedin]]\n\t- 🧱 **BLOCKS:** [[#^dependent]]\n\t- 🧩 **Sub-projects:** [[Child]]\n"
     );
 }
 

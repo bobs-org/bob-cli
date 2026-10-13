@@ -871,8 +871,8 @@ pub(super) fn subprojects_need_normalization(
         || subprojects_marker_precedes_depends_on(sub_block, marker_line)
 }
 
-pub(super) fn is_depends_on_child(line: &str) -> bool {
-    crate::native::task_dependencies::is_dependency_line(line)
+pub(super) fn is_managed_dependency_child(line: &str) -> bool {
+    crate::native::task_dependencies::is_managed_dependency_line(line)
 }
 
 pub(super) fn is_cancel_log_child(line: &str) -> bool {
@@ -899,13 +899,13 @@ fn is_direct_prj_child(
     })
 }
 
-fn is_direct_prj_depends_on(
+fn is_direct_prj_dependency_line(
     sub_block: &PrjSubBlock,
     line: &PrjSubBlockLine,
 ) -> bool {
     !line.is_marker
         && is_direct_prj_child(sub_block, line)
-        && is_depends_on_child(&line.trimmed_text)
+        && is_managed_dependency_child(&line.trimmed_text)
 }
 
 pub(super) fn subprojects_anchor_child(
@@ -914,7 +914,8 @@ pub(super) fn subprojects_anchor_child(
     if let Some(depends) = sub_block
         .lines
         .iter()
-        .find(|line| is_direct_prj_depends_on(sub_block, line))
+        .filter(|line| is_direct_prj_dependency_line(sub_block, line))
+        .last()
     {
         return Some(depends);
     }
@@ -946,7 +947,7 @@ pub(super) fn subprojects_marker_precedes_depends_on(
     marker_line: &PrjSubBlockLine,
 ) -> bool {
     sub_block.lines.iter().any(|line| {
-        is_direct_prj_depends_on(sub_block, line)
+        is_direct_prj_dependency_line(sub_block, line)
             && marker_line.line_number < line.line_number
     })
 }

@@ -20,7 +20,7 @@ use serde::Serialize;
 
 use super::{
     capture_block_ids, capture_pomodoros, config::PlanConfig, dataview,
-    markdown, pomodoro,
+    markdown, pomodoro, task_dependencies,
 };
 
 /// Lint codes emitted by [`compute`]. They appear verbatim in human
@@ -509,6 +509,9 @@ fn collect_entry_links(
         if fenced.contains(&index) {
             continue;
         }
+        if task_dependencies::is_managed_dependency_line(line) {
+            continue;
+        }
         if !line.is_empty() && !line.starts_with([' ', '\t']) {
             break;
         }
@@ -678,6 +681,19 @@ mod tests {
         assert!(gtd.exempt);
         assert_eq!(gtd.links, 0);
         assert_eq!(ledger.entries[0].links, 3);
+    }
+
+    #[test]
+    fn managed_dependency_lines_do_not_count_toward_pomodoro_link_budget() {
+        let ledger = budget(
+            "## Pomodoros\n\
+            \n\
+            - [ ] () — GOALS\n\
+            \x20   - ⛓️ **DEPENDS ON:** [[task#^prerequisite]]\n\
+            \x20   - 🧱 **BLOCKS:** [[task#^dependent]]\n\
+            \x20   - Worked [[task#^worked]]\n",
+        );
+        assert_eq!(ledger.links.count, 1);
     }
 
     #[test]
