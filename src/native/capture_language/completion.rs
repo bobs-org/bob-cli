@@ -494,10 +494,10 @@ fn pomodoro_start_name_field(
 }
 
 /// For a `pomodoro_start_name` field, whether the name belongs to a `==`
-/// override token: `Some(true)` when the `<X>` suffix is empty (a swap
-/// keeps the running ledger) and `Some(false)` for a fresh `<X>` timing.
-/// `None` for plain `=` tokens and when the cursor is not inside a
-/// named-start name part.
+/// override token: `Some(true)` when the leading `<X>` suffix is empty and
+/// no `@` part was typed (a swap keeps the running ledger) and `Some(false)`
+/// for a fresh `<X>` timing. `None` for plain `=` tokens and when the cursor
+/// is not inside a named-start name part.
 pub(crate) fn pomodoro_start_override_at(
     raw_text: &str,
     cursor: usize,
@@ -512,7 +512,19 @@ pub(crate) fn pomodoro_start_override_at(
             .any(|line| cursor >= line.raw.start && cursor <= line.raw.end)
     })?;
     let (is_override, suffix, _, _) = named_start_name_at(item, cursor)?;
-    is_override.then_some(suffix.is_empty())
+    if !is_override {
+        return None;
+    }
+    // `keeps_ledger` is true only when the leading suffix is empty and no
+    // `@` part was typed.
+    let parent = item.lines.first()?;
+    let trimmed = parent.raw.text.trim();
+    let super::item::EqualsToken::Start { timing, .. } =
+        super::item::session_equals_token(trimmed)?
+    else {
+        return None;
+    };
+    Some(suffix.is_empty() && timing.is_none())
 }
 
 /// Identify the completable marker component at `cursor`, reusing the same

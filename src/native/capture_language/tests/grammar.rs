@@ -1133,7 +1133,7 @@ fn execution_parses_override_family_with_identical_claim_rules() {
     for (raw, expected) in [
         (
             "==#bugs=3",
-            "write the duration before the name: `==3#bugs` instead of `==#bugs=3`",
+            "write the duration after `@` or before the name: `==#bugs@3` or `==3#bugs` instead of `==#bugs=3`",
         ),
         (
             "==~2#bugs",

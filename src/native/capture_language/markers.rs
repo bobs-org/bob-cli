@@ -882,6 +882,65 @@ pub(super) fn start_drop_no_spaces_error() -> String {
     "write the task numbers right after `~`, with no spaces (for example `=~2,3`)".to_string()
 }
 
+/// The keep list typed both ways: leading `<N>` plus `@<N>`.
+pub(super) fn close_selection_keep_twice_error(token: &str) -> String {
+    format!(
+        "`{token}` lists the in-progress tasks twice; type them once, right after `=x` or after `@` (for example `=x2,3` or `=x@2,3`)"
+    )
+}
+
+/// A second `@` in a close selection points at the second `@`.
+pub(super) fn close_selection_one_at_error() -> String {
+    "use one `@` list: `=x!1@2,3`".to_string()
+}
+
+/// An empty `@` group directly before another marker.
+pub(super) fn close_selection_expected_number_after_at_error() -> String {
+    "expected a task number after `@`".to_string()
+}
+
+/// Both timings typed: leading `<X>` plus `@<X>`.
+pub(super) fn start_timing_twice_error(
+    token: &str,
+    sigil: &str,
+    effective: &str,
+    name: &str,
+) -> String {
+    format!(
+        "`{token}` gives the timing twice; write `{sigil}{effective}#{name}` or `{sigil}#{name}@{effective}`"
+    )
+}
+
+/// Both timings typed on an unnamed drop start.
+pub(super) fn start_timing_twice_unnamed_error(
+    token: &str,
+    sigil: &str,
+    effective: &str,
+    drop_text: &str,
+) -> String {
+    let drop_suffix = if drop_text.is_empty() {
+        String::new()
+    } else {
+        format!("~{drop_text}")
+    };
+    format!(
+        "`{token}` gives the timing twice; write `{sigil}{effective}{drop_suffix}`"
+    )
+}
+
+/// A dangling `@` with no timing after it.
+pub(super) fn start_timing_incomplete_error(token: &str) -> String {
+    format!("`{token}` is incomplete: type the timing after `@` (for example `{token}3`)")
+}
+
+/// A spaceless join that lexes as a start timing gets this hint instead of
+/// the shape error.
+pub(super) fn start_timing_no_spaces_error(suggestion: &str) -> String {
+    format!(
+        "write the timing right after the name, with no space: `{suggestion}`"
+    )
+}
+
 // ---------------------------------------------------------------------------
 // Editor-facing parse
 // ---------------------------------------------------------------------------

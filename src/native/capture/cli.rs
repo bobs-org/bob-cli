@@ -217,16 +217,16 @@ Capture a whole item `=`/`=<X>` (for example `=`, `=3`, `=-2`, `=2-1`) to \
 start today's next future Pomodoro now with the same timing as the `se<X>` \
 snippet: empty is 25 minutes, `3` is 15 minutes, `-` is 25 minutes with a \
 5-minute offset, `2-1` is 10 minutes with a 5-minute offset. Write \
-`=<X>#<pomodoro>` (for example `=#deep-work`, `=3#bugs`) to start the \
+`=<X>#<pomodoro>` (for example `=#deep-work`, `=3#bugs`, `=#bugs@3`) to start the \
 named Pomodoro now with `se<X>` timing: an open match (whole slug, else \
 prefix) starts in place, a completed match starts a new session with that \
 name (an \"again\" start), and otherwise a new named session is created \
-and started. `<X>` goes before `#`; `=#bugs=3` teaches `=3#bugs`. Write \
+and started. `<X>` goes before `#` or last after `@` (`=#bugs@3` means `=3#bugs`); `=#bugs=3` teaches `=#bugs@3` or `=3#bugs`. Write \
 a trailing `~<K>` drop list (for example `=~2`, `=3~2,4`, `=#bugs~2`, \
 `=3#bugs~1,3`) to start without those queued Task Links: `~` drops, so \
 `=~2` drops task 2 from the session you start the way `=x~2` drops task 2 \
 from the session you stop, using the numbers the start lineup shows. The \
-drop part always comes last, after `<X>` and after `#name` when present. \
+`~<K>` and `@<X>` parts come last, after `#name` when present, in either order (`=#bugs~2@3` means `=3#bugs~2`). \
 The item must contain only the start token (leading/trailing whitespace \
 is fine) and have exactly one physical line; a claimed token (counted or \
 drop-carrying) with extra text, markers, or child lines (`=3 more`, `=3x`, \
@@ -249,11 +249,11 @@ rolls the whole batch back, so `=x`, blank line, `=` switches sessions \
 atomically.\n\n\
 Capture a whole item `==`/`==<X>` (for example `==`, `==3`, `==-2`) to \
 restart today's running timed Pomodoro now with fresh `se<X>` timing, or \
-`==[<X>]#<pomodoro>` (for example `==#bugs`, `==3#bugs`) to swap that \
+`==[<X>]#<pomodoro>` (for example `==#bugs`, `==3#bugs`, `==#bugs@3`) to swap that \
 Pomodoro in as the running one: an empty `<X>` takes over the running \
 session ledger byte-for-byte while a counted `<X>` starts it with fresh \
 timing, and the old session returns intact to first future. A trailing \
-`~<K>` drop list (for example `==~2`, `==#bugs~2`) drops those queued \
+`~<K>` drop list (for example `==~2`, `==#bugs~2`, `==#bugs~2@3`) drops those queued \
 Task Links from the session that ends up running. When nothing is \
 running, every `==` token acts exactly like its `=` twin. The item must \
 contain only the override token (quote in zsh); a bare `==` with more \
@@ -265,8 +265,8 @@ given (`==3#capture` restarts like `==3`). JSON kind stays \
 `demoted` for swaps); human output prints `restarted`/`swapped` with the \
 takeover and first-future lines. See `docs/capture.md` (`Restarting or \
 swapping the running Pomodoro`).\n\n\
-Capture a whole item `=x[<N>][*<P>][!<M>][~<K>]` (case-insensitive `=X`, with \
-`*`, `!`, and `~` in any order; `=*` omits `x` before an initial `*` and `=!` omits it before `!`) to close today's running timed Pomodoro the \
+Capture a whole item `=x[<N>][*<P>][!<M>][~<K>][@<N>]` (case-insensitive `=X`, with \
+`*`, `!`, `~`, and `@` in any order; `<N>` may instead be typed last as `@<N>` (for example `=x!1@2` means `=x2!1`); `=*` omits `x` before an initial `*` and `=!` omits it before `!`) to close today's running timed Pomodoro the \
 way Obsidian's Ctrl+Enter completion does, plus an auto-decrement that \
 shortens an early-stopped session to the earliest five-minute step at or \
 after now (never extended; an overrun is reported). A bare `=x` keeps \
@@ -434,7 +434,7 @@ prefix-matched, so --task-section future-work does not match FUTURE WORK.",
         )
         .after_help(
             "Examples:\n  bob capture buy milk @groceries\n  bob capture buy milk s:1\n  bob capture buy milk s:2 @groceries\n  bob capture buy milk @groceries s:2\n  bob capture buy milk p:2\n  bob capture research rust p:4 @dev\n  bob capture buy milk %\n  bob capture research links %3\n  bob capture investigate %log @dev:blockid\n  bob capture --clip=screenshot -- save dashboard\n  bob capture '@dev^foobar' 'Some ordinary task.'\n  bob capture '@dev:foobar' 'Some foobar task.'\n  bob capture '@dev:foobar#bugs' 'Some foobar task.'\n  bob capture '@cash^goog-exit+' 'Finish the Google exit packet!'\n  printf 'Finish the Google exit packet! @cash^goog-exit+\\n- Draft the resignation memo\\n' | bob capture
-  printf 'Finish the Google exit packet! @cash^goog-exit+#admin\\n- Draft the resignation memo :draft-memo\\n  - keep it short\\n- Collect the equity paperwork ^equity-docs\\n' | bob capture\n  bob capture '@cash+goog-exit' 'Called Morgan Stanley today.'\n  bob capture '@cash+goog-exit!'\n  bob capture +5\n  bob capture -- -2\n  bob capture +\n  bob capture ++3\n  bob capture -- --2\n  bob capture --1\n  printf '+5\\n\\nCall bank @Cash+\\n' | bob capture\n  printf -- '--2\\n\\n+\\n' | bob capture\n  bob capture '=x'\n  bob capture '=x2'\n  bob capture '=x1!2'\n  bob capture '=x1~2'\n  bob capture '=x0'\n  printf '=x2,3\\n- 2 wired the lexer\\n' | bob capture\n  printf '=x =\\n- 1 wired the lexer\\n' | bob capture\n  bob capture '='\n  bob capture '=3'\n  bob capture '=~2'\n  bob capture '=3#bugs~1'\n  bob capture '=#deep-work'\n  bob capture '=3#bugs'\n  bob capture '=x =#bugs'\n  bob capture '=x =~2'\n  printf '=x\\n\\n=\\n' | bob capture\n  bob capture '+2 =x'\n  bob capture '=x ='\n  bob capture '^bob:capture-stop=x'\n  bob capture '^bob:capture-stop=x!1'\n  printf -- '-2\\n\\n=x\\n' | bob capture\n  bob capture 'Postgres 17 minimum @foo+bar#requirements'\n  bob capture --route foo --task bar --task-section REQUIREMENTS -- 'Postgres 17 minimum'\n  bob capture remembered to bump the timeout #\n  bob capture paste the failing output % #\n  bob capture jot idea @notes#Ideas\n  bob capture --route notes --section Ideas -- jot idea\n  bob capture @notes#Ideas jot idea\n  printf '@@foo\\nFirst task\\n\\nSecond task @bar\\n' | bob capture\n  printf '@@foo+a-id\\nFirst note\\n- authored detail\\n\\nSecond note\\n' | bob capture\n  echo 'buy milk @groceries' | bob capture\n  bob capture -f json -- @work send status\n  printf 'Prepare launch\\n- Confirm owner\\n\\nSend status @work\\n' | bob capture\n  printf 'Prepare launch\\n- Confirm owner\\n- Attach checklist\\n' | bob capture\n  bob capture https://example.com/essay\n\nEnvironment:\n  BOB_CLIPBOARD_CMD          whitespace-split command that prints the live clipboard; overrides platform tools\n  BOB_CLIPBOARD_HISTORY_CMD  whitespace-split history command; receives count and prints a newest-first JSON array of strings\n  BOB_CONFIG_FILE            exact bullet-property config file; defaults to $XDG_CONFIG_HOME/bob/config.yml or ~/.config/bob/config.yml\n  BOB_DAY_FILE               exact daily note used by Pomodoro-linked capture\n  BOB_DIR                    Bob vault root when --bob-dir is omitted\n  BOB_NOW                    current date/time override\n  BOB_PRIORITY_ROLL_SEED     fixed seed for p:<N> rolls; unset means random\n  XDG_CONFIG_HOME            base config directory for BOB_CONFIG_FILE's default; defaults to ~/.config\n\nClipboard source order:\n  Live: BOB_CLIPBOARD_CMD; macOS pbpaste; Linux wl-paste or xclip/xsel; tmux show-buffer\n  History: BOB_CLIPBOARD_HISTORY_CMD; otherwise read-only Clipy SQLite on macOS; no automatic provider elsewhere",
+  printf 'Finish the Google exit packet! @cash^goog-exit+#admin\\n- Draft the resignation memo :draft-memo\\n  - keep it short\\n- Collect the equity paperwork ^equity-docs\\n' | bob capture\n  bob capture '@cash+goog-exit' 'Called Morgan Stanley today.'\n  bob capture '@cash+goog-exit!'\n  bob capture +5\n  bob capture -- -2\n  bob capture +\n  bob capture ++3\n  bob capture -- --2\n  bob capture --1\n  printf '+5\\n\\nCall bank @Cash+\\n' | bob capture\n  printf -- '--2\\n\\n+\\n' | bob capture\n  bob capture '=x'\n  bob capture '=x2'\n  bob capture '=x1!2'\n  bob capture '=x!1@2'\n  bob capture '=x1~2'\n  bob capture '=x0'\n  printf '=x2,3\\n- 2 wired the lexer\\n' | bob capture\n  printf '=x =\\n- 1 wired the lexer\\n' | bob capture\n  bob capture '='\n  bob capture '=3'\n  bob capture '=~2'\n  bob capture '=3#bugs~1'\n  bob capture '=#deep-work'\n  bob capture '=3#bugs'\n  bob capture '=#bugs@3'\n  bob capture '=x =#bugs'\n  bob capture '=x =~2'\n  printf '=x\\n\\n=\\n' | bob capture\n  bob capture '+2 =x'\n  bob capture '=x ='\n  bob capture '^bob:capture-stop=x'\n  bob capture '^bob:capture-stop=x!1'\n  printf -- '-2\\n\\n=x\\n' | bob capture\n  bob capture 'Postgres 17 minimum @foo+bar#requirements'\n  bob capture --route foo --task bar --task-section REQUIREMENTS -- 'Postgres 17 minimum'\n  bob capture remembered to bump the timeout #\n  bob capture paste the failing output % #\n  bob capture jot idea @notes#Ideas\n  bob capture --route notes --section Ideas -- jot idea\n  bob capture @notes#Ideas jot idea\n  printf '@@foo\\nFirst task\\n\\nSecond task @bar\\n' | bob capture\n  printf '@@foo+a-id\\nFirst note\\n- authored detail\\n\\nSecond note\\n' | bob capture\n  echo 'buy milk @groceries' | bob capture\n  bob capture -f json -- @work send status\n  printf 'Prepare launch\\n- Confirm owner\\n\\nSend status @work\\n' | bob capture\n  printf 'Prepare launch\\n- Confirm owner\\n- Attach checklist\\n' | bob capture\n  bob capture https://example.com/essay\n\nEnvironment:\n  BOB_CLIPBOARD_CMD          whitespace-split command that prints the live clipboard; overrides platform tools\n  BOB_CLIPBOARD_HISTORY_CMD  whitespace-split history command; receives count and prints a newest-first JSON array of strings\n  BOB_CONFIG_FILE            exact bullet-property config file; defaults to $XDG_CONFIG_HOME/bob/config.yml or ~/.config/bob/config.yml\n  BOB_DAY_FILE               exact daily note used by Pomodoro-linked capture\n  BOB_DIR                    Bob vault root when --bob-dir is omitted\n  BOB_NOW                    current date/time override\n  BOB_PRIORITY_ROLL_SEED     fixed seed for p:<N> rolls; unset means random\n  XDG_CONFIG_HOME            base config directory for BOB_CONFIG_FILE's default; defaults to ~/.config\n\nClipboard source order:\n  Live: BOB_CLIPBOARD_CMD; macOS pbpaste; Linux wl-paste or xclip/xsel; tmux show-buffer\n  History: BOB_CLIPBOARD_HISTORY_CMD; otherwise read-only Clipy SQLite on macOS; no automatic provider elsewhere",
         )
         .disable_help_flag(true)
         .arg(bob_dir_arg())

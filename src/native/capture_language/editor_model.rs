@@ -225,6 +225,7 @@ pub(crate) enum Need {
     PomodoroCloseTask,
     PomodoroCloseLogText,
     PomodoroStartTask,
+    PomodoroStartTiming,
     /// A prerequisite picker is still open: an `&` modifier is partial.
     TaskDependency,
     /// No dependent was named: add task text or `@note+task-id`.
@@ -250,6 +251,7 @@ impl Need {
             Self::PomodoroCloseTask => "pomodoro_close_task",
             Self::PomodoroCloseLogText => "pomodoro_close_log_text",
             Self::PomodoroStartTask => "pomodoro_start_task",
+            Self::PomodoroStartTiming => "pomodoro_start_timing",
             Self::TaskDependency => "task_dependency",
             Self::DependencyTarget => "dependency_target",
             Self::TaskComplete => "task_complete",

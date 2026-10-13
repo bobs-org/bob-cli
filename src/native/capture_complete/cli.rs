@@ -158,7 +158,7 @@ Progress, then Next), and accepting a row inserts the full \
 `route:block-id` in one step while a typed `#name`/`=<X>` suffix \
 survives. A `#name` after `^route:block-id` completes Pomodoro names \
 exactly as it does after `@route:block-id`, and a cursor inside `=<X>` \
-or `=x[<N>][*<P>][!<M>][~<K>]`/`=*`/`=!` offers nothing. A whole-item `!` token completes \
+or `=x[<N>][*<P>][!<M>][~<K>][@<N>]`/`=*`/`=!` offers nothing. A whole-item `!` token completes \
 `task_complete`: every open task (Ready, Blocked, Next, In Progress) in the vault-wide \
 completable catalog, today rows first and ranked by the query with today matches on top; \
 the replacement covers the whole `!` token, sigil included, and the response carries a \

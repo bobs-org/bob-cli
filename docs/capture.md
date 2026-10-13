@@ -202,10 +202,21 @@ anything is written, and any failure rolls the whole batch back.
 | `= ~2` | Ordinary task text; a bare `=` followed by separate text stays prose |
 | `=#deep-work` | Start the open `DEEP WORK` Pomodoro now for 25 minutes; whole-slug match wins, else prefix (`=#deep` matches too) |
 | `=3#bugs` | Start the open `BUGS` Pomodoro now for 15 minutes |
+| `=#bugs@3` | Start the open `BUGS` Pomodoro now for 15 minutes (`=3#bugs` typed last) |
+| `=#bugs@3~2`, `=#bugs~2@3` | Start `BUGS` for 15 minutes without task 2 (`=3#bugs~2`; `@` and `~` in either order) |
+| `==#bugs@3` | Swap `BUGS` in with fresh 15-minute timing (never a ledger takeover) |
+| `=~2@3` | Start without task 2 for 15 minutes (`=3~2` typed last) |
+| `=x!1@2` | Close keeping task 2 in progress and completing task 1 (`=x2!1` typed last) |
+| `=x@2` | Close keeping only task 2 in progress (`=x2` typed last) |
+| `=x@` | Incomplete: type a task number after `@` (`capture-parse` needs `pomodoro_close_task`) |
+| `=x2@3` | Error: lists the in-progress tasks twice (`=x2,3` or `=x@2,3`) |
+| `==#bugs@` | Incomplete: type the timing after `@` (`capture-parse` needs `pomodoro_start_timing`) |
+| `=3#bugs@5` | Error: gives the timing twice (`=5#bugs` or `=#bugs@5`) |
+| `=x @2 foo` | Error: write the task numbers right after `=x` (`=x@2`); to log text starting with `@2`, put the task number first (`=x 1 @2 foo`) |
 | `=#` | Incomplete: type a Pomodoro name after `#` (`capture-parse` needs `pomodoro_name`) |
 | `=# bugs` | Error: write the name right after `#`, with no space (`=#bugs`) |
 | `=#deep work` | Error: join multi-word Pomodoro names with `-` (`=#deep-work`) |
-| `=#bugs=3` | Error: write the duration before the name (`=3#bugs`) |
+| `=#bugs=3` | Error: write the duration after `@` or before the name (`=#bugs@3` or `=3#bugs`) |
 | `=#bugs+2` | Start the Pomodoro named `BUGS+2`; `+` is name charset, so the token stays one named start |
 | `=x#bugs` | Error: `` `=x` always closes the running Pomodoro; write `=x =#bugs` to close it and then start that Pomodoro `` |
 | `=3#bugs more` | Error: a named start item must contain only the token; remove extra text, markers, or child lines |
@@ -1722,9 +1733,7 @@ bob capture '=x =#bugs'
 ```
 
 A named start token is `=` plus an `se<X>` suffix (possibly empty) plus `#`
-plus a name part: every byte after that `#` up to the next ASCII whitespace
-or the end of the line. The `#` must come immediately after the suffix, and
-the `<X>` always goes **before** the `#`. The name part is a Pomodoro
+plus a name part: every byte after that `#` up to the next ASCII whitespace, `~`, or `@`, or the end of the line. The `#` must come immediately after the suffix, and the `<X>` goes before `#` or last after `@` (`=#bugs@3` means `=3#bugs`). The name part is a Pomodoro
 selector with the usual charset (`A-Z`, `a-z`, `0-9`, `& ' ( ) + , . / -`);
 write spaces in names as `-`. A named start claims its item and is never
 prose: an exact token (the item's only text, on exactly one physical line)

@@ -1470,7 +1470,7 @@ fn editor_reports_named_pomodoro_start_modes_spans_and_diagnostics() {
     assert_eq!(codes(&order), vec!["invalid_pomodoro_start"], "=#bugs=3");
     assert_eq!(
         order.diagnostics[0].message,
-        "write the duration before the name: `=3#bugs` instead of `=#bugs=3`",
+        "write the duration after `@` or before the name: `=#bugs@3` or `=3#bugs` instead of `=#bugs=3`",
         "=#bugs=3"
     );
     assert_eq!(order.diagnostics[0].range, Some((2, 8)), "=#bugs=3");

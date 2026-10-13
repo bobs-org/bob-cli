@@ -1085,21 +1085,24 @@ pub(crate) enum EqualsToken {
     /// is never a start-suffix character. `=x#…` still lexes as `Close`.
     Close,
     /// `=` plus the longest `[0-9]*(-[0-9]*)?` run, plus an optional
-    /// `#name` part, plus an optional `~<K>` drop part. `suffix` excludes
-    /// the sigil, `counted` is true when the suffix holds at least one
-    /// digit, `name` is `Some` when a `#` immediately follows the suffix
-    /// (possibly empty, as in `=#`; it ends at the first ASCII whitespace
-    /// or `~`), `drop` holds the `~` offset inside the token plus the text
-    /// after it when a `~` immediately follows the suffix or name, `len`
-    /// is the token's byte length including the sigil, the name, and the
-    /// drop parts, and `override` is true when the token used the doubled
-    /// `==` sigil (an override of the running Pomodoro).
+    /// `#name` part, plus optional `@<X>` timing and `~<K>` drop parts in
+    /// either order. `suffix` excludes the sigil (the leading `<X>`),
+    /// `counted` is true when the effective `<X>` (leading or `@`) holds at
+    /// least one digit, `name` is `Some` when a `#` immediately follows the
+    /// suffix (possibly empty, as in `=#`; it ends at the first ASCII
+    /// whitespace, `~`, or `@`), `drop` holds the `~` offset inside the
+    /// token plus the text after it, `timing` holds the `@` offset plus the
+    /// text after it, `len` is the token's byte length including the sigil,
+    /// the name, and both optional parts, and `override` is true when the
+    /// token used the doubled `==` sigil (an override of the running
+    /// Pomodoro).
     Start {
         suffix: String,
         counted: bool,
         len: usize,
         name: Option<String>,
         drop: Option<(usize, String)>,
+        timing: Option<(usize, String)>,
         r#override: bool,
     },
 }
@@ -1129,10 +1132,15 @@ fn double_close_tail_is_claimed(after_first: &str) -> bool {
 /// with `=`, so ordinary parsing continues. A bare token (`=`, `=-`) has
 /// an empty or digit-free suffix; a counted token (`=3`, `=-2`, `=3-`,
 /// `=2-1`, `=0`) carries at least one digit. An optional `#name` part
-/// immediately after the suffix ends at the first ASCII whitespace or `~`;
-/// the `#` must come immediately after the suffix. An optional `~<K>` drop
-/// part immediately after the suffix or name extends the token to the next
-/// ASCII whitespace (or end of line).
+/// immediately after the suffix ends at the first ASCII whitespace, `~`, or
+/// `@`; the `#` must come immediately after the suffix. After the name, two
+/// optional parts may follow, each at most once and in either order: an
+/// `@<X>` timing part and a `~<K>` drop part. An unnamed token whose `~<K>`
+/// part is present may also take an `@<X>` part after it. A token with no
+/// `#name` and no `~<K>` never reads an `@`, so `=@3` stays prose and
+/// `=3@2` keeps its shape error. Whichever optional part comes first ends
+/// at whitespace or at the other part's sigil; the second runs to
+/// whitespace. `len` covers every part.
 pub(crate) fn session_equals_token(text: &str) -> Option<EqualsToken> {
     let rest = text.strip_prefix('=')?;
     // The doubled `==` sigil is the override twin of every whole-item `=`
@@ -1175,39 +1183,106 @@ pub(crate) fn session_equals_token(text: &str) -> Option<EqualsToken> {
         }
     }
     let suffix = rest[..len].to_string();
-    let counted = suffix.bytes().any(|byte| byte.is_ascii_digit());
     let mut token_len = len + sigil_len;
     let mut name: Option<String> = None;
     if rest.as_bytes().get(len) == Some(&b'#') {
         let after_hash = &rest[len + 1..];
         let name_len = after_hash
             .find(|character: char| {
-                character.is_ascii_whitespace() || character == '~'
+                character.is_ascii_whitespace()
+                    || character == '~'
+                    || character == '@'
             })
             .unwrap_or(after_hash.len());
         name = Some(after_hash[..name_len].to_string());
         token_len += 1 + name_len;
     }
     let mut drop: Option<(usize, String)> = None;
-    // A `~` follows the suffix or name part: its `rest` index is the token
-    // offset minus the sigil length (they coincide only for `=`).
-    let tilde_at = token_len - sigil_len;
-    if rest.as_bytes().get(tilde_at) == Some(&b'~') {
-        let after_tilde = &rest[tilde_at + 1..];
-        let drop_len = after_tilde
-            .find(|character: char| character.is_ascii_whitespace())
-            .unwrap_or(after_tilde.len());
-        drop = Some((token_len, after_tilde[..drop_len].to_string()));
-        token_len += 1 + drop_len;
+    let mut timing: Option<(usize, String)> = None;
+    // After the suffix/name, an optional `@<X>` timing part and an optional
+    // `~<K>` drop part may follow in either order (named), or a `~<K>` part
+    // followed by an `@<X>` part (unnamed with a drop). A token with no
+    // `#name` and no `~<K>` never reads an `@`.
+    let mut rest_pos = token_len - sigil_len;
+    let first = rest.as_bytes().get(rest_pos).copied();
+    match (name.is_some(), first) {
+        (true, Some(b'~')) | (true, Some(b'@')) | (false, Some(b'~')) => {
+            let first_sigil = first.expect("sigil") as char;
+            let after_first = &rest[rest_pos + 1..];
+            let other = if first_sigil == '~' { '@' } else { '~' };
+            // Named: first part ends at whitespace or the other sigil.
+            // Unnamed (no name): only `~` can come first, ending at `@`.
+            let first_len = if name.is_some() {
+                after_first
+                    .find(|c: char| c.is_ascii_whitespace() || c == other)
+                    .unwrap_or(after_first.len())
+            } else {
+                // Unnamed: `~` part ends at whitespace or `@`.
+                after_first
+                    .find(|c: char| c.is_ascii_whitespace() || c == '@')
+                    .unwrap_or(after_first.len())
+            };
+            let first_text = after_first[..first_len].to_string();
+            let first_offset = token_len;
+            token_len += 1 + first_len;
+            rest_pos += 1 + first_len;
+            if first_sigil == '~' {
+                drop = Some((first_offset, first_text));
+            } else {
+                timing = Some((first_offset, first_text));
+            }
+            // Second part, if present, runs to whitespace.
+            let second = rest.as_bytes().get(rest_pos).copied();
+            let want_second = match (name.is_some(), first_sigil, second) {
+                (true, '~', Some(b'@')) | (true, '@', Some(b'~')) => true,
+                (false, '~', Some(b'@')) => true,
+                _ => false,
+            };
+            if want_second {
+                let after_second = &rest[rest_pos + 1..];
+                let second_len = after_second
+                    .find(|c: char| c.is_ascii_whitespace())
+                    .unwrap_or(after_second.len());
+                let second_text = after_second[..second_len].to_string();
+                let second_offset = token_len;
+                token_len += 1 + second_len;
+                if first_sigil == '~' {
+                    timing = Some((second_offset, second_text));
+                } else {
+                    drop = Some((second_offset, second_text));
+                }
+            }
+        }
+        _ => {}
     }
+    let effective = if let Some((_, text)) = timing.as_ref() {
+        text.clone()
+    } else {
+        suffix.clone()
+    };
+    // `counted` reflects the effective `<X>`.
+    let counted = effective.bytes().any(|byte| byte.is_ascii_digit());
     Some(EqualsToken::Start {
         suffix,
         counted,
         len: token_len,
         name,
         drop,
+        timing,
         r#override: is_override,
     })
+}
+
+/// The effective `<X>` timing text: the `@` text when a timing part was
+/// typed, otherwise the leading suffix.
+pub(crate) fn effective_start_timing(
+    suffix: &str,
+    timing: &Option<(usize, String)>,
+) -> String {
+    timing
+        .as_ref()
+        .map(|(_, text)| text.clone())
+        .unwrap_or_else(|| suffix.to_string())
 }
 
 /// Whether a whitespace-separated token can take part in a same-line
@@ -1233,9 +1308,10 @@ pub(super) fn is_session_chain_token(token: &str) -> bool {
             len,
             name,
             drop,
+            timing,
             ..
         }) => {
-            if name.is_some() || drop.is_some() {
+            if name.is_some() || drop.is_some() || timing.is_some() {
                 return true;
             }
             len == token.len() || counted
@@ -1388,36 +1464,55 @@ pub(super) fn parse_pomodoro_adjust_item<'a>(
 /// A named start token's own error, in E1/E3/E2/overflow order. `None`
 /// when the token itself is well-formed (callers then report E4 for extra
 /// text or accept the exact token). `token` is the token without its
-/// `~<K>` drop part; `drop_text` is the text after `~` when one was typed,
-/// kept in the order-error suggestion (for example `=#bugs=3~2` teaches
-/// `=3#bugs~2`).
+/// `~<K>` drop and `@<X>` timing parts; `drop_text`/`timing_text` keep the
+/// typed parts in the order-error suggestion.
 fn named_token_error(
     token: &str,
     suffix: &str,
     name: &str,
     drop_text: Option<&str>,
+    timing_text: Option<&str>,
 ) -> Option<String> {
     if name.is_empty() {
         return Some(pomodoro_named_start_incomplete_error(token));
     }
     if let Some((before, after)) = name.split_once('=')
         && suffix.is_empty()
+        && timing_text.is_none()
         && parse_pomodoro_start_suffix(after).is_ok()
     {
         let drop_suffix =
             drop_text.map(|text| format!("~{text}")).unwrap_or_default();
         let sigil = if token.starts_with("==") { "==" } else { "=" };
         return Some(format!(
-            "write the duration before the name: `{sigil}{after}#{before}{drop_suffix}` instead of `{token}`"
+            "write the duration after `@` or before the name: `{sigil}#{before}@{after}{drop_suffix}` or `{sigil}{after}#{before}{drop_suffix}` instead of `{token}`"
         ));
     }
     if !is_pomodoro_selector_component(name) {
         return Some(pomodoro_named_start_name_error(name, token));
     }
-    if let Err(message) = parse_pomodoro_start_suffix(suffix) {
+    let effective = timing_text.unwrap_or(suffix);
+    if let Err(message) = parse_pomodoro_start_suffix(effective) {
         return Some(message);
     }
     None
+}
+
+/// Both-timings error for a named token with a leading `<X>` and an `@<X>`
+/// part. `None` when not both. Wins over the dangling-`@` incomplete state.
+fn named_timing_twice_error(
+    token: &str,
+    suffix: &str,
+    name: &str,
+    timing_text: Option<&str>,
+) -> Option<String> {
+    let timing = timing_text?;
+    if suffix.is_empty() {
+        return None;
+    }
+    let sigil = if token.starts_with("==") { "==" } else { "=" };
+    let effective = if !timing.is_empty() { timing } else { suffix };
+    Some(start_timing_twice_error(token, sigil, effective, name))
 }
 
 /// E4 for a well-formed named token with extra text or child lines.
@@ -1459,15 +1554,11 @@ pub(super) fn named_shape_error_with_drop(
 
 /// Absolute byte offset of a whole-item start token's `after_tilde` text
 /// (the drop list after the first `~`), so drop diagnostics point at the
-/// original input. `token_text` is the parent line's first token.
-fn start_drop_offset(
-    parent_line: &ItemLine<'_>,
-    token_text: &str,
-    after_tilde: &str,
-) -> usize {
+/// original input. `drop_offset` is the token-relative offset of the `~`.
+fn start_drop_offset(parent_line: &ItemLine<'_>, drop_offset: usize) -> usize {
     let leading =
         parent_line.raw.text.len() - parent_line.raw.text.trim_start().len();
-    parent_line.raw.start + leading + (token_text.len() - after_tilde.len())
+    parent_line.raw.start + leading + drop_offset + 1
 }
 
 /// Lex a start drop part for execution: a valid list, an incomplete
@@ -1476,9 +1567,10 @@ fn start_drop_offset(
 fn lex_start_drop_for_execution(
     parent_line: &ItemLine<'_>,
     token_text: &str,
+    drop_offset: usize,
     after_tilde: &str,
 ) -> Result<Vec<u32>, String> {
-    let offset = start_drop_offset(parent_line, token_text, after_tilde);
+    let offset = start_drop_offset(parent_line, drop_offset);
     match lex_start_drop(after_tilde, offset, token_text) {
         Ok(StartDropOutcome::Valid(lex)) => Ok(lex.drop),
         Ok(StartDropOutcome::Incomplete(incomplete)) => Err(
@@ -1489,13 +1581,14 @@ fn lex_start_drop_for_execution(
 }
 
 /// Whether the spaceless join of a start line lexes as a valid whole-item
-/// start with a drop list, in which case the no-spaces hint wins over the
-/// shape error.
+/// start with a drop or timing list, in which case the no-spaces hint wins
+/// over the shape error.
 pub(super) fn spaceless_start_drop_is_valid(nospace: &str) -> bool {
     let Some(EqualsToken::Start {
         suffix,
         name,
-        drop: Some((_, after_tilde)),
+        drop,
+        timing,
         len,
         ..
     }) = session_equals_token(nospace)
@@ -1505,7 +1598,11 @@ pub(super) fn spaceless_start_drop_is_valid(nospace: &str) -> bool {
     if len != nospace.len() {
         return false;
     }
-    if parse_pomodoro_start_suffix(&suffix).is_err() {
+    if drop.is_none() && timing.is_none() {
+        return false;
+    }
+    let effective = effective_start_timing(&suffix, &timing);
+    if parse_pomodoro_start_suffix(&effective).is_err() {
         return false;
     }
     if let Some(selector) = name
@@ -1513,8 +1610,34 @@ pub(super) fn spaceless_start_drop_is_valid(nospace: &str) -> bool {
     {
         return false;
     }
-    lex_start_drop(&after_tilde, 0, nospace)
-        .is_ok_and(|outcome| matches!(outcome, StartDropOutcome::Valid(_)))
+    if let Some((_, after_tilde)) = drop {
+        if lex_start_drop(&after_tilde, 0, nospace)
+            .is_ok_and(|outcome| matches!(outcome, StartDropOutcome::Valid(_)))
+            == false
+        {
+            return false;
+        }
+    }
+    // A timing part, when present, must itself be a valid `<X>`.
+    if let Some((_, after_at)) = timing {
+        if parse_pomodoro_start_suffix(&after_at).is_err() {
+            return false;
+        }
+    }
+    true
+}
+
+/// Whether the spaceless join's first extra word starts with `@`, in which
+/// case the timing no-space hint wins over the drop hint.
+pub(super) fn spaceless_extra_is_timing(
+    parent_trimmed: &str,
+    len: usize,
+) -> bool {
+    let extra = parent_trimmed.get(len..).unwrap_or("").trim_start();
+    extra
+        .split_whitespace()
+        .next()
+        .is_some_and(|word| word.starts_with('@'))
 }
 
 /// E4 no-space variant for `=# <word>`: the name must follow `#` directly.
@@ -1892,26 +2015,37 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
             len,
             name,
             drop,
+            timing,
             r#override,
         } => {
             if let Some(selector) = name {
                 let token_text =
                     parent_trimmed.get(..len).unwrap_or(parent_trimmed);
                 let drop_text = drop.as_ref().map(|(_, text)| text.as_str());
-                // Named diagnostics interpolate the token without the drop
-                // part; `=#~2` reports the existing empty-name error on `=#`.
-                let token_without_drop = match drop.as_ref() {
-                    Some((offset, _)) => {
-                        token_text.get(..*offset).unwrap_or(token_text)
+                let timing_text =
+                    timing.as_ref().map(|(_, text)| text.as_str());
+                // Named diagnostics interpolate the token without the
+                // optional parts; `=#~2` reports the empty-name error on
+                // `=#`, and `=#@3` the same way.
+                let first_opt = drop
+                    .as_ref()
+                    .map(|(offset, _)| *offset)
+                    .into_iter()
+                    .chain(timing.as_ref().map(|(offset, _)| *offset))
+                    .min();
+                let token_without_parts = match first_opt {
+                    Some(offset) => {
+                        token_text.get(..offset).unwrap_or(token_text)
                     }
                     None => token_text,
                 };
-                // Suffix and name errors win over the drop list.
+                // Suffix and name errors win over the drop/timing lists.
                 if let Some(error) = named_token_error(
-                    token_without_drop,
+                    token_without_parts,
                     &suffix,
                     &selector,
                     drop_text,
+                    timing_text,
                 ) {
                     let exact =
                         parent_trimmed.len() == len && item.lines.len() == 1;
@@ -1928,7 +2062,22 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                     }
                     return Err(error);
                 }
-                // A drop part claims the item, like a counted token.
+                // Both timings win over the dangling-`@` incomplete state.
+                if let Some(error) = named_timing_twice_error(
+                    token_text,
+                    &suffix,
+                    &selector,
+                    timing_text,
+                ) {
+                    return Err(error);
+                }
+                // Dangling `@` is an incomplete error on execution.
+                if let Some(text) = timing_text
+                    && text.is_empty()
+                {
+                    return Err(start_timing_incomplete_error(token_text));
+                }
+                // A drop or timing part claims the item, like a counted token.
                 let exact =
                     parent_trimmed.len() == len && item.lines.len() == 1;
                 if !exact {
@@ -1938,12 +2087,10 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                         // A broken drop list reports its own error first; a
                         // dangling separator with extra text falls through
                         // to the no-spaces hint or the shape error.
-                        if let Some((_, after_tilde)) = drop.as_ref() {
-                            let offset = start_drop_offset(
-                                parent_line,
-                                token_text,
-                                after_tilde,
-                            );
+                        if let Some((drop_offset, after_tilde)) = drop.as_ref()
+                        {
+                            let offset =
+                                start_drop_offset(parent_line, *drop_offset);
                             if let Err(error) =
                                 lex_start_drop(after_tilde, offset, token_text)
                             {
@@ -1954,11 +2101,19 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                             let nospace: String =
                                 parent_trimmed.split_whitespace().collect();
                             if spaceless_start_drop_is_valid(&nospace) {
+                                if spaceless_extra_is_timing(
+                                    parent_trimmed,
+                                    len,
+                                ) {
+                                    return Err(start_timing_no_spaces_error(
+                                        &nospace,
+                                    ));
+                                }
                                 return Err(start_drop_no_spaces_error());
                             }
                         }
                         return Err(named_shape_error_with_drop(
-                            token_without_drop,
+                            token_without_parts,
                             &suffix,
                             &selector,
                             parent_trimmed,
@@ -1968,12 +2123,14 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                     }
                     return Ok(None);
                 }
-                let mut spec = parse_pomodoro_start_suffix(&suffix)?;
+                let effective = effective_start_timing(&suffix, &timing);
+                let mut spec = parse_pomodoro_start_suffix(&effective)?;
                 spec.r#override = r#override;
-                if let Some((_, after_tilde)) = drop.as_ref() {
+                if let Some((drop_offset, after_tilde)) = drop.as_ref() {
                     spec.drop = lex_start_drop_for_execution(
                         parent_line,
                         token_text,
+                        *drop_offset,
                         after_tilde,
                     )?;
                 }
@@ -2001,10 +2158,10 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                     None,
                 )));
             }
-            // A drop part claims the item, the same way a counted token
-            // does. It is never prose, near misses included. A bare `=`
+            // A drop or timing part claims the item, the same way a counted
+            // token does. It is never prose, near misses included. A bare `=`
             // followed by separate text (`= ~2`, `= foo`) stays prose.
-            let claims = counted || drop.is_some();
+            let claims = counted || drop.is_some() || timing.is_some();
             let exact = parent_trimmed.len() == len && item.lines.len() == 1;
             if !exact {
                 if claims
@@ -2012,15 +2169,39 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                 {
                     let token_text =
                         parent_trimmed.get(..len).unwrap_or(parent_trimmed);
+                    // Both timings win over dangling-`@`.
+                    if !suffix.is_empty()
+                        && let Some((_, timing_text)) = timing.as_ref()
+                    {
+                        let sigil = if token_text.starts_with("==") {
+                            "=="
+                        } else {
+                            "="
+                        };
+                        let drop_text = drop
+                            .as_ref()
+                            .map(|(_, text)| text.as_str())
+                            .unwrap_or("");
+                        let effective = if !timing_text.is_empty() {
+                            timing_text.as_str()
+                        } else {
+                            suffix.as_str()
+                        };
+                        return Err(start_timing_twice_unnamed_error(
+                            token_text, sigil, effective, drop_text,
+                        ));
+                    }
+                    if let Some((_, timing_text)) = timing.as_ref()
+                        && timing_text.is_empty()
+                    {
+                        return Err(start_timing_incomplete_error(token_text));
+                    }
                     // A broken drop list reports its own error first; a
                     // dangling separator with extra text falls through to
                     // the no-spaces hint or the shape error, like closes.
-                    if let Some((_, after_tilde)) = drop.as_ref() {
-                        let offset = start_drop_offset(
-                            parent_line,
-                            token_text,
-                            after_tilde,
-                        );
+                    if let Some((drop_offset, after_tilde)) = drop.as_ref() {
+                        let offset =
+                            start_drop_offset(parent_line, *drop_offset);
                         if let Err(error) =
                             lex_start_drop(after_tilde, offset, token_text)
                         {
@@ -2047,14 +2228,44 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                 }
                 return Ok(None);
             }
-            // Suffix errors win over the drop list.
-            let mut spec = parse_pomodoro_start_suffix(&suffix)?;
+            // Both timings (`=3~2@4`) are the timing-twice error.
+            if !suffix.is_empty()
+                && let Some((_, timing_text)) = timing.as_ref()
+            {
+                let sigil = if parent_trimmed.starts_with("==") {
+                    "=="
+                } else {
+                    "="
+                };
+                let drop_text =
+                    drop.as_ref().map(|(_, text)| text.as_str()).unwrap_or("");
+                let effective = if !timing_text.is_empty() {
+                    timing_text.as_str()
+                } else {
+                    suffix.as_str()
+                };
+                let token_text = parent_trimmed;
+                return Err(start_timing_twice_unnamed_error(
+                    token_text, sigil, effective, drop_text,
+                ));
+            }
+            if let Some((_, timing_text)) = timing.as_ref()
+                && timing_text.is_empty()
+            {
+                let token_text = parent_trimmed;
+                return Err(start_timing_incomplete_error(token_text));
+            }
+            // Suffix errors win over the drop list; the effective `<X>`
+            // (leading or `@`) is validated.
+            let effective = effective_start_timing(&suffix, &timing);
+            let mut spec = parse_pomodoro_start_suffix(&effective)?;
             spec.r#override = r#override;
-            if let Some((_, after_tilde)) = drop.as_ref() {
+            if let Some((drop_offset, after_tilde)) = drop.as_ref() {
                 let token_text = parent_trimmed;
                 spec.drop = lex_start_drop_for_execution(
                     parent_line,
                     token_text,
+                    *drop_offset,
                     after_tilde,
                 )?;
             }

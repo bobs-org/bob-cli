@@ -270,6 +270,7 @@ pub(super) fn parse_editor_named_start_item<'a>(
     name: String,
     len: usize,
     drop: Option<(usize, String)>,
+    timing: Option<(usize, String)>,
     override_token: bool,
 ) -> Option<EditorItemOutcome<'a>> {
     let parent = item.lines.first().expect("nonempty item");
@@ -301,10 +302,18 @@ pub(super) fn parse_editor_named_start_item<'a>(
     }
     let token_text = parent_trimmed.get(..len).unwrap_or(parent_trimmed);
     let drop_text = drop.as_ref().map(|(_, text)| text.as_str());
-    let token_without_drop = match drop.as_ref() {
-        Some((offset, _)) => token_text.get(..*offset).unwrap_or(token_text),
+    let timing_text = timing.as_ref().map(|(_, text)| text.as_str());
+    let first_opt = drop
+        .as_ref()
+        .map(|(offset, _)| *offset)
+        .into_iter()
+        .chain(timing.as_ref().map(|(offset, _)| *offset))
+        .min();
+    let token_without_parts = match first_opt {
+        Some(offset) => token_text.get(..offset).unwrap_or(token_text),
         None => token_text,
     };
+    let token_without_drop = token_without_parts;
     // Lex the drop part with absolute offsets, mirroring execution's
     // message and range byte for byte.
     enum DropLex {
@@ -315,8 +324,8 @@ pub(super) fn parse_editor_named_start_item<'a>(
     }
     let drop_lex = match drop.as_ref() {
         None => DropLex::None,
-        Some((_, after_tilde)) => {
-            let base = token_start + (token_text.len() - after_tilde.len());
+        Some((drop_offset, after_tilde)) => {
+            let base = token_start + drop_offset + 1;
             match lex_start_drop(after_tilde, base, token_text) {
                 Ok(StartDropOutcome::Valid(lex)) => {
                     DropLex::Valid(lex.drop, lex.drop_range)
@@ -337,13 +346,15 @@ pub(super) fn parse_editor_named_start_item<'a>(
     if exact {
         if name.is_empty() {
             // `=<X>#` is an editing state, never a mistake — unless a drop
-            // part was typed (`=#~2`), which reports the empty-name error.
-            if drop.is_some() {
+            // or timing part was typed (`=#~2`, `=#@3`), which reports the
+            // empty-name error.
+            if drop.is_some() || timing.is_some() {
                 let (message, range) = named_start_token_diagnostic(
                     token_without_drop,
                     &suffix,
                     &name,
                     drop_text,
+                    timing_text,
                     NamedStartOffsets {
                         token_start,
                         prefix_len,
@@ -375,6 +386,7 @@ pub(super) fn parse_editor_named_start_item<'a>(
             &suffix,
             &name,
             drop_text,
+            timing_text,
             NamedStartOffsets {
                 token_start,
                 prefix_len,
@@ -390,9 +402,75 @@ pub(super) fn parse_editor_named_start_item<'a>(
                 Some(range),
             ));
         }
-        let mut spec = parse_pomodoro_start_suffix(&suffix)
+        // Both timings win over the dangling-`@` incomplete state.
+        if !suffix.is_empty()
+            && let Some((timing_offset, timing_after)) = timing.as_ref()
+        {
+            let sigil = if token_text.starts_with("==") {
+                "=="
+            } else {
+                "="
+            };
+            let effective = if !timing_after.is_empty() {
+                timing_after.as_str()
+            } else {
+                suffix.as_str()
+            };
+            let message =
+                start_timing_twice_error(token_text, sigil, effective, &name);
+            let range = (
+                token_start + timing_offset,
+                token_start + timing_offset + 1 + timing_after.len(),
+            );
+            return Some(editor_named_invalid_outcome(
+                item,
+                parent_trimmed,
+                spans,
+                message,
+                Some(range),
+            ));
+        }
+        // Dangling `@`: incomplete needing `pomodoro_start_timing`, no spec.
+        if let Some((timing_offset, timing_after)) = timing.as_ref()
+            && timing_after.is_empty()
+        {
+            let mut timing_spans = spans.clone();
+            timing_spans.push(Span {
+                start: token_start + timing_offset,
+                end: token_start + timing_offset + 1,
+                kind: SpanKind::InteractivePlaceholder,
+            });
+            // Add drop span if a valid drop was typed before the dangling `@`.
+            if let DropLex::Valid(_, range) = &drop_lex {
+                timing_spans.push(Span {
+                    start: range.0,
+                    end: range.1,
+                    kind: SpanKind::PomodoroStartDrop,
+                });
+                timing_spans.sort_by_key(|span| span.start);
+            }
+            return Some(editor_start_timing_incomplete_outcome(
+                item,
+                parent_trimmed,
+                timing_spans,
+                Some(name.clone()),
+            ));
+        }
+        let effective = super::item::effective_start_timing(&suffix, &timing);
+        let mut spec = parse_pomodoro_start_suffix(&effective)
             .expect("named token checked before spec");
         spec.r#override = override_token;
+        // Second `pomodoro_start` span over `@<X>` including the `@`.
+        if let Some((timing_offset, timing_after)) = timing.as_ref() {
+            let start = token_start + timing_offset;
+            let end = start + 1 + timing_after.len();
+            spans.push(Span {
+                start,
+                end,
+                kind: SpanKind::PomodoroStart,
+            });
+            spans.sort_by_key(|span| span.start);
+        }
         match drop_lex {
             DropLex::None => {
                 return Some(editor_named_valid_outcome(
@@ -472,6 +550,7 @@ pub(super) fn parse_editor_named_start_item<'a>(
         &suffix,
         &name,
         drop_text,
+        timing_text,
         NamedStartOffsets {
             token_start,
             prefix_len,
@@ -495,6 +574,53 @@ pub(super) fn parse_editor_named_start_item<'a>(
             range,
         ));
     }
+    // Both timings win over dangling-`@`, like execution.
+    if !suffix.is_empty()
+        && let Some((timing_offset, timing_after)) = timing.as_ref()
+    {
+        let sigil = if token_text.starts_with("==") {
+            "=="
+        } else {
+            "="
+        };
+        let effective = if !timing_after.is_empty() {
+            timing_after.as_str()
+        } else {
+            suffix.as_str()
+        };
+        let message =
+            start_timing_twice_error(token_text, sigil, effective, &name);
+        let range = (
+            token_start + timing_offset,
+            token_start + timing_offset + 1 + timing_after.len(),
+        );
+        return Some(editor_named_invalid_outcome(
+            item,
+            parent_trimmed,
+            spans,
+            message,
+            Some(range),
+        ));
+    }
+    if let Some((timing_offset, timing_after)) = timing.as_ref()
+        && timing_after.is_empty()
+    {
+        let mut timing_spans = spans.clone();
+        timing_spans.push(Span {
+            start: token_start + timing_offset,
+            end: token_start + timing_offset + 1,
+            kind: SpanKind::InteractivePlaceholder,
+        });
+        timing_spans.sort_by_key(|span| span.start);
+        // With extra text or child lines, a dangling `@` still reports the
+        // timing incomplete state (never a takeover).
+        return Some(editor_start_timing_incomplete_outcome(
+            item,
+            parent_trimmed,
+            timing_spans,
+            Some(name.clone()),
+        ));
+    }
     // A broken drop list reports its own error first, exactly like
     // execution. A dangling separator with extra text falls through to
     // the no-spaces hint or the shape error, like closes.
@@ -510,6 +636,15 @@ pub(super) fn parse_editor_named_start_item<'a>(
     if has_extra {
         let nospace: String = parent_trimmed.split_whitespace().collect();
         if super::item::spaceless_start_drop_is_valid(&nospace) {
+            if super::item::spaceless_extra_is_timing(parent_trimmed, len) {
+                return Some(editor_named_invalid_outcome(
+                    item,
+                    parent_trimmed,
+                    spans,
+                    start_timing_no_spaces_error(&nospace),
+                    Some(extra_text_range(token_start, parent_trimmed, len)),
+                ));
+            }
             return Some(editor_named_invalid_outcome(
                 item,
                 parent_trimmed,
@@ -636,6 +771,47 @@ fn editor_start_drop_incomplete_outcome<'a>(
     }
 }
 
+/// Build a timing-incomplete outcome: mode `incomplete`, need
+/// `pomodoro_start_timing`, the typed name as `section`, no spec (the
+/// timing is unknown and an empty `raw` would read as a ledger takeover),
+/// and an `interactive_placeholder` span over the `@`.
+fn editor_start_timing_incomplete_outcome<'a>(
+    item: &CaptureItem<'a>,
+    parent_trimmed: &str,
+    spans: Vec<Span>,
+    section: Option<String>,
+) -> EditorItemOutcome<'a> {
+    EditorItemOutcome {
+        item: EditorItemParse {
+            index: item.index,
+            start: item.start,
+            end: item.end,
+            line_start: item.line_start,
+            line_end: item.line_end,
+            body: parent_trimmed.to_string(),
+            mode: EditorMode::Incomplete,
+            route: None,
+            section,
+            block_id: None,
+            needs: vec![Need::PomodoroStartTiming],
+            ref_listen: false,
+            pomodoro_start: None,
+            pomodoro_adjust: None,
+            pomodoro_shift: None,
+            pomodoro_close: None,
+            dependencies: Vec::new(),
+            dependency_target: None,
+            task_complete: None,
+            spans,
+            diagnostics: Vec::new(),
+            sub_bullets: Vec::new(),
+            has_local_destination: false,
+            local_destination_markers: Vec::new(),
+        },
+        declarations: Vec::new(),
+    }
+}
+
 /// Absolute byte offsets of a named start token's parts: `token_start` is
 /// the `=` byte, `prefix_len` is the `=<X>` byte length, and `name_start`
 /// / `name_end` bound the name part.
@@ -657,6 +833,7 @@ fn named_start_token_diagnostic(
     suffix: &str,
     name: &str,
     drop_text: Option<&str>,
+    timing_text: Option<&str>,
     offsets: NamedStartOffsets,
 ) -> Option<(String, (usize, usize))> {
     let NamedStartOffsets {
@@ -673,6 +850,7 @@ fn named_start_token_diagnostic(
     }
     if let Some((before, after)) = name.split_once('=')
         && suffix.is_empty()
+        && timing_text.is_none()
         && parse_pomodoro_start_suffix(after).is_ok()
     {
         let drop_suffix =
@@ -680,7 +858,7 @@ fn named_start_token_diagnostic(
         let sigil = if token.starts_with("==") { "==" } else { "=" };
         return Some((
             format!(
-                "write the duration before the name: `{sigil}{after}#{before}{drop_suffix}` instead of `{token}`"
+                "write the duration after `@` or before the name: `{sigil}#{before}@{after}{drop_suffix}` or `{sigil}{after}#{before}{drop_suffix}` instead of `{token}`"
             ),
             (name_start, name_end),
         ));
@@ -691,7 +869,8 @@ fn named_start_token_diagnostic(
             (name_start, name_end),
         ));
     }
-    if let Err(message) = parse_pomodoro_start_suffix(suffix) {
+    let effective = timing_text.unwrap_or(suffix);
+    if let Err(message) = parse_pomodoro_start_suffix(effective) {
         return Some((message, (token_start, token_start + prefix_len)));
     }
     None
@@ -787,6 +966,7 @@ pub(super) fn parse_editor_start_item<'a>(
     counted: bool,
     len: usize,
     drop: Option<(usize, String)>,
+    timing: Option<(usize, String)>,
     override_token: bool,
 ) -> Option<EditorItemOutcome<'a>> {
     let parent = item.lines.first().expect("nonempty item");
@@ -794,14 +974,15 @@ pub(super) fn parse_editor_start_item<'a>(
     let token_start = parent.raw.start + leading;
     let token_end = token_start + len;
     let token_text = parent_trimmed.get(..len).unwrap_or(parent_trimmed);
-    // When a drop part is present the `pomodoro_start` span covers only
-    // `==<X>`/`=<X>`; otherwise it is unchanged over the whole token. The
-    // `==` sigil is one byte longer than `=`.
+    // When a drop or timing part is present the `pomodoro_start` span covers
+    // only `==<X>`/`=<X>`; otherwise it is unchanged over the whole token.
+    // A second `pomodoro_start` span covers `@<X>`. The `==` sigil is one
+    // byte longer than `=`.
     let sigil_len: usize = if override_token { 2 } else { 1 };
     let prefix_len = sigil_len + suffix.len();
     let base_span = Span {
         start: token_start,
-        end: if drop.is_some() {
+        end: if drop.is_some() || timing.is_some() {
             token_start + prefix_len
         } else {
             token_end
@@ -816,8 +997,8 @@ pub(super) fn parse_editor_start_item<'a>(
     }
     let drop_lex = match drop.as_ref() {
         None => DropLex::None,
-        Some((_, after_tilde)) => {
-            let base = token_start + (token_text.len() - after_tilde.len());
+        Some((drop_offset, after_tilde)) => {
+            let base = token_start + drop_offset + 1;
             match lex_start_drop(after_tilde, base, token_text) {
                 Ok(StartDropOutcome::Valid(lex)) => {
                     DropLex::Valid(lex.drop, lex.drop_range)
@@ -842,10 +1023,67 @@ pub(super) fn parse_editor_start_item<'a>(
             kind: SpanKind::PomodoroStartDrop,
         });
     }
-    let claims = counted || drop.is_some();
+    if let Some((timing_offset, timing_after)) = timing.as_ref()
+        && !timing_after.is_empty()
+    {
+        valid_spans.push(Span {
+            start: token_start + timing_offset,
+            end: token_start + timing_offset + 1 + timing_after.len(),
+            kind: SpanKind::PomodoroStart,
+        });
+        valid_spans.sort_by_key(|span| span.start);
+    }
+    let claims = counted || drop.is_some() || timing.is_some();
     let exact = parent_trimmed.len() == len && item.lines.len() == 1;
     if !exact {
         if claims || (parent_trimmed.len() == len && item.lines.len() > 1) {
+            // Both timings win over dangling-`@`, like execution.
+            if !suffix.is_empty()
+                && let Some((timing_offset, timing_after)) = timing.as_ref()
+            {
+                let sigil = if token_text.starts_with("==") {
+                    "=="
+                } else {
+                    "="
+                };
+                let drop_text =
+                    drop.as_ref().map(|(_, text)| text.as_str()).unwrap_or("");
+                let effective = if !timing_after.is_empty() {
+                    timing_after.as_str()
+                } else {
+                    suffix.as_str()
+                };
+                let message = start_timing_twice_unnamed_error(
+                    token_text, sigil, effective, drop_text,
+                );
+                let range = (
+                    token_start + timing_offset,
+                    token_start + timing_offset + 1 + timing_after.len(),
+                );
+                return Some(editor_start_invalid_outcome(
+                    item,
+                    parent_trimmed,
+                    base_span,
+                    message,
+                    Some(range),
+                ));
+            }
+            if let Some((timing_offset, timing_after)) = timing.as_ref()
+                && timing_after.is_empty()
+            {
+                let mut timing_spans = vec![base_span];
+                timing_spans.push(Span {
+                    start: token_start + timing_offset,
+                    end: token_start + timing_offset + 1,
+                    kind: SpanKind::InteractivePlaceholder,
+                });
+                return Some(editor_start_timing_incomplete_outcome(
+                    item,
+                    parent_trimmed,
+                    timing_spans,
+                    None,
+                ));
+            }
             // A broken drop list reports its own error first, exactly like
             // execution. A dangling separator with extra text falls through
             // to the no-spaces hint or the shape error, like closes.
@@ -913,8 +1151,56 @@ pub(super) fn parse_editor_start_item<'a>(
         }
         return None;
     }
-    // Suffix errors win over the drop list.
-    let base_spec = match parse_pomodoro_start_suffix(&suffix) {
+    // Both timings win over dangling-`@`.
+    if !suffix.is_empty()
+        && let Some((timing_offset, timing_after)) = timing.as_ref()
+    {
+        let sigil = if token_text.starts_with("==") {
+            "=="
+        } else {
+            "="
+        };
+        let drop_text =
+            drop.as_ref().map(|(_, text)| text.as_str()).unwrap_or("");
+        let effective = if !timing_after.is_empty() {
+            timing_after.as_str()
+        } else {
+            suffix.as_str()
+        };
+        let message = start_timing_twice_unnamed_error(
+            token_text, sigil, effective, drop_text,
+        );
+        let range = (
+            token_start + timing_offset,
+            token_start + timing_offset + 1 + timing_after.len(),
+        );
+        return Some(editor_start_invalid_outcome(
+            item,
+            parent_trimmed,
+            base_span,
+            message,
+            Some(range),
+        ));
+    }
+    if let Some((timing_offset, timing_after)) = timing.as_ref()
+        && timing_after.is_empty()
+    {
+        let mut timing_spans = vec![base_span];
+        timing_spans.push(Span {
+            start: token_start + timing_offset,
+            end: token_start + timing_offset + 1,
+            kind: SpanKind::InteractivePlaceholder,
+        });
+        return Some(editor_start_timing_incomplete_outcome(
+            item,
+            parent_trimmed,
+            timing_spans,
+            None,
+        ));
+    }
+    // Effective `<X>` errors win over the drop list.
+    let effective = super::item::effective_start_timing(&suffix, &timing);
+    let base_spec = match parse_pomodoro_start_suffix(&effective) {
         Ok(mut spec) => {
             spec.r#override = override_token;
             spec
@@ -930,35 +1216,44 @@ pub(super) fn parse_editor_start_item<'a>(
         }
     };
     match drop_lex {
-        DropLex::None => Some(EditorItemOutcome {
-            item: EditorItemParse {
-                index: item.index,
-                start: item.start,
-                end: item.end,
-                line_start: item.line_start,
-                line_end: item.line_end,
-                body: parent_trimmed.to_string(),
-                mode: EditorMode::PomodoroStart,
-                route: None,
-                section: None,
-                block_id: None,
-                needs: Vec::new(),
-                ref_listen: false,
-                pomodoro_start: Some(base_spec),
-                pomodoro_adjust: None,
-                pomodoro_shift: None,
-                pomodoro_close: None,
-                dependencies: Vec::new(),
-                dependency_target: None,
-                task_complete: None,
-                spans: vec![base_span],
-                diagnostics: Vec::new(),
-                sub_bullets: Vec::new(),
-                has_local_destination: false,
-                local_destination_markers: Vec::new(),
-            },
-            declarations: Vec::new(),
-        }),
+        DropLex::None => {
+            // A timing-only start (`=#bugs@3`, `=~2@3`) is valid with the
+            // second `pomodoro_start` span; otherwise the base span alone.
+            let spans = if timing.is_some() {
+                valid_spans.clone()
+            } else {
+                vec![base_span]
+            };
+            Some(EditorItemOutcome {
+                item: EditorItemParse {
+                    index: item.index,
+                    start: item.start,
+                    end: item.end,
+                    line_start: item.line_start,
+                    line_end: item.line_end,
+                    body: parent_trimmed.to_string(),
+                    mode: EditorMode::PomodoroStart,
+                    route: None,
+                    section: None,
+                    block_id: None,
+                    needs: Vec::new(),
+                    ref_listen: false,
+                    pomodoro_start: Some(base_spec),
+                    pomodoro_adjust: None,
+                    pomodoro_shift: None,
+                    pomodoro_close: None,
+                    dependencies: Vec::new(),
+                    dependency_target: None,
+                    task_complete: None,
+                    spans,
+                    diagnostics: Vec::new(),
+                    sub_bullets: Vec::new(),
+                    has_local_destination: false,
+                    local_destination_markers: Vec::new(),
+                },
+                declarations: Vec::new(),
+            })
+        }
         DropLex::Valid(list, _) => {
             let mut spec = base_spec;
             spec.drop = list;
@@ -1056,6 +1351,7 @@ pub(super) fn parse_editor_close_item<'a>(
             len,
             name,
             drop,
+            timing,
             r#override,
         } => {
             if let Some(selector) = name {
@@ -1066,6 +1362,7 @@ pub(super) fn parse_editor_close_item<'a>(
                     selector,
                     len,
                     drop,
+                    timing,
                     r#override,
                 );
             }
@@ -1076,6 +1373,7 @@ pub(super) fn parse_editor_close_item<'a>(
                 counted,
                 len,
                 drop,
+                timing,
                 r#override,
             );
         }

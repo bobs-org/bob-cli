@@ -361,12 +361,12 @@ typed on that same item. The whole batch is planned before anything is written.
 | `+[N]` / `-[N]` | Adjust today's current timed Pomodoro by N five-minute units (`+5` extends 25m, `-` shortens 5m; the count defaults to 1); the item must contain only the signed count |
 | `++[N]` / `--[N]` | Shift today's running timed Pomodoro N five-minute units later/earlier, keeping its duration (`++3` moves 15m later, `--` moves 5m earlier; the count defaults to 1); the item must contain only the operator |
 | `=` / `=<X>` | Start today's next future Pomodoro now with `se<X>` timing (`=` is 25 minutes, `=3` is 15 minutes); the item must contain only the start token (quote in zsh) |
-| `=<X>#pomodoro` | Start the named Pomodoro now with `se<X>` timing (`=#deep-work` is 25 minutes, `=3#bugs` is 15 minutes); an open match (whole slug, else prefix) starts in place, a completed match starts a new session with that name, otherwise a new named session is created and started; the item must contain only the start token (quote in zsh) |
+| `=<X>#pomodoro` | Start the named Pomodoro now with `se<X>` timing (`=#deep-work` is 25 minutes, `=3#bugs` is 15 minutes, `=#bugs@3` means `=3#bugs`); an open match (whole slug, else prefix) starts in place, a completed match starts a new session with that name, otherwise a new named session is created and started; the item must contain only the start token (quote in zsh) |
 | `=[<X>][#<name>]~<K>` | Start without the queued Task Links in `<K>` (`=~2`, `=3~2,4`, `=#bugs~2`); `~` drops, the drop part always comes last (quote in zsh) |
 | `==` / `==<X>` | Restart today's running timed Pomodoro now with fresh `se<X>` timing (`==` is 25 minutes); when nothing is running, acts exactly like the `=` twin (quote in zsh) |
 | `==[<X>]#pomodoro` | Swap the named Pomodoro in as the running session: an empty `<X>` takes over the running ledger (`==#bugs`), otherwise fresh `se<X>` timing (`==3#bugs`); the old session returns intact to first future (quote in zsh) |
 | `==[<X>][#<name>]~<K>` | Restart or swap without the queued Task Links in `<K>` (`==~2`, `==#bugs~2`); `~` drops from the session that ends up running (quote in zsh) |
-| `=x[<N>][*<P>][!<M>][~<K>]` | Close today's running timed Pomodoro (case-insensitive `=X`, `*`/`!`/`~` in any order); `<N>` keeps links in progress, `*<P>` parks them without carrying forward, `!<M>` completes them, `~<K>` drops them while keeping their lane; a lone `0` in `<N>` means none; one Work Log entry may sit on the close line, several use child bullets (quote in zsh) |
+| `=x[<N>][*<P>][!<M>][~<K>][@<N>]` | Close today's running timed Pomodoro (case-insensitive `=X`, `*`/`!`/`~`/`@` in any order; `<N>` may instead be typed last as `@<N>`, so `=x!1@2` means `=x2!1`); `<N>` keeps links in progress, `*<P>` parks them without carrying forward, `!<M>` completes them, `~<K>` drops them while keeping their lane; a lone `0` in `<N>` means none; one Work Log entry may sit on the close line, several use child bullets (quote in zsh) |
 | `=*` / `=!` (also `=x*` / `=x!`) | Close parking/completing every numbered Task Link; an empty `*` or `!` selects the remainder after explicit assignments (`=*!2` parks all except task 2 and completes task 2) |
 | `=x [<n>] <entry>` | One Work Log entry on the close line (`=x wired the lexer` logs to task 1, `=x1,3 3 fixed the flake` logs to task 3) |
 | `+2 =x`, `=x =`, `=x =#bugs`, `=x =~2`, `=x wired the lexer =` | Same-line session-operator chain: whitespace-separated session tokens on one line run left to right like blank-line items (`=x =~2` closes then starts without link 2; `=x wired the lexer =` closes with the entry then starts) |
@@ -463,7 +463,7 @@ quote in zsh, which expands a leading `=word`). A trailing `~<K>` drop list
 Task Links: `~` drops, so `=~2` drops task 2 from the session you start the
 way `=x~2` drops task 2 from the session you stop.
 
-Capture a whole item `=x[<N>][*<P>][!<M>][~<K>]` to close today's running timed
+Capture a whole item `=x[<N>][*<P>][!<M>][~<K>][@<N>]` to close today's running timed
 Pomodoro the way Obsidian's Ctrl+Enter completion does, plus an
 auto-decrement that shortens an early-stopped session to the earliest
 five-minute step at or after now: `bob capture '=x'` closes the session,

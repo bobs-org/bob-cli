@@ -182,8 +182,8 @@ span over `#` and the partial `pomodoro_start` spec, and `=x#name` reports \
 mode 'pomodoro_close' with an `invalid_pomodoro_close` diagnostic over \
 `#name`. Named overrides (`==#bugs`, `==3#bugs`) parse the same way with \
 the `override` flag; `==#` needs `pomodoro_name` with the partial override \
-spec, and `==#bugs=3` teaches `==3#bugs`. A whole-item \
-`=x[<N>][*<P>][!<M>][~<K>]` close (case-insensitive `=X`, with `*`, `!`, and `~` in \
+spec, and `==#bugs=3` teaches `==#bugs@3` or `==3#bugs`. A trailing `@<X>` timing (`=#bugs@3` means `=3#bugs`, `==#bugs@3` swaps with fresh timing, `=~2@3` means `=3~2`) reports the canonical spec with a second `pomodoro_start` span over `@<X>`; a dangling `@` reports `incomplete` needing `pomodoro_start_timing` with no spec. A whole-item \
+`=x[<N>][*<P>][!<M>][~<K>][@<N>]` close (case-insensitive `=X`, with `*`, `!`, `~`, and `@` in \
 any order; `=*`/`=!` omit `x` before an initial `*`/`!`) reports mode 'pomodoro_close' with a `pomodoro_close` object \
 (`raw` exactly as typed plus the additive `in_progress` list, null when no `<N>` was typed, \
 the `park` list, the `complete` list, the `drop` list, the additive `park_all` and `complete_all` flags, and the `log` entries (`index`, \

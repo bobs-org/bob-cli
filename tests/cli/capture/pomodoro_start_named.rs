@@ -157,7 +157,7 @@ fn named_start_grammar_errors_are_precise() {
     let (_temp, vault, day_file) = named_vault("bob-cli-named-errors", WORKED);
     for (token, needle) in [
         ("=#", "is incomplete: type a Pomodoro name after `#`"),
-        ("=#bugs=3", "write the duration before the name: `=3#bugs`"),
+        ("=#bugs=3", "write the duration after `@` or before the name: `=#bugs@3` or `=3#bugs`"),
         ("=x#bugs", "`=x` always closes the running Pomodoro"),
         ("=#deep work", "must be the whole capture item"),
     ] {
