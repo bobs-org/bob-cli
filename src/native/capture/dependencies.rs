@@ -1261,7 +1261,7 @@ fn task_indent(line: &str) -> &str {
 /// order: the managed-line slot plus any duplicate that refuses the
 /// write. Mirrors the single-match [`dependency_child_of`] walk while
 /// collecting every match.
-fn managed_children(
+pub(super) fn managed_children(
     lines: &[&str],
     fenced: &BTreeSet<usize>,
     task_line: usize,
@@ -1720,7 +1720,7 @@ fn archive_projected_id(
 
 /// Verbatim `[[...]]` text of one managed-line link, sliced from the
 /// original child line so aliases, embeds, and strikes round-trip.
-fn verbatim_link(
+pub(super) fn verbatim_link(
     child_line: &str,
     link_index: usize,
     link: &task_dependencies::parse::DependencyLink,
@@ -2859,6 +2859,7 @@ pub(super) fn plan_dependency_only_item(
             toggle_task_description: None,
             r#ref: None,
             link_guard: None,
+            dropped_dependencies: Vec::new(),
         },
         clip_plan: None,
         pomodoro_refs: update.pomodoro_refs,

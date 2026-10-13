@@ -784,7 +784,7 @@ digits, `_`, and `-`. The block ID may contain letters, digits, and `-`,
 the same rule as `@route^id`. Scheduled offsets work in either
 terminal order; a scheduled Pomodoro-linked task starts `[?]`, and the block ID
 remains the final task token after any `[scheduled::YYYY-MM-DD]` property.
-A task that is Blocked after the gesture is never linked (`docs/task-dependencies.md`
+A newly captured task that is Blocked after the gesture is never linked (`docs/task-dependencies.md`
 §13.5): a future `s:<N>` (N ≥ 1), open `&` prerequisites, or a blocked
 destination project lands the new task `[?]` (plus `#prj_is_blocked` in a
 blocked project) with no Task Link. The open prerequisites rise along the
@@ -908,8 +908,10 @@ Next and In Progress `[/]` is never demoted. A single valid future
 `[scheduled::]` is retired with the pull-forward Schedule Log entry when a log
 already exists — all under the existing Ensure Next rules, plus the §13.5
 link guard: a target that is Blocked after the gesture stays unlinked while
-its open prerequisites (own plus inherited) rise, and the result reports
-`link_guard`. The one refusal is a `^prj` whose only reason is its own future
+its open prerequisites (own plus inherited) rise, unless §13.5.1 permits
+capture to drop its own prerequisites and link in the same staged write.
+Project-blocked tasks and `^prj` targets keep their prerequisites and stay
+unlinked. A refused drop adds `drop_refused` to `link_guard`. The one refusal is a `^prj` whose only reason is its own future
 schedule: it fails with "move the project date from the `^prj` Schedule
 action" instead of pulling the date forward. Done, canceled, and unknown
 statuses fail: only Ready, Blocked, Next, and In Progress tasks can be linked.
@@ -2073,9 +2075,12 @@ running but a future Pomodoro exists, the close diagnostic names it with a
 session's sub-bullet range) then close it; `<text>
 @route:block-id=x…` creates the new Next task in the running session then
 closes it. When the §13.5 link guard finds the existing-task target Blocked,
-the status stays as-is (a Blocked task never rises on a history link) while
-the link still lands under the closing entry as history; the open
-prerequisites rise and the result reports `link_guard`. `#pomodoro` with a close fails (`` `=x` always closes the running
+§13.5.1 drops its own prerequisites first when every safety gate passes, then
+the ordinary link-and-close path runs. Otherwise the status stays as-is (a
+Blocked task never rises on a history link) while the link still lands under
+the closing entry as history; the open prerequisites rise and the result
+reports `link_guard` with `drop_refused` when an own dependency reason kept
+the prerequisites. `#pomodoro` with a close fails (`` `=x` always closes the running
 Pomodoro; remove `#name` ``), as do `s:<N>`/`p:<N>`, project-note `+` forms,
 and forced flags on a whole-item close. A `@@` declaration never applies to
 close items.
@@ -3034,7 +3039,7 @@ Link presence for `@route+block-id!` is:
 
 | Linked under an open Pomodoro today? | Status | Result |
 | --- | --- | --- |
-| no | Ready `[ ]` / Blocked `[?]` | Next `[*]`, with `[[route#^block-id]]` linked under the implicit current/next open Pomodoro — unless the §13.5 link guard finds the target Blocked, in which case nothing links, the open prerequisites rise, and JSON reports `link_guard` |
+| no | Ready `[ ]` / Blocked `[?]` | Next `[*]`, with `[[route#^block-id]]` linked under the implicit current/next open Pomodoro — unless the §13.5 link guard consumes it; §13.5.1 first drops its own open prerequisites when every safety gate passes |
 | no | Next `[*]` / In Progress `[/]` | Link inserted under the implicit current/next open Pomodoro; status unchanged |
 | yes | any open status | Every matching link under every open Pomodoro removed; status unchanged |
 | — | done, canceled, or unknown | Error: `task ^<id> is <Status Name>; only Ready, Blocked, Next, and In Progress tasks can be toggled` |
@@ -3108,10 +3113,12 @@ When the sole link is already under the selected destination, the daily file
 is left byte-for-byte unchanged. The task-side plan is independent: a Ready
 or Blocked status still becomes Next and a single future schedule is still
 retired when an existing Schedule Log is present — unless the §13.5 link
-guard finds the target Blocked, in which case the task line stays unchanged,
-any existing live links to that task are removed from today's open ledger,
-the open prerequisites rise, and the result reports
-`link_guard` (human output prints `stays <Status>` plus the guard sentence). An already-Next task whose
+guard finds the target Blocked. If §13.5.1 can safely drop its own open
+prerequisites, Ensure Next proceeds and reports them; otherwise the task line
+stays unchanged, any existing live links to that task are removed from today's
+open ledger, the open prerequisites rise, and the result reports
+`link_guard` (human output prints `stays <Status>` plus the guard sentence).
+An already-Next task whose
 link is already at the destination is a true no-op. When relocation is
 needed, Bob moves the dedicated link bullet and its complete descendant
 subtree, adapting only the root indentation to the destination's established
@@ -3152,7 +3159,9 @@ Human output says `would toggle` / `toggled` and prints a link summary:
 `linked ^id under NAME · stays In Progress`, `not linked ^id · stays
 <Status>` plus the guard sentence when consumption replaced the link, or
 `unlinked ^id from N open Pomodoros · stays <Status>`, followed by the day
-file and ledger lines. JSON stays schema version 1 and kind `"task_toggle"`.
+file and ledger lines. A successful dependency drop adds a dim
+`⛓️ dropped dependency on [[route#^id]]` line after the status line (or
+`⛓️ dropped N dependencies: …` for several). JSON stays schema version 1 and kind `"task_toggle"`.
 Successful link and unlink actions include `toggle_direction: "link"` or
 `"unlink"`, `status_changed`, `removed_pomodoro_links` for unlink, and the
 existing insertion fields for link. A consumed `@route+block-id!` keeps kind
@@ -3160,7 +3169,9 @@ existing insertion fields for link. A consumed `@route+block-id!` keeps kind
 `creates_pomodoro`, `pomodoro_already_linked`, `pomodoro_selector_unused`,
 `pomodoro_link_placement`, `pomodoro_name`, and `pomodoro_link_action` plus
 its source/destination endpoints. It reports `link_guard` (`reasons`,
-`promoted`, `detail`); `removed_pomodoro_links` remains present, and
+`promoted`, `detail`, and `drop_refused` when an own dependency reason kept
+the prerequisites); successful drops report `dropped_dependencies` in line
+order. `removed_pomodoro_links` remains present, and
 `day_file` is present only when cleanup removed at least one live link. A
 `^prj` whose only reason is its own future schedule is refused with "move
 the project date from the `^prj` Schedule action".
@@ -3374,7 +3385,18 @@ and omits `block_link`, `creates_pomodoro`, `pomodoro_link_action` and its
 source/destination endpoints, `pomodoro_link_placement`, and
 `pomodoro_name`. It includes additive `removed_pomodoro_links` and `day_file`
 only when existing live links were removed. The `link_guard` object carries
-the outcome; any existing live-link cleanup also appears in `pomodoro_blocks`.
+the outcome; when a local dependency reason prevents a drop, it also carries
+`drop_refused` (`project_blocked`, `project_task`, `schedule`, or
+`dependency_line`) and `detail` says why the prerequisites were kept. Any
+existing live-link cleanup also appears in `pomodoro_blocks`.
+
+A successful dependency drop keeps kind `"pomodoro_link"` and adds
+`dropped_dependencies` in Depends-On line order. Each row has the prerequisite
+`note_path`, `block_id`, exact `link`, clean `text`, `status_symbol`, and
+`status_name`. Human output prints `⛓️ dropped dependency on [[route#^id]]`
+or `⛓️ dropped N dependencies: …` after the status line (`would drop` in a
+dry run). The batch-level `task_blocks` entry for the dependent includes role
+`"dependency_dropped"` and shows the changed task and Depends-On lines.
 
 Project-note results use kind `"project_note"` with `placement: "created"`.
 `route` stays the parent route (`cash` for `@cash^goog-exit+`), so
@@ -3643,8 +3665,9 @@ Field rules:
   batch. This happens when an earlier item in the same draft created it,
   as in `Task @sase^new` followed by `note @sase+new`. A created block's
   lines are all `added`.
-- `roles` is informational and deduplicated: `"sub_bullet"` for captured
+  - `roles` is informational and deduplicated: `"sub_bullet"` for captured
   children, `"dependency"` / `"dependency_target"` for prerequisite writes,
+  `"dependency_dropped"` when a capture link drops the task's own prerequisites,
   and `"completed"` (the completed root and each closed subtask) /
   `"unblocked"` (each recovered dependent) for whole-item `!` completions.
   Clients must not depend on it.

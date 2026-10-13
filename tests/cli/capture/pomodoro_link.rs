@@ -79,7 +79,7 @@ fn capture_pomodoro_linked_task_updates_both_notes_and_reports_json() {
 }
 
 #[test]
-fn consumed_pomodoro_link_reports_removed_link_without_capture_success() {
+fn capture_pomodoro_link_drops_dependencies_when_already_linked() {
     let temp = TempDir::new("bob-cli-capture-pomodoro-link-guard-removed");
     let vault = temp.path().join("vault");
     let target = vault.join("dev.md");
@@ -119,17 +119,37 @@ fn consumed_pomodoro_link_reports_removed_link_without_capture_success() {
     let json: serde_json::Value =
         serde_json::from_str(stdout(&json_output).trim())
             .expect("capture JSON");
-    assert_eq!(json["kind"], "link_guard");
-    assert_eq!(json["removed_pomodoro_links"], 1, "{json}");
+    assert_eq!(json["kind"], "pomodoro_link", "{json}");
+    assert_eq!(json["status_symbol"], "*", "{json}");
+    assert_eq!(json["status_changed"], true, "{json}");
+    assert_eq!(json["pomodoro_link_action"], "already_current", "{json}");
+    assert_eq!(json["dropped_dependencies"].as_array().unwrap().len(), 1);
     assert_eq!(json["day_file"], day_file.display().to_string(), "{json}");
+    assert!(json.get("link_guard").is_none(), "{json}");
+    assert!(json.get("removed_pomodoro_links").is_none(), "{json}");
+    let target_after =
+        fs::read_to_string(&target).expect("read unblocked task");
+    assert!(!target_after.contains("DEPENDS ON"), "{target_after}");
     assert!(
-        json["link_guard"].get("removed_pomodoro_links").is_none(),
-        "{json}"
+        target_after.contains("- [*] #task Blocked"),
+        "{target_after}"
     );
-    assert!(json["link_guard"].get("day_file").is_none(), "{json}");
+    let day_after = fs::read_to_string(&day_file).expect("read daily note");
+    assert_eq!(
+        day_after.matches("[[dev#^blocked]]").count(),
+        1,
+        "{day_after}"
+    );
 
-    // Restore the same stale live link so the human-output run also proves
-    // that consumption reports its cleanup instead of claiming capture.
+    // Restore the pre-drop task so the human-output path reports the same
+    // successful drop while the Pomodoro already contains the link.
+    write_file(
+        &target,
+        concat!(
+            "- [?] #task Blocked [dependsOn:: prep__prep] [id:: dev__blocked] ^blocked\n",
+            "  - ⛓️ **DEPENDS ON:** [[prep#^prep]]\n",
+        ),
+    );
     write_file(
         &day_file,
         concat!(
@@ -150,19 +170,21 @@ fn consumed_pomodoro_link_reports_removed_link_without_capture_success() {
         .expect("run guarded human Pomodoro link capture");
     assert_success(&output);
     let human = stdout(&output);
-    assert!(human.contains("not linked"), "{human}");
+    assert!(human.contains("✓ link"), "{human}");
     assert!(
-        !human.contains("✓ captured") && !human.contains("captured  dev.md"),
-        "guarded capture must not claim success:\n{human}"
+        human.contains("dropped dependency on [[prep#^prep]]"),
+        "{human}"
     );
-    assert!(human.contains("removed 1 live Pomodoro link"), "{human}");
     let day_after = fs::read_to_string(&day_file).expect("read daily note");
-    assert!(!day_after.contains("[[dev#^blocked]]"), "{day_after}");
+    assert_eq!(
+        day_after.matches("[[dev#^blocked]]").count(),
+        1,
+        "{day_after}"
+    );
 }
 
 #[test]
-fn consumed_pomodoro_link_without_cleanup_reports_neither_capture_nor_removal()
-{
+fn capture_pomodoro_link_drops_dependencies_without_existing_link() {
     let temp = TempDir::new("bob-cli-capture-pomodoro-link-guard-empty");
     let vault = temp.path().join("vault");
     let target = vault.join("dev.md");
@@ -180,23 +202,6 @@ fn consumed_pomodoro_link_without_cleanup_reports_neither_capture_nor_removal()
     );
     write_file(&day_file, "## Pomodoros\n- [ ] Current (0900-0930)\n");
 
-    let human_output = bob_command()
-        .arg("capture")
-        .arg("-b")
-        .arg(&vault)
-        .arg("@dev:blocked")
-        .env("BOB_DAY_FILE", &day_file)
-        .env("BOB_NOW", "2026-07-10 09:10:00")
-        .output()
-        .expect("run guarded human Pomodoro link capture");
-    assert_success(&human_output);
-    let human = stdout(&human_output);
-    assert!(human.contains("not linked"), "{human}");
-    assert!(
-        !human.contains("✓ captured") && !human.contains("captured  dev.md"),
-        "guarded capture must not claim success:\n{human}"
-    );
-
     let json_output = bob_command()
         .arg("capture")
         .arg("-b")
@@ -207,19 +212,58 @@ fn consumed_pomodoro_link_without_cleanup_reports_neither_capture_nor_removal()
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_NOW", "2026-07-10 09:10:00")
         .output()
-        .expect("run guarded JSON Pomodoro link capture");
+        .expect("run JSON Pomodoro link capture");
     assert_success(&json_output);
     let json: serde_json::Value =
         serde_json::from_str(stdout(&json_output).trim())
             .expect("capture JSON");
-    assert_eq!(json["kind"], "link_guard");
+    assert_eq!(json["kind"], "pomodoro_link", "{json}");
+    assert_eq!(json["status_symbol"], "*", "{json}");
+    assert_eq!(json["status_changed"], true, "{json}");
+    assert_eq!(json["dropped_dependencies"].as_array().unwrap().len(), 1);
+    assert!(json.get("link_guard").is_none(), "{json}");
     assert!(json.get("removed_pomodoro_links").is_none(), "{json}");
-    assert!(json.get("day_file").is_none(), "{json}");
-    assert!(
-        json["link_guard"].get("removed_pomodoro_links").is_none(),
-        "{json}"
+    let target_after =
+        fs::read_to_string(&target).expect("read unblocked task");
+    assert!(!target_after.contains("DEPENDS ON"), "{target_after}");
+    let day_after = fs::read_to_string(&day_file).expect("read daily note");
+    assert_eq!(
+        day_after.matches("[[dev#^blocked]]").count(),
+        1,
+        "{day_after}"
     );
-    assert!(json["link_guard"].get("day_file").is_none(), "{json}");
+
+    // Restore the original task and empty ledger to exercise human output.
+    write_file(
+        &target,
+        concat!(
+            "- [?] #task Blocked [dependsOn:: prep__prep] [id:: dev__blocked] ^blocked\n",
+            "  - ⛓️ **DEPENDS ON:** [[prep#^prep]]\n",
+        ),
+    );
+    write_file(&day_file, "## Pomodoros\n- [ ] Current (0900-0930)\n");
+    let human_output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("@dev:blocked")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 09:10:00")
+        .output()
+        .expect("run human Pomodoro link capture");
+    assert_success(&human_output);
+    let human = stdout(&human_output);
+    assert!(human.contains("✓ link"), "{human}");
+    assert!(
+        human.contains("dropped dependency on [[prep#^prep]]"),
+        "{human}"
+    );
+    let day_after = fs::read_to_string(&day_file).expect("read daily note");
+    assert_eq!(
+        day_after.matches("[[dev#^blocked]]").count(),
+        1,
+        "{day_after}"
+    );
 }
 
 #[test]
@@ -924,18 +968,17 @@ fn capture_pomodoro_link_reports_created_named_destination() {
     assert_pomodoro_blocks_cover_changes(day_before, &day_after, &json);
 }
 
-// PDG1 (§13.15): `@route:block-id` on a dependency-blocked target does
-// not link; the open prerequisites rise and the result reports
-// `not_linked` with the reasons.
+// PDG18/20/21 (§13.15): a safe own-dependency blocker is removed before
+// the ordinary solo link, in the same staged capture.
 #[test]
-fn capture_pomodoro_link_on_blocked_target_consumes_and_promotes() {
-    let temp = TempDir::new("bob-cli-capture-pomodoro-link-consume");
+fn capture_pomodoro_link_drops_own_dependency_and_links_atomically() {
+    let temp = TempDir::new("bob-cli-capture-pomodoro-link-drop");
     let vault = temp.path().join("vault");
     let target = vault.join("cash.md");
     let day_file = vault.join("day.md");
     write_toggle_task_settings(&vault);
     let target_before = concat!(
-        "- [?] #task Blocked work ^blocked\n",
+        "- [?] #task Blocked work [id:: cash__blocked] [dependsOn:: job__prep] [scheduled:: 2026-07-20] ^blocked\n",
         "\t- ⛓️ **DEPENDS ON:** [[job#^prep]]\n",
     );
     write_file(&target, target_before);
@@ -949,6 +992,23 @@ fn capture_pomodoro_link_on_blocked_target_consumes_and_promotes() {
     );
     write_file(&day_file, day_before);
 
+    let dry_output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("--dry-run")
+        .arg("@cash:blocked")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 09:10:00")
+        .output()
+        .expect("dry-run dependency drop and link");
+    assert_success(&dry_output);
+    let dry_json: serde_json::Value =
+        serde_json::from_str(stdout(&dry_output).trim())
+            .expect("dry-run link JSON");
+
     let output = bob_command()
         .arg("capture")
         .arg("-b")
@@ -957,40 +1017,325 @@ fn capture_pomodoro_link_on_blocked_target_consumes_and_promotes() {
         .arg("json")
         .arg("@cash:blocked")
         .env("BOB_DAY_FILE", &day_file)
-        .env("BOB_NOW", "2026-07-10 13:40:00")
+        .env("BOB_NOW", "2026-07-10 09:10:00")
         .output()
-        .expect("link blocked task");
+        .expect("link dependency-blocked task");
     assert_success(&output);
     let json: serde_json::Value =
         serde_json::from_str(stdout(&output).trim()).expect("link JSON");
-    assert_eq!(json["kind"], "link_guard", "{json}");
-    assert_eq!(json["status_changed"], false, "{json}");
-    assert_eq!(json["status_symbol"], "?", "{json}");
-    assert!(json.get("pomodoro_link_action").is_none(), "{json}");
-    assert!(json.get("block_link").is_none(), "{json}");
-    assert_eq!(json["removed_pomodoro_links"], 1, "{json}");
-    assert_eq!(json["day_file"], day_file.display().to_string(), "{json}");
+    assert_eq!(json["kind"], "pomodoro_link", "{json}");
     assert_eq!(
-        json["link_guard"]["reasons"],
-        serde_json::json!(["local_dependency"]),
+        json["previous_task_line"],
+        target_before.lines().next().unwrap()
+    );
+    assert_eq!(json["previous_status_symbol"], "?");
+    assert_eq!(json["status_symbol"], "*");
+    assert_eq!(json["status_changed"], true);
+    assert_eq!(json["removed_scheduled"], "2026-07-20");
+    assert!(json.get("link_guard").is_none(), "{json}");
+    assert_eq!(json["dropped_dependencies"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        json["dropped_dependencies"][0],
+        serde_json::json!({
+            "note_path": "job.md",
+            "block_id": "prep",
+            "link": "[[job#^prep]]",
+            "text": "Prep work",
+            "status_symbol": " ",
+            "status_name": "Ready",
+        }),
         "{json}"
     );
     assert_eq!(
-        json["link_guard"]["promoted"],
-        serde_json::json!(["job.md#^prep"]),
+        json["task_blocks"][0]["roles"],
+        serde_json::json!(["dependency_dropped"]),
         "{json}"
     );
+    let mut normalized_dry = dry_json;
+    normalized_dry["dry_run"] = serde_json::json!(false);
     assert_eq!(
-        fs::read_to_string(&target).expect("read target"),
-        target_before
+        normalized_dry, json,
+        "dry run plans the same dependency drop"
     );
+    let target_after = fs::read_to_string(&target).expect("read target");
+    assert!(
+        target_after.contains("- [*] #task Blocked work"),
+        "{target_after}"
+    );
+    assert!(
+        target_after.contains("[fresh:: 2026-07-10]"),
+        "{target_after}"
+    );
+    assert!(!target_after.contains("dependsOn::"), "{target_after}");
+    assert!(!target_after.contains("DEPENDS ON"), "{target_after}");
     let day_after = fs::read_to_string(&day_file).expect("read day");
-    assert!(!day_after.contains("[[cash#^blocked]]"), "{day_after}");
+    assert!(day_after.contains("[[cash#^blocked]]"), "{day_after}");
     assert!(day_after.contains("context"), "{day_after}");
-    assert!(!day_after.contains("LATER"), "{day_after}");
     assert_eq!(
         fs::read_to_string(vault.join("job.md")).expect("read prereq"),
-        "- [*] #task Prep work ^prep\n"
+        "- [ ] #task Prep work ^prep\n"
+    );
+}
+
+#[test]
+fn dependency_drop_reasons_report_schedule_and_managed_line_refusals() {
+    let cases = [
+        (
+            "schedule",
+            concat!(
+                "- [?] #task Blocked [id:: cash__blocked] [dependsOn:: job__prep] [scheduled:: 2026-07-20] [scheduled:: 2026-07-21] ^blocked\n",
+                "\t- ⛓️ **DEPENDS ON:** [[job#^prep]]\n",
+            ),
+            "schedule",
+            "several [scheduled::] fields still block it",
+        ),
+        (
+            "duplicate-lines",
+            concat!(
+                "- [?] #task Blocked [id:: cash__blocked] [dependsOn:: job__prep] ^blocked\n",
+                "\t- ⛓️ **DEPENDS ON:** [[job#^prep]]\n",
+                "\t- ⛓️ **DEPENDS ON:** [[job#^prep]]\n",
+            ),
+            "dependency_line",
+            "repair its Depends-On line first",
+        ),
+    ];
+    for (name, target_before, code, phrase) in cases {
+        let temp =
+            TempDir::new(&format!("bob-cli-capture-drop-refused-{name}"));
+        let vault = temp.path().join("vault");
+        let day_file = vault.join("day.md");
+        write_toggle_task_settings(&vault);
+        let target = vault.join("cash.md");
+        write_file(&target, target_before);
+        write_file(
+            &vault.join("job.md"),
+            "- [ ] #task Prep [id:: job__prep] ^prep\n",
+        );
+        write_file(
+            &day_file,
+            "## Pomodoros\n- [ ] (**0900-0930**) — CURRENT\n  - context\n",
+        );
+
+        let output = bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-f")
+            .arg("json")
+            .arg("@cash:blocked")
+            .env("BOB_DAY_FILE", &day_file)
+            .env("BOB_NOW", "2026-07-10 09:10:00")
+            .output()
+            .expect("capture refused dependency drop");
+        assert_success(&output);
+        let json: serde_json::Value =
+            serde_json::from_str(stdout(&output).trim()).expect("capture JSON");
+        assert_eq!(json["kind"], "link_guard", "{json}");
+        assert_eq!(json["link_guard"]["drop_refused"], code, "{json}");
+        assert!(
+            json["link_guard"]["detail"]
+                .as_str()
+                .unwrap_or_default()
+                .contains(phrase),
+            "{json}"
+        );
+        assert_eq!(fs::read_to_string(target).unwrap(), target_before);
+    }
+}
+
+#[test]
+fn failed_start_rolls_back_a_staged_dependency_drop_for_real_and_dry_runs() {
+    let temp = TempDir::new("bob-cli-capture-drop-start-rollback");
+    let vault = temp.path().join("vault");
+    let target = vault.join("cash.md");
+    let day_file = vault.join("day.md");
+    write_toggle_task_settings(&vault);
+    let target_before = concat!(
+        "- [?] #task Blocked [id:: cash__blocked] [dependsOn:: job__prep] ^blocked\n",
+        "\t- ⛓️ **DEPENDS ON:** [[job#^prep]]\n",
+    );
+    let day_before = concat!(
+        "## Pomodoros\n",
+        "- [ ] (**0900-0930** [t:: 30m]) — CURRENT\n",
+        "  - context\n",
+    );
+    write_file(&target, target_before);
+    write_file(
+        &vault.join("job.md"),
+        "- [ ] #task Prep [id:: job__prep] ^prep\n",
+    );
+    write_file(&day_file, day_before);
+
+    let run = |dry_run: bool| {
+        let mut command = bob_command();
+        command
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("-f")
+            .arg("json");
+        if dry_run {
+            command.arg("--dry-run");
+        }
+        command
+            .arg("@cash:blocked=5")
+            .env("BOB_DAY_FILE", &day_file)
+            .env("BOB_NOW", "2026-07-10 09:10:00")
+            .output()
+            .expect("capture start should fail while a timed Pomodoro is open")
+    };
+    let dry = run(true);
+    let real = run(false);
+    assert!(!dry.status.success(), "{}", format_output(&dry));
+    assert!(!real.status.success(), "{}", format_output(&real));
+    assert!(
+        format_output(&dry).contains("finish the current Pomodoro first"),
+        "{}",
+        format_output(&dry)
+    );
+    assert_eq!(stdout(&dry), stdout(&real));
+    assert_eq!(stderr(&dry), stderr(&real));
+    assert_eq!(fs::read_to_string(&target).unwrap(), target_before);
+    assert_eq!(fs::read_to_string(&day_file).unwrap(), day_before);
+}
+
+#[test]
+fn dependency_drop_supports_named_pomodoro_start() {
+    let temp = TempDir::new("bob-cli-capture-drop-named-start");
+    let vault = temp.path().join("vault");
+    let target = vault.join("cash.md");
+    let day_file = vault.join("day.md");
+    write_toggle_task_settings(&vault);
+    write_file(
+        &target,
+        concat!(
+            "- [?] #task Work [id:: cash__work] [dependsOn:: job__prep] ^work\n",
+            "\t- ⛓️ **DEPENDS ON:** [[job#^prep]]\n",
+        ),
+    );
+    write_file(
+        &vault.join("job.md"),
+        "- [ ] #task Prep [id:: job__prep] ^prep\n",
+    );
+    write_file(&day_file, "## Pomodoros\n- [ ] () — CURRENT\n  - context\n");
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("@cash:work#focus=5")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 09:00:00")
+        .output()
+        .expect("drop prerequisites and start named Pomodoro");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture JSON");
+    assert_eq!(json["kind"], "pomodoro_link", "{json}");
+    assert_eq!(json["dropped_dependencies"].as_array().unwrap().len(), 1);
+    assert_eq!(json["pomodoro_name"], "FOCUS", "{json}");
+    assert!(json.get("pomodoro_start").is_some(), "{json}");
+    let day = fs::read_to_string(day_file).expect("read started session");
+    assert!(day.contains("FOCUS"), "{day}");
+    assert!(day.contains("[[cash#^work]]"), "{day}");
+}
+
+#[test]
+fn dependency_drop_human_output_names_the_removed_link() {
+    let temp = TempDir::new("bob-cli-capture-drop-human-output");
+    let vault = temp.path().join("vault");
+    let target = vault.join("cash.md");
+    let day_file = vault.join("day.md");
+    write_toggle_task_settings(&vault);
+    write_file(
+        &target,
+        concat!(
+            "- [?] #task Work [id:: cash__work] [dependsOn:: job__prep] ^work\n",
+            "\t- ⛓️ **DEPENDS ON:** [[job#^prep]]\n",
+        ),
+    );
+    write_file(
+        &vault.join("job.md"),
+        "- [ ] #task Prep [id:: job__prep] ^prep\n",
+    );
+    write_file(&day_file, "## Pomodoros\n- [ ] () — CURRENT\n  - context\n");
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("@cash:work")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 09:00:00")
+        .output()
+        .expect("capture dependency drop with human output");
+    assert_success(&output);
+    let human = stdout(&output);
+    assert!(
+        human.contains("⛓️ dropped dependency on [[job#^prep]]"),
+        "{human}"
+    );
+}
+
+#[test]
+fn dependency_drop_keeps_closed_and_unresolved_links_verbatim() {
+    let temp = TempDir::new("bob-cli-capture-pomodoro-link-drop-partial");
+    let vault = temp.path().join("vault");
+    let target = vault.join("cash.md");
+    let day_file = vault.join("day.md");
+    write_toggle_task_settings(&vault);
+    write_file(
+        &target,
+        concat!(
+            "- [?] #task Work [id:: cash__work] [dependsOn:: job__prep, done__done, ghost__missing] ^work\n",
+            "\t- ⛓️ **DEPENDS ON:** [[job#^prep|Prep alias]] • [[done#^done|Done alias]] • [[ghost#^missing]]\n",
+        ),
+    );
+    write_file(
+        &vault.join("job.md"),
+        "- [ ] #task Prep [id:: job__prep] ^prep\n",
+    );
+    write_file(
+        &vault.join("done.md"),
+        "- [x] #task Done [id:: done__done] ^done\n",
+    );
+    write_file(
+        &day_file,
+        "## Pomodoros\n- [ ] (**0900-0930**) — CURRENT\n  - context\n",
+    );
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("@cash:work")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 09:10:00")
+        .output()
+        .expect("capture link with historical and unresolved dependency links");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture JSON");
+    assert_eq!(json["kind"], "pomodoro_link", "{json}");
+    assert_eq!(
+        json["dropped_dependencies"][0]["link"], "[[job#^prep|Prep alias]]",
+        "{json}"
+    );
+    let after = fs::read_to_string(&target).expect("read dependent");
+    assert!(after.contains("[[done#^done|Done alias]]"), "{after}");
+    assert!(after.contains("[[ghost#^missing]]"), "{after}");
+    assert!(
+        after.contains("dependsOn:: done__done, ghost__missing"),
+        "{after}"
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("done.md")).expect("read closed target"),
+        "- [x] #task Done [id:: done__done] ^done\n"
     );
 }
 

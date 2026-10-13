@@ -54,6 +54,9 @@ pub(super) enum LinkGuardVerdict {
     /// Blocked: skip the link, promote the seeds, report. Boxed: the
     /// plan carries the whole staged graph.
     Consume(Box<ConsumePlan>),
+    /// A capture-only candidate drop. The staged writer checks the
+    /// managed Depends-On line before applying it.
+    DropDependencies(Box<DropPlan>),
 }
 
 /// A consumption decision: the reasons to report, the open
@@ -65,6 +68,16 @@ pub(super) struct ConsumePlan {
     pub(super) seeds: Vec<(String, String)>,
     pub(super) lane: u8,
     pub(super) graph: DependencyGraph,
+    pub(super) drop_refused: Option<&'static str>,
+}
+
+/// Candidate dependency drop plus the unchanged consumption fallback
+/// used when the staged line fails the G5 shape check.
+pub(super) struct DropPlan {
+    pub(super) open_prerequisites: Vec<(String, String)>,
+    pub(super) dependent_digest: String,
+    pub(super) index: NoteIndex,
+    pub(super) fallback: ConsumePlan,
 }
 
 /// Whether this task has any local dependency input that needs openness
@@ -508,19 +521,85 @@ pub(super) fn assess_link_target(
         }
     }
 
-    let mut seeds = own_open;
-    seeds.extend(inherited_open);
-    seeds.extend(ancestor_open);
+    let mut seeds = own_open.clone();
+    seeds.extend(inherited_open.iter().cloned());
+    seeds.extend(ancestor_open.iter().cloned());
     seeds.sort();
     seeds.dedup();
     let status = graph.status.get(&identity).copied().unwrap_or(' ');
     let lane = lane_for_status(status).unwrap_or(0).max(1);
-    Ok(LinkGuardVerdict::Consume(Box::new(ConsumePlan {
+    let mut fallback = ConsumePlan {
         reasons,
         seeds,
         lane,
         graph,
-    })))
+        drop_refused: None,
+    };
+    if !own_open.is_empty() {
+        // Refusal codes follow the gate order in §13.5.1.
+        let drop_refused = if !inherited_open.is_empty()
+            || prj_scheduled.is_some()
+            || inherit_blocks
+        {
+            Some("project_blocked")
+        } else if is_prj {
+            Some("project_task")
+        } else if own_scheduled.is_some()
+            && !target_task
+                .and_then(|task| contents.lines().nth(task.line_index))
+                .is_some_and(|line| {
+                    capture_task_toggle::task_update_has_single_future_scheduled(
+                        line, today,
+                    )
+                })
+        {
+            Some("schedule")
+        } else {
+            None
+        };
+        if let Some(code) = drop_refused {
+            fallback.drop_refused = Some(code);
+            return Ok(LinkGuardVerdict::Consume(Box::new(fallback)));
+        }
+        let dependent_digest = target_task
+            .and_then(|task| contents.lines().nth(task.line_index))
+            .map(note_tasks::line_digest)
+            .ok_or_else(|| {
+                CaptureError::io(format!(
+                    "dependency-drop invariant failed: ^{block_id} is missing from {}",
+                    display_relative(target_rel)
+                ))
+            })?;
+        return Ok(LinkGuardVerdict::DropDependencies(Box::new(DropPlan {
+            open_prerequisites: own_open,
+            dependent_digest,
+            index,
+            fallback,
+        })));
+    }
+    Ok(LinkGuardVerdict::Consume(Box::new(fallback)))
+}
+
+/// Keep the existing consumption behavior for capture gestures that a
+/// later phase has not migrated to dependency drops yet.
+pub(super) fn assess_link_target_legacy(
+    ctx: &DependencyContext,
+    planner: &mut CaptureBatchPlanner,
+    bob_dir: &Path,
+    target_rel: &Path,
+    block_id: &str,
+    today: NaiveDate,
+) -> Result<LinkGuardVerdict, CaptureError> {
+    Ok(
+        match assess_link_target(
+            ctx, planner, bob_dir, target_rel, block_id, today,
+        )? {
+            LinkGuardVerdict::DropDependencies(plan) => {
+                LinkGuardVerdict::Consume(Box::new(plan.fallback))
+            }
+            other => other,
+        },
+    )
 }
 
 /// Assess a destination note for a task capture creates: `Some` plan
@@ -634,6 +713,7 @@ pub(super) fn assess_destination_project(
         seeds: open,
         lane: 1,
         graph,
+        drop_refused: None,
     }))
 }
 
@@ -826,6 +906,9 @@ mod tests {
             LinkGuardVerdict::Link => panic!("expected Consume, got Link"),
             LinkGuardVerdict::PullForward => {
                 panic!("expected Consume, got PullForward")
+            }
+            LinkGuardVerdict::DropDependencies(_) => {
+                panic!("expected a Consume or a successful drop, got DropDependencies")
             }
         }
     }

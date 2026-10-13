@@ -1762,8 +1762,10 @@ a task that is Blocked after the gesture follows one rule:
 
 - only the task's **own** future `scheduled` blocks it → pull forward
   as today (retire the schedule, link it);
-- any dependency or project-dependency reason → do not link; promote
-  the open prerequisites (own plus inherited); report it;
+- a dependency or project-dependency reason → capture may drop the
+  dependent's own open prerequisites under §13.5.1; otherwise do not
+  link, promote the open prerequisites (own plus inherited), and report
+  it;
 - a `project_schedule` reason without a dependency reason → do not
   link; report the project date;
 - **refinement: a `^prj` target whose only reason is its own date** →
@@ -1774,6 +1776,38 @@ a task that is Blocked after the gesture follows one rule:
 Capture never creates a linked `[?]` task: it creates it unlinked and
 reports `not_linked` with the reasons. Links under a Pomodoro the same
 gesture closes are history, not live links.
+
+### 13.5.1 Capture drops its own prerequisites before linking
+
+Capture link gestures may link an existing task that is Blocked only by
+its own open prerequisites by removing those prerequisites from its
+Depends-On line and `[dependsOn::]` field, then running the ordinary
+link gesture. The task is unblocked before its Task Link is added. This
+applies to solo `@route:id` / `^route:id`, `@route+id!`, Ensure Next,
+and link-then-close. A single own future `[scheduled::]` may accompany
+the dependencies and is retired by the existing pull-forward path.
+
+The drop is capture-only. It requires a local dependency reason, no
+project or inherited project reason, a target other than a recognised
+project's `^prj`, no unsupported multiple future schedule fields, and
+exactly one accepted managed Depends-On child. If any gate fails,
+today's consumption or project-task refusal remains in force. When a
+local dependency reason prevents a drop, `link_guard.drop_refused`
+reports `project_blocked`, `project_task`, `schedule`, or
+`dependency_line`, and the human detail says why the prerequisites
+were kept.
+
+The writer removes every link to each open own prerequisite, including
+duplicate links. Kept links remain verbatim and in order; prerequisite
+tasks are never edited. Their corresponding IDs are removed from the
+dependent's `[dependsOn::]` field, while unrelated and historical IDs
+remain. An empty Depends-On line and field are removed. The dependent is
+stamped fresh, then the ordinary capture link write runs in the same
+staged batch; a later failure leaves the drop unapplied. No
+`[unblocked::]` is written because a successful link puts the task in
+Next. Dropped links are reported in `dropped_dependencies` and human
+output; the task itself does not keep a history edge. Plugins retain
+the PDG1 consumption behavior.
 
 **Pipeline.** Compute the final Blocked set (with project reasons),
 then plan the ledger in this order: dedupe, remove canceled links,
@@ -2036,7 +2070,7 @@ Only today's open Pomodoros. `promoted[]` is the consumption seed.
 
 | # | gesture | outcome |
 | --- | --- | --- |
-| PDG1 | link toggle (capture or Ctrl+Shift+Enter) on a dependency-blocked target | not linked; open prerequisites (own plus inherited) promoted; reported |
+| PDG1 | plugin link gesture (Ctrl+Shift+Enter or `^^`) on a dependency-blocked target, or capture when §13.5.1 refuses a drop | not linked; open prerequisites (own plus inherited) promoted; reported |
 | PDG2 | same link intent through `!`, Pomodoro-link insertion, Ensure Next, or link-then-close; only the target's own future `scheduled` blocks it | pulled forward as today and linked |
 | PDG3 | same toggle; only a project schedule blocks a resident | refused; project date reported; not linked |
 | PDG4 | `@route:id s:N` with N ≥ 1 | created unlinked |
@@ -2053,6 +2087,16 @@ Only today's open Pomodoros. `promoted[]` is the consumption seed.
 | PDG15 | a link gesture (capture link guard, `^^` / Ctrl+Shift+Enter in block-id-prompt, Pomodoro link insertion) on K's `^prj` or a K resident while K's `^prj` is tagged | not linked. The `project` reason names the owning ancestor (capture) or `parent(K)` (plugins). Capture promotes the open prerequisites of each ancestor up to and including the first untagged one |
 | PDG16 | a new task captured into K while K's `^prj` is tagged | lands `[?]`, `#prj_is_blocked`, unlinked, `not_linked` with the project reason |
 | PDG17 | Alt+] / Alt+[ on K's tagged `[?]` `^prj` | refused, as for a tagged resident: `Project blocked by parent project · <parent(K)>` |
+| PDG18 | capture `@route:id` (also `^route:id`, `#name`, `=<X>`) on a target whose only reason is `local_dependency` | open prerequisite links dropped from the line and field; `[?]` → `[*]`; linked (and started for `=<X>`); `dropped_dependencies` listed; prerequisite notes byte-identical |
+| PDG19 | the same target through `@route+id!`, `@route+id` / `@route+id#name` Ensure Next, and `@route:id=x…` | dropped, then linked, relocated, or linked-and-closed exactly like an unblocked target (`=x1` leaves it `[/]`, `=x!1` completes it) |
+| PDG20 | the dropped links were the line's only links | line deleted; `[dependsOn::]` removed |
+| PDG21 | own open prerequisites plus a single own future `scheduled` | both retired in one write (PDG2 pull-forward plus the drop); linked |
+| PDG22 | the line also holds a Done prerequisite and an unresolved link | the Done and unresolved links are kept verbatim in order; their field ids are kept |
+| PDG23 | own open prerequisites, and the task is a resident of a blocked project (own or inherited reason) | nothing dropped; PDG1/PDG15 consumption; `drop_refused: project_blocked` |
+| PDG24 | a `^prj` target with an open prerequisite | nothing dropped; PDG1 consumption; `drop_refused: project_task` |
+| PDG25 | two managed Depends-On lines, or several `scheduled` fields | nothing dropped; consumption; `drop_refused: dependency_line` or `schedule` |
+| PDG26 | `^route:id=` while a timed Pomodoro runs, or a later item in the batch fails | the batch fails; nothing is dropped; the dry run reports the same failure |
+| PDG27 | plugin Ctrl+Shift+Enter or `^^` on a dependency-blocked target | unchanged PDG1; plugins never drop |
 
 ### 13.16 PDC — close vectors
 

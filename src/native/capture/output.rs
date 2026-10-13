@@ -421,6 +421,8 @@ pub(super) struct CaptureItemResult {
     /// clients ignore it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) link_guard: Option<LinkGuardJson>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(super) dropped_dependencies: Vec<DroppedDependencyJson>,
 }
 
 /// Why a link gesture left its target unlinked (§13.5 gesture rule):
@@ -435,6 +437,8 @@ pub(super) struct LinkGuardJson {
     pub(super) promoted: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) detail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) drop_refused: Option<&'static str>,
     #[serde(skip)]
     pub(super) removed_pomodoro_links: Option<usize>,
     #[serde(skip)]
@@ -445,19 +449,24 @@ impl LinkGuardJson {
     pub(super) fn not_linked(
         reasons: &[BlockedReason],
         promoted: Vec<String>,
+        drop_refused: Option<&'static str>,
     ) -> Self {
         let promoted_text = if promoted.is_empty() {
             String::new()
         } else {
             format!(" · promoted {}", promoted.join(", "))
         };
+        let refusal = drop_refused
+            .and_then(drop_refused_phrase)
+            .map(|phrase| format!(" · dependencies kept: {phrase}"))
+            .unwrap_or_default();
         Self {
             reasons: reasons
                 .iter()
                 .map(|reason| reason.kind.to_string())
                 .collect(),
             detail: Some(format!(
-                "not linked ({}){promoted_text}",
+                "not linked ({}){promoted_text}{refusal}",
                 reasons
                     .iter()
                     .map(|reason| reason.label.as_str())
@@ -465,10 +474,34 @@ impl LinkGuardJson {
                     .join("; "),
             )),
             promoted,
+            drop_refused,
             removed_pomodoro_links: None,
             day_file: None,
         }
     }
+}
+
+fn drop_refused_phrase(code: &'static str) -> Option<&'static str> {
+    match code {
+        "project_blocked" => Some("its project is blocked"),
+        "project_task" => {
+            Some("edit a project's prerequisites from its ^prj Task Card")
+        }
+        "schedule" => Some("several [scheduled::] fields still block it"),
+        "dependency_line" => Some("repair its Depends-On line first"),
+        _ => None,
+    }
+}
+
+/// One prerequisite removed from a task's Depends-On line by capture.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct DroppedDependencyJson {
+    pub(super) note_path: String,
+    pub(super) block_id: String,
+    pub(super) link: String,
+    pub(super) text: String,
+    pub(super) status_symbol: char,
+    pub(super) status_name: String,
 }
 
 /// One `task_complete` result: what completing a whole-item `!` wrote.
@@ -1785,6 +1818,8 @@ pub(super) fn print_human_task_toggle_success(
         );
     }
 
+    print_human_dropped_dependencies(result, styler);
+
     let mut chips = Vec::new();
     if result.removed_scheduled.is_some() {
         chips.push("removed future schedule".to_string());
@@ -1922,6 +1957,35 @@ pub(super) fn format_pomodoro_endpoint(
     }
 }
 
+pub(super) fn print_human_dropped_dependencies(
+    result: &CaptureItemResult,
+    styler: &Styler,
+) {
+    if result.dropped_dependencies.is_empty() {
+        return;
+    }
+    let links = result
+        .dropped_dependencies
+        .iter()
+        .map(|dependency| dependency.link.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let action = if result.dry_run {
+        "would drop"
+    } else {
+        "dropped"
+    };
+    let line = if result.dropped_dependencies.len() == 1 {
+        format!("⛓️ {action} dependency on {links}")
+    } else {
+        format!(
+            "⛓️ {action} {} dependencies: {links}",
+            result.dropped_dependencies.len()
+        )
+    };
+    println!("  {}", styler.dim(&line));
+}
+
 pub(super) fn print_human_pomodoro_link_success(
     result: &CaptureItemResult,
     styler: &Styler,
@@ -1966,6 +2030,8 @@ pub(super) fn print_human_pomodoro_link_success(
             "  {previous_marker} → {next_marker}  {description}{block_id}"
         );
     }
+
+    print_human_dropped_dependencies(result, styler);
 
     let mut chips = Vec::new();
     if result.removed_scheduled.is_some() {

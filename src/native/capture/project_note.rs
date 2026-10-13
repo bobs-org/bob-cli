@@ -175,6 +175,7 @@ pub(super) fn plan_project_note_item(
                 "not linked (project scheduled {})",
                 scheduled.as_deref().unwrap_or_default(),
             )),
+            drop_refused: None,
             removed_pomodoro_links: None,
             day_file: None,
         })
@@ -354,6 +355,7 @@ pub(super) fn plan_project_note_item(
             toggle_task_description: None,
             r#ref: None,
             link_guard: project_link_guard,
+            dropped_dependencies: Vec::new(),
         },
         clip_plan: None,
         pomodoro_refs: Vec::new(),

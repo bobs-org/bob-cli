@@ -353,6 +353,7 @@ fn json_success_shape_is_stable() {
             r#ref: None,
             toggle_task_description: None,
             link_guard: None,
+            dropped_dependencies: Vec::new(),
         }],
         None,
         Vec::new(),

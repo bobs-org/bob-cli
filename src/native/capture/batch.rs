@@ -282,6 +282,8 @@ pub(super) struct PomodoroLinkCaptureDetails {
     pub(super) schedule_log: Option<capture_schedule_log::ScheduleLog>,
     pub(super) status_changed: bool,
     pub(super) pomodoro_start: Option<PomodoroStartSummary>,
+    pub(super) dropped_dependencies: Vec<DroppedDependencyJson>,
+    pub(super) task_block_ref: Option<TaskBlockRef>,
 }
 
 #[derive(Debug)]

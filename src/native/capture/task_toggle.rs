@@ -151,13 +151,19 @@ pub(super) fn plan_task_toggle_capture(
     // is authoritative for this instant, so a link that proceeds needs
     // no warning.
     let target_rel = relative_target(Some(route));
-    if let LinkGuardVerdict::Consume(plan) =
-        assess_link_target(ctx, planner, bob_dir, &target_rel, block_id, today)?
-    {
+    if let LinkGuardVerdict::Consume(plan) = assess_link_target_legacy(
+        ctx,
+        planner,
+        bob_dir,
+        &target_rel,
+        block_id,
+        today,
+    )? {
         // PDG1/PDG3: the target stays Blocked, so the task line and
         // the ledger stay untouched; only the open prerequisites rise.
         let dependent_desc = format!("link toggle ^{block_id}");
         let reasons = plan.reasons.clone();
+        let drop_refused = plan.drop_refused;
         let promoted = promote_consume_plan(
             ctx,
             planner,
@@ -165,7 +171,8 @@ pub(super) fn plan_task_toggle_capture(
             *plan,
             &dependent_desc,
         )?;
-        let link_guard = LinkGuardJson::not_linked(&reasons, promoted);
+        let link_guard =
+            LinkGuardJson::not_linked(&reasons, promoted, drop_refused);
         return Ok((
             CaptureWritePlan {
                 placement: Placement::Toggled,

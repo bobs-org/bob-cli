@@ -148,6 +148,90 @@ fn write_tagged_child_tree(
     write_file(day_file, "## Pomodoros\n- [ ] () — CURRENT\n  - context\n");
 }
 
+#[test]
+fn own_dependency_drop_is_refused_for_a_project_blocked_resident() {
+    let temp = TempDir::new("bob-cli-link-guard-project-drop-refusal");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("day.md");
+    write_tagged_child_tree(&vault, &day_file);
+    write_file(
+        &vault.join("local.md"),
+        "- [ ] #task Local prerequisite [id:: local__prep] ^prep\n",
+    );
+    let child_path = vault.join("child.md");
+    let child_before = concat!(
+        "---\n",
+        "type: \"[[project]]\"\n",
+        "status: wip\n",
+        "parent: \"[[parent]]\"\n",
+        "---\n\n",
+        "- [?] #task Child #prj #hide #prj_is_blocked ^prj\n",
+        "- [?] #task Work #prj_is_blocked [id:: child__work] [dependsOn:: local__prep] ^work\n",
+        "\t- ⛓️ **DEPENDS ON:** [[local#^prep]]\n",
+    );
+    write_file(&child_path, child_before);
+    write_file(
+        &day_file,
+        "## Pomodoros\n- [ ] () — CURRENT\n  - [[child#^work]]\n  - context\n",
+    );
+
+    let json = capture_json(&vault, &day_file, "@child:work");
+    assert_eq!(json["kind"], "link_guard", "{json}");
+    assert_eq!(
+        json["link_guard"]["drop_refused"], "project_blocked",
+        "{json}"
+    );
+    assert!(
+        json["link_guard"]["detail"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("dependencies kept: its project is blocked"),
+        "{json}"
+    );
+    let after = fs::read_to_string(child_path).expect("read child");
+    assert_eq!(after, child_before);
+    let day = fs::read_to_string(day_file).expect("read day");
+    assert!(!day.contains("[[child#^work]]"), "{day}");
+    assert!(day.contains("context"), "{day}");
+}
+
+#[test]
+fn own_dependency_drop_is_refused_for_a_project_task() {
+    let temp = TempDir::new("bob-cli-link-guard-project-task-drop-refusal");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("day.md");
+    write_toggle_task_settings(&vault);
+    write_file(
+        &vault.join("job.md"),
+        "- [ ] #task Prep [id:: job__prep] ^prep\n",
+    );
+    let project_before = concat!(
+        "---\n",
+        "type: \"[[project]]\"\n",
+        "status: wip\n",
+        "---\n\n",
+        "- [?] #task Ship #prj #hide [id:: cash__prj] [dependsOn:: job__prep] ^prj\n",
+        "\t- ⛓️ **DEPENDS ON:** [[job#^prep]]\n",
+    );
+    write_file(&vault.join("cash.md"), project_before);
+    write_file(&day_file, "## Pomodoros\n- [ ] () — CURRENT\n  - context\n");
+
+    let json = capture_json(&vault, &day_file, "@cash:prj");
+    assert_eq!(json["kind"], "link_guard", "{json}");
+    assert_eq!(json["link_guard"]["drop_refused"], "project_task", "{json}");
+    assert!(
+        json["link_guard"]["detail"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("edit a project's prerequisites from its ^prj Task Card"),
+        "{json}"
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("cash.md")).expect("read project"),
+        project_before
+    );
+}
+
 // PDG15 (§13.15): a link gesture on a tagged child's `^prj` or resident
 // does not link. Capture names the owning ancestor and promotes that
 // ancestor's open projected prerequisites.

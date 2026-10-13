@@ -1068,6 +1068,7 @@ fn plan_reset_link_item(
             toggle_task_description: Some(task_description),
             r#ref: None,
             link_guard: None,
+            dropped_dependencies: Vec::new(),
         },
         clip_plan: None,
         pomodoro_refs,
@@ -1198,6 +1199,7 @@ fn plan_reset_task_item(
             toggle_task_description: None,
             r#ref: None,
             link_guard: None,
+            dropped_dependencies: Vec::new(),
         },
         clip_plan: None,
         pomodoro_refs,
@@ -1299,6 +1301,7 @@ fn plan_reset_whole_item(
             toggle_task_description: None,
             r#ref: None,
             link_guard: None,
+            dropped_dependencies: Vec::new(),
         },
         clip_plan: None,
         pomodoro_refs,
@@ -1504,6 +1507,7 @@ pub(super) fn plan_pomodoro_close_item(
             toggle_task_description: None,
             r#ref: None,
             link_guard: None,
+            dropped_dependencies: Vec::new(),
         },
         clip_plan: None,
         pomodoro_refs,
@@ -1844,28 +1848,37 @@ pub(super) fn plan_pomodoro_close_link_item(
     // closes are history, not live links. Only the seeds rise, and the
     // result reports `not_linked`.
     let target_rel = relative_target(Some(&route));
-    let close_link_guard: Option<LinkGuardJson> = match assess_link_target(
-        dependency_ctx,
-        planner,
-        &request.bob_dir,
-        &target_rel,
-        block_id,
-        today,
-    )? {
-        LinkGuardVerdict::Consume(plan) => {
-            let dependent_desc = format!("pomodoro close link ^{block_id}");
-            let reasons = plan.reasons.clone();
-            let promoted = promote_consume_plan(
-                dependency_ctx,
-                planner,
-                &request.bob_dir,
-                *plan,
-                &dependent_desc,
-            )?;
-            Some(LinkGuardJson::not_linked(&reasons, promoted))
-        }
-        LinkGuardVerdict::Link | LinkGuardVerdict::PullForward => None,
-    };
+    let close_link_guard: Option<LinkGuardJson> =
+        match assess_link_target_legacy(
+            dependency_ctx,
+            planner,
+            &request.bob_dir,
+            &target_rel,
+            block_id,
+            today,
+        )? {
+            LinkGuardVerdict::Consume(plan) => {
+                let dependent_desc = format!("pomodoro close link ^{block_id}");
+                let reasons = plan.reasons.clone();
+                let drop_refused = plan.drop_refused;
+                let promoted = promote_consume_plan(
+                    dependency_ctx,
+                    planner,
+                    &request.bob_dir,
+                    *plan,
+                    &dependent_desc,
+                )?;
+                Some(LinkGuardJson::not_linked(
+                    &reasons,
+                    promoted,
+                    drop_refused,
+                ))
+            }
+            LinkGuardVerdict::Link | LinkGuardVerdict::PullForward => None,
+            LinkGuardVerdict::DropDependencies(_) => {
+                unreachable!("legacy link guard preserves consumption")
+            }
+        };
     let task_plan = if close_link_guard.is_some() {
         // Keep `[?]` (and any future schedule): the history link must
         // never promote a Blocked task into a lane.
@@ -2153,6 +2166,7 @@ pub(super) fn plan_pomodoro_close_link_item(
             toggle_task_description: Some(task_description),
             r#ref: None,
             link_guard: close_link_guard,
+            dropped_dependencies: Vec::new(),
         },
         clip_plan: None,
         pomodoro_refs,
@@ -2448,6 +2462,7 @@ pub(super) fn plan_pomodoro_close_task_item(
             toggle_task_description: None,
             r#ref: None,
             link_guard: None,
+            dropped_dependencies: Vec::new(),
         },
         clip_plan: None,
         pomodoro_refs,

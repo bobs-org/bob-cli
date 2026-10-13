@@ -18,6 +18,7 @@ pub(super) enum TaskBlockRole {
     SubBullet,
     Dependency,
     DependencyTarget,
+    DependencyDropped,
     Completed,
     Unblocked,
 }

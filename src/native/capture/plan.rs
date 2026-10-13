@@ -446,6 +446,7 @@ fn plan_ref_item(
             }),
             toggle_task_description: None,
             link_guard: None,
+            dropped_dependencies: Vec::new(),
         },
         clip_plan: None,
         pomodoro_refs: Vec::new(),
@@ -685,6 +686,7 @@ pub(super) fn plan_capture_item(
                 toggle_task_description: Some(toggle.task_description.clone()),
                 r#ref: None,
                 link_guard,
+                dropped_dependencies: Vec::new(),
             },
             clip_plan: None,
             pomodoro_refs,
@@ -815,10 +817,11 @@ pub(super) fn plan_capture_item(
                 toggle_task_description: Some(link.task_description.clone()),
                 r#ref: None,
                 link_guard,
+                dropped_dependencies: link.dropped_dependencies.clone(),
             },
             clip_plan: None,
             pomodoro_refs,
-            task_block_refs: Vec::new(),
+            task_block_refs: link.task_block_ref.clone().into_iter().collect(),
         });
     }
     if matches!(parsed.kind, CaptureKind::ProjectNote { .. }) {
@@ -1242,8 +1245,11 @@ pub(super) fn plan_capture_item(
                         &format!("new task ^{block_id}"),
                     )?;
                 }
-                new_task_link_guard =
-                    Some(LinkGuardJson::not_linked(&blocked_reasons, promoted));
+                new_task_link_guard = Some(LinkGuardJson::not_linked(
+                    &blocked_reasons,
+                    promoted,
+                    None,
+                ));
                 plan_capture_to_target(
                     planner,
                     &target,
@@ -1451,6 +1457,7 @@ pub(super) fn plan_capture_item(
             toggle_task_description: None,
             r#ref: None,
             link_guard: new_task_link_guard,
+            dropped_dependencies: Vec::new(),
         },
         clip_plan,
         pomodoro_refs,

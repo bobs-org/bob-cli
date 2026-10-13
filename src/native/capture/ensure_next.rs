@@ -35,11 +35,17 @@ pub(super) fn plan_ensure_next_capture(
     // instead of linking or relocating; the guard replaces the old
     // `[dependsOn::` text warning.
     let target_rel = relative_target(Some(route));
-    if let LinkGuardVerdict::Consume(plan) =
-        assess_link_target(ctx, planner, bob_dir, &target_rel, block_id, today)?
-    {
+    if let LinkGuardVerdict::Consume(plan) = assess_link_target_legacy(
+        ctx,
+        planner,
+        bob_dir,
+        &target_rel,
+        block_id,
+        today,
+    )? {
         let dependent_desc = format!("ensure next ^{block_id}");
         let reasons = plan.reasons.clone();
+        let drop_refused = plan.drop_refused;
         let consumption = consume_live_links(
             planner,
             bob_dir,
@@ -54,7 +60,8 @@ pub(super) fn plan_ensure_next_capture(
             *plan,
             &dependent_desc,
         )?;
-        let link_guard = LinkGuardJson::not_linked(&reasons, promoted);
+        let link_guard =
+            LinkGuardJson::not_linked(&reasons, promoted, drop_refused);
         let _ = warnings;
         return Ok((
             CaptureWritePlan {

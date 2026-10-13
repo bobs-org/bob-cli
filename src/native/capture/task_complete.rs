@@ -586,6 +586,7 @@ pub(super) fn plan_task_complete_item(
             r#ref: None,
             task_complete: Some(summary),
             link_guard: None,
+            dropped_dependencies: Vec::new(),
         },
         clip_plan: None,
         pomodoro_refs,
@@ -721,6 +722,7 @@ fn already_done_item(
             toggle_task_description: None,
             r#ref: None,
             link_guard: None,
+            dropped_dependencies: Vec::new(),
             task_complete: Some(TaskCompleteSummaryJson {
                 raw: raw.to_string(),
                 note: note.to_string(),
