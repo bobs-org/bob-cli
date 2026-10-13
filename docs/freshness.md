@@ -548,9 +548,9 @@ today on a canonical line is a no-op.
 | Surface                | Stamps | Never stamps |
 | ---------------------- | ------ | ------------ |
 | bob-navigation-hotkeys | Alt+F and Ctrl+Alt+F stamp through `api.freshness.keepLine` (counted only under exact eligibility); Alt+N commit and release; the Ctrl+Shift+P Task Card (`1`–`4`, `0`, Enter/Schedule, `b`, `f`, `x`, Ctrl+D) and the stages its actions open, in single, counted and Task Link mode; each open task moved by Ctrl+Shift+M; routed moves stamp like Ctrl+Shift+M; the Ctrl+Enter recommended roll and decay; decision-card outcomes write through the existing writers (Not now and levels through the priority writer, Less often through set-refresh, Reword through the generic stamp, Drop through the cancel row, which never stamps) | the cancel row (including the decay cancel), create-project-note-from-task, the `!` transclusion toggle (a pure toggle that never rewrites a task line) |
-| task-status-cycler     | Alt+[ / Alt+] (including counted and transcluded targets) when the result is an open status, including leaving Blocked by hand; Ctrl+Enter reopening a done task | closing (done or cancelled), Ctrl+Shift+] bullet → `#task` (that is creation), the dependency-ID normalizer, `recoverBlockedDependents` |
+| task-status-cycler     | Alt+[ / Alt+] (including counted and transcluded targets) when the result is an open status, including leaving Blocked by hand; Ctrl+Enter reopening a done task; **picked successor offers** on a Done close (Ctrl+Enter / Alt+] into Done), which stamp like Ctrl+Shift+Enter | closing the completed task itself (done or cancelled), unpicked recoveries, cancelled closes, Ctrl+Shift+] bullet → `#task` (that is creation), the dependency-ID normalizer, `recoverBlockedDependents` |
 | block-id-prompt        | Ctrl+Shift+Enter and `^^` when they rewrite the task line (Ready/Blocked → Next, a new block ID) | unlink, Task Link removal, Ctrl+6 rename |
-| `bob capture`          | dependency drop on an existing dependent; `plan_task_link` (the link direction of `@route+id!`, Ensure Next, solo `@route:id` / `^route:id`, link-then-close), the `=x` rows that set `[/]`, and an `&note:id` dependency capture that edits an existing open dependent (its Depends-On line, derived fields, or Blocked status) | new tasks on any route (including new tasks with `&` prerequisites), `=x` complete, unlink, start rows, sub-bullets, prerequisite target-ID and lane promotion edits, an unchanged repeat `&` |
+| `bob capture`          | dependency drop on an existing dependent; `plan_task_link` (the link direction of `@route+id!`, Ensure Next, solo `@route:id` / `^route:id`, link-then-close), the `=x` rows that set `[/]`, an `&note:id` dependency capture that edits an existing open dependent (its Depends-On line, derived fields, or Blocked status), and **picked `--pull-in` successor offers** (same stamp as a manual link) | new tasks on any route (including new tasks with `&` prerequisites), `=x` complete of the closed task itself, unpicked successor recoveries, unlink, start rows, sub-bullets, prerequisite target-ID and lane promotion edits, an unchanged repeat `&` |
 | Automation             | — | hooks, `projects sync`, `task reroll`, `gkeep pull`, `ref`, `task archive`, `nightly`, `vault-sync`, `capture-task-id` |
 | `bob freshness seed`   | the one-time cutover (a documented exception) | — |
 | Hand editing           | — | not monitored; edit, then press Alt+F |
@@ -558,7 +558,10 @@ today on a canonical line is a no-op.
 Deferrals: scheduling a task into the future stamps it, and it becomes
 Blocked. When it returns it is RESURFACED. Automatic Blocked → Ready
 returns never stamp: `[unblocked::]` is a freshness input, not a stamp.
-Automation still never stamps.
+A **picked successor offer** stamps like a manual link (Ctrl+Shift+Enter):
+`[fresh:: today]`, clearing `[unblocked::]` and `[keeps::]`. Unpicked
+recoveries keep the WRITE rule below and never stamp. Automation
+(hooks, sync, reroll, archive) still never stamps.
 
 **Who writes `[unblocked::]`.** On every automatic transition of an
 open task from Blocked `[?]` to Ready `[ ]` — reconcile Unblock;

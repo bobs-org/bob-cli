@@ -436,9 +436,9 @@ the plugin reopens only Blocked dependents that directly name one of those
 tasks and have no other recognized open dependency in the post-close vault
 snapshot. The immediate target is the derived rank: `[?]` becomes `[ ]`,
 or `[*]` when the dependent has a live link in the post-gesture day text —
-and a dependent this close fully unblocked is linked into the predecessor's
-slot as a successor (Next) in the same pass, per
-[task-dependencies.md §12](task-dependencies.md#12-successor-links).
+and a dependent this close fully unblocked is offered as a successor
+(Next when picked) in the same pass, per
+[task-dependencies.md §12](task-dependencies.md#12-successor-offers).
 It reads unsaved open Markdown buffers, preserves
 the active cursor, skips stale or failed notes without rolling back completed
 tasks, and serializes recovery with closed-reference retirement. A later
@@ -470,10 +470,12 @@ writing `[unblocked::]` when freshness.md §5's WRITE rule applies. Cycling
 longer `project(T)`, and a transcluded `^prj` recovers residents in its
 source note. Closed lines stay untouched.
 Cycling any task into Done through the same keys runs the same immediate
-recover-and-link pass as Ctrl+Enter above (linking what the close unblocked);
-cycling into Cancelled runs recovery only and never links. Reopening the
-predecessor the same day through Ctrl+Enter takes back untouched successor
-links from that pass and restores their statuses.
+recover-and-offer pass as Ctrl+Enter above (offering what the close
+unblocked, linking only the picked rows);
+cycling into Cancelled runs recovery only and never offers. Reopening the
+predecessor the same day through Ctrl+Enter takes back untouched picked
+successor links from that pass and restores their statuses and freshness
+fields.
 
 The installed Tasks registry must contain exactly one compatible status:
 

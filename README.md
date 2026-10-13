@@ -195,12 +195,14 @@ separate steps:
    outcome such as `bob capture '=x'` or `bob capture '=!'` (see
    [Capture](#capture)). Starting the timer leaves task statuses unchanged;
    closing records worked tasks as In Progress and completed tasks as Done.
-   When a close completes planned work, it can also link eligible newly
-   unblocked dependents into the next session (`plan.link_unblocked: true`
-   by default). When no work remains under the project surfacing rules,
-   it can link the project's completion tracker (`^prj`) for you to review,
-   raising Ready or newly unblocked trackers to Next. It does not complete
-   the project. See [completion follow-ups](docs/task-dependencies.md#12-successor-links).
+   When a close completes planned work, it recovers newly unblocked
+   tasks immediately and offers them as successor offers
+   (`plan.link_unblocked: true` by default). Nothing is auto-linked;
+   pick which tasks to pull in (Obsidian picker, Bob Mac Capture choice
+   step, or `bob capture -p`). When no work remains under the project
+   surfacing rules, the project's completion tracker (`^prj`) is offered
+   the same way after `#hide` is removed. It does not complete the
+   project. See [completion follow-ups](docs/task-dependencies.md#12-successor-offers).
    `bob pomodoro`, `bob pomodoro tmux`, and
    `bob pomodoro notify` read the ledger to report timing; they do not create
    links or start sessions.

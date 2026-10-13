@@ -1377,16 +1377,19 @@ engine, in this order and all against the staged batch snapshot:
    move to the running entry (else the last completed entry), emptied
    placeholders are removed, and a carried copy is dropped when the
    destination already links the task.
-6. **Recover dependents and link successors.** Blocked `[?]` dependents
+6. **Recover dependents and offer successors.** Blocked `[?]` dependents
    that name a completed task's `[id::]`, have no other open dependency,
    and have no strictly future `scheduled` date recover to their derived
    rank, exactly like Task Status Cycler's Ctrl+Enter recovery. Every
-   dependent this close fully unblocked is then linked into the
-   predecessor's slot and becomes Next in the same write, per
-   [task-dependencies.md §12](task-dependencies.md#12-successor-links).
-   The successor link is placed **before** retirement runs (step 5), so
-   retirement strikes or moves the predecessor around it and the vacated
-   slot keeps its successor.
+   dependent this close fully unblocked, plus every available resident
+   of a project whose `^prj` this close unblocked and each project
+   pull-in, is **offered**; only `--pull-in` picks are linked into the
+   predecessor's slot and become Next in the same write, per
+   [task-dependencies.md §12](task-dependencies.md#12-successor-offers).
+   Capture never prompts and never auto-links. Picked successor links
+   are placed **before** retirement runs (step 5), so retirement strikes
+   or moves the predecessor around them and the vacated slot keeps the
+   pick.
 
 Status-group moves, `^prj` frontmatter, `#hide`, and archiving stay with
 their existing writers (`bob task reconcile`, `bob projects sync`, and
@@ -1449,6 +1452,19 @@ clean `text` and named ledger entries:
   "unblocked": []
 }
 ```
+
+The batch also carries top-level `pull_in` on every success (`supported:
+true`, `offer_count`, `choice`, `picked_count`). Dry-run JSON equals
+real-run JSON with the same flags, including `--pull-in`. To pull in
+numbered offers, pass `-p 1,2`, `-p all`, or `-p none`:
+
+```text
+bob capture -p 1 -- '!sase:fix-apollo'
+```
+
+An unknown or stale pick is a teaching error that writes nothing and
+lists current offers. Without `-p`, capture recovers and reports
+numbered `offer N` rows as not pulled in.
 
 The `ledger` line names entries in this order, joined with `·`, and ends
 with the day file: one `Task Link struck in <NAME>` row per entry with an
@@ -1519,8 +1535,9 @@ I/O-class error (exit 1) whose JSON carries a machine-readable `code`:
 {"ok": false, "error": "refusing capture: today's plan would grow to 4/3 themes (adds BOB); …", "code": "plan_theme_cap_exceeded"}
 ```
 
-`code` appears only on this refusal; every other capture failure omits
-it.
+`code` appears on this refusal and on `pull_in_choice_required`
+(§12.14 when `--require-pull-in-choice` is set, offers exist, and no
+`--pull-in` was given); every other capture failure omits it.
 
 Every `pomodoro_link_destination` carries a `role` naming how the entry
 was chosen: `current` (the running timed entry), `next_up` (implicitly
@@ -2164,15 +2181,16 @@ carried or no later entry follows; with nothing carried the placeholder gets
 a `\t- ` stub. Direct-child qualifying links with descendants write dated
 Work Log entries under a `🛠️ **WORK LOG**` marker (newest on top) or append
 one after the task's child block. Notes stay in the ledger (copied, not
-moved). Close-time recovery plus successor linking runs on every close
+moved). Close-time recovery plus successor **offers** run on every close
 that completes tasks, per
-[task-dependencies.md §12](task-dependencies.md#12-successor-links):
-successors go into the same-name continuation, created when needed, and
-count as carried. The continuation rule is the same-name entry search in
-§12.3: the created continuation first, else the first open same-name
-entry after the closed one, else a new placeholder at the continuation
-position. Completed-reference retirement **outside** the session still
-stays with reconcile.
+[task-dependencies.md §12](task-dependencies.md#12-successor-offers):
+picked successors go into the same-name continuation, created when
+needed, and count as carried. Without `--pull-in`, capture recovers and
+reports numbered offers (`not_selected`). The continuation rule is the
+same-name entry search in §12.3: the created continuation first, else
+the first open same-name entry after the closed one, else a new
+placeholder at the continuation position. Completed-reference
+retirement **outside** the session still stays with reconcile.
 
 Diagnostics (all write nothing): a missing day file, a missing Pomodoros
 section, no open timed entry (`` no running Pomodoro to close ``, plus
@@ -2251,13 +2269,16 @@ Field notes:
 - `pomodoro_close` carries the same `unblocked[]`, `still_blocked[]`,
   and `unblocked_check` fields as `task_complete` (see the
   task-complete result contract above): the same row shapes, the same
-  `not_linked` reasons, the same `trigger` / `hide_removed` fields, and
+  `offer` object, the same `not_linked` reasons (`not_selected`,
+  `no_destination`, `project_member`; never `breaker` or
+  `not_planned_today`), the same `trigger` / `hide_removed` fields, and
   the same gate semantics over the close's completed set. Dry-run JSON
-  equals real-run JSON except for `dry_run`.
+  equals real-run JSON with the same flags. The batch also carries
+  top-level `pull_in` on every success.
 - When the successor logic created the continuation, `next_pomodoro`
-  reports it (`{line, name, time_range: None, created: true}`); the
+  reports it (`{line, name, time_range: None, created: true}`); picked
   successors count as carried.
-- Added block lines that equal a surviving successor bullet carry
+- Added block lines that equal a surviving picked successor bullet carry
   `"reason": "unblocked"` in the `pomodoro_blocks` line objects; rows
   dropped by net batch reporting lose the reason.
 
@@ -2266,10 +2287,11 @@ single range with no decrement, plus `(ran Nm over)` on overruns), always
 naming the day file; one line per task as `transition text route ^id`
 plus `+N Work Log` counts; dropped rows read `dropped <K> [[T]]`
 (with a `stays <status>` lane caption: a dropped task keeps its status) and a
-`Dropped <K>` summary follows the rows; the same `linked` / `unblocked` /
-`still blocked` successor rows the `!` close prints, after the task rows;
+`Dropped <K>` summary follows the rows; the same numbered `offer N` /
+`linked` / `unblocked` / `still blocked` successor rows the `!` close
+prints, after the task rows;
 and the next session, which reads
-`carries 1 link` in the singular. When successors rode along, `next:`
+`carries 1 link` in the singular. When picked successors rode along, `next:`
 names them (`next: BOB (created) at line N · carries K links ·
 1 unblocked`). When at least one row is numbered, every
 task row is prefixed with a right-aligned index column (width = digits of
@@ -3338,6 +3360,12 @@ Useful options:
 - `-n, --no-clip`: keep trailing `%...` clipboard markers literal
 - `-R, --no-ref`: keep bare links as inbox tasks instead of queueing a
   background reference job
+- `-p, --pull-in PICKS`: select successor offers to link (`all`, `none`,
+  or a comma list of offer numbers and/or keys; see
+  [task-dependencies.md §12.14](task-dependencies.md#1214-cli-selection)).
+  Hidden `--require-pull-in-choice` (no short alias, absent from
+  `--help`) refuses write-free with `code: pull_in_choice_required`
+  when offers exist and no `--pull-in` was given
 - `-r, --route NAME`: force `NAME.md` and keep any `@tokens` in the text literal
 - `-s, --section TITLE`: with `--route`, force a bullet into the exact section
 - `-t, --task BLOCK-ID`: with `--route`, append beneath the identified task
@@ -3359,15 +3387,17 @@ single `TEXT` argument stay intact; multiple `TEXT` arguments are still
 joined with single spaces, never newlines. Editor clients such as Bob Mac Capture should
 call `bob capture --format json -- <text>` and parse the JSON object, whose
 stable fields include `ok`, `dry_run`, `routed`, `route`, `route_label`,
-`relative_target`, `target`, `text`, `task_line`, `kind`, `created`, and
-`placement`. The `kind` field is `"task"`, `"bullet"`, `"pomodoro_task"`,
+`relative_target`, `target`, `text`, `task_line`, `kind`, `created`,
+`placement`, and `pull_in` (`supported: true` on every success). The
+`kind` field is `"task"`, `"bullet"`, `"pomodoro_task"`,
 `"pomodoro_note"`, `"sub_bullet"`, `"task_toggle"`, `"project_note"`,
 `"pomodoro_adjust"`, `"pomodoro_shift"`, `"pomodoro_start"`,
 `"pomodoro_close"`, `"pomodoro_link"`, `"task_complete"`, or `"ref"`, and
 `task_line` holds the rendered line for any kind — for `"project_note"` it is
 the rendered `^prj` line, and for `"pomodoro_link"` it is the linked task's
 post-image line. On JSON-mode failures, stdout is still a
-single object with `ok: false` and an `error` string.
+single object with `ok: false` and an `error` string. `code` appears on
+`plan_theme_cap_exceeded` and `pull_in_choice_required` refusals.
 
 A reference item (`kind: "ref"`) uses `placement: "queued"` or
 `"unchanged"`, leaves `task_line` empty, and carries the additive `ref`
@@ -3565,51 +3595,65 @@ deduplicated bullet, and `removed_placeholders`), the extended
 `link` with `day_file` (vault-relative), `entry_name` (`""` when
 unnamed), 1-based `entry_line` and `line`, `entry_created`, `next_up`,
 `block_link`, and `block_id_created` — non-null exactly when this item
-linked the dependent — `not_linked` with one of `already_planned`,
-`not_planned_today`, `breaker`, `project_task`, `hidden`, or `disabled`,
-null when linked, `trigger` `"dependency"` or `"project_empty"` (a
-missing key means an older bob), and `hide_removed` true when this item
+linked a picked offer — additive `offer` with `key`, `n`, `group`
+(`hand_off` / `project` / `project_finished`), `project` on the project
+group, `destination` `{day_file, entry_name, entry_role, fallback}`
+(`entry_role` is `slot` / `closing` / `implicit` / `created`),
+`selected`, and `block_id_needed`, `not_linked` with one of
+`already_planned`, `project_task`, `project_member`, `hidden`,
+`disabled`, `not_selected`, or `no_destination` (the key is omitted
+when linked; `breaker` and `not_planned_today` are never emitted
+again), `trigger` `"dependency"` or `"project_empty"` (a missing key
+means an older bob), and `hide_removed` true when this item
 removed a whole-token `#hide`), `still_blocked[]` (one `note_path`/
 `block_id`/`line`/`text`/`status_symbol` row per open dependent that
-stays blocked, with `reason` `waits_on`, `scheduled`, or `project`
-(`project` carries the note's vault-relative `project` path, plus
-`scheduled` when the project date blocks), `waits_on`
-counting the open prerequisites left, `scheduled` set only for
-`scheduled`, and the same `trigger` field), and
+stays blocked, including muted project-offer residents, with `reason`
+`waits_on`, `scheduled`, or `project` (`project` carries the note's
+vault-relative `project` path, plus `scheduled` when the project date
+blocks), `waits_on` counting the open prerequisites left, `scheduled`
+set only for `scheduled`, and the same `trigger` field), and
 `unblocked_check` (`"checked"` when the lookup ran or the `[id::]` gate
 proved it unnecessary, `"unavailable"` when the dependents snapshot
-could not be built). `block_id` holds the minted ID when one was minted
-(SL10), and `""` when the dependent has none and none was minted.
+could not be built). Offered rows are emitted even when the status did
+not change. `block_id` holds the minted ID when one was minted
+(SL10), and `""` when the dependent has none and none was minted
+(unpicked rows never mint).
 `struck_in` and `dropped` are always present (possibly empty)
 whenever `ledger` is present; `struck` and `deduplicated` keep their count
 meaning. Entry `status` is `running`, `queued`, or `completed`; when an
 entry has no name, `name` is `""`. The item's top-level `day_file` is the
 absolute day file path whenever the item changed the day file (`ledger`
 present or a successor linked); previously it was always `null`. After
-all items are planned, net batch reporting drops any successor row whose
-link no longer survives live in the final staged day text, or whose task
-is no longer open (SL20). Dry-run JSON equals real-run JSON except for
-`dry_run`. The batch-level
+all items are planned, net batch reporting drops any offer whose later
+item linked, completed, re-blocked, or dropped it, or whose task is no
+longer open (SL20). Every successful capture JSON (dry-run too) carries
+top-level `pull_in` with `supported: true`, `offer_count`, `choice`
+(`null` / `"all"` / `"none"` / `"subset"`), `picked_count`, and per
+project-group `folded` counts. Dry-run JSON equals real-run JSON with
+the same flags. The batch-level
 `task_blocks` array gains roles `"completed"` (the root and each closed
-subtask) and `"unblocked"` (each recovered dependent); see
+subtask) and `"unblocked"` (each recovered or picked dependent); see
 [Task blocks](#task-blocks). Human output prints
 `✓ completed [*] → [x] <text>  <note> ^<id>` (dry-run: `would complete`),
 one indented row per closed subtask and left-open descendant, a `ledger`
 line in struck, moved, dropped, removed order ending with the day file
-(an unnamed entry prints as `line N`), one `linked` row per linked
-successor (`linked [?] → [*] <text>  <note> ^<id> → <destination>`,
+(an unnamed entry prints as `line N`), numbered `offer N` rows under
+group headers, one `linked` row per picked successor
+(`linked [?] → [*] <text>  <note> ^<id> → <destination>`,
 dry-run: `would link`, with destinations `→ FIX`, `→ FIX (next up)`,
 `→ new BOB session (next up)`, `→ new session`, and `→ line 37`, plus
 `· added ^<id>` when an ID was minted), one `unblocked` row per
 recovered-but-unlinked dependent (with suffixes `· already planned`,
-`· not planned today`, `· project task`, `· hidden`,
-`· not linked, more than 5`, `· linking off`), one `surfaced` row per
+`· not pulled in`, `· no open Pomodoro`, `· project task`,
+`· project member`, `· hidden`, `· linking off`), one `surfaced` row per
 project pull-in that removed `#hide` without linking or changing status
 (dry-run: `would surface`; every project row puts `· project has no
 open tasks` before any reason suffix; see
 [`docs/task-dependencies.md`](task-dependencies.md) §12.10), and one
 `still blocked` row per remaining blocked dependent (`· waits on N more`,
-`· until YYYY-MM-DD`, `· project <path>`). A left-open descendant or unblocked dependent with no
+`· until YYYY-MM-DD`, `· project <path>`). A dry-run hint shows
+`-p 1,2 · -p all`; a real run without a pick says the offers were not
+pulled in. A left-open descendant or unblocked dependent with no
 block ID prints only its note path with no trailing ` ^`. Already-done
 tasks print `✓ already done [x] <text>  <note> ^<id> · nothing to change`.
 

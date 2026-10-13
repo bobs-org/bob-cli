@@ -463,6 +463,10 @@ app.plugins.plugins["bob-navigation-hotkeys"].api = Object.freeze({
     version: 1,
     showUnblocked(model),     // additive: renders the Unblocked notice card (§12.6); returns true when shown
   }),
+  successors: Object.freeze({
+    version: 1,
+    pick(model),              // Promise<{picks: [{key, destination?}]} | null>; never rejects; null = none (§12.13)
+  }),
 });
 ```
 
@@ -491,11 +495,18 @@ app.plugins.plugins["bob-navigation-hotkeys"].api = Object.freeze({
   settled exactly once on every path. Callers feature-detect
   `api.version >= 3` with `reviewWalk.version >= 1` and keep today's
   behavior otherwise.
-- `notice.showUnblocked(model)` renders the shared successor-link notice
+- `notice.showUnblocked(model)` renders the shared successor-offer notice
   model (§12.5) as the Unblocked card (§12.6) and returns `true` when
   shown. The member is additive: the api stays `version: 3` and callers
   feature-detect `api.notice?.version >= 1`, falling back to a plain
   text notice when it is absent.
+- `successors.pick(model)` opens the successor-offer picker (§12.13)
+  and resolves `{picks}` or `null`. The member is additive: the api
+  stays `version: 3` and callers feature-detect
+  `api.successors?.version >= 1`. Without it the cycler lists offers as
+  `not pulled in` and writes no links. A second call while one picker
+  is open resolves `null`. The null-plugin variant (after unload)
+  resolves `null`.
 - Plugins never import each other's `main.js`. bob-ledger-tools
   feature-detects `api?.version >= 1`.
 - Additive `inboxRoute` v1 namespace (nav 2.9.0+; `api.version` stays 3,
@@ -684,40 +695,42 @@ is `↗ note` for a cross-note target, else absent. Text cuts at about
 
 ### 11.6 SL — successor-link vectors
 
-Outcomes of the shared successor-link rule (§12). Rust tests run them
-through capture (`!` and close); cycler tests run them through the pure
-helpers.
+Outcomes of the shared successor-offer rule (§12). A row that expects a
+link means the task is **offered** and **linked when picked**. Tests
+pass a select-all selection unless a row says otherwise. Rust tests run
+them through capture (`!` and close); cycler tests run them through the
+pure helpers. New offer-only cases live in the SO table (§12.12).
 
 | # | Situation | Outcome |
 | --- | --- | --- |
-| SL1 | P linked in the running entry; D `[?]` depends only on P | link right after P's bullet subtree; D `[?]`→`[*]`; `unblocked_by: [P]` |
-| SL2 | P linked in queued FIX while BOB runs; `!` retirement moves P's struck link into BOB | D at P's vacated FIX position; FIX not removed as empty |
-| SL3 | D also depends on open Q | no link; `still_blocked{waits_on, 1}`; D stays `[?]` |
-| SL4 | D's only remaining blocker is a future `scheduled` | no link; `still_blocked{scheduled}`; schedule untouched |
-| SL5 | D already has a live link under another open entry | no link (`already_planned`); `[?]`→`[*]`; existing link not moved |
-| SL6 | D's only links today are struck or under closed entries | linked as in SL1 |
-| SL7 | `=!` closes BOB; nothing carried; FIX follows | `- [ ] () — BOB` created right after BOB holding only D; `entry_created`, `next_up`; `next_pomodoro` names it |
-| SL8 | `=x` close with carried links; an embed P completes | D appended after the carried lines in the continuation |
-| SL9 | P has no live link today | D `[?]`→`[ ]`; `not_planned_today`; successor logic leaves the ledger alone |
-| SL10 | D has no `^block-id` | ` ^<mint>` appended (SB rule); `block_id_created: true`; `block_id` is the mint |
+| SL1 | P linked in the running entry; D `[?]` depends only on P | offered (`hand_off`); when picked, link right after P's bullet subtree; D `[?]`→`[*]`; `unblocked_by: [P]` |
+| SL2 | P linked in queued FIX while BOB runs; `!` retirement moves P's struck link into BOB | when picked, D at P's vacated FIX position; FIX not removed as empty |
+| SL3 | D also depends on open Q | no offer; `still_blocked{waits_on, 1}`; D stays `[?]` |
+| SL4 | D's only remaining blocker is a future `scheduled` | no offer; `still_blocked{scheduled}`; schedule untouched |
+| SL5 | D already has a live link under another open entry | no offer (`already_planned`); `[?]`→`[*]`; existing link not moved |
+| SL6 | D's only links today are struck or under closed entries | offered as in SL1 |
+| SL7 | `=!` closes BOB; nothing carried; FIX follows | when picked, `- [ ] () — BOB` created right after BOB holding only D; `entry_created`, `next_up`; `next_pomodoro` names it |
+| SL8 | `=x` close with carried links; an embed P completes | when picked, D appended after the carried lines in the continuation |
+| SL9 | P has no live link today | offered at the implicit destination (today's single open timed entry, else the first open entry). Two open timed entries, no day file, no `## Pomodoros`, or no open entry → recover, `no_destination`, no offer |
+| SL10 | D has no `^block-id` | when picked, ` ^<mint>` appended (SB rule); `block_id_created: true`; `block_id` is the mint. Unpicked rows never mint |
 | SL11 | D is `^prj` / carries `#hide` | recover only; `project_task` / `hidden` (except §12.10) |
-| SL12 | One gesture closes P1 and P2; D depends on both | D linked once, after the earlier anchor; `unblocked_by: [P1, P2]` |
-| SL13 | Chain P → D → E | D linked; E untouched and not reported |
-| SL14 | D's basename is ambiguous | `[[dir/note#^id]]` |
-| SL15 | D is a stale `[ ]` whose only prerequisite was P | linked; `[ ]`→`[*]` |
+| SL12 | One gesture closes P1 and P2; D depends on both | offered once; when picked, linked after the earlier anchor; `unblocked_by: [P1, P2]` |
+| SL13 | Chain P → D → E | D offered; E untouched and not reported (picking D never completes D) |
+| SL14 | D's basename is ambiguous | when picked, `[[dir/note#^id]]` |
+| SL15 | D is a stale `[ ]` whose only prerequisite was P | offered even if status is unchanged; when picked, `[ ]`→`[*]` |
 | SL16 | No task in C carries `[id::]` | gate: no lookup, no extra reads; empty arrays; `checked` |
-| SL17 | Six successors from one gesture | none linked; all `breaker`, recovered to derived rank |
-| SL18 | `plan.link_unblocked: false` | recovery to derived rank; no links or mints; `disabled` |
+| SL17 | Six successors from one gesture | **retired.** The breaker is deleted; all six are offered with nothing pre-checked (SO2) |
+| SL18 | `plan.link_unblocked: false` | recovery to derived rank; no offers, links, or mints; `disabled` |
 | SL19 | The same close re-applied (already Done) / a double press | no writes, no rows |
-| SL20 | Draft `!P` then `!D` | the first item's `unblocked` omits D (net) |
-| SL21 | Cancel, reopen, raw checkbox, hooks run, `=*` park | never link |
+| SL20 | Draft `!P` then `!D` | the first item's offer for D is dropped (net) |
+| SL21 | Cancel, reopen, raw checkbox, hooks run, `=*` park | never offer, never link |
 | SL22 | Ctrl+Enter on a Depends-On line | unchanged (nothing) |
 | SL23 | P closes as a subtask of an embedded root R planned today | P anchors at R's link (`inherit`) |
-| SL24 | Close creates no continuation; a later open entry named BOB exists | D appended to that BOB entry; `entry_created: false` |
+| SL24 | Close creates no continuation; a later open entry named BOB exists | when picked, D appended to that BOB entry; `entry_created: false` |
 | SL25 | D already `[*]` and already planned | nothing written, no row |
-| SL26 | D lives in an inbox file | linked; `inbox: true` |
-| SL27 | `=x~K` drops D's link in the same close that completes P | D not re-linked (`already_planned`); recovers to `[ ]` |
-| SL28 | D lives in today's day file | link names the note (`[[20261009#^id]]`), never `[[#^id]]` |
+| SL26 | D lives in an inbox file | offered; when picked, linked; `inbox: true` |
+| SL27 | `=x~K` drops D's link in the same close that completes P | D's offer is removed (`already_planned`); recovers to `[ ]` |
+| SL28 | D lives in today's day file | when picked, the link names the note (`[[20261009#^id]]`), never `[[#^id]]` |
 
 ### 11.7 SB — successor block-ID vectors
 
@@ -747,35 +760,61 @@ suffix on collision. SB7 falls back to `task` when every suggestion and
 every `-2`…`-9` suffix is taken. SB8 falls back on non-ASCII text with
 no words. SB9 walks the `task-N` fallback past taken IDs.
 
-## 12. Successor links
+## 12. Successor offers
 
-When a Bob close gesture completes a task planned in today's ledger,
-every direct dependent that this close fully unblocked is linked into
-the predecessor's slot and becomes Next in the same write. When that
-close also empties the predecessor's project note, the project's `^prj`
-task is pulled in the same way and loses `#hide` (§12.10).
+When a Bob close gesture completes a task, every managed Done recovery
+still runs immediately: Blocked → Ready (derived rank),
+`#prj_is_blocked` stripped, `[unblocked::]` written per
+[freshness.md §5](freshness.md#5-who-stamps)'s WRITE rule, and `#hide`
+removed from an emptied project's `^prj` — whether or not anything is
+picked. What used to be auto-linked becomes a **successor offer**. One
+gesture produces one offer set. Only picked offers are linked, raised
+to Next, and stamped fresh. Picking nothing never undoes an unblock;
+the NEW and TICKLER review tiers resurface unpicked work.
 
 - **Gesture.** One Obsidian Ctrl+Enter, or one capture **item**. A
   multi-item draft is several gestures, planned in order against the
-  staged batch.
+  staged batch. A batch gesture (Pomodoro line, counted Alt+],
+  multi-item capture draft) gets **one** picker over the union of its
+  offers.
 - **Predecessor (P).** A task this gesture moved from open to Done. That
   covers the root and every embedded subtask closed with it.
-- **Successor (D).** An open direct dependent of a predecessor whose
-  **last** blocker this gesture removed.
+- **Offer (D).** A task this gesture fully unblocked that would have
+  been auto-linked under the old successor-link rule, plus every
+  available open resident of a project whose `^prj` this gesture
+  recovered, plus each §12.10 pull-in. One row per task identity.
+- **Pick / selection.** The input that chooses which offers to link.
+  Nothing is pre-checked. ↵ applies the marked rows, or the highlighted
+  row when none are marked; Esc means none.
+- **Groups.** `hand_off` (direct dependents), `project` (residents of an
+  unblocked project), `project_finished` (§12.10 pull-ins).
+- **Destination.** Where a picked link is inserted. Hand-offs and
+  pull-ins use the §12.3 anchor (slot / closing / inherit). Project
+  residents use the earliest anchor among `preds(R)` (the tasks that
+  unblocked R; in closing mode the closing target), falling back to the
+  implicit destination. An unplanned predecessor uses the implicit
+  destination.
+- **Offer key.** Opaque, stable identity string (§12.2 KEYS).
 - **Anchor.** Where a predecessor was planned today. It is read from
   today's day text **before** this gesture strikes or moves anything.
-- **Successor link.** The plain Task Link bullet the gesture inserts for
-  D, for example `\t- [[sase#^relaunch-agents]]`. It is never an embed
-  and never annotated.
+- **Successor link.** The plain Task Link bullet inserted for a **picked**
+  offer, for example `\t- [[sase#^relaunch-agents]]`. It is never an
+  embed and never annotated.
 - **Live link.** An unstruck Task Link sub-bullet (plain, embed, or
   `#`-deferred; 🍅 markers ignored) under an **open** `[ ]` entry of
   today's day file's `## Pomodoros` section. Struck links and links
   under closed entries are history, not plans.
 
+The Obsidian picker API is §12.13. CLI selection (`-p, --pull-in`) is
+§12.14. SO vectors are §12.12.
+
 ### 12.1 Trigger
 
-Successor linking runs inside these gestures, and only when they
-**complete** a task:
+Successor offers are planned inside these **managed Done** gestures, and
+only when they **complete** a task. A picker appears only when the
+offer set is non-empty. `bob capture` **never prompts and never
+auto-links**: without a pick flag it recovers and reports numbered
+offers.
 
 | Gesture | Where |
 | --- | --- |
@@ -786,9 +825,10 @@ Successor linking runs inside these gestures, and only when they
 | `bob capture` closes that complete links: `=x` with embeds, `=x!M`, `=!`, `^route:id=x…` | bob-cli |
 | Alt+] / Alt+[ status cycling into Done | task-status-cycler |
 
-The same complete gestures trigger project pull-in (§12.10).
+The same complete gestures produce project offers and project-finished
+pull-in offers (§12.10).
 
-It **never** runs on any of the following:
+It **never** prompts, offers, or links on any of the following:
 
 - cancel (the nav Ctrl+Shift+P cancel, Alt+[ into Cancelled);
 - reopen;
@@ -797,9 +837,9 @@ It **never** runs on any of the following:
 - `=*` parks;
 - Ctrl+Enter on a Depends-On line.
 
-Cancels still recover dependents exactly as today. Cancel never links
-a successor or a pull-in; it still un-hides an emptied project's
-`^prj` (surfaces only, §12.10).
+Cancels still recover dependents exactly as today. Cancel never offers
+or links a successor or a pull-in; it still un-hides an emptied
+project's `^prj` (surfaces only, §12.10).
 
 ### 12.2 Rule
 
@@ -809,8 +849,8 @@ One definition, two engines (Rust capture and the JS cycler):
 C        = tasks this gesture moved open → Done (roots + closed embedded subtasks),
            read from the staged post-close text
 GATE     : if no c ∈ C carries an [id::] field → skip the dependents lookup and extra
-           vault reads. unblocked_check = "checked". Project pull-in (§12.10) still
-           runs from the staged text of C's notes.
+           vault reads. unblocked_check = "checked". Project pull-in (§12.10) and
+           PROJECT OFFERS still run from the staged text of C's notes.
 match(c) = c's [id::] value
 
 ANCHORS (computed on today's day text BEFORE this gesture's strikes, moves, or retirement,
@@ -820,6 +860,11 @@ ANCHORS (computed on today's day text BEFORE this gesture's strikes, moves, or r
                (b = that bullet)
   inherit    : a closed subtask with no live link of its own takes its root's anchor
   none       : otherwise (no today day file, no ## Pomodoros, or not planned today)
+
+IMPLICIT DESTINATION = today's single open timed entry, else the first open entry
+           in document order (the same resolution as the plain `@route:id`
+           Ensure-Next form). Fails when there is no day file, no ## Pomodoros,
+           no open entry, or several open timed entries.
 
 CANDIDATES = open tasks D (status type Todo/InProgress/OnHold: ' ', '?', '*', '/'),
              outside done/, whose [dependsOn::] contains match(c) for some c ∈ C
@@ -833,31 +878,71 @@ FOR EACH D, in this order:
                                   → still_blocked{reason: project}  (PDC1; D stays [?])
   4. D's block id is prj          → recover; not_linked: project_task
                                     (except §12.10: a ^prj of an emptied
-                                    project is a pull-in, not project_task)
+                                    project is a project_finished offer,
+                                    not project_task)
   5. D carries #hide              → recover; not_linked: hidden
   6. D had a live link before this gesture
                                   → recover; not_linked: already_planned
   7. no predecessor of D in C has an anchor
-                                  → recover; not_linked: not_planned_today
-  8. plan.link_unblocked is false → recover; not_linked: disabled
-  9. otherwise                    → SUCCESSOR, anchored at the earliest (ledger order)
-                                    anchor among D's predecessors in C
+                                  → OFFER at IMPLICIT DESTINATION, group hand_off;
+                                    if implicit resolution fails → recover;
+                                    not_linked: no_destination; no offer
+  8. plan.link_unblocked is false → recover; not_linked: disabled; no offers
+                                    (the config keeps its boolean spelling;
+                                    true, the default, now means "offer")
+  9. cancelled close (cycler)     → recover only; never offer
+ 10. otherwise                    → OFFER, group hand_off, destination = the
+                                    earliest (ledger order) §12.3 anchor among
+                                    D's predecessors in C
 
-PROJECT RECOVERY: when a `^prj` recovers (step 4), every resident of
-           that project loses `#prj_is_blocked`. Residents with no
-           remaining own reason recover too (recover-only, never
-           successor-linked) and receive `[unblocked::]` when
-           freshness.md §5's WRITE rule applies. Those recoveries
-           do not count toward the breaker (PDC2). A resident that
-           still has an open prerequisite of its own stays Blocked
-           (PDC3).
-BREAKER  : more than 5 successors in one gesture → link none; each becomes
-           recover + not_linked: breaker
-ORDER    : successors by anchor ledger position, then note path, then line
+PROJECT OFFERS: when a `^prj` R recovers (step 4) and R has no own or
+           inherited reason left, enumerate every **open resident T of
+           N** (`[?]` or `[ ]`, including `#ref` and inbox tasks) on
+           the staged post-gesture text:
+           - own open prerequisite or future date → still blocked: a
+             muted, unselectable row with its reason (PDC3);
+           - `#hide` → recover only, folded into a count line;
+           - live-linked today → recover to derived rank, folded into
+             a count line;
+           - otherwise → recover **and** offer, group project.
+           R itself is the **group header, not a choice**, when N still
+           has open work. Descendant (sub-)projects are untouched
+           (`close_recovers_subprojects = no`, PDC5); the group shows
+           one muted line counting N's open sub-projects from R's
+           `🧩 **Sub-projects:**` marker ("N sub-projects stay blocked
+           until the next reconcile"). Residents still lose
+           `#prj_is_blocked` immediately. Unpicked recoveries receive
+           `[unblocked::]` when freshness.md §5's WRITE rule applies.
+           Resident destination = earliest_anchor(preds(R)), falling
+           back to IMPLICIT DESTINATION.
+DEDUP    : one row per task identity; causes are merged. A resident
+           that is also a direct dependent appears once, in hand_off.
+           In a multi-item capture draft, a later item that links,
+           completes, re-blocks, or explicitly drops (`=x~K`) a task
+           removes its offer; a later item that adds open work to N
+           removes N's project_finished offer.
+BREAKER  : deleted. No replacement cap. SL17, PP15, and the breaker
+           notice tests are retired. Keep the unrelated
+           embedded-completion safeguards (25 levels / 250 targets).
+KEYS     : row with a block ID → `<note_path>#^<block_id>`;
+           otherwise → `<note_path>@<first 8 hex of SHA-256 of
+           note_tasks::clean_description>`, and the k-th (k ≥ 2) row
+           in the same note with the same digest, in document order,
+           gets a `~k` suffix. Rust pins this format (the Mac and the
+           CLI round-trip it). The cycler may use any deterministic
+           synchronous digest in the same shape; it must never key by
+           line number.
+SELECTION: an input to each engine's existing single write pass
+           (plan → choose → apply). Unpicked offers recover with
+           not_linked: not_selected. Nothing is pre-checked.
+ORDER    : offers by group (hand_off, then project, then
+           project_finished), then anchor ledger position, then note
+           path, then line
 recover  : '?' → derived rank on the POST-gesture day text: '*' if D has a live link
            there, else ' '. ' ', '*', '/' are unchanged.
-SUCCESSOR: '?' or ' ' → '*'; '*' and '/' are unchanged. Mint a missing ^block-id, then
-           insert the successor link (Placement).
+PICK     : '?' or ' ' → '*'; '*' and '/' are unchanged. Mint a missing ^block-id,
+           stamp [fresh:: today] (clearing [unblocked::] and [keeps::]), then
+           insert the successor link (Placement). Unpicked rows never mint.
 ```
 
 - **Identity.** Matching uses only c's `[id::]` value. That is the one
@@ -879,27 +964,48 @@ SUCCESSOR: '?' or ' ' → '*'; '*' and '/' are unchanged. Mint a missing ^block-
 - **The already-planned baseline** is the day text **before** the
   gesture. Three consequences:
   - A dependent whose link this same close carries forward stays planned
-    and is not duplicated.
+    and is not offered.
   - A dependent whose link this same close **drops** (`=x~K`) is never
-    re-linked. The drop wins, and the dependent recovers to Ready.
+    re-offered. The drop wins, and the dependent recovers to Ready.
   - The recovered rank is derived from the **post**-gesture text,
     because that is what the hooks will see.
-- **Rows report what the gesture did.** A dependent appears in
-  `unblocked[]` only if this gesture changed its status or linked it. An
-  already-Next dependent that is already planned produces no row.
-  `still_blocked[]` lists every open dependent of C that stays blocked.
-- **No recursion.** Linking D is not completing D, so D's own dependents
+- **Rows report what the gesture did.** An offered task appears in
+  `unblocked[]` even when its status did not change (a stale `[ ]`
+  resident). An already-Next dependent that is already planned produces
+  no row. `still_blocked[]` lists every open dependent of C that stays
+  blocked, plus muted still-blocked project residents (with their
+  `project`).
+- **No recursion.** Picking D is not completing D, so D's own dependents
   wait (SL13).
+- **No minting for unpicked rows.** A picked row that became Blocked or
+  was linked meanwhile is refused per row and never satisfied by
+  linking its prerequisites instead.
 - **No managed-line guard in v1.** The field is the single identity,
   exactly as recovery and the hooks use it. Staleness is the same window
   Blocked derivation already has.
 
 ### 12.3 Anchors and placement
 
-The inserted line is always `<indent>- <link>`. The indent is the anchor
-bullet's indent for slot anchors, and one tab for entry children.
-Nothing else goes on the line: prose would stop it counting as a Task
-Link.
+Placement runs only for **picked** offers. The inserted line is always
+`<indent>- <link>`. The indent is the anchor bullet's indent for slot
+anchors, and one tab for entry children (including implicit-destination
+inserts). Nothing else goes on the line: prose would stop it counting
+as a Task Link. A lone `\t- ` stub is replaced.
+
+**Implicit destination.** When no predecessor of D in C has an anchor
+(step 7), or when a project resident's `earliest_anchor(preds(R))` is
+empty, the destination is today's single open timed entry, else the
+first open entry in document order — the same resolution as the plain
+`@route:id` Ensure-Next form. If that resolution fails (no day file, no
+`## Pomodoros`, no open entry, or several open timed entries) the task
+recovers with `not_linked: no_destination` and is not offered.
+`destination.entry_role` is `"implicit"`; `fallback` is true when this
+path was used because no §12.3 anchor existed.
+
+**Resident destination.** A project-group offer's destination is the
+earliest (ledger order) anchor among `preds(R)` — the tasks that
+unblocked R; in closing mode the closing target — falling back to the
+implicit destination.
 
 **Slot anchors** (`slot(E, b)`): insert immediately after bullet `b`'s
 subtree (`b` plus its deeper-indented children), in successor order.
@@ -921,11 +1027,13 @@ subtree (`b` plus its deeper-indented children), in successor order.
 3. else a new placeholder, `- [ ] () — NAME` (or `- [ ] ()` when the
    closed entry was unnamed). It goes immediately after the closed
    entry's sub-bullet range, exactly where the close would have created
-   its continuation. Successors count as carried.
+   its continuation. Picked successors count as carried.
 
-Successors are appended after the target's existing children; a lone
-`\t- ` stub is replaced. `link.entry_created` is true when the entry
-did not exist before this gesture, in case 1 or 3.
+Picked successors are appended after the target's existing children; a
+lone `\t- ` stub is replaced. Implicit-destination inserts are entry
+children (one tab, after existing children, replacing a lone stub).
+`link.entry_created` is true when the entry did not exist before this
+gesture, in case 1 or 3.
 
 **Next up.** `link.next_up` is true when, after the gesture, the target
 entry is the first open untimed placeholder in the ledger: the one a
@@ -936,26 +1044,39 @@ surprise.
 ### 12.4 Writes
 
 Each gesture makes one write set: one staged batch in capture, one
-planned pass in Obsidian.
+planned pass in Obsidian (plan → choose → apply). Selection is an
+**input** to that pass. Each picked offer behaves like a manual link
+(Ctrl+Shift+Enter):
 
-- **Successor's note.** Its status changes per the rule. A missing
-  `^block-id` is appended as ` ^<mint>` at the end of the task line.
-  Removing whole-token `#hide` from a pulled-in `^prj` is the one
-  non-status line edit (§12.10). `#hidden` and `#hideaway` stay.
-- **Day file.** Successor bullets are inserted, plus the created
-  placeholder when one is needed.
-- **Freshness.** Never touched: no `[fresh::]` stamp, and an existing
-  stamp is kept byte-for-byte. Automation never stamps. An unstamped
-  successor surfaces in tomorrow's NEXT review, which is correct.
+- **Picked row's note.** Status `' '`/`'?'` → `'*'` (`'*'` and `'/'`
+  unchanged; a Pending task is never demoted). Mint a missing
+  `^block-id` (existing deterministic mint, below). Strip
+  `#prj_is_blocked`. Stamp `[fresh:: today]`, clearing `[unblocked::]`
+  and `[keeps::]` (Rust `freshness::placement::stamp_fresh`; JS
+  `applyFreshStampLine` + `getFreshnessStampLine`). Removing
+  whole-token `#hide` from a pulled-in `^prj` is unconditional
+  (§12.10), picked or not. `#hidden` and `#hideaway` stay.
+- **Unpicked row's note.** Recovers exactly as today's recover rule
+  (including the `[unblocked::]` WRITE rule) and reports
+  `not_linked: not_selected`. **No mint.** Status follows `recover`.
+- **Day file.** Picked successor bullets are inserted, plus the created
+  placeholder when one is needed. Unpicked offers insert nothing.
+- **Freshness.** Picked rows stamp like a manual link. Unpicked
+  recoveries never stamp; they keep the WRITE rule
+  ([freshness.md §5](freshness.md#5-who-stamps)). An unpicked Ready
+  recovery can still surface as TICKLER tomorrow.
 - **Schedule.** Never touched: no `scheduled` change and no Schedule Log
-  line. Eligible successors have no future date by definition.
+  line. Eligible offers have no future date by definition.
 - **Fields.** No `[id::]` / `[dependsOn::]` writes; the hooks own those.
-- **Do not call `plan_task_link`** (Rust) or nav's
-  `planTargetTaskUpdate`: both stamp freshness and retire schedules. Use
-  the lower-level status writer (`set_task_line_status`) and the
-  placement helper.
+- **Do not call `plan_task_link`** (Rust) or block-id-prompt's
+  `planTargetTaskUpdate`: both stamp freshness **and** retire
+  schedules. Picks stamp freshness through `stamp_fresh` /
+  `applyFreshStampLine` and never retire a schedule. Use the
+  lower-level status writer (`set_task_line_status`) and the placement
+  helper.
 
-**Block-ID minting.** `mint(D)` is the first entry of bob's
+**Block-ID minting.** Minting runs only for picked offers. `mint(D)` is
+the first entry of bob's
 `capture_block_ids::suggest_ids_with_used(description, '^', used)`.
 
 - `description` is `note_tasks::clean_description` of D's body: the
@@ -988,11 +1109,15 @@ The JS port counts the same set without reading note bodies.
 ### 12.5 Reporting model
 
 The capture result contract is additive under schema version 1, so old
-clients keep working. Dry-run JSON equals real-run JSON except for
-`dry_run`. There is no new subcommand and no new CLI option.
+clients keep working. Dry-run JSON equals real-run JSON with the same
+flags (including `--pull-in`). Serde omits `not_linked` when the row
+was linked; clients must not expect `"not_linked": null`. `breaker` and
+`not_planned_today` are never emitted again (clients keep their copy
+for older bobs). CLI selection is `-p, --pull-in` (§12.14).
 
 Both `task_complete` and `pomodoro_close` objects carry the same three
-fields:
+fields. Offered rows are emitted even when the status did not change (a
+stale `[ ]` resident).
 
 ```json
 "unblocked": [{
@@ -1009,7 +1134,12 @@ fields:
            "entry_created": false, "next_up": false, "line": 40,
            "block_link": "[[sase#^relaunch-failed-agents]]",
            "block_id_created": true},
-  "not_linked": null
+  "offer": {
+    "key": "sase.md#^relaunch-failed-agents", "n": 1, "group": "hand_off",
+    "destination": {"day_file": "2026/20261009.md", "entry_name": "FIX",
+                    "entry_role": "slot", "fallback": false},
+    "selected": true, "block_id_needed": false
+  }
 }],
 "still_blocked": [{"note_path": "sase_agents_repo.md", "block_id": "badges", "line": 21,
   "text": "Start adding sase--<name> badges", "status_symbol": "?",
@@ -1033,14 +1163,29 @@ fields:
   removed `#hide` without linking or changing status (§12.6, §12.10).
 - `block_id` holds the minted ID when one was minted, and `""` when D
   has none and none was minted.
-- `link` is non-null exactly when this gesture linked D.
+- `link` is non-null exactly when this gesture linked D (the offer was
+  picked).
   - Line numbers are 1-based in the day text after this item.
   - `day_file` is vault-relative.
   - `entry_name` is `""` when the entry is unnamed.
-- `not_linked` is one of `already_planned`, `not_planned_today`,
-  `breaker`, `project_task`, `project_member`, `hidden`, `disabled`.
+- `offer` is additive on every offered row:
+  - `key`: the offer key (§12.2 KEYS);
+  - `n`: 1-based index in the numbered offer list this command reports
+    without a selection;
+  - `group`: `"hand_off"` | `"project"` | `"project_finished"`;
+  - `project`: vault-relative path of N, present on the `project` group;
+  - `destination`: `{day_file, entry_name, entry_role, fallback}` where
+    `entry_role` is `"slot"` | `"closing"` | `"implicit"` | `"created"`
+    and `fallback` is true when the implicit destination was used
+    because no §12.3 anchor existed;
+  - `selected`: true when this offer was picked;
+  - `block_id_needed`: true when a pick would mint.
+- `not_linked` is one of `already_planned`, `project_task`,
+  `project_member`, `hidden`, `disabled`, `not_selected`,
+  `no_destination`. Serde omits the key when the row was linked.
   - The cycler-only model adds `failed` and `cancelled`; Rust never
     emits them.
+  - `breaker` and `not_planned_today` are never emitted again.
 
 **`still_blocked[]` rows**
 
@@ -1051,7 +1196,8 @@ fields:
 - `project` (the reason) is a resident whose project still has an
   open prerequisite or a future `scheduled` date after this gesture
   (§13). The optional `project` field is that note's vault-relative
-  path. Pull-in still-blocked rows carry `project` (N's path) for every
+  path. Muted still-blocked project-offer residents carry `project`
+  too. Pull-in still-blocked rows carry `project` (N's path) for every
   reason. `^prj` reports only its own reasons, never a `project_*`
   reason.
 - `trigger` is `"dependency"` or `"project_empty"`, same rule as
@@ -1061,8 +1207,35 @@ fields:
 
 - `"checked"`: the lookup ran, or the gate proved it unnecessary.
 - `"unavailable"`: the dependents snapshot could not be built. The close
-  still succeeds and nothing is linked.
+  still succeeds and nothing is offered or linked.
 - A missing key means an older `bob`.
+
+**Top-level `pull_in`**
+
+Present on **every** successful capture JSON (dry-run too):
+
+```json
+"pull_in": {
+  "supported": true,
+  "offer_count": 2,
+  "choice": null,
+  "picked_count": 0,
+  "groups": [
+    {"group": "project", "project": "sase_foo.md",
+     "folded": {"hidden": 0, "already_planned": 0, "sub_projects": 0}}
+  ]
+}
+```
+
+- `supported`: always `true` on a bob that implements this contract.
+- `offer_count`: selectable offers in this result (muted/folded rows
+  are not offers).
+- `choice`: `null` when no `--pull-in` was given; otherwise `"all"`,
+  `"none"`, or `"subset"`.
+- `picked_count`: how many offers were linked.
+- `groups`: folded counts (hidden, already planned, sub-projects) per
+  project group. Omitted when every folded count is zero and there is
+  no project group.
 
 **Elsewhere in the result**
 
@@ -1072,12 +1245,13 @@ fields:
 - **`pomodoro_close.next_pomodoro`** names the successor's continuation
   when the successor logic created it.
 - **`pomodoro_blocks[].lines[].reason`.** Optional `"unblocked"` on
-  added lines that are surviving successor links.
-- **Net batch reporting (SL20).** After all items are planned, a
-  successor whose link no longer survives live in the final staged day
-  text, or whose task is no longer open, is dropped from its item's
-  `unblocked[]` and loses its block-line `reason`.
-- **`task_blocks`.** Successors keep role `unblocked`.
+  added lines that are surviving picked successor links.
+- **Net batch reporting (SL20).** After all items are planned, an offer
+  whose task is no longer open, or whose later item linked, completed,
+  re-blocked, or dropped it, is dropped from its item's `unblocked[]`
+  and loses its block-line `reason`. A later item that adds open work
+  to N removes N's `project_finished` offer.
+- **`task_blocks`.** Picked successors keep role `unblocked`.
 
 **Shared notice model** (cycler → nav `api.notice.showUnblocked(model)`).
 It is the JSON row shape above, kept in snake_case on purpose so one
@@ -1102,14 +1276,21 @@ vocabulary serves Rust, JS, Swift, and the vectors:
 - One notice per gesture, and silence when nothing was unblocked.
 - Each row reads successor text first, then the destination, then the
   cause.
+- Offer lists use group headers: `Hand-offs`, `Project ‹note›`,
+  `Project finished`. The project group's `^prj` is the header, not a
+  choice, when N still has open work.
 - Use only existing glyphs: 🔓 unblocked (Mac `lock.open.fill`), 🔒
   still blocked (Mac `lock.fill`), ✓ done.
 - Use only existing `--task-status-*` colour tokens, with no new hex
   values.
 - Show at most 3 rows (linked, then not linked, then still blocked),
-  then `+N more`. This is a display limit, not an insertion limit.
+  then `+N more`. This is a display limit, not an insertion limit. The
+  picker itself has no row cap: grouping and a filter handle large
+  lists.
 - Never lead with a block ID.
 - Truncate task text to 48 characters with `…`.
+- Drop breaker copy from new output. Older payloads may still render
+  `not linked · more than 5`.
 
 **Notice text** (`successorNoticeText(model)` in the cycler, and the Mac
 notification line). This is the plain fallback and walk-toast form:
@@ -1120,11 +1301,15 @@ notification line). This is the plain fallback and walk-toast form:
 | Several linked, one entry | `🔓 3 linked → SASE: Review memory beads, Ship AGENTS.md…, +1` |
 | Several entries | `🔓 3 linked · FIX, SASE` |
 | Created continuation | `🔓 Next in new BOB session (next up): Re-launch…` |
-| Breaker | `🔓 7 unblocked · not linked (more than 5)` |
+| Not pulled in | `🔓 7 unblocked · not pulled in` |
+| No destination | `🔓 Unblocked: Book flights (Ready) · no open Pomodoro` |
 | Recovered only | `🔓 Unblocked: Book flights (Ready)` |
+| Project member | `🔓 Unblocked: Draft the pitch (Ready) · project member` |
 | One linked pull-in | `🔓 Next in FIX: Ship the outcome! · project has no open tasks` |
 | Surfaced only | `🔓 Surfaced: Ship the outcome! (Ready) · project has no open tasks` |
+| Pulled-in summary | `🔓 Pulled in 2 of 7` |
 | Partial failure (Obsidian) | `⚠ Closed Fix apollo machine! — couldn't link 1 successor (daily note changed)` |
+| No nav picker | offers listed as `not pulled in` |
 
 **Obsidian: the `Unblocked` card** (nav's notice family,
 `bob-nh-notice is-unblock`).
@@ -1144,7 +1329,7 @@ notification line). This is the plain fallback and walk-toast form:
   - The title is `Project empty` when every row is a project pull-in
     row (`trigger: "project_empty"`), otherwise `Unblocked`.
   - The count chip reads `n → NAME` / `n → new NAME session` /
-    `n linked`, plus `· next up` when it applies.
+    `n linked` / `n not pulled in`, plus `· next up` when it applies.
   - The right-aligned muted receipt reads `✓ <predecessor>`, or
     `✓ N tasks`.
 - **Rows.**
@@ -1153,10 +1338,10 @@ notification line). This is the plain fallback and walk-toast form:
     `inbox` when D lives in an inbox file. Project pull-in rows add a
     muted `no open tasks` chip after the lane pill.
   - **Not-linked rows** show the text, a lane pill (`Ready`/`Next`), and
-    a muted reason: `already planned`, `not planned today`,
-    `not linked · more than 5`, `project task`, `hidden`, `linking off`,
-    `couldn't link`, or `cancelled`. Project pull-in rows add the same
-    `no open tasks` chip.
+    a muted reason: `already planned`, `not pulled in`,
+    `no open Pomodoro`, `project task`, `project member`, `hidden`,
+    `linking off`, `couldn't link`, or `cancelled`. Project pull-in
+    rows add the same `no open tasks` chip.
   - **Still-blocked rows** are muted: `🔒 text · waits on N more` or
     `· waits until Oct 13`. A `reason: "project"` row reads
     `· blocked by project` (`· project until <date>` when `scheduled`
@@ -1169,30 +1354,39 @@ notification line). This is the plain fallback and walk-toast form:
     when over.
   - `added ^id`, or `added N block IDs`.
   - `Alt+N releases` (muted), shown when anything was linked.
-- **Breaker variant.** The header reads `7 · not linked`, followed by one
-  reason line: `More than 5 at once — link the ones you want with
-  Ctrl+Shift+Enter`.
 - **Duration.** 6 s plus 1 s per extra visible row, capped at 10 s.
-- **No nav.** Without nav (or with `api.notice` missing), show a plain
-  `new Notice(successorNoticeText(model))`.
+- **No nav.** Without nav (or with `api.notice` missing, or
+  `api.successors?.version < 1`), show a plain
+  `new Notice(successorNoticeText(model))` listing offers as
+  `not pulled in`. No links.
 - **Walk landings.** The gesture keeps its **single** walk toast. The
-  notice text is composed into `outcome.notice` as the line after
-  `✓ Done · <task>`, and no card is shown. Inserted rows never steal
-  focus or cause a second advance.
+  successor picker holds the review-walk gesture lock while it is
+  open; after it settles (including Esc) the walk advances exactly
+  once and the pull-in result composes into `outcome.notice` as the
+  line after `✓ Done · <task>`. No card is shown. Inserted rows never
+  steal focus or cause a second advance. Ctrl+Enter never crosses the
+  PRE/POST boundary. A double-press guard ignores Enter carrying
+  modifiers, key repeats, and presses within ~350 ms of opening.
 
-**Bob Mac Capture: preview first, notification second.** Preview is the
-primary surface because it explains before anything is written. Mac
-needs no change for project pull-in (`decisions:mac-capture-is-a-thin-client`;
-the JSON is additive). Pull-in rows render as linked successors.
+**Bob Mac Capture: preview first, choice step, notification second.**
+Preview is the primary surface because it explains before anything is
+written. The app stays a thin client: bob computes offers and does the
+write; the app adds an in-panel multi-select choice step on Return
+when the latest preview has offers, then passes `--pull-in` on the one
+atomic `bob capture`. Numbered offer rows appear on the `!` and close
+cards under group headers, with the hint `↩ choose what to pull in`.
 
 - **`!` card unblocked rows.**
-  - **Linked.** `lock.open.fill` in the Next tint, monospaced
-    `[?] → [*]  Re-launch…`, and a trailing destination capsule
-    (`→ FIX` / `→ new BOB · next up`). A caption reads `added ^id` when
-    an ID was minted. An `inbox` capsule appears when it applies.
+  - **Offered.** Numbered `offer N` rows with group headers. Destination
+    capsule (`→ FIX` / `→ new BOB · next up` / `→ implicit`).
+  - **Linked (after a pick).** `lock.open.fill` in the Next tint,
+    monospaced `[?] → [*]  Re-launch…`, and a trailing destination
+    capsule. A caption reads `added ^id` when an ID was minted. An
+    `inbox` capsule appears when it applies.
   - **Not linked.** `lock.open.fill` in secondary colour,
     `[?] → [ ]  text`, and a caption with the reason
-    (`Ready · not planned today`).
+    (`Ready · not pulled in` / `Ready · no open Pomodoro` /
+    `Ready · project member`).
   - **Still blocked.** `lock.fill` in tertiary colour, `text`, and a
     caption reading `stays Blocked · waits on 1 more` /
     `· until Oct 13`.
@@ -1202,19 +1396,28 @@ the JSON is additive). Pull-in rows render as linked successors.
   trailing `lock.open.fill` badge with `.help("Unblocked successor")`,
   so the successor visibly sits under its struck predecessor.
 - **Notification.** One extra body line, taken from the notice-text table
-  above. There is never a second notification. With only recovered rows,
-  keep today's `· unblocked A, B`.
+  above, reporting what was pulled in. There is never a second
+  notification. With only recovered rows, keep today's
+  `· unblocked A, B`.
 - **Open Note(s)** includes the daily note whenever anything was linked.
+- **Esc** on the Mac choice step returns to the draft with nothing
+  written (the close has not happened yet). ⇧↩ submits with none.
 
 **Human output** follows the existing word-led rows (`dry run`:
-`would link`). It prints after the `ledger` line for `!`, and after the
-task rows and before `next:` for closes:
+`would link`). Numbered `offer N` rows print under group headers after
+the `ledger` line for `!`, and after the task rows and before `next:`
+for closes. A dry-run hint shows `-p 1,2 · -p all`. A real run without
+a pick says the offers were not pulled in and names Obsidian / Bob Mac
+Capture / Ctrl+Shift+Enter as the way to link later:
 
 ```text
 ✓ completed [*] → [x] Fix apollo machine!  sase.md ^fix-apollo
   ledger  Task Link struck in FIX · 2026/20261009.md
+  Hand-offs
+  offer 1  [?] Re-launch all failed agents on apollo!  sase.md ^relaunch-failed-agents → FIX
+  offer 2  [?] Book flights  travel.md ^book-flights → FIX
   linked [?] → [*] Re-launch all failed agents on apollo!  sase.md ^relaunch-failed-agents → FIX · added ^relaunch-failed-agents
-  unblocked [?] → [ ] Book flights  travel.md ^book-flights · not planned today
+  unblocked [?] → [ ] Book flights  travel.md ^book-flights · not pulled in
   linked [ ] → [*] Ship the outcome!  proj.md ^prj → FIX · project has no open tasks
   surfaced Ship the outcome!  proj.md ^prj · project has no open tasks
   still blocked  Start adding sase--<name> badges  sase_agents_repo.md ^badges · until 2026-10-13
@@ -1230,10 +1433,11 @@ plan 3/3 themes · 10/10 links
   - `→ line 37` for an unnamed existing entry
 - **Reason suffixes:**
   - `· already planned`
-  - `· not planned today`
+  - `· not pulled in`
+  - `· no open Pomodoro`
   - `· project task`
+  - `· project member`
   - `· hidden`
-  - `· not linked, more than 5`
   - `· linking off`
 - **Project pull-in.** A pull-in that linked R uses `linked` / `would
   link`. A pull-in with no link and no status change uses `surfaced` /
@@ -1252,6 +1456,7 @@ plan 3/3 themes · 10/10 links
 | 1. Lazy context | `DependencyContext` builds `discover` only for items that need the dependency pool. `!` resolves notes from a walk-only index. | `hello` / `=x` previews go from about 270 ms to about 40 ms on apollo. |
 | 2. Prefiltered parallel snapshot | One batch-scoped dependents snapshot. Byte reads run in parallel, and a prefilter keeps only notes containing `dependsOn` or `id::`. Staged files always overlay disk. Shared by every `!` and close item in the batch, never cloned per item. | About 30 ms per batch, paid only when the gate passes. |
 | 3. Obsidian Tasks cache | When Tasks reports Warm, build a reverse index `id → dependents` from `getTasks()`. Open editor buffers override the cache. Read only the candidate notes and today's daily note. A cold cache falls back to the full scan. | The notice lands about 50 ms after the keypress. |
+| 4. Project offers | Enumerate residents from N's already-staged text plus the dependents snapshot the gate already allows. No extra vault walk for descendant notes. | The `^bar` → `sase_foo` case costs one staged-note read. |
 | No daemon, no persistent cache | A validated cache needs a stat walk (32–55 ms) that costs as much as layer 2. | Respects the thin-client rule: no Swift-side dependency or placement logic. |
 
 **Targets.** Measured on apollo with a release build, against a temporary
@@ -1265,12 +1470,14 @@ plan 3/3 themes · 10/10 links
 ### 12.8 Kill switch
 
 `plan.link_unblocked: true` lives in `~/.config/bob/config.yml` and is
-read by Rust and the cycler. Setting it to `false` turns off **linking
-and minting only**:
+read by Rust and the cycler. The config keeps its boolean spelling;
+`true`, the default, now means **offer**. Setting it to `false` turns
+off **offering, linking, and minting**:
 
 - close-time recovery still runs and still uses the derived rank;
 - each unblocked row reports `not_linked: "disabled"`;
-- project pull-ins obey the same kill switch: no link, status
+- no picker, no `--pull-in` effect, no offers in JSON;
+- project pull-ins obey the same kill switch: no offer, no link, status
   unchanged, `not_linked: "disabled"`; un-hiding still happens
   (§12.10).
 
@@ -1281,29 +1488,33 @@ surfaces through the existing invalid-plan-config warning paths
 
 ### 12.9 Undo
 
-- **One successor.** Alt+N on its link releases it, as the inverse of
-  what was written. The card's chip teaches this.
+- **One pick.** Alt+N on its link releases it, as the inverse of what
+  was written. The card's chip teaches this.
 - **The whole gesture, in Obsidian.** Reopening the predecessor the same
-  day takes back its successor links if they are untouched. This uses an
+  day takes back its picked successor links if they are untouched, and
+  restores the pre-pass lines it owns, including picked rows' freshness
+  fields (`[fresh::]`, `[unblocked::]`, `[keeps::]`). This uses an
   in-memory receipt; nothing is stored in Markdown. For a project
   pull-in, the receipt also stores R's full pre-edit line and restores
-  that line byte-for-byte (status and `#hide`) when R's current line is
-  still the line the pass wrote (§12.10).
+  that line byte-for-byte (status, `#hide`, and freshness) when R's
+  current line is still the line the pass wrote (§12.10).
+- **Rust.** No reopen take-back, as today.
 - **Not undo.** Deleting the bullet or pressing `u` in the editor leaves
   the sticky Next. That is the general sticky-lane cost.
 
 ### 12.10 Project pull-in
 
 When a close gesture empties a project, do immediately and visibly what
-`bob projects sync` would do within 15 minutes, and also link `^prj` as
-Next. "Empties" uses sync's own predicate, so sync never re-hides a
-pulled-in `^prj`. Implementations copy the PP table (§12.11) into their
-tests, citing the vector id in a comment. If an implementation disagrees
-with a vector, fix this section first in the same change.
+`bob projects sync` would do within 15 minutes: remove `#hide` from
+`^prj`. The link step becomes a `project_finished` offer. "Empties"
+uses sync's own predicate, so sync never re-hides a pulled-in `^prj`.
+Implementations copy the PP table (§12.11) into their tests, citing the
+vector id in a comment. If an implementation disagrees with a vector,
+fix this section first in the same change.
 
 A pulled-in `^prj` is never Blocked when linked (Rule steps 1–3), so
 §13.5 consumption and "never link a Blocked task" hold. Dependency
-promotion never raises a `^prj` target; a direct Task Link raises `^prj`
+promotion never raises a `^prj` target; a picked Task Link raises `^prj`
 to Next like any other task, including this close-gesture pull-in.
 
 **Terms**
@@ -1382,47 +1593,56 @@ project_task row):
      pull-in still never links a Blocked ^prj. this applies to
      every trigger. steps 1–3 leave R's line byte-identical,
      #hide included)
-  4. From here on, remove every whole-token #hide from R.
+  4. From here on, remove every whole-token #hide from R
+     (unconditional; picked or not).
   5. R had a live link before the gesture
                                   → not_linked: already_planned;
                                     ' ' / '?' → '*'
   6. no task in preds(R) has an anchor
-                                  → not_linked: not_planned_today;
-                                    recover rank
+                                  → OFFER at IMPLICIT DESTINATION, group
+                                    project_finished; if implicit
+                                    resolution fails → not_linked:
+                                    no_destination; recover rank
   7. cancelled close (cycler only)
                                   → not_linked: cancelled; recover rank
+                                    (never offer)
   8. plan.link_unblocked is false → not_linked: disabled; recover rank
-  9. otherwise                    → PULL-IN: link R at the earliest
-                                    anchor among preds(R) (§12.3 slot /
-                                    closing / inherit); ' ' / '?' → '*';
-                                    '*' and '/' unchanged
+                                    (no offer)
+  9. otherwise                    → project_finished OFFER at the
+                                    earliest anchor among preds(R)
+                                    (§12.3 slot / closing / inherit);
+                                    linked when picked; unpicked
+                                    recovers with not_linked:
+                                    not_selected
 recover rank : '?' → '*' if R has a live link in the post-gesture day
                text, else ' '; other statuses unchanged. A Ready
                landing (`' '`) writes `[unblocked::]` when
                freshness.md §5's WRITE rule applies; a Next landing
-               skips it (UB4). The WRITE rule is evaluated on R's
-               line AFTER step 4 removed #hide, so the hidden skip
+               (a pick) stamps [fresh:: today] instead and skips
+               `[unblocked::]` (UB4). The WRITE rule is evaluated on
+               R's line AFTER step 4 removed #hide, so the hidden skip
                never applies to a pulled-in R. When R was `[?]` and
-               leaves Blocked through steps 5–9, §12.2 PROJECT
-               RECOVERY runs for N exactly as for a `project_task`
-               recover (PDC2/PDC3).
-BREAKER      : pull-ins never count toward the 5-successor breaker and
-               are never broken
-ORDER        : pull-ins sort with successors (§12.2 ORDER: anchor, note
-               path, line)
+               leaves Blocked through steps 5–9, §12.2 PROJECT OFFERS
+               run for N exactly as for a `project_task` recover
+               (PDC2/PDC3).
+BREAKER      : deleted. Pull-ins are ordinary offers.
+ORDER        : pull-ins sort with offers (§12.2 ORDER: group, anchor,
+               note path, line)
 ROWS         : unblocked[] gets a row when the gesture changed R's
-               status, removed #hide, or linked R. still_blocked[]
-               always gets a row for steps 1–3. An already-Next,
-               already-linked, visible R produces nothing.
+               status, removed #hide, offered R, or linked R.
+               still_blocked[] always gets a row for steps 1–3. An
+               already-Next, already-linked, visible R produces
+               nothing.
                A surfaced row removed #hide without linking or changing
                status: `previous_status_symbol` == `status_symbol`,
                `hide_removed: true`, `link: null`, and its `not_linked`
-               reason.
+               reason (`not_selected` when offered and unpicked).
 ```
 
-Status follows the successor rule: ` ` and `?` become `*`; `*` and `/`
-are unchanged. A Pending `^prj` is never demoted
-(`decisions:task-lanes-are-sticky`).
+Status follows the pick rule: ` ` and `?` become `*` when picked; `*`
+and `/` are unchanged. A Pending `^prj` is never demoted
+(`decisions:task-lanes-are-sticky`). An unpicked `^prj` stays at its
+recovered rank.
 
 **Gate.** The `[id::]` gate still guards the dependents lookup only.
 
@@ -1433,10 +1653,10 @@ are unchanged. A Pending `^prj` is never demoted
   - a candidate R carries `[dependsOn::]`. Steps 1 and 3 need
     vault-wide openness in that case; or
   - a candidate R has status `?` and some open resident of N carries a
-    non-empty `[dependsOn::]`. The §12.2 PROJECT RECOVERY cascade checks
+    non-empty `[dependsOn::]`. The §12.2 PROJECT OFFERS cascade checks
     residents' own prerequisites vault-wide in that case.
 - If the snapshot is unavailable, set `unblocked_check: "unavailable"`
-  and write no pull-in.
+  and write no pull-in or project offer.
 - Closes outside project notes cost nothing extra. The cycler's
   zero-read wiring test must keep passing.
 
@@ -1450,11 +1670,14 @@ are unchanged. A Pending `^prj` is never demoted
     `projects::edits::normalize_task_hide_tag(line, false, true)`. The
     cycler mirrors it. PP22 pins the bytes.
   - Nothing else changes except a Ready recover-rank landing, which
-    writes `[unblocked::]` when freshness.md §5's WRITE rule applies.
-    No freshness stamp, no schedule, no `[id::]` / `[dependsOn::]`.
-    `^prj` already has its block ID, so nothing is minted.
-- **Day file.** One `<indent>- [[N#^prj]]` bullet, placed per §12.3.
-  The link form follows §12.4, so it is never `[[#^prj]]`.
+    writes `[unblocked::]` when freshness.md §5's WRITE rule applies,
+    and a pick, which stamps `[fresh:: today]` and clears
+    `[unblocked::]` / `[keeps::]`. No schedule, no `[id::]` /
+    `[dependsOn::]`. `^prj` already has its block ID, so nothing is
+    minted.
+- **Day file.** When picked, one `<indent>- [[N#^prj]]` bullet, placed
+  per §12.3. The link form follows §12.4, so it is never `[[#^prj]]`.
+  Unpicked pull-ins insert nothing.
 
 **Reporting** (additive, capture schema v1)
 
@@ -1473,22 +1696,25 @@ are unchanged. A Pending `^prj` is never demoted
     `would surface`.
   - Every project row puts `· project has no open tasks` before any
     reason suffix.
+  - Offered pull-ins appear as numbered `offer N` rows under
+    `Project finished`.
 - **Notice text** (cycler `successorNoticeText`, nav fallback, Mac
   notification line).
   - One linked pull-in:
     `🔓 Next in FIX: Ship the outcome! · project has no open tasks`.
   - Surfaced only:
     `🔓 Surfaced: Ship the outcome! (Ready) · project has no open tasks`.
-  - Mixed notices keep §12.6's count forms, and a pull-in counts as
-    linked.
+  - Mixed notices keep §12.6's count forms, and a picked pull-in
+    counts as linked.
   - Only existing glyphs are used.
 - **Nav `Unblocked` card.**
   - Project rows get a muted `no open tasks` chip after the lane pill.
   - The title is `Project empty` when every row is a project row,
     otherwise `Unblocked`.
   - Still-blocked project rows add `· no open tasks`.
-- **Bob Mac Capture** needs no change. Pull-in rows render as linked
-  successors.
+- **Bob Mac Capture** numbers pull-in offers on the preview cards and
+  includes them in the in-panel choice step. The app stays a thin
+  client: bob computes the offer and writes the pick.
 
 **Undo (Obsidian)**
 
@@ -1496,8 +1722,8 @@ The successor receipt also stores R's full pre-edit line. A same-day
 Ctrl+Enter reopen of a predecessor that owns the row does two things,
 as long as R's current line is still the line the pass wrote:
 
-- takes back R's link, as §12.9 does today;
-- restores R's whole line (status and `#hide`).
+- takes back R's picked link, as §12.9 does today;
+- restores R's whole line (status, `#hide`, and freshness fields).
 
 Rust has no reopen take-back, as today.
 
@@ -1509,22 +1735,24 @@ Rust has no reopen take-back, as today.
   releases it, or Bryan closes R.
 - **`bob task reconcile`.** A linked `[*]` R is stable. If N later
   becomes Blocked, §13.5 consumption removes R's link.
-- **Freshness / walk.** Untouched except the recover-rank
-  `[unblocked::]` (§12.4). A visible R walks in the PROJECTS tier as
-  today.
+- **Freshness / walk.** Unpicked recover-rank landings write
+  `[unblocked::]` per §12.4. Picks stamp `[fresh:: today]`. A visible
+  R walks in the PROJECTS tier as today.
 - **Multi-item drafts.** SL20's net pass drops any pull-in row, linked
   or not, whose R is no longer open in the final staged text.
 
 ### 12.11 PP — project pull-in vectors
 
-Outcomes of the shared project pull-in rule (§12.10). Rust tests run
-them through capture (`!` and close); cycler tests run them through the
-pure helpers. Copy the rows you implement into tests, citing this
-section in a comment.
+Outcomes of the shared project pull-in rule (§12.10). A row that
+expects a link means the `^prj` is **offered** (`project_finished`) and
+**linked when picked**. Tests pass a select-all selection unless a row
+says otherwise. Rust tests run them through capture (`!` and close);
+cycler tests run them through the pure helpers. Copy the rows you
+implement into tests, citing this section in a comment.
 
 | # | Situation | Outcome |
 | --- | --- | --- |
-| PP1 | N has one open task A, linked in FIX; R is ` ` with `#hide`; close A | R is linked right after A's bullet; ` `→`*`; `#hide` removed; `trigger: project_empty`; `hide_removed: true`; `unblocked_by: [A]` |
+| PP1 | N has one open task A, linked in FIX; R is ` ` with `#hide`; close A | R is offered (`project_finished`); when picked, linked right after A's bullet; ` `→`*`; `#hide` removed regardless; `trigger: project_empty`; `hide_removed: true`; `unblocked_by: [A]` |
 | PP2 | A and B are open; close A | nothing |
 | PP3 | B is `[?]` | nothing (Blocked tasks are remaining work) |
 | PP4 | B carries `#hide` | pull-in |
@@ -1533,12 +1761,12 @@ section in a comment.
 | PP7 | future project `scheduled` on `^prj` | `still_blocked{reason: scheduled}` with the date; `trigger: project_empty`; R byte-identical |
 | PP8 | R has an open prerequisite on its Depends-On line | `still_blocked`; R byte-identical |
 | PP9 | R already linked today | no new link; ` `→`*`; `#hide` removed; `already_planned` |
-| PP10 | A not planned today | no link; status unchanged; `#hide` removed; `not_planned_today`; row reported (verb `surfaced`) |
-| PP11 | `plan.link_unblocked: false` | as PP10 with `disabled` |
+| PP10 | A not planned today | offered at the implicit destination; `#hide` removed regardless; linked when picked. No implicit destination → `no_destination`, surfaced, no offer |
+| PP11 | `plan.link_unblocked: false` | no offer; `#hide` removed; `disabled`; status unchanged |
 | PP12 | R is `[/]` | linked; stays `[/]` |
 | PP13 | R is `[*]`, visible and already linked | no write, no row |
 | PP14 | A has no `[id::]` | the gate does not suppress the pull-in, and the dependents snapshot is not built |
-| PP15 | a dependency successor D and R in one gesture | both linked after A's bullet in ORDER. With six dependents plus R → six `breaker` rows, and R still linked |
+| PP15 | a dependency successor D and R in one gesture | **retired.** The breaker is deleted. D is a `hand_off` offer and R is a `project_finished` offer; both offered, linked when picked (SO) |
 | PP16 | `=x` completes embedded A | R joins the closing target (continuation, same-name entry, or created placeholder) |
 | PP17 | R depends on A through a legacy internal Depends-On line | one row, and the pull-in wins over `project_task` |
 | PP18 | cycler cancel of A | no link; `#hide` removed; `cancelled` |
@@ -1547,19 +1775,140 @@ section in a comment.
 | PP21 | draft `!N:a !N:b` | only the second item reports R. Draft `!N:b !N:prj` → the net pass drops R's row |
 | PP22 | `#hide` bytes via `normalize_task_hide_tag(line, false, true)` | `- [ ] #task #prj Ship it! #hide ^prj` → `- [ ] #task #prj Ship it! ^prj` (pull-in then writes `[*]`); `- [ ] #task #prj Ship it! #hide [priority:: high] ^prj` → `- [ ] #task #prj Ship it! [priority:: high] ^prj`; `- [ ] #task #prj Ship it! #hidden #hide ^prj` → `- [ ] #task #prj Ship it! #hidden ^prj` (`#hidden` untouched) |
 | PP23 | after a pull-in, `bob projects sync --dry-run` | reports no change for N |
-| PP24 | closing P in another note when R depended only on P and N is empty | R pulled in after P's bullet. If N is not empty → `project_task` (unchanged) |
-| PP25 | R is `[?] … #hide` and depends only on P in another note. N's only other open task is `[?] #prj_is_blocked #hide`. Close P (planned today) | R is pulled in after P's bullet: `[?]`→`[*]`, R's `#hide` removed. The resident loses `#prj_is_blocked` and recovers to `[ ]` as `project_member`. It gets no `[unblocked::]` (it is still hidden, UB6) |
+| PP24 | closing P in another note when R depended only on P and N is empty | R offered (`project_finished`); when picked, linked after P's bullet. If N is not empty → `project_task` (unchanged) |
+| PP25 | R is `[?] … #hide` and depends only on P in another note. N's only other open task is `[?] #prj_is_blocked #hide`. Close P (planned today) | R offered; when picked, linked after P's bullet: `[?]`→`[*]`, R's `#hide` removed regardless. The hidden resident is folded (recover only, no offer) and loses `#prj_is_blocked`. It gets no `[unblocked::]` (it is still hidden, UB6) |
 | PP26 | R carries `[scheduled:: <today or past>]`; N's only other open task B carries `#hide`. Close A | nothing (B is remaining work under the dated recount). With no project date → pull-in |
-| PP27 | R `[?]` with `[fresh::]`, not planned today, last blocker closed | `' '`, `#hide` removed, `[unblocked:: today]` written, `not_planned_today`. Linked instead → `[*]` and no `[unblocked::]` (UB4) |
+| PP27 | R `[?]` with `[fresh::]`, not planned today, last blocker closed | unpicked: `' '`, `#hide` removed, `[unblocked:: today]` written, offered at implicit destination (`not_selected` if unpicked). Picked → `[*]`, `[fresh:: today]`, no `[unblocked::]` (UB4) |
 | PP28 | leftover frontmatter future `scheduled` on N with an open `^prj` | `still_blocked{reason: scheduled}`, R byte-identical |
-| PP29 | K (`parent: "[[N]]"`) is the only open sub-project on N's marker line, and N has no other remaining work. K's `^prj` is linked in FIX; close it via its link | N's R is linked right after K's bullet: ` `→`*`, `#hide` removed, `trigger: project_empty`, `unblocked_by: [K ^prj]` |
+| PP29 | K (`parent: "[[N]]"`) is the only open sub-project on N's marker line, and N has no other remaining work. K's `^prj` is linked in FIX; close it via its link | N's R is offered (`project_finished`); when picked, linked right after K's bullet: ` `→`*`, `#hide` removed regardless, `trigger: project_empty`, `unblocked_by: [K ^prj]` |
 | PP30 | N's marker lists another open child, or N has a remaining task | nothing |
 | PP31 | K has no `parent:`, or it is unresolvable, ambiguous, or not a project | nothing |
 | PP32 | R carries `#prj_is_blocked` (N inherits), under any trigger | `still_blocked{reason: project, project: parent(N)}`, `trigger: project_empty`; R byte-identical |
-| PP33 | K's `^prj` not planned today; cycler cancel (Alt+[) of K's `^prj` | surfaced (`not_planned_today`); cancel → `cancelled`, surfaced only |
+| PP33 | K's `^prj` not planned today; cycler cancel (Alt+[) of K's `^prj` | offered at implicit destination (or `no_destination`); cancel → `cancelled`, surfaced only, never offered |
 | PP34 | after a PP29 pull-in, `bob projects sync --dry-run` | changes only N's marker entry for K (→ `~~[[K]]~~ ✅`), never N's `#hide` |
 | PP35 | draft `!K:prj !N:prj` | the net pass drops R's row |
 | PP36 | row text of a project row whose R carries `#prj_is_blocked` | drops `#prj_is_blocked` with `#prj` and `#hide` (token-bounded) |
+
+### 12.12 SO — successor offer vectors
+
+Outcomes of the successor-offer rule (§12) that the SL and PP tables do
+not already pin. Implementations copy the rows they implement into
+tests, citing the vector id in a comment. Select-all is the default
+selection unless a row names another.
+
+| # | Situation | Outcome |
+| --- | --- | --- |
+| SO1 | close `sase.md` `^bar`; `sase_foo.md` `^prj` depended only on `^bar` and still has two open residents (`[?]` or `[ ]`, `#ref` included) | both residents offered under the `project` group; `^prj` is the group header, not a choice; pick one → minted id if missing, `[*]`, `[fresh:: today]`, `[unblocked::]` cleared, linked under `^bar`'s entry; the other recovers, `not_selected`, no mint |
+| SO2 | 11-way fan-out from one gesture | 11 `hand_off` offers, zero pre-checked, no breaker, no cap |
+| SO3 | pick all | every selectable offer linked, raised to Next, minted as needed, stamped |
+| SO4 | pick none / Esc | recovery stands; no minted IDs; no successor-only placeholders; each offer `not_selected` |
+| SO5 | pick a subset | only those rows linked; the rest `not_selected` |
+| SO6 | stale, unknown, or out-of-range pick (`--pull-in` key/number) | teaching error, write-free; lists current offers |
+| SO7 | a resident that is also a direct dependent | one row, `hand_off` |
+| SO8 | stale `[ ]` resident with no own remaining reason | offered even though status is unchanged until picked |
+| SO9 | resident still has an open prerequisite or future date | muted unselectable row in `still_blocked[]` with `project`; `#prj_is_blocked` stripped (PDC3) |
+| SO10 | resident carries `#hide` | recover only; folded into the project group's hidden count |
+| SO11 | resident already live-linked today | recover to derived rank; folded into the already-planned count |
+| SO12 | `=x~K` drops D's link in the same close that completes P | D's offer removed (`already_planned`); recovers to `[ ]` |
+| SO13 | later item in a draft completes, links, re-blocks, or drops an offered task | that offer is dropped (net). Later item adds open work to N → N's `project_finished` offer is dropped |
+| SO14 | unplanned predecessor; one open timed entry (else first open entry) | offered at the implicit destination; `entry_role: implicit`, `fallback: true` |
+| SO15 | unplanned predecessor; no day file, no `## Pomodoros`, or no open entry | recover, `no_destination`, no offer |
+| SO16 | unplanned predecessor; two open timed entries | recover, `no_destination`, no offer |
+| SO17 | emptied-project pull-in, unpicked | `#hide` removed; no link; `not_selected`; `project_finished` |
+| SO18 | parent-project pull-in (trigger c), unpicked | `#hide` removed; no link; `not_selected`; `project_finished`. Picked → linked after K's `^prj` bullet |
+| SO19 | `plan.link_unblocked: false` | recover only; `disabled`; no offers; emptied `^prj` still loses `#hide` |
+| SO20 | pick freshness bytes | `stamp_fresh` / `applyFreshStampLine`; `[fresh:: today]`; `[unblocked::]` and `[keeps::]` cleared. Unpicked Ready recover keeps the WRITE rule |
+| SO21 | walk-landing close (cycler/nav) | picker holds the gesture lock; after it settles (including Esc) the walk advances exactly once; PRE/POST boundary unchanged |
+| SO22 | double Ctrl+Enter (cycler/nav) | ignore Enter carrying modifiers, key repeats, and presses within ~350 ms of opening; the picker is not applied |
+| SO23 | per-row destination override (Obsidian only) | Ctrl+Shift+Enter opens the Pomodoro link picker; pick returns `{kind: "existing", entryLine, entryText} \| {kind: "new", name}` with the row; cycler inserts there |
+| SO24 | N has open sub-projects on R's marker | one muted count line; descendants untouched (PDC5) |
+| SO25 | empty selection on ↵ | applies the highlighted row when none are marked; Esc means none |
+| SO26 | `bob capture` without `--pull-in` | recover; numbered `offer N` rows; `not_selected`; never prompts; never auto-links |
+| SO27 | `--require-pull-in-choice` with offers and no `--pull-in` | write-free; `{"ok": false, "code": "pull_in_choice_required", "error": "…", "pull_in": {…}}`; exit 1 |
+| SO28 | cancelled close (cycler) | recover only; never offer |
+| SO29 | `all` / `none` with zero offers | no-op |
+| SO30 | picked row became Blocked or was linked meanwhile | refused per row; never satisfied by linking its prerequisites |
+| SO31 | `#ref` and inbox residents of an unblocked project | offered (SO1 includes them) |
+| SO32 | 20-way fan-out | all 20 reachable; grouping and a filter; nothing pre-checked |
+
+### 12.13 Obsidian picker API
+
+Nav exposes `api.successors` on the frozen navigation-hotkeys api
+object (§9). Feature-detect `api.successors?.version >= 1`.
+
+```js
+successors: {
+  version: 1,
+  pick(model) → Promise<{picks: [{key, destination?}]} | null>
+}
+```
+
+- `pick` never rejects. `null` means none (Esc, click outside, unload,
+  or a second call while one picker is already open).
+- One picker at a time: a second call while one is open resolves
+  `null`.
+- `destination` on a pick is reserved for the per-row override
+  (`obsidian_destination`):
+  `{kind: "existing", entryLine, entryText} | {kind: "new", name}`.
+- The cycler plans without a selection, awaits `pick(model)` when
+  offers exist, re-reads the daily note and affected notes, re-plans
+  with the selection, and applies.
+
+**Model shape**
+
+```js
+{
+  title: string,
+  predecessors: [{ notePath, blockId, text }],
+  groups: [{
+    group: "hand_off" | "project" | "project_finished",
+    header: string,           // "Hand-offs" / project ^prj text / "Project finished"
+    project?: string,         // vault-relative path of N
+    rows: [{
+      key: string,
+      text: string,
+      notePath: string,
+      status: string,
+      destinationLabel: string,
+      needsBlockId: boolean,
+      selectable: boolean,
+      mutedReason?: string,
+    }],
+    folded?: { hidden: number, alreadyPlanned: number, subProjects: number },
+  }],
+  budget?: { links: number, max: number },  // plan meter; warns, never refuses
+}
+```
+
+### 12.14 CLI selection
+
+`-p, --pull-in <PICKS>` on `bob capture` (alphabetical between
+`--no-ref` and `--route`; short alias `-p`). `PICKS` is `all`, `none`,
+or a comma list of offer numbers and/or keys. Numbers index the
+numbered offers the same command reports without a selection. An
+unknown, stale, or out-of-range pick is a teaching error that writes
+nothing and lists current offers. `all` / `none` with zero offers is a
+no-op.
+
+Hidden internal `--require-pull-in-choice` (no short alias; internal
+subprocess argument, absent from `--help`): when offers exist and no
+`--pull-in` was given, write nothing and fail with
+
+```json
+{"ok": false, "code": "pull_in_choice_required",
+ "error": "this capture has successor offers; pass --pull-in",
+ "pull_in": {"supported": true, "offer_count": 2, "choice": null,
+             "picked_count": 0}}
+```
+
+Same exit status (1) and shape conventions as the
+`plan_theme_cap_exceeded` refusal. `code` appears on these two
+refusals; every other capture failure omits it.
+
+Human output: numbered `offer N` rows under group headers. A dry-run
+hint shows `-p 1,2 · -p all`. A real run without a pick says the
+offers were not pulled in and names Obsidian / Bob Mac Capture /
+Ctrl+Shift+Enter as the way to link later.
 
 ## 13. Project dependencies
 
@@ -2100,14 +2449,14 @@ Only today's open Pomodoros. `promoted[]` is the consumption seed.
 
 ### 13.16 PDC — close vectors
 
-Outcomes of the successor-link rule (§12.2) once project reasons exist.
+Outcomes of the successor-offer rule (§12.2) once project reasons exist.
 
 | # | situation | outcome |
 | --- | --- | --- |
-| PDC1 | dependent D lives in a still-blocked project; this close removed D's last *own* prerequisite | D stays `[?]`; `still_blocked{reason: project}`; no successor link |
-| PDC2 | this close fully unblocks a `^prj`; residents have no own remaining reason | `^prj` recovers (`not_linked: project_task`); residents recover-only (never successor-linked), lose `#prj_is_blocked`, and receive `[unblocked::]` when freshness.md §5's WRITE rule applies; those recoveries are outside the breaker (except §12.10) |
-| PDC3 | same as PDC2, but one resident still has an open prerequisite of its own | that resident stays `[?]`; `#prj_is_blocked` is still stripped |
-| PDC4 | dependent D is a resident of K (K's `^prj` tagged); this close removes D's last own prerequisite | D stays `[?]`; `still_blocked{reason: project, project: parent(K)}`; no link |
+| PDC1 | dependent D lives in a still-blocked project; this close removed D's last *own* prerequisite | D stays `[?]`; `still_blocked{reason: project}`; no offer |
+| PDC2 | this close fully unblocks a `^prj`; residents have no own remaining reason | `^prj` is the project group header (not a choice) while N has open work; every open resident (`[?]` or `[ ]`) is offered under the `project` group, or muted/folded; `#prj_is_blocked` stripped; unpicked recover to derived rank and receive `[unblocked::]` when freshness.md §5's WRITE rule applies (SO1) |
+| PDC3 | same as PDC2, but one resident still has an open prerequisite of its own | that resident stays `[?]`; muted unselectable row with its reason; `#prj_is_blocked` is still stripped |
+| PDC4 | dependent D is a resident of K (K's `^prj` tagged); this close removes D's last own prerequisite | D stays `[?]`; `still_blocked{reason: project, project: parent(K)}`; no offer |
 | PDC5 | K's tagged `^prj` loses its last own prerequisite | stays `[?]`; `still_blocked{reason: project}`; no `project_task` recover; no PDC2 / PDC3 for K's residents |
 | PDC6 | a close fully unblocks an untagged N that has tagged descendants | descendants keep their tags until the next reconcile, which recovers them (PDS4 / PDS5 outcomes). PDC2 covers only N's own residents |
 

@@ -594,7 +594,7 @@ plan:
   max_ready: 100 # soft limit for dashboard READY tasks, excluding Today (see above)
   max_ready_per_note: 5 # soft cap per area/project note; frontmatter ready_cap overrides
   strict: false # refuse #NAME captures that would create a theme past max_themes
-  link_unblocked: true # link a closed planned task's unblocked dependents into its slot, including project pull-ins (docs/task-dependencies.md §12, §12.10)
+  link_unblocked: true # offer a closed planned task's unblocked dependents, project residents, and project pull-ins (docs/task-dependencies.md §12); false recovers only
   exempt: [GTD] # open entries that never count as themes
   inventory_labels: [LATER, MISC, NEW FEATURES, SASE] # open names that are storage, not themes
 ```
@@ -614,7 +614,7 @@ non-empty strings.
   return `plan_budget: null` with a stderr warning. Their vault writes
   continue, and capture's strict plan enforcement is unavailable.
 - An invalid `link_unblocked` falls back to `true` through the same
-  warning paths: close-time recovery still runs, and linking stays on.
+  warning paths: close-time recovery still runs, and offering stays on.
 - Capture completion omits the plan-creation hint.
 - The native tmux meter silently uses defaults. Obsidian budget surfaces
   use defaults and flag invalid config in their feedback. Invalid plan config

@@ -154,16 +154,18 @@ embed (`![[note#^id]]`) requests completion. Unresolved or ineligible targets
 can be skipped with warnings; check the capture report. See
 [close outcomes](capture.md#closing-the-running-pomodoro) for the full rules.
 
-When the close completes a planned task, Bob can add eligible newly unblocked
-dependents to the next Pomodoro (`plan.link_unblocked: true` by default).
-If more than five ordinary dependents qualify in one close, none of those
-dependents are automatically linked; project trackers use a separate rule.
-If the project has no remaining work under the project surfacing rules
-and no open sub-projects, its completion tracker (`^prj`) can also be
-linked, raising Ready or newly unblocked trackers to Next and preserving
-In Progress. You still decide whether the project is complete. Future
-dates and remaining prerequisites or inherited project blocking prevent
-that link. See [completion follow-ups](task-dependencies.md#12-successor-links)
+When the close completes a planned task, Bob recovers newly unblocked
+dependents immediately and offers them as successor offers
+(`plan.link_unblocked: true` by default). Nothing is auto-linked; pick
+which tasks to pull in through the Obsidian picker, the Bob Mac Capture
+choice step, or `bob capture -p/--pull-in`. There is no five-successor
+cap. If the project has no remaining work under the project surfacing
+rules and no open sub-projects, its completion tracker (`^prj`) is
+offered the same way after `#hide` is removed, raising Ready or newly
+unblocked trackers to Next only when picked, and preserving In Progress.
+You still decide whether the project is complete. Future dates and
+remaining prerequisites or inherited project blocking prevent that
+offer. See [completion follow-ups](task-dependencies.md#12-successor-offers)
 and [project pull-in](task-dependencies.md#1210-project-pull-in) for eligibility.
 
 Inspect `bob task reconcile --dry-run`, then run `bob task reconcile` to
