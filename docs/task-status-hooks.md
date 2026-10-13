@@ -455,11 +455,14 @@ future schedule that caused the Blocked marker, which is what keeps this
 command from immediately re-deriving `[?]` on its next run. A remaining open
 dependency, or a project-level date on `^prj` that
 `bob projects sync` re-propagates onto residents, still re-blocks the task
-on the next run. `Alt+]` on a `[?]` `^prj` that leaves the project with no
-remaining reason (its date retired, no open Depends-On target) strips
-`#prj_is_blocked` from every open resident and recovers those whose only
-reason was the project, writing `[unblocked::]` when freshness.md §4's WRITE
-rule applies. Closed lines stay untouched.
+on the next run. `Alt+]` / `Alt+[` on a `[?]` `^prj` that leaves the project with no
+remaining reason (its date retired, no Depends-On target that resolves to
+an open task; a missing id never blocks) strips `#prj_is_blocked` from
+every open resident and recovers those whose only reason was the project,
+writing `[unblocked::]` when freshness.md §4's WRITE rule applies. Cycling
+`^prj` to Cancelled recovers the same way even though the note is then no
+longer `project(T)`, and a transcluded `^prj` recovers residents in its
+source note. Closed lines stay untouched.
 Cycling any task into Done through the same keys runs the same immediate
 recover-and-link pass as Ctrl+Enter above (linking what the close unblocked);
 cycling into Cancelled runs recovery only and never links. Reopening the

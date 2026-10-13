@@ -1792,7 +1792,12 @@ is line ↔ line both ways. Capture `&` on `^prj` writes the line.
 leaves the project with no remaining reason, the same gesture strips
 `#prj_is_blocked` from every open resident and recovers those whose only
 reason was the project, writing `[unblocked::]` when freshness.md §4 says
-to. Closed lines are never edited.
+to. A remaining reason is a future inline date or a Depends-On id that
+resolves to an open task; a missing id never blocks (DC7). Cycling `^prj`
+out of `[?]` to any non-Blocked status — including Alt+[ to Cancelled,
+which leaves the note no longer `project(T)` — recovers the same way, and
+a transcluded `^prj` recovers residents in its source note. Closed lines
+are never edited.
 
 `create-project-note-from-task` (Ctrl+Alt+Shift+N) keeps the source's
 Depends-On line as the first child of `^prj` and its inline date on `^prj`
