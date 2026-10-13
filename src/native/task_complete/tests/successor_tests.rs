@@ -1240,3 +1240,151 @@ fn ub_close_hidden_resident_recovers_without_unblocked() {
     assert!(quiet_line.contains("- [ ] #task Quiet"), "{quiet_line}");
     assert!(!quiet_line.contains("[unblocked::"), "{quiet_line}");
 }
+
+// Project note with a scalar `parent:` frontmatter link, read the way
+// sync reads it (`docs/task-dependencies.md` §13.1).
+fn child_project_note(parent: &str, body: &str) -> String {
+    format!(
+        "---\ntype: [[project]]\nstatus: wip\nparent: \"[[{parent}]]\"\n---\n{body}"
+    )
+}
+
+// PDC4 (§13.16): D is a resident of K whose `^prj` carries
+// `#prj_is_blocked`; this close removes D's last own prerequisite, but D
+// stays `[?]` with `still_blocked{reason: project, project: parent(K)}`
+// and no link.
+#[test]
+fn pdc4_inherited_resident_stays_blocked_naming_parent() {
+    let vault_index = index(&["sase.md", "k.md", "par.md", "20261005.md"]);
+    let plan = run(
+        vec![pred("sase.md", "done-p", "done-p", "Done P", true)],
+        &[
+            (
+                "sase.md",
+                "- [x] #task Done P [id:: done-p] ^done-p\n",
+            ),
+            (
+                "k.md",
+                &child_project_note(
+                    "par",
+                    concat!(
+                        "- [?] #task Kid [fresh:: 2026-10-01] #prj_is_blocked ^prj\n",
+                        "- [?] #task Dee [fresh:: 2026-10-01] [dependsOn:: done-p] #prj_is_blocked [id:: dee] ^dee\n",
+                    ),
+                ),
+            ),
+        ],
+        Some(&day_with_fix_link()),
+        "20261005.md",
+        true,
+        &vault_index,
+    );
+    assert!(plan.unblocked.is_empty(), "{:?}", plan.unblocked);
+    assert_eq!(plan.still_blocked.len(), 1);
+    let row = &plan.still_blocked[0];
+    assert_eq!(row.block_id, "dee");
+    assert_eq!(row.reason, "project");
+    assert_eq!(row.project, Some(PathBuf::from("par.md")));
+    assert_eq!(row.trigger, "dependency");
+    assert!(
+        !plan.changed_files.contains_key(&PathBuf::from("k.md")),
+        "D stays byte-identical: {:?}",
+        plan.changed_files
+    );
+}
+
+// PDC5 (§13.16): K's tagged `^prj` loses its last own prerequisite →
+// stays `[?]` with `still_blocked{reason: project}`; no `project_task`
+// recover and no PDC2/PDC3 for K's residents (they keep their tags
+// until reconcile).
+#[test]
+fn pdc5_tagged_prj_loses_last_prerequisite_stays_blocked() {
+    let vault_index = index(&["sase.md", "k.md", "par.md", "20261005.md"]);
+    let plan = run(
+        vec![pred("sase.md", "done-p", "done-p", "Done P", true)],
+        &[
+            (
+                "sase.md",
+                "- [x] #task Done P [id:: done-p] ^done-p\n",
+            ),
+            (
+                "k.md",
+                &child_project_note(
+                    "par",
+                    concat!(
+                        "- [?] #task Kid [fresh:: 2026-10-01] [dependsOn:: done-p] #prj_is_blocked [id:: kprj] ^prj\n",
+                        "- [?] #task Rita [fresh:: 2026-10-01] #prj_is_blocked [id:: rita] ^rita\n",
+                    ),
+                ),
+            ),
+        ],
+        Some(&day_with_fix_link()),
+        "20261005.md",
+        true,
+        &vault_index,
+    );
+    assert!(plan.unblocked.is_empty(), "{:?}", plan.unblocked);
+    assert_eq!(plan.still_blocked.len(), 1);
+    let row = &plan.still_blocked[0];
+    assert_eq!(row.block_id, "prj");
+    assert_eq!(row.reason, "project");
+    assert_eq!(row.project, Some(PathBuf::from("par.md")));
+    assert_eq!(row.trigger, "dependency");
+    assert!(
+        !plan.changed_files.contains_key(&PathBuf::from("k.md")),
+        "K stays byte-identical, residents keep their tags: {:?}",
+        plan.changed_files
+    );
+}
+
+// PDC6 under `close_recovers_subprojects = no` (§13.16): a close that
+// fully unblocks an untagged N recovers only N's own residents (PDC2);
+// a tagged descendant K in the snapshot keeps its tags until the next
+// reconcile.
+#[test]
+fn pdc6_no_close_recovery_for_tagged_descendants() {
+    let vault_index =
+        index(&["sase.md", "proj.md", "k.md", "par.md", "20261005.md"]);
+    let plan = run(
+        vec![pred("sase.md", "done-p", "done-p", "Done P", true)],
+        &[
+            (
+                "sase.md",
+                "- [x] #task Done P [id:: done-p] ^done-p\n",
+            ),
+            (
+                "proj.md",
+                &project_note(concat!(
+                    "- [?] #task Apply [fresh:: 2026-10-01] [dependsOn:: done-p] [id:: apply] ^prj\n",
+                    "- [?] #task Pitch [fresh:: 2026-10-01] #prj_is_blocked [id:: pitch] ^pitch\n",
+                )),
+            ),
+            (
+                "k.md",
+                &child_project_note(
+                    "proj",
+                    concat!(
+                        "- [?] #task Kid [fresh:: 2026-10-01] #prj_is_blocked ^prj\n",
+                        "- [?] #task Rita [fresh:: 2026-10-01] #prj_is_blocked [id:: rita] ^rita\n",
+                    ),
+                ),
+            ),
+        ],
+        Some(&day_with_fix_link()),
+        "20261005.md",
+        true,
+        &vault_index,
+    );
+    let pitch = plan
+        .unblocked
+        .iter()
+        .find(|row| row.block_id == "pitch")
+        .expect("N's own resident recovers");
+    assert_eq!(pitch.not_linked, Some("project_member"));
+    assert!(
+        !plan.changed_files.contains_key(&PathBuf::from("k.md")),
+        "tagged descendant keeps its tags until reconcile: {:?}",
+        plan.changed_files
+    );
+    assert!(plan.still_blocked.is_empty(), "{:?}", plan.still_blocked);
+}

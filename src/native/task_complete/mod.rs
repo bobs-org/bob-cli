@@ -12,7 +12,9 @@ pub(crate) mod retirement;
 pub(crate) mod successors;
 pub(crate) mod tree;
 
-pub(crate) use project_pull_in::inspect_pull_ins;
+pub(crate) use project_pull_in::{
+    closed_prj_may_have_parent, inspect_pull_ins,
+};
 pub(crate) use retirement::{
     retire_completed_links, LedgerRetirement, LinkStatus,
 };

@@ -45,7 +45,9 @@ use super::project_pull_in::{
     classify_pull_in, detect_pull_ins, emit_rows, pull_in_hide_removed,
     pull_in_preview_line, pull_in_recover_status, PullInCandidate, RowEmit,
 };
-use crate::native::capture_dependency_tasks::has_hide_tag;
+use crate::native::capture_dependency_tasks::{
+    has_hide_tag, has_prj_is_blocked_tag,
+};
 
 /// Successor-link breaker (`docs/task-dependencies.md` §12): more than
 /// this many successors in one gesture links none.
@@ -577,8 +579,14 @@ pub(crate) fn plan_successors(input: SuccessorInput) -> SuccessorPlan {
         .iter()
         .map(|(path, _)| path.clone())
         .collect();
-    let pull_ins =
-        detect_pull_ins(&input.completed, &files, &surfaces, &staged_notes);
+    let pull_ins = detect_pull_ins(
+        &input.completed,
+        &files,
+        &surfaces,
+        &staged_notes,
+        Some(input.index),
+        input.today,
+    );
     // GATE: without an `[id::]` on any completed task no dependent can
     // name this close, so skip the lookup with no extra reads — unless a
     // pull-in candidate was detected from the staged texts.
@@ -588,7 +596,8 @@ pub(crate) fn plan_successors(input: SuccessorInput) -> SuccessorPlan {
         return SuccessorPlan::default();
     }
     let states = task_dependency_states(&files, &BTreeSet::new());
-    let project_states = project_states_for_files(&files, &states, input.today);
+    let project_states =
+        project_states_for_files(&files, &states, input.today, input.index);
     let day = match input.pre_day.as_deref() {
         Some(text) => DayView::parse(text, &input.day_relative, input.index),
         None => DayView::empty(),
@@ -655,6 +664,9 @@ pub(crate) fn plan_successors(input: SuccessorInput) -> SuccessorPlan {
                     day.live
                         .contains_key(&(file.relative_path.clone(), id.clone()))
                 });
+                let inherited = project_states
+                    .get(file_index)
+                    .and_then(|state| state.inherited.clone());
                 let (kind, anchor) = classify_pull_in(
                     surface,
                     open_count,
@@ -662,6 +674,7 @@ pub(crate) fn plan_successors(input: SuccessorInput) -> SuccessorPlan {
                     earliest_anchor(&candidate.preds, &anchors),
                     input.link_unblocked,
                     input.today,
+                    inherited,
                 );
                 verdicts.push(DependentVerdict {
                     file: file_index,
@@ -700,7 +713,18 @@ pub(crate) fn plan_successors(input: SuccessorInput) -> SuccessorPlan {
                 .as_deref()
                 .is_some_and(|id| is_project_task_id(Some(id)))
             {
-                VerdictKind::Recover("project_task")
+                // PDC5 (§13.16): a tagged `^prj` inherits its block from
+                // an ancestor, so losing its last own prerequisite
+                // leaves it `[?]` with no `project_task` recover and no
+                // PDC2/PDC3 for its residents.
+                if has_prj_is_blocked_tag(&raw_task_line(
+                    &file.contents,
+                    task.line_index,
+                )) {
+                    VerdictKind::StillBlockedProject
+                } else {
+                    VerdictKind::Recover("project_task")
+                }
             } else if has_hide_tag(&raw_task_line(
                 &file.contents,
                 task.line_index,
@@ -1270,9 +1294,10 @@ fn apply_verdicts(
     let recovered_files =
         recovered_unblocked_project_files(&verdicts, &files, project_states);
     for file_index in recovered_files {
-        let Some((context, _)) = project_states.get(file_index) else {
+        let Some(state) = project_states.get(file_index) else {
             continue;
         };
+        let context = &state.context;
         let file = &files[file_index];
         for (task_index, task) in file.tasks.iter().enumerate() {
             if !context.is_resident(task) {

@@ -9,10 +9,14 @@
 //!
 //! Detection runs over the staged post-gesture texts: trigger (a) reads the
 //! staged text of C's own notes (no vault walk), trigger (b) reads R's note
-//! text for dependent candidates of C. The vault-wide dependents snapshot is
-//! only needed when [`inspect_pull_ins`] says so. Verdicts follow
-//! the Rule steps 1, 2 and 4–9; step 3 needs no separate check under the
-//! line model (`^prj` reports only its own reasons, covered by steps 1–2).
+//! text for dependent candidates of C, and trigger (c) resolves each closed
+//! `^prj`'s `parent:` to N and reads N's staged text with K's marker entry
+//! overridden closed (one resolution plus the caller's one read of N, only
+//! when C contains a closed `^prj` whose note has `parent:`). The vault-wide
+//! dependents snapshot is only needed when [`inspect_pull_ins`] says so.
+//! Verdicts follow the Rule steps 1–9; step 3 reads a tagged R as an
+//! inherited reason through the tag proxy (`docs/task-dependencies.md`
+//! §12.10 Rule, §13.3).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -20,9 +24,13 @@ use std::path::{Path, PathBuf};
 use chrono::NaiveDate;
 
 use super::super::capture_task_toggle::set_task_line_status;
-use super::super::project_dependencies::is_project_task_id;
+use super::super::project_dependencies::{
+    is_project_task_id, resolve_project_parent,
+};
 use super::super::projects::edits::normalize_task_hide_tag;
-use super::super::projects::{project_surface, ProjectSurface};
+use super::super::projects::{
+    project_surface, project_surface_with_closed_child, ProjectSurface,
+};
 use super::super::task_status_hooks::{
     parse_tasks, FileScan, TaskLine, TasksSettings,
 };
@@ -41,10 +49,17 @@ pub(crate) const PULL_IN_TRIGGER: &str = "project_empty";
 pub(crate) const DEPENDENCY_TRIGGER: &str = "dependency";
 
 /// The capture-side cost gate discovered from the staged close texts.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct PullInGate {
     pub(crate) has_candidates: bool,
     pub(crate) needs_dependents: bool,
+    /// Resolved parent notes of closed `^prj` tasks in C that are not in
+    /// the staged texts yet (`docs/task-dependencies.md` §12.10 trigger
+    /// (c)). The caller loads each through its staged planner, appends it
+    /// to the staged note texts, and re-inspects. Empty unless C closed a
+    /// `^prj` whose note has a resolvable `parent:`, so every other close
+    /// pays nothing.
+    pub(crate) parent_notes: Vec<PathBuf>,
 }
 
 /// One pull-in candidate R with the C tasks that triggered it.
@@ -62,11 +77,31 @@ pub(crate) struct PullInCandidate {
 /// `[dependsOn::]` (the §12.2 PROJECT RECOVERY cascade needs vault-wide
 /// openness). Trigger (b) necessarily has an `[id::]` predecessor, so it is
 /// covered by the same gate even though it is discovered in that snapshot.
+/// Byte prefilter for trigger (c) loading (`docs/task-dependencies.md`
+/// §12.10 Trigger): true when C closed a `^prj` whose staged text mentions
+/// `parent:`. Resolving the parent still needs the vault index, but this
+/// check costs no reads and no catalog walk, so ordinary closes never pay
+/// for trigger (c). A prose or body `parent:` only over-reports (the
+/// resolver still says no); a real scalar `parent:` always contains the
+/// substring, so nothing is missed.
+pub(crate) fn closed_prj_may_have_parent(
+    completed: &[CompletedTask],
+    note_texts: &[(PathBuf, String)],
+) -> bool {
+    completed.iter().any(|task| {
+        is_project_task_id(Some(task.block_id.as_str()))
+            && note_texts.iter().any(|(path, contents)| {
+                path == &task.relative_path && contents.contains("parent:")
+            })
+    })
+}
+
 pub(crate) fn inspect_pull_ins(
     completed: &[CompletedTask],
     note_texts: &[(PathBuf, String)],
     tasks_settings: &TasksSettings,
     today: NaiveDate,
+    index: Option<&NoteIndex>,
 ) -> PullInGate {
     let has_completed_ids =
         completed.iter().any(|task| !task.task_id.is_empty());
@@ -74,6 +109,7 @@ pub(crate) fn inspect_pull_ins(
         return PullInGate {
             has_candidates: false,
             needs_dependents: has_completed_ids,
+            parent_notes: closed_prj_parent_notes(completed, note_texts, index),
         };
     }
     let files: Vec<FileScan> = note_texts
@@ -91,7 +127,8 @@ pub(crate) fn inspect_pull_ins(
         .collect();
     let staged: BTreeSet<PathBuf> =
         note_texts.iter().map(|(path, _)| path.clone()).collect();
-    let candidates = detect_pull_ins(completed, &files, &surfaces, &staged);
+    let candidates =
+        detect_pull_ins(completed, &files, &surfaces, &staged, index, today);
     let needs_candidate_dependencies = candidates.iter().any(|candidate| {
         files[candidate.file].tasks[candidate.task]
             .depends_on
@@ -118,19 +155,61 @@ pub(crate) fn inspect_pull_ins(
         needs_dependents: has_completed_ids
             || needs_candidate_dependencies
             || needs_stale_blocked_cascade,
+        parent_notes: closed_prj_parent_notes(completed, note_texts, index),
     }
+}
+
+/// Resolved parent notes for trigger (c) loading: for each closed `^prj`
+/// in C whose note text resolves a `parent:`, the parent path unless its
+/// text is already staged. Unresolvable, ambiguous, list-form, and self
+/// parents yield nothing (PP31); a loaded note that is not a recognised
+/// project simply yields no candidate at detection.
+fn closed_prj_parent_notes(
+    completed: &[CompletedTask],
+    note_texts: &[(PathBuf, String)],
+    index: Option<&NoteIndex>,
+) -> Vec<PathBuf> {
+    let Some(index) = index else {
+        return Vec::new();
+    };
+    let staged: BTreeSet<&PathBuf> =
+        note_texts.iter().map(|(path, _)| path).collect();
+    let mut parents = Vec::new();
+    for task in completed {
+        if !is_project_task_id(Some(task.block_id.as_str())) {
+            continue;
+        }
+        let Some((_, contents)) = note_texts
+            .iter()
+            .find(|(path, _)| path == &task.relative_path)
+        else {
+            continue;
+        };
+        let Some(parent) =
+            resolve_project_parent(&task.relative_path, contents, index)
+        else {
+            continue;
+        };
+        if !staged.contains(&parent) && !parents.contains(&parent) {
+            parents.push(parent);
+        }
+    }
+    parents
 }
 
 /// Find every pull-in candidate R over staged files with their surfaces.
 /// Trigger (a) needs the note's staged text from the explicit `staged_notes`
 /// lookup (C's own notes); trigger (b) reads R's note text from any staged
-/// file. One candidate per R: both triggers' predecessors union into
-/// `preds(R)`.
+/// file; trigger (c) resolves each closed `^prj`'s `parent:` to N and reads
+/// N with K's marker entry overridden closed. One candidate per R: all
+/// triggers' predecessors union into `preds(R)`.
 pub(crate) fn detect_pull_ins(
     completed: &[CompletedTask],
     files: &[FileScan],
     surfaces: &[Option<ProjectSurface>],
     staged_notes: &BTreeSet<PathBuf>,
+    index: Option<&NoteIndex>,
+    today: NaiveDate,
 ) -> Vec<PullInCandidate> {
     let completed_ids: BTreeSet<&str> = completed
         .iter()
@@ -185,6 +264,66 @@ pub(crate) fn detect_pull_ins(
             candidates.insert((file_index, task_index), preds);
         }
     }
+    // Trigger (c): C contains K's `^prj` with `parent(K)` = N, R ∉ C, and
+    // EMPTY(N) with N's marker entry for K read as closed. `preds(R)` is
+    // K's `^prj`, anchored by its slot, the closing entry, or inherit.
+    // N's staged text arrives via the caller's parent-note load; without
+    // an index (or without N staged) there is no candidate and every
+    // other close is unchanged.
+    if let Some(index) = index {
+        for (position, closed) in completed.iter().enumerate() {
+            if !is_project_task_id(Some(closed.block_id.as_str())) {
+                continue;
+            }
+            let Some(k_file) = files
+                .iter()
+                .position(|file| file.relative_path == closed.relative_path)
+            else {
+                continue;
+            };
+            let Some(parent) = resolve_project_parent(
+                &files[k_file].relative_path,
+                &files[k_file].contents,
+                index,
+            ) else {
+                continue;
+            };
+            let Some(n_file) =
+                files.iter().position(|file| file.relative_path == parent)
+            else {
+                continue;
+            };
+            // R ∉ C: N's own `^prj` was not closed by this gesture.
+            if completed.iter().any(|task| {
+                task.relative_path == parent
+                    && is_project_task_id(Some(task.block_id.as_str()))
+            }) {
+                continue;
+            }
+            let closed_child = files[k_file].relative_path.clone();
+            let surface = project_surface_with_closed_child(
+                &parent,
+                &files[n_file].contents,
+                today,
+                &closed_child,
+            );
+            let Some(surface) = surface else {
+                continue;
+            };
+            if !surface.is_empty() {
+                continue;
+            }
+            let Some(task_index) =
+                open_prj_task_index(&files[n_file], &surface)
+            else {
+                continue;
+            };
+            candidates
+                .entry((n_file, task_index))
+                .or_default()
+                .insert(position);
+        }
+    }
     candidates
         .into_iter()
         .map(|((file, task), preds)| PullInCandidate {
@@ -222,8 +361,9 @@ fn open_prj_task_index(
     on_line.or(if count == 1 { last } else { None })
 }
 
-/// Run the pull-in Rule for one candidate (§12.10 steps 1, 2, 4–9; step 2
-/// uses SCHED(N)). Step 3 needs no separate check under the line model.
+/// Run the pull-in Rule for one candidate (§12.10 steps 1–9; step 2
+/// uses SCHED(N)). Step 3 reads a tagged R as an inherited reason
+/// through the tag proxy, so a pull-in never links a Blocked `^prj`.
 /// Returns the verdict kind plus the link anchor for a step-9 pull-in.
 pub(crate) fn classify_pull_in(
     surface: &ProjectSurface,
@@ -232,6 +372,7 @@ pub(crate) fn classify_pull_in(
     anchor: Option<SlotAnchor>,
     link_unblocked: bool,
     today: NaiveDate,
+    inherited: Option<PathBuf>,
 ) -> (super::successors::VerdictKind, Option<SlotAnchor>) {
     use super::successors::VerdictKind;
     // Step 1: R has open prerequisites after the gesture.
@@ -241,6 +382,13 @@ pub(crate) fn classify_pull_in(
     // Step 2: SCHED(N) is after today.
     if surface.sched_date.is_some_and(|date| date > today) {
         return (VerdictKind::StillBlockedScheduled, None);
+    }
+    // Step 3: R carries `#prj_is_blocked` (N inherits). R stays
+    // byte-identical with `still_blocked{reason: project}`; this
+    // applies to every trigger. The row builder reports the holder
+    // from the close states, which carry the same tag read.
+    if inherited.is_some() {
+        return (VerdictKind::StillBlockedProject, None);
     }
     // Step 4 removes `#hide`; steps 5–9 pick the row shape.
     if live_before {
@@ -337,13 +485,17 @@ fn token_carries_hide(token: &str) -> bool {
 }
 
 /// Row display text for a project row: the post-write description with
-/// `#prj` and `#hide` dropped (display only), using sync's tag boundaries
-/// for `#hide` so `#hide,`, `#hide.` and `(#hide)` drop while `#hidden`,
-/// `#hideaway` and `#prj_is_blocked` never do.
+/// `#prj`, `#hide` and `#prj_is_blocked` dropped (display only), using
+/// sync's tag boundaries for `#hide` so `#hide,`, `#hide.` and `(#hide)`
+/// drop while `#hidden` and `#hideaway` never do (PP36).
 pub(crate) fn pull_in_display_text(description: &str) -> String {
     description
         .split_whitespace()
-        .filter(|token| *token != "#prj" && !token_carries_hide(token))
+        .filter(|token| {
+            *token != "#prj"
+                && *token != "#prj_is_blocked"
+                && !token_carries_hide(token)
+        })
         .collect::<Vec<_>>()
         .join(" ")
 }
@@ -545,10 +697,15 @@ pub(crate) fn emit_rows(plan: &mut SuccessorPlan, ctx: RowEmit<'_>) {
                     &block_id,
                     task.line_index + 1,
                 );
-                let scheduled = project_states
-                    .get(verdict.file)
-                    .and_then(|(_, reasons)| reasons.future_scheduled)
+                let state = project_states.get(verdict.file);
+                let scheduled = state
+                    .and_then(|state| state.reasons.future_scheduled)
                     .map(|date| date.format("%Y-%m-%d").to_string());
+                // A resident of a cascade-blocked project names the
+                // holder (PDC4/PP32); otherwise the project note itself.
+                let project = state
+                    .and_then(|state| state.inherited.clone())
+                    .or_else(|| Some(file.relative_path.clone()));
                 plan.still_blocked.push(StillBlockedRow {
                     note_path: file.relative_path.clone(),
                     block_id,
@@ -558,7 +715,7 @@ pub(crate) fn emit_rows(plan: &mut SuccessorPlan, ctx: RowEmit<'_>) {
                     reason: "project",
                     waits_on: 0,
                     scheduled,
-                    project: Some(file.relative_path.clone()),
+                    project,
                     trigger: if verdict.pull_in {
                         PULL_IN_TRIGGER
                     } else {

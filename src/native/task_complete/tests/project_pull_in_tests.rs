@@ -537,6 +537,7 @@ fn pp14_id_less_close_pulls_in() {
             &[(PathBuf::from("proj.md"), staged.clone())],
             &settings,
             today(),
+            Some(&index(&["proj.md", "20261005.md"])),
         )
         .needs_dependents,
         "no snapshot needed without ids or R dependsOn"
@@ -1070,6 +1071,7 @@ fn gate_needs_dependents_cases() {
             &[(PathBuf::from("proj.md"), staged_plain.clone())],
             &settings,
             today(),
+            Some(&index(&["proj.md", "20261005.md"])),
         )
         .needs_dependents
     );
@@ -1080,6 +1082,7 @@ fn gate_needs_dependents_cases() {
             &[(PathBuf::from("proj.md"), staged_plain.clone())],
             &settings,
             today(),
+            Some(&index(&["proj.md", "20261005.md"])),
         )
         .needs_dependents
     );
@@ -1090,6 +1093,7 @@ fn gate_needs_dependents_cases() {
             &[(PathBuf::from("proj.md"), staged_depends.clone())],
             &settings,
             today(),
+            Some(&index(&["proj.md", "20261005.md"])),
         )
         .needs_dependents
     );
@@ -1099,7 +1103,8 @@ fn gate_needs_dependents_cases() {
             &[task("proj.md", "a-fix", "", "Fix pump")],
             &[],
             &settings,
-            today()
+            today(),
+            Some(&index(&["proj.md", "20261005.md"]))
         )
         .needs_dependents
     );
@@ -1170,6 +1175,7 @@ fn r2_stale_blocked_cascade_needs_dependents() {
             &[(PathBuf::from("proj.md"), staged.clone())],
             &settings,
             today(),
+            Some(&index(&["proj.md", "other.md", "20261005.md"])),
         )
         .needs_dependents,
         "stale [?] R with dependent resident needs snapshot"
@@ -1241,4 +1247,291 @@ fn r3_project_reason_carries_scheduled() {
     assert_eq!(row.reason, "project");
     assert_eq!(row.scheduled.as_deref(), Some("2026-10-13"));
     assert_eq!(row.project, Some(PathBuf::from("proj.md")));
+}
+
+// Project note with a scalar `parent:` frontmatter link, read the way
+// sync reads it (`docs/task-dependencies.md` §13.1).
+fn child_project_note(parent: &str, body: &str) -> String {
+    format!(
+        "---\ntype: \"[[project]]\"\nstatus: wip\nparent: \"[[{parent}]]\"\n---\n{body}"
+    )
+}
+
+fn closed_k_prj() -> CompletedTask {
+    task("k.md", "prj", "", "Kid work")
+}
+
+// PP29 (§12.11): K (`parent: "[[n-proj]]"`) is the only open sub-project
+// on N's marker line and N has no other remaining work. K's `^prj` is
+// linked in FIX; closing it pulls N's R in right after K's bullet:
+// ` `→`*`, `#hide` removed, `trigger: project_empty`,
+// `unblocked_by: [K ^prj]`. PP36: the row text drops `#prj_is_blocked`
+// with `#prj` and `#hide`.
+#[test]
+fn pp29_subproject_close_pulls_in_parent() {
+    let vault_index = index(&["k.md", "n-proj.md", "20261005.md"]);
+    let settings = test_settings();
+    let staged_k = child_project_note("n-proj", "- [x] #task Kid work ^prj\n");
+    let staged_n = project_note(concat!(
+        "- [ ] #task #prj Parent work #hide ^prj\n",
+        "  - 🧩 **Sub-projects:** [[k]]\n",
+    ));
+    // The gate reports N for loading before N's text is staged.
+    let gate = inspect_pull_ins(
+        &[closed_k_prj()],
+        &[(PathBuf::from("k.md"), staged_k.clone())],
+        &settings,
+        today(),
+        Some(&vault_index),
+    );
+    assert_eq!(gate.parent_notes, vec![PathBuf::from("n-proj.md")]);
+    assert!(!gate.has_candidates, "N is not staged yet");
+    let plan = run(
+        vec![closed_k_prj()],
+        &[("n-proj.md", &staged_n)],
+        &[("k.md", &staged_k)],
+        Some(&day_fix("  - [[k#^prj]]\n")),
+        "20261005.md",
+        true,
+        &vault_index,
+    );
+    assert!(plan.ran_lookup);
+    assert!(plan.still_blocked.is_empty(), "{:?}", plan.still_blocked);
+    assert_eq!(plan.unblocked.len(), 1);
+    let row = &plan.unblocked[0];
+    assert_eq!(row.note_path, PathBuf::from("n-proj.md"));
+    assert_eq!(row.block_id, "prj");
+    assert_eq!(row.previous_status_symbol, ' ');
+    assert_eq!(row.status_symbol, '*');
+    assert_eq!(row.trigger, "project_empty");
+    assert_eq!(row.text, "Parent work");
+    assert_eq!(row.not_linked, None);
+    assert_eq!(row.unblocked_by.len(), 1);
+    assert_eq!(row.unblocked_by[0].note_path, PathBuf::from("k.md"));
+    assert_eq!(row.unblocked_by[0].block_id, "prj");
+    let link = row.link.as_ref().expect("linked");
+    assert_eq!(link.entry_name, "FIX");
+    assert_eq!(link.block_link, "[[n-proj#^prj]]");
+    let updated = plan
+        .changed_files
+        .get(&PathBuf::from("n-proj.md"))
+        .expect("n-proj.md changed");
+    assert!(
+        updated.contains("- [*] #task #prj Parent work ^prj"),
+        "{updated}"
+    );
+    assert!(!updated.contains("#hide"), "{updated}");
+    assert!(
+        !plan.changed_files.contains_key(&PathBuf::from("k.md")),
+        "K is already closed: {:?}",
+        plan.changed_files
+    );
+    let day = plan.new_day_text.expect("day changed");
+    let anchor = day.find("[[k#^prj]]").expect("anchor bullet");
+    let pulled = day.find("[[n-proj#^prj]]").expect("pulled bullet");
+    assert!(anchor < pulled, "{day}");
+}
+
+// PP30 (§12.11): N's marker lists another open child, or N has a
+// remaining task → nothing.
+#[test]
+fn pp30_open_sibling_or_remaining_work_suppresses_parent_pull_in() {
+    let vault_index = index(&["k.md", "n-proj.md", "20261005.md"]);
+    let staged_k = child_project_note("n-proj", "- [x] #task Kid work ^prj\n");
+    for (label, staged_n) in [
+        (
+            "open marker sibling",
+            project_note(concat!(
+                "- [ ] #task #prj Parent work #hide ^prj\n",
+                "  - 🧩 **Sub-projects:** [[k]] [[other]]\n",
+            )),
+        ),
+        (
+            "remaining task",
+            project_note(concat!(
+                "- [x] #task Kid work ^prj\n",
+                "- [ ] #task Leftover ^left\n",
+                "- [ ] #task #prj Parent work #hide ^prj\n",
+                "  - 🧩 **Sub-projects:** [[k]]\n",
+            )),
+        ),
+    ] {
+        let plan = run(
+            vec![closed_k_prj()],
+            &[("n-proj.md", &staged_n)],
+            &[("k.md", &staged_k)],
+            Some(&day_fix("  - [[k#^prj]]\n")),
+            "20261005.md",
+            true,
+            &vault_index,
+        );
+        assert!(plan.unblocked.is_empty(), "{label}");
+        assert!(plan.still_blocked.is_empty(), "{label}");
+        assert!(plan.changed_files.is_empty(), "{label}");
+    }
+}
+
+// PP31 (§12.11): K has no `parent:`, or it is unresolvable, or K
+// itself → nothing.
+#[test]
+fn pp31_parentless_subproject_close_pulls_in_nothing() {
+    let vault_index = index(&["k.md", "n-proj.md", "20261005.md"]);
+    let settings = test_settings();
+    let staged_n = project_note(concat!(
+        "- [ ] #task #prj Parent work #hide ^prj\n",
+        "  - 🧩 **Sub-projects:** [[k]]\n",
+    ));
+    for (label, staged_k) in [
+        ("no parent", project_note("- [x] #task Kid work ^prj\n")),
+        (
+            "unresolvable parent",
+            child_project_note("missing", "- [x] #task Kid work ^prj\n"),
+        ),
+        (
+            "self parent",
+            child_project_note("k", "- [x] #task Kid work ^prj\n"),
+        ),
+    ] {
+        let gate = inspect_pull_ins(
+            &[closed_k_prj()],
+            &[(PathBuf::from("k.md"), staged_k.clone())],
+            &settings,
+            today(),
+            Some(&vault_index),
+        );
+        assert!(gate.parent_notes.is_empty(), "{label}");
+        let plan = run(
+            vec![closed_k_prj()],
+            &[("n-proj.md", &staged_n)],
+            &[("k.md", &staged_k)],
+            Some(&day_fix("  - [[k#^prj]]\n")),
+            "20261005.md",
+            true,
+            &vault_index,
+        );
+        assert!(plan.unblocked.is_empty(), "{label}");
+        assert!(plan.still_blocked.is_empty(), "{label}");
+        assert!(plan.changed_files.is_empty(), "{label}");
+    }
+}
+
+// PP31, non-project parent: K names a plain note → its text loads but
+// yields no candidate.
+#[test]
+fn pp31_non_project_parent_pulls_in_nothing() {
+    let vault_index = index(&["k.md", "plain.md", "20261005.md"]);
+    let staged_k = child_project_note("plain", "- [x] #task Kid work ^prj\n");
+    let plan = run(
+        vec![closed_k_prj()],
+        &[("plain.md", "- [ ] #task Plain leftover\n")],
+        &[("k.md", &staged_k)],
+        Some(&day_fix("  - [[k#^prj]]\n")),
+        "20261005.md",
+        true,
+        &vault_index,
+    );
+    assert!(plan.unblocked.is_empty());
+    assert!(plan.still_blocked.is_empty());
+    assert!(plan.changed_files.is_empty());
+}
+
+// PP32 (§12.10 step 3): R carries `#prj_is_blocked` (N inherits from
+// `grand`) under trigger (a) → `still_blocked{reason: project,
+// project: parent(N)}`; R byte-identical; the row text drops the tag
+// (PP36).
+#[test]
+fn pp32_tagged_parent_pull_in_stays_blocked() {
+    let vault_index = index(&["proj.md", "grand.md", "20261005.md"]);
+    let staged = child_project_note(
+        "grand",
+        concat!(
+            "- [x] #task Fix pump [id:: fix-a] ^a-fix\n",
+            "- [?] #task #prj Ship it! #hide #prj_is_blocked ^prj\n",
+        ),
+    );
+    let plan = run(
+        vec![closed_a()],
+        &[],
+        &[("proj.md", &staged)],
+        Some(&day_fix("  - [[proj#^a-fix]]\n")),
+        "20261005.md",
+        true,
+        &vault_index,
+    );
+    assert!(plan.unblocked.is_empty(), "{:?}", plan.unblocked);
+    assert_eq!(plan.still_blocked.len(), 1);
+    let row = &plan.still_blocked[0];
+    assert_eq!(row.block_id, "prj");
+    assert_eq!(row.reason, "project");
+    assert_eq!(row.project, Some(PathBuf::from("grand.md")));
+    assert_eq!(row.trigger, "project_empty");
+    assert_eq!(row.text, "Ship it!");
+    assert!(plan.changed_files.is_empty(), "{:?}", plan.changed_files);
+    assert!(plan.new_day_text.is_none());
+}
+
+// PP33 (§12.11): K's `^prj` was not planned today → the parent pull-in
+// surfaces (`not_planned_today`) with `#hide` removed and the status
+// unchanged.
+#[test]
+fn pp33_unplanned_subproject_close_surfaces_parent() {
+    let vault_index = index(&["k.md", "n-proj.md", "20261005.md"]);
+    let staged_k = child_project_note("n-proj", "- [x] #task Kid work ^prj\n");
+    let staged_n = project_note(concat!(
+        "- [ ] #task #prj Parent work #hide ^prj\n",
+        "  - 🧩 **Sub-projects:** [[k]]\n",
+    ));
+    let plan = run(
+        vec![closed_k_prj()],
+        &[("n-proj.md", &staged_n)],
+        &[("k.md", &staged_k)],
+        Some(&day_fix("")),
+        "20261005.md",
+        true,
+        &vault_index,
+    );
+    assert_eq!(plan.unblocked.len(), 1);
+    let row = &plan.unblocked[0];
+    assert_eq!(row.block_id, "prj");
+    assert_eq!(row.not_linked, Some("not_planned_today"));
+    assert_eq!(row.previous_status_symbol, row.status_symbol);
+    assert!(row.hide_removed);
+    assert_eq!(row.text, "Parent work");
+    let updated = plan
+        .changed_files
+        .get(&PathBuf::from("n-proj.md"))
+        .expect("n-proj.md changed");
+    assert!(!updated.contains("#hide"), "{updated}");
+    assert!(
+        updated.contains("- [ ] #task #prj Parent work ^prj"),
+        "{updated}"
+    );
+}
+
+// Trigger (c) prefilter (§12.10 Trigger): only a closed `^prj` whose
+// staged text mentions `parent:` needs the catalog index walk, so
+// ordinary closes never pay for it.
+#[test]
+fn trigger_c_prefilter_skips_index_for_ordinary_closes() {
+    let staged_k = child_project_note("n-proj", "- [x] #task Kid work ^prj\n");
+    assert!(closed_prj_may_have_parent(
+        &[closed_k_prj()],
+        &[(PathBuf::from("k.md"), staged_k)],
+    ));
+    assert!(!closed_prj_may_have_parent(
+        &[closed_a()],
+        &[(
+            PathBuf::from("proj.md"),
+            staged_closed_a("- [ ] #task #prj Ship it! #hide ^prj"),
+        )],
+    ));
+    // A prose `parent:` over-reports (the resolver still says no), so
+    // the gate stays correct.
+    assert!(closed_prj_may_have_parent(
+        &[closed_k_prj()],
+        &[(
+            PathBuf::from("k.md"),
+            "---\ntype: \"[[project]]\"\nstatus: wip\n---\n- [x] #task Kid parent: duty ^prj\n".to_string(),
+        )],
+    ));
 }

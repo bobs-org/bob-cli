@@ -209,4 +209,6 @@ pub(crate) use scan::{
     is_markdown_file, parse_frontmatter, project_name_aliases,
     trim_yaml_scalar, walk_typed_notes, wikilink_path_target,
 };
-pub(crate) use surface::{project_surface, ProjectSurface};
+pub(crate) use surface::{
+    project_surface, project_surface_with_closed_child, ProjectSurface,
+};

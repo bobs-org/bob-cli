@@ -15,22 +15,38 @@ use std::path::{Path, PathBuf};
 
 use chrono::NaiveDate;
 
-use super::super::capture_dependency_tasks::has_hide_tag;
+use super::super::capture_dependency_tasks::{
+    has_hide_tag, has_prj_is_blocked_tag,
+};
 use super::super::freshness::placement::{mark_unblocked, UnblockScope};
 use super::super::project_dependencies::{
     blocking_open_dependency_ids, filter_internal_project_ids,
-    is_project_task_id, project_block_reasons, ProjectBlockReasons,
-    ProjectContext,
+    is_project_task_id, project_block_reasons, resolve_project_parent,
+    ProjectBlockReasons, ProjectContext,
 };
 use super::super::projects::edits::normalize_prj_is_blocked_tag;
 use super::super::task_status_hooks::{
     canonical_daily_date, FileScan, TaskDependencyState, TaskLine,
 };
+use super::super::vault_links::NoteIndex;
 use super::is_recurring_task_line;
 
-/// Per-file project context plus remaining reasons after this
-/// gesture's completions, in `files` order.
-pub(crate) type ProjectCloseStates = Vec<(ProjectContext, ProjectBlockReasons)>;
+/// Per-file project close state in `files` order: the context plus
+/// remaining own reasons after this gesture's completions, plus the
+/// inherited holder when the `^prj` line carries `#prj_is_blocked`
+/// (the tag proxy, `docs/task-dependencies.md` §13.3). `inherited` is
+/// `parent(K)` resolved through the vault index, falling back to the
+/// note's own path when the parent is unresolvable, so a tagged
+/// project always reads as still blocked on close paths (PDC4/PDC5).
+#[derive(Debug, Clone)]
+pub(crate) struct ProjectCloseState {
+    pub(crate) context: ProjectContext,
+    pub(crate) reasons: ProjectBlockReasons,
+    pub(crate) inherited: Option<PathBuf>,
+}
+
+/// Per-file [`ProjectCloseState`]s in `files` order.
+pub(crate) type ProjectCloseStates = Vec<ProjectCloseState>;
 
 /// Build [`ProjectCloseStates`] for staged files. Openness comes from
 /// the staged post-close snapshot, so a prerequisite this gesture
@@ -39,6 +55,7 @@ pub(crate) fn project_states_for_files(
     files: &[FileScan],
     states: &BTreeMap<(usize, usize), TaskDependencyState>,
     today: NaiveDate,
+    index: &NoteIndex,
 ) -> ProjectCloseStates {
     files
         .iter()
@@ -55,7 +72,30 @@ pub(crate) fn project_states_for_files(
                 .unwrap_or_default();
             let open_ids = filter_internal_project_ids(file, &open_ids);
             let reasons = project_block_reasons(&context, &open_ids, today);
-            (context, reasons)
+            let inherited = context
+                .project_task_index()
+                .and_then(|task_index| {
+                    file.tasks.get(task_index).map(|task| {
+                        file.contents
+                            .lines()
+                            .nth(task.line_index)
+                            .unwrap_or_default()
+                    })
+                })
+                .filter(|raw| has_prj_is_blocked_tag(raw))
+                .map(|_| {
+                    resolve_project_parent(
+                        &file.relative_path,
+                        &file.contents,
+                        index,
+                    )
+                    .unwrap_or_else(|| file.relative_path.clone())
+                });
+            ProjectCloseState {
+                context,
+                reasons,
+                inherited,
+            }
         })
         .collect()
 }
@@ -63,15 +103,25 @@ pub(crate) fn project_states_for_files(
 /// Whether `task` is a resident whose project still has a reason
 /// after this gesture (PDC1): its own reasons are gone but the
 /// project's remain, so it stays `[?]` with `still_blocked{reason:
-/// project}`. `^prj` itself is never a resident and never matches.
+/// project}`. A resident of a tagged `^prj` project stays Blocked
+/// through the inherited holder even when the own reasons are gone
+/// (PDC4), naming `parent(K)`. `^prj` itself is never a resident and
+/// never matches.
 pub(crate) fn project_still_blocks(
     file_index: usize,
     task: &TaskLine,
     project_states: &ProjectCloseStates,
 ) -> Option<PathBuf> {
-    let (context, reasons) = project_states.get(file_index)?;
-    if context.is_resident(task) && !reasons.is_empty() {
-        Some(context.relative_path.clone())
+    let state = project_states.get(file_index)?;
+    if state.context.is_resident(task)
+        && (!state.reasons.is_empty() || state.inherited.is_some())
+    {
+        Some(
+            state
+                .inherited
+                .clone()
+                .unwrap_or_else(|| state.context.relative_path.clone()),
+        )
     } else {
         None
     }
@@ -118,10 +168,13 @@ pub(crate) fn recovered_unblocked_project_files(
         if !recovering_prj_verdict(verdict, files) {
             continue;
         }
-        let Some((_, reasons)) = project_states.get(verdict.file) else {
+        let Some(state) = project_states.get(verdict.file) else {
             continue;
         };
-        if reasons.is_empty() {
+        // An inherited (tagged) project never recovers its residents on
+        // close paths: descendants keep their tags until reconcile
+        // (`close_recovers_subprojects = no`, PDC5/PDC6).
+        if state.reasons.is_empty() && state.inherited.is_none() {
             files_out.push(verdict.file);
         }
     }
@@ -182,12 +235,15 @@ pub(crate) fn recover_project_members(
         .map(|verdict| (verdict.file, verdict.preds.clone()))
         .collect();
     for (file_index, preds) in recovering {
-        let Some((context, reasons)) = project_states.get(file_index) else {
+        let Some(state) = project_states.get(file_index) else {
             continue;
         };
-        if !reasons.is_empty() {
+        // An inherited (tagged) project recovers nothing on close paths
+        // (PDC5): its residents keep `[?]` + tag until reconcile.
+        if !state.reasons.is_empty() || state.inherited.is_some() {
             continue;
         }
+        let context = &state.context;
         let Some(file) = files.get(file_index) else {
             continue;
         };

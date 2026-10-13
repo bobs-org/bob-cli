@@ -48,6 +48,30 @@ pub(crate) fn project_surface(
     contents: &str,
     today: NaiveDate,
 ) -> Option<ProjectSurface> {
+    project_surface_inner(relative, contents, today, None)
+}
+
+/// [`project_surface`] with one sub-project read as closed: the marker
+/// entry naming `closed_child` counts as Done for SUBOPEN(N), whatever
+/// the marker line still says (`docs/task-dependencies.md` §12.10
+/// trigger (c)). The entry matches by lowercased file stem, which is
+/// how sync keys marker displays, so `[[N]]`, `[[N|Alias]]`,
+/// `[[dir/N]]` and `[[N#Heading]]` all match.
+pub(crate) fn project_surface_with_closed_child(
+    relative: &Path,
+    contents: &str,
+    today: NaiveDate,
+    closed_child: &Path,
+) -> Option<ProjectSurface> {
+    project_surface_inner(relative, contents, today, Some(closed_child))
+}
+
+fn project_surface_inner(
+    relative: &Path,
+    contents: &str,
+    today: NaiveDate,
+    closed_child: Option<&Path>,
+) -> Option<ProjectSurface> {
     if is_done_path(relative) || canonical_daily_date(relative).is_some() {
         return None;
     }
@@ -74,13 +98,22 @@ pub(crate) fn project_surface(
     let sync_schedule = project_schedule_for_sync(&project, &effective_status);
     let remaining =
         effective_unhidden_count(&project, sync_schedule.as_ref(), today);
+    let closed_stem = closed_child.and_then(|child| {
+        child
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .map(|stem| stem.to_ascii_lowercase())
+    });
     let subopen = project
         .prj_task
         .sub_block
         .first_marker_line()
         .map(|line| subproject_displays_in_marker_line(&line.trimmed_text))
         .is_some_and(|displays| {
-            displays.values().any(|display| display.state.is_open())
+            displays.iter().any(|(link_name, display)| {
+                display.state.is_open()
+                    && closed_stem.as_deref() != Some(link_name.as_str())
+            })
         });
     let prj_line = project.task_lines.iter().find(|task| task.is_prj)?;
     Some(ProjectSurface {

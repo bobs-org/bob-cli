@@ -25,6 +25,7 @@ use super::super::{
     task_status_hooks::{
         parse_tasks, task_dependency_states, FileScan, TasksSettings,
     },
+    vault_links::NoteIndex,
 };
 use super::project_close::{
     apply_recovery_writes, has_own_remaining_reason, project_states_for_files,
@@ -81,7 +82,14 @@ where
         });
     }
     let states = task_dependency_states(&files, &BTreeSet::new());
-    let project_states = project_states_for_files(&files, &states, today);
+    // Snapshot-scoped resolution for the tag proxy: a tagged `^prj`
+    // whose parent is outside the snapshot keeps its own path as the
+    // holder, so close recovery never contradicts the cascade.
+    let index = NoteIndex::from_paths(
+        files.iter().map(|file| file.relative_path.clone()),
+    );
+    let project_states =
+        project_states_for_files(&files, &states, today, &index);
     let mut recover: BTreeSet<(usize, usize)> = BTreeSet::new();
     let mut recovering_projects: BTreeSet<usize> = BTreeSet::new();
     for (file_index, file) in files.iter().enumerate() {
@@ -112,6 +120,18 @@ where
             {
                 continue;
             }
+            // A tagged `^prj` inherits its block from an ancestor (PDC5):
+            // close recovery never recovers it, whatever its own reasons.
+            if task
+                .block_id
+                .as_deref()
+                .is_some_and(|id| is_project_task_id(Some(id)))
+                && project_states
+                    .get(file_index)
+                    .is_some_and(|state| state.inherited.is_some())
+            {
+                continue;
+            }
             recover.insert((file_index, task_index));
             if task
                 .block_id
@@ -127,12 +147,14 @@ where
     // are empty whenever its `^prj` recovered (they are the `^prj`'s
     // own reasons); the guard below keeps that invariant explicit.
     for file_index in &recovering_projects {
-        let Some((context, reasons)) = project_states.get(*file_index) else {
+        let Some(state) = project_states.get(*file_index) else {
             continue;
         };
-        if !reasons.is_empty() {
+        // An inherited (tagged) project recovers nothing here (PDC5).
+        if !state.reasons.is_empty() || state.inherited.is_some() {
             continue;
         }
+        let context = &state.context;
         let file = &files[*file_index];
         for (task_index, task) in file.tasks.iter().enumerate() {
             if !context.is_resident(task) || task.status != '?' {
@@ -158,12 +180,13 @@ where
     // reasons and open rows that were never `[?]`.
     let mut strip_only: BTreeSet<(usize, usize)> = BTreeSet::new();
     for file_index in recovering_projects {
-        let Some((context, reasons)) = project_states.get(file_index) else {
+        let Some(state) = project_states.get(file_index) else {
             continue;
         };
-        if !reasons.is_empty() {
+        if !state.reasons.is_empty() || state.inherited.is_some() {
             continue;
         }
+        let context = &state.context;
         let file = &files[file_index];
         for (task_index, task) in file.tasks.iter().enumerate() {
             if !context.is_resident(task)

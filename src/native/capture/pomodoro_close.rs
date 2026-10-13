@@ -691,18 +691,49 @@ fn plan_close_successors(
     }
     // Trigger (a) reads the staged post-close text of C's notes; the
     // project note may not be in the filtered dependents snapshot.
-    let note_texts = super::task_complete::staged_completed_note_texts(
+    let mut note_texts = super::task_complete::staged_completed_note_texts(
         bob_dir,
         planner,
         &predecessors,
     )?;
     let tasks_settings =
         crate::native::task_status_hooks::read_tasks_settings(bob_dir);
+    // Trigger (c) preload: when C closed a sub-project's `^prj`, load
+    // its parent N through the staged planner before the gate. The byte
+    // prefilter keeps this (and the catalog index it needs, a full vault
+    // walk) off every other close: one resolution plus one read of N,
+    // and only for `^prj` closes with a `parent:`.
+    let mut note_index = None;
+    if engine::closed_prj_may_have_parent(&predecessors, &note_texts) {
+        let index = super::task_complete::staged_note_index(
+            bob_dir,
+            planner,
+            dependency_ctx,
+        );
+        let preload = engine::inspect_pull_ins(
+            &predecessors,
+            &note_texts,
+            &tasks_settings,
+            today,
+            Some(&index),
+        );
+        for parent in preload.parent_notes {
+            if note_texts.iter().any(|(path, _)| path == &parent) {
+                continue;
+            }
+            let absolute = bob_dir.join(&parent);
+            if let Some(contents) = planner.current_contents(&absolute)? {
+                note_texts.push((parent, contents));
+            }
+        }
+        note_index = Some(index);
+    }
     let gate = engine::inspect_pull_ins(
         &predecessors,
         &note_texts,
         &tasks_settings,
         today,
+        note_index.as_ref(),
     );
     if !gate.has_candidates && !gate.needs_dependents {
         return Ok(empty("checked"));
@@ -725,11 +756,6 @@ fn plan_close_successors(
         Vec::new()
     };
     let post_day = planner.current_contents(day_file)?;
-    let note_index = super::task_complete::staged_note_index(
-        bob_dir,
-        planner,
-        dependency_ctx,
-    );
     let running = &plan.summary.running;
     let closed_name = running.name.clone().unwrap_or_default();
     let closed_line = close_entry_line(
@@ -747,6 +773,14 @@ fn plan_close_successors(
             line: next.line,
             created: true,
         });
+    if note_index.is_none() {
+        note_index = Some(super::task_complete::staged_note_index(
+            bob_dir,
+            planner,
+            dependency_ctx,
+        ));
+    }
+    let index = note_index.as_ref().expect("index built above");
     let successor_plan = engine::plan_successors(engine::SuccessorInput {
         completed: predecessors,
         snapshot,
@@ -763,7 +797,7 @@ fn plan_close_successors(
         tasks_settings: &tasks_settings,
         note_settings: &settings,
         link_unblocked: dependency_ctx.link_unblocked(),
-        index: &note_index,
+        index,
     });
     for (relative_path, text) in &successor_plan.changed_files {
         planner.stage(&bob_dir.join(relative_path), text.clone())?;

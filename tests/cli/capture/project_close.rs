@@ -125,3 +125,92 @@ fn close_recovers_prj_and_residents_with_unblocked() {
     assert!(proj.contains("- [ ] #task Pitch"), "{proj}");
     assert!(proj.contains("[unblocked:: 2026-10-05]"), "{proj}");
 }
+
+// PDC4 (§13.16): D is a resident of K whose `^prj` carries
+// `#prj_is_blocked`; closing D's last own prerequisite leaves D `[?]`
+// with `still_blocked{reason: project, project: parent(K)}` and no link.
+#[test]
+fn close_leaves_inherited_resident_blocked_naming_parent() {
+    let (_temp, vault) =
+        vault_with_settings("bob-cli-project-close-inherited-still-blocked");
+    let day_file = vault.join("20261005.md");
+    write_file(
+        &vault.join("sase.md"),
+        "- [ ] #task Done P [id:: done-p] ^done-p\n",
+    );
+    write_file(
+        &vault.join("par.md"),
+        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Parent chore [id:: chore] ^chore\n",
+    );
+    write_file(
+        &vault.join("k.md"),
+        "---\ntype: [[project]]\nstatus: wip\nparent: \"[[par]]\"\n---\n- [?] #task Kid #prj_is_blocked ^prj\n- [?] #task Dee [dependsOn:: done-p] #prj_is_blocked [id:: dee] ^dee\n",
+    );
+    write_file(&day_file, "## Pomodoros\n- [ ] () \u{2014} FIX\n");
+
+    let json = capture_json(&vault, &day_file, &["!sase:done-p"]);
+    assert_eq!(json["ok"], true);
+    let complete = &json["task_complete"];
+    assert_eq!(
+        complete["unblocked"].as_array().expect("unblocked").len(),
+        0
+    );
+    let still = complete["still_blocked"].as_array().expect("still_blocked");
+    assert_eq!(still.len(), 1);
+    assert_eq!(still[0]["block_id"], "dee");
+    assert_eq!(still[0]["reason"], "project");
+    assert_eq!(still[0]["project"], "par.md");
+
+    let k = fs::read_to_string(vault.join("k.md")).expect("read k");
+    assert!(
+        k.contains("- [?] #task Dee [dependsOn:: done-p] #prj_is_blocked [id:: dee] ^dee"),
+        "D stays byte-identical:\n{k}"
+    );
+}
+
+// PDC5 (§13.16): K's tagged `^prj` loses its last own prerequisite →
+// stays `[?]` with `still_blocked{reason: project}`; no
+// `project_task` recover and K's residents keep their tags.
+#[test]
+fn close_leaves_tagged_prj_blocked_without_recovery() {
+    let (_temp, vault) =
+        vault_with_settings("bob-cli-project-close-tagged-prj");
+    let day_file = vault.join("20261005.md");
+    write_file(
+        &vault.join("sase.md"),
+        "- [ ] #task Done P [id:: done-p] ^done-p\n",
+    );
+    write_file(
+        &vault.join("par.md"),
+        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Parent chore [id:: chore] ^chore\n",
+    );
+    write_file(
+        &vault.join("k.md"),
+        "---\ntype: [[project]]\nstatus: wip\nparent: \"[[par]]\"\n---\n- [?] #task Kid [dependsOn:: done-p] #prj_is_blocked [id:: kprj] ^prj\n- [?] #task Rita #prj_is_blocked [id:: rita] ^rita\n",
+    );
+    write_file(&day_file, "## Pomodoros\n- [ ] () \u{2014} FIX\n");
+
+    let json = capture_json(&vault, &day_file, &["!sase:done-p"]);
+    assert_eq!(json["ok"], true);
+    let complete = &json["task_complete"];
+    assert_eq!(
+        complete["unblocked"].as_array().expect("unblocked").len(),
+        0,
+        "no project_task or project_member recovery"
+    );
+    let still = complete["still_blocked"].as_array().expect("still_blocked");
+    assert_eq!(still.len(), 1);
+    assert_eq!(still[0]["block_id"], "prj");
+    assert_eq!(still[0]["reason"], "project");
+    assert_eq!(still[0]["project"], "par.md");
+
+    let k = fs::read_to_string(vault.join("k.md")).expect("read k");
+    assert!(
+        k.contains("- [?] #task Kid [dependsOn:: done-p] #prj_is_blocked [id:: kprj] ^prj"),
+        "K stays byte-identical:\n{k}"
+    );
+    assert!(
+        k.contains("- [?] #task Rita #prj_is_blocked [id:: rita] ^rita"),
+        "residents keep their tags until reconcile:\n{k}"
+    );
+}

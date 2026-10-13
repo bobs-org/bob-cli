@@ -180,15 +180,42 @@ pub(super) fn plan_task_complete_item(
     }
     // Trigger (a) reads the staged post-close text of C's notes, including
     // project notes that the filtered dependents snapshot omits.
-    let note_texts =
+    let mut note_texts =
         staged_completed_note_texts(bob_dir, planner, &predecessors)?;
     let tasks_settings =
         crate::native::task_status_hooks::read_tasks_settings(bob_dir);
+    // Trigger (c) preload: when C closed a sub-project's `^prj`, load
+    // its parent N through the staged planner before the gate. The byte
+    // prefilter keeps this (and the catalog index it needs, a full vault
+    // walk) off every other close: one resolution plus one read of N,
+    // and only for `^prj` closes with a `parent:`.
+    let mut note_index = None;
+    if engine::closed_prj_may_have_parent(&predecessors, &note_texts) {
+        let index = staged_note_index(bob_dir, planner, dependency_ctx);
+        let preload = engine::inspect_pull_ins(
+            &predecessors,
+            &note_texts,
+            &tasks_settings,
+            today,
+            Some(&index),
+        );
+        for parent in preload.parent_notes {
+            if note_texts.iter().any(|(path, _)| path == &parent) {
+                continue;
+            }
+            let absolute = bob_dir.join(&parent);
+            if let Some(contents) = planner.current_contents(&absolute)? {
+                note_texts.push((parent, contents));
+            }
+        }
+        note_index = Some(index);
+    }
     let gate = engine::inspect_pull_ins(
         &predecessors,
         &note_texts,
         &tasks_settings,
         today,
+        note_index.as_ref(),
     );
     // Day text before this gesture's strikes, moves, or retirement: the
     // already-planned baseline for anchors and derived ranks. The tree
@@ -224,8 +251,11 @@ pub(super) fn plan_task_complete_item(
             // The project rule explicitly suppresses all writes when the
             // required dependents snapshot is incomplete.
         } else {
-            let note_index =
-                staged_note_index(bob_dir, planner, dependency_ctx);
+            if note_index.is_none() {
+                note_index =
+                    Some(staged_note_index(bob_dir, planner, dependency_ctx));
+            }
+            let index = note_index.as_ref().expect("index built above");
             successor_plan = engine::plan_successors(engine::SuccessorInput {
                 completed: predecessors,
                 snapshot,
@@ -238,7 +268,7 @@ pub(super) fn plan_task_complete_item(
                 tasks_settings: &tasks_settings,
                 note_settings: &settings,
                 link_unblocked: dependency_ctx.link_unblocked(),
-                index: &note_index,
+                index,
             });
             for (relative_path, text) in &successor_plan.changed_files {
                 let absolute_path = bob_dir.join(relative_path);

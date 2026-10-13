@@ -517,3 +517,43 @@ fn close_without_identities_reports_no_successors() {
     assert_eq!(close["still_blocked"], serde_json::json!([]));
     assert_eq!(close["unblocked_check"], "checked");
 }
+
+// PP29 (§12.11) through `=x`: closing K's embedded `^prj` pulls the
+// parent N's R into the closing continuation.
+#[test]
+fn pomodoro_close_pulls_in_parent_of_closed_subproject() {
+    let (_temp, vault, day_file) = vault("bob-cli-close-pp29");
+    write_file(
+        &vault.join("k.md"),
+        "---\ntype: [[project]]\nstatus: wip\nparent: \"[[n-proj]]\"\n---\n- [ ] #task Kid work ^prj\n",
+    );
+    write_file(
+        &vault.join("n-proj.md"),
+        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Parent work #prj #hide ^prj\n  - 🧩 **Sub-projects:** [[k]]\n",
+    );
+    write_file(
+        &day_file,
+        "## Pomodoros\n- [ ] (**0920-0950**) — BOB\n  - ![[k#^prj]]\n- [ ] () — FIX\n",
+    );
+
+    let json = run_close_json(&vault, &day_file, NOW, &["=x"]);
+    let close = &json["pomodoro_close"];
+    assert_eq!(close["still_blocked"], serde_json::json!([]));
+    let unblocked = close["unblocked"].as_array().expect("unblocked");
+    assert_eq!(unblocked.len(), 1);
+    let row = &unblocked[0];
+    assert_eq!(row["trigger"], "project_empty");
+    assert_eq!(row["note_path"], "n-proj.md");
+    assert_eq!(row["block_id"], "prj");
+    assert_eq!(row["text"], "Parent work");
+    assert_eq!(row["unblocked_by"][0]["note_path"], "k.md");
+    assert_eq!(row["unblocked_by"][0]["block_id"], "prj");
+    assert_eq!(row["link"]["entry_name"], "BOB");
+    assert_eq!(row["link"]["block_link"], "[[n-proj#^prj]]");
+    let n = fs::read_to_string(vault.join("n-proj.md")).expect("read n");
+    assert!(n.contains("- [*] #task Parent work #prj ^prj"), "{n}");
+    assert!(!n.contains("#hide"), "{n}");
+    let k = fs::read_to_string(vault.join("k.md")).expect("read k");
+    assert!(k.contains("- [x] #task Kid work"), "{k}");
+    assert!(k.contains("^prj"), "{k}");
+}

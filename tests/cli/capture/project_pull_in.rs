@@ -496,3 +496,149 @@ fn stale_blocked_resident_stays_blocked() {
     assert!(resident.contains("#hide"), "{resident}");
     assert!(!resident.contains("[unblocked::"), "{resident}");
 }
+
+fn child_project(parent: &str, contents: &str) -> String {
+    format!("---\ntype: [[project]]\nstatus: wip\nparent: \"[[{parent}]]\"\n---\n{contents}")
+}
+
+// PP29 + PP34 + PP36 + dry-run: closing K's `^prj` pulls in the parent
+// N's R (`trigger: project_empty`, `unblocked_by: [K ^prj]`, row text
+// drops the tags); `--dry-run` writes nothing; and `bob projects sync
+// --dry-run` then only flips K's marker entry, never N's `#hide`.
+#[test]
+fn subproject_close_pulls_in_parent_and_sync_agrees() {
+    let (_temp, vault, day_file) = make_vault("bob-cli-project-pull-in-pp29");
+    write_file(
+        &vault.join("k.md"),
+        &child_project("n-proj", "- [ ] #task Kid work ^prj\n"),
+    );
+    write_file(
+        &vault.join("n-proj.md"),
+        &project(
+            "- [ ] #task Parent work #prj #hide ^prj\n  - 🧩 **Sub-projects:** [[k]]\n",
+        ),
+    );
+    write_file(&day_file, "## Pomodoros\n- [ ] () — FIX\n  - [[k#^prj]]\n");
+
+    let before_k = fs::read(vault.join("k.md")).expect("read k bytes");
+    let before_n = fs::read(vault.join("n-proj.md")).expect("read n bytes");
+    let before_day = fs::read(&day_file).expect("read day bytes");
+    let dry = capture_json(&vault, &day_file, &["!k:prj"], true);
+    let row = &dry["task_complete"]["unblocked"][0];
+    assert_eq!(row["trigger"], "project_empty");
+    assert_eq!(row["block_id"], "prj");
+    assert_eq!(row["note_path"], "n-proj.md");
+    assert_eq!(row["previous_status_symbol"], " ");
+    assert_eq!(row["status_symbol"], "*");
+    assert_eq!(row["text"], "Parent work");
+    assert_eq!(row["link"]["block_link"], "[[n-proj#^prj]]");
+    assert_eq!(row["unblocked_by"][0]["note_path"], "k.md");
+    assert_eq!(row["unblocked_by"][0]["block_id"], "prj");
+    assert_eq!(fs::read(vault.join("k.md")).unwrap(), before_k);
+    assert_eq!(fs::read(vault.join("n-proj.md")).unwrap(), before_n);
+    assert_eq!(fs::read(&day_file).unwrap(), before_day);
+
+    let human = capture_human(&vault, &day_file, &["!k:prj"], true);
+    assert_success(&human);
+    let out = stdout(&human);
+    assert!(out.contains("Parent work"), "{out}");
+    assert!(out.contains("· project has no open tasks"), "{out}");
+
+    let json = capture_json(&vault, &day_file, &["!k:prj"], false);
+    let row = &json["task_complete"]["unblocked"][0];
+    assert_eq!(row["trigger"], "project_empty");
+    assert!(row["link"].is_object());
+    let k = fs::read_to_string(vault.join("k.md")).expect("read k");
+    assert!(k.contains("- [x] #task Kid work"), "{k}");
+    assert!(k.contains("^prj"), "{k}");
+    let n = fs::read_to_string(vault.join("n-proj.md")).expect("read n");
+    assert!(n.contains("- [*] #task Parent work #prj ^prj"), "{n}");
+    assert!(!n.contains("#hide"), "{n}");
+
+    let sync = bob_command()
+        .arg("projects")
+        .arg("sync")
+        .arg("--dry-run")
+        .arg("-b")
+        .arg(&vault)
+        .output()
+        .expect("run project sync dry-run");
+    assert_success(&sync);
+    let out = stdout(&sync);
+    assert!(
+        out.contains("update [[k]] on ^prj"),
+        "sync flips only K's marker entry:\n{out}"
+    );
+    assert!(
+        !out.contains("#hide"),
+        "sync never touches N's #hide:\n{out}"
+    );
+}
+
+// PP35 (SL20): a draft that closes K's `^prj` and then N's pulled-in R
+// drops the pull-in row in the net batch pass.
+#[test]
+fn parent_pull_in_row_drops_when_parent_prj_also_closes() {
+    let (_temp, vault, day_file) = make_vault("bob-cli-project-pull-in-pp35");
+    write_file(
+        &vault.join("k.md"),
+        &child_project("n-proj", "- [ ] #task Kid work ^prj\n"),
+    );
+    write_file(
+        &vault.join("n-proj.md"),
+        &project(
+            "- [ ] #task Parent work #prj #hide ^prj\n  - 🧩 **Sub-projects:** [[k]]\n",
+        ),
+    );
+    write_file(&day_file, "## Pomodoros\n- [ ] () — FIX\n  - [[k#^prj]]\n");
+
+    let json =
+        capture_json(&vault, &day_file, &["!k:prj\n\n!n-proj:prj"], false);
+    assert_eq!(
+        json["captures"][0]["task_complete"]["unblocked"],
+        serde_json::json!([]),
+        "net pass drops the pulled-in row once R closes"
+    );
+    let n = fs::read_to_string(vault.join("n-proj.md")).expect("read n");
+    assert!(n.contains("- [x] #task Parent work #prj"), "{n}");
+    assert!(n.contains("^prj"), "{n}");
+}
+
+// PP32: closing a task in N when N's R is tagged (N inherits) leaves R
+// `[?]` with `still_blocked{reason: project, project: parent(N)}` and
+// the row text drops the tag.
+#[test]
+fn tagged_parent_prj_close_stays_blocked_naming_grandparent() {
+    let (_temp, vault, day_file) = make_vault("bob-cli-project-pull-in-pp32");
+    write_file(
+        &vault.join("grand.md"),
+        &project("- [ ] #task Grand chore [id:: chore] ^chore\n"),
+    );
+    write_file(
+        &vault.join("proj.md"),
+        &child_project(
+            "grand",
+            "- [ ] #task Fix pump [id:: fix-a] ^a-fix\n- [?] #task Ship it! #prj #hide #prj_is_blocked ^prj\n",
+        ),
+    );
+    write_file(
+        &day_file,
+        "## Pomodoros\n- [ ] () — FIX\n  - [[proj#^a-fix]]\n",
+    );
+
+    let json = capture_json(&vault, &day_file, &["!proj:a-fix"], false);
+    let complete = &json["task_complete"];
+    assert_eq!(complete["unblocked"], serde_json::json!([]));
+    let still = complete["still_blocked"].as_array().expect("still_blocked");
+    assert_eq!(still.len(), 1);
+    assert_eq!(still[0]["block_id"], "prj");
+    assert_eq!(still[0]["reason"], "project");
+    assert_eq!(still[0]["project"], "grand.md");
+    assert_eq!(still[0]["trigger"], "project_empty");
+    assert_eq!(still[0]["text"], "Ship it!");
+    let note = fs::read_to_string(vault.join("proj.md")).expect("read proj");
+    assert!(
+        note.contains("- [?] #task Ship it! #prj #hide #prj_is_blocked ^prj"),
+        "R stays byte-identical:\n{note}"
+    );
+}
