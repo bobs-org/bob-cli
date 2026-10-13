@@ -590,7 +590,8 @@ ledger) still clears back to Ready once unlinked and stale. Independently,
 open Dataview dependencies and future `[scheduled:: YYYY-MM-DD]` dates mark a
 task Blocked (`[?]`). A project's own blocking comes from its open `^prj`
 task's Depends-On line and inline schedule: while either gives a reason,
-every open resident of the note is Blocked and carries `#prj_is_blocked`,
+every open resident of the note is Blocked and carries `#prj_is_blocked`
+— as does every open task in its sub-project notes, recursively —
 and every automatic Blocked-to-Ready recovery writes `[unblocked::]`. The command
 also retires completed references, moves stray bullets onto the current
 Pomodoro, repairs Pomodoro markers, de-duplicates the same task under later

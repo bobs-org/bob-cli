@@ -1355,11 +1355,17 @@ EMPTY(N), R ∉ C, and one of:
 - (b) R is a dependent candidate of C (its `[dependsOn::]` names a task
   in C). This gesture removed R's last blocker.
 
-Closing a sub-project's `^prj` never pulls in its parent. `bob projects
-sync` surfaces the parent on its next run.
+- (c) C contains the `^prj` of a project K with `parent(K)` = N,
+  R ∉ C, and EMPTY(N) holds with N's marker entry for K read as
+  closed. `preds(R)` = {K's `^prj`}, anchored by its slot, the
+  closing entry, or inherit (§12.3). Reuses `trigger:
+  "project_empty"`, its copy, and its rows; `unblocked_by` names K's
+  `^prj`. Cost: one parent resolution plus one read of N, and only
+  when C contains a closed `^prj` whose note has `parent:`. Every
+  other close is unchanged.
 
 `preds(R)` is the set of tasks in C that triggered R: N's closed tasks,
-or R's closed prerequisites.
+R's closed prerequisites, or — under trigger (c) — K's `^prj`.
 
 **Rule** (both engines)
 
@@ -1369,12 +1375,13 @@ project_task row):
   1. R has open prerequisites after the gesture
                                   → still_blocked{reason: waits_on}
   2. SCHED(N) > today             → still_blocked{reason: scheduled}
-  3. N has remaining project reasons (§13.3) after 1–2
-                                  → still_blocked{reason: project}
-     (under the line model ^prj reports only its own reasons
-     (§13.3), so steps 1–2 already cover it and engines implement
-     no separate check here. steps 1–3 leave R's line
-     byte-identical, #hide included)
+  3. R carries `#prj_is_blocked`
+                                  → still_blocked{reason: project,
+                                     project: parent(N)}
+     (the tag means N inherits a reason from an ancestor, so a
+     pull-in still never links a Blocked ^prj. this applies to
+     every trigger. steps 1–3 leave R's line byte-identical,
+     #hide included)
   4. From here on, remove every whole-token #hide from R.
   5. R had a live link before the gesture
                                   → not_linked: already_planned;
@@ -1457,7 +1464,8 @@ are unchanged. A Pending `^prj` is never demoted
   `"project_empty"`.
 - `unblocked[]` rows carry `hide_removed` (bool).
 - The row text of a project row is the post-write description with
-  `#prj` and `#hide` dropped (display only).
+  `#prj`, `#hide`, and `#prj_is_blocked` dropped (display only,
+  token-bounded).
 - `unblocked_by` lists `preds(R)`.
 - **Human output (Rust).**
   - A pull-in that linked R uses `linked` / `would link`.
@@ -1544,6 +1552,14 @@ section in a comment.
 | PP26 | R carries `[scheduled:: <today or past>]`; N's only other open task B carries `#hide`. Close A | nothing (B is remaining work under the dated recount). With no project date → pull-in |
 | PP27 | R `[?]` with `[fresh::]`, not planned today, last blocker closed | `' '`, `#hide` removed, `[unblocked:: today]` written, `not_planned_today`. Linked instead → `[*]` and no `[unblocked::]` (UB4) |
 | PP28 | leftover frontmatter future `scheduled` on N with an open `^prj` | `still_blocked{reason: scheduled}`, R byte-identical |
+| PP29 | K (`parent: "[[N]]"`) is the only open sub-project on N's marker line, and N has no other remaining work. K's `^prj` is linked in FIX; close it via its link | N's R is linked right after K's bullet: ` `→`*`, `#hide` removed, `trigger: project_empty`, `unblocked_by: [K ^prj]` |
+| PP30 | N's marker lists another open child, or N has a remaining task | nothing |
+| PP31 | K has no `parent:`, or it is unresolvable, ambiguous, or not a project | nothing |
+| PP32 | R carries `#prj_is_blocked` (N inherits), under any trigger | `still_blocked{reason: project, project: parent(N)}`, `trigger: project_empty`; R byte-identical |
+| PP33 | K's `^prj` not planned today; cycler cancel (Alt+[) of K's `^prj` | surfaced (`not_planned_today`); cancel → `cancelled`, surfaced only |
+| PP34 | after a PP29 pull-in, `bob projects sync --dry-run` | changes only N's marker entry for K (→ `~~[[K]]~~ ✅`), never N's `#hide` |
+| PP35 | draft `!K:prj !N:prj` | the net pass drops R's row |
+| PP36 | row text of a project row whose R carries `#prj_is_blocked` | drops `#prj_is_blocked` with `#prj` and `#hide` (token-bounded) |
 
 ## 13. Project dependencies
 
@@ -1556,7 +1572,9 @@ keeps a Task Link under today's open Pomodoros: the link is consumed
 (prerequisites promoted, link removed, emptied Pomodoro deleted).
 Ordinary tasks, including ordinary tasks inside project notes, keep
 the Depends-On line and R1–R10 unchanged. `^prj` uses those same
-R-rules: no R0, no D3, and no R2 exception.
+R-rules: no R0, no D3, and no R2 exception. Blocking also cascades
+to sub-projects: a blocked project's descendant project notes
+inherit its `^prj` reasons through `parent:` (§13.1, §13.3).
 
 Implementations copy the PD tables in this section into their tests,
 citing the vector id in a comment. If an implementation disagrees with
@@ -1573,10 +1591,24 @@ vectors live in [freshness.md §10b](freshness.md#10b-ub--unblocked-vectors).
 - **Resident task:** every recognised open `#task` line physically in
   the project note except `^prj`, including nested and `#ref` tasks.
   Fenced, blockquoted, and custom-status lines are excluded. Residence
-  is physical: there is no cascade through `parent`.
+  is physical; the cascade through `parent:` below is the one
+  exception.
+- **Parent (`parent(K)`):** the note named by K's frontmatter `parent:`,
+  read as one scalar wikilink (alias and heading dropped, any path
+  kept) and resolved like the note index (exact vault-relative path,
+  else the unique case-insensitive basename among scanned notes).
+  Unresolved, ambiguous, list-form, or K itself → no parent.
+- **Ancestors (`ancestors(K)`):** `parent(K)`, `parent(parent(K))`, …
+  while each is `project(·)`, stopping at the first note that is not,
+  at a repeat (cycle), or at depth 16.
+- **Descendants (`descendants(N)`):** every project K with
+  N ∈ `ancestors(K)`.
+- **Inherited reasons (`inherited(K)`):** for each A in `ancestors(K)`,
+  nearest first, with `own_reasons(^prj` of A`) ≠ ∅`: the
+  `project_dependency` / `project_schedule` reasons that name A.
 - **Project reasons (`project_reasons` / `blocked(P)`):** `own_reasons`
-  of P's `^prj`. Internal targets are never projected, so they never
-  contribute.
+  of P's `^prj` union `inherited(P)`. Internal targets are never
+  projected, so they never contribute.
 - **Own reasons (`own_reasons(T)`):** open prerequisites projected from
   T's Depends-On line (`local_dependency`) union `{ T.scheduled > today }`
   (`local_schedule`).
@@ -1584,7 +1616,9 @@ vectors live in [freshness.md §10b](freshness.md#10b-ub--unblocked-vectors).
   `edges(T)`, then removing its live Task Links under today's open
   Pomodoros, then running the empty-Pomodoro rule.
 - **`#prj_is_blocked`:** machine-owned tag on every open resident of a
-  blocked project (§13.7). `^prj` never carries it.
+  blocked project, and on the `^prj` of a project that inherits a
+  reason from an ancestor (§13.7). A `^prj` carries the tag ⇔
+  `inherited(K) ≠ ∅`.
 
 ### 13.2 Storage
 
@@ -1636,29 +1670,45 @@ own_reasons(T)  = open prerequisites projected from T's Depends-On line   (local
                 ∪ { T.scheduled > today }                                 (local_schedule)
 project(T)      = the note T lives in when: type project, non-terminal status, exactly
                   one open ^prj, not a canonical daily note
-blocked(P)      = own_reasons(^prj of P) ≠ ∅   (internal targets never projected)
-T is Blocked    = own_reasons(T) ≠ ∅
-               OR (T is a resident of P AND blocked(P))   → project_dependency / project_schedule
+blocked(P)      = own_reasons(^prj of P) ≠ ∅ OR inherited(P) ≠ ∅
+                  (internal targets never projected)
+^prj of K is Blocked ⇔ own_reasons ≠ ∅ OR inherited(K) ≠ ∅
+                  (it reports inherited reasons naming A, never itself)
+resident T of K is Blocked ⇔ own_reasons(T) ≠ ∅ OR blocked(K)
+                  → project_dependency / project_schedule
 edges(T)        = T's own dep links ∪ (T is a resident ? ^prj's projected links : ∅)
+                  ∪ (T is ^prj(K) or a resident of K ? projected links of every
+                     ^prj(A), A ∈ ancestors(K) : ∅)
+internal(^prj N)= targets in N's own note OR in any descendant of N: kept on the
+                  line, never projected into [dependsOn::], warn
+                  project_internal_dependency, refused by pickers and capture &
 ```
 
 - **Residents** are every recognised open `#task` line physically in
   the note except `^prj`, nested and `#ref` tasks included. Fenced,
   blockquoted, and custom-status lines are excluded.
-- **`^prj` reports only its own reasons.** It never gets a `project_*`
-  reason that points at itself.
+- **The cascade.** A sub-project inherits every ancestor's `^prj`
+  reasons through `parent:`, recursively: the inheriting `^prj` and
+  every open resident are `[?]` and tagged. Each cycle member inherits
+  from the others' own reasons, never from itself; reconcile warns
+  `project_parent_cycle` once per cycle.
+- **`^prj` reports own plus inherited reasons.** It never gets a
+  `project_*` reason that points at itself.
 - **Derive from reasons, never from the `[?]` cache.** A hand-set `[?]`
   on `^prj` blocks nobody.
   - JS immediate paths may use `^prj`'s `[?]` as the "will the project
     still be blocked" shortcut.
   - JS paths use the resident's own `#prj_is_blocked` tag as the "this
     resident is project-blocked now" signal.
+  - Engines that do not walk the tree read a tagged `^prj` as an extra
+    project reason naming `parent(K)` (the tag proxy).
 - **Recovery** happens only when every reason, own and inherited, is
   gone. The task returns to its existing derived rank. No previous
   status is stored. Lanes do not survive Blocked, now project-wide.
 - **Reasons are reported, not stored.** The kinds are
   `local_dependency`, `local_schedule`, `project_dependency`, and
-  `project_schedule`, with project path, open ids, and date. They
+  `project_schedule`, with project path, open ids, and date. A
+  `project_*` path may now name an ancestor that owns the reason. They
   appear in reconcile JSON, capture JSON, and plugin notices.
 - **ADJ-11.** Dependency promotion never raises a `^prj` target into a
   lane, but the walk continues through it to that project's
@@ -1666,9 +1716,10 @@ edges(T)        = T's own dep links ∪ (T is a resident ? ^prj's projected link
   other task.
   Residents of a depended-on project are not promoted.
 - A terminal project (`status: done` or `canceled`) is not
-  `project(T)`. A child project is not blocked by its parent's
-  reasons. A note with more than one open `^prj` is not a project
-  under this rule. A canonical daily note typed `project` is ignored.
+  `project(T)`, so the chain stops at the first non-project note: its
+  descendants inherit nothing from above it. A note with more than one
+  open `^prj` is not a project under this rule. A canonical daily note
+  typed `project` is ignored.
 
 ### 13.4 Promotion
 
@@ -1679,6 +1730,9 @@ edges(T)        = T's own dep links ∪ (T is a resident ? ^prj's projected link
   Next like any other task, including the §12.10 close-gesture pull-in.
 - The walk continues through that `^prj` to the depended-on project's
   own Depends-On links.
+- Ancestor edges: a `^prj` and its residents also link to every
+  ancestor `^prj`'s projected targets. This feeds promotion,
+  consumption seeds, and R7 cycle detection.
 - Residents of a depended-on project are not promoted.
 - Adding a project dependency from the keymap **transfers
   commitment:** each open prerequisite rises to at least the strongest
@@ -1735,9 +1789,14 @@ clear on the next run.
 
 ### 13.6 Guards
 
-- Pickers refuse `^prj` targets inside the same project note. A
-  hand-authored internal target stays on the line, is not projected
-  onto `[dependsOn::]`, and warns `project_internal_dependency`.
+- Pickers refuse `^prj` targets inside the same project note, and
+  targets inside any descendant of the project ("inside a sub-project
+  of this project"). A `^prj` that depends on its own sub-project's
+  task would block that task forever — the same guaranteed deadlock
+  §13.6 already prevents for same-note targets. A hand-authored
+  internal target stays on the line, is not projected onto
+  `[dependsOn::]`, and warns `project_internal_dependency`, naming the
+  sub-project for descendant targets.
 - Cycle detection (reconcile R7, capture, nav stage) includes the
   implicit resident → `^prj` edges. Longer cycles keep the R7
   behavior (keep and warn).
@@ -1745,24 +1804,34 @@ clear on the next run.
 ### 13.7 `#prj_is_blocked`
 
 **Rule.** An open resident of a blocked project carries exactly one
-`#prj_is_blocked`, and no other open task carries it.
+`#prj_is_blocked`, and a `^prj` carries it ⇔ it inherits a reason
+from an ancestor. No other open task carries it.
 
-- `^prj` never carries it.
 - Closed lines are never edited; a tag left on a closed line is
   accurate history.
 - Every open resident is tagged, including residents that also have
   their own reasons (`tag_scope = every_resident`).
+- An inheriting `^prj` is tagged exactly once; placement is as PDT9.
 
 **It is machine-owned derived state,** like `[?]` and `#hide`.
 
 - **Reconcile is the authority.** It adds the tag, and strips it from
   open lines that no longer qualify (moved out, project unblocked,
-  project terminal, hand-copied).
-- **Immediate writers keep it current in the same write** wherever
-  they flip a resident: capture (`&` on `^prj`, new tasks into a
-  blocked project); nav (`^prj` Schedule or Ctrl+D, the Depends on
-  stage on `^prj`, Ctrl+Shift+M, conversion); and cycler/capture
-  recovery of residents.
+  project terminal, hand-copied, or a `^prj` whose ancestors cleared).
+- **The Task Card subtree pass is the immediate cascade writer.**
+  After a Depends on edit — or a Schedule edit — to N's `^prj`, it
+  blocks and tags N's descendants top-down in the same gesture, and
+  recovers them when N's last reason clears (§13.10).
+- **Same-note writers keep their own note current in the same
+  write** wherever they flip a resident: capture (`&` on `^prj`, new
+  tasks into a blocked project); nav (the Depends on stage on `^prj`,
+  Ctrl+Shift+M, conversion); and cycler/capture recovery of residents.
+- **Every other cascade write defers to reconcile.** Capture `&` on
+  `^prj`, close recovery, Alt+`]`/Alt+`[` on a `[?]` `^prj`,
+  Ctrl+Shift+M, conversion, and new child projects respect the tag
+  proxy but write no descendant note: a close that unblocks a project
+  leaves its descendants tagged until the next reconcile (≤ 15 minutes
+  on the MacBook cron), which re-derives them.
 - A missed immediate write is repaired within one reconcile interval.
 
 **Placement.** Use `projects/edits.rs` `task_metadata_insertion_offset`,
@@ -1781,8 +1850,9 @@ as structural, so the quiet period applies.
 
 ### 13.8 Project schedule side effects
 
-- **Propagation stays.** Sync and nav still copy the date onto
-  residents, raise-only, but now read it from `^prj` inline.
+- **Propagation stays residence-only.** Sync and nav still copy the
+  date onto residents, raise-only, but now read it from `^prj` inline.
+  Project dates are never propagated to descendant notes.
 - **Move-earlier fix (nav only):** when a gesture changes `^prj`'s
   date from P_old to P_new, also replace residents' copies that are
   exactly P_old. Ctrl+D already removes copies by exact value.
@@ -1812,9 +1882,13 @@ Additive `bob projects sync` output:
 
 - `hoisted_project_schedules`
 
+A `project_*` reason's project path may name an ancestor that owns
+the reason, not the note the blocked task lives in.
+
 Warning kinds:
 
 - `project_internal_dependency`
+- `project_parent_cycle` (once per parent cycle, naming every member)
 
 ### 13.10 Gestures on `^prj`
 
@@ -1830,7 +1904,27 @@ from an unblocked `^prj` leaves untagged residents and their own
 reasons alone. Ctrl+D on the Depends on row deletes the line and the
 field.
 
-Schedule on `^prj` writes the inline `[scheduled::]` field. Conversion
+After planning an edit to N's `^prj` through Depends on, the Task
+Card runs the subtree pass: when N is blocked before or after the
+gesture (own reasons, or N's `^prj` carrying the tag), it walks N's
+descendants top-down — `blockedAfter(K)` is K's own reasons or its
+parent's blocked-after state — and per descendant `^prj` writes the
+tag ⇔ inherited, `[?]` while blocked (a tagged `[?]` `^prj` with no
+remaining reason recovers to its derived rank), and per resident the
+tag ⇔ blocked, `[?]` while blocked (tagged residents with no own
+reason recover with `[unblocked::]` per freshness.md §5); live Task
+Links of newly Blocked tasks under today's open Pomodoros are
+consumed, and commitment transfers the strongest newly-blocked lane
+(never onto a `^prj` target). Write order is N's note, then each
+descendant note preimage-checked (a stale note is skipped and
+reported), then the daily Pomodoro cleanup. A gesture on a tagged N's
+`^prj` never recovers anything: it only re-asserts the descendants'
+tags. Ctrl+Z undoes N's edit only; the next reconcile re-derives the
+descendants.
+
+Schedule on `^prj` writes the inline `[scheduled::]` field and runs
+the same subtree pass for a future date, a due date, and a delete; a
+tagged `^prj` keeps its tag through every Schedule write. Conversion
 is line ↔ line both ways. Capture `&` on `^prj` writes the line.
 `Alt+]` / `Alt+[` on a `[?]` `^prj` retires its own future date; when that
 leaves the project with no remaining reason, the same gesture strips
@@ -1876,6 +1970,15 @@ Capture `&` aimed at `^prj` writes the Depends-On line. Capture of a
 new task into a blocked project lands `[?]`, `#prj_is_blocked`, and
 unlinked. `@route:id s:N` with N ≥ 1 creates the task unlinked.
 
+Writers other than the Task Card never cascade: capture `&` on
+`^prj`, close recovery, Alt+`]`/Alt+`[` on a `[?]` `^prj`,
+Ctrl+Shift+M, conversion, and new child projects (capture `+`,
+Ctrl+Shift+Alt+N). Each one still respects the tag proxy, so it never
+contradicts the cascade, and descendants catch up at the next
+reconcile. Closes and Alt+`]`/Alt+`[` that unblock a project do not
+recover its sub-projects at once: descendants keep their tags until
+reconcile re-derives them.
+
 ### 13.11 Rollout
 
 An old `bob projects sync` on the MacBook cron (`:05/:20/:35/:50`)
@@ -1909,7 +2012,7 @@ Each vector names the rule under test. `^prj` uses plain R1–R10.
 | PDB2 | same project | `^prj` is `[?]` with `local_dependency` only (never `project_dependency`) |
 | PDB3 | last open target closes; a resident still has its own future `scheduled` | that resident stays `[?]` (own reason); others recover to derived rank; `#prj_is_blocked` stripped from all |
 | PDB4 | `status: done` (or `canceled`) project with a still-open `^prj` prerequisite | not `project(T)`; residents are not inherited-Blocked; tag stripped |
-| PDB5 | child project `parent: "[[blocked-parent]]"`; child has no own project reasons | child `^prj` and residents are not inherited-Blocked |
+| PDB5 | child project `parent: "[[blocked-parent]]"`; child has no own project reasons | child `^prj` and residents inherit: Blocked and tagged; see PDS1 |
 | PDB6 | two open `^prj` lines in one note | not `project(T)` |
 | PDB7 | `^prj` `[scheduled::]` strictly later than today; no open Depends-On target | `^prj` `[?]` with `local_schedule`; residents `[?]` with `project_schedule` and `#prj_is_blocked` |
 | PDB8 | canonical daily note typed `project` with a `^prj` Depends-On line | ignored; not `project(T)` |
@@ -1940,6 +2043,16 @@ Only today's open Pomodoros. `promoted[]` is the consumption seed.
 | PDG5 | new task captured into a blocked project | `[?]`, `#prj_is_blocked`, unlinked, `not_linked` with the project reasons |
 | PDG6 | link toggle on a `^prj` whose only reason is its own future `scheduled` | refused; "move the project date from the `^prj` Schedule action"; never a pull-forward |
 | PDG7 | capture `&` on `^prj` adding an open target | residents `[?]` + `#prj_is_blocked`; their live links consumed; commitment transferred onto the open prerequisite (never onto a `^prj` target) |
+| PDG8 | Task Card Depends on adds an open target to an unblocked, untagged N's `^prj`. N has child K (2 residents) and grandchild G | N's residents, plus K's and G's `^prj` and residents, become `[?]` + tag. Their live links in today's open Pomodoros are consumed. The target rises to the strongest of their lanes. Notice `· 2 sub-projects Blocked` |
+| PDG9 | removing N's last open target (N untagged, `^prj` `[?]` before) | K and G recover: tags stripped, and tagged lines with no own reason return to their derived rank with `[unblocked::]` per §5. Notice `· 2 sub-projects Ready again` |
+| PDG10 | as PDG9, but K's `^prj` has its own open target | K's `^prj` loses the tag and stays `[?]` (`local_dependency`). K's residents keep `[?]` + tag (reason names K). G keeps its tags (reasons name K) |
+| PDG11 | any Depends on gesture on a tagged N's `^prj` (N inherits from M) | nothing recovers. Descendants' tags are only re-asserted |
+| PDG12 | Task Card Schedule writes a future date on an unblocked N's `^prj`; then a due date, or Ctrl+D on the date | like PDG8 (with `project_schedule`); then like PDG9. A tagged `^prj` keeps its tag through every Schedule write |
+| PDG13 | Depends on stage on N's `^prj`, or capture `&` on it, targeting a task in a descendant | refused: "inside a sub-project of this project" |
+| PDG14 | a descendant note changed after the pass read it | that note is skipped and N's write stands. Notice suffix `· 1 sub-project not updated`. The next reconcile repairs it |
+| PDG15 | a link gesture (capture link guard, `^^` / Ctrl+Shift+Enter in block-id-prompt, Pomodoro link insertion) on K's `^prj` or a K resident while K's `^prj` is tagged | not linked. The `project` reason names the owning ancestor (capture) or `parent(K)` (plugins). Capture promotes the open prerequisites of each ancestor up to and including the first untagged one |
+| PDG16 | a new task captured into K while K's `^prj` is tagged | lands `[?]`, `#prj_is_blocked`, unlinked, `not_linked` with the project reason |
+| PDG17 | Alt+] / Alt+[ on K's tagged `[?]` `^prj` | refused, as for a tagged resident: `Project blocked by parent project · <parent(K)>` |
 
 ### 13.16 PDC — close vectors
 
@@ -1950,6 +2063,9 @@ Outcomes of the successor-link rule (§12.2) once project reasons exist.
 | PDC1 | dependent D lives in a still-blocked project; this close removed D's last *own* prerequisite | D stays `[?]`; `still_blocked{reason: project}`; no successor link |
 | PDC2 | this close fully unblocks a `^prj`; residents have no own remaining reason | `^prj` recovers (`not_linked: project_task`); residents recover-only (never successor-linked), lose `#prj_is_blocked`, and receive `[unblocked::]` when freshness.md §5's WRITE rule applies; those recoveries are outside the breaker (except §12.10) |
 | PDC3 | same as PDC2, but one resident still has an open prerequisite of its own | that resident stays `[?]`; `#prj_is_blocked` is still stripped |
+| PDC4 | dependent D is a resident of K (K's `^prj` tagged); this close removes D's last own prerequisite | D stays `[?]`; `still_blocked{reason: project, project: parent(K)}`; no link |
+| PDC5 | K's tagged `^prj` loses its last own prerequisite | stays `[?]`; `still_blocked{reason: project}`; no `project_task` recover; no PDC2 / PDC3 for K's residents |
+| PDC6 | a close fully unblocks an untagged N that has tagged descendants | descendants keep their tags until the next reconcile, which recovers them (PDS4 / PDS5 outcomes). PDC2 covers only N's own residents |
 
 ### 13.17 PDF — Databricks fixtures
 
@@ -1997,10 +2113,35 @@ project carries the tag.
 | PDT3 | resident moved out of a blocked project | tag stripped from the moved task |
 | PDT4 | project becomes terminal (`status: done` / `canceled`) | tag stripped from every open resident |
 | PDT5 | hand-copied `#prj_is_blocked` on an open task that is not a resident of a blocked project | stripped |
-| PDT6 | `#prj_is_blocked` on an open `^prj` | never added; if present, stripped |
+| PDT6 | `#prj_is_blocked` on an open `^prj` that inherits no reason | never added; if present, stripped |
 | PDT7 | closed (`[x]` / `[-]`) line carrying `#prj_is_blocked` | untouched (history) |
 | PDT8 | resident already tagged, project still blocked | exactly one tag (no duplicate) |
 | PDT9 | placement | tag lands after the fields and `#hide`, before `^id` (`task_metadata_insertion_offset`) |
 | PDT10 | CRLF preserved | tag edit uses the note's line endings |
 | PDT11 | resident with its own open prerequisite, in a blocked project | still tagged `#prj_is_blocked` (and stays `[?]` for both reasons) |
 | PDT12 | token-bounded matching | `#prj_is_blocked` is never matched as `#prj`; `#prj` is never matched as `#prj_is_blocked` |
+| PDT13 | an open `^prj` that inherits a reason | tagged exactly once; placement as PDT9 |
+
+### 13.19 PDS — sub-project cascade
+
+Outcomes of the cascade rule (§13.3) in reconcile. Reconcile resolves
+`parent:` for every recognised project from the scan it already holds,
+so the cascade costs no extra file reads.
+
+| # | Situation | Outcome |
+| --- | --- | --- |
+| PDS1 | N's `^prj` has one open target X. Child K (`parent: "[[N]]"`) has no own reason; its residents are a nested `#task` and a `#ref` task | K's `^prj` → `[?]` + `#prj_is_blocked`, with reason `project_dependency{project: N, open_ids: [X]}`. Both residents → `[?]` + tag, with the same reason. N's `^prj` stays untagged |
+| PDS2 | grandchild G of K (3 levels) | G's `^prj` and residents are Blocked and tagged; their reasons name N |
+| PDS3 | N's `^prj` has a future inline date and no open target | descendants get `project_schedule{project: N, date}` |
+| PDS4 | X closes | K and G lose every tag. Each line returns to its derived rank. `[unblocked::]` is written per freshness.md §5 (a `#hide` `^prj` is skipped) |
+| PDS5 | as PDS4, but K's `^prj` also has its own open target Y | K's `^prj` loses the tag but stays `[?]` (`local_dependency`). K's residents keep `[?]` + tag (reason names K). G keeps its tags (reasons name K) |
+| PDS6 | K's parent is an area note, a terminal project, a two-`^prj` note, a canonical daily note, unresolvable, an ambiguous basename, a list-form `parent:`, or K itself | no inheritance. A hand-copied tag on K's `^prj` is stripped |
+| PDS7 | N → K → G with K `status: done` | G inherits nothing from N (the chain stops at the first non-project) |
+| PDS8 | N's `^prj` Depends-On line links a task in K or G | the link is kept on the line, never projected into `[dependsOn::]`, and warns `project_internal_dependency`; it blocks nobody |
+| PDS9 | parent cycle A ↔ B; A's `^prj` has an open target | B inherits from A; A gets no reason from itself; `project_parent_cycle` warns once, naming both |
+| PDS10 | live Task Links to K's `^prj` and to a K resident under today's open Pomodoro | both are consumed. X is promoted through the ancestor edges (ADJ-11 still never raises a `^prj` target). `consumed_blocked_references` lists the reasons |
+| PDS11 | Y depends on a K resident while N's `^prj` depends on Y | R7 warns `dependency_cycle` through the implicit ancestor edge |
+| PDS12 | second run over a reconciled tree | zero changes |
+| PDS13 | K's `^prj` was `[*]` and linked today when N became blocked | `[?]`; the link is consumed; the lane is lost |
+| PDS14 | `bob projects sync --dry-run` on a cascade-blocked tree | no change caused by the tags: descriptions drop the tag, marker states are unchanged, and a `[?]` child still counts as an open sub-project |
+| PDS15 | `parent: "[[N\|Alias]]"`, `"[[dir/N]]"`, `"[[N#Heading]]"` | all resolve to N |

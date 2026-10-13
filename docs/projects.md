@@ -162,7 +162,9 @@ Task statuses follow the Tasks plugin convention:
   same surface predicate through one shared helper (recognition,
   plannability, schedule, and the recounted effective-unhidden count),
   except sub-projects are read from the marker line rather than child
-  notes' `parent:`. Sync agrees with that state: a later run reports no
+  notes' `parent:`. Closing a sub-project's `^prj` that leaves its
+  parent with no open work pulls the parent's `^prj` in as Next
+  (§12.10 trigger (c)). Sync agrees with that state: a later run reports no
   change for that project.
 - Active projects with non-hidden open tasks or open sub-projects get
   `#hide` added back to their open `^prj` task immediately before `^prj`.
@@ -257,7 +259,10 @@ query change. These tasks now appear in `blocked.md`; that query also needs no
 change. Derived Blocked status outranks Pomodoro promotion.
 
 An open sub-project is another project note whose `parent` wikilink resolves to
-this note's file stem and whose own `^prj` task is open. A child with terminal
+this note's file stem and whose own `^prj` task is open. Blocking
+cascades to sub-projects: while a project's `^prj` is blocked, every
+open task in its descendant project notes is Blocked and tagged
+(`docs/task-dependencies.md` §13). A child with terminal
 frontmatter but an open `^prj` task counts as open in the same run, because the
 open task reopens it to `wip`. Checked or canceled child projects do not keep the
 parent hidden; missing, malformed, or multiple non-terminal `^prj` child tasks

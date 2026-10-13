@@ -394,15 +394,21 @@ contract.
 
 Blocked is derived state: a recognized open task is blocked when it has at
 least one open dependency, a valid future schedule, or both. A task that
-lives in a blocked project is Blocked too. Project blocking comes from the
+lives in a blocked project is Blocked too, and so is every open task in
+that project's sub-projects (recursively through `parent:`): a sub-project
+inherits each ancestor's `^prj` reasons, and its `^prj` and residents are
+Blocked with a `project_dependency` or `project_schedule` reason naming the
+ancestor. Project blocking comes from the
 project's open `^prj` task alone: its projected Depends-On prerequisites and
-its inline `[scheduled::]` date (same-note `^prj` links never project and
-warn `project_internal_dependency`). While `^prj` carries any such reason,
+its inline `[scheduled::]` date (`^prj` links to its own note or any
+descendant never project and
+warn `project_internal_dependency`; a parent cycle warns
+`project_parent_cycle`). While `^prj` carries any such reason,
 every open resident of the note — nested and `#ref` tasks included, fenced
 lines excluded — is Blocked with a `project_dependency` or `project_schedule`
 reason, and carries exactly one machine-owned `#prj_is_blocked` tag; `^prj`
-itself reports only its own `local_*` reasons and is never tagged. A hand-set
-`[?]` on `^prj` is not a reason and blocks nobody. Residents inherit `^prj`
+itself carries the tag exactly when it inherits a reason from an ancestor.
+A hand-set `[?]` on `^prj` is not a reason and blocks nobody. Residents inherit `^prj`
 links as implicit promotion edges, and dependency promotion never raises a
 `^prj` target into a lane — the walk continues through it to that project's
 prerequisites. A direct Task Link raises `^prj` to Next like any other task.
