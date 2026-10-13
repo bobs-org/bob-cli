@@ -10,17 +10,18 @@ use std::path::PathBuf;
 
 use chrono::NaiveDate;
 
-use super::super::capture_language::is_reserved_project_task_id;
 use super::super::projects::{
     frontmatter_is_project, frontmatter_value, parse_frontmatter, ProjectStatus,
 };
-use super::super::task_dependencies;
 use super::super::task_status_hooks::{
     canonical_daily_date, fenced_lines, logical_lines, FileScan, TaskLine,
 };
 
 fn is_prj_block_id(block_id: Option<&str>) -> bool {
-    block_id.is_some_and(is_reserved_project_task_id)
+    // Project recognition is exact. Capture reserves case-insensitive
+    // look-alikes only to avoid minting confusing ids; `^PRJ` is still
+    // an ordinary task everywhere that derives project behavior.
+    block_id == Some("prj")
 }
 
 /// A note's project shape and the location of its sole open `^prj` task.
@@ -127,15 +128,24 @@ impl ProjectBlockReasons {
     }
 }
 
-/// Open ids that may block `task`. Internal same-note ids on a `^prj`
-/// never count (PDR7), even when a dirty `[dependsOn::]` still lists
-/// them.
+/// Open ids that may block `task`. Internal same-note ids on the sole
+/// recognised project task never count (PDR7), even when a dirty
+/// `[dependsOn::]` still lists them. An ordinary `^prj`-shaped task in
+/// an unrecognised note follows normal dependency rules.
 pub(crate) fn blocking_open_dependency_ids(
     file: &FileScan,
     task: &TaskLine,
     open_ids: &[String],
 ) -> Vec<String> {
-    if is_prj_block_id(task.block_id.as_deref()) {
+    if !is_prj_block_id(task.block_id.as_deref()) {
+        return open_ids.to_vec();
+    }
+    let context = ProjectContext::for_note(file);
+    if context
+        .project_task_index()
+        .and_then(|index| file.tasks.get(index))
+        .is_some_and(|project_task| project_task.line_index == task.line_index)
+    {
         filter_internal_project_ids(file, open_ids)
     } else {
         open_ids.to_vec()
@@ -166,14 +176,6 @@ fn same_note_dependency_ids(file: &FileScan) -> BTreeSet<String> {
     for task in &file.tasks {
         if let Some(id) = &task.task_id {
             ids.insert(id.clone());
-        }
-        if let Some(block) = &task.block_id {
-            ids.insert(block.clone());
-            if let Ok(canonical) =
-                task_dependencies::dependency_id(&file.relative_path, block)
-            {
-                ids.insert(canonical);
-            }
         }
     }
     ids

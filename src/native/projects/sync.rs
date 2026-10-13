@@ -722,7 +722,12 @@ fn project_schedule_for_sync(
     if effective_status.is_terminal() {
         return None;
     }
-    if let Some(scheduled) = &project.scheduled {
+    // The frontmatter value is only a schedule source when this pass
+    // hoists it onto an open ^prj. Without that write, only an inline
+    // ^prj date may be propagated to ordinary tasks.
+    if project.prj_task.state == PrjTaskState::Open
+        && let Some(scheduled) = &project.scheduled
+    {
         return Some(scheduled.clone());
     }
     let date = prj_inline_schedule_date(project)?;

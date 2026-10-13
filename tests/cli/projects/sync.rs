@@ -982,6 +982,7 @@ fn projects_sync_does_not_hoist_without_open_prj() {
     let dry_run = bob_command()
         .args(["projects", "sync", "-d", "-b"])
         .arg(&vault)
+        .env("BOB_NOW", "2026-07-10")
         .output()
         .expect("dry-run hoist without ^prj");
     assert_success(&dry_run);
@@ -1000,9 +1001,11 @@ fn projects_sync_does_not_hoist_without_open_prj() {
     let synced = bob_command()
         .args(["projects", "sync", "-b"])
         .arg(&vault)
+        .env("BOB_NOW", "2026-07-10")
         .output()
         .expect("sync hoist without ^prj");
     assert_success(&synced);
+    assert_eq!(synced.status.code(), Some(0), "{}", format_output(&synced));
     let synced_out = stdout(&synced);
     assert!(
         synced_out.contains("cannot hoist leftover scheduled onto ^prj")
@@ -1011,12 +1014,8 @@ fn projects_sync_does_not_hoist_without_open_prj() {
         format_output(&synced)
     );
     let after = fs::read_to_string(&missing).expect("read missing after sync");
-    assert!(
-        after.contains("scheduled: 2026-07-11"),
-        "live sync must leave leftover frontmatter scheduled in place:\n{after}"
-    );
-    assert!(
-        !after.contains("^prj"),
-        "live sync must not invent a ^prj task:\n{after}"
+    assert_eq!(
+        after, contents,
+        "live sync must leave the missing-^prj note unchanged"
     );
 }

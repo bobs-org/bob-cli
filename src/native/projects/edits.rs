@@ -705,7 +705,9 @@ pub(super) fn line_spans(contents: &str) -> Vec<LineSpan> {
 
 pub(super) fn line_ending(contents: &str, line: LineSpan) -> &'static str {
     if line.next_start == line.end {
-        return "\n";
+        return crate::native::task_dependencies::format::note_line_ending(
+            contents,
+        );
     }
     if line.end > line.start && contents.as_bytes()[line.end - 1] == b'\r' {
         "\r\n"

@@ -498,7 +498,12 @@ fn add_resident_implicit_edges(
         let mut targets = BTreeSet::new();
         for id in &prj.depends_on {
             if let Some(identities) = task_ids.get(id) {
-                targets.extend(identities.iter().cloned());
+                targets.extend(
+                    identities
+                        .iter()
+                        .filter(|(path, _)| path != &file.relative_path)
+                        .cloned(),
+                );
             }
         }
         if targets.is_empty() {

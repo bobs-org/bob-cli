@@ -105,8 +105,10 @@ or open sub-projects get #hide added back. Sync also maintains a single \
 Sub-projects line nested under open ^prj tasks after the whole Depends-On or \
 Cancel Log subtree. Leftover scheduled: YYYY-MM-DD frontmatter is hoisted onto \
 ^prj as [scheduled:: YYYY-MM-DD] and the key is deleted when ^prj is open \
-(frontmatter wins when both exist; terminal projects, and notes without an \
-open ^prj, leave the key in place with a warning). \
+(frontmatter wins when both exist). Terminal projects are skipped silently. \
+A missing ^prj leaves the key in place with the 'cannot hoist leftover \
+scheduled onto ^prj' warning; malformed or duplicate ^prj tasks are project \
+issues and make sync exit 1. \
 When ^prj has a valid inline date, it overrides the normal surfacing rule: \
 every open ordinary task receives a matching [scheduled:: YYYY-MM-DD] field \
 unless it already has a valid equal or later schedule, and ordinary-task \

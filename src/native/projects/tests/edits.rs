@@ -178,7 +178,7 @@ fn project_changes_insert_subproject_links_after_prj_with_tab_indent() {
 fn project_changes_insert_subproject_line_after_depends_on_and_cancel_log() {
     let desired = [open_subproject("Child")];
     let output = apply_subproject_changes(
-        "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n  - ❌ **CANCEL LOG**\n    - [-] old work\n  - ⛓️ **DEPENDS ON:** [[job#^update-linkedin]]\n  - user notes\n",
+        "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n  - ❌ **CANCEL LOG**\n    - [-] old work\n  - ⛓️ **DEPENDS ON:** [[job#^update-linkedin]]\n    - Dependency note\n  - user notes\n",
         &[ProjectChange::AddSubprojectLink {
             stem: "Child".to_string(),
             state: SubprojectState::Open,
@@ -187,7 +187,43 @@ fn project_changes_insert_subproject_line_after_depends_on_and_cancel_log() {
     );
     assert_eq!(
         output,
-        "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n  - ❌ **CANCEL LOG**\n    - [-] old work\n  - ⛓️ **DEPENDS ON:** [[job#^update-linkedin]]\n\t- 🧩 **Sub-projects:** [[Child]]\n  - user notes\n"
+        "---\ntype: [[project]]\n---\n- [ ] #task Ship #hide ^prj\n  - ❌ **CANCEL LOG**\n    - [-] old work\n  - ⛓️ **DEPENDS ON:** [[job#^update-linkedin]]\n    - Dependency note\n\t- 🧩 **Sub-projects:** [[Child]]\n  - user notes\n"
+    );
+}
+
+#[test]
+fn project_changes_insert_subprojects_after_crlf_dependency_subtree_at_eof() {
+    let desired = [open_subproject("Child")];
+    let contents = concat!(
+        "---\r\n",
+        "type: [[project]]\r\n",
+        "---\r\n",
+        "- [ ] #task Ship ^prj\r\n",
+        "  - ⛓️ **DEPENDS ON:** [[job#^update-linkedin]]\r\n",
+        "    - Dependency note\r\n",
+        "      - Nested detail",
+    );
+    let output = apply_subproject_changes(
+        contents,
+        &[ProjectChange::AddSubprojectLink {
+            stem: "Child".to_string(),
+            state: SubprojectState::Open,
+        }],
+        &desired,
+    );
+
+    assert_eq!(
+        output,
+        concat!(
+            "---\r\n",
+            "type: [[project]]\r\n",
+            "---\r\n",
+            "- [ ] #task Ship ^prj\r\n",
+            "  - ⛓️ **DEPENDS ON:** [[job#^update-linkedin]]\r\n",
+            "    - Dependency note\r\n",
+            "      - Nested detail\r\n",
+            "\t- 🧩 **Sub-projects:** [[Child]]",
+        )
     );
 }
 

@@ -102,6 +102,8 @@ struct ReconcileWorker<'a> {
     snapshots: Vec<NoteSnapshot>,
     /// Live graph for R7: dependent identity to scanned targets.
     graph: BTreeMap<(PathBuf, String), BTreeSet<(PathBuf, String)>>,
+    /// Internal project warnings emitted once per dependent and field id.
+    warned_project_internal: BTreeSet<(PathBuf, usize, String)>,
     /// Dependent note location per graph node.
     graph_nodes: BTreeMap<(PathBuf, String), (usize, usize)>,
     /// Pending task-line rewrites: (file, line) to (text, id, depends).
@@ -261,6 +263,7 @@ impl<'a> ReconcileWorker<'a> {
             archive_tasks: BTreeMap::new(),
             snapshots,
             graph: BTreeMap::new(),
+            warned_project_internal: BTreeSet::new(),
             graph_nodes: BTreeMap::new(),
             task_rewrites: BTreeMap::new(),
             previous_daily_file,
@@ -544,28 +547,43 @@ impl ReconcileWorker<'_> {
 }
 
 impl ReconcileWorker<'_> {
-    /// PDR7: warn and skip projecting a same-note `^prj` target.
-    /// Returns true when the target is internal so the caller keeps it
-    /// off `[dependsOn::]` and off the live graph.
+    /// PDR7: skip projecting a same-note `^prj` target, warning only if
+    /// its `[id::]` value is named in the dependent's field. Returns true
+    /// for every internal target so it stays off the live graph.
     fn warn_project_internal_target(
         &mut self,
         view: &TaskView<'_>,
         files: &[FileScan],
         path: &Path,
         block: &str,
+        target_id: Option<&str>,
     ) -> bool {
         if !is_open_project_task(view, files) || path != view.relative_path {
             return false;
         }
-        self.warn(
-            view,
-            "project_internal_dependency",
-            &format!(
-                "link to {}#^{} lives in the project's own note; kept, not projected",
-                display_path(path),
-                block
-            ),
-        );
+        if let Some(target_id) = target_id.filter(|target_id| {
+            view.task
+                .depends_on
+                .iter()
+                .any(|field_id| field_id.as_str() == *target_id)
+        }) {
+            let warning_key = (
+                view.relative_path.to_path_buf(),
+                view.task.line_index,
+                target_id.to_string(),
+            );
+            if self.warned_project_internal.insert(warning_key) {
+                self.warn(
+                    view,
+                    "project_internal_dependency",
+                    &format!(
+                        "field id {target_id} names {}#^{} in the project's own note; kept, not projected",
+                        display_path(path),
+                        block
+                    ),
+                );
+            }
+        }
         true
     }
 }
@@ -681,7 +699,11 @@ impl ReconcileWorker<'_> {
                     path, block, id, ..
                 } => {
                     if self.warn_project_internal_target(
-                        view, files, &path, &block,
+                        view,
+                        files,
+                        &path,
+                        &block,
+                        id.as_deref(),
                     ) {
                         continue;
                     }
@@ -870,11 +892,19 @@ impl ReconcileWorker<'_> {
             // PDR7: a `^prj` link to a task in its own note is a
             // guaranteed deadlock: kept on the line, never projected
             // into `[dependsOn::]`, warned once per link.
-            if let LinkTarget::Task { path, block, .. } = &link.resolved {
+            if let LinkTarget::Task {
+                path, block, id, ..
+            } = &link.resolved
+            {
                 let path = path.clone();
                 let block = block.clone();
-                if self.warn_project_internal_target(view, files, &path, &block)
-                {
+                if self.warn_project_internal_target(
+                    view,
+                    files,
+                    &path,
+                    &block,
+                    id.as_deref(),
+                ) {
                     keep_verbatim = true;
                 }
             }
@@ -1448,7 +1478,13 @@ impl ReconcileWorker<'_> {
             }
             // Deterministic choice: first in vault scan order.
             let (path, block) = targets[0].clone();
-            if self.warn_project_internal_target(view, files, &path, &block) {
+            if self.warn_project_internal_target(
+                view,
+                files,
+                &path,
+                &block,
+                Some(id),
+            ) {
                 continue;
             }
             adopted.push((path, block, id.clone()));

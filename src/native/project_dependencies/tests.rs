@@ -76,8 +76,8 @@ fn recognises_only_one_open_prj_in_a_live_project_note() {
         &project_note("- [ ] #task Ship #hide ^PRJ\n- [ ] #task Work ^work\n"),
     );
     let mixed_context = ProjectContext::for_note(&mixed_case);
-    assert!(mixed_context.recognised);
-    assert_eq!(mixed_context.project_task_index(), Some(0));
+    assert!(!mixed_context.recognised);
+    assert_eq!(mixed_context.project_task_index(), None);
 
     for (path, contents) in [
         (

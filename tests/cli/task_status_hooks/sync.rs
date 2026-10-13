@@ -3,6 +3,128 @@
 use crate::support::*;
 use std::fs;
 use std::path::Path;
+use std::process::Command;
+
+#[test]
+fn reconcile_status_only_flips_skip_quiet_period_but_structural_edits_wait() {
+    let temp = TempDir::new("bob-cli-task-status-hooks-structural-quiet");
+    let touch_future = |path: &Path| {
+        let status = Command::new("touch")
+            .arg("-d")
+            .arg("+1 hour")
+            .arg(path)
+            .status()
+            .expect("set future mtime");
+        assert!(status.success());
+    };
+    let run = |vault: &Path, daily: &Path, state: &Path| {
+        bob_command()
+            .args(["task", "reconcile", "--format", "json", "-r", "0"])
+            .arg("--bob-dir")
+            .arg(vault)
+            .env("BOB_DAY_FILE", daily)
+            .env("BOB_NOW", "2026-07-16")
+            .env("XDG_STATE_HOME", state)
+            .output()
+            .expect("run quiet-period reconciliation")
+    };
+
+    // A current Task Link raises a Ready task to Next by changing only
+    // its checkbox. That write is safe during the quiet interval.
+    let status_vault = temp.path().join("status-only");
+    let status_daily = status_vault.join("2026/20260716.md");
+    let status_task = status_vault.join("tasks.md");
+    write_file(
+        &status_daily,
+        "## Pomodoros\n\n- [ ] Current (0900-0930)\n  - [[tasks#^work]]\n",
+    );
+    write_file(&status_task, "- [ ] #task Work ^work\n");
+    write_blocked_tasks_settings(&status_vault);
+    touch_future(&status_task);
+    let status_only = run(
+        &status_vault,
+        &status_daily,
+        &temp.path().join("status-state"),
+    );
+    assert_eq!(
+        status_only.status.code(),
+        Some(0),
+        "{}",
+        format_output(&status_only)
+    );
+    assert_eq!(
+        fs::read_to_string(&status_task).unwrap(),
+        "- [*] #task Work ^work\n"
+    );
+
+    // A project Blocked transition also inserts the derived tag, so it
+    // remains structural and is deferred for a recently edited note.
+    let tag_vault = temp.path().join("tag-edit");
+    let tag_daily = tag_vault.join("2026/20260716.md");
+    let project = tag_vault.join("proj.md");
+    write_file(&tag_daily, "## Pomodoros\n\n- [ ] Current (0900-0930)\n");
+    write_file(
+        &project,
+        concat!(
+            "---\n",
+            "type: \"[[project]]\"\n",
+            "status: wip\n",
+            "---\n",
+            "- [ ] #task #prj Project [scheduled:: 2026-07-20] ^prj\n",
+            "- [ ] #task Resident ^resident\n",
+        ),
+    );
+    write_blocked_tasks_settings(&tag_vault);
+    let project_before = fs::read_to_string(&project).unwrap();
+    touch_future(&project);
+    let tag_edit = run(&tag_vault, &tag_daily, &temp.path().join("tag-state"));
+    assert_eq!(
+        tag_edit.status.code(),
+        Some(1),
+        "{}",
+        format_output(&tag_edit)
+    );
+    let tag_json: serde_json::Value =
+        serde_json::from_str(stdout(&tag_edit).trim()).unwrap();
+    assert_eq!(tag_json["reason"], "quiet_period");
+    assert_eq!(fs::read_to_string(&project).unwrap(), project_before);
+
+    // Recovering a fresh, formerly Blocked task writes [unblocked::],
+    // which is structural even without a project tag change.
+    let unblock_vault = temp.path().join("unblocked-field");
+    let unblock_daily = unblock_vault.join("2026/20260716.md");
+    let tasks = unblock_vault.join("tasks.md");
+    write_file(
+        &unblock_daily,
+        "## Pomodoros\n\n- [ ] Current (0900-0930)\n",
+    );
+    write_file(
+        &tasks,
+        concat!(
+            "- [?] #task Return [fresh:: 2026-07-15] [dependsOn:: tasks__pre] ^return\n",
+            "  - ⛓️ **DEPENDS ON:** [[#^pre]]\n",
+            "- [x] #task Finished [id:: tasks__pre] ^pre\n",
+        ),
+    );
+    write_blocked_tasks_settings(&unblock_vault);
+    let tasks_before = fs::read_to_string(&tasks).unwrap();
+    touch_future(&tasks);
+    let unblock = run(
+        &unblock_vault,
+        &unblock_daily,
+        &temp.path().join("unblock-state"),
+    );
+    assert_eq!(
+        unblock.status.code(),
+        Some(1),
+        "{}",
+        format_output(&unblock)
+    );
+    let unblock_json: serde_json::Value =
+        serde_json::from_str(stdout(&unblock).trim()).unwrap();
+    assert_eq!(unblock_json["reason"], "quiet_period");
+    assert_eq!(fs::read_to_string(&tasks).unwrap(), tasks_before);
+}
 
 #[test]
 fn task_status_hooks_syncs_fixture_and_is_idempotent() {

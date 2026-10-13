@@ -581,20 +581,25 @@ fn project_sync_plan_does_not_hoist_without_open_prj() {
         "Missing.md",
         "---\ntype: [[project]]\nstatus: wip\nscheduled: 2026-07-11\n---\n- [ ] #task Needs completion task\n",
     );
-    let plan = plan_project_sync_at(
-        &project,
-        &[],
+    // The leftover frontmatter date must not flow into schedule
+    // propagation, whether it is future or already past. Only a date
+    // hoisted onto an open ^prj can become this run's project schedule.
+    for today in [
         NaiveDate::from_ymd_opt(2026, 7, 10).unwrap(),
-    );
-    assert!(!plan
-        .changes
-        .iter()
-        .any(|change| matches!(change, ProjectChange::HoistScheduled { .. })));
-    assert!(plan.warnings.iter().any(|event| matches!(
-        event,
-        SyncEvent::Warning { message, .. }
-            if message.contains("cannot hoist leftover scheduled")
-    )));
+        NaiveDate::from_ymd_opt(2026, 7, 12).unwrap(),
+    ] {
+        let plan = plan_project_sync_at(&project, &[], today);
+        assert!(!plan.changes.iter().any(|change| matches!(
+            change,
+            ProjectChange::HoistScheduled { .. }
+                | ProjectChange::ReconcileTaskSchedules { .. }
+        )));
+        assert!(plan.warnings.iter().any(|event| matches!(
+            event,
+            SyncEvent::Warning { message, .. }
+                if message.contains("cannot hoist leftover scheduled")
+        )));
+    }
 }
 
 #[test]

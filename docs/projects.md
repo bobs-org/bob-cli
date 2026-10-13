@@ -184,10 +184,11 @@ Task statuses follow the Tasks plugin convention:
 - Leftover frontmatter `scheduled` on a non-terminal project is written onto
   `^prj` (replacing any existing inline date; frontmatter wins) and the YAML
   key is deleted, but only when `^prj` is open. Unrelated YAML, CRLF, and the
-  final-newline state stay byte-identical. Terminal projects are left alone.
-  A missing, malformed, or non-open `^prj` leaves the key in place and reports
-  a per-file warning. The hoist counts as a `--dry-run` change and is reported
-  as `N schedules hoisted`.
+  final-newline state stay byte-identical. A missing `^prj` leaves the key in
+  place and reports the `cannot hoist leftover scheduled onto ^prj` warning.
+  A malformed or duplicate `^prj` is a project issue and makes sync exit 1;
+  terminal projects are skipped silently. The hoist counts as a `--dry-run`
+  change and is reported as `N schedules hoisted`.
 - Invalid or duplicate inline `[scheduled::]` on `^prj` is reported the same
   way as leftover frontmatter `scheduled` (multiple or invalid calendar
   dates). `bob projects list` and `bob projects sync` both surface the issue,

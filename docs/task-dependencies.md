@@ -1297,9 +1297,9 @@ tests, citing the vector id in a comment. If an implementation disagrees
 with a vector, fix this section first in the same change.
 
 A pulled-in `^prj` is never Blocked when linked (Rule steps 1–3), so
-§13.5 consumption and "never link a Blocked task" hold. ADJ-11
-(§13.4) still governs dependency promotion; this close-gesture rule is
-the one path that makes `^prj` Next.
+§13.5 consumption and "never link a Blocked task" hold. Dependency
+promotion never raises a `^prj` target; a direct Task Link raises `^prj`
+to Next like any other task, including this close-gesture pull-in.
 
 **Terms**
 
@@ -1616,8 +1616,10 @@ edges(T)        = T's own dep links ∪ (T is a resident ? ^prj's projected link
   `local_dependency`, `local_schedule`, `project_dependency`, and
   `project_schedule`, with project path, open ids, and date. They
   appear in reconcile JSON, capture JSON, and plugin notices.
-- **ADJ-11.** Promotion never raises a `^prj` target into a lane, but
-  the walk continues through it to that project's prerequisites.
+- **ADJ-11.** Dependency promotion never raises a `^prj` target into a
+  lane, but the walk continues through it to that project's
+  prerequisites. A direct Task Link raises `^prj` to Next like any
+  other task.
   Residents of a depended-on project are not promoted.
 - A terminal project (`status: done` or `canceled`) is not
   `project(T)`. A child project is not blocked by its parent's

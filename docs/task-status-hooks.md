@@ -403,9 +403,10 @@ lines excluded — is Blocked with a `project_dependency` or `project_schedule`
 reason, and carries exactly one machine-owned `#prj_is_blocked` tag; `^prj`
 itself reports only its own `local_*` reasons and is never tagged. A hand-set
 `[?]` on `^prj` is not a reason and blocks nobody. Residents inherit `^prj`
-links as implicit promotion edges, and promotion never raises a `^prj`
-target into a lane — the walk continues through it to that project's
-prerequisites. The full `^prj` line-model rule, tag placement, and
+links as implicit promotion edges, and dependency promotion never raises a
+`^prj` target into a lane — the walk continues through it to that project's
+prerequisites. A direct Task Link raises `^prj` to Next like any other task.
+The full `^prj` line-model rule, tag placement, and
 consumption of links to Blocked tasks are in
 [task-dependencies.md §13](task-dependencies.md#13-project-dependencies). This combined
 state overrides Ready (`[ ]`), Next (`[*]`), and In Progress (`[/]`), including
