@@ -1785,6 +1785,11 @@ field.
 
 Schedule on `^prj` writes the inline `[scheduled::]` field. Conversion
 is line ↔ line both ways. Capture `&` on `^prj` writes the line.
+`Alt+]` / `Alt+[` on a `[?]` `^prj` retires its own future date; when that
+leaves the project with no remaining reason, the same gesture strips
+`#prj_is_blocked` from every open resident and recovers those whose only
+reason was the project, writing `[unblocked::]` when freshness.md §4 says
+to. Closed lines are never edited.
 
 `create-project-note-from-task` (Ctrl+Alt+Shift+N) keeps the source's
 Depends-On line as the first child of `^prj` and its inline date on `^prj`
