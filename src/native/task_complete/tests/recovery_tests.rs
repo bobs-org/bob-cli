@@ -271,7 +271,14 @@ fn recovery_preserves_crlf_when_writing_unblocked() {
         .changed_files
         .get(&PathBuf::from("proj.md"))
         .expect("proj.md changed");
-    assert!(updated.contains("\r\n"), "{updated:?}");
-    assert!(updated.contains("[unblocked:: 2026-10-05]"), "{updated}");
+    let pitch = updated
+        .split_inclusive('\n')
+        .find(|line| line.contains("^pitch"))
+        .expect("recovered pitch task line");
+    assert!(pitch.contains("[unblocked:: 2026-10-05]"), "{pitch:?}");
+    assert!(
+        pitch.ends_with("\r\n"),
+        "task line must retain CRLF: {pitch:?}"
+    );
     assert!(!updated.contains("#prj_is_blocked"), "{updated}");
 }

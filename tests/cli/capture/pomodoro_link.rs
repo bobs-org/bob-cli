@@ -79,6 +79,150 @@ fn capture_pomodoro_linked_task_updates_both_notes_and_reports_json() {
 }
 
 #[test]
+fn consumed_pomodoro_link_reports_removed_link_without_capture_success() {
+    let temp = TempDir::new("bob-cli-capture-pomodoro-link-guard-removed");
+    let vault = temp.path().join("vault");
+    let target = vault.join("dev.md");
+    let day_file = vault.join("day.md");
+    write_file(
+        &vault.join("prep.md"),
+        "- [ ] #task Prep [id:: prep__prep] ^prep\n",
+    );
+    write_file(
+        &target,
+        concat!(
+            "- [?] #task Blocked [dependsOn:: prep__prep] [id:: dev__blocked] ^blocked\n",
+            "  - ⛓️ **DEPENDS ON:** [[prep#^prep]]\n",
+        ),
+    );
+    write_file(
+        &day_file,
+        concat!(
+            "## Pomodoros\n",
+            "- [ ] Current (0900-0930)\n",
+            "  - [[dev#^blocked]]\n",
+        ),
+    );
+
+    let json_output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("@dev:blocked")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 09:10:00")
+        .output()
+        .expect("run guarded JSON Pomodoro link capture with cleanup");
+    assert_success(&json_output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&json_output).trim())
+            .expect("capture JSON");
+    assert_eq!(json["kind"], "link_guard");
+    assert_eq!(json["removed_pomodoro_links"], 1, "{json}");
+    assert_eq!(json["day_file"], day_file.display().to_string(), "{json}");
+    assert!(
+        json["link_guard"].get("removed_pomodoro_links").is_none(),
+        "{json}"
+    );
+    assert!(json["link_guard"].get("day_file").is_none(), "{json}");
+
+    // Restore the same stale live link so the human-output run also proves
+    // that consumption reports its cleanup instead of claiming capture.
+    write_file(
+        &day_file,
+        concat!(
+            "## Pomodoros\n",
+            "- [ ] Current (0900-0930)\n",
+            "  - [[dev#^blocked]]\n",
+        ),
+    );
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("@dev:blocked")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 09:10:00")
+        .output()
+        .expect("run guarded human Pomodoro link capture");
+    assert_success(&output);
+    let human = stdout(&output);
+    assert!(human.contains("not linked"), "{human}");
+    assert!(
+        !human.contains("✓ captured") && !human.contains("captured  dev.md"),
+        "guarded capture must not claim success:\n{human}"
+    );
+    assert!(human.contains("removed 1 live Pomodoro link"), "{human}");
+    let day_after = fs::read_to_string(&day_file).expect("read daily note");
+    assert!(!day_after.contains("[[dev#^blocked]]"), "{day_after}");
+}
+
+#[test]
+fn consumed_pomodoro_link_without_cleanup_reports_neither_capture_nor_removal()
+{
+    let temp = TempDir::new("bob-cli-capture-pomodoro-link-guard-empty");
+    let vault = temp.path().join("vault");
+    let target = vault.join("dev.md");
+    let day_file = vault.join("day.md");
+    write_file(
+        &vault.join("prep.md"),
+        "- [ ] #task Prep [id:: prep__prep] ^prep\n",
+    );
+    write_file(
+        &target,
+        concat!(
+            "- [?] #task Blocked [dependsOn:: prep__prep] [id:: dev__blocked] ^blocked\n",
+            "  - ⛓️ **DEPENDS ON:** [[prep#^prep]]\n",
+        ),
+    );
+    write_file(&day_file, "## Pomodoros\n- [ ] Current (0900-0930)\n");
+
+    let human_output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("@dev:blocked")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 09:10:00")
+        .output()
+        .expect("run guarded human Pomodoro link capture");
+    assert_success(&human_output);
+    let human = stdout(&human_output);
+    assert!(human.contains("not linked"), "{human}");
+    assert!(
+        !human.contains("✓ captured") && !human.contains("captured  dev.md"),
+        "guarded capture must not claim success:\n{human}"
+    );
+
+    let json_output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("@dev:blocked")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 09:10:00")
+        .output()
+        .expect("run guarded JSON Pomodoro link capture");
+    assert_success(&json_output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&json_output).trim())
+            .expect("capture JSON");
+    assert_eq!(json["kind"], "link_guard");
+    assert!(json.get("removed_pomodoro_links").is_none(), "{json}");
+    assert!(json.get("day_file").is_none(), "{json}");
+    assert!(
+        json["link_guard"].get("removed_pomodoro_links").is_none(),
+        "{json}"
+    );
+    assert!(json["link_guard"].get("day_file").is_none(), "{json}");
+}
+
+#[test]
 fn capture_pomodoro_link_uses_default_day_file_and_untimed_fallback() {
     let temp = TempDir::new("bob-cli-capture-pomodoro-default-day");
     let vault = temp.path().join("vault");

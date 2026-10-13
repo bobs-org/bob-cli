@@ -525,7 +525,6 @@ mod tests {
             ('*', task_status_hooks::TaskStatusType::OnHold),
             ('/', task_status_hooks::TaskStatusType::InProgress),
             ('x', task_status_hooks::TaskStatusType::Done),
-            ('>', task_status_hooks::TaskStatusType::Cancelled),
         ]);
         // PDG5: every open resident lands `[?]` plus exactly one tag.
         assert_eq!(
@@ -559,7 +558,9 @@ mod tests {
                 "- [?] #task Work [created::2026-07-10] #prj_is_blocked ^work"
             )
         );
-        // Closed lines are never edited; non-task lines return `None`.
+        // Closed lines and unconfigured statuses are never edited;
+        // non-task lines return `None`. The unconfigured `[>]` case
+        // fails if unknown statuses are treated as open.
         assert_eq!(
             apply_new_task_project_block(
                 "- [x] #task Done [created::2026-07-10] ^done",
@@ -569,7 +570,7 @@ mod tests {
         );
         assert_eq!(
             apply_new_task_project_block(
-                "- [>] #task Cancelled ^cancelled",
+                "- [>] #task Unknown status ^unknown",
                 &status_types,
             ),
             None

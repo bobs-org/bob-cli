@@ -697,9 +697,9 @@ fn reconcile_derives_project_blocking_tag_and_unblocked() {
     }
 }
 
-// PDR7: a `^prj` link to a task in its own note stays on the line and
-// never projects into `[dependsOn::]`; without a field naming it, it is
-// not a `project_internal_dependency` warning.
+// PDR7: an internal Depends-On line link stays on the line, never
+// projects into `[dependsOn::]`, and always warns once even without a
+// matching `[dependsOn::]` field.
 #[test]
 fn reconcile_keeps_prj_internal_links_unprojected() {
     let temp = TempDir::new("bob-cli-task-status-hooks-prj-internal");
@@ -734,15 +734,14 @@ fn reconcile_keeps_prj_internal_links_unprojected() {
     assert_success(&dry_run);
     let json: serde_json::Value =
         serde_json::from_str(stdout(&dry_run).trim()).unwrap();
-    assert!(
-        json["dependency_warnings"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|warning| warning["kind"] != "project_internal_dependency"),
-        "an unfielded internal link must not warn:\n{}",
-        stdout(&dry_run)
-    );
+    let internal_warnings = json["dependency_warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|warning| warning["kind"] == "project_internal_dependency")
+        .collect::<Vec<_>>();
+    assert_eq!(internal_warnings.len(), 1, "{}", stdout(&dry_run));
+    assert_eq!(internal_warnings[0]["path"], "proj.md");
     assert!(
         json["marked_blocked"].as_array().unwrap().is_empty(),
         "{}",
@@ -876,6 +875,59 @@ fn reconcile_ignores_terminal_projects() {
             .unwrap()
             .len(),
         1
+    );
+}
+
+// PDB4: a terminal project with an external open ^prj prerequisite is an
+// ordinary blocked task; its residents are not inherited-blocked and stale
+// project tags are removed.
+#[test]
+fn reconcile_terminal_project_prerequisite_does_not_block_residents() {
+    let temp = TempDir::new("bob-cli-task-status-hooks-pdb4-external");
+    let vault = temp.path().join("vault");
+    let daily = vault.join("2026/20260716.md");
+    let proj = vault.join("proj.md");
+    write_file(&daily, "## Pomodoros\n\n- [ ] Current (0900-0930)\n");
+    write_file(
+        &vault.join("prereq.md"),
+        "- [ ] #task External prerequisite [id:: prereq__open] ^open\n",
+    );
+    write_file(
+        &proj,
+        concat!(
+            "---\n",
+            "type: \"[[project]]\"\n",
+            "status: done\n",
+            "---\n",
+            "- [?] #task #prj Ship the thing [dependsOn:: prereq__open] ^prj\n",
+            "  - ⛓️ **DEPENDS ON:** [[prereq#^open]]\n",
+            "- [ ] #task Resident work #prj_is_blocked ^r1\n",
+        ),
+    );
+    write_blocked_tasks_settings(&vault);
+
+    let output = bob_command()
+        .args(["task", "reconcile"])
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("reconcile terminal project with external prerequisite");
+    assert_success(&output);
+    let contents = fs::read_to_string(&proj).expect("read reconciled project");
+    assert!(
+        contents.contains(
+            "- [?] #task #prj Ship the thing [dependsOn:: prereq__open] ^prj"
+        ),
+        "the terminal project's ^prj remains blocked by its own prerequisite:\n{contents}"
+    );
+    assert!(
+        contents.contains("- [ ] #task Resident work ^r1"),
+        "the resident must not inherit the terminal project's Blocked status:\n{contents}"
+    );
+    assert!(
+        !contents.contains("#prj_is_blocked"),
+        "the stale resident tag is stripped:\n{contents}"
     );
 }
 
@@ -1112,6 +1164,63 @@ fn reconcile_ignores_notes_with_two_open_prj_lines() {
         .unwrap()
         .iter()
         .all(|item| item["block_id"] != "r1"));
+    assert!(json["prj_is_blocked_tags_added"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+}
+
+// PDB6: two scheduled open ^prj tasks make the note unrecognised as a
+// project; both task schedules still block those tasks as ordinary tasks.
+#[test]
+fn reconcile_ignores_two_scheduled_prj_tasks() {
+    let temp = TempDir::new("bob-cli-task-status-hooks-pdb6-scheduled");
+    let vault = temp.path().join("vault");
+    let daily = vault.join("2026/20260716.md");
+    let proj = vault.join("proj.md");
+    write_file(&daily, "## Pomodoros\n\n- [ ] Current (0900-0930)\n");
+    write_file(
+        &proj,
+        concat!(
+            "---\n",
+            "type: \"[[project]]\"\n",
+            "status: wip\n",
+            "---\n",
+            "- [ ] #task #prj First [scheduled:: 2026-07-20] ^prj\n",
+            "- [ ] #task #prj Second [scheduled:: 2026-07-20] ^prj\n",
+            "- [ ] #task Resident work ^r1\n",
+        ),
+    );
+    write_blocked_tasks_settings(&vault);
+
+    let dry_run = bob_command()
+        .args(["task", "reconcile"])
+        .arg("--dry-run")
+        .arg("--format")
+        .arg("json")
+        .arg("--bob-dir")
+        .arg(&vault)
+        .env("BOB_DAY_FILE", &daily)
+        .output()
+        .expect("dry-run two scheduled ^prj tasks");
+    assert_success(&dry_run);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&dry_run).trim()).unwrap();
+    let blocked_prj = json["marked_blocked"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|item| item["path"] == "proj.md" && item["block_id"] == "prj")
+        .collect::<Vec<_>>();
+    assert_eq!(blocked_prj.len(), 2, "{}", stdout(&dry_run));
+    assert!(blocked_prj.iter().all(|item| {
+        item["reason_kinds"] == serde_json::json!(["local_schedule"])
+    }));
+    assert!(json["marked_blocked"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|item| { item["path"] != "proj.md" || item["block_id"] != "r1" }));
     assert!(json["prj_is_blocked_tags_added"]
         .as_array()
         .unwrap()

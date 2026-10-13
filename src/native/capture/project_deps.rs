@@ -318,7 +318,14 @@ mod tests {
             format!("---\ntype: [[project]]\nstatus: wip\n---\n{body}");
         let mut staged =
             contents.lines().map(str::to_string).collect::<Vec<_>>();
-        staged.insert(1, "\t- ⛓️ **DEPENDS ON:** [[job#^prep]]".to_string());
+        let prj_index = staged
+            .iter()
+            .position(|line| line.contains("^prj"))
+            .expect("project task line");
+        staged.insert(
+            prj_index + 1,
+            "\t- ⛓️ **DEPENDS ON:** [[job#^prep]]".to_string(),
+        );
         let staged_text = staged.join("\n");
         let staged_tasks =
             task_status_hooks::parse_tasks(&staged_text, &settings());

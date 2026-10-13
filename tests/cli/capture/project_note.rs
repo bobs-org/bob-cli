@@ -1042,6 +1042,7 @@ fn capture_project_note_task_links_need_the_day_file_only_for_links() {
     let day_file = vault.join("day.md");
     write_file(&vault.join("cash.md"), "---\ntype: \"[[area]]\"\n---\n");
     write_file(&day_file, "## Pomodoros\n- [ ] (1330-1400) Work\n");
+    write_blocked_tasks_settings(&vault);
     let input = concat!(
         "Body @cash^schedlink1+ s:2\n",
         "- Draft the memo :draft-memo\n",

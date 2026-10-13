@@ -19,9 +19,8 @@ use std::path::PathBuf;
 use chrono::NaiveDate;
 
 use super::super::{
-    capture_language::is_reserved_project_task_id,
     capture_task_toggle::set_task_line_status,
-    project_dependencies::blocking_open_dependency_ids,
+    project_dependencies::{blocking_open_dependency_ids, is_project_task_id},
     projects::edits::normalize_prj_is_blocked_tag,
     task_status_hooks::{
         parse_tasks, task_dependency_states, FileScan, TasksSettings,
@@ -117,7 +116,7 @@ where
             if task
                 .block_id
                 .as_deref()
-                .is_some_and(is_reserved_project_task_id)
+                .is_some_and(|id| is_project_task_id(Some(id)))
             {
                 recovering_projects.insert(file_index);
             }

@@ -17,7 +17,7 @@ use super::super::task_status_hooks::{
     canonical_daily_date, fenced_lines, logical_lines, FileScan, TaskLine,
 };
 
-fn is_prj_block_id(block_id: Option<&str>) -> bool {
+pub(crate) fn is_project_task_id(block_id: Option<&str>) -> bool {
     // Project recognition is exact. Capture reserves case-insensitive
     // look-alikes only to avoid minting confusing ids; `^PRJ` is still
     // an ordinary task everywhere that derives project behavior.
@@ -98,14 +98,14 @@ impl ProjectContext {
         self.recognised
             && task.status_recognized
             && task.status_type.is_open()
-            && !is_prj_block_id(task.block_id.as_deref())
+            && !is_project_task_id(task.block_id.as_deref())
             && !self.fenced.contains(&task.line_index)
     }
 }
 
 /// Whether `task` is an open `^prj` completion-criteria task.
 fn is_open_prj_task(task: &TaskLine, fenced: &BTreeSet<usize>) -> bool {
-    is_prj_block_id(task.block_id.as_deref())
+    is_project_task_id(task.block_id.as_deref())
         && task.status_recognized
         && task.status_type.is_open()
         && !fenced.contains(&task.line_index)
@@ -137,7 +137,7 @@ pub(crate) fn blocking_open_dependency_ids(
     task: &TaskLine,
     open_ids: &[String],
 ) -> Vec<String> {
-    if !is_prj_block_id(task.block_id.as_deref()) {
+    if !is_project_task_id(task.block_id.as_deref()) {
         return open_ids.to_vec();
     }
     let context = ProjectContext::for_note(file);

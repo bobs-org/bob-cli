@@ -435,9 +435,9 @@ pub(super) struct LinkGuardJson {
     pub(super) promoted: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) detail: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip)]
     pub(super) removed_pomodoro_links: Option<usize>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip)]
     pub(super) day_file: Option<String>,
 }
 

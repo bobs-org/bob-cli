@@ -547,9 +547,10 @@ impl ReconcileWorker<'_> {
 }
 
 impl ReconcileWorker<'_> {
-    /// PDR7: skip projecting a same-note `^prj` target, warning only if
-    /// its `[id::]` value is named in the dependent's field. Returns true
-    /// for every internal target so it stays off the live graph.
+    /// PDR7: skip projecting a same-note `^prj` target. Depends-On line
+    /// links always warn; legacy-child and field-adoption paths warn only
+    /// when the target's `[id::]` value is named in the field. Returns
+    /// true for every internal target so it stays off the live graph.
     fn warn_project_internal_target(
         &mut self,
         view: &TaskView<'_>,
@@ -557,31 +558,41 @@ impl ReconcileWorker<'_> {
         path: &Path,
         block: &str,
         target_id: Option<&str>,
+        warn_unfielded_line_link: bool,
     ) -> bool {
         if !is_open_project_task(view, files) || path != view.relative_path {
             return false;
         }
-        if let Some(target_id) = target_id.filter(|target_id| {
-            view.task
-                .depends_on
-                .iter()
-                .any(|field_id| field_id.as_str() == *target_id)
-        }) {
+        let warning_id = target_id
+            .map(str::to_string)
+            .or_else(|| task_dependencies::dependency_id(path, block).ok())
+            .unwrap_or_else(|| block.to_string());
+        let field_names_target = view
+            .task
+            .depends_on
+            .iter()
+            .any(|field_id| field_id == &warning_id);
+        if warn_unfielded_line_link || field_names_target {
             let warning_key = (
                 view.relative_path.to_path_buf(),
                 view.task.line_index,
-                target_id.to_string(),
+                warning_id.clone(),
             );
             if self.warned_project_internal.insert(warning_key) {
-                self.warn(
-                    view,
-                    "project_internal_dependency",
-                    &format!(
-                        "field id {target_id} names {}#^{} in the project's own note; kept, not projected",
+                let detail = if warn_unfielded_line_link {
+                    format!(
+                        "Depends-On link to {}#^{} is in the project's own note; kept, not projected",
                         display_path(path),
                         block
-                    ),
-                );
+                    )
+                } else {
+                    format!(
+                        "field id {warning_id} names {}#^{} in the project's own note; kept, not projected",
+                        display_path(path),
+                        block
+                    )
+                };
+                self.warn(view, "project_internal_dependency", &detail);
             }
         }
         true
@@ -704,6 +715,7 @@ impl ReconcileWorker<'_> {
                         &path,
                         &block,
                         id.as_deref(),
+                        false,
                     ) {
                         continue;
                     }
@@ -891,7 +903,7 @@ impl ReconcileWorker<'_> {
             let mut keep_verbatim = false;
             // PDR7: a `^prj` link to a task in its own note is a
             // guaranteed deadlock: kept on the line, never projected
-            // into `[dependsOn::]`, warned once per link.
+            // into `[dependsOn::]`, and always warned.
             if let LinkTarget::Task {
                 path, block, id, ..
             } = &link.resolved
@@ -904,6 +916,7 @@ impl ReconcileWorker<'_> {
                     &path,
                     &block,
                     id.as_deref(),
+                    true,
                 ) {
                     keep_verbatim = true;
                 }
@@ -1484,6 +1497,7 @@ impl ReconcileWorker<'_> {
                 &path,
                 &block,
                 Some(id),
+                false,
             ) {
                 continue;
             }

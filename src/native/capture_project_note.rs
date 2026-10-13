@@ -361,7 +361,7 @@ pub(crate) fn render_project_note(
             let open = input
                 .status_types
                 .get(&authored_status)
-                .is_none_or(|status_type| !status_type.is_terminal());
+                .is_some_and(|status_type| status_type.is_open());
             let task_status = if project_blocked && open {
                 '?'
             } else {
@@ -515,6 +515,7 @@ mod tests {
                 ('X', TaskStatusType::Done),
                 ('/', TaskStatusType::InProgress),
                 ('*', TaskStatusType::OnHold),
+                ('?', TaskStatusType::OnHold),
                 ('-', TaskStatusType::Cancelled),
                 ('>', TaskStatusType::Cancelled),
             ]),
@@ -876,6 +877,20 @@ mod tests {
         assert!(rendered.contents.contains(
             "- [?] #task Open work [created::2026-09-20] #prj_is_blocked\n"
         ));
+    }
+
+    #[test]
+    fn unconfigured_status_stays_authored_in_scheduled_project_note() {
+        pin_utc();
+        let sub_bullets =
+            vec![bullet("[!] Unknown status", AuthoredDepth::First)];
+        let mut input = base_input(&sub_bullets);
+        input.scheduled = Some("2026-09-22");
+        let rendered = render_project_note(&input);
+        assert!(rendered
+            .contents
+            .contains("- [!] #task Unknown status [created::2026-09-20]\n"));
+        assert!(!rendered.contents.contains("#prj_is_blocked"));
     }
 
     #[test]

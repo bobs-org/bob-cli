@@ -957,13 +957,18 @@ pre-image `pomodoro_link_source` (only when a link existed), post-image
 inserted or moved), and the exact `pomodoro_start` object `pomodoro_task`
 uses (only with `=<X>`). It emits no `toggle_direction`/`toggle_behavior`.
 When the guard consumes the gesture, JSON uses the additive kind
-`"link_guard"`, omits link-only fields such as `block_link`, `day_file`, and
-`pomodoro_link_action`, and reports `link_guard` (`reasons`, `promoted`,
-`detail`). This neutral kind lets older clients show a generic preview instead
-of a false link confirmation; newer clients can render the guard details.
-Any live links removed from today's open Pomodoros appear in the batch-level
-`pomodoro_blocks` diff. Human output reports the guard detail without a link
-confirmation. Successful human output follows the Ensure Next style: a `link`/`would link` or
+`"link_guard"`, omits `block_link`, `creates_pomodoro`,
+`pomodoro_link_action` and its endpoints, `pomodoro_link_placement`, and
+`pomodoro_name`, and reports `link_guard` (`reasons`, `promoted`, `detail`).
+When existing live links are removed, top-level `removed_pomodoro_links` and
+`day_file` report the cleanup; neither field is copied into the nested
+`link_guard` object. With no cleanup, both fields are omitted. This neutral
+kind lets older clients show a generic preview instead of a false link
+confirmation; newer clients can render the guard details. Any live links
+removed from today's open Pomodoros appear in the batch-level `pomodoro_blocks`
+diff. Human output says `not linked` and reports the guard detail without a
+generic capture confirmation. Successful human output follows the Ensure Next
+style: a `link`/`would link` or
 `start`/`would start` header, a status line (`[ ] → [*]`, `[*] already
 Next`, `[/] stays In Progress`), a ledger line (`Linked … under BUGS`,
 `Moved Task Link BUGS → FOCUS (created FOCUS)`, `Task Link already in
@@ -3103,8 +3108,9 @@ When the sole link is already under the selected destination, the daily file
 is left byte-for-byte unchanged. The task-side plan is independent: a Ready
 or Blocked status still becomes Next and a single future schedule is still
 retired when an existing Schedule Log is present — unless the §13.5 link
-guard finds the target Blocked, in which case neither the task line nor the
-ledger changes, the open prerequisites rise, and the result reports
+guard finds the target Blocked, in which case the task line stays unchanged,
+any existing live links to that task are removed from today's open ledger,
+the open prerequisites rise, and the result reports
 `link_guard` (human output prints `stays <Status>` plus the guard sentence). An already-Next task whose
 link is already at the destination is a true no-op. When relocation is
 needed, Bob moves the dedicated link bullet and its complete descendant
@@ -3433,19 +3439,24 @@ any Pomodoro a link-direction toggle insert or unlink cleanup touches — also
 appears in the batch-level `pomodoro_blocks` array;
 see [Pomodoro blocks](#pomodoro-blocks).
 
-When the link guard consumes a link, Ensure Next, or link-then-close gesture,
-`link_guard` describes why the target stayed unlinked and which prerequisites
-rose. For `@route+block-id!`, the result omits `toggle_direction`,
-`block_link`, `creates_pomodoro`, `pomodoro_already_linked`,
-`pomodoro_selector_unused`, and insertion-specific placement/name/action
-fields. For Ensure Next it keeps `toggle_behavior: "ensure_next"` but omits
-`pomodoro_link_action` and source/destination endpoints. Link-then-close
-keeps its close summary and omits `block_link` and `pomodoro_link_action`
-when the guard consumes the link. The standalone `@route:id` guard uses kind
-`"link_guard"`, so older clients render it neutrally instead of claiming a
-link succeeded. Whenever consumption removes live links,
-`removed_pomodoro_links`, `day_file`, and the batch-level `pomodoro_blocks`
-diff report that cleanup.
+When the link guard consumes a link or Ensure Next gesture, `link_guard`
+describes why the target stayed unlinked and which prerequisites rose. For
+`@route+block-id!`, the result omits `toggle_direction`, `block_link`,
+`creates_pomodoro`, `pomodoro_already_linked`, `pomodoro_selector_unused`,
+`pomodoro_link_placement`, `pomodoro_name`, `pomodoro_link_action`, and the
+source/destination endpoints. Ensure Next keeps
+`toggle_behavior: "ensure_next"` and omits the same insertion-only fields,
+including `pomodoro_link_action` and its source/destination endpoints. For
+both forms, `removed_pomodoro_links` and `day_file` report any cleanup at the
+top level and are absent from the nested `link_guard` object.
+
+Link-then-close is different: its Task Link lands under the Pomodoro being
+closed as history, so the result retains both `block_link` and
+`pomodoro_link_action` even when the task-side link guard reports a blocked
+target. The standalone `@route:id` guard uses kind `"link_guard"`, so older
+clients render it neutrally instead of claiming a link succeeded. Whenever
+consumption removes live links, the top-level `removed_pomodoro_links`,
+`day_file`, and batch-level `pomodoro_blocks` diff report that cleanup.
 
 Task-complete results use kind `"task_complete"` with `placement:
 "completed"`, `routed: true`, `route: null`, and `text: ""`.

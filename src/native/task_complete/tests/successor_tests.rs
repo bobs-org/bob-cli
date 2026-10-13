@@ -317,6 +317,41 @@ fn sl11_project_and_hidden_tasks_recover_only() {
     assert!(plan.new_day_text.is_none());
 }
 
+// A case variant of `^prj` is an ordinary task. Closing its prerequisite
+// recovers and links it as a normal successor (the matcher is exact).
+#[test]
+fn uppercase_prj_lookalike_links_as_ordinary_successor() {
+    let vault_index = index(&["sase.md", "20261005.md"]);
+    let day =
+        concat!("## Pomodoros\n", "- [ ] () — FIX\n", "  - [[sase#^p]]\n",);
+    let plan = run(
+        vec![pred("sase.md", "p", "p", "Prerequisite", true)],
+        &[(
+            "sase.md",
+            concat!(
+                "- [x] #task Prerequisite [id:: p] ^p\n",
+                "- [?] #task Ordinary task [dependsOn:: p] [id:: ordinary] ^PRJ\n",
+            ),
+        )],
+        Some(day),
+        "20261005.md",
+        true,
+        &vault_index,
+    );
+    let row = plan
+        .unblocked
+        .iter()
+        .find(|row| row.block_id == "PRJ")
+        .expect("ordinary ^PRJ successor recovered");
+    assert_eq!(row.not_linked, None);
+    assert!(row.link.is_some());
+    assert_eq!(row.status_symbol, '*');
+    assert!(plan
+        .new_day_text
+        .as_deref()
+        .is_some_and(|text| text.contains("[[sase#^PRJ]]")));
+}
+
 // SL12: one gesture closes P1 and P2; D depends on both. D links once,
 // after the earlier anchor, naming both predecessors.
 #[test]

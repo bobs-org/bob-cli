@@ -19,7 +19,8 @@ use super::super::capture_dependency_tasks::has_hide_tag;
 use super::super::freshness::placement::{mark_unblocked, UnblockScope};
 use super::super::project_dependencies::{
     blocking_open_dependency_ids, filter_internal_project_ids,
-    project_block_reasons, ProjectBlockReasons, ProjectContext,
+    is_project_task_id, project_block_reasons, ProjectBlockReasons,
+    ProjectContext,
 };
 use super::super::projects::edits::normalize_prj_is_blocked_tag;
 use super::super::task_status_hooks::{
@@ -113,8 +114,6 @@ pub(crate) fn recovered_unblocked_project_files(
     project_states: &ProjectCloseStates,
 ) -> Vec<usize> {
     use super::successors::VerdictKind;
-    use crate::native::capture_language::is_reserved_project_task_id;
-
     let mut files_out = Vec::new();
     for verdict in verdicts {
         if !matches!(verdict.kind, VerdictKind::Recover(_)) {
@@ -129,7 +128,7 @@ pub(crate) fn recovered_unblocked_project_files(
         if !task
             .block_id
             .as_deref()
-            .is_some_and(is_reserved_project_task_id)
+            .is_some_and(|id| is_project_task_id(Some(id)))
         {
             continue;
         }
@@ -160,8 +159,6 @@ pub(crate) fn recover_project_members(
     today: NaiveDate,
 ) {
     use super::successors::VerdictKind;
-    use crate::native::capture_language::is_reserved_project_task_id;
-
     let recovering: Vec<(usize, Vec<usize>)> = verdicts
         .iter()
         .filter(|verdict| {
@@ -170,7 +167,7 @@ pub(crate) fn recover_project_members(
                     .get(verdict.file)
                     .and_then(|file| file.tasks.get(verdict.task))
                     .and_then(|task| task.block_id.as_deref())
-                    .is_some_and(is_reserved_project_task_id)
+                    .is_some_and(|id| is_project_task_id(Some(id)))
         })
         .map(|verdict| (verdict.file, verdict.preds.clone()))
         .collect();

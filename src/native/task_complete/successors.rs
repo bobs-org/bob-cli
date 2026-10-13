@@ -19,14 +19,13 @@ use chrono::NaiveDate;
 use super::super::freshness::placement::UnblockScope;
 use super::super::{
     capture_block_ids::mint_block_id,
-    capture_language::is_reserved_project_task_id,
     capture_pomodoros,
     capture_task_toggle::set_task_line_status,
     collect_done::block_ids_in_markdown,
     note_tasks::clean_description,
     note_tasks::NoteTaskSettings,
     pomodoro::pomodoros_section_range,
-    project_dependencies::blocking_open_dependency_ids,
+    project_dependencies::{blocking_open_dependency_ids, is_project_task_id},
     projects::edits::normalize_prj_is_blocked_tag,
     task_dependencies::format::canonical_link,
     task_status_hooks::{
@@ -605,7 +604,7 @@ pub(crate) fn plan_successors(input: SuccessorInput) -> SuccessorPlan {
             } else if task
                 .block_id
                 .as_deref()
-                .is_some_and(is_reserved_project_task_id)
+                .is_some_and(|id| is_project_task_id(Some(id)))
             {
                 VerdictKind::Recover("project_task")
             } else if has_hide_tag(&raw_task_line(
