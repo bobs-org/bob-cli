@@ -199,8 +199,8 @@ and no R2 exception.
   today's open Pomodoros. A gesture that would create or keep such a
   link promotes the task's open prerequisites (own plus inherited)
   along those edges and then drops the link, except the own-schedule
-  pull-forward in §13. `bob task reconcile` does the same for stale
-  links.
+  pull-forward in §13 and capture's own-prerequisite drop in §13.5.
+  `bob task reconcile` does the same for stale links.
 - **Not edges:** `#^ref` embeds and archived targets.
 - **Closing.** Closing a dependent **never** closes its prerequisites.
   Embedded-tree closes in capture `=x` and the cycler ignore

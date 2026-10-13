@@ -351,7 +351,7 @@ typed on that same item. The whole batch is planned before anything is written.
 | `@route:id#pomodoro` | Same, linked under a matching named open Pomodoro or a new named future Pomodoro |
 | `@route:id=<X>` | Same, and atomically start the session; `<X>` mirrors the `se<X>` snippet (empty is 25 minutes) |
 | `@route:id#pomodoro=<X>` | Same under the named Pomodoro, starting that session |
-| `@route:id[#pomodoro][=<X>]` with no other text | Link the existing task into today's ledger (no new task); `=<X>` starts the resolved session |
+| `@route:id[#pomodoro][=<X>]` with no other text | Link the existing task into today's ledger (no new task); a task Blocked only by its own prerequisites drops them first; `=<X>` starts the resolved session |
 | `^route:id[#pomodoro][=<X>]` with no other text | Identical execution; `^` completes only In Progress and Next tasks |
 | `:<query>` with no other text | Task-link picker over Ready, Blocked, Next, and In Progress tasks in routable inbox, area, and non-terminal project notes; accepting an identified task inserts `@route:id`; the query itself cannot be captured |
 | `+query` or terminal prose `+` | Parent-task picker over the same task catalog; accepting inserts `@route+id` |
@@ -370,7 +370,7 @@ typed on that same item. The whole batch is planned before anything is written.
 | `=*` / `=!` (also `=x*` / `=x!`) | Close parking/completing every numbered Task Link; an empty `*` or `!` selects the remainder after explicit assignments (`=*!2` parks all except task 2 and completes task 2) |
 | `=x [<n>] <entry>` | One Work Log entry on the close line (`=x wired the lexer` logs to task 1, `=x1,3 3 fixed the flake` logs to task 3) |
 | `+2 =x`, `=x =`, `=x =#bugs`, `=x =~2`, `=x wired the lexer =` | Same-line session-operator chain: whitespace-separated session tokens on one line run left to right like blank-line items (`=x =~2` closes then starts without link 2; `=x wired the lexer =` closes with the entry then starts) |
-| `@route:id=x…` / `^route:id=x…` with no other text | Put that existing task into the running session, then close it; numbers refer to the post-link lineup |
+| `@route:id=x…` / `^route:id=x…` with no other text | Put that existing task into the running session, then close it (own-prerequisite Blocked targets drop those links first); numbers refer to the post-link lineup |
 | `<text> @route:id=x…` | Create the new task in the running session, then close it |
 | `@route^id+` | New project note `<route>_<id>.md`; the daily note and the parent note are left unchanged |
 | `@route^id+#pomodoro` | Same, picking the Pomodoro that ` :<task-id>` Task Links go under (named open Pomodoro or new named future Pomodoro) |
@@ -379,9 +379,9 @@ typed on that same item. The whole batch is planned before anything is written.
 | `@route:id+` | Retired project-note spelling; use `@route^id+` instead |
 | `@route+id` | Child bullet under an existing task |
 | `@route+id#section` | Child bullet under an ALL-CAPS section of that task |
-| `@route+id` with no other text | Ensure the task is Next and relocate its existing open-Pomodoro Task Link to today's current/next Pomodoro |
-| `@route+id#pomodoro` with no other text | Ensure Next and move that existing Task Link to the named Pomodoro, creating the named future Pomodoro if needed |
-| `@route+id!` with no other text | Toggle that task's Pomodoro Task Link: link it when unlinked (Ready/Blocked rise to Next) or unlink it when linked (lane unchanged) |
+| `@route+id` with no other text | Ensure the task is Next and relocate its existing open-Pomodoro Task Link to today's current/next Pomodoro; a task Blocked only by its own prerequisites drops them first |
+| `@route+id#pomodoro` with no other text | Ensure Next and move that existing Task Link to the named Pomodoro, creating the named future Pomodoro if needed; a task Blocked only by its own prerequisites drops them first |
+| `@route+id!` with no other text | Toggle that task's Pomodoro Task Link: link it when unlinked (Ready and own-prerequisite Blocked rise to Next; other Blocked stay unlinked) or unlink it when linked (lane unchanged) |
 | trailing `#` | Plain-text note on a Pomodoro (no `@route`) |
 | `s:<N>` | Schedule N days from today; checkbox-bearing captures start Blocked, including `s:0` |
 | `p:<N>` | Write priority level N and roll a scheduled date, so checkbox-bearing captures start Blocked |
@@ -411,20 +411,22 @@ stays part of the name. Route names may contain letters, digits, `_`, and `-`.
 Block IDs may contain letters, digits, and `-`.
 
 A bare `@route+id` marker-only capture is the default Ensure Next operation:
-Ready `[ ]`, Blocked `[?]`, In Progress `[/]`, and Next `[*]` all end as Next,
-and Bob moves the task's single existing open-Pomodoro Task Link subtree to the
-implicit current/next open Pomodoro. `@route+id#pomodoro` is the same Ensure
+Ready `[ ]`, a task Blocked `[?]` only by its own open prerequisites, In
+Progress `[/]`, and Next `[*]` all end as Next, and Bob moves the task's
+single existing open-Pomodoro Task Link subtree to the implicit current/next
+open Pomodoro. A project-blocked or `^prj` target stays unlinked. `@route+id#pomodoro` is the same Ensure
 Next operation targeting a named open Pomodoro, or creating that named future
 Pomodoro when no open match exists. Neither unsuffixed form toggles Next back
 to Ready or creates a missing link. Repeating the request when the task is
 already Next and the link is already at the destination is a no-op.
 
 Use `@route+id!` to toggle the Pomodoro Task Link itself: an unlinked Ready
-`[ ]` or Blocked `[?]` task becomes Next `[*]` and gets `[[route#^id]]` under
-the implicit current/next open Pomodoro; an unlinked Next `[*]` or In Progress
-`[/]` task links with its status unchanged; a linked task of any open status
-unlinks every matching link under every open Pomodoro with its status
-unchanged. `!` cannot be combined with `#pomodoro`. Future schedules are retired
+`[ ]` task, or a Blocked `[?]` task whose own open prerequisites capture can
+drop, becomes Next `[*]` and gets `[[route#^id]]` under the implicit
+current/next open Pomodoro; other Blocked targets stay unlinked. An unlinked
+Next `[*]` or In Progress `[/]` task links with its status unchanged; a
+linked task of any open status unlinks every matching link under every open
+Pomodoro with its status unchanged. `!` cannot be combined with `#pomodoro`. Future schedules are retired
 only when the link direction sets the task to Next and the task has exactly one
 valid future `[scheduled::YYYY-MM-DD]`, and
 a Schedule Log entry is written only if the task already has that log. Done,

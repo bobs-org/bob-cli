@@ -11,7 +11,9 @@ summary:
   open Pomodoros."
 metadata:
   status: superseded-in-part
-  superseded_by: decisions:subprojects-inherit-project-blocking
+  superseded_by:
+    - decisions:subprojects-inherit-project-blocking
+    - decisions:capture-link-drops-blocking-deps
   decided: 2026-10-12
 ---
 
@@ -81,4 +83,4 @@ the R9 carve-out.
 cascade or re-linking on unblock; a projects-by-date Properties/Bases
 view is needed.
 
-Superseded in part: residence-only blocking remains for each project’s own residents; sub-project descendants now inherit blocked ancestor reasons — see [[decisions:subprojects-inherit-project-blocking]].
+Superseded in part: residence-only blocking remains for each project’s own residents; sub-project descendants now inherit blocked ancestor reasons — see [[decisions:subprojects-inherit-project-blocking]]. Capture link gestures on a task blocked only by its own prerequisites now drop them and link ([[decisions:capture-link-drops-blocking-deps]]).

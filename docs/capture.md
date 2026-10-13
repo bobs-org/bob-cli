@@ -79,7 +79,7 @@ anything is written, and any failure rolls the whole batch back.
 | `@route:block-id#pomodoro` | Same, linked under a matching named open Pomodoro or a new named future Pomodoro |
 | `@route:block-id=<X>` | Same, and atomically start the selected session; `<X>` mirrors the `se<X>` snippet (empty is 25 minutes) |
 | `@route:block-id#pomodoro=<X>` | Same under the named Pomodoro, starting that session |
-| `@route:block-id[#pomodoro][=<X>]` with no other text | Link the existing `^block-id` task in `route.md` into today's ledger (no new task); `=<X>` starts the resolved session atomically |
+| `@route:block-id[#pomodoro][=<X>]` with no other text | Link the existing `^block-id` task in `route.md` into today's ledger (no new task); a task Blocked only by its own prerequisites drops them first; `=<X>` starts the resolved session atomically |
 | `^route:block-id[#pomodoro][=<X>]` with no other text | Identical execution; `^` is the active-task spelling and completes In Progress and Next tasks |
 | `:<query>` | Incomplete: pick any open task to link (`capture-parse` needs `task_link`); accepting inserts `@route:block-id`, and execution never captures it |
 | `/<query>` | Incomplete: pick any open task to open in Obsidian (`capture-parse` needs `task_goto`); accepting opens the task, and execution never captures it |
@@ -105,7 +105,7 @@ anything is written, and any failure rolls the whole batch back.
 | `=x` + `- [<n>] <text>` (+ `  - <detail>`) | Several entries while closing: bullets are numbered all or none — a numbered bullet logs its text to worked task `<n>`, while unnumbered bullets log in order to the close's worked tasks (one worked task takes them all, otherwise bullet `i` logs to worked task `i`); a two-space bullet nests an undated detail under its entry; an inline entry plus bullets fails |
 | `+2 =x`, `=x =`, `=x =#bugs`, `=x =~2`, `=x wired the lexer =` | Same-line session-operator chain: whitespace-separated session tokens on one line run left to right exactly like blank-line items; an inline entry sits right after its close with operators trailing (`=x wired the lexer =` closes with the entry then starts); `=x =~2` closes then starts without link 2 of the next lineup, while `=x~2 =` drops link 2 of the running session and then starts |
 | `=x =` + `- 1 wired the lexer` | Close with a Work Log bullet in a chain: the child lines attach to the line's `=x`, so this logs the entry then starts the next session |
-| `@route:block-id=x…` with no other text | Put that existing task into the running session, then close it; the same selection may follow the `x` and numbers refer to the post-link lineup |
+| `@route:block-id=x…` with no other text | Put that existing task into the running session, then close it (own-prerequisite Blocked targets drop those links first; a refused drop keeps today's history link); the same selection may follow the `x` and numbers refer to the post-link lineup |
 | `^route:block-id=x…` with no other text | Identical execution; `^` is the active-task spelling |
 | `<text> @route:block-id=x…` | Create the new Pomodoro-linked task in the running session, then close it; numbers refer to the post-link lineup |
 | `@route^block-id+` | Create the project note `<route>_<block_id>.md`; the `^prj` task is never linked and the daily note is untouched |
@@ -114,9 +114,9 @@ anything is written, and any failure rolls the whole batch back.
 | `- <task> ^<task-id>` (project-note bullet) | Name the task only: `- [ ] #task <task> [created::DATE] ^<task-id>` |
 | `@route+block-id` | Ordinary child bullet under an existing task |
 | `@route+block-id#section` | Child bullet under an ALL-CAPS section of that task |
-| `@route+block-id` with no other text | Ensure the task is Next and relocate its existing open-Pomodoro Task Link to today's implicit current/next Pomodoro |
-| `@route+block-id#pomodoro` with no other text | Ensure Next and move that existing Task Link subtree to the named open Pomodoro, or create that named future Pomodoro and move the subtree there |
-| `@route+block-id!` with no other text | Toggle that task's Pomodoro Task Link: link it when unlinked (Ready/Blocked rise to Next) or unlink it when linked (lane unchanged) |
+| `@route+block-id` with no other text | Ensure the task is Next and relocate its existing open-Pomodoro Task Link to today's implicit current/next Pomodoro; a task Blocked only by its own prerequisites drops them first |
+| `@route+block-id#pomodoro` with no other text | Ensure Next and move that existing Task Link subtree to the named open Pomodoro, or create that named future Pomodoro and move the subtree there; a task Blocked only by its own prerequisites drops them first |
+| `@route+block-id!` with no other text | Toggle that task's Pomodoro Task Link: link it when unlinked (Ready and own-prerequisite Blocked rise to Next; other Blocked stay unlinked) or unlink it when linked (lane unchanged) |
 | trailing bare `#` | Plain-text note on a Pomodoro (not a routed task) |
 | `s:<N>` | `[scheduled::]` N days from today; checkbox-bearing captures start Blocked (`[?]`) |
 | `p:<N>` | Write priority level N and roll a scheduled date in that level's window |
@@ -3170,8 +3170,10 @@ child bullets with `task toggle capture cannot have authored child bullets`.
 
 The marker-only `@route+block-id` and `@route+block-id#pomodoro` forms are
 Ensure Next operations. Ready `[ ]`, Blocked `[?]`, In Progress `[/]`, and
-Next `[*]` are eligible: Ready and Blocked rise to Next while Next and In
-Progress keep their lane. Like the `!` link direction, Ensure Next stamps
+Next `[*]` are eligible: Ready and a task Blocked only by its own
+prerequisites rise to Next after a §13.5.1 drop, while Next and In
+Progress keep their lane. Other Blocked targets stay unlinked (see the
+link-guard paragraph below). Like the `!` link direction, Ensure Next stamps
 `[fresh:: TODAY]` whenever it rewrites the task line (see `docs/freshness.md`). Done, canceled, unknown, missing,
 non-task, and duplicate-ID targets keep actionable errors. This default
 reverses the initial `!` implementation: use the unsuffixed forms for
@@ -3232,10 +3234,12 @@ A terminal `!` on the same marker-only shape, `@route+block-id!`, opts into
 the link-presence toggle. It is accepted only as the final byte of that
 exact marker: not on `@route+id#name`, `@@route+id`, body-bearing items,
 authored children, clipboard, schedule, priority, or forced destination flags.
-Ordinary `!` in capture prose stays literal. An unlinked Ready `[ ]` or
-Blocked `[?]` task becomes Next `[*]` and uses the existing link-insertion
-path; an unlinked Next `[*]` or In Progress `[/]` task links with its status
-unchanged; a linked task of any open status unlinks with its status unchanged.
+Ordinary `!` in capture prose stays literal. An unlinked Ready `[ ]` task,
+or a Blocked `[?]` task whose own open prerequisites §13.5.1 can drop,
+becomes Next `[*]` and uses the existing link-insertion path; other Blocked
+targets stay unlinked. An unlinked Next `[*]` or In Progress `[/]` task
+links with its status unchanged; a linked task of any open status unlinks
+with its status unchanged.
 Done, canceled, and unknown states keep the normal toggle errors.
 
 Human output says `would toggle` / `toggled` and prints a link summary:

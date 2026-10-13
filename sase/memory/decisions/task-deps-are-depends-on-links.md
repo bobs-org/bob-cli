@@ -9,7 +9,8 @@ summary:
   Depends-On first-child line; that line is the source of truth and the
   [dependsOn::] / [id::] fields are derived from it."
 metadata:
-  status: accepted
+  status: superseded-in-part
+  superseded_by: decisions:capture-link-drops-blocking-deps
   decided: 2026-10-02
 ---
 
@@ -72,3 +73,7 @@ vault migration `66c6d47c`; fix epic `bob-cli-3n.12`
 (hooks-docs-cleanup); bob-plugins `3ffa187` (nav-writer-fix), `330fc58`
 (chips-compat-fix), `f78ffad` (nav-mirror-gestures), `40e2e3a`
 (nav-stage-polish).
+
+Linking a dependency-blocked dependent from capture drops its open
+prerequisites instead of raising them
+([[decisions:capture-link-drops-blocking-deps]]).
