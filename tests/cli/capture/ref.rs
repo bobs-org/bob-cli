@@ -89,20 +89,41 @@ fn write_article_curl(dir: &std::path::Path) -> std::path::PathBuf {
     path
 }
 
-fn write_fake_listen(dir: &std::path::Path) -> std::path::PathBuf {
-    let path = dir.join("fake-listen.sh");
+/// Fake `sase listen render` for capture-queued listen jobs.
+///
+/// The launcher is SASE-only (`highlights_ref::listen`): a raw script path
+/// is rejected before the worker runs. `PATH` must scope to the returned
+/// bin dir. `FAKE_LISTEN_EXIT` overrides the exit code.
+fn setup_fake_listen_sase(temp: &TempDir) -> (std::path::PathBuf, String) {
+    let bin = temp.path().join("fake-sase-bin");
+    fs::create_dir_all(&bin).expect("create fake sase bin");
+    let log = temp.path().join("listen.log");
     write_executable(
-        &path,
-        r##"#!/bin/sh
+        &bin.join("sase"),
+        r#"#!/bin/sh
 echo "$@" >> "$FAKE_LISTEN_LOG"
+if [ "$1" != "listen" ] || [ "$2" != "render" ]; then
+  echo "bad-launcher:$1:$2" >> "$FAKE_LISTEN_LOG"
+  exit 99
+fi
+shift 2
 for arg in "$@"; do
   case "$arg" in
-    *.mp3) printf 'ID3 fake companion audio' > "$arg" ;;
+    *.mp3)
+      if [ -z "$FAKE_LISTEN_NO_AUDIO" ]; then
+        printf 'ID3 fake companion audio' > "$arg"
+      fi
+      ;;
   esac
 done
-"##,
+exit "${FAKE_LISTEN_EXIT:-0}"
+"#,
     );
-    path
+    (log, path_with_prefix(&bin))
+}
+
+fn listen_command() -> &'static str {
+    "sase listen render {target} -o {audio}"
 }
 
 #[test]
@@ -905,16 +926,14 @@ fn percent_listen_reference_runs_existing_worker_and_installs_audio() {
     fs::create_dir_all(&vault).expect("create vault");
     let fake = FakeClip::new(&temp, "fake");
     let curl = write_article_curl(temp.path());
-    let listen = write_fake_listen(temp.path());
-    let listen_log = temp.path().join("listen.log");
+    let (listen_log, listen_path) = setup_fake_listen_sase(&temp);
     let url = format!("{ARTICLE_URL} %");
-    let listen_command =
-        format!("{} {{target}} -o {{audio}}", path_str(&listen));
 
     let output = capture(&temp, &vault, &["-f", "json", url.as_str()])
         .env("BOB_HIGHLIGHTS_CURL", &curl)
         .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
-        .env("BOB_HIGHLIGHTS_LISTEN_COMMAND", &listen_command)
+        .env("BOB_HIGHLIGHTS_LISTEN_COMMAND", listen_command())
+        .env("PATH", &listen_path)
         .env("FAKE_LISTEN_LOG", &listen_log)
         .env("BOB_REF_JOBS_KICK", "off")
         .output()
@@ -933,7 +952,8 @@ fn percent_listen_reference_runs_existing_worker_and_installs_audio() {
         .env("BOB_DIR", &vault)
         .env("BOB_HIGHLIGHTS_CURL", &curl)
         .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
-        .env("BOB_HIGHLIGHTS_LISTEN_COMMAND", &listen_command)
+        .env("BOB_HIGHLIGHTS_LISTEN_COMMAND", listen_command())
+        .env("PATH", &listen_path)
         .env("FAKE_LISTEN_LOG", &listen_log)
         .output()
         .expect("drain listen reference job");
@@ -954,20 +974,14 @@ fn failed_percent_listen_worker_keeps_listen_retry_guidance() {
     fs::create_dir_all(&vault).expect("create vault");
     let fake = FakeClip::new(&temp, "fake");
     let curl = write_article_curl(temp.path());
-    let listen = temp.path().join("failing-listen.sh");
-    let listen_log = temp.path().join("listen.log");
-    write_executable(
-        &listen,
-        "#!/bin/sh\necho \"$@\" >> \"$FAKE_LISTEN_LOG\"\necho narration failed >&2\nexit 4\n",
-    );
-    let listen_command =
-        format!("{} {{target}} -o {{audio}}", path_str(&listen));
+    let (listen_log, listen_path) = setup_fake_listen_sase(&temp);
 
     let output =
         capture(&temp, &vault, &["-f", "json", "https://example.com/post %"])
             .env("BOB_HIGHLIGHTS_CURL", &curl)
             .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
-            .env("BOB_HIGHLIGHTS_LISTEN_COMMAND", &listen_command)
+            .env("BOB_HIGHLIGHTS_LISTEN_COMMAND", listen_command())
+            .env("PATH", &listen_path)
             .env("FAKE_LISTEN_LOG", &listen_log)
             .env("BOB_REF_JOBS_KICK", "off")
             .output()
@@ -983,8 +997,10 @@ fn failed_percent_listen_worker_keeps_listen_retry_guidance() {
         .env("BOB_DIR", &vault)
         .env("BOB_HIGHLIGHTS_CURL", &curl)
         .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
-        .env("BOB_HIGHLIGHTS_LISTEN_COMMAND", &listen_command)
+        .env("BOB_HIGHLIGHTS_LISTEN_COMMAND", listen_command())
+        .env("PATH", &listen_path)
         .env("FAKE_LISTEN_LOG", &listen_log)
+        .env("FAKE_LISTEN_EXIT", "4")
         .output()
         .expect("run failing listen job");
     assert_success(&output);

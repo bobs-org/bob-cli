@@ -5,8 +5,9 @@
 
 use super::super::super::vault_links::NoteIndex;
 use super::super::successors::{
-    insert_successor_links, plan_successors, CompletedTask, SuccessorInput,
-    SuccessorPlacement, SuccessorTarget,
+    insert_successor_links, plan_successors, CompletedTask, EntryRole,
+    OfferGroup, SuccessorInput, SuccessorPlacement, SuccessorSelection,
+    SuccessorTarget,
 };
 use super::*;
 
@@ -42,6 +43,26 @@ fn run(
     link_unblocked: bool,
     index: &NoteIndex,
 ) -> super::super::successors::SuccessorPlan {
+    run_sel(
+        completed,
+        snapshot,
+        pre_day,
+        day_relative,
+        link_unblocked,
+        index,
+        SuccessorSelection::All,
+    )
+}
+
+fn run_sel(
+    completed: Vec<CompletedTask>,
+    snapshot: &[(&str, &str)],
+    pre_day: Option<&str>,
+    day_relative: &str,
+    link_unblocked: bool,
+    index: &NoteIndex,
+    selection: SuccessorSelection,
+) -> super::super::successors::SuccessorPlan {
     let settings = test_settings();
     plan_successors(SuccessorInput {
         completed,
@@ -58,6 +79,7 @@ fn run(
         tasks_settings: &settings,
         note_settings: &settings,
         link_unblocked,
+        selection,
         index,
     })
 }
@@ -111,7 +133,7 @@ fn sl1_links_blocked_dependent_into_slot() {
         .get(&PathBuf::from("sase.md"))
         .expect("sase.md changed");
     assert!(updated.contains(
-        "- [*] #task Relaunch [dependsOn:: fix-apollo] [id:: relaunch] ^relaunch"
+        "- [*] #task Relaunch [fresh:: 2026-10-05] [dependsOn:: fix-apollo] [id:: relaunch] ^relaunch"
     ));
     let day = plan.new_day_text.expect("day changed");
     assert!(day.contains("  - [[sase#^relaunch]]\n"));
@@ -226,10 +248,11 @@ fn sl6_struck_history_does_not_count_as_planned() {
     assert!(plan.unblocked[0].link.is_some());
 }
 
-// SL9: with no live link today the dependent recovers to Ready and the
-// ledger is untouched.
+// SL9 / SO14: with no live link today the dependent is offered at the
+// implicit destination (CAPTURE: one open timed entry). Select-all
+// links it as an entry child (`fallback: true`).
 #[test]
-fn sl9_unplanned_predecessor_recovers_without_link() {
+fn sl9_unplanned_predecessor_links_at_implicit_destination() {
     let vault_index = index(&["sase.md", "20261005.md"]);
     let plan = run(
         vec![pred("sase.md", "fix-apollo", "fix-apollo", "Fix apollo", true)],
@@ -248,8 +271,77 @@ fn sl9_unplanned_predecessor_recovers_without_link() {
     assert_eq!(plan.unblocked.len(), 1);
     let row = &plan.unblocked[0];
     assert_eq!(row.previous_status_symbol, '?');
+    assert_eq!(row.status_symbol, '*');
+    assert_eq!(row.not_linked, None);
+    let offer = row.offer.as_ref().expect("implicit offer");
+    assert_eq!(offer.group, OfferGroup::HandOff);
+    assert_eq!(offer.destination.entry_name, "CAPTURE");
+    assert_eq!(offer.destination.entry_role, EntryRole::Implicit);
+    assert!(offer.destination.fallback);
+    assert!(offer.selected);
+    let link = row.link.as_ref().expect("linked");
+    assert_eq!(link.entry_name, "CAPTURE");
+    assert!(!link.entry_created);
+    let day = plan.new_day_text.expect("day changed");
+    assert!(day.contains("[[sase#^relaunch]]"), "{day}");
+}
+
+// SO15: unplanned predecessor with no open entry recovers, no offer.
+#[test]
+fn so15_unplanned_predecessor_no_open_entry_is_no_destination() {
+    let vault_index = index(&["sase.md", "20261005.md"]);
+    let plan = run(
+        vec![pred("sase.md", "fix-apollo", "fix-apollo", "Fix apollo", true)],
+        &[(
+            "sase.md",
+            concat!(
+                "- [x] #task Fix apollo [id:: fix-apollo] ^fix-apollo\n",
+                "- [?] #task Relaunch [dependsOn:: fix-apollo] [id:: relaunch] ^relaunch\n",
+            ),
+        )],
+        Some("## Pomodoros\n- [x] (**0800-0820**) \u{2014} DONE\n"),
+        "20261005.md",
+        true,
+        &vault_index,
+    );
+    assert_eq!(plan.unblocked.len(), 1);
+    let row = &plan.unblocked[0];
+    assert_eq!(row.not_linked, Some("no_destination"));
+    assert!(row.offer.is_none());
+    assert!(row.link.is_none());
     assert_eq!(row.status_symbol, ' ');
-    assert_eq!(row.not_linked, Some("not_planned_today"));
+    assert!(plan.new_day_text.is_none());
+}
+
+// SO16: unplanned predecessor with two open timed entries recovers,
+// no offer.
+#[test]
+fn so16_unplanned_predecessor_two_open_timed_is_no_destination() {
+    let vault_index = index(&["sase.md", "20261005.md"]);
+    let day = concat!(
+        "## Pomodoros\n",
+        "- [ ] (**0900-0920**) \u{2014} ONE\n",
+        "- [ ] (**0930-0950**) \u{2014} TWO\n",
+    );
+    let plan = run(
+        vec![pred("sase.md", "fix-apollo", "fix-apollo", "Fix apollo", true)],
+        &[(
+            "sase.md",
+            concat!(
+                "- [x] #task Fix apollo [id:: fix-apollo] ^fix-apollo\n",
+                "- [?] #task Relaunch [dependsOn:: fix-apollo] [id:: relaunch] ^relaunch\n",
+            ),
+        )],
+        Some(day),
+        "20261005.md",
+        true,
+        &vault_index,
+    );
+    assert_eq!(plan.unblocked.len(), 1);
+    let row = &plan.unblocked[0];
+    assert_eq!(row.not_linked, Some("no_destination"));
+    assert!(row.offer.is_none());
+    assert!(row.link.is_none());
     assert!(plan.new_day_text.is_none());
 }
 
@@ -443,19 +535,19 @@ fn sl16_gate_without_ids_runs_nothing() {
     assert!(plan.changed_files.is_empty());
 }
 
-// SL17: six successors from one gesture link none; all recover with the
-// breaker reason.
+// SO2: 11-way fan-out. None links nothing (`not_selected`, no mint, no
+// day edit); All links all 11. No breaker, no cap.
 #[test]
-fn sl17_breaker_links_none() {
+fn so2_eleven_way_fan_out() {
     let vault_index = index(&["sase.md", "20261005.md"]);
     let mut note =
         "- [x] #task Fix apollo [id:: fix-apollo] ^fix-apollo\n".to_string();
-    for n in 1..=6 {
+    for n in 1..=11 {
         note.push_str(&format!(
             "- [?] #task Fan {n} [dependsOn:: fix-apollo] [id:: fan-{n}] ^fan-{n}\n"
         ));
     }
-    let plan = run(
+    let none = run_sel(
         vec![pred(
             "sase.md",
             "fix-apollo",
@@ -468,17 +560,47 @@ fn sl17_breaker_links_none() {
         "20261005.md",
         true,
         &vault_index,
+        SuccessorSelection::None,
     );
-    assert_eq!(plan.unblocked.len(), 6);
-    for row in &plan.unblocked {
-        assert_eq!(row.not_linked, Some("breaker"));
+    assert_eq!(none.unblocked.len(), 11);
+    for row in &none.unblocked {
+        assert_eq!(row.not_linked, Some("not_selected"));
         assert!(row.link.is_none());
+        let offer = row.offer.as_ref().expect("hand_off offer");
+        assert_eq!(offer.group, OfferGroup::HandOff);
+        assert!(!offer.selected);
     }
-    assert!(plan.new_day_text.is_none());
+    assert!(none.new_day_text.is_none());
+    let all = run_sel(
+        vec![pred(
+            "sase.md",
+            "fix-apollo",
+            "fix-apollo",
+            "Fix apollo",
+            true,
+        )],
+        &[("sase.md", &note)],
+        Some(&day_with_fix_link()),
+        "20261005.md",
+        true,
+        &vault_index,
+        SuccessorSelection::All,
+    );
+    assert_eq!(all.unblocked.len(), 11);
+    for row in &all.unblocked {
+        assert!(row.link.is_some(), "{row:?}");
+        assert_eq!(row.not_linked, None);
+        assert_eq!(row.status_symbol, '*');
+        assert!(row.offer.as_ref().is_some_and(|offer| offer.selected));
+    }
+    let day = all.new_day_text.expect("day changed");
+    for n in 1..=11 {
+        assert!(day.contains(&format!("[[sase#^fan-{n}]]")), "{day}");
+    }
 }
 
-// SL18: `plan.link_unblocked: false` recovers to the derived rank with
-// no links and no mints.
+// SL18 / SO19: `plan.link_unblocked: false` recovers to the derived
+// rank with no links, no mints, and no offers (`disabled`).
 #[test]
 fn sl18_disabled_recovers_without_links_or_mints() {
     let vault_index = index(&["sase.md", "20261005.md"]);
@@ -895,13 +1017,14 @@ fn pdc1_dependent_in_still_blocked_project_stays_blocked() {
     assert!(plan.changed_files.is_empty());
 }
 
-// PDC2 (§13.16): closing P fully unblocks `^prj`; residents with no
-// own remaining reason recover-only (`project_member`), never
-// successor-linked, outside the breaker, losing `#prj_is_blocked`
-// and gaining `[unblocked::]` (UB1). Six residents that also depend
-// on P would have tripped the breaker as successors.
+// PDC2: closing P fully unblocks `^prj`; the six residents are
+// `project` offers. All links them at `earliest_anchor(preds(R))`
+// (FIX / `done-p`), stamps `[fresh:: 2026-10-05]`, and does not write
+// `[unblocked::]` on those picked lines. `^prj` stays `project_task`,
+// recovers to Ready, and keeps the `[unblocked::]` WRITE. The outside
+// dependent stays one `hand_off` row. There is no breaker.
 #[test]
-fn pdc2_prj_recovery_recovers_residents_outside_breaker() {
+fn pdc2_prj_recovery_offers_residents() {
     let vault_index = index(&["sase.md", "proj.md", "20261005.md"]);
     let mut body =
         "- [?] #task Apply [fresh:: 2026-10-01] [dependsOn:: done-p] [id:: apply] ^prj\n"
@@ -933,23 +1056,36 @@ fn pdc2_prj_recovery_recovers_residents_outside_breaker() {
     let members: Vec<_> = plan
         .unblocked
         .iter()
-        .filter(|row| row.not_linked == Some("project_member"))
+        .filter(|row| {
+            row.offer
+                .as_ref()
+                .is_some_and(|offer| offer.group == OfferGroup::Project)
+        })
         .collect();
     assert_eq!(members.len(), 6, "{:?}", plan.unblocked);
+    let mut project_ns = Vec::new();
     for row in &members {
         assert_eq!(row.previous_status_symbol, '?');
-        assert_eq!(row.status_symbol, ' ');
-        assert!(row.link.is_none());
+        assert_eq!(row.status_symbol, '*');
+        assert!(row.link.is_some());
+        assert_eq!(row.not_linked, None);
+        let offer = row.offer.as_ref().expect("project offer");
+        assert!(offer.selected);
+        assert_eq!(offer.destination.entry_name, "FIX");
+        assert!(!offer.destination.fallback);
+        assert_eq!(offer.project, Some(PathBuf::from("proj.md")));
+        project_ns.push(offer.n);
     }
+    project_ns.sort_unstable();
+    assert_eq!(project_ns, vec![2, 3, 4, 5, 6, 7]);
     let prj = plan
         .unblocked
         .iter()
         .find(|row| row.block_id == "prj")
         .expect("prj recovered");
     assert_eq!(prj.not_linked, Some("project_task"));
+    assert!(prj.offer.is_none());
     assert!(prj.link.is_none());
-    // The one genuine successor still links: the member recoveries
-    // sit outside the breaker.
     let outside = plan
         .unblocked
         .iter()
@@ -957,6 +1093,9 @@ fn pdc2_prj_recovery_recovers_residents_outside_breaker() {
         .expect("outside successor");
     assert!(outside.link.is_some());
     assert_eq!(outside.not_linked, None);
+    let outside_offer = outside.offer.as_ref().expect("hand_off");
+    assert_eq!(outside_offer.group, OfferGroup::HandOff);
+    assert_eq!(outside_offer.n, 1);
     assert!(plan.still_blocked.is_empty());
     let updated = plan
         .changed_files
@@ -964,12 +1103,30 @@ fn pdc2_prj_recovery_recovers_residents_outside_breaker() {
         .expect("proj.md changed");
     assert!(!updated.contains("#prj_is_blocked"), "{updated}");
     assert!(updated.contains("- [ ] #task Apply"), "{updated}");
-    assert!(updated.contains("- [ ] #task Pitch 1"), "{updated}");
-    assert!(updated.contains("[unblocked:: 2026-10-05]"), "{updated}");
+    assert!(
+        updated.contains("- [*] #task Pitch 1 [fresh:: 2026-10-05]"),
+        "{updated}"
+    );
+    let apply_line = updated
+        .lines()
+        .find(|line| line.contains("^prj"))
+        .expect("apply line");
+    assert!(
+        apply_line.contains("[unblocked:: 2026-10-05]"),
+        "{apply_line}"
+    );
+    let pitch_line = updated
+        .lines()
+        .find(|line| line.contains("^pitch-1"))
+        .expect("pitch line");
+    assert!(!pitch_line.contains("[unblocked::"), "{pitch_line}");
 }
 
-// PDC3 (§13.16): same as PDC2, but a resident with its own open
-// prerequisite stays Blocked.
+// PDC3 / SO8 / SO9: the sequenced resident is a muted `still_blocked`
+// row (`waits_on`, `project: proj.md`) and loses `#prj_is_blocked`.
+// The `[ ]` ready leftover is offered even though its status is
+// unchanged until picked (SO8). This fixture's day links `fix-apollo`,
+// not `done-p`, so the resident destination is implicit (CAPTURE).
 #[test]
 fn pdc3_resident_with_own_prerequisite_stays_blocked() {
     let vault_index = index(&["sase.md", "proj.md", "20261005.md"]);
@@ -1002,23 +1159,48 @@ fn pdc3_resident_with_own_prerequisite_stays_blocked() {
         .collect();
     assert!(ids.contains(&"prj"), "{ids:?}");
     assert!(ids.contains(&"pitch"), "{ids:?}");
+    assert!(ids.contains(&"ready"), "{ids:?}");
     assert!(!ids.contains(&"seq"), "{ids:?}");
     let pitch = plan
         .unblocked
         .iter()
         .find(|row| row.block_id == "pitch")
         .expect("pitch");
-    assert_eq!(pitch.not_linked, Some("project_member"));
-    assert!(pitch.link.is_none());
-    assert!(plan.still_blocked.is_empty());
+    let pitch_offer = pitch.offer.as_ref().expect("project offer");
+    assert_eq!(pitch_offer.group, OfferGroup::Project);
+    assert!(pitch_offer.selected);
+    assert_eq!(pitch_offer.destination.entry_name, "CAPTURE");
+    assert!(pitch_offer.destination.fallback);
+    assert_eq!(pitch_offer.destination.entry_role, EntryRole::Implicit);
+    assert!(pitch.link.is_some());
+    assert_eq!(pitch.not_linked, None);
+    let ready = plan
+        .unblocked
+        .iter()
+        .find(|row| row.block_id == "ready")
+        .expect("ready leftover offered (SO8)");
+    assert_eq!(ready.previous_status_symbol, ' ');
+    assert_eq!(ready.status_symbol, '*');
+    assert!(ready.offer.is_some());
+    assert_eq!(plan.still_blocked.len(), 1);
+    let seq = &plan.still_blocked[0];
+    assert_eq!(seq.block_id, "seq");
+    assert_eq!(seq.reason, "waits_on");
+    assert_eq!(seq.project, Some(PathBuf::from("proj.md")));
     let updated = plan
         .changed_files
         .get(&PathBuf::from("proj.md"))
         .expect("proj.md changed");
     assert!(updated.contains("- [?] #task Sequenced"), "{updated}");
-    assert!(updated.contains("- [ ] #task Pitch"), "{updated}");
+    assert!(
+        updated.contains("- [*] #task Pitch [fresh:: 2026-10-05]"),
+        "{updated}"
+    );
     assert!(!updated.contains("#prj_is_blocked"), "{updated}");
-    assert!(updated.contains("- [ ] #task Ready leftover"), "{updated}");
+    assert!(
+        updated.contains("- [*] #task Ready leftover [fresh:: 2026-10-05]"),
+        "{updated}"
+    );
 }
 
 // direct_prj_link = raise: a `^prj` that keeps a live Task Link
@@ -1075,7 +1257,7 @@ fn linked_prj_recovery_lands_next() {
 #[test]
 fn ub_close_ready_recovery_writes_unblocked() {
     let vault_index = index(&["sase.md", "20261005.md"]);
-    let plan = run(
+    let plan = run_sel(
         vec![pred("sase.md", "p", "p", "P", true)],
         &[(
             "sase.md",
@@ -1088,14 +1270,17 @@ fn ub_close_ready_recovery_writes_unblocked() {
         "20261005.md",
         true,
         &vault_index,
+        SuccessorSelection::None,
     );
-    // No anchor for P: D recovers `not_planned_today` to Ready.
+    // Unpicked implicit offer: D recovers `not_selected` to Ready and
+    // the WRITE rule still stamps `[unblocked::]`.
     let row = plan
         .unblocked
         .iter()
         .find(|row| row.block_id == "d")
         .expect("d recovered");
     assert_eq!(row.status_symbol, ' ');
+    assert_eq!(row.not_linked, Some("not_selected"));
     let updated = plan
         .changed_files
         .get(&PathBuf::from("sase.md"))
@@ -1108,7 +1293,7 @@ fn ub_close_ready_recovery_writes_unblocked() {
 #[test]
 fn ub_close_new_recovery_skips_unblocked() {
     let vault_index = index(&["sase.md", "20261005.md"]);
-    let plan = run(
+    let plan = run_sel(
         vec![pred("sase.md", "p", "p", "P", true)],
         &[(
             "sase.md",
@@ -1121,6 +1306,7 @@ fn ub_close_new_recovery_skips_unblocked() {
         "20261005.md",
         true,
         &vault_index,
+        SuccessorSelection::None,
     );
     let updated = plan
         .changed_files
@@ -1135,7 +1321,7 @@ fn ub_close_new_recovery_skips_unblocked() {
 #[test]
 fn ub_close_scheduled_tickler_skips_unblocked() {
     let vault_index = index(&["sase.md", "20261005.md"]);
-    let plan = run(
+    let plan = run_sel(
         vec![pred("sase.md", "p", "p", "P", true)],
         &[(
             "sase.md",
@@ -1148,6 +1334,7 @@ fn ub_close_scheduled_tickler_skips_unblocked() {
         "20261005.md",
         true,
         &vault_index,
+        SuccessorSelection::None,
     );
     let updated = plan
         .changed_files
@@ -1227,7 +1414,7 @@ fn ub_close_hidden_resident_recovers_without_unblocked() {
         .iter()
         .find(|row| row.block_id == "quiet")
         .expect("quiet recovered");
-    assert_eq!(quiet.not_linked, Some("project_member"));
+    assert_eq!(quiet.not_linked, Some("hidden"));
     assert_eq!(quiet.status_symbol, ' ');
     let updated = plan
         .changed_files
@@ -1379,12 +1566,433 @@ fn pdc6_no_close_recovery_for_tagged_descendants() {
         .unblocked
         .iter()
         .find(|row| row.block_id == "pitch")
-        .expect("N's own resident recovers");
-    assert_eq!(pitch.not_linked, Some("project_member"));
+        .expect("N's own resident is offered");
+    let pitch_offer = pitch.offer.as_ref().expect("project offer");
+    assert_eq!(pitch_offer.group, OfferGroup::Project);
+    assert!(pitch_offer.selected);
+    assert_eq!(pitch.not_linked, None);
+    assert!(pitch.link.is_some());
     assert!(
         !plan.changed_files.contains_key(&PathBuf::from("k.md")),
         "tagged descendant keeps its tags until reconcile: {:?}",
         plan.changed_files
     );
     assert!(plan.still_blocked.is_empty(), "{:?}", plan.still_blocked);
+}
+
+fn so1_snapshot() -> (String, String) {
+    (
+        "- [x] #task Bar [id:: bar] ^bar\n".to_string(),
+        project_note(concat!(
+            "- [?] #task Foo [dependsOn:: bar] [id:: foo] ^prj\n",
+            "- [?] #task First [unblocked:: 2026-10-01] [id:: first] ^first\n",
+            "- [?] #task Second\n",
+        )),
+    )
+}
+
+fn so1_day() -> String {
+    concat!(
+        "## Pomodoros\n",
+        "- [ ] (**0920-0950**) \u{2014} CAPTURE\n",
+        "- [ ] () \u{2014} FIX\n",
+        "  - [[sase#^bar]]\n",
+    )
+    .to_string()
+}
+
+// SO1: close `sase.md` `^bar`; `sase_foo.md` `^prj` depended only on
+// `^bar` and has two open residents. Both are `project` offers, `^prj`
+// is not an offer. Picking the id-less row mints, sets `[*]`, stamps
+// `[fresh:: today]`, clears `[unblocked::]`, and links under `^bar`'s
+// entry. The other recovers `not_selected` with no mint.
+#[test]
+fn so1_project_offers_pick_one() {
+    let vault_index = index(&["sase.md", "sase_foo.md", "20261005.md"]);
+    let (sase, foo) = so1_snapshot();
+    let day = so1_day();
+    let preview = run_sel(
+        vec![pred("sase.md", "bar", "bar", "Bar", true)],
+        &[("sase.md", &sase), ("sase_foo.md", &foo)],
+        Some(&day),
+        "20261005.md",
+        true,
+        &vault_index,
+        SuccessorSelection::None,
+    );
+    let pick_key = preview
+        .unblocked
+        .iter()
+        .find(|row| row.block_id.is_empty())
+        .and_then(|row| row.offer.as_ref().map(|offer| offer.key.clone()))
+        .expect("id-less resident key");
+    let plan = run_sel(
+        vec![pred("sase.md", "bar", "bar", "Bar", true)],
+        &[("sase.md", &sase), ("sase_foo.md", &foo)],
+        Some(&day),
+        "20261005.md",
+        true,
+        &vault_index,
+        SuccessorSelection::Keys(BTreeSet::from([pick_key])),
+    );
+    let prj = plan
+        .unblocked
+        .iter()
+        .find(|row| row.block_id == "prj")
+        .expect("^prj is the group header");
+    assert_eq!(prj.not_linked, Some("project_task"));
+    assert!(prj.offer.is_none());
+    let project_offers: Vec<_> = plan
+        .unblocked
+        .iter()
+        .filter(|row| {
+            row.offer
+                .as_ref()
+                .is_some_and(|offer| offer.group == OfferGroup::Project)
+        })
+        .collect();
+    assert_eq!(project_offers.len(), 2, "{:?}", plan.unblocked);
+    let picked = project_offers
+        .iter()
+        .find(|row| row.offer.as_ref().is_some_and(|offer| offer.selected))
+        .expect("picked resident");
+    assert!(picked.block_id_is_minted(), "{picked:?}");
+    assert_eq!(picked.status_symbol, '*');
+    assert!(picked.link.is_some());
+    assert_eq!(picked.link.as_ref().unwrap().entry_name, "FIX");
+    assert!(picked.link.as_ref().unwrap().block_id_created);
+    let unpicked = project_offers
+        .iter()
+        .find(|row| row.offer.as_ref().is_some_and(|offer| !offer.selected))
+        .expect("unpicked resident");
+    assert_eq!(unpicked.not_linked, Some("not_selected"));
+    assert!(unpicked.link.is_none());
+    assert_eq!(unpicked.block_id, "first");
+    let updated = plan
+        .changed_files
+        .get(&PathBuf::from("sase_foo.md"))
+        .expect("sase_foo.md changed");
+    let second_line = updated
+        .lines()
+        .find(|line| line.contains("Second"))
+        .expect("second line");
+    assert!(second_line.contains("- [*] #task Second"), "{second_line}");
+    assert!(
+        second_line.contains("[fresh:: 2026-10-05]"),
+        "{second_line}"
+    );
+    assert!(second_line.contains(" ^"), "{second_line}");
+    assert!(!second_line.contains("[unblocked::"), "{second_line}");
+    let first_line = updated
+        .lines()
+        .find(|line| line.contains("^first"))
+        .expect("first line");
+    assert!(first_line.contains("- [ ] #task First"), "{first_line}");
+    assert!(!first_line.contains("[fresh:: 2026-10-05]"), "{first_line}");
+}
+
+trait BlockIdMinted {
+    fn block_id_is_minted(&self) -> bool;
+}
+
+impl BlockIdMinted for super::super::successors::UnblockedRow {
+    fn block_id_is_minted(&self) -> bool {
+        self.link.as_ref().is_some_and(|link| link.block_id_created)
+            && !self.block_id.is_empty()
+    }
+}
+
+fn three_fan_note() -> String {
+    concat!(
+        "- [x] #task Fix apollo [id:: fix-apollo] ^fix-apollo\n",
+        "- [?] #task Fan 1 [dependsOn:: fix-apollo] [id:: fan-1] ^fan-1\n",
+        "- [?] #task Fan 2 [dependsOn:: fix-apollo] [id:: fan-2] ^fan-2\n",
+        "- [?] #task Fan 3 [dependsOn:: fix-apollo] [id:: fan-3] ^fan-3\n",
+    )
+    .to_string()
+}
+
+// SO3: pick all — every selectable offer linked, raised to Next, stamped.
+#[test]
+fn so3_pick_all_links_every_offer() {
+    let vault_index = index(&["sase.md", "20261005.md"]);
+    let note = three_fan_note();
+    let plan = run(
+        vec![pred(
+            "sase.md",
+            "fix-apollo",
+            "fix-apollo",
+            "Fix apollo",
+            true,
+        )],
+        &[("sase.md", &note)],
+        Some(&day_with_fix_link()),
+        "20261005.md",
+        true,
+        &vault_index,
+    );
+    assert_eq!(plan.unblocked.len(), 3);
+    for row in &plan.unblocked {
+        assert!(row.link.is_some());
+        assert_eq!(row.status_symbol, '*');
+        assert!(row.offer.as_ref().is_some_and(|offer| offer.selected));
+    }
+    let updated = plan
+        .changed_files
+        .get(&PathBuf::from("sase.md"))
+        .expect("sase.md changed");
+    assert!(updated.contains("[fresh:: 2026-10-05]"), "{updated}");
+}
+
+// SO4: pick none — recovery stands; no minted IDs; each offer
+// `not_selected`.
+#[test]
+fn so4_pick_none_recovers_without_links() {
+    let vault_index = index(&["sase.md", "20261005.md"]);
+    let note = concat!(
+        "- [x] #task Fix apollo [id:: fix-apollo] ^fix-apollo\n",
+        "- [?] #task Fan 1 [dependsOn:: fix-apollo] [id:: fan-1] ^fan-1\n",
+        "- [?] #task Mint me [dependsOn:: fix-apollo] [id:: mint-me]\n",
+    );
+    let plan = run_sel(
+        vec![pred(
+            "sase.md",
+            "fix-apollo",
+            "fix-apollo",
+            "Fix apollo",
+            true,
+        )],
+        &[("sase.md", note)],
+        Some(&day_with_fix_link()),
+        "20261005.md",
+        true,
+        &vault_index,
+        SuccessorSelection::None,
+    );
+    assert_eq!(plan.unblocked.len(), 2);
+    for row in &plan.unblocked {
+        assert_eq!(row.not_linked, Some("not_selected"));
+        assert!(row.link.is_none());
+        assert!(!row.offer.as_ref().unwrap().selected);
+    }
+    assert!(plan.new_day_text.is_none());
+    let updated = plan
+        .changed_files
+        .get(&PathBuf::from("sase.md"))
+        .expect("recovery still writes");
+    assert!(updated.contains("- [ ] #task Mint me"));
+    assert!(!updated.contains(" ^mint-me"), "{updated}");
+}
+
+// SO5: pick a subset — only those rows linked; the rest `not_selected`.
+#[test]
+fn so5_pick_subset() {
+    let vault_index = index(&["sase.md", "20261005.md"]);
+    let note = three_fan_note();
+    let plan = run_sel(
+        vec![pred(
+            "sase.md",
+            "fix-apollo",
+            "fix-apollo",
+            "Fix apollo",
+            true,
+        )],
+        &[("sase.md", &note)],
+        Some(&day_with_fix_link()),
+        "20261005.md",
+        true,
+        &vault_index,
+        SuccessorSelection::Keys(BTreeSet::from(
+            ["sase.md#^fan-2".to_string()],
+        )),
+    );
+    let linked: Vec<_> = plan
+        .unblocked
+        .iter()
+        .filter(|row| row.link.is_some())
+        .collect();
+    assert_eq!(linked.len(), 1);
+    assert_eq!(linked[0].block_id, "fan-2");
+    for row in &plan.unblocked {
+        if row.block_id == "fan-2" {
+            assert_eq!(row.not_linked, None);
+            assert!(row.offer.as_ref().unwrap().selected);
+        } else {
+            assert_eq!(row.not_linked, Some("not_selected"));
+            assert!(row.link.is_none());
+        }
+    }
+}
+
+// SO7: a resident that is also a direct dependent is one `hand_off` row.
+#[test]
+fn so7_direct_dependent_resident_stays_hand_off() {
+    let vault_index = index(&["sase.md", "proj.md", "20261005.md"]);
+    let plan = run(
+        vec![pred("sase.md", "p", "p", "P", true)],
+        &[
+            ("sase.md", "- [x] #task P [id:: p] ^p\n"),
+            (
+                "proj.md",
+                &project_note(concat!(
+                    "- [?] #task Apply [dependsOn:: p] [id:: apply] ^prj\n",
+                    "- [?] #task Also dep [dependsOn:: p] [id:: also] ^also\n",
+                    "- [ ] #task Leftover [id:: left] ^left\n",
+                )),
+            ),
+        ],
+        Some("## Pomodoros\n- [ ] () \u{2014} FIX\n  - [[sase#^p]]\n"),
+        "20261005.md",
+        true,
+        &vault_index,
+    );
+    let also = plan
+        .unblocked
+        .iter()
+        .find(|row| row.block_id == "also")
+        .expect("direct dependent");
+    let also_offer = also.offer.as_ref().expect("one row");
+    assert_eq!(also_offer.group, OfferGroup::HandOff);
+    assert!(also.link.is_some());
+    let leftover = plan
+        .unblocked
+        .iter()
+        .find(|row| row.block_id == "left")
+        .expect("plain resident");
+    assert_eq!(
+        leftover.offer.as_ref().map(|offer| offer.group),
+        Some(OfferGroup::Project)
+    );
+}
+
+// SO10, SO11, SO24: hidden and already-planned counts, and
+// `open_subprojects` from the marker, with descendants unedited.
+#[test]
+fn so10_so11_so24_folds_and_open_subprojects() {
+    let vault_index = index(&["sase.md", "proj.md", "k.md", "20261005.md"]);
+    let day = concat!(
+        "## Pomodoros\n",
+        "- [ ] (**0920-0950**) \u{2014} CAPTURE\n",
+        "- [ ] () \u{2014} FIX\n",
+        "  - [[sase#^p]]\n",
+        "  - [[proj#^planned]]\n",
+    );
+    let plan = run_sel(
+        vec![pred("sase.md", "p", "p", "P", true)],
+        &[
+            ("sase.md", "- [x] #task P [id:: p] ^p\n"),
+            (
+                "proj.md",
+                &project_note(concat!(
+                    "- [?] #task Apply [dependsOn:: p] [id:: apply] ^prj\n",
+                    "  - 🧩 **Sub-projects:** [[k]]\n",
+                    "- [?] #task Quiet #hide [id:: quiet] ^quiet\n",
+                    "- [?] #task Planned [id:: planned] ^planned\n",
+                    "- [?] #task Offer me [id:: offer] ^offer\n",
+                )),
+            ),
+            (
+                "k.md",
+                &child_project_note(
+                    "proj",
+                    concat!(
+                        "- [?] #task Kid #prj_is_blocked ^prj\n",
+                        "- [?] #task Rita #prj_is_blocked [id:: rita] ^rita\n",
+                    ),
+                ),
+            ),
+        ],
+        Some(day),
+        "20261005.md",
+        true,
+        &vault_index,
+        SuccessorSelection::None,
+    );
+    assert_eq!(plan.project_folds.len(), 1);
+    let fold = &plan.project_folds[0];
+    assert_eq!(fold.project, PathBuf::from("proj.md"));
+    assert_eq!(fold.hidden, 1);
+    assert_eq!(fold.already_planned, 1);
+    assert_eq!(fold.sub_projects, 1);
+    let quiet = plan
+        .unblocked
+        .iter()
+        .find(|row| row.block_id == "quiet")
+        .expect("hidden resident");
+    assert_eq!(quiet.not_linked, Some("hidden"));
+    assert!(quiet.offer.is_none());
+    let planned = plan
+        .unblocked
+        .iter()
+        .find(|row| row.block_id == "planned")
+        .expect("already-planned resident");
+    assert_eq!(planned.not_linked, Some("already_planned"));
+    assert!(planned.offer.is_none());
+    let offer = plan
+        .unblocked
+        .iter()
+        .find(|row| row.block_id == "offer")
+        .expect("offered resident");
+    assert_eq!(
+        offer.offer.as_ref().map(|draft| draft.group),
+        Some(OfferGroup::Project)
+    );
+    assert!(!offer.offer.as_ref().unwrap().selected);
+    assert!(
+        !plan.changed_files.contains_key(&PathBuf::from("k.md")),
+        "descendants unedited: {:?}",
+        plan.changed_files
+    );
+}
+
+// SO20: pick freshness bytes versus an unpicked Ready recovery's WRITE
+// rule.
+#[test]
+fn so20_pick_stamps_fresh_unpicked_writes_unblocked() {
+    let vault_index = index(&["sase.md", "20261005.md"]);
+    let note = concat!(
+        "- [x] #task P [id:: p] ^p\n",
+        "- [?] #task Keep [fresh:: 2026-10-01] [keeps:: 2] [unblocked:: 2026-10-01] [dependsOn:: p] [id:: keep] ^keep\n",
+        "- [?] #task Skip [fresh:: 2026-10-01] [dependsOn:: p] [id:: skip] ^skip\n",
+    );
+    let day = concat!(
+        "## Pomodoros\n",
+        "- [ ] () \u{2014} FIX\n",
+        "  - [[sase#^p]]\n",
+    );
+    let plan = run_sel(
+        vec![pred("sase.md", "p", "p", "P", true)],
+        &[("sase.md", note)],
+        Some(day),
+        "20261005.md",
+        true,
+        &vault_index,
+        SuccessorSelection::Keys(BTreeSet::from(["sase.md#^keep".to_string()])),
+    );
+    let updated = plan
+        .changed_files
+        .get(&PathBuf::from("sase.md"))
+        .expect("sase.md changed");
+    let keep_line = updated
+        .lines()
+        .find(|line| line.contains("^keep"))
+        .expect("keep line");
+    assert!(keep_line.contains("[fresh:: 2026-10-05]"), "{keep_line}");
+    assert!(!keep_line.contains("[unblocked::"), "{keep_line}");
+    assert!(!keep_line.contains("[keeps::"), "{keep_line}");
+    let skip_line = updated
+        .lines()
+        .find(|line| line.contains("^skip"))
+        .expect("skip line");
+    assert!(
+        skip_line.contains("[unblocked:: 2026-10-05]"),
+        "{skip_line}"
+    );
+    assert_eq!(
+        plan.unblocked
+            .iter()
+            .find(|row| row.block_id == "skip")
+            .map(|row| row.not_linked),
+        Some(Some("not_selected"))
+    );
 }

@@ -115,10 +115,7 @@ fn close_recovers_prj_and_residents_with_unblocked() {
         })
         .collect();
     assert!(reasons.contains(&("prj", "project_task")), "{reasons:?}");
-    assert!(
-        reasons.contains(&("pitch", "project_member")),
-        "{reasons:?}"
-    );
+    assert!(reasons.contains(&("pitch", "not_selected")), "{reasons:?}");
 
     let proj = fs::read_to_string(vault.join("proj.md")).expect("read proj");
     assert!(!proj.contains("#prj_is_blocked"), "{proj}");

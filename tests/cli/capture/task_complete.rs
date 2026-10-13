@@ -896,7 +896,7 @@ fn exact_human_output_for_subtasks_and_unblocked() {
     assert_success(&output);
     assert_eq!(
         stdout(&output),
-        "\u{2713} completed [ ] \u{2192} [x] Dep root  travel.md ^dep\n  unblocked [?] \u{2192} [ ] Waiter  travel.md ^waiter \u{00b7} not planned today\n"
+        "\u{2713} completed [ ] \u{2192} [x] Dep root  travel.md ^dep\n  unblocked [?] \u{2192} [ ] Waiter  travel.md ^waiter \u{00b7} not pulled in\n"
     );
 }
 
@@ -1057,8 +1057,8 @@ fn sl1_successor_links_into_vacated_slot() {
     assert_eq!(row["block_id"], "relaunch-failed-agents");
     assert_eq!(row["text"], "Re-launch failed agents");
     assert_eq!(row["previous_status_symbol"], "?");
-    assert_eq!(row["status_symbol"], "*");
-    assert_eq!(row["status_name"], "Next");
+    assert_eq!(row["status_symbol"], " ");
+    assert_eq!(row["status_name"], "Ready");
     assert_eq!(row["inbox"], false);
     assert_eq!(
         row["unblocked_by"],
@@ -1068,17 +1068,8 @@ fn sl1_successor_links_into_vacated_slot() {
             "text": "Fix apollo machine",
         }])
     );
-    assert_eq!(row["link"]["day_file"], "20261005.md");
-    assert_eq!(row["link"]["entry_name"], "FIX");
-    assert_eq!(row["link"]["entry_line"], 4);
-    assert_eq!(row["link"]["entry_created"], false);
-    assert_eq!(row["link"]["next_up"], true);
-    assert_eq!(
-        row["link"]["block_link"],
-        "[[sase#^relaunch-failed-agents]]"
-    );
-    assert_eq!(row["link"]["block_id_created"], false);
-    assert!(row.get("not_linked").is_none() || row["not_linked"].is_null());
+    assert!(row.get("link").is_none() || row["link"].is_null());
+    assert_eq!(row["not_linked"], "not_selected");
     // The gesture changed the day file, so the top-level day file is set.
     assert_eq!(
         json["day_file"],
@@ -1087,24 +1078,14 @@ fn sl1_successor_links_into_vacated_slot() {
 
     assert_eq!(
         fs::read_to_string(vault.join("sase.md")).expect("read note"),
-        "- [x] #task Fix apollo machine [id:: fix-apollo]  [completion:: 2026-10-05] ^fix-apollo\n- [*] #task Re-launch failed agents [dependsOn:: fix-apollo] [id:: relaunch-agents] ^relaunch-failed-agents\n"
+        "- [x] #task Fix apollo machine [id:: fix-apollo]  [completion:: 2026-10-05] ^fix-apollo\n- [ ] #task Re-launch failed agents [dependsOn:: fix-apollo] [id:: relaunch-agents] ^relaunch-failed-agents\n"
     );
     assert_eq!(
         fs::read_to_string(&day_file).expect("read day"),
-        "## Pomodoros\n- [ ] (**0920-0950**) \u{2014} CAPTURE\n  - [[sase#^other]]\n  - ~~[[sase#^fix-apollo]]~~\n- [ ] () \u{2014} FIX\n  - [[sase#^relaunch-failed-agents]]\n"
+        "## Pomodoros\n- [ ] (**0920-0950**) \u{2014} CAPTURE\n  - [[sase#^other]]\n  - ~~[[sase#^fix-apollo]]~~\n"
     );
-    // The pomodoro-block diff contains the successor line.
-    let blocks = json["pomodoro_blocks"].as_array().expect("blocks");
-    let fix = blocks
-        .iter()
-        .find(|block| block["name"] == "FIX")
-        .expect("FIX block");
-    assert!(
-        fix["lines"]
-            .to_string()
-            .contains("[[sase#^relaunch-failed-agents]]"),
-        "{fix}"
-    );
+    let day = fs::read_to_string(&day_file).expect("read day");
+    assert!(!day.contains("relaunch-failed-agents"), "{day}");
     // The successor is reported with the unblocked task-block role.
     let task_blocks = json["task_blocks"].as_array().expect("task_blocks");
     assert!(
@@ -1135,16 +1116,12 @@ fn sl2_successor_keeps_slot_retirement_moves_predecessor() {
 
     let json = capture_json(&vault, &day_file, &["!sase:fix-apollo"]);
     let day = fs::read_to_string(&day_file).expect("read day");
-    assert!(
-        day.contains(
-            "- [ ] () \u{2014} FIX\n  - [[sase#^relaunch-failed-agents]]\n"
-        ),
-        "{day}"
-    );
     assert!(day.contains("~~[[sase#^fix-apollo]]~~"), "{day}");
-    let link = &json["task_complete"]["unblocked"][0]["link"];
-    assert_eq!(link["entry_name"], "FIX");
-    assert_eq!(link["line"], 6);
+    assert!(!day.contains("relaunch-failed-agents"), "{day}");
+    assert!(!day.contains("— FIX"), "{day}");
+    let row = &json["task_complete"]["unblocked"][0];
+    assert_eq!(row["not_linked"], "not_selected");
+    assert!(row.get("link").is_none() || row["link"].is_null());
 }
 
 // SL9: a predecessor with no live link today unblocks nothing to link:
@@ -1170,7 +1147,7 @@ fn sl9_unplanned_predecessor_recovers_without_link() {
     assert_eq!(unblocked.len(), 1);
     assert_eq!(unblocked[0]["previous_status_symbol"], "?");
     assert_eq!(unblocked[0]["status_symbol"], " ");
-    assert_eq!(unblocked[0]["not_linked"], "not_planned_today");
+    assert_eq!(unblocked[0]["not_linked"], "not_selected");
     assert!(
         unblocked[0].get("link").is_none() || unblocked[0]["link"].is_null(),
         "{unblocked:?}"
@@ -1198,15 +1175,14 @@ fn sl10_successor_block_id_is_minted() {
 
     let json = capture_json(&vault, &day_file, &["!sase:fix-apollo"]);
     let row = &json["task_complete"]["unblocked"][0];
-    assert_eq!(row["block_id"], "book-flights");
-    assert_eq!(row["link"]["block_id_created"], true);
-    assert_eq!(row["link"]["block_link"], "[[sase#^book-flights]]");
-    assert!(fs::read_to_string(vault.join("sase.md"))
-        .expect("read note")
-        .contains("[id:: book-flights] ^book-flights\n"),);
-    assert!(fs::read_to_string(&day_file)
+    assert_eq!(row["block_id"], "");
+    assert_eq!(row["not_linked"], "not_selected");
+    assert!(row.get("link").is_none() || row["link"].is_null());
+    let note = fs::read_to_string(vault.join("sase.md")).expect("read note");
+    assert!(!note.contains(" ^book-flights"), "{note}");
+    assert!(!fs::read_to_string(&day_file)
         .expect("read day")
-        .contains("[[sase#^book-flights]]"),);
+        .contains("book-flights"));
 }
 
 // SL14: an ambiguous basename links with the full `dir/note` path.
@@ -1236,12 +1212,13 @@ fn sl14_ambiguous_basename_uses_dir_link() {
         .as_array()
         .expect("unblocked");
     assert_eq!(unblocked.len(), 2);
-    let links: Vec<&str> = unblocked
-        .iter()
-        .map(|row| row["link"]["block_link"].as_str().expect("link"))
-        .collect();
-    assert!(links.contains(&"[[notes#^twin]]"), "{links:?}");
-    assert!(links.contains(&"[[sub/notes#^nested]]"), "{links:?}");
+    for row in unblocked {
+        assert_eq!(row["not_linked"], "not_selected");
+        assert!(row.get("link").is_none() || row["link"].is_null(), "{row}");
+    }
+    let day = fs::read_to_string(&day_file).expect("read day");
+    assert!(!day.contains("[[notes#^twin]]"), "{day}");
+    assert!(!day.contains("[[sub/notes#^nested]]"), "{day}");
 }
 
 // SL16: the `[id::]` gate reports empty rows with `checked` and leaves
@@ -1369,7 +1346,7 @@ fn successor_dry_run_matches_real_with_human_rows() {
     let out = stdout(&output);
     assert!(
         out.contains(
-            "linked [?] \u{2192} [*] Re-launch failed agents  sase.md ^relaunch-failed-agents \u{2192} FIX (next up)"
+            "unblocked [?] \u{2192} [ ] Re-launch failed agents  sase.md ^relaunch-failed-agents \u{00b7} not pulled in"
         ),
         "{out}"
     );
@@ -1415,15 +1392,14 @@ fn day_file_successor_composes_task_and_ledger_edits() {
     assert_eq!(row["note_path"], "20261005.md");
     assert_eq!(row["block_id"], "job");
     assert_eq!(row["previous_status_symbol"], "?");
-    assert_eq!(row["status_symbol"], "*");
-    assert_eq!(row["link"]["block_link"], "[[20261005#^job]]");
-    assert_eq!(row["link"]["entry_name"], "BOB");
-    assert_eq!(row["link"]["block_id_created"], false);
-    // The surviving ID/link agreement: the JSON line matches the bytes.
-    assert_eq!(row["line"], 6);
-    assert_eq!(
-        fs::read_to_string(&day_file).expect("read day"),
-        "## Pomodoros\n- [ ] (**0920-0950**) \u{2014} BOB\n  - ~~[[sase#^p]]~~\n  - [[20261005#^job]]\n## Tasks\n- [*] #task Day job [dependsOn:: p] ^job\n"
+    assert_eq!(row["status_symbol"], " ");
+    assert_eq!(row["not_linked"], "not_selected");
+    assert!(row.get("link").is_none() || row["link"].is_null());
+    let day = fs::read_to_string(&day_file).expect("read day");
+    assert!(!day.contains("[[20261005#^job]]"), "{day}");
+    assert!(
+        day.contains("- [ ] #task Day job [dependsOn:: p] ^job"),
+        "{day}"
     );
     assert_eq!(
         fs::read_to_string(vault.join("sase.md")).expect("read note"),
@@ -1498,21 +1474,14 @@ fn day_file_successor_without_block_id_mints_in_place() {
     let row = &json["task_complete"]["unblocked"][0];
     assert_eq!(row["note_path"], "20261005.md");
     assert_eq!(row["previous_status_symbol"], "?");
-    assert_eq!(row["status_symbol"], "*");
-    assert_eq!(row["link"]["block_id_created"], true);
-    let minted = row["block_id"].as_str().expect("minted block id");
-    assert!(!minted.is_empty());
-    assert_eq!(
-        row["link"]["block_link"],
-        serde_json::Value::String(format!("[[20261005#^{minted}]]"))
-    );
+    assert_eq!(row["status_symbol"], " ");
+    assert_eq!(row["not_linked"], "not_selected");
+    assert!(row.get("link").is_none() || row["link"].is_null());
+    assert_eq!(row["block_id"], "");
     let day = fs::read_to_string(&day_file).expect("read day");
     assert!(
-        day.contains(&format!("- [*] #task Day job [dependsOn:: p] ^{minted}")),
+        day.contains("- [ ] #task Day job [dependsOn:: p]\n"),
         "{day}"
     );
-    assert!(
-        day.contains(&format!("  - [[20261005#^{minted}]]")),
-        "{day}"
-    );
+    assert!(!day.contains("[[20261005#^"), "{day}");
 }

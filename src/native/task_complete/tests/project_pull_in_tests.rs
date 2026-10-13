@@ -6,7 +6,8 @@
 use super::super::super::vault_links::NoteIndex;
 use super::super::inspect_pull_ins;
 use super::super::successors::{
-    plan_successors, CompletedTask, SuccessorInput, SuccessorPlan,
+    plan_successors, CompletedTask, EntryRole, OfferGroup, SuccessorInput,
+    SuccessorPlan, SuccessorSelection,
 };
 use super::*;
 
@@ -38,6 +39,29 @@ fn run(
     link_unblocked: bool,
     vault_index: &NoteIndex,
 ) -> SuccessorPlan {
+    run_sel(
+        completed,
+        snapshot,
+        note_texts,
+        pre_day,
+        day_relative,
+        link_unblocked,
+        vault_index,
+        SuccessorSelection::All,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_sel(
+    completed: Vec<CompletedTask>,
+    snapshot: &[(&str, &str)],
+    note_texts: &[(&str, &str)],
+    pre_day: Option<&str>,
+    day_relative: &str,
+    link_unblocked: bool,
+    vault_index: &NoteIndex,
+    selection: SuccessorSelection,
+) -> SuccessorPlan {
     let settings = test_settings();
     plan_successors(SuccessorInput {
         completed,
@@ -57,6 +81,7 @@ fn run(
         tasks_settings: &settings,
         note_settings: &settings,
         link_unblocked,
+        selection,
         index: vault_index,
     })
 }
@@ -120,7 +145,7 @@ fn pp1_last_task_close_pulls_in_prj() {
         .get(&PathBuf::from("proj.md"))
         .expect("proj.md changed");
     assert!(
-        updated.contains("- [*] #task #prj Ship it! ^prj"),
+        updated.contains("- [*] #task #prj Ship it! [fresh:: 2026-10-05] ^prj"),
         "{updated}"
     );
     assert!(!updated.contains("#hide"), "{updated}");
@@ -425,12 +450,13 @@ fn pp9_already_linked_recovers_planned() {
     );
 }
 
-// PP10: A not planned today → no link; status unchanged; `#hide` removed;
-// `not_planned_today`; row reported (verb `surfaced`).
+// PP10 / SO14: A not planned today; one open untimed entry → offered at
+// the implicit destination. Unpicked: status unchanged, `#hide` removed,
+// `not_selected`, no day edit.
 #[test]
 fn pp10_unplanned_predecessor_surfaces() {
     let vault_index = index(&["proj.md", "20261005.md"]);
-    let plan = run(
+    let plan = run_sel(
         vec![closed_a()],
         &[],
         &[(
@@ -441,6 +467,7 @@ fn pp10_unplanned_predecessor_surfaces() {
         "20261005.md",
         true,
         &vault_index,
+        SuccessorSelection::None,
     );
     assert!(plan.still_blocked.is_empty());
     assert_eq!(plan.unblocked.len(), 1);
@@ -448,10 +475,16 @@ fn pp10_unplanned_predecessor_surfaces() {
     assert_eq!(row.block_id, "prj");
     assert_eq!(row.previous_status_symbol, ' ');
     assert_eq!(row.status_symbol, ' ');
-    assert_eq!(row.not_linked, Some("not_planned_today"));
+    assert_eq!(row.not_linked, Some("not_selected"));
     assert_eq!(row.link, None);
     assert_eq!(row.trigger, "project_empty");
     assert!(row.hide_removed);
+    let offer = row.offer.as_ref().expect("implicit project_finished");
+    assert_eq!(offer.group, OfferGroup::ProjectFinished);
+    assert_eq!(offer.destination.entry_name, "FIX");
+    assert_eq!(offer.destination.entry_role, EntryRole::Implicit);
+    assert!(offer.destination.fallback);
+    assert!(!offer.selected);
     let updated = plan
         .changed_files
         .get(&PathBuf::from("proj.md"))
@@ -463,7 +496,8 @@ fn pp10_unplanned_predecessor_surfaces() {
     assert!(plan.new_day_text.is_none());
 }
 
-// PP11: `plan.link_unblocked: false` → as PP10 with `disabled`.
+// PP11 / SO19: `plan.link_unblocked: false` → `disabled`, no offers;
+// `#hide` still removed.
 #[test]
 fn pp11_disabled_link_surfaces() {
     let vault_index = index(&["proj.md", "20261005.md"]);
@@ -515,7 +549,7 @@ fn pp12_in_progress_prj_links_unchanged() {
         .get(&PathBuf::from("proj.md"))
         .expect("proj.md changed");
     assert!(
-        updated.contains("- [/] #task #prj Ship it! ^prj"),
+        updated.contains("- [/] #task #prj Ship it! [fresh:: 2026-10-05] ^prj"),
         "{updated}"
     );
 }
@@ -607,7 +641,7 @@ fn pp15_dependent_and_pull_in_link_together() {
 }
 
 #[test]
-fn pp15_breaker_spares_pull_in() {
+fn pp15_all_links_dependents_and_pull_in() {
     let vault_index = index(&["n-proj.md", "sase.md", "20261005.md"]);
     let staged = project_note(concat!(
         "- [x] #task Fix pump [id:: fix-a] ^a-fix\n",
@@ -636,21 +670,30 @@ fn pp15_breaker_spares_pull_in() {
         .expect("pull-in row");
     assert!(pull_in.link.is_some());
     assert_eq!(pull_in.trigger, "project_empty");
-    let broken: Vec<_> = plan
+    assert_eq!(
+        pull_in.offer.as_ref().map(|offer| offer.group),
+        Some(OfferGroup::ProjectFinished)
+    );
+    let deps: Vec<_> = plan
         .unblocked
         .iter()
         .filter(|row| row.block_id != "prj")
         .collect();
-    assert_eq!(broken.len(), 6);
-    for row in broken {
-        assert_eq!(row.not_linked, Some("breaker"), "{row:?}");
+    assert_eq!(deps.len(), 6);
+    for row in deps {
+        assert!(row.link.is_some(), "{row:?}");
+        assert_eq!(row.not_linked, None);
+        assert_eq!(
+            row.offer.as_ref().map(|offer| offer.group),
+            Some(OfferGroup::HandOff)
+        );
     }
     let updated = plan
         .changed_files
         .get(&PathBuf::from("n-proj.md"))
         .expect("n-proj.md changed");
     assert!(
-        updated.contains("- [*] #task #prj Ship it! ^prj"),
+        updated.contains("- [*] #task #prj Ship it! [fresh:: 2026-10-05] ^prj"),
         "{updated}"
     );
 }
@@ -792,7 +835,9 @@ fn pp24_cross_note_dependent_pulls_in() {
         .get(&PathBuf::from("proj.md"))
         .expect("proj.md changed");
     assert!(
-        updated.contains("- [*] #task #prj Ship it! [dependsOn:: pay] ^prj"),
+        updated.contains(
+            "- [*] #task #prj Ship it! [fresh:: 2026-10-05] [dependsOn:: pay] ^prj"
+        ),
         "{updated}"
     );
 }
@@ -816,10 +861,21 @@ fn pp24_non_empty_note_keeps_project_task() {
         true,
         &vault_index,
     );
-    assert!(plan.unblocked.is_empty());
+    assert!(
+        plan.unblocked.iter().all(|row| row.block_id != "prj"),
+        "^prj stays project_task with unchanged Ready status: {:?}",
+        plan.unblocked
+    );
+    let other = plan
+        .unblocked
+        .iter()
+        .find(|row| row.block_id == "other")
+        .expect("leftover resident is offered");
+    let other_offer = other.offer.as_ref().expect("project offer");
+    assert_eq!(other_offer.group, OfferGroup::Project);
+    assert!(other_offer.selected);
+    assert!(other.link.is_some());
     assert!(plan.still_blocked.is_empty());
-    assert!(!plan.changed_files.contains_key(&PathBuf::from("proj.md")));
-    assert!(plan.new_day_text.is_none());
 }
 
 // PP13: R is `[*]`, visible and already linked → no write, no row.
@@ -846,8 +902,8 @@ fn pp13_visible_linked_next_is_silent() {
 // PP25: R is `[?] … #hide` and depends only on P in another note. N's only
 // other open task is `[?] #prj_is_blocked #hide`. Close P (planned today) →
 // R is pulled in after P's bullet: `[?]`→`[*]`, R's `#hide` removed. The
-// resident loses `#prj_is_blocked` and recovers to `[ ]` as
-// `project_member`. It gets no `[unblocked::]` (it is still hidden, UB6).
+// resident loses `#prj_is_blocked` and recovers to `[ ]` as `hidden`.
+// It gets no `[unblocked::]` (it is still hidden, UB6).
 #[test]
 fn pp25_blocked_prj_pull_in_recovers_hidden_resident() {
     let vault_index = index(&["pnote.md", "proj.md", "20261005.md"]);
@@ -886,7 +942,7 @@ fn pp25_blocked_prj_pull_in_recovers_hidden_resident() {
         .expect("resident row");
     assert_eq!(resident.previous_status_symbol, '?');
     assert_eq!(resident.status_symbol, ' ');
-    assert_eq!(resident.not_linked, Some("project_member"));
+    assert_eq!(resident.not_linked, Some("hidden"));
     assert_eq!(resident.link, None);
     assert_eq!(resident.trigger, "dependency");
     let updated = plan
@@ -894,7 +950,9 @@ fn pp25_blocked_prj_pull_in_recovers_hidden_resident() {
         .get(&PathBuf::from("proj.md"))
         .expect("proj.md changed");
     assert!(
-        updated.contains("- [*] #task #prj Ship it! [dependsOn:: pay] ^prj"),
+        updated.contains(
+            "- [*] #task #prj Ship it! [fresh:: 2026-10-05] [dependsOn:: pay] ^prj"
+        ),
         "{updated}"
     );
     let resident_line = updated
@@ -958,15 +1016,16 @@ fn pp26_undated_hidden_sibling_pulls_in() {
 }
 
 // PP27: R `[?]` with `[fresh::]`, not planned today, last blocker closed →
-// `' '`, `#hide` removed, `[unblocked:: today]` written,
-// `not_planned_today`. Linked instead → `[*]` and no `[unblocked::]` (UB4).
+// unpicked: `' '`, `#hide` removed, `[unblocked:: today]` written,
+// offered at implicit destination (`not_selected`). Linked instead →
+// `[*]` and no `[unblocked::]` (UB4).
 #[test]
 fn pp27_unplanned_blocked_prj_writes_unblocked() {
     let vault_index = index(&["pnote.md", "proj.md", "20261005.md"]);
     let staged = project_note(
         "- [?] #task #prj Ship it! #hide [fresh:: 2026-10-01] [dependsOn:: pay] ^prj\n",
     );
-    let plan = run(
+    let plan = run_sel(
         vec![task("pnote.md", "pay", "pay", "Pay vendor")],
         &[
             ("pnote.md", "- [x] #task Pay vendor [id:: pay] ^pay\n"),
@@ -977,6 +1036,7 @@ fn pp27_unplanned_blocked_prj_writes_unblocked() {
         "20261005.md",
         true,
         &vault_index,
+        SuccessorSelection::None,
     );
     assert!(plan.still_blocked.is_empty());
     assert_eq!(plan.unblocked.len(), 1);
@@ -984,9 +1044,12 @@ fn pp27_unplanned_blocked_prj_writes_unblocked() {
     assert_eq!(row.block_id, "prj");
     assert_eq!(row.previous_status_symbol, '?');
     assert_eq!(row.status_symbol, ' ');
-    assert_eq!(row.not_linked, Some("not_planned_today"));
+    assert_eq!(row.not_linked, Some("not_selected"));
     assert_eq!(row.trigger, "project_empty");
     assert!(row.hide_removed);
+    let offer = row.offer.as_ref().expect("implicit project_finished");
+    assert_eq!(offer.group, OfferGroup::ProjectFinished);
+    assert!(offer.destination.fallback);
     let updated = plan
         .changed_files
         .get(&PathBuf::from("proj.md"))
@@ -1139,8 +1202,9 @@ fn r1_punctuation_hide_linked_and_surfaced() {
     assert!(!updated.contains("#hide"), "{updated}");
     assert!(updated.contains("^prj"), "{updated}");
 
-    // Not-planned-today: same punctuation `#hide` still surfaces.
-    let plan = run(
+    // Unpicked implicit destination: same punctuation `#hide` still
+    // surfaces.
+    let plan = run_sel(
         vec![closed_a()],
         &[],
         &[("proj.md", &staged)],
@@ -1148,10 +1212,11 @@ fn r1_punctuation_hide_linked_and_surfaced() {
         "20261005.md",
         true,
         &vault_index,
+        SuccessorSelection::None,
     );
     assert_eq!(plan.unblocked.len(), 1);
     let row = &plan.unblocked[0];
-    assert_eq!(row.not_linked, Some("not_planned_today"));
+    assert_eq!(row.not_linked, Some("not_selected"));
     assert!(row.hide_removed);
     assert_eq!(row.text, "Ship it!");
     assert_eq!(row.previous_status_symbol, row.status_symbol);
@@ -1190,17 +1255,18 @@ fn r2_stale_blocked_cascade_needs_dependents() {
         true,
         &vault_index,
     );
-    let resident = plan.unblocked.iter().find(|row| row.block_id == "help");
     assert!(
-        resident.is_none(),
+        plan.unblocked.iter().all(|row| row.block_id != "help"),
         "resident with open prerequisite stays Blocked: {:?}",
         plan.unblocked
     );
-    assert!(
-        plan.still_blocked.iter().all(|row| row.block_id != "help"),
-        "resident is not recovered: {:?}",
-        plan.still_blocked
-    );
+    let help = plan
+        .still_blocked
+        .iter()
+        .find(|row| row.block_id == "help")
+        .expect("muted still_blocked resident");
+    assert_eq!(help.reason, "waits_on");
+    assert_eq!(help.project, Some(PathBuf::from("proj.md")));
 }
 
 // R3: `reason: "project"` still-blocked rows carry `scheduled` when the
@@ -1239,6 +1305,7 @@ fn r3_project_reason_carries_scheduled() {
         tasks_settings: &settings,
         note_settings: &settings,
         link_unblocked: true,
+        selection: SuccessorSelection::All,
         index: &vault_index,
     });
     assert!(plan.unblocked.is_empty(), "{:?}", plan.unblocked);
@@ -1317,7 +1384,8 @@ fn pp29_subproject_close_pulls_in_parent() {
         .get(&PathBuf::from("n-proj.md"))
         .expect("n-proj.md changed");
     assert!(
-        updated.contains("- [*] #task #prj Parent work ^prj"),
+        updated
+            .contains("- [*] #task #prj Parent work [fresh:: 2026-10-05] ^prj"),
         "{updated}"
     );
     assert!(!updated.contains("#hide"), "{updated}");
@@ -1481,7 +1549,7 @@ fn pp33_unplanned_subproject_close_surfaces_parent() {
         "- [ ] #task #prj Parent work #hide ^prj\n",
         "  - 🧩 **Sub-projects:** [[k]]\n",
     ));
-    let plan = run(
+    let plan = run_sel(
         vec![closed_k_prj()],
         &[("n-proj.md", &staged_n)],
         &[("k.md", &staged_k)],
@@ -1489,13 +1557,17 @@ fn pp33_unplanned_subproject_close_surfaces_parent() {
         "20261005.md",
         true,
         &vault_index,
+        SuccessorSelection::None,
     );
     assert_eq!(plan.unblocked.len(), 1);
     let row = &plan.unblocked[0];
     assert_eq!(row.block_id, "prj");
-    assert_eq!(row.not_linked, Some("not_planned_today"));
+    assert_eq!(row.not_linked, Some("not_selected"));
     assert_eq!(row.previous_status_symbol, row.status_symbol);
     assert!(row.hide_removed);
+    let offer = row.offer.as_ref().expect("implicit project_finished");
+    assert_eq!(offer.group, OfferGroup::ProjectFinished);
+    assert!(offer.destination.fallback);
     assert_eq!(row.text, "Parent work");
     let updated = plan
         .changed_files
@@ -1506,6 +1578,75 @@ fn pp33_unplanned_subproject_close_surfaces_parent() {
         updated.contains("- [ ] #task #prj Parent work ^prj"),
         "{updated}"
     );
+}
+
+// SO17: emptied-project pull-in, unpicked. `#hide` removed; no link;
+// `not_selected`; `project_finished`.
+#[test]
+fn so17_emptied_project_pull_in_unpicked() {
+    let vault_index = index(&["proj.md", "20261005.md"]);
+    let plan = run_sel(
+        vec![closed_a()],
+        &[],
+        &[(
+            "proj.md",
+            &staged_closed_a("- [ ] #task #prj Ship it! #hide ^prj"),
+        )],
+        Some(&day_fix("  - [[proj#^a-fix]]\n")),
+        "20261005.md",
+        true,
+        &vault_index,
+        SuccessorSelection::None,
+    );
+    assert_eq!(plan.unblocked.len(), 1);
+    let row = &plan.unblocked[0];
+    assert_eq!(row.block_id, "prj");
+    assert_eq!(row.not_linked, Some("not_selected"));
+    assert!(row.link.is_none());
+    assert!(row.hide_removed);
+    let offer = row.offer.as_ref().expect("project_finished");
+    assert_eq!(offer.group, OfferGroup::ProjectFinished);
+    assert!(!offer.selected);
+    assert!(plan.new_day_text.is_none());
+    let updated = plan
+        .changed_files
+        .get(&PathBuf::from("proj.md"))
+        .expect("proj.md changed");
+    assert!(!updated.contains("#hide"), "{updated}");
+}
+
+// SO18: parent-project pull-in (trigger c), unpicked. `#hide` removed;
+// no link; `not_selected`; `project_finished`. PP29's fixture is the
+// parent case; picked is already covered there.
+#[test]
+fn so18_parent_project_pull_in_unpicked() {
+    let vault_index = index(&["k.md", "n-proj.md", "20261005.md"]);
+    let staged_k = child_project_note("n-proj", "- [x] #task Kid work ^prj\n");
+    let staged_n = project_note(concat!(
+        "- [ ] #task #prj Parent work #hide ^prj\n",
+        "  - 🧩 **Sub-projects:** [[k]]\n",
+    ));
+    let plan = run_sel(
+        vec![closed_k_prj()],
+        &[("n-proj.md", &staged_n)],
+        &[("k.md", &staged_k)],
+        Some(&day_fix("  - [[k#^prj]]\n")),
+        "20261005.md",
+        true,
+        &vault_index,
+        SuccessorSelection::None,
+    );
+    assert_eq!(plan.unblocked.len(), 1);
+    let row = &plan.unblocked[0];
+    assert_eq!(row.block_id, "prj");
+    assert_eq!(row.trigger, "project_empty");
+    assert_eq!(row.not_linked, Some("not_selected"));
+    assert!(row.link.is_none());
+    assert!(row.hide_removed);
+    let offer = row.offer.as_ref().expect("project_finished");
+    assert_eq!(offer.group, OfferGroup::ProjectFinished);
+    assert!(!offer.selected);
+    assert!(plan.new_day_text.is_none());
 }
 
 // Trigger (c) prefilter (§12.10 Trigger): only a closed `^prj` whose

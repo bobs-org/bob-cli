@@ -49,23 +49,22 @@ fn close_successor_then_consume_net() {
         serde_json::from_str(stdout(&output).trim()).expect("capture JSON");
     let captures = json["captures"].as_array().expect("captures");
     assert_eq!(captures.len(), 2);
-    // The consumed successor row is gone from the first item (net).
-    assert!(
-        captures[0]["pomodoro_close"]["unblocked"]
-            .as_array()
-            .expect("first unblocked")
-            .is_empty(),
-        "{}",
-        captures[0]["pomodoro_close"]
-    );
+    // Empty selection: the first close reports D as an unpicked offer.
+    let first = captures[0]["pomodoro_close"]["unblocked"]
+        .as_array()
+        .expect("first unblocked");
+    assert_eq!(first.len(), 1);
+    assert_eq!(first[0]["block_id"], "d");
+    assert_eq!(first[0]["not_linked"], "not_selected");
     let second = captures[1]["task_complete"]["unblocked"]
         .as_array()
         .expect("second unblocked");
     assert_eq!(second.len(), 1);
     assert_eq!(second[0]["block_id"], "e");
-    assert_eq!(second[0]["status_symbol"], "*");
-    assert!(second[0]["link"].is_object());
-    // Final truth: P and D done, E next, and the continuation holds E.
+    assert_eq!(second[0]["status_symbol"], " ");
+    assert_eq!(second[0]["not_linked"], "not_selected");
+    assert!(second[0].get("link").is_none() || second[0]["link"].is_null());
+    // Final truth: P and D done, E recovered Ready, no successor bullet.
     let sase = fs::read_to_string(vault.join("sase.md")).expect("read note");
     assert!(sase.contains("- [x] #task P [id:: p]"), "{sase}");
     assert!(
@@ -73,12 +72,11 @@ fn close_successor_then_consume_net() {
         "{sase}"
     );
     assert!(
-        sase.contains("- [*] #task E [dependsOn:: d] [id:: e]"),
+        sase.contains("- [ ] #task E [dependsOn:: d] [id:: e]"),
         "{sase}"
     );
     let day = fs::read_to_string(&day_file).expect("read day");
-    assert!(day.contains("[[sase#^e]]"), "{day}");
-    assert!(!day.contains("[[sase#^d]]\n  - [[sase#^e]]"), "{day}");
+    assert!(!day.contains("[[sase#^e]]"), "{day}");
     // The surviving successor keeps the unblocked task-block role; the
     // consumed one reports none.
     let task_blocks = json["task_blocks"].as_array().expect("task_blocks");
@@ -175,10 +173,13 @@ fn ref_task_successor_links_like_an_ordinary_task() {
     assert_eq!(unblocked.len(), 1);
     assert_eq!(unblocked[0]["note_path"], "parent.md");
     assert_eq!(unblocked[0]["block_id"], "d");
-    assert_eq!(unblocked[0]["status_symbol"], "*");
-    assert_eq!(unblocked[0]["link"]["block_link"], "[[parent#^d]]");
+    assert_eq!(unblocked[0]["status_symbol"], " ");
+    assert_eq!(unblocked[0]["not_linked"], "not_selected");
+    assert!(
+        unblocked[0].get("link").is_none() || unblocked[0]["link"].is_null()
+    );
     assert_eq!(
         fs::read_to_string(vault.join("parent.md")).expect("read parent"),
-        "---\ntype: [[area]]\n---\n- [*] #task #ref Read paper [dependsOn:: p] [id:: d] ^d\n"
+        "---\ntype: [[area]]\n---\n- [ ] #task #ref Read paper [dependsOn:: p] [id:: d] ^d\n"
     );
 }

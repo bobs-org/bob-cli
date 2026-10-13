@@ -2401,6 +2401,8 @@ fn not_linked_reason(reason: &str) -> &str {
         "project_member" => "project member",
         "hidden" => "hidden",
         "disabled" => "linking off",
+        "not_selected" => "not pulled in",
+        "no_destination" => "no open Pomodoro",
         _ => reason,
     }
 }

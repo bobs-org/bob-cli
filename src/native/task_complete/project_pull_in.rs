@@ -361,10 +361,25 @@ fn open_prj_task_index(
     on_line.or(if count == 1 { last } else { None })
 }
 
-/// Run the pull-in Rule for one candidate (§12.10 steps 1–9; step 2
-/// uses SCHED(N)). Step 3 reads a tagged R as an inherited reason
-/// through the tag proxy, so a pull-in never links a Blocked `^prj`.
-/// Returns the verdict kind plus the link anchor for a step-9 pull-in.
+/// Pull-in classification after steps 1–5 (`docs/task-dependencies.md`
+/// §12.10). Destination (implicit vs earliest_anchor) is attached by
+/// [`super::successors::plan_successors`].
+#[derive(Debug, Clone)]
+pub(crate) enum PullInClass {
+    StillBlockedWaitsOn,
+    StillBlockedScheduled,
+    StillBlockedProject,
+    Recover(&'static str),
+    /// Offerable: `anchor` is `None` when preds(R) have no §12.3 slot.
+    Offer {
+        anchor: Option<SlotAnchor>,
+    },
+}
+
+/// Run the pull-in Rule for one candidate (§12.10 steps 1–5, then the
+/// shared kill-switch / implicit-destination / offer steps). Step 3
+/// reads a tagged R as an inherited reason through the tag proxy, so a
+/// pull-in never offers a Blocked `^prj`.
 pub(crate) fn classify_pull_in(
     surface: &ProjectSurface,
     open_count: usize,
@@ -373,38 +388,32 @@ pub(crate) fn classify_pull_in(
     link_unblocked: bool,
     today: NaiveDate,
     inherited: Option<PathBuf>,
-) -> (super::successors::VerdictKind, Option<SlotAnchor>) {
-    use super::successors::VerdictKind;
+) -> PullInClass {
     // Step 1: R has open prerequisites after the gesture.
     if open_count > 0 {
-        return (VerdictKind::StillBlockedWaitsOn, None);
+        return PullInClass::StillBlockedWaitsOn;
     }
     // Step 2: SCHED(N) is after today.
     if surface.sched_date.is_some_and(|date| date > today) {
-        return (VerdictKind::StillBlockedScheduled, None);
+        return PullInClass::StillBlockedScheduled;
     }
     // Step 3: R carries `#prj_is_blocked` (N inherits). R stays
     // byte-identical with `still_blocked{reason: project}`; this
     // applies to every trigger. The row builder reports the holder
     // from the close states, which carry the same tag read.
     if inherited.is_some() {
-        return (VerdictKind::StillBlockedProject, None);
+        return PullInClass::StillBlockedProject;
     }
     // Step 4 removes `#hide`; steps 5–9 pick the row shape.
     if live_before {
         // Step 5: R had a live link before the gesture.
-        return (VerdictKind::Recover("already_planned"), None);
+        return PullInClass::Recover("already_planned");
     }
-    let Some(anchor) = anchor else {
-        // Step 6: no task in preds(R) has an anchor.
-        return (VerdictKind::Recover("not_planned_today"), None);
-    };
     if !link_unblocked {
-        // Step 8: linking disabled.
-        return (VerdictKind::Recover("disabled"), None);
+        // Kill switch before implicit resolution (SO19).
+        return PullInClass::Recover("disabled");
     }
-    // Step 9: pull R in at the earliest anchor among preds(R).
-    (VerdictKind::Successor, Some(anchor))
+    PullInClass::Offer { anchor }
 }
 
 /// Recover rank for a pull-in recover verdict: `?` becomes `*` when R keeps
@@ -635,6 +644,7 @@ pub(crate) fn emit_rows(plan: &mut SuccessorPlan, ctx: RowEmit<'_>) {
             not_linked: None,
             trigger,
             hide_removed,
+            offer: verdict.offer.as_ref().map(super::successors::offer_report),
         });
     }
     for verdict in verdicts.iter() {
@@ -660,7 +670,7 @@ pub(crate) fn emit_rows(plan: &mut SuccessorPlan, ctx: RowEmit<'_>) {
                     reason: "waits_on",
                     waits_on: verdict.open_count,
                     scheduled: None,
-                    project,
+                    project: project.or_else(|| verdict.muted_project.clone()),
                     trigger,
                 });
             }
@@ -684,7 +694,7 @@ pub(crate) fn emit_rows(plan: &mut SuccessorPlan, ctx: RowEmit<'_>) {
                     reason: "scheduled",
                     waits_on: 0,
                     scheduled,
-                    project,
+                    project: project.or_else(|| verdict.muted_project.clone()),
                     trigger,
                 });
             }
@@ -739,16 +749,21 @@ pub(crate) fn emit_rows(plan: &mut SuccessorPlan, ctx: RowEmit<'_>) {
                     );
                     continue;
                 }
-                if task.status != '?' {
-                    continue;
-                }
                 let live = task.block_id.as_ref().is_some_and(|id| {
                     post_live
                         .live
                         .contains_key(&(file.relative_path.clone(), id.clone()))
                 });
-                let status_symbol = if live { '*' } else { ' ' };
-                if status_symbol == task.status {
+                let status_symbol = if task.status == '?' {
+                    if live {
+                        '*'
+                    } else {
+                        ' '
+                    }
+                } else {
+                    task.status
+                };
+                if status_symbol == task.status && verdict.offer.is_none() {
                     continue;
                 }
                 let block_id = task.block_id.clone().unwrap_or_default();
@@ -776,9 +791,14 @@ pub(crate) fn emit_rows(plan: &mut SuccessorPlan, ctx: RowEmit<'_>) {
                     not_linked: Some(reason),
                     trigger: DEPENDENCY_TRIGGER,
                     hide_removed: false,
+                    offer: verdict
+                        .offer
+                        .as_ref()
+                        .map(super::successors::offer_report),
                 });
             }
-            super::successors::VerdictKind::Successor => {}
+            super::successors::VerdictKind::Successor
+            | super::successors::VerdictKind::Offer => {}
         }
     }
 }
@@ -872,7 +892,8 @@ fn emit_pull_in_recover(
     let status_symbol = pull_in_recover_status(reason, task.status, live);
     let hide_removed =
         pull_in_hide_removed(&raw_task_line(&file.contents, task.line_index));
-    if status_symbol == task.status && !hide_removed {
+    if status_symbol == task.status && !hide_removed && verdict.offer.is_none()
+    {
         return;
     }
     let block_id = task.block_id.clone().unwrap_or_default();
@@ -896,5 +917,6 @@ fn emit_pull_in_recover(
         not_linked: Some(reason),
         trigger: PULL_IN_TRIGGER,
         hide_removed,
+        offer: verdict.offer.as_ref().map(super::successors::offer_report),
     });
 }

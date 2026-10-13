@@ -2,13 +2,13 @@
 //! (`docs/task-dependencies.md` §12.2, PDC vectors in §13.16).
 //!
 //! When a `^prj` dependent recovers and its project has no remaining
-//! reason, every `[?]` resident with no own remaining reason recovers
-//! with it as `Recover("project_member")`: recover-only, never
-//! successor-linked, outside the successor breaker, with
-//! `#prj_is_blocked` stripped. A resident in a still-blocked project
-//! stays Blocked (`StillBlockedProject`, PDC1). Every recovery that
-//! lands Ready writes `[unblocked::]` through `mark_unblocked`
-//! (`docs/freshness.md` §10b UB1 with the WRITE skips).
+//! reason, every open resident is classified: own remaining reason stays
+//! muted still-blocked (PDC3), `#hide` and already-planned rows fold,
+//! and the rest become `project` offers. A resident in a still-blocked
+//! project stays Blocked (`StillBlockedProject`, PDC1). Every recovery
+//! that lands Ready writes `[unblocked::]` through `mark_unblocked`
+//! (`docs/freshness.md` §10b UB1 with the WRITE skips). Picked offers
+//! stamp freshness instead.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -207,33 +207,55 @@ fn recovering_prj_verdict(
     }
     match verdict.kind {
         VerdictKind::Recover(_) if !verdict.pull_in => true,
-        VerdictKind::Recover(_) | VerdictKind::Successor => {
-            verdict.pull_in && task.status == '?'
-        }
+        VerdictKind::Recover(_)
+        | VerdictKind::Successor
+        | VerdictKind::Offer => verdict.pull_in && task.status == '?',
         _ => false,
     }
 }
 
-/// When a `^prj` dependent recovers, recover every `[?]`
-/// resident of its project that has no own remaining reason as
-/// `Recover("project_member")` (PDC2): recover-only, never
-/// successor-linked, outside the breaker. A resident that still has
-/// an open prerequisite of its own stays Blocked (PDC3). The cascade
-/// fires for any `^prj` recovery verdict, whatever reason replaced
-/// `project_task` (§12.10 pull-in verdicts included).
-pub(crate) fn recover_project_members(
-    verdicts: &mut Vec<super::successors::DependentVerdict>,
+/// One open resident of a recovered project, classified before this
+/// file attaches a destination (`docs/task-dependencies.md` §12.2
+/// PROJECT OFFERS).
+#[derive(Debug, Clone)]
+pub(crate) struct ProjectResidentClass {
+    pub(crate) file: usize,
+    pub(crate) task: usize,
+    pub(crate) preds: Vec<usize>,
+    pub(crate) open_count: usize,
+    pub(crate) kind: ProjectResidentKind,
+}
+
+/// Resident outcome before destination / selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ProjectResidentKind {
+    StillBlockedWaitsOn,
+    StillBlockedScheduled,
+    Hidden,
+    AlreadyPlanned,
+    Offerable,
+}
+
+/// When a `^prj` dependent recovers and the project has no remaining
+/// reason, classify every open resident (PDC2/PDC3). Hidden and
+/// already-planned rows fold; the rest are offerable. A resident with
+/// its own open prerequisite or future date stays muted still-blocked.
+/// The cascade fires for any `^prj` recovery verdict, whatever reason
+/// replaced `project_task` (§12.10 pull-in verdicts included).
+pub(crate) fn classify_project_members(
+    verdicts: &[super::successors::DependentVerdict],
     files: &[FileScan],
     states: &BTreeMap<(usize, usize), TaskDependencyState>,
     project_states: &ProjectCloseStates,
     today: NaiveDate,
-) {
-    use super::successors::VerdictKind;
+    live: &BTreeMap<(PathBuf, String), (usize, usize, usize, String)>,
+) -> Vec<ProjectResidentClass> {
     let recovering: Vec<(usize, Vec<usize>)> = verdicts
         .iter()
         .filter(|verdict| recovering_prj_verdict(verdict, files))
         .map(|verdict| (verdict.file, verdict.preds.clone()))
         .collect();
+    let mut classified = Vec::new();
     for (file_index, preds) in recovering {
         let Some(state) = project_states.get(file_index) else {
             continue;
@@ -248,7 +270,7 @@ pub(crate) fn recover_project_members(
             continue;
         };
         for (task_index, task) in file.tasks.iter().enumerate() {
-            if !context.is_resident(task) || task.status != '?' {
+            if !context.is_resident(task) {
                 continue;
             }
             let open_count = blocking_open_dependency_ids(
@@ -260,35 +282,34 @@ pub(crate) fn recover_project_members(
                     .unwrap_or(&[]),
             )
             .len();
-            if has_own_remaining_reason(task, open_count, today) {
-                continue;
-            }
-            if let Some(existing) = verdicts.iter_mut().find(|verdict| {
-                verdict.file == file_index && verdict.task == task_index
-            }) {
-                match existing.kind {
-                    VerdictKind::StillBlockedWaitsOn
-                    | VerdictKind::StillBlockedScheduled
-                    | VerdictKind::StillBlockedProject
-                    | VerdictKind::Recover("project_task") => {}
-                    _ => {
-                        existing.kind = VerdictKind::Recover("project_member");
-                        existing.anchor = None;
-                    }
+            let kind = if has_own_remaining_reason(task, open_count, today) {
+                if open_count > 0 {
+                    ProjectResidentKind::StillBlockedWaitsOn
+                } else {
+                    ProjectResidentKind::StillBlockedScheduled
                 }
-                continue;
-            }
-            verdicts.push(super::successors::DependentVerdict {
+            } else if has_hide_tag(&super::successors::raw_task_line(
+                &file.contents,
+                task.line_index,
+            )) {
+                ProjectResidentKind::Hidden
+            } else if task.block_id.as_ref().is_some_and(|id| {
+                live.contains_key(&(file.relative_path.clone(), id.clone()))
+            }) {
+                ProjectResidentKind::AlreadyPlanned
+            } else {
+                ProjectResidentKind::Offerable
+            };
+            classified.push(ProjectResidentClass {
                 file: file_index,
                 task: task_index,
                 preds: preds.clone(),
-                anchor: None,
-                kind: VerdictKind::Recover("project_member"),
                 open_count,
-                pull_in: false,
+                kind,
             });
         }
     }
+    classified
 }
 
 /// Whole-line writes for one Blocked → Ready recovery: strip

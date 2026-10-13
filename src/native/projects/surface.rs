@@ -29,6 +29,9 @@ pub(crate) struct ProjectSurface {
     pub(crate) remaining: usize,
     /// SUBOPEN(N): the marker line lists an open child.
     pub(crate) subopen: bool,
+    /// Open children on R's `🧩 **Sub-projects:**` marker, counted with
+    /// the same predicate as `subopen` (a `closed_child` stem is ignored).
+    pub(crate) open_subprojects: usize,
 }
 
 impl ProjectSurface {
@@ -104,24 +107,29 @@ fn project_surface_inner(
             .and_then(|stem| stem.to_str())
             .map(|stem| stem.to_ascii_lowercase())
     });
-    let subopen = project
+    let open_subprojects = project
         .prj_task
         .sub_block
         .first_marker_line()
         .map(|line| subproject_displays_in_marker_line(&line.trimmed_text))
-        .is_some_and(|displays| {
-            displays.iter().any(|(link_name, display)| {
-                display.state.is_open()
-                    && closed_stem.as_deref() != Some(link_name.as_str())
-            })
-        });
+        .map(|displays| {
+            displays
+                .iter()
+                .filter(|(link_name, display)| {
+                    display.state.is_open()
+                        && closed_stem.as_deref() != Some(link_name.as_str())
+                })
+                .count()
+        })
+        .unwrap_or(0);
     let prj_line = project.task_lines.iter().find(|task| task.is_prj)?;
     Some(ProjectSurface {
         prj_line_number: prj_line.line_number,
         sched_date: sync_schedule.as_ref().map(|sched| sched.date),
         sched_raw: sync_schedule.as_ref().map(|sched| sched.raw.clone()),
         remaining,
-        subopen,
+        subopen: open_subprojects > 0,
+        open_subprojects,
     })
 }
 

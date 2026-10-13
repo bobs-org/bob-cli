@@ -1,22 +1,22 @@
-//! Pure successor-link planner (`docs/task-dependencies.md` §12).
+//! Pure successor-offer planner (`docs/task-dependencies.md` §12).
 //!
 //! One definition, two engines: this is the Rust half of the shared rule.
 //! Given the completed set C of one capture gesture, the staged post-close
-//! snapshot, and the day text before the gesture, it decides per dependent
-//! whether it stays blocked, recovers, or links into its predecessor's
-//! slot. It returns note edits (status changes plus minted `^block-id`
-//! appends, via [`set_task_line_status`]) and the ordered successor
-//! placements for [`insert_successor_links`]. It never touches freshness,
-//! schedules, or `[id::]`/`[dependsOn::]` fields, and never calls
-//! `plan_task_link`.
+//! snapshot, the day text before the gesture, and a [`SuccessorSelection`],
+//! it classifies each dependent as still-blocked, recover-only, or a keyed
+//! offer. Picked offers mint, stamp freshness, and insert successor links;
+//! unpicked offers recover with `not_linked: not_selected`. It never calls
+//! `plan_task_link`, never retires a schedule, and never auto-links.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::ffi::OsStr;
 use std::path::{Component, Path, PathBuf};
 
 use chrono::NaiveDate;
+use sha2::{Digest, Sha256};
 
-use super::super::freshness::placement::UnblockScope;
+use super::super::capture_task_toggle::select_implicit_open_entry;
+use super::super::freshness::placement::{stamp_fresh, UnblockScope};
 use super::super::projects::edits::normalize_task_hide_tag;
 use super::super::projects::{project_surface, ProjectSurface};
 use super::super::{
@@ -32,26 +32,95 @@ use super::super::{
     task_dependencies::format::canonical_link,
     task_status_hooks::{
         logical_lines, scan_pomodoros, task_dependency_states, FileScan,
-        TasksSettings,
+        TaskLine, TasksSettings,
     },
     vault_links::NoteIndex,
 };
 use super::project_close::{
-    apply_recovery_writes, project_states_for_files, project_still_blocks,
-    recover_project_members, recovered_unblocked_project_files,
-    unblock_scope_for,
+    apply_recovery_writes, classify_project_members, project_states_for_files,
+    project_still_blocks, recovered_unblocked_project_files, unblock_scope_for,
+    ProjectResidentKind,
 };
 use super::project_pull_in::{
     classify_pull_in, detect_pull_ins, emit_rows, pull_in_hide_removed,
-    pull_in_preview_line, pull_in_recover_status, PullInCandidate, RowEmit,
+    pull_in_preview_line, pull_in_recover_status, PullInCandidate, PullInClass,
+    RowEmit,
 };
 use crate::native::capture_dependency_tasks::{
     has_hide_tag, has_prj_is_blocked_tag,
 };
 
-/// Successor-link breaker (`docs/task-dependencies.md` §12): more than
-/// this many successors in one gesture links none.
-pub(crate) const MAX_SUCCESSORS_PER_GESTURE: usize = 5;
+/// Which offers [`plan_successors`] should pick. Unknown keys are ignored.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)]
+pub(crate) enum SuccessorSelection {
+    /// Pick nothing: every offer recovers with `not_selected`.
+    None,
+    /// Pick every offer.
+    All,
+    /// Pick offers whose keys are in the set.
+    Keys(BTreeSet<String>),
+}
+
+/// Offer group (`docs/task-dependencies.md` §12.2 ORDER).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum OfferGroup {
+    HandOff,
+    Project,
+    ProjectFinished,
+}
+
+/// Where a picked offer's successor bullet lands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EntryRole {
+    Slot,
+    Closing,
+    Implicit,
+    Created,
+}
+
+/// Destination reported on an offer row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct OfferDestination {
+    pub day_file: PathBuf,
+    pub entry_name: String,
+    pub entry_role: EntryRole,
+    pub fallback: bool,
+}
+
+/// Offer draft attached to a verdict before row emission.
+#[derive(Debug, Clone)]
+pub(crate) struct OfferDraft {
+    pub group: OfferGroup,
+    pub project: Option<PathBuf>,
+    pub destination: OfferDestination,
+    pub target: SuccessorTarget,
+    pub key: String,
+    pub block_id_needed: bool,
+    pub selected: bool,
+    pub n: usize,
+}
+
+/// Offer fields on an [`UnblockedRow`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct OfferReport {
+    pub key: String,
+    pub n: usize,
+    pub group: OfferGroup,
+    pub project: Option<PathBuf>,
+    pub destination: OfferDestination,
+    pub selected: bool,
+    pub block_id_needed: bool,
+}
+
+/// Folded counts for one project whose `^prj` entered project offers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ProjectFold {
+    pub project: PathBuf,
+    pub hidden: usize,
+    pub already_planned: usize,
+    pub sub_projects: usize,
+}
 
 /// One completed predecessor in C: a task this gesture moved open →
 /// Done, read from the staged post-close text.
@@ -89,6 +158,7 @@ pub(crate) struct SuccessorInput<'a> {
     pub tasks_settings: &'a TasksSettings,
     pub note_settings: &'a NoteTaskSettings,
     pub link_unblocked: bool,
+    pub selection: SuccessorSelection,
     pub index: &'a NoteIndex,
 }
 
@@ -156,6 +226,8 @@ pub(crate) struct UnblockedRow {
     pub trigger: &'static str,
     /// Whether the gesture removed `#hide` from this row's line.
     pub hide_removed: bool,
+    /// Present on every offered row, picked or not.
+    pub offer: Option<OfferReport>,
 }
 
 /// One open dependent of C that stays blocked (§12.5 `still_blocked[]`).
@@ -188,6 +260,8 @@ pub(crate) struct SuccessorPlan {
     /// Day text after successor insertion (pre-retirement), when at
     /// least one successor linked.
     pub new_day_text: Option<String>,
+    /// One record per project whose `^prj` entered project offers.
+    pub project_folds: Vec<ProjectFold>,
 }
 
 /// Whether a vault-relative note is an inbox note, mirroring nav's
@@ -526,9 +600,14 @@ pub(crate) struct DependentVerdict {
     pub(crate) anchor: Option<SlotAnchor>,
     pub(crate) kind: VerdictKind,
     pub(crate) open_count: usize,
-    /// True for §12.10 pull-in verdicts: exempt from the breaker, with
-    /// `#hide` removal, surfaced rows, and the `[?]`-gated cascade.
+    /// True for §12.10 pull-in verdicts: `#hide` removal, surfaced rows,
+    /// and the `[?]`-gated cascade.
     pub(crate) pull_in: bool,
+    /// Offer draft when this row is selectable. Survives unpicked
+    /// recovery as `selected: false`.
+    pub(crate) offer: Option<OfferDraft>,
+    /// Project note for a muted still-blocked resident (PDC3 / SO9).
+    pub(crate) muted_project: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -538,6 +617,7 @@ pub(crate) enum VerdictKind {
     StillBlockedProject,
     Recover(&'static str),
     Successor,
+    Offer,
 }
 
 /// Run the shared successor rule (§12.2) over one gesture.
@@ -667,7 +747,7 @@ pub(crate) fn plan_successors(input: SuccessorInput) -> SuccessorPlan {
                 let inherited = project_states
                     .get(file_index)
                     .and_then(|state| state.inherited.clone());
-                let (kind, anchor) = classify_pull_in(
+                let class = classify_pull_in(
                     surface,
                     open_count,
                     live_before,
@@ -676,6 +756,23 @@ pub(crate) fn plan_successors(input: SuccessorInput) -> SuccessorPlan {
                     input.today,
                     inherited,
                 );
+                let (kind, anchor) = match class {
+                    PullInClass::StillBlockedWaitsOn => {
+                        (VerdictKind::StillBlockedWaitsOn, None)
+                    }
+                    PullInClass::StillBlockedScheduled => {
+                        (VerdictKind::StillBlockedScheduled, None)
+                    }
+                    PullInClass::StillBlockedProject => {
+                        (VerdictKind::StillBlockedProject, None)
+                    }
+                    PullInClass::Recover(reason) => {
+                        (VerdictKind::Recover(reason), None)
+                    }
+                    PullInClass::Offer { anchor } => {
+                        (VerdictKind::Offer, anchor)
+                    }
+                };
                 verdicts.push(DependentVerdict {
                     file: file_index,
                     task: task_index,
@@ -684,6 +781,8 @@ pub(crate) fn plan_successors(input: SuccessorInput) -> SuccessorPlan {
                     kind,
                     open_count,
                     pull_in: true,
+                    offer: None,
+                    muted_project: None,
                 });
                 continue;
             }
@@ -735,19 +834,13 @@ pub(crate) fn plan_successors(input: SuccessorInput) -> SuccessorPlan {
                     .contains_key(&(file.relative_path.clone(), id.clone()))
             }) {
                 VerdictKind::Recover("already_planned")
+            } else if !input.link_unblocked {
+                VerdictKind::Recover("disabled")
             } else {
-                let anchor = earliest_anchor(&preds, &anchors);
-                let linked = anchor.is_some() && input.link_unblocked;
-                if anchor.is_none() {
-                    VerdictKind::Recover("not_planned_today")
-                } else if !linked {
-                    VerdictKind::Recover("disabled")
-                } else {
-                    VerdictKind::Successor
-                }
+                VerdictKind::Offer
             };
             let anchor = match kind {
-                VerdictKind::Successor => earliest_anchor(&preds, &anchors),
+                VerdictKind::Offer => earliest_anchor(&preds, &anchors),
                 _ => None,
             };
             verdicts.push(DependentVerdict {
@@ -758,22 +851,61 @@ pub(crate) fn plan_successors(input: SuccessorInput) -> SuccessorPlan {
                 kind,
                 open_count,
                 pull_in: false,
+                offer: None,
+                muted_project: None,
             });
         }
     }
 
-    // PDC2/PDC3 (§13.16): a recovering `^prj` recovers its
-    // residents recover-only, outside the breaker.
-    recover_project_members(
+    let insertion_base = input
+        .post_day
+        .as_deref()
+        .or(input.pre_day.as_deref())
+        .unwrap_or("");
+    let implicit = resolve_implicit_destination(
+        insertion_base,
+        &input.day_relative,
+        input.index,
+    );
+
+    attach_hand_off_and_pull_in_offers(
         &mut verdicts,
+        &files,
+        &day,
+        &input.day_relative,
+        input.closing.is_some(),
+        implicit.as_ref(),
+        input.note_settings,
+    );
+
+    let members = classify_project_members(
+        &verdicts,
         &files,
         &states,
         &project_states,
         input.today,
+        &day.live,
+    );
+    let mut project_folds = Vec::new();
+    apply_project_member_classes(
+        &mut verdicts,
+        &mut project_folds,
+        members,
+        &files,
+        &day,
+        &anchors,
+        &surfaces,
+        &input.day_relative,
+        input.closing.is_some(),
+        implicit.as_ref(),
+        input.link_unblocked,
+        input.note_settings,
     );
 
-    // Order successors by anchor ledger position, then note path, then
-    // line (§12.2 ORDER).
+    assign_offer_keys(&mut verdicts, &files, input.note_settings);
+    apply_selection(&mut verdicts, &input.selection);
+    number_offers(&mut verdicts, &files);
+
     let mut successor_positions = verdicts
         .iter()
         .enumerate()
@@ -785,24 +917,6 @@ pub(crate) fn plan_successors(input: SuccessorInput) -> SuccessorPlan {
             .cmp(&successor_order_key(&verdicts[*right], &files))
     });
 
-    // BREAKER: more than 5 successors in one gesture links none; each
-    // recovers to its derived rank instead. Pull-ins never count toward
-    // the breaker and are never broken (§12.10 BREAKER).
-    let linkable_successors = successor_positions
-        .iter()
-        .filter(|position| !verdicts[**position].pull_in)
-        .count();
-    if linkable_successors > MAX_SUCCESSORS_PER_GESTURE {
-        for position in &successor_positions {
-            if verdicts[*position].pull_in {
-                continue;
-            }
-            verdicts[*position].kind = VerdictKind::Recover("breaker");
-            verdicts[*position].anchor = None;
-        }
-        successor_positions.retain(|position| verdicts[*position].pull_in);
-    }
-
     apply_verdicts(
         input,
         files,
@@ -811,6 +925,7 @@ pub(crate) fn plan_successors(input: SuccessorInput) -> SuccessorPlan {
         day,
         &project_states,
         &surfaces,
+        project_folds,
     )
 }
 
@@ -942,13 +1057,521 @@ fn successor_order_key(
     files: &[FileScan],
 ) -> ((usize, usize), PathBuf, usize) {
     let anchor_key = verdict
-        .anchor
+        .offer
         .as_ref()
-        .map(|anchor| (anchor.entry_index, anchor.bullet_end))
+        .map(|offer| match &offer.target {
+            SuccessorTarget::Slot {
+                entry_index,
+                bullet_end,
+                ..
+            } => (*entry_index, *bullet_end),
+            SuccessorTarget::Closing { entry_index, .. } => {
+                (entry_index.unwrap_or(usize::MAX), 0)
+            }
+        })
+        .or_else(|| {
+            verdict
+                .anchor
+                .as_ref()
+                .map(|anchor| (anchor.entry_index, anchor.bullet_end))
+        })
         .unwrap_or((usize::MAX, usize::MAX));
     let file = &files[verdict.file];
     let task = &file.tasks[verdict.task];
     (anchor_key, file.relative_path.clone(), task.line_index)
+}
+
+fn offer_order_key(
+    verdict: &DependentVerdict,
+    files: &[FileScan],
+) -> (u8, (usize, usize), PathBuf, usize) {
+    let group = match verdict.offer.as_ref().map(|offer| offer.group) {
+        Some(OfferGroup::HandOff) => 0,
+        Some(OfferGroup::Project) => 1,
+        Some(OfferGroup::ProjectFinished) => 2,
+        None => 3,
+    };
+    let ((entry, bullet), path, line) = successor_order_key(verdict, files);
+    (group, (entry, bullet), path, line)
+}
+
+struct ImplicitDest {
+    target: SuccessorTarget,
+    entry_name: String,
+    entry_index: usize,
+}
+
+fn resolve_implicit_destination(
+    base_text: &str,
+    day_relative: &Path,
+    index: &NoteIndex,
+) -> Option<ImplicitDest> {
+    let scan = capture_pomodoros::scan(base_text);
+    let entry = select_implicit_open_entry(&scan).ok()?;
+    let day = DayView::parse(base_text, day_relative, index);
+    let line_0 = entry.line.saturating_sub(1);
+    let entry_index =
+        day.entries.iter().position(|item| item.line == line_0)?;
+    let lines = logical_lines(base_text);
+    let end = pomodoros_section_range(&lines)
+        .map(|range| range.end.min(lines.len()))
+        .unwrap_or(lines.len());
+    let insert_at =
+        capture_pomodoros::pomodoro_block_range(&lines, line_0.min(end), end)
+            .end;
+    Some(ImplicitDest {
+        target: SuccessorTarget::Closing {
+            entry_index: Some(entry_index),
+            insert_at,
+            created_name: None,
+        },
+        entry_name: entry.name.clone().unwrap_or_default(),
+        entry_index,
+    })
+}
+
+fn slot_target(anchor: &SlotAnchor) -> SuccessorTarget {
+    SuccessorTarget::Slot {
+        entry_index: anchor.entry_index,
+        bullet_end: anchor.bullet_end,
+        indent: anchor.indent.clone(),
+    }
+}
+
+fn offer_destination(
+    day_relative: &Path,
+    entry_name: String,
+    entry_role: EntryRole,
+    fallback: bool,
+) -> OfferDestination {
+    OfferDestination {
+        day_file: day_relative.to_path_buf(),
+        entry_name,
+        entry_role,
+        fallback,
+    }
+}
+
+fn slot_entry_name(day: &DayView, anchor: &SlotAnchor) -> String {
+    day.entries
+        .get(anchor.entry_index)
+        .map(|entry| entry.name.clone())
+        .unwrap_or_default()
+}
+
+fn make_offer(
+    group: OfferGroup,
+    project: Option<PathBuf>,
+    destination: OfferDestination,
+    target: SuccessorTarget,
+    block_id_needed: bool,
+) -> OfferDraft {
+    OfferDraft {
+        group,
+        project,
+        destination,
+        target,
+        key: String::new(),
+        block_id_needed,
+        selected: false,
+        n: 0,
+    }
+}
+
+fn block_id_needed(task: &TaskLine) -> bool {
+    task.block_id.is_none()
+}
+
+fn attach_offer(
+    verdict: &mut DependentVerdict,
+    files: &[FileScan],
+    day: &DayView,
+    day_relative: &Path,
+    closing: bool,
+    implicit: Option<&ImplicitDest>,
+    group: OfferGroup,
+    project: Option<PathBuf>,
+) -> bool {
+    let file = &files[verdict.file];
+    let task = &file.tasks[verdict.task];
+    let needed = block_id_needed(task);
+    if closing {
+        let dummy = SlotAnchor::at(usize::MAX, usize::MAX, "\t");
+        let target = verdict
+            .anchor
+            .as_ref()
+            .map(slot_target)
+            .unwrap_or_else(|| slot_target(&dummy));
+        verdict.kind = VerdictKind::Offer;
+        verdict.offer = Some(make_offer(
+            group,
+            project,
+            offer_destination(
+                day_relative,
+                String::new(),
+                EntryRole::Closing,
+                false,
+            ),
+            target,
+            needed,
+        ));
+        return true;
+    }
+    if let Some(anchor) = verdict.anchor.as_ref() {
+        let name = slot_entry_name(day, anchor);
+        verdict.kind = VerdictKind::Offer;
+        verdict.offer = Some(make_offer(
+            group,
+            project,
+            offer_destination(day_relative, name, EntryRole::Slot, false),
+            slot_target(anchor),
+            needed,
+        ));
+        return true;
+    }
+    let Some(implicit) = implicit else {
+        verdict.kind = VerdictKind::Recover("no_destination");
+        verdict.anchor = None;
+        verdict.offer = None;
+        return false;
+    };
+    verdict.kind = VerdictKind::Offer;
+    verdict.anchor = Some(SlotAnchor::at(implicit.entry_index, 0, "\t"));
+    verdict.offer = Some(make_offer(
+        group,
+        project,
+        offer_destination(
+            day_relative,
+            implicit.entry_name.clone(),
+            EntryRole::Implicit,
+            true,
+        ),
+        implicit.target.clone(),
+        needed,
+    ));
+    true
+}
+
+fn attach_hand_off_and_pull_in_offers(
+    verdicts: &mut [DependentVerdict],
+    files: &[FileScan],
+    day: &DayView,
+    day_relative: &Path,
+    closing: bool,
+    implicit: Option<&ImplicitDest>,
+    _note_settings: &NoteTaskSettings,
+) {
+    for verdict in verdicts.iter_mut() {
+        if verdict.kind != VerdictKind::Offer {
+            continue;
+        }
+        let group = if verdict.pull_in {
+            OfferGroup::ProjectFinished
+        } else {
+            OfferGroup::HandOff
+        };
+        attach_offer(
+            verdict,
+            files,
+            day,
+            day_relative,
+            closing,
+            implicit,
+            group,
+            None,
+        );
+    }
+}
+
+fn apply_project_member_classes(
+    verdicts: &mut Vec<DependentVerdict>,
+    folds: &mut Vec<ProjectFold>,
+    members: Vec<super::project_close::ProjectResidentClass>,
+    files: &[FileScan],
+    day: &DayView,
+    anchors: &[Option<SlotAnchor>],
+    surfaces: &[Option<ProjectSurface>],
+    day_relative: &Path,
+    closing: bool,
+    implicit: Option<&ImplicitDest>,
+    link_unblocked: bool,
+    _note_settings: &NoteTaskSettings,
+) {
+    let mut grouped: BTreeMap<
+        usize,
+        Vec<super::project_close::ProjectResidentClass>,
+    > = BTreeMap::new();
+    for member in members {
+        grouped.entry(member.file).or_default().push(member);
+    }
+    for (file_index, residents) in grouped {
+        let mut hidden = 0usize;
+        let mut already_planned = 0usize;
+        let project_path = files[file_index].relative_path.clone();
+        let sub_projects = surfaces
+            .get(file_index)
+            .and_then(|surface| surface.as_ref())
+            .map(|surface| surface.open_subprojects)
+            .unwrap_or(0);
+        for resident in residents {
+            let existing = verdicts.iter().position(|verdict| {
+                verdict.file == resident.file && verdict.task == resident.task
+            });
+            if let Some(position) = existing {
+                let kind = verdicts[position].kind;
+                let is_hand_off =
+                    verdicts[position].offer.as_ref().is_some_and(|offer| {
+                        offer.group == OfferGroup::HandOff
+                    }) || kind == VerdictKind::Offer
+                        && !verdicts[position].pull_in;
+                match kind {
+                    VerdictKind::StillBlockedWaitsOn
+                    | VerdictKind::StillBlockedScheduled
+                    | VerdictKind::StillBlockedProject => continue,
+                    VerdictKind::Recover("project_task") => continue,
+                    _ if is_hand_off => continue,
+                    _ => {}
+                }
+                match resident.kind {
+                    ProjectResidentKind::StillBlockedWaitsOn => {
+                        verdicts[position].kind =
+                            VerdictKind::StillBlockedWaitsOn;
+                        verdicts[position].open_count = resident.open_count;
+                        verdicts[position].muted_project =
+                            Some(project_path.clone());
+                        verdicts[position].offer = None;
+                    }
+                    ProjectResidentKind::StillBlockedScheduled => {
+                        verdicts[position].kind =
+                            VerdictKind::StillBlockedScheduled;
+                        verdicts[position].muted_project =
+                            Some(project_path.clone());
+                        verdicts[position].offer = None;
+                    }
+                    ProjectResidentKind::Hidden => {
+                        hidden += 1;
+                        verdicts[position].kind =
+                            VerdictKind::Recover("hidden");
+                        verdicts[position].anchor = None;
+                        verdicts[position].offer = None;
+                    }
+                    ProjectResidentKind::AlreadyPlanned => {
+                        already_planned += 1;
+                        verdicts[position].kind =
+                            VerdictKind::Recover("already_planned");
+                        verdicts[position].anchor = None;
+                        verdicts[position].offer = None;
+                    }
+                    ProjectResidentKind::Offerable => {
+                        if !link_unblocked {
+                            verdicts[position].kind =
+                                VerdictKind::Recover("disabled");
+                            verdicts[position].anchor = None;
+                            verdicts[position].offer = None;
+                            continue;
+                        }
+                        verdicts[position].preds = resident.preds.clone();
+                        verdicts[position].anchor =
+                            earliest_anchor(&resident.preds, anchors);
+                        verdicts[position].kind = VerdictKind::Offer;
+                        attach_offer(
+                            &mut verdicts[position],
+                            files,
+                            day,
+                            day_relative,
+                            closing,
+                            implicit,
+                            OfferGroup::Project,
+                            Some(project_path.clone()),
+                        );
+                    }
+                }
+                continue;
+            }
+            match resident.kind {
+                ProjectResidentKind::Hidden => hidden += 1,
+                ProjectResidentKind::AlreadyPlanned => already_planned += 1,
+                _ => {}
+            }
+            let (kind, anchor, muted_project) = match resident.kind {
+                ProjectResidentKind::StillBlockedWaitsOn => (
+                    VerdictKind::StillBlockedWaitsOn,
+                    None,
+                    Some(project_path.clone()),
+                ),
+                ProjectResidentKind::StillBlockedScheduled => (
+                    VerdictKind::StillBlockedScheduled,
+                    None,
+                    Some(project_path.clone()),
+                ),
+                ProjectResidentKind::Hidden => {
+                    (VerdictKind::Recover("hidden"), None, None)
+                }
+                ProjectResidentKind::AlreadyPlanned => {
+                    (VerdictKind::Recover("already_planned"), None, None)
+                }
+                ProjectResidentKind::Offerable if !link_unblocked => {
+                    (VerdictKind::Recover("disabled"), None, None)
+                }
+                ProjectResidentKind::Offerable => (
+                    VerdictKind::Offer,
+                    earliest_anchor(&resident.preds, anchors),
+                    None,
+                ),
+            };
+            let mut verdict = DependentVerdict {
+                file: resident.file,
+                task: resident.task,
+                preds: resident.preds,
+                anchor,
+                kind,
+                open_count: resident.open_count,
+                pull_in: false,
+                offer: None,
+                muted_project,
+            };
+            if kind == VerdictKind::Offer {
+                attach_offer(
+                    &mut verdict,
+                    files,
+                    day,
+                    day_relative,
+                    closing,
+                    implicit,
+                    OfferGroup::Project,
+                    Some(project_path.clone()),
+                );
+            }
+            verdicts.push(verdict);
+        }
+        folds.push(ProjectFold {
+            project: project_path,
+            hidden,
+            already_planned,
+            sub_projects,
+        });
+    }
+}
+
+fn offer_key_for(
+    file: &FileScan,
+    task: &TaskLine,
+    digest_ordinal: usize,
+    note_settings: &NoteTaskSettings,
+) -> String {
+    let path = normalized_relative(&file.relative_path);
+    if let Some(id) = task.block_id.as_deref() {
+        return format!("{path}#^{id}");
+    }
+    let description = clean_description(
+        &task.description,
+        note_settings.global_filter.as_str(),
+        None,
+    );
+    let digest = Sha256::digest(description.as_bytes());
+    let hex = hex::encode(digest);
+    let short = &hex[..8];
+    if digest_ordinal >= 2 {
+        format!("{path}@{short}~{digest_ordinal}")
+    } else {
+        format!("{path}@{short}")
+    }
+}
+
+fn assign_offer_keys(
+    verdicts: &mut [DependentVerdict],
+    files: &[FileScan],
+    note_settings: &NoteTaskSettings,
+) {
+    let mut positions: Vec<usize> = verdicts
+        .iter()
+        .enumerate()
+        .filter(|(_, verdict)| verdict.offer.is_some())
+        .map(|(position, _)| position)
+        .collect();
+    positions.sort_by_key(|position| {
+        let verdict = &verdicts[*position];
+        (
+            files[verdict.file].relative_path.clone(),
+            files[verdict.file].tasks[verdict.task].line_index,
+        )
+    });
+    let mut seen: BTreeMap<(PathBuf, String), usize> = BTreeMap::new();
+    for position in positions {
+        let verdict = &verdicts[position];
+        let file = &files[verdict.file];
+        let task = &file.tasks[verdict.task];
+        let ordinal = if task.block_id.is_some() {
+            1
+        } else {
+            let description = clean_description(
+                &task.description,
+                note_settings.global_filter.as_str(),
+                None,
+            );
+            let digest = hex::encode(Sha256::digest(description.as_bytes()));
+            let key = (file.relative_path.clone(), digest[..8].to_string());
+            let count = seen.entry(key).or_insert(0);
+            *count += 1;
+            *count
+        };
+        let key = offer_key_for(file, task, ordinal, note_settings);
+        if let Some(offer) = verdicts[position].offer.as_mut() {
+            offer.key = key;
+        }
+    }
+}
+
+fn apply_selection(
+    verdicts: &mut [DependentVerdict],
+    selection: &SuccessorSelection,
+) {
+    for verdict in verdicts.iter_mut() {
+        let Some(offer) = verdict.offer.as_mut() else {
+            continue;
+        };
+        let picked = match selection {
+            SuccessorSelection::All => true,
+            SuccessorSelection::None => false,
+            SuccessorSelection::Keys(keys) => keys.contains(&offer.key),
+        };
+        offer.selected = picked;
+        if picked {
+            verdict.kind = VerdictKind::Successor;
+        } else {
+            verdict.kind = VerdictKind::Recover("not_selected");
+        }
+    }
+}
+
+fn number_offers(verdicts: &mut [DependentVerdict], files: &[FileScan]) {
+    let mut positions: Vec<usize> = verdicts
+        .iter()
+        .enumerate()
+        .filter(|(_, verdict)| verdict.offer.is_some())
+        .map(|(position, _)| position)
+        .collect();
+    positions.sort_by(|left, right| {
+        offer_order_key(&verdicts[*left], files)
+            .cmp(&offer_order_key(&verdicts[*right], files))
+    });
+    for (index, position) in positions.into_iter().enumerate() {
+        if let Some(offer) = verdicts[position].offer.as_mut() {
+            offer.n = index + 1;
+        }
+    }
+}
+
+pub(crate) fn offer_report(offer: &OfferDraft) -> OfferReport {
+    OfferReport {
+        key: offer.key.clone(),
+        n: offer.n,
+        group: offer.group,
+        project: offer.project.clone(),
+        destination: offer.destination.clone(),
+        selected: offer.selected,
+        block_id_needed: offer.block_id_needed,
+    }
 }
 
 pub(crate) fn raw_task_line(contents: &str, line_index: usize) -> String {
@@ -1020,9 +1643,11 @@ fn apply_verdicts(
     day: DayView,
     project_states: &super::project_close::ProjectCloseStates,
     surfaces: &[Option<ProjectSurface>],
+    project_folds: Vec<ProjectFold>,
 ) -> SuccessorPlan {
     let mut plan = SuccessorPlan {
         ran_lookup: true,
+        project_folds,
         ..SuccessorPlan::default()
     };
     // Mint successor block IDs in placement order so the per-note used
@@ -1034,7 +1659,12 @@ fn apply_verdicts(
         BTreeMap::new();
     for position in &successor_positions {
         let verdict = &verdicts[*position];
-        if verdict.pull_in {
+        if verdict.pull_in
+            || files[verdict.file].tasks[verdict.task]
+                .block_id
+                .as_deref()
+                .is_some_and(|id| is_project_task_id(Some(id)))
+        {
             continue;
         }
         let file = &files[verdict.file];
@@ -1079,6 +1709,20 @@ fn apply_verdicts(
             closing,
         )
     });
+    let mut verdicts = verdicts;
+    if let Some(resolved) = closing_target.as_ref() {
+        let role = if resolved.entry_created {
+            EntryRole::Created
+        } else {
+            EntryRole::Closing
+        };
+        for verdict in verdicts.iter_mut() {
+            if let Some(offer) = verdict.offer.as_mut() {
+                offer.destination.entry_name = resolved.name.clone();
+                offer.destination.entry_role = role;
+            }
+        }
+    }
     // Build placements and insert them into the day text before
     // retirement (for `!`) or as the final day text (for closes).
     let mut placements = Vec::new();
@@ -1121,6 +1765,13 @@ fn apply_verdicts(
             });
             continue;
         }
+        if let Some(offer) = verdict.offer.as_ref() {
+            placements.push(SuccessorPlacement {
+                target: offer.target.clone(),
+                block_link,
+            });
+            continue;
+        }
         let anchor = verdict.anchor.as_ref().expect("successor has an anchor");
         placements.push(SuccessorPlacement {
             target: SuccessorTarget::Slot {
@@ -1159,7 +1810,8 @@ fn apply_verdicts(
                          mint: Option<&str>,
                          recovery: Option<(NaiveDate, UnblockScope)>,
                          strip_tag: bool,
-                         strip_hide: bool| {
+                         strip_hide: bool,
+                         stamp: Option<NaiveDate>| {
         let staged = edited.get(relative).cloned().unwrap_or_else(|| {
             files
                 .iter()
@@ -1196,6 +1848,9 @@ fn apply_verdicts(
             } else if strip_tag {
                 updated = normalize_prj_is_blocked_tag(&updated, false);
             }
+            if let Some(date) = stamp {
+                updated = stamp_fresh(&updated, date).line;
+            }
             if line.ends_with('\r') {
                 updated.push('\r');
             }
@@ -1220,8 +1875,9 @@ fn apply_verdicts(
             Some(successor_new_status(task.status)),
             mint,
             None,
-            false,
+            true,
             verdict.pull_in,
+            Some(input.today),
         );
     }
     // Recovered ranks derive from the post-gesture day text: `*` when the
@@ -1262,10 +1918,11 @@ fn apply_verdicts(
                 recovery,
                 false,
                 true,
+                None,
             );
             continue;
         }
-        if task.status != '?' {
+        if task.status != '?' && verdict.offer.is_none() {
             continue;
         }
         let live = task.block_id.as_ref().is_some_and(|id| {
@@ -1273,20 +1930,33 @@ fn apply_verdicts(
                 .live
                 .contains_key(&(file.relative_path.clone(), id.clone()))
         });
-        let landed = if live { '*' } else { ' ' };
+        let landed = if task.status == '?' {
+            if live {
+                '*'
+            } else {
+                ' '
+            }
+        } else {
+            task.status
+        };
+        if landed == task.status && verdict.offer.is_none() {
+            continue;
+        }
         let scope = unblock_scope_for(
             &file.relative_path,
             &raw_task_line(&file.contents, task.line_index),
             live,
         );
+        let recovery = (landed == ' ').then_some((input.today, scope));
         edit_line(
             &file.relative_path,
             task.line_index,
             Some(landed),
             None,
-            Some((input.today, scope)),
+            recovery,
+            true,
             false,
-            false,
+            None,
         );
     }
     // PDC3: remaining open residents of a recovered project lose
@@ -1322,6 +1992,7 @@ fn apply_verdicts(
                 None,
                 true,
                 false,
+                None,
             );
         }
     }

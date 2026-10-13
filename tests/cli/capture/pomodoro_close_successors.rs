@@ -47,7 +47,9 @@ fn sl7_close_all_creates_continuation_holding_only_successor() {
     assert_eq!(row["block_id"], "relaunch-failed-agents");
     assert_eq!(row["text"], "Re-launch failed agents");
     assert_eq!(row["previous_status_symbol"], "?");
-    assert_eq!(row["status_symbol"], "*");
+    assert_eq!(row["status_symbol"], " ");
+    assert_eq!(row["not_linked"], "not_selected");
+    assert!(row.get("link").is_none() || row["link"].is_null());
     assert_eq!(
         row["unblocked_by"],
         serde_json::json!([{
@@ -56,46 +58,13 @@ fn sl7_close_all_creates_continuation_holding_only_successor() {
             "text": "Fix apollo machine",
         }])
     );
-    let link = &row["link"];
-    assert_eq!(link["day_file"], "20261005.md");
-    assert_eq!(link["entry_name"], "BOB");
-    assert_eq!(link["entry_created"], true);
-    assert_eq!(link["next_up"], true);
-    assert_eq!(link["block_link"], "[[sase#^relaunch-failed-agents]]");
-    assert_eq!(link["block_id_created"], false);
-    let next = &close["next_pomodoro"];
-    assert_eq!(next["name"], "BOB");
-    assert_eq!(next["created"], true);
-    assert_eq!(next["line"], link["entry_line"]);
-
-    assert_eq!(
-        fs::read_to_string(&day_file).expect("read day"),
-        "## Pomodoros\n- [x] (**0920-0930** [t:: 10m]) \u{2014} BOB\n  - ~~[[sase#^fix-apollo]]~~\n- [ ] () \u{2014} BOB\n\t- [[sase#^relaunch-failed-agents]]\n- [ ] () \u{2014} FIX\n",
-    );
+    let day = fs::read_to_string(&day_file).expect("read day");
+    assert!(day.contains("~~[[sase#^fix-apollo]]~~"), "{day}");
+    assert!(!day.contains("relaunch-failed-agents"), "{day}");
     assert_eq!(
         fs::read_to_string(vault.join("sase.md")).expect("read note"),
-        "- [x] #task Fix apollo machine [id:: fix-apollo]  [completion:: 2026-10-05] ^fix-apollo\n- [*] #task Re-launch failed agents [dependsOn:: fix-apollo] [id:: relaunch-agents] ^relaunch-failed-agents\n",
+        "- [x] #task Fix apollo machine [id:: fix-apollo]  [completion:: 2026-10-05] ^fix-apollo\n- [ ] #task Re-launch failed agents [dependsOn:: fix-apollo] [id:: relaunch-agents] ^relaunch-failed-agents\n",
     );
-    // The added successor bullet carries the unblocked block-line reason.
-    let blocks = json["pomodoro_blocks"].as_array().expect("blocks");
-    let created = blocks
-        .iter()
-        .find(|block| block["name"] == "BOB" && block["created"] == true)
-        .expect("created BOB block");
-    let added: Vec<&serde_json::Value> = created["lines"]
-        .as_array()
-        .expect("lines")
-        .iter()
-        .filter(|line| {
-            line["change"] == "added"
-                && line["text"].as_str().is_some_and(|text| {
-                    text.contains("[[sase#^relaunch-failed-agents]]")
-                })
-        })
-        .collect();
-    assert_eq!(added.len(), 1);
-    assert_eq!(added[0]["reason"], "unblocked");
-    // The successor keeps the unblocked task-block role.
     let task_blocks = json["task_blocks"].as_array().expect("task_blocks");
     assert!(
         task_blocks
@@ -124,19 +93,14 @@ fn sl8_embed_close_appends_successor_after_carried_links() {
     let close = &json["pomodoro_close"];
     let unblocked = close["unblocked"].as_array().expect("unblocked");
     assert_eq!(unblocked.len(), 1);
-    let link = &unblocked[0]["link"];
-    assert_eq!(link["entry_name"], "BOB");
-    assert_eq!(link["entry_created"], true);
-    assert_eq!(link["next_up"], true);
+    assert_eq!(unblocked[0]["not_linked"], "not_selected");
+    assert!(
+        unblocked[0].get("link").is_none() || unblocked[0]["link"].is_null()
+    );
 
     let day = fs::read_to_string(&day_file).expect("read day");
-    let keep = day
-        .find("[[sase#^keep]]\n")
-        .expect("carried keep in continuation");
-    let relaunched = day
-        .find("[[sase#^relaunch-failed-agents]]")
-        .expect("successor in continuation");
-    assert!(relaunched > keep, "{day}");
+    assert!(day.contains("[[sase#^keep]]"), "{day}");
+    assert!(!day.contains("relaunch-failed-agents"), "{day}");
 }
 
 // SL12: one gesture closing two predecessors links their shared
@@ -166,13 +130,16 @@ fn sl12_two_predecessors_link_shared_dependent_once() {
         .map(|cause| cause["block_id"].as_str().expect("cause id"))
         .collect();
     assert_eq!(by, vec!["p1", "p2"]);
-    assert_eq!(unblocked[0]["link"]["block_link"], "[[sase#^both]]");
+    assert_eq!(unblocked[0]["not_linked"], "not_selected");
+    assert!(
+        unblocked[0].get("link").is_none() || unblocked[0]["link"].is_null()
+    );
 }
 
-// SL17: more than five successors in one gesture links none; each
-// recovers to its derived rank with the breaker reason.
+// Capture without a selection recovers every successor as an unpicked
+// offer (`not_selected`); the breaker cap is gone (SO2 / SO26).
 #[test]
-fn sl17_breaker_links_none_of_six_successors() {
+fn sl17_unpicked_offers_link_none_of_six_successors() {
     let (_temp, vault, day_file) = vault("bob-cli-close-sl17");
     let mut note = "- [ ] #task Pred [id:: p] ^p\n".to_string();
     for index in 1..=6 {
@@ -191,7 +158,7 @@ fn sl17_breaker_links_none_of_six_successors() {
     let unblocked = close["unblocked"].as_array().expect("unblocked");
     assert_eq!(unblocked.len(), 6);
     for row in unblocked {
-        assert_eq!(row["not_linked"], "breaker");
+        assert_eq!(row["not_linked"], "not_selected");
         assert_eq!(row["previous_status_symbol"], "?");
         assert_eq!(row["status_symbol"], " ");
         assert!(row.get("link").is_none() || row["link"].is_null(), "{row}");
@@ -216,15 +183,14 @@ fn sl24_successor_reuses_later_same_name_entry() {
     let close = &json["pomodoro_close"];
     let unblocked = close["unblocked"].as_array().expect("unblocked");
     assert_eq!(unblocked.len(), 1);
-    let link = &unblocked[0]["link"];
-    assert_eq!(link["entry_name"], "BOB");
-    assert_eq!(link["entry_created"], false);
-    assert_eq!(link["next_up"], false);
-
-    assert_eq!(
-        fs::read_to_string(&day_file).expect("read day"),
-        "## Pomodoros\n- [x] (**0920-0930** [t:: 10m]) \u{2014} BOB\n  - ~~[[sase#^fix-apollo]]~~\n- [ ] () \u{2014} FIX\n- [ ] () \u{2014} BOB\n\t- [[sase#^relaunch-failed-agents]]\n",
+    assert_eq!(unblocked[0]["not_linked"], "not_selected");
+    assert!(
+        unblocked[0].get("link").is_none() || unblocked[0]["link"].is_null()
     );
+
+    let day = fs::read_to_string(&day_file).expect("read day");
+    assert!(day.contains("~~[[sase#^fix-apollo]]~~"), "{day}");
+    assert!(!day.contains("relaunch-failed-agents"), "{day}");
 }
 
 // SL27: `=x~K` drops the dependent's link in the same close that
@@ -271,14 +237,13 @@ fn route_close_links_predecessor_then_closes_with_successor() {
     let close = &json["pomodoro_close"];
     let unblocked = close["unblocked"].as_array().expect("unblocked");
     assert_eq!(unblocked.len(), 1);
-    let link = &unblocked[0]["link"];
-    assert_eq!(link["entry_name"], "BOB");
-    assert_eq!(link["entry_created"], true);
-    assert_eq!(link["next_up"], true);
-    assert_eq!(
-        fs::read_to_string(&day_file).expect("read day"),
-        "## Pomodoros\n- [x] (**0920-0930** [t:: 10m]) \u{2014} BOB\n  - ~~[[bob#^better]]~~\n  - ~~[[sase#^fix-apollo]]~~\n- [ ] () \u{2014} BOB\n\t- [[sase#^relaunch-failed-agents]]\n- [ ] () \u{2014} FIX\n",
+    assert_eq!(unblocked[0]["not_linked"], "not_selected");
+    assert!(
+        unblocked[0].get("link").is_none() || unblocked[0]["link"].is_null()
     );
+    let day = fs::read_to_string(&day_file).expect("read day");
+    assert!(day.contains("~~[[sase#^fix-apollo]]~~"), "{day}");
+    assert!(!day.contains("relaunch-failed-agents"), "{day}");
 }
 
 // A two-item `=x!1 =` draft closes with the successor, then starts the
@@ -299,17 +264,12 @@ fn close_then_start_opens_successor_continuation() {
     assert_eq!(captures[0]["kind"], "pomodoro_close");
     assert_eq!(captures[1]["kind"], "pomodoro_start");
     assert_eq!(
-        captures[0]["pomodoro_close"]["unblocked"][0]["link"]["entry_name"],
-        "BOB"
+        captures[0]["pomodoro_close"]["unblocked"][0]["not_linked"],
+        "not_selected"
     );
-    assert_eq!(captures[1]["pomodoro_start"]["pomodoro_name"], "BOB");
+    assert_eq!(captures[1]["pomodoro_start"]["pomodoro_name"], "FIX");
     let day = fs::read_to_string(&day_file).expect("read day");
-    assert!(
-        day.contains(
-            "- [ ] (**0930-0955** [t:: 25m]) \u{2014} BOB\n\t- [[sase#^relaunch-failed-agents]]\n"
-        ),
-        "{day}"
-    );
+    assert!(!day.contains("relaunch-failed-agents"), "{day}");
 }
 
 // SL20: a draft that completes the successor right after linking it
@@ -344,20 +304,19 @@ fn sl20_second_completion_drops_first_link_net() {
         serde_json::from_str(stdout(&output).trim()).expect("capture JSON");
     let captures = json["captures"].as_array().expect("captures");
     assert_eq!(captures.len(), 2);
-    assert!(
-        captures[0]["task_complete"]["unblocked"]
-            .as_array()
-            .expect("first unblocked")
-            .is_empty(),
-        "{}",
-        captures[0]["task_complete"]
-    );
+    let first = captures[0]["task_complete"]["unblocked"]
+        .as_array()
+        .expect("first unblocked");
+    assert_eq!(first.len(), 1);
+    assert_eq!(first[0]["block_id"], "d");
+    assert_eq!(first[0]["not_linked"], "not_selected");
     let second = captures[1]["task_complete"]["unblocked"]
         .as_array()
         .expect("second unblocked");
     assert_eq!(second.len(), 1);
     assert_eq!(second[0]["block_id"], "e");
-    assert_eq!(second[0]["link"]["block_link"], "[[sase#^e]]");
+    assert_eq!(second[0]["not_linked"], "not_selected");
+    assert!(second[0].get("link").is_none() || second[0]["link"].is_null());
 }
 
 // Dry-run JSON equals real-run JSON (minus `dry_run`) for a close that
@@ -415,7 +374,7 @@ fn close_successor_human_rows_and_next_line() {
     let out = stdout(&output);
     assert!(
         out.contains(
-            "linked [?] \u{2192} [*] Re-launch failed agents  sase.md ^relaunch-failed-agents \u{2192} new BOB session (next up)"
+            "unblocked [?] \u{2192} [ ] Re-launch failed agents  sase.md ^relaunch-failed-agents \u{00b7} not pulled in"
         ),
         "{out}"
     );
@@ -425,7 +384,7 @@ fn close_successor_human_rows_and_next_line() {
         ),
         "{out}"
     );
-    assert!(out.contains("next: BOB (created)"), "{out}");
+    assert!(out.contains("next: FIX at line 4"), "{out}");
     assert!(out.contains("1 unblocked"), "{out}");
 }
 
@@ -452,20 +411,19 @@ fn close_all_day_file_successor_composes_edits() {
     assert_eq!(row["note_path"], "20261005.md");
     assert_eq!(row["block_id"], "job");
     assert_eq!(row["previous_status_symbol"], "?");
-    assert_eq!(row["status_symbol"], "*");
-    assert_eq!(row["link"]["block_link"], "[[20261005#^job]]");
-    assert_eq!(row["link"]["entry_name"], "BOB");
-    assert_eq!(row["link"]["entry_created"], true);
+    assert_eq!(row["status_symbol"], " ");
+    assert_eq!(row["not_linked"], "not_selected");
+    assert!(row.get("link").is_none() || row["link"].is_null());
     let day = fs::read_to_string(&day_file).expect("read day");
     assert!(
-        day.contains("- [*] #task Day job [dependsOn:: p] ^job"),
+        day.contains("- [ ] #task Day job [dependsOn:: p] ^job"),
         "{day}"
     );
     assert!(
         day.contains("  - [[sase#^p]]") || day.contains("~~[[sase#^p]]~~"),
         "{day}"
     );
-    assert!(day.contains("[[20261005#^job]]"), "{day}");
+    assert!(!day.contains("[[20261005#^job]]"), "{day}");
 }
 
 // An unreadable dependency note makes the close snapshot incomplete:
@@ -548,10 +506,10 @@ fn pomodoro_close_pulls_in_parent_of_closed_subproject() {
     assert_eq!(row["text"], "Parent work");
     assert_eq!(row["unblocked_by"][0]["note_path"], "k.md");
     assert_eq!(row["unblocked_by"][0]["block_id"], "prj");
-    assert_eq!(row["link"]["entry_name"], "BOB");
-    assert_eq!(row["link"]["block_link"], "[[n-proj#^prj]]");
+    assert_eq!(row["not_linked"], "not_selected");
+    assert!(row.get("link").is_none() || row["link"].is_null());
     let n = fs::read_to_string(vault.join("n-proj.md")).expect("read n");
-    assert!(n.contains("- [*] #task Parent work #prj ^prj"), "{n}");
+    assert!(n.contains("- [ ] #task Parent work #prj ^prj"), "{n}");
     assert!(!n.contains("#hide"), "{n}");
     let k = fs::read_to_string(vault.join("k.md")).expect("read k");
     assert!(k.contains("- [x] #task Kid work"), "{k}");

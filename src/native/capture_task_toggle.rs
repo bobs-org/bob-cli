@@ -28,7 +28,8 @@ pub(crate) use ledger::{
 };
 pub(crate) use links::{
     find_movable_task_links, plan_link_insertion, plan_link_removal,
-    LinkInsertionOutcome, LinkPlacement, LinkPlanError,
+    select_implicit_open_entry, LinkInsertionOutcome, LinkPlacement,
+    LinkPlanError,
 };
 pub(crate) use relocation::{
     endpoint_from_entry, insert_named_placeholder, move_subtree_to_entry,

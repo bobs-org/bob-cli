@@ -797,6 +797,7 @@ fn plan_close_successors(
         tasks_settings: &tasks_settings,
         note_settings: &settings,
         link_unblocked: dependency_ctx.link_unblocked(),
+        selection: engine::SuccessorSelection::None,
         index,
     });
     for (relative_path, text) in &successor_plan.changed_files {
