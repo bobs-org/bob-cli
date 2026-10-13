@@ -109,6 +109,10 @@ ssh mac 'tail -n 80 /var/tmp/com.bbugyi.bob-vault-sync.err'
 ```
 
 The LaunchAgent runs `bob vault-sync -q` every 15 seconds and at load.
+launchd starts that command through `/bin/sh -c`, which `exec`s
+`/Users/bbugyi/.cargo/bin/bob vault-sync -q`. Background Task Management then tracks
+Apple-signed `/bin/sh` instead of the ad-hoc `bob` binary that `cargo install` replaces.
+`launchctl print` shows `program = /bin/sh`.
 
 ## Mac scheduled maintenance
 
