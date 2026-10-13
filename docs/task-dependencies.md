@@ -1812,7 +1812,10 @@ accepted. Residents blocked by the project are tagged or recovered through the
 shared recovery gate; entering a blocked project consumes their live Pomodoro
 links in today's open entries. Reversal writes the parent first, planning
 `#^prj` rewrites and today's Pomodoro cleanup against both the project's
-`^prj` link and the restored block id in memory before any write.
+`^prj` link and the restored block id in memory before any write. A
+rewrite that throws or finds changed content after the parent write keeps
+the project note and is reported (`... was kept`, with the Pomodoro
+suffix when the daily rewrite failed).
 
 Ctrl+Shift+M into a blocked project sets the moved open tasks `[?]`,
 tags them `#prj_is_blocked`, promotes only open tasks' Depends-On
