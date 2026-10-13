@@ -435,6 +435,10 @@ pub(super) struct LinkGuardJson {
     pub(super) promoted: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) detail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) removed_pomodoro_links: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) day_file: Option<String>,
 }
 
 impl LinkGuardJson {
@@ -461,6 +465,8 @@ impl LinkGuardJson {
                     .join("; "),
             )),
             promoted,
+            removed_pomodoro_links: None,
+            day_file: None,
         }
     }
 }
@@ -933,6 +939,23 @@ pub(super) fn print_human_item_success(
             &ordinal,
             &target_label,
         );
+        return;
+    }
+    if result.kind == "link_guard" {
+        let id = result
+            .block_id
+            .as_deref()
+            .map(|id| format!("^{}", id))
+            .unwrap_or_else(|| "the blocked task".to_string());
+        println!("{prefix} not linked  {ordinal}{target_label}");
+        println!("  {}", styler.dim(&format!("{id} was not linked")));
+        print_human_link_guard(result, &styler);
+        if let Some(count) = result.removed_pomodoro_links.filter(|n| *n > 0) {
+            println!(
+                "  {}",
+                styler.dim(&format!("removed {count} live Pomodoro link(s)"))
+            );
+        }
         return;
     }
     if result.kind == "task_toggle"

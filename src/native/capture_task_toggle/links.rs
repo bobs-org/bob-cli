@@ -279,10 +279,11 @@ pub(super) fn insert_link_into_entry(
     block_link: &str,
 ) -> (String, bool, Option<LinkPlacement>) {
     let entry_end_line = child_block_end_line(lines, entry_line_index);
-    let child_start_offset = lines[entry_line_index].end;
-    let child_end_offset = lines[entry_end_line].end;
     let already_linked =
-        day_contents[child_start_offset..child_end_offset].contains(block_link);
+        entry_end_line > entry_line_index
+            && lines[entry_line_index + 1..=entry_end_line].iter().any(
+                |line| !unstruck_link_ranges(line.text, block_link).is_empty(),
+            );
     if already_linked {
         return (day_contents.to_string(), true, None);
     }

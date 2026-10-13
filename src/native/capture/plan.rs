@@ -769,7 +769,11 @@ pub(super) fn plan_capture_item(
                 clip: None,
                 schedule_log: link.schedule_log.clone(),
                 block_id: Some(link.block_id.clone()),
-                day_file: (!link_consumed).then(|| link.day_file.clone()),
+                day_file: if link_consumed {
+                    link_guard.as_ref().and_then(|guard| guard.day_file.clone())
+                } else {
+                    Some(link.day_file.clone())
+                },
                 block_link: (!link_consumed).then(|| link.block_link.clone()),
                 pomodoro_link_placement: link.pomodoro_link_placement,
                 parent_line: None,
@@ -787,7 +791,9 @@ pub(super) fn plan_capture_item(
                 creates_pomodoro: (!link_consumed)
                     .then_some(link.creates_pomodoro),
                 pomodoro_already_linked: None,
-                removed_pomodoro_links: None,
+                removed_pomodoro_links: link_guard
+                    .as_ref()
+                    .and_then(|guard| guard.removed_pomodoro_links),
                 removed_scheduled: link.removed_scheduled.clone(),
                 pomodoro_selector_unused: None,
                 toggle_behavior: None,
@@ -1083,8 +1089,10 @@ pub(super) fn plan_capture_item(
             today,
         )?;
         if new_task_project_block.is_some() {
+            let status_types =
+                note_tasks::read_settings(&request.bob_dir).status_types;
             let flip = |line: &str| {
-                apply_new_task_project_block(line)
+                apply_new_task_project_block(line, &status_types)
                     .unwrap_or_else(|| line.to_string())
             };
             if let Some((augmented, _)) = &mut new_task_dependencies {
@@ -1098,8 +1106,12 @@ pub(super) fn plan_capture_item(
     // augmented lines flipped above.
     let flipped_capture_line =
         match (&new_task_dependencies, &new_task_project_block) {
-            (None, Some(_)) => apply_new_task_project_block(&capture_line)
-                .unwrap_or_else(|| capture_line.clone()),
+            (None, Some(_)) => {
+                let status_types =
+                    note_tasks::read_settings(&request.bob_dir).status_types;
+                apply_new_task_project_block(&capture_line, &status_types)
+                    .unwrap_or_else(|| capture_line.clone())
+            }
             _ => capture_line.clone(),
         };
     let (block_first_line, block_child_lines) = match &new_task_dependencies {

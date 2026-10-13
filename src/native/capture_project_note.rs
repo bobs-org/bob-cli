@@ -22,13 +22,14 @@
 //! brand-new task rather than moving an existing one, so a log-shaped bullet
 //! is an ordinary task or section bullet.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use chrono::{Local, LocalResult, NaiveDate, NaiveDateTime, TimeZone};
 
 use super::capture_language::{
     split_leading_checkbox, AuthoredDepth, AuthoredSubBullet,
 };
+use super::note_tasks::TaskStatusType;
 use super::projects::edits::normalize_prj_is_blocked_tag;
 
 /// Placeholder task kept under `## Tasks` when no authored task children were
@@ -53,6 +54,7 @@ pub(crate) struct ProjectNoteRenderInput<'a> {
     pub(crate) priority: Option<(&'a str, &'a str)>,
     pub(crate) schedule_log_lines: &'a [String],
     pub(crate) sub_bullets: &'a [AuthoredSubBullet],
+    pub(crate) status_types: BTreeMap<char, TaskStatusType>,
 }
 
 /// Rendered note plus the summary the execution layer reports.
@@ -356,7 +358,10 @@ pub(crate) fn render_project_note(
                 }
                 _ => checkbox.unwrap_or(' '),
             };
-            let open = !matches!(authored_status, 'x' | 'X' | '-');
+            let open = input
+                .status_types
+                .get(&authored_status)
+                .is_none_or(|status_type| !status_type.is_terminal());
             let task_status = if project_blocked && open {
                 '?'
             } else {
@@ -504,6 +509,15 @@ mod tests {
             priority: None,
             schedule_log_lines: &[],
             sub_bullets,
+            status_types: BTreeMap::from([
+                (' ', TaskStatusType::Todo),
+                ('x', TaskStatusType::Done),
+                ('X', TaskStatusType::Done),
+                ('/', TaskStatusType::InProgress),
+                ('*', TaskStatusType::OnHold),
+                ('-', TaskStatusType::Cancelled),
+                ('>', TaskStatusType::Cancelled),
+            ]),
         }
     }
 
@@ -844,6 +858,24 @@ mod tests {
         ));
         assert!(rendered.task_line.starts_with("- [?] "));
         assert!(!rendered.task_line.contains("#prj_is_blocked"));
+    }
+
+    #[test]
+    fn configured_cancelled_status_stays_closed_in_project_note() {
+        pin_utc();
+        let sub_bullets = vec![
+            bullet("[>] Cancelled work", AuthoredDepth::First),
+            bullet("[ ] Open work", AuthoredDepth::First),
+        ];
+        let mut input = base_input(&sub_bullets);
+        input.scheduled = Some("2026-09-22");
+        let rendered = render_project_note(&input);
+        assert!(rendered
+            .contents
+            .contains("- [>] #task Cancelled work [created::2026-09-20]\n"));
+        assert!(rendered.contents.contains(
+            "- [?] #task Open work [created::2026-09-20] #prj_is_blocked\n"
+        ));
     }
 
     #[test]

@@ -338,6 +338,32 @@ mod tests {
     }
 
     #[test]
+    fn resident_after_prj_before_fence_is_not_hidden_by_stale_fence_range() {
+        let body = concat!(
+            "- [ ] #task Ship #hide ^prj\n",
+            "- [ ] #task Resident ^resident\n",
+            "```md\n",
+            "- [ ] #task Fenced example ^fenced\n",
+            "```\n",
+        );
+        let (context, _) = project_context(body);
+        let contents =
+            format!("---\ntype: [[project]]\nstatus: wip\n---\n{body}");
+        let mut staged =
+            contents.lines().map(str::to_string).collect::<Vec<_>>();
+        staged.insert(1, "\t- ⛓️ **DEPENDS ON:** [[job#^prep]]".to_string());
+        let staged_text = staged.join("\n");
+        let staged_tasks =
+            task_status_hooks::parse_tasks(&staged_text, &settings());
+        let (edits, residents) =
+            plan_resident_block(&context, &staged_tasks, &staged);
+        assert_eq!(residents, vec!["resident".to_string()]);
+        assert_eq!(edits.len(), 1);
+        assert_eq!(edits[0].block_id.as_deref(), Some("resident"));
+        assert!(edits[0].text.contains("#prj_is_blocked"));
+    }
+
+    #[test]
     fn strongest_lane_ignores_closed_and_outsiders() {
         let (context, tasks) = project_context(concat!(
             "- [ ] #task Ship #hide ^prj\n",

@@ -520,10 +520,18 @@ mod tests {
 
     #[test]
     fn new_task_flip_blocks_open_lines_tags_blocked_and_skips_closed() {
+        let status_types = BTreeMap::from([
+            (' ', task_status_hooks::TaskStatusType::Todo),
+            ('*', task_status_hooks::TaskStatusType::OnHold),
+            ('/', task_status_hooks::TaskStatusType::InProgress),
+            ('x', task_status_hooks::TaskStatusType::Done),
+            ('>', task_status_hooks::TaskStatusType::Cancelled),
+        ]);
         // PDG5: every open resident lands `[?]` plus exactly one tag.
         assert_eq!(
             apply_new_task_project_block(
-                "- [ ] #task Work [created::2026-07-10] ^work"
+                "- [ ] #task Work [created::2026-07-10] ^work",
+                &status_types,
             )
             .as_deref(),
             Some(
@@ -532,7 +540,8 @@ mod tests {
         );
         assert_eq!(
             apply_new_task_project_block(
-                "- [*] #task Work [created::2026-07-10] ^work"
+                "- [*] #task Work [created::2026-07-10] ^work",
+                &status_types,
             )
             .as_deref(),
             Some(
@@ -542,7 +551,8 @@ mod tests {
         // An existing `[?]` only gains the tag, once.
         assert_eq!(
             apply_new_task_project_block(
-                "- [?] #task Work [created::2026-07-10] #prj_is_blocked ^work"
+                "- [?] #task Work [created::2026-07-10] #prj_is_blocked ^work",
+                &status_types,
             )
             .as_deref(),
             Some(
@@ -552,11 +562,22 @@ mod tests {
         // Closed lines are never edited; non-task lines return `None`.
         assert_eq!(
             apply_new_task_project_block(
-                "- [x] #task Done [created::2026-07-10] ^done"
+                "- [x] #task Done [created::2026-07-10] ^done",
+                &status_types,
             ),
             None
         );
-        assert_eq!(apply_new_task_project_block("ordinary prose"), None);
+        assert_eq!(
+            apply_new_task_project_block(
+                "- [>] #task Cancelled ^cancelled",
+                &status_types,
+            ),
+            None
+        );
+        assert_eq!(
+            apply_new_task_project_block("ordinary prose", &status_types),
+            None
+        );
     }
 }
 
@@ -564,7 +585,10 @@ mod tests {
 /// (PDG5): open Ready/Next/In Progress lines become `[?]`, an existing
 /// `[?]` only gains the tag, and closed or custom-status lines come
 /// back untouched. Returns `None` when the line is not a task line.
-pub(super) fn apply_new_task_project_block(line: &str) -> Option<String> {
+pub(super) fn apply_new_task_project_block(
+    line: &str,
+    status_types: &BTreeMap<char, task_status_hooks::TaskStatusType>,
+) -> Option<String> {
     let indent_len = line
         .bytes()
         .take_while(|byte| matches!(byte, b' ' | b'\t'))
@@ -575,11 +599,14 @@ pub(super) fn apply_new_task_project_block(line: &str) -> Option<String> {
         return None;
     }
     match symbol {
-        ' ' | '*' | '/' => {
+        '?' => Some(normalize_prj_is_blocked_tag(line, true)),
+        _ if status_types
+            .get(&symbol)
+            .is_some_and(|status| status.is_open()) =>
+        {
             let blocked = replace_status_char(line, '?')?;
             Some(normalize_prj_is_blocked_tag(&blocked, true))
         }
-        '?' => Some(normalize_prj_is_blocked_tag(line, true)),
         _ => None,
     }
 }

@@ -3149,9 +3149,13 @@ Human output says `would toggle` / `toggled` and prints a link summary:
 file and ledger lines. JSON stays schema version 1 and kind `"task_toggle"`.
 Successful link and unlink actions include `toggle_direction: "link"` or
 `"unlink"`, `status_changed`, `removed_pomodoro_links` for unlink, and the
-existing insertion fields for link. A consumed link keeps the same kind but
-omits `toggle_direction` and `block_link`, and reports `link_guard`
-(`reasons`, `promoted`, `detail`). A
+existing insertion fields for link. A consumed `@route+block-id!` keeps kind
+`"task_toggle"` but omits `toggle_direction`, `block_link`,
+`creates_pomodoro`, `pomodoro_already_linked`, `pomodoro_selector_unused`,
+`pomodoro_link_placement`, `pomodoro_name`, and `pomodoro_link_action` plus
+its source/destination endpoints. It reports `link_guard` (`reasons`,
+`promoted`, `detail`); `removed_pomodoro_links` remains present, and
+`day_file` is present only when cleanup removed at least one live link. A
 `^prj` whose only reason is its own future schedule is refused with "move
 the project date from the `^prj` Schedule action".
 
@@ -3359,10 +3363,12 @@ inserted or moved), and `pomodoro_start` (only with `=<X>`). They emit no
 preview instead of a wrong one. Every touched Pomodoro also appears in the
 batch-level `pomodoro_blocks` array; see
 [Pomodoro blocks](#pomodoro-blocks).
-When the guard consumes the gesture, the result instead uses kind
-`"link_guard"` and omits `day_file`, `block_link`, and the link action and
-destination fields. The `link_guard` object carries the outcome; any existing
-live-link cleanup appears in `pomodoro_blocks`.
+When the guard consumes `@route:id`, the result uses kind `"link_guard"`
+and omits `block_link`, `creates_pomodoro`, `pomodoro_link_action` and its
+source/destination endpoints, `pomodoro_link_placement`, and
+`pomodoro_name`. It includes additive `removed_pomodoro_links` and `day_file`
+only when existing live links were removed. The `link_guard` object carries
+the outcome; any existing live-link cleanup also appears in `pomodoro_blocks`.
 
 Project-note results use kind `"project_note"` with `placement: "created"`.
 `route` stays the parent route (`cash` for `@cash^goog-exit+`), so
@@ -3427,13 +3433,19 @@ any Pomodoro a link-direction toggle insert or unlink cleanup touches — also
 appears in the batch-level `pomodoro_blocks` array;
 see [Pomodoro blocks](#pomodoro-blocks).
 
-When the link guard consumes a link or Ensure Next gesture, `link_guard`
-describes why the target stayed unlinked and which prerequisites rose. The
-result omits `toggle_direction` and `block_link`, so a client that does not
-understand `link_guard` cannot show a false `+ [[link]]` confirmation. An
-Ensure Next request keeps `toggle_behavior: "ensure_next"`; if consumption
-removes existing live links, `removed_pomodoro_links`, `day_file`, and the
-batch-level `pomodoro_blocks` diff report that cleanup.
+When the link guard consumes a link, Ensure Next, or link-then-close gesture,
+`link_guard` describes why the target stayed unlinked and which prerequisites
+rose. For `@route+block-id!`, the result omits `toggle_direction`,
+`block_link`, `creates_pomodoro`, `pomodoro_already_linked`,
+`pomodoro_selector_unused`, and insertion-specific placement/name/action
+fields. For Ensure Next it keeps `toggle_behavior: "ensure_next"` but omits
+`pomodoro_link_action` and source/destination endpoints. Link-then-close
+keeps its close summary and omits `block_link` and `pomodoro_link_action`
+when the guard consumes the link. The standalone `@route:id` guard uses kind
+`"link_guard"`, so older clients render it neutrally instead of claiming a
+link succeeded. Whenever consumption removes live links,
+`removed_pomodoro_links`, `day_file`, and the batch-level `pomodoro_blocks`
+diff report that cleanup.
 
 Task-complete results use kind `"task_complete"` with `placement:
 "completed"`, `routed: true`, `route: null`, and `text: ""`.

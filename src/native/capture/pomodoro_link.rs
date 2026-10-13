@@ -298,6 +298,7 @@ pub(super) fn plan_pomodoro_link_capture(
             route,
             &[block_id.to_string()],
         )?;
+        let removed_pomodoro_links = consumption.removed_links;
         let promoted = promote_consume_plan(
             ctx,
             planner,
@@ -305,7 +306,12 @@ pub(super) fn plan_pomodoro_link_capture(
             *plan,
             &dependent_desc,
         )?;
-        let link_guard = LinkGuardJson::not_linked(&reasons, promoted);
+        let mut link_guard = LinkGuardJson::not_linked(&reasons, promoted);
+        if removed_pomodoro_links > 0 {
+            link_guard.removed_pomodoro_links = Some(removed_pomodoro_links);
+            link_guard.day_file =
+                Some(pomodoro::day_file_for(bob_dir).display().to_string());
+        }
         let _ = warnings;
         return Ok((
             CaptureWritePlan {

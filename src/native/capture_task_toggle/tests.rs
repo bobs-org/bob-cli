@@ -248,6 +248,22 @@ fn idempotent_insertion_skips_when_already_linked() {
 }
 
 #[test]
+fn insertion_ignores_struck_history_and_adds_a_live_link() {
+    let contents = concat!(
+        "## Pomodoros\n",
+        "- [ ] (0900-0930) — CURRENT\n",
+        "\t- ~~[[cash#^id]]~~\n",
+    );
+    let plan = planned(
+        plan_link_insertion(contents, "[[cash#^id]]", None).expect("plan"),
+    );
+    assert!(!plan.already_linked);
+    assert!(plan.has_changes);
+    assert!(plan.content.contains("\t- ~~[[cash#^id]]~~\n"));
+    assert!(plan.content.contains("\t- [[cash#^id]]\n"));
+}
+
+#[test]
 fn insertion_removes_duplicate_from_later_open_entry() {
     let contents = concat!(
         "## Pomodoros\n",

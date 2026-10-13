@@ -824,7 +824,8 @@ fn capture_pomodoro_link_on_blocked_target_consumes_and_promotes() {
     assert_eq!(json["status_symbol"], "?", "{json}");
     assert!(json.get("pomodoro_link_action").is_none(), "{json}");
     assert!(json.get("block_link").is_none(), "{json}");
-    assert!(json.get("day_file").is_none(), "{json}");
+    assert_eq!(json["removed_pomodoro_links"], 1, "{json}");
+    assert_eq!(json["day_file"], day_file.display().to_string(), "{json}");
     assert_eq!(
         json["link_guard"]["reasons"],
         serde_json::json!(["local_dependency"]),

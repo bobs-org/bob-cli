@@ -145,6 +145,7 @@ pub(super) fn plan_project_note_item(
         .as_ref()
         .map(|log| log.lines.clone())
         .unwrap_or_default();
+    let status_types = note_tasks::read_settings(&request.bob_dir).status_types;
     let render_input = capture_project_note::ProjectNoteRenderInput {
         route: &route,
         block_id: &block_id,
@@ -154,6 +155,7 @@ pub(super) fn plan_project_note_item(
         priority: priority_field,
         schedule_log_lines: &schedule_log_lines,
         sub_bullets: &parsed.sub_bullets,
+        status_types,
     };
     let rendered = capture_project_note::render_project_note(&render_input);
 
@@ -173,6 +175,8 @@ pub(super) fn plan_project_note_item(
                 "not linked (project scheduled {})",
                 scheduled.as_deref().unwrap_or_default(),
             )),
+            removed_pomodoro_links: None,
+            day_file: None,
         })
     } else {
         None
