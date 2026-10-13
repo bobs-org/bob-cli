@@ -358,16 +358,39 @@ mod tests {
             format!("---\ntype: [[project]]\nstatus: wip\n---\n{body}");
         let mut staged =
             contents.lines().map(str::to_string).collect::<Vec<_>>();
-        staged.insert(1, "\t- ⛓️ **DEPENDS ON:** [[job#^prep]]".to_string());
+        let prj_index = staged
+            .iter()
+            .position(|line| line.contains("^prj"))
+            .expect("project task line");
+        staged.insert(
+            prj_index + 1,
+            "\t- ⛓️ **DEPENDS ON:** [[job#^prep]]".to_string(),
+        );
         let staged_text = staged.join("\n");
         let staged_tasks =
             task_status_hooks::parse_tasks(&staged_text, &settings());
+        let staged_context = ProjectContext::for_note(&FileScan {
+            path: PathBuf::from("/vault/proj.md"),
+            relative_path: PathBuf::from("proj.md"),
+            contents: staged_text.clone(),
+            tasks: staged_tasks.clone(),
+        });
+        assert!(
+            staged_context.recognised,
+            "frontmatter and ^prj stay a project after the Depends-On insert"
+        );
         let (edits, residents) =
             plan_resident_block(&context, &staged_tasks, &staged);
         assert_eq!(residents, vec!["resident".to_string()]);
         assert_eq!(edits.len(), 1);
         assert_eq!(edits[0].block_id.as_deref(), Some("resident"));
         assert!(edits[0].text.contains("#prj_is_blocked"));
+        assert!(
+            !edits
+                .iter()
+                .any(|edit| edit.text.contains("Fenced example")),
+            "the fenced example stays unedited"
+        );
     }
 
     #[test]
