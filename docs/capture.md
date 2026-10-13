@@ -4142,9 +4142,11 @@ bob capture-rewrite [-c|--cursor N] [-f|--format human|json] [--] [TEXT]...
 
 Applies the capture grammar's automatic draft rewrites -- the block-ID
 separator toggle and the bare `@@` absorption rule -- and reports the
-resulting edits, cursor, and a human summary. Like `bob capture-parse` it is
-purely lexical and completely read-only: it never opens the vault, never
-reads the clipboard, never touches the filesystem, and takes no `--bob-dir`.
+resulting edits, cursor, and a human summary. It is purely lexical and
+completely read-only: it never opens the vault, never reads the clipboard
+or the URL routing config, never touches the filesystem, and takes no
+`--bob-dir`. `bob capture-parse` does read that config; see
+[above](#bob-capture-parse).
 If `TEXT` is omitted and stdin is piped, it reads the complete piped stdin
 stream. Only a missing `TEXT` or a bad flag is an error (exit 2); every
 other input succeeds, with `changed: false` when nothing needed to change.

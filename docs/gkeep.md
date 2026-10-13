@@ -33,7 +33,7 @@ setup. Tests never touch live Keep: set `BOB_GKEEP_ADAPTER` to a fake adapter.
 ```bash
 bob gkeep [-a|--all] [-b|--bob-dir DIR] [-f|--format table|json] [-s|--source both|keep|vault]
 bob gkeep list [-a|--all] [-b|--bob-dir DIR] [-f|--format table|json] [-s|--source both|keep|vault]
-bob gkeep pull [-b|--bob-dir DIR] [-d|--dry-run] [-f|--format human|json] [-i|--id REF]... [-p|--include-pinned] [-S|--include-shared] [-l|--limit N] [-n|--no-archive] [-C|--no-commit] [-q|--quiet] [-R|--no-ref]
+bob gkeep pull [-b|--bob-dir DIR] [-d|--dry-run] [-f|--format human|json] [-i|--id REF]... [-p|--include-pinned] [-S|--include-shared] [-l|--limit N] [-n|--no-archive] [-C|--no-commit] [-R|--no-ref] [-P|--parent ROUTE] [-q|--quiet]
 bob gkeep migrate-markers [-b|--bob-dir DIR] [-d|--dry-run] [-f|--format human|json] [-C|--no-commit] [-q|--quiet]
 bob gkeep migrate-tasks [-b|--bob-dir DIR] [-d|--dry-run] [-f|--format human|json] [-C|--no-commit] [-q|--quiet]
 bob gkeep login [-e|--email EMAIL]
@@ -198,8 +198,9 @@ content-guarded archive, journal append.
 nothing. `-n, --no-archive` writes and verifies but leaves notes in Keep.
 `-C, --no-commit` skips the vault Git commit. `-R, --no-ref` keeps URL-only
 notes as inbox tasks instead of clipping them to intake PDFs.
-`-P, --parent ROUTE` files URL-only notes under that parent route (overrides
-note `@route` and the prompt; an invalid route fails before any clip).
+`-P, --parent ROUTE` is the parent for a URL-only note that has no valid
+`@route` of its own. A valid note `@route` wins over `-P` and over the
+prompt. An invalid `-P` fails before any clip.
 `-q, --quiet` prints only errors. `-l, --limit N` takes the first N
 actionable notes, oldest first.
 A per-host pull lock serializes concurrent pulls (exit 1 when held); dry runs

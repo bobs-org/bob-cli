@@ -21,15 +21,23 @@ pending → clipping → clipped | already in library | already queued
 
 One attempt in v1: a retryable failure still falls back instead of
 retrying. `bob ref scan` turns clipped intake PDFs into ref notes
-later. Nothing in bob-cli starts that scan. The published
-[Mac scan job](highlights-ref-sync.md#scheduled-scan) runs hourly
-(`StartInterval` 3600, or cron `0 * * * *`) and the example command is
-`bob highlights scan --dry-run` until you remove `--dry-run` after clean
-cycles. `bob highlights` is a permanent alias of `bob ref`. On another
-setup, run `bob ref scan` yourself. The `bob ref jobs` footer currently
-prints `the Mac runs it every 15 minutes`; follow the Scheduled Scan
-runbook for the interval and the dry-run command. Neither capture nor the
-worker runs `scan`, and neither returns a ref-note path before it exists.
+later. Nothing in bob-cli starts that scan. Two Mac schedules are
+documented, and they are not the same job:
+
+- The installed MacBook cron in the
+  [Highlights bridge](vault-git-sync.md#highlights-bridge) runs
+  `maybe_bob_highlights_sync -w` every 15 minutes. That runs
+  `bob highlights scan`, which writes notes.
+- The [Scheduled Scan](highlights-ref-sync.md#scheduled-scan) recipe is a
+  separate LaunchAgent (`StartInterval` 3600) or cron `0 * * * *`. Its
+  example command is `bob highlights scan --dry-run` until you remove
+  `--dry-run` after clean cycles.
+
+`bob highlights` is a permanent alias of `bob ref`. On another setup, run
+`bob ref scan` yourself. The `bob ref jobs` footer always prints `the Mac
+runs it every 15 minutes`. That matches the installed cron above. It does
+not name the hourly dry-run recipe. Neither capture nor the worker runs
+`scan`, and neither returns a ref-note path before it exists.
 Use `bob ref jobs` to inspect work before the note appears in
 `bob ref list`.
 

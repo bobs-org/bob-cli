@@ -178,11 +178,12 @@ separate steps:
    calls the same commands). Tasks land in `mac_inbox.md` unless an `@route`
    token sends them to another note; scheduled checkbox-bearing captures start
    Blocked (`[?]`). A bare public link queues a background clip
-   (`-R` keeps it a task). The confirmation says reading queue; `bob ref list`
-   shows the note after `bob ref scan`.
+   (`-R` keeps it a task). Append a standalone `%` to request companion audio
+   (`https://example.com/article %`). The confirmation says reading queue;
+   `bob ref list` shows the note after `bob ref scan`.
 2. **Review and choose work** with the read-only reports `bob plan`,
-   `bob freshness`, and `bob ready`; confirm or revise due tasks in Obsidian.
-   After time away, preview the overdue backlog with
+   `bob freshness`, `bob ready`, and `bob stats`; confirm or revise due tasks
+   in Obsidian. After time away, preview the overdue backlog with
    `bob task reroll --dry-run`, then `bob task reroll --seed <seed>` to re-roll it.
 3. **Link and run today's work** on a Pomodoro in the daily note. Link with
    a marker-only `@route:id` capture (which raises Ready to Next), ensure an
@@ -193,18 +194,22 @@ separate steps:
    outcome such as `bob capture '=x'` or `bob capture '=!'` (see
    [Capture](#capture)). Starting the timer leaves task statuses unchanged;
    closing records worked tasks as In Progress and completed tasks as Done.
-   `bob pomodoro`, `bob pomodoro tmux`, and `bob pomodoro notify` read the
-   ledger to report timing; they do not create links or start sessions.
+   By default (`plan.link_unblocked`) a close also links dependents that it
+   fully unblocked, and it can pull an emptied project's `^prj` in as Next.
+   `bob pomodoro`, `bob pomodoro tmux`, and
+   `bob pomodoro notify` read the ledger to report timing; they do not create
+   links or start sessions.
 4. **Reconcile** with `bob task reconcile` after manual ledger or task edits.
    Next and In Progress are sticky lanes: unlinking work does not release it.
-   The command promotes linked work, derives Blocked from
-   dependencies and future schedules, and cleans up the ledger.
+   The command promotes linked work, derives Blocked from open dependencies,
+   future schedules, and a blocked project's `^prj` line (open residents and
+   sub-projects carry `#prj_is_blocked`), and cleans up the ledger.
 5. **Nightly**, run `bob nightly` to reconcile the vault through Git, archive
    done and canceled tasks with `bob task archive`, and reconcile the vault
    again.
 
-Read-only inspection (`bob query`, `bob projects list`, `bob plugins list --no-pull`,
-`bob ref doctor`) can run at any time.
+Read-only inspection (`bob query`, `bob stats`, `bob projects list`,
+`bob plugins list --no-pull`, `bob ref doctor`) can run at any time.
 
 ## Vault layout
 
@@ -283,7 +288,7 @@ uses these JSON endpoints as a separate integration protocol.
 | `capture-complete` | Complete capture markers, task/dependency pickers, or wikilinks at the cursor |
 | `capture-parse` | Preview what in-progress capture text and wikilinks mean |
 | `capture-pomodoro-name` | Assign a canonical name to an unnamed Pomodoro |
-| `capture-pomodoros` | List today's Pomodoro ledger entries |
+| `capture-pomodoros` | List today's Pomodoro ledger entries; `--tasks` adds the resolved agenda |
 | `capture-rewrite` | Apply the capture grammar's automatic draft rewrites (`@route:id`/`@route^id` toggle and bare `@@` absorption) |
 | `capture-sections` | List the non-`Tasks` headings in a routed note |
 | `capture-targets` | List inbox, area, and non-terminal project capture routes |
@@ -325,6 +330,8 @@ typed on that same item. The whole batch is planned before anything is written.
 | Marker | Meaning |
 | --- | --- |
 | Bare public URL | Queue a reference for background capture when the routing policy admits the host; `--no-ref` keeps it a task |
+| `URL %` | Queue that reference and request companion audio. A standalone `@` immediately after the URL is the same request |
+| `URL % @route` | Same, filed under that parent. `@` remains a compatible listen alias (`URL @ @route`) |
 | `@@route` | Shared task destination, anywhere in the draft, for otherwise-unrouted items |
 | `@@route+id` | Shared parent-task destination, anywhere in the draft, for otherwise-unrouted items |
 | `@route` | Task in `<route>.md` |
@@ -369,7 +376,7 @@ typed on that same item. The whole batch is planned before anything is written.
 | trailing `#` | Plain-text note on a Pomodoro (no `@route`) |
 | `s:<N>` | Schedule N days from today; checkbox-bearing captures start Blocked, including `s:0` |
 | `p:<N>` | Write priority level N and roll a scheduled date, so checkbox-bearing captures start Blocked |
-| `%`, `%N`, `%header` | Attach clipboard content |
+| `%`, `%N`, `%header` | Attach clipboard content. On a bare public URL, a standalone `%` is the listen request above, not a clipboard paste |
 
 `#` is not one marker. A trailing bare `#` is a Pomodoro note; `@route#…` selects
 a heading in that note; `@route+id#…` selects an ALL-CAPS child section of that
@@ -722,12 +729,12 @@ examples live in [`docs/plan.md`](docs/plan.md).
 
 Task freshness is the human-confirmed `[fresh:: YYYY-MM-DD]` date when a
 task was last confirmed to still need doing as written. Visible, non-recurring
-Ready tasks never confirmed, a tickler back from a scheduled deferral after their
-last confirmation, or whose review interval expired (7 days by
-default, overridable per task, per
-note, and in config), are due for review. Supported keymaps and
-`bob capture` edits stamp the tasks they rewrite; creation and
-automation never do. The definition, placement and state rules, and
+Ready tasks never confirmed, a tickler back from a scheduled deferral or from
+an automatic Blocked-to-Ready recovery after their last confirmation, or whose
+review interval expired (7 days by default, overridable per task, per note,
+and in config), are due for review. Supported keymaps and `bob capture` edits
+stamp the tasks they rewrite; creation and automation never do. Recurring
+tasks are never stamped. The definition, placement and state rules, and
 conformance vectors live in [`docs/freshness.md`](docs/freshness.md).
 The freshness mark display contract lives in §11 of that file.
 
@@ -737,9 +744,27 @@ bob freshness list [-b|--bob-dir DIR] [-f|--format human|json] [-l|--limit N]
 bob freshness seed [-b|--bob-dir DIR] [-d|--dry-run] [-F|--force] [-f|--format human|json]
 ```
 
-Running bob freshness with no subcommand runs read-only list: the queue is ordered PRE → NEW → PROJECTS → PENDING → NEXT → RECURRING → TICKLER → ROTTEN → POST. Both list and seed use JSON schema 13. Counts cover the whole vault even with --limit; counts.walk sums the nine counts.by_tier values. Ready state totals and walk-tier totals have different scopes.
+Running `bob freshness` with no subcommand runs read-only `list`. The queue
+is ordered PRE → NEW → PROJECTS → PENDING → NEXT → RECURRING → TICKLER →
+ROTTEN → POST. Both list and seed use JSON schema 14. Counts cover the whole
+vault even with `--limit`; `counts.walk` sums the nine `counts.by_tier`
+values. Ready state totals and walk-tier totals have different scopes.
 
-Ordinary Pending and Next tasks, including references, use freshness.pending_interval / next_interval (default 1 day; false disables that ordinary lane's walk). Due ^prj trackers walk in PROJECTS on project_interval or the ordinary Ready chain. References use ordinary freshness and review groups: Ready refs join NEW, TICKLER, or ROTTEN, while Pending/Next refs use their lane groups. Project review follows the #hide written by bob projects sync; hidden references follow the ordinary #hide exclusion. Recurring occurrences, Today-linked, daily-note, blocked, and future-scheduled tasks stay outside the review queue, except PRE/POST #gtd checklist rows, which walk by tag.
+Ordinary Pending and Next tasks, including references, use
+`freshness.pending_interval` / `next_interval` (default 1 day; `false`
+disables that ordinary lane's walk). Due `^prj` trackers walk in PROJECTS on
+`project_interval` or the ordinary Ready chain. References use ordinary
+freshness and review groups: Ready refs join NEW, TICKLER, or ROTTEN, while
+Pending and Next refs use their lane groups. A Ready task whose future
+schedule has arrived, or that was automatically unblocked on or after its
+stamp, walks in TICKLER. Project review follows the `#hide` written by
+`bob projects sync`; hidden references follow the ordinary `#hide` exclusion.
+A recurring occurrence whose date has arrived walks in RECURRING until it is
+completed, rescheduled, linked to Today, or cancelled. Today-linked tasks,
+canonical daily-note tasks, blocked tasks, and not-yet-due tasks stay outside
+the ordinary review queue. PRE/POST `#gtd` checklist rows still walk by tag
+when they are recurring, on the daily note, or linked to Today; a blocked or
+future-scheduled checklist row stays out.
 
 On the dashboard, NEW holds unconfirmed tasks, READY holds confirmed/exempt backlog, and rotten.md holds tickler tasks plus expired tasks. Repeated due-Ready confirmations accumulate [keeps:: N]; the approved-decay decision card is available immediately, subject to config and plugin capability.
 
@@ -823,7 +848,7 @@ full project task contract lives in
 ```bash
 bob plugins [-b|--bob-dir DIR] [-f|--format table|json] [-n|--no-pull] [-r|--repo DIR]
 bob plugins list [-b|--bob-dir DIR] [-f|--format table|json] [-n|--no-pull] [-r|--repo DIR]
-bob plugins sync [-B|--backup-dir DIR] [-b|--bob-dir DIR] [-d|--dry-run] [-F|--force] [-n|--no-pull] [-p|--plugin ID] [-r|--repo DIR]
+bob plugins sync [-B|--backup-dir DIR] [-b|--bob-dir DIR] [-d|--dry-run] [-F|--force] [-f|--format table|json] [-n|--no-pull] [-p|--plugin ID] [-r|--repo DIR]
 ```
 
 Lists Bryan's custom Bob Obsidian plugins from the
@@ -847,7 +872,7 @@ The full command contract lives in [`docs/plugins.md`](docs/plugins.md).
 ```bash
 bob gkeep [-a|--all] [-b|--bob-dir DIR] [-f|--format table|json] [-s|--source both|keep|vault]
 bob gkeep list [-a|--all] [-b|--bob-dir DIR] [-f|--format table|json] [-s|--source both|keep|vault]
-bob gkeep pull [-b|--bob-dir DIR] [-d|--dry-run] [-f|--format human|json] [-i|--id REF]... [-p|--include-pinned] [-S|--include-shared] [-l|--limit N] [-n|--no-archive] [-C|--no-commit] [-q|--quiet] [-R|--no-ref]
+bob gkeep pull [-b|--bob-dir DIR] [-d|--dry-run] [-f|--format human|json] [-i|--id REF]... [-p|--include-pinned] [-S|--include-shared] [-l|--limit N] [-n|--no-archive] [-C|--no-commit] [-R|--no-ref] [-P|--parent ROUTE] [-q|--quiet]
 bob gkeep migrate-markers [-b|--bob-dir DIR] [-d|--dry-run] [-f|--format human|json] [-C|--no-commit] [-q|--quiet]
 bob gkeep migrate-tasks [-b|--bob-dir DIR] [-d|--dry-run] [-f|--format human|json] [-C|--no-commit] [-q|--quiet]
 bob gkeep login [-e|--email EMAIL]
@@ -865,7 +890,9 @@ that pulls before relying on marker-free imports). Run the explicit offline
 Eligible URL-only notes are clipped inline to intake PDFs during `pull`;
 `bob ref scan` writes the notes `bob ref list` shows. `bob capture` queues
 the same kind of link as a background job instead. `pull -R` keeps links as
-tasks. Each note is archived in Keep only after its current content is
+tasks. A valid `@route` on the Keep note chooses the clip's parent; otherwise
+`-P` does, then one terminal prompt, then `gkeep_inbox`. An invalid `-P`
+fails before any clip. A standalone `%` on that URL requests companion audio. Each note is archived in Keep only after its current content is
 verified in the vault (unless `--no-archive`). A pull that only clips skips
 the inbox write and the Git commit. Unidentifiable URL-less edited tasks
 keep `keep_id`/`keep_state` null rather than guessing another note's
@@ -894,7 +921,7 @@ bob ref list [-A|--all] [-b|--bob-dir PATH] [-f|--format human|json|markdown] [-
 bob ref migrate-tasks [-b|--bob-dir DIR] [-f|--format human|json|tsv] [-m|--map FILE] [-o|--offline] [-r|--ref-dir PATH] [-w|--write]
 bob ref migrate-zorg [-b|--bob-dir PATH] [-f|--format human|json] [-o|--offline] [-r|--ref-dir PATH] [-w|--write]
 bob ref marker <pdf> [-b|--bob-dir PATH] [-l|--lib-dir PATH] [-r|--ref-dir PATH] [-x|--xlib-dir PATH]
-bob ref scan [-b|--bob-dir PATH] [-d|--dry-run] [-j|--jobs N] [-l|--lib-dir PATH] [-n|--no-hooks] [-r|--ref-dir PATH] [-v|--verbose] [-w|--write-pdfs] [-x|--xlib-dir PATH]
+bob ref scan [-b|--bob-dir PATH] [-d|--dry-run] [-f|--format human|json] [-j|--jobs N] [-l|--lib-dir PATH] [-n|--no-hooks] [-r|--ref-dir PATH] [-v|--verbose] [-w|--write-pdfs] [-x|--xlib-dir PATH]
 bob ref show <REF>... [-b|--bob-dir PATH] [-c|--comments-only] [-f|--format human|json|markdown] [-N|--no-annotations] [-r|--ref-dir PATH]
 bob ref sync <pdf> [-b|--bob-dir PATH] [-d|--dry-run] [-l|--lib-dir PATH] [-p|--prefer marker|frontmatter] [-r|--ref-dir PATH] [-w|--write-pdf] [-x|--xlib-dir PATH]
 ```

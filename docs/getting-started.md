@@ -157,11 +157,16 @@ can be skipped with warnings; check the capture report. See
 Inspect `bob task reconcile --dry-run`, then run `bob task reconcile` to
 reconcile statuses and clean up links. Next and Pending are sticky: unlinking
 a task keeps its lane. The explicit release gesture in Obsidian is Alt+N.
-Blocked is derived from open prerequisites and future task schedules.
+Blocked (`[?]`) is derived from open prerequisites, a future schedule, and a
+blocked project. While a project's `^prj` line is blocked, every open resident
+is Blocked and tagged `#prj_is_blocked`, and that reason passes through
+sub-projects. See [task dependencies §13](task-dependencies.md#13-project-dependencies).
 With the cursor on a Pomodoro Task Link, Alt+[ / Alt+] toggles the linked
 task between Next and In Progress (asking once for an optional Work Log
 summary when moving back to Next); In Progress targets show a rendered ◐
-mark in today's daily note.
+mark in today's daily note. By default (`plan.link_unblocked`), completing
+a task also links dependents that the close fully unblocked, and it can pull
+an emptied project's `^prj` in as Next.
 
 ## Review the backlog
 
@@ -172,13 +177,21 @@ bob ready
 ```
 
 `bob plan` reports today's themes and Task Links plus Next/Pending pressure.
-`bob freshness` shows the due review queue in PRE → NEW → PROJECTS → PENDING → NEXT
-→ TICKLER → ROTTEN → POST order. `bob ready` reports each area's or
-project's whole Ready lane, including NEW and ROTTEN; the dashboard READY
-backlog filters out those review buckets and Today-linked work. Today means
-linked under an open Pomodoro in the selected daily note; it is not a task
-status. Today-linked tasks are also excluded from the freshness review queue,
-except PRE/POST `#gtd` checklist rows.
+`bob freshness` shows the due review queue in PRE → NEW → PROJECTS → PENDING →
+NEXT → RECURRING → TICKLER → ROTTEN → POST order. A recurring occurrence whose
+date has arrived is in RECURRING; complete it in Obsidian so Tasks writes the
+next occurrence. The walk does not stamp recurring tasks. A Ready task that
+comes back from a future schedule, or that was automatically unblocked on or
+after its stamp, is in TICKLER. `bob ready` reports each area's or project's
+whole Ready lane, including NEW and ROTTEN; the dashboard READY backlog
+filters out those review buckets and Today-linked work. Today means linked
+under an open Pomodoro in the selected daily note; it is not a task status.
+Today-linked and canonical daily-note tasks are excluded from the ordinary
+freshness review queue. PRE/POST `#gtd` checklist rows still walk in those
+places, and when the row is recurring. A blocked or future-scheduled
+checklist row stays out.
+`bob stats` is a separate read-only glance at derived daily metrics.
+
 Use `bob ready NOTE` for one note's
 worklist, or `bob ready --check` to exit 3 when notes are crowded.
 
@@ -194,7 +207,8 @@ the moved task to its destination note, and the next `]s` resumes the walk.
 Alt+F is the one answer that stays, `]s` skips,
 and `<C-o>` returns to the row just answered. Away from the
 current review task, `]s` / `[s` first bring you back to it. Walk commitments
-with `]s` / Ctrl+Alt+F until **Commitments done**. `]S` jumps to POST; complete
+with `]s` / Ctrl+Alt+F through RECURRING and TICKLER until **Commitments done**.
+`]S` jumps to POST; complete
 Morning review last with Ctrl+Enter or Alt+F.
 Ctrl+Alt+J/K also walks due tasks. Alt+F confirms a non-checklist task under
 the cursor. `]s` / `[s` are the equivalent configured Vim bindings, not
@@ -279,15 +293,18 @@ The path above is illustrative; use the actual note path Bob reports.
 
 | Commands | Effects |
 | --- | --- |
-| `query`, `plan`, `ready`, `freshness list`, capture discovery/parse/complete, `projects list` | Read local vault state |
+| `query`, `plan`, `ready`, `freshness list`, `stats`, capture discovery, `capture-complete`, `projects list` | Read local vault state |
+| `capture-parse` | Classify the draft without opening the vault. It does read the URL routing config, so a bare link matches `bob capture` |
+| `capture-rewrite` | Rewrite the draft in memory. It does not open the vault, the clipboard, or the URL routing config |
 | `ref find`, `ref list`, `ref show`, `ref jobs [list]`, `ref migrate-tasks`, `ref migrate-zorg` without `--write` | Inspect local references, jobs, or a migration plan without vault writes |
-| `capture`, `capture-task-id`, `capture-pomodoro-name`, `projects sync`, `task reconcile`, `freshness seed` | Write vault notes; a bare public link queues a job that later writes an intake PDF or a fallback task; `capture --dry-run` is offline |
+| `capture`, `capture-task-id`, `capture-pomodoro-name`, `projects sync`, `task reconcile`, `freshness seed` | Write vault notes; a bare public link queues a job that later writes an intake PDF or a fallback task; `URL %` asks that job for companion audio; `capture --dry-run` is offline |
 | `vault-sync`, `nightly` | Reconcile the vault with Git, including commits, merges, and pushes |
 | `task archive` | Archive task blocks and repair links; in a Git vault, commit touched files and push |
 | `task reroll` | Re-roll schedules; in a Git worktree, sync before/after and commit rewritten notes; `--offline` skips sync but still commits locally |
-| `plugins list`, `plugins sync` | Pull the plugin source repo by default, including for `sync --dry-run` (`--no-pull` skips); `sync` deploys plugin assets with backups |
-| `gkeep list`, `gkeep pull` | Contact Keep; `pull` writes inbox tasks or intake PDFs, commits the Keep inbox note when tasks were written unless `--no-commit`, then archives verified Keep notes unless `--no-archive`; a clips-only pull skips that commit; `pull --dry-run` still contacts Keep and does not clip |
-| `ref create`, `ref scan`, `ref sync` | Write PDFs and reference notes inline; `create --dry-run` still downloads or opens URL targets; writing scans can run a configured pre-scan hook |
+| `plugins list`, `plugins sync` | Pull the plugin source repo by default, including for `sync --dry-run` (`--no-pull` skips); `sync` deploys plugin assets with backups. `-f json` prints one object instead of the table |
+| `gkeep list`, `gkeep pull` | Contact Keep; `pull` writes inbox tasks or intake PDFs, commits the Keep inbox note when tasks were written unless `--no-commit`, then archives verified Keep notes unless `--no-archive`; a clips-only pull skips that commit; `pull --dry-run` still contacts Keep and does not clip. A valid note `@route` chooses a clip's parent ahead of `-P` |
+| `gkeep migrate-markers`, `gkeep migrate-tasks` | Rewrite Keep task Markdown offline, with no Keep credentials or network. `--dry-run` previews. A live run commits changed notes unless `--no-commit` |
+| `ref create`, `ref scan`, `ref sync` | Write PDFs and reference notes inline; `create --dry-run` still downloads or opens URL targets; `create --listen` also narrates companion audio; writing scans can run a configured pre-scan hook. `scan -f json` prints one report |
 | `ref jobs run` | Fetch queued links for their stored destination vaults; write intake PDFs or fallback inbox tasks |
 | `ref migrate-tasks --write`, `ref migrate-zorg --write` | Copy legacy reading records into `ref/zorg/` or move open ref tasks into parent notes and commit them; sync before and after unless `--offline` |
 | `completion install`, `completion uninstall` | Change shell adapter files and the completion manifest |
