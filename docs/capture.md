@@ -3487,7 +3487,9 @@ null when linked, `trigger` `"dependency"` or `"project_empty"` (a
 missing key means an older bob), and `hide_removed` true when this item
 removed a whole-token `#hide`), `still_blocked[]` (one `note_path`/
 `block_id`/`line`/`text`/`status_symbol` row per open dependent that
-stays blocked, with `reason` `waits_on` or `scheduled`, `waits_on`
+stays blocked, with `reason` `waits_on`, `scheduled`, or `project`
+(`project` carries the note's vault-relative `project` path, plus
+`scheduled` when the project date blocks), `waits_on`
 counting the open prerequisites left, `scheduled` set only for
 `scheduled`, and the same `trigger` field), and
 `unblocked_check` (`"checked"` when the lookup ran or the `[id::]` gate

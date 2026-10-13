@@ -459,7 +459,7 @@ on the next run. `Alt+]` / `Alt+[` on a `[?]` `^prj` that leaves the project wit
 remaining reason (its date retired, no Depends-On target that resolves to
 an open task; a missing id never blocks) strips `#prj_is_blocked` from
 every open resident and recovers those whose only reason was the project,
-writing `[unblocked::]` when freshness.md §4's WRITE rule applies. Cycling
+writing `[unblocked::]` when freshness.md §5's WRITE rule applies. Cycling
 `^prj` to Cancelled recovers the same way even though the note is then no
 longer `project(T)`, and a transcluded `^prj` recovers residents in its
 source note. Closed lines stay untouched.
