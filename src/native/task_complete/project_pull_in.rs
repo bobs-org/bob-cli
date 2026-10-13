@@ -10,7 +10,7 @@
 //! Detection runs over the staged post-gesture texts: trigger (a) reads the
 //! staged text of C's own notes (no vault walk), trigger (b) reads R's note
 //! text for dependent candidates of C. The vault-wide dependents snapshot is
-//! only needed when [`pull_in_needs_dependents`] says so. Verdicts follow
+//! only needed when [`inspect_pull_ins`] says so. Verdicts follow
 //! the Rule steps 1, 2 and 4–9; step 3 needs no separate check under the
 //! line model (`^prj` reports only its own reasons, covered by steps 1–2).
 
@@ -19,7 +19,6 @@ use std::path::{Path, PathBuf};
 
 use chrono::NaiveDate;
 
-use super::super::capture_dependency_tasks::has_hide_tag;
 use super::super::capture_task_toggle::set_task_line_status;
 use super::super::project_dependencies::is_project_task_id;
 use super::super::projects::edits::normalize_task_hide_tag;
@@ -29,8 +28,8 @@ use super::super::task_status_hooks::{
 };
 use super::super::vault_links::NoteIndex;
 use super::successors::{
-    is_inbox_note, successor_link_text, successor_new_status, CompletedTask,
-    DayView, DependentVerdict, PlacedSuccessor, PredecessorRef,
+    is_inbox_note, raw_task_line, successor_link_text, successor_new_status,
+    CompletedTask, DayView, DependentVerdict, PlacedSuccessor, PredecessorRef,
     ResolvedClosingTarget, SlotAnchor, StillBlockedRow, SuccessorLinkReport,
     SuccessorPlan, UnblockedRow,
 };
@@ -56,25 +55,13 @@ pub(crate) struct PullInCandidate {
     pub(crate) preds: Vec<usize>,
 }
 
-/// Whether the vault-wide dependents snapshot must be built for this
-/// gesture (§12.10 Gate): some task in C carries `[id::]` (as today), or a
-/// trigger-(a) candidate R carries `[dependsOn::]` (Rule steps 1 and 3 need
-/// vault-wide openness in that case). Callers run this before deciding
-/// whether to build the snapshot.
-pub(crate) fn pull_in_needs_dependents(
-    completed: &[CompletedTask],
-    note_texts: &[(PathBuf, String)],
-    tasks_settings: &TasksSettings,
-    today: NaiveDate,
-) -> bool {
-    inspect_pull_ins(completed, note_texts, tasks_settings, today)
-        .needs_dependents
-}
-
 /// Detect trigger-(a) candidates from staged C-note texts and decide
-/// whether the vault-wide dependents snapshot is required (§12.10 Gate).
-/// Trigger (b) necessarily has an `[id::]` predecessor, so it is covered
-/// by the same gate even though it is discovered in that snapshot.
+/// whether the vault-wide dependents snapshot is required (§12.10 Gate):
+/// some task in C carries `[id::]`, a candidate R carries `[dependsOn::]`,
+/// or a candidate R is `[?]` while some open resident of N carries
+/// `[dependsOn::]` (the §12.2 PROJECT RECOVERY cascade needs vault-wide
+/// openness). Trigger (b) necessarily has an `[id::]` predecessor, so it is
+/// covered by the same gate even though it is discovered in that snapshot.
 pub(crate) fn inspect_pull_ins(
     completed: &[CompletedTask],
     note_texts: &[(PathBuf, String)],
@@ -111,9 +98,26 @@ pub(crate) fn inspect_pull_ins(
             .iter()
             .any(|dependency| !dependency.is_empty())
     });
+    let needs_stale_blocked_cascade = candidates.iter().any(|candidate| {
+        let file = &files[candidate.file];
+        if file.tasks[candidate.task].status != '?' {
+            return false;
+        }
+        file.tasks.iter().enumerate().any(|(index, task)| {
+            index != candidate.task
+                && task.status_recognized
+                && task.status_type.is_open()
+                && task
+                    .depends_on
+                    .iter()
+                    .any(|dependency| !dependency.is_empty())
+        })
+    });
     PullInGate {
         has_candidates: !candidates.is_empty(),
-        needs_dependents: has_completed_ids || needs_candidate_dependencies,
+        needs_dependents: has_completed_ids
+            || needs_candidate_dependencies
+            || needs_stale_blocked_cascade,
     }
 }
 
@@ -292,18 +296,54 @@ pub(crate) fn pull_in_preview_line(raw: &str, landed: char) -> String {
     normalize_task_hide_tag(&updated, false, true)
 }
 
-/// Whether a pull-in line write removed `#hide`.
+/// Whether a pull-in line write removed `#hide`: sync's own tag boundaries
+/// (`normalize_task_hide_tag`, PP22/PP23), so `#hide,`, `#hide.` and
+/// `(#hide)` count while `#hidden` and `#hideaway` do not.
 pub(crate) fn pull_in_hide_removed(raw: &str) -> bool {
-    has_hide_tag(raw)
+    normalize_task_hide_tag(raw, false, true) != raw
+}
+
+fn is_hide_left_boundary(character: char) -> bool {
+    character.is_whitespace() || matches!(character, '(' | '[' | '{')
+}
+
+fn is_hide_right_boundary(character: char) -> bool {
+    character.is_whitespace()
+        || matches!(
+            character,
+            ']' | ')' | '}' | ':' | '.' | ',' | ';' | '!' | '?'
+        )
+}
+
+fn token_carries_hide(token: &str) -> bool {
+    let bytes = token.as_bytes();
+    let mut offset = 0;
+    while offset + 5 <= bytes.len() {
+        let Some(relative) = token[offset..].find("#hide") else {
+            break;
+        };
+        let index = offset + relative;
+        let end = index + 5;
+        let before = token[..index].chars().next_back();
+        let after = token[end..].chars().next();
+        if before.is_none_or(is_hide_left_boundary)
+            && after.is_none_or(is_hide_right_boundary)
+        {
+            return true;
+        }
+        offset = index + 1;
+    }
+    false
 }
 
 /// Row display text for a project row: the post-write description with
-/// `#prj` and `#hide` dropped token-bounded (display only). `#hidden`,
-/// `#hideaway` and `#prj_is_blocked` are never touched.
+/// `#prj` and `#hide` dropped (display only), using sync's tag boundaries
+/// for `#hide` so `#hide,`, `#hide.` and `(#hide)` drop while `#hidden`,
+/// `#hideaway` and `#prj_is_blocked` never do.
 pub(crate) fn pull_in_display_text(description: &str) -> String {
     description
         .split_whitespace()
-        .filter(|token| *token != "#prj" && *token != "#hide")
+        .filter(|token| *token != "#prj" && !token_carries_hide(token))
         .collect::<Vec<_>>()
         .join(" ")
 }
@@ -348,6 +388,7 @@ pub(crate) struct RowEmit<'a> {
     pub successor_positions: &'a [usize],
     pub completed: &'a [CompletedTask],
     pub surfaces: &'a [Option<ProjectSurface>],
+    pub project_states: &'a super::project_close::ProjectCloseStates,
     pub day: &'a DayView,
     pub closing_target: &'a Option<ResolvedClosingTarget>,
     pub minted: &'a BTreeMap<(PathBuf, usize), String>,
@@ -368,6 +409,7 @@ pub(crate) fn emit_rows(plan: &mut SuccessorPlan, ctx: RowEmit<'_>) {
         successor_positions,
         completed,
         surfaces,
+        project_states,
         day,
         closing_target,
         minted,
@@ -503,17 +545,25 @@ pub(crate) fn emit_rows(plan: &mut SuccessorPlan, ctx: RowEmit<'_>) {
                     &block_id,
                     task.line_index + 1,
                 );
+                let scheduled = project_states
+                    .get(verdict.file)
+                    .and_then(|(_, reasons)| reasons.future_scheduled)
+                    .map(|date| date.format("%Y-%m-%d").to_string());
                 plan.still_blocked.push(StillBlockedRow {
                     note_path: file.relative_path.clone(),
                     block_id,
                     line,
-                    text: task.description.clone(),
+                    text: still_blocked_text(task, verdict),
                     status_symbol: task.status,
                     reason: "project",
                     waits_on: 0,
-                    scheduled: None,
+                    scheduled,
                     project: Some(file.relative_path.clone()),
-                    trigger: DEPENDENCY_TRIGGER,
+                    trigger: if verdict.pull_in {
+                        PULL_IN_TRIGGER
+                    } else {
+                        DEPENDENCY_TRIGGER
+                    },
                 });
             }
             super::successors::VerdictKind::Recover(reason) => {
@@ -690,14 +740,4 @@ fn emit_pull_in_recover(
         trigger: PULL_IN_TRIGGER,
         hide_removed,
     });
-}
-
-/// Raw staged line for one task, without its line ending.
-fn raw_task_line(contents: &str, line_index: usize) -> String {
-    contents
-        .lines()
-        .nth(line_index)
-        .unwrap_or_default()
-        .trim_end_matches('\r')
-        .to_string()
 }

@@ -4,7 +4,7 @@
 //! `successor_tests.rs`. Every test cites its vector id.
 
 use super::super::super::vault_links::NoteIndex;
-use super::super::pull_in_needs_dependents;
+use super::super::inspect_pull_ins;
 use super::super::successors::{
     plan_successors, CompletedTask, SuccessorInput, SuccessorPlan,
 };
@@ -532,12 +532,13 @@ fn pp14_id_less_close_pulls_in() {
     let completed = vec![task("proj.md", "a-fix", "", "Fix pump")];
     let settings = test_settings();
     assert!(
-        !pull_in_needs_dependents(
+        !inspect_pull_ins(
             &completed,
             &[(PathBuf::from("proj.md"), staged.clone())],
             &settings,
             today(),
-        ),
+        )
+        .needs_dependents,
         "no snapshot needed without ids or R dependsOn"
     );
     let plan = run(
@@ -1063,31 +1064,181 @@ fn gate_needs_dependents_cases() {
         "- [ ] #task #prj Ship it! #hide [dependsOn:: fix-a] ^prj",
     );
     // Some C task has `[id::]` → snapshot needed.
-    assert!(pull_in_needs_dependents(
-        &[closed_a()],
-        &[(PathBuf::from("proj.md"), staged_plain.clone())],
-        &settings,
-        today(),
-    ));
+    assert!(
+        inspect_pull_ins(
+            &[closed_a()],
+            &[(PathBuf::from("proj.md"), staged_plain.clone())],
+            &settings,
+            today(),
+        )
+        .needs_dependents
+    );
     // Id-less C, R without `dependsOn` (PP14) → no snapshot.
-    assert!(!pull_in_needs_dependents(
-        &[task("proj.md", "a-fix", "", "Fix pump")],
-        &[(PathBuf::from("proj.md"), staged_plain.clone())],
-        &settings,
-        today(),
-    ));
+    assert!(
+        !inspect_pull_ins(
+            &[task("proj.md", "a-fix", "", "Fix pump")],
+            &[(PathBuf::from("proj.md"), staged_plain.clone())],
+            &settings,
+            today(),
+        )
+        .needs_dependents
+    );
     // Id-less C, R with `dependsOn` → snapshot needed for steps 1 and 3.
-    assert!(pull_in_needs_dependents(
-        &[task("proj.md", "a-fix", "", "Fix pump")],
-        &[(PathBuf::from("proj.md"), staged_depends.clone())],
-        &settings,
-        today(),
-    ));
+    assert!(
+        inspect_pull_ins(
+            &[task("proj.md", "a-fix", "", "Fix pump")],
+            &[(PathBuf::from("proj.md"), staged_depends.clone())],
+            &settings,
+            today(),
+        )
+        .needs_dependents
+    );
     // Id-less C, no staged texts → no snapshot.
-    assert!(!pull_in_needs_dependents(
-        &[task("proj.md", "a-fix", "", "Fix pump")],
+    assert!(
+        !inspect_pull_ins(
+            &[task("proj.md", "a-fix", "", "Fix pump")],
+            &[],
+            &settings,
+            today()
+        )
+        .needs_dependents
+    );
+}
+
+// R1 (PP22/PP23): punctuation-bounded `#hide` uses sync's tag boundaries in
+// both the linked and the not-planned-today cases.
+#[test]
+fn r1_punctuation_hide_linked_and_surfaced() {
+    let vault_index = index(&["proj.md", "20261005.md"]);
+    // Linked: `#hide,` still counts as hidden, links, and drops from display.
+    let staged = staged_closed_a("- [ ] #task #prj Ship it! #hide, ^prj");
+    let plan = run(
+        vec![closed_a()],
         &[],
-        &settings,
-        today(),
+        &[("proj.md", &staged)],
+        Some(&day_fix("  - [[proj#^a-fix]]\n")),
+        "20261005.md",
+        true,
+        &vault_index,
+    );
+    assert_eq!(plan.unblocked.len(), 1);
+    let row = &plan.unblocked[0];
+    assert_eq!(row.block_id, "prj");
+    assert!(row.hide_removed);
+    assert_eq!(row.text, "Ship it!");
+    assert!(row.link.is_some());
+    let updated = plan
+        .changed_files
+        .get(&PathBuf::from("proj.md"))
+        .expect("proj.md changed");
+    assert!(!updated.contains("#hide"), "{updated}");
+    assert!(updated.contains("^prj"), "{updated}");
+
+    // Not-planned-today: same punctuation `#hide` still surfaces.
+    let plan = run(
+        vec![closed_a()],
+        &[],
+        &[("proj.md", &staged)],
+        Some(&day_fix("")),
+        "20261005.md",
+        true,
+        &vault_index,
+    );
+    assert_eq!(plan.unblocked.len(), 1);
+    let row = &plan.unblocked[0];
+    assert_eq!(row.not_linked, Some("not_planned_today"));
+    assert!(row.hide_removed);
+    assert_eq!(row.text, "Ship it!");
+    assert_eq!(row.previous_status_symbol, row.status_symbol);
+}
+
+// R2: a `[?]` R with an open resident carrying `[dependsOn::]` needs the
+// dependents snapshot, and the resident keeps its Blocked status when its
+// prerequisite is still open elsewhere.
+#[test]
+fn r2_stale_blocked_cascade_needs_dependents() {
+    let settings = test_settings();
+    let staged = project_note(concat!(
+        "- [x] #task Fix pump ^a-fix\n",
+        "- [?] #task #prj Ship it! #hide ^prj\n",
+        "- [?] #task Help #prj_is_blocked #hide [dependsOn:: ext-id] ^help\n",
     ));
+    let completed = vec![task("proj.md", "a-fix", "", "Fix pump")];
+    assert!(
+        inspect_pull_ins(
+            &completed,
+            &[(PathBuf::from("proj.md"), staged.clone())],
+            &settings,
+            today(),
+        )
+        .needs_dependents,
+        "stale [?] R with dependent resident needs snapshot"
+    );
+    let vault_index = index(&["proj.md", "other.md", "20261005.md"]);
+    let plan = run(
+        completed,
+        &[("other.md", "- [ ] #task External [id:: ext-id] ^ext\n")],
+        &[("proj.md", &staged)],
+        Some(&day_fix("  - [[proj#^a-fix]]\n")),
+        "20261005.md",
+        true,
+        &vault_index,
+    );
+    let resident = plan.unblocked.iter().find(|row| row.block_id == "help");
+    assert!(
+        resident.is_none(),
+        "resident with open prerequisite stays Blocked: {:?}",
+        plan.unblocked
+    );
+    assert!(
+        plan.still_blocked.iter().all(|row| row.block_id != "help"),
+        "resident is not recovered: {:?}",
+        plan.still_blocked
+    );
+}
+
+// R3: `reason: "project"` still-blocked rows carry `scheduled` when the
+// project date blocks (§12.5).
+#[test]
+fn r3_project_reason_carries_scheduled() {
+    let vault_index = index(&["sase.md", "proj.md", "20261005.md"]);
+    let settings = test_settings();
+    let plan = plan_successors(SuccessorInput {
+        completed: vec![CompletedTask {
+            relative_path: PathBuf::from("sase.md"),
+            block_id: "done-p".to_string(),
+            task_id: "done-p".to_string(),
+            text: "Done P".to_string(),
+            is_root: true,
+        }],
+        snapshot: vec![
+            (
+                PathBuf::from("sase.md"),
+                "- [x] #task Done P [id:: done-p] ^done-p\n".to_string(),
+            ),
+            (
+                PathBuf::from("proj.md"),
+                project_note(concat!(
+                    "- [?] #task Apply [scheduled:: 2026-10-13] [id:: apply] ^prj\n",
+                    "- [?] #task Resident [dependsOn:: done-p] [id:: res] ^res\n",
+                )),
+            ),
+        ],
+        note_texts: vec![],
+        pre_day: Some(day_fix("  - [[sase#^done-p]]\n")),
+        post_day: None,
+        closing: None,
+        day_relative: PathBuf::from("20261005.md"),
+        today: today(),
+        tasks_settings: &settings,
+        note_settings: &settings,
+        link_unblocked: true,
+        index: &vault_index,
+    });
+    assert!(plan.unblocked.is_empty(), "{:?}", plan.unblocked);
+    assert_eq!(plan.still_blocked.len(), 1);
+    let row = &plan.still_blocked[0];
+    assert_eq!(row.reason, "project");
+    assert_eq!(row.scheduled.as_deref(), Some("2026-10-13"));
+    assert_eq!(row.project, Some(PathBuf::from("proj.md")));
 }

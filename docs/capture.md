@@ -3525,7 +3525,7 @@ project pull-in that removed `#hide` without linking or changing status
 open tasks` before any reason suffix; see
 [`docs/task-dependencies.md`](task-dependencies.md) §12.10), and one
 `still blocked` row per remaining blocked dependent (`· waits on N more`,
-`· until YYYY-MM-DD`). A left-open descendant or unblocked dependent with no
+`· until YYYY-MM-DD`, `· project <path>`). A left-open descendant or unblocked dependent with no
 block ID prints only its note path with no trailing ` ^`. Already-done
 tasks print `✓ already done [x] <text>  <note> ^<id> · nothing to change`.
 

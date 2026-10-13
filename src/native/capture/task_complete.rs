@@ -132,13 +132,14 @@ pub(super) fn plan_task_complete_item(
     // moves, or retirement), the planner recovers newly unblocked
     // dependents and inserts successor links, and retirement then strikes
     // the predecessor in place while the successor keeps the vacated
-    // slot. The `[id::]` gate runs first: the staged post-close lines of
-    // the completed tasks (root and closed subtasks) are read directly
-    // from the planner, and when none carries an `[id::]` field no
-    // dependent can name this close, so successor planning is skipped
-    // with no dependents lookup and no extra reads. Dependents that name
-    // only the canonical id of a target without `[id::]` are left to the
-    // hooks (successor-links gate edge).
+    // slot. The §12.10 gate runs first: the staged post-close texts of C's
+    // notes are scanned for pull-in candidates, and the vault-wide
+    // dependents snapshot is built only when some C task carries `[id::]`,
+    // a candidate R carries `[dependsOn::]`, or a `[?]` R has an open
+    // resident with `[dependsOn::]`; otherwise successor planning is
+    // skipped with no extra reads. Dependents that name only the canonical
+    // id of a target without `[id::]` are left to the hooks
+    // (successor-links gate edge).
     let day_exists = planner.currently_exists(&day_file)? || day_file.is_file();
     let mut predecessors: Vec<engine::CompletedTask> = Vec::new();
     for (path, id) in &completed {

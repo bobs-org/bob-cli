@@ -428,3 +428,71 @@ fn due_project_schedule_applies_sync_hidden_task_recount() {
         "project_empty"
     );
 }
+
+// R1 (PP22/PP23): a live pull-in with punctuation-bounded `#hide` agrees
+// with `bob projects sync --dry-run` (no event for N).
+#[test]
+fn punctuation_hide_pull_in_and_sync_agrees() {
+    let (_temp, vault, day_file) = make_vault("bob-cli-project-pull-in-r1");
+    write_file(
+        &vault.join("proj.md"),
+        &project(
+            "- [ ] #task Ship the last outcome ^a\n\
+             - [ ] #task Ship the project #prj #hide, ^prj\n",
+        ),
+    );
+    write_file(&day_file, "## Pomodoros\n- [ ] () — FIX\n  - [[proj#^a]]\n");
+
+    let json =
+        capture_json_dry_run_matches_real(&vault, &day_file, NOW, &["!proj:a"]);
+    let row = &json["task_complete"]["unblocked"][0];
+    assert_eq!(row["trigger"], "project_empty");
+    assert_eq!(row["hide_removed"], true);
+    assert_eq!(row["block_id"], "prj");
+    assert!(row["link"].is_object());
+
+    let sync = bob_command()
+        .arg("projects")
+        .arg("sync")
+        .arg("--dry-run")
+        .arg("-b")
+        .arg(&vault)
+        .output()
+        .expect("run project sync dry-run");
+    assert_success(&sync);
+    let out = stdout(&sync);
+    assert!(
+        !out.contains("proj.md"),
+        "sync should leave the pull-in alone:\n{out}"
+    );
+}
+
+// R2: a `[?]` resident whose prerequisite is still open elsewhere stays
+// `[?]` instead of recovering to `[ ]`.
+#[test]
+fn stale_blocked_resident_stays_blocked() {
+    let (_temp, vault, day_file) = make_vault("bob-cli-project-pull-in-r2");
+    write_file(
+        &vault.join("other.md"),
+        "- [ ] #task Ext [id:: ext-id] ^ext\n",
+    );
+    write_file(
+        &vault.join("proj.md"),
+        &project(concat!(
+            "- [ ] #task Fix pump ^a\n",
+            "- [?] #task Ship it! #prj #hide ^prj\n",
+            "- [?] #task Help #prj_is_blocked #hide [dependsOn:: ext-id] ^help\n",
+        )),
+    );
+    write_file(&day_file, "## Pomodoros\n- [ ] () — FIX\n  - [[proj#^a]]\n");
+
+    let _json = capture_json(&vault, &day_file, &["!proj:a"], false);
+    let note = fs::read_to_string(vault.join("proj.md")).expect("read project");
+    let resident = note
+        .lines()
+        .find(|line| line.contains("^help"))
+        .expect("resident line");
+    assert!(resident.starts_with("- [?] "), "{resident}");
+    assert!(resident.contains("#hide"), "{resident}");
+    assert!(!resident.contains("[unblocked::"), "{resident}");
+}

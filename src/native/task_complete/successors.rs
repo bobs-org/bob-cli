@@ -375,17 +375,17 @@ fn in_done_archive(relative: &Path) -> bool {
 /// short name (`""` when unnamed), and whether it is still open.
 #[derive(Debug, Clone)]
 pub(crate) struct DayEntry {
-    pub(crate) line: usize,
+    line: usize,
     pub(crate) name: String,
-    pub(crate) open: bool,
+    open: bool,
 }
 
 /// Slot anchor: insert after an anchor bullet's subtree.
 #[derive(Debug, Clone)]
 pub(crate) struct SlotAnchor {
     pub(crate) entry_index: usize,
-    pub(crate) bullet_end: usize,
-    pub(crate) indent: String,
+    bullet_end: usize,
+    indent: String,
 }
 
 /// The pre-gesture day text parsed once: open entries plus the first
@@ -903,7 +903,7 @@ pub(crate) fn live_link_keys(
         .collect()
 }
 
-pub(crate) fn earliest_anchor(
+fn earliest_anchor(
     preds: &[usize],
     anchors: &[Option<SlotAnchor>],
 ) -> Option<SlotAnchor> {
@@ -1368,6 +1368,7 @@ fn apply_verdicts(
             successor_positions: &successor_positions,
             completed: &input.completed,
             surfaces,
+            project_states: &project_states,
             day: &day,
             closing_target: &closing_target,
             minted: &minted,

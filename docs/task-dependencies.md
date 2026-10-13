@@ -1051,7 +1051,8 @@ fields:
 - `project` (the reason) is a resident whose project still has an
   open prerequisite or a future `scheduled` date after this gesture
   (§13). The optional `project` field is that note's vault-relative
-  path. `^prj` reports only its own reasons, never a `project_*`
+  path. Pull-in still-blocked rows carry `project` (N's path) for every
+  reason. `^prj` reports only its own reasons, never a `project_*`
   reason.
 - `trigger` is `"dependency"` or `"project_empty"`, same rule as
   `unblocked[]`.
@@ -1215,7 +1216,7 @@ task rows and before `next:` for closes:
   linked [?] → [*] Re-launch all failed agents on apollo!  sase.md ^relaunch-failed-agents → FIX · added ^relaunch-failed-agents
   unblocked [?] → [ ] Book flights  travel.md ^book-flights · not planned today
   linked [ ] → [*] Ship the outcome!  proj.md ^prj → FIX · project has no open tasks
-  surfaced  Ship the outcome!  proj.md ^prj · project has no open tasks
+  surfaced Ship the outcome!  proj.md ^prj · project has no open tasks
   still blocked  Start adding sase--<name> badges  sase_agents_repo.md ^badges · until 2026-10-13
   still blocked  Ship the outcome!  proj.md ^prj · project has no open tasks · waits on 1 more
 plan 3/3 themes · 10/10 links
@@ -1238,8 +1239,9 @@ plan 3/3 themes · 10/10 links
   link`. A pull-in with no link and no status change uses `surfaced` /
   `would surface`. Every project row puts `· project has no open tasks`
   before any reason suffix.
-- **Still-blocked suffixes:** `· waits on N more`, `· until YYYY-MM-DD`,
-  `· blocked by project`.
+- **Still-blocked suffixes (Rust human):** `· waits on N more`,
+  `· until YYYY-MM-DD`, `· project <path>`. The nav card keeps
+  `· blocked by project` and `· project until <Mon D>`.
 - A row with no block ID omits ` ^`, as today.
 
 ### 12.7 Performance
@@ -1422,7 +1424,10 @@ are unchanged. A Pending `^prj` is never demoted
 - The vault-wide dependents snapshot is built only when needed:
   - some task in C carries `[id::]` (as today); or
   - a candidate R carries `[dependsOn::]`. Steps 1 and 3 need
-    vault-wide openness in that case.
+    vault-wide openness in that case; or
+  - a candidate R has status `?` and some open resident of N carries a
+    non-empty `[dependsOn::]`. The §12.2 PROJECT RECOVERY cascade checks
+    residents' own prerequisites vault-wide in that case.
 - If the snapshot is unavailable, set `unblocked_check: "unavailable"`
   and write no pull-in.
 - Closes outside project notes cost nothing extra. The cycler's
