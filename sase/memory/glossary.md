@@ -15,7 +15,7 @@ Run `sase memory read glossary:<term> [<term> ...] -r "<why>"` before relying on
 **GLOSSARY TERMS:** Area Note; Inbox File (inbox note); Keep Streak (keeps); Mac Menu
 Bar Pomodoro Indicator (mac pom); Morning GTD Review Footer (review footer); Pomodoro;
 Project Note (prj note); Project Task (prj task); Reference Note (ref note); Reference
-Task (ref task); Schedule Log; Task Dependency Link (task dep link, dep link); Task
-Freshness (freshness); Task Link (task block link); Work Log
+Task (ref task); Schedule Log; Successor Offer; Task Dependency Link (task dep link, dep
+link); Task Freshness (freshness); Task Link (task block link); Work Log
 
 <!-- /sase:strands -->

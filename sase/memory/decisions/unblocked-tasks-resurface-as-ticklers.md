@@ -1,16 +1,16 @@
 ---
 keyword: Unblocked Tasks Resurface As Ticklers
 aliases:
-  - unblocked ticklers
-  - unblocked field
-  - returned_by unblocked
-summary:
-  "Every automatic Blocked-to-Ready recovery records [unblocked:: today]
-  unless a WRITE skip applies, so the task is TICKLER in the next
-  morning review; a keep on that row leaves the streak unchanged."
+- unblocked ticklers
+- unblocked field
+- returned_by unblocked
+summary: 'Every automatic Blocked-to-Ready recovery records [unblocked:: today] unless
+  a WRITE skip applies, so the task is TICKLER in the next morning review; a keep
+  on that row leaves the streak unchanged.'
 metadata:
-  status: accepted
-  decided: 2026-10-12
+  status: superseded-in-part
+  superseded_by:
+  - decisions:unblocked-tasks-are-offered
 ---
 
 **Applies to.** bob-cli, bob-plugins, vault.
@@ -64,3 +64,7 @@ not write the field during the mixed-version window; reconcile prunes
 
 **Reopens when.** A required surface cannot wait for reconcile, or
 stamps must remain the only freshness write.
+
+Superseded in part: project residents are now offered as successors and linked only
+when picked; the former rejected "successor-linking residents" behavior is an explicit
+offer. See [[decisions:unblocked-tasks-are-offered]].

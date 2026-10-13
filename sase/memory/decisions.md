@@ -100,9 +100,9 @@ edited in place.
     existing priority ladder; nothing decays silently and freshness itself still never
     changes priority or schedule.
 15. **Subprojects Inherit Project Blocking** (`subprojects-inherit-project-blocking`)
-    - A blocked project passes its dependency or schedule reason through its project
-      descendants, with reconcile as the authority and the ^prj tag as the proxy for
-      other engines.
+    - _[partly superseded by `decisions:unblocked-tasks-are-offered`]_ A blocked project
+      passes its dependency or schedule reason through its project descendants, with
+      reconcile as the authority and the ^prj tag as the proxy for other engines.
 16. **Task Dependencies Are Links On One Depends-On Line**
     (`task-deps-are-depends-on-links`) - _[partly superseded by
     `decisions:capture-link-drops-blocking-deps`]_ A task's prerequisites live as plain
@@ -114,9 +114,13 @@ edited in place.
     under today's open Pomodoros, computed at read time by bob plan and
     bob-ledger-tools; never a tag, task-line field, or file-path filter; #now is
     retired.
-18. **Unblocked Tasks Resurface As Ticklers** (`unblocked-tasks-resurface-as-ticklers`)
-    - Every automatic Blocked-to-Ready recovery records [unblocked:: today] unless a
-      WRITE skip applies, so the task is TICKLER in the next morning review; a keep on
-      that row leaves the streak unchanged.
+18. **Unblocked Tasks Are Offered, Never Auto-Linked** (`unblocked-tasks-are-offered`)
+    - Every would-be successor link from a managed Done gesture is offered for explicit
+      selection; recovery remains automatic.
+19. **Unblocked Tasks Resurface As Ticklers** (`unblocked-tasks-resurface-as-ticklers`)
+    - _[partly superseded by `decisions:unblocked-tasks-are-offered`]_ Every automatic
+      Blocked-to-Ready recovery records [unblocked:: today] unless a WRITE skip applies,
+      so the task is TICKLER in the next morning review; a keep on that row leaves the
+      streak unchanged.
 
 <!-- /sase:strands -->

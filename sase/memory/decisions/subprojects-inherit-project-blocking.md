@@ -1,13 +1,20 @@
 ---
 aliases:
-  - sub-project cascade
-  - inherited project blocking
-  - parent project blocking
+- sub-project cascade
+- inherited project blocking
+- parent project blocking
 title: Sub-projects Inherit Project Blocking
 origin: requested
 scope: project
-summary: A blocked project passes its dependency or schedule reason through its project descendants, with reconcile as the authority and the ^prj tag as the proxy for other engines.
+summary: A blocked project passes its dependency or schedule reason through its project
+  descendants, with reconcile as the authority and the ^prj tag as the proxy for other
+  engines.
+metadata:
+  status: superseded-in-part
+  superseded_by:
+  - decisions:unblocked-tasks-are-offered
 ---
+
 **Applies to.** bob-cli, bob-plugins, vault.
 
 **Claim.** A project note has at most one parent, stored as a scalar frontmatter
@@ -58,3 +65,6 @@ frontmatter wikilink.
 
 Supersedes in part [[decisions:projects-block-from-prj-line]]: blocking by residence
 alone is retired; a project's own prerequisites and date still originate on its `^prj`.
+
+Superseded in part: the parent project's trigger (c) pull-in is now offered and linked
+only when picked. See [[decisions:unblocked-tasks-are-offered]].
