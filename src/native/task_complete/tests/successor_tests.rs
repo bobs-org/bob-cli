@@ -49,6 +49,7 @@ fn run(
             .iter()
             .map(|(path, contents)| (PathBuf::from(path), contents.to_string()))
             .collect(),
+        note_texts: Vec::new(),
         pre_day: pre_day.map(str::to_string),
         post_day: None,
         closing: None,
@@ -1056,7 +1057,11 @@ fn linked_prj_recovery_lands_next() {
         .iter()
         .find(|row| row.block_id == "prj")
         .expect("prj recovered");
-    assert_eq!(prj.not_linked, Some("project_task"));
+    // §12.10 pull-in (PP9 shape via trigger (b): N holds only R, so the
+    // pull-in replaces the SL11 `project_task` row; step 5 keeps the live
+    // link with no new link and still lands Next).
+    assert_eq!(prj.not_linked, Some("already_planned"));
+    assert_eq!(prj.trigger, "project_empty");
     assert_eq!(prj.status_symbol, '*');
     let updated = plan
         .changed_files

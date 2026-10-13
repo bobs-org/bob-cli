@@ -113,23 +113,9 @@ pub(crate) fn recovered_unblocked_project_files(
     files: &[FileScan],
     project_states: &ProjectCloseStates,
 ) -> Vec<usize> {
-    use super::successors::VerdictKind;
     let mut files_out = Vec::new();
     for verdict in verdicts {
-        if !matches!(verdict.kind, VerdictKind::Recover(_)) {
-            continue;
-        }
-        let Some(task) = files
-            .get(verdict.file)
-            .and_then(|file| file.tasks.get(verdict.task))
-        else {
-            continue;
-        };
-        if !task
-            .block_id
-            .as_deref()
-            .is_some_and(|id| is_project_task_id(Some(id)))
-        {
+        if !recovering_prj_verdict(verdict, files) {
             continue;
         }
         let Some((_, reasons)) = project_states.get(verdict.file) else {
@@ -142,6 +128,37 @@ pub(crate) fn recovered_unblocked_project_files(
     files_out.sort_unstable();
     files_out.dedup();
     files_out
+}
+
+/// Whether one verdict's `^prj` recovery cascades to its residents: any
+/// dependency `Recover`, or a §12.10 pull-in verdict (linked or not) on a
+/// `[?]` R that leaves Blocked. A linked pull-in is a `Successor` verdict,
+/// which only pull-ins ever produce for `^prj`.
+fn recovering_prj_verdict(
+    verdict: &super::successors::DependentVerdict,
+    files: &[FileScan],
+) -> bool {
+    use super::successors::VerdictKind;
+    let Some(task) = files
+        .get(verdict.file)
+        .and_then(|file| file.tasks.get(verdict.task))
+    else {
+        return false;
+    };
+    if !task
+        .block_id
+        .as_deref()
+        .is_some_and(|id| is_project_task_id(Some(id)))
+    {
+        return false;
+    }
+    match verdict.kind {
+        VerdictKind::Recover(_) if !verdict.pull_in => true,
+        VerdictKind::Recover(_) | VerdictKind::Successor => {
+            verdict.pull_in && task.status == '?'
+        }
+        _ => false,
+    }
 }
 
 /// When a `^prj` dependent recovers, recover every `[?]`
@@ -161,14 +178,7 @@ pub(crate) fn recover_project_members(
     use super::successors::VerdictKind;
     let recovering: Vec<(usize, Vec<usize>)> = verdicts
         .iter()
-        .filter(|verdict| {
-            matches!(verdict.kind, VerdictKind::Recover(_))
-                && files
-                    .get(verdict.file)
-                    .and_then(|file| file.tasks.get(verdict.task))
-                    .and_then(|task| task.block_id.as_deref())
-                    .is_some_and(|id| is_project_task_id(Some(id)))
-        })
+        .filter(|verdict| recovering_prj_verdict(verdict, files))
         .map(|verdict| (verdict.file, verdict.preds.clone()))
         .collect();
     for (file_index, preds) in recovering {
@@ -219,6 +229,7 @@ pub(crate) fn recover_project_members(
                 anchor: None,
                 kind: VerdictKind::Recover("project_member"),
                 open_count,
+                pull_in: false,
             });
         }
     }

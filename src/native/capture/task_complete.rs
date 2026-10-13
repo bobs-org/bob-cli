@@ -211,6 +211,8 @@ pub(super) fn plan_task_complete_item(
             successor_plan = engine::plan_successors(engine::SuccessorInput {
                 completed: predecessors,
                 snapshot,
+                // Project pull-in staged texts are wired by `cli-capture`.
+                note_texts: Vec::new(),
                 pre_day: pre_day_text.clone(),
                 post_day: None,
                 closing: None,

@@ -482,6 +482,43 @@ pub(super) fn subproject_children_by_parent_link_name<'a>(
         .collect()
 }
 
+/// Sync's effective-unhidden count for the surfacing rule, shared with
+/// the project pull-in surface predicate
+/// (`docs/task-dependencies.md` §12.10 REMAINING). Without a project
+/// schedule this is the scan's open-unhidden count; with one, a hidden
+/// ordinary open task with fewer than two scheduled fields counts too,
+/// because sync strips its `#hide` on this run.
+pub(super) fn effective_unhidden_count(
+    project: &Project,
+    sync_schedule: Option<&ProjectSchedule>,
+    today: NaiveDate,
+) -> usize {
+    let Some(scheduled) = sync_schedule else {
+        return project.open_unhidden_count;
+    };
+    let policy = TaskSchedulePolicy::for_schedule(scheduled.date, today);
+    project
+        .task_lines
+        .iter()
+        .filter(|task| {
+            task.is_open_task
+                && !task.is_prj
+                && (task.hide_tag_count == 0
+                    || policy.ordinary_hide_needs_removal(**task))
+        })
+        .count()
+}
+
+/// Sync's surfacing rule, shared with the pull-in EMPTY predicate: no
+/// remaining work and no open sub-project. Sync passes child-note states;
+/// the pull-in passes the marker-line states.
+pub(super) fn should_surface_project(
+    effective_unhidden: usize,
+    has_open_subprojects: bool,
+) -> bool {
+    effective_unhidden == 0 && !has_open_subprojects
+}
+
 pub(super) fn plan_project_sync_at(
     project: &Project,
     subproject_children: &[SubprojectEntry],
@@ -544,6 +581,8 @@ pub(super) fn plan_project_sync_at(
     let mut effective_unhidden = project.open_unhidden_count;
     if let Some(scheduled) = &sync_schedule {
         let policy = TaskSchedulePolicy::for_schedule(scheduled.date, today);
+        effective_unhidden =
+            effective_unhidden_count(project, Some(scheduled), today);
         let scheduled_task_count = project
             .task_lines
             .iter()
@@ -559,16 +598,6 @@ pub(super) fn plan_project_sync_at(
             .iter()
             .copied()
             .any(|task| policy.prj_hide_needs_change(task));
-        effective_unhidden = project
-            .task_lines
-            .iter()
-            .filter(|task| {
-                task.is_open_task
-                    && !task.is_prj
-                    && (task.hide_tag_count == 0
-                        || policy.ordinary_hide_needs_removal(**task))
-            })
-            .count();
         for task in project
             .task_lines
             .iter()
@@ -603,7 +632,8 @@ pub(super) fn plan_project_sync_at(
         let has_open_subprojects = subproject_children
             .iter()
             .any(|child| child.state.is_open());
-        let should_surface = effective_unhidden == 0 && !has_open_subprojects;
+        let should_surface =
+            should_surface_project(effective_unhidden, has_open_subprojects);
         if sync_schedule.as_ref().is_none_or(|s| s.date <= today) {
             if should_surface {
                 if project.prj_task.hidden {
@@ -715,7 +745,7 @@ pub(super) fn prj_inline_schedule_date(project: &Project) -> Option<NaiveDate> {
         .and_then(|task| task.scheduled_date)
 }
 
-fn project_schedule_for_sync(
+pub(super) fn project_schedule_for_sync(
     project: &Project,
     effective_status: &ProjectStatus,
 ) -> Option<ProjectSchedule> {

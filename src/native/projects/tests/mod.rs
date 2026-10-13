@@ -64,4 +64,5 @@ fn apply_subproject_changes(
 
 mod edits;
 mod parse;
+mod surface;
 mod sync;

@@ -142,7 +142,7 @@ pub(super) fn task_schedule_edits(
     Ok(edits)
 }
 
-pub(super) fn normalize_task_hide_tag(
+pub(crate) fn normalize_task_hide_tag(
     line: &str,
     future: bool,
     include_prj: bool,

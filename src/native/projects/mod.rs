@@ -190,6 +190,7 @@ pub(crate) mod edits;
 mod model;
 mod output;
 mod scan;
+mod surface;
 mod sync;
 mod tags;
 #[cfg(test)]
@@ -208,3 +209,4 @@ pub(crate) use scan::{
     is_markdown_file, parse_frontmatter, project_name_aliases,
     trim_yaml_scalar, walk_typed_notes,
 };
+pub(crate) use surface::{project_surface, ProjectSurface};

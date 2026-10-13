@@ -732,6 +732,8 @@ fn plan_close_successors(
     let successor_plan = engine::plan_successors(engine::SuccessorInput {
         completed: predecessors,
         snapshot,
+        // Project pull-in staged texts are wired by `cli-capture`.
+        note_texts: Vec::new(),
         pre_day: pre_day.clone(),
         post_day: post_day.clone(),
         closing: Some(engine::ClosingContext {

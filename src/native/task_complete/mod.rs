@@ -6,11 +6,13 @@
 //! module. Keep everything `pub(crate)`.
 
 pub(crate) mod project_close;
+pub(crate) mod project_pull_in;
 pub(crate) mod recovery;
 pub(crate) mod retirement;
 pub(crate) mod successors;
 pub(crate) mod tree;
 
+pub(crate) use project_pull_in::pull_in_needs_dependents;
 pub(crate) use retirement::{
     retire_completed_links, LedgerRetirement, LinkStatus,
 };

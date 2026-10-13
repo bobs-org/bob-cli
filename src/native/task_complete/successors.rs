@@ -17,6 +17,8 @@ use std::path::{Component, Path, PathBuf};
 use chrono::NaiveDate;
 
 use super::super::freshness::placement::UnblockScope;
+use super::super::projects::edits::normalize_task_hide_tag;
+use super::super::projects::{project_surface, ProjectSurface};
 use super::super::{
     capture_block_ids::mint_block_id,
     capture_pomodoros,
@@ -38,6 +40,10 @@ use super::project_close::{
     apply_recovery_writes, project_states_for_files, project_still_blocks,
     recover_project_members, recovered_unblocked_project_files,
     unblock_scope_for,
+};
+use super::project_pull_in::{
+    classify_pull_in, detect_pull_ins, emit_rows, pull_in_hide_removed,
+    pull_in_preview_line, pull_in_recover_status, PullInCandidate, RowEmit,
 };
 use crate::native::capture_dependency_tasks::has_hide_tag;
 
@@ -62,6 +68,10 @@ pub(crate) struct CompletedTask {
 pub(crate) struct SuccessorInput<'a> {
     pub completed: Vec<CompletedTask>,
     pub snapshot: Vec<(PathBuf, String)>,
+    /// Staged post-gesture texts of C's notes for project pull-in trigger
+    /// (a) detection (`docs/task-dependencies.md` §12.10 Gate). Empty keeps
+    /// today's behaviour; `cli-capture` wires the planner texts.
+    pub note_texts: Vec<(PathBuf, String)>,
     pub pre_day: Option<String>,
     /// Post-gesture day text before successor insertion. `None` for `!`
     /// (the pre-gesture text is the base); closes pass the post-close
@@ -140,6 +150,10 @@ pub(crate) struct UnblockedRow {
     pub unblocked_by: Vec<PredecessorRef>,
     pub link: Option<SuccessorLinkReport>,
     pub not_linked: Option<&'static str>,
+    /// `"dependency"` for existing rows, `"project_empty"` for pull-ins.
+    pub trigger: &'static str,
+    /// Whether the gesture removed `#hide` from this row's line.
+    pub hide_removed: bool,
 }
 
 /// One open dependent of C that stays blocked (§12.5 `still_blocked[]`).
@@ -155,6 +169,8 @@ pub(crate) struct StillBlockedRow {
     pub scheduled: Option<String>,
     /// Vault-relative project note when `reason` is `project`.
     pub project: Option<PathBuf>,
+    /// `"dependency"` for existing rows, `"project_empty"` for pull-ins.
+    pub trigger: &'static str,
 }
 
 /// Output of [`plan_successors`].
@@ -358,25 +374,26 @@ fn in_done_archive(relative: &Path) -> bool {
 /// One ledger entry in the pre-gesture day text: its 0-based line,
 /// short name (`""` when unnamed), and whether it is still open.
 #[derive(Debug, Clone)]
-struct DayEntry {
-    line: usize,
-    name: String,
-    open: bool,
+pub(crate) struct DayEntry {
+    pub(crate) line: usize,
+    pub(crate) name: String,
+    pub(crate) open: bool,
 }
 
 /// Slot anchor: insert after an anchor bullet's subtree.
 #[derive(Debug, Clone)]
 pub(crate) struct SlotAnchor {
-    entry_index: usize,
-    bullet_end: usize,
-    indent: String,
+    pub(crate) entry_index: usize,
+    pub(crate) bullet_end: usize,
+    pub(crate) indent: String,
 }
 
 /// The pre-gesture day text parsed once: open entries plus the first
 /// live link per completed identity, in ledger order.
-struct DayView {
-    entries: Vec<DayEntry>,
-    live: BTreeMap<(PathBuf, String), (usize, usize, usize, String)>,
+#[derive(Debug, Clone)]
+pub(crate) struct DayView {
+    pub(crate) entries: Vec<DayEntry>,
+    pub(crate) live: BTreeMap<(PathBuf, String), (usize, usize, usize, String)>,
 }
 
 impl DayView {
@@ -482,7 +499,7 @@ impl SlotAnchor {
 /// canonical dependency-link form, except a successor living in the day
 /// file itself still names the note (`[[20261009#^id]]`), never the bare
 /// `[[#^id]]`.
-fn successor_link_text(
+pub(crate) fn successor_link_text(
     target: &Path,
     block_id: &str,
     day_relative: &Path,
@@ -507,6 +524,9 @@ pub(crate) struct DependentVerdict {
     pub(crate) anchor: Option<SlotAnchor>,
     pub(crate) kind: VerdictKind,
     pub(crate) open_count: usize,
+    /// True for §12.10 pull-in verdicts: exempt from the breaker, with
+    /// `#hide` removal, surfaced rows, and the `[?]`-gated cascade.
+    pub(crate) pull_in: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -520,13 +540,21 @@ pub(crate) enum VerdictKind {
 
 /// Run the shared successor rule (§12.2) over one gesture.
 pub(crate) fn plan_successors(input: SuccessorInput) -> SuccessorPlan {
-    // GATE: without an `[id::]` on any completed task no dependent can
-    // name this close, so skip the lookup with no extra reads.
-    if !input.completed.iter().any(|task| !task.task_id.is_empty()) {
-        return SuccessorPlan::default();
+    // Merge the staged texts of C's notes (§12.10 Gate) over the snapshot:
+    // a project note without `dependsOn`/`id::` markers is never in the
+    // dependents snapshot, even when staged.
+    let mut snapshot = input.snapshot.clone();
+    for (relative_path, contents) in &input.note_texts {
+        if let Some(entry) =
+            snapshot.iter_mut().find(|(path, _)| path == relative_path)
+        {
+            entry.1 = contents.clone();
+        } else {
+            snapshot.push((relative_path.clone(), contents.clone()));
+        }
     }
     let mut files = Vec::new();
-    for (relative_path, contents) in &input.snapshot {
+    for (relative_path, contents) in &snapshot {
         files.push(FileScan {
             path: relative_path.clone(),
             relative_path: relative_path.clone(),
@@ -536,6 +564,28 @@ pub(crate) fn plan_successors(input: SuccessorInput) -> SuccessorPlan {
                 input.tasks_settings,
             ),
         });
+    }
+    // Surfaces for pull-in detection over the staged texts.
+    let surfaces: Vec<Option<ProjectSurface>> = files
+        .iter()
+        .map(|file| {
+            project_surface(&file.relative_path, &file.contents, input.today)
+        })
+        .collect();
+    let staged_notes: BTreeSet<PathBuf> = input
+        .note_texts
+        .iter()
+        .map(|(path, _)| path.clone())
+        .collect();
+    let pull_ins =
+        detect_pull_ins(&input.completed, &files, &surfaces, &staged_notes);
+    // GATE: without an `[id::]` on any completed task no dependent can
+    // name this close, so skip the lookup with no extra reads — unless a
+    // pull-in candidate was detected from the staged texts.
+    if !input.completed.iter().any(|task| !task.task_id.is_empty())
+        && pull_ins.is_empty()
+    {
+        return SuccessorPlan::default();
     }
     let states = task_dependency_states(&files, &BTreeSet::new());
     let project_states = project_states_for_files(&files, &states, input.today);
@@ -562,6 +612,10 @@ pub(crate) fn plan_successors(input: SuccessorInput) -> SuccessorPlan {
     };
 
     // Classify every open direct dependent of C.
+    let pull_in_by_task: BTreeMap<(usize, usize), &PullInCandidate> = pull_ins
+        .iter()
+        .map(|candidate| ((candidate.file, candidate.task), candidate))
+        .collect();
     let mut verdicts = Vec::new();
     for (file_index, file) in files.iter().enumerate() {
         if in_done_archive(&file.relative_path) {
@@ -579,6 +633,46 @@ pub(crate) fn plan_successors(input: SuccessorInput) -> SuccessorPlan {
                 if task.depends_on.contains(&completed.task_id) {
                     preds.push(position);
                 }
+            }
+            if let Some(candidate) =
+                pull_in_by_task.get(&(file_index, task_index))
+            {
+                // §12.10 pull-in: one row per R; the pull-in replaces R's
+                // SL11 `project_task` / `hidden` row.
+                let open_count = blocking_open_dependency_ids(
+                    file,
+                    task,
+                    states
+                        .get(&(file_index, task_index))
+                        .map(|state| state.open_dependency_ids.as_slice())
+                        .unwrap_or(&[]),
+                )
+                .len();
+                let surface = surfaces[file_index]
+                    .as_ref()
+                    .expect("pull-in candidate has a surface");
+                let live_before = task.block_id.as_ref().is_some_and(|id| {
+                    day.live
+                        .contains_key(&(file.relative_path.clone(), id.clone()))
+                });
+                let (kind, anchor) = classify_pull_in(
+                    surface,
+                    open_count,
+                    live_before,
+                    earliest_anchor(&candidate.preds, &anchors),
+                    input.link_unblocked,
+                    input.today,
+                );
+                verdicts.push(DependentVerdict {
+                    file: file_index,
+                    task: task_index,
+                    preds: candidate.preds.clone(),
+                    anchor,
+                    kind,
+                    open_count,
+                    pull_in: true,
+                });
+                continue;
             }
             if preds.is_empty() {
                 continue;
@@ -639,6 +733,7 @@ pub(crate) fn plan_successors(input: SuccessorInput) -> SuccessorPlan {
                 anchor,
                 kind,
                 open_count,
+                pull_in: false,
             });
         }
     }
@@ -667,13 +762,21 @@ pub(crate) fn plan_successors(input: SuccessorInput) -> SuccessorPlan {
     });
 
     // BREAKER: more than 5 successors in one gesture links none; each
-    // recovers to its derived rank instead.
-    if successor_positions.len() > MAX_SUCCESSORS_PER_GESTURE {
+    // recovers to its derived rank instead. Pull-ins never count toward
+    // the breaker and are never broken (§12.10 BREAKER).
+    let linkable_successors = successor_positions
+        .iter()
+        .filter(|position| !verdicts[**position].pull_in)
+        .count();
+    if linkable_successors > MAX_SUCCESSORS_PER_GESTURE {
         for position in &successor_positions {
+            if verdicts[*position].pull_in {
+                continue;
+            }
             verdicts[*position].kind = VerdictKind::Recover("breaker");
             verdicts[*position].anchor = None;
         }
-        successor_positions.clear();
+        successor_positions.retain(|position| verdicts[*position].pull_in);
     }
 
     apply_verdicts(
@@ -683,16 +786,17 @@ pub(crate) fn plan_successors(input: SuccessorInput) -> SuccessorPlan {
         successor_positions,
         day,
         &project_states,
+        &surfaces,
     )
 }
 
 /// One resolved closing target (`docs/task-dependencies.md` §12.3):
 /// where every successor of a Pomodoro close goes, plus the entry name
 /// the JSON rows report and whether the entry is new since the gesture.
-struct ResolvedClosingTarget {
-    target: SuccessorTarget,
-    name: String,
-    entry_created: bool,
+pub(crate) struct ResolvedClosingTarget {
+    pub(crate) target: SuccessorTarget,
+    pub(crate) name: String,
+    pub(crate) entry_created: bool,
 }
 
 /// Resolve the closing target against the post-close day text: the
@@ -799,7 +903,7 @@ pub(crate) fn live_link_keys(
         .collect()
 }
 
-fn earliest_anchor(
+pub(crate) fn earliest_anchor(
     preds: &[usize],
     anchors: &[Option<SlotAnchor>],
 ) -> Option<SlotAnchor> {
@@ -823,7 +927,7 @@ fn successor_order_key(
     (anchor_key, file.relative_path.clone(), task.line_index)
 }
 
-fn raw_task_line(contents: &str, line_index: usize) -> String {
+pub(crate) fn raw_task_line(contents: &str, line_index: usize) -> String {
     contents
         .lines()
         .nth(line_index)
@@ -868,6 +972,16 @@ pub(crate) struct PlacedSuccessor {
     pub next_up: bool,
 }
 
+/// Next rank for a linked successor (`docs/task-dependencies.md` §12.2):
+/// ` ` and `?` become `*`; `*` and `/` are unchanged. A Pending `^prj` is
+/// never demoted.
+pub(crate) fn successor_new_status(previous: char) -> char {
+    match previous {
+        '?' | ' ' => '*',
+        _ => previous,
+    }
+}
+
 /// Mint new statuses and block IDs, insert successor links into the day
 /// text, and build the row lists. Recovered ranks derive from the
 /// post-insertion day text (what the hooks will see); retirement runs
@@ -881,6 +995,7 @@ fn apply_verdicts(
     successor_positions: Vec<usize>,
     day: DayView,
     project_states: &super::project_close::ProjectCloseStates,
+    surfaces: &[Option<ProjectSurface>],
 ) -> SuccessorPlan {
     let mut plan = SuccessorPlan {
         ran_lookup: true,
@@ -888,12 +1003,16 @@ fn apply_verdicts(
     };
     // Mint successor block IDs in placement order so the per-note used
     // set (staged IDs plus IDs minted earlier in this gesture) is
-    // deterministic.
+    // deterministic. A pulled-in `^prj` already has its block ID, so
+    // nothing is ever minted for a pull-in.
     let mut minted: BTreeMap<(PathBuf, usize), String> = BTreeMap::new();
     let mut minted_in_note: BTreeMap<PathBuf, HashSet<String>> =
         BTreeMap::new();
     for position in &successor_positions {
         let verdict = &verdicts[*position];
+        if verdict.pull_in {
+            continue;
+        }
         let file = &files[verdict.file];
         let task = &file.tasks[verdict.task];
         if task.block_id.is_some() {
@@ -1015,7 +1134,8 @@ fn apply_verdicts(
                          new_status: Option<char>,
                          mint: Option<&str>,
                          recovery: Option<(NaiveDate, UnblockScope)>,
-                         strip_tag: bool| {
+                         strip_tag: bool,
+                         strip_hide: bool| {
         let staged = edited.get(relative).cloned().unwrap_or_else(|| {
             files
                 .iter()
@@ -1037,6 +1157,11 @@ fn apply_verdicts(
                 updated.push_str(" ^");
                 updated.push_str(id);
             }
+            if strip_hide {
+                // §12.10 step 4: `#hide` comes off before any
+                // recover-rank write, through sync's own normalizer.
+                updated = normalize_task_hide_tag(&updated, false, true);
+            }
             if let Some((today, scope)) = recovery {
                 // PDC2/UB1 (§13.16, freshness.md §10b): recovered rows
                 // lose `#prj_is_blocked`, and Ready landings write
@@ -1054,17 +1179,17 @@ fn apply_verdicts(
         }
         edited.insert(relative.clone(), lines.join("\n"));
     };
-    let successor_new_status = |previous: char| match previous {
-        '?' | ' ' => '*',
-        _ => previous,
-    };
     for position in &successor_positions {
         let verdict = &verdicts[*position];
         let file = &files[verdict.file];
         let task = &file.tasks[verdict.task];
-        let mint = minted
-            .get(&(file.relative_path.clone(), task.line_index))
-            .map(String::as_str);
+        let mint = if verdict.pull_in {
+            None
+        } else {
+            minted
+                .get(&(file.relative_path.clone(), task.line_index))
+                .map(String::as_str)
+        };
         edit_line(
             &file.relative_path,
             task.line_index,
@@ -1072,6 +1197,7 @@ fn apply_verdicts(
             mint,
             None,
             false,
+            verdict.pull_in,
         );
     }
     // Recovered ranks derive from the post-gesture day text: `*` when the
@@ -1079,11 +1205,42 @@ fn apply_verdicts(
     // Recovered rows also take the project-close writes (tag strip plus
     // `[unblocked::]` on Ready landings).
     for verdict in verdicts.iter() {
-        let VerdictKind::Recover(_) = verdict.kind else {
+        let VerdictKind::Recover(reason) = verdict.kind else {
             continue;
         };
         let file = &files[verdict.file];
         let task = &file.tasks[verdict.task];
+        if verdict.pull_in {
+            // §12.10 steps 4–9 line writes: the status, then `#hide`
+            // removal, then the recover-rank write scoped off the
+            // post-removal line (so the hidden WRITE skip never applies
+            // to a pulled-in R). Only a `[?]` R landing Ready can write
+            // `[unblocked::]`; a Next landing skips it (UB4).
+            let live = task.block_id.as_ref().is_some_and(|id| {
+                post_live
+                    .live
+                    .contains_key(&(file.relative_path.clone(), id.clone()))
+            });
+            let landed = pull_in_recover_status(reason, task.status, live);
+            let raw = raw_task_line(&file.contents, task.line_index);
+            if landed == task.status && !pull_in_hide_removed(&raw) {
+                continue;
+            }
+            let preview = pull_in_preview_line(&raw, landed);
+            let scope = unblock_scope_for(&file.relative_path, &preview, live);
+            let recovery = (task.status == '?' && landed == ' ')
+                .then_some((input.today, scope));
+            edit_line(
+                &file.relative_path,
+                task.line_index,
+                Some(landed),
+                None,
+                recovery,
+                false,
+                true,
+            );
+            continue;
+        }
         if task.status != '?' {
             continue;
         }
@@ -1105,12 +1262,13 @@ fn apply_verdicts(
             None,
             Some((input.today, scope)),
             false,
+            false,
         );
     }
     // PDC3: remaining open residents of a recovered project lose
     // `#prj_is_blocked` even when they keep their own status.
     let recovered_files =
-        recovered_unblocked_project_files(&verdicts, &files, &project_states);
+        recovered_unblocked_project_files(&verdicts, &files, project_states);
     for file_index in recovered_files {
         let Some((context, _)) = project_states.get(file_index) else {
             continue;
@@ -1138,6 +1296,7 @@ fn apply_verdicts(
                 None,
                 None,
                 true,
+                false,
             );
         }
     }
@@ -1184,13 +1343,6 @@ fn apply_verdicts(
             placed = post_placed;
         }
     }
-    let day_line = |note_path: &PathBuf, block_id: &str, fallback: usize| {
-        if *note_path == input.day_relative && !block_id.is_empty() {
-            day_task_lines.get(block_id).copied().unwrap_or(fallback)
-        } else {
-            fallback
-        }
-    };
     for (relative, contents) in &edited {
         let original = files
             .iter()
@@ -1202,195 +1354,30 @@ fn apply_verdicts(
                 .insert(relative.clone(), contents.clone());
         }
     }
-    // Rows report what the gesture did: linked successors always, and
-    // recovers whose status changed. Still-blocked dependents always.
-    // `placed` aligns 1:1 with `successor_positions` (insert returns one
-    // report per placement, in input order).
-    let mut placed_by_order = placed.into_iter();
-    for position in &successor_positions {
-        let verdict = &verdicts[*position];
-        let file = &files[verdict.file];
-        let task = &file.tasks[verdict.task];
-        let placed_link = placed_by_order.next().expect("placed link");
-        let minted_id = minted
-            .get(&(file.relative_path.clone(), task.line_index))
-            .cloned();
-        let block_id = task
-            .block_id
-            .clone()
-            .or(minted_id.clone())
-            .unwrap_or_default();
-        let entry_name = match closing_target.as_ref() {
-            Some(resolved) => resolved.name.clone(),
-            None => {
-                let anchor =
-                    verdict.anchor.as_ref().expect("successor has an anchor");
-                day.entries
-                    .get(anchor.entry_index)
-                    .map(|entry| entry.name.clone())
-                    .unwrap_or_default()
-            }
-        };
-        let block_link = successor_link_text(
-            &file.relative_path,
-            &block_id,
-            &input.day_relative,
-            input.index,
-        );
-        let line =
-            day_line(&file.relative_path, &block_id, task.line_index + 1);
-        plan.unblocked.push(UnblockedRow {
-            note_path: file.relative_path.clone(),
-            block_id,
-            line,
-            text: task.description.clone(),
-            previous_status_symbol: task.status,
-            status_symbol: successor_new_status(task.status),
-            inbox: is_inbox_note(
-                &file.relative_path,
-                &file.contents,
-                input.index,
-            ),
-            unblocked_by: input
-                .completed
-                .iter()
-                .enumerate()
-                .filter(|(position, _)| verdict.preds.contains(position))
-                .map(|(_, completed)| PredecessorRef {
-                    note_path: completed.relative_path.clone(),
-                    block_id: completed.block_id.clone(),
-                    text: completed.text.clone(),
-                })
-                .collect(),
-            link: Some(SuccessorLinkReport {
-                entry_name,
-                entry_line: placed_link.entry_line,
-                line: placed_link.line,
-                block_link,
-                entry_created: placed_link.entry_created
-                    || closing_target
-                        .as_ref()
-                        .is_some_and(|resolved| resolved.entry_created),
-                next_up: placed_link.next_up,
-                block_id_created: minted_id.is_some(),
-            }),
-            not_linked: None,
-        });
-    }
-    for verdict in verdicts.iter() {
-        let file = &files[verdict.file];
-        let task = &file.tasks[verdict.task];
-        match verdict.kind {
-            VerdictKind::StillBlockedWaitsOn => {
-                let block_id = task.block_id.clone().unwrap_or_default();
-                let line = day_line(
-                    &file.relative_path,
-                    &block_id,
-                    task.line_index + 1,
-                );
-                plan.still_blocked.push(StillBlockedRow {
-                    note_path: file.relative_path.clone(),
-                    block_id,
-                    line,
-                    text: task.description.clone(),
-                    status_symbol: task.status,
-                    reason: "waits_on",
-                    waits_on: verdict.open_count,
-                    scheduled: None,
-                    project: None,
-                });
-            }
-            VerdictKind::StillBlockedScheduled => {
-                let block_id = task.block_id.clone().unwrap_or_default();
-                let line = day_line(
-                    &file.relative_path,
-                    &block_id,
-                    task.line_index + 1,
-                );
-                plan.still_blocked.push(StillBlockedRow {
-                    note_path: file.relative_path.clone(),
-                    block_id,
-                    line,
-                    text: task.description.clone(),
-                    status_symbol: task.status,
-                    reason: "scheduled",
-                    waits_on: 0,
-                    scheduled: task
-                        .scheduled
-                        .map(|date| date.format("%Y-%m-%d").to_string()),
-                    project: None,
-                });
-            }
-            VerdictKind::StillBlockedProject => {
-                let block_id = task.block_id.clone().unwrap_or_default();
-                let line = day_line(
-                    &file.relative_path,
-                    &block_id,
-                    task.line_index + 1,
-                );
-                plan.still_blocked.push(StillBlockedRow {
-                    note_path: file.relative_path.clone(),
-                    block_id,
-                    line,
-                    text: task.description.clone(),
-                    status_symbol: task.status,
-                    reason: "project",
-                    waits_on: 0,
-                    scheduled: None,
-                    project: Some(file.relative_path.clone()),
-                });
-            }
-            VerdictKind::Recover(reason) => {
-                if task.status != '?' {
-                    continue;
-                }
-                let live = task.block_id.as_ref().is_some_and(|id| {
-                    post_live
-                        .live
-                        .contains_key(&(file.relative_path.clone(), id.clone()))
-                });
-                let status_symbol = if live { '*' } else { ' ' };
-                if status_symbol == task.status {
-                    continue;
-                }
-                let block_id = task.block_id.clone().unwrap_or_default();
-                let line = day_line(
-                    &file.relative_path,
-                    &block_id,
-                    task.line_index + 1,
-                );
-                plan.unblocked.push(UnblockedRow {
-                    note_path: file.relative_path.clone(),
-                    block_id,
-                    line,
-                    text: task.description.clone(),
-                    previous_status_symbol: task.status,
-                    status_symbol,
-                    inbox: is_inbox_note(
-                        &file.relative_path,
-                        &file.contents,
-                        input.index,
-                    ),
-                    unblocked_by: input
-                        .completed
-                        .iter()
-                        .enumerate()
-                        .filter(|(position, _)| {
-                            verdict.preds.contains(position)
-                        })
-                        .map(|(_, completed)| PredecessorRef {
-                            note_path: completed.relative_path.clone(),
-                            block_id: completed.block_id.clone(),
-                            text: completed.text.clone(),
-                        })
-                        .collect(),
-                    link: None,
-                    not_linked: Some(reason),
-                });
-            }
-            VerdictKind::Successor => {}
-        }
-    }
+    // Rows report what the gesture did: linked successors always, recovers
+    // whose status changed (pull-ins: or whose `#hide` was removed), and
+    // still-blocked dependents always. `placed` aligns 1:1 with
+    // `successor_positions` (insert returns one report per placement, in
+    // input order). Row building lives in `project_pull_in` so this
+    // planner stays small.
+    emit_rows(
+        &mut plan,
+        RowEmit {
+            files: &files,
+            verdicts: &verdicts,
+            successor_positions: &successor_positions,
+            completed: &input.completed,
+            surfaces,
+            day: &day,
+            closing_target: &closing_target,
+            minted: &minted,
+            placed,
+            post_live: &post_live,
+            day_task_lines: &day_task_lines,
+            day_relative: &input.day_relative,
+            index: input.index,
+        },
+    );
     plan
 }
 
