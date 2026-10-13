@@ -48,6 +48,7 @@ mod routing;
 mod sections;
 mod sub_bullet;
 mod successor_integration;
+mod successor_offers;
 mod targets;
 mod task_blocks;
 mod task_complete;

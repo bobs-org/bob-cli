@@ -51,16 +51,19 @@ use crate::native::capture_dependency_tasks::{
 };
 
 /// Which offers [`plan_successors`] should pick. Unknown keys are ignored.
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub(crate) enum SuccessorSelection {
     /// Pick nothing: every offer recovers with `not_selected`.
+    #[default]
     None,
     /// Pick every offer.
     All,
     /// Pick offers whose keys are in the set.
     Keys(BTreeSet<String>),
 }
+
+/// Draft-list sort key: group, anchor (entry, bullet), note path, task line.
+pub(crate) type OfferOrderKey = (u8, (usize, usize), PathBuf, usize);
 
 /// Offer group (`docs/task-dependencies.md` §12.2 ORDER).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -70,6 +73,16 @@ pub(crate) enum OfferGroup {
     ProjectFinished,
 }
 
+impl OfferGroup {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::HandOff => "hand_off",
+            Self::Project => "project",
+            Self::ProjectFinished => "project_finished",
+        }
+    }
+}
+
 /// Where a picked offer's successor bullet lands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum EntryRole {
@@ -77,6 +90,17 @@ pub(crate) enum EntryRole {
     Closing,
     Implicit,
     Created,
+}
+
+impl EntryRole {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Slot => "slot",
+            Self::Closing => "closing",
+            Self::Implicit => "implicit",
+            Self::Created => "created",
+        }
+    }
 }
 
 /// Destination reported on an offer row.
@@ -99,6 +123,7 @@ pub(crate) struct OfferDraft {
     pub block_id_needed: bool,
     pub selected: bool,
     pub n: usize,
+    pub order_key: OfferOrderKey,
 }
 
 /// Offer fields on an [`UnblockedRow`].
@@ -111,6 +136,8 @@ pub(crate) struct OfferReport {
     pub destination: OfferDestination,
     pub selected: bool,
     pub block_id_needed: bool,
+    /// Crate-private draft order; never a JSON field.
+    pub order_key: OfferOrderKey,
 }
 
 /// Folded counts for one project whose `^prj` entered project offers.
@@ -1175,6 +1202,7 @@ fn make_offer(
         block_id_needed,
         selected: false,
         n: 0,
+        order_key: (3, (usize::MAX, usize::MAX), PathBuf::new(), 0),
     }
 }
 
@@ -1555,9 +1583,15 @@ fn number_offers(verdicts: &mut [DependentVerdict], files: &[FileScan]) {
         offer_order_key(&verdicts[*left], files)
             .cmp(&offer_order_key(&verdicts[*right], files))
     });
-    for (index, position) in positions.into_iter().enumerate() {
+    let keys: Vec<OfferOrderKey> = positions
+        .iter()
+        .map(|position| offer_order_key(&verdicts[*position], files))
+        .collect();
+    for (index, (position, key)) in positions.into_iter().zip(keys).enumerate()
+    {
         if let Some(offer) = verdicts[position].offer.as_mut() {
             offer.n = index + 1;
+            offer.order_key = key;
         }
     }
 }
@@ -1571,6 +1605,7 @@ pub(crate) fn offer_report(offer: &OfferDraft) -> OfferReport {
         destination: offer.destination.clone(),
         selected: offer.selected,
         block_id_needed: offer.block_id_needed,
+        order_key: offer.order_key.clone(),
     }
 }
 

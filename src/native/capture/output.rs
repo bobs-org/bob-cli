@@ -208,6 +208,10 @@ pub(super) struct PomodoroCloseSummaryJson {
     /// proved it unnecessary; `"unavailable"` when the snapshot could
     /// not be built and the close succeeded without linking.
     pub(super) unblocked_check: &'static str,
+    /// Project-group folded counts from this close's successor plan.
+    /// Never serialized.
+    #[serde(skip)]
+    pub(super) project_folds: Vec<crate::native::task_complete::ProjectFold>,
 }
 
 /// One note-free `=x0` reset: the current Pomodoro returned to the
@@ -256,6 +260,8 @@ pub(super) struct CaptureResult {
     /// when the batch wrote a sub-bullet. Never per item.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(super) task_blocks: Vec<TaskBlockJson>,
+    /// Draft-level successor-offer summary. Present on every success.
+    pub(super) pull_in: PullInJson,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -274,6 +280,7 @@ impl CaptureResult {
         plan_budget: Option<CapturePlanBudget>,
         pomodoro_blocks: Vec<PomodoroBlockJson>,
         task_blocks: Vec<TaskBlockJson>,
+        pull_in: PullInJson,
     ) -> Self {
         let item = items
             .first()
@@ -288,6 +295,7 @@ impl CaptureResult {
             plan_budget,
             pomodoro_blocks,
             task_blocks,
+            pull_in,
         }
     }
 }
@@ -525,6 +533,10 @@ pub(super) struct TaskCompleteSummaryJson {
     pub(super) unblocked: Vec<TaskCompleteUnblockedJson>,
     pub(super) still_blocked: Vec<TaskCompleteStillBlockedJson>,
     pub(super) unblocked_check: &'static str,
+    /// Project-group folded counts from this item's successor plan.
+    /// Never serialized.
+    #[serde(skip)]
+    pub(super) project_folds: Vec<crate::native::task_complete::ProjectFold>,
 }
 
 /// One embedded subtask closed by a `task_complete` item.
@@ -618,6 +630,8 @@ pub(super) struct TaskCompleteUnblockedJson {
     pub(super) not_linked: Option<String>,
     pub(super) trigger: &'static str,
     pub(super) hide_removed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) offer: Option<TaskCompleteOfferJson>,
 }
 
 /// One predecessor behind an unblocked row.
@@ -640,6 +654,70 @@ pub(super) struct TaskCompleteSuccessorLinkJson {
     pub(super) line: usize,
     pub(super) block_link: String,
     pub(super) block_id_created: bool,
+}
+
+/// Offer fields on an unblocked row (`docs/task-dependencies.md` §12.5).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct TaskCompleteOfferJson {
+    pub(super) key: String,
+    pub(super) n: usize,
+    pub(super) group: &'static str,
+    pub(super) selected: bool,
+    pub(super) block_id_needed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) project: Option<String>,
+    pub(super) destination: TaskCompleteOfferDestinationJson,
+    /// Crate-private draft order; never a JSON field.
+    #[serde(skip)]
+    pub(super) order_key: crate::native::task_complete::OfferOrderKey,
+}
+
+/// Destination reported on an offer row.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct TaskCompleteOfferDestinationJson {
+    pub(super) day_file: String,
+    pub(super) entry_name: String,
+    pub(super) entry_role: &'static str,
+    pub(super) fallback: bool,
+}
+
+/// Top-level successor-offer summary, present on every success.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct PullInJson {
+    pub(super) supported: bool,
+    pub(super) offer_count: usize,
+    pub(super) choice: Option<String>,
+    pub(super) picked_count: usize,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(super) groups: Vec<PullInGroupJson>,
+}
+
+impl PullInJson {
+    #[cfg(test)]
+    pub(super) fn empty() -> Self {
+        Self {
+            supported: true,
+            offer_count: 0,
+            choice: None,
+            picked_count: 0,
+            groups: Vec::new(),
+        }
+    }
+}
+
+/// One project group in `pull_in.groups`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct PullInGroupJson {
+    pub(super) group: &'static str,
+    pub(super) project: String,
+    pub(super) folded: PullInFoldedJson,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct PullInFoldedJson {
+    pub(super) hidden: usize,
+    pub(super) already_planned: usize,
+    pub(super) sub_projects: usize,
 }
 
 /// One open dependent of the completed tasks that stays blocked
@@ -783,6 +861,7 @@ pub(super) fn print_human_success(result: &CaptureResult) {
     }
     if result.captures.is_empty() {
         print_human_item_success(result, None);
+        print_pull_in_hint(result);
         return;
     }
 
@@ -792,6 +871,71 @@ pub(super) fn print_human_success(result: &CaptureResult) {
             println!();
         }
         print_human_item_success(item, Some((index + 1, total)));
+    }
+    print_pull_in_hint(result);
+}
+
+fn print_pull_in_hint(result: &CaptureResult) {
+    if result.pull_in.offer_count == 0 || result.pull_in.picked_count > 0 {
+        return;
+    }
+    if result.pull_in.choice.is_some() {
+        return;
+    }
+    let styler = Styler::detect();
+    if result.dry_run {
+        let mut numbers: Vec<usize> = Vec::new();
+        let items = if result.captures.is_empty() {
+            std::slice::from_ref(&result.item)
+        } else {
+            result.captures.as_slice()
+        };
+        for item in items {
+            for row in item_unblocked(item) {
+                if let Some(offer) = row.offer.as_ref() {
+                    numbers.push(offer.n);
+                }
+            }
+        }
+        numbers.sort_unstable();
+        numbers.dedup();
+        let list = numbers
+            .iter()
+            .map(usize::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
+        println!("  {}", styler.dim(&format!("-p {list} · -p all")));
+    } else {
+        println!(
+            "  {}",
+            styler.dim(
+                "offers were not pulled in; link later in Obsidian, Bob Mac Capture, or Ctrl+Shift+Enter"
+            )
+        );
+    }
+}
+
+fn item_unblocked(item: &CaptureItemResult) -> &[TaskCompleteUnblockedJson] {
+    if let Some(summary) = item.task_complete.as_ref() {
+        &summary.unblocked
+    } else if let Some(summary) = item.pomodoro_close.as_ref() {
+        &summary.unblocked
+    } else {
+        &[]
+    }
+}
+
+fn pulled_in_phrase(unblocked: &[TaskCompleteUnblockedJson]) -> String {
+    let offer_count =
+        unblocked.iter().filter(|row| row.offer.is_some()).count();
+    let picked_count = unblocked
+        .iter()
+        .filter(|row| row.offer.as_ref().is_some_and(|offer| offer.selected))
+        .count();
+    if picked_count == 0 {
+        String::new()
+    } else {
+        format!(" · pulled in {picked_count} of {offer_count}")
     }
 }
 
@@ -1549,10 +1693,11 @@ pub(super) fn print_human_pomodoro_close_success(
         } else {
             format!(" · {} unblocked", close.unblocked.len())
         };
+        let pulled = pulled_in_phrase(&close.unblocked);
         println!(
             "  {}",
             styler.dim(&format!(
-                "next: {next_name}{created_text} at line {}{carries_text}{unblocked_text}",
+                "next: {next_name}{created_text} at line {}{carries_text}{unblocked_text}{pulled}",
                 next.line
             ))
         );
@@ -2215,7 +2360,10 @@ pub(super) fn print_human_task_complete_success(
     } else {
         format!("{previous_marker} → {current_marker} {text}")
     };
-    println!("{prefix} {verb} {head}  {ordinal}{target_label} {block_label}");
+    let pulled = pulled_in_phrase(&summary.unblocked);
+    println!(
+        "{prefix} {verb} {head}  {ordinal}{target_label} {block_label}{pulled}"
+    );
     for subtask in &summary.subtasks {
         let previous =
             style_task_status_marker(styler, subtask.previous_status_symbol);
@@ -2288,55 +2436,31 @@ pub(super) fn print_human_successor_rows(
     dry_run: bool,
     styler: &Styler,
 ) {
-    for unblocked in unblocked {
-        let previous =
-            style_task_status_marker(styler, unblocked.previous_status_symbol);
-        let current = style_task_status_marker(styler, unblocked.status_symbol);
-        let locator =
-            task_complete_locator(&unblocked.note_path, &unblocked.block_id);
-        let project_empty = unblocked.trigger == "project_empty";
-        let project_label = if project_empty {
-            " · project has no open tasks"
-        } else {
-            ""
+    let mut offered: Vec<&TaskCompleteUnblockedJson> =
+        unblocked.iter().filter(|row| row.offer.is_some()).collect();
+    offered.sort_by_key(|row| {
+        row.offer.as_ref().map(|offer| offer.n).unwrap_or(0)
+    });
+    let mut last_header: Option<String> = None;
+    for row in offered {
+        let offer = row.offer.as_ref().expect("offered row");
+        let header = match offer.group {
+            "hand_off" => "Hand-offs".to_string(),
+            "project" => format!(
+                "Project {}",
+                offer.project.as_deref().unwrap_or_default()
+            ),
+            "project_finished" => "Project finished".to_string(),
+            other => other.to_string(),
         };
-        let head = if unblocked.text.is_empty() {
-            format!("{previous} → {current}")
-        } else {
-            format!("{previous} → {current} {}", unblocked.text)
-        };
-        if let Some(link) = unblocked.link.as_ref() {
-            let verb = if dry_run { "would link" } else { "linked" };
-            let destination = successor_destination(link);
-            let minted = link
-                .block_link
-                .rsplit_once('^')
-                .filter(|_| link.block_id_created)
-                .map(|(_, id)| format!(" · added ^{id}"))
-                .unwrap_or_default();
-            println!(
-                "  {verb} {head}  {locator} → {destination}{minted}{project_label}"
-            );
-        } else if project_empty
-            && unblocked.hide_removed
-            && unblocked.previous_status_symbol == unblocked.status_symbol
-        {
-            let verb = if dry_run { "would surface" } else { "surfaced" };
-            println!("  {verb} {}  {locator}{project_label}", unblocked.text);
-        } else {
-            let reason = unblocked
-                .not_linked
-                .as_deref()
-                .map(not_linked_reason)
-                .unwrap_or_default();
-            if reason.is_empty() {
-                println!("  unblocked {head}  {locator}{project_label}");
-            } else {
-                println!(
-                    "  unblocked {head}  {locator}{project_label} · {reason}"
-                );
-            }
+        if last_header.as_ref() != Some(&header) {
+            println!("  {header}");
+            last_header = Some(header);
         }
+        print_human_unblocked_row(row, dry_run, styler, Some(offer.n));
+    }
+    for row in unblocked.iter().filter(|row| row.offer.is_none()) {
+        print_human_unblocked_row(row, dry_run, styler, None);
     }
     for blocked in still_blocked {
         let locator =
@@ -2365,6 +2489,69 @@ pub(super) fn print_human_successor_rows(
             println!(
                 "  still blocked  {}  {locator}{project_label} · {detail}",
                 blocked.text
+            );
+        }
+    }
+}
+
+fn print_human_unblocked_row(
+    unblocked: &TaskCompleteUnblockedJson,
+    dry_run: bool,
+    styler: &Styler,
+    offer_n: Option<usize>,
+) {
+    let previous =
+        style_task_status_marker(styler, unblocked.previous_status_symbol);
+    let current = style_task_status_marker(styler, unblocked.status_symbol);
+    let locator =
+        task_complete_locator(&unblocked.note_path, &unblocked.block_id);
+    let project_empty = unblocked.trigger == "project_empty";
+    let project_label = if project_empty {
+        " · project has no open tasks"
+    } else {
+        ""
+    };
+    let head = if unblocked.text.is_empty() {
+        format!("{previous} → {current}")
+    } else {
+        format!("{previous} → {current} {}", unblocked.text)
+    };
+    let prefix = match offer_n {
+        Some(n) => format!("  offer {n}  "),
+        None => "  ".to_string(),
+    };
+    if let Some(link) = unblocked.link.as_ref() {
+        let verb = if dry_run { "would link" } else { "linked" };
+        let destination = successor_destination(link);
+        let minted = link
+            .block_link
+            .rsplit_once('^')
+            .filter(|_| link.block_id_created)
+            .map(|(_, id)| format!(" · added ^{id}"))
+            .unwrap_or_default();
+        println!(
+            "{prefix}{verb} {head}  {locator} → {destination}{minted}{project_label}"
+        );
+    } else if project_empty
+        && unblocked.hide_removed
+        && unblocked.previous_status_symbol == unblocked.status_symbol
+    {
+        let verb = if dry_run { "would surface" } else { "surfaced" };
+        println!(
+            "{prefix}{verb} {}  {locator}{project_label}",
+            unblocked.text
+        );
+    } else {
+        let reason = unblocked
+            .not_linked
+            .as_deref()
+            .map(not_linked_reason)
+            .unwrap_or_default();
+        if reason.is_empty() {
+            println!("{prefix}unblocked {head}  {locator}{project_label}");
+        } else {
+            println!(
+                "{prefix}unblocked {head}  {locator}{project_label} · {reason}"
             );
         }
     }
@@ -2474,13 +2661,29 @@ pub(super) fn print_capture_error(
     output_format: OutputFormat,
 ) -> i32 {
     match output_format {
-        OutputFormat::Human => eprintln!("{COMMAND_NAME}: {}", error.message),
+        OutputFormat::Human => {
+            eprintln!("{COMMAND_NAME}: {}", error.message);
+            if !error.human_unblocked.is_empty() {
+                let styler = Styler::detect();
+                print_human_successor_rows(
+                    &error.human_unblocked,
+                    &[],
+                    false,
+                    &styler,
+                );
+            }
+        }
         OutputFormat::Json => {
             let mut value = serde_json::Map::new();
             value.insert("ok".to_string(), json!(false));
             value.insert("error".to_string(), json!(error.message));
             if let Some(code) = error.code {
                 value.insert("code".to_string(), json!(code));
+            }
+            if let Some(extra) = error.extra {
+                for (key, extra_value) in extra {
+                    value.insert(key, extra_value);
+                }
             }
             println!("{}", serde_json::Value::Object(value));
         }
@@ -2493,8 +2696,14 @@ pub(crate) struct CaptureError {
     pub(super) kind: CaptureErrorKind,
     pub(crate) message: String,
     /// Machine-readable failure code, serialized only for the strict
-    /// plan-budget refusal (`plan_theme_cap_exceeded`).
+    /// plan-budget refusal (`plan_theme_cap_exceeded`) and the
+    /// successor-offer choice refusal (`pull_in_choice_required`).
     pub(super) code: Option<String>,
+    /// Extra JSON object fields merged into the error value (offers and
+    /// `pull_in` on `pull_in_choice_required`).
+    pub(super) extra: Option<serde_json::Map<String, serde_json::Value>>,
+    /// Numbered offer rows printed on human `pull_in_choice_required`.
+    pub(super) human_unblocked: Vec<TaskCompleteUnblockedJson>,
 }
 
 impl CaptureError {
@@ -2503,6 +2712,8 @@ impl CaptureError {
             kind: CaptureErrorKind::Usage,
             message: message.into(),
             code: None,
+            extra: None,
+            human_unblocked: Vec::new(),
         }
     }
 
@@ -2511,6 +2722,8 @@ impl CaptureError {
             kind: CaptureErrorKind::Io,
             message: message.into(),
             code: None,
+            extra: None,
+            human_unblocked: Vec::new(),
         }
     }
 
@@ -2521,6 +2734,22 @@ impl CaptureError {
             kind: CaptureErrorKind::Io,
             message: message.into(),
             code: Some(plan_budget::LINT_THEME_CAP.to_string()),
+            extra: None,
+            human_unblocked: Vec::new(),
+        }
+    }
+
+    pub(super) fn pull_in_choice_required(
+        extra: serde_json::Map<String, serde_json::Value>,
+        human_unblocked: Vec<TaskCompleteUnblockedJson>,
+    ) -> Self {
+        Self {
+            kind: CaptureErrorKind::Io,
+            message: "this capture has successor offers; pass --pull-in"
+                .to_string(),
+            code: Some("pull_in_choice_required".to_string()),
+            extra: Some(extra),
+            human_unblocked,
         }
     }
 }

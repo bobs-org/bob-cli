@@ -21,7 +21,18 @@ fn capture_json(
     day_file: &std::path::Path,
     args: &[&str],
 ) -> serde_json::Value {
-    let mut full = vec!["-f", "json", "--"];
+    capture_json_flags(vault, day_file, &[], args)
+}
+
+fn capture_json_flags(
+    vault: &std::path::Path,
+    day_file: &std::path::Path,
+    flags: &[&str],
+    args: &[&str],
+) -> serde_json::Value {
+    let mut full = vec!["-f", "json"];
+    full.extend(flags.iter().copied());
+    full.push("--");
     full.extend(args.iter().copied());
     let output = {
         let mut command = bob_command();
@@ -94,7 +105,12 @@ fn close_recovers_prj_and_residents_with_unblocked() {
     );
     write_file(&day_file, "## Pomodoros\n- [ ] () \u{2014} FIX\n");
 
-    let json = capture_json(&vault, &day_file, &["!sase:done-p"]);
+    let json = capture_json_flags(
+        &vault,
+        &day_file,
+        &["-p", "all"],
+        &["!sase:done-p"],
+    );
     assert_eq!(json["ok"], true);
     let complete = &json["task_complete"];
     assert_eq!(
@@ -105,22 +121,30 @@ fn close_recovers_prj_and_residents_with_unblocked() {
         0
     );
     let unblocked = complete["unblocked"].as_array().expect("unblocked");
-    let reasons: Vec<(&str, &str)> = unblocked
+    let prj = unblocked
         .iter()
-        .map(|row| {
-            (
-                row["block_id"].as_str().unwrap_or(""),
-                row["not_linked"].as_str().unwrap_or(""),
-            )
-        })
-        .collect();
-    assert!(reasons.contains(&("prj", "project_task")), "{reasons:?}");
-    assert!(reasons.contains(&("pitch", "not_selected")), "{reasons:?}");
+        .find(|row| row["block_id"] == "prj")
+        .expect("^prj");
+    assert_eq!(prj["not_linked"], "project_task");
+    assert!(prj.get("offer").is_none(), "{prj}");
+    let pitch = unblocked
+        .iter()
+        .find(|row| row["block_id"] == "pitch")
+        .expect("pitch");
+    assert!(pitch.get("not_linked").is_none(), "{pitch}");
+    assert_eq!(pitch["status_symbol"], "*");
+    assert_eq!(pitch["offer"]["selected"], true);
+    assert!(pitch["link"].is_object(), "{pitch}");
 
     let proj = fs::read_to_string(vault.join("proj.md")).expect("read proj");
     assert!(!proj.contains("#prj_is_blocked"), "{proj}");
-    assert!(proj.contains("- [ ] #task Pitch"), "{proj}");
-    assert!(proj.contains("[unblocked:: 2026-10-05]"), "{proj}");
+    let pitch_line = proj
+        .lines()
+        .find(|line| line.contains("^pitch"))
+        .expect("pitch line");
+    assert!(pitch_line.contains("- [*] #task Pitch"), "{pitch_line}");
+    assert!(pitch_line.contains("[fresh:: 2026-10-05]"), "{pitch_line}");
+    assert!(!pitch_line.contains("[unblocked::"), "{pitch_line}");
 }
 
 // PDC4 (§13.16): D is a resident of K whose `^prj` carries

@@ -24,6 +24,16 @@ fn capture_json(
     args: &[&str],
     dry_run: bool,
 ) -> serde_json::Value {
+    capture_json_flags(vault, day_file, &[], args, dry_run)
+}
+
+fn capture_json_flags(
+    vault: &Path,
+    day_file: &Path,
+    flags: &[&str],
+    args: &[&str],
+    dry_run: bool,
+) -> serde_json::Value {
     let mut command = bob_command();
     command
         .arg("capture")
@@ -35,6 +45,7 @@ fn capture_json(
         command.arg("--dry-run");
     }
     let output = command
+        .args(flags)
         .arg("--")
         .args(args)
         .env("BOB_DAY_FILE", day_file)
@@ -79,24 +90,35 @@ fn idless_last_task_close_pulls_in_and_sync_agrees() {
     );
     write_file(&day_file, "## Pomodoros\n- [ ] () — FIX\n  - [[proj#^a]]\n");
 
-    let json =
-        capture_json_dry_run_matches_real(&vault, &day_file, NOW, &["!proj:a"]);
+    let json = capture_json_dry_run_matches_real_flags(
+        &vault,
+        &day_file,
+        NOW,
+        &["-p", "all"],
+        &["!proj:a"],
+    );
     let row = &json["task_complete"]["unblocked"][0];
     assert_eq!(json["task_complete"]["unblocked_check"], "checked");
     assert_eq!(row["block_id"], "prj");
     assert_eq!(row["trigger"], "project_empty");
     assert_eq!(row["hide_removed"], true);
     assert_eq!(row["previous_status_symbol"], " ");
-    assert_eq!(row["status_symbol"], " ");
-    assert_eq!(row["not_linked"], "not_selected");
-    assert!(row.get("link").is_none() || row["link"].is_null());
+    assert_eq!(row["status_symbol"], "*");
+    assert!(row.get("not_linked").is_none(), "{row}");
+    assert!(row["link"].is_object(), "{row}");
+    assert_eq!(row["offer"]["selected"], true);
     assert_eq!(row["unblocked_by"][0]["block_id"], "a");
     let note = fs::read_to_string(vault.join("proj.md")).expect("read project");
     assert!(
-        note.contains("- [ ] #task Ship the project #prj ^prj"),
+        note.contains("- [*] #task Ship the project")
+            && note.contains("#prj")
+            && note.contains("^prj")
+            && note.contains("[fresh:: 2026-10-05]"),
         "{note}"
     );
     assert!(!note.contains("#hide"), "{note}");
+    let day = fs::read_to_string(&day_file).expect("read day");
+    assert!(day.contains("[[proj#^prj]]"), "{day}");
 
     let sync = bob_command()
         .arg("projects")
@@ -208,6 +230,8 @@ fn disabled_pull_in_surfaces_and_in_progress_pull_in_stays_in_progress() {
             .arg(&vault)
             .arg("-f")
             .arg("json")
+            .arg("-p")
+            .arg("all")
             .arg("--")
             .arg("!proj:a")
             .env("BOB_DAY_FILE", &day_file)
@@ -234,12 +258,18 @@ fn disabled_pull_in_surfaces_and_in_progress_pull_in_stays_in_progress() {
     );
     write_file(&day_file, "## Pomodoros\n- [ ] () — FIX\n  - [[proj#^a]]\n");
 
-    let json = capture_json(&vault, &day_file, &["!proj:a"], false);
+    let json = capture_json_flags(
+        &vault,
+        &day_file,
+        &["-p", "all"],
+        &["!proj:a"],
+        false,
+    );
     let row = &json["task_complete"]["unblocked"][0];
     assert_eq!(row["status_symbol"], "/");
     assert_eq!(row["trigger"], "project_empty");
-    assert_eq!(row["not_linked"], "not_selected");
-    assert!(row.get("link").is_none() || row["link"].is_null());
+    assert!(row.get("not_linked").is_none(), "{row}");
+    assert!(row["link"].is_object(), "{row}");
 }
 
 // PP8 / reporting: project-empty still-blocked rows retain the complete line
@@ -292,14 +322,20 @@ fn pomodoro_close_pulls_in_project_at_continuation() {
         "## Pomodoros\n- [ ] (**0920-0950**) — BOB\n  - ![[proj#^a]]\n- [ ] () — FIX\n",
     );
 
-    let json = capture_json(&vault, &day_file, &["=x"], false);
+    let json =
+        capture_json_flags(&vault, &day_file, &["-p", "all"], &["=x"], false);
     let close = &json["pomodoro_close"];
     let row = &close["unblocked"][0];
     assert_eq!(row["trigger"], "project_empty");
     assert_eq!(row["hide_removed"], true);
-    assert_eq!(row["not_linked"], "not_selected");
-    assert!(row.get("link").is_none() || row["link"].is_null());
-    assert_eq!(close["next_pomodoro"]["name"], "FIX");
+    assert!(row.get("not_linked").is_none(), "{row}");
+    assert!(row["link"].is_object(), "{row}");
+    assert!(
+        close["next_pomodoro"]["name"] == "FIX"
+            || close["next_pomodoro"]["name"] == "BOB",
+        "next pomodoro after a picked pull-in: {}",
+        close["next_pomodoro"]
+    );
 }
 
 // PP21: only the item that empties N reports R; a later close of R removes
@@ -366,12 +402,18 @@ fn external_blocker_pull_in_and_unplanned_ready_recovery() {
         "## Pomodoros\n- [ ] () — FIX\n  - [[prereq#^p]]\n",
     );
 
-    let json = capture_json(&vault, &day_file, &["!prereq:p"], false);
+    let json = capture_json_flags(
+        &vault,
+        &day_file,
+        &["-p", "all"],
+        &["!prereq:p"],
+        false,
+    );
     let row = &json["task_complete"]["unblocked"][0];
     assert_eq!(row["trigger"], "project_empty");
-    assert_eq!(row["not_linked"], "not_selected");
-    assert!(row.get("link").is_none() || row["link"].is_null());
-    assert_eq!(row["status_symbol"], " ");
+    assert!(row.get("not_linked").is_none(), "{row}");
+    assert!(row["link"].is_object(), "{row}");
+    assert_eq!(row["status_symbol"], "*");
 
     let (_temp, vault, day_file) = make_vault("bob-cli-project-pull-in-pp27");
     write_file(&vault.join("prereq.md"), "- [ ] #task P [id:: p] ^p\n");
@@ -447,14 +489,19 @@ fn punctuation_hide_pull_in_and_sync_agrees() {
     );
     write_file(&day_file, "## Pomodoros\n- [ ] () — FIX\n  - [[proj#^a]]\n");
 
-    let json =
-        capture_json_dry_run_matches_real(&vault, &day_file, NOW, &["!proj:a"]);
+    let json = capture_json_dry_run_matches_real_flags(
+        &vault,
+        &day_file,
+        NOW,
+        &["-p", "all"],
+        &["!proj:a"],
+    );
     let row = &json["task_complete"]["unblocked"][0];
     assert_eq!(row["trigger"], "project_empty");
     assert_eq!(row["hide_removed"], true);
     assert_eq!(row["block_id"], "prj");
-    assert_eq!(row["not_linked"], "not_selected");
-    assert!(row.get("link").is_none() || row["link"].is_null());
+    assert!(row.get("not_linked").is_none(), "{row}");
+    assert!(row["link"].is_object(), "{row}");
 
     let sync = bob_command()
         .arg("projects")
@@ -550,17 +597,35 @@ fn subproject_close_pulls_in_parent_and_sync_agrees() {
     assert!(out.contains("Parent work"), "{out}");
     assert!(out.contains("· project has no open tasks"), "{out}");
 
-    let json = capture_json(&vault, &day_file, &["!k:prj"], false);
+    let json = capture_json_flags(
+        &vault,
+        &day_file,
+        &["-p", "all"],
+        &["!k:prj"],
+        false,
+    );
     let row = &json["task_complete"]["unblocked"][0];
     assert_eq!(row["trigger"], "project_empty");
-    assert_eq!(row["not_linked"], "not_selected");
-    assert!(row.get("link").is_none() || row["link"].is_null());
+    assert!(row.get("not_linked").is_none(), "{row}");
+    assert!(row["link"].is_object(), "{row}");
     let k = fs::read_to_string(vault.join("k.md")).expect("read k");
     assert!(k.contains("- [x] #task Kid work"), "{k}");
     assert!(k.contains("^prj"), "{k}");
     let n = fs::read_to_string(vault.join("n-proj.md")).expect("read n");
-    assert!(n.contains("- [ ] #task Parent work #prj ^prj"), "{n}");
+    assert!(
+        n.contains("- [*] #task Parent work")
+            && n.contains("#prj")
+            && n.contains("[fresh:: 2026-10-05]"),
+        "{n}"
+    );
     assert!(!n.contains("#hide"), "{n}");
+    assert!(
+        k.contains("[[n-proj#^prj]]")
+            || fs::read_to_string(&day_file)
+                .expect("read day")
+                .contains("[[n-proj#^prj]]"),
+        "picked parent pull-in inserts a successor link:\nk={k}"
+    );
 
     let sync = bob_command()
         .arg("projects")

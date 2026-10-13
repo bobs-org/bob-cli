@@ -68,6 +68,7 @@ mod pomodoro_link;
 mod pomodoro_start;
 mod project_deps;
 mod project_note;
+mod pull_in;
 mod sections;
 mod start_output;
 mod sub_bullet;
@@ -96,6 +97,7 @@ use pomodoro_link::*;
 use pomodoro_start::*;
 use project_deps::*;
 use project_note::*;
+use pull_in::*;
 use sections::*;
 use start_output::*;
 use sub_bullet::*;
@@ -165,9 +167,10 @@ fn load_capture_routing(no_ref: bool) -> Option<UrlRoutingPolicy> {
     }
 }
 
-fn capture(request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
+fn capture(mut request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
     let routing = load_capture_routing(request.no_ref);
-    let mut batch = plan_capture_batch(&request, routing.as_ref())?;
+    let (mut batch, pull_in) =
+        plan_with_pull_in(&mut request, routing.as_ref())?;
     append_plan_budget(&request, &mut batch)?;
     if !request.dry_run {
         commit_capture_batch(&mut batch)?;
@@ -186,5 +189,6 @@ fn capture(request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
         batch.plan_budget,
         batch.pomodoro_blocks,
         batch.task_blocks,
+        pull_in,
     ))
 }

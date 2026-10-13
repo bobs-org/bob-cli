@@ -490,6 +490,7 @@ pub(super) fn build_close_summary_json(
         unblocked: Vec::new(),
         still_blocked: Vec::new(),
         unblocked_check: "checked",
+        project_folds: Vec::new(),
     };
     (summary, extra_warnings)
 }
@@ -554,6 +555,7 @@ struct CloseSuccessorOutcome {
     unblocked: Vec<TaskCompleteUnblockedJson>,
     still_blocked: Vec<TaskCompleteStillBlockedJson>,
     unblocked_check: &'static str,
+    project_folds: Vec<crate::native::task_complete::ProjectFold>,
 }
 
 /// 0-based line of the closed entry in the post-close day text: the
@@ -634,6 +636,7 @@ fn plan_close_successors(
         unblocked: Vec::new(),
         still_blocked: Vec::new(),
         unblocked_check: check,
+        project_folds: Vec::new(),
     };
     let bob_dir = &request.bob_dir;
     let settings = note_tasks::read_settings(bob_dir);
@@ -797,7 +800,7 @@ fn plan_close_successors(
         tasks_settings: &tasks_settings,
         note_settings: &settings,
         link_unblocked: dependency_ctx.link_unblocked(),
-        selection: engine::SuccessorSelection::None,
+        selection: request.selection.clone(),
         index,
     });
     for (relative_path, text) in &successor_plan.changed_files {
@@ -857,6 +860,7 @@ fn plan_close_successors(
             not_linked: dependent.not_linked.map(str::to_string),
             trigger: dependent.trigger,
             hide_removed: dependent.hide_removed,
+            offer: dependent.offer.as_ref().map(offer_json),
         })
         .collect::<Vec<_>>();
     let still_blocked = successor_plan
@@ -904,6 +908,7 @@ fn plan_close_successors(
         // The lookup ran here, or the empty-C gate above proved it
         // unnecessary: either way the check reads "checked".
         unblocked_check: "checked",
+        project_folds: successor_plan.project_folds.clone(),
     })
 }
 
@@ -1433,6 +1438,7 @@ pub(super) fn plan_pomodoro_close_item(
     summary.unblocked = successors.unblocked;
     summary.still_blocked = successors.still_blocked;
     summary.unblocked_check = successors.unblocked_check;
+    summary.project_folds = successors.project_folds;
     let post_day = planner.read_existing(&day_file)?;
     let mut pomodoro_refs = vec![PomodoroBlockRef::at(
         PomodoroBlockRole::Closed,
@@ -2094,6 +2100,7 @@ pub(super) fn plan_pomodoro_close_link_item(
     summary.unblocked = successors.unblocked;
     summary.still_blocked = successors.still_blocked;
     summary.unblocked_check = successors.unblocked_check;
+    summary.project_folds = successors.project_folds;
     task_block_refs.extend(close_task_block_ref);
     // Block refs: the closed entry was the pre-link running entry
     // (`destination` still carries its pre-link line); a moved source
@@ -2369,6 +2376,7 @@ pub(super) fn plan_pomodoro_close_task_item(
     summary.unblocked = successors.unblocked;
     summary.still_blocked = successors.still_blocked;
     summary.unblocked_check = successors.unblocked_check;
+    summary.project_folds = successors.project_folds;
     // Block refs: the closed entry was the pre-link running entry; a
     // moved source resolves through the item's line map; the next entry
     // is named by the close card, so it shows even when byte-identical.

@@ -49,13 +49,14 @@ fn close_successor_then_consume_net() {
         serde_json::from_str(stdout(&output).trim()).expect("capture JSON");
     let captures = json["captures"].as_array().expect("captures");
     assert_eq!(captures.len(), 2);
-    // Empty selection: the first close reports D as an unpicked offer.
+    // SL20: a later item that completes D drops the first item's offer.
     let first = captures[0]["pomodoro_close"]["unblocked"]
         .as_array()
         .expect("first unblocked");
-    assert_eq!(first.len(), 1);
-    assert_eq!(first[0]["block_id"], "d");
-    assert_eq!(first[0]["not_linked"], "not_selected");
+    assert!(
+        first.is_empty(),
+        "first item's D offer is net-dropped: {first:?}"
+    );
     let second = captures[1]["task_complete"]["unblocked"]
         .as_array()
         .expect("second unblocked");

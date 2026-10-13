@@ -268,7 +268,7 @@ pub(super) fn plan_task_complete_item(
                 tasks_settings: &tasks_settings,
                 note_settings: &settings,
                 link_unblocked: dependency_ctx.link_unblocked(),
-                selection: engine::SuccessorSelection::None,
+                selection: request.selection.clone(),
                 index,
             });
             for (relative_path, text) in &successor_plan.changed_files {
@@ -437,6 +437,7 @@ pub(super) fn plan_task_complete_item(
             not_linked: dependent.not_linked.map(str::to_string),
             trigger: dependent.trigger,
             hide_removed: dependent.hide_removed,
+            offer: dependent.offer.as_ref().map(offer_json),
         })
         .collect::<Vec<_>>();
     let still_blocked = successor_plan
@@ -489,6 +490,7 @@ pub(super) fn plan_task_complete_item(
         unblocked: unblocked.clone(),
         still_blocked,
         unblocked_check,
+        project_folds: successor_plan.project_folds.clone(),
     };
     // Task blocks: completed (root + closed subtasks) + unblocked.
     let mut task_block_refs = Vec::new();
@@ -738,6 +740,7 @@ fn already_done_item(
                 unblocked: Vec::new(),
                 still_blocked: Vec::new(),
                 unblocked_check: "checked",
+                project_folds: Vec::new(),
             }),
         },
         clip_plan: None,
@@ -999,8 +1002,9 @@ pub(super) fn staged_completed_note_texts(
 /// Net batch post-pass for successor rows (`docs/task-dependencies.md`
 /// §12.5 SL20): after every item is planned, drop each linked row whose
 /// bullet no longer survives live in the final staged day text, or whose
-/// task is no longer open. Only rows with `link` are verified; recovered
-/// and still-blocked rows report what their own gesture did. Runs on
+/// task is no longer open. Offer rows are also dropped when a later item
+/// completes, re-blocks, later-links, or `=x~K`-drops them, or when a
+/// `project_finished` emptied-project predicate no longer holds. Runs on
 /// staged text, so dry-run and real-run JSON stay equal.
 pub(super) fn apply_successor_net_post_pass(
     items: &mut [PlannedCaptureItem],
@@ -1008,32 +1012,23 @@ pub(super) fn apply_successor_net_post_pass(
     dependency_ctx: &DependencyContext,
     bob_dir: &Path,
 ) {
-    let any_linked = items.iter().any(|item| {
-        item.result.task_complete.as_ref().is_some_and(|summary| {
-            summary.unblocked.iter().any(|row| row.link.is_some())
-        }) || item.result.pomodoro_close.as_ref().is_some_and(|summary| {
-            summary.unblocked.iter().any(|row| row.link.is_some())
-        })
-    });
+    let any_linked = items
+        .iter()
+        .any(|item| item_unblocked(item).iter().any(|row| row.link.is_some()));
     let any_pull_in = items.iter().any(|item| {
-        item.result.task_complete.as_ref().is_some_and(|summary| {
-            summary
-                .unblocked
-                .iter()
-                .any(|row| row.trigger == "project_empty")
-        }) || item.result.pomodoro_close.as_ref().is_some_and(|summary| {
-            summary
-                .unblocked
-                .iter()
-                .any(|row| row.trigger == "project_empty")
-        })
+        item_unblocked(item)
+            .iter()
+            .any(|row| row.trigger == "project_empty")
     });
-    if !any_linked && !any_pull_in {
+    let any_offer = items
+        .iter()
+        .any(|item| item_unblocked(item).iter().any(|row| row.offer.is_some()));
+    if !any_linked && !any_pull_in && !any_offer {
         return;
     }
     let day_file = pomodoro::day_file_for(bob_dir);
     let day_relative = capture_pomodoros::relative_day_file(&day_file, bob_dir);
-    let live = if any_linked {
+    let live = if any_linked || any_offer {
         planner
             .peek_text(&day_file)
             .map(|final_day| {
@@ -1053,66 +1048,86 @@ pub(super) fn apply_successor_net_post_pass(
     for item in items.iter_mut() {
         if let Some(summary) = item.result.task_complete.as_mut() {
             summary.unblocked.retain(|row| {
-                if row.trigger == "project_empty" {
-                    if row.link.is_some() {
-                        successor_row_survives(
-                            row,
-                            &live,
-                            planner,
-                            bob_dir,
-                            &tasks_settings,
-                        )
-                    } else {
-                        successor_task_is_open(
-                            row,
-                            planner,
-                            bob_dir,
-                            &tasks_settings,
-                        )
-                    }
-                } else {
-                    row.link.is_none()
-                        || successor_row_survives(
-                            row,
-                            &live,
-                            planner,
-                            bob_dir,
-                            &tasks_settings,
-                        )
-                }
+                keep_unblocked_row(
+                    row,
+                    &live,
+                    planner,
+                    bob_dir,
+                    &tasks_settings,
+                )
             });
         }
         if let Some(summary) = item.result.pomodoro_close.as_mut() {
             summary.unblocked.retain(|row| {
-                if row.trigger == "project_empty" {
-                    if row.link.is_some() {
-                        successor_row_survives(
-                            row,
-                            &live,
-                            planner,
-                            bob_dir,
-                            &tasks_settings,
-                        )
-                    } else {
-                        successor_task_is_open(
-                            row,
-                            planner,
-                            bob_dir,
-                            &tasks_settings,
-                        )
-                    }
-                } else {
-                    row.link.is_none()
-                        || successor_row_survives(
-                            row,
-                            &live,
-                            planner,
-                            bob_dir,
-                            &tasks_settings,
-                        )
-                }
+                keep_unblocked_row(
+                    row,
+                    &live,
+                    planner,
+                    bob_dir,
+                    &tasks_settings,
+                )
             });
         }
+    }
+}
+
+fn keep_unblocked_row(
+    row: &TaskCompleteUnblockedJson,
+    live: &BTreeSet<(PathBuf, String)>,
+    planner: &mut CaptureBatchPlanner,
+    bob_dir: &Path,
+    tasks_settings: &crate::native::task_status_hooks::TasksSettings,
+) -> bool {
+    if row.offer.is_some() {
+        if !successor_task_is_open(row, planner, bob_dir, tasks_settings) {
+            return false;
+        }
+        let in_live = live
+            .contains(&(PathBuf::from(&row.note_path), row.block_id.clone()));
+        if row.link.is_some() {
+            if !successor_row_survives(
+                row,
+                live,
+                planner,
+                bob_dir,
+                tasks_settings,
+            ) {
+                return false;
+            }
+        } else if in_live {
+            return false;
+        }
+        if matches!(row.status_symbol, ' ' | '*')
+            && successor_task_status(row, planner, bob_dir, tasks_settings)
+                == Some('?')
+        {
+            return false;
+        }
+        if row
+            .offer
+            .as_ref()
+            .is_some_and(|offer| offer.group == "project_finished")
+            && project_has_open_work(row, planner, bob_dir, tasks_settings)
+        {
+            return false;
+        }
+        return true;
+    }
+    if row.trigger == "project_empty" {
+        if row.link.is_some() {
+            successor_row_survives(row, live, planner, bob_dir, tasks_settings)
+        } else {
+            successor_task_is_open(row, planner, bob_dir, tasks_settings)
+        }
+    } else {
+        row.link.is_none()
+            || successor_row_survives(
+                row,
+                live,
+                planner,
+                bob_dir,
+                tasks_settings,
+            )
     }
 }
 
@@ -1140,6 +1155,50 @@ fn successor_task_is_open(
     bob_dir: &Path,
     tasks_settings: &crate::native::task_status_hooks::TasksSettings,
 ) -> bool {
+    successor_task_lookup(row, planner, bob_dir, tasks_settings).is_some_and(
+        |task| task.status_recognized && task.status_type.is_open(),
+    )
+}
+
+fn successor_task_status(
+    row: &TaskCompleteUnblockedJson,
+    planner: &mut CaptureBatchPlanner,
+    bob_dir: &Path,
+    tasks_settings: &crate::native::task_status_hooks::TasksSettings,
+) -> Option<char> {
+    successor_task_lookup(row, planner, bob_dir, tasks_settings)
+        .map(|task| task.status)
+}
+
+fn successor_task_lookup(
+    row: &TaskCompleteUnblockedJson,
+    planner: &mut CaptureBatchPlanner,
+    bob_dir: &Path,
+    tasks_settings: &crate::native::task_status_hooks::TasksSettings,
+) -> Option<crate::native::task_status_hooks::TaskLine> {
+    let absolute = bob_dir.join(&row.note_path);
+    let contents = planner.current_contents(&absolute).ok().flatten()?;
+    let tasks = crate::native::task_status_hooks::parse_tasks(
+        &contents,
+        tasks_settings,
+    );
+    if row.block_id.is_empty() {
+        tasks
+            .into_iter()
+            .find(|task| task.line_index + 1 == row.line)
+    } else {
+        tasks.into_iter().find(|task| {
+            task.block_id.as_deref() == Some(row.block_id.as_str())
+        })
+    }
+}
+
+fn project_has_open_work(
+    row: &TaskCompleteUnblockedJson,
+    planner: &mut CaptureBatchPlanner,
+    bob_dir: &Path,
+    tasks_settings: &crate::native::task_status_hooks::TasksSettings,
+) -> bool {
     let absolute = bob_dir.join(&row.note_path);
     let Ok(Some(contents)) = planner.current_contents(&absolute) else {
         return false;
@@ -1147,9 +1206,17 @@ fn successor_task_is_open(
     crate::native::task_status_hooks::parse_tasks(&contents, tasks_settings)
         .iter()
         .any(|task| {
-            task.block_id.as_deref() == Some(row.block_id.as_str())
-                && task.status_recognized
+            task.status_recognized
                 && task.status_type.is_open()
+                && task.block_id.as_deref() != Some("prj")
+                && task.block_id.as_deref() != Some(row.block_id.as_str())
+                && !crate::native::capture_dependency_tasks::has_hide_tag(
+                    contents
+                        .lines()
+                        .nth(task.line_index)
+                        .unwrap_or_default()
+                        .trim_end_matches('\r'),
+                )
         })
 }
 

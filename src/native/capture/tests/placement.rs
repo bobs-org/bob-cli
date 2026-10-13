@@ -360,6 +360,7 @@ fn json_success_shape_is_stable() {
         None,
         Vec::new(),
         Vec::new(),
+        PullInJson::empty(),
     );
 
     let value: serde_json::Value =
@@ -384,6 +385,11 @@ fn json_success_shape_is_stable() {
     assert!(value.get("sub_bullets").is_none(), "{value}");
     assert!(value.get("captures").is_none(), "{value}");
     assert!(value.get("global_destination").is_none(), "{value}");
+    assert_eq!(value["pull_in"]["supported"], true);
+    assert_eq!(value["pull_in"]["offer_count"], 0);
+    assert!(value["pull_in"]["choice"].is_null(), "{value}");
+    assert_eq!(value["pull_in"]["picked_count"], 0);
+    assert!(value["pull_in"].get("groups").is_none(), "{value}");
     for special_field in [
         "priority",
         "priority_label",

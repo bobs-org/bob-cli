@@ -58,11 +58,16 @@ fn capture_help_lists_options_alphabetically() {
             "-f, --format",
             "-h, --help",
             "-n, --no-clip",
+            "-p, --pull-in",
             "-r, --route",
             "-s, --section",
             "-t, --task",
             "-S, --task-section",
         ],
+    );
+    assert!(
+        !help.contains("--require-pull-in-choice"),
+        "hidden --require-pull-in-choice must stay out of help:\n{help}"
     );
     assert!(
         help.contains("@<route>+<block-id>")

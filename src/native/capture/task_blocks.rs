@@ -553,7 +553,10 @@ mod tests {
             forced_task_section: None,
             no_clip: true,
             no_ref: false,
+            pull_in: None,
+            require_pull_in_choice: false,
             raw_text: raw_text.to_string(),
+            selection: crate::native::task_complete::SuccessorSelection::None,
         }
     }
 

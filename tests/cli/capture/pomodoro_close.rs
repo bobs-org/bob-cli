@@ -60,12 +60,23 @@ pub(crate) fn run_close_json(
     now: &str,
     args: &[&str],
 ) -> serde_json::Value {
+    run_close_json_flags(vault, day_file, now, &[], args)
+}
+
+pub(crate) fn run_close_json_flags(
+    vault: &Path,
+    day_file: &Path,
+    now: &str,
+    flags: &[&str],
+    args: &[&str],
+) -> serde_json::Value {
     let output = bob_command()
         .arg("capture")
         .arg("-b")
         .arg(vault)
         .arg("-f")
         .arg("json")
+        .args(flags)
         .arg("--")
         .args(args)
         .env("BOB_DAY_FILE", day_file)

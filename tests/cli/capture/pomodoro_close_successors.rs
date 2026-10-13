@@ -2,7 +2,7 @@
 //! recovery and successor linking inside `=x` embeds, `=x!M`, `=!`, and
 //! `^route:id=x…` (vectors SL7, SL8, SL12, SL17, SL20, SL24, SL27).
 
-use super::pomodoro_close::run_close_json;
+use super::pomodoro_close::{run_close_json, run_close_json_flags};
 use crate::support::*;
 use std::fs;
 
@@ -272,9 +272,8 @@ fn close_then_start_opens_successor_continuation() {
     assert!(!day.contains("relaunch-failed-agents"), "{day}");
 }
 
-// SL20: a draft that completes the successor right after linking it
-// reports neither row: the first item's `unblocked` omits the taken-back
-// link (net), while the second item links what its own close unblocked.
+// SL20: a later item that completes D drops the first item's offer
+// (net). The second item still reports E, unpicked.
 #[test]
 fn sl20_second_completion_drops_first_link_net() {
     let (_temp, vault, day_file) = vault("bob-cli-close-sl20");
@@ -307,9 +306,10 @@ fn sl20_second_completion_drops_first_link_net() {
     let first = captures[0]["task_complete"]["unblocked"]
         .as_array()
         .expect("first unblocked");
-    assert_eq!(first.len(), 1);
-    assert_eq!(first[0]["block_id"], "d");
-    assert_eq!(first[0]["not_linked"], "not_selected");
+    assert!(
+        first.is_empty(),
+        "first item's D offer is net-dropped: {first:?}"
+    );
     let second = captures[1]["task_complete"]["unblocked"]
         .as_array()
         .expect("second unblocked");
@@ -494,7 +494,8 @@ fn pomodoro_close_pulls_in_parent_of_closed_subproject() {
         "## Pomodoros\n- [ ] (**0920-0950**) — BOB\n  - ![[k#^prj]]\n- [ ] () — FIX\n",
     );
 
-    let json = run_close_json(&vault, &day_file, NOW, &["=x"]);
+    let json =
+        run_close_json_flags(&vault, &day_file, NOW, &["-p", "all"], &["=x"]);
     let close = &json["pomodoro_close"];
     assert_eq!(close["still_blocked"], serde_json::json!([]));
     let unblocked = close["unblocked"].as_array().expect("unblocked");
@@ -506,10 +507,15 @@ fn pomodoro_close_pulls_in_parent_of_closed_subproject() {
     assert_eq!(row["text"], "Parent work");
     assert_eq!(row["unblocked_by"][0]["note_path"], "k.md");
     assert_eq!(row["unblocked_by"][0]["block_id"], "prj");
-    assert_eq!(row["not_linked"], "not_selected");
-    assert!(row.get("link").is_none() || row["link"].is_null());
+    assert!(row.get("not_linked").is_none(), "{row}");
+    assert!(row["link"].is_object(), "{row}");
     let n = fs::read_to_string(vault.join("n-proj.md")).expect("read n");
-    assert!(n.contains("- [ ] #task Parent work #prj ^prj"), "{n}");
+    assert!(
+        n.contains("- [*] #task Parent work")
+            && n.contains("#prj")
+            && n.contains("[fresh:: 2026-10-05]"),
+        "{n}"
+    );
     assert!(!n.contains("#hide"), "{n}");
     let k = fs::read_to_string(vault.join("k.md")).expect("read k");
     assert!(k.contains("- [x] #task Kid work"), "{k}");

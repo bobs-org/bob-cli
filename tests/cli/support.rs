@@ -625,6 +625,18 @@ pub(crate) fn capture_json_dry_run_matches_real(
     now: &str,
     args: &[&str],
 ) -> serde_json::Value {
+    capture_json_dry_run_matches_real_flags(vault, day_file, now, &[], args)
+}
+
+/// Like [`capture_json_dry_run_matches_real`], with extra clap flags
+/// inserted before `--` so `-p/--pull-in` is not swallowed as TEXT.
+pub(crate) fn capture_json_dry_run_matches_real_flags(
+    vault: &Path,
+    day_file: &Path,
+    now: &str,
+    flags: &[&str],
+    args: &[&str],
+) -> serde_json::Value {
     let run = |dry_run: bool| {
         let mut command = bob_command();
         command
@@ -636,7 +648,7 @@ pub(crate) fn capture_json_dry_run_matches_real(
         if dry_run {
             command.arg("--dry-run");
         }
-        command.arg("--").args(args);
+        command.args(flags).arg("--").args(args);
         let output = command
             .env("BOB_DAY_FILE", day_file)
             .env("BOB_NOW", now)

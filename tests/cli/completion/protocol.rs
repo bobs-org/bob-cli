@@ -145,6 +145,11 @@ fn double_dash_offers_long_forms_only() {
     assert_success(&output);
     let names = values(&output);
     assert!(names.contains(&"--bob-dir".to_string()));
+    assert!(names.contains(&"--pull-in".to_string()));
+    assert!(
+        !names.contains(&"--require-pull-in-choice".to_string()),
+        "hidden --require-pull-in-choice must stay out of completion: {names:?}"
+    );
     assert!(
         !names
             .iter()
@@ -206,6 +211,19 @@ fn file_and_dir_slots_emit_directives() {
     let output = complete(&["bob", "capture", "--bob-dir", ""]);
     assert_success(&output);
     assert_eq!(directives(&output), vec!["!dirs".to_string()]);
+}
+
+#[test]
+fn pull_in_value_is_free_text() {
+    let output = complete(&["bob", "capture", "--pull-in", ""]);
+    assert_success(&output);
+    let dirs = directives(&output);
+    assert!(
+        dirs.iter()
+            .any(|line| line.starts_with("!message PICKS \u{2014} ")),
+        "{dirs:?}"
+    );
+    assert!(rows(&output).is_empty(), "{:?}", rows(&output));
 }
 
 #[test]

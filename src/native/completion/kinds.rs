@@ -370,6 +370,11 @@ const TABLE: &[Entry] = &[
     },
     Entry {
         path: &[],
+        arg: "pull-in",
+        kind: Kind::FreeText,
+    },
+    Entry {
+        path: &[],
         arg: "query",
         kind: Kind::FreeText,
     },
@@ -644,5 +649,6 @@ mod tests {
         assert_eq!(lookup_generic("tasks"), Some(Kind::FreeText));
         assert_eq!(lookup_generic("bob-dir"), Some(Kind::Dirs));
         assert_eq!(lookup_generic("text"), Some(Kind::FreeText));
+        assert_eq!(lookup_generic("pull-in"), Some(Kind::FreeText));
     }
 }

@@ -21,7 +21,8 @@ pub(crate) use retirement::{
 };
 pub(crate) use successors::{
     live_link_keys, plan_successors, ClosingContext, ClosingContinuation,
-    CompletedTask, SuccessorInput, SuccessorPlan, SuccessorSelection,
+    CompletedTask, OfferGroup, OfferOrderKey, OfferReport, ProjectFold,
+    SuccessorInput, SuccessorPlan, SuccessorSelection,
 };
 pub(crate) use tree::{
     complete_embedded_trees, complete_task_tree, CompleteTreeOutcome,
