@@ -72,6 +72,19 @@ pub(super) fn assert_reconciled_clean(json: &Value) {
         "unexpected canonicalizations: {}",
         json["canonicalized_dependency_lines"]
     );
+    assert!(
+        json["blocks_line_updates"].as_array().unwrap().is_empty(),
+        "unexpected BLOCKS updates: {}",
+        json["blocks_line_updates"]
+    );
+    assert!(
+        json["minted_dependent_block_ids"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "unexpected minted block ids: {}",
+        json["minted_dependent_block_ids"]
+    );
 }
 
 #[test]
@@ -197,6 +210,7 @@ fn reconcile_projects_line_into_field_and_stamps_target_id() {
             "- [?] #task Dependent [dependsOn:: tasks__pre] ^dep\n",
             "  - ⛓️ **DEPENDS ON:** [[#^pre]]\n",
             "- [ ] #task Prerequisite [id:: tasks__pre] ^pre\n",
+            "\t- 🧱 **BLOCKS:** [[#^dep]]\n",
         )
     );
 
@@ -299,7 +313,9 @@ fn reconcile_adopts_field_ids_into_canonical_line() {
             "  - ⛓️ **DEPENDS ON:** [[#^one]]\n",
             "  - ![[#^two]]\n",
             "- [ ] #task One [id:: tasks__one] ^one\n",
+            "\t- 🧱 **BLOCKS:** [[#^adopt]]\n",
             "- [ ] #task Two [id:: tasks__two] ^two\n",
+            "\t- 🧱 **BLOCKS:** [[#^adopt]]\n",
         )
     );
 
@@ -697,8 +713,10 @@ fn reconcile_same_index_insert_does_not_clobber_replace() {
             "- [?] #task A [dependsOn:: tasks__c] ^a\n",
             "\t- ⛓️ **DEPENDS ON:** [[#^c]]\n",
             "- [ ] #task B [id:: tasks__b] ^b\n",
+            "\t- 🧱 **BLOCKS:** [[#^c]]\n",
             "- [?] #task C [id:: tasks__c] [dependsOn:: tasks__b] ^c\n",
             "  - ⛓️ **DEPENDS ON:** [[#^b]]\n",
+            "  - 🧱 **BLOCKS:** [[#^a]]\n",
         )
     );
 
@@ -747,7 +765,9 @@ fn reconcile_dependency_chain_settles_in_one_run() {
             "  - ⛓️ **DEPENDS ON:** [[#^b]]\n",
             "- [?] #task B [id:: tasks__b] [dependsOn:: tasks__c] ^b\n",
             "  - ⛓️ **DEPENDS ON:** [[#^c]]\n",
+            "  - 🧱 **BLOCKS:** [[#^a]]\n",
             "- [ ] #task C [id:: tasks__c] ^c\n",
+            "\t- 🧱 **BLOCKS:** [[#^b]]\n",
         )
     );
 
@@ -968,11 +988,18 @@ fn reconcile_archive_legacy_children_follow_archive_rule() {
         .expect("apply archive-legacy run");
     assert_success(&applied);
     let after = fs::read_to_string(&tasks).unwrap();
-    // Only the Blocked checkbox changes; lines, fields, and legacy
-    // children are byte-identical.
+    // Blocked checkbox plus the BLOCKS mirror on the open prerequisite.
     assert_eq!(
         after,
-        before.replacen("- [ ] #task Dep", "- [?] #task Dep", 1)
+        concat!(
+            "- [?] #task Dep [dependsOn:: tasks__pre, done__old__gone] ^dep\n",
+            "  - ⛓️ **DEPENDS ON:** [[#^pre]]\n",
+            "  - ![[done/old#^gone]]\n",
+            "- [ ] #task Pre [id:: tasks__pre] ^pre\n",
+            "\t- 🧱 **BLOCKS:** [[#^dep]]\n",
+            "- [ ] #task Lone [dependsOn:: done__old__gone] ^lone\n",
+            "  - ![[done/old#^gone]]\n",
+        )
     );
 
     let second = dry_run_json(&vault, &daily);
@@ -1249,7 +1276,10 @@ fn reconcile_stamps_cross_note_target_id() {
     assert_success(&applied);
     assert_eq!(
         fs::read_to_string(&target).unwrap(),
-        "- [ ] #task T [id:: b__t] ^t\n"
+        concat!(
+            "- [ ] #task T [id:: b__t] ^t\n",
+            "\t- 🧱 **BLOCKS:** [[a#^dep]]\n",
+        )
     );
     assert!(fs::read_to_string(&dependent)
         .unwrap()
@@ -1294,7 +1324,15 @@ fn reconcile_legacy_window_with_line_and_children() {
     let after = fs::read_to_string(&tasks).unwrap();
     assert_eq!(
         after,
-        before.replacen("- [ ] #task Dep", "- [?] #task Dep", 1)
+        concat!(
+            "- [?] #task Dep [dependsOn:: tasks__one, tasks__two] ^dep\n",
+            "  - ⛓️ **DEPENDS ON:** [[#^one]]\n",
+            "  - [[#^two]]\n",
+            "- [ ] #task One [id:: tasks__one] ^one\n",
+            "\t- 🧱 **BLOCKS:** [[#^dep]]\n",
+            "- [ ] #task Two [id:: tasks__two] ^two\n",
+            "\t- 🧱 **BLOCKS:** [[#^dep]]\n",
+        )
     );
     assert!(after.contains("  - [[#^two]]\n"), "{after}");
 

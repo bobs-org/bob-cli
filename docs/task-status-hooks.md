@@ -348,6 +348,21 @@ matching human sections, a `Dependencies:` summary line, dependency
 counts appended to the `Summary:` line, and stderr warnings. A second
 run over a reconciled vault reports no dependency changes.
 
+After that projection, a second pass writes the generated `🧱 **BLOCKS:**`
+mirror on every open prerequisite (`docs/task-dependencies.md` §14).
+It uses the accepted explicit edges from R1–R10 (including id-less
+dependents, excluding implicit resident → `^prj` edges and R4/R5/R6,
+archive, previous-daily, unencodable, and `^prj` internal targets).
+Open owners gain, rewrite, canonicalise, deduplicate, or lose the
+line; closed owners freeze; malformed BLOCKS children warn
+`malformed_blocks_line` and are left alone; dependents that still
+need a mint in a note the quiet interval would refuse are skipped
+this run. `dependencies.blocks_lines: false` removes every BLOCKS
+line on an open task and mints nothing. JSON reports the additive
+`blocks_line_updates` (`{path, line, task, kind, added[], removed[]}`)
+and `minted_dependent_block_ids` (`{path, line, block_id}`) arrays;
+human output adds a `🧱 BLOCKS lines` group.
+
 ## Derived Blocked Status
 
 Dependency lines are reconciled as described in
@@ -1146,6 +1161,23 @@ JSON mode prints one object on stdout with these stable fields:
       "detail": "link [[missing#^gone]] kept verbatim; it never blocks"
     }
   ],
+  "blocks_line_updates": [
+    {
+      "path": "dev.md",
+      "line": 34,
+      "task": "Review the outline",
+      "kind": "inserted",
+      "added": ["[[#^ship]]"],
+      "removed": []
+    }
+  ],
+  "minted_dependent_block_ids": [
+    {
+      "path": "inbox.md",
+      "line": 12,
+      "block_id": "call-back"
+    }
+  ],
   "applied_files": [],
   "deferred_files": [],
   "recovery_directory": null,
@@ -1251,9 +1283,14 @@ lines in the same shape, `legacy_dependency_children` counts legacy children
 for the legacy-window retirement decision, and `dependency_warnings` lists
 `{kind, path, line, detail}` rows (for example `unresolved_dependency_link`,
 `previous_daily_target`, `unencodable_dependency_target`,
-`dependency_field_ids_dropped`). The human report mirrors these with
-projected-field, adopted, healed, and canonicalized sections plus a
-`Dependencies:` line, and the `Summary:` line appends the same counts.
+`dependency_field_ids_dropped`, `malformed_blocks_line`).
+`blocks_line_updates` lists each BLOCKS-line insert, rewrite,
+canonicalization, removal, or deduplication with `path`, one-based `line`,
+owner `task` description, `kind`, and `added`/`removed` canonical links;
+`minted_dependent_block_ids` lists each dependent `^block-id` minted so a
+BLOCKS entry can name it. The human report mirrors these with
+projected-field, adopted, healed, canonicalized, and `🧱 BLOCKS` sections
+plus a `Dependencies:` line, and the `Summary:` line appends the same counts.
 `applied_files`, `deferred_files`, and `recovery_directory` describe live
 application. On dry-run and live no-op, `applied_files` and `deferred_files`
 are empty and `recovery_directory` is `null`; on a successful live write,

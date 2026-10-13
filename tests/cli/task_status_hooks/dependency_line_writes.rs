@@ -56,7 +56,9 @@ fn reconcile_dw1_inserts_adopted_line_before_schedule_log() {
             "  - ⛓️ **DEPENDS ON:** [[#^one]] • [[#^two]]\n",
             "  - 🗓️ **SCHEDULE LOG**\n",
             "- [ ] #task One [id:: tasks__one] ^one\n",
+            "\t- 🧱 **BLOCKS:** [[#^adopt]]\n",
             "- [ ] #task Two [id:: tasks__two] ^two\n",
+            "\t- 🧱 **BLOCKS:** [[#^adopt]]\n",
         )
     );
 
@@ -110,6 +112,7 @@ fn reconcile_dw2_inserts_adopted_line_after_cancel_log() {
             "  - ⛓️ **DEPENDS ON:** [[#^one]]\n",
             "  - prose child\n",
             "- [ ] #task One [id:: tasks__one] ^one\n",
+            "\t- 🧱 **BLOCKS:** [[#^adopt]]\n",
         )
     );
 
@@ -265,7 +268,9 @@ fn reconcile_dw3_dw6_rewrite_keeps_link_order() {
             "- [?] #task Dependent [dependsOn:: tasks__b, tasks__a] ^dep\n",
             "  - ⛓️ **DEPENDS ON:** [[#^b]] • [[#^a]]\n",
             "- [ ] #task A [id:: tasks__a] ^a\n",
+            "\t- 🧱 **BLOCKS:** [[#^dep]]\n",
             "- [ ] #task B [id:: tasks__b] ^b\n",
+            "\t- 🧱 **BLOCKS:** [[#^dep]]\n",
         )
     );
 
@@ -328,13 +333,13 @@ fn summary_reports_dependency_counts() {
     let report = stdout(&applied);
     assert!(
         report.contains(
-            "Dependencies: 2 projected, 1 adopted, 0 healed, 0 canonicalized, 0 legacy children, 0 warnings"
+            "Dependencies: 2 projected, 1 adopted, 0 healed, 0 canonicalized, 0 legacy children, 0 warnings, 2 \u{1F9F1} BLOCKS, 0 minted"
         ),
         "unexpected Dependencies line:\n{report}"
     );
     assert!(
         report.contains(
-            "2 dependency projected, 1 adopted, 0 healed, 0 canonicalized, 0 legacy children, 0 warnings"
+            "2 dependency projected, 1 adopted, 0 healed, 0 canonicalized, 0 legacy children, 0 warnings, 2 \u{1F9F1} BLOCKS, 0 minted"
         ),
         "unexpected Summary line:\n{report}"
     );

@@ -85,13 +85,35 @@ pub(super) struct DependencyLineReport {
 /// `unadoptable_dependency_id`, `non_task_dependency`,
 /// `self_dependency`, `dependency_cycle`, `malformed_dependency_line`,
 /// `previous_daily_target`, `unencodable_dependency_target`,
-/// `dependency_field_ids_dropped`).
+/// `dependency_field_ids_dropped`, `malformed_blocks_line`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct DependencyWarning {
     pub(super) kind: String,
     pub(super) path: String,
     pub(super) line: usize,
     pub(super) detail: String,
+}
+
+/// One BLOCKS-line projection write (`docs/task-dependencies.md` §14.6).
+/// `kind` is `inserted`, `rewritten`, `canonicalized`, `removed`, or
+/// `deduplicated`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct BlocksLineUpdate {
+    pub(super) path: String,
+    pub(super) line: usize,
+    pub(super) task: String,
+    pub(super) kind: String,
+    pub(super) added: Vec<String>,
+    pub(super) removed: Vec<String>,
+}
+
+/// One dependent `^block-id` minted so a BLOCKS entry can name it
+/// (`docs/task-dependencies.md` §14.4).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct MintedDependentBlockId {
+    pub(super) path: String,
+    pub(super) line: usize,
+    pub(super) block_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -255,6 +277,8 @@ pub(super) struct SyncResult {
     pub(super) canonicalized_dependency_lines: Vec<DependencyLineReport>,
     pub(super) legacy_dependency_children: usize,
     pub(super) dependency_warnings: Vec<DependencyWarning>,
+    pub(super) blocks_line_updates: Vec<BlocksLineUpdate>,
+    pub(super) minted_dependent_block_ids: Vec<MintedDependentBlockId>,
     pub(super) prj_is_blocked_tags_added: Vec<ProjectBlockedTagChange>,
     pub(super) prj_is_blocked_tags_stripped: Vec<ProjectBlockedTagChange>,
     pub(super) unblocked_fields_written: Vec<UnblockedFieldChange>,

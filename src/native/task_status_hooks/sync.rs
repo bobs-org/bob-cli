@@ -203,6 +203,43 @@ pub(super) fn note_kind(contents: &str) -> NoteKind {
     }
 }
 
+/// Load `dependencies.blocks_lines`, falling back to `true` and warning
+/// on stderr when the value is invalid (BR25).
+fn load_blocks_lines_enabled() -> bool {
+    match bob_config::load_dependencies_config(&bob_config::config_path()) {
+        Ok(config) => config.blocks_lines,
+        Err(error) => {
+            eprintln!(
+                "{COMMAND_NAME}: warning: invalid dependencies config: {error}; using dependencies.blocks_lines=true"
+            );
+            true
+        }
+    }
+}
+
+/// Files whose mtime is in the future or unreadable: the guarded write
+/// would refuse them without waiting, so a mint on that note must not
+/// be listed this run (BR5).
+fn quiet_deferred_files(files: &[FileScan]) -> BTreeSet<usize> {
+    let now = SystemTime::now();
+    files
+        .iter()
+        .enumerate()
+        .filter(|(_, file)| file_would_defer_quietly(&file.path, now))
+        .map(|(index, _)| index)
+        .collect()
+}
+
+fn file_would_defer_quietly(path: &Path, now: SystemTime) -> bool {
+    let Ok(metadata) = fs::symlink_metadata(path) else {
+        return true;
+    };
+    let Some(mtime) = metadata.modified().ok() else {
+        return true;
+    };
+    now.duration_since(mtime).is_err()
+}
+
 pub(super) fn sync_task_statuses(
     request: &Request,
 ) -> Result<SyncResult, SyncError> {
@@ -427,6 +464,8 @@ pub(super) fn sync_task_statuses(
         &empty_project_reasons,
         &note_index,
     );
+    let task_counts: Vec<usize> =
+        files.iter().map(|file| file.tasks.len()).collect();
     let reconcile = reconcile_dependencies(
         &request.bob_dir,
         &mut files,
@@ -436,11 +475,47 @@ pub(super) fn sync_task_statuses(
         previous_daily_path.as_deref(),
         &mut inputs,
     );
-    let pre_reconcile = &reconcile.original_contents;
     for file_index in &reconcile.touched_files {
         let file = &mut files[*file_index];
         file.tasks = parse_tasks(&file.contents, &settings);
     }
+    for (file_index, file) in files.iter().enumerate() {
+        debug_assert_eq!(
+            file.tasks.len(),
+            task_counts[file_index],
+            "R1–R10 never adds or removes task lines"
+        );
+    }
+    let previous_daily_file = previous_daily_path
+        .as_ref()
+        .and_then(|path| files.iter().position(|file| &file.path == path));
+    let quiet_deferred = quiet_deferred_files(&files);
+    let blocks_enabled = load_blocks_lines_enabled();
+    let mut pre_reconcile = reconcile.original_contents;
+    let blocks = reconcile_blocks_lines(
+        &mut files,
+        &note_index,
+        &settings,
+        &reconcile.explicit_edges,
+        &reconcile.uncertain_dependents,
+        previous_daily_file,
+        &quiet_deferred,
+        blocks_enabled,
+    );
+    for (file_index, original) in blocks.original_contents {
+        pre_reconcile.entry(file_index).or_insert(original);
+    }
+    let mut reconcile_touched = reconcile.touched_files;
+    reconcile_touched.extend(blocks.touched_files);
+    for file_index in files.iter().enumerate().map(|(index, _)| index) {
+        debug_assert_eq!(
+            files[file_index].tasks.len(),
+            task_counts[file_index],
+            "BLOCKS projection never adds or removes task lines"
+        );
+    }
+    let mut dependency_warnings = reconcile.warnings;
+    dependency_warnings.extend(blocks.warnings);
     let task_blocks = task_blocks(&files);
     let mut unresolved = Vec::new();
     let dependency_edges = dependency_edges(
@@ -772,7 +847,7 @@ pub(super) fn sync_task_statuses(
     // Line rewrites (tag and `[unblocked::]` edits) are structural,
     // so their notes join the reconciled set for the quiet-period
     // guarded write.
-    let mut structural_files = reconcile.touched_files.clone();
+    let mut structural_files = reconcile_touched;
     structural_files.extend(line_rewrite_files);
     let mut compose = compose_outputs(
         &files,
@@ -785,7 +860,7 @@ pub(super) fn sync_task_statuses(
             settings: &settings,
         },
         &structural_files,
-        pre_reconcile,
+        &pre_reconcile,
     );
     // Second rewrite pass after transitions (§13.5): consume live
     // links to the final Blocked set, then empty Pomodoros. Promotion
@@ -870,7 +945,9 @@ pub(super) fn sync_task_statuses(
         healed_dependency_links: reconcile.healed,
         canonicalized_dependency_lines: reconcile.canonicalized,
         legacy_dependency_children: reconcile.legacy_children,
-        dependency_warnings: reconcile.warnings,
+        dependency_warnings,
+        blocks_line_updates: blocks.updates,
+        minted_dependent_block_ids: blocks.mints,
         prj_is_blocked_tags_added,
         prj_is_blocked_tags_stripped,
         unblocked_fields_written,

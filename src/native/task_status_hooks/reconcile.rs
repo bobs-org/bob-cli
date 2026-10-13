@@ -36,6 +36,16 @@ pub(super) struct ReconcileOutcome {
     /// Original note contents for touched files only, so callers clone
     /// just what reconcile rewrote instead of the whole vault.
     pub(super) original_contents: BTreeMap<usize, String>,
+    /// Accepted explicit edges from R1–R10, keyed by dependent
+    /// `(file_index, task_index)` so id-less dependents are included
+    /// (`docs/task-dependencies.md` §14.3, §14.6). Recorded before
+    /// `add_resident_implicit_edges`.
+    pub(super) explicit_edges:
+        BTreeMap<(usize, usize), BTreeSet<(PathBuf, String)>>,
+    /// Open dependents whose Depends-On line is malformed (R10). BLOCKS
+    /// never newly lists them and never prunes existing entries that
+    /// name them.
+    pub(super) uncertain_dependents: BTreeSet<(usize, usize)>,
 }
 
 /// Project every open dependent's Depends-On line into its fields.
@@ -131,6 +141,7 @@ struct NoteSnapshot {
 /// Read-only task view used during planning.
 struct TaskView<'a> {
     file_index: usize,
+    task_index: usize,
     relative_path: &'a Path,
     task: &'a TaskLine,
 }
@@ -147,6 +158,8 @@ impl ReconcileOutcome {
             warnings: Vec::new(),
             archive_closed_ids: BTreeSet::new(),
             original_contents: BTreeMap::new(),
+            explicit_edges: BTreeMap::new(),
+            uncertain_dependents: BTreeSet::new(),
         }
     }
 }
@@ -305,6 +318,7 @@ impl<'a> ReconcileWorker<'a> {
             // ends before any mutation below.
             let view = TaskView {
                 file_index,
+                task_index,
                 relative_path: &files[file_index].relative_path,
                 task,
             };
@@ -411,6 +425,7 @@ impl<'a> ReconcileWorker<'a> {
             };
             let view = TaskView {
                 file_index,
+                task_index,
                 relative_path: &files[file_index].relative_path,
                 task,
             };
@@ -577,6 +592,9 @@ impl ReconcileWorker<'_> {
                 self.plan_adoption(view, &legacy, None);
             }
             Some(task_dependencies::DependencyLine::Malformed) => {
+                self.outcome
+                    .uncertain_dependents
+                    .insert((view.file_index, view.task_index));
                 self.warn(
                     view,
                     "malformed_dependency_line",
@@ -1646,21 +1664,34 @@ impl ReconcileWorker<'_> {
     /// Record the dependent's live graph edges for R7 cycle detection.
     /// Only scanned tasks join the graph; archive history, non-tasks,
     /// self links, and unresolved links never do.
+    ///
+    /// Explicit BLOCKS edges are recorded first, before the block-id
+    /// early return, so id-less dependents still appear in
+    /// `ReconcileOutcome.explicit_edges`.
     fn record_graph(
         &mut self,
         view: &TaskView<'_>,
         set: &[(PathBuf, String, String, bool)],
     ) {
-        let Some(own) = view.task.block_id.clone() else {
-            return;
-        };
-        let source = (view.relative_path.to_path_buf(), own);
+        let own_identity = view
+            .task
+            .block_id
+            .as_ref()
+            .map(|block| (view.relative_path.to_path_buf(), block.clone()));
         let targets: BTreeSet<(PathBuf, String)> = set
             .iter()
             .filter(|(_, _, _, archive)| !archive)
             .map(|(path, block, _, _)| (path.clone(), block.clone()))
-            .filter(|target| target != &source)
+            .filter(|target| own_identity.as_ref() != Some(target))
             .collect();
+        if !targets.is_empty() {
+            self.outcome
+                .explicit_edges
+                .insert((view.file_index, view.task_index), targets.clone());
+        }
+        let Some(source) = own_identity else {
+            return;
+        };
         if targets.is_empty() {
             return;
         }

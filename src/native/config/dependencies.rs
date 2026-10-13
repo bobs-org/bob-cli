@@ -1,6 +1,3 @@
-// Reconcile and capture start consuming this config in later epic phases.
-#![allow(dead_code)]
-
 use std::path::Path;
 
 use serde_yaml::Value;

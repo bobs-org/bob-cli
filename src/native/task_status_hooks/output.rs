@@ -38,7 +38,9 @@ pub(super) fn print_human_result(result: &SyncResult) {
         + result.prj_is_blocked_tags_added.len()
         + result.prj_is_blocked_tags_stripped.len()
         + result.unblocked_fields_written.len()
-        + result.unblocked_fields_pruned.len();
+        + result.unblocked_fields_pruned.len()
+        + result.blocks_line_updates.len()
+        + result.minted_dependent_block_ids.len();
     let prefix = if result.dry_run {
         styler.success_prefix(true)
     } else {
@@ -146,6 +148,7 @@ pub(super) fn print_human_result(result: &SyncResult) {
     print_duplicate_line_section(result);
     print_empty_pomodoro_section(result);
     print_dependency_projection_sections(&styler, result);
+    print_blocks_line_sections(&styler, result);
     print_project_blocked_tag_sections(&styler, result);
     print_unblocked_field_sections(&styler, result);
     print_grouped_task_sections(&styler, result);
@@ -163,16 +166,18 @@ pub(super) fn print_human_result(result: &SyncResult) {
         println!("  recovery copies: {recovery}");
     }
     println!(
-        "Dependencies: {} projected, {} adopted, {} healed, {} canonicalized, {} legacy children, {} warnings",
+        "Dependencies: {} projected, {} adopted, {} healed, {} canonicalized, {} legacy children, {} warnings, {} \u{1F9F1} BLOCKS, {} minted",
         result.dependency_projection_updates.len(),
         result.adopted_dependency_lines.len(),
         result.healed_dependency_links.len(),
         result.canonicalized_dependency_lines.len(),
         result.legacy_dependency_children,
-        result.dependency_warnings.len()
+        result.dependency_warnings.len(),
+        result.blocks_line_updates.len(),
+        result.minted_dependent_block_ids.len()
     );
     println!(
-        "Summary: {} marked next, {} marked in progress, {} cleared, {} cleared in progress, {} blocked, {} unblocked, {} struck, {} moved, {} marked, {} unmarked, {} canceled-reference triggers, {} duplicate-line removals, {} empty Pomodoros removed, {} grouped sections, {} dependency projected, {} adopted, {} healed, {} canonicalized, {} legacy children, {} warnings, {} project-blocked tags added, {} stripped, {} unblocked fields written, {} pruned, {} blocked-reference consumptions",
+        "Summary: {} marked next, {} marked in progress, {} cleared, {} cleared in progress, {} blocked, {} unblocked, {} struck, {} moved, {} marked, {} unmarked, {} canceled-reference triggers, {} duplicate-line removals, {} empty Pomodoros removed, {} grouped sections, {} dependency projected, {} adopted, {} healed, {} canonicalized, {} legacy children, {} warnings, {} \u{1F9F1} BLOCKS, {} minted, {} project-blocked tags added, {} stripped, {} unblocked fields written, {} pruned, {} blocked-reference consumptions",
         result.marked_next.len(),
         result.marked_in_progress.len(),
         result.cleared.len(),
@@ -193,12 +198,65 @@ pub(super) fn print_human_result(result: &SyncResult) {
         result.canonicalized_dependency_lines.len(),
         result.legacy_dependency_children,
         result.dependency_warnings.len(),
+        result.blocks_line_updates.len(),
+        result.minted_dependent_block_ids.len(),
         result.prj_is_blocked_tags_added.len(),
         result.prj_is_blocked_tags_stripped.len(),
         result.unblocked_fields_written.len(),
         result.unblocked_fields_pruned.len(),
         result.consumed_blocked_references.len()
     );
+}
+
+pub(super) fn print_blocks_line_sections(styler: &Styler, result: &SyncResult) {
+    if !result.blocks_line_updates.is_empty() {
+        println!();
+        println!(
+            "  {}",
+            if result.dry_run {
+                "would update \u{1F9F1} BLOCKS lines"
+            } else {
+                "updated \u{1F9F1} BLOCKS lines"
+            }
+        );
+        for entry in &result.blocks_line_updates {
+            let mut detail = entry.kind.clone();
+            if !entry.added.is_empty() {
+                detail.push_str("  +");
+                detail.push_str(&entry.added.join(" "));
+            }
+            if !entry.removed.is_empty() {
+                detail.push_str("  -");
+                detail.push_str(&entry.removed.join(" "));
+            }
+            println!(
+                "    {}  line {}  {}  {}",
+                styler.cyan(&entry.path),
+                entry.line,
+                entry.task,
+                detail
+            );
+        }
+    }
+    if !result.minted_dependent_block_ids.is_empty() {
+        println!();
+        println!(
+            "  {}",
+            if result.dry_run {
+                "would mint dependent block ids"
+            } else {
+                "minted dependent block ids"
+            }
+        );
+        for entry in &result.minted_dependent_block_ids {
+            println!(
+                "    {}  line {}  ^{}",
+                styler.cyan(&entry.path),
+                entry.line,
+                entry.block_id
+            );
+        }
+    }
 }
 
 pub(super) fn print_dependency_projection_sections(

@@ -283,6 +283,8 @@ mod tests {
             canonicalized_dependency_lines: Vec::new(),
             legacy_dependency_children: 0,
             dependency_warnings: Vec::new(),
+            blocks_line_updates: Vec::new(),
+            minted_dependent_block_ids: Vec::new(),
             prj_is_blocked_tags_added: Vec::new(),
             prj_is_blocked_tags_stripped: Vec::new(),
             unblocked_fields_written: Vec::new(),

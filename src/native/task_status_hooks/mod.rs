@@ -248,6 +248,7 @@ impl Request {
     }
 }
 
+mod blocks;
 mod compose;
 mod model;
 mod output;
@@ -262,6 +263,7 @@ mod sync;
 #[cfg(test)]
 mod tests;
 
+use blocks::*;
 use compose::*;
 use model::*;
 use output::*;

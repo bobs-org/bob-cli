@@ -5,10 +5,6 @@
 //! scanner so aliases, embeds, and struck links are understood without
 //! splitting on separators that may occur inside an alias.
 
-// The next rollout phases consume the planner and delta API; this phase
-// lands those stable seams before any writer begins calling them.
-#![allow(dead_code)]
-
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::super::task_status_hooks::{
@@ -417,6 +413,7 @@ fn leading_whitespace(line: &str) -> &str {
 /// Desired entries after a gesture delta. `resolve` maps each parsed link
 /// to `(stable identity, canonical link text)`; additions carry the same
 /// mapping, and removals name stable identities.
+#[allow(dead_code)]
 pub(crate) fn blocks_desired_after_delta<F>(
     existing: &[BlocksLink],
     mut resolve: F,
