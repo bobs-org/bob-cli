@@ -356,6 +356,8 @@ pub(super) fn plan_project_note_item(
             r#ref: None,
             link_guard: project_link_guard,
             dropped_dependencies: Vec::new(),
+            blocks_line_updates: Vec::new(),
+            minted_dependent_block_id: None,
         },
         clip_plan: None,
         pomodoro_refs: Vec::new(),

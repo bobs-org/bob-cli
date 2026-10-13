@@ -52,6 +52,8 @@ pub(super) struct DependencyContext {
     previous_daily: OnceLock<Option<PathBuf>>,
     dependents: OnceLock<DependentsSnapshot>,
     link_unblocked: OnceLock<bool>,
+    blocks_lines: OnceLock<(bool, Option<String>)>,
+    block_reservations: BTreeMap<PathBuf, BTreeSet<String>>,
     #[cfg(test)]
     graph_builds: AtomicUsize,
 }
@@ -73,6 +75,8 @@ impl DependencyContext {
             previous_daily: OnceLock::new(),
             dependents: OnceLock::new(),
             link_unblocked: OnceLock::new(),
+            blocks_lines: OnceLock::new(),
+            block_reservations: BTreeMap::new(),
             #[cfg(test)]
             graph_builds: AtomicUsize::new(0),
         }
@@ -131,6 +135,37 @@ impl DependencyContext {
                 .map(|loaded| loaded.link_unblocked())
                 .unwrap_or(true)
         })
+    }
+
+    /// BLOCKS-mirror kill switch (`docs/task-dependencies.md` §14.10),
+    /// read once per batch: `dependencies.blocks_lines`, defaulting to
+    /// `true`. An invalid value falls back to `true`; the warning
+    /// surfaces once per batch through [`Self::blocks_lines_warning`].
+    pub(super) fn blocks_lines_enabled(&self) -> bool {
+        self.blocks_lines.get_or_init(load_blocks_lines_enabled).0
+    }
+
+    /// The invalid-config warning for [`Self::blocks_lines_enabled`],
+    /// when the batch consulted the switch and the value was invalid.
+    /// Plain captures never touch the config and never warn.
+    pub(super) fn blocks_lines_warning(&self) -> Option<String> {
+        self.blocks_lines
+            .get()
+            .and_then(|(_, warning)| warning.clone())
+    }
+
+    /// Remember a minted dependent `^block-id` so later mints in the
+    /// same batch cannot collide with it.
+    pub(super) fn reserve_block_id(&mut self, note: PathBuf, id: String) {
+        self.block_reservations.entry(note).or_default().insert(id);
+    }
+
+    /// Minted ids reserved for one note so far this batch.
+    pub(super) fn block_reservations_for(&self, note: &Path) -> Vec<String> {
+        self.block_reservations
+            .get(note)
+            .map(|reserved| reserved.iter().cloned().collect())
+            .unwrap_or_default()
     }
 
     #[cfg(test)]
@@ -1443,6 +1478,7 @@ pub(super) struct PlannedDependencyUpdate {
     pub(super) dependent_ref: TaskBlockRef,
     pub(super) target_refs: Vec<TaskBlockRef>,
     pub(super) pomodoro_refs: Vec<PomodoroBlockRef>,
+    pub(super) blocks: BlocksMirrorReports,
 }
 
 fn prerequisite_json(prereq: &ResolvedPrerequisite) -> PrerequisiteJson {
@@ -2467,6 +2503,34 @@ pub(super) fn plan_existing_task_dependencies(
         )?;
         touches.extend(promoted);
     }
+    // BLOCKS mirror (§14.7): stage each added prerequisite's entry in
+    // the same batch, reporting rows additively. Pre-existing links
+    // already have entries, and reconcile repairs anything missed.
+    // Closed, archive, and previous-daily owners are never written.
+    let mut blocks = BlocksMirrorReports::default();
+    for target in &merged_identities {
+        if pre_existing.contains(target) {
+            continue;
+        }
+        if !graph.open.get(target).copied().unwrap_or(false) {
+            continue;
+        }
+        let owner_relative = PathBuf::from(&target.0);
+        if let Some((update, owner_ref)) = stage_blocks_delta(
+            &*ctx,
+            planner,
+            bob_dir,
+            &index,
+            &owner_relative,
+            &target.1,
+            &dependent,
+            BlocksDelta::Add,
+            warnings,
+        )? {
+            blocks.updates.push(update);
+            blocks.target_refs.push(owner_ref);
+        }
+    }
     let added = merged_identities
         .iter()
         .filter(|identity| !pre_existing.contains(*identity))
@@ -2513,8 +2577,14 @@ pub(super) fn plan_existing_task_dependencies(
         target_refs: touches
             .into_iter()
             .map(|touch| target_block_ref(&touch))
+            .chain(blocks.target_refs)
             .collect(),
         pomodoro_refs,
+        blocks: BlocksMirrorReports {
+            updates: blocks.updates,
+            minted: None,
+            target_refs: Vec::new(),
+        },
     })
 }
 
@@ -2597,6 +2667,45 @@ pub(super) fn plan_new_task_dependencies(
         );
     }
     let open_count = prereqs.iter().filter(|prereq| prereq.open).count();
+    // BLOCKS mirror (§14.7): the dependent needs a `^block-id` before
+    // any prerequisite can list it. When at least one open, writable
+    // prerequisite qualifies and the kill switch is on, mint the id
+    // inside the atomic staged batch (never adding `[id::]`); dry runs
+    // report the mint without persisting it.
+    let mut qualifying: Vec<(PathBuf, String)> = Vec::new();
+    if ctx.blocks_lines_enabled() {
+        for prereq in &prereqs {
+            if !prereq.open {
+                continue;
+            }
+            if task_dependencies::is_archive_path(&prereq.relative) {
+                continue;
+            }
+            let absolute = absolute_note(bob_dir, &prereq.relative);
+            if ctx.previous_daily() == Some(absolute.as_path()) {
+                continue;
+            }
+            qualifying.push((prereq.relative.clone(), prereq.block_id.clone()));
+        }
+    }
+    let mut dependent_block = new_block_id.map(str::to_string);
+    let mut blocks = BlocksMirrorReports::default();
+    if !qualifying.is_empty() && dependent_block.is_none() {
+        let dep_absolute = absolute_note(bob_dir, &dep_rel);
+        let minted = mint_staged_dependent_id(
+            ctx,
+            planner,
+            &dep_absolute,
+            &dep_rel,
+            capture_line,
+        )?;
+        blocks.minted = Some(MintedDependentBlockIdJson {
+            path: display_relative(&dep_rel),
+            line: 0,
+            block_id: minted.clone(),
+        });
+        dependent_block = Some(minted);
+    }
     let mut status_char = capture_status;
     let mut status_name = status_name_for(capture_status).to_string();
     let mut status_changed = false;
@@ -2619,6 +2728,11 @@ pub(super) fn plan_new_task_dependencies(
         && let Some(rebuilt) = replace_status_char(&task_line, status_char)
     {
         task_line = rebuilt;
+    }
+    if new_block_id.is_none()
+        && let Some(block) = dependent_block.as_deref()
+    {
+        task_line.push_str(&format!(" ^{block}"));
     }
     task_line = task_status_hooks::set_task_fields(
         &task_line,
@@ -2651,10 +2765,31 @@ pub(super) fn plan_new_task_dependencies(
         )?;
         touches.extend(promoted);
     }
-    let _ = warnings;
+    // BLOCKS mirror (§14.7): stage each qualifying prerequisite's
+    // entry in the same batch. The dependent id is minted above when
+    // the new task has none.
+    if let Some(block) = dependent_block.clone() {
+        let staged_dependent = (display_relative(&dep_rel), block);
+        for (owner_relative, owner_block) in &qualifying {
+            if let Some((update, owner_ref)) = stage_blocks_delta(
+                &*ctx,
+                planner,
+                bob_dir,
+                &index,
+                owner_relative,
+                owner_block,
+                &staged_dependent,
+                BlocksDelta::Add,
+                warnings,
+            )? {
+                blocks.updates.push(update);
+                blocks.target_refs.push(owner_ref);
+            }
+        }
+    }
     let summary = DependencyUpdateJson {
         dependent_note: display_relative(&dep_rel),
-        dependent_block_id: new_block_id.map(str::to_string),
+        dependent_block_id: dependent_block.clone(),
         dependent_text: task_description_of(capture_line),
         new_task: true,
         added: prereqs.len(),
@@ -2665,6 +2800,11 @@ pub(super) fn plan_new_task_dependencies(
         dependent_status_name: status_name,
         status_changed,
     };
+    let target_refs: Vec<TaskBlockRef> = touches
+        .into_iter()
+        .map(|touch| target_block_ref(&touch))
+        .chain(blocks.target_refs)
+        .collect();
     Ok((
         AugmentedNewTask {
             task_line,
@@ -2672,14 +2812,16 @@ pub(super) fn plan_new_task_dependencies(
         },
         PlannedDependencyUpdateParts {
             summary,
-            target_refs: touches
-                .into_iter()
-                .map(|touch| target_block_ref(&touch))
-                .collect(),
+            target_refs,
             pomodoro_refs: Vec::new(),
             relative_target: display_relative(&dep_rel),
             route: dependent_route.map(str::to_string).unwrap_or_default(),
-            block_id: new_block_id.map(str::to_string),
+            block_id: dependent_block,
+            blocks: BlocksMirrorReports {
+                updates: blocks.updates,
+                minted: blocks.minted,
+                target_refs: Vec::new(),
+            },
         },
     ))
 }
@@ -2694,6 +2836,7 @@ pub(super) struct PlannedDependencyUpdateParts {
     pub(super) relative_target: String,
     pub(super) route: String,
     pub(super) block_id: Option<String>,
+    pub(super) blocks: BlocksMirrorReports,
 }
 
 /// Locate a just-inserted new task's final line for its task block:
@@ -2732,7 +2875,7 @@ fn status_name_for(status: char) -> &'static str {
 }
 
 /// Best-effort task text from a formatted capture line for previews.
-fn task_description_of(capture_line: &str) -> String {
+pub(super) fn task_description_of(capture_line: &str) -> String {
     let mut text = capture_line.to_string();
     if let Some(start) = text.find("#task ") {
         text = text[start + "#task ".len()..].to_string();
@@ -2794,6 +2937,7 @@ pub(super) fn plan_dependency_only_item(
         warnings,
     )?;
     let summary = update.summary.clone();
+    let blocks_updates = update.blocks.updates.clone();
     let final_contents = current_note_text(planner, &absolute)?;
     let final_line = final_contents
         .lines()
@@ -2860,6 +3004,8 @@ pub(super) fn plan_dependency_only_item(
             r#ref: None,
             link_guard: None,
             dropped_dependencies: Vec::new(),
+            blocks_line_updates: blocks_updates,
+            minted_dependent_block_id: None,
         },
         clip_plan: None,
         pomodoro_refs: update.pomodoro_refs,

@@ -439,6 +439,8 @@ pub(super) fn plan_pomodoro_adjust_item(
             r#ref: None,
             link_guard: None,
             dropped_dependencies: Vec::new(),
+            blocks_line_updates: Vec::new(),
+            minted_dependent_block_id: None,
         },
         clip_plan: None,
         pomodoro_refs: vec![PomodoroBlockRef::at(
@@ -609,6 +611,8 @@ pub(super) fn plan_pomodoro_shift_item(
             r#ref: None,
             link_guard: None,
             dropped_dependencies: Vec::new(),
+            blocks_line_updates: Vec::new(),
+            minted_dependent_block_id: None,
         },
         clip_plan: None,
         pomodoro_refs: vec![PomodoroBlockRef::at(

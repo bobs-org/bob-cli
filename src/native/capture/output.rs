@@ -431,6 +431,15 @@ pub(super) struct CaptureItemResult {
     pub(super) link_guard: Option<LinkGuardJson>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(super) dropped_dependencies: Vec<DroppedDependencyJson>,
+    /// BLOCKS-mirror rows staged by this item (`&` adds and dependency
+    /// drops, `docs/task-dependencies.md` §14.11). Additive: omitted
+    /// when empty, so Bob Mac Capture decoders never change.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(super) blocks_line_updates: Vec<BlocksLineUpdateJson>,
+    /// The dependent `^block-id` minted for this item's BLOCKS entries,
+    /// if any. Additive: omitted when no mint happens.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) minted_dependent_block_id: Option<MintedDependentBlockIdJson>,
 }
 
 /// Why a link gesture left its target unlinked (§13.5 gesture rule):
@@ -768,6 +777,44 @@ pub(super) struct PrerequisiteJson {
     pub(super) status_name: String,
     pub(super) text: String,
     pub(super) open: bool,
+}
+
+/// One BLOCKS-line projection write (`docs/task-dependencies.md` §14.11,
+/// same shape as reconcile's `blocks_line_updates` rows). `kind` is one
+/// of `inserted`, `rewritten`, `canonicalized`, `removed`, or
+/// `deduplicated`. Additive: omitted from capture JSON when empty, so
+/// Bob Mac Capture decoders never change.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct BlocksLineUpdateJson {
+    pub(super) path: String,
+    pub(super) line: usize,
+    pub(super) task: String,
+    pub(super) kind: String,
+    pub(super) added: Vec<String>,
+    pub(super) removed: Vec<String>,
+}
+
+/// One dependent `^block-id` minted so a BLOCKS entry can name it
+/// (`docs/task-dependencies.md` §14.4), reported as the singular
+/// `minted_dependent_block_id` on the owning capture item. Additive:
+/// omitted when no mint happens.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct MintedDependentBlockIdJson {
+    pub(super) path: String,
+    pub(super) line: usize,
+    pub(super) block_id: String,
+}
+
+/// BLOCKS-mirror side effects staged inside one capture batch item:
+/// the projection rows, the dependent mint (at most one dependent per
+/// item), and the touched owners reported as `dependency_target` task
+/// blocks. Never serialized directly; its pieces ride on
+/// [`CaptureItemResult`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(super) struct BlocksMirrorReports {
+    pub(super) updates: Vec<BlocksLineUpdateJson>,
+    pub(super) minted: Option<MintedDependentBlockIdJson>,
+    pub(super) target_refs: Vec<TaskBlockRef>,
 }
 
 pub(super) fn print_success(

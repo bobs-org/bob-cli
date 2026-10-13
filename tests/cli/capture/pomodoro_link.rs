@@ -1382,8 +1382,16 @@ fn capture_pomodoro_task_with_open_dependency_is_created_unlinked() {
         fs::read_to_string(vault.join("dev.md")).expect("read new note");
     assert!(contents.contains(task_line), "{contents}");
     assert_eq!(fs::read_to_string(&day_file).expect("read day"), day_before);
+    // BW13: the prerequisite's BLOCKS mirror stages in the same batch,
+    // even when the `:` task itself stays unlinked.
+    assert_eq!(
+        json["blocks_line_updates"][0]["added"],
+        serde_json::json!(["[[dev#^fern]]"]),
+        "{json}",
+    );
+    assert!(json.get("minted_dependent_block_id").is_none(), "{json}");
     assert_eq!(
         fs::read_to_string(vault.join("cash.md")).expect("read prereq"),
-        "- [*] #task Seed work [id:: cash__seed] ^seed\n"
+        "- [*] #task Seed work [id:: cash__seed] ^seed\n\t- 🧱 **BLOCKS:** [[dev#^fern]]\n"
     );
 }

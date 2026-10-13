@@ -912,6 +912,32 @@ fn plan_close_successors(
     })
 }
 
+/// BLOCKS-mirror rows for a close carrying new-task dependencies:
+/// the projection rows plus the mint with its inserted line patched
+/// (`docs/task-dependencies.md` §14.11).
+fn close_dependencies_blocks(
+    planner: &mut CaptureBatchPlanner,
+    bob_dir: &Path,
+    close_dependencies: &Option<(String, PlannedDependencyUpdateParts)>,
+) -> (
+    Vec<BlocksLineUpdateJson>,
+    Option<MintedDependentBlockIdJson>,
+) {
+    let Some((task_line, parts)) = close_dependencies.as_ref() else {
+        return (Vec::new(), None);
+    };
+    let minted = parts.blocks.minted.clone().map(|mint| {
+        match locate_new_task_ref(planner, bob_dir, parts, task_line) {
+            Some(tracked) => MintedDependentBlockIdJson {
+                line: tracked.line + 1,
+                ..mint
+            },
+            None => mint,
+        }
+    });
+    (parts.blocks.updates.clone(), minted)
+}
+
 pub(super) fn build_reset_summary_json(
     raw: &str,
     day_relative: &str,
@@ -971,6 +997,7 @@ fn plan_reset_link_item(
     task_description: String,
     dropped_dependencies: Vec<DroppedDependencyJson>,
     task_block_ref: Option<TaskBlockRef>,
+    blocks_updates: Vec<BlocksLineUpdateJson>,
 ) -> Result<PlannedCaptureItem, CaptureError> {
     stage_reset_plan(planner, day_file, reset)?;
     let summary = build_reset_summary_json(&close_spec.raw, rel, reset);
@@ -1077,6 +1104,8 @@ fn plan_reset_link_item(
             r#ref: None,
             link_guard: None,
             dropped_dependencies,
+            blocks_line_updates: blocks_updates,
+            minted_dependent_block_id: None,
         },
         clip_plan: None,
         pomodoro_refs,
@@ -1146,6 +1175,11 @@ fn plan_reset_task_item(
     };
     let relative_target_path = relative_target(Some(route));
     let target_path = request.bob_dir.join(&relative_target_path);
+    let (reset_blocks_updates, reset_blocks_minted) = close_dependencies_blocks(
+        planner,
+        &request.bob_dir,
+        &close_dependencies,
+    );
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
             ok: true,
@@ -1208,6 +1242,8 @@ fn plan_reset_task_item(
             r#ref: None,
             link_guard: None,
             dropped_dependencies: Vec::new(),
+            blocks_line_updates: reset_blocks_updates,
+            minted_dependent_block_id: reset_blocks_minted,
         },
         clip_plan: None,
         pomodoro_refs,
@@ -1310,6 +1346,8 @@ fn plan_reset_whole_item(
             r#ref: None,
             link_guard: None,
             dropped_dependencies: Vec::new(),
+            blocks_line_updates: Vec::new(),
+            minted_dependent_block_id: None,
         },
         clip_plan: None,
         pomodoro_refs,
@@ -1517,6 +1555,8 @@ pub(super) fn plan_pomodoro_close_item(
             r#ref: None,
             link_guard: None,
             dropped_dependencies: Vec::new(),
+            blocks_line_updates: Vec::new(),
+            minted_dependent_block_id: None,
         },
         clip_plan: None,
         pomodoro_refs,
@@ -1874,35 +1914,42 @@ pub(super) fn plan_pomodoro_close_link_item(
         &target_rel,
         block_id,
         verdict,
+        warnings,
     )?;
-    let (close_link_guard, dropped_dependencies, close_task_block_ref) =
-        match resolution {
-            ResolvedLinkGuard::Proceed {
-                dropped,
-                task_block_ref,
-            } => (None, dropped, task_block_ref),
-            ResolvedLinkGuard::Consume(plan) => {
-                let dependent_desc = format!("pomodoro close link ^{block_id}");
-                let reasons = plan.reasons.clone();
-                let drop_refused = plan.drop_refused;
-                let promoted = promote_consume_plan(
-                    dependency_ctx,
-                    planner,
-                    &request.bob_dir,
-                    *plan,
-                    &dependent_desc,
-                )?;
-                (
-                    Some(LinkGuardJson::not_linked(
-                        &reasons,
-                        promoted,
-                        drop_refused,
-                    )),
-                    Vec::new(),
-                    None,
-                )
-            }
-        };
+    let (
+        close_link_guard,
+        dropped_dependencies,
+        close_task_block_ref,
+        close_blocks_updates,
+    ) = match resolution {
+        ResolvedLinkGuard::Proceed {
+            dropped,
+            task_block_ref,
+            blocks_updates,
+        } => (None, dropped, task_block_ref, blocks_updates),
+        ResolvedLinkGuard::Consume(plan) => {
+            let dependent_desc = format!("pomodoro close link ^{block_id}");
+            let reasons = plan.reasons.clone();
+            let drop_refused = plan.drop_refused;
+            let promoted = promote_consume_plan(
+                dependency_ctx,
+                planner,
+                &request.bob_dir,
+                *plan,
+                &dependent_desc,
+            )?;
+            (
+                Some(LinkGuardJson::not_linked(
+                    &reasons,
+                    promoted,
+                    drop_refused,
+                )),
+                Vec::new(),
+                None,
+                Vec::new(),
+            )
+        }
+    };
     // Re-read through the staged snapshot: a dependency drop staged
     // above rewrote the task line, so the link write must build on the
     // post-drop text.
@@ -2066,6 +2113,7 @@ pub(super) fn plan_pomodoro_close_link_item(
             task_description.clone(),
             dropped_dependencies,
             close_task_block_ref,
+            close_blocks_updates,
         );
     }
     let capture_pomodoro_close::PomodoroCloseOutcome::Close(plan) = outcome
@@ -2212,6 +2260,8 @@ pub(super) fn plan_pomodoro_close_link_item(
             r#ref: None,
             link_guard: close_link_guard,
             dropped_dependencies,
+            blocks_line_updates: close_blocks_updates,
+            minted_dependent_block_id: None,
         },
         clip_plan: None,
         pomodoro_refs,
@@ -2445,6 +2495,12 @@ pub(super) fn plan_pomodoro_close_task_item(
         });
     let relative_target_path = relative_target(Some(route));
     let target_path = request.bob_dir.join(&relative_target_path);
+    let (close_task_blocks_updates, close_task_blocks_minted) =
+        close_dependencies_blocks(
+            planner,
+            &request.bob_dir,
+            &close_dependencies,
+        );
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
             ok: true,
@@ -2509,6 +2565,8 @@ pub(super) fn plan_pomodoro_close_task_item(
             r#ref: None,
             link_guard: None,
             dropped_dependencies: Vec::new(),
+            blocks_line_updates: close_task_blocks_updates,
+            minted_dependent_block_id: close_task_blocks_minted,
         },
         clip_plan: None,
         pomodoro_refs,

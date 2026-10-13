@@ -15,6 +15,7 @@ pub(super) enum ResolvedLinkGuard {
     Proceed {
         dropped: Vec<DroppedDependencyJson>,
         task_block_ref: Option<TaskBlockRef>,
+        blocks_updates: Vec<BlocksLineUpdateJson>,
     },
     Consume(Box<ConsumePlan>),
 }
@@ -23,6 +24,7 @@ enum DropAttempt {
     Applied {
         dropped: Vec<DroppedDependencyJson>,
         task_block_ref: TaskBlockRef,
+        blocks_updates: Vec<BlocksLineUpdateJson>,
     },
     Refused(ConsumePlan),
 }
@@ -36,24 +38,28 @@ pub(super) fn resolve_link_guard(
     target_rel: &Path,
     block_id: &str,
     verdict: LinkGuardVerdict,
+    warnings: &mut Vec<String>,
 ) -> Result<ResolvedLinkGuard, CaptureError> {
     match verdict {
         LinkGuardVerdict::Link | LinkGuardVerdict::PullForward => {
             Ok(ResolvedLinkGuard::Proceed {
                 dropped: Vec::new(),
                 task_block_ref: None,
+                blocks_updates: Vec::new(),
             })
         }
         LinkGuardVerdict::Consume(plan) => Ok(ResolvedLinkGuard::Consume(plan)),
         LinkGuardVerdict::DropDependencies(plan) => match plan_dependency_drop(
-            ctx, planner, bob_dir, target_rel, block_id, *plan,
+            ctx, planner, bob_dir, target_rel, block_id, *plan, warnings,
         )? {
             DropAttempt::Applied {
                 dropped,
                 task_block_ref,
+                blocks_updates,
             } => Ok(ResolvedLinkGuard::Proceed {
                 dropped,
                 task_block_ref: Some(task_block_ref),
+                blocks_updates,
             }),
             DropAttempt::Refused(plan) => {
                 Ok(ResolvedLinkGuard::Consume(Box::new(plan)))
@@ -69,6 +75,7 @@ fn plan_dependency_drop(
     target_rel: &Path,
     block_id: &str,
     mut plan: DropPlan,
+    warnings: &mut Vec<String>,
 ) -> Result<DropAttempt, CaptureError> {
     let absolute = absolute_note(bob_dir, target_rel);
     let contents = current_note_text(planner, &absolute)?;
@@ -216,6 +223,28 @@ fn plan_dependency_drop(
         .and_then(|stem| stem.to_str())
         .unwrap_or(&route_label)
         .to_string();
+    // BLOCKS mirror (§14.7): stage the dependent's removal from each
+    // dropped prerequisite's line in the same batch. Prerequisite task
+    // lines are still never edited; closed, archive, and
+    // previous-daily owners are left for reconcile.
+    let mut blocks_updates = Vec::new();
+    let dependent = (route_label.clone(), block_id.to_string());
+    for (note, owner) in &found {
+        let owner_relative = PathBuf::from(note);
+        if let Some((update, _)) = stage_blocks_delta(
+            ctx,
+            planner,
+            bob_dir,
+            &plan.index,
+            &owner_relative,
+            owner,
+            &dependent,
+            BlocksDelta::Remove,
+            warnings,
+        )? {
+            blocks_updates.push(update);
+        }
+    }
     Ok(DropAttempt::Applied {
         dropped,
         task_block_ref: TaskBlockRef {
@@ -226,6 +255,7 @@ fn plan_dependency_drop(
             block_id: Some(block_id.to_string()),
             role: TaskBlockRole::DependencyDropped,
         },
+        blocks_updates,
     })
 }
 
@@ -290,6 +320,7 @@ mod tests {
             target,
             block_id,
             plan,
+            &mut Vec::new(),
         )
         .expect("plan dependency drop");
         if let DropAttempt::Applied { .. } = &attempt {
@@ -395,6 +426,7 @@ mod tests {
                 Path::new("cash.md"),
                 "work",
                 candidate(task_line, &[("job.md", "prep")]),
+                &mut Vec::new(),
             )
             .expect("plan fallback consumption");
             let DropAttempt::Refused(plan) = attempt else {

@@ -284,6 +284,7 @@ pub(super) struct PomodoroLinkCaptureDetails {
     pub(super) pomodoro_start: Option<PomodoroStartSummary>,
     pub(super) dropped_dependencies: Vec<DroppedDependencyJson>,
     pub(super) task_block_ref: Option<TaskBlockRef>,
+    pub(super) blocks_updates: Vec<BlocksLineUpdateJson>,
 }
 
 #[derive(Debug)]
@@ -499,6 +500,7 @@ pub(super) struct TaskToggleCaptureDetails {
     pub(super) pomodoro_link_destination: Option<PomodoroLinkEndpoint>,
     pub(super) dropped_dependencies: Vec<DroppedDependencyJson>,
     pub(super) task_block_ref: Option<TaskBlockRef>,
+    pub(super) blocks_updates: Vec<BlocksLineUpdateJson>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

@@ -51,76 +51,80 @@ pub(super) fn plan_ensure_next_capture(
         &target_rel,
         block_id,
         verdict,
+        warnings,
     )?;
-    let (dropped_dependencies, task_block_ref) = match resolution {
-        ResolvedLinkGuard::Proceed {
-            dropped,
-            task_block_ref,
-        } => (dropped, task_block_ref),
-        ResolvedLinkGuard::Consume(plan) => {
-            let dependent_desc = format!("ensure next ^{block_id}");
-            let reasons = plan.reasons.clone();
-            let drop_refused = plan.drop_refused;
-            let consumption = consume_live_links(
-                planner,
-                bob_dir,
-                route,
-                &[block_id.to_string()],
-            )?;
-            let removed_pomodoro_links = consumption.removed_links;
-            let promoted = promote_consume_plan(
-                ctx,
-                planner,
-                bob_dir,
-                *plan,
-                &dependent_desc,
-            )?;
-            let link_guard =
-                LinkGuardJson::not_linked(&reasons, promoted, drop_refused);
-            let _ = warnings;
-            return Ok((
-                CaptureWritePlan {
-                    placement: Placement::Toggled,
-                    pomodoro: None,
-                    sub_bullet: None,
-                    pomodoro_note: None,
-                    toggle: Some(TaskToggleCaptureDetails {
-                        direction: TaskToggleDirection::Next,
-                        previous_task_line: previous_task_line.clone(),
-                        task_line: previous_task_line,
-                        task_description,
-                        previous_status_symbol,
-                        previous_status_name: previous_status_name.clone(),
-                        status_symbol: previous_status_symbol,
-                        status_name: previous_status_name,
-                        block_id: block_id.to_string(),
-                        day_file: pomodoro::day_file_for(bob_dir)
-                            .display()
-                            .to_string(),
-                        block_link: format!("[[{route}#^{block_id}]]"),
-                        pomodoro_link_placement: None,
-                        pomodoro_name: None,
-                        creates_pomodoro: false,
-                        pomodoro_already_linked: false,
-                        removed_pomodoro_links,
-                        removed_scheduled: None,
-                        schedule_log: None,
-                        pomodoro_selector_unused: false,
-                        toggle_behavior: Some("ensure_next"),
-                        status_changed: Some(false),
-                        pomodoro_link_action: None,
-                        pomodoro_link_source: None,
-                        pomodoro_link_destination: None,
-                        dropped_dependencies: Vec::new(),
-                        task_block_ref: None,
-                    }),
-                    pomodoro_link: None,
-                    pomodoro_refs: consumption.pomodoro_refs,
-                },
-                Some(link_guard),
-            ));
-        }
-    };
+    let (dropped_dependencies, task_block_ref, blocks_updates) =
+        match resolution {
+            ResolvedLinkGuard::Proceed {
+                dropped,
+                task_block_ref,
+                blocks_updates,
+            } => (dropped, task_block_ref, blocks_updates),
+            ResolvedLinkGuard::Consume(plan) => {
+                let dependent_desc = format!("ensure next ^{block_id}");
+                let reasons = plan.reasons.clone();
+                let drop_refused = plan.drop_refused;
+                let consumption = consume_live_links(
+                    planner,
+                    bob_dir,
+                    route,
+                    &[block_id.to_string()],
+                )?;
+                let removed_pomodoro_links = consumption.removed_links;
+                let promoted = promote_consume_plan(
+                    ctx,
+                    planner,
+                    bob_dir,
+                    *plan,
+                    &dependent_desc,
+                )?;
+                let link_guard =
+                    LinkGuardJson::not_linked(&reasons, promoted, drop_refused);
+                let _ = warnings;
+                return Ok((
+                    CaptureWritePlan {
+                        placement: Placement::Toggled,
+                        pomodoro: None,
+                        sub_bullet: None,
+                        pomodoro_note: None,
+                        toggle: Some(TaskToggleCaptureDetails {
+                            direction: TaskToggleDirection::Next,
+                            previous_task_line: previous_task_line.clone(),
+                            task_line: previous_task_line,
+                            task_description,
+                            previous_status_symbol,
+                            previous_status_name: previous_status_name.clone(),
+                            status_symbol: previous_status_symbol,
+                            status_name: previous_status_name,
+                            block_id: block_id.to_string(),
+                            day_file: pomodoro::day_file_for(bob_dir)
+                                .display()
+                                .to_string(),
+                            block_link: format!("[[{route}#^{block_id}]]"),
+                            pomodoro_link_placement: None,
+                            pomodoro_name: None,
+                            creates_pomodoro: false,
+                            pomodoro_already_linked: false,
+                            removed_pomodoro_links,
+                            removed_scheduled: None,
+                            schedule_log: None,
+                            pomodoro_selector_unused: false,
+                            toggle_behavior: Some("ensure_next"),
+                            status_changed: Some(false),
+                            pomodoro_link_action: None,
+                            pomodoro_link_source: None,
+                            pomodoro_link_destination: None,
+                            dropped_dependencies: Vec::new(),
+                            task_block_ref: None,
+                            blocks_updates: Vec::new(),
+                        }),
+                        pomodoro_link: None,
+                        pomodoro_refs: consumption.pomodoro_refs,
+                    },
+                    Some(link_guard),
+                ));
+            }
+        };
     // Re-read through the staged snapshot: a dependency drop staged
     // above rewrote the task line, so the link write must build on the
     // post-drop text.
@@ -257,6 +261,7 @@ pub(super) fn plan_ensure_next_capture(
                 )),
                 dropped_dependencies,
                 task_block_ref,
+                blocks_updates,
             }),
             pomodoro_link: None,
             pomodoro_refs,

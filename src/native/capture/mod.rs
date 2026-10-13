@@ -51,6 +51,7 @@ pub(crate) const INBOX_FILE: &str = "mac_inbox.md";
 
 mod batch;
 mod block_diff;
+mod blocks_mirror;
 mod budget;
 pub(crate) mod cli;
 mod commit;
@@ -80,6 +81,7 @@ mod tests;
 
 use batch::*;
 use block_diff::*;
+use blocks_mirror::*;
 use budget::*;
 use cli::*;
 use commit::*;

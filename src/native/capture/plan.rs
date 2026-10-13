@@ -166,6 +166,14 @@ pub(super) fn plan_capture_batch(
     let pomodoro_blocks = block_tracker
         .finish_with_unblocked(final_day.as_deref(), &successor_links);
     let task_blocks = task_tracker.finish(&planner);
+    // The BLOCKS kill-switch warning surfaces once per batch, and only
+    // when a dependency write consulted the switch (§14.10). Plain
+    // captures never touch the config and never warn.
+    if let Some(warning) = dependency_ctx.blocks_lines_warning()
+        && !warnings.contains(&warning)
+    {
+        warnings.push(warning);
+    }
     Ok(PlannedCaptureBatch {
         items,
         text_files: planner.into_staged_files(),
@@ -447,6 +455,8 @@ fn plan_ref_item(
             toggle_task_description: None,
             link_guard: None,
             dropped_dependencies: Vec::new(),
+            blocks_line_updates: Vec::new(),
+            minted_dependent_block_id: None,
         },
         clip_plan: None,
         pomodoro_refs: Vec::new(),
@@ -687,6 +697,8 @@ pub(super) fn plan_capture_item(
                 r#ref: None,
                 link_guard,
                 dropped_dependencies: toggle.dropped_dependencies.clone(),
+                blocks_line_updates: toggle.blocks_updates.clone(),
+                minted_dependent_block_id: None,
             },
             clip_plan: None,
             pomodoro_refs,
@@ -822,6 +834,8 @@ pub(super) fn plan_capture_item(
                 r#ref: None,
                 link_guard,
                 dropped_dependencies: link.dropped_dependencies.clone(),
+                blocks_line_updates: link.blocks_updates.clone(),
+                minted_dependent_block_id: None,
             },
             clip_plan: None,
             pomodoro_refs,
@@ -1283,8 +1297,13 @@ pub(super) fn plan_capture_item(
     let pomodoro_note = note_plan.pomodoro_note.as_ref();
     // Dependency effects report through `task_blocks` with the new
     // `dependency` / `dependency_target` roles, and through the
-    // `dependency_update` preview detail.
+    // `dependency_update` preview detail. BLOCKS-mirror rows ride
+    // additively as `blocks_line_updates` plus the singular
+    // `minted_dependent_block_id` (§14.11).
     let mut dependency_update: Option<DependencyUpdateJson> = None;
+    let mut blocks_line_updates: Vec<BlocksLineUpdateJson> = Vec::new();
+    let mut minted_dependent_block_id: Option<MintedDependentBlockIdJson> =
+        None;
     let mut dependency_block_refs: Vec<TaskBlockRef> = Vec::new();
     match &parsed.dependency_target {
         Some(target) if target.kind == ParsedDependencyTargetKind::NewTask => {
@@ -1295,11 +1314,21 @@ pub(super) fn plan_capture_item(
                     parts,
                     &augmented.task_line,
                 ) {
+                    if let Some(minted) = parts.blocks.minted.clone() {
+                        minted_dependent_block_id =
+                            Some(MintedDependentBlockIdJson {
+                                line: tracked.line + 1,
+                                ..minted
+                            });
+                    }
                     dependency_block_refs.push(tracked);
+                } else if let Some(minted) = parts.blocks.minted.clone() {
+                    minted_dependent_block_id = Some(minted);
                 }
                 dependency_block_refs.extend(parts.target_refs.clone());
                 pomodoro_refs.extend(parts.pomodoro_refs.iter().copied());
                 dependency_update = Some(parts.summary.clone());
+                blocks_line_updates = parts.blocks.updates.clone();
             }
         }
         Some(target)
@@ -1333,6 +1362,7 @@ pub(super) fn plan_capture_item(
             dependency_block_refs.extend(update.target_refs);
             pomodoro_refs.extend(update.pomodoro_refs);
             dependency_update = Some(update.summary);
+            blocks_line_updates = update.blocks.updates;
         }
         _ => {}
     }
@@ -1462,6 +1492,8 @@ pub(super) fn plan_capture_item(
             r#ref: None,
             link_guard: new_task_link_guard,
             dropped_dependencies: Vec::new(),
+            blocks_line_updates,
+            minted_dependent_block_id,
         },
         clip_plan,
         pomodoro_refs,

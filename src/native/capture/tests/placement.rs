@@ -354,6 +354,8 @@ fn json_success_shape_is_stable() {
             toggle_task_description: None,
             link_guard: None,
             dropped_dependencies: Vec::new(),
+            blocks_line_updates: Vec::new(),
+            minted_dependent_block_id: None,
         }],
         None,
         Vec::new(),
