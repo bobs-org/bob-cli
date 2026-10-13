@@ -1912,7 +1912,9 @@ successors: {
   wins the race); created entries join the reopen receipt.
 - The cycler plans without a selection, awaits `pick(model)` when
   offers exist, re-reads the daily note and affected notes, re-plans
-  with the selection, and applies.
+  with the selection, and applies. The re-plan still anchors on the
+  pre-gesture day: the fresh text with a closed Pomodoro's headline
+  restored, so a Pomodoro-line close keeps its `closing` anchor.
 
 **Model shape**
 

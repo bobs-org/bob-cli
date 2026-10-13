@@ -2629,8 +2629,6 @@ fn successor_destination(link: &TaskCompleteSuccessorLinkJson) -> String {
 fn not_linked_reason(reason: &str) -> &str {
     match reason {
         "already_planned" => "already planned",
-        "not_planned_today" => "not planned today",
-        "breaker" => "not linked, more than 5",
         "project_task" => "project task",
         "project_member" => "project member",
         "hidden" => "hidden",

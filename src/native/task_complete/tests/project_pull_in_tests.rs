@@ -1539,8 +1539,8 @@ fn pp32_tagged_parent_pull_in_stays_blocked() {
 }
 
 // PP33 (§12.11): K's `^prj` was not planned today → the parent pull-in
-// surfaces (`not_planned_today`) with `#hide` removed and the status
-// unchanged.
+// is an implicit-destination `project_finished` offer (`not_selected`
+// unpicked) with `#hide` removed and the status unchanged.
 #[test]
 fn pp33_unplanned_subproject_close_surfaces_parent() {
     let vault_index = index(&["k.md", "n-proj.md", "20261005.md"]);

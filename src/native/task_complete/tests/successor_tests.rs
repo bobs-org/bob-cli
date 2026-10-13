@@ -666,8 +666,8 @@ fn sl23_subtask_inherits_root_anchor() {
 
 // An ID-less planned root with an ID-bearing embedded subtask: the
 // subtask keeps the root entry for its anchor (no dependency ID is
-// minted for the root), so the subtask's dependent links instead of
-// recovering to `not_planned_today`.
+// minted for the root), so the subtask's dependent links (select-all) at
+// that anchor instead of falling back to the implicit destination.
 #[test]
 fn idless_root_anchors_id_bearing_child_dependent() {
     let vault_index = index(&["sase.md", "sub.md", "d.md", "20261005.md"]);
