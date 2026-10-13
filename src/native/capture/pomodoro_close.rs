@@ -963,6 +963,8 @@ fn plan_reset_link_item(
     previous_status_name: String,
     schedule_log: Option<capture_schedule_log::ScheduleLog>,
     task_description: String,
+    dropped_dependencies: Vec<DroppedDependencyJson>,
+    task_block_ref: Option<TaskBlockRef>,
 ) -> Result<PlannedCaptureItem, CaptureError> {
     stage_reset_plan(planner, day_file, reset)?;
     let summary = build_reset_summary_json(&close_spec.raw, rel, reset);
@@ -1068,11 +1070,11 @@ fn plan_reset_link_item(
             toggle_task_description: Some(task_description),
             r#ref: None,
             link_guard: None,
-            dropped_dependencies: Vec::new(),
+            dropped_dependencies,
         },
         clip_plan: None,
         pomodoro_refs,
-        task_block_refs: Vec::new(),
+        task_block_refs: task_block_ref.into_iter().collect(),
     })
 }
 
@@ -1842,22 +1844,37 @@ pub(super) fn plan_pomodoro_close_link_item(
             )));
         }
     }
-    // Link guard (§13.5 gesture rule, PDG1–PDG3, PDG6): a Blocked
-    // target keeps its status (no Next flip) but the link still lands
-    // under the closing entry: links under a Pomodoro the same gesture
-    // closes are history, not live links. Only the seeds rise, and the
-    // result reports `not_linked`.
+    // Link guard (§13.5 gesture rule, PDG1–PDG3, PDG6, PDG18–PDG27):
+    // an eligible own-dependency drop runs first and the link then
+    // proceeds exactly like an unblocked target. A refused drop keeps
+    // the Blocked status (no Next flip) but the link still lands under
+    // the closing entry: links under a Pomodoro the same gesture closes
+    // are history, not live links. Only the seeds rise, and the result
+    // reports `not_linked`.
     let target_rel = relative_target(Some(&route));
-    let close_link_guard: Option<LinkGuardJson> =
-        match assess_link_target_legacy(
-            dependency_ctx,
-            planner,
-            &request.bob_dir,
-            &target_rel,
-            block_id,
-            today,
-        )? {
-            LinkGuardVerdict::Consume(plan) => {
+    let verdict = assess_link_target(
+        dependency_ctx,
+        planner,
+        &request.bob_dir,
+        &target_rel,
+        block_id,
+        today,
+    )?;
+    let resolution = resolve_link_guard(
+        dependency_ctx,
+        planner,
+        &request.bob_dir,
+        &target_rel,
+        block_id,
+        verdict,
+    )?;
+    let (close_link_guard, dropped_dependencies, close_task_block_ref) =
+        match resolution {
+            ResolvedLinkGuard::Proceed {
+                dropped,
+                task_block_ref,
+            } => (None, dropped, task_block_ref),
+            ResolvedLinkGuard::Consume(plan) => {
                 let dependent_desc = format!("pomodoro close link ^{block_id}");
                 let reasons = plan.reasons.clone();
                 let drop_refused = plan.drop_refused;
@@ -1868,34 +1885,51 @@ pub(super) fn plan_pomodoro_close_link_item(
                     *plan,
                     &dependent_desc,
                 )?;
-                Some(LinkGuardJson::not_linked(
-                    &reasons,
-                    promoted,
-                    drop_refused,
-                ))
-            }
-            LinkGuardVerdict::Link | LinkGuardVerdict::PullForward => None,
-            LinkGuardVerdict::DropDependencies(_) => {
-                unreachable!("legacy link guard preserves consumption")
+                (
+                    Some(LinkGuardJson::not_linked(
+                        &reasons,
+                        promoted,
+                        drop_refused,
+                    )),
+                    Vec::new(),
+                    None,
+                )
             }
         };
+    // Re-read through the staged snapshot: a dependency drop staged
+    // above rewrote the task line, so the link write must build on the
+    // post-drop text.
+    let staged_contents = current_note_text(planner, &target)?;
+    let staged_scan = note_tasks::scan(&staged_contents, &settings);
+    let staged_task = match staged_scan.by_block_id(block_id) {
+        BlockIdLookup::Found(task) => task.clone(),
+        _ => {
+            return Err(CaptureError::io(
+                "pomodoro link capture invariant failed: linked task disappeared after dependency drop",
+            ));
+        }
+    };
     let task_plan = if close_link_guard.is_some() {
         // Keep `[?]` (and any future schedule): the history link must
         // never promote a Blocked task into a lane.
         capture_task_toggle::TaskTogglePlan {
-            content: contents.clone(),
+            content: staged_contents.clone(),
             previous_status_symbol,
             new_status_symbol: previous_status_symbol,
             removed_scheduled: None,
             schedule_log: None,
         }
     } else {
-        capture_task_toggle::plan_task_link(&contents, task.line_index, today)
-            .ok_or_else(|| {
-                CaptureError::io(
-                    "pomodoro link capture invariant failed: task line could not be updated",
-                )
-            })?
+        capture_task_toggle::plan_task_link(
+            &staged_contents,
+            staged_task.line_index,
+            today,
+        )
+        .ok_or_else(|| {
+            CaptureError::io(
+                "pomodoro link capture invariant failed: task line could not be updated",
+            )
+        })?
     };
     let staged_task_contents = task_plan.content.clone();
     let updated_scan = note_tasks::scan(&staged_task_contents, &settings);
@@ -2023,6 +2057,8 @@ pub(super) fn plan_pomodoro_close_link_item(
             previous_status_name.clone(),
             task_plan.schedule_log.clone(),
             task_description.clone(),
+            dropped_dependencies,
+            close_task_block_ref,
         );
     }
     let capture_pomodoro_close::PomodoroCloseOutcome::Close(plan) = outcome
@@ -2057,6 +2093,7 @@ pub(super) fn plan_pomodoro_close_link_item(
     summary.unblocked = successors.unblocked;
     summary.still_blocked = successors.still_blocked;
     summary.unblocked_check = successors.unblocked_check;
+    task_block_refs.extend(close_task_block_ref);
     // Block refs: the closed entry was the pre-link running entry
     // (`destination` still carries its pre-link line); a moved source
     // resolves through the item's line map; the next entry is named by
@@ -2166,7 +2203,7 @@ pub(super) fn plan_pomodoro_close_link_item(
             toggle_task_description: Some(task_description),
             r#ref: None,
             link_guard: close_link_guard,
-            dropped_dependencies: Vec::new(),
+            dropped_dependencies,
         },
         clip_plan: None,
         pomodoro_refs,

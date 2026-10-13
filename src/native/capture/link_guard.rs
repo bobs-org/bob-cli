@@ -6,8 +6,11 @@
 //!
 //! - only the task's own future `scheduled` blocks it → pull forward as
 //!   today (retire the schedule, link it; PDG2);
-//! - any dependency or project-dependency reason → do not link; promote
-//!   the open prerequisites (own plus inherited) and report it (PDG1);
+//! - only its own open prerequisites block it (and the §13.5.1 gate
+//!   passes) → drop those links, then link (PDG18–PDG22);
+//! - any other dependency or project-dependency reason → do not link;
+//!   promote the open prerequisites (own plus inherited) and report it
+//!   (PDG1, PDG23–PDG25);
 //! - a `project_schedule` reason without a dependency reason → do not
 //!   link; report the project date (PDG3);
 //! - a `^prj` target whose only reason is its own date → refuse, with
@@ -578,28 +581,6 @@ pub(super) fn assess_link_target(
         })));
     }
     Ok(LinkGuardVerdict::Consume(Box::new(fallback)))
-}
-
-/// Keep the existing consumption behavior for capture gestures that a
-/// later phase has not migrated to dependency drops yet.
-pub(super) fn assess_link_target_legacy(
-    ctx: &DependencyContext,
-    planner: &mut CaptureBatchPlanner,
-    bob_dir: &Path,
-    target_rel: &Path,
-    block_id: &str,
-    today: NaiveDate,
-) -> Result<LinkGuardVerdict, CaptureError> {
-    Ok(
-        match assess_link_target(
-            ctx, planner, bob_dir, target_rel, block_id, today,
-        )? {
-            LinkGuardVerdict::DropDependencies(plan) => {
-                LinkGuardVerdict::Consume(Box::new(plan.fallback))
-            }
-            other => other,
-        },
-    )
 }
 
 /// Assess a destination note for a task capture creates: `Some` plan

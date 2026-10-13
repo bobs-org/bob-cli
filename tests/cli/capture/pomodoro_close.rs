@@ -1609,27 +1609,111 @@ fn capture_pomodoro_close_link_reports_already_current() {
 }
 
 #[test]
-fn capture_pomodoro_close_link_on_blocked_target_keeps_history() {
-    // Close-link on a Blocked target (§13.5): the task keeps `[?]`
-    // (never rises on a history link), the link still lands under the
-    // closing entry as history, the open prerequisites rise, and the
-    // result reports `not_linked` with the reasons.
+fn capture_pomodoro_close_link_drops_own_dependency_and_closes() {
+    // PDG19 (§13.15): close-link on a target whose only reason is its
+    // own open prerequisites drops those links and then links and
+    // closes exactly like an unblocked target.
     let (_temp, vault, day_file) =
-        close_worked_vault("bob-cli-close-link-blocked");
-    write_file(
-        &vault.join("cash.md"),
-        concat!(
-            "- [?] #task Blocked work ^blocked\n",
-            "\t- ⛓️ **DEPENDS ON:** [[job#^prep]]\n",
-        ),
+        close_worked_vault("bob-cli-close-link-drop");
+    let target_before = concat!(
+        "- [?] #task Blocked work ^blocked\n",
+        "\t- ⛓️ **DEPENDS ON:** [[job#^prep]]\n",
     );
+    write_file(&vault.join("cash.md"), target_before);
     write_file(&vault.join("job.md"), "- [ ] #task Prep work ^prep\n");
+    let dry_human = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-d")
+        .arg("--")
+        .arg("@cash:blocked=x")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-09-28 09:37:00")
+        .output()
+        .expect("dry-run close-link drop");
+    assert_success(&dry_human);
+    let human = stdout(&dry_human);
+    assert!(human.contains("would close"), "{human}");
+    assert!(
+        human.contains("⛓️ would drop dependency on [[job#^prep]]"),
+        "{human}"
+    );
     let day_before = fs::read_to_string(&day_file).expect("read day before");
     let json = capture_json_dry_run_matches_real(
         &vault,
         &day_file,
         "2026-09-28 09:37:00",
         &["@cash:blocked=x"],
+    );
+    let day_after = fs::read_to_string(&day_file).expect("read day after");
+    assert_pomodoro_blocks_cover_changes(&day_before, &day_after, &json);
+    assert_eq!(
+        json["previous_task_line"],
+        target_before.lines().next().unwrap(),
+        "{json}"
+    );
+    assert_eq!(json["previous_status_symbol"], "?", "{json}");
+    assert_eq!(json["status_changed"], true, "{json}");
+    assert!(json.get("pomodoro_close").is_some(), "{json}");
+    assert!(json.get("link_guard").is_none(), "{json}");
+    assert_eq!(
+        json["dropped_dependencies"],
+        serde_json::json!([{
+            "note_path": "job.md",
+            "block_id": "prep",
+            "link": "[[job#^prep]]",
+            "text": "Prep work",
+            "status_symbol": " ",
+            "status_name": "Ready",
+        }]),
+        "{json}"
+    );
+    assert!(
+        json["task_blocks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|block| block["roles"]
+                == serde_json::json!(["dependency_dropped"])),
+        "drop block is reported: {json}"
+    );
+    let target_after =
+        fs::read_to_string(vault.join("cash.md")).expect("read target");
+    assert!(!target_after.contains("DEPENDS ON"), "{target_after}");
+    assert!(!target_after.contains("dependsOn::"), "{target_after}");
+    assert!(
+        day_after.contains("[[cash#^blocked]]"),
+        "link lands under the closing entry:\n{day_after}"
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("job.md")).expect("read prereq"),
+        "- [ ] #task Prep work ^prep\n"
+    );
+}
+
+#[test]
+fn capture_pomodoro_close_link_on_project_task_refuses_drop() {
+    // PDG24 (§13.15): close-link on a `^prj` with an open prerequisite
+    // refuses the drop. The task keeps `[?]` (never rises on a history
+    // link), the link still lands under the closing entry as history,
+    // the open prerequisite rises, and the result reports `not_linked`
+    // with `drop_refused: project_task`.
+    let (_temp, vault, day_file) =
+        close_worked_vault("bob-cli-close-link-drop-refused");
+    let target_before = concat!(
+        "---\ntype: \"[[project]]\"\nstatus: wip\n---\n",
+        "- [?] #task Ship it #prj #hide ^prj\n",
+        "\t- ⛓️ **DEPENDS ON:** [[job#^prep]]\n",
+    );
+    write_file(&vault.join("cash.md"), target_before);
+    write_file(&vault.join("job.md"), "- [ ] #task Prep work ^prep\n");
+    let day_before = fs::read_to_string(&day_file).expect("read day before");
+    let json = capture_json_dry_run_matches_real(
+        &vault,
+        &day_file,
+        "2026-09-28 09:37:00",
+        &["@cash:prj=x"],
     );
     let day_after = fs::read_to_string(&day_file).expect("read day after");
     assert_pomodoro_blocks_cover_changes(&day_before, &day_after, &json);
@@ -1641,20 +1725,21 @@ fn capture_pomodoro_close_link_on_blocked_target_keeps_history() {
         serde_json::json!(["local_dependency"]),
         "{json}"
     );
-    assert_eq!(
-        json["link_guard"]["promoted"],
-        serde_json::json!(["job.md#^prep"]),
+    assert_eq!(json["link_guard"]["drop_refused"], "project_task", "{json}");
+    assert!(
+        json["link_guard"]["detail"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("dependencies kept: edit a project's prerequisites"),
         "{json}"
     );
+    assert!(json.get("dropped_dependencies").is_none(), "{json}");
     assert_eq!(
         fs::read_to_string(vault.join("cash.md")).expect("read target"),
-        concat!(
-            "- [?] #task Blocked work ^blocked\n",
-            "\t- ⛓️ **DEPENDS ON:** [[job#^prep]]\n",
-        )
+        target_before
     );
     assert!(
-        day_after.contains("[[cash#^blocked]]"),
+        day_after.contains("[[cash#^prj]]"),
         "history link lands under the closing entry:\n{day_after}"
     );
     assert_eq!(

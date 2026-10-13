@@ -497,6 +497,8 @@ pub(super) struct TaskToggleCaptureDetails {
     pub(super) pomodoro_link_action: Option<&'static str>,
     pub(super) pomodoro_link_source: Option<PomodoroLinkEndpoint>,
     pub(super) pomodoro_link_destination: Option<PomodoroLinkEndpoint>,
+    pub(super) dropped_dependencies: Vec<DroppedDependencyJson>,
+    pub(super) task_block_ref: Option<TaskBlockRef>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

@@ -686,11 +686,15 @@ pub(super) fn plan_capture_item(
                 toggle_task_description: Some(toggle.task_description.clone()),
                 r#ref: None,
                 link_guard,
-                dropped_dependencies: Vec::new(),
+                dropped_dependencies: toggle.dropped_dependencies.clone(),
             },
             clip_plan: None,
             pomodoro_refs,
-            task_block_refs: Vec::new(),
+            task_block_refs: toggle
+                .task_block_ref
+                .clone()
+                .into_iter()
+                .collect(),
         });
     }
     if let CaptureKind::PomodoroLink {

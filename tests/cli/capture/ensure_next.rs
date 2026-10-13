@@ -840,12 +840,12 @@ fn capture_task_toggle_ensure_next_keeps_in_progress() {
     );
 }
 
-// PDG1 (§13.15): ensure-next on a dependency-blocked target neither
-// relocates nor links; the open prerequisites rise and the result
-// reports `not_linked` with the reasons.
+// PDG19 (§13.15): ensure-next on a target whose only reason is its
+// own open prerequisites drops those links and then relocates exactly
+// like an unblocked target (here through the `#name` form).
 #[test]
-fn capture_ensure_next_on_blocked_target_consumes_and_promotes() {
-    let temp = TempDir::new("bob-cli-capture-ensure-next-consume");
+fn capture_ensure_next_drops_own_dependency_and_relocates() {
+    let temp = TempDir::new("bob-cli-capture-ensure-next-drop");
     let vault = temp.path().join("vault");
     let target = vault.join("cash.md");
     let day_file = vault.join("day.md");
@@ -856,12 +856,131 @@ fn capture_ensure_next_on_blocked_target_consumes_and_promotes() {
     );
     write_file(&target, target_before);
     write_file(&vault.join("job.md"), "- [ ] #task Prep work ^prep\n");
+    write_file(
+        &day_file,
+        concat!(
+            "## Pomodoros\n",
+            "- [ ] (**0900-0930**) — CURRENT\n",
+            "  - context\n",
+            "- [ ] () — LATER\n",
+            "  - [[cash#^blocked]]\n",
+        ),
+    );
+
+    let dry_human = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-d")
+        .arg("--")
+        .arg("@cash+blocked#current")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 10:00:00")
+        .output()
+        .expect("dry-run ensure-next drop");
+    assert_success(&dry_human);
+    let human = stdout(&dry_human);
+    assert!(human.contains("would ensure"), "{human}");
+    assert!(human.contains("[?] → [*]"), "{human}");
+    assert!(
+        human.contains("⛓️ would drop dependency on [[job#^prep]]"),
+        "{human}"
+    );
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("@cash+blocked#current")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 10:00:00")
+        .output()
+        .expect("ensure-next blocked task");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("json");
+    assert_eq!(json["toggle_behavior"], "ensure_next", "{json}");
+    assert_eq!(json["toggle_direction"], "next", "{json}");
+    assert_eq!(
+        json["previous_task_line"],
+        target_before.lines().next().unwrap(),
+        "{json}"
+    );
+    assert_eq!(json["previous_status_symbol"], "?", "{json}");
+    assert_eq!(json["status_symbol"], "*", "{json}");
+    assert_eq!(json["status_changed"], true, "{json}");
+    assert_eq!(json["pomodoro_link_action"], "moved", "{json}");
+    assert_eq!(json["pomodoro_name"], "CURRENT", "{json}");
+    assert!(json.get("link_guard").is_none(), "{json}");
+    assert_eq!(
+        json["dropped_dependencies"],
+        serde_json::json!([{
+            "note_path": "job.md",
+            "block_id": "prep",
+            "link": "[[job#^prep]]",
+            "text": "Prep work",
+            "status_symbol": " ",
+            "status_name": "Ready",
+        }]),
+        "{json}"
+    );
+    assert_eq!(
+        json["task_blocks"][0]["roles"],
+        serde_json::json!(["dependency_dropped"]),
+        "{json}"
+    );
+    let target_after = fs::read_to_string(&target).expect("target");
+    assert!(
+        target_after.contains("- [*] #task Blocked work"),
+        "{target_after}"
+    );
+    assert!(!target_after.contains("DEPENDS ON"), "{target_after}");
+    assert!(!target_after.contains("dependsOn::"), "{target_after}");
+    let day_after = fs::read_to_string(&day_file).expect("day");
+    assert!(day_after.contains("[[cash#^blocked]]"), "{day_after}");
+    assert!(day_after.contains("CURRENT"), "{day_after}");
+    assert!(day_after.contains("context"), "{day_after}");
+    assert_eq!(
+        fs::read_to_string(vault.join("job.md")).expect("read prereq"),
+        "- [ ] #task Prep work ^prep\n"
+    );
+}
+
+// PDG23 (§13.15): ensure-next on a resident of a blocked project
+// refuses the drop: the live links are consumed, the open prerequisites
+// rise, and the result reports `not_linked` with
+// `drop_refused: project_blocked`.
+#[test]
+fn capture_ensure_next_on_project_blocked_resident_refuses_drop() {
+    let temp = TempDir::new("bob-cli-capture-ensure-next-drop-refused");
+    let vault = temp.path().join("vault");
+    let target = vault.join("proj.md");
+    let day_file = vault.join("day.md");
+    write_toggle_task_settings(&vault);
+    let target_before = concat!(
+        "---\ntype: \"[[project]]\"\nstatus: wip\n---\n",
+        "- [?] #task Ship it #prj #hide ^prj\n",
+        "\t- ⛓️ **DEPENDS ON:** [[job#^x]]\n",
+        "- [?] #task Grind ^grind\n",
+        "\t- ⛓️ **DEPENDS ON:** [[job#^y]]\n",
+    );
+    write_file(&target, target_before);
+    write_file(
+        &vault.join("job.md"),
+        concat!(
+            "- [ ] #task Ex prerequisite ^x\n",
+            "- [ ] #task Why prerequisite ^y\n",
+        ),
+    );
     let day_before = concat!(
         "## Pomodoros\n",
         "- [ ] (**0900-0930**) — CURRENT\n",
         "  - context\n",
         "- [ ] () — LATER\n",
-        "  - [[cash#^blocked]]\n",
+        "  - [[proj#^grind]]\n",
     );
     write_file(&day_file, day_before);
 
@@ -872,11 +991,11 @@ fn capture_ensure_next_on_blocked_target_consumes_and_promotes() {
         .arg("-f")
         .arg("json")
         .arg("--")
-        .arg("@cash+blocked")
+        .arg("@proj+grind")
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_NOW", "2026-07-10 10:00:00")
         .output()
-        .expect("ensure-next blocked task");
+        .expect("ensure-next project-blocked resident");
     assert_success(&output);
     let json: serde_json::Value =
         serde_json::from_str(stdout(&output).trim()).expect("json");
@@ -889,24 +1008,26 @@ fn capture_ensure_next_on_blocked_target_consumes_and_promotes() {
     assert!(json.get("pomodoro_link_action").is_none(), "{json}");
     assert_eq!(
         json["link_guard"]["reasons"],
-        serde_json::json!(["local_dependency"]),
+        serde_json::json!(["local_dependency", "project_dependency"]),
         "{json}"
     );
     assert_eq!(
-        json["link_guard"]["promoted"],
-        serde_json::json!(["job.md#^prep"]),
+        json["link_guard"]["drop_refused"], "project_blocked",
         "{json}"
     );
+    assert!(
+        json["link_guard"]["detail"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("dependencies kept: its project is blocked"),
+        "{json}"
+    );
+    assert!(json.get("dropped_dependencies").is_none(), "{json}");
     assert_eq!(fs::read_to_string(&target).expect("target"), target_before);
     let day_after = fs::read_to_string(&day_file).expect("day");
-    assert!(!day_after.contains("[[cash#^blocked]]"), "{day_after}");
-    assert!(
-        !day_after.contains("LATER"),
-        "empty Pomodoro is removed: {day_after}"
-    );
+    assert!(!day_after.contains("[[proj#^grind]]"), "{day_after}");
     assert!(day_after.contains("context"), "{day_after}");
-    assert_eq!(
-        fs::read_to_string(vault.join("job.md")).expect("read prereq"),
-        "- [*] #task Prep work ^prep\n"
-    );
+    let job = fs::read_to_string(vault.join("job.md")).expect("read prereqs");
+    assert!(job.contains("- [*] #task Ex prerequisite ^x"), "{job}");
+    assert!(job.contains("- [*] #task Why prerequisite ^y"), "{job}");
 }

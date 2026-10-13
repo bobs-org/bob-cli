@@ -10,7 +10,7 @@ pub(super) fn plan_ensure_next_capture(
     block_id: &str,
     pomodoro_name: Option<&str>,
     contents: &str,
-    task_line_index: usize,
+    _task_line_index: usize,
     previous_status_symbol: char,
     previous_status_name: String,
     task_description: String,
@@ -31,84 +31,121 @@ pub(super) fn plan_ensure_next_capture(
 
     // Link semantics: Ready/Blocked rise to Next, while Next and In
     // Progress keep their lane (sticky lanes: no capture path demotes).
-    // Link guard (§13.5 gesture rule): a Blocked target consumes
-    // instead of linking or relocating; the guard replaces the old
-    // `[dependsOn::` text warning.
+    // Link guard (§13.5 gesture rule, PDG1–PDG3, PDG6, PDG18–PDG27): a
+    // Blocked target either drops its eligible own prerequisites and
+    // relocates, or consumes instead of linking; the guard replaces the
+    // old `[dependsOn::` text warning.
     let target_rel = relative_target(Some(route));
-    if let LinkGuardVerdict::Consume(plan) = assess_link_target_legacy(
+    let verdict = assess_link_target(
         ctx,
         planner,
         bob_dir,
         &target_rel,
         block_id,
         today,
-    )? {
-        let dependent_desc = format!("ensure next ^{block_id}");
-        let reasons = plan.reasons.clone();
-        let drop_refused = plan.drop_refused;
-        let consumption = consume_live_links(
-            planner,
-            bob_dir,
-            route,
-            &[block_id.to_string()],
-        )?;
-        let removed_pomodoro_links = consumption.removed_links;
-        let promoted = promote_consume_plan(
-            ctx,
-            planner,
-            bob_dir,
-            *plan,
-            &dependent_desc,
-        )?;
-        let link_guard =
-            LinkGuardJson::not_linked(&reasons, promoted, drop_refused);
-        let _ = warnings;
-        return Ok((
-            CaptureWritePlan {
-                placement: Placement::Toggled,
-                pomodoro: None,
-                sub_bullet: None,
-                pomodoro_note: None,
-                toggle: Some(TaskToggleCaptureDetails {
-                    direction: TaskToggleDirection::Next,
-                    previous_task_line: previous_task_line.clone(),
-                    task_line: previous_task_line,
-                    task_description,
-                    previous_status_symbol,
-                    previous_status_name: previous_status_name.clone(),
-                    status_symbol: previous_status_symbol,
-                    status_name: previous_status_name,
-                    block_id: block_id.to_string(),
-                    day_file: pomodoro::day_file_for(bob_dir)
-                        .display()
-                        .to_string(),
-                    block_link: format!("[[{route}#^{block_id}]]"),
-                    pomodoro_link_placement: None,
-                    pomodoro_name: None,
-                    creates_pomodoro: false,
-                    pomodoro_already_linked: false,
-                    removed_pomodoro_links,
-                    removed_scheduled: None,
-                    schedule_log: None,
-                    pomodoro_selector_unused: false,
-                    toggle_behavior: Some("ensure_next"),
-                    status_changed: Some(false),
-                    pomodoro_link_action: None,
-                    pomodoro_link_source: None,
-                    pomodoro_link_destination: None,
-                }),
-                pomodoro_link: None,
-                pomodoro_refs: consumption.pomodoro_refs,
-            },
-            Some(link_guard),
-        ));
-    }
-    let task_plan = capture_task_toggle::plan_task_link(contents, task_line_index, today)
-        .ok_or_else(|| {
-            CaptureError::io("task toggle capture invariant failed: task line could not be updated")
-        })?;
+    )?;
+    let resolution = resolve_link_guard(
+        ctx,
+        planner,
+        bob_dir,
+        &target_rel,
+        block_id,
+        verdict,
+    )?;
+    let (dropped_dependencies, task_block_ref) = match resolution {
+        ResolvedLinkGuard::Proceed {
+            dropped,
+            task_block_ref,
+        } => (dropped, task_block_ref),
+        ResolvedLinkGuard::Consume(plan) => {
+            let dependent_desc = format!("ensure next ^{block_id}");
+            let reasons = plan.reasons.clone();
+            let drop_refused = plan.drop_refused;
+            let consumption = consume_live_links(
+                planner,
+                bob_dir,
+                route,
+                &[block_id.to_string()],
+            )?;
+            let removed_pomodoro_links = consumption.removed_links;
+            let promoted = promote_consume_plan(
+                ctx,
+                planner,
+                bob_dir,
+                *plan,
+                &dependent_desc,
+            )?;
+            let link_guard =
+                LinkGuardJson::not_linked(&reasons, promoted, drop_refused);
+            let _ = warnings;
+            return Ok((
+                CaptureWritePlan {
+                    placement: Placement::Toggled,
+                    pomodoro: None,
+                    sub_bullet: None,
+                    pomodoro_note: None,
+                    toggle: Some(TaskToggleCaptureDetails {
+                        direction: TaskToggleDirection::Next,
+                        previous_task_line: previous_task_line.clone(),
+                        task_line: previous_task_line,
+                        task_description,
+                        previous_status_symbol,
+                        previous_status_name: previous_status_name.clone(),
+                        status_symbol: previous_status_symbol,
+                        status_name: previous_status_name,
+                        block_id: block_id.to_string(),
+                        day_file: pomodoro::day_file_for(bob_dir)
+                            .display()
+                            .to_string(),
+                        block_link: format!("[[{route}#^{block_id}]]"),
+                        pomodoro_link_placement: None,
+                        pomodoro_name: None,
+                        creates_pomodoro: false,
+                        pomodoro_already_linked: false,
+                        removed_pomodoro_links,
+                        removed_scheduled: None,
+                        schedule_log: None,
+                        pomodoro_selector_unused: false,
+                        toggle_behavior: Some("ensure_next"),
+                        status_changed: Some(false),
+                        pomodoro_link_action: None,
+                        pomodoro_link_source: None,
+                        pomodoro_link_destination: None,
+                        dropped_dependencies: Vec::new(),
+                        task_block_ref: None,
+                    }),
+                    pomodoro_link: None,
+                    pomodoro_refs: consumption.pomodoro_refs,
+                },
+                Some(link_guard),
+            ));
+        }
+    };
+    // Re-read through the staged snapshot: a dependency drop staged
+    // above rewrote the task line, so the link write must build on the
+    // post-drop text.
+    let current_contents = current_note_text(planner, target)?;
+    let current_scan = note_tasks::scan(&current_contents, settings);
+    let current_task = match current_scan.by_block_id(block_id) {
+        BlockIdLookup::Found(task) => task,
+        _ => {
+            return Err(CaptureError::io(
+                "task toggle capture invariant failed: task disappeared after dependency drop",
+            ));
+        }
+    };
+    let task_plan = capture_task_toggle::plan_task_link(
+        &current_contents,
+        current_task.line_index,
+        today,
+    )
+    .ok_or_else(|| {
+        CaptureError::io(
+            "task toggle capture invariant failed: task line could not be updated",
+        )
+    })?;
     let task_line =
-        line_text_at(&task_plan.content, task_line_index)?.to_string();
+        line_text_at(&task_plan.content, current_task.line_index)?.to_string();
     let updated_scan = note_tasks::scan(&task_plan.content, settings);
     let updated_task = match updated_scan.by_block_id(block_id) {
         BlockIdLookup::Found(task) => task,
@@ -218,6 +255,8 @@ pub(super) fn plan_ensure_next_capture(
                     relocation.creates_pomodoro,
                     selector,
                 )),
+                dropped_dependencies,
+                task_block_ref,
             }),
             pomodoro_link: None,
             pomodoro_refs,

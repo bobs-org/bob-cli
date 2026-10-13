@@ -1272,6 +1272,7 @@ pub(super) fn print_human_pomodoro_reset_success(
         );
     }
     println!("  {}", styler.dim(&reset.entry_line));
+    print_human_dropped_dependencies(result, styler);
 }
 
 pub(super) fn print_human_pomodoro_close_success(
@@ -1341,6 +1342,7 @@ pub(super) fn print_human_pomodoro_close_success(
         );
     }
     print_human_link_guard(result, styler);
+    print_human_dropped_dependencies(result, styler);
     // Numbered index column: width of the highest numbered row, plus one
     // space. Unnumbered rows get blanks so text stays aligned; with zero
     // numbered rows the output below is byte-identical to before.

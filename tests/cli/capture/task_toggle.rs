@@ -968,26 +968,59 @@ fn capture_task_toggle_unlink_keeps_every_lane() {
     );
 }
 
-// PDG1 (§13.15): a link toggle on a dependency-blocked target does not
-// link; the open prerequisites rise along edges(T) and the result
-// reports `not_linked` with the reasons.
+// PDG19 (§13.15): a link toggle on a target whose only reason is its
+// own open prerequisites drops those links and then links exactly like
+// an unblocked target.
 #[test]
-fn capture_task_toggle_on_blocked_target_consumes_and_promotes() {
-    let temp = TempDir::new("bob-cli-capture-toggle-blocked-consume");
+fn capture_task_toggle_drops_own_dependency_and_links() {
+    let temp = TempDir::new("bob-cli-capture-toggle-drop");
     let vault = temp.path().join("vault");
     let target = vault.join("cash.md");
     let day_file = vault.join("day.md");
     write_toggle_task_settings(&vault);
-    write_file(
-        &target,
-        concat!(
-            "- [?] #task Blocked work ^blocked\n",
-            "\t- ⛓️ **DEPENDS ON:** [[job#^prep]]\n",
-        ),
+    let target_before = concat!(
+        "- [?] #task Blocked work ^blocked\n",
+        "\t- ⛓️ **DEPENDS ON:** [[job#^prep]]\n",
     );
+    write_file(&target, target_before);
     write_file(&vault.join("job.md"), "- [ ] #task Prep work ^prep\n");
-    let day_before = "## Pomodoros\n- [ ] (**0900-0930**) — CURRENT\n";
-    write_file(&day_file, day_before);
+    write_file(&day_file, "## Pomodoros\n- [ ] (**0900-0930**) — CURRENT\n");
+
+    let dry_human = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-d")
+        .arg("--")
+        .arg("@cash+blocked!")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 10:00:00")
+        .output()
+        .expect("dry-run toggle drop");
+    assert_success(&dry_human);
+    let human = stdout(&dry_human);
+    assert!(human.contains("would toggle"), "{human}");
+    assert!(human.contains("linked ^blocked"), "{human}");
+    assert!(
+        human.contains("⛓️ would drop dependency on [[job#^prep]]"),
+        "{human}"
+    );
+
+    let dry_output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("--dry-run")
+        .arg("@cash+blocked!")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 10:00:00")
+        .output()
+        .expect("dry-run toggle blocked task");
+    assert_success(&dry_output);
+    let dry_json: serde_json::Value =
+        serde_json::from_str(stdout(&dry_output).trim()).expect("toggle JSON");
 
     let output = bob_command()
         .arg("capture")
@@ -1004,35 +1037,130 @@ fn capture_task_toggle_on_blocked_target_consumes_and_promotes() {
     assert_success(&output);
     let json: serde_json::Value =
         serde_json::from_str(stdout(&output).trim()).expect("toggle JSON");
+    assert_eq!(json["kind"], "task_toggle", "{json}");
+    assert_eq!(json["toggle_direction"], "link", "{json}");
+    assert_eq!(
+        json["previous_task_line"],
+        target_before.lines().next().unwrap(),
+        "{json}"
+    );
+    assert_eq!(json["previous_status_symbol"], "?", "{json}");
+    assert_eq!(json["status_symbol"], "*", "{json}");
+    assert_eq!(json["status_changed"], true, "{json}");
+    assert!(json.get("link_guard").is_none(), "{json}");
+    assert_eq!(
+        json["dropped_dependencies"],
+        serde_json::json!([{
+            "note_path": "job.md",
+            "block_id": "prep",
+            "link": "[[job#^prep]]",
+            "text": "Prep work",
+            "status_symbol": " ",
+            "status_name": "Ready",
+        }]),
+        "{json}"
+    );
+    assert_eq!(
+        json["task_blocks"][0]["roles"],
+        serde_json::json!(["dependency_dropped"]),
+        "{json}"
+    );
+    let mut normalized_dry = dry_json;
+    normalized_dry["dry_run"] = serde_json::json!(false);
+    assert_eq!(normalized_dry, json, "dry run plans the same toggle drop");
+    // The prerequisite links are gone and the task rose; the open
+    // prerequisite itself is byte-identical.
+    let target_after = fs::read_to_string(&target).expect("read target");
+    assert!(
+        target_after.contains("- [*] #task Blocked work"),
+        "{target_after}"
+    );
+    assert!(!target_after.contains("DEPENDS ON"), "{target_after}");
+    assert!(!target_after.contains("dependsOn::"), "{target_after}");
+    assert!(
+        target_after.contains("[fresh:: 2026-07-10]"),
+        "{target_after}"
+    );
+    let day_after = fs::read_to_string(&day_file).expect("read day");
+    assert!(day_after.contains("[[cash#^blocked]]"), "{day_after}");
+    assert_eq!(
+        fs::read_to_string(vault.join("job.md")).expect("read prereq"),
+        "- [ ] #task Prep work ^prep\n"
+    );
+}
+
+// PDG23 (§13.15): a link toggle on a resident of a blocked project
+// refuses the drop: nothing is staged, the open prerequisites rise, and
+// the result reports `not_linked` with `drop_refused: project_blocked`.
+#[test]
+fn capture_task_toggle_on_project_blocked_resident_refuses_drop() {
+    let temp = TempDir::new("bob-cli-capture-toggle-drop-refused");
+    let vault = temp.path().join("vault");
+    let target = vault.join("proj.md");
+    let day_file = vault.join("day.md");
+    write_toggle_task_settings(&vault);
+    let target_before = concat!(
+        "---\ntype: \"[[project]]\"\nstatus: wip\n---\n",
+        "- [?] #task Ship it #prj #hide ^prj\n",
+        "\t- ⛓️ **DEPENDS ON:** [[job#^x]]\n",
+        "- [?] #task Grind ^grind\n",
+        "\t- ⛓️ **DEPENDS ON:** [[job#^y]]\n",
+    );
+    write_file(&target, target_before);
+    write_file(
+        &vault.join("job.md"),
+        concat!(
+            "- [ ] #task Ex prerequisite ^x\n",
+            "- [ ] #task Why prerequisite ^y\n",
+        ),
+    );
+    let day_before = "## Pomodoros\n- [ ] (**0900-0930**) — CURRENT\n";
+    write_file(&day_file, day_before);
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("@proj+grind!")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 10:00:00")
+        .output()
+        .expect("toggle project-blocked resident");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("toggle JSON");
     assert!(json.get("toggle_direction").is_none(), "{json}");
     assert!(json.get("block_link").is_none(), "{json}");
-    assert!(json.get("day_file").is_none(), "{json}");
     assert_eq!(json["status_changed"], false, "{json}");
     assert_eq!(json["status_symbol"], "?", "{json}");
     assert_eq!(
         json["link_guard"]["reasons"],
-        serde_json::json!(["local_dependency"]),
+        serde_json::json!(["local_dependency", "project_dependency"]),
         "{json}"
     );
     assert_eq!(
-        json["link_guard"]["promoted"],
-        serde_json::json!(["job.md#^prep"]),
+        json["link_guard"]["drop_refused"], "project_blocked",
         "{json}"
     );
-    // Neither the task line nor the ledger changed; the open
-    // prerequisite rose to Next.
+    assert!(
+        json["link_guard"]["detail"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("dependencies kept: its project is blocked"),
+        "{json}"
+    );
+    assert!(json.get("dropped_dependencies").is_none(), "{json}");
     assert_eq!(
         fs::read_to_string(&target).expect("read target"),
-        concat!(
-            "- [?] #task Blocked work ^blocked\n",
-            "\t- ⛓️ **DEPENDS ON:** [[job#^prep]]\n",
-        )
+        target_before
     );
     assert_eq!(fs::read_to_string(&day_file).expect("read day"), day_before);
-    assert_eq!(
-        fs::read_to_string(vault.join("job.md")).expect("read prereq"),
-        "- [*] #task Prep work ^prep\n"
-    );
+    let job = fs::read_to_string(vault.join("job.md")).expect("read prereqs");
+    assert!(job.contains("- [*] #task Ex prerequisite ^x"), "{job}");
+    assert!(job.contains("- [*] #task Why prerequisite ^y"), "{job}");
 }
 
 #[test]
