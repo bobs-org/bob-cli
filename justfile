@@ -2,6 +2,7 @@ set shell := ["bash", "-eu", "-o", "pipefail", "-c"]
 
 # Horizontal rule drawn beneath each section title (single source for width/char).
 rule := "────────────────────────────────────────────────"
+rustc_gate := "-D unused -A unused_extern_crates -A unused_macro_rules -D private_interfaces"
 
 all: fmt lint test
     @if [[ -t 1 ]]; then \
@@ -14,7 +15,7 @@ fmt: (_banner "34" "🎨" "FORMAT")
     cargo fmt --check
 
 lint: (_banner "33" "🔍" "LINT")
-    cargo clippy --all-targets --all-features
+    cargo clippy --all-targets --all-features -- {{rustc_gate}}
 
 test: (_banner "32" "🧪" "TEST")
     cargo test --no-fail-fast
@@ -23,7 +24,7 @@ test: (_banner "32" "🧪" "TEST")
 # (lib, all tests/* binaries, doctests) even when one binary fails.
 check: (_banner "32" "✅" "CHECK")
     cargo fmt --check
-    cargo clippy --all-targets --all-features
+    cargo clippy --all-targets --all-features -- {{rustc_gate}}
     cargo test --no-fail-fast
 
 # Render a themed section banner: blank line, bold colored title + icon, colored rule.

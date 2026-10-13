@@ -364,21 +364,6 @@ pub(super) fn verified_pairs(
     set
 }
 
-/// Verified ids across the store (any revision).
-pub(super) fn verified_ids(
-    files: &[(PathBuf, TransactionFile)],
-) -> BTreeSet<String> {
-    let mut set = BTreeSet::new();
-    for (_, file) in files {
-        for entry in &file.entries {
-            if entry.state == EntryState::Verified {
-                set.insert(entry.id.clone());
-            }
-        }
-    }
-    set
-}
-
 /// Whether a verified receipt covers the exact `(id, fp)` pair.
 pub(super) fn has_verified(
     files: &[(PathBuf, TransactionFile)],

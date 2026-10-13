@@ -1,12 +1,13 @@
 //! Shared task-completion engine (phase `engine`).
 //!
 //! The single home for "what completing a task writes": the embedded tree
-//! close, the scoped ledger retirement, and the Blocked-dependent recovery.
+//! close, the scoped ledger retirement, and the successor planner.
 //! No user-visible behavior changes here; later phases call into this
 //! module. Keep everything `pub(crate)`.
 
 pub(crate) mod project_close;
 pub(crate) mod project_pull_in;
+#[cfg(test)]
 pub(crate) mod recovery;
 pub(crate) mod retirement;
 pub(crate) mod successors;

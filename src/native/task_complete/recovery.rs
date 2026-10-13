@@ -1,4 +1,4 @@
-//! Immediate Blocked-dependent recovery for whole-item completion.
+//! Test-only parity oracle for the successor planner.
 //!
 //! Reuses reconcile's parsed [`FileScan`]/[`TaskLine`] types and the
 //! open-dependency rule of [`task_dependency_states`], so there is exactly

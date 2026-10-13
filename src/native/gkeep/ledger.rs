@@ -363,6 +363,7 @@ impl Journal {
     /// The parent recorded on a `ref_created` event for `(id, fp)`, when
     /// the journal carries one. Older lines predate the field and yield
     /// `None`; callers fall back without forcing a fresh selection.
+    #[cfg(test)]
     pub(super) fn ref_parent(&self, id: &str, fp: &str) -> Option<String> {
         self.records.iter().find_map(|record| {
             (record.event == JournalEvent::RefCreated
@@ -424,14 +425,8 @@ static CHECKBOX_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^\s*-\s*\[([^\]])\]").expect("valid checkbox regex")
 });
 
-/// Read the top-level tasks from target-note `contents`.
-///
-/// Done and cancelled tasks are included: `list --all` shows them.
-/// Checkbox counts cover every descendant line; the marker is the first
-/// gkeep marker anywhere in the task's block (legacy, authoritative).
-/// When `imports` are supplied, marker-free tasks gain a receipt-backed
-/// `source` via exact emitted-URL match, else unambiguous URL-less
-/// block-digest match; uncertain cases stay `None`.
+/// Test convenience wrapper: read tasks without import history.
+#[cfg(test)]
 pub(super) fn read_target_tasks(
     contents: &str,
     settings: &NoteTaskSettings,
@@ -439,8 +434,14 @@ pub(super) fn read_target_tasks(
     read_target_tasks_with_imports(contents, settings, &[])
 }
 
-/// Same as [`read_target_tasks`] with vault import history for
-/// marker-free identity.
+/// Read the top-level tasks from target-note `contents`.
+///
+/// Done and cancelled tasks are included: `list --all` shows them.
+/// Checkbox counts cover every descendant line; the marker is the first
+/// gkeep marker anywhere in the task's block (legacy, authoritative).
+/// Marker-free tasks gain a receipt-backed `source` via exact emitted-URL
+/// match, else unambiguous URL-less block-digest match; uncertain cases stay
+/// `None`.
 pub(super) fn read_target_tasks_with_imports(
     contents: &str,
     settings: &NoteTaskSettings,

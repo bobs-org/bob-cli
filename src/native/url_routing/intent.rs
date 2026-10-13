@@ -188,20 +188,6 @@ impl std::ops::DerefMut for RefIntent {
     }
 }
 
-/// Shared suffix recognizer for a URL token plus an optional adjacent
-/// listen token. Returns the URL text and whether the next
-/// whitespace-delimited token on the same line is the standalone listen
-/// marker (`%` or its `@` alias). Callers keep route and note-eligibility
-/// checks in their own layer and never use string replacement.
-pub(crate) fn split_listen_suffix(
-    url_token: &str,
-    next_token: Option<&str>,
-) -> Option<(UrlIntent, bool)> {
-    let intent = classify_token(url_token)?;
-    let listen = next_token.is_some_and(is_standalone_listen_marker);
-    Some((intent, listen))
-}
-
 /// Lexical URL-list line test: a single whitespace-free token,
 /// optionally `<…>`-wrapped, with an `http`/`https` scheme that parses
 /// with `url::Url::parse`, or a URL plus a standalone listen marker

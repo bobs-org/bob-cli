@@ -31,7 +31,6 @@ impl RefTaskDiagnostic {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Selected {
     V2(LocatedRefTask),
-    V1(TrackerHit),
 }
 
 /// What `decide_status` receives plus selection evidence.
@@ -176,9 +175,8 @@ pub(crate) fn select_for_ref(
         } else if !v1_hits.is_empty() {
             // Rule 4: v1 passthrough.
             selection.status_hits = v1_hits.to_vec();
-            // `task` stays None for v1 here; the caller maps the usable
-            // single hit to Selected::V1 when decide_status finds it usable.
-            // Keep task None and let ref_library decide; but carry hits.
+            // `task` stays None for v1 here. Let ref_library decide from
+            // the carried hits whether a tracker is usable.
             selection.task = None;
         } else {
             // Rule 5: nothing.

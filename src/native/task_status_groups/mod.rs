@@ -22,16 +22,6 @@ pub(crate) const TITLE_CLOSED: &str = "Done & Canceled";
 /// one in its slot, and the emitter never writes them.
 const LEGACY_GROUP_MARKER_PREFIX: &str = "bob:task-status-group:v1:";
 
-#[cfg(test)]
-pub(crate) const MARKER_ACTIVE: &str =
-    "<!-- bob:task-status-group:v1:active -->";
-#[cfg(test)]
-pub(crate) const MARKER_BLOCKED: &str =
-    "<!-- bob:task-status-group:v1:blocked -->";
-#[cfg(test)]
-pub(crate) const MARKER_CLOSED: &str =
-    "<!-- bob:task-status-group:v1:closed -->";
-
 /// Shared badge-row grammar: the four fixed-order `(emoji, label)` chips.
 /// Both the emitter (`render_badges`) and the recognizer (`is_badge_row`)
 /// iterate this table so the two cannot drift apart.

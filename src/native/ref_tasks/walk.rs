@@ -37,7 +37,6 @@ pub(crate) struct RefTaskIndex {
     candidates: BTreeMap<String, Vec<LocatedRefTask>>,
     follow_ups: BTreeMap<String, Vec<RefFollowUp>>,
     orphans: Vec<OrphanRefTask>,
-    warnings: Vec<String>,
 }
 
 /// True when a file name is a conflict copy.
@@ -49,22 +48,16 @@ pub(crate) fn is_conflict_copy_name(name: &str) -> bool {
 
 impl RefTaskIndex {
     /// Build the index over `(bob_dir, ref_dir)`. Never errors; problems
-    /// become `warnings`.
+    /// yield an empty or partial index.
     pub(crate) fn build(bob_dir: &Path, ref_dir: &Path) -> Self {
-        let mut warnings = Vec::new();
         let ref_rel = match ref_dir.strip_prefix(bob_dir) {
             Ok(rel) => rel.to_string_lossy().replace('\\', "/"),
             Err(_) => {
-                warnings.push(
-                    "ref dir is outside the vault; reading tasks were not located"
-                        .to_string(),
-                );
                 return Self {
                     candidates: BTreeMap::new(),
                     follow_ups: BTreeMap::new(),
                     orphans: Vec::new(),
-                    warnings,
-                };
+                }
             }
         };
         let ref_prefix = if ref_rel.is_empty() {
@@ -73,9 +66,8 @@ impl RefTaskIndex {
             format!("{}/", ref_rel.trim_end_matches('/'))
         };
 
-        let (mut paths, mut walk_warnings) =
+        let (mut paths, _) =
             crate::native::capture_dependency_tasks::vault_note_paths(bob_dir);
-        warnings.append(&mut walk_warnings);
         // Drop lib/xlib first components and conflict copies.
         paths.retain(|p| {
             let forward = p.to_string_lossy().replace('\\', "/");
@@ -472,7 +464,6 @@ impl RefTaskIndex {
             candidates,
             follow_ups,
             orphans,
-            warnings,
         }
     }
 
@@ -495,11 +486,6 @@ impl RefTaskIndex {
     /// Every orphan task line.
     pub(crate) fn orphans(&self) -> &[OrphanRefTask] {
         &self.orphans
-    }
-
-    /// Walk problems.
-    pub(crate) fn warnings(&self) -> &[String] {
-        &self.warnings
     }
 
     /// Pure selection for one ref note.

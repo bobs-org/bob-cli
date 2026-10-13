@@ -19,24 +19,18 @@ mod tests;
 
 pub(crate) use dates::close_date;
 pub(crate) use edit::{
-    edit_reading_task_checkbox, locate_original_line, EditedReadingTask,
-    READING_TASK_CHANGED,
+    edit_reading_task_checkbox, locate_original_line, READING_TASK_CHANGED,
 };
-pub(crate) use embed::{find_managed_embed, ManagedEmbed};
-pub(crate) use insert::{
-    insert_ref_task, insert_ref_task_with_preferred_id, InsertedRefTask,
-};
+pub(crate) use embed::find_managed_embed;
+pub(crate) use insert::{insert_ref_task, insert_ref_task_with_preferred_id};
 pub(crate) use line::{
     allocate_ref_block_id, allocate_unique_block_id, managed_embed_line,
     render_ref_task_line, sanitize_title_alias, slug_ref_stem,
-    stamp_close_date_any_id, strip_blockquote_prefix, task_mark, OrphanRefTask,
-    RefFollowUp, REF_BLOCK_ID_MAX_LEN,
+    strip_blockquote_prefix, task_mark,
 };
 pub(crate) use select::{
     is_open_mark, select_for_ref, RefTaskDiagnostic, RefTaskSelection,
     Selected, REF_TASK_DIAGNOSTIC_CODES,
 };
-pub(crate) use v1::{
-    find_trackers, managed_region_line_range, parse_tracker_line, TrackerHit,
-};
+pub(crate) use v1::{find_trackers, parse_tracker_line, TrackerHit};
 pub(crate) use walk::{is_conflict_copy_name, LocatedRefTask, RefTaskIndex};

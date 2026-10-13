@@ -119,21 +119,8 @@ pub(super) struct PlanSummary {
     pub(super) archived: usize,
 }
 
-/// Classify `notes` against combined import history.
-///
-/// Checks an exact `(id, fp)` match in either verified receipts or
-/// legacy markers before checking whether either knows another revision
-/// of the id; a stale legacy marker never outranks a newer exact
-/// receipt. Prepared records never authorize archive-only. Then the
-/// existing lower-priority local `written`/`ref_created` fallbacks apply.
-/// Multiple proofs of one import are one history entry.
-///
-/// Notes are ordered oldest first by Keep `created`, ties broken by id.
-/// When `opts.ids` is non-empty the plan narrows to the selected notes
-/// (which also lifts the pinned/shared skips for them); unresolvable
-/// `-i` values select nothing here — callers validate with [`resolve_ids`]
-/// first for the exit-2 errors. `limit` keeps the first N actionable
-/// notes; skips and archived notes are always kept.
+/// Test convenience wrapper: classify without vault import history.
+#[cfg(test)]
 pub(super) fn classify(
     notes: &[KeepNote],
     ledger: &Ledger,
@@ -143,7 +130,17 @@ pub(super) fn classify(
     classify_with_imports(notes, ledger, journal, &[], opts)
 }
 
-/// Same as [`classify`] with vault import history.
+/// Classify `notes` against combined import history.
+///
+/// Checks exact fingerprint matches before older identities, then uses the
+/// lower-priority local `written`/`ref_created` fallbacks. Prepared records
+/// never authorize archive-only. Multiple proofs of one import are one
+/// history entry.
+///
+/// Notes are ordered oldest first by Keep `created`, ties broken by id.
+/// Explicit `-i` values narrow the plan and lift pinned/shared skips;
+/// callers validate unresolvable values first. `limit` keeps the first N
+/// actionable notes; skips and archived notes are always kept.
 pub(super) fn classify_with_imports(
     notes: &[KeepNote],
     ledger: &Ledger,
@@ -206,16 +203,6 @@ pub(super) fn classify_with_imports(
         notes: planned,
         summary,
     }
-}
-
-fn classify_one(
-    note: &KeepNote,
-    selected: bool,
-    ledger: &Ledger,
-    journal: &Journal,
-    opts: &PlanOptions,
-) -> PlannedNote {
-    classify_one_with_imports(note, selected, ledger, journal, &[], opts)
 }
 
 fn classify_one_with_imports(

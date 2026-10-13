@@ -181,7 +181,7 @@ pub(super) fn adoptable_group_body(
     pieces.iter().all(|piece| match piece {
         DirectPiece::Task(task) => task.movable,
         DirectPiece::Other { raw, .. } => raw.chars().all(char::is_whitespace),
-        DirectPiece::Badges { .. } => false,
+        DirectPiece::Badges => false,
     })
 }
 
@@ -246,7 +246,7 @@ pub(super) fn parse_container_regions<'a>(
     }
     let has_badges = intake
         .iter()
-        .any(|piece| matches!(piece, DirectPiece::Badges { .. }));
+        .any(|piece| matches!(piece, DirectPiece::Badges));
 
     let mut groups = BTreeMap::new();
     for item in &classified.items {
@@ -291,27 +291,21 @@ fn group_body_start(node: &HeadingNode, lines: &[SourceLine<'_>]) -> usize {
 #[derive(Clone)]
 pub(super) enum DirectPiece<'a> {
     Task(TaskBlock<'a>),
-    Other {
-        raw: &'a str,
-        byte_range: Range<usize>,
-    },
-    Badges {
-        byte_range: Range<usize>,
-    },
+    Other { raw: &'a str },
+    Badges,
 }
 
 impl<'a> DirectPiece<'a> {
     pub(super) fn task(&self) -> Option<&TaskBlock<'a>> {
         match self {
             Self::Task(task) => Some(task),
-            Self::Other { .. } | Self::Badges { .. } => None,
+            Self::Other { .. } | Self::Badges => None,
         }
     }
 }
 
 #[derive(Clone)]
 pub(super) struct TaskBlock<'a> {
-    pub(super) byte_range: Range<usize>,
     pub(super) start_line: usize,
     pub(super) raw: &'a str,
     pub(super) bucket: StatusBucket,
@@ -366,9 +360,7 @@ fn parse_direct_pieces<'a>(
                 line.byte_range.start,
             );
             let end = line.byte_range.end.min(span.end);
-            pieces.push(DirectPiece::Badges {
-                byte_range: line.byte_range.start..end,
-            });
+            pieces.push(DirectPiece::Badges);
             cursor = end;
             index += 1;
             continue;
@@ -430,7 +422,6 @@ fn parse_direct_pieces<'a>(
                     ));
                 }
                 pieces.push(DirectPiece::Task(TaskBlock {
-                    byte_range: byte_range.clone(),
                     start_line: line.index + 1,
                     raw: &contents[byte_range.clone()],
                     bucket: task,
@@ -501,7 +492,6 @@ fn flush_other<'a>(
     if *cursor < next {
         pieces.push(DirectPiece::Other {
             raw: &contents[*cursor..next],
-            byte_range: *cursor..next,
         });
         *cursor = next;
     }

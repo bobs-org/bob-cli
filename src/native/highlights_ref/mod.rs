@@ -153,7 +153,7 @@ pub(crate) use note::configured_path;
 pub(crate) use reading_plan::apply_v2_migration_note;
 pub(crate) use region::{
     is_marker_mirror_text, parse_follow_up_task, parse_managed_region,
-    split_note_body, RegionBlockKind, RegionTask,
+    split_note_body, RegionBlockKind,
 };
 pub(crate) const SOURCE_LINK_ALIAS: &str = "🔖";
 pub(crate) use sidecar::is_wikilink;

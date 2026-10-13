@@ -54,9 +54,6 @@ pub(crate) struct PlannedTask {
     pub migrated_line: String,
     /// Child lines that move with the tracker (raw, without the tracker).
     pub children: Vec<String>,
-    /// Tracker block range in the ref note (start inclusive, end exclusive).
-    pub tracker_start: usize,
-    pub tracker_end: usize,
     pub follow_ups: Vec<PlannedFollowUp>,
     /// Old and preview-new dependency ids (when encodable).
     pub old_dep_id: Option<String>,
@@ -67,7 +64,6 @@ pub(crate) struct PlannedTask {
 #[derive(Debug, Clone)]
 pub(crate) struct UnmappedRow {
     pub ref_note: String,
-    pub stem: String,
     pub reason: String,
 }
 
@@ -126,10 +122,6 @@ pub(crate) struct MigrationPlan {
 }
 
 impl MigrationPlan {
-    pub(crate) fn is_empty(&self) -> bool {
-        self.tasks.is_empty()
-    }
-
     pub(crate) fn distinct_parents(&self) -> usize {
         let mut set = BTreeSet::new();
         for task in &self.tasks {
@@ -237,7 +229,7 @@ pub(crate) fn plan_migration(
             continue;
         };
         let indent = indentation_len(body_lines[tracker_idx]);
-        let (block_end_excl, children) =
+        let (_, children) =
             tracker_block_extent(&body_lines, tracker_idx, indent);
 
         // Parent resolution: map, frontmatter, marker.
@@ -289,7 +281,6 @@ pub(crate) fn plan_migration(
                 Err(err) => {
                     unmapped.push(UnmappedRow {
                         ref_note: ref_note.clone(),
-                        stem: file_stem(ref_note),
                         reason: err
                             .message()
                             .lines()
@@ -314,7 +305,6 @@ pub(crate) fn plan_migration(
                         Err(reason) => {
                             unmapped.push(UnmappedRow {
                                 ref_note: ref_note.clone(),
-                                stem: file_stem(ref_note),
                                 reason,
                             });
                             continue;
@@ -328,7 +318,6 @@ pub(crate) fn plan_migration(
                 Err(reason) => {
                     unmapped.push(UnmappedRow {
                         ref_note: ref_note.clone(),
-                        stem: file_stem(ref_note),
                         reason,
                     });
                     continue;
@@ -395,13 +384,10 @@ pub(crate) fn plan_migration(
             preview_block_id: preview,
             migrated_line: migrated,
             children,
-            tracker_start: tracker_idx,
-            tracker_end: block_end_excl,
             follow_ups,
             old_dep_id: old_dep,
             new_dep_id_preview: new_dep,
         });
-        let _ = block_end_excl;
         let _ = ref_tasks_index;
     }
 

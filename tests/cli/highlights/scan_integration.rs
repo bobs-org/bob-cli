@@ -477,7 +477,6 @@ fn v2_dry_run_writes_nothing() {
 fn v2_missing_task_never_gains_automatic_replacement() {
     let (_temp, vault) = scan_vault("bob-cli-scan-integration-missing");
     let pdf = vault.join("lib/missing.pdf");
-    let note = vault.join("ref/missing.md");
     let parent_note = vault.join("obsidian.md");
     write_area_note(&parent_note, "Obsidian");
     write_highlights_pdf(&pdf, "- status: wip\n- parent: obsidian\n");

@@ -190,20 +190,10 @@ impl IngestError {
     }
 }
 
-/// Render the shared fallback bullet from a stored kind and message,
-/// so the worker can retry a `stuck/` fallback without the original
-/// [`IngestError`]. Identical to [`IngestError::fallback_note`].
-pub(crate) fn fallback_note_for(
-    kind: &str,
-    message: &str,
-    url: &str,
-    parent: &str,
-) -> String {
-    fallback_note_for_with_listen(kind, message, url, parent, false)
-}
-
-/// Listen-preserving variant: appends ` -L` to the retry command when
-/// the original request asked for companion audio.
+/// Render the shared fallback bullet from stored data, so the worker can
+/// retry a `stuck/` fallback without the original [`IngestError`]. Identical
+/// to [`IngestError::fallback_note`]. The listen-preserving form appends
+/// ` -L` when the original request asked for companion audio.
 pub(crate) fn fallback_note_for_with_listen(
     kind: &str,
     message: &str,

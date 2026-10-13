@@ -123,9 +123,6 @@ pub(super) fn select_birth_task(
     let selection = select_for_ref(candidates, &[]);
     let task = match selection.task {
         Some(Selected::V2(located)) => BirthTask::Adopt(located),
-        // Unreachable today (`select_for_ref` never returns V1 with no
-        // hits); refuse rather than invent a task.
-        Some(Selected::V1(_)) => BirthTask::Refused,
         None if candidates.is_empty() => BirthTask::Insert,
         None => BirthTask::Refused,
     };
@@ -662,19 +659,7 @@ fn plan_existing_task(
     let Some(selected) = selection.task else {
         return Ok(unselected_task_plan(inputs, &selection.diagnostics));
     };
-    let Selected::V2(located) = selected else {
-        return Ok(ReadingTaskPlan {
-            branch: NoteBranch::V2,
-            kind: ReadingTaskKind::Refused,
-            action: ReadingTaskAction::NoWrite,
-            residence: None,
-            embed: None,
-            status_target: None,
-            task_changed: false,
-            refuse_status_parent_writes: true,
-            diagnostics: selection.diagnostics,
-        });
-    };
+    let Selected::V2(located) = selected;
     let signal = v2_task_status_signal(V2TaskSignalInputs {
         mark: located.mark,
         current_status: inputs.resolved_status,

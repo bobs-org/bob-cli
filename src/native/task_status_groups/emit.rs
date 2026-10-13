@@ -69,7 +69,7 @@ pub(super) fn grouping_plan<'a>(
             DirectPiece::Task(_) | DirectPiece::Other { .. } => {
                 intake_staying.push(piece.clone());
             }
-            DirectPiece::Badges { .. } => {}
+            DirectPiece::Badges => {}
         }
     }
 
@@ -259,7 +259,7 @@ fn emit_intake(plan: &GroupingPlan<'_>, newline: &str) -> String {
                 push_task(&mut buf, task.raw, newline);
                 last_was_task = true;
             }
-            DirectPiece::Badges { .. } => {}
+            DirectPiece::Badges => {}
         }
     }
     if !inserted_recovered {

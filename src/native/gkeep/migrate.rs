@@ -107,14 +107,11 @@ struct FilePlan {
     before_bytes: Vec<u8>,
     /// Line ending: `\r\n` when the file uses CRLF, else `\n`.
     crlf: bool,
-    has_final_newline: bool,
     perms: fs::Permissions,
     /// Recognized hits grouped by task block.
     hits: Vec<MarkerHit>,
     /// Task-block line ranges for ambiguity detection.
     blocks: Vec<(usize, usize)>,
-    /// Human-readable skips (ambiguous, malformed outside positions).
-    skips: Vec<String>,
 }
 
 pub(crate) fn run(args: &MigrateArgs) -> i32 {
@@ -569,7 +566,6 @@ fn scan_file(
         Err(_) => return Ok(None),
     };
     let crlf = text.contains("\r\n");
-    let has_final_newline = text.ends_with('\n');
     let settings = note_tasks::read_settings(bob_dir);
     let scan = note_tasks::scan(&text, &settings);
     // Top-level task block extents (any status, including completed).
@@ -648,11 +644,9 @@ fn scan_file(
         path: path.to_path_buf(),
         before_bytes,
         crlf,
-        has_final_newline,
         perms,
         hits,
         blocks,
-        skips: Vec::new(),
     }))
 }
 

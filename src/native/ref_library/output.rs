@@ -58,7 +58,7 @@ struct FindEnvelope<'a> {
 }
 
 /// Print the `ref find` envelope as compact one-line JSON.
-pub(crate) fn print_find_json(
+pub(super) fn print_find_json(
     coverage: &Coverage,
     library: &LibraryCounts,
     summary: &FindSummary,
@@ -247,7 +247,7 @@ pub(crate) fn dated_suffix(row: &super::RefRow) -> Option<String> {
 }
 
 /// Render one `bob ref find` result block in human form.
-pub(crate) fn render_find_human(
+pub(super) fn render_find_human(
     coverage: &Coverage,
     summary: &FindSummary,
     results: &[FindResult],
@@ -489,7 +489,7 @@ fn library_breakdown(results: &[FindResult]) -> String {
 }
 
 /// Render `bob ref find` results as a Markdown table plus coverage line.
-pub(crate) fn render_find_markdown(
+pub(super) fn render_find_markdown(
     summary: &FindSummary,
     results: &[FindResult],
 ) -> String {

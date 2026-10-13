@@ -1700,7 +1700,6 @@ fn execute_pdf_sync_v2(
 /// What the v2 reading-task action did for this PDF's note rendering.
 struct V2ReadingOutcome {
     execution: Option<ReadingTaskExecution>,
-    refreshed: Option<ref_tasks_mod::LocatedRefTask>,
     residence: Option<String>,
     embed: Option<(String, String)>,
 }
@@ -1716,7 +1715,6 @@ fn execute_v2_reading_action(
     let reading = plan.reading_task_plan.as_ref().expect("v2 plan");
     let blank = V2ReadingOutcome {
         execution: None,
-        refreshed: None,
         residence: plan.v2_residence.clone(),
         embed: plan_embed_pair(plan),
     };
@@ -1734,7 +1732,6 @@ fn execute_v2_reading_action(
                 refreshed.residence.clone().or(plan.v2_residence.clone());
             Ok(V2ReadingOutcome {
                 execution: None,
-                refreshed: Some(refreshed),
                 residence,
                 embed: embed.or(blank.embed),
             })
@@ -1789,7 +1786,6 @@ fn execute_v2_reading_action(
             let embed = (target, execution.block_id.clone());
             Ok(V2ReadingOutcome {
                 execution: Some(execution),
-                refreshed: None,
                 residence: Some(destination_route.clone()),
                 embed: Some(embed),
             })
@@ -1807,7 +1803,6 @@ fn execute_v2_reading_action(
             )?;
             Ok(V2ReadingOutcome {
                 execution: Some(execution),
-                refreshed: None,
                 residence: plan.v2_residence.clone(),
                 embed: blank.embed,
             })

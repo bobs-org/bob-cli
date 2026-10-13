@@ -304,11 +304,6 @@ fn base_status(front: &ParsedFrontmatter) -> Option<String> {
 }
 
 #[cfg(test)]
-pub(crate) use crate::native::ref_tasks::{
-    find_trackers, managed_region_line_range, parse_tracker_line,
-};
-
-#[cfg(test)]
 mod tests {
     use super::*;
 

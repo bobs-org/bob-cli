@@ -49,7 +49,7 @@ pub(crate) use row::{
     bare_parent_name, strip_wikilink_brackets, Coverage, Diagnostic,
     LibraryCounts, RefIdentity, RefRow, RefSnapshot, RefTaskView,
 };
-pub(crate) use status::{decide_status, TrackerHit};
+pub(crate) use status::decide_status;
 
 use frontmatter::FrontValue;
 
@@ -445,7 +445,7 @@ fn build_row(
                 archived: located.archived,
             })
         }
-        Some(crate::native::ref_tasks::Selected::V1(_)) | None => {
+        None => {
             if outcome.has_usable_tracker
                 && let Some(hit) = outcome.tracker.as_ref()
             {

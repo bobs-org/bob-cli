@@ -1423,7 +1423,8 @@ just package-list
 ```
 
 `just check` is the canonical verification gate: `cargo fmt --check`,
-`cargo clippy --all-targets --all-features`, then
+`cargo clippy --all-targets --all-features` with rustc unused and private-interface
+warnings promoted to errors for bob-cli's targets, then
 `cargo test --no-fail-fast`, which runs the lib, every `tests/*` binary,
 and doctests even when one binary fails. `just test` runs the same
 unmasked test step on its own. `just all` runs the same three checks through

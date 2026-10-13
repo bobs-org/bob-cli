@@ -126,7 +126,6 @@ fn capture_unrouted_prefers_tasks_section_in_existing_inbox() {
     );
 }
 
-#[test]
 // PDG5 (§13.15): a plain task captured into a blocked project lands
 // `[?]` plus the machine-owned tag. No link is involved, so no
 // `link_guard` is reported; reconcile owns the rest.

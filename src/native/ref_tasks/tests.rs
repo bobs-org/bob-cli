@@ -3,6 +3,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use super::line::stamp_close_date_any_id;
 use super::*;
 
 fn write_vault_file(root: &Path, rel: &str, contents: &str) {
@@ -462,7 +463,7 @@ fn outside_area_fires_for_daily_and_hub_notes() {
 }
 
 #[test]
-fn ref_dir_outside_vault_yields_warning_and_empty_index() {
+fn ref_dir_outside_vault_yields_empty_index() {
     let temp = tempfile::tempdir().expect("temp vault");
     let root = temp.path();
     let other = tempfile::tempdir().expect("outside vault");
@@ -470,10 +471,6 @@ fn ref_dir_outside_vault_yields_warning_and_empty_index() {
     std::fs::create_dir_all(&outside).expect("outside dir");
     let index = walk::RefTaskIndex::build(root, &outside);
     assert!(index.candidates("ref/papers/x.md").is_empty());
-    assert!(index
-        .warnings()
-        .iter()
-        .any(|w| w.contains("outside the vault")));
 }
 
 #[test]

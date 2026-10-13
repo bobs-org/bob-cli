@@ -266,6 +266,7 @@ fn invalid(message: String, hint: impl Into<String>) -> ListenError {
 }
 
 impl ListenCommand {
+    #[cfg(test)]
     pub(super) fn display(&self) -> &str {
         &self.command
     }
@@ -1545,10 +1546,7 @@ exit "${FAKE_LISTEN_EXIT:-0}"
         fs::create_dir_all(&bin).expect("create fake bin");
         let trap_marker = scratch.join("trap.hit");
         write_sase_listen_trap(&bin, &trap_marker);
-        let path: std::ffi::OsString = {
-            let mut out = bin.as_os_str().to_os_string();
-            out
-        };
+        let path = bin.as_os_str().to_os_string();
         let _guard = crate::native::env::TestEnvGuard::set(&[
             ("PATH", Some(path.as_os_str())),
             ("FAKE_LISTEN_EXIT", None),

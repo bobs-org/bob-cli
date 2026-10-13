@@ -479,17 +479,6 @@ impl ScanContext {
             invocation_date: current_local_date(),
         }
     }
-
-    #[cfg(test)]
-    pub(super) fn for_tests(
-        index: crate::native::ref_tasks::RefTaskIndex,
-        invocation_date: &str,
-    ) -> Self {
-        Self {
-            index,
-            invocation_date: invocation_date.to_string(),
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
