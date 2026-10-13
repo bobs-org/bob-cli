@@ -69,7 +69,8 @@ edited in place.
    - The per-note soft cap (plan.max_ready_per_note, default 5; ready_cap: N|off) counts
      each area/project note's whole Ready lane by residence, whatever its freshness.
 10. **Projects Block Their Tasks From The ^prj Line** (`projects-block-from-prj-line`)
-    - A project's prerequisites and date live on its ^prj task; while that line is
+    - _[partly superseded by `decisions:subprojects-inherit-project-blocking`]_ A
+      project's prerequisites and date live on its ^prj task; while that line is
       Blocked, every open resident is Blocked and tagged #prj_is_blocked, and Blocked
       tasks keep no Task Links under today's open Pomodoros.
 11. **READY Is Freshness-Gated With NEW and ROTTEN Review** (`ready-is-freshness-gated`)
@@ -92,17 +93,21 @@ edited in place.
     ]_ Repeated due-Ready keeps earn an explicit approved decision that enters the
     existing priority ladder; nothing decays silently and freshness itself still never
     changes priority or schedule.
-14. **Task Dependencies Are Links On One Depends-On Line**
+14. **Subprojects Inherit Project Blocking** (`subprojects-inherit-project-blocking`)
+    - A blocked project passes its dependency or schedule reason through its project
+      descendants, with reconcile as the authority and the ^prj tag as the proxy for
+      other engines.
+15. **Task Dependencies Are Links On One Depends-On Line**
     (`task-deps-are-depends-on-links`) - A task's prerequisites live as plain task
     dependency links on one managed Depends-On first-child line; that line is the source
     of truth and the [dependsOn::] / [id::] fields are derived from it.
-15. **Today Is Read From The Ledger, Never Written To Tasks**
+16. **Today Is Read From The Ledger, Never Written To Tasks**
     (`today-is-read-from-the-ledger`) - _[partly superseded by
     `ready-is-freshness-gated`]_ Today is the open tasks with a dedicated Task Link
     under today's open Pomodoros, computed at read time by bob plan and
     bob-ledger-tools; never a tag, task-line field, or file-path filter; #now is
     retired.
-16. **Unblocked Tasks Resurface As Ticklers** (`unblocked-tasks-resurface-as-ticklers`)
+17. **Unblocked Tasks Resurface As Ticklers** (`unblocked-tasks-resurface-as-ticklers`)
     - Every automatic Blocked-to-Ready recovery records [unblocked:: today] unless a
       WRITE skip applies, so the task is TICKLER in the next morning review; a keep on
       that row leaves the streak unchanged.

@@ -10,7 +10,8 @@ summary:
   #prj_is_blocked, and Blocked tasks keep no Task Links under today's
   open Pomodoros."
 metadata:
-  status: accepted
+  status: superseded-in-part
+  superseded_by: decisions:subprojects-inherit-project-blocking
   decided: 2026-10-12
 ---
 
@@ -79,3 +80,5 @@ the R9 carve-out.
 **Reopens when.** Lanes must survive Blocked; Bryan wants a sub-project
 cascade or re-linking on unblock; a projects-by-date Properties/Bases
 view is needed.
+
+Superseded in part: residence-only blocking remains for each project’s own residents; sub-project descendants now inherit blocked ancestor reasons — see [[decisions:subprojects-inherit-project-blocking]].
