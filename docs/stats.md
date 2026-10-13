@@ -627,6 +627,13 @@ Open Stats command; the page contract is in
 labels, quality, definitions, and formatted parts from Bob; the plugin
 only lays them out and manages the current view.
 
+On desktop the block finds `bob` by checking `stats.bob_path` in
+`~/.config/bob/config.yml` first (`~/` is expanded), then
+`~/.cargo/bin/bob`, `~/.local/bin/bob`, `/opt/homebrew/bin/bob`, and
+`/usr/local/bin/bob`, then `bob` on PATH. GUI Obsidian on macOS does not
+inherit the shell PATH, which is why the fixed locations are tried first.
+The error card lists exactly the paths that were tried.
+
 The focus chart groups its bars by the report's selected day, week, or month bucket.
 Its legend names that grouping and, when supplied, the 25th–75th percentile range for
 those displayed buckets. The rolling-median line uses Bob's supplied daily rolling
