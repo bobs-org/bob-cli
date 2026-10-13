@@ -1,4 +1,5 @@
 //! Task reference resolution and desired-status computation.
+use super::super::project_dependencies::ProjectTree;
 use super::*;
 
 pub(super) fn archive_reference_catalog<'a, I>(
@@ -313,6 +314,7 @@ pub(super) fn dependency_edges(
     files: &[FileScan],
     note_index: &NoteIndex,
     task_blocks: &BTreeMap<(PathBuf, String), Vec<char>>,
+    project_tree: &ProjectTree,
     unresolved: &mut Vec<UnresolvedReference>,
 ) -> BTreeMap<(PathBuf, String), BTreeSet<(PathBuf, String)>> {
     let mut edges: BTreeMap<(PathBuf, String), BTreeSet<(PathBuf, String)>> =
@@ -452,17 +454,16 @@ pub(super) fn dependency_edges(
             }
         }
     }
-    add_resident_implicit_edges(files, &mut edges);
+    add_resident_implicit_edges(files, project_tree, &mut edges);
     edges
 }
 
-/// Resident → `^prj`-link implicit edges (`docs/task-dependencies.md`
-/// §13.3): every open resident inherits its project's prerequisites
-/// for promotion and recovery rank. Targets resolve through the
-/// `^prj` task's projected `[dependsOn::]` field, so same-note
-/// internal links (never projected) contribute no edge.
+/// A project's open `^prj` task and residents inherit the projected links
+/// of that project and every ancestor (`docs/task-dependencies.md` §13.3).
+/// Internal links have already been removed from the fields by R1–R10.
 fn add_resident_implicit_edges(
     files: &[FileScan],
+    project_tree: &ProjectTree,
     edges: &mut BTreeMap<(PathBuf, String), BTreeSet<(PathBuf, String)>>,
 ) {
     let mut task_ids: BTreeMap<String, Vec<(PathBuf, String)>> =
@@ -480,49 +481,68 @@ fn add_resident_implicit_edges(
                 .push((file.relative_path.clone(), block_id));
         }
     }
-    for file in files {
-        let context =
-            super::super::project_dependencies::ProjectContext::for_note(file);
-        if !context.recognised {
-            continue;
-        }
-        let Some(prj) = context
-            .project_task_index()
-            .and_then(|index| file.tasks.get(index))
+    for (file_index, file) in files.iter().enumerate() {
+        let Some(project_task_index) =
+            project_tree.project_task_index(file_index)
         else {
             continue;
         };
-        if prj.depends_on.is_empty() {
-            continue;
-        }
-        let mut targets = BTreeSet::new();
-        for id in &prj.depends_on {
-            if let Some(identities) = task_ids.get(id) {
-                targets.extend(
-                    identities
-                        .iter()
-                        .filter(|(path, _)| path != &file.relative_path)
-                        .cloned(),
-                );
-            }
-        }
-        if targets.is_empty() {
-            continue;
+        let project_source = file
+            .tasks
+            .get(project_task_index)
+            .and_then(|prj| prj.block_id.as_ref())
+            .map(|block_id| (file.relative_path.clone(), block_id.clone()));
+        let mut sources = Vec::new();
+        if let Some(project_source) = &project_source {
+            sources.push(project_source.clone());
         }
         for task in &file.tasks {
+            if !project_tree.is_resident(file_index, task) {
+                continue;
+            }
             let Some(block_id) = &task.block_id else {
                 continue;
             };
-            if !context.is_resident(task) {
+            sources.push((file.relative_path.clone(), block_id.clone()));
+        }
+        let owners = std::iter::once(file_index)
+            .chain(project_tree.ancestors(file_index).iter().copied());
+        for owner_index in owners {
+            let owner = &files[owner_index];
+            let Some(prj) = project_tree
+                .project_task_index(owner_index)
+                .and_then(|index| owner.tasks.get(index))
+            else {
                 continue;
+            };
+            let mut targets = BTreeSet::new();
+            for id in &prj.depends_on {
+                if let Some(identities) = task_ids.get(id) {
+                    targets.extend(identities.iter().filter_map(
+                        |(path, block)| {
+                            (!project_tree
+                                .is_internal_target(owner_index, path))
+                            .then(|| (path.clone(), block.clone()))
+                        },
+                    ));
+                }
             }
-            let source = (file.relative_path.clone(), block_id.clone());
-            for target in &targets {
-                if target != &source {
-                    edges
-                        .entry(source.clone())
-                        .or_default()
-                        .insert(target.clone());
+            for source in &sources {
+                // Residents inherit their own project's prerequisites, but
+                // the project's `^prj` task does not gain a synthetic edge
+                // to its own target. Project tasks receive ancestor edges.
+                if owner_index == file_index
+                    && project_source.as_ref() == Some(source)
+                {
+                    continue;
+                }
+                for target in &targets {
+                    if target != source {
+                        edges
+                            .entry(source.clone())
+                            .or_default()
+                            .insert(target.clone());
+                    }
                 }
             }
         }
@@ -786,18 +806,23 @@ pub(super) fn dependency_status_change(
                     project,
                     open_ids,
                 } => {
-                    project_path =
-                        Some(display_path(project));
-                    project_open_dependency_ids = open_ids.clone();
+                    let path = display_path(project);
+                    if project_path.as_ref().is_none_or(|current| current == &path)
+                    {
+                        project_path.get_or_insert(path);
+                        project_open_dependency_ids = open_ids.clone();
+                    }
                 }
                 super::super::project_dependencies::BlockReason::ProjectSchedule {
                     project,
                     date,
                 } => {
-                    project_path =
-                        Some(display_path(project));
-                    project_scheduled_date =
-                        Some(date.to_string());
+                    let path = display_path(project);
+                    if project_path.as_ref().is_none_or(|current| current == &path)
+                    {
+                        project_path.get_or_insert(path);
+                        project_scheduled_date = Some(date.to_string());
+                    }
                 }
                 super::super::project_dependencies::BlockReason::LocalDependency { .. }
                 | super::super::project_dependencies::BlockReason::LocalSchedule { .. } => {}

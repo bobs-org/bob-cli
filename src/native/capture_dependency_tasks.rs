@@ -253,6 +253,14 @@ pub(crate) fn has_hide_tag(raw_line: &str) -> bool {
     raw_line.split_whitespace().any(|token| token == "#hide")
 }
 
+/// Whether a raw task line carries the machine-owned project-block tag as
+/// its own token (`#prj_is_blocked` does not match a longer token).
+pub(crate) fn has_prj_is_blocked_tag(raw_line: &str) -> bool {
+    raw_line
+        .split_whitespace()
+        .any(|token| token == "#prj_is_blocked")
+}
+
 /// Short display locator for a note path: the file stem when that
 /// basename is unique in the vault (case-insensitive, like link
 /// resolution), otherwise the full vault-relative path without `.md`.

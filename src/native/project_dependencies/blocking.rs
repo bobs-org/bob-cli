@@ -6,7 +6,7 @@
 //! dependency model; this module only adds the project-resident rule.
 
 use std::collections::BTreeSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use chrono::NaiveDate;
 
@@ -33,6 +33,8 @@ pub(crate) struct ProjectContext {
     pub(crate) recognised: bool,
     /// Index into `FileScan::tasks` for the project's open `^prj` task.
     project_task_index: Option<usize>,
+    /// Logical line index for the project's open `^prj` task.
+    project_task_line_index: Option<usize>,
     /// The project's own inline `scheduled` value.
     pub(crate) scheduled: Option<NaiveDate>,
     /// Fenced logical-line indices; fenced task-looking lines are not
@@ -48,6 +50,7 @@ impl ProjectContext {
             relative_path: file.relative_path.clone(),
             recognised: false,
             project_task_index: None,
+            project_task_line_index: None,
             scheduled: None,
             fenced: fenced_lines(&lines, 0..lines.len()),
         };
@@ -75,6 +78,8 @@ impl ProjectContext {
 
         context.recognised = true;
         context.project_task_index = Some(*project_task_index);
+        context.project_task_line_index =
+            Some(file.tasks[*project_task_index].line_index);
         context.scheduled = file.tasks[*project_task_index].scheduled;
         context
     }
@@ -82,6 +87,11 @@ impl ProjectContext {
     /// Index of the `^prj` task in the scanned note, when this is a project.
     pub(crate) fn project_task_index(&self) -> Option<usize> {
         self.recognised.then_some(self.project_task_index).flatten()
+    }
+
+    /// Whether `task` is this note's recognised open `^prj` line.
+    pub(crate) fn is_project_task(&self, task: &TaskLine) -> bool {
+        self.recognised && self.project_task_line_index == Some(task.line_index)
     }
 
     /// Whether a logical line sits inside a fenced block: fenced
@@ -229,13 +239,15 @@ impl BlockReason {
 }
 
 /// Pure effective-blocking reasons for one task (§13.3): its own open
-/// prerequisites and future schedule, plus its project's reasons when it is
-/// a resident. The `^prj` task reports only its own reasons.
+/// prerequisites and future schedule, plus its project's own and inherited
+/// reasons when it is a resident. A `^prj` reports its own reasons as local
+/// reasons and only inherited reasons as project reasons.
 pub(crate) fn effective_block_reasons(
     task: &TaskLine,
     local_open_dependency_ids: &[String],
     context: &ProjectContext,
     project_reasons: &ProjectBlockReasons,
+    inherited_reasons: &[(PathBuf, ProjectBlockReasons)],
     today: NaiveDate,
 ) -> Vec<BlockReason> {
     let mut reasons = Vec::new();
@@ -251,18 +263,42 @@ pub(crate) fn effective_block_reasons(
         reasons.push(BlockReason::LocalSchedule { date });
     }
     if context.is_resident(task) {
-        if !project_reasons.open_dependency_ids.is_empty() {
-            reasons.push(BlockReason::ProjectDependency {
-                project: context.relative_path.clone(),
-                open_ids: project_reasons.open_dependency_ids.clone(),
-            });
-        }
-        if let Some(date) = project_reasons.future_scheduled {
-            reasons.push(BlockReason::ProjectSchedule {
-                project: context.relative_path.clone(),
-                date,
-            });
-        }
+        append_project_reasons(
+            &mut reasons,
+            &context.relative_path,
+            project_reasons,
+        );
+        append_inherited_reasons(&mut reasons, inherited_reasons);
+    } else if context.is_project_task(task) {
+        append_inherited_reasons(&mut reasons, inherited_reasons);
     }
     reasons
+}
+
+fn append_inherited_reasons(
+    reasons: &mut Vec<BlockReason>,
+    inherited: &[(PathBuf, ProjectBlockReasons)],
+) {
+    for (project, project_reasons) in inherited {
+        append_project_reasons(reasons, project, project_reasons);
+    }
+}
+
+fn append_project_reasons(
+    reasons: &mut Vec<BlockReason>,
+    project: &Path,
+    project_reasons: &ProjectBlockReasons,
+) {
+    if !project_reasons.open_dependency_ids.is_empty() {
+        reasons.push(BlockReason::ProjectDependency {
+            project: project.to_path_buf(),
+            open_ids: project_reasons.open_dependency_ids.clone(),
+        });
+    }
+    if let Some(date) = project_reasons.future_scheduled {
+        reasons.push(BlockReason::ProjectSchedule {
+            project: project.to_path_buf(),
+            date,
+        });
+    }
 }

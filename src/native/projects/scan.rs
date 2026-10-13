@@ -735,6 +735,24 @@ pub(super) fn wikilink_target(value: &str) -> Option<String> {
     wikilink_ref(value).map(|target| target.link_name)
 }
 
+/// Return a scalar wikilink's note target without its alias or heading.
+/// Unlike `wikilink_target`, this preserves a vault-relative path so callers
+/// can resolve it with the same exact-path/unique-basename rules as links.
+pub(crate) fn wikilink_path_target(value: &str) -> Option<String> {
+    let value = trim_yaml_scalar(value);
+    let inner = value.strip_prefix("[[")?.strip_suffix("]]")?;
+    if inner.contains("[[") || inner.contains("]]") {
+        return None;
+    }
+    let before_alias =
+        inner.split_once('|').map_or(inner, |(target, _)| target);
+    let target = before_alias
+        .split_once('#')
+        .map_or(before_alias, |(target, _)| target)
+        .trim();
+    (!target.is_empty()).then(|| target.to_string())
+}
+
 pub(super) fn wikilink_ref(value: &str) -> Option<WikilinkRef> {
     let value = trim_yaml_scalar(value);
     let inner = value.strip_prefix("[[")?.strip_suffix("]]")?.trim();

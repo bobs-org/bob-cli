@@ -1,5 +1,8 @@
 //! Daily, reference, parse, and status-transition tests.
 use super::*;
+use crate::native::project_dependencies::{
+    ProjectBlockReasons, ProjectContext, ProjectTree,
+};
 
 #[test]
 fn previous_daily_selection_uses_latest_canonical_earlier_date() {
@@ -225,7 +228,9 @@ fn fenced_column_zero_content_does_not_end_dependency_scan() {
         files.iter().map(|file| file.relative_path.clone()),
     );
     let blocks = task_blocks(&files);
-    let edges = dependency_edges(&files, &index, &blocks, &mut Vec::new());
+    let tree = project_tree_for(&files, &index);
+    let edges =
+        dependency_edges(&files, &index, &blocks, &tree, &mut Vec::new());
     assert!(edges[&(PathBuf::from("A.md"), "a".to_string())]
         .contains(&(PathBuf::from("B.md"), "b".to_string())));
 }
@@ -639,8 +644,19 @@ fn edge_scan(entries: &[(&str, &str)]) -> ScannedEdges {
     );
     let blocks = task_blocks(&files);
     let mut unresolved = Vec::new();
-    let edges = dependency_edges(&files, &index, &blocks, &mut unresolved);
+    let tree = project_tree_for(&files, &index);
+    let edges =
+        dependency_edges(&files, &index, &blocks, &tree, &mut unresolved);
     ScannedEdges { edges, unresolved }
+}
+
+fn project_tree_for(files: &[FileScan], index: &NoteIndex) -> ProjectTree {
+    let contexts = files
+        .iter()
+        .map(ProjectContext::for_note)
+        .collect::<Vec<_>>();
+    let reasons = vec![ProjectBlockReasons::default(); files.len()];
+    ProjectTree::build(files, &contexts, &reasons, index)
 }
 
 struct ScannedEdges {
@@ -742,7 +758,6 @@ fn archive_targets_are_not_promotion_edges() {
 
 use crate::native::project_dependencies::{
     effective_block_reasons, project_block_reasons, BlockReason,
-    ProjectBlockReasons, ProjectContext,
 };
 
 const PROJECT_FRONTMATTER: &str =
@@ -853,6 +868,7 @@ fn prj_reports_only_own_reasons() {
         &prj.depends_on,
         &context,
         &reasons,
+        &[],
         date(2026, 7, 16),
     );
     assert_eq!(
@@ -879,6 +895,7 @@ fn hand_blocked_prj_with_no_reasons_recovers() {
         &[],
         &context,
         &reasons,
+        &[],
         date(2026, 7, 16),
     );
     assert!(effective.is_empty());
@@ -893,6 +910,7 @@ fn hand_blocked_prj_with_no_reasons_recovers() {
         &[],
         &context,
         &reasons,
+        &[],
         date(2026, 7, 16),
     );
     assert!(resident_effective.is_empty());
@@ -920,6 +938,7 @@ fn blocked_project_marks_and_tags_residents() {
         &[],
         &context,
         &reasons,
+        &[],
         date(2026, 7, 16),
     );
     assert_eq!(
@@ -938,6 +957,7 @@ fn blocked_project_marks_and_tags_residents() {
         Some('?'),
         &context,
         &reasons,
+        &[],
         Transition::MarkBlocked,
         date(2026, 7, 16),
         false,
@@ -983,6 +1003,7 @@ fn recovery_strips_tag_and_writes_unblocked() {
         Some(' '),
         &context,
         &reasons,
+        &[],
         Transition::Unblock(RankedStatus::Ready),
         date(2026, 7, 16),
         false,
@@ -1024,6 +1045,7 @@ fn stale_unblocked_field_is_pruned_without_status_change() {
         None,
         &context,
         &reasons,
+        &[],
         Transition::Unchanged,
         date(2026, 7, 20),
         false,
@@ -1064,6 +1086,7 @@ fn hand_copied_tag_outside_blocked_projects_is_stripped() {
         None,
         &context,
         &ProjectBlockReasons::default(),
+        &[],
         Transition::Unchanged,
         date(2026, 7, 16),
         false,
@@ -1103,6 +1126,7 @@ fn misplaced_existing_tag_is_not_counted_as_added() {
         None,
         &context,
         &reasons,
+        &[],
         Transition::Unchanged,
         date(2026, 7, 16),
         false,
@@ -1140,6 +1164,7 @@ fn parenthesized_repeat_skips_unblocked_write() {
         Some(' '),
         &context,
         &reasons,
+        &[],
         Transition::Unblock(RankedStatus::Ready),
         date(2026, 7, 16),
         false,

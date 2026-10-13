@@ -104,9 +104,10 @@ Ready, Next, and In Progress. A schedule on the anchor date or earlier is not \
 future. When every derived blocking reason clears, Blocked tasks recover to \
 Next when directly recent, In Progress only through a stronger eligible \
 transclusion path, or Ready when unreachable. No pre-Blocked status is stored. \
-A project's own blocking comes from its open `^prj` task's ordinary \
-Depends-On line and inline schedule: while those give a reason, every open \
-resident of the note is Blocked and carries `#prj_is_blocked`, and every \
+Blocking starts from an open project's `^prj` Depends-On line and inline \
+schedule, and cascades through project `parent:` links. Descendant `^prj` \
+tasks inherit ancestor reasons and carry `#prj_is_blocked`; every open \
+resident of a blocked project carries the same tag, and every \
 automatic Blocked-to-Ready recovery writes `[unblocked::]` (see \
 docs/task-dependencies.md §13). \
 Completed linked-task references \

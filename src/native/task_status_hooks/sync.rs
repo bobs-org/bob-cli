@@ -1,13 +1,16 @@
 //! Daily-note selection and task-status sync orchestration.
 use super::*;
 
+use super::super::capture_dependency_tasks::{
+    has_hide_tag, has_prj_is_blocked_tag,
+};
 use super::super::freshness::placement::{
     mark_unblocked, prune_unblocked, UnblockScope,
 };
 use super::super::project_dependencies::{
     blocking_open_dependency_ids, effective_block_reasons,
     filter_internal_project_ids, project_block_reasons, BlockReason,
-    ProjectBlockReasons, ProjectContext,
+    ProjectBlockReasons, ProjectContext, ProjectTree,
 };
 use super::super::projects::edits::normalize_prj_is_blocked_tag;
 use super::super::task_complete::is_recurring_task_line;
@@ -411,10 +414,24 @@ pub(super) fn sync_task_statuses(
     let note_index = NoteIndex::from_paths(
         files.iter().map(|file| file.relative_path.clone()),
     );
+    // Recognition and `parent:` do not change in R1–R10. Build the
+    // hierarchy from this pre-reconcile scan so both dependency projection
+    // and the later status pass share one resolution of the tree.
+    let project_contexts: Vec<ProjectContext> =
+        files.iter().map(ProjectContext::for_note).collect();
+    let empty_project_reasons =
+        vec![ProjectBlockReasons::default(); files.len()];
+    let mut project_tree = ProjectTree::build(
+        &files,
+        &project_contexts,
+        &empty_project_reasons,
+        &note_index,
+    );
     let reconcile = reconcile_dependencies(
         &request.bob_dir,
         &mut files,
         &note_index,
+        &project_tree,
         &settings,
         previous_daily_path.as_deref(),
         &mut inputs,
@@ -426,8 +443,13 @@ pub(super) fn sync_task_statuses(
     }
     let task_blocks = task_blocks(&files);
     let mut unresolved = Vec::new();
-    let dependency_edges =
-        dependency_edges(&files, &note_index, &task_blocks, &mut unresolved);
+    let dependency_edges = dependency_edges(
+        &files,
+        &note_index,
+        &task_blocks,
+        &project_tree,
+        &mut unresolved,
+    );
     let reference_resolver = TaskReferenceResolver {
         note_index: &note_index,
         task_blocks: &task_blocks,
@@ -497,12 +519,9 @@ pub(super) fn sync_task_statuses(
     );
     let task_dependency_states =
         task_dependency_states(&files, &reconcile.archive_closed_ids);
-    // Project blocking (`docs/task-dependencies.md` §13.3): each
-    // project's `^prj` own reasons first. Same-note internal ids are
-    // filtered here so a dirty `[dependsOn::]` cannot deadlock the
-    // project (PDR7).
-    let project_contexts: Vec<ProjectContext> =
-        files.iter().map(ProjectContext::for_note).collect();
+    // Project blocking (`docs/task-dependencies.md` §13.3): derive own
+    // reasons from the reconciled fields, then remove same-note and
+    // descendant-internal targets before publishing them through the tree.
     let project_reasons: Vec<ProjectBlockReasons> = files
         .iter()
         .enumerate()
@@ -519,9 +538,12 @@ pub(super) fn sync_task_statuses(
                 .map(|state| state.open_dependency_ids.clone())
                 .unwrap_or_default();
             let open_ids = filter_internal_project_ids(file, &open_ids);
+            let open_ids = project_tree
+                .filter_descendant_ids(file_index, &files, &open_ids);
             project_block_reasons(context, &open_ids, anchor)
         })
         .collect();
+    project_tree.set_project_reasons(&files, project_reasons);
 
     let mut marked_next = Vec::new();
     let mut marked_in_progress = Vec::new();
@@ -587,11 +609,21 @@ pub(super) fn sync_task_statuses(
                 task,
                 &dependency_state.open_dependency_ids,
             );
+            let open_ids = if project_tree.project_task_index(file_index)
+                == Some(task_index)
+            {
+                let open_ids = filter_internal_project_ids(file, &open_ids);
+                project_tree
+                    .filter_descendant_ids(file_index, &files, &open_ids)
+            } else {
+                open_ids
+            };
             let block_reasons = effective_block_reasons(
                 task,
                 &open_ids,
                 &project_contexts[file_index],
-                &project_reasons[file_index],
+                project_tree.own_reasons(file_index),
+                project_tree.inherited(file_index),
                 anchor,
             );
             let has_derived_block = !block_reasons.is_empty();
@@ -684,7 +716,8 @@ pub(super) fn sync_task_statuses(
                     file_lines.get(task.line_index).copied().unwrap_or(""),
                     replacement,
                     &project_contexts[file_index],
-                    &project_reasons[file_index],
+                    project_tree.own_reasons(file_index),
+                    project_tree.inherited(file_index),
                     transition,
                     anchor,
                     is_daily_note,
@@ -910,6 +943,7 @@ pub(super) fn plan_task_line_rewrite(
     replacement: Option<char>,
     context: &ProjectContext,
     project_reasons: &ProjectBlockReasons,
+    inherited_reasons: &[(PathBuf, ProjectBlockReasons)],
     transition: Transition,
     anchor: NaiveDate,
     is_daily_note: bool,
@@ -923,10 +957,16 @@ pub(super) fn plan_task_line_rewrite(
     if let Some(to) = replacement {
         line = swap_status_byte(&line, task.status, to);
     }
-    // `tag_scope = every_resident`: every open resident of a blocked
-    // project carries the tag; every other open line loses it.
+    // Residents carry the tag when their project has any own or inherited
+    // reason. A project's `^prj` carries it only for inherited reasons.
     if !context.is_fenced(task.line_index) {
-        let want_tag = !project_reasons.is_empty() && context.is_resident(task);
+        let want_tag = if context.is_project_task(task) {
+            !inherited_reasons.is_empty()
+        } else {
+            context.is_resident(task)
+                && (!project_reasons.is_empty()
+                    || !inherited_reasons.is_empty())
+        };
         let tagged = normalize_prj_is_blocked_tag(&line, want_tag);
         if tagged != line {
             let change = ProjectBlockedTagChange {
@@ -937,7 +977,7 @@ pub(super) fn plan_task_line_rewrite(
             if want_tag {
                 // Count only real additions: moving a misplaced
                 // existing tag is a rewrite, not an add.
-                if !has_tag_token(raw_line, "#prj_is_blocked") {
+                if !has_prj_is_blocked_tag(raw_line) {
                     tags_added.push(change);
                 }
             } else {
@@ -954,7 +994,7 @@ pub(super) fn plan_task_line_rewrite(
         });
         let scope = UnblockScope {
             recurring: is_recurring_task_line(&line),
-            hidden: has_tag_token(&line, "#hide"),
+            hidden: has_hide_tag(&line),
             is_daily_note,
             is_today,
         };
@@ -1003,12 +1043,6 @@ fn swap_status_byte(line: &str, from: char, to: char) -> String {
         );
     }
     output
-}
-
-/// Token-bounded tag check: `#prj` never matches `#prj_is_blocked`
-/// and vice versa (PDT12).
-fn has_tag_token(line: &str, tag: &str) -> bool {
-    line.split(char::is_whitespace).any(|token| token == tag)
 }
 
 /// The date carried by the first `[unblocked:: …]` field on the line.

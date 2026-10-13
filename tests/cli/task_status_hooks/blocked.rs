@@ -1038,10 +1038,10 @@ fn reconcile_pdf1_databricks_ref_residents() {
     assert_eq!(json["consumed_blocked_references"], serde_json::json!([]));
 }
 
-// PDB5: a child project is not blocked by its parent.
+// PDS1/PDS2: a blocked project cascades through child and grandchild projects.
 #[test]
-fn reconcile_does_not_cascade_to_child_projects() {
-    let temp = TempDir::new("bob-cli-task-status-hooks-pdb5");
+fn reconcile_cascades_to_child_projects() {
+    let temp = TempDir::new("bob-cli-task-status-hooks-pds1");
     let vault = temp.path().join("vault");
     let daily = vault.join("2026/20260716.md");
     write_file(&daily, "## Pomodoros\n\n- [ ] Current (0900-0930)\n");
@@ -1054,6 +1054,7 @@ fn reconcile_does_not_cascade_to_child_projects() {
             "---\n",
             "- [ ] #task #prj Parent [dependsOn:: tasks__pre] ^prj\n",
             "  - ⛓️ **DEPENDS ON:** [[tasks#^pre]]\n",
+            "  - 🧩 **Sub-projects:** [[child]]\n",
             "- [ ] #task Parent resident ^parent-res\n",
         ),
     );
@@ -1066,7 +1067,19 @@ fn reconcile_does_not_cascade_to_child_projects() {
             "parent: \"[[parent]]\"\n",
             "---\n",
             "- [ ] #task #prj Child ^prj\n",
-            "- [ ] #task Child resident ^child-res\n",
+            "- [ ] #task #ref Child resident ^child-res\n",
+        ),
+    );
+    write_file(
+        &vault.join("grandchild.md"),
+        concat!(
+            "---\n",
+            "type: \"[[project]]\"\n",
+            "status: wip\n",
+            "parent: \"[[child]]\"\n",
+            "---\n",
+            "- [ ] #task #prj Grandchild ^prj\n",
+            "- [ ] #task Grandchild resident ^grandchild-res\n",
         ),
     );
     write_file(&vault.join("tasks.md"), "- [ ] #task Prerequisite ^pre\n");
@@ -1081,20 +1094,32 @@ fn reconcile_does_not_cascade_to_child_projects() {
         .arg(&vault)
         .env("BOB_DAY_FILE", &daily)
         .output()
-        .expect("dry-run PDB5");
+        .expect("dry-run PDS1/PDS2");
     assert_success(&dry_run);
     let json: serde_json::Value =
         serde_json::from_str(stdout(&dry_run).trim()).unwrap();
     let marked = json["marked_blocked"].as_array().unwrap();
-    assert!(
-        marked.iter().all(|item| {
-            item["path"] != "child.md"
-                || (item["block_id"] != "prj"
-                    && item["block_id"] != "child-res")
-        }),
-        "{}",
-        stdout(&dry_run)
-    );
+    for (path, block_id) in [
+        ("child.md", "prj"),
+        ("child.md", "child-res"),
+        ("grandchild.md", "prj"),
+        ("grandchild.md", "grandchild-res"),
+    ] {
+        let row = marked
+            .iter()
+            .find(|item| item["path"] == path && item["block_id"] == block_id);
+        assert!(
+            row.is_some(),
+            "missing blocked {path}#{block_id}: {}",
+            stdout(&dry_run)
+        );
+        let row = row.unwrap();
+        assert_eq!(
+            row["reason_kinds"],
+            serde_json::json!(["project_dependency"])
+        );
+        assert_eq!(row["project_path"], "parent.md");
+    }
     assert!(
         marked.iter().any(|item| {
             item["path"] == "parent.md" && item["block_id"] == "prj"
@@ -1107,6 +1132,13 @@ fn reconcile_does_not_cascade_to_child_projects() {
         }),
         "the parent's resident is a positive control for project blocking"
     );
+    let tagged = json["prj_is_blocked_tags_added"].as_array().unwrap();
+    assert!(tagged.iter().any(|item| {
+        item["path"] == "child.md" && item["block_id"] == "prj"
+    }));
+    assert!(tagged.iter().any(|item| {
+        item["path"] == "grandchild.md" && item["block_id"] == "prj"
+    }));
 }
 
 // PDB6: two open `^prj` lines means the note is not `project(T)`.

@@ -10,6 +10,7 @@
 //! structural, so the quiet interval defers recently modified notes.
 use super::*;
 
+use super::super::project_dependencies::ProjectTree;
 use std::collections::BTreeMap;
 
 mod apply;
@@ -46,6 +47,7 @@ pub(super) fn reconcile_dependencies(
     vault: &Path,
     files: &mut [FileScan],
     note_index: &NoteIndex,
+    project_tree: &ProjectTree,
     settings: &TasksSettings,
     previous_daily_path: Option<&Path>,
     inputs: &mut Vec<InputSnapshot>,
@@ -54,6 +56,7 @@ pub(super) fn reconcile_dependencies(
         vault,
         files,
         note_index,
+        project_tree,
         settings,
         previous_daily_path,
     );
@@ -85,6 +88,7 @@ enum EditKind {
 struct ReconcileWorker<'a> {
     vault: &'a Path,
     note_index: &'a NoteIndex,
+    project_tree: &'a ProjectTree,
     settings: &'a TasksSettings,
     previous_daily_path: Option<&'a Path>,
     /// (file index, task index) per scanned task identity.
@@ -152,6 +156,7 @@ impl<'a> ReconcileWorker<'a> {
         vault: &'a Path,
         files: &[FileScan],
         note_index: &'a NoteIndex,
+        project_tree: &'a ProjectTree,
         settings: &'a TasksSettings,
         previous_daily_path: Option<&'a Path>,
     ) -> Self {
@@ -254,6 +259,7 @@ impl<'a> ReconcileWorker<'a> {
         Self {
             vault,
             note_index,
+            project_tree,
             settings,
             previous_daily_path,
             task_lookup,
@@ -306,55 +312,113 @@ impl<'a> ReconcileWorker<'a> {
         }
         self.add_resident_implicit_edges(files);
         self.plan_cycles(files);
+        self.warn_project_parent_cycles(files);
     }
 
-    /// Resident → `^prj`-link implicit edges for R7 cycle detection
-    /// (`docs/task-dependencies.md` §13.3, PDR8): every open resident
-    /// inherits its project's projected prerequisites, so an inherited
-    /// cycle through a resident warns `dependency_cycle` like a direct
-    /// one. Same-note internal links never project, so they contribute
-    /// no edge.
+    /// Project tasks and residents inherit every ancestor project's
+    /// projected prerequisites for R7 cycle detection (PDS11). Internal
+    /// targets have already been kept off the graph by R1–R10.
     fn add_resident_implicit_edges(&mut self, files: &[FileScan]) {
         for (file_index, file) in files.iter().enumerate() {
-            let context =
-                super::super::project_dependencies::ProjectContext::for_note(
-                    file,
-                );
-            if !context.recognised {
+            let Some(project_task_index) =
+                self.project_tree.project_task_index(file_index)
+            else {
                 continue;
-            }
-            let targets = self
-                .graph
-                .get(&(file.relative_path.clone(), "prj".to_string()))
-                .cloned()
-                .unwrap_or_default();
-            if targets.is_empty() {
-                continue;
+            };
+            let project_source = file
+                .tasks
+                .get(project_task_index)
+                .and_then(|project_task| project_task.block_id.as_ref())
+                .map(|block_id| (file.relative_path.clone(), block_id.clone()));
+            let mut sources = Vec::new();
+            if let Some(project_source) = &project_source
+                && let Some(project_task) = file.tasks.get(project_task_index)
+            {
+                sources.push((project_source.clone(), project_task.line_index));
             }
             for task in &file.tasks {
+                if !self.project_tree.is_resident(file_index, task) {
+                    continue;
+                }
                 let Some(block_id) = &task.block_id else {
                     continue;
                 };
-                if !context.is_resident(task) {
-                    continue;
-                }
-                let source = (file.relative_path.clone(), block_id.clone());
-                let resident_targets: BTreeSet<(PathBuf, String)> = targets
-                    .iter()
-                    .filter(|target| *target != &source)
-                    .cloned()
-                    .collect();
-                if resident_targets.is_empty() {
-                    continue;
-                }
-                self.graph_nodes
-                    .entry(source.clone())
-                    .or_insert((file_index, task.line_index));
-                self.graph
-                    .entry(source)
-                    .or_default()
-                    .extend(resident_targets);
+                sources.push((
+                    (file.relative_path.clone(), block_id.clone()),
+                    task.line_index,
+                ));
             }
+            let owners = std::iter::once(file_index)
+                .chain(self.project_tree.ancestors(file_index).iter().copied());
+            for owner_index in owners {
+                let owner = &files[owner_index];
+                let targets = self
+                    .project_tree
+                    .project_task_index(owner_index)
+                    .and_then(|task_index| owner.tasks.get(task_index))
+                    .and_then(|task| task.block_id.as_ref())
+                    .and_then(|block_id| {
+                        self.graph.get(&(
+                            owner.relative_path.clone(),
+                            block_id.clone(),
+                        ))
+                    })
+                    .cloned()
+                    .unwrap_or_default();
+                for (source, line_index) in &sources {
+                    if owner_index == file_index
+                        && project_source.as_ref() == Some(source)
+                    {
+                        continue;
+                    }
+                    let targets = targets
+                        .iter()
+                        .filter(|target| *target != source)
+                        .cloned()
+                        .collect::<BTreeSet<_>>();
+                    if targets.is_empty() {
+                        continue;
+                    }
+                    self.graph_nodes
+                        .entry(source.clone())
+                        .or_insert((file_index, *line_index));
+                    self.graph
+                        .entry(source.clone())
+                        .or_default()
+                        .extend(targets);
+                }
+            }
+        }
+    }
+
+    fn warn_project_parent_cycles(&mut self, files: &[FileScan]) {
+        let cycles = self.project_tree.cycles().to_vec();
+        for cycle in cycles {
+            let names = cycle
+                .iter()
+                .map(|index| display_path(&files[*index].relative_path))
+                .collect::<Vec<_>>();
+            let Some(file_index) = cycle.first().copied() else {
+                continue;
+            };
+            let Some(task_index) =
+                self.project_tree.project_task_index(file_index)
+            else {
+                continue;
+            };
+            let Some(task) = files[file_index].tasks.get(task_index) else {
+                continue;
+            };
+            let view = TaskView {
+                file_index,
+                relative_path: &files[file_index].relative_path,
+                task,
+            };
+            self.warn(
+                &view,
+                "project_parent_cycle",
+                &format!("project parent cycle includes {}", names.join(" → ")),
+            );
         }
     }
 
@@ -505,12 +569,12 @@ impl ReconcileWorker<'_> {
             view.task.line_index,
         );
         let child_index = child.as_ref().map(|child| child.line_index);
-        let legacy = self.plan_legacy(view, files, child_index, inputs);
+        let legacy = self.plan_legacy(view, child_index, inputs);
         match child.map(|child| child.parsed) {
             // `dependency_child_of` never returns `NotALine`, but the
             // type says it can; both mean "no managed line" (R2).
             None | Some(task_dependencies::DependencyLine::NotALine) => {
-                self.plan_adoption(view, files, &legacy, None);
+                self.plan_adoption(view, &legacy, None);
             }
             Some(task_dependencies::DependencyLine::Malformed) => {
                 self.warn(
@@ -523,7 +587,7 @@ impl ReconcileWorker<'_> {
                 let Some(child_index) = child_index else {
                     return;
                 };
-                self.plan_empty(view, files, &legacy, child_index);
+                self.plan_empty(view, &legacy, child_index);
             }
             Some(task_dependencies::DependencyLine::Accepted {
                 links,
@@ -547,22 +611,26 @@ impl ReconcileWorker<'_> {
 }
 
 impl ReconcileWorker<'_> {
-    /// PDR7: skip projecting a same-note `^prj` target. Depends-On line
-    /// links always warn; legacy-child and field-adoption paths warn only
-    /// when the target's `[id::]` value is named in the field. Returns
-    /// true for every internal target so it stays off the live graph.
+    /// PDS8: skip projecting a `^prj` target in its own note or any
+    /// descendant note. Depends-On line links always warn; legacy-child
+    /// and field-adoption paths warn only when the target's `[id::]` value
+    /// is named in the field. Returns true for every internal target.
     fn warn_project_internal_target(
         &mut self,
         view: &TaskView<'_>,
-        files: &[FileScan],
         path: &Path,
         block: &str,
         target_id: Option<&str>,
         warn_unfielded_line_link: bool,
     ) -> bool {
-        if !is_open_project_task(view, files) || path != view.relative_path {
+        if !self
+            .project_tree
+            .is_project_task(view.file_index, view.task)
+            || !self.project_tree.is_internal_target(view.file_index, path)
+        {
             return false;
         }
+        let same_note = path == view.relative_path;
         let warning_id = target_id
             .map(str::to_string)
             .or_else(|| task_dependencies::dependency_id(path, block).ok())
@@ -580,42 +648,39 @@ impl ReconcileWorker<'_> {
             );
             if self.warned_project_internal.insert(warning_key) {
                 let detail = if warn_unfielded_line_link {
-                    format!(
-                        "Depends-On link to {}#^{} is in the project's own note; kept, not projected",
-                        display_path(path),
-                        block
-                    )
+                    if same_note {
+                        format!(
+                            "Depends-On link to {}#^{} is in the project's own note; kept, not projected",
+                            display_path(path),
+                            block
+                        )
+                    } else {
+                        format!(
+                            "Depends-On link to {}#^{} is inside a sub-project; kept, not projected",
+                            display_path(path),
+                            block
+                        )
+                    }
                 } else {
-                    format!(
-                        "field id {warning_id} names {}#^{} in the project's own note; kept, not projected",
-                        display_path(path),
-                        block
-                    )
+                    if same_note {
+                        format!(
+                            "field id {warning_id} names {}#^{} in the project's own note; kept, not projected",
+                            display_path(path),
+                            block
+                        )
+                    } else {
+                        format!(
+                            "field id {warning_id} names {}#^{} inside a sub-project; kept, not projected",
+                            display_path(path),
+                            block
+                        )
+                    }
                 };
                 self.warn(view, "project_internal_dependency", &detail);
             }
         }
         true
     }
-}
-
-/// Whether the dependent is the open `^prj` task of a recognised
-/// project note (`docs/task-dependencies.md` §13.1): only then does
-/// the same-note link guard (PDR7) apply.
-fn is_open_project_task(view: &TaskView<'_>, files: &[FileScan]) -> bool {
-    if view.task.block_id.as_deref() != Some("prj") {
-        return false;
-    }
-    let context = super::super::project_dependencies::ProjectContext::for_note(
-        &files[view.file_index],
-    );
-    context.recognised
-        && context.project_task_index().is_some_and(|index| {
-            files[view.file_index]
-                .tasks
-                .get(index)
-                .is_some_and(|task| task.line_index == view.task.line_index)
-        })
 }
 
 impl LinkTarget {
@@ -649,7 +714,6 @@ impl ReconcileWorker<'_> {
     fn plan_legacy(
         &mut self,
         view: &TaskView<'_>,
-        files: &[FileScan],
         dependency_line: Option<usize>,
         inputs: &mut Vec<InputSnapshot>,
     ) -> Vec<LegacyMember> {
@@ -711,7 +775,6 @@ impl ReconcileWorker<'_> {
                 } => {
                     if self.warn_project_internal_target(
                         view,
-                        files,
                         &path,
                         &block,
                         id.as_deref(),
@@ -912,7 +975,6 @@ impl ReconcileWorker<'_> {
                 let block = block.clone();
                 if self.warn_project_internal_target(
                     view,
-                    files,
                     &path,
                     &block,
                     id.as_deref(),
@@ -1286,7 +1348,6 @@ impl ReconcileWorker<'_> {
     fn plan_empty(
         &mut self,
         view: &TaskView<'_>,
-        files: &[FileScan],
         legacy: &[LegacyMember],
         child_index: usize,
     ) {
@@ -1294,7 +1355,7 @@ impl ReconcileWorker<'_> {
             self.remove_label_only_line(view, child_index);
             return;
         }
-        self.plan_adoption(view, files, legacy, Some(child_index));
+        self.plan_adoption(view, legacy, Some(child_index));
     }
 
     /// Report a deleted label-only Depends-On line.
@@ -1407,7 +1468,6 @@ impl ReconcileWorker<'_> {
     fn plan_adoption(
         &mut self,
         view: &TaskView<'_>,
-        files: &[FileScan],
         legacy: &[LegacyMember],
         empty_line: Option<usize>,
     ) {
@@ -1493,7 +1553,6 @@ impl ReconcileWorker<'_> {
             let (path, block) = targets[0].clone();
             if self.warn_project_internal_target(
                 view,
-                files,
                 &path,
                 &block,
                 Some(id),

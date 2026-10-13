@@ -1,7 +1,7 @@
 //! Project blocking vectors copied from `docs/task-dependencies.md` §13.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use chrono::NaiveDate;
 
@@ -9,7 +9,11 @@ use super::super::task_status_hooks::{
     parse_tasks, task_dependency_states, FileScan, TaskStatusType,
     TasksSettings,
 };
+use super::tree::{
+    ancestor_chain, project_parent_target, resolve_project_parent,
+};
 use super::*;
+use crate::native::vault_links::NoteIndex;
 
 fn settings() -> TasksSettings {
     TasksSettings {
@@ -123,7 +127,7 @@ fn project_reasons_come_from_the_prj_depends_on_line_and_schedule() {
 
     let resident = &files[0].tasks[1];
     let kinds =
-        effective_block_reasons(resident, &[], &context, &reasons, today)
+        effective_block_reasons(resident, &[], &context, &reasons, &[], today)
             .iter()
             .map(BlockReason::kind)
             .collect::<Vec<_>>();
@@ -136,6 +140,7 @@ fn project_reasons_come_from_the_prj_depends_on_line_and_schedule() {
         &reasons.open_dependency_ids,
         &context,
         &reasons,
+        &[],
         today,
     )
     .iter()
@@ -189,7 +194,7 @@ fn project_reasons_do_not_clear_a_residents_own_reason() {
         project_block_reasons(&context, &["prerequisite".into()], today);
     let resident = &file.tasks[1];
     let kinds =
-        effective_block_reasons(resident, &[], &context, &blocked, today)
+        effective_block_reasons(resident, &[], &context, &blocked, &[], today)
             .iter()
             .map(BlockReason::kind)
             .collect::<Vec<_>>();
@@ -197,7 +202,7 @@ fn project_reasons_do_not_clear_a_residents_own_reason() {
 
     let cleared = ProjectBlockReasons::default();
     let kinds =
-        effective_block_reasons(resident, &[], &context, &cleared, today)
+        effective_block_reasons(resident, &[], &context, &cleared, &[], today)
             .iter()
             .map(BlockReason::kind)
             .collect::<Vec<_>>();
@@ -240,6 +245,7 @@ fn project_reason_path_is_the_project_note_path() {
         &[],
         &context,
         &reasons,
+        &[],
         date(2026, 10, 12),
     );
     assert_eq!(
@@ -249,4 +255,240 @@ fn project_reason_path_is_the_project_note_path() {
             open_ids: vec!["required".into()],
         }]
     );
+}
+
+#[test]
+fn project_parent_targets_resolve_scalar_alias_path_and_heading_forms() {
+    // PDS15: aliases and headings are removed while the target path remains.
+    let note = |parent: &str| {
+        format!(
+            "---\ntype: [[project]]\nstatus: wip\nparent: {parent}\n---\n- [ ] #task Work ^work\n"
+        )
+    };
+    let children = [
+        ("alias.md", note("\"[[N|Alias]]\"")),
+        ("path.md", note("\"[[dir/N]]\"")),
+        ("heading.md", note("\"[[N#Heading]]\"")),
+    ];
+    let index = NoteIndex::from_paths([
+        PathBuf::from("N.md"),
+        PathBuf::from("alias.md"),
+        PathBuf::from("heading.md"),
+    ]);
+    assert_eq!(
+        resolve_project_parent(Path::new("alias.md"), &children[0].1, &index,),
+        Some(PathBuf::from("N.md"))
+    );
+    assert_eq!(
+        resolve_project_parent(
+            Path::new("path.md"),
+            &children[1].1,
+            &NoteIndex::from_paths([
+                PathBuf::from("dir/N.md"),
+                PathBuf::from("path.md"),
+            ]),
+        ),
+        Some(PathBuf::from("dir/N.md"))
+    );
+    assert_eq!(
+        resolve_project_parent(Path::new("heading.md"), &children[2].1, &index,),
+        Some(PathBuf::from("N.md"))
+    );
+    assert_eq!(
+        project_parent_target(&note("[[N]], [[Other]]")),
+        None,
+        "list-form parent values are not scalar wikilinks"
+    );
+    assert_eq!(
+        resolve_project_parent(Path::new("N.md"), &note("[[N]]"), &index,),
+        None,
+        "a self-parent is ignored"
+    );
+    let ambiguous = NoteIndex::from_paths([
+        PathBuf::from("one/N.md"),
+        PathBuf::from("two/N.md"),
+        PathBuf::from("child.md"),
+    ]);
+    assert_eq!(
+        resolve_project_parent(
+            Path::new("child.md"),
+            &note("[[N]]"),
+            &ambiguous,
+        ),
+        None,
+        "ambiguous basename parents are ignored"
+    );
+}
+
+#[test]
+fn project_tree_resolves_nearest_ancestors_and_stops_at_nonprojects() {
+    let files = vec![
+        scan_note(
+            "parent.md",
+            &project_note("- [ ] #task Parent ^prj\n"),
+        ),
+        scan_note(
+            "child.md",
+            "---\ntype: [[project]]\nstatus: wip\nparent: [[parent]]\n---\n- [ ] #task Child ^prj\n",
+        ),
+        scan_note(
+            "grandchild.md",
+            "---\ntype: [[project]]\nstatus: wip\nparent: [[child]]\n---\n- [ ] #task Grandchild ^prj\n",
+        ),
+        scan_note(
+            "area.md",
+            "---\ntype: [[area]]\n---\n- [ ] #task Area ^area\n",
+        ),
+        scan_note(
+            "area-child.md",
+            "---\ntype: [[project]]\nstatus: wip\nparent: [[area]]\n---\n- [ ] #task Area child ^prj\n",
+        ),
+        scan_note(
+            "terminal.md",
+            "---\ntype: [[project]]\nstatus: done\nparent: [[parent]]\n---\n- [ ] #task Terminal ^prj\n",
+        ),
+        scan_note(
+            "terminal-child.md",
+            "---\ntype: [[project]]\nstatus: wip\nparent: [[terminal]]\n---\n- [ ] #task Child of terminal ^prj\n",
+        ),
+        scan_note(
+            "two-prj.md",
+            "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task First ^prj\n- [ ] #task Second ^prj\n",
+        ),
+        scan_note(
+            "two-prj-child.md",
+            "---\ntype: [[project]]\nstatus: wip\nparent: [[two-prj]]\n---\n- [ ] #task Child ^prj\n",
+        ),
+        scan_note(
+            "2026/20260716.md",
+            "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Daily ^prj\n",
+        ),
+        scan_note(
+            "daily-child.md",
+            "---\ntype: [[project]]\nstatus: wip\nparent: [[2026/20260716]]\n---\n- [ ] #task Child ^prj\n",
+        ),
+    ];
+    let contexts = files
+        .iter()
+        .map(ProjectContext::for_note)
+        .collect::<Vec<_>>();
+    let reasons = vec![ProjectBlockReasons::default(); files.len()];
+    let index = NoteIndex::from_paths(
+        files.iter().map(|file| file.relative_path.clone()),
+    );
+    let mut tree = ProjectTree::build(&files, &contexts, &reasons, &index);
+
+    assert_eq!(tree.parent_index(1), Some(0));
+    assert_eq!(tree.children(0), &[1]);
+    assert_eq!(tree.ancestors(2), &[1, 0]);
+    assert_eq!(tree.descendants(0), &[1, 2]);
+    assert!(
+        tree.ancestors(4).is_empty(),
+        "PDS6: area parent stops the chain"
+    );
+    assert!(
+        tree.ancestors(6).is_empty(),
+        "PDS7: terminal project stops the chain"
+    );
+    assert!(
+        tree.ancestors(8).is_empty(),
+        "PDS6: two-^prj parent stops the chain"
+    );
+    assert!(
+        tree.ancestors(10).is_empty(),
+        "PDS6: canonical daily parent stops the chain"
+    );
+
+    let mut own_reasons = reasons;
+    own_reasons[0] = ProjectBlockReasons {
+        open_dependency_ids: vec!["outside".into()],
+        future_scheduled: None,
+    };
+    tree.set_project_reasons(&files, own_reasons);
+    assert_eq!(
+        tree.inherited(2)[0],
+        (
+            PathBuf::from("parent.md"),
+            ProjectBlockReasons {
+                open_dependency_ids: vec!["outside".into()],
+                future_scheduled: None,
+            }
+        )
+    );
+    assert_eq!(tree.inherited(4).len(), 0);
+}
+
+#[test]
+fn project_tree_cycle_excludes_self_and_reports_the_cycle_once() {
+    let files = vec![
+        scan_note(
+            "A.md",
+            "---\ntype: [[project]]\nstatus: wip\nparent: [[B]]\n---\n- [ ] #task A ^prj\n",
+        ),
+        scan_note(
+            "B.md",
+            "---\ntype: [[project]]\nstatus: wip\nparent: [[A]]\n---\n- [ ] #task B ^prj\n",
+        ),
+    ];
+    let contexts = files
+        .iter()
+        .map(ProjectContext::for_note)
+        .collect::<Vec<_>>();
+    let reasons = vec![ProjectBlockReasons::default(); files.len()];
+    let index = NoteIndex::from_paths(
+        files.iter().map(|file| file.relative_path.clone()),
+    );
+    let mut tree = ProjectTree::build(&files, &contexts, &reasons, &index);
+    assert_eq!(tree.cycles(), &[vec![0, 1]]);
+    assert_eq!(tree.ancestors(0), &[1]);
+    assert_eq!(tree.ancestors(1), &[0]);
+
+    let mut own_reasons = reasons;
+    own_reasons[0].open_dependency_ids = vec!["outside".into()];
+    tree.set_project_reasons(&files, own_reasons);
+    assert_eq!(tree.inherited(0).len(), 0);
+    assert_eq!(tree.inherited(1)[0].0, PathBuf::from("A.md"));
+}
+
+#[test]
+fn ancestor_chain_is_read_on_demand_cycle_safe_and_depth_limited() {
+    let index = NoteIndex::from_paths([
+        PathBuf::from("child.md"),
+        PathBuf::from("parent.md"),
+        PathBuf::from("grandparent.md"),
+    ]);
+    let parent = project_note("- [ ] #task Parent ^prj\n");
+    let grandparent = "---\ntype: [[project]]\nstatus: wip\nparent: [[child]]\n---\n- [ ] #task Grandparent ^prj\n".to_string();
+    let contents = "---\ntype: [[project]]\nstatus: wip\nparent: [[parent]]\n---\n- [ ] #task Child ^prj\n";
+    let chain = ancestor_chain(
+        Path::new("child.md"),
+        contents,
+        &index,
+        |path| match path.to_str() {
+            Some("parent.md") => Some(parent.clone()),
+            Some("grandparent.md") => Some(grandparent.clone()),
+            _ => None,
+        },
+        16,
+    );
+    assert_eq!(chain, [PathBuf::from("parent.md")]);
+
+    let linear_index = NoteIndex::from_paths([
+        PathBuf::from("child.md"),
+        PathBuf::from("parent.md"),
+        PathBuf::from("grandparent.md"),
+    ]);
+    let parent = "---\ntype: [[project]]\nstatus: wip\nparent: [[grandparent]]\n---\n- [ ] #task Parent ^prj\n".to_string();
+    let chain = ancestor_chain(
+        Path::new("child.md"),
+        contents,
+        &linear_index,
+        |path| match path.to_str() {
+            Some("parent.md") => Some(parent.clone()),
+            Some("grandparent.md") => Some(grandparent.clone()),
+            _ => None,
+        },
+        1,
+    );
+    assert_eq!(chain, [PathBuf::from("parent.md")]);
 }
