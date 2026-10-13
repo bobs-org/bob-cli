@@ -289,9 +289,10 @@ Invalid or duplicate schedule fields stop creation with a focused notice. The
 source task's managed Depends-On line moves to be the first child of `^prj`, with
 same-note links rebased to the source note. It is not copied into `## Tasks`, and
 the machine-owned Sub-projects child is skipped on reverse conversion. A blocked
-source (`[?]`) is accepted. If the new project is blocked, its open residents are
-tagged `#prj_is_blocked` and their live links are removed from today's open
-Pomodoros. `bob capture` can create
+source (`[?]`) is accepted and seeds a Ready project unless a carried open
+prerequisite or a future inline date still blocks it. If the new project is
+blocked, its open residents are tagged `#prj_is_blocked` and their live links
+are removed from today's open Pomodoros. `bob capture` can create
 the same kind of project note directly, with no Obsidian window open: see
 [Project notes](capture.md#project-notes). Task bullets in that capture can
 name their IDs with a trailing ` ^<id>`, or name them and link them into the

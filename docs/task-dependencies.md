@@ -1747,10 +1747,11 @@ as structural, so the quiet period applies.
 - **`#hide` forcing** for a future date stays in sync.
 - **Stamps:** `^prj` follows the normal stamp rule. The
   "project-frontmatter edits never stamp" carve-out is gone.
-- **Due or deleted dates keep the tag while `^prj` holds Depends-On
-  links.** Residents lose `#prj_is_blocked` only when the project has
-  no remaining reason (or the recovery snapshot proves them ready);
-  reconcile repairs the tag once the last prerequisite closes.
+- **Due or deleted dates follow `^prj` status.** Residents lose
+  `#prj_is_blocked` when `^prj` leaves Blocked. A closed Depends-On
+  history line does not keep the tag. Residents keep it while `^prj`
+  stays `[?]` (an open prerequisite or a still-future date). Reconcile
+  repairs the tag once the last remaining reason clears.
 
 ### 13.9 Outputs and warning kinds
 
@@ -1804,18 +1805,20 @@ restored task's first child and the date stays inline on the
 root task (links re-formed relative to the destination). `[?]` sources are
 accepted. Residents blocked by the project are tagged or recovered through the
 shared recovery gate; entering a blocked project consumes their live Pomodoro
-links in today's open entries. Reversal repoints `#^prj` links to the
-restored block id before planning that cleanup, so the live links are
-consumed rather than left behind.
+links in today's open entries. Reversal writes the parent first, planning
+`#^prj` rewrites and today's Pomodoro cleanup against both the project's
+`^prj` link and the restored block id in memory before any write.
 
 Ctrl+Shift+M into a blocked project sets the moved open tasks `[?]`,
-tags them `#prj_is_blocked`, promotes their verifiably open
-prerequisites (the destination project's and their own carried ones) to
-the strongest moved lane, and removes their live links from today's open
-Pomodoros in the same move write; moving them out strips the tag and recovers
-those without own reasons, writing `[unblocked::]` when required by the
-freshness gate. Move, inbox-route, and reversal notices report the
-blocked and recovered counts (`· N Blocked · M Ready again`).
+tags them `#prj_is_blocked`, promotes only open tasks' Depends-On
+targets (each to that task's own lane; the destination `^prj`'s
+prerequisites to the strongest moved lane), walking through a `^prj`
+target to its open prerequisites without raising it, and removes their
+live links from today's open Pomodoros in the same move write; moving
+them out strips the tag and recovers those without own reasons, writing
+`[unblocked::]` when required by the freshness gate. Move, inbox-route,
+and reversal notices report the blocked and recovered counts
+(`· N Blocked · M Ready again`).
 
 Capture `&` aimed at `^prj` writes the Depends-On line. Capture of a
 new task into a blocked project lands `[?]`, `#prj_is_blocked`, and
