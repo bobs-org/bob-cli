@@ -21,23 +21,27 @@ pending → clipping → clipped | already in library | already queued
 
 One attempt in v1: a retryable failure still falls back instead of
 retrying. `bob ref scan` turns clipped intake PDFs into ref notes
-later. Nothing in bob-cli starts that scan. Two Mac schedules are
-documented, and they are not the same job:
+later. Capture and its worker do not run that scan. The MacBook has an
+installed schedule; the docs also provide an optional setup recipe:
 
 - The installed MacBook cron in the
   [Highlights bridge](vault-git-sync.md#highlights-bridge) runs
   `maybe_bob_highlights_sync -w` every 15 minutes. That runs
-  `bob highlights scan`, which writes notes.
-- The [Scheduled Scan](highlights-ref-sync.md#scheduled-scan) recipe is a
-  separate LaunchAgent (`StartInterval` 3600) or cron `0 * * * *`. Its
+  `bob highlights scan -w`, which writes reference notes and permits PDF
+  marker updates. The wrapper can skip a tick when its activity guard or
+  shared scan lock prevents a scan.
+- The [Scheduled Scan](highlights-ref-sync.md#scheduled-scan) recipe is an
+  example LaunchAgent (`StartInterval` 3600) or cron `0 * * * *`. Its
   example command is `bob highlights scan --dry-run` until you remove
   `--dry-run` after clean cycles.
 
 `bob highlights` is a permanent alias of `bob ref`. On another setup, run
-`bob ref scan` yourself. The `bob ref jobs` footer always prints `the Mac
-runs it every 15 minutes`. That matches the installed cron above. It does
-not name the hourly dry-run recipe. Neither capture nor the worker runs
-`scan`, and neither returns a ref-note path before it exists.
+`bob ref scan` yourself or configure a schedule. The footer of a nonempty
+human `bob ref jobs` report prints `the Mac runs it every 15 minutes`.
+That is fixed text describing Bryan's cron, rather than a check of your
+machine's scheduler. The hourly dry-run recipe only previews; remove
+`--dry-run` to create notes. Capture and its worker return no ref-note path
+before a note exists.
 Use `bob ref jobs` to inspect work before the note appears in
 `bob ref list`.
 

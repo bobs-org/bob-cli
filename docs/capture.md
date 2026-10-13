@@ -3740,14 +3740,15 @@ bob capture-parse [-f|--format human|json] [-R|--no-ref] [--] [TEXT]...
 
 Reports the authoritative capture grammar's reading of `TEXT` so an editor can
 highlight capture syntax and Obsidian wikilinks while the user is still typing.
-It shares one parser with `bob capture`: the same tokenizer, the same
-terminal-marker extraction, and the same `@token` classification, so the two
-commands can never disagree about a complete capture. Wikilink highlighting is
-syntax-only and additive; it does not change capture routing or diagnostics.
+It shares the tokenizer, terminal-marker extraction, and `@token`
+classification with `bob capture`. Parse does not validate vault targets
+or execute the draft, so a successful parse does not guarantee a capture
+will succeed. Wikilink highlighting is syntax-only and additive; it does
+not change capture routing or diagnostics.
 
 The command does not open the vault, read the clipboard, or contact the
-network, and it takes no `--bob-dir`. It does read the URL routing policy
-from the config file (`BOB_CONFIG_FILE`, otherwise
+network, and it takes no `--bob-dir`. Unless `--no-ref` is set, it reads
+the URL routing policy from the config file (`BOB_CONFIG_FILE`, otherwise
 `$XDG_CONFIG_HOME/bob/config.yml`, otherwise `~/.config/bob/config.yml`) so a
 bare link's `ref`/`task` classification matches capture. `-R, --no-ref`,
 `highlights.url_routing.capture: false`, and an invalid config all keep
@@ -4145,11 +4146,12 @@ separator toggle and the bare `@@` absorption rule -- and reports the
 resulting edits, cursor, and a human summary. It is purely lexical and
 completely read-only: it never opens the vault, never reads the clipboard
 or the URL routing config, never touches the filesystem, and takes no
-`--bob-dir`. `bob capture-parse` does read that config; see
-[above](#bob-capture-parse).
+`--bob-dir`. `bob capture-parse` reads that config unless `--no-ref` is
+set; see [above](#bob-capture-parse).
 If `TEXT` is omitted and stdin is piped, it reads the complete piped stdin
-stream. Only a missing `TEXT` or a bad flag is an error (exit 2); every
-other input succeeds, with `changed: false` when nothing needed to change.
+stream. Missing `TEXT`, invalid options, or a cursor outside `TEXT` or
+inside a UTF-8 character return exit 2. Other draft text succeeds, with
+`changed: false` when nothing needed to change.
 
 **Block-ID separator toggle.** Typing `^` immediately after a complete
 plain `@route:id`, or `:` immediately after `@route^id`, consumes that

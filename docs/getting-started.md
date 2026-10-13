@@ -154,19 +154,33 @@ embed (`![[note#^id]]`) requests completion. Unresolved or ineligible targets
 can be skipped with warnings; check the capture report. See
 [close outcomes](capture.md#closing-the-running-pomodoro) for the full rules.
 
+When the close completes a planned task, Bob can add eligible newly unblocked
+dependents to the next Pomodoro (`plan.link_unblocked: true` by default).
+If more than five ordinary dependents qualify in one close, none of those
+dependents are automatically linked; project trackers use a separate rule.
+If the project has no remaining work under the project surfacing rules
+and no open sub-projects, its completion tracker (`^prj`) can also be
+linked, raising Ready or newly unblocked trackers to Next and preserving
+In Progress. You still decide whether the project is complete. Future
+dates and remaining prerequisites or inherited project blocking prevent
+that link. See [completion follow-ups](task-dependencies.md#12-successor-links)
+and [project pull-in](task-dependencies.md#1210-project-pull-in) for eligibility.
+
 Inspect `bob task reconcile --dry-run`, then run `bob task reconcile` to
 reconcile statuses and clean up links. Next and Pending are sticky: unlinking
 a task keeps its lane. The explicit release gesture in Obsidian is Alt+N.
-Blocked (`[?]`) is derived from open prerequisites, a future schedule, and a
-blocked project. While a project's `^prj` line is blocked, every open resident
-is Blocked and tagged `#prj_is_blocked`, and that reason passes through
-sub-projects. See [task dependencies §13](task-dependencies.md#13-project-dependencies).
+Blocked (`[?]`) is derived from open prerequisites, a future scheduled date,
+or project blocking. A project's prerequisites and date live on its `^prj`
+completion tracker. While those inputs block the project, its other open
+tasks become Blocked and carry `#prj_is_blocked`. Blocking also passes
+through sub-projects linked by their `parent` frontmatter, including their
+`^prj` lines and open tasks. See
+[task dependencies §13](task-dependencies.md#13-project-dependencies).
+
 With the cursor on a Pomodoro Task Link, Alt+[ / Alt+] toggles the linked
 task between Next and In Progress (asking once for an optional Work Log
 summary when moving back to Next); In Progress targets show a rendered ◐
-mark in today's daily note. By default (`plan.link_unblocked`), completing
-a task also links dependents that the close fully unblocked, and it can pull
-an emptied project's `^prj` in as Next.
+mark in today's daily note.
 
 ## Review the backlog
 
@@ -178,18 +192,26 @@ bob ready
 
 `bob plan` reports today's themes and Task Links plus Next/Pending pressure.
 `bob freshness` shows the due review queue in PRE → NEW → PROJECTS → PENDING →
-NEXT → RECURRING → TICKLER → ROTTEN → POST order. A recurring occurrence whose
-date has arrived is in RECURRING; complete it in Obsidian so Tasks writes the
-next occurrence. The walk does not stamp recurring tasks. A Ready task that
-comes back from a future schedule, or that was automatically unblocked on or
-after its stamp, is in TICKLER. `bob ready` reports each area's or project's
-whole Ready lane, including NEW and ROTTEN; the dashboard READY backlog
-filters out those review buckets and Today-linked work. Today means linked
-under an open Pomodoro in the selected daily note; it is not a task status.
-Today-linked and canonical daily-note tasks are excluded from the ordinary
-freshness review queue. PRE/POST `#gtd` checklist rows still walk in those
-places, and when the row is recurring. A blocked or future-scheduled
-checklist row stays out.
+NEXT → RECURRING → TICKLER → ROTTEN → POST order. These are review groups,
+separate from task statuses. A visible recurring occurrence joins RECURRING
+when the earliest of its `scheduled`, `due`, and `start` dates arrives;
+complete it in Obsidian so Tasks writes the next occurrence. Recurring tasks
+never receive a freshness confirmation date (`[fresh:: YYYY-MM-DD]`, a
+"stamp"). An ordinary Ready task with a stamp is a TICKLER when a later
+scheduled date arrives, or its recorded `[unblocked::]` date is on or after
+the stamp and no later than today. Without a stamp, it stays NEW. Due
+project completion trackers (`^prj`) use PROJECTS instead.
+
+`bob ready` counts each area's or project's visible, non-recurring Ready
+tasks, including NEW and ROTTEN, and excludes its `^prj` tracker. The
+dashboard READY backlog filters out those review buckets and Today-linked
+work. Today means linked under an open Pomodoro in the selected daily
+note; it is not a task status. Today-linked tasks and
+tasks in canonical daily notes (`YYYY/YYYYMMDD.md`) are excluded from
+ordinary review. Checklist rows tagged `#gtd #pre` or `#gtd #post` still
+walk in PRE or POST in those places, even when recurring; resolve them by
+completion. Hidden, blocked, and future-scheduled tasks stay out.
+
 `bob stats` is a separate read-only glance at derived daily metrics.
 
 Use `bob ready NOTE` for one note's
@@ -199,21 +221,28 @@ With the review plugins enabled in Obsidian, `[S` or `]s` from outside the
 queue starts at PRE. Every gesture that answers the landed row advances the
 walk once to the next remaining item in the same keystroke: Ctrl+Enter
 completes (never crossing the PRE/POST boundary — Ctrl+Alt+F does),
-Ctrl+Alt+F keeps, Alt+N releases, Ctrl+Shift+Enter picks a Pomodoro (↵ takes the current/next one), a
+Ctrl+Alt+F keeps an ordinary non-recurring task, Alt+N releases,
+Ctrl+Shift+Enter picks a Pomodoro (↵ takes the current/next one), and a
 resolving Task Card commit moves on. On an inbox task, every non-closing Task Card answer and
 Ctrl+Shift+Enter asks where the task goes as the last step before writing, then answers and moves there.
 Ctrl+Shift+M never advances: it follows
 the moved task to its destination note, and the next `]s` resumes the walk.
 Alt+F is the one answer that stays, `]s` skips,
 and `<C-o>` returns to the row just answered. Away from the
-current review task, `]s` / `[s` first bring you back to it. Walk commitments
-with `]s` / Ctrl+Alt+F through RECURRING and TICKLER until **Commitments done**.
-`]S` jumps to POST; complete
-Morning review last with Ctrl+Enter or Alt+F.
-Ctrl+Alt+J/K also walks due tasks. Alt+F confirms a non-checklist task under
-the cursor. `]s` / `[s` are the equivalent configured Vim bindings, not
-shortcuts installed by the CLI. Ctrl+Alt+F confirms and advances
-(Control+Option+F on a Mac). Hand edits alone do not stamp freshness.
+current review task, `]s` / `[s` first bring you back to it. Review the
+commitment groups from PRE through TICKLER until the footer says
+**Commitments done**. Use Ctrl+Alt+F to keep an ordinary task or complete
+a PRE/POST checklist row. On RECURRING it writes nothing and stays;
+complete the occurrence with Ctrl+Enter, reschedule it into the future,
+link it to Today, or cancel it. `]s` skips a row without resolving it.
+ROTTEN follows for backlog upkeep. `]S` jumps to POST; complete the
+Morning review checklist last with Ctrl+Enter or Alt+F (on a checklist,
+Alt+F completes the row).
+Ctrl+Alt+J/K also walks due tasks. Alt+F confirms an eligible non-recurring,
+non-checklist task under the cursor. `]s` / `[s` are the equivalent configured
+Vim bindings, not shortcuts installed by the CLI. On those ordinary tasks,
+Ctrl+Alt+F confirms and advances (Control+Option+F on a Mac).
+Hand edits alone do not stamp freshness.
 `bob freshness list` only reports the queue; it does not confirm tasks.
 `bob freshness seed` is a one-time migration for an
 existing backlog; it is not the command to confirm today's new captures.
@@ -246,8 +275,11 @@ the job; the worker fetches the link independently of the capture process.
 `find --include-intake` can locate it. After the scan moves it, plain
 `bob ref find` finds the note.
 
-Eligible URLs are the whole capture item: no extra prose and no capture
-markers. Hosts without a dot, such as `http://go/x` and `localhost`, IP
+An eligible URL fills the capture item, optionally with a parent route
+and a listen marker: `URL @route`, `URL %`, or `URL % @route`. Put the
+standalone `%` immediately after the URL to request companion audio;
+`URL @` is an alias. Extra prose, child bullets, or other capture markers
+keep it a task. Hosts without a dot, such as `http://go/x` and `localhost`, IP
 literals, and the default excluded hosts (`google.com`, `googleplex.com`,
 `youtube.com`, `youtu.be`, `github.com`, `x.com`, `twitter.com`, and their
 subdomains) stay tasks. Use `--no-ref` for a task, or configure the
@@ -294,7 +326,7 @@ The path above is illustrative; use the actual note path Bob reports.
 | Commands | Effects |
 | --- | --- |
 | `query`, `plan`, `ready`, `freshness list`, `stats`, capture discovery, `capture-complete`, `projects list` | Read local vault state |
-| `capture-parse` | Classify the draft without opening the vault. It does read the URL routing config, so a bare link matches `bob capture` |
+| `capture-parse` | Classify the draft without opening the vault. It reads the URL routing config unless `--no-ref` is set; it does not validate vault targets |
 | `capture-rewrite` | Rewrite the draft in memory. It does not open the vault, the clipboard, or the URL routing config |
 | `ref find`, `ref list`, `ref show`, `ref jobs [list]`, `ref migrate-tasks`, `ref migrate-zorg` without `--write` | Inspect local references, jobs, or a migration plan without vault writes |
 | `capture`, `capture-task-id`, `capture-pomodoro-name`, `projects sync`, `task reconcile`, `freshness seed` | Write vault notes; a bare public link queues a job that later writes an intake PDF or a fallback task; `URL %` asks that job for companion audio; `capture --dry-run` is offline |
@@ -303,7 +335,7 @@ The path above is illustrative; use the actual note path Bob reports.
 | `task reroll` | Re-roll schedules; in a Git worktree, sync before/after and commit rewritten notes; `--offline` skips sync but still commits locally |
 | `plugins list`, `plugins sync` | Pull the plugin source repo by default, including for `sync --dry-run` (`--no-pull` skips); `sync` deploys plugin assets with backups. `-f json` prints one object instead of the table |
 | `gkeep list`, `gkeep pull` | Contact Keep; `pull` writes inbox tasks or intake PDFs, commits the Keep inbox note when tasks were written unless `--no-commit`, then archives verified Keep notes unless `--no-archive`; a clips-only pull skips that commit; `pull --dry-run` still contacts Keep and does not clip. A valid note `@route` chooses a clip's parent ahead of `-P` |
-| `gkeep migrate-markers`, `gkeep migrate-tasks` | Rewrite Keep task Markdown offline, with no Keep credentials or network. `--dry-run` previews. A live run commits changed notes unless `--no-commit` |
+| `gkeep migrate-markers`, `gkeep migrate-tasks` | Rewrite Keep task Markdown and local import evidence offline, with no Keep credentials or network. `--dry-run` previews. In a Git vault, a live run commits changed notes and import evidence unless `--no-commit` |
 | `ref create`, `ref scan`, `ref sync` | Write PDFs and reference notes inline; `create --dry-run` still downloads or opens URL targets; `create --listen` also narrates companion audio; writing scans can run a configured pre-scan hook. `scan -f json` prints one report |
 | `ref jobs run` | Fetch queued links for their stored destination vaults; write intake PDFs or fallback inbox tasks |
 | `ref migrate-tasks --write`, `ref migrate-zorg --write` | Copy legacy reading records into `ref/zorg/` or move open ref tasks into parent notes and commit them; sync before and after unless `--offline` |
@@ -325,7 +357,7 @@ Follow the [Git sync runbook](vault-git-sync.md) before enabling maintenance.
 | Hooks refuse a Blocked transition | The Tasks registry's `?` status must match the required definition |
 | A native query using plugin-dependent dashboard filters omits tasks | Native queries do not load desktop Bob plugins; use `bob freshness` for the headless review queue |
 | A captured link is absent from `ref list` | Inspect `bob ref jobs`; a clipped intake PDF needs `bob ref scan` before it has a note |
-| A link stays a task | Extra prose, markers, children, a forced destination, `--no-ref`, a host without a dot, an IP address, an excluded host, or routing disabled in config |
+| A link stays a task | Extra prose, unsupported markers, children, a parent-task destination, `--no-ref`, a host without a dot, an IP address, an excluded host, or routing disabled in config. A simple `@route` parent and a `%` listen marker immediately after the URL are supported |
 | Markdown PDF creation fails | Check the `pandoc`, `xelatex`, and `latex_packages` rows in `bob ref doctor`. Missing packages produce one `tlmgr install` line in the warnings section. Doctor does not check fonts; install DejaVu Serif, DejaVu Sans, and DejaVu Sans Mono when XeLaTeX cannot find them |
 
 Use `bob <command> --help` for accepted options and the [guide index](README.md)

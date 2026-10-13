@@ -200,7 +200,11 @@ nothing. `-n, --no-archive` writes and verifies but leaves notes in Keep.
 notes as inbox tasks instead of clipping them to intake PDFs.
 `-P, --parent ROUTE` is the parent for a URL-only note that has no valid
 `@route` of its own. A valid note `@route` wins over `-P` and over the
-prompt. An invalid `-P` fails before any clip.
+prompt. Parent selection applies only to reference clips; ordinary tasks
+still go to the configured Keep inbox note. When the pull includes reference
+candidates, an invalid `-P` fails before any clip, even if those notes have
+valid routes of their own. Without a reference candidate (including with
+`--no-ref`), `-P` is unused. See the parent-selection rules below for prompts.
 `-q, --quiet` prints only errors. `-l, --limit N` takes the first N
 actionable notes, oldest first.
 A per-host pull lock serializes concurrent pulls (exit 1 when held); dry runs
