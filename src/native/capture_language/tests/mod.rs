@@ -85,6 +85,7 @@ mod draft;
 mod editor_modes;
 mod editor_spans;
 mod globals;
+mod goto;
 mod grammar;
 mod ref_grammar;
 mod rewrite;

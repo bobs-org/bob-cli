@@ -398,6 +398,13 @@ pub(super) fn parse_capture_item<'a>(
             }
         }
     }
+    // A whole-draft `/query` Go To search is never executable: it
+    // rejects with the T3 teaching error before any other item parser --
+    // before the `&` dependency scan, and so before the `:` refusal.
+    // Forced flags do not change this.
+    if let Some(token) = task_goto_query_token(item) {
+        return Err(task_goto_picker_error(token.text));
+    }
     // `&note:block-id` dependency modifiers are staged for the writer:
     // malformed or half-typed modifiers fail here, operator items fail
     // with a targeted diagnostic, and complete modifiers strip from the

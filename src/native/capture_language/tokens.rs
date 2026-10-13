@@ -204,6 +204,37 @@ pub(super) fn task_link_query_token<'a>(
     token.text.starts_with(':').then_some(*token)
 }
 
+/// A whole-draft `/query` Go To claim: a single-line, single-token item
+/// whose token starts with `/`, holds no second `/`, and is the whole
+/// draft (`item.source` trimmed). The returned token covers the whole
+/// query including the sigil. Execution, the editor parse, and completion
+/// all call this one predicate; nothing else re-derives the rule.
+pub(super) fn task_goto_query_token<'a>(
+    item: &CaptureItem<'a>,
+) -> Option<Token<'a>> {
+    let [line] = item.lines.as_slice() else {
+        return None;
+    };
+    let tokens = tokenize_line_with_spans(&line.raw);
+    let [token] = tokens.as_slice() else {
+        return None;
+    };
+    if !token.text.starts_with('/') {
+        return None;
+    }
+    if token
+        .text
+        .as_bytes()
+        .iter()
+        .filter(|byte| **byte == b'/')
+        .count()
+        != 1
+    {
+        return None;
+    }
+    (item.source.trim() == token.text).then_some(*token)
+}
+
 /// One whole-item `!` token claim, shared by execution, the editor parse,
 /// and completion. A query is still being typed (`!`, `!fix`, `!sase:`);
 /// a complete token names a task; anything extra on the item is a

@@ -1,0 +1,66 @@
+{
+  "schema": 1,
+  "doc": "Shared line-digest vectors for bob-cli (Rust line_digest in src/native/note_tasks.rs) and bob-navigation-hotkeys (JS ref-digest in the bob-goto-task handler). The digest is the first 8 lowercase hex characters of SHA-256 over the UTF-8 line after Rust str::trim_end, which strips trailing Unicode White_Space (including U+0085 and U+00A0) but keeps U+FEFF. JS must strip exactly that set and never call trimEnd().",
+  "vectors": [
+    {
+      "id": "plain",
+      "line": "- [ ] #task Same",
+      "digest": "35a733bd",
+      "runners": ["rust", "js"]
+    },
+    {
+      "id": "trailing-spaces",
+      "line": "- [ ] #task Same   ",
+      "digest": "35a733bd",
+      "runners": ["rust", "js"]
+    },
+    {
+      "id": "trailing-tab-cr",
+      "line": "- [ ] #task Same\t\r",
+      "digest": "35a733bd",
+      "runners": ["rust", "js"]
+    },
+    {
+      "id": "trailing-nbsp",
+      "line": "- [ ] #task Same\u00a0",
+      "digest": "35a733bd",
+      "runners": ["rust", "js"]
+    },
+    {
+      "id": "trailing-nel",
+      "line": "- [ ] #task Same\u0085",
+      "digest": "35a733bd",
+      "runners": ["rust", "js"]
+    },
+    {
+      "id": "trailing-bom-kept",
+      "line": "- [ ] #task Same\ufeff",
+      "digest": "080a2f04",
+      "runners": ["rust", "js"]
+    },
+    {
+      "id": "leading-indent-kept",
+      "line": "\t- [ ] #task Indented ^blk",
+      "digest": "95e4c084",
+      "runners": ["rust", "js"]
+    },
+    {
+      "id": "leading-spaces-kept",
+      "line": "  - [ ] #task Same",
+      "digest": "7c6b26a7",
+      "runners": ["rust", "js"]
+    },
+    {
+      "id": "unicode",
+      "line": "- [/] #task Café ☕ — résumé 日本語 ^cafe-1",
+      "digest": "c4c8a067",
+      "runners": ["rust", "js"]
+    },
+    {
+      "id": "inline-fields",
+      "line": "- [*] #task Ship it [created:: 2026-10-01] [scheduled:: 2026-10-20] ^ship-it",
+      "digest": "c2201ec4",
+      "runners": ["rust", "js"]
+    }
+  ]
+}

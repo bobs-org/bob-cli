@@ -4,8 +4,8 @@ use super::{
     model::{
         ActiveTaskCandidate, ActiveTaskPomodoroCandidate, Candidates,
         CompleteError, DependencyCandidate, RouteCandidate, SectionCandidate,
-        TaskCandidate, TaskCompleteCandidate, TaskLinkCandidate,
-        TaskParentCandidate, TaskSectionCandidate,
+        TaskCandidate, TaskCompleteCandidate, TaskGotoCandidate,
+        TaskLinkCandidate, TaskParentCandidate, TaskSectionCandidate,
     },
     support::rank,
 };
@@ -477,6 +477,52 @@ pub(super) fn task_link_candidates(
         })
         .collect();
     (Candidates::TaskLink(candidates), discovered.warnings)
+}
+
+/// `task_goto` candidates for a whole-draft `/` token: every linkable
+/// open task (Ready, Blocked, Next, In Progress) in the routable inbox,
+/// area, and non-terminal project notes, in canonical order and ranked by
+/// the query -- exactly the `task_link` rows and order for the same query,
+/// including ID-less tasks. `--all-tasks` does not affect this context.
+/// The `replacement` is always empty (clients never insert it) and carries
+/// no Add block ID metadata; `note_path` is the exact vault-relative path
+/// and `target` the absolute path for opening the task.
+pub(super) fn task_goto_candidates(
+    bob_dir: &Path,
+    query: &str,
+) -> (Candidates, Vec<String>) {
+    let discovered = capture_link_tasks::discover(bob_dir);
+    let candidates = capture_link_tasks::rank(&discovered.tasks, query)
+        .into_iter()
+        .map(|task| TaskGotoCandidate {
+            replacement: String::new(),
+            task_ref: task.task_ref.clone(),
+            route: task.route.clone(),
+            note_kind: task.note_kind,
+            note_path: task.note_path.clone(),
+            target: bob_dir.join(&task.note_path).display().to_string(),
+            block_id: task.block_id.clone(),
+            status_symbol: task.status_symbol,
+            status_name: task.status_name.clone(),
+            status_type: task.status_type,
+            text: task.text.clone(),
+            section: task.section.clone(),
+            depth: task.depth,
+            line: task.line,
+            group: task.group,
+            scheduled: task.scheduled.clone(),
+            pomodoro: task.pomodoro.as_ref().map(|pomodoro| {
+                ActiveTaskPomodoroCandidate {
+                    line: pomodoro.line,
+                    name: pomodoro.name.clone(),
+                    time_range: pomodoro.time_range.clone(),
+                    is_current: pomodoro.is_current,
+                }
+            }),
+            task_kind: task.task_kind,
+        })
+        .collect();
+    (Candidates::TaskGoto(candidates), discovered.warnings)
 }
 
 /// `task_parent` candidates for a bare-plus selector. Reuses the colon

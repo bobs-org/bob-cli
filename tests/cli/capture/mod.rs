@@ -52,6 +52,7 @@ mod targets;
 mod task_blocks;
 mod task_complete;
 mod task_complete_parse;
+mod task_goto;
 mod task_id;
 mod task_link;
 mod task_marker;

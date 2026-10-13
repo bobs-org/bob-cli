@@ -4,8 +4,8 @@ use super::{
     candidates::{
         active_task_candidates, dependency_candidates, link_candidates,
         route_candidates, section_candidates, task_candidates,
-        task_complete_candidates, task_link_candidates, task_parent_candidates,
-        task_section_candidates, TaskSearch,
+        task_complete_candidates, task_goto_candidates, task_link_candidates,
+        task_parent_candidates, task_section_candidates, TaskSearch,
     },
     model::{
         Candidates, CaptureCompleteResult, CompleteError, OverrideCompletion,
@@ -76,6 +76,7 @@ pub(super) fn build_result(
             | CompletionContext::TaskSection
             | CompletionContext::ActiveTask
             | CompletionContext::TaskLink
+            | CompletionContext::TaskGoto
             | CompletionContext::TaskParent
             | CompletionContext::TaskDependency
             | CompletionContext::TaskComplete => {
@@ -221,6 +222,9 @@ pub(super) fn build_result(
         }
         CompletionContext::TaskLink => {
             task_link_candidates(bob_dir, &field.query)
+        }
+        CompletionContext::TaskGoto => {
+            task_goto_candidates(bob_dir, &field.query)
         }
         CompletionContext::TaskParent => {
             task_parent_candidates(bob_dir, &field.query)

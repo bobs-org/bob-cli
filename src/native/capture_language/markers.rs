@@ -363,6 +363,14 @@ pub(super) const POMODORO_LINK_PROJECT_ERROR: &str = "`^route:block-id+` is not 
 
 pub(super) const POMODORO_LINK_TOGGLE_ERROR: &str = "Pomodoro link `^route:block-id!` is a task toggle; use `@route+block-id!` for the explicit toggle";
 
+/// T3: a whole-draft `/query` Go To picker search. The query only opens
+/// the picker; it is never captured.
+pub(super) fn task_goto_picker_error(token: &str) -> String {
+    format!(
+        "`{token}` opens the Go To picker; pick a task to open it in Obsidian — it never captures"
+    )
+}
+
 /// T1: a `:` picker query whose suffix is not a complete caret link. The
 /// query is only a picker search; it is never captured.
 pub(super) fn task_link_picker_error(token: &str) -> String {

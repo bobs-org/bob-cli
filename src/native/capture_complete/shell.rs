@@ -345,6 +345,11 @@ pub(crate) fn shell_completion(
                 });
             }
         }
+        CompletionContext::TaskGoto => {
+            // Nothing is insertable: Go To rows open the task instead of
+            // rewriting the draft, so the shell serves no rows.
+            return Ok(Some(ShellCompletion { marker_start, rows }));
+        }
         CompletionContext::TaskParent => {
             let (candidates, _) = task_parent_candidates(bob_dir, "");
             let Candidates::TaskParent(items) = candidates else {

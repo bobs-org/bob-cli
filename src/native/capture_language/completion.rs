@@ -31,6 +31,11 @@ pub(crate) enum CompletionContext {
     TaskSection,
     ActiveTask,
     TaskLink,
+    /// A whole-draft `/query` Go To search over the `:` task catalog.
+    /// The query runs from just after the sigil to the cursor and the
+    /// replacement covers the whole token, sigil included, so refetching
+    /// at `replacement.start` returns the unfiltered list.
+    TaskGoto,
     /// A bare-plus task search across the capture-target catalog. Accept
     /// inserts a complete `@route+block-id` parent marker.
     TaskParent,
@@ -113,6 +118,40 @@ pub(super) fn task_link_completion_field_at(
     };
     Some(CompletionField {
         context: CompletionContext::TaskLink,
+        route: None,
+        block_id: None,
+        query,
+        replacement: (token.start, token.end),
+    })
+}
+
+/// Complete a whole-draft `/query` Go To search: the query is the token
+/// text between the sigil and the cursor (empty at or just after the
+/// sigil), and the replacement covers the whole token including the sigil,
+/// because refetching at `replacement.start` returns the unfiltered list
+/// and Backspace on an empty filter can remove the `/`. The cursor may sit
+/// anywhere in `[token.start, token.end]`, including just before the sigil
+/// so clients can refetch the full list at `replacement.start`.
+/// Multi-token drafts, multi-item drafts, and second-`/` tokens stay prose
+/// and return `None`, exactly like the claim predicate.
+pub(super) fn task_goto_completion_field_at(
+    item: &CaptureItem<'_>,
+    cursor: usize,
+) -> Option<CompletionField> {
+    let token = task_goto_query_token(item)?;
+    if cursor < token.start || cursor > token.end {
+        return None;
+    }
+    let relative = cursor - token.start;
+    // A cursor just before the sigil refetches the full list with an empty
+    // query; `get(1..0)` would be `None`, so spell that case directly.
+    let query = if relative == 0 {
+        String::new()
+    } else {
+        token.text.get(1..relative)?.to_string()
+    };
+    Some(CompletionField {
+        context: CompletionContext::TaskGoto,
         route: None,
         block_id: None,
         query,
@@ -556,6 +595,15 @@ pub(crate) fn completion_field_at(
         return Some(field);
     }
     let leading = line_index == 0;
+
+    // A whole-draft `/` token completes Go To searches instead of
+    // offering `@` route completion. This runs before the `!`, `:`, and
+    // `^` paths; all four only fire on the item's leading line and their
+    // claims are disjoint.
+    if leading && let Some(field) = task_goto_completion_field_at(item, cursor)
+    {
+        return Some(field);
+    }
 
     // A solo leading `!` token completes vault-wide completable
     // tasks instead of offering `@` route completion. This runs before

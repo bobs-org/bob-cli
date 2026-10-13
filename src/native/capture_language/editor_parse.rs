@@ -311,6 +311,7 @@ pub(crate) fn parse_for_editor_with(
                 || item.mode == EditorMode::Ref
                 || item.mode == EditorMode::TaskComplete
                 || item.needs == [Need::TaskLink]
+                || item.needs == [Need::TaskGoto]
                 || item.needs == [Need::TaskComplete]
                 || item.pomodoro_close.is_some()
                 || item.pomodoro_start.is_some()
@@ -686,6 +687,50 @@ pub(super) fn parse_editor_task_link_item<'a>(
             section: None,
             block_id: None,
             needs: vec![Need::TaskLink],
+            ref_listen: false,
+            pomodoro_start: None,
+            pomodoro_adjust: None,
+            pomodoro_shift: None,
+            pomodoro_close: None,
+            dependencies: Vec::new(),
+            dependency_target: None,
+            task_complete: None,
+            spans: vec![Span {
+                start: token.start,
+                end: token.end,
+                kind: SpanKind::InteractivePlaceholder,
+            }],
+            diagnostics: Vec::new(),
+            sub_bullets: Vec::new(),
+            has_local_destination: true,
+            local_destination_markers: Vec::new(),
+        },
+        declarations: Vec::new(),
+    })
+}
+
+/// A whole-draft `/query` Go To picker search: a single-line,
+/// single-token item holding the whole draft reports `incomplete` needing
+/// `task_goto` with one `interactive_placeholder` span over the whole token
+/// (sigil included) and no diagnostics. A `@@` declaration never applies
+/// to it, exactly like the `:` picker family.
+pub(super) fn parse_editor_task_goto_item<'a>(
+    item: &CaptureItem<'a>,
+) -> Option<EditorItemOutcome<'a>> {
+    let token = task_goto_query_token(item)?;
+    Some(EditorItemOutcome {
+        item: EditorItemParse {
+            index: item.index,
+            start: item.start,
+            end: item.end,
+            line_start: item.line_start,
+            line_end: item.line_end,
+            body: String::new(),
+            mode: EditorMode::Incomplete,
+            route: None,
+            section: None,
+            block_id: None,
+            needs: vec![Need::TaskGoto],
             ref_listen: false,
             pomodoro_start: None,
             pomodoro_adjust: None,
@@ -1216,6 +1261,9 @@ pub(super) fn parse_editor_item_with<'a>(
     item: &CaptureItem<'a>,
     options: &EditorParseOptions<'_>,
 ) -> EditorItemOutcome<'a> {
+    if let Some(task_goto) = parse_editor_task_goto_item(item) {
+        return task_goto;
+    }
     if let Some(task_link) = parse_editor_task_link_item(item) {
         return task_link;
     }

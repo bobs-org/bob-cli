@@ -3,7 +3,7 @@ use serde_json::json;
 use super::model::{
     Candidates, CaptureCompleteResult, CompleteError, DependencyCandidate,
     OutputFormat, PomodoroNameCandidate, TaskCompleteCandidate,
-    TaskLinkCandidate, TaskParentCandidate,
+    TaskGotoCandidate, TaskLinkCandidate, TaskParentCandidate,
 };
 use super::COMMAND_NAME;
 use crate::native::{
@@ -156,6 +156,20 @@ pub(super) fn task_link_line(item: &TaskLinkCandidate) -> (String, String) {
         item.replacement.clone()
     };
     (label, detail)
+}
+
+/// Human row for one `task_goto` candidate: the `note_path:line`
+/// opening location plus `[status] text  · note_path:line`, with
+/// `· scheduled DATE` whenever the task carries a scheduled date. Every
+/// row opens directly, so there is never a needs-ID tail.
+pub(super) fn task_goto_line(item: &TaskGotoCandidate) -> (String, String) {
+    let location = format!("{}:{}", item.note_path, item.line);
+    let mut detail =
+        format!("[{}] {}  · {location}", item.status_symbol, item.text);
+    if let Some(scheduled) = &item.scheduled {
+        detail.push_str(&format!("  · scheduled {scheduled}"));
+    }
+    (location, detail)
 }
 
 /// Human row for a `task_parent` candidate, using the plus marker so the
@@ -338,6 +352,9 @@ pub(super) fn candidate_lines(
         Candidates::TaskLink(items) => {
             items.iter().map(task_link_line).collect()
         }
+        Candidates::TaskGoto(items) => {
+            items.iter().map(task_goto_line).collect()
+        }
         Candidates::TaskParent(items) => {
             items.iter().map(task_parent_line).collect()
         }
@@ -469,6 +486,7 @@ pub(super) fn context_label(context: CompletionContext) -> &'static str {
         CompletionContext::TaskSection => "task_section",
         CompletionContext::ActiveTask => "active_task",
         CompletionContext::TaskLink => "task_link",
+        CompletionContext::TaskGoto => "task_goto",
         CompletionContext::TaskParent => "task_parent",
         CompletionContext::TaskDependency => "task_dependency",
         CompletionContext::TaskComplete => "task_complete",

@@ -43,6 +43,11 @@ pub(crate) enum LinkTaskGroup {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct LinkTask {
     pub(crate) route: String,
+    /// Exact vault-relative path with extension (for example `sase.md`).
+    /// Skipped in JSON so existing `task_link` output stays byte-identical;
+    /// the Go To candidate carries it as `note_path` instead.
+    #[serde(skip)]
+    pub(crate) note_path: String,
     pub(crate) note_kind: CaptureTargetKind,
     pub(crate) block_id: Option<String>,
     pub(crate) block_id_suggestions: Vec<String>,
@@ -176,6 +181,7 @@ pub(crate) fn discover_at(
             ordered.push((
                 LinkTask {
                     route: target.route.clone(),
+                    note_path: target.relative_path.clone(),
                     note_kind: target.kind,
                     block_id: task.block_id.clone(),
                     block_id_suggestions: if task.block_id.is_some() {
@@ -903,6 +909,7 @@ mod tests {
     fn ranker_orders_by_tier_sum_then_canonical_order() {
         let first = LinkTask {
             route: "sase".to_string(),
+            note_path: "sase.md".to_string(),
             note_kind: CaptureTargetKind::Project,
             block_id: None,
             block_id_suggestions: Vec::new(),
@@ -964,6 +971,7 @@ mod tests {
         ) -> LinkTask {
             LinkTask {
                 route: route.to_string(),
+                note_path: format!("{route}.md"),
                 note_kind: CaptureTargetKind::Project,
                 block_id: block_id.map(str::to_string),
                 block_id_suggestions: Vec::new(),

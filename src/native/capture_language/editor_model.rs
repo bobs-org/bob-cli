@@ -218,6 +218,8 @@ pub(crate) enum Need {
     TaskSection,
     ActiveTask,
     TaskLink,
+    /// A whole-draft `/query` Go To picker is still open.
+    TaskGoto,
     /// A bare-plus parent-task selector has not been accepted yet.
     TaskParent,
     PomodoroCloseTask,
@@ -243,6 +245,7 @@ impl Need {
             Self::TaskSection => "task_section",
             Self::ActiveTask => "active_task",
             Self::TaskLink => "task_link",
+            Self::TaskGoto => "task_goto",
             Self::TaskParent => "task_parent",
             Self::PomodoroCloseTask => "pomodoro_close_task",
             Self::PomodoroCloseLogText => "pomodoro_close_log_text",

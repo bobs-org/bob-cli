@@ -168,6 +168,39 @@ pub(super) struct TaskLinkCandidate {
     pub(super) task_kind: Option<&'static str>,
 }
 
+/// One `task_goto` (Go To picker) candidate: any linkable open task in
+/// the same routable catalog `task_link` uses, in the same rows and order.
+/// The JSON keys match the picker contract: `replacement` is always `""`
+/// (clients never insert it; it is kept so the shared decoder still
+/// works), `note_path` is the exact vault-relative path with extension,
+/// and `target` is the absolute path (`bob_dir.join(note_path)`). There
+/// is no `requires_block_id`, `block_id_suggestions`, or `pulls_forward`:
+/// every row opens directly, including ID-less ones. `scheduled` is shown
+/// as context only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct TaskGotoCandidate {
+    pub(super) replacement: String,
+    #[serde(rename = "ref")]
+    pub(super) task_ref: String,
+    pub(super) route: String,
+    pub(super) note_kind: CaptureTargetKind,
+    pub(super) note_path: String,
+    pub(super) target: String,
+    pub(super) block_id: Option<String>,
+    pub(super) status_symbol: char,
+    pub(super) status_name: String,
+    pub(super) status_type: &'static str,
+    pub(super) text: String,
+    pub(super) section: Option<String>,
+    pub(super) depth: usize,
+    pub(super) line: usize,
+    pub(super) group: capture_link_tasks::LinkTaskGroup,
+    pub(super) scheduled: Option<String>,
+    pub(super) pomodoro: Option<ActiveTaskPomodoroCandidate>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) task_kind: Option<&'static str>,
+}
+
 /// One `task_parent` picker candidate: a linkable open task in the capture
 /// target catalog, with a parent-task `@route+id` replacement. ID-less
 /// candidates have no replacement and must go through Add block ID first.
@@ -332,6 +365,7 @@ pub(super) enum Candidates {
     PomodoroName(Vec<PomodoroNameCandidate>),
     ActiveTask(Vec<ActiveTaskCandidate>),
     TaskLink(Vec<TaskLinkCandidate>),
+    TaskGoto(Vec<TaskGotoCandidate>),
     TaskParent(Vec<TaskParentCandidate>),
     Dependency(Vec<DependencyCandidate>),
     TaskComplete(Vec<TaskCompleteCandidate>),
@@ -350,6 +384,7 @@ impl Candidates {
             Self::PomodoroName(items) => items.len(),
             Self::ActiveTask(items) => items.len(),
             Self::TaskLink(items) => items.len(),
+            Self::TaskGoto(items) => items.len(),
             Self::TaskParent(items) => items.len(),
             Self::Dependency(items) => items.len(),
             Self::TaskComplete(items) => items.len(),

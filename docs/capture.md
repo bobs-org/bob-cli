@@ -29,6 +29,7 @@ workflow guide.
   - [Starting the session atomically](#starting-the-session-atomically)
   - [Linking and starting existing tasks](#linking-and-starting-existing-tasks)
   - [Picking any open task with ':'](#picking-any-open-task-with-)
+  - [Going to a task with '/'](#going-to-a-task-with-)
   - [Adding prerequisites with '&'](#adding-prerequisites-with-)
   - [Completing tasks with '!'](#completing-tasks-with-)
   - [Plan budget and strict mode](#plan-budget-and-strict-mode)
@@ -81,6 +82,7 @@ anything is written, and any failure rolls the whole batch back.
 | `@route:block-id[#pomodoro][=<X>]` with no other text | Link the existing `^block-id` task in `route.md` into today's ledger (no new task); `=<X>` starts the resolved session atomically |
 | `^route:block-id[#pomodoro][=<X>]` with no other text | Identical execution; `^` is the active-task spelling and completes In Progress and Next tasks |
 | `:<query>` | Incomplete: pick any open task to link (`capture-parse` needs `task_link`); accepting inserts `@route:block-id`, and execution never captures it |
+| `/<query>` | Incomplete: pick any open task to open in Obsidian (`capture-parse` needs `task_goto`); accepting opens the task, and execution never captures it |
 | `+query` or terminal prose `+` | Incomplete: choose a parent task (`capture-parse` needs `task_parent`); accepting inserts `@route+block-id`, and execution never captures the unresolved selector |
 | lone `+` | Opens the same task picker in an editor; Escape leaves the valid +5m Pomodoro adjustment unchanged |
 | `&note:block-id` | Prerequisite task link: the captured (or explicitly selected) task depends on `note.md`'s `^block-id` task; nested notes use `&projects/foo:bar`, notes with spaces use `&"Shopping List":bar` |
@@ -1044,6 +1046,66 @@ using the candidate's `route` and `ref`, then capture the link with an
 optional `=` as usual. Linking retires a single future
 `[scheduled::YYYY-MM-DD]` exactly like a typed link; candidates flag that
 with `pulls_forward: true` and the `scheduled` date.
+
+### Going to a task with '/'
+
+Type `/` as the whole capture draft to fuzzy-search the same catalog `:` uses:
+linkable open tasks (Ready `[ ]`, Blocked `[?]`, Next `[*]`, or In Progress
+`[/]`) in the routable inbox, area, and non-terminal project notes listed by
+`bob capture-targets`, as described in [Picking any open
+task](#picking-any-open-task-with-). Picking a row opens that task in Obsidian
+at its home note — caret at column 0, line centred — instead of inserting a
+link. Go To never writes: no block-ID minting, no freshness stamps, no lane
+changes, no ledger edits, no walk moves, no Task Card opens, no completions.
+
+A draft is a Go To query exactly when the whole draft is one
+whitespace-delimited token starting with `/` and holding no second `/`. The
+token is the sigil plus a query of any non-whitespace characters, possibly
+empty. Unlike `:`, the claim is per draft, not per item.
+
+| Draft | Reading |
+| --- | --- |
+| `/` | Query `""`: the picker opens on the full list |
+| `/fix` | Query `fix` |
+| `/sase:deep-fix` | Query `sase:deep-fix` (a `:` inside the query is fine) |
+| `  /fix\n` | Query `fix` (surrounding whitespace is ignored) |
+| `//`, `/Users/x`, `/r/rust` | Prose: a second `/` |
+| `/a b`, `Buy /x` | Prose: several tokens |
+| `/x` with a child line | Prose: several lines |
+| `/x`, a blank line, then `Buy milk` | Prose: two items, both captured as usual |
+| `@@work` on one line, then `/x` | Prose: `/x` routes to `work` as usual |
+
+`bob capture` (and `--dry-run`) refuses a claimed draft before any other item
+parser — before the `&` dependency scan, and so before the `:` refusal — so
+the whole batch rolls back and forced flags such as `-r` and `-s` change
+nothing. No vault file changes. The teaching error (T3) keeps the usual
+`capture item 1 starting on line L: …` prefix and reads `` `/dee` opens the
+Go To picker; pick a task to open it in Obsidian — it never captures `` (the
+quoted token is the exact typed token, so a bare `/` reads `` `/` opens …
+``).
+
+`bob capture-parse` reports a claimed draft as mode `incomplete` needing
+`task_goto`, with one `interactive_placeholder` span over the whole token,
+sigil included, and no diagnostics. `bob capture-complete` serves context
+`task_goto`: the same rows and order as `task_link` for the same query,
+including ID-less rows (every row opens directly) and the inbox. Each
+candidate carries `replacement` (always `""`; clients never insert it),
+`ref` (`<line>:<digest>`), `route`, `note_kind`, `note_path` (the exact
+vault-relative path with extension), `target` (the absolute path,
+`bob_dir.join(note_path)`), nullable `block_id`, `status_symbol`,
+`status_name`, `status_type`, `text`, nullable `section`, `depth`, 1-based
+`line`, `group`, nullable `scheduled` (context only), nullable `pomodoro`,
+and `task_kind` (omitted when absent). There is no `requires_block_id`,
+`block_id_suggestions`, or `pulls_forward`. The query is the token text
+between the sigil and the cursor (empty at or just after the sigil); the
+replacement covers the whole token, sigil included, so refetching at
+`replacement.start` returns the unfiltered list. The response carries no
+`query` field and no `picker` descriptor, exactly like `task_link`. Human
+rows read `[status] text  · note_path:line`, with `· scheduled YYYY-MM-DD`
+whenever the task carries a scheduled date; the shell format yields no rows,
+because nothing is insertable. The navigation itself runs through
+bob-navigation-hotkeys' `obsidian://bob-goto-task` URI, whose contract lives
+in the bob-plugins README.
 
 ### Choosing a parent task with `+`
 
@@ -4003,7 +4065,7 @@ the Pomodoro name when one was typed — the same "whichever applies" reuse
 `block_id` already has, and `mode` disambiguates — and the same holds for the
 `^` project-note form, where `section` is the `#pomodoro` name. `needs` lists what a picker
 still has to supply, in the
-order `route`, `section`, `block_id`, `pomodoro_id`, `pomodoro_name`, `task`, `task_section`, `active_task`, `task_link`, `task_parent`, `pomodoro_close_task`, `pomodoro_start_task`, `task_dependency`, `dependency_target`, `task_complete`; it is an independent
+order `route`, `section`, `block_id`, `pomodoro_id`, `pomodoro_name`, `task`, `task_section`, `active_task`, `task_link`, `task_goto`, `task_parent`, `pomodoro_close_task`, `pomodoro_start_task`, `task_dependency`, `dependency_target`, `task_complete`; it is an independent
 completion hint, so the executable `@route#` bullet reports mode `bullet` and
 needs `["section"]`, while `@route+id#` with no body text reports mode
 `incomplete` and needs `["pomodoro_name"]`, `note @route+id#` reports mode
@@ -4538,7 +4600,7 @@ JSON output is a single versioned object:
 full, regardless of where the cursor sits inside it; it is always present, even
 in an empty result, where it collapses to a zero-length range at the cursor.
 `context` is `route`, `section`, `pomodoro_block_id`, `task_block_id`, `project_task_block_id`, `pomodoro_name`, `task`,
-`task_section`, `active_task`, `task_link`, `task_parent`, `task_dependency`, `task_complete`, `wikilink_note`, `wikilink_heading`, `wikilink_block`, or `null` when no completion field is
+`task_section`, `active_task`, `task_link`, `task_goto`, `task_parent`, `task_dependency`, `task_complete`, `wikilink_note`, `wikilink_heading`, `wikilink_block`, or `null` when no completion field is
 active. `task_parent` covers a terminal `+query`, strips the sigil from its
 additive top-level `query`, and replaces the whole selector. `task` covers
 scoped `@route+id` with only the ID span replaced and the typed ID query.
@@ -4651,7 +4713,7 @@ identified rows use `@route+block-id` replacements, while ID-less rows have
 an empty replacement, `requires_block_id: true`, and suggested IDs. Human
 rows begin with `@route+block-id` or `@route+…` and describe missing IDs.
 Every task-bearing candidate (`task`, `active_task`, `task_link`,
-`task_parent`, `task_dependency`, `task_complete`) also carries an additive
+`task_goto`, `task_parent`, `task_dependency`, `task_complete`) also carries an additive
 `task_kind` (`"ref"` when the row is a `#task #ref` reference reading task,
 omitted otherwise, so existing JSON stays byte-identical). `bob query`
 `text` also drops that `#ref` token, so `#task #ref X` reads as `X`. A

@@ -687,6 +687,40 @@ mod tests {
         assert_eq!(scan.tasks[1].task_kind, None);
     }
 
+    /// The shared line-digest fixture drives the Rust digest verbatim
+    /// (see `tests/fixtures/line_digest/vectors.json`, also mirrored by
+    /// the bob-navigation-hotkeys `bob-goto-task` handler). `js`-only
+    /// vectors are skipped here.
+    #[test]
+    fn line_digest_fixture_vectors_match_rust() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/line_digest/vectors.json");
+        let text = fs::read_to_string(&path).expect("read digest fixture");
+        let fixture: serde_json::Value =
+            serde_json::from_str(&text).expect("parse digest fixture");
+        assert_eq!(fixture["schema"], 1);
+        let vectors = fixture["vectors"].as_array().expect("vectors array");
+        assert!(!vectors.is_empty(), "fixture must carry vectors");
+        for vector in vectors {
+            let id = vector["id"].as_str().unwrap_or("?");
+            let runners: Vec<&str> = vector["runners"]
+                .as_array()
+                .expect("runners array")
+                .iter()
+                .map(|runner| runner.as_str().expect("runner string"))
+                .collect();
+            if !runners.contains(&"rust") {
+                continue;
+            }
+            let line = vector["line"].as_str().expect("vector line");
+            assert_eq!(
+                line_digest(line),
+                vector["digest"].as_str().expect("vector digest"),
+                "{id}: digest"
+            );
+        }
+    }
+
     #[test]
     fn task_refs_parse_strictly_and_round_trip_scan_metadata() {
         assert_eq!(
