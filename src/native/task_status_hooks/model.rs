@@ -181,9 +181,19 @@ pub(crate) struct ConsumedBlockedReference {
 pub(crate) struct RemovedBlockedReference {
     pub(crate) target: String,
     pub(crate) block_id: String,
+    pub(crate) link: String,
     pub(crate) line_number: usize,
     pub(crate) pomodoro: String,
+    pub(crate) pomodoro_line_number: usize,
     pub(crate) task_path: PathBuf,
+    pub(crate) action: BlockedLinkAction,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BlockedLinkAction {
+    Removed,
+    TokenRemoved,
+    NotesKept,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]

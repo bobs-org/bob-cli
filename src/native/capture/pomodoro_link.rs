@@ -313,13 +313,18 @@ pub(super) fn plan_pomodoro_link_capture(
                 let dependent_desc = format!("pomodoro link ^{block_id}");
                 let reasons = plan.reasons.clone();
                 let drop_refused = plan.drop_refused;
-                let consumption = consume_live_links(
-                    planner,
-                    bob_dir,
-                    route,
-                    &[block_id.to_string()],
-                )?;
+                let target_identity_path = target
+                    .strip_prefix(bob_dir)
+                    .map(Path::to_path_buf)
+                    .unwrap_or_else(|_| target_rel.clone());
+                let identities = std::collections::BTreeSet::from([(
+                    target_identity_path,
+                    block_id.to_string(),
+                )]);
+                let consumption =
+                    consume_live_links(planner, bob_dir, &identities)?;
                 let removed_pomodoro_links = consumption.removed_links;
+                append_consumption_warning(warnings, removed_pomodoro_links);
                 let promoted = promote_consume_plan(
                     ctx,
                     planner,
@@ -336,7 +341,6 @@ pub(super) fn plan_pomodoro_link_capture(
                         pomodoro::day_file_for(bob_dir).display().to_string(),
                     );
                 }
-                let _ = warnings;
                 return Ok((
                     CaptureWritePlan {
                         placement: Placement::Unchanged,

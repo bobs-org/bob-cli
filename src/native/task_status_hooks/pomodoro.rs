@@ -288,6 +288,14 @@ pub(crate) fn plan_empty_pomodoro_removals(
     contents: &str,
     original_model: &PomodoroModel,
 ) -> EmptyPomodoroPlan {
+    plan_empty_pomodoro_removals_with_options(contents, original_model, false)
+}
+
+pub(crate) fn plan_empty_pomodoro_removals_with_options(
+    contents: &str,
+    original_model: &PomodoroModel,
+    only_emptied: bool,
+) -> EmptyPomodoroPlan {
     let lines = logical_lines(contents);
     let Some(section) = native_pomodoro::pomodoros_section_range(&lines) else {
         return EmptyPomodoroPlan::default();
@@ -299,8 +307,11 @@ pub(crate) fn plan_empty_pomodoro_removals(
         if entry.has_child {
             continue;
         }
-        plan.deleted_lines.extend(entry.line_index..entry.end_line);
         let original = original_model.entries.get(entry_index).unwrap_or(entry);
+        if only_emptied && !original.has_child {
+            continue;
+        }
+        plan.deleted_lines.extend(entry.line_index..entry.end_line);
         plan.removed.push(RemovedEmptyPomodoro {
             line_number: original.line_index + 1,
             line: original.context.clone(),

@@ -99,6 +99,7 @@ pub(super) fn plan_capture_batch(
         let item_number = parsed_item.index + 1;
         let line_start = parsed_item.line_start;
         let pre_day = planner.peek_text(&day_file);
+        planner.begin_item(pre_day.clone());
         let pre_tasks = task_tracker.snapshot_pre(&planner);
         if matches!(parsed_item.parsed.kind, CaptureKind::Ref(_)) {
             let assignment = ref_assignments
@@ -108,7 +109,7 @@ pub(super) fn plan_capture_batch(
                         "reference capture invariant failed: missing verdict",
                     )
                 })?;
-            let (planned, staged) =
+            let (mut planned, staged) =
                 plan_ref_item(request, parsed_item, assignment, today)
                     .map_err(|mut error| {
                         error.message = format!(
@@ -117,6 +118,7 @@ pub(super) fn plan_capture_batch(
                         );
                         error
                     })?;
+            planned.result.consumed_links = planner.take_consumed_links();
             if let Some(job) = staged {
                 staged_jobs.push(StagedRefJob {
                     item: items.len(),
@@ -144,6 +146,7 @@ pub(super) fn plan_capture_batch(
             );
             error
         })?;
+        planned.result.consumed_links = planner.take_consumed_links();
         let refs = std::mem::take(&mut planned.pomodoro_refs);
         match planner.loaded_texts(&day_file) {
             Some((original, current)) => {
@@ -441,6 +444,7 @@ fn plan_ref_item(
             pomodoro_close: None,
             pomodoro_reset: None,
             dependency_update: None,
+            consumed_links: Vec::new(),
             task_complete: None,
             r#ref: Some(RefItemJson {
                 url: intent.original.clone(),
@@ -701,6 +705,7 @@ pub(super) fn plan_capture_item(
                 pomodoro_close: None,
                 pomodoro_reset: None,
                 dependency_update: None,
+                consumed_links: Vec::new(),
                 task_complete: None,
                 toggle_task_description: Some(toggle.task_description.clone()),
                 r#ref: None,
@@ -838,6 +843,7 @@ pub(super) fn plan_capture_item(
                 pomodoro_close: None,
                 pomodoro_reset: None,
                 dependency_update: None,
+                consumed_links: Vec::new(),
                 task_complete: None,
                 toggle_task_description: Some(link.task_description.clone()),
                 r#ref: None,
@@ -1496,6 +1502,7 @@ pub(super) fn plan_capture_item(
             pomodoro_close: None,
             pomodoro_reset: None,
             dependency_update,
+            consumed_links: Vec::new(),
             task_complete: None,
             toggle_task_description: None,
             r#ref: None,

@@ -10,6 +10,7 @@
 
 use super::*;
 use crate::native::{
+    capture_pomodoro_close::CloseVault,
     project_dependencies::{project_ancestors, ProjectContext},
     projects::edits::normalize_prj_is_blocked_tag,
     task_status_hooks::{self, FileScan, TaskLine},
@@ -260,60 +261,244 @@ pub(super) struct LiveLinkConsumption {
     pub(super) pomodoro_refs: Vec<PomodoroBlockRef>,
 }
 
-/// Remove every `[[route#^id]]` live link from today's open Pomodoros,
-/// then drop emptied entries (§13.5). A missing day file is nothing to
-/// consume. Returns the removed link count and refs for emptied entries.
+pub(super) fn append_consumption_warning(
+    warnings: &mut Vec<String>,
+    removed_links: usize,
+) {
+    if removed_links == 0 {
+        return;
+    }
+    let warning = format!(
+        "removed {removed_links} live Pomodoro link(s) to newly Blocked task(s)"
+    );
+    if !warnings.contains(&warning) {
+        warnings.push(warning);
+    }
+}
+
+/// Remove every live Task Link to the supplied resolved identities from
+/// today's open Pomodoros. Capture keeps child notes and only removes a
+/// Pomodoro that this consumption emptied. A missing day file is nothing
+/// to consume.
 pub(super) fn consume_live_links(
     planner: &mut CaptureBatchPlanner,
     bob_dir: &Path,
-    route: &str,
-    block_ids: &[String],
+    blocked: &std::collections::BTreeSet<(PathBuf, String)>,
 ) -> Result<LiveLinkConsumption, CaptureError> {
-    if block_ids.is_empty() {
+    let day_absolute = pomodoro::day_file_for(bob_dir);
+    consume_live_links_from_day(planner, bob_dir, &day_absolute, blocked)
+}
+
+fn consume_live_links_from_day(
+    planner: &mut CaptureBatchPlanner,
+    bob_dir: &Path,
+    day_absolute: &Path,
+    blocked: &std::collections::BTreeSet<(PathBuf, String)>,
+) -> Result<LiveLinkConsumption, CaptureError> {
+    if blocked.is_empty() {
         return Ok(LiveLinkConsumption::default());
     }
-    let day_absolute = pomodoro::day_file_for(bob_dir);
-    let before = match planner.current_contents(&day_absolute)? {
+    let before = match planner.current_contents(day_absolute)? {
         Some(staged) => staged,
         None => match fs::read_to_string(&day_absolute) {
             Ok(disk) => disk,
             Err(_) => return Ok(LiveLinkConsumption::default()),
         },
     };
-    let mut contents = before.clone();
-    let mut removed = 0usize;
-    for block_id in block_ids {
-        let block_link = format!("[[{route}#^{block_id}]]");
-        let plan =
-            capture_task_toggle::plan_link_removal(&contents, &block_link);
-        contents = plan.content;
-        removed += plan.removed_links;
+    let before_lines = task_status_hooks::logical_lines(&before);
+    let Some(section) = pomodoro::pomodoros_section_range(&before_lines) else {
+        return Ok(LiveLinkConsumption::default());
+    };
+    let model = task_status_hooks::scan_pomodoros(&before_lines, section);
+    let vault = SnapshotCloseVault::from_planner(planner, bob_dir);
+    let settings = note_tasks::read_settings(bob_dir);
+    let mut resolved = BTreeMap::new();
+    let mut display_texts = BTreeMap::new();
+    for reference in &model.all_references {
+        let vault_path =
+            match vault.resolve_target(day_absolute, &reference.target) {
+                vault_links::LinkResolution::Found(path) => path,
+                _ => continue,
+            };
+        let absolute = if vault_path.is_absolute() {
+            vault_path
+        } else {
+            bob_dir.join(vault_path)
+        };
+        let Ok(relative) = absolute.strip_prefix(bob_dir) else {
+            continue;
+        };
+        let relative = relative.to_path_buf();
+        let Ok(Some(note_text)) = vault.read_latest(&absolute) else {
+            continue;
+        };
+        let scan = note_tasks::scan(&note_text, &settings);
+        let matches = scan
+            .tasks()
+            .iter()
+            .filter(|task| {
+                task.block_id.as_deref() == Some(&reference.block_id)
+            })
+            .collect::<Vec<_>>();
+        if matches.is_empty() {
+            continue;
+        }
+        let identity = (relative.clone(), reference.block_id.clone());
+        resolved.insert(
+            reference.clone(),
+            task_status_hooks::ResolvedReference {
+                path: relative.clone(),
+                statuses: matches
+                    .iter()
+                    .map(|task| task.status_symbol)
+                    .collect(),
+            },
+        );
+        if let Some(task) = matches.first() {
+            let task_line = note_text
+                .lines()
+                .nth(task.line_index)
+                .unwrap_or_default()
+                .trim_end_matches('\r');
+            let display = task_complete_display_text(
+                task_line,
+                &settings.global_filter,
+                Some(&reference.block_id),
+            );
+            display_texts
+                .entry(identity)
+                .or_insert_with(|| flatten_block_wikilinks(&display));
+        }
     }
-    if contents == before {
-        return Ok(LiveLinkConsumption {
-            removed_links: removed,
-            pomodoro_refs: Vec::new(),
+
+    let item_pre = planner
+        .item_pre_day(&day_absolute)
+        .unwrap_or_else(|| before.clone());
+    let item_pre_lines = task_status_hooks::logical_lines(&item_pre);
+    let current_lines = task_status_hooks::logical_lines(&before);
+    let (_, current_to_item) = line_maps(&item_pre_lines, &current_lines);
+    let consumption = task_status_hooks::apply_blocked_consumption_with_options(
+        &before,
+        &resolved,
+        blocked,
+        &task_status_hooks::BlockedConsumptionOptions {
+            keep_notes: true,
+            only_emptied: true,
+            display_texts: display_texts.clone(),
+        },
+    );
+    if consumption.consumed.is_empty() {
+        return Ok(LiveLinkConsumption::default());
+    }
+    let removed_entry_lines = consumption
+        .removed_empty
+        .iter()
+        .map(|entry| entry.line_number)
+        .collect::<std::collections::BTreeSet<_>>();
+    let capture_entries = capture_pomodoros::scan(&before).entries;
+    let mut pomodoro_refs = Vec::new();
+    for entry in &consumption.removed_empty {
+        let current_index = entry.line_number.saturating_sub(1);
+        let item_index = current_to_item
+            .get(&current_index)
+            .copied()
+            .unwrap_or(current_index);
+        pomodoro_refs.push(PomodoroBlockRef::removed(item_index));
+    }
+
+    let day_relative = day_absolute
+        .strip_prefix(bob_dir)
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|_| day_absolute.to_path_buf());
+    let mut consumed_links = Vec::with_capacity(consumption.consumed.len());
+    for consumed in &consumption.consumed {
+        let current_link_line = consumed.line_number.saturating_sub(1);
+        let current_pomodoro_line =
+            consumed.pomodoro_line_number.saturating_sub(1);
+        let line = current_to_item
+            .get(&current_link_line)
+            .copied()
+            .unwrap_or(current_link_line)
+            + 1;
+        let pomodoro_line = current_to_item
+            .get(&current_pomodoro_line)
+            .copied()
+            .unwrap_or(current_pomodoro_line)
+            + 1;
+        let entry = capture_entries
+            .iter()
+            .find(|entry| entry.line == consumed.pomodoro_line_number);
+        let identity = (consumed.task_path.clone(), consumed.block_id.clone());
+        let action = match consumed.action {
+            task_status_hooks::BlockedLinkAction::Removed => {
+                ConsumedLinkAction::Removed
+            }
+            task_status_hooks::BlockedLinkAction::TokenRemoved => {
+                ConsumedLinkAction::TokenRemoved
+            }
+            task_status_hooks::BlockedLinkAction::NotesKept => {
+                ConsumedLinkAction::NotesKept
+            }
+        };
+        consumed_links.push(ConsumedLinkJson {
+            day_file: display_relative(&day_relative),
+            line,
+            link: consumed.link.clone(),
+            note: display_relative(&consumed.task_path),
+            block_id: consumed.block_id.clone(),
+            text: display_texts
+                .get(&identity)
+                .cloned()
+                .unwrap_or_else(|| consumed.block_id.clone()),
+            action,
+            pomodoro: ConsumedLinkPomodoroJson {
+                line: pomodoro_line,
+                name: entry.and_then(|entry| entry.name.clone()),
+                time_range: entry.and_then(|entry| entry.time_range.clone()),
+                status: if entry.is_some_and(|entry| {
+                    entry.state == capture_pomodoros::PomodoroState::Open
+                        && entry.time_range.is_some()
+                }) {
+                    ConsumedPomodoroStatus::Running
+                } else {
+                    ConsumedPomodoroStatus::Queued
+                },
+                removed: removed_entry_lines
+                    .contains(&consumed.pomodoro_line_number),
+            },
         });
     }
-    let before_lines = task_status_hooks::logical_lines(&before);
-    let mut pomodoro_refs = Vec::new();
-    if let Some(section) = pomodoro::pomodoros_section_range(&before_lines) {
-        let original =
-            task_status_hooks::scan_pomodoros(&before_lines, section);
-        let emptied = task_status_hooks::plan_empty_pomodoro_removals(
-            &contents, &original,
-        );
-        pomodoro_refs.extend(emptied.removed.iter().map(|entry| {
-            PomodoroBlockRef::removed(entry.line_number.saturating_sub(1))
-        }));
-        contents =
-            task_status_hooks::apply_empty_pomodoro_plan(&contents, &emptied);
-    }
-    planner.stage(&day_absolute, contents)?;
+    planner.record_consumed_links(consumed_links);
+    planner.stage(day_absolute, consumption.contents)?;
     Ok(LiveLinkConsumption {
-        removed_links: removed,
+        removed_links: consumption.consumed.len(),
         pomodoro_refs,
     })
+}
+
+fn flatten_block_wikilinks(text: &str) -> String {
+    let mut flattened = text.to_string();
+    let spans = crate::native::task_dependencies::raw_wikilink_spans(text);
+    for span in spans.into_iter().rev() {
+        let inside = &text[span.open + 2..span.end - 2];
+        let link_target = inside.split('|').next().unwrap_or(inside);
+        let alias = inside.split_once('|').map(|(_, alias)| alias);
+        let display = if let Some(alias) = alias {
+            alias.to_string()
+        } else if let Some((target, block_id)) =
+            crate::native::task_dependencies::parse_block_link_inside(inside)
+        {
+            if target.is_empty() {
+                block_id
+            } else {
+                target.rsplit('/').next().unwrap_or(&target).to_string()
+            }
+        } else {
+            link_target.to_string()
+        };
+        flattened.replace_range(span.open..span.end, &display);
+    }
+    flattened
 }
 
 #[cfg(test)]
@@ -337,6 +522,168 @@ mod tests {
             status_definitions: Vec::new(),
             status_settings_error: None,
         }
+    }
+
+    fn write_note(root: &Path, relative: &str, contents: &str) {
+        let path = root.join(relative);
+        fs::create_dir_all(path.parent().expect("parent")).expect("parent");
+        fs::write(path, contents).expect("write note");
+    }
+
+    #[test]
+    fn flatten_block_links_uses_plain_alias_or_target_text() {
+        assert_eq!(
+            flatten_block_wikilinks(
+                "Read [[projects/other#^x|the handoff]] and [[#^local]]"
+            ),
+            "Read the handoff and local"
+        );
+    }
+
+    #[test]
+    fn consumption_resolves_alias_basename_path_case_and_local_links_by_identity(
+    ) {
+        let vault = tempfile::tempdir().expect("temporary vault");
+        let root = vault.path();
+        write_note(
+            root,
+            ".obsidian/plugins/obsidian-tasks-plugin/data.json",
+            r##"{
+              "globalFilter": "#task",
+              "statusSettings": {
+                "coreStatuses": [
+                  {"symbol":" ","name":"Ready","type":"TODO"},
+                  {"symbol":"x","name":"Done","type":"DONE"}
+                ],
+                "customStatuses": [
+                  {"symbol":"?","name":"Blocked","type":"ON_HOLD"}
+                ]
+              }
+            }"##,
+        );
+        write_note(
+            root,
+            "projects/Jobs.md",
+            "- [?] #task Ship the handoff [[other#^target|block link]] ^blocked\n",
+        );
+        let day_relative = PathBuf::from("2026/20261014.md");
+        let day_absolute = root.join(&day_relative);
+        write_note(
+            root,
+            "2026/20261014.md",
+            concat!(
+                "## Pomodoros\n\n",
+                "- [ ] Alias\n",
+                "  - [[projects/Jobs#^blocked|friendly]]\n",
+                "- [ ] Basename\n",
+                "  - [[Jobs#^blocked]]\n",
+                "- [ ] Path\n",
+                "  - [[projects/Jobs#^blocked]]\n",
+                "- [ ] Case\n",
+                "  - [[jobs#^blocked]]\n",
+                "- [ ] Local\n",
+                "  - [[#^local]]\n",
+                "- [ ] Unrelated placeholder\n",
+                "- [x] Closed\n",
+                "  - [[Jobs#^blocked]]\n",
+                "- [ ] Struck\n",
+                "  - ~~[[Jobs#^blocked]]~~\n",
+                "## Tasks\n",
+                "- [?] #task Local blocked task ^local\n",
+            ),
+        );
+        let mut planner = CaptureBatchPlanner::default();
+        let blocked = BTreeSet::from([
+            (PathBuf::from("projects/Jobs.md"), "blocked".to_string()),
+            (day_relative, "local".to_string()),
+        ]);
+
+        let result = consume_live_links_from_day(
+            &mut planner,
+            root,
+            &day_absolute,
+            &blocked,
+        )
+        .expect("consume by resolved identity");
+        let consumed = planner.take_consumed_links();
+        assert_eq!(result.removed_links, 5, "resolved rows: {consumed:?}");
+        let after =
+            planner.peek_text(&day_absolute).expect("staged daily note");
+        assert!(after.contains("- [ ] Unrelated placeholder\n"));
+        assert!(after.contains("- [x] Closed\n  - [[Jobs#^blocked]]\n"));
+        assert!(after.contains("- [ ] Struck\n  - ~~[[Jobs#^blocked]]~~\n"));
+        assert_eq!(consumed.len(), 5);
+        assert!(consumed
+            .iter()
+            .any(|item| item.link == "[[projects/Jobs#^blocked|friendly]]"));
+        assert!(consumed.iter().any(|item| item.link == "[[#^local]]"));
+        assert!(consumed
+            .iter()
+            .any(|item| { item.text == "Ship the handoff block link" }));
+    }
+
+    #[test]
+    fn removed_refs_and_consumed_lines_use_the_items_pre_state_coordinates() {
+        let vault = tempfile::tempdir().expect("temporary vault");
+        let root = vault.path();
+        write_note(
+            root,
+            ".obsidian/plugins/obsidian-tasks-plugin/data.json",
+            r##"{
+              "globalFilter": "#task",
+              "statusSettings": {
+                "coreStatuses": [
+                  {"symbol":" ","name":"Ready","type":"TODO"},
+                  {"symbol":"x","name":"Done","type":"DONE"}
+                ],
+                "customStatuses": [
+                  {"symbol":"?","name":"Blocked","type":"ON_HOLD"}
+                ]
+              }
+            }"##,
+        );
+        write_note(root, "tasks.md", "- [?] #task Blocked ^blocked\n");
+        let day_relative = PathBuf::from("2026/20261014.md");
+        let day_absolute = root.join(&day_relative);
+        let pre = concat!(
+            "## Pomodoros\n\n",
+            "- [ ] Current (0900-0930)\n",
+            "  - [[tasks#^blocked]]\n",
+        );
+        write_note(root, "2026/20261014.md", pre);
+        let staged = concat!(
+            "## Pomodoros\n\n",
+            "- [ ] Earlier\n",
+            "  - [[tasks#^keep]]\n",
+            "- [ ] Current (0900-0930)\n",
+            "  - [[tasks#^blocked]]\n",
+        );
+        let mut planner = CaptureBatchPlanner::default();
+        planner.begin_item(Some(pre.to_string()));
+        planner
+            .stage(&day_absolute, staged.to_string())
+            .expect("stage earlier item edit");
+        let blocked = BTreeSet::from([(
+            PathBuf::from("tasks.md"),
+            "blocked".to_string(),
+        )]);
+
+        let result = consume_live_links_from_day(
+            &mut planner,
+            root,
+            &day_absolute,
+            &blocked,
+        )
+        .expect("consume shifted entry");
+        assert_eq!(result.removed_links, 1);
+        assert_eq!(
+            result.pomodoro_refs[0].before,
+            PomodoroBlockBefore::Removed(2),
+            "the deleted session ref uses the item pre-state headline line"
+        );
+        let consumed = planner.take_consumed_links();
+        assert_eq!(consumed[0].line, 4);
+        assert_eq!(consumed[0].pomodoro.line, 3);
     }
 
     fn project_context(body: &str) -> (ProjectContext, Vec<TaskLine>) {

@@ -64,12 +64,17 @@ pub(super) fn plan_ensure_next_capture(
                 let dependent_desc = format!("ensure next ^{block_id}");
                 let reasons = plan.reasons.clone();
                 let drop_refused = plan.drop_refused;
-                let consumption = consume_live_links(
-                    planner,
-                    bob_dir,
-                    route,
-                    &[block_id.to_string()],
-                )?;
+                let target_identity_path = target
+                    .strip_prefix(bob_dir)
+                    .map(Path::to_path_buf)
+                    .unwrap_or_else(|_| target_rel.clone());
+                let identities = std::collections::BTreeSet::from([(
+                    target_identity_path,
+                    block_id.to_string(),
+                )]);
+                let consumption =
+                    consume_live_links(planner, bob_dir, &identities)?;
+                append_consumption_warning(warnings, consumption.removed_links);
                 let removed_pomodoro_links = consumption.removed_links;
                 let promoted = promote_consume_plan(
                     ctx,
@@ -78,9 +83,15 @@ pub(super) fn plan_ensure_next_capture(
                     *plan,
                     &dependent_desc,
                 )?;
-                let link_guard =
+                let mut link_guard =
                     LinkGuardJson::not_linked(&reasons, promoted, drop_refused);
-                let _ = warnings;
+                if removed_pomodoro_links > 0 {
+                    link_guard.removed_pomodoro_links =
+                        Some(removed_pomodoro_links);
+                    link_guard.day_file = Some(
+                        pomodoro::day_file_for(bob_dir).display().to_string(),
+                    );
+                }
                 return Ok((
                     CaptureWritePlan {
                         placement: Placement::Toggled,

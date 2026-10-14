@@ -1114,7 +1114,12 @@ fn capture_task_toggle_on_project_blocked_resident_refuses_drop() {
             "- [ ] #task Why prerequisite ^y\n",
         ),
     );
-    let day_before = "## Pomodoros\n- [ ] (**0900-0930**) — CURRENT\n";
+    let day_before = concat!(
+        "## Pomodoros\n",
+        "- [ ] (**0900-0930**) — CURRENT\n",
+        "  - [[proj#^grind|alias]]\n",
+        "  - keep context\n",
+    );
     write_file(&day_file, day_before);
 
     let output = bob_command()
@@ -1137,6 +1142,20 @@ fn capture_task_toggle_on_project_blocked_resident_refuses_drop() {
     assert_eq!(json["status_changed"], false, "{json}");
     assert_eq!(json["status_symbol"], "?", "{json}");
     assert_eq!(
+        json["consumed_links"].as_array().unwrap().len(),
+        1,
+        "{json}"
+    );
+    assert_eq!(
+        json["consumed_links"][0]["link"], "[[proj#^grind|alias]]",
+        "{json}"
+    );
+    assert_eq!(json["consumed_links"][0]["action"], "removed", "{json}");
+    assert_eq!(
+        json["consumed_links"][0]["pomodoro"]["removed"], false,
+        "{json}"
+    );
+    assert_eq!(
         json["link_guard"]["reasons"],
         serde_json::json!(["local_dependency", "project_dependency"]),
         "{json}"
@@ -1157,7 +1176,9 @@ fn capture_task_toggle_on_project_blocked_resident_refuses_drop() {
         fs::read_to_string(&target).expect("read target"),
         target_before
     );
-    assert_eq!(fs::read_to_string(&day_file).expect("read day"), day_before);
+    let day_after = fs::read_to_string(&day_file).expect("read day");
+    assert!(!day_after.contains("[[proj#^grind|alias]]"), "{day_after}");
+    assert!(day_after.contains("keep context"), "{day_after}");
     let job = fs::read_to_string(vault.join("job.md")).expect("read prereqs");
     assert!(job.contains("- [*] #task Ex prerequisite ^x"), "{job}");
     assert!(job.contains("- [*] #task Why prerequisite ^y"), "{job}");

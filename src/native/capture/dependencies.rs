@@ -2459,18 +2459,12 @@ pub(super) fn plan_existing_task_dependencies(
                 }
             }
         }
-        let consumption = consume_live_links(
-            planner,
-            bob_dir,
-            dependent_route,
-            &blocked_ids,
-        )?;
-        if consumption.removed_links > 0 {
-            warnings.push(format!(
-                "removed {} live Pomodoro link(s) to newly Blocked task(s)",
-                consumption.removed_links
-            ));
-        }
+        let identities = blocked_ids
+            .into_iter()
+            .map(|block_id| (dep_rel.clone(), block_id))
+            .collect::<BTreeSet<_>>();
+        let consumption = consume_live_links(planner, bob_dir, &identities)?;
+        append_consumption_warning(warnings, consumption.removed_links);
         pomodoro_refs = consumption.pomodoro_refs;
     }
     // Promote open prerequisites to the dependent's pre-capture lane —
@@ -2999,6 +2993,7 @@ pub(super) fn plan_dependency_only_item(
             pomodoro_close: None,
             pomodoro_reset: None,
             dependency_update: Some(summary),
+            consumed_links: Vec::new(),
             task_complete: None,
             toggle_task_description: None,
             r#ref: None,

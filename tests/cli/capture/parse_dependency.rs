@@ -668,6 +668,25 @@ fn capture_prj_with_day_file(
         .expect("run bob capture")
 }
 
+fn capture_json_with_day_file(
+    vault: &std::path::Path,
+    day_file: &std::path::Path,
+    draft: &str,
+) -> std::process::Output {
+    bob_command()
+        .env("BOB_NOW", DEPENDENCY_NOW)
+        .env("BOB_DAY_FILE", day_file)
+        .arg("capture")
+        .arg("-b")
+        .arg(vault)
+        .arg("--format")
+        .arg("json")
+        .arg("--")
+        .arg(draft)
+        .output()
+        .expect("run bob capture JSON")
+}
+
 // PDG7 (§13.15): `&` on `^prj` adding an open target blocks the whole
 // project note in the same write: `^prj` and every open resident flip to
 // `[?]`, residents gain exactly one `#prj_is_blocked`, their live links
@@ -933,18 +952,20 @@ fn capture_dependency_consumes_links_when_newly_blocked() {
         &day_file,
         concat!(
             "## Pomodoros\n",
-            "- [ ] (0900-0930) Morning\n",
+            "- [ ] (0900-0930) — Morning\n",
             "  - [[body#^excercise]]\n",
             "  - other context\n",
         ),
     );
 
-    let output = capture_prj_with_day_file(
+    let output = capture_json_with_day_file(
         &vault,
         &day_file,
         "&cash:fund @body+excercise",
     );
     assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture JSON");
     let body = fs::read_to_string(vault.join("body.md")).expect("read body");
     assert!(
         body.contains("- [?] #task Exercise"),
@@ -958,6 +979,139 @@ fn capture_dependency_consumes_links_when_newly_blocked() {
     assert!(
         day.contains("other context"),
         "the entry survives on its other children:\n{day}"
+    );
+    assert_eq!(json["consumed_links"].as_array().unwrap().len(), 1);
+    assert_eq!(json["consumed_links"][0]["action"], "removed");
+    assert_eq!(json["consumed_links"][0]["pomodoro"]["status"], "running");
+    assert_eq!(json["consumed_links"][0]["pomodoro"]["removed"], false);
+    assert_eq!(json["consumed_links"][0]["line"], 3);
+    assert_eq!(
+        json["warnings"][0],
+        "removed 1 live Pomodoro link(s) to newly Blocked task(s)"
+    );
+}
+
+#[test]
+fn capture_consumption_reports_and_deletes_only_the_emptied_running_entry() {
+    let temp = TempDir::new("bob-cli-capture-dep-consume-running");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    write_blocked_tasks_settings(&vault);
+    write_file(&vault.join("cash.md"), "- [ ] #task Fund ^fund\n");
+    write_file(&vault.join("body.md"), "- [*] #task Exercise ^excercise\n");
+    let day_file = vault.join("day.md");
+    write_file(
+        &day_file,
+        concat!(
+            "## Pomodoros\n\n",
+            "- [ ] Unrelated placeholder\n",
+            "- [ ] (0900-0930) — Morning\n",
+            "  - [[body#^excercise]]\n",
+        ),
+    );
+
+    let output = capture_json_with_day_file(
+        &vault,
+        &day_file,
+        "&cash:fund @body+excercise",
+    );
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture JSON");
+    let day = fs::read_to_string(&day_file).expect("read day");
+    assert_eq!(day, "## Pomodoros\n\n- [ ] Unrelated placeholder\n");
+    assert_eq!(json["consumed_links"][0]["pomodoro"]["name"], "Morning");
+    assert_eq!(
+        json["consumed_links"][0]["pomodoro"]["time_range"],
+        "0900-0930"
+    );
+    assert_eq!(json["consumed_links"][0]["pomodoro"]["removed"], true);
+    assert_eq!(json["pomodoro_blocks"].as_array().unwrap().len(), 1);
+    assert_eq!(json["pomodoro_blocks"][0]["removed"], true);
+    assert_eq!(
+        json["pomodoro_blocks"][0]["roles"],
+        serde_json::json!(["removed"])
+    );
+    assert_eq!(json["pomodoro_blocks"][0]["status"], "running");
+    assert!(json["pomodoro_blocks"][0]["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|line| line["change"] == "removed"));
+}
+
+#[test]
+fn capture_consumption_keeps_authored_notes_under_plain_task_text() {
+    let temp = TempDir::new("bob-cli-capture-dep-consume-notes");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    write_blocked_tasks_settings(&vault);
+    write_file(&vault.join("cash.md"), "- [ ] #task Fund ^fund\n");
+    write_file(
+        &vault.join("body.md"),
+        "- [*] #task Exercise with [[steps#^walk|the walk]] ^excercise\n",
+    );
+    let day_file = vault.join("day.md");
+    write_file(
+        &day_file,
+        concat!(
+            "## Pomodoros\n\n",
+            "- [ ] (0900-0930) — Morning\n",
+            "  - [[body#^excercise]]\n",
+            "    - authored work note\n",
+            "- [ ] Unrelated placeholder\n",
+        ),
+    );
+
+    let output = capture_json_with_day_file(
+        &vault,
+        &day_file,
+        "&cash:fund @body+excercise",
+    );
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture JSON");
+    let day = fs::read_to_string(&day_file).expect("read day");
+    assert!(day.contains("  - Exercise with the walk\n"), "{day}");
+    assert!(day.contains("    - authored work note\n"), "{day}");
+    assert!(day.contains("- [ ] Unrelated placeholder\n"), "{day}");
+    assert_eq!(json["consumed_links"][0]["text"], "Exercise with the walk");
+    assert_eq!(json["consumed_links"][0]["action"], "notes_kept");
+    assert_eq!(json["consumed_links"][0]["pomodoro"]["removed"], false);
+}
+
+#[test]
+fn human_consumption_line_replaces_the_legacy_warning() {
+    let temp = TempDir::new("bob-cli-capture-dep-consume-human");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    write_blocked_tasks_settings(&vault);
+    write_file(&vault.join("cash.md"), "- [ ] #task Fund ^fund\n");
+    write_file(&vault.join("body.md"), "- [*] #task Exercise ^excercise\n");
+    let day_file = vault.join("day.md");
+    write_file(
+        &day_file,
+        "## Pomodoros\n\n- [ ] (0900-0930) — Morning\n  - [[body#^excercise]]\n",
+    );
+
+    let output = capture_prj_with_day_file(
+        &vault,
+        &day_file,
+        "&cash:fund @body+excercise",
+    );
+    assert_success(&output);
+    let out = stdout(&output);
+    assert!(
+        out.contains(
+            "− removed its Task Link from Morning 09:00–09:30 (running)"
+        ),
+        "{out}"
+    );
+    assert!(out.contains("deleted the empty Pomodoro"), "{out}");
+    assert!(
+        !stderr(&output).contains("removed 1 live Pomodoro link(s)"),
+        "{}",
+        stderr(&output)
     );
 }
 

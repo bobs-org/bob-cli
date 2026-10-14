@@ -417,6 +417,10 @@ pub(super) struct CaptureItemResult {
     pub(super) pomodoro_reset: Option<PomodoroResetSummaryJson>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) dependency_update: Option<DependencyUpdateJson>,
+    /// Live Task Links consumed by this item while it left tasks Blocked.
+    /// Additive and omitted when empty.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(super) consumed_links: Vec<ConsumedLinkJson>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) task_complete: Option<TaskCompleteSummaryJson>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -766,6 +770,44 @@ pub(super) struct DependencyUpdateJson {
     pub(super) status_changed: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct ConsumedLinkJson {
+    pub(super) day_file: String,
+    pub(super) line: usize,
+    pub(super) link: String,
+    pub(super) note: String,
+    pub(super) block_id: String,
+    pub(super) text: String,
+    pub(super) action: ConsumedLinkAction,
+    pub(super) pomodoro: ConsumedLinkPomodoroJson,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum ConsumedLinkAction {
+    Removed,
+    TokenRemoved,
+    NotesKept,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct ConsumedLinkPomodoroJson {
+    pub(super) line: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) time_range: Option<String>,
+    pub(super) status: ConsumedPomodoroStatus,
+    pub(super) removed: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum ConsumedPomodoroStatus {
+    Running,
+    Queued,
+}
+
 /// One prerequisite behind a `dependency_update` summary: its note,
 /// block ID, canonical link, and status with text.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -836,9 +878,98 @@ pub(super) fn print_capture_warnings(result: &CaptureResult) {
         return;
     }
     let styler = Styler::detect();
+    let has_structured_consumption = if result.captures.is_empty() {
+        !result.item.consumed_links.is_empty()
+    } else {
+        result
+            .captures
+            .iter()
+            .any(|item| !item.consumed_links.is_empty())
+    };
     for warning in &result.warnings {
+        if has_structured_consumption
+            && warning.starts_with("removed ")
+            && warning
+                .ends_with(" live Pomodoro link(s) to newly Blocked task(s)")
+        {
+            continue;
+        }
         eprintln!("{COMMAND_NAME}: {}: {warning}", styler.warning_prefix());
     }
+}
+
+fn print_consumed_links(result: &CaptureItemResult, styler: &Styler) {
+    for consumed in &result.consumed_links {
+        let pomodoro = &consumed.pomodoro;
+        let name = pomodoro
+            .name
+            .as_deref()
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("line {}", pomodoro.line));
+        let range = pomodoro
+            .time_range
+            .as_deref()
+            .map(format_consumed_time_range)
+            .map(|range| format!(" {range}"))
+            .unwrap_or_default();
+        let running = if pomodoro.status == ConsumedPomodoroStatus::Running {
+            " (running)"
+        } else {
+            " (queued)"
+        };
+        let action = match consumed.action {
+            ConsumedLinkAction::NotesKept => {
+                let verb = if result.dry_run { "would keep" } else { "kept" };
+                println!(
+                    "  {} {} its notes under {}{} as plain text",
+                    styler.dim("−"),
+                    verb,
+                    name,
+                    range,
+                );
+                continue;
+            }
+            ConsumedLinkAction::Removed | ConsumedLinkAction::TokenRemoved => {
+                if result.dry_run {
+                    "would remove"
+                } else {
+                    "removed"
+                }
+            }
+        };
+        let deletion = if pomodoro.removed {
+            if result.dry_run {
+                " · would delete the empty Pomodoro"
+            } else {
+                " · deleted the empty Pomodoro"
+            }
+        } else {
+            ""
+        };
+        println!(
+            "  {} {} its Task Link from {}{}{}{}",
+            styler.dim("−"),
+            action,
+            name,
+            range,
+            running,
+            deletion,
+        );
+    }
+}
+
+fn format_consumed_time_range(range: &str) -> String {
+    let Some((start, end)) = range.split_once('-') else {
+        return range.to_string();
+    };
+    let format = |time: &str| {
+        if time.len() == 4 && time.bytes().all(|byte| byte.is_ascii_digit()) {
+            format!("{}:{}", &time[..2], &time[2..])
+        } else {
+            time.to_string()
+        }
+    };
+    format!("{}–{}", format(start), format(end))
 }
 
 /// Plan-budget meter line (stdout) plus one stderr warning per fired
@@ -1145,6 +1276,7 @@ pub(super) fn print_human_item_success(
             &ordinal,
             &target_label,
         );
+        print_consumed_links(result, &styler);
         return;
     }
     if let Some(close) = result.pomodoro_close.as_ref() {
@@ -1156,6 +1288,7 @@ pub(super) fn print_human_item_success(
             &ordinal,
             &target_label,
         );
+        print_consumed_links(result, &styler);
         return;
     }
     if result.kind == "pomodoro_link" {
@@ -1166,6 +1299,7 @@ pub(super) fn print_human_item_success(
             &ordinal,
             &target_label,
         );
+        print_consumed_links(result, &styler);
         return;
     }
     if result.kind == "link_guard" {
@@ -1177,12 +1311,16 @@ pub(super) fn print_human_item_success(
         println!("{prefix} not linked  {ordinal}{target_label}");
         println!("  {}", styler.dim(&format!("{id} was not linked")));
         print_human_link_guard(result, &styler);
-        if let Some(count) = result.removed_pomodoro_links.filter(|n| *n > 0) {
+        if result.consumed_links.is_empty()
+            && let Some(count) =
+                result.removed_pomodoro_links.filter(|n| *n > 0)
+        {
             println!(
                 "  {}",
                 styler.dim(&format!("removed {count} live Pomodoro link(s)"))
             );
         }
+        print_consumed_links(result, &styler);
         return;
     }
     if result.kind == "task_toggle"
@@ -1195,6 +1333,7 @@ pub(super) fn print_human_item_success(
             &ordinal,
             &target_label,
         );
+        print_consumed_links(result, &styler);
         return;
     }
     if result.kind == "task_complete" {
@@ -1205,6 +1344,7 @@ pub(super) fn print_human_item_success(
             &ordinal,
             &target_label,
         );
+        print_consumed_links(result, &styler);
         return;
     }
     // A dependency-only action is never labeled a task creation or a
@@ -1217,6 +1357,7 @@ pub(super) fn print_human_item_success(
             &ordinal,
             &target_label,
         );
+        print_consumed_links(result, &styler);
         return;
     }
     if let Some(adjust) = result.pomodoro_adjust.as_ref() {
@@ -1228,6 +1369,7 @@ pub(super) fn print_human_item_success(
             &ordinal,
             &target_label,
         );
+        print_consumed_links(result, &styler);
         return;
     }
     if let Some(shift) = result.pomodoro_shift.as_ref() {
@@ -1239,6 +1381,7 @@ pub(super) fn print_human_item_success(
             &ordinal,
             &target_label,
         );
+        print_consumed_links(result, &styler);
         return;
     }
     if result.kind == "pomodoro_start" {
@@ -1251,6 +1394,7 @@ pub(super) fn print_human_item_success(
                 &ordinal,
                 &target_label,
             );
+            print_consumed_links(result, &styler);
             return;
         }
     }
@@ -1260,6 +1404,7 @@ pub(super) fn print_human_item_success(
         print_human_ref_item_success(
             result, reference, &styler, &prefix, &ordinal,
         );
+        print_consumed_links(result, &styler);
         return;
     }
     let verb = if result.dry_run {
@@ -1404,6 +1549,7 @@ pub(super) fn print_human_item_success(
             )
         );
     }
+    print_consumed_links(result, &styler);
 }
 
 /// Render one close task row's typed Work Log entries, each followed by
@@ -2059,7 +2205,9 @@ pub(super) fn print_human_task_toggle_success(
                 let marker = styler.green("+");
                 println!("  {marker} {block_link}");
             }
-            if result.removed_pomodoro_links.unwrap_or(0) > 0 {
+            if result.consumed_links.is_empty()
+                && result.removed_pomodoro_links.unwrap_or(0) > 0
+            {
                 print_removed_pomodoro_links(
                     styler,
                     result.removed_pomodoro_links.unwrap_or(0),

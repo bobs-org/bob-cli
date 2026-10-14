@@ -392,6 +392,7 @@ fn plan_blocked_link_removals(
     lines: &[&str],
     blocked: &BTreeSet<(PathBuf, String)>,
     already_deleted: &BTreeSet<usize>,
+    options: &BlockedConsumptionOptions,
 ) -> (
     BTreeMap<usize, Vec<TokenEdit>>,
     BTreeSet<usize>,
@@ -435,21 +436,56 @@ fn plan_blocked_link_removals(
                 .get(&link.reference)
                 .map(|reference| reference.path.clone())
                 .expect("blocked links are resolved");
+            let link_only =
+                blocked_links.len() == 1 && is_link_only_bullet(line, link);
+            let keeps_notes = link_only
+                && options.keep_notes
+                && bullet_has_child(lines, bullet);
+            let action = if keeps_notes {
+                BlockedLinkAction::NotesKept
+            } else if link_only {
+                BlockedLinkAction::Removed
+            } else {
+                BlockedLinkAction::TokenRemoved
+            };
             removed_blocked.push(RemovedBlockedReference {
                 target: link.reference.target.clone(),
                 block_id: link.reference.block_id.clone(),
+                link: raw_link_token(line, link),
                 line_number: bullet.line_index + 1,
                 pomodoro: source.context.clone(),
+                pomodoro_line_number: source.line_index + 1,
                 task_path: resolved_path,
+                action,
             });
         }
-        // A link-only bullet (body is exactly one blocked live token)
-        // goes with its subtree; otherwise only each blocked token
-        // is removed (PDL1, PDL6, PDL7).
-        let link_only = blocked_links
-            .iter()
-            .any(|link| is_link_only_bullet(line, link));
-        if link_only {
+        // A link-only bullet goes with its subtree by default (the
+        // reconcile contract). Capture can instead retain its authored
+        // child notes and replace the consumed link with task text.
+        let link_only = blocked_links.len() == 1
+            && is_link_only_bullet(line, blocked_links[0]);
+        if link_only && options.keep_notes && bullet_has_child(lines, bullet) {
+            let link = blocked_links[0];
+            let identity = resolved
+                .get(&link.reference)
+                .map(|reference| {
+                    (reference.path.clone(), link.reference.block_id.clone())
+                })
+                .expect("blocked links are resolved");
+            let replacement = options
+                .display_texts
+                .get(&identity)
+                .cloned()
+                .unwrap_or_else(|| link.reference.block_id.clone());
+            token_edits
+                .entry(bullet.line_index)
+                .or_default()
+                .push(TokenEdit {
+                    start: link.edit_start,
+                    end: link.edit_end,
+                    replacement,
+                });
+        } else if link_only {
             deleted_lines.extend(bullet.line_index..bullet.end_line);
         } else {
             for link in blocked_links {
@@ -466,6 +502,20 @@ fn plan_blocked_link_removals(
     (token_edits, deleted_lines, removed_blocked)
 }
 
+fn bullet_has_child(lines: &[&str], bullet: &LinkBullet) -> bool {
+    let parent_indentation = leading_indentation_len(lines[bullet.line_index]);
+    (bullet.line_index + 1..bullet.end_line).any(|line_index| {
+        after_list_marker(
+            lines[line_index],
+            leading_indentation_len(lines[line_index]),
+        )
+        .is_some()
+            && nearest_parent_list_item(lines, line_index)
+                == Some(bullet.line_index)
+            && leading_indentation_len(lines[line_index]) > parent_indentation
+    })
+}
+
 fn is_link_only_bullet(line: &str, link: &LinkOccurrence) -> bool {
     let indent = leading_indentation_len(line);
     let Some(after) = after_list_marker(line, indent) else {
@@ -479,6 +529,18 @@ fn is_link_only_bullet(line: &str, link: &LinkOccurrence) -> bool {
     !token.is_empty() && body == token
 }
 
+fn raw_link_token(line: &str, link: &LinkOccurrence) -> String {
+    let token = line.get(link.edit_start..link.edit_end).unwrap_or_default();
+    let Some(start) = token.find("[[") else {
+        return token.to_string();
+    };
+    let end = token[start..]
+        .find("]]")
+        .map(|offset| start + offset + 2)
+        .unwrap_or(token.len());
+    token[start..end].to_string()
+}
+
 /// Consume live links to `blocked` identities under today's open
 /// Pomodoros, then run the empty-Pomodoro rule against the matching
 /// pre-consumption model (`docs/task-dependencies.md` §13.5).
@@ -488,10 +550,31 @@ pub(crate) struct BlockedConsumption {
     pub(crate) removed_empty: Vec<RemovedEmptyPomodoro>,
 }
 
+#[derive(Debug, Clone, Default)]
+pub(crate) struct BlockedConsumptionOptions {
+    pub(crate) keep_notes: bool,
+    pub(crate) only_emptied: bool,
+    pub(crate) display_texts: BTreeMap<(PathBuf, String), String>,
+}
+
 pub(crate) fn apply_blocked_consumption(
     contents: &str,
     resolved: &BTreeMap<RawReference, ResolvedReference>,
     blocked: &BTreeSet<(PathBuf, String)>,
+) -> BlockedConsumption {
+    apply_blocked_consumption_with_options(
+        contents,
+        resolved,
+        blocked,
+        &BlockedConsumptionOptions::default(),
+    )
+}
+
+pub(crate) fn apply_blocked_consumption_with_options(
+    contents: &str,
+    resolved: &BTreeMap<RawReference, ResolvedReference>,
+    blocked: &BTreeSet<(PathBuf, String)>,
+    options: &BlockedConsumptionOptions,
 ) -> BlockedConsumption {
     let unchanged = BlockedConsumption {
         contents: contents.to_string(),
@@ -512,6 +595,7 @@ pub(crate) fn apply_blocked_consumption(
         &lines,
         blocked,
         &BTreeSet::new(),
+        options,
     );
     if consumed.is_empty() {
         return unchanged;
@@ -530,7 +614,11 @@ pub(crate) fn apply_blocked_consumption(
         removed_blocked: consumed,
     };
     let updated = apply_structural_plan(contents, &model, &plan);
-    let empty_plan = plan_empty_pomodoro_removals(&updated, &model);
+    let empty_plan = plan_empty_pomodoro_removals_with_options(
+        &updated,
+        &model,
+        options.only_emptied,
+    );
     let text = apply_empty_pomodoro_plan(&updated, &empty_plan);
     BlockedConsumption {
         contents: text,

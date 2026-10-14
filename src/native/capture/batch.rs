@@ -5,6 +5,8 @@ use super::*;
 pub(super) struct CaptureBatchPlanner {
     pub(super) files: Vec<BatchTextFile>,
     pub(super) by_path: HashMap<PathBuf, usize>,
+    item_pre_day: Option<Option<String>>,
+    item_consumed_links: Vec<ConsumedLinkJson>,
 }
 
 pub(super) struct BatchTextFile {
@@ -23,6 +25,33 @@ pub(crate) struct StagedTextFile {
 }
 
 impl CaptureBatchPlanner {
+    pub(super) fn begin_item(&mut self, pre_day: Option<String>) {
+        self.item_pre_day = Some(pre_day);
+        self.item_consumed_links.clear();
+    }
+
+    pub(super) fn item_pre_day(&self, path: &Path) -> Option<String> {
+        match &self.item_pre_day {
+            Some(Some(contents)) => Some(contents.clone()),
+            Some(None) => self
+                .by_path
+                .get(path)
+                .map(|index| self.files[*index].original.clone()),
+            None => None,
+        }
+    }
+
+    pub(super) fn record_consumed_links(
+        &mut self,
+        links: impl IntoIterator<Item = ConsumedLinkJson>,
+    ) {
+        self.item_consumed_links.extend(links);
+    }
+
+    pub(super) fn take_consumed_links(&mut self) -> Vec<ConsumedLinkJson> {
+        std::mem::take(&mut self.item_consumed_links)
+    }
+
     pub(super) fn currently_exists(
         &mut self,
         path: &Path,

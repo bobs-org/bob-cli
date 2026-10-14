@@ -24,6 +24,7 @@ pub(super) enum PomodoroBlockRole {
     Linked,
     Unlinked,
     Changed,
+    Removed,
 }
 
 /// Where a ref's headline sat before its item ran. Indices are 0-based
@@ -147,6 +148,7 @@ struct TrackedBlock {
 pub(super) struct PomodoroBlockTracker {
     relative_target: String,
     tracked: Vec<TrackedBlock>,
+    removed: Vec<PomodoroBlockJson>,
 }
 
 impl PomodoroBlockTracker {
@@ -154,6 +156,7 @@ impl PomodoroBlockTracker {
         Self {
             relative_target,
             tracked: Vec::new(),
+            removed: Vec::new(),
         }
     }
 
@@ -190,6 +193,61 @@ impl PomodoroBlockTracker {
                 _ => None,
             })
             .collect();
+        for headline in &removed {
+            let Some(entry) = pre_scan
+                .entries
+                .iter()
+                .find(|entry| entry.line.saturating_sub(1) == *headline)
+            else {
+                debug_assert!(false, "removed Pomodoro ref is not an entry");
+                continue;
+            };
+            let range = capture_pomodoros::pomodoro_block_range(
+                &pre_lines,
+                *headline,
+                pre_section_end,
+            );
+            let before_block = range
+                .clone()
+                .map(|index| pre_lines[index].to_string())
+                .collect::<Vec<_>>();
+            let depths = block_depths(&pre_lines, *headline, range);
+            let status = match entry.state {
+                capture_pomodoros::PomodoroState::Completed => {
+                    PomodoroBlockStatus::Completed
+                }
+                capture_pomodoros::PomodoroState::Open
+                    if entry.time_range.is_some() =>
+                {
+                    PomodoroBlockStatus::Running
+                }
+                capture_pomodoros::PomodoroState::Open => {
+                    PomodoroBlockStatus::Queued
+                }
+            };
+            let lines = before_block
+                .into_iter()
+                .zip(depths)
+                .map(|(text, depth)| PomodoroBlockLineJson {
+                    text,
+                    depth,
+                    change: PomodoroBlockChange::Removed,
+                    before: None,
+                    reason: None,
+                })
+                .collect();
+            self.removed.push(PomodoroBlockJson {
+                relative_target: self.relative_target.clone(),
+                line: *headline + 1,
+                name: entry.name.clone(),
+                time_range: entry.time_range.clone(),
+                status,
+                created: false,
+                removed: true,
+                roles: vec![PomodoroBlockRole::Removed],
+                lines,
+            });
+        }
         let live_refs = refs
             .into_iter()
             .filter(|item| {
@@ -375,7 +433,8 @@ impl PomodoroBlockTracker {
             .map(|entry| (entry.line.saturating_sub(1), entry))
             .collect::<BTreeMap<_, _>>();
         let end = section_end(&final_lines).unwrap_or(final_lines.len());
-        let mut blocks = Vec::with_capacity(self.tracked.len());
+        let mut blocks = self.removed;
+        blocks.reserve(self.tracked.len());
         for tracked in self.tracked {
             let Some(entry) = entry_by_line.get(&tracked.current) else {
                 debug_assert!(
@@ -453,6 +512,7 @@ impl PomodoroBlockTracker {
                 time_range: entry.time_range.clone(),
                 status,
                 created: tracked.created,
+                removed: false,
                 roles: tracked.roles,
                 lines,
             });
@@ -811,8 +871,14 @@ pub(super) struct PomodoroBlockJson {
     pub(super) time_range: Option<String>,
     pub(super) status: PomodoroBlockStatus,
     pub(super) created: bool,
+    #[serde(skip_serializing_if = "is_false")]
+    pub(super) removed: bool,
     pub(super) roles: Vec<PomodoroBlockRole>,
     pub(super) lines: Vec<PomodoroBlockLineJson>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !value
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

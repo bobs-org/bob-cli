@@ -181,10 +181,22 @@ pub(super) fn plan_task_toggle_capture(
             } => (dropped, task_block_ref, blocks_updates),
             ResolvedLinkGuard::Consume(plan) => {
                 // PDG1/PDG3: the target stays Blocked, so the task line and
-                // the ledger stay untouched; only the open prerequisites rise.
+                // the checkbox stays untouched. Its stale live links are
+                // consumed by identity before the open prerequisites rise.
                 let dependent_desc = format!("link toggle ^{block_id}");
                 let reasons = plan.reasons.clone();
                 let drop_refused = plan.drop_refused;
+                let target_identity_path = target
+                    .strip_prefix(bob_dir)
+                    .map(Path::to_path_buf)
+                    .unwrap_or_else(|_| target_rel.clone());
+                let identities = std::collections::BTreeSet::from([(
+                    target_identity_path,
+                    block_id.to_string(),
+                )]);
+                let consumption =
+                    consume_live_links(planner, bob_dir, &identities)?;
+                append_consumption_warning(warnings, consumption.removed_links);
                 let promoted = promote_consume_plan(
                     ctx,
                     planner,
@@ -192,8 +204,15 @@ pub(super) fn plan_task_toggle_capture(
                     *plan,
                     &dependent_desc,
                 )?;
-                let link_guard =
+                let mut link_guard =
                     LinkGuardJson::not_linked(&reasons, promoted, drop_refused);
+                if consumption.removed_links > 0 {
+                    link_guard.removed_pomodoro_links =
+                        Some(consumption.removed_links);
+                    link_guard.day_file = Some(
+                        pomodoro::day_file_for(bob_dir).display().to_string(),
+                    );
+                }
                 return Ok((
                     CaptureWritePlan {
                         placement: Placement::Toggled,
@@ -216,7 +235,7 @@ pub(super) fn plan_task_toggle_capture(
                             pomodoro_name: None,
                             creates_pomodoro: false,
                             pomodoro_already_linked: false,
-                            removed_pomodoro_links: 0,
+                            removed_pomodoro_links: consumption.removed_links,
                             removed_scheduled: None,
                             schedule_log: None,
                             pomodoro_selector_unused: false,
@@ -230,7 +249,7 @@ pub(super) fn plan_task_toggle_capture(
                             blocks_updates: Vec::new(),
                         }),
                         pomodoro_link: None,
-                        pomodoro_refs: Vec::new(),
+                        pomodoro_refs: consumption.pomodoro_refs,
                     },
                     Some(link_guard),
                 ));

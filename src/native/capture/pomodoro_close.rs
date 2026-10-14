@@ -1099,6 +1099,7 @@ fn plan_reset_link_item(
             pomodoro_close: None,
             pomodoro_reset: Some(summary),
             dependency_update: None,
+            consumed_links: Vec::new(),
             task_complete: None,
             toggle_task_description: Some(task_description),
             r#ref: None,
@@ -1237,6 +1238,7 @@ fn plan_reset_task_item(
             dependency_update: close_dependencies
                 .as_ref()
                 .map(|(_, parts)| parts.summary.clone()),
+            consumed_links: Vec::new(),
             task_complete: None,
             toggle_task_description: None,
             r#ref: None,
@@ -1341,6 +1343,7 @@ fn plan_reset_whole_item(
             pomodoro_close: None,
             pomodoro_reset: Some(summary),
             dependency_update: None,
+            consumed_links: Vec::new(),
             task_complete: None,
             toggle_task_description: None,
             r#ref: None,
@@ -1550,6 +1553,7 @@ pub(super) fn plan_pomodoro_close_item(
             pomodoro_close: Some(summary),
             pomodoro_reset: None,
             dependency_update: None,
+            consumed_links: Vec::new(),
             task_complete: None,
             toggle_task_description: None,
             r#ref: None,
@@ -1921,16 +1925,28 @@ pub(super) fn plan_pomodoro_close_link_item(
         dropped_dependencies,
         close_task_block_ref,
         close_blocks_updates,
+        guard_pomodoro_refs,
     ) = match resolution {
         ResolvedLinkGuard::Proceed {
             dropped,
             task_block_ref,
             blocks_updates,
-        } => (None, dropped, task_block_ref, blocks_updates),
+        } => (None, dropped, task_block_ref, blocks_updates, Vec::new()),
         ResolvedLinkGuard::Consume(plan) => {
             let dependent_desc = format!("pomodoro close link ^{block_id}");
             let reasons = plan.reasons.clone();
             let drop_refused = plan.drop_refused;
+            let target_identity_path = target
+                .strip_prefix(&request.bob_dir)
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|_| target_rel.clone());
+            let identities = std::collections::BTreeSet::from([(
+                target_identity_path,
+                block_id.to_string(),
+            )]);
+            let consumption =
+                consume_live_links(planner, &request.bob_dir, &identities)?;
+            append_consumption_warning(warnings, consumption.removed_links);
             let promoted = promote_consume_plan(
                 dependency_ctx,
                 planner,
@@ -1938,15 +1954,23 @@ pub(super) fn plan_pomodoro_close_link_item(
                 *plan,
                 &dependent_desc,
             )?;
+            let mut link_guard =
+                LinkGuardJson::not_linked(&reasons, promoted, drop_refused);
+            if consumption.removed_links > 0 {
+                link_guard.removed_pomodoro_links =
+                    Some(consumption.removed_links);
+                link_guard.day_file = Some(
+                    pomodoro::day_file_for(&request.bob_dir)
+                        .display()
+                        .to_string(),
+                );
+            }
             (
-                Some(LinkGuardJson::not_linked(
-                    &reasons,
-                    promoted,
-                    drop_refused,
-                )),
+                Some(link_guard),
                 Vec::new(),
                 None,
                 Vec::new(),
+                consumption.pomodoro_refs,
             )
         }
     };
@@ -2173,6 +2197,7 @@ pub(super) fn plan_pomodoro_close_link_item(
             PomodoroBlockRef::resolved(PomodoroBlockRole::Next, after)
         });
     }
+    pomodoro_refs.extend(guard_pomodoro_refs);
     // Final post-image for the linked task (close starts it to [/]).
     let final_task_line =
         final_task_line_for(planner, &request.bob_dir, &route, block_id)
@@ -2255,6 +2280,7 @@ pub(super) fn plan_pomodoro_close_link_item(
             pomodoro_close: Some(summary),
             pomodoro_reset: None,
             dependency_update: None,
+            consumed_links: Vec::new(),
             task_complete: None,
             toggle_task_description: Some(task_description),
             r#ref: None,
@@ -2560,6 +2586,7 @@ pub(super) fn plan_pomodoro_close_task_item(
             dependency_update: close_dependencies
                 .as_ref()
                 .map(|(_, parts)| parts.summary.clone()),
+            consumed_links: Vec::new(),
             task_complete: None,
             toggle_task_description: None,
             r#ref: None,

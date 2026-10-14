@@ -1139,6 +1139,75 @@ fn consumption_removes_link_only_subtree_with_child_notes() {
     );
 }
 
+#[test]
+fn capture_consumption_keeps_link_only_notes_as_clean_task_text() {
+    let contents = concat!(
+        "## Pomodoros\n\n",
+        "- [ ] Current (0900-0930)\n",
+        "  - [[tasks#^blocked]]\n",
+        "    - authored note\n",
+    );
+    let resolved = resolved(&[("tasks", "blocked", vec!['?'])]);
+    let options = BlockedConsumptionOptions {
+        keep_notes: true,
+        only_emptied: true,
+        display_texts: BTreeMap::from([(
+            (PathBuf::from("tasks.md"), "blocked".to_string()),
+            "Task with plain linked detail".to_string(),
+        )]),
+    };
+    let consumption = apply_blocked_consumption_with_options(
+        contents,
+        &resolved,
+        &blocked_set(&["blocked"]),
+        &options,
+    );
+
+    assert_eq!(
+        consumption.contents,
+        concat!(
+            "## Pomodoros\n\n",
+            "- [ ] Current (0900-0930)\n",
+            "  - Task with plain linked detail\n",
+            "    - authored note\n",
+        )
+    );
+    assert_eq!(consumption.consumed[0].action, BlockedLinkAction::NotesKept);
+    assert!(consumption.removed_empty.is_empty());
+}
+
+#[test]
+fn capture_only_removes_pomodoros_emptied_by_this_consumption() {
+    let contents = concat!(
+        "## Pomodoros\n\n",
+        "- [ ] Unrelated placeholder\n",
+        "- [ ] Current (0900-0930)\n",
+        "  - [[tasks#^blocked]]\n",
+    );
+    let resolved = resolved(&[("tasks", "blocked", vec!['?'])]);
+    let options = BlockedConsumptionOptions {
+        keep_notes: true,
+        only_emptied: true,
+        display_texts: BTreeMap::new(),
+    };
+    let consumption = apply_blocked_consumption_with_options(
+        contents,
+        &resolved,
+        &blocked_set(&["blocked"]),
+        &options,
+    );
+
+    assert_eq!(
+        consumption.contents,
+        concat!("## Pomodoros\n\n", "- [ ] Unrelated placeholder\n",)
+    );
+    assert_eq!(consumption.removed_empty.len(), 1);
+    assert_eq!(
+        consumption.removed_empty[0].line,
+        "- [ ] Current (0900-0930)"
+    );
+}
+
 // Never key removal off `'?'`: an empty Blocked set leaves `[?]` links
 // in place so `task_complete` retirement (`Live{'?'}`) is unchanged.
 #[test]

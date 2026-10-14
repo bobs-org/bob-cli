@@ -1720,6 +1720,11 @@ fn capture_pomodoro_close_link_on_project_task_refuses_drop() {
     write_file(&vault.join("cash.md"), target_before);
     write_file(&vault.join("job.md"), "- [ ] #task Prep work ^prep\n");
     let day_before = fs::read_to_string(&day_file).expect("read day before");
+    let day_before = day_before.replace(
+        "\t- [[bob#^capture-stop]]\n",
+        "\t- [[bob#^capture-stop]]\n\t- [[cash#^prj|stale]]\n",
+    );
+    write_file(&day_file, &day_before);
     let json = capture_json_dry_run_matches_real(
         &vault,
         &day_file,
@@ -1731,6 +1736,20 @@ fn capture_pomodoro_close_link_on_project_task_refuses_drop() {
     assert_eq!(json["status_symbol"], "?", "{json}");
     assert_eq!(json["status_changed"], false, "{json}");
     assert!(json.get("pomodoro_close").is_some(), "{json}");
+    assert_eq!(
+        json["consumed_links"].as_array().unwrap().len(),
+        1,
+        "{json}"
+    );
+    assert_eq!(
+        json["consumed_links"][0]["link"], "[[cash#^prj|stale]]",
+        "{json}"
+    );
+    assert_eq!(json["consumed_links"][0]["action"], "notes_kept", "{json}");
+    assert_eq!(
+        json["consumed_links"][0]["pomodoro"]["removed"], false,
+        "{json}"
+    );
     assert_eq!(
         json["link_guard"]["reasons"],
         serde_json::json!(["local_dependency"]),
@@ -1753,6 +1772,8 @@ fn capture_pomodoro_close_link_on_project_task_refuses_drop() {
         day_after.contains("[[cash#^prj]]"),
         "history link lands under the closing entry:\n{day_after}"
     );
+    assert!(!day_after.contains("[[cash#^prj|stale]]"), "{day_after}");
+    assert!(day_after.contains("Ship it #prj #hide"), "{day_after}");
     assert_eq!(
         fs::read_to_string(vault.join("job.md")).expect("read prereq"),
         "- [*] #task Prep work ^prep\n"

@@ -79,6 +79,83 @@ fn capture_pomodoro_linked_task_updates_both_notes_and_reports_json() {
 }
 
 #[test]
+fn pomodoro_link_guard_consumes_an_aliased_live_link_by_identity() {
+    let temp = TempDir::new("bob-cli-capture-pomodoro-link-consume-alias");
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("day.md");
+    write_toggle_task_settings(&vault);
+    write_file(
+        &vault.join("proj.md"),
+        concat!(
+            "---\ntype: \"[[project]]\"\nstatus: wip\n---\n",
+            "- [?] #task Ship it #prj #hide ^prj\n",
+            "\t- ⛓️ **DEPENDS ON:** [[job#^x]]\n",
+            "- [?] #task Grind ^grind\n",
+            "\t- ⛓️ **DEPENDS ON:** [[job#^y]]\n",
+        ),
+    );
+    write_file(
+        &vault.join("job.md"),
+        "- [ ] #task Ex prerequisite ^x\n- [ ] #task Why prerequisite ^y\n",
+    );
+    write_file(
+        &day_file,
+        concat!(
+            "## Pomodoros\n",
+            "- [ ] (**0900-0930**) — CURRENT\n",
+            "  - [[proj#^grind|stale alias]]\n",
+            "  - keep context\n",
+        ),
+    );
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg("@proj:grind")
+        .env("BOB_DAY_FILE", &day_file)
+        .env("BOB_NOW", "2026-07-10 10:00:00")
+        .output()
+        .expect("guarded Pomodoro link capture");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("capture JSON");
+    assert_eq!(json["kind"], "link_guard", "{json}");
+    assert_eq!(json["status_symbol"], "?", "{json}");
+    assert_eq!(json["status_changed"], false, "{json}");
+    assert_eq!(
+        json["link_guard"]["drop_refused"], "project_blocked",
+        "{json}"
+    );
+    assert_eq!(
+        json["consumed_links"].as_array().unwrap().len(),
+        1,
+        "{json}"
+    );
+    assert_eq!(
+        json["consumed_links"][0]["link"], "[[proj#^grind|stale alias]]",
+        "{json}"
+    );
+    assert_eq!(json["consumed_links"][0]["action"], "removed", "{json}");
+    assert_eq!(
+        json["consumed_links"][0]["pomodoro"]["removed"], false,
+        "{json}"
+    );
+    let day_after = fs::read_to_string(&day_file).expect("read day");
+    assert!(
+        !day_after.contains("[[proj#^grind|stale alias]]"),
+        "{day_after}"
+    );
+    assert!(day_after.contains("keep context"), "{day_after}");
+    assert!(fs::read_to_string(vault.join("proj.md"))
+        .unwrap()
+        .contains("- [?] #task Grind ^grind"));
+}
+
+#[test]
 fn capture_pomodoro_link_drops_dependencies_when_already_linked() {
     let temp = TempDir::new("bob-cli-capture-pomodoro-link-guard-removed");
     let vault = temp.path().join("vault");

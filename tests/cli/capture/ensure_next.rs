@@ -1005,6 +1005,27 @@ fn capture_ensure_next_on_project_blocked_resident_refuses_drop() {
     assert_eq!(json["status_changed"], false, "{json}");
     assert_eq!(json["status_symbol"], "?", "{json}");
     assert_eq!(json["removed_pomodoro_links"], 1, "{json}");
+    assert_eq!(
+        json["consumed_links"].as_array().unwrap().len(),
+        1,
+        "{json}"
+    );
+    assert_eq!(json["consumed_links"][0]["action"], "removed", "{json}");
+    assert_eq!(
+        json["consumed_links"][0]["pomodoro"]["removed"], true,
+        "{json}"
+    );
+    assert!(
+        json["pomodoro_blocks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|block| {
+                block["removed"] == true
+                    && block["roles"] == serde_json::json!(["removed"])
+            }),
+        "{json}"
+    );
     assert!(json.get("pomodoro_link_action").is_none(), "{json}");
     assert_eq!(
         json["link_guard"]["reasons"],
