@@ -223,7 +223,8 @@ The JSON envelope carries `filters` (the effective `reading_state` plus
 `reading_state_defaulted`, every active filter, the `limit`, and
 `undated_excluded`), `matched`, `returned`, `truncated`, and
 `hidden.superseded` alongside the shared `coverage` and `library`
-counts.
+counts. Every row includes `marker_id`, the frontmatter `id`, or `null`
+when that id is absent.
 
 ## `bob ref show`
 
@@ -249,6 +250,9 @@ resolves before anything prints, so one failure exits 1 and prints
 nothing else.
 
 Each shown row extends the base index row with the note's content:
+
+The base row's `marker_id` is the note's frontmatter `id`, or `null` when
+it is absent.
 
 - `annotations_status`: `parsed`, `absent` (no managed region, as on
   legacy notes), or `unparsed` (with `raw_region`).
@@ -497,7 +501,8 @@ bob vault-sync
 intake directory). `library` counts exclude superseded notes.
 `generated_at` is local `YYYY-MM-DDTHH:MM:SS` (pin with `BOB_NOW`).
 Each `ref` object is the full index row: path, link, title, origin,
-ref_type, era, status, status_sync, legacy_status,
+`marker_id` (the frontmatter `id`, or `null` when absent), ref_type, era,
+status, status_sync, legacy_status,
 reading_state and its source, `blocked`, parent, `task`, urls, identity
 keys, author/published/captured, added/finished dates and sources,
 source_pdf, audio, annotation and comment counts, snapshot,

@@ -462,6 +462,7 @@ mod tests {
             path: "ref/ai/mirrored.md".to_string(),
             link: "[[ref/ai/mirrored]]".to_string(),
             title: "Mirrored".to_string(),
+            marker_id: None,
             origin: "external".to_string(),
             ref_type: Some("ai".to_string()),
             era: "legacy".to_string(),

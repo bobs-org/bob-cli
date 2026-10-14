@@ -156,6 +156,31 @@ fn list_default_view_is_the_queue_in_every_format() {
 }
 
 #[test]
+fn list_json_exposes_marker_id_and_null_for_missing_ids() {
+    let (_temp, vault) = fixture_vault("bob-cli-ref-list-marker-id");
+    let path = vault.join("ref/papers/created_note.md");
+    let contents = fs::read_to_string(&path).expect("read fixture note");
+    fs::write(
+        &path,
+        contents.replacen("---\n", "---\nid: ref-handle-42\n", 1),
+    )
+    .expect("add marker id to fixture note");
+
+    let document = run_list_json(&vault, &["-R", "all", "-A"]);
+    let rows = document["refs"].as_array().expect("refs array");
+    let identified = rows
+        .iter()
+        .find(|row| row["path"] == "ref/papers/created_note.md")
+        .expect("identified row");
+    assert_eq!(identified["marker_id"], "ref-handle-42");
+    let legacy = rows
+        .iter()
+        .find(|row| row["path"] == "ref/papers/wiki_parent.md")
+        .expect("row without an id");
+    assert_eq!(legacy["marker_id"], serde_json::Value::Null);
+}
+
+#[test]
 fn list_human_rows_align_dated_and_undated_columns() {
     let (_temp, vault) = fixture_vault("bob-cli-ref-list-align");
     let output = bob_command()

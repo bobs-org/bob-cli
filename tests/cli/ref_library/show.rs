@@ -92,6 +92,25 @@ fn show_rows_carry_blocked() {
     assert_eq!(rows[1]["blocked"], false);
 }
 
+#[test]
+fn show_json_exposes_marker_id_and_null_for_missing_ids() {
+    let (_temp, vault) = fixture_vault("bob-cli-ref-show-marker-id");
+    let path = vault.join("ref/papers/created_note.md");
+    let contents = fs::read_to_string(&path).expect("read fixture note");
+    fs::write(
+        &path,
+        contents.replacen("---\n", "---\nid: ref-handle-42\n", 1),
+    )
+    .expect("add marker id to fixture note");
+
+    let document = run_show_json(
+        &vault,
+        &["ref/papers/created_note.md", "ref/papers/wiki_parent.md"],
+    );
+    assert_eq!(document["refs"][0]["marker_id"], "ref-handle-42");
+    assert_eq!(document["refs"][1]["marker_id"], serde_json::Value::Null);
+}
+
 fn vault_snapshot(vault: &Path) -> Vec<(String, Vec<u8>)> {
     let mut files = Vec::new();
     walk_snapshot(vault, vault, &mut files);

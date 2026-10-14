@@ -12,6 +12,8 @@ pub(crate) struct RefRow {
     pub path: String,
     pub link: String,
     pub title: String,
+    /// Frontmatter `id`, exposed as the stable handle used by reference clients.
+    pub marker_id: Option<String>,
     pub origin: String,
     pub ref_type: Option<String>,
     pub era: String,
@@ -44,7 +46,7 @@ pub(crate) struct RefRow {
     pub research_ref: Option<String>,
     pub superseded_by: Option<String>,
     pub diagnostics: Vec<Diagnostic>,
-    /// Frontmatter `id`, kept out of JSON; only query resolution reads it.
+    /// Frontmatter `id`, also exposed as `marker_id` in JSON.
     #[serde(skip_serializing)]
     pub id: Option<String>,
     /// Frontmatter `source_block`, kept out of JSON; only the zorg-era

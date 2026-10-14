@@ -481,6 +481,7 @@ fn build_row(
         path: rel.to_string(),
         link,
         title,
+        marker_id: front_string(&front, "id"),
         origin: origin.to_string(),
         ref_type,
         era: era.to_string(),

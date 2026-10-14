@@ -1088,6 +1088,7 @@ mod tests {
                 path: "ref/papers/ea_graph.md".to_string(),
                 link: "[[ref/papers/ea_graph]]".to_string(),
                 title: "EA-Graph: Verification Memory".to_string(),
+                marker_id: None,
                 origin: "external".to_string(),
                 ref_type: Some("papers".to_string()),
                 era: "modern".to_string(),

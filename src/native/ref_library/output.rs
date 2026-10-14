@@ -978,6 +978,7 @@ mod tests {
             path: path.to_string(),
             link: format!("[[{}]]", path.strip_suffix(".md").unwrap_or(path)),
             title: title.to_string(),
+            marker_id: None,
             origin: "external".to_string(),
             ref_type: Some("papers".to_string()),
             era: "modern".to_string(),
