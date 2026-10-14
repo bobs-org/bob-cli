@@ -1,11 +1,16 @@
-use std::{fs, io, path::Path};
+use std::{
+    collections::{HashMap, HashSet},
+    fs, io,
+    path::{Path, PathBuf},
+};
 
 use super::{
     model::{
-        ActiveTaskCandidate, ActiveTaskPomodoroCandidate, Candidates,
-        CompleteError, DependencyCandidate, RouteCandidate, SectionCandidate,
-        TaskCandidate, TaskCompleteCandidate, TaskGotoCandidate,
-        TaskLinkCandidate, TaskParentCandidate, TaskSectionCandidate,
+        ActiveTaskCandidate, ActiveTaskPomodoroCandidate, BlockedTaskCandidate,
+        Candidates, CompleteError, DependencyCandidate, RouteCandidate,
+        SectionCandidate, TaskCandidate, TaskCompleteCandidate,
+        TaskGotoCandidate, TaskLinkCandidate, TaskParentCandidate,
+        TaskSectionCandidate,
     },
     support::rank,
 };
@@ -15,7 +20,7 @@ use crate::native::{
     capture_language::{DependencyTarget, DependencyTargetKind},
     capture_link_tasks, capture_targets, capture_task_sections, capture_tasks,
     note_tasks::{self, BlockIdLookup},
-    pomodoro,
+    pomodoro, project_dependencies, task_complete, task_status_hooks,
 };
 
 pub(super) fn route_candidates(
@@ -676,6 +681,347 @@ pub(super) fn dependency_candidates(
         })
         .collect();
     (Candidates::Dependency(candidates), discovered.warnings)
+}
+
+/// `blocked_task` candidates for a `*` modifier. Only open, editable tasks
+/// are offered. Today links and the task lanes establish the stable order;
+/// the dependency graph adds early self, cycle, project-resident, duplicate,
+/// and already-blocked metadata while the capture writer remains final.
+pub(super) fn blocked_task_candidates(
+    bob_dir: &Path,
+    query: &str,
+    owner: Option<&DependencyTarget>,
+    owner_note: &str,
+    typed_dependencies: &[(String, String)],
+    typed_blocked: &[(String, String)],
+) -> (Candidates, Vec<String>) {
+    let discovered = capture_dependency_tasks::discover(bob_dir);
+    let graph =
+        capture_dependency_tasks::dependency_graph(bob_dir, &discovered);
+    let day_file = pomodoro::day_file_for(bob_dir);
+    let mut warnings = Vec::new();
+    let ledger = capture_active_tasks::read_ledger(&day_file, &mut warnings);
+    warnings.extend(discovered.warnings.iter().cloned());
+
+    let owner_path = PathBuf::from(capture::route_label(owner_note));
+    let owner_path_display = owner_path.to_string_lossy().replace('\\', "/");
+    let owner_identity = owner.and_then(|target| {
+        if target.kind != DependencyTargetKind::ExistingTask {
+            return None;
+        }
+        let block_id = target.block_id.as_ref()?;
+        let path = target
+            .route
+            .as_deref()
+            .map(capture::route_label)
+            .unwrap_or_else(|| owner_path_display.clone());
+        Some((path, block_id.clone()))
+    });
+
+    let mut typed_blocked_identities = HashSet::new();
+    for (note, block_id) in typed_blocked {
+        if let Ok(path) = capture_dependency_tasks::resolve_dependency_note(
+            bob_dir,
+            &discovered,
+            note,
+        ) {
+            typed_blocked_identities.insert((
+                capture_dependency_tasks::display_path(&path),
+                block_id.clone(),
+            ));
+        }
+    }
+
+    let mut cycle_roots = Vec::new();
+    if let Some(identity) = &owner_identity {
+        cycle_roots.push(identity.clone());
+    }
+    for (note, block_id) in typed_dependencies {
+        if let Ok(path) = capture_dependency_tasks::resolve_dependency_note(
+            bob_dir,
+            &discovered,
+            note,
+        ) {
+            cycle_roots.push((
+                capture_dependency_tasks::display_path(&path),
+                block_id.clone(),
+            ));
+        }
+    }
+    cycle_roots.sort();
+    cycle_roots.dedup();
+    let reachable = dependency_reachable(&graph, &cycle_roots);
+
+    let settings = note_tasks::read_settings(bob_dir);
+    let mut note_cache: HashMap<PathBuf, String> = HashMap::new();
+    let owner_in_project = if bob_dir.join(&owner_path).is_file() {
+        read_note_cached(bob_dir, &owner_path, &mut note_cache).map(
+            |contents| {
+                project_dependencies::project_ancestors(
+                    &owner_path,
+                    &contents,
+                    &discovered.index,
+                    |path| read_note_cached(bob_dir, path, &mut note_cache),
+                    |path, contents| {
+                        is_recognized_project(
+                            path, contents, bob_dir, &settings,
+                        )
+                    },
+                )
+                .into_iter()
+                .map(|path| capture_dependency_tasks::display_path(&path))
+                .collect::<HashSet<_>>()
+            },
+        )
+    } else {
+        None
+    };
+    let mut recognized_project_paths = HashSet::new();
+    for task in discovered
+        .tasks
+        .iter()
+        .filter(|task| task.block_id.as_deref() == Some("prj") && task.open)
+    {
+        let path = PathBuf::from(&task.note_path);
+        if read_note_cached(bob_dir, &path, &mut note_cache).is_some_and(
+            |contents| {
+                is_recognized_project(&path, &contents, bob_dir, &settings)
+            },
+        ) {
+            recognized_project_paths.insert(task.note_path.clone());
+        }
+    }
+
+    let mut ordered: Vec<(&capture_dependency_tasks::DependencyTask, u32)> =
+        discovered
+            .tasks
+            .iter()
+            .filter(|task| is_editable_open_task(task))
+            .filter_map(|task| {
+                capture_link_tasks::match_score(
+                    &capture_dependency_tasks::dependency_search_fields(task),
+                    query,
+                )
+                .map(|score| (task, score))
+            })
+            .collect();
+    ordered.sort_by(|(left, left_score), (right, right_score)| {
+        right_score.cmp(left_score).then_with(|| {
+            blocked_task_order_key(left, &ledger, &owner_path_display).cmp(
+                &blocked_task_order_key(right, &ledger, &owner_path_display),
+            )
+        })
+    });
+
+    let candidates = ordered
+        .into_iter()
+        .map(|(task, _)| {
+            let key = task
+                .block_id
+                .as_ref()
+                .map(|id| (task.note_path.clone(), id.clone()));
+            let is_self = owner_identity
+                .as_ref()
+                .is_some_and(|owner| key.as_ref() == Some(owner));
+            let already = key.as_ref().is_some_and(|key| {
+                typed_blocked_identities.contains(key)
+                    || owner_identity.as_ref().is_some_and(|owner| {
+                        graph.get(key).is_some_and(|prerequisites| {
+                            prerequisites.contains(owner)
+                        })
+                    })
+            });
+            let internal_project = recognized_project_paths
+                .contains(&task.note_path)
+                && (owner_path_display == task.note_path
+                    || owner_in_project.as_ref().is_some_and(|projects| {
+                        projects.contains(&task.note_path)
+                    }));
+            let disabled_reason = if is_self {
+                Some("the owner task itself".to_string())
+            } else if task.duplicate_id {
+                Some(format!(
+                    "duplicate block ID ^{} in {}",
+                    task.block_id.as_deref().unwrap_or_default(),
+                    task.note_path
+                ))
+            } else if !already
+                && key.as_ref().is_some_and(|key| reachable.contains(key))
+            {
+                Some("would create a dependency cycle".to_string())
+            } else if internal_project {
+                Some("a project cannot depend on its own resident".to_string())
+            } else {
+                None
+            };
+            let requires_block_id = task.block_id.is_none();
+            let replacement = if requires_block_id || disabled_reason.is_some()
+            {
+                String::new()
+            } else {
+                capture_dependency_tasks::replacement_for_sigil(
+                    &discovered.index,
+                    Path::new(&task.note_path),
+                    task.block_id.as_deref().expect("identified task"),
+                    b'*',
+                )
+            };
+            BlockedTaskCandidate {
+                replacement,
+                task_ref: task.task_ref.clone(),
+                note_path: task.note_path.clone(),
+                locator: task.locator.clone(),
+                group: blocked_task_group(task, &ledger, &owner_path_display)
+                    .to_string(),
+                hidden: task.hidden,
+                block_id: task.block_id.clone(),
+                requires_block_id,
+                block_id_suggestions: task.block_id_suggestions.clone(),
+                already_blocked: already,
+                disabled_reason,
+                status_symbol: task.status_symbol,
+                status_name: task.status_name.clone(),
+                status_type: capture_tasks::status_type_label(task.status_type),
+                text: task.text.clone(),
+                section: task.section.clone(),
+                depth: task.depth,
+                line: task.line,
+                task_kind: task.task_kind,
+            }
+        })
+        .collect();
+    (Candidates::BlockedTask(candidates), warnings)
+}
+
+fn is_editable_open_task(
+    task: &capture_dependency_tasks::DependencyTask,
+) -> bool {
+    if !task.open || !task_complete::is_completable_status(task.status_symbol) {
+        return false;
+    }
+    let path = Path::new(&task.note_path);
+    if task_status_hooks::canonical_daily_date(path).is_some() {
+        return false;
+    }
+    !path
+        .components()
+        .any(|component| component.as_os_str() == "done")
+}
+
+fn blocked_task_group(
+    task: &capture_dependency_tasks::DependencyTask,
+    ledger: &capture_active_tasks::Ledger,
+    owner_note: &str,
+) -> &'static str {
+    if task_has_today_link(task, ledger) {
+        "today"
+    } else if task.status_symbol == '/' {
+        "in_progress"
+    } else if task.status_symbol == '*' {
+        "next"
+    } else if task.note_path == owner_note {
+        "in_this_note"
+    } else {
+        "open"
+    }
+}
+
+fn blocked_task_order_key(
+    task: &capture_dependency_tasks::DependencyTask,
+    ledger: &capture_active_tasks::Ledger,
+    owner_note: &str,
+) -> (u8, usize, usize) {
+    if let Some((entry, link)) = task_ledger_position(task, ledger) {
+        let running = task
+            .block_id
+            .as_ref()
+            .and_then(|id| {
+                ledger
+                    .owners
+                    .get(&(task_route(&task.note_path), id.clone()))
+            })
+            .is_some_and(|pomodoro| pomodoro.is_current);
+        (if running { 0 } else { 1 }, entry, link)
+    } else if task.status_symbol == '/' {
+        (2, 0, 0)
+    } else if task.status_symbol == '*' {
+        (3, 0, 0)
+    } else if task.note_path == owner_note {
+        (4, 0, 0)
+    } else {
+        (5, 0, 0)
+    }
+}
+
+fn task_has_today_link(
+    task: &capture_dependency_tasks::DependencyTask,
+    ledger: &capture_active_tasks::Ledger,
+) -> bool {
+    task_ledger_position(task, ledger).is_some()
+}
+
+fn task_ledger_position(
+    task: &capture_dependency_tasks::DependencyTask,
+    ledger: &capture_active_tasks::Ledger,
+) -> Option<(usize, usize)> {
+    let id = task.block_id.as_ref()?;
+    ledger.position(&(task_route(&task.note_path), id.clone()))
+}
+
+fn task_route(note_path: &str) -> String {
+    let mut path = PathBuf::from(note_path);
+    path.set_extension("");
+    path.to_string_lossy().replace('\\', "/")
+}
+
+fn dependency_reachable(
+    graph: &HashMap<
+        capture_dependency_tasks::TaskIdentity,
+        HashSet<capture_dependency_tasks::TaskIdentity>,
+    >,
+    roots: &[capture_dependency_tasks::TaskIdentity],
+) -> HashSet<capture_dependency_tasks::TaskIdentity> {
+    let mut reachable = HashSet::new();
+    let mut pending = roots.to_vec();
+    while let Some(task) = pending.pop() {
+        if !reachable.insert(task.clone()) {
+            continue;
+        }
+        if let Some(prerequisites) = graph.get(&task) {
+            pending.extend(prerequisites.iter().cloned());
+        }
+    }
+    reachable
+}
+
+fn read_note_cached(
+    bob_dir: &Path,
+    path: &Path,
+    cache: &mut HashMap<PathBuf, String>,
+) -> Option<String> {
+    if !cache.contains_key(path) {
+        let contents = fs::read_to_string(bob_dir.join(path)).ok()?;
+        cache.insert(path.to_path_buf(), contents);
+    }
+    cache.get(path).cloned()
+}
+
+fn is_recognized_project(
+    relative: &Path,
+    contents: &str,
+    bob_dir: &Path,
+    settings: &note_tasks::NoteTaskSettings,
+) -> bool {
+    let tasks = task_status_hooks::parse_tasks(contents, settings);
+    project_dependencies::ProjectContext::for_note(
+        &task_status_hooks::FileScan {
+            path: bob_dir.join(relative),
+            relative_path: relative.to_path_buf(),
+            contents: contents.to_string(),
+            tasks,
+        },
+    )
+    .recognised
 }
 
 /// `task_complete` candidates for a whole-item `!` token: every open

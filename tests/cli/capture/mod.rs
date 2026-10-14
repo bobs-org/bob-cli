@@ -6,6 +6,7 @@ mod batch;
 mod blocks;
 mod clip;
 mod complete_block_id;
+mod complete_blocked_task;
 mod complete_dependency;
 mod complete_editor;
 mod complete_parent_task;

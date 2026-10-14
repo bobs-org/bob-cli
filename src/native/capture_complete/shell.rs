@@ -2,10 +2,10 @@ use std::path::Path;
 
 use super::{
     candidates::{
-        active_task_candidates, link_candidates, route_candidates,
-        section_candidates, task_candidates, task_complete_candidates,
-        task_link_candidates, task_parent_candidates, task_section_candidates,
-        TaskSearch,
+        active_task_candidates, blocked_task_candidates, link_candidates,
+        route_candidates, section_candidates, task_candidates,
+        task_complete_candidates, task_link_candidates, task_parent_candidates,
+        task_section_candidates, TaskSearch,
     },
     model::Candidates,
     pomodoros::{pomodoro_name_candidates, pomodoro_start_name_candidates},
@@ -318,6 +318,69 @@ pub(crate) fn shell_completion(
                     full,
                     description: item.text.clone(),
                     group: "prerequisite tasks".to_string(),
+                });
+            }
+        }
+        CompletionContext::BlockedTask => {
+            let item = capture_language::editor_item_at(raw_text, cursor);
+            let typed_dependencies: Vec<(String, String)> = item
+                .as_ref()
+                .map(|found| {
+                    found
+                        .dependencies
+                        .iter()
+                        .map(|entry| {
+                            (entry.note.clone(), entry.block_id.clone())
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let typed_blocked: Vec<(String, String)> = item
+                .as_ref()
+                .map(|found| {
+                    found
+                        .blocked_tasks
+                        .iter()
+                        .map(|entry| {
+                            (entry.note.clone(), entry.block_id.clone())
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let owner_note = item
+                .as_ref()
+                .and_then(|found| found.route.as_deref())
+                .or_else(|| {
+                    item.as_ref()
+                        .and_then(|found| found.dependency_target.as_ref())
+                        .and_then(|target| target.route.as_deref())
+                })
+                .unwrap_or_else(|| capture::inbox_route());
+            let (candidates, _) = blocked_task_candidates(
+                bob_dir,
+                "",
+                item.as_ref()
+                    .and_then(|found| found.dependency_target.as_ref()),
+                owner_note,
+                &typed_dependencies,
+                &typed_blocked,
+            );
+            let Candidates::BlockedTask(items) = candidates else {
+                return Ok(None);
+            };
+            for item in items {
+                if item.replacement.is_empty() {
+                    continue;
+                }
+                let full = format!("{marker_prefix}{}", item.replacement);
+                if full.is_empty() {
+                    continue;
+                }
+                rows.push(ShellRow {
+                    nospace: ends_in_continuation(&full),
+                    full,
+                    description: item.text.clone(),
+                    group: "blocked tasks".to_string(),
                 });
             }
         }

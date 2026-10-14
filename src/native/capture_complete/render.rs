@@ -1,9 +1,10 @@
 use serde_json::json;
 
 use super::model::{
-    Candidates, CaptureCompleteResult, CompleteError, DependencyCandidate,
-    OutputFormat, PomodoroNameCandidate, TaskCompleteCandidate,
-    TaskGotoCandidate, TaskLinkCandidate, TaskParentCandidate,
+    BlockedTaskCandidate, Candidates, CaptureCompleteResult, CompleteError,
+    DependencyCandidate, OutputFormat, PomodoroNameCandidate,
+    TaskCompleteCandidate, TaskGotoCandidate, TaskLinkCandidate,
+    TaskParentCandidate,
 };
 use super::COMMAND_NAME;
 use crate::native::{
@@ -285,6 +286,34 @@ pub(super) fn dependency_line(item: &DependencyCandidate) -> (String, String) {
     (label, detail)
 }
 
+/// One human line for a `blocked_task` (`*`) candidate.
+pub(super) fn blocked_task_line(
+    item: &BlockedTaskCandidate,
+) -> (String, String) {
+    let mut detail = format!(
+        "[{}] {}  · {}  · {}",
+        item.status_symbol, item.text, item.locator, item.group
+    );
+    if let Some(reason) = item.disabled_reason.as_deref() {
+        detail.push_str(&format!("  · {reason}"));
+    } else if item.requires_block_id {
+        match item.block_id_suggestions.first() {
+            Some(suggestion) => {
+                detail.push_str(&format!(" · needs ID (^{suggestion})"))
+            }
+            None => detail.push_str(" · needs ID"),
+        }
+    } else if item.already_blocked {
+        detail.push_str(" · already blocked");
+    }
+    let label = if item.replacement.is_empty() {
+        "…".to_string()
+    } else {
+        item.replacement.clone()
+    };
+    (label, detail)
+}
+
 pub(super) fn candidate_lines(
     candidates: &Candidates,
     context: Option<CompletionContext>,
@@ -360,6 +389,9 @@ pub(super) fn candidate_lines(
         }
         Candidates::Dependency(items) => {
             items.iter().map(dependency_line).collect()
+        }
+        Candidates::BlockedTask(items) => {
+            items.iter().map(blocked_task_line).collect()
         }
         Candidates::TaskComplete(items) => {
             items.iter().map(task_complete_line).collect()
@@ -489,6 +521,7 @@ pub(super) fn context_label(context: CompletionContext) -> &'static str {
         CompletionContext::TaskGoto => "task_goto",
         CompletionContext::TaskParent => "task_parent",
         CompletionContext::TaskDependency => "task_dependency",
+        CompletionContext::BlockedTask => "blocked_task",
         CompletionContext::TaskComplete => "task_complete",
         CompletionContext::WikilinkNote => "wikilink_note",
         CompletionContext::WikilinkHeading => "wikilink_heading",

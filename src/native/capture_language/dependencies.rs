@@ -249,6 +249,16 @@ pub(crate) fn scan_line_dependencies(
     scan_line_modifiers(line, base, b'&')
 }
 
+/// Scan one physical line for `*` blocked-task modifiers. `base` is the
+/// line's byte offset in the original draft, so every range is
+/// draft-absolute.
+pub(crate) fn scan_line_blocked_tasks(
+    line: &str,
+    base: usize,
+) -> Vec<ScannedDependency> {
+    scan_line_modifiers(line, base, b'*')
+}
+
 fn scan_line_modifiers(
     line: &str,
     base: usize,

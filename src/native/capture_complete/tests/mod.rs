@@ -8,6 +8,7 @@ use std::{
 use super::{engine::build_result, model::CaptureCompleteResult};
 
 mod active_tasks;
+mod blocked_tasks;
 mod output;
 mod parent_tasks;
 mod pomodoros;

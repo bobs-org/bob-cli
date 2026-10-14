@@ -136,6 +136,37 @@ pub(super) struct DependencyCandidate {
     pub(super) task_kind: Option<&'static str>,
 }
 
+/// One `blocked_task` (`*` picker) candidate. It shares the identity,
+/// display, ID-assignment, and task fields of `DependencyCandidate`, with
+/// `already_blocked` reporting an existing or already-typed edge from this
+/// task to the capture owner.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct BlockedTaskCandidate {
+    pub(super) replacement: String,
+    #[serde(rename = "ref")]
+    pub(super) task_ref: String,
+    pub(super) note_path: String,
+    pub(super) locator: String,
+    pub(super) group: String,
+    pub(super) hidden: bool,
+    pub(super) block_id: Option<String>,
+    pub(super) requires_block_id: bool,
+    pub(super) block_id_suggestions: Vec<String>,
+    #[serde(skip_serializing_if = "is_false")]
+    pub(super) already_blocked: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) disabled_reason: Option<String>,
+    pub(super) status_symbol: char,
+    pub(super) status_name: String,
+    pub(super) status_type: &'static str,
+    pub(super) text: String,
+    pub(super) section: Option<String>,
+    pub(super) depth: usize,
+    pub(super) line: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) task_kind: Option<&'static str>,
+}
+
 /// One `task_link` (`:` picker) candidate: any linkable open task in a
 /// routable inbox, area, or non-terminal project note. The JSON keys match
 /// the picker contract: `replacement` is the `@route:id` an accept inserts
@@ -368,6 +399,7 @@ pub(super) enum Candidates {
     TaskGoto(Vec<TaskGotoCandidate>),
     TaskParent(Vec<TaskParentCandidate>),
     Dependency(Vec<DependencyCandidate>),
+    BlockedTask(Vec<BlockedTaskCandidate>),
     TaskComplete(Vec<TaskCompleteCandidate>),
     WikilinkNote(Vec<WikilinkNoteCandidate>),
     WikilinkHeading(Vec<WikilinkHeadingCandidate>),
@@ -387,6 +419,7 @@ impl Candidates {
             Self::TaskGoto(items) => items.len(),
             Self::TaskParent(items) => items.len(),
             Self::Dependency(items) => items.len(),
+            Self::BlockedTask(items) => items.len(),
             Self::TaskComplete(items) => items.len(),
             Self::WikilinkNote(items) => items.len(),
             Self::WikilinkHeading(items) => items.len(),
@@ -431,16 +464,16 @@ pub(super) struct CaptureCompleteResult {
     pub(super) block_id: Option<capture_block_ids::BlockIdField>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(super) warnings: Vec<String>,
-    /// Search text for `task_dependency`, scoped `task`, and bare-plus
-    /// `task_parent` completion. Dependency queries have their sigil,
+    /// Search text for `task_dependency`, `blocked_task`, scoped `task`,
+    /// and bare-plus `task_parent` completion. Relation queries have their sigil,
     /// opening quote, and escapes decoded so clients never parse a quoted
     /// note component. Omitted from other contexts.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) query: Option<String>,
-    /// Lexical owner of the `task_dependency` modifier under the cursor
-    /// (the capture-parse `dependency_target` for the cursor's item), so
-    /// the app never derives the dependent itself. Set only for that
-    /// context; resolution-grade eligibility lands in later phases.
+    /// Lexical owner of the `task_dependency` or `blocked_task` modifier
+    /// under the cursor (the capture-parse `dependency_target` for the
+    /// cursor's item), so clients never derive the owner themselves.
+    /// Set only for those contexts.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) owner: Option<LanguageDependencyTarget>,
     /// Parent-task picker scope and editing ranges; omitted from every

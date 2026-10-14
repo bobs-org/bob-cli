@@ -44,6 +44,9 @@ pub(crate) enum CompletionContext {
     /// scan lands in the discovery phase; the lexical field (query plus the
     /// exact sigil-inclusive replacement range) is contract.
     TaskDependency,
+    /// A `*` blocked-task modifier: vault-wide open-task search whose accept
+    /// inserts a Bob-authored `*note:block-id` replacement.
+    BlockedTask,
     /// A whole-item `!` token: vault-wide open-task search whose accept
     /// inserts a Bob-authored `!note:block-id` replacement. The query is
     /// decoded like `&`; the replacement covers the whole token, sigil
@@ -173,10 +176,47 @@ pub(super) fn dependency_completion_field_at(
     cursor: usize,
     parent: bool,
 ) -> Option<CompletionField> {
+    relation_completion_field_at(
+        line,
+        cursor,
+        parent,
+        b'&',
+        CompletionContext::TaskDependency,
+    )
+}
+
+/// Complete a `*` blocked-task modifier with the same cursor and replacement
+/// semantics as the prerequisite picker. The line extractor remains the
+/// authority for leading/trailing run placement and Markdown guards.
+pub(super) fn blocked_task_completion_field_at(
+    line: &RawLine<'_>,
+    cursor: usize,
+    parent: bool,
+) -> Option<CompletionField> {
+    relation_completion_field_at(
+        line,
+        cursor,
+        parent,
+        b'*',
+        CompletionContext::BlockedTask,
+    )
+}
+
+fn relation_completion_field_at(
+    line: &RawLine<'_>,
+    cursor: usize,
+    parent: bool,
+    sigil: u8,
+    context: CompletionContext,
+) -> Option<CompletionField> {
     if cursor < line.start || cursor > line.end {
         return None;
     }
-    let scanned = scan_line_dependencies(line.text, line.start);
+    let scanned = if sigil == b'*' {
+        scan_line_blocked_tasks(line.text, line.start)
+    } else {
+        scan_line_dependencies(line.text, line.start)
+    };
     let target = scanned.iter().find(|scan| {
         !matches!(
             scan,
@@ -189,12 +229,15 @@ pub(super) fn dependency_completion_field_at(
     let tokens = tokenize_line_with_spans(line);
     let (_, found) =
         extract_line_dependencies(tokens, line.text, line.start, parent, true);
-    let directive = found
-        .entries
+    let (entries, partials) = if sigil == b'*' {
+        (&found.blocked_entries, &found.blocked_partials)
+    } else {
+        (&found.entries, &found.partials)
+    };
+    let directive = entries
         .iter()
         .any(|entry| entry.start <= cursor && cursor <= entry.end)
-        || found
-            .partials
+        || partials
             .iter()
             .any(|(start, end)| *start <= cursor && cursor <= *end);
     if !directive {
@@ -212,7 +255,7 @@ pub(super) fn dependency_completion_field_at(
         decode_dependency_query(slice)
     };
     Some(CompletionField {
-        context: CompletionContext::TaskDependency,
+        context,
         route: None,
         block_id: None,
         query: typed,
@@ -680,6 +723,13 @@ pub(crate) fn completion_field_at(
     {
         return Some(field);
     }
+    // A cursor inside a `*note:block-id` modifier completes a blocked task
+    // using the same owner context as `&` prerequisites.
+    if let Some(field) =
+        blocked_task_completion_field_at(&scan_line, cursor, leading)
+    {
+        return Some(field);
+    }
     // A recognized standalone `%` listen marker (or `@` alias) never offers
     // route completion: completing it would replace the listen request with a
     // route. The policy check agrees with the parser rather than
@@ -690,9 +740,10 @@ pub(crate) fn completion_field_at(
 
     let mut tokens = tokenize_line_with_spans(&scan_line);
     take_global_declarations(&mut tokens);
-    // Leading/trailing `&...` modifiers are not marker candidates: strip
-    // them with the shared extractor (before terminal markers, exactly
-    // like the editor parse) so an interleaved marker still completes.
+    // Leading/trailing dependency and blocked-task modifiers are not marker
+    // candidates: strip them with the shared extractor (before terminal
+    // markers, exactly like the editor parse) so an interleaved marker still
+    // completes.
     let (stripped, _) = extract_line_dependencies(
         tokens,
         scan_line.text,

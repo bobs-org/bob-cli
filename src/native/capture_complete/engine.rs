@@ -2,8 +2,8 @@ use std::path::Path;
 
 use super::{
     candidates::{
-        active_task_candidates, dependency_candidates, link_candidates,
-        route_candidates, section_candidates, task_candidates,
+        active_task_candidates, blocked_task_candidates, dependency_candidates,
+        link_candidates, route_candidates, section_candidates, task_candidates,
         task_complete_candidates, task_goto_candidates, task_link_candidates,
         task_parent_candidates, task_section_candidates, TaskSearch,
     },
@@ -79,6 +79,7 @@ pub(super) fn build_result(
             | CompletionContext::TaskGoto
             | CompletionContext::TaskParent
             | CompletionContext::TaskDependency
+            | CompletionContext::BlockedTask
             | CompletionContext::TaskComplete => {
                 unreachable!("link field context")
             }
@@ -261,6 +262,51 @@ pub(super) fn build_result(
                 &typed,
             )
         }
+        CompletionContext::BlockedTask => {
+            let item = capture_language::editor_item_at(raw_text, cursor);
+            let typed_dependencies: Vec<(String, String)> = item
+                .as_ref()
+                .map(|found| {
+                    found
+                        .dependencies
+                        .iter()
+                        .map(|entry| {
+                            (entry.note.clone(), entry.block_id.clone())
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let typed_blocked: Vec<(String, String)> = item
+                .as_ref()
+                .map(|found| {
+                    found
+                        .blocked_tasks
+                        .iter()
+                        .map(|entry| {
+                            (entry.note.clone(), entry.block_id.clone())
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let owner_note = item
+                .as_ref()
+                .and_then(|found| found.route.as_deref())
+                .or_else(|| {
+                    item.as_ref()
+                        .and_then(|found| found.dependency_target.as_ref())
+                        .and_then(|target| target.route.as_deref())
+                })
+                .unwrap_or_else(|| capture::inbox_route());
+            blocked_task_candidates(
+                bob_dir,
+                &field.query,
+                item.as_ref()
+                    .and_then(|found| found.dependency_target.as_ref()),
+                owner_note,
+                &typed_dependencies,
+                &typed_blocked,
+            )
+        }
         CompletionContext::WikilinkNote
         | CompletionContext::WikilinkHeading
         | CompletionContext::WikilinkBlock => {
@@ -268,7 +314,7 @@ pub(super) fn build_result(
         }
     };
 
-    // Bob owns the search query for dependency, scoped task,
+    // Bob owns the search query for dependency, blocked-task, scoped task,
     // parent-task, and task-complete pickers. Dependency and
     // task-complete queries are decoded here so clients never parse a
     // quoted note component; only the dependency context also carries
@@ -276,13 +322,18 @@ pub(super) fn build_result(
     let (query, owner) = if matches!(
         field.context,
         CompletionContext::TaskDependency
+            | CompletionContext::BlockedTask
             | CompletionContext::Task
             | CompletionContext::TaskParent
             | CompletionContext::TaskComplete
     ) {
         (
             Some(field.query.clone()),
-            if field.context == CompletionContext::TaskDependency {
+            if matches!(
+                field.context,
+                CompletionContext::TaskDependency
+                    | CompletionContext::BlockedTask
+            ) {
                 capture_language::editor_item_at(raw_text, cursor)
                     .and_then(|item| item.dependency_target)
             } else {

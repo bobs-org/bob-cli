@@ -79,6 +79,10 @@ pub(crate) struct DependencyTaskResult {
     pub(crate) basenames: HashMap<String, Vec<String>>,
 }
 
+/// Exact task identity used by dependency completion: vault-relative note
+/// path plus block ID.
+pub(crate) type TaskIdentity = (String, String);
+
 /// Scan every task-bearing vault note for prerequisite candidates.
 ///
 /// Included: untyped root notes, nested folders, ref notes, terminal
@@ -636,6 +640,72 @@ pub(crate) fn already_present_prerequisites(
         ));
     }
     present
+}
+
+/// Read the accepted managed Depends-On edges for every identified task.
+/// The candidate picker uses these edges only to explain likely cycle
+/// guards; the writer remains authoritative when capture is submitted.
+pub(crate) fn dependency_graph(
+    bob_dir: &Path,
+    discovered: &DependencyTaskResult,
+) -> HashMap<TaskIdentity, HashSet<TaskIdentity>> {
+    let mut contents_by_note: HashMap<&str, Option<String>> = HashMap::new();
+    let mut graph = HashMap::new();
+    for task in &discovered.tasks {
+        let Some(block_id) = task.block_id.as_deref() else {
+            continue;
+        };
+        let contents = contents_by_note
+            .entry(task.note_path.as_str())
+            .or_insert_with(|| {
+                fs::read_to_string(bob_dir.join(&task.note_path)).ok()
+            });
+        let Some(contents) = contents.as_deref() else {
+            continue;
+        };
+        let lines: Vec<&str> = contents.lines().collect();
+        let Some(task_line) = task.line.checked_sub(1) else {
+            continue;
+        };
+        if task_line >= lines.len() {
+            continue;
+        }
+        let fenced = super::markdown::fenced_lines(&lines, 0..lines.len());
+        let Some(child) = task_dependencies::parse::dependency_child_of(
+            &lines, &fenced, task_line,
+        ) else {
+            graph
+                .entry((task.note_path.clone(), block_id.to_string()))
+                .or_insert_with(HashSet::new);
+            continue;
+        };
+        let task_dependencies::parse::DependencyLine::Accepted {
+            links, ..
+        } = &child.parsed
+        else {
+            graph
+                .entry((task.note_path.clone(), block_id.to_string()))
+                .or_insert_with(HashSet::new);
+            continue;
+        };
+        let dependent_path = Path::new(&task.note_path);
+        let prerequisites = links
+            .iter()
+            .filter_map(|link| {
+                let resolved = if link.target.is_empty() {
+                    Some(dependent_path.to_path_buf())
+                } else {
+                    discovered.index.resolve(Some(dependent_path), &link.target)
+                }?;
+                Some((display_path(&resolved), link.block_id.clone()))
+            })
+            .collect();
+        graph.insert(
+            (task.note_path.clone(), block_id.to_string()),
+            prerequisites,
+        );
+    }
+    graph
 }
 
 /// Exact `(note_path, block_id)` pairs on one existing task's managed

@@ -70,7 +70,7 @@ pub(crate) fn build_cli() -> ClapCommand {
 Bob note.\n\n\
 The command is the write half of task completion: callers first discover \
 a missing-ID task with `bob capture-complete --all-tasks` (or the `&` \
-dependency picker), then pass that candidate's stale-safe --task-ref \
+dependency and `*` blocked-task picker), then pass that candidate's stale-safe --task-ref \
 together with the authored --block-id. Validation uses the same route \
 grammar, block-ID grammar, task scan, and duplicate-ID rules as \
 `bob capture`. The selected task must still be open and must not already \
@@ -90,7 +90,9 @@ with one same-directory temporary file rename. The JSON success shape \
 additionally carries the exact `note_path` (in --note-path mode) and the \
 backend-formatted `dependency_replacement` (`&note:id`, quoted when the \
 locator needs it) so the app can resume the picker without losing \
-quoting or case, plus `complete_replacement` (`!note:id`, quoted when the \
+quoting or case, plus `blocked_task_replacement` (`*note:id`, quoted when the \
+locator needs it, in both modes) so the blocked-task picker can splice the new ID, \
+plus `complete_replacement` (`!note:id`, quoted when the \
 locator needs it, in both modes) so the Complete picker can splice the new ID, \
 plus `parent_replacement` (`@route+block-id`) in routable \
 `--route` mode. Dry-run plans the same \
@@ -326,6 +328,9 @@ struct CaptureTaskIdResult {
     /// needs it) so the app resumes the picker without losing
     /// quoting or case.
     dependency_replacement: String,
+    /// Backend-formatted `*note:block-id` (quoted when the locator
+    /// needs it) so the blocked-task picker can splice the assigned ID.
+    blocked_task_replacement: String,
     /// Backend-formatted `!note:block-id` (quoted when the locator
     /// needs it) so the Complete picker can splice the new ID without
     /// losing quoting or case. Present in both `--route` and
@@ -516,6 +521,13 @@ fn plan_assignment(
         &target_path,
         &request.block_id,
     );
+    let blocked_task_replacement =
+        capture_dependency_tasks::replacement_for_sigil(
+            &discovered.index,
+            &target_path,
+            &request.block_id,
+            b'*',
+        );
     let complete_replacement = capture_dependency_tasks::replacement_for_sigil(
         &discovered.index,
         &target_path,
@@ -541,6 +553,7 @@ fn plan_assignment(
             },
             block_id: request.block_id.clone(),
             dependency_replacement,
+            blocked_task_replacement,
             complete_replacement,
             parent_replacement,
             line: assigned.line,
@@ -1023,6 +1036,7 @@ mod tests {
             note_path: None,
             block_id: "report-id".to_string(),
             dependency_replacement: "&file:report-id".to_string(),
+            blocked_task_replacement: "*file:report-id".to_string(),
             complete_replacement: "!file:report-id".to_string(),
             parent_replacement: Some("@file+report-id".to_string()),
             line: 2,
@@ -1050,6 +1064,7 @@ mod tests {
         assert_eq!(value["relative_target"], "file.md");
         assert!(value.get("note_path").is_none());
         assert_eq!(value["dependency_replacement"], "&file:report-id");
+        assert_eq!(value["blocked_task_replacement"], "*file:report-id");
         assert_eq!(value["complete_replacement"], "!file:report-id");
         assert_eq!(value["block_id"], "report-id");
         assert_eq!(value["line"], 2);
