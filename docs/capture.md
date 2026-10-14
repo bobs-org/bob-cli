@@ -32,6 +32,7 @@ workflow guide.
   - [Going to a task with '/'](#going-to-a-task-with-)
   - [Adding prerequisites with '&'](#adding-prerequisites-with-)
   - [Blocking existing tasks with '*'](#blocking-existing-tasks-with-)
+  - [Relating existing tasks with '&' and '*'](#relating-existing-tasks)
   - [Completing tasks with '!'](#completing-tasks-with-)
   - [Plan budget and strict mode](#plan-budget-and-strict-mode)
   - [Starting the next Pomodoro](#starting-the-next-pomodoro)
@@ -88,10 +89,16 @@ anything is written, and any failure rolls the whole batch back.
 | lone `+` | Opens the same task picker in an editor; Escape leaves the valid +5m Pomodoro adjustment unchanged |
 | `&note:block-id` | Prerequisite task link: the captured (or explicitly selected) task depends on `note.md`'s `^block-id` task; nested notes use `&projects/foo:bar`, notes with spaces use `&"Shopping List":bar` |
 | `&`, `&query`, `&note:` | Incomplete: the prerequisite picker is still open (`capture-parse` needs `task_dependency`); execution refuses with a teaching error |
-| `&note:block-id` with no other text | Incomplete: a prerequisite is selected but no dependent is named (`capture-parse` needs `dependency_target`); execution never creates an ampersand-named task |
+| `^route:block-id &note:id` or `&note:id ^route:block-id` | Add a prerequisite to the existing open owner task; `^route:id` is a bare owner alias here and does not create a Pomodoro link |
+| `&note:block-id` with no owner | Incomplete: a prerequisite is selected but no dependent is named (`capture-parse` needs `dependency_target`); type task text or `+` to choose an existing owner |
+| `&note:block-id +query` | Incomplete: choose the existing owner with the `task_parent` picker; execution refuses until the selection is complete |
+| `+query &note:block-id` | Incomplete: choose the dependent owner with the `task_parent` picker |
 | `*note:block-id` | Blocked-task link: the named open task depends on the captured (or explicitly selected) task; nested notes use `*projects/foo:bar`, notes with spaces use `*"Shopping List":bar`. Quote `*` on the shell (`bob capture 'Ask Kelly *job:cleanup'`): zsh globs it |
 | `X *`, `X *query`, `X *note:` | Incomplete: the blocked-task picker is still open (`capture-parse` needs `blocked_task`); a line-initial bare `*` is never this marker |
-| `*note:block-id` with no other text | Incomplete: a blocked task is selected but no blocker is named (`capture-parse` needs `dependency_target`); execution never creates a star-named task |
+| `^route:block-id *note:id` or `*note:id ^route:block-id` | Make the named open task depend on the existing owner; `^route:id` is a bare owner alias and does not create a Pomodoro link |
+| `*note:block-id` with no owner | Incomplete: a blocked task is selected but no owner is named (`capture-parse` needs `dependency_target`); type task text or `+` to choose an existing owner |
+| `*note:block-id +query` | Incomplete: choose the existing owner with the `task_parent` picker; execution refuses until the selection is complete |
+| `+query *note:block-id` | Incomplete: choose the blocking owner with the `task_parent` picker |
 | `!` | Incomplete: pick an open task to complete (`capture-parse` needs `task_complete`); accepting inserts `!<note>:<block-id>`, and execution never captures it |
 | `!fix`, `!sase:`, `!"Shopping List` | Incomplete: still typing the completion query (`capture-parse` needs `task_complete`) |
 | `!note:block-id` with no other text | Complete an existing open task (`capture-parse` mode `task_complete`); `bob capture` closes it exactly as `=x!N` would, retires its Task Links, and unblocks dependents |
@@ -1184,9 +1191,11 @@ Without `&`, both spellings keep their existing link/toggle meanings.
 | `Buy Groceries! @home &foo:bar &cash:budget` | New `home.md` task with two prerequisites, in typed order |
 | `@cash &foo:bar Buy milk` | New `cash.md` task depending on `foo.md#^bar` (leading run skips the destination marker) |
 | `&foo:bar @body+excercise` | Add the dependency to existing `body.md#^excercise` (`task_dependency`, no new task) |
+| `&foo:bar ^body:excercise` | Same owner via the bare `^` alias; no Task Link is written |
 | `&foo:bar @body:excercise` | Same owner via the narrow colon alias (only when bare: no `#name`, `=…`, or `!`) |
 | `Waiting for approval @body+excercise &foo:bar` | Keep the sub-bullet prose, add the dependency to its explicit parent |
-| `&foo:bar` | Incomplete: needs `dependency_target` ("add task text or `@note+task-id`") |
+| `&foo:bar` | Incomplete: needs `dependency_target` (type task text or `+` to choose an existing owner) |
+| `&foo:bar +` | Incomplete: needs `task_parent`; the picker chooses the task that will depend on `foo.md#^bar` |
 | `&`, `Buy Groceries! &fo`, `Buy Groceries! &foo:` | Incomplete: needs `task_dependency` (the picker stays open) |
 | `Research & Development`, `R&D research` | Literal text: mid-word and between-words `&` is never a directive |
 | `Buy Groceries! \&foo:bar` | Literal task text `Buy Groceries! &foo:bar` (only the `\` is consumed) |
@@ -1403,8 +1412,10 @@ Rejections:
 | `Ask Kelly *job:cleanup *job:send-batch` | N blocks both, in typed order |
 | `Call registrar &school:transcript *job:apply-x` | Insert between; cycle-checked |
 | `*job:cleanup @bob+ask-kelly`, `@bob:ask-kelly *job:cleanup` | Existing task blocks T (mode `task_dependency`) |
+| `^bob:ask-kelly *job:cleanup`, `*job:cleanup ^bob:ask-kelly` | Same relationship with the bare `^` owner alias; no Pomodoro Task Link is written |
 | `Order parts *projects/house/kitchen:cabinets`, `X *"Release Plan":publish` | Nested and quoted targets |
-| `*job:cleanup` with no other text | Incomplete: needs `dependency_target` |
+| `*job:cleanup` with no owner | Incomplete: needs `dependency_target` (type task text or `+` to choose an existing owner) |
+| `*job:cleanup +` | Incomplete: needs `task_parent`; the picker chooses the task that will own the relationship |
 | `X *`, `X *jo`, `X *job:` | Incomplete: needs `blocked_task` (picker open) |
 | `Fix *urgent* bug`, `Read **Dune**`, `* Buy milk`, `5 * 3`, `R*D`, `Fix *foo:bar now` | Literal |
 | `X \*job:cleanup` | Literal `*job:cleanup` |
@@ -1613,12 +1624,11 @@ Variants:
 - A typed duplicate `*` target is skipped; a repeat that adds nothing
   prints `🧱 ^work already blocks "Cleanup"  job.md ^cleanup` with no
   status arrow, live and dry-run
-- Existing-owner items print `🧱 ^work now blocks "…"` live and
-  `🧱 ^work would now block "…"` in a dry run, including the sub-bullet
-  path `Note text @route+id *T`
-- A `*`-only existing-owner header names the owner:
-  `✓ Add blocker from "Exercise"  body.md` (dry run: `would add blocker from`).
-  `&` headers stay `Add dependency to`
+- Existing-owner items use the update header and owner status row, then print
+  one relationship row per target; for example `✓ updated  body.md`,
+  `  [/] → [?]  Exercise  ^excercise`, and
+  `  🧱 now blocks "Do cleanup tasks"  job.md ^cleanup  [*] → [?] Blocked`.
+  Dry runs use `would update` / `would now block`.
 
 `&` consumption prints the same `−` lines.
 
@@ -1762,6 +1772,271 @@ too, with `role: "dependent"`. `blocked_residents` is omitted when 0.
 `notes_kept`. `line` values are 1-based in the item's pre-state day
 text. Execution vectors **ST1–ST19** live in
 [task-dependencies.md §13.5.2](task-dependencies.md#1352-capture-star-blocks-execution-vectors-st).
+
+<a id="relating-existing-tasks"></a>
+
+### Relating existing tasks with '&' and '*'
+
+`&` adds a prerequisite to the item's owner; `*` makes the named task depend
+on that owner. When the item has task text, that text creates the owner. When
+it has no task text and names an existing task, that existing task is the
+owner. An existing owner is edited in place and is never recreated as a new
+bullet.
+
+| Owner spelling | Meaning |
+| --- | --- |
+| `@route+id` | Canonical explicit owner; may lead or trail the relationship modifiers |
+| `@@route+id` | Inherited owner for otherwise ownerless items anywhere in the draft |
+| `@route:id` | Existing bare alias; with `&`/`*` it names the owner and never links it |
+| `^route:id` | Bare active-task alias; may lead or trail `&`/`*`, and never links it |
+
+The aliases stay narrow: `@route:id` and `^route:id` name an owner only when
+used bare with relationship modifiers. Without `&` or `*`, their existing
+Pomodoro-link behavior remains unchanged. The familiar two-item form still
+keeps a blocked task in a session while it takes over the blocker’s slot:
+
+```text
+@bob:ask-kelly
+
+@bob+ask-kelly *job:cleanup
+```
+
+An owner must be in a location that `@route` can write: the inbox, an area
+note, or a non-terminal project note. The prerequisite or blocked task can be
+anywhere in the vault. If only one task is routable, flip the relationship so
+that task owns it; for example, use
+`@cash+budget *projects/house/kitchen:cabinets` instead of trying to own the
+relationship from the unroutable project task.
+
+#### Authoring flows
+
+1. **Choose the owner first.** Type `@body+` for the note-scoped picker or `+`
+   for the vault-wide picker, choose Exercise, then add `&foo:bar` or
+   `*job:cleanup`. In relationship mode, the picker explains which task will
+   depend on or block the named task. Self-edges and cycles are disabled with
+   Bob’s reason.
+2. **Choose the relationship first.** Type `&foo:bar` or `*job:cleanup`, then
+   type task text to create the owner. To use an existing owner, type `+` and
+   choose it; the replacement is the canonical `@route+id` spelling.
+   `capture-parse` reports `dependency_target` while the owner is missing and
+   `task_parent` while the `+` picker is open. A draft waiting for an owner
+   shows a `dependency_target` hint in Bob Mac Capture instead of a failed
+   preview.
+3. **Use the current task.** Pick the active task with `^`, then add `&` or
+   `*`. The resulting bare `^route:id` names the owner without adding or
+   moving a Pomodoro Task Link.
+
+For several prerequisites or blocked tasks, the picker names the first and
+counts the rest, for example “Buy shoes + 1 more”. When only one relationship
+direction is present, the owner picker says which task will depend on or block
+the selected task; with both directions, it names both relationships.
+
+#### Refusals
+
+An unresolved `+` is never captured as task text. On submit it refuses with:
+
+```text
+`+` needs a task selection; choose the task to relate before capture
+```
+
+Submitting a completed relationship modifier without either task text or an
+existing owner also refuses rather than creating a task named after the
+modifier. The ownerless `&` and `*` messages are:
+
+```text
+task relationships need a dependent: add task text or '@note+task-id' for the task that should use the '&note:block-id' modifier(s)
+task relationships need a dependent: add task text or '@note+task-id' for the task that should use the '*note:block-id' modifier(s)
+```
+
+The interactive `+` picker is the route for selecting an existing owner.
+
+A relationship-only item with an existing owner edits only the Depends-On and
+BLOCKS lines. It cannot carry `p:<N>`, `s:<N>`, `%…`, or authored child
+bullets because those need task text. Parse emits the ranged error diagnostic
+`relationship_needs_text`, and execution returns the same message. The
+offending token is named in the message; for example:
+
+```text
+`p:2` needs task text: `@body+excercise` with no text only adds task relationships; add text to write a sub-bullet (`Note @body+excercise &foo:bar p:2`)
+```
+
+The same template applies to `s:3`, a clipboard token such as `%header`, and
+`child bullets`. To write a child bullet, add parent task text to the owner
+line, as in `Waiting @body+excercise &foo:bar` followed by `- detail`.
+
+An existing task that is Done or Canceled cannot be the owner of `*`; capture
+refuses without changing the vault. The exact error is:
+
+```text
+task ^old in foo.md is Done; a finished task cannot block another task (reopen it first)
+```
+
+The status word is `Canceled` for a canceled owner. Existing `&` closed-owner
+refusal wording is unchanged. Suffixed owners (`#name`, `=…`, or `!`) keep the
+existing “must be bare” refusal, since they combine relationships with a
+Pomodoro action.
+
+#### Terminal output
+
+An existing-owner relationship uses the update layout: one header, one owner
+status row, then one row per relationship. Status arrows appear only when the
+status changes. A successful live example is:
+
+```text
+✓ updated  body.md
+  [/] → [?]  Exercise  ^excercise
+  ⛓ now depends on "Buy shoes"  foo.md ^bar  [ ] Ready
+  🧱 now blocks "Do cleanup tasks"  job.md ^cleanup  [*] → [?] Blocked
+  − removed its Task Link from BODY 10:10–10:35 (running) · deleted the empty Pomodoro
+```
+
+A dry run begins `[dry-run] ok would update  body.md`; relationship rows say
+`would now depend on` and `would now block`. An unchanged owner row uses the
+toggle wording, for example `  [ ] stays Ready  Exercise  ^excercise`.
+Repeated relationships say `already depends on` or `already blocks`, with no
+status arrow and no write. The existing `· blocked N project tasks` chip stays
+on `🧱` rows.
+
+New-task owners use the same per-relationship row shape, for example:
+
+```text
+  ⛓ depends on "Buy shoes"  foo.md ^bar  [ ] Ready
+```
+
+For a sub-bullet owner, output prints the bullet and its authored children
+first, then the relationship rows. The `under` row shows the parent’s final
+status, such as `under [ ] → [?] Exercise  ^excercise`. Consumption continues
+to use the structured `−` rows.
+
+#### Completion wire additions
+
+The schema stays version 1 and these fields are additive. In
+`capture-complete`, `owner` gains optional `text`, `note_path`,
+`status_symbol`, and `status_name` fields. For an existing owner they describe
+the resolved task; for `new_task`, `text` is the non-empty draft body.
+Unresolved existing owners retain the old owner shape. Drafts without `&` or
+`*` keep their current JSON byte-for-byte.
+
+```json
+// bob capture-complete -b VAULT -c 17 -f json -- '@body+excercise &'
+{
+  "ok": true,
+  "schema_version": 1,
+  "cursor": 17,
+  "replacement": { "start": 16, "end": 17 },
+  "context": "task_dependency",
+  "candidates": [],
+  "query": "",
+  "owner": {
+    "kind": "existing_task",
+    "route": "body",
+    "block_id": "excercise",
+    "text": "Exercise",
+    "note_path": "body.md",
+    "status_symbol": "/",
+    "status_name": "In Progress"
+  }
+}
+```
+
+When a complete `&`/`*` modifier is present in a `task_parent` or scoped
+`task` picker, its `picker` descriptor gains a `relationship` object. Each
+entry carries the typed `raw` marker, exact vault-relative `note_path`,
+`block_id`, and resolved task `text`; unresolved entries omit only `text`.
+Candidate rows gain `disabled_reason` for self-edges, cycles, and a project
+depending on its own resident. A disabled row has no insertable replacement,
+and shell completion omits it. These selected fields show the vault-wide `+`
+picker in owner mode; its self row is disabled and a cycle row uses the same
+guard:
+
+```json
+// Selected fields from bob capture-complete -b VAULT -c 10 -f json -- '&foo:bar +'
+{
+  "context": "task_parent",
+  "query": "",
+  "replacement": { "start": 9, "end": 10 },
+  "picker": {
+    "kind": "parent_task",
+    "scope": "vault",
+    "scope_token": "+",
+    "marker_range": { "start": 9, "end": 10 },
+    "trigger_removal_range": { "start": 9, "end": 10 },
+    "relationship": {
+      "dependencies": [
+        { "raw": "&foo:bar", "note_path": "foo.md", "block_id": "bar", "text": "Buy shoes" }
+      ],
+      "blocked_tasks": []
+    }
+  },
+  "candidates": [
+    { "replacement": "", "text": "Buy shoes", "disabled_reason": "the prerequisite itself" },
+    { "replacement": "", "text": "Cycle candidate", "disabled_reason": "would create a dependency cycle" }
+  ]
+}
+```
+
+#### Conformance vectors
+
+Each **RX** execution vector checks parsing, exact vault bytes, JSON, human
+output, dry-run/live agreement, and a second live run as a no-op where
+applicable. `foo.md#^bar` is Buy shoes, `body.md#^excercise` is Exercise,
+and `job.md#^cleanup` is Do cleanup tasks.
+
+| # | Draft / state | Contract |
+| --- | --- | --- |
+| RX1 | `&foo:bar @body+excercise`, `@body+excercise &foo:bar` | Exercise depends on Buy shoes; Exercise becomes `[?]`; no new bullet; mode `task_dependency` |
+| RX2 | `@body+excercise *job:cleanup` | cleanup depends on Exercise; cleanup becomes `[?]`; Exercise gets the normal commitment transfer (`task-dependencies.md` §5) |
+| RX3 | `@body+excercise &foo:bar *job:cleanup` | cleanup → Exercise → Buy shoes |
+| RX4 | `^body:excercise &foo:bar`, `&foo:bar ^body:excercise`, `^body:excercise *job:cleanup` | Same relationship as RX1/RX2; parse owner is `existing_task` |
+| RX5 | `@body:excercise &foo:bar` | Existing bare `@route:id` alias behavior remains unchanged |
+| RX6 | `@@body+excercise` then `&foo:bar`, with or without a blank line | Edge only; no empty bullet; `inherited: true` |
+| RX7 | `@foo+old *job:cleanup`, `Note @foo+old *job:cleanup`; owner `[x]` or `[-]` | Refuse with the closed-owner `*` message; vault bytes are unchanged |
+| RX8 | `+ &foo:bar`, `+ex &foo:bar`, `&foo:bar +`, `*job:cleanup +ex` | Parse needs `task_parent`, no diagnostics; submit refuses with the exact `+` message above; never create a `+…` task |
+| RX9 | `@body+excercise &foo:bar p:2`, `s:3`, or `%` | `relationship_needs_text` in parse and the identical execution error |
+| RX10 | `@body+excercise &foo:bar` plus child `- note` | Same refusal, naming `child bullets` |
+| RX11 | `@body+excercise &foo:bar *foo:bar` | Refuse the cycle with `foo.md^bar -> body.md^excercise -> foo.md^bar` |
+| RX12 | `Waiting @body+excercise &foo:bar` plus child `- detail` | Print the sub-bullet and child, then `⛓`; `under` shows `[ ] → [?]` |
+| RX13 | `@body+excercise#bugs &foo:bar`, `@body+excercise! *job:cleanup`, `^body:excercise=x &foo:bar` | Existing “must be bare” refusals stay unchanged |
+| RX14 | Owner `[/]` linked in the running Pomodoro; `@body+excercise &foo:bar` | Existing consumption applies (`−` row; delete an emptied entry) with the new output layout |
+| RX15 | Repeat RX1–RX4 | `already depends on` / `already blocks`; no write |
+| RX16 | `Buy milk &foo:bar` | Per-prerequisite row: `⛓ depends on "Buy shoes"  foo.md ^bar  [ ] Ready` |
+
+Completion vectors **RXC** check the additive wire contract:
+
+| # | Draft (cursor at end) | Contract |
+| --- | --- | --- |
+| RXC1 | `@body+excercise &` | `owner` includes Exercise, `body.md`, and `/` / `In Progress` |
+| RXC2 | `^body:excercise &`, `^body:excercise *` | Same owner fields; Exercise is disabled as `the dependent task itself` / `the owner task itself` |
+| RXC3 | `Buy milk &` | `owner: {kind: new_task, text: "Buy milk"}` |
+| RXC4 | `&foo:bar +` | `task_parent`; `picker.relationship.dependencies[0].text` is Buy shoes; the owner row is disabled as `the prerequisite itself`, and a would-cycle row is disabled |
+| RXC5 | `*job:cleanup +` | `picker.relationship.blocked_tasks`; `@job+cleanup` is disabled as `the blocked task itself` |
+| RXC6 | `&foo:bar @body+` | Scoped picker returns the same `relationship` object and guards |
+| RXC7 | `+ &foo:bar`, cursor after `+` | `task_parent`; replacement covers only the `+` token |
+| RXC8 | Any draft without relationship modifiers | Byte-identical to current output: no `relationship` object or new owner fields |
+
+The RXC4 JSON excerpt above freezes the relationship descriptor and guard
+strings. The RX8 parse shape for `+ &foo:bar` keeps the incomplete parent
+selection and typed modifier, without diagnostics:
+
+```json
+// Selected fields from bob capture-parse -f json -- '+ &foo:bar'
+{
+  "input": "+ &foo:bar",
+  "body": "",
+  "mode": "incomplete",
+  "needs": ["task_parent"],
+  "dependencies": [
+    {
+      "raw": "&foo:bar",
+      "note": "foo",
+      "block_id": "bar",
+      "quoted": false,
+      "range": { "start": 2, "end": 10 }
+    }
+  ],
+  "diagnostics": []
+}
+```
 
 ### Completing tasks with '!'
 
@@ -4646,6 +4921,12 @@ sub-bullet populates `route`, `block_id`, and `section` together. A complete
 populate `route`, `block_id`, and `section` the same way; the mode says whether
 `section` is a Pomodoro name or a task section.
 
+`relationship_needs_text` is an error diagnostic, not a picker need. It is
+ranged on the `p:<N>`, `s:<N>`, clipboard marker, or `child bullets` token
+when a bare existing-task owner has relationships but no task text; the
+diagnostic message is identical to the `bob capture` refusal. See
+[Relating existing tasks with `&` and `*`](#relating-existing-tasks).
+
 `sub_bullets` is an optional array, omitted when empty, of every other valid
 physical line's normalized body -- its source `-`/`*`/`+` marker and any
 item-wide markers already removed -- in source order. These are semantic
@@ -5134,6 +5415,13 @@ ranks by match score first, then that order. Replacements use `*`
 `capture-task-id`'s `blocked_task_replacement`. Shell completion adds a
 `blocked tasks` group. See
 [Blocking existing tasks with '*'](#blocking-existing-tasks-with-).
+For `task_dependency` and `blocked_task`, `owner` remains the lexical
+`dependency_target`; when it resolves to an existing task, it also carries
+the additive `text`, `note_path`, `status_symbol`, and `status_name` display
+fields. A `new_task` owner carries its non-empty draft `text`. These additions
+are omitted when absent, and responses for drafts without relationship
+modifiers remain byte-identical.
+
 The analogous parent-task picker accepts a terminal `+query` on an item's
 parent line or an eligible authored child line. It uses context `task_parent`,
 strips `+` from the top-level `query`, and replaces the full selector token.
@@ -5142,7 +5430,15 @@ tasks whose empty `replacement` must not be inserted; those rows include block-I
 suggestions for the Add block ID action. A lone `+` keeps its Pomodoro
 adjustment meaning in parsing but completion returns this picker with
 `action_continuation_keys` (`0`–`9` and `+`). Scoped `@route+id` completion
-continues to use context `task` and replace only the ID.
+continues to use context `task` and replace only the ID. When the current item
+has complete `&` or `*` modifiers, the parent picker descriptor adds
+`relationship.dependencies[]` and `relationship.blocked_tasks[]`, each with
+the typed `raw` token, `note_path`, `block_id`, and resolved `text` when
+available. This metadata appears for both the vault-wide `+` picker and the
+scoped `@route+` picker. Candidate `disabled_reason` values identify the
+prerequisite itself, blocked task itself, a dependency cycle, or a project
+depending on its own resident; guarded rows have no insertable replacement
+and shell completion skips them.
 `@route:` (`pomodoro_block_id`) completion now carries the `block_id` object
 and link-only filtering above; an empty-query marker-only `@route:` still
 lists that note's linkable tasks in document order. An empty block-ID component (`@route+#`) returns a successful empty

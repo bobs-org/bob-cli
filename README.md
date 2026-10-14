@@ -357,8 +357,14 @@ typed on that same item. The whole batch is planned before anything is written.
 | `+query` or terminal prose `+` | Parent-task picker over the same task catalog; accepting inserts `@route+id` |
 | `&note:id` | Add a prerequisite to the captured task; `&projects/foo:bar` supports nested notes, and `&"Shopping List":bar` supports spaces |
 | `&note:id @route+id` with no body text | Add a prerequisite to an existing dependent task |
+| `^route:id &note:id` or `&note:id ^route:id` | Add a prerequisite to the active-task owner; `^route:id` is a bare alias here and does not write a Pomodoro Task Link |
+| `&note:id +query` | Open the parent-task picker to choose the existing task that will depend on `note.md#^id` |
+| `+query &note:id` | Choose the existing dependent task first, then add its prerequisite |
 | `*note:id` | Make the named open task depend on the captured (or explicitly selected) task; nested notes use `*projects/foo:bar`, quoted notes use `*"Shopping List":bar`. Quote `*` on the shell (`bob capture 'Ask Kelly *job:cleanup'`): zsh globs it |
 | `*note:id @route+id` with no body text | Make the named task depend on that existing owner |
+| `^route:id *note:id` or `*note:id ^route:id` | Make the named open task depend on the active-task owner; `^route:id` does not write a Pomodoro Task Link |
+| `*note:id +query` | Open the parent-task picker to choose the existing task that will block the named task |
+| `+query *note:id` | Choose the existing blocking task first, then name the task it will block |
 | `!note:block-id` with no other text | Complete that existing open task. Quote `!` on shells that history-expand it (`bob capture '!sase:fix-flaky'`). Nested paths and quoted note names work (`!projects/foo:bar`, `!"Shopping List":milk`). Pomodoro Task Links to the completed task are retired. A Blocked dependent returns to Ready when it names that task directly, has no other open dependency, and has no future scheduled date |
 | `+[N]` / `-[N]` | Adjust today's current timed Pomodoro by N five-minute units (`+5` extends 25m, `-` shortens 5m; the count defaults to 1); the item must contain only the signed count |
 | `++[N]` / `--[N]` | Shift today's running timed Pomodoro N five-minute units later/earlier, keeping its duration (`++3` moves 15m later, `--` moves 5m earlier; the count defaults to 1); the item must contain only the operator |

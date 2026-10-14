@@ -2276,8 +2276,10 @@ clear on the next run.
 ### 13.5.2 Capture star-blocks execution vectors (ST)
 
 Capture `*note:block-id` makes N a prerequisite of T. The grammar,
-wire names, and human lines live in `docs/capture.md`. Parse vectors
-**STP** are the grammar-table rows there. These **ST** rows are the
+wire names, and human lines live in `docs/capture.md`. Existing-task owner
+behavior and its RX/RXC vectors are documented in
+[Relating existing tasks with `&` and `*`](capture.md#relating-existing-tasks).
+Parse vectors **STP** are the grammar-table rows there. These **ST** rows are the
 execution contract later phases test.
 
 | # | Situation | Outcome |
