@@ -47,6 +47,7 @@ mod project_note;
 mod project_pull_in;
 mod r#ref;
 mod ref_grammar;
+mod relate_existing;
 mod rewrite;
 mod routing;
 mod sections;

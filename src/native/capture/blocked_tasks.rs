@@ -217,6 +217,27 @@ pub(super) fn absorb_dependency_write(
     summaries.push(update.summary);
 }
 
+/// Refuse a Done or Canceled `*` owner before any blocked-task write.
+pub(super) fn refuse_closed_star_owner(
+    ctx: &DependencyContext,
+    planner: &mut CaptureBatchPlanner,
+    bob_dir: &Path,
+    owner: &DependentRef,
+) -> Result<(), CaptureError> {
+    let absolute = absolute_note(bob_dir, &owner.relative);
+    let contents = current_note_text(planner, &absolute)?;
+    let scan = note_tasks::scan(&contents, ctx.settings());
+    let label = display_relative(&owner.relative);
+    let task = lookup_staged_task(&scan, &label, &owner.block_id)?;
+    if task.status_type.is_terminal() || !task.status_type.is_open() {
+        return Err(CaptureError::usage(format!(
+            "task ^{} in {label} is {}; a finished task cannot block another task (reopen it first)",
+            owner.block_id, task.status_name,
+        )));
+    }
+    Ok(())
+}
+
 /// One existing-dependent writer pass per typed `*` target, in order.
 /// Repeats are idempotent `already_present` no-ops. Relocate N by ID
 /// after each pass so later targets see lane/`[id::]` edits.
@@ -229,6 +250,7 @@ pub(super) fn plan_blocked_task_writes(
     warnings: &mut Vec<String>,
     options: ExistingDependencyOptions,
 ) -> Result<Vec<PlannedDependencyUpdate>, CaptureError> {
+    refuse_closed_star_owner(ctx, planner, bob_dir, owner)?;
     let mut out = Vec::with_capacity(blocked_tasks.len());
     let mut seen = BTreeSet::new();
     for typed in blocked_tasks {

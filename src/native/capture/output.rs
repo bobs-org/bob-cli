@@ -1460,12 +1460,7 @@ pub(super) fn print_human_item_success(
         println!("  parent  {}", styler.cyan(&note.parent_link));
     }
     if let Some(parent_text) = result.parent_text.as_deref() {
-        let marker = result
-            .parent_status_symbol
-            .map(|symbol| {
-                format!("{} ", style_task_status_marker(&styler, symbol))
-            })
-            .unwrap_or_default();
+        let marker = parent_under_marker(result, &styler);
         let block_id = result
             .block_id
             .as_deref()
@@ -1479,7 +1474,6 @@ pub(super) fn print_human_item_success(
         println!("  under {marker}{parent_text}{block_id}{parent_section}");
     }
     println!("  {}", styler.dim(&result.task_line));
-    print_human_dependency_updates(result, &styler);
     print_human_link_guard(result, &styler);
     if result.kind == "pomodoro_task"
         && let Some(destination) = result.pomodoro_link_destination.as_ref()
@@ -1507,6 +1501,7 @@ pub(super) fn print_human_item_success(
     for line in &result.sub_bullets {
         println!("  {}", styler.dim(line));
     }
+    print_human_dependency_updates(result, &styler);
     if let Some(clip) = &result.clip {
         for line in &clip.lines {
             println!("  {}", styler.dim(line));
@@ -2098,32 +2093,78 @@ pub(super) fn print_human_task_dependency_success(
     ordinal: &str,
     target_label: &str,
 ) {
-    let Some(update) = result.dependency_update.as_ref() else {
-        println!("{prefix} updated  {ordinal}{target_label}");
-        println!("  {}", styler.dim(&result.task_line));
-        return;
+    let verb = if result.dry_run {
+        "would update"
+    } else {
+        "updated"
     };
-    let (verb, headline) = match update.role {
-        DependencyUpdateRole::BlockedTask => {
-            let verb = if result.dry_run {
-                "would add blocker from"
-            } else {
-                "Add blocker from"
-            };
-            (verb, result.text.as_str())
-        }
-        DependencyUpdateRole::Dependent => {
-            let verb = if result.dry_run {
-                "would add dependency to"
-            } else {
-                "Add dependency to"
-            };
-            (verb, update.dependent_text.as_str())
-        }
-    };
-    println!("{prefix} {verb} \"{headline}\"  {ordinal}{target_label}");
-    println!("  {}", styler.dim(&result.task_line));
+    println!("{prefix} {verb}  {ordinal}{target_label}");
+    print_human_owner_status_row(result, styler);
     print_human_dependency_updates(result, styler);
+}
+
+fn print_human_owner_status_row(result: &CaptureItemResult, styler: &Styler) {
+    let previous = result
+        .previous_status_symbol
+        .map(|symbol| style_task_status_marker(styler, symbol))
+        .unwrap_or_else(|| styler.dim("[?]"));
+    let next = result
+        .status_symbol
+        .map(|symbol| style_task_status_marker(styler, symbol))
+        .unwrap_or_else(|| styler.dim("[?]"));
+    let description = if result.text.is_empty() {
+        result.task_line.as_str()
+    } else {
+        result.text.as_str()
+    };
+    let block_id = result
+        .block_id
+        .as_deref()
+        .map(|id| format!("  {}", styler.cyan(&format!("^{id}"))))
+        .unwrap_or_default();
+    let changed = result.status_changed.unwrap_or(false)
+        || result.previous_status_symbol != result.status_symbol;
+    if changed
+        && result.previous_status_symbol.is_some()
+        && result.status_symbol.is_some()
+        && result.previous_status_symbol != result.status_symbol
+    {
+        println!("  {previous} → {next}  {description}{block_id}");
+        return;
+    }
+    let status =
+        result
+            .status_name
+            .as_deref()
+            .unwrap_or(match result.status_symbol {
+                Some('/') => "In Progress",
+                Some('*') => "Next",
+                Some('?') => "Blocked",
+                Some('x') | Some('X') => "Done",
+                Some('-') => "Canceled",
+                _ => "Ready",
+            });
+    println!("  {next} stays {status}  {description}{block_id}");
+}
+
+fn parent_under_marker(result: &CaptureItemResult, styler: &Styler) -> String {
+    let Some(current) = result.parent_status_symbol else {
+        return String::new();
+    };
+    let current_marker = style_task_status_marker(styler, current);
+    let previous = result.dependency_updates.iter().find(|update| {
+        update.role == DependencyUpdateRole::Dependent
+            && update.dependent_block_id.as_deref()
+                == result.block_id.as_deref()
+            && update.previous_status != current
+    });
+    if let Some(update) = previous {
+        let previous_marker =
+            style_task_status_marker(styler, update.previous_status);
+        format!("{previous_marker} → {current_marker} ")
+    } else {
+        format!("{current_marker} ")
+    }
 }
 
 fn print_human_dependency_updates(result: &CaptureItemResult, styler: &Styler) {
@@ -2136,7 +2177,7 @@ fn print_human_dependency_updates(result: &CaptureItemResult, styler: &Styler) {
     for update in updates {
         match update.role {
             DependencyUpdateRole::Dependent => {
-                print_human_dependency_line(update, styler);
+                print_human_dependency_line(result, update, styler);
             }
             DependencyUpdateRole::BlockedTask => {
                 print_human_blocked_task_line(result, update, styler);
@@ -2163,35 +2204,31 @@ fn print_human_blocked_task_line(
             (false, false) => "blocks",
         }
     };
-    let owner = if existing_owner {
-        result
-            .block_id
-            .as_deref()
-            .map(|id| format!("^{id} "))
-            .unwrap_or_default()
-    } else {
-        String::new()
-    };
     let block_id = update
         .dependent_block_id
         .as_deref()
         .map(|id| format!(" ^{id}"))
         .unwrap_or_default();
-    let mut line = if already {
-        format!(
-            "  🧱 {owner}{verb} \"{}\"  {}{block_id}",
-            update.dependent_text, update.dependent_note,
-        )
-    } else {
-        let previous = style_task_status_marker(styler, update.previous_status);
+    let mut line = format!(
+        "  🧱 {verb} \"{}\"  {}{block_id}",
+        update.dependent_text, update.dependent_note,
+    );
+    if !already {
         let next = style_task_status_marker(styler, update.dependent_status);
-        format!(
-            "  🧱 {owner}{verb} \"{}\"  {}{block_id}  {previous} → {next} {}",
-            update.dependent_text,
-            update.dependent_note,
-            update.dependent_status_name,
-        )
-    };
+        if update.previous_status != update.dependent_status {
+            let previous =
+                style_task_status_marker(styler, update.previous_status);
+            line.push_str(&format!(
+                "  {previous} → {next} {}",
+                update.dependent_status_name
+            ));
+        } else {
+            line.push_str(&format!(
+                "  {next} {}",
+                update.dependent_status_name
+            ));
+        }
+    }
     if !already && update.blocked_residents > 0 {
         let noun = if update.blocked_residents == 1 {
             "task"
@@ -2211,37 +2248,33 @@ fn print_human_blocked_task_line(
     println!("{line}");
 }
 
-/// One shared `⛓ depends on …` trailer for every capture carrying a
-/// `dependency_update`: added and already-present counts, the waiting
-/// count, and the resulting Blocked distinction.
+/// One row per prerequisite for every capture carrying a
+/// `dependency_update`.
 pub(super) fn print_human_dependency_line(
+    result: &CaptureItemResult,
     update: &DependencyUpdateJson,
     styler: &Styler,
 ) {
-    let links = update
-        .prerequisites
-        .iter()
-        .map(|prereq| prereq.link.as_str())
-        .collect::<Vec<_>>()
-        .join(", ");
-    let head = if update.new_task {
-        "New task depends on"
-    } else if update.added == 0 {
-        "Already depends on"
+    let existing_owner =
+        result.kind == "task_dependency" || result.kind == "sub_bullet";
+    let already = update.added == 0 && update.already_present > 0;
+    let verb = if already {
+        "already depends on"
     } else {
-        "depends on"
+        match (result.dry_run, existing_owner) {
+            (true, true) => "would now depend on",
+            (false, true) => "now depends on",
+            (true, false) => "would depend on",
+            (false, false) => "depends on",
+        }
     };
-    let mut chips = vec![format!("{} added", update.added)];
-    if update.already_present > 0 {
-        chips.push(format!("{} already", update.already_present));
+    for prereq in &update.prerequisites {
+        let marker = style_task_status_marker(styler, prereq.status_symbol);
+        println!(
+            "  ⛓ {verb} \"{}\"  {} ^{}  {marker} {}",
+            prereq.text, prereq.note, prereq.block_id, prereq.status_name,
+        );
     }
-    if update.open_prerequisites > 0 {
-        chips.push(format!("waiting on {}", update.open_prerequisites));
-    }
-    if update.dependent_status == '?' {
-        chips.push("Blocked until finished".to_string());
-    }
-    println!("  ⛓ {head} {links} ({})", styler.dim(&chips.join(" · ")),);
 }
 
 pub(super) fn print_human_task_toggle_success(

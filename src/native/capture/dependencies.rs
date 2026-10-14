@@ -1538,9 +1538,13 @@ fn reject_new_cycles(
                 )));
             }
             if let Some(path) = graph.reaches(target, source, &extra) {
-                let mut readable: Vec<String> =
-                    path.iter().map(format_identity).collect();
+                // `reaches(target, source)` is `[target, …, source]`.
+                // Prepend the new edge's source so the cycle reads
+                // `source -> target -> … -> source` once, with no
+                // duplicated final hop.
+                let mut readable = Vec::with_capacity(path.len() + 1);
                 readable.push(format_identity(source));
+                readable.extend(path.iter().map(format_identity));
                 return Err(CaptureError::usage(format!(
                     "task dependency cycle: {} (a task cannot depend on itself, directly or transitively)",
                     readable.join(" -> ")

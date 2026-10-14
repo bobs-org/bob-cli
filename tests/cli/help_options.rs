@@ -84,6 +84,15 @@ fn capture_help_lists_options_alphabetically() {
             && !help.contains("--task-ref"),
         "expected public sub-bullet and ID-only help without hidden task ref:\n{help}"
     );
+    assert!(
+        help.contains("Append `&note:block-id`")
+            && help.contains("bare `^note:id`")
+            && help.contains("A `+` or `+query` token")
+            && help.contains("bob capture '&foo:bar @body+excercise'")
+            && help.contains("bob capture '^body:excercise &foo:bar'")
+            && help.contains("A Done or Canceled owner cannot block"),
+        "expected existing-owner relationship help:\n{help}"
+    );
     assert_stdout_has_no_ansi(&output);
 }
 

@@ -925,10 +925,14 @@ fn human_star_line_and_consumption() {
     let existing = capture_human(&vault, &day, "*job:cleanup @body+work");
     assert_success(&existing);
     let out = stdout(&existing);
-    assert!(out.contains("🧱 ^work now blocks \"Cleanup\""), "{out}");
+    assert!(out.contains("🧱 now blocks \"Cleanup\""), "{out}");
     assert!(
-        out.contains("Add blocker from \"Exercise\""),
-        "*-only existing-owner header names the owner:\n{out}"
+        out.contains("updated  body.md"),
+        "*-only existing-owner header names the note:\n{out}"
+    );
+    assert!(
+        out.contains("Exercise"),
+        "*-only existing-owner status row names the owner:\n{out}"
     );
 
     write_file(&vault.join("job.md"), "- [ ] #task Other ^other\n");
@@ -936,7 +940,7 @@ fn human_star_line_and_consumption() {
     let sub = capture_human(&vault, &day, "Note text @body+work *job:other");
     assert_success(&sub);
     let out = stdout(&sub);
-    assert!(out.contains("🧱 ^work now blocks \"Other\""), "{out}");
+    assert!(out.contains("🧱 now blocks \"Other\""), "{out}");
 
     write_file(&vault.join("job.md"), "- [ ] #task Cleanup ^cleanup\n");
     write_file(&vault.join("body.md"), "- [ ] #task Exercise ^work\n");
@@ -948,11 +952,8 @@ fn human_star_line_and_consumption() {
     );
     assert_success(&dry);
     let out = stdout(&dry);
-    assert!(
-        out.contains("🧱 ^work would now block \"Cleanup\""),
-        "{out}"
-    );
-    assert!(out.contains("would add blocker from \"Exercise\""), "{out}");
+    assert!(out.contains("🧱 would now block \"Cleanup\""), "{out}");
+    assert!(out.contains("would update  body.md"), "{out}");
 
     write_file(&vault.join("job.md"), "- [ ] #task Cleanup ^cleanup\n");
     write_file(&vault.join("body.md"), "- [ ] #task Exercise ^work\n");
@@ -960,7 +961,7 @@ fn human_star_line_and_consumption() {
     let already = capture_human(&vault, &day, "*job:cleanup @body+work");
     assert_success(&already);
     let out = stdout(&already);
-    assert!(out.contains("🧱 ^work already blocks \"Cleanup\""), "{out}");
+    assert!(out.contains("🧱 already blocks \"Cleanup\""), "{out}");
     assert!(
         !out.contains('→'),
         "already-present has no status arrow:\n{out}"

@@ -486,14 +486,10 @@ pub(super) fn plan_capture_item(
     let mut parsed = parsed_item.parsed;
     // A dependency-only capture updates an explicitly selected existing
     // task: no new task, empty child, link toggle, or Pomodoro action.
-    // It never flows through the toggle/link planners below.
-    if let Some(target) = parsed.dependency_target.clone()
-        && target.kind == ParsedDependencyTargetKind::ExistingTask
-        && matches!(
-            parsed.kind,
-            CaptureKind::TaskToggle { .. } | CaptureKind::PomodoroLink { .. }
-        )
-    {
+    // It never flows through the toggle/link planners below. Inherited
+    // `@@route+id` items land as empty SubBullet owners and take the
+    // same path so they write the edge without an empty bullet.
+    if let Some(target) = relationship_only_existing_owner(&parsed) {
         return plan_dependency_only_item(
             request,
             &parsed,
@@ -613,6 +609,19 @@ pub(super) fn plan_capture_item(
     }
     if let Some(clip) = request.forced_clip.as_ref() {
         parsed.clip = Some(clip.clone());
+    }
+    // Forced `--task`/`--route` rewrites the kind to SubBullet after
+    // the first relationship-only check; empty-body owners still skip
+    // the empty-bullet path.
+    if let Some(target) = relationship_only_existing_owner(&parsed) {
+        return plan_dependency_only_item(
+            request,
+            &parsed,
+            &target,
+            planner,
+            warnings,
+            dependency_ctx,
+        );
     }
     if let CaptureKind::TaskToggle {
         block_id,
@@ -1488,18 +1497,34 @@ pub(super) fn plan_capture_item(
                 task_block_id = relocated.block_id.clone();
             }
         }
-        if let Some(details) = note_plan.sub_bullet.as_mut() {
-            let contents = current_note_text(planner, &relocated.target)?;
-            let scan = note_tasks::scan(&contents, dependency_ctx.settings());
-            if let Ok(task) = lookup_staged_task(
-                &scan,
-                &relocated.relative_target,
-                &owner.block_id,
-            ) {
-                details.parent_status_symbol = task.status_symbol;
-                details.parent_status_name = task.status_name.clone();
-                details.parent_line = task.line_index + 1;
-            }
+    }
+    // Sub-bullet `under` uses the parent's final status, including `&`
+    // writes that never enter the `*` block above.
+    if let Some(details) = note_plan.sub_bullet.as_mut()
+        && !dependency_summaries.is_empty()
+        && let Some(target) = parsed.dependency_target.as_ref()
+        && target.kind == ParsedDependencyTargetKind::ExistingTask
+        && let (Some(route), Some(block_id)) =
+            (target.route.as_deref(), target.block_id.as_deref())
+    {
+        let owner = DependentRef::from_route(route, block_id);
+        let relocated = locate_task_by_block_id(
+            dependency_ctx,
+            planner,
+            &request.bob_dir,
+            &owner.relative,
+            &owner.block_id,
+        )?;
+        let contents = current_note_text(planner, &relocated.target)?;
+        let scan = note_tasks::scan(&contents, dependency_ctx.settings());
+        if let Ok(task) = lookup_staged_task(
+            &scan,
+            &relocated.relative_target,
+            &owner.block_id,
+        ) {
+            details.parent_status_symbol = task.status_symbol;
+            details.parent_status_name = task.status_name.clone();
+            details.parent_line = task.line_index + 1;
         }
     }
     let (dependency_update, dependency_updates) =
@@ -1801,6 +1826,29 @@ fn close_star_marker(parsed: &ParsedCaptureText) -> String {
             .as_deref()
             .map(|route| format!("@{route}:id=x"))
             .unwrap_or_else(|| "@route:id=x".to_string()),
+    }
+}
+
+/// Existing-task relationship with no body, authored children, or
+/// extra capture kind: write the edge only.
+fn relationship_only_existing_owner(
+    parsed: &ParsedCaptureText,
+) -> Option<ParsedDependencyTarget> {
+    if !parsed.body.trim().is_empty() || !parsed.sub_bullets.is_empty() {
+        return None;
+    }
+    let target = parsed.dependency_target.as_ref()?;
+    if target.kind != ParsedDependencyTargetKind::ExistingTask {
+        return None;
+    }
+    match &parsed.kind {
+        CaptureKind::TaskToggle { .. }
+        | CaptureKind::PomodoroLink { .. }
+        | CaptureKind::SubBullet {
+            target: SubBulletTarget::BlockId(_),
+            ..
+        } => Some(target.clone()),
+        _ => None,
     }
 }
 

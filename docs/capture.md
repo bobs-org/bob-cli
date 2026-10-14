@@ -1620,9 +1620,9 @@ Variants:
 
 - `− kept its notes under JOB 10:10–10:35 as plain text`
 - `· blocked 4 project tasks` for a `^prj` T (dry run: `· would block 4 project tasks`)
-- `would …` in dry runs (`🧱 would block "…"`, `🧱 ^work would now block "…"`)
+- `would …` in dry runs (`🧱 would block "…"`, `🧱 would now block "…"`)
 - A typed duplicate `*` target is skipped; a repeat that adds nothing
-  prints `🧱 ^work already blocks "Cleanup"  job.md ^cleanup` with no
+  prints `🧱 already blocks "Cleanup"  job.md ^cleanup` with no
   status arrow, live and dry-run
 - Existing-owner items use the update header and owner status row, then print
   one relationship row per target; for example `✓ updated  body.md`,

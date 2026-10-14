@@ -549,8 +549,8 @@ fn capture_executes_dependency_only_updates_idempotently() {
         "repeat adds no duplicate links:\n{after_repeat}"
     );
     assert!(
-        stdout(&repeat).contains("0 added"),
-        "repeat reports nothing added:\n{}",
+        stdout(&repeat).contains("already depends on"),
+        "repeat reports the relationship already exists:\n{}",
         format_output(&repeat)
     );
 
@@ -570,8 +570,8 @@ fn capture_executes_dependency_only_updates_idempotently() {
         "the field accumulates both ids:\n{after_second}"
     );
     assert!(
-        stdout(&second).contains("1 added"),
-        "append tallies only the new prerequisite:\n{}",
+        stdout(&second).contains("now depends on"),
+        "append reports the new prerequisite:\n{}",
         format_output(&second)
     );
 
