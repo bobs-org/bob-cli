@@ -426,12 +426,21 @@ another thin client of that service (see `docs/capture.md`
   offers only identified, enabled `!note:block-id` values (ID-less and
   guarded rows stay in the interactive picker), grouped `today` /
   `in progress` / `next` / `open` with today rows first.
+- **`&` completes prerequisite tasks.** A leading or trailing `&` /
+  `&query` / `&note:` token opens the prerequisite picker
+  (`task_dependency`), and shell completion offers identified
+  `&note:block-id` values, grouped `tasks`.
+- **`*` completes blocked tasks.** A trailing `*` / `*query` / `*note:`
+  after other text on the line opens the blocked-task picker
+  (`blocked_task`); a line-initial `*` is never this marker. Shell
+  completion offers identified, enabled `*note:block-id` values,
+  grouped `blocked tasks`. Quote `*` on the shell; zsh globs it.
 - **Presentation.** Values are full marker texts such as
   `@dev:remote-power`. Descriptions come from the row: task text, route
   kind, `new block ID`, or Pomodoro time and name. Groups are human
   words: `inbox` / `areas` / `projects`, `sections in dev`,
   `tasks in dev`, `parent tasks`, `new task ID`, `task sections`,
-  `open Pomodoros`, `active tasks`. A value ending in `:` `+` `#` `=` `^` is `nospace`;
+  `open Pomodoros`, `active tasks`, `blocked tasks`. A value ending in `:` `+` `#` `=` `^` `*` `&` is `nospace`;
   a complete marker gets a space. A quoted word carrying its own prefix
   (for example `fix it @dev:`) is served with `!prefix 7`, counted in
   Unicode scalar values.

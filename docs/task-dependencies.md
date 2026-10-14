@@ -105,8 +105,8 @@ target.
 | Line | Owner | Writer | Slot | Recognisers that reject it |
 | --- | --- | --- | --- | --- |
 | `❌ **CANCEL LOG**` | any `#task` with a cancel history | nav cancel / decay cancel | first direct child | Task Link and Pomodoro scanners; section titles; Depends-On, BLOCKS, Sub-projects, Schedule Log, and Work Log parsers; R8 legacy-child |
-| `⛓️ **DEPENDS ON:**` | any `#task` with prerequisites | nav Depends on stage, capture `&` and §13.5.1 drops, reconcile R1–R10 | first direct child, or second after a first-child Cancel Log | Task Link and Pomodoro scanners; section titles; BLOCKS, Sub-projects, Schedule Log, Work Log, and Cancel Log parsers; tree-close and strike/restore; R8 legacy-child |
-| `🧱 **BLOCKS:**` | any open `#task` that other open tasks depend on (§14) | reconcile (authority); nav Depends-On writers; capture `&` and §13.5.1 drops | after the Depends-On subtree, else the Depends-On slot | same as Depends-On, plus the Depends-On parser (BK20) |
+| `⛓️ **DEPENDS ON:**` | any `#task` with prerequisites | nav Depends on stage, capture `&` / `*` and §13.5.1 drops, reconcile R1–R10 | first direct child, or second after a first-child Cancel Log | Task Link and Pomodoro scanners; section titles; BLOCKS, Sub-projects, Schedule Log, Work Log, and Cancel Log parsers; tree-close and strike/restore; R8 legacy-child |
+| `🧱 **BLOCKS:**` | any open `#task` that other open tasks depend on (§14) | reconcile (authority); nav Depends-On writers; capture `&` / `*` and §13.5.1 drops | after the Depends-On subtree, else the Depends-On slot | same as Depends-On, plus the Depends-On parser (BK20) |
 | `🧩 **Sub-projects:**` | an active project's `^prj` | `bob projects sync` | after the Depends-On and BLOCKS subtrees | Task Link and Pomodoro scanners; section titles; Depends-On, BLOCKS, Schedule Log, Work Log, and Cancel Log parsers |
 | `🗓️ **SCHEDULE LOG**` | any `#task` with a schedule history | nav Task Card / Schedule, capture `p:` / `s:`, `bob task reroll` | after the managed-dependency lines (and Sub-projects on `^prj`) | Task Link and Pomodoro scanners; section titles; Depends-On, BLOCKS, Sub-projects, Cancel Log, and Work Log parsers |
 | `🛠️ **WORK LOG**` and its dated entries | any `#task` with work history | capture `=x`, Alt+N, Ctrl+Shift+Enter unlink | after the managed-dependency lines (and Sub-projects on `^prj`) | Task Link and Pomodoro scanners; section titles; Depends-On, BLOCKS, Sub-projects, Cancel Log, and Schedule Log parsers |
@@ -219,7 +219,12 @@ and no R2 exception.
   link promotes the task's open prerequisites (own plus inherited)
   along those edges and then drops the link, except the own-schedule
   pull-forward in §13 and capture's own-prerequisite drop in §13.5.
-  `bob task reconcile` does the same for stale links.
+  `bob task reconcile` does the same for stale links. Capture
+  consumption (`&`, `*`, and the link-guard Consume branches) matches
+  by identity, keeps authored notes under a consumed link-only
+  bullet, deletes only the Pomodoro entries this capture emptied, and
+  reports `consumed_links[]` plus `removed` blocks (PDL8–PDL11,
+  §13.5). Reconcile and plugins keep PDL7 (whole subtree removed).
 - **Not edges:** `#^ref` embeds and archived targets.
 - **Visibility.** An open prerequisite that other open tasks depend on
   carries a generated `🧱 **BLOCKS:**` child listing those dependents
@@ -240,6 +245,16 @@ and no R2 exception.
   raised. An add that leaves the dependent `[?]` also consumes the
   dependent's own live links in today's open Pomodoros, together with
   any emptied entry.
+- **Adding a dependency from the prerequisite side.** Naming T from
+  the blocker N writes the same Depends-On edge as adding N from T:
+  T's `⛓️ **DEPENDS ON:**` line gains N, N's `🧱 **BLOCKS:**` line is
+  the generated mirror, and T becomes `[?]` with the usual promotion,
+  freshness, and consumption side effects. Capture `*note:block-id`
+  is the v1 writer (`docs/capture.md`); a reverse Blocks… stage in
+  Obsidian can share this meaning. A new N is capped at Next `[*]`;
+  an existing owner follows the ordinary transfer and may become
+  `[/]`. A `^prj` N is never raised. A `^prj` T whose project
+  contains N (or a descendant of that project) is refused.
 - **Removing a dependency** recovers the dependent to its derived rank
   _immediately_ when no open prerequisite, no future `scheduled` date,
   and no remaining project reason remain. Otherwise it stays `[?]`.
@@ -474,6 +489,7 @@ last-blocker badge, and `frees N` summaries (§14.9).
 | Ctrl+D on the Depends on row | Deletes the line, the field, and any legacy children, with immediate recovery. |
 | Hand edits in Obsidian | Once the cursor leaves the edited line (short debounce), nav applies R1/R9 to that task. Deleting the whole line clears the field. Malformed lines are left alone. |
 | `bob capture` `&note:id` (and the Bob Mac Capture `&` picker) | Adds prerequisites to a new task or an explicit `@note+id` dependent through the staged capture writer: new links append in typed order (repeats are no-ops), legacy children fold and field-only dependencies are adopted, fields are derived, and §5 Blocked/promotion applies in the same batch. On `^prj`, `&` writes the Depends-On line and applies resident side effects (§13). It never removes or reorders links; removal stays with Ctrl+Shift+P and Ctrl+D. See `docs/capture.md`. |
+| `bob capture` `*note:id` (and the Bob Mac Capture `*` picker) | Adds the captured (or explicitly selected) task as a prerequisite of an existing open task T: the edge is written on T's Depends-On line, N's BLOCKS line is the generated mirror, and T's live Task Links are consumed (§13.5, PDL8–PDL11). A new N is capped at Next. Existing owners, sub-bullets, and forced `--task`/`--route` mirror `&`. See `docs/capture.md`. |
 | Ctrl+Shift+M, `task archive` | The line moves with its task. Same-note links inside a moved block whose target stayed behind gain the source note path. Moving open tasks **into** a blocked project sets them `[?]`, tags them `#prj_is_blocked`, promotes verifiably open prerequisites to the strongest moved lane, and removes their live links from today's open Pomodoros in the move write. Moving them **out** strips the tag and recovers those without own reasons, writing `[unblocked::]` when [freshness.md §5](freshness.md#5-who-stamps) says to. Closed lines are never edited. |
 | Ctrl+Alt+Shift+N (`create-project-note-from-task`) | Forward: the source's Depends-On line becomes the first child of `^prj`, and its inline `scheduled` stays on `^prj` (rebase same-note links to the source note; never seed that line as a Tasks row; skip the machine-owned Sub-projects child); the project lands blocked only for a carried open prerequisite or a future inline date. Reverse: the line becomes the restored task's first child and the date stays inline on its root task (links re-formed relative to the destination), with `#^prj` links repointed before Pomodoro cleanup so live links are consumed. `[?]` sources are accepted; blocked residents are tagged/recovered through the shared gate and live links are consumed when they enter a blocked project. Details in §13. |
 | "Rewrite dependency navigation links" command, `migrate-dependency-bullets.mjs` | Deleted. They emit embeds. |
@@ -2162,9 +2178,26 @@ Only live (unstruck) Task Links under **today's open** Pomodoros.
 Closed entries, `🍅` history, other days, and dependency links are
 never touched.
 
-**Removal.** A link-only bullet is removed with its subtree; otherwise
-only the link token is removed. Then the existing empty-Pomodoro rule
-runs; it may delete a running timed entry (accepted; matches cancel).
+**Removal (reconcile and plugins).** A link-only bullet is removed
+with its subtree (PDL7); otherwise only the link token is removed
+(PDL6). Then the existing empty-Pomodoro rule runs; it may delete a
+running timed entry and every already-childless placeholder
+(accepted; matches cancel). Match is by the literal `[[route#^id]]`
+text.
+
+**Removal (capture).** Capture matches live links by resolved
+identity — vault-relative path plus block id — so aliases,
+`[[#^local]]`, basename, path, and case spellings all match (PDL10).
+A childless link-only bullet is deleted. A link-only bullet with
+children keeps the marker, indentation, and children, replacing the
+link token with the task's clean display text (PDL8). A prose bullet
+loses only the token (PDL6). An entry is deleted only when this
+capture emptied it: it had a child list item before and none after,
+judged after all of the item's edits, including a running timed
+entry (PDL9). Unrelated childless placeholders stay. Every consumed
+link is a `consumed_links[]` row; every deleted entry appears in
+`pomodoro_blocks` with `removed: true` (PDL11). Reconcile keeps
+passing today's PDL7 behaviour.
 
 **Promotion seed.** Before removal, the link seeds promotion exactly
 as a surviving link would, along `edges(T)`, so the task's open
@@ -2237,6 +2270,35 @@ exception below).
 **Known exception.** A prerequisite in a canonical daily note promoted
 only by consumption follows the sticky-lanes R9 carve-out and may
 clear on the next run.
+
+### 13.5.2 Capture star-blocks execution vectors (ST)
+
+Capture `*note:block-id` makes N a prerequisite of T. The grammar,
+wire names, and human lines live in `docs/capture.md`. Parse vectors
+**STP** are the grammar-table rows there. These **ST** rows are the
+execution contract later phases test.
+
+| # | Situation | Outcome |
+| --- | --- | --- |
+| ST1 | `N *T`, T Ready and unlinked | N `[ ]` with a minted `^id` and a BLOCKS line; T's Depends-On gains N; T `[?]` and fresh |
+| ST2 | T `[*]`, linked under the running entry, which has other children | link removed; entry kept; N `[*]` |
+| ST3 | T `[/]`, the running entry's only child | link removed; entry deleted and reported (`removed: true`, `(running)`); N capped at `[*]` |
+| ST4 | T's link bullet has authored child notes | bullet becomes T's plain text; children and entry kept (`notes_kept`) |
+| ST5 | nested T; the ledger link is a basename or alias spelling | consumed by identity |
+| ST6 | `N @mac_inbox:id *T` | N linked into the session first; T's link consumed; session kept |
+| ST7 | an unrelated childless placeholder entry | untouched by capture |
+| ST8 | `^prj` T | residents `[?]` plus `#prj_is_blocked`; their links consumed; `blocked_residents` reported |
+| ST9 | `^prj` T while N lands in that project or a descendant | refused; vault byte-identical |
+| ST10 | `N *T &T`; an existing owner that already depends on T; transitive and cross-item cycles | refused; vault byte-identical |
+| ST11 | T closed, in a daily note, in `done/`/`_templates`/fenced code, self, or with two or malformed Depends-On lines | refused with a teaching error |
+| ST12 | repeat `*T` on an existing owner already on T's line; a second live run | `already_present`; no-op |
+| ST13 | `N *T1 *T2 *T1` | T1 then T2; the duplicate is a no-op |
+| ST14 | `N &P *T` | T → N → P; N `[?]`; T `[?]` |
+| ST15 | `dependencies.blocks_lines: false` | N still gets an ID; no BLOCKS line |
+| ST16 | `N *T` then a later item `@T-route:T-id` | N dropped from T's line (capture-link-drops); final preview accurate |
+| ST17 | `N *T` vs the two-item `N @mac_inbox^id` + `&mac_inbox:id @T-route+T-id`, T Ready or Next | identical vault diffs apart from the ID |
+| ST18 | any ST vector, dry run vs live run | identical JSON apart from `dry_run` |
+| ST19 | `*T @route+id`, and `Note text @route+id *T` | owner gets the normal §5 transfer (may become `[/]`); sub-bullet added |
 
 ### 13.6 Guards
 
@@ -2481,7 +2543,11 @@ Only today's open Pomodoros. `promoted[]` is the consumption seed.
 | PDL4 | closed entries in the same day file | byte-identical |
 | PDL5 | struck link under an open entry | untouched |
 | PDL6 | prose bullet whose only Task Link token is the Blocked target | token removed; the rest of the bullet kept |
-| PDL7 | planned link-only bullet with authored child notes | whole subtree removed |
+| PDL7 | planned link-only bullet with authored child notes | whole subtree removed. Reconcile and plugin consumption keep this row |
+| PDL8 | capture: planned link-only bullet with authored child notes | bullet becomes the task's clean display text; children and entry kept (`notes_kept`) |
+| PDL9 | capture: an entry that had children before this consumption and none after | that entry deleted (including a running timed entry); already-childless placeholders stay |
+| PDL10 | capture: ledger link is an alias, basename, path, case, or `[[#^local]]` spelling of the Blocked target | consumed by resolved identity |
+| PDL11 | capture: any consumed link and any entry this capture emptied | `consumed_links[]` row (`removed` / `token_removed` / `notes_kept`); deleted entry in `pomodoro_blocks` with `removed: true` |
 
 ### 13.15 PDG — gesture vectors
 
@@ -2841,6 +2907,7 @@ reconcile.
 | nav removals (chip ×, api v3 `removeDependency`, Ctrl+D on the Depends on row, counted Ctrl+D) | Remove the dependent from each removed target's line, deleting the line when it empties. |
 | nav hand-edit mirror (cursor leaves an edited Depends-On line; undo re-arms it) | Diff the burst baseline's targets against the final targets and mirror the difference. Clearing the whole line removes every old target. This keeps cross-note undo honest. |
 | capture `&` (and Bob Mac Capture through bob) | Stage each added target's BLOCKS entry and the dependent's minted `^id` in the same batch, using the shared Rust planner. The target's block is reported as a `dependency_target` task block. |
+| capture `*` (and Bob Mac Capture through bob) | Stage N's BLOCKS entry on T in the same batch when T gains N as a prerequisite. N is reported as a `dependency_target` task block; T is reported as a `dependency` task block. A minted N id is `minted_blocker_block_id`, not `minted_dependent_block_id`. |
 | capture dependency drop (§13.5.1) | Stage the dependent's removal from each dropped prerequisite's line. Prerequisite task lines are still never edited. |
 | Ctrl+Shift+M, `bob task archive`, project conversion | The moved owner's line moves with it; generic link rebasing applies. Conversion never copies a BLOCKS line as a user child. Links into a moved or converted dependent are left to reconcile. |
 | Closes, cancels, reopens (capture `=x` / `!`, Ctrl+Enter, Alt+], Mac Capture, hand edits) | **None.** The owner's line freezes; a closed dependent drops off at the next reconcile. Chips hide the lag. |

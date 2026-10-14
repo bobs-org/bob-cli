@@ -357,6 +357,8 @@ typed on that same item. The whole batch is planned before anything is written.
 | `+query` or terminal prose `+` | Parent-task picker over the same task catalog; accepting inserts `@route+id` |
 | `&note:id` | Add a prerequisite to the captured task; `&projects/foo:bar` supports nested notes, and `&"Shopping List":bar` supports spaces |
 | `&note:id @route+id` with no body text | Add a prerequisite to an existing dependent task |
+| `*note:id` | Make the named open task depend on the captured (or explicitly selected) task; nested notes use `*projects/foo:bar`, quoted notes use `*"Shopping List":bar`. Quote `*` on the shell (`bob capture 'Ask Kelly *job:cleanup'`): zsh globs it |
+| `*note:id @route+id` with no body text | Make the named task depend on that existing owner |
 | `!note:block-id` with no other text | Complete that existing open task. Quote `!` on shells that history-expand it (`bob capture '!sase:fix-flaky'`). Nested paths and quoted note names work (`!projects/foo:bar`, `!"Shopping List":milk`). Pomodoro Task Links to the completed task are retired. A Blocked dependent returns to Ready when it names that task directly, has no other open dependency, and has no future scheduled date |
 | `+[N]` / `-[N]` | Adjust today's current timed Pomodoro by N five-minute units (`+5` extends 25m, `-` shortens 5m; the count defaults to 1); the item must contain only the signed count |
 | `++[N]` / `--[N]` | Shift today's running timed Pomodoro N five-minute units later/earlier, keeping its duration (`++3` moves 15m later, `--` moves 5m earlier; the count defaults to 1); the item must contain only the operator |
@@ -496,8 +498,16 @@ notes across the vault, including nested notes and completed history;
 closed prerequisites do not block, and adding a dependency does not link the
 dependent into a Pomodoro.
 
-Incomplete `&` and `+query` selectors must be resolved before capture. See
-[dependency capture](docs/capture.md#adding-prerequisites-with-) and
+Block an existing task from the new (or selected) task with
+`bob capture 'Ask Kelly *job:cleanup'`. That writes the edge on the named
+task's Depends-On line, so `job#^cleanup` waits on Ask Kelly. The `*`
+picker searches open editable tasks, ranked with today's linked tasks
+first (the running entry's first). A new blocker is capped at Next.
+Quote `*` on the shell; zsh globs it.
+
+Incomplete `&`, `*`, and `+query` selectors must be resolved before capture. See
+[dependency capture](docs/capture.md#adding-prerequisites-with-),
+[blocking existing tasks](docs/capture.md#blocking-existing-tasks-with-), and
 [task dependencies](docs/task-dependencies.md).
 
 ```bash

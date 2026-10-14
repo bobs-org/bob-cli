@@ -31,6 +31,7 @@ workflow guide.
   - [Picking any open task with ':'](#picking-any-open-task-with-)
   - [Going to a task with '/'](#going-to-a-task-with-)
   - [Adding prerequisites with '&'](#adding-prerequisites-with-)
+  - [Blocking existing tasks with '*'](#blocking-existing-tasks-with-)
   - [Completing tasks with '!'](#completing-tasks-with-)
   - [Plan budget and strict mode](#plan-budget-and-strict-mode)
   - [Starting the next Pomodoro](#starting-the-next-pomodoro)
@@ -88,6 +89,9 @@ anything is written, and any failure rolls the whole batch back.
 | `&note:block-id` | Prerequisite task link: the captured (or explicitly selected) task depends on `note.md`'s `^block-id` task; nested notes use `&projects/foo:bar`, notes with spaces use `&"Shopping List":bar` |
 | `&`, `&query`, `&note:` | Incomplete: the prerequisite picker is still open (`capture-parse` needs `task_dependency`); execution refuses with a teaching error |
 | `&note:block-id` with no other text | Incomplete: a prerequisite is selected but no dependent is named (`capture-parse` needs `dependency_target`); execution never creates an ampersand-named task |
+| `*note:block-id` | Blocked-task link: the named open task depends on the captured (or explicitly selected) task; nested notes use `*projects/foo:bar`, notes with spaces use `*"Shopping List":bar`. Quote `*` on the shell (`bob capture 'Ask Kelly *job:cleanup'`): zsh globs it |
+| `X *`, `X *query`, `X *note:` | Incomplete: the blocked-task picker is still open (`capture-parse` needs `blocked_task`); a line-initial bare `*` is never this marker |
+| `*note:block-id` with no other text | Incomplete: a blocked task is selected but no blocker is named (`capture-parse` needs `dependency_target`); execution never creates a star-named task |
 | `!` | Incomplete: pick an open task to complete (`capture-parse` needs `task_complete`); accepting inserts `!<note>:<block-id>`, and execution never captures it |
 | `!fix`, `!sase:`, `!"Shopping List` | Incomplete: still typing the completion query (`capture-parse` needs `task_complete`) |
 | `!note:block-id` with no other text | Complete an existing open task (`capture-parse` mode `task_complete`); `bob capture` closes it exactly as `=x!N` would, retires its Task Links, and unblocks dependents |
@@ -1166,7 +1170,10 @@ components, and `.`/`..` are rejected.
 Modifiers sit at the leading or trailing marker positions of the parent
 line, interleaving with destination, schedule, priority, and clipboard
 markers in either order, or close an authored child line (a child holding
-only modifiers contributes no empty bullet). An explicit `@route+task-id`
+only modifiers contributes no empty bullet). Both runs skip the same
+trailing-transparent marker shapes (`@…`, `#…`, `s:`, `p:`, schedule,
+priority, and clip tokens), so `@cash &foo:bar Buy milk` is a dependency
+on a `cash.md` task, not literal text. An explicit `@route+task-id`
 selects the existing parent even with child-bullet text; a bare solo
 `@route:task-id` alongside modifiers is a narrow alias for the same owner.
 Without `&`, both spellings keep their existing link/toggle meanings.
@@ -1175,6 +1182,7 @@ Without `&`, both spellings keep their existing link/toggle meanings.
 | --- | --- |
 | `Buy Groceries! &foo:bar` | New inbox task depending on `foo.md#^bar` (`task` + `new_task` target) |
 | `Buy Groceries! @home &foo:bar &cash:budget` | New `home.md` task with two prerequisites, in typed order |
+| `@cash &foo:bar Buy milk` | New `cash.md` task depending on `foo.md#^bar` (leading run skips the destination marker) |
 | `&foo:bar @body+excercise` | Add the dependency to existing `body.md#^excercise` (`task_dependency`, no new task) |
 | `&foo:bar @body:excercise` | Same owner via the narrow colon alias (only when bare: no `#name`, `=…`, or `!`) |
 | `Waiting for approval @body+excercise &foo:bar` | Keep the sub-bullet prose, add the dependency to its explicit parent |
@@ -1307,12 +1315,400 @@ wait on its own tasks), while pre-existing hand-authored same-note
 links stay on the line unprojected. When any target is open, `^prj`
 and every open resident flip to `[?]` in the same write, residents
 gain exactly one `#prj_is_blocked`, and their live links leave
-today's open Pomodoros (emptied entries go with them). Open
+today's open Pomodoros. Open
 prerequisites rise to at least the strongest lane among `^prj` and its
 residents — never onto a `^prj` target, which the walk passes through
 to that project's own prerequisites. More generally, any `&` that
 leaves its dependent Blocked consumes that dependent's live links in
-the same write.
+the same write. Capture consumption is one shared path for `&`, `*`,
+and the link-guard Consume branches: match by identity, keep authored
+notes under a consumed link-only bullet, delete only Pomodoro entries
+this capture emptied, and report `consumed_links[]` plus `removed`
+Pomodoro blocks ([Blocking existing tasks with '*'](#blocking-existing-tasks-with-);
+[task-dependencies.md §13.5](task-dependencies.md#135-consumption),
+PDL8–PDL11). Reconcile and plugins keep removing the whole subtree
+(PDL7). Human output prints the structured `−` consumption lines and
+suppresses the legacy `removed N live Pomodoro link(s) to newly
+Blocked task(s)` warning string, which still appears in `warnings[]`
+for older clients.
+
+A successful `&` item always carries `dependency_update` and
+`dependency_updates[]` (the array's first entry equals the singular
+field, with `role: "dependent"`). See
+[Dependency updates and consumed links](#dependency-updates-and-consumed-links).
+
+### Blocking existing tasks with '*'
+
+`*note:block-id` is the dual of `&note:block-id`. Let N be the item's
+task (new, or an existing owner) and T the task named with `*`. Arrows
+mean "depends on":
+
+| Draft | Stored edge | Line that changes |
+| --- | --- | --- |
+| `N &P` (today) | N → P | N's Depends-On |
+| `N *T` | T → N | T's Depends-On |
+| `N &P *T` | T → N → P | both ("insert between") |
+| `*T @route+id`, `@route:id *T` | T → `route#^id` | T's Depends-On |
+| `Note text @route+id *T` | T → `route#^id`, plus the sub-bullet | T's Depends-On |
+
+The edge lives only on T's `⛓️ **DEPENDS ON:**` line, and N's
+`🧱 **BLOCKS:**` line is the usual generated mirror. No new data model,
+field, or tag is added. `*` shares `&`'s ownership rules
+(`resolve_execution_ownership`, `@@` inheritance, forced
+`--task`/`--route`), child-line trailing runs, and rejections.
+Quote `*` on the shell, because zsh globs it:
+`bob capture 'Ask Kelly *job:cleanup'`.
+
+#### Grammar
+
+`*` is a directive only when **all** of these hold:
+
+1. **Placement.** It starts a whitespace-delimited token in the parent
+   line's leading run or in any line's trailing run, exactly where `&`
+   is allowed. A mid-line `*foo:bar` stays body text. Both runs skip
+   the `is_trailing_transparent` marker shapes (`@…`, `#…`, `s:`,
+   `p:`, schedule, priority, and clip tokens).
+2. **Next byte.** The byte after `*` is neither whitespace nor `*`.
+   This keeps `**bold**`, `* bullet`, and `5 * 3` literal.
+3. **Rest of the token.** The rest of the token contains no `*`, which
+   keeps `*urgent*` literal. `validate_note` rejects `*` in the note
+   component for both sigils, since Obsidian file names cannot contain
+   it (`&no*te:id` and `*no*te:id` are invalid).
+4. **Bare `*`.** A bare `*` is a directive (it opens the picker) only
+   as the **last token of a line that has other text before it**. A
+   line-initial `*` is always literal or a list marker. This differs
+   from `&`, whose bare form also works as the first parent token.
+5. **Escape.** `\*` escapes it, but only where an unescaped token
+   would have been a directive under rules 1–3. Elsewhere `\*` stays
+   verbatim Markdown.
+
+Rejections:
+
+- `=x*…`, `=*`, and `==*` stay park operators; they live inside `=`
+  tokens.
+- Session operators, `+N`/`-N`, section bullets, project-note
+  construction, `!` completions, `--task-ref` pickers, and suffixed
+  owners reject `*` exactly as they reject `&`. Error text names the
+  sigil the user typed. A claimed `!` keeps precedence
+  (`!sase:x *foo` stays the bang teaching error).
+- `@route:id=x… *T` is also rejected: closing and blocking in one
+  item is incoherent.
+
+| Draft item | Reading |
+| --- | --- |
+| `Ask Kelly *job:cleanup` | New inbox task N; `job#^cleanup` depends on N |
+| `*job:cleanup Ask Kelly`, `@cash *job:cleanup Ask Kelly` | Same (leading run, past `@cash`) |
+| `Ask Kelly @mac_inbox:ask-kelly *job:cleanup` | Same, and N is linked first so it takes T's place in the session |
+| `Ask Kelly *job:cleanup *job:send-batch` | N blocks both, in typed order |
+| `Call registrar &school:transcript *job:apply-x` | Insert between; cycle-checked |
+| `*job:cleanup @bob+ask-kelly`, `@bob:ask-kelly *job:cleanup` | Existing task blocks T (mode `task_dependency`) |
+| `Order parts *projects/house/kitchen:cabinets`, `X *"Release Plan":publish` | Nested and quoted targets |
+| `*job:cleanup` with no other text | Incomplete: needs `dependency_target` |
+| `X *`, `X *jo`, `X *job:` | Incomplete: needs `blocked_task` (picker open) |
+| `Fix *urgent* bug`, `Read **Dune**`, `* Buy milk`, `5 * 3`, `R*D`, `Fix *foo:bar now` | Literal |
+| `X \*job:cleanup` | Literal `*job:cleanup` |
+| `Support *nix` | Partial; submit fails with a teaching error that suggests `\*nix` |
+| `N *T &T` | Direct cycle; refused, vault byte-identical |
+| `=x*1`, `=*`, `==*` | Unchanged park / restart operators |
+| `@cash &foo:bar Buy milk` | `&` dependency (leading run skips `@cash`); STP twin of the `*` leading-run rows |
+
+Parse vectors **STP** are the rows of this table plus those extras.
+`capture-parse` reports each `*` modifier in per-item and top-level
+`blocked_tasks` (`raw`, decoded `note` and `block_id`, `quoted`,
+sigil-inclusive `range`) with `blocked_task_sigil`, `blocked_task_note`,
+and `blocked_task_block_id` spans. Never put a direction flag on
+`dependencies[]`. A complete existing-owner action reports mode
+`task_dependency`; new-task and sub-bullet captures keep their mode and
+gain the `blocked_tasks` fields. A partial `*` needs `blocked_task`. A
+complete `*` with no owner needs `dependency_target`, the same need
+`&` uses. Frozen v1 examples (schema version 1, additive fields only):
+
+```json
+// bob capture-parse -f json -- 'Ask Kelly *job:cleanup *job:send-batch'
+{
+  "body": "Ask Kelly",
+  "mode": "task",
+  "route": "mac_inbox",
+  "needs": [],
+  "blocked_tasks": [
+    {
+      "raw": "*job:cleanup",
+      "note": "job",
+      "block_id": "cleanup",
+      "quoted": false,
+      "range": { "start": 10, "end": 23 }
+    },
+    {
+      "raw": "*job:send-batch",
+      "note": "job",
+      "block_id": "send-batch",
+      "quoted": false,
+      "range": { "start": 24, "end": 39 }
+    }
+  ],
+  "dependency_target": { "kind": "new_task", "route": "mac_inbox" }
+}
+```
+
+```json
+// bob capture-parse -f json -- '*job:cleanup @bob+ask-kelly'
+{
+  "body": "",
+  "mode": "task_dependency",
+  "route": "bob",
+  "block_id": "ask-kelly",
+  "needs": [],
+  "blocked_tasks": [
+    {
+      "raw": "*job:cleanup",
+      "note": "job",
+      "block_id": "cleanup",
+      "quoted": false,
+      "range": { "start": 0, "end": 13 }
+    }
+  ],
+  "dependency_target": {
+    "kind": "existing_task",
+    "route": "bob",
+    "block_id": "ask-kelly"
+  }
+}
+```
+
+`capture-complete` serves context `blocked_task` with a replacement
+range covering exactly the active modifier (sigil and quoted note
+included), the decoded `query`, the lexical `owner`, and the
+open-editable candidate list:
+
+```json
+// bob capture-complete -b VAULT -c 12 -f json -- 'Ask Kelly *jo'
+{
+  "cursor": 12,
+  "replacement": { "start": 10, "end": 13 },
+  "context": "blocked_task",
+  "candidates": [],
+  "query": "jo",
+  "owner": { "kind": "new_task" }
+}
+```
+
+Rows reuse the `DependencyCandidate` shape, plus `already_blocked`
+(omitted when false) and `disabled_reason`:
+
+- `the owner task itself`
+- `would create a dependency cycle`
+- `a project cannot depend on its own resident`
+- the existing duplicate-block-ID reason
+
+The pool is open, editable tasks only: refuse daily notes, `done/`,
+`_templates`, `_generated`, `_conflicts`, dot-directories, and fenced
+code. With an empty query, ranking is (1) today's linked tasks (the
+running entry's first), (2) Pending `[/]`, (3) Next `[*]`, (4) the
+owner's note, (5) everything else. With a non-empty query, ranking is
+match score first, then the same order. Replacements use `*`
+(`replacement_for_sigil`). Shell completion adds a `blocked tasks`
+group.
+
+#### Execution
+
+The whole draft plans before anything is written. For an item with
+`blocked_tasks`:
+
+1. **Resolve and check every target.** Dedupe by resolved identity.
+   The note resolves vault-wide exactly like `&note`: path or basename,
+   nested, quoted, plus staged notes. T must be an open, editable
+   task. Refuse targets in daily notes, `done/`, `_templates`,
+   `_generated`, `_conflicts`, dot-directories, or fenced code. Also
+   refuse a self target; a T with several or malformed Depends-On
+   lines; and a `^prj` T when N lives in that project's note or a
+   descendant project (a guaranteed deadlock). A repeat is a no-op
+   reported as `already_present`.
+2. **Give N a block ID.** Use the typed `^id` or `:id`. Otherwise mint
+   one with this batch's reservations, even when
+   `dependencies.blocks_lines: false`. When the ID was minted, report
+   it as `minted_blocker_block_id`. Never reuse
+   `minted_dependent_block_id`, which means the opposite (`&`'s BLOCKS
+   mirror for N-as-dependent).
+3. **Plan N as today.** N's own `&` prerequisites come first, so N may
+   be born `[?]`. Insert N and stage its Task Link if `:id`/`#pomodoro`
+   asked for one and the existing link guard allows it. This is the
+   "link N, then consume T" order: `N @mac_inbox:id *T` keeps the
+   session alive by putting N into T's slot before T's link is
+   consumed.
+4. **Run one writer pass per T, in typed order.** Each pass is the
+   existing-dependent writer with dependent = T (vault path plus block
+   ID) and prerequisites = [N]. It merges the line and fields, stamps
+   T fresh, flips T to `[?]`, blocks and tags `^prj` residents,
+   consumes links, and stages N's BLOCKS line. **Commitment transfer:**
+   an open N rises to T's pre-capture lane (for a `^prj` T, the
+   strongest resident lane), **capped at Next `[*]` when N is new in
+   this capture**. The cap applies to the whole promotion walk that
+   this pass seeds. An existing owner gets the normal §5 transfer and
+   may become `[/]`. A `^prj` N is never raised. Re-locate N by block
+   ID after every pass.
+5. **Existing owners** go through the dependency-only path. The
+   sub-bullet path (`Note text @route+id *T`) and forced
+   `--task`/`--route` mirror `&`.
+6. **Cycles.** Direct, transitive, cross-item, and `&`+`*` cycles are
+   refused; the vault stays byte-identical.
+7. **Later link gestures.** A later `@T:id` in the same batch drops N
+   from T's line under capture's own-prerequisite drop. That is
+   intended, and the final preview reports it accurately. Capture does
+   not auto-link N into T's slot; the explicit
+   `N @mac_inbox:id *T` idiom covers it.
+
+#### Capture consumption
+
+Every capture path that consumes live links (`plan_existing_task_dependencies`,
+`plan_resident_block`, and the link-guard Consume branches) follows
+this contract. Reconcile and plugins are unchanged (PDL7).
+
+- **Scope.** Only live (unstruck) Task Links under **today's open**
+  Pomodoros (running and planned), every occurrence. Closed entries,
+  `🍅` history, other days, prose outside `## Pomodoros`, and
+  dependency lines are never touched. A missing day file means there
+  is nothing to consume.
+- **Identity.** Match by resolved `(vault-relative path, block id)`,
+  not by text. Aliases (`|x`), `[[#^local]]`, basename, path, and case
+  spellings all match.
+- **Notes kept (PDL8).** A consumed **link-only bullet with children**
+  is not deleted. Its link token is replaced by the task's clean
+  display text: the same `text` capture reports, with checkbox, tags,
+  inline fields, and `^id` stripped, and any `[[…#^…]]` inside it
+  flattened to plain text. The marker, indentation, and children stay
+  unchanged, and the bullet carries no Task Link. A childless
+  link-only bullet is deleted. A prose bullet loses only the token
+  (PDL6).
+- **Only entries this capture emptied (PDL9).** "Pomodoro" means the
+  column-0 entry, never the `## Pomodoros` heading. An entry is
+  deleted only if it had a child list item before this consumption
+  and has none after it, judged after all of the item's edits. That
+  includes a running timed entry. Entries that were already childless
+  stay.
+- **Reported (PDL11).** Each consumed link becomes a `consumed_links[]`
+  row. Each deleted entry appears in `pomodoro_blocks` with
+  `removed: true`. Human output names the session. The legacy
+  `warnings[]` consumption string stays for older clients; human
+  output prints the `−` lines instead, so the same fact is never
+  printed twice.
+
+#### Human output
+
+```text
+✓ Ask Kelly for references!  mac_inbox.md ^ask-kelly-for-references   [*] Next
+  🧱 blocks "Do cleanup tasks!"  job.md ^cleanup  [/] → [?] Blocked
+  − removed its Task Link from JOB 10:10–10:35 (running) · deleted the empty Pomodoro
+```
+
+Variants:
+
+- `− kept its notes under JOB 10:10–10:35 as plain text`
+- `· blocked 4 project tasks` for a `^prj` T
+- `would …` in dry runs
+
+`&` consumption prints the same `−` lines. Existing-owner items print
+`🧱 ^ask-kelly now blocks "…"`.
+
+A full JSON example (schema version 1, additive fields; the `publish`
+phase reconciles literals against the shipped binary):
+
+```json
+{
+  "ok": true,
+  "schema_version": 1,
+  "kind": "task",
+  "text": "Ask Kelly for references!",
+  "relative_target": "mac_inbox.md",
+  "block_id": "ask-kelly-for-references",
+  "task_line": "- [*] #task Ask Kelly for references! ^ask-kelly-for-references",
+  "dependency_update": {
+    "role": "blocked_task",
+    "dependent_note": "job.md",
+    "dependent_block_id": "cleanup",
+    "dependent_text": "Do cleanup tasks!",
+    "new_task": false,
+    "added": 1,
+    "already_present": 0,
+    "open_prerequisites": 1,
+    "prerequisites": [
+      {
+        "note": "mac_inbox.md",
+        "block_id": "ask-kelly-for-references",
+        "link": "[[mac_inbox#^ask-kelly-for-references]]",
+        "status_symbol": "*",
+        "status_name": "Next",
+        "text": "Ask Kelly for references!",
+        "open": true
+      }
+    ],
+    "dependent_status": "?",
+    "dependent_status_name": "Blocked",
+    "status_changed": true,
+    "previous_status": "/",
+    "previous_status_name": "In Progress"
+  },
+  "dependency_updates": [
+    {
+      "role": "blocked_task",
+      "dependent_note": "job.md",
+      "dependent_block_id": "cleanup",
+      "dependent_text": "Do cleanup tasks!",
+      "new_task": false,
+      "added": 1,
+      "already_present": 0,
+      "open_prerequisites": 1,
+      "prerequisites": [
+        {
+          "note": "mac_inbox.md",
+          "block_id": "ask-kelly-for-references",
+          "link": "[[mac_inbox#^ask-kelly-for-references]]",
+          "status_symbol": "*",
+          "status_name": "Next",
+          "text": "Ask Kelly for references!",
+          "open": true
+        }
+      ],
+      "dependent_status": "?",
+      "dependent_status_name": "Blocked",
+      "status_changed": true,
+      "previous_status": "/",
+      "previous_status_name": "In Progress"
+    }
+  ],
+  "consumed_links": [
+    {
+      "day_file": "2026/20261014.md",
+      "line": 8,
+      "link": "[[job#^cleanup]]",
+      "note": "job.md",
+      "block_id": "cleanup",
+      "text": "Do cleanup tasks!",
+      "action": "removed",
+      "pomodoro": {
+        "line": 5,
+        "name": "JOB",
+        "time_range": "1010-1035",
+        "status": "running",
+        "removed": true
+      }
+    }
+  ],
+  "minted_blocker_block_id": {
+    "path": "mac_inbox.md",
+    "line": 1,
+    "block_id": "ask-kelly-for-references"
+  }
+}
+```
+
+`dependency_update` equals `dependency_updates[0]`. For `N *T` that is
+T's update (dependent T, prerequisites [N]), which older Mac builds
+already render as a dependency on T. `&`-only items carry the array
+too, with `role: "dependent"`. `blocked_residents` is omitted when 0.
+`consumed_links[].action` is `removed`, `token_removed`, or
+`notes_kept`. `line` values are 1-based in the item's pre-state day
+text. Execution vectors **ST1–ST19** live in
+[task-dependencies.md §13.5.2](task-dependencies.md#1352-capture-star-blocks-execution-vectors-st).
 
 ### Completing tasks with '!'
 
@@ -3412,7 +3808,7 @@ stable fields include `ok`, `dry_run`, `routed`, `route`, `route_label`,
 `kind` field is `"task"`, `"bullet"`, `"pomodoro_task"`,
 `"pomodoro_note"`, `"sub_bullet"`, `"task_toggle"`, `"project_note"`,
 `"pomodoro_adjust"`, `"pomodoro_shift"`, `"pomodoro_start"`,
-`"pomodoro_close"`, `"pomodoro_link"`, `"task_complete"`, or `"ref"`, and
+`"pomodoro_close"`, `"pomodoro_link"`, `"task_dependency"`, `"task_complete"`, or `"ref"`, and
 `task_line` holds the rendered line for any kind — for `"project_note"` it is
 the rendered `^prj` line, and for `"pomodoro_link"` it is the linked task's
 post-image line. On JSON-mode failures, stdout is still a
@@ -3720,14 +4116,19 @@ Field rules:
 - `relative_target` is the day file relative to the vault, `line` is the
   1-based headline line in the final staged day file, and `name` /
   `time_range` (plain `HHMM-HHMM`) come from the final ledger scan. Each is
-  omitted when the entry has none.
+  omitted when the entry has none. When `removed` is true, `line` is the
+  1-based headline in the item's pre-state day text, so an earlier edit
+  in the same item (N linked above T's consumption) does not shift it.
 - `status` is `"completed"` for a completed entry, `"running"` for an open
   entry with a time range, and `"queued"` for an open entry without one.
 - `created` is true when the entry did not exist before the batch.
+- `removed` is true when this capture deleted the entry; omitted when
+  false. A deleted entry's `lines` all carry `change: "removed"`.
 - `roles` is an informational, deduplicated list in first-touch order. The
   vocabulary is `"adjusted"`, `"shifted"`, `"started"`, `"closed"`,
   `"reset"` (a demoted swap session or `=x0` reset), `"next"`,
-  `"linked"`, `"unlinked"`, and `"changed"` (auto-detected);
+  `"linked"`, `"unlinked"`, `"removed"` (the entry this capture emptied),
+  and `"changed"` (auto-detected);
   clients must not depend on it.
 - `lines` is the block in document order — the headline plus every
   following line up to the first non-blank zero-indent line or the end of
@@ -3738,15 +4139,19 @@ Field rules:
   takes its parent list item's depth + 1, a blank line is 0); `change` is
   `"unchanged"`, `"added"`, `"removed"`, or `"changed"`; and `before` holds
   the old text only on `"changed"` rows. A created block's lines are all
-  `"added"`.
+  `"added"`. A deleted block's lines are all `"removed"`.
 
 Blocks appear in first-touch order across the batch. A chain such as
 `+2 =x` touches the same session twice but reports it once, in its final
 state, with the cumulative diff against the ledger before the capture.
 Whole-item adjust, shift, start (including named starts), and close report
 their sessions; link and task forms report theirs through auto-detection
-until they carry explicit refs. Dry-run JSON equals real-run JSON except
-for `dry_run`. Human output does not change.
+until they carry explicit refs. Every `PomodoroBlockRef::removed`
+producer reports the deleted entry this way, not just consumption.
+Dry-run JSON equals real-run JSON except
+for `dry_run`. Human output names a deleted session on the structured
+`−` consumption lines
+([Blocking existing tasks with '*'](#blocking-existing-tasks-with-)).
 
 #### Task blocks
 
@@ -3814,6 +4219,50 @@ Field rules:
   text.
 - Dry-run JSON equals real-run JSON except for `dry_run`. Human output
   does not change. Per-item `parent_*` fields stay as they are.
+
+#### Dependency updates and consumed links
+
+Per-item additive fields on `bob capture -f json` (schema version 1).
+Omitted when empty. Dry-run JSON equals live JSON apart from `dry_run`.
+The `publish` phase reconciles example literals against the shipped
+binary.
+
+- `dependency_updates[]`: every dependency update the item made. The
+  item's own `&` update comes first (`role: "dependent"`), then one
+  entry per `*` target in typed order (`role: "blocked_task"`). Present
+  whenever at least one update exists, so `&`-only items carry it too.
+  The singular `dependency_update` stays and equals
+  `dependency_updates[0]`. For `N *T` that is therefore T's update
+  (dependent T, prerequisites [N]), which older Mac builds already
+  render truthfully. Each entry keeps today's `dependency_update`
+  shape (`dependent_note`, `dependent_block_id`, `dependent_text`,
+  `new_task`, `added`, `already_present`, `open_prerequisites`,
+  `prerequisites[]`, `dependent_status`, `dependent_status_name`,
+  `status_changed`) and gains:
+  - `role`: `"dependent"` or `"blocked_task"`
+  - `previous_status` and `previous_status_name`
+  - `blocked_residents`, the count of `^prj` residents newly blocked
+    (omitted when 0)
+- `consumed_links[]`: one row per live Task Link this item consumed.
+  Fields: `{day_file, line, link, note, block_id, text, action,
+  pomodoro: {line, name?, time_range?, status, removed}}`.
+  `action` is `"removed"`, `"token_removed"`, or `"notes_kept"`.
+  `status` is `"running"` or `"queued"`. `line` values are 1-based in
+  the item's pre-state day text. `&` consumption emits the same array.
+- `minted_blocker_block_id {path, line, block_id}`: present only when
+  N's ID was minted for `*`. Never reuse `minted_dependent_block_id`,
+  which names the ID minted so an `&` BLOCKS mirror can point at N as
+  a dependent.
+- Batch `pomodoro_blocks` entries for deleted sessions carry
+  `removed: true` and role `"removed"`; see
+  [Pomodoro blocks](#pomodoro-blocks).
+- The legacy `warnings[]` string
+  `removed N live Pomodoro link(s) to newly Blocked task(s)` stays for
+  older clients. Human output prints the structured `−` lines instead,
+  so the same fact is never printed twice.
+
+See [Blocking existing tasks with '*'](#blocking-existing-tasks-with-)
+for the human lines and a full JSON example.
 
 ### Interactive editor markers
 
@@ -4135,7 +4584,7 @@ the Pomodoro name when one was typed — the same "whichever applies" reuse
 `block_id` already has, and `mode` disambiguates — and the same holds for the
 `^` project-note form, where `section` is the `#pomodoro` name. `needs` lists what a picker
 still has to supply, in the
-order `route`, `section`, `block_id`, `pomodoro_id`, `pomodoro_name`, `task`, `task_section`, `active_task`, `task_link`, `task_goto`, `task_parent`, `pomodoro_close_task`, `pomodoro_start_task`, `task_dependency`, `dependency_target`, `task_complete`; it is an independent
+order `route`, `section`, `block_id`, `pomodoro_id`, `pomodoro_name`, `task`, `task_section`, `active_task`, `task_link`, `task_goto`, `task_parent`, `pomodoro_close_task`, `pomodoro_start_task`, `task_dependency`, `dependency_target`, `blocked_task`, `task_complete`; it is an independent
 completion hint, so the executable `@route#` bullet reports mode `bullet` and
 needs `["section"]`, while `@route+id#` with no body text reports mode
 `incomplete` and needs `["pomodoro_name"]`, `note @route+id#` reports mode
@@ -4169,11 +4618,15 @@ per token: each `range` covers its token, and all entries share the physical
 line's `line_start`/`line_end`. Each entry has a one-based `index`, a `range` with global UTF-8
 `start`/`end` offsets into `input`, `line_start`/`line_end` physical line
 numbers, the item's `body`, `mode`, `route`, `section`, `block_id`, `needs`,
-and optional `sub_bullets`/`sub_bullet_depths`/`sub_bullet_task_ids`/`pomodoro_start`/`pomodoro_adjust`/`pomodoro_shift`/`pomodoro_close`/`dependencies`/`dependency_target`/`task_complete`. Real item indices and ranges
+and optional `sub_bullets`/`sub_bullet_depths`/`sub_bullet_task_ids`/`pomodoro_start`/`pomodoro_adjust`/`pomodoro_shift`/`pomodoro_close`/`dependencies`/`blocked_tasks`/`dependency_target`/`task_complete`. Real item indices and ranges
 exclude declaration-only `@@` lines but still index the original draft. Top-level and
 per-item `route`, `mode`, and `block_id` are the item's effective destination
 after inheritance. The legacy top-level fields continue to describe the first
-item so older clients retain a useful preview.
+item so older clients retain a useful preview. `blocked_tasks` is the `*`
+twin of `dependencies[]`: the same `{raw, note, block_id, quoted, range}`
+shape, emitted at the top level and per item, omitted when empty. Never put
+a direction flag on `dependencies[]`. A partial `*` needs `blocked_task`;
+see [Blocking existing tasks with '*'](#blocking-existing-tasks-with-).
 
 When the draft has a `@@` declaration, `global_destination` is an optional
 object with the declaration `range`, one-based physical `line`, effective
@@ -4245,7 +4698,7 @@ non-overlapping, and always on a character boundary. Each `kind` is one of
 `task_toggle_block_id`, `task_toggle_pomodoro_name`, `task_toggle_explicit_toggle`, `global_route`,
 `global_sub_bullet_route`, `global_sub_bullet_block_id`, `schedule`, `priority`, `clipboard`,
 `ref_url`, `ref_listen`,
-`interactive_placeholder`, `project_task_link_marker`, `project_task_block_id`, `dependency_sigil`, `dependency_note`, `dependency_block_id`, `task_complete_sigil`, `task_complete_note`, `task_complete_block_id`, `wikilink_delimiter`, `wikilink_target`,
+`interactive_placeholder`, `project_task_link_marker`, `project_task_block_id`, `dependency_sigil`, `dependency_note`, `dependency_block_id`, `blocked_task_sigil`, `blocked_task_note`, `blocked_task_block_id`, `task_complete_sigil`, `task_complete_note`, `task_complete_block_id`, `wikilink_delimiter`, `wikilink_target`,
 `wikilink_heading`, `wikilink_block_id`, or `wikilink_alias`. A placeholder
 marks the part of a marker the user has not filled in yet: the trailing `+` in
 `@cash+` or `@@cash+`, the trailing `#` in `@cash+id#` or `@cash:id#`, the dangling `,` or `!` in `=x1,` or `=x!`, a lone `:` or `^` ending a project-note task bullet, or the whole `@+` /
@@ -4612,6 +5065,24 @@ over the task text, locator, `locator:block-id`, block ID, note path, section,
 and today Pomodoro name. For example `bob capture-complete -c 1 -- '!'`
 lists the full completable catalog, and `-c 4 -- '!fix'` narrows to matching
 rows with `replacement` `{0, 4}`.
+A `*` modifier completes `blocked_task` with the same `query`, `owner`, and
+replacement-range semantics as `task_dependency`: the replacement covers
+exactly the active modifier (sigil and quoted note included), including
+just before the sigil so clients can refetch at `replacement.start`.
+`X *`, `X *jo`, and `X *job:` all open this context. The pool is open,
+editable tasks only (daily notes, `done/`, `_templates`, `_generated`,
+`_conflicts`, dot-directories, and fenced code are absent). Rows reuse
+the `DependencyCandidate` shape plus `already_blocked` (omitted when
+false) and `disabled_reason` (`the owner task itself`, `would create a
+dependency cycle`, `a project cannot depend on its own resident`, or the
+existing duplicate-block-ID reason). With an empty query, ranking is
+today's linked tasks (the running entry's first), then Pending `[/]`,
+Next `[*]`, the owner's note, then everything else; a non-empty query
+ranks by match score first, then that order. Replacements use `*`
+(`replacement_for_sigil`). ID-less and guarded rows resolve through
+`capture-task-id`'s `blocked_task_replacement`. Shell completion adds a
+`blocked tasks` group. See
+[Blocking existing tasks with '*'](#blocking-existing-tasks-with-).
 The analogous parent-task picker accepts a terminal `+query` on an item's
 parent line or an eligible authored child line. It uses context `task_parent`,
 strips `+` from the top-level `query`, and replaces the full selector token.
@@ -4670,13 +5141,16 @@ JSON output is a single versioned object:
 full, regardless of where the cursor sits inside it; it is always present, even
 in an empty result, where it collapses to a zero-length range at the cursor.
 `context` is `route`, `section`, `pomodoro_block_id`, `task_block_id`, `project_task_block_id`, `pomodoro_name`, `task`,
-`task_section`, `active_task`, `task_link`, `task_goto`, `task_parent`, `task_dependency`, `task_complete`, `wikilink_note`, `wikilink_heading`, `wikilink_block`, or `null` when no completion field is
+`task_section`, `active_task`, `task_link`, `task_goto`, `task_parent`, `task_dependency`, `blocked_task`, `task_complete`, `wikilink_note`, `wikilink_heading`, `wikilink_block`, or `null` when no completion field is
 active. `task_parent` covers a terminal `+query`, strips the sigil from its
 additive top-level `query`, and replaces the whole selector. `task` covers
 scoped `@route+id` with only the ID span replaced and the typed ID query.
-`query` is present only for `task_parent`, `task`, `task_dependency`, and `task_complete`; it
+`query` is present only for `task_parent`, `task`, `task_dependency`, `blocked_task`, and `task_complete`; it
 contains the selector text after its sigil (and a decoded locator for a
-dependency query). Both parent-task contexts include an
+dependency or blocked-task query). `blocked_task` is the `*` twin of
+`task_dependency`: same owner and replacement-range rules, `*` replacements,
+and the open-editable pool documented under
+[Blocking existing tasks with '*'](#blocking-existing-tasks-with-). Both parent-task contexts include an
 additive `picker` descriptor: `kind` is `parent_task`; `scope` is `vault`
 with `scope_token: "+"` for the bare selector, or `note` with the canonical
 `@route+` / `@@route+` scope token for scoped selection. `note_target` is
@@ -4783,7 +5257,7 @@ identified rows use `@route+block-id` replacements, while ID-less rows have
 an empty replacement, `requires_block_id: true`, and suggested IDs. Human
 rows begin with `@route+block-id` or `@route+…` and describe missing IDs.
 Every task-bearing candidate (`task`, `active_task`, `task_link`,
-`task_goto`, `task_parent`, `task_dependency`, `task_complete`) also carries an additive
+`task_goto`, `task_parent`, `task_dependency`, `blocked_task`, `task_complete`) also carries an additive
 `task_kind` (`"ref"` when the row is a `#task #ref` reference reading task,
 omitted otherwise, so existing JSON stays byte-identical). `bob query`
 `text` also drops that `#ref` token, so `#task #ref X` reads as `X`. A
@@ -4963,7 +5437,7 @@ bob capture-task-id (--route NAME | --note-path PATH) --task-ref REF --block-id 
 
 Assigns a user-authored Obsidian block ID to one open task in a Bob note.
 This is the only write needed to turn a missing-ID `capture-complete --all-tasks`,
-`task_link`, `task_parent`, `task_dependency`, or `task_complete` candidate into an identified task. The command validates
+`task_link`, `task_parent`, `task_dependency`, `blocked_task`, or `task_complete` candidate into an identified task. The command validates
 `--route` (or `--note-path`) and `--block-id` with Bob's shared grammar (`A-Z`, `a-z`, `0-9`, and `-` for the
 ID; routes also allow `_`), resolves `--task-ref` with the same stale-safe
 `<line>:<digest>` recovery as `bob capture --task-ref`, and then confirms the
@@ -4987,6 +5461,8 @@ JSON success is a single versioned object with `ok`, `schema_version` `1`,
 `dry_run`, `route` (in `--route` mode) or `note_path` (in `--note-path`
 mode), `relative_target`, the backend-formatted `dependency_replacement`
 (`&note:id`, quoted when the locator needs it), the backend-formatted
+`blocked_task_replacement` (`*note:id`, quoted when the locator needs it),
+the backend-formatted
 `complete_replacement` (`!note:id`, quoted when the locator needs it, in
 both modes) for splicing the new ID into the Complete picker, the canonical
 `block_id`,
