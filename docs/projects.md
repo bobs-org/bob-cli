@@ -370,7 +370,7 @@ remaining item.
 | `Ctrl+Enter` | Apply the cached recommendation (`Cmd+Enter` alias) |
 | `Ctrl+R` | Regenerate recommendation and priority previews; no write |
 | `Enter` | Open the selected action; Schedule is the default |
-| `b` | Blocked by (the existing Depends on stage; on `^prj` it also blocks, tags, and unlinks residents, per [§13.10](task-dependencies.md#1310-gestures-on-prj)) |
+| `b` | Blocked by (the existing Depends on stage; the dependent is unlinked from today's open Pomodoros once it becomes Blocked; on `^prj` it also blocks, tags, and unlinks residents, per [§13.10](task-dependencies.md#1310-gestures-on-prj)) |
 | `f` | Review every (the existing Refresh stage) |
 | `x` | Open the cancel-reason stage; never cancel on the key alone |
 | `Alt+N` | Commit to Next or release to Ready |

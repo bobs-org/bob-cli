@@ -237,7 +237,9 @@ and no R2 exception.
   open. On `^prj`, every open resident becomes `[?]` too. If the
   dependent was `[*]` or `[/]`, an open target rises to at least that
   lane (`getDependencyPromotionStatus`); a `^prj` target is never
-  raised.
+  raised. An add that leaves the dependent `[?]` also consumes the
+  dependent's own live links in today's open Pomodoros, together with
+  any emptied entry.
 - **Removing a dependency** recovers the dependent to its derived rank
   _immediately_ when no open prerequisite, no future `scheduled` date,
   and no remaining project reason remain. Otherwise it stays `[?]`.
@@ -366,12 +368,13 @@ unchanged.
    its residents onto each open prerequisite (never onto a `^prj`
    target, §13). Nav never regroups lines between sections; reconcile
    does that within one interval.
-3. **Consume Pomodoro links after a `^prj` block.** The live links of
-   `^prj` and its newly Blocked residents are removed from today's open
-   Pomodoros with `removeEmptiedEntries`, in the same write when the
-   daily note is the edited note and in a follow-up write otherwise. A
-   cleanup failure shows the `Pomodoro links not removed` chip and is
-   never rolled back; reconcile repairs it.
+3. **Consume Pomodoro links after a newly Blocked dependent.** The live
+   links of every newly Blocked dependent — including `^prj` and its
+   newly Blocked residents — are removed from today's open Pomodoros
+   with `removeEmptiedEntries`, in the same write when the daily note is
+   the edited note and in a follow-up write otherwise. Counted writers
+   are included. A cleanup failure shows the `Pomodoro links not
+   removed` chip and is never rolled back; reconcile repairs it.
 4. **If preparation fails**, the dependent is untouched. An unused
    target id is acceptable; a link to an unprepared target is not.
 
@@ -385,6 +388,7 @@ effects of hand edits are reconcile's.
 ### 6.7 Notices
 
 - `⛓ Now waits on "File for unemployment" · Blocked`
+- `⛓ Now waits on "File for unemployment" · Blocked · removed 1 Pomodoro link`
 - `⛓ No longer waits on "Launch swarm…" · Ready again`
 - `⛓ 2 added · 1 removed · Blocked (1 open)`
 - `⛓ Project waits on "Fix LinkedIn now" · 2 tasks Blocked · removed 2 Pomodoro links`
@@ -2510,6 +2514,8 @@ Only today's open Pomodoros. `promoted[]` is the consumption seed.
 | PDG25 | two managed Depends-On lines, or several `scheduled` fields | nothing dropped; consumption; `drop_refused: dependency_line` or `schedule` |
 | PDG26 | `^route:id=` while a timed Pomodoro runs, or a later item in the batch fails | the batch fails; nothing is dropped; the dry run reports the same failure |
 | PDG27 | plugin Ctrl+Shift+Enter or `^^` on a dependency-blocked target | unchanged PDG1; plugins never drop |
+| PDG28 | Ctrl+Shift+P Depends on add (single, marked, counted, or Task Link mode) of an open target to an ordinary task that has a live link in today's open Pomodoro | the task is `[?]`; its live links are removed and an emptied open entry is deleted; closed entries are untouched; commitment is transferred; the notice gets `· removed N Pomodoro link(s)` |
+| PDG29 | the same add when the dependent lives in today's daily note; or a stale daily note after the snapshot | same-file: those effects land in one undo group. Stale daily: the dependent write stands, the notice adds `; Pomodoro links not removed`, and reconcile repairs it |
 
 ### 13.16 PDC — close vectors
 
