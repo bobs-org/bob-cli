@@ -1,10 +1,8 @@
-//! `*` blocked-task target resolution and A8 guards.
-//!
-//! Execute calls [`resolve_blocked_task_target`] before the existing-
-//! dependent writer. Parse still refuses `*` until that phase lands.
+//! `*` blocked-task target resolution, A8 guards, and execute passes.
 
 use super::*;
 use crate::native::{
+    capture_language::ParsedDependency,
     collect_done::trailing_block_id_in_line,
     task_dependencies::{self, parse as dependency_parse},
     task_status_hooks,
@@ -175,6 +173,84 @@ pub(super) fn resolve_blocked_task_target(
         relative,
         block_id: block_id.to_string(),
     })
+}
+
+/// N as a prerequisite of T: the existing-dependent writer resolves
+/// `note` vault-wide, including notes this batch just created.
+fn blocker_as_dependency(owner: &DependentRef) -> ParsedDependency {
+    let note = route_without_extension(&owner.relative);
+    ParsedDependency {
+        raw: format!("&{note}:{}", owner.block_id),
+        note,
+        block_id: owner.block_id.clone(),
+        quoted: false,
+    }
+}
+
+/// Fold `&` then `*` summaries so the singular field equals the first
+/// entry and `&`-only items still carry the array.
+pub(super) fn fold_dependency_updates(
+    updates: Vec<DependencyUpdateJson>,
+) -> (Option<DependencyUpdateJson>, Vec<DependencyUpdateJson>) {
+    (updates.first().cloned(), updates)
+}
+
+pub(super) fn absorb_dependency_write(
+    update: PlannedDependencyUpdate,
+    summaries: &mut Vec<DependencyUpdateJson>,
+    refs: &mut Vec<TaskBlockRef>,
+    pomodoro_refs: &mut Vec<PomodoroBlockRef>,
+    blocks_line_updates: &mut Vec<BlocksLineUpdateJson>,
+) {
+    refs.push(update.dependent_ref);
+    refs.extend(update.target_refs);
+    pomodoro_refs.extend(update.pomodoro_refs);
+    blocks_line_updates.extend(update.blocks.updates);
+    summaries.push(update.summary);
+}
+
+/// One existing-dependent writer pass per typed `*` target, in order.
+/// Repeats are idempotent `already_present` no-ops. Relocate N by ID
+/// after each pass so later targets see lane/`[id::]` edits.
+pub(super) fn plan_blocked_task_writes(
+    ctx: &mut DependencyContext,
+    planner: &mut CaptureBatchPlanner,
+    bob_dir: &Path,
+    owner: &DependentRef,
+    blocked_tasks: &[ParsedDependency],
+    warnings: &mut Vec<String>,
+    options: ExistingDependencyOptions,
+) -> Result<Vec<PlannedDependencyUpdate>, CaptureError> {
+    let mut out = Vec::with_capacity(blocked_tasks.len());
+    for typed in blocked_tasks {
+        let target = resolve_blocked_task_target(
+            ctx,
+            planner,
+            bob_dir,
+            &typed.note,
+            &typed.block_id,
+            Some(owner),
+        )?;
+        let prereq = blocker_as_dependency(owner);
+        let update = plan_existing_task_dependencies(
+            ctx,
+            planner,
+            bob_dir,
+            &target,
+            &[prereq],
+            warnings,
+            options,
+        )?;
+        out.push(update);
+        let _ = locate_task_by_block_id(
+            ctx,
+            planner,
+            bob_dir,
+            &owner.relative,
+            &owner.block_id,
+        )?;
+    }
+    Ok(out)
 }
 
 #[cfg(test)]

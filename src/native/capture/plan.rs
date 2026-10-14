@@ -55,15 +55,6 @@ pub(super) fn plan_capture_batch(
         request.forced_section.as_deref(),
         &options,
     )?;
-    if parsed_draft
-        .items
-        .iter()
-        .any(|item| !item.parsed.blocked_tasks.is_empty())
-    {
-        return Err(CaptureError::usage(
-            "`*` blocked tasks are not supported yet; remove the modifier or wait for capture execution support",
-        ));
-    }
     if parsed_draft.global.is_some()
         && !request.forced_destination_flags.is_empty()
     {
@@ -470,6 +461,8 @@ fn plan_ref_item(
             dropped_dependencies: Vec::new(),
             blocks_line_updates: Vec::new(),
             minted_dependent_block_id: None,
+            dependency_updates: Vec::new(),
+            minted_blocker_block_id: None,
         },
         clip_plan: None,
         pomodoro_refs: Vec::new(),
@@ -570,7 +563,7 @@ pub(super) fn plan_capture_item(
         };
         // A forced sub-bullet parent owns the item's modifiers like an
         // explicit marker does; a picker-ref target cannot.
-        if !parsed.dependencies.is_empty() {
+        if !parsed.dependencies.is_empty() || !parsed.blocked_tasks.is_empty() {
             match target {
                 SubBulletTarget::BlockId(block_id) => {
                     let Some(route) = parsed.route.clone() else {
@@ -713,6 +706,8 @@ pub(super) fn plan_capture_item(
                 dropped_dependencies: toggle.dropped_dependencies.clone(),
                 blocks_line_updates: toggle.blocks_updates.clone(),
                 minted_dependent_block_id: None,
+                dependency_updates: Vec::new(),
+                minted_blocker_block_id: None,
             },
             clip_plan: None,
             pomodoro_refs,
@@ -851,6 +846,8 @@ pub(super) fn plan_capture_item(
                 dropped_dependencies: link.dropped_dependencies.clone(),
                 blocks_line_updates: link.blocks_updates.clone(),
                 minted_dependent_block_id: None,
+                dependency_updates: Vec::new(),
+                minted_blocker_block_id: None,
             },
             clip_plan: None,
             pomodoro_refs,
@@ -899,6 +896,33 @@ pub(super) fn plan_capture_item(
     let scheduled = scheduled_offset
         .map(|offset| scheduled_date_string(today, offset))
         .transpose()?;
+    // A9: reserve N's ID before the capture line is built, even when
+    // `dependencies.blocks_lines` is off. Typed `^id` / `:id` win.
+    let mut minted_blocker_block_id: Option<MintedDependentBlockIdJson> = None;
+    if !parsed.blocked_tasks.is_empty()
+        && matches!(parsed.kind, CaptureKind::Task)
+    {
+        let dest = relative_target(parsed.route.as_deref());
+        let absolute = request.bob_dir.join(&dest);
+        let minted = mint_staged_block_id(
+            dependency_ctx,
+            planner,
+            &absolute,
+            &dest,
+            &format!("- [ ] #task {}", parsed.body),
+        )?;
+        minted_blocker_block_id = Some(MintedDependentBlockIdJson {
+            path: display_relative(&dest),
+            line: 0,
+            block_id: minted.clone(),
+        });
+        parsed.kind = CaptureKind::TaskWithBlockId {
+            block_id: minted.clone(),
+        };
+        if let Some(target) = parsed.dependency_target.as_mut() {
+            target.block_id = Some(minted);
+        }
+    }
     let capture_line = match &parsed.kind {
         CaptureKind::Task => format_task_line(
             &parsed.body,
@@ -969,7 +993,7 @@ pub(super) fn plan_capture_item(
         }
     };
     let kind_label = capture_kind_label(&parsed.kind);
-    let task_block_id = match &parsed.kind {
+    let mut task_block_id = match &parsed.kind {
         CaptureKind::TaskWithBlockId { block_id } => Some(block_id.clone()),
         // A `:` task reports its id even when the guard creates it
         // unlinked (no Pomodoro write to read it back from).
@@ -1072,23 +1096,27 @@ pub(super) fn plan_capture_item(
                         | CaptureKind::Pomodoro { .. }
                 ) =>
         {
-            let status = match &parsed.kind {
-                CaptureKind::Pomodoro { .. } => '*',
-                _ => scheduled.as_deref().map(|_| '?').unwrap_or(' '),
-            };
-            let (augmented, parts) = plan_new_task_dependencies(
-                dependency_ctx,
-                planner,
-                &request.bob_dir,
-                parsed.route.as_deref(),
-                target.block_id.as_deref(),
-                &capture_line,
-                status,
-                child_indent.as_deref(),
-                &parsed.dependencies,
-                warnings,
-            )?;
-            Some((augmented, parts))
+            if parsed.dependencies.is_empty() {
+                None
+            } else {
+                let status = match &parsed.kind {
+                    CaptureKind::Pomodoro { .. } => '*',
+                    _ => scheduled.as_deref().map(|_| '?').unwrap_or(' '),
+                };
+                let (augmented, parts) = plan_new_task_dependencies(
+                    dependency_ctx,
+                    planner,
+                    &request.bob_dir,
+                    parsed.route.as_deref(),
+                    target.block_id.as_deref(),
+                    &capture_line,
+                    status,
+                    child_indent.as_deref(),
+                    &parsed.dependencies,
+                    warnings,
+                )?;
+                Some((augmented, parts))
+            }
         }
         Some(target) if target.kind == ParsedDependencyTargetKind::NewTask => {
             return Err(CaptureError::io(
@@ -1150,7 +1178,8 @@ pub(super) fn plan_capture_item(
             }
             _ => capture_line.clone(),
         };
-    let (block_first_line, block_child_lines) = match &new_task_dependencies {
+    let (mut block_first_line, block_child_lines) = match &new_task_dependencies
+    {
         Some((augmented, _)) => {
             let mut children = vec![augmented.dep_child.clone()];
             children.extend(sub_bullet_lines.iter().cloned());
@@ -1307,15 +1336,13 @@ pub(super) fn plan_capture_item(
         )?,
     };
     let mut pomodoro_refs = std::mem::take(&mut note_plan.pomodoro_refs);
-    let special = note_plan.pomodoro.as_ref();
-    let sub_bullet = note_plan.sub_bullet.as_ref();
-    let pomodoro_note = note_plan.pomodoro_note.as_ref();
     // Dependency effects report through `task_blocks` with the new
     // `dependency` / `dependency_target` roles, and through the
-    // `dependency_update` preview detail. BLOCKS-mirror rows ride
-    // additively as `blocks_line_updates` plus the singular
-    // `minted_dependent_block_id` (§14.11).
-    let mut dependency_update: Option<DependencyUpdateJson> = None;
+    // `dependency_update` / `dependency_updates[]` preview. BLOCKS-mirror
+    // rows ride additively as `blocks_line_updates` plus the singular
+    // `minted_dependent_block_id` (§14.11). `*` mints report separately
+    // as `minted_blocker_block_id`.
+    let mut dependency_summaries: Vec<DependencyUpdateJson> = Vec::new();
     let mut blocks_line_updates: Vec<BlocksLineUpdateJson> = Vec::new();
     let mut minted_dependent_block_id: Option<MintedDependentBlockIdJson> =
         None;
@@ -1342,7 +1369,7 @@ pub(super) fn plan_capture_item(
                 }
                 dependency_block_refs.extend(parts.target_refs.clone());
                 pomodoro_refs.extend(parts.pomodoro_refs.iter().copied());
-                dependency_update = Some(parts.summary.clone());
+                dependency_summaries.push(parts.summary.clone());
                 blocks_line_updates = parts.blocks.updates.clone();
             }
         }
@@ -1363,24 +1390,106 @@ pub(super) fn plan_capture_item(
                 }
             };
             // Prose captures normally first; the modifiers belong to the
-            // explicit parent task, outside any child section.
-            let update = plan_existing_task_dependencies(
-                dependency_ctx,
-                planner,
-                &request.bob_dir,
-                &DependentRef::from_route(&route, &block_id),
-                &parsed.dependencies,
-                warnings,
-                ExistingDependencyOptions::ampersand(),
-            )?;
-            dependency_block_refs.push(update.dependent_ref);
-            dependency_block_refs.extend(update.target_refs);
-            pomodoro_refs.extend(update.pomodoro_refs);
-            dependency_update = Some(update.summary);
-            blocks_line_updates = update.blocks.updates;
+            // explicit parent task, outside any child section. `&` first,
+            // then `*` with no Next cap.
+            if !parsed.dependencies.is_empty() {
+                let update = plan_existing_task_dependencies(
+                    dependency_ctx,
+                    planner,
+                    &request.bob_dir,
+                    &DependentRef::from_route(&route, &block_id),
+                    &parsed.dependencies,
+                    warnings,
+                    ExistingDependencyOptions::ampersand(),
+                )?;
+                absorb_dependency_write(
+                    update,
+                    &mut dependency_summaries,
+                    &mut dependency_block_refs,
+                    &mut pomodoro_refs,
+                    &mut blocks_line_updates,
+                );
+            }
         }
         _ => {}
     }
+    if !parsed.blocked_tasks.is_empty() {
+        let owner = star_owner_ref(
+            &parsed,
+            &relative_target,
+            task_block_id.as_deref(),
+            minted_dependent_block_id.as_ref(),
+            minted_blocker_block_id.as_ref(),
+        )?;
+        let options = match &parsed.dependency_target {
+            Some(target)
+                if target.kind == ParsedDependencyTargetKind::ExistingTask =>
+            {
+                ExistingDependencyOptions::star_existing_owner()
+            }
+            _ => ExistingDependencyOptions::star_new_blocker(),
+        };
+        let writes = plan_blocked_task_writes(
+            dependency_ctx,
+            planner,
+            &request.bob_dir,
+            &owner,
+            &parsed.blocked_tasks,
+            warnings,
+            options,
+        )?;
+        for write in writes {
+            absorb_dependency_write(
+                write,
+                &mut dependency_summaries,
+                &mut dependency_block_refs,
+                &mut pomodoro_refs,
+                &mut blocks_line_updates,
+            );
+        }
+        let relocated = locate_task_by_block_id(
+            dependency_ctx,
+            planner,
+            &request.bob_dir,
+            &owner.relative,
+            &owner.block_id,
+        )?;
+        if let Some(minted) = minted_blocker_block_id.as_mut() {
+            minted.line = relocated.line + 1;
+        }
+        if matches!(
+            parsed.kind,
+            CaptureKind::Task
+                | CaptureKind::TaskWithBlockId { .. }
+                | CaptureKind::Pomodoro { .. }
+        ) {
+            let contents = current_note_text(planner, &relocated.target)?;
+            if let Some(line) = contents.lines().nth(relocated.line) {
+                block_first_line = line.to_string();
+            }
+            if task_block_id.is_none() {
+                task_block_id = relocated.block_id.clone();
+            }
+        }
+        if let Some(details) = note_plan.sub_bullet.as_mut() {
+            let contents = current_note_text(planner, &relocated.target)?;
+            let scan = note_tasks::scan(&contents, dependency_ctx.settings());
+            if let Ok(task) = lookup_staged_task(
+                &scan,
+                &relocated.relative_target,
+                &owner.block_id,
+            ) {
+                details.parent_status_symbol = task.status_symbol;
+                details.parent_status_name = task.status_name.clone();
+                details.parent_line = task.line_index + 1;
+            }
+        }
+    }
+    let (dependency_update, dependency_updates) =
+        fold_dependency_updates(dependency_summaries);
+    let special = note_plan.pomodoro.as_ref();
+    let sub_bullet = note_plan.sub_bullet.as_ref();
+    let pomodoro_note = note_plan.pomodoro_note.as_ref();
     let task_block_refs = match &parsed.kind {
         CaptureKind::SubBullet { .. } => {
             if let Some(details) = note_plan.sub_bullet.as_ref() {
@@ -1510,6 +1619,8 @@ pub(super) fn plan_capture_item(
             dropped_dependencies: Vec::new(),
             blocks_line_updates,
             minted_dependent_block_id,
+            dependency_updates,
+            minted_blocker_block_id,
         },
         clip_plan,
         pomodoro_refs,
@@ -1641,6 +1752,42 @@ pub(super) fn resolve_priority(
         min_days: level.min_days(),
         max_days: level.max_days(),
         rolled_offset,
+    })
+}
+
+/// N for a `*` pass: an existing `@route+id` owner, else the new task
+/// this item just inserted (typed or minted `^id`).
+fn star_owner_ref(
+    parsed: &ParsedCaptureText,
+    relative_target: &Path,
+    task_block_id: Option<&str>,
+    minted_dependent: Option<&MintedDependentBlockIdJson>,
+    minted_blocker: Option<&MintedDependentBlockIdJson>,
+) -> Result<DependentRef, CaptureError> {
+    if let Some(target) = parsed.dependency_target.as_ref()
+        && target.kind == ParsedDependencyTargetKind::ExistingTask
+    {
+        return match (target.route.as_deref(), target.block_id.as_deref()) {
+            (Some(route), Some(block_id)) => {
+                Ok(DependentRef::from_route(route, block_id))
+            }
+            _ => Err(CaptureError::io(
+                "star capture invariant failed: existing owner without route and block ID",
+            )),
+        };
+    }
+    let block_id = task_block_id
+        .map(str::to_string)
+        .or_else(|| minted_dependent.map(|minted| minted.block_id.clone()))
+        .or_else(|| minted_blocker.map(|minted| minted.block_id.clone()))
+        .ok_or_else(|| {
+            CaptureError::io(
+                "star capture invariant failed: blocker has no block ID",
+            )
+        })?;
+    Ok(DependentRef {
+        relative: relative_target.to_path_buf(),
+        block_id,
     })
 }
 

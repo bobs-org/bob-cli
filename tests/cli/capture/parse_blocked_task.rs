@@ -1,8 +1,7 @@
-//! `*note:block-id` capture-parse grammar and temporary execution guard.
+//! `*note:block-id` capture-parse grammar.
 
 use crate::support::*;
 use serde_json::Value;
-use std::process::Output;
 
 fn parse_json(draft: &str) -> Value {
     let output = bob_command()
@@ -171,7 +170,7 @@ fn blocked_task_picker_and_markdown_guards_are_distinct() {
 }
 
 #[test]
-fn blocked_task_note_star_is_invalid_and_capture_refuses_supported_parse() {
+fn blocked_task_note_star_is_invalid() {
     let malformed = parse_json("Ask Kelly *no*te:id");
     assert_eq!(malformed["diagnostics"][0]["code"], "invalid_dependency");
     assert!(malformed["diagnostics"][0]["message"]
@@ -182,22 +181,5 @@ fn blocked_task_note_star_is_invalid_and_capture_refuses_supported_parse() {
     assert_eq!(
         malformed_dependency["diagnostics"][0]["code"],
         "invalid_dependency"
-    );
-
-    let temp = tempfile::tempdir().expect("temporary vault");
-    let output: Output = bob_command()
-        .arg("capture")
-        .arg("-b")
-        .arg(temp.path())
-        .arg("--dry-run")
-        .arg("--")
-        .arg("Ask Kelly *job:cleanup")
-        .output()
-        .expect("run unsupported capture preview");
-    assert!(!output.status.success());
-    assert!(
-        stderr(&output).contains("`*` blocked tasks are not supported yet"),
-        "{}",
-        format_output(&output)
     );
 }

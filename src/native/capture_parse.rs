@@ -302,8 +302,11 @@ the parsed task would become its prerequisite, reported separately in \
 runs and ownership rules as `&`; `*` is also a partial picker need named \
 `blocked_task`. A bare `*` opens that picker only as the last token after \
 existing text, and line-initial `*` remains a Markdown bullet. Mid-line stars, \
-`**bold**`, `*italic*`, and `5 * 3` stay literal. At this phase, \
-`bob capture` refuses recognized `*` modifiers until execution support lands. \
+`**bold**`, `*italic*`, and `5 * 3` stay literal. `bob capture` executes \
+recognized `*` modifiers through the staged batch writer: the parsed task \
+becomes a prerequisite of each named target (managed `DEPENDS ON` line plus \
+derived field, status, consumption, and BLOCKS-mirror effects); a draft with \
+blocked-task modifiers never captures without them. \
 The retired \
 '@route::...' spelling is a diagnostic directing users to '@route^...'; \
 it is not an incomplete Pomodoro marker. A bare trailing '#' reports mode \

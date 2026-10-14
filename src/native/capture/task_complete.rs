@@ -593,6 +593,8 @@ pub(super) fn plan_task_complete_item(
             dropped_dependencies: Vec::new(),
             blocks_line_updates: Vec::new(),
             minted_dependent_block_id: None,
+            dependency_updates: Vec::new(),
+            minted_blocker_block_id: None,
         },
         clip_plan: None,
         pomodoro_refs,
@@ -732,6 +734,8 @@ fn already_done_item(
             dropped_dependencies: Vec::new(),
             blocks_line_updates: Vec::new(),
             minted_dependent_block_id: None,
+            dependency_updates: Vec::new(),
+            minted_blocker_block_id: None,
             task_complete: Some(TaskCompleteSummaryJson {
                 raw: raw.to_string(),
                 note: note.to_string(),

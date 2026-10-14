@@ -51,7 +51,6 @@ pub(crate) const INBOX_FILE: &str = "mac_inbox.md";
 
 mod batch;
 mod block_diff;
-#[allow(dead_code)]
 mod blocked_tasks;
 mod blocks_mirror;
 mod budget;
@@ -83,6 +82,7 @@ mod tests;
 
 use batch::*;
 use block_diff::*;
+use blocked_tasks::*;
 use blocks_mirror::*;
 use budget::*;
 use cli::*;

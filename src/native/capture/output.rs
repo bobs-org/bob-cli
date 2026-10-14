@@ -448,6 +448,17 @@ pub(super) struct CaptureItemResult {
     /// if any. Additive: omitted when no mint happens.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) minted_dependent_block_id: Option<MintedDependentBlockIdJson>,
+    /// Every dependency update this item made: the item's own `&` update
+    /// first, then one per `*` target in typed order. Present whenever
+    /// at least one update exists, so `&`-only items carry it too. The
+    /// singular `dependency_update` equals the first entry.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(super) dependency_updates: Vec<DependencyUpdateJson>,
+    /// N's `^block-id` minted so a `*` write can name it. Never reuse
+    /// `minted_dependent_block_id`, which is `&`'s BLOCKS mint for N as
+    /// dependent. Additive: omitted when the ID was typed, not minted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) minted_blocker_block_id: Option<MintedDependentBlockIdJson>,
 }
 
 /// Why a link gesture left its target unlinked (§13.5 gesture rule):
@@ -761,8 +772,7 @@ pub(super) struct TaskCompleteStillBlockedJson {
 #[serde(rename_all = "snake_case")]
 pub(super) enum DependencyUpdateRole {
     Dependent,
-    /// Execute fills this for each `*` target.
-    #[allow(dead_code)]
+    /// One `*` target: T is the dependent, N is the prerequisite.
     BlockedTask,
 }
 
@@ -1456,9 +1466,7 @@ pub(super) fn print_human_item_success(
         println!("  under {marker}{parent_text}{block_id}{parent_section}");
     }
     println!("  {}", styler.dim(&result.task_line));
-    if let Some(update) = result.dependency_update.as_ref() {
-        print_human_dependency_line(update, &styler);
-    }
+    print_human_dependency_updates(result, &styler);
     print_human_link_guard(result, &styler);
     if result.kind == "pomodoro_task"
         && let Some(destination) = result.pomodoro_link_destination.as_ref()
@@ -2092,7 +2100,74 @@ pub(super) fn print_human_task_dependency_success(
         update.dependent_text
     );
     println!("  {}", styler.dim(&result.task_line));
-    print_human_dependency_line(update, styler);
+    print_human_dependency_updates(result, styler);
+}
+
+fn print_human_dependency_updates(result: &CaptureItemResult, styler: &Styler) {
+    let updates: Vec<&DependencyUpdateJson> =
+        if !result.dependency_updates.is_empty() {
+            result.dependency_updates.iter().collect()
+        } else {
+            result.dependency_update.iter().collect()
+        };
+    for update in updates {
+        match update.role {
+            DependencyUpdateRole::Dependent => {
+                print_human_dependency_line(update, styler);
+            }
+            DependencyUpdateRole::BlockedTask => {
+                print_human_blocked_task_line(result, update, styler);
+            }
+        }
+    }
+}
+
+fn print_human_blocked_task_line(
+    result: &CaptureItemResult,
+    update: &DependencyUpdateJson,
+    styler: &Styler,
+) {
+    let existing_owner = result.kind == "task_dependency";
+    let verb = match (result.dry_run, existing_owner) {
+        (true, true) => "would now block",
+        (false, true) => "now blocks",
+        (true, false) => "would block",
+        (false, false) => "blocks",
+    };
+    let owner = if existing_owner {
+        result
+            .block_id
+            .as_deref()
+            .map(|id| format!("^{id} "))
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
+    let previous = style_task_status_marker(styler, update.previous_status);
+    let next = style_task_status_marker(styler, update.dependent_status);
+    let block_id = update
+        .dependent_block_id
+        .as_deref()
+        .map(|id| format!(" ^{id}"))
+        .unwrap_or_default();
+    let mut line = format!(
+        "  🧱 {owner}{verb} \"{}\"  {}{block_id}  {previous} → {next} {}",
+        update.dependent_text,
+        update.dependent_note,
+        update.dependent_status_name,
+    );
+    if update.blocked_residents > 0 {
+        let noun = if update.blocked_residents == 1 {
+            "task"
+        } else {
+            "tasks"
+        };
+        line.push_str(&format!(
+            " · blocked {} project {noun}",
+            update.blocked_residents
+        ));
+    }
+    println!("{line}");
 }
 
 /// One shared `⛓ depends on …` trailer for every capture carrying a

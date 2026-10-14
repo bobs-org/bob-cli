@@ -3,6 +3,7 @@
 mod authored;
 mod bare;
 mod batch;
+mod blocked_tasks;
 mod blocks;
 mod clip;
 mod complete_block_id;

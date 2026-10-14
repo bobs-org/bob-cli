@@ -525,7 +525,6 @@ impl ExistingDependencyOptions {
     }
 
     /// Execute applies this cap when N is new in the capture.
-    #[allow(dead_code)]
     pub(super) fn star_new_blocker() -> Self {
         Self {
             transfer_cap: lane_for_status('*'),
@@ -534,7 +533,6 @@ impl ExistingDependencyOptions {
     }
 
     /// Execute applies this when an existing owner is the blocker.
-    #[allow(dead_code)]
     pub(super) fn star_existing_owner() -> Self {
         Self {
             transfer_cap: None,
@@ -2959,7 +2957,6 @@ pub(super) fn locate_new_task_ref(
 
 /// Re-find a task by block ID in staged (or on-disk) note text after
 /// later passes have rewritten its line (`[id::]`, lane, BLOCKS).
-#[allow(dead_code)]
 pub(super) fn locate_task_by_block_id(
     ctx: &DependencyContext,
     planner: &mut CaptureBatchPlanner,
@@ -3048,25 +3045,68 @@ pub(super) fn plan_dependency_only_item(
         .nth(previous_task.line_index)
         .unwrap_or_default()
         .to_string();
-    let update = plan_existing_task_dependencies(
+    let owner = DependentRef::from_route(&route, &block_id);
+    let mut dependency_summaries: Vec<DependencyUpdateJson> = Vec::new();
+    let mut blocks_line_updates: Vec<BlocksLineUpdateJson> = Vec::new();
+    let mut task_block_refs: Vec<TaskBlockRef> = Vec::new();
+    let mut pomodoro_refs: Vec<PomodoroBlockRef> = Vec::new();
+    // `&` first (uncapped), then `*` with no Next cap. Skip an empty
+    // `&` rewrite so a star-only owner does not restage its line.
+    if !parsed.dependencies.is_empty() {
+        let update = plan_existing_task_dependencies(
+            ctx,
+            planner,
+            &request.bob_dir,
+            &owner,
+            &parsed.dependencies,
+            warnings,
+            ExistingDependencyOptions::ampersand(),
+        )?;
+        absorb_dependency_write(
+            update,
+            &mut dependency_summaries,
+            &mut task_block_refs,
+            &mut pomodoro_refs,
+            &mut blocks_line_updates,
+        );
+    }
+    if !parsed.blocked_tasks.is_empty() {
+        let writes = plan_blocked_task_writes(
+            ctx,
+            planner,
+            &request.bob_dir,
+            &owner,
+            &parsed.blocked_tasks,
+            warnings,
+            ExistingDependencyOptions::star_existing_owner(),
+        )?;
+        for write in writes {
+            absorb_dependency_write(
+                write,
+                &mut dependency_summaries,
+                &mut task_block_refs,
+                &mut pomodoro_refs,
+                &mut blocks_line_updates,
+            );
+        }
+    }
+    let relocated = locate_task_by_block_id(
         ctx,
         planner,
         &request.bob_dir,
-        &DependentRef::from_route(&route, &block_id),
-        &parsed.dependencies,
-        warnings,
-        ExistingDependencyOptions::ampersand(),
+        &owner.relative,
+        &owner.block_id,
     )?;
-    let summary = update.summary.clone();
-    let blocks_updates = update.blocks.updates.clone();
-    let final_contents = current_note_text(planner, &absolute)?;
+    let final_contents = current_note_text(planner, &relocated.target)?;
     let final_line = final_contents
         .lines()
-        .nth(update.dependent_ref.line)
+        .nth(relocated.line)
         .unwrap_or_default()
         .to_string();
-    let mut task_block_refs = vec![update.dependent_ref];
-    task_block_refs.extend(update.target_refs);
+    let final_scan = note_tasks::scan(&final_contents, ctx.settings());
+    let final_task = lookup_staged_task(&final_scan, &route, &block_id)?;
+    let (dependency_update, dependency_updates) =
+        fold_dependency_updates(dependency_summaries);
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
             ok: true,
@@ -3076,7 +3116,7 @@ pub(super) fn plan_dependency_only_item(
             route_label: route_label(&route),
             relative_target: relative_target.to_string_lossy().into_owned(),
             target: absolute.display().to_string(),
-            text: summary.dependent_text.clone(),
+            text: final_task.description.clone(),
             task_line: final_line,
             kind: "task_dependency",
             created: date_string(ctx.today),
@@ -3098,8 +3138,8 @@ pub(super) fn plan_dependency_only_item(
             parent_status_name: None,
             toggle_direction: None,
             previous_task_line: Some(previous_line),
-            status_symbol: Some(summary.dependent_status),
-            status_name: Some(summary.dependent_status_name.clone()),
+            status_symbol: Some(final_task.status_symbol),
+            status_name: Some(final_task.status_name.clone()),
             previous_status_symbol: Some(previous_task.status_symbol),
             previous_status_name: Some(previous_task.status_name.clone()),
             pomodoro_name: None,
@@ -3109,7 +3149,9 @@ pub(super) fn plan_dependency_only_item(
             removed_scheduled: None,
             pomodoro_selector_unused: None,
             toggle_behavior: None,
-            status_changed: Some(summary.status_changed),
+            status_changed: Some(
+                final_task.status_symbol != previous_task.status_symbol,
+            ),
             pomodoro_link_action: None,
             pomodoro_link_source: None,
             pomodoro_link_destination: None,
@@ -3119,18 +3161,20 @@ pub(super) fn plan_dependency_only_item(
             pomodoro_shift: None,
             pomodoro_close: None,
             pomodoro_reset: None,
-            dependency_update: Some(summary),
+            dependency_update,
             consumed_links: Vec::new(),
             task_complete: None,
             toggle_task_description: None,
             r#ref: None,
             link_guard: None,
             dropped_dependencies: Vec::new(),
-            blocks_line_updates: blocks_updates,
+            blocks_line_updates,
             minted_dependent_block_id: None,
+            dependency_updates,
+            minted_blocker_block_id: None,
         },
         clip_plan: None,
-        pomodoro_refs: update.pomodoro_refs,
+        pomodoro_refs,
         task_block_refs,
     })
 }
