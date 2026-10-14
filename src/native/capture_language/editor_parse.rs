@@ -572,7 +572,7 @@ fn pending_colon_dependency_target(
     marker_text: Option<&str>,
 ) -> Option<DependencyTarget> {
     let marker = marker_text?;
-    if !marker.starts_with('@')
+    if !(marker.starts_with('@') || marker.starts_with('^'))
         || !marker.contains(':')
         || marker.contains('+')
         || marker.contains('#')
@@ -601,7 +601,15 @@ fn dependency_owner_mode_word(mode: EditorMode) -> &'static str {
         }
         EditorMode::PomodoroClose => "Pomodoro-close",
         EditorMode::PomodoroStart => "Pomodoro-start",
-        _ => "Pomodoro-ledger-link",
+        EditorMode::TaskComplete => "task-complete",
+        EditorMode::Ref => "reference",
+        EditorMode::PomodoroLink | EditorMode::PomodoroTask => {
+            "Pomodoro-ledger-link"
+        }
+        EditorMode::TaskToggle
+        | EditorMode::SubBullet
+        | EditorMode::TaskDependency => "task-toggle",
+        EditorMode::Task | EditorMode::Incomplete => "task",
     }
 }
 
@@ -892,6 +900,8 @@ pub(super) fn parse_editor_task_complete_item<'a>(
 /// leading-colon picker, it is never previewed or submitted as an ordinary
 /// task; the explicit selection writes a scoped `@route+block-id` marker.
 /// The exact lone parent-line `+` remains the existing Pomodoro adjustment.
+/// Beside `&`/`*` the outcome keeps those modifiers and does not diagnose
+/// them as an unsupported operator target.
 pub(super) fn parse_editor_parent_task_item<'a>(
     item: &CaptureItem<'a>,
 ) -> Option<EditorItemOutcome<'a>> {
@@ -899,6 +909,40 @@ pub(super) fn parse_editor_parent_task_item<'a>(
         .into_iter()
         .find(|selector| !selector.dual_use_adjustment)?;
     let token = selector.token;
+    let found = scan_item_dependencies(item, true);
+    let mut needs = vec![Need::TaskParent];
+    if !found.partials.is_empty() && !needs.contains(&Need::TaskDependency) {
+        needs.push(Need::TaskDependency);
+    }
+    if !found.blocked_partials.is_empty() && !needs.contains(&Need::BlockedTask)
+    {
+        needs.push(Need::BlockedTask);
+    }
+    let mut diagnostics = Vec::new();
+    for invalid in found.invalid.iter().chain(found.blocked_invalid.iter()) {
+        diagnostics.push(Diagnostic {
+            severity: Severity::Error,
+            code: "invalid_dependency",
+            message: invalid.message.clone(),
+            range: Some((invalid.start, invalid.end)),
+        });
+    }
+    let parent = item.lines.first()?;
+    let parent_tokens = tokenize_line_with_spans(&parent.raw);
+    let (_, parent_deps) = extract_line_dependencies(
+        parent_tokens,
+        parent.raw.text,
+        parent.raw.start,
+        true,
+        true,
+    );
+    let mut spans = parent_deps.spans;
+    spans.push(Span {
+        start: token.start,
+        end: token.end,
+        kind: SpanKind::InteractivePlaceholder,
+    });
+    spans.sort_by_key(|span| (span.start, span.end));
     Some(EditorItemOutcome {
         item: EditorItemParse {
             index: item.index,
@@ -911,22 +955,18 @@ pub(super) fn parse_editor_parent_task_item<'a>(
             route: None,
             section: None,
             block_id: None,
-            needs: vec![Need::TaskParent],
+            needs,
             ref_listen: false,
             pomodoro_start: None,
             pomodoro_adjust: None,
             pomodoro_shift: None,
             pomodoro_close: None,
-            dependencies: Vec::new(),
-            blocked_tasks: Vec::new(),
+            dependencies: found.dependency_entries(),
+            blocked_tasks: found.blocked_task_entries(),
             dependency_target: None,
             task_complete: None,
-            spans: vec![Span {
-                start: token.start,
-                end: token.end,
-                kind: SpanKind::InteractivePlaceholder,
-            }],
-            diagnostics: Vec::new(),
+            spans,
+            diagnostics,
             sub_bullets: Vec::new(),
             has_local_destination: true,
             local_destination_markers: Vec::new(),
@@ -1303,7 +1343,7 @@ pub(super) fn parse_editor_item_with<'a>(
         return attach_operator_dependency_rejection(close, item);
     }
     if let Some(parent_task) = parse_editor_parent_task_item(item) {
-        return attach_operator_dependency_rejection(parent_task, item);
+        return parent_task;
     }
     if let Some(adjustment) = parse_editor_adjust_item(item) {
         return attach_operator_dependency_rejection(adjustment, item);
@@ -1596,7 +1636,10 @@ pub(super) fn parse_editor_item_with<'a>(
         });
         let close_defers_schedule =
             pomodoro_close.is_some() && (seen.schedule || seen.priority);
-        let conflict = if !sub_bullets.is_empty() {
+        let conflict = if item_dependencies.has_entries() {
+            // Relationship extras use `relationship_needs_text`.
+            None
+        } else if !sub_bullets.is_empty() {
             Some(POMODORO_LINK_CHILD_CONFLICT_ERROR)
         } else if seen.schedule && !close_defers_schedule {
             Some(POMODORO_LINK_SCHEDULE_CONFLICT_ERROR)
@@ -2036,6 +2079,18 @@ pub(super) fn parse_editor_item_with<'a>(
                 needs = vec![Need::ActiveTask];
                 pomodoro_start = None;
                 pomodoro_close = None;
+                local_destination_markers.push(LocalDestinationMarker {
+                    start: token_start,
+                    end: token_end,
+                    text: caret.token.text.to_string(),
+                    mode: EditorMode::Incomplete,
+                    route: route.clone(),
+                    block_id: None,
+                    section: None,
+                });
+                local_destination_marker = local_destination_markers
+                    .last()
+                    .map(|marker| marker.text.clone());
                 spans.push(Span {
                     start: token_start,
                     end: token_end,
@@ -2126,7 +2181,16 @@ pub(super) fn parse_editor_item_with<'a>(
             });
         }
         let parent_marker = parent_parse.marker.as_ref();
-        let aliased = mode == EditorMode::PomodoroLink
+        let caret_aliased = has_caret_item
+            && body.is_empty()
+            && section.is_none()
+            && pomodoro_start.is_none()
+            && pomodoro_close.is_none()
+            && matches!(
+                mode,
+                EditorMode::PomodoroLink | EditorMode::Incomplete
+            );
+        let aliased = (mode == EditorMode::PomodoroLink
             && !has_caret_item
             && parent_marker.is_some_and(|marker| {
                 marker.mode == EditorMode::PomodoroTask
@@ -2134,15 +2198,9 @@ pub(super) fn parse_editor_item_with<'a>(
                     && marker.pomodoro_start.is_none()
                     && marker.pomodoro_close.is_none()
             })
-            && body.is_empty()
-            && sub_bullets.is_empty();
-        if has_caret_item {
-            diagnostics.push(dependency_unsupported_target_diagnostic(
-                mode,
-                None,
-                item_dependencies.sigil(),
-            ));
-        } else if has_explicit_toggle {
+            && body.is_empty())
+            || (caret_aliased && mode == EditorMode::PomodoroLink);
+        if has_explicit_toggle {
             diagnostics.push(invalid_dependency_target_diagnostic(
                 local_destination_marker.as_deref().unwrap_or("@route+id"),
                 spans.iter().find_map(|span| {
@@ -2155,14 +2213,27 @@ pub(super) fn parse_editor_item_with<'a>(
             && parent_marker.is_some_and(|marker| {
                 matches!(marker.mode, EditorMode::SubBullet)
             })
-            && let Some(target) = existing_dependency_target(&route, &block_id)
         {
-            mode = EditorMode::TaskDependency;
-            if let Some(index) = own_local_destination_marker_index {
-                local_destination_markers[index].mode =
-                    EditorMode::TaskDependency;
+            let owner =
+                local_destination_marker.as_deref().unwrap_or("@route+id");
+            if owner_marker_is_suffixed(owner) {
+                diagnostics.push(invalid_dependency_target_diagnostic(
+                    owner,
+                    local_destination_markers
+                        .first()
+                        .map(|marker| (marker.start, marker.end)),
+                    item_dependencies.sigil(),
+                ));
+            } else if let Some(target) =
+                existing_dependency_target(&route, &block_id)
+            {
+                mode = EditorMode::TaskDependency;
+                if let Some(index) = own_local_destination_marker_index {
+                    local_destination_markers[index].mode =
+                        EditorMode::TaskDependency;
+                }
+                dependency_target = Some(target);
             }
-            dependency_target = Some(target);
         } else if aliased
             && let Some(target) = existing_dependency_target(&route, &block_id)
         {
@@ -2170,16 +2241,27 @@ pub(super) fn parse_editor_item_with<'a>(
             if let Some(index) = own_local_destination_marker_index {
                 local_destination_markers[index].mode =
                     EditorMode::TaskDependency;
+            } else if let Some(index) = local_destination_markers
+                .iter()
+                .position(|marker| marker.text.starts_with('^'))
+            {
+                local_destination_markers[index].mode =
+                    EditorMode::TaskDependency;
             }
             dependency_target = Some(target);
         } else if mode == EditorMode::PomodoroLink {
-            diagnostics.push(invalid_dependency_target_diagnostic(
-                local_destination_marker.as_deref().unwrap_or("@route:id"),
-                local_destination_markers
-                    .first()
-                    .map(|marker| (marker.start, marker.end)),
-                item_dependencies.sigil(),
-            ));
+            if !diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "invalid_pomodoro_link")
+            {
+                diagnostics.push(invalid_dependency_target_diagnostic(
+                    local_destination_marker.as_deref().unwrap_or("@route:id"),
+                    local_destination_markers
+                        .first()
+                        .map(|marker| (marker.start, marker.end)),
+                    item_dependencies.sigil(),
+                ));
+            }
         } else if mode == EditorMode::SubBullet
             && let Some(target) = existing_dependency_target(&route, &block_id)
         {
@@ -2189,7 +2271,9 @@ pub(super) fn parse_editor_item_with<'a>(
             && block_id.is_none()
             && let Some(pending) = pending_colon_dependency_target(
                 &route,
-                parent_parse.marker_text.as_deref(),
+                local_destination_marker
+                    .as_deref()
+                    .or(parent_parse.marker_text.as_deref()),
             )
         {
             dependency_target = Some(pending);
@@ -2210,6 +2294,51 @@ pub(super) fn parse_editor_item_with<'a>(
                 None,
                 item_dependencies.sigil(),
             ));
+        }
+        if matches!(
+            dependency_target.as_ref().map(|target| &target.kind),
+            Some(DependencyTargetKind::ExistingTask)
+        ) && body.is_empty()
+            && (seen.schedule
+                || seen.priority
+                || seen.clip
+                || !sub_bullets.is_empty())
+        {
+            let owner =
+                local_destination_marker.as_deref().unwrap_or("@route+id");
+            let (offending, range) = if let Some(span) =
+                spans.iter().find(|span| {
+                    matches!(
+                        span.kind,
+                        SpanKind::Schedule
+                            | SpanKind::Priority
+                            | SpanKind::Clipboard
+                    )
+                }) {
+                (
+                    item.source.get(span.start..span.end).unwrap_or("p:2"),
+                    Some((span.start, span.end)),
+                )
+            } else {
+                let child_range = item.lines.iter().skip(1).find_map(|line| {
+                    matches!(
+                        classify_authored_line(line.raw),
+                        AuthoredLineClass::Item(_)
+                    )
+                    .then_some((line.raw.start, line.raw.end))
+                });
+                ("child bullets", child_range)
+            };
+            diagnostics.push(Diagnostic {
+                severity: Severity::Error,
+                code: "relationship_needs_text",
+                message: relationship_needs_text_error(
+                    offending,
+                    owner,
+                    &relation_modifier_raws(&item_dependencies),
+                ),
+                range,
+            });
         }
         if !item_dependencies.partials.is_empty()
             && !needs.contains(&Need::TaskDependency)

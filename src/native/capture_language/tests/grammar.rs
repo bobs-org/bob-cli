@@ -1,6 +1,7 @@
 //! Grammar and marker parsing tests.
 
 use super::super::completion::*;
+use super::super::dependencies::*;
 use super::super::draft::*;
 use super::super::editor_classify::*;
 use super::super::editor_model::*;
@@ -2088,6 +2089,221 @@ fn plus_parent_picker_does_not_claim_operators_or_work_log_text() {
     let log = "=x\n- 1 worked on the task +";
     let parsed = editor(log);
     assert_ne!(parsed.needs, vec![Need::TaskParent]);
+}
+
+fn assert_existing_owner(
+    parsed: &EditorParse,
+    route: &str,
+    block_id: &str,
+    raw: &str,
+) {
+    assert_eq!(parsed.mode, EditorMode::TaskDependency, "{raw}");
+    assert_eq!(parsed.body, "", "{raw}");
+    assert_eq!(parsed.route.as_deref(), Some(route), "{raw}");
+    assert_eq!(parsed.block_id.as_deref(), Some(block_id), "{raw}");
+    assert!(parsed.needs.is_empty(), "{raw}");
+    assert_eq!(
+        parsed.dependency_target,
+        Some(DependencyTarget {
+            kind: DependencyTargetKind::ExistingTask,
+            route: Some(route.to_string()),
+            block_id: Some(block_id.to_string()),
+            inherited: false,
+        }),
+        "{raw}"
+    );
+    assert!(
+        parsed.diagnostics.is_empty(),
+        "{raw}: {:?}",
+        parsed.diagnostics
+    );
+}
+
+fn assert_execute_existing_owner(
+    parsed: &ParsedCaptureText,
+    route: &str,
+    block_id: &str,
+    raw: &str,
+) {
+    assert_eq!(parsed.body, "", "{raw}");
+    assert_eq!(parsed.route.as_deref(), Some(route), "{raw}");
+    assert_eq!(
+        parsed.dependency_target,
+        Some(ParsedDependencyTarget {
+            kind: ParsedDependencyTargetKind::ExistingTask,
+            route: Some(route.to_string()),
+            block_id: Some(block_id.to_string()),
+            inherited: false,
+        }),
+        "{raw}"
+    );
+}
+
+#[test]
+fn caret_alias_owns_relationships_in_leading_and_trailing_position() {
+    for raw in ["^body:excercise &foo:bar", "&foo:bar ^body:excercise"] {
+        let parsed = editor(raw);
+        assert_existing_owner(&parsed, "body", "excercise", raw);
+        assert_eq!(parsed.dependencies[0].raw, "&foo:bar", "{raw}");
+        let executed = execute(raw).expect(raw);
+        assert_execute_existing_owner(&executed, "body", "excercise", raw);
+        assert!(
+            matches!(
+                executed.kind,
+                CaptureKind::PomodoroLink {
+                    spelling: PomodoroLinkSpelling::Caret,
+                    ..
+                }
+            ),
+            "{raw}: {:?}",
+            executed.kind
+        );
+        assert_eq!(executed.dependencies[0].raw, "&foo:bar", "{raw}");
+    }
+
+    let star = "^body:excercise *job:cleanup";
+    let parsed = editor(star);
+    assert_existing_owner(&parsed, "body", "excercise", star);
+    assert_eq!(parsed.blocked_tasks[0].raw, "*job:cleanup");
+    let executed = execute(star).expect(star);
+    assert_execute_existing_owner(&executed, "body", "excercise", star);
+    assert_eq!(executed.blocked_tasks[0].raw, "*job:cleanup");
+}
+
+#[test]
+fn colon_alias_owner_is_unchanged_beside_modifiers() {
+    let raw = "@body:excercise &foo:bar";
+    let parsed = editor(raw);
+    assert_existing_owner(&parsed, "body", "excercise", raw);
+    let executed = execute(raw).expect(raw);
+    assert_execute_existing_owner(&executed, "body", "excercise", raw);
+    assert!(matches!(
+        executed.kind,
+        CaptureKind::PomodoroLink {
+            spelling: PomodoroLinkSpelling::At,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn plus_selector_beside_modifiers_needs_task_parent() {
+    for raw in [
+        "+ &foo:bar",
+        "+ex &foo:bar",
+        "&foo:bar +",
+        "*job:cleanup +ex",
+    ] {
+        let parsed = editor(raw);
+        assert_eq!(parsed.mode, EditorMode::Incomplete, "{raw}");
+        assert_eq!(parsed.needs, vec![Need::TaskParent], "{raw}");
+        assert!(
+            parsed.diagnostics.is_empty(),
+            "{raw}: {:?}",
+            parsed.diagnostics
+        );
+        assert!(parsed.body.is_empty(), "{raw}");
+        let selector = raw
+            .split_whitespace()
+            .find(|token| token.starts_with('+'))
+            .expect("selector");
+        assert_eq!(
+            execute(raw).expect_err(raw),
+            parent_task_relate_error(selector),
+            "{raw}"
+        );
+    }
+
+    let leading = editor("+ &foo:bar");
+    assert_eq!(leading.dependencies[0].raw, "&foo:bar");
+    let trailing = editor("&foo:bar +");
+    assert_eq!(trailing.dependencies[0].raw, "&foo:bar");
+    let query = editor("+ex &foo:bar");
+    assert_eq!(query.dependencies[0].raw, "&foo:bar");
+    let star = editor("*job:cleanup +ex");
+    assert_eq!(star.blocked_tasks[0].raw, "*job:cleanup");
+
+    let lone_plus = editor("+");
+    assert_eq!(lone_plus.mode, EditorMode::PomodoroAdjust);
+    assert!(lone_plus.needs.is_empty());
+    assert!(lone_plus.diagnostics.is_empty());
+    assert!(matches!(
+        execute("+").expect("lone + stays an adjustment").kind,
+        CaptureKind::PomodoroAdjust { .. }
+    ));
+}
+
+#[test]
+fn relationship_only_owner_refuses_text_extras() {
+    let owner = "@body+excercise";
+    let rel = "&foo:bar";
+    for (raw, token) in [
+        ("@body+excercise &foo:bar p:2", "p:2"),
+        ("@body+excercise &foo:bar s:3", "s:3"),
+        ("@body+excercise &foo:bar %", "%"),
+    ] {
+        let expected =
+            relationship_needs_text_error(token, owner, &[rel.to_string()]);
+        assert_eq!(execute(raw).expect_err(raw), expected, "{raw}");
+        let parsed = editor(raw);
+        assert_eq!(codes(&parsed), vec!["relationship_needs_text"], "{raw}");
+        assert_eq!(parsed.diagnostics[0].message, expected, "{raw}");
+        assert_eq!(
+            parsed.dependency_target.as_ref().map(|target| &target.kind),
+            Some(&DependencyTargetKind::ExistingTask),
+            "{raw}"
+        );
+    }
+
+    let children = "@body+excercise &foo:bar\n- note";
+    let expected = relationship_needs_text_error(
+        "child bullets",
+        owner,
+        &[rel.to_string()],
+    );
+    assert_eq!(execute(children).expect_err(children), expected);
+    let parsed = editor(children);
+    assert_eq!(codes(&parsed), vec!["relationship_needs_text"]);
+    assert_eq!(parsed.diagnostics[0].message, expected);
+}
+
+#[test]
+fn suffixed_owners_keep_must_be_bare_refusals() {
+    let plus_named = "@body+excercise#bugs &foo:bar";
+    let plus_expected =
+        invalid_relation_target_error("@body+excercise#bugs", b'&');
+    assert_eq!(execute(plus_named).expect_err(plus_named), plus_expected);
+    let parsed = editor(plus_named);
+    assert_eq!(
+        codes(&parsed),
+        vec!["invalid_dependency_target"],
+        "{plus_named}"
+    );
+    assert_eq!(parsed.diagnostics[0].message, plus_expected);
+
+    let bang = "@body+excercise! *job:cleanup";
+    let bang_expected = invalid_relation_target_error("@body+excercise!", b'*');
+    assert_eq!(execute(bang).expect_err(bang), bang_expected);
+    let parsed = editor(bang);
+    assert_eq!(codes(&parsed), vec!["invalid_dependency_target"], "{bang}");
+    assert_eq!(parsed.diagnostics[0].message, bang_expected);
+
+    let caret_close = "^body:excercise=x &foo:bar";
+    let caret_expected =
+        invalid_relation_target_error("^body:excercise=x", b'&');
+    assert_eq!(execute(caret_close).expect_err(caret_close), caret_expected);
+    let parsed = editor(caret_close);
+    assert_eq!(
+        codes(&parsed),
+        vec!["invalid_dependency_target"],
+        "{caret_close}"
+    );
+    assert_eq!(parsed.diagnostics[0].message, caret_expected);
+    assert!(
+        !codes(&parsed).contains(&"dependency_unsupported_target"),
+        "{caret_close}: {:?}",
+        parsed.diagnostics
+    );
 }
 
 #[test]

@@ -272,10 +272,11 @@ single-line item starting with ':' is a task-picker query: it reports mode \
 over the whole token (sigil included) and no diagnostics, and it is never \
 captured. A whole draft that is one `/` token (with no second `/`) reports \
 'incomplete' needing `task_goto` with one `interactive_placeholder` span; \
-`bob capture` refuses it. A terminal `+query` on an item parent line or eligible authored \
-child line is an unresolved parent-task selector: it reports `incomplete` \
-needing `task_parent` with a placeholder over the full token, and capture \
-refuses it until a task is selected. An exact lone `+` remains the existing \
+`bob capture` refuses it. A `+query` token that is the item's whole remaining body after `&`/`*` \
+modifiers leave (leading `+ &foo:bar` or trailing `&foo:bar +`) is an \
+unresolved parent-task selector: it reports `incomplete` needing \
+`task_parent` with a placeholder over the full token, keeps the modifiers, \
+and capture refuses it until a task is selected. An exact lone `+` remains the existing \
 Pomodoro adjustment in parsing. An `&note:block-id` modifier names a prerequisite task link \
 (`&projects/foo:bar`; quote notes with spaces: `&\"Shopping List\":bar`): \
 one or more modifiers lead or trail the parent line (interleaving with \
@@ -285,8 +286,11 @@ close an authored child line, and each adds a per-item `dependencies` entry \
 with `dependency_sigil`, `dependency_note`, and `dependency_block_id` \
 spans. Body text keeps its established mode and gains a `dependency_target` \
 (`new_task` for a task this capture would create); a bare `&note:block-id` \
-with an explicit `@note+task-id` (or the narrow bare `@note:id` colon \
-alias) reports mode 'task_dependency' with an `existing_task` target. An \
+with an explicit `@note+task-id` (or the narrow bare `@note:id` / \
+`^note:id` aliases, leading or trailing) reports mode 'task_dependency' \
+with an `existing_task` target. A bare existing owner with `p:<N>`, \
+`s:<N>`, `%…`, or child bullets reports a `relationship_needs_text` \
+diagnostic. An \
 ownerless `&note:block-id` reports mode 'incomplete' needing \
 `dependency_target`, and a partial `&`, `&query`, or `&note:` needs \
 `task_dependency` with a placeholder span over the typed query. A mid-line \
@@ -329,7 +333,7 @@ If TEXT is omitted and stdin is piped, it reads the complete piped stdin \
 stream.",
         )
         .after_help(
-            "Examples:\n  bob capture-parse --format json -- 'Call bank @cash+'\n  bob capture-parse 'Call bank @Cash+'\n  bob capture-parse -f json -- 'jot idea @notes#Ideas'\n  bob capture-parse -f json -- 'Postgres 17 minimum @foo+bar#req'\n  bob capture-parse -f json -- '@cash+goog-exit'\n  bob capture-parse -f json -- '+5'\n  bob capture-parse -f json -- '-2'\n  bob capture-parse -f json -- '++3'\n  bob capture-parse -f json -- '--'\n  bob capture-parse -f json -- '+'\n  printf '++3\\n\\nCall bank @Cash+\\n' | bob capture-parse -f json\n  printf '+5\\n\\nCall bank @Cash+\\n' | bob capture-parse -f json\n  echo 'Do work @dev^focus-123' | bob capture-parse -f json\n  echo 'Do work @dev:focus-123' | bob capture-parse -f json\n  echo 'Do work @dev:focus-123#' | bob capture-parse -f json\n  printf '@@foo\\nFirst task\\n\\nSecond task @bar\\n' | bob capture-parse -f json\n  printf 'Parent\\n- first child\\n\\nSecond @work\\n' | bob capture-parse\n  bob capture-parse -f json -- '=x'\n  bob capture-parse -f json -- '=x1,3!2'\n  bob capture-parse -f json -- '=x1~2'\n  bob capture-parse -f json -- '=x0!2'\n  printf '=x\\n- 1 wired the lexer\\n' | bob capture-parse -f json\n  printf '=x\\n- 1\\n' | bob capture-parse -f json\n  printf '=x =\\n- 1 wired it\\n' | bob capture-parse -f json\n  bob capture-parse -f json -- '='\n  bob capture-parse -f json -- '=3'\n  bob capture-parse -f json -- '=~2'\n  bob capture-parse -f json -- '=3#bugs~1'\n  bob capture-parse -f json -- '=x =~2'\n  bob capture-parse -f json -- '@r:id=x'\n  bob capture-parse -f json -- '^r:id=x1'\n  printf '=x\\n\\n=\\n' | bob capture-parse -f json\n  bob capture-parse -f json -- '+2 =x'\n  bob capture-parse -f json -- 'Buy Groceries! &foo:bar'\n  bob capture-parse -f json -- 'Ask Kelly *job:cleanup'\n  bob capture-parse -f json -- '&foo:bar @body+excercise'\n  bob capture-parse -f json -- '&foo:bar'\n  bob capture-parse -f json -- 'Buy Groceries! &fo'\n  bob capture-parse -f json -- '/fix'\n\nModes:\n  task, bullet, pomodoro_task, pomodoro_note, sub_bullet, task_toggle, project_note, pomodoro_project_note, pomodoro_adjust, pomodoro_shift, pomodoro_link, pomodoro_close, pomodoro_start, task_dependency, task_complete, ref, incomplete\n\nNeeds:\n  route, section, block_id, pomodoro_id, pomodoro_name, task, task_section, active_task, task_link, task_goto, task_parent, pomodoro_close_task, pomodoro_close_log_text, pomodoro_start_task, task_dependency, blocked_task, dependency_target, task_complete",
+            "Examples:\n  bob capture-parse --format json -- 'Call bank @cash+'\n  bob capture-parse 'Call bank @Cash+'\n  bob capture-parse -f json -- 'jot idea @notes#Ideas'\n  bob capture-parse -f json -- 'Postgres 17 minimum @foo+bar#req'\n  bob capture-parse -f json -- '@cash+goog-exit'\n  bob capture-parse -f json -- '+5'\n  bob capture-parse -f json -- '-2'\n  bob capture-parse -f json -- '++3'\n  bob capture-parse -f json -- '--'\n  bob capture-parse -f json -- '+'\n  printf '++3\\n\\nCall bank @Cash+\\n' | bob capture-parse -f json\n  printf '+5\\n\\nCall bank @Cash+\\n' | bob capture-parse -f json\n  echo 'Do work @dev^focus-123' | bob capture-parse -f json\n  echo 'Do work @dev:focus-123' | bob capture-parse -f json\n  echo 'Do work @dev:focus-123#' | bob capture-parse -f json\n  printf '@@foo\\nFirst task\\n\\nSecond task @bar\\n' | bob capture-parse -f json\n  printf 'Parent\\n- first child\\n\\nSecond @work\\n' | bob capture-parse\n  bob capture-parse -f json -- '=x'\n  bob capture-parse -f json -- '=x1,3!2'\n  bob capture-parse -f json -- '=x1~2'\n  bob capture-parse -f json -- '=x0!2'\n  printf '=x\\n- 1 wired the lexer\\n' | bob capture-parse -f json\n  printf '=x\\n- 1\\n' | bob capture-parse -f json\n  printf '=x =\\n- 1 wired it\\n' | bob capture-parse -f json\n  bob capture-parse -f json -- '='\n  bob capture-parse -f json -- '=3'\n  bob capture-parse -f json -- '=~2'\n  bob capture-parse -f json -- '=3#bugs~1'\n  bob capture-parse -f json -- '=x =~2'\n  bob capture-parse -f json -- '@r:id=x'\n  bob capture-parse -f json -- '^r:id=x1'\n  printf '=x\\n\\n=\\n' | bob capture-parse -f json\n  bob capture-parse -f json -- '+2 =x'\n  bob capture-parse -f json -- 'Buy Groceries! &foo:bar'\n  bob capture-parse -f json -- 'Ask Kelly *job:cleanup'\n  bob capture-parse -f json -- '&foo:bar @body+excercise'\n  bob capture-parse -f json -- '^r:id &foo:bar'\n  bob capture-parse -f json -- '&foo:bar +'\n  bob capture-parse -f json -- '&foo:bar'\n  bob capture-parse -f json -- 'Buy Groceries! &fo'\n  bob capture-parse -f json -- '/fix'\n\nModes:\n  task, bullet, pomodoro_task, pomodoro_note, sub_bullet, task_toggle, project_note, pomodoro_project_note, pomodoro_adjust, pomodoro_shift, pomodoro_link, pomodoro_close, pomodoro_start, task_dependency, task_complete, ref, incomplete\n\nNeeds:\n  route, section, block_id, pomodoro_id, pomodoro_name, task, task_section, active_task, task_link, task_goto, task_parent, pomodoro_close_task, pomodoro_close_log_text, pomodoro_start_task, task_dependency, blocked_task, dependency_target, task_complete",
         )
         .disable_help_flag(true)
         .arg(format_arg())

@@ -1183,6 +1183,90 @@ pub(crate) fn invalid_relation_target_error(
     )
 }
 
+/// Shared parse/execute refusal when a bare existing owner carries `p:`,
+/// `s:`, `%…`, or child bullets. Those extras need task text.
+pub(crate) fn relationship_needs_text_error(
+    offending: &str,
+    owner: &str,
+    rel_raws: &[String],
+) -> String {
+    let rel = rel_raws.join(" ");
+    let example = if offending == "child bullets" {
+        format!("Waiting {owner} {rel}` then `- detail")
+    } else if rel.is_empty() {
+        format!("Note {owner} {offending}")
+    } else {
+        format!("Note {owner} {rel} {offending}")
+    };
+    format!(
+        "`{offending}` needs task text: `{owner}` with no text only adds task \
+         relationships; add text to write a sub-bullet (`{example}`)"
+    )
+}
+
+/// Typed `&`/`*` modifiers in source order, for teaching examples.
+pub(crate) fn relation_modifier_raws(found: &ItemDependencySet) -> Vec<String> {
+    let mut entries: Vec<(usize, String)> = found
+        .entries
+        .iter()
+        .map(|entry| (entry.start, entry.raw.clone()))
+        .chain(
+            found
+                .blocked_entries
+                .iter()
+                .map(|entry| (entry.start, entry.raw.clone())),
+        )
+        .collect();
+    entries.sort_by_key(|(start, _)| *start);
+    entries.into_iter().map(|(_, raw)| raw).collect()
+}
+
+/// First `p:<N>`, `s:<N>`, or clipboard token on the parent line.
+pub(crate) fn first_relationship_text_token<'a>(
+    tokens: &[Token<'a>],
+    parse_clip: bool,
+) -> Option<&'a str> {
+    tokens.iter().find_map(|token| {
+        if parse_priority_token(token.text).is_some()
+            || parse_schedule_token(token.text).is_some()
+        {
+            return Some(token.text);
+        }
+        if parse_clip && parse_clip_token(token.text).is_some() {
+            return Some(token.text);
+        }
+        None
+    })
+}
+
+/// `#name`, `=…`, or `!` on an existing-owner marker: a Pomodoro action,
+/// refused with [`invalid_relation_target_error`] rather than
+/// [`relationship_needs_text_error`].
+pub(crate) fn owner_marker_is_suffixed(marker: &str) -> bool {
+    let rest = marker
+        .strip_prefix('@')
+        .or_else(|| marker.strip_prefix('^'))
+        .unwrap_or(marker);
+    rest.contains('#') || rest.contains('=') || rest.ends_with('!')
+}
+
+/// Build the shared relationship-only extra-text refusal for a bare owner.
+pub(crate) fn refuse_relationship_needs_text(
+    found: &ItemDependencySet,
+    owner: &str,
+    parent_tokens: &[Token<'_>],
+    parse_clip: bool,
+    has_children: bool,
+) -> String {
+    let offending = first_relationship_text_token(parent_tokens, parse_clip)
+        .unwrap_or(if has_children { "child bullets" } else { "p:2" });
+    relationship_needs_text_error(
+        offending,
+        owner,
+        &relation_modifier_raws(found),
+    )
+}
+
 /// Closing a Pomodoro cannot also write a `*` edge: the two actions
 /// belong on separate blank-line items.
 pub(crate) fn close_blocked_task_error(marker_text: &str) -> String {
@@ -1245,16 +1329,18 @@ pub(crate) fn resolve_execution_ownership(
             close,
             spelling,
         } => {
-            // The narrow `@route:id` colon alias selects the same
+            // Bare `@route:id` and `^route:id` aliases select the same
             // existing dependent as `@route+id`; any other link shape
-            // (caret spelling, `#name`, `=` suffix) cannot carry
+            // (`#name`, `=` suffix, creation modifiers) cannot carry
             // dependencies.
-            let bare =
-                matches!(spelling, super::model::PomodoroLinkSpelling::At)
-                    && pomodoro_name.is_none()
-                    && start.is_none()
-                    && close.is_none()
-                    && !has_creation_modifiers;
+            let bare = matches!(
+                spelling,
+                super::model::PomodoroLinkSpelling::At
+                    | super::model::PomodoroLinkSpelling::Caret
+            ) && pomodoro_name.is_none()
+                && start.is_none()
+                && close.is_none()
+                && !has_creation_modifiers;
             if !bare {
                 return Err(invalid_relation_target_error(
                     local_marker_text.unwrap_or("@route:id"),

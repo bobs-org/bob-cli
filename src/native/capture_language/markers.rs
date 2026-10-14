@@ -421,6 +421,14 @@ pub(super) fn parent_task_picker_error(token: &str) -> String {
     )
 }
 
+/// Same picker, when `+` sits beside `&`/`*` and is choosing the owner
+/// to relate rather than a parent to append to.
+pub(super) fn parent_task_relate_error(token: &str) -> String {
+    format!(
+        "`{token}` needs a task selection; choose the task to relate before capture"
+    )
+}
+
 pub(super) const POMODORO_ADJUST_ZERO_ERROR: &str = "Pomodoro adjustment magnitude must be positive; `+0` and `-0` adjust nothing (for example `+5` extends by 25 minutes)";
 
 pub(super) const POMODORO_ADJUST_OVERFLOW_ERROR: &str =

@@ -106,6 +106,31 @@ fn resolve_line_inner<'a>(
         });
     }
 
+    // A remaining solo `^route:id` (leading or trailing after relationship
+    // modifiers leave) is the same Pomodoro-link owner as `@route:id`.
+    if leading
+        && tokens.len() == 1
+        && let Ok((route, parts)) = parse_caret_link_token(tokens[0].text)
+    {
+        return Ok(LineOutcome {
+            body: String::new(),
+            markers,
+            route: Some(LineRoute {
+                token: RouteToken {
+                    route: Some(route),
+                    kind: CaptureKind::Pomodoro {
+                        block_id: parts.block_id,
+                        pomodoro_name: parts.pomodoro_name,
+                        start: parts.start,
+                        close: parts.close,
+                    },
+                },
+                marker_text: tokens[0].text.to_string(),
+            }),
+            declarations,
+        });
+    }
+
     // Leading route wins: when the first token is a route token followed by
     // body text, route by it and do not inspect later route-looking tokens.
     if leading && let Some(token) = parse_terminal_route_token(tokens[0].text)?

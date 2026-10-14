@@ -228,6 +228,29 @@ fn blocked_task_parse_vectors_cover_leading_quoted_and_nested() {
     assert_eq!(nested["body"], "Order parts");
     assert_eq!(nested["blocked_tasks"][0]["note"], "projects/house/kitchen");
     assert_eq!(nested["blocked_tasks"][0]["block_id"], "cabinets");
+
+    for draft in ["^bob:ask-kelly *job:cleanup", "*job:cleanup ^bob:ask-kelly"]
+    {
+        let json = parse_json(draft);
+        assert_eq!(json["mode"], "task_dependency", "{draft}");
+        assert_eq!(
+            json["dependency_target"],
+            serde_json::json!({
+                "kind": "existing_task",
+                "route": "bob",
+                "block_id": "ask-kelly",
+            }),
+            "{draft}"
+        );
+        assert_eq!(json["blocked_tasks"][0]["raw"], "*job:cleanup", "{draft}");
+        assert_eq!(json["diagnostics"], serde_json::json!([]), "{draft}");
+    }
+
+    let parent = parse_json("*job:cleanup +ex");
+    assert_eq!(parent["mode"], "incomplete");
+    assert_eq!(parent["needs"], serde_json::json!(["task_parent"]));
+    assert_eq!(parent["blocked_tasks"][0]["raw"], "*job:cleanup");
+    assert_eq!(parent["diagnostics"], serde_json::json!([]));
 }
 
 #[test]

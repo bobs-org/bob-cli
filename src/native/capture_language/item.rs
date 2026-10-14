@@ -27,9 +27,10 @@ pub(super) struct ParsedCaptureItemOutcome<'a> {
 }
 
 /// Refuse dependency modifiers on Pomodoro operator items (close, start,
-/// adjustment, shift, caret link) before any other item parser: they have
-/// no unambiguous single task owner, so the whole batch rolls back
-/// instead of capturing without the prerequisites.
+/// adjustment, shift) before any other item parser: they have no
+/// unambiguous single task owner, so the whole batch rolls back instead of
+/// capturing without the prerequisites. A remaining bare `^route:id` is an
+/// owner alias, not an operator.
 fn reject_operator_dependencies(
     item: &CaptureItem<'_>,
     parent_line: &ItemLine<'_>,
@@ -61,20 +62,6 @@ fn reject_operator_dependencies(
         forced_section,
     )) {
         return Err(operator_relation_error(sigil));
-    }
-    // A leading `^` owner is never a dependency dependent either: caret
-    // markers resolve to the active task, not to `@note+task-id`.
-    if parent_line
-        .raw
-        .text
-        .split_whitespace()
-        .next()
-        .is_some_and(|first| first.starts_with('^'))
-    {
-        return Err(unsupported_target_relation_error(
-            "Pomodoro-ledger-link",
-            sigil,
-        ));
     }
     Ok(())
 }
@@ -483,7 +470,11 @@ pub(super) fn parse_capture_item<'a>(
         .into_iter()
         .find(|selector| !selector.dual_use_adjustment)
     {
-        return Err(parent_task_picker_error(selector.token.text));
+        return Err(if has_dependencies {
+            parent_task_relate_error(selector.token.text)
+        } else {
+            parent_task_picker_error(selector.token.text)
+        });
     }
     if let Some(outcome) = parse_pomodoro_adjust_item(
         item,
@@ -638,33 +629,56 @@ pub(super) fn parse_capture_item<'a>(
     }
 
     if parent_is_pomodoro_candidate && parent_body_is_empty {
+        let marker_text = aggregate
+            .route
+            .as_ref()
+            .map(|route| route.marker_text.clone());
+        let extras = aggregate.clip.is_some()
+            || aggregate.scheduled_offset.is_some()
+            || aggregate.priority_level.is_some()
+            || !sub_bullets.is_empty();
+        if has_dependencies
+            && extras
+            && !owner_marker_is_suffixed(marker_text.as_deref().unwrap_or(""))
+        {
+            let parent_tokens = tokenize_line_with_spans(&parent_line.raw);
+            return Err(refuse_relationship_needs_text(
+                &item_dependencies,
+                marker_text.as_deref().unwrap_or("@route:id"),
+                &parent_tokens,
+                options.parse_clip_markers,
+                !sub_bullets.is_empty(),
+            ));
+        }
         if forced_route.is_some() || forced_section.is_some() {
             return Err(
                 "Pomodoro link capture cannot be combined with --route, --section, --task, --task-ref, --task-section, or --clip; capture the link alone".to_string(),
             );
         }
-        if aggregate.clip.is_some() {
-            return Err(
-                "Pomodoro link capture cannot be combined with % clipboard markers".to_string(),
-            );
+        if !has_dependencies {
+            if aggregate.clip.is_some() {
+                return Err(
+                    "Pomodoro link capture cannot be combined with % clipboard markers".to_string(),
+                );
+            }
+            if aggregate.scheduled_offset.is_some() {
+                return Err(
+                    "Pomodoro link capture cannot be combined with s:<N>"
+                        .to_string(),
+                );
+            }
+            if aggregate.priority_level.is_some() {
+                return Err(
+                    "Pomodoro link capture cannot be combined with p:<N>"
+                        .to_string(),
+                );
+            }
+            if !sub_bullets.is_empty() {
+                return Err(
+                    "Pomodoro link capture cannot be combined with authored child bullets".to_string(),
+                );
+            }
         }
-        if aggregate.scheduled_offset.is_some() {
-            return Err("Pomodoro link capture cannot be combined with s:<N>"
-                .to_string());
-        }
-        if aggregate.priority_level.is_some() {
-            return Err("Pomodoro link capture cannot be combined with p:<N>"
-                .to_string());
-        }
-        if !sub_bullets.is_empty() {
-            return Err(
-                "Pomodoro link capture cannot be combined with authored child bullets".to_string(),
-            );
-        }
-        let marker_text = aggregate
-            .route
-            .as_ref()
-            .map(|route| route.marker_text.clone());
         let (route, kind) = match aggregate.route {
             Some(line_route) => (line_route.token.route, line_route.token.kind),
             None => (None, CaptureKind::Task),
@@ -678,15 +692,23 @@ pub(super) fn parse_capture_item<'a>(
         else {
             return Err(missing_text_error());
         };
+        let spelling = if marker_text
+            .as_deref()
+            .is_some_and(|marker| marker.starts_with('^'))
+        {
+            PomodoroLinkSpelling::Caret
+        } else {
+            PomodoroLinkSpelling::At
+        };
         let link_kind = CaptureKind::PomodoroLink {
             block_id,
             pomodoro_name,
             start,
             close,
-            spelling: PomodoroLinkSpelling::At,
+            spelling,
         };
-        // The narrow `@route:id` colon alias selects the same existing
-        // dependent as `@route+id`; anything else on the link rejects.
+        // Bare `@route:id` / `^route:id` aliases select the same existing
+        // dependent as `@route+id`; a suffixed link rejects.
         let (dependencies, dependency_target) = execution_item_dependencies(
             &item_dependencies,
             &link_kind,
@@ -811,12 +833,18 @@ pub(super) fn parse_capture_item<'a>(
         || aggregate.priority_level.is_some();
     if has_dependencies
         && parent_body_is_empty
-        && sub_bullets.is_empty()
-        && has_creation_modifiers
+        && (has_creation_modifiers || !sub_bullets.is_empty())
+        && !owner_marker_is_suffixed(
+            local_destination_marker.as_deref().unwrap_or(""),
+        )
     {
-        return Err(invalid_relation_target_error(
+        let parent_tokens = tokenize_line_with_spans(&parent_line.raw);
+        return Err(refuse_relationship_needs_text(
+            &item_dependencies,
             local_destination_marker.as_deref().unwrap_or("@route+id"),
-            relationship_sigil,
+            &parent_tokens,
+            options.parse_clip_markers,
+            !sub_bullets.is_empty(),
         ));
     }
     let kind = resolve_sub_bullet_kind(

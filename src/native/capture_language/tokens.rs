@@ -347,10 +347,11 @@ pub(super) struct ParentTaskSelectorToken<'a> {
 }
 
 /// Shared lexical claim for bare-plus task selectors. A selector is the
-/// final whitespace-delimited token on the parent line, or on an eligible
-/// authored child line. Numeric and double-plus tokens remain Pomodoro
-/// operators; protected Markdown, global declarations, and Work Log text
-/// are excluded by the shared capture/link paths.
+/// final remaining whitespace-delimited token on the parent line, or on an
+/// eligible authored child line, after relationship modifiers leave.
+/// Numeric and double-plus tokens remain Pomodoro operators; protected
+/// Markdown, global declarations, and Work Log text are excluded by the
+/// shared capture/link paths.
 pub(super) fn parent_task_selector_tokens<'a>(
     item: &CaptureItem<'a>,
 ) -> Vec<ParentTaskSelectorToken<'a>> {
@@ -394,6 +395,16 @@ pub(super) fn parent_task_selector_tokens<'a>(
         }
 
         let tokens = tokenize_line_with_spans(&scan_line);
+        // Relationship modifiers leave before the selector claim, so
+        // `+ &foo:bar` and `&foo:bar +` share one remaining `+` token.
+        let tokens = extract_line_dependencies(
+            tokens,
+            scan_line.text,
+            scan_line.start,
+            line_index == 0,
+            true,
+        )
+        .0;
         let Some(token) = tokens.last().copied() else {
             continue;
         };
@@ -1194,10 +1205,43 @@ pub(super) const POMODORO_LINK_SCHEDULE_CONFLICT_ERROR: &str =
 pub(super) const POMODORO_LINK_PRIORITY_CONFLICT_ERROR: &str =
     "Pomodoro link capture cannot be combined with p:<N>";
 
-/// Editor reading of an item whose parent line starts with `^`. Returns
-/// `None` when the item stays on the ordinary path (no `^` first token, a
-/// lookalike, or a partial shape with other text on the item, all of which
-/// stay prose). Otherwise the `^` token claims the item: a complete shape
+/// Remaining parent tokens after relationship modifiers (and, when those
+/// were present, trailing `p:`/`s:`/`%` markers) leave. Used so a bare
+/// `^route:id` owner alias works in both leading and trailing position.
+fn relation_stripped_parent_tokens<'a>(
+    parent_line: RawLine<'a>,
+) -> (Vec<Token<'a>>, LineDependencies) {
+    let tokens = tokenize_line_with_spans(&parent_line);
+    extract_line_dependencies(
+        tokens,
+        parent_line.text,
+        parent_line.start,
+        true,
+        true,
+    )
+}
+
+fn line_has_relations(deps: &LineDependencies) -> bool {
+    !deps.entries.is_empty()
+        || !deps.blocked_entries.is_empty()
+        || !deps.partials.is_empty()
+        || !deps.blocked_partials.is_empty()
+}
+
+fn remainder_is_caret_owner(tokens: &[Token<'_>]) -> bool {
+    let mut remaining = tokens.to_vec();
+    let _ = extract_terminal_markers(&mut remaining, true);
+    matches!(
+        remaining.as_slice(),
+        [token] if parse_caret_link_token(token.text).is_ok()
+    )
+}
+
+/// Editor reading of an item whose remaining parent body (after
+/// relationship modifiers) starts with `^`. Returns `None` when the item
+/// stays on the ordinary path (no `^` first remaining token, a lookalike,
+/// or a partial shape with other text on the item, all of which stay
+/// prose). Otherwise the `^` token claims the item: a complete shape
 /// reports `pomodoro_link` (plus an `invalid_pomodoro_link` diagnostic when
 /// anything else is on the item), partial shapes report `incomplete`, and
 /// near misses report `pomodoro_link` with the diagnostic.
@@ -1265,13 +1309,28 @@ pub(super) fn classify_caret_item<'a>(
     item: &CaptureItem<'a>,
     parent_line: RawLine<'a>,
 ) -> Option<CaretItem<'a>> {
-    let parent_tokens = tokenize_line_with_spans(&parent_line);
+    let original = tokenize_line_with_spans(&parent_line);
+    let (stripped, deps) = relation_stripped_parent_tokens(parent_line);
+    let has_relations = line_has_relations(&deps);
+    let parent_tokens = if has_relations {
+        let mut remaining = stripped;
+        let _ = extract_terminal_markers(&mut remaining, true);
+        remaining
+    } else {
+        original
+    };
     let first = parent_tokens.first()?;
     if !first.text.starts_with('^') {
         return None;
     }
     let solo_parent = parent_tokens.len() == 1;
-    let single_line = item.lines.len() == 1;
+    // Relationship extras (`p:`/`s:`/`%`/children) are not caret-link
+    // conflicts: ownership emits `relationship_needs_text` instead.
+    let single_line = if has_relations {
+        true
+    } else {
+        item.lines.len() == 1
+    };
     match classify_caret_token(first.text) {
         CaretTokenShape::Prose => None,
         CaretTokenShape::Invalid(message) => Some(CaretItem {
@@ -1430,7 +1489,14 @@ pub(super) fn parse_pomodoro_link_item<'a>(
     forced_route: Option<&str>,
     forced_section: Option<&str>,
 ) -> Result<Option<ParsedCaptureItemOutcome<'a>>, String> {
-    let parent_trimmed = parent_line.raw.text.trim();
+    let parent_raw = parent_line.raw;
+    let (stripped, deps) = relation_stripped_parent_tokens(parent_raw);
+    if line_has_relations(&deps) && remainder_is_caret_owner(&stripped) {
+        // Bare `^route:id` beside `&`/`*` is an owner alias, not a
+        // whole-item ledger link. The generic path classifies it.
+        return Ok(None);
+    }
+    let parent_trimmed = parent_raw.text.trim();
     if !parent_trimmed.starts_with('^') {
         return Ok(None);
     }

@@ -184,6 +184,90 @@ fn dependency_only_suffixed_colon_target_is_rejected() {
 }
 
 #[test]
+fn caret_alias_reports_existing_task_owner() {
+    let existing = serde_json::json!({
+        "kind": "existing_task",
+        "route": "body",
+        "block_id": "excercise",
+    });
+    for draft in ["^body:excercise &foo:bar", "&foo:bar ^body:excercise"] {
+        let json = parse_json(draft);
+        assert_eq!(json["mode"], "task_dependency", "{draft}");
+        assert_eq!(json["body"], "", "{draft}");
+        assert_eq!(json["dependency_target"], existing, "{draft}");
+        assert_eq!(json["dependencies"][0]["raw"], "&foo:bar", "{draft}");
+        assert_eq!(json["diagnostics"], serde_json::json!([]), "{draft}");
+        assert_eq!(json["needs"], serde_json::json!([]), "{draft}");
+    }
+}
+
+#[test]
+fn plus_selector_beside_modifiers_needs_task_parent() {
+    for draft in ["+ &foo:bar", "+ex &foo:bar", "&foo:bar +"] {
+        let json = parse_json(draft);
+        assert_eq!(json["mode"], "incomplete", "{draft}");
+        assert_eq!(
+            json["needs"],
+            serde_json::json!(["task_parent"]),
+            "{draft}"
+        );
+        assert_eq!(json["dependencies"][0]["raw"], "&foo:bar", "{draft}");
+        assert!(json["dependency_target"].is_null(), "{draft}");
+        assert_eq!(json["diagnostics"], serde_json::json!([]), "{draft}");
+    }
+}
+
+#[test]
+fn relationship_only_owner_reports_needs_text() {
+    let expected = "`p:2` needs task text: `@body+excercise` with no text only adds task relationships; add text to write a sub-bullet (`Note @body+excercise &foo:bar p:2`)";
+    let json = parse_json("@body+excercise &foo:bar p:2");
+    let diagnostics =
+        json["diagnostics"].as_array().expect("diagnostics array");
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(diagnostics[0]["code"], "relationship_needs_text");
+    assert_eq!(diagnostics[0]["severity"], "error");
+    assert_eq!(diagnostics[0]["message"], expected);
+    assert_eq!(
+        json["dependency_target"],
+        serde_json::json!({
+            "kind": "existing_task",
+            "route": "body",
+            "block_id": "excercise",
+        })
+    );
+
+    let children = parse_json("@body+excercise &foo:bar\n- note");
+    assert_eq!(
+        children["diagnostics"][0]["code"],
+        "relationship_needs_text"
+    );
+    assert!(
+        children["diagnostics"][0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("`child bullets` needs task text"),
+        "{}",
+        children["diagnostics"][0]["message"]
+    );
+}
+
+#[test]
+fn suffixed_plus_owner_keeps_must_be_bare() {
+    let json = parse_json("@body+excercise#bugs &foo:bar");
+    let diagnostics =
+        json["diagnostics"].as_array().expect("diagnostics array");
+    assert_eq!(diagnostics[0]["code"], "invalid_dependency_target");
+    assert!(
+        diagnostics[0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("must be bare"),
+        "{}",
+        diagnostics[0]["message"]
+    );
+}
+
+#[test]
 fn ownerless_dependency_needs_its_target() {
     let json = parse_json("&foo:bar");
     assert_eq!(json["body"], "");
