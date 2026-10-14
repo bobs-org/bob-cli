@@ -139,7 +139,10 @@ fn absorb_bare_declaration(
                         unchanged_rewrite(
                             raw_text,
                             cursor,
-                            vec![non_absorbable_marker_notice(marker)],
+                            vec![non_absorbable_marker_notice(
+                                marker,
+                                &item_outcomes[item_index].item,
+                            )],
                         )
                     }
                 };
@@ -436,6 +439,7 @@ pub(super) fn classify_local_marker(
 /// Rule A5: explain why `@@` cannot take this item's single local marker.
 pub(super) fn non_absorbable_marker_notice(
     marker: &LocalDestinationMarker,
+    item: &EditorItemParse,
 ) -> String {
     let route = marker.route.as_deref().unwrap_or("route");
     match marker.mode {
@@ -486,8 +490,16 @@ pub(super) fn non_absorbable_marker_notice(
         // A dependency-only marker names an existing task: absorbing it
         // into `@@` would change which task the prerequisites attach to.
         EditorMode::TaskDependency => format!(
-            "@@ cannot take a task dependency owner: leave {} on this item, or delete it",
-            marker.text
+            "@@ cannot take a task relationship owner ({}): leave {} on this item, or delete it",
+            match (
+                item.dependencies.first().map(|entry| entry.start),
+                item.blocked_tasks.first().map(|entry| entry.start),
+            ) {
+                (Some(dependency), Some(blocked)) if blocked < dependency => "*",
+                (None, Some(_)) => "*",
+                _ => "&",
+            },
+            marker.text,
         ),
         // A completion token names an existing task: absorbing it into
         // `@@` would change which task gets completed.

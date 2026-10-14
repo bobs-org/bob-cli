@@ -1534,6 +1534,7 @@ pub(super) fn parse_pomodoro_link_item<'a>(
                     priority_level: None,
                     sub_bullets: Vec::new(),
                     dependencies: Vec::new(),
+                    blocked_tasks: Vec::new(),
                     dependency_target: None,
                 },
                 Vec::new(),

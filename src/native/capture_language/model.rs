@@ -435,6 +435,8 @@ pub(crate) struct ParsedCaptureText {
     /// Complete `&note:block-id` modifiers on this item, in typed order.
     /// Empty for every input without dependency modifiers.
     pub(crate) dependencies: Vec<ParsedDependency>,
+    /// Complete `*note:block-id` modifiers on this item, in typed order.
+    pub(crate) blocked_tasks: Vec<ParsedDependency>,
     /// Ownership of this item's modifiers: a task this capture creates
     /// (`new_task`) or an explicitly selected existing task
     /// (`existing_task`). `None` when the item carries no modifiers, or

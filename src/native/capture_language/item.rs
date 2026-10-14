@@ -35,6 +35,7 @@ fn reject_operator_dependencies(
     parent_line: &ItemLine<'_>,
     forced_route: Option<&str>,
     forced_section: Option<&str>,
+    sigil: u8,
 ) -> Result<(), String> {
     // A claimed operator refuses even when its own shape is broken: the
     // item is operator-shaped, so its own diagnostic would hide the
@@ -59,7 +60,7 @@ fn reject_operator_dependencies(
         forced_route,
         forced_section,
     )) {
-        return Err(operator_dependency_error());
+        return Err(operator_relation_error(sigil));
     }
     // A leading `^` owner is never a dependency dependent either: caret
     // markers resolve to the active task, not to `@note+task-id`.
@@ -70,8 +71,9 @@ fn reject_operator_dependencies(
         .next()
         .is_some_and(|first| first.starts_with('^'))
     {
-        return Err(unsupported_target_dependency_error(
+        return Err(unsupported_target_relation_error(
             "Pomodoro-ledger-link",
+            sigil,
         ));
     }
     Ok(())
@@ -156,6 +158,7 @@ fn claim_reference_item<'a>(
                     priority_level: None,
                     sub_bullets: Vec::new(),
                     dependencies: Vec::new(),
+                    blocked_tasks: Vec::new(),
                     dependency_target: None,
                 },
                 Vec::new(),
@@ -173,6 +176,7 @@ fn claim_reference_item<'a>(
                 priority_level: None,
                 sub_bullets: Vec::new(),
                 dependencies: Vec::new(),
+                blocked_tasks: Vec::new(),
                 dependency_target: None,
             },
             Vec::new(),
@@ -203,6 +207,7 @@ fn claim_reference_item<'a>(
                             priority_level: None,
                             sub_bullets: Vec::new(),
                             dependencies: Vec::new(),
+                            blocked_tasks: Vec::new(),
                             dependency_target: None,
                         },
                         Vec::new(),
@@ -220,6 +225,7 @@ fn claim_reference_item<'a>(
                         priority_level: None,
                         sub_bullets: Vec::new(),
                         dependencies: Vec::new(),
+                        blocked_tasks: Vec::new(),
                         dependency_target: None,
                     },
                     Vec::new(),
@@ -266,6 +272,7 @@ fn claim_reference_item<'a>(
                 priority_level: None,
                 sub_bullets: Vec::new(),
                 dependencies: Vec::new(),
+                blocked_tasks: Vec::new(),
                 dependency_target: None,
             },
             Vec::new(),
@@ -296,6 +303,7 @@ fn claim_reference_item<'a>(
                     priority_level: None,
                     sub_bullets: Vec::new(),
                     dependencies: Vec::new(),
+                    blocked_tasks: Vec::new(),
                     dependency_target: None,
                 },
                 Vec::new(),
@@ -326,6 +334,7 @@ fn claim_reference_item<'a>(
                     priority_level: None,
                     sub_bullets: Vec::new(),
                     dependencies: Vec::new(),
+                    blocked_tasks: Vec::new(),
                     dependency_target: None,
                 },
                 Vec::new(),
@@ -390,6 +399,7 @@ pub(super) fn parse_capture_item<'a>(
                         priority_level: None,
                         sub_bullets: Vec::new(),
                         dependencies: Vec::new(),
+                        blocked_tasks: Vec::new(),
                         dependency_target: None,
                     },
                     Vec::new(),
@@ -405,7 +415,8 @@ pub(super) fn parse_capture_item<'a>(
     if let Some(token) = task_goto_query_token(item) {
         return Err(task_goto_picker_error(token.text));
     }
-    // `&note:block-id` dependency modifiers are staged for the writer:
+    // `&note:block-id` prerequisites and `*note:block-id` blocked tasks
+    // are staged for the writer:
     // malformed or half-typed modifiers fail here, operator items fail
     // with a targeted diagnostic, and complete modifiers strip from the
     // marker runs below so the established pipeline resolves the
@@ -414,19 +425,37 @@ pub(super) fn parse_capture_item<'a>(
     // draft resolution.
     let item_dependencies =
         scan_item_dependencies(item, options.parse_clip_markers);
-    if let Some(invalid) = item_dependencies.invalid.first() {
+    let invalid = match (
+        item_dependencies.invalid.first(),
+        item_dependencies.blocked_invalid.first(),
+    ) {
+        (Some(dependency), Some(blocked))
+            if blocked.start < dependency.start =>
+        {
+            Some(blocked)
+        }
+        (Some(dependency), _) => Some(dependency),
+        (None, blocked) => blocked,
+    };
+    if let Some(invalid) = invalid {
         return Err(invalid.message.clone());
     }
-    if !item_dependencies.partials.is_empty() {
-        return Err(incomplete_dependency_error());
+    if item_dependencies.has_partial_tokens() {
+        return Err(if item_dependencies.partial_sigil() == b'*' {
+            incomplete_blocked_task_error()
+        } else {
+            incomplete_dependency_error()
+        });
     }
-    let has_dependencies = !item_dependencies.entries.is_empty();
+    let has_dependencies = item_dependencies.has_entries();
+    let relationship_sigil = item_dependencies.sigil();
     if has_dependencies {
         reject_operator_dependencies(
             item,
             parent_line,
             forced_route,
             forced_section,
+            relationship_sigil,
         )?;
     }
     // A `:` picker query is never executable: it rejects with a teaching
@@ -677,6 +706,7 @@ pub(super) fn parse_capture_item<'a>(
                 priority_level: None,
                 sub_bullets: Vec::new(),
                 dependencies,
+                blocked_tasks: execution_blocked_tasks(&item_dependencies),
                 dependency_target,
             },
             declarations,
@@ -693,7 +723,10 @@ pub(super) fn parse_capture_item<'a>(
         }
         let route = normalize_forced_route(route)?;
         if has_dependencies {
-            return Err(unsupported_target_dependency_error("section-bullet"));
+            return Err(unsupported_target_relation_error(
+                "section-bullet",
+                relationship_sigil,
+            ));
         }
         return Ok(parsed_capture_item_outcome(
             item,
@@ -709,6 +742,7 @@ pub(super) fn parse_capture_item<'a>(
                 priority_level: aggregate.priority_level,
                 sub_bullets,
                 dependencies: Vec::new(),
+                blocked_tasks: Vec::new(),
                 dependency_target: None,
             },
             declarations,
@@ -725,7 +759,7 @@ pub(super) fn parse_capture_item<'a>(
         // an ownerless modifier into an existing-task update.
         let (dependencies, dependency_target) = if has_dependencies {
             if parent_outcome.body.is_empty() && sub_bullets.is_empty() {
-                return Err(ownerless_dependency_error());
+                return Err(ownerless_relation_error(relationship_sigil));
             }
             (
                 execution_dependencies(&item_dependencies),
@@ -750,6 +784,7 @@ pub(super) fn parse_capture_item<'a>(
                 priority_level: aggregate.priority_level,
                 sub_bullets,
                 dependencies,
+                blocked_tasks: execution_blocked_tasks(&item_dependencies),
                 dependency_target,
             },
             declarations,
@@ -779,8 +814,9 @@ pub(super) fn parse_capture_item<'a>(
         && sub_bullets.is_empty()
         && has_creation_modifiers
     {
-        return Err(invalid_dependency_target_error(
+        return Err(invalid_relation_target_error(
             local_destination_marker.as_deref().unwrap_or("@route+id"),
+            relationship_sigil,
         ));
     }
     let kind = resolve_sub_bullet_kind(
@@ -877,6 +913,7 @@ pub(super) fn parse_capture_item<'a>(
             priority_level: aggregate.priority_level,
             sub_bullets,
             dependencies,
+            blocked_tasks: execution_blocked_tasks(&item_dependencies),
             dependency_target,
         },
         declarations,
@@ -893,7 +930,7 @@ pub(super) fn finish_item_dependency_target(
     parsed: &mut ParsedCaptureText,
     inherited: bool,
 ) -> Result<(), String> {
-    if parsed.dependencies.is_empty() {
+    if parsed.dependencies.is_empty() && parsed.blocked_tasks.is_empty() {
         return Ok(());
     }
     if let Some(target) = parsed.dependency_target.as_mut() {
@@ -914,11 +951,22 @@ pub(super) fn finish_item_dependency_target(
         false,
         true,
         inherited,
+        if parsed.dependencies.is_empty() {
+            b'*'
+        } else {
+            b'&'
+        },
     )? {
         parsed.dependency_target = Some(target);
         return Ok(());
     }
-    Err(ownerless_dependency_error())
+    Err(ownerless_relation_error(
+        if parsed.dependencies.is_empty() {
+            b'*'
+        } else {
+            b'&'
+        },
+    ))
 }
 
 /// Complete modifiers plus ownership for an execution item: empty when
@@ -932,7 +980,7 @@ pub(super) fn execution_item_dependencies(
     has_creation_modifiers: bool,
     local_marker_text: Option<&str>,
 ) -> Result<(Vec<ParsedDependency>, Option<ParsedDependencyTarget>), String> {
-    if found.entries.is_empty() {
+    if !found.has_entries() {
         return Ok((Vec::new(), None));
     }
     let target = resolve_execution_ownership(
@@ -941,6 +989,7 @@ pub(super) fn execution_item_dependencies(
         body_empty,
         has_creation_modifiers,
         local_marker_text,
+        found.sigil(),
     )?;
     Ok((execution_dependencies(found), target))
 }
@@ -1454,6 +1503,7 @@ pub(super) fn parse_pomodoro_adjust_item<'a>(
             priority_level: None,
             sub_bullets: Vec::new(),
             dependencies: Vec::new(),
+            blocked_tasks: Vec::new(),
             dependency_target: None,
         },
         Vec::new(),
@@ -1775,6 +1825,7 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                         priority_level: None,
                         sub_bullets: Vec::new(),
                         dependencies: Vec::new(),
+                        blocked_tasks: Vec::new(),
                         dependency_target: None,
                     },
                     Vec::new(),
@@ -1855,6 +1906,7 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                                 priority_level: None,
                                 sub_bullets: Vec::new(),
                                 dependencies: Vec::new(),
+                                blocked_tasks: Vec::new(),
                                 dependency_target: None,
                             },
                             Vec::new(),
@@ -2001,6 +2053,7 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                             priority_level: None,
                             sub_bullets: Vec::new(),
                             dependencies: Vec::new(),
+                            blocked_tasks: Vec::new(),
                             dependency_target: None,
                         },
                         Vec::new(),
@@ -2152,6 +2205,7 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                         priority_level: None,
                         sub_bullets: Vec::new(),
                         dependencies: Vec::new(),
+                        blocked_tasks: Vec::new(),
                         dependency_target: None,
                     },
                     Vec::new(),
@@ -2287,6 +2341,7 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                     priority_level: None,
                     sub_bullets: Vec::new(),
                     dependencies: Vec::new(),
+                    blocked_tasks: Vec::new(),
                     dependency_target: None,
                 },
                 Vec::new(),

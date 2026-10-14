@@ -130,6 +130,14 @@ fn dependency_markers_interleave_with_destination_in_either_order() {
 }
 
 #[test]
+fn leading_dependency_run_skips_a_destination_marker() {
+    let json = parse_json("@cash &foo:bar Buy milk");
+    assert_eq!(json["body"], "Buy milk");
+    assert_eq!(json["route"], "cash");
+    assert_eq!(json["dependencies"][0]["raw"], "&foo:bar");
+}
+
+#[test]
 fn dependency_only_plus_target_reports_task_dependency() {
     let json = parse_json("&foo:bar @body+excercise");
     assert_eq!(json["body"], "");

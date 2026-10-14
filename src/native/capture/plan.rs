@@ -55,6 +55,15 @@ pub(super) fn plan_capture_batch(
         request.forced_section.as_deref(),
         &options,
     )?;
+    if parsed_draft
+        .items
+        .iter()
+        .any(|item| !item.parsed.blocked_tasks.is_empty())
+    {
+        return Err(CaptureError::usage(
+            "`*` blocked tasks are not supported yet; remove the modifier or wait for capture execution support",
+        ));
+    }
     if parsed_draft.global.is_some()
         && !request.forced_destination_flags.is_empty()
     {

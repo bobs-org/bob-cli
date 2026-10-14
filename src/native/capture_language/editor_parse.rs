@@ -348,6 +348,7 @@ pub(crate) fn parse_for_editor_with(
             pomodoro_shift: None,
             pomodoro_close: None,
             dependencies: Vec::new(),
+            blocked_tasks: Vec::new(),
             dependency_target: None,
             task_complete: None,
             spans,
@@ -370,6 +371,7 @@ pub(crate) fn parse_for_editor_with(
     let pomodoro_shift = first.pomodoro_shift.clone();
     let pomodoro_close = first.pomodoro_close.clone();
     let dependencies = first.dependencies.clone();
+    let blocked_tasks = first.blocked_tasks.clone();
     let dependency_target = first.dependency_target.clone();
     let task_complete = first.task_complete.clone();
     let sub_bullets = first.sub_bullets.clone();
@@ -396,6 +398,7 @@ pub(crate) fn parse_for_editor_with(
         pomodoro_shift,
         pomodoro_close,
         dependencies,
+        blocked_tasks,
         dependency_target,
         task_complete,
         spans,
@@ -472,6 +475,7 @@ pub(super) fn inherit_editor_global_destination(
     // Dependency needs survive inheritance: the modifiers are item-local
     // even when their dependent comes from the declaration.
     let had_task_dependency_need = item.needs.contains(&Need::TaskDependency);
+    let had_blocked_task_need = item.needs.contains(&Need::BlockedTask);
     let had_target_need = item.needs.contains(&Need::DependencyTarget);
     item.mode = global.mode;
     item.route = global.route.clone();
@@ -479,13 +483,18 @@ pub(super) fn inherit_editor_global_destination(
     item.block_id = global.block_id.clone();
     item.needs = global.needs.clone();
     if item.dependencies.is_empty()
+        && item.blocked_tasks.is_empty()
         && !had_task_dependency_need
+        && !had_blocked_task_need
         && !had_target_need
     {
         return;
     }
     if had_task_dependency_need && !item.needs.contains(&Need::TaskDependency) {
         item.needs.push(Need::TaskDependency);
+    }
+    if had_blocked_task_need && !item.needs.contains(&Need::BlockedTask) {
+        item.needs.push(Need::BlockedTask);
     }
     if let Some(block_id) = global.block_id.clone() {
         // `@@route+id` selects the inherited existing parent: the item's
@@ -599,15 +608,17 @@ fn dependency_owner_mode_word(mode: EditorMode) -> &'static str {
 fn dependency_unsupported_target_diagnostic(
     mode: EditorMode,
     range: Option<(usize, usize)>,
+    sigil: u8,
 ) -> Diagnostic {
     Diagnostic {
         severity: Severity::Error,
         code: "dependency_unsupported_target",
         message: format!(
-            "task dependencies need a task owner: '&note:block-id' cannot \
+            "task relationships need a task owner: '{sigil}note:block-id' cannot \
              attach to a {} capture (add task text or '@note+task-id' for \
              the dependent)",
-            dependency_owner_mode_word(mode)
+            dependency_owner_mode_word(mode),
+            sigil = sigil as char,
         ),
         range,
     }
@@ -616,14 +627,16 @@ fn dependency_unsupported_target_diagnostic(
 fn invalid_dependency_target_diagnostic(
     marker_text: &str,
     range: Option<(usize, usize)>,
+    sigil: u8,
 ) -> Diagnostic {
     Diagnostic {
         severity: Severity::Error,
         code: "invalid_dependency_target",
         message: format!(
-            "dependency-only '{marker_text}' must be bare: it mixes a \
-             Pomodoro action with '&note:block-id' (capture them as \
-             separate blank-line items)"
+            "relationship-only '{marker_text}' must be bare: it mixes a \
+             Pomodoro action with '{sigil}note:block-id' (capture them as \
+             separate blank-line items)",
+            sigil = sigil as char
         ),
         range,
     }
@@ -642,7 +655,8 @@ pub(super) fn attach_operator_dependency_rejection<'a>(
         return outcome;
     }
     outcome.item.dependencies = found.dependency_entries();
-    for invalid in &found.invalid {
+    outcome.item.blocked_tasks = found.blocked_task_entries();
+    for invalid in found.invalid.iter().chain(found.blocked_invalid.iter()) {
         outcome.item.diagnostics.push(Diagnostic {
             severity: Severity::Error,
             code: "invalid_dependency",
@@ -656,11 +670,17 @@ pub(super) fn attach_operator_dependency_rejection<'a>(
         .push(dependency_unsupported_target_diagnostic(
             outcome.item.mode,
             None,
+            found.sigil(),
         ));
-    if found.has_partial()
+    if !found.partials.is_empty()
         && !outcome.item.needs.contains(&Need::TaskDependency)
     {
         outcome.item.needs.push(Need::TaskDependency);
+    }
+    if !found.blocked_partials.is_empty()
+        && !outcome.item.needs.contains(&Need::BlockedTask)
+    {
+        outcome.item.needs.push(Need::BlockedTask);
     }
     outcome
 }
@@ -693,6 +713,7 @@ pub(super) fn parse_editor_task_link_item<'a>(
             pomodoro_shift: None,
             pomodoro_close: None,
             dependencies: Vec::new(),
+            blocked_tasks: Vec::new(),
             dependency_target: None,
             task_complete: None,
             spans: vec![Span {
@@ -737,6 +758,7 @@ pub(super) fn parse_editor_task_goto_item<'a>(
             pomodoro_shift: None,
             pomodoro_close: None,
             dependencies: Vec::new(),
+            blocked_tasks: Vec::new(),
             dependency_target: None,
             task_complete: None,
             spans: vec![Span {
@@ -793,6 +815,7 @@ pub(super) fn parse_editor_task_complete_item<'a>(
             pomodoro_shift: None,
             pomodoro_close: None,
             dependencies: Vec::new(),
+            blocked_tasks: Vec::new(),
             dependency_target: None,
             task_complete,
             spans,
@@ -895,6 +918,7 @@ pub(super) fn parse_editor_parent_task_item<'a>(
             pomodoro_shift: None,
             pomodoro_close: None,
             dependencies: Vec::new(),
+            blocked_tasks: Vec::new(),
             dependency_target: None,
             task_complete: None,
             spans: vec![Span {
@@ -984,6 +1008,7 @@ fn parse_editor_ref_item<'a>(
                 pomodoro_shift: None,
                 pomodoro_close: None,
                 dependencies: Vec::new(),
+                blocked_tasks: Vec::new(),
                 dependency_target: None,
                 task_complete: None,
                 spans: vec![Span {
@@ -1025,6 +1050,7 @@ fn parse_editor_ref_item<'a>(
                         pomodoro_shift: None,
                         pomodoro_close: None,
                         dependencies: Vec::new(),
+                        blocked_tasks: Vec::new(),
                         dependency_target: None,
                         task_complete: None,
                         spans: vec![
@@ -1088,6 +1114,7 @@ fn parse_editor_ref_item<'a>(
                 pomodoro_shift: None,
                 pomodoro_close: None,
                 dependencies: Vec::new(),
+                blocked_tasks: Vec::new(),
                 dependency_target: None,
                 task_complete: None,
                 spans: vec![
@@ -1147,6 +1174,7 @@ fn parse_editor_ref_item<'a>(
                     pomodoro_shift: None,
                     pomodoro_close: None,
                     dependencies: Vec::new(),
+                    blocked_tasks: Vec::new(),
                     dependency_target: None,
                     task_complete: None,
                     spans: vec![
@@ -1212,6 +1240,7 @@ fn parse_editor_ref_item<'a>(
                     pomodoro_shift: None,
                     pomodoro_close: None,
                     dependencies: Vec::new(),
+                    blocked_tasks: Vec::new(),
                     dependency_target: None,
                     task_complete: None,
                     spans: vec![
@@ -2084,7 +2113,11 @@ pub(super) fn parse_editor_item_with<'a>(
     // ledger links, and session operators reject the modifiers.
     let mut dependency_target: Option<DependencyTarget> = None;
     if !item_dependencies.is_empty() {
-        for invalid in &item_dependencies.invalid {
+        for invalid in item_dependencies
+            .invalid
+            .iter()
+            .chain(item_dependencies.blocked_invalid.iter())
+        {
             diagnostics.push(Diagnostic {
                 severity: Severity::Error,
                 code: "invalid_dependency",
@@ -2104,8 +2137,11 @@ pub(super) fn parse_editor_item_with<'a>(
             && body.is_empty()
             && sub_bullets.is_empty();
         if has_caret_item {
-            diagnostics
-                .push(dependency_unsupported_target_diagnostic(mode, None));
+            diagnostics.push(dependency_unsupported_target_diagnostic(
+                mode,
+                None,
+                item_dependencies.sigil(),
+            ));
         } else if has_explicit_toggle {
             diagnostics.push(invalid_dependency_target_diagnostic(
                 local_destination_marker.as_deref().unwrap_or("@route+id"),
@@ -2113,6 +2149,7 @@ pub(super) fn parse_editor_item_with<'a>(
                     (span.kind == SpanKind::TaskToggleExplicitToggle)
                         .then_some((span.start, span.end))
                 }),
+                item_dependencies.sigil(),
             ));
         } else if mode == EditorMode::TaskToggle
             && parent_marker.is_some_and(|marker| {
@@ -2141,6 +2178,7 @@ pub(super) fn parse_editor_item_with<'a>(
                 local_destination_markers
                     .first()
                     .map(|marker| (marker.start, marker.end)),
+                item_dependencies.sigil(),
             ));
         } else if mode == EditorMode::SubBullet
             && let Some(target) = existing_dependency_target(&route, &block_id)
@@ -2167,13 +2205,21 @@ pub(super) fn parse_editor_item_with<'a>(
                 });
             }
         } else if mode != EditorMode::Incomplete {
-            diagnostics
-                .push(dependency_unsupported_target_diagnostic(mode, None));
+            diagnostics.push(dependency_unsupported_target_diagnostic(
+                mode,
+                None,
+                item_dependencies.sigil(),
+            ));
         }
-        if item_dependencies.has_partial()
+        if !item_dependencies.partials.is_empty()
             && !needs.contains(&Need::TaskDependency)
         {
             needs.push(Need::TaskDependency);
+        }
+        if !item_dependencies.blocked_partials.is_empty()
+            && !needs.contains(&Need::BlockedTask)
+        {
+            needs.push(Need::BlockedTask);
         }
         if dependency_target.is_none()
             && !matches!(
@@ -2239,6 +2285,7 @@ pub(super) fn parse_editor_item_with<'a>(
             pomodoro_shift: None,
             pomodoro_close,
             dependencies: item_dependencies.dependency_entries(),
+            blocked_tasks: item_dependencies.blocked_task_entries(),
             dependency_target,
             task_complete: None,
             spans,

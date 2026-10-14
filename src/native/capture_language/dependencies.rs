@@ -207,6 +207,11 @@ fn validate_note(note: &str, sigil: u8) -> Option<String> {
             "dependency note '{note}' must be vault-relative, not absolute"
         ));
     }
+    if note.contains('*') {
+        return Some(format!(
+            "dependency note '{note}' contains '*', which is not allowed in the note component"
+        ));
+    }
     for component in note.split('/') {
         if component.is_empty() {
             return Some(format!(
@@ -241,13 +246,40 @@ pub(crate) fn scan_line_dependencies(
     line: &str,
     base: usize,
 ) -> Vec<ScannedDependency> {
+    scan_line_modifiers(line, base, b'&')
+}
+
+fn scan_line_modifiers(
+    line: &str,
+    base: usize,
+    sigil: u8,
+) -> Vec<ScannedDependency> {
     let protected = protected_ranges(line);
     let mut found = Vec::new();
     let mut index = 0;
     while index < line.len() {
-        if line.as_bytes()[index] != b'&' {
+        if line.as_bytes()[index] != sigil {
             index += char_len(line, index);
             continue;
+        }
+        if sigil == b'*' {
+            if line.as_bytes().get(index + 1) == Some(&b'*') {
+                index += 1;
+                continue;
+            }
+            let mut token_end = index + 1;
+            while token_end < line.len() && !is_space_at(line, token_end) {
+                token_end += char_len(line, token_end);
+            }
+            let token = &line[index..token_end];
+            if let Some(extra_star) = token[1..].find('*') {
+                let extra_star = extra_star + 1;
+                let colon = token.find(':');
+                if colon.is_none_or(|colon| colon < extra_star) {
+                    index = token_end;
+                    continue;
+                }
+            }
         }
         // An escape opens at its own backslash, so it is checked before
         // the token-start boundary (the `&` itself never is one).
@@ -274,17 +306,11 @@ pub(crate) fn scan_line_dependencies(
             index += 1;
             continue;
         }
-        found.push(scan_modifier(line, base, index));
+        found.push(scan_modifier_with_sigil(line, base, index, sigil));
         let end = found.last().expect("pushed").end() - base;
         index = end.max(index + 1);
     }
     found
-}
-
-/// Classify the modifier starting at sigil byte `amp` (already known to sit
-/// at a token start, outside protected spans, and unescaped).
-fn scan_modifier(line: &str, base: usize, amp: usize) -> ScannedDependency {
-    scan_modifier_with_sigil(line, base, amp, b'&')
 }
 
 /// Classify the modifier starting at `sigil` byte `amp`, generalized over
@@ -453,13 +479,19 @@ fn scan_block_id(
 pub(crate) struct LineDependencies {
     /// Complete modifiers in source order.
     pub(crate) entries: Vec<DependencyRef>,
+    /// Complete `*` modifiers in source order.
+    pub(crate) blocked_entries: Vec<DependencyRef>,
     /// Partial-query ranges in source order.
     pub(crate) partials: Vec<(usize, usize)>,
+    /// Partial `*` modifier ranges.
+    pub(crate) blocked_partials: Vec<(usize, usize)>,
     /// Malformed modifiers in source order.
     pub(crate) invalid: Vec<InvalidDependency>,
+    /// Malformed `*` modifiers in source order.
+    pub(crate) blocked_invalid: Vec<InvalidDependency>,
     /// Semantic spans for every extracted modifier.
     pub(crate) spans: Vec<Span>,
-    /// Consumed `\` bytes of `\&` escapes (for body unescaping).
+    /// Consumed `\` bytes of `\&`/`\*` escapes (for body unescaping).
     pub(crate) escapes: Vec<(usize, usize)>,
     /// Whitespace tokens consumed as directive modifiers.
     pub(crate) stripped_tokens: usize,
@@ -480,6 +512,60 @@ fn is_trailing_transparent(text: &str, parse_clip: bool) -> bool {
         || (parse_clip && parse_clip_token(text).is_some())
 }
 
+fn escaped_star_is_in_modifier_run(
+    backslash: usize,
+    tokens: &[Token<'_>],
+    consumed: &[bool],
+    parent: bool,
+    parse_clip: bool,
+) -> bool {
+    let Some(token_index) =
+        tokens.iter().position(|token| token.start == backslash)
+    else {
+        return false;
+    };
+    let token = tokens[token_index].text;
+    let has_query = token
+        .strip_prefix("\\*")
+        .is_some_and(|query| !query.is_empty());
+
+    if parent {
+        let mut index = 0;
+        while index < tokens.len() {
+            if index == token_index {
+                return has_query;
+            }
+            if consumed[index]
+                || is_trailing_transparent(tokens[index].text, parse_clip)
+                || tokens[index].text.starts_with("\\&")
+                || tokens[index].text.starts_with("\\*")
+            {
+                index += 1;
+                continue;
+            }
+            break;
+        }
+    }
+
+    let mut index = tokens.len();
+    while index > 0 {
+        let candidate = index - 1;
+        if candidate == token_index {
+            return has_query || token_index > 0;
+        }
+        if consumed[candidate]
+            || is_trailing_transparent(tokens[candidate].text, parse_clip)
+            || tokens[candidate].text.starts_with("\\&")
+            || tokens[candidate].text.starts_with("\\*")
+        {
+            index -= 1;
+            continue;
+        }
+        break;
+    }
+    false
+}
+
 /// Strip directive dependency modifiers from a line's whitespace tokens.
 ///
 /// Leading modifiers are directive on the parent line only; trailing
@@ -495,13 +581,44 @@ pub(crate) fn extract_line_dependencies<'a>(
     parent: bool,
     parse_clip: bool,
 ) -> (Vec<Token<'a>>, LineDependencies) {
-    let scanned = scan_line_dependencies(line_text, line_base);
+    let (tokens, mut result) = extract_line_relation(
+        tokens, line_text, line_base, parent, parse_clip, b'&',
+    );
+    let (tokens, mut blocked) = extract_line_relation(
+        tokens, line_text, line_base, parent, parse_clip, b'*',
+    );
+    result.blocked_entries = std::mem::take(&mut blocked.blocked_entries);
+    result.blocked_partials = std::mem::take(&mut blocked.blocked_partials);
+    result.blocked_invalid = std::mem::take(&mut blocked.blocked_invalid);
+    result.spans.append(&mut blocked.spans);
+    result.escapes.append(&mut blocked.escapes);
+    result.stripped_tokens += blocked.stripped_tokens;
+    result.spans.sort_by_key(|span| (span.start, span.end));
+    (tokens, result)
+}
+
+fn extract_line_relation<'a>(
+    tokens: Vec<Token<'a>>,
+    line_text: &str,
+    line_base: usize,
+    parent: bool,
+    parse_clip: bool,
+    sigil: u8,
+) -> (Vec<Token<'a>>, LineDependencies) {
+    let scanned = scan_line_modifiers(line_text, line_base, sigil);
     if scanned.is_empty() {
         return (tokens, LineDependencies::default());
     }
     // Whitespace-token index -> covering scanned index, for tokens fully
     // inside one scanned range (a quoted note with spaces covers several).
     let mut covering: Vec<Option<usize>> = vec![None; tokens.len()];
+    let other_sigil = if sigil == b'&' { b'*' } else { b'&' };
+    let other_scanned = scan_line_modifiers(line_text, line_base, other_sigil);
+    let covered_by_other_relation = |token: &Token<'_>| {
+        other_scanned
+            .iter()
+            .any(|scan| scan.start() <= token.start && token.end <= scan.end())
+    };
     for (token_index, token) in tokens.iter().enumerate() {
         for (scan_index, scan) in scanned.iter().enumerate() {
             if matches!(scan, ScannedDependency::Escaped { .. }) {
@@ -513,16 +630,22 @@ pub(crate) fn extract_line_dependencies<'a>(
             }
         }
     }
-    // A bare `&` is directive only at the item's beginning (first parent
-    // token) or at the line end (last token); between prose words it is
-    // literal text.
+    // A bare `&` works at either run edge. A bare `*` is only an editor
+    // trigger after existing text at the line end; line-initial `*` stays
+    // a Markdown list marker.
     let bare_directive = |token_index: usize| -> bool {
-        (parent && token_index == 0) || token_index + 1 == tokens.len()
+        if sigil == b'*' {
+            token_index > 0 && token_index + 1 == tokens.len()
+        } else {
+            (parent && token_index == 0) || token_index + 1 == tokens.len()
+        }
     };
     let is_directive = |token_index: usize, scan_index: usize| -> bool {
         match &scanned[scan_index] {
             ScannedDependency::Escaped { .. } => false,
-            ScannedDependency::Partial { raw, .. } if raw == "&" => {
+            ScannedDependency::Partial { raw, .. }
+                if raw.as_bytes() == &[sigil] =>
+            {
                 bare_directive(token_index)
             }
             _ => true,
@@ -534,6 +657,14 @@ pub(crate) fn extract_line_dependencies<'a>(
     if parent {
         let mut index = 0;
         while index < tokens.len() {
+            if is_trailing_transparent(tokens[index].text, parse_clip)
+                || covered_by_other_relation(&tokens[index])
+                || tokens[index].text.starts_with("\\&")
+                || tokens[index].text.starts_with("\\*")
+            {
+                index += 1;
+                continue;
+            }
             match covering[index] {
                 Some(scan_index) if is_directive(index, scan_index) => {
                     // Consume the whole scanned group (a quoted note may
@@ -585,7 +716,13 @@ pub(crate) fn extract_line_dependencies<'a>(
                 index -= 1;
                 continue;
             }
-            if tokens[candidate].text.starts_with("\\&") {
+            if covered_by_other_relation(&tokens[candidate]) {
+                index -= 1;
+                continue;
+            }
+            if tokens[candidate].text.starts_with("\\&")
+                || tokens[candidate].text.starts_with("\\*")
+            {
                 index -= 1;
                 continue;
             }
@@ -610,19 +747,35 @@ pub(crate) fn extract_line_dependencies<'a>(
                 result.spans.push(Span {
                     start: entry.start,
                     end: entry.start + 1,
-                    kind: SpanKind::DependencySigil,
+                    kind: if sigil == b'*' {
+                        SpanKind::BlockedTaskSigil
+                    } else {
+                        SpanKind::DependencySigil
+                    },
                 });
                 result.spans.push(Span {
                     start: entry.note_start,
                     end: entry.note_end,
-                    kind: SpanKind::DependencyNote,
+                    kind: if sigil == b'*' {
+                        SpanKind::BlockedTaskNote
+                    } else {
+                        SpanKind::DependencyNote
+                    },
                 });
                 result.spans.push(Span {
                     start: entry.block_start,
                     end: entry.block_end,
-                    kind: SpanKind::DependencyBlockId,
+                    kind: if sigil == b'*' {
+                        SpanKind::BlockedTaskBlockId
+                    } else {
+                        SpanKind::DependencyBlockId
+                    },
                 });
-                result.entries.push(entry.clone());
+                if sigil == b'*' {
+                    result.blocked_entries.push(entry.clone());
+                } else {
+                    result.entries.push(entry.clone());
+                }
             }
             ScannedDependency::Partial { start, end, .. } => {
                 let kept =
@@ -639,7 +792,11 @@ pub(crate) fn extract_line_dependencies<'a>(
                     end: *end,
                     kind: SpanKind::InteractivePlaceholder,
                 });
-                result.partials.push((*start, *end));
+                if sigil == b'*' {
+                    result.blocked_partials.push((*start, *end));
+                } else {
+                    result.partials.push((*start, *end));
+                }
             }
             ScannedDependency::Invalid(invalid) => {
                 let kept =
@@ -656,10 +813,20 @@ pub(crate) fn extract_line_dependencies<'a>(
                     end: invalid.end,
                     kind: SpanKind::InteractivePlaceholder,
                 });
-                result.invalid.push(invalid.clone());
+                if sigil == b'*' {
+                    result.blocked_invalid.push(invalid.clone());
+                } else {
+                    result.invalid.push(invalid.clone());
+                }
             }
             ScannedDependency::Escaped { backslash, .. } => {
-                result.escapes.push((*backslash, *backslash + 1));
+                if sigil != b'*'
+                    || escaped_star_is_in_modifier_run(
+                        *backslash, &tokens, &consumed, parent, parse_clip,
+                    )
+                {
+                    result.escapes.push((*backslash, *backslash + 1));
+                }
             }
         }
     }
@@ -674,14 +841,14 @@ pub(crate) fn extract_line_dependencies<'a>(
     (remaining, result)
 }
 
-/// Unescape one body token: a consumed `\&` escape drops its backslash,
-/// leaving the visible `&...` in task text.
+/// Unescape one body token: a consumed relationship escape drops its
+/// backslash, leaving the visible `&...` or `*...` in task text.
 pub(crate) fn unescape_dependency_text(
     text: &str,
     token_start: usize,
     escapes: &[(usize, usize)],
 ) -> String {
-    if text.starts_with("\\&")
+    if (text.starts_with("\\&") || text.starts_with("\\*"))
         && escapes.contains(&(token_start, token_start + 1))
     {
         text[1..].to_string()
@@ -718,8 +885,11 @@ pub(crate) fn decode_dependency_query(text: &str) -> String {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct ItemDependencySet {
     pub(crate) entries: Vec<DependencyRef>,
+    pub(crate) blocked_entries: Vec<DependencyRef>,
     pub(crate) partials: Vec<(usize, usize)>,
+    pub(crate) blocked_partials: Vec<(usize, usize)>,
     pub(crate) invalid: Vec<InvalidDependency>,
+    pub(crate) blocked_invalid: Vec<InvalidDependency>,
 }
 
 impl ItemDependencySet {
@@ -731,9 +901,21 @@ impl ItemDependencySet {
                 self.entries.push(entry.clone());
             }
         }
+        for entry in &line.blocked_entries {
+            if !self.blocked_entries.iter().any(|known| {
+                known.start == entry.start && known.end == entry.end
+            }) {
+                self.blocked_entries.push(entry.clone());
+            }
+        }
         for partial in &line.partials {
             if !self.partials.contains(partial) {
                 self.partials.push(*partial);
+            }
+        }
+        for partial in &line.blocked_partials {
+            if !self.blocked_partials.contains(partial) {
+                self.blocked_partials.push(*partial);
             }
         }
         for invalid in &line.invalid {
@@ -743,22 +925,86 @@ impl ItemDependencySet {
                 self.invalid.push(invalid.clone());
             }
         }
+        for invalid in &line.blocked_invalid {
+            if !self.blocked_invalid.iter().any(|known| {
+                known.start == invalid.start && known.end == invalid.end
+            }) {
+                self.blocked_invalid.push(invalid.clone());
+            }
+        }
         self.entries.sort_by_key(|entry| (entry.start, entry.end));
+        self.blocked_entries
+            .sort_by_key(|entry| (entry.start, entry.end));
         self.partials.sort();
+        self.blocked_partials.sort();
     }
 
     pub(crate) fn is_empty(&self) -> bool {
         self.entries.is_empty()
+            && self.blocked_entries.is_empty()
             && self.partials.is_empty()
+            && self.blocked_partials.is_empty()
             && self.invalid.is_empty()
+            && self.blocked_invalid.is_empty()
     }
 
-    pub(crate) fn has_partial(&self) -> bool {
-        !self.partials.is_empty()
+    pub(crate) fn has_entries(&self) -> bool {
+        !self.entries.is_empty() || !self.blocked_entries.is_empty()
+    }
+
+    pub(crate) fn has_partial_tokens(&self) -> bool {
+        !self.partials.is_empty() || !self.blocked_partials.is_empty()
+    }
+
+    pub(crate) fn partial_sigil(&self) -> u8 {
+        match (
+            self.partials.first().map(|partial| partial.0),
+            self.blocked_partials.first().map(|partial| partial.0),
+        ) {
+            (Some(dependency), Some(blocked)) if blocked < dependency => b'*',
+            (None, Some(_)) => b'*',
+            _ => b'&',
+        }
+    }
+
+    pub(crate) fn sigil(&self) -> u8 {
+        let dependency = self
+            .entries
+            .iter()
+            .map(|entry| entry.start)
+            .chain(self.partials.iter().map(|partial| partial.0))
+            .chain(self.invalid.iter().map(|invalid| invalid.start))
+            .min();
+        let blocked = self
+            .blocked_entries
+            .iter()
+            .map(|entry| entry.start)
+            .chain(self.blocked_partials.iter().map(|partial| partial.0))
+            .chain(self.blocked_invalid.iter().map(|invalid| invalid.start))
+            .min();
+        match (dependency, blocked) {
+            (Some(a), Some(b)) if b < a => b'*',
+            (None, Some(_)) => b'*',
+            _ => b'&',
+        }
     }
 
     pub(crate) fn dependency_entries(&self) -> Vec<DependencyEntry> {
         self.entries
+            .iter()
+            .map(|entry| DependencyEntry {
+                raw: entry.raw.clone(),
+                note: entry.note.clone(),
+                block_id: entry.block_id.clone(),
+                quoted: entry.quoted,
+                start: entry.start,
+                end: entry.end,
+            })
+            .collect()
+    }
+
+    pub(crate) fn blocked_task_entries(&self) -> Vec<DependencyEntry> {
+        self.blocked_entries
             .iter()
             .map(|entry| DependencyEntry {
                 raw: entry.raw.clone(),
@@ -836,9 +1082,24 @@ pub(crate) fn execution_dependencies(
         .collect()
 }
 
-/// Map stripped tokens through `\&` unescaping without moving their
+pub(crate) fn execution_blocked_tasks(
+    found: &ItemDependencySet,
+) -> Vec<ParsedDependency> {
+    found
+        .blocked_entries
+        .iter()
+        .map(|entry| ParsedDependency {
+            raw: entry.raw.clone(),
+            note: entry.note.clone(),
+            block_id: entry.block_id.clone(),
+            quoted: entry.quoted,
+        })
+        .collect()
+}
+
+/// Map stripped tokens through relationship unescaping without moving their
 /// borrows: a token starting with a consumed escape drops its backslash
-/// and keeps the visible `&...` in task text. `escapes` are the absolute
+/// and keeps the visible modifier in task text. `escapes` are the absolute
 /// backslash ranges from the same line's extraction.
 pub(crate) fn unescape_execution_tokens<'a>(
     tokens: Vec<Token<'a>>,
@@ -848,7 +1109,7 @@ pub(crate) fn unescape_execution_tokens<'a>(
         .into_iter()
         .map(|token| {
             let text = token.text;
-            if text.starts_with("\\&")
+            if (text.starts_with("\\&") || text.starts_with("\\*"))
                 && escapes.contains(&(token.start, token.start + 1))
                 && let Some(unescaped) = text.strip_prefix('\\')
             {
@@ -872,44 +1133,54 @@ pub(crate) fn incomplete_dependency_error() -> String {
         .to_string()
 }
 
-/// Error for a Pomodoro operator item (close, start, adjustment, shift,
-/// or caret link) carrying dependency modifiers: operators have no
-/// unambiguous single task owner for the prerequisites.
-pub(crate) fn operator_dependency_error() -> String {
-    "task dependencies need a task owner: '&note:block-id' cannot attach \
-     to a Pomodoro operator capture (add task text or '@note+task-id' for \
-     the dependent)"
+pub(crate) fn incomplete_blocked_task_error() -> String {
+    "blocked-task selection is incomplete: finish typing the \
+     `*note:block-id` modifier or remove it (the `*` picker needs a note \
+     and a block ID; escape a literal star such as `\\*nix`)"
         .to_string()
 }
 
-/// Error for a non-task capture shape (section bullet, project note,
-/// Pomodoro note, ledger link) carrying dependency modifiers.
-pub(crate) fn unsupported_target_dependency_error(mode_word: &str) -> String {
+pub(crate) fn operator_relation_error(sigil: u8) -> String {
     format!(
-        "task dependencies need a task owner: '&note:block-id' cannot \
-         attach to a {mode_word} capture (add task text or '@note+task-id' \
-         for the dependent)"
+        "task relationships need a task owner: '{sigil}note:block-id' cannot \
+         attach to a Pomodoro operator capture (add task text or '@note+task-id' \
+         for the dependent)",
+        sigil = sigil as char,
     )
 }
 
-/// Error for a dependency-only marker that smuggles a second action: a
-/// `!` toggle, `#name`, `=` suffix, or schedule/priority/clipboard
-/// modifier on an existing-task update.
-pub(crate) fn invalid_dependency_target_error(marker_text: &str) -> String {
+pub(crate) fn unsupported_target_relation_error(
+    mode_word: &str,
+    sigil: u8,
+) -> String {
     format!(
-        "dependency-only '{marker_text}' must be bare: it mixes a Pomodoro \
-         action with '&note:block-id' (capture them as separate blank-line \
-         items)"
+        "task relationships need a task owner: '{sigil}note:block-id' cannot \
+         attach to a {mode_word} capture (add task text or '@note+task-id' \
+         for the dependent)",
+        sigil = sigil as char,
+    )
+}
+
+pub(crate) fn invalid_relation_target_error(
+    marker_text: &str,
+    sigil: u8,
+) -> String {
+    format!(
+        "relationship-only '{marker_text}' must be bare: it mixes a Pomodoro \
+         action with '{sigil}note:block-id' (capture them as separate blank-line \
+         items)",
+        sigil = sigil as char,
     )
 }
 
 /// Error when modifiers name prerequisites but no dependent: add task
 /// text or an explicit existing parent.
-pub(crate) fn ownerless_dependency_error() -> String {
-    "task dependencies need a dependent: add task text or '@note+task-id' \
-     for the task that should depend on the '&note:block-id' \
-     prerequisite(s)"
-        .to_string()
+pub(crate) fn ownerless_relation_error(sigil: u8) -> String {
+    format!(
+        "task relationships need a dependent: add task text or '@note+task-id' \
+         for the task that should use the '{sigil}note:block-id' modifier(s)",
+        sigil = sigil as char,
+    )
 }
 
 /// Decide which task owns an execution item's modifiers once its finished
@@ -925,6 +1196,7 @@ pub(crate) fn resolve_execution_ownership(
     body_empty: bool,
     has_creation_modifiers: bool,
     local_marker_text: Option<&str>,
+    sigil: u8,
 ) -> Result<Option<ParsedDependencyTarget>, String> {
     match kind {
         CaptureKind::TaskToggle {
@@ -937,7 +1209,7 @@ pub(crate) fn resolve_execution_ownership(
                 || matches!(intent, TaskToggleIntent::Toggle)
                 || has_creation_modifiers
             {
-                return Err(invalid_dependency_target_error(marker));
+                return Err(invalid_relation_target_error(marker, sigil));
             }
             Ok(Some(ParsedDependencyTarget {
                 kind: ParsedDependencyTargetKind::ExistingTask,
@@ -964,8 +1236,9 @@ pub(crate) fn resolve_execution_ownership(
                     && close.is_none()
                     && !has_creation_modifiers;
             if !bare {
-                return Err(invalid_dependency_target_error(
+                return Err(invalid_relation_target_error(
                     local_marker_text.unwrap_or("@route:id"),
+                    sigil,
                 ));
             }
             Ok(Some(ParsedDependencyTarget {
@@ -985,9 +1258,11 @@ pub(crate) fn resolve_execution_ownership(
                 }))
             }
             SubBulletTarget::Ref { .. } => {
-                Err("task dependencies cannot attach to a `--task-ref` picker \
-                 selection: use '@note+task-id' for the dependent"
-                    .to_string())
+                Err(format!(
+                    "task relationships cannot attach to a `--task-ref` picker \
+                     selection: use '@note+task-id' for the dependent ('{sigil}note:block-id')",
+                    sigil = sigil as char,
+                ))
             }
         },
         CaptureKind::Task
@@ -1013,31 +1288,31 @@ pub(crate) fn resolve_execution_ownership(
             }))
         }
         CaptureKind::Bullet { .. } => {
-            Err(unsupported_target_dependency_error("section-bullet"))
+            Err(unsupported_target_relation_error("section-bullet", sigil))
         }
         CaptureKind::ProjectNote { .. } => {
-            Err(unsupported_target_dependency_error("project-note"))
+            Err(unsupported_target_relation_error("project-note", sigil))
         }
         CaptureKind::PomodoroNote => {
-            Err(unsupported_target_dependency_error("Pomodoro-note"))
+            Err(unsupported_target_relation_error("Pomodoro-note", sigil))
         }
         CaptureKind::PomodoroAdjust { .. }
         | CaptureKind::PomodoroShift { .. } => Err(
-            unsupported_target_dependency_error("Pomodoro session-operator"),
+            unsupported_target_relation_error("Pomodoro session-operator", sigil),
         ),
         CaptureKind::PomodoroClose { .. } => {
-            Err(unsupported_target_dependency_error("Pomodoro-close"))
+            Err(unsupported_target_relation_error("Pomodoro-close", sigil))
         }
         CaptureKind::PomodoroStart { .. } => {
-            Err(unsupported_target_dependency_error("Pomodoro-start"))
+            Err(unsupported_target_relation_error("Pomodoro-start", sigil))
         }
         CaptureKind::TaskComplete { .. } => {
             // A `!` item never carries `&` modifiers: any second token
             // is claimed invalid before ownership resolves.
-            Err(unsupported_target_dependency_error("task-complete"))
+            Err(unsupported_target_relation_error("task-complete", sigil))
         }
         CaptureKind::Ref(_) => {
-            Err(unsupported_target_dependency_error("reference"))
+            Err(unsupported_target_relation_error("reference", sigil))
         }
     }
 }
@@ -1054,6 +1329,7 @@ pub(crate) fn finish_inherited_dependency_target(
     has_target: bool,
     has_dependencies: bool,
     inherited: bool,
+    sigil: u8,
 ) -> Result<Option<ParsedDependencyTarget>, String> {
     if has_target || !has_dependencies || !inherited {
         return Ok(None);
@@ -1074,7 +1350,7 @@ pub(crate) fn finish_inherited_dependency_target(
             block_id: None,
             inherited: true,
         })),
-        _ => Err(ownerless_dependency_error()),
+        _ => Err(ownerless_relation_error(sigil)),
     }
 }
 
@@ -1209,5 +1485,55 @@ mod tests {
         assert_eq!(found.entries.len(), 1);
         assert_eq!((found.entries[0].start, found.entries[0].end), (6, 14));
         assert_eq!(&"café &foo:bar"[6..14], "&foo:bar");
+    }
+
+    #[test]
+    fn blocked_task_modifiers_have_separate_entries_and_spans() {
+        let (remaining, found) =
+            extract("Call registrar &school:transcript *job:apply-x", true);
+        assert_eq!(remaining, vec!["Call", "registrar"]);
+        assert_eq!(found.entries.len(), 1);
+        assert_eq!(found.entries[0].raw, "&school:transcript");
+        assert_eq!(found.blocked_entries.len(), 1);
+        assert_eq!(found.blocked_entries[0].raw, "*job:apply-x");
+        assert!(found.spans.iter().any(|span| {
+            span.kind == SpanKind::BlockedTaskSigil
+                && span.start == "Call registrar &school:transcript ".len()
+        }));
+    }
+
+    #[test]
+    fn star_markdown_and_mid_line_tokens_stay_literal() {
+        for text in [
+            "Fix *urgent* bug",
+            "Read **Dune**",
+            "* Buy milk",
+            "5 * 3",
+            "R*D",
+            "Fix *foo:bar now",
+            "Fix *foo:bar*",
+        ] {
+            let (remaining, found) = extract(text, true);
+            assert!(found.blocked_entries.is_empty(), "{text}");
+            assert!(found.blocked_partials.is_empty(), "{text}");
+            assert_eq!(remaining.join(" "), text, "{text}");
+        }
+    }
+
+    #[test]
+    fn escaped_star_unescapes_only_inside_a_modifier_run() {
+        let (remaining, found) = extract("Support \\*nix", true);
+        assert_eq!(remaining, vec!["Support", "\\*nix"]);
+        assert_eq!(
+            unescape_dependency_text("\\*nix", 8, &found.escapes),
+            "*nix"
+        );
+
+        let (remaining, found) = extract("Support \\*nix today", true);
+        assert_eq!(remaining, vec!["Support", "\\*nix", "today"]);
+        assert_eq!(
+            unescape_dependency_text("\\*nix", 8, &found.escapes),
+            "\\*nix"
+        );
     }
 }

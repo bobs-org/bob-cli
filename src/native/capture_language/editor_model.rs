@@ -45,6 +45,9 @@ pub(crate) enum SpanKind {
     DependencySigil,
     DependencyNote,
     DependencyBlockId,
+    BlockedTaskSigil,
+    BlockedTaskNote,
+    BlockedTaskBlockId,
     /// A whole-item bare URL admitted by the routing policy.
     RefUrl,
     /// The standalone `%` listen marker (or compatible `@` alias).
@@ -102,6 +105,9 @@ impl SpanKind {
             Self::DependencySigil => "dependency_sigil",
             Self::DependencyNote => "dependency_note",
             Self::DependencyBlockId => "dependency_block_id",
+            Self::BlockedTaskSigil => "blocked_task_sigil",
+            Self::BlockedTaskNote => "blocked_task_note",
+            Self::BlockedTaskBlockId => "blocked_task_block_id",
             Self::RefUrl => "ref_url",
             Self::RefListen => "ref_listen",
             Self::TaskCompleteSigil => "task_complete_sigil",
@@ -228,6 +234,8 @@ pub(crate) enum Need {
     PomodoroStartTiming,
     /// A prerequisite picker is still open: an `&` modifier is partial.
     TaskDependency,
+    /// A blocked-task picker is still open: a `*` modifier is partial.
+    BlockedTask,
     /// No dependent was named: add task text or `@note+task-id`.
     DependencyTarget,
     /// A completion picker is still open: a `!` token is partial.
@@ -253,6 +261,7 @@ impl Need {
             Self::PomodoroStartTask => "pomodoro_start_task",
             Self::PomodoroStartTiming => "pomodoro_start_timing",
             Self::TaskDependency => "task_dependency",
+            Self::BlockedTask => "blocked_task",
             Self::DependencyTarget => "dependency_target",
             Self::TaskComplete => "task_complete",
         }
@@ -276,6 +285,10 @@ pub(crate) struct DependencyEntry {
     pub(crate) start: usize,
     pub(crate) end: usize,
 }
+
+/// One complete `*note:block-id` modifier. Its wire shape matches
+/// `DependencyEntry`; the distinct field and span kinds carry direction.
+pub(crate) type BlockedTaskEntry = DependencyEntry;
 
 /// One whole-item `!note:block-id` completion token, in lexical form.
 /// Additive schema-version-1 data: the picker and writer phases add
@@ -357,6 +370,9 @@ pub(crate) struct EditorParse {
     /// Complete `&note:block-id` modifiers on the first item, in source
     /// order. Empty for every older input.
     pub(crate) dependencies: Vec<DependencyEntry>,
+    /// Complete `*note:block-id` modifiers on the first item, in source
+    /// order. Empty for every older input.
+    pub(crate) blocked_tasks: Vec<BlockedTaskEntry>,
     /// Ownership of the first item's modifiers, when a dependent is named.
     pub(crate) dependency_target: Option<DependencyTarget>,
     /// Whole-item `!note:block-id` completion token on the first item,
@@ -407,6 +423,8 @@ pub(crate) struct EditorItemParse {
     pub(crate) pomodoro_close: Option<PomodoroCloseSpec>,
     /// Complete `&note:block-id` modifiers on this item, in source order.
     pub(crate) dependencies: Vec<DependencyEntry>,
+    /// Complete `*note:block-id` modifiers on this item, in source order.
+    pub(crate) blocked_tasks: Vec<BlockedTaskEntry>,
     /// Ownership of this item's modifiers, when a dependent is named.
     pub(crate) dependency_target: Option<DependencyTarget>,
     /// Whole-item `!note:block-id` completion token, when claimed.
