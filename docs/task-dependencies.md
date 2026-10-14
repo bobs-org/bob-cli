@@ -256,7 +256,7 @@ and no R2 exception.
 | --- | --- | --- |
 | A `#task` line | Ctrl+Shift+P then `b` on the Task Card (Blocked by) | this task; on `^prj`, the line plus resident side effects (§13) |
 | Anywhere on a Depends-On line, including inside a link | Ctrl+Shift+P (skips the card and the property step) | the **owning** task, never the link under the cursor |
-| A dedicated Task Link | Ctrl+Shift+P then `b` | the **linked** task in its own note, named in the title |
+| A dedicated Task Link | Ctrl+Shift+P then `b` | focuses the linked note's tab (opening it if needed) before opening the stage on the **linked** task, named in the title |
 | A task line, counted | `N<Ctrl+Shift+P>` then `b` | this task plus the next N (existing add-to-all/remove-from-all, `k/n` badges, no Tab marks) |
 | A chip | `＋` / hover `×` | opens the stage / removes that prerequisite |
 | Anywhere | palette command **Edit task dependencies** (`edit-task-dependencies`, no default hotkey) | the task under the cursor |
