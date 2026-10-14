@@ -1594,8 +1594,12 @@ this contract. Reconcile and plugins are unchanged (PDL7).
 
 #### Human output
 
+These lines are from a real ST3 capture; the final plan-budget footer is
+omitted because its limits come from local configuration.
+
 ```text
-✓ Ask Kelly for references!  mac_inbox.md ^ask-kelly-for-references   [*] Next
+✓ captured  mac_inbox.md
+  - [*] #task Ask Kelly for references! [created::2026-10-14] [id:: mac_inbox__ask-kelly-references] ^ask-kelly-references
   🧱 blocks "Do cleanup tasks!"  job.md ^cleanup  [/] → [?] Blocked
   − removed its Task Link from JOB 10:10–10:35 (running) · deleted the empty Pomodoro
 ```
@@ -1609,18 +1613,18 @@ Variants:
 `&` consumption prints the same `−` lines. Existing-owner items print
 `🧱 ^ask-kelly now blocks "…"`.
 
-A full JSON example (schema version 1, additive fields; the `publish`
-phase reconciles literals against the shipped binary):
+Selected fields from the real ST3 `bob capture -f json` result are shown
+below; the absolute `target` path and unrelated fields are omitted. The
+`created` and `[id::]` properties are part of the emitted task line.
 
 ```json
 {
   "ok": true,
-  "schema_version": 1,
   "kind": "task",
   "text": "Ask Kelly for references!",
   "relative_target": "mac_inbox.md",
   "block_id": "ask-kelly-for-references",
-  "task_line": "- [*] #task Ask Kelly for references! ^ask-kelly-for-references",
+  "task_line": "- [*] #task Ask Kelly for references! [created::2026-10-14] [id:: mac_inbox__ask-kelly-references] ^ask-kelly-references",
   "dependency_update": {
     "role": "blocked_task",
     "dependent_note": "job.md",
@@ -1635,8 +1639,8 @@ phase reconciles literals against the shipped binary):
         "note": "mac_inbox.md",
         "block_id": "ask-kelly-for-references",
         "link": "[[mac_inbox#^ask-kelly-for-references]]",
-        "status_symbol": "*",
-        "status_name": "Next",
+        "status_symbol": " ",
+        "status_name": "Todo",
         "text": "Ask Kelly for references!",
         "open": true
       }
@@ -1662,8 +1666,8 @@ phase reconciles literals against the shipped binary):
           "note": "mac_inbox.md",
           "block_id": "ask-kelly-for-references",
           "link": "[[mac_inbox#^ask-kelly-for-references]]",
-          "status_symbol": "*",
-          "status_name": "Next",
+          "status_symbol": " ",
+          "status_name": "Todo",
           "text": "Ask Kelly for references!",
           "open": true
         }
@@ -1678,14 +1682,14 @@ phase reconciles literals against the shipped binary):
   "consumed_links": [
     {
       "day_file": "2026/20261014.md",
-      "line": 8,
+      "line": 3,
       "link": "[[job#^cleanup]]",
       "note": "job.md",
       "block_id": "cleanup",
       "text": "Do cleanup tasks!",
       "action": "removed",
       "pomodoro": {
-        "line": 5,
+        "line": 2,
         "name": "JOB",
         "time_range": "1010-1035",
         "status": "running",
@@ -1697,7 +1701,47 @@ phase reconciles literals against the shipped binary):
     "path": "mac_inbox.md",
     "line": 1,
     "block_id": "ask-kelly-for-references"
-  }
+  },
+  "pomodoro_blocks": [
+    {
+      "relative_target": "2026/20261014.md",
+      "line": 2,
+      "name": "JOB",
+      "time_range": "1010-1035",
+      "status": "running",
+      "created": false,
+      "removed": true,
+      "roles": ["removed"],
+      "lines": [
+        {"text": "- [ ] (1010-1035) — JOB", "depth": 0, "change": "removed"},
+        {"text": "  - [[job#^cleanup]]", "depth": 1, "change": "removed"}
+      ]
+    }
+  ],
+  "task_blocks": [
+    {
+      "relative_target": "job.md",
+      "route": "job",
+      "line": 1,
+      "block_id": "cleanup",
+      "text": "Do cleanup tasks!",
+      "status_symbol": "?",
+      "status_name": "Blocked",
+      "created": false,
+      "roles": ["dependency"]
+    },
+    {
+      "relative_target": "mac_inbox.md",
+      "route": "mac_inbox",
+      "line": 1,
+      "block_id": "ask-kelly-for-references",
+      "text": "Ask Kelly for references!",
+      "status_symbol": "*",
+      "status_name": "Next",
+      "created": true,
+      "roles": ["dependency_target"]
+    }
+  ]
 }
 ```
 
