@@ -254,10 +254,10 @@ and no R2 exception.
 
 | Cursor | Gesture | Edits |
 | --- | --- | --- |
-| A `#task` line | Ctrl+Shift+P then `b` on the Task Card (Blocked by) | this task; on `^prj`, the line plus resident side effects (§13) |
+| A `#task` line | Ctrl+Shift+P then `b` on the Task Card (Blocked by), or Ctrl+Shift+B | this task; on `^prj`, the line plus resident side effects (§13) |
 | Anywhere on a Depends-On line, including inside a link | Ctrl+Shift+P (skips the card and the property step) | the **owning** task, never the link under the cursor |
-| A dedicated Task Link | Ctrl+Shift+P then `b` | focuses the linked note's tab (opening it if needed) before opening the stage on the **linked** task, named in the title |
-| A task line, counted | `N<Ctrl+Shift+P>` then `b` | this task plus the next N (existing add-to-all/remove-from-all, `k/n` badges, no Tab marks) |
+| A dedicated Task Link | Ctrl+Shift+P then `b`, or Ctrl+Shift+B | focuses the linked note's tab (opening it if needed) before opening the stage on the **linked** task, named in the title |
+| A task line, counted | `N<Ctrl+Shift+P>` then `b`, or `N<Ctrl+Shift+B>` | this task plus the next N (existing add-to-all/remove-from-all, `k/n` badges, no Tab marks) |
 | A chip | `＋` / hover `×` | opens the stage / removes that prerequisite |
 | Anywhere | palette command **Edit task dependencies** (`edit-task-dependencies`, no default hotkey) | the task under the cursor |
 | Prose with several links, or a selection spanning tasks | any | refused with a short reason |
@@ -2514,7 +2514,7 @@ Only today's open Pomodoros. `promoted[]` is the consumption seed.
 | PDG25 | two managed Depends-On lines, or several `scheduled` fields | nothing dropped; consumption; `drop_refused: dependency_line` or `schedule` |
 | PDG26 | `^route:id=` while a timed Pomodoro runs, or a later item in the batch fails | the batch fails; nothing is dropped; the dry run reports the same failure |
 | PDG27 | plugin Ctrl+Shift+Enter or `^^` on a dependency-blocked target | unchanged PDG1; plugins never drop |
-| PDG28 | Ctrl+Shift+P Depends on add (single, marked, counted, or Task Link mode) of an open target to an ordinary task that has a live link in today's open Pomodoro | the task is `[?]`; its live links are removed and an emptied open entry is deleted; closed entries are untouched; commitment is transferred; the notice gets `· removed N Pomodoro link(s)` |
+| PDG28 | Ctrl+Shift+P then `b` or Ctrl+Shift+B Depends on add (single, marked, counted, or Task Link mode) of an open target to an ordinary task that has a live link in today's open Pomodoro | the task is `[?]`; its live links are removed and an emptied open entry is deleted; closed entries are untouched; commitment is transferred; the notice gets `· removed N Pomodoro link(s)` |
 | PDG29 | the same add when the dependent lives in today's daily note; or a stale daily note after the snapshot | same-file: those effects land in one undo group. Stale daily: the dependent write stands, the notice adds `; Pomodoro links not removed`, and reconcile repairs it |
 
 ### 13.16 PDC — close vectors
@@ -2837,7 +2837,7 @@ reconcile.
 
 | Writer | BLOCKS behaviour |
 | --- | --- |
-| nav Depends on stage (Task Card `b`, Ctrl+Shift+P on the line, counted, palette, marked batches) | **Same-note targets:** the owner's BLOCKS edit and any minted dependent id go into the dependent's one transaction, so one Ctrl+Z undoes both. **Cross-note targets:** after the commit, a best-effort follow-up per target note, for old ∪ new targets. It uses the open editor (its own undo entry), otherwise a preimage-checked `vault.process`. On failure the notice gains `· 🧱 BLOCKS not updated`; nothing rolls back. Preparation never writes a reverse entry. |
+| nav Depends on stage (Task Card `b`, Ctrl+Shift+B, Ctrl+Shift+P on the line, counted, palette, marked batches) | **Same-note targets:** the owner's BLOCKS edit and any minted dependent id go into the dependent's one transaction, so one Ctrl+Z undoes both. **Cross-note targets:** after the commit, a best-effort follow-up per target note, for old ∪ new targets. It uses the open editor (its own undo entry), otherwise a preimage-checked `vault.process`. On failure the notice gains `· 🧱 BLOCKS not updated`; nothing rolls back. Preparation never writes a reverse entry. |
 | nav removals (chip ×, api v3 `removeDependency`, Ctrl+D on the Depends on row, counted Ctrl+D) | Remove the dependent from each removed target's line, deleting the line when it empties. |
 | nav hand-edit mirror (cursor leaves an edited Depends-On line; undo re-arms it) | Diff the burst baseline's targets against the final targets and mirror the difference. Clearing the whole line removes every old target. This keeps cross-note undo honest. |
 | capture `&` (and Bob Mac Capture through bob) | Stage each added target's BLOCKS entry and the dependent's minted `^id` in the same batch, using the shared Rust planner. The target's block is reported as a `dependency_target` task block. |
