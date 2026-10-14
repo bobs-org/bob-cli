@@ -7,17 +7,20 @@ use std::{
 use super::{
     model::{
         ActiveTaskCandidate, ActiveTaskPomodoroCandidate, BlockedTaskCandidate,
-        Candidates, CompleteError, DependencyCandidate, RouteCandidate,
-        SectionCandidate, TaskCandidate, TaskCompleteCandidate,
-        TaskGotoCandidate, TaskLinkCandidate, TaskParentCandidate,
-        TaskSectionCandidate,
+        Candidates, CompleteError, DependencyCandidate, PickerRelationship,
+        PickerRelationshipEntry, RouteCandidate, SectionCandidate,
+        TaskCandidate, TaskCompleteCandidate, TaskGotoCandidate,
+        TaskLinkCandidate, TaskParentCandidate, TaskSectionCandidate,
     },
     support::rank,
 };
 use crate::native::{
     capture, capture_active_tasks, capture_block_ids,
     capture_completable_tasks, capture_dependency_tasks,
-    capture_language::{DependencyTarget, DependencyTargetKind},
+    capture_language::{
+        DependencyEntry, DependencyTarget, DependencyTargetKind,
+        EditorItemParse,
+    },
     capture_link_tasks, capture_targets, capture_task_sections, capture_tasks,
     note_tasks::{self, BlockIdLookup},
     pomodoro, project_dependencies, task_complete, task_status_hooks,
@@ -165,6 +168,7 @@ pub(super) fn task_candidates(
                         task.status_type,
                     ),
                     text: task.description.clone(),
+                    disabled_reason: None,
                     section: task.section.clone(),
                     depth: capture_tasks::indentation_depth(&task.indentation),
                     child_count: task.child_count,
@@ -223,6 +227,7 @@ pub(super) fn link_candidates(
                 status_name: task.status_name.clone(),
                 status_type: capture_tasks::status_type_label(task.status_type),
                 text: task.description.clone(),
+                disabled_reason: None,
                 section: task.section.clone(),
                 depth: capture_tasks::indentation_depth(&task.indentation),
                 child_count: task.child_count,
@@ -558,6 +563,7 @@ pub(super) fn task_parent_candidates(
                 status_name: task.status_name.clone(),
                 status_type: task.status_type,
                 text: task.text.clone(),
+                disabled_reason: None,
                 section: task.section.clone(),
                 depth: task.depth,
                 line: task.line,
@@ -575,6 +581,293 @@ pub(super) fn task_parent_candidates(
         })
         .collect();
     (Candidates::TaskParent(candidates), discovered.warnings)
+}
+
+/// Adds relationship-aware guards to either parent-task picker and returns
+/// the matching picker descriptor data. The same vault-wide task catalog and
+/// dependency graph power both the `+` and note-scoped `@route+` pickers.
+pub(super) fn apply_relationship_picker(
+    bob_dir: &Path,
+    candidates: &mut Candidates,
+    item: &EditorItemParse,
+) -> Option<PickerRelationship> {
+    if item.dependencies.is_empty() && item.blocked_tasks.is_empty() {
+        return None;
+    }
+
+    let discovered = capture_dependency_tasks::discover(bob_dir);
+    let graph =
+        capture_dependency_tasks::dependency_graph(bob_dir, &discovered);
+    let resolved_dependencies: Vec<_> = item
+        .dependencies
+        .iter()
+        .map(|entry| resolve_relationship_entry(bob_dir, &discovered, entry))
+        .collect();
+    let resolved_blocked: Vec<_> = item
+        .blocked_tasks
+        .iter()
+        .map(|entry| resolve_relationship_entry(bob_dir, &discovered, entry))
+        .collect();
+    let recognized_projects = recognized_project_paths(bob_dir, &discovered);
+    let settings = note_tasks::read_settings(bob_dir);
+    let mut note_cache = HashMap::new();
+
+    let mut annotate =
+        |route: &str,
+         block_id: Option<&str>,
+         replacement: &mut String,
+         disabled_reason: &mut Option<String>| {
+            let Some(block_id) = block_id else {
+                return;
+            };
+            let Some(identity) =
+                task_identity_for_route(bob_dir, &discovered, route, block_id)
+            else {
+                return;
+            };
+            let reason = relationship_disabled_reason(
+                bob_dir,
+                &discovered,
+                &graph,
+                &recognized_projects,
+                &settings,
+                &mut note_cache,
+                &identity,
+                &resolved_dependencies,
+                &resolved_blocked,
+            );
+            if let Some(reason) = reason {
+                *replacement = String::new();
+                *disabled_reason = Some(reason);
+            }
+        };
+
+    match candidates {
+        Candidates::TaskParent(rows) => {
+            for row in rows {
+                annotate(
+                    &row.route,
+                    row.block_id.as_deref(),
+                    &mut row.replacement,
+                    &mut row.disabled_reason,
+                );
+            }
+        }
+        Candidates::Task(rows) => {
+            for row in rows {
+                annotate(
+                    &row.route,
+                    row.block_id.as_deref(),
+                    &mut row.replacement,
+                    &mut row.disabled_reason,
+                );
+            }
+        }
+        _ => return None,
+    }
+
+    Some(PickerRelationship {
+        dependencies: resolved_dependencies
+            .into_iter()
+            .map(|entry| entry.wire)
+            .collect(),
+        blocked_tasks: resolved_blocked
+            .into_iter()
+            .map(|entry| entry.wire)
+            .collect(),
+    })
+}
+
+struct ResolvedRelationshipEntry {
+    wire: PickerRelationshipEntry,
+    identity: Option<capture_dependency_tasks::TaskIdentity>,
+}
+
+fn resolve_relationship_entry(
+    bob_dir: &Path,
+    discovered: &capture_dependency_tasks::DependencyTaskResult,
+    entry: &DependencyEntry,
+) -> ResolvedRelationshipEntry {
+    let resolved = capture_dependency_tasks::resolve_dependency_note(
+        bob_dir,
+        discovered,
+        &entry.note,
+    )
+    .ok()
+    .map(|path| capture_dependency_tasks::display_path(&path));
+    let task = resolved.as_ref().and_then(|note_path| {
+        unique_task(discovered, note_path, &entry.block_id)
+    });
+    let note_path = task
+        .map(|task| task.note_path.clone())
+        .or_else(|| resolved.clone())
+        .unwrap_or_else(|| entry.note.clone());
+    ResolvedRelationshipEntry {
+        wire: PickerRelationshipEntry {
+            raw: entry.raw.clone(),
+            note_path,
+            block_id: entry.block_id.clone(),
+            text: task.map(|task| task.text.clone()),
+        },
+        identity: task
+            .map(|task| (task.note_path.clone(), entry.block_id.clone())),
+    }
+}
+
+fn unique_task<'a>(
+    discovered: &'a capture_dependency_tasks::DependencyTaskResult,
+    note_path: &str,
+    block_id: &str,
+) -> Option<&'a capture_dependency_tasks::DependencyTask> {
+    let mut matches = discovered.tasks.iter().filter(|task| {
+        task.note_path == note_path
+            && task.block_id.as_deref() == Some(block_id)
+    });
+    let first = matches.next()?;
+    matches.next().is_none().then_some(first)
+}
+
+fn task_identity_for_route(
+    bob_dir: &Path,
+    discovered: &capture_dependency_tasks::DependencyTaskResult,
+    route: &str,
+    block_id: &str,
+) -> Option<capture_dependency_tasks::TaskIdentity> {
+    let typed = capture::route_label(route);
+    let path = capture_dependency_tasks::resolve_dependency_note(
+        bob_dir, discovered, &typed,
+    )
+    .ok()?;
+    let note_path = capture_dependency_tasks::display_path(&path);
+    unique_task(discovered, &note_path, block_id)?;
+    Some((note_path, block_id.to_string()))
+}
+
+fn relationship_disabled_reason(
+    bob_dir: &Path,
+    discovered: &capture_dependency_tasks::DependencyTaskResult,
+    graph: &HashMap<
+        capture_dependency_tasks::TaskIdentity,
+        HashSet<capture_dependency_tasks::TaskIdentity>,
+    >,
+    recognized_projects: &HashSet<String>,
+    settings: &note_tasks::NoteTaskSettings,
+    note_cache: &mut HashMap<PathBuf, String>,
+    candidate: &capture_dependency_tasks::TaskIdentity,
+    dependencies: &[ResolvedRelationshipEntry],
+    blocked_tasks: &[ResolvedRelationshipEntry],
+) -> Option<String> {
+    if dependencies
+        .iter()
+        .any(|entry| entry.identity.as_ref() == Some(candidate))
+    {
+        return Some("the prerequisite itself".to_string());
+    }
+    if blocked_tasks
+        .iter()
+        .any(|entry| entry.identity.as_ref() == Some(candidate))
+    {
+        return Some("the blocked task itself".to_string());
+    }
+
+    let dependency_cycle = dependencies.iter().any(|entry| {
+        entry.identity.as_ref().is_some_and(|identity| {
+            dependency_reachable(graph, std::slice::from_ref(identity))
+                .contains(candidate)
+        })
+    });
+    let blocked_cycle = blocked_tasks.iter().any(|entry| {
+        entry.identity.as_ref().is_some_and(|identity| {
+            dependency_reachable(graph, std::slice::from_ref(candidate))
+                .contains(identity)
+        })
+    });
+    if dependency_cycle || blocked_cycle {
+        return Some("would create a dependency cycle".to_string());
+    }
+
+    let candidate_note = candidate.0.as_str();
+    let project_resident = dependencies.iter().any(|entry| {
+        entry.identity.as_ref().is_some_and(|identity| {
+            project_resident_relation(
+                bob_dir,
+                discovered,
+                recognized_projects,
+                settings,
+                note_cache,
+                candidate_note,
+                &identity.0,
+            )
+        })
+    }) || blocked_tasks.iter().any(|entry| {
+        entry.identity.as_ref().is_some_and(|identity| {
+            project_resident_relation(
+                bob_dir,
+                discovered,
+                recognized_projects,
+                settings,
+                note_cache,
+                &identity.0,
+                candidate_note,
+            )
+        })
+    });
+    project_resident
+        .then(|| "a project cannot depend on its own resident".to_string())
+}
+
+fn recognized_project_paths(
+    bob_dir: &Path,
+    discovered: &capture_dependency_tasks::DependencyTaskResult,
+) -> HashSet<String> {
+    let settings = note_tasks::read_settings(bob_dir);
+    let mut note_cache = HashMap::new();
+    discovered
+        .tasks
+        .iter()
+        .filter(|task| task.block_id.as_deref() == Some("prj") && task.open)
+        .filter_map(|task| {
+            let path = PathBuf::from(&task.note_path);
+            read_note_cached(bob_dir, &path, &mut note_cache)
+                .filter(|contents| {
+                    is_recognized_project(&path, contents, bob_dir, &settings)
+                })
+                .map(|_| task.note_path.clone())
+        })
+        .collect()
+}
+
+fn project_resident_relation(
+    bob_dir: &Path,
+    discovered: &capture_dependency_tasks::DependencyTaskResult,
+    recognized_projects: &HashSet<String>,
+    settings: &note_tasks::NoteTaskSettings,
+    note_cache: &mut HashMap<PathBuf, String>,
+    project_note: &str,
+    resident_note: &str,
+) -> bool {
+    if !recognized_projects.contains(project_note) {
+        return false;
+    }
+    if project_note == resident_note {
+        return true;
+    }
+    let resident_path = PathBuf::from(resident_note);
+    let Some(contents) = read_note_cached(bob_dir, &resident_path, note_cache)
+    else {
+        return false;
+    };
+    project_dependencies::project_ancestors(
+        &resident_path,
+        &contents,
+        &discovered.index,
+        |path| read_note_cached(bob_dir, path, note_cache),
+        |path, contents| {
+            is_recognized_project(path, contents, bob_dir, settings)
+        },
+    )
+    .into_iter()
+    .any(|path| capture_dependency_tasks::display_path(&path) == project_note)
 }
 
 /// `task_dependency` candidates for an `&` token: every task in the

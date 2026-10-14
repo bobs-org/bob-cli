@@ -453,7 +453,10 @@ fn complete_reports_task_dependency_field() {
         serde_json::json!({ "start": 15, "end": 19 })
     );
     assert_eq!(json["query"], "foo");
-    assert_eq!(json["owner"], serde_json::json!({ "kind": "new_task" }));
+    assert_eq!(
+        json["owner"],
+        serde_json::json!({ "kind": "new_task", "text": "Buy Groceries!" })
+    );
     assert_eq!(json["candidates"], serde_json::json!([]));
 }
 

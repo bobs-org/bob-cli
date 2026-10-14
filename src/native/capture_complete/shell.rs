@@ -164,7 +164,7 @@ pub(crate) fn shell_completion(
             let Some(route) = field.route.as_deref() else {
                 return Ok(None);
             };
-            let candidates = task_candidates(
+            let mut candidates = task_candidates(
                 bob_dir,
                 route,
                 "",
@@ -172,12 +172,24 @@ pub(crate) fn shell_completion(
                 TaskSearch::MultiField,
             )
             .map_err(|error| error.message.clone())?;
+            if let Some(item) =
+                capture_language::editor_item_at(raw_text, cursor)
+            {
+                super::candidates::apply_relationship_picker(
+                    bob_dir,
+                    &mut candidates,
+                    &item,
+                );
+            }
             let Candidates::Task(items) = candidates else {
                 return Ok(None);
             };
             let group = format!("tasks in {route_for_group}");
             for item in items {
-                if item.requires_block_id || item.replacement.is_empty() {
+                if item.requires_block_id
+                    || item.disabled_reason.is_some()
+                    || item.replacement.is_empty()
+                {
                     continue;
                 }
                 let full = format!("{}{}", marker_prefix, item.replacement);
@@ -414,12 +426,24 @@ pub(crate) fn shell_completion(
             return Ok(Some(ShellCompletion { marker_start, rows }));
         }
         CompletionContext::TaskParent => {
-            let (candidates, _) = task_parent_candidates(bob_dir, "");
+            let (mut candidates, _) = task_parent_candidates(bob_dir, "");
+            if let Some(item) =
+                capture_language::editor_item_at(raw_text, cursor)
+            {
+                super::candidates::apply_relationship_picker(
+                    bob_dir,
+                    &mut candidates,
+                    &item,
+                );
+            }
             let Candidates::TaskParent(items) = candidates else {
                 return Ok(None);
             };
             for item in items {
-                if item.requires_block_id || item.replacement.is_empty() {
+                if item.requires_block_id
+                    || item.disabled_reason.is_some()
+                    || item.replacement.is_empty()
+                {
                     continue;
                 }
                 let full = format!("{marker_prefix}{}", item.replacement);

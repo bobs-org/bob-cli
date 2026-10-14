@@ -151,7 +151,16 @@ intentional dual-use case: completion opens this picker and its descriptor \
 returns the action continuation keys `0` through `9` and `+`, allowing an \
 editor to preserve the Pomodoro adjustment. Scoped `@route+id` and \
 `@@route+id` keep the `task` context, with picker scope and removal ranges \
-identifying the note-local parent marker. A solo leading '^' token completes active tasks instead: the \
+identifying the note-local parent marker. When either parent-task picker has \
+complete `&` or `*` modifiers on its item, `picker.relationship` reports the \
+resolved relationship rows (`raw`, `note_path`, `block_id`, and optional `text`). \
+Self-edges, dependency cycles, and project-resident conflicts set \
+`disabled_reason` and an empty replacement; shell completion omits those rows. \
+For `task_dependency` and `blocked_task`, `owner` adds the resolved task's \
+`text`, `note_path`, `status_symbol`, and `status_name`; a new-task owner carries \
+its non-empty draft text. Unresolved owners keep the lexical owner fields. A \
+draft with no complete relationship modifiers keeps the existing response shape. \
+A solo leading '^' token completes active tasks instead: the \
 `route:block-id` part offers In Progress and Next tasks with block IDs, \
 ordered by today's open-Pomodoro Task Links (queued first, then In \
 Progress, then Next), and accepting a row inserts the full \

@@ -3,9 +3,7 @@ use serde::Serialize;
 use crate::native::{
     capture_block_ids,
     capture_completable_tasks::{CompletableGroup, TodayInfo},
-    capture_language::{
-        CompletionContext, DependencyTarget as LanguageDependencyTarget,
-    },
+    capture_language::CompletionContext,
     capture_link_tasks,
     capture_links::{
         WikilinkBlockCandidate, WikilinkHeadingCandidate, WikilinkNoteCandidate,
@@ -66,6 +64,8 @@ pub(super) struct TaskCandidate {
     pub(super) status_name: String,
     pub(super) status_type: &'static str,
     pub(super) text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) disabled_reason: Option<String>,
     pub(super) section: Option<String>,
     pub(super) depth: usize,
     pub(super) child_count: usize,
@@ -250,6 +250,8 @@ pub(super) struct TaskParentCandidate {
     pub(super) status_name: String,
     pub(super) status_type: &'static str,
     pub(super) text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) disabled_reason: Option<String>,
     pub(super) section: Option<String>,
     pub(super) depth: usize,
     pub(super) line: usize,
@@ -333,6 +335,41 @@ pub(super) struct PickerDescriptor {
     pub(super) trigger_removal_range: Replacement,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) action_continuation_keys: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) relationship: Option<PickerRelationship>,
+}
+
+/// Complete typed relationships on the picker item's owner task. Text is
+/// omitted when a marker does not resolve to one task in the vault.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct PickerRelationship {
+    pub(super) dependencies: Vec<PickerRelationshipEntry>,
+    pub(super) blocked_tasks: Vec<PickerRelationshipEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct PickerRelationshipEntry {
+    pub(super) raw: String,
+    pub(super) note_path: String,
+    pub(super) block_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) text: Option<String>,
+}
+
+/// Enriched completion owner. Flattening preserves the existing lexical
+/// owner fields while adding optional resolved display metadata.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct CompletionOwner {
+    #[serde(flatten)]
+    pub(super) target: crate::native::capture_language::DependencyTarget,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) note_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) status_symbol: Option<char>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) status_name: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -475,7 +512,7 @@ pub(super) struct CaptureCompleteResult {
     /// cursor's item), so clients never derive the owner themselves.
     /// Set only for those contexts.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) owner: Option<LanguageDependencyTarget>,
+    pub(super) owner: Option<CompletionOwner>,
     /// Parent-task picker scope and editing ranges; omitted from every
     /// other completion context.
     #[serde(skip_serializing_if = "Option::is_none")]

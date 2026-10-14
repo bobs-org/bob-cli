@@ -13,6 +13,7 @@ mod complete_editor;
 mod complete_parent_task;
 mod complete_query;
 mod complete_ref_kind;
+mod complete_relationship_owner;
 mod complete_task_complete;
 mod complete_task_link;
 mod ensure_next;

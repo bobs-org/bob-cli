@@ -2,14 +2,16 @@ use std::path::Path;
 
 use super::{
     candidates::{
-        active_task_candidates, blocked_task_candidates, dependency_candidates,
-        link_candidates, route_candidates, section_candidates, task_candidates,
+        active_task_candidates, apply_relationship_picker,
+        blocked_task_candidates, dependency_candidates, link_candidates,
+        route_candidates, section_candidates, task_candidates,
         task_complete_candidates, task_goto_candidates, task_link_candidates,
         task_parent_candidates, task_section_candidates, TaskSearch,
     },
     model::{
-        Candidates, CaptureCompleteResult, CompleteError, OverrideCompletion,
-        PickerDescriptor, PickerKind, PickerScope, Replacement, SCHEMA_VERSION,
+        Candidates, CaptureCompleteResult, CompleteError, CompletionOwner,
+        OverrideCompletion, PickerDescriptor, PickerKind, PickerScope,
+        Replacement, SCHEMA_VERSION,
     },
     pomodoros::{
         pomodoro_name_candidates, pomodoro_start_name_candidates,
@@ -17,8 +19,10 @@ use super::{
     },
 };
 use crate::native::{
-    capture, capture_active_tasks, capture_block_ids,
-    capture_language::{self, CompletionContext},
+    capture, capture_active_tasks, capture_block_ids, capture_dependency_tasks,
+    capture_language::{
+        self, CompletionContext, DependencyTarget, DependencyTargetKind,
+    },
     capture_links, pomodoro,
 };
 
@@ -174,7 +178,8 @@ pub(super) fn build_result(
         });
     }
 
-    let (candidates, warnings) = match field.context {
+    let editor_item = capture_language::editor_item_at(raw_text, cursor);
+    let (mut candidates, warnings) = match field.context {
         CompletionContext::Route => {
             (route_candidates(bob_dir, &field.query)?, Vec::new())
         }
@@ -241,8 +246,7 @@ pub(super) fn build_result(
             // modifier under the cursor plus every complete `&note:id`
             // already typed in its item feed the already-added guards,
             // so picked rows and typed rows agree.
-            let item = capture_language::editor_item_at(raw_text, cursor);
-            let typed: Vec<(String, String)> = item
+            let typed: Vec<(String, String)> = editor_item
                 .as_ref()
                 .map(|found| {
                     found
@@ -257,14 +261,14 @@ pub(super) fn build_result(
             dependency_candidates(
                 bob_dir,
                 &field.query,
-                item.as_ref()
+                editor_item
+                    .as_ref()
                     .and_then(|found| found.dependency_target.as_ref()),
                 &typed,
             )
         }
         CompletionContext::BlockedTask => {
-            let item = capture_language::editor_item_at(raw_text, cursor);
-            let typed_dependencies: Vec<(String, String)> = item
+            let typed_dependencies: Vec<(String, String)> = editor_item
                 .as_ref()
                 .map(|found| {
                     found
@@ -276,7 +280,7 @@ pub(super) fn build_result(
                         .collect()
                 })
                 .unwrap_or_default();
-            let typed_blocked: Vec<(String, String)> = item
+            let typed_blocked: Vec<(String, String)> = editor_item
                 .as_ref()
                 .map(|found| {
                     found
@@ -288,11 +292,12 @@ pub(super) fn build_result(
                         .collect()
                 })
                 .unwrap_or_default();
-            let owner_note = item
+            let owner_note = editor_item
                 .as_ref()
                 .and_then(|found| found.route.as_deref())
                 .or_else(|| {
-                    item.as_ref()
+                    editor_item
+                        .as_ref()
                         .and_then(|found| found.dependency_target.as_ref())
                         .and_then(|target| target.route.as_deref())
                 })
@@ -300,7 +305,8 @@ pub(super) fn build_result(
             blocked_task_candidates(
                 bob_dir,
                 &field.query,
-                item.as_ref()
+                editor_item
+                    .as_ref()
                     .and_then(|found| found.dependency_target.as_ref()),
                 owner_note,
                 &typed_dependencies,
@@ -334,8 +340,12 @@ pub(super) fn build_result(
                 CompletionContext::TaskDependency
                     | CompletionContext::BlockedTask
             ) {
-                capture_language::editor_item_at(raw_text, cursor)
-                    .and_then(|item| item.dependency_target)
+                editor_item
+                    .as_ref()
+                    .and_then(|item| item.dependency_target.clone())
+                    .map(|target| {
+                        completion_owner(bob_dir, editor_item.as_ref(), target)
+                    })
             } else {
                 None
             },
@@ -343,7 +353,16 @@ pub(super) fn build_result(
     } else {
         (None, None)
     };
-    let picker = picker_descriptor(raw_text, &field);
+    let mut picker = picker_descriptor(raw_text, &field);
+    if matches!(
+        field.context,
+        CompletionContext::TaskParent | CompletionContext::Task
+    ) && let (Some(picker), Some(item)) =
+        (picker.as_mut(), editor_item.as_ref())
+    {
+        picker.relationship =
+            apply_relationship_picker(bob_dir, &mut candidates, item);
+    }
     // A `==` name field carries the additive override context (keeps_ledger
     // plus the running session); plain `=` output stays byte-identical.
     let override_info = (field.context == CompletionContext::PomodoroStartName)
@@ -371,6 +390,61 @@ pub(super) fn build_result(
         owner,
         picker,
     })
+}
+
+fn completion_owner(
+    bob_dir: &Path,
+    item: Option<&capture_language::EditorItemParse>,
+    target: DependencyTarget,
+) -> CompletionOwner {
+    let mut enriched = CompletionOwner {
+        target,
+        text: None,
+        note_path: None,
+        status_symbol: None,
+        status_name: None,
+    };
+    match enriched.target.kind {
+        DependencyTargetKind::NewTask => {
+            if let Some(item) = item.filter(|item| !item.body.trim().is_empty())
+            {
+                enriched.text = Some(item.body.clone());
+            }
+        }
+        DependencyTargetKind::ExistingTask => {
+            let (Some(route), Some(block_id)) = (
+                enriched.target.route.as_deref(),
+                enriched.target.block_id.as_deref(),
+            ) else {
+                return enriched;
+            };
+            let discovered = capture_dependency_tasks::discover(bob_dir);
+            let note = capture::route_label(route);
+            let Ok(path) = capture_dependency_tasks::resolve_dependency_note(
+                bob_dir,
+                &discovered,
+                &note,
+            ) else {
+                return enriched;
+            };
+            let note_path = capture_dependency_tasks::display_path(&path);
+            let mut matches = discovered.tasks.iter().filter(|task| {
+                task.note_path == note_path
+                    && task.block_id.as_deref() == Some(block_id)
+            });
+            let Some(task) = matches.next() else {
+                return enriched;
+            };
+            if matches.next().is_some() {
+                return enriched;
+            }
+            enriched.text = Some(task.text.clone());
+            enriched.note_path = Some(task.note_path.clone());
+            enriched.status_symbol = Some(task.status_symbol);
+            enriched.status_name = Some(task.status_name.clone());
+        }
+    }
+    enriched
 }
 
 fn picker_descriptor(
@@ -413,6 +487,7 @@ fn picker_descriptor(
                 marker_range,
                 trigger_removal_range: marker_range,
                 action_continuation_keys,
+                relationship: None,
             })
         }
         CompletionContext::TaskComplete => {
@@ -437,6 +512,7 @@ fn picker_descriptor(
                 trigger_removal_range: marker_range,
                 action_continuation_keys: bare
                     .then(|| vec!["!".to_string(), "[".to_string()]),
+                relationship: None,
             })
         }
         CompletionContext::Task => {
@@ -479,6 +555,7 @@ fn picker_descriptor(
                     end: field.replacement.1,
                 },
                 action_continuation_keys: None,
+                relationship: None,
             })
         }
         _ => None,
