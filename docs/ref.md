@@ -511,7 +511,7 @@ research_ref, superseded_by, and diagnostics. `task` is always present
 `block_id`, `link` (`[[path#^id]]` or `[[path]]`), `mark`, and
 `archived`; v1 carries the ref note path, `block_id: "ref"`,
 `link: [[ref/…#^ref]]`, and `archived: false`. One `(path, block_id)`
-join works for both eras. `blocked` and `task` are additive under
+join works for both eras. `blocked`, `task`, and `marker_id` are additive under
 `schema_version` 1.
 
 Diagnostics: `multiple_open_ref_tasks` (several open v2 claim the ref;
