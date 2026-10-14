@@ -481,6 +481,68 @@ pub(super) fn display_relative(path: &Path) -> String {
         .join("/")
 }
 
+/// Route form of a vault-relative note: the display path with `.md`
+/// stripped (`projects/house/kitchen.md` → `projects/house/kitchen`).
+pub(super) fn route_without_extension(relative: &Path) -> String {
+    let mut without_extension = relative.to_path_buf();
+    without_extension.set_extension("");
+    display_relative(&without_extension)
+}
+
+/// Existing dependent addressed by vault-relative path plus block ID.
+/// `&` callers build `{route}.md`; `*` passes the resolved nested path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct DependentRef {
+    pub(super) relative: PathBuf,
+    pub(super) block_id: String,
+}
+
+impl DependentRef {
+    /// Today's `&` owner: a lowercased route with `.md` appended.
+    pub(super) fn from_route(route: &str, block_id: impl Into<String>) -> Self {
+        Self {
+            relative: PathBuf::from(format!("{route}.md")),
+            block_id: block_id.into(),
+        }
+    }
+}
+
+/// Options for [`plan_existing_task_dependencies`]. `&` leaves the
+/// transfer uncapped and reports `role: dependent`. `*` on a new
+/// blocker caps promotion at Next.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct ExistingDependencyOptions {
+    pub(super) transfer_cap: Option<u8>,
+    pub(super) role: DependencyUpdateRole,
+}
+
+impl ExistingDependencyOptions {
+    pub(super) fn ampersand() -> Self {
+        Self {
+            transfer_cap: None,
+            role: DependencyUpdateRole::Dependent,
+        }
+    }
+
+    /// Execute applies this cap when N is new in the capture.
+    #[allow(dead_code)]
+    pub(super) fn star_new_blocker() -> Self {
+        Self {
+            transfer_cap: lane_for_status('*'),
+            role: DependencyUpdateRole::BlockedTask,
+        }
+    }
+
+    /// Execute applies this when an existing owner is the blocker.
+    #[allow(dead_code)]
+    pub(super) fn star_existing_owner() -> Self {
+        Self {
+            transfer_cap: None,
+            role: DependencyUpdateRole::BlockedTask,
+        }
+    }
+}
+
 /// Absolute path for a vault-relative note.
 pub(super) fn absolute_note(bob_dir: &Path, relative: &Path) -> PathBuf {
     bob_dir.join(relative)
@@ -746,6 +808,26 @@ pub(super) struct ResolvedPrerequisite {
     status_name: String,
     text: String,
     open: bool,
+}
+
+impl ResolvedPrerequisite {
+    /// Identity-only row for the `^prj` same-note/descendant gate.
+    #[allow(dead_code)]
+    pub(super) fn identity(
+        relative: PathBuf,
+        block_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            relative,
+            block_id: block_id.into(),
+            projected_id: String::new(),
+            link_text: String::new(),
+            status_symbol: ' ',
+            status_name: String::new(),
+            text: String::new(),
+            open: false,
+        }
+    }
 }
 
 /// Look a task up by block ID in staged contents, with capture-shaped
@@ -2097,23 +2179,24 @@ fn merge_existing_members(
 /// The dependent must be an open task; completed dependents never
 /// reopen. Repeats are idempotent. A later failing batch item aborts
 /// planning before anything is committed, so no partial dependency
-/// state can land.
+/// state can land. `options.transfer_cap` caps commitment transfer
+/// (Next for a new `*` blocker) before promotions run.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn plan_existing_task_dependencies(
     ctx: &mut DependencyContext,
     planner: &mut CaptureBatchPlanner,
     bob_dir: &Path,
-    dependent_route: &str,
-    dependent_block_id: &str,
+    dependent_ref: &DependentRef,
     deps: &[ParsedDependency],
     warnings: &mut Vec<String>,
+    options: ExistingDependencyOptions,
 ) -> Result<PlannedDependencyUpdate, CaptureError> {
-    let dep_rel = PathBuf::from(format!("{dependent_route}.md"));
+    let dep_rel = dependent_ref.relative.clone();
+    let dependent_block_id = dependent_ref.block_id.as_str();
+    let dep_label = display_relative(&dep_rel);
     let dep_abs = absolute_note(bob_dir, &dep_rel);
-    let dep_desc =
-        format!("^{dependent_block_id} in {}", display_relative(&dep_rel));
-    let dependent =
-        (display_relative(&dep_rel), dependent_block_id.to_string());
+    let dep_desc = format!("^{dependent_block_id} in {dep_label}");
+    let dependent = (dep_label.clone(), dependent_block_id.to_string());
     // `&` writes plan against the dependency pool: warm the full vault
     // scan now so every resolution below sees it.
     ctx.ensure_discovered();
@@ -2132,13 +2215,15 @@ pub(super) fn plan_existing_task_dependencies(
     )?;
     let contents = current_note_text(planner, &dep_abs)?;
     let scan = note_tasks::scan(&contents, ctx.settings());
-    let task = lookup_staged_task(&scan, dependent_route, dependent_block_id)?;
+    let task = lookup_staged_task(&scan, &dep_label, dependent_block_id)?;
     if task.status_type.is_terminal() || !task.status_type.is_open() {
         return Err(CaptureError::io(format!(
-            "task ^{dependent_block_id} in {dependent_route}.md is {}; dependencies cannot reopen a completed task",
+            "task ^{dependent_block_id} in {dep_label} is {}; dependencies cannot reopen a completed task",
             task.status_name
         )));
     }
+    let previous_status = task.status_symbol;
+    let previous_status_name = task.status_name.clone();
     // A `^prj` dependent in a recognised project refuses same-note
     // targets: a project cannot wait on its own tasks (§13.6).
     let prj_project = prj_context_for_dependent(
@@ -2294,10 +2379,10 @@ pub(super) fn plan_existing_task_dependencies(
     let fresh = current_note_text(planner, &dep_abs)?;
     let fresh_scan = note_tasks::scan(&fresh, ctx.settings());
     let fresh_task =
-        lookup_staged_task(&fresh_scan, dependent_route, dependent_block_id)?;
+        lookup_staged_task(&fresh_scan, &dep_label, dependent_block_id)?;
     if fresh_task.digest != dependent_digest {
         return Err(CaptureError::io(format!(
-            "task ^{dependent_block_id} in {dependent_route}.md changed while planning {dep_desc}; refusing to overwrite it"
+            "task ^{dependent_block_id} in {dep_label} changed while planning {dep_desc}; refusing to overwrite it"
         )));
     }
     // Target-ID stamps rewrite lines in place, so pre-stamp indices
@@ -2372,7 +2457,7 @@ pub(super) fn plan_existing_task_dependencies(
     let joined = note.join();
     let joined_scan = note_tasks::scan(&joined, ctx.settings());
     let joined_task =
-        lookup_staged_task(&joined_scan, dependent_route, dependent_block_id)?;
+        lookup_staged_task(&joined_scan, &dep_label, dependent_block_id)?;
     let current_line = note
         .lines
         .get(joined_task.line_index)
@@ -2425,9 +2510,14 @@ pub(super) fn plan_existing_task_dependencies(
     // Any `&` that leaves its dependent Blocked consumes the
     // dependent's own live links the same way.
     let mut pomodoro_refs = Vec::new();
+    let mut blocked_residents = 0usize;
     if status_char == '?' && open_count > 0 {
         let mut blocked_ids = vec![dependent_block_id.to_string()];
-        if let Some((context, _)) = &prj_project {
+        if let Some((context, pre_tasks)) = &prj_project {
+            blocked_residents = pre_tasks
+                .iter()
+                .filter(|task| context.is_resident(task) && task.status != '?')
+                .count();
             let staged = current_note_text(planner, &dep_abs)?;
             let staged_tasks =
                 task_status_hooks::parse_tasks(&staged, ctx.settings());
@@ -2475,6 +2565,10 @@ pub(super) fn plan_existing_task_dependencies(
             strongest_project_lane(context, pre_tasks)
         }
         None => dependent_lane,
+    };
+    let transfer_lane = match (transfer_lane, options.transfer_cap) {
+        (Some(lane), Some(cap)) => Some(lane.min(cap)),
+        (lane, _) => lane,
     };
     if let Some(lane) = transfer_lane
         && lane > 0
@@ -2542,6 +2636,7 @@ pub(super) fn plan_existing_task_dependencies(
         typed_known.intersection(&pre_existing).count() + repeats;
     let _ = kept_unresolved;
     let summary = DependencyUpdateJson {
+        role: options.role,
         dependent_note: display_relative(&dep_rel),
         dependent_block_id: Some(dependent_block_id.to_string()),
         dependent_text,
@@ -2553,17 +2648,20 @@ pub(super) fn plan_existing_task_dependencies(
         dependent_status: status_char,
         dependent_status_name: status_name,
         status_changed,
+        previous_status,
+        previous_status_name,
+        blocked_residents,
     };
     let final_contents = current_note_text(planner, &dep_abs)?;
     let final_scan = note_tasks::scan(&final_contents, ctx.settings());
     let final_task =
-        lookup_staged_task(&final_scan, dependent_route, dependent_block_id)?;
+        lookup_staged_task(&final_scan, &dep_label, dependent_block_id)?;
     Ok(PlannedDependencyUpdate {
         summary,
         dependent_ref: TaskBlockRef {
             target: dep_abs,
             relative_target: display_relative(&dep_rel),
-            route: dependent_route.to_string(),
+            route: route_without_extension(&dep_rel),
             line: final_task.line_index,
             block_id: Some(dependent_block_id.to_string()),
             role: TaskBlockRole::Dependency,
@@ -2782,6 +2880,7 @@ pub(super) fn plan_new_task_dependencies(
         }
     }
     let summary = DependencyUpdateJson {
+        role: DependencyUpdateRole::Dependent,
         dependent_note: display_relative(&dep_rel),
         dependent_block_id: dependent_block.clone(),
         dependent_text: task_description_of(capture_line),
@@ -2793,6 +2892,9 @@ pub(super) fn plan_new_task_dependencies(
         dependent_status: status_char,
         dependent_status_name: status_name,
         status_changed,
+        previous_status: capture_status,
+        previous_status_name: status_name_for(capture_status).to_string(),
+        blocked_residents: 0,
     };
     let target_refs: Vec<TaskBlockRef> = touches
         .into_iter()
@@ -2851,6 +2953,31 @@ pub(super) fn locate_new_task_ref(
         route: parts.route.clone(),
         line,
         block_id: parts.block_id.clone(),
+        role: TaskBlockRole::Dependency,
+    })
+}
+
+/// Re-find a task by block ID in staged (or on-disk) note text after
+/// later passes have rewritten its line (`[id::]`, lane, BLOCKS).
+#[allow(dead_code)]
+pub(super) fn locate_task_by_block_id(
+    ctx: &DependencyContext,
+    planner: &mut CaptureBatchPlanner,
+    bob_dir: &Path,
+    relative: &Path,
+    block_id: &str,
+) -> Result<TaskBlockRef, CaptureError> {
+    let absolute = absolute_note(bob_dir, relative);
+    let contents = current_note_text(planner, &absolute)?;
+    let scan = note_tasks::scan(&contents, ctx.settings());
+    let label = display_relative(relative);
+    let task = lookup_staged_task(&scan, &label, block_id)?;
+    Ok(TaskBlockRef {
+        target: absolute,
+        relative_target: label,
+        route: route_without_extension(relative),
+        line: task.line_index,
+        block_id: Some(block_id.to_string()),
         role: TaskBlockRole::Dependency,
     })
 }
@@ -2925,10 +3052,10 @@ pub(super) fn plan_dependency_only_item(
         ctx,
         planner,
         &request.bob_dir,
-        &route,
-        &block_id,
+        &DependentRef::from_route(&route, &block_id),
         &parsed.dependencies,
         warnings,
+        ExistingDependencyOptions::ampersand(),
     )?;
     let summary = update.summary.clone();
     let blocks_updates = update.blocks.updates.clone();

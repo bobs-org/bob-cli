@@ -1368,10 +1368,10 @@ pub(super) fn plan_capture_item(
                 dependency_ctx,
                 planner,
                 &request.bob_dir,
-                &route,
-                &block_id,
+                &DependentRef::from_route(&route, &block_id),
                 &parsed.dependencies,
                 warnings,
+                ExistingDependencyOptions::ampersand(),
             )?;
             dependency_block_refs.push(update.dependent_ref);
             dependency_block_refs.extend(update.target_refs);

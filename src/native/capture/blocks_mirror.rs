@@ -249,11 +249,13 @@ fn owner_task_ref(
     })
 }
 
-/// Mint the dependent's `^block-id` inside the atomic staged batch
+/// Mint a `^block-id` inside the atomic staged batch
 /// (`docs/task-dependencies.md` §14.4): the SB pipeline over the task
-/// description, against every block id in the dependent's note plus
-/// this batch's reservations. Never adds `[id::]`.
-pub(super) fn mint_staged_dependent_id(
+/// description, against every block id in the note plus this batch's
+/// reservations. Never adds `[id::]`. Does not consult
+/// `dependencies.blocks_lines`; `*` always mints even when the kill
+/// switch is off.
+pub(super) fn mint_staged_block_id(
     ctx: &mut DependencyContext,
     planner: &mut CaptureBatchPlanner,
     absolute: &Path,
@@ -276,6 +278,18 @@ pub(super) fn mint_staged_dependent_id(
     let minted = mint_block_id(&description, &used_refs);
     ctx.reserve_block_id(dep_relative.to_path_buf(), minted.clone());
     Ok(minted)
+}
+
+/// `&` alias for [`mint_staged_block_id`]: mint the dependent's id for
+/// the BLOCKS mirror when the kill switch is on.
+pub(super) fn mint_staged_dependent_id(
+    ctx: &mut DependencyContext,
+    planner: &mut CaptureBatchPlanner,
+    absolute: &Path,
+    dep_relative: &Path,
+    task_line: &str,
+) -> Result<String, CaptureError> {
+    mint_staged_block_id(ctx, planner, absolute, dep_relative, task_line)
 }
 
 fn edit_line_index(edit: &blocks_mod::BlocksEdit) -> usize {

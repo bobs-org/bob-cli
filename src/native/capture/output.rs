@@ -238,6 +238,10 @@ fn is_false(value: &bool) -> bool {
     !value
 }
 
+fn is_zero(value: &usize) -> bool {
+    *value == 0
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct CaptureResult {
     #[serde(flatten)]
@@ -752,10 +756,21 @@ pub(super) struct TaskCompleteStillBlockedJson {
     pub(super) trigger: &'static str,
 }
 
+/// Whether this update is the item's own `&` write or a `*` target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum DependencyUpdateRole {
+    Dependent,
+    /// Execute fills this for each `*` target.
+    #[allow(dead_code)]
+    BlockedTask,
+}
+
 /// Summary JSON for one item's dependency effects, reported as
 /// `dependency_update` on the capture result.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct DependencyUpdateJson {
+    pub(super) role: DependencyUpdateRole,
     pub(super) dependent_note: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) dependent_block_id: Option<String>,
@@ -768,6 +783,11 @@ pub(super) struct DependencyUpdateJson {
     pub(super) dependent_status: char,
     pub(super) dependent_status_name: String,
     pub(super) status_changed: bool,
+    pub(super) previous_status: char,
+    pub(super) previous_status_name: String,
+    /// `^prj` residents this write newly blocked. Omitted when 0.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub(super) blocked_residents: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
