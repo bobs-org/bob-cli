@@ -47,7 +47,7 @@ as the source of truth.
 
 **Evidence.** `research:202610/capture_star_blocks_modifier/capture_star_blocks_modifier.md`;
 `plan:202610/capture_star_blocks.md`; bob-cli commits `04a6e84` (contract),
-`1a074c6` (consumption), `8774e89` (parser), `158f6de` (writer),
+`1a074c6` (consumption), `8774e89` (parser), `158d6de` (writer),
 `78f1a69` (completion), and `1b9d35f` (execution); Bob Mac Capture commit
 `f2a5cb5` (direction-aware picker and preview); publish phase `bob-cli-7n.8`.
 See also [[decisions:task-deps-are-depends-on-links]] and

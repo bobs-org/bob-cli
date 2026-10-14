@@ -360,14 +360,12 @@ fn consume_live_links_from_day(
                 .nth(task.line_index)
                 .unwrap_or_default()
                 .trim_end_matches('\r');
-            let display = task_complete_display_text(
+            let display = kept_notes_display_text(
                 task_line,
                 &settings.global_filter,
                 Some(&reference.block_id),
             );
-            display_texts
-                .entry(identity)
-                .or_insert_with(|| flatten_block_wikilinks(&display));
+            display_texts.entry(identity).or_insert(display);
         }
     }
 
@@ -476,25 +474,40 @@ fn consume_live_links_from_day(
     })
 }
 
+fn kept_notes_display_text(
+    task_line: &str,
+    global_filter: &str,
+    block_id: Option<&str>,
+) -> String {
+    let display =
+        task_complete_display_text(task_line, global_filter, block_id);
+    strip_kept_notes_markup(&flatten_block_wikilinks(&display))
+}
+
+fn strip_kept_notes_markup(text: &str) -> String {
+    text.split_whitespace()
+        .filter(|token| !token.starts_with('#') && !token.starts_with('^'))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn flatten_block_wikilinks(text: &str) -> String {
     let mut flattened = text.to_string();
     let spans = crate::native::task_dependencies::raw_wikilink_spans(text);
     for span in spans.into_iter().rev() {
         let inside = &text[span.open + 2..span.end - 2];
-        let link_target = inside.split('|').next().unwrap_or(inside);
         let alias = inside.split_once('|').map(|(_, alias)| alias);
+        let Some((target, block_id)) =
+            crate::native::task_dependencies::parse_block_link_inside(inside)
+        else {
+            continue;
+        };
         let display = if let Some(alias) = alias {
             alias.to_string()
-        } else if let Some((target, block_id)) =
-            crate::native::task_dependencies::parse_block_link_inside(inside)
-        {
-            if target.is_empty() {
-                block_id
-            } else {
-                target.rsplit('/').next().unwrap_or(&target).to_string()
-            }
+        } else if target.is_empty() {
+            block_id
         } else {
-            link_target.to_string()
+            target.rsplit('/').next().unwrap_or(&target).to_string()
         };
         flattened.replace_range(span.open..span.end, &display);
     }
@@ -537,6 +550,30 @@ mod tests {
                 "Read [[projects/other#^x|the handoff]] and [[#^local]]"
             ),
             "Read the handoff and local"
+        );
+        assert_eq!(
+            flatten_block_wikilinks("See [[plain-note]] and [[plain|alias]]"),
+            "See [[plain-note]] and [[plain|alias]]"
+        );
+    }
+
+    #[test]
+    fn kept_notes_text_strips_tags_fields_and_ids() {
+        assert_eq!(
+            kept_notes_display_text(
+                "- [?] #task Work #prj_is_blocked [id:: proj__work] ^work",
+                "#task",
+                Some("work"),
+            ),
+            "Work"
+        );
+        assert_eq!(
+            kept_notes_display_text(
+                "- [?] #task Ship it #prj #hide ^prj",
+                "#task",
+                Some("prj"),
+            ),
+            "Ship it"
         );
     }
 

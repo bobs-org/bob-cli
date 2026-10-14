@@ -303,3 +303,46 @@ fn task_id_assignment_returns_star_replacement_with_quoted_locator() {
         "*\"Shopping List\":cheese-task"
     );
 }
+
+#[test]
+fn missing_day_file_is_empty_ledger_without_warning() {
+    let temp = TempDir::new("bob-cli-complete-blocked-task-missing-day");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    write_completion_fixture(&vault);
+    let missing = vault.join("no-such-day.md");
+    let text = "Create a report *";
+    let output = bob_command()
+        .arg("capture-complete")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-c")
+        .arg(text.len().to_string())
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .arg(text)
+        .env("BOB_NOW", BOB_NOW)
+        .env("BOB_DAY_FILE", &missing)
+        .output()
+        .expect("run blocked-task completion with missing day file");
+    assert_success(&output);
+    let json: serde_json::Value =
+        serde_json::from_slice(stdout(&output).as_bytes()).expect("json");
+    assert_eq!(json["context"], "blocked_task");
+    let warnings = json["warnings"].as_array().cloned().unwrap_or_default();
+    assert!(
+        warnings.iter().all(|warning| {
+            !warning
+                .as_str()
+                .unwrap_or_default()
+                .contains("does not exist")
+        }),
+        "missing day file must not warn: {warnings:?}"
+    );
+    assert!(
+        json["candidates"].as_array().map(|rows| !rows.is_empty())
+            == Some(true),
+        "candidates still rank without a ledger: {json}"
+    );
+}

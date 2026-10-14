@@ -461,6 +461,19 @@ pub(super) struct CaptureItemResult {
     pub(super) minted_blocker_block_id: Option<MintedDependentBlockIdJson>,
 }
 
+impl CaptureItemResult {
+    /// The array is present whenever any update exists, and the singular
+    /// field equals `[0]`. Close/reset paths historically set only the
+    /// singular field; fold them here so every JSON item holds the pair.
+    pub(super) fn normalize_dependency_updates(&mut self) {
+        if self.dependency_updates.is_empty()
+            && let Some(update) = self.dependency_update.clone()
+        {
+            self.dependency_updates.push(update);
+        }
+    }
+}
+
 /// Why a link gesture left its target unlinked (§13.5 gesture rule):
 /// the §13.9 reason kinds for machines, the promoted prerequisite
 /// identities (`route#^block`) for machines, and one sentence for
@@ -2090,15 +2103,25 @@ pub(super) fn print_human_task_dependency_success(
         println!("  {}", styler.dim(&result.task_line));
         return;
     };
-    let verb = if result.dry_run {
-        "would add dependency to"
-    } else {
-        "Add dependency to"
+    let (verb, headline) = match update.role {
+        DependencyUpdateRole::BlockedTask => {
+            let verb = if result.dry_run {
+                "would add blocker from"
+            } else {
+                "Add blocker from"
+            };
+            (verb, result.text.as_str())
+        }
+        DependencyUpdateRole::Dependent => {
+            let verb = if result.dry_run {
+                "would add dependency to"
+            } else {
+                "Add dependency to"
+            };
+            (verb, update.dependent_text.as_str())
+        }
     };
-    println!(
-        "{prefix} {verb} \"{}\"  {ordinal}{target_label}",
-        update.dependent_text
-    );
+    println!("{prefix} {verb} \"{headline}\"  {ordinal}{target_label}");
     println!("  {}", styler.dim(&result.task_line));
     print_human_dependency_updates(result, styler);
 }
@@ -2127,12 +2150,18 @@ fn print_human_blocked_task_line(
     update: &DependencyUpdateJson,
     styler: &Styler,
 ) {
-    let existing_owner = result.kind == "task_dependency";
-    let verb = match (result.dry_run, existing_owner) {
-        (true, true) => "would now block",
-        (false, true) => "now blocks",
-        (true, false) => "would block",
-        (false, false) => "blocks",
+    let existing_owner =
+        result.kind == "task_dependency" || result.kind == "sub_bullet";
+    let already = update.added == 0 && update.already_present > 0;
+    let verb = if already {
+        "already blocks"
+    } else {
+        match (result.dry_run, existing_owner) {
+            (true, true) => "would now block",
+            (false, true) => "now blocks",
+            (true, false) => "would block",
+            (false, false) => "blocks",
+        }
     };
     let owner = if existing_owner {
         result
@@ -2143,27 +2172,39 @@ fn print_human_blocked_task_line(
     } else {
         String::new()
     };
-    let previous = style_task_status_marker(styler, update.previous_status);
-    let next = style_task_status_marker(styler, update.dependent_status);
     let block_id = update
         .dependent_block_id
         .as_deref()
         .map(|id| format!(" ^{id}"))
         .unwrap_or_default();
-    let mut line = format!(
-        "  🧱 {owner}{verb} \"{}\"  {}{block_id}  {previous} → {next} {}",
-        update.dependent_text,
-        update.dependent_note,
-        update.dependent_status_name,
-    );
-    if update.blocked_residents > 0 {
+    let mut line = if already {
+        format!(
+            "  🧱 {owner}{verb} \"{}\"  {}{block_id}",
+            update.dependent_text, update.dependent_note,
+        )
+    } else {
+        let previous = style_task_status_marker(styler, update.previous_status);
+        let next = style_task_status_marker(styler, update.dependent_status);
+        format!(
+            "  🧱 {owner}{verb} \"{}\"  {}{block_id}  {previous} → {next} {}",
+            update.dependent_text,
+            update.dependent_note,
+            update.dependent_status_name,
+        )
+    };
+    if !already && update.blocked_residents > 0 {
         let noun = if update.blocked_residents == 1 {
             "task"
         } else {
             "tasks"
         };
+        let resident_verb = if result.dry_run {
+            "would block"
+        } else {
+            "blocked"
+        };
         line.push_str(&format!(
-            " · blocked {} project {noun}",
+            " · {resident_verb} {} project {noun}",
             update.blocked_residents
         ));
     }

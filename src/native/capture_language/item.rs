@@ -983,6 +983,13 @@ pub(super) fn execution_item_dependencies(
     if !found.has_entries() {
         return Ok((Vec::new(), None));
     }
+    if matches!(kind, CaptureKind::Pomodoro { close: Some(_), .. })
+        && !found.blocked_entries.is_empty()
+    {
+        return Err(close_blocked_task_error(
+            local_marker_text.unwrap_or("@route:id=x"),
+        ));
+    }
     let target = resolve_execution_ownership(
         kind,
         route,

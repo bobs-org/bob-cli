@@ -42,6 +42,7 @@ pub(crate) use self::completion::pomodoro_start_override_at;
 pub(crate) use self::completion::project_task_block_id_detail;
 pub(crate) use self::completion::CompletionContext;
 pub(crate) use self::completion::CompletionField;
+pub(crate) use self::dependencies::close_blocked_task_error;
 pub(crate) use self::draft::parse_capture_draft_with_clip_control;
 #[cfg(test)]
 pub(crate) use self::draft::parse_capture_text_with_clip_control;

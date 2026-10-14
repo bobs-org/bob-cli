@@ -1573,17 +1573,54 @@ fn prerequisite_json(prereq: &ResolvedPrerequisite) -> PrerequisiteJson {
     }
 }
 
-fn target_block_ref(touch: &TargetTouch) -> TaskBlockRef {
-    let mut without_extension = touch.relative.clone();
-    without_extension.set_extension("");
-    TaskBlockRef {
-        target: touch.absolute.clone(),
-        relative_target: display_relative(&touch.relative),
-        route: display_relative(&without_extension),
-        line: touch.line,
-        block_id: Some(touch.block_id.clone()),
-        role: TaskBlockRole::DependencyTarget,
+fn target_block_ref(
+    ctx: &DependencyContext,
+    planner: &mut CaptureBatchPlanner,
+    bob_dir: &Path,
+    touch: &TargetTouch,
+) -> Result<TaskBlockRef, CaptureError> {
+    relocate_task_block_ref(
+        ctx,
+        planner,
+        bob_dir,
+        TaskBlockRef {
+            target: touch.absolute.clone(),
+            relative_target: display_relative(&touch.relative),
+            route: route_without_extension(&touch.relative),
+            line: touch.line,
+            block_id: Some(touch.block_id.clone()),
+            role: TaskBlockRole::DependencyTarget,
+        },
+    )
+}
+
+pub(super) fn relocate_task_block_refs(
+    ctx: &DependencyContext,
+    planner: &mut CaptureBatchPlanner,
+    bob_dir: &Path,
+    refs: Vec<TaskBlockRef>,
+) -> Result<Vec<TaskBlockRef>, CaptureError> {
+    let mut out = Vec::with_capacity(refs.len());
+    for r#ref in refs {
+        out.push(relocate_task_block_ref(ctx, planner, bob_dir, r#ref)?);
     }
+    Ok(out)
+}
+
+fn relocate_task_block_ref(
+    ctx: &DependencyContext,
+    planner: &mut CaptureBatchPlanner,
+    bob_dir: &Path,
+    r#ref: TaskBlockRef,
+) -> Result<TaskBlockRef, CaptureError> {
+    let Some(block_id) = r#ref.block_id.as_deref() else {
+        return Ok(r#ref);
+    };
+    let relative = PathBuf::from(&r#ref.relative_target);
+    let mut found =
+        locate_task_by_block_id(ctx, planner, bob_dir, &relative, block_id)?;
+    found.role = r#ref.role;
+    Ok(found)
 }
 
 /// Raise open prerequisites to at least the dependent's lane (Ready 0,
@@ -2664,11 +2701,14 @@ pub(super) fn plan_existing_task_dependencies(
             block_id: Some(dependent_block_id.to_string()),
             role: TaskBlockRole::Dependency,
         },
-        target_refs: touches
-            .into_iter()
-            .map(|touch| target_block_ref(&touch))
-            .chain(blocks.target_refs)
-            .collect(),
+        target_refs: {
+            let mut refs = Vec::new();
+            for touch in touches {
+                refs.push(target_block_ref(ctx, planner, bob_dir, &touch)?);
+            }
+            refs.extend(blocks.target_refs);
+            refs
+        },
         pomodoro_refs,
         blocks: BlocksMirrorReports {
             updates: blocks.updates,
@@ -2894,11 +2934,11 @@ pub(super) fn plan_new_task_dependencies(
         previous_status_name: status_name_for(capture_status).to_string(),
         blocked_residents: 0,
     };
-    let target_refs: Vec<TaskBlockRef> = touches
-        .into_iter()
-        .map(|touch| target_block_ref(&touch))
-        .chain(blocks.target_refs)
-        .collect();
+    let mut target_refs = Vec::new();
+    for touch in touches {
+        target_refs.push(target_block_ref(ctx, planner, bob_dir, &touch)?);
+    }
+    target_refs.extend(blocks.target_refs);
     Ok((
         AugmentedNewTask {
             task_line,
@@ -3107,6 +3147,12 @@ pub(super) fn plan_dependency_only_item(
     let final_task = lookup_staged_task(&final_scan, &route, &block_id)?;
     let (dependency_update, dependency_updates) =
         fold_dependency_updates(dependency_summaries);
+    let task_block_refs = relocate_task_block_refs(
+        ctx,
+        planner,
+        &request.bob_dir,
+        task_block_refs,
+    )?;
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
             ok: true,

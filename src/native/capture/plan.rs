@@ -138,6 +138,7 @@ pub(super) fn plan_capture_batch(
             error
         })?;
         planned.result.consumed_links = planner.take_consumed_links();
+        planned.result.normalize_dependency_updates();
         let refs = std::mem::take(&mut planned.pomodoro_refs);
         match planner.loaded_texts(&day_file) {
             Some((original, current)) => {
@@ -521,6 +522,13 @@ pub(super) fn plan_capture_item(
         );
     }
     if let CaptureKind::PomodoroClose { spec } = parsed.kind.clone() {
+        if !parsed.blocked_tasks.is_empty() {
+            return Err(CaptureError::usage(
+                capture_language::close_blocked_task_error(&close_star_marker(
+                    &parsed,
+                )),
+            ));
+        }
         return plan_pomodoro_close_item(
             request,
             parsed,
@@ -567,9 +575,10 @@ pub(super) fn plan_capture_item(
             match target {
                 SubBulletTarget::BlockId(block_id) => {
                     let Some(route) = parsed.route.clone() else {
-                        return Err(CaptureError::usage(
-                            "task dependencies with --task need --route for the dependent note",
-                        ));
+                        return Err(CaptureError::usage(format!(
+                            "{} with --task need --route for the dependent note",
+                            typed_relationship_phrase(&parsed),
+                        )));
                     };
                     parsed.dependency_target = Some(ParsedDependencyTarget {
                         kind: ParsedDependencyTargetKind::ExistingTask,
@@ -579,9 +588,10 @@ pub(super) fn plan_capture_item(
                     });
                 }
                 SubBulletTarget::Ref { .. } => {
-                    return Err(CaptureError::usage(
-                        "task dependencies cannot attach to a --task-ref picker selection",
-                    ));
+                    return Err(CaptureError::usage(format!(
+                        "{} cannot attach to a --task-ref picker selection",
+                        typed_relationship_phrase(&parsed),
+                    )));
                 }
             }
         }
@@ -1227,6 +1237,13 @@ pub(super) fn plan_capture_item(
                 )
             })?;
             if let Some(close_spec) = close.clone() {
+                if !parsed.blocked_tasks.is_empty() {
+                    return Err(CaptureError::usage(
+                        capture_language::close_blocked_task_error(
+                            &close_star_marker(&parsed),
+                        ),
+                    ));
+                }
                 // The augmented block already carries the managed child;
                 // the close path only needs the summary parts.
                 let close_dependencies =
@@ -1487,6 +1504,12 @@ pub(super) fn plan_capture_item(
     }
     let (dependency_update, dependency_updates) =
         fold_dependency_updates(dependency_summaries);
+    dependency_block_refs = relocate_task_block_refs(
+        dependency_ctx,
+        planner,
+        &request.bob_dir,
+        dependency_block_refs,
+    )?;
     let special = note_plan.pomodoro.as_ref();
     let sub_bullet = note_plan.sub_bullet.as_ref();
     let pomodoro_note = note_plan.pomodoro_note.as_ref();
@@ -1753,6 +1776,32 @@ pub(super) fn resolve_priority(
         max_days: level.max_days(),
         rolled_offset,
     })
+}
+
+fn typed_relationship_phrase(parsed: &ParsedCaptureText) -> String {
+    match (
+        parsed.dependencies.is_empty(),
+        parsed.blocked_tasks.is_empty(),
+    ) {
+        (false, false) => "'&' and '*'".to_string(),
+        (false, true) => "'&'".to_string(),
+        (true, false) => "'*'".to_string(),
+        (true, true) => "task dependencies".to_string(),
+    }
+}
+
+fn close_star_marker(parsed: &ParsedCaptureText) -> String {
+    match &parsed.kind {
+        CaptureKind::Pomodoro { block_id, .. } => {
+            let route = parsed.route.as_deref().unwrap_or("route");
+            format!("@{route}:{block_id}=x")
+        }
+        _ => parsed
+            .route
+            .as_deref()
+            .map(|route| format!("@{route}:id=x"))
+            .unwrap_or_else(|| "@route:id=x".to_string()),
+    }
 }
 
 /// N for a `*` pass: an existing `@route+id` owner, else the new task

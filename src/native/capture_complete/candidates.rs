@@ -699,9 +699,11 @@ pub(super) fn blocked_task_candidates(
     let graph =
         capture_dependency_tasks::dependency_graph(bob_dir, &discovered);
     let day_file = pomodoro::day_file_for(bob_dir);
-    let mut warnings = Vec::new();
-    let ledger = capture_active_tasks::read_ledger(&day_file, &mut warnings);
-    warnings.extend(discovered.warnings.iter().cloned());
+    let mut ledger_warnings = Vec::new();
+    let ledger =
+        capture_active_tasks::read_ledger(&day_file, &mut ledger_warnings);
+    let _ = ledger_warnings;
+    let warnings = discovered.warnings.clone();
 
     let owner_path = PathBuf::from(capture::route_label(owner_note));
     let owner_path_display = owner_path.to_string_lossy().replace('\\', "/");

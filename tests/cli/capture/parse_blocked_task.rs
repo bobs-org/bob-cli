@@ -163,9 +163,15 @@ fn blocked_task_picker_and_markdown_guards_are_distinct() {
     assert_eq!(trailing_escape["body"], "Support *nix");
     assert!(trailing_escape["blocked_tasks"].is_null());
 
-    for text in ["=x*1", "=*", "==*"] {
+    for (text, mode) in [
+        ("=x*1", "pomodoro_close"),
+        ("=*", "pomodoro_close"),
+        ("==*", "pomodoro_start"),
+    ] {
         let json = parse_json(text);
         assert!(json["blocked_tasks"].is_null(), "{text}: {json}");
+        assert_eq!(json["mode"], mode, "{text}: {json}");
+        assert_eq!(json["body"], text, "{text}: {json}");
     }
 }
 
@@ -181,5 +187,122 @@ fn blocked_task_note_star_is_invalid() {
     assert_eq!(
         malformed_dependency["diagnostics"][0]["code"],
         "invalid_dependency"
+    );
+}
+
+#[test]
+fn blocked_task_parse_vectors_cover_leading_quoted_and_nested() {
+    let leading = parse_json("@cash *job:cleanup Ask Kelly");
+    assert_eq!(leading["body"], "Ask Kelly");
+    assert_eq!(leading["route"], "cash");
+    assert_eq!(leading["mode"], "task");
+    assert_eq!(leading["blocked_tasks"][0]["raw"], "*job:cleanup");
+    assert_eq!(
+        leading["dependency_target"],
+        serde_json::json!({ "kind": "new_task", "route": "cash" })
+    );
+
+    let colon = parse_json("@bob:ask-kelly *job:cleanup");
+    assert_eq!(colon["mode"], "task_dependency");
+    assert_eq!(
+        colon["dependency_target"],
+        serde_json::json!({
+            "kind": "existing_task",
+            "route": "bob",
+            "block_id": "ask-kelly",
+        })
+    );
+
+    let quoted = parse_json(r#"X *"Release Plan":publish"#);
+    assert_eq!(quoted["body"], "X");
+    assert_eq!(quoted["blocked_tasks"][0]["note"], "Release Plan");
+    assert_eq!(quoted["blocked_tasks"][0]["quoted"], true);
+    assert_eq!(quoted["blocked_tasks"][0]["block_id"], "publish");
+
+    let linked = parse_json("Ask Kelly @mac_inbox:ask-kelly *job:cleanup");
+    assert_eq!(linked["mode"], "pomodoro_task");
+    assert_eq!(linked["block_id"], "ask-kelly");
+    assert_eq!(linked["blocked_tasks"][0]["raw"], "*job:cleanup");
+
+    let nested = parse_json("Order parts *projects/house/kitchen:cabinets");
+    assert_eq!(nested["body"], "Order parts");
+    assert_eq!(nested["blocked_tasks"][0]["note"], "projects/house/kitchen");
+    assert_eq!(nested["blocked_tasks"][0]["block_id"], "cabinets");
+}
+
+#[test]
+fn bang_keeps_precedence_over_star() {
+    let json = parse_json("!sase:x *foo");
+    assert_eq!(json["mode"], "task_complete");
+    let diagnostics = json["diagnostics"].as_array().expect("diagnostics");
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains('!')
+        }),
+        "bang teaching error stays: {json}"
+    );
+}
+
+fn diagnostic_messages(json: &serde_json::Value) -> Vec<String> {
+    json["diagnostics"]
+        .as_array()
+        .unwrap_or(&Vec::new())
+        .iter()
+        .filter_map(|diagnostic| {
+            diagnostic["message"].as_str().map(str::to_string)
+        })
+        .collect()
+}
+
+fn assert_star_named_rejection(draft: &str) {
+    let json = parse_json(draft);
+    let messages = diagnostic_messages(&json);
+    assert!(
+        messages.iter().any(|message| message.contains('*')),
+        "{draft}: expected a * diagnostic, got {json}"
+    );
+}
+
+#[test]
+fn star_twins_of_ampersand_rejections_name_the_sigil() {
+    assert_star_named_rejection("=x *job:cleanup");
+    assert_star_named_rejection("++3 *job:cleanup");
+    assert_star_named_rejection("+5 *job:cleanup");
+    assert_star_named_rejection("-5 *job:cleanup");
+    assert_star_named_rejection("Buy milk @notes#Ideas *job:cleanup");
+    assert_star_named_rejection("*job:cleanup @body:excercise#name");
+    assert_star_named_rejection("@job^cleanup+ *job:other");
+    let close = parse_json("New thing @mac_inbox:new-thing=x *job:cleanup");
+    let close_messages = diagnostic_messages(&close);
+    assert!(
+        close_messages.iter().any(|message| {
+            message.contains('*') && message.contains("separate")
+        }),
+        "body-bearing close must refuse *: {close}"
+    );
+    assert_eq!(close["diagnostics"][0]["code"], "invalid_dependency_target");
+}
+
+#[test]
+fn body_bearing_close_with_star_fails_capture() {
+    let temp = tempfile::tempdir().expect("temporary vault");
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(temp.path())
+        .arg("--dry-run")
+        .arg("--")
+        .arg("New thing @mac_inbox:new-thing=x *job:cleanup")
+        .output()
+        .expect("run close+star capture");
+    assert!(!output.status.success(), "{}", format_output(&output));
+    let message = stderr(&output);
+    assert!(message.contains('*'), "{message}");
+    assert!(
+        message.contains("separate") || message.contains("blank-line"),
+        "{message}"
     );
 }

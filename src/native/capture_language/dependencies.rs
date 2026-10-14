@@ -1183,6 +1183,16 @@ pub(crate) fn invalid_relation_target_error(
     )
 }
 
+/// Closing a Pomodoro cannot also write a `*` edge: the two actions
+/// belong on separate blank-line items.
+pub(crate) fn close_blocked_task_error(marker_text: &str) -> String {
+    format!(
+        "cannot mix a Pomodoro close with '*note:block-id': '{marker_text}' \
+         closes the session, so capture the block as a separate blank-line item \
+         (close first, then N *T)"
+    )
+}
+
 /// Error when modifiers name prerequisites but no dependent: add task
 /// text or an explicit existing parent.
 pub(crate) fn ownerless_relation_error(sigil: u8) -> String {
@@ -1275,17 +1285,12 @@ pub(crate) fn resolve_execution_ownership(
                 ))
             }
         },
-        CaptureKind::Task
-        | CaptureKind::TaskWithBlockId { .. }
-        | CaptureKind::Pomodoro { .. } => {
+        CaptureKind::Task | CaptureKind::TaskWithBlockId { .. } => {
             if body_empty {
                 return Ok(None);
             }
             let block_id = match kind {
                 CaptureKind::TaskWithBlockId { block_id } => {
-                    Some(block_id.clone())
-                }
-                CaptureKind::Pomodoro { block_id, .. } => {
                     Some(block_id.clone())
                 }
                 _ => None,
@@ -1294,6 +1299,24 @@ pub(crate) fn resolve_execution_ownership(
                 kind: ParsedDependencyTargetKind::NewTask,
                 route: route.map(str::to_string),
                 block_id,
+                inherited: false,
+            }))
+        }
+        CaptureKind::Pomodoro {
+            block_id, close, ..
+        } => {
+            if close.is_some() && sigil == b'*' {
+                return Err(close_blocked_task_error(
+                    local_marker_text.unwrap_or("@route:id=x"),
+                ));
+            }
+            if body_empty {
+                return Ok(None);
+            }
+            Ok(Some(ParsedDependencyTarget {
+                kind: ParsedDependencyTargetKind::NewTask,
+                route: route.map(str::to_string),
+                block_id: Some(block_id.clone()),
                 inherited: false,
             }))
         }

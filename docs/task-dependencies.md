@@ -2190,7 +2190,9 @@ identity — vault-relative path plus block id — so aliases,
 `[[#^local]]`, basename, path, and case spellings all match (PDL10).
 A childless link-only bullet is deleted. A link-only bullet with
 children keeps the marker, indentation, and children, replacing the
-link token with the task's clean display text (PDL8). A prose bullet
+link token with the task's clean display text: checkbox, tags, inline
+fields, and `^id` stripped, and only `[[…#^…]]` block links flattened
+(PDL8). A prose bullet
 loses only the token (PDL6). An entry is deleted only when this
 capture emptied it: it had a child list item before and none after,
 judged after all of the item's edits, including a running timed

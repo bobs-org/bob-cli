@@ -54,16 +54,52 @@ fn capture_human(
     day: &Path,
     draft: &str,
 ) -> std::process::Output {
-    bob_command()
+    capture_human_flags(vault, day, &[], draft)
+}
+
+fn capture_human_flags(
+    vault: &Path,
+    day: &Path,
+    flags: &[&str],
+    draft: &str,
+) -> std::process::Output {
+    let mut command = bob_command();
+    command
         .env("BOB_NOW", NOW)
         .env("BOB_DAY_FILE", day)
         .arg("capture")
         .arg("-b")
-        .arg(vault)
-        .arg("--")
-        .arg(draft)
-        .output()
-        .expect("run bob capture human")
+        .arg(vault);
+    command.args(flags);
+    command.arg("--").arg(draft);
+    command.output().expect("run bob capture human")
+}
+
+fn capture_fail_flags(
+    vault: &Path,
+    day: &Path,
+    flags: &[&str],
+    draft: &str,
+) -> std::process::Output {
+    let mut command = bob_command();
+    command
+        .env("BOB_NOW", NOW)
+        .env("BOB_DAY_FILE", day)
+        .arg("capture")
+        .arg("-b")
+        .arg(vault);
+    command.args(flags);
+    command.arg("--").arg(draft);
+    command.output().expect("run bob capture")
+}
+
+fn task_block_ids(json: &serde_json::Value) -> Vec<String> {
+    json["task_blocks"]
+        .as_array()
+        .unwrap_or(&Vec::new())
+        .iter()
+        .filter_map(|row| row["block_id"].as_str().map(str::to_string))
+        .collect()
 }
 
 fn running_day(extra_children: &str) -> String {
@@ -105,23 +141,22 @@ fn st1_new_blocker_ready_unlinked() {
 
     let inbox = fs::read_to_string(vault.join("mac_inbox.md")).expect("inbox");
     let job = fs::read_to_string(vault.join("job.md")).expect("job");
-    assert!(
-        inbox.contains(&format!("^{minted}")),
-        "N carries the minted id:\n{inbox}"
+    let task_line = json["task_line"].as_str().expect("task_line");
+    assert_eq!(
+        inbox,
+        format!("{task_line}\n\t- 🧱 **BLOCKS:** [[job#^cleanup]]\n"),
+        "N exact bytes:\n{inbox}"
     );
     assert!(
-        inbox.contains("- [ ] #task Ask Kelly"),
-        "Ready T does not raise new N past Ready:\n{inbox}"
+        task_line.starts_with("- [ ] #task Ask Kelly"),
+        "Ready T does not raise new N past Ready:\n{task_line}"
     );
-    assert!(
-        inbox.contains("🧱 **BLOCKS:**") && inbox.contains("[[job#^cleanup]]"),
-        "N gained a BLOCKS line:\n{inbox}"
-    );
-    assert!(
-        job.contains("- [?] #task Cleanup")
-            && job.contains("⛓️ **DEPENDS ON:**")
-            && job.contains(&format!("[[mac_inbox#^{minted}]]")),
-        "T depends on N and is Blocked:\n{job}"
+    assert_eq!(
+        job,
+        format!(
+            "- [?] #task Cleanup [fresh:: 2026-10-14] [id:: job__cleanup] [dependsOn:: mac_inbox__{minted}] ^cleanup\n\t- ⛓️ **DEPENDS ON:** [[mac_inbox#^{minted}]]\n"
+        ),
+        "T exact bytes:\n{job}"
     );
     let day_after = fs::read_to_string(&day).expect("day");
     assert_eq!(
@@ -183,13 +218,9 @@ fn st3_delete_empty_running_entry() {
         !inbox.contains("- [/] #task Ask Kelly"),
         "cap must not raise to In Progress:\n{inbox}"
     );
-    assert!(
-        !day_after.contains("(1010-1035) JOB"),
-        "empty running entry deleted:\n{day_after}"
-    );
-    assert!(
-        day_after.contains("Unrelated placeholder"),
-        "unrelated entry kept:\n{day_after}"
+    assert_eq!(
+        day_after, "## Pomodoros\n- [ ] Unrelated placeholder\n",
+        "empty running entry deleted; placeholder kept:\n{day_after}"
     );
     assert_eq!(json["consumed_links"][0]["pomodoro"]["removed"], true);
     assert_eq!(json["consumed_links"][0]["pomodoro"]["status"], "running");
@@ -217,12 +248,15 @@ fn st4_notes_kept() {
 
     let json = capture_json(&vault, &day, "Ask Kelly *job:cleanup");
     let day_after = fs::read_to_string(&day).expect("day");
-    assert!(
-        day_after.contains("  - Cleanup with the walk\n"),
-        "{day_after}"
-    );
-    assert!(
-        day_after.contains("    - authored work note\n"),
+    assert_eq!(
+        day_after,
+        concat!(
+            "## Pomodoros\n",
+            "- [ ] (1010-1035) — JOB\n",
+            "  - Cleanup with the walk\n",
+            "    - authored work note\n",
+            "- [ ] Unrelated placeholder\n",
+        ),
         "{day_after}"
     );
     assert_eq!(json["consumed_links"][0]["action"], "notes_kept");
@@ -284,14 +318,28 @@ fn st6_link_then_consume() {
     assert!(json.get("minted_blocker_block_id").is_none(), "{json}");
 }
 
-// ST7: unrelated childless placeholder stays.
+// ST7: linked T is consumed; unrelated childless placeholder stays.
 #[test]
 fn st7_unrelated_placeholder_untouched() {
     let (_temp, vault, day) = setup("bob-cli-star-st7");
-    write_file(&vault.join("job.md"), "- [ ] #task Cleanup ^cleanup\n");
+    write_file(&vault.join("job.md"), "- [*] #task Cleanup ^cleanup\n");
+    write_file(&day, &running_day("  - [[job#^cleanup]]\n"));
     let before = fs::read_to_string(&day).expect("day");
+    assert!(before.contains("- [ ] Unrelated placeholder\n"), "{before}");
     capture_json(&vault, &day, "Ask Kelly *job:cleanup");
-    assert_eq!(fs::read_to_string(&day).expect("day"), before);
+    let day_after = fs::read_to_string(&day).expect("day");
+    assert!(
+        !day_after.contains("[[job#^cleanup]]"),
+        "T's link is consumed:\n{day_after}"
+    );
+    assert!(
+        day_after.contains("- [ ] Unrelated placeholder\n"),
+        "placeholder untouched:\n{day_after}"
+    );
+    assert!(
+        !day_after.contains("(1010-1035) — JOB"),
+        "emptied running entry deleted:\n{day_after}"
+    );
 }
 
 // ST8: `^prj` T blocks residents and reports `blocked_residents`.
@@ -313,31 +361,36 @@ fn st8_prj_blocks_residents() {
             "## Pomodoros\n",
             "- [ ] (1010-1035) — JOB\n",
             "  - [[proj#^work]]\n",
+            "    - authored work note\n",
             "  - [[proj#^grind]]\n",
             "  - other context\n",
         ),
     );
 
     let json = capture_json(&vault, &day, "Ask Kelly *proj:prj");
-    assert!(
-        json["dependency_update"]["blocked_residents"]
-            .as_u64()
-            .unwrap()
-            >= 1,
-        "{json}"
-    );
+    assert_eq!(json["dependency_update"]["blocked_residents"], 2, "{json}");
     let proj = fs::read_to_string(vault.join("proj.md")).expect("proj");
     assert!(proj.contains("- [?] #task Ship"), "{proj}");
     assert!(
-        proj.contains("#prj_is_blocked") && proj.contains("^work"),
-        "{proj}"
+        task_line(&proj, "work").contains("- [?] ")
+            && task_line(&proj, "work").contains("#prj_is_blocked"),
+        "work resident is Blocked with #prj_is_blocked:\n{proj}"
+    );
+    assert!(
+        task_line(&proj, "grind").contains("- [?] ")
+            && task_line(&proj, "grind").contains("#prj_is_blocked"),
+        "grind resident is Blocked with #prj_is_blocked:\n{proj}"
+    );
+    let day_after = fs::read_to_string(&day).expect("day");
+    assert!(
+        day_after.contains("  - Work\n    - authored work note\n"),
+        "kept-notes strip tags from the resident line:\n{day_after}"
     );
     let inbox = fs::read_to_string(vault.join("mac_inbox.md")).expect("inbox");
     assert!(
         inbox.contains("- [*] #task Ask Kelly"),
         "strongest resident [/] still caps new N at Next:\n{inbox}"
     );
-    let day_after = fs::read_to_string(&day).expect("day");
     assert!(
         !day_after.contains("[[proj#^work]]")
             && !day_after.contains("[[proj#^grind]]"),
@@ -389,6 +442,40 @@ fn st9_prj_internal_refuse() {
             || stderr(&descendant).contains("cannot wait"),
         "{}",
         format_output(&descendant)
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("parent.md")).expect("parent"),
+        parent_before
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("child.md")).expect("child"),
+        child_before
+    );
+
+    let new_in_project =
+        capture_fail(&vault, &day, "Internal *parent:prj @parent");
+    assert!(
+        !new_in_project.status.success(),
+        "{}",
+        format_output(&new_in_project)
+    );
+    assert!(
+        stderr(&new_in_project).contains('*'),
+        "{}",
+        format_output(&new_in_project)
+    );
+
+    let new_in_descendant =
+        capture_fail(&vault, &day, "Work *parent:prj @child");
+    assert!(
+        !new_in_descendant.status.success(),
+        "{}",
+        format_output(&new_in_descendant)
+    );
+    assert!(
+        stderr(&new_in_descendant).contains('*'),
+        "{}",
+        format_output(&new_in_descendant)
     );
     assert_eq!(
         fs::read_to_string(vault.join("parent.md")).expect("parent"),
@@ -592,7 +679,7 @@ fn st13_multiple_and_duplicate() {
         &day,
         "Ask Kelly *job:cleanup *job:send-batch *job:cleanup",
     );
-    assert_eq!(json["dependency_updates"].as_array().unwrap().len(), 3);
+    assert_eq!(json["dependency_updates"].as_array().unwrap().len(), 2);
     assert_eq!(
         json["dependency_updates"][0]["dependent_block_id"],
         "cleanup"
@@ -601,13 +688,23 @@ fn st13_multiple_and_duplicate() {
         json["dependency_updates"][1]["dependent_block_id"],
         "send-batch"
     );
-    assert_eq!(json["dependency_updates"][2]["added"], 0);
     let job = fs::read_to_string(vault.join("job.md")).expect("job");
     assert_eq!(
         job.matches("[[mac_inbox#^").count(),
         2,
         "duplicate did not add a third edge:\n{job}"
     );
+
+    write_file(
+        &vault.join("job.md"),
+        concat!(
+            "- [ ] #task Cleanup ^cleanup\n",
+            "- [ ] #task Send batch ^send-batch\n",
+        ),
+    );
+    let cased =
+        capture_json(&vault, &day, "Ask Kelly *job:cleanup *Job:cleanup");
+    assert_eq!(cased["dependency_updates"].as_array().unwrap().len(), 1);
 }
 
 // ST14: `N &P *T` inserts N between T and P.
@@ -721,7 +818,7 @@ fn st17_two_item_equivalent() {
         let vault = temp.path().join("vault");
         fs::create_dir_all(&vault).expect("vault");
         write_blocked_tasks_settings(&vault);
-        write_file(&vault.join("job.md"), "- [ ] #task Cleanup ^cleanup\n");
+        write_file(&vault.join("job.md"), "- [*] #task Cleanup ^cleanup\n");
         write_file(&vault.join("day.md"), "## Pomodoros\n- [ ] () — later\n");
     }
     let star_vault = star_tmp.path().join("vault");
@@ -748,6 +845,9 @@ fn st17_two_item_equivalent() {
     let amp_inbox =
         fs::read_to_string(amp_vault.join("mac_inbox.md")).expect("inbox");
     assert_eq!(star_inbox, amp_inbox, "N notes must match");
+    let star_day = fs::read_to_string(&star_day).expect("star day");
+    let amp_day = fs::read_to_string(&amp_day).expect("amp day");
+    assert_eq!(star_day, amp_day, "day files must match");
 }
 
 // ST19: existing owner + sub-bullet; forced `--task`/`--route`.
@@ -791,6 +891,16 @@ fn st19_existing_owner_and_forced_task() {
         task_line(&body, "work").contains("- [/] "),
         "forced --task owner transferred:\n{body}"
     );
+
+    write_file(&vault.join("job.md"), "- [/] #task Cleanup ^cleanup\n");
+    write_file(&vault.join("body.md"), "- [ ] #task Exercise ^work\n");
+    let colon = capture_json(&vault, &day, "@body:work *job:cleanup");
+    assert_eq!(colon["kind"], "task_dependency");
+    let body = fs::read_to_string(vault.join("body.md")).expect("body");
+    assert!(
+        task_line(&body, "work").contains("- [/] "),
+        "@route:id *T existing owner transferred:\n{body}"
+    );
 }
 
 #[test]
@@ -816,4 +926,240 @@ fn human_star_line_and_consumption() {
     assert_success(&existing);
     let out = stdout(&existing);
     assert!(out.contains("🧱 ^work now blocks \"Cleanup\""), "{out}");
+    assert!(
+        out.contains("Add blocker from \"Exercise\""),
+        "*-only existing-owner header names the owner:\n{out}"
+    );
+
+    write_file(&vault.join("job.md"), "- [ ] #task Other ^other\n");
+    write_file(&vault.join("body.md"), "- [ ] #task Exercise ^work\n");
+    let sub = capture_human(&vault, &day, "Note text @body+work *job:other");
+    assert_success(&sub);
+    let out = stdout(&sub);
+    assert!(out.contains("🧱 ^work now blocks \"Other\""), "{out}");
+
+    write_file(&vault.join("job.md"), "- [ ] #task Cleanup ^cleanup\n");
+    write_file(&vault.join("body.md"), "- [ ] #task Exercise ^work\n");
+    let dry = capture_human_flags(
+        &vault,
+        &day,
+        &["--dry-run"],
+        "*job:cleanup @body+work",
+    );
+    assert_success(&dry);
+    let out = stdout(&dry);
+    assert!(
+        out.contains("🧱 ^work would now block \"Cleanup\""),
+        "{out}"
+    );
+    assert!(out.contains("would add blocker from \"Exercise\""), "{out}");
+
+    write_file(&vault.join("job.md"), "- [ ] #task Cleanup ^cleanup\n");
+    write_file(&vault.join("body.md"), "- [ ] #task Exercise ^work\n");
+    assert_success(&capture_human(&vault, &day, "*job:cleanup @body+work"));
+    let already = capture_human(&vault, &day, "*job:cleanup @body+work");
+    assert_success(&already);
+    let out = stdout(&already);
+    assert!(out.contains("🧱 ^work already blocks \"Cleanup\""), "{out}");
+    assert!(
+        !out.contains('→'),
+        "already-present has no status arrow:\n{out}"
+    );
+}
+
+#[test]
+fn human_dry_run_residents_and_kept_notes() {
+    let (_temp, vault, day) = setup("bob-cli-star-human-residents");
+    write_project(
+        &vault,
+        "proj.md",
+        concat!(
+            "- [ ] #task Ship #hide ^prj\n",
+            "- [ ] #task Work ^work\n",
+            "- [/] #task Grind ^grind\n",
+        ),
+    );
+    write_file(
+        &day,
+        concat!(
+            "## Pomodoros\n",
+            "- [ ] (1010-1035) — JOB\n",
+            "  - [[proj#^work]]\n",
+            "    - authored work note\n",
+            "  - [[proj#^grind]]\n",
+        ),
+    );
+    let dry = capture_human_flags(
+        &vault,
+        &day,
+        &["--dry-run"],
+        "Ask Kelly *proj:prj",
+    );
+    assert_success(&dry);
+    let out = stdout(&dry);
+    assert!(out.contains("would block 2 project tasks"), "{out}");
+    assert!(out.contains("would block \"Ship"), "{out}");
+
+    let live = capture_human(&vault, &day, "Ask Kelly *proj:prj");
+    assert_success(&live);
+    let out = stdout(&live);
+    assert!(out.contains("blocked 2 project tasks"), "{out}");
+    assert!(
+        out.contains("kept its notes") || stdout(&live).contains("Work"),
+        "{out}"
+    );
+}
+
+#[test]
+fn same_note_task_blocks_relocate_by_block_id() {
+    let (_temp, vault, day) = setup("bob-cli-star-relocate");
+    write_file(
+        &vault.join("job.md"),
+        concat!(
+            "- [ ] #task Cleanup ^cleanup\n",
+            "- [ ] #task Other ^other\n",
+        ),
+    );
+    let json = capture_json(&vault, &day, "Ask Kelly @job *job:cleanup");
+    let ids = task_block_ids(&json);
+    assert!(
+        !ids.iter().any(|id| id == "other"),
+        "untouched same-note task is not a task_block: {ids:?}\n{json}"
+    );
+    assert!(
+        ids.iter().any(|id| id == "cleanup"),
+        "T is reported: {ids:?}\n{json}"
+    );
+    let minted = json["minted_blocker_block_id"]["block_id"]
+        .as_str()
+        .expect("minted");
+    assert_eq!(
+        ids.iter().filter(|id| *id == minted).count(),
+        1,
+        "N appears once: {ids:?}\n{json}"
+    );
+    let job_before = fs::read_to_string(vault.join("job.md")).expect("job");
+
+    write_file(
+        &vault.join("job.md"),
+        concat!(
+            "- [ ] #task Cleanup ^cleanup\n",
+            "- [ ] #task Send batch ^send-batch\n",
+        ),
+    );
+    let two = capture_json(
+        &vault,
+        &day,
+        "Ask Kelly @job *job:cleanup *job:send-batch",
+    );
+    let minted = two["minted_blocker_block_id"]["block_id"]
+        .as_str()
+        .expect("minted");
+    let ids = task_block_ids(&two);
+    assert_eq!(
+        ids.iter().filter(|id| *id == minted).count(),
+        1,
+        "two * targets still report N once: {ids:?}\n{two}"
+    );
+    let _ = job_before;
+}
+
+#[test]
+fn ampersand_same_note_prerequisite_below_dependent_relocates() {
+    let (_temp, vault, day) = setup("bob-cli-amp-relocate");
+    write_file(
+        &vault.join("job.md"),
+        concat!(
+            "- [ ] #task Cleanup ^cleanup\n",
+            "- [ ] #task Third ^third\n",
+        ),
+    );
+    let json = capture_json(&vault, &day, "&job:third @job+cleanup");
+    let ids = task_block_ids(&json);
+    assert!(
+        ids.iter().any(|id| id == "cleanup"),
+        "dependent is reported: {ids:?}\n{json}"
+    );
+    assert!(
+        ids.iter().any(|id| id == "third"),
+        "prerequisite is reported: {ids:?}\n{json}"
+    );
+    assert_eq!(json["dependency_update"], json["dependency_updates"][0]);
+    assert!(
+        !json["dependency_updates"].as_array().unwrap().is_empty(),
+        "{json}"
+    );
+}
+
+#[test]
+fn close_with_ampersand_emits_dependency_updates_array() {
+    let (_temp, vault, day) = setup("bob-cli-amp-close-updates");
+    write_file(&vault.join("cash.md"), "- [ ] #task Budget ^budget\n");
+    write_file(&day, &running_day("  - other context\n"));
+    let json = capture_json(
+        &vault,
+        &day,
+        "Follow up @mac_inbox:follow-up=x &cash:budget",
+    );
+    assert!(json.get("dependency_update").is_some(), "{json}");
+    assert_eq!(
+        json["dependency_update"], json["dependency_updates"][0],
+        "{json}"
+    );
+    assert_eq!(json["dependency_updates"][0]["role"], "dependent");
+}
+
+#[test]
+fn forced_target_rejections_name_the_typed_sigil() {
+    let (_temp, vault, day) = setup("bob-cli-star-forced");
+    write_file(&vault.join("job.md"), "- [ ] #task Cleanup ^cleanup\n");
+    write_file(&vault.join("body.md"), "- [ ] #task Exercise ^work\n");
+
+    let task_ref = capture_pomodoro_ref("- [ ] #task Exercise ^work", 1);
+    let star_ref = capture_fail_flags(
+        &vault,
+        &day,
+        &["--route", "body", "--task-ref", &task_ref],
+        "Forced note *job:cleanup",
+    );
+    assert!(!star_ref.status.success(), "{}", format_output(&star_ref));
+    assert!(
+        stderr(&star_ref).contains("'*'"),
+        "{}",
+        format_output(&star_ref)
+    );
+
+    let amp_ref = capture_fail_flags(
+        &vault,
+        &day,
+        &["--route", "body", "--task-ref", &task_ref],
+        "Forced note &job:cleanup",
+    );
+    assert!(!amp_ref.status.success(), "{}", format_output(&amp_ref));
+    assert!(
+        stderr(&amp_ref).contains("'&'"),
+        "{}",
+        format_output(&amp_ref)
+    );
+}
+
+#[test]
+fn fenced_example_does_not_hide_real_task() {
+    let (_temp, vault, day) = setup("bob-cli-star-fenced-real");
+    write_file(
+        &vault.join("job.md"),
+        concat!(
+            "```md\n",
+            "- [ ] #task Example ^cleanup\n",
+            "```\n",
+            "- [ ] #task Cleanup ^cleanup\n",
+        ),
+    );
+    let json = capture_json(&vault, &day, "Ask Kelly *job:cleanup");
+    assert_eq!(json["dependency_update"]["role"], "blocked_task");
+    let job = fs::read_to_string(vault.join("job.md")).expect("job");
+    assert!(
+        job.contains("- [?] #task Cleanup"),
+        "unfenced task is blocked:\n{job}"
+    );
 }

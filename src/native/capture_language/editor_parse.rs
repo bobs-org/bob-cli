@@ -2221,6 +2221,23 @@ pub(super) fn parse_editor_item_with<'a>(
         {
             needs.push(Need::BlockedTask);
         }
+        if pomodoro_close.is_some()
+            && !item_dependencies.blocked_entries.is_empty()
+        {
+            diagnostics.push(Diagnostic {
+                severity: Severity::Error,
+                code: "invalid_dependency_target",
+                message: close_blocked_task_error(
+                    local_destination_marker
+                        .as_deref()
+                        .unwrap_or("@route:id=x"),
+                ),
+                range: item_dependencies
+                    .blocked_entries
+                    .first()
+                    .map(|entry| (entry.start, entry.end)),
+            });
+        }
         if dependency_target.is_none()
             && !matches!(
                 mode,

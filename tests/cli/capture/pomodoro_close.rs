@@ -1773,7 +1773,11 @@ fn capture_pomodoro_close_link_on_project_task_refuses_drop() {
         "history link lands under the closing entry:\n{day_after}"
     );
     assert!(!day_after.contains("[[cash#^prj|stale]]"), "{day_after}");
-    assert!(day_after.contains("Ship it #prj #hide"), "{day_after}");
+    assert!(day_after.contains("Ship it"), "{day_after}");
+    assert!(
+        !day_after.contains("Ship it #prj"),
+        "kept-notes strip tags: {day_after}"
+    );
     assert_eq!(
         fs::read_to_string(vault.join("job.md")).expect("read prereq"),
         "- [*] #task Prep work ^prep\n"

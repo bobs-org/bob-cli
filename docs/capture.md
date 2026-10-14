@@ -1391,8 +1391,9 @@ Rejections:
   owners reject `*` exactly as they reject `&`. Error text names the
   sigil the user typed. A claimed `!` keeps precedence
   (`!sase:x *foo` stays the bang teaching error).
-- `@route:id=x… *T` is also rejected: closing and blocking in one
-  item is incoherent.
+- `@route:id=x… *T` and `<text> @route:id=x… *T` are also rejected:
+  closing and blocking in one item is incoherent. Capture the close
+  first, then `N *T` as a separate blank-line item.
 
 | Draft item | Reading |
 | --- | --- |
@@ -1428,7 +1429,7 @@ complete `*` with no owner needs `dependency_target`, the same need
 {
   "body": "Ask Kelly",
   "mode": "task",
-  "route": "mac_inbox",
+  "route": null,
   "needs": [],
   "blocked_tasks": [
     {
@@ -1436,17 +1437,17 @@ complete `*` with no owner needs `dependency_target`, the same need
       "note": "job",
       "block_id": "cleanup",
       "quoted": false,
-      "range": { "start": 10, "end": 23 }
+      "range": { "start": 10, "end": 22 }
     },
     {
       "raw": "*job:send-batch",
       "note": "job",
       "block_id": "send-batch",
       "quoted": false,
-      "range": { "start": 24, "end": 39 }
+      "range": { "start": 23, "end": 38 }
     }
   ],
-  "dependency_target": { "kind": "new_task", "route": "mac_inbox" }
+  "dependency_target": { "kind": "new_task" }
 }
 ```
 
@@ -1464,7 +1465,7 @@ complete `*` with no owner needs `dependency_target`, the same need
       "note": "job",
       "block_id": "cleanup",
       "quoted": false,
-      "range": { "start": 0, "end": 13 }
+      "range": { "start": 0, "end": 12 }
     }
   ],
   "dependency_target": {
@@ -1481,9 +1482,9 @@ included), the decoded `query`, the lexical `owner`, and the
 open-editable candidate list:
 
 ```json
-// bob capture-complete -b VAULT -c 12 -f json -- 'Ask Kelly *jo'
+// bob capture-complete -b VAULT -c 13 -f json -- 'Ask Kelly *jo'
 {
-  "cursor": 12,
+  "cursor": 13,
   "replacement": { "start": 10, "end": 13 },
   "context": "blocked_task",
   "candidates": [],
@@ -1607,11 +1608,19 @@ omitted because its limits come from local configuration.
 Variants:
 
 - `− kept its notes under JOB 10:10–10:35 as plain text`
-- `· blocked 4 project tasks` for a `^prj` T
-- `would …` in dry runs
+- `· blocked 4 project tasks` for a `^prj` T (dry run: `· would block 4 project tasks`)
+- `would …` in dry runs (`🧱 would block "…"`, `🧱 ^work would now block "…"`)
+- A typed duplicate `*` target is skipped; a repeat that adds nothing
+  prints `🧱 ^work already blocks "Cleanup"  job.md ^cleanup` with no
+  status arrow, live and dry-run
+- Existing-owner items print `🧱 ^work now blocks "…"` live and
+  `🧱 ^work would now block "…"` in a dry run, including the sub-bullet
+  path `Note text @route+id *T`
+- A `*`-only existing-owner header names the owner:
+  `✓ Add blocker from "Exercise"  body.md` (dry run: `would add blocker from`).
+  `&` headers stay `Add dependency to`
 
-`&` consumption prints the same `−` lines. Existing-owner items print
-`🧱 ^ask-kelly now blocks "…"`.
+`&` consumption prints the same `−` lines.
 
 Selected fields from the real ST3 `bob capture -f json` result are shown
 below; the absolute `target` path and unrelated fields are omitted. The
@@ -1623,7 +1632,7 @@ below; the absolute `target` path and unrelated fields are omitted. The
   "kind": "task",
   "text": "Ask Kelly for references!",
   "relative_target": "mac_inbox.md",
-  "block_id": "ask-kelly-for-references",
+  "block_id": "ask-kelly-references",
   "task_line": "- [*] #task Ask Kelly for references! [created::2026-10-14] [id:: mac_inbox__ask-kelly-references] ^ask-kelly-references",
   "dependency_update": {
     "role": "blocked_task",
@@ -1637,8 +1646,8 @@ below; the absolute `target` path and unrelated fields are omitted. The
     "prerequisites": [
       {
         "note": "mac_inbox.md",
-        "block_id": "ask-kelly-for-references",
-        "link": "[[mac_inbox#^ask-kelly-for-references]]",
+        "block_id": "ask-kelly-references",
+        "link": "[[mac_inbox#^ask-kelly-references]]",
         "status_symbol": " ",
         "status_name": "Todo",
         "text": "Ask Kelly for references!",
@@ -1664,8 +1673,8 @@ below; the absolute `target` path and unrelated fields are omitted. The
       "prerequisites": [
         {
           "note": "mac_inbox.md",
-          "block_id": "ask-kelly-for-references",
-          "link": "[[mac_inbox#^ask-kelly-for-references]]",
+          "block_id": "ask-kelly-references",
+          "link": "[[mac_inbox#^ask-kelly-references]]",
           "status_symbol": " ",
           "status_name": "Todo",
           "text": "Ask Kelly for references!",
@@ -1700,7 +1709,7 @@ below; the absolute `target` path and unrelated fields are omitted. The
   "minted_blocker_block_id": {
     "path": "mac_inbox.md",
     "line": 1,
-    "block_id": "ask-kelly-for-references"
+    "block_id": "ask-kelly-references"
   },
   "pomodoro_blocks": [
     {
@@ -1734,7 +1743,7 @@ below; the absolute `target` path and unrelated fields are omitted. The
       "relative_target": "mac_inbox.md",
       "route": "mac_inbox",
       "line": 1,
-      "block_id": "ask-kelly-for-references",
+      "block_id": "ask-kelly-references",
       "text": "Ask Kelly for references!",
       "status_symbol": "*",
       "status_name": "Next",
@@ -4268,8 +4277,6 @@ Field rules:
 
 Per-item additive fields on `bob capture -f json` (schema version 1).
 Omitted when empty. Dry-run JSON equals live JSON apart from `dry_run`.
-The `publish` phase reconciles example literals against the shipped
-binary.
 
 - `dependency_updates[]`: every dependency update the item made. The
   item's own `&` update comes first (`role: "dependent"`), then one
@@ -4628,7 +4635,7 @@ the Pomodoro name when one was typed — the same "whichever applies" reuse
 `block_id` already has, and `mode` disambiguates — and the same holds for the
 `^` project-note form, where `section` is the `#pomodoro` name. `needs` lists what a picker
 still has to supply, in the
-order `route`, `section`, `block_id`, `pomodoro_id`, `pomodoro_name`, `task`, `task_section`, `active_task`, `task_link`, `task_goto`, `task_parent`, `pomodoro_close_task`, `pomodoro_start_task`, `task_dependency`, `dependency_target`, `blocked_task`, `task_complete`; it is an independent
+order `route`, `section`, `block_id`, `pomodoro_id`, `pomodoro_name`, `task`, `task_section`, `active_task`, `task_link`, `task_goto`, `task_parent`, `pomodoro_close_task`, `pomodoro_close_log_text`, `pomodoro_start_task`, `task_dependency`, `blocked_task`, `dependency_target`, `task_complete`; it is an independent
 completion hint, so the executable `@route#` bullet reports mode `bullet` and
 needs `["section"]`, while `@route+id#` with no body text reports mode
 `incomplete` and needs `["pomodoro_name"]`, `note @route+id#` reports mode

@@ -7,6 +7,7 @@ use crate::native::{
     task_dependencies::{self, parse as dependency_parse},
     task_status_hooks,
 };
+use std::collections::BTreeSet;
 
 /// Vault-relative path for a typed `*note` identity: append `.md`
 /// unless the last segment already has an extension.
@@ -99,18 +100,25 @@ pub(super) fn resolve_blocked_task_target(
     refuse_blocked_task_path(typed_note, block_id, &relative)?;
     let absolute = absolute_note(bob_dir, &relative);
     let contents = current_note_text(planner, &absolute)?;
-    if block_id_in_fenced_code(&contents, block_id) {
-        return Err(CaptureError::usage(format!(
-            "cannot block {star}: ^{block_id} lives inside a fenced code block and is not an editable task"
-        )));
-    }
     let scan = note_tasks::scan(&contents, ctx.settings());
     let label = display_relative(&relative);
-    let task = lookup_staged_task(&scan, &label, block_id)?;
-    if task.status_type.is_terminal() || !task.status_type.is_open() {
+    let task = match lookup_staged_task(&scan, &label, block_id) {
+        Ok(task) => task,
+        Err(error) => {
+            if block_id_in_fenced_code(&contents, block_id) {
+                return Err(CaptureError::usage(format!(
+                    "cannot block {star}: ^{block_id} lives inside a fenced code block and is not an editable task"
+                )));
+            }
+            return Err(error);
+        }
+    };
+    let task_line_index = task.line_index;
+    let task_status_type = task.status_type;
+    let task_status_name = task.status_name.clone();
+    if task_status_type.is_terminal() || !task_status_type.is_open() {
         return Err(CaptureError::usage(format!(
-            "cannot block {star}: the task is {}; capture cannot block a completed task",
-            task.status_name
+            "cannot block {star}: the task is {task_status_name}; capture cannot block a completed task"
         )));
     }
     if let Some(owner) = owner
@@ -123,7 +131,7 @@ pub(super) fn resolve_blocked_task_target(
     }
     let lines: Vec<&str> = contents.lines().collect();
     let fenced = task_status_hooks::fenced_lines(&lines, 0..lines.len());
-    let managed = managed_children(&lines, &fenced, task.line_index);
+    let managed = managed_children(&lines, &fenced, task_line_index);
     if managed.len() > 1 {
         return Err(CaptureError::usage(format!(
             "cannot block {star}: {count} managed Depends-On lines; keep one canonical '- ⛓️ **DEPENDS ON:** ...' child line, then capture again",
@@ -222,6 +230,7 @@ pub(super) fn plan_blocked_task_writes(
     options: ExistingDependencyOptions,
 ) -> Result<Vec<PlannedDependencyUpdate>, CaptureError> {
     let mut out = Vec::with_capacity(blocked_tasks.len());
+    let mut seen = BTreeSet::new();
     for typed in blocked_tasks {
         let target = resolve_blocked_task_target(
             ctx,
@@ -231,6 +240,11 @@ pub(super) fn plan_blocked_task_writes(
             &typed.block_id,
             Some(owner),
         )?;
+        let identity =
+            (display_relative(&target.relative), target.block_id.clone());
+        if !seen.insert(identity) {
+            continue;
+        }
         let prereq = blocker_as_dependency(owner);
         let update = plan_existing_task_dependencies(
             ctx,
@@ -646,6 +660,20 @@ mod tests {
                 "{needle}: {message}"
             );
         }
+
+        write_note(
+            root,
+            "both.md",
+            concat!(
+                "```md\n",
+                "- [ ] #task Example ^cleanup\n",
+                "```\n",
+                "- [ ] #task Cleanup ^cleanup\n",
+            ),
+        );
+        resolve_star(root, "both", "cleanup", None).expect(
+            "unfenced task wins over a fenced example with the same id",
+        );
 
         let owner = DependentRef::from_route("job", "cleanup");
         let self_message = usage_message(
