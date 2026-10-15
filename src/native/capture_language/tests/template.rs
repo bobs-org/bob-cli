@@ -245,3 +245,24 @@ fn non_template_expansion_is_an_identity() {
     let raw = "plain draft\r\nkeeps its exact bytes";
     assert_eq!(template::expand(raw).unwrap(), None);
 }
+
+#[test]
+fn template_mask_preserves_byte_offsets_and_hides_header_rows_and_braces() {
+    let raw = "@@template:\r\nTask {0} {{literal}} @job:{1}\r\n\r\n\"Two Sigma\" role\r\n";
+    let masked = template::masked(raw);
+    assert_eq!(masked.len(), raw.len());
+    assert!(masked.starts_with("           \r\n"));
+    assert!(masked.contains("Task xxx xxliteralxx @job:xxx\r\n"));
+    let row_start = raw.find("\"Two Sigma\"").unwrap();
+    let row_len = "\"Two Sigma\" role".len();
+    assert_eq!(&masked[row_start..row_start + row_len], " ".repeat(row_len));
+    assert!(masked.ends_with("\r\n"));
+    assert_eq!(
+        masked
+            .as_bytes()
+            .iter()
+            .filter(|byte| **byte == b'\n')
+            .count(),
+        4
+    );
+}

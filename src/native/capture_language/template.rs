@@ -91,6 +91,17 @@ pub(crate) struct TemplateInstance {
     pub(crate) row_range: Range<usize>,
     pub(crate) expanded_range: Range<usize>,
     pub(crate) text: String,
+    pub(crate) source_map: Vec<TemplateSourceSegment>,
+}
+
+/// One expansion interval and the typed source interval it came from.
+/// `field` is set for inserted row values; literal template text (including
+/// escaped braces and line endings) maps directly to the template source.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TemplateSourceSegment {
+    pub(crate) expanded: Range<usize>,
+    pub(crate) source: Range<usize>,
+    pub(crate) field: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -98,6 +109,109 @@ pub(crate) struct TemplateExpansion {
     pub(crate) text: String,
     pub(crate) instances: Vec<TemplateInstance>,
     pub(crate) summary: TemplateSummary,
+}
+
+/// Return a same-length copy suitable for the editor parser. Header and row
+/// lines are hidden, while placeholders and brace escapes retain their byte
+/// offsets as harmless ASCII text.
+pub(crate) fn masked(raw: &str) -> String {
+    let analysis = analyze(raw);
+    let lines = split_physical_lines(raw);
+    let mut bytes = raw.as_bytes().to_vec();
+
+    if let Some((_, line_number)) = analysis.header.as_ref() {
+        if let Some(line) = lines.get(line_number.saturating_sub(1)) {
+            bytes[line.start..line.end].fill(b' ');
+        }
+    }
+    for row in &analysis.rows {
+        if let Some(line) = lines.get(row.line.saturating_sub(1)) {
+            bytes[line.start..line.end].fill(b' ');
+        }
+    }
+
+    let mut masked_ranges = analysis
+        .placeholders
+        .iter()
+        .map(|placeholder| placeholder.range.clone())
+        .chain(analysis.escapes.iter().cloned())
+        .chain(
+            analysis
+                .issues
+                .iter()
+                .filter(|issue| issue.code == "template_invalid_placeholder")
+                .map(|issue| issue.range.clone()),
+        )
+        .collect::<Vec<_>>();
+    masked_ranges.sort_by_key(|range| range.start);
+    for range in masked_ranges {
+        bytes[range].fill(b'x');
+    }
+
+    String::from_utf8(bytes).expect("ASCII masking keeps UTF-8 valid")
+}
+
+/// Build instances independently for capture-parse. A malformed row does
+/// not prevent other well-formed rows from being previewed, and each valid
+/// instance carries the map needed to report diagnostics against the typed
+/// template and row values.
+pub(crate) fn expand_rows_for_editor(
+    raw: &str,
+    analysis: &TemplateAnalysis,
+) -> Vec<Option<TemplateInstance>> {
+    let Some(block) = analysis.block.as_ref() else {
+        return Vec::new();
+    };
+    if analysis
+        .issues
+        .iter()
+        .any(|issue| issue.code == "template_invalid_placeholder")
+        || analysis.field_count == 0
+    {
+        return analysis.rows.iter().map(|_| None).collect();
+    }
+
+    let mut expanded_bytes = 0usize;
+    analysis
+        .rows
+        .iter()
+        .enumerate()
+        .map(|(index, row)| {
+            if index >= MAX_ROWS
+                || analysis.issues.iter().any(|issue| {
+                    issue.code == "template_unterminated_quote"
+                        && issue.range.start < row.range.end
+                        && row.range.start < issue.range.end
+                })
+            {
+                return None;
+            }
+            if row.fields.len() != analysis.field_count {
+                return None;
+            }
+            let instance = build_instance(
+                raw,
+                block,
+                &analysis.placeholders,
+                &analysis.escapes,
+                row,
+            )
+            .ok()?;
+            let separator = usize::from(expanded_bytes > 0) * 2;
+            if expanded_bytes
+                .saturating_add(separator)
+                .saturating_add(instance.text.len())
+                .saturating_add(1)
+                > MAX_EXPANDED_BYTES
+            {
+                return None;
+            }
+            expanded_bytes = expanded_bytes
+                .saturating_add(separator)
+                .saturating_add(instance.text.len());
+            Some(instance)
+        })
+        .collect()
 }
 
 /// Analyze the framing and language of `raw`. A missing header with no
@@ -447,35 +561,16 @@ fn build_expansion(
     let mut text = String::new();
     let mut instances = Vec::with_capacity(rows.len());
     for row in rows {
+        let mut instance =
+            build_instance(raw, block, placeholders, escapes, row)?;
         if !text.is_empty() {
             push_bounded_str(&mut text, "\n\n")?;
         }
         let start = text.len();
-        for (line_index, (line_number, range)) in block.lines.iter().enumerate()
-        {
-            if line_index > 0 {
-                push_bounded_char(&mut text, '\n')?;
-            }
-            let line_text = &raw[range.clone()];
-            append_expanded_line(
-                &mut text,
-                line_text,
-                range.start,
-                placeholders,
-                escapes,
-                &row.fields,
-            )?;
-            let _ = line_number;
-        }
+        push_bounded_str(&mut text, &instance.text)?;
         let end = text.len();
-        instances.push(TemplateInstance {
-            row: row.row,
-            line: row.line,
-            template_line_start: block.line_start,
-            row_range: row.range.clone(),
-            expanded_range: start..end,
-            text: text[start..end].to_string(),
-        });
+        instance.expanded_range = start..end;
+        instances.push(instance);
     }
     if !instances.is_empty() {
         push_bounded_char(&mut text, '\n')?;
@@ -491,6 +586,49 @@ fn build_expansion(
     })
 }
 
+fn build_instance(
+    raw: &str,
+    block: &TemplateBlock,
+    placeholders: &[TemplatePlaceholder],
+    escapes: &[Range<usize>],
+    row: &TemplateRow,
+) -> Result<TemplateInstance, ()> {
+    let mut text = String::new();
+    let mut source_map = Vec::new();
+    for (line_index, (_, range)) in block.lines.iter().enumerate() {
+        if line_index > 0 {
+            let previous = &block.lines[line_index - 1].1;
+            let newline_range = previous.end..range.start;
+            let start = text.len();
+            push_bounded_char(&mut text, '\n')?;
+            push_source_segment(
+                &mut source_map,
+                start..text.len(),
+                newline_range,
+                None,
+            );
+        }
+        append_expanded_line(
+            &mut text,
+            &raw[range.clone()],
+            range.start,
+            placeholders,
+            escapes,
+            &row.fields,
+            &mut source_map,
+        )?;
+    }
+    Ok(TemplateInstance {
+        row: row.row,
+        line: row.line,
+        template_line_start: block.line_start,
+        row_range: row.range.clone(),
+        expanded_range: 0..text.len(),
+        text,
+        source_map,
+    })
+}
+
 fn append_expanded_line(
     output: &mut String,
     line: &str,
@@ -498,6 +636,7 @@ fn append_expanded_line(
     placeholders: &[TemplatePlaceholder],
     escapes: &[Range<usize>],
     fields: &[TemplateField],
+    source_map: &mut Vec<TemplateSourceSegment>,
 ) -> Result<(), ()> {
     let mut cursor = 0;
     let mut placeholder_index = placeholders
@@ -509,25 +648,74 @@ fn append_expanded_line(
         if let Some(placeholder) = placeholders.get(placeholder_index)
             && placeholder.range.start == absolute
         {
-            push_bounded_str(output, &fields[placeholder.field].value)?;
+            let field = fields.get(placeholder.field).ok_or(())?;
+            let start = output.len();
+            push_bounded_str(output, &field.value)?;
+            if start < output.len() {
+                push_source_segment(
+                    source_map,
+                    start..output.len(),
+                    field.range.clone(),
+                    Some(field.field),
+                );
+            }
             cursor = placeholder.range.end - base;
             placeholder_index += 1;
         } else if let Some(escape) = escapes.get(escape_index)
             && escape.start == absolute
         {
+            let start = output.len();
             push_bounded_char(
                 output,
                 line[cursor..].chars().next().expect("brace"),
             )?;
+            push_source_segment(
+                source_map,
+                start..output.len(),
+                escape.clone(),
+                None,
+            );
             cursor = escape.end - base;
             escape_index += 1;
         } else {
             let character = line[cursor..].chars().next().expect("valid UTF-8");
+            let start = output.len();
             push_bounded_char(output, character)?;
+            push_source_segment(
+                source_map,
+                start..output.len(),
+                absolute..(absolute + character.len_utf8()),
+                None,
+            );
             cursor += character.len_utf8();
         }
     }
     Ok(())
+}
+
+fn push_source_segment(
+    segments: &mut Vec<TemplateSourceSegment>,
+    expanded: Range<usize>,
+    source: Range<usize>,
+    field: Option<usize>,
+) {
+    if expanded.is_empty() {
+        return;
+    }
+    if let Some(previous) = segments.last_mut()
+        && previous.expanded.end == expanded.start
+        && previous.source.end == source.start
+        && previous.field == field
+    {
+        previous.expanded.end = expanded.end;
+        previous.source.end = source.end;
+    } else {
+        segments.push(TemplateSourceSegment {
+            expanded,
+            source,
+            field,
+        });
+    }
 }
 
 fn push_bounded_str(output: &mut String, value: &str) -> Result<(), ()> {

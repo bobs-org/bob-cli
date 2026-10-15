@@ -10,7 +10,7 @@ bare-URL lines splits into one item per URL, and a line chaining session operato
 (`+2 =x`, `=x =`) into one item per operator. Authored child bullets never start an
 item. Each item is still judged alone, with its own markers and whole-item forms, so
 bulk linking (several `@route:id` items) and bulk completion (one `!note:id` per item)
-work. `@@route` declarations route otherwise-unrouted items across a blank-line batch; `@@template:` declares and expands before parsing. One staged planner
+work. The draft-wide `@@route` form routes otherwise-unrouted items across a blank-line batch; the draft-wide `@@template:` form declares and expands before parsing. One staged planner
 (`CaptureBatchPlanner`) runs the items in order, so each item sees the edits planned
 before it (insertion points, block-ID checks, Pomodoro lineup numbers) exactly as
 sequential captures would, and any item's failure rolls the whole draft back. JSON

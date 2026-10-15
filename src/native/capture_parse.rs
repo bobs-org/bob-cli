@@ -440,7 +440,7 @@ struct CaptureParseResult {
     /// older input keeps its exact JSON shape.
     #[serde(default, skip_serializing_if = "is_false")]
     ref_listen: bool,
-    spans: Vec<Span>,
+    spans: Vec<CaptureParseSpan>,
     diagnostics: Vec<Diagnostic>,
     /// Normalized authored-child bodies (source list marker and capture
     /// markers already removed) of every valid later physical line, in
@@ -465,6 +465,8 @@ struct CaptureParseResult {
     sub_bullet_task_ids: Vec<Option<ProjectTaskId>>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     items: Vec<CaptureParseItem>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    template: Option<TemplateParse>,
     #[serde(skip_serializing_if = "Option::is_none")]
     global_destination: Option<GlobalDestinationParse>,
     /// Validated additive `@<route>:<block-id>[#<name>]=<X>` start suffix:
@@ -562,7 +564,7 @@ struct CaptureParseItem {
     line_start: usize,
     line_end: usize,
     body: String,
-    mode: EditorMode,
+    mode: String,
     route: Option<String>,
     section: Option<String>,
     block_id: Option<String>,
@@ -593,6 +595,52 @@ struct CaptureParseItem {
     dependency_target: Option<DependencyTarget>,
     #[serde(skip_serializing_if = "Option::is_none")]
     task_complete: Option<ParseTaskComplete>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    template_row: Option<TemplateRowParse>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct CaptureParseSpan {
+    start: usize,
+    end: usize,
+    kind: super::capture_language::SpanKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    field: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct TemplateParse {
+    header: TemplateHeaderParse,
+    range: SourceRange,
+    line_start: usize,
+    line_end: usize,
+    field_count: usize,
+    rows: Vec<TemplateRowParse>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct TemplateHeaderParse {
+    range: SourceRange,
+    line: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct TemplateRowParse {
+    row: usize,
+    line: usize,
+    range: SourceRange,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mode: Option<EditorMode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    body: Option<String>,
+    fields: Vec<TemplateFieldParse>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct TemplateFieldParse {
+    field: usize,
+    value: String,
+    range: SourceRange,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -603,9 +651,16 @@ struct SourceRange {
 
 impl CaptureParseResult {
     fn new(input: String, options: &EditorParseOptions<'_>) -> Self {
+        let analysis = capture_language::template::analyze(&input);
+        if analysis.header.is_some() {
+            return Self::new_template(input, options, analysis);
+        }
+
         let parse = capture_language::parse_for_editor_with(&input, options);
-        let spans =
-            merge_spans(parse.spans, capture_links::wikilink_spans(&input));
+        let spans = wire_spans(merge_spans(
+            parse.spans,
+            capture_links::wikilink_spans(&input),
+        ));
         let items = parse_items(&parse.items);
         let ref_parent = ref_parent_for(
             parse.mode,
@@ -616,6 +671,28 @@ impl CaptureParseResult {
         let sub_bullets = parse.sub_bullets;
         let sub_bullet_depths = sub_bullet_depths(&sub_bullets);
         let sub_bullet_task_ids = sub_bullet_task_ids(&sub_bullets);
+        let mut diagnostics = Vec::new();
+        if let Some(warning) = headerless_template_hint(&input, &parse.items) {
+            diagnostics.push(warning);
+        }
+        diagnostics.extend(
+            analysis
+                .issues
+                .iter()
+                .filter(|issue| issue.code() == "template_header_misplaced")
+                .map(template_issue_diagnostic),
+        );
+        diagnostics.extend(parse.diagnostics.into_iter().filter(
+            |diagnostic| {
+                !analysis.issues.iter().any(|issue| {
+                    issue.code() == "template_header_misplaced"
+                        && ranges_overlap(
+                            diagnostic.range,
+                            Some((issue.range().start, issue.range().end)),
+                        )
+                })
+            },
+        ));
         Self {
             ok: true,
             schema_version: SCHEMA_VERSION,
@@ -629,11 +706,12 @@ impl CaptureParseResult {
             ref_parent,
             ref_listen,
             spans,
-            diagnostics: parse.diagnostics,
+            diagnostics,
             sub_bullets: sub_bullet_bodies(&sub_bullets),
             sub_bullet_depths,
             sub_bullet_task_ids,
             items,
+            template: None,
             global_destination: parse
                 .global_destination
                 .as_ref()
@@ -646,6 +724,344 @@ impl CaptureParseResult {
             blocked_tasks: parse_dependencies(&parse.blocked_tasks),
             dependency_target: parse.dependency_target,
             task_complete: parse.task_complete.as_ref().map(|entry| {
+                ParseTaskComplete {
+                    raw: entry.raw.clone(),
+                    note: entry.note.clone(),
+                    block_id: entry.block_id.clone(),
+                    quoted: entry.quoted,
+                    range: SourceRange {
+                        start: entry.start,
+                        end: entry.end,
+                    },
+                }
+            }),
+        }
+    }
+
+    fn new_template(
+        input: String,
+        options: &EditorParseOptions<'_>,
+        analysis: capture_language::template::TemplateAnalysis,
+    ) -> Self {
+        let masked = capture_language::template::masked(&input);
+        let parsed = capture_language::parse_for_editor_with(&masked, options);
+        let placeholders = &analysis.placeholders;
+        let template_needs =
+            template_needs(&parsed.needs, &parsed.spans, placeholders);
+        let body = parsed
+            .items
+            .first()
+            .map(|item| rebuild_template_body(&input, &masked, item))
+            .unwrap_or_default();
+
+        let (header_range, header_line) = analysis
+            .header
+            .as_ref()
+            .expect("template parse has a header");
+        let (template_range, line_start, line_end) = analysis
+            .block
+            .as_ref()
+            .map(|block| {
+                (block.range.clone(), block.line_start, block.line_end)
+            })
+            .unwrap_or_else(|| {
+                (header_range.clone(), *header_line, *header_line)
+            });
+
+        let expanded_rows = capture_language::template::expand_rows_for_editor(
+            &input, &analysis,
+        );
+        let mut row_summaries = Vec::with_capacity(analysis.rows.len());
+        let mut row_items = Vec::with_capacity(analysis.rows.len());
+        let mut instance_diagnostics = Vec::new();
+        let mut refusal_diagnostics = Vec::new();
+        let mut incomplete_diagnostics = Vec::new();
+
+        for (index, row) in analysis.rows.iter().enumerate() {
+            let instance = expanded_rows.get(index).and_then(Option::as_ref);
+            let row_parse = instance.map(|instance| {
+                capture_language::parse_for_editor_with(&instance.text, options)
+            });
+            if let (Some(instance), Some(row_parse)) =
+                (instance, row_parse.as_ref())
+            {
+                for diagnostic in &row_parse.diagnostics {
+                    if diagnostic.code == "invalid_global_destination" {
+                        continue;
+                    }
+                    let mut mapped = diagnostic.clone();
+                    mapped.range = Some(map_instance_range(
+                        diagnostic.range,
+                        instance,
+                        &row.fields,
+                        &row.range,
+                    ));
+                    mapped.message = offset_diagnostic_lines(
+                        &mapped.message,
+                        instance.template_line_start.saturating_sub(1),
+                    );
+                    instance_diagnostics.push(mapped);
+                }
+
+                if let Some(diagnostic) = refusal_diagnostic(
+                    &row_parse.spans,
+                    row_parse.mode,
+                    &row_parse.items,
+                    (row.range.start, row.range.end),
+                ) {
+                    let mapped_range = map_instance_range(
+                        diagnostic.range,
+                        instance,
+                        &row.fields,
+                        &row.range,
+                    );
+                    refusal_diagnostics.push(Diagnostic {
+                        range: Some(mapped_range),
+                        ..diagnostic
+                    });
+                }
+
+                if !row_parse.needs.is_empty()
+                    || row_parse.mode == EditorMode::Incomplete
+                {
+                    incomplete_diagnostics.push(Diagnostic {
+                        severity: Severity::Error,
+                        code: "template_row_incomplete",
+                        message: format!(
+                            "template row {} (line {}): complete the row's capture markers",
+                            row.row, row.line
+                        ),
+                        range: Some((row.range.start, row.range.end)),
+                    });
+                }
+            }
+
+            let summary = TemplateRowParse {
+                row: row.row,
+                line: row.line,
+                range: SourceRange {
+                    start: row.range.start,
+                    end: row.range.end,
+                },
+                mode: row_parse.as_ref().map(|parsed| parsed.mode),
+                body: row_parse.as_ref().map(|parsed| parsed.body.clone()),
+                fields: row
+                    .fields
+                    .iter()
+                    .map(|field| TemplateFieldParse {
+                        field: field.field,
+                        value: field.value.clone(),
+                        range: SourceRange {
+                            start: field.range.start,
+                            end: field.range.end,
+                        },
+                    })
+                    .collect(),
+            };
+
+            if let Some(row_parse) = row_parse.as_ref() {
+                let template_row = summary.clone();
+                row_items.push(CaptureParseItem {
+                    index: row.row + 1,
+                    range: SourceRange {
+                        start: row.range.start,
+                        end: row.range.end,
+                    },
+                    line_start: row.line,
+                    line_end: row.line,
+                    body: row_parse.body.clone(),
+                    mode: "template_row".to_string(),
+                    route: row_parse.route.clone(),
+                    section: row_parse.section.clone(),
+                    block_id: row_parse.block_id.clone(),
+                    needs: Vec::new(),
+                    ref_parent: None,
+                    ref_listen: row_parse.ref_listen,
+                    sub_bullets: Vec::new(),
+                    sub_bullet_depths: Vec::new(),
+                    sub_bullet_task_ids: Vec::new(),
+                    pomodoro_start: None,
+                    pomodoro_adjust: None,
+                    pomodoro_shift: None,
+                    pomodoro_close: None,
+                    dependencies: Vec::new(),
+                    blocked_tasks: Vec::new(),
+                    dependency_target: None,
+                    task_complete: None,
+                    template_row: Some(template_row),
+                });
+            } else {
+                row_items.push(CaptureParseItem {
+                    index: row.row + 1,
+                    range: SourceRange {
+                        start: row.range.start,
+                        end: row.range.end,
+                    },
+                    line_start: row.line,
+                    line_end: row.line,
+                    body: String::new(),
+                    mode: "template_row".to_string(),
+                    route: None,
+                    section: None,
+                    block_id: None,
+                    needs: Vec::new(),
+                    ref_parent: None,
+                    ref_listen: false,
+                    sub_bullets: Vec::new(),
+                    sub_bullet_depths: Vec::new(),
+                    sub_bullet_task_ids: Vec::new(),
+                    pomodoro_start: None,
+                    pomodoro_adjust: None,
+                    pomodoro_shift: None,
+                    pomodoro_close: None,
+                    dependencies: Vec::new(),
+                    blocked_tasks: Vec::new(),
+                    dependency_target: None,
+                    task_complete: None,
+                    template_row: Some(summary.clone()),
+                });
+            }
+            row_summaries.push(summary);
+        }
+
+        // Wikilinks are intentionally scanned on the masked copy: row text
+        // is data and must never be interpreted as editor syntax.
+        let wikilinks = capture_links::wikilink_spans(&masked);
+        let spans = template_spans(
+            &parsed.spans,
+            &wikilinks,
+            &analysis,
+            &row_summaries,
+        );
+
+        let mut diagnostics = analysis
+            .issues
+            .iter()
+            .filter(|issue| issue.code() != "template_missing_rows")
+            .map(template_issue_diagnostic)
+            .collect::<Vec<_>>();
+
+        diagnostics.extend(parsed.diagnostics.iter().filter_map(
+            |diagnostic| {
+                if diagnostic.code == "invalid_global_destination"
+                    || diagnostic.range.is_some_and(|range| {
+                        placeholders.iter().any(|placeholder| {
+                            ranges_overlap(
+                                Some(range),
+                                Some((
+                                    placeholder.range.start,
+                                    placeholder.range.end,
+                                )),
+                            )
+                        })
+                    })
+                {
+                    None
+                } else {
+                    Some(diagnostic.clone())
+                }
+            },
+        ));
+        diagnostics.extend(instance_diagnostics);
+
+        if let Some(diagnostic) = refusal_diagnostic(
+            &parsed.spans,
+            parsed.mode,
+            &parsed.items,
+            (template_range.start, template_range.end),
+        ) {
+            refusal_diagnostics.push(diagnostic);
+        }
+        diagnostics.extend(refusal_diagnostics);
+        diagnostics.extend(incomplete_diagnostics);
+        diagnostics.extend(
+            analysis
+                .issues
+                .iter()
+                .filter(|issue| issue.code() == "template_missing_rows")
+                .map(template_issue_diagnostic),
+        );
+        deduplicate_diagnostics(&mut diagnostics);
+
+        let mut template_item = parsed
+            .items
+            .first()
+            .map(wire_item)
+            .unwrap_or_else(|| empty_wire_item());
+        template_item.index = 1;
+        template_item.range = SourceRange {
+            start: template_range.start,
+            end: template_range.end,
+        };
+        template_item.line_start = line_start;
+        template_item.line_end = line_end;
+        template_item.body = body.clone();
+        template_item.needs = template_needs.clone();
+        template_item.template_row = None;
+        let mut items = Vec::with_capacity(row_items.len() + 1);
+        items.push(template_item);
+        items.extend(row_items);
+
+        let header = TemplateHeaderParse {
+            range: SourceRange {
+                start: header_range.start,
+                end: header_range.end,
+            },
+            line: *header_line,
+        };
+        let template = TemplateParse {
+            header,
+            range: SourceRange {
+                start: template_range.start,
+                end: template_range.end,
+            },
+            line_start,
+            line_end,
+            field_count: analysis.field_count,
+            rows: row_summaries,
+        };
+
+        let mut needs = template_needs;
+        if analysis.block.is_none() || analysis.rows.is_empty() {
+            needs.push(Need::TemplateRow);
+        }
+        let ref_parent = ref_parent_for(
+            parsed.mode,
+            parsed.route.as_deref(),
+            parsed.items.first().map(|item| item.has_local_destination),
+        );
+        let sub_bullets = parsed.sub_bullets;
+        let sub_bullet_depths = sub_bullet_depths(&sub_bullets);
+        let sub_bullet_task_ids = sub_bullet_task_ids(&sub_bullets);
+
+        Self {
+            ok: true,
+            schema_version: SCHEMA_VERSION,
+            input,
+            body,
+            mode: parsed.mode,
+            route: parsed.route,
+            section: parsed.section,
+            block_id: parsed.block_id,
+            needs,
+            ref_parent,
+            ref_listen: parsed.ref_listen,
+            spans,
+            diagnostics,
+            sub_bullets: sub_bullet_bodies(&sub_bullets),
+            sub_bullet_depths,
+            sub_bullet_task_ids,
+            items,
+            template: Some(template),
+            global_destination: None,
+            pomodoro_start: parsed.pomodoro_start,
+            pomodoro_adjust: parsed.pomodoro_adjust,
+            pomodoro_shift: parsed.pomodoro_shift,
+            pomodoro_close: parsed.pomodoro_close,
+            dependencies: parse_dependencies(&parsed.dependencies),
+            blocked_tasks: parse_dependencies(&parsed.blocked_tasks),
+            dependency_target: parsed.dependency_target,
+            task_complete: parsed.task_complete.as_ref().map(|entry| {
                 ParseTaskComplete {
                     raw: entry.raw.clone(),
                     note: entry.note.clone(),
@@ -675,6 +1091,405 @@ fn parse_dependencies(entries: &[DependencyEntry]) -> Vec<ParseDependency> {
             },
         })
         .collect()
+}
+
+fn wire_spans(spans: Vec<Span>) -> Vec<CaptureParseSpan> {
+    spans
+        .into_iter()
+        .map(|span| CaptureParseSpan {
+            start: span.start,
+            end: span.end,
+            kind: span.kind,
+            field: None,
+        })
+        .collect()
+}
+
+fn template_issue_diagnostic(
+    issue: &capture_language::template::TemplateIssue,
+) -> Diagnostic {
+    let range = issue.range();
+    Diagnostic {
+        severity: Severity::Error,
+        code: issue.code(),
+        message: issue.message(),
+        range: Some((range.start, range.end)),
+    }
+}
+
+fn ranges_overlap(
+    left: Option<(usize, usize)>,
+    right: Option<(usize, usize)>,
+) -> bool {
+    let (Some((left_start, left_end)), Some((right_start, right_end))) =
+        (left, right)
+    else {
+        return false;
+    };
+    left_start < right_end && right_start < left_end
+}
+
+fn template_needs(
+    needs: &[Need],
+    spans: &[Span],
+    placeholders: &[capture_language::template::TemplatePlaceholder],
+) -> Vec<Need> {
+    if spans.iter().any(|span| {
+        span.kind == capture_language::SpanKind::InteractivePlaceholder
+            && placeholders.iter().any(|placeholder| {
+                ranges_overlap(
+                    Some((span.start, span.end)),
+                    Some((placeholder.range.start, placeholder.range.end)),
+                )
+            })
+    }) {
+        return Vec::new();
+    }
+    needs
+        .iter()
+        .copied()
+        .filter(|need| !matches!(need, Need::BlockId | Need::PomodoroId))
+        .collect()
+}
+
+fn template_spans(
+    capture_spans: &[Span],
+    wikilink_spans: &[Span],
+    analysis: &capture_language::template::TemplateAnalysis,
+    rows: &[TemplateRowParse],
+) -> Vec<CaptureParseSpan> {
+    use capture_language::SpanKind;
+
+    let merged = merge_spans(capture_spans.to_vec(), wikilink_spans.to_vec());
+    let mut result = Vec::new();
+    for span in merged {
+        if span.start >= span.end {
+            continue;
+        }
+        let overlaps_placeholder = analysis.placeholders.iter().any(|item| {
+            ranges_overlap(
+                Some((span.start, span.end)),
+                Some((item.range.start, item.range.end)),
+            )
+        });
+        if span.kind == SpanKind::InteractivePlaceholder && overlaps_placeholder
+        {
+            continue;
+        }
+        let mut cursor = span.start;
+        for placeholder in &analysis.placeholders {
+            if placeholder.range.end <= cursor
+                || placeholder.range.start >= span.end
+            {
+                continue;
+            }
+            if cursor < placeholder.range.start {
+                result.push(CaptureParseSpan {
+                    start: cursor,
+                    end: placeholder.range.start,
+                    kind: span.kind,
+                    field: None,
+                });
+            }
+            cursor = cursor.max(placeholder.range.end);
+        }
+        if cursor < span.end {
+            result.push(CaptureParseSpan {
+                start: cursor,
+                end: span.end,
+                kind: span.kind,
+                field: None,
+            });
+        }
+    }
+
+    if let Some((range, _)) = analysis.header.as_ref() {
+        result.push(CaptureParseSpan {
+            start: range.start,
+            end: range.end,
+            kind: SpanKind::TemplateHeader,
+            field: None,
+        });
+    }
+    result.extend(analysis.placeholders.iter().map(|placeholder| {
+        CaptureParseSpan {
+            start: placeholder.range.start,
+            end: placeholder.range.end,
+            kind: SpanKind::TemplatePlaceholder,
+            field: Some(placeholder.field),
+        }
+    }));
+    result.extend(rows.iter().flat_map(|row| {
+        row.fields.iter().map(|field| CaptureParseSpan {
+            start: field.range.start,
+            end: field.range.end,
+            kind: SpanKind::TemplateField,
+            field: Some(field.field),
+        })
+    }));
+    result.sort_by_key(|span| (span.start, span.end));
+    result
+}
+
+fn rebuild_template_body(
+    raw: &str,
+    masked: &str,
+    item: &EditorItemParse,
+) -> String {
+    let lines = capture_language::split_physical_lines(raw);
+    let Some(line) = lines.get(item.line_start.saturating_sub(1)) else {
+        return item.body.clone();
+    };
+    let masked_line = &masked[line.start..line.end];
+    let mut kept = Vec::new();
+    for token in capture_language::tokenize_with_spans(masked_line) {
+        let start = line.start + token.start;
+        let end = line.start + token.end;
+        let capture_span = item.spans.iter().any(|span| {
+            span.kind != capture_language::SpanKind::WikilinkDelimiter
+                && span.kind != capture_language::SpanKind::WikilinkTarget
+                && span.kind != capture_language::SpanKind::WikilinkHeading
+                && span.kind != capture_language::SpanKind::WikilinkBlockId
+                && span.kind != capture_language::SpanKind::WikilinkAlias
+                && ranges_overlap(
+                    Some((start, end)),
+                    Some((span.start, span.end)),
+                )
+        });
+        let diagnostic_span = item.diagnostics.iter().any(|diagnostic| {
+            ranges_overlap(diagnostic.range, Some((start, end)))
+        });
+        if !capture_span && !diagnostic_span {
+            kept.push(raw[start..end].to_string());
+        }
+    }
+    if kept.is_empty() {
+        String::new()
+    } else {
+        kept.join(" ")
+    }
+}
+
+fn headerless_template_hint(
+    raw: &str,
+    items: &[EditorItemParse],
+) -> Option<Diagnostic> {
+    let first = items.first()?;
+    if items.len() < 2 || !contains_braced_decimal(&raw[first.start..first.end])
+    {
+        return None;
+    }
+    Some(Diagnostic {
+        severity: Severity::Warning,
+        code: "template_header_missing",
+        message: "add `@@template:` as the first line to use this item as a template for the lines below".to_string(),
+        range: Some((first.start, first.end)),
+    })
+}
+
+fn contains_braced_decimal(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] != b'{' {
+            index += 1;
+            continue;
+        }
+        let start = index + 1;
+        let mut end = start;
+        while end < bytes.len() && bytes[end].is_ascii_digit() {
+            end += 1;
+        }
+        if end > start && bytes.get(end) == Some(&b'}') {
+            return true;
+        }
+        index += 1;
+    }
+    false
+}
+
+fn map_instance_range(
+    range: Option<(usize, usize)>,
+    instance: &capture_language::template::TemplateInstance,
+    fields: &[capture_language::template::TemplateField],
+    row_range: &std::ops::Range<usize>,
+) -> (usize, usize) {
+    let Some((start, end)) = range else {
+        return (row_range.start, row_range.end);
+    };
+    let touched = instance
+        .source_map
+        .iter()
+        .filter(|segment| {
+            ranges_overlap(
+                Some((start, end)),
+                Some((segment.expanded.start, segment.expanded.end)),
+            )
+        })
+        .collect::<Vec<_>>();
+    let field_ids = touched
+        .iter()
+        .filter_map(|segment| segment.field)
+        .collect::<std::collections::BTreeSet<_>>();
+    if field_ids.len() == 1 {
+        if let Some(field) = fields
+            .iter()
+            .find(|field| Some(field.field) == field_ids.first().copied())
+        {
+            return (field.range.start, field.range.end);
+        }
+    } else if field_ids.len() > 1 {
+        return (row_range.start, row_range.end);
+    }
+    let literal_sources = touched
+        .iter()
+        .filter(|segment| segment.field.is_none())
+        .map(|segment| {
+            let overlap_start = start.max(segment.expanded.start);
+            let overlap_end = end.min(segment.expanded.end);
+            if segment.source.len() == segment.expanded.len() {
+                let offset_start = overlap_start - segment.expanded.start;
+                let offset_end = overlap_end - segment.expanded.start;
+                (
+                    segment.source.start + offset_start,
+                    segment.source.start + offset_end,
+                )
+            } else {
+                (segment.source.start, segment.source.end)
+            }
+        })
+        .collect::<Vec<_>>();
+    if let (Some(first), Some(last)) = (
+        literal_sources.iter().map(|range| range.0).min(),
+        literal_sources.iter().map(|range| range.1).max(),
+    ) {
+        return (first, last);
+    }
+    (row_range.start, row_range.end)
+}
+
+fn offset_diagnostic_lines(message: &str, offset: usize) -> String {
+    if offset == 0 {
+        return message.to_string();
+    }
+    let mut output = String::with_capacity(message.len());
+    let mut cursor = 0;
+    while let Some(relative) = message[cursor..].find("line ") {
+        let start = cursor + relative;
+        let digits_start = start + "line ".len();
+        let digits_end = message[digits_start..]
+            .bytes()
+            .take_while(u8::is_ascii_digit)
+            .count()
+            + digits_start;
+        if digits_end == digits_start {
+            output.push_str(&message[cursor..digits_start]);
+            cursor = digits_start;
+            continue;
+        }
+        output.push_str(&message[cursor..digits_start]);
+        if let Ok(line) = message[digits_start..digits_end].parse::<usize>() {
+            output.push_str(&(line.saturating_add(offset)).to_string());
+        } else {
+            output.push_str(&message[digits_start..digits_end]);
+        }
+        cursor = digits_end;
+    }
+    output.push_str(&message[cursor..]);
+    output
+}
+
+fn refusal_diagnostic(
+    spans: &[Span],
+    mode: EditorMode,
+    items: &[EditorItemParse],
+    fallback_range: (usize, usize),
+) -> Option<Diagnostic> {
+    use capture_language::SpanKind;
+
+    if let Some(span) =
+        spans.iter().find(|span| span.kind == SpanKind::Clipboard)
+    {
+        return Some(Diagnostic {
+            severity: Severity::Error,
+            code: "template_clipboard",
+            message: "a template can't capture the clipboard: `%` would repeat once per row".to_string(),
+            range: Some((span.start, span.end)),
+        });
+    }
+    let is_session = |mode| {
+        matches!(
+            mode,
+            EditorMode::PomodoroAdjust
+                | EditorMode::PomodoroShift
+                | EditorMode::PomodoroClose
+                | EditorMode::PomodoroStart
+        )
+    };
+    let session =
+        is_session(mode) || items.iter().any(|item| is_session(item.mode));
+    if !session {
+        return None;
+    }
+    let range = spans
+        .iter()
+        .find(|span| {
+            matches!(
+                span.kind,
+                SpanKind::PomodoroAdjust
+                    | SpanKind::PomodoroShift
+                    | SpanKind::PomodoroClose
+                    | SpanKind::PomodoroStart
+            )
+        })
+        .map(|span| (span.start, span.end))
+        .unwrap_or(fallback_range);
+    Some(Diagnostic {
+        severity: Severity::Error,
+        code: "template_session_operator",
+        message: "a template can't drive the Pomodoro session; capture `=`, `=x`, `+N`, and `++N` on their own".to_string(),
+        range: Some(range),
+    })
+}
+
+fn deduplicate_diagnostics(diagnostics: &mut Vec<Diagnostic>) {
+    let mut seen = std::collections::HashSet::new();
+    diagnostics.retain(|diagnostic| {
+        seen.insert((
+            diagnostic.code,
+            diagnostic.range,
+            diagnostic.message.clone(),
+        ))
+    });
+}
+
+fn empty_wire_item() -> CaptureParseItem {
+    CaptureParseItem {
+        index: 1,
+        range: SourceRange { start: 0, end: 0 },
+        line_start: 1,
+        line_end: 1,
+        body: String::new(),
+        mode: EditorMode::Task.label().to_string(),
+        route: None,
+        section: None,
+        block_id: None,
+        needs: Vec::new(),
+        ref_parent: None,
+        ref_listen: false,
+        sub_bullets: Vec::new(),
+        sub_bullet_depths: Vec::new(),
+        sub_bullet_task_ids: Vec::new(),
+        pomodoro_start: None,
+        pomodoro_adjust: None,
+        pomodoro_shift: None,
+        pomodoro_close: None,
+        dependencies: Vec::new(),
+        blocked_tasks: Vec::new(),
+        dependency_target: None,
+        task_complete: None,
+        template_row: None,
+    }
 }
 
 fn global_destination_parse(
@@ -721,52 +1536,54 @@ fn parse_items(items: &[EditorItemParse]) -> Vec<CaptureParseItem> {
     if items.len() <= 1 {
         return Vec::new();
     }
-    items
-        .iter()
-        .map(|item| CaptureParseItem {
-            index: item.index + 1,
-            range: SourceRange {
-                start: item.start,
-                end: item.end,
-            },
-            line_start: item.line_start,
-            line_end: item.line_end,
-            body: item.body.clone(),
-            mode: item.mode,
-            route: item.route.clone(),
-            section: item.section.clone(),
-            block_id: item.block_id.clone(),
-            needs: item.needs.clone(),
-            ref_parent: ref_parent_for(
-                item.mode,
-                item.route.as_deref(),
-                Some(item.has_local_destination),
-            ),
-            ref_listen: item.ref_listen,
-            sub_bullets: sub_bullet_bodies(&item.sub_bullets),
-            sub_bullet_depths: sub_bullet_depths(&item.sub_bullets),
-            sub_bullet_task_ids: sub_bullet_task_ids(&item.sub_bullets),
-            pomodoro_start: item.pomodoro_start.clone(),
-            pomodoro_adjust: item.pomodoro_adjust.clone(),
-            pomodoro_shift: item.pomodoro_shift.clone(),
-            pomodoro_close: item.pomodoro_close.clone(),
-            dependencies: parse_dependencies(&item.dependencies),
-            blocked_tasks: parse_dependencies(&item.blocked_tasks),
-            dependency_target: item.dependency_target.clone(),
-            task_complete: item.task_complete.as_ref().map(|entry| {
-                ParseTaskComplete {
-                    raw: entry.raw.clone(),
-                    note: entry.note.clone(),
-                    block_id: entry.block_id.clone(),
-                    quoted: entry.quoted,
-                    range: SourceRange {
-                        start: entry.start,
-                        end: entry.end,
-                    },
-                }
-            }),
-        })
-        .collect()
+    items.iter().map(wire_item).collect()
+}
+
+fn wire_item(item: &EditorItemParse) -> CaptureParseItem {
+    CaptureParseItem {
+        index: item.index + 1,
+        range: SourceRange {
+            start: item.start,
+            end: item.end,
+        },
+        line_start: item.line_start,
+        line_end: item.line_end,
+        body: item.body.clone(),
+        mode: item.mode.label().to_string(),
+        route: item.route.clone(),
+        section: item.section.clone(),
+        block_id: item.block_id.clone(),
+        needs: item.needs.clone(),
+        ref_parent: ref_parent_for(
+            item.mode,
+            item.route.as_deref(),
+            Some(item.has_local_destination),
+        ),
+        ref_listen: item.ref_listen,
+        sub_bullets: sub_bullet_bodies(&item.sub_bullets),
+        sub_bullet_depths: sub_bullet_depths(&item.sub_bullets),
+        sub_bullet_task_ids: sub_bullet_task_ids(&item.sub_bullets),
+        pomodoro_start: item.pomodoro_start.clone(),
+        pomodoro_adjust: item.pomodoro_adjust.clone(),
+        pomodoro_shift: item.pomodoro_shift.clone(),
+        pomodoro_close: item.pomodoro_close.clone(),
+        dependencies: parse_dependencies(&item.dependencies),
+        blocked_tasks: parse_dependencies(&item.blocked_tasks),
+        dependency_target: item.dependency_target.clone(),
+        task_complete: item.task_complete.as_ref().map(|entry| {
+            ParseTaskComplete {
+                raw: entry.raw.clone(),
+                note: entry.note.clone(),
+                block_id: entry.block_id.clone(),
+                quoted: entry.quoted,
+                range: SourceRange {
+                    start: entry.start,
+                    end: entry.end,
+                },
+            }
+        }),
+        template_row: None,
+    }
 }
 
 fn sub_bullet_bodies(sub_bullets: &[AuthoredSubBullet]) -> Vec<String> {
@@ -859,6 +1676,17 @@ fn print_human_success_with_styler(
     );
     println!();
     print_field(styler, "body", &result.body);
+    if let Some(template) = result.template.as_ref() {
+        print_field(
+            styler,
+            "template",
+            &format!(
+                "{} fields · {} rows",
+                template.field_count,
+                template.rows.len()
+            ),
+        );
+    }
     if let Some(global) = &result.global_destination {
         let mut summary = global
             .route

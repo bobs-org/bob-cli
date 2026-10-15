@@ -4794,6 +4794,49 @@ still succeeds. If `TEXT` is omitted and stdin is piped, it reads the
 complete piped stdin stream, like `bob capture`. Only a missing `TEXT` or a
 bad flag is an error (exit 2); every other input succeeds.
 
+### Template drafts
+
+See [Bulk templates](#bulk-templates) for the `@@template:` grammar. For
+`capture-parse`, the header line is a `template_header` span, each `{N}` is a
+`template_placeholder` span with its zero-based `field`, and every lexed row
+value is a `template_field` span with its field index. Field spans include
+quotes when a value is quoted. The JSON `template` object reports the header,
+template block range and line bounds, `field_count`, and `rows`. Each row has
+its one-based row number, source line and range, fields, and (when expansion
+succeeded) the expanded capture `mode` and `body`.
+
+`items[0]` is the template parsed through a same-length masked copy. Each
+expanded row follows as an item with mode `template_row`, the row's typed
+range and source line, its expanded body and capture markers, and
+`needs: []`. Its `template_row` value mirrors the corresponding entry in
+`template.rows`. A row that cannot expand still has an item and its field
+spans, but no expanded `mode` or `body`. If the header has no template yet or
+the template has no rows, the top-level `needs` includes `template_row`.
+
+Template-language diagnostics include `template_header_misplaced`,
+`template_missing_rows`, `template_needs_separator`,
+`template_missing_placeholder`, `template_invalid_placeholder`,
+`template_placeholder_gap`, `template_row_bullet`,
+`template_unterminated_quote`, `template_row_arity`,
+`template_global_declaration`, `template_too_large`,
+`template_clipboard`, and `template_session_operator`. A validly expanded row
+that still has picker needs or parses as `incomplete` adds
+`template_row_incomplete`. Without a header, a first item containing `{N}`
+followed by another item adds the `template_header_missing` warning; capture
+continues to treat those items normally.
+
+Template and masked-parse ranges point into the typed draft because masking
+preserves byte offsets. Per-row diagnostics use the expansion source map:
+literal-template errors point to the template, an error touching one row field
+points to that whole field (including its quotes), and an error touching
+multiple fields points to the row. Repeated literal errors are deduplicated by
+code, range, and message. A placeholder that changes a token's meaning per
+row, such as `p:{0}`, is highlighted according to how the masked template
+parses it; each row's expanded parse still reports any real problem.
+`global_destination` is omitted for template drafts. Drafts without a header
+keep their existing JSON shape, except for the `template_header_missing`
+warning when that hint applies.
+
 `TEXT` accepts the same batch draft `bob capture` does: one or more blank or
 whitespace-only physical lines separate capture items, and each item keeps the
 existing parent-plus-authored-bullets grammar. Within an item, the first

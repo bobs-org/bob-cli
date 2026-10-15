@@ -56,6 +56,9 @@ pub(crate) enum SpanKind {
     TaskCompleteNote,
     TaskCompleteBlockId,
     InteractivePlaceholder,
+    TemplateHeader,
+    TemplatePlaceholder,
+    TemplateField,
     WikilinkDelimiter,
     WikilinkTarget,
     WikilinkHeading,
@@ -114,6 +117,9 @@ impl SpanKind {
             Self::TaskCompleteNote => "task_complete_note",
             Self::TaskCompleteBlockId => "task_complete_block_id",
             Self::InteractivePlaceholder => "interactive_placeholder",
+            Self::TemplateHeader => "template_header",
+            Self::TemplatePlaceholder => "template_placeholder",
+            Self::TemplateField => "template_field",
             Self::WikilinkDelimiter => "wikilink_delimiter",
             Self::WikilinkTarget => "wikilink_target",
             Self::WikilinkHeading => "wikilink_heading",
@@ -240,6 +246,8 @@ pub(crate) enum Need {
     DependencyTarget,
     /// A completion picker is still open: a `!` token is partial.
     TaskComplete,
+    /// A template draft still needs a row to expand.
+    TemplateRow,
 }
 
 impl Need {
@@ -264,6 +272,7 @@ impl Need {
             Self::BlockedTask => "blocked_task",
             Self::DependencyTarget => "dependency_target",
             Self::TaskComplete => "task_complete",
+            Self::TemplateRow => "template_row",
         }
     }
 }
