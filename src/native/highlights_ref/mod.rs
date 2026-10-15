@@ -58,6 +58,9 @@ mod projection;
 mod reading_execute;
 mod reading_plan;
 mod region;
+// The dependent `ref rename` command consumes this module in the next phase.
+#[allow(dead_code)]
+pub(crate) mod rename;
 mod render_tex;
 mod report;
 pub(crate) mod return_links;
