@@ -175,7 +175,7 @@ fn expand_capture(matches: &ArgMatches, output_format: OutputFormat) -> i32 {
         Ok(expansion) => expansion,
         Err(issue) => {
             return print_capture_error(
-                CaptureError::usage(issue.message()),
+                CaptureError::usage_code(issue.message(), issue.code()),
                 output_format,
             );
         }
@@ -244,6 +244,8 @@ fn capture(mut request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
     Ok(CaptureResult::from_items(
         batch.items.into_iter().map(|item| item.result).collect(),
         batch.global_destination,
+        batch.template,
+        batch.template_rows,
         batch.warnings,
         batch.plan_budget,
         batch.pomodoro_blocks,

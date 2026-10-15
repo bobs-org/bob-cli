@@ -642,6 +642,9 @@ pub(crate) struct ParsedCaptureItem {
     pub(crate) line_start: usize,
     pub(crate) line_end: usize,
     pub(crate) parsed: ParsedCaptureText,
+    /// The row that produced this item when it came from a template draft.
+    #[allow(dead_code)]
+    pub(crate) template_row: Option<TemplateRowSummary>,
     /// Lexical ref-parent source for `Ref` items (`explicit` for an inline
     /// `@route` or forced `-r`, `global` for a plain `@@route` upgrade,
     /// `default` otherwise). `None` for non-`Ref` items.
@@ -688,4 +691,12 @@ pub(crate) struct ParsedCaptureDraft {
     pub(crate) global: Option<ParsedGlobalDestination>,
     pub(crate) items: Vec<ParsedCaptureItem>,
     pub(crate) warnings: Vec<String>,
+    pub(crate) template: Option<super::template::TemplateSummary>,
+}
+
+/// Additive execution metadata for one item expanded from a template row.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct TemplateRowSummary {
+    pub(crate) row: usize,
+    pub(crate) line: usize,
 }

@@ -105,6 +105,7 @@ pub(crate) use self::model::RefParentSource;
 pub(crate) use self::model::SubBulletTarget;
 pub(crate) use self::model::TaskSectionSelector;
 pub(crate) use self::model::TaskToggleIntent;
+pub(crate) use self::model::TemplateRowSummary;
 pub(crate) use self::project_tasks::split_leading_checkbox;
 pub(crate) use self::rewrite::rewrite_draft;
 pub(crate) use self::rewrite::DraftRewrite;

@@ -250,6 +250,10 @@ pub(super) struct CaptureResult {
     pub(super) captures: Vec<CaptureItemResult>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) global_destination: Option<GlobalDestinationSummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) template: Option<capture_language::template::TemplateSummary>,
+    #[serde(skip)]
+    pub(super) template_rows: Vec<Option<capture_language::TemplateRowSummary>>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(super) warnings: Vec<String>,
     /// Before/after plan budget, present only when the batch changed
@@ -280,6 +284,8 @@ impl CaptureResult {
     pub(super) fn from_items(
         items: Vec<CaptureItemResult>,
         global_destination: Option<GlobalDestinationSummary>,
+        template: Option<capture_language::template::TemplateSummary>,
+        template_rows: Vec<Option<capture_language::TemplateRowSummary>>,
         warnings: Vec<String>,
         plan_budget: Option<CapturePlanBudget>,
         pomodoro_blocks: Vec<PomodoroBlockJson>,
@@ -295,6 +301,8 @@ impl CaptureResult {
             item,
             captures,
             global_destination,
+            template,
+            template_rows,
             warnings,
             plan_budget,
             pomodoro_blocks,
@@ -1089,6 +1097,9 @@ pub(super) fn print_human_success(result: &CaptureResult) {
     if let Some(global) = &result.global_destination {
         print_global_destination_summary(global);
     }
+    if let Some(summary) = &result.template {
+        print_template_summary(summary, &result.template_rows);
+    }
     if result.captures.is_empty() {
         print_human_item_success(result, None);
         print_pull_in_hint(result);
@@ -1103,6 +1114,37 @@ pub(super) fn print_human_success(result: &CaptureResult) {
         print_human_item_success(item, Some((index + 1, total)));
     }
     print_pull_in_hint(result);
+}
+
+fn print_template_summary(
+    summary: &capture_language::template::TemplateSummary,
+    rows: &[Option<capture_language::TemplateRowSummary>],
+) {
+    let styler = Styler::detect();
+    let row_label = if summary.row_count == 1 {
+        "row"
+    } else {
+        "rows"
+    };
+    let line_range = match (
+        rows.first().and_then(Option::as_ref),
+        rows.last().and_then(Option::as_ref),
+    ) {
+        (Some(first), Some(last)) if first.line == last.line => {
+            format!("line {}", first.line)
+        }
+        (Some(first), Some(last)) => {
+            format!("lines {}–{}", first.line, last.line)
+        }
+        _ => format!("header line {}", summary.line),
+    };
+    println!(
+        "{}  {} {} · {}",
+        styler.dim("template"),
+        summary.row_count,
+        row_label,
+        line_range
+    );
 }
 
 fn print_pull_in_hint(result: &CaptureResult) {
@@ -3064,7 +3106,30 @@ pub(super) fn print_clip_file_confirmation(
 }
 
 pub(super) fn success_json(result: &CaptureResult) -> String {
-    serde_json::to_string(result).expect("serialize capture result")
+    if result.template.is_none() {
+        return serde_json::to_string(result)
+            .expect("serialize capture result");
+    }
+    let mut value =
+        serde_json::to_value(result).expect("serialize capture result");
+    if let Some(row) = result.template_rows.first().and_then(Option::as_ref)
+        && let serde_json::Value::Object(object) = &mut value
+    {
+        object.insert("template_row".to_string(), json!(row));
+    }
+    if let Some(captures) = value
+        .get_mut("captures")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        for (capture, row) in captures.iter_mut().zip(&result.template_rows) {
+            if let (serde_json::Value::Object(object), Some(row)) =
+                (capture, row)
+            {
+                object.insert("template_row".to_string(), json!(row));
+            }
+        }
+    }
+    serde_json::to_string(&value).expect("serialize capture result JSON")
 }
 
 pub(super) fn print_capture_error(
@@ -3106,9 +3171,8 @@ pub(super) fn print_capture_error(
 pub(crate) struct CaptureError {
     pub(super) kind: CaptureErrorKind,
     pub(crate) message: String,
-    /// Machine-readable failure code, serialized only for the strict
-    /// plan-budget refusal (`plan_theme_cap_exceeded`) and the
-    /// successor-offer choice refusal (`pull_in_choice_required`).
+    /// Machine-readable failure code for template errors and the strict
+    /// plan-budget and successor-offer choice refusals.
     pub(super) code: Option<String>,
     /// Extra JSON object fields merged into the error value (offers and
     /// `pull_in` on `pull_in_choice_required`).
@@ -3123,6 +3187,19 @@ impl CaptureError {
             kind: CaptureErrorKind::Usage,
             message: message.into(),
             code: None,
+            extra: None,
+            human_unblocked: Vec::new(),
+        }
+    }
+
+    pub(super) fn usage_code(
+        message: impl Into<String>,
+        code: impl Into<String>,
+    ) -> Self {
+        Self {
+            kind: CaptureErrorKind::Usage,
+            message: message.into(),
+            code: Some(code.into()),
             extra: None,
             human_unblocked: Vec::new(),
         }

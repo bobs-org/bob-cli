@@ -624,6 +624,17 @@ pub(crate) fn parse_capture_draft_with_clip_control(
     forced_section: Option<&str>,
     options: &CaptureParseOptions<'_>,
 ) -> Result<ParsedCaptureDraft, String> {
+    if let Some(expansion) =
+        super::template::expand(raw_text).map_err(|issue| issue.message())?
+    {
+        return parse_template_expansion(
+            expansion,
+            forced_route,
+            forced_section,
+            options,
+        );
+    }
+
     let draft = split_capture_draft(raw_text);
     if draft.items.is_empty() {
         let global = resolve_global_declaration_strict(&draft.declarations)?;
@@ -739,6 +750,7 @@ pub(crate) fn parse_capture_draft_with_clip_control(
             line_end: outcome.line_end,
             parsed: outcome.parsed,
             ref_source,
+            template_row: None,
         });
     }
 
@@ -746,7 +758,128 @@ pub(crate) fn parse_capture_draft_with_clip_control(
         global,
         items,
         warnings,
+        template: None,
     })
+}
+
+fn parse_template_expansion(
+    expansion: super::template::TemplateExpansion,
+    forced_route: Option<&str>,
+    forced_section: Option<&str>,
+    options: &CaptureParseOptions<'_>,
+) -> Result<ParsedCaptureDraft, String> {
+    let instance_options = CaptureParseOptions {
+        // A template cannot repeat clipboard capture. Recognize markers even
+        // for --no-clip so live preview and submission agree.
+        parse_clip_markers: true,
+        has_global_destination: false,
+        ..*options
+    };
+    let mut items = Vec::with_capacity(expansion.instances.len());
+
+    for instance in &expansion.instances {
+        let lines = split_physical_lines(&instance.text)
+            .into_iter()
+            .enumerate()
+            .map(|(index, raw)| ItemLine {
+                raw,
+                line_number: instance.template_line_start + index,
+            })
+            .collect::<Vec<_>>();
+        let draft_items = split_items_from_item_lines(&lines, &instance.text);
+        if draft_items.len() != 1 {
+            return Err(template_session_error(instance.row, instance.line));
+        }
+        let mut outcome = parse_capture_item(
+            &draft_items[0],
+            forced_route,
+            forced_section,
+            &instance_options,
+        )
+        .map_err(|message| {
+            template_row_error(instance.row, instance.line, message)
+        })?;
+
+        if outcome.parsed.clip.is_some() {
+            return Err(template_clipboard_error(instance.row, instance.line));
+        }
+        if is_template_session_kind(&outcome.parsed.kind) {
+            return Err(template_session_error(instance.row, instance.line));
+        }
+        finish_item_dependency_target(&mut outcome.parsed, false).map_err(
+            |message| template_row_error(instance.row, instance.line, message),
+        )?;
+
+        let ref_source = if matches!(outcome.parsed.kind, CaptureKind::Ref(_)) {
+            if forced_route.is_some()
+                || outcome.local_destination_marker.is_some()
+            {
+                Some(RefParentSource::Explicit)
+            } else if outcome.parsed.route.is_some() {
+                Some(RefParentSource::Global)
+            } else {
+                Some(RefParentSource::Default)
+            }
+        } else {
+            None
+        };
+        items.push(ParsedCaptureItem {
+            index: instance.row - 1,
+            start: instance.row_range.start,
+            end: instance.row_range.end,
+            line_start: instance.line,
+            line_end: instance.line,
+            parsed: outcome.parsed,
+            ref_source,
+            template_row: Some(TemplateRowSummary {
+                row: instance.row,
+                line: instance.line,
+            }),
+        });
+    }
+
+    Ok(ParsedCaptureDraft {
+        global: None,
+        items,
+        warnings: Vec::new(),
+        template: Some(expansion.summary),
+    })
+}
+
+fn template_row_error(row: usize, line: usize, message: String) -> String {
+    format!("template row {row} (line {line}): {message}")
+}
+
+fn template_clipboard_error(row: usize, line: usize) -> String {
+    template_row_error(
+        row,
+        line,
+        "a template can't capture the clipboard: `%` would repeat once per row"
+            .to_string(),
+    )
+}
+
+fn template_session_error(row: usize, line: usize) -> String {
+    template_row_error(
+        row,
+        line,
+        "a template can't drive the Pomodoro session; capture `=`, `=x`, `+N`, and `++N` on their own"
+            .to_string(),
+    )
+}
+
+fn is_template_session_kind(kind: &CaptureKind) -> bool {
+    match kind {
+        CaptureKind::PomodoroAdjust { .. }
+        | CaptureKind::PomodoroShift { .. }
+        | CaptureKind::PomodoroStart { .. }
+        | CaptureKind::PomodoroClose { .. } => true,
+        CaptureKind::Pomodoro { start, close, .. }
+        | CaptureKind::PomodoroLink { start, close, .. } => {
+            start.is_some() || close.is_some()
+        }
+        _ => false,
+    }
 }
 
 pub(super) fn resolve_global_declaration_strict(

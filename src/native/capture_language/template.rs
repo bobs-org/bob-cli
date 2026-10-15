@@ -87,6 +87,7 @@ pub(crate) struct TemplateAnalysis {
 pub(crate) struct TemplateInstance {
     pub(crate) row: usize,
     pub(crate) line: usize,
+    pub(crate) template_line_start: usize,
     pub(crate) row_range: Range<usize>,
     pub(crate) expanded_range: Range<usize>,
     pub(crate) text: String,
@@ -470,6 +471,7 @@ fn build_expansion(
         instances.push(TemplateInstance {
             row: row.row,
             line: row.line,
+            template_line_start: block.line_start,
             row_range: row.range.clone(),
             expanded_range: start..end,
             text: text[start..end].to_string(),

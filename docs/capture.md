@@ -21,6 +21,7 @@ workflow guide.
   - [Global destination declaration](#global-destination-declaration)
   - [Scheduling and priority](#scheduling-and-priority)
   - [Multi-item capture](#multi-item-capture)
+  - [Bulk templates](#bulk-templates)
   - [Authored sub-bullets](#authored-sub-bullets)
   - [Clipboard](#clipboard)
   - [Saving links to your reading queue](#saving-links-to-your-reading-queue)
@@ -73,6 +74,7 @@ anything is written, and any failure rolls the whole batch back.
 | Bare URL with `-r route` | Queue the reference under that route (source `explicit`) |
 | `@@route` | Shared task destination, anywhere in the draft, for otherwise-unrouted items; a plain declaration also routes default (routeless) refs (source `global`), while `@@route+block-id` keeps refs as tasks |
 | `@@route+block-id` | Shared parent-task destination, anywhere in the draft, for otherwise-unrouted items |
+| `@@template:` | Expand one capture item per row from the following `{N}` template; captures exactly like the expansion |
 | `@route` | Write a task to `<route>.md` (default route is `mac_inbox`) |
 | `@route#Section` | Write an ordinary bullet into a matching non-`Tasks` heading |
 | `@route#` | Write an ordinary bullet into any non-`Tasks` heading |
@@ -488,6 +490,90 @@ object with `mode`, `route`, and optional `block_id`. The declaration never
 creates an extra result. Human output numbers batch items as `1/N`, `2/N`,
 and so on, and prints a compact `global  foo.md` (or `global  foo.md · under
 ^a-id`) summary when a declaration was used.
+
+### Bulk templates
+
+A draft whose first nonblank line is `@@template:` expands one capture item per
+row. The planner receives the same text that `bob capture -E` prints, so a
+template capture has the same results, ordering, and all-or-nothing writes as
+capturing that expansion directly.
+
+```text
+@@template:
+Apply to {0}! @job^apply-{1}
+- **URL**: {2}
+
+Foobar foo http://foobar.com/career/some_foo_job
+"Two Sigma" two-sigma https://www.twosigma.com/careers/some_role
+```
+
+This expands to two ordinary items, preserving the authored child bullet:
+
+```text
+Apply to Foobar! @job^apply-foo
+- **URL**: http://foobar.com/career/some_foo_job
+
+Apply to Two Sigma! @job^apply-two-sigma
+- **URL**: https://www.twosigma.com/careers/some_role
+```
+
+The template is one item: a parent line and optional authored child bullets.
+It ends at the first blank line after the header. Blank lines after that
+separate rows and are ignored. Each nonblank row supplies one capture; rows
+cannot have child bullets yet.
+
+| Draft part | Rule |
+| --- | --- |
+| Header | `@@template:` alone on the first nonblank line; case-insensitive |
+| Placeholder | `{0}` through `{999}`; indices must start at zero and have no gaps; repeats and any order are allowed |
+| Literal braces | Write `{{` for `{` and `}}` for `}` |
+| One placeholder | The whole trimmed row is its value, including spaces |
+| Multiple placeholders | Separate fields with spaces or tabs; quote fields containing spaces with `"..."` or `“...”`; `\"` and `\\` are the only escapes inside quotes |
+
+Values are inserted once and are not scanned again. Every ordinary marker in
+the template applies independently to each row, including routes and sections,
+`s:<N>`, `p:<N>`, `&` and `*` dependencies, completion (`!note:id`), task
+links, and reference URLs. Duplicate block IDs across rows are refused by the
+normal planner. A row with an empty or incomplete picker value gets the
+existing capture error, scoped to that template row.
+
+Use `@route:{1}` when each row should link its task under the one selected
+Pomodoro; the normal `plan.max_links` warning applies. Use `@route^apply-{1}`
+when rows should create plain Ready tasks that you link as you work them.
+
+Templates refuse other `@@` declarations, clipboard capture, and Pomodoro
+session operators. This includes `%` markers even with `--no-clip`, `--clip`,
+whole-item forms such as `=`, `=x`, `+N`, and `++N`, and start/close suffixes
+on task markers. `URL %` remains allowed when it is the reference listen
+marker. A template is limited to 1,000 rows and 1 MiB of expanded text; it is
+refused rather than truncated when it exceeds either bound.
+
+Template errors use stable codes in JSON mode. Execution reports the first
+problem in draft order and writes nothing:
+
+| Code | Example message |
+| --- | --- |
+| `template_header_misplaced` | Write `@@template:` alone on the draft's first line |
+| `template_missing_rows` | Add a blank line, then one row per capture |
+| `template_needs_separator` | Add a blank line between the template and its rows |
+| `template_missing_placeholder` | Add at least one placeholder such as `{0}` |
+| `template_invalid_placeholder` | Use `{N}`; write `{{` for a literal brace |
+| `template_placeholder_gap` | This template uses `{0}` and `{2}` but not `{1}`; number placeholders without gaps |
+| `template_row_bullet` | Rows can't have child bullets yet; put each capture's values on one row |
+| `template_unterminated_quote` | Quoted field has no closing quote |
+| `template_row_arity` | Template row 3 (line 7) has 4 fields but the template uses `{0}`–`{2}` |
+| `template_global_declaration` | A template draft can't declare `@@` destinations; put the destination in the template line |
+| `template_clipboard` | A template can't capture the clipboard: `%` would repeat once per row |
+| `template_session_operator` | A template can't drive the Pomodoro session; capture `=`, `=x`, `+N`, and `++N` on their own |
+| `template_too_large` | Expanded template exceeds the 1 MiB limit |
+| `template_row_incomplete` | `capture-parse` reports an incomplete expanded item on its row |
+
+Success JSON adds a top-level `template` summary (`line`, `field_count`, and
+`row_count`) and a `template_row` (`row`, `line`) on each result item. Human
+output prints a dim row-count and source-line summary before the numbered
+items. `-E, --expand` prints the expanded text and exits before vault access
+or planning; JSON mode returns it as `expanded` with the same `template`
+summary. On drafts without the header, `-E` returns the original text.
 
 ### Authored sub-bullets
 
@@ -4102,6 +4188,8 @@ Useful options:
 - `-b, --bob-dir DIR`: Bob vault root; defaults to `BOB_DIR` or `~/bob`
 - `-c, --clip[=HEADER]`: force clipboard capture, optionally with a header
 - `-d, --dry-run`: plan and report without writing notes or clipboard files
+- `-E, --expand`: print a template draft's expansion and exit before vault
+  access or planning
 - `-f, --format human|json`: human confirmation or stable JSON for callers
 - `-n, --no-clip`: keep trailing `%...` clipboard markers literal
 - `-R, --no-ref`: keep bare links as inbox tasks instead of queueing a
@@ -4135,6 +4223,11 @@ call `bob capture --format json -- <text>` and parse the JSON object, whose
 stable fields include `ok`, `dry_run`, `routed`, `route`, `route_label`,
 `relative_target`, `target`, `text`, `task_line`, `kind`, `created`,
 `placement`, and `pull_in` (`supported: true` on every success). The
+template path additionally returns `template: {line, field_count, row_count}`
+and `template_row: {row, line}` on each expanded item, including the legacy
+top-level result for row 1. `-E, --expand` prints the expanded draft in human
+mode; with `-f json` it returns `expanded` and the same `template` summary. On
+drafts without a header it returns the original text. The
 `kind` field is `"task"`, `"bullet"`, `"pomodoro_task"`,
 `"pomodoro_note"`, `"sub_bullet"`, `"task_toggle"`, `"project_note"`,
 `"pomodoro_adjust"`, `"pomodoro_shift"`, `"pomodoro_start"`,
@@ -4142,7 +4235,8 @@ stable fields include `ok`, `dry_run`, `routed`, `route`, `route_label`,
 `task_line` holds the rendered line for any kind — for `"project_note"` it is
 the rendered `^prj` line, and for `"pomodoro_link"` it is the linked task's
 post-image line. On JSON-mode failures, stdout is still a
-single object with `ok: false` and an `error` string. `code` appears on
+single object with `ok: false` and an `error` string. Template framing and
+refusal errors include their stable `template_*` code. `code` also appears on
 `plan_theme_cap_exceeded` and `pull_in_choice_required` refusals.
 
 A reference item (`kind: "ref"`) uses `placement: "queued"` or

@@ -5,15 +5,12 @@ aliases:
   - "batch capture"
 ---
 
-A capture whose draft holds two or more capture items, whether typed directly or
-generated one per row by a `@@template:` draft (`bob capture -E` prints the expansion).
-Blank or whitespace-only lines separate items; a blank-line-free block of two or more
+A bulk capture holds multiple items: blank-line items, bare-URL lists, chained session operators, or one item per row from a `@@template:` draft. Template rows are later nonblank physical lines, one capture per line, not blank-line-separated items; capturing the draft is exactly capturing its `bob capture -E` expansion. Blank or whitespace-only lines separate items; a blank-line-free block of two or more
 bare-URL lines splits into one item per URL, and a line chaining session operators
 (`+2 =x`, `=x =`) into one item per operator. Authored child bullets never start an
 item. Each item is still judged alone, with its own markers and whole-item forms, so
 bulk linking (several `@route:id` items) and bulk completion (one `!note:id` per item)
-work. Only a `@@route` declaration spans items: it routes every item that lacks its own
-route or mode marker. One staged planner
+work. `@@route` declarations route otherwise-unrouted items across a blank-line batch; `@@template:` declares and expands before parsing. One staged planner
 (`CaptureBatchPlanner`) runs the items in order, so each item sees the edits planned
 before it (insertion points, block-ID checks, Pomodoro lineup numbers) exactly as
 sequential captures would, and any item's failure rolls the whole draft back. JSON

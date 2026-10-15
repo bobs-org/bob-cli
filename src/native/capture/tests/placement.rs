@@ -361,6 +361,8 @@ fn json_success_shape_is_stable() {
             minted_blocker_block_id: None,
         }],
         None,
+        None,
+        Vec::new(),
         Vec::new(),
         None,
         Vec::new(),
@@ -368,6 +370,9 @@ fn json_success_shape_is_stable() {
         PullInJson::empty(),
     );
 
+    let legacy_json = serde_json::to_string(&result)
+        .expect("serialize legacy capture result");
+    assert_eq!(success_json(&result), legacy_json);
     let value: serde_json::Value =
         serde_json::from_str(&success_json(&result)).expect("json");
     assert_eq!(value["ok"], true);

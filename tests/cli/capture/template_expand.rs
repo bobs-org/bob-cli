@@ -82,5 +82,6 @@ fn capture_expand_reports_language_errors_as_usage_errors() {
     let value: serde_json::Value =
         serde_json::from_str(stdout(&output).trim()).expect("error JSON");
     assert_eq!(value["ok"], false);
+    assert_eq!(value["code"], "template_placeholder_gap");
     assert!(value["error"].as_str().unwrap().contains("not {1}"));
 }

@@ -34,3 +34,4 @@ mod commit;
 mod grammar;
 mod placement;
 mod started;
+mod template;

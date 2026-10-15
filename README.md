@@ -331,7 +331,9 @@ tasks. See
 
 `TEXT` may be several physical lines: each item’s first nonblank line is the
 parent, later authored bullets become children, and blank lines split a batch
-of items. A `@@route` or `@@route+id` token anywhere in the draft is a
+of items. A first-line `@@template:` header turns the following item into a
+template; after a blank line, each row supplies one capture. A `@@route` or
+`@@route+id` token anywhere in the draft is a
 draft-wide destination declaration, not body text; item-local `@...` markers
 still win, and `bob capture` warns when a local marker shadows the declaration
 typed on that same item. The whole batch is planned before anything is written.
@@ -343,6 +345,7 @@ typed on that same item. The whole batch is planned before anything is written.
 | `URL % @route` | Same, with the reference note's `parent` set to `[[route]]`. `URL @ @route` is an alias |
 | `@@route` | Shared task destination, anywhere in the draft, for otherwise-unrouted items |
 | `@@route+id` | Shared parent-task destination, anywhere in the draft, for otherwise-unrouted items |
+| `@@template:` | Expand one capture per row from a `{N}` template block |
 | `@route` | Task in `<route>.md` |
 | `@route#Section` | Ordinary bullet under a matching non-`Tasks` heading |
 | `@route#` | Ordinary bullet under any non-`Tasks` heading |

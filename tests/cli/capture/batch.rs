@@ -32,12 +32,17 @@ fn capture_batch_json_is_ordered_and_keeps_legacy_top_level() {
     let json: serde_json::Value =
         serde_json::from_str(stdout(&output).trim()).expect("capture JSON");
     assert_eq!(json["ok"], true);
+    assert!(json.get("template").is_none());
+    assert!(json.get("template_row").is_none());
     assert_eq!(json["text"], "first task");
     assert_eq!(json["route"], "work");
     assert_eq!(json["relative_target"], "work.md");
     assert_eq!(json["sub_bullets"], serde_json::json!(["\t- child detail"]));
 
     let captures = json["captures"].as_array().expect("captures array");
+    assert!(captures
+        .iter()
+        .all(|item| item.get("template_row").is_none()));
     assert_eq!(captures.len(), 3);
     assert_eq!(captures[0]["text"], "first task");
     assert_eq!(captures[0]["route"], "work");

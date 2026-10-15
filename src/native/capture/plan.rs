@@ -9,6 +9,8 @@ pub(super) struct PlannedCaptureBatch {
     pub(super) plan_budget: Option<CapturePlanBudget>,
     pub(super) pomodoro_blocks: Vec<PomodoroBlockJson>,
     pub(super) task_blocks: Vec<TaskBlockJson>,
+    pub(super) template: Option<capture_language::template::TemplateSummary>,
+    pub(super) template_rows: Vec<Option<capture_language::TemplateRowSummary>>,
     /// Ref jobs staged by reference items, in batch order. The commit
     /// enqueues them as rolled-back side effects and patches each
     /// item's `ref.job` with the created id.
@@ -55,6 +57,12 @@ pub(super) fn plan_capture_batch(
         request.forced_section.as_deref(),
         &options,
     )?;
+    if parsed_draft.template.is_some() && request.forced_clip.is_some() {
+        return Err(CaptureError::usage_code(
+            "a template can't capture the clipboard: `%` would repeat once per row",
+            "template_clipboard",
+        ));
+    }
     if parsed_draft.global.is_some()
         && !request.forced_destination_flags.is_empty()
     {
@@ -62,6 +70,12 @@ pub(super) fn plan_capture_batch(
             &request.forced_destination_flags,
         )));
     }
+    let template = parsed_draft.template;
+    let template_rows = parsed_draft
+        .items
+        .iter()
+        .map(|item| item.template_row.clone())
+        .collect();
     let parsed_items = parsed_draft.items;
     let mut warnings = parsed_draft.warnings;
     let global_destination =
@@ -88,7 +102,7 @@ pub(super) fn plan_capture_batch(
 
     for parsed_item in parsed_items {
         let item_number = parsed_item.index + 1;
-        let line_start = parsed_item.line_start;
+        let error_context = capture_error_context(item_number, &parsed_item);
         let pre_day = planner.peek_text(&day_file);
         planner.begin_item(pre_day.clone());
         let pre_tasks = task_tracker.snapshot_pre(&planner);
@@ -103,10 +117,8 @@ pub(super) fn plan_capture_batch(
             let (mut planned, staged) =
                 plan_ref_item(request, parsed_item, assignment, today)
                     .map_err(|mut error| {
-                        error.message = format!(
-                            "capture item {item_number} starting on line {line_start}: {}",
-                            error.message
-                        );
+                        error.message =
+                            format!("{error_context}: {}", error.message);
                         error
                     })?;
             planned.result.consumed_links = planner.take_consumed_links();
@@ -131,10 +143,7 @@ pub(super) fn plan_capture_batch(
             &mut dependency_ctx,
         )
         .map_err(|mut error| {
-            error.message = format!(
-                "capture item {item_number} starting on line {line_start}: {}",
-                error.message
-            );
+            error.message = format!("{error_context}: {}", error.message);
             error
         })?;
         planned.result.consumed_links = planner.take_consumed_links();
@@ -186,6 +195,8 @@ pub(super) fn plan_capture_batch(
         plan_budget: None,
         pomodoro_blocks,
         task_blocks,
+        template,
+        template_rows,
         staged_jobs,
     })
 }
@@ -260,6 +271,19 @@ fn assign_ref_verdicts(
         assignments.insert(index, assignment);
     }
     assignments
+}
+
+fn capture_error_context(
+    item_number: usize,
+    parsed_item: &ParsedCaptureItem,
+) -> String {
+    match &parsed_item.template_row {
+        Some(row) => format!("template row {} (line {})", row.row, row.line),
+        None => format!(
+            "capture item {item_number} starting on line {}",
+            parsed_item.line_start
+        ),
+    }
 }
 
 /// Plan one reference item: resolve the canonical parent with
