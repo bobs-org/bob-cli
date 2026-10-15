@@ -1661,7 +1661,7 @@ def run_capture(request: dict, *, allow_headed: bool = True,
                 "pdf_bytes": pdf_bytes,
                 "warnings": warnings,
             }
-            if article_json_path is not None:
+            if request.get("render") is False and article_json_path is not None:
                 response["article_json"] = article_json_path
             debug.update({"images": images,
                           "fidelity": response["fidelity"], "mode": mode,
@@ -1775,6 +1775,17 @@ def op_compose(request: dict) -> dict:
             raise AdapterFail(
                 "invalid_request",
                 f"parts[{index - 1}].article_json is missing: {path}")
+        try:
+            with open(path, encoding="utf-8") as handle:
+                article = json.load(handle)
+        except (OSError, ValueError) as exc:
+            raise AdapterFail(
+                "invalid_request",
+                f"parts[{index - 1}].article_json is unreadable or malformed: {exc}") from exc
+        if not isinstance(article, dict):
+            raise AdapterFail(
+                "invalid_request",
+                f"parts[{index - 1}].article_json must contain an object")
         article_paths.append(path)
     collection = request.get("collection")
     if not isinstance(collection, dict):
@@ -1830,6 +1841,8 @@ def op_compose(request: dict) -> dict:
                 out_pdf,
                 _RendererLauncher(pw, browser_info),
             )
+    except web_clip_render.BrowserLaunchError as exc:
+        raise AdapterFail("browser", str(exc), BROWSER_HINT) from exc
     except web_clip_render.RenderError as exc:
         raise AdapterFail(
             "render", str(exc),
@@ -1954,7 +1967,57 @@ def _fixture_hook_factory(directory: str, statuses: dict | None = None):
     return _hook
 
 
-def _inspect_collection_pdf(pdf_path: str) -> tuple[bool, bool, bool, str]:
+def _qpdf_top_level_count(payload: dict) -> int | None:
+    """Read qpdf's top-level outline entries across supported JSON shapes."""
+    outlines = payload.get("outlines")
+    if isinstance(outlines, list):
+        return len(outlines)
+    if isinstance(outlines, dict):
+        top = outlines.get("kids") or outlines.get("open") or []
+        return len(top) if isinstance(top, list) else None
+    return None
+
+
+def _mutool_top_level_count(output: str) -> int:
+    """Count mutool outline rows at zero tab depth.
+
+    MuPDF prints the outline state marker first, followed by a tab-delimited
+    title column. Each additional tab after that column's first tab adds one
+    nesting level. Older output can instead indent the marker itself.
+    """
+    count = 0
+    for line in output.splitlines():
+        if not line.strip():
+            continue
+        prefix_tabs = len(line) - len(line.lstrip("\t"))
+        row = line[prefix_tabs:]
+        if not row.startswith(("-", "+", "|")):
+            continue
+        title_column = row[1:]
+        column_tabs = len(title_column) - len(title_column.lstrip("\t"))
+        depth = prefix_tabs + max(column_tabs - 1, 0)
+        if depth == 0:
+            count += 1
+    return count
+
+
+def _page_has_content(text: str, number: int, page_count: int,
+                      footer_title: str | None = None) -> bool:
+    """Ignore the printed footer when deciding whether a page is blank."""
+    content = re.sub(rf"\b{number}\s*/\s*{page_count}\b", "", text)
+    if footer_title:
+        content = content.replace(footer_title, "")
+        collapsed = re.sub(r"\s+", " ", footer_title).strip()
+        if len(collapsed) > 60:
+            cut = collapsed[:60].rsplit(" ", 1)[0] or collapsed[:60]
+            content = content.replace(cut + "…", "")
+    return bool(content.strip())
+
+
+def _inspect_collection_pdf(
+    pdf_path: str,
+    footer_title: str | None = None,
+) -> tuple[bool, bool, bool, str]:
     """Check outline, blank pages, and continuous counters. Best-effort."""
     notes: list[str] = []
     outline_ok = False
@@ -1969,12 +2032,12 @@ def _inspect_collection_pdf(pdf_path: str) -> tuple[bool, bool, bool, str]:
             payload = json.loads(proc.stdout)
             pages = payload.get("pages") or []
             notes.append(f"qpdf pages={len(pages)}")
-            outlines = payload.get("outlines") or {}
-            top = outlines.get("kids") or outlines.get("open") or []
-            if isinstance(top, list):
-                outline_ok = len(top) == 2
-                notes.append(f"qpdf outline kids={len(top)}")
-        except (subprocess.SubprocessError, OSError, ValueError) as exc:
+            top_count = _qpdf_top_level_count(payload)
+            if top_count is not None:
+                outline_ok = top_count == 2
+                notes.append(f"qpdf outline top={top_count}")
+        except (subprocess.SubprocessError, OSError, ValueError,
+                AttributeError, TypeError, KeyError) as exc:
             notes.append(f"qpdf failed: {exc}")
 
     if shutil.which("mutool"):
@@ -1982,15 +2045,10 @@ def _inspect_collection_pdf(pdf_path: str) -> tuple[bool, bool, bool, str]:
             info = subprocess.run(
                 ["mutool", "show", pdf_path, "outline"],
                 check=True, capture_output=True, text=True, timeout=60)
-            lines = [line for line in info.stdout.splitlines() if line.strip()]
-            # mutool prints top-level bookmarks as `- "Title"` and nested
-            # entries as `| "Child"` (tabs, not leading spaces).
-            top_level = [
-                line for line in lines if line.lstrip().startswith("-")
-            ]
+            top_count = _mutool_top_level_count(info.stdout)
             if not outline_ok:
-                outline_ok = len(top_level) == 2
-            notes.append(f"mutool outline top={len(top_level)}")
+                outline_ok = top_count == 2
+            notes.append(f"mutool outline top={top_count}")
             pages_proc = subprocess.run(
                 ["mutool", "info", pdf_path],
                 check=True, capture_output=True, text=True, timeout=60)
@@ -2012,7 +2070,8 @@ def _inspect_collection_pdf(pdf_path: str) -> tuple[bool, bool, bool, str]:
                      pdf_path, str(number)],
                     check=True, capture_output=True, text=True, timeout=60)
                 text = drawn.stdout
-                if not text.strip():
+                if not _page_has_content(text, number, page_count,
+                                         footer_title):
                     empty += 1
                 counter = re.search(
                     rf"\b{number}\s*/\s*{page_count}\b", text)
@@ -2023,7 +2082,8 @@ def _inspect_collection_pdf(pdf_path: str) -> tuple[bool, bool, bool, str]:
                 page_count >= 2 and found_counters == list(range(1, page_count + 1))
             )
             notes.append(f"empty_pages={empty} counters={found_counters}")
-        except (subprocess.SubprocessError, OSError, ValueError) as exc:
+        except (subprocess.SubprocessError, OSError, ValueError,
+                AttributeError, TypeError, KeyError) as exc:
             notes.append(f"mutool failed: {exc}")
 
     if not notes:
@@ -2033,6 +2093,59 @@ def _inspect_collection_pdf(pdf_path: str) -> tuple[bool, bool, bool, str]:
     if "no qpdf or mutool" in notes[0]:
         return True, True, True, "; ".join(notes)
     return outline_ok, blank_ok, counters_ok, "; ".join(notes)
+
+
+def _compose_error_kind_checks(
+    workdir: str,
+    article_json: str,
+) -> tuple[bool, bool]:
+    """Exercise compose's invalid-input and renderer-launch mappings."""
+    global discover_browser, _RendererLauncher
+
+    malformed_json = os.path.join(workdir, "malformed.json")
+    with open(malformed_json, "w", encoding="utf-8") as handle:
+        handle.write("{broken")
+    malformed_error = None
+    try:
+        op_compose({
+            "parts": [{"article_json": malformed_json}],
+            "collection": {"title": "Fixture", "captured": "2026-10-15"},
+            "workdir": os.path.join(workdir, "malformed-compose"),
+            "out_pdf": os.path.join(workdir, "bad.pdf"),
+        })
+    except AdapterFail as exc:
+        malformed_error = exc
+
+    original_discover_browser = discover_browser
+    original_renderer_launcher = _RendererLauncher
+
+    class FailingRendererLauncher:
+        def __init__(self, _pw, _browser_info):
+            pass
+
+        def __call__(self, *, headless=True):
+            raise RuntimeError("fixture launch failure")
+
+    discover_browser = lambda: {"kind": "fixture", "launch": "fixture"}
+    _RendererLauncher = FailingRendererLauncher
+    browser_error = None
+    try:
+        op_compose({
+            "parts": [{"article_json": article_json}],
+            "collection": {"title": "Fixture", "captured": "2026-10-15"},
+            "workdir": os.path.join(workdir, "browser-compose"),
+            "out_pdf": os.path.join(workdir, "browser.pdf"),
+        })
+    except AdapterFail as exc:
+        browser_error = exc
+    finally:
+        discover_browser = original_discover_browser
+        _RendererLauncher = original_renderer_launcher
+    return (
+        malformed_error is not None
+        and malformed_error.kind == "invalid_request",
+        browser_error is not None and browser_error.kind == "browser",
+    )
 
 
 def self_test() -> int:
@@ -2359,6 +2472,24 @@ def self_test() -> int:
           'href="#p1-fn1"' in namespaced
           and 'xlink:href="#p1-introduction"' in namespaced
           and 'url(#p1-fn1)' in namespaced)
+    protected_text = 'id="x" href="/y" url(#z)'
+    markup_with_attribute_like_text = (
+        f"<pre><code>{protected_text} &lt;div id=\"root\"&gt;"
+        f"</code></pre><p>{protected_text}</p>"
+        '<a id="x" href="/y" '
+        'style="clip-path:url(#z); content: \'a > b\'">link</a>'
+        '<!-- <a href="/comment"> -->'
+    )
+    rewritten_text = _render.resolve_relative_hrefs(
+        _render.namespace_ids(markup_with_attribute_like_text, "p1-"),
+        "https://example.com/base")
+    check("attribute rewrites preserve code and prose byte-for-byte",
+          rewritten_text.count(protected_text) == 2
+          and '&lt;div id="root"&gt;' in rewritten_text)
+    check("attribute rewrites handle quoted greater-than and comments",
+          '<a id="p1-x" href="https://example.com/y" '
+          'style="clip-path:url(#p1-z); content: \'a > b\'">' in rewritten_text
+          and '<!-- <a href="/comment"> -->' in rewritten_text)
     resolved = _render.resolve_relative_hrefs(
         '<a href="/other">o</a><a href="#fn1">n</a>'
         '<a href="https://keep.example/x">k</a>',
@@ -2367,6 +2498,24 @@ def self_test() -> int:
           'href="https://example.com/other"' in resolved
           and 'href="#fn1"' in resolved
           and 'href="https://keep.example/x"' in resolved)
+    check("qpdf outline rejects an extra top-level entry",
+          _qpdf_top_level_count({"outlines": [{}, {}, {}]}) != 2)
+    check("mutool outline counts only zero-tab-depth rows",
+          _mutool_top_level_count(
+              '- "One"\n\t+ "Child"\n| "Two"\n') == 2
+          and _mutool_top_level_count(
+              '- "One"\n\t+ "Child"\n| "Two"\n- "Extra"\n') != 2)
+    check("mutool outline counts real printed nesting",
+          _mutool_top_level_count(
+              '-\t"One"\n|\t\t"Child"\n-\t"Two"\n') == 2
+          and _mutool_top_level_count(
+              '-\t"One"\n|\t\t"Child"\n-\t"Two"\n'
+              '+\t"Extra"\n') != 2)
+    check("blank-page check ignores only the footer",
+          not _page_has_content("5 / 5\nTokio Internals", 5, 5,
+                                "Tokio Internals")
+          and _page_has_content("Real page text\n5 / 5", 5, 5,
+                                "Tokio Internals"))
 
     collection_root = _offline_tf.mkdtemp(prefix="bob-clip-collection-")
     collection_parts = []
@@ -2443,6 +2592,12 @@ def self_test() -> int:
           and 'href="https://example.com/other-2"' in collection_html)
     check("collection css has part page break",
           "break-before: page" in css)
+    invalid_request_ok, browser_kind_ok = _compose_error_kind_checks(
+        collection_root, collection_parts[0])
+    check("malformed compose article.json is invalid_request",
+          invalid_request_ok)
+    check("compose browser launch failure has browser kind",
+          browser_kind_ok)
 
     # -- Browser-backed fixture checks (offline via routing) -----------------
     try:
@@ -2474,6 +2629,8 @@ def self_test() -> int:
         response, debug, workdir = _capture("article_basic.html")
         check("article ok", response.get("ok") is True)
         check("article kind", response.get("kind") == "article")
+        check("single capture omits article_json by default",
+              "article_json" not in response)
         check("article title", response.get("title")
               == "An open-source spec for orchestration: Symphony")
         check("article author", response.get("author")
@@ -2549,7 +2706,7 @@ def self_test() -> int:
                   (compose_resp.get("pdf_bytes") or 0) > 1000
                   and os.path.isfile(compose_pdf))
             outline_ok, blank_ok, counters_ok, compose_note = (
-                _inspect_collection_pdf(compose_pdf))
+                _inspect_collection_pdf(compose_pdf, "Tokio Internals"))
             check(f"compose outline two top-level ({compose_note})",
                   outline_ok)
             check(f"compose has no blank pages ({compose_note})",

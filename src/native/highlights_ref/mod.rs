@@ -39,7 +39,6 @@ mod clip;
 mod clip_adapter;
 mod clip_url;
 mod collection;
-#[allow(dead_code)]
 mod collection_name;
 mod companion;
 mod doctor;

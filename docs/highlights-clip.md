@@ -161,8 +161,9 @@ reported with the stderr tail. The full request/response shapes live in
 For a collection, Rust sends a `capture` request per URL in argument order.
 `render: false` stores the extracted `article.json` and assets in that part's
 work directory and returns its absolute path with `pdf_bytes: null`, without
-printing. Requests that omit `render` keep the single-article behavior; the
-single-capture JSON omits the optional `render` and `out_pdf` fields as before.
+printing. Requests that omit `render` keep the single-article behavior and
+still send `out_pdf`; only the optional `render` field is omitted. The additive
+`article_json` response field appears only when the request sets `render: false`.
 Rust then sends one `compose` request with the ordered article paths,
 collection-level title/author/published/captured metadata, a work directory,
 and output PDF path. `compose` returns the combined PDF byte count, image

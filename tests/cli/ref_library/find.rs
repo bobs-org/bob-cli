@@ -479,6 +479,28 @@ fn find_intake_records_both_marker_url_fields() {
 }
 
 #[test]
+fn find_intake_list_marker_indexes_each_url() {
+    let (_temp, vault) = fixture_vault("bob-cli-ref-find-intake-list-urls");
+    write_highlights_pdf(
+        &vault.join("xlib/blogs/list-urls.pdf"),
+        "- status: ready\n- parent: tech_blogs\n- title: Collection\n- source_url: [https://example.com/intake/part-one, https://example.com/intake/part-two]\n",
+    );
+    for query in [
+        "https://example.com/intake/part-one",
+        "https://example.com/intake/part-two",
+    ] {
+        let document = run_find_json(&vault, &[query, "-i"]);
+        let result = result_for(&document, query);
+        assert_eq!(result["verdict"], "in_intake", "query {query}");
+        assert_eq!(
+            result["intake"][0]["path"], "xlib/blogs/list-urls.pdf",
+            "query {query}"
+        );
+        assert_eq!(result["intake"][0]["source_url"], query, "query {query}");
+    }
+}
+
+#[test]
 fn find_intake_unavailable_without_intake_dir() {
     let (_temp, vault) = fixture_vault("bob-cli-ref-find-nointake");
     let document = run_find_json(

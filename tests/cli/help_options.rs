@@ -736,6 +736,7 @@ fn highlights_create_help_lists_options_alphabetically() {
             && help.contains("<TARGET>...")
             && help.contains("Several URLs:")
             && help.contains("one reference takes at most 20 URLs")
+            && help.contains("for several URLs, the words their slugs share")
             && help.contains("tokio-internals-part-1")
             && help.contains("URL1 URL2 URL3 -N spotify_bg_agents"),
         "expected variadic TARGET and collection help in Arguments section:\n{help}"

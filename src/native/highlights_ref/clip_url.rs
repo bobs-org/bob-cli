@@ -264,6 +264,15 @@ pub(super) fn stem_from_url(url: &WebUrl) -> Option<String> {
 }
 
 pub(super) fn stem_from_segment(segment: &str) -> Option<String> {
+    let candidate = clean_segment(segment)?;
+    let slugged = snake_case(&candidate);
+    (!slugged.is_empty()).then_some(slugged)
+}
+
+/// Strip a page extension, date prefix, and opaque identifier words without
+/// applying the filename cap. Collection naming needs every token for its
+/// part-order check; callers still apply `snake_case` at the final naming step.
+pub(super) fn clean_segment(segment: &str) -> Option<String> {
     let mut candidate = strip_page_extension(segment);
     if is_opaque_segment(&candidate) {
         return None;
@@ -297,8 +306,7 @@ pub(super) fn stem_from_segment(segment: &str) -> Option<String> {
     {
         return None;
     }
-    let slugged = snake_case(&candidate);
-    (!slugged.is_empty()).then_some(slugged)
+    Some(candidate)
 }
 
 fn strip_page_extension(segment: &str) -> String {

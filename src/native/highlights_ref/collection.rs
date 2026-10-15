@@ -183,10 +183,7 @@ fn run_preflight(
         OverlapCheck::Clear { legacy } => {
             sources::warn_for_legacy_hits(legacy);
         }
-        OverlapCheck::Attach(hit) => {
-            // The listen phase consumes this hit to attach its episode.
-            let _ = hit.path;
-        }
+        OverlapCheck::Attach(_) => {}
     }
 
     Ok(PreparedCollection {
@@ -373,10 +370,39 @@ fn capture_and_install(
         options.dry_run,
         &captured,
     )?;
-    let derived =
-        derive_collection_meta(&urls, &parts, &options, &resolved_name.name);
+    let derived = derive_collection_meta(&parts, &options, &resolved_name.name);
     let styler = Styler::detect();
     if options.dry_run {
+        let audio = match options.audio.as_deref() {
+            Some(path) => super::companion::plan_explicit_audio(
+                config,
+                &plan,
+                options.force,
+                path,
+            )?,
+            None => None,
+        };
+        let listen_flow = match listen {
+            Some(_) => Some(super::listen::plan_listen_flow(
+                &plan, &scratch, &plan.stem,
+            )?),
+            None => None,
+        };
+        if let (Some(command), Some(flow)) = (listen, &listen_flow) {
+            let staged_pdf = scratch.path().join("collection.pdf");
+            println!(
+                "{}",
+                super::listen::would_run_line(
+                    command,
+                    &super::listen::ListenValues {
+                        target: staged_pdf.to_string_lossy().into_owned(),
+                        pdf: staged_pdf,
+                        audio: flow.scratch_audio.clone(),
+                        title: derived.title.clone(),
+                    },
+                )
+            );
+        }
         print_dry_run(
             &styler,
             config,
@@ -387,27 +413,9 @@ fn capture_and_install(
             &resolved_name,
             &derived,
             &overlap,
+            audio.as_ref(),
+            listen_flow.as_ref(),
         )?;
-        if let Some(command) = listen {
-            println!(
-                "{}",
-                super::listen::would_run_line(
-                    command,
-                    &super::listen::ListenValues {
-                        target: scratch
-                            .path()
-                            .join("collection.pdf")
-                            .to_string_lossy()
-                            .into_owned(),
-                        pdf: scratch.path().join("collection.pdf"),
-                        audio: scratch
-                            .path()
-                            .join(format!("{}.mp3", plan.stem)),
-                        title: derived.title.clone(),
-                    },
-                )
-            );
-        }
         return Ok(());
     }
 
@@ -519,10 +527,11 @@ fn capture_and_install(
                 &mut scratch,
                 &flow.scratch_audio,
                 error.to_string(),
-                format!(
-                    "bind it with bob ref create {} --audio {}",
-                    urls[0].cleaned,
-                    flow.scratch_audio.display()
+                bind_listen_hint(
+                    &urls,
+                    &options,
+                    &resolved_name,
+                    &flow.scratch_audio,
                 ),
             ));
         }
@@ -536,10 +545,11 @@ fn capture_and_install(
                 &mut scratch,
                 &flow.scratch_audio,
                 error.to_string(),
-                format!(
-                    "bind it with bob ref create {} --audio {}",
-                    urls[0].cleaned,
-                    flow.scratch_audio.display()
+                bind_listen_hint(
+                    &urls,
+                    &options,
+                    &resolved_name,
+                    &flow.scratch_audio,
                 ),
             ));
         }
@@ -550,10 +560,11 @@ fn capture_and_install(
                         &mut scratch,
                         &flow.scratch_audio,
                         error.to_string(),
-                        format!(
-                            "bind it with bob ref create {} --audio {}",
-                            urls[0].cleaned,
-                            flow.scratch_audio.display()
+                        bind_listen_hint(
+                            &urls,
+                            &options,
+                            &resolved_name,
+                            &flow.scratch_audio,
                         ),
                     )
                 },
@@ -577,10 +588,11 @@ fn capture_and_install(
                     &mut scratch,
                     &flow.scratch_audio,
                     error.to_string(),
-                    format!(
-                        "bind it with bob ref create {} --audio {}",
-                        urls[0].cleaned,
-                        flow.scratch_audio.display()
+                    bind_listen_hint(
+                        &urls,
+                        &options,
+                        &resolved_name,
+                        &flow.scratch_audio,
                     ),
                 ));
             }
@@ -692,7 +704,6 @@ struct DerivedMeta {
 }
 
 fn derive_collection_meta(
-    _urls: &[WebUrl],
     parts: &[CapturedPart],
     options: &CreateOptions,
     name: &str,
@@ -874,6 +885,33 @@ fn with_nothing_written(mut error: CommandError) -> CommandError {
     error
 }
 
+fn bind_listen_hint(
+    urls: &[WebUrl],
+    options: &CreateOptions,
+    resolved_name: &collection_name::ResolvedName,
+    kept_audio: &Path,
+) -> String {
+    let mut command = String::from("bind it with bob ref create");
+    for url in urls {
+        command.push(' ');
+        command.push_str(&super::listen::shell_quote(&url.cleaned));
+    }
+    if let Some(output) = &options.output {
+        command.push_str(" -o ");
+        command
+            .push_str(&super::listen::shell_quote(&output.to_string_lossy()));
+    } else {
+        command.push_str(" -N ");
+        command.push_str(&super::listen::shell_quote(&resolved_name.name));
+    }
+    command.push_str(" -P ");
+    command.push_str(&super::listen::shell_quote(&options.parent));
+    command.push_str(" --audio ");
+    command
+        .push_str(&super::listen::shell_quote(&kept_audio.to_string_lossy()));
+    command
+}
+
 #[allow(clippy::too_many_arguments)]
 fn print_success(
     styler: &Styler,
@@ -887,7 +925,7 @@ fn print_success(
     audio: Option<&super::companion::AudioCopyPlan>,
     captured: &str,
     page_count: usize,
-    _listen_flow: Option<&super::listen::ListenFlow>,
+    listen_flow: Option<&super::listen::ListenFlow>,
 ) {
     let installed_bytes = fs::metadata(&plan.target)
         .map(|metadata| metadata.len())
@@ -911,7 +949,7 @@ fn print_success(
     println!("pdf: {}", plan.target.display());
     if let Some(audio) = audio {
         println!("audio: {} (from {})", audio.dest.display(), audio.origin);
-    } else if let Some(flow) = _listen_flow {
+    } else if let Some(flow) = listen_flow {
         println!("audio: {} (from --listen)", flow.dest.display());
     }
     if let Some(author) = &derived.author {
@@ -945,6 +983,8 @@ fn print_dry_run(
     resolved_name: &collection_name::ResolvedName,
     derived: &DerivedMeta,
     overlap: &OverlapCheck,
+    audio: Option<&super::companion::AudioCopyPlan>,
+    listen_flow: Option<&super::listen::ListenFlow>,
 ) -> Result<(), CommandError> {
     let captured = super::current_local_date();
     println!(
@@ -964,6 +1004,11 @@ fn print_dry_run(
     println!("parts:");
     print_part_rows(styler, parts);
     println!("pdf: {}", plan.target.display());
+    if let Some(audio) = audio {
+        println!("audio: {} (from {})", audio.dest.display(), audio.origin);
+    } else if let Some(flow) = listen_flow {
+        println!("audio: {} (from --listen)", flow.dest.display());
+    }
     match &plan.workflow {
         TargetWorkflow::Intake {
             library_destination,
@@ -1202,16 +1247,45 @@ fn usage_error(
 
 fn report_error(error: CommandError) -> i32 {
     let styler = Styler::detect();
-    let message = error.message;
-    if message.starts_with(&format!("{CREATE_COMMAND_NAME}: error:")) {
-        eprintln!("{message}");
-    } else if let Some((first, hint)) = message.split_once("\nhint: ") {
-        eprintln!("{CREATE_COMMAND_NAME}: {}: {first}", styler.red("error"));
-        eprintln!("hint: {hint}");
-    } else {
-        eprintln!("{CREATE_COMMAND_NAME}: {}: {message}", styler.red("error"));
-    }
+    eprintln!("{}", style_error_message(&error.message, &styler));
     error.exit_code.unwrap_or(1)
+}
+
+fn style_error_message(message: &str, styler: &Styler) -> String {
+    let mut lines = message.lines();
+    let first = lines.next().unwrap_or_default();
+    let command_prefix = format!("{CREATE_COMMAND_NAME}: error:");
+    let first_line = if let Some(remainder) =
+        first.strip_prefix(&command_prefix)
+    {
+        format!("{CREATE_COMMAND_NAME}: {}:{remainder}", styler.red("error"))
+    } else {
+        format!("{CREATE_COMMAND_NAME}: {}: {first}", styler.red("error"))
+    };
+    let mut output = vec![first_line];
+    for line in lines {
+        if line.starts_with("hint:") {
+            output.push(line.to_string());
+        } else if let Some(row) = style_error_row(line, styler) {
+            output.push(row);
+        } else {
+            output.push(line.to_string());
+        }
+    }
+    output.join("\n")
+}
+
+fn style_error_row(line: &str, styler: &Styler) -> Option<String> {
+    let row = line.strip_prefix("  ")?;
+    let digits = row.bytes().take_while(u8::is_ascii_digit).count();
+    if digits == 0 || row.get(digits..)?.get(..2)? != "  " {
+        return None;
+    }
+    Some(format!(
+        "  {}  {}",
+        styler.dim(&row[..digits]),
+        &row[digits + 2..]
+    ))
 }
 
 #[cfg(test)]
@@ -1240,6 +1314,29 @@ mod tests {
             source_pdf: is_ref_note.then(|| "lib/blogs/one.pdf".into()),
             has_audio: false,
         }
+    }
+
+    #[test]
+    fn collection_multiline_errors_style_labels_and_indexes_only() {
+        let no_name = "bob ref create: error: these 2 URLs need a reference name\n  1  example.com/a\n  2  example.com/b\nhint: pass -N <name>";
+        assert_eq!(
+            style_error_message(no_name, &Styler::plain()),
+            no_name,
+            "plain errors stay byte-identical"
+        );
+        let partial = "2 of 3 URLs are already in the library\n  1  example.com/a   captured as ref/blogs/a.md\n  3  example.com/c   queued in xlib/blogs/c.pdf\nhint: a URL belongs to one reference";
+        assert_eq!(
+            style_error_message(partial, &Styler::plain()),
+            format!("bob ref create: error: {partial}"),
+            "plain partial-overlap output keeps its existing text"
+        );
+        let styled = style_error_message(partial, &Styler::colored());
+        assert!(styled.contains("\u{1b}[31;1merror\u{1b}[0m"), "{styled:?}");
+        assert!(
+            styled.contains("\u{1b}[2m1\u{1b}[0m  example.com/a"),
+            "{styled:?}"
+        );
+        assert!(styled.contains("\nhint: a URL belongs"), "{styled:?}");
     }
 
     #[test]

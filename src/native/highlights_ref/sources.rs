@@ -2,11 +2,11 @@
 //!
 //! Every URL target dedupes before any fetch: the key is syntactic (see
 //! [`dedupe_key_for`](super::clip_url::dedupe_key_for)), so no network is
-//! needed. Recorded sources are ref-note frontmatter `source_url` **and
-//! legacy `url`** keys plus queued intake-PDF markers carrying either key,
-//! so the existing paper refs (which use the ad hoc `url:` key) take part
-//! in dedupe instead of being duplicated. Moved out of `clip.rs` so the
-//! `create` PDF routes share it.
+//! needed. Recorded sources are every scalar or list entry in ref-note
+//! `source_url` and legacy `url` frontmatter, plus queued intake-PDF markers
+//! carrying either key, so existing paper refs and multi-source collections
+//! take part in dedupe instead of being duplicated. Moved out of `clip.rs`
+//! so the `create` PDF routes share it.
 //!
 //! A ref-note hit refuses only when the note is PDF-backed (it carries a
 //! `source_pdf`). A URL recorded only by a legacy note without a
@@ -21,12 +21,13 @@ use std::{
 
 use super::{
     clip_url::validate_and_clean,
-    frontmatter::{parse_frontmatter_entry, split_frontmatter},
+    frontmatter::split_frontmatter,
     marker::{parse_marker, read_pdf_marker},
     model::{Config, MarkerValue},
     stamp::normalize_lexically,
     CommandError,
 };
+use crate::native::ref_library::ParsedFrontmatter;
 
 /// A dedupe failure: the message goes after `error:`, the hint after
 /// `hint:`.
@@ -126,37 +127,13 @@ fn collect_ref_note_sources(
         let Some((frontmatter, _)) = split_frontmatter(&contents) else {
             continue;
         };
-        let mut urls = Vec::new();
-        let mut source_pdf = None;
-        let mut has_audio = false;
-        for raw in frontmatter {
-            let entry = parse_frontmatter_entry(&raw);
-            let key = entry.key.as_deref().unwrap_or_default();
-            let values =
-                entry.value.as_ref().map(url_values).unwrap_or_default();
-            match key {
-                "source_url" | "url" => {
-                    urls.extend(values.into_iter().map(str::to_string));
-                }
-                "source_pdf" => {
-                    if source_pdf.is_none() {
-                        source_pdf = entry.value.as_ref().and_then(|value| {
-                            value.as_string().map(str::to_string)
-                        });
-                    }
-                }
-                "audio"
-                    if entry
-                        .value
-                        .as_ref()
-                        .and_then(MarkerValue::as_string)
-                        .is_some_and(|value| !value.is_empty()) =>
-                {
-                    has_audio = true;
-                }
-                _ => {}
-            }
-        }
+        let parsed = ParsedFrontmatter::parse(&frontmatter);
+        let mut urls = parsed.get_all("source_url");
+        urls.extend(parsed.get_all("url"));
+        let source_pdf = parsed.get_str("source_pdf").map(str::to_string);
+        let has_audio = parsed
+            .get_str("audio")
+            .is_some_and(|value| !value.is_empty());
         for url in urls {
             if let Ok(cleaned) = validate_and_clean(&url) {
                 recorded.push(RecordedSource {
@@ -610,6 +587,34 @@ mod tests {
             );
             check_dedupe(&recorded, &key, None, false)
                 .expect_err("each list value must refuse as already captured");
+        }
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn block_list_note_urls_participate_in_import_dedupe() {
+        let root = test_dir("block-list-note-urls");
+        let config = test_config(&root);
+        fs::create_dir_all(config.ref_dir.join("blogs"))
+            .expect("create ref dir");
+        fs::write(
+            config.ref_dir.join("blogs/collection.md"),
+            "---\ntitle: Collection\nsource_url:\n  - https://example.com/one\n  - https://example.com/two\nurl:\n  - https://example.com/three\nsource_pdf: lib/blogs/collection.pdf\n---\n\n# Collection\n",
+        )
+        .expect("write block-list note");
+
+        let recorded =
+            collect_recorded_source_urls(&config).expect("collect sources");
+        assert_eq!(recorded.len(), 3);
+        for url in ["one", "two", "three"] {
+            let key = format!("https://example.com/{url}");
+            assert!(
+                recorded.iter().any(|source| source.dedupe_key == key),
+                "missing source URL {key}"
+            );
+            check_dedupe(&recorded, &key, None, false).expect_err(
+                "each block-list value must refuse as already captured",
+            );
         }
         fs::remove_dir_all(&root).ok();
     }

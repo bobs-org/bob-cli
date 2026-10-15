@@ -606,6 +606,37 @@ fn capture_library_hits_are_unchanged() {
 }
 
 #[test]
+fn capture_dry_run_routes_each_pdf_backed_list_source_to_library() {
+    let temp = TempDir::new("bob-cli-capture-ref-list-source-url");
+    let vault = temp.path().join("vault");
+    write_file(
+        &vault.join("ref/blogs/collection.md"),
+        "---\ntitle: Collection\nsource_url:\n  - https://example.com/collection/one\n  - https://example.com/collection/two\nsource_pdf: lib/blogs/collection.pdf\n---\n\n- [ ] ^ref\n",
+    );
+
+    for url in [
+        "https://example.com/collection/one",
+        "https://example.com/collection/two",
+    ] {
+        let output = capture(&temp, &vault, &["-f", "json", "-d", url])
+            .output()
+            .expect("run dry-run capture for list URL");
+        assert_success(&output);
+        let json = parse_json(&output);
+        assert_eq!(json["placement"], "unchanged", "{url}: {json}");
+        assert_eq!(
+            json["ref"]["library"]["verdict"], "in_library",
+            "{url}: {json}"
+        );
+        assert_eq!(
+            json["relative_target"], "ref/blogs/collection.md",
+            "{url}: {json}"
+        );
+    }
+    assert!(pending_files(&temp).is_empty(), "dry runs enqueue nothing");
+}
+
+#[test]
 fn capture_spool_hit_is_clipping() {
     let temp = TempDir::new("bob-cli-capture-ref-clipping");
     let vault = temp.path().join("vault");

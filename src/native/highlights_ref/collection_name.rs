@@ -8,8 +8,8 @@ use std::collections::BTreeSet;
 use chrono::NaiveDate;
 
 use super::clip_url::{
-    humanize_stem, percent_decode, snake_case, stem_from_segment,
-    validate_name, WebUrl,
+    clean_segment, humanize_stem, percent_decode, snake_case, validate_name,
+    WebUrl,
 };
 use super::{CommandError, Result};
 
@@ -406,8 +406,11 @@ fn unique_sites(urls: &[WebUrl]) -> Vec<String> {
 }
 
 fn same_path(urls: &[url::Url]) -> bool {
-    urls.first()
-        .is_some_and(|first| urls.iter().all(|url| url.path() == first.path()))
+    urls.first().is_some_and(|first| {
+        let first_path = first.path().trim_end_matches('/');
+        urls.iter()
+            .all(|url| url.path().trim_end_matches('/') == first_path)
+    })
 }
 
 /// Return true when some query key changes and at least one changed key is
@@ -462,8 +465,8 @@ fn slug_words(url: &url::Url) -> Vec<String> {
         if segment.starts_with('@') || segment.starts_with('~') {
             continue;
         }
-        if let Some(stem) = stem_from_segment(segment) {
-            return split_words(&stem);
+        if let Some(cleaned) = clean_segment(segment) {
+            return split_words(&cleaned);
         }
     }
     Vec::new()
@@ -522,8 +525,8 @@ fn shared_folder_words(urls: &[url::Url]) -> Option<Vec<String>> {
     if folder.starts_with('@') || folder.starts_with('~') {
         return None;
     }
-    let stem = stem_from_segment(folder)?;
-    Some(trim_words(&split_words(&stem)))
+    let cleaned = clean_segment(folder)?;
+    Some(trim_words(&split_words(&cleaned)))
 }
 
 fn trim_words(words: &[String]) -> Vec<String> {
@@ -583,7 +586,11 @@ fn is_useful_name(words: &[String], allow_one_word_series: bool) -> bool {
         && meaningful.iter().any(|word| !GENERIC_WORDS.contains(word)))
         || (allow_one_word_series
             && meaningful.len() == 1
-            && meaningful[0].len() >= 4
+            && meaningful[0]
+                .bytes()
+                .filter(u8::is_ascii_alphabetic)
+                .count()
+                >= 4
             && !GENERIC_WORDS.contains(&meaningful[0]))
 }
 
@@ -899,6 +906,81 @@ mod tests {
             "https://www.example.com/2024/01/tokio-internals-part-1/",
         ]));
         assert_eq!(first, permuted);
+
+        let query_only = derive_collection_name(&urls(&[
+            "https://news.ycombinator.com/item?id=1",
+            "https://news.ycombinator.com/item?id=2",
+        ]));
+        let query_only_spelled = derive_collection_name(&urls(&[
+            "https://WWW.NEWS.YCOMBINATOR.COM/ITEM/?id=1",
+            "https://news.ycombinator.com/ITEM?id=2",
+        ]));
+        assert_eq!(query_only, query_only_spelled);
+        assert_eq!(query_only, NameOutcome::NoName(NoNameReason::NoSlug(1)));
+
+        let folder = derive_collection_name(&urls(&[
+            "https://example.com/articles/exploring-gen-ai/01-intro.html",
+            "https://example.com/articles/exploring-gen-ai/02-prompting.html",
+        ]));
+        let folder_spelled = derive_collection_name(&urls(&[
+            "https://WWW.EXAMPLE.COM/articles/exploring-gen-ai/01-intro.html/",
+            "https://example.com/articles/exploring-gen-ai/02-prompting.html",
+        ]));
+        assert_eq!(folder, folder_spelled);
+        assert_eq!(
+            folder,
+            NameOutcome::Derived {
+                name: "exploring_gen_ai".into(),
+                source: NameSource::Folder,
+            }
+        );
+
+        let one_word = derive_collection_name(&urls(&[
+            "https://example.com/raft-part-1",
+            "https://example.com/raft-part-2",
+        ]));
+        let one_word_spelled = derive_collection_name(&urls(&[
+            "https://WWW.EXAMPLE.COM/raft-part-1/",
+            "https://example.com/raft-part-2",
+        ]));
+        assert_eq!(one_word, one_word_spelled);
+        assert_eq!(
+            one_word,
+            NameOutcome::Derived {
+                name: "raft".into(),
+                source: NameSource::SlugWords,
+            }
+        );
+    }
+
+    #[test]
+    fn one_word_gate_counts_letters_and_part_order_sees_uncapped_slug_words() {
+        assert_eq!(
+            no_name(&[
+                "https://example.com/gpt4-part-1",
+                "https://example.com/gpt4-part-2",
+            ]),
+            NoNameReason::TooThin("gpt4".into())
+        );
+        assert_eq!(
+            derived(&[
+                "https://example.com/raft-part-1",
+                "https://example.com/raft-part-2",
+            ]),
+            ("raft".into(), NameSource::SlugWords)
+        );
+
+        let long_prefix = "distributed-systems-architecture-for-highly-available-services-with-resilient-consensus-and-durable-storage-patterns";
+        assert!(long_prefix.len() > 80);
+        let reversed = [
+            format!("https://example.com/{long_prefix}-part-2"),
+            format!("https://example.com/{long_prefix}-part-1"),
+        ];
+        let urls = urls(&[&reversed[0], &reversed[1]]);
+        assert_eq!(
+            part_order_warning(&urls).as_deref(),
+            Some("warning: the URLs are in part order 2, 1; the PDF follows argument order")
+        );
     }
 
     #[test]

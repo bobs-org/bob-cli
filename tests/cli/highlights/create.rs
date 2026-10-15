@@ -28,6 +28,43 @@ fn vault_holds_only(vault: &std::path::Path, expected: &[&str]) {
     assert_eq!(entries, want, "vault holds only {want:?}");
 }
 
+fn snapshot_vault_dirs(
+    vault: &std::path::Path,
+    names: &[&str],
+) -> Vec<(String, Vec<u8>)> {
+    fn walk(
+        root: &std::path::Path,
+        dir: &std::path::Path,
+        out: &mut Vec<(String, Vec<u8>)>,
+    ) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries {
+            let entry = entry.expect("read snapshot entry");
+            let path = entry.path();
+            if path.is_dir() {
+                walk(root, &path, out);
+            } else {
+                out.push((
+                    path.strip_prefix(root)
+                        .expect("snapshot path under root")
+                        .to_string_lossy()
+                        .into_owned(),
+                    std::fs::read(&path).expect("read snapshot file"),
+                ));
+            }
+        }
+    }
+
+    let mut files = Vec::new();
+    for name in names {
+        walk(vault, &vault.join(name), &mut files);
+    }
+    files.sort_by(|left, right| left.0.cmp(&right.0));
+    files
+}
+
 fn collection_create(vault: &std::path::Path, targets: &[&str]) -> Command {
     let mut command = bob_command();
     command.arg("highlights").arg("create");
@@ -790,6 +827,11 @@ done
     assert!(listen_args.contains("listen render"), "{listen_args}");
     assert!(listen_args.contains("target-exists:yes"), "{listen_args}");
     assert!(
+        listen_args.contains("--title Symphony Spec"),
+        "{listen_args}"
+    );
+    assert!(listen_args.contains("collection.pdf"), "{listen_args}");
+    assert!(
         stdout(&output).contains("(from --listen)"),
         "{}",
         format_output(&output)
@@ -806,9 +848,26 @@ fn highlights_create_collection_listen_attaches_to_same_set() {
     collection_env(&mut capture, &curl, &curl_root, &log, &fake.path);
     let output = capture.output().expect("capture collection before attach");
     assert_success(&output);
-    let pdf = vault.join("xlib/blogs/tokio_internals.pdf");
-    assert!(pdf.is_file(), "{}", format_output(&output));
+    let intake_pdf = vault.join("xlib/blogs/tokio_internals.pdf");
+    assert!(intake_pdf.is_file(), "{}", format_output(&output));
     let adapter_calls = fake.request_count();
+
+    let scan = bob_command()
+        .arg("highlights")
+        .arg("--no-hooks")
+        .arg("scan")
+        .arg("-b")
+        .arg(&vault)
+        .output()
+        .expect("scan collection before PDF-backed note attach");
+    assert_success(&scan);
+    let pdf = vault.join("lib/blogs/tokio_internals.pdf");
+    assert!(
+        pdf.is_file(),
+        "scanned PDF must move into lib: {}",
+        format_output(&scan)
+    );
+    assert!(vault.join("ref/blogs/tokio_internals.md").is_file());
 
     let listen_bin = temp.path().join("fake-attach-listen-bin");
     std::fs::create_dir_all(&listen_bin).expect("create fake listen bin");
@@ -865,6 +924,199 @@ done
         "{}",
         format_output(&output)
     );
+}
+
+#[test]
+fn highlights_create_collection_listen_failure_leaves_vault_unchanged() {
+    let (temp, vault, fake, curl, curl_root, log) =
+        collection_harness("bob-cli-highlights-create-collection-listen-fail");
+    for (dir, file) in [
+        ("xlib", "keep-intake.txt"),
+        ("lib", "keep-library.txt"),
+        ("ref", "keep-note.md"),
+    ] {
+        write_file(&vault.join(dir).join(file), "unchanged\n");
+    }
+    let before = snapshot_vault_dirs(&vault, &["xlib", "lib", "ref"]);
+    let listen_bin = temp.path().join("failing-listen-bin");
+    std::fs::create_dir_all(&listen_bin).expect("create failing listen bin");
+    let listen_log = temp.path().join("failing-listen.log");
+    write_executable(
+        &listen_bin.join("sase"),
+        "#!/bin/sh\necho called >> \"$FAKE_LISTEN_LOG\"\nexit 7\n",
+    );
+    let mut command = collection_create(&vault, &[TOKIO_PART_1, TOKIO_PART_2]);
+    command
+        .arg("-L")
+        .env(
+            "BOB_HIGHLIGHTS_LISTEN_COMMAND",
+            "sase listen render {target} -e full -o {audio} --title {title}",
+        )
+        .env("FAKE_LISTEN_LOG", &listen_log)
+        .env("PATH", path_with_prefix(&listen_bin));
+    collection_env(&mut command, &curl, &curl_root, &log, &fake.path);
+    let output = command
+        .output()
+        .expect("run collection with failing listen");
+    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+    assert!(listen_log.is_file(), "fake listen command should run");
+    assert_eq!(
+        snapshot_vault_dirs(&vault, &["xlib", "lib", "ref"]),
+        before,
+        "listen failure must leave xlib, lib, and ref byte-identical"
+    );
+}
+
+#[test]
+fn highlights_create_collection_partial_overlap_with_listen_never_listens() {
+    let (temp, vault, fake, curl, curl_root, log) = collection_harness(
+        "bob-cli-highlights-create-collection-partial-listen",
+    );
+    write_file(
+        &vault.join("ref/blogs/part-one.md"),
+        &format!(
+            "---\ntitle: Part one\nsource_url: {TOKIO_PART_1}\nsource_pdf: lib/blogs/part-one.pdf\n---\n\n# Part one\n"
+        ),
+    );
+    let listen_bin = temp.path().join("partial-listen-bin");
+    std::fs::create_dir_all(&listen_bin).expect("create partial listen bin");
+    let listen_log = temp.path().join("partial-listen.log");
+    write_executable(
+        &listen_bin.join("sase"),
+        "#!/bin/sh\necho called >> \"$FAKE_LISTEN_LOG\"\nexit 0\n",
+    );
+    let mut command = collection_create(&vault, &[TOKIO_PART_1, TOKIO_PART_2]);
+    command
+        .arg("-L")
+        .env(
+            "BOB_HIGHLIGHTS_LISTEN_COMMAND",
+            "sase listen render {target} -e full -o {audio} --title {title}",
+        )
+        .env("FAKE_LISTEN_LOG", &listen_log)
+        .env("PATH", path_with_prefix(&listen_bin));
+    collection_env(&mut command, &curl, &curl_root, &log, &fake.path);
+    let output = command.output().expect("run partial-overlap collection");
+    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+    assert!(stderr(&output).contains("1 of 2 URLs is already in the library"));
+    assert!(
+        !listen_log.exists(),
+        "partial overlap must not invoke listen"
+    );
+    assert!(
+        !fake.called(),
+        "partial overlap must precede adapter capture"
+    );
+}
+
+#[test]
+fn highlights_create_collection_listen_dry_run_prints_audio_and_would_run() {
+    let (_temp, vault, fake, curl, curl_root, log) = collection_harness(
+        "bob-cli-highlights-create-collection-listen-dry-run",
+    );
+    let mut command = collection_create(&vault, &[TOKIO_PART_1, TOKIO_PART_2]);
+    command.arg("-L").arg("--dry-run").env(
+        "BOB_HIGHLIGHTS_LISTEN_COMMAND",
+        "sase listen render {target} -e full -o {audio} --title {title}",
+    );
+    collection_env(&mut command, &curl, &curl_root, &log, &fake.path);
+    let output = command.output().expect("dry-run collection listen");
+    assert_success(&output);
+    let report = stdout(&output);
+    let would_run = report.find("listen: would-run").expect("would-run line");
+    let report_line = report
+        .find("[dry-run] ok would create")
+        .expect("report line");
+    assert!(
+        would_run < report_line,
+        "would-run must precede report:\n{report}"
+    );
+    assert!(report.contains("collection.pdf"), "{report}");
+    assert!(report.contains("--title 'Symphony Spec'"), "{report}");
+    assert!(
+        report.contains("audio: ") && report.contains("(from --listen)"),
+        "{report}"
+    );
+    assert!(!fake.compose_called(), "dry run must not compose");
+    assert!(
+        !vault.join("xlib").exists(),
+        "dry run must not write the vault"
+    );
+}
+
+#[test]
+fn highlights_create_collection_dry_run_validates_explicit_audio() {
+    let (_temp, vault, fake, curl, curl_root, log) = collection_harness(
+        "bob-cli-highlights-create-collection-audio-dry-run",
+    );
+    let missing_audio = vault.join("missing.mp3");
+    let mut command = collection_create(&vault, &[TOKIO_PART_1, TOKIO_PART_2]);
+    command.arg("--dry-run").arg("--audio").arg(&missing_audio);
+    collection_env(&mut command, &curl, &curl_root, &log, &fake.path);
+    let output = command
+        .output()
+        .expect("dry-run collection with missing audio");
+    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+    assert!(
+        stderr(&output).contains("audio"),
+        "{}",
+        format_output(&output)
+    );
+    assert!(
+        stderr(&output).contains("missing.mp3"),
+        "{}",
+        format_output(&output)
+    );
+    assert!(
+        !fake.compose_called(),
+        "invalid audio must fail before compose"
+    );
+    assert!(
+        !vault.join("xlib").exists(),
+        "dry run must not write vault files"
+    );
+}
+
+#[test]
+fn highlights_create_collection_listen_post_failure_hint_keeps_all_urls() {
+    let (temp, vault, fake, curl, curl_root, log) =
+        collection_harness("bob-cli-highlights-create-collection-listen-hint");
+    let listen_bin = temp.path().join("hint-listen-bin");
+    std::fs::create_dir_all(&listen_bin).expect("create hint listen bin");
+    let listen_log = temp.path().join("hint-listen.log");
+    let race_target = vault.join("xlib/blogs/tokio_internals.pdf");
+    write_executable(
+        &listen_bin.join("sase"),
+        r#"#!/bin/sh
+echo "$@" >> "$FAKE_LISTEN_LOG"
+shift 2
+for arg in "$@"; do
+  case "$arg" in
+    *.mp3) printf 'ID3 episode' > "$arg" ;;
+  esac
+done
+mkdir -p "$(dirname "$FAKE_LISTEN_TOUCH")"
+printf 'race' > "$FAKE_LISTEN_TOUCH"
+"#,
+    );
+    let mut command = collection_create(&vault, &[TOKIO_PART_1, TOKIO_PART_2]);
+    command
+        .arg("-L")
+        .env(
+            "BOB_HIGHLIGHTS_LISTEN_COMMAND",
+            "sase listen render {target} -e full -o {audio} --title {title}",
+        )
+        .env("FAKE_LISTEN_LOG", &listen_log)
+        .env("FAKE_LISTEN_TOUCH", &race_target)
+        .env("PATH", path_with_prefix(&listen_bin));
+    collection_env(&mut command, &curl, &curl_root, &log, &fake.path);
+    let output = command.output().expect("run post-listen collision");
+    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+    let diagnostic = format!("{}{}", stdout(&output), stderr(&output));
+    assert!(diagnostic.contains(TOKIO_PART_1), "{diagnostic}");
+    assert!(diagnostic.contains(TOKIO_PART_2), "{diagnostic}");
+    assert!(diagnostic.contains("-N tokio_internals"), "{diagnostic}");
+    assert!(diagnostic.contains("-P sase --audio "), "{diagnostic}");
+    assert!(diagnostic.contains("kept: "), "{diagnostic}");
 }
 
 #[test]
@@ -4606,6 +4858,79 @@ fn highlights_create_folded_refuses_library_and_dedupe_collisions_early() {
         !fake.called(),
         "the ref-note dedupe must precede the adapter"
     );
+}
+
+#[test]
+fn highlights_create_refuses_each_url_in_pdf_backed_frontmatter_lists() {
+    let (_temp, base_vault, fake, curl, curl_root, log) =
+        collection_harness("bob-cli-highlights-create-source-url-lists");
+    for (name, source_list) in [
+        (
+            "inline",
+            format!("source_url: [{FOLDED_URL}, https://example.com/other]"),
+        ),
+        (
+            "block",
+            format!(
+                "source_url:\n  - {FOLDED_URL}\n  - https://example.com/other"
+            ),
+        ),
+    ] {
+        let vault = base_vault.join(name);
+        write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
+        write_file(
+            &vault.join("ref/blogs/collection.md"),
+            &format!(
+                "---\ntitle: Collection\n{source_list}\nsource_pdf: lib/blogs/collection.pdf\n---\n\n# Collection\n"
+            ),
+        );
+        let mut command = collection_create(&vault, &[FOLDED_URL]);
+        collection_env(&mut command, &curl, &curl_root, &log, &fake.path);
+        let output = command.output().expect("create from list-valued source");
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "{name} list must refuse:\n{}",
+            format_output(&output)
+        );
+        assert!(
+            stderr(&output).contains("already captured as")
+                && stderr(&output).contains("ref/blogs/collection.md"),
+            "{name} list did not refuse the recorded URL:\n{}",
+            format_output(&output)
+        );
+        assert!(!fake.called(), "{name} list must refuse before adapter");
+    }
+    let curl_calls = std::fs::read_to_string(log).expect("read curl log");
+    assert!(
+        curl_calls.is_empty(),
+        "a URL already recorded by a PDF-backed note must refuse before curl"
+    );
+}
+
+#[test]
+fn highlights_create_warns_and_proceeds_for_legacy_list_note() {
+    let (_temp, vault, fake, curl, curl_root, log) =
+        collection_harness("bob-cli-highlights-create-legacy-source-list");
+    write_file(
+        &vault.join("ref/ai/legacy.md"),
+        &format!(
+            "---\ntitle: Legacy Collection\nsource_url:\n  - {FOLDED_URL}\n  - https://example.com/other\n---\n\n# Legacy Collection\n"
+        ),
+    );
+    let mut command = collection_create(&vault, &[FOLDED_URL]);
+    collection_env(&mut command, &curl, &curl_root, &log, &fake.path);
+    let output = command.output().expect("create over legacy URL list");
+    assert_success(&output);
+    let diagnostic = stderr(&output);
+    assert!(
+        diagnostic.contains("already in the library as")
+            && diagnostic.contains("ref/ai/legacy.md")
+            && diagnostic.contains("capturing a fresh copy"),
+        "legacy list should warn and continue:\n{}",
+        format_output(&output)
+    );
+    assert!(fake.called(), "legacy list should proceed to adapter");
 }
 
 #[test]

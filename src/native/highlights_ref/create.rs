@@ -304,7 +304,7 @@ pub(crate) fn command() -> ClapCommand {
                 .long("name")
                 .short('N')
                 .value_name("NAME")
-                .help("Reference name: the PDF filename and the ref note bob ref scan writes [default: derived from TARGET]"),
+                .help("Reference name: the PDF filename and the ref note bob ref scan writes [default: derived from TARGET; for several URLs, the words their slugs share]"),
         )
         .arg(
             Arg::new("no-audio")

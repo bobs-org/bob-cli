@@ -47,6 +47,10 @@ class RenderError(Exception):
     """Printing or assembly failed; the adapter maps this to ``render``."""
 
 
+class BrowserLaunchError(RenderError):
+    """A renderer browser could not launch; compose maps this to ``browser``."""
+
+
 # ---------------------------------------------------------------------------
 # Image normalization (Pillow) into ``render/assets/``.
 # ---------------------------------------------------------------------------
@@ -200,12 +204,6 @@ _HEADING_RE = re.compile(r"<(/?)h([1-6])\b", re.IGNORECASE)
 _FIRST_PARA_RE = re.compile(r"<p\b[^>]*>(.*?)</p>",
                             re.IGNORECASE | re.DOTALL)
 _TAG_RE = re.compile(r"<[^>]*>")
-_ID_ATTR_RE = re.compile(
-    r"""(\bid\s*=\s*)(["'])([^"']+)\2""", re.IGNORECASE)
-_FRAG_HREF_RE = re.compile(
-    r"""(\b(?:xlink:)?href\s*=\s*)(["'])#([^"']+)\2""", re.IGNORECASE)
-_HREF_ATTR_RE = re.compile(
-    r"""(\b(?:xlink:)?href\s*=\s*)(["'])([^"']*)\2""", re.IGNORECASE)
 _URL_HASH_RE = re.compile(r"""url\(\s*#([^)]+?)\s*\)""", re.IGNORECASE)
 
 WORDS_PER_MINUTE = 230
@@ -286,30 +284,22 @@ def reading_minutes(word_count: int, *, wpm: int = WORDS_PER_MINUTE) -> int:
 
 def namespace_ids(markup: str, prefix: str) -> str:
     """Prefix ``id`` values and same-document ``#`` / ``url(#)`` fragments."""
+    def rewrite(name: str, value: str) -> str:
+        if name == "id":
+            return value if value.startswith(prefix) else prefix + value
+        if name in ("href", "xlink:href") and value.startswith("#"):
+            fragment = value[1:]
+            return value if fragment.startswith(prefix) else f"#{prefix}{fragment}"
 
-    def _id(match: re.Match) -> str:
-        value = match.group(3)
-        if value.startswith(prefix):
-            return match.group(0)
-        return (f"{match.group(1)}{match.group(2)}{prefix}{value}"
-                f"{match.group(2)}")
+        def prefix_url(match: re.Match) -> str:
+            fragment = match.group(1).strip()
+            if fragment.startswith(prefix):
+                return match.group(0)
+            return f"url(#{prefix}{fragment})"
 
-    def _href(match: re.Match) -> str:
-        value = match.group(3)
-        if value.startswith(prefix):
-            return match.group(0)
-        return (f"{match.group(1)}{match.group(2)}#{prefix}{value}"
-                f"{match.group(2)}")
+        return _URL_HASH_RE.sub(prefix_url, value)
 
-    def _url(match: re.Match) -> str:
-        value = match.group(1).strip()
-        if value.startswith(prefix):
-            return match.group(0)
-        return f"url(#{prefix}{value})"
-
-    markup = _ID_ATTR_RE.sub(_id, markup)
-    markup = _FRAG_HREF_RE.sub(_href, markup)
-    return _URL_HASH_RE.sub(_url, markup)
+    return _rewrite_start_tag_attributes(markup, rewrite)
 
 
 def resolve_relative_hrefs(markup: str, base_url: str) -> str:
@@ -317,19 +307,139 @@ def resolve_relative_hrefs(markup: str, base_url: str) -> str:
     if not base_url:
         return markup
 
-    def _replace(match: re.Match) -> str:
-        href = html.unescape(match.group(3)).strip()
+    def rewrite(name: str, value: str) -> str:
+        if name not in ("href", "xlink:href"):
+            return value
+        href = html.unescape(value).strip()
         if not href or href.startswith(("#", "mailto:", "data:",
                                         "javascript:")):
-            return match.group(0)
+            return value
         scheme = urlsplit(href).scheme.lower()
         if scheme in ("http", "https"):
-            return match.group(0)
+            return value
         resolved = urljoin(base_url, href)
-        return (f"{match.group(1)}{match.group(2)}"
-                f"{html.escape(resolved, quote=True)}{match.group(2)}")
+        return html.escape(resolved, quote=True)
 
-    return _HREF_ATTR_RE.sub(_replace, markup)
+    return _rewrite_start_tag_attributes(markup, rewrite)
+
+
+def _rewrite_start_tag_attributes(markup: str, rewrite) -> str:
+    """Rewrite real start-tag attributes while preserving every text node.
+
+    The scanner tracks quoted values when finding a tag's closing ``>``. It
+    then walks only that tag's attributes, so markup-like prose and code are
+    left byte-for-byte intact and a ``>`` inside a quoted value is harmless.
+    """
+    output: list[str] = []
+    cursor = 0
+    length = len(markup)
+    while cursor < length:
+        start = markup.find("<", cursor)
+        if start < 0:
+            output.append(markup[cursor:])
+            break
+        output.append(markup[cursor:start])
+        if markup.startswith("<!--", start):
+            end = markup.find("-->", start + 4)
+            if end < 0:
+                output.append(markup[start:])
+                break
+            end += 3
+            output.append(markup[start:end])
+            cursor = end
+            continue
+        if (markup.startswith("</", start)
+                or markup.startswith("<!", start)
+                or markup.startswith("<?", start)
+                or start + 1 >= length
+                or not markup[start + 1].isalpha()):
+            end = _markup_token_end(markup, start)
+            if end is None:
+                output.append(markup[start:])
+                break
+            output.append(markup[start:end])
+            cursor = end
+            continue
+        end = _markup_token_end(markup, start)
+        if end is None:
+            output.append(markup[start:])
+            break
+        output.append(_rewrite_start_tag(markup[start:end], rewrite))
+        cursor = end
+    return "".join(output)
+
+
+def _markup_token_end(markup: str, start: int) -> int | None:
+    """Return the index after a tag-like token, respecting quoted values."""
+    quote: str | None = None
+    index = start + 1
+    while index < len(markup):
+        char = markup[index]
+        if quote:
+            if char == quote:
+                quote = None
+        elif char in ("'", '"'):
+            quote = char
+        elif char == ">":
+            return index + 1
+        index += 1
+    return None
+
+
+def _rewrite_start_tag(tag: str, rewrite) -> str:
+    """Rewrite attribute values in one already-tokenized start tag."""
+    index = 1
+    length = len(tag)
+    while index < length and not tag[index].isspace() and tag[index] not in "/>":
+        index += 1
+    pieces: list[str] = []
+    copied_to = 0
+    while index < length:
+        while index < length and tag[index].isspace():
+            index += 1
+        if index >= length or tag[index] in "/>" or tag[index] == ">":
+            break
+        attr_start = index
+        while (index < length and not tag[index].isspace()
+               and tag[index] not in "=/>\""):
+            index += 1
+        if index == attr_start:
+            index += 1
+            continue
+        name = tag[attr_start:index].lower()
+        while index < length and tag[index].isspace():
+            index += 1
+        if index >= length or tag[index] != "=":
+            continue
+        index += 1
+        while index < length and tag[index].isspace():
+            index += 1
+        if index >= length:
+            break
+        quote = tag[index] if tag[index] in ("'", '"') else None
+        if quote:
+            value_start = index + 1
+            value_end = tag.find(quote, value_start)
+            if value_end < 0:
+                break
+            value = tag[value_start:value_end]
+            next_index = value_end + 1
+        else:
+            value_start = index
+            while index < length and not tag[index].isspace() and tag[index] != ">":
+                index += 1
+            value_end = index
+            value = tag[value_start:value_end]
+            next_index = value_end
+        rewritten = rewrite(name, value)
+        if rewritten != value:
+            pieces.extend((tag[copied_to:value_start], rewritten))
+            copied_to = value_end
+        index = next_index
+    if not pieces:
+        return tag
+    pieces.append(tag[copied_to:])
+    return "".join(pieces)
 
 
 def prefix_part_assets(markup: str, assets_dir: str, prefix: str,
@@ -648,7 +758,10 @@ def print_pdf(render_dir: str, out_pdf: str, launcher) -> None:
             handle.read()
     except OSError as exc:
         raise RenderError(f"reader template is missing: {exc}") from exc
-    browser = launcher(headless=True)
+    try:
+        browser = launcher(headless=True)
+    except Exception as exc:
+        raise BrowserLaunchError(f"browser launch failed: {exc}") from exc
     try:
         context = browser.new_context(locale="en-US",
                                       color_scheme="light",

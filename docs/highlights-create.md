@@ -359,7 +359,7 @@ the URLs indexed by `bob ref find`.
 For several URLs, each part is checked against recorded sources before capture.
 Any part already in a PDF-backed ref or queued intake refuses the complete
 collection, even if the remaining URLs are new. `--force` applies only when
-the queued collection has exactly the same ordered source list. A legacy
+the queued collection has exactly the same URL set, in any order. A legacy
 PDF-less note is reported as a warning and the collection may proceed. The
 collection marker stores the cleaned URLs in argument order as a YAML list;
 `bob ref scan` writes that list to one ref note. A later create of an individual
@@ -424,8 +424,8 @@ bullet used by every fallback path.
 configured `highlights.listen_command` and binds the episode as the PDF's
 companion audio. For a multi-URL collection, bob passes the staged composed
 PDF as `{target}` and `{pdf}`, with the resolved collection title as `{title}`;
-the episode binds to the one installed collection PDF. If the same ordered
-URL set is already captured or queued, `--listen` attaches an episode to that
+the episode binds to the one installed collection PDF. If the same URL set is
+already captured or queued, in any order, `--listen` attaches an episode to that
 capture. Partial overlap still refuses.
 
 ```bash
