@@ -83,13 +83,37 @@ fn run_collection(
     config: &Config,
     targets: &[OsString],
 ) -> Result<(), CommandError> {
+    let listen = if matches.get_flag("listen") {
+        Some(
+            super::listen::require_validated()
+                .map_err(|error| error.into_command_error())?,
+        )
+    } else {
+        None
+    };
     let prepared = run_preflight(matches, config, targets)?;
-    if prepared.options.listen {
-        return Err(CommandError::new(
-            "--listen with several URLs arrives in the next phase",
-        ));
+    if let (Some(command), OverlapCheck::Attach(hit)) =
+        (listen.as_ref(), &prepared.overlap)
+    {
+        let attach = super::attach::attach_for_dedupe_hit(config, hit)?;
+        let target = attach.existing_pdf.to_string_lossy().into_owned();
+        let source_line = format!(
+            "sources: {} URLs (same set as {})",
+            prepared.urls.len(),
+            attach.existing_pdf.display()
+        );
+        let mut scratch = ScratchDir::create("collection-listen")?;
+        return super::attach::run_attach(
+            config,
+            command,
+            &attach,
+            &source_line,
+            &target,
+            prepared.options.dry_run,
+            &mut scratch,
+        );
     }
-    capture_and_install(config, prepared)
+    capture_and_install(config, prepared, listen.as_ref())
 }
 
 fn run_preflight(
@@ -324,6 +348,7 @@ fn plan_collection_target(
 fn capture_and_install(
     config: &Config,
     prepared: PreparedCollection,
+    listen: Option<&super::listen::ListenCommand>,
 ) -> Result<(), CommandError> {
     let PreparedCollection {
         urls,
@@ -336,7 +361,7 @@ fn capture_and_install(
         CommandError::new("internal: collection target was not planned")
     })?;
     let total = urls.len();
-    let scratch = ScratchDir::create("collection")?;
+    let mut scratch = ScratchDir::create("collection")?;
     classify_parts(&urls, &scratch)?;
 
     let client = ClipAdapterClient::resolve()?;
@@ -363,6 +388,26 @@ fn capture_and_install(
             &derived,
             &overlap,
         )?;
+        if let Some(command) = listen {
+            println!(
+                "{}",
+                super::listen::would_run_line(
+                    command,
+                    &super::listen::ListenValues {
+                        target: scratch
+                            .path()
+                            .join("collection.pdf")
+                            .to_string_lossy()
+                            .into_owned(),
+                        pdf: scratch.path().join("collection.pdf"),
+                        audio: scratch
+                            .path()
+                            .join(format!("{}.mp3", plan.stem)),
+                        title: derived.title.clone(),
+                    },
+                )
+            );
+        }
         return Ok(());
     }
 
@@ -397,6 +442,14 @@ fn capture_and_install(
         with_nothing_written(partless_adapter_error(failure))
     })?;
 
+    // Plan audio before the guarded install, and before the listener runs.
+    let listen_flow = match listen {
+        Some(_) => Some(super::listen::plan_listen_flow(
+            &plan, &scratch, &plan.stem,
+        )?),
+        None => None,
+    };
+
     let recorded = sources::collect_recorded_source_urls(config)
         .map_err(|error| CommandError::new(error.message))?;
     check_collection_overlap(
@@ -430,16 +483,107 @@ fn capture_and_install(
         )?,
         None => None,
     };
+    let staged_stamp = if listen.is_some() {
+        Some(super::pdf_target::stamp_pdf_to_scratch(
+            &composed_pdf,
+            &scratch,
+            &marker,
+            &info,
+        )?)
+    } else {
+        None
+    };
     let created = super::companion::copy_audio_for_install(audio.as_ref())?;
-    let page_count = match super::stamp_and_install(
-        &composed_pdf,
-        &plan.target,
-        &marker,
-        &info,
-    ) {
+    let mut listened_audio_created: Option<Option<PathBuf>> = None;
+    if let (Some(command), Some(flow)) = (listen, &listen_flow) {
+        let values = super::listen::ListenValues {
+            target: composed_pdf.to_string_lossy().into_owned(),
+            pdf: composed_pdf.clone(),
+            audio: flow.scratch_audio.clone(),
+            title: derived.title.clone(),
+        };
+        super::listen::run_listen(command, &values)
+            .map_err(|error| error.into_command_error())?;
+        // Revalidate identity and the target after the potentially long render.
+        let latest = sources::collect_recorded_source_urls(config)
+            .map_err(|error| CommandError::new(error.message))?;
+        if let Err(error) = check_collection_overlap(
+            config,
+            &latest,
+            &urls,
+            Some(&plan.target),
+            options.force,
+            false,
+        ) {
+            return Err(super::listen::post_listen_error(
+                &mut scratch,
+                &flow.scratch_audio,
+                error.to_string(),
+                format!(
+                    "bind it with bob ref create {} --audio {}",
+                    urls[0].cleaned,
+                    flow.scratch_audio.display()
+                ),
+            ));
+        }
+        if let Err(error) = stamp::refuse_target_collisions(
+            &plan.target,
+            &plan.sidecar,
+            &plan.workflow,
+            options.force,
+        ) {
+            return Err(super::listen::post_listen_error(
+                &mut scratch,
+                &flow.scratch_audio,
+                error.to_string(),
+                format!(
+                    "bind it with bob ref create {} --audio {}",
+                    urls[0].cleaned,
+                    flow.scratch_audio.display()
+                ),
+            ));
+        }
+        listened_audio_created = Some(
+            super::listen::install_listen_audio(flow, options.force).map_err(
+                |error| {
+                    super::listen::post_listen_error(
+                        &mut scratch,
+                        &flow.scratch_audio,
+                        error.to_string(),
+                        format!(
+                            "bind it with bob ref create {} --audio {}",
+                            urls[0].cleaned,
+                            flow.scratch_audio.display()
+                        ),
+                    )
+                },
+            )?,
+        );
+    }
+    let install_result = if let Some((stamped, page_count)) = &staged_stamp {
+        super::atomic_copy(stamped, &plan.target).map(|()| *page_count)
+    } else {
+        super::stamp_and_install(&composed_pdf, &plan.target, &marker, &info)
+    };
+    let page_count = match install_result {
         Ok(page_count) => page_count,
         Err(error) => {
             super::companion::cleanup_audio_on_failure(created.as_ref());
+            if let Some(Some(path)) = listened_audio_created.as_ref() {
+                let _ = fs::remove_file(path);
+            }
+            if let (Some(flow), Some(_)) = (&listen_flow, listen) {
+                return Err(super::listen::post_listen_error(
+                    &mut scratch,
+                    &flow.scratch_audio,
+                    error.to_string(),
+                    format!(
+                        "bind it with bob ref create {} --audio {}",
+                        urls[0].cleaned,
+                        flow.scratch_audio.display()
+                    ),
+                ));
+            }
             return Err(with_nothing_written(error));
         }
     };
@@ -455,6 +599,7 @@ fn capture_and_install(
         audio.as_ref(),
         &captured,
         page_count,
+        listen_flow.as_ref(),
     );
     Ok(())
 }
@@ -742,6 +887,7 @@ fn print_success(
     audio: Option<&super::companion::AudioCopyPlan>,
     captured: &str,
     page_count: usize,
+    _listen_flow: Option<&super::listen::ListenFlow>,
 ) {
     let installed_bytes = fs::metadata(&plan.target)
         .map(|metadata| metadata.len())
@@ -765,6 +911,8 @@ fn print_success(
     println!("pdf: {}", plan.target.display());
     if let Some(audio) = audio {
         println!("audio: {} (from {})", audio.dest.display(), audio.origin);
+    } else if let Some(flow) = _listen_flow {
+        println!("audio: {} (from --listen)", flow.dest.display());
     }
     if let Some(author) = &derived.author {
         println!("author: {author}");

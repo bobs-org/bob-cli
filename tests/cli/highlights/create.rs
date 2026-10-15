@@ -745,23 +745,126 @@ fn highlights_create_collection_binds_explicit_audio() {
 }
 
 #[test]
-fn highlights_create_collection_listen_is_deferred() {
-    let (_temp, vault, fake, curl, curl_root, log) =
+fn highlights_create_collection_listens_to_staged_pdf_before_install() {
+    let (temp, vault, fake, curl, curl_root, log) =
         collection_harness("bob-cli-highlights-create-collection-listen");
+    let listen_bin = temp.path().join("fake-listen-bin");
+    std::fs::create_dir_all(&listen_bin).expect("create fake listen bin");
+    let listen_log = temp.path().join("collection-listen.log");
+    write_executable(
+        &listen_bin.join("sase"),
+        r#"#!/bin/sh
+echo "$@" >> "$FAKE_LISTEN_LOG"
+if [ "$1" != "listen" ] || [ "$2" != "render" ] || [ ! -f "$3" ]; then
+  exit 9
+fi
+echo "target-exists:yes" >> "$FAKE_LISTEN_LOG"
+shift 2
+for arg in "$@"; do
+  case "$arg" in
+    *.mp3) printf 'ID3 collection episode' > "$arg" ;;
+  esac
+done
+"#,
+    );
 
     let mut command = collection_create(&vault, &[TOKIO_PART_1, TOKIO_PART_2]);
-    command.arg("-L");
+    command
+        .arg("-L")
+        .env(
+            "BOB_HIGHLIGHTS_LISTEN_COMMAND",
+            "sase listen render {target} -e full -o {audio} --title {title}",
+        )
+        .env("FAKE_LISTEN_LOG", &listen_log)
+        .env("PATH", path_with_prefix(&listen_bin));
     collection_env(&mut command, &curl, &curl_root, &log, &fake.path);
     let output = command.output().expect("run collection with --listen");
-    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+    assert_success(&output);
+    assert!(fake.compose_called(), "collection must be composed first");
+    let pdf = vault.join("xlib/blogs/tokio_internals.pdf");
+    let audio = vault.join("xlib/blogs/tokio_internals.mp3");
+    assert!(pdf.is_file(), "{}", format_output(&output));
+    assert!(audio.is_file(), "{}", format_output(&output));
+    let listen_args = std::fs::read_to_string(&listen_log)
+        .expect("listen command should run");
+    assert!(listen_args.contains("listen render"), "{listen_args}");
+    assert!(listen_args.contains("target-exists:yes"), "{listen_args}");
     assert!(
-        stderr(&output)
-            .contains("--listen with several URLs arrives in the next phase"),
+        stdout(&output).contains("(from --listen)"),
         "{}",
         format_output(&output)
     );
-    assert!(!fake.called(), "listen deferral is local");
-    vault_holds_only(&vault, &["sase.md"]);
+}
+
+#[test]
+fn highlights_create_collection_listen_attaches_to_same_set() {
+    let (temp, vault, fake, curl, curl_root, log) = collection_harness(
+        "bob-cli-highlights-create-collection-listen-attach",
+    );
+
+    let mut capture = collection_create(&vault, &[TOKIO_PART_1, TOKIO_PART_2]);
+    collection_env(&mut capture, &curl, &curl_root, &log, &fake.path);
+    let output = capture.output().expect("capture collection before attach");
+    assert_success(&output);
+    let pdf = vault.join("xlib/blogs/tokio_internals.pdf");
+    assert!(pdf.is_file(), "{}", format_output(&output));
+    let adapter_calls = fake.request_count();
+
+    let listen_bin = temp.path().join("fake-attach-listen-bin");
+    std::fs::create_dir_all(&listen_bin).expect("create fake listen bin");
+    let listen_log = temp.path().join("collection-attach-listen.log");
+    write_executable(
+        &listen_bin.join("sase"),
+        r#"#!/bin/sh
+echo "$@" >> "$FAKE_LISTEN_LOG"
+if [ "$1" != "listen" ] || [ "$2" != "render" ] || [ ! -f "$3" ]; then
+  exit 9
+fi
+shift 2
+for arg in "$@"; do
+  case "$arg" in
+    *.mp3) printf 'ID3 attached collection episode' > "$arg" ;;
+  esac
+done
+"#,
+    );
+
+    let mut attach = collection_create(&vault, &[TOKIO_PART_1, TOKIO_PART_2]);
+    attach
+        .arg("-L")
+        .env(
+            "BOB_HIGHLIGHTS_LISTEN_COMMAND",
+            "sase listen render {target} -e full -o {audio} --title {title}",
+        )
+        .env("FAKE_LISTEN_LOG", &listen_log)
+        .env("PATH", path_with_prefix(&listen_bin));
+    collection_env(&mut attach, &curl, &curl_root, &log, &fake.path);
+    let output = attach
+        .output()
+        .expect("attach listen to captured collection");
+    assert_success(&output);
+    assert_eq!(
+        fake.request_count(),
+        adapter_calls,
+        "attach must not recapture"
+    );
+    let audio = vault.join("xlib/blogs/tokio_internals.mp3");
+    assert!(audio.is_file(), "{}", format_output(&output));
+    assert!(
+        pdf.is_file(),
+        "attach must leave the collection PDF in place"
+    );
+    let listen_args = std::fs::read_to_string(&listen_log)
+        .expect("attach listen command should run");
+    assert!(
+        listen_args.contains(&pdf.display().to_string()),
+        "{listen_args}"
+    );
+    assert!(
+        stdout(&output).contains(&pdf.display().to_string()),
+        "{}",
+        format_output(&output)
+    );
 }
 
 #[test]
