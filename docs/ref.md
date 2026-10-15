@@ -377,6 +377,17 @@ A rerun using the old stem or note path succeeds with
 the matching rename subject. Passing the current stem as both `REF` and `NAME`
 returns `outcome: "unchanged"` without creating another commit.
 
+### Renaming while the PDF is open in Highlights
+
+Acceptance (Mac, 2026-10-15): a scratch-vault script renamed a PDF while it was
+open in Highlights. Result: PASS — Highlights did not recreate the old PDF or
+note path, so the `confirm` fallback never triggers. The motivating live rename
+(`442a6bf555914893e9891c11519de94f` → `karpathy_llm_wiki`) then committed
+cleanly in the live vault with pre/post sync OK; verification confirmed the old
+paths absent, the new paths present, and a follow-up dry run unchanged with the
+frontmatter `id` and reading-task `^ref` preserved. Recorded from
+`bob-cli-7x.6`.
+
 ### Rollback runbook
 
 Each rename is one Git commit. To undo it, revert that commit and publish the
