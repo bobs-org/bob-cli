@@ -1,23 +1,28 @@
-//! Preflight for multi-URL `bob ref create` collections.
-//!
-//! This phase owns the local, fail-fast gate. Capturing and composing the
-//! articles is added by the following route phase.
+//! Multi-URL `bob ref create` collections: fail-fast gate plus the
+//! classify/capture/compose/stamp pipeline.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
     ffi::OsString,
+    fs,
+    io::IsTerminal,
     path::{Path, PathBuf},
 };
 
 use clap::ArgMatches;
 
 use super::{
+    clip::format_bytes,
+    clip_adapter::{
+        CaptureRequest, CaptureSuccess, ClipAdapterClient, CollectionMeta,
+        ComposePart, ComposeRequest, ComposeSuccess,
+    },
     clip_url::{self, WebUrl},
     collection_name,
     create::CreateOptions,
     sources::{self, RecordedSource},
-    stamp::{self, DefaultTargetIdentity, TargetPlan},
-    CommandError, Config, Styler,
+    stamp::{self, DefaultTargetIdentity, PdfInfo, TargetPlan, TargetWorkflow},
+    CommandError, Config, MarkerValue, ScratchDir, Styler,
 };
 
 const MAX_COLLECTION_URLS: usize = 20;
@@ -48,27 +53,50 @@ impl SourceGroup {
     }
 }
 
+struct PreparedCollection {
+    urls: Vec<WebUrl>,
+    options: CreateOptions,
+    resolved_name: collection_name::ResolvedName,
+    plan: Option<TargetPlan>,
+    overlap: OverlapCheck,
+}
+
+struct CapturedPart {
+    url: WebUrl,
+    response: CaptureSuccess,
+    workdir: PathBuf,
+}
+
 pub(super) fn run(
     matches: &ArgMatches,
     config: &Config,
     targets: &[OsString],
 ) -> i32 {
-    let result = run_preflight(matches, config, targets).and_then(|_| {
-        Err(CommandError::new(
-            "merging several URLs is not wired up yet",
-        ))
-    });
-    match result {
+    match run_collection(matches, config, targets) {
         Ok(()) => 0,
         Err(error) => report_error(error),
     }
+}
+
+fn run_collection(
+    matches: &ArgMatches,
+    config: &Config,
+    targets: &[OsString],
+) -> Result<(), CommandError> {
+    let prepared = run_preflight(matches, config, targets)?;
+    if prepared.options.listen {
+        return Err(CommandError::new(
+            "--listen with several URLs arrives in the next phase",
+        ));
+    }
+    capture_and_install(config, prepared)
 }
 
 fn run_preflight(
     matches: &ArgMatches,
     config: &Config,
     targets: &[OsString],
-) -> Result<(), CommandError> {
+) -> Result<PreparedCollection, CommandError> {
     let urls = validate_targets(matches, targets)?;
     let options = options_from_matches(matches, config)?;
     let output_stem = options
@@ -124,17 +152,12 @@ fn run_preflight(
         first_overlap
     };
 
-    if options.listen {
-        super::listen::require_validated()
-            .map_err(|error| error.into_command_error())?;
-    }
-
     if let Some(warning) = collection_name::part_order_warning(&urls) {
         eprintln!("{warning}");
     }
-    match final_overlap {
+    match &final_overlap {
         OverlapCheck::Clear { legacy } => {
-            sources::warn_for_legacy_hits(&legacy);
+            sources::warn_for_legacy_hits(legacy);
         }
         OverlapCheck::Attach(hit) => {
             // The listen phase consumes this hit to attach its episode.
@@ -142,10 +165,13 @@ fn run_preflight(
         }
     }
 
-    // Keep the plan live through all local checks. The route phase replaces
-    // this stub and consumes it when capture and installation are implemented.
-    let _ = plan;
-    Ok(())
+    Ok(PreparedCollection {
+        urls,
+        options,
+        resolved_name,
+        plan,
+        overlap: final_overlap,
+    })
 }
 
 fn validate_targets(
@@ -293,6 +319,590 @@ fn plan_collection_target(
         force,
         &identity,
     )
+}
+
+fn capture_and_install(
+    config: &Config,
+    prepared: PreparedCollection,
+) -> Result<(), CommandError> {
+    let PreparedCollection {
+        urls,
+        options,
+        resolved_name,
+        plan,
+        overlap,
+    } = prepared;
+    let plan = plan.ok_or_else(|| {
+        CommandError::new("internal: collection target was not planned")
+    })?;
+    let total = urls.len();
+    let scratch = ScratchDir::create("collection")?;
+    classify_parts(&urls, &scratch)?;
+
+    let client = ClipAdapterClient::resolve()?;
+    let captured = super::current_local_date();
+    let parts = capture_parts(
+        &client,
+        &urls,
+        scratch.path(),
+        options.dry_run,
+        &captured,
+    )?;
+    let derived =
+        derive_collection_meta(&urls, &parts, &options, &resolved_name.name);
+    let styler = Styler::detect();
+    if options.dry_run {
+        print_dry_run(
+            &styler,
+            config,
+            &urls,
+            &parts,
+            &plan,
+            &options,
+            &resolved_name,
+            &derived,
+            &overlap,
+        )?;
+        return Ok(());
+    }
+
+    if std::io::stderr().is_terminal() {
+        eprintln!("composing {total} articles…");
+    }
+    let compose_dir = scratch.path().join("compose");
+    fs::create_dir_all(&compose_dir).map_err(|error| {
+        CommandError::new(format!(
+            "create compose workdir {}: {error}",
+            compose_dir.display()
+        ))
+    })?;
+    let composed_pdf = scratch.path().join("collection.pdf");
+    let compose_request = ComposeRequest::new(
+        parts
+            .iter()
+            .map(|part| ComposePart {
+                article_json: article_json_path(part),
+            })
+            .collect(),
+        CollectionMeta {
+            title: derived.title.clone(),
+            author: derived.author.clone(),
+            published: derived.published.clone(),
+            captured: captured.clone(),
+        },
+        compose_dir.to_string_lossy().into_owned(),
+        composed_pdf.to_string_lossy().into_owned(),
+    );
+    let compose = client.compose(&compose_request).map_err(|failure| {
+        with_nothing_written(partless_adapter_error(failure))
+    })?;
+
+    let recorded = sources::collect_recorded_source_urls(config)
+        .map_err(|error| CommandError::new(error.message))?;
+    check_collection_overlap(
+        config,
+        &recorded,
+        &urls,
+        Some(&plan.target),
+        options.force,
+        options.listen,
+    )?;
+    stamp::refuse_target_collisions(
+        &plan.target,
+        &plan.sidecar,
+        &plan.workflow,
+        options.force,
+    )
+    .map_err(with_nothing_written)?;
+
+    let marker =
+        collection_marker(&options, &plan, &urls, &derived, &captured)?;
+    let info = PdfInfo {
+        title: Some(derived.title.clone()),
+        author: derived.author.clone(),
+    };
+    let audio = match &options.audio {
+        Some(path) => super::companion::plan_explicit_audio(
+            config,
+            &plan,
+            options.force,
+            path,
+        )?,
+        None => None,
+    };
+    let created = super::companion::copy_audio_for_install(audio.as_ref())?;
+    let page_count = match super::stamp_and_install(
+        &composed_pdf,
+        &plan.target,
+        &marker,
+        &info,
+    ) {
+        Ok(page_count) => page_count,
+        Err(error) => {
+            super::companion::cleanup_audio_on_failure(created.as_ref());
+            return Err(with_nothing_written(error));
+        }
+    };
+    print_success(
+        &styler,
+        &urls,
+        &parts,
+        &plan,
+        &options,
+        &resolved_name,
+        &derived,
+        &compose,
+        audio.as_ref(),
+        &captured,
+        page_count,
+    );
+    Ok(())
+}
+
+fn classify_parts(
+    urls: &[WebUrl],
+    scratch: &ScratchDir,
+) -> Result<(), CommandError> {
+    let total = urls.len();
+    let progress = |line: &str| {
+        if std::io::stderr().is_terminal() {
+            eprintln!("{line}");
+        }
+    };
+    for (index, url) in urls.iter().enumerate() {
+        let part = index + 1;
+        match super::target::fetch_and_route(
+            url.clone(),
+            scratch,
+            Some(&progress),
+        ) {
+            Ok(super::target::CreateSource::WebArticle { .. }) => {}
+            Ok(super::target::CreateSource::PdfUrl { url, .. }) => {
+                return Err(pdf_part_error(part, total, &url));
+            }
+            Ok(_) => {
+                return Err(with_nothing_written(CommandError::new(format!(
+                    "part {part}/{total} classified as an unsupported target"
+                ))));
+            }
+            Err(error) => {
+                return Err(prefix_part_error(part, total, error));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn capture_parts(
+    client: &ClipAdapterClient,
+    urls: &[WebUrl],
+    scratch: &Path,
+    dry_run: bool,
+    captured: &str,
+) -> Result<Vec<CapturedPart>, CommandError> {
+    let total = urls.len();
+    let mut parts = Vec::with_capacity(total);
+    for (index, url) in urls.iter().enumerate() {
+        let part = index + 1;
+        let workdir = scratch.join(format!("part-{part}"));
+        fs::create_dir_all(&workdir).map_err(|error| {
+            CommandError::new(format!(
+                "create part workdir {}: {error}",
+                workdir.display()
+            ))
+        })?;
+        if std::io::stderr().is_terminal() {
+            eprintln!("capturing {part}/{total} {}…", url.host);
+        }
+        let request = CaptureRequest::for_collection_part(
+            url.cleaned.clone(),
+            workdir.to_string_lossy().into_owned(),
+            dry_run,
+            captured.to_string(),
+        );
+        let response = match client.capture(&request) {
+            Ok(response) => response,
+            Err(failure) => {
+                return Err(capture_part_error(part, total, url, failure));
+            }
+        };
+        if response.kind.as_deref() == Some("pdf") {
+            return Err(pdf_part_error(part, total, url));
+        }
+        parts.push(CapturedPart {
+            url: url.clone(),
+            response,
+            workdir,
+        });
+    }
+    Ok(parts)
+}
+
+struct DerivedMeta {
+    title: String,
+    title_phrase: &'static str,
+    author: Option<String>,
+    published: Option<String>,
+    published_from_flag: bool,
+}
+
+fn derive_collection_meta(
+    _urls: &[WebUrl],
+    parts: &[CapturedPart],
+    options: &CreateOptions,
+    name: &str,
+) -> DerivedMeta {
+    let part_titles: Vec<String> = parts
+        .iter()
+        .map(|part| part_title(&part.response))
+        .collect();
+    let part_authors: Vec<Option<String>> = parts
+        .iter()
+        .map(|part| {
+            part.response
+                .author
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+        })
+        .collect();
+    let part_dates: Vec<Option<String>> = parts
+        .iter()
+        .map(|part| part.response.published.clone())
+        .collect();
+    let title = collection_name::collection_title(
+        &part_titles,
+        options.title.as_deref(),
+        name,
+    );
+    let title_phrase = title_source_phrase(
+        options.title.as_deref(),
+        &part_titles,
+        name,
+        &title,
+    );
+    DerivedMeta {
+        title,
+        title_phrase,
+        author: collection_name::collection_author(
+            &part_authors,
+            options.author.as_deref(),
+        ),
+        published: collection_name::collection_published(
+            &part_dates,
+            options.published.as_deref(),
+        ),
+        published_from_flag: options
+            .published
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty()),
+    }
+}
+
+fn title_source_phrase(
+    title_flag: Option<&str>,
+    part_titles: &[String],
+    name: &str,
+    title: &str,
+) -> &'static str {
+    if title_flag
+        .map(str::trim)
+        .is_some_and(|value| !value.is_empty())
+    {
+        return "from -T";
+    }
+    let derived = collection_name::collection_title(part_titles, None, name);
+    if derived == title && derived != clip_url::humanize_stem(name) {
+        "shared by every part title; -T overrides"
+    } else {
+        "from the reference name; -T overrides"
+    }
+}
+
+fn part_title(response: &CaptureSuccess) -> String {
+    response
+        .title
+        .as_deref()
+        .map(str::trim)
+        .filter(|title| !title.is_empty())
+        .unwrap_or("untitled")
+        .to_string()
+}
+
+fn article_json_path(part: &CapturedPart) -> String {
+    part.response.article_json.clone().unwrap_or_else(|| {
+        part.workdir
+            .join("article.json")
+            .to_string_lossy()
+            .into_owned()
+    })
+}
+
+fn collection_marker(
+    options: &CreateOptions,
+    plan: &TargetPlan,
+    urls: &[WebUrl],
+    derived: &DerivedMeta,
+    captured: &str,
+) -> Result<String, CommandError> {
+    let source_url = MarkerValue::List(
+        urls.iter()
+            .map(|url| MarkerValue::String(url.cleaned.clone()))
+            .collect(),
+    );
+    super::compose_marker(
+        &options.status,
+        &options.parent,
+        &derived.title,
+        Some(plan.stem.as_str()),
+        &[
+            ("source_url", source_url),
+            (
+                "author",
+                MarkerValue::String(derived.author.clone().unwrap_or_default()),
+            ),
+            (
+                "published",
+                MarkerValue::String(
+                    derived.published.clone().unwrap_or_default(),
+                ),
+            ),
+            ("captured", MarkerValue::String(captured.to_string())),
+        ],
+    )
+}
+
+fn pdf_part_error(part: usize, total: usize, url: &WebUrl) -> CommandError {
+    with_nothing_written(CommandError::new(format!(
+        "part {part}/{total} is a PDF ({}); merging supports web articles only\nhint: capture this PDF on its own",
+        url.cleaned
+    )))
+}
+
+fn prefix_part_error(
+    part: usize,
+    total: usize,
+    error: CommandError,
+) -> CommandError {
+    let exit_code = error.exit_code;
+    let prefixed =
+        if let Some((first, rest)) = error.message.split_once("\nhint: ") {
+            format!("part {part}/{total}: {first}\nhint: {rest}")
+        } else {
+            format!("part {part}/{total}: {}", error.message)
+        };
+    let mut prefixed = CommandError::new(prefixed);
+    if let Some(code) = exit_code {
+        prefixed = prefixed.with_exit_code(code);
+    }
+    with_nothing_written(prefixed)
+}
+
+fn capture_part_error(
+    part: usize,
+    total: usize,
+    url: &WebUrl,
+    failure: super::clip_adapter::AdapterFailure,
+) -> CommandError {
+    let location = without_scheme(&url.cleaned);
+    let mut message =
+        format!("part {part}/{total} ({location}): {}", failure.message);
+    if let Some(hint) = failure.hint {
+        message.push_str("\nhint: ");
+        message.push_str(&hint);
+    }
+    with_nothing_written(CommandError::new(message))
+}
+
+fn partless_adapter_error(
+    failure: super::clip_adapter::AdapterFailure,
+) -> CommandError {
+    failure.into()
+}
+
+fn with_nothing_written(mut error: CommandError) -> CommandError {
+    if !error.message.contains("nothing was written") {
+        error.message.push_str("\nnothing was written");
+    }
+    error
+}
+
+#[allow(clippy::too_many_arguments)]
+fn print_success(
+    styler: &Styler,
+    urls: &[WebUrl],
+    parts: &[CapturedPart],
+    plan: &TargetPlan,
+    options: &CreateOptions,
+    resolved_name: &collection_name::ResolvedName,
+    derived: &DerivedMeta,
+    compose: &ComposeSuccess,
+    audio: Option<&super::companion::AudioCopyPlan>,
+    captured: &str,
+    page_count: usize,
+) {
+    let installed_bytes = fs::metadata(&plan.target)
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
+    println!(
+        "{} created Highlights-ready PDF from {} web articles",
+        styler.success_prefix(false),
+        urls.len()
+    );
+    if let Some(line) = plan.renamed_line() {
+        println!("{line}");
+    }
+    println!(
+        "name: {} ({})",
+        resolved_name.name,
+        resolved_name.source.report_phrase()
+    );
+    println!("title: {} ({})", derived.title, derived.title_phrase);
+    println!("parts:");
+    print_part_rows(styler, parts);
+    println!("pdf: {}", plan.target.display());
+    if let Some(audio) = audio {
+        println!("audio: {} (from {})", audio.dest.display(), audio.origin);
+    }
+    if let Some(author) = &derived.author {
+        println!("author: {author}");
+    }
+    if let Some(published) = published_line(derived) {
+        println!("{published}");
+    }
+    println!("captured: {captured}");
+    println!("status: {}", options.status);
+    println!("parent: {}", options.parent);
+    println!(
+        "pages: {page_count} · images: {}/{} · size: {}",
+        compose.images.kept,
+        compose.images.total,
+        format_bytes(installed_bytes),
+    );
+    super::print_next_step(plan);
+    print_part_warnings(styler, parts);
+    print_warnings(styler, &compose.warnings);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn print_dry_run(
+    styler: &Styler,
+    config: &Config,
+    urls: &[WebUrl],
+    parts: &[CapturedPart],
+    plan: &TargetPlan,
+    options: &CreateOptions,
+    resolved_name: &collection_name::ResolvedName,
+    derived: &DerivedMeta,
+    overlap: &OverlapCheck,
+) -> Result<(), CommandError> {
+    let captured = super::current_local_date();
+    println!(
+        "{} would create Highlights-ready PDF from {} web articles",
+        styler.success_prefix(true),
+        urls.len()
+    );
+    if let Some(line) = plan.renamed_line() {
+        println!("{line}");
+    }
+    println!(
+        "name: {} ({})",
+        resolved_name.name,
+        resolved_name.source.report_phrase()
+    );
+    println!("title: {} ({})", derived.title, derived.title_phrase);
+    println!("parts:");
+    print_part_rows(styler, parts);
+    println!("pdf: {}", plan.target.display());
+    match &plan.workflow {
+        TargetWorkflow::Intake {
+            library_destination,
+        } => println!("library_destination: {}", library_destination.display()),
+        _ => println!("library_destination: n/a (external target)"),
+    }
+    if let Some(author) = &derived.author {
+        println!("author: {author}");
+    }
+    if let Some(published) = published_line(derived) {
+        println!("{published}");
+    }
+    println!("captured: {captured}");
+    println!("status: {}", options.status);
+    println!("parent: {}", options.parent);
+    if let OverlapCheck::Clear { legacy } = overlap {
+        for hit in legacy {
+            println!(
+                "legacy: {} (superseded by this capture)",
+                path_for_report(config, &hit.path)
+            );
+        }
+    }
+    let marker = collection_marker(options, plan, urls, derived, &captured)?;
+    println!("marker:");
+    print!("{marker}");
+    println!("writes: none");
+    print_part_warnings(styler, parts);
+    Ok(())
+}
+
+fn print_part_rows(styler: &Styler, parts: &[CapturedPart]) {
+    let total = parts.len();
+    for (index, part) in parts.iter().enumerate() {
+        let n = index + 1;
+        let title = part_title(&part.response);
+        let words = format_count(part.response.word_count);
+        let fidelity = part
+            .response
+            .fidelity
+            .status
+            .as_deref()
+            .unwrap_or("unknown");
+        let meta =
+            format!("{} · {words} words · fidelity {fidelity}", part.url.host);
+        println!("  {n}/{total}  {title}   {}", styler.dim(&meta));
+    }
+}
+
+fn print_part_warnings(styler: &Styler, parts: &[CapturedPart]) {
+    let total = parts.len();
+    for (index, part) in parts.iter().enumerate() {
+        let n = index + 1;
+        for warning in &part.response.warnings {
+            println!(
+                "{}: part {n}/{total}: {warning}",
+                styler.warning_prefix()
+            );
+        }
+    }
+}
+
+fn print_warnings(styler: &Styler, warnings: &[String]) {
+    for warning in warnings {
+        println!("{}: {warning}", styler.warning_prefix());
+    }
+}
+
+fn published_line(derived: &DerivedMeta) -> Option<String> {
+    let date = derived.published.as_ref()?;
+    if derived.published_from_flag {
+        Some(format!("published: {date}"))
+    } else {
+        Some(format!("published: {date} (first part)"))
+    }
+}
+
+fn format_count(value: u64) -> String {
+    let digits = value.to_string();
+    let mut grouped = String::new();
+    for (index, ch) in digits.chars().rev().enumerate() {
+        if index > 0 && index % 3 == 0 {
+            grouped.push(',');
+        }
+        grouped.push(ch);
+    }
+    grouped.chars().rev().collect()
 }
 
 fn check_collection_overlap(

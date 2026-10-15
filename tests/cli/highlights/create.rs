@@ -38,6 +38,74 @@ fn collection_create(vault: &std::path::Path, targets: &[&str]) -> Command {
     command
 }
 
+/// Fake curl for collection tests: HTML 200 for ordinary URLs, PDF for
+/// `paper.pdf` / `as-pdf`, and HTTP 404 for paths containing `/missing`.
+fn write_collection_curl(dir: &std::path::Path) -> std::path::PathBuf {
+    let root = dir.join("collection-curl-root");
+    std::fs::create_dir_all(&root).expect("create collection curl root");
+    std::fs::write(root.join("paper.pdf"), b"%PDF-1.4\n")
+        .expect("write pdf body");
+    let path = dir.join("collection-curl.sh");
+    let script = r#"#!/bin/sh
+dest=""
+url=""
+prev=""
+for arg in "$@"; do
+  if [ "$prev" = "-o" ]; then dest="$arg"; fi
+  prev="$arg"
+  url="$arg"
+done
+echo "$url" >> "$FAKE_CURL_LOG"
+case "$url" in
+  *"/missing"*)
+    printf '<html>nope</html>' > "$dest"
+    printf '404\ntext/html; charset=utf-8\n\n'
+    ;;
+  *"paper.pdf"*|*"as-pdf"*)
+    cp "$FAKE_CURL_ROOT/paper.pdf" "$dest"
+    printf '200\napplication/pdf\n\n'
+    ;;
+  *)
+    printf '<html><body>article</body></html>' > "$dest"
+    printf '200\ntext/html; charset=utf-8\n\n'
+    ;;
+esac
+"#;
+    write_executable(&path, script);
+    path
+}
+
+fn collection_env(
+    command: &mut Command,
+    curl: &std::path::Path,
+    curl_root: &std::path::Path,
+    log: &std::path::Path,
+    adapter: &std::path::Path,
+) {
+    command
+        .arg("-P")
+        .arg("sase")
+        .env("BOB_HIGHLIGHTS_CURL", curl)
+        .env("FAKE_CURL_ROOT", curl_root)
+        .env("FAKE_CURL_LOG", log)
+        .env("BOB_WEB_CLIP_ADAPTER", adapter);
+}
+
+fn article_capture(
+    title: &str,
+    author: &str,
+    published: &str,
+    words: u64,
+) -> String {
+    format!(
+        r#"{{"protocol":1,"ok":true,"op":"capture","kind":"article","final_url":"https://example.com/","title":"{title}","author":"{author}","published":"{published}","site":"Example","description":"","metadata_sources":{{}},"word_count":{words},"capture":{{"browser":"chrome","browser_version":"154.0.0","mode":"headless","retried_after_challenge":false}},"fidelity":{{"status":"ok","page_large_media":0,"kept_large_media":0,"page_code_blocks":0,"kept_code_blocks":0,"page_words":{words},"kept_words":{words}}},"images":{{"total":1,"kept":1,"skipped_small":0,"failed":0}},"pdf_bytes":null,"warnings":[]}}"#
+    )
+}
+
+const TOKIO_PART_1: &str = "https://example.com/2024/01/tokio-internals-part-1";
+const TOKIO_PART_2: &str = "https://example.com/2024/02/tokio-internals-part-2";
+const TOKIO_PART_3: &str = "https://example.com/2024/03/tokio-internals-part-3";
+
 #[test]
 fn highlights_create_collection_rejects_invalid_target_lists_before_work() {
     let temp = TempDir::new("bob-cli-highlights-create-collection-targets");
@@ -200,37 +268,51 @@ fn highlights_create_collection_name_waterfall_is_local_and_options_parse_after_
         format_output(&output)
     );
 
-    // Each supported naming source passes the gate and reaches the route stub.
-    let mut commands = Vec::new();
-    let mut name_flag = collection_create(&vault, &urls);
+    // Each supported naming source passes the gate. The missing-name case
+    // above already proved no network runs before a name exists; named
+    // collections continue into the capture route under the working fakes.
+    let html_curl = write_collection_curl(temp.path());
+    let curl_root = temp.path().join("collection-curl-root");
+    let log = temp.path().join("named-curl.log");
+    std::fs::write(&log, "").expect("init named curl log");
+    let route_fake = FakeClip::new(&temp, "named-adapter");
+    let mut cases: Vec<Command> = Vec::new();
+    let n_vault = temp.path().join("n-flag");
+    write_file(&n_vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
+    let mut name_flag = collection_create(&n_vault, &urls);
     name_flag.arg("-N").arg("manual_packet");
-    commands.push(name_flag);
-    let mut title_flag = collection_create(&vault, &urls);
+    cases.push(name_flag);
+    let t_vault = temp.path().join("t-flag");
+    write_file(&t_vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
+    let mut title_flag = collection_create(&t_vault, &urls);
     title_flag.arg("-T").arg("Reading Packet");
-    commands.push(title_flag);
-    let mut output_flag = collection_create(&vault, &urls);
+    cases.push(title_flag);
+    let o_vault = temp.path().join("o-flag");
+    write_file(&o_vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
+    let mut output_flag = collection_create(&o_vault, &urls);
     output_flag
         .arg("-o")
         .arg(temp.path().join("from_output.pdf"));
-    commands.push(output_flag);
-    commands.push(collection_create(
-        &vault,
-        &[
-            "https://example.com/2024/01/tokio-internals-part-1",
-            "https://example.com/2024/02/tokio-internals-part-2",
-        ],
+    cases.push(output_flag);
+    let slug_vault = temp.path().join("slug");
+    write_file(&slug_vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
+    cases.push(collection_create(
+        &slug_vault,
+        &[TOKIO_PART_1, TOKIO_PART_2],
     ));
-    for mut command in commands {
+    for mut command in cases {
         command
             .arg("-P")
             .arg("sase")
-            .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
-            .env("BOB_HIGHLIGHTS_CURL", &curl);
+            .env("BOB_WEB_CLIP_ADAPTER", &route_fake.path)
+            .env("BOB_HIGHLIGHTS_CURL", &html_curl)
+            .env("FAKE_CURL_ROOT", &curl_root)
+            .env("FAKE_CURL_LOG", &log);
         let output = command.output().expect("run named collection");
-        assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+        assert_success(&output);
         assert!(
-            stderr(&output)
-                .contains("merging several URLs is not wired up yet"),
+            stdout(&output)
+                .contains("created Highlights-ready PDF from 2 web articles"),
             "{}",
             format_output(&output)
         );
@@ -238,23 +320,23 @@ fn highlights_create_collection_name_waterfall_is_local_and_options_parse_after_
 
     // Flags after the variadic positional are still options; -n retains its
     // existing no-audio meaning, and -o still conflicts with -N.
-    let output = collection_create(
-        &vault,
-        &[
-            "https://example.com/2024/01/tokio-internals-part-1",
-            "https://example.com/2024/02/tokio-internals-part-2",
-        ],
-    )
-    .arg("-n")
-    .arg("-N")
-    .arg("tokio_packet")
-    .arg("-P")
-    .arg("sase")
-    .output()
-    .expect("run collection with options after targets");
-    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+    let after_vault = temp.path().join("after-urls");
+    write_file(&after_vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
+    let output = collection_create(&after_vault, &[TOKIO_PART_1, TOKIO_PART_2])
+        .arg("-n")
+        .arg("-N")
+        .arg("tokio_packet")
+        .arg("-P")
+        .arg("sase")
+        .env("BOB_WEB_CLIP_ADAPTER", &route_fake.path)
+        .env("BOB_HIGHLIGHTS_CURL", &html_curl)
+        .env("FAKE_CURL_ROOT", &curl_root)
+        .env("FAKE_CURL_LOG", &log)
+        .output()
+        .expect("run collection with options after targets");
+    assert_success(&output);
     assert!(
-        stderr(&output).contains("merging several URLs is not wired up yet"),
+        stdout(&output).contains("name: tokio_packet (from -N)"),
         "{}",
         format_output(&output)
     );
@@ -276,9 +358,409 @@ fn highlights_create_collection_name_waterfall_is_local_and_options_parse_after_
 
     assert!(
         !fake.called(),
-        "the adapter must not run before route lands"
+        "the sentinel adapter must not run during gate checks"
     );
-    assert!(!curl_calls.exists(), "curl must not run before route lands");
+    assert!(
+        !curl_calls.exists(),
+        "the sentinel curl must not run during gate checks"
+    );
+}
+
+fn collection_harness(
+    name: &str,
+) -> (
+    TempDir,
+    std::path::PathBuf,
+    FakeClip,
+    std::path::PathBuf,
+    std::path::PathBuf,
+    std::path::PathBuf,
+) {
+    let temp = TempDir::new(name);
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
+    let fake = FakeClip::new(&temp, "adapter");
+    let curl = write_collection_curl(temp.path());
+    let curl_root = temp.path().join("collection-curl-root");
+    let log = temp.path().join("curl.log");
+    std::fs::write(&log, "").expect("init curl log");
+    (temp, vault, fake, curl, curl_root, log)
+}
+
+#[test]
+fn highlights_create_collection_installs_list_marker_and_scan_finds_each_part()
+{
+    let (_temp, vault, fake, curl, curl_root, log) =
+        collection_harness("bob-cli-highlights-create-collection-route");
+    fake.respond_n(
+        1,
+        &article_capture(
+            "Tokio Internals, Part 1: The Scheduler",
+            "Jane Doe",
+            "2024-01-08",
+            2140,
+        ),
+    );
+    fake.respond_n(
+        2,
+        &article_capture(
+            "Tokio Internals, Part 2: The Reactor",
+            "Jane Doe",
+            "2024-02-01",
+            1980,
+        ),
+    );
+
+    let mut command = collection_create(&vault, &[TOKIO_PART_1, TOKIO_PART_2]);
+    collection_env(&mut command, &curl, &curl_root, &log, &fake.path);
+    let output = command.output().expect("run two-url collection");
+    assert_success(&output);
+    let report = stdout(&output);
+    let pdf = vault.join("xlib/blogs/tokio_internals.pdf");
+    assert!(pdf.is_file(), "collection PDF must install: {report}");
+    assert!(
+        report.contains("created Highlights-ready PDF from 2 web articles")
+            && report.contains(
+                "name: tokio_internals (words every URL starts with; -N overrides)"
+            )
+            && report.contains(
+                "title: Tokio Internals (shared by every part title; -T overrides)"
+            )
+            && report.contains("Tokio Internals, Part 1: The Scheduler")
+            && report.contains("Tokio Internals, Part 2: The Reactor")
+            && report.contains("author: Jane Doe")
+            && report.contains("published: 2024-01-08 (first part)")
+            && report.contains("next: bob ref scan"),
+        "{report}"
+    );
+    assert!(
+        fake.request_n(1).contains(r#""render":false"#)
+            && fake.request_n(1).contains(r#""overrides":{}"#)
+            && !fake.request_n(1).contains(r#""out_pdf""#),
+        "{}",
+        fake.request_n(1)
+    );
+    assert!(
+        fake.request_n(2).contains(r#""render":false"#),
+        "{}",
+        fake.request_n(2)
+    );
+    assert!(
+        fake.compose_called()
+            && fake.request_n(3).contains(r#""op":"compose""#)
+            && fake.request_n(3).contains("article.json")
+            && fake.request_n(3).contains("Tokio Internals"),
+        "{}",
+        fake.request_n(3)
+    );
+
+    let marker_output = bob_command()
+        .arg("highlights")
+        .arg("marker")
+        .arg(&pdf)
+        .arg("-b")
+        .arg(&vault)
+        .output()
+        .expect("inspect collection marker");
+    assert_success(&marker_output);
+    let marker = stdout(&marker_output);
+    assert!(
+        marker.contains(&format!(
+            "- source_url: [{TOKIO_PART_1}, {TOKIO_PART_2}]"
+        )) && marker.contains("- id: tokio_internals\n")
+            && marker.contains("- title: Tokio Internals\n"),
+        "{marker}"
+    );
+
+    let scan = bob_command()
+        .arg("highlights")
+        .arg("--no-hooks")
+        .arg("scan")
+        .arg("-b")
+        .arg(&vault)
+        .output()
+        .expect("scan collection PDF");
+    assert_success(&scan);
+    let note = vault.join("ref/blogs/tokio_internals.md");
+    let contents = std::fs::read_to_string(&note).expect("read scanned note");
+    assert!(
+        contents.contains("source_url:")
+            && contents.contains(TOKIO_PART_1)
+            && contents.contains(TOKIO_PART_2)
+            && contents.contains("^ref"),
+        "{contents}"
+    );
+    assert_eq!(
+        contents.matches("^ref").count(),
+        1,
+        "scan must write one ^ref task:\n{contents}"
+    );
+
+    let find = bob_command()
+        .arg("ref")
+        .arg("find")
+        .arg(TOKIO_PART_2)
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("find collection by part URL");
+    assert_success(&find);
+    assert!(
+        stdout(&find).contains("tokio_internals")
+            || stdout(&find).contains("ref/blogs/tokio_internals.md"),
+        "{}",
+        format_output(&find)
+    );
+
+    let mut rerun = collection_create(&vault, &[TOKIO_PART_1]);
+    collection_env(&mut rerun, &curl, &curl_root, &log, &fake.path);
+    let output = rerun.output().expect("create one overlapping part");
+    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+    assert!(
+        stderr(&output).contains("already captured")
+            || stderr(&output).contains("already queued")
+            || stderr(&output).contains("already in the library"),
+        "{}",
+        format_output(&output)
+    );
+}
+
+#[test]
+fn highlights_create_collection_three_parts_derives_title_and_authors() {
+    let (_temp, vault, fake, curl, curl_root, log) =
+        collection_harness("bob-cli-highlights-create-collection-three");
+    fake.respond_n(
+        1,
+        &article_capture(
+            "Tokio Internals, Part 1: The Scheduler",
+            "Jane Doe",
+            "2024-01-08",
+            2140,
+        ),
+    );
+    fake.respond_n(
+        2,
+        &article_capture(
+            "Tokio Internals, Part 2: The Reactor",
+            "John Smith",
+            "2024-02-01",
+            1980,
+        ),
+    );
+    fake.respond_n(
+        3,
+        &article_capture(
+            "Tokio Internals, Part 3: The Runtime",
+            "Jane Doe",
+            "2024-03-01",
+            2010,
+        ),
+    );
+
+    let mut command =
+        collection_create(&vault, &[TOKIO_PART_1, TOKIO_PART_2, TOKIO_PART_3]);
+    collection_env(&mut command, &curl, &curl_root, &log, &fake.path);
+    let output = command.output().expect("run three-url collection");
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("created Highlights-ready PDF from 3 web articles")
+            && report.contains("title: Tokio Internals (shared by every part title; -T overrides)")
+            && report.contains("author: Jane Doe and John Smith")
+            && report.contains("1/3")
+            && report.contains("3/3"),
+        "{report}"
+    );
+}
+
+#[test]
+fn highlights_create_collection_failing_part_writes_nothing() {
+    let (_temp, vault, fake, curl, curl_root, log) =
+        collection_harness("bob-cli-highlights-create-collection-fail");
+    fake.respond_n(
+        2,
+        &failure_response("render", "part exploded", "retry later"),
+    );
+
+    let mut command = collection_create(&vault, &[TOKIO_PART_1, TOKIO_PART_2]);
+    collection_env(&mut command, &curl, &curl_root, &log, &fake.path);
+    let output = command.output().expect("run failing collection");
+    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+    let diagnostic = stderr(&output);
+    assert!(
+        diagnostic.contains("part 2/2")
+            && diagnostic.contains("part exploded")
+            && diagnostic.contains("nothing was written"),
+        "{diagnostic}"
+    );
+    assert!(
+        !fake.compose_called(),
+        "compose must not run after a failed part"
+    );
+    assert!(
+        !vault.join("xlib").exists()
+            && !vault.join("lib").exists()
+            && std::fs::read_dir(vault.join("ref"))
+                .ok()
+                .map(|entries| entries.count())
+                .unwrap_or(0)
+                == 0,
+        "failed part must leave xlib/, lib/, and ref/ empty:\n{}",
+        format_output(&output)
+    );
+}
+
+#[test]
+fn highlights_create_collection_refuses_pdf_parts() {
+    let (_temp, vault, fake, curl, curl_root, log) =
+        collection_harness("bob-cli-highlights-create-collection-pdf");
+
+    let mut classified = collection_create(
+        &vault,
+        &[TOKIO_PART_1, "https://example.com/files/paper.pdf"],
+    );
+    classified.arg("-N").arg("mixed_packet");
+    collection_env(&mut classified, &curl, &curl_root, &log, &fake.path);
+    let output = classified.output().expect("run pdf-classified collection");
+    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+    assert!(
+        stderr(&output).contains("part 2/2 is a PDF")
+            && stderr(&output).contains("merging supports web articles only")
+            && stderr(&output).contains("nothing was written"),
+        "{}",
+        format_output(&output)
+    );
+    assert!(
+        !fake.called(),
+        "a classified PDF must not reach the adapter"
+    );
+
+    fake.respond_n(
+        2,
+        r#"{"protocol":1,"ok":true,"op":"capture","kind":"pdf","pdf_bytes":100,"warnings":[]}"#,
+    );
+    let mut captured = collection_create(&vault, &[TOKIO_PART_1, TOKIO_PART_2]);
+    collection_env(&mut captured, &curl, &curl_root, &log, &fake.path);
+    let output = captured.output().expect("run pdf-captured collection");
+    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+    assert!(
+        stderr(&output).contains("part 2/2 is a PDF")
+            && stderr(&output).contains("nothing was written"),
+        "{}",
+        format_output(&output)
+    );
+    vault_holds_only(&vault, &["sase.md"]);
+}
+
+#[test]
+fn highlights_create_collection_dry_run_skips_compose_and_writes() {
+    let (_temp, vault, fake, curl, curl_root, log) =
+        collection_harness("bob-cli-highlights-create-collection-dry");
+
+    let mut command = collection_create(&vault, &[TOKIO_PART_1, TOKIO_PART_2]);
+    command.arg("-d");
+    collection_env(&mut command, &curl, &curl_root, &log, &fake.path);
+    let output = command.output().expect("dry-run collection");
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report
+            .contains("would create Highlights-ready PDF from 2 web articles")
+            && report.contains("name: tokio_internals")
+            && report.contains("library_destination:")
+            && report.contains("lib/blogs/tokio_internals.pdf")
+            && report.contains("writes: none")
+            && report.contains("- source_url:"),
+        "{report}"
+    );
+    assert!(fake.called(), "dry-run still captures");
+    assert!(!fake.compose_called(), "dry-run must not compose");
+    assert!(
+        !vault.join("xlib").exists(),
+        "dry-run must not install: {report}"
+    );
+}
+
+#[test]
+fn highlights_create_collection_collision_walk_and_exact_output() {
+    let (temp, vault, fake, curl, curl_root, log) =
+        collection_harness("bob-cli-highlights-create-collection-collision");
+    write_highlights_pdf(
+        &vault.join("xlib/blogs/tokio_internals.pdf"),
+        "- status: ready\n- parent: sase\n- title: Other Series\n- source_url: https://example.com/other-series\n",
+    );
+
+    let mut command = collection_create(&vault, &[TOKIO_PART_1, TOKIO_PART_2]);
+    collection_env(&mut command, &curl, &curl_root, &log, &fake.path);
+    let output = command.output().expect("run colliding collection");
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("xlib/blogs/tokio_internals_2.pdf")
+            && report.contains("renamed: tokio_internals.pdf is taken by")
+            && vault.join("xlib/blogs/tokio_internals_2.pdf").is_file(),
+        "{report}"
+    );
+
+    let exact = temp.path().join("exact-collection.pdf");
+    let mut output_cmd = collection_create(
+        &vault,
+        &[
+            "https://example.com/series-alpha-part-1",
+            "https://example.com/series-alpha-part-2",
+        ],
+    );
+    output_cmd.arg("-o").arg(&exact);
+    collection_env(&mut output_cmd, &curl, &curl_root, &log, &fake.path);
+    let output = output_cmd.output().expect("run collection -o");
+    assert_success(&output);
+    assert!(exact.is_file(), "{}", format_output(&output));
+    assert!(
+        stdout(&output).contains(&exact.display().to_string()),
+        "{}",
+        format_output(&output)
+    );
+}
+
+#[test]
+fn highlights_create_collection_binds_explicit_audio() {
+    let (temp, vault, fake, curl, curl_root, log) =
+        collection_harness("bob-cli-highlights-create-collection-audio");
+    let audio = temp.path().join("episode.mp3");
+    std::fs::write(&audio, b"audio-bytes").expect("write audio");
+
+    let mut command = collection_create(&vault, &[TOKIO_PART_1, TOKIO_PART_2]);
+    command.arg("--audio").arg(&audio);
+    collection_env(&mut command, &curl, &curl_root, &log, &fake.path);
+    let output = command.output().expect("run collection with audio");
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains("(from --audio)"),
+        "{}",
+        format_output(&output)
+    );
+    assert!(
+        vault.join("xlib/blogs/tokio_internals.mp3").is_file(),
+        "audio must bind beside the collection PDF"
+    );
+}
+
+#[test]
+fn highlights_create_collection_listen_is_deferred() {
+    let (_temp, vault, fake, curl, curl_root, log) =
+        collection_harness("bob-cli-highlights-create-collection-listen");
+
+    let mut command = collection_create(&vault, &[TOKIO_PART_1, TOKIO_PART_2]);
+    command.arg("-L");
+    collection_env(&mut command, &curl, &curl_root, &log, &fake.path);
+    let output = command.output().expect("run collection with --listen");
+    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+    assert!(
+        stderr(&output)
+            .contains("--listen with several URLs arrives in the next phase"),
+        "{}",
+        format_output(&output)
+    );
+    assert!(!fake.called(), "listen deferral is local");
     vault_holds_only(&vault, &["sase.md"]);
 }
 

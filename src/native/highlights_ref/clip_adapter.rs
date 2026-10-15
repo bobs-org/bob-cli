@@ -158,7 +158,6 @@ impl ClipAdapterClient {
     }
 
     /// Merge ordered article.json parts into one PDF.
-    #[allow(dead_code)]
     pub(super) fn compose(
         &self,
         request: &ComposeRequest,
@@ -373,6 +372,27 @@ impl CaptureRequest {
             render: None,
         }
     }
+
+    /// Capture a collection part to `article.json` without printing.
+    pub(super) fn for_collection_part(
+        url: String,
+        workdir: String,
+        dry_run: bool,
+        captured: String,
+    ) -> Self {
+        Self {
+            protocol: ADAPTER_PROTOCOL_VERSION,
+            op: "capture",
+            url,
+            html_path: None,
+            workdir,
+            out_pdf: None,
+            dry_run,
+            captured,
+            overrides: MetadataOverrides::default(),
+            render: Some(false),
+        }
+    }
 }
 
 /// One article.json path in a `compose` request.
@@ -402,7 +422,6 @@ pub(super) struct ComposeRequest {
 }
 
 impl ComposeRequest {
-    #[allow(dead_code)]
     pub(super) fn new(
         parts: Vec<ComposePart>,
         collection: CollectionMeta,

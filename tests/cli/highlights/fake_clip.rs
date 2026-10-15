@@ -1,8 +1,10 @@
 //! Shared fake `BOB_WEB_CLIP_ADAPTER` for highlights clip/create tests.
 //!
-//! The fake adapter saves each request to `request.json`, copies a tiny
-//! fixture PDF to the requested `out_pdf`, and prints a canned response.
-//! No test touches the network or a real browser.
+//! The fake adapter saves each request to `request.json` and `request-N.json`,
+//! copies a tiny fixture PDF to the requested `out_pdf`, and prints a canned
+//! response. Capture N reads `response-N.json` when present. Compose copies
+//! the fixture PDF and prints a compose response. No test touches the
+//! network or a real browser.
 
 use crate::support::*;
 use std::fs;
@@ -20,26 +22,50 @@ impl FakeClip {
         let script = format!(
             r#"#!/bin/sh
 # Fake web-clip adapter: one JSON request on stdin, one JSON response on
-# stdout. Saves stdin to request.json, copies the fixture PDF to out_pdf,
-# then prints the canned response file.
+# stdout. Saves stdin to request.json and request-N.json, copies the
+# fixture PDF to out_pdf, then prints the canned response file.
 ROOT={root}
 request=$(cat)
+n=1
+if [ -f "$ROOT/request-count" ]; then
+  n=$(cat "$ROOT/request-count")
+  n=$((n + 1))
+fi
+printf '%s\n' "$n" > "$ROOT/request-count"
 printf '%s' "$request" > "$ROOT/request.json"
+printf '%s' "$request" > "$ROOT/request-$n.json"
 case "$request" in
   *'"op":"ping"'*)
     if [ -f "$ROOT/ping.json" ]; then cat "$ROOT/ping.json"; else printf '%s' '{PING}'; fi
     ;;
+  *'"op":"compose"'*)
+    out_pdf=$(printf '%s' "$request" | sed -n 's/.*"out_pdf":"\([^"]*\)".*/\1/p')
+    if [ -n "$out_pdf" ] && [ -f "$ROOT/fixture.pdf" ]; then
+      mkdir -p "$(dirname "$out_pdf")"
+      cp "$ROOT/fixture.pdf" "$out_pdf"
+    fi
+    if [ -f "$ROOT/compose.json" ]; then cat "$ROOT/compose.json"; else printf '%s' '{COMPOSE}'; fi
+    ;;
   *)
     out_pdf=$(printf '%s' "$request" | sed -n 's/.*"out_pdf":"\([^"]*\)".*/\1/p')
-    if [ -n "$out_pdf" ] && [ -f "$ROOT/fixture.pdf" ]; then cp "$ROOT/fixture.pdf" "$out_pdf"; fi
+    if [ -n "$out_pdf" ] && [ -f "$ROOT/fixture.pdf" ]; then
+      mkdir -p "$(dirname "$out_pdf")"
+      cp "$ROOT/fixture.pdf" "$out_pdf"
+    fi
     html_path=$(printf '%s' "$request" | sed -n 's/.*"html_path":"\([^"]*\)".*/\1/p')
     if [ -n "$html_path" ] && [ -f "$html_path" ]; then cp "$html_path" "$ROOT/staged.html"; fi
-    cat "$ROOT/response.json"
+    workdir=$(printf '%s' "$request" | sed -n 's/.*"workdir":"\([^"]*\)".*/\1/p')
+    if [ -n "$workdir" ]; then
+      mkdir -p "$workdir"
+      printf '%s' '{{}}' > "$workdir/article.json"
+    fi
+    if [ -f "$ROOT/response-$n.json" ]; then cat "$ROOT/response-$n.json"; else cat "$ROOT/response.json"; fi
     ;;
 esac
 "#,
             root = shell_single_quote(path_str(&root)),
             PING = default_ping(),
+            COMPOSE = default_compose(),
         );
         write_executable(&path, &script);
         // The fixture must carry no annotations: the adapter's render is a
@@ -55,9 +81,33 @@ esac
             .expect("write fake capture response");
     }
 
+    pub(crate) fn respond_n(&self, n: usize, body: &str) {
+        fs::write(self.root.join(format!("response-{n}.json")), body)
+            .expect("write numbered fake capture response");
+    }
+
     pub(crate) fn request(&self) -> String {
         fs::read_to_string(self.root.join("request.json"))
             .expect("read saved adapter request")
+    }
+
+    pub(crate) fn request_n(&self, n: usize) -> String {
+        fs::read_to_string(self.root.join(format!("request-{n}.json")))
+            .unwrap_or_else(|error| {
+                panic!("read saved adapter request {n}: {error}")
+            })
+    }
+
+    pub(crate) fn request_count(&self) -> usize {
+        fs::read_to_string(self.root.join("request-count"))
+            .ok()
+            .and_then(|value| value.trim().parse().ok())
+            .unwrap_or(0)
+    }
+
+    pub(crate) fn compose_called(&self) -> bool {
+        (1..=self.request_count())
+            .any(|n| self.request_n(n).contains(r#""op":"compose""#))
     }
 
     pub(crate) fn called(&self) -> bool {
@@ -109,6 +159,10 @@ pub(crate) fn default_ping() -> &'static str {
 
 pub(crate) fn default_capture() -> &'static str {
     r#"{"protocol":1,"ok":true,"op":"capture","kind":"article","final_url":"https://example.com/index/open-source-codex-orchestration-symphony/","title":"Symphony Spec","author":"Jane Doe","published":"2026-04-27","site":"Example","description":"A spec.","metadata_sources":{"title":"h1","author":"byline","published":"visible-date","site":"og:site_name"},"word_count":8921,"capture":{"browser":"chrome","browser_version":"154.0.0","mode":"headless","retried_after_challenge":false},"fidelity":{"status":"ok","page_large_media":2,"kept_large_media":2,"page_code_blocks":1,"kept_code_blocks":1,"page_words":10858,"kept_words":8921},"images":{"total":2,"kept":2,"skipped_small":0,"failed":0},"pdf_bytes":2400,"warnings":[]}"#
+}
+
+pub(crate) fn default_compose() -> &'static str {
+    r#"{"protocol":1,"ok":true,"op":"compose","pdf_bytes":2400,"images":{"total":4,"kept":4,"skipped_small":0,"failed":0},"warnings":[]}"#
 }
 
 pub(crate) fn failure_response(
