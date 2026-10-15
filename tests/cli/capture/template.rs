@@ -247,6 +247,73 @@ fn template_clip_flag_and_session_operators_have_stable_codes() {
 }
 
 #[test]
+fn template_session_suffixes_refuse_in_execution() {
+    let temp = TempDir::new("bob-cli-capture-template-session-suffix");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    for draft in [
+        "@@template:\nTask {0} @job:{1}=3\n\na b\n",
+        "@@template:\n^job:{0}=x\n\na\n",
+        "@@template:\n^job:{0}=3\n\na\n",
+        "@@template:\n{0}\n\n^job:a=x\n",
+    ] {
+        let output = capture(&temp, &vault)
+            .args(["--dry-run", "-f", "json"])
+            .arg(draft)
+            .output()
+            .expect("run session-suffix refusal");
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{draft:?}: {}",
+            format_output(&output)
+        );
+        let error = json(&output);
+        assert_eq!(error["code"], "template_session_operator", "{draft:?}");
+        assert!(
+            error["error"].as_str().unwrap().contains("template row 1"),
+            "{draft:?}: {}",
+            error["error"]
+        );
+    }
+}
+
+#[test]
+fn template_execution_reports_first_issue_in_draft_order() {
+    let temp = TempDir::new("bob-cli-capture-template-draft-order");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+
+    let probe = "@@template:\n{0}{1}\n\n= \"\"\na\n";
+    let output = capture(&temp, &vault)
+        .args(["--dry-run", "-f", "json"])
+        .arg(probe)
+        .output()
+        .expect("run draft-order probe");
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+    let error = json(&output);
+    assert_eq!(error["code"], "template_session_operator");
+    assert!(
+        error["error"]
+            .as_str()
+            .unwrap()
+            .starts_with("template row 1 (line 4): a template can't drive"),
+        "{}",
+        error["error"]
+    );
+
+    let arity_only = "@@template:\n{0} {1}\n\nonly-one\n";
+    let output = capture(&temp, &vault)
+        .args(["--dry-run", "-f", "json"])
+        .arg(arity_only)
+        .output()
+        .expect("run arity-only draft");
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+    let error = json(&output);
+    assert_eq!(error["code"], "template_row_arity");
+}
+
+#[test]
 fn template_url_listen_marker_is_not_clipboard_capture() {
     let temp = TempDir::new("bob-cli-capture-template-listen");
     let vault = temp.path().join("vault");

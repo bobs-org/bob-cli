@@ -39,30 +39,15 @@ pub(super) fn parse_capture_draft_with_clip_control(
     forced_section: Option<&str>,
     options: &capture_language::CaptureParseOptions<'_>,
 ) -> Result<capture_language::ParsedCaptureDraft, CaptureError> {
-    if let Err(issue) = capture_language::template::expand(raw_text) {
-        return Err(CaptureError::usage_code(issue.message(), issue.code()));
-    }
-    capture_language::parse_capture_draft_with_clip_control(
+    capture_language::parse_capture_draft_with_clip_control_coded(
         raw_text,
         forced_route,
         forced_section,
         options,
     )
-    .map_err(|message| {
-        let code = if message.contains("a template can't capture the clipboard")
-        {
-            Some("template_clipboard")
-        } else if message
-            .contains("a template can't drive the Pomodoro session")
-        {
-            Some("template_session_operator")
-        } else {
-            None
-        };
-        match code {
-            Some(code) => CaptureError::usage_code(message, code),
-            None => CaptureError::usage(message),
-        }
+    .map_err(|error| match error.code {
+        Some(code) => CaptureError::usage_code(error.message, code),
+        None => CaptureError::usage(error.message),
     })
 }
 

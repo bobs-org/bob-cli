@@ -56,7 +56,8 @@ legacy shape; multi-item JSON keeps the first result at the top level and adds \
 an ordered 'captures' array.\n\n\
 A draft beginning with `@@template:` expands one capture per later row. Write \
 one capture item with `{0}`, `{1}`, and so on, then a blank line and one row \
-of values per capture; quote multi-word fields in templates with multiple \
+of values per capture; each row must supply exactly one value per placeholder \
+index; quote multi-word fields in templates with multiple \
 placeholders. Capturing a template is exactly capturing its expansion, and \
 the whole run still plans and writes atomically. Use `{{` and `}}` for literal \
 braces, or the `--expand` option to print the expanded text without capturing. \

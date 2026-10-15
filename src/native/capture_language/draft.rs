@@ -618,14 +618,101 @@ pub(crate) fn parse_capture_text_with_clip_control(
     Ok(outcome.parsed)
 }
 
+/// A template-aware parse failure with its stable JSON code, when the
+/// failure is a template refusal. `code` is `None` for ordinary capture
+/// errors, which stay generic usage errors.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TemplateCodedError {
+    pub(crate) code: Option<&'static str>,
+    pub(crate) message: String,
+}
+
+impl TemplateCodedError {
+    fn generic(message: String) -> Self {
+        Self {
+            code: None,
+            message,
+        }
+    }
+
+    fn coded(code: &'static str, message: String) -> Self {
+        Self {
+            code: Some(code),
+            message,
+        }
+    }
+}
+
+#[cfg(test)]
 pub(crate) fn parse_capture_draft_with_clip_control(
     raw_text: &str,
     forced_route: Option<&str>,
     forced_section: Option<&str>,
     options: &CaptureParseOptions<'_>,
 ) -> Result<ParsedCaptureDraft, String> {
+    parse_capture_draft_with_clip_control_coded(
+        raw_text,
+        forced_route,
+        forced_section,
+        options,
+    )
+    .map_err(|error| error.message)
+}
+
+pub(crate) fn parse_capture_draft_with_clip_control_coded(
+    raw_text: &str,
+    forced_route: Option<&str>,
+    forced_section: Option<&str>,
+    options: &CaptureParseOptions<'_>,
+) -> Result<ParsedCaptureDraft, TemplateCodedError> {
+    let analysis = super::template::analyze(raw_text);
+    if analysis.header.is_some() {
+        if let Some(first_issue) = analysis.issues.first() {
+            if let Some(row) =
+                super::template::row_number_for_issue(&analysis, first_issue)
+            {
+                if let Some(execution) = first_leading_execution_error(
+                    raw_text,
+                    &analysis,
+                    row,
+                    forced_route,
+                    forced_section,
+                    options,
+                ) {
+                    return Err(execution);
+                }
+            }
+            return Err(TemplateCodedError::coded(
+                first_issue.code(),
+                first_issue.message(),
+            ));
+        }
+        let Some(expansion) =
+            super::template::expand(raw_text).map_err(|issue| {
+                TemplateCodedError::coded(issue.code(), issue.message())
+            })?
+        else {
+            // Header without a block is already reported as a language
+            // issue above; reaching here means an ordinary draft.
+            return parse_ordinary_draft(
+                raw_text,
+                forced_route,
+                forced_section,
+                options,
+            )
+            .map_err(TemplateCodedError::generic);
+        };
+        return parse_template_expansion(
+            expansion,
+            forced_route,
+            forced_section,
+            options,
+        );
+    }
     if let Some(expansion) =
-        super::template::expand(raw_text).map_err(|issue| issue.message())?
+        super::template::expand(raw_text).map_err(|issue| {
+            TemplateCodedError::coded(issue.code(), issue.message())
+        })?
     {
         return parse_template_expansion(
             expansion,
@@ -634,7 +721,16 @@ pub(crate) fn parse_capture_draft_with_clip_control(
             options,
         );
     }
+    parse_ordinary_draft(raw_text, forced_route, forced_section, options)
+        .map_err(TemplateCodedError::generic)
+}
 
+fn parse_ordinary_draft(
+    raw_text: &str,
+    forced_route: Option<&str>,
+    forced_section: Option<&str>,
+    options: &CaptureParseOptions<'_>,
+) -> Result<ParsedCaptureDraft, String> {
     let draft = split_capture_draft(raw_text);
     if draft.items.is_empty() {
         let global = resolve_global_declaration_strict(&draft.declarations)?;
@@ -767,69 +863,26 @@ fn parse_template_expansion(
     forced_route: Option<&str>,
     forced_section: Option<&str>,
     options: &CaptureParseOptions<'_>,
-) -> Result<ParsedCaptureDraft, String> {
-    let instance_options = CaptureParseOptions {
-        // A template cannot repeat clipboard capture. Recognize markers even
-        // for --no-clip so live preview and submission agree.
-        parse_clip_markers: true,
-        has_global_destination: false,
-        ..*options
-    };
+) -> Result<ParsedCaptureDraft, TemplateCodedError> {
+    let instance_options = template_instance_options(options);
     let mut items = Vec::with_capacity(expansion.instances.len());
 
     for instance in &expansion.instances {
-        let lines = split_physical_lines(&instance.text)
-            .into_iter()
-            .enumerate()
-            .map(|(index, raw)| ItemLine {
-                raw,
-                line_number: instance.template_line_start + index,
-            })
-            .collect::<Vec<_>>();
-        let draft_items = split_items_from_item_lines(&lines, &instance.text);
-        if draft_items.len() != 1 {
-            return Err(template_session_error(instance.row, instance.line));
-        }
-        let mut outcome = parse_capture_item(
-            &draft_items[0],
+        let parsed = parse_single_template_instance(
+            instance,
             forced_route,
             forced_section,
             &instance_options,
         )
-        .map_err(|message| {
-            template_row_error(instance.row, instance.line, message)
-        })?;
-
-        if outcome.parsed.clip.is_some() {
-            return Err(template_clipboard_error(instance.row, instance.line));
-        }
-        if is_template_session_kind(&outcome.parsed.kind) {
-            return Err(template_session_error(instance.row, instance.line));
-        }
-        finish_item_dependency_target(&mut outcome.parsed, false).map_err(
-            |message| template_row_error(instance.row, instance.line, message),
-        )?;
-
-        let ref_source = if matches!(outcome.parsed.kind, CaptureKind::Ref(_)) {
-            if forced_route.is_some()
-                || outcome.local_destination_marker.is_some()
-            {
-                Some(RefParentSource::Explicit)
-            } else if outcome.parsed.route.is_some() {
-                Some(RefParentSource::Global)
-            } else {
-                Some(RefParentSource::Default)
-            }
-        } else {
-            None
-        };
+        .map_err(|error| error)?;
+        let (outcome_parsed, ref_source) = parsed;
         items.push(ParsedCaptureItem {
             index: instance.row - 1,
             start: instance.row_range.start,
             end: instance.row_range.end,
             line_start: instance.line,
             line_end: instance.line,
-            parsed: outcome.parsed,
+            parsed: outcome_parsed,
             ref_source,
             template_row: Some(TemplateRowSummary {
                 row: instance.row,
@@ -844,6 +897,114 @@ fn parse_template_expansion(
         warnings: Vec::new(),
         template: Some(expansion.summary),
     })
+}
+
+fn template_instance_options<'a>(
+    options: &CaptureParseOptions<'a>,
+) -> CaptureParseOptions<'a> {
+    CaptureParseOptions {
+        // A template cannot repeat clipboard capture. Recognize markers even
+        // for --no-clip so live preview and submission agree.
+        parse_clip_markers: true,
+        has_global_destination: false,
+        ..*options
+    }
+}
+
+fn parse_single_template_instance(
+    instance: &super::template::TemplateInstance,
+    forced_route: Option<&str>,
+    forced_section: Option<&str>,
+    instance_options: &CaptureParseOptions<'_>,
+) -> Result<(ParsedCaptureText, Option<RefParentSource>), TemplateCodedError> {
+    let lines = split_physical_lines(&instance.text)
+        .into_iter()
+        .enumerate()
+        .map(|(index, raw)| ItemLine {
+            raw,
+            line_number: instance.template_line_start + index,
+        })
+        .collect::<Vec<_>>();
+    let draft_items = split_items_from_item_lines(&lines, &instance.text);
+    if draft_items.len() != 1 {
+        return Err(TemplateCodedError::coded(
+            "template_session_operator",
+            template_session_error(instance.row, instance.line),
+        ));
+    }
+    let mut outcome = parse_capture_item(
+        &draft_items[0],
+        forced_route,
+        forced_section,
+        instance_options,
+    )
+    .map_err(|message| {
+        TemplateCodedError::generic(template_row_error(
+            instance.row,
+            instance.line,
+            message,
+        ))
+    })?;
+
+    if outcome.parsed.clip.is_some() {
+        return Err(TemplateCodedError::coded(
+            "template_clipboard",
+            template_clipboard_error(instance.row, instance.line),
+        ));
+    }
+    if is_template_session_kind(&outcome.parsed.kind) {
+        return Err(TemplateCodedError::coded(
+            "template_session_operator",
+            template_session_error(instance.row, instance.line),
+        ));
+    }
+    finish_item_dependency_target(&mut outcome.parsed, false).map_err(
+        |message| {
+            TemplateCodedError::generic(template_row_error(
+                instance.row,
+                instance.line,
+                message,
+            ))
+        },
+    )?;
+
+    let ref_source = if matches!(outcome.parsed.kind, CaptureKind::Ref(_)) {
+        if forced_route.is_some() || outcome.local_destination_marker.is_some()
+        {
+            Some(RefParentSource::Explicit)
+        } else if outcome.parsed.route.is_some() {
+            Some(RefParentSource::Global)
+        } else {
+            Some(RefParentSource::Default)
+        }
+    } else {
+        None
+    };
+    Ok((outcome.parsed, ref_source))
+}
+
+fn first_leading_execution_error(
+    raw_text: &str,
+    analysis: &super::template::TemplateAnalysis,
+    upto_row: usize,
+    forced_route: Option<&str>,
+    forced_section: Option<&str>,
+    options: &CaptureParseOptions<'_>,
+) -> Option<TemplateCodedError> {
+    let instance_options = template_instance_options(options);
+    for instance in
+        super::template::leading_instances(raw_text, analysis, upto_row)
+    {
+        if let Err(error) = parse_single_template_instance(
+            &instance,
+            forced_route,
+            forced_section,
+            &instance_options,
+        ) {
+            return Some(error);
+        }
+    }
+    None
 }
 
 fn template_row_error(row: usize, line: usize, message: String) -> String {

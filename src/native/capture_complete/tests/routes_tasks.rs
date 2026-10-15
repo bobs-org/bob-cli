@@ -93,6 +93,35 @@ fn template_header_completion_is_offered_first_for_prefix_and_last_for_empty_que
 }
 
 #[test]
+fn template_header_offered_only_on_first_nonblank_line() {
+    use super::super::model::RouteCandidateKind;
+
+    let temp = TempDir::new("bob-cli-capture-complete-template-first-line");
+    let raw = "@@te\n\n@@te";
+    let first = result(temp.path(), raw, 4);
+    let Candidates::Route(routes) = &first.candidates else {
+        panic!("expected route candidates");
+    };
+    assert!(
+        routes
+            .iter()
+            .any(|route| route.kind == RouteCandidateKind::Template),
+        "cursor in first @@te still offers template: {first:?}"
+    );
+
+    let second = result(temp.path(), raw, 10);
+    let Candidates::Route(routes) = &second.candidates else {
+        panic!("expected route candidates");
+    };
+    assert!(
+        !routes
+            .iter()
+            .any(|route| route.kind == RouteCandidateKind::Template),
+        "cursor in second @@te must not offer template: {second:?}"
+    );
+}
+
+#[test]
 fn template_completion_suppresses_header_rows_and_placeholders() {
     let temp = TempDir::new("bob-cli-capture-complete-template-gate");
     for (raw, cursor) in [

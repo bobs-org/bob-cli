@@ -30,7 +30,6 @@ impl TemplateIssue {
         self.message.clone()
     }
 
-    #[allow(dead_code)] // Consumed by the template-aware editor protocol phase.
     pub(crate) fn range(&self) -> Range<usize> {
         self.range.clone()
     }
@@ -382,7 +381,12 @@ pub(crate) fn analyze(raw: &str) -> TemplateAnalysis {
                     row_range.clone(),
                 ));
             }
-            check_global_tokens(line, index + 1, &mut issues);
+            check_global_tokens_in_row(
+                line,
+                row_number,
+                index + 1,
+                &mut issues,
+            );
             if is_row_bullet(trimmed) {
                 issues.push(issue(
                     "template_row_bullet",
@@ -518,6 +522,52 @@ pub(crate) fn analyze(raw: &str) -> TemplateAnalysis {
         rows,
         issues,
     }
+}
+
+/// The 1-based row whose range overlaps `issue`, when the issue is
+/// row-scoped. `template_too_large` is always template-scoped, even when its
+/// range sits on a row.
+pub(crate) fn row_number_for_issue(
+    analysis: &TemplateAnalysis,
+    issue: &TemplateIssue,
+) -> Option<usize> {
+    if issue.code() == "template_too_large" {
+        return None;
+    }
+    analysis.rows.iter().find_map(|row| {
+        let overlaps = row.range.start < issue.range().end
+            && issue.range().start < row.range.end;
+        overlaps.then_some(row.row)
+    })
+}
+
+/// Build expansion instances for every analyzable row before `upto_row`
+/// (exclusive). Rows that cannot be built are skipped; callers only use this
+/// to surface an earlier execution error ahead of a later row-scoped
+/// language issue, so leading rows are expected to be valid.
+pub(crate) fn leading_instances(
+    raw: &str,
+    analysis: &TemplateAnalysis,
+    upto_row: usize,
+) -> Vec<TemplateInstance> {
+    let Some(block) = analysis.block.as_ref() else {
+        return Vec::new();
+    };
+    analysis
+        .rows
+        .iter()
+        .filter(|row| row.row < upto_row)
+        .filter_map(|row| {
+            build_instance(
+                raw,
+                block,
+                &analysis.placeholders,
+                &analysis.escapes,
+                row,
+            )
+            .ok()
+        })
+        .collect()
 }
 
 /// Expand a template draft, or return `None` unchanged for an ordinary
@@ -904,6 +954,25 @@ fn check_global_tokens(
             issues.push(issue(
                 "template_global_declaration",
                 format!("template line {line_number}: a template draft can't declare `@@` destinations; put the destination in the template line"),
+                (line.start + token.start)..(line.start + token.end),
+            ));
+        }
+    }
+}
+
+fn check_global_tokens_in_row(
+    line: &RawLine<'_>,
+    row_number: usize,
+    line_number: usize,
+    issues: &mut Vec<TemplateIssue>,
+) {
+    for token in tokenize_with_spans(line.text) {
+        if token.text.starts_with("@@")
+            && !token.text.to_ascii_lowercase().starts_with(HEADER)
+        {
+            issues.push(issue(
+                "template_global_declaration",
+                format!("template row {row_number} (line {line_number}): a template draft can't declare `@@` destinations; put the destination in the template line"),
                 (line.start + token.start)..(line.start + token.end),
             ));
         }

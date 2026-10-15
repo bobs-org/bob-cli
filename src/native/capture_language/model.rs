@@ -643,7 +643,6 @@ pub(crate) struct ParsedCaptureItem {
     pub(crate) line_end: usize,
     pub(crate) parsed: ParsedCaptureText,
     /// The row that produced this item when it came from a template draft.
-    #[allow(dead_code)]
     pub(crate) template_row: Option<TemplateRowSummary>,
     /// Lexical ref-parent source for `Ref` items (`explicit` for an inline
     /// `@route` or forced `-r`, `global` for a plain `@@route` upgrade,

@@ -427,7 +427,8 @@ fn template_completion_gate(
                 let template = RouteCandidate {
                     replacement: "template:".to_string(),
                     route: "template:".to_string(),
-                    label: "Bulk template".to_string(),
+                    label: "Bulk template: one capture per row below"
+                        .to_string(),
                     kind: RouteCandidateKind::Template,
                     status: None,
                     match_kind: None,
@@ -485,19 +486,20 @@ fn partial_template_header(
     if cursor > raw.len() || !raw.is_char_boundary(cursor) {
         return None;
     }
-    let line_start = raw[..cursor].rfind(['\n', '\r']).map_or(0, |i| i + 1);
-    let line_end = raw[cursor..]
-        .find(['\n', '\r'])
-        .map_or(raw.len(), |i| cursor + i);
-    let line = &raw[line_start..line_end];
-    let first_nonblank = raw
-        .split(['\n', '\r'])
-        .find(|line| !line.trim_matches([' ', '\t']).is_empty())?;
-    if line.trim_matches([' ', '\t'])
-        != first_nonblank.trim_matches([' ', '\t'])
-    {
+    let lines = crate::native::capture_language::split_physical_lines(raw);
+    let first_nonblank_index = lines
+        .iter()
+        .position(|line| !line.text.trim_matches([' ', '\t']).is_empty())?;
+    let cursor_index = lines
+        .iter()
+        .position(|line| line.start <= cursor && cursor <= line.end)?;
+    if cursor_index != first_nonblank_index {
         return None;
     }
+    let cursor_line = &lines[cursor_index];
+    let line_start = cursor_line.start;
+    let line_end = cursor_line.end;
+    let line = &raw[line_start..line_end];
     let trimmed_start = line.len() - line.trim_start_matches([' ', '\t']).len();
     let content = &line[trimmed_start..];
     if !"@@template:".starts_with(&content.to_ascii_lowercase())

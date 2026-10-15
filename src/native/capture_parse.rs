@@ -806,6 +806,8 @@ impl CaptureParseResult {
                 if let Some(diagnostic) = refusal_diagnostic(
                     &row_parse.spans,
                     row_parse.mode,
+                    &row_parse.pomodoro_start,
+                    &row_parse.pomodoro_close,
                     &row_parse.items,
                     (row.range.start, row.range.end),
                 ) {
@@ -964,13 +966,20 @@ impl CaptureParseResult {
         ));
         diagnostics.extend(instance_diagnostics);
 
+        // Instance parses are the source of truth for clipboard: the masked
+        // copy (`xxx %`) reads as a clipboard marker while a `URL %` row
+        // expands to a Listen reference. Only the session check runs here.
         if let Some(diagnostic) = refusal_diagnostic(
             &parsed.spans,
             parsed.mode,
+            &parsed.pomodoro_start,
+            &parsed.pomodoro_close,
             &parsed.items,
             (template_range.start, template_range.end),
         ) {
-            refusal_diagnostics.push(diagnostic);
+            if diagnostic.code != "template_clipboard" {
+                refusal_diagnostics.push(diagnostic);
+            }
         }
         diagnostics.extend(refusal_diagnostics);
         diagnostics.extend(incomplete_diagnostics);
@@ -1402,6 +1411,8 @@ fn offset_diagnostic_lines(message: &str, offset: usize) -> String {
 fn refusal_diagnostic(
     spans: &[Span],
     mode: EditorMode,
+    pomodoro_start: &Option<PomodoroStartSpec>,
+    pomodoro_close: &Option<PomodoroCloseSpec>,
     items: &[EditorItemParse],
     fallback_range: (usize, usize),
 ) -> Option<Diagnostic> {
@@ -1417,17 +1428,22 @@ fn refusal_diagnostic(
             range: Some((span.start, span.end)),
         });
     }
-    let is_session = |mode| {
+    let is_session = |mode: EditorMode,
+                      start: &Option<PomodoroStartSpec>,
+                      close: &Option<PomodoroCloseSpec>| {
         matches!(
             mode,
             EditorMode::PomodoroAdjust
                 | EditorMode::PomodoroShift
                 | EditorMode::PomodoroClose
                 | EditorMode::PomodoroStart
-        )
+        ) || matches!(mode, EditorMode::PomodoroTask | EditorMode::PomodoroLink)
+            && (start.is_some() || close.is_some())
     };
-    let session =
-        is_session(mode) || items.iter().any(|item| is_session(item.mode));
+    let session = is_session(mode, pomodoro_start, pomodoro_close)
+        || items.iter().any(|item| {
+            is_session(item.mode, &item.pomodoro_start, &item.pomodoro_close)
+        });
     if !session {
         return None;
     }

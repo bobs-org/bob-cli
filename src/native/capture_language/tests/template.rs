@@ -184,6 +184,17 @@ fn rows_cannot_be_bullets_and_templates_cannot_use_other_globals() {
 }
 
 #[test]
+fn row_global_declarations_use_row_scope() {
+    let issue = first_issue("@@template:\nTask {0} {1}\n\na @@job\n");
+    assert_eq!(issue.code(), "template_global_declaration");
+    assert!(
+        issue.message().starts_with("template row 1 (line 4):"),
+        "{}",
+        issue.message()
+    );
+}
+
+#[test]
 fn one_field_rows_keep_spaces_and_template_line_endings_normalize() {
     for newline in ["\n", "\r\n", "\r"] {
         let raw = ["@@template:", "Apply {0}", "", "  Montréal 🧭 role  "]

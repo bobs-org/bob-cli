@@ -224,6 +224,73 @@ fn template_placeholders_split_capture_spans_and_refusals_are_reported() {
 }
 
 #[test]
+fn template_session_suffixes_are_refused_with_typed_ranges() {
+    for draft in [
+        "@@template:\nTask {0} @job:{1}=3\n\na b\n",
+        "@@template:\n^job:{0}=x\n\na\n",
+        "@@template:\n^job:{0}=3\n\na\n",
+        "@@template:\n{0}\n\n^job:a=x\n",
+    ] {
+        let value = parse_json(draft);
+        let session = value["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["code"] == "template_session_operator")
+            .unwrap_or_else(|| panic!("expected session refusal in {draft:?}"));
+        let range = session["range"]
+            .as_array()
+            .unwrap_or_else(|| panic!("expected typed range in {draft:?}"));
+        assert_eq!(range.len(), 2);
+        let start = range[0].as_u64().unwrap() as usize;
+        let end = range[1].as_u64().unwrap() as usize;
+        assert!(start < end);
+        assert!(draft.is_char_boundary(start));
+        assert!(draft.is_char_boundary(end));
+        assert!(end <= draft.len());
+    }
+}
+
+#[test]
+fn template_clipboard_follows_expanded_instances() {
+    let listen = parse_json("@@template:\n{0} %\n\nhttps://example.com/a\n");
+    assert!(
+        !listen["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["code"] == "template_clipboard"),
+        "URL % stays a Listen reference: {:?}",
+        listen["diagnostics"]
+    );
+
+    let literal = "@@template:\n{0} task %\n\nvalue1\nvalue2\n";
+    let value = parse_json(literal);
+    let clipboard: Vec<_> = value["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|entry| entry["code"] == "template_clipboard")
+        .collect();
+    assert_eq!(clipboard.len(), 1);
+    let percent = literal.find('%').unwrap();
+    assert_eq!(
+        clipboard[0]["range"],
+        serde_json::json!([percent, percent + 1])
+    );
+
+    let row_clip = parse_json("@@template:\nTask {0}\n\na %\n");
+    assert!(
+        row_clip["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["code"] == "template_clipboard"),
+        "a % typed in a row value is still refused"
+    );
+}
+
+#[test]
 fn human_output_adds_template_summary() {
     let output = bob_command()
         .arg("capture-parse")

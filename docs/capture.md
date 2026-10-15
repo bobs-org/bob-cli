@@ -5415,9 +5415,11 @@ the masked template: the header, rows, and placeholders return empty success,
 while route, section, Pomodoro-name, dependency, and wikilink pickers in the
 template body remain available. Block-ID contexts and replacements that
 overlap a placeholder return empty success. On `@@`, `@@te`, and other
-first-line prefixes of the reserved header, route completion offers a
-`template:` candidate (`kind: "template"`), first for a matching query and
-last for an empty query. It is not offered on later lines. Section completion
+first-nonblank-line prefixes of the reserved header, route completion offers a
+`template:` candidate (`kind: "template"`, label
+`Bulk template: one capture per row below`), first for a matching query and
+last for an empty query. It is not offered on later lines, even when a later
+line repeats the same prefix text. Section completion
 covers `@route#prefix`,
 backed by the same scan as `bob capture-sections`. Task-section completion
 covers `@route+id#prefix` and a bare `@route+id#` once the item has body text,
