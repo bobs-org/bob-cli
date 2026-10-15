@@ -1,7 +1,9 @@
 ---
 summary: Ref renames change bundle paths while preserving reference and task identity.
+metadata:
+  status: superseded
+  superseded_by: decisions:reference-renames-keep-identity
 ---
-
 # Ref Rename Keeps Reference Identity
 
 *Accepted · project*
@@ -30,3 +32,5 @@ Evidence: research report
 `research:202610/bob_ref_rename_command/bob_ref_rename_command.md`; epic
 `bob-cli-7x` (`plan:202610/bob_ref_rename.md`); live writer and verification
 phase `bob-cli-7x.4` (`docs/ref.md`, `tests/cli/ref_library/rename.rs`).
+
+Superseded: the earlier bundle-path and task-identity claim is consolidated in [[decisions:reference-renames-keep-identity]], which records the supported scope and identity invariants.
