@@ -418,18 +418,33 @@ pub(super) fn snake_case(text: &str) -> String {
     }
 }
 
+/// Strip one trailing `.md`, `.markdown`, or `.txt` from a title-derived
+/// stem candidate, compared ASCII case-insensitively.
+fn strip_title_extension(title: &str) -> &str {
+    for extension in [".md", ".markdown", ".txt"] {
+        if title.len() >= extension.len()
+            && title[title.len() - extension.len()..]
+                .eq_ignore_ascii_case(extension)
+        {
+            return &title[..title.len() - extension.len()];
+        }
+    }
+    title
+}
+
+/// Derive the filename stem from an extracted title: drop one trailing
+/// `.md`/`.markdown`/`.txt` first, then [`snake_case`].
+pub(super) fn title_stem(title: &str) -> String {
+    snake_case(strip_title_extension(title))
+}
+
 /// Derive the filename stem from a paper title with the short-title
 /// rule: when the text before the first colon is 1-4 words, that prefix
 /// is the short name (`EA-Graph: …` becomes `ea_graph`); otherwise the
 /// first 6 words stand in. The result runs through [`snake_case`], which
 /// caps it at 80 characters.
 pub(super) fn short_title_stem(title: &str) -> String {
-    let title = title
-        .strip_suffix(".md")
-        .or_else(|| title.strip_suffix(".txt"))
-        .or_else(|| title.strip_suffix(".MD"))
-        .or_else(|| title.strip_suffix(".TXT"))
-        .unwrap_or(title);
+    let title = strip_title_extension(title);
     let words: Vec<&str> = title.split_whitespace().collect();
     let prefix: Vec<&str> = match title.find(':') {
         Some(index) => title[..index].split_whitespace().collect(),
@@ -644,6 +659,24 @@ mod tests {
             short_title_stem("Attention Is All You Need.txt"),
             "attention_is_all_you_need",
             "a trailing text extension is removed before title derivation"
+        );
+    }
+
+    #[test]
+    fn title_stem_strips_one_trailing_text_extension() {
+        assert_eq!(title_stem("karpathy/llm-wiki.md"), "karpathy_llm_wiki");
+        assert_eq!(
+            title_stem("karpathy/llm-wiki.Markdown"),
+            "karpathy_llm_wiki"
+        );
+        assert_eq!(title_stem("karpathy/llm-wiki.TXT"), "karpathy_llm_wiki");
+        assert_eq!(
+            title_stem("Attention Is All You Need"),
+            "attention_is_all_you_need"
+        );
+        assert_eq!(
+            short_title_stem("Attention Is All You Need.Md"),
+            "attention_is_all_you_need"
         );
     }
 

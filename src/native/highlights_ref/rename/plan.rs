@@ -1865,7 +1865,7 @@ fn rewrite_own_frontmatter(
     output.push_str(first);
     let mut fields = BTreeSet::new();
     let mut ended = false;
-    while let Some(line) = lines.next() {
+    for line in lines.by_ref() {
         let line_without_ending = line
             .strip_suffix('\n')
             .unwrap_or(line)
@@ -1939,12 +1939,12 @@ fn dirty_touched_paths(
         let path =
             PathBuf::from(String::from_utf8_lossy(&record[3..]).as_ref());
         dirty.insert(path);
-        if status.contains('R') || status.contains('C') {
-            if let Some(previous) = records.next() {
-                dirty.insert(PathBuf::from(
-                    String::from_utf8_lossy(previous).as_ref(),
-                ));
-            }
+        if (status.contains('R') || status.contains('C'))
+            && let Some(previous) = records.next()
+        {
+            dirty.insert(PathBuf::from(
+                String::from_utf8_lossy(previous).as_ref(),
+            ));
         }
     }
     let touched = touched_paths

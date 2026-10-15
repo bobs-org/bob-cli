@@ -352,7 +352,7 @@ pub(super) fn capture_article(
         .name
         .clone()
         .or_else(|| stem_from_url(&web_url))
-        .or_else(|| extracted_title.as_ref().map(|title| snake_case(title)))
+        .or_else(|| extracted_title.as_ref().map(|title| title_stem(title)))
         .filter(|stem| !stem.is_empty())
         .unwrap_or_else(|| {
             format!(

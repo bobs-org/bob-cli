@@ -7,8 +7,9 @@ human, Markdown, or versioned JSON output. `bob ref list` renders
 filtered library views, defaulting to the reading queue (queued and
 started notes). `bob ref show` resolves one or more exact references
 into their metadata, annotations, notes, and tasks. `find`, `list`, and
-`show` are read-only; `find -i` also reads intake PDF markers. `bob ref rename` previews
-a coordinated rename of an unannotated modern reference. `bob ref migrate-zorg`
+`show` are read-only; `find -i` also reads intake PDF markers. `bob ref rename` renames
+an unannotated modern reference's files and updates links (preview with `-d`).
+`bob ref migrate-zorg`
 plans copies of zorg-era `status::` reading records into legacy notes under
 `ref/zorg/`. It is a dry run by default; `-w/--write` applies the plan.
 

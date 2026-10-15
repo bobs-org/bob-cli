@@ -230,7 +230,8 @@ state only.
 Short-title stem: when the text before the first `:` is 1–4 words, that
 prefix is the short name (`EA-Graph: …` becomes `ea_graph`); otherwise the
 first 6 words stand in, run through `snake_case` (capped at 80 chars).
-Trailing `.md` and `.txt` filename extensions are removed first.
+A trailing `.md`, `.markdown`, or `.txt` is dropped first (case-insensitive),
+and the same rule applies to the title-stem fallback.
 `Attention Is All You Need` and `Attention Is All You Need.md` both become
 `attention_is_all_you_need`. URL-derived stems discard trailing opaque hex IDs
 and UUIDs; if the final meaningful URL path segment is itself an opaque ID,

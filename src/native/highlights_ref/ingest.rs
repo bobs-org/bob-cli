@@ -18,7 +18,7 @@ use super::arxiv::ArxivPaper;
 use super::clip_adapter::{
     CaptureRequest, ClipAdapterClient, MetadataOverrides,
 };
-use super::clip_url::{humanize_stem, snake_case, stem_from_url, WebUrl};
+use super::clip_url::{humanize_stem, stem_from_url, title_stem, WebUrl};
 use super::companion::cleanup_audio_on_failure;
 use super::io::vault_relative_path_value;
 use super::listen::{ListenCommand, ListenError, ListenOutput, ListenValues};
@@ -1038,7 +1038,7 @@ fn ingest_article_route(
             super::pdf_meta::pdf_info_metadata(&out_pdf, &stem_hint).0;
     }
     let stem = stem_from_url(url)
-        .or_else(|| extracted_title.as_ref().map(|title| snake_case(title)))
+        .or_else(|| extracted_title.as_ref().map(|title| title_stem(title)))
         .filter(|stem| !stem.is_empty())
         .unwrap_or_else(|| {
             format!(

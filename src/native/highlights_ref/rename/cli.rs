@@ -37,7 +37,7 @@ pub(crate) fn command() -> ClapCommand {
                 .value_name("FORMAT")
                 .value_parser(["human", "json"])
                 .default_value("human")
-                .help("Output format [default: human] [possible values: human, json]"),
+                .help("Output format"),
         )
         .arg(
             Arg::new("lib-dir")
