@@ -241,7 +241,7 @@ fn disabled_rows_explain_duplicate_ids_cycles_and_internal_projects() {
     );
     write_file(
         &vault.join("project.md"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Project ^prj\n- [ ] #task Project owner ^project-owner\n",
+        "---\ntype: [[project]]\nstatus: wip\n---\n- [ ] #task Project ^prj\n- [ ] #task Project owner ^project-owner\n- [ ] #task Other resident ^other\n",
     );
 
     let text = "@owner+owner *";
@@ -265,6 +265,11 @@ fn disabled_rows_explain_duplicate_ids_cycles_and_internal_projects() {
     assert_eq!(
         prj["disabled_reason"],
         "a project cannot depend on its own resident"
+    );
+    let other = candidate_by_text(&json, "Other resident");
+    assert!(
+        other.get("disabled_reason").is_none(),
+        "non-^prj residents stay pickable: {other}"
     );
 }
 

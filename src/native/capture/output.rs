@@ -862,6 +862,15 @@ pub(super) struct PrerequisiteJson {
     pub(super) status_name: String,
     pub(super) text: String,
     pub(super) open: bool,
+    /// True when this prerequisite was already on the Depends-On line.
+    /// Omitted when false so older decoders stay valid.
+    #[serde(skip_serializing_if = "is_false")]
+    pub(super) already_present: bool,
+    /// Pre-write status, present only when this write changed it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) previous_status: Option<char>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) previous_status_name: Option<String>,
 }
 
 /// One BLOCKS-line projection write (`docs/task-dependencies.md` §14.11,
@@ -2152,19 +2161,45 @@ fn parent_under_marker(result: &CaptureItemResult, styler: &Styler) -> String {
         return String::new();
     };
     let current_marker = style_task_status_marker(styler, current);
-    let previous = result.dependency_updates.iter().find(|update| {
-        update.role == DependencyUpdateRole::Dependent
-            && update.dependent_block_id.as_deref()
-                == result.block_id.as_deref()
-            && update.previous_status != current
-    });
-    if let Some(update) = previous {
-        let previous_marker =
-            style_task_status_marker(styler, update.previous_status);
+    let updates: Vec<&DependencyUpdateJson> =
+        if !result.dependency_updates.is_empty() {
+            result.dependency_updates.iter().collect()
+        } else {
+            result.dependency_update.iter().collect()
+        };
+    let previous = updates
+        .iter()
+        .find_map(|update| parent_previous_status(result, update, current));
+    if let Some(previous) = previous {
+        let previous_marker = style_task_status_marker(styler, previous);
         format!("{previous_marker} → {current_marker} ")
     } else {
         format!("{current_marker} ")
     }
+}
+
+/// Pre-capture parent status from whichever relationship changed it:
+/// the parent as `&` dependent, or as a `*` prerequisite that
+/// commitment transfer raised.
+fn parent_previous_status(
+    result: &CaptureItemResult,
+    update: &DependencyUpdateJson,
+    current: char,
+) -> Option<char> {
+    let parent_id = result.block_id.as_deref()?;
+    if update.role == DependencyUpdateRole::Dependent
+        && update.dependent_block_id.as_deref() == Some(parent_id)
+        && update.previous_status != current
+    {
+        return Some(update.previous_status);
+    }
+    update.prerequisites.iter().find_map(|prereq| {
+        let previous = prereq.previous_status?;
+        (prereq.block_id == parent_id
+            && prereq.note == result.relative_target
+            && previous != current)
+            .then_some(previous)
+    })
 }
 
 fn print_human_dependency_updates(result: &CaptureItemResult, styler: &Styler) {
@@ -2257,23 +2292,37 @@ pub(super) fn print_human_dependency_line(
 ) {
     let existing_owner =
         result.kind == "task_dependency" || result.kind == "sub_bullet";
-    let already = update.added == 0 && update.already_present > 0;
-    let verb = if already {
-        "already depends on"
-    } else {
-        match (result.dry_run, existing_owner) {
-            (true, true) => "would now depend on",
-            (false, true) => "now depends on",
-            (true, false) => "would depend on",
-            (false, false) => "depends on",
-        }
-    };
+    let update_already = update.added == 0 && update.already_present > 0;
     for prereq in &update.prerequisites {
-        let marker = style_task_status_marker(styler, prereq.status_symbol);
-        println!(
-            "  ⛓ {verb} \"{}\"  {} ^{}  {marker} {}",
-            prereq.text, prereq.note, prereq.block_id, prereq.status_name,
+        let already = prereq.already_present || update_already;
+        let verb = if already {
+            "already depends on"
+        } else {
+            match (result.dry_run, existing_owner) {
+                (true, true) => "would now depend on",
+                (false, true) => "now depends on",
+                (true, false) => "would depend on",
+                (false, false) => "depends on",
+            }
+        };
+        let mut line = format!(
+            "  ⛓ {verb} \"{}\"  {} ^{}",
+            prereq.text, prereq.note, prereq.block_id,
         );
+        let next = style_task_status_marker(styler, prereq.status_symbol);
+        if let (Some(previous), Some(_)) =
+            (prereq.previous_status, prereq.previous_status_name.as_ref())
+            && previous != prereq.status_symbol
+        {
+            let previous_marker = style_task_status_marker(styler, previous);
+            line.push_str(&format!(
+                "  {previous_marker} → {next} {}",
+                prereq.status_name
+            ));
+        } else {
+            line.push_str(&format!("  {next} {}", prereq.status_name));
+        }
+        println!("{line}");
     }
 }
 

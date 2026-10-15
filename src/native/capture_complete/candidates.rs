@@ -787,27 +787,33 @@ fn relationship_disabled_reason(
     }
 
     let candidate_note = candidate.0.as_str();
+    // `&` candidate is the dependent: refuse only when it is `^prj`
+    // of a recognised project and a typed prerequisite lives in that
+    // note or a descendant. `*` typed blocked task is the dependent:
+    // refuse only when that task is such a `^prj` and the candidate
+    // lives in its note or a descendant. Matches the writer
+    // (`refuse_internal_prj_targets`).
     let project_resident = dependencies.iter().any(|entry| {
         entry.identity.as_ref().is_some_and(|identity| {
-            project_resident_relation(
+            project_cannot_wait_on_resident(
                 bob_dir,
                 discovered,
                 recognized_projects,
                 settings,
                 note_cache,
-                candidate_note,
+                candidate,
                 &identity.0,
             )
         })
     }) || blocked_tasks.iter().any(|entry| {
         entry.identity.as_ref().is_some_and(|identity| {
-            project_resident_relation(
+            project_cannot_wait_on_resident(
                 bob_dir,
                 discovered,
                 recognized_projects,
                 settings,
                 note_cache,
-                &identity.0,
+                identity,
                 candidate_note,
             )
         })
@@ -835,6 +841,29 @@ fn recognized_project_paths(
                 .map(|_| task.note_path.clone())
         })
         .collect()
+}
+
+fn project_cannot_wait_on_resident(
+    bob_dir: &Path,
+    discovered: &capture_dependency_tasks::DependencyTaskResult,
+    recognized_projects: &HashSet<String>,
+    settings: &note_tasks::NoteTaskSettings,
+    note_cache: &mut HashMap<PathBuf, String>,
+    dependent: &capture_dependency_tasks::TaskIdentity,
+    other_note: &str,
+) -> bool {
+    if dependent.1 != "prj" {
+        return false;
+    }
+    project_resident_relation(
+        bob_dir,
+        discovered,
+        recognized_projects,
+        settings,
+        note_cache,
+        &dependent.0,
+        other_note,
+    )
 }
 
 fn project_resident_relation(
@@ -1049,43 +1078,7 @@ pub(super) fn blocked_task_candidates(
 
     let settings = note_tasks::read_settings(bob_dir);
     let mut note_cache: HashMap<PathBuf, String> = HashMap::new();
-    let owner_in_project = if bob_dir.join(&owner_path).is_file() {
-        read_note_cached(bob_dir, &owner_path, &mut note_cache).map(
-            |contents| {
-                project_dependencies::project_ancestors(
-                    &owner_path,
-                    &contents,
-                    &discovered.index,
-                    |path| read_note_cached(bob_dir, path, &mut note_cache),
-                    |path, contents| {
-                        is_recognized_project(
-                            path, contents, bob_dir, &settings,
-                        )
-                    },
-                )
-                .into_iter()
-                .map(|path| capture_dependency_tasks::display_path(&path))
-                .collect::<HashSet<_>>()
-            },
-        )
-    } else {
-        None
-    };
-    let mut recognized_project_paths = HashSet::new();
-    for task in discovered
-        .tasks
-        .iter()
-        .filter(|task| task.block_id.as_deref() == Some("prj") && task.open)
-    {
-        let path = PathBuf::from(&task.note_path);
-        if read_note_cached(bob_dir, &path, &mut note_cache).is_some_and(
-            |contents| {
-                is_recognized_project(&path, &contents, bob_dir, &settings)
-            },
-        ) {
-            recognized_project_paths.insert(task.note_path.clone());
-        }
-    }
+    let recognized_projects = recognized_project_paths(bob_dir, &discovered);
 
     let mut ordered: Vec<(&capture_dependency_tasks::DependencyTask, u32)> =
         discovered
@@ -1126,12 +1119,17 @@ pub(super) fn blocked_task_candidates(
                         })
                     })
             });
-            let internal_project = recognized_project_paths
-                .contains(&task.note_path)
-                && (owner_path_display == task.note_path
-                    || owner_in_project.as_ref().is_some_and(|projects| {
-                        projects.contains(&task.note_path)
-                    }));
+            let internal_project = key.as_ref().is_some_and(|identity| {
+                project_cannot_wait_on_resident(
+                    bob_dir,
+                    &discovered,
+                    &recognized_projects,
+                    &settings,
+                    &mut note_cache,
+                    identity,
+                    &owner_path_display,
+                )
+            });
             let disabled_reason = if is_self {
                 Some("the owner task itself".to_string())
             } else if task.duplicate_id {

@@ -2306,15 +2306,18 @@ pub(super) fn parse_editor_item_with<'a>(
         {
             let owner =
                 local_destination_marker.as_deref().unwrap_or("@route+id");
-            let (offending, range) = if let Some(span) =
-                spans.iter().find(|span| {
+            let (offending, range) = if let Some(span) = spans
+                .iter()
+                .filter(|span| {
                     matches!(
                         span.kind,
                         SpanKind::Schedule
                             | SpanKind::Priority
                             | SpanKind::Clipboard
                     )
-                }) {
+                })
+                .min_by_key(|span| span.start)
+            {
                 (
                     item.source.get(span.start..span.end).unwrap_or("p:2"),
                     Some((span.start, span.end)),

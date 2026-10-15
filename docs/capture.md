@@ -1273,7 +1273,7 @@ decoded `query`, the lexical `owner`, and the vault-wide candidate list:
   "context": "task_dependency",
   "candidates": [],
   "query": "foo",
-  "owner": { "kind": "new_task" }
+  "owner": { "kind": "new_task", "text": "Buy Groceries!" }
 }
 ```
 
@@ -1500,7 +1500,7 @@ open-editable candidate list:
   "context": "blocked_task",
   "candidates": [],
   "query": "jo",
-  "owner": { "kind": "new_task" }
+  "owner": { "kind": "new_task", "text": "Ask Kelly" }
 }
 ```
 
@@ -1885,7 +1885,7 @@ status changes. A successful live example is:
 ```text
 ✓ updated  body.md
   [/] → [?]  Exercise  ^excercise
-  ⛓ now depends on "Buy shoes"  foo.md ^bar  [ ] Ready
+  ⛓ now depends on "Buy shoes"  foo.md ^bar  [ ] → [/] In Progress
   🧱 now blocks "Do cleanup tasks"  job.md ^cleanup  [*] → [?] Blocked
   − removed its Task Link from BODY 10:10–10:35 (running) · deleted the empty Pomodoro
 ```
@@ -4571,6 +4571,13 @@ Omitted when empty. Dry-run JSON equals live JSON apart from `dry_run`.
   - `previous_status` and `previous_status_name`
   - `blocked_residents`, the count of `^prj` residents newly blocked
     (omitted when 0)
+  Each `prerequisites[]` row keeps `note`, `block_id`, `link`,
+  `status_symbol`, `status_name`, `text`, and `open`. `status_symbol`
+  and `status_name` are the post-write values. Additive fields:
+  - `already_present`: `true` when this prerequisite was already on
+    the Depends-On line (omitted when false)
+  - `previous_status` and `previous_status_name`: present only when
+    this write changed the prerequisite's status
 - `consumed_links[]`: one row per live Task Link this item consumed.
   Fields: `{day_file, line, link, note, block_id, text, action,
   pomodoro: {line, name?, time_range?, status, removed}}`.

@@ -1565,16 +1565,57 @@ pub(super) struct PlannedDependencyUpdate {
     pub(super) blocks: BlocksMirrorReports,
 }
 
-fn prerequisite_json(prereq: &ResolvedPrerequisite) -> PrerequisiteJson {
+fn prerequisite_json(
+    prereq: &ResolvedPrerequisite,
+    already_present: bool,
+    final_status: Option<(char, String)>,
+) -> PrerequisiteJson {
+    let (status_symbol, status_name) = final_status
+        .unwrap_or_else(|| (prereq.status_symbol, prereq.status_name.clone()));
+    let changed = status_symbol != prereq.status_symbol;
     PrerequisiteJson {
         note: display_relative(&prereq.relative),
         block_id: prereq.block_id.clone(),
         link: prereq.link_text.clone(),
-        status_symbol: prereq.status_symbol,
-        status_name: prereq.status_name.clone(),
+        status_symbol,
+        status_name,
         text: prereq.text.clone(),
         open: prereq.open,
+        already_present,
+        previous_status: changed.then_some(prereq.status_symbol),
+        previous_status_name: changed.then(|| prereq.status_name.clone()),
     }
+}
+
+fn staged_prerequisite_status(
+    ctx: &DependencyContext,
+    planner: &mut CaptureBatchPlanner,
+    bob_dir: &Path,
+    prereq: &ResolvedPrerequisite,
+) -> Option<(char, String)> {
+    let absolute = absolute_note(bob_dir, &prereq.relative);
+    let contents = current_note_text(planner, &absolute).ok()?;
+    let scan = note_tasks::scan(&contents, ctx.settings());
+    let label = display_relative(&prereq.relative);
+    let task = lookup_staged_task(&scan, &label, &prereq.block_id).ok()?;
+    Some((task.status_symbol, task.status_name.clone()))
+}
+
+fn prerequisite_jsons(
+    ctx: &DependencyContext,
+    planner: &mut CaptureBatchPlanner,
+    bob_dir: &Path,
+    prereqs: &[ResolvedPrerequisite],
+    already: impl Fn(&ResolvedPrerequisite) -> bool,
+) -> Vec<PrerequisiteJson> {
+    prereqs
+        .iter()
+        .map(|prereq| {
+            let final_status =
+                staged_prerequisite_status(ctx, planner, bob_dir, prereq);
+            prerequisite_json(prereq, already(prereq), final_status)
+        })
+        .collect()
 }
 
 fn target_block_ref(
@@ -2683,7 +2724,18 @@ pub(super) fn plan_existing_task_dependencies(
         added,
         already_present,
         open_prerequisites: open_count,
-        prerequisites: prereqs.iter().map(prerequisite_json).collect(),
+        prerequisites: prerequisite_jsons(
+            ctx,
+            planner,
+            bob_dir,
+            &prereqs,
+            |prereq| {
+                pre_existing.contains(&(
+                    display_relative(&prereq.relative),
+                    prereq.block_id.clone(),
+                ))
+            },
+        ),
         dependent_status: status_char,
         dependent_status_name: status_name,
         status_changed,
@@ -2930,7 +2982,13 @@ pub(super) fn plan_new_task_dependencies(
         added: prereqs.len(),
         already_present: repeats,
         open_prerequisites: open_count,
-        prerequisites: prereqs.iter().map(prerequisite_json).collect(),
+        prerequisites: prerequisite_jsons(
+            ctx,
+            planner,
+            bob_dir,
+            &prereqs,
+            |_| false,
+        ),
         dependent_status: status_char,
         dependent_status_name: status_name,
         status_changed,

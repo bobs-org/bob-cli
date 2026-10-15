@@ -113,16 +113,26 @@ fn capture_dry_human(vault: &Path, day: &Path, draft: &str) -> String {
 }
 
 fn capture_fail(vault: &Path, day: &Path, draft: &str) -> std::process::Output {
-    bob_command()
+    capture_fail_flags(vault, day, &[], draft)
+}
+
+fn capture_fail_flags(
+    vault: &Path,
+    day: &Path,
+    flags: &[&str],
+    draft: &str,
+) -> std::process::Output {
+    let mut command = bob_command();
+    command
         .env("BOB_NOW", NOW)
         .env("BOB_DAY_FILE", day)
+        .env("NO_COLOR", "1")
         .arg("capture")
         .arg("-b")
-        .arg(vault)
-        .arg("--")
-        .arg(draft)
-        .output()
-        .expect("run bob capture")
+        .arg(vault);
+    command.args(flags);
+    command.arg("--").arg(draft);
+    command.output().expect("run bob capture")
 }
 
 fn capture_stdin(
@@ -385,6 +395,34 @@ fn rx7_closed_star_owner_is_refused() {
             assert_eq!(read(&vault, "job.md"), before_job, "{draft}");
         }
     }
+
+    let message_forced = "task ^old in old.md is Done; a finished task cannot block another task (reopen it first)";
+    let (_temp, vault, day) = setup("bob-cli-rx7-forced");
+    write_file(&vault.join("old.md"), "- [x] #task Old thing ^old\n");
+    write_file(
+        &vault.join("job.md"),
+        "- [*] #task Do cleanup tasks ^cleanup\n",
+    );
+    let before_old = read(&vault, "old.md");
+    let before_job = read(&vault, "job.md");
+    let output = capture_fail_flags(
+        &vault,
+        &day,
+        &["--route", "old", "--task", "old"],
+        "Note *job:cleanup",
+    );
+    assert!(
+        !output.status.success(),
+        "forced closed * owner must fail:\n{}",
+        format_output(&output)
+    );
+    assert!(
+        stderr(&output).contains(message_forced),
+        "{}",
+        format_output(&output)
+    );
+    assert_eq!(read(&vault, "old.md"), before_old);
+    assert_eq!(read(&vault, "job.md"), before_job);
 }
 
 // RX8
@@ -439,17 +477,34 @@ fn rx8_unresolved_plus_selector_never_creates_a_task() {
 // RX9
 #[test]
 fn rx9_relationship_needs_text_in_parse_and_execute() {
-    let expected = "`p:2` needs task text: `@body+excercise` with no text only adds task relationships; add text to write a sub-bullet (`Note @body+excercise &foo:bar p:2`)";
-    for draft in [
-        "@body+excercise &foo:bar p:2",
-        "@body+excercise &foo:bar s:3",
-        "@body+excercise &foo:bar %",
-    ] {
+    let cases = [
+        (
+            "@body+excercise &foo:bar p:2",
+            "`p:2` needs task text: `@body+excercise` with no text only adds task relationships; add text to write a sub-bullet (`Note @body+excercise &foo:bar p:2`)",
+        ),
+        (
+            "@body+excercise &foo:bar s:3",
+            "`s:3` needs task text: `@body+excercise` with no text only adds task relationships; add text to write a sub-bullet (`Note @body+excercise &foo:bar s:3`)",
+        ),
+        (
+            "@body+excercise &foo:bar %",
+            "`%` needs task text: `@body+excercise` with no text only adds task relationships; add text to write a sub-bullet (`Note @body+excercise &foo:bar %`)",
+        ),
+        (
+            "@body+excercise &foo:bar p:2 s:3",
+            "`p:2` needs task text: `@body+excercise` with no text only adds task relationships; add text to write a sub-bullet (`Note @body+excercise &foo:bar p:2`)",
+        ),
+    ];
+    for (draft, expected) in cases {
         let parsed = parse_json(draft);
         assert_eq!(
             parsed["diagnostics"][0]["code"], "relationship_needs_text",
             "{draft}"
         );
+        let parse_message = parsed["diagnostics"][0]["message"]
+            .as_str()
+            .unwrap_or_default();
+        assert_eq!(parse_message, expected, "{draft}");
         let (_temp, vault, day) = setup("bob-cli-rx9");
         seed_standard(&vault);
         let before = read(&vault, "body.md");
@@ -459,19 +514,12 @@ fn rx9_relationship_needs_text_in_parse_and_execute() {
             "{draft}: {}",
             format_output(&output)
         );
-        if draft.contains("p:2") {
-            assert!(
-                stderr(&output).contains(expected),
-                "{draft}: {}",
-                format_output(&output)
-            );
-        } else {
-            assert!(
-                stderr(&output).contains("needs task text"),
-                "{draft}: {}",
-                format_output(&output)
-            );
-        }
+        let execute_stderr = stderr(&output);
+        assert!(
+            execute_stderr.contains(parse_message),
+            "parse and execute must name the same token for {draft}:\n{}",
+            format_output(&output)
+        );
         assert_eq!(read(&vault, "body.md"), before, "{draft}");
     }
 }
@@ -557,6 +605,30 @@ fn rx12_sub_bullet_prints_children_then_relationship() {
             || out.contains("under [ ] → [?]  Exercise"),
         "under row shows the parent status change:\n{out}"
     );
+
+    let star_draft = "Note @plain+plain *job:cleanup";
+    let (_temp, vault, day) = setup("bob-cli-rx12-star");
+    write_file(&vault.join("plain.md"), "- [ ] #task Plain ^plain\n");
+    write_file(
+        &vault.join("job.md"),
+        "- [*] #task Do cleanup tasks ^cleanup\n",
+    );
+    let dry = capture_human_flags(&vault, &day, &["--dry-run"], star_draft);
+    assert_success(&dry);
+    let dry_out = stdout(&dry);
+    assert!(
+        dry_out.contains("under [ ] → [*] Plain")
+            || dry_out.contains("under [ ] → [*]  Plain"),
+        "dry-run under row shows the * parent promotion:\n{dry_out}"
+    );
+    let live = capture_human(&vault, &day, star_draft);
+    assert_success(&live);
+    let live_out = stdout(&live);
+    assert!(
+        live_out.contains("under [ ] → [*] Plain")
+            || live_out.contains("under [ ] → [*]  Plain"),
+        "live under row shows the * parent promotion:\n{live_out}"
+    );
 }
 
 // RX13
@@ -611,7 +683,12 @@ fn rx14_in_progress_owner_consumes_running_link() {
     let out = capture_dry_human(&vault, &day, draft);
     assert!(out.contains("would update  body.md"), "{out}");
     assert!(out.contains("[/] → [?]  Exercise"), "{out}");
-    assert!(out.contains("would now depend on \"Buy shoes\""), "{out}");
+    assert!(
+        out.contains(
+            "would now depend on \"Buy shoes\"  foo.md ^bar  [ ] → [/] In Progress"
+        ),
+        "{out}"
+    );
     assert!(
         out.contains(
             "would remove its Task Link from BODY 10:10–10:35 (running)"
@@ -621,6 +698,12 @@ fn rx14_in_progress_owner_consumes_running_link() {
 
     let json = capture_json(&vault, &day, draft);
     assert_eq!(json["kind"], "task_dependency", "{json}");
+    let prereq = &json["dependency_update"]["prerequisites"][0];
+    assert_eq!(prereq["status_symbol"], "/", "{json}");
+    assert_eq!(prereq["status_name"], "In Progress", "{json}");
+    assert_eq!(prereq["previous_status"], " ", "{json}");
+    assert_eq!(prereq["previous_status_name"], "Ready", "{json}");
+    assert!(prereq.get("already_present").is_none(), "{json}");
     assert!(
         !json["consumed_links"].as_array().unwrap().is_empty(),
         "{json}"
@@ -652,6 +735,53 @@ fn rx15_repeat_is_already_present_noop() {
     assert!(
         !out.contains('→'),
         "already-present has no status arrow:\n{out}"
+    );
+    let repeat_json = capture_json(&vault, &day, "&foo:bar @body+excercise");
+    let shoes = &repeat_json["dependency_update"]["prerequisites"][0];
+    assert_eq!(shoes["already_present"], true, "{repeat_json}");
+    assert!(shoes.get("previous_status").is_none(), "{repeat_json}");
+
+    write_file(
+        &vault.join("foo.md"),
+        "- [ ] #task Buy shoes ^bar\n- [ ] #task Buy socks ^socks\n",
+    );
+    write_file(&vault.join("body.md"), "- [ ] #task Exercise ^excercise\n");
+    assert_success(&capture_human(&vault, &day, "@body+excercise &foo:bar"));
+    let mixed_draft = "@body+excercise &foo:bar &foo:socks";
+    let mixed_json_output = capture_human_flags(
+        &vault,
+        &day,
+        &["-f", "json", "--dry-run"],
+        mixed_draft,
+    );
+    assert_success(&mixed_json_output);
+    let mixed_json: serde_json::Value =
+        serde_json::from_str(stdout(&mixed_json_output).trim())
+            .expect("mixed dry-run JSON");
+    let mixed_prereqs = mixed_json["dependency_update"]["prerequisites"]
+        .as_array()
+        .expect("prerequisites");
+    let by_id = |id: &str| {
+        mixed_prereqs
+            .iter()
+            .find(|row| row["block_id"] == id)
+            .unwrap_or_else(|| panic!("missing {id} in {mixed_json}"))
+    };
+    assert_eq!(by_id("bar")["already_present"], true, "{mixed_json}");
+    assert!(
+        by_id("socks").get("already_present").is_none(),
+        "{mixed_json}"
+    );
+    let mixed = capture_human(&vault, &day, mixed_draft);
+    assert_success(&mixed);
+    let mixed_out = stdout(&mixed);
+    assert!(
+        mixed_out.contains("already depends on \"Buy shoes\""),
+        "{mixed_out}"
+    );
+    assert!(
+        mixed_out.contains("now depends on \"Buy socks\""),
+        "{mixed_out}"
     );
 
     write_file(
@@ -694,6 +824,10 @@ fn rx16_new_task_prints_per_prerequisite_row() {
     assert!(
         out.contains("⛓ depends on \"Buy shoes\"  foo.md ^bar  [ ] Ready"),
         "{out}"
+    );
+    assert!(
+        !out.contains('→'),
+        "new-task prerequisite with no transfer has no status arrow:\n{out}"
     );
     let inbox = read(&vault, "mac_inbox.md");
     assert!(inbox.contains("Buy milk"), "{inbox}");

@@ -2241,6 +2241,7 @@ fn relationship_only_owner_refuses_text_extras() {
         ("@body+excercise &foo:bar p:2", "p:2"),
         ("@body+excercise &foo:bar s:3", "s:3"),
         ("@body+excercise &foo:bar %", "%"),
+        ("@body+excercise &foo:bar p:2 s:3", "p:2"),
     ] {
         let expected =
             relationship_needs_text_error(token, owner, &[rel.to_string()]);

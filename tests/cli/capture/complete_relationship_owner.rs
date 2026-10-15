@@ -44,12 +44,15 @@ fn fixture() -> (TempDir, std::path::PathBuf) {
             "status: wip\n",
             "---\n",
             "- [ ] #task Project root ^prj\n",
+            "- [ ] #task Other resident ^other\n",
         ),
     );
     write_file(
         &vault.join("resident.md"),
         concat!(
             "---\n",
+            "type: [[project]]\n",
+            "status: wip\n",
             "parent: [[project]]\n",
             "---\n",
             "- [ ] #task Resident ^resident\n",
@@ -243,19 +246,68 @@ fn scoped_parent_picker_applies_the_same_relationship_guards() {
 }
 
 #[test]
-fn project_cannot_depend_on_its_resident_and_unmodified_shape_is_frozen() {
+fn caret_star_picker_disables_the_owner_task_itself() {
     let (temp, day_file) = fixture();
     let vault = temp.path().join("vault");
-    let text = "&resident:resident +";
+    let text = "^body:excercise *";
     let result = complete_json(&vault, &day_file, text, text.len());
-    let project = result["candidates"]
+    assert_eq!(result["context"], "blocked_task");
+    let exercise = result["candidates"]
         .as_array()
         .expect("candidate array")
         .iter()
-        .find(|row| row["text"] == "Project root")
-        .expect("project task candidate");
+        .find(|row| row["text"] == "Exercise")
+        .expect("Exercise candidate");
+    assert_eq!(exercise["disabled_reason"], "the owner task itself");
+    assert_eq!(exercise["replacement"], "");
+}
+
+#[test]
+fn project_cannot_depend_on_its_resident_and_unmodified_shape_is_frozen() {
+    let (temp, day_file) = fixture();
+    let vault = temp.path().join("vault");
+    let candidate = |result: &serde_json::Value, name: &str| {
+        result["candidates"]
+            .as_array()
+            .expect("candidate array")
+            .iter()
+            .find(|row| row["text"] == name)
+            .unwrap_or_else(|| panic!("missing candidate {name}"))
+            .clone()
+    };
+
+    let text = "&resident:resident +";
+    let result = complete_json(&vault, &day_file, text, text.len());
     assert_eq!(
-        project["disabled_reason"],
+        candidate(&result, "Project root")["disabled_reason"],
+        "a project cannot depend on its own resident"
+    );
+    assert!(
+        candidate(&result, "Other resident")
+            .get("disabled_reason")
+            .is_none(),
+        "a non-^prj project resident can depend on another resident: {}",
+        candidate(&result, "Other resident")
+    );
+
+    let text = "*project:other +";
+    let result = complete_json(&vault, &day_file, text, text.len());
+    assert!(
+        candidate(&result, "Project root")
+            .get("disabled_reason")
+            .is_none(),
+        "^prj can own a * of another resident: {}",
+        candidate(&result, "Project root")
+    );
+
+    let text = "*project:prj +";
+    let result = complete_json(&vault, &day_file, text, text.len());
+    assert_eq!(
+        candidate(&result, "Other resident")["disabled_reason"],
+        "a project cannot depend on its own resident"
+    );
+    assert_eq!(
+        candidate(&result, "Resident")["disabled_reason"],
         "a project cannot depend on its own resident"
     );
 
