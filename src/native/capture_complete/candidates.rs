@@ -43,7 +43,7 @@ pub(super) fn route_candidates(
                 replacement: target.route.clone(),
                 route: target.route,
                 label: target.label,
-                kind: target.kind,
+                kind: target.kind.into(),
                 status: target.status,
                 match_kind,
             })

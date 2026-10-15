@@ -33,7 +33,7 @@ pub(super) struct RouteCandidate {
     pub(super) replacement: String,
     pub(super) route: String,
     pub(super) label: String,
-    pub(super) kind: CaptureTargetKind,
+    pub(super) kind: RouteCandidateKind,
     pub(super) status: Option<String>,
     /// Additive alias-match marker: `Some("alias")` when the query matched
     /// a `project_name_aliases` entry and `replacement`/`route` carry the
@@ -41,6 +41,25 @@ pub(super) struct RouteCandidate {
     /// is unchanged for older inputs.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) match_kind: Option<&'static str>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum RouteCandidateKind {
+    Inbox,
+    Area,
+    Project,
+    Template,
+}
+
+impl From<CaptureTargetKind> for RouteCandidateKind {
+    fn from(kind: CaptureTargetKind) -> Self {
+        match kind {
+            CaptureTargetKind::Inbox => Self::Inbox,
+            CaptureTargetKind::Area => Self::Area,
+            CaptureTargetKind::Project => Self::Project,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -444,6 +463,10 @@ pub(super) enum Candidates {
 }
 
 impl Candidates {
+    pub(super) fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     pub(super) fn len(&self) -> usize {
         match self {
             Self::Route(items) => items.len(),

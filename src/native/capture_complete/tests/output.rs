@@ -3,7 +3,7 @@ use super::{
         cli::build_cli,
         model::{
             Candidates, CaptureCompleteResult, Replacement, RouteCandidate,
-            SCHEMA_VERSION,
+            RouteCandidateKind, SCHEMA_VERSION,
         },
         pomodoros::pomodoro_name_candidates_from_entries,
         render::print_human_success_with_styler,
@@ -12,8 +12,7 @@ use super::{
     result, write_file, TempDir,
 };
 use crate::native::{
-    capture_language::CompletionContext, capture_pomodoros,
-    capture_targets::CaptureTargetKind, style::Styler,
+    capture_language::CompletionContext, capture_pomodoros, style::Styler,
 };
 #[test]
 fn build_cli_renders_without_panicking() {
@@ -240,7 +239,7 @@ fn json_shape_is_stable() {
             replacement: "cash".to_string(),
             route: "cash".to_string(),
             label: "cash.md".to_string(),
-            kind: CaptureTargetKind::Area,
+            kind: RouteCandidateKind::Area,
             status: None,
             match_kind: None,
         }]),
@@ -397,7 +396,7 @@ fn human_output_is_plain_without_color() {
                 replacement: "cash".to_string(),
                 route: "cash".to_string(),
                 label: "cash.md".to_string(),
-                kind: CaptureTargetKind::Area,
+                kind: RouteCandidateKind::Area,
                 status: None,
                 match_kind: None,
             }]),

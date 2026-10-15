@@ -11,7 +11,7 @@ use super::{
     model::{
         Candidates, CaptureCompleteResult, CompleteError, CompletionOwner,
         OverrideCompletion, PickerDescriptor, PickerKind, PickerScope,
-        Replacement, SCHEMA_VERSION,
+        Replacement, RouteCandidate, RouteCandidateKind, SCHEMA_VERSION,
     },
     pomodoros::{
         pomodoro_name_candidates, pomodoro_start_name_candidates,
@@ -35,6 +35,20 @@ pub(super) fn cursor_in_close_log_text(raw_text: &str, cursor: usize) -> bool {
 }
 
 pub(super) fn build_result(
+    bob_dir: &Path,
+    raw_text: &str,
+    cursor: usize,
+    all_tasks: bool,
+) -> Result<CaptureCompleteResult, CompleteError> {
+    if let Some(result) =
+        template_completion_gate(bob_dir, raw_text, cursor, all_tasks)?
+    {
+        return Ok(result);
+    }
+    build_result_inner(bob_dir, raw_text, cursor, all_tasks)
+}
+
+fn build_result_inner(
     bob_dir: &Path,
     raw_text: &str,
     cursor: usize,
@@ -390,6 +404,114 @@ pub(super) fn build_result(
         owner,
         picker,
     })
+}
+
+/// Template completion uses a same-length masked draft so template syntax and
+/// row values never become picker queries. Partial first-line headers remain
+/// ordinary route completion, with a synthetic `template:` candidate.
+fn template_completion_gate(
+    bob_dir: &Path,
+    raw_text: &str,
+    cursor: usize,
+    all_tasks: bool,
+) -> Result<Option<CaptureCompleteResult>, CompleteError> {
+    let partial_header = partial_template_header(raw_text, cursor);
+    let analysis = crate::native::capture_language::template::analyze(raw_text);
+    if analysis.header.is_none() {
+        if let Some((start, end, query)) = partial_header {
+            let mut result =
+                build_result_inner(bob_dir, raw_text, cursor, all_tasks)?;
+            if result.context == Some(CompletionContext::Route)
+                && let Candidates::Route(ref mut candidates) = result.candidates
+            {
+                let template = RouteCandidate {
+                    replacement: "template:".to_string(),
+                    route: "template:".to_string(),
+                    label: "Bulk template".to_string(),
+                    kind: RouteCandidateKind::Template,
+                    status: None,
+                    match_kind: None,
+                };
+                if "template:".starts_with(&query.to_ascii_lowercase()) {
+                    let at = if query.is_empty() {
+                        candidates.len()
+                    } else {
+                        0
+                    };
+                    candidates.insert(at, template);
+                    result.replacement = Replacement { start, end };
+                }
+            }
+            return Ok(Some(result));
+        }
+        return Ok(None);
+    }
+
+    let (header_range, _) = analysis.header.as_ref().expect("checked header");
+    if (header_range.start..=header_range.end).contains(&cursor)
+        || analysis
+            .rows
+            .iter()
+            .any(|row| row.range.start <= cursor && cursor <= row.range.end)
+        || analysis.placeholders.iter().any(|placeholder| {
+            placeholder.range.start <= cursor && cursor <= placeholder.range.end
+        })
+    {
+        return Ok(Some(CaptureCompleteResult::empty(cursor)));
+    }
+
+    let masked = crate::native::capture_language::template::masked(raw_text);
+    let result = build_result_inner(bob_dir, &masked, cursor, all_tasks)?;
+    if matches!(
+        result.context,
+        Some(
+            CompletionContext::PomodoroBlockId
+                | CompletionContext::TaskBlockId
+                | CompletionContext::ProjectTaskBlockId
+        )
+    ) || analysis.placeholders.iter().any(|placeholder| {
+        result.replacement.start < placeholder.range.end
+            && placeholder.range.start < result.replacement.end
+    }) {
+        return Ok(Some(CaptureCompleteResult::empty(cursor)));
+    }
+    Ok(Some(result))
+}
+
+fn partial_template_header(
+    raw: &str,
+    cursor: usize,
+) -> Option<(usize, usize, String)> {
+    if cursor > raw.len() || !raw.is_char_boundary(cursor) {
+        return None;
+    }
+    let line_start = raw[..cursor].rfind(['\n', '\r']).map_or(0, |i| i + 1);
+    let line_end = raw[cursor..]
+        .find(['\n', '\r'])
+        .map_or(raw.len(), |i| cursor + i);
+    let line = &raw[line_start..line_end];
+    let first_nonblank = raw
+        .split(['\n', '\r'])
+        .find(|line| !line.trim_matches([' ', '\t']).is_empty())?;
+    if line.trim_matches([' ', '\t'])
+        != first_nonblank.trim_matches([' ', '\t'])
+    {
+        return None;
+    }
+    let trimmed_start = line.len() - line.trim_start_matches([' ', '\t']).len();
+    let content = &line[trimmed_start..];
+    if !"@@template:".starts_with(&content.to_ascii_lowercase())
+        || content.len() < 2
+        || content.to_ascii_lowercase() == "@@template:"
+    {
+        return None;
+    }
+    let query = content.strip_prefix("@@")?;
+    Some((
+        line_start + trimmed_start + 2,
+        cursor.min(line_end),
+        query.to_string(),
+    ))
 }
 
 fn completion_owner(

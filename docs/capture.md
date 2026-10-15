@@ -5239,6 +5239,10 @@ stream. Missing `TEXT`, invalid options, or a cursor outside `TEXT` or
 inside a UTF-8 character return exit 2. Other draft text succeeds, with
 `changed: false` when nothing needed to change.
 
+Template drafts are never rewritten: `capture-rewrite` returns
+`changed: false`, with no rule or edits, so it cannot absorb `@@` or toggle a
+template marker.
+
 **Block-ID separator toggle.** Typing `^` immediately after a complete
 plain `@route:id`, or `:` immediately after `@route^id`, consumes that
 character and swaps the separator. `--cursor` is required: only the token
@@ -5406,7 +5410,15 @@ completion covers `@@route+fragment` the same way it covers `@route+fragment`,
 including `--all-tasks` missing-ID candidates. An inherited global route also
 becomes the current note for same-note wikilink heading/block completion unless
 that item overrides it. Route completion is backed by the same
-scan as `bob capture-targets`. Section completion covers `@route#prefix`,
+scan as `bob capture-targets`. For a template draft, completion runs against
+the masked template: the header, rows, and placeholders return empty success,
+while route, section, Pomodoro-name, dependency, and wikilink pickers in the
+template body remain available. Block-ID contexts and replacements that
+overlap a placeholder return empty success. On `@@`, `@@te`, and other
+first-line prefixes of the reserved header, route completion offers a
+`template:` candidate (`kind: "template"`), first for a matching query and
+last for an empty query. It is not offered on later lines. Section completion
+covers `@route#prefix`,
 backed by the same scan as `bob capture-sections`. Task-section completion
 covers `@route+id#prefix` and a bare `@route+id#` once the item has body text,
 backed by the same scanner as `bob capture-task-sections`; the candidate

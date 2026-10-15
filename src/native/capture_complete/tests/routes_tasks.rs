@@ -2,10 +2,7 @@ use super::{
     super::model::{Candidates, Replacement},
     result, result_all, write_file, write_settings, TempDir,
 };
-use crate::native::{
-    capture_block_ids, capture_language::CompletionContext,
-    capture_targets::CaptureTargetKind,
-};
+use crate::native::{capture_block_ids, capture_language::CompletionContext};
 #[test]
 fn route_completion_ranks_prefix_matches_before_substring_matches() {
     let temp = TempDir::new("bob-cli-capture-complete-routes");
@@ -68,7 +65,45 @@ fn route_completion_lists_every_target_for_an_empty_query() {
     };
     assert_eq!(routes.len(), 1);
     assert_eq!(routes[0].route, "mac_inbox");
-    assert_eq!(routes[0].kind, CaptureTargetKind::Inbox);
+    assert_eq!(
+        routes[0].kind,
+        super::super::model::RouteCandidateKind::Inbox
+    );
+}
+
+#[test]
+fn template_header_completion_is_offered_first_for_prefix_and_last_for_empty_query(
+) {
+    use super::super::model::RouteCandidateKind;
+
+    let temp = TempDir::new("bob-cli-capture-complete-template-header");
+    let prefix = result(temp.path(), "@@te", 4);
+    let Candidates::Route(routes) = &prefix.candidates else {
+        panic!("expected route candidates");
+    };
+    assert_eq!(routes[0].kind, RouteCandidateKind::Template);
+    assert_eq!(routes[0].replacement, "template:");
+    assert_eq!(prefix.replacement, Replacement { start: 2, end: 4 });
+
+    let empty = result(temp.path(), "@@", 2);
+    let Candidates::Route(routes) = &empty.candidates else {
+        panic!("expected route candidates");
+    };
+    assert_eq!(routes.last().unwrap().kind, RouteCandidateKind::Template);
+}
+
+#[test]
+fn template_completion_suppresses_header_rows_and_placeholders() {
+    let temp = TempDir::new("bob-cli-capture-complete-template-gate");
+    for (raw, cursor) in [
+        ("@@template:\n@not-a-route", 8),
+        ("@@template:\nBuy {0} @not-a-route\n\nrow", 37),
+        ("@@template:\nBuy {0} @not-a-route\n\nrow", 17),
+    ] {
+        let value = result(temp.path(), raw, cursor);
+        assert!(value.context.is_none(), "{raw:?} at {cursor}: {value:?}");
+        assert!(value.candidates.is_empty());
+    }
 }
 
 #[test]

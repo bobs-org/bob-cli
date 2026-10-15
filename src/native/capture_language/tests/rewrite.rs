@@ -117,6 +117,16 @@ fn rewrite_draft_is_a_no_op_without_a_bare_at_at() {
 }
 
 #[test]
+fn rewrite_draft_leaves_template_drafts_untouched() {
+    let raw = "@@template:\nDo work @file:{0}^\n\nrow";
+    let rewrite =
+        rewrite_draft(raw, Some("@@template:\nDo work @file:{0}^".len()));
+    assert_eq!(rewrite.rule, None);
+    assert!(rewrite.edits.is_empty());
+    assert_eq!(rewrite.text, raw);
+}
+
+#[test]
 fn rewrite_draft_selects_the_bare_at_at_under_the_cursor_else_the_last() {
     let raw = "Buy milk @dev @@ @@";
     let claimed_start = |rewrite: &DraftRewrite| {

@@ -56,7 +56,7 @@ pub(super) fn print_human_success_with_styler(
         println!("  {}  {:?}", styler.dim("query"), query);
     }
 
-    if result.candidates.len() == 0 {
+    if result.candidates.is_empty() {
         println!();
         println!("  No candidates found.");
         print_warnings(result, styler);

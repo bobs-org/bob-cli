@@ -73,6 +73,9 @@ pub(crate) fn rewrite_draft(
     raw_text: &str,
     cursor: Option<usize>,
 ) -> DraftRewrite {
+    if super::template::analyze(raw_text).header.is_some() {
+        return unchanged_rewrite(raw_text, cursor, Vec::new());
+    }
     if let Some(position) = cursor
         && let Some(rewrite) = switch_block_id_separator(raw_text, position)
     {

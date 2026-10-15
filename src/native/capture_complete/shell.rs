@@ -7,14 +7,13 @@ use super::{
         task_complete_candidates, task_link_candidates, task_parent_candidates,
         task_section_candidates, TaskSearch,
     },
-    model::Candidates,
+    model::{Candidates, RouteCandidateKind},
     pomodoros::{pomodoro_name_candidates, pomodoro_start_name_candidates},
 };
 use crate::native::{
     capture, capture_block_ids, capture_completable_tasks,
     capture_language::{self, CompletionContext},
     capture_links,
-    capture_targets::CaptureTargetKind,
 };
 
 use super::candidates::dependency_candidates;
@@ -53,6 +52,12 @@ pub(crate) fn shell_completion(
     raw_text: &str,
     cursor: usize,
 ) -> Result<Option<ShellCompletion>, String> {
+    if crate::native::capture_language::template::analyze(raw_text)
+        .header
+        .is_some()
+    {
+        return Ok(None);
+    }
     if raw_text.contains(['\n', '\r']) {
         return Ok(None);
     }
@@ -116,18 +121,21 @@ pub(crate) fn shell_completion(
                     continue;
                 }
                 let (group, description) = match item.kind {
-                    CaptureTargetKind::Inbox => (
+                    RouteCandidateKind::Inbox => (
                         "inbox",
                         "inbox \u{00B7} default capture target".to_string(),
                     ),
-                    CaptureTargetKind::Area => ("areas", "area".to_string()),
-                    CaptureTargetKind::Project => (
+                    RouteCandidateKind::Area => ("areas", "area".to_string()),
+                    RouteCandidateKind::Project => (
                         "projects",
                         item.status
                             .as_deref()
                             .map(|status| format!("project \u{00B7} {status}"))
                             .unwrap_or_else(|| "project".to_string()),
                     ),
+                    RouteCandidateKind::Template => {
+                        unreachable!("template is editor-only")
+                    }
                 };
                 rows.push(ShellRow {
                     nospace: ends_in_continuation(&full),
