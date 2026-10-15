@@ -64,3 +64,4 @@ mod task_id;
 mod task_link;
 mod task_marker;
 mod task_toggle;
+mod template_expand;

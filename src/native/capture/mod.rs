@@ -141,6 +141,9 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
     };
 
     let output_format = OutputFormat::from_matches(&matches);
+    if matches.get_flag("expand") {
+        return expand_capture(&matches, output_format);
+    }
     let request = match CaptureRequest::from_matches(&matches) {
         Ok(request) => request,
         Err(error) => return print_capture_error(error, output_format),
@@ -152,6 +155,58 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
             0
         }
         Err(error) => print_capture_error(error, output_format),
+    }
+}
+
+#[derive(Serialize)]
+struct CaptureExpansionOutput {
+    ok: bool,
+    expanded: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    template: Option<capture_language::template::TemplateSummary>,
+}
+
+fn expand_capture(matches: &ArgMatches, output_format: OutputFormat) -> i32 {
+    let raw = match raw_text_from_matches(matches) {
+        Ok(raw) => raw,
+        Err(error) => return print_capture_error(error, output_format),
+    };
+    let expansion = match capture_language::template::expand(&raw) {
+        Ok(expansion) => expansion,
+        Err(issue) => {
+            return print_capture_error(
+                CaptureError::usage(issue.message()),
+                output_format,
+            );
+        }
+    };
+    let (expanded, template) = match expansion {
+        Some(expansion) => (expansion.text, Some(expansion.summary)),
+        None => (raw, None),
+    };
+    match output_format {
+        OutputFormat::Human => match io::stdout()
+            .lock()
+            .write_all(expanded.as_bytes())
+        {
+            Ok(()) => 0,
+            Err(error) => {
+                eprintln!("{COMMAND_NAME}: failed to write expansion: {error}");
+                1
+            }
+        },
+        OutputFormat::Json => {
+            println!(
+                "{}",
+                serde_json::to_string(&CaptureExpansionOutput {
+                    ok: true,
+                    expanded,
+                    template,
+                })
+                .expect("serialize capture expansion")
+            );
+            0
+        }
     }
 }
 

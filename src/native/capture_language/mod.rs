@@ -29,6 +29,7 @@ mod model;
 mod project_tasks;
 mod rewrite;
 mod start_selection;
+pub(crate) mod template;
 mod tokens;
 
 #[cfg(test)]

@@ -446,7 +446,9 @@ section.\n\n\
 Use --route with --task and --task-section TITLE to nest a sub-bullet under \
 the named ALL-CAPS child section of that task. The title is matched exactly, \
 case insensitively; unlike a typed #<section> selector, it is not slug- or \
-prefix-matched, so --task-section future-work does not match FUTURE WORK.",
+prefix-matched, so --task-section future-work does not match FUTURE WORK.\n\n\
+Use expansion mode to print a template draft's expanded capture text and exit before vault access or planning. \
+In expansion mode all other capture options are accepted and ignored.",
         )
         .after_help(
             "Examples:\n  bob capture buy milk @groceries\n  bob capture buy milk s:1\n  bob capture buy milk s:2 @groceries\n  bob capture buy milk @groceries s:2\n  bob capture buy milk p:2\n  bob capture research rust p:4 @dev\n  bob capture buy milk %\n  bob capture research links %3\n  bob capture investigate %log @dev:blockid\n  bob capture --clip=screenshot -- save dashboard\n  bob capture '@dev^foobar' 'Some ordinary task.'\n  bob capture '@dev:foobar' 'Some foobar task.'\n  bob capture '@dev:foobar#bugs' 'Some foobar task.'\n  bob capture '@cash^goog-exit+' 'Finish the Google exit packet!'\n  printf 'Finish the Google exit packet! @cash^goog-exit+\\n- Draft the resignation memo\\n' | bob capture
@@ -456,6 +458,7 @@ prefix-matched, so --task-section future-work does not match FUTURE WORK.",
         .arg(bob_dir_arg())
         .arg(clip_arg())
         .arg(dry_run_arg())
+        .arg(expand_arg())
         .arg(format_arg())
         .arg(help_arg())
         .arg(no_clip_arg())
@@ -496,6 +499,14 @@ pub(super) fn dry_run_arg() -> Arg {
         .short('d')
         .action(ArgAction::SetTrue)
         .help("Plan and report without writing notes or clipboard files")
+}
+
+pub(super) fn expand_arg() -> Arg {
+    Arg::new("expand")
+        .long("expand")
+        .short('E')
+        .action(ArgAction::SetTrue)
+        .help("Print the draft with its @@template: expanded, then exit without capturing")
 }
 
 pub(super) fn format_arg() -> Arg {

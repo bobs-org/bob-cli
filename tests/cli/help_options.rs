@@ -55,6 +55,7 @@ fn capture_help_lists_options_alphabetically() {
             "-b, --bob-dir",
             "-c, --clip",
             "-d, --dry-run",
+            "-E, --expand",
             "-f, --format",
             "-h, --help",
             "-n, --no-clip",
@@ -64,6 +65,13 @@ fn capture_help_lists_options_alphabetically() {
             "-t, --task",
             "-S, --task-section",
         ],
+    );
+    assert!(
+        help.contains("-E, --expand")
+            && help.contains("before vault access or planning")
+            && help
+                .contains("all other capture options are accepted and ignored"),
+        "expected capture expansion help:\n{help}"
     );
     assert!(
         !help.contains("--require-pull-in-choice"),

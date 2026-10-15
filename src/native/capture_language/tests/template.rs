@@ -1,0 +1,247 @@
+use super::super::template;
+
+fn issue_codes(raw: &str) -> Vec<&'static str> {
+    template::analyze(raw)
+        .issues
+        .iter()
+        .map(|issue| issue.code())
+        .collect()
+}
+
+fn first_issue(raw: &str) -> template::TemplateIssue {
+    template::analyze(raw).issues[0].clone()
+}
+
+#[test]
+fn template_header_accepts_case_and_ascii_padding_and_skips_blank_lines() {
+    let raw = "  \t@@TeMpLaTe:\t\n\n  Task {0}  \n- child {0}\n  - deeper {0}\n\n\nvalue\n";
+    let expansion = template::expand(raw).expect("valid template").unwrap();
+    assert_eq!(
+        expansion.text,
+        "  Task value  \n- child value\n  - deeper value\n"
+    );
+    assert_eq!(expansion.summary.line, 1);
+    assert_eq!(expansion.summary.field_count, 1);
+    assert_eq!(expansion.summary.row_count, 1);
+}
+
+#[test]
+fn template_header_reports_misplaced_inline_repeated_and_option_like_forms() {
+    for raw in [
+        "Task\n@@template:\n\n{0}\n\nvalue\n",
+        "@@template: extra\nTask {0}\n\nvalue\n",
+        "@@template:\n@@template:\n\nTask {0}\n\nvalue\n",
+        "@@template:tsv\nTask {0}\n\nvalue\n",
+    ] {
+        assert!(
+            issue_codes(raw).contains(&"template_header_misplaced"),
+            "{raw:?}"
+        );
+        assert_eq!(
+            first_issue(raw).message(),
+            "write `@@template:` alone on the draft's first line"
+        );
+    }
+}
+
+#[test]
+fn missing_template_or_rows_has_a_teaching_issue() {
+    assert_eq!(
+        first_issue("@@template:\n\n").code(),
+        "template_missing_rows"
+    );
+    assert!(first_issue("@@template:\n\n")
+        .message()
+        .contains("write the template"));
+    assert_eq!(
+        first_issue("@@template:\nTask {0}\n\n").code(),
+        "template_missing_rows"
+    );
+    assert!(first_issue("@@template:\nTask {0}\n\n")
+        .message()
+        .contains("add a blank line"));
+}
+
+#[test]
+fn a_template_needs_a_blank_separator_before_rows() {
+    let raw = "@@template:\nTask {0}\nvalue\n";
+    assert!(issue_codes(raw).contains(&"template_needs_separator"));
+    assert!(first_issue(raw).message().contains("add a blank line"));
+}
+
+#[test]
+fn placeholders_repeat_reorder_escape_and_expand_inside_markers() {
+    let raw = "@@template:\nApply {{draft}} {1} {0} {1}! @jobs^apply-{0}\n\nfoo bar\n";
+    let expansion = template::expand(raw).expect("valid template").unwrap();
+    assert_eq!(
+        expansion.text,
+        "Apply {draft} bar foo bar! @jobs^apply-foo\n"
+    );
+}
+
+#[test]
+fn placeholder_grammar_rejects_noncanonical_and_incomplete_braces() {
+    for bad in ["{}", "{name}", "{01}", "{0:x}", "{1000}", "{", "}", "{12"] {
+        let raw = format!("@@template:\nTask {bad}\n\nvalue\n");
+        assert!(
+            issue_codes(&raw).contains(&"template_invalid_placeholder"),
+            "{bad:?}"
+        );
+        assert!(first_issue(&raw).message().contains("write `{{`"));
+    }
+}
+
+#[test]
+fn placeholder_gaps_and_one_based_indices_are_explained() {
+    let gap = first_issue("@@template:\nTask {0} {2}\n\nA B C\n");
+    assert_eq!(gap.code(), "template_placeholder_gap");
+    assert!(gap.message().contains("not {1}"));
+    assert!(gap.range().start < gap.range().end);
+    let one_based = first_issue("@@template:\nTask {1} {2}\n\nA B\n");
+    assert_eq!(one_based.code(), "template_placeholder_gap");
+    assert!(one_based.message().contains("placeholders start at {0}"));
+}
+
+#[test]
+fn missing_placeholder_is_suppressed_until_rows_exist() {
+    assert_eq!(
+        issue_codes("@@template:\nA task\n\n").as_slice(),
+        ["template_missing_rows"]
+    );
+    assert!(issue_codes("@@template:\nA task\n\nvalue\n")
+        .contains(&"template_missing_placeholder"));
+}
+
+#[test]
+fn row_lexer_handles_quotes_escapes_and_plain_quotes() {
+    let raw = "@@template:\n{0} {1} {2} {3}\n\n\"Two Sigma\" “Acme Works” \"say \\\"hi\\\"\" \"a\\\\b\"\n";
+    let analysis = template::analyze(raw);
+    assert!(analysis.issues.is_empty(), "{:?}", analysis.issues);
+    assert_eq!(
+        analysis.rows[0]
+            .fields
+            .iter()
+            .map(|field| field.value.as_str())
+            .collect::<Vec<_>>(),
+        ["Two Sigma", "Acme Works", "say \"hi\"", "a\\b"]
+    );
+
+    let raw = "@@template:\n{0} {1}\n\n\"Two Sigma” next\n";
+    let analysis = template::analyze(raw);
+    assert!(analysis.issues.is_empty(), "{:?}", analysis.issues);
+    assert_eq!(analysis.rows[0].fields[0].value, "Two Sigma");
+
+    let raw = "@@template:\n{0} {1} {2}\n\n27\" O'Reilly value\n";
+    let analysis = template::analyze(raw);
+    assert!(analysis.issues.is_empty(), "{:?}", analysis.issues);
+    assert_eq!(analysis.rows[0].fields[0].value, "27\"");
+    assert_eq!(analysis.rows[0].fields[1].value, "O'Reilly");
+
+    let raw = "@@template:\n{0}\t{1}\t{2}\n\n\"\"\t“”\tplain\n";
+    let analysis = template::analyze(raw);
+    assert!(analysis.issues.is_empty(), "{:?}", analysis.issues);
+    assert_eq!(analysis.rows[0].fields[0].value, "");
+    assert_eq!(analysis.rows[0].fields[1].value, "");
+
+    let raw = "@@template:\n{0} {1}\n\n\"close\"word next\n";
+    assert_eq!(
+        first_issue(raw).code(),
+        "template_unterminated_quote",
+        "a quote not followed by a field separator is literal"
+    );
+}
+
+#[test]
+fn quote_errors_and_arity_errors_are_row_scoped() {
+    let unterminated = first_issue("@@template:\n{0} {1}\n\n\"Two Sigma\n");
+    assert_eq!(unterminated.code(), "template_unterminated_quote");
+    assert!(unterminated
+        .message()
+        .starts_with("template row 1 (line 4):"));
+
+    for row in ["one", "one two three"] {
+        let raw = format!("@@template:\n{{0}} {{1}}\n\n{row}\n");
+        let arity = first_issue(&raw);
+        assert_eq!(arity.code(), "template_row_arity");
+        assert!(arity.message().starts_with("template row 1 (line 4):"));
+    }
+}
+
+#[test]
+fn rows_cannot_be_bullets_and_templates_cannot_use_other_globals() {
+    assert!(issue_codes("@@template:\nTask {0}\n\n- value\n")
+        .contains(&"template_row_bullet"));
+    assert!(issue_codes("@@template:\nTask {0} @@route\n\nvalue\n")
+        .contains(&"template_global_declaration"));
+    assert!(issue_codes("@@template:\nTask {0}\n\nvalue @@route\n")
+        .contains(&"template_global_declaration"));
+    assert!(
+        issue_codes("@@template:\nTask {0} {1}\n\nvalue \"@@route\"\n")
+            .contains(&"template_global_declaration")
+    );
+    assert!(issue_codes("@@template:\nTask @{0}\n\n@route\n")
+        .contains(&"template_global_declaration"));
+}
+
+#[test]
+fn one_field_rows_keep_spaces_and_template_line_endings_normalize() {
+    for newline in ["\n", "\r\n", "\r"] {
+        let raw = ["@@template:", "Apply {0}", "", "  Montréal 🧭 role  "]
+            .join(newline);
+        let expansion =
+            template::expand(&raw).expect("valid template").unwrap();
+        assert_eq!(expansion.text, "Apply Montréal 🧭 role\n");
+        assert_eq!(expansion.instances[0].line, 4);
+    }
+}
+
+#[test]
+fn expansion_matches_the_plan_example_byte_for_byte() {
+    let raw = concat!(
+        "@@template:\n",
+        "Apply to {0}! @job_2026_apply_29:{1}\n",
+        "- **URL**: {2}\n",
+        "\n",
+        "Foobar foo http://foobar.com/career/some_foo_job\n",
+        "Bazbuz baz http://bazbuz.com/career/some_baz_job\n",
+        "\"Two Sigma\" two-sigma https://www.twosigma.com/careers/some_role\n",
+    );
+    let expanded = template::expand(raw).expect("valid example").unwrap();
+    assert_eq!(
+        expanded.text,
+        concat!(
+            "Apply to Foobar! @job_2026_apply_29:foo\n",
+            "- **URL**: http://foobar.com/career/some_foo_job\n",
+            "\n",
+            "Apply to Bazbuz! @job_2026_apply_29:baz\n",
+            "- **URL**: http://bazbuz.com/career/some_baz_job\n",
+            "\n",
+            "Apply to Two Sigma! @job_2026_apply_29:two-sigma\n",
+            "- **URL**: https://www.twosigma.com/careers/some_role\n",
+        )
+    );
+}
+
+#[test]
+fn both_template_bounds_are_checked_without_truncation() {
+    let rows = std::iter::repeat_n("x", 1_001)
+        .collect::<Vec<_>>()
+        .join("\n");
+    let raw = format!("@@template:\n{{0}}\n\n{rows}\n");
+    assert!(issue_codes(&raw).contains(&"template_too_large"));
+
+    let row = "x".repeat(1024 * 1024);
+    let raw = format!("@@template:\n{{0}}\n\n{row}\n");
+    assert!(issue_codes(&raw).contains(&"template_too_large"));
+
+    let repeated_placeholder = "{0}".repeat(1_000);
+    let row = "x".repeat(1_100);
+    let raw = format!("@@template:\n{repeated_placeholder}\n\n{row}\n");
+    assert!(issue_codes(&raw).contains(&"template_too_large"));
+}
+
+#[test]
+fn non_template_expansion_is_an_identity() {
+    let raw = "plain draft\r\nkeeps its exact bytes";
+    assert_eq!(template::expand(raw).unwrap(), None);
+}

@@ -89,3 +89,4 @@ mod goto;
 mod grammar;
 mod ref_grammar;
 mod rewrite;
+mod template;
