@@ -259,7 +259,7 @@ pub(super) fn stem_from_url(url: &WebUrl) -> Option<String> {
     None
 }
 
-fn stem_from_segment(segment: &str) -> Option<String> {
+pub(super) fn stem_from_segment(segment: &str) -> Option<String> {
     let mut candidate = segment.to_string();
     for extension in PAGE_EXTENSIONS {
         if let Some(stripped) = candidate

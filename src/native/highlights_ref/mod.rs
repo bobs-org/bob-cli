@@ -38,6 +38,9 @@ pub(crate) mod cli;
 mod clip;
 mod clip_adapter;
 mod clip_url;
+// The gate phase wires this pure naming API into `bob ref create`.
+#[allow(dead_code)]
+mod collection_name;
 mod companion;
 mod doctor;
 mod fetch;

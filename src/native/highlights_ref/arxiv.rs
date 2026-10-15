@@ -10,6 +10,8 @@ use std::{fs, path::Path, sync::OnceLock};
 
 use regex::Regex;
 
+#[cfg(test)]
+use super::collection_name::author_display;
 use super::fetch::fetch_url;
 
 /// An arXiv paper: the base identifier plus an optional version suffix.
@@ -115,17 +117,6 @@ pub(super) struct ArxivMetadata {
     pub(super) authors: Vec<String>,
     /// The date part of the API `<published>` (the first version).
     pub(super) published: String,
-}
-
-/// Display authors as `A`, `A and B`, `A, B, and C`, or `A et al.`.
-pub(super) fn author_display(authors: &[String]) -> String {
-    match authors {
-        [] => String::new(),
-        [only] => only.clone(),
-        [first, second] => format!("{first} and {second}"),
-        [first, second, third] => format!("{first}, {second}, and {third}"),
-        [first, ..] => format!("{first} et al."),
-    }
 }
 
 /// Fetch API metadata for `paper` into `dir`, degrading to `None` with a

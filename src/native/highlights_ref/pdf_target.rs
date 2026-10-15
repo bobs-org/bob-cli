@@ -10,11 +10,12 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use super::arxiv::{author_display, ArxivMetadata, ArxivPaper};
+use super::arxiv::{ArxivMetadata, ArxivPaper};
 use super::clip_url::{
     humanize_stem, short_title_stem, snake_case, stem_from_url, validate_name,
     WebUrl,
 };
+use super::collection_name::author_display;
 use super::marker::{parse_marker, read_pdf_marker};
 use super::pdf_meta::pdf_info_metadata;
 use super::workdir::ScratchDir;
