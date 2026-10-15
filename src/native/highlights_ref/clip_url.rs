@@ -252,6 +252,10 @@ pub(super) fn stem_from_url(url: &WebUrl) -> Option<String> {
     let segments: Vec<String> =
         parsed.path_segments()?.map(percent_decode).collect();
     for segment in segments.iter().rev() {
+        let candidate = strip_page_extension(segment);
+        if is_opaque_segment(&candidate) {
+            return None;
+        }
         if let Some(stem) = stem_from_segment(segment) {
             return Some(stem);
         }
@@ -260,18 +264,9 @@ pub(super) fn stem_from_url(url: &WebUrl) -> Option<String> {
 }
 
 pub(super) fn stem_from_segment(segment: &str) -> Option<String> {
-    let mut candidate = segment.to_string();
-    for extension in PAGE_EXTENSIONS {
-        if let Some(stripped) = candidate
-            .strip_suffix(&format!(".{extension}"))
-            .or_else(|| {
-                candidate
-                    .strip_suffix(&format!(".{}", extension.to_uppercase()))
-            })
-        {
-            candidate = stripped.to_string();
-            break;
-        }
+    let mut candidate = strip_page_extension(segment);
+    if is_opaque_segment(&candidate) {
+        return None;
     }
     if candidate.is_empty()
         || candidate.len() <= 2
@@ -289,8 +284,87 @@ pub(super) fn stem_from_segment(segment: &str) -> Option<String> {
     } else if strip_date_prefix(&candidate).is_some() {
         return None;
     }
+    let mut words = split_stem_words(&candidate);
+    strip_opaque_suffix(&mut words);
+    candidate = words.join("_");
+    if candidate.is_empty() {
+        return None;
+    }
+    if candidate.len() <= 2
+        || candidate.chars().all(|c| c.is_ascii_digit())
+        || is_date_part(&candidate)
+        || SKIPPED_SEGMENTS.contains(&candidate.to_lowercase().as_str())
+    {
+        return None;
+    }
     let slugged = snake_case(&candidate);
     (!slugged.is_empty()).then_some(slugged)
+}
+
+fn strip_page_extension(segment: &str) -> String {
+    let mut candidate = segment.to_string();
+    for extension in PAGE_EXTENSIONS {
+        if let Some(stripped) = candidate
+            .strip_suffix(&format!(".{extension}"))
+            .or_else(|| {
+                candidate
+                    .strip_suffix(&format!(".{}", extension.to_uppercase()))
+            })
+        {
+            candidate = stripped.to_string();
+            break;
+        }
+    }
+    candidate
+}
+
+fn is_opaque_segment(candidate: &str) -> bool {
+    let lower = candidate.to_ascii_lowercase();
+    super::collection_name::is_hex_id_word(&lower) || is_uuid(&lower)
+}
+
+fn is_uuid(candidate: &str) -> bool {
+    let parts: Vec<&str> = candidate.split('-').collect();
+    [8, 4, 4, 4, 12].iter().enumerate().all(|(index, len)| {
+        parts.get(index).is_some_and(|part| {
+            part.len() == *len
+                && part.bytes().all(|byte| byte.is_ascii_hexdigit())
+        })
+    }) && parts.len() == 5
+}
+
+fn split_stem_words(text: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut current = String::new();
+    for byte in text.bytes() {
+        if byte.is_ascii_alphanumeric() {
+            current.push((byte as char).to_ascii_lowercase());
+        } else if !current.is_empty() {
+            words.push(std::mem::take(&mut current));
+        }
+    }
+    if !current.is_empty() {
+        words.push(current);
+    }
+    words
+}
+
+fn strip_opaque_suffix(words: &mut Vec<String>) {
+    if words.len() >= 5 {
+        let suffix = &words[words.len() - 5..];
+        if [8, 4, 4, 4, 12].iter().enumerate().all(|(index, len)| {
+            suffix[index].len() == *len
+                && suffix[index].bytes().all(|byte| byte.is_ascii_hexdigit())
+        }) {
+            words.truncate(words.len() - 5);
+        }
+    }
+    while words
+        .last()
+        .is_some_and(|word| super::collection_name::is_hex_id_word(word))
+    {
+        words.pop();
+    }
 }
 
 fn is_date_part(candidate: &str) -> bool {
@@ -342,6 +416,12 @@ pub(super) fn snake_case(text: &str) -> String {
 /// first 6 words stand in. The result runs through [`snake_case`], which
 /// caps it at 80 characters.
 pub(super) fn short_title_stem(title: &str) -> String {
+    let title = title
+        .strip_suffix(".md")
+        .or_else(|| title.strip_suffix(".txt"))
+        .or_else(|| title.strip_suffix(".MD"))
+        .or_else(|| title.strip_suffix(".TXT"))
+        .unwrap_or(title);
     let words: Vec<&str> = title.split_whitespace().collect();
     let prefix: Vec<&str> = match title.find(':') {
         Some(index) => title[..index].split_whitespace().collect(),
@@ -494,6 +574,26 @@ mod tests {
             None,
             "numeric-only paths have no slug"
         );
+        assert_eq!(
+            stem("https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f"),
+            None,
+            "an opaque final path segment is not a useful filename stem"
+        );
+        assert_eq!(
+            stem("https://example.com/blog/karpathy-llm-wiki-442a6bf555914893e9891c11519de94f"),
+            Some("karpathy_llm_wiki".to_string()),
+            "trailing opaque hex IDs are removed from an otherwise useful slug"
+        );
+        assert_eq!(
+            stem("https://example.com/550e8400-e29b-41d4-a716-446655440000"),
+            None,
+            "an opaque UUID path segment is not a useful filename stem"
+        );
+        assert_eq!(
+            stem("https://example.com/blog/a-good-title-550e8400-e29b-41d4-a716-446655440000"),
+            Some("a_good_title".to_string()),
+            "a trailing UUID is removed from an otherwise useful slug"
+        );
     }
 
     #[test]
@@ -526,6 +626,16 @@ mod tests {
             short_title_stem("Machine Learning Systems: Design and Operation"),
             "machine_learning_systems",
             "a three-word prefix is kept whole"
+        );
+        assert_eq!(
+            short_title_stem("Attention Is All You Need.md"),
+            "attention_is_all_you_need",
+            "a trailing Markdown extension is removed before title derivation"
+        );
+        assert_eq!(
+            short_title_stem("Attention Is All You Need.txt"),
+            "attention_is_all_you_need",
+            "a trailing text extension is removed before title derivation"
         );
     }
 

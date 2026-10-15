@@ -230,7 +230,11 @@ state only.
 Short-title stem: when the text before the first `:` is 1–4 words, that
 prefix is the short name (`EA-Graph: …` becomes `ea_graph`); otherwise the
 first 6 words stand in, run through `snake_case` (capped at 80 chars).
-`Attention Is All You Need` becomes `attention_is_all_you_need`.
+Trailing `.md` and `.txt` filename extensions are removed first.
+`Attention Is All You Need` and `Attention Is All You Need.md` both become
+`attention_is_all_you_need`. URL-derived stems discard trailing opaque hex IDs
+and UUIDs; if the final meaningful URL path segment is itself an opaque ID,
+there is no URL stem and the next configured fallback is used.
 
 Plausible Info title: trimmed and whitespace-collapsed, at least 3 chars
 with a letter, not equal to the source file stem or URL stem

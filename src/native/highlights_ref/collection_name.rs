@@ -549,7 +549,7 @@ fn is_number_word(word: &str) -> bool {
     !word.is_empty() && word.bytes().all(|byte| byte.is_ascii_digit())
 }
 
-fn is_hex_id_word(word: &str) -> bool {
+pub(super) fn is_hex_id_word(word: &str) -> bool {
     word.len() >= 6
         && word.bytes().any(|byte| byte.is_ascii_digit())
         && word
