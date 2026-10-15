@@ -135,11 +135,10 @@ When a PDF-backed note shares an identity key with a note without a
 PDF, the PDF-less note is `superseded_by` the PDF-backed one. `find`
 still reaches superseded notes and prints them as `also` companions.
 
-Import deduplication currently differs from library lookup for list-valued
-metadata: `ref find` indexes every URL in a `source_url` or `url` list, but
-`ref create` and automatic URL routing read only scalar URL fields from notes.
-A list-only match can therefore import again without an already-known or
-legacy warning. Use `ref find` to check those references before importing.
+Import deduplication and library lookup both index every URL in scalar or
+list-valued `source_url` and `url` metadata. This applies to ref notes and
+queued intake markers, so any URL in a collection can prevent a duplicate
+import and can be found with `ref find -i`.
 
 ## Usage
 

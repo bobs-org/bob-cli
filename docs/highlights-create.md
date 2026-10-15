@@ -259,9 +259,9 @@ instead of refusing; with `--listen` it is a normal capture plus listen,
 never attach mode. A dry run adds
 `legacy: <path> (superseded by this capture)` to its report.
 
-Current note-side import deduplication reads scalar `source_url`/`url`
-fields only. A YAML list of URLs is indexed by `bob ref find` but missed by
-import deduplication; check those notes with `find` before importing again.
+Import deduplication reads every URL from scalar or list-valued
+`source_url`/`url` fields in ref notes and queued intake markers, matching
+the URLs indexed by `bob ref find`.
 
 Default targets dedupe by walking `<stem>`, `<stem>_2`, `<stem>_3`, …
 (up to `<stem>_999`): a free candidate is chosen, a candidate occupied by a

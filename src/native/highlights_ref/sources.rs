@@ -23,7 +23,7 @@ use super::{
     clip_url::validate_and_clean,
     frontmatter::{parse_frontmatter_entry, split_frontmatter},
     marker::{parse_marker, read_pdf_marker},
-    model::Config,
+    model::{Config, MarkerValue},
     stamp::normalize_lexically,
     CommandError,
 };
@@ -132,22 +132,26 @@ fn collect_ref_note_sources(
         for raw in frontmatter {
             let entry = parse_frontmatter_entry(&raw);
             let key = entry.key.as_deref().unwrap_or_default();
-            let value = entry
-                .value
-                .as_ref()
-                .and_then(|value| value.as_string().map(str::to_string));
+            let values =
+                entry.value.as_ref().map(url_values).unwrap_or_default();
             match key {
                 "source_url" | "url" => {
-                    if let Some(url) = value {
-                        urls.push(url);
-                    }
+                    urls.extend(values.into_iter().map(str::to_string));
                 }
                 "source_pdf" => {
                     if source_pdf.is_none() {
-                        source_pdf = value;
+                        source_pdf = entry.value.as_ref().and_then(|value| {
+                            value.as_string().map(str::to_string)
+                        });
                     }
                 }
-                "audio" if value.is_some_and(|value| !value.is_empty()) => {
+                "audio"
+                    if entry
+                        .value
+                        .as_ref()
+                        .and_then(MarkerValue::as_string)
+                        .is_some_and(|value| !value.is_empty()) =>
+                {
                     has_audio = true;
                 }
                 _ => {}
@@ -207,17 +211,19 @@ fn collect_intake_sources(
             continue;
         };
         for key in ["source_url", "url"] {
-            if let Some(url) =
-                projection.get(key).and_then(|value| value.as_string())
-                && let Ok(cleaned) = validate_and_clean(url)
-            {
-                recorded.push(RecordedSource {
-                    dedupe_key: cleaned.dedupe_key,
-                    path: path.clone(),
-                    is_ref_note: false,
-                    source_pdf: None,
-                    has_audio: false,
-                });
+            if let Some(value) = projection.get(key) {
+                for url in url_values(value) {
+                    let Ok(cleaned) = validate_and_clean(url) else {
+                        continue;
+                    };
+                    recorded.push(RecordedSource {
+                        dedupe_key: cleaned.dedupe_key,
+                        path: path.clone(),
+                        is_ref_note: false,
+                        source_pdf: None,
+                        has_audio: false,
+                    });
+                }
             }
         }
     }
@@ -301,11 +307,12 @@ fn collect_intake_records_inner(
         // both too. One record travels per distinct value.
         let mut urls: Vec<String> = Vec::new();
         for key in ["source_url", "url"] {
-            if let Some(url) =
-                projection.get(key).and_then(|value| value.as_string())
-                && !urls.iter().any(|seen| seen.as_str() == url)
-            {
-                urls.push(url.to_string());
+            if let Some(value) = projection.get(key) {
+                for url in url_values(value) {
+                    if !urls.iter().any(|seen| seen.as_str() == url) {
+                        urls.push(url.to_string());
+                    }
+                }
             }
         }
         if urls.is_empty() {
@@ -329,6 +336,18 @@ fn collect_intake_records_inner(
         }
     }
     Ok(())
+}
+
+/// URL metadata is stored as either one string or a list of strings. Ignore
+/// non-string list entries, matching the ref library's identity handling.
+fn url_values(value: &MarkerValue) -> Vec<&str> {
+    match value {
+        MarkerValue::String(value) => vec![value],
+        MarkerValue::List(values) => {
+            values.iter().filter_map(MarkerValue::as_string).collect()
+        }
+        _ => Vec::new(),
+    }
 }
 
 /// Ref-note hits that [`check_dedupe`] lets through: the note records
@@ -566,6 +585,51 @@ mod tests {
             "other keys report no legacy hits"
         );
         fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn list_valued_note_urls_participate_in_import_dedupe() {
+        let root = test_dir("list-note-urls");
+        let config = test_config(&root);
+        fs::create_dir_all(config.ref_dir.join("blogs"))
+            .expect("create ref dir");
+        fs::write(
+            config.ref_dir.join("blogs/collection.md"),
+            "---\ntitle: Collection\nsource_url: [https://example.com/one, https://example.com/two]\nurl: [https://example.com/three]\nsource_pdf: lib/blogs/collection.pdf\n---\n\n# Collection\n",
+        )
+        .expect("write list-valued note");
+
+        let recorded =
+            collect_recorded_source_urls(&config).expect("collect sources");
+        assert_eq!(recorded.len(), 3);
+        for url in ["one", "two", "three"] {
+            let key = format!("https://example.com/{url}");
+            assert!(
+                recorded.iter().any(|source| source.dedupe_key == key),
+                "missing source URL {key}"
+            );
+            check_dedupe(&recorded, &key, None, false)
+                .expect_err("each list value must refuse as already captured");
+        }
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn marker_url_lists_are_expanded_for_dedupe_and_intake_lookup() {
+        let projection = parse_marker(
+            "- status: ready\n- parent: obsidian\n- source_url: [https://example.com/one, https://example.com/two]\n- url: https://example.com/three",
+        )
+        .expect("parse marker");
+        let urls =
+            url_values(projection.get("source_url").expect("source_url"));
+        assert_eq!(
+            urls,
+            ["https://example.com/one", "https://example.com/two"]
+        );
+        assert_eq!(
+            url_values(projection.get("url").expect("url")),
+            ["https://example.com/three"]
+        );
     }
 
     #[test]
