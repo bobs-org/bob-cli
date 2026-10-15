@@ -404,7 +404,7 @@ const SUBCOMMANDS: &[Subcommand] = &[
     },
     Subcommand {
         name: "ref",
-        about: "Find, list, and read references; sync Highlights PDFs into them",
+        about: "Find, list, read, and rename references; sync Highlights PDFs into them",
         section: Section::Vault,
         target: Target::Leaf(Leaf {
             native_command: NativeCommand::Highlights,

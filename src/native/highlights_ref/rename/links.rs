@@ -50,6 +50,8 @@ pub(crate) struct AmbiguousBareLink {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct LinkRewritePlan {
     pub(crate) files: Vec<FileRewrite>,
+    /// Number of distinct inbound link targets that will change.
+    pub(crate) rewritten: usize,
     pub(crate) skipped_ambiguous: Vec<AmbiguousBareLink>,
     /// Inbound links whose fragment is a highlight block ID (`#^h-…`).
     pub(crate) highlight_fragments: Vec<LinkFinding>,
@@ -246,6 +248,7 @@ pub(crate) fn plan_vault_links(
                 contents: result.contents,
             });
         }
+        plan.rewritten += result.rewritten;
         plan.skipped_ambiguous.extend(result.skipped_ambiguous);
         plan.highlight_fragments.extend(result.highlight_fragments);
         plan.highlight_follow_ups
@@ -262,6 +265,7 @@ pub(crate) fn plan_vault_links(
 struct TextRewrite {
     contents: String,
     edits: Vec<LineEdit>,
+    rewritten: usize,
     skipped_ambiguous: Vec<AmbiguousBareLink>,
     highlight_fragments: Vec<LinkFinding>,
     highlight_follow_ups: Vec<LinkFinding>,
@@ -312,6 +316,7 @@ fn rewrite_text(
         result
             .highlight_follow_ups
             .extend(line_result.highlight_follow_ups);
+        result.rewritten += line_result.rewritten;
     }
     result.contents = output;
     result
@@ -320,6 +325,7 @@ fn rewrite_text(
 #[derive(Debug, Default)]
 struct LineRewrite {
     after: String,
+    rewritten: usize,
     skipped_ambiguous: Vec<AmbiguousBareLink>,
     highlight_fragments: Vec<LinkFinding>,
     highlight_follow_ups: Vec<LinkFinding>,
@@ -443,6 +449,7 @@ fn rewrite_line(
         if let Some(replacement) = link.replacement {
             let old_path = &line[link.path_start..link.path_end];
             if replacement != old_path {
+                result.rewritten += 1;
                 replacements.push(Replacement {
                     start: link.path_start,
                     end: link.path_end,

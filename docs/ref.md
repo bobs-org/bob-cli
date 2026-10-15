@@ -6,8 +6,9 @@ answers "is this already in my library?" with a verdict per query, in
 human, Markdown, or versioned JSON output. `bob ref list` renders
 filtered library views, defaulting to the reading queue (queued and
 started notes). `bob ref show` resolves one or more exact references
-into their metadata, annotations, notes, and tasks. All three verbs are
-read-only; `find -i` also reads intake PDF markers. `bob ref migrate-zorg`
+into their metadata, annotations, notes, and tasks. `find`, `list`, and
+`show` are read-only; `find -i` also reads intake PDF markers. `bob ref rename` previews
+a coordinated rename of an unannotated modern reference. `bob ref migrate-zorg`
 plans copies of zorg-era `status::` reading records into legacy notes under
 `ref/zorg/`. It is a dry run by default; `-w/--write` applies the plan.
 
@@ -18,6 +19,7 @@ plans copies of zorg-era `status::` reading records into legacy notes under
 | Check whether a reference is known | `bob ref find <URL-or-identifier>` | Read library notes; `--include-intake` also checks queued PDFs |
 | See what remains to read | `bob ref list` | Read queued and started reference notes |
 | Read annotations and your notes | `bob ref show <note-path>` | Read one exact reference; `-c` selects commented annotations |
+| Fix a reference's file name | `bob ref rename <REF> <NAME> -d`, then without `-d` | Move the note, PDF, and companions and update links; keeps the id and reading task |
 | Import a URL, local PDF, or Markdown file now | `bob ref create <TARGET>` | Write an intake PDF inline; see [target types](highlights-create.md) |
 | Save a bare public link quickly | `bob capture '<URL>'` | Queue a background job when the routing policy admits the URL; the note appears in `ref list` after `bob ref scan` |
 | Inspect or process background imports | `bob ref jobs`, `bob ref jobs run` | List jobs, or fetch pending links; see [ref jobs](ref-jobs.md) |
@@ -306,6 +308,46 @@ exact notes with `bob ref show <path>`. Prefer `-c -f markdown` for
 Bryan's own thoughts on a reference, and never claim a `not_found`
 result means he has not read something — it only means it is not under
 `ref/`.
+
+## `bob ref rename`
+
+```text
+bob ref rename <REF> <NAME> -d
+```
+
+`REF` uses the exact resolver from `bob ref show`: note path, stem,
+frontmatter id, URL, arXiv ID, DOI, or a unique exact title. `NAME` is a
+same-directory file stem matching `[A-Za-z0-9][A-Za-z0-9_.-]*`; one trailing
+`.pdf` is ignored. For example, the motivating gist can be previewed with:
+
+```bash
+bob ref rename 442a6bf555914893e9891c11519de94f karpathy_llm_wiki -d
+```
+
+The dry-run inventories the note, PDF, sidecar, audio, and inbound links, then
+reports the frontmatter paths that would change. It does not write files, take
+locks, sync, or commit. Live mode is reserved for the follow-up write phase.
+The JSON form (`-d -f json`) uses schema version 1 and includes `from`, `to`,
+`moves`, `links`, `frontmatter`, `kept`, and the current `ref` row; `commit` is
+`null` and both sync values are `skipped` in a dry run.
+
+V1 accepts only modern, PDF-backed, unannotated references in their current
+`ref/<type>/` directory. It refuses legacy and intake references, annotated
+references, and notes whose PDF sync plan is not clean. A rename changes the
+file stem for the note, PDF, and any same-stem sidecar or audio companions; it
+updates inbound vault links and the note's `source_pdf`, `highlights_sidecar`,
+and `audio` paths. It keeps the frontmatter `id`, `title`, `source_url`, PDF
+bytes, marker identity, and reading task block ID. Names are checked
+case-insensitively across the vault and are never auto-suffixed. Links in
+browser bookmarks and copied `obsidian://` or `highlights://` URIs are outside
+the vault and cannot be updated.
+
+Machine-readable refusal codes are `unknown_reference`,
+`ambiguous_reference`, `legacy_reference`, `intake_reference`, `invalid_name`,
+`name_taken`, `has_highlights`, `listen_card_link`, `not_in_sync`,
+`dirty_paths`, `not_a_worktree`, `not_implemented`, `lock_busy`, `scan_busy`,
+`sync_failed`, and `verify_failed`. JSON errors use the shared schema-version-1 envelope with an
+`error` object containing `code`, `message`, and optional `hint`.
 
 ## Migrating zorg-era records (`bob ref migrate-zorg`)
 

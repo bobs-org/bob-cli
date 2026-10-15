@@ -11,7 +11,14 @@ use super::*;
 const HELP_GROUPS: &[(&str, &[&str])] = &[
     (
         "Library",
-        &["find", "list", "migrate-tasks", "migrate-zorg", "show"],
+        &[
+            "find",
+            "list",
+            "migrate-tasks",
+            "migrate-zorg",
+            "rename",
+            "show",
+        ],
     ),
     (
         "Highlights pipeline",
@@ -31,6 +38,7 @@ Examples:
   bob ref find https://arxiv.org/abs/1706.03762   Is this paper already in the library?
   bob ref list                                    Show the reading queue
   bob ref list -R finished -S 30d                 Show what was finished in the last 30 days
+  bob ref rename 442a6bf555914893e9891c11519de94f karpathy_llm_wiki -d
   bob ref show ea_graph -c                        Read your comments on one reference
   bob ref create <URL|PDF|MD> -L                  Capture a reference and narrate it
   bob ref scan                                    Sync Highlights PDFs into reference notes
@@ -59,7 +67,7 @@ pub(crate) fn build_cli() -> ClapCommand {
     let groups = groups.trim_end().to_string();
     let mut command = ClapCommand::new(COMMAND_NAME)
         .about(
-            "Find, list, and read Bob reference notes, and sync Highlights PDFs into them",
+            "Find, list, read, and rename Bob reference notes, and sync Highlights PDFs into them",
         )
         .help_template(REF_HELP_TEMPLATE)
         .before_help(groups)
@@ -81,6 +89,7 @@ fn all_subcommands() -> Vec<ClapCommand> {
         crate::native::ref_library::cli::list_command(),
         crate::native::ref_library::migrate_tasks::migrate_tasks_command(),
         crate::native::ref_library::migrate_zorg::migrate_zorg_command(),
+        rename::command(),
         crate::native::ref_library::cli::show_command(),
         create::command(),
         doctor_command(),

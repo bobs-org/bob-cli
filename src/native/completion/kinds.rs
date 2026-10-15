@@ -194,6 +194,12 @@ const TABLE: &[Entry] = &[
         arg: "ref",
         kind: Kind::VaultNote,
     },
+    // `bob ref rename` resolves the old reference through the same exact note index.
+    Entry {
+        path: &["ref", "rename"],
+        arg: "ref",
+        kind: Kind::VaultNote,
+    },
     // `bob ref migrate-tasks` takes a TSV map file.
     Entry {
         path: &["ref", "migrate-tasks"],

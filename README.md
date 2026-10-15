@@ -271,7 +271,7 @@ Bob's workflow commands are:
 | --- | --- |
 | [`nightly`](#nightly-maintenance) | Run nightly maintenance: vault-sync, task archive, vault-sync |
 | [`query`](#query) | Run Dataview or Tasks queries against the vault |
-| [`ref`](#reference-library-bob-ref) | Find, list, and read references; sync Highlights PDFs into them |
+| [`ref`](#reference-library-bob-ref) | Find, list, read, and rename references; sync Highlights PDFs into them |
 | [`vault-sync`](#vault-sync) | Reconcile the vault through Git (default: run) or show status |
 
 ### Integrations
@@ -963,6 +963,7 @@ bob ref list [-A|--all] [-b|--bob-dir PATH] [-f|--format human|json|markdown] [-
 bob ref migrate-tasks [-b|--bob-dir DIR] [-f|--format human|json|tsv] [-m|--map FILE] [-o|--offline] [-r|--ref-dir PATH] [-w|--write]
 bob ref migrate-zorg [-b|--bob-dir PATH] [-f|--format human|json] [-o|--offline] [-r|--ref-dir PATH] [-w|--write]
 bob ref marker <pdf> [-b|--bob-dir PATH] [-l|--lib-dir PATH] [-r|--ref-dir PATH] [-x|--xlib-dir PATH]
+bob ref rename <REF> <NAME> [-b|--bob-dir PATH] [-d|--dry-run] [-f|--format human|json] [-l|--lib-dir PATH] [-o|--offline] [-r|--ref-dir PATH] [-x|--xlib-dir PATH]
 bob ref scan [-b|--bob-dir PATH] [-d|--dry-run] [-f|--format human|json] [-j|--jobs N] [-l|--lib-dir PATH] [-n|--no-hooks] [-r|--ref-dir PATH] [-v|--verbose] [-w|--write-pdfs] [-x|--xlib-dir PATH]
 bob ref show <REF>... [-b|--bob-dir PATH] [-c|--comments-only] [-f|--format human|json|markdown] [-N|--no-annotations] [-r|--ref-dir PATH]
 bob ref sync <pdf> [-b|--bob-dir PATH] [-d|--dry-run] [-l|--lib-dir PATH] [-p|--prefer marker|frontmatter] [-r|--ref-dir PATH] [-w|--write-pdf] [-x|--xlib-dir PATH]

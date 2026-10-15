@@ -5,6 +5,7 @@ mod find;
 mod list;
 mod migrate_tasks;
 mod migrate_zorg;
+mod rename;
 mod show;
 mod tasks;
 
@@ -14,7 +15,9 @@ use std::path::Path;
 use std::process::Output;
 
 const ALIASES: &[&str] = &["highlights", "highlights-ref"];
-const VERBS: &[&str] = &["create", "doctor", "jobs", "marker", "scan", "sync"];
+const VERBS: &[&str] = &[
+    "create", "doctor", "jobs", "marker", "rename", "scan", "sync",
+];
 const FIXED_NOW: &str = "2026-10-06 12:00:00";
 
 fn run_root(root: &str, args: &[&str], vault: &Path) -> Output {
@@ -145,6 +148,7 @@ fn ref_error_paths_match_aliases_for_every_verb() {
         &["doctor", "--prefer", "marker"],
         &["jobs", "list", "--format", "bogus"],
         &["marker"],
+        &["rename"],
         &["scan", "--jobs", "0"],
         &["sync"],
     ];
