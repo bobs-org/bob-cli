@@ -163,6 +163,48 @@ pub(super) fn acquire_scan_writer_lock(
         .with_code("scan_busy"))
 }
 
+/// Take the scan writer lock with a caller-specific bound. Reference renames
+/// use a shorter budget than scans themselves so the command stays within the
+/// Bob Mac Capture request timeout while still serializing with scans.
+pub(super) fn acquire_scan_writer_lock_with_timeout(
+    timeout: std::time::Duration,
+) -> Result<fs::File> {
+    let dir = bob_env::bob_cli_state_dir().join("ref");
+    let path = dir.join("scan.lock");
+    let file = bob_env::create_state_lock_file(&dir, "scan.lock").map_err(
+        |error| {
+            CommandError::new(format!(
+                "open scan lock {}: {error}",
+                path.display()
+            ))
+        },
+    )?;
+    {
+        use fs2::FileExt;
+        if file.try_lock_exclusive().is_ok() {
+            return Ok(file);
+        }
+    }
+    eprintln!("waiting for another bob ref scan to finish…");
+    let started = std::time::Instant::now();
+    loop {
+        if started.elapsed() >= timeout {
+            return Err(CommandError::new(format!(
+                "another bob ref scan is still running (waited {} seconds)",
+                timeout.as_secs()
+            ))
+            .with_code("scan_busy"));
+        }
+        std::thread::sleep(
+            SCAN_LOCK_POLL.min(timeout.saturating_sub(started.elapsed())),
+        );
+        use fs2::FileExt;
+        if file.try_lock_exclusive().is_ok() {
+            return Ok(file);
+        }
+    }
+}
+
 /// Bounded writer-lock wait, in seconds.
 fn scan_lock_wait_seconds() -> f64 {
     bob_env::var(ENV_SCAN_LOCK_WAIT_SECONDS)

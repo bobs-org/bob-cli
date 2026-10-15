@@ -11,3 +11,6 @@ mod rewrite;
 mod write;
 
 pub(crate) use cli::{migrate_tasks_command, run_migrate_tasks};
+pub(crate) use write::{
+    restore_before_images, snapshot_before_images, BeforeImages,
+};

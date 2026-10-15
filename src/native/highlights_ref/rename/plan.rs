@@ -5,6 +5,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::Command,
+    time::Duration,
 };
 
 use serde::Serialize;
@@ -24,6 +25,8 @@ use crate::native::{
 const RENAME_COMMAND: &str = "ref rename";
 const AUDIO_EXTENSIONS: &[&str] = &["mp3", "m4a", "ogg", "opus"];
 const LEGACY_REF_DIRS: &[&str] = &["ai", "zorg"];
+const MAINTENANCE_LOCK_BUDGET: Duration = Duration::from_secs(60);
+const SCAN_LOCK_BUDGET: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone)]
 struct RenameFailure {
@@ -96,9 +99,9 @@ pub(super) struct KeptInfo {
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct SyncInfo {
-    pre: &'static str,
-    post: &'static str,
+pub(super) struct SyncInfo {
+    pub(super) pre: &'static str,
+    pub(super) post: &'static str,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -119,7 +122,7 @@ pub(super) struct RenameEnvelope {
     #[serde(rename = "ref")]
     pub(super) reference: ShowRow,
     pub(super) commit: Option<serde_json::Value>,
-    sync: SyncInfo,
+    pub(super) sync: SyncInfo,
     pub(super) warnings: Vec<String>,
 }
 
@@ -160,45 +163,787 @@ pub(crate) fn run(matches: &clap::ArgMatches) -> i32 {
         .get_one::<String>("name")
         .expect("required NAME is enforced by clap");
 
-    match prepare(&config, query, requested_name, dry_run, offline) {
-        Ok(prepared) => {
-            if !dry_run && prepared.report.changed {
-                match ob::detect_git_worktree(&config.bob_dir, &ob::child_env())
-                {
-                    Ok(true) => {}
-                    Ok(false) | Err(_) => {
-                        return print_failure(
-                            format,
-                            RenameFailure::new(
-                                "not_a_worktree",
-                                "reference renames require a Git worktree",
-                                Some("initialize or open the Bob vault as a Git worktree"),
-                            ),
-                        );
-                    }
-                }
+    if dry_run {
+        return match prepare(&config, query, requested_name, true, offline) {
+            Ok(prepared) => print_success(format, &prepared.report),
+            Err(failure) => print_failure(format, failure),
+        };
+    }
+
+    run_live(&config, query, requested_name, offline, format)
+}
+
+fn run_live(
+    config: &Config,
+    query: &str,
+    requested_name: &str,
+    offline: bool,
+    format: Format,
+) -> i32 {
+    let _maintenance_lock = {
+        let json_mode = format == Format::Json;
+        let on_first_wait = move || {
+            if json_mode {
+                eprintln!("waiting for another vault maintenance run…");
+            } else {
+                eprintln!(
+                    "  {}",
+                    crate::native::style::Styler::detect()
+                        .dim("waiting for another vault maintenance run…")
+                );
+            }
+        };
+        match ob::acquire_lock_waiting(MAINTENANCE_LOCK_BUDGET, on_first_wait) {
+            Ok(lock) => lock,
+            Err(error) => {
                 return print_failure(
                     format,
                     RenameFailure::new(
-                        "not_implemented",
-                        "live reference renames are not available yet",
-                        Some("preview with -d; the write flow lands in a follow-up phase"),
+                        "lock_busy",
+                        format!("could not acquire the vault maintenance lock: {error}"),
+                        Some("wait for the other maintenance run to finish, then retry"),
                     ),
                 );
             }
-            if format == Format::Json {
-                println!(
-                    "{}",
-                    serde_json::to_string(&prepared.report)
-                        .expect("rename report serializes")
-                );
-            } else {
-                print!("{}", super::report::render_human(&prepared.report));
-            }
-            0
         }
-        Err(failure) => print_failure(format, failure),
+    };
+    let child_env = ob::child_env();
+
+    match ob::detect_git_worktree(&config.bob_dir, &child_env) {
+        Ok(true) => {}
+        Ok(false) | Err(_) => {
+            return print_failure(
+                format,
+                RenameFailure::new(
+                    "not_a_worktree",
+                    format!(
+                        "reference renames require a Git worktree: {}",
+                        config.bob_dir.display()
+                    ),
+                    Some("initialize or open the Bob vault as a Git worktree"),
+                ),
+            );
+        }
     }
+
+    let _scan_lock = match super::super::acquire_scan_writer_lock_with_timeout(
+        SCAN_LOCK_BUDGET,
+    ) {
+        Ok(lock) => lock,
+        Err(error) => {
+            return print_failure(
+                format,
+                RenameFailure::new(
+                    "scan_busy",
+                    format!("could not acquire the reference scan lock: {error}"),
+                    Some("wait for the running reference scan to finish, then retry"),
+                ),
+            );
+        }
+    };
+
+    if !offline {
+        let cycle =
+            crate::native::vault_sync::run_cycle_with_existing_lock_report(
+                &child_env, true,
+            );
+        if !cycle.ok || !cycle.conflicts.is_empty() {
+            let detail = if cycle.conflicts.is_empty() {
+                cycle.error.unwrap_or_else(|| {
+                    "vault sync reported failure".to_string()
+                })
+            } else {
+                format!("vault sync conflict in {}", cycle.conflicts.join(", "))
+            };
+            return print_failure(
+                format,
+                RenameFailure::new(
+                    "sync_failed",
+                    format!("pre-sync failed: {detail}"),
+                    Some("re-run with --offline to commit locally without syncing"),
+                ),
+            );
+        }
+    }
+
+    let mut prepared = match prepare(config, query, requested_name, false, true)
+    {
+        Ok(prepared) => prepared,
+        Err(failure) if failure.code == "unknown_reference" => {
+            match already_renamed_report(
+                config,
+                query,
+                requested_name,
+                offline,
+                &child_env,
+            ) {
+                Ok(Some(report)) => return print_success(format, &report),
+                Ok(None) => return print_failure(format, failure),
+                Err(already_failure) => {
+                    return print_failure(format, already_failure);
+                }
+            }
+        }
+        Err(failure) => return print_failure(format, failure),
+    };
+
+    if !prepared.report.changed {
+        match already_renamed_report(
+            config,
+            query,
+            requested_name,
+            offline,
+            &child_env,
+        ) {
+            Ok(Some(report)) => return print_success(format, &report),
+            Ok(None) => {}
+            Err(failure) => return print_failure(format, failure),
+        }
+    }
+
+    prepared.report.sync.pre = if offline { "skipped" } else { "ok" };
+    if !prepared.report.changed {
+        return print_success(format, &prepared.report);
+    }
+
+    let old_head = git_head(&config.bob_dir, &child_env).ok();
+    let prior_row = prepared.report.reference.row.clone();
+    let applied = match apply_and_verify(&config.bob_dir, &prepared, || {
+        verify_renamed(config, &prepared, &prior_row)
+    }) {
+        Ok(applied) => applied,
+        Err(message) => {
+            return print_failure(
+                format,
+                RenameFailure::new(
+                    "verify_failed",
+                    format!("could not apply and verify the rename: {message}"),
+                    Some("the rename was rolled back; inspect the listed paths and retry"),
+                ),
+            );
+        }
+    };
+
+    let subject = format!(
+        "bob ref rename: {} → {}",
+        prepared.report.from.stem, prepared.report.to.stem
+    );
+    let commit_paths =
+        prepared.touched_paths.iter().cloned().collect::<Vec<_>>();
+    let sha = match ob::commit_paths(
+        &config.bob_dir,
+        &child_env,
+        &subject,
+        &commit_paths,
+    ) {
+        Ok(Some(sha)) => sha,
+        Ok(None) => {
+            let unstage =
+                unstage_paths(&config.bob_dir, &child_env, &commit_paths);
+            let rollback = rollback_applied(&applied);
+            return print_failure(
+                format,
+                RenameFailure::new(
+                    "verify_failed",
+                    format!("rename verified but produced no scoped Git commit{unstage}{rollback}"),
+                    Some("check the vault Git state and retry"),
+                ),
+            );
+        }
+        Err(error) => {
+            if let Some((sha, committed_subject)) = committed_despite_error(
+                &config.bob_dir,
+                &child_env,
+                old_head.as_deref(),
+                &subject,
+            ) {
+                if committed_subject == subject {
+                    let _ = error;
+                    sha
+                } else {
+                    let unstage = unstage_paths(
+                        &config.bob_dir,
+                        &child_env,
+                        &commit_paths,
+                    );
+                    let rollback = rollback_applied(&applied);
+                    return print_failure(
+                        format,
+                        RenameFailure::new(
+                            "verify_failed",
+                            format!(
+                                "Git commit failed: {error}{unstage}{rollback}"
+                            ),
+                            Some("check the vault Git state and retry"),
+                        ),
+                    );
+                }
+            } else {
+                let unstage =
+                    unstage_paths(&config.bob_dir, &child_env, &commit_paths);
+                let rollback = rollback_applied(&applied);
+                return print_failure(
+                    format,
+                    RenameFailure::new(
+                        "verify_failed",
+                        format!(
+                            "Git commit failed: {error}{unstage}{rollback}"
+                        ),
+                        Some("check the vault Git state and retry"),
+                    ),
+                );
+            }
+        }
+    };
+
+    prepared.report.commit = Some(serde_json::json!({
+        "sha": sha,
+        "subject": subject,
+    }));
+    if offline {
+        prepared.report.sync.post = "skipped";
+    } else {
+        let cycle =
+            crate::native::vault_sync::run_cycle_with_existing_lock_report(
+                &child_env, true,
+            );
+        if !cycle.ok || !cycle.conflicts.is_empty() {
+            let detail = if cycle.conflicts.is_empty() {
+                cycle.error.unwrap_or_else(|| {
+                    "vault sync reported failure".to_string()
+                })
+            } else {
+                format!("vault sync conflict in {}", cycle.conflicts.join(", "))
+            };
+            prepared.report.sync.post = "failed";
+            prepared.report.warnings.push(format!(
+                "the rename is committed locally; post-sync failed ({detail}); run bob vault-sync"
+            ));
+        } else {
+            prepared.report.sync.post = "ok";
+        }
+    }
+    print_success(format, &prepared.report)
+}
+
+fn print_success(format: Format, report: &RenameEnvelope) -> i32 {
+    if format == Format::Json {
+        println!(
+            "{}",
+            serde_json::to_string(report).expect("rename report serializes")
+        );
+    } else {
+        print!("{}", super::report::render_human(report));
+    }
+    0
+}
+
+fn already_renamed_report(
+    config: &Config,
+    query: &str,
+    requested_name: &str,
+    offline: bool,
+    child_env: &ob::ChildEnv,
+) -> std::result::Result<Option<RenameEnvelope>, RenameFailure> {
+    let Some(old_stem) = old_stem_from_query(query) else {
+        return Ok(None);
+    };
+    let new_stem = super::super::clip_url::validate_name(requested_name)
+        .map_err(|_| invalid_name_failure(requested_name))?;
+    let library_config = LibraryConfig {
+        bob_dir: config.bob_dir.clone(),
+        ref_dir: config.ref_dir.clone(),
+        xlib_dir: config.xlib_dir.clone(),
+    };
+    let index = build_index(&library_config).map_err(|error| {
+        RenameFailure::new(
+            "unknown_reference",
+            format!("could not inspect the renamed reference: {error}"),
+            Some(
+                "pass the exact reference note path or check the ref directory",
+            ),
+        )
+    })?;
+    let expected_subject = format!("bob ref rename: {old_stem} → {new_stem}");
+    let mut matches = Vec::new();
+    for (row_index, row) in index.rows.iter().enumerate() {
+        if Path::new(&row.path)
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            != Some(new_stem.as_str())
+            || row.source_pdf.is_none()
+        {
+            continue;
+        }
+        let Some((sha, subject)) = latest_commit_for_path(
+            &config.bob_dir,
+            child_env,
+            Path::new(&row.path),
+        )
+        .map_err(|error| {
+            RenameFailure::new(
+                "not_in_sync",
+                format!("could not inspect rename history: {error}"),
+                Some("check Git availability and retry"),
+            )
+        })?
+        else {
+            continue;
+        };
+        if subject == expected_subject {
+            matches.push((row_index, sha));
+        }
+    }
+    if matches.len() != 1 {
+        return Ok(None);
+    }
+    let (row_index, sha) = matches.pop().expect("one matched row");
+    let resolved = crate::native::ref_library::show::ResolvedShow {
+        row: row_index,
+        also: Vec::new(),
+    };
+    let shown = crate::native::ref_library::show::load_show_row(
+        &index, &resolved, false, false,
+    )
+    .map_err(|message| {
+        RenameFailure::new(
+            "not_in_sync",
+            format!("could not read renamed reference: {message}"),
+            Some("check the reference note and retry"),
+        )
+    })?;
+    let row = &index.rows[row_index];
+    let to_path = PathBuf::from(&row.path);
+    let from_path = to_path
+        .parent()
+        .unwrap_or_else(|| Path::new(""))
+        .join(format!("{old_stem}.md"));
+    let to_pdf = PathBuf::from(row.source_pdf.as_deref().unwrap_or_default());
+    let from_pdf = to_pdf
+        .parent()
+        .unwrap_or_else(|| Path::new(""))
+        .join(format!("{old_stem}.pdf"));
+    Ok(Some(RenameEnvelope {
+        ok: true,
+        schema_version: crate::native::ref_library::output::REF_SCHEMA_VERSION,
+        command: RENAME_COMMAND,
+        generated_at: crate::native::ref_library::output::generated_at(),
+        mode: "write",
+        changed: false,
+        outcome: "already_renamed",
+        from: RefLocation {
+            path: vault_path(&from_path),
+            pdf: vault_path(&from_pdf),
+            stem: old_stem,
+        },
+        to: RefLocation {
+            path: vault_path(&to_path),
+            pdf: vault_path(&to_pdf),
+            stem: new_stem,
+        },
+        moves: Vec::new(),
+        links: LinksInfo {
+            rewritten: 0,
+            files: Vec::new(),
+            skipped_ambiguous: Vec::new(),
+        },
+        frontmatter: Vec::new(),
+        kept: KeptInfo {
+            marker_id: row.marker_id.clone(),
+            task: row.task.as_ref().map(|task| KeptTask {
+                path: task.path.clone(),
+                block_id: task.block_id.clone(),
+            }),
+        },
+        reference: shown,
+        commit: Some(serde_json::json!({
+            "sha": sha,
+            "subject": expected_subject,
+        })),
+        sync: SyncInfo {
+            pre: if offline { "skipped" } else { "ok" },
+            post: "skipped",
+        },
+        warnings: Vec::new(),
+    }))
+}
+
+fn old_stem_from_query(query: &str) -> Option<String> {
+    let value = query.trim();
+    if value.is_empty() {
+        return None;
+    }
+    let looks_like_note_path = value.starts_with("ref/")
+        || Path::new(value).is_absolute()
+        || value.ends_with(".md");
+    let stem = if looks_like_note_path {
+        Path::new(value).file_stem()?.to_str()?
+    } else if value.contains('/') || value.contains('\\') {
+        return None;
+    } else {
+        value.strip_suffix(".md").unwrap_or(value)
+    };
+    (!stem.is_empty() && !stem.contains('/') && !stem.contains('\\'))
+        .then(|| stem.to_string())
+}
+
+fn latest_commit_for_path(
+    vault: &Path,
+    child_env: &ob::ChildEnv,
+    path: &Path,
+) -> std::result::Result<Option<(String, String)>, String> {
+    let output = ob::git_command(vault, child_env)
+        .args(["log", "-1", "--format=%H%x00%s", "--"])
+        .arg(path)
+        .output()
+        .map_err(|error| format!("git log for {}: {error}", path.display()))?;
+    if !output.status.success() {
+        return Err(format!(
+            "git log for {} failed: {}",
+            path.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    let value = String::from_utf8_lossy(&output.stdout);
+    let Some((sha, subject)) = value.trim_end().split_once('\0') else {
+        return Ok(None);
+    };
+    Ok(Some((sha.to_string(), subject.to_string())))
+}
+
+#[derive(Debug, Default)]
+struct AppliedRename {
+    moves: Vec<(PathBuf, PathBuf)>,
+    before: crate::native::ref_library::migrate_tasks::BeforeImages,
+    after: BTreeMap<PathBuf, Vec<u8>>,
+}
+
+fn apply_and_verify(
+    bob_dir: &Path,
+    prepared: &PreparedPlan,
+    verify: impl FnOnce() -> std::result::Result<(), String>,
+) -> std::result::Result<AppliedRename, String> {
+    let mut rewrites = BTreeMap::<PathBuf, String>::new();
+    for rewrite in &prepared.link_rewrites {
+        rewrites.insert(rewrite.path.clone(), rewrite.contents.clone());
+    }
+    if let Some((path, contents)) = &prepared.own_note_rewrite {
+        rewrites.insert(path.clone(), contents.clone());
+    }
+    apply_transaction(bob_dir, &prepared.report.moves, &rewrites, verify)
+}
+
+fn apply_transaction(
+    bob_dir: &Path,
+    moves: &[MoveInfo],
+    rewrites: &BTreeMap<PathBuf, String>,
+    verify: impl FnOnce() -> std::result::Result<(), String>,
+) -> std::result::Result<AppliedRename, String> {
+    let mut transaction = AppliedRename::default();
+    let relative_paths = rewrites
+        .keys()
+        .map(|path| vault_path(path))
+        .collect::<Vec<_>>();
+    transaction.before =
+        crate::native::ref_library::migrate_tasks::snapshot_before_images(
+            bob_dir,
+            &relative_paths,
+        );
+    if let Some((path, _)) = transaction
+        .before
+        .iter()
+        .find(|(_, before)| before.is_none())
+    {
+        return Err(format!(
+            "could not snapshot rewrite source {}",
+            path.display()
+        ));
+    }
+
+    let result = (|| {
+        for movement in moves {
+            let from = PathBuf::from(&movement.from);
+            let to = PathBuf::from(&movement.to);
+            let from_absolute = bob_dir.join(&from);
+            let to_absolute = bob_dir.join(&to);
+            if let Some(parent) = to_absolute.parent()
+                && !parent.is_dir()
+            {
+                return Err(format!(
+                    "destination parent does not exist: {}",
+                    parent.display()
+                ));
+            }
+            rename_no_replace(&from_absolute, &to_absolute).map_err(
+                |error| {
+                    format!(
+                        "move {} to {}: {error}",
+                        from.display(),
+                        to.display()
+                    )
+                },
+            )?;
+            transaction.moves.push((from_absolute, to_absolute));
+        }
+
+        let moved = transaction
+            .moves
+            .iter()
+            .map(|(from, to)| {
+                (
+                    from.strip_prefix(bob_dir).unwrap_or(from).to_path_buf(),
+                    to.strip_prefix(bob_dir).unwrap_or(to).to_path_buf(),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        for (relative, contents) in rewrites {
+            let write_relative = moved.get(relative).unwrap_or(relative);
+            let absolute = bob_dir.join(write_relative);
+            super::super::atomic_write(&absolute, contents).map_err(
+                |error| {
+                    format!("rewrite {}: {error}", write_relative.display())
+                },
+            )?;
+            transaction
+                .after
+                .insert(bob_dir.join(relative), contents.as_bytes().to_vec());
+        }
+        verify()
+    })();
+
+    if let Err(message) = result {
+        let rollback = rollback_applied(&transaction);
+        return Err(format!("{message}{rollback}"));
+    }
+    Ok(transaction)
+}
+
+fn rollback_applied(transaction: &AppliedRename) -> String {
+    let mut failures = Vec::new();
+    for (from, to) in transaction.moves.iter().rev() {
+        if !to.exists() {
+            if from.exists() {
+                continue;
+            }
+            failures.push(format!(
+                "{} and {} are both missing",
+                from.display(),
+                to.display()
+            ));
+            continue;
+        }
+        if from.exists() {
+            failures.push(format!(
+                "{} exists; left {} in place",
+                from.display(),
+                to.display()
+            ));
+            continue;
+        }
+        if let Err(error) = rename_no_replace(to, from) {
+            failures.push(format!(
+                "could not move {} back to {}: {error}",
+                to.display(),
+                from.display()
+            ));
+        }
+    }
+    let diverged =
+        crate::native::ref_library::migrate_tasks::restore_before_images(
+            &transaction.before,
+            &transaction.after,
+        );
+    failures.extend(diverged.into_iter().map(|path| {
+        format!("left concurrently changed path {} in place", path.display())
+    }));
+    if failures.is_empty() {
+        String::new()
+    } else {
+        format!("; rollback issues: {}", failures.join("; "))
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn rename_no_replace(from: &Path, to: &Path) -> std::io::Result<()> {
+    use std::{ffi::CString, os::unix::ffi::OsStrExt};
+    let from = CString::new(from.as_os_str().as_bytes()).map_err(|error| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, error)
+    })?;
+    let to = CString::new(to.as_os_str().as_bytes()).map_err(|error| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, error)
+    })?;
+    let status = unsafe {
+        libc::renameat2(
+            libc::AT_FDCWD,
+            from.as_ptr(),
+            libc::AT_FDCWD,
+            to.as_ptr(),
+            libc::RENAME_NOREPLACE,
+        )
+    };
+    if status == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+fn rename_no_replace(from: &Path, to: &Path) -> std::io::Result<()> {
+    use std::{ffi::CString, os::unix::ffi::OsStrExt};
+    let from = CString::new(from.as_os_str().as_bytes()).map_err(|error| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, error)
+    })?;
+    let to = CString::new(to.as_os_str().as_bytes()).map_err(|error| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, error)
+    })?;
+    let status = unsafe {
+        libc::renamex_np(from.as_ptr(), to.as_ptr(), libc::RENAME_EXCL)
+    };
+    if status == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "ios")))]
+fn rename_no_replace(from: &Path, to: &Path) -> std::io::Result<()> {
+    if to.exists() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            format!("destination already exists: {}", to.display()),
+        ));
+    }
+    fs::rename(from, to)
+}
+
+fn verify_renamed(
+    config: &Config,
+    prepared: &PreparedPlan,
+    prior_row: &RefRow,
+) -> std::result::Result<(), String> {
+    if !is_in_sync(config, Path::new(&prepared.report.to.pdf)) {
+        return Err(format!(
+            "dry-run ref sync still plans work for {}",
+            prepared.report.to.pdf
+        ));
+    }
+    let library_config = LibraryConfig {
+        bob_dir: config.bob_dir.clone(),
+        ref_dir: config.ref_dir.clone(),
+        xlib_dir: config.xlib_dir.clone(),
+    };
+    let index = build_index(&library_config)
+        .map_err(|error| format!("rebuild the reference index: {error}"))?;
+    let row = index
+        .rows
+        .iter()
+        .find(|row| row.path == prepared.report.to.path)
+        .ok_or_else(|| {
+            format!("new index row is missing: {}", prepared.report.to.path)
+        })?;
+    if index
+        .rows
+        .iter()
+        .any(|row| row.path == prepared.report.from.path)
+    {
+        return Err(format!(
+            "old index row remains at {}",
+            prepared.report.from.path
+        ));
+    }
+    if row.marker_id != prepared.report.kept.marker_id {
+        return Err("reference id changed during rename".to_string());
+    }
+    let expected_task = prepared
+        .report
+        .kept
+        .task
+        .as_ref()
+        .map(|task| (&task.path, &task.block_id));
+    let actual_task =
+        row.task.as_ref().map(|task| (&task.path, &task.block_id));
+    if expected_task != actual_task {
+        return Err(
+            "reading task path or block ID changed during rename".to_string()
+        );
+    }
+    for code in ["open_ref_without_task", "duplicate_identity"] {
+        if row
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == code)
+        {
+            return Err(format!("new index row has {code} diagnostic"));
+        }
+    }
+    let had_orphan = prior_row
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code == "orphan_ref_task");
+    if !had_orphan
+        && row
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "orphan_ref_task")
+    {
+        return Err(
+            "rename introduced an orphan_ref_task diagnostic".to_string()
+        );
+    }
+    Ok(())
+}
+
+fn git_head(
+    vault: &Path,
+    child_env: &ob::ChildEnv,
+) -> std::result::Result<String, String> {
+    let output = ob::git_command(vault, child_env)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .map_err(|error| format!("git rev-parse HEAD: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "git rev-parse HEAD failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn unstage_paths(
+    vault: &Path,
+    child_env: &ob::ChildEnv,
+    paths: &[PathBuf],
+) -> String {
+    let output = ob::git_command(vault, child_env)
+        .arg("reset")
+        .arg("--quiet")
+        .arg("HEAD")
+        .arg("--")
+        .args(paths)
+        .output();
+    match output {
+        Ok(output) if output.status.success() => String::new(),
+        Ok(output) => format!(
+            "; could not unstage rename paths: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ),
+        Err(error) => format!("; could not unstage rename paths: {error}"),
+    }
+}
+
+fn committed_despite_error(
+    vault: &Path,
+    child_env: &ob::ChildEnv,
+    old_head: Option<&str>,
+    expected_subject: &str,
+) -> Option<(String, String)> {
+    let (sha, subject) =
+        latest_commit_for_path(vault, child_env, Path::new(".")).ok()??;
+    (old_head != Some(sha.as_str()) && subject == expected_subject)
+        .then_some((sha, subject))
 }
 
 fn prepare(
@@ -1291,6 +2036,56 @@ mod tests {
             )
         );
         assert_eq!(fields, ["audio", "highlights_sidecar", "source_pdf"]);
+    }
+
+    #[test]
+    fn forced_verify_failure_reverses_moves_and_restores_rewrites() {
+        let temp = tempfile::tempdir().expect("create scratch vault");
+        let vault = temp.path();
+        fs::create_dir_all(vault.join("ref/blogs")).unwrap();
+        fs::create_dir_all(vault.join("lib/blogs")).unwrap();
+        let old_note = vault.join("ref/blogs/old.md");
+        let old_pdf = vault.join("lib/blogs/old.pdf");
+        let linked_note = vault.join("sase.md");
+        fs::write(&old_note, "original reference\n").unwrap();
+        fs::write(&old_pdf, b"original PDF bytes").unwrap();
+        fs::write(&linked_note, "[[ref/blogs/old]]\n").unwrap();
+
+        let mut rewrites = BTreeMap::new();
+        rewrites.insert(
+            PathBuf::from("sase.md"),
+            "[[ref/blogs/new]]\n".to_string(),
+        );
+        let result = apply_transaction(
+            vault,
+            &[
+                MoveInfo {
+                    kind: MoveKind::Note,
+                    from: "ref/blogs/old.md".to_string(),
+                    to: "ref/blogs/new.md".to_string(),
+                },
+                MoveInfo {
+                    kind: MoveKind::Pdf,
+                    from: "lib/blogs/old.pdf".to_string(),
+                    to: "lib/blogs/new.pdf".to_string(),
+                },
+            ],
+            &rewrites,
+            || Err("forced verifier failure".to_string()),
+        );
+
+        assert!(result.unwrap_err().contains("forced verifier failure"));
+        assert_eq!(
+            fs::read_to_string(old_note).unwrap(),
+            "original reference\n"
+        );
+        assert_eq!(fs::read(old_pdf).unwrap(), b"original PDF bytes");
+        assert_eq!(
+            fs::read_to_string(linked_note).unwrap(),
+            "[[ref/blogs/old]]\n"
+        );
+        assert!(!vault.join("ref/blogs/new.md").exists());
+        assert!(!vault.join("lib/blogs/new.pdf").exists());
     }
 
     #[test]

@@ -326,7 +326,7 @@ bob ref rename 442a6bf555914893e9891c11519de94f karpathy_llm_wiki -d
 
 The dry-run inventories the note, PDF, sidecar, audio, and inbound links, then
 reports the frontmatter paths that would change. It does not write files, take
-locks, sync, or commit. Live mode is reserved for the follow-up write phase.
+locks, sync, or commit. Live mode applies the same plan as one scoped commit.
 The JSON form (`-d -f json`) uses schema version 1 and includes `from`, `to`,
 `moves`, `links`, `frontmatter`, `kept`, and the current `ref` row; `commit` is
 `null` and both sync values are `skipped` in a dry run.
@@ -345,9 +345,49 @@ the vault and cannot be updated.
 Machine-readable refusal codes are `unknown_reference`,
 `ambiguous_reference`, `legacy_reference`, `intake_reference`, `invalid_name`,
 `name_taken`, `has_highlights`, `listen_card_link`, `not_in_sync`,
-`dirty_paths`, `not_a_worktree`, `not_implemented`, `lock_busy`, `scan_busy`,
-`sync_failed`, and `verify_failed`. JSON errors use the shared schema-version-1 envelope with an
+`dirty_paths`, `not_a_worktree`, `lock_busy`, `scan_busy`, `sync_failed`, and
+`verify_failed`. JSON errors use the shared schema-version-1 envelope with an
 `error` object containing `code`, `message`, and optional `hint`.
+
+### Live write flow
+
+The live command takes the shared `bob_sync.lock` first (60 second wait), then
+the reference scan writer lock (30 second wait). It requires a Git worktree so
+the rename can be reverted. Unless `--offline` is set, it runs vault-sync while
+holding both locks and replans from the synced files. Offline runs refuse when
+any source, destination, or rewritten path is dirty.
+
+The writer snapshots every Markdown file it will rewrite, moves the bundle with
+no-clobber semantics, and atomically writes the planned link and frontmatter
+changes. It verifies that a dry-run `bob ref sync` on the new PDF plans no
+work, and that the rebuilt index has the same reference id and reading-task
+`(path, block_id)` at the new note path, with no duplicate identity or orphaned
+task introduced. A write or verification failure moves files back and restores
+the saved Markdown before-images.
+
+On success, Bob commits only the old and new bundle paths and rewritten notes
+with subject `bob ref rename: <old> → <new>`. The JSON `commit` object contains
+the commit `sha` and `subject`. Unless `--offline` is set, Bob then runs
+vault-sync again. If that post-sync fails, the local rename commit stays valid:
+the command exits successfully, reports `sync.post: "failed"`, and tells you to
+run `bob vault-sync`. `--offline` skips both sync cycles and commits locally.
+
+A rerun using the old stem or note path succeeds with
+`outcome: "already_renamed"` when the latest commit touching the new note has
+the matching rename subject. Passing the current stem as both `REF` and `NAME`
+returns `outcome: "unchanged"` without creating another commit.
+
+### Rollback runbook
+
+Each rename is one Git commit. To undo it, revert that commit and publish the
+revert through vault-sync:
+
+```bash
+git -C ~/bob log --format=%h --grep='^bob ref rename' -1
+bob vault-sync status --json
+git -C ~/bob revert --no-edit <sha>
+bob vault-sync
+```
 
 ## Migrating zorg-era records (`bob ref migrate-zorg`)
 

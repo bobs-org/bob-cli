@@ -427,14 +427,218 @@ fn listen_link_not_in_sync_dirty_and_live_mode_refusals() {
 
     let (_temp, live_vault) = gist_vault("bob-cli-ref-rename-live");
     git_commit_all(&live_vault);
-    assert_eq!(
-        error_json(
-            &live_vault,
-            &["442a6bf555914893e9891c11519de94f", "karpathy_llm_wiki"],
-            false,
-        )["error"]["code"],
-        "not_implemented"
+    let output = run_rename(
+        &live_vault,
+        &[
+            "442a6bf555914893e9891c11519de94f",
+            "karpathy_llm_wiki",
+            "-o",
+            "-f",
+            "json",
+        ],
     );
+    assert_success(&output);
+    let document: serde_json::Value =
+        serde_json::from_str(&stdout(&output)).expect("parse write JSON");
+    assert_eq!(document["mode"], "write");
+    assert_eq!(document["outcome"], "renamed");
+    assert_eq!(document["sync"]["pre"], "skipped");
+    assert_eq!(document["sync"]["post"], "skipped");
+    assert_eq!(
+        document["commit"]["subject"],
+        "bob ref rename: 442a6bf555914893e9891c11519de94f → karpathy_llm_wiki"
+    );
+}
+
+#[test]
+fn offline_write_verifies_identity_sync_and_already_renamed_reruns() {
+    let (_temp, vault) = gist_vault("bob-cli-ref-rename-write-verify");
+    git_commit_all(&vault);
+    let old_pdf_bytes =
+        fs::read(vault.join("lib/blogs/442a6bf555914893e9891c11519de94f.pdf"))
+            .unwrap();
+    write_file(&vault.join("unrelated.md"), "stay uncommitted\n");
+
+    let output = run_rename(
+        &vault,
+        &[
+            "442a6bf555914893e9891c11519de94f",
+            "karpathy_llm_wiki",
+            "-o",
+            "-f",
+            "json",
+        ],
+    );
+    assert_success(&output);
+    let document: serde_json::Value =
+        serde_json::from_str(&stdout(&output)).expect("parse rename JSON");
+    assert_eq!(document["ok"], true);
+    assert_eq!(document["mode"], "write");
+    assert_eq!(document["changed"], true);
+    assert_eq!(document["outcome"], "renamed");
+    assert_eq!(
+        document["commit"]["subject"],
+        "bob ref rename: 442a6bf555914893e9891c11519de94f → karpathy_llm_wiki"
+    );
+    assert_eq!(document["sync"]["pre"], "skipped");
+    assert_eq!(document["sync"]["post"], "skipped");
+    assert_eq!(
+        fs::read(vault.join("lib/blogs/karpathy_llm_wiki.pdf")).unwrap(),
+        old_pdf_bytes
+    );
+    assert!(!vault
+        .join("lib/blogs/442a6bf555914893e9891c11519de94f.pdf")
+        .exists());
+
+    let status = stdout(&git_in(&vault, ["status", "--short"]));
+    assert!(status.contains("?? unrelated.md"), "{status}");
+    let committed = stdout(&git_in(
+        &vault,
+        ["show", "--name-status", "--format=%s", "HEAD"],
+    ));
+    assert!(committed.starts_with(
+        "bob ref rename: 442a6bf555914893e9891c11519de94f → karpathy_llm_wiki\n"
+    ));
+    assert!(committed.contains("R100\tlib/blogs/442a6bf555914893e9891c11519de94f.pdf\tlib/blogs/karpathy_llm_wiki.pdf"));
+    assert!(committed.contains("M\tsase.md"));
+    assert!(!committed.contains("unrelated.md"));
+
+    let sync = bob_command()
+        .args(["ref", "sync", "-d"])
+        .arg(vault.join("lib/blogs/karpathy_llm_wiki.pdf"))
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", FIXED_NOW)
+        .output()
+        .expect("run dry-run sync after rename");
+    assert_success(&sync);
+    assert!(
+        stdout(&sync).contains("note_action: none"),
+        "{}",
+        format_output(&sync)
+    );
+
+    let find = bob_command()
+        .args([
+            "ref",
+            "find",
+            "442a6bf555914893e9891c11519de94f",
+            "-f",
+            "json",
+        ])
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", FIXED_NOW)
+        .output()
+        .expect("find old stable id");
+    assert_success(&find);
+    let found: serde_json::Value =
+        serde_json::from_str(&stdout(&find)).unwrap();
+    assert_eq!(
+        found["results"][0]["matches"][0]["ref"]["path"],
+        "ref/blogs/karpathy_llm_wiki.md"
+    );
+    assert_eq!(
+        found["results"][0]["matches"][0]["ref"]["task"]["block_id"],
+        document["kept"]["task"]["block_id"]
+    );
+
+    let rerun = run_rename(
+        &vault,
+        &[
+            "442a6bf555914893e9891c11519de94f",
+            "karpathy_llm_wiki",
+            "-o",
+            "-f",
+            "json",
+        ],
+    );
+    assert_success(&rerun);
+    let rerun: serde_json::Value =
+        serde_json::from_str(&stdout(&rerun)).unwrap();
+    assert_eq!(rerun["outcome"], "already_renamed");
+    assert_eq!(rerun["changed"], false);
+    assert_eq!(rerun["to"]["path"], "ref/blogs/karpathy_llm_wiki.md");
+
+    let unchanged = run_rename(
+        &vault,
+        &["karpathy_llm_wiki", "karpathy_llm_wiki", "-o", "-f", "json"],
+    );
+    assert_success(&unchanged);
+    let unchanged: serde_json::Value =
+        serde_json::from_str(&stdout(&unchanged)).unwrap();
+    assert_eq!(unchanged["outcome"], "unchanged");
+    assert_eq!(unchanged["changed"], false);
+    assert_eq!(unchanged["commit"], serde_json::Value::Null);
+}
+
+#[test]
+fn offline_write_moves_companions_and_refuses_dirty_or_stale_inputs() {
+    let (_temp, vault) = synced_vault(
+        "bob-cli-ref-rename-write-bundle",
+        "old.bundle",
+        "- status: wip\n- parent: sase\n- title: Bundle\n- id: bundle-id\n",
+        true,
+    );
+    git_commit_all(&vault);
+    let output =
+        run_rename(&vault, &["old.bundle", "new.bundle", "-o", "-f", "json"]);
+    assert_success(&output);
+    let document: serde_json::Value =
+        serde_json::from_str(&stdout(&output)).unwrap();
+    let moves = document["moves"].as_array().unwrap();
+    for expected in [
+        "ref/blogs/new.bundle.md",
+        "lib/blogs/new.bundle.pdf",
+        "lib/blogs/new.bundle.md",
+        "lib/blogs/new.bundle.textbundle",
+        "lib/blogs/new.bundle.mp3",
+    ] {
+        assert!(
+            moves.iter().any(|movement| movement["to"] == expected),
+            "missing move {expected}: {moves:?}"
+        );
+        assert!(
+            vault.join(expected).exists(),
+            "missing moved path {expected}"
+        );
+    }
+
+    let (_temp, dirty_vault) = gist_vault("bob-cli-ref-rename-write-dirty");
+    git_commit_all(&dirty_vault);
+    let tracker = dirty_vault.join("sase.md");
+    fs::write(
+        &tracker,
+        format!(
+            "{}\n[[ref/blogs/442a6bf555914893e9891c11519de94f]]\n",
+            fs::read_to_string(&tracker).unwrap()
+        ),
+    )
+    .unwrap();
+    let dirty = error_json(
+        &dirty_vault,
+        &[
+            "442a6bf555914893e9891c11519de94f",
+            "karpathy_llm_wiki",
+            "-o",
+        ],
+        false,
+    );
+    assert_eq!(dirty["error"]["code"], "dirty_paths");
+
+    let (_temp, stale_vault) = synced_vault(
+        "bob-cli-ref-rename-write-stale",
+        "old",
+        "- status: wip\n- parent: sase\n- title: Old\n- id: old-id\n",
+        false,
+    );
+    git_commit_all(&stale_vault);
+    let stale_path = stale_vault.join("ref/blogs/old.md");
+    let stale_contents = fs::read_to_string(&stale_path).unwrap().replace(
+        "source_pdf: lib/blogs/old.pdf",
+        "source_pdf: lib/blogs/missing.pdf",
+    );
+    fs::write(stale_path, stale_contents).unwrap();
+    let stale = error_json(&stale_vault, &["old", "new", "-o"], false);
+    assert_eq!(stale["error"]["code"], "not_in_sync");
 }
 
 fn add_listen_link(pdf: &Path, uri: &str) {

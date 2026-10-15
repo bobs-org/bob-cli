@@ -70,6 +70,25 @@ pub(super) fn render_human(report: &RenameEnvelope) -> String {
     }
     if report.outcome == "unchanged" {
         out.push_str("  outcome: unchanged\n");
+    } else if report.outcome == "already_renamed" {
+        out.push_str("  outcome: already_renamed\n");
+    }
+    if report.mode == "write" {
+        if let Some(commit) = &report.commit {
+            let sha = commit
+                .get("sha")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("(unknown)");
+            let subject = commit
+                .get("subject")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("bob ref rename");
+            out.push_str(&format!("  committed {sha} {subject}\n"));
+        }
+        out.push_str(&format!(
+            "  sync: pre {}, post {}\n",
+            report.sync.pre, report.sync.post
+        ));
     }
     out
 }
