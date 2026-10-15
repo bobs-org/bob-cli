@@ -818,6 +818,13 @@ fn pomodoro_help_documents_show_stale_option() {
                 && help.contains("open Pomodoro from no open Pomodoro"),
             "expected show-stale help in {label}:\n{help}"
         );
+        if label != "script fallback bob pomodoro status --help" {
+            assert!(
+                help.contains("[-w|--worked]") && help.contains("-w, --worked"),
+                "expected worked help in {label}:\n{help}"
+            );
+            assert_text_order(&help, &["-v, --verbose", "-w, --worked"]);
+        }
         assert_text_order(
             &help,
             &[

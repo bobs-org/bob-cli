@@ -310,7 +310,13 @@ fn notify_alias_matches_canonical_help_and_bad_arity() {
 #[test]
 fn pomodoro_status_forms_match_with_and_without_show_stale() {
     let day = fixture("pomodoro/day_with_open_pomodoro.md");
-    for extra in [&[][..], &["--show-stale"][..], &["-s"][..]] {
+    for extra in [
+        &[][..],
+        &["--show-stale"][..],
+        &["-s"][..],
+        &["--worked"][..],
+        &["-w"][..],
+    ] {
         let mut bob_bare = vec!["pomodoro"];
         bob_bare.extend_from_slice(extra);
         let mut bob_status = vec!["pomodoro", "status"];

@@ -8,7 +8,7 @@ use std::{
 use chrono::{NaiveDate, NaiveDateTime, Timelike};
 use clap::{Arg, ArgAction, Command as ClapCommand};
 
-use super::{config, env as bob_env, plan_budget};
+use super::{capture_pomodoros, config, env as bob_env, plan_budget};
 
 #[derive(Debug)]
 pub(crate) struct Error {
@@ -29,6 +29,7 @@ impl Error {
 struct Options {
     show_stale: bool,
     verbose: bool,
+    worked: bool,
 }
 
 #[derive(Debug)]
@@ -57,12 +58,49 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
             println!("{output}");
             0
         }
+        Ok(None) if options.worked => {
+            let day_file = day_file();
+            match worked_minutes(&day_file) {
+                Ok(minutes) => {
+                    debug(
+                        options.verbose,
+                        format_args!("Worked Pomodoro total: {minutes}m"),
+                    );
+                    println!("[WORKED {minutes}m]");
+                    0
+                }
+                Err(error) => {
+                    let error = Error::new(
+                        1,
+                        format!(
+                            "failed to read Bob day file {}: {error}",
+                            day_file.display()
+                        ),
+                    );
+                    print_error(&error);
+                    error.code
+                }
+            }
+        }
         Ok(None) => 0,
         Err(error) => {
             print_error(&error);
             error.code
         }
     }
+}
+
+fn worked_minutes(day_file: &Path) -> io::Result<u64> {
+    let contents = match fs::read_to_string(day_file) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(0),
+        Err(error) => return Err(error),
+    };
+    let scan = capture_pomodoros::scan(&contents);
+    Ok(
+        capture_pomodoros::completed_summary_for(&scan.entries, &contents)
+            .minutes,
+    )
 }
 
 pub(crate) fn run_tmux(args: Vec<OsString>) -> i32 {
@@ -207,6 +245,9 @@ fn parse_args(args: Vec<OsString>) -> ParseResult {
             }
             "-s" | "--show-stale" => {
                 options.show_stale = true;
+            }
+            "-w" | "--worked" => {
+                options.worked = true;
             }
             _ => {
                 return ParseResult::Error(Error::new(
@@ -578,6 +619,13 @@ pub(crate) fn completion_descriptor() -> ClapCommand {
                 .help("Show open Pomodoros after the stale cutoff"),
         )
         .arg(
+            Arg::new("worked")
+                .long("worked")
+                .short('w')
+                .action(ArgAction::SetTrue)
+                .help("Print today's worked minutes when no Pomodoro status prints"),
+        )
+        .arg(
             Arg::new("help")
                 .long("help")
                 .short('h')
@@ -601,7 +649,8 @@ pub(crate) fn tmux_completion_descriptor() -> ClapCommand {
 
 pub(crate) fn help_text() -> String {
     "\
-usage: bob pomodoro [status] [-d|--debug] [-s|--show-stale] [-v|--verbose]
+usage: bob pomodoro [status] [-d|--debug] [-s|--show-stale]
+       [-v|--verbose] [-w|--worked]
        bob pomodoro status -h
 
 Show the current Pomodoro status from today's Bob daily note.
@@ -612,6 +661,12 @@ daily note is missing, has no open Pomodoro, or the Pomodoro is more than nine
 minutes overdue. Pass --show-stale when a consumer needs to distinguish an old
 open Pomodoro from no open Pomodoro.
 
+Pass --worked when a consumer wants today's worked time instead of empty output:
+whenever no status line would print, the command prints `[WORKED <minutes>m]`,
+the minutes in today's closed Pomodoros (each row's recorded `[t:: ]` duration,
+else its time range). A missing daily note reports `[WORKED 0m]`. --worked is
+native-only; the `BOB_CLI_USE_SCRIPT` script fallback rejects it.
+
 environment:
   BOB_DAY_FILE  exact daily note path to read
   BOB_DIR       Bob vault root used to find the default daily note
@@ -621,7 +676,8 @@ options:
   -d, --debug       enable debug tracing
   -h, --help        show this help message and exit
   -s, --show-stale  show open Pomodoros after the stale cutoff
-  -v, --verbose     enable verbose debug output"
+  -v, --verbose     enable verbose debug output
+  -w, --worked      print today's worked minutes when no Pomodoro status prints"
         .to_string()
 }
 

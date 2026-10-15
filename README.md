@@ -1106,7 +1106,7 @@ Bare `bob pomodoro` runs `bob pomodoro status`. `-h`/`--help` as the first
 token shows the group help; `bob pomodoro status --help` shows the leaf help.
 
 ```bash
-bob pomodoro [status] [-d|--debug] [-s|--show-stale] [-v|--verbose]
+bob pomodoro [status] [-d|--debug] [-s|--show-stale] [-v|--verbose] [-w|--worked]
 ```
 
 Prints the current Pomodoro ledger entry from today's Bob daily note, including
@@ -1123,6 +1123,14 @@ Pass `-s` / `--show-stale` when a consumer needs to distinguish an old open
 entry from no open entry; stale open Pomodoros keep the same normalized
 `[OVERDUE by <minutes>m] HHMM-HHMM <task>` output shape as recent overdue
 Pomodoros. `-d, --debug` and `-v, --verbose` enable debug tracing on stderr.
+
+Pass `-w` / `--worked` when a consumer wants today's worked time instead of empty
+output: whenever no status line would print, the command prints
+`[WORKED <minutes>m]`. The total counts today's closed Pomodoros, using each
+row's recorded `[t:: ]` duration first and its time range otherwise. It is the
+same total as `capture-pomodoros --tasks`'s `completed_summary.minutes` and the
+`bob stats` `worked` metric. A missing daily note reports `[WORKED 0m]`. The
+option is native-only; with `BOB_CLI_USE_SCRIPT=1`, the script fallback exits 2.
 
 ```bash
 bob pomodoro notify [-v] PRE_CHECK_SLEEP POST_NOTIFY_SLEEP

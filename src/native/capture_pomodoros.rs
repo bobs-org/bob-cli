@@ -378,7 +378,7 @@ fn list_capture_pomodoros(
     })
 }
 
-fn completed_summary_for(
+pub(crate) fn completed_summary_for(
     entries: &[PomodoroEntry],
     contents: &str,
 ) -> capture_pomodoros_agenda::CompletedSummary {

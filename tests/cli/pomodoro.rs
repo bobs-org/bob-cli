@@ -303,6 +303,75 @@ fn pomodoro_missing_day_file_is_a_successful_noop() {
     assert!(stderr(&output).is_empty(), "expected empty stderr");
 }
 
+#[test]
+fn pomodoro_worked_reports_closed_ledger_total_only_when_status_is_empty() {
+    for args in [
+        &["--worked"][..],
+        &["-w"][..],
+        &["--show-stale", "--worked"][..],
+    ] {
+        let output = run_pomodoro_fixture(
+            args,
+            "pomodoro/day_with_worked_pomodoros.md",
+            "2026-06-01 12:00:00",
+            false,
+        );
+        assert_success(&output);
+        assert_eq!(stdout(&output), "[WORKED 95m]\n");
+        assert!(stderr(&output).is_empty());
+    }
+
+    let output = run_pomodoro_fixture(
+        &["--worked"],
+        "pomodoro/day_with_open_pomodoro.md",
+        "2026-06-01 09:10:01",
+        false,
+    );
+    assert_success(&output);
+    assert_eq!(stdout(&output), "[<65m] 0945-1015 Review crate skeleton\n");
+
+    let output = run_pomodoro_fixture(
+        &["--show-stale", "--worked"],
+        "pomodoro/day_with_open_pomodoro.md",
+        "2026-06-01 10:25:00",
+        false,
+    );
+    assert_success(&output);
+    assert_eq!(
+        stdout(&output),
+        "[OVERDUE by 10m] 0945-1015 Review crate skeleton\n"
+    );
+
+    let output = run_pomodoro_fixture(
+        &["--worked"],
+        "pomodoro/day_with_open_pomodoro.md",
+        "2026-06-01 10:25:00",
+        false,
+    );
+    assert_success(&output);
+    assert_eq!(stdout(&output), "[WORKED 0m]\n");
+
+    let temp = TempDir::new("bob-cli-pomodoro-worked-missing");
+    let output = bob_command()
+        .args(["pomodoro", "--worked"])
+        .env("BOB_DAY_FILE", temp.path().join("missing-day.md"))
+        .env("XDG_CACHE_HOME", temp.path().join("cache"))
+        .output()
+        .expect("run bob pomodoro --worked with missing day file");
+    assert_success(&output);
+    assert_eq!(stdout(&output), "[WORKED 0m]\n");
+    assert!(stderr(&output).is_empty());
+
+    let output = run_pomodoro_fixture(
+        &["--worked"],
+        "pomodoro/day_with_worked_pomodoros.md",
+        "2026-06-01 12:00:00",
+        true,
+    );
+    assert_eq!(output.status.code(), Some(2));
+    assert!(stderr(&output).contains("Unexpected argument: --worked"));
+}
+
 fn run_pomodoro_fixture(
     args: &[&str],
     fixture_relative: &str,
