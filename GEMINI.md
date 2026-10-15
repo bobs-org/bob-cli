@@ -225,11 +225,12 @@ depend on. Pass every term you need in one command — one batched read costs fa
 tokens than one read per term, because terms shared between definitions are printed
 once. Terms are separated by semicolons; aliases follow in parentheses.
 
-**GLOSSARY TERMS:** Area Note; Inbox File (inbox note); Keep Streak (keeps); Mac Menu
-Bar Pomodoro Indicator (mac pom); Morning GTD Review Footer (review footer); Pomodoro;
-Project Note (prj note); Project Task (prj task); Reference Note (ref note); Reference
-Task (ref task); Schedule Log; Successor Offer; Task Dependency Link (task dep link, dep
-link); Task Freshness (freshness); Task Link (task block link); Work Log
+**GLOSSARY TERMS:** Area Note; Bulk Capture (multi-item capture, batch capture);
+Capture; Inbox File (inbox note); Keep Streak (keeps); Mac Menu Bar Pomodoro Indicator
+(mac pom); Morning GTD Review Footer (review footer); Pomodoro; Project Note (prj note);
+Project Task (prj task); Reference Note (ref note); Reference Task (ref task); Schedule
+Log; Successor Offer; Task Dependency Link (task dep link, dep link); Task Freshness
+(freshness); Task Link (task block link); Work Log
 
 ### 3.3 Task Bead Types (task_types)
 
