@@ -157,6 +157,16 @@ impl ClipAdapterClient {
         into_success(value, &stderr_text, "capture")
     }
 
+    /// Merge ordered article.json parts into one PDF.
+    #[allow(dead_code)]
+    pub(super) fn compose(
+        &self,
+        request: &ComposeRequest,
+    ) -> AdapterResult<ComposeSuccess> {
+        let (value, stderr_text) = self.run_request(request)?;
+        into_success(value, &stderr_text, "compose")
+    }
+
     /// Spawn the adapter, write one request, and read one response.
     ///
     /// Stdin, stdout, and stderr each drain on their own thread while the
@@ -330,10 +340,13 @@ pub(super) struct CaptureRequest {
     pub(super) url: String,
     pub(super) html_path: Option<String>,
     pub(super) workdir: String,
-    pub(super) out_pdf: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) out_pdf: Option<String>,
     pub(super) dry_run: bool,
     pub(super) captured: String,
     pub(super) overrides: MetadataOverrides,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) render: Option<bool>,
 }
 
 impl CaptureRequest {
@@ -353,10 +366,56 @@ impl CaptureRequest {
             url,
             html_path,
             workdir,
-            out_pdf,
+            out_pdf: Some(out_pdf),
             dry_run,
             captured,
             overrides,
+            render: None,
+        }
+    }
+}
+
+/// One article.json path in a `compose` request.
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct ComposePart {
+    pub(super) article_json: String,
+}
+
+/// Collection-level metadata forwarded to `compose`.
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct CollectionMeta {
+    pub(super) title: String,
+    pub(super) author: Option<String>,
+    pub(super) published: Option<String>,
+    pub(super) captured: String,
+}
+
+/// One `compose` request: ordered article.json parts into one PDF.
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct ComposeRequest {
+    pub(super) protocol: u32,
+    pub(super) op: &'static str,
+    pub(super) parts: Vec<ComposePart>,
+    pub(super) collection: CollectionMeta,
+    pub(super) workdir: String,
+    pub(super) out_pdf: String,
+}
+
+impl ComposeRequest {
+    #[allow(dead_code)]
+    pub(super) fn new(
+        parts: Vec<ComposePart>,
+        collection: CollectionMeta,
+        workdir: String,
+        out_pdf: String,
+    ) -> Self {
+        Self {
+            protocol: ADAPTER_PROTOCOL_VERSION,
+            op: "compose",
+            parts,
+            collection,
+            workdir,
+            out_pdf,
         }
     }
 }
@@ -391,6 +450,26 @@ pub(super) struct CaptureSuccess {
     pub(super) images: ImageReport,
     #[serde(default)]
     pub(super) pdf_bytes: Option<u64>,
+    #[serde(default)]
+    pub(super) article_json: Option<String>,
+    #[serde(default)]
+    pub(super) warnings: Vec<String>,
+}
+
+/// A successful `compose` response.
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
+pub(super) struct ComposeSuccess {
+    #[serde(default)]
+    pub(super) protocol: u32,
+    #[serde(default)]
+    pub(super) ok: Option<bool>,
+    #[serde(default)]
+    pub(super) op: Option<String>,
+    #[serde(default)]
+    pub(super) pdf_bytes: Option<u64>,
+    #[serde(default)]
+    pub(super) images: ImageReport,
     #[serde(default)]
     pub(super) warnings: Vec<String>,
 }
@@ -639,4 +718,88 @@ fn adapter_crash(reason: String, stderr_text: String) -> AdapterFailure {
         message.push_str(&tail.join("\n"));
     }
     AdapterFailure::new(message)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_capture() -> CaptureRequest {
+        CaptureRequest::new(
+            "https://example.com/a".into(),
+            None,
+            "/tmp/w".into(),
+            "/tmp/w/out.pdf".into(),
+            false,
+            "2026-10-15".into(),
+            MetadataOverrides::default(),
+        )
+    }
+
+    #[test]
+    fn single_capture_request_json_is_byte_identical() {
+        let json = serde_json::to_string(&sample_capture())
+            .expect("serialize capture request");
+        assert_eq!(
+            json,
+            r#"{"protocol":1,"op":"capture","url":"https://example.com/a","html_path":null,"workdir":"/tmp/w","out_pdf":"/tmp/w/out.pdf","dry_run":false,"captured":"2026-10-15","overrides":{}}"#
+        );
+    }
+
+    #[test]
+    fn capture_request_omits_out_pdf_when_render_is_false() {
+        let mut request = sample_capture();
+        request.out_pdf = None;
+        request.render = Some(false);
+        let json = serde_json::to_string(&request)
+            .expect("serialize render:false capture");
+        assert_eq!(
+            json,
+            r#"{"protocol":1,"op":"capture","url":"https://example.com/a","html_path":null,"workdir":"/tmp/w","dry_run":false,"captured":"2026-10-15","overrides":{},"render":false}"#
+        );
+    }
+
+    #[test]
+    fn compose_request_serializes_null_collection_fields() {
+        let request = ComposeRequest::new(
+            vec![ComposePart {
+                article_json: "/abs/part-1/article.json".into(),
+            }],
+            CollectionMeta {
+                title: "Tokio Internals".into(),
+                author: None,
+                published: None,
+                captured: "2026-10-15".into(),
+            },
+            "/abs/compose".into(),
+            "/abs/collection.pdf".into(),
+        );
+        let json =
+            serde_json::to_string(&request).expect("serialize compose request");
+        assert_eq!(
+            json,
+            r#"{"protocol":1,"op":"compose","parts":[{"article_json":"/abs/part-1/article.json"}],"collection":{"title":"Tokio Internals","author":null,"published":null,"captured":"2026-10-15"},"workdir":"/abs/compose","out_pdf":"/abs/collection.pdf"}"#
+        );
+    }
+
+    #[test]
+    fn compose_success_deserializes() {
+        let value: ComposeSuccess = serde_json::from_str(
+            r#"{"protocol":1,"ok":true,"op":"compose","pdf_bytes":1234,"images":{"total":2,"kept":2,"skipped_small":0,"failed":0},"warnings":[]}"#,
+        )
+        .expect("deserialize compose success");
+        assert_eq!(value.pdf_bytes, Some(1234));
+        assert_eq!(value.images.kept, 2);
+        assert!(value.warnings.is_empty());
+    }
+
+    #[test]
+    fn capture_success_reads_article_json() {
+        let value: CaptureSuccess = serde_json::from_str(
+            r#"{"protocol":1,"ok":true,"op":"capture","kind":"article","pdf_bytes":null,"article_json":"/tmp/w/article.json","warnings":[],"images":{},"fidelity":{},"capture":{},"metadata_sources":{},"word_count":0}"#,
+        )
+        .expect("deserialize capture success");
+        assert_eq!(value.article_json.as_deref(), Some("/tmp/w/article.json"));
+        assert_eq!(value.pdf_bytes, None);
+    }
 }

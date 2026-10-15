@@ -7,6 +7,10 @@ supplied by the adapter's ``launcher``.
 
 ``render(article_json_path, out_pdf, launcher)`` returns
 ``{"pdf_bytes", "images", "warnings"}``.
+
+``render_collection(parts, collection, workdir, out_pdf, launcher)``
+typesets ordered article.json parts into one PDF: an opening page with
+linked contents, then a fresh page and bookmark per part.
 """
 
 from __future__ import annotations
@@ -15,7 +19,8 @@ import datetime
 import html
 import os
 import re
-from urllib.parse import urlsplit
+import shutil
+from urllib.parse import urljoin, urlsplit
 
 RENDER_DIR = os.path.dirname(os.path.abspath(__file__))
 FONTS_DIR = os.path.join(RENDER_DIR, "fonts")
@@ -195,6 +200,15 @@ _HEADING_RE = re.compile(r"<(/?)h([1-6])\b", re.IGNORECASE)
 _FIRST_PARA_RE = re.compile(r"<p\b[^>]*>(.*?)</p>",
                             re.IGNORECASE | re.DOTALL)
 _TAG_RE = re.compile(r"<[^>]*>")
+_ID_ATTR_RE = re.compile(
+    r"""(\bid\s*=\s*)(["'])([^"']+)\2""", re.IGNORECASE)
+_FRAG_HREF_RE = re.compile(
+    r"""(\b(?:xlink:)?href\s*=\s*)(["'])#([^"']+)\2""", re.IGNORECASE)
+_HREF_ATTR_RE = re.compile(
+    r"""(\b(?:xlink:)?href\s*=\s*)(["'])([^"']*)\2""", re.IGNORECASE)
+_URL_HASH_RE = re.compile(r"""url\(\s*#([^)]+?)\s*\)""", re.IGNORECASE)
+
+WORDS_PER_MINUTE = 230
 
 
 def _visible_text(markup: str) -> str:
@@ -262,8 +276,88 @@ def show_dek(description: str | None, body_html: str) -> str | None:
     return dek
 
 
-def assemble(article: dict) -> str:
-    """Build the full reader page from an ``article.json`` dict."""
+def reading_minutes(word_count: int, *, wpm: int = WORDS_PER_MINUTE) -> int:
+    """Reading time in minutes: ``ceil(words / wpm)``, minimum 1."""
+    words = max(0, int(word_count or 0))
+    if wpm <= 0:
+        return 1
+    return max(1, (words + wpm - 1) // wpm)
+
+
+def namespace_ids(markup: str, prefix: str) -> str:
+    """Prefix ``id`` values and same-document ``#`` / ``url(#)`` fragments."""
+
+    def _id(match: re.Match) -> str:
+        value = match.group(3)
+        if value.startswith(prefix):
+            return match.group(0)
+        return (f"{match.group(1)}{match.group(2)}{prefix}{value}"
+                f"{match.group(2)}")
+
+    def _href(match: re.Match) -> str:
+        value = match.group(3)
+        if value.startswith(prefix):
+            return match.group(0)
+        return (f"{match.group(1)}{match.group(2)}#{prefix}{value}"
+                f"{match.group(2)}")
+
+    def _url(match: re.Match) -> str:
+        value = match.group(1).strip()
+        if value.startswith(prefix):
+            return match.group(0)
+        return f"url(#{prefix}{value})"
+
+    markup = _ID_ATTR_RE.sub(_id, markup)
+    markup = _FRAG_HREF_RE.sub(_href, markup)
+    return _URL_HASH_RE.sub(_url, markup)
+
+
+def resolve_relative_hrefs(markup: str, base_url: str) -> str:
+    """Resolve relative ``href`` / ``xlink:href`` against ``base_url``."""
+    if not base_url:
+        return markup
+
+    def _replace(match: re.Match) -> str:
+        href = html.unescape(match.group(3)).strip()
+        if not href or href.startswith(("#", "mailto:", "data:",
+                                        "javascript:")):
+            return match.group(0)
+        scheme = urlsplit(href).scheme.lower()
+        if scheme in ("http", "https"):
+            return match.group(0)
+        resolved = urljoin(base_url, href)
+        return (f"{match.group(1)}{match.group(2)}"
+                f"{html.escape(resolved, quote=True)}{match.group(2)}")
+
+    return _HREF_ATTR_RE.sub(_replace, markup)
+
+
+def prefix_part_assets(markup: str, assets_dir: str, prefix: str,
+                       dest_dir: str) -> str:
+    """Copy part assets under ``prefix`` and rewrite ``src="assets/…"``."""
+    os.makedirs(dest_dir, exist_ok=True)
+
+    def _replace(match: re.Match) -> str:
+        tag = match.group(0)
+        src_match = _SRC_ATTR_RE.search(tag)
+        if not src_match:
+            return tag
+        raw_src = html.unescape(src_match.group(1).strip("\"'"))
+        if (not raw_src.startswith("assets/")
+                or "/" in raw_src[len("assets/"):]):
+            return tag
+        name = raw_src[len("assets/"):]
+        new_name = f"{prefix}{name}"
+        src_path = os.path.join(assets_dir, name)
+        if os.path.isfile(src_path):
+            shutil.copy2(src_path, os.path.join(dest_dir, new_name))
+        return _SRC_ATTR_RE.sub(f'src="assets/{new_name}"', tag, count=1)
+
+    return _IMG_TAG_RE.sub(_replace, markup)
+
+
+def assemble_masthead(article: dict, body: str | None = None) -> str:
+    """Build the ``<header class="masthead">`` for one article."""
     title = article.get("title") or "Untitled"
     author = article.get("author")
     published = format_long_date(article.get("published"))
@@ -272,7 +366,8 @@ def assemble(article: dict) -> str:
     description = article.get("description")
     source_url = article.get("source_url") or ""
     word_count = article.get("word_count") or 0
-    body = shift_headings(article.get("html") or "")
+    if body is None:
+        body = shift_headings(article.get("html") or "")
 
     byline = " · ".join(part for part in (author, published) if part)
     provenance = [f'<a href="{html.escape(source_url)}">'
@@ -283,7 +378,7 @@ def assemble(article: dict) -> str:
         provenance.append(f"{word_count} words")
     dek = show_dek(description, body)
 
-    masthead = [ '<header class="masthead">']
+    masthead = ['<header class="masthead">']
     if site:
         masthead.append(
             f'<p class="masthead-site">{html.escape(site)}</p>')
@@ -300,6 +395,14 @@ def assemble(article: dict) -> str:
         + " · ".join(f"<span>{part}</span>" for part in provenance)
         + "</p>")
     masthead.append("</header>")
+    return "".join(masthead)
+
+
+def assemble(article: dict) -> str:
+    """Build the full reader page from an ``article.json`` dict."""
+    title = article.get("title") or "Untitled"
+    body = shift_headings(article.get("html") or "")
+    masthead = assemble_masthead(article, body)
 
     footer_title = css_escape_string(short_footer_title(title))
 
@@ -324,13 +427,161 @@ def assemble(article: dict) -> str:
 </style>
 </head>
 <body>
-{"".join(masthead)}
+{masthead}
 <div class="article-body">
 {body}
 </div>
 </body>
 </html>
 """
+
+
+def assemble_collection(parts: list[dict], collection: dict) -> str:
+    """Build one reader page from ordered part dicts and collection meta."""
+    title = collection.get("title") or "Untitled"
+    author = collection.get("author")
+    captured = format_long_date(collection.get("captured"))
+    n_parts = len(parts)
+    total_words = sum(int(part.get("word_count") or 0) for part in parts)
+    sites = [part.get("site") for part in parts]
+    shared_site = (
+        sites[0]
+        if sites and all(site and site == sites[0] for site in sites)
+        else None
+    )
+
+    opening = ['<div class="collection-opening">']
+    if shared_site:
+        opening.append(
+            f'<p class="masthead-site">{html.escape(str(shared_site))}</p>')
+    opening.append(
+        f'<p class="masthead-title">{html.escape(title)}</p>')
+    if author:
+        opening.append(
+            f'<p class="masthead-byline">{html.escape(str(author))}</p>')
+    meta_bits = [
+        f"{n_parts} article{'s' if n_parts != 1 else ''}",
+        f"{total_words:,} words",
+        f"~{reading_minutes(total_words)} min read",
+    ]
+    if captured:
+        meta_bits.append(f"captured {captured}")
+    opening.append(
+        f'<p class="collection-meta">{html.escape(" · ".join(meta_bits))}</p>')
+    opening.append('<p class="contents-label">Contents</p>')
+    opening.append('<ol class="contents">')
+    for index, part in enumerate(parts, 1):
+        part_title = part.get("title") or "Untitled"
+        opening.append("<li>")
+        opening.append(
+            f'<a href="#part-{index}">{html.escape(part_title)}</a>')
+        line_bits: list[str] = []
+        if part.get("site"):
+            line_bits.append(str(part["site"]))
+        if part.get("author"):
+            line_bits.append(str(part["author"]))
+        part_date = format_long_date(part.get("published"))
+        if part_date:
+            line_bits.append(part_date)
+        line_bits.append(
+            f"~{reading_minutes(int(part.get('word_count') or 0))} min")
+        opening.append(
+            f'<p class="contents-meta">{html.escape(" · ".join(line_bits))}</p>')
+        opening.append("</li>")
+    opening.append("</ol></div>")
+
+    sections: list[str] = []
+    for index, part in enumerate(parts, 1):
+        body = shift_headings(part.get("html") or "")
+        masthead = assemble_masthead(part, body)
+        kicker = f"Part {index} of {n_parts}"
+        sections.append(
+            f'<section class="part" id="part-{index}">'
+            f'<p class="part-kicker">{html.escape(kicker)}</p>'
+            f"{masthead}"
+            f'<div class="article-body">\n{body}\n</div>'
+            "</section>"
+        )
+
+    footer_title = css_escape_string(short_footer_title(title))
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="{html.escape(CSP)}">
+<title>{html.escape(title)}</title>
+<link rel="stylesheet" href="/template/reader.css">
+<style>
+@page {{
+  @bottom-left {{
+    content: "{footer_title}";
+  }}
+}}
+@page :first {{
+  @bottom-left {{
+    content: none;
+  }}
+}}
+</style>
+</head>
+<body>
+{"".join(opening)}
+{"".join(sections)}
+</body>
+</html>
+"""
+
+
+def prepare_part(article: dict, assets_dir: str, index: int,
+                 combined_assets_dir: str, render_assets_dir: str,
+                 warnings: list[str]) -> tuple[dict, dict]:
+    """Namespace ids, prefix assets, and normalize images for one part."""
+    prefix = f"p{index}-"
+    markup = article.get("html") or ""
+    markup = resolve_relative_hrefs(markup, article.get("source_url") or "")
+    markup = namespace_ids(markup, prefix)
+    markup = prefix_part_assets(
+        markup, assets_dir, prefix, combined_assets_dir)
+    markup, images = normalize_images(
+        markup, combined_assets_dir, render_assets_dir, warnings)
+    return dict(article, html=markup), images
+
+
+def build_collection_html(part_json_paths: list[str], collection: dict,
+                          workdir: str) -> tuple[str, dict, list[str]]:
+    """Assemble collection HTML without printing. Returns html, images, warnings."""
+    import json
+
+    if not part_json_paths:
+        raise RenderError("compose needs at least one part")
+    combined_assets = os.path.join(workdir, "assets")
+    render_dir = os.path.join(workdir, "render")
+    render_assets = os.path.join(render_dir, "assets")
+    os.makedirs(combined_assets, exist_ok=True)
+    os.makedirs(render_assets, exist_ok=True)
+
+    warnings: list[str] = []
+    images = {"total": 0, "kept": 0, "skipped_small": 0, "failed": 0}
+    loaded: list[dict] = []
+    for index, path in enumerate(part_json_paths, 1):
+        with open(path, encoding="utf-8") as handle:
+            article = json.load(handle)
+        if not isinstance(article, dict):
+            raise RenderError(f"part {index} article.json is not an object")
+        part_assets = os.path.join(os.path.dirname(os.path.abspath(path)),
+                                   "assets")
+        article, part_images = prepare_part(
+            article, part_assets, index, combined_assets, render_assets,
+            warnings)
+        for key in images:
+            images[key] += int(part_images.get(key, 0) or 0)
+        loaded.append(article)
+
+    page = assemble_collection(loaded, collection)
+    page_path = os.path.join(render_dir, "article.html")
+    with open(page_path, "w", encoding="utf-8") as handle:
+        handle.write(page)
+    return page, images, warnings
 
 
 # ---------------------------------------------------------------------------
@@ -458,6 +709,22 @@ def render(article_json_path: str, out_pdf: str, launcher) -> dict:
     with open(page_path, "w", encoding="utf-8") as handle:
         handle.write(assemble(article))
 
+    print_pdf(render_dir, out_pdf, launcher)
+
+    pdf_bytes = os.path.getsize(out_pdf)
+    if pdf_bytes > PDF_WARN_BYTES:
+        warnings.append(
+            f"printed PDF is {pdf_bytes / 1048576:.1f} MiB "
+            "(vault sync refuses 95 MiB or more)")
+    return {"pdf_bytes": pdf_bytes, "images": images, "warnings": warnings}
+
+
+def render_collection(parts: list[str], collection: dict, workdir: str,
+                      out_pdf: str, launcher) -> dict:
+    """Normalize, assemble, and print a multi-part collection PDF."""
+    _page, images, warnings = build_collection_html(
+        parts, collection, workdir)
+    render_dir = os.path.join(workdir, "render")
     print_pdf(render_dir, out_pdf, launcher)
 
     pdf_bytes = os.path.getsize(out_pdf)

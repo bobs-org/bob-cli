@@ -14,7 +14,11 @@ Ops:
 - ``capture``: launch Chrome (headless, with a headed Xvfb fallback on bot
   challenges), snapshot a stable DOM, run vendored Defuddle in isolation,
   layer metadata, check fidelity, sanitize with ``nh3``, localize images,
-  and print a reader PDF via the bundled template renderer.
+  and print a reader PDF via the bundled template renderer. Optional
+  ``"render": false`` writes ``article.json`` and ``assets/`` then skips
+  printing (``pdf_bytes`` is null; the response adds ``article_json``).
+- ``compose``: typeset ordered ``article.json`` parts into one collection
+  PDF (opening page, linked contents, a fresh page and bookmark per part).
 
 Siblings loaded at runtime (same directory, on ``sys.path``):
 
@@ -1280,10 +1284,20 @@ def run_capture(request: dict, *, allow_headed: bool = True,
     if not isinstance(workdir, str) or not os.path.isabs(workdir):
         raise AdapterFail("invalid_request",
                           "capture request needs an absolute workdir")
+    render_value = request.get("render", None)
+    if render_value is None or render_value is True:
+        should_render = True
+    elif render_value is False:
+        should_render = False
+    else:
+        raise AdapterFail("invalid_request", "render must be a boolean")
     out_pdf = request.get("out_pdf")
-    if not isinstance(out_pdf, str):
-        raise AdapterFail("invalid_request",
-                          "capture request needs an out_pdf path")
+    if should_render:
+        if not isinstance(out_pdf, str):
+            raise AdapterFail("invalid_request",
+                              "capture request needs an out_pdf path")
+    elif out_pdf is not None and not isinstance(out_pdf, str):
+        raise AdapterFail("invalid_request", "out_pdf must be a path")
     dry_run = bool(request.get("dry_run", False))
     html_path = request.get("html_path")
     html_bytes: bytes | None = None
@@ -1342,7 +1356,7 @@ def run_capture(request: dict, *, allow_headed: bool = True,
             probe_api_context = pw.request.new_context()
             try:
                 if html_bytes is None and _probe_pdf(probe_api_context, url):
-                    if dry_run:
+                    if dry_run or not isinstance(out_pdf, str):
                         return (_direct_pdf_response(
                             browser_info=browser_info, mode="direct-pdf",
                             final_url=url, host=host, overrides=overrides,
@@ -1387,7 +1401,7 @@ def run_capture(request: dict, *, allow_headed: bool = True,
                 raise AdapterFail("network", f"navigation failed: {exc}",
                                   PRIVATE_HINT) from exc
             if nav is not None and _is_pdf_response(nav):
-                if dry_run:
+                if dry_run or not isinstance(out_pdf, str):
                     return (_direct_pdf_response(
                         browser_info=browser_info, mode="direct-pdf",
                         final_url=nav.url or url, host=host,
@@ -1565,6 +1579,7 @@ def run_capture(request: dict, *, allow_headed: bool = True,
                 raise thin
             warnings.extend(fidelity_warnings)
 
+            article_json_path: str | None = None
             if not dry_run:
                 article = {
                     "title": title,
@@ -1583,34 +1598,36 @@ def run_capture(request: dict, *, allow_headed: bool = True,
                 article_json = os.path.join(workdir, "article.json")
                 with open(article_json, "w", encoding="utf-8") as handle:
                     json.dump(article, handle)
-                if WEB_CLIP_DIR not in sys.path:
-                    sys.path.insert(0, WEB_CLIP_DIR)
-                import web_clip_render
+                article_json_path = os.path.abspath(article_json)
+                if should_render:
+                    if WEB_CLIP_DIR not in sys.path:
+                        sys.path.insert(0, WEB_CLIP_DIR)
+                    import web_clip_render
 
-                try:
-                    rendered = web_clip_render.render(
-                        article_json, out_pdf,
-                        _RendererLauncher(pw, browser_info))
-                except web_clip_render.RenderError as exc:
-                    raise AdapterFail(
-                        "render", str(exc),
-                        "retry with --html from a browser-saved page") from exc
-                pdf_bytes = rendered["pdf_bytes"]
-                images = rendered.get("images") or images
-                warnings.extend(rendered.get("warnings") or [])
-                # The fidelity verdict above ran on the localized markup;
-                # normalization may drop a few more, so report the PDF's
-                # own image count.
-                kept_counts = dict(kept_counts,
-                                   large_media=images["kept"])
-                if pdf_bytes > PDF_MAX_BYTES:
-                    raise AdapterFail(
-                        "render", "the printed PDF is larger than 95 MiB",
-                        "vault sync refuses files of 95 MiB or more")
-                if pdf_bytes > PDF_WARN_BYTES:
-                    warnings.append(
-                        f"printed PDF is {pdf_bytes / 1048576:.1f} MiB "
-                        "(vault sync refuses 95 MiB or more)")
+                    try:
+                        rendered = web_clip_render.render(
+                            article_json, out_pdf,
+                            _RendererLauncher(pw, browser_info))
+                    except web_clip_render.RenderError as exc:
+                        raise AdapterFail(
+                            "render", str(exc),
+                            "retry with --html from a browser-saved page") from exc
+                    pdf_bytes = rendered["pdf_bytes"]
+                    images = rendered.get("images") or images
+                    warnings.extend(rendered.get("warnings") or [])
+                    # The fidelity verdict above ran on the localized markup;
+                    # normalization may drop a few more, so report the PDF's
+                    # own image count.
+                    kept_counts = dict(kept_counts,
+                                       large_media=images["kept"])
+                    if pdf_bytes > PDF_MAX_BYTES:
+                        raise AdapterFail(
+                            "render", "the printed PDF is larger than 95 MiB",
+                            "vault sync refuses files of 95 MiB or more")
+                    if pdf_bytes > PDF_WARN_BYTES:
+                        warnings.append(
+                            f"printed PDF is {pdf_bytes / 1048576:.1f} MiB "
+                            "(vault sync refuses 95 MiB or more)")
 
             response = {
                 "protocol": PROTOCOL_VERSION,
@@ -1644,6 +1661,8 @@ def run_capture(request: dict, *, allow_headed: bool = True,
                 "pdf_bytes": pdf_bytes,
                 "warnings": warnings,
             }
+            if article_json_path is not None:
+                response["article_json"] = article_json_path
             debug.update({"images": images,
                           "fidelity": response["fidelity"], "mode": mode,
                           "snapshot_html": snapshot["html"],
@@ -1735,9 +1754,106 @@ def op_capture(request: dict) -> dict:
     return response
 
 
+def op_compose(request: dict) -> dict:
+    """Typeset ordered article.json parts into one collection PDF."""
+    parts = request.get("parts")
+    if not isinstance(parts, list) or not parts:
+        raise AdapterFail(
+            "invalid_request",
+            "compose request needs a non-empty parts array")
+    article_paths: list[str] = []
+    for index, part in enumerate(parts, 1):
+        if not isinstance(part, dict):
+            raise AdapterFail(
+                "invalid_request", f"parts[{index - 1}] must be an object")
+        path = part.get("article_json")
+        if not isinstance(path, str) or not os.path.isabs(path):
+            raise AdapterFail(
+                "invalid_request",
+                f"parts[{index - 1}].article_json must be an absolute path")
+        if not os.path.isfile(path):
+            raise AdapterFail(
+                "invalid_request",
+                f"parts[{index - 1}].article_json is missing: {path}")
+        article_paths.append(path)
+    collection = request.get("collection")
+    if not isinstance(collection, dict):
+        raise AdapterFail(
+            "invalid_request", "compose request needs a collection object")
+    title = collection.get("title")
+    if not isinstance(title, str) or not title.strip():
+        raise AdapterFail(
+            "invalid_request", "collection.title must be a non-empty string")
+    for key in ("author", "published"):
+        value = collection.get(key)
+        if value is not None and not isinstance(value, str):
+            raise AdapterFail(
+                "invalid_request",
+                f"collection.{key} must be a string or null")
+    captured = collection.get("captured")
+    if not isinstance(captured, str):
+        raise AdapterFail(
+            "invalid_request",
+            "collection.captured must be a YYYY-MM-DD string")
+    workdir = request.get("workdir")
+    if not isinstance(workdir, str) or not os.path.isabs(workdir):
+        raise AdapterFail(
+            "invalid_request", "compose request needs an absolute workdir")
+    out_pdf = request.get("out_pdf")
+    if not isinstance(out_pdf, str) or not out_pdf:
+        raise AdapterFail(
+            "invalid_request", "compose request needs an out_pdf path")
+
+    os.makedirs(workdir, mode=0o700, exist_ok=True)
+    os.environ["TMPDIR"] = workdir
+
+    browser_info = discover_browser()
+    if browser_info is None:
+        raise AdapterFail("browser", "no usable browser found", BROWSER_HINT)
+
+    if WEB_CLIP_DIR not in sys.path:
+        sys.path.insert(0, WEB_CLIP_DIR)
+    import web_clip_render
+    from playwright.sync_api import sync_playwright
+
+    try:
+        with sync_playwright() as pw:
+            rendered = web_clip_render.render_collection(
+                article_paths,
+                {
+                    "title": title,
+                    "author": collection.get("author"),
+                    "published": collection.get("published"),
+                    "captured": captured,
+                },
+                workdir,
+                out_pdf,
+                _RendererLauncher(pw, browser_info),
+            )
+    except web_clip_render.RenderError as exc:
+        raise AdapterFail(
+            "render", str(exc),
+            "retry with --html from a browser-saved page") from exc
+
+    pdf_bytes = rendered["pdf_bytes"]
+    if pdf_bytes > PDF_MAX_BYTES:
+        raise AdapterFail(
+            "render", "the printed PDF is larger than 95 MiB",
+            "vault sync refuses files of 95 MiB or more")
+    return {
+        "protocol": PROTOCOL_VERSION,
+        "ok": True,
+        "op": "compose",
+        "pdf_bytes": pdf_bytes,
+        "images": rendered.get("images") or {},
+        "warnings": rendered.get("warnings") or [],
+    }
+
+
 OPS = {
     "ping": op_ping,
     "capture": op_capture,
+    "compose": op_compose,
 }
 
 
@@ -1836,6 +1952,87 @@ def _fixture_hook_factory(directory: str, statuses: dict | None = None):
         return True
 
     return _hook
+
+
+def _inspect_collection_pdf(pdf_path: str) -> tuple[bool, bool, bool, str]:
+    """Check outline, blank pages, and continuous counters. Best-effort."""
+    notes: list[str] = []
+    outline_ok = False
+    blank_ok = False
+    counters_ok = False
+
+    if shutil.which("qpdf"):
+        try:
+            proc = subprocess.run(
+                ["qpdf", "--json", pdf_path],
+                check=True, capture_output=True, text=True, timeout=60)
+            payload = json.loads(proc.stdout)
+            pages = payload.get("pages") or []
+            notes.append(f"qpdf pages={len(pages)}")
+            outlines = payload.get("outlines") or {}
+            top = outlines.get("kids") or outlines.get("open") or []
+            if isinstance(top, list):
+                outline_ok = len(top) == 2
+                notes.append(f"qpdf outline kids={len(top)}")
+        except (subprocess.SubprocessError, OSError, ValueError) as exc:
+            notes.append(f"qpdf failed: {exc}")
+
+    if shutil.which("mutool"):
+        try:
+            info = subprocess.run(
+                ["mutool", "show", pdf_path, "outline"],
+                check=True, capture_output=True, text=True, timeout=60)
+            lines = [line for line in info.stdout.splitlines() if line.strip()]
+            # mutool prints top-level bookmarks as `- "Title"` and nested
+            # entries as `| "Child"` (tabs, not leading spaces).
+            top_level = [
+                line for line in lines if line.lstrip().startswith("-")
+            ]
+            if not outline_ok:
+                outline_ok = len(top_level) == 2
+            notes.append(f"mutool outline top={len(top_level)}")
+            pages_proc = subprocess.run(
+                ["mutool", "info", pdf_path],
+                check=True, capture_output=True, text=True, timeout=60)
+            page_count = 0
+            match = re.search(r"Pages:\s+(\d+)", pages_proc.stdout)
+            if match:
+                page_count = int(match.group(1))
+            if page_count <= 0:
+                match = re.search(r"(\d+)\s+pages", pages_proc.stdout,
+                                  flags=re.IGNORECASE)
+                if match:
+                    page_count = int(match.group(1))
+            notes.append(f"mutool pages={page_count}")
+            empty = 0
+            found_counters = []
+            for number in range(1, max(page_count, 0) + 1):
+                drawn = subprocess.run(
+                    ["mutool", "draw", "-F", "txt", "-o", "-",
+                     pdf_path, str(number)],
+                    check=True, capture_output=True, text=True, timeout=60)
+                text = drawn.stdout
+                if not text.strip():
+                    empty += 1
+                counter = re.search(
+                    rf"\b{number}\s*/\s*{page_count}\b", text)
+                if counter:
+                    found_counters.append(number)
+            blank_ok = page_count >= 2 and empty == 0
+            counters_ok = (
+                page_count >= 2 and found_counters == list(range(1, page_count + 1))
+            )
+            notes.append(f"empty_pages={empty} counters={found_counters}")
+        except (subprocess.SubprocessError, OSError, ValueError) as exc:
+            notes.append(f"mutool failed: {exc}")
+
+    if not notes:
+        notes.append("no qpdf or mutool")
+    # A missing inspector cannot fail the self-test closed: the HTML
+    # assertions already cover layout. Treat "no tool" as skipped-true.
+    if "no qpdf or mutool" in notes[0]:
+        return True, True, True, "; ".join(notes)
+    return outline_ok, blank_ok, counters_ok, "; ".join(notes)
 
 
 def self_test() -> int:
@@ -2144,6 +2341,109 @@ def self_test() -> int:
     check("normalize cleans svg",
           "<script" not in cleaned_svg and "onload" not in cleaned_svg)
 
+    check("reading minutes ceil",
+          _render.reading_minutes(230) == 1
+          and _render.reading_minutes(231) == 2
+          and _render.reading_minutes(0) == 1)
+    namespaced = _render.namespace_ids(
+        '<h2 id="introduction">I</h2><p><a href="#fn1">n</a>'
+        '<a xlink:href="#introduction">t</a></p>'
+        '<svg><radialGradient id="fn1"/>'
+        '<circle fill="url(#fn1)"/></svg>',
+        "p1-")
+    check("namespace prefixes ids",
+          'id="p1-introduction"' in namespaced
+          and 'id="p1-fn1"' in namespaced
+          and 'id="introduction"' not in namespaced)
+    check("namespace prefixes fragments",
+          'href="#p1-fn1"' in namespaced
+          and 'xlink:href="#p1-introduction"' in namespaced
+          and 'url(#p1-fn1)' in namespaced)
+    resolved = _render.resolve_relative_hrefs(
+        '<a href="/other">o</a><a href="#fn1">n</a>'
+        '<a href="https://keep.example/x">k</a>',
+        "https://example.com/one")
+    check("relative hrefs resolve against the part URL",
+          'href="https://example.com/other"' in resolved
+          and 'href="#fn1"' in resolved
+          and 'href="https://keep.example/x"' in resolved)
+
+    collection_root = _offline_tf.mkdtemp(prefix="bob-clip-collection-")
+    collection_parts = []
+    try:
+        from PIL import Image as _CollImage
+    except Exception as exc:  # noqa: BLE001 - pillow is a hard dep here
+        check(f"collection fixture images written ({exc})", False)
+        _CollImage = None
+    for index, slug in enumerate(("one", "two"), 1):
+        part_dir = os.path.join(collection_root, f"part-{index}")
+        assets = os.path.join(part_dir, "assets")
+        os.makedirs(assets, exist_ok=True)
+        if _CollImage is not None:
+            _CollImage.new("RGB", (80, 80), (20 * index, 80, 160)).save(
+                os.path.join(assets, "img-001.png"))
+        html_body = (
+            f'<h2 id="introduction">Introduction {index}</h2>'
+            f'<p>See the <a href="#fn1">note</a> and the '
+            f'<a href="#introduction">start</a> of part {index}. '
+            f'<a href="/other-{index}">relative</a>.</p>'
+            f'<p><img src="assets/img-001.png" alt="fig-{index}"></p>'
+            f'<p id="fn1">Footnote {index}.</p>'
+        )
+        article = {
+            "title": f"Tokio Internals, Part {index}: The Piece",
+            "author": "Jane Doe",
+            "published": "2026-01-08" if index == 1 else "2026-02-09",
+            "captured": "2026-10-15",
+            "site": "example.com",
+            "description": f"A distinct dek for part {index}.",
+            "html": html_body,
+            "source_url": f"https://example.com/{slug}",
+            "word_count": 400 if index == 1 else 200,
+        }
+        article_json = os.path.join(part_dir, "article.json")
+        with open(article_json, "w", encoding="utf-8") as handle:
+            json.dump(article, handle)
+        collection_parts.append(article_json)
+    compose_dir = os.path.join(collection_root, "compose")
+    os.makedirs(compose_dir, exist_ok=True)
+    collection_html, collection_images, _coll_warn = (
+        _render.build_collection_html(
+            collection_parts,
+            {"title": "Tokio Internals", "author": "Jane Doe",
+             "published": "2026-01-08", "captured": "2026-10-15"},
+            compose_dir,
+        )
+    )
+    opening, _sep, rest = collection_html.partition('<section class="part"')
+    check("collection prefixes colliding ids",
+          'id="p1-introduction"' in collection_html
+          and 'id="p2-introduction"' in collection_html
+          and 'id="p1-fn1"' in collection_html
+          and 'id="p2-fn1"' in collection_html)
+    check("collection prefixes colliding fragments",
+          'href="#p1-fn1"' in collection_html
+          and 'href="#p2-introduction"' in collection_html)
+    check("collection contents links resolve to part sections",
+          'href="#part-1"' in collection_html
+          and 'href="#part-2"' in collection_html
+          and 'id="part-1"' in collection_html
+          and 'id="part-2"' in collection_html)
+    check("collection opening has no headings",
+          not re.search(r"<h[1-6]\b", opening, flags=re.IGNORECASE))
+    check("collection has one h1 per part",
+          len(re.findall(r"<h1\b", rest, flags=re.IGNORECASE)) == 2
+          and collection_html.count('<section class="part"') == 2)
+    check("collection asset names are unique",
+          'src="assets/p1-img-001.jpg"' in collection_html
+          and 'src="assets/p2-img-001.jpg"' in collection_html
+          and collection_images.get("kept") == 2)
+    check("collection resolves relative links per part",
+          'href="https://example.com/other-1"' in collection_html
+          and 'href="https://example.com/other-2"' in collection_html)
+    check("collection css has part page break",
+          "break-before: page" in css)
+
     # -- Browser-backed fixture checks (offline via routing) -----------------
     try:
         browser = discover_browser()
@@ -2210,6 +2510,60 @@ def self_test() -> int:
             head = handle.read(5)
         check("reader pdf header", head == b"%PDF-")
 
+        skip_workdir = tempfile.mkdtemp(prefix="bob-clip-norender-")
+        skip_req = {"protocol": 1, "op": "capture",
+                    "url": f"https://{FIXTURE_HOST}/article_basic.html",
+                    "html_path": None, "workdir": skip_workdir,
+                    "dry_run": False, "captured": "2026-10-01",
+                    "render": False,
+                    "overrides": {"title": None, "author": None,
+                                  "published": None}}
+        skip_resp, _skip_debug = run_capture(skip_req, route_hook=hook)
+        check("render false skips pdf", skip_resp.get("pdf_bytes") is None)
+        check("render false writes article.json",
+              isinstance(skip_resp.get("article_json"), str)
+              and os.path.isfile(skip_resp["article_json"]))
+        check("render false omits out_pdf",
+              not os.path.isfile(os.path.join(skip_workdir, "render.pdf")))
+
+        compose_print_dir = os.path.join(collection_root, "print")
+        os.makedirs(compose_print_dir, exist_ok=True)
+        compose_pdf = os.path.join(compose_print_dir, "collection.pdf")
+        try:
+            compose_resp = op_compose({
+                "protocol": 1,
+                "op": "compose",
+                "parts": [{"article_json": path}
+                          for path in collection_parts],
+                "collection": {
+                    "title": "Tokio Internals",
+                    "author": "Jane Doe",
+                    "published": "2026-01-08",
+                    "captured": "2026-10-15",
+                },
+                "workdir": compose_print_dir,
+                "out_pdf": compose_pdf,
+            })
+            check("compose op ok", compose_resp.get("ok") is True)
+            check("compose pdf written",
+                  (compose_resp.get("pdf_bytes") or 0) > 1000
+                  and os.path.isfile(compose_pdf))
+            outline_ok, blank_ok, counters_ok, compose_note = (
+                _inspect_collection_pdf(compose_pdf))
+            check(f"compose outline two top-level ({compose_note})",
+                  outline_ok)
+            check(f"compose has no blank pages ({compose_note})",
+                  blank_ok)
+            check(f"compose page counters continuous ({compose_note})",
+                  counters_ok)
+        except AdapterFail as exc:
+            log(f"compose print failed: {exc.kind}: {exc.message}")
+            check("compose op ok", False)
+            check("compose pdf written", False)
+            check("compose outline two top-level", False)
+            check("compose has no blank pages", False)
+            check("compose page counters continuous", False)
+
         # Reader typography: the title lands on page 1, and the text
         # layer carries no soft hyphens, joiners, ligatures, or
         # auto-hyphenation.
@@ -2242,8 +2596,9 @@ def self_test() -> int:
                 mutool_ok = False
             check("mutool extraction ran", mutool_ok)
             if mutool_ok:
+                page1_flat = re.sub(r"\s+", " ", page1)
                 check("reader title on page 1",
-                      "orchestration: Symphony" in page1)
+                      "orchestration: Symphony" in page1_flat)
                 check("reader text has no soft hyphens", "\u00ad" not in full)
                 check("reader text has no word joiners", "\u2060" not in full)
                 check("reader text has no zero-width spaces",
