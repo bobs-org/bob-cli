@@ -140,6 +140,11 @@ list-valued `source_url` and `url` metadata. This applies to ref notes and
 queued intake markers, so any URL in a collection can prevent a duplicate
 import and can be found with `ref find -i`.
 
+For a multi-URL `bob ref create`, the marker and scanned ref note store
+`source_url` as an ordered list in the order the URLs were supplied. The
+collection remains one PDF, one note, and one `^ref` task, and every listed URL
+resolves to that same reference.
+
 ## Usage
 
 ```bash

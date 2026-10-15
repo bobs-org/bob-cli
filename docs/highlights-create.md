@@ -36,6 +36,11 @@ bob ref create report.md --audio episode.mp3 --include-id -P sase
 # Web article with saved page and metadata overrides
 bob ref create https://example.com/essay -H saved.html -P sase
 bob ref create https://example.com/essay -A "Jane Doe" -p 2026-01-02 -d -P sase
+
+# Merge a reading packet into one reference and PDF (2–20 web articles)
+bob ref create https://example.com/2024/01/tokio-internals-part-1 \
+  https://example.com/2024/02/tokio-internals-part-2 -L -P sase
+bob ref create URL1 URL2 URL3 -N spotify_bg_agents -P sase
 ```
 
 `-P/--parent` is required: the area or project note that owns the
@@ -45,6 +50,89 @@ resolution). A missing `-P` fails before any work with a hint naming
 See [web article capture](highlights-clip.md) for reader-mode capture, headed
 retries, the `--html` escape hatch, and environment variables. `bob ref clip`
 is a hidden compatibility alias for `create` with the same targets and options.
+
+## Several URLs
+
+Two to twenty web-article URLs passed to one `create` invocation become one
+reference and one PDF. The URLs stay in argument order. The collection has one
+reading task after `bob ref scan`, one annotation space, and one optional listen
+episode. Use it for material you'll read as one unit; capture an ongoing series
+part by part under the same `-P`. A collection is a snapshot: `create` does not
+add parts to an existing collection.
+
+```bash
+bob ref create URL1 URL2 -P sase
+bob ref create URL1 URL2 -N my_reading_packet -P sase
+bob ref create URL1 URL2 -o ~/bob/xlib/blogs/my_reading_packet.pdf -P sase
+bob ref create URL1 URL2 -T "Tokio Internals" -P sase
+```
+
+Options can appear before or after the URLs. One target still uses the existing
+single-target route. Several targets must all be live HTTP(S) web articles:
+local files, arXiv papers, PDFs, and `-H/--html` replay are not supported in a
+collection. A collection accepts at most 20 URLs. Duplicate URLs and any
+pre-existing PDF-backed or queued reference that overlaps one of the parts make
+the whole command fail. Legacy notes without a Highlights PDF produce a warning
+and do not block capture. Captures are staged privately; a failed part leaves
+the vault unchanged and reports its `part N/M` position.
+
+### Naming
+
+The collection name is resolved before any network request, in this order:
+
+1. `-N/--name`.
+2. The filename stem from `-o/--output` (the option remains an exact PDF path).
+3. Shared slug words, then a qualifying shared folder, as described below.
+4. `snake_case` of `-T/--title`.
+5. Otherwise the command exits 2 with the URLs and a hint to pass `-N` or `-T`.
+
+With several URLs and no `-N`, bob names the reference after the words every
+URL's slug starts with, or failing that the folder they all share, ignoring
+dates, ids, part numbers, and filler. It needs two meaningful words, or one
+when the pages differ only by a part or page number. Otherwise pass `-N` (or
+`-T`). The derived name is validated and follows the usual `_2`, `_3` collision
+walk. The selected source is shown in normal and dry-run output.
+
+The rule is intentionally strict. URLs must have the same site (host compared
+case-insensitively, with `www.` ignored). Each URL must have a usable slug: the
+last path segment after skipping short, numeric, date, and known noise
+segments. Slugs are split into lowercase words; bob takes the longest shared
+word prefix and trims filler, series terms (`part`, `chapter`, `episode`,
+`page`, and related forms), numbers, and hex ids from its ends. It accepts at
+least two meaningful words when one is specific rather than generic. One
+remaining word of at least four letters is accepted only when the URLs differ
+by a part/page number. If the slug rule fails, a shared multi-word folder can
+qualify by the same two-word rule; a one-word folder never names a collection.
+This prevents common paths such as `core` or `configuration` from becoming
+misleading names.
+
+Examples: `tokio-internals-part-1` and `tokio-internals-part-2` derive
+`tokio_internals`; `/raft-part-1` and `/raft-part-2` derive `raft`; and
+`/core/configuration` plus `/core/usage` require an explicit name because
+`core` is too generic. A Spotify set whose slugs share no meaningful start also
+requires `-N` or `-T`. If every URL has a part/page number and their numeric
+order goes backwards, bob warns but keeps the supplied argument order.
+
+### Collection document and metadata
+
+The PDF opens with a collection title, byline/metadata, and linked contents.
+Every article starts on a fresh page with its own masthead and part label. The
+PDF has one outline bookmark per article, continuous page numbering, and
+part-prefixed fragment ids and assets so repeated names do not collide. Relative
+links resolve against each article's URL. The `source_url` marker value is an
+ordered list; after scanning, the single reference note retains every URL, and
+`bob ref find` can locate the collection from any part.
+
+`-T` overrides the collection title. Otherwise bob uses the longest shared
+article-title prefix at a word boundary, or the humanized collection name when
+there is no useful shared title. An author shared by every part is kept; when
+they differ, bob formats the distinct authors together. The published date is
+the earliest date available, and `-A` / `-p` override the collection values.
+Each part retains its own source and article metadata in the PDF.
+
+`--dry-run` still loads each web page in the browser but skips composition and
+installation. `-L/--listen` narrates the staged collection PDF as one episode.
+See [the listen contract](#listen) below.
 
 ## Prerequisites
 
@@ -137,6 +225,7 @@ state only.
 | PDF URL (PDF content-type or sniffed `%PDF-`) | Downloaded with `curl`, stamped as-is | `papers` | `-T`, plausible Info `/Title`, humanized stem | `-N`, URL slug, short-title stem, `<host>_<YYYYMMDD>` |
 | arXiv (`arxiv.org` abs/html/pdf) | PDF fetched from `arxiv.org/pdf/<id>`, metadata from the API | `papers` | `-T`, arXiv API title, plausible Info `/Title`, `arXiv <id>` (no version) | `-N`, short-title stem, `arxiv_<id>` (no version) |
 | Web article (HTML 2xx or 403/429/503) | Captured with the web-article engine | `blogs` | web-article rules (`-T` overrides the title) | web-article rules (`-N`) |
+| Several web articles (2–20 URLs) | Captured in order and composed into one PDF | `blogs` | Shared title prefix or humanized name (`-T` overrides) | Collection naming waterfall above |
 
 Short-title stem: when the text before the first `:` is 1–4 words, that
 prefix is the short name (`EA-Graph: …` becomes `ea_graph`); otherwise the
@@ -263,6 +352,16 @@ Import deduplication reads every URL from scalar or list-valued
 `source_url`/`url` fields in ref notes and queued intake markers, matching
 the URLs indexed by `bob ref find`.
 
+For several URLs, each part is checked against recorded sources before capture.
+Any part already in a PDF-backed ref or queued intake refuses the complete
+collection, even if the remaining URLs are new. `--force` applies only when
+the queued collection has exactly the same ordered source list. A legacy
+PDF-less note is reported as a warning and the collection may proceed. The
+collection marker stores the cleaned URLs in argument order as a YAML list;
+`bob ref scan` writes that list to one ref note. A later create of an individual
+part is refused as already captured, and `bob ref find <part URL>` locates the
+collection.
+
 Default targets dedupe by walking `<stem>`, `<stem>_2`, `<stem>_3`, …
 (up to `<stem>_999`): a free candidate is chosen, a candidate occupied by a
 different reference is skipped, and a candidate occupied by the same
@@ -319,7 +418,11 @@ bullet used by every fallback path.
 
 `-L, --listen` (conflicts with `-a` and `-n`) narrates the target with the
 configured `highlights.listen_command` and binds the episode as the PDF's
-companion audio. The web-article route accepts the same flag with the same semantics.
+companion audio. For a multi-URL collection, bob passes the staged composed
+PDF as `{target}` and `{pdf}`, with the resolved collection title as `{title}`;
+the episode binds to the one installed collection PDF. If the same ordered
+URL set is already captured or queued, `--listen` attaches an episode to that
+capture. Partial overlap still refuses.
 
 ```bash
 bob ref create https://arxiv.org/abs/1706.03762 -L

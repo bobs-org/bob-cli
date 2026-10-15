@@ -1,11 +1,14 @@
-# Web article capture (`bob ref create <URL>`)
+# Web article capture (`bob ref create <URL> [<URL>…]`)
 
-`bob ref create <URL>` turns a web article into a beautiful, readable,
-provenance-stamped PDF in the Highlights intake (`xlib/blogs/` by default),
-which the existing `bob ref scan` turns into a `ref/` note. It is the web-article route of `bob ref create` (see [`highlights-create.md`](highlights-create.md)); `bob ref clip` is a permanent hidden alias.
+`bob ref create <URL>` turns a web article into a readable, provenance-stamped
+PDF in the Highlights intake (`xlib/blogs/` by default), which `bob ref scan`
+turns into a `ref/` note. Two to twenty URLs create one collection PDF and one
+reference; see [Several URLs](highlights-create.md#several-urls) for naming,
+ordering, layout, and collection rules. `bob ref clip` is a permanent hidden
+alias for `create`.
 
 ```bash
-bob ref create [OPTIONS] <URL>
+bob ref create [OPTIONS] <URL>...
 ```
 
 ## Examples
@@ -26,6 +29,10 @@ bob ref create https://example.com/posts/some-article/ -H saved.html -P sase
 
 # Narrate the article and bind the episode as companion audio
 bob ref create https://example.com/posts/some-article/ -L -P sase
+
+# Capture a two-part series as one collection
+bob ref create https://example.com/posts/series-part-1 \
+  https://example.com/posts/series-part-2 -N series -L -P sase
 ```
 
 `-P/--parent` is required on every invocation: the area or project note
@@ -43,25 +50,27 @@ plus the episode instead.
 
 ## The pipeline
 
-1. The URL is validated (public `http(s)` only) and cleaned: the fragment
+1. Each URL is validated (public `http(s)` only) and cleaned: the fragment
    and tracking parameters (`utm_*`, `fbclid`, `gclid`, `mc_cid`, `mc_eid`,
    `ref_src`) are removed. The cleaned URL is recorded as the marker
    `source_url`.
-2. The URL is deduped against scalar ref-note `source_url` (and legacy
+2. Each URL is deduped against ref-note `source_url` (and legacy
    `url:`) values and queued intake PDFs. A PDF-backed ref-note hit refuses
    even with `--force`; that flag can overwrite the same intake target when
    the planned path matches. A URL recorded only by notes without a
    Highlights PDF warns (`already in the library as <path>, a note without a
    Highlights PDF; capturing a fresh copy`) and captures a fresh copy.
-   Import deduplication keeps only string scalars. A YAML list, including a
-   one-element flow list (`url: [https://example.com/a]`) or a block list,
-   is indexed by `ref find` and missed by this import check.
-3. The pinned adapter fetches the page, extracts the article in reader
+   Import deduplication reads every URL from scalar or list-valued
+   `source_url`/`url` metadata in ref notes and queued intake markers.
+3. For one URL, the pinned adapter fetches the page, extracts the article in reader
    mode, and renders a Bob-owned print template to PDF.
 4. The PDF is stamped with a page-1 marker (`status`, `parent`, `title`,
    `id`, `source_url`, plus `author`, `published`, and `captured` when
    known) and installed into `xlib/<ref-type>/<stem>.pdf`.
-5. `bob ref scan` later moves it into `lib/` and writes the note.
+5. For a collection, each page is captured into private scratch without
+   printing; the adapter composes the ordered article data into one document
+   and prints it once. The collection marker records `source_url` as an ordered
+   list. `bob ref scan` later moves the PDF into `lib/` and writes one note.
    Clip never writes `ref/` notes itself.
 
 "Reliable" means "never silently wrong": bot challenges it cannot clear,
@@ -148,6 +157,23 @@ browser, and headed fallback for `doctor`. The adapter exits 0 whenever it
 wrote a response. Non-JSON stdout or a nonzero exit is a protocol error,
 reported with the stderr tail. The full request/response shapes live in
 `src/native/highlights_ref/clip_adapter.rs`.
+
+For a collection, Rust sends a `capture` request per URL in argument order.
+`render: false` stores the extracted `article.json` and assets in that part's
+work directory and returns its absolute path with `pdf_bytes: null`, without
+printing. Requests that omit `render` keep the single-article behavior; the
+single-capture JSON omits the optional `render` and `out_pdf` fields as before.
+Rust then sends one `compose` request with the ordered article paths,
+collection-level title/author/published/captured metadata, a work directory,
+and output PDF path. `compose` returns the combined PDF byte count, image
+report, and warnings. Both operations use protocol version 1.
+
+The composed PDF has an opening page with linked contents, then a fresh page
+for each article, its own masthead, and one top-level bookmark per part.
+Page numbering runs across the whole document. Article ids, fragments, and
+asset names are prefixed per part; relative article links keep their original
+base URL. Rust stamps and installs the result only after all captures and
+composition succeed.
 
 ## Verified (2026-10-01)
 
