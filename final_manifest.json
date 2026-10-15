@@ -1,0 +1,23 @@
+{
+  "agent_id": "research.1m.gem",
+  "context_digest": "76841573144da7213e8439726fb30445fec7ed46d531d7e8029f557f636c122b",
+  "payloads": [
+    {
+      "instance_id": "commit",
+      "payload": {
+        "deferrals": [],
+        "repositories": [
+          {
+            "action": "commit",
+            "message": "docs(research): investigate highlights tab switcher filter for bob-mac-capture",
+            "repo_id": "repo-519ba234a6bd"
+          }
+        ]
+      }
+    }
+  ],
+  "plan_digest": "c21e7df7416530911e2f8a3a140f9bac08a842ff4e9f2cc76c2adffbc1d98145",
+  "run_id": "20261015163340",
+  "schema_version": 2,
+  "turn_nonce": "RCEltvyvrAJuaFmVDt3c2cw6oR-_5tJ-3ENt5xcYJTU"
+}
