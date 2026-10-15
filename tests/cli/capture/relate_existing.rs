@@ -387,6 +387,55 @@ fn rx7_closed_star_owner_is_refused() {
     }
 }
 
+// RX8
+#[test]
+fn rx8_unresolved_plus_selector_never_creates_a_task() {
+    let message_plus =
+        "`+` needs a task selection; choose the task to relate before capture";
+    let message_plus_ex =
+        "`+ex` needs a task selection; choose the task to relate before capture";
+    for (draft, message) in [
+        ("+ &foo:bar", message_plus),
+        ("+ex &foo:bar", message_plus_ex),
+        ("&foo:bar +", message_plus),
+        ("*job:cleanup +ex", message_plus_ex),
+    ] {
+        let parsed = parse_json(draft);
+        assert_eq!(parsed["mode"], "incomplete", "{draft}");
+        assert_eq!(
+            parsed["needs"],
+            serde_json::json!(["task_parent"]),
+            "{draft}"
+        );
+        assert_eq!(parsed["diagnostics"], serde_json::json!([]), "{draft}");
+        assert_eq!(parsed["body"], "", "{draft}");
+
+        let (_temp, vault, day) = setup("bob-cli-rx8");
+        seed_standard(&vault);
+        let before_foo = read(&vault, "foo.md");
+        let before_body = read(&vault, "body.md");
+        let before_job = read(&vault, "job.md");
+        let output = capture_fail(&vault, &day, draft);
+        assert!(
+            !output.status.success(),
+            "draft {draft:?} must fail:\n{}",
+            format_output(&output)
+        );
+        assert!(
+            stderr(&output).contains(message),
+            "draft {draft:?}:\n{}",
+            format_output(&output)
+        );
+        assert_eq!(read(&vault, "foo.md"), before_foo, "{draft}");
+        assert_eq!(read(&vault, "body.md"), before_body, "{draft}");
+        assert_eq!(read(&vault, "job.md"), before_job, "{draft}");
+        assert!(
+            !vault.join("mac_inbox.md").exists(),
+            "never create a +… inbox task for {draft:?}"
+        );
+    }
+}
+
 // RX9
 #[test]
 fn rx9_relationship_needs_text_in_parse_and_execute() {

@@ -1890,6 +1890,11 @@ status changes. A successful live example is:
   − removed its Task Link from BODY 10:10–10:35 (running) · deleted the empty Pomodoro
 ```
 
+That live example is one capture of
+`@body+excercise &foo:bar *job:cleanup` while Exercise is In Progress and
+linked in the running Pomodoro. The final plan-budget footer is omitted
+because its limits come from local configuration.
+
 A dry run begins `[dry-run] ok would update  body.md`; relationship rows say
 `would now depend on` and `would now block`. An unchanged owner row uses the
 toggle wording, for example `  [ ] stays Ready  Exercise  ^excercise`.
@@ -1918,14 +1923,11 @@ Unresolved existing owners retain the old owner shape. Drafts without `&` or
 `*` keep their current JSON byte-for-byte.
 
 ```json
-// bob capture-complete -b VAULT -c 17 -f json -- '@body+excercise &'
+// Selected fields from bob capture-complete -b VAULT -c 17 -f json -- '@body+excercise &'
 {
-  "ok": true,
-  "schema_version": 1,
+  "context": "task_dependency",
   "cursor": 17,
   "replacement": { "start": 16, "end": 17 },
-  "context": "task_dependency",
-  "candidates": [],
   "query": "",
   "owner": {
     "kind": "existing_task",
