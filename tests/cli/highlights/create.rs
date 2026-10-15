@@ -28,6 +28,260 @@ fn vault_holds_only(vault: &std::path::Path, expected: &[&str]) {
     assert_eq!(entries, want, "vault holds only {want:?}");
 }
 
+fn collection_create(vault: &std::path::Path, targets: &[&str]) -> Command {
+    let mut command = bob_command();
+    command.arg("highlights").arg("create");
+    for target in targets {
+        command.arg(target);
+    }
+    command.arg("-b").arg(vault);
+    command
+}
+
+#[test]
+fn highlights_create_collection_rejects_invalid_target_lists_before_work() {
+    let temp = TempDir::new("bob-cli-highlights-create-collection-targets");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
+    let local = temp.path().join("notes.md");
+    write_file(&local, "# Notes\n");
+    let fake = FakeClip::new(&temp, "adapter");
+    let curl_calls = temp.path().join("curl-called");
+    let curl = temp.path().join("curl-sentinel.sh");
+    write_executable(
+        &curl,
+        &format!(
+            "#!/bin/sh\nprintf called > '{}'\nexit 99\n",
+            path_str(&curl_calls)
+        ),
+    );
+
+    let output = collection_create(
+        &vault,
+        &[
+            local.to_str().unwrap(),
+            "https://example.com/tokio-internals-part-2",
+        ],
+    )
+    .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+    .env("BOB_HIGHLIGHTS_CURL", &curl)
+    .output()
+    .expect("run mixed local and URL collection");
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+    assert!(
+        stderr(&output).contains("TARGET 1 is a local file (")
+            && stderr(&output)
+                .contains("several targets must all be web article URLs"),
+        "{}",
+        format_output(&output)
+    );
+
+    let output = collection_create(
+        &vault,
+        &[
+            "https://example.com/tokio-internals-part-1",
+            "https://arxiv.org/abs/1706.03762",
+        ],
+    )
+    .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+    .env("BOB_HIGHLIGHTS_CURL", &curl)
+    .output()
+    .expect("run collection with arXiv target");
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+    assert!(
+        stderr(&output).contains(
+            "URL 2 is an arXiv paper; merging supports web articles only"
+        ),
+        "{}",
+        format_output(&output)
+    );
+
+    let output = collection_create(
+        &vault,
+        &[
+            "https://example.com/tokio-internals-part-1",
+            "https://example.com/tokio-internals-part-2",
+        ],
+    )
+    .arg("-H")
+    .arg("saved.html")
+    .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+    .env("BOB_HIGHLIGHTS_CURL", &curl)
+    .output()
+    .expect("run collection with --html");
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+    assert!(
+        stderr(&output).contains(
+            "--html replays one saved page; several URLs are captured live"
+        ),
+        "{}",
+        format_output(&output)
+    );
+
+    let output = collection_create(
+        &vault,
+        &[
+            "https://example.com/essay",
+            "https://www.example.com/essay/",
+        ],
+    )
+    .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+    .env("BOB_HIGHLIGHTS_CURL", &curl)
+    .output()
+    .expect("run collection with duplicate URLs");
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+    assert!(
+        stderr(&output).contains("URL 1 and URL 2 are the same page"),
+        "{}",
+        format_output(&output)
+    );
+
+    let too_many: Vec<String> = (1..=21)
+        .map(|part| format!("https://example.com/collection-part-{part}"))
+        .collect();
+    let mut command = bob_command();
+    command.arg("highlights").arg("create");
+    command.args(&too_many);
+    command
+        .arg("-b")
+        .arg(&vault)
+        .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+        .env("BOB_HIGHLIGHTS_CURL", &curl);
+    let output = command.output().expect("run oversized collection");
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+    assert!(
+        stderr(&output)
+            .contains("too many URLs (21); one reference takes at most 20"),
+        "{}",
+        format_output(&output)
+    );
+
+    assert!(
+        !fake.called(),
+        "the adapter must not run during gate checks"
+    );
+    assert!(!curl_calls.exists(), "curl must not run during gate checks");
+    vault_holds_only(&vault, &["sase.md"]);
+}
+
+#[test]
+fn highlights_create_collection_name_waterfall_is_local_and_options_parse_after_urls(
+) {
+    let temp = TempDir::new("bob-cli-highlights-create-collection-name");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
+    let fake = FakeClip::new(&temp, "adapter");
+    let curl_calls = temp.path().join("curl-called");
+    let curl = temp.path().join("curl-sentinel.sh");
+    write_executable(
+        &curl,
+        &format!(
+            "#!/bin/sh\nprintf called > '{}'\nexit 99\n",
+            path_str(&curl_calls)
+        ),
+    );
+    let urls = ["https://one.example/essay", "https://two.example/paper"];
+
+    let output = collection_create(&vault, &urls)
+        .arg("-P")
+        .arg("sase")
+        .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+        .env("BOB_HIGHLIGHTS_CURL", &curl)
+        .output()
+        .expect("run unnamed collection");
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+    assert!(
+        stderr(&output).starts_with(
+            "bob ref create: error: these 2 URLs need a reference name"
+        ) && stderr(&output)
+            .contains("different sites (one.example, two.example)")
+            && !stderr(&output).contains("error: bob ref create: error:"),
+        "{}",
+        format_output(&output)
+    );
+
+    // Each supported naming source passes the gate and reaches the route stub.
+    let mut commands = Vec::new();
+    let mut name_flag = collection_create(&vault, &urls);
+    name_flag.arg("-N").arg("manual_packet");
+    commands.push(name_flag);
+    let mut title_flag = collection_create(&vault, &urls);
+    title_flag.arg("-T").arg("Reading Packet");
+    commands.push(title_flag);
+    let mut output_flag = collection_create(&vault, &urls);
+    output_flag
+        .arg("-o")
+        .arg(temp.path().join("from_output.pdf"));
+    commands.push(output_flag);
+    commands.push(collection_create(
+        &vault,
+        &[
+            "https://example.com/2024/01/tokio-internals-part-1",
+            "https://example.com/2024/02/tokio-internals-part-2",
+        ],
+    ));
+    for mut command in commands {
+        command
+            .arg("-P")
+            .arg("sase")
+            .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+            .env("BOB_HIGHLIGHTS_CURL", &curl);
+        let output = command.output().expect("run named collection");
+        assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+        assert!(
+            stderr(&output)
+                .contains("merging several URLs is not wired up yet"),
+            "{}",
+            format_output(&output)
+        );
+    }
+
+    // Flags after the variadic positional are still options; -n retains its
+    // existing no-audio meaning, and -o still conflicts with -N.
+    let output = collection_create(
+        &vault,
+        &[
+            "https://example.com/2024/01/tokio-internals-part-1",
+            "https://example.com/2024/02/tokio-internals-part-2",
+        ],
+    )
+    .arg("-n")
+    .arg("-N")
+    .arg("tokio_packet")
+    .arg("-P")
+    .arg("sase")
+    .output()
+    .expect("run collection with options after targets");
+    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+    assert!(
+        stderr(&output).contains("merging several URLs is not wired up yet"),
+        "{}",
+        format_output(&output)
+    );
+
+    let output = collection_create(&vault, &urls)
+        .arg("-o")
+        .arg(temp.path().join("exact.pdf"))
+        .arg("-N")
+        .arg("conflict")
+        .output()
+        .expect("run conflicting output and name options");
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+    assert!(
+        stderr(&output).contains("cannot be used with")
+            && stderr(&output).contains("--name"),
+        "{}",
+        format_output(&output)
+    );
+
+    assert!(
+        !fake.called(),
+        "the adapter must not run before route lands"
+    );
+    assert!(!curl_calls.exists(), "curl must not run before route lands");
+    vault_holds_only(&vault, &["sase.md"]);
+}
+
 #[test]
 fn highlights_create_dry_run_prints_plan_without_writes() {
     let temp = TempDir::new("bob-cli-highlights-create-dry-run");

@@ -724,8 +724,13 @@ fn highlights_create_help_lists_options_alphabetically() {
     assert_success(&output);
     let help = stdout(&output);
     assert!(
-        help.contains("Arguments:") && help.contains("<TARGET>"),
-        "expected TARGET positional argument in Arguments section:\n{help}"
+        help.contains("Arguments:")
+            && help.contains("<TARGET>...")
+            && help.contains("Several URLs:")
+            && help.contains("one reference takes at most 20 URLs")
+            && help.contains("tokio-internals-part-1")
+            && help.contains("URL1 URL2 URL3 -N spotify_bg_agents"),
+        "expected variadic TARGET and collection help in Arguments section:\n{help}"
     );
     assert_text_order(
         &help,
@@ -757,6 +762,9 @@ fn highlights_create_help_lists_options_alphabetically() {
     );
     assert!(
         help.contains("Complete path for the generated PDF")
+            && help.contains(
+                "with several URLs, its filename is the reference name"
+            )
             && help.contains("`--output` cannot be combined with `--ref-type`"),
         "expected --output contract in help:\n{help}"
     );
