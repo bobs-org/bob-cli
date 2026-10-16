@@ -1037,10 +1037,12 @@ impl AttachmentIndex {
         let asset = SnapshotAsset {
             id: format!("a{sequence}"),
             canonical_source_path: attachment.canonical_source_path.clone(),
+            vault_relative_path: attachment.vault_relative_path.clone(),
             relative_path: PathBuf::from(format!(
                 "assets/{sequence}.{extension}"
             )),
             media_kind: attachment.media_kind.clone(),
+            missing_label: None,
             width_px_hint: attachment.width_px_hint,
             width_percent: attachment
                 .width_px_hint

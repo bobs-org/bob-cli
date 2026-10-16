@@ -430,8 +430,10 @@ pub(super) fn contract_view() -> SnapshotView {
             canonical_source_path: PathBuf::from(
                 "/synthetic-vault/img/cover.png",
             ),
+            vault_relative_path: PathBuf::from("img/cover.png"),
             relative_path: PathBuf::from("assets/quay_crane.png"),
             media_kind: AssetMediaKind::Png,
+            missing_label: None,
             width_px_hint: Some(400),
             width_percent: Some(62),
         }],

@@ -451,10 +451,18 @@ fn render_image(
     let Some(asset) = view.assets.iter().find(|asset| asset.id == asset_id)
     else {
         return format!(
-            "[Missing image · {}]{{.missing}}",
+            "[Image not printable · {}]{{.missing}}",
             escape_text(asset_id)
         );
     };
+    if asset.media_kind == super::view::AssetMediaKind::Missing {
+        return format!(
+            "[Missing image · {}]{{.missing}}",
+            escape_text(
+                asset.missing_label.as_deref().unwrap_or("unknown image")
+            )
+        );
+    }
     let path = asset.relative_path.to_string_lossy().replace('\\', "/");
     let destination = escape_destination(&path);
     let width = width_percent

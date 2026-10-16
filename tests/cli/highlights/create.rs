@@ -5577,6 +5577,61 @@ fn highlights_create_vault_note_dry_run_uses_title_parent_and_fixed_date() {
 }
 
 #[test]
+fn highlights_create_vault_note_dry_run_reports_image_processing() {
+    use image::{DynamicImage, ImageBuffer, ImageFormat, Rgb};
+    use std::io::Cursor;
+
+    let temp = TempDir::new("bob-cli-create-vault-note-images-dry-run");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("Area.md"), "---\ntype: [[area]]\n---\n");
+    write_file(
+        &vault.join("note.md"),
+        "---\nparent: [[Area]]\n---\n![[img/large.png]]\n![[img/vector.svg]]\n![[img/broken.png]]\n![[img/gone.png]]\n",
+    );
+    let images = vault.join("img");
+    std::fs::create_dir_all(&images).expect("create image directory");
+    let large = DynamicImage::ImageRgb8(ImageBuffer::from_pixel(
+        2000,
+        1000,
+        Rgb([80, 120, 160]),
+    ));
+    let mut png = Cursor::new(Vec::new());
+    large
+        .write_to(&mut png, ImageFormat::Png)
+        .expect("encode PNG");
+    std::fs::write(images.join("large.png"), png.into_inner())
+        .expect("write PNG");
+    write_file(&images.join("vector.svg"), "<svg></svg>");
+    write_file(&images.join("broken.png"), "not an image");
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg("note")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-d")
+        .env("BOB_NOW", "2026-10-16 12:00:00")
+        .output()
+        .expect("dry-run note image preparation");
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("image_processing: 4 total · 1 downscaled · 3 missing")
+            && report.contains("downscaled: img/large.png")
+            && report.contains("missing: img/vector.svg")
+            && report.contains("missing: img/broken.png")
+            && report.contains("warning: image not printable · img/vector.svg")
+            && report.contains("writes: none"),
+        "unexpected image dry run:\n{report}"
+    );
+    assert!(
+        !vault.join("xlib").exists(),
+        "dry run must not write intake files"
+    );
+}
+
+#[test]
 fn highlights_create_vault_note_marker_survives_scan_and_sync() {
     let temp = TempDir::new("bob-cli-create-vault-note-roundtrip");
     let vault = temp.path().join("vault");

@@ -73,6 +73,13 @@ logs. `-M/--plain` uses the existing plain Markdown renderer, while keeping the
 vault-note parent, naming, title, and `source_note` provenance. `-C` and `-M`
 only accept one vault-note target and conflict with each other.
 
+Embedded PNG and JPEG images are copied into the private render scratch as-is
+when their long edge is at most 1600 pixels; larger images are downscaled with
+a high-quality filter. GIF embeds use the first frame, and WebP embeds are
+converted to PNG. SVG and unreadable images become an “Image not printable”
+placeholder with a warning. Dry runs report the image count, downscaled paths,
+and unprintable paths.
+
 Dry runs show the selected title, parent, destination, projection summary, and
 warnings without running pandoc, xelatex, or listen; they end with `writes:
 none`. Set `BOB_HIGHLIGHTS_KEEP_WORKDIR=1` to retain projected Markdown, TeX,

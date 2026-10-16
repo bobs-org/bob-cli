@@ -1154,11 +1154,13 @@ fn create_vault_note_route(
 fn create_snapshot_plan(
     config: &Config,
     mut plan: CreatePlan,
-    snapshot: note_snapshot::SnapshotPlan,
+    mut snapshot: note_snapshot::SnapshotPlan,
     scratch: &mut super::ScratchDir,
     options: &CreateOptions,
     listen: Option<&super::listen::ListenCommand>,
 ) -> Result<()> {
+    let asset_preparation = note_snapshot::assets::prepare(&mut snapshot)
+        .map_err(CommandError::new)?;
     let stem = plan
         .target
         .file_stem()
@@ -1202,7 +1204,13 @@ fn create_snapshot_plan(
                 )
             );
         }
-        print_snapshot_plan(&plan, &snapshot, options, &Styler::detect());
+        print_snapshot_plan(
+            &plan,
+            &snapshot,
+            &asset_preparation,
+            options,
+            &Styler::detect(),
+        );
         emit_snapshot_warnings(&snapshot, &snapshot.projected_markdown, &[]);
         println!("writes: none");
         return Ok(());
@@ -1214,7 +1222,7 @@ fn create_snapshot_plan(
             plan.target.display()
         )));
     }
-    stage_snapshot_assets(&snapshot, scratch.path())?;
+    stage_snapshot_assets(&asset_preparation, scratch.path())?;
     let filters = write_render_filters(scratch.path())?;
     let outcome = note_snapshot::profile::render_note_pdf(
         &snapshot.projected_markdown,
@@ -1309,10 +1317,10 @@ fn create_snapshot_plan(
 }
 
 fn stage_snapshot_assets(
-    snapshot: &note_snapshot::SnapshotPlan,
+    preparation: &note_snapshot::assets::AssetPreparation,
     scratch: &Path,
 ) -> Result<()> {
-    for asset in &snapshot.projection.view.assets {
+    for asset in &preparation.assets {
         let destination = scratch.join(&asset.relative_path);
         let parent = destination.parent().ok_or_else(|| {
             CommandError::new(format!(
@@ -1326,15 +1334,12 @@ fn stage_snapshot_assets(
                 parent.display()
             ))
         })?;
-        fs::copy(&asset.canonical_source_path, &destination).map_err(
-            |error| {
-                CommandError::new(format!(
-                    "copy snapshot asset {} to scratch {}: {error}",
-                    asset.canonical_source_path.display(),
-                    destination.display()
-                ))
-            },
-        )?;
+        fs::write(&destination, &asset.bytes).map_err(|error| {
+            CommandError::new(format!(
+                "write snapshot asset {}: {error}",
+                destination.display()
+            ))
+        })?;
     }
     Ok(())
 }
@@ -1364,6 +1369,7 @@ fn write_render_filters(scratch: &Path) -> Result<RenderFilters> {
 fn print_snapshot_plan(
     plan: &CreatePlan,
     snapshot: &note_snapshot::SnapshotPlan,
+    assets: &note_snapshot::assets::AssetPreparation,
     options: &CreateOptions,
     styler: &Styler,
 ) {
@@ -1408,10 +1414,13 @@ fn print_snapshot_plan(
     }
     println!("marker:");
     print!("{}", plan.marker);
-    print_snapshot_projection_summary(snapshot);
+    print_snapshot_projection_summary(snapshot, assets);
 }
 
-fn print_snapshot_projection_summary(snapshot: &note_snapshot::SnapshotPlan) {
+fn print_snapshot_projection_summary(
+    snapshot: &note_snapshot::SnapshotPlan,
+    assets: &note_snapshot::assets::AssetPreparation,
+) {
     let sections = snapshot
         .projection
         .view
@@ -1456,6 +1465,19 @@ fn print_snapshot_projection_summary(snapshot: &note_snapshot::SnapshotPlan) {
         snapshot.summary.transclusions,
         snapshot.summary.guarded_omissions
     );
+    println!(
+        "image_processing: {} total · {} downscaled · {} missing",
+        snapshot.summary.assets + snapshot.summary.missing_images
+            - assets.missing.len() as u64,
+        assets.downscaled.len(),
+        snapshot.summary.missing_images
+    );
+    for path in &assets.downscaled {
+        println!("  downscaled: {path}");
+    }
+    for path in &assets.missing {
+        println!("  missing: {path}");
+    }
     println!(
         "links: {} resolved · {} unresolved",
         snapshot.summary.links.resolved, snapshot.summary.links.unresolved

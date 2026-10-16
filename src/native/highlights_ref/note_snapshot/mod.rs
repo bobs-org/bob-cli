@@ -5,6 +5,7 @@
 //! finalize `anchors`, and this module's serializer is the only producer of projected
 //! Markdown.
 
+pub(crate) mod assets;
 pub(crate) mod fonts;
 mod plan;
 pub(crate) mod profile;

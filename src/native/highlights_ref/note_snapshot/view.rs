@@ -334,6 +334,7 @@ pub(crate) enum AssetMediaKind {
     Webp,
     Svg,
     Other,
+    Missing,
 }
 
 /// Resolved asset provenance retained for a later render-scratch copy.
@@ -341,8 +342,10 @@ pub(crate) enum AssetMediaKind {
 pub(crate) struct SnapshotAsset {
     pub id: String,
     pub canonical_source_path: PathBuf,
+    pub vault_relative_path: PathBuf,
     pub relative_path: PathBuf,
     pub media_kind: AssetMediaKind,
+    pub missing_label: Option<String>,
     pub width_px_hint: Option<u32>,
     pub width_percent: Option<u8>,
 }
