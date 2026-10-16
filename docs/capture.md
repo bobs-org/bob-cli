@@ -4219,9 +4219,20 @@ non-`Tasks` section whose heading title starts with the prefix (compared case
 insensitively), or any non-`Tasks` section when the marker is a bare `#`. A
 matching non-H1 section is preferred; a matching H1 heading is used only when no
 non-H1 heading matches. If no heading matches, the bullet goes into the
-pre-heading (zeroth) section. Within the chosen section the bullet is inserted
-after the last existing top-level bullet, otherwise just below the heading (or
-after any YAML frontmatter for the zeroth section). The suffixed route token may
+pre-heading (zeroth) section. When the destination note is an article
+(`type: "[[article]]"`), selectors also match on heading identity: the title
+with bob's section-number token removed, compared case-insensitively with
+whitespace collapsed, and with emphasis, inline code, and wikilink markup
+stripped. A prefix selector matches when it is a prefix of that identity, so
+`@sase_blog_contents#agent` still finds `## 1.3 Agent CLIs` after numbering. An
+exact `--section` title matches when its de-numbered identity equals the
+heading's identity, so both `--section "Agent CLIs"` and a stale
+`--section "1.4 Agent CLIs"` land on `1.3 Agent CLIs`. Raw title matching still
+runs first, so `@note#1.3` prefers `## 1.3 Agent CLIs` over `### 1.3.1 Nested`
+in document order. Notes that are not articles keep the raw-title behavior
+only. Within the chosen section the bullet is inserted after the last existing
+top-level bullet, otherwise just below the heading (or after any YAML
+frontmatter for the zeroth section). The suffixed route token may
 lead or trail the body, so `@notes#Ideas jot idea` and `jot idea @notes#Ideas`
 both capture into `notes.md`. A standalone terminal `#<section-prefix>`
 marker not appended to an `@route` token, such as `note #Ideas @foo`, is

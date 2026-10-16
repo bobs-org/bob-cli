@@ -42,6 +42,171 @@ fn capture_forced_section_inserts_exact_bullet() {
     );
 }
 
+const ARTICLE_NOTE: &str = concat!(
+    "---\n",
+    "type: \"[[article]]\"\n",
+    "---\n",
+    "\n",
+    "# 1. Title\n",
+    "\n",
+    "## 1.1 Intro\n",
+    "intro\n",
+    "## 1.2 Skills\n",
+    "skills\n",
+    "## 1.3 Agent CLIs\n",
+    "agents\n",
+    "### 1.3.1 Nested\n",
+    "nested\n",
+    "## 1.4 Later\n",
+    "later\n",
+);
+
+fn article_note_with_bullet(created: &str) -> String {
+    ARTICLE_NOTE.replace(
+        "## 1.3 Agent CLIs\nagents\n",
+        &format!("## 1.3 Agent CLIs\n\n- jot [created::{created}]\nagents\n"),
+    )
+}
+
+#[test]
+fn capture_article_prefix_matches_de_numbered_identity() {
+    let temp = TempDir::new("bob-cli-capture-article-prefix-identity");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("note.md"), ARTICLE_NOTE);
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("jot")
+        .arg("@note#agent")
+        .env("BOB_NOW", "2026-06-15")
+        .output()
+        .expect("run article identity prefix capture");
+
+    assert_success(&output);
+    assert_eq!(
+        fs::read_to_string(vault.join("note.md")).expect("read note"),
+        article_note_with_bullet("2026-06-15")
+    );
+}
+
+#[test]
+fn capture_article_prefix_prefers_raw_number_in_document_order() {
+    let temp = TempDir::new("bob-cli-capture-article-prefix-number");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("note.md"), ARTICLE_NOTE);
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("jot")
+        .arg("@note#1.3")
+        .env("BOB_NOW", "2026-06-15")
+        .output()
+        .expect("run article numbered prefix capture");
+
+    assert_success(&output);
+    assert_eq!(
+        fs::read_to_string(vault.join("note.md")).expect("read note"),
+        article_note_with_bullet("2026-06-15")
+    );
+}
+
+#[test]
+fn capture_article_forced_section_matches_identity_and_stale_number() {
+    for (name, section) in
+        [("identity", "Agent CLIs"), ("stale", "1.4 Agent CLIs")]
+    {
+        let temp = TempDir::new(&format!(
+            "bob-cli-capture-article-forced-section-{name}"
+        ));
+        let vault = temp.path().join("vault");
+        write_file(&vault.join("note.md"), ARTICLE_NOTE);
+
+        let output = bob_command()
+            .arg("capture")
+            .arg("-b")
+            .arg(&vault)
+            .arg("--route")
+            .arg("note")
+            .arg("--section")
+            .arg(section)
+            .arg("--")
+            .arg("jot")
+            .env("BOB_NOW", "2026-06-15")
+            .output()
+            .expect("run article forced-section capture");
+
+        assert_success(&output);
+        assert_eq!(
+            fs::read_to_string(vault.join("note.md")).expect("read note"),
+            article_note_with_bullet("2026-06-15"),
+            "section {section:?} should land on 1.3 Agent CLIs"
+        );
+    }
+}
+
+#[test]
+fn capture_non_article_numbered_heading_keeps_raw_title_matching() {
+    let temp = TempDir::new("bob-cli-capture-non-article-numbered");
+    let vault = temp.path().join("vault");
+    let original = "# Title\n## 1.3 Agent CLIs\nagents\n";
+    write_file(&vault.join("note.md"), original);
+
+    let missed = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("jot")
+        .arg("@note#agent")
+        .env("BOB_NOW", "2026-06-15")
+        .output()
+        .expect("run non-article identity prefix capture");
+    assert_success(&missed);
+    assert_eq!(
+        fs::read_to_string(vault.join("note.md")).expect("read note"),
+        "- jot [created::2026-06-15]\n# Title\n## 1.3 Agent CLIs\nagents\n"
+    );
+
+    write_file(&vault.join("note.md"), original);
+    let exact = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("--route")
+        .arg("note")
+        .arg("--section")
+        .arg("Agent CLIs")
+        .arg("--")
+        .arg("jot")
+        .env("BOB_NOW", "2026-06-15")
+        .output()
+        .expect("run non-article exact identity capture");
+    assert_success(&exact);
+    assert_eq!(
+        fs::read_to_string(vault.join("note.md")).expect("read note"),
+        "- jot [created::2026-06-15]\n# Title\n## 1.3 Agent CLIs\nagents\n"
+    );
+
+    write_file(&vault.join("note.md"), original);
+    let numbered = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("jot")
+        .arg("@note#1.3")
+        .env("BOB_NOW", "2026-06-15")
+        .output()
+        .expect("run non-article numbered prefix capture");
+    assert_success(&numbered);
+    assert_eq!(
+        fs::read_to_string(vault.join("note.md")).expect("read note"),
+        "# Title\n## 1.3 Agent CLIs\n\n- jot [created::2026-06-15]\nagents\n"
+    );
+}
+
 #[test]
 fn capture_forced_section_requires_route() {
     let temp = TempDir::new("bob-cli-capture-forced-section-route");

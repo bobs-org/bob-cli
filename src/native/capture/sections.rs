@@ -1,6 +1,9 @@
 //! Markdown section/task/bullet insertion and line spans.
 use super::*;
 
+use crate::native::articles::{heading_identity, heading_plain_identity};
+use crate::native::projects::{frontmatter_is_article, parse_frontmatter};
+
 #[cfg(test)]
 pub(super) fn parse_capture_text(
     raw_text: &str,
@@ -163,8 +166,14 @@ pub(super) fn insert_bullet_line(
 ) -> (String, Placement) {
     let lines = line_spans(contents);
     let headings = markdown_headings(&lines);
-    let section =
-        target_bullet_section(&lines, &headings, section_prefix, exact);
+    let article = destination_is_article(contents);
+    let section = target_bullet_section(
+        &lines,
+        &headings,
+        section_prefix,
+        exact,
+        article,
+    );
 
     if let Some(index) = last_bullet_block_insert_index_in_range(
         &lines,
@@ -219,6 +228,7 @@ pub(super) fn target_bullet_section(
     headings: &[MarkdownHeading<'_>],
     section_prefix: Option<&str>,
     exact: bool,
+    article: bool,
 ) -> MarkdownSection {
     let matches = |heading: &MarkdownHeading<'_>| {
         heading.title != "Tasks"
@@ -226,6 +236,7 @@ pub(super) fn target_bullet_section(
                 heading.title,
                 section_prefix,
                 exact,
+                article,
             )
     };
     // Prefer the first matching non-H1 heading, falling back to the first
@@ -276,23 +287,50 @@ pub(super) fn target_bullet_section(
 /// Whether `title` matches a bullet capture's section selector. A bare marker
 /// (no selector) matches every heading; otherwise exact selectors compare the
 /// whole title case insensitively, and prefix selectors compare against the
-/// start of `title` case insensitively.
+/// start of `title` case insensitively. Article notes also match on heading
+/// identity after the raw-title comparison.
 pub(super) fn heading_matches_bullet_selector(
     title: &str,
     section_prefix: Option<&str>,
     exact: bool,
+    article: bool,
 ) -> bool {
     match section_prefix {
         None => true,
         Some(selector) => {
-            let title = title.to_lowercase();
-            let selector = selector.to_lowercase();
-            if exact {
-                title == selector
+            let title_lc = title.to_lowercase();
+            let selector_lc = selector.to_lowercase();
+            let raw = if exact {
+                title_lc == selector_lc
             } else {
-                title.starts_with(&selector)
-            }
+                title_lc.starts_with(&selector_lc)
+            };
+            raw || (article && article_heading_matches(title, selector, exact))
         }
+    }
+}
+
+fn destination_is_article(contents: &str) -> bool {
+    parse_frontmatter(contents)
+        .is_some_and(|frontmatter| frontmatter_is_article(&frontmatter))
+}
+
+fn article_heading_matches(title: &str, selector: &str, exact: bool) -> bool {
+    let heading = [heading_identity(title), heading_plain_identity(title)];
+    let selector =
+        [heading_identity(selector), heading_plain_identity(selector)];
+    if exact {
+        heading.iter().any(|heading| {
+            !heading.is_empty()
+                && selector.iter().any(|selector| heading == selector)
+        })
+    } else {
+        selector.iter().any(|selector| {
+            !selector.is_empty()
+                && heading
+                    .iter()
+                    .any(|heading| heading.starts_with(selector.as_str()))
+        })
     }
 }
 

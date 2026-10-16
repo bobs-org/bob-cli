@@ -847,3 +847,127 @@ fn bare_bullet_marker_ignores_exact_flag() {
         insert_bullet_line(contents, BULLET, None)
     );
 }
+
+const ARTICLE_SECTIONS: &str = concat!(
+    "---\n",
+    "type: \"[[article]]\"\n",
+    "---\n",
+    "\n",
+    "# 1. Title\n",
+    "\n",
+    "## 1.1 Intro\n",
+    "intro\n",
+    "## 1.2 Skills\n",
+    "skills\n",
+    "## 1.3 Agent CLIs\n",
+    "agents\n",
+    "### 1.3.1 Nested\n",
+    "nested\n",
+    "## 1.4 Later\n",
+    "later\n",
+);
+
+fn article_with_bullet_in_agent_clis() -> String {
+    ARTICLE_SECTIONS.replace(
+        "## 1.3 Agent CLIs\nagents\n",
+        &format!("## 1.3 Agent CLIs\n\n{BULLET}\nagents\n"),
+    )
+}
+
+#[test]
+fn article_prefix_matches_de_numbered_identity() {
+    assert_eq!(
+        insert_bullet_line(ARTICLE_SECTIONS, BULLET, Some("agent")),
+        (article_with_bullet_in_agent_clis(), Placement::Inserted)
+    );
+}
+
+#[test]
+fn article_prefix_prefers_raw_number_in_document_order() {
+    assert_eq!(
+        insert_bullet_line(ARTICLE_SECTIONS, BULLET, Some("1.3")),
+        (article_with_bullet_in_agent_clis(), Placement::Inserted)
+    );
+}
+
+#[test]
+fn article_exact_section_matches_de_numbered_identity() {
+    assert_eq!(
+        super::super::insert_bullet_line(
+            ARTICLE_SECTIONS,
+            BULLET,
+            Some("Agent CLIs"),
+            true,
+        ),
+        (article_with_bullet_in_agent_clis(), Placement::Inserted)
+    );
+}
+
+#[test]
+fn article_exact_section_matches_stale_number() {
+    assert_eq!(
+        super::super::insert_bullet_line(
+            ARTICLE_SECTIONS,
+            BULLET,
+            Some("1.4 Agent CLIs"),
+            true,
+        ),
+        (article_with_bullet_in_agent_clis(), Placement::Inserted)
+    );
+}
+
+#[test]
+fn article_exact_section_matches_plain_identity() {
+    let contents = concat!(
+        "---\n",
+        "type: \"[[article]]\"\n",
+        "---\n",
+        "## 1.3 **Agent CLIs**\n",
+        "agents\n",
+    );
+    assert_eq!(
+        super::super::insert_bullet_line(
+            contents,
+            BULLET,
+            Some("Agent CLIs"),
+            true,
+        ),
+        (
+            format!(
+                "---\ntype: \"[[article]]\"\n---\n## 1.3 **Agent CLIs**\n\n{BULLET}\nagents\n"
+            ),
+            Placement::Inserted,
+        )
+    );
+}
+
+#[test]
+fn non_article_numbered_heading_keeps_raw_title_matching() {
+    let contents = "# Title\n## 1.3 Agent CLIs\nagents\n";
+    assert_eq!(
+        insert_bullet_line(contents, BULLET, Some("agent")),
+        (
+            format!("{BULLET}\n# Title\n## 1.3 Agent CLIs\nagents\n"),
+            Placement::Inserted,
+        )
+    );
+    assert_eq!(
+        super::super::insert_bullet_line(
+            contents,
+            BULLET,
+            Some("Agent CLIs"),
+            true,
+        ),
+        (
+            format!("{BULLET}\n# Title\n## 1.3 Agent CLIs\nagents\n"),
+            Placement::Inserted,
+        )
+    );
+    assert_eq!(
+        insert_bullet_line(contents, BULLET, Some("1.3")),
+        (
+            format!("# Title\n## 1.3 Agent CLIs\n\n{BULLET}\nagents\n"),
+            Placement::Inserted,
+        )
+    );
+}
