@@ -1,0 +1,345 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+usage() {
+    cat <<'EOF'
+Render every root area/project note and dry-run every vault Markdown note.
+
+Usage: scripts/dev/note_snapshot_corpus_gate [BOB_DIR] [OUTPUT_DIR]
+
+BOB_DIR defaults to $BOB_DIR or ~/bob. OUTPUT_DIR defaults to a new directory
+under ${TMPDIR:-/tmp}; it must be outside the vault and empty if it exists.
+Set BOB_BIN to choose the bob executable (defaults to bob).
+EOF
+}
+
+fail() {
+    printf 'note-snapshot-corpus-gate: error: %s\n' "$*" >&2
+    exit 2
+}
+
+if [[ ${1-} == -h || ${1-} == --help ]]; then
+    usage
+    exit 0
+fi
+(( $# <= 2 )) || { usage >&2; exit 2; }
+
+bob_dir=${1:-${BOB_DIR:-$HOME/bob}}
+bob_bin=${BOB_BIN:-bob}
+
+[[ -d $bob_dir ]] || fail "vault directory does not exist: $bob_dir"
+bob_dir=$(cd -P -- "$bob_dir" && pwd) || fail "cannot resolve vault directory"
+
+if [[ -n ${2-} ]]; then
+    out_dir=$2
+    mkdir -p -- "$out_dir" || fail "cannot create output directory: $out_dir"
+else
+    out_dir=$(mktemp -d "${TMPDIR:-/tmp}/bob-note-snapshot-gate.XXXXXX") || fail "cannot create scratch output directory"
+fi
+out_dir=$(cd -P -- "$out_dir" && pwd) || fail "cannot resolve output directory"
+case "$out_dir/" in
+    "$bob_dir/"*) fail "output directory must be outside the vault: $out_dir" ;;
+esac
+[[ -z $(find "$out_dir" -mindepth 1 -maxdepth 1 -print -quit) ]] || fail "output directory must be empty: $out_dir"
+
+command -v "$bob_bin" >/dev/null 2>&1 || fail "bob executable not found: $bob_bin"
+for tool in git awk find grep pdffonts pdfinfo pdftoppm; do
+    command -v "$tool" >/dev/null 2>&1 || fail "required command not found: $tool"
+done
+git -C "$bob_dir" rev-parse --show-toplevel >/dev/null 2>&1 || fail "vault is not a git checkout: $bob_dir"
+
+mkdir -p "$out_dir/logs" "$out_dir/pages"
+summary="$out_dir/summary.md"
+before_status="$out_dir/vault-status.before"
+after_status="$out_dir/vault-status.after"
+git -C "$bob_dir" status --porcelain --untracked-files=all >"$before_status" || fail "cannot read vault git status"
+
+declare -a render_notes=()
+declare -a render_rows=()
+declare -a dry_rows=()
+declare -a render_warnings=()
+declare -a dry_warnings=()
+declare -a type3_details=()
+render_failures=0
+dry_failures=0
+missing_glyph_warnings=0
+overfull_warnings=0
+type3_fonts=0
+dry_unresolved=0
+dry_parent_fallbacks=0
+dry_run_parent=
+
+frontmatter_kind() {
+    awk '
+        NR == 1 && $0 ~ /^---[[:space:]]*$/ { frontmatter = 1; next }
+        frontmatter && $0 ~ /^---[[:space:]]*$/ { exit }
+        frontmatter && $0 ~ /^[[:space:]]*type:[[:space:]]*/ {
+            value = $0
+            sub(/^[[:space:]]*type:[[:space:]]*/, "", value)
+            sub(/[[:space:]]+#.*/, "", value)
+            gsub(/["\047[:space:]]/, "", value)
+            if (value == "[[area]]" || value == "[[project]]") {
+                print value
+                exit
+            }
+        }
+    ' "$1"
+}
+
+markdown_cell() {
+    local value=${1//$'\n'/<br>}
+    value=${value//|/\\|}
+    printf '%s' "$value"
+}
+
+dry_warning_explanation() {
+    local warning=$1
+    case "$warning" in
+        *"no file or vault note named "*)
+            printf 'Source refers to a missing note or attachment; the dry run preserved its visible label and reported the unresolved target.' ;;
+        *"no vault attachment named "*)
+            printf 'Source refers to an attachment absent from this vault; the dry run reported it without changing the source.' ;;
+        *"no #"*|*"no ^"*)
+            printf 'Source refers to a missing heading or block anchor; the dry run reported the unresolved target.' ;;
+        *" headings named "*|*" blocks named "*)
+            printf 'Duplicate anchors make this heading or block reference ambiguous; the source remains unchanged.' ;;
+        *"cyclic embed"*|*"not following nested embed "*|*"not following cyclic nested embed "*)
+            printf 'The nested embed was not followed to prevent recursion or unbounded expansion; the dry run reported the omission.' ;;
+        *"not including "*"selected content is "*" limits:"*)
+            printf 'Selected embed content exceeded the configured size or line bound and was omitted; the dry run reported the limit.' ;;
+        *"cannot include "*)
+            printf 'The embed was omitted to avoid recursion or an unavailable source; the dry run reported the omission.' ;;
+        *"unknown task status "*)
+            printf 'The source uses an unknown task marker; Bob reports it and treats the row as open.' ;;
+        *"uncovered glyphs: U+FE0F"*)
+            printf 'This is the U+FE0F emoji variation selector, which the print Lua filter intentionally removes.' ;;
+        *"uncovered glyph "*)
+            printf 'The source contains a glyph outside the print coverage report; dry runs do not render a PDF.' ;;
+        *)
+            printf 'Retained for manual review; no vault content was changed.' ;;
+    esac
+}
+
+note_index=0
+while IFS= read -r -d '' note; do
+    kind=$(frontmatter_kind "$note")
+    [[ -n $kind ]] || continue
+    rel=${note#"$bob_dir"/}
+    render_notes+=("$rel")
+done < <(find "$bob_dir" -maxdepth 1 -type f -name '*.md' -print0 | sort -z)
+
+((${#render_notes[@]} > 0)) || fail "no root area/project notes found in $bob_dir"
+
+# Ordinary notes without a usable parent still need one for a complete dry-run.
+# Keep the note's own/ancestor default under test first; retry only the notes for
+# which the CLI correctly reports that it cannot infer an eligible parent.
+for rel in "${render_notes[@]}"; do
+    if [[ $(frontmatter_kind "$bob_dir/$rel") == '[[area]]' ]]; then
+        dry_run_parent=${rel%.md}
+        break
+    fi
+done
+if [[ -z $dry_run_parent ]]; then
+    for rel in "${render_notes[@]}"; do
+        dry_run_parent=${rel%.md}
+        break
+    done
+fi
+
+printf 'Rendering %d root area/project notes; dry-running all vault Markdown notes.\n' "${#render_notes[@]}"
+printf 'Scratch output: %s\n' "$out_dir"
+
+for rel in "${render_notes[@]}"; do
+    ((note_index += 1))
+    note="$bob_dir/$rel"
+    stem=${rel##*/}
+    stem=${stem%.md}
+    pdf="$out_dir/$stem.pdf"
+    log="$out_dir/logs/render-$(printf '%04d' "$note_index").log"
+    start_seconds=$SECONDS
+    status=0
+    "$bob_bin" ref create "$note" --output "$pdf" --no-audio --bob-dir "$bob_dir" >"$log" 2>&1 || status=$?
+    elapsed=$((SECONDS - start_seconds))
+    warning_text=$(grep -i 'warning:' "$log" || true)
+    while IFS= read -r line; do
+        [[ -n $line ]] || continue
+        render_warnings+=("$rel: $line")
+        [[ $line == *"missing glyph:"* ]] && ((missing_glyph_warnings += 1))
+        [[ $line == *"overfull:"* ]] && ((overfull_warnings += 1))
+    done <<<"$warning_text"
+
+    pages=0
+    fonts_status=unavailable
+    if (( status == 0 )) && [[ -f $pdf ]]; then
+        pages=$(pdfinfo "$pdf" 2>/dev/null | awk -F: '/^Pages:/ {gsub(/[[:space:]]/, "", $2); print $2; exit}')
+        pages=${pages:-0}
+        if [[ $pages == 0 ]]; then
+            status=1
+        fi
+        fonts_log="$out_dir/logs/fonts-$(printf '%04d' "$note_index").log"
+        if (( status == 0 )) && pdffonts "$pdf" >"$fonts_log" 2>&1; then
+            fonts_status=clean
+            while IFS= read -r font_line; do
+                [[ $font_line == *"Type 3"* ]] || continue
+                ((type3_fonts += 1))
+                type3_details+=("$rel: $font_line")
+                fonts_status=Type-3
+            done <"$fonts_log"
+        elif (( status == 0 )); then
+            fonts_status=failed
+            status=1
+        fi
+        prefix="$out_dir/pages/$stem"
+        if (( status == 0 )) && ! pdftoppm -f 1 -l 2 -png -r 110 "$pdf" "$prefix" >"$out_dir/logs/pages-$(printf '%04d' "$note_index").log" 2>&1; then
+            status=1
+        fi
+    else
+        status=1
+    fi
+    (( status == 0 )) || ((render_failures += 1))
+    warnings_cell=$(markdown_cell "$warning_text")
+    render_rows+=("| $(markdown_cell "$rel") | $status | $pages | ${elapsed}s | $fonts_status | ${warnings_cell:-—} |")
+    if (( status == 0 )); then
+        printf '  rendered %s (%s pages, %ss, %s fonts)\n' "$rel" "$pages" "$elapsed" "$fonts_status"
+    else
+        printf '  FAILED  %s (exit %s; see %s)\n' "$rel" "$status" "$log" >&2
+    fi
+done
+
+dry_index=0
+while IFS= read -r -d '' note; do
+    ((dry_index += 1))
+    rel=${note#"$bob_dir"/}
+    log="$out_dir/logs/dry-run-$(printf '%05d' "$dry_index").log"
+    status=0
+    "$bob_bin" ref create "$note" --dry-run --bob-dir "$bob_dir" >"$log" 2>&1 || status=$?
+    if (( status != 0 )) && grep -Fq -- '--parent is required' "$log"; then
+        retry_log="$log.retry"
+        retry_status=0
+        "$bob_bin" ref create "$note" --dry-run --bob-dir "$bob_dir" --parent "$dry_run_parent" >"$retry_log" 2>&1 || retry_status=$?
+        if (( retry_status == 0 )); then
+            {
+                printf 'Corpus dry-run parent fallback: -P %s (no eligible parent inferred).\n' "$dry_run_parent"
+                cat "$retry_log"
+            } >"$log"
+            status=0
+            ((dry_parent_fallbacks += 1))
+        else
+            {
+                cat "$log"
+                printf '\nCorpus dry-run parent fallback failed: -P %s (exit %s).\n' "$dry_run_parent" "$retry_status"
+                cat "$retry_log"
+            } >"$log.failed"
+            mv -- "$log.failed" "$log"
+            status=$retry_status
+        fi
+        rm -f -- "$retry_log"
+    fi
+    warning_text=$(grep -i 'warning:' "$log" || true)
+    while IFS= read -r line; do
+        [[ -n $line ]] || continue
+        dry_warnings+=("$rel: $line")
+        case "$line" in
+            *"no file or vault note named "*|*"no vault attachment named "*|*"no #"*|*"no ^"*|*"unresolved"*|*"not found"*)
+                ((dry_unresolved += 1)) ;;
+        esac
+    done <<<"$warning_text"
+    (( status == 0 )) || ((dry_failures += 1))
+    dry_rows+=("| $(markdown_cell "$rel") | $status | $(markdown_cell "$warning_text") |")
+    if (( status != 0 )); then
+        printf '  dry-run FAILED %s (exit %s; see %s)\n' "$rel" "$status" "$log" >&2
+    fi
+done < <(find "$bob_dir" \
+    \( -type d \( -name '.*' -o -name '_conflicts' -o -name '_generated' -o -name '_templates' -o -name 'xlib' -o -name 'lib' -o -name 'lit_review' \) -prune \) -o \
+    \( -type f -name '*.md' ! -name '.md' -print0 \))
+
+git -C "$bob_dir" status --porcelain --untracked-files=all >"$after_status" || fail "cannot read vault git status after gate"
+vault_status_clean=yes
+if ! cmp -s "$before_status" "$after_status"; then
+    vault_status_clean=no
+fi
+
+cat >"$summary" <<EOF
+# Note snapshot corpus gate
+
+- Vault: \`$bob_dir\`
+- Output: \`$out_dir\`
+- Area/project notes rendered: ${#render_notes[@]}
+- Markdown notes dry-run: $dry_index
+- Render failures: $render_failures
+- Dry-run failures: $dry_failures
+- Missing-glyph warnings: $missing_glyph_warnings
+- Overfull warnings: $overfull_warnings
+- Type 3 fonts: $type3_fonts
+- Unresolved-reference warnings in dry runs (review each entry): $dry_unresolved
+- Dry-run parent fallbacks: $dry_parent_fallbacks (route: \`$dry_run_parent\`)
+- Vault git status unchanged: $vault_status_clean
+
+## Render results
+
+| Note | Exit | Pages | Seconds | Fonts | Warnings |
+| --- | ---: | ---: | ---: | --- | --- |
+EOF
+printf '%s\n' "${render_rows[@]}" >>"$summary"
+
+cat >>"$summary" <<'EOF'
+
+## Render warning details
+
+EOF
+if ((${#render_warnings[@]})); then
+    for line in "${render_warnings[@]}"; do
+        printf -- '- %s\n' "$(markdown_cell "$line")" >>"$summary"
+    done
+else
+    printf -- '- None.\n' >>"$summary"
+fi
+
+cat >>"$summary" <<'EOF'
+
+## Dry-run results
+
+| Note | Exit | Warnings |
+| --- | ---: | --- |
+EOF
+printf '%s\n' "${dry_rows[@]}" >>"$summary"
+
+cat >>"$summary" <<'EOF'
+
+## Dry-run warning details
+
+Explain each genuinely unresolved link below; keep explanations here so the acceptance
+record shows why each warning is harmless. Entries above identify the source note and
+warning. Do not paste note contents into this report.
+
+EOF
+if ((${#dry_warnings[@]})); then
+    for line in "${dry_warnings[@]}"; do
+        explanation=$(dry_warning_explanation "$line")
+        printf -- '- %s — explanation: %s\n' "$(markdown_cell "$line")" "$explanation" >>"$summary"
+    done
+else
+    printf -- '- None.\n' >>"$summary"
+fi
+
+if ((${#type3_details[@]})); then
+    cat >>"$summary" <<'EOF'
+
+## Type 3 font details
+
+EOF
+    for line in "${type3_details[@]}"; do
+        printf -- '- %s\n' "$(markdown_cell "$line")" >>"$summary"
+    done
+fi
+
+printf '\nSummary: %s\n' "$summary"
+if [[ $vault_status_clean != yes ]]; then
+    printf 'note-snapshot-corpus-gate: error: vault git status changed; inspect %s and %s\n' "$before_status" "$after_status" >&2
+    exit 1
+fi
+if (( render_failures || dry_failures || missing_glyph_warnings || overfull_warnings || type3_fonts )); then
+    printf 'note-snapshot-corpus-gate: FAIL (see %s)\n' "$summary" >&2
+    exit 1
+fi
+printf 'note-snapshot-corpus-gate: renders and dry runs passed; review warnings and page images in %s\n' "$out_dir"

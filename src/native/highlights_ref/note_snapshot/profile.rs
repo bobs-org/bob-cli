@@ -915,6 +915,53 @@ Overfull \\hbox (20.1pt too wide) in paragraph\n";
     }
 
     #[test]
+    fn pandoc_keeps_struck_code_and_fallback_glyphs_renderable() {
+        let Some(pandoc) = super::super::super::create::pandoc_command() else {
+            eprintln!("skipping strike fallback test: pandoc is required");
+            return;
+        };
+        let temp = tempfile::tempdir().expect("tempdir");
+        let scratch = temp.path().join("scratch");
+        fs::create_dir_all(&scratch).expect("scratch");
+        fs::write(
+            scratch.join("glyphs.lua"),
+            "return { [0x1F3B2] = true, serif_uncovered = {}, sans_uncovered = {}, mono_uncovered = {}, }\n",
+        )
+        .expect("glyphs");
+        fs::write(scratch.join("note.lua"), NOTE_FILTER).expect("filter");
+        let source = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/note_snapshot/strike-fallback.projected.md");
+        let output_path = scratch.join("strike-fallback.tex");
+        let output = std::process::Command::new(&pandoc)
+            .arg(&source)
+            .arg("-f")
+            .arg("commonmark_x-tex_math_dollars-emoji")
+            .arg("-t")
+            .arg("latex")
+            .arg("-s")
+            .arg("-o")
+            .arg(&output_path)
+            .arg("--lua-filter")
+            .arg(scratch.join("note.lua"))
+            .arg("--metadata")
+            .arg("bob-glyph-table=glyphs.lua")
+            .current_dir(&scratch)
+            .output()
+            .expect("run pandoc");
+        assert!(output.status.success(), "pandoc failed: {output:?}");
+        let tex = fs::read_to_string(output_path).expect("read generated TeX");
+        for expected in [
+            "\\st{Read the }",
+            "\\texttt{models}",
+            "\\st{ config",
+            "\\BobFallbackBegin{}🎲\\BobFallbackEnd{}",
+            "\\st{ safely.}",
+        ] {
+            assert!(tex.contains(expected), "missing {expected}: {tex}");
+        }
+    }
+
+    #[test]
     fn renders_contract_with_clean_text_layer_and_metadata() {
         let Some(_) = super::super::super::create::pandoc_command() else {
             eprintln!("skipping real render: pandoc is required");

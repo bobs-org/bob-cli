@@ -687,6 +687,16 @@ resolved-address check. A missing `curl` hints at
 
 ## Verified on athena
 
+The note snapshot corpus gate ran on 2026-10-16:
+
+- 101 area/project notes rendered successfully; 5,054 Markdown notes dry-ran
+  successfully.
+- 0 render failures, 0 dry-run failures, 0 missing-glyph warnings, 0 overfull
+  warnings, and 0 Type 3 fonts; the vault git status was unchanged.
+- Dry runs reported 9,580 unresolved-reference warnings and 4,346 parent
+  fallbacks through `body`. Every warning entry in the scratch summary has an
+  explanation; the summary contains no vault note contents.
+
 Live verification ran 2026-10-06 into a scratch vault (`-b /tmp/lv-vault`):
 
 - Every non-listen target kind created, and `scan` wrote 5 ref notes

@@ -877,9 +877,20 @@ impl<'a, L: SourceLoader> Projector<'a, L> {
                 continue;
             }
             if line.fenced {
-                let (block, next) = self.parse_fence(lines, index);
-                blocks.push(block);
-                index = next;
+                if fence_marker(&line.text).is_some() {
+                    let (block, next) = self.parse_fence(lines, index);
+                    blocks.push(block);
+                    index = next;
+                } else {
+                    // Nested projections can start inside a fence whose
+                    // opener was outside this slice. Keep that literal line
+                    // as code instead of treating it as a new fence.
+                    blocks.push(Block::Code {
+                        language: Some(String::new()),
+                        text: line.text.clone(),
+                    });
+                    index += 1;
+                }
                 continue;
             }
             if line.indent_width() < min_indent {
@@ -2982,16 +2993,17 @@ fn strip_emphasis_markers(text: &str) -> String {
     let mut cursor = 0;
     while cursor < without_strike.len() {
         if without_strike[cursor..].starts_with('`') {
-            let mut end = cursor + 1;
-            while end < without_strike.len()
-                && !without_strike[end..].starts_with('`')
-            {
-                end += 1;
-            }
-            plain.push_str(
-                &without_strike[cursor + 1..end.min(without_strike.len())],
-            );
-            cursor = (end + 1).min(without_strike.len());
+            let content_start = cursor + 1;
+            let end = without_strike[content_start..]
+                .find('`')
+                .map(|offset| content_start + offset)
+                .unwrap_or(without_strike.len());
+            plain.push_str(&without_strike[content_start..end]);
+            cursor = if end < without_strike.len() {
+                end + 1
+            } else {
+                end
+            };
         } else {
             let next = without_strike[cursor..]
                 .chars()
@@ -3854,6 +3866,62 @@ mod tests {
             ),
             "See Alias and bold code #keep"
         );
+    }
+
+    #[test]
+    fn excerpt_cleaning_handles_unicode_before_inline_code() {
+        let source = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/note_snapshot/unicode-inline-code.md"
+        ));
+        let expected = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/note_snapshot/unicode-inline-code.expected.txt"
+        ));
+        assert_eq!(clean_readable_text(source), expected.trim_end());
+    }
+
+    #[test]
+    fn nested_fenced_content_without_its_opener_stays_literal() {
+        let directory = test_vault(&[("Host.md", "")]);
+        let root = directory.path().canonicalize().expect("canonical root");
+        let mut store = SourceStore::with_loader(&root, FilesystemSourceLoader)
+            .expect("open source store");
+        let vault_root = store.vault_root().to_path_buf();
+        let canonical = root.join("Host.md").canonicalize().expect("host");
+        let identity =
+            source_identity(&vault_root, &canonical).expect("identity");
+        let mut attachments = AttachmentIndex::new(vault_root);
+        let settings = fake_settings();
+        let mut projector = Projector::new(
+            &mut store,
+            &mut attachments,
+            &identity,
+            "",
+            &settings,
+        );
+        let text = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/note_snapshot/orphan-fenced-line.md"
+        ))
+        .trim_end()
+        .to_string();
+        let line = WorkLine {
+            index: 0,
+            line_no: 1,
+            byte_start: 0,
+            raw: text.clone(),
+            source_prefix: String::new(),
+            text: text.clone(),
+            fenced: true,
+            dropped: false,
+        };
+        let blocks = projector.parse_blocks(&[line], 0);
+        assert!(matches!(
+            blocks.as_slice(),
+            [Block::Code { language, text: code }]
+                if language.as_deref() == Some("") && code == &text
+        ));
     }
 
     #[test]

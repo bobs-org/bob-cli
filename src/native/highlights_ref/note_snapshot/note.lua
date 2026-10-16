@@ -232,6 +232,40 @@ local function is_meta_map(value)
   if value.t == "MetaMap" then return true end
   return value.t == nil and (value["status"] ~= nil or value["count"] ~= nil)
 end
+-- soul's strikeout reconstruction cannot parse raw font wrappers or inline
+-- code. Keep ordinary words visibly struck, and leave those already
+-- formatted runs intact so one glyph or code span cannot abort the PDF.
+local function strikeout_with_plain_runs(content)
+  local out = {}
+  local run = {}
+  local outside_font_wrapper = false
+  local function flush_run()
+    if #run > 0 then
+      out[#out + 1] = pandoc.Strikeout(run)
+      run = {}
+    end
+  end
+  for _, inline in ipairs(content) do
+    local raw = inline.t == "RawInline" and inline.format == "latex" and inline.text or ""
+    if raw:match("^\\Bob[%a]+Begin{}$") then
+      flush_run()
+      outside_font_wrapper = true
+      out[#out + 1] = inline
+    elseif outside_font_wrapper then
+      out[#out + 1] = inline
+      if raw:match("^\\Bob[%a]+End{}$") then
+        outside_font_wrapper = false
+      end
+    elseif inline.t == "Str" or inline.t == "Space" or inline.t == "SoftBreak" or inline.t == "LineBreak" then
+      run[#run + 1] = inline
+    else
+      flush_run()
+      out[#out + 1] = inline
+    end
+  end
+  flush_run()
+  return out
+end
 -- Recursively process inlines: Str/Code glyph wrapping, Span/Link mapping.
 -- Returns a new inline list, preserving anchors and return-link additions.
 local function process_inlines(inlines)
@@ -293,7 +327,11 @@ local function process_inlines(inlines)
       else
         out[#out + 1] = el
       end
-    elseif el.t == "Emph" or el.t == "Strong" or el.t == "Strikeout" or el.t == "Superscript" or el.t == "Subscript" or el.t == "SmallCaps" then
+    elseif el.t == "Strikeout" then
+      for _, n in ipairs(strikeout_with_plain_runs(process_inlines(el.content))) do
+        out[#out + 1] = n
+      end
+    elseif el.t == "Emph" or el.t == "Strong" or el.t == "Superscript" or el.t == "Subscript" or el.t == "SmallCaps" then
       el.content = process_inlines(el.content)
       out[#out + 1] = el
     elseif el.t == "Quoted" then
