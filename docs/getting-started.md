@@ -331,8 +331,8 @@ The path above is illustrative; use the actual note path Bob reports.
 | `query`, `plan`, `ready`, `freshness list`, `stats`, capture discovery, `capture-complete`, `projects list` | Read local vault state |
 | `capture-parse` | Classify the draft without opening the vault. It reads the URL routing config unless `--no-ref` is set; it does not validate vault targets |
 | `capture-rewrite` | Rewrite the draft in memory. It does not open the vault, the clipboard, or the URL routing config |
-| `ref find`, `ref list`, `ref show`, `ref jobs [list]`, `ref migrate-tasks`, `ref migrate-zorg` without `--write` | Inspect local references, jobs, or a migration plan without vault writes |
-| `capture`, `capture-task-id`, `capture-pomodoro-name`, `projects sync`, `task reconcile`, `freshness seed` | Write vault notes; a bare public link queues a job that later writes an intake PDF or a fallback task; `URL %` asks that job for companion audio; `capture --dry-run` is offline |
+| `ref find`, `ref list`, `ref show`, `ref today --dry-run`, `ref jobs [list]`, `ref migrate-tasks`, `ref migrate-zorg` without `--write` | Inspect local references, jobs, or a migration plan without vault writes |
+| `capture`, `capture-task-id`, `capture-pomodoro-name`, `projects sync`, `task reconcile`, `freshness seed`, `ref today` | Write vault notes; a bare public link queues a job that later writes an intake PDF or a fallback task; `URL %` asks that job for companion audio; `capture --dry-run` is offline |
 | `vault-sync`, `nightly` | Reconcile the vault with Git, including commits, merges, and pushes |
 | `task archive` | Archive task blocks and repair links; in a Git vault, commit touched files and push |
 | `task reroll` | Re-roll schedules; in a Git worktree, sync before/after and commit rewritten notes; `--offline` skips sync but still commits locally |

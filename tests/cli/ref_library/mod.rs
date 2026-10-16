@@ -8,6 +8,7 @@ mod migrate_zorg;
 mod rename;
 mod show;
 mod tasks;
+mod today;
 
 use crate::support::*;
 use std::fs;

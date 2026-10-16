@@ -29,7 +29,8 @@ pub(super) fn plan_capture_with_pomodoro_link(
         return Err(CaptureError::io(format!(
             "Bob daily note does not exist: {}",
             day_file.display()
-        )));
+        ))
+        .with_typed(CaptureFailureKind::NoDailyNote));
     }
     if paths_refer_to_same_file(target, &day_file) {
         return Err(CaptureError::io(
@@ -222,7 +223,7 @@ pub(super) fn plan_pomodoro_link_capture(
     target: &Path,
     route: &str,
     block_id: &str,
-    pomodoro_name: Option<&str>,
+    ledger_target: capture_task_toggle::PomodoroLinkTarget<'_>,
     start: Option<&PomodoroStartSpec>,
     now: chrono::NaiveDateTime,
     today: NaiveDate,
@@ -428,7 +429,8 @@ pub(super) fn plan_pomodoro_link_capture(
         return Err(CaptureError::io(format!(
             "Bob daily note does not exist: {}",
             day_file.display()
-        )));
+        ))
+        .with_typed(CaptureFailureKind::NoDailyNote));
     }
     if paths_refer_to_same_file(target, &day_file) {
         return Err(CaptureError::io(
@@ -439,6 +441,7 @@ pub(super) fn plan_pomodoro_link_capture(
     let day_file_label = day_file.display().to_string();
     let block_link = format!("[[{route}#^{block_id}]]");
 
+    let pomodoro_name = ledger_target.named_selector();
     if let Some(spec) = start {
         let (mut plan, guard) = plan_pomodoro_link_with_start(
             planner,
@@ -474,7 +477,7 @@ pub(super) fn plan_pomodoro_link_capture(
     let relocation = capture_task_toggle::plan_pomodoro_link_ledger(
         &day_contents,
         &block_link,
-        pomodoro_name,
+        ledger_target,
     )
     .map_err(|error| {
         relocation_plan_error(error, &block_link, route, block_id)
@@ -554,6 +557,136 @@ pub(super) fn plan_pomodoro_link_capture(
         },
         None,
     ))
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn plan_existing_task_pomodoro_link_item(
+    planner: &mut CaptureBatchPlanner,
+    bob_dir: &Path,
+    dry_run: bool,
+    target: &Path,
+    route: &str,
+    block_id: &str,
+    ledger_target: capture_task_toggle::PomodoroLinkTarget<'_>,
+    start: Option<&PomodoroStartSpec>,
+    now: chrono::NaiveDateTime,
+    today: NaiveDate,
+    warnings: &mut Vec<String>,
+    ctx: &mut DependencyContext,
+) -> Result<PlannedCaptureItem, CaptureError> {
+    let (note_plan, link_guard) = plan_pomodoro_link_capture(
+        planner,
+        bob_dir,
+        target,
+        route,
+        block_id,
+        ledger_target,
+        start,
+        now,
+        today,
+        warnings,
+        ctx,
+    )?;
+    planned_item_from_pomodoro_link_plan(
+        note_plan, link_guard, route, target, dry_run, today,
+    )
+}
+
+fn planned_item_from_pomodoro_link_plan(
+    mut note_plan: CaptureWritePlan,
+    link_guard: Option<LinkGuardJson>,
+    route: &str,
+    target: &Path,
+    dry_run: bool,
+    today: NaiveDate,
+) -> Result<PlannedCaptureItem, CaptureError> {
+    let pomodoro_refs = std::mem::take(&mut note_plan.pomodoro_refs);
+    let link = note_plan.pomodoro_link.as_ref().ok_or_else(|| {
+        CaptureError::io(
+            "pomodoro link capture invariant failed: missing link details",
+        )
+    })?;
+    let link_consumed = link_guard.is_some();
+    let relative_target = relative_target(Some(route));
+    Ok(PlannedCaptureItem {
+        result: CaptureItemResult {
+            ok: true,
+            dry_run,
+            routed: true,
+            route: Some(route.to_string()),
+            route_label: route_label(route),
+            relative_target: relative_target.to_string_lossy().into_owned(),
+            target: target.display().to_string(),
+            text: String::new(),
+            task_line: link.task_line.clone(),
+            kind: if link_consumed {
+                "link_guard"
+            } else {
+                "pomodoro_link"
+            },
+            created: date_string(today),
+            scheduled: None,
+            priority: None,
+            priority_label: None,
+            placement: note_plan.placement,
+            sub_bullets: Vec::new(),
+            clip: None,
+            schedule_log: link.schedule_log.clone(),
+            block_id: Some(link.block_id.clone()),
+            day_file: if link_consumed {
+                link_guard.as_ref().and_then(|guard| guard.day_file.clone())
+            } else {
+                Some(link.day_file.clone())
+            },
+            block_link: (!link_consumed).then(|| link.block_link.clone()),
+            pomodoro_link_placement: link.pomodoro_link_placement,
+            parent_line: None,
+            parent_text: None,
+            parent_section: None,
+            parent_status_symbol: None,
+            parent_status_name: None,
+            toggle_direction: None,
+            previous_task_line: Some(link.previous_task_line.clone()),
+            status_symbol: Some(link.status_symbol),
+            status_name: Some(link.status_name.clone()),
+            previous_status_symbol: Some(link.previous_status_symbol),
+            previous_status_name: Some(link.previous_status_name.clone()),
+            pomodoro_name: link.pomodoro_name.clone(),
+            creates_pomodoro: (!link_consumed).then_some(link.creates_pomodoro),
+            pomodoro_already_linked: None,
+            removed_pomodoro_links: link_guard
+                .as_ref()
+                .and_then(|guard| guard.removed_pomodoro_links),
+            removed_scheduled: link.removed_scheduled.clone(),
+            pomodoro_selector_unused: None,
+            toggle_behavior: None,
+            status_changed: Some(link.status_changed),
+            pomodoro_link_action: (!link_consumed)
+                .then_some(link.pomodoro_link_action),
+            pomodoro_link_source: link.pomodoro_link_source.clone(),
+            pomodoro_link_destination: link.pomodoro_link_destination.clone(),
+            project_note: None,
+            pomodoro_start: link.pomodoro_start.clone(),
+            pomodoro_adjust: None,
+            pomodoro_shift: None,
+            pomodoro_close: None,
+            pomodoro_reset: None,
+            dependency_update: None,
+            consumed_links: Vec::new(),
+            task_complete: None,
+            toggle_task_description: Some(link.task_description.clone()),
+            r#ref: None,
+            link_guard,
+            dropped_dependencies: link.dropped_dependencies.clone(),
+            blocks_line_updates: link.blocks_updates.clone(),
+            minted_dependent_block_id: None,
+            dependency_updates: Vec::new(),
+            minted_blocker_block_id: None,
+        },
+        clip_plan: None,
+        pomodoro_refs,
+        task_block_refs: link.task_block_ref.clone().into_iter().collect(),
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1217,11 +1350,21 @@ pub(super) fn relocation_plan_error(
         }
         capture_task_toggle::LinkRelocationError::NoMovableLink => CaptureError::io(format!(
             "no movable open Pomodoro Task Link for {block_link}; use @{route}+{block_id}! to run the explicit toggle and add one"
-        )),
+        )).with_typed(CaptureFailureKind::LedgerInvariant),
         capture_task_toggle::LinkRelocationError::MultipleMovableLinks => {
             CaptureError::io(format!(
                 "found more than one movable open Pomodoro Task Link for {block_link}; make the dedicated Task Link unique before capturing"
-            ))
+            )).with_typed(CaptureFailureKind::LedgerInvariant)
+        }
+        capture_task_toggle::LinkRelocationError::StalePomodoro => {
+            CaptureError::io(
+                "Pomodoro ref no longer matches an open entry; list again and retry",
+            )
+            .with_typed(CaptureFailureKind::StalePomodoro)
+        }
+        capture_task_toggle::LinkRelocationError::PomodoroClosed => {
+            CaptureError::io("Pomodoro ref names a completed entry")
+                .with_typed(CaptureFailureKind::PomodoroClosed)
         }
     }
 }
@@ -1246,15 +1389,19 @@ pub(super) fn link_plan_error(
     match error {
         capture_task_toggle::LinkPlanError::NoPomodorosSection => {
             CaptureError::io("Bob daily note has no Pomodoros section")
+                .with_typed(CaptureFailureKind::NoPomodorosSection)
         }
         capture_task_toggle::LinkPlanError::NoEligibleOpenEntry => {
             CaptureError::io("Bob daily note has no eligible open Pomodoro")
+                .with_typed(CaptureFailureKind::NoOpenPomodoro)
         }
         capture_task_toggle::LinkPlanError::MultipleOpenTimedEntries => {
             CaptureError::io("Bob daily note has multiple open timed Pomodoros")
+                .with_typed(CaptureFailureKind::MultipleRunning)
         }
         capture_task_toggle::LinkPlanError::InvalidPomodoroName => {
             CaptureError::usage(capture_pomodoros::POMODORO_NAME_USAGE)
+                .with_typed(CaptureFailureKind::InvalidPomodoroName)
         }
     }
 }

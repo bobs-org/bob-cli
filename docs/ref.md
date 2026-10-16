@@ -6,8 +6,10 @@ answers "is this already in my library?" with a verdict per query, in
 human, Markdown, or versioned JSON output. `bob ref list` renders
 filtered library views, defaulting to the reading queue (queued and
 started notes). `bob ref show` resolves one or more exact references
-into their metadata, annotations, notes, and tasks. `find`, `list`, and
-`show` are read-only; `find -i` also reads intake PDF markers. `bob ref rename` renames
+into their metadata, annotations, notes, and tasks. `bob ref today`
+links a reference's v2 reading task under today's Pomodoro. `find`,
+`list`, and `show` are read-only; `find -i` also reads intake PDF
+markers. `bob ref today --dry-run` plans without writing. `bob ref rename` renames
 an unannotated modern reference's files and updates links (preview with `-d`).
 `bob ref migrate-zorg`
 plans copies of zorg-era `status::` reading records into legacy notes under
@@ -20,6 +22,7 @@ plans copies of zorg-era `status::` reading records into legacy notes under
 | Check whether a reference is known | `bob ref find <URL-or-identifier>` | Read library notes; `--include-intake` also checks queued PDFs |
 | See what remains to read | `bob ref list` | Read queued and started reference notes |
 | Read annotations and your notes | `bob ref show <note-path>` | Read one exact reference; `-c` selects commented annotations |
+| Read a reference today | `bob ref today <REF> [-p NAME]` | Set its reading task Next and link it under today's Pomodoro |
 | Fix a reference's file name | `bob ref rename <REF> <NAME> -d`, then without `-d` | Move the note, PDF, and companions and update links; keeps the id and reading task |
 | Import a URL, local PDF, or Markdown file now | `bob ref create <TARGET>` | Write an intake PDF inline; see [target types](highlights-create.md) |
 | Save a bare public link quickly | `bob capture '<URL>'` | Queue a background job when the routing policy admits the URL; the note appears in `ref list` after `bob ref scan` |
@@ -309,6 +312,79 @@ exact notes with `bob ref show <path>`. Prefer `-c -f markdown` for
 Bryan's own thoughts on a reference, and never claim a `not_found`
 result means he has not read something — it only means it is not under
 `ref/`.
+
+## `bob ref today`
+
+```bash
+bob ref today ea_graph
+bob ref today ea_graph -p reading
+bob ref today ea_graph -d -f json
+```
+
+Options: `-b/--bob-dir`, `-d/--dry-run`, `-e/--exact` (requires `-p`),
+`-f/--format human|json` (default human), `-p/--pomodoro NAME`,
+`-P/--pomodoro-ref LINE:DIGEST`, `-r/--ref-dir`. `-p` conflicts with
+`-P`.
+
+`REF` uses the exact resolver from `bob ref show`: note path, stem,
+frontmatter id, URL, arXiv ID, DOI, or a unique exact title. The
+command then locates the reference's v2 reading task and runs the same
+planner as `bob capture '^route:block-id[#name]'` (see [Linking and
+starting existing tasks](capture.md#linking-and-starting-existing-tasks)).
+It never starts a Pomodoro and never commits or syncs; vault-sync picks
+the change up, as with capture. The tracker change reads
+`status_sync: pending` until the next `ref scan -w` (the Refs panel's
+⌘S), exactly as an Obsidian Ctrl+Shift+Enter on a ref task does today.
+
+| Flags | Destination |
+| --- | --- |
+| none | Capture's no-name rule. If the task already has a dedicated live link under an open Pomodoro (Q), it stays there (`already_current`). Otherwise the implicit current/next entry: the single open timed entry, else the first open entry |
+| `-p NAME` | Capture's `#name` rule: whole-slug match among open entries, then prefix match, else create the canonical named future Pomodoro. Q's subtree moves |
+| `-p NAME -e` | Whole-slug match among open entries only, else create. Never a prefix match |
+| `-P LINE:DIGEST` | Exactly that entry, resolved stale-safe through the `ref` values the dry run lists. A completed entry gives `pomodoro_closed`; stale or ambiguous gives `stale_pomodoro` |
+
+Human output prints `✓ linked 📖 <title>` (or `would link` on a dry
+run), then capture's pomodoro-link details. `--dry-run` also lists
+open Pomodoros (`●` running, `◆` default, `✓` linked) with `-P
+LINE:DIGEST` so unnamed entries can be targeted.
+
+JSON is schema 1 with `command: "ref today"`. A success envelope
+carries `mode` (`dry_run` or `write`), `changed`, `ref`, `task`,
+`pomodoros` (every open top-level entry, with `running` / `default` /
+`linked` flags), and `capture` (the same item object `bob capture -f
+json` reports for `^route:block-id`). A guarded gesture is `ok: true`
+with `capture.kind == "link_guard"`: it is a real write that promotes
+prerequisites, as in capture.
+
+```json
+{"ok":true,"schema_version":1,"command":"ref today","mode":"dry_run","changed":true,"ref":{"path":"ref/papers/attention.md","link":"[[ref/papers/attention]]","title":"Attention Is All You Need","marker_id":"attention"},"task":{"path":"sase.md","block_id":"ref-attention","link":"[[sase#^ref-attention]]","status_symbol":" ","status_name":"Ready"},"pomodoros":[{"ref":"41:0b1c2d3e","line":41,"name":"BUGS","running":true,"default":true,"linked":false}],"capture":{"kind":"pomodoro_link"}}
+```
+
+Failures print
+`{"ok":false,"schema_version":1,"command":"ref today","error":{"code","message","hint"}}`
+and add `candidates` for resolution failures, plus `ref`, `task`, and
+`pomodoros` whenever resolution got that far. Exit 1 for failures,
+exit 2 for usage (including `invalid_pomodoro_name`).
+
+| Code | When |
+| --- | --- |
+| `unknown_reference` | REF matches nothing |
+| `ambiguous_reference` | REF matches several notes |
+| `no_reading_task` | The reference has no reading task |
+| `ambiguous_reading_task` | Several open reading tasks claim the reference |
+| `v1_reading_task` | The task is an in-note v1 `^ref` tracker |
+| `reading_task_closed` | The task is archived, read, or abandoned |
+| `reading_task_unroutable` | The task's residence is not a root note |
+| `no_daily_note` | Today's daily note does not exist |
+| `no_pomodoros_section` | The daily note has no Pomodoros section |
+| `no_open_pomodoro` | There is no open entry and no selector |
+| `multiple_running` | Implicit selection or named creation with several open timed entries |
+| `invalid_pomodoro_name` | bob's Pomodoro name usage text |
+| `stale_pomodoro` | The `-P` ref no longer matches an entry |
+| `pomodoro_closed` | The `-P` ref names a completed entry |
+| `ledger_invariant` | For example, several movable links |
+| `note_changed` | A pre-image mismatch at write time; retry |
+| `io` | Any other I/O failure |
 
 ## `bob ref rename`
 
@@ -631,9 +707,11 @@ errors. In JSON mode, failures print
 `{"ok":false,"schema_version":1,"command":"ref find","error":{"code":"…","message":"…","hint":"…"}}`
 to stdout and exit 1. A missing intake directory under `-i` is not a
 failure: coverage reports `unavailable` and the lookup continues.
-`show` resolution failures (`ambiguous_reference`,
+`show` and `today` resolution failures (`ambiguous_reference`,
 `unknown_reference`) exit 1 as well; in JSON mode they add
-`"candidates":[{"path":…,"title":…}]` to the envelope.
+`"candidates":[{"path":…,"title":…}]` to the envelope. `today` uses
+the same envelope with `command: "ref today"` and the error codes in
+[bob ref today](#bob-ref-today).
 
 ## URL routing
 

@@ -153,14 +153,16 @@ pub(super) fn validate_disk_preimages(
                         return Err(CaptureError::io(format!(
                             "refusing to overwrite {}: note changed on disk after planning",
                             staged.target.display()
-                        )));
+                        ))
+                        .with_typed(CaptureFailureKind::NoteChanged));
                     }
                 }
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {
                     return Err(CaptureError::io(format!(
                         "refusing to overwrite {}: note was deleted on disk after planning",
                         staged.target.display()
-                    )));
+                    ))
+                    .with_typed(CaptureFailureKind::NoteChanged));
                 }
                 Err(error) => {
                     return Err(fs_error("read target", &staged.target, error));
@@ -172,7 +174,8 @@ pub(super) fn validate_disk_preimages(
                     return Err(CaptureError::io(format!(
                         "refusing to overwrite {}: note was created on disk after planning",
                         staged.target.display()
-                    )));
+                    ))
+                    .with_typed(CaptureFailureKind::NoteChanged));
                 }
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {}
                 Err(error) => {

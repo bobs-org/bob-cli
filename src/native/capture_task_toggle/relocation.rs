@@ -25,6 +25,8 @@ pub(crate) enum LinkRelocationError {
     InvalidPomodoroName,
     NoMovableLink,
     MultipleMovableLinks,
+    StalePomodoro,
+    PomodoroClosed,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

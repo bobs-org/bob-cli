@@ -852,3 +852,114 @@ fn named_relocation_same_location_noop_does_not_edit_bytes() {
     assert_eq!(plan.action, LinkRelocationAction::AlreadyCurrent);
     assert_eq!(plan.content, contents);
 }
+
+#[test]
+fn ledger_exact_name_creates_when_only_a_prefix_matches() {
+    let contents = concat!(
+        "## Pomodoros\n",
+        "- [ ] (**0900-0930**) — CURRENT\n",
+        "- [ ] () — READING\n",
+    );
+    let plan = plan_pomodoro_link_ledger(
+        contents,
+        "[[sase#^ref-x]]",
+        PomodoroLinkTarget::ExactName("read"),
+    )
+    .expect("plan");
+    assert_eq!(plan.action, PomodoroLinkLedgerAction::Linked);
+    assert!(plan.creates_pomodoro);
+    assert_eq!(plan.destination.name.as_deref(), Some("READ"));
+    assert!(plan.content.contains("- [ ] () — READ\n"));
+    assert!(plan.content.contains("[[sase#^ref-x]]"));
+    assert!(plan.content.contains("— READING\n"));
+}
+
+#[test]
+fn ledger_exact_name_reuses_a_whole_slug_open_entry() {
+    let contents = concat!(
+        "## Pomodoros\n",
+        "- [ ] (**0900-0930**) — CURRENT\n",
+        "- [ ] () — READING\n",
+    );
+    let plan = plan_pomodoro_link_ledger(
+        contents,
+        "[[sase#^ref-x]]",
+        PomodoroLinkTarget::ExactName("reading"),
+    )
+    .expect("plan");
+    assert_eq!(plan.action, PomodoroLinkLedgerAction::Linked);
+    assert!(!plan.creates_pomodoro);
+    assert_eq!(plan.destination.name.as_deref(), Some("READING"));
+    assert!(!plan.content.contains("— READ\n"));
+}
+
+#[test]
+fn ledger_entry_moves_q_to_the_named_ref() {
+    let contents = concat!(
+        "## Pomodoros\n",
+        "- [ ] (**0900-0930**) — CURRENT\n",
+        "  - [[sase#^ref-x]]\n",
+        "- [ ] () — READING\n",
+    );
+    let scan = crate::native::capture_pomodoros::scan(contents);
+    let reading = scan
+        .entries
+        .iter()
+        .find(|entry| entry.name.as_deref() == Some("READING"))
+        .expect("reading");
+    let plan = plan_pomodoro_link_ledger(
+        contents,
+        "[[sase#^ref-x]]",
+        PomodoroLinkTarget::Entry(&reading.pomodoro_ref),
+    )
+    .expect("plan");
+    assert_eq!(plan.action, PomodoroLinkLedgerAction::Moved);
+    assert_eq!(plan.destination.name.as_deref(), Some("READING"));
+    assert_eq!(
+        plan.source
+            .as_ref()
+            .and_then(|source| source.name.as_deref()),
+        Some("CURRENT")
+    );
+}
+
+#[test]
+fn ledger_entry_stale_ref_is_stale_pomodoro() {
+    let contents = "## Pomodoros\n- [ ] (**0900-0930**) — CURRENT\n";
+    let stale =
+        crate::native::capture_pomodoros::PomodoroRef::parse("99:deadbeef")
+            .expect("parse");
+    assert_eq!(
+        plan_pomodoro_link_ledger(
+            contents,
+            "[[sase#^ref-x]]",
+            PomodoroLinkTarget::Entry(&stale),
+        )
+        .unwrap_err(),
+        LinkRelocationError::StalePomodoro
+    );
+}
+
+#[test]
+fn ledger_entry_completed_ref_is_pomodoro_closed() {
+    let contents = concat!(
+        "## Pomodoros\n",
+        "- [x] (**0800-0830**) — DONE\n",
+        "- [ ] (**0900-0930**) — CURRENT\n",
+    );
+    let scan = crate::native::capture_pomodoros::scan(contents);
+    let done = scan
+        .entries
+        .iter()
+        .find(|entry| entry.name.as_deref() == Some("DONE"))
+        .expect("done");
+    assert_eq!(
+        plan_pomodoro_link_ledger(
+            contents,
+            "[[sase#^ref-x]]",
+            PomodoroLinkTarget::Entry(&done.pomodoro_ref),
+        )
+        .unwrap_err(),
+        LinkRelocationError::PomodoroClosed
+    );
+}

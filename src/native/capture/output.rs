@@ -2635,7 +2635,16 @@ pub(super) fn print_human_pomodoro_link_success(
         (false, false) => "link",
     };
     println!("{prefix} {verb}  {ordinal}{target_label}");
+    print!("{}", format_human_pomodoro_link_details(result, styler));
+}
 
+/// Status transition, ledger line, and dependency-drop / schedule chips
+/// for a Pomodoro link. Shared by `bob capture` and `bob ref today`.
+pub(crate) fn format_human_pomodoro_link_details(
+    result: &CaptureItemResult,
+    styler: &Styler,
+) -> String {
+    let mut out = String::new();
     let previous_marker = result
         .previous_status_symbol
         .map(|symbol| style_task_status_marker(styler, symbol))
@@ -2656,16 +2665,41 @@ pub(super) fn print_human_pomodoro_link_success(
     let previous_symbol = result.previous_status_symbol.unwrap_or(' ');
     let current_symbol = result.status_symbol.unwrap_or(' ');
     if previous_symbol == '*' && current_symbol == '*' {
-        println!("  {next_marker} already Next  {description}{block_id}");
+        out.push_str(&format!(
+            "  {next_marker} already Next  {description}{block_id}\n"
+        ));
     } else if previous_symbol == '/' && current_symbol == '/' {
-        println!("  {next_marker} stays In Progress  {description}{block_id}");
+        out.push_str(&format!(
+            "  {next_marker} stays In Progress  {description}{block_id}\n"
+        ));
     } else {
-        println!(
-            "  {previous_marker} → {next_marker}  {description}{block_id}"
-        );
+        out.push_str(&format!(
+            "  {previous_marker} → {next_marker}  {description}{block_id}\n"
+        ));
     }
 
-    print_human_dropped_dependencies(result, styler);
+    if !result.dropped_dependencies.is_empty() {
+        let links = result
+            .dropped_dependencies
+            .iter()
+            .map(|dependency| dependency.link.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let action = if result.dry_run {
+            "would drop"
+        } else {
+            "dropped"
+        };
+        let line = if result.dropped_dependencies.len() == 1 {
+            format!("⛓️ {action} dependency on {links}")
+        } else {
+            format!(
+                "⛓️ {action} {} dependencies: {links}",
+                result.dropped_dependencies.len()
+            )
+        };
+        out.push_str(&format!("  {}\n", styler.dim(&line)));
+    }
 
     let mut chips = Vec::new();
     if result.removed_scheduled.is_some() {
@@ -2675,11 +2709,16 @@ pub(super) fn print_human_pomodoro_link_success(
         chips.push("logged schedule change".to_string());
     }
     if !chips.is_empty() {
-        println!("  {}", styler.dim(&chips.join(" · ")));
+        out.push_str(&format!("  {}\n", styler.dim(&chips.join(" · "))));
     }
 
-    if result.link_guard.is_some() {
-        print_human_link_guard(result, styler);
+    if let Some(guard) = result.link_guard.as_ref() {
+        if let Some(detail) = guard.detail.as_deref() {
+            out.push_str(&format!(
+                "  {}\n",
+                styler.dim(&format!("⛔ {detail}"))
+            ));
+        }
     } else {
         match result.pomodoro_link_action {
             Some("moved") => {
@@ -2698,12 +2737,12 @@ pub(super) fn print_human_pomodoro_link_success(
                 } else {
                     String::new()
                 };
-                println!(
-                    "  {}",
+                out.push_str(&format!(
+                    "  {}\n",
                     styler.dim(&format!(
                         "Moved Task Link {source} → {destination}{created}"
                     ))
-                );
+                ));
             }
             Some("linked") => {
                 let destination = result
@@ -2711,32 +2750,37 @@ pub(super) fn print_human_pomodoro_link_success(
                     .as_ref()
                     .map(format_pomodoro_endpoint)
                     .unwrap_or_else(|| "current/next".to_string());
-                println!(
-                    "  {}",
+                out.push_str(&format!(
+                    "  {}\n",
                     styler.dim(&format!("Linked under {destination}"))
-                );
+                ));
                 if result.creates_pomodoro == Some(true) {
-                    println!(
-                        "  {}",
+                    out.push_str(&format!(
+                        "  {}\n",
                         styler.dim(&format!("created {destination}"))
-                    );
+                    ));
                 }
             }
             _ => {
                 let already = result
-                .pomodoro_name
-                .as_deref()
-                .or_else(|| {
-                    result
-                        .pomodoro_link_destination
-                        .as_ref()
-                        .and_then(|endpoint| endpoint.name.as_deref())
-                })
-                .map(|name| format!("Task Link already in {name}; no ledger change."))
-                .unwrap_or_else(|| {
-                    "Task Link already in current/next Pomodoro; no ledger change.".to_string()
-                });
-                println!("  {}", styler.dim(&already));
+                    .pomodoro_name
+                    .as_deref()
+                    .or_else(|| {
+                        result
+                            .pomodoro_link_destination
+                            .as_ref()
+                            .and_then(|endpoint| endpoint.name.as_deref())
+                    })
+                    .map(|name| {
+                        format!(
+                            "Task Link already in {name}; no ledger change."
+                        )
+                    })
+                    .unwrap_or_else(|| {
+                        "Task Link already in current/next Pomodoro; no ledger change."
+                            .to_string()
+                    });
+                out.push_str(&format!("  {}\n", styler.dim(&already)));
             }
         }
     }
@@ -2753,8 +2797,8 @@ pub(super) fn print_human_pomodoro_link_success(
         } else {
             "started"
         };
-        println!(
-            "  {}",
+        out.push_str(&format!(
+            "  {}\n",
             styler.dim(&format!(
                 "{verb} {name} {}-{} ({}m){created} at line {}",
                 start.start,
@@ -2762,8 +2806,9 @@ pub(super) fn print_human_pomodoro_link_success(
                 start.duration_minutes,
                 start.pomodoro_line,
             ))
-        );
+        ));
     }
+    out
 }
 
 pub(super) fn print_removed_pomodoro_links(
@@ -3222,6 +3267,24 @@ pub(crate) struct CaptureError {
     pub(super) extra: Option<serde_json::Map<String, serde_json::Value>>,
     /// Numbered offer rows printed on human `pull_in_choice_required`.
     pub(super) human_unblocked: Vec<TaskCompleteUnblockedJson>,
+    /// Typed failure kind for `bob ref today`. Capture JSON ignores this
+    /// so `bob capture` stays byte-identical.
+    pub(crate) typed: Option<CaptureFailureKind>,
+}
+
+/// Stable classification for capture failures `bob ref today` maps to
+/// error codes. Never string-matched from messages.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CaptureFailureKind {
+    NoDailyNote,
+    NoPomodorosSection,
+    NoOpenPomodoro,
+    MultipleRunning,
+    InvalidPomodoroName,
+    StalePomodoro,
+    PomodoroClosed,
+    LedgerInvariant,
+    NoteChanged,
 }
 
 impl CaptureError {
@@ -3232,6 +3295,7 @@ impl CaptureError {
             code: None,
             extra: None,
             human_unblocked: Vec::new(),
+            typed: None,
         }
     }
 
@@ -3245,6 +3309,7 @@ impl CaptureError {
             code: Some(code.into()),
             extra: None,
             human_unblocked: Vec::new(),
+            typed: None,
         }
     }
 
@@ -3255,6 +3320,7 @@ impl CaptureError {
             code: None,
             extra: None,
             human_unblocked: Vec::new(),
+            typed: None,
         }
     }
 
@@ -3267,6 +3333,7 @@ impl CaptureError {
             code: Some(plan_budget::LINT_THEME_CAP.to_string()),
             extra: None,
             human_unblocked: Vec::new(),
+            typed: None,
         }
     }
 
@@ -3281,7 +3348,13 @@ impl CaptureError {
             code: Some("pull_in_choice_required".to_string()),
             extra: Some(extra),
             human_unblocked,
+            typed: None,
         }
+    }
+
+    pub(crate) fn with_typed(mut self, typed: CaptureFailureKind) -> Self {
+        self.typed = Some(typed);
+        self
     }
 }
 

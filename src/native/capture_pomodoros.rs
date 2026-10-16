@@ -690,6 +690,28 @@ pub(crate) fn select_named<'a>(
     NamedSelection::Missing { suggestion }
 }
 
+/// Whole-slug match among open selectable entries only. Never a prefix
+/// match and never a completed-only hit: callers create when this
+/// returns [`NamedSelection::Missing`].
+pub(crate) fn select_named_exact<'a>(
+    scan: &'a PomodoroScan,
+    selector: &str,
+) -> NamedSelection<'a> {
+    let needle = capture_language::selector_slug(selector);
+    if needle.is_empty() {
+        return NamedSelection::Missing { suggestion: None };
+    }
+    let found = scan.entries.iter().find(|entry| {
+        entry.state == PomodoroState::Open
+            && entry.selectable
+            && entry.slug == needle
+    });
+    match found {
+        Some(entry) => NamedSelection::Found(entry),
+        None => NamedSelection::Missing { suggestion: None },
+    }
+}
+
 /// Canonical name for a future Pomodoro `bob capture` would create for
 /// `selector`, if that selector is valid and today's ledger can uniquely
 /// place the new entry. `None` when an open exact/prefix name would win,

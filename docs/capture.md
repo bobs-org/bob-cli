@@ -1061,7 +1061,9 @@ whether the entry was created); human output names the Pomodoro and its time.
 Capture a whole item that is only `@route:block-id[#pomodoro][=<X>]` (or the
 `^route:block-id[#pomodoro][=<X>]` active-task spelling) to link an existing
 task into today's Pomodoro ledger and optionally start that session
-atomically. For example, `bob capture '^sase:deep-fix='` links the existing
+atomically. `bob ref today` reuses this planner for a reference's reading
+task; its exact-name (`-e`) and entry-ref (`-P`) targets are
+`bob ref today`-only and the capture grammar is unchanged. For example, `bob capture '^sase:deep-fix='` links the existing
 `^deep-fix` task in `sase.md` and starts its session. The marker must be the
 entire capture item: no body text, no authored child bullets, no `%`/`--clip`,
 no `s:<N>`/`p:<N>`, and no forced destination flags. A token with the complete

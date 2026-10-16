@@ -151,11 +151,12 @@ pub(crate) fn print_find_error(
     }
 }
 
-/// Report a `ref show` resolution failure: human errors go to stderr with
-/// one `hint:` line per candidate, JSON errors go to stdout with the
-/// shared envelope plus its `candidates` array.
+/// Report a `ref show` / `ref today` resolution failure: human errors go
+/// to stderr with one `hint:` line per candidate, JSON errors go to
+/// stdout with the shared envelope plus its `candidates` array.
 pub(crate) fn print_show_error(
     format: Format,
+    command: &'static str,
     code: &str,
     message: &str,
     candidates: &[ErrorCandidate],
@@ -164,7 +165,7 @@ pub(crate) fn print_show_error(
         let envelope = ErrorEnvelope {
             ok: false,
             schema_version: REF_SCHEMA_VERSION,
-            command: "ref show",
+            command,
             error: ErrorBody {
                 code: code.to_string(),
                 message: message.to_string(),

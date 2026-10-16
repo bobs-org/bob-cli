@@ -788,114 +788,25 @@ pub(super) fn plan_capture_item(
                 "pomodoro link capture invariant failed: route is missing",
             )
         })?;
-        let created = date_string(today);
-        let relative_target = relative_target(Some(route));
-        let target = request.bob_dir.join(&relative_target);
-        let (mut note_plan, link_guard) = plan_pomodoro_link_capture(
+        let target = request.bob_dir.join(relative_target(Some(route)));
+        let ledger_target = match pomodoro_name.as_deref() {
+            Some(name) => capture_task_toggle::PomodoroLinkTarget::Named(name),
+            None => capture_task_toggle::PomodoroLinkTarget::Implicit,
+        };
+        return plan_existing_task_pomodoro_link_item(
             planner,
             &request.bob_dir,
+            request.dry_run,
             &target,
             route,
             block_id,
-            pomodoro_name.as_deref(),
+            ledger_target,
             start.as_ref(),
             now,
             today,
             warnings,
             dependency_ctx,
-        )?;
-        let pomodoro_refs = std::mem::take(&mut note_plan.pomodoro_refs);
-        let link = note_plan.pomodoro_link.as_ref().ok_or_else(|| {
-            CaptureError::io(
-                "pomodoro link capture invariant failed: missing link details",
-            )
-        })?;
-        let link_consumed = link_guard.is_some();
-        return Ok(PlannedCaptureItem {
-            result: CaptureItemResult {
-                ok: true,
-                dry_run: request.dry_run,
-                routed: true,
-                route: Some(route.to_string()),
-                route_label: route_label(route),
-                relative_target: relative_target.to_string_lossy().into_owned(),
-                target: target.display().to_string(),
-                text: String::new(),
-                task_line: link.task_line.clone(),
-                // Unknown kinds fall back to a neutral preview in older
-                // clients. A consumed gesture must not be presented as a
-                // successful Pomodoro link.
-                kind: if link_consumed {
-                    "link_guard"
-                } else {
-                    capture_kind_label(&parsed.kind)
-                },
-                created,
-                scheduled: None,
-                priority: None,
-                priority_label: None,
-                placement: note_plan.placement,
-                sub_bullets: Vec::new(),
-                clip: None,
-                schedule_log: link.schedule_log.clone(),
-                block_id: Some(link.block_id.clone()),
-                day_file: if link_consumed {
-                    link_guard.as_ref().and_then(|guard| guard.day_file.clone())
-                } else {
-                    Some(link.day_file.clone())
-                },
-                block_link: (!link_consumed).then(|| link.block_link.clone()),
-                pomodoro_link_placement: link.pomodoro_link_placement,
-                parent_line: None,
-                parent_text: None,
-                parent_section: None,
-                parent_status_symbol: None,
-                parent_status_name: None,
-                toggle_direction: None,
-                previous_task_line: Some(link.previous_task_line.clone()),
-                status_symbol: Some(link.status_symbol),
-                status_name: Some(link.status_name.clone()),
-                previous_status_symbol: Some(link.previous_status_symbol),
-                previous_status_name: Some(link.previous_status_name.clone()),
-                pomodoro_name: link.pomodoro_name.clone(),
-                creates_pomodoro: (!link_consumed)
-                    .then_some(link.creates_pomodoro),
-                pomodoro_already_linked: None,
-                removed_pomodoro_links: link_guard
-                    .as_ref()
-                    .and_then(|guard| guard.removed_pomodoro_links),
-                removed_scheduled: link.removed_scheduled.clone(),
-                pomodoro_selector_unused: None,
-                toggle_behavior: None,
-                status_changed: Some(link.status_changed),
-                pomodoro_link_action: (!link_consumed)
-                    .then_some(link.pomodoro_link_action),
-                pomodoro_link_source: link.pomodoro_link_source.clone(),
-                pomodoro_link_destination: link
-                    .pomodoro_link_destination
-                    .clone(),
-                project_note: None,
-                pomodoro_start: link.pomodoro_start.clone(),
-                pomodoro_adjust: None,
-                pomodoro_shift: None,
-                pomodoro_close: None,
-                pomodoro_reset: None,
-                dependency_update: None,
-                consumed_links: Vec::new(),
-                task_complete: None,
-                toggle_task_description: Some(link.task_description.clone()),
-                r#ref: None,
-                link_guard,
-                dropped_dependencies: link.dropped_dependencies.clone(),
-                blocks_line_updates: link.blocks_updates.clone(),
-                minted_dependent_block_id: None,
-                dependency_updates: Vec::new(),
-                minted_blocker_block_id: None,
-            },
-            clip_plan: None,
-            pomodoro_refs,
-            task_block_refs: link.task_block_ref.clone().into_iter().collect(),
-        });
+        );
     }
     if matches!(parsed.kind, CaptureKind::ProjectNote { .. }) {
         return plan_project_note_item(

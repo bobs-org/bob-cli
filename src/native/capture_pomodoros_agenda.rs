@@ -670,7 +670,7 @@ fn agenda_role(
     AgendaRole::Later
 }
 
-fn agenda_datetimes(
+pub(crate) fn agenda_datetimes(
     date: NaiveDate,
     time_range: Option<&str>,
 ) -> (Option<String>, Option<String>) {

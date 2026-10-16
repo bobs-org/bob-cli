@@ -21,6 +21,7 @@ mod resolve;
 mod row;
 pub(crate) mod show;
 mod status;
+pub(crate) mod today;
 
 #[cfg(test)]
 mod tests;

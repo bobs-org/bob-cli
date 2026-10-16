@@ -24,7 +24,8 @@ mod tests;
 mod text;
 
 pub(crate) use ledger::{
-    list_open_entry_links, plan_pomodoro_link_ledger, PomodoroLinkLedgerAction,
+    default_pomodoro_link_destination, list_open_entry_links,
+    plan_pomodoro_link_ledger, PomodoroLinkLedgerAction, PomodoroLinkTarget,
 };
 pub(crate) use links::{
     find_movable_task_links, plan_link_insertion, plan_link_removal,

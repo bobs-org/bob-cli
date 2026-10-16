@@ -399,6 +399,7 @@ pub(crate) fn run_show(matches: &ArgMatches) -> i32 {
             Err(ShowFailure::Ambiguous { query, candidates }) => {
                 print_show_error(
                     format,
+                    "ref show",
                     "ambiguous_reference",
                     &format!("ambiguous reference: {query}"),
                     &candidates,
@@ -408,6 +409,7 @@ pub(crate) fn run_show(matches: &ArgMatches) -> i32 {
             Err(ShowFailure::NotFound { query, candidates }) => {
                 print_show_error(
                     format,
+                    "ref show",
                     "unknown_reference",
                     &format!("no reference note matches {query}"),
                     &candidates,

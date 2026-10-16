@@ -194,6 +194,18 @@ const TABLE: &[Entry] = &[
         arg: "ref",
         kind: Kind::VaultNote,
     },
+    // `bob ref today` resolves the same exact note index, then links.
+    Entry {
+        path: &["ref", "today"],
+        arg: "ref",
+        kind: Kind::VaultNote,
+    },
+    // `-p NAME` is capture's #name rule: typed slug, prefix, or create.
+    Entry {
+        path: &["ref", "today"],
+        arg: "pomodoro",
+        kind: Kind::FreeText,
+    },
     // `bob ref rename` resolves the old reference through the same exact note index.
     Entry {
         path: &["ref", "rename"],

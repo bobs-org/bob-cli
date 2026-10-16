@@ -1828,7 +1828,9 @@ fn named_relocation_error(
             CaptureError::usage(capture_pomodoros::POMODORO_NAME_USAGE)
         }
         capture_task_toggle::LinkRelocationError::NoMovableLink
-        | capture_task_toggle::LinkRelocationError::MultipleMovableLinks => {
+        | capture_task_toggle::LinkRelocationError::MultipleMovableLinks
+        | capture_task_toggle::LinkRelocationError::StalePomodoro
+        | capture_task_toggle::LinkRelocationError::PomodoroClosed => {
             CaptureError::io(
                 "Pomodoro capture invariant failed: named start needs no movable link",
             )

@@ -18,6 +18,7 @@ const HELP_GROUPS: &[(&str, &[&str])] = &[
             "migrate-zorg",
             "rename",
             "show",
+            "today",
         ],
     ),
     (
@@ -40,6 +41,7 @@ Examples:
   bob ref list -R finished -S 30d                 Show what was finished in the last 30 days
   bob ref rename <REF> <NAME> -d                  Preview renaming a reference's files
   bob ref show ea_graph -c                        Read your comments on one reference
+  bob ref today <REF> -p reading                  Pull a reference into today's Pomodoro
   bob ref create <URL|PDF|MD> -L                  Capture a reference and narrate it
   bob ref scan                                    Sync Highlights PDFs into reference notes
 ";
@@ -67,7 +69,7 @@ pub(crate) fn build_cli() -> ClapCommand {
     let groups = groups.trim_end().to_string();
     let mut command = ClapCommand::new(COMMAND_NAME)
         .about(
-            "Find, list, read, and rename Bob reference notes, and sync Highlights PDFs into them",
+            "Find, list, read, rename, and plan Bob reference notes for today, and sync Highlights PDFs into them",
         )
         .help_template(REF_HELP_TEMPLATE)
         .before_help(groups)
@@ -91,6 +93,7 @@ fn all_subcommands() -> Vec<ClapCommand> {
         crate::native::ref_library::migrate_zorg::migrate_zorg_command(),
         rename::command(),
         crate::native::ref_library::cli::show_command(),
+        crate::native::ref_library::today::today_command(),
         create::command(),
         doctor_command(),
         crate::native::ref_jobs::command(),
@@ -418,8 +421,13 @@ mod tests {
                     "group `{title}` member `{name}` has no about",
                 );
                 let rendered = render_help_groups(&subcommands, false);
+                let rendered_flat =
+                    rendered.split_whitespace().collect::<Vec<_>>().join(" ");
+                let about_flat =
+                    about.split_whitespace().collect::<Vec<_>>().join(" ");
                 assert!(
-                    rendered.contains(name) && rendered.contains(&about),
+                    rendered.contains(name)
+                        && rendered_flat.contains(&about_flat),
                     "group `{title}` member `{name}` about is not rendered",
                 );
             }

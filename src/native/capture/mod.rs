@@ -59,6 +59,7 @@ mod commit;
 mod dependencies;
 mod dependency_drop;
 mod ensure_next;
+mod existing_task_link;
 mod link_guard;
 mod output;
 mod plan;
@@ -112,7 +113,11 @@ use task_toggle::*;
 pub(crate) use batch::StagedTextFile;
 pub(crate) use block_diff::block_depths;
 pub(crate) use commit::{validate_target_parent, write_staged_files};
-pub(crate) use output::{CaptureError, Placement};
+pub(crate) use existing_task_link::{
+    link_existing_task, list_today_link_pomodoros, today_error_code,
+    ExistingTaskLinkOutcome, TodayPomodoroRow,
+};
+pub(crate) use output::{CaptureError, CaptureFailureKind, Placement};
 pub(crate) use plan::{format_task_line, inbox_route, route_label};
 pub(crate) use pomodoro_adjust::{
     adjustment_duration_for_range, duration_from_range_text,

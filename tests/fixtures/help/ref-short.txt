@@ -1,4 +1,4 @@
-Find, list, read, and rename Bob reference notes, and sync Highlights PDFs into them
+Find, list, read, rename, and plan Bob reference notes for today, and sync Highlights PDFs into them
 
 Usage: bob ref [OPTIONS] <COMMAND>
 
@@ -9,6 +9,8 @@ Library:
   migrate-zorg   Migrate zorg-era records to ref/zorg/; dry run unless --write
   rename         Rename a reference's files and update every link to it
   show           Show notes with metadata, annotations, and your own notes
+  today          Pull a reference's reading task into today's Pomodoro (sets it
+                 Next)
 
 Highlights pipeline:
   create  Create a Highlights-ready PDF from Markdown, a PDF, or a URL
@@ -28,5 +30,6 @@ Examples:
   bob ref list -R finished -S 30d                 Show what was finished in the last 30 days
   bob ref rename <REF> <NAME> -d                  Preview renaming a reference's files
   bob ref show ea_graph -c                        Read your comments on one reference
+  bob ref today <REF> -p reading                  Pull a reference into today's Pomodoro
   bob ref create <URL|PDF|MD> -L                  Capture a reference and narrate it
   bob ref scan                                    Sync Highlights PDFs into reference notes

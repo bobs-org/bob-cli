@@ -17,8 +17,8 @@ Tasks and projects:
 Vault:
   nightly     Run nightly maintenance: vault-sync, task archive, vault-sync
   query       Run Dataview or Tasks queries against the vault
-  ref         Find, list, read, and rename references; sync Highlights PDFs into
-              them
+  ref         Find, list, read, rename, and plan references for today; sync
+              Highlights PDFs into them
   vault-sync  Reconcile the vault through Git (default: run) or show status
 
 Integrations:
