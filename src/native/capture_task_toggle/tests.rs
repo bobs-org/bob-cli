@@ -924,6 +924,61 @@ fn ledger_entry_moves_q_to_the_named_ref() {
 }
 
 #[test]
+fn ledger_entry_move_tracks_duplicate_unnamed_destination_after_source() {
+    let contents = concat!(
+        "## Pomodoros\n",
+        "- [ ] ()\n",
+        "- [ ] ()\n",
+        "- [ ] () — SOURCE\n",
+        "  - [[sase#^ref-x]]\n",
+    );
+    let scan = crate::native::capture_pomodoros::scan(contents);
+    let target = scan
+        .entries
+        .iter()
+        .find(|entry| entry.line == 2)
+        .expect("target");
+    let plan = plan_pomodoro_link_ledger(
+        contents,
+        "[[sase#^ref-x]]",
+        PomodoroLinkTarget::Entry(&target.pomodoro_ref),
+    )
+    .expect("plan");
+    assert_eq!(plan.destination.line, 2);
+    assert_eq!(plan.content.lines().nth(1), Some("- [ ] ()"));
+    assert_eq!(plan.content.lines().nth(2), Some("  - [[sase#^ref-x]]"));
+}
+
+#[test]
+fn ledger_entry_move_tracks_duplicate_unnamed_destination_after_multiline_source(
+) {
+    let contents = concat!(
+        "## Pomodoros\n",
+        "- [ ] () — SOURCE\n",
+        "  - [[sase#^ref-x]]\n",
+        "    - nested note\n",
+        "- [ ] ()\n",
+        "- [ ] ()\n",
+    );
+    let scan = crate::native::capture_pomodoros::scan(contents);
+    let target = scan
+        .entries
+        .iter()
+        .find(|entry| entry.line == 6)
+        .expect("target");
+    let plan = plan_pomodoro_link_ledger(
+        contents,
+        "[[sase#^ref-x]]",
+        PomodoroLinkTarget::Entry(&target.pomodoro_ref),
+    )
+    .expect("plan");
+    assert_eq!(plan.destination.line, 4);
+    assert_eq!(plan.content.lines().nth(3), Some("- [ ] ()"));
+    assert_eq!(plan.content.lines().nth(4), Some("  - [[sase#^ref-x]]"));
+    assert_eq!(plan.content.lines().nth(5), Some("    - nested note"));
+}
+
+#[test]
 fn ledger_entry_stale_ref_is_stale_pomodoro() {
     let contents = "## Pomodoros\n- [ ] (**0900-0930**) — CURRENT\n";
     let stale =

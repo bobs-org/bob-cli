@@ -226,7 +226,6 @@ fn plan_found_open_entry(
     selector: Option<&str>,
 ) -> Result<PomodoroLinkLedgerPlan, LinkRelocationError> {
     let dest_index = entry.line - 1;
-    let dest_digest = entry.pomodoro_ref.digest.clone();
     let destination = endpoint_from_entry(entry);
     if let Some(q) = queue {
         let source_endpoint = endpoint_from_entry(q.owner);
@@ -250,7 +249,9 @@ fn plan_found_open_entry(
         let destination = destination_after_found_move(
             &content,
             selector,
-            &dest_digest,
+            entry.line,
+            q.line_index,
+            q.subtree_end,
             &destination,
         )?;
         return Ok(PomodoroLinkLedgerPlan {
@@ -376,7 +377,9 @@ fn created_destination(
 fn destination_after_found_move(
     content: &str,
     selector: Option<&str>,
-    dest_digest: &str,
+    planned_line: usize,
+    moved_source_line: usize,
+    moved_subtree_end: usize,
     planned: &PomodoroEndpoint,
 ) -> Result<PomodoroEndpoint, LinkRelocationError> {
     if let Some(name) = selector {
@@ -387,15 +390,24 @@ fn destination_after_found_move(
             false,
         );
     }
+    // Entry refs can select identical unnamed headlines. The selected row's
+    // original line is unambiguous, and removing the moved subtree shifts it
+    // only when that subtree began above the destination. Resolve by this
+    // known movement mapping rather than by the duplicate digest.
+    let removed_lines = if moved_source_line < planned_line - 1 {
+        moved_subtree_end - moved_source_line + 1
+    } else {
+        0
+    };
+    let destination_line = planned_line.saturating_sub(removed_lines);
     let scan = capture_pomodoros::scan(content);
-    let mut matches = scan.entries.iter().filter(|entry| {
-        entry.state == PomodoroState::Open
-            && entry.pomodoro_ref.digest == dest_digest
-    });
-    match (matches.next(), matches.next()) {
-        (Some(entry), None) => Ok(endpoint_from_entry(entry)),
-        _ => Ok(planned.clone()),
-    }
+    scan.entries
+        .iter()
+        .find(|entry| {
+            entry.state == PomodoroState::Open && entry.line == destination_line
+        })
+        .map(endpoint_from_entry)
+        .ok_or(LinkRelocationError::NoEligibleOpenEntry)
 }
 
 /// Read-only helper for the active-task discovery phase: each open entry's

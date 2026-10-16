@@ -380,6 +380,38 @@ fn pomodoro_ref_targets_an_unnamed_entry() {
 }
 
 #[test]
+fn moving_to_duplicate_unnamed_entry_reports_its_post_move_line() {
+    let day = concat!(
+        "## Pomodoros\n",
+        "- [ ] () — SOURCE\n",
+        "  - [[sase#^ref-attention]]\n",
+        "- [ ] ()\n",
+        "- [ ] ()\n",
+    );
+    let vault =
+        TodayVault::new("bob-cli-ref-today-duplicate-entry", ready_task(), day);
+    let selected = fs::read_to_string(&vault.day_file)
+        .expect("day")
+        .lines()
+        .nth(4)
+        .expect("second unnamed entry")
+        .to_string();
+    let selected_ref = capture_pomodoro_ref(&selected, 5);
+    let (output, json) =
+        run_today_json(&vault, &["attention", "-P", &selected_ref]);
+    assert_success(&output);
+
+    let day_after = fs::read_to_string(&vault.day_file).expect("day after");
+    let destination_line = json["capture"]["pomodoro_link_destination"]["line"]
+        .as_u64()
+        .expect("destination line") as usize;
+    let lines = day_after.lines().collect::<Vec<_>>();
+    assert_eq!(destination_line, 4);
+    assert_eq!(lines[destination_line - 1], "- [ ] ()");
+    assert_eq!(lines[destination_line], "  - [[sase#^ref-attention]]");
+}
+
+#[test]
 fn stale_pomodoro_ref_writes_nothing() {
     let vault =
         TodayVault::new("bob-cli-ref-today-stale", ready_task(), DEFAULT_DAY);
