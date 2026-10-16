@@ -240,15 +240,30 @@ pub(crate) fn mask_inline_spans(line: &str) -> String {
                 continue;
             }
         }
-        if chars[i] == '$'
-            && chars.get(i + 1) == Some(&'$')
-            && let Some(rel) =
-                chars[i + 2..].windows(2).position(|w| w == ['$', '$'])
-        {
-            let end = i + 2 + rel + 2;
-            out.extend(std::iter::repeat_n(' ', end - i));
-            i = end;
-            continue;
+        if chars[i] == '$' && !is_escaped(&chars, i) {
+            let ticks = if chars.get(i + 1) == Some(&'$') { 2 } else { 1 };
+            let mut cursor = i + ticks;
+            let mut close_end = None;
+            while cursor < chars.len() {
+                if chars[cursor] == '$' && !is_escaped(&chars, cursor) {
+                    let closing = chars[cursor..]
+                        .iter()
+                        .take_while(|character| **character == '$')
+                        .count();
+                    if (ticks == 1 && closing == 1) || closing >= 2 {
+                        close_end = Some(cursor + ticks);
+                        break;
+                    }
+                    cursor += closing.max(1);
+                } else {
+                    cursor += 1;
+                }
+            }
+            if let Some(end) = close_end {
+                out.extend(std::iter::repeat_n(' ', end - i));
+                i = end;
+                continue;
+            }
         }
         if chars[i] == '%'
             && chars.get(i + 1) == Some(&'%')
@@ -278,4 +293,12 @@ pub(crate) fn mask_inline_spans(line: &str) -> String {
 
 fn byte_index(chars: &[char], char_index: usize) -> usize {
     chars[..char_index].iter().map(|c| c.len_utf8()).sum()
+}
+
+fn is_escaped(chars: &[char], index: usize) -> bool {
+    let mut start = index;
+    while start > 0 && chars[start - 1] == '\\' {
+        start -= 1;
+    }
+    (index - start) % 2 == 1
 }

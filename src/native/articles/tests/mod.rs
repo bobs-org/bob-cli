@@ -152,6 +152,158 @@ fn strip_section_number_keeps_bare_numbers_and_escapes() {
 }
 
 #[test]
+fn heading_links_follow_new_numbers_and_keep_aliases_and_encoding() {
+    let input = "---\ntype: [[article]]\n---\n\n## One\n\n## Two\n\n## Three\n\n## Four\n\n## Five\n\n## Six\n\n## Beads\n\n[[#Beads]]\n";
+    let plan = format(input, &ArticleContext::new(Path::new("stem.md")));
+    let output = plan.formatted.expect("formatted article");
+    assert!(output.contains("[[#7. Beads]]"), "{output}");
+    assert_eq!(plan.changes.links, 1);
+
+    let input = "---\ntype: [[article]]\n---\n\n# 2024 taxes\n\n[[stem#2024 taxes|alias]]\n[encoded](stem.md#2024%20taxes)\n";
+    let plan = format(input, &ArticleContext::new(Path::new("stem.md")));
+    let output = plan.formatted.expect("formatted article");
+    assert!(output.contains("[[stem#1. 2024 taxes|alias]]"), "{output}");
+    assert!(
+        output.contains("[encoded](stem.md#1.%202024%20taxes)"),
+        "{output}"
+    );
+    assert_eq!(plan.changes.links, 2);
+}
+
+#[test]
+fn heading_links_resolve_preformat_titles_before_ambiguous_identities() {
+    let duplicate = "---\ntype: [[article]]\n---\n\n## 9. Examples\n\n## 8. Examples\n\n[[#9. Examples]]\n";
+    let plan = format(duplicate, &ArticleContext::new(Path::new("note.md")));
+    let output = plan.formatted.expect("duplicate titles format");
+    assert!(output.contains("[[#1. Examples]]"), "{output}");
+    assert!(!plan
+        .findings
+        .iter()
+        .any(|f| f.code == "ambiguous-heading-link"));
+
+    let ambiguous = "---\ntype: [[article]]\n---\n\n## 9. Example\n\n## 2. Example\n\n[[#Example]]\n";
+    let plan = format(ambiguous, &ArticleContext::new(Path::new("note.md")));
+    assert!(plan.formatted.is_some());
+    assert!(plan
+        .findings
+        .iter()
+        .any(|f| f.code == "ambiguous-heading-link"));
+}
+
+#[test]
+fn heading_links_leave_blocks_and_protected_code_alone() {
+    let input = "---\ntype: [[article]]\n---\n\n## Section\n\n[[#^block]]\n`[[#Section]]`\nInline $[[#Section]]$ math.\nInline %% [[#Section]] %% comment.\n\n```md\n[[#Section]]\n```\n";
+    let plan = format(input, &ArticleContext::new(Path::new("note.md")));
+    let output = plan.formatted.expect("formatted article");
+    assert!(output.contains("[[#^block]]"), "{output}");
+    assert!(output.contains("`[[#Section]]`"), "{output}");
+    assert!(output.contains("Inline $[[#Section]]$ math."), "{output}");
+    assert!(
+        output.contains("Inline %% [[#Section]] %% comment."),
+        "{output}"
+    );
+    assert!(output.contains("[[#Section]]\n```"), "{output}");
+    assert_eq!(plan.changes.links, 0);
+}
+
+#[test]
+fn nested_heading_paths_rewrite_every_segment_and_numbers_off_removes_them() {
+    let nested = "---\ntype: [[article]]\n---\n\n# Parent\n\n## Child\n\n### Grandchild\n\n[[#Parent#Child#Grandchild]]\n";
+    let plan = format(nested, &ArticleContext::new(Path::new("note.md")));
+    let output = plan.formatted.expect("nested article format");
+    assert!(
+        output.contains("[[#1. Parent#1.1 Child#1.1.1 Grandchild]]"),
+        "{output}"
+    );
+
+    let unnumbered = "---\ntype: [[article]]\nsection_numbers: false\n---\n\n## 8. Section\n\n[[#8. Section]]\n";
+    let plan = format(unnumbered, &ArticleContext::new(Path::new("note.md")));
+    let output = plan.formatted.expect("numbering-off format");
+    assert!(output.contains("## Section"), "{output}");
+    assert!(output.contains("[[#Section]]"), "{output}");
+}
+
+#[test]
+fn report_only_findings_include_pseudo_footnote_broken_and_title() {
+    let input = "---\ntype: [[article]]\n---\n\n[1]: TODO reference\n\n# 1. Article\n\n[[#missing]]\n";
+    let plan = format(input, &ArticleContext::new(Path::new("article.md")));
+    assert!(plan.findings.iter().any(|f| f.code == "pseudo-footnote"));
+    assert!(plan
+        .findings
+        .iter()
+        .any(|f| f.code == "broken-heading-link"));
+    assert!(plan.findings.iter().any(|f| f.code == "title-heading"));
+}
+
+#[test]
+fn outline_counts_words_and_marks_stubs() {
+    let plan = format(
+        include_str!("fixtures/blog_draft.md"),
+        &ArticleContext::new(Path::new("sase_blog_contents.md")),
+    );
+    let outline = plan.outline;
+    assert_eq!(
+        serde_json::to_string_pretty(&outline).unwrap(),
+        include_str!("fixtures/outline_blog_draft.json").trim_end()
+    );
+    assert_eq!(outline.title, "sase_blog_contents");
+    assert!(outline.words > 0);
+    assert!(outline.preamble.words > 0);
+    assert!(outline.preamble.line > 0);
+    assert_eq!(outline.sections.len(), 10);
+    assert!(outline.sections.iter().all(|section| section.stub));
+    assert_eq!(outline.sections[0].words, 0);
+    assert!(outline.sections[1..]
+        .iter()
+        .all(|section| section.words == 1));
+    assert!(outline
+        .sections
+        .iter()
+        .all(|section| section.output_line > 0));
+    assert_eq!(outline.sections[0].title, "The Abstractions");
+}
+
+#[test]
+fn outline_word_counts_skip_fences_math_and_comments() {
+    let input = "---\ntype: [[article]]\n---\n\nVisible words. Inline $ignored math$ prose.\n\n```md\nignored words\n```\n\n$$\nignored math words\n$$\n\n%%\nignored comment words\n%%\n\n<!-- hidden words -->\n\n# Section\n\nBody words.\n";
+    let plan = format(input, &ArticleContext::new(Path::new("note.md")));
+    assert_eq!(plan.outline.words, 8);
+    assert_eq!(plan.outline.preamble.words, 4);
+    assert_eq!(plan.outline.sections[0].words, 2);
+}
+
+#[test]
+fn article_plan_json_matches_schema_v1_shape() {
+    let plan = format(
+        "---\ntype: [[article]]\n---\n\n## Alpha\n\nText.\n",
+        &ArticleContext::new(Path::new("note.md")),
+    );
+    let response = super::response(vec![plan]);
+    let json = serde_json::to_value(&response).unwrap();
+    assert_eq!(
+        serde_json::to_string_pretty(&response).unwrap(),
+        include_str!("fixtures/plan_v1.expected.json").trim_end()
+    );
+    assert_eq!(json["schema_version"], 1);
+    assert_eq!(json["summary"]["articles"], 1);
+    assert_eq!(json["summary"]["changed"], 1);
+    let note = &json["notes"][0];
+    assert_eq!(note["path"], "note.md");
+    assert_eq!(note["status"], "changed");
+    assert!(note["reason"].is_null());
+    assert!(note["sha256"].as_str().is_some());
+    assert!(note["edits"].is_array());
+    assert!(note["changes"]["links"].is_number());
+    assert!(note["replaced"].is_array());
+    assert_eq!(note["notice"], "Article formatted · 1 sections numbered");
+    assert!(note["findings"].is_array());
+    assert_eq!(note["outline"]["title"], "note");
+    assert_eq!(note["outline"]["sections"][0]["title"], "Alpha");
+    assert_eq!(note["inbound"], serde_json::json!([]));
+    assert!(note.get("formatted").is_none());
+}
+
+#[test]
 fn refusals() {
     let skip = |text: &str, path: &str| {
         format(text, &ArticleContext::new(Path::new(path)))

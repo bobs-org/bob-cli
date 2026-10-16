@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "notes": [
+    {
+      "path": "note.md",
+      "status": "changed",
+      "reason": null,
+      "sha256": "63944282a5db308c904d0f3a0902dbaabad92836a3f773b37eb4ed0fadd0b601",
+      "edits": [
+        {
+          "line": 5,
+          "delete": 1,
+          "insert": [
+            "## 1. Alpha"
+          ]
+        }
+      ],
+      "changes": {
+        "numbered": 1,
+        "renumbered": 0,
+        "unnumbered": 0,
+        "promoted": 0,
+        "setext": 0,
+        "links": 0,
+        "layout": 0
+      },
+      "replaced": [],
+      "notice": "Article formatted · 1 sections numbered",
+      "findings": [],
+      "outline": {
+        "title": "note",
+        "numbering": true,
+        "words": 3,
+        "preamble": {
+          "line": 5,
+          "words": 0
+        },
+        "sections": [
+          {
+            "number": "1.",
+            "written": null,
+            "stale": true,
+            "depth": 1,
+            "level": 2,
+            "title": "Alpha",
+            "line": 5,
+            "end_line": 7,
+            "output_line": 5,
+            "words": 1,
+            "stub": false
+          }
+        ]
+      },
+      "inbound": []
+    }
+  ],
+  "summary": {
+    "articles": 1,
+    "changed": 1,
+    "unchanged": 0,
+    "skipped": 0,
+    "errors": 0
+  }
+}

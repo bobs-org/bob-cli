@@ -1,0 +1,141 @@
+{
+  "title": "sase_blog_contents",
+  "numbering": true,
+  "words": 97,
+  "preamble": {
+    "line": 7,
+    "words": 30
+  },
+  "sections": [
+    {
+      "number": "1.",
+      "written": null,
+      "stale": true,
+      "depth": 1,
+      "level": 1,
+      "title": "The Abstractions",
+      "line": 17,
+      "end_line": 17,
+      "output_line": 16,
+      "words": 0,
+      "stub": true
+    },
+    {
+      "number": "1.1",
+      "written": null,
+      "stale": true,
+      "depth": 2,
+      "level": 2,
+      "title": "Gates -> Plans -> Epics",
+      "line": 18,
+      "end_line": 20,
+      "output_line": 18,
+      "words": 1,
+      "stub": true
+    },
+    {
+      "number": "1.2",
+      "written": null,
+      "stale": true,
+      "depth": 2,
+      "level": 2,
+      "title": "Beads -> Sidecar repos",
+      "line": 21,
+      "end_line": 23,
+      "output_line": 22,
+      "words": 1,
+      "stub": true
+    },
+    {
+      "number": "1.3",
+      "written": null,
+      "stale": true,
+      "depth": 2,
+      "level": 2,
+      "title": "Agent CLIs",
+      "line": 24,
+      "end_line": 25,
+      "output_line": 26,
+      "words": 1,
+      "stub": true
+    },
+    {
+      "number": "1.3.1",
+      "written": null,
+      "stale": true,
+      "depth": 3,
+      "level": 3,
+      "title": "Skills, **memory**, provider interface, NOT hooks",
+      "line": 26,
+      "end_line": 27,
+      "output_line": 30,
+      "words": 1,
+      "stub": true
+    },
+    {
+      "number": "1.3.2",
+      "written": null,
+      "stale": true,
+      "depth": 3,
+      "level": 3,
+      "title": "Agent presentation / organization (tribes, clans, families, hoods, metadata/files/tools panel)",
+      "line": 28,
+      "end_line": 30,
+      "output_line": 34,
+      "words": 1,
+      "stub": true
+    },
+    {
+      "number": "1.4",
+      "written": null,
+      "stale": true,
+      "depth": 2,
+      "level": 2,
+      "title": "VCS and workspace operations",
+      "line": 31,
+      "end_line": 33,
+      "output_line": 38,
+      "words": 1,
+      "stub": true
+    },
+    {
+      "number": "1.5",
+      "written": null,
+      "stale": true,
+      "depth": 2,
+      "level": 2,
+      "title": "Xprompts / Agent control flow (forks/waits/queues)",
+      "line": 34,
+      "end_line": 36,
+      "output_line": 42,
+      "words": 1,
+      "stub": true
+    },
+    {
+      "number": "1.6",
+      "written": null,
+      "stale": true,
+      "depth": 2,
+      "level": 2,
+      "title": "Project Management (hoods, agents sidecar, artifacts)",
+      "line": 37,
+      "end_line": 39,
+      "output_line": 46,
+      "words": 1,
+      "stub": true
+    },
+    {
+      "number": "1.7",
+      "written": null,
+      "stale": true,
+      "depth": 2,
+      "level": 2,
+      "title": "Routines and Jobs",
+      "line": 40,
+      "end_line": 41,
+      "output_line": 50,
+      "words": 1,
+      "stub": true
+    }
+  ]
+}

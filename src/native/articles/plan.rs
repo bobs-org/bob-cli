@@ -2,6 +2,8 @@
 
 use std::path::{Path, PathBuf};
 
+use serde::Serialize;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ArticleContext<'a> {
     pub(crate) path: &'a Path,
@@ -24,7 +26,8 @@ impl<'a> ArticleContext<'a> {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub(crate) enum ArticleStatus {
     Changed,
     Unchanged,
@@ -32,20 +35,20 @@ pub(crate) enum ArticleStatus {
     Error,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct Refusal {
     pub(crate) code: String,
     pub(crate) message: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct LineEdit {
     pub(crate) line: usize,
     pub(crate) delete: usize,
     pub(crate) insert: Vec<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
 pub(crate) struct ChangeCounts {
     pub(crate) numbered: usize,
     pub(crate) renumbered: usize,
@@ -56,7 +59,7 @@ pub(crate) struct ChangeCounts {
     pub(crate) layout: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct ReplacedToken {
     pub(crate) line: usize,
     pub(crate) token: String,
@@ -75,18 +78,21 @@ pub(crate) struct ArticleSection {
     pub(crate) end_line: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct ArticlePlan {
     pub(crate) path: PathBuf,
     pub(crate) status: ArticleStatus,
     pub(crate) reason: Option<Refusal>,
     pub(crate) sha256: String,
+    #[serde(skip_serializing)]
     pub(crate) formatted: Option<String>,
     pub(crate) edits: Vec<LineEdit>,
     pub(crate) changes: ChangeCounts,
     pub(crate) replaced: Vec<ReplacedToken>,
+    pub(crate) notice: String,
     pub(crate) findings: Vec<super::findings::Finding>,
-    pub(crate) sections: Vec<ArticleSection>,
+    pub(crate) outline: super::outline::ArticleOutline,
+    pub(crate) inbound: Vec<InboundLink>,
 }
 
 impl ArticlePlan {
@@ -95,6 +101,7 @@ impl ArticlePlan {
         sha256: String,
         reason: Refusal,
     ) -> Self {
+        let notice = format!("Article skipped · {}", reason.message);
         Self {
             path: path.to_path_buf(),
             status: ArticleStatus::Skipped,
@@ -105,7 +112,9 @@ impl ArticlePlan {
             changes: ChangeCounts::default(),
             replaced: Vec::new(),
             findings: Vec::new(),
-            sections: Vec::new(),
+            notice,
+            outline: super::outline::empty_outline(path, true),
+            inbound: Vec::new(),
         }
     }
 
@@ -114,8 +123,9 @@ impl ArticlePlan {
         sha256: String,
         reason: Refusal,
         findings: Vec<super::findings::Finding>,
-        sections: Vec<ArticleSection>,
+        outline: super::outline::ArticleOutline,
     ) -> Self {
+        let notice = format!("Article formatting failed · {}", reason.message);
         Self {
             path: path.to_path_buf(),
             status: ArticleStatus::Error,
@@ -126,7 +136,59 @@ impl ArticlePlan {
             changes: ChangeCounts::default(),
             replaced: Vec::new(),
             findings,
-            sections,
+            notice,
+            outline,
+            inbound: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct InboundLink {
+    pub(crate) path: PathBuf,
+    pub(crate) line: usize,
+    pub(crate) sha256: String,
+    pub(crate) before: String,
+    pub(crate) after: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct ArticlePlanResponse {
+    pub(crate) schema_version: u8,
+    pub(crate) notes: Vec<ArticlePlan>,
+    pub(crate) summary: PlanSummary,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct PlanSummary {
+    pub(crate) articles: usize,
+    pub(crate) changed: usize,
+    pub(crate) unchanged: usize,
+    pub(crate) skipped: usize,
+    pub(crate) errors: usize,
+}
+
+impl ArticlePlanResponse {
+    pub(crate) fn new(notes: Vec<ArticlePlan>) -> Self {
+        let mut summary = PlanSummary {
+            articles: notes.len(),
+            changed: 0,
+            unchanged: 0,
+            skipped: 0,
+            errors: 0,
+        };
+        for note in &notes {
+            match note.status {
+                ArticleStatus::Changed => summary.changed += 1,
+                ArticleStatus::Unchanged => summary.unchanged += 1,
+                ArticleStatus::Skipped => summary.skipped += 1,
+                ArticleStatus::Error => summary.errors += 1,
+            }
+        }
+        Self {
+            schema_version: 1,
+            notes,
+            summary,
         }
     }
 }

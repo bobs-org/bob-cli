@@ -27,7 +27,10 @@ pub(crate) fn word_tokens(
                 .map(|(_, title)| title)
                 .unwrap_or_else(|| content.trim_start_matches('#').trim());
             let rest = strip_section_number(title).rest;
-            push_tokens(rest, &mut tokens);
+            push_tokens(
+                &super::links::strip_number_tokens_for_words(rest),
+                &mut tokens,
+            );
             continue;
         }
         if classified
@@ -36,7 +39,10 @@ pub(crate) fn word_tokens(
         {
             continue;
         }
-        push_tokens(content, &mut tokens);
+        push_tokens(
+            &super::links::strip_number_tokens_for_words(content),
+            &mut tokens,
+        );
     }
     tokens
 }
