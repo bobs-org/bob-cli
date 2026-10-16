@@ -51,6 +51,8 @@ mod listen;
 mod marker;
 mod model;
 mod note;
+// Model and serializer are intentionally defined before their production callers;
+// the following snapshot phases wire these crate-visible seams into projection.
 #[allow(dead_code)]
 pub(crate) mod note_snapshot;
 mod pdf_meta;
