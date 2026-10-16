@@ -337,47 +337,47 @@ pub(crate) fn frontmatter_is_area(frontmatter: &Frontmatter<'_>) -> bool {
     frontmatter_has_type(frontmatter, "[[area]]")
 }
 
-pub(super) fn frontmatter_has_type(
+pub(crate) fn frontmatter_is_article(frontmatter: &Frontmatter<'_>) -> bool {
+    frontmatter_has_type(frontmatter, "[[article]]")
+}
+
+pub(crate) fn frontmatter_has_type(
     frontmatter: &Frontmatter<'_>,
     expected: &str,
 ) -> bool {
-    // Scalar forms: quoted, single-quoted, and bare (`type: [[project]]`).
+    let expected_name = wikilink_type_name(expected).unwrap_or(expected);
+    frontmatter_type_names(frontmatter)
+        .iter()
+        .any(|name| name == expected_name)
+}
+
+/// Wikilink type names from `type:` (`project` from `[[project]]`), in file
+/// order. Scalar, flow-list, block-list, and nested `[["name"]]` forms
+/// all resolve.
+pub(crate) fn frontmatter_type_names(
+    frontmatter: &Frontmatter<'_>,
+) -> Vec<String> {
     if let Some(raw) = frontmatter_value(frontmatter, "type") {
         let trimmed = raw.trim();
         if !trimmed.is_empty() {
-            // Flow-list form: `type: ["[[project]]"]`.
             if trimmed.starts_with('[') {
-                return flow_list_contains(trimmed, expected);
+                return flow_list_type_names(trimmed);
             }
-            return trim_yaml_scalar(trimmed) == expected;
+            return yaml_type_name(trimmed).into_iter().collect();
         }
     }
-    // Block-list form:
-    // `type:` followed by `  - "[[project]]"` lines.
-    block_list_contains(frontmatter, expected)
+    block_list_type_names(frontmatter)
 }
 
-fn flow_list_contains(raw: &str, expected: &str) -> bool {
+fn flow_list_type_names(raw: &str) -> Vec<String> {
     let inner = raw.trim().strip_prefix('[').unwrap_or(raw);
     let inner = inner.strip_suffix(']').unwrap_or(inner);
-    inner.split(',').any(|item| {
-        let item = item.trim();
-        if item.is_empty() {
-            return false;
-        }
-        // Bare YAML wikilinks parse as a nested array (`[["project"]]`);
-        // accept the inner scalar too.
-        let unquoted = trim_yaml_scalar(item).trim();
-        unquoted == expected
-            || unquoted.trim_matches(['[', ']', '"', '\'']).trim() == "project"
-                && expected == "[[project]]"
-            || unquoted.trim_matches(['[', ']', '"', '\'']).trim() == "area"
-                && expected == "[[area]]"
-    })
+    inner.split(',').filter_map(yaml_type_name).collect()
 }
 
-fn block_list_contains(frontmatter: &Frontmatter<'_>, expected: &str) -> bool {
+fn block_list_type_names(frontmatter: &Frontmatter<'_>) -> Vec<String> {
     let mut in_list = false;
+    let mut names = Vec::new();
     for line in &frontmatter.lines {
         if !in_list {
             let Some(rest) = line.strip_prefix("type") else {
@@ -387,7 +387,7 @@ fn block_list_contains(frontmatter: &Frontmatter<'_>, expected: &str) -> bool {
                 continue;
             };
             if !value.trim().is_empty() {
-                return false;
+                return names;
             }
             in_list = true;
             continue;
@@ -402,20 +402,32 @@ fn block_list_contains(frontmatter: &Frontmatter<'_>, expected: &str) -> bool {
         else {
             break;
         };
-        let item = trim_yaml_scalar(item.trim());
-        if item == expected {
-            return true;
-        }
-        // Nested `[["project"]]` scalar inside a block list.
-        let inner = item.trim_matches(['[', ']', '"', '\'']).trim();
-        if inner == "project" && expected == "[[project]]" {
-            return true;
-        }
-        if inner == "area" && expected == "[[area]]" {
-            return true;
+        if let Some(name) = yaml_type_name(item) {
+            names.push(name);
         }
     }
-    false
+    names
+}
+
+fn yaml_type_name(item: &str) -> Option<String> {
+    let unquoted = trim_yaml_scalar(item.trim()).trim();
+    if unquoted.is_empty() {
+        return None;
+    }
+    if let Some(name) = wikilink_type_name(unquoted) {
+        return Some(name.to_string());
+    }
+    // Bare YAML wikilinks parse as a nested array (`[["project"]]`).
+    let inner = unquoted.trim_matches(['[', ']', '"', '\'']).trim();
+    if inner.is_empty() {
+        None
+    } else {
+        Some(inner.to_string())
+    }
+}
+
+fn wikilink_type_name(value: &str) -> Option<&str> {
+    value.strip_prefix("[[")?.strip_suffix("]]")
 }
 
 pub(crate) fn frontmatter_value<'a>(

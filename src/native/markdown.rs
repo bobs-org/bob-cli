@@ -171,6 +171,35 @@ pub(crate) fn is_indented_code_line(line: &str) -> bool {
         && line.bytes().take_while(|byte| *byte == b' ').count() >= 4
 }
 
+/// Line indexes hidden inside multiline `%%` / HTML comment spans.
+/// Callers exclude fences themselves.
+pub(crate) fn multiline_comment_lines(lines: &[&str]) -> BTreeSet<usize> {
+    let mut hidden = BTreeSet::new();
+    for (open, close) in [("%%", "%%"), ("<!--", "-->")] {
+        let mut inside = false;
+        for (index, line) in lines.iter().enumerate() {
+            let mut rest = *line;
+            if !inside {
+                let Some(start) = rest.find(open) else {
+                    continue;
+                };
+                rest = &rest[start + open.len()..];
+                if rest.contains(close) {
+                    continue;
+                }
+                inside = true;
+                hidden.insert(index);
+            } else {
+                hidden.insert(index);
+                if rest.contains(close) {
+                    inside = false;
+                }
+            }
+        }
+    }
+    hidden
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

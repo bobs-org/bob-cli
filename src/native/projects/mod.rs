@@ -205,10 +205,12 @@ use tags::*;
 
 pub(crate) use model::{Frontmatter, ProjectStatus};
 pub(crate) use scan::{
-    frontmatter_is_area, frontmatter_is_project, frontmatter_value,
-    is_markdown_file, parse_frontmatter, project_name_aliases,
-    trim_yaml_scalar, walk_typed_notes, wikilink_path_target,
+    frontmatter_is_area, frontmatter_is_article, frontmatter_is_project,
+    frontmatter_type_names, frontmatter_value, is_markdown_file,
+    parse_frontmatter, project_name_aliases, trim_yaml_scalar,
+    walk_typed_notes, wikilink_path_target,
 };
 pub(crate) use surface::{
     project_surface, project_surface_with_closed_child, ProjectSurface,
 };
+pub(crate) use tags::contains_task_tag;

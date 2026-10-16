@@ -14,6 +14,7 @@ pub(crate) fn is_always_excluded_note_directory_name(name: &OsStr) -> bool {
     })
 }
 
+mod articles;
 mod capture;
 mod capture_active_tasks;
 mod capture_block_ids;

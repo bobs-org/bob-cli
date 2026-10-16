@@ -1,7 +1,7 @@
 //! Tag spans, inline fields, descriptions, and whitespace helpers.
 use super::*;
 
-pub(super) fn contains_task_tag(text: &str) -> bool {
+pub(crate) fn contains_task_tag(text: &str) -> bool {
     contains_tag(text, "#task")
 }
 

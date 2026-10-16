@@ -59,7 +59,7 @@ use super::view::{
 use crate::native::collect_done::trailing_block_id_in_line;
 use crate::native::markdown::{
     atx_heading, closes_fence, fence_marker, fenced_lines,
-    strictly_closed_frontmatter_end,
+    multiline_comment_lines, strictly_closed_frontmatter_end,
 };
 use crate::native::task_status_hooks::{TaskStatusType, TasksSettings};
 
@@ -1217,8 +1217,8 @@ impl<'a, L: SourceLoader> Projector<'a, L> {
                 byte_start: line.byte_start,
                 raw: line.raw.clone(),
                 source_prefix: {
-                    let effective_prefix =
-                        line.text.len() - strip_callout_prefix(&line.text).len();
+                    let effective_prefix = line.text.len()
+                        - strip_callout_prefix(&line.text).len();
                     let mut prefix = line.source_prefix.clone();
                     prefix.push_str(&line.text[..effective_prefix]);
                     prefix
@@ -1419,35 +1419,6 @@ fn parse_callout_header(line: &str) -> Option<(String, String)> {
 /// fragment index (trimmed, case-insensitive).
 fn normalize_heading_key_for(plain: &str) -> String {
     plain.trim().to_lowercase()
-}
-
-/// Line numbers hidden inside multiline `%%` / HTML comment spans,
-/// mirroring the fragment index (fences excluded: callers handle those).
-fn multiline_comment_lines(lines: &[&str]) -> BTreeSet<usize> {
-    let mut hidden = std::collections::BTreeSet::new();
-    for (open, close) in [("%%", "%%"), ("<!--", "-->")] {
-        let mut inside = false;
-        for (index, line) in lines.iter().enumerate() {
-            let mut rest = *line;
-            if !inside {
-                let Some(start) = rest.find(open) else {
-                    continue;
-                };
-                rest = &rest[start + open.len()..];
-                if rest.contains(close) {
-                    continue;
-                }
-                inside = true;
-                hidden.insert(index);
-            } else {
-                hidden.insert(index);
-                if rest.contains(close) {
-                    inside = false;
-                }
-            }
-        }
-    }
-    hidden
 }
 
 /// Slugify plain heading text into a stable id: lowercase alphanumerics,
@@ -3481,7 +3452,8 @@ mod tests {
     }
 
     #[test]
-    fn task_source_records_keep_comments_fields_indentation_and_callout_offsets() {
+    fn task_source_records_keep_comments_fields_indentation_and_callout_offsets(
+    ) {
         let input = "    - [ ] Keep %%private%% [fresh:: 2026-10-16] ^item\n\
                      \t- [ ] Tab [custom:: retained]\n\
                      > [!note]\n\
@@ -3495,7 +3467,12 @@ mod tests {
                 1,
                 "    - [ ] Keep %%private%% [fresh:: 2026-10-16] ^item",
             ),
-            ("Tab [custom:: retained]", "\t", 2, "\t- [ ] Tab [custom:: retained]"),
+            (
+                "Tab [custom:: retained]",
+                "\t",
+                2,
+                "\t- [ ] Tab [custom:: retained]",
+            ),
             (
                 "Nested %%secret%% [custom:: callout] ^nested",
                 "",
@@ -3534,7 +3511,9 @@ mod tests {
         });
         let blocks = receiver
             .recv_timeout(std::time::Duration::from_secs(2))
-            .expect("snapshot parser did not advance through image-shaped lines");
+            .expect(
+                "snapshot parser did not advance through image-shaped lines",
+            );
         assert_eq!(blocks.len(), 3, "{blocks:?}");
         let remote_links = blocks[..2]
             .iter()
@@ -3542,11 +3521,13 @@ mod tests {
                 Block::Paragraph(inlines) => inlines.iter().collect::<Vec<_>>(),
                 _ => Vec::new(),
             })
-            .filter(|inline| matches!(
-                inline,
-                Inline::Link { target: LinkTarget::Url(url), .. }
-                    if url == "https://example.test/image.png"
-            ))
+            .filter(|inline| {
+                matches!(
+                    inline,
+                    Inline::Link { target: LinkTarget::Url(url), .. }
+                        if url == "https://example.test/image.png"
+                )
+            })
             .count();
         assert_eq!(remote_links, 2);
         let Block::Paragraph(malformed) = &blocks[2] else {
