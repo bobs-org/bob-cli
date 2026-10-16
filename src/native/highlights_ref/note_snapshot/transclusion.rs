@@ -29,6 +29,7 @@ use super::{
         SnapshotTaskStatus, SnapshotView, SnapshotWarning, SnapshotWarningKind,
         SourceIdentity, SourceLocation,
     },
+    visibility::{apply_bob_visibility, BobVisibilityContext},
 };
 use crate::native::{
     markdown::strictly_closed_frontmatter_end, task_status_hooks::TasksSettings,
@@ -45,6 +46,10 @@ pub(crate) struct SnapshotProjectionOptions {
     /// with the existing `env::current_datetime()`/`BOB_NOW` path; tests
     /// pass explicit dates.
     pub snapshot_date: chrono::NaiveDate,
+    /// When true, restore done/canceled tasks in a compact appendix with
+    /// full managed logs. Reading mode (`false`) omits those subtrees and
+    /// condenses logs on the tasks that remain.
+    pub include_closed: bool,
 }
 
 /// The structured view plus lossless root-source data needed by the later Bob layer.
@@ -115,8 +120,14 @@ pub(crate) fn project_snapshot<L: SourceLoader>(
     // Bob content policy follows the root's area/project kind, including
     // terminal projects; ordinary notes keep the plain Obsidian projection.
     // The host policy covers transcluded tasks while each occurrence keeps
-    // its actual source identity. Chips and relationship rows reuse the
-    // existing anchors, so the visible set below needs no extra pass.
+    // its actual source identity. Logs, closed-task omission, and
+    // self-snapshot filtering rebuild the visible anchor set from the
+    // surviving body plus any appendix.
+    let mut closed = None;
+    let mut bob_omitted_closed = 0;
+    let mut bob_omitted_self = 0;
+    let mut bob_schedule_logs = 0;
+    let mut bob_work_logs = 0;
     if matches!(
         note.kind,
         NoteKind::Area | NoteKind::Project | NoteKind::TerminalProject
@@ -127,6 +138,21 @@ pub(crate) fn project_snapshot<L: SourceLoader>(
         for section in &mut sections {
             apply_bob_task_rows(&mut section.blocks, &context);
         }
+        let outcome = apply_bob_visibility(
+            &mut sections,
+            expander.store,
+            &note.identity,
+            &BobVisibilityContext {
+                snapshot_date: options.snapshot_date,
+                include_closed: options.include_closed,
+            },
+        );
+        closed = outcome.closed;
+        bob_omitted_closed = outcome.omitted_closed_tasks;
+        bob_omitted_self = outcome.omitted_self_snapshot_tasks;
+        bob_schedule_logs = outcome.schedule_logs;
+        bob_work_logs = outcome.work_logs;
+        expander.warnings.extend(outcome.warnings);
     }
     if let Some(anchor) = synthetic_anchor {
         expander.used_anchor_ids.insert(anchor.id);
@@ -134,6 +160,9 @@ pub(crate) fn project_snapshot<L: SourceLoader>(
     let mut anchors = Vec::new();
     for section in &sections {
         collect_section_anchors(section, &mut anchors);
+    }
+    if let Some(closed_section) = &closed {
+        collect_section_anchors(closed_section, &mut anchors);
     }
     let mut summary = expander.summary;
     summary.sections = sections.len() as u64;
@@ -150,12 +179,22 @@ pub(crate) fn project_snapshot<L: SourceLoader>(
         })
         .count() as u64;
     count_task_statuses(&sections, &mut summary.task_counts);
+    if let Some(closed_section) = &closed {
+        count_task_statuses(
+            std::slice::from_ref(closed_section),
+            &mut summary.task_counts,
+        );
+    }
+    summary.omitted_closed_tasks = bob_omitted_closed;
+    summary.omitted_self_snapshot_tasks = bob_omitted_self;
+    summary.schedule_logs = bob_schedule_logs;
+    summary.work_logs = bob_work_logs;
 
     let view = SnapshotView {
         source: note.identity.clone(),
         masthead: options.masthead,
         sections,
-        closed: None,
+        closed,
         assets: expander.assets,
         summary,
         warnings: expander.warnings,
@@ -947,7 +986,9 @@ fn collect_block_anchors(blocks: &[Block], anchors: &mut Vec<SnapshotAnchor>) {
                 }
                 collect_inline_anchors(content, anchors);
             }
-            Block::MissingImage { label } => collect_inline_anchors(label, anchors),
+            Block::MissingImage { label } => {
+                collect_inline_anchors(label, anchors)
+            }
             Block::Embed { blocks, .. }
             | Block::LiveQuery { blocks }
             | Block::Compact { blocks } => {
@@ -974,10 +1015,13 @@ fn collect_inline_anchors(
             | Inline::Strong(label)
             | Inline::Strike(label)
             | Inline::Muted(label) => collect_inline_anchors(label, anchors),
-            Inline::Chip(chip) => collect_inline_anchors(&chip.content, anchors),
-            Inline::EmbeddedBlock(block) => {
-                collect_block_anchors(std::slice::from_ref(block.as_ref()), anchors)
+            Inline::Chip(chip) => {
+                collect_inline_anchors(&chip.content, anchors)
             }
+            Inline::EmbeddedBlock(block) => collect_block_anchors(
+                std::slice::from_ref(block.as_ref()),
+                anchors,
+            ),
             Inline::Text(_)
             | Inline::Code(_)
             | Inline::Image { .. }
@@ -1086,7 +1130,9 @@ fn remap_block_anchors(
                 }
                 remap_inline_anchors(content, mapping);
             }
-            Block::MissingImage { label } => remap_inline_anchors(label, mapping),
+            Block::MissingImage { label } => {
+                remap_inline_anchors(label, mapping)
+            }
             Block::Embed { blocks, .. }
             | Block::LiveQuery { blocks }
             | Block::Compact { blocks } => remap_block_anchors(blocks, mapping),
@@ -1117,10 +1163,13 @@ fn remap_inline_anchors(
             | Inline::Strong(label)
             | Inline::Strike(label)
             | Inline::Muted(label) => remap_inline_anchors(label, mapping),
-            Inline::Chip(chip) => remap_inline_anchors(&mut chip.content, mapping),
-            Inline::EmbeddedBlock(block) => {
-                remap_block_anchors(std::slice::from_mut(block.as_mut()), mapping)
+            Inline::Chip(chip) => {
+                remap_inline_anchors(&mut chip.content, mapping)
             }
+            Inline::EmbeddedBlock(block) => remap_block_anchors(
+                std::slice::from_mut(block.as_mut()),
+                mapping,
+            ),
             Inline::Text(_)
             | Inline::Code(_)
             | Inline::Image { .. }
@@ -1472,6 +1521,7 @@ mod tests {
             SnapshotProjectionOptions {
                 masthead: masthead(),
                 snapshot_date: test_snapshot_date(),
+                include_closed: false,
             },
         )
         .expect("project snapshot")
@@ -1527,7 +1577,12 @@ mod tests {
                             walk_inlines(item, found);
                         }
                     }
-                    Block::LogRow { label, date, content, .. } => {
+                    Block::LogRow {
+                        label,
+                        date,
+                        content,
+                        ..
+                    } => {
                         walk_inlines(label, found);
                         if let Some(date) = date {
                             walk_inlines(date, found);
@@ -1652,11 +1707,13 @@ mod tests {
                 items.iter().map(|item| ast_node_count(item, tag)).sum()
             }
             serde_json::Value::Object(object) => {
-                usize::from(object.get("t").and_then(|value| value.as_str()) == Some(tag))
-                    + object
-                        .values()
-                        .map(|item| ast_node_count(item, tag))
-                        .sum::<usize>()
+                usize::from(
+                    object.get("t").and_then(|value| value.as_str())
+                        == Some(tag),
+                ) + object
+                    .values()
+                    .map(|item| ast_node_count(item, tag))
+                    .sum::<usize>()
             }
             _ => 0,
         }
@@ -1667,7 +1724,11 @@ mod tests {
         ids: &mut Vec<String>,
     ) {
         fn attr_id(value: &serde_json::Value) -> Option<&str> {
-            value.as_array()?.first()?.as_str().filter(|id| !id.is_empty())
+            value
+                .as_array()?
+                .first()?
+                .as_str()
+                .filter(|id| !id.is_empty())
         }
         match value {
             serde_json::Value::Array(items) => {
@@ -1678,11 +1739,17 @@ mod tests {
             serde_json::Value::Object(object) => {
                 let tag = object.get("t").and_then(|value| value.as_str());
                 let content = object.get("c");
-                let attr = match (tag, content.and_then(|value| value.as_array())) {
-                    (Some("Header"), Some(items)) => items.get(1),
-                    (Some("CodeBlock" | "Div" | "Span" | "Link" | "Image"), Some(items)) => items.first(),
-                    _ => None,
-                };
+                let attr =
+                    match (tag, content.and_then(|value| value.as_array())) {
+                        (Some("Header"), Some(items)) => items.get(1),
+                        (
+                            Some(
+                                "CodeBlock" | "Div" | "Span" | "Link" | "Image",
+                            ),
+                            Some(items),
+                        ) => items.first(),
+                        _ => None,
+                    };
                 if let Some(id) = attr.and_then(attr_id) {
                     ids.push(id.to_string());
                 }
@@ -1848,16 +1915,21 @@ mod tests {
             super::super::serialize_projected_markdown(&projection.view)
                 .expect("serialize inline embeds");
         let before = serialized.find("Before").expect("leading prose");
-        let embed = serialized.find(".embed source=\"Other\"").expect("embed div");
+        let embed = serialized
+            .find(".embed source=\"Other\"")
+            .expect("embed div");
         let close = embed
             + serialized[embed..]
                 .find("\n:::")
                 .expect("embed closing fence");
         let after = close
-            + serialized[close..]
-                .find("\n\n after")
-                .unwrap_or_else(|| panic!("trailing prose not after embed: {serialized}"));
-        assert!(before < embed && embed < close && close < after, "{serialized}");
+            + serialized[close..].find("\n\n after").unwrap_or_else(|| {
+                panic!("trailing prose not after embed: {serialized}")
+            });
+        assert!(
+            before < embed && embed < close && close < after,
+            "{serialized}"
+        );
         assert!(serialized.contains("{width=62%}"), "{serialized}");
 
         let Some(pandoc) = super::super::super::create::pandoc_command() else {
@@ -1892,10 +1964,8 @@ mod tests {
 
     #[test]
     fn prelude_heading_uses_a_collision_safe_emitted_id() {
-        let directory = vault(&[(
-            "Host.md",
-            "Prelude\n\n# Snapshot content\nBody\n",
-        )]);
+        let directory =
+            vault(&[("Host.md", "Prelude\n\n# Snapshot content\nBody\n")]);
         let projection = project(&directory, "Host.md");
         let ids = projection
             .view
@@ -1904,11 +1974,12 @@ mod tests {
             .map(|anchor| anchor.id.clone())
             .collect::<Vec<_>>();
         assert!(ids.contains(&"snapshot-content".to_string()), "{ids:?}");
-        assert!(
-            ids.contains(&"snapshot-content-2".to_string()),
+        assert!(ids.contains(&"snapshot-content-2".to_string()), "{ids:?}");
+        assert_eq!(
+            ids.len(),
+            ids.iter().collect::<BTreeSet<_>>().len(),
             "{ids:?}"
         );
-        assert_eq!(ids.len(), ids.iter().collect::<BTreeSet<_>>().len(), "{ids:?}");
 
         let serialized =
             super::super::serialize_projected_markdown(&projection.view)
@@ -2012,7 +2083,10 @@ mod tests {
         ] {
             assert!(serialized.contains(&format!("[]{{#{expected}}}")));
         }
-        assert!(serialized.contains("](<#embed-1-t-paragraph>)"), "{serialized}");
+        assert!(
+            serialized.contains("](<#embed-1-t-paragraph>)"),
+            "{serialized}"
+        );
         assert!(serialized.contains("](<#embed-2-t-list>)"), "{serialized}");
     }
 
@@ -2193,6 +2267,7 @@ mod tests {
             SnapshotProjectionOptions {
                 masthead: masthead(),
                 snapshot_date: test_snapshot_date(),
+                include_closed: false,
             },
         )
         .expect("project cached bytes");
@@ -2242,6 +2317,7 @@ mod tests {
             SnapshotProjectionOptions {
                 masthead: masthead(),
                 snapshot_date: test_snapshot_date(),
+                include_closed: false,
             },
         )
         .expect("project synthetic vault");

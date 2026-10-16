@@ -15,6 +15,7 @@ mod resolve;
 mod serialize;
 mod transclusion;
 mod view;
+mod visibility;
 
 #[cfg(test)]
 pub(crate) mod tests;

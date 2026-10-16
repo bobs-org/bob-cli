@@ -1533,10 +1533,7 @@ mod tests {
                 "visible heading was not indexed: {visible}"
             );
         }
-        for hidden in [
-            "Hidden by HTML comment",
-            "Hidden by percent comment",
-        ] {
+        for hidden in ["Hidden by HTML comment", "Hidden by percent comment"] {
             assert!(
                 matches!(
                     index.lookup(&LinkFragment::Heading(hidden.to_string())),

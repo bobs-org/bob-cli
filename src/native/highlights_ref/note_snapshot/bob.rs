@@ -31,12 +31,11 @@
 //!   link. Code, prose mentioning a marker, malformed lines, and nested
 //!   children's rows are never mistaken for a parent's metadata.
 //!
-//! Wire-up note: [`apply_bob_task_rows`] is the per-view entry point. The
-//! transclusion assembler calls it on the final section blocks while each
-//! occurrence still carries its own [`TaskSource`], so embed anchor
-//! namespacing and link rewriting keep working on the rows produced here.
-//! Later Bob phases (managed logs, closed appendix, masthead) build on the
-//! same seam.
+//! Wire-up note: [`apply_bob_task_rows`] is the per-view entry point for
+//! chips and relationship rows. The transclusion assembler calls it on the
+//! final section blocks while each occurrence still carries its own
+//! [`TaskSource`], then the logs/visibility pass condenses managed logs,
+//! omits or restores closed tasks, and filters self-snapshot `#ref` rows.
 //!
 //! [`inline_fields`]: crate::native::task_fields::inline_fields
 //! [`parse_dependency_line`]:
@@ -270,7 +269,7 @@ fn format_scheduled(date: NaiveDate, snapshot_date: NaiveDate) -> String {
 /// True when `raw` carries an exact lowercase `#ref` tag outside code.
 /// The boundary rules mirror the Obsidian projector: the `#` must not
 /// follow an alphanumeric, `_`, or `/`, and `#references` never counts.
-fn has_ref_tag(raw: &str, code: &[Range<usize>]) -> bool {
+pub(super) fn has_ref_tag(raw: &str, code: &[Range<usize>]) -> bool {
     let bytes = raw.as_bytes();
     let mut index = 0;
     while index < bytes.len() {
@@ -441,7 +440,10 @@ fn subproject_items(raw: &str, content: &[Inline]) -> Vec<Vec<Inline>> {
 /// Drop the muted `key: value` nodes a chip replaces, one per consumed
 /// occurrence. Anything else — custom fields, malformed values, past
 /// scheduled dates — stays readable.
-fn remove_consumed_muted(content: &mut Vec<Inline>, consumed: &[String]) {
+pub(super) fn remove_consumed_muted(
+    content: &mut Vec<Inline>,
+    consumed: &[String],
+) {
     let mut remaining: HashMap<&str, usize> = HashMap::new();
     for text in consumed {
         *remaining.entry(text.as_str()).or_default() += 1;
@@ -1024,6 +1026,7 @@ mod tests {
             SnapshotProjectionOptions {
                 masthead: masthead(),
                 snapshot_date: snapshot_date(),
+                include_closed: false,
             },
         )
         .expect("project snapshot")

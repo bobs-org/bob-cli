@@ -558,10 +558,8 @@ fn render_inlines(view: &SnapshotView, inlines: &[Inline]) -> String {
     for inline in inlines {
         match inline {
             Inline::Text(text) => output.push_str(&escape_text(text)),
-            Inline::Anchor(anchor) => output.push_str(&format!(
-                "[]{{#{}}}",
-                safe_anchor_id(&anchor.id)
-            )),
+            Inline::Anchor(anchor) => output
+                .push_str(&format!("[]{{#{}}}", safe_anchor_id(&anchor.id))),
             Inline::Link { label, target } => {
                 let label = render_inlines(view, label);
                 if let Some(destination) = render_target(view, target) {
@@ -649,11 +647,14 @@ fn render_strike(view: &SnapshotView, content: &[Inline]) -> String {
     for (index, piece) in pieces.iter().cloned().enumerate() {
         match piece {
             StrikePiece::Whitespace { wrappers, text } => {
-                let next = pieces[index + 1..]
-                    .iter()
-                    .find(|piece| !matches!(piece, StrikePiece::Whitespace { .. }));
+                let next = pieces[index + 1..].iter().find(|piece| {
+                    !matches!(piece, StrikePiece::Whitespace { .. })
+                });
                 let boundary_after = next.is_none_or(|piece| {
-                    matches!(piece, StrikePiece::Link { .. } | StrikePiece::LinkChip(_))
+                    matches!(
+                        piece,
+                        StrikePiece::Link { .. } | StrikePiece::LinkChip(_)
+                    )
                 });
                 if !run_has_text || boundary_after {
                     flush_strike_text_group(

@@ -97,22 +97,22 @@ pub(super) fn contract_view() -> SnapshotView {
     };
     let next_task = SnapshotTask {
         status: SnapshotTaskStatus::Next,
-            content: vec![
-                text("Brief the "),
-                Inline::Link {
-                    label: vec![text("night crew")],
-                    target: LinkTarget::ObsidianUri(
-                        "obsidian://open?vault=bob&file=night_crew.md".to_string(),
-                    ),
-                },
-            ],
-            chips: vec![Chip {
-                content: vec![text("Keep")],
-                kind: ChipKind::Normal,
-                target: Some(LinkTarget::Url(
-                    "https://example.com/keep/night-crew".to_string(),
-                )),
-            }],
+        content: vec![
+            text("Brief the "),
+            Inline::Link {
+                label: vec![text("night crew")],
+                target: LinkTarget::ObsidianUri(
+                    "obsidian://open?vault=bob&file=night_crew.md".to_string(),
+                ),
+            },
+        ],
+        chips: vec![Chip {
+            content: vec![text("Keep")],
+            kind: ChipKind::Normal,
+            target: Some(LinkTarget::Url(
+                "https://example.com/keep/night-crew".to_string(),
+            )),
+        }],
         anchor: Some(next.clone()),
         source: None,
         children: vec![Block::List {
@@ -144,13 +144,15 @@ pub(super) fn contract_view() -> SnapshotView {
                     vec![Inline::Link {
                         label: vec![text("Tide Office")],
                         target: LinkTarget::ObsidianUri(
-                            "obsidian://open?vault=bob&file=tide_office.md".to_string(),
+                            "obsidian://open?vault=bob&file=tide_office.md"
+                                .to_string(),
                         ),
                     }],
                     vec![Inline::Link {
                         label: vec![text("Pier Nine")],
                         target: LinkTarget::ObsidianUri(
-                            "obsidian://open?vault=bob&file=pier_nine.md".to_string(),
+                            "obsidian://open?vault=bob&file=pier_nine.md"
+                                .to_string(),
                         ),
                     }],
                 ],
@@ -170,7 +172,8 @@ pub(super) fn contract_view() -> SnapshotView {
                                         Inline::Link {
                                             label: vec![text("child link")],
                                             target: LinkTarget::Url(
-                                                "https://example.com/child".to_string(),
+                                                "https://example.com/child"
+                                                    .to_string(),
                                             ),
                                         },
                                     ],
@@ -182,7 +185,9 @@ pub(super) fn contract_view() -> SnapshotView {
                                         text("second bullet with "),
                                         Inline::Code("code_token".to_string()),
                                         text(" and "),
-                                        Inline::Emphasis(vec![text("emphasis")]),
+                                        Inline::Emphasis(vec![text(
+                                            "emphasis",
+                                        )]),
                                     ],
                                     children: Vec::new(),
                                     source: None,
@@ -193,7 +198,9 @@ pub(super) fn contract_view() -> SnapshotView {
                             kind: ListKind::Ordered { start: 1 },
                             items: vec![
                                 ListItem {
-                                    content: vec![text("check the flood lamps")],
+                                    content: vec![text(
+                                        "check the flood lamps",
+                                    )],
                                     children: Vec::new(),
                                     source: None,
                                 },
@@ -943,9 +950,8 @@ fn ast_tag_contains_tag(
             .iter()
             .any(|value| ast_tag_contains_tag(value, parent, child)),
         serde_json::Value::Object(values) => {
-            let is_parent =
-                values.get("t").and_then(serde_json::Value::as_str)
-                    == Some(parent);
+            let is_parent = values.get("t").and_then(serde_json::Value::as_str)
+                == Some(parent);
             (is_parent && ast_has_node(value, child))
                 || values
                     .values()
@@ -977,11 +983,9 @@ fn ast_tag_contains_text(
 
 fn ast_has_str_node_containing(value: &serde_json::Value, text: &str) -> bool {
     match value {
-        serde_json::Value::Array(values) => {
-            values
-                .iter()
-                .any(|value| ast_has_str_node_containing(value, text))
-        }
+        serde_json::Value::Array(values) => values
+            .iter()
+            .any(|value| ast_has_str_node_containing(value, text)),
         serde_json::Value::Object(values) => {
             (values.get("t").and_then(serde_json::Value::as_str) == Some("Str")
                 && values
