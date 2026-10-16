@@ -521,16 +521,37 @@ Apply to Two Sigma! @job^apply-two-sigma
 
 The template is one item: a parent line and optional authored child bullets.
 It ends at the first blank line after the header. Blank lines after that
-separate rows and are ignored. Each nonblank row supplies one capture; rows
-cannot have child bullets yet.
+separate rows and are ignored. Each nonblank row supplies one capture, except
+a template using only `{0}` takes one capture per space-separated value, so
+values may share a line or sit one per line; rows cannot have child bullets
+yet.
 
 | Draft part | Rule |
 | --- | --- |
 | Header | `@@template:` alone on the first nonblank line; case-insensitive |
 | Placeholder | `{0}` through `{999}`; indices must start at zero and have no gaps; repeats and any order are allowed |
 | Literal braces | Write `{{` for `{` and `}}` for `}` |
-| One placeholder | The whole trimmed row is its value, including spaces |
+| One placeholder | Split the row on spaces and tabs; each value is its own row, numbered left to right then top to bottom; quote values containing spaces as below |
 | Multiple placeholders | Separate fields with spaces or tabs; quote fields containing spaces with `"..."` or `“...”`; `\"` and `\\` are the only escapes inside quotes |
+
+A `{0}`-only template takes one capture per value:
+
+```text
+@@template:
+foo: {0}! @sase:foo-{0}
+
+bar baz bam
+```
+
+This expands to three ordinary items, exactly like one value per line:
+
+```text
+foo: bar! @sase:foo-bar
+
+foo: baz! @sase:foo-baz
+
+foo: bam! @sase:foo-bam
+```
 
 Values are inserted once and are not scanned again. Every ordinary marker in
 the template applies independently to each row, including routes and sections,
@@ -547,8 +568,13 @@ Templates refuse other `@@` declarations, clipboard capture, and Pomodoro
 session operators. This includes `%` markers even with `--no-clip`, `--clip`,
 whole-item forms such as `=`, `=x`, `+N`, and `++N`, and start/close suffixes
 on task markers. `URL %` remains allowed when it is the reference listen
-marker. A template is limited to 1,000 rows and 1 MiB of expanded text; it is
-refused rather than truncated when it exceeds either bound.
+marker. In a `{0}`-only template, keep the marker on its URL by quoting the
+row (`"https://example.com/one %"`) or by putting `%` in the template
+(`{0} %` covers the all-listen case); an unquoted
+`https://example.com/one %` row is two values and refuses naming row 2. A
+template is limited to 1,000 rows and 1 MiB of
+expanded text; it is refused rather than truncated when it exceeds either
+bound.
 
 Template errors use stable codes in JSON mode. Execution reports the first
 problem in draft order and writes nothing:
@@ -556,7 +582,7 @@ problem in draft order and writes nothing:
 | Code | Example message |
 | --- | --- |
 | `template_header_misplaced` | Write `@@template:` alone on the draft's first line |
-| `template_missing_rows` | Add a blank line, then one row per capture; with the blank separator present: add one row per capture (`: N values separated by spaces`, `: one value per row`, or bare) |
+| `template_missing_rows` | Add a blank line, then one row per capture; with the blank separator present: add one row per capture (`: N values separated by spaces`, `: one value per capture, separated by spaces or new lines`, or bare) |
 | `template_needs_separator` | Add a blank line between the template and its rows |
 | `template_missing_placeholder` | Add at least one placeholder such as `{0}` |
 | `template_invalid_placeholder` | Use `{N}`; write `{{` for a literal brace |
@@ -4890,7 +4916,8 @@ value is a `template_field` span with its field index. Field spans include
 quotes when a value is quoted. The JSON `template` object reports the header,
 template block range and line bounds, `field_count`, and `rows`. Each row has
 its one-based row number, source line and range, fields, and (when expansion
-succeeded) the expanded capture `mode` and `body`.
+succeeded) the expanded capture `mode` and `body`. Rows of a one-placeholder
+template can share a `line`, and each row's `range` is its value's range.
 
 `items[0]` is the template parsed through a same-length masked copy. Each
 expanded row follows as an item with mode `template_row`, the row's typed

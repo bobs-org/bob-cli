@@ -623,13 +623,63 @@ fn plain_captures_stay_byte_identical_without_a_header() {
 }
 
 #[test]
+fn template_one_placeholder_one_line_dry_run_matches_three_lines() {
+    let temp = TempDir::new("bob-cli-capture-template-one-line");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    let one_line = "@@template:\nTask {0}\n\nbar baz bam\n";
+    let three_line = "@@template:\nTask {0}\n\nbar\nbaz\nbam\n";
+
+    let one = capture(&temp, &vault)
+        .args(["--dry-run", "-f", "json"])
+        .arg(one_line)
+        .output()
+        .expect("run one-line dry-run");
+    assert_success(&one);
+    let one_value = json(&one);
+    assert_eq!(one_value["template"]["row_count"], 3);
+    assert_eq!(
+        one_value["captures"][0]["template_row"],
+        serde_json::json!({"row": 1, "line": 4})
+    );
+    assert_eq!(
+        one_value["captures"][1]["template_row"],
+        serde_json::json!({"row": 2, "line": 4})
+    );
+    assert_eq!(
+        one_value["captures"][2]["template_row"],
+        serde_json::json!({"row": 3, "line": 4})
+    );
+
+    let three = capture(&temp, &vault)
+        .args(["--dry-run", "-f", "json"])
+        .arg(three_line)
+        .output()
+        .expect("run three-line dry-run");
+    assert_success(&three);
+    let three_value = json(&three);
+    for index in 0..3 {
+        assert_eq!(
+            one_value["captures"][index]["text"],
+            three_value["captures"][index]["text"],
+            "body differs at index {index}"
+        );
+        assert_eq!(
+            one_value["captures"][index]["task_line"],
+            three_value["captures"][index]["task_line"],
+            "task line differs at index {index}"
+        );
+    }
+}
+
+#[test]
 fn template_url_listen_marker_is_not_clipboard_capture() {
     let temp = TempDir::new("bob-cli-capture-template-listen");
     let vault = temp.path().join("vault");
     fs::create_dir_all(&vault).expect("create vault");
     let output = capture(&temp, &vault)
         .args(["--dry-run", "--no-clip", "-f", "json"])
-        .arg("@@template:\n{0}\n\nhttps://example.com/one %\n")
+        .arg("@@template:\n{0}\n\n\"https://example.com/one %\"\n")
         .output()
         .expect("run URL listen template");
     assert_success(&output);
@@ -639,5 +689,26 @@ fn template_url_listen_marker_is_not_clipboard_capture() {
     assert_eq!(
         value["template_row"],
         serde_json::json!({"row": 1, "line": 4})
+    );
+
+    let unquoted = capture(&temp, &vault)
+        .args(["--dry-run", "--no-clip", "-f", "json"])
+        .arg("@@template:\n{0}\n\nhttps://example.com/one %\n")
+        .output()
+        .expect("run unquoted URL listen template");
+    assert_eq!(
+        unquoted.status.code(),
+        Some(2),
+        "{}",
+        format_output(&unquoted)
+    );
+    let error = json(&unquoted);
+    assert!(
+        error["error"]
+            .as_str()
+            .unwrap()
+            .contains("template row 2 (line 4)"),
+        "{}",
+        error["error"]
     );
 }

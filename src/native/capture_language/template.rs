@@ -428,64 +428,121 @@ pub(crate) fn analyze(raw: &str) -> TemplateAnalysis {
             if trimmed.is_empty() {
                 continue;
             }
-            let row_number = rows.len() + 1;
+            let line_number = index + 1;
             let leading = line.text.len()
                 - line.text.trim_start_matches([' ', '\t']).len();
             let trailing = trimmed.len();
-            let row_range =
+            let line_range =
                 (line.start + leading)..(line.start + leading + trailing);
+            let base_row = rows.len() + 1;
+            if is_row_bullet(trimmed) {
+                let row_number = base_row;
+                if row_number == MAX_ROWS + 1 {
+                    issues.push(issue(
+                        "template_too_large",
+                        format!("template row {row_number} (line {line_number}) exceeds the limit of {MAX_ROWS} rows"),
+                        line_range.clone(),
+                    ));
+                }
+                check_global_tokens_in_row(
+                    line,
+                    row_number,
+                    line_number,
+                    &mut issues,
+                );
+                issues.push(issue(
+                    "template_row_bullet",
+                    format!("template row {row_number} (line {line_number}): rows can't have child bullets yet; put each capture's values on one row"),
+                    line_range.clone(),
+                ));
+                rows.push(TemplateRow {
+                    row: row_number,
+                    line: line_number,
+                    range: line_range,
+                    fields: Vec::new(),
+                });
+                continue;
+            }
+            let (fields, unterminated_range) =
+                lex_row(trimmed, line_range.start);
+            if field_count == 1 {
+                for (offset, field) in fields.iter().enumerate() {
+                    let row_number = base_row + offset;
+                    if row_number == MAX_ROWS + 1 {
+                        issues.push(issue(
+                            "template_too_large",
+                            format!("template row {row_number} (line {line_number}) exceeds the limit of {MAX_ROWS} rows"),
+                            field.range.clone(),
+                        ));
+                    }
+                    rows.push(TemplateRow {
+                        row: row_number,
+                        line: line_number,
+                        range: field.range.clone(),
+                        fields: vec![TemplateField {
+                            field: 0,
+                            value: field.value.clone(),
+                            range: field.range.clone(),
+                        }],
+                    });
+                }
+                if let Some(range) = unterminated_range {
+                    let unterminated_row =
+                        base_row + fields.len().saturating_sub(1);
+                    issues.push(unterminated_quote_issue(
+                        unterminated_row,
+                        line_number,
+                        range,
+                    ));
+                }
+                check_global_tokens_in_single_line(
+                    line,
+                    line_number,
+                    base_row,
+                    &rows[base_row - 1..],
+                    &mut issues,
+                );
+                continue;
+            }
+            let row_number = base_row;
             if row_number == MAX_ROWS + 1 {
                 issues.push(issue(
                     "template_too_large",
-                    format!("template row {row_number} (line {}) exceeds the limit of {MAX_ROWS} rows", index + 1),
-                    row_range.clone(),
+                    format!("template row {row_number} (line {line_number}) exceeds the limit of {MAX_ROWS} rows"),
+                    line_range.clone(),
                 ));
             }
             check_global_tokens_in_row(
                 line,
                 row_number,
-                index + 1,
+                line_number,
                 &mut issues,
             );
-            if is_row_bullet(trimmed) {
-                issues.push(issue(
-                    "template_row_bullet",
-                    format!("template row {row_number} (line {}): rows can't have child bullets yet; put each capture's values on one row", index + 1),
-                    row_range.clone(),
+            if let Some(range) = unterminated_range {
+                issues.push(unterminated_quote_issue(
+                    row_number,
+                    line_number,
+                    range,
                 ));
                 rows.push(TemplateRow {
                     row: row_number,
-                    line: index + 1,
-                    range: row_range,
-                    fields: Vec::new(),
+                    line: line_number,
+                    range: line_range,
+                    fields,
                 });
                 continue;
             }
-            let (fields, quote_issue) = lex_row(
-                trimmed,
-                row_range.start,
-                row_number,
-                index + 1,
-                field_count,
-            );
-            let unterminated_quote = quote_issue.is_some();
-            if let Some(issue) = quote_issue {
-                issues.push(issue);
-            }
-            if !unterminated_quote
-                && field_count > 0
-                && fields.len() != field_count
-            {
+            if field_count > 0 && fields.len() != field_count {
                 issues.push(issue(
                     "template_row_arity",
-                    format!("template row {row_number} (line {}): has {} field{} but the template uses {}; quote a field that contains spaces: \"Two Sigma\"", index + 1, fields.len(), if fields.len() == 1 { "" } else { "s" }, field_range(field_count)),
-                    row_range.clone(),
+                    format!("template row {row_number} (line {line_number}): has {} field{} but the template uses {}; quote a field that contains spaces: \"Two Sigma\"", fields.len(), if fields.len() == 1 { "" } else { "s" }, field_range(field_count)),
+                    line_range.clone(),
                 ));
             }
             rows.push(TemplateRow {
                 row: row_number,
-                line: index + 1,
-                range: row_range,
+                line: line_number,
+                range: line_range,
                 fields,
             });
         }
@@ -507,7 +564,8 @@ pub(crate) fn analyze(raw: &str) -> TemplateAnalysis {
         let message = if separator_index.is_some() {
             match field_count {
                 0 => "add one row per capture".to_string(),
-                1 => "add one row per capture: one value per row".to_string(),
+                1 => "add one value per capture, separated by spaces or new lines"
+                    .to_string(),
                 count => format!(
                     "add one row per capture: {count} values separated by spaces"
                 ),
@@ -924,21 +982,7 @@ fn scan_template_braces(
 fn lex_row(
     row: &str,
     base: usize,
-    row_number: usize,
-    line_number: usize,
-    field_count: usize,
-) -> (Vec<TemplateField>, Option<TemplateIssue>) {
-    if field_count == 1 {
-        return (
-            vec![TemplateField {
-                field: 0,
-                value: row.to_string(),
-                range: base..(base + row.len()),
-            }],
-            None,
-        );
-    }
-
+) -> (Vec<TemplateField>, Option<Range<usize>>) {
     let mut fields = Vec::new();
     let mut cursor = 0;
     while cursor < row.len() {
@@ -966,17 +1010,24 @@ fn lex_row(
         });
         cursor = end;
         if unterminated {
-            return (
-                fields,
-                Some(issue(
-                    "template_unterminated_quote",
-                    format!("template row {row_number} (line {line_number}): quoted field has no closing quote"),
-                    (base + field_start)..(base + row.len()),
-                )),
-            );
+            return (fields, Some((base + field_start)..(base + row.len())));
         }
     }
     (fields, None)
+}
+
+fn unterminated_quote_issue(
+    row_number: usize,
+    line_number: usize,
+    range: Range<usize>,
+) -> TemplateIssue {
+    issue(
+        "template_unterminated_quote",
+        format!(
+            "template row {row_number} (line {line_number}): quoted field has no closing quote"
+        ),
+        range,
+    )
 }
 
 fn scan_quoted_field(row: &str, start: usize) -> (String, usize, bool) {
@@ -1048,6 +1099,62 @@ fn check_global_tokens_in_row(
             ));
         }
     }
+}
+
+fn check_global_tokens_in_single_line(
+    line: &RawLine<'_>,
+    line_number: usize,
+    base_row: usize,
+    line_rows: &[TemplateRow],
+    issues: &mut Vec<TemplateIssue>,
+) {
+    let fallback = line_rows.first().map(|row| row.row).unwrap_or(base_row);
+    for token in tokenize_with_spans(line.text) {
+        if token.text.starts_with("@@")
+            && !token.text.to_ascii_lowercase().starts_with(HEADER)
+        {
+            let token_start = line.start + token.start;
+            let row_number = line_rows
+                .iter()
+                .find(|row| {
+                    row.range.start <= token_start
+                        && token_start < row.range.end
+                })
+                .map(|row| row.row)
+                .unwrap_or(fallback);
+            issues.push(issue(
+                "template_global_declaration",
+                format!("template row {row_number} (line {line_number}): a template draft can't declare `@@` destinations; put the destination in the template line"),
+                (line.start + token.start)..(line.start + token.end),
+            ));
+        }
+    }
+}
+
+/// `true` when `cursor` sits on a template row or in a gap between two values
+/// sharing one physical line. One-placeholder rows split on spaces, so the
+/// gap between values still suppresses completion like the values themselves.
+pub(crate) fn cursor_on_template_row(
+    analysis: &TemplateAnalysis,
+    cursor: usize,
+) -> bool {
+    let mut index = 0;
+    while index < analysis.rows.len() {
+        let line = analysis.rows[index].line;
+        let mut start = analysis.rows[index].range.start;
+        let mut end = analysis.rows[index].range.end;
+        let mut next = index + 1;
+        while next < analysis.rows.len() && analysis.rows[next].line == line {
+            start = start.min(analysis.rows[next].range.start);
+            end = end.max(analysis.rows[next].range.end);
+            next += 1;
+        }
+        if start <= cursor && cursor <= end {
+            return true;
+        }
+        index = next;
+    }
+    false
 }
 
 fn field_range(field_count: usize) -> String {

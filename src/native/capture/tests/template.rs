@@ -149,7 +149,7 @@ fn planning_each_template_matches_planning_its_expansion() {
         ),
         (
             "reference listen markers",
-            "@@template:\n{0}\n\nhttps://example.com/listen-one %\nhttps://example.com/listen-two %\n",
+            "@@template:\n{0}\n\n\"https://example.com/listen-one %\"\n\"https://example.com/listen-two %\"\n",
         ),
     ];
     let routing = UrlRoutingPolicy::default();

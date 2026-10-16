@@ -85,3 +85,34 @@ fn capture_expand_reports_language_errors_as_usage_errors() {
     assert_eq!(value["code"], "template_placeholder_gap");
     assert!(value["error"].as_str().unwrap().contains("not {1}"));
 }
+
+#[test]
+fn capture_expand_one_line_values_equal_three_line_rows() {
+    let one_line = "@@template:\nfoo: {0}! @sase:foo-{0}\n\nbar baz bam\n";
+    let three_line = "@@template:\nfoo: {0}! @sase:foo-{0}\n\nbar\nbaz\nbam\n";
+    let one = bob_command()
+        .args(["capture", "-E"])
+        .arg(one_line)
+        .output()
+        .expect("run one-line expansion");
+    assert_success(&one);
+    let three = bob_command()
+        .args(["capture", "-E"])
+        .arg(three_line)
+        .output()
+        .expect("run three-line expansion");
+    assert_success(&three);
+    assert_eq!(stdout(&one), stdout(&three));
+
+    for draft in [one_line, three_line] {
+        let json = bob_command()
+            .args(["capture", "--expand", "-f", "json"])
+            .arg(draft)
+            .output()
+            .expect("run expansion json");
+        assert_success(&json);
+        let value: serde_json::Value =
+            serde_json::from_str(stdout(&json).trim()).expect("expansion JSON");
+        assert_eq!(value["template"]["row_count"], 3);
+    }
+}

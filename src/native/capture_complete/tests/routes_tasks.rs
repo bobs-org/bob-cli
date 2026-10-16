@@ -128,6 +128,7 @@ fn template_completion_suppresses_header_rows_and_placeholders() {
         ("@@template:\n@not-a-route", 8),
         ("@@template:\nBuy {0} @not-a-route\n\nrow", 37),
         ("@@template:\nBuy {0} @not-a-route\n\nrow", 17),
+        ("@@template:\nBuy {0} @not-a-route\n\nrow  two", 39),
     ] {
         let value = result(temp.path(), raw, cursor);
         assert!(value.context.is_none(), "{raw:?} at {cursor}: {value:?}");

@@ -301,3 +301,60 @@ fn human_output_adds_template_summary() {
     assert_success(&output);
     assert!(stdout(&output).contains("template  2 fields · 1 rows"));
 }
+
+#[test]
+fn template_parse_one_line_values_share_line_with_per_value_ranges() {
+    let draft = "@@template:\nTask {0}\n\nbar baz bam\n";
+    let value = parse_json(draft);
+
+    let rows = value["template"]["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 3);
+    for (index, expected) in ["bar", "baz", "bam"].iter().enumerate() {
+        assert_eq!(rows[index]["row"], index + 1);
+        assert_eq!(rows[index]["line"], 4);
+        assert_eq!(rows[index]["fields"][0]["value"], **expected);
+        let start = draft.find(expected).unwrap();
+        // `find` returns the first occurrence; `bar`/`baz`/`bam` also appear
+        // only in the row line for this draft, so the offsets are exact.
+        assert_eq!(
+            rows[index]["range"],
+            serde_json::json!({"start": start, "end": start + expected.len()})
+        );
+    }
+
+    let items = value["items"].as_array().unwrap();
+    assert_eq!(items.len(), 4);
+    let mut ranges = Vec::new();
+    for (index, item) in items.iter().skip(1).enumerate() {
+        assert_eq!(item["mode"], "template_row");
+        assert_eq!(item["line_start"], 4);
+        assert_eq!(item["line_end"], 4);
+        assert_eq!(item["template_row"]["row"], index + 1);
+        let start = item["range"]["start"].as_u64().unwrap();
+        let end = item["range"]["end"].as_u64().unwrap();
+        assert!(start < end);
+        ranges.push((start, end));
+    }
+    ranges.sort();
+    ranges.dedup();
+    assert_eq!(ranges.len(), 3, "per-value ranges must be distinct");
+
+    let field_spans: Vec<_> = value["spans"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|span| span["kind"] == "template_field")
+        .collect();
+    assert_eq!(field_spans.len(), 3);
+
+    let quoted_draft = "@@template:\nTask {0}\n\nbar \"baz bam\"\n";
+    let quoted = parse_json(quoted_draft);
+    let quoted_rows = quoted["template"]["rows"].as_array().unwrap();
+    assert_eq!(quoted_rows.len(), 2);
+    let quoted_value = "\"baz bam\"";
+    let start = quoted_draft.find(quoted_value).unwrap();
+    assert_eq!(
+        quoted_rows[1]["fields"][0]["range"],
+        serde_json::json!({"start": start, "end": start + quoted_value.len()})
+    );
+}

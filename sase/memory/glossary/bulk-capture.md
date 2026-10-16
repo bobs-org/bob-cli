@@ -5,7 +5,7 @@ aliases:
   - "batch capture"
 ---
 
-A bulk capture holds multiple items: blank-line items, bare-URL lists, chained session operators, or one item per row from a `@@template:` draft. Template rows are later nonblank physical lines, one capture per line, not blank-line-separated items; capturing the draft is exactly capturing its `bob capture -E` expansion. Blank or whitespace-only lines separate items; a blank-line-free block of two or more
+A bulk capture holds multiple items: blank-line items, bare-URL lists, chained session operators, or one item per row from a `@@template:` draft. Template rows are later nonblank physical lines, one capture per line (a template using only `{0}` takes one capture per space-separated or quoted value, so several can share a line), never blank-line-separated items; capturing the draft is exactly capturing its `bob capture -E` expansion. Blank or whitespace-only lines separate items; a blank-line-free block of two or more
 bare-URL lines splits into one item per URL, and a line chaining session operators
 (`+2 =x`, `=x =`) into one item per operator. Authored child bullets never start an
 item. Each item is still judged alone, with its own markers and whole-item forms, so

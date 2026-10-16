@@ -59,7 +59,7 @@ fn missing_template_or_rows_has_a_teaching_issue() {
     );
     assert_eq!(
         first_issue("@@template:\nTask {0}\n\n").message(),
-        "add one row per capture: one value per row"
+        "add one value per capture, separated by spaces or new lines"
     );
     assert_eq!(
         first_issue("@@template:\nApply to {0} {1}\n\n").message(),
@@ -232,14 +232,46 @@ fn row_global_declarations_use_row_scope() {
 }
 
 #[test]
-fn one_field_rows_keep_spaces_and_template_line_endings_normalize() {
+fn one_field_rows_split_on_spaces_and_template_line_endings_normalize() {
     for newline in ["\n", "\r\n", "\r"] {
         let raw = ["@@template:", "Apply {0}", "", "  Montréal 🧭 role  "]
             .join(newline);
+        let analysis = template::analyze(&raw);
+        assert!(analysis.issues.is_empty(), "{:?}", analysis.issues);
+        assert_eq!(analysis.rows.len(), 3);
+        assert_eq!(
+            analysis.rows.iter().map(|row| row.line).collect::<Vec<_>>(),
+            [4, 4, 4]
+        );
+        assert_eq!(
+            analysis
+                .rows
+                .iter()
+                .map(|row| row.fields[0].value.as_str())
+                .collect::<Vec<_>>(),
+            ["Montréal", "🧭", "role"]
+        );
         let expansion =
             template::expand(&raw).expect("valid template").unwrap();
-        assert_eq!(expansion.text, "Apply Montréal 🧭 role\n");
-        assert_eq!(expansion.instances[0].line, 4);
+        assert_eq!(
+            expansion.text,
+            "Apply Montréal\n\nApply 🧭\n\nApply role\n"
+        );
+        assert_eq!(expansion.summary.row_count, 3);
+
+        for quoted in ["\"Montréal 🧭 role\"", "“Montréal 🧭 role”"] {
+            let raw =
+                ["@@template:", "Apply {0}", "", &format!("  {quoted}  ")]
+                    .join(newline);
+            let analysis = template::analyze(&raw);
+            assert!(analysis.issues.is_empty(), "{:?}", analysis.issues);
+            assert_eq!(analysis.rows.len(), 1);
+            assert_eq!(analysis.rows[0].fields[0].value, "Montréal 🧭 role");
+            let expansion =
+                template::expand(&raw).expect("valid template").unwrap();
+            assert_eq!(expansion.text, "Apply Montréal 🧭 role\n");
+            assert_eq!(expansion.instances[0].line, 4);
+        }
     }
 }
 
@@ -313,4 +345,133 @@ fn template_mask_preserves_byte_offsets_and_hides_header_rows_and_braces() {
             .count(),
         4
     );
+}
+
+#[test]
+fn one_placeholder_one_line_equals_three_line_expansion() {
+    let one_line = "@@template:\nfoo: {0}! @sase:foo-{0}\n\nbar baz bam\n";
+    let three_line = "@@template:\nfoo: {0}! @sase:foo-{0}\n\nbar\nbaz\nbam\n";
+    let one = template::expand(one_line).expect("valid one-line").unwrap();
+    let three = template::expand(three_line)
+        .expect("valid three-line")
+        .unwrap();
+    assert_eq!(one.text, three.text);
+    assert_eq!(one.summary.row_count, 3);
+}
+
+#[test]
+fn one_placeholder_rows_share_line_with_per_value_ranges() {
+    let raw = "@@template:\nfoo: {0}! @sase:foo-{0}\n\nbar baz bam\n";
+    let analysis = template::analyze(raw);
+    assert!(analysis.issues.is_empty(), "{:?}", analysis.issues);
+    assert_eq!(analysis.rows.len(), 3);
+    for (index, row) in analysis.rows.iter().enumerate() {
+        assert_eq!(row.row, index + 1);
+        assert_eq!(row.line, 4);
+        assert_eq!(row.fields.len(), 1);
+        assert_eq!(row.fields[0].field, 0);
+        assert_eq!(row.range, row.fields[0].range);
+        assert_eq!(&raw[row.range.clone()], ["bar", "baz", "bam"][index]);
+    }
+}
+
+#[test]
+fn one_placeholder_tabs_and_repeated_spaces_split_cleanly() {
+    let raw = "@@template:\nTask {0}\n\none\t\ttwo   three\n";
+    let analysis = template::analyze(raw);
+    assert!(analysis.issues.is_empty(), "{:?}", analysis.issues);
+    assert_eq!(
+        analysis
+            .rows
+            .iter()
+            .map(|row| row.fields[0].value.as_str())
+            .collect::<Vec<_>>(),
+        ["one", "two", "three"]
+    );
+}
+
+#[test]
+fn one_placeholder_mixed_lines_number_left_to_right_then_top_to_bottom() {
+    let raw = "@@template:\nTask {0}\n\na b\nc\n";
+    let analysis = template::analyze(raw);
+    assert!(analysis.issues.is_empty(), "{:?}", analysis.issues);
+    assert_eq!(analysis.rows.len(), 3);
+    assert_eq!(
+        analysis
+            .rows
+            .iter()
+            .map(|row| (row.row, row.line))
+            .collect::<Vec<_>>(),
+        [(1, 4), (2, 4), (3, 5)]
+    );
+}
+
+#[test]
+fn one_placeholder_unterminated_quote_names_value_row_and_keeps_leading_row() {
+    let raw = "@@template:\nTask {0}\n\na \"b c\n";
+    let issue = first_issue(raw);
+    assert_eq!(issue.code(), "template_unterminated_quote");
+    assert!(
+        issue.message().starts_with("template row 2 (line 4):"),
+        "{}",
+        issue.message()
+    );
+    let analysis = template::analyze(raw);
+    assert_eq!(analysis.rows.len(), 2);
+    let expanded = template::expand_rows_for_editor(raw, &analysis);
+    assert_eq!(expanded.len(), 2);
+    assert!(expanded[0].is_some());
+    assert!(expanded[1].is_none());
+}
+
+#[test]
+fn one_placeholder_global_declaration_names_containing_row() {
+    let issue = first_issue("@@template:\nTask {0}\n\na @@route\n");
+    assert_eq!(issue.code(), "template_global_declaration");
+    assert!(
+        issue.message().starts_with("template row 2 (line 4):"),
+        "{}",
+        issue.message()
+    );
+}
+
+#[test]
+fn one_placeholder_thousand_and_first_value_is_too_large() {
+    let row = std::iter::repeat_n("x", 1_001)
+        .collect::<Vec<_>>()
+        .join(" ");
+    let raw = format!("@@template:\n{{0}}\n\n{row}\n");
+    let analysis = template::analyze(&raw);
+    assert!(issue_codes(&raw).contains(&"template_too_large"));
+    let issue = analysis
+        .issues
+        .iter()
+        .find(|issue| issue.code() == "template_too_large")
+        .expect("too-large issue");
+    assert!(issue.message().contains("template row 1001 (line 4)"));
+    assert_eq!(analysis.rows.len(), 1_001);
+    assert_eq!(analysis.rows[1_000].row, 1_001);
+}
+
+#[test]
+fn one_placeholder_templates_never_report_arity() {
+    for raw in [
+        "@@template:\nTask {0}\n\na b c\n",
+        "@@template:\nTask {0}\n\na\n",
+        "@@template:\nTask {0} {0}\n\na b\n",
+    ] {
+        assert!(
+            !issue_codes(raw).contains(&"template_row_arity"),
+            "{raw:?}: {:?}",
+            template::analyze(raw).issues
+        );
+    }
+}
+
+#[test]
+fn multi_placeholder_extra_values_still_report_arity() {
+    let raw = "@@template:\nTask {0} {1}\n\none two three\n";
+    let issue = first_issue(raw);
+    assert_eq!(issue.code(), "template_row_arity");
+    assert!(issue.message().starts_with("template row 1 (line 4):"));
 }

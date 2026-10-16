@@ -347,7 +347,8 @@ tasks. See
 `TEXT` may be several physical lines: each item’s first nonblank line is the
 parent, later authored bullets become children, and blank lines split a batch
 of items. A first-line `@@template:` header turns the following item into a
-template; after a blank line, each row supplies one capture. A `@@route` or
+template; after a blank line, each row supplies one capture, except a
+`{0}`-only template takes one capture per space-separated value. A `@@route` or
 `@@route+id` token anywhere in the draft is a
 draft-wide destination declaration, not body text; item-local `@...` markers
 still win, and `bob capture` warns when a local marker shadows the declaration

@@ -450,10 +450,9 @@ fn template_completion_gate(
 
     let (header_range, _) = analysis.header.as_ref().expect("checked header");
     if (header_range.start..=header_range.end).contains(&cursor)
-        || analysis
-            .rows
-            .iter()
-            .any(|row| row.range.start <= cursor && cursor <= row.range.end)
+        || crate::native::capture_language::template::cursor_on_template_row(
+            &analysis, cursor,
+        )
         || analysis.placeholders.iter().any(|placeholder| {
             placeholder.range.start <= cursor && cursor <= placeholder.range.end
         })
