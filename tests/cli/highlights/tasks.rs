@@ -753,6 +753,121 @@ fn highlights_ref_task_checked_sync_creates_annotation_tasks_before_closing() {
 }
 
 #[test]
+fn highlights_ref_task_checked_sync_imports_ready_annotation_tasks_before_closing(
+) {
+    let temp = TempDir::new("bob-cli-highlights-ref-ready-closing-sync");
+    let vault = temp.path().join("vault");
+    let pdf = vault.join("lib/books/ready-closing.pdf");
+    let sidecar = pdf.with_extension("md");
+    let note = vault.join("ref/books/ready-closing.md");
+    write_highlights_pdf(
+        &pdf,
+        "- status: ready\n- parent: obsidian\n- title: Ready Closing\n",
+    );
+    seed_v1_ref_note(
+        &note,
+        "- [ ] #task #ref [[lib/books/ready-closing.pdf]] #hide ^ref",
+    );
+    assert_success(
+        &bob_command()
+            .arg("highlights")
+            .arg("sync")
+            .arg(&pdf)
+            .env("BOB_DIR", &vault)
+            .output()
+            .expect("initial ready sync"),
+    );
+    write_file(
+        &sidecar,
+        "\
+## Page 7
+
+- status: ready
+- parent: obsidian
+
+---
+
+> Closing highlight.
+
+- #task Ready closing intake.
+",
+    );
+    let checked_note =
+        fs::read_to_string(&note).expect("read ref note").replace(
+            "- [ ] #task #ref [[lib/books/ready-closing.pdf]]",
+            "- [x] #task #ref [[lib/books/ready-closing.pdf]]",
+        );
+    write_file(&note, &checked_note);
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("sync")
+        .arg(&pdf)
+        .arg("--write-pdf")
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("sync checked ready task with new annotation task");
+
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("pdf_task_contribution: status=read")
+            && report.contains("annotation_tasks_create: 1")
+            && report.contains("annotation_tasks_created: 1"),
+        "expected ready close to import pending annotation tasks:\n{}",
+        format_output(&output)
+    );
+    let marker = pdf_marker_contents(&pdf);
+    assert!(marker.contains("- status: read\n"), "{marker}");
+    let contents = fs::read_to_string(&note).expect("read closed ref note");
+    assert!(contents.contains("status: read\n"), "{contents}");
+    let imported =
+        find_created_annotation_task(&contents, "#task Ready closing intake.");
+    assert!(
+        imported.contains("[[#^h-") && imported.contains("[h:: "),
+        "imported task should carry backlink and processed id: {imported}"
+    );
+
+    write_file(
+        &sidecar,
+        "\
+## Page 7
+
+- status: ready
+- parent: obsidian
+
+---
+
+> Closing highlight.
+
+- #task Ready closing intake.
+- #task After close should skip.
+",
+    );
+    let output = bob_command()
+        .arg("highlights")
+        .arg("sync")
+        .arg(&pdf)
+        .env("BOB_DIR", &vault)
+        .output()
+        .expect("repeat sync after ready close with new bullet");
+
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains("annotation_tasks_created: 0"),
+        "read reference should not import a newly added bullet:\n{}",
+        format_output(&output)
+    );
+    let after = fs::read_to_string(&note).expect("read post-close note");
+    assert!(
+        !after.lines().any(|line| {
+            line.starts_with("- [ ] #task After close should skip.")
+        }),
+        "terminal read should skip new intake:\n{after}"
+    );
+}
+
+#[test]
 fn highlights_ref_task_checked_scan_creates_annotation_tasks_before_closing() {
     let temp = TempDir::new("bob-cli-highlights-ref-task-closing-scan");
     let vault = temp.path().join("vault");

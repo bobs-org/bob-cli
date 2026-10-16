@@ -799,6 +799,15 @@ pub(super) fn projection_status_is(
     status_value_is(projection.get(FIELD_STATUS), status)
 }
 
+pub(super) fn projection_status_is_open(projection: &Projection) -> bool {
+    matches!(
+        projection
+            .get(FIELD_STATUS)
+            .and_then(MarkerValue::as_string),
+        Some(STATUS_READY | STATUS_NEXT | STATUS_WIP)
+    )
+}
+
 pub(super) fn projection_pdf_task_mark(projection: &Projection) -> char {
     match projection
         .get(FIELD_STATUS)

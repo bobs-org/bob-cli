@@ -312,11 +312,12 @@ pub(super) fn plan_pdf_sync(
         prefer: options.prefer,
     })?;
     // Capture intake eligibility before the `^ref` task signal so the final
-    // closing run still imports pending annotation tasks (pre-signal `wip`),
-    // then re-check after the signal so a reopen to `wip` also intakes in the
-    // same run instead of waiting for the next pass.
+    // closing run still imports pending annotation tasks from any open
+    // status (`ready`, `next`, or `wip`), then re-check after the signal so
+    // a reopen to any open status also intakes in the same run instead of
+    // waiting for the next pass.
     let intake_allowed_before_signal =
-        projection_status_is(&resolution.projection, STATUS_WIP);
+        projection_status_is_open(&resolution.projection);
     let pdf_task_signal = apply_pdf_task_status_signal(
         &mut resolution,
         &pdf_task_line,
@@ -325,7 +326,7 @@ pub(super) fn plan_pdf_sync(
         &frontmatter_projection,
     )?;
     let annotation_task_intake_allowed = intake_allowed_before_signal
-        || projection_status_is(&resolution.projection, STATUS_WIP);
+        || projection_status_is_open(&resolution.projection);
     let decision = resolution.decision;
     let synced_projection = resolution.projection;
     validate_required_marker_keys(
@@ -551,11 +552,10 @@ fn plan_pdf_sync_v2(
         },
     })?;
     // Eligibility from the merged projection before the reading-task signal,
-    // mirroring the v1 path: a WIP merged status before the signal keeps the
-    // closing run's intake, and a WIP status after the signal keeps a reopen
-    // intake in the same run.
-    let pre_signal_wip =
-        projection_status_is(&resolution.projection, STATUS_WIP);
+    // mirroring the v1 path: an open merged status before the signal keeps
+    // the closing run's intake, and an open status after the signal keeps a
+    // reopen intake in the same run.
+    let pre_signal_open = projection_status_is_open(&resolution.projection);
     // Task-gesture status drives the synced projection (like v1's PDF-task
     // signal, but from the located task via the stored base). Marker-only or
     // frontmatter-only changes leave the merged projection alone; the
@@ -582,9 +582,9 @@ fn plan_pdf_sync_v2(
             .push_str("reading task set status");
     }
     // Preserve annotation eligibility before and after the status signal so
-    // closing and reopening runs import the same pending work as today.
-    let annotation_task_intake_allowed = pre_signal_wip
-        || projection_status_is(&resolution.projection, STATUS_WIP);
+    // closing and reopening runs import pending work from any open status.
+    let annotation_task_intake_allowed =
+        pre_signal_open || projection_status_is_open(&resolution.projection);
     // Ambiguity or unselectable state refuses status/parent/task writes
     // rather than guessing: no task, marker, or frontmatter write and no
     // invented birth embed. A per-PDF planning failure keeps partial-scan
@@ -1079,8 +1079,8 @@ pub(super) fn finalize_annotation_task_plans(
     // entirely when no plan carries annotation-task candidates: with nothing to
     // accept/reject there are no intents to form and no reference-note
     // bodies to mutate, so the index would never be consulted. This keeps the
-    // common `sync`/`scan` path (non-`wip` PDFs, or `wip` PDFs with no `#task`
-    // bullets) free of the vault-wide scan.
+    // common `sync`/`scan` path (terminal (`read`, `abandoned`, `legacy`) PDFs,
+    // or open PDFs with no `#task` bullets) free of the vault-wide scan.
     if plans
         .iter()
         .all(|plan| plan.annotation_task_candidates.is_empty())

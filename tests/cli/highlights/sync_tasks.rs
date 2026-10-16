@@ -883,10 +883,10 @@ fn highlights_ref_sync_routes_annotation_tasks_to_existing_root_note() {
 }
 
 #[test]
-fn highlights_ref_sync_skips_annotation_tasks_for_non_wip_statuses() {
-    for status in ["ready", "next", "read", "abandoned", "legacy"] {
+fn highlights_ref_sync_skips_annotation_tasks_for_terminal_statuses() {
+    for status in ["read", "abandoned", "legacy"] {
         let temp = TempDir::new(&format!(
-            "bob-cli-highlights-ref-non-wip-task-{status}"
+            "bob-cli-highlights-ref-terminal-task-{status}"
         ));
         let vault = temp.path().join("vault");
         let pdf = vault.join("lib/books/task-notes.pdf");
@@ -931,6 +931,94 @@ fn highlights_ref_sync_skips_annotation_tasks_for_non_wip_statuses() {
                 .any(|line| line
                     .starts_with("- [ ] #task Should not be created.")),
             "{status} PDFs should not create annotation tasks:\n{contents}"
+        );
+    }
+}
+
+#[test]
+fn highlights_ref_sync_creates_annotation_tasks_for_open_statuses() {
+    for (status, mark) in [("ready", ' '), ("next", '*')] {
+        let temp =
+            TempDir::new(&format!("bob-cli-highlights-ref-open-task-{status}"));
+        let vault = temp.path().join("vault");
+        let pdf = vault.join("lib/books/task-notes.pdf");
+        let sidecar = pdf.with_extension("md");
+        let note = vault.join("ref/books/task-notes.md");
+        write_highlights_pdf(
+            &pdf,
+            &format!(
+                "- status: {status}\n- parent: obsidian\n- title: Task Notes\n"
+            ),
+        );
+        seed_v1_ref_note(
+            &note,
+            &format!(
+                "- [{mark}] #task #ref [[lib/books/task-notes.pdf]] #hide ^ref"
+            ),
+        );
+        write_file(
+            &sidecar,
+            "\
+## Page 4
+
+- status: wip
+- parent: obsidian
+
+---
+
+> Claim.
+
+- #task Open-status intake.
+",
+        );
+
+        let output = bob_command()
+            .arg("highlights")
+            .arg("sync")
+            .arg(&pdf)
+            .env("BOB_DIR", &vault)
+            .output()
+            .unwrap_or_else(|error| panic!("sync {status}: {error}"));
+
+        assert_success(&output);
+        let contents = fs::read_to_string(&note)
+            .unwrap_or_else(|error| panic!("read note for {status}: {error}"));
+        let created = contents
+            .lines()
+            .find(|line| line.starts_with("- [ ] #task Open-status intake."))
+            .unwrap_or_else(|| {
+                panic!(
+                    "{status} PDFs should create annotation tasks:\n{contents}"
+                )
+            });
+        assert!(
+            created.contains("[[#^h-") && created.contains("|🔖]]"),
+            "{status} task should carry a same-note backlink: {created}"
+        );
+        assert!(
+            created.contains("[h:: "),
+            "{status} task should carry a processed id: {created}"
+        );
+
+        let output = bob_command()
+            .arg("highlights")
+            .arg("sync")
+            .arg(&pdf)
+            .env("BOB_DIR", &vault)
+            .output()
+            .unwrap_or_else(|error| panic!("resync {status}: {error}"));
+        assert_success(&output);
+        let resynced = fs::read_to_string(&note)
+            .unwrap_or_else(|error| panic!("read resynced {status}: {error}"));
+        assert_eq!(
+            resynced
+                .lines()
+                .filter(|line| {
+                    line.starts_with("- [ ] #task Open-status intake.")
+                })
+                .count(),
+            1,
+            "{status} second sync should not duplicate:\n{resynced}"
         );
     }
 }

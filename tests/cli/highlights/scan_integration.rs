@@ -1358,3 +1358,25 @@ fn v2_dirty_parent_accepts_default_follow_up() {
         .expect("dirty scan");
     assert_success(&output);
 }
+
+#[test]
+fn v2_ready_parent_accepts_default_follow_up() {
+    let (_temp, vault) = scan_vault("bob-cli-scan-integration-ready-follow-up");
+    let pdf = vault.join("lib/ready.pdf");
+    let parent_note = vault.join("obsidian.md");
+    write_area_note(&parent_note, "Obsidian");
+    write_highlights_pdf(&pdf, "- status: ready\n- parent: obsidian\n");
+    write_file(
+        &pdf.with_extension("md"),
+        "# Ready\n\n## Page 1\n\n- status: ready\n- parent: obsidian\n\n---\n\n> Q.\n\n- #task Ready follow-up.\n",
+    );
+    assert_success(&sync_pdf(&vault, &pdf, &[]));
+    let parent_contents =
+        fs::read_to_string(&parent_note).expect("read parent");
+    assert!(
+        parent_contents.contains("#task Ready follow-up.")
+            && parent_contents.contains("[[ref/ready#^h-")
+            && parent_contents.contains("|🔖]]"),
+        "ready v2 default follow-up should file into the parent with a full-path backlink:\n{parent_contents}"
+    );
+}

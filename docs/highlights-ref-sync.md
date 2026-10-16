@@ -1062,12 +1062,13 @@ work. A writing scan keeps the default note-only refusal unless `--write-pdfs`
 is supplied.
 
 Highlight comments and standalone non-marker notes can also create actionable
-Obsidian tasks when the marker/frontmatter-selected PDF status is `wip`, before
-the generated PDF `^ref` checkbox contributes another lifecycle status. The
-final run that moves a `wip` PDF to `read` or `abandoned` still imports newly
-added annotation tasks in that same run, and moving a reference to `[/]` imports
-them too. Runs whose selected and final status are both non-`wip` skip task
-intake. Any unordered Markdown bullet line whose item text contains `#task` as a
+Obsidian tasks when the marker/frontmatter-selected PDF status is open
+(`ready`, `next`, or `wip`), before the generated PDF `^ref` checkbox
+contributes another lifecycle status. A run that closes an open reference to
+`read` or `abandoned` still imports newly added annotation tasks in that same
+run, and reopening a terminal reference imports them too. Runs whose status is
+terminal (`read`, `abandoned`, or `legacy`) both before and after the
+reading-task signal skip task intake. Any unordered Markdown bullet line whose item text contains `#task` as a
 whitespace-delimited token is copied to an unchecked task:
 
 ```md
@@ -1362,9 +1363,9 @@ The sync model is deliberately asymmetric:
 - Marker/frontmatter fields are 2-way and can conflict.
 - Highlights, highlight comments, and standalone non-marker notes are PDF or
   sidecar to reference note only.
-- Annotation-created `#task` bullets are created in the reference note or an
-  explicitly routed existing root note only, and do not sync completion state
-  back to the PDF marker.
+- Annotation-created `#task` bullets land in the v1 reference note, the v2
+  reading task's residence (or `mac_inbox`), or an explicit `@name` root note,
+  and do not sync completion state back to the PDF marker.
 - Edits inside the managed `<!-- highlights:begin -->` region in Obsidian may be
   overwritten.
 
