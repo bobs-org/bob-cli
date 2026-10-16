@@ -214,16 +214,36 @@ fn protects_links(region: Region) -> bool {
             | Region::PercentComment
             | Region::HtmlComment
             | Region::HtmlBlock
+            | Region::IndentedCode
     )
 }
 
 fn link_spans(line: &str) -> Vec<LinkSpan> {
-    let masked = mask_inline_ranges(line);
+    let inline_mask =
+        super::scan::inline_mask(line, super::scan::InlineMaskMode::Links);
+    let mut masked = line.as_bytes().to_vec();
+    for (byte, masked) in masked.iter_mut().zip(inline_mask) {
+        if masked {
+            *byte = b' ';
+        }
+    }
     let mut spans = Vec::new();
     let mut i = 0;
     while i + 1 < masked.len() {
-        if is_escaped(&masked, i) {
+        if super::scan::is_escaped(line.as_bytes(), i) {
             i += 1;
+            continue;
+        }
+        if masked[i..].starts_with(b"![[")
+            && let Some(relative_end) = find_bytes(&masked[i + 3..], b"]]")
+        {
+            let end = i + 3 + relative_end + 2;
+            spans.push(LinkSpan {
+                target_start: i + 3,
+                target_end: end - 2,
+                wikilink: true,
+            });
+            i = end;
             continue;
         }
         if masked[i..].starts_with(b"[[")
@@ -284,52 +304,6 @@ fn link_spans(line: &str) -> Vec<LinkSpan> {
     spans
 }
 
-fn mask_inline_ranges(line: &str) -> Vec<u8> {
-    let mut masked = line.as_bytes().to_vec();
-    let bytes = line.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        let end = if bytes[i..].starts_with(b"<!--") {
-            find_bytes(&bytes[i + 4..], b"-->")
-                .map(|relative| i + 4 + relative + 3)
-        } else if bytes[i..].starts_with(b"%%") {
-            find_bytes(&bytes[i + 2..], b"%%")
-                .map(|relative| i + 2 + relative + 2)
-        } else if bytes[i] == b'`' {
-            let ticks =
-                bytes[i..].iter().take_while(|byte| **byte == b'`').count();
-            find_delimiter(bytes, i + ticks, &vec![b'`'; ticks])
-                .map(|close| close + ticks)
-        } else if bytes[i] == b'$' {
-            let ticks = if bytes.get(i + 1) == Some(&b'$') {
-                2
-            } else {
-                1
-            };
-            find_delimiter(bytes, i + ticks, &vec![b'$'; ticks])
-                .map(|close| close + ticks)
-        } else {
-            None
-        };
-        if let Some(end) = end {
-            masked[i..end].fill(b' ');
-            i = end;
-        } else {
-            i += 1;
-        }
-    }
-    masked
-}
-
-fn find_delimiter(
-    bytes: &[u8],
-    from: usize,
-    delimiter: &[u8],
-) -> Option<usize> {
-    let relative = find_bytes(bytes.get(from..)?, delimiter)?;
-    Some(from + relative)
-}
-
 fn find_markdown_close(bytes: &[u8], start: usize) -> Option<usize> {
     let mut depth = 1_usize;
     let mut i = start;
@@ -371,14 +345,6 @@ fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack
         .windows(needle.len())
         .position(|window| window == needle)
-}
-
-fn is_escaped(bytes: &[u8], index: usize) -> bool {
-    let mut start = index;
-    while start > 0 && bytes[start - 1] == b'\\' {
-        start -= 1;
-    }
-    (index - start) % 2 == 1
 }
 
 fn markdown_target(target: &str) -> &str {
@@ -511,10 +477,7 @@ fn identity_heading(heading: &PlannedHeading, fragment: &str) -> bool {
 }
 
 fn normalize(text: &str) -> String {
-    text.split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .to_lowercase()
+    super::sections::normalize_identity(text)
 }
 
 fn rewrite_fragment(

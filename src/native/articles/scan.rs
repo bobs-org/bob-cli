@@ -3,7 +3,7 @@
 use crate::native::markdown::{
     atx_heading, closes_fence, fence_marker, html_comment_closes,
     html_comment_opens, is_blockquote_line, is_indented_code_line,
-    setext_underline, MarkdownFence,
+    setext_underline, strictly_closed_frontmatter_end, MarkdownFence,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -82,6 +82,12 @@ pub(crate) struct Document<'a> {
     pub(crate) lines: Vec<ClassifiedLine<'a>>,
     pub(crate) default_ending: &'static str,
     pub(crate) unclosed_fence: Option<usize>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum InlineMaskMode {
+    Marker,
+    Links,
 }
 
 pub(crate) fn classify(text: &str) -> Document<'_> {
@@ -356,8 +362,12 @@ pub(crate) fn classify(text: &str) -> Document<'_> {
                     || line.region.is_quote()
                     || line.region == Region::Table
             });
+            let continues_list = last_paragraph.is_some_and(|(start, _)| {
+                start > 0 && lines[start - 1].region.is_listy()
+            });
             if let Some((start, count)) = last_paragraph
                 && !forbidden
+                && !continues_list
             {
                 let _ = (level, start, count);
                 lines.push(ClassifiedLine {
@@ -505,14 +515,95 @@ pub(crate) fn split_physical_lines(text: &str) -> Vec<(&str, &str)> {
 }
 
 fn closed_frontmatter_end(lines: &[&str]) -> Option<usize> {
-    if lines.first().copied().map(str::trim_end) != Some("---") {
-        return None;
+    strictly_closed_frontmatter_end(lines)
+}
+
+/// Byte positions covered by inline code, math, or comments. Shared by
+/// article link parsing and marker scans so those rules protect the same text.
+pub(crate) fn inline_mask(line: &str, mode: InlineMaskMode) -> Vec<bool> {
+    let bytes = line.as_bytes();
+    let mut masked = vec![false; bytes.len()];
+    let mut i = 0;
+    while i < bytes.len() {
+        let end = if bytes[i..].starts_with(b"<!--") {
+            find_inline_bytes(&bytes[i + 4..], b"-->")
+                .map(|relative| i + 4 + relative + 3)
+        } else if bytes[i..].starts_with(b"%%") {
+            find_inline_bytes(&bytes[i + 2..], b"%%")
+                .map(|relative| i + 2 + relative + 2)
+        } else if bytes[i] == b'`' {
+            let ticks =
+                bytes[i..].iter().take_while(|byte| **byte == b'`').count();
+            find_inline_bytes(&bytes[i + ticks..], &vec![b'`'; ticks])
+                .map(|relative| i + ticks + relative + ticks)
+        } else if bytes[i] == b'$'
+            && (matches!(mode, InlineMaskMode::Links) || !is_escaped(bytes, i))
+        {
+            let ticks = if bytes.get(i + 1) == Some(&b'$') {
+                2
+            } else {
+                1
+            };
+            match mode {
+                InlineMaskMode::Links => {
+                    find_inline_bytes(&bytes[i + ticks..], &vec![b'$'; ticks])
+                        .map(|relative| i + ticks + relative + ticks)
+                }
+                InlineMaskMode::Marker => {
+                    find_math_close(bytes, i + ticks, ticks, true)
+                        .map(|close| close + ticks)
+                }
+            }
+        } else {
+            None
+        };
+        if let Some(end) = end {
+            masked[i..end].fill(true);
+            i = end;
+        } else {
+            i += 1;
+        }
     }
-    lines
-        .iter()
-        .enumerate()
-        .skip(1)
-        .find_map(|(index, line)| (line.trim_end() == "---").then_some(index))
+    masked
+}
+
+pub(crate) fn is_escaped(bytes: &[u8], index: usize) -> bool {
+    let mut start = index;
+    while start > 0 && bytes[start - 1] == b'\\' {
+        start -= 1;
+    }
+    (index - start) % 2 == 1
+}
+
+fn find_inline_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
+}
+
+fn find_math_close(
+    bytes: &[u8],
+    mut index: usize,
+    ticks: usize,
+    escape_delimiters: bool,
+) -> Option<usize> {
+    while index < bytes.len() {
+        if bytes[index] == b'$'
+            && (!escape_delimiters || !is_escaped(bytes, index))
+        {
+            let closing = bytes[index..]
+                .iter()
+                .take_while(|byte| **byte == b'$')
+                .count();
+            if (ticks == 1 && closing == 1) || (ticks == 2 && closing >= 2) {
+                return Some(index);
+            }
+            index += closing.max(1);
+        } else {
+            index += 1;
+        }
+    }
+    None
 }
 
 fn is_blank(line: &str) -> bool {

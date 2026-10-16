@@ -36,6 +36,7 @@ pub(crate) fn pseudo_footnotes(lines: &[ClassifiedLine<'_>]) -> Vec<Finding> {
                     | Region::PercentComment
                     | Region::HtmlComment
                     | Region::HtmlBlock
+                    | Region::IndentedCode
             ) {
                 return None;
             }
@@ -43,13 +44,16 @@ pub(crate) fn pseudo_footnotes(lines: &[ClassifiedLine<'_>]) -> Vec<Finding> {
             let rest = visible.strip_prefix('[')?;
             let (label, body) = rest.split_once("]:")?;
             let body = body.trim_start();
+            let destination = body.split_whitespace().next().unwrap_or("");
+            let lower_destination = destination.to_ascii_lowercase();
             if label.is_empty()
                 || label.starts_with('^')
-                || body.contains("://")
-                || body.to_ascii_lowercase().contains("mailto:")
-                || body.contains('#')
-                || body.contains('/')
-                || body.starts_with("./")
+                || destination.contains("://")
+                || lower_destination.starts_with("mailto:")
+                || destination.starts_with('#')
+                || destination.starts_with('/')
+                || destination.starts_with("./")
+                || destination.starts_with("../")
             {
                 return None;
             }
@@ -91,10 +95,7 @@ pub(crate) fn title_heading(
 }
 
 fn normalize(text: &str) -> String {
-    text.split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .to_lowercase()
+    super::sections::normalize_identity(text)
 }
 
 impl Finding {

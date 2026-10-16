@@ -151,8 +151,10 @@ pub(crate) fn emit(
             out.push((line.content.clone(), ending_of(line, default)));
         }
         let body = &work[end + 1..];
-        out.push((String::new(), default.to_string()));
-        emit_body(&mut out, body, default, true);
+        if !body.is_empty() {
+            out.push((String::new(), default.to_string()));
+            emit_body(&mut out, body, default, true);
+        }
     } else {
         emit_body(&mut out, work, default, false);
     }
@@ -218,6 +220,14 @@ fn emit_body(
             && !body[i].fence_open
             && !body[i].fence_close
         {
+            ensure_spacing(
+                out,
+                last_kind,
+                last_is_blank,
+                &body[i],
+                first_body,
+                default,
+            );
             let mut j = i;
             while j < body.len()
                 && body[j].region.is_protected_layout()
@@ -251,11 +261,25 @@ fn emit_body(
             let next = body[j..]
                 .iter()
                 .find(|line| !line.drop && !is_blank_work(line));
-            let keep = match (last_kind, next) {
-                (LastKind::List, Some(line)) if line.region.is_listy() => run,
-                _ if first_body => 0,
-                _ if run > 0 => 1,
-                _ => 0,
+            let previous = body[..i]
+                .iter()
+                .rev()
+                .find(|line| !line.drop && !is_blank_work(line));
+            let keep = match (previous, next) {
+                (Some(before), Some(after))
+                    if before.region == Region::IndentedCode
+                        && after.region == Region::IndentedCode =>
+                {
+                    run
+                }
+                _ => match (last_kind, next) {
+                    (LastKind::List, Some(line)) if line.region.is_listy() => {
+                        run
+                    }
+                    _ if first_body => 0,
+                    _ if run > 0 => 1,
+                    _ => 0,
+                },
             };
             for _ in 0..keep {
                 out.push((String::new(), default.to_string()));

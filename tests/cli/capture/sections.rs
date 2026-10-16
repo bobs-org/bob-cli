@@ -149,6 +149,52 @@ fn capture_article_forced_section_matches_identity_and_stale_number() {
 }
 
 #[test]
+fn capture_article_exact_raw_title_precedes_earlier_identity_match() {
+    let temp = TempDir::new("bob-cli-capture-article-raw-first");
+    let vault = temp.path().join("vault");
+    let source = concat!(
+        "---\n",
+        "type: \"[[article]]\"\n",
+        "---\n",
+        "### 1.1.1 Examples\n",
+        "first\n",
+        "### 1.2.1 Examples\n",
+        "second\n",
+    );
+    write_file(&vault.join("note.md"), source);
+
+    let output = bob_command()
+        .arg("capture")
+        .arg("-b")
+        .arg(&vault)
+        .arg("--route")
+        .arg("note")
+        .arg("--section")
+        .arg("1.2.1 Examples")
+        .arg("--")
+        .arg("jot")
+        .env("BOB_NOW", "2026-06-15")
+        .output()
+        .expect("run article exact raw-title capture");
+
+    assert_success(&output);
+    assert_eq!(
+        fs::read_to_string(vault.join("note.md")).expect("read note"),
+        concat!(
+            "---\n",
+            "type: \"[[article]]\"\n",
+            "---\n",
+            "### 1.1.1 Examples\n",
+            "first\n",
+            "### 1.2.1 Examples\n",
+            "\n",
+            "- jot [created::2026-06-15]\n",
+            "second\n",
+        )
+    );
+}
+
+#[test]
 fn capture_non_article_numbered_heading_keeps_raw_title_matching() {
     let temp = TempDir::new("bob-cli-capture-non-article-numbered");
     let vault = temp.path().join("vault");

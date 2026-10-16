@@ -229,7 +229,7 @@ pub(crate) fn format(text: &str, ctx: &ArticleContext<'_>) -> ArticlePlan {
     } else {
         ArticleStatus::Changed
     };
-    let notice = format_notice(&changes);
+    let notice = format_notice(&changes, &numbering.headings);
     ArticlePlan {
         path: ctx.path.to_path_buf(),
         status,
@@ -378,30 +378,71 @@ fn remap_zero_based(index: usize, at: usize, count: usize) -> usize {
     }
 }
 
-fn format_notice(changes: &plan::ChangeCounts) -> String {
+fn format_notice(
+    changes: &plan::ChangeCounts,
+    headings: &[sections::PlannedHeading],
+) -> String {
     let mut clauses = Vec::new();
     if changes.numbered > 0 {
-        clauses.push(format!("{} sections numbered", changes.numbered));
+        clauses.push(format!(
+            "{} {} numbered",
+            changes.numbered,
+            plural(changes.numbered, "section", "sections")
+        ));
     }
     if changes.renumbered > 0 {
-        clauses.push(format!("{} renumbered", changes.renumbered));
+        clauses.push(format!(
+            "{} {} renumbered",
+            changes.renumbered,
+            plural(changes.renumbered, "section", "sections")
+        ));
     }
     if changes.promoted > 0 {
+        let mut promotions = headings
+            .iter()
+            .filter(|heading| heading.new_level < heading.original_level)
+            .map(|heading| (heading.original_level, heading.new_level))
+            .collect::<Vec<_>>();
+        promotions.sort_unstable();
+        promotions.dedup();
+        let levels = match promotions.as_slice() {
+            [(from, to)] => {
+                format!(" ({} → {})", "#".repeat(*from), "#".repeat(*to))
+            }
+            _ => String::new(),
+        };
         clauses.push(format!(
-            "{} headings promoted (#### → ###)",
-            changes.promoted
+            "{} {} promoted{levels}",
+            changes.promoted,
+            plural(changes.promoted, "heading", "headings")
         ));
     }
     if changes.setext > 0 {
-        clauses.push(format!("{} Setext headings converted", changes.setext));
+        clauses.push(format!(
+            "{} Setext {} converted",
+            changes.setext,
+            plural(changes.setext, "heading", "headings")
+        ));
     }
     if changes.links > 0 {
-        clauses.push(format!("{} links refreshed", changes.links));
+        clauses.push(format!(
+            "{} {} refreshed",
+            changes.links,
+            plural(changes.links, "link", "links")
+        ));
     }
     if clauses.is_empty() {
         "Article formatted".to_owned()
     } else {
         format!("Article formatted · {}", clauses.join(" · "))
+    }
+}
+
+fn plural<'a>(count: usize, singular: &'a str, plural: &'a str) -> &'a str {
+    if count == 1 {
+        singular
+    } else {
+        plural
     }
 }
 

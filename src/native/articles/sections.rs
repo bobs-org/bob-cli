@@ -41,7 +41,7 @@ pub(crate) fn heading_plain_identity(title: &str) -> String {
     normalize_identity(&strip_inline_markup(strip_section_number(title).rest))
 }
 
-fn normalize_identity(text: &str) -> String {
+pub(crate) fn normalize_identity(text: &str) -> String {
     text.split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
@@ -215,11 +215,12 @@ pub(crate) fn plan_headings(
             }
         }
         if numbering {
-            changes.numbered += 1;
-            if raw_heading.written.as_deref() != number.as_deref()
-                && raw_heading.written.is_some()
-            {
-                changes.renumbered += 1;
+            match raw_heading.written.as_deref() {
+                None => changes.numbered += 1,
+                Some(token) if Some(token) != number.as_deref() => {
+                    changes.renumbered += 1;
+                }
+                Some(_) => {}
             }
         } else if raw_heading.written.is_some() {
             changes.unnumbered += 1;

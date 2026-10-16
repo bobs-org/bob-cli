@@ -917,6 +917,31 @@ fn article_exact_section_matches_stale_number() {
 }
 
 #[test]
+fn article_exact_raw_title_match_precedes_earlier_identity_match() {
+    let contents = concat!(
+        "---\n",
+        "type: \"[[article]]\"\n",
+        "---\n",
+        "### 1.1.1 Examples\n",
+        "first\n",
+        "### 1.2.1 Examples\n",
+        "second\n",
+    );
+    let expected = format!(
+        "---\ntype: \"[[article]]\"\n---\n### 1.1.1 Examples\nfirst\n### 1.2.1 Examples\n\n{BULLET}\nsecond\n"
+    );
+    assert_eq!(
+        super::super::insert_bullet_line(
+            contents,
+            BULLET,
+            Some("1.2.1 Examples"),
+            true,
+        ),
+        (expected, Placement::Inserted)
+    );
+}
+
+#[test]
 fn article_exact_section_matches_plain_identity() {
     let contents = concat!(
         "---\n",

@@ -171,6 +171,17 @@ fn heading_links_follow_new_numbers_and_keep_aliases_and_encoding() {
 }
 
 #[test]
+fn heading_embeds_refresh_and_preserve_aliases_and_blocks() {
+    let input = "---\ntype: [[article]]\n---\n\n# Root\n\n## Beta\n\n![[#Beta]]\n![[note#Beta|alias]]\n![[#^id]]\n";
+    let plan = format(input, &ArticleContext::new(Path::new("note.md")));
+    let output = plan.formatted.expect("formatted article");
+    assert!(output.contains("![[#1.1 Beta]]"), "{output}");
+    assert!(output.contains("![[note#1.1 Beta|alias]]"), "{output}");
+    assert!(output.contains("![[#^id]]"), "{output}");
+    assert_eq!(plan.changes.links, 2);
+}
+
+#[test]
 fn heading_links_resolve_preformat_titles_before_ambiguous_identities() {
     let duplicate = "---\ntype: [[article]]\n---\n\n## 9. Examples\n\n## 8. Examples\n\n[[#9. Examples]]\n";
     let plan = format(duplicate, &ArticleContext::new(Path::new("note.md")));
@@ -204,6 +215,118 @@ fn heading_links_leave_blocks_and_protected_code_alone() {
     );
     assert!(output.contains("[[#Section]]\n```"), "{output}");
     assert_eq!(plan.changes.links, 0);
+}
+
+#[test]
+fn indented_code_links_and_blank_runs_are_preserved() {
+    let input = "---\ntype: [[article]]\n---\n\n## Alpha\n\n    code [[#Alpha]]\n\n\n    more code\n";
+    let plan = format(input, &ArticleContext::new(Path::new("note.md")));
+    let output = plan.formatted.expect("formatted article");
+    assert!(
+        output.contains("    code [[#Alpha]]\n\n\n    more code"),
+        "{output:?}"
+    );
+    assert_eq!(plan.changes.links, 0);
+}
+
+#[test]
+fn heading_spacing_surrounds_protected_blocks() {
+    let input = concat!(
+        "---\ntype: [[article]]\n---\n\n",
+        "# Math\n$$\nmath\n$$\n",
+        "# Comment\n%%\ncomment\n%%\n",
+        "# Html comment\n<!--\ncomment\n-->\n",
+        "# Html block\n<div>\nbody\n</div>\n",
+    );
+    let output = article(input);
+    for (heading, block) in [
+        ("# 1. Math", "$$"),
+        ("# 2. Comment", "%%"),
+        ("# 3. Html comment", "<!--"),
+        ("# 4. Html block", "<div>"),
+    ] {
+        assert!(
+            output.contains(&format!("{heading}\n\n{block}")),
+            "{output}"
+        );
+    }
+}
+
+#[test]
+fn section_number_counts_and_notice_plurals_reflect_actual_changes() {
+    let single = format(
+        "---\ntype: [[article]]\n---\n\n## One\n",
+        &ArticleContext::new(Path::new("note.md")),
+    );
+    assert_eq!(single.changes.numbered, 1);
+    assert_eq!(single.notice, "Article formatted · 1 section numbered");
+
+    let formatted = single.formatted.unwrap();
+    let unchanged =
+        format(&formatted, &ArticleContext::new(Path::new("note.md")));
+    assert_eq!(unchanged.changes.numbered, 0);
+    assert_eq!(unchanged.changes.renumbered, 0);
+    assert_eq!(unchanged.notice, "Article formatted");
+
+    let layout_only = format(
+        "---\ntype: [[article]]\n---\n\n# 1. One   \n",
+        &ArticleContext::new(Path::new("note.md")),
+    );
+    assert_eq!(layout_only.changes.numbered, 0);
+    assert_eq!(layout_only.notice, "Article formatted");
+
+    let promoted = format(
+        "---\ntype: [[article]]\n---\n\n## Parent\n#### Child\n",
+        &ArticleContext::new(Path::new("note.md")),
+    );
+    assert!(promoted.notice.contains("1 heading promoted (#### → ###)"));
+}
+
+#[test]
+fn pseudo_footnotes_only_exclude_url_like_destinations() {
+    let input = concat!(
+        "---\ntype: [[article]]\n---\n\n",
+        "[b]: TODO: Update commit/line counts!\n",
+        "[x]: https://example.test/path\n",
+        "[y]: ./a.md\n",
+        "[z]: #heading\n",
+        "[mail]: MAILTO:person@example.test\n",
+    );
+    let plan = format(input, &ArticleContext::new(Path::new("note.md")));
+    let findings = plan
+        .findings
+        .iter()
+        .filter(|finding| finding.code == "pseudo-footnote")
+        .collect::<Vec<_>>();
+    assert_eq!(findings.len(), 1, "{findings:?}");
+    assert_eq!(findings[0].line, 5);
+}
+
+#[test]
+fn lazy_list_continuation_is_not_a_setext_heading() {
+    let input = "---\ntype: [[article]]\n---\n\n- foo\nbar\n---\n";
+    let plan = format(input, &ArticleContext::new(Path::new("note.md")));
+    let output = plan.formatted.expect("formatted article");
+    assert!(output.contains("- foo\nbar\n---"), "{output:?}");
+    assert!(plan.headings.is_empty());
+}
+
+#[test]
+fn frontmatter_only_article_does_not_gain_an_extra_blank_line() {
+    let input = "---\ntype: [[article]]\n---\n";
+    assert_eq!(article(input), input);
+}
+
+#[test]
+fn invalid_section_numbers_finding_uses_the_option_line() {
+    let input = "---\ntype: [[article]]\ntitle: Example\nsection_numbers: maybe\n---\n\n# Heading\n";
+    let plan = format(input, &ArticleContext::new(Path::new("note.md")));
+    let finding = plan
+        .findings
+        .iter()
+        .find(|finding| finding.code == "bad-option")
+        .expect("bad option finding");
+    assert_eq!(finding.line, 4);
 }
 
 #[test]
@@ -295,7 +418,7 @@ fn article_plan_json_matches_schema_v1_shape() {
     assert!(note["edits"].is_array());
     assert!(note["changes"]["links"].is_number());
     assert!(note["replaced"].is_array());
-    assert_eq!(note["notice"], "Article formatted · 1 sections numbered");
+    assert_eq!(note["notice"], "Article formatted · 1 section numbered");
     assert!(note["findings"].is_array());
     assert_eq!(note["outline"]["title"], "note");
     assert_eq!(note["outline"]["sections"][0]["title"], "Alpha");
@@ -333,6 +456,14 @@ fn refusals() {
         )
         .as_deref(),
         Some("holds-tasks")
+    );
+    assert_eq!(
+        skip(
+            "---\ntype: [[article]]\n---\n\nThis article mentions #task in prose.\n",
+            "note.md"
+        )
+        .as_deref(),
+        None
     );
     assert_eq!(
         skip(

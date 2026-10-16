@@ -207,6 +207,100 @@ fn all_formats_every_article_and_skips_untyped_notes() {
 }
 
 #[test]
+fn all_writes_good_articles_when_another_article_is_refused() {
+    let fixture = fixture();
+    write_file(
+        &fixture.vault.join("holds-tasks.md"),
+        "---\ntype: [[article]]\n---\n\n- [ ] #task wait\n",
+    );
+    write_file(&fixture.vault.join("good.md"), ARTICLE);
+
+    let output = article_command(&fixture)
+        .args(["format", "-a", "-f", "json"])
+        .output()
+        .expect("format all with one refusal");
+
+    assert_eq!(output.status.code(), Some(2));
+    let value = json(&output);
+    let good = value["notes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|note| note["path"] == "good.md")
+        .expect("good article result");
+    let refused = value["notes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|note| note["path"] == "holds-tasks.md")
+        .expect("refused article result");
+    assert_eq!(good["status"], "changed");
+    assert_eq!(refused["status"], "skipped");
+    assert_eq!(refused["reason"]["code"], "holds-tasks");
+    assert!(refused["reason"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("#task on line 5"));
+    assert_eq!(
+        fs::read_to_string(fixture.vault.join("good.md")).unwrap(),
+        FORMATTED
+    );
+}
+
+#[test]
+fn non_utf8_markdown_does_not_break_list_or_format_all() {
+    let fixture = fixture();
+    write_file(&fixture.vault.join("good.md"), ARTICLE);
+    fs::write(fixture.vault.join("binary.md"), [0xff, 0xfe, 0x00])
+        .expect("write non-UTF-8 markdown");
+
+    let list = article_command(&fixture)
+        .output()
+        .expect("list articles with non-UTF-8 note");
+    assert_success(&list);
+    assert!(stdout(&list).contains("good"));
+
+    let format = article_command(&fixture)
+        .args(["format", "-a"])
+        .output()
+        .expect("format articles with non-UTF-8 note");
+    assert_success(&format);
+    assert_eq!(
+        fs::read_to_string(fixture.vault.join("good.md")).unwrap(),
+        FORMATTED
+    );
+}
+
+#[test]
+fn unresolved_notes_show_nearby_and_ambiguous_candidates() {
+    let missing_fixture = fixture();
+    write_file(&missing_fixture.vault.join("draft.md"), ARTICLE);
+    let missing = article_command(&missing_fixture)
+        .args(["format", "drfat"])
+        .output()
+        .expect("resolve a nearby missing note");
+    assert_eq!(missing.status.code(), Some(2));
+    assert!(
+        stderr(&missing).contains("near matches: draft"),
+        "{}",
+        stderr(&missing)
+    );
+
+    let ambiguous_fixture = fixture();
+    write_file(&ambiguous_fixture.vault.join("a/note.md"), ARTICLE);
+    write_file(&ambiguous_fixture.vault.join("b/note.md"), ARTICLE);
+    let ambiguous = article_command(&ambiguous_fixture)
+        .args(["format", "note"])
+        .output()
+        .expect("resolve an ambiguous note");
+    assert_eq!(ambiguous.status.code(), Some(2));
+    let message = stderr(&ambiguous);
+    assert!(message.contains("is ambiguous"), "{message}");
+    assert!(message.contains("a/note.md"), "{message}");
+    assert!(message.contains("b/note.md"), "{message}");
+}
+
+#[test]
 fn named_non_article_reports_refusal_in_json() {
     let fixture = fixture();
     write_file(&fixture.vault.join("plain.md"), "# Plain\n");
@@ -495,6 +589,24 @@ fn format_rewrites_inbound_links_in_two_other_notes() {
     assert_eq!(
         fs::read_to_string(fixture.vault.join("log.md")).unwrap(),
         "[First](draft.md#1.1%20First)\n"
+    );
+}
+
+#[test]
+fn format_rewrites_inbound_embeds() {
+    let fixture = fixture();
+    write_file(&fixture.vault.join("draft.md"), ARTICLE);
+    write_file(&fixture.vault.join("journal.md"), "![[draft#9. First]]\n");
+
+    let output = article_command(&fixture)
+        .args(["format", "draft"])
+        .output()
+        .expect("format with inbound embed");
+
+    assert_success(&output);
+    assert_eq!(
+        fs::read_to_string(fixture.vault.join("journal.md")).unwrap(),
+        "![[draft#1.1 First]]\n"
     );
 }
 

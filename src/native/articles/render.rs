@@ -6,6 +6,7 @@ use std::path::Path;
 
 use similar::{ChangeTag, TextDiff};
 
+use super::findings::Severity;
 use super::inbound;
 use super::plan::{ArticlePlan, ArticleStatus};
 use crate::native::style::{pad_right, Styler};
@@ -170,7 +171,7 @@ pub(crate) fn list_human(
         "{} {} {}",
         styler.cyan("Articles"),
         styler.separator(),
-        format!("{total} · {}", root.display())
+        format!("{total} · {}", display_root(root))
     );
 
     let rows = plans
@@ -231,7 +232,9 @@ pub(crate) fn list_human(
     println!(
         "{}",
         styler.dim(&format!(
-            "{total} articles · {needs_format} needs formatting"
+            "{} · {needs_format} {} formatting",
+            plural_count(total, "article", "articles"),
+            if needs_format == 1 { "needs" } else { "need" }
         ))
     );
 }
@@ -314,15 +317,24 @@ fn list_state(plan: &ArticlePlan) -> String {
 
 fn print_findings(plan: &ArticlePlan, styler: &Styler) {
     for finding in &plan.findings {
+        let prefix = match finding.severity {
+            Severity::Warning => styler.warning_prefix(),
+            Severity::Info => styler.dim("i"),
+        };
         println!(
             "  {} {}:{} · {} ({})",
-            styler.warning_prefix(),
+            prefix,
             display_path(&plan.path),
             finding.line,
             finding.message,
             finding.hint
         );
     }
+}
+
+fn plural_count(count: usize, singular: &str, plural: &str) -> String {
+    let noun = if count == 1 { singular } else { plural };
+    format!("{count} {noun}")
 }
 
 fn print_inbound_diffs(
@@ -403,6 +415,20 @@ fn display_path(path: &std::path::Path) -> String {
 
 fn display_file_path(path: &std::path::Path) -> String {
     path.to_string_lossy().replace('\\', "/")
+}
+
+fn display_root(root: &Path) -> String {
+    let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from)
+    else {
+        return root.display().to_string();
+    };
+    if root == home {
+        "~".to_owned()
+    } else if let Ok(relative) = root.strip_prefix(&home) {
+        format!("~/{}", relative.display())
+    } else {
+        root.display().to_string()
+    }
 }
 
 fn pad_left(value: &str, width: usize) -> String {

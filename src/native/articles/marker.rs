@@ -252,15 +252,21 @@ fn parse_section_numbers(
 }
 
 fn section_numbers_line(text: &str) -> usize {
-    text.lines()
-        .take_while(|line| line.trim_end() != "---")
-        .enumerate()
-        .find_map(|(index, line)| {
-            line.trim_start()
-                .starts_with("section_numbers:")
-                .then_some(index + 1)
-        })
-        .unwrap_or(1)
+    let mut lines = text.lines().enumerate();
+    if lines
+        .next()
+        .is_some_and(|(_, line)| line.trim_end() == "---")
+    {
+        for (index, line) in lines {
+            if line.trim_end() == "---" {
+                break;
+            }
+            if line.trim_start().starts_with("section_numbers:") {
+                return index + 1;
+            }
+        }
+    }
+    1
 }
 
 fn not_article() -> Refusal {
@@ -302,7 +308,10 @@ fn body_refusals(
             continue;
         }
         let masked = mask_inline_spans(line.content);
-        if contains_task_tag(&masked) {
+        if line.region != super::scan::Region::IndentedCode
+            && is_task_checkbox_line(line.content)
+            && contains_task_tag(&masked)
+        {
             task_lines.push(line.index + 1);
         }
         if contains_block_anchor(&masked) {
@@ -325,6 +334,11 @@ fn body_refusals(
         });
     }
     if !task_lines.is_empty() {
+        let line_word = if task_lines.len() == 1 {
+            "line"
+        } else {
+            "lines"
+        };
         let listed = task_lines
             .iter()
             .map(ToString::to_string)
@@ -333,11 +347,53 @@ fn body_refusals(
         return Some(Refusal {
             code: "holds-tasks".to_string(),
             message: format!(
-                "move them to the parent note (Ctrl+Shift+M); #task on lines {listed}"
+                "move them to the parent note (Ctrl+Shift+M); #task on {line_word} {listed}"
             ),
         });
     }
     None
+}
+
+fn is_task_checkbox_line(line: &str) -> bool {
+    let line = line.trim_start();
+    let marker_end = if line
+        .as_bytes()
+        .first()
+        .is_some_and(|byte| matches!(byte, b'-' | b'*' | b'+'))
+    {
+        line.as_bytes()
+            .get(1)
+            .is_some_and(u8::is_ascii_whitespace)
+            .then_some(2)
+    } else {
+        let digits = line
+            .as_bytes()
+            .iter()
+            .take_while(|byte| byte.is_ascii_digit())
+            .count();
+        (digits > 0
+            && line
+                .as_bytes()
+                .get(digits)
+                .is_some_and(|byte| matches!(byte, b'.' | b')'))
+            && line
+                .as_bytes()
+                .get(digits + 1)
+                .is_some_and(u8::is_ascii_whitespace))
+        .then_some(digits + 2)
+    };
+    let Some(marker_end) = marker_end else {
+        return false;
+    };
+    let body = line[marker_end..].trim_start();
+    let mut chars = body.chars();
+    if chars.next() != Some('[') || chars.next().is_none() {
+        return false;
+    }
+    if chars.next() != Some(']') {
+        return false;
+    }
+    chars.next().is_none_or(char::is_whitespace)
 }
 
 fn contains_block_anchor(text: &str) -> bool {
@@ -370,81 +426,15 @@ fn is_conflict_marker(line: &str) -> bool {
 }
 
 pub(crate) fn mask_inline_spans(line: &str) -> String {
-    let mut out = String::with_capacity(line.len());
-    let chars: Vec<char> = line.chars().collect();
-    let mut i = 0;
-    while i < chars.len() {
-        if chars[i] == '`' {
-            let ticks = chars[i..].iter().take_while(|c| **c == '`').count();
-            if let Some(rel) = chars[i + ticks..]
-                .windows(ticks)
-                .position(|window| window.iter().all(|c| *c == '`'))
-            {
-                let end = i + ticks + rel + ticks;
-                out.extend(std::iter::repeat_n(' ', end - i));
-                i = end;
-                continue;
+    let mask =
+        super::scan::inline_mask(line, super::scan::InlineMaskMode::Marker);
+    line.char_indices()
+        .map(|(byte, character)| {
+            if mask.get(byte).copied().unwrap_or(false) {
+                ' '
+            } else {
+                character
             }
-        }
-        if chars[i] == '$' && !is_escaped(&chars, i) {
-            let ticks = if chars.get(i + 1) == Some(&'$') { 2 } else { 1 };
-            let mut cursor = i + ticks;
-            let mut close_end = None;
-            while cursor < chars.len() {
-                if chars[cursor] == '$' && !is_escaped(&chars, cursor) {
-                    let closing = chars[cursor..]
-                        .iter()
-                        .take_while(|character| **character == '$')
-                        .count();
-                    if (ticks == 1 && closing == 1) || closing >= 2 {
-                        close_end = Some(cursor + ticks);
-                        break;
-                    }
-                    cursor += closing.max(1);
-                } else {
-                    cursor += 1;
-                }
-            }
-            if let Some(end) = close_end {
-                out.extend(std::iter::repeat_n(' ', end - i));
-                i = end;
-                continue;
-            }
-        }
-        if chars[i] == '%'
-            && chars.get(i + 1) == Some(&'%')
-            && let Some(rel) =
-                chars[i + 2..].windows(2).position(|w| w == ['%', '%'])
-        {
-            let end = i + 2 + rel + 2;
-            out.extend(std::iter::repeat_n(' ', end - i));
-            i = end;
-            continue;
-        }
-        if line[byte_index(&chars, i)..].starts_with("<!--")
-            && let Some(rel) = line[byte_index(&chars, i) + 4..].find("-->")
-        {
-            let start_byte = byte_index(&chars, i);
-            let end_byte = start_byte + 4 + rel + 3;
-            let end_char = line[..end_byte].chars().count();
-            out.extend(std::iter::repeat_n(' ', end_char - i));
-            i = end_char;
-            continue;
-        }
-        out.push(chars[i]);
-        i += 1;
-    }
-    out
-}
-
-fn byte_index(chars: &[char], char_index: usize) -> usize {
-    chars[..char_index].iter().map(|c| c.len_utf8()).sum()
-}
-
-fn is_escaped(chars: &[char], index: usize) -> bool {
-    let mut start = index;
-    while start > 0 && chars[start - 1] == '\\' {
-        start -= 1;
-    }
-    (index - start) % 2 == 1
+        })
+        .collect()
 }

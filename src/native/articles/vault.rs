@@ -10,7 +10,7 @@ use super::{format, plan::ArticlePlan, ArticleContext};
 use crate::native::{
     collect_done, is_always_excluded_note_directory_name,
     projects::{frontmatter_is_article, is_markdown_file, parse_frontmatter},
-    vault_links::{target_to_markdown_path, NoteIndex},
+    vault_links::{target_to_markdown_path, LinkResolution, VaultLinkResolver},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,13 +54,19 @@ pub(crate) fn discover_articles(
     let paths = list_markdown(root)?;
     let mut articles = Vec::new();
     for path in paths {
-        let text = fs::read_to_string(root.join(&path)).map_err(|source| {
-            VaultError {
-                path: path.clone(),
-                action: "read",
-                source,
+        let text = match fs::read_to_string(root.join(&path)) {
+            Ok(text) => text,
+            Err(error) if error.kind() == io::ErrorKind::InvalidData => {
+                continue;
             }
-        })?;
+            Err(source) => {
+                return Err(VaultError {
+                    path: path.clone(),
+                    action: "read",
+                    source,
+                });
+            }
+        };
         if text_is_article(&text) {
             articles.push(ArticleFile { path, text });
         }
@@ -78,35 +84,73 @@ pub(crate) fn resolve_note(root: &Path, note: &str) -> Result<PathBuf, String> {
         return Ok(relative);
     }
 
-    let mut paths = Vec::new();
-    walk_markdown(root, root, &mut paths).map_err(|error| error.to_string())?;
-    let index = NoteIndex::from_paths(paths);
-    index.resolve(None, note).ok_or_else(|| {
-        format!("{note:?} does not resolve to one vault Markdown note")
-    })
+    let resolver = VaultLinkResolver::new(root);
+    match resolver.resolve(Path::new(""), note) {
+        LinkResolution::Found(path) => Ok(path),
+        LinkResolution::Ambiguous => {
+            let candidates = resolver
+                .candidates(note)
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>();
+            Err(format!(
+                "{note:?} is ambiguous; candidates: {}",
+                candidates.join(", ")
+            ))
+        }
+        LinkResolution::Missing => {
+            let near = resolver.near_stems(note, 3);
+            let suggestion = if near.is_empty() {
+                String::new()
+            } else {
+                format!("; near matches: {}", near.join(", "))
+            };
+            Err(format!(
+                "{note:?} does not resolve to one vault Markdown note{suggestion}"
+            ))
+        }
+    }
 }
 
 /// Validate every planned source preimage before writing any result, then
 /// install each changed note with the shared atomic writer.
+pub(crate) fn preflight_plans(
+    root: &Path,
+    plans: &mut [ArticlePlan],
+) -> Result<(), String> {
+    for plan in plans {
+        if !matches!(plan.status, super::plan::ArticleStatus::Changed) {
+            continue;
+        }
+        let absolute = root.join(&plan.path);
+        let bytes = match fs::read(&absolute) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                mark_preimage_changed(plan);
+                continue;
+            }
+            Err(error) => {
+                return Err(format!("read {}: {error}", plan.path.display()));
+            }
+        };
+        if sha256_bytes(&bytes) != plan.sha256 {
+            mark_preimage_changed(plan);
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn write_plans(
     root: &Path,
-    plans: &[ArticlePlan],
+    plans: &mut [ArticlePlan],
 ) -> Result<(), String> {
+    preflight_plans(root, plans)?;
     let mut writes = Vec::new();
     for plan in plans {
         if !matches!(plan.status, super::plan::ArticleStatus::Changed) {
             continue;
         }
         let absolute = root.join(&plan.path);
-        let current = fs::read_to_string(&absolute).map_err(|error| {
-            format!("read {}: {error}", plan.path.display())
-        })?;
-        if super::plan::sha256_hex(&current) != plan.sha256 {
-            return Err(format!(
-                "{} changed since the article plan was made; no notes were written",
-                plan.path.display()
-            ));
-        }
         let formatted = plan.formatted.as_ref().ok_or_else(|| {
             format!("{} has no formatted output", plan.path.display())
         })?;
@@ -119,6 +163,26 @@ pub(crate) fn write_plans(
         })?;
     }
     Ok(())
+}
+
+fn mark_preimage_changed(plan: &mut ArticlePlan) {
+    let message = format!(
+        "{} changed since the article plan was made; not written",
+        plan.path.display()
+    );
+    plan.status = super::plan::ArticleStatus::Error;
+    plan.reason = Some(super::plan::Refusal {
+        code: "preimage-changed".to_string(),
+        message: message.clone(),
+    });
+    plan.notice = format!("Article formatting failed · {message}");
+    plan.formatted = None;
+    plan.inbound.clear();
+}
+
+fn sha256_bytes(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    hex::encode(Sha256::digest(bytes))
 }
 
 /// Completion values are extensionless vault-relative paths paired with
@@ -240,10 +304,14 @@ mod tests {
         let changed = "newer source\n";
         fs::write(root.path().join(&path), changed).expect("change source");
 
-        let error = write_plans(root.path(), &[plan])
-            .expect_err("stale source must refuse the write");
-
-        assert!(error.contains("changed since the article plan was made"));
+        let mut plans = vec![plan];
+        write_plans(root.path(), &mut plans)
+            .expect("stale source is reported per note");
+        assert_eq!(plans[0].status, super::super::plan::ArticleStatus::Error);
+        assert_eq!(
+            plans[0].reason.as_ref().map(|reason| reason.code.as_str()),
+            Some("preimage-changed")
+        );
         assert_eq!(
             fs::read_to_string(root.path().join(&path)).unwrap(),
             changed

@@ -271,20 +271,32 @@ fn run_adopt(matches: &ArgMatches) -> i32 {
     });
 
     if !plan_failed && write && !from_stdin {
-        inbound::fold_into_formatted(
-            &mut plans,
-            std::slice::from_ref(&source),
-            &index,
-        );
-        if let Err(message) = vault::write_plans(&bob_dir, &plans) {
+        if let Err(message) = vault::preflight_plans(&bob_dir, &mut plans) {
             if output_format == OutputFormat::Json {
                 render::format_json(plans);
             }
             eprintln!("{COMMAND_NAME}: {message}");
             return 2;
         }
-        for reason in inbound::write_others(&bob_dir, &plans, &index) {
-            eprintln!("{COMMAND_NAME}: {reason}");
+        if plans
+            .iter()
+            .all(|plan| plan.status == ArticleStatus::Changed)
+        {
+            inbound::fold_into_formatted(
+                &mut plans,
+                std::slice::from_ref(&source),
+                &index,
+            );
+            if let Err(message) = vault::write_plans(&bob_dir, &mut plans) {
+                if output_format == OutputFormat::Json {
+                    render::format_json(plans);
+                }
+                eprintln!("{COMMAND_NAME}: {message}");
+                return 2;
+            }
+            for reason in inbound::write_others(&bob_dir, &plans, &index) {
+                eprintln!("{COMMAND_NAME}: {reason}");
+            }
         }
     }
 
@@ -295,6 +307,9 @@ fn run_adopt(matches: &ArgMatches) -> i32 {
         }
     }
 
+    let plan_failed = plans.iter().any(|plan| {
+        matches!(plan.status, ArticleStatus::Skipped | ArticleStatus::Error)
+    });
     if plan_failed {
         2
     } else {
@@ -387,13 +402,16 @@ fn run_format(matches: &ArgMatches) -> i32 {
         Ok(index) => index,
         Err(error) => return print_vault_error(error),
     };
-    let plan_failed = plans.iter().any(|plan| {
-        matches!(plan.status, ArticleStatus::Skipped | ArticleStatus::Error)
-    });
-
-    if !plan_failed && !check && !dry_run && !from_stdin {
+    if !check && !dry_run && !from_stdin {
+        if let Err(message) = vault::preflight_plans(&bob_dir, &mut plans) {
+            if output_format == OutputFormat::Json {
+                render::format_json(plans);
+            }
+            eprintln!("{COMMAND_NAME}: {message}");
+            return 2;
+        }
         inbound::fold_into_formatted(&mut plans, &sources, &index);
-        if let Err(message) = vault::write_plans(&bob_dir, &plans) {
+        if let Err(message) = vault::write_plans(&bob_dir, &mut plans) {
             if output_format == OutputFormat::Json {
                 render::format_json(plans);
             }
@@ -405,6 +423,9 @@ fn run_format(matches: &ArgMatches) -> i32 {
         }
     }
 
+    let plan_failed = plans.iter().any(|plan| {
+        matches!(plan.status, ArticleStatus::Skipped | ArticleStatus::Error)
+    });
     match output_format {
         OutputFormat::Json => render::format_json(plans.clone()),
         OutputFormat::Human => render::format_human(

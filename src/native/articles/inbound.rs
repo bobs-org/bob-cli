@@ -2,7 +2,7 @@
 
 use std::{
     collections::BTreeSet,
-    fs,
+    fs, io,
     path::{Path, PathBuf},
 };
 
@@ -44,7 +44,16 @@ pub(crate) fn attach(
         let absolute = root.join(path);
         let text = match fs::read_to_string(&absolute) {
             Ok(text) => text,
-            Err(_) => continue,
+            Err(error) if error.kind() == io::ErrorKind::InvalidData => {
+                continue;
+            }
+            Err(source) => {
+                return Err(VaultError {
+                    path: path.clone(),
+                    action: "read",
+                    source,
+                });
+            }
         };
         let lowered = text.to_lowercase();
         let matching = stems
@@ -138,6 +147,10 @@ pub(crate) fn write_others(
     let mut skips = Vec::new();
     let mut seen = BTreeSet::new();
     for plan in plans {
+        if matches!(plan.status, ArticleStatus::Skipped | ArticleStatus::Error)
+        {
+            continue;
+        }
         for inbound in &plan.inbound {
             if written.contains(&inbound.path)
                 || !seen.insert(inbound.path.clone())
@@ -469,7 +482,8 @@ mod tests {
         fs::write(root.join("journal.md"), "changed in the meantime\n")
             .expect("race");
 
-        vault::write_plans(&root, &plans).expect("write article");
+        let mut plans = plans;
+        vault::write_plans(&root, &mut plans).expect("write article");
         let skips = write_others(&root, &plans, &index);
 
         assert!(

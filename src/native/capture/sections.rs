@@ -241,14 +241,31 @@ pub(super) fn target_bullet_section(
     };
     // Prefer the first matching non-H1 heading, falling back to the first
     // matching H1 heading only when no non-H1 heading matches.
-    let target = headings
-        .iter()
-        .position(|heading| heading.level != 1 && matches(heading))
-        .or_else(|| {
-            headings
-                .iter()
-                .position(|heading| heading.level == 1 && matches(heading))
-        });
+    let find_preferred = |predicate: &dyn Fn(&MarkdownHeading<'_>) -> bool| {
+        headings
+            .iter()
+            .position(|heading| heading.level != 1 && predicate(heading))
+            .or_else(|| {
+                headings.iter().position(|heading| {
+                    heading.level == 1 && predicate(heading)
+                })
+            })
+    };
+    let target = if article {
+        let raw = |heading: &MarkdownHeading<'_>| {
+            heading.title != "Tasks"
+                && raw_heading_matches(heading.title, section_prefix, exact)
+        };
+        let identity = |heading: &MarkdownHeading<'_>| {
+            heading.title != "Tasks"
+                && section_prefix.is_some_and(|selector| {
+                    article_heading_matches(heading.title, selector, exact)
+                })
+        };
+        find_preferred(&raw).or_else(|| find_preferred(&identity))
+    } else {
+        find_preferred(&matches)
+    };
 
     match target {
         Some(pos) => {
@@ -295,17 +312,28 @@ pub(super) fn heading_matches_bullet_selector(
     exact: bool,
     article: bool,
 ) -> bool {
+    raw_heading_matches(title, section_prefix, exact)
+        || article
+            && section_prefix.is_some_and(|selector| {
+                article_heading_matches(title, selector, exact)
+            })
+}
+
+fn raw_heading_matches(
+    title: &str,
+    section_prefix: Option<&str>,
+    exact: bool,
+) -> bool {
     match section_prefix {
         None => true,
         Some(selector) => {
-            let title_lc = title.to_lowercase();
-            let selector_lc = selector.to_lowercase();
-            let raw = if exact {
-                title_lc == selector_lc
+            let title = title.to_lowercase();
+            let selector = selector.to_lowercase();
+            if exact {
+                title == selector
             } else {
-                title_lc.starts_with(&selector_lc)
-            };
-            raw || (article && article_heading_matches(title, selector, exact))
+                title.starts_with(&selector)
+            }
         }
     }
 }
