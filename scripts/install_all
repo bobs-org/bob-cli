@@ -521,8 +521,8 @@ mac_capture_step() {
   if [[ "$PULL_STATE" == warn ]]; then
     step_warning=$((step_warning + 1))
   fi
-  command_line "just --justfile $(display_path "$mac_capture_dir/justfile") install $(display_path "$HOME/Applications") ${CODESIGN_IDENTITY:--}"
-  if (cd "$mac_capture_dir" && just --justfile "$mac_capture_dir/justfile" install "$HOME/Applications" "${CODESIGN_IDENTITY:--}"); then
+  command_line "just --justfile $(display_path "$mac_capture_dir/justfile") install $(display_path "$HOME/Applications")"
+  if (cd "$mac_capture_dir" && just --justfile "$mac_capture_dir/justfile" install "$HOME/Applications"); then
     status=ok
     detail="$pull_detail · installed $(display_path "$HOME/Applications/Bob Mac Capture.app")"
   else
@@ -535,6 +535,10 @@ mac_capture_step() {
       status=fail
       detail="$pull_detail · install failed (exit $install_status)"
     fi
+  fi
+  if [[ "$status" == ok || "$status" == warn ]] && [[ -z "${CODESIGN_IDENTITY:-}" ]] && mac_capture_is_adhoc "$HOME/Applications/Bob Mac Capture.app"; then
+    step_warning=$((step_warning + 1))
+    detail="$detail · installed ad-hoc · Accessibility grant resets each install · see bob-mac-capture README › Signing"
   fi
   case "$status" in
     ok)
@@ -558,6 +562,13 @@ mac_capture_step() {
       add_summary 'bob-mac-capture' fail "$detail" "$(format_duration "$((SECONDS - step_start))")"
       ;;
   esac
+}
+
+mac_capture_is_adhoc() {
+  local app_path="$1" codesign_output
+  [[ -x /usr/bin/codesign && -d "$app_path" ]] || return 1
+  codesign_output="$(/usr/bin/codesign -dv "$app_path" 2>&1 || true)"
+  [[ "$codesign_output" == *'Signature=adhoc'* ]]
 }
 
 obsidian_step() {

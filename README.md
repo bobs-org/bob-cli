@@ -71,8 +71,12 @@ installs: cargo already replaces the same package from any checkout, and
 Run `just install-all` to pull this checkout with `--ff-only`, install bob-cli,
 then pull and deploy the sibling `../bob-plugins` checkout with
 `bob plugins sync --no-pull --repo`. On macOS it also pulls and installs the
-sibling `../bob-mac-capture` checkout with `just install`, honoring
-`CODESIGN_IDENTITY`. When a sibling it would install is missing and the command
+sibling `../bob-mac-capture` checkout. `just install-all` passes no signing
+identity, so Bob Mac Capture resolves the stable "Bob Mac Capture Local" identity
+from the login keychain when available; an explicit `CODESIGN_IDENTITY` (including
+`-`) still wins. An ad-hoc install is reported as a ⚠ warning because its
+Accessibility grant resets each install; see the bob-mac-capture README › Signing
+for identity setup. When a sibling it would install is missing and the command
 runs in a terminal, it asks `[y/N]` whether to clone it over SSH from
 `git@github.com:bobs-org/<repo>.git` into that sibling path. It asks before the
 bob-cli build starts. bob-plugins is offered only when the Obsidian vault exists,
