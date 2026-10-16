@@ -194,15 +194,22 @@ impl GlyphCoverage {
         Ok(())
     }
 
-    /// Writes a Lua integer-keyed set of glyphs that require the fallback face.
+    /// Writes a Lua integer-keyed set of glyphs that require the fallback face,
+    /// plus per-role body-font overrides.
+    ///
+    /// The integer keys preserve the original contract: every codepoint covered
+    /// by the fallback face but by no body face. The named `serif_uncovered`,
+    /// `sans_uncovered`, and `mono_uncovered` tables list codepoints missing
+    /// from that role but present in another bundled face (body or fallback),
+    /// so the Lua filter can select another body face before Noto. In
+    /// particular `▸` (U+25B8) lives only in JetBrains Mono: the union table
+    /// alone would claim body coverage while serif/sans text still renders
+    /// tofu, so the per-role tables direct serif/sans runs to the mono face.
     pub(crate) fn write_glyph_table(&self, path: &Path) -> io::Result<()> {
         let mut fallback_chars = BTreeSet::new();
+        let mut all_chars = BTreeSet::new();
 
-        for font in self
-            .fonts
-            .iter()
-            .filter(|font| font.role == FontRole::Fallback)
-        {
+        for font in self.fonts.iter() {
             let Some(cmap) = font.face.tables().cmap else {
                 continue;
             };
@@ -216,13 +223,45 @@ impl GlyphCoverage {
                     let Some(ch) = char::from_u32(codepoint) else {
                         return;
                     };
-                    if ch != VARIATION_SELECTOR_16
-                        && font.face.glyph_index(ch).is_some()
-                        && !self.body_covers(ch)
+                    if ch == VARIATION_SELECTOR_16 {
+                        return;
+                    }
+                    if font.face.glyph_index(ch).is_none() {
+                        return;
+                    }
+                    all_chars.insert(ch);
+                    if font.role == FontRole::Fallback && !self.body_covers(ch)
                     {
                         fallback_chars.insert(ch);
                     }
                 });
+            }
+        }
+
+        let mut serif_uncovered = BTreeSet::new();
+        let mut sans_uncovered = BTreeSet::new();
+        let mut mono_uncovered = BTreeSet::new();
+        for ch in &all_chars {
+            if !self.covers(FontRole::Serif, *ch)
+                && (self.covers(FontRole::Sans, *ch)
+                    || self.covers(FontRole::Mono, *ch)
+                    || self.covers(FontRole::Fallback, *ch))
+            {
+                serif_uncovered.insert(*ch);
+            }
+            if !self.covers(FontRole::Sans, *ch)
+                && (self.covers(FontRole::Serif, *ch)
+                    || self.covers(FontRole::Mono, *ch)
+                    || self.covers(FontRole::Fallback, *ch))
+            {
+                sans_uncovered.insert(*ch);
+            }
+            if !self.covers(FontRole::Mono, *ch)
+                && (self.covers(FontRole::Serif, *ch)
+                    || self.covers(FontRole::Sans, *ch)
+                    || self.covers(FontRole::Fallback, *ch))
+            {
+                mono_uncovered.insert(*ch);
             }
         }
 
@@ -231,6 +270,21 @@ impl GlyphCoverage {
         for ch in fallback_chars {
             writeln!(writer, "  [0x{:X}] = true,", u32::from(ch))?;
         }
+        writeln!(writer, "  serif_uncovered = {{")?;
+        for ch in serif_uncovered {
+            writeln!(writer, "    [0x{:X}] = true,", u32::from(ch))?;
+        }
+        writeln!(writer, "  }},")?;
+        writeln!(writer, "  sans_uncovered = {{")?;
+        for ch in sans_uncovered {
+            writeln!(writer, "    [0x{:X}] = true,", u32::from(ch))?;
+        }
+        writeln!(writer, "  }},")?;
+        writeln!(writer, "  mono_uncovered = {{")?;
+        for ch in mono_uncovered {
+            writeln!(writer, "    [0x{:X}] = true,", u32::from(ch))?;
+        }
+        writeln!(writer, "  }},")?;
         writeln!(writer, "}}")
     }
 
@@ -367,6 +421,44 @@ mod tests {
         assert!(
             !source.contains("[0xFE0F] = true,"),
             "presentation selector is stripped before rendering"
+        );
+    }
+
+    #[test]
+    fn triangular_bullet_selects_mono_before_fallback() {
+        let coverage =
+            GlyphCoverage::new().expect("bundled fonts should parse");
+        assert!(
+            coverage.covers(FontRole::Mono, '▸'),
+            "JetBrains Mono must cover U+25B8"
+        );
+        assert!(
+            !coverage.covers(FontRole::Serif, '▸'),
+            "Source Serif must miss U+25B8 for this regression"
+        );
+        assert!(
+            !coverage.covers(FontRole::Sans, '▸'),
+            "Inter must miss U+25B8 for this regression"
+        );
+        assert!(
+            !coverage.covers(FontRole::Fallback, '▸'),
+            "Noto Emoji must miss U+25B8 for this regression"
+        );
+
+        let temp = tempfile::tempdir().expect("temporary directory");
+        let table = temp.path().join("glyphs.lua");
+        coverage
+            .write_glyph_table(Path::new(&table))
+            .expect("glyph table should write");
+        let source =
+            fs::read_to_string(table).expect("glyph table should be UTF-8");
+        assert!(
+            source.contains("serif_uncovered"),
+            "glyph table must carry per-role overrides"
+        );
+        assert!(
+            source.contains("[0x25B8] = true,"),
+            "U+25B8 must appear as a per-role override, not a union hit"
         );
     }
 }

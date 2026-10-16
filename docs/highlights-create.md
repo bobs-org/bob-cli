@@ -158,10 +158,15 @@ package; run that command with the TeX Live installation that provides your
 `xelatex`. A later render failure can also hint at a single missing package.
 
 Bob's headers require `fvextra`, `lineno`, `upquote`, `needspace`, and `pgf`
-(`tikz.sty`). Doctor also checks the packages used by pandoc's LaTeX template,
-including table and image support. Doctor does not check whether the DejaVu
-fonts are installed. If XeLaTeX cannot find DejaVu Serif, DejaVu Sans, or
-DejaVu Sans Mono, install them for the host's font system before retrying.
+(`tikz.sty`). The note snapshot print profile additionally requires
+`titlesec`, `enumitem`, `fancyhdr`, `lastpage`, `refcount`, and `xurl`.
+Doctor also checks the packages used by pandoc's LaTeX template, including
+table and image support. Doctor does not check whether the DejaVu fonts are
+installed. If XeLaTeX cannot find DejaVu Serif, DejaVu Sans, or DejaVu Sans
+Mono, install them for the host's font system before retrying. Note snapshots
+bundle their own fonts (`Source Serif 4`, `Inter`, `JetBrains Mono`, Noto
+Emoji) and write them to the scratch `fonts/` directory, so no system-font
+install is needed for that route.
 
 ### macOS BasicTeX: installing a missing package in user mode
 
@@ -181,15 +186,15 @@ tex_home=$(/Library/TeX/texbin/kpsewhich -var-value=TEXMFHOME)
 if ! test -f "$tex_home/tlpkg/texlive.tlpdb"; then
     /Library/TeX/texbin/tlmgr init-usertree
 fi
-/Library/TeX/texbin/tlmgr --usermode install needspace
-/Library/TeX/texbin/kpsewhich needspace.sty
+/Library/TeX/texbin/tlmgr --usermode install titlesec enumitem fancyhdr lastpage refcount xurl
+/Library/TeX/texbin/kpsewhich titlesec.sty enumitem.sty fancyhdr.sty lastpage.sty refcount.sty xurl.sty
 ```
 
 The default user tree (`~/Library/texmf`) is already on kpsewhich's
 search path. User-tree packages are maintained separately from the system
 installation, so specify `--usermode` on future package operations too.
-Verify with the `latex_packages` doctor row (`ok (24 checked)`) and then
-a real render: a doctor exit of zero alone does not establish render
+Verify with the `latex_packages` doctor row (`ok` with all packages checked)
+and then a real render: a doctor exit of zero alone does not establish render
 readiness, because missing render dependencies are warnings by design,
 and Markdown `--dry-run` returns before pandoc runs.
 
@@ -588,7 +593,10 @@ Renders, downloads, stamped copies, and filter files live in a `0700`
 scratch directory (`TMPDIR` when short, else `/tmp`) until the final atomic
 installs, because `scan` and `bob_xlib_pull` read every file in `xlib/`.
 It is removed on drop, kept with `BOB_HIGHLIGHTS_KEEP_WORKDIR=1` (or the
-legacy `BOB_WEB_CLIP_KEEP_WORKDIR=1`).
+legacy `BOB_WEB_CLIP_KEEP_WORKDIR=1`). The note snapshot renderer keeps the
+same ownership: with the keep flag set, the scratch directory retains
+`projected.md`, `note-profile.tex`, `note.lua`, `fonts/`, `glyphs.lua`, the
+pandoc-generated `note.tex`, `note.log`, and `note.pdf` for debugging.
 
 ## Environment variables
 
@@ -598,6 +606,7 @@ legacy `BOB_WEB_CLIP_KEEP_WORKDIR=1`).
 | `BOB_HIGHLIGHTS_RESOLVE` | Replaces DNS for the fetch address check: comma-separated `host=ip` pairs with `*` as a wildcard (test seam) |
 | `BOB_HIGHLIGHTS_KEEP_WORKDIR` | `1` keeps the scratch directory for debugging |
 | `BOB_PANDOC_COMMAND` | Overrides pandoc for the Markdown route |
+| `BOB_XELATEX_COMMAND` | Overrides xelatex for the note snapshot print profile (test seam, like `BOB_PANDOC_COMMAND`) |
 | `BOB_HIGHLIGHTS_AUDIO_LIBRARY` | sase-listen library for Markdown audio discovery |
 | `BOB_HIGHLIGHTS_LISTEN_COMMAND` | Overrides `highlights.listen_command` for `--listen` |
 

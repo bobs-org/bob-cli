@@ -119,6 +119,31 @@ pub(super) const RENDER_TEX_PACKAGES: &[TexPackage] = &[
         file: "soul.sty",
         tlmgr: "soul",
     },
+    // Note snapshot print profile (`note_snapshot/note.tex`).
+    TexPackage {
+        file: "titlesec.sty",
+        tlmgr: "titlesec",
+    },
+    TexPackage {
+        file: "enumitem.sty",
+        tlmgr: "enumitem",
+    },
+    TexPackage {
+        file: "fancyhdr.sty",
+        tlmgr: "fancyhdr",
+    },
+    TexPackage {
+        file: "lastpage.sty",
+        tlmgr: "lastpage",
+    },
+    TexPackage {
+        file: "refcount.sty",
+        tlmgr: "refcount",
+    },
+    TexPackage {
+        file: "xurl.sty",
+        tlmgr: "xurl",
+    },
 ];
 
 /// Return the declared packages missing from `kpsewhich` stdout.
@@ -254,6 +279,7 @@ fn missing_tex_file(detail: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::super::create::PANDOC_HEADER_INCLUDES;
+    use super::super::note_snapshot::profile::NOTE_HEADER;
     use super::super::return_links::HEADER_INCLUDES;
     use super::*;
 
@@ -264,7 +290,7 @@ mod tests {
     #[test]
     fn header_packages_are_all_declared() {
         let mut names = BTreeSet::new();
-        for header in [PANDOC_HEADER_INCLUDES, HEADER_INCLUDES] {
+        for header in [PANDOC_HEADER_INCLUDES, HEADER_INCLUDES, NOTE_HEADER] {
             names.extend(tex_packages_in(header));
         }
         let declared: BTreeSet<&str> = RENDER_TEX_PACKAGES

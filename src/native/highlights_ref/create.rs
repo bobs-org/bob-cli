@@ -212,10 +212,13 @@ struct CreatePlan {
 /// Pandoc inputs for the Markdown render: the code-break/listen filter, the
 /// return-link filter that runs after it, and the JSON report path the
 /// return-link filter writes for bob.
-struct RenderFilters {
-    code_break: PathBuf,
-    return_links: PathBuf,
-    report: PathBuf,
+///
+/// Shared with the note-snapshot print profile, which reuses the same two
+/// filters plus its own contract filter.
+pub(crate) struct RenderFilters {
+    pub(crate) code_break: PathBuf,
+    pub(crate) return_links: PathBuf,
+    pub(crate) report: PathBuf,
 }
 
 impl CreatePlan {

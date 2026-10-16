@@ -5,6 +5,7 @@
 //! module's serializer is the only producer of projected Markdown.
 
 pub(crate) mod fonts;
+pub(crate) mod profile;
 
 mod serialize;
 mod view;
