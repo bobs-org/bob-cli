@@ -5,7 +5,7 @@ use std::sync::LazyLock;
 use regex::Regex;
 
 use super::findings::Finding;
-use super::plan::{ArticleSection, ChangeCounts, ReplacedToken};
+use super::plan::{ChangeCounts, ReplacedToken};
 use super::scan::{setext_span, ClassifiedLine, Region};
 use crate::native::markdown::{atx_heading, setext_underline};
 
@@ -342,30 +342,4 @@ fn rewrite_heading(level: usize, number: Option<&str>, title: &str) -> String {
         (None, false) => format!("{hashes} {title}"),
         (None, true) => hashes,
     }
-}
-
-pub(crate) fn article_sections(
-    headings: &[PlannedHeading],
-    line_count: usize,
-) -> Vec<ArticleSection> {
-    headings
-        .iter()
-        .enumerate()
-        .map(|(index, heading)| {
-            let end_line = headings
-                .get(index + 1)
-                .map(|next| next.line)
-                .unwrap_or(line_count);
-            ArticleSection {
-                number: heading.number.clone(),
-                written: heading.written.clone(),
-                depth: heading.depth,
-                level: heading.new_level,
-                original_level: heading.original_level,
-                title: heading.title.clone(),
-                line: heading.line + 1,
-                end_line,
-            }
-        })
-        .collect()
 }

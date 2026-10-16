@@ -81,6 +81,7 @@ mod vault_sync;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum NativeCommand {
+    Articles,
     Capture,
     CaptureComplete,
     CaptureParse,
@@ -132,6 +133,7 @@ pub(crate) fn command_for_script(
 
 pub(crate) fn run(command: NativeCommand, args: Vec<OsString>) -> i32 {
     match command {
+        NativeCommand::Articles => articles::run(args),
         NativeCommand::Capture => capture::run(args),
         NativeCommand::CaptureComplete => capture_complete::run(args),
         NativeCommand::CaptureParse => capture_parse::run(args),

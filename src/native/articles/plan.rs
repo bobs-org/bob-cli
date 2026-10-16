@@ -18,6 +18,7 @@ impl<'a> ArticleContext<'a> {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn bypass_marker(path: &'a Path) -> Self {
         Self {
             path,
@@ -64,18 +65,6 @@ pub(crate) struct ReplacedToken {
     pub(crate) line: usize,
     pub(crate) token: String,
     pub(crate) number: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ArticleSection {
-    pub(crate) number: Option<String>,
-    pub(crate) written: Option<String>,
-    pub(crate) depth: usize,
-    pub(crate) level: usize,
-    pub(crate) original_level: usize,
-    pub(crate) title: String,
-    pub(crate) line: usize,
-    pub(crate) end_line: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

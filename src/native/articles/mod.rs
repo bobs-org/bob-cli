@@ -1,17 +1,19 @@
 //! Article notes: bob-owned section numbers and layout.
 //!
-//! Pure core: text in, [`ArticlePlan`] out. The CLI and plugin phases
-//! wire I/O around this engine.
-#![allow(dead_code)] // wired by the cli phase
+//! Pure core: text in, [`ArticlePlan`] out. The CLI wires vault I/O around
+//! this engine, while the plugin phase consumes the JSON contract.
 
+pub(crate) mod cli;
 mod findings;
 mod layout;
 mod links;
 mod marker;
 mod outline;
 mod plan;
+mod render;
 mod scan;
 mod sections;
+mod vault;
 mod verify;
 
 #[cfg(test)]
@@ -23,12 +25,19 @@ use plan::{
 };
 
 pub(crate) use plan::ArticleContext;
-#[allow(unused_imports)] // wired by the cli phase
-pub(crate) use plan::ArticlePlanResponse as JsonArticlePlan;
-#[allow(unused_imports)] // wired by the cli phase
-pub(crate) use sections::{
-    heading_identity, heading_plain_identity, strip_section_number,
-};
+#[cfg(test)]
+pub(crate) use sections::strip_section_number;
+pub(crate) use sections::{heading_identity, heading_plain_identity};
+
+pub(crate) fn run(args: Vec<std::ffi::OsString>) -> i32 {
+    cli::run(args)
+}
+
+pub(crate) fn completion_candidates(
+    bob_dir: &std::path::Path,
+) -> Vec<(String, String)> {
+    vault::completion_candidates(bob_dir)
+}
 
 pub(crate) fn format(text: &str, ctx: &ArticleContext<'_>) -> ArticlePlan {
     let sha256 = sha256_hex(text);
@@ -247,6 +256,7 @@ fn format_notice(changes: &plan::ChangeCounts) -> String {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn format_as_article(text: &str) -> ArticlePlan {
     format(
         text,

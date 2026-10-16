@@ -80,6 +80,10 @@ install-smoke:
     cargo install --path . --locked --root "${root}"
     "${root}/bin/bob" --help >/dev/null
     "${root}/bin/bob" capture --help >/dev/null
+    "${root}/bin/bob" articles --help >/dev/null
+    "${root}/bin/bob" articles format --help >/dev/null
+    "${root}/bin/bob" articles list --help >/dev/null
+    "${root}/bin/bob" articles outline --help >/dev/null
     "${root}/bin/bob" completion --help >/dev/null
     "${root}/bin/bob" completion install --help >/dev/null
     "${root}/bin/bob" completion status --help >/dev/null

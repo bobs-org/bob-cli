@@ -22,6 +22,7 @@ sync files. The [guide index](docs/README.md) points to the detailed contracts.
 - [Daily workflow](#daily-workflow)
 - [Vault layout](#vault-layout)
 - [Commands](#commands)
+- [Article notes](#article-notes)
 - [Capture](#capture)
 - [Query](#query)
 - [Task maintenance](#task-maintenance)
@@ -274,10 +275,18 @@ Bob's workflow commands are:
 
 | Command | Purpose |
 | --- | --- |
+| [`articles`](#article-notes) | Format and inspect article notes with bob-owned section numbers |
 | [`nightly`](#nightly-maintenance) | Run nightly maintenance: vault-sync, task archive, vault-sync |
 | [`query`](#query) | Run Dataview or Tasks queries against the vault |
 | [`ref`](#reference-library-bob-ref) | Find, list, read, rename, and plan references for today; sync Highlights PDFs into them |
 | [`vault-sync`](#vault-sync) | Reconcile the vault through Git (default: run) or show status |
+
+## Article notes
+
+`bob articles` lists, formats, and outlines Markdown notes marked
+`type: "[[article]]"`. It writes section numbers into headings while preserving
+the words. Use `bob articles format --check` in scripts and
+[`docs/articles.md`](docs/articles.md) for the command and JSON contracts.
 
 ### Integrations
 
@@ -1523,6 +1532,7 @@ blocks point at `done/..._done#^block-id`, and the vault Git commit was pushed.
 | Topic | Document |
 | --- | --- |
 | Capture grammar, JSON, and picker protocol | [`docs/capture.md`](docs/capture.md) |
+| Article note formatting, vault reports, and ArticlePlan JSON | [`docs/articles.md`](docs/articles.md) |
 | First capture, vault settings, command effects, and troubleshooting | [`docs/getting-started.md`](docs/getting-started.md) |
 | Dashboard navigation and collection pages | [`docs/dashboard.md`](docs/dashboard.md) |
 | Shell completion: runtime model, protocol 1, lifecycle, and troubleshooting | [`docs/completion.md`](docs/completion.md) |

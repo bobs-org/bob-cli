@@ -40,6 +40,7 @@ pub(crate) fn vault_lines(
         Kind::Level => Some(levels()),
         Kind::Metric => Some(metrics()),
         Kind::VaultNote => Some(vault_notes(context)),
+        Kind::ArticleNote => Some(article_notes(context)),
         Kind::Choices | Kind::Dirs | Kind::Files(_) | Kind::FreeText => None,
     }
 }
@@ -292,4 +293,20 @@ fn vault_notes(context: &Context) -> Vec<String> {
         &context.bob_dir.display().to_string(),
         "*.md",
     )]
+}
+
+/// Article notes complete by their vault-relative stem and expose the
+/// current section count in the candidate description.
+fn article_notes(context: &Context) -> Vec<String> {
+    crate::native::articles::completion_candidates(&context.bob_dir)
+        .iter()
+        .filter_map(|(path, description)| {
+            protocol::candidate_line(
+                OsStr::new(path),
+                description,
+                "articles",
+                false,
+            )
+        })
+        .collect()
 }

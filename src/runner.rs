@@ -385,6 +385,15 @@ const SUBCOMMANDS: &[Subcommand] = &[
         }),
     },
     Subcommand {
+        name: "articles",
+        about: "Format and inspect article notes with bob-owned section numbers",
+        section: Section::Vault,
+        target: Target::Leaf(Leaf {
+            native_command: NativeCommand::Articles,
+            script_command: None,
+        }),
+    },
+    Subcommand {
         name: "nightly",
         about: "Run nightly maintenance: vault-sync, task archive, vault-sync",
         section: Section::Vault,
@@ -1471,6 +1480,7 @@ mod tests {
         );
 
         let expected = [
+            NativeCommand::Articles,
             NativeCommand::Capture,
             NativeCommand::CaptureComplete,
             NativeCommand::CaptureParse,

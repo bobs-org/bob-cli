@@ -47,6 +47,8 @@ pub(crate) enum Kind {
     Metric,
     /// A vault note, completed as a path relative to the vault root.
     VaultNote,
+    /// An article note, completed with its current section count.
+    ArticleNote,
 }
 
 struct Entry {
@@ -59,6 +61,16 @@ struct Entry {
 
 /// Static decisions, most specific entry first per (path, arg).
 const TABLE: &[Entry] = &[
+    Entry {
+        path: &["articles", "format"],
+        arg: "note",
+        kind: Kind::ArticleNote,
+    },
+    Entry {
+        path: &["articles", "outline"],
+        arg: "note",
+        kind: Kind::ArticleNote,
+    },
     // One id, two meanings: a _new_ ID here ...
     Entry {
         path: &["capture-task-id"],

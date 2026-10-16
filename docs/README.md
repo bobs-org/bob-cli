@@ -20,6 +20,7 @@ then creates the notes that `bob ref list` shows. The
 
 | Guide | What it covers |
 | --- | --- |
+| [articles.md](articles.md) | `bob articles` formatting, list, outline, and ArticlePlan JSON |
 | [capture.md](capture.md) | Capture grammar, JSON, and picker commands (`bob capture`, parse, complete, discovery) |
 | [completion.md](completion.md) | Shell completion: the runtime model, protocol 1, and what completes |
 | [dataview.md](dataview.md) | `bob query` Dataview and Tasks |

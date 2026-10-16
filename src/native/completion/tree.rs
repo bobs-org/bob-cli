@@ -19,6 +19,9 @@ impl NativeCommand {
     /// `NativeCommand` cannot compile without a tree entry.
     pub(crate) fn command(self) -> ClapCommand {
         match self {
+            NativeCommand::Articles => {
+                crate::native::articles::cli::build_cli()
+            }
             NativeCommand::Capture => crate::native::capture::cli::build_cli(),
             NativeCommand::CaptureComplete => {
                 crate::native::capture_complete::build_cli()
