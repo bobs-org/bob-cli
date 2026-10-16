@@ -7,6 +7,8 @@
 pub(crate) mod fonts;
 pub(crate) mod profile;
 
+mod classify;
+mod resolve;
 mod serialize;
 mod view;
 
@@ -15,6 +17,27 @@ mod tests;
 
 // These crate-visible exports are the integration seam for later snapshot phases;
 // their production callers are intentionally added by the create-wiring phase.
+#[cfg(test)]
+#[allow(unused_imports)]
+pub(crate) use classify::CountingLoader;
+#[allow(unused_imports)]
+pub(crate) use classify::{
+    classify_note_kind, classify_target, default_parent, sha256_hex,
+    source_identity, vault_member_relative, ClassifiedNote, ClassifyError,
+    DefaultParentDeferred, FilesystemSourceLoader, NoteKind, SnapshotTarget,
+    SourceLoader, SourceStore,
+};
+#[allow(unused_imports)]
+pub(crate) use resolve::{
+    build_fragment_index, classify_error_from_resolve, normalize_heading_key,
+    obsidian_uri, obsidian_uri_with_fragment, parse_attachment_target,
+    parse_link_target, percent_encode, render_uri_template,
+    resolve_uri_template, width_hint_to_percent, AttachmentIndex,
+    AttachmentResolutionError, FragmentIndex, FragmentKind, FragmentLookup,
+    FragmentSpan, LinkFragment, NoteResolveError, ParsedAttachmentTarget,
+    ParsedLinkTarget, ResolvedAttachment, ResolvedNote, VaultNotes,
+    DEFAULT_OBSIDIAN_URI_TEMPLATE, SNAPSHOT_TEXT_WIDTH_PX,
+};
 #[allow(unused_imports)]
 pub(crate) use serialize::serialize_projected_markdown;
 #[allow(unused_imports)]

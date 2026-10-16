@@ -2174,9 +2174,10 @@ fn play_uri(config: &Config, plan: &CreatePlan) -> Result<Option<String>> {
         &super::bob_config::config_path(),
     )
     .map_err(super::config_error)?;
-    let template = resolve_audio_link_template(
+    let template = super::note_snapshot::resolve_uri_template(
         bob_env::var_os(ENV_AUDIO_LINK_TEMPLATE).as_deref(),
         highlights.audio_link_template(),
+        DEFAULT_AUDIO_LINK_TEMPLATE,
     );
     if template.is_empty() || matches!(plan.workflow, TargetWorkflow::External)
     {
@@ -2201,11 +2202,9 @@ fn play_uri(config: &Config, plan: &CreatePlan) -> Result<Option<String>> {
         ))
     })?;
     let path = relative.to_string_lossy().replace('\\', "/");
-    Ok(Some(
-        template
-            .replace("{vault}", &percent_encode(vault))
-            .replace("{path}", &percent_encode(&path)),
-    ))
+    Ok(Some(super::note_snapshot::render_uri_template(
+        &template, vault, &path,
+    )))
 }
 
 fn bound_audio_path(plan: &CreatePlan) -> Option<PathBuf> {
@@ -2291,32 +2290,11 @@ fn plan_audio_copy(
     companion_mod::plan_reused_companion(target_plan, Some(source_md))
 }
 
-fn percent_encode(value: &str) -> String {
-    let mut encoded = String::new();
-    for byte in value.bytes() {
-        if byte.is_ascii_alphanumeric() || b"-._~".contains(&byte) {
-            encoded.push(char::from(byte));
-        } else {
-            use std::fmt::Write as _;
-            let _ = write!(encoded, "%{byte:02X}");
-        }
-    }
-    encoded
-}
-
-fn resolve_audio_link_template(
-    env_template: Option<&OsStr>,
-    configured: Option<&str>,
-) -> String {
-    env_template.map_or_else(
-        || {
-            configured
-                .unwrap_or(DEFAULT_AUDIO_LINK_TEMPLATE)
-                .to_string()
-        },
-        |value| value.to_string_lossy().into_owned(),
-    )
-}
+/// Audio URIs render through the shared snapshot `obsidian://` helpers
+/// (`note_snapshot::render_uri_template` in `play_uri` above), so both
+/// routes encode vault and path components identically; only the template
+/// source differs (audio keeps its env/config/default precedence,
+/// snapshots use the default template).
 
 fn render_temp_pdf(
     pandoc: &OsStr,
@@ -2739,6 +2717,7 @@ mod tests {
 
     #[test]
     fn audio_path_components_are_percent_encoded() {
+        use super::super::note_snapshot::percent_encode;
         assert_eq!(percent_encode("Research Notes"), "Research%20Notes");
         assert_eq!(
             percent_encode("lib/chat/hello+world.mp3"),
@@ -2748,22 +2727,20 @@ mod tests {
 
     #[test]
     fn audio_link_template_precedence_is_env_then_config_then_default() {
+        use super::super::note_snapshot::resolve_uri_template;
+        let resolve = |env: Option<&OsStr>, configured: Option<&str>| {
+            resolve_uri_template(env, configured, DEFAULT_AUDIO_LINK_TEMPLATE)
+        };
         assert_eq!(
-            resolve_audio_link_template(
+            resolve(
                 Some(OsStr::new("custom:{vault}:{path}")),
                 Some("configured"),
             ),
             "custom:{vault}:{path}"
         );
-        assert_eq!(
-            resolve_audio_link_template(None, Some("configured")),
-            "configured"
-        );
-        assert_eq!(
-            resolve_audio_link_template(None, None),
-            DEFAULT_AUDIO_LINK_TEMPLATE
-        );
-        assert_eq!(resolve_audio_link_template(Some(OsStr::new("")), None), "");
+        assert_eq!(resolve(None, Some("configured")), "configured");
+        assert_eq!(resolve(None, None), DEFAULT_AUDIO_LINK_TEMPLATE);
+        assert_eq!(resolve(Some(OsStr::new("")), None), "");
     }
 
     #[test]

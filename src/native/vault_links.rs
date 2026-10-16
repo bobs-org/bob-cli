@@ -54,6 +54,27 @@ impl NoteIndex {
         self.relative_paths.iter().map(PathBuf::as_path)
     }
 
+    /// Sorted vault-relative paths sharing one case-insensitive basename stem.
+    /// Iteration follows the underlying sorted set, so diagnostics built from
+    /// this list are deterministic across runs.
+    pub(crate) fn basename_candidates(&self, stem: &str) -> Vec<PathBuf> {
+        let needle = strip_markdown_suffix(stem).to_lowercase();
+        self.relative_paths
+            .iter()
+            .filter(|path| {
+                markdown_basename(path)
+                    .is_some_and(|base| base.to_lowercase() == needle)
+            })
+            .cloned()
+            .collect()
+    }
+
+    /// Every known case-insensitive basename stem, sorted. Used for
+    /// deterministic near-miss suggestions on unresolved targets.
+    pub(crate) fn known_stems(&self) -> Vec<String> {
+        self.basename_paths.keys().cloned().collect()
+    }
+
     /// This index plus a few extra paths (batch-staged notes), without
     /// rebuilding the whole basename map: the common successor-link
     /// case adds a handful of staged files to a vault-wide index.
@@ -186,6 +207,54 @@ impl VaultLinkResolver {
             .resolve_detailed(Some(current_path), target)
     }
 
+    /// Every vault-relative path that could answer `target`, sorted: the exact
+    /// vault-relative hit when it exists on disk, otherwise every note sharing
+    /// the target's case-insensitive basename stem. Mirrors `resolve` without
+    /// collapsing ambiguity, so diagnostics can list complete candidates.
+    /// Targets containing a path separator never fall back to basenames.
+    pub(crate) fn candidates(&self, target: &str) -> Vec<PathBuf> {
+        let Some(candidate) = target_to_markdown_path(target) else {
+            return Vec::new();
+        };
+        if self.root.join(&candidate).is_file() {
+            return vec![candidate];
+        }
+        if target.contains('/') || target.contains('\\') {
+            return Vec::new();
+        }
+        self.index
+            .get_or_init(|| self.build_index())
+            .basename_candidates(target)
+    }
+
+    /// Up to `limit` known basename stems near `target`, ordered by
+    /// (edit distance, stem) for deterministic missing-target hints.
+    /// Only stems within a small distance qualify; unrelated names are
+    /// omitted rather than suggested.
+    pub(crate) fn near_stems(&self, target: &str, limit: usize) -> Vec<String> {
+        let needle = strip_markdown_suffix(target.trim()).to_lowercase();
+        if needle.is_empty() || limit == 0 {
+            return Vec::new();
+        }
+        let threshold = (needle.chars().count() / 3).max(2);
+        let index = self.index.get_or_init(|| self.build_index());
+        let mut scored = index
+            .known_stems()
+            .into_iter()
+            .map(|stem| {
+                let distance = levenshtein(&needle, &stem);
+                (distance, stem)
+            })
+            .filter(|(distance, _)| *distance <= threshold)
+            .collect::<Vec<_>>();
+        scored.sort();
+        scored
+            .into_iter()
+            .take(limit)
+            .map(|(_, stem)| stem)
+            .collect()
+    }
+
     #[cfg(test)]
     fn index_was_built(&self) -> bool {
         self.index_builds.load(std::sync::atomic::Ordering::Relaxed) > 0
@@ -240,9 +309,37 @@ fn collect_markdown_paths(
 
 pub(crate) fn markdown_basename(path: &Path) -> Option<&str> {
     let name = path.file_name()?.to_str()?;
+    Some(strip_markdown_suffix(name))
+}
+
+fn strip_markdown_suffix(name: &str) -> &str {
     name.strip_suffix(".md")
         .or_else(|| name.strip_suffix(".MD"))
-        .or(Some(name))
+        .unwrap_or(name)
+}
+
+/// Case-sensitive Levenshtein distance over Unicode scalar values, for
+/// near-miss stem suggestions. Callers lowercase both sides first.
+fn levenshtein(first: &str, second: &str) -> usize {
+    let first = first.chars().collect::<Vec<_>>();
+    let second = second.chars().collect::<Vec<_>>();
+    if first.is_empty() {
+        return second.len();
+    }
+    if second.is_empty() {
+        return first.len();
+    }
+    let mut row = (0..=second.len()).collect::<Vec<_>>();
+    for (index, left) in first.iter().enumerate() {
+        let mut previous = index;
+        row[0] = index + 1;
+        for (width, right) in second.iter().enumerate() {
+            let substitution = previous + usize::from(left != right);
+            previous = row[width + 1];
+            row[width + 1] = substitution.min(row[width] + 1).min(previous + 1);
+        }
+    }
+    row[second.len()]
 }
 
 pub(crate) fn target_to_markdown_path(target: &str) -> Option<PathBuf> {
