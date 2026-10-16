@@ -45,23 +45,169 @@ pub(crate) fn skip_reason(
     }
     let types = frontmatter_type_names(&frontmatter);
     if types.iter().any(|name| name != "article") {
-        return Some(Refusal {
-            code: "mixed-type".to_string(),
-            message: format!(
-                "type names [[{}]] as well as [[article]]",
-                types
-                    .iter()
-                    .filter(|name| *name != "article")
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .join("]], [[")
-            ),
-        });
+        return Some(mixed_type_refusal(&types));
     }
     if let Some(refusal) = body_refusals(classified) {
         return Some(refusal);
     }
     None
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum AdoptDecision {
+    AlreadyArticle,
+    Insert,
+    Refuse(Refusal),
+}
+
+/// Whether `bob articles adopt` should insert a type, no-op, or refuse.
+pub(crate) fn adopt_decision(
+    text: &str,
+    path: &Path,
+    classified: &[super::scan::ClassifiedLine<'_>],
+) -> AdoptDecision {
+    if path_is_excluded(path) {
+        return AdoptDecision::Refuse(Refusal {
+            code: "excluded-directory".to_string(),
+            message: format!(
+                "skip {}: path is under an excluded directory",
+                path.display()
+            ),
+        });
+    }
+    let text = strip_bom(text);
+    if frontmatter_unclosed(text) {
+        return AdoptDecision::Refuse(Refusal {
+            code: "frontmatter-unclosed".to_string(),
+            message: "opening --- never closes".to_string(),
+        });
+    }
+    if let Some(frontmatter) = parse_frontmatter(text) {
+        let types = frontmatter_type_names(&frontmatter);
+        if frontmatter_is_article(&frontmatter) {
+            if types.iter().any(|name| name != "article") {
+                return AdoptDecision::Refuse(mixed_type_refusal(&types));
+            }
+            return AdoptDecision::AlreadyArticle;
+        }
+        if !types.is_empty() {
+            return AdoptDecision::Refuse(Refusal {
+                code: "mixed-type".to_string(),
+                message: format!(
+                    "note already has type [[{}]]",
+                    types.join("]], [[")
+                ),
+            });
+        }
+    }
+    if let Some(refusal) = body_refusals(classified) {
+        return AdoptDecision::Refuse(refusal);
+    }
+    AdoptDecision::Insert
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ArticleTypeInsert {
+    pub(crate) text: String,
+    pub(crate) at: usize,
+    pub(crate) count: usize,
+}
+
+const TYPE_LINE: &str = "type: \"[[article]]\"";
+
+/// Insert `type: "[[article]]"` after `parent:`, before the closing
+/// `---` when there is no parent, or as a new frontmatter block.
+pub(crate) fn with_article_type(text: &str) -> ArticleTypeInsert {
+    let (bom, rest) = match text.strip_prefix('\u{feff}') {
+        Some(rest) => (true, rest),
+        None => (false, text),
+    };
+    let mut insert = insert_type_line(rest);
+    if bom {
+        insert.text.insert(0, '\u{feff}');
+    }
+    insert
+}
+
+fn insert_type_line(text: &str) -> ArticleTypeInsert {
+    let physical = super::scan::split_physical_lines(text);
+    let default_ending = physical
+        .iter()
+        .find_map(|(_, ending)| (!ending.is_empty()).then_some(*ending))
+        .unwrap_or("\n");
+    let opens = physical
+        .first()
+        .is_some_and(|(content, _)| content.trim_end() == "---");
+    if !opens {
+        let mut out = String::from("---");
+        out.push_str(default_ending);
+        out.push_str(TYPE_LINE);
+        out.push_str(default_ending);
+        out.push_str("---");
+        out.push_str(default_ending);
+        out.push_str(default_ending);
+        out.push_str(text);
+        return ArticleTypeInsert {
+            text: out,
+            at: 0,
+            count: 4,
+        };
+    }
+
+    let Some(close) = physical.iter().enumerate().skip(1).find_map(
+        |(index, (content, _))| (content.trim_end() == "---").then_some(index),
+    ) else {
+        return ArticleTypeInsert {
+            text: text.to_owned(),
+            at: 0,
+            count: 0,
+        };
+    };
+
+    let parent = physical[1..close].iter().enumerate().find_map(
+        |(offset, (content, _))| {
+            content
+                .trim_start()
+                .starts_with("parent:")
+                .then_some(offset + 1)
+        },
+    );
+    let insert_at = parent.map(|index| index + 1).unwrap_or(close);
+    let insert_ending = physical
+        .get(insert_at.saturating_sub(1))
+        .map(|(_, ending)| *ending)
+        .filter(|ending| !ending.is_empty())
+        .unwrap_or(default_ending);
+
+    let mut out = String::new();
+    for (index, (content, ending)) in physical.iter().enumerate() {
+        if index == insert_at {
+            out.push_str(TYPE_LINE);
+            out.push_str(insert_ending);
+        }
+        out.push_str(content);
+        out.push_str(ending);
+    }
+    ArticleTypeInsert {
+        text: out,
+        at: insert_at,
+        count: 1,
+    }
+}
+
+fn mixed_type_refusal(types: &[String]) -> Refusal {
+    Refusal {
+        code: "mixed-type".to_string(),
+        message: format!(
+            "type names [[{}]] as well as [[article]]",
+            types
+                .iter()
+                .filter(|name| *name != "article")
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("]], [[")
+        ),
+    }
 }
 
 pub(crate) fn parse_options(text: &str) -> ArticleOptions {

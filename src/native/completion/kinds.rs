@@ -62,6 +62,11 @@ struct Entry {
 /// Static decisions, most specific entry first per (path, arg).
 const TABLE: &[Entry] = &[
     Entry {
+        path: &["articles", "adopt"],
+        arg: "note",
+        kind: Kind::VaultNote,
+    },
+    Entry {
         path: &["articles", "format"],
         arg: "note",
         kind: Kind::ArticleNote,

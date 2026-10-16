@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use super::{
-    format, format_as_article, heading_identity, heading_plain_identity,
+    adopt, format, format_as_article, heading_identity, heading_plain_identity,
     strip_section_number, ArticleContext,
 };
 use crate::native::projects::{frontmatter_is_article, parse_frontmatter};
@@ -365,6 +365,89 @@ fn refusals() {
         )
         .as_deref(),
         Some("excluded-directory")
+    );
+}
+
+#[test]
+fn adopt_inserts_type_after_parent_and_formats() {
+    let input = "---\nparent: \"[[sase_blog]]\"\ncreated: 2026-10-15\n---\n\n# Draft\n\n## First\n";
+    let plan = adopt(input, &ArticleContext::new(Path::new("draft.md")));
+    let formatted = plan.formatted.expect("adopt formats");
+    assert!(formatted.contains("parent: \"[[sase_blog]]\""));
+    assert!(formatted.contains("type: \"[[article]]\""));
+    assert!(formatted.contains("# 1. Draft"));
+    assert!(formatted.contains("## 1.1 First"));
+    assert_eq!(plan.status, super::ArticleStatus::Changed);
+    assert!(plan.notice.starts_with("Adopted as an article"));
+    assert!(!plan.edits.is_empty());
+    let type_line = formatted
+        .lines()
+        .position(|line| line.contains("type: \"[[article]]\""))
+        .expect("type line");
+    let parent_line = formatted
+        .lines()
+        .position(|line| line.contains("parent:"))
+        .expect("parent line");
+    assert_eq!(type_line, parent_line + 1);
+}
+
+#[test]
+fn adopt_creates_frontmatter_when_missing_and_inserts_before_close() {
+    let no_frontmatter =
+        adopt("# Title\n", &ArticleContext::new(Path::new("note.md")));
+    let formatted = no_frontmatter.formatted.expect("adopted");
+    assert!(formatted.starts_with("---\ntype: \"[[article]]\"\n---\n"));
+    assert!(formatted.contains("# 1. Title"));
+
+    let no_parent = adopt(
+        "---\ncreated: 2026-10-15\n---\n\n# Title\n",
+        &ArticleContext::new(Path::new("note.md")),
+    );
+    let formatted = no_parent.formatted.expect("adopted");
+    let lines: Vec<&str> = formatted.lines().collect();
+    assert_eq!(lines[0], "---");
+    assert_eq!(lines[1], "created: 2026-10-15");
+    assert_eq!(lines[2], "type: \"[[article]]\"");
+    assert_eq!(lines[3], "---");
+}
+
+#[test]
+fn adopt_already_article_is_noop_and_other_type_is_refused() {
+    let already = adopt(
+        "---\ntype: \"[[article]]\"\n---\n\n# Title\n",
+        &ArticleContext::new(Path::new("note.md")),
+    );
+    assert_eq!(already.status, super::ArticleStatus::Unchanged);
+    assert_eq!(already.notice, "already an article");
+    assert!(already.edits.is_empty());
+
+    let restaurant = adopt(
+        "---\ntype: \"[[restaurant]]\"\n---\n\n# Title\n",
+        &ArticleContext::new(Path::new("note.md")),
+    );
+    assert_eq!(restaurant.status, super::ArticleStatus::Skipped);
+    assert_eq!(
+        restaurant
+            .reason
+            .as_ref()
+            .map(|reason| reason.code.as_str()),
+        Some("mixed-type")
+    );
+    assert_eq!(
+        restaurant
+            .reason
+            .as_ref()
+            .map(|reason| reason.message.as_str()),
+        Some("note already has type [[restaurant]]")
+    );
+
+    let tasks = adopt(
+        "---\nparent: \"[[home]]\"\n---\n\n- [ ] #task move me\n",
+        &ArticleContext::new(Path::new("note.md")),
+    );
+    assert_eq!(
+        tasks.reason.as_ref().map(|reason| reason.code.as_str()),
+        Some("holds-tasks")
     );
 }
 

@@ -283,9 +283,10 @@ Bob's workflow commands are:
 
 ## Article notes
 
-`bob articles` lists, formats, and outlines Markdown notes marked
+`bob articles` lists, formats, outlines, and adopts Markdown notes marked
 `type: "[[article]]"`. It writes section numbers into headings while preserving
-the words. Use `bob articles format --check` in scripts and
+the words. Use `bob articles adopt NOTE` to preview marking a note, `-w` to
+write, `bob articles format --check` in scripts, and
 [`docs/articles.md`](docs/articles.md) for the command and JSON contracts.
 
 ### Integrations

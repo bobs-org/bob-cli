@@ -13,7 +13,7 @@ use clap::{
     ArgMatches, Command as ClapCommand,
 };
 
-use super::{format, render, vault, ArticleContext, ArticleStatus};
+use super::{adopt, format, render, vault, ArticleContext, ArticleStatus};
 use crate::native::{env as bob_env, style::Styler};
 
 const COMMAND_NAME: &str = "bob articles";
@@ -34,6 +34,7 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
     };
 
     match matches.subcommand() {
+        Some(("adopt", sub_matches)) => run_adopt(sub_matches),
         Some(("format", sub_matches)) => run_format(sub_matches),
         Some(("list", sub_matches)) => run_list(sub_matches),
         Some(("outline", sub_matches)) => run_outline(sub_matches),
@@ -56,15 +57,38 @@ pub(crate) fn build_cli() -> ClapCommand {
              runs the read-only `list` command.",
         )
         .after_help(
-            "Examples:\n  bob articles                         List article notes\n  bob articles format blog              Format one article\n  bob articles format -a -c             Check every article without writing\n  bob articles outline blog              Show its numbered section outline\n\nSee docs/articles.md for the rules and JSON contract.",
+            "Examples:\n  bob articles                                List article notes\n  bob articles adopt sase_blog_contents       Preview adopting a note\n  bob articles adopt -w sase_blog_contents    Adopt it\n  bob articles format sase_blog_contents      Format one article\n  bob articles format -a -c                   Exit 1 if any article needs formatting\n  bob articles outline sase_blog_contents     Numbered outline with word counts\n\nSee docs/articles.md for the rules and the JSON contract.",
         )
         .arg(bob_dir_arg())
         .arg(format_arg())
         .args_conflicts_with_subcommands(true)
         .subcommand_required(false)
+        .subcommand(adopt_command())
         .subcommand(format_command())
         .subcommand(list_command())
         .subcommand(outline_command())
+}
+
+fn adopt_command() -> ClapCommand {
+    ClapCommand::new("adopt")
+        .about("Mark a note as an article; preview unless --write")
+        .long_about(
+            "Insert type: \"[[article]]\" and plan the first format. \
+             Previews by default with a diff and the numbers it will \
+             replace. Pass --write to apply the change, or --stdin to \
+             print a JSON plan for a buffer without writing.",
+        )
+        .after_help(
+            "Examples:\n  bob articles adopt blog\n  bob articles adopt -w blog\n  cat blog.md | bob articles adopt -s blog -f json",
+        )
+        .arg(bob_dir_arg())
+        .arg(format_arg())
+        .arg(stdin_arg().conflicts_with("write"))
+        .arg(write_arg())
+        .arg(note_arg_with_help(
+            false,
+            "Vault-relative Markdown path or unique note stem",
+        ))
 }
 
 fn format_command() -> ClapCommand {
@@ -167,16 +191,100 @@ fn stdin_arg() -> Arg {
         .help("Read the named note's text from stdin; print a plan and never write")
 }
 
+fn write_arg() -> Arg {
+    Arg::new("write")
+        .short('w')
+        .long("write")
+        .action(ArgAction::SetTrue)
+        .help("Write the adopted article; preview without this flag")
+}
+
 fn note_arg(multiple: bool) -> Arg {
+    note_arg_with_help(
+        multiple,
+        "Vault-relative article path or unique note stem",
+    )
+}
+
+fn note_arg_with_help(multiple: bool, help: &'static str) -> Arg {
     let arg = Arg::new("note")
         .value_name("NOTE")
         .value_parser(clap::builder::NonEmptyStringValueParser::new())
         .value_hint(clap::ValueHint::Other)
-        .help("Vault-relative article path or unique note stem");
+        .help(help);
     if multiple {
         arg.num_args(1..)
     } else {
         arg.num_args(1).required(true)
+    }
+}
+
+fn run_adopt(matches: &ArgMatches) -> i32 {
+    let bob_dir = bob_dir_from_matches(matches);
+    let write = matches.get_flag("write");
+    let from_stdin = matches.get_flag("stdin");
+    let output_format = output_format(matches);
+    let note = matches
+        .get_one::<String>("note")
+        .expect("adopt requires NOTE");
+
+    if from_stdin && write {
+        return usage_error(
+            adopt_command(),
+            "--stdin never writes and cannot be combined with --write",
+        );
+    }
+
+    let path = match vault::resolve_note(&bob_dir, note) {
+        Ok(path) => path,
+        Err(message) => {
+            eprintln!("{COMMAND_NAME}: {message}");
+            return 2;
+        }
+    };
+    let source = if from_stdin {
+        let mut text = String::new();
+        if let Err(error) = io::stdin().read_to_string(&mut text) {
+            eprintln!("{COMMAND_NAME}: read stdin: {error}");
+            return 2;
+        }
+        text
+    } else {
+        match fs::read_to_string(bob_dir.join(&path)) {
+            Ok(text) => text,
+            Err(error) => {
+                eprintln!("{COMMAND_NAME}: read {}: {error}", path.display());
+                return 2;
+            }
+        }
+    };
+
+    let plans = vec![adopt(&source, &ArticleContext::new(&path))];
+    let plan_failed = plans.iter().any(|plan| {
+        matches!(plan.status, ArticleStatus::Skipped | ArticleStatus::Error)
+    });
+
+    if !plan_failed && write && !from_stdin {
+        if let Err(message) = vault::write_plans(&bob_dir, &plans) {
+            if output_format == OutputFormat::Json {
+                render::format_json(plans);
+            }
+            eprintln!("{COMMAND_NAME}: {message}");
+            return 2;
+        }
+    }
+
+    match output_format {
+        OutputFormat::Json => render::format_json(plans.clone()),
+        OutputFormat::Human => {
+            render::adopt_human(&plans[0], &source, &Styler::detect(), write)
+        }
+    }
+
+    if plan_failed {
+        2
+    } else {
+        0
     }
 }
 

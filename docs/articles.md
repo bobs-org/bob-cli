@@ -12,9 +12,11 @@ A bare `bob articles` runs the read-only list view.
 | Command | Effect |
 | --- | --- |
 | `bob articles` or `bob articles list` | List article paths, section and word counts, TODO stubs, findings, and formatting state. |
-| `bob articles outline NOTE` | Show the article's numbered outline and word counts. |
+| `bob articles adopt NOTE` | Preview inserting `type: "[[article]]"` and the first format. |
+| `bob articles adopt -w NOTE` | Write the adoption. |
 | `bob articles format NOTE...` | Format one or more articles and write by default. |
 | `bob articles format --all` | Format every discovered article in the vault. |
+| `bob articles outline NOTE` | Show the article's numbered outline and word counts. |
 
 `NOTE` accepts a vault-relative `.md` path or a unique note stem. A path is preferred
 when names are ambiguous. `--bob-dir PATH` (`-b`) selects the vault; otherwise bob
@@ -37,6 +39,27 @@ conflict markers, or live under `.git`, `.obsidian`, `_conflicts`, `_generated`,
 `_templates`. A refusal never writes part of a note. `--all` and `--check` can report
 refusals in the plan.
 
+## Adopt
+
+`bob articles adopt NOTE` inserts `type: "[[article]]"` after the `parent:` line, or
+before the closing `---` when there is no parent. A note with no frontmatter gets a
+frontmatter block that holds only `type`. It then plans the first format in the same
+ArticlePlan, with the frontmatter edit included in `edits` and notice
+`Adopted as an article · …`.
+
+Preview is the default: a header, a colored diff, a `Numbers replaced` list
+(`## 3. Reasons` → `1.2`, or `none`), findings, and
+`Preview only · rerun with -w to write`. `--write` (`-w`) applies the change with the
+same SHA-256 preimage check as `format`. `--stdin` (`-s`) reads the named note from
+stdin and never writes; `-f json` prints the plan the plugin preview modal consumes.
+
+A note that is already an article succeeds as a no-op (`already an article`). A note
+with another `type`, with tasks, or with anchors is refused with the same codes as
+format, for example `note already has type [[restaurant]]`.
+
+Adopt options: `--bob-dir PATH` (`-b`), `--format human|json` (`-f`), `--stdin` (`-s`),
+`--write` (`-w`).
+
 Before writing, bob rereads every changed note and checks its SHA-256 preimage against
 the plan. If a source changed, it refuses the write. Each accepted result is installed
 with a temporary file and atomic rename. Human format output is silent when nothing
@@ -44,8 +67,8 @@ changes; warnings appear under changed-note summaries.
 
 ## JSON contract
 
-Every `format -f json` mode prints the complete ArticlePlan v1 response, including on
-formatting refusals. It contains `schema_version`, `notes`, and `summary`. A note
+Every `format -f json` and `adopt -f json` mode prints the complete ArticlePlan v1
+response, including on formatting refusals. It contains `schema_version`, `notes`, and `summary`. A note
 includes its path, status, reason, source SHA-256, line edits, change counts, replaced
 number tokens, bob-owned notice, findings, outline, and inbound rewrites. `formatted`
 is intentionally omitted; clients apply the `edits` or use the in-process result.
@@ -56,4 +79,5 @@ additive: existing fields keep their meaning, and clients must reject unknown sc
 versions.
 
 `format` exits 0 on success, 1 when `--check` finds changes, and 2 for usage errors,
-refusals, or formatting errors. Vault discovery errors exit 1.
+refusals, or formatting errors. `adopt` exits 0 on success (including an already-article
+no-op) and 2 for usage errors or refusals. Vault discovery errors exit 1.

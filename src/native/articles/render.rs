@@ -29,6 +29,70 @@ pub(crate) fn outline_json(plan: &ArticlePlan) {
     );
 }
 
+pub(crate) fn adopt_human(
+    plan: &ArticlePlan,
+    source: &str,
+    styler: &Styler,
+    write: bool,
+) {
+    match plan.status {
+        ArticleStatus::Skipped | ArticleStatus::Error => {
+            let message = plan
+                .reason
+                .as_ref()
+                .map(|reason| reason.message.as_str())
+                .unwrap_or("note could not be adopted");
+            eprintln!("bob articles: {}: {message}", display_path(&plan.path));
+        }
+        ArticleStatus::Unchanged => {
+            println!(
+                "{} {} · {}",
+                styler.green("✓"),
+                display_path(&plan.path),
+                plan.notice
+            );
+        }
+        ArticleStatus::Changed if write => {
+            let detail = plan
+                .notice
+                .strip_prefix("Adopted as an article")
+                .unwrap_or(&plan.notice)
+                .trim_start_matches([' ', '·']);
+            let line = if detail.is_empty() {
+                display_path(&plan.path)
+            } else {
+                format!("{} · {detail}", display_path(&plan.path))
+            };
+            println!("{} {}", styler.green("✓"), line);
+            print_findings(plan, styler);
+        }
+        ArticleStatus::Changed => {
+            println!("{}", styler.cyan(&plan.notice));
+            print_diff(plan, source, styler);
+            println!("{}", styler.cyan("Numbers replaced"));
+            if plan.replaced.is_empty() {
+                println!("  {}", styler.dim("none"));
+            } else {
+                for item in &plan.replaced {
+                    let original = source_line(source, item.line);
+                    println!(
+                        "  {} {} {}",
+                        original,
+                        styler.dim("→"),
+                        item.number
+                    );
+                }
+            }
+            print_findings(plan, styler);
+            println!("{}", styler.dim("Preview only · rerun with -w to write"));
+        }
+    }
+}
+
+fn source_line(source: &str, line: usize) -> &str {
+    source.lines().nth(line.saturating_sub(1)).unwrap_or("")
+}
+
 pub(crate) fn format_human(
     plans: &[ArticlePlan],
     sources: &[String],

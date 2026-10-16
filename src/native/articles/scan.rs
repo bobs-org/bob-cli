@@ -482,7 +482,7 @@ pub(crate) fn classify(text: &str) -> Document<'_> {
     }
 }
 
-fn split_physical_lines(text: &str) -> Vec<(&str, &str)> {
+pub(crate) fn split_physical_lines(text: &str) -> Vec<(&str, &str)> {
     let mut lines = Vec::new();
     let mut rest = text;
     while !rest.is_empty() {

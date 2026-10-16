@@ -39,6 +39,66 @@ pub(crate) fn completion_candidates(
     vault::completion_candidates(bob_dir)
 }
 
+pub(crate) fn adopt(text: &str, ctx: &ArticleContext<'_>) -> ArticlePlan {
+    let sha256 = sha256_hex(text);
+    let input_document = scan::classify(text);
+    match marker::adopt_decision(text, ctx.path, &input_document.lines) {
+        marker::AdoptDecision::Refuse(reason) => {
+            ArticlePlan::skipped(ctx.path, sha256, reason)
+        }
+        marker::AdoptDecision::AlreadyArticle => ArticlePlan {
+            path: ctx.path.to_path_buf(),
+            status: ArticleStatus::Unchanged,
+            reason: None,
+            sha256,
+            formatted: None,
+            edits: Vec::new(),
+            changes: plan::ChangeCounts::default(),
+            replaced: Vec::new(),
+            findings: Vec::new(),
+            notice: "already an article".to_string(),
+            outline: outline::empty_outline(ctx.path, true),
+            inbound: Vec::new(),
+        },
+        marker::AdoptDecision::Insert => {
+            let insert = marker::with_article_type(text);
+            let mut planned = format(&insert.text, ctx);
+            planned.sha256 = sha256;
+            if matches!(
+                planned.status,
+                ArticleStatus::Skipped | ArticleStatus::Error
+            ) {
+                return planned;
+            }
+            let formatted = planned
+                .formatted
+                .clone()
+                .unwrap_or_else(|| insert.text.clone());
+            let original_lines: Vec<&str> = input_document
+                .lines
+                .iter()
+                .map(|line| line.content)
+                .collect();
+            let formatted_document = scan::classify(&formatted);
+            let formatted_lines: Vec<&str> = formatted_document
+                .lines
+                .iter()
+                .map(|line| line.content)
+                .collect();
+            planned.edits = line_edits(&original_lines, &formatted_lines);
+            planned.status = if formatted == text {
+                ArticleStatus::Unchanged
+            } else {
+                ArticleStatus::Changed
+            };
+            planned.formatted = Some(formatted);
+            planned.notice = adopt_notice(&planned.notice);
+            remap_adopt_lines(&mut planned, insert.at, insert.count);
+            planned
+        }
+    }
+}
+
 pub(crate) fn format(text: &str, ctx: &ArticleContext<'_>) -> ArticlePlan {
     let sha256 = sha256_hex(text);
     let input_document = scan::classify(text);
@@ -227,6 +287,51 @@ fn with_line_replacements(
         out.push_str(line.ending);
     }
     out
+}
+
+fn adopt_notice(format_notice: &str) -> String {
+    if let Some(rest) = format_notice.strip_prefix("Article formatted") {
+        let rest = rest.trim_start_matches([' ', '·']).trim();
+        if rest.is_empty() {
+            "Adopted as an article".to_owned()
+        } else {
+            format!("Adopted as an article · {rest}")
+        }
+    } else {
+        format!("Adopted as an article · {format_notice}")
+    }
+}
+
+fn remap_adopt_lines(plan: &mut ArticlePlan, at: usize, count: usize) {
+    if count == 0 {
+        return;
+    }
+    for finding in &mut plan.findings {
+        finding.line = remap_one_based(finding.line, at, count);
+    }
+    for replaced in &mut plan.replaced {
+        replaced.line = remap_one_based(replaced.line, at, count);
+    }
+    plan.outline.preamble.line =
+        remap_one_based(plan.outline.preamble.line, at, count);
+    for section in &mut plan.outline.sections {
+        section.line = remap_one_based(section.line, at, count);
+        section.end_line = remap_zero_based(section.end_line, at, count);
+    }
+}
+
+fn remap_one_based(line: usize, at: usize, count: usize) -> usize {
+    remap_zero_based(line.saturating_sub(1), at, count) + 1
+}
+
+fn remap_zero_based(index: usize, at: usize, count: usize) -> usize {
+    if index < at {
+        index
+    } else if index < at + count {
+        at
+    } else {
+        index - count
+    }
 }
 
 fn format_notice(changes: &plan::ChangeCounts) -> String {

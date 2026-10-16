@@ -283,8 +283,185 @@ fn article_help_exposes_the_cli_contract() {
     assert_success(&output);
     let help = stdout(&output);
     assert!(help.contains("Bare `bob articles`"), "{help}");
+    assert!(help.contains("adopt"), "{help}");
     assert!(help.contains("format"), "{help}");
     assert!(help.contains("outline"), "{help}");
     assert!(help.contains("docs/articles.md"), "{help}");
+    assert_text_order(
+        &help,
+        &["\n  adopt", "\n  format", "\n  list", "\n  outline"],
+    );
     assert_stdout_has_no_ansi(&output);
+}
+
+#[test]
+fn adopt_previews_without_writing_and_reports_replaced_numbers() {
+    let fixture = fixture();
+    let source = "---\nparent: \"[[home]]\"\n---\n\n# Draft\n\n## 3. Reasons\n";
+    write_file(&fixture.vault.join("draft.md"), source);
+
+    let output = article_command(&fixture)
+        .args(["adopt", "draft"])
+        .output()
+        .expect("preview adopt");
+
+    assert_success(&output);
+    let text = stdout(&output);
+    assert!(text.contains("Adopted as an article"), "{text}");
+    assert!(text.contains("Numbers replaced"), "{text}");
+    assert!(text.contains("## 3. Reasons"), "{text}");
+    assert!(text.contains("1.1"), "{text}");
+    assert!(
+        text.contains("Preview only · rerun with -w to write"),
+        "{text}"
+    );
+    assert_eq!(
+        fs::read_to_string(fixture.vault.join("draft.md")).unwrap(),
+        source
+    );
+}
+
+#[test]
+fn adopt_write_inserts_type_and_adopting_twice_is_a_noop() {
+    let fixture = fixture();
+    write_file(
+        &fixture.vault.join("draft.md"),
+        "---\nparent: \"[[home]]\"\n---\n\n# Draft\n\n## First\n",
+    );
+
+    let output = article_command(&fixture)
+        .args(["adopt", "-w", "draft"])
+        .output()
+        .expect("write adopt");
+    assert_success(&output);
+    let written = fs::read_to_string(fixture.vault.join("draft.md")).unwrap();
+    assert!(written.contains("type: \"[[article]]\""));
+    assert!(written.contains("# 1. Draft"));
+    assert!(stdout(&output).contains("draft"), "{}", stdout(&output));
+
+    let again = article_command(&fixture)
+        .args(["adopt", "-w", "draft"])
+        .output()
+        .expect("adopt twice");
+    assert_success(&again);
+    assert!(
+        stdout(&again).contains("already an article"),
+        "{}",
+        stdout(&again)
+    );
+    assert_eq!(
+        fs::read_to_string(fixture.vault.join("draft.md")).unwrap(),
+        written
+    );
+}
+
+#[test]
+fn adopt_stdin_json_returns_plan_without_writing() {
+    let fixture = fixture();
+    let source = "# Title\n";
+    write_file(&fixture.vault.join("plain.md"), source);
+
+    let output = run_with_stdin(
+        &mut article_command(&fixture)
+            .args(["adopt", "-s", "plain", "-f", "json"]),
+        source,
+    );
+
+    assert_success(&output);
+    let value = json(&output);
+    assert_eq!(value["schema_version"], 1);
+    assert_eq!(value["notes"][0]["status"], "changed");
+    assert!(
+        value["notes"][0]["notice"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("Adopted as an article"),
+        "{value}"
+    );
+    assert!(!value["notes"][0]["edits"].as_array().unwrap().is_empty());
+    assert_eq!(
+        fs::read_to_string(fixture.vault.join("plain.md")).unwrap(),
+        source
+    );
+}
+
+#[test]
+fn adopt_refuses_other_types_and_tasks() {
+    let fixture = fixture();
+    write_file(
+        &fixture.vault.join("meal.md"),
+        "---\ntype: \"[[restaurant]]\"\n---\n\n# Dinner\n",
+    );
+    write_file(
+        &fixture.vault.join("todo.md"),
+        "---\nparent: \"[[home]]\"\n---\n\n- [ ] #task pack\n",
+    );
+
+    let restaurant = article_command(&fixture)
+        .args(["adopt", "meal", "-f", "json"])
+        .output()
+        .expect("adopt restaurant");
+    assert_eq!(restaurant.status.code(), Some(2));
+    let value = json(&restaurant);
+    assert_eq!(value["notes"][0]["status"], "skipped");
+    assert_eq!(value["notes"][0]["reason"]["code"], "mixed-type");
+    assert_eq!(
+        value["notes"][0]["reason"]["message"],
+        "note already has type [[restaurant]]"
+    );
+
+    let tasks = article_command(&fixture)
+        .args(["adopt", "todo", "-f", "json"])
+        .output()
+        .expect("adopt tasks");
+    assert_eq!(tasks.status.code(), Some(2));
+    let value = json(&tasks);
+    assert_eq!(value["notes"][0]["reason"]["code"], "holds-tasks");
+}
+
+#[test]
+fn adopt_help_lists_options_alphabetically() {
+    let output = article_command(&fixture())
+        .args(["adopt", "--help"])
+        .output()
+        .expect("adopt help");
+    assert_success(&output);
+    let help = stdout(&output);
+    assert!(
+        help.contains("Insert type:") && help.contains("--write"),
+        "{help}"
+    );
+    assert_text_order(
+        &help,
+        &[
+            "-b, --bob-dir",
+            "-f, --format",
+            "-s, --stdin",
+            "-w, --write",
+        ],
+    );
+    assert_stdout_has_no_ansi(&output);
+}
+
+#[test]
+fn adopt_note_completion_is_a_vault_note() {
+    let fixture = fixture();
+    write_file(&fixture.vault.join("plain.md"), "# Plain\n");
+
+    let output = complete(
+        &fixture.vault,
+        &[
+            "bob",
+            "articles",
+            "adopt",
+            "--bob-dir",
+            fixture.vault.to_str().unwrap(),
+            "",
+        ],
+    );
+
+    assert_success(&output);
+    let text = stdout(&output);
+    assert!(text.contains("!files-in"), "{text}");
+    assert!(text.contains("*.md"), "{text}");
 }
