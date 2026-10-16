@@ -385,11 +385,11 @@ unchanged.
    does that within one interval.
 3. **Consume Pomodoro links after a newly Blocked dependent.** The live
    links of every newly Blocked dependent — including `^prj` and its
-   newly Blocked residents — are removed from today's open Pomodoros
-   with `removeEmptiedEntries`, in the same write when the daily note is
-   the edited note and in a follow-up write otherwise. Counted writers
-   are included. A cleanup failure shows the `Pomodoro links not
-   removed` chip and is never rolled back; reconcile repairs it.
+   newly Blocked residents — are removed from today's open Pomodoros;
+   any entry emptied by that cleanup is deleted in the same write when
+   the daily note is the edited note and in a follow-up write otherwise.
+   Counted writers are included. A cleanup failure shows the `Pomodoro
+   links not removed` chip and is never rolled back; reconcile repairs it.
 4. **If preparation fails**, the dependent is untouched. An unused
    target id is acceptable; a link to an unprepared target is not.
 

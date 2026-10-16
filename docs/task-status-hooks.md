@@ -216,6 +216,19 @@ Dry-run reports the same deterministic removals without changing the vault.
 Live runs write through the normal guarded snapshot, recovery, and retry path.
 A second run after a successful cleanup is a no-op.
 
+### Plugin keymap cleanup
+
+The Bob Navigation Hotkeys, Block ID Prompt, and Task Status Cycler plugins
+apply the same childless-entry rule when a keymap removes Task Links. A gesture
+deletes an entry only when it removes at least one link or line from that
+entry and, after all of the gesture's edits to the note, no direct list-item
+child remains. Plain prose children keep the entry; fenced example bullets do
+not count. The whole entry block is removed, including continuation text, in
+the same editor transaction or vault write as the link removal, so undo also
+restores it. Cleanup of today's open Pomodoros is limited to open entries;
+selected-link deletion and deferred-only completion can also remove an emptied
+closed entry. Placeholders that were already childless are left alone.
+
 The rewritten Pomodoro section is scanned again after duplicate removal,
 canceled/completed-reference structural rewrites, marker repair, and empty
 Pomodoro cleanup. Only references that will actually be written contribute to
