@@ -24,11 +24,11 @@ const PROJECT_TASK_SHAPE: &str =
 const HIDE_TAG: &str = "#hide";
 const PROJECT_TASK_TAG: &str = "#prj";
 const PROJECT_BLOCKED_TAG: &str = "#prj_is_blocked";
-const SUBPROJECTS_MARKER_PREFIX: &str = "🧩 **Sub-projects:**";
+pub(crate) const SUBPROJECTS_MARKER_PREFIX: &str = "🧩 **Sub-projects:**";
 const SUBPROJECTS_SEPARATOR: &str = "•";
-const SUBPROJECT_FUTURE_SCHEDULE_MARKER: &str = "🗓️";
-const SUBPROJECT_DONE_MARKER: &str = "✅";
-const SUBPROJECT_CANCELED_MARKER: &str = "❌";
+pub(crate) const SUBPROJECT_FUTURE_SCHEDULE_MARKER: &str = "🗓️";
+pub(crate) const SUBPROJECT_DONE_MARKER: &str = "✅";
+pub(crate) const SUBPROJECT_CANCELED_MARKER: &str = "❌";
 
 pub(crate) fn run(args: Vec<OsString>) -> i32 {
     let mut command = build_cli();
@@ -203,14 +203,21 @@ use scan::*;
 use sync::*;
 use tags::*;
 
-pub(crate) use model::{Frontmatter, ProjectStatus};
+pub(crate) use model::{
+    Frontmatter, ProjectStatus, SubprojectDisplay, SubprojectState,
+    WikilinkRef, WikilinkSpan,
+};
 pub(crate) use scan::{
     frontmatter_is_area, frontmatter_is_article, frontmatter_is_project,
     frontmatter_type_names, frontmatter_value, is_markdown_file,
-    parse_frontmatter, project_name_aliases, trim_yaml_scalar,
-    walk_typed_notes, wikilink_path_target,
+    list_item_content, parse_frontmatter, project_name_aliases,
+    trim_yaml_scalar, walk_typed_notes, wikilink_path_target,
+    wikilink_spans_in_line,
 };
 pub(crate) use surface::{
     project_surface, project_surface_with_closed_child, ProjectSurface,
+};
+pub(crate) use sync::{
+    display_for_wikilink, subproject_displays_in_marker_line,
 };
 pub(crate) use tags::contains_task_tag;

@@ -49,6 +49,7 @@ fn task(
         chips: Vec::new(),
         anchor: task_anchor,
         children: Vec::new(),
+        source: None,
     })
 }
 
@@ -92,6 +93,7 @@ pub(super) fn contract_view() -> SnapshotView {
         ],
         anchor: None,
         children: Vec::new(),
+        source: None,
     };
     let next_task = SnapshotTask {
         status: SnapshotTaskStatus::Next,
@@ -112,6 +114,7 @@ pub(super) fn contract_view() -> SnapshotView {
                 )),
             }],
         anchor: Some(next.clone()),
+        source: None,
         children: vec![Block::List {
             kind: ListKind::Unordered,
             items: vec![ListItem {
@@ -121,8 +124,10 @@ pub(super) fn contract_view() -> SnapshotView {
                     items: vec![ListItem {
                         content: vec![text("Second level")],
                         children: Vec::new(),
+                        source: None,
                     }],
                 }],
+                source: None,
             }],
         }],
     };
@@ -131,6 +136,7 @@ pub(super) fn contract_view() -> SnapshotView {
         content: vec![text("Blocked task")],
         chips: Vec::new(),
         anchor: Some(blocked.clone()),
+        source: None,
         children: vec![
             Block::LabeledRow {
                 label: vec![text("Waits on")],
@@ -153,6 +159,7 @@ pub(super) fn contract_view() -> SnapshotView {
                 kind: ListKind::Unordered,
                 items: vec![ListItem {
                     content: vec![text("A nested ordinary list under a task:")],
+                    source: None,
                     children: vec![
                         Block::List {
                             kind: ListKind::Unordered,
@@ -168,6 +175,7 @@ pub(super) fn contract_view() -> SnapshotView {
                                         },
                                     ],
                                     children: Vec::new(),
+                                    source: None,
                                 },
                                 ListItem {
                                     content: vec![
@@ -177,6 +185,7 @@ pub(super) fn contract_view() -> SnapshotView {
                                         Inline::Emphasis(vec![text("emphasis")]),
                                     ],
                                     children: Vec::new(),
+                                    source: None,
                                 },
                             ],
                         },
@@ -186,10 +195,12 @@ pub(super) fn contract_view() -> SnapshotView {
                                 ListItem {
                                     content: vec![text("check the flood lamps")],
                                     children: Vec::new(),
+                                    source: None,
                                 },
                                 ListItem {
                                     content: vec![text("log the gull nests")],
                                     children: Vec::new(),
+                                    source: None,
                                 },
                             ],
                         },
@@ -272,6 +283,7 @@ pub(super) fn contract_view() -> SnapshotView {
             chips: Vec::new(),
             anchor: None,
             children: Vec::new(),
+            source: None,
         }),
         Block::Task(blocked_task),
         Block::Task(SnapshotTask {
@@ -280,6 +292,7 @@ pub(super) fn contract_view() -> SnapshotView {
             chips: Vec::new(),
             anchor: None,
             children: Vec::new(),
+            source: None,
         }),
         Block::Task(SnapshotTask {
             status: SnapshotTaskStatus::Canceled,
@@ -287,6 +300,7 @@ pub(super) fn contract_view() -> SnapshotView {
             chips: Vec::new(),
             anchor: None,
             children: Vec::new(),
+            source: None,
         }),
         Block::LogRow {
             label: vec![text("Worked")],

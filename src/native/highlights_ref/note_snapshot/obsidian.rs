@@ -54,7 +54,7 @@ use super::view::{
     ParsedTaskLine, SnapshotAnchor, SnapshotAsset, SnapshotHeading,
     SnapshotTask, SnapshotTaskStatus, SnapshotWarning, SnapshotWarningKind,
     SourceExtent, SourceFrontmatter, SourceIdentity, SourceIndentation,
-    SourceLocation,
+    SourceLocation, TaskSource,
 };
 use crate::native::collect_done::trailing_block_id_in_line;
 use crate::native::markdown::{
@@ -1089,6 +1089,11 @@ impl<'a, L: SourceLoader> Projector<'a, L> {
             block_id,
         });
         let (children, next) = self.parse_nested(lines, index + 1, width);
+        let task_source = TaskSource {
+            source: self.host.clone(),
+            line: line.line_no,
+            raw_line: line.raw.clone(),
+        };
         (
             Block::Task(SnapshotTask {
                 status,
@@ -1096,6 +1101,7 @@ impl<'a, L: SourceLoader> Projector<'a, L> {
                 chips: Vec::new(),
                 anchor,
                 children,
+                source: Some(task_source),
             }),
             next,
         )
@@ -1188,7 +1194,15 @@ impl<'a, L: SourceLoader> Projector<'a, L> {
             }
             let width = line.indent_width();
             let (children, next) = self.parse_nested(lines, cursor + 1, width);
-            items.push(ListItem { content, children });
+            items.push(ListItem {
+                content,
+                children,
+                source: Some(TaskSource {
+                    source: self.host.clone(),
+                    line: line.line_no,
+                    raw_line: line.raw.clone(),
+                }),
+            });
             cursor = next;
         }
         let kind = if ordered {

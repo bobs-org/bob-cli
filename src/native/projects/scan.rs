@@ -794,7 +794,7 @@ pub(super) fn wikilink_refs_in_line(line: &str) -> Vec<WikilinkRef> {
         .collect()
 }
 
-pub(super) fn wikilink_spans_in_line(line: &str) -> Vec<WikilinkSpan> {
+pub(crate) fn wikilink_spans_in_line(line: &str) -> Vec<WikilinkSpan> {
     let mut spans = Vec::new();
     let mut offset = 0;
     while let Some(open_relative) = line[offset..].find("[[") {
@@ -865,7 +865,7 @@ pub(super) fn leading_whitespace(line: &str) -> &str {
     &line[..end]
 }
 
-pub(super) fn list_item_content(line: &str) -> Option<&str> {
+pub(crate) fn list_item_content(line: &str) -> Option<&str> {
     let trimmed = line.trim_start();
     let bullet = trimmed.chars().next()?;
     if !matches!(bullet, '-' | '*' | '+') {

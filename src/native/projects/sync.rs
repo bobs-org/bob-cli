@@ -808,7 +808,7 @@ pub(super) fn desired_subproject_entries(
     open_entries
 }
 
-pub(super) fn subproject_displays_in_marker_line(
+pub(crate) fn subproject_displays_in_marker_line(
     line: &str,
 ) -> HashMap<String, SubprojectDisplay> {
     let mut displays = HashMap::new();
@@ -820,7 +820,7 @@ pub(super) fn subproject_displays_in_marker_line(
     displays
 }
 
-pub(super) fn display_for_wikilink(
+pub(crate) fn display_for_wikilink(
     line: &str,
     link_start: usize,
     link_end: usize,

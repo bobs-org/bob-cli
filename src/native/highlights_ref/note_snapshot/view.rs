@@ -228,10 +228,24 @@ pub(crate) enum ListKind {
     Ordered { start: u64 },
 }
 
+/// Source-local attribution for one task or list row. The Bob layer reads
+/// `raw_line` with the shared parsers (never rendered text), so rows without
+/// block IDs, with identical text, or inside repeated transclusions keep
+/// their actual source. Each transclusion occurrence carries its own copy.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct TaskSource {
+    pub source: SourceIdentity,
+    /// One-based source line number.
+    pub line: usize,
+    /// The full original source line, indentation and marker included.
+    pub raw_line: String,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ListItem {
     pub content: Vec<Inline>,
     pub children: Vec<Block>,
+    pub source: Option<TaskSource>,
 }
 
 /// Body blocks supported by the shared projection contract.
@@ -291,6 +305,10 @@ pub(crate) struct SnapshotTask {
     pub chips: Vec<Chip>,
     pub anchor: Option<SnapshotAnchor>,
     pub children: Vec<Block>,
+    /// Source-local attribution for Bob-layer field/relationship parsing.
+    /// `None` only for tasks built synthetically in tests or by callers
+    /// that bypass the Obsidian projector.
+    pub source: Option<TaskSource>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

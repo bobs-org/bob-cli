@@ -10,7 +10,10 @@ use std::{
 };
 
 use super::{
-    classify::{source_identity, ClassifiedNote, SourceLoader, SourceStore},
+    bob::{apply_bob_task_rows, BobTaskContext},
+    classify::{
+        source_identity, ClassifiedNote, NoteKind, SourceLoader, SourceStore,
+    },
     obsidian::{
         project_obsidian_syntax, project_obsidian_syntax_selection,
         PendingEmbed, SyntaxProjection, TitleCandidate,
@@ -38,6 +41,10 @@ const MAX_TRANSCLUSION_LINES: usize = 1_500;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct SnapshotProjectionOptions {
     pub masthead: SnapshotMasthead,
+    /// Caller-selected snapshot day for Bob date chips. Callers compute it
+    /// with the existing `env::current_datetime()`/`BOB_NOW` path; tests
+    /// pass explicit dates.
+    pub snapshot_date: chrono::NaiveDate,
 }
 
 /// The structured view plus lossless root-source data needed by the later Bob layer.
@@ -103,11 +110,24 @@ pub(crate) fn project_snapshot<L: SourceLoader>(
         true,
     );
 
-    let (sections, synthetic_anchor) = sectionize_root(
-        &note.identity,
-        blocks,
-        &expander.used_anchor_ids,
-    );
+    let (mut sections, synthetic_anchor) =
+        sectionize_root(&note.identity, blocks, &expander.used_anchor_ids);
+    // Bob content policy follows the root's area/project kind, including
+    // terminal projects; ordinary notes keep the plain Obsidian projection.
+    // The host policy covers transcluded tasks while each occurrence keeps
+    // its actual source identity. Chips and relationship rows reuse the
+    // existing anchors, so the visible set below needs no extra pass.
+    if matches!(
+        note.kind,
+        NoteKind::Area | NoteKind::Project | NoteKind::TerminalProject
+    ) {
+        let context = BobTaskContext {
+            snapshot_date: options.snapshot_date,
+        };
+        for section in &mut sections {
+            apply_bob_task_rows(&mut section.blocks, &context);
+        }
+    }
     if let Some(anchor) = synthetic_anchor {
         expander.used_anchor_ids.insert(anchor.id);
     }
@@ -1401,6 +1421,10 @@ mod tests {
         }
     }
 
+    fn test_snapshot_date() -> chrono::NaiveDate {
+        chrono::NaiveDate::from_ymd_opt(2026, 10, 16).expect("test date")
+    }
+
     fn masthead() -> SnapshotMasthead {
         SnapshotMasthead {
             title: "Synthetic snapshot".to_string(),
@@ -1447,6 +1471,7 @@ mod tests {
             &settings(),
             SnapshotProjectionOptions {
                 masthead: masthead(),
+                snapshot_date: test_snapshot_date(),
             },
         )
         .expect("project snapshot")
@@ -2167,6 +2192,7 @@ mod tests {
             &settings(),
             SnapshotProjectionOptions {
                 masthead: masthead(),
+                snapshot_date: test_snapshot_date(),
             },
         )
         .expect("project cached bytes");
@@ -2215,6 +2241,7 @@ mod tests {
             &settings(),
             SnapshotProjectionOptions {
                 masthead: masthead(),
+                snapshot_date: test_snapshot_date(),
             },
         )
         .expect("project synthetic vault");

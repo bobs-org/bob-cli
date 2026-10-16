@@ -319,20 +319,20 @@ pub(super) struct PrjSubBlockLine {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct WikilinkRef {
-    pub(super) link_name: String,
-    pub(super) stem: String,
+pub(crate) struct WikilinkRef {
+    pub(crate) link_name: String,
+    pub(crate) stem: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct WikilinkSpan {
-    pub(super) link: WikilinkRef,
-    pub(super) start: usize,
-    pub(super) end: usize,
+pub(crate) struct WikilinkSpan {
+    pub(crate) link: WikilinkRef,
+    pub(crate) start: usize,
+    pub(crate) end: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum SubprojectState {
+pub(crate) enum SubprojectState {
     Open,
     Done,
     Canceled,
@@ -401,9 +401,9 @@ pub(super) struct SubprojectEntry {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct SubprojectDisplay {
-    pub(super) state: SubprojectState,
-    pub(super) future_scheduled: bool,
+pub(crate) struct SubprojectDisplay {
+    pub(crate) state: SubprojectState,
+    pub(crate) future_scheduled: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

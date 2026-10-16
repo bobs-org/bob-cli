@@ -8,6 +8,7 @@
 pub(crate) mod fonts;
 pub(crate) mod profile;
 
+mod bob;
 mod classify;
 mod obsidian;
 mod resolve;
@@ -20,6 +21,8 @@ pub(crate) mod tests;
 
 // These crate-visible exports are the integration seam for later snapshot phases;
 // their production callers are intentionally added by the create-wiring phase.
+#[allow(unused_imports)]
+pub(crate) use bob::{apply_bob_task_rows, BobTaskContext};
 #[cfg(test)]
 #[allow(unused_imports)]
 pub(crate) use classify::CountingLoader;
@@ -60,5 +63,5 @@ pub(crate) use view::{
     SnapshotHeading, SnapshotLinkCounts, SnapshotMasthead, SnapshotSection,
     SnapshotSummary, SnapshotTask, SnapshotTaskStatus, SnapshotView,
     SnapshotWarning, SnapshotWarningKind, SourceExtent, SourceFrontmatter,
-    SourceIdentity, SourceIndentation, SourceLocation, StatusCount,
+    SourceIdentity, SourceIndentation, SourceLocation, StatusCount, TaskSource,
 };
