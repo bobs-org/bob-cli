@@ -51,6 +51,91 @@ pub(super) fn canonicalize_parent(
     Ok(())
 }
 
+/// Normalize optional source-note provenance like `parent`, while keeping
+/// diagnostics tied to the field that supplied an invalid value.
+pub(super) fn canonicalize_source_note(
+    projection: &mut Projection,
+    source: &str,
+) -> Result<()> {
+    let Some(value) = projection.get_mut(FIELD_SOURCE_NOTE) else {
+        return Ok(());
+    };
+    let scalar = match value {
+        MarkerValue::String(value) | MarkerValue::Number(value) => {
+            value.clone()
+        }
+        MarkerValue::Bool(value) => value.to_string(),
+        MarkerValue::Null => {
+            return Err(CommandError::new(format!(
+                "{source} {FIELD_SOURCE_NOTE} must be a scalar note target; null is not supported"
+            )));
+        }
+        MarkerValue::List(_) => {
+            return Err(CommandError::new(format!(
+                "{source} {FIELD_SOURCE_NOTE} must be a scalar note target; inline lists are not supported"
+            )));
+        }
+    };
+    let target = scalar.trim();
+    if target.is_empty() {
+        return Err(CommandError::new(format!(
+            "{source} has an empty optional marker field: {FIELD_SOURCE_NOTE}"
+        )));
+    }
+    let (canonical, route) = if target.starts_with("[[")
+        && target.ends_with("]]")
+    {
+        let inner = &target[2..target.len() - 2];
+        if inner.trim().is_empty()
+            || inner.trim() != inner
+            || inner.contains('|')
+            || inner.contains('#')
+            || inner.contains("[[")
+            || inner.contains("]]")
+        {
+            return Err(CommandError::new(format!(
+                "{source} {FIELD_SOURCE_NOTE} must be a bare note target or a simple wikilink"
+            )));
+        }
+        (target.to_string(), inner)
+    } else {
+        if target.starts_with(['!', '"', '\''])
+            || target.contains("[[")
+            || target.contains("]]")
+            || target.contains('|')
+            || target.contains('#')
+            || target.starts_with('[')
+            || target.ends_with(']')
+        {
+            return Err(CommandError::new(format!(
+                "{source} {FIELD_SOURCE_NOTE} must be a bare note target or a simple wikilink"
+            )));
+        }
+        (format!("[[{target}]]"), target)
+    };
+    if route.to_ascii_lowercase().ends_with(".md") {
+        return Err(CommandError::new(format!(
+            "{source} {FIELD_SOURCE_NOTE} must omit the .md suffix"
+        )));
+    }
+    *value = MarkerValue::String(canonical);
+    Ok(())
+}
+
+pub(super) fn source_note_target(value: &str, source: &str) -> Result<String> {
+    let Some(target) = simple_wikilink_target(value) else {
+        return Err(CommandError::new(format!(
+            "{source} {FIELD_SOURCE_NOTE} must be a simple canonical wikilink"
+        )));
+    };
+    if target.is_empty() || target.contains('#') {
+        return Err(CommandError::new(format!(
+            "{source} {FIELD_SOURCE_NOTE} must be a simple canonical wikilink"
+        )));
+    }
+    Ok(target.to_string())
+}
+
 pub(super) fn canonical_parent_target(
     value: &str,
     source: &str,

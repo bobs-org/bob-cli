@@ -1,11 +1,12 @@
-# `bob ref create` — Markdown, PDF, and URL targets
+# `bob ref create` — vault notes, Markdown, PDF, and URL targets
 
-`bob ref create <TARGET>` turns Markdown, a local PDF, a PDF URL,
+`bob ref create <TARGET>` turns a vault note, Markdown, a local PDF, a PDF URL,
 an arXiv paper URL, or a web article URL into a Highlights-ready PDF in
 the intake (`xlib/<ref-type>/<stem>.pdf` by default), which
 `bob ref scan` later moves into `lib/` and turns into a `ref/`
-note. A PDF is stamped as-is, never re-rendered. Web article URLs run
-through the web-article engine with `create`'s options.
+note. Vault notes become projected reading snapshots; other Markdown uses
+pandoc, a PDF is stamped as-is, and web article URLs run through the
+web-article engine.
 
 ```bash
 bob ref create [OPTIONS] <TARGET>
@@ -43,9 +44,56 @@ bob ref create https://example.com/2024/01/tokio-internals-part-1 \
 bob ref create URL1 URL2 URL3 -N spotify_bg_agents -P sase
 ```
 
-`-P/--parent` is required: the area or project note that owns the
-reading task (see [`highlights-ref-sync.md`](highlights-ref-sync.md) for
-resolution). A missing `-P` fails before any work with a hint naming
+## Vault note targets
+
+A target may be an exact vault-relative route, a unique case-insensitive note
+basename, a simple `[[route|alias]]` wikilink, or an existing in-vault Markdown
+path. Existing filesystem paths keep precedence. Dot-directories, `_conflicts/`,
+`xlib/`, `lib/`, `lit_review/`, and shared excluded note directories are not
+snapshot notes. An excluded Markdown path keeps the regular Markdown route.
+
+For a vault note, the default parent is the note itself if it is an eligible
+root area or non-terminal project. Otherwise create follows its `parent:` links
+for up to eight hops and chooses the nearest eligible area or project. If that
+walk finds none, pass `-P/--parent`. Other target types still require `-P`.
+Explicit parents use the existing `bob capture-targets` eligibility and
+resolution rules (see [`highlights-ref-sync.md`](highlights-ref-sync.md)).
+
+The default filename is `<note-stem>_<YYMMDD>.pdf`; `BOB_NOW` controls the date
+in tests. `-N/--name` overrides the dated stem, while `-o/--output` chooses the
+complete PDF path. The identity title comes from `-T`, frontmatter `title`, the
+first H1 outside fences and comments, then a humanized filename stem. The
+selected H1 is removed from the projected body only when it supplied the title.
+Without `-T`, the snapshot date is appended to the identity title. `-T` is the
+exact identity title.
+
+By default, closed tasks are summarized as omitted and managed schedule/work
+logs are condensed. `-C/--closed` restores closed tasks in an appendix and full
+logs. `-M/--plain` uses the existing plain Markdown renderer, while keeping the
+vault-note parent, naming, title, and `source_note` provenance. `-C` and `-M`
+only accept one vault-note target and conflict with each other.
+
+Dry runs show the selected title, parent, destination, projection summary, and
+warnings without running pandoc, xelatex, or listen; they end with `writes:
+none`. Set `BOB_HIGHLIGHTS_KEEP_WORKDIR=1` to retain projected Markdown, TeX,
+logs, fonts, and staged assets for debugging. `-L/--listen` passes the rendered
+`projected.md` as `{target}` and the snapshot PDF as `{pdf}`. In `-M` mode,
+`{target}` is the original Markdown.
+
+```bash
+bob ref create harbor_cranes
+bob ref create '[[harbor_cranes]]' -d
+bob ref create zk/some_idea -N idea_261016
+bob ref create harbor_cranes -C
+bob ref create harbor_cranes -M
+bob ref create harbor_cranes -L
+```
+
+## Other single targets
+
+Markdown outside the vault, local PDFs, and URLs continue to require
+`-P/--parent`: the area or project note that owns the reading task. A missing
+`-P` fails before rendering, fetching, or writing with a hint naming
 `bob capture-targets`.
 See [web article capture](highlights-clip.md) for reader-mode capture, headed
 retries, the `--html` escape hatch, and environment variables. `bob ref clip`

@@ -262,6 +262,38 @@ pub(crate) fn resolve_parent(
     })
 }
 
+/// Resolve a note as a parent when create-wiring already has its contents in
+/// the snapshot source cache. Capture parents are root-level area notes and
+/// non-terminal project notes; keeping this predicate here makes inferred
+/// parents follow the same eligibility rule as explicit `-P` resolution.
+pub(crate) fn resolve_cached_note_parent(
+    route: &str,
+    contents: &str,
+) -> Option<ResolvedParent> {
+    if route.contains('/') || route.is_empty() {
+        return None;
+    }
+    let frontmatter = parse_frontmatter(contents)?;
+    let kind = if frontmatter_is_area(&frontmatter) {
+        CaptureTargetKind::Area
+    } else if frontmatter_is_project(&frontmatter) {
+        if ProjectStatus::parse(frontmatter_value(&frontmatter, "status"))
+            .is_terminal()
+        {
+            return None;
+        }
+        CaptureTargetKind::Project
+    } else {
+        return None;
+    };
+    Some(ResolvedParent {
+        route: route.to_string(),
+        kind,
+        label: format!("{route}.md"),
+        matched: ParentMatchKind::Stem,
+    })
+}
+
 /// Strip whitespace, one `.md` suffix, and one `[[…]]` wrapper (with any
 /// `|alias` or `#heading` suffix) from a `-P` input.
 pub(crate) fn normalize_parent_input(input: &str) -> String {

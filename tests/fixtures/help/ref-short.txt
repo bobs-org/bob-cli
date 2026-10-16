@@ -13,7 +13,8 @@ Library:
                  Next)
 
 Highlights pipeline:
-  create  Create a Highlights-ready PDF from Markdown, a PDF, or a URL
+  create  Create a Highlights-ready PDF from a vault note, Markdown, a PDF, or a
+          URL
   doctor  Check library health and Highlights sync prerequisites
   jobs    Queue and clip reading-queue links in the background
   marker  Inspect the marker note for one PDF

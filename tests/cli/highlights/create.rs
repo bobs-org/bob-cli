@@ -5535,3 +5535,279 @@ fn highlights_create_output_existing_pdf_still_refuses_without_force() {
         format_output(&output)
     );
 }
+
+#[test]
+fn highlights_create_vault_note_dry_run_uses_title_parent_and_fixed_date() {
+    let temp = TempDir::new("bob-cli-create-vault-note-dry-run");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("Area.md"), "---\ntype: [[area]]\n---\n# Area\n");
+    write_file(
+        &vault.join("zk/harbor_cranes.md"),
+        "---\nparent: [[Area]]\n---\n# Harbor Cranes\n\nA source note.\n",
+    );
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg("[[zk/harbor_cranes|Harbor]]")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-d")
+        .env("BOB_NOW", "2026-10-16 12:00:00")
+        .env("BOB_PANDOC_COMMAND", "/definitely/missing/pandoc")
+        .output()
+        .expect("dry-run vault note snapshot");
+
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("would create note snapshot")
+            && report.contains("xlib/notes/harbor_cranes_261016.pdf")
+            && report.contains("title: Harbor Cranes · 2026-10-16")
+            && report.contains("parent    Area  (area")
+            && report.contains("default: ancestor Area")
+            && report.contains("source_note: zk/harbor_cranes")
+            && report.contains("writes: none"),
+        "unexpected vault-note dry run:\n{report}"
+    );
+    assert!(
+        !vault.join("xlib").exists(),
+        "dry run must not create intake files"
+    );
+}
+
+#[test]
+fn highlights_create_vault_note_marker_survives_scan_and_sync() {
+    let temp = TempDir::new("bob-cli-create-vault-note-roundtrip");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("Area.md"), "---\ntype: [[area]]\n---\n# Area\n");
+    write_file(
+        &vault.join("zk/harbor_cranes.md"),
+        "---\nparent: [[Area]]\n---\n# Harbor Cranes\n\nA source note.\n",
+    );
+    let fixture = temp.path().join("rendered.pdf");
+    write_highlights_pdf_pages(&fixture, &[&[]]);
+    let pandoc = temp.path().join("fake-pandoc.sh");
+    write_executable(
+        &pandoc,
+        "#!/bin/sh\ninput=\"$1\"\nif [ -n \"$FAKE_PROJECTED_LOG\" ]; then cp \"$input\" \"$FAKE_PROJECTED_LOG\"; fi\nout=\"\"\nprev=\"\"\nfor arg in \"$@\"; do\n  if [ \"$prev\" = \"-o\" ]; then out=\"$arg\"; fi\n  prev=\"$arg\"\ndone\nprintf '%% synthetic TeX\\n' > \"$out\"\n",
+    );
+    let xelatex = temp.path().join("fake-xelatex.sh");
+    write_executable(
+        &xelatex,
+        "#!/bin/sh\ncp \"$BOB_TEST_FIXTURE_PDF\" note.pdf\n: > note.log\n",
+    );
+    let projected_log = temp.path().join("projected.md");
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg("zk/harbor_cranes")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-i")
+        .env("BOB_NOW", "2026-10-16 12:00:00")
+        .env("BOB_PANDOC_COMMAND", &pandoc)
+        .env("BOB_XELATEX_COMMAND", &xelatex)
+        .env("BOB_TEST_FIXTURE_PDF", &fixture)
+        .env("FAKE_PROJECTED_LOG", &projected_log)
+        .output()
+        .expect("render vault note snapshot with fake renderer");
+    assert_success(&output);
+    let report = stdout(&output);
+    let intake_pdf = vault.join("xlib/notes/harbor_cranes_261016.pdf");
+    assert!(intake_pdf.is_file(), "{report}");
+    assert!(
+        report.contains("created note snapshot")
+            && report.contains("shown:")
+            && report.contains("next: bob ref scan"),
+        "unexpected snapshot report:\n{report}"
+    );
+    let projected = std::fs::read_to_string(projected_log)
+        .expect("read rendered projection");
+    assert!(
+        projected.contains("Harbor Cranes · 2026-10-16")
+            && !projected.contains("# Harbor Cranes\n"),
+        "selected H1 should supply the title and be consumed:\n{projected}"
+    );
+
+    let marker_output = bob_command()
+        .arg("highlights")
+        .arg("marker")
+        .arg(&intake_pdf)
+        .arg("-b")
+        .arg(&vault)
+        .output()
+        .expect("read snapshot marker");
+    assert_success(&marker_output);
+    let marker = stdout(&marker_output);
+    assert!(marker.contains("- parent: Area\n"), "{marker}");
+    assert!(
+        marker.contains("- source_note: zk/harbor_cranes\n"),
+        "source-note marker must use the bare vault route:\n{marker}"
+    );
+
+    let scan = bob_command()
+        .arg("highlights")
+        .arg("scan")
+        .arg("--no-hooks")
+        .arg("-b")
+        .arg(&vault)
+        .env("BOB_NOW", "2026-10-16 12:00:00")
+        .output()
+        .expect("scan created note snapshot");
+    assert_success(&scan);
+    let ref_note = vault.join("ref/notes/harbor_cranes_261016.md");
+    let ref_before = std::fs::read_to_string(&ref_note)
+        .expect("read scanned reference note");
+    assert!(
+        ref_before.contains("source_note: \"[[zk/harbor_cranes]]\""),
+        "scan should normalize the source route into frontmatter:\n{ref_before}"
+    );
+
+    let library_pdf = vault.join("lib/notes/harbor_cranes_261016.pdf");
+    let sync = bob_command()
+        .arg("highlights")
+        .arg("sync")
+        .arg(&library_pdf)
+        .arg("-b")
+        .arg(&vault)
+        .output()
+        .expect("sync created note snapshot");
+    assert_success(&sync);
+    assert_eq!(
+        std::fs::read_to_string(&ref_note).expect("read synced reference note"),
+        ref_before,
+        "a no-op sync must not churn the source-note projection"
+    );
+}
+
+#[test]
+fn highlights_create_closed_and_plain_require_one_vault_note() {
+    let temp = TempDir::new("bob-cli-create-vault-note-flag-scope");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("Area.md"), "---\ntype: [[area]]\n---\n");
+    let external = temp.path().join("outside.md");
+    write_file(&external, "# Outside\n");
+
+    for flag in ["--closed", "--plain"] {
+        let output = bob_command()
+            .arg("highlights")
+            .arg("create")
+            .arg(&external)
+            .arg(flag)
+            .arg("-b")
+            .arg(&vault)
+            .output()
+            .expect("reject note-only flag for external Markdown");
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "flag {flag}: {}",
+            format_output(&output)
+        );
+        assert!(
+            stderr(&output).contains("require a vault-note TARGET"),
+            "flag {flag}: {}",
+            format_output(&output)
+        );
+    }
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg("https://example.com/one")
+        .arg("https://example.com/two")
+        .arg("--plain")
+        .arg("-b")
+        .arg(&vault)
+        .output()
+        .expect("reject note-only flag for a collection");
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+    assert!(stderr(&output).contains("require a single vault-note TARGET"));
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg("Missing")
+        .arg("--closed")
+        .arg("--plain")
+        .arg("-b")
+        .arg(&vault)
+        .output()
+        .expect("reject mutually exclusive note flags");
+    assert_eq!(output.status.code(), Some(2));
+    assert!(stderr(&output).contains("cannot be used with"));
+
+    write_file(&vault.join("NoParent.md"), "# No Parent\n");
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg("NoParent")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-d")
+        .output()
+        .expect("reject note without an inferred parent");
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+    assert!(
+        stderr(&output).contains("--parent is required")
+            && stderr(&output).contains("bob capture-targets"),
+        "{}",
+        format_output(&output)
+    );
+}
+
+#[test]
+fn highlights_create_plain_vault_note_keeps_snapshot_provenance() {
+    let temp = TempDir::new("bob-cli-create-vault-note-plain");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("Area.md"), "---\ntype: [[area]]\n---\n");
+    write_file(
+        &vault.join("zk/plain_note.md"),
+        "---\nparent: [[Area]]\n---\n# Plain Note\n\nSource body.\n",
+    );
+    let fixture = temp.path().join("rendered.pdf");
+    write_highlights_pdf_pages(&fixture, &[&[]]);
+    let pandoc = temp.path().join("fake-pandoc.sh");
+    write_executable(
+        &pandoc,
+        "#!/bin/sh\nout=\"\"\nprev=\"\"\nfor arg in \"$@\"; do\n  if [ \"$prev\" = \"-o\" ]; then out=\"$arg\"; fi\n  prev=\"$arg\"\ndone\ncp \"$BOB_TEST_FIXTURE_PDF\" \"$out\"\n",
+    );
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg("zk/plain_note")
+        .arg("--plain")
+        .arg("-b")
+        .arg(&vault)
+        .env("BOB_NOW", "2026-10-16 12:00:00")
+        .env("BOB_PANDOC_COMMAND", &pandoc)
+        .env("BOB_TEST_FIXTURE_PDF", &fixture)
+        .output()
+        .expect("create plain vault-note PDF");
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("created Highlights-ready PDF")
+            && report.contains("xlib/notes/plain_note_261016.pdf")
+            && report.contains("title: Plain Note · 2026-10-16"),
+        "unexpected plain vault-note report:\n{report}"
+    );
+    let marker_output = bob_command()
+        .arg("highlights")
+        .arg("marker")
+        .arg(vault.join("xlib/notes/plain_note_261016.pdf"))
+        .arg("-b")
+        .arg(&vault)
+        .output()
+        .expect("inspect plain vault-note marker");
+    assert_success(&marker_output);
+    let marker = stdout(&marker_output);
+    assert!(marker.contains("- parent: Area\n"), "{marker}");
+    assert!(
+        marker.contains("- source_note: zk/plain_note\n"),
+        "plain mode must keep source_note provenance:\n{marker}"
+    );
+}

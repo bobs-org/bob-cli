@@ -119,6 +119,7 @@ pub(crate) const ENV_XLIB_DIR: &str = "BOB_HIGHLIGHTS_XLIB_DIR";
 const FIELD_STATUS: &str = "status";
 const FIELD_PARENT: &str = "parent";
 const FIELD_ID: &str = "id";
+const FIELD_SOURCE_NOTE: &str = "source_note";
 const FIELD_RESEARCH: &str = "research";
 const FIELD_NOTE_TYPE: &str = "type";
 const FIELD_REF_TYPE: &str = "ref_type";
@@ -215,6 +216,7 @@ const COMMON_USER_FIELDS: &[&str] = &[
     "aliases",
     "topics",
     "source_url",
+    FIELD_SOURCE_NOTE,
     "author",
     "published",
     FIELD_CAPTURED,

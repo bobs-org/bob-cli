@@ -557,8 +557,9 @@ Every parsed record lands in exactly one bucket: `already_migrated`
   the first `file::` wikilink, else `zorg` (`chat` notes read as
   `agent-report` origin). The title is the record's `title::` field
   when present, else the humanized ID (words split on `_`/`-` and
-  capitalized, with ai, api, cli, gtd, html, http, json, llm, lsp,
-  mcp, pdf, prd, sql, ui, url, ux, and yaml uppercased). The body
+  capitalized, with ai, api, cli, gtd, html, http, json, llm, lsp, mcp,
+  pdf, prd, sase, sql, ui, url, ux, and yaml uppercased; `bob` renders as
+  `Bob`). The body
   carries `## Files`, `## Related`, `## Chapters` (books), and an
   escaped `## Original Record` fence. The original source records are never
   edited or deleted. No `^ref` tracker is written, so these notes do not

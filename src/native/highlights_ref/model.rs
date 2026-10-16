@@ -883,6 +883,7 @@ impl ParsedNote {
         }
 
         canonicalize_parent(&mut projection, "frontmatter")?;
+        canonicalize_source_note(&mut projection, "frontmatter")?;
         let status_normalized = normalize_deprecated_status(&mut projection);
         Ok(NormalizedProjection {
             projection,

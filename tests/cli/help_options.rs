@@ -777,6 +777,15 @@ fn highlights_create_help_lists_options_alphabetically() {
             && help.contains("`--output` cannot be combined with `--ref-type`"),
         "expected --output contract in help:\n{help}"
     );
+    assert!(
+        help.contains("Vault notes:")
+            && help.contains("-C, --closed")
+            && help.contains("-M, --plain")
+            && help.contains("default ref type notes")
+            && help.contains("source_note")
+            && help.contains("BOB_HIGHLIGHTS_KEEP_WORKDIR=1"),
+        "expected vault-note create options and workflow in help:\n{help}"
+    );
     assert_stdout_has_no_ansi(&output);
 }
 

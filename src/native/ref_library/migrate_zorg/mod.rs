@@ -13,3 +13,4 @@ mod report;
 mod write;
 
 pub(crate) use cli::{migrate_zorg_command, run_migrate_zorg};
+pub(crate) use render::titleize_id;

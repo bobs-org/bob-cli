@@ -103,7 +103,7 @@ never fail the command:
 Available commands:
 
 ```bash
-bob ref create <TARGET> [-A|--author NAME] [-a|--audio PATH] [-b|--bob-dir PATH] [-d|--dry-run] [-f|--force] [-H|--html FILE] [-i|--include-id] [-l|--lib-dir PATH] [-L|--listen] [-N|--name STEM] [-n|--no-audio] [-o|--output PDF] [-P|--parent NOTE] [-p|--published DATE] [-r|--ref-dir PATH] [-s|--status STATUS] [-T|--title TITLE] [-t|--ref-type DIR] [-x|--xlib-dir PATH]
+bob ref create <TARGET> [-A|--author NAME] [-a|--audio PATH] [-b|--bob-dir PATH] [-C|--closed] [-d|--dry-run] [-f|--force] [-H|--html FILE] [-i|--include-id] [-l|--lib-dir PATH] [-L|--listen] [-M|--plain] [-N|--name STEM] [-n|--no-audio] [-o|--output PDF] [-P|--parent NOTE] [-p|--published DATE] [-r|--ref-dir PATH] [-s|--status STATUS] [-T|--title TITLE] [-t|--ref-type DIR] [-x|--xlib-dir PATH]
 bob ref doctor [-b|--bob-dir PATH] [-l|--lib-dir PATH] [-n|--no-hooks] [-r|--ref-dir PATH] [-x|--xlib-dir PATH]
 bob ref marker <pdf> [-b|--bob-dir PATH] [-l|--lib-dir PATH] [-r|--ref-dir PATH] [-x|--xlib-dir PATH]
 bob ref scan [-b|--bob-dir PATH] [-d|--dry-run] [-f|--format human|json] [-j|--jobs N] [-l|--lib-dir PATH] [-n|--no-hooks] [-r|--ref-dir PATH] [-v|--verbose] [-w|--write-pdfs] [-x|--xlib-dir PATH]
@@ -115,9 +115,10 @@ pinned web-clip adapter and stamps the same page-1 marker plus the web
 provenance fields (`source_url`, `author`, `published`, `captured`); the
 full contract lives in [`highlights-clip.md`](highlights-clip.md).
 
-`create` accepts a Markdown file, a local PDF, a PDF URL, an arXiv
+`create` accepts a vault note, a Markdown file, a local PDF, a PDF URL, an arXiv
 paper URL, or a web article URL and writes `<xlib-dir>/<ref-type>/<stem>.pdf` (by default
-`~/bob/xlib/chat/<basename>.pdf` for Markdown and
+`~/bob/xlib/notes/<note-stem>_<YYMMDD>.pdf` for vault notes,
+`~/bob/xlib/chat/<basename>.pdf` for other Markdown, and
 `~/bob/xlib/papers/<stem>.pdf` for PDFs) unless `-o, --output <PDF>`
 selects the complete output path. The full target contract lives in
 [`highlights-create.md`](highlights-create.md). `--output` keeps the
@@ -446,6 +447,7 @@ The marker note is an unordered list of `key: value` pairs:
 - aliases: ["Systems Performance", "Brendan Gregg systems performance"]
 - topics: [linux, performance]
 - source_url: https://example.com/book
+- source_note: zk/harbor_cranes
 ```
 
 Allowed list markers:
@@ -460,6 +462,12 @@ note target such as `obsidian` or `Systems Performance`; Obsidian wikilinks such
 as `[[obsidian]]`, aliases, embeds, and block links are rejected in the PDF
 marker. Generated reference notes still render `parent` frontmatter as an
 Obsidian wikilink, for example `parent: "[[obsidian]]"`.
+
+`source_note`, when present, is a bare vault-relative note route without a
+`.md` suffix. It is provenance for a snapshot made from a vault note; marker
+sync stores it as a canonical frontmatter wikilink such as
+`source_note: "[[zk/harbor_cranes]]"`. Marker input rejects wikilinks, aliases,
+embeds, and fragments for this field.
 
 `status` must be a scalar string and must exactly match one of:
 
@@ -537,8 +545,9 @@ PDF, and omitted otherwise. It never enters the marker projection, hash, or
 base.
 
 Standard synced user fields are `status`, `parent`, `title`, `id`, `research`,
-`aliases`, `topics`, `source_url`, `author`, `published`, `captured`, and
-`return_links`. `id` is ordinary
+`aliases`, `topics`, `source_url`, `source_note`, `author`, `published`,
+`captured`, and `return_links`. `source_note` is the canonical source vault
+route for note snapshots. `id` is ordinary
 user frontmatter for the basename-derived source identifier and does not
 require `highlights_marker_fields`. Existing `research` values remain legacy
 standard fields for repository-relative Markdown source paths; they round-trip

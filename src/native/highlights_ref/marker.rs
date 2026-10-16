@@ -270,11 +270,18 @@ pub(super) fn parse_marker_with_normalization(
         let parsed_value = parse_value(value);
         if key == FIELD_PARENT {
             validate_marker_parent_value(value, line_number, &parsed_value)?;
+        } else if key == FIELD_SOURCE_NOTE {
+            validate_marker_source_note_value(
+                value,
+                line_number,
+                &parsed_value,
+            )?;
         }
         projection.insert(key, parsed_value);
     }
 
     canonicalize_parent(&mut projection, "marker")?;
+    canonicalize_source_note(&mut projection, "marker")?;
     let status_normalized = normalize_deprecated_status(&mut projection);
     validate_required_marker_keys(&projection, "marker")?;
     Ok(NormalizedProjection {
@@ -357,12 +364,46 @@ pub(super) fn render_marker(projection: &Projection) -> Result<String> {
         rendered.push_str(": ");
         if key == FIELD_PARENT {
             rendered.push_str(&render_marker_parent_value(value)?);
+        } else if key == FIELD_SOURCE_NOTE {
+            let source_note = value.as_string().ok_or_else(|| {
+                CommandError::new(
+                    "source_note cannot be rendered as a PDF marker bare note target: expected a canonical wikilink string",
+                )
+            })?;
+            rendered.push_str(&source_note_target(source_note, "marker")?);
         } else {
             rendered.push_str(&value.as_marker_value());
         }
         rendered.push('\n');
     }
     Ok(rendered)
+}
+
+pub(super) fn validate_marker_source_note_value(
+    raw_value: &str,
+    line_number: usize,
+    parsed_value: &MarkerValue,
+) -> Result<()> {
+    let trimmed = raw_value.trim();
+    let invalid = || {
+        CommandError::new(format!(
+            "invalid marker {FIELD_SOURCE_NOTE} on line {line_number}: expected a bare vault note route without .md, wikilinks, aliases, or fragments"
+        ))
+    };
+    if trimmed.is_empty()
+        || matches!(parsed_value, MarkerValue::Null | MarkerValue::List(_))
+        || trimmed.starts_with(['"', '\''])
+        || trimmed.contains("[[")
+        || trimmed.contains("]]")
+        || trimmed.starts_with('!')
+        || trimmed.contains('|')
+        || trimmed.contains('#')
+        || trimmed.starts_with('[')
+        || trimmed.ends_with(']')
+    {
+        return Err(invalid());
+    }
+    Ok(())
 }
 
 pub(super) fn validate_marker_parent_value(

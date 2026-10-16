@@ -97,6 +97,28 @@ pub(crate) fn project_snapshot<L: SourceLoader>(
         &note.identity,
         settings,
     )?;
+    project_snapshot_from_syntax(
+        store,
+        note,
+        settings,
+        options,
+        attachments,
+        syntax,
+    )
+}
+
+/// Assemble one already-parsed syntax projection. Create-wiring uses this
+/// seam to select the title from the exact `TitleCandidate` and parsed
+/// frontmatter before Bob finalizes the view, without rereading or parsing
+/// the source a second time.
+pub(crate) fn project_snapshot_from_syntax<L: SourceLoader>(
+    store: &mut SourceStore<L>,
+    note: &ClassifiedNote,
+    settings: &TasksSettings,
+    options: SnapshotProjectionOptions,
+    mut attachments: AttachmentIndex,
+    syntax: SyntaxProjection,
+) -> Result<SnapshotProjection, String> {
     let SyntaxProjection {
         parsed,
         mut blocks,
@@ -146,6 +168,24 @@ pub(crate) fn project_snapshot<L: SourceLoader>(
         );
         (preamble, sections, None)
     } else {
+        let blocks = if let Some(selected) =
+            options.consumed_title_heading.as_deref()
+        {
+            blocks
+                .into_iter()
+                .filter(|block| {
+                    !matches!(
+                        block,
+                        Block::Heading(heading)
+                            if heading.level == HeadingLevel::H1
+                                && heading.anchor.identity.source == note.identity
+                                && heading.anchor.id == selected
+                    )
+                })
+                .collect()
+        } else {
+            blocks
+        };
         let (sections, synthetic_anchor) =
             sectionize_root(&note.identity, blocks, &expander.used_anchor_ids);
         (Vec::new(), sections, synthetic_anchor)
@@ -2854,8 +2894,8 @@ Unrelated prose after the closed lane stays visible.\n\
             .collect::<BTreeSet<_>>();
         assert_eq!(anchor_ids.len(), bob_closed.view.anchors.len());
         assert!(
-            ordinary_markdown.contains("# Plain note"),
-            "{ordinary_markdown}"
+            !ordinary_markdown.contains("# Plain note"),
+            "the selected source H1 should be consumed when it supplies the title:\n{ordinary_markdown}"
         );
         assert!(
             ordinary_markdown.contains("Ordinary control prose"),

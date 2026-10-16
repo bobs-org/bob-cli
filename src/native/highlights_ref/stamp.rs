@@ -67,6 +67,7 @@ pub(super) struct PdfInfo {
 /// Canonical insertion order for the optional provenance marker keys.
 pub(super) const MARKER_EXTRA_ORDER: &[&str] = &[
     "source_url",
+    FIELD_SOURCE_NOTE,
     "author",
     "published",
     "captured",
@@ -619,6 +620,7 @@ pub(super) fn compose_marker(
     for (key, value) in ordered {
         projection.insert(key.to_string(), value.clone());
     }
+    canonicalize_source_note(&mut projection, "create marker")?;
     validate_required_marker_keys(&projection, "create marker")?;
     let marker = render_marker(&projection)?;
     let normalized = parse_marker_with_normalization(&marker)?;
@@ -1562,6 +1564,10 @@ mod tests {
                         "https://example.com/article".to_string(),
                     ),
                 ),
+                (
+                    FIELD_SOURCE_NOTE,
+                    MarkerValue::String("zk/harbor_cranes".to_string()),
+                ),
                 ("author", MarkerValue::String(String::new())),
                 ("published", MarkerValue::String("2026-04-27".to_string())),
             ],
@@ -1574,6 +1580,7 @@ mod tests {
              - title: Clipped Article\n\
              - id: clipped_article\n\
              - source_url: https://example.com/article\n\
+             - source_note: zk/harbor_cranes\n\
              - published: 2026-04-27\n\
              - captured: 2026-10-01\n"
         );
@@ -1585,6 +1592,37 @@ mod tests {
             ))
         );
         assert!(!parsed.projection.contains_key("author"));
+        assert_eq!(
+            parsed.projection.get(FIELD_SOURCE_NOTE),
+            Some(&MarkerValue::String("[[zk/harbor_cranes]]".to_string()))
+        );
+        assert!(is_standard_user_field(FIELD_SOURCE_NOTE));
+        assert!(unknown_synced_fields(&parsed.projection).is_empty());
+        let snapshot = projection_snapshot_json(&parsed.projection);
+        assert_eq!(
+            projection_from_snapshot_json(&snapshot).expect("base projection"),
+            parsed.projection
+        );
+    }
+
+    #[test]
+    fn source_note_marker_requires_a_bare_route_without_suffix_or_fragment() {
+        let marker = |source_note: &str| {
+            format!(
+                "- status: ready\n- parent: area\n- title: Snapshot\n- source_note: {source_note}\n"
+            )
+        };
+        for invalid in [
+            "[[zk/harbor_cranes]]",
+            "zk/harbor_cranes.md",
+            "zk/harbor_cranes#section",
+            "zk/harbor_cranes|alias",
+            "!zk/harbor_cranes",
+        ] {
+            let error = parse_marker_with_normalization(&marker(invalid))
+                .expect_err("invalid source_note must be rejected");
+            assert!(error.to_string().contains("source_note"), "{error}");
+        }
     }
 
     #[test]

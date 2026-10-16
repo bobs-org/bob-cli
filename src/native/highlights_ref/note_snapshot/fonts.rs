@@ -307,7 +307,9 @@ impl GlyphCoverage {
 }
 
 fn unique_chars(text: &str) -> BTreeSet<char> {
-    text.chars().collect()
+    text.chars()
+        .filter(|ch| !ch.is_whitespace() && !ch.is_control())
+        .collect()
 }
 
 #[cfg(test)]
@@ -378,6 +380,7 @@ mod tests {
             GlyphCoverage::new().expect("bundled fonts should parse");
         assert_eq!(coverage.body_uncovered("A🎲"), vec!['🎲']);
         assert!(coverage.uncovered_everywhere("A🎲").is_empty());
+        assert!(coverage.uncovered_everywhere("A\n\t\r").is_empty());
         assert_eq!(
             coverage.uncovered_everywhere("\u{fe0f}"),
             vec![VARIATION_SELECTOR_16]

@@ -24,6 +24,8 @@ fn pdf_progress(line: &str) {
 use clap::{Arg, ArgAction, ArgMatches, Command as ClapCommand};
 use sha2::Digest;
 
+use super::note_snapshot;
+use super::FIELD_SOURCE_NOTE;
 use super::{
     attach as attach_mod, companion as companion_mod,
     pdf_target as pdf_target_mod,
@@ -39,6 +41,7 @@ use super::{sources as sources_mod, target as target_mod};
 use crate::native::style::Styler;
 
 const DEFAULT_MARKDOWN_REF_TYPE: &str = "chat";
+const DEFAULT_NOTE_REF_TYPE: &str = "notes";
 const DEFAULT_PDF_REF_TYPE: &str = "papers";
 const DEFAULT_ARTICLE_REF_TYPE: &str = "blogs";
 const DEFAULT_STATUS: &str = "ready";
@@ -171,6 +174,7 @@ return {{Meta = Meta}, {Code = Code, Div = Div}}
 pub(super) struct CreateOptions {
     pub(super) audio: Option<PathBuf>,
     pub(super) author: Option<String>,
+    pub(super) closed: bool,
     pub(super) dry_run: bool,
     pub(super) force: bool,
     pub(super) html: Option<OsString>,
@@ -179,13 +183,25 @@ pub(super) struct CreateOptions {
     pub(super) name: Option<String>,
     pub(super) no_audio: bool,
     pub(super) output: Option<PathBuf>,
+    pub(super) plain: bool,
     pub(super) parent: String,
+    pub(super) parent_default_reason: Option<String>,
     pub(super) resolved_parent:
         Option<crate::native::parent_notes::ResolvedParent>,
     pub(super) published: Option<String>,
     pub(super) ref_type: Option<String>,
     pub(super) status: String,
     pub(super) title: Option<String>,
+}
+
+enum PreparedTarget {
+    Url,
+    Markdown(PathBuf),
+    Pdf(PathBuf),
+    VaultNote {
+        store: super::note_snapshot::SourceStore,
+        note: super::note_snapshot::ClassifiedNote,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -202,6 +218,8 @@ struct CreatePlan {
     author: Option<String>,
     published: Option<String>,
     source_url: Option<String>,
+    source_note: Option<String>,
+    source_markdown: Option<String>,
     captured: Option<String>,
     id: Option<String>,
     marker: String,
@@ -241,7 +259,7 @@ fn print_renamed_if_needed(plan: &TargetPlan) {
 
 pub(crate) fn command() -> ClapCommand {
     ClapCommand::new("create")
-        .about("Create a Highlights-ready PDF from Markdown, a PDF, or a URL")
+        .about("Create a Highlights-ready PDF from a vault note, Markdown, a PDF, or a URL")
         .alias("clip")
         .arg(
             Arg::new("target")
@@ -250,7 +268,7 @@ pub(crate) fn command() -> ClapCommand {
                 .num_args(1..)
                 .action(ArgAction::Append)
                 .value_parser(clap::builder::OsStringValueParser::new())
-                .help("Markdown file, PDF file, PDF URL, arXiv paper URL, or web article URL; several web article URLs become one reference"),
+                .help("Vault note, Markdown file, PDF file, PDF URL, arXiv paper URL, or web article URL; several web article URLs become one reference"),
         )
         .arg(
             Arg::new("author")
@@ -258,6 +276,15 @@ pub(crate) fn command() -> ClapCommand {
                 .short('A')
                 .value_name("NAME")
                 .help("Override the derived author"),
+        )
+        .arg(
+            Arg::new("closed")
+                .long("closed")
+                .short('C')
+                .action(ArgAction::SetTrue)
+                .conflicts_with("plain")
+                .help_heading("Vault notes")
+                .help("Also print closed tasks (a Closed tasks appendix) and full task logs"),
         )
         .arg(
             Arg::new("audio")
@@ -308,7 +335,7 @@ pub(crate) fn command() -> ClapCommand {
                 .long("name")
                 .short('N')
                 .value_name("NAME")
-                .help("Reference name: the PDF filename and the ref note bob ref scan writes [default: derived from TARGET; for several URLs, the words their slugs share]"),
+                .help("Reference name: the PDF filename and the ref note bob ref scan writes [default: dated note stem for vault notes; otherwise derived from TARGET; for several URLs, the words their slugs share]"),
         )
         .arg(
             Arg::new("no-audio")
@@ -333,7 +360,16 @@ pub(crate) fn command() -> ClapCommand {
                 .long("parent")
                 .short('P')
                 .value_name("NOTE")
-                .help("Area or project note that owns the reading task (required)"),
+                .help("Area or project note that owns the reading task [vault notes default to the nearest eligible note or ancestor]"),
+        )
+        .arg(
+            Arg::new("plain")
+                .long("plain")
+                .short('M')
+                .action(ArgAction::SetTrue)
+                .conflicts_with("closed")
+                .help_heading("Vault notes")
+                .help("Render a vault note as plain Markdown, without the snapshot view"),
         )
         .arg(
             Arg::new("published")
@@ -364,7 +400,7 @@ pub(crate) fn command() -> ClapCommand {
                 .long("title")
                 .short('T')
                 .value_name("TITLE")
-                .help("Override the derived title"),
+                .help("Override the derived title; for vault notes this is the exact PDF identity title"),
         )
         .arg(
             Arg::new("ref-type")
@@ -372,11 +408,11 @@ pub(crate) fn command() -> ClapCommand {
                 .short('t')
                 .value_name("DIR")
                 .conflicts_with("output")
-                .help("Single library subdirectory [default: chat for Markdown, papers for PDFs, blogs for web articles]"),
+                .help("Single library subdirectory [default: notes for vault notes, chat for Markdown, papers for PDFs, blogs for web articles]"),
         )
         .arg(xlib_dir_arg())
         .after_help(
-            "Targets:\n  Markdown file (.md) -> rendered with pandoc (default ref type chat)\n  Local PDF file (.pdf or %PDF- magic) -> stamped as-is (default ref type papers)\n  PDF URL (Content-Type PDF or sniffed %PDF-) -> downloaded, stamped as-is (default ref type papers)\n  arXiv paper URL (abs/html/pdf) -> PDF fetched from arxiv.org/pdf/<id>, metadata from the API (default ref type papers)\n  Web article URL (HTML 2xx or 403/429/503) -> captured with the web-article engine into a Highlights-ready PDF (default ref type blogs)\n\nSeveral URLs:\n  With several URLs and no -N, bob names the reference after the words every URL's slug starts with, or failing that the folder they all share, ignoring dates, ids, part numbers, and filler. It needs two meaningful words (or one when the pages differ only by a part or page number); otherwise pass -N or -T. Several URLs must all be web article URLs. Collection capture is all-or-nothing and follows argument order; one reference takes at most 20 URLs. Merge material you'll read as one unit; capture an ongoing series part by part under the same -P.\n\nWeb articles:\n  Captures the article in reader mode and re-typesets it with a Bob-owned print template; it never prints the live page. `bob ref scan` later moves the intake PDF into the library and writes the reference note. A site that blocks headless browsers is retried headed automatically: on Linux under a private Xvfb display or in an off-screen window on macOS; hosts with no browser fail closed with a hint. `-H, --html FILE` replays a page saved from a real browser instead of fetching (`-` reads stdin) and forces the web-article route. `-A, --author` and `-p, --published` override the derived author/publish date on every route. Environment: BOB_WEB_CLIP_ADAPTER replaces the adapter invocation; BOB_CHROME selects the browser executable; BOB_WEB_CLIP_TIMEOUT_SECS sets the adapter timeout in seconds (default 300); BOB_WEB_CLIP_KEEP_WORKDIR=1 keeps the scratch directory for debugging.\n\nListen:\n  `-L, --listen` narrates TARGET with `highlights.listen_command` (`BOB_HIGHLIGHTS_LISTEN_COMMAND` overrides), which must be `sase listen render ...` and write MP3 audio to `{audio}`; bob passes `{target}`, `{pdf}`, `{audio}`, and `{title}` as single arguments to `sase` itself — do not quote them — and streams the command output unchanged. A direct `sase-listen render ...` setting migrates automatically; wrappers, shell programs, chains, pipelines, redirections, and expansions need conversion to plain SASE render arguments. Preflights run first, the PDF is produced in private scratch, then the episode is bound beside the PDF; if the listen command fails nothing is written, and a failure after the episode exists keeps the scratch audio with a `kept:` line. If TARGET is already captured, `--listen` attaches the new episode (`xlib/<rel>.mp3`) for `bob ref scan` to pair, and the PDF and ref note stay untouched.\n\nAudio:\n  Create discovers audio as `--audio PATH`, then frontmatter `audio.episode_id` in the sase-listen library (Markdown only), then a sibling `<stem>_narration.md` hash matched against library manifests (`BOB_HIGHLIGHTS_AUDIO_LIBRARY`, then `highlights.audio_library`, then `$XDG_DATA_HOME/sase-listen/library`, then `~/.local/share/sase-listen/library`); `--no-audio` skips discovery. The copy lands beside the PDF with the source extension lowercased before the PDF is installed, reuses identical bytes, refuses different bytes without `--force`, and refuses when the mirrored library audio already exists. Only a companion already at the target's `<stem>.<ext>` counts as reused; audio beside the source is copied through the same rules.\n\nOutput:\n  Default target `<xlib-dir>/<ref-type>/<stem>.pdf`, becoming `<stem>_2`, `<stem>_3`, … when the name is taken by a different reference; the same reference refuses (`already captured` / `already queued`), and `-o, --output` keeps the exact path. `-o, --output` selects the complete path instead, including the filename (`.pdf` required, `~` expanded, cwd-relative). `--output` cannot be combined with `--ref-type` or `--name` because those only participate in default target derivation. `-N` sets the stem (with `-i`, the marker id); `-T` overrides the title; `-A` and `-p` override the derived author/publish date. Pandoc renders TOC/bookmarks and embeds the page-1 scan marker. Scan moves intake PDFs to the library before writing notes; library PDFs scan directly, other paths need `bob ref sync`. A `<div class=\"listen\">` card becomes a callout with a Play link when audio is bound. Same-document `#` links get a raised letter tag and a matching `↩ p. N` return pill under their target, dead ones render as plain text with a warning, and frontmatter `bob-return-links: false` turns this off.\n\nExamples:\n  bob ref create report.md -P sase\n  bob ref create paper.pdf -t papers -P sase\n  bob ref create https://example.com/paper.pdf -N my_paper -P sase\n  bob ref create https://arxiv.org/abs/1706.03762 -d -P bob\n  bob ref create https://arxiv.org/abs/1706.03762 -L -P bob\n  bob ref create https://example.com/essay -H saved.html -P sase\n  bob ref create https://example.com/essay -A \"Jane Doe\" -p 2026-01-02 -d -P sase\n  bob ref create https://example.com/2024/01/tokio-internals-part-1 https://example.com/2024/02/tokio-internals-part-2 -L -P sase\n  bob ref create URL1 URL2 URL3 -N spotify_bg_agents -P sase",
+            "Targets:\n  Vault note route, wikilink, or in-vault Markdown path -> projected reading snapshot (default ref type notes)\n  Other Markdown file (.md) -> rendered with pandoc (default ref type chat)\n  Local PDF file (.pdf or %PDF- magic) -> stamped as-is (default ref type papers)\n  PDF URL (Content-Type PDF or sniffed %PDF-) -> downloaded, stamped as-is (default ref type papers)\n  arXiv paper URL (abs/html/pdf) -> PDF fetched from arxiv.org/pdf/<id>, metadata from the API (default ref type papers)\n  Web article URL (HTML 2xx or 403/429/503) -> captured with the web-article engine into a Highlights-ready PDF (default ref type blogs)\n\nVault notes:\n  `TARGET` resolves like an Obsidian note link: exact vault-relative path, then a unique case-insensitive basename; `[[route|alias]]` is accepted. Existing filesystem paths keep precedence. Dot-directories, `_conflicts/`, `xlib/`, `lib/`, `lit_review/`, and shared excluded note directories are not snapshot notes. The default parent is the note itself when it is an eligible area/project, otherwise the nearest eligible area/project in its `parent:` chain (up to eight links); if none exists, pass `-P`. Names default to `<note-stem>_<YYMMDD>` using `BOB_NOW` when set. Titles use `-T`, frontmatter `title`, the first H1 outside fences/comments, then a humanized stem; the first H1 is removed only when it supplies the title. Closed tasks are counted and omitted, and schedule/work logs are condensed; `-C` restores closed tasks and full logs. `-M` keeps today's plain Markdown renderer while retaining the vault-note parent, dated name, and `source_note` provenance. `-C` and `-M` require one vault-note TARGET and conflict with each other. Dry run (`-d`) shows the selected identity, parent, target, projection summary, and warnings without running pandoc, xelatex, or listen; it ends with `writes: none`. Set BOB_HIGHLIGHTS_KEEP_WORKDIR=1 to retain projected Markdown, TeX, logs, fonts, and staged assets for debugging.\n  Examples: `bob ref create harbor_cranes`; `bob ref create '[[harbor_cranes]]' -d`; `bob ref create zk/some_idea -N idea_261016`; `bob ref create harbor_cranes -C`; `bob ref create harbor_cranes -M`; `bob ref create harbor_cranes -L`; `bob ref create harbor_cranes -o ~/Desktop/harbor_cranes.pdf`\n\nSeveral URLs:\n  With several URLs and no -N, bob names the reference after the words every URL's slug starts with, or failing that the folder they all share, ignoring dates, ids, part numbers, and filler. It needs two meaningful words (or one when the pages differ only by a part or page number); otherwise pass -N or -T. Several URLs must all be web article URLs. Collection capture is all-or-nothing and follows argument order; one reference takes at most 20 URLs. Merge material you'll read as one unit; capture an ongoing series part by part under the same -P.\n\nWeb articles:\n  Captures the article in reader mode and re-typesets it with a Bob-owned print template; it never prints the live page. `bob ref scan` later moves the intake PDF into the library and writes the reference note. A site that blocks headless browsers is retried headed automatically: on Linux under a private Xvfb display or in an off-screen window on macOS; hosts with no browser fail closed with a hint. `-H, --html FILE` replays a page saved from a real browser instead of fetching (`-` reads stdin) and forces the web-article route. `-A, --author` and `-p, --published` override the derived author/publish date on every route. Environment: BOB_WEB_CLIP_ADAPTER replaces the adapter invocation; BOB_CHROME selects the browser executable; BOB_WEB_CLIP_TIMEOUT_SECS sets the adapter timeout in seconds (default 300); BOB_WEB_CLIP_KEEP_WORKDIR=1 keeps the scratch directory for debugging.\n\nListen:\n  `-L, --listen` narrates TARGET with `highlights.listen_command` (`BOB_HIGHLIGHTS_LISTEN_COMMAND` overrides), which must be `sase listen render ...` and write MP3 audio to `{audio}`; bob passes `{target}`, `{pdf}`, `{audio}`, and `{title}` as single arguments to `sase` itself — do not quote them — and streams the command output unchanged. A direct `sase-listen render ...` setting migrates automatically; wrappers, shell programs, chains, pipelines, redirections, and expansions need conversion to plain SASE render arguments. Preflights run first, the PDF is produced in private scratch, then the episode is bound beside the PDF; if the listen command fails nothing is written, and a failure after the episode exists keeps the scratch audio with a `kept:` line. If TARGET is already captured, `--listen` attaches the new episode (`xlib/<rel>.mp3`) for `bob ref scan` to pair, and the PDF and ref note stay untouched. Vault-note `-L` passes the rendered `projected.md` as `{target}` and the rendered snapshot PDF as `{pdf}`; `-M` narrates the original Markdown.\n\nAudio:\n  Create discovers audio as `--audio PATH`, then frontmatter `audio.episode_id` in the sase-listen library (Markdown only), then a sibling `<stem>_narration.md` hash matched against library manifests (`BOB_HIGHLIGHTS_AUDIO_LIBRARY`, then `highlights.audio_library`, then `$XDG_DATA_HOME/sase-listen/library`, then `~/.local/share/sase-listen/library`); `--no-audio` skips discovery. The copy lands beside the PDF with the source extension lowercased before the PDF is installed, reuses identical bytes, refuses different bytes without `--force`, and refuses when the mirrored library audio already exists. Only a companion already at the target's `<stem>.<ext>` counts as reused; audio beside the source is copied through the same rules.\n\nOutput:\n  Default target `<xlib-dir>/<ref-type>/<stem>.pdf`, becoming `<stem>_2`, `<stem>_3`, … when the name is taken by a different reference; the same reference refuses (`already captured` / `already queued`), and `-o, --output` keeps the exact path. `-o, --output` selects the complete path instead, including the filename (`.pdf` required, `~` expanded, cwd-relative). `--output` cannot be combined with `--ref-type` or `--name` because those only participate in default target derivation. For vault notes `-N` overrides the dated stem and `-i` follows the final collision-resolved stem; `-T` sets the exact identity title. Pandoc renders TOC/bookmarks for the legacy Markdown route and embeds the page-1 scan marker. Scan moves intake PDFs to the library before writing notes; library PDFs scan directly, other paths need `bob ref sync`. A `<div class=\"listen\">` card becomes a callout with a Play link when audio is bound. Same-document `#` links get a raised letter tag and a matching `↩ p. N` return pill under their target, dead ones render as plain text with a warning, and frontmatter `bob-return-links: false` turns this off.\n\nExamples:\n  bob ref create report.md -P sase\n  bob ref create harbor_cranes\n  bob ref create harbor_cranes -d\n  bob ref create zk/some_idea -M\n  bob ref create paper.pdf -t papers -P sase\n  bob ref create https://example.com/paper.pdf -N my_paper -P sase\n  bob ref create https://arxiv.org/abs/1706.03762 -d -P bob\n  bob ref create https://arxiv.org/abs/1706.03762 -L -P bob\n  bob ref create https://example.com/essay -H saved.html -P sase\n  bob ref create https://example.com/essay -A \"Jane Doe\" -p 2026-01-02 -d -P sase\n  bob ref create https://example.com/2024/01/tokio-internals-part-1 https://example.com/2024/02/tokio-internals-part-2 -L -P sase\n  bob ref create URL1 URL2 URL3 -N spotify_bg_agents -P sase",
         )
 }
 
@@ -388,6 +424,14 @@ pub(super) fn run(matches: &ArgMatches) -> i32 {
         .cloned()
         .collect();
     if targets.len() > 1 {
+        if matches.get_flag("closed") || matches.get_flag("plain") {
+            return report_create_error(
+                CommandError::new(
+                    "--closed and --plain require a single vault-note TARGET\nhint: pass one note route, such as `bob ref create harbor_cranes -d`",
+                )
+                .with_exit_code(2),
+            );
+        }
         return super::collection::run(matches, &config, &targets);
     }
     let target_os = targets.into_iter().next().expect("required by clap");
@@ -429,47 +473,30 @@ pub(super) fn run(matches: &ArgMatches) -> i32 {
         );
         return 1;
     }
-    let Some(parent_input) = matches.get_one::<String>("parent").cloned()
-    else {
-        let styler = Styler::detect();
-        eprintln!(
-            "bob ref create: {}: --parent is required",
-            styler.red("error")
-        );
-        eprintln!(
-            "hint: pass -P <note>, for example `-P sase`; list area and project notes with `bob capture-targets`"
-        );
-        return 2;
+    let mut prepared = match prepare_target(&config, &target_os) {
+        Ok(target) => target,
+        Err(error) => return report_create_error(error),
     };
-    // -P resolves before any work (pandoc, the browser, the network, or
-    // a write) and the marker stores the canonical route.
-    let (parent, resolved_parent) =
-        match crate::native::parent_notes::resolve_parent(
-            &config.bob_dir,
-            &parent_input,
-        ) {
-            Ok(resolved) => (resolved.route.clone(), Some(resolved)),
-            Err(error) => {
-                let styler = Styler::detect();
-                let message = error.message();
-                if let Some((first, hint)) = message.split_once("\nhint: ") {
-                    eprintln!(
-                        "bob ref create: {}: {first}",
-                        styler.red("error")
-                    );
-                    eprintln!("hint: {hint}");
-                } else {
-                    eprintln!(
-                        "bob ref create: {}: {message}",
-                        styler.red("error")
-                    );
-                }
-                return 1;
-            }
+    if !matches!(prepared, PreparedTarget::VaultNote { .. })
+        && (matches.get_flag("closed") || matches.get_flag("plain"))
+    {
+        return report_create_error(
+            CommandError::new(
+                "--closed and --plain require a vault-note TARGET\nhint: pass a note route, such as `bob ref create harbor_cranes -d`",
+            )
+            .with_exit_code(2),
+        );
+    }
+    let parent_input = matches.get_one::<String>("parent").cloned();
+    let (parent, resolved_parent, parent_default_reason) =
+        match resolve_parent_for_target(&config, &mut prepared, parent_input) {
+            Ok(parent) => parent,
+            Err(error) => return report_create_error(error),
         };
     let options = CreateOptions {
         audio: matches.get_one::<OsString>("audio").map(PathBuf::from),
         author: matches.get_one::<String>("author").cloned(),
+        closed: matches.get_flag("closed"),
         dry_run: matches.get_flag("dry-run"),
         force: matches.get_flag("force"),
         html: matches.get_one::<OsString>("html").cloned(),
@@ -478,7 +505,9 @@ pub(super) fn run(matches: &ArgMatches) -> i32 {
         name: matches.get_one::<String>("name").cloned(),
         no_audio: matches.get_flag("no-audio"),
         output: matches.get_one::<OsString>("output").map(PathBuf::from),
+        plain: matches.get_flag("plain"),
         parent,
+        parent_default_reason,
         resolved_parent,
         published: matches.get_one::<String>("published").cloned(),
         ref_type,
@@ -489,21 +518,171 @@ pub(super) fn run(matches: &ArgMatches) -> i32 {
         title: matches.get_one::<String>("title").cloned(),
     };
 
-    match create_pdf(&config, &target_os, &options) {
+    match create_pdf(&config, &target_os, &mut prepared, &options) {
         Ok(()) => 0,
-        Err(error) => {
-            let styler = Styler::detect();
-            // Errors may carry a `hint:` second line.
-            let message = error.message;
-            if let Some((first, hint)) = message.split_once("\nhint: ") {
-                eprintln!("{COMMAND_NAME}: {}: {first}", styler.red("error"));
-                eprintln!("hint: {hint}");
-            } else {
-                eprintln!("{COMMAND_NAME}: {}: {message}", styler.red("error"));
+        Err(error) => report_create_error(error),
+    }
+}
+
+fn report_create_error(error: CommandError) -> i32 {
+    let styler = Styler::detect();
+    let message = error.message;
+    if let Some((first, hint)) = message.split_once("\nhint: ") {
+        eprintln!("{COMMAND_NAME}: {}: {first}", styler.red("error"));
+        eprintln!("hint: {hint}");
+    } else {
+        eprintln!("{COMMAND_NAME}: {}: {message}", styler.red("error"));
+    }
+    error.exit_code.unwrap_or(1)
+}
+
+fn prepare_target(
+    config: &Config,
+    target_os: &OsStr,
+) -> Result<PreparedTarget> {
+    if target_os.to_str().is_some_and(target_mod::looks_like_url) {
+        return Ok(PreparedTarget::Url);
+    }
+    let path = Path::new(target_os);
+    if path.exists() {
+        return match target_mod::resolve_local_target(path)? {
+            target_mod::CreateSource::Markdown(path) => {
+                let canonical = fs::canonicalize(&path).map_err(|error| {
+                    CommandError::new(format!(
+                        "resolve Markdown file {}: {error}",
+                        path.display()
+                    ))
+                })?;
+                let member = note_snapshot::vault_member_relative(
+                    &config.bob_dir,
+                    &canonical,
+                );
+                let utf8_identity = member.as_ref().is_some_and(|relative| {
+                    relative.components().all(|component| {
+                        component.as_os_str().to_str().is_some()
+                    })
+                });
+                if !utf8_identity {
+                    return Ok(PreparedTarget::Markdown(path));
+                }
+                let mut store = open_snapshot_store(config)?;
+                let raw = path.to_str().ok_or_else(|| {
+                    CommandError::new(format!(
+                        "Markdown file path is not UTF-8: {}",
+                        path.display()
+                    ))
+                })?;
+                match note_snapshot::classify_target(&mut store, raw)
+                    .map_err(|error| CommandError::new(error.to_string()))?
+                {
+                    note_snapshot::SnapshotTarget::VaultNote(note) => {
+                        Ok(PreparedTarget::VaultNote { store, note })
+                    }
+                    note_snapshot::SnapshotTarget::PlainMarkdown(path) => {
+                        Ok(PreparedTarget::Markdown(path))
+                    }
+                    note_snapshot::SnapshotTarget::Pdf(path) => {
+                        Ok(PreparedTarget::Pdf(path))
+                    }
+                    note_snapshot::SnapshotTarget::OtherExistingFile(path) => {
+                        Err(CommandError::new(format!(
+                            "TARGET must be a Markdown file (.md), a PDF file, or an http(s) URL: {}",
+                            path.display()
+                        )))
+                    }
+                }
             }
-            error.exit_code.unwrap_or(1)
+            target_mod::CreateSource::LocalPdf(path) => {
+                Ok(PreparedTarget::Pdf(path))
+            }
+            _ => Err(CommandError::new("unexpected target classification")),
+        };
+    }
+    if target_os.to_str().is_none() {
+        return Err(target_mod::resolve_local_target(path).unwrap_err());
+    }
+    let mut store = open_snapshot_store(config)?;
+    match note_snapshot::classify_target(
+        &mut store,
+        target_os.to_str().expect("checked UTF-8 target"),
+    )
+    .map_err(|error| CommandError::new(error.to_string()))?
+    {
+        note_snapshot::SnapshotTarget::VaultNote(note) => {
+            Ok(PreparedTarget::VaultNote { store, note })
+        }
+        note_snapshot::SnapshotTarget::PlainMarkdown(path) => {
+            Ok(PreparedTarget::Markdown(path))
+        }
+        note_snapshot::SnapshotTarget::Pdf(path) => {
+            Ok(PreparedTarget::Pdf(path))
+        }
+        note_snapshot::SnapshotTarget::OtherExistingFile(path) => {
+            Err(CommandError::new(format!(
+                "TARGET must be a Markdown file (.md), a PDF file, or an http(s) URL: {}",
+                path.display()
+            )))
         }
     }
+}
+
+fn open_snapshot_store(config: &Config) -> Result<note_snapshot::SourceStore> {
+    note_snapshot::SourceStore::open(&config.bob_dir).map_err(|error| {
+        CommandError::new(format!(
+            "open vault source cache {}: {error}",
+            config.bob_dir.display()
+        ))
+    })
+}
+
+fn resolve_parent_for_target(
+    config: &Config,
+    target: &mut PreparedTarget,
+    parent_input: Option<String>,
+) -> Result<(
+    String,
+    Option<crate::native::parent_notes::ResolvedParent>,
+    Option<String>,
+)> {
+    match target {
+        PreparedTarget::VaultNote { store, note } => {
+            if let Some(input) = parent_input {
+                let resolved = crate::native::parent_notes::resolve_parent(
+                    &config.bob_dir,
+                    &input,
+                )
+                .map_err(|error| CommandError::new(error.message()))?;
+                return Ok((resolved.route.clone(), Some(resolved), None));
+            }
+            let Some(default) = note_snapshot::default_parent(store, note)
+            else {
+                return Err(missing_parent_error());
+            };
+            Ok((
+                default.resolved.route.clone(),
+                Some(default.resolved),
+                Some(default.reason),
+            ))
+        }
+        _ => {
+            let Some(input) = parent_input else {
+                return Err(missing_parent_error());
+            };
+            let resolved = crate::native::parent_notes::resolve_parent(
+                &config.bob_dir,
+                &input,
+            )
+            .map_err(|error| CommandError::new(error.message()))?;
+            Ok((resolved.route.clone(), Some(resolved), None))
+        }
+    }
+}
+
+fn missing_parent_error() -> CommandError {
+    CommandError::new(
+        "--parent is required\nhint: pass -P <note>, for example `-P sase`; list area and project notes with `bob capture-targets`",
+    )
+    .with_exit_code(2)
 }
 
 pub(super) fn pandoc_command() -> Option<OsString> {
@@ -523,6 +702,7 @@ pub(super) fn pandoc_command() -> Option<OsString> {
 fn create_pdf(
     config: &Config,
     target_os: &OsString,
+    prepared: &mut PreparedTarget,
     options: &CreateOptions,
 ) -> Result<()> {
     // With --listen the command is resolved and validated before any
@@ -539,7 +719,7 @@ fn create_pdf(
     let target_lossy = target_os.to_string_lossy().into_owned();
     let target_raw = target_lossy.as_str();
     // Syntactic classification first; URL dedupe runs before any fetch.
-    if target_mod::looks_like_url(target_raw) {
+    if matches!(prepared, PreparedTarget::Url) {
         let (url, arxiv) = target_mod::resolve_url_syntactic(target_raw)?;
         let recorded = sources_mod::collect_recorded_source_urls(config)
             .map_err(|error| CommandError::new(error.message.clone()))?;
@@ -627,23 +807,32 @@ fn create_pdf(
             }
         }
     }
-    let local_path = Path::new(target_os);
-    match target_mod::resolve_local_target(local_path)? {
-        target_mod::CreateSource::Markdown(path) => create_markdown_route(
+    match prepared {
+        PreparedTarget::VaultNote { store, note } => create_vault_note_route(
             config,
-            &path,
+            store,
+            note.clone(),
             &mut scratch,
             options,
             listen.as_ref(),
         ),
-        target_mod::CreateSource::LocalPdf(path) => create_local_pdf_route(
+        PreparedTarget::Markdown(path) => create_markdown_route(
             config,
-            &path,
+            path,
             &mut scratch,
             options,
             listen.as_ref(),
         ),
-        _ => Err(CommandError::new("unexpected target classification")),
+        PreparedTarget::Pdf(path) => create_local_pdf_route(
+            config,
+            path,
+            &mut scratch,
+            options,
+            listen.as_ref(),
+        ),
+        PreparedTarget::Url => {
+            Err(CommandError::new("unexpected target classification"))
+        }
     }
 }
 
@@ -837,6 +1026,7 @@ fn default_ref_type_for_kind(
         "markdown" => DEFAULT_MARKDOWN_REF_TYPE.to_string(),
         "pdf" | "arxiv" => DEFAULT_PDF_REF_TYPE.to_string(),
         "article" => DEFAULT_ARTICLE_REF_TYPE.to_string(),
+        "note" => DEFAULT_NOTE_REF_TYPE.to_string(),
         _ => DEFAULT_MARKDOWN_REF_TYPE.to_string(),
     })
 }
@@ -861,6 +1051,499 @@ fn plan_target_for(
     }
 }
 
+fn create_vault_note_route(
+    config: &Config,
+    store: &mut note_snapshot::SourceStore,
+    note: note_snapshot::ClassifiedNote,
+    scratch: &mut super::ScratchDir,
+    options: &CreateOptions,
+    listen: Option<&super::listen::ListenCommand>,
+) -> Result<()> {
+    let snapshot_date = bob_env::current_datetime().date();
+    let settings =
+        crate::native::task_status_hooks::read_tasks_settings(&config.bob_dir);
+    let parent = options
+        .resolved_parent
+        .clone()
+        .ok_or_else(missing_parent_error)?;
+    let snapshot = note_snapshot::plan_snapshot(
+        store,
+        note,
+        &settings,
+        snapshot_date,
+        options.title.as_deref(),
+        options.closed,
+        parent,
+        options.parent_default_reason.clone(),
+    )
+    .map_err(CommandError::new)?;
+
+    let stem = match &options.name {
+        Some(name) => super::clip_url::validate_name(name)?,
+        None => snapshot.dated_stem.clone(),
+    };
+    let ref_type =
+        default_ref_type_for_kind("note", options.ref_type.as_deref())?;
+    let identity =
+        DefaultTargetIdentity::Title(snapshot.identity_title.clone());
+    let target_plan = plan_target_for(
+        config,
+        &stem,
+        &ref_type,
+        options.output.as_ref(),
+        options.force,
+        &identity,
+    )?;
+    let final_stem = if options.output.is_some() {
+        stem.clone()
+    } else {
+        target_plan.stem.clone()
+    };
+    let id = if options.include_id {
+        Some(final_stem)
+    } else {
+        None
+    };
+    let source_note = snapshot.note.identity.route.clone();
+    let author = options.author.clone().filter(|value| !value.is_empty());
+    let published = options.published.clone().filter(|value| !value.is_empty());
+    let marker = compose_markdown_marker(
+        &options.status,
+        &options.parent,
+        &snapshot.identity_title,
+        id.as_deref(),
+        author.as_deref(),
+        published.as_deref(),
+        Some(&source_note),
+        false,
+    )?;
+    let audio = plan_audio_copy(
+        config,
+        &snapshot.note.canonical_path,
+        &snapshot.source_markdown,
+        &target_plan,
+        options,
+    )?;
+    let plan = CreatePlan {
+        source: snapshot.note.canonical_path.display().to_string(),
+        source_kind: "vault note",
+        target: target_plan.target.clone(),
+        sidecar: target_plan.sidecar.clone(),
+        workflow: target_plan.workflow.clone(),
+        stem: target_plan.stem.clone(),
+        renamed_from: target_plan.renamed_from.clone(),
+        title: snapshot.identity_title.clone(),
+        title_source: snapshot.title_source.as_str(),
+        author,
+        published,
+        source_url: None,
+        source_note: Some(source_note),
+        source_markdown: Some(snapshot.source_markdown.clone()),
+        captured: None,
+        id,
+        marker,
+        audio,
+        page_count_hint: None,
+    };
+    if options.plain {
+        return create_markdown_plan(config, plan, scratch, options, listen);
+    }
+    create_snapshot_plan(config, plan, snapshot, scratch, options, listen)
+}
+
+fn create_snapshot_plan(
+    config: &Config,
+    mut plan: CreatePlan,
+    snapshot: note_snapshot::SnapshotPlan,
+    scratch: &mut super::ScratchDir,
+    options: &CreateOptions,
+    listen: Option<&super::listen::ListenCommand>,
+) -> Result<()> {
+    let stem = plan
+        .target
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .ok_or_else(|| {
+            CommandError::new(format!(
+                "target has no file stem: {}",
+                plan.target.display()
+            ))
+        })?
+        .to_string();
+    let listen_flow = match listen {
+        Some(_) => {
+            let flow = super::listen::plan_listen_flow(
+                &plan.target_plan(),
+                scratch,
+                &stem,
+            )?;
+            plan.audio = Some(listen_audio_plan(&flow));
+            Some(flow)
+        }
+        None => None,
+    };
+    let audio_uri = play_uri(config, &plan)?;
+    if options.dry_run {
+        if let (Some(command), Some(flow)) = (listen, listen_flow.as_ref()) {
+            println!(
+                "{}",
+                super::listen::would_run_line(
+                    command,
+                    &super::listen::ListenValues {
+                        target: scratch
+                            .path()
+                            .join("projected.md")
+                            .display()
+                            .to_string(),
+                        pdf: scratch.path().join("note.pdf"),
+                        audio: flow.scratch_audio.clone(),
+                        title: plan.title.clone(),
+                    },
+                )
+            );
+        }
+        print_snapshot_plan(&plan, &snapshot, options, &Styler::detect());
+        emit_snapshot_warnings(&snapshot, &snapshot.projected_markdown, &[]);
+        println!("writes: none");
+        return Ok(());
+    }
+
+    if plan.target.parent().is_none() {
+        return Err(CommandError::new(format!(
+            "target has no parent directory: {}",
+            plan.target.display()
+        )));
+    }
+    stage_snapshot_assets(&snapshot, scratch.path())?;
+    let filters = write_render_filters(scratch.path())?;
+    let outcome = note_snapshot::profile::render_note_pdf(
+        &snapshot.projected_markdown,
+        scratch.path(),
+        &filters,
+        &note_snapshot::profile::NoteMeta {
+            identity_title: snapshot.identity_title.clone(),
+            source_path: snapshot.note.identity.vault_relative_path.clone(),
+            kind: snapshot.source_kind.to_string(),
+            listen_uri: audio_uri,
+        },
+    )?;
+    let marker = stamp_marker_for_outcome(&plan, options, &outcome.report)?;
+    let info = PdfInfo {
+        title: Some(snapshot.identity_title.clone()),
+        author: plan.author.clone(),
+    };
+    let (page_count, link_outcome) = match (listen, listen_flow.as_ref()) {
+        (Some(command), Some(flow)) => {
+            let projected_path = scratch.path().join("projected.md");
+            let projected_display = projected_path.display().to_string();
+            let pages = stamp_listen_and_install_pdf(
+                scratch,
+                &plan.target_plan(),
+                command,
+                flow,
+                &projected_display,
+                &outcome.pdf,
+                &plan.title,
+                &plan.source,
+                &outcome.pdf,
+                &marker,
+                &info,
+                options.force,
+            )?;
+            (pages, outcome.report)
+        }
+        _ => {
+            let (stamped, pages) = pdf_target_mod::stamp_pdf_to_scratch(
+                &outcome.pdf,
+                scratch,
+                &marker,
+                &info,
+            )?;
+            super::refuse_target_collisions(
+                &plan.target,
+                &plan.sidecar,
+                &plan.workflow,
+                options.force,
+            )?;
+            pdf_target_mod::install_stamped_pdf(
+                &stamped,
+                &plan.target,
+                plan.audio.as_ref(),
+                pages,
+            )?;
+            (pages, outcome.report)
+        }
+    };
+
+    let styler = Styler::detect();
+    println!("{} created note snapshot", styler.success_prefix(false));
+    println!(
+        "source: {} ({} · sha256 {})",
+        plan.source,
+        snapshot.source_kind,
+        &snapshot.source_digest[..8]
+    );
+    print_renamed_if_needed(&plan.target_plan());
+    println!("pdf: {}", plan.target.display());
+    if let Some(audio) = &plan.audio {
+        println!("audio: {} (from {})", audio.dest.display(), audio.origin);
+    } else {
+        println!("audio: none");
+    }
+    println!("title: {}", plan.title);
+    println!("status: {}", options.status);
+    println!("parent: {}", options.parent);
+    if let Some(id) = &plan.id {
+        println!("id: {id}");
+    }
+    println!("pages: {page_count}");
+    print_snapshot_shown_omitted(&snapshot.summary);
+    emit_snapshot_warnings(
+        &snapshot,
+        &snapshot.projected_markdown,
+        &outcome.warnings,
+    );
+    super::return_links::emit_outcome(&link_outcome, &styler);
+    print_next_step(&plan.target_plan());
+    Ok(())
+}
+
+fn stage_snapshot_assets(
+    snapshot: &note_snapshot::SnapshotPlan,
+    scratch: &Path,
+) -> Result<()> {
+    for asset in &snapshot.projection.view.assets {
+        let destination = scratch.join(&asset.relative_path);
+        let parent = destination.parent().ok_or_else(|| {
+            CommandError::new(format!(
+                "snapshot asset has no destination directory: {}",
+                destination.display()
+            ))
+        })?;
+        fs::create_dir_all(parent).map_err(|error| {
+            CommandError::new(format!(
+                "create snapshot asset directory {}: {error}",
+                parent.display()
+            ))
+        })?;
+        fs::copy(&asset.canonical_source_path, &destination).map_err(
+            |error| {
+                CommandError::new(format!(
+                    "copy snapshot asset {} to scratch {}: {error}",
+                    asset.canonical_source_path.display(),
+                    destination.display()
+                ))
+            },
+        )?;
+    }
+    Ok(())
+}
+
+fn write_render_filters(scratch: &Path) -> Result<RenderFilters> {
+    let code_break = scratch.join("filter.lua");
+    fs::write(&code_break, PANDOC_CODE_BREAK_FILTER).map_err(|error| {
+        CommandError::new(format!(
+            "write pandoc filter {}: {error}",
+            code_break.display()
+        ))
+    })?;
+    let return_links = scratch.join("return-links.lua");
+    fs::write(&return_links, super::return_links::FILTER).map_err(|error| {
+        CommandError::new(format!(
+            "write pandoc filter {}: {error}",
+            return_links.display()
+        ))
+    })?;
+    Ok(RenderFilters {
+        code_break,
+        return_links,
+        report: scratch.join("return-links.json"),
+    })
+}
+
+fn print_snapshot_plan(
+    plan: &CreatePlan,
+    snapshot: &note_snapshot::SnapshotPlan,
+    options: &CreateOptions,
+    styler: &Styler,
+) {
+    println!(
+        "dry-run: {} would create note snapshot",
+        styler.success_prefix(true)
+    );
+    println!(
+        "source: {} ({} · sha256 {})",
+        plan.source,
+        snapshot.source_kind,
+        &snapshot.source_digest[..8]
+    );
+    print_renamed_if_needed(&plan.target_plan());
+    println!("pdf: {}", plan.target.display());
+    println!("sidecar_guard: {}", plan.sidecar.display());
+    if let TargetWorkflow::Intake {
+        library_destination,
+    } = &plan.workflow
+    {
+        println!("library_destination: {}", library_destination.display());
+    }
+    if let Some(audio) = &plan.audio {
+        println!("audio: {} (from {})", audio.dest.display(), audio.origin);
+    } else {
+        println!("audio: none");
+    }
+    println!("title: {}", plan.title);
+    println!("status: {}", options.status);
+    let parent_line = snapshot
+        .parent
+        .as_ref()
+        .map(|parent| parent.dry_run_line())
+        .unwrap_or_else(|| format!("parent: {}", options.parent));
+    if let Some(reason) = &snapshot.parent_default_reason {
+        println!("{parent_line} · default: {reason}");
+    } else {
+        println!("{parent_line}");
+    }
+    if let Some(id) = &plan.id {
+        println!("id: {id}");
+    }
+    println!("marker:");
+    print!("{}", plan.marker);
+    print_snapshot_projection_summary(snapshot);
+}
+
+fn print_snapshot_projection_summary(snapshot: &note_snapshot::SnapshotPlan) {
+    let sections = snapshot
+        .projection
+        .view
+        .sections
+        .iter()
+        .map(|section| {
+            section
+                .heading
+                .content
+                .iter()
+                .filter_map(|inline| match inline {
+                    note_snapshot::Inline::Text(text) => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<String>()
+        })
+        .filter(|name| !name.is_empty())
+        .collect::<Vec<_>>();
+    println!(
+        "sections: {}",
+        if sections.is_empty() {
+            "none".to_string()
+        } else {
+            sections.join(" · ")
+        }
+    );
+    println!("tasks: {}", task_summary(&snapshot.summary));
+    println!(
+        "omitted: {} closed · {} self-snapshot · {} sections",
+        snapshot.summary.omitted_closed_tasks,
+        snapshot.summary.omitted_self_snapshot_tasks,
+        snapshot.summary.omitted_sections
+    );
+    println!(
+        "logs: {} schedule logs · {} work logs",
+        snapshot.summary.schedule_logs, snapshot.summary.work_logs
+    );
+    println!(
+        "embeds: {} images ({} missing) · {} transclusions · {} guarded omissions",
+        snapshot.summary.assets,
+        snapshot.summary.missing_images,
+        snapshot.summary.transclusions,
+        snapshot.summary.guarded_omissions
+    );
+    println!(
+        "links: {} resolved · {} unresolved",
+        snapshot.summary.links.resolved, snapshot.summary.links.unresolved
+    );
+    match glyph_coverage(&snapshot.projected_markdown) {
+        Ok(uncovered) if uncovered.is_empty() => {
+            println!("glyphs: all covered")
+        }
+        Ok(uncovered) => println!(
+            "glyphs: uncovered {}",
+            uncovered
+                .iter()
+                .map(|ch| format!("U+{:04X}", u32::from(*ch)))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        Err(error) => println!("glyphs: unavailable ({error})"),
+    }
+}
+
+fn print_snapshot_shown_omitted(summary: &note_snapshot::SnapshotSummary) {
+    println!("shown: {}", task_summary(summary));
+    println!(
+        "omitted: {} closed · {} self-snapshot · {} sections",
+        summary.omitted_closed_tasks,
+        summary.omitted_self_snapshot_tasks,
+        summary.omitted_sections
+    );
+}
+
+fn task_summary(summary: &note_snapshot::SnapshotSummary) -> String {
+    use note_snapshot::SnapshotTaskStatus as Status;
+    let statuses = [
+        (Status::Open, "open"),
+        (Status::Next, "next"),
+        (Status::Wip, "in progress"),
+        (Status::Blocked, "blocked"),
+        (Status::Done, "done"),
+        (Status::Canceled, "canceled"),
+    ];
+    let shown = statuses
+        .iter()
+        .filter_map(|(status, label)| {
+            let count = summary.task_counts.get(status).copied().unwrap_or(0);
+            (count > 0).then(|| format!("{count} {label}"))
+        })
+        .collect::<Vec<_>>();
+    let total = summary.task_counts.values().sum::<u64>();
+    format!(
+        "{total} shown ({})",
+        if shown.is_empty() {
+            "none".to_string()
+        } else {
+            shown.join(" · ")
+        }
+    )
+}
+
+fn glyph_coverage(markdown: &str) -> std::io::Result<Vec<char>> {
+    note_snapshot::fonts::GlyphCoverage::new()
+        .map(|coverage| coverage.uncovered_everywhere(markdown))
+}
+
+fn emit_snapshot_warnings(
+    snapshot: &note_snapshot::SnapshotPlan,
+    projected_markdown: &str,
+    render_warnings: &[note_snapshot::profile::NoteWarning],
+) {
+    for warning in &snapshot.warnings {
+        println!("warning: {}", warning.message);
+    }
+    match glyph_coverage(projected_markdown) {
+        Ok(uncovered) if !uncovered.is_empty() => println!(
+            "warning: uncovered glyphs: {}",
+            uncovered
+                .iter()
+                .map(|ch| format!("U+{:04X} {ch}", u32::from(*ch)))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        Err(error) => println!("warning: glyph coverage unavailable: {error}"),
+        _ => {}
+    }
+    for warning in render_warnings {
+        println!("warning: {}", warning.message());
+    }
+}
+
 fn create_markdown_route(
     config: &Config,
     source: &Path,
@@ -868,7 +1551,17 @@ fn create_markdown_route(
     options: &CreateOptions,
     listen: Option<&super::listen::ListenCommand>,
 ) -> Result<()> {
-    let mut plan = plan_markdown(config, source, options)?;
+    let plan = plan_markdown(config, source, options)?;
+    create_markdown_plan(config, plan, scratch, options, listen)
+}
+
+fn create_markdown_plan(
+    config: &Config,
+    mut plan: CreatePlan,
+    scratch: &mut super::ScratchDir,
+    options: &CreateOptions,
+    listen: Option<&super::listen::ListenCommand>,
+) -> Result<()> {
     let styler = Styler::detect();
     // With --listen the staged render doubles as the narration source:
     // `{target}` and `{pdf}` are `<scratch>/<stem>.pdf`, and the listen
@@ -1958,6 +2651,7 @@ fn plan_markdown(
         id.as_deref(),
         author.as_deref(),
         published.as_deref(),
+        None,
         false,
     )?;
 
@@ -1977,6 +2671,8 @@ fn plan_markdown(
         author,
         published,
         source_url: None,
+        source_note: None,
+        source_markdown: Some(markdown),
         captured: None,
         id,
         marker,
@@ -1995,6 +2691,7 @@ fn compose_markdown_marker(
     id: Option<&str>,
     author: Option<&str>,
     published: Option<&str>,
+    source_note: Option<&str>,
     return_links: bool,
 ) -> Result<String> {
     let mut extras: Vec<(&str, MarkerValue)> = Vec::new();
@@ -2003,6 +2700,12 @@ fn compose_markdown_marker(
     }
     if let Some(published) = published.filter(|value| !value.is_empty()) {
         extras.push(("published", MarkerValue::String(published.to_string())));
+    }
+    if let Some(source_note) = source_note.filter(|value| !value.is_empty()) {
+        extras.push((
+            FIELD_SOURCE_NOTE,
+            MarkerValue::String(source_note.to_string()),
+        ));
     }
     if return_links {
         extras.push(("return_links", MarkerValue::Bool(true)));
@@ -2043,6 +2746,7 @@ fn stamp_marker_for_outcome(
         plan.id.as_deref(),
         plan.author.as_deref(),
         plan.published.as_deref(),
+        plan.source_note.as_deref(),
         true,
     )
 }
@@ -2162,9 +2866,15 @@ fn render_temp_path(target: &Path) -> Result<PathBuf> {
 
 fn play_uri(config: &Config, plan: &CreatePlan) -> Result<Option<String>> {
     let Some(audio_path) = bound_audio_path(plan) else {
-        if fs::read_to_string(&plan.source)
-            .is_ok_and(|markdown| markdown.contains("class=\"listen\""))
-        {
+        let has_listen_card = plan
+            .source_markdown
+            .as_deref()
+            .map(|markdown| markdown.contains("class=\"listen\""))
+            .unwrap_or_else(|| {
+                fs::read_to_string(&plan.source)
+                    .is_ok_and(|markdown| markdown.contains("class=\"listen\""))
+            });
+        if has_listen_card {
             eprintln!("warning: listen card has no bound companion audio");
         }
         return Ok(None);
@@ -2399,9 +3109,15 @@ fn render_temp_pdf(
 /// The dry-run parent line: the resolved `parent    route  (kind · label
 /// [· via alias])` line for an explicit `-P`, else today's `parent: …` line.
 fn print_parent_line(options: &CreateOptions) {
-    match &options.resolved_parent {
-        Some(resolved) => println!("{}", resolved.dry_run_line()),
-        None => println!("parent: {}", options.parent),
+    let line = options
+        .resolved_parent
+        .as_ref()
+        .map(|resolved| resolved.dry_run_line())
+        .unwrap_or_else(|| format!("parent: {}", options.parent));
+    if let Some(reason) = &options.parent_default_reason {
+        println!("{line} · default: {reason}");
+    } else {
+        println!("{line}");
     }
 }
 
@@ -2477,6 +3193,7 @@ mod tests {
         CreateOptions {
             audio: None,
             author: None,
+            closed: false,
             dry_run: false,
             force: false,
             html: None,
@@ -2485,7 +3202,9 @@ mod tests {
             name: None,
             no_audio: false,
             output: None,
+            plain: false,
             parent: "mac_inbox".to_string(),
+            parent_default_reason: None,
             resolved_parent: None,
             published: None,
             ref_type: None,
@@ -2776,6 +3495,8 @@ mod tests {
             author: None,
             published: None,
             source_url: None,
+            source_note: None,
+            source_markdown: Some("# Report".to_string()),
             captured: None,
             id: None,
             marker: compose_marker(
@@ -3149,7 +3870,7 @@ mod tests {
         }
         source.push_str("\n## Near bottom landing {#nearbottom}\n\n| cell one | cell two |\n|----------|----------|\n| r1c1 | r1c2 |\n| r2c1 | r2c2 |\n");
         let source_path = temp.path.join("exercise.md");
-        fs::write(&source_path, source).expect("write source");
+        fs::write(&source_path, &source).expect("write source");
         let target = temp.path.join("xlib/chat/exercise.pdf");
         fs::create_dir_all(target.parent().expect("target parent"))
             .expect("create output directory");
@@ -3168,6 +3889,8 @@ mod tests {
             author: None,
             published: None,
             source_url: None,
+            source_note: None,
+            source_markdown: Some(source.clone()),
             captured: None,
             id: None,
             marker: compose_marker(

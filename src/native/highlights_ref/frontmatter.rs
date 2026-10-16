@@ -170,6 +170,7 @@ pub(super) fn projection_from_snapshot_json(
         projection.insert(key, marker_value_from_json(value)?);
     }
     canonicalize_parent(&mut projection, FIELD_MARKER_BASE)?;
+    canonicalize_source_note(&mut projection, FIELD_MARKER_BASE)?;
     Ok(projection)
 }
 

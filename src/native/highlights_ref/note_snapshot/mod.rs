@@ -6,6 +6,7 @@
 //! Markdown.
 
 pub(crate) mod fonts;
+mod plan;
 pub(crate) mod profile;
 
 mod bob;
@@ -31,7 +32,7 @@ pub(crate) use classify::CountingLoader;
 pub(crate) use classify::{
     classify_note_kind, classify_target, default_parent, sha256_hex,
     source_identity, vault_member_relative, ClassifiedNote, ClassifyError,
-    DefaultParentDeferred, FilesystemSourceLoader, NoteKind, SnapshotTarget,
+    DefaultParent, FilesystemSourceLoader, NoteKind, SnapshotTarget,
     SourceLoader, SourceStore,
 };
 #[allow(unused_imports)]
@@ -39,6 +40,7 @@ pub(crate) use obsidian::{
     project_obsidian_syntax, status_for_symbol, PendingEmbed, SyntaxProjection,
     TitleCandidate,
 };
+pub(crate) use plan::{plan_snapshot, SnapshotPlan};
 #[allow(unused_imports)]
 pub(crate) use resolve::{
     build_fragment_index, classify_error_from_resolve, normalize_heading_key,
@@ -54,8 +56,8 @@ pub(crate) use resolve::{
 pub(crate) use serialize::serialize_projected_markdown;
 #[allow(unused_imports)]
 pub(crate) use transclusion::{
-    project_bob_snapshot, project_snapshot, SnapshotProjection,
-    SnapshotProjectionOptions,
+    project_bob_snapshot, project_snapshot, project_snapshot_from_syntax,
+    SnapshotProjection, SnapshotProjectionOptions,
 };
 #[allow(unused_imports)]
 pub(crate) use view::{

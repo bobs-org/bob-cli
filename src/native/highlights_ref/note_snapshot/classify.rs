@@ -13,7 +13,7 @@
 //! it is documented at this API rather than left as a misleading stub.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     ffi::OsStr,
     fmt, fs, io,
     path::{Component, Path, PathBuf},
@@ -25,7 +25,7 @@ use std::cell::Cell;
 
 use sha2::{Digest, Sha256};
 
-use super::resolve::VaultNotes;
+use super::resolve::{parse_link_target, VaultNotes};
 use super::view::SourceIdentity;
 use crate::native::{
     is_always_excluded_note_directory_name,
@@ -542,32 +542,80 @@ fn read_member_note<L: SourceLoader>(
     })
 }
 
-/// The default-parent walk belongs to outer create-wiring: nearest open
-/// area/project at or above the note, cycle-safe, depth-capped, with
-/// today's `-P required` error as the fallback. This error marks the
-/// intentional boundary so no caller mistakes classification for parent
-/// resolution.
+/// The inferred parent and why it was selected, for dry-run reporting.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct DefaultParentDeferred;
-
-impl fmt::Display for DefaultParentDeferred {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "default parent walk is deferred to outer create-wiring"
-        )
-    }
+pub(crate) struct DefaultParent {
+    pub resolved: crate::native::parent_notes::ResolvedParent,
+    /// `the note itself` or `ancestor <route>`.
+    pub reason: String,
 }
 
-impl std::error::Error for DefaultParentDeferred {}
+/// Find the nearest eligible root area/project in a note's parent chain.
+/// The walk is cycle-safe, bounded to eight ancestor hops, and reads every
+/// note through the same cache used by projection.
+pub(crate) fn default_parent<L: SourceLoader>(
+    store: &mut SourceStore<L>,
+    note: &ClassifiedNote,
+) -> Option<DefaultParent> {
+    const MAX_ANCESTORS: usize = 8;
 
-/// Explicitly deferred: always returns [`DefaultParentDeferred`] until
-/// outer create-wiring owns the walk. Present so the ownership boundary is
-/// documented at the classification API.
-pub(crate) fn default_parent(
-    _note: &ClassifiedNote,
-) -> Result<PathBuf, DefaultParentDeferred> {
-    Err(DefaultParentDeferred)
+    let root_bytes = store.read_canonical(&note.canonical_path).ok()?;
+    let mut current_identity = note.identity.clone();
+    let mut current_text = String::from_utf8_lossy(&root_bytes).into_owned();
+    if let Some(resolved) =
+        crate::native::parent_notes::resolve_cached_note_parent(
+            &current_identity.route,
+            &current_text,
+        )
+    {
+        return Some(DefaultParent {
+            resolved,
+            reason: "the note itself".to_string(),
+        });
+    }
+
+    let vault = store.vault_notes();
+    let mut visited = HashSet::from([current_identity.canonical_path.clone()]);
+    for _ in 0..MAX_ANCESTORS {
+        let parent = cached_parent_link(&current_text)?;
+        let parsed = parse_link_target(&parent);
+        let resolved = vault
+            .resolve_note(
+                Path::new(&current_identity.vault_relative_path),
+                &parsed,
+            )
+            .ok()?;
+        if !visited.insert(resolved.canonical_path.clone()) {
+            return None;
+        }
+        let bytes = store.read_canonical(&resolved.canonical_path).ok()?;
+        current_text = String::from_utf8_lossy(&bytes).into_owned();
+        current_identity =
+            source_identity(store.vault_root(), &resolved.canonical_path)?;
+        if let Some(parent) =
+            crate::native::parent_notes::resolve_cached_note_parent(
+                &current_identity.route,
+                &current_text,
+            )
+        {
+            return Some(DefaultParent {
+                reason: format!("ancestor {}", parent.route),
+                resolved: parent,
+            });
+        }
+    }
+    None
+}
+
+fn cached_parent_link(contents: &str) -> Option<String> {
+    let frontmatter = parse_frontmatter(contents)?;
+    let value = frontmatter_value(&frontmatter, "parent")?;
+    let value = crate::native::projects::trim_yaml_scalar(value).trim();
+    if value.is_empty() || value.eq_ignore_ascii_case("null") {
+        None
+    } else {
+        Some(value.to_string())
+    }
 }
 
 #[cfg(test)]
@@ -904,19 +952,121 @@ mod tests {
     }
 
     #[test]
-    fn default_parent_walk_is_explicitly_deferred() {
-        let vault = SyntheticVault::new(&[("Note.md", ORDINARY)]);
+    fn default_parent_prefers_self_then_walks_eligible_ancestors() {
+        let vault = SyntheticVault::new(&[
+            ("Area.md", AREA),
+            (
+                "projects/Done.md",
+                "---\ntype: [[project]]\nstatus: done\nparent: [[Area]]\n---\n",
+            ),
+            (
+                "zk/Idea.md",
+                "---\nparent: [[projects/Done]]\n---\n# Idea\n",
+            ),
+        ]);
+        let mut store = vault.filesystem_store();
+        let SnapshotTarget::VaultNote(area) =
+            classify_target(&mut store, "Area").expect("classify area")
+        else {
+            panic!("expected area note");
+        };
+        let self_parent =
+            default_parent(&mut store, &area).expect("self default");
+        assert_eq!(self_parent.resolved.route, "Area");
+        assert_eq!(self_parent.reason, "the note itself");
+
+        let SnapshotTarget::VaultNote(idea) =
+            classify_target(&mut store, "zk/Idea").expect("classify idea")
+        else {
+            panic!("expected idea note");
+        };
+        let ancestor =
+            default_parent(&mut store, &idea).expect("ancestor default");
+        assert_eq!(ancestor.resolved.route, "Area");
+        assert_eq!(ancestor.reason, "ancestor Area");
+    }
+
+    #[test]
+    fn default_parent_follows_subfolder_note_ancestry_and_rejects_cycles() {
+        let vault = SyntheticVault::new(&[
+            ("Area.md", AREA),
+            ("zk/Idea.md", "---\nparent: [[zk/Folder]]\n---\n"),
+            ("zk/Folder.md", "---\nparent: [[Area]]\n---\n"),
+            ("Loop.md", "---\nparent: [[Other]]\n---\n"),
+            ("Other.md", "---\nparent: [[Loop]]\n---\n"),
+            ("NoParent.md", "---\nparent: [[Missing]]\n---\n"),
+        ]);
+        let mut store = vault.filesystem_store();
+        for (route, expected) in [
+            ("zk/Idea", Some("Area")),
+            ("Loop", None),
+            ("NoParent", None),
+        ] {
+            let SnapshotTarget::VaultNote(note) =
+                classify_target(&mut store, route).expect("classify")
+            else {
+                panic!("expected note {route}");
+            };
+            assert_eq!(
+                default_parent(&mut store, &note)
+                    .map(|parent| parent.resolved.route),
+                expected.map(str::to_string),
+                "route {route}"
+            );
+        }
+    }
+
+    #[test]
+    fn default_parent_walk_is_bounded_to_eight_ancestor_hops() {
+        let mut files = vec![("Area.md".to_string(), AREA.to_string())];
+        files.push((
+            "Start.md".to_string(),
+            "---\nparent: [[n1]]\n---\n".to_string(),
+        ));
+        for index in 1..8 {
+            files.push((
+                format!("n{index}.md"),
+                format!("---\nparent: [[n{}]]\n---\n", index + 1),
+            ));
+        }
+        files.push(("n8.md".to_string(), PROJECT.to_string()));
+        let file_refs = files
+            .iter()
+            .map(|(path, text)| (path.as_str(), text.as_str()))
+            .collect::<Vec<_>>();
+        let vault = SyntheticVault::new(&file_refs);
         let mut store = vault.filesystem_store();
         let SnapshotTarget::VaultNote(note) =
-            classify_target(&mut store, "Note").expect("classify")
+            classify_target(&mut store, "Start").expect("classify")
         else {
-            panic!("expected vault note");
+            panic!("expected note");
         };
-        let error = default_parent(&note).expect_err("deferred");
         assert_eq!(
-            error.to_string(),
-            "default parent walk is deferred to outer create-wiring"
+            default_parent(&mut store, &note)
+                .expect("eight hops include n8")
+                .resolved
+                .route,
+            "n8"
         );
+
+        files.pop();
+        files.push((
+            "n8.md".to_string(),
+            "---\nparent: [[n9]]\n---\n".to_string(),
+        ));
+        files.push(("n9.md".to_string(), AREA.to_string()));
+        let file_refs = files
+            .iter()
+            .map(|(path, text)| (path.as_str(), text.as_str()))
+            .collect::<Vec<_>>();
+        let vault = SyntheticVault::new(&file_refs);
+        let mut store = vault.filesystem_store();
+        let SnapshotTarget::VaultNote(note) =
+            classify_target(&mut store, "Start").expect("classify")
+        else {
+            panic!("expected note");
+        };
+        assert!(default_parent(&mut store, &note).is_none());
     }
 
     #[cfg(unix)]

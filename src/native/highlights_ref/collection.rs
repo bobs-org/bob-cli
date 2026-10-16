@@ -297,6 +297,7 @@ fn options_from_matches(
     Ok(CreateOptions {
         audio: matches.get_one::<OsString>("audio").map(PathBuf::from),
         author: matches.get_one::<String>("author").cloned(),
+        closed: false,
         dry_run: matches.get_flag("dry-run"),
         force: matches.get_flag("force"),
         html: matches.get_one::<OsString>("html").cloned(),
@@ -305,7 +306,9 @@ fn options_from_matches(
         name: matches.get_one::<String>("name").cloned(),
         no_audio: matches.get_flag("no-audio"),
         output: matches.get_one::<OsString>("output").map(PathBuf::from),
+        plain: false,
         parent: resolved_parent.route.clone(),
+        parent_default_reason: None,
         resolved_parent: Some(resolved_parent),
         published,
         ref_type,

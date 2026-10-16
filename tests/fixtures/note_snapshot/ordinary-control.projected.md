@@ -11,7 +11,7 @@ bob-glyph-table: glyphs.lua
 bob-return-links: false
 ---
 
-# Plain note {#plain-note}
+# Content {#snapshot-content}
 
 Ordinary control prose\.
 

@@ -9,7 +9,7 @@
 /// Words uppercased whole when a record ID is humanized into a title.
 const ACRONYMS: &[&str] = &[
     "ai", "api", "cli", "gtd", "html", "http", "json", "llm", "lsp", "mcp",
-    "pdf", "prd", "sql", "ui", "url", "ux", "yaml",
+    "pdf", "prd", "sase", "sql", "ui", "url", "ux", "yaml",
 ];
 
 /// Humanize a record ID: split on `_` and `-`, capitalize each word,
@@ -22,6 +22,10 @@ pub(crate) fn titleize_id(id: &str) -> String {
             continue;
         }
         let folded = chunk.to_lowercase();
+        if folded == "bob" {
+            words.push("Bob".to_string());
+            continue;
+        }
         if ACRONYMS.contains(&folded.as_str()) {
             words.push(folded.to_uppercase());
             continue;
@@ -403,6 +407,8 @@ mod tests {
         assert_eq!(titleize_id("nvim-treesitter_lsp"), "Nvim Treesitter LSP");
         assert_eq!(titleize_id("25_goog_evals"), "25 Goog Evals");
         assert_eq!(titleize_id("http-go-link"), "HTTP Go Link");
+        assert_eq!(titleize_id("sase_blog"), "SASE Blog");
+        assert_eq!(titleize_id("bob_git"), "Bob Git");
     }
 
     #[test]
