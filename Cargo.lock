@@ -167,6 +167,7 @@ dependencies = [
  "shlex",
  "similar",
  "tempfile",
+ "ttf-parser",
  "url",
 ]
 

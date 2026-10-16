@@ -51,6 +51,8 @@ mod listen;
 mod marker;
 mod model;
 mod note;
+#[allow(dead_code)]
+pub(crate) mod note_snapshot;
 mod pdf_meta;
 mod pdf_target;
 mod projection;
