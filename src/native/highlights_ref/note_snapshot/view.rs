@@ -184,6 +184,8 @@ pub(crate) enum LinkTarget {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum Inline {
     Text(String),
+    /// An emitted source-local anchor attached to its actual content node.
+    Anchor(SnapshotAnchor),
     Link {
         label: Vec<Inline>,
         target: LinkTarget,
@@ -192,6 +194,16 @@ pub(crate) enum Inline {
     Strong(Vec<Inline>),
     Strike(Vec<Inline>),
     Code(String),
+    /// An image resolved through the shared asset index, including its width hint.
+    Image {
+        asset_id: String,
+        alt: String,
+        width_percent: Option<u8>,
+    },
+    /// A block-level image or note embed that appeared inline in source text.
+    /// The transclusion pass replaces note-embed placeholders with their expanded
+    /// block or their readable fallback while preserving surrounding inline order.
+    EmbeddedBlock(Box<Block>),
     Chip(Chip),
     Muted(Vec<Inline>),
     Break,

@@ -242,6 +242,9 @@ struct WorkLine {
     byte_start: usize,
     /// Original line without its terminator.
     raw: String,
+    /// Prefix of the original line removed while projecting blockquote/callout
+    /// structure. It maps the effective syntax back to the original source line.
+    source_prefix: String,
     /// Effective line content after comment stripping.
     text: String,
     /// True for lines inside (or bounding) a fenced code block.
@@ -500,6 +503,7 @@ fn preprocess_lines(
                     line_no: index + 1,
                     byte_start: line.byte_start,
                     raw: line.text.to_string(),
+                    source_prefix: String::new(),
                     text: String::new(),
                     fenced: false,
                     dropped: true,
@@ -511,6 +515,7 @@ fn preprocess_lines(
                     line_no: index + 1,
                     byte_start: line.byte_start,
                     raw: line.text.to_string(),
+                    source_prefix: String::new(),
                     text: line.text.to_string(),
                     fenced: true,
                     dropped: false,
@@ -522,6 +527,7 @@ fn preprocess_lines(
                     line_no: index + 1,
                     byte_start: line.byte_start,
                     raw: line.text.to_string(),
+                    source_prefix: String::new(),
                     text,
                     fenced: false,
                     dropped: false,
@@ -531,6 +537,7 @@ fn preprocess_lines(
                     line_no: index + 1,
                     byte_start: line.byte_start,
                     raw: line.text.to_string(),
+                    source_prefix: String::new(),
                     text: String::new(),
                     fenced: false,
                     dropped: true,
@@ -538,6 +545,30 @@ fn preprocess_lines(
             }
         })
         .collect()
+}
+
+/// Line numbers hidden by the same fenced/inline-code-aware comment scanner used by
+/// syntax projection. Fragment indexing calls this so comment-looking code never
+/// hides later headings.
+pub(super) fn hidden_comment_lines(lines: &[&str]) -> BTreeSet<usize> {
+    let fenced = fenced_lines(lines, 0..lines.len());
+    let mut state = CommentState::default();
+    let mut hidden = BTreeSet::new();
+    for (index, line) in lines.iter().enumerate() {
+        if fenced.contains(&index) {
+            continue;
+        }
+        if strip_line_comments(line, &mut state).is_none() {
+            hidden.insert(index);
+        }
+    }
+    hidden
+}
+
+/// Produce one heading line's visible spelling with syntax projection's comment
+/// rules, including protection for inline code spans.
+pub(super) fn strip_comments_for_fragment(line: &str) -> String {
+    strip_line_comments(line, &mut CommentState::default()).unwrap_or_default()
 }
 
 #[derive(Default)]
@@ -550,50 +581,54 @@ struct CommentState {
 /// whole line is hidden inside a multiline span. Inline code spans are
 /// recomputed after every removal so offsets stay honest.
 fn strip_line_comments(line: &str, state: &mut CommentState) -> Option<String> {
-    let mut current = line.to_string();
+    let mut current = line;
+    let mut visible = String::new();
     loop {
         if state.in_percent {
-            let Some(position) = find_outside_code(&current, "%%") else {
-                return None;
+            let Some(position) = find_outside_code(current, "%%") else {
+                return (!visible.is_empty()).then_some(visible);
             };
-            current = current[position + 2..].to_string();
+            current = &current[position + 2..];
             state.in_percent = false;
         } else if state.in_html {
-            let Some(position) = find_outside_code(&current, "-->") else {
-                return None;
+            let Some(position) = find_outside_code(current, "-->") else {
+                return (!visible.is_empty()).then_some(visible);
             };
-            current = current[position + 3..].to_string();
+            current = &current[position + 3..];
             state.in_html = false;
         } else {
-            let percent = find_outside_code(&current, "%%");
-            let html = find_outside_code(&current, "<!--");
+            let percent = find_outside_code(current, "%%");
+            let html = find_outside_code(current, "<!--");
             let percent_first = match (percent, html) {
                 (Some(open), None) => Some(open),
                 (Some(open), Some(other)) if other > open => Some(open),
                 _ => None,
             };
             if let Some(open) = percent_first {
-                match find_outside_code_from(&current, "%%", open + 2) {
+                visible.push_str(&current[..open]);
+                match find_outside_code_from(current, "%%", open + 2) {
                     Some(close) => {
-                        current.replace_range(open..close + 2, "");
+                        current = &current[close + 2..];
                     }
                     None => {
-                        current.truncate(open);
                         state.in_percent = true;
+                        return (!visible.is_empty()).then_some(visible);
                     }
                 }
             } else if let Some(open) = html {
-                match find_outside_code_from(&current, "-->", open + 4) {
+                visible.push_str(&current[..open]);
+                match find_outside_code_from(current, "-->", open + 4) {
                     Some(close) => {
-                        current.replace_range(open..close + 3, "");
+                        current = &current[close + 3..];
                     }
                     None => {
-                        current.truncate(open);
                         state.in_html = true;
+                        return (!visible.is_empty()).then_some(visible);
                     }
                 }
             } else {
-                return Some(current);
+                visible.push_str(current);
+                return Some(visible);
             }
         }
     }
@@ -888,6 +923,15 @@ impl<'a, L: SourceLoader> Projector<'a, L> {
                 }
             }
             let (block, next) = self.parse_paragraph(lines, index, min_indent);
+            if next <= index {
+                // Every dispatch path must consume input. An unhandled single-line
+                // construct is kept as readable projected inline content.
+                blocks.push(Block::Paragraph(
+                    self.parse_inlines(&line.text, Some(line.line_no)),
+                ));
+                index += 1;
+                continue;
+            }
             blocks.push(block);
             index = next;
         }
@@ -932,17 +976,26 @@ impl<'a, L: SourceLoader> Projector<'a, L> {
         let label = self.parse_inlines(&alt, Some(line_no));
         let (path, _) = split_image_target(&target);
         if is_url_target(&path) {
-            return None;
+            return Some(Block::Paragraph(vec![Inline::Link {
+                label,
+                target: LinkTarget::Url(path),
+            }]));
         }
         let alt = flatten_inlines(&label);
-        Some(self.project_attachment_image(&path, None, alt, Some(line_no)))
+        let attachment = parse_attachment_target(&path);
+        Some(self.project_attachment_image(
+            &attachment.path,
+            attachment.width_px,
+            alt,
+            Some(line_no),
+        ))
     }
 
     fn parse_heading(&mut self, line: &WorkLine) -> Block {
         let (level, title) =
             atx_heading(&line.text).expect("heading checked by caller");
         let (title, block_id) = strip_trailing_block_id(title);
-        let content = self.parse_inlines(title, Some(line.line_no));
+        let mut content = self.parse_inlines(title, Some(line.line_no));
         let plain = flatten_inlines(&content);
         let slug = self.claim_anchor_id(&slugify(&plain));
         // The anchor identity must match the fragment index key, which is
@@ -950,11 +1003,12 @@ impl<'a, L: SourceLoader> Projector<'a, L> {
         // with formatting intact — never from flattened plain text.
         // (Inline HTML comments stay in the index key by shared-index
         // design; links to such headings warn rather than misresolve.)
-        let key = normalize_heading_key_for(&strip_inline_comment_pairs(title));
+        let key = normalize_heading_key_for(title);
         let anchor = self.push_anchor(AnchorKind::Heading, key, slug.clone());
         if let Some(id) = block_id {
             let tid = self.claim_anchor_id(&format!("t-{id}"));
-            self.push_anchor(AnchorKind::Block, id, tid);
+            let block_anchor = self.push_anchor(AnchorKind::Block, id, tid);
+            content.push(Inline::Anchor(block_anchor));
         }
         if level == 1 && !self.seen_title {
             self.seen_title = true;
@@ -1006,9 +1060,22 @@ impl<'a, L: SourceLoader> Projector<'a, L> {
             self.push_anchor(AnchorKind::Block, id, tid)
         });
         let byte_end = line.byte_start + line.raw.len();
+        let raw_task_line = line
+            .raw
+            .get(line.source_prefix.len()..)
+            .unwrap_or(&line.raw);
+        let raw_marker = parse_task_marker(raw_task_line);
+        let raw_body = raw_marker
+            .as_ref()
+            .map(|raw_marker| raw_marker.body.to_string())
+            .unwrap_or_else(|| marker.body.to_string());
+        let source_indent = raw_marker
+            .as_ref()
+            .map(|raw_marker| raw_marker.indent.to_string())
+            .unwrap_or_else(|| marker.indent.to_string());
         self.task_lines.push(ParsedTaskLine {
             raw_line: line.raw.clone(),
-            body: marker.body.to_string(),
+            body: raw_body,
             extent: SourceExtent {
                 byte_start: line.byte_start,
                 byte_end,
@@ -1016,8 +1083,8 @@ impl<'a, L: SourceLoader> Projector<'a, L> {
                 last_line: line.line_no,
             },
             indentation: SourceIndentation {
-                prefix: marker.indent.to_string(),
-                columns: width,
+                columns: indent_width(&source_indent),
+                prefix: source_indent,
             },
             block_id,
         });
@@ -1110,15 +1177,15 @@ impl<'a, L: SourceLoader> Projector<'a, L> {
                 break;
             }
             let (item_body, block_id) = strip_trailing_block_id(marker.content);
-            let content = self.parse_inlines(item_body, Some(line.line_no));
-            let content = match block_id {
+            let mut content = self.parse_inlines(item_body, Some(line.line_no));
+            match block_id {
                 Some(id) => {
                     let tid = self.claim_anchor_id(&format!("t-{id}"));
-                    self.push_anchor(AnchorKind::Block, id, tid);
-                    content
+                    let anchor = self.push_anchor(AnchorKind::Block, id, tid);
+                    content.push(Inline::Anchor(anchor));
                 }
-                None => content,
-            };
+                None => {}
+            }
             let width = line.indent_width();
             let (children, next) = self.parse_nested(lines, cursor + 1, width);
             items.push(ListItem { content, children });
@@ -1148,7 +1215,14 @@ impl<'a, L: SourceLoader> Projector<'a, L> {
                 index: line.index,
                 line_no: line.line_no,
                 byte_start: line.byte_start,
-                raw: strip_callout_prefix(&line.text).to_string(),
+                raw: line.raw.clone(),
+                source_prefix: {
+                    let effective_prefix =
+                        line.text.len() - strip_callout_prefix(&line.text).len();
+                    let mut prefix = line.source_prefix.clone();
+                    prefix.push_str(&line.text[..effective_prefix]);
+                    prefix
+                },
                 text: strip_callout_prefix(&line.text).to_string(),
                 fenced: false,
                 dropped: false,
@@ -1277,7 +1351,6 @@ impl<'a, L: SourceLoader> Projector<'a, L> {
                 || parse_task_marker(&line.text).is_some()
                 || parse_list_marker(&line.text).is_some()
                 || is_thematic_break(&line.text)
-                || is_single_embed_line(&line.text)
             {
                 break;
             }
@@ -1288,16 +1361,17 @@ impl<'a, L: SourceLoader> Projector<'a, L> {
                     inlines.push(Inline::Text(" ".to_string()));
                 }
             }
-            // Trailing block IDs anchor the line without surviving as
-            // text. Prose carries no anchor marker in the output, so the
-            // anchor lives in the visible set for link serialization;
-            // tasks render their own `t-ID` marker.
+            // Trailing block IDs anchor the actual content and remain in the
+            // final visible set only while this paragraph survives filtering.
             let (visible, block_id) = strip_trailing_block_id(&line.text);
             if let Some(id) = block_id {
                 let tid = self.claim_anchor_id(&format!("t-{id}"));
-                self.push_anchor(AnchorKind::Block, id, tid);
+                let anchor = self.push_anchor(AnchorKind::Block, id, tid);
+                inlines.extend(self.parse_inlines(visible, Some(line.line_no)));
+                inlines.push(Inline::Anchor(anchor));
+            } else {
+                inlines.extend(self.parse_inlines(visible, Some(line.line_no)));
             }
-            inlines.extend(self.parse_inlines(visible, Some(line.line_no)));
             cursor += 1;
         }
         (Block::Paragraph(inlines), cursor)
@@ -1345,19 +1419,6 @@ fn parse_callout_header(line: &str) -> Option<(String, String)> {
 /// fragment index (trimmed, case-insensitive).
 fn normalize_heading_key_for(plain: &str) -> String {
     plain.trim().to_lowercase()
-}
-
-/// Remove one inline `%%...%%` pair for heading-key purposes, mirroring
-/// the fragment index. An unclosed `%%` leaves the title untouched.
-fn strip_inline_comment_pairs(title: &str) -> String {
-    let Some(start) = title.find("%%") else {
-        return title.to_string();
-    };
-    let after = &title[start + 2..];
-    let Some(end) = after.find("%%") else {
-        return title.to_string();
-    };
-    format!("{}{}", &title[..start], &after[end + 2..])
 }
 
 /// Line numbers hidden inside multiline `%%` / HTML comment spans,
@@ -1420,6 +1481,7 @@ fn flatten_inlines(inlines: &[Inline]) -> String {
     for inline in inlines {
         match inline {
             Inline::Text(text) | Inline::Code(text) => plain.push_str(text),
+            Inline::Anchor(_) => {}
             Inline::Link { label, .. } => {
                 plain.push_str(&flatten_inlines(label))
             }
@@ -1432,6 +1494,14 @@ fn flatten_inlines(inlines: &[Inline]) -> String {
             Inline::Chip(chip) => {
                 plain.push_str(&flatten_inlines(&chip.content))
             }
+            Inline::Image { alt, .. } => plain.push_str(alt),
+            Inline::EmbeddedBlock(block) => match block.as_ref() {
+                Block::Embed { source, .. } => plain.push_str(source),
+                Block::Paragraph(content) | Block::EmptyState(content) => {
+                    plain.push_str(&flatten_inlines(content))
+                }
+                _ => {}
+            },
             Inline::Break => plain.push(' '),
         }
     }
@@ -1890,7 +1960,13 @@ impl<'a, L: SourceLoader> Projector<'a, L> {
                 ));
             }
             let alt = flatten_inlines(&self.parse_inlines(&label_raw, line_no));
-            let inlines = self.project_inline_image(&path, alt, line_no);
+            let attachment = parse_attachment_target(&path);
+            let inlines = self.project_inline_image(
+                &attachment.path,
+                alt,
+                attachment.width_px,
+                line_no,
+            );
             return Some((inlines, consumed));
         }
         let label = self.parse_inlines(&label_raw, line_no);
@@ -2363,6 +2439,19 @@ impl<'a, L: SourceLoader> Projector<'a, L> {
                 ));
                 match fragment {
                     LinkFragment::Block(id) => {
+                        if is_self {
+                            if let Some(warning) =
+                                self.check_host_fragment(fragment)
+                            {
+                                return (
+                                    vec![Inline::Text(format!(
+                                        "{stem} › ^{id}"
+                                    ))],
+                                    None,
+                                    Some(warning),
+                                );
+                            }
+                        }
                         let excerpt = self.block_excerpt(
                             &resolved.canonical_path,
                             id,
@@ -2377,7 +2466,6 @@ impl<'a, L: SourceLoader> Projector<'a, L> {
                             }
                         };
                         if is_self {
-                            let warning = self.check_host_fragment(fragment);
                             return (
                                 label,
                                 Some(LinkTarget::Internal(AnchorIdentity {
@@ -2385,7 +2473,7 @@ impl<'a, L: SourceLoader> Projector<'a, L> {
                                     kind: AnchorKind::Block,
                                     fragment: id.clone(),
                                 })),
-                                warning,
+                                None,
                             );
                         }
                         let warning =
@@ -2403,6 +2491,9 @@ impl<'a, L: SourceLoader> Projector<'a, L> {
                                 }
                             };
                             let warning = self.check_host_fragment(fragment);
+                            if warning.is_some() {
+                                return (label, None, warning);
+                            }
                             return (
                                 label,
                                 Some(LinkTarget::Internal(AnchorIdentity {
@@ -2436,7 +2527,11 @@ impl<'a, L: SourceLoader> Projector<'a, L> {
             FragmentLookup::Ambiguous { count } => Some((
                 SnapshotWarningKind::AmbiguousFragment,
                 format!(
-                    "{count} headings named {} in this note",
+                    "{count} {} named {} in this note",
+                    match fragment {
+                        LinkFragment::Heading(_) => "headings",
+                        LinkFragment::Block(_) => "blocks",
+                    },
                     fragment_describe(fragment)
                 ),
             )),
@@ -2616,17 +2711,15 @@ impl<'a, L: SourceLoader> Projector<'a, L> {
         &mut self,
         path: &str,
         alt: String,
+        width_px: Option<u32>,
         line_no: Option<usize>,
     ) -> Vec<Inline> {
-        match self.resolve_attachment_image(path, None, line_no) {
-            Ok((asset, _)) => {
-                let href =
-                    asset.relative_path.to_string_lossy().replace('\\', "/");
-                vec![Inline::Link {
-                    label: vec![Inline::Text(alt)],
-                    target: LinkTarget::Url(href),
-                }]
-            }
+        match self.resolve_attachment_image(path, width_px, line_no) {
+            Ok((asset, width_percent)) => vec![Inline::Image {
+                asset_id: asset.id,
+                alt,
+                width_percent,
+            }],
             Err(_) => vec![Inline::Muted(vec![Inline::Text(format!(
                 "Missing image · {path}"
             ))])],
@@ -2720,7 +2813,12 @@ impl<'a, L: SourceLoader> Projector<'a, L> {
             } else {
                 alt
             };
-            return self.project_inline_image(&attach.path, alt, line_no);
+            return self.project_inline_image(
+                &attach.path,
+                alt,
+                attach.width_px,
+                line_no,
+            );
         }
         let parsed = parse_link_target(inner);
         let fallback =
@@ -2743,7 +2841,6 @@ impl<'a, L: SourceLoader> Projector<'a, L> {
                 }
             };
         let route = note_route(&resolved.vault_relative_path);
-        let file = relative_uri_path(&resolved.vault_relative_path);
         let label = match &parsed.fragment {
             Some(fragment) => {
                 format!("{route} › {}", fragment_label(fragment))
@@ -2751,14 +2848,18 @@ impl<'a, L: SourceLoader> Projector<'a, L> {
             None => route,
         };
         self.links_resolved += 1;
-        vec![Inline::Link {
-            label: vec![Inline::Text(label)],
-            target: LinkTarget::ObsidianUri(obsidian_uri_with_fragment(
-                &self.vault_name,
-                &file,
-                parsed.fragment.as_ref(),
-            )),
-        }]
+        self.pending_embeds.push(PendingEmbed {
+            label: label.clone(),
+            canonical_path: resolved.canonical_path,
+            vault_relative: resolved.vault_relative_path,
+            fragment: parsed.fragment,
+            origin_line: line_no,
+            same_note: resolved.same_note,
+        });
+        vec![Inline::EmbeddedBlock(Box::new(Block::Embed {
+            source: label,
+            blocks: Vec::new(),
+        }))]
     }
 }
 
@@ -3214,6 +3315,32 @@ mod tests {
     }
 
     #[test]
+    fn comment_scanner_preserves_visible_text_around_multiline_comments() {
+        let (_dir, projection) = host_only(
+            "# Visible %%private%% title\n\
+             Before <!-- hidden start\n\
+             # Hidden heading\n\
+             --> after\n\
+             ```text\n%%\n<!--\n```\n",
+        );
+        let shape = shapes(&projection.blocks).join("\n");
+        assert!(shape.contains("H:#:Visible  title"), "{shape}");
+        assert!(shape.contains("Before"), "{shape}");
+        assert!(shape.contains("after"), "{shape}");
+        assert!(!shape.contains("private"), "{shape}");
+        assert!(!shape.contains("Hidden heading"), "{shape}");
+        let code = projection
+            .blocks
+            .iter()
+            .find_map(|block| match block {
+                Block::Code { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .expect("fenced code");
+        assert_eq!(code, "%%\n<!--\n");
+    }
+
+    #[test]
     fn inline_code_protects_apparent_syntax() {
         let (_dir, projection) =
             host_only("Use `[[not a link]]` and `#notatag` here.\n");
@@ -3351,6 +3478,81 @@ mod tests {
             vec!["parent", "two-space child", "tab grandchild", "sibling",]
         );
         assert_eq!(projection.parsed.task_lines[2].indentation.columns, 4);
+    }
+
+    #[test]
+    fn task_source_records_keep_comments_fields_indentation_and_callout_offsets() {
+        let input = "    - [ ] Keep %%private%% [fresh:: 2026-10-16] ^item\n\
+                     \t- [ ] Tab [custom:: retained]\n\
+                     > [!note]\n\
+                     > - [ ] Nested %%secret%% [custom:: callout] ^nested\n";
+        let (_dir, projection) = host_only(input);
+        assert_eq!(projection.parsed.task_lines.len(), 3);
+        let expected = [
+            (
+                "Keep %%private%% [fresh:: 2026-10-16] ^item",
+                "    ",
+                1,
+                "    - [ ] Keep %%private%% [fresh:: 2026-10-16] ^item",
+            ),
+            ("Tab [custom:: retained]", "\t", 2, "\t- [ ] Tab [custom:: retained]"),
+            (
+                "Nested %%secret%% [custom:: callout] ^nested",
+                "",
+                4,
+                "> - [ ] Nested %%secret%% [custom:: callout] ^nested",
+            ),
+        ];
+        for (task, (body, indent, line, raw_line)) in
+            projection.parsed.task_lines.iter().zip(expected)
+        {
+            assert_eq!(task.body, body);
+            assert_eq!(task.indentation.prefix, indent);
+            assert_eq!(task.extent.first_line, line);
+            assert_eq!(task.raw_line, raw_line);
+            assert_eq!(
+                &projection.parsed.raw_bytes
+                    [task.extent.byte_start..task.extent.byte_end],
+                raw_line.as_bytes()
+            );
+        }
+    }
+
+    #[test]
+    fn remote_and_malformed_image_lines_always_make_bounded_progress() {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let (_dir, projection) = host_only(
+                "![remote](https://example.test/image.png)\n\
+                 \n\
+                 Adjacent ![remote](https://example.test/image.png) prose\n\
+                 \n\
+                 ![broken](https://example.test/image.png\n",
+            );
+            let blocks = projection.blocks;
+            let _ = sender.send(blocks);
+        });
+        let blocks = receiver
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("snapshot parser did not advance through image-shaped lines");
+        assert_eq!(blocks.len(), 3, "{blocks:?}");
+        let remote_links = blocks[..2]
+            .iter()
+            .flat_map(|block| match block {
+                Block::Paragraph(inlines) => inlines.iter().collect::<Vec<_>>(),
+                _ => Vec::new(),
+            })
+            .filter(|inline| matches!(
+                inline,
+                Inline::Link { target: LinkTarget::Url(url), .. }
+                    if url == "https://example.test/image.png"
+            ))
+            .count();
+        assert_eq!(remote_links, 2);
+        let Block::Paragraph(malformed) = &blocks[2] else {
+            panic!("malformed image: {blocks:?}");
+        };
+        assert!(flatten_inlines(malformed).contains("![broken]"));
     }
 
     #[test]

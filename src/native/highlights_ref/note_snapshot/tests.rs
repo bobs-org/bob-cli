@@ -52,18 +52,17 @@ fn task(
     })
 }
 
-fn contract_view() -> SnapshotView {
+pub(super) fn contract_view() -> SnapshotView {
     let source = source_identity();
     let requirements = anchor(&source, "requirements", "requirements");
-    let detail_heading =
-        anchor(&source, "heading-level-three", "heading-level-three");
+    let fasteners = anchor(&source, "fasteners", "fasteners");
     let next = anchor(&source, "next-task", "t-next");
     let blocked = anchor(&source, "intro-proposal", "t-intro-proposal");
     let closed = anchor(&source, "closed", "closed");
     let omitted = anchor(&source, "omitted-task", "t-omitted");
     let anchors = vec![
         requirements.clone(),
-        detail_heading.clone(),
+        fasteners.clone(),
         next.clone(),
         blocked.clone(),
         closed.clone(),
@@ -96,8 +95,22 @@ fn contract_view() -> SnapshotView {
     };
     let next_task = SnapshotTask {
         status: SnapshotTaskStatus::Next,
-        content: vec![text("Next task")],
-        chips: Vec::new(),
+            content: vec![
+                text("Brief the "),
+                Inline::Link {
+                    label: vec![text("night crew")],
+                    target: LinkTarget::ObsidianUri(
+                        "obsidian://open?vault=bob&file=night_crew.md".to_string(),
+                    ),
+                },
+            ],
+            chips: vec![Chip {
+                content: vec![text("Keep")],
+                kind: ChipKind::Normal,
+                target: Some(LinkTarget::Url(
+                    "https://example.com/keep/night-crew".to_string(),
+                )),
+            }],
         anchor: Some(next.clone()),
         children: vec![Block::List {
             kind: ListKind::Unordered,
@@ -123,19 +136,64 @@ fn contract_view() -> SnapshotView {
                 label: vec![text("Waits on")],
                 items: vec![
                     vec![Inline::Link {
-                        label: vec![text("Task One")],
-                        target: LinkTarget::Url(
-                            "https://example.test/tasks/one".to_string(),
+                        label: vec![text("Tide Office")],
+                        target: LinkTarget::ObsidianUri(
+                            "obsidian://open?vault=bob&file=tide_office.md".to_string(),
                         ),
                     }],
-                    vec![text("Plan")],
+                    vec![Inline::Link {
+                        label: vec![text("Pier Nine")],
+                        target: LinkTarget::ObsidianUri(
+                            "obsidian://open?vault=bob&file=pier_nine.md".to_string(),
+                        ),
+                    }],
                 ],
             },
             Block::List {
                 kind: ListKind::Unordered,
                 items: vec![ListItem {
-                    content: vec![text("Prerequisite notes")],
-                    children: Vec::new(),
+                    content: vec![text("A nested ordinary list under a task:")],
+                    children: vec![
+                        Block::List {
+                            kind: ListKind::Unordered,
+                            items: vec![
+                                ListItem {
+                                    content: vec![
+                                        text("first bullet with a "),
+                                        Inline::Link {
+                                            label: vec![text("child link")],
+                                            target: LinkTarget::Url(
+                                                "https://example.com/child".to_string(),
+                                            ),
+                                        },
+                                    ],
+                                    children: Vec::new(),
+                                },
+                                ListItem {
+                                    content: vec![
+                                        text("second bullet with "),
+                                        Inline::Code("code_token".to_string()),
+                                        text(" and "),
+                                        Inline::Emphasis(vec![text("emphasis")]),
+                                    ],
+                                    children: Vec::new(),
+                                },
+                            ],
+                        },
+                        Block::List {
+                            kind: ListKind::Ordered { start: 1 },
+                            items: vec![
+                                ListItem {
+                                    content: vec![text("check the flood lamps")],
+                                    children: Vec::new(),
+                                },
+                                ListItem {
+                                    content: vec![text("log the gull nests")],
+                                    children: Vec::new(),
+                                },
+                            ],
+                        },
+                    ],
                 }],
             },
         ],
@@ -143,7 +201,21 @@ fn contract_view() -> SnapshotView {
 
     let blocks = vec![
         Block::Paragraph(vec![
-            text("Punctuation: [square], _marks_, $69.00, :sparkles:, and @ROUTE; Unicode: café — naïve. "),
+            text("Punctuation: [square], _marks_, $69.00, :sparkles:, and @ROUTE; Unicode: café — naïve. A short prose paragraph with emphasis, inline code, and a "),
+            Inline::Link {
+                label: vec![text("harbor link")],
+                target: LinkTarget::ObsidianUri(
+                    "obsidian://open?vault=bob&file=harbor.md".to_string(),
+                ),
+            },
+            text(". See "),
+            Inline::Link {
+                label: vec![text("Closed tasks")],
+                target: LinkTarget::Internal(closed.identity.clone()),
+            },
+            text(" for history. Literal specials: % & _ # $ { } and a backslash \\ stay visible. A route @BANK and an amount $69,044.29 and a literal :shortcode: never become citations, math, or emoji. Office ligature check: office offers efficient coffee. A long token that must wrap without visible spacers: "),
+            Inline::Code("a_very_long_harbor_crane_identifier/with/slashes-and.dots.that.keeps.going/and_going_onward".to_string()),
+            text(". "),
             Inline::Emphasis(vec![text("emphasis")]),
             text(" "),
             Inline::Strong(vec![text("strong")]),
@@ -176,6 +248,10 @@ fn contract_view() -> SnapshotView {
             },
             text(" tail"),
         ])]),
+        Block::Paragraph(vec![text("A long token sample and a link to "), Inline::Link {
+            label: vec![text("fasteners")],
+            target: LinkTarget::Url("https://example.com/fasteners".to_string()),
+        }, text(" plus "), Inline::Code("mono_token".to_string()), text("." )]),
         Block::Heading(SnapshotHeading {
             level: HeadingLevel::H2,
             content: vec![text("Next & In Progress")],
@@ -184,9 +260,9 @@ fn contract_view() -> SnapshotView {
         }),
         Block::Heading(SnapshotHeading {
             level: HeadingLevel::H3,
-            content: vec![text("Heading level three")],
+            content: vec![text("Fastener notes")],
             class: HeadingClass::Normal,
-            anchor: detail_heading,
+            anchor: fasteners,
         }),
         Block::Task(open_task),
         Block::Task(next_task),
@@ -332,7 +408,7 @@ fn contract_view() -> SnapshotView {
             canonical_source_path: PathBuf::from(
                 "/synthetic-vault/img/cover.png",
             ),
-            relative_path: PathBuf::from("assets/3.png"),
+            relative_path: PathBuf::from("assets/quay_crane.png"),
             media_kind: AssetMediaKind::Png,
             width_px_hint: Some(400),
             width_percent: Some(62),
@@ -482,12 +558,19 @@ fn internal_links_without_a_final_visible_anchor_become_plain_labels() {
 fn escaping_caps_image_width_and_keeps_authored_code_fences_intact() {
     let mut view = contract_view();
     view.assets[0].relative_path = PathBuf::from("assets/a b>c.png");
-    if let Block::Image { width_percent, .. } = &mut view.sections[0].blocks[12]
-    {
-        *width_percent = Some(140);
-    } else {
-        panic!("contract image block moved");
-    }
+    let image = view.sections[0]
+        .blocks
+        .iter_mut()
+        .find_map(|block| match block {
+            Block::Image {
+                asset_id,
+                width_percent,
+                ..
+            } if asset_id == "cover" => Some(width_percent),
+            _ => None,
+        })
+        .expect("contract image block");
+    *image = Some(140);
     view.sections[0].blocks.push(Block::Code {
         language: None,
         text: "```\ninside\n".to_string(),
@@ -560,7 +643,8 @@ fn raw_source_metadata_and_task_bodies_survive_in_the_separate_source_record() {
 fn strike_serialization_never_places_links_inside_strike_nodes() {
     let projected =
         serialize_projected_markdown(&contract_view()).expect("serialize view");
-    assert!(projected.contains("~~struck **bold **~~[visible link](<#t-next>)"));
+    assert!(projected.contains("~~struck **bold**~~ [visible link](<#t-next>)"));
+    assert!(projected.contains("~~and~~ omitted item ~~tail~~"));
     assert!(!projected.contains("~~~~"));
     for struck in projected.split("~~").skip(1).step_by(2) {
         assert!(
@@ -568,6 +652,7 @@ fn strike_serialization_never_places_links_inside_strike_nodes() {
             "link remained inside strike: {struck}"
         );
     }
+    assert!(projected.contains("- [Waits on]{.label}"));
 }
 
 #[test]
@@ -614,6 +699,29 @@ fn pandoc_parses_the_complete_contract_as_markdown_ast_when_available() {
     for node in ["Header", "Span", "Div", "Link", "Image", "CodeBlock"] {
         assert!(ast_has_node(&ast, node), "missing Pandoc {node} node");
     }
+    assert!(ast_has_node(&ast, "Strikeout"), "strike semantics lost");
+    assert!(ast_has_node(&ast, "Strong"), "strong semantics lost");
+    assert!(
+        ast_tag_contains_tag(&ast, "Strikeout", "Strong"),
+        "strong text is no longer struck"
+    );
+    assert!(
+        !ast_tag_contains_tag(&ast, "Strikeout", "Link"),
+        "a link remained inside strikeout"
+    );
+    for struck in ["struck", "bold", "and", "tail"] {
+        assert!(
+            ast_tag_contains_text(&ast, "Strikeout", struck),
+            "lost strike semantics for {struck}"
+        );
+    }
+    for delimiter in ["~~", "**"] {
+        assert!(
+            !ast_has_str_node_containing(&ast, delimiter),
+            "unintended delimiter text survived: {delimiter}"
+        );
+    }
+    assert!(ast_has_class(&ast, "label"), "labeled row lost .label span");
     assert!(
         ast_has_attr_id(&ast, "requirements"),
         "heading anchor missing"
@@ -806,6 +914,87 @@ fn ast_has_node(value: &serde_json::Value, tag: &str) -> bool {
         serde_json::Value::Object(values) => {
             values.get("t").and_then(serde_json::Value::as_str) == Some(tag)
                 || values.values().any(|value| ast_has_node(value, tag))
+        }
+        _ => false,
+    }
+}
+
+fn ast_tag_contains_tag(
+    value: &serde_json::Value,
+    parent: &str,
+    child: &str,
+) -> bool {
+    match value {
+        serde_json::Value::Array(values) => values
+            .iter()
+            .any(|value| ast_tag_contains_tag(value, parent, child)),
+        serde_json::Value::Object(values) => {
+            let is_parent =
+                values.get("t").and_then(serde_json::Value::as_str)
+                    == Some(parent);
+            (is_parent && ast_has_node(value, child))
+                || values
+                    .values()
+                    .any(|value| ast_tag_contains_tag(value, parent, child))
+        }
+        _ => false,
+    }
+}
+
+fn ast_tag_contains_text(
+    value: &serde_json::Value,
+    tag: &str,
+    text: &str,
+) -> bool {
+    match value {
+        serde_json::Value::Array(values) => values
+            .iter()
+            .any(|value| ast_tag_contains_text(value, tag, text)),
+        serde_json::Value::Object(values) => {
+            (values.get("t").and_then(serde_json::Value::as_str) == Some(tag)
+                && ast_contains_text(value, text))
+                || values
+                    .values()
+                    .any(|value| ast_tag_contains_text(value, tag, text))
+        }
+        _ => false,
+    }
+}
+
+fn ast_has_str_node_containing(value: &serde_json::Value, text: &str) -> bool {
+    match value {
+        serde_json::Value::Array(values) => {
+            values
+                .iter()
+                .any(|value| ast_has_str_node_containing(value, text))
+        }
+        serde_json::Value::Object(values) => {
+            (values.get("t").and_then(serde_json::Value::as_str) == Some("Str")
+                && values
+                    .get("c")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|actual| actual.contains(text)))
+                || values
+                    .values()
+                    .any(|value| ast_has_str_node_containing(value, text))
+        }
+        _ => false,
+    }
+}
+
+fn ast_has_class(value: &serde_json::Value, class: &str) -> bool {
+    match value {
+        serde_json::Value::Array(values) => {
+            let has_class = values
+                .get(1)
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|classes| {
+                    classes.iter().any(|value| value.as_str() == Some(class))
+                });
+            has_class || values.iter().any(|value| ast_has_class(value, class))
+        }
+        serde_json::Value::Object(values) => {
+            values.values().any(|value| ast_has_class(value, class))
         }
         _ => false,
     }

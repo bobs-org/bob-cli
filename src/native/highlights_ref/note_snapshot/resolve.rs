@@ -531,37 +531,7 @@ fn strip_list_marker(line: &str) -> Option<&str> {
 fn hidden_line_ranges(lines: &[&str]) -> BTreeSet<usize> {
     use crate::native::markdown::fenced_lines;
     let mut hidden = fenced_lines(lines, 0..lines.len());
-    hidden.extend(comment_span_lines(lines, "%%", "%%"));
-    hidden.extend(comment_span_lines(lines, "<!--", "-->"));
-    hidden
-}
-
-fn comment_span_lines(
-    lines: &[&str],
-    open: &str,
-    close: &str,
-) -> BTreeSet<usize> {
-    let mut hidden = BTreeSet::new();
-    let mut inside = false;
-    for (index, line) in lines.iter().enumerate() {
-        let mut rest = *line;
-        if !inside {
-            let Some(start) = rest.find(open) else {
-                continue;
-            };
-            rest = &rest[start + open.len()..];
-            if rest.contains(close) {
-                continue;
-            }
-            inside = true;
-            hidden.insert(index);
-        } else {
-            hidden.insert(index);
-            if rest.contains(close) {
-                inside = false;
-            }
-        }
-    }
+    hidden.extend(super::obsidian::hidden_comment_lines(lines));
     hidden
 }
 
@@ -569,14 +539,7 @@ fn comment_span_lines(
 /// trailing comment cannot fork the heading key. Text after the pair is
 /// kept; an unclosed `%%` leaves the title untouched.
 fn strip_inline_comment_text(line: &str) -> String {
-    let Some(start) = line.find("%%") else {
-        return line.to_string();
-    };
-    let after = &line[start + 2..];
-    let Some(end) = after.find("%%") else {
-        return line.to_string();
-    };
-    format!("{}{}", &line[..start], &after[end + 2..])
+    super::obsidian::strip_comments_for_fragment(line)
 }
 
 /// Build the fragment index for one note's cached text. Only ATX headings
@@ -1533,6 +1496,55 @@ mod tests {
         };
         assert_eq!((task.first_line, task.last_line), (31, 33));
         assert!(text[task.byte_start..task.byte_end].contains("tab child"));
+    }
+
+    #[test]
+    fn fragment_comments_follow_fence_inline_code_and_visible_heading_rules() {
+        let text = concat!(
+            "```text\n",
+            "%%\n",
+            "<!--\n",
+            "```\n",
+            "# Visible after fence\n",
+            "# Inline code `%%` title\n",
+            "# Inline HTML `<!--` title\n",
+            "# Visible %%private%% heading\n",
+            "<!--\n",
+            "# Hidden by HTML comment\n",
+            "-->\n",
+            "%%\n",
+            "# Hidden by percent comment\n",
+            "%%\n",
+            "# Visible after comments\n",
+        );
+        let index = build_fragment_index(text);
+        for visible in [
+            "Visible after fence",
+            "Inline code `%%` title",
+            "Inline HTML `<!--` title",
+            "Visible  heading",
+            "Visible after comments",
+        ] {
+            assert!(
+                matches!(
+                    index.lookup(&LinkFragment::Heading(visible.to_string())),
+                    FragmentLookup::Found(_)
+                ),
+                "visible heading was not indexed: {visible}"
+            );
+        }
+        for hidden in [
+            "Hidden by HTML comment",
+            "Hidden by percent comment",
+        ] {
+            assert!(
+                matches!(
+                    index.lookup(&LinkFragment::Heading(hidden.to_string())),
+                    FragmentLookup::Missing
+                ),
+                "commented heading was indexed: {hidden}"
+            );
+        }
     }
 
     #[test]

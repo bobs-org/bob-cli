@@ -684,7 +684,7 @@ Overfull \\hbox (20.1pt too wide) in paragraph\n";
 
     fn contract_projected_md() -> String {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/note_snapshot/profile-contract.projected.md");
+            .join("tests/fixtures/note_snapshot/contract.projected.md");
         std::fs::read_to_string(&path).expect("contract fixture")
     }
 
@@ -752,7 +752,12 @@ Overfull \\hbox (20.1pt too wide) in paragraph\n";
         fs::write(&return_filter, super::super::super::return_links::FILTER)
             .expect("return-links");
         let source = scratch.join("contract.projected.md");
-        fs::write(&source, contract_projected_md()).expect("fixture");
+        let projected = super::super::serialize_projected_markdown(
+            &super::super::tests::contract_view(),
+        )
+        .expect("serialize complete contract");
+        assert_eq!(projected, contract_projected_md());
+        fs::write(&source, &projected).expect("fixture");
         let out = scratch.join("contract.tex");
         let output = std::process::Command::new(&pandoc)
             .arg(&source)
@@ -849,11 +854,19 @@ Overfull \\hbox (20.1pt too wide) in paragraph\n";
         }
         // Anchors preserved, return-link opt-out respected in a second run.
         assert!(
-            tex.contains("\\label{t-example}") || tex.contains("t-example"),
+            tex.contains("\\label{t-next}") || tex.contains("t-next"),
             "anchor"
         );
-        // No struck links reintroduced; specials survive as literal text.
-        assert!(!tex.contains("\\st{"), "no struck links");
+        // Strike formatting survives while lifted links stay after the strike.
+        let strike = tex.find("\\st{struck").expect("strike formatting");
+        let lifted_link = tex
+            .find("\\hyperref[t-next]{visible link\\BobTag{ᵇ}}")
+            .expect("lifted link");
+        assert!(strike < lifted_link, "{tex}");
+        assert!(
+            !tex[strike..lifted_link].contains("\\hyperref"),
+            "a link entered strike formatting: {tex}"
+        );
         assert!(tex.contains("\\%"), "percent literal");
         assert!(tex.contains("\\&"), "ampersand literal");
         assert!(tex.contains("\\$"), "dollar literal");
@@ -1010,7 +1023,7 @@ Overfull \\hbox (20.1pt too wide) in paragraph\n";
             .expect("pdftotext");
         assert!(text_out.status.success(), "{text_out:?}");
         let text = String::from_utf8_lossy(&text_out.stdout).into_owned();
-        assert!(text.contains("Survey the quay"), "task words");
+        assert!(text.contains("Open task"), "task words");
         assert!(text.contains("sched Oct 17"), "chip text");
         for symbol in ["○", "◉", "◐", "⊘", "✓", "⊗"] {
             assert!(

@@ -29,27 +29,34 @@ bob-return-links: true
 
 # Requirements {#requirements}
 
-Punctuation\: \[square\]\, \_marks\_\, \$69\.00\, \:sparkles\:\, and \@ROUTE\; Unicode\: café — naïve\. *emphasis* **strong** ``a `code` sample`` [\[\[due\:\: soon\]\]]{.muted} [inline tag]{.chip}  
+Punctuation\: \[square\]\, \_marks\_\, \$69\.00\, \:sparkles\:\, and \@ROUTE\; Unicode\: café — naïve\. A short prose paragraph with emphasis\, inline code\, and a [harbor link](<obsidian://open?vault=bob&file=harbor.md>)\. See [Closed tasks](<#closed>) for history\. Literal specials\: \% \& \_ \# \$ \{ \} and a backslash \\ stay visible\. A route \@BANK and an amount \$69\,044\.29 and a literal \:shortcode\: never become citations\, math\, or emoji\. Office ligature check\: office offers efficient coffee\. A long token that must wrap without visible spacers\: `a_very_long_harbor_crane_identifier/with/slashes-and.dots.that.keeps.going/and_going_onward`\. *emphasis* **strong** ``a `code` sample`` [\[\[due\:\: soon\]\]]{.muted} [inline tag]{.chip}\
 after a hard break
 
-~~struck **bold **~~[visible link](<#t-next>)~~ and ~~omitted item~~ tail~~
+~~struck **bold**~~ [visible link](<#t-next>) ~~and~~ omitted item ~~tail~~
+
+A long token sample and a link to [fasteners](<https://example.com/fasteners>) plus `mono_token`\.
 
 ## Next \& In Progress {#next-lane .lane}
 
-### Heading level three {#heading-level-three}
+### Fastener notes {#fasteners}
 
 - []{.st .st-open} Open task [sched Oct 17]{.chip} [high]{.chip .chip-accent} [Keep](<https://example.test/keep?x=1&y=2>){.chip}
 
-- []{.st .st-next} []{#t-next} Next task
+- []{.st .st-next} []{#t-next} Brief the [night crew](<obsidian://open?vault=bob&file=night_crew.md>) [Keep](<https://example.com/keep/night-crew>){.chip}
   - Nested child
     2. Second level
 
 - []{.st .st-wip} Work in progress
 
 - []{.st .st-blocked} []{#t-intro-proposal} Blocked task
-  - Waits on [Task One](<https://example.test/tasks/one>) · Plan
+  - [Waits on]{.label} [Tide Office](<obsidian://open?vault=bob&file=tide_office.md>) · [Pier Nine](<obsidian://open?vault=bob&file=pier_nine.md>)
 
-  - Prerequisite notes
+  - A nested ordinary list under a task\:
+    - first bullet with a [child link](<https://example.com/child>)
+    - second bullet with `code_token` and *emphasis*
+
+    1. check the flood lamps
+    2. log the gull nests
 
 - []{.st .st-done} Done task
 
@@ -63,7 +70,7 @@ fn main() {
 }
 ```
 
-![diagram \& notes](<assets/3.png>){width=62%}
+![diagram \& notes](<assets/quay_crane.png>){width=62%}
 
 [Missing image · img\/x\.png]{.missing}
 

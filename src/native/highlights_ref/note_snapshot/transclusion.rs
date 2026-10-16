@@ -103,7 +103,11 @@ pub(crate) fn project_snapshot<L: SourceLoader>(
         true,
     );
 
-    let (sections, synthetic_anchor) = sectionize_root(&note.identity, blocks);
+    let (sections, synthetic_anchor) = sectionize_root(
+        &note.identity,
+        blocks,
+        &expander.used_anchor_ids,
+    );
     if let Some(anchor) = synthetic_anchor {
         expander.used_anchor_ids.insert(anchor.id);
     }
@@ -227,6 +231,13 @@ impl<'a, L: SourceLoader> Expander<'a, L> {
                 }
                 Block::List { items, .. } => {
                     for item in items {
+                        self.expand_inline_embeds(
+                            &mut item.content,
+                            requests,
+                            current_source,
+                            request_index,
+                            may_expand,
+                        );
                         self.expand_blocks(
                             &mut item.children,
                             requests,
@@ -236,13 +247,95 @@ impl<'a, L: SourceLoader> Expander<'a, L> {
                         );
                     }
                 }
-                Block::Task(task) => self.expand_blocks(
-                    &mut task.children,
+                Block::Task(task) => {
+                    self.expand_inline_embeds(
+                        &mut task.content,
+                        requests,
+                        current_source,
+                        request_index,
+                        may_expand,
+                    );
+                    for chip in &mut task.chips {
+                        self.expand_inline_embeds(
+                            &mut chip.content,
+                            requests,
+                            current_source,
+                            request_index,
+                            may_expand,
+                        );
+                    }
+                    self.expand_blocks(
+                        &mut task.children,
+                        requests,
+                        current_source,
+                        request_index,
+                        may_expand,
+                    );
+                }
+                Block::Paragraph(inlines) | Block::EmptyState(inlines) => {
+                    self.expand_inline_embeds(
+                        inlines,
+                        requests,
+                        current_source,
+                        request_index,
+                        may_expand,
+                    );
+                }
+                Block::Heading(heading) => self.expand_inline_embeds(
+                    &mut heading.content,
                     requests,
                     current_source,
                     request_index,
                     may_expand,
                 ),
+                Block::LabeledRow { label, items } => {
+                    self.expand_inline_embeds(
+                        label,
+                        requests,
+                        current_source,
+                        request_index,
+                        may_expand,
+                    );
+                    for item in items {
+                        self.expand_inline_embeds(
+                            item,
+                            requests,
+                            current_source,
+                            request_index,
+                            may_expand,
+                        );
+                    }
+                }
+                Block::LogRow {
+                    label,
+                    date,
+                    content,
+                    ..
+                } => {
+                    self.expand_inline_embeds(
+                        label,
+                        requests,
+                        current_source,
+                        request_index,
+                        may_expand,
+                    );
+                    if let Some(date) = date {
+                        self.expand_inline_embeds(
+                            date,
+                            requests,
+                            current_source,
+                            request_index,
+                            may_expand,
+                        );
+                    }
+                    self.expand_inline_embeds(
+                        content,
+                        requests,
+                        current_source,
+                        request_index,
+                        may_expand,
+                    );
+                }
                 Block::Callout { blocks, .. }
                 | Block::Compact { blocks }
                 | Block::LiveQuery { blocks } => self.expand_blocks(
@@ -253,6 +346,71 @@ impl<'a, L: SourceLoader> Expander<'a, L> {
                     may_expand,
                 ),
                 _ => {}
+            }
+        }
+    }
+
+    fn expand_inline_embeds(
+        &mut self,
+        inlines: &mut [Inline],
+        requests: &[PendingEmbed],
+        current_source: &SourceIdentity,
+        request_index: &mut usize,
+        may_expand: bool,
+    ) {
+        for inline in inlines {
+            match inline {
+                Inline::EmbeddedBlock(block) => {
+                    let source = match block.as_ref() {
+                        Block::Embed { source, .. } => source.clone(),
+                        _ => continue,
+                    };
+                    let request = requests.get(*request_index).cloned();
+                    *request_index += 1;
+                    let expanded = match request {
+                        Some(request) if may_expand => {
+                            self.expand_one(request, current_source)
+                        }
+                        Some(request) => {
+                            self.nested_fallback(request, current_source)
+                        }
+                        None => {
+                            self.warn(
+                                SnapshotWarningKind::InvalidSource,
+                                current_source,
+                                None,
+                                format!(
+                                    "inline embed placeholder '{source}' has no resolved source record"
+                                ),
+                            );
+                            Block::Paragraph(vec![Inline::Text(source)])
+                        }
+                    };
+                    *block = Box::new(expanded);
+                }
+                Inline::Link { label, .. }
+                | Inline::Emphasis(label)
+                | Inline::Strong(label)
+                | Inline::Strike(label)
+                | Inline::Muted(label) => self.expand_inline_embeds(
+                    label,
+                    requests,
+                    current_source,
+                    request_index,
+                    may_expand,
+                ),
+                Inline::Chip(chip) => self.expand_inline_embeds(
+                    &mut chip.content,
+                    requests,
+                    current_source,
+                    request_index,
+                    may_expand,
+                ),
+                Inline::Text(_)
+                | Inline::Anchor(_)
+                | Inline::Code(_)
+                | Inline::Image { .. }
+                | Inline::Break => {}
             }
         }
     }
@@ -626,6 +784,7 @@ fn fragment_display(fragment: &LinkFragment) -> String {
 fn sectionize_root(
     source: &SourceIdentity,
     blocks: Vec<Block>,
+    reserved_anchor_ids: &BTreeSet<String>,
 ) -> (Vec<SnapshotSection>, Option<SnapshotAnchor>) {
     let mut sections = Vec::new();
     let mut current: Option<SnapshotSection> = None;
@@ -646,7 +805,7 @@ fn sectionize_root(
                 sections.push(current.take().expect("checked section"));
             }
             if !prelude.is_empty() {
-                let heading = content_heading(source);
+                let heading = content_heading(source, reserved_anchor_ids);
                 sections.push(SnapshotSection {
                     source: source.clone(),
                     heading: heading.clone(),
@@ -676,7 +835,7 @@ fn sectionize_root(
     let synthetic = if prelude.is_empty() && sections.is_empty() {
         None
     } else if !prelude.is_empty() {
-        let heading = content_heading(source);
+        let heading = content_heading(source, reserved_anchor_ids);
         sections.push(SnapshotSection {
             source: source.clone(),
             heading: heading.clone(),
@@ -689,7 +848,17 @@ fn sectionize_root(
     (sections, synthetic)
 }
 
-fn content_heading(source: &SourceIdentity) -> SnapshotHeading {
+fn content_heading(
+    source: &SourceIdentity,
+    reserved_anchor_ids: &BTreeSet<String>,
+) -> SnapshotHeading {
+    let base = "snapshot-content";
+    let mut id = base.to_string();
+    let mut suffix = 2_u32;
+    while reserved_anchor_ids.contains(&id) {
+        id = format!("{base}-{suffix}");
+        suffix += 1;
+    }
     SnapshotHeading {
         level: HeadingLevel::H1,
         content: vec![Inline::Text("Content".to_string())],
@@ -700,7 +869,7 @@ fn content_heading(source: &SourceIdentity) -> SnapshotHeading {
                 kind: AnchorKind::Heading,
                 fragment: "__snapshot_content".to_string(),
             },
-            id: "snapshot-content".to_string(),
+            id,
         },
     }
 }
@@ -710,31 +879,89 @@ fn collect_section_anchors(
     anchors: &mut Vec<SnapshotAnchor>,
 ) {
     anchors.push(section.heading.anchor.clone());
+    collect_inline_anchors(&section.heading.content, anchors);
     collect_block_anchors(&section.blocks, anchors);
 }
 
 fn collect_block_anchors(blocks: &[Block], anchors: &mut Vec<SnapshotAnchor>) {
     for block in blocks {
         match block {
-            Block::Heading(heading) => anchors.push(heading.anchor.clone()),
+            Block::Paragraph(inlines) | Block::EmptyState(inlines) => {
+                collect_inline_anchors(inlines, anchors)
+            }
+            Block::Heading(heading) => {
+                anchors.push(heading.anchor.clone());
+                collect_inline_anchors(&heading.content, anchors);
+            }
             Block::Task(task) => {
                 if let Some(anchor) = &task.anchor {
                     anchors.push(anchor.clone());
+                }
+                collect_inline_anchors(&task.content, anchors);
+                for chip in &task.chips {
+                    collect_inline_anchors(&chip.content, anchors);
                 }
                 collect_block_anchors(&task.children, anchors);
             }
             Block::List { items, .. } => {
                 for item in items {
+                    collect_inline_anchors(&item.content, anchors);
                     collect_block_anchors(&item.children, anchors);
                 }
             }
+            Block::LabeledRow { label, items } => {
+                collect_inline_anchors(label, anchors);
+                for item in items {
+                    collect_inline_anchors(item, anchors);
+                }
+            }
+            Block::LogRow {
+                label,
+                date,
+                content,
+                ..
+            } => {
+                collect_inline_anchors(label, anchors);
+                if let Some(date) = date {
+                    collect_inline_anchors(date, anchors);
+                }
+                collect_inline_anchors(content, anchors);
+            }
+            Block::MissingImage { label } => collect_inline_anchors(label, anchors),
             Block::Embed { blocks, .. }
             | Block::LiveQuery { blocks }
-            | Block::Callout { blocks, .. }
             | Block::Compact { blocks } => {
                 collect_block_anchors(blocks, anchors)
             }
-            _ => {}
+            Block::Callout { title, blocks, .. } => {
+                collect_inline_anchors(title, anchors);
+                collect_block_anchors(blocks, anchors);
+            }
+            Block::Code { .. } | Block::Image { .. } => {}
+        }
+    }
+}
+
+fn collect_inline_anchors(
+    inlines: &[Inline],
+    anchors: &mut Vec<SnapshotAnchor>,
+) {
+    for inline in inlines {
+        match inline {
+            Inline::Anchor(anchor) => anchors.push(anchor.clone()),
+            Inline::Link { label, .. }
+            | Inline::Emphasis(label)
+            | Inline::Strong(label)
+            | Inline::Strike(label)
+            | Inline::Muted(label) => collect_inline_anchors(label, anchors),
+            Inline::Chip(chip) => collect_inline_anchors(&chip.content, anchors),
+            Inline::EmbeddedBlock(block) => {
+                collect_block_anchors(std::slice::from_ref(block.as_ref()), anchors)
+            }
+            Inline::Text(_)
+            | Inline::Code(_)
+            | Inline::Image { .. }
+            | Inline::Break => {}
         }
     }
 }
@@ -793,6 +1020,7 @@ fn remap_block_anchors(
                 )) {
                     heading.anchor = anchor.clone();
                 }
+                remap_inline_anchors(&mut heading.content, mapping);
             }
             Block::Task(task) => {
                 if let Some(original) = &task.anchor {
@@ -802,18 +1030,81 @@ fn remap_block_anchors(
                         task.anchor = Some(anchor.clone());
                     }
                 }
+                remap_inline_anchors(&mut task.content, mapping);
+                for chip in &mut task.chips {
+                    remap_inline_anchors(&mut chip.content, mapping);
+                }
                 remap_block_anchors(&mut task.children, mapping);
             }
             Block::List { items, .. } => {
-                for ListItem { children, .. } in items {
+                for ListItem {
+                    content, children, ..
+                } in items
+                {
+                    remap_inline_anchors(content, mapping);
                     remap_block_anchors(children, mapping);
                 }
             }
+            Block::Paragraph(inlines) | Block::EmptyState(inlines) => {
+                remap_inline_anchors(inlines, mapping)
+            }
+            Block::LabeledRow { label, items } => {
+                remap_inline_anchors(label, mapping);
+                for item in items {
+                    remap_inline_anchors(item, mapping);
+                }
+            }
+            Block::LogRow {
+                label,
+                date,
+                content,
+                ..
+            } => {
+                remap_inline_anchors(label, mapping);
+                if let Some(date) = date {
+                    remap_inline_anchors(date, mapping);
+                }
+                remap_inline_anchors(content, mapping);
+            }
+            Block::MissingImage { label } => remap_inline_anchors(label, mapping),
             Block::Embed { blocks, .. }
             | Block::LiveQuery { blocks }
-            | Block::Callout { blocks, .. }
             | Block::Compact { blocks } => remap_block_anchors(blocks, mapping),
-            _ => {}
+            Block::Callout { title, blocks, .. } => {
+                remap_inline_anchors(title, mapping);
+                remap_block_anchors(blocks, mapping);
+            }
+            Block::Code { .. } | Block::Image { .. } => {}
+        }
+    }
+}
+
+fn remap_inline_anchors(
+    inlines: &mut [Inline],
+    mapping: &BTreeMap<(AnchorIdentity, String), SnapshotAnchor>,
+) {
+    for inline in inlines {
+        match inline {
+            Inline::Anchor(anchor) => {
+                if let Some(replacement) =
+                    mapping.get(&(anchor.identity.clone(), anchor.id.clone()))
+                {
+                    *anchor = replacement.clone();
+                }
+            }
+            Inline::Link { label, .. }
+            | Inline::Emphasis(label)
+            | Inline::Strong(label)
+            | Inline::Strike(label)
+            | Inline::Muted(label) => remap_inline_anchors(label, mapping),
+            Inline::Chip(chip) => remap_inline_anchors(&mut chip.content, mapping),
+            Inline::EmbeddedBlock(block) => {
+                remap_block_anchors(std::slice::from_mut(block.as_mut()), mapping)
+            }
+            Inline::Text(_)
+            | Inline::Code(_)
+            | Inline::Image { .. }
+            | Inline::Break => {}
         }
     }
 }
@@ -1020,7 +1311,18 @@ fn rewrite_inlines(
                     );
                 }
             }
-            Inline::Text(_) | Inline::Code(_) | Inline::Break => {}
+            Inline::EmbeddedBlock(block) => rewrite_local_links(
+                std::slice::from_mut(block.as_mut()),
+                source,
+                local_anchors,
+                full_index,
+                vault_name,
+            ),
+            Inline::Text(_)
+            | Inline::Anchor(_)
+            | Inline::Code(_)
+            | Inline::Image { .. }
+            | Inline::Break => {}
         }
     }
 }
@@ -1067,7 +1369,9 @@ mod tests {
     use std::{
         collections::{BTreeMap, BTreeSet},
         fs,
+        io::Write,
         path::{Path, PathBuf},
+        process::{Command, Stdio},
     };
 
     use super::*;
@@ -1150,19 +1454,61 @@ mod tests {
 
     fn embeds(blocks: &[Block]) -> Vec<&Block> {
         let mut found = Vec::new();
+        fn walk_inlines<'a>(inlines: &'a [Inline], found: &mut Vec<&'a Block>) {
+            for inline in inlines {
+                match inline {
+                    Inline::EmbeddedBlock(block) => {
+                        if matches!(block.as_ref(), Block::Embed { .. }) {
+                            found.push(block.as_ref());
+                        }
+                        walk(std::slice::from_ref(block.as_ref()), found);
+                    }
+                    Inline::Link { label, .. }
+                    | Inline::Emphasis(label)
+                    | Inline::Strong(label)
+                    | Inline::Strike(label)
+                    | Inline::Muted(label) => walk_inlines(label, found),
+                    Inline::Chip(chip) => walk_inlines(&chip.content, found),
+                    _ => {}
+                }
+            }
+        }
         fn walk<'a>(blocks: &'a [Block], found: &mut Vec<&'a Block>) {
             for block in blocks {
                 match block {
                     Block::Embed { .. } => found.push(block),
-                    Block::Task(task) => walk(&task.children, found),
+                    Block::Paragraph(inlines) | Block::EmptyState(inlines) => {
+                        walk_inlines(inlines, found)
+                    }
+                    Block::Heading(heading) => {
+                        walk_inlines(&heading.content, found)
+                    }
+                    Block::Task(task) => {
+                        walk_inlines(&task.content, found);
+                        walk(&task.children, found)
+                    }
                     Block::List { items, .. } => {
                         for item in items {
+                            walk_inlines(&item.content, found);
                             walk(&item.children, found);
                         }
                     }
                     Block::Callout { blocks, .. }
                     | Block::Compact { blocks }
                     | Block::LiveQuery { blocks } => walk(blocks, found),
+                    Block::LabeledRow { label, items } => {
+                        walk_inlines(label, found);
+                        for item in items {
+                            walk_inlines(item, found);
+                        }
+                    }
+                    Block::LogRow { label, date, content, .. } => {
+                        walk_inlines(label, found);
+                        if let Some(date) = date {
+                            walk_inlines(date, found);
+                        }
+                        walk_inlines(content, found);
+                    }
                     _ => {}
                 }
             }
@@ -1176,17 +1522,21 @@ mod tests {
             match block {
                 Block::Paragraph(inlines) | Block::EmptyState(inlines) => {
                     output.push(flatten(inlines));
+                    view_inlines(inlines, output);
                 }
                 Block::Heading(heading) => {
-                    output.push(flatten(&heading.content))
+                    output.push(flatten(&heading.content));
+                    view_inlines(&heading.content, output);
                 }
                 Block::Task(task) => {
                     output.push(flatten(&task.content));
+                    view_inlines(&task.content, output);
                     view_text(&task.children, output);
                 }
                 Block::List { items, .. } => {
                     for item in items {
                         output.push(flatten(&item.content));
+                        view_inlines(&item.content, output);
                         view_text(&item.children, output);
                     }
                 }
@@ -1213,6 +1563,23 @@ mod tests {
         }
     }
 
+    fn view_inlines(inlines: &[Inline], output: &mut Vec<String>) {
+        for inline in inlines {
+            match inline {
+                Inline::EmbeddedBlock(block) => {
+                    view_text(std::slice::from_ref(block.as_ref()), output)
+                }
+                Inline::Link { label, .. }
+                | Inline::Emphasis(label)
+                | Inline::Strong(label)
+                | Inline::Strike(label)
+                | Inline::Muted(label) => view_inlines(label, output),
+                Inline::Chip(chip) => view_inlines(&chip.content, output),
+                _ => {}
+            }
+        }
+    }
+
     fn flatten(inlines: &[Inline]) -> String {
         let mut output = String::new();
         for inline in inlines {
@@ -1220,12 +1587,21 @@ mod tests {
                 Inline::Text(text) | Inline::Code(text) => {
                     output.push_str(text)
                 }
+                Inline::Anchor(_) => {}
                 Inline::Link { label, .. }
                 | Inline::Emphasis(label)
                 | Inline::Strong(label)
                 | Inline::Strike(label)
                 | Inline::Muted(label) => output.push_str(&flatten(label)),
                 Inline::Chip(chip) => output.push_str(&flatten(&chip.content)),
+                Inline::Image { alt, .. } => output.push_str(alt),
+                Inline::EmbeddedBlock(block) => match block.as_ref() {
+                    Block::Embed { source, .. } => output.push_str(source),
+                    Block::Paragraph(content) | Block::EmptyState(content) => {
+                        output.push_str(&flatten(content))
+                    }
+                    _ => {}
+                },
                 Inline::Break => output.push(' '),
             }
         }
@@ -1243,6 +1619,54 @@ mod tests {
 
     fn warning_kinds(view: &SnapshotView) -> Vec<SnapshotWarningKind> {
         view.warnings.iter().map(|warning| warning.kind).collect()
+    }
+
+    fn ast_node_count(value: &serde_json::Value, tag: &str) -> usize {
+        match value {
+            serde_json::Value::Array(items) => {
+                items.iter().map(|item| ast_node_count(item, tag)).sum()
+            }
+            serde_json::Value::Object(object) => {
+                usize::from(object.get("t").and_then(|value| value.as_str()) == Some(tag))
+                    + object
+                        .values()
+                        .map(|item| ast_node_count(item, tag))
+                        .sum::<usize>()
+            }
+            _ => 0,
+        }
+    }
+
+    fn collect_pandoc_anchor_ids(
+        value: &serde_json::Value,
+        ids: &mut Vec<String>,
+    ) {
+        fn attr_id(value: &serde_json::Value) -> Option<&str> {
+            value.as_array()?.first()?.as_str().filter(|id| !id.is_empty())
+        }
+        match value {
+            serde_json::Value::Array(items) => {
+                for item in items {
+                    collect_pandoc_anchor_ids(item, ids);
+                }
+            }
+            serde_json::Value::Object(object) => {
+                let tag = object.get("t").and_then(|value| value.as_str());
+                let content = object.get("c");
+                let attr = match (tag, content.and_then(|value| value.as_array())) {
+                    (Some("Header"), Some(items)) => items.get(1),
+                    (Some("CodeBlock" | "Div" | "Span" | "Link" | "Image"), Some(items)) => items.first(),
+                    _ => None,
+                };
+                if let Some(id) = attr.and_then(attr_id) {
+                    ids.push(id.to_string());
+                }
+                for item in object.values() {
+                    collect_pandoc_anchor_ids(item, ids);
+                }
+            }
+            _ => {}
+        }
     }
 
     #[test]
@@ -1348,6 +1772,223 @@ mod tests {
             .contains(&SnapshotWarningKind::AmbiguousFragment));
         assert!(!all_text(&ambiguous_projection.view).contains("One."));
         assert!(!all_text(&ambiguous_projection.view).contains("Two."));
+    }
+
+    #[test]
+    fn source_block_anchors_are_emitted_for_headings_prose_and_lists() {
+        let directory = vault(&[(
+            "Host.md",
+            "# Head ^heading\n\nParagraph ^paragraph\n\n- item ^list\n\n[[#^heading]] [[#^paragraph]] [[#^list]]\n",
+        )]);
+        let result = project(&directory, "Host.md");
+        let ids = result
+            .view
+            .anchors
+            .iter()
+            .map(|anchor| anchor.id.as_str())
+            .collect::<Vec<_>>();
+        for expected in ["t-heading", "t-paragraph", "t-list"] {
+            assert!(ids.contains(&expected), "lost block anchor: {ids:?}");
+        }
+        let serialized =
+            super::super::serialize_projected_markdown(&result.view)
+                .expect("serialize anchored view");
+        for expected in ["t-heading", "t-paragraph", "t-list"] {
+            assert!(serialized.contains(&format!("[]{{#{expected}}}")));
+            assert!(serialized.contains(&format!("](<#{expected}>)")));
+        }
+    }
+
+    #[test]
+    fn inline_embeds_and_images_expand_inside_prose_tasks_and_lists() {
+        let directory = vault(&[
+            (
+                "Host.md",
+                "# Host\n\nBefore ![[Other]] after.\n\n- [ ] Task before ![[Other]] after.\n\n- Item before ![[Other]] after.\n\nImage before ![[diagram.png|400]] after.\n",
+            ),
+            ("Other.md", "Other before ![[Host]] after.\n"),
+        ]);
+        fs::write(directory.path().join("diagram.png"), b"synthetic image")
+            .expect("write synthetic image asset");
+        let projection = project(&directory, "Host.md");
+        assert_eq!(projection.view.summary.transclusions, 3);
+        assert_eq!(
+            warning_kinds(&projection.view)
+                .iter()
+                .filter(|kind| **kind == SnapshotWarningKind::CyclicTransclusion)
+                .count(),
+            3
+        );
+        let serialized =
+            super::super::serialize_projected_markdown(&projection.view)
+                .expect("serialize inline embeds");
+        let before = serialized.find("Before").expect("leading prose");
+        let embed = serialized.find(".embed source=\"Other\"").expect("embed div");
+        let close = embed
+            + serialized[embed..]
+                .find("\n:::")
+                .expect("embed closing fence");
+        let after = close
+            + serialized[close..]
+                .find("\n\n after")
+                .unwrap_or_else(|| panic!("trailing prose not after embed: {serialized}"));
+        assert!(before < embed && embed < close && close < after, "{serialized}");
+        assert!(serialized.contains("{width=62%}"), "{serialized}");
+
+        let Some(pandoc) = super::super::super::create::pandoc_command() else {
+            eprintln!("skipping inline embed AST test: pandoc is required");
+            return;
+        };
+        let mut child = Command::new(pandoc)
+            .args(["--from=commonmark_x-tex_math_dollars-emoji", "--to=json"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("start pandoc AST parser");
+        child
+            .stdin
+            .take()
+            .expect("pandoc stdin")
+            .write_all(serialized.as_bytes())
+            .expect("write projected Markdown");
+        let output = child.wait_with_output().expect("wait for pandoc");
+        assert!(
+            output.status.success(),
+            "pandoc could not parse inline embeds: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let ast: serde_json::Value =
+            serde_json::from_slice(&output.stdout).expect("pandoc AST");
+        assert!(ast_node_count(&ast, "Image") >= 1, "{ast}");
+        assert!(ast_node_count(&ast, "Div") >= 3, "{ast}");
+        assert!(ast_node_count(&ast, "Link") >= 3, "{ast}");
+    }
+
+    #[test]
+    fn prelude_heading_uses_a_collision_safe_emitted_id() {
+        let directory = vault(&[(
+            "Host.md",
+            "Prelude\n\n# Snapshot content\nBody\n",
+        )]);
+        let projection = project(&directory, "Host.md");
+        let ids = projection
+            .view
+            .anchors
+            .iter()
+            .map(|anchor| anchor.id.clone())
+            .collect::<Vec<_>>();
+        assert!(ids.contains(&"snapshot-content".to_string()), "{ids:?}");
+        assert!(
+            ids.contains(&"snapshot-content-2".to_string()),
+            "{ids:?}"
+        );
+        assert_eq!(ids.len(), ids.iter().collect::<BTreeSet<_>>().len(), "{ids:?}");
+
+        let serialized =
+            super::super::serialize_projected_markdown(&projection.view)
+                .expect("serialize prelude view");
+        let Some(pandoc) = super::super::super::create::pandoc_command() else {
+            eprintln!("skipping prelude anchor AST test: pandoc is required");
+            return;
+        };
+        let output = Command::new(pandoc)
+            .args(["--from=commonmark_x-tex_math_dollars-emoji", "--to=json"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .and_then(|mut child| {
+                child
+                    .stdin
+                    .take()
+                    .expect("pandoc stdin")
+                    .write_all(serialized.as_bytes())?;
+                child.wait_with_output()
+            })
+            .expect("run pandoc AST parser");
+        assert!(
+            output.status.success(),
+            "pandoc could not parse anchors: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let ast: serde_json::Value =
+            serde_json::from_slice(&output.stdout).expect("pandoc AST");
+        let mut emitted_ids = Vec::new();
+        collect_pandoc_anchor_ids(&ast, &mut emitted_ids);
+        assert!(
+            emitted_ids.contains(&"snapshot-content".to_string()),
+            "{emitted_ids:?}"
+        );
+        assert!(
+            emitted_ids.contains(&"snapshot-content-2".to_string()),
+            "{emitted_ids:?}"
+        );
+        assert_eq!(
+            emitted_ids.len(),
+            emitted_ids.iter().collect::<BTreeSet<_>>().len(),
+            "Pandoc emitted duplicate anchors: {emitted_ids:?}"
+        );
+    }
+
+    #[test]
+    fn explicit_ambiguous_self_headings_and_blocks_never_invent_targets() {
+        let directory = vault(&[(
+            "Host.md",
+            "# Same\nOne\n\n# Same\nTwo [[Host#Same]] [[Host#Same|alias]] [[#Same]] [[#Same|host alias]]\n\nFirst ^duplicate\n\nSecond ^duplicate\n\n[[Host#^duplicate]] [[#^duplicate]]\n",
+        )]);
+        let projection = project(&directory, "Host.md");
+        let serialized =
+            super::super::serialize_projected_markdown(&projection.view)
+                .expect("serialize ambiguous links");
+        assert!(!serialized.contains("](<#same>)"), "{serialized}");
+        assert!(!serialized.contains("](<#t-duplicate>)"), "{serialized}");
+        assert!(serialized.contains("host alias"), "{serialized}");
+        assert!(serialized.contains("alias"), "{serialized}");
+        assert!(warning_kinds(&projection.view)
+            .contains(&SnapshotWarningKind::AmbiguousFragment));
+    }
+
+    #[test]
+    fn repeated_selected_embeds_namespace_prose_and_list_block_anchors() {
+        let directory = vault(&[
+            (
+                "Host.md",
+                "# Host\n\n![[Target#Details]]\n\n![[Target#Details]]\n",
+            ),
+            (
+                "Target.md",
+                "## Details ^section\n\nParagraph ^paragraph\n\n- item ^list\n\n[[#^paragraph]] [[#^list]]\n",
+            ),
+        ]);
+        let projection = project(&directory, "Host.md");
+        let ids = projection
+            .view
+            .anchors
+            .iter()
+            .map(|anchor| anchor.id.as_str())
+            .collect::<Vec<_>>();
+        for expected in [
+            "embed-1-t-paragraph",
+            "embed-1-t-list",
+            "embed-2-t-paragraph",
+            "embed-2-t-list",
+        ] {
+            assert!(ids.contains(&expected), "missing {expected}: {ids:?}");
+        }
+        let serialized =
+            super::super::serialize_projected_markdown(&projection.view)
+                .expect("serialize repeated selected blocks");
+        for expected in [
+            "embed-1-t-paragraph",
+            "embed-1-t-list",
+            "embed-2-t-paragraph",
+            "embed-2-t-list",
+        ] {
+            assert!(serialized.contains(&format!("[]{{#{expected}}}")));
+        }
+        assert!(serialized.contains("](<#embed-1-t-paragraph>)"), "{serialized}");
+        assert!(serialized.contains("](<#embed-2-t-list>)"), "{serialized}");
     }
 
     #[test]

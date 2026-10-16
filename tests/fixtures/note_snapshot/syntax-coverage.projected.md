@@ -17,7 +17,7 @@ bob-return-links: false
 
 Intro links [aliased](<obsidian://open?vault=VAULT&file=Other.md>)\, [Other](<obsidian://open?vault=VAULT&file=Other.md%23Details>)\, [Other › Other task custom\: kept](<obsidian://open?vault=VAULT&file=Other.md%23%5Et1>)\, Missing Note\, and [Coverage Host](<#coverage-host>)\.
 
-~~struck ~~[lifted](<obsidian://open?vault=VAULT&file=Other.md>)~~ tail~~ and ~~plain `code` strike~~\.
+~~struck~~ [lifted](<obsidian://open?vault=VAULT&file=Other.md>) ~~tail~~ and ~~plain `code` strike~~\.
 
 - []{.st .st-open} Open row
 

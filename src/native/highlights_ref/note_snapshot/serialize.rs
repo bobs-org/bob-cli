@@ -111,6 +111,110 @@ fn render_section(view: &SnapshotView, section: &SnapshotSection) -> String {
     output
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum InlineFlowPart {
+    Inlines(Vec<Inline>),
+    Block(Block),
+}
+
+fn render_inline_flow(view: &SnapshotView, inlines: &[Inline]) -> String {
+    split_inline_flow(inlines)
+        .into_iter()
+        .map(|part| match part {
+            InlineFlowPart::Inlines(content) => render_inlines(view, &content),
+            InlineFlowPart::Block(block) => render_block(view, &block, 0),
+        })
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+fn split_inline_flow(inlines: &[Inline]) -> Vec<InlineFlowPart> {
+    let mut parts = Vec::new();
+    for inline in inlines {
+        match inline {
+            Inline::EmbeddedBlock(block) => {
+                parts.push(InlineFlowPart::Block(block.as_ref().clone()));
+            }
+            Inline::Emphasis(content) => push_wrapped_flow(
+                &mut parts,
+                split_inline_flow(content),
+                Inline::Emphasis,
+            ),
+            Inline::Strong(content) => push_wrapped_flow(
+                &mut parts,
+                split_inline_flow(content),
+                Inline::Strong,
+            ),
+            Inline::Strike(content) => push_wrapped_flow(
+                &mut parts,
+                split_inline_flow(content),
+                Inline::Strike,
+            ),
+            Inline::Muted(content) => push_wrapped_flow(
+                &mut parts,
+                split_inline_flow(content),
+                Inline::Muted,
+            ),
+            Inline::Link { label, target } => {
+                let nested = split_inline_flow(label);
+                push_wrapped_flow(&mut parts, nested, |label| Inline::Link {
+                    label,
+                    target: target.clone(),
+                });
+            }
+            Inline::Chip(chip) => {
+                let nested = split_inline_flow(&chip.content);
+                push_wrapped_flow(&mut parts, nested, |content| {
+                    Inline::Chip(Chip {
+                        content,
+                        kind: chip.kind,
+                        target: chip.target.clone(),
+                    })
+                });
+            }
+            leaf => push_flow_inline(&mut parts, leaf.clone()),
+        }
+    }
+    parts
+}
+
+fn push_wrapped_flow(
+    output: &mut Vec<InlineFlowPart>,
+    nested: Vec<InlineFlowPart>,
+    mut wrap: impl FnMut(Vec<Inline>) -> Inline,
+) {
+    for part in nested {
+        match part {
+            InlineFlowPart::Inlines(content) => {
+                push_flow_inline(output, wrap(content));
+            }
+            block @ InlineFlowPart::Block(_) => output.push(block),
+        }
+    }
+}
+
+fn push_flow_inline(output: &mut Vec<InlineFlowPart>, inline: Inline) {
+    if let Some(InlineFlowPart::Inlines(content)) = output.last_mut() {
+        content.push(inline);
+    } else {
+        output.push(InlineFlowPart::Inlines(vec![inline]));
+    }
+}
+
+fn plain_block_label(block: &Block) -> String {
+    match block {
+        Block::Embed { source, .. } => source.clone(),
+        Block::Paragraph(content) | Block::EmptyState(content) => {
+            plain_inlines(content)
+        }
+        Block::MissingImage { label } => plain_inlines(label),
+        Block::Image { alt, .. } => alt.clone(),
+        Block::Heading(heading) => plain_inlines(&heading.content),
+        _ => String::new(),
+    }
+}
+
 fn render_blocks(
     view: &SnapshotView,
     blocks: &[Block],
@@ -126,7 +230,7 @@ fn render_blocks(
 
 fn render_block(view: &SnapshotView, block: &Block, indent: usize) -> String {
     let rendered = match block {
-        Block::Paragraph(content) => render_inlines(view, content),
+        Block::Paragraph(content) => render_inline_flow(view, content),
         Block::Heading(heading) => render_heading(view, heading),
         Block::List { kind, items } => render_list(view, *kind, items),
         Block::Code { language, text } => {
@@ -134,7 +238,7 @@ fn render_block(view: &SnapshotView, block: &Block, indent: usize) -> String {
         }
         Block::Task(task) => render_task(view, task),
         Block::LabeledRow { label, items } => {
-            let label = render_inlines(view, label);
+            let label = render_chip_label(view, label);
             let items = items
                 .iter()
                 .map(|item| render_inlines(view, item))
@@ -219,17 +323,43 @@ fn render_task(view: &SnapshotView, task: &SnapshotTask) -> String {
     if let Some(anchor) = &task.anchor {
         line.push_str(&format!(" []{{#{}}}", safe_anchor_id(&anchor.id)));
     }
-    if !task.content.is_empty() {
-        line.push(' ');
-        line.push_str(&render_inlines(view, &task.content));
+    let flow = split_inline_flow(&task.content);
+    let mut continuation = Vec::new();
+    for (index, part) in flow.into_iter().enumerate() {
+        match part {
+            InlineFlowPart::Inlines(content) if index == 0 => {
+                let content = render_inlines(view, &content);
+                if !content.is_empty() {
+                    line.push(' ');
+                    line.push_str(&content);
+                }
+            }
+            InlineFlowPart::Inlines(content) => {
+                let content = render_inlines(view, &content);
+                if !content.is_empty() {
+                    continuation.push(content);
+                }
+            }
+            InlineFlowPart::Block(block) => {
+                continuation.push(render_block(view, &block, 0));
+            }
+        }
     }
     for chip in &task.chips {
         line.push(' ');
         line.push_str(&render_chip(view, chip));
     }
     if !task.children.is_empty() {
+        continuation.push(render_blocks(view, &task.children, 0));
+    }
+    if !continuation.is_empty() {
+        let continued = continuation
+            .into_iter()
+            .map(|part| indent_lines(&part, 2))
+            .collect::<Vec<_>>()
+            .join("\n\n");
         line.push('\n');
-        line.push_str(&render_blocks(view, &task.children, 2));
+        line.push_str(&continued);
     }
     line
 }
@@ -251,11 +381,37 @@ fn render_list(
                 format!("{}. ", start + index as u64)
             }
         };
-        let mut line =
-            format!("{marker}{}", render_inlines(view, &item.content));
+        let mut line = marker.clone();
+        let mut continuation = Vec::new();
+        for (part_index, part) in
+            split_inline_flow(&item.content).into_iter().enumerate()
+        {
+            match part {
+                InlineFlowPart::Inlines(content) if part_index == 0 => {
+                    line.push_str(&render_inlines(view, &content));
+                }
+                InlineFlowPart::Inlines(content) => {
+                    continuation.push(render_inlines(view, &content));
+                }
+                InlineFlowPart::Block(block) => {
+                    continuation.push(render_block(view, &block, 0));
+                }
+            }
+        }
         if !item.children.is_empty() {
-            line.push('\n');
-            line.push_str(&render_blocks(view, &item.children, marker.len()));
+            continuation.push(render_blocks(view, &item.children, 0));
+        }
+        if !continuation.is_empty() {
+            let continued = continuation
+                .into_iter()
+                .filter(|part| !part.is_empty())
+                .map(|part| indent_lines(&part, marker.len()))
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            if !continued.is_empty() {
+                line.push('\n');
+                line.push_str(&continued);
+            }
         }
         output.push(line);
     }
@@ -402,6 +558,10 @@ fn render_inlines(view: &SnapshotView, inlines: &[Inline]) -> String {
     for inline in inlines {
         match inline {
             Inline::Text(text) => output.push_str(&escape_text(text)),
+            Inline::Anchor(anchor) => output.push_str(&format!(
+                "[]{{#{}}}",
+                safe_anchor_id(&anchor.id)
+            )),
             Inline::Link { label, target } => {
                 let label = render_inlines(view, label);
                 if let Some(destination) = render_target(view, target) {
@@ -424,13 +584,29 @@ fn render_inlines(view: &SnapshotView, inlines: &[Inline]) -> String {
                 output.push_str(&render_strike(view, content))
             }
             Inline::Code(code) => output.push_str(&render_code_span(code)),
+            Inline::Image {
+                asset_id,
+                alt,
+                width_percent,
+            } => output.push_str(&render_image(
+                view,
+                asset_id,
+                alt,
+                *width_percent,
+            )),
+            Inline::EmbeddedBlock(block) => {
+                output.push_str(&plain_block_label(block));
+            }
             Inline::Chip(chip) => output.push_str(&render_chip(view, chip)),
             Inline::Muted(content) => {
                 output.push('[');
                 output.push_str(&render_inlines(view, content));
                 output.push_str("]{.muted}");
             }
-            Inline::Break => output.push_str("  \n"),
+            Inline::Break => {
+                output.push('\\');
+                output.push('\n');
+            }
         }
     }
     output
@@ -441,6 +617,10 @@ enum StrikePiece {
     Text {
         wrappers: Vec<InlineWrapper>,
         content: Inline,
+    },
+    Whitespace {
+        wrappers: Vec<InlineWrapper>,
+        text: String,
     },
     Link {
         label: Vec<Inline>,
@@ -464,9 +644,50 @@ fn render_strike(view: &SnapshotView, content: &[Inline]) -> String {
     let mut current_wrappers: Option<Vec<InlineWrapper>> = None;
     let mut current_content = Vec::new();
     let mut current_strike = String::new();
+    let mut run_has_text = false;
 
-    for piece in pieces {
+    for (index, piece) in pieces.iter().cloned().enumerate() {
         match piece {
+            StrikePiece::Whitespace { wrappers, text } => {
+                let next = pieces[index + 1..]
+                    .iter()
+                    .find(|piece| !matches!(piece, StrikePiece::Whitespace { .. }));
+                let boundary_after = next.is_none_or(|piece| {
+                    matches!(piece, StrikePiece::Link { .. } | StrikePiece::LinkChip(_))
+                });
+                if !run_has_text || boundary_after {
+                    flush_strike_text_group(
+                        view,
+                        &mut current_strike,
+                        &mut current_wrappers,
+                        &mut current_content,
+                    );
+                    flush_strike_run(&mut output, &mut current_strike);
+                    output.push_str(&text);
+                    if boundary_after {
+                        run_has_text = false;
+                    }
+                } else {
+                    if current_wrappers
+                        .as_ref()
+                        .is_some_and(|current| *current != wrappers)
+                    {
+                        current_strike.push_str(&render_strike_text_group(
+                            view,
+                            current_wrappers
+                                .take()
+                                .as_deref()
+                                .unwrap_or_default(),
+                            &current_content,
+                        ));
+                        current_content.clear();
+                    }
+                    if current_wrappers.is_none() {
+                        current_wrappers = Some(wrappers);
+                    }
+                    current_content.push(Inline::Text(text));
+                }
+            }
             StrikePiece::Text { wrappers, content } => {
                 if current_wrappers
                     .as_ref()
@@ -483,6 +704,7 @@ fn render_strike(view: &SnapshotView, content: &[Inline]) -> String {
                     current_wrappers = Some(wrappers);
                 }
                 current_content.push(content);
+                run_has_text = true;
             }
             StrikePiece::Link { label, target } => {
                 flush_strike_text_group(
@@ -498,6 +720,7 @@ fn render_strike(view: &SnapshotView, content: &[Inline]) -> String {
                 } else {
                     output.push_str(&label);
                 }
+                run_has_text = false;
             }
             StrikePiece::LinkChip(chip) => {
                 flush_strike_text_group(
@@ -508,6 +731,7 @@ fn render_strike(view: &SnapshotView, content: &[Inline]) -> String {
                 );
                 flush_strike_run(&mut output, &mut current_strike);
                 output.push_str(&render_chip(view, &chip));
+                run_has_text = false;
             }
         }
     }
@@ -571,6 +795,46 @@ fn collect_strike_pieces(
 ) {
     for inline in inlines {
         match inline {
+            Inline::Text(text) => {
+                let leading = text.len() - text.trim_start().len();
+                let trailing_end = text.trim_end().len();
+                if leading == text.len() {
+                    output.push(StrikePiece::Whitespace {
+                        wrappers: wrappers
+                            .get(..wrappers.len().saturating_sub(1))
+                            .unwrap_or_default()
+                            .to_vec(),
+                        text: text.clone(),
+                    });
+                } else {
+                    if leading > 0 {
+                        output.push(StrikePiece::Whitespace {
+                            wrappers: wrappers
+                                .get(..wrappers.len().saturating_sub(1))
+                                .unwrap_or_default()
+                                .to_vec(),
+                            text: text[..leading].to_string(),
+                        });
+                    }
+                    if trailing_end > leading {
+                        output.push(StrikePiece::Text {
+                            wrappers: wrappers.to_vec(),
+                            content: Inline::Text(
+                                text[leading..trailing_end].to_string(),
+                            ),
+                        });
+                    }
+                    if trailing_end < text.len() {
+                        output.push(StrikePiece::Whitespace {
+                            wrappers: wrappers
+                                .get(..wrappers.len().saturating_sub(1))
+                                .unwrap_or_default()
+                                .to_vec(),
+                            text: text[trailing_end..].to_string(),
+                        });
+                    }
+                }
+            }
             Inline::Link { label, target } => output.push(StrikePiece::Link {
                 label: label.clone(),
                 target: target.clone(),
@@ -711,12 +975,15 @@ fn plain_inlines(inlines: &[Inline]) -> String {
         .iter()
         .map(|inline| match inline {
             Inline::Text(text) | Inline::Code(text) => text.clone(),
+            Inline::Anchor(_) => String::new(),
             Inline::Link { label, .. } => plain_inlines(label),
             Inline::Emphasis(content)
             | Inline::Strong(content)
             | Inline::Strike(content)
             | Inline::Muted(content) => plain_inlines(content),
             Inline::Chip(chip) => plain_inlines(&chip.content),
+            Inline::Image { alt, .. } => alt.clone(),
+            Inline::EmbeddedBlock(block) => plain_block_label(block),
             Inline::Break => " ".to_string(),
         })
         .collect::<String>()
@@ -729,7 +996,13 @@ fn indent_lines(value: &str, indent: usize) -> String {
     let prefix = " ".repeat(indent);
     value
         .split('\n')
-        .map(|line| format!("{prefix}{line}"))
+        .map(|line| {
+            if line.is_empty() {
+                String::new()
+            } else {
+                format!("{prefix}{line}")
+            }
+        })
         .collect::<Vec<_>>()
         .join("\n")
 }
