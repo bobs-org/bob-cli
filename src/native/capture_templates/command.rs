@@ -14,6 +14,7 @@ use serde_json::json;
 
 use super::store::{self, TemplateShelfEntry, TemplateShelfSnapshot};
 use crate::native::{
+    capture::cli::template_origin_arg,
     capture_language,
     capture_parse::{self, CaptureParseSpan},
     config,
@@ -213,18 +214,11 @@ fn template_arg() -> Arg {
 fn templates_arg() -> Arg {
     Arg::new("template")
         .value_name("TEMPLATE")
+        .required(true)
         .num_args(1..)
         .action(ArgAction::Append)
         .value_parser(clap::builder::ValueParser::string())
         .help("1-based list index or content id")
-}
-
-fn template_origin_arg() -> Arg {
-    Arg::new("template-origin")
-        .long("template-origin")
-        .value_name("ID")
-        .hide(true)
-        .help("Internal saved-template checkout id")
 }
 
 fn text_arg() -> Arg {
@@ -503,7 +497,7 @@ fn report_save_error(
         }
         store::TemplateSaveError::Io(_) => ("saved_templates_io", 1),
     };
-    report_error(format, code, error.reason(), exit)
+    report_error(format, code, &error.reason(), exit)
 }
 
 fn report_error(
@@ -640,36 +634,42 @@ fn print_human_list(
             }
             byte_start += line.len() + 1;
         }
-        let mut metadata = format!(
+        let prefix = format!(
             "{} field{}",
             template.field_count,
             if template.field_count == 1 { "" } else { "s" }
         );
-        if let Some(route) = template.route.as_deref() {
-            metadata.push_str(" · ");
-            metadata.push_str(&styler.cyan(route));
-        }
+        let mut suffix = String::new();
         if template.use_count == 0 {
             if let Some(age) = relative_time(
                 template.first_saved_at.as_deref(),
                 &store::now_timestamp(),
             ) {
-                metadata.push_str(" · saved ");
-                metadata.push_str(&age);
+                suffix.push_str(" · saved ");
+                suffix.push_str(&age);
             }
         } else {
-            metadata.push_str(&format!(" · used {}×", template.use_count));
+            suffix.push_str(&format!(" · used {}×", template.use_count));
             if let Some(age) = relative_time(
                 template.last_used_at.as_deref(),
                 &store::now_timestamp(),
             ) {
-                metadata.push_str(" · ");
-                metadata.push_str(&age);
+                suffix.push_str(" · ");
+                suffix.push_str(&age);
             }
         }
-        metadata.push_str(" · ");
-        metadata.push_str(&styler.dim(&template.id));
-        println!("    {}", styler.dim(&metadata));
+        suffix.push_str(" · ");
+        suffix.push_str(&template.id);
+        if let Some(route) = template.route.as_deref() {
+            println!(
+                "    {}{}{}",
+                styler.dim(&(prefix + " · ")),
+                styler.cyan(route),
+                styler.dim(&suffix)
+            );
+        } else {
+            println!("    {}", styler.dim(&(prefix + &suffix)));
+        }
     }
 }
 

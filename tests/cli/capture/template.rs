@@ -552,6 +552,50 @@ fn bad_template_origin_is_a_usage_error() {
 }
 
 #[test]
+fn expand_with_bad_template_origin_is_a_usage_error() {
+    let temp = TempDir::new("bob-cli-capture-template-origin-expand-bad");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    let output = capture(&temp, &vault)
+        .args(["-E", "--template-origin", "bad!"])
+        .arg("@@template:\nTask {0}\n\nfirst\n")
+        .output()
+        .expect("run bad origin expand");
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+    assert!(!shelf_path(&temp).exists());
+}
+
+#[test]
+fn human_replaced_names_the_checked_out_origin() {
+    let temp = TempDir::new("bob-cli-capture-template-human-replaced");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    let first = capture(&temp, &vault)
+        .args(["-f", "json"])
+        .arg("@@template:\nApply to {0}\n\nAcme\n")
+        .output()
+        .expect("run first capture");
+    assert_success(&first);
+    let origin = json(&first)["template"]["saved"]["id"]
+        .as_str()
+        .expect("origin id")
+        .to_string();
+    let replaced = capture(&temp, &vault)
+        .args(["--template-origin"])
+        .arg(&origin)
+        .arg("@@template:\nApply to {0}!\n\nAcme\n")
+        .output()
+        .expect("run replacing capture");
+    assert_success(&replaced);
+    let expected = format!("· saved, replacing {origin}");
+    assert!(
+        stdout(&replaced).contains(&expected),
+        "{}",
+        format_output(&replaced)
+    );
+}
+
+#[test]
 fn plain_captures_stay_byte_identical_without_a_header() {
     let temp = TempDir::new("bob-cli-capture-template-plain-identical");
     let vault = temp.path().join("vault");

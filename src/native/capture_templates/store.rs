@@ -187,15 +187,16 @@ pub(crate) struct TemplateClearOutcome {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum TemplateSaveError {
     Busy(String),
-    Refused(String),
+    Refused(u64),
     Io(String),
 }
 
 impl TemplateSaveError {
-    pub(crate) fn reason(&self) -> &str {
+    pub(crate) fn reason(&self) -> String {
         match self {
-            Self::Busy(reason) | Self::Refused(reason) | Self::Io(reason) => {
-                reason
+            Self::Busy(reason) | Self::Io(reason) => reason.clone(),
+            Self::Refused(version) => {
+                format!("shelf uses newer schema_version {version}")
             }
         }
     }
@@ -339,9 +340,7 @@ fn save_template_text_mode_with_lock_timeout(
         );
     }
     if let Some(version) = loaded.newer_schema {
-        return Err(TemplateSaveError::Refused(format!(
-            "shelf uses newer schema_version {version}"
-        )));
+        return Err(TemplateSaveError::Refused(version));
     }
     if loaded.corrupt {
         loaded.entries.clear();
@@ -515,7 +514,82 @@ fn read_locked(file: &Path) -> LoadedShelf {
             };
         }
     };
-    let parsed: ShelfFile = match serde_json::from_slice(&bytes) {
+    let value: serde_json::Value = match serde_json::from_slice(&bytes) {
+        Ok(value) => value,
+        Err(_) => {
+            return LoadedShelf {
+                entries: Vec::new(),
+                extra: Default::default(),
+                corrupt: true,
+                newer_schema: None,
+            };
+        }
+    };
+    let Some(version) =
+        value.get("schema_version").and_then(|value| value.as_u64())
+    else {
+        return LoadedShelf {
+            entries: Vec::new(),
+            extra: Default::default(),
+            corrupt: true,
+            newer_schema: None,
+        };
+    };
+    if version > SCHEMA_VERSION {
+        let mut extra = serde_json::Map::new();
+        if let Some(object) = value.as_object() {
+            for (key, extra_value) in object {
+                if key != "schema_version" && key != "templates" {
+                    extra.insert(key.clone(), extra_value.clone());
+                }
+            }
+        }
+        let mut entries = Vec::new();
+        if let Some(templates) =
+            value.get("templates").and_then(|value| value.as_array())
+        {
+            for template in templates {
+                let Some(object) = template.as_object() else {
+                    continue;
+                };
+                let Some(id) = object
+                    .get("id")
+                    .and_then(|value| value.as_str())
+                    .filter(|id| !id.is_empty())
+                else {
+                    continue;
+                };
+                let Some(text) =
+                    object.get("text").and_then(|value| value.as_str())
+                else {
+                    continue;
+                };
+                entries.push(ShelfEntry {
+                    id: Some(id.to_string()),
+                    text: Some(text.to_string()),
+                    first_saved_at: object
+                        .get("first_saved_at")
+                        .and_then(|value| value.as_str())
+                        .map(str::to_string),
+                    last_used_at: object
+                        .get("last_used_at")
+                        .and_then(|value| value.as_str())
+                        .map(str::to_string),
+                    use_count: object
+                        .get("use_count")
+                        .and_then(|value| value.as_u64()),
+                    extra: serde_json::Map::new(),
+                });
+            }
+        }
+        return LoadedShelf {
+            entries,
+            extra,
+            corrupt: false,
+            newer_schema: Some(version),
+        };
+    }
+    let parsed: ShelfFile = match serde_json::from_value(value) {
         Ok(parsed) => parsed,
         Err(_) => {
             return LoadedShelf {
@@ -526,31 +600,6 @@ fn read_locked(file: &Path) -> LoadedShelf {
             };
         }
     };
-    let Some(version) = parsed.schema_version else {
-        return LoadedShelf {
-            entries: Vec::new(),
-            extra: Default::default(),
-            corrupt: true,
-            newer_schema: None,
-        };
-    };
-    if version > SCHEMA_VERSION {
-        let entries = parsed
-            .templates
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|entry| {
-                entry.id.as_deref().is_some_and(|id| !id.is_empty())
-                    && entry.text.is_some()
-            })
-            .collect();
-        return LoadedShelf {
-            entries,
-            extra: parsed.extra,
-            corrupt: false,
-            newer_schema: Some(version),
-        };
-    }
     let Some(templates) = parsed.templates else {
         return LoadedShelf {
             entries: Vec::new(),
@@ -626,18 +675,34 @@ fn write_locked(
         std::process::id()
     );
     let temp = parent.join(temp_name);
-    fs::write(&temp, text.as_bytes()).map_err(|error| {
-        TemplateSaveError::Io(format!("write shelf: {error}"))
-    })?;
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = fs::set_permissions(&temp, fs::Permissions::from_mode(0o600));
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut temp_file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&temp)
+            .map_err(|error| {
+                TemplateSaveError::Io(format!("write shelf: {error}"))
+            })?;
+        if let Err(error) = temp_file.write_all(text.as_bytes()) {
+            let _ = fs::remove_file(&temp);
+            return Err(TemplateSaveError::Io(format!("write shelf: {error}")));
+        }
+        let _ = temp_file.sync_all();
     }
-    let sync_temp = fs::File::open(&temp)
-        .and_then(|synced| synced.sync_all().map(|()| synced));
-    if let Ok(synced) = sync_temp {
-        drop(synced);
+    #[cfg(not(unix))]
+    {
+        fs::write(&temp, text.as_bytes()).map_err(|error| {
+            TemplateSaveError::Io(format!("write shelf: {error}"))
+        })?;
+        let sync_temp = fs::File::open(&temp)
+            .and_then(|synced| synced.sync_all().map(|()| synced));
+        if let Ok(synced) = sync_temp {
+            drop(synced);
+        }
     }
     fs::rename(&temp, file).map_err(|error| {
         TemplateSaveError::Io(format!("write shelf: {error}"))
@@ -729,11 +794,7 @@ fn acquire_write_lock(
 fn shelf_error_from_save(error: TemplateSaveError) -> TemplateShelfError {
     match error {
         TemplateSaveError::Busy(reason) => TemplateShelfError::Busy(reason),
-        TemplateSaveError::Refused(reason) => {
-            let version = reason
-                .strip_prefix("shelf uses newer schema_version ")
-                .and_then(|value| value.parse().ok())
-                .unwrap_or(SCHEMA_VERSION + 1);
+        TemplateSaveError::Refused(version) => {
             TemplateShelfError::NewerSchema(version)
         }
         TemplateSaveError::Io(reason) => TemplateShelfError::Io(reason),

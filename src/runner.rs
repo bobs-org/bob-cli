@@ -597,8 +597,6 @@ const CAPTURE_TEMPLATES_MEMBERS: &[Member] = &[
 ];
 
 const CAPTURE_TEMPLATES_AFTER_HELP: &str = "\
-Bare `bob capture-templates` runs the read-only list.
-
 Examples:
   bob capture-templates list -f json
   bob capture-templates show 1
@@ -606,7 +604,8 @@ Examples:
   bob capture-templates delete 1
   bob capture-templates clear
 
-See docs/capture.md for the saved-template protocol.
+Store: ${XDG_STATE_HOME:-~/.local/state}/bob-cli/capture/templates.json (override: BOB_CAPTURE_TEMPLATES_FILE).
+See docs/capture.md § Saved templates.
 Run 'bob capture-templates <command> --help' for more information.";
 
 #[derive(Debug, Clone)]
@@ -1483,6 +1482,11 @@ mod tests {
             NativeCommand::CaptureTaskId,
             NativeCommand::CaptureTaskSections,
             NativeCommand::CaptureTasks,
+            NativeCommand::CaptureTemplatesClear,
+            NativeCommand::CaptureTemplatesDelete,
+            NativeCommand::CaptureTemplatesList,
+            NativeCommand::CaptureTemplatesSave,
+            NativeCommand::CaptureTemplatesShow,
             NativeCommand::Completion,
             NativeCommand::Freshness,
             NativeCommand::Gkeep,

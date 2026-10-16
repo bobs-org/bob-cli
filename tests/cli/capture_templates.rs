@@ -167,3 +167,178 @@ fn definition_errors_and_newer_schema_have_stable_recovery_paths() {
     assert_eq!(json(&disabled)["code"], "saved_templates_disabled");
     assert!(!disabled_file.exists());
 }
+
+#[test]
+fn bare_delete_is_a_usage_error_and_leaves_the_store_absent() {
+    let temp = TempDir::new("bob-cli-capture-templates-bare-delete");
+    let file = temp.path().join("templates.json");
+    let output = command(&file)
+        .args(["delete", "-f", "json"])
+        .output()
+        .expect("run bare delete");
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+    assert!(!file.exists(), "bare delete must not create the store");
+}
+
+#[test]
+fn newer_schema_with_changed_field_type_stays_readable_and_refuses_writes() {
+    let temp = TempDir::new("bob-cli-capture-templates-newer-types");
+    let file = temp.path().join("templates.json");
+    let bytes = br#"{"schema_version": 2, "templates": [{"id": "9c1f0e2a7b3d", "text": "Task {0}", "use_count": 1.5, "name": "future"}]}"#;
+    fs::create_dir_all(file.parent().expect("parent")).expect("mkdir");
+    fs::write(&file, bytes).expect("write newer schema with bad type");
+
+    let listed = command(&file)
+        .args(["list", "-f", "json"])
+        .output()
+        .expect("list newer schema with bad type");
+    assert_success(&listed);
+    let listed_json = json(&listed);
+    assert_eq!(listed_json["templates"].as_array().unwrap().len(), 1);
+    assert_eq!(listed_json["templates"][0]["id"], "9c1f0e2a7b3d");
+    assert!(!listed_json["warnings"].as_array().unwrap().is_empty());
+    assert!(
+        stderr(&listed).contains("newer schema"),
+        "{}",
+        format_output(&listed)
+    );
+
+    let save = command(&file)
+        .arg("save")
+        .args(["-f", "json"])
+        .arg("@@template:\nTask {0}\n\n")
+        .output()
+        .expect("save against newer schema");
+    assert_eq!(save.status.code(), Some(1));
+    assert_eq!(json(&save)["code"], "saved_templates_newer_schema");
+    assert_eq!(
+        fs::read(&file).expect("read after refused save"),
+        bytes,
+        "refused save must leave the bytes untouched"
+    );
+
+    let cleared = command(&file)
+        .args(["clear", "-f", "json"])
+        .output()
+        .expect("clear newer schema");
+    assert_success(&cleared);
+    assert!(!file.exists());
+}
+
+#[test]
+fn human_list_covers_empty_populated_and_saving_off() {
+    let temp = TempDir::new("bob-cli-capture-templates-human");
+    let file = temp.path().join("templates.json");
+
+    let empty = command(&file)
+        .env("NO_COLOR", "1")
+        .arg("list")
+        .output()
+        .expect("human empty list");
+    assert_success(&empty);
+    assert!(
+        stdout(&empty).contains("No saved templates yet"),
+        "{}",
+        format_output(&empty)
+    );
+
+    let saved = run_with_stdin(
+        &mut command(&file).args(["save", "-f", "json"]),
+        DEFINITION,
+    );
+    assert_success(&saved);
+    let id = json(&saved)["saved"]["id"]
+        .as_str()
+        .expect("saved id")
+        .to_string();
+
+    let populated = command(&file)
+        .env("NO_COLOR", "1")
+        .arg("list")
+        .output()
+        .expect("human populated list");
+    assert_success(&populated);
+    let text = stdout(&populated);
+    assert!(
+        text.contains("1  Apply to"),
+        "{}",
+        format_output(&populated)
+    );
+    assert!(text.contains(&id), "{}", format_output(&populated));
+    assert!(
+        !text.contains("\u{1b}["),
+        "NO_COLOR output must have no escapes: {}",
+        format_output(&populated)
+    );
+
+    let config = temp.path().join("config.yml");
+    fs::write(&config, "capture:\n  max_saved_templates: 0\n")
+        .expect("write off config");
+    let off = command(&file)
+        .env("NO_COLOR", "1")
+        .env("BOB_CONFIG_FILE", &config)
+        .arg("list")
+        .output()
+        .expect("human list with saving off");
+    assert_success(&off);
+    assert!(
+        stdout(&off).contains("saving is off"),
+        "{}",
+        format_output(&off)
+    );
+}
+
+#[test]
+fn show_by_index_prints_the_insertable_draft() {
+    let temp = TempDir::new("bob-cli-capture-templates-show-index");
+    let file = temp.path().join("templates.json");
+    let saved = run_with_stdin(
+        &mut command(&file).args(["save", "-f", "json"]),
+        DEFINITION,
+    );
+    assert_success(&saved);
+    let shown = command(&file)
+        .args(["show", "1"])
+        .output()
+        .expect("show by index");
+    assert_success(&shown);
+    assert_eq!(
+        stdout(&shown),
+        "@@template:\nApply to {0}! @job^apply-{1}\n- **URL**: {2}\n\n"
+    );
+}
+
+#[test]
+fn save_of_headerless_draft_is_not_a_template() {
+    let temp = TempDir::new("bob-cli-capture-templates-headerless");
+    let file = temp.path().join("templates.json");
+    let output = run_with_stdin(
+        &mut command(&file).args(["save", "-f", "json"]),
+        "just a task\n",
+    );
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+    assert_eq!(json(&output)["code"], "saved_template_not_template");
+}
+
+#[test]
+fn clear_also_removes_the_corrupt_quarantine() {
+    let temp = TempDir::new("bob-cli-capture-templates-clear-quarantine");
+    let file = temp.path().join("templates.json");
+    let saved = run_with_stdin(
+        &mut command(&file).args(["save", "-f", "json"]),
+        DEFINITION,
+    );
+    assert_success(&saved);
+    let quarantine = temp.path().join("templates.corrupt.json");
+    fs::write(&quarantine, b"old quarantine").expect("write quarantine");
+    let cleared = command(&file)
+        .args(["clear", "-f", "json"])
+        .output()
+        .expect("clear shelf");
+    assert_success(&cleared);
+    assert!(!file.exists());
+    assert!(
+        !quarantine.exists(),
+        "clear must remove the quarantine copy"
+    );
+}

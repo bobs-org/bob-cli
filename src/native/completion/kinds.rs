@@ -269,9 +269,25 @@ const TABLE: &[Entry] = &[
         kind: Kind::TaskSection,
     },
     // Internal saved-template checkout id; free text, never completed
-    // from the vault.
+    // from the vault. A list index or content id, never completed from
+    // the vault.
     Entry {
         path: &["capture"],
+        arg: "template-origin",
+        kind: Kind::FreeText,
+    },
+    Entry {
+        path: &["capture-templates", "show"],
+        arg: "template",
+        kind: Kind::FreeText,
+    },
+    Entry {
+        path: &["capture-templates", "delete"],
+        arg: "template",
+        kind: Kind::FreeText,
+    },
+    Entry {
+        path: &["capture-templates", "save"],
         arg: "template-origin",
         kind: Kind::FreeText,
     },

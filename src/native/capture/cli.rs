@@ -614,7 +614,7 @@ pub(super) fn task_section_arg() -> Arg {
         .help("Nest under the exact task-section TITLE; requires --route and --task")
 }
 
-pub(super) fn template_origin_arg() -> Arg {
+pub(crate) fn template_origin_arg() -> Arg {
     Arg::new("template-origin")
         .long("template-origin")
         .value_name("ID")
@@ -728,15 +728,7 @@ impl CaptureRequest {
                 "--task-section requires --task or --task-ref",
             ));
         }
-        let template_origin =
-            matches.get_one::<String>("template-origin").cloned();
-        if let Some(origin) = template_origin.as_deref()
-            && !crate::native::capture_templates::store::is_valid_origin(origin)
-        {
-            return Err(CaptureError::usage(
-                "--template-origin must be 1-64 ASCII alphanumeric characters",
-            ));
-        }
+        let template_origin = validated_template_origin(matches)?;
 
         Ok(Self {
             bob_dir: bob_dir_from_matches(matches),
@@ -759,6 +751,20 @@ impl CaptureRequest {
             selection: crate::native::task_complete::SuccessorSelection::None,
         })
     }
+}
+
+pub(crate) fn validated_template_origin(
+    matches: &ArgMatches,
+) -> Result<Option<String>, CaptureError> {
+    let template_origin = matches.get_one::<String>("template-origin").cloned();
+    if let Some(origin) = template_origin.as_deref()
+        && !crate::native::capture_templates::store::is_valid_origin(origin)
+    {
+        return Err(CaptureError::usage(
+            "--template-origin must be 1-64 ASCII alphanumeric characters",
+        ));
+    }
+    Ok(template_origin)
 }
 
 pub(super) fn parse_pull_in_picks(

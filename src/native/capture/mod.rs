@@ -172,6 +172,9 @@ struct CaptureExpansionOutput {
 }
 
 fn expand_capture(matches: &ArgMatches, output_format: OutputFormat) -> i32 {
+    if let Err(error) = validated_template_origin(matches) {
+        return print_capture_error(error, output_format);
+    }
     let raw = match raw_text_from_matches(matches) {
         Ok(raw) => raw,
         Err(error) => return print_capture_error(error, output_format),
@@ -310,13 +313,14 @@ fn save_template_shelf(
             for warning in &saved.warnings {
                 eprintln!("{COMMAND_NAME}: warning: {warning}");
             }
+            out.template_origin = request.template_origin.clone();
             out.template_saved = Some(TemplateSavedJson {
                 id: saved.id,
                 status: saved.status.as_str(),
             });
         }
         Err(error) => {
-            let reason = error.reason().to_string();
+            let reason = error.reason();
             eprintln!("{COMMAND_NAME}: warning: template not saved: {reason}");
             out.template_not_saved = Some(reason);
         }

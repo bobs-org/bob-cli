@@ -22,6 +22,7 @@ workflow guide.
   - [Scheduling and priority](#scheduling-and-priority)
   - [Multi-item capture](#multi-item-capture)
   - [Bulk templates](#bulk-templates)
+    - [Saved templates](#saved-templates)
   - [Authored sub-bullets](#authored-sub-bullets)
   - [Clipboard](#clipboard)
   - [Saving links to your reading queue](#saving-links-to-your-reading-queue)
@@ -55,8 +56,8 @@ workflow guide.
 - [`bob capture-parse`](#bob-capture-parse)
 - [`bob capture-rewrite`](#bob-capture-rewrite)
 - [`bob capture-complete`](#bob-capture-complete)
-- [`bob capture-templates`](#bob-capture-templates)
 - [Discovery commands](#discovery-commands)
+- [`bob capture-templates`](#bob-capture-templates)
 - [`bob capture-task-id`](#bob-capture-task-id)
 - [`bob capture-pomodoro-name`](#bob-capture-pomodoro-name)
 
@@ -602,9 +603,10 @@ lines joined with `\n`), ordered most recently touched first, with
 
 `capture.max_saved_templates` in the Bob config caps the shelf from 0 to 36
 and defaults to 36. Every write trims to the cap by dropping the least
-recently used entries. `0` turns saving off: bob never writes the shelf, and
-existing entries stay listed and usable. An invalid value or a config read
-error prints one stderr warning and uses 36.
+recently used entries. `0` turns saving off: bob never writes the shelf
+except for an explicit `delete` or `clear`, and existing entries stay listed
+and usable. An invalid value or a config read error prints one stderr warning
+and uses 36.
 
 A save may carry the app's checkout origin: when the used block differs from
 the checked-out entry, the edited version replaces the original in the same
@@ -4298,8 +4300,8 @@ block to the shelf (see [Saved templates](#saved-templates)): the `template`
 object then gains `saved: {id, status}` (`new`, `updated`, or `replaced`),
 or `not_saved: "<reason>"` when the best-effort save failed. Both are absent
 on `--dry-run` and when saving is off. Human output appends `· saved`
-(`· saved, replacing <id>` for `replaced`) or `· not saved` to the template
-summary line. `-E, --expand` prints the expanded draft in human
+(`· saved, replacing <origin-id>` for `replaced`, naming the checked-out
+origin that was removed) or `· not saved` to the template summary line. `-E, --expand` prints the expanded draft in human
 mode; with `-f json` it returns `expanded` and the same `template` summary. On
 drafts without a header it returns the original text. The
 `kind` field is `"task"`, `"bullet"`, `"pomodoro_task"`,
@@ -5851,41 +5853,6 @@ an empty candidate list. Discovery failures never fall back to a default route
 or an empty result silently; they return the same actionable error in human and
 JSON forms as the underlying scan would.
 
-## `bob capture-templates`
-
-```text
-bob capture-templates [list] [-f|--format human|json]
-bob capture-templates show TEMPLATE [-f|--format human|json]
-bob capture-templates save [-f|--format human|json] [TEXT]...
-bob capture-templates delete TEMPLATE... [-f|--format human|json]
-bob capture-templates clear [-f|--format human|json]
-```
-
-The group is a capture-protocol sibling of `bob capture`; its verbs must stay
-under `capture-templates` because free-text `bob capture` accepts arbitrary
-text. `list` is the default and is read-only. `show` writes an unstyled draft
-to stdout. `save` reads TEXT joined with spaces, or stdin when TEXT is absent.
-`delete` resolves numeric selectors against the locked list at write time.
-All commands support `-f|--format human|json`. JSON errors use
-`{"ok":false,"error":"...","code":"..."}`.
-
-`list -f json` is the app protocol: each entry includes the insertable `draft`,
-the UTF-8 byte `cursor`, `field_count`, `line_count`, the first row's `route`,
-and `spans` computed by the same parser as `capture-parse`. Clients render and
-insert these values directly instead of parsing template syntax. Saving is
-controlled by `capture.max_saved_templates`; a newer schema blocks writes but
-still permits reads, and `clear` remains available as the explicit reset.
-
-`show -f json` returns `{"ok":true,"template":...}`. `save -f json`
-returns `saved: {id,status}` and the new entry; `status` is `new`, `updated`,
-or `replaced`. A new explicit save starts with `use_count: 0`. Delete returns
-the deleted ids and any unresolved selector strings in `missing`; clear
-returns the number of entries removed. Error JSON includes `ok: false`,
-`error`, and `code`: `saved_template_not_found` exits 1; `saved_template_not_template`,
-`saved_templates_disabled`, and existing `template_*` definition errors exit
-2; `saved_templates_newer_schema`, `saved_templates_busy`, and
-`saved_templates_io` exit 1.
-
 ## Discovery commands
 
 ```bash
@@ -6044,6 +6011,69 @@ state. JSON success is a single versioned object with `ok`, `schema_version`
 `--task-ref` and still has no ID), `ref`, `count`, and an ordered `sections`
 array. Each section has `title`, `slug`, `line`, `child_count`, and `depth`
 (always `1` for a direct child). JSON failure is `{"ok": false, "error": "..."}`.
+
+## `bob capture-templates`
+
+```text
+bob capture-templates [list] [-f|--format human|json]
+bob capture-templates show TEMPLATE [-f|--format human|json]
+bob capture-templates save [-f|--format human|json] [TEXT]...
+bob capture-templates delete TEMPLATE... [-f|--format human|json]
+bob capture-templates clear [-f|--format human|json]
+```
+
+The group is a capture-protocol sibling of `bob capture`; its verbs must stay
+under `capture-templates` because free-text `bob capture` accepts arbitrary
+text. `list` is the default and is read-only. An older bob reports an
+unrecognized subcommand for `bob capture-templates` and exits 2. `show`
+writes an unstyled draft to stdout. `save` reads TEXT joined with spaces, or
+stdin when TEXT is absent. `delete` resolves numeric selectors against the
+locked list at write time. All commands support `-f|--format human|json`.
+JSON errors use `{"ok":false,"error":"...","code":"..."}`.
+
+`list -f json` is the app protocol: each entry includes the insertable `draft`,
+the UTF-8 byte `cursor`, `field_count`, `line_count`, the first row's `route`,
+and `spans` computed by the same parser as `capture-parse`. Clients render and
+insert these values directly instead of parsing template syntax. Saving is
+controlled by `capture.max_saved_templates`; a newer schema blocks writes but
+still permits reads, and `clear` remains available as the explicit reset.
+
+```json
+{
+  "ok": true,
+  "schema_version": 1,
+  "capacity": 36,
+  "saving": true,
+  "file": "/Users/bryan/.local/state/bob-cli/capture/templates.json",
+  "templates": [
+    {
+      "index": 1,
+      "id": "9c1f0e2a7b3d",
+      "text": "Apply to {0}! @job^apply-{1}\n- **URL**: {2}",
+      "draft": "@@template:\nApply to {0}! @job^apply-{1}\n- **URL**: {2}\n\n",
+      "cursor": 57,
+      "field_count": 3,
+      "line_count": 2,
+      "route": "job",
+      "spans": [{ "start": 9, "end": 12, "kind": "template_placeholder", "field": 0 }],
+      "first_saved_at": "2026-10-16T09:12:44-04:00",
+      "last_used_at": "2026-10-16T09:40:02-04:00",
+      "use_count": 3
+    }
+  ],
+  "warnings": []
+}
+```
+
+`show -f json` returns `{"ok":true,"template":...}`. `save -f json`
+returns `saved: {id,status}` and the new entry; `status` is `new`, `updated`,
+or `replaced`. A new explicit save starts with `use_count: 0`. Delete returns
+the deleted ids and any unresolved selector strings in `missing`; clear
+returns the number of entries removed. Error JSON includes `ok: false`,
+`error`, and `code`: `saved_template_not_found` exits 1; `saved_template_not_template`,
+`saved_templates_disabled`, and existing `template_*` definition errors exit
+2; `saved_templates_newer_schema`, `saved_templates_busy`, and
+`saved_templates_io` exit 1.
 
 ## `bob capture-task-id`
 

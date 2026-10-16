@@ -264,6 +264,8 @@ pub(super) struct CaptureResult {
     pub(super) template_saved: Option<TemplateSavedJson>,
     #[serde(skip)]
     pub(super) template_not_saved: Option<String>,
+    #[serde(skip)]
+    pub(super) template_origin: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(super) warnings: Vec<String>,
     /// Before/after plan budget, present only when the batch changed
@@ -315,6 +317,7 @@ impl CaptureResult {
             template_rows,
             template_saved: None,
             template_not_saved: None,
+            template_origin: None,
             warnings,
             plan_budget,
             pomodoro_blocks,
@@ -1115,6 +1118,7 @@ pub(super) fn print_human_success(result: &CaptureResult) {
             &result.template_rows,
             result.template_saved.as_ref(),
             result.template_not_saved.as_deref(),
+            result.template_origin.as_deref(),
         );
     }
     if result.captures.is_empty() {
@@ -1138,6 +1142,7 @@ fn print_template_summary(
     rows: &[Option<capture_language::TemplateRowSummary>],
     saved: Option<&TemplateSavedJson>,
     not_saved: Option<&str>,
+    origin: Option<&str>,
 ) {
     let styler = Styler::detect();
     let row_label = if summary.row_count == 1 {
@@ -1166,9 +1171,10 @@ fn print_template_summary(
     );
     if let Some(saved) = saved {
         if saved.status == "replaced" {
+            let replaced = origin.unwrap_or(&saved.id);
             line.push_str(&format!(
                 " · saved, replacing {}",
-                styler.dim(&saved.id)
+                styler.dim(replaced)
             ));
         } else {
             line.push_str(" · saved");
