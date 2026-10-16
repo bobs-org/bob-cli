@@ -3375,6 +3375,14 @@ fn highlights_create_markdown_renders_outside_xlib() {
         .expect("run create scratch render");
     assert_success(&output);
     let args = std::fs::read_to_string(&logged).expect("read pandoc args");
+    assert!(
+        args.contains("mainfontoptions=Ligatures=NoCommon"),
+        "Markdown render disables common main-font ligatures: {args}"
+    );
+    assert!(
+        args.contains(r"\AtBeginDocument{\raggedright\hyphenpenalty=10000\exhyphenpenalty=10000}"),
+        "Markdown render is ragged-right and disables hyphenation: {args}"
+    );
     let out_line = args
         .lines()
         .skip_while(|line| *line != "-o")

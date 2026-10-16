@@ -59,6 +59,7 @@ pub(super) const PANDOC_HEADER_INCLUDES: &str = concat!(
     r"\definecolor{BobListenFill}{HTML}{EEF3FA}",
     r"\newcommand{\BobListenCard}[1]{\par\medskip\noindent\hbox{{\color{BobListenRule}\vrule width 2.5pt}\setlength{\fboxsep}{6pt}\colorbox{BobListenFill}{\parbox{\dimexpr\linewidth-2.5pt-12pt\relax}{\sffamily\small\raggedright #1}}}\par\medskip}",
     r"\newcommand{\BobListenPlay}{\colorbox{BobListenRule}{\textcolor{white}{\textbf{▶\,Play}}}}",
+    r"\AtBeginDocument{\raggedright\hyphenpenalty=10000\exhyphenpenalty=10000}",
 );
 /// Pandoc Lua filter that gives long inline code somewhere to break and renders
 /// listen-card Divs as a compact LaTeX callout.
@@ -2360,6 +2361,8 @@ fn render_temp_pdf(
         .arg("sansfont=DejaVu Sans")
         .arg("-V")
         .arg("monofont=DejaVu Sans Mono")
+        .arg("-V")
+        .arg("mainfontoptions=Ligatures=NoCommon")
         .arg("-V")
         .arg(format!(
             "header-includes={PANDOC_HEADER_INCLUDES}\n{}",
