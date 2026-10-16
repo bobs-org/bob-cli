@@ -11,8 +11,8 @@ use std::{
 
 use super::{
     bob::{
-        apply_bob_task_rows, prepare_project_outcome_for_visibility,
-        take_project_outcome, BobTaskContext, ProjectOutcome,
+        apply_bob_task_rows, take_project_outcome, BobTaskContext,
+        ProjectOutcome,
     },
     classify::{
         source_identity, ClassifiedNote, NoteKind, SourceLoader, SourceStore,
@@ -170,30 +170,23 @@ pub(crate) fn project_snapshot<L: SourceLoader>(
         for section in &mut sections {
             apply_bob_task_rows(&mut section.blocks, &context);
         }
-        let project_outcome_status = if matches!(
-            note.kind,
-            NoteKind::Project | NoteKind::TerminalProject
-        ) {
-            prepare_project_outcome_for_visibility(
-                &mut preamble,
-                &mut sections,
-                &note.identity,
-            )
-        } else {
-            None
-        };
         // Visibility treats preamble tasks by running the same pass over a
-        // temporary section, then the serializer places surviving blocks
-        // directly below the masthead without a synthetic Content heading.
+        // temporary section in document order, then the serializer places
+        // surviving blocks directly below the masthead without a synthetic
+        // Content heading. The preamble section is inserted first so
+        // closed-task extraction preserves source order.
         let preamble_index = if preamble.is_empty() {
             None
         } else {
-            sections.push(preamble_section(
-                &note.identity,
-                std::mem::take(&mut preamble),
-                &expander.used_anchor_ids,
-            ));
-            Some(sections.len() - 1)
+            sections.insert(
+                0,
+                preamble_section(
+                    &note.identity,
+                    std::mem::take(&mut preamble),
+                    &expander.used_anchor_ids,
+                ),
+            );
+            Some(0)
         };
         let outcome = apply_bob_visibility(
             &mut sections,
@@ -215,9 +208,6 @@ pub(crate) fn project_snapshot<L: SourceLoader>(
                 &note.identity,
             );
             if let Some(outcome) = &mut project_outcome {
-                if let Some(status) = project_outcome_status {
-                    outcome.status = status;
-                }
                 if !outcome.history.is_empty() {
                     sections.push(outcome_history_section(
                         &note.identity,
@@ -293,6 +283,7 @@ pub(crate) fn project_snapshot<L: SourceLoader>(
             options.snapshot_date,
             options.include_closed,
             expander.store,
+            settings,
         );
     }
 
@@ -1166,6 +1157,7 @@ fn compose_bob_masthead<L: SourceLoader>(
     snapshot_date: chrono::NaiveDate,
     include_closed: bool,
     store: &mut SourceStore<L>,
+    settings: &TasksSettings,
 ) {
     let metadata = frontmatter.map(|front| &front.metadata);
     let category = if *kind == NoteKind::Area {
@@ -1173,8 +1165,8 @@ fn compose_bob_masthead<L: SourceLoader>(
     } else {
         "PROJECT"
     };
-    let parent =
-        metadata.and_then(|metadata| parent_label(metadata, source, store));
+    let parent = metadata
+        .and_then(|metadata| parent_label(metadata, source, store, settings));
     masthead.kicker = vec![Inline::Text(match parent {
         Some(parent) => format!("{category} · {parent}"),
         None => category.to_string(),
@@ -1305,6 +1297,7 @@ fn parent_label<L: SourceLoader>(
     metadata: &YamlValue,
     source: &SourceIdentity,
     store: &mut SourceStore<L>,
+    settings: &TasksSettings,
 ) -> Option<String> {
     let raw = yaml_scalar_text(metadata_value(metadata, "parent")?)?;
     let parsed = super::resolve::parse_link_target(&raw);
@@ -1319,14 +1312,32 @@ fn parent_label<L: SourceLoader>(
         return None;
     }
 
+    // Reuse the syntax projector's title-candidate rules with the same
+    // SourceStore so linked, emphasized, commented, and fenced titles all
+    // project to readable text. The projection shares the cached source
+    // bytes (one-read invariant), never expands embeds, and never recurses
+    // into parent rendering.
     let readable = store
         .vault_notes()
         .resolve_note(Path::new(&source.vault_relative_path), &parsed)
         .ok()
         .and_then(|resolved| {
-            store.read_canonical(&resolved.canonical_path).ok()
-        })
-        .and_then(|bytes| first_source_h1(&String::from_utf8_lossy(&bytes)));
+            let vault_root = store.vault_root().to_path_buf();
+            let identity =
+                source_identity(&vault_root, &resolved.canonical_path)?;
+            let mut attachments =
+                AttachmentIndex::new(store.vault_root().to_path_buf());
+            project_obsidian_syntax(
+                store,
+                &mut attachments,
+                &identity,
+                settings,
+            )
+            .ok()
+            .and_then(|projection| projection.title_candidate)
+            .map(|candidate| candidate.display_text)
+            .filter(|text| !text.trim().is_empty())
+        });
     readable.or_else(|| {
         parsed
             .note
@@ -1335,30 +1346,6 @@ fn parent_label<L: SourceLoader>(
             .map(|name| name.trim_end_matches(".md").replace(['_', '-'], " "))
             .filter(|name| !name.trim().is_empty())
     })
-}
-
-fn first_source_h1(contents: &str) -> Option<String> {
-    let lines = contents.lines().collect::<Vec<_>>();
-    let body_start = strictly_closed_frontmatter_end(&lines)
-        .map_or(0, |frontmatter_end| frontmatter_end + 1);
-    let mut in_fence = false;
-    for line in lines.into_iter().skip(body_start) {
-        let trimmed = line.trim_start();
-        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
-            in_fence = !in_fence;
-            continue;
-        }
-        if in_fence {
-            continue;
-        }
-        if let Some(title) = trimmed.strip_prefix("# ") {
-            let title = title.trim().trim_end_matches('#').trim();
-            if !title.is_empty() {
-                return Some(title.to_string());
-            }
-        }
-    }
-    None
 }
 
 fn finalize_bob_sections(
@@ -1408,19 +1395,54 @@ fn prune_bob_blocks(blocks: &mut Vec<Block>) -> u64 {
     for block in blocks.iter_mut() {
         match block {
             Block::Task(task) => {
+                prune_bob_inlines(&mut task.content);
+                for chip in task.chips.iter_mut() {
+                    prune_bob_inlines(&mut chip.content);
+                }
                 let mut children = std::mem::take(&mut task.children);
                 prune_bob_blocks(&mut children);
                 task.children = children;
             }
+            Block::Paragraph(inlines) | Block::EmptyState(inlines) => {
+                prune_bob_inlines(inlines);
+            }
+            Block::Heading(heading) => {
+                prune_bob_inlines(&mut heading.content);
+            }
             Block::List { items, .. } => {
                 for item in items {
+                    prune_bob_inlines(&mut item.content);
                     prune_bob_blocks(&mut item.children);
                 }
             }
+            Block::LabeledRow { label, items } => {
+                prune_bob_inlines(label);
+                for item in items {
+                    prune_bob_inlines(item);
+                }
+            }
+            Block::LogRow {
+                label,
+                date,
+                content,
+                ..
+            } => {
+                prune_bob_inlines(label);
+                if let Some(date) = date {
+                    prune_bob_inlines(date);
+                }
+                prune_bob_inlines(content);
+            }
+            Block::MissingImage { label } => {
+                prune_bob_inlines(label);
+            }
             Block::Embed { blocks, .. }
             | Block::LiveQuery { blocks }
-            | Block::Compact { blocks }
-            | Block::Callout { blocks, .. } => {
+            | Block::Compact { blocks } => {
+                prune_bob_blocks(blocks);
+            }
+            Block::Callout { title, blocks, .. } => {
+                prune_bob_inlines(title);
                 prune_bob_blocks(blocks);
             }
             _ => {}
@@ -1475,6 +1497,28 @@ fn prune_bob_blocks(blocks: &mut Vec<Block>) -> u64 {
         .filter_map(|(index, block)| (!remove[index]).then_some(block))
         .collect();
     removed
+}
+
+fn prune_bob_inlines(inlines: &mut [Inline]) {
+    for inline in inlines.iter_mut() {
+        match inline {
+            Inline::EmbeddedBlock(inner) => {
+                let mut nested = vec![std::mem::replace(
+                    inner.as_mut(),
+                    Block::Paragraph(Vec::new()),
+                )];
+                prune_bob_blocks(&mut nested);
+                **inner = nested.into_iter().next().expect("embedded block");
+            }
+            Inline::Link { label, .. }
+            | Inline::Emphasis(label)
+            | Inline::Strong(label)
+            | Inline::Strike(label)
+            | Inline::Muted(label) => prune_bob_inlines(label),
+            Inline::Chip(chip) => prune_bob_inlines(&mut chip.content),
+            _ => {}
+        }
+    }
 }
 
 fn badge_row(inlines: &[Inline]) -> bool {
@@ -1541,13 +1585,19 @@ fn block_has_visible_content(block: &Block) -> bool {
         Block::Heading(_) => false,
         Block::Paragraph(content) | Block::EmptyState(content) => {
             !plain_inline_text(content).is_empty()
+                || inline_has_visible_content(content)
         }
         Block::List { items, .. } => items.iter().any(|item| {
             !plain_inline_text(&item.content).is_empty()
+                || inline_has_visible_content(&item.content)
                 || item.children.iter().any(block_has_visible_content)
         }),
         Block::Task(_) | Block::Code { .. } | Block::Image { .. } => true,
-        Block::LabeledRow { items, .. } => !items.is_empty(),
+        Block::LabeledRow { label, items } => {
+            !items.is_empty()
+                || inline_has_visible_content(label)
+                || items.iter().any(|item| inline_has_visible_content(item))
+        }
         Block::LogRow { .. } | Block::MissingImage { .. } => true,
         Block::Embed { blocks, .. }
         | Block::LiveQuery { blocks }
@@ -1558,16 +1608,67 @@ fn block_has_visible_content(block: &Block) -> bool {
     }
 }
 
+fn inline_has_visible_content(inlines: &[Inline]) -> bool {
+    inlines.iter().any(|inline| match inline {
+        Inline::EmbeddedBlock(inner) => {
+            block_has_visible_content(inner.as_ref())
+        }
+        Inline::Link { label, .. }
+        | Inline::Emphasis(label)
+        | Inline::Strong(label)
+        | Inline::Strike(label)
+        | Inline::Muted(label) => inline_has_visible_content(label),
+        Inline::Chip(chip) => inline_has_visible_content(&chip.content),
+        _ => false,
+    })
+}
+
 fn has_task(blocks: &[Block]) -> bool {
     blocks.iter().any(|block| match block {
         Block::Task(_) => true,
-        Block::List { items, .. } => {
-            items.iter().any(|item| has_task(&item.children))
+        Block::Paragraph(inlines) | Block::EmptyState(inlines) => {
+            has_task_in_inlines(inlines)
         }
+        Block::Heading(heading) => has_task_in_inlines(&heading.content),
+        Block::List { items, .. } => items.iter().any(|item| {
+            has_task_in_inlines(&item.content) || has_task(&item.children)
+        }),
+        Block::LabeledRow { label, items } => {
+            has_task_in_inlines(label)
+                || items.iter().any(|item| has_task_in_inlines(item))
+        }
+        Block::LogRow {
+            label,
+            date,
+            content,
+            ..
+        } => {
+            has_task_in_inlines(label)
+                || date.as_ref().is_some_and(|date| has_task_in_inlines(date))
+                || has_task_in_inlines(content)
+        }
+        Block::MissingImage { label } => has_task_in_inlines(label),
         Block::Embed { blocks, .. }
         | Block::LiveQuery { blocks }
-        | Block::Compact { blocks }
-        | Block::Callout { blocks, .. } => has_task(blocks),
+        | Block::Compact { blocks } => has_task(blocks),
+        Block::Callout { title, blocks, .. } => {
+            has_task_in_inlines(title) || has_task(blocks)
+        }
+        _ => false,
+    })
+}
+
+fn has_task_in_inlines(inlines: &[Inline]) -> bool {
+    inlines.iter().any(|inline| match inline {
+        Inline::EmbeddedBlock(inner) => {
+            has_task(std::slice::from_ref(inner.as_ref()))
+        }
+        Inline::Link { label, .. }
+        | Inline::Emphasis(label)
+        | Inline::Strong(label)
+        | Inline::Strike(label)
+        | Inline::Muted(label) => has_task_in_inlines(label),
+        Inline::Chip(chip) => has_task_in_inlines(&chip.content),
         _ => false,
     })
 }
@@ -1614,13 +1715,25 @@ fn count_log_blocks(blocks: &[Block], counts: &mut (u64, u64)) {
                         counts.0 += value;
                     }
                 }
+                count_log_inlines(&task.content, counts);
+                for chip in &task.chips {
+                    count_log_inlines(&chip.content, counts);
+                }
                 count_log_blocks(&task.children, counts);
+            }
+            Block::Paragraph(inlines) | Block::EmptyState(inlines) => {
+                count_log_inlines(inlines, counts);
+            }
+            Block::Heading(heading) => {
+                count_log_inlines(&heading.content, counts);
             }
             Block::List { items, .. } => {
                 for item in items {
+                    count_log_inlines(&item.content, counts);
                     if let Some(source) = item.source.as_ref()
-                        && let Some(kind) =
-                            parse_managed_task_log_marker(&source.raw_line)
+                        && let Some(kind) = parse_managed_task_log_marker(
+                            source.semantic_line(),
+                        )
                     {
                         let entries = item
                             .children
@@ -1639,16 +1752,55 @@ fn count_log_blocks(blocks: &[Block], counts: &mut (u64, u64)) {
                 }
             }
             Block::LogRow {
-                label, older_count, ..
-            } => match plain_inline_text(label).as_str() {
-                "MOVED" => counts.0 += 1,
-                "WORKED" => counts.1 += 1 + older_count.unwrap_or(0),
-                _ => {}
-            },
+                label,
+                date,
+                content,
+                older_count,
+            } => {
+                match plain_inline_text(label).as_str() {
+                    "MOVED" => counts.0 += 1,
+                    "WORKED" => counts.1 += 1 + older_count.unwrap_or(0),
+                    _ => {}
+                }
+                count_log_inlines(label, counts);
+                if let Some(date) = date {
+                    count_log_inlines(date, counts);
+                }
+                count_log_inlines(content, counts);
+            }
+            Block::LabeledRow { label, items } => {
+                count_log_inlines(label, counts);
+                for item in items {
+                    count_log_inlines(item, counts);
+                }
+            }
+            Block::MissingImage { label } => {
+                count_log_inlines(label, counts);
+            }
             Block::Embed { blocks, .. }
             | Block::LiveQuery { blocks }
-            | Block::Compact { blocks }
-            | Block::Callout { blocks, .. } => count_log_blocks(blocks, counts),
+            | Block::Compact { blocks } => count_log_blocks(blocks, counts),
+            Block::Callout { title, blocks, .. } => {
+                count_log_inlines(title, counts);
+                count_log_blocks(blocks, counts);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn count_log_inlines(inlines: &[Inline], counts: &mut (u64, u64)) {
+    for inline in inlines {
+        match inline {
+            Inline::EmbeddedBlock(inner) => {
+                count_log_blocks(std::slice::from_ref(inner.as_ref()), counts);
+            }
+            Inline::Link { label, .. }
+            | Inline::Emphasis(label)
+            | Inline::Strong(label)
+            | Inline::Strike(label)
+            | Inline::Muted(label) => count_log_inlines(label, counts),
+            Inline::Chip(chip) => count_log_inlines(&chip.content, counts),
             _ => {}
         }
     }
@@ -1794,17 +1946,69 @@ fn count_blocks(
         match block {
             Block::Task(task) => {
                 *counts.entry(task.status).or_default() += 1;
+                count_inlines(&task.content, counts);
+                for chip in &task.chips {
+                    count_inlines(&chip.content, counts);
+                }
                 count_blocks(&task.children, counts);
+            }
+            Block::Paragraph(inlines) | Block::EmptyState(inlines) => {
+                count_inlines(inlines, counts);
+            }
+            Block::Heading(heading) => {
+                count_inlines(&heading.content, counts);
             }
             Block::List { items, .. } => {
                 for item in items {
+                    count_inlines(&item.content, counts);
                     count_blocks(&item.children, counts);
                 }
+            }
+            Block::LabeledRow { label, items } => {
+                count_inlines(label, counts);
+                for item in items {
+                    count_inlines(item, counts);
+                }
+            }
+            Block::LogRow {
+                label,
+                date,
+                content,
+                ..
+            } => {
+                count_inlines(label, counts);
+                if let Some(date) = date {
+                    count_inlines(date, counts);
+                }
+                count_inlines(content, counts);
+            }
+            Block::MissingImage { label } => {
+                count_inlines(label, counts);
             }
             Block::Embed { blocks, .. }
             | Block::LiveQuery { blocks }
             | Block::Callout { blocks, .. }
             | Block::Compact { blocks } => count_blocks(blocks, counts),
+            _ => {}
+        }
+    }
+}
+
+fn count_inlines(
+    inlines: &[Inline],
+    counts: &mut BTreeMap<SnapshotTaskStatus, u64>,
+) {
+    for inline in inlines {
+        match inline {
+            Inline::EmbeddedBlock(inner) => {
+                count_blocks(std::slice::from_ref(inner.as_ref()), counts);
+            }
+            Inline::Link { label, .. }
+            | Inline::Emphasis(label)
+            | Inline::Strong(label)
+            | Inline::Strike(label)
+            | Inline::Muted(label) => count_inlines(label, counts),
+            Inline::Chip(chip) => count_inlines(&chip.content, counts),
             _ => {}
         }
     }
@@ -3511,5 +3715,379 @@ Unrelated prose after the closed lane stays visible.\n\
             panic!("read transclusion golden {}: {error}", path.display());
         });
         assert_eq!(actual, expected, "transclusion golden: {}", path.display());
+    }
+
+    #[test]
+    fn land_audit_inline_embed_policy() {
+        let directory = vault(&[
+            ("Area.md", "---\ntype: [[area]]\n---\n# Area\n## Tasks\nContext ![[Child]] after.\n\nRepeat ![[Child]] again.\n\nSelected ![[Child#Focus]] done.\n"),
+            (
+                "Child.md",
+                "# Child\n\n## Focus\n- [ ] Focus open [priority:: high] ^focus\n\n- [ ] Child open [priority:: high] ^open\n- [x] Child closed ^closed\n",
+            ),
+        ]);
+        // Reading mode: closed occurrences omitted, open chips applied inline.
+        let projection = project_bob(&directory, "Area.md", false, true);
+        let output = markdown(&projection);
+        assert!(!output.contains("Child closed"), "{output}");
+        assert!(output.contains("Child open"), "{output}");
+        assert!(output.contains("Focus open"), "{output}");
+        assert!(output.contains("Context"), "{output}");
+        assert!(output.contains("after"), "{output}");
+        // Two full embeds plus the Focus slice each contribute one closed
+        // omission (the Focus extent runs to the end of Child).
+        assert_eq!(projection.view.summary.omitted_closed_tasks, 3);
+        // Two full embeds x (Focus open + Child open) + Focus slice x 2 opens.
+        assert_eq!(
+            projection
+                .view
+                .summary
+                .task_counts
+                .get(&SnapshotTaskStatus::Open),
+            Some(&6)
+        );
+        assert!(
+            output.contains("[high]{.chip"),
+            "priority chips must survive inline embeds: {output}"
+        );
+        assert!(
+            !output.contains("No open tasks"),
+            "inline tasks count as visible: {output}"
+        );
+        // Repeated occurrences keep distinct anchors.
+        let mut ids = Vec::new();
+        for section in &projection.view.sections {
+            collect_test_anchors(&section.blocks, &mut ids);
+        }
+        collect_test_anchors(&projection.view.preamble, &mut ids);
+        let mut seen = std::collections::BTreeSet::new();
+        for id in &ids {
+            assert!(
+                seen.insert(id.clone()),
+                "duplicate anchor {id} in {ids:?}"
+            );
+        }
+        assert!(ids.iter().any(|id| id.starts_with("embed-1-")), "{ids:?}");
+        assert!(ids.iter().any(|id| id.starts_with("embed-2-")), "{ids:?}");
+
+        // Include-closed mode restores inline closed rows to the appendix
+        // with occurrence-specific anchors while leaving prose intact.
+        let restored = project_bob(&directory, "Area.md", true, true);
+        let restored_output = markdown(&restored);
+        assert!(
+            restored_output.contains("Child closed"),
+            "{restored_output}"
+        );
+        assert!(restored_output.contains("Context"), "{restored_output}");
+        assert!(restored_output.contains("after"), "{restored_output}");
+        let closed = restored.view.closed.as_ref().expect("appendix");
+        let mut appendix_ids = Vec::new();
+        collect_test_anchors(&closed.blocks, &mut appendix_ids);
+        assert_eq!(appendix_ids.len(), 3, "{appendix_ids:?}");
+        let mut uniq = std::collections::BTreeSet::new();
+        for id in &appendix_ids {
+            assert!(uniq.insert(id.clone()), "duplicate appendix {id}");
+        }
+
+        // Ordinary notes keep plain projection inside inline embeds.
+        let ordinary_dir = vault(&[
+            ("Ordinary.md", "Context ![[Child]] after.\n"),
+            (
+                "Child.md",
+                "- [ ] Child open [priority:: high] ^open\n- [x] Child closed ^closed\n",
+            ),
+        ]);
+        let ordinary = project(&ordinary_dir, "Ordinary.md");
+        let ordinary_md = markdown(&ordinary);
+        assert!(ordinary_md.contains("Child closed"), "{ordinary_md}");
+        assert!(
+            !ordinary_md.contains("[high]{.chip"),
+            "ordinary hosts must not mint Bob chips: {ordinary_md}"
+        );
+    }
+
+    fn collect_test_anchors(blocks: &[Block], ids: &mut Vec<String>) {
+        for block in blocks {
+            match block {
+                Block::Task(task) => {
+                    if let Some(anchor) = &task.anchor {
+                        ids.push(anchor.id.clone());
+                    }
+                    collect_test_anchors(&task.children, ids);
+                }
+                Block::List { items, .. } => {
+                    for item in items {
+                        collect_test_anchors(&item.children, ids);
+                    }
+                }
+                Block::Embed { blocks, .. }
+                | Block::LiveQuery { blocks }
+                | Block::Compact { blocks } => {
+                    collect_test_anchors(blocks, ids)
+                }
+                Block::Callout { blocks, .. } => {
+                    collect_test_anchors(blocks, ids)
+                }
+                Block::Paragraph(inlines) | Block::EmptyState(inlines) => {
+                    collect_test_inline_anchors(inlines, ids);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn collect_test_inline_anchors(inlines: &[Inline], ids: &mut Vec<String>) {
+        for inline in inlines {
+            match inline {
+                Inline::Anchor(anchor) => ids.push(anchor.id.clone()),
+                Inline::EmbeddedBlock(inner) => collect_test_anchors(
+                    std::slice::from_ref(inner.as_ref()),
+                    ids,
+                ),
+                Inline::Link { label, .. }
+                | Inline::Emphasis(label)
+                | Inline::Strong(label)
+                | Inline::Strike(label)
+                | Inline::Muted(label) => {
+                    collect_test_inline_anchors(label, ids)
+                }
+                Inline::Chip(chip) => {
+                    collect_test_inline_anchors(&chip.content, ids)
+                }
+                _ => {}
+            }
+        }
+    }
+    #[test]
+    fn land_audit_relationship_child_once() {
+        let directory = vault(&[(
+            "Area.md",
+            "---\ntype: [[area]]\n---\n# Area\n## Tasks\n- [ ] Parent ^parent\n\t- ⛓️ **DEPENDS ON:** [[Area#^other]]\n\t\t- [ ] Child [priority:: high] [scheduled:: 2026-10-20] [repeat:: every week] ^child\n- [ ] Other ^other\n",
+        )]);
+        let projection = project_bob(&directory, "Area.md", false, true);
+        let output = markdown(&projection);
+        assert_eq!(output.matches("[high]{.chip").count(), 1, "{output}");
+        assert_eq!(output.matches("sched Oct 20").count(), 1, "{output}");
+        assert_eq!(output.matches("repeats every week").count(), 1, "{output}");
+        assert!(output.contains("Waits on"), "{output}");
+    }
+    #[test]
+    fn land_audit_comment_fields_hidden() {
+        let directory = vault(&[
+            (
+                "Area.md",
+                "---\ntype: [[area]]\n---\n# Area\n## Tasks\n- [ ] Visible %% [priority:: high] [repeat:: secret] %% ^task\n- [ ] Html <!-- [priority:: high] #ref [[Snap]] --> ^html\n- [ ] Code `[priority:: high]` #task ^code\n",
+            ),
+            (
+                "Snap.md",
+                "---\nsource_note: \"[[Elsewhere]]\"\n---\n\n# Snap\n",
+            ),
+        ]);
+        let projection = project_bob(&directory, "Area.md", false, true);
+        let output = markdown(&projection);
+        assert!(!output.contains("secret"), "{output}");
+        assert!(!output.contains("[high]{.chip"), "{output}");
+        // HTML-hidden fields, refs, and links never leak either.
+        assert!(!output.contains("[[Snap]]"), "{output}");
+        assert_eq!(output.matches("[ref]").count(), 0, "{output}");
+        // Protected literal code stays readable and mints no chips.
+        assert!(output.contains("[priority:: high]"), "{output}");
+        // Multiline comment spans hide fields on later lines without
+        // resurrecting them via per-line stripping.
+        let multiline = vault(&[(
+            "Area.md",
+            "---\ntype: [[area]]\n---\n# Area\n## Tasks\n%% start\n[priority:: high] hidden\nend %%\n- [ ] After ^after\n",
+        )]);
+        let multi_proj = project_bob(&multiline, "Area.md", false, true);
+        let multi_out = markdown(&multi_proj);
+        assert!(!multi_out.contains("[high]{.chip"), "{multi_out}");
+        assert!(multi_out.contains("After"), "{multi_out}");
+    }
+    #[test]
+    fn land_audit_terminal_outcome_cancel_history() {
+        let directory = vault(&[(
+            "Project.md",
+            "---\ntype: [[project]]\nstatus: canceled\n---\n# Project\n## Tasks\n- [-] Outcome #task [cancelled:: 2026-10-14] ^prj\n\t- ❌ **CANCEL LOG**\n\t\t- *2026-10-15* — cancellation explanation\n\t- Ordinary outcome child prose remains.\n",
+        )]);
+        // Full mode preserves the cancellation explanation and history.
+        let projection = project_bob(&directory, "Project.md", true, true);
+        let output = markdown(&projection);
+        assert!(output.contains("cancellation explanation"), "{output}");
+        assert!(
+            output.contains("Ordinary outcome child prose remains"),
+            "{output}"
+        );
+        assert!(output.contains("[canceled]{.chip}"), "{output}");
+        assert!(output.contains("Outcome history"), "{output}");
+        assert!(!output.contains("#t-prj"), "{output}");
+        // Reading mode keeps status meaning via masthead chips while
+        // respecting condensed-log policy.
+        let reading = project_bob(&directory, "Project.md", false, true);
+        let reading_out = markdown(&reading);
+        assert!(reading_out.contains("[canceled]{.chip}"), "{reading_out}");
+        assert!(
+            reading_out.contains("Ordinary outcome child prose remains")
+                || reading_out.contains("Outcome history"),
+            "{reading_out}"
+        );
+        // Completed outcomes preserve completion chips and work history.
+        let done_dir = vault(&[(
+            "Done.md",
+            "---\ntype: [[project]]\nstatus: done\n---\n# Done\n## Tasks\n- [x] Shipped #task [completion:: 2026-10-15] ^prj\n\t- 🛠️ **WORK LOG**\n\t\t- *2026-10-15* — final polish\n",
+        )]);
+        let done_full = project_bob(&done_dir, "Done.md", true, true);
+        let done_out = markdown(&done_full);
+        assert!(done_out.contains("final polish"), "{done_out}");
+        assert!(done_out.contains("[done]{.chip}"), "{done_out}");
+        let done_reading = project_bob(&done_dir, "Done.md", false, true);
+        let done_reading_out = markdown(&done_reading);
+        assert!(
+            done_reading_out.contains("[done]{.chip}"),
+            "{done_reading_out}"
+        );
+    }
+    #[test]
+    fn land_audit_closed_appendix_source_order() {
+        let directory = vault(&[
+            (
+                "Area.md",
+                "---\ntype: [[area]]\n---\n# Area\n- [x] Preamble closed ^before\n## Tasks\nBody ![[Embed]] tail.\n- [x] Section closed ^after\n",
+            ),
+            ("Embed.md", "- [x] Embedded closed ^embedded\n"),
+        ]);
+        let projection = project_bob(&directory, "Area.md", true, true);
+        let output = markdown(&projection);
+        let preamble_pos = output.find("Preamble closed").expect("{output}");
+        let section_pos = output.find("Section closed").expect("{output}");
+        let embedded_pos = output.find("Embedded closed").expect("{output}");
+        // Document order is preserved in the appendix.
+        assert!(preamble_pos < embedded_pos, "{output}");
+        assert!(embedded_pos < section_pos, "{output}");
+        // No duplicate descendants or anchors.
+        assert_eq!(output.matches("Preamble closed").count(), 1, "{output}");
+        assert_eq!(output.matches("Section closed").count(), 1, "{output}");
+        assert_eq!(output.matches("Embedded closed").count(), 1, "{output}");
+        assert!(output.contains("Body"), "{output}");
+        assert!(output.contains("tail"), "{output}");
+    }
+    #[test]
+    fn land_audit_nested_self_omission() {
+        let directory = vault(&[
+            ("Area.md", "---\ntype: [[area]]\n---\n# Area\n## Tasks\n- [x] Parent closed ^parent\n\t- [x] Read [[Snapshot]] #ref ^self\n"),
+            ("Snapshot.md", "---\ntype: [[ref]]\nsource_note: '[[Area]]'\n---\n# Snapshot\n"),
+        ]);
+        // Reading mode omits both; include-closed restores the closed
+        // parent to the appendix while the self child stays omitted.
+        let reading = project_bob(&directory, "Area.md", false, true);
+        assert_eq!(reading.view.summary.omitted_self_snapshot_tasks, 1);
+        assert_eq!(reading.view.summary.omitted_closed_tasks, 1);
+        let restored = project_bob(&directory, "Area.md", true, true);
+        assert_eq!(restored.view.summary.omitted_self_snapshot_tasks, 1);
+        assert_eq!(restored.view.summary.omitted_closed_tasks, 0);
+        // Self-ref ancestors omit once as self; nested closed children
+        // still count as closed with no overlap.
+        let ancestor = vault(&[
+            (
+                "Area.md",
+                "---\ntype: [[area]]\n---\n# Area\n## Tasks\n- [ ] Self parent [[Snapshot]] #ref ^selfparent\n\t- [x] Nested closed ^nested\n",
+            ),
+            ("Snapshot.md", "---\ntype: [[ref]]\nsource_note: '[[Area]]'\n---\n# Snapshot\n"),
+        ]);
+        for include_closed in [false, true] {
+            let projection =
+                project_bob(&ancestor, "Area.md", include_closed, true);
+            assert_eq!(
+                projection.view.summary.omitted_self_snapshot_tasks, 1,
+                "include_closed={include_closed}"
+            );
+            assert_eq!(
+                projection.view.summary.omitted_closed_tasks, 1,
+                "include_closed={include_closed}"
+            );
+        }
+        // Source bytes stay unchanged.
+        let root = directory.path().canonicalize().expect("vault root");
+        let before = fs::read(root.join("Area.md")).expect("read host");
+        let _ = project_bob(&directory, "Area.md", false, true);
+        assert_eq!(fs::read(root.join("Area.md")).expect("reread"), before);
+    }
+    #[test]
+    fn land_audit_parent_readable_title() {
+        let directory = vault(&[
+            ("Area.md", "---\ntype: [[area]]\nparent: '[[Parent]]'\n---\n# Area\nPurpose.\n"),
+            ("Parent.md", "# [[Goals|Project Goals]]\n"),
+            ("Goals.md", "# Goals\n"),
+        ]);
+        let projection = project_bob(&directory, "Area.md", false, true);
+        assert_eq!(
+            plain_inline_text(&projection.view.masthead.kicker),
+            "AREA · Project Goals"
+        );
+        // Emphasized titles project to readable text.
+        let emphasized = vault(&[
+            (
+                "Area.md",
+                "---\ntype: [[area]]\nparent: '[[Parent]]'\n---\n# Area\n",
+            ),
+            ("Parent.md", "# **Bold Goals**\n"),
+        ]);
+        assert_eq!(
+            plain_inline_text(
+                &project_bob(&emphasized, "Area.md", false, true)
+                    .view
+                    .masthead
+                    .kicker
+            ),
+            "AREA · Bold Goals"
+        );
+        // Comment-hidden title text stays hidden.
+        let commented = vault(&[
+            (
+                "Area.md",
+                "---\ntype: [[area]]\nparent: '[[Parent]]'\n---\n# Area\n",
+            ),
+            ("Parent.md", "# Visible %%secret%%\n"),
+        ]);
+        assert_eq!(
+            plain_inline_text(
+                &project_bob(&commented, "Area.md", false, true)
+                    .view
+                    .masthead
+                    .kicker
+            ),
+            "AREA · Visible"
+        );
+        // Fenced H1 lookalikes never become the parent label; the route
+        // fallback applies.
+        let fenced = vault(&[
+            (
+                "Area.md",
+                "---\ntype: [[area]]\nparent: '[[Parent]]'\n---\n# Area\n",
+            ),
+            ("Parent.md", "```\n# Fenced\n```\n"),
+        ]);
+        assert_eq!(
+            plain_inline_text(
+                &project_bob(&fenced, "Area.md", false, true)
+                    .view
+                    .masthead
+                    .kicker
+            ),
+            "AREA · Parent"
+        );
+        // Explicit parent aliases are preserved.
+        let aliased = vault(&[(
+            "Area.md",
+            "---\ntype: [[area]]\nparent: '[[Parent|Custom]]'\n---\n# Area\n",
+        )]);
+        assert_eq!(
+            plain_inline_text(
+                &project_bob(&aliased, "Area.md", false, true)
+                    .view
+                    .masthead
+                    .kicker
+            ),
+            "AREA · Custom"
+        );
     }
 }

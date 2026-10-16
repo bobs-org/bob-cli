@@ -1093,6 +1093,7 @@ impl<'a, L: SourceLoader> Projector<'a, L> {
             source: self.host.clone(),
             line: line.line_no,
             raw_line: line.raw.clone(),
+            effective_line: line.text.clone(),
         };
         (
             Block::Task(SnapshotTask {
@@ -1201,6 +1202,7 @@ impl<'a, L: SourceLoader> Projector<'a, L> {
                     source: self.host.clone(),
                     line: line.line_no,
                     raw_line: line.raw.clone(),
+                    effective_line: line.text.clone(),
                 }),
             });
             cursor = next;

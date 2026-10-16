@@ -90,42 +90,6 @@ pub(crate) struct ProjectOutcome {
     pub history: Vec<Block>,
 }
 
-/// Temporarily treat the root `^prj` task as open while the visibility pass
-/// converts its managed logs. The row is removed immediately afterward and
-/// its source checkbox status is retained separately for the masthead.
-pub(crate) fn prepare_project_outcome_for_visibility(
-    preamble: &mut [Block],
-    sections: &mut [SnapshotSection],
-    root: &SourceIdentity,
-) -> Option<SnapshotTaskStatus> {
-    if let Some(status) = prepare_outcome_in_blocks(preamble, root) {
-        return Some(status);
-    }
-    for section in sections {
-        if let Some(status) =
-            prepare_outcome_in_blocks(&mut section.blocks, root)
-        {
-            return Some(status);
-        }
-    }
-    None
-}
-
-fn prepare_outcome_in_blocks(
-    blocks: &mut [Block],
-    root: &SourceIdentity,
-) -> Option<SnapshotTaskStatus> {
-    let task = blocks.iter_mut().find_map(|block| {
-        let Block::Task(task) = block else {
-            return None;
-        };
-        is_root_project_outcome(task, root).then_some(task)
-    })?;
-    let status = task.status;
-    task.status = SnapshotTaskStatus::Open;
-    Some(status)
-}
-
 /// Remove the root note's direct `^prj` task and return its masthead data.
 /// Embedded project tasks are excluded by source identity, and a task with
 /// a similar label or a different block ID is left in the body.
@@ -162,7 +126,7 @@ fn take_outcome_from_blocks(
     };
     let mut content = task.content;
     let created = task.source.as_ref().and_then(|source| {
-        let field = inline_fields(&source.raw_line, "created")
+        let field = inline_fields(source.semantic_line(), "created")
             .into_iter()
             .find_map(|field| {
                 parse_strict_calendar_date(&field.value)
@@ -193,11 +157,14 @@ fn take_outcome_from_blocks(
     })
 }
 
-fn is_root_project_outcome(task: &SnapshotTask, root: &SourceIdentity) -> bool {
+pub(crate) fn is_root_project_outcome(
+    task: &SnapshotTask,
+    root: &SourceIdentity,
+) -> bool {
     task.source.as_ref().is_some_and(|source| {
         source.source == *root
             && crate::native::collect_done::trailing_block_id_in_line(
-                &source.raw_line,
+                source.semantic_line(),
             )
             .as_deref()
                 == Some("prj")
@@ -266,14 +233,66 @@ fn apply_to_block(block: &mut Block, context: &BobTaskContext) {
         Block::Task(task) => apply_to_task(task, context),
         Block::List { items, .. } => {
             for item in items {
+                apply_to_inlines(&mut item.content, context);
                 apply_to_blocks(&mut item.children, context);
             }
+        }
+        Block::Paragraph(inlines) | Block::EmptyState(inlines) => {
+            apply_to_inlines(inlines, context);
+        }
+        Block::Heading(heading) => {
+            apply_to_inlines(&mut heading.content, context);
+        }
+        Block::LabeledRow { label, items } => {
+            apply_to_inlines(label, context);
+            for item in items {
+                apply_to_inlines(item, context);
+            }
+        }
+        Block::LogRow {
+            label,
+            date,
+            content,
+            ..
+        } => {
+            apply_to_inlines(label, context);
+            if let Some(date) = date {
+                apply_to_inlines(date, context);
+            }
+            apply_to_inlines(content, context);
+        }
+        Block::MissingImage { label } => {
+            apply_to_inlines(label, context);
         }
         Block::Embed { blocks, .. }
         | Block::LiveQuery { blocks }
         | Block::Compact { blocks } => apply_to_blocks(blocks, context),
-        Block::Callout { blocks, .. } => apply_to_blocks(blocks, context),
-        _ => {}
+        Block::Callout { title, blocks, .. } => {
+            apply_to_inlines(title, context);
+            apply_to_blocks(blocks, context);
+        }
+        Block::Code { .. } | Block::Image { .. } => {}
+    }
+}
+
+fn apply_to_inlines(inlines: &mut [Inline], context: &BobTaskContext) {
+    for inline in inlines.iter_mut() {
+        match inline {
+            Inline::EmbeddedBlock(inner) => {
+                apply_to_block(inner.as_mut(), context);
+            }
+            Inline::Link { label, .. }
+            | Inline::Emphasis(label)
+            | Inline::Strong(label)
+            | Inline::Strike(label)
+            | Inline::Muted(label) => {
+                apply_to_inlines(label, context);
+            }
+            Inline::Chip(chip) => {
+                apply_to_inlines(&mut chip.content, context);
+            }
+            _ => {}
+        }
     }
 }
 
@@ -286,6 +305,10 @@ fn apply_to_blocks(blocks: &mut [Block], context: &BobTaskContext) {
 /// Transform one task: chips first, then direct-child relationship rows,
 /// then recursion into surviving children (nested tasks own their rows).
 fn apply_to_task(task: &mut SnapshotTask, context: &BobTaskContext) {
+    apply_to_inlines(&mut task.content, context);
+    for chip in task.chips.iter_mut() {
+        apply_to_inlines(&mut chip.content, context);
+    }
     if let Some(source) = task.source.as_ref() {
         let (chips, consumed) = chips_for_task(source, context.snapshot_date);
         if !consumed.is_empty() {
@@ -293,8 +316,7 @@ fn apply_to_task(task: &mut SnapshotTask, context: &BobTaskContext) {
         }
         task.chips.extend(chips);
     }
-    task.children =
-        convert_task_children(std::mem::take(&mut task.children), context);
+    task.children = convert_task_children(std::mem::take(&mut task.children));
     apply_to_blocks(&mut task.children, context);
 }
 
@@ -305,10 +327,7 @@ fn apply_to_task(task: &mut SnapshotTask, context: &BobTaskContext) {
 /// followed by that item's surviving children), while unrecognized items
 /// stay in ordinary lists in their original order. Non-list children pass
 /// through untouched for the recursion step.
-fn convert_task_children(
-    children: Vec<Block>,
-    context: &BobTaskContext,
-) -> Vec<Block> {
+fn convert_task_children(children: Vec<Block>) -> Vec<Block> {
     let mut output = Vec::with_capacity(children.len());
     for child in children {
         match child {
@@ -324,7 +343,6 @@ fn convert_task_children(
                         }
                         output.append(&mut row);
                         let mut leftovers = std::mem::take(&mut item.children);
-                        apply_to_blocks(&mut leftovers, context);
                         output.append(&mut leftovers);
                     } else {
                         run.push(item);
@@ -350,7 +368,7 @@ fn chips_for_task(
     source: &TaskSource,
     snapshot_date: NaiveDate,
 ) -> (Vec<Chip>, Vec<String>) {
-    let raw = source.raw_line.as_str();
+    let raw = source.semantic_line();
     let code = inline_code_spans(raw);
     let outside_code = |start: usize, end: usize| {
         !code.iter().any(|span| start < span.end && end > span.start)
@@ -475,7 +493,7 @@ pub(super) fn has_ref_tag(raw: &str, code: &[Range<usize>]) -> bool {
 /// left for the caller to reattach. Unrecognized items return `None` and
 /// stay ordinary list content.
 fn managed_row_for_item(item: &ListItem) -> Option<Vec<Block>> {
-    let raw = item.source.as_ref()?.raw_line.as_str();
+    let raw = item.source.as_ref()?.semantic_line();
     if matches!(parse_dependency_line(raw), DependencyLine::Accepted { .. }) {
         return Some(vec![Block::LabeledRow {
             label: vec![Inline::Text("Waits on".to_string())],

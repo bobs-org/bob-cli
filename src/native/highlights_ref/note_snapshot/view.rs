@@ -229,9 +229,10 @@ pub(crate) enum ListKind {
 }
 
 /// Source-local attribution for one task or list row. The Bob layer reads
-/// `raw_line` with the shared parsers (never rendered text), so rows without
+/// `effective_line` with the shared parsers (never rendered text), so rows without
 /// block IDs, with identical text, or inside repeated transclusions keep
-/// their actual source. Each transclusion occurrence carries its own copy.
+/// their actual source. `raw_line` retains the original bytes for diagnostics
+/// and identity. Each transclusion occurrence carries its own copy.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct TaskSource {
     pub source: SourceIdentity,
@@ -239,6 +240,20 @@ pub(crate) struct TaskSource {
     pub line: usize,
     /// The full original source line, indentation and marker included.
     pub raw_line: String,
+    /// Comment-stripped effective spelling from the syntax layer, including
+    /// blockquote/callout prefix handling. Bob semantic readers must use
+    /// this; `raw_line` stays for diagnostics and identity.
+    pub effective_line: String,
+}
+
+impl TaskSource {
+    pub(crate) fn semantic_line(&self) -> &str {
+        if self.effective_line.is_empty() {
+            self.raw_line.as_str()
+        } else {
+            self.effective_line.as_str()
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

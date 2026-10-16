@@ -136,13 +136,44 @@ impl<'a, L: SourceLoader> VisibilityPass<'a, L> {
                 Block::Task(task) => self.convert_task(task),
                 Block::List { items, .. } => {
                     for item in items {
+                        self.convert_logs_in_inlines(&mut item.content);
                         self.convert_logs_in_blocks(&mut item.children);
                     }
                 }
+                Block::Paragraph(inlines) | Block::EmptyState(inlines) => {
+                    self.convert_logs_in_inlines(inlines);
+                }
+                Block::Heading(heading) => {
+                    self.convert_logs_in_inlines(&mut heading.content);
+                }
+                Block::LabeledRow { label, items } => {
+                    self.convert_logs_in_inlines(label);
+                    for item in items {
+                        self.convert_logs_in_inlines(item);
+                    }
+                }
+                Block::LogRow {
+                    label,
+                    date,
+                    content,
+                    ..
+                } => {
+                    self.convert_logs_in_inlines(label);
+                    if let Some(date) = date {
+                        self.convert_logs_in_inlines(date);
+                    }
+                    self.convert_logs_in_inlines(content);
+                }
+                Block::MissingImage { label } => {
+                    self.convert_logs_in_inlines(label);
+                }
                 Block::Embed { blocks, .. }
                 | Block::LiveQuery { blocks }
-                | Block::Compact { blocks }
-                | Block::Callout { blocks, .. } => {
+                | Block::Compact { blocks } => {
+                    self.convert_logs_in_blocks(blocks);
+                }
+                Block::Callout { title, blocks, .. } => {
+                    self.convert_logs_in_inlines(title);
                     self.convert_logs_in_blocks(blocks);
                 }
                 _ => {}
@@ -150,10 +181,53 @@ impl<'a, L: SourceLoader> VisibilityPass<'a, L> {
         }
     }
 
+    fn convert_logs_in_inlines(&mut self, inlines: &mut [Inline]) {
+        for inline in inlines.iter_mut() {
+            match inline {
+                Inline::EmbeddedBlock(inner) => {
+                    let mut nested = vec![std::mem::replace(
+                        inner.as_mut(),
+                        Block::Paragraph(Vec::new()),
+                    )];
+                    self.convert_logs_in_blocks(&mut nested);
+                    *inner = Box::new(
+                        nested.into_iter().next().expect("embedded block"),
+                    );
+                }
+                Inline::Link { label, .. }
+                | Inline::Emphasis(label)
+                | Inline::Strong(label)
+                | Inline::Strike(label)
+                | Inline::Muted(label) => {
+                    self.convert_logs_in_inlines(label);
+                }
+                Inline::Chip(chip) => {
+                    self.convert_logs_in_inlines(&mut chip.content);
+                }
+                _ => {}
+            }
+        }
+    }
+
     fn convert_task(&mut self, task: &mut SnapshotTask) {
+        self.convert_logs_in_inlines(&mut task.content);
+        for chip in task.chips.iter_mut() {
+            self.convert_logs_in_inlines(&mut chip.content);
+        }
         self.add_closed_date_chips(task);
         self.convert_task_logs(task);
         self.convert_logs_in_blocks(&mut task.children);
+    }
+
+    fn is_root_outcome(&self, task: &SnapshotTask) -> bool {
+        task.source.as_ref().is_some_and(|source| {
+            source.source == *self.root
+                && crate::native::collect_done::trailing_block_id_in_line(
+                    source.semantic_line(),
+                )
+                .as_deref()
+                    == Some("prj")
+        })
     }
 
     fn add_closed_date_chips(&self, task: &mut SnapshotTask) {
@@ -163,7 +237,7 @@ impl<'a, L: SourceLoader> VisibilityPass<'a, L> {
         let Some(source) = task.source.as_ref() else {
             return;
         };
-        let raw = source.raw_line.as_str();
+        let raw = source.semantic_line();
         let code = inline_code_spans(raw);
         let mut consumed = Vec::new();
         if let Some((field, date)) = first_date_field(raw, "completion", &code)
@@ -318,9 +392,30 @@ impl<'a, L: SourceLoader> VisibilityPass<'a, L> {
                 }
                 Block::Heading(heading) if is_closed_lane_heading(&heading) => {
                 }
+                Block::Heading(mut heading) => {
+                    let (content, nested) =
+                        self.filter_inlines(heading.content);
+                    heading.content = content;
+                    extracted.extend(nested);
+                    surviving.push(Block::Heading(heading));
+                }
+                Block::Paragraph(inlines) => {
+                    let (inlines, nested) = self.filter_inlines(inlines);
+                    extracted.extend(nested);
+                    surviving.push(Block::Paragraph(inlines));
+                }
+                Block::EmptyState(inlines) => {
+                    let (inlines, nested) = self.filter_inlines(inlines);
+                    extracted.extend(nested);
+                    surviving.push(Block::EmptyState(inlines));
+                }
                 Block::List { kind, items } => {
                     let mut kept_items = Vec::new();
                     for mut item in items {
+                        let (content, mut nested) =
+                            self.filter_inlines(item.content);
+                        item.content = content;
+                        extracted.extend(nested.drain(..));
                         let (children, nested) =
                             self.filter_blocks(item.children);
                         item.children = children;
@@ -333,6 +428,52 @@ impl<'a, L: SourceLoader> VisibilityPass<'a, L> {
                             items: kept_items,
                         });
                     }
+                }
+                Block::LabeledRow { mut label, items } => {
+                    let (label_filtered, mut nested) =
+                        self.filter_inlines(label);
+                    label = label_filtered;
+                    extracted.extend(nested.drain(..));
+                    let mut filtered_items = Vec::with_capacity(items.len());
+                    for item in items {
+                        let (item_filtered, nested) = self.filter_inlines(item);
+                        extracted.extend(nested);
+                        filtered_items.push(item_filtered);
+                    }
+                    surviving.push(Block::LabeledRow {
+                        label,
+                        items: filtered_items,
+                    });
+                }
+                Block::LogRow {
+                    mut label,
+                    mut date,
+                    mut content,
+                    older_count,
+                } => {
+                    let (filtered, mut nested) = self.filter_inlines(label);
+                    label = filtered;
+                    extracted.extend(nested.drain(..));
+                    if let Some(date_inlines) = date {
+                        let (filtered, nested) =
+                            self.filter_inlines(date_inlines);
+                        extracted.extend(nested);
+                        date = Some(filtered);
+                    }
+                    let (filtered, nested) = self.filter_inlines(content);
+                    content = filtered;
+                    extracted.extend(nested);
+                    surviving.push(Block::LogRow {
+                        label,
+                        date,
+                        content,
+                        older_count,
+                    });
+                }
+                Block::MissingImage { label } => {
+                    let (label, nested) = self.filter_inlines(label);
+                    extracted.extend(nested);
+                    surviving.push(Block::MissingImage { label });
                 }
                 Block::Embed {
                     source,
@@ -357,6 +498,8 @@ impl<'a, L: SourceLoader> VisibilityPass<'a, L> {
                     title,
                     blocks: inner,
                 } => {
+                    let (title, nested) = self.filter_inlines(title);
+                    extracted.extend(nested);
                     let (blocks, nested) = self.filter_blocks(inner);
                     surviving.push(Block::Callout {
                         kind,
@@ -371,13 +514,108 @@ impl<'a, L: SourceLoader> VisibilityPass<'a, L> {
         (surviving, extracted)
     }
 
+    fn filter_inlines(
+        &mut self,
+        inlines: Vec<Inline>,
+    ) -> (Vec<Inline>, Vec<Block>) {
+        let mut surviving = Vec::with_capacity(inlines.len());
+        let mut extracted = Vec::new();
+        for mut inline in inlines {
+            match &mut inline {
+                Inline::EmbeddedBlock(inner) => {
+                    let original = std::mem::replace(
+                        inner.as_mut(),
+                        Block::Paragraph(Vec::new()),
+                    );
+                    let (kept, nested) = self.filter_single_block(original);
+                    if let Some(kept) = kept {
+                        **inner = kept;
+                    } else {
+                        // Keep surrounding prose intact: an omitted inline
+                        // embed leaves an empty placeholder, never drops
+                        // the host paragraph.
+                        **inner = Block::Paragraph(Vec::new());
+                    }
+                    surviving.push(inline);
+                    extracted.extend(nested);
+                }
+                Inline::Link { label, .. }
+                | Inline::Emphasis(label)
+                | Inline::Strong(label)
+                | Inline::Strike(label)
+                | Inline::Muted(label) => {
+                    let (filtered, nested) =
+                        self.filter_inlines(std::mem::take(label));
+                    *label = filtered;
+                    surviving.push(inline);
+                    extracted.extend(nested);
+                }
+                Inline::Chip(chip) => {
+                    let (filtered, nested) =
+                        self.filter_inlines(std::mem::take(&mut chip.content));
+                    chip.content = filtered;
+                    surviving.push(inline);
+                    extracted.extend(nested);
+                }
+                _ => surviving.push(inline),
+            }
+        }
+        (surviving, extracted)
+    }
+
+    fn filter_single_block(
+        &mut self,
+        block: Block,
+    ) -> (Option<Block>, Vec<Block>) {
+        match block {
+            Block::Task(task) => {
+                let (keep, nested) = self.filter_task(task);
+                (keep.map(Block::Task), nested)
+            }
+            Block::Embed { source, blocks } => {
+                let (blocks, nested) = self.filter_blocks(blocks);
+                (Some(Block::Embed { source, blocks }), nested)
+            }
+            Block::Paragraph(inlines) => {
+                let (inlines, nested) = self.filter_inlines(inlines);
+                (Some(Block::Paragraph(inlines)), nested)
+            }
+            other => {
+                let (surviving, nested) = self.filter_blocks(vec![other]);
+                let kept = surviving.into_iter().next();
+                (kept, nested)
+            }
+        }
+    }
+
     fn filter_task(
         &mut self,
         task: SnapshotTask,
     ) -> (Option<SnapshotTask>, Vec<Block>) {
+        // The promoted root outcome never omits: its real status drives
+        // log conversion, and the assembler removes the row after this
+        // pass while keeping its history. Counts exclude the row itself.
+        if self.is_root_outcome(&task) {
+            let mut task = task;
+            let (content, nested_content) = self.filter_inlines(task.content);
+            task.content = content;
+            let mut nested_all = nested_content;
+            let mut filtered_chips = Vec::with_capacity(task.chips.len());
+            for mut chip in task.chips {
+                let (filtered, nested) = self.filter_inlines(chip.content);
+                chip.content = filtered;
+                filtered_chips.push(chip);
+                nested_all.extend(nested);
+            }
+            task.chips = filtered_chips;
+            let (children, nested) = self.filter_blocks(task.children);
+            task.children = children;
+            nested_all.extend(nested);
+            return (Some(task), nested_all);
+        }
         if self.is_self_snapshot(&task) {
             self.omitted_self += 1;
-            self.omitted_closed += closed_count_in(&task.children);
+            self.account_omitted_descendants(&task.children);
             return (None, Vec::new());
         }
         if is_closed(task.status) {
@@ -385,14 +623,114 @@ impl<'a, L: SourceLoader> VisibilityPass<'a, L> {
                 let task = self.strip_self_snapshot_tree(task);
                 (None, vec![Block::Task(task)])
             } else {
-                self.omitted_closed += 1 + closed_count_in(&task.children);
+                self.omitted_closed += 1;
+                self.account_omitted_descendants(&task.children);
                 (None, Vec::new())
             }
         } else {
             let mut task = task;
+            let (content, mut nested_all) = self.filter_inlines(task.content);
+            task.content = content;
+            let mut filtered_chips = Vec::with_capacity(task.chips.len());
+            for mut chip in task.chips {
+                let (filtered, nested) = self.filter_inlines(chip.content);
+                chip.content = filtered;
+                filtered_chips.push(chip);
+                nested_all.extend(nested);
+            }
+            task.chips = filtered_chips;
             let (children, nested) = self.filter_blocks(task.children);
             task.children = children;
-            (Some(task), nested)
+            nested_all.extend(nested);
+            (Some(task), nested_all)
+        }
+    }
+
+    /// Count every omitted descendant occurrence with self-snapshot
+    /// precedence, mirroring `filter_task` rules. Open non-self descendants
+    /// are omitted but uncounted; their own children still count.
+    fn account_omitted_descendants(&mut self, blocks: &[Block]) {
+        for block in blocks {
+            match block {
+                Block::Task(task) => {
+                    if self.is_self_snapshot(task) {
+                        self.omitted_self += 1;
+                    } else if is_closed(task.status) {
+                        self.omitted_closed += 1;
+                    }
+                    self.account_omitted_descendants(&task.children);
+                    self.account_omitted_inlines(&task.content);
+                    for chip in &task.chips {
+                        self.account_omitted_inlines(&chip.content);
+                    }
+                }
+                Block::List { items, .. } => {
+                    for item in items {
+                        self.account_omitted_inlines(&item.content);
+                        self.account_omitted_descendants(&item.children);
+                    }
+                }
+                Block::Paragraph(inlines) | Block::EmptyState(inlines) => {
+                    self.account_omitted_inlines(inlines);
+                }
+                Block::Heading(heading) => {
+                    self.account_omitted_inlines(&heading.content);
+                }
+                Block::LabeledRow { label, items } => {
+                    self.account_omitted_inlines(label);
+                    for item in items {
+                        self.account_omitted_inlines(item);
+                    }
+                }
+                Block::LogRow {
+                    label,
+                    date,
+                    content,
+                    ..
+                } => {
+                    self.account_omitted_inlines(label);
+                    if let Some(date) = date {
+                        self.account_omitted_inlines(date);
+                    }
+                    self.account_omitted_inlines(content);
+                }
+                Block::MissingImage { label } => {
+                    self.account_omitted_inlines(label);
+                }
+                Block::Embed { blocks, .. }
+                | Block::LiveQuery { blocks }
+                | Block::Compact { blocks } => {
+                    self.account_omitted_descendants(blocks);
+                }
+                Block::Callout { title, blocks, .. } => {
+                    self.account_omitted_inlines(title);
+                    self.account_omitted_descendants(blocks);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn account_omitted_inlines(&mut self, inlines: &[Inline]) {
+        for inline in inlines {
+            match inline {
+                Inline::EmbeddedBlock(inner) => {
+                    self.account_omitted_descendants(std::slice::from_ref(
+                        inner.as_ref(),
+                    ));
+                }
+                Inline::Link { label, .. }
+                | Inline::Emphasis(label)
+                | Inline::Strong(label)
+                | Inline::Strike(label)
+                | Inline::Muted(label) => {
+                    self.account_omitted_inlines(label);
+                }
+                Inline::Chip(chip) => {
+                    self.account_omitted_inlines(&chip.content);
+                }
+                _ => {}
+            }
         }
     }
 
@@ -411,27 +749,83 @@ impl<'a, L: SourceLoader> VisibilityPass<'a, L> {
         let mut output = Vec::with_capacity(blocks.len());
         for block in blocks {
             match block {
-                Block::Task(task) => {
+                Block::Task(mut task) => {
                     if self.is_self_snapshot(&task) {
                         self.omitted_self += 1;
-                        self.omitted_closed += closed_count_in(&task.children);
+                        self.account_omitted_descendants(&task.children);
+                        self.account_omitted_inlines(&task.content);
+                        for chip in &task.chips {
+                            self.account_omitted_inlines(&chip.content);
+                        }
                         continue;
                     }
-                    let mut task = task;
+                    task.content = self.strip_self_inlines(task.content);
+                    let mut stripped_chips =
+                        Vec::with_capacity(task.chips.len());
+                    for mut chip in task.chips {
+                        chip.content = self.strip_self_inlines(chip.content);
+                        stripped_chips.push(chip);
+                    }
+                    task.chips = stripped_chips;
                     task.children = self
                         .strip_self_blocks(std::mem::take(&mut task.children));
                     output.push(Block::Task(task));
+                }
+                Block::Paragraph(inlines) => {
+                    output.push(Block::Paragraph(
+                        self.strip_self_inlines(inlines),
+                    ));
+                }
+                Block::EmptyState(inlines) => {
+                    output.push(Block::EmptyState(
+                        self.strip_self_inlines(inlines),
+                    ));
+                }
+                Block::Heading(mut heading) => {
+                    heading.content = self.strip_self_inlines(heading.content);
+                    output.push(Block::Heading(heading));
                 }
                 Block::List { kind, items } => {
                     let items = items
                         .into_iter()
                         .map(|mut item| {
+                            item.content =
+                                self.strip_self_inlines(item.content);
                             item.children =
                                 self.strip_self_blocks(item.children);
                             item
                         })
                         .collect();
                     output.push(Block::List { kind, items });
+                }
+                Block::LabeledRow { label, items } => {
+                    let label = self.strip_self_inlines(label);
+                    let items = items
+                        .into_iter()
+                        .map(|item| self.strip_self_inlines(item))
+                        .collect();
+                    output.push(Block::LabeledRow { label, items });
+                }
+                Block::LogRow {
+                    label,
+                    date,
+                    content,
+                    older_count,
+                } => {
+                    let label = self.strip_self_inlines(label);
+                    let date = date.map(|date| self.strip_self_inlines(date));
+                    let content = self.strip_self_inlines(content);
+                    output.push(Block::LogRow {
+                        label,
+                        date,
+                        content,
+                        older_count,
+                    });
+                }
+                Block::MissingImage { label } => {
+                    output.push(Block::MissingImage {
+                        label: self.strip_self_inlines(label),
+                    });
                 }
                 Block::Embed {
                     source,
@@ -456,7 +850,7 @@ impl<'a, L: SourceLoader> VisibilityPass<'a, L> {
                     blocks: inner,
                 } => output.push(Block::Callout {
                     kind,
-                    title,
+                    title: self.strip_self_inlines(title),
                     blocks: self.strip_self_blocks(inner),
                 }),
                 other => output.push(other),
@@ -465,11 +859,77 @@ impl<'a, L: SourceLoader> VisibilityPass<'a, L> {
         output
     }
 
+    fn strip_self_inlines(&mut self, inlines: Vec<Inline>) -> Vec<Inline> {
+        let mut output = Vec::with_capacity(inlines.len());
+        for mut inline in inlines {
+            match &mut inline {
+                Inline::EmbeddedBlock(inner) => {
+                    let original = std::mem::replace(
+                        inner.as_mut(),
+                        Block::Paragraph(Vec::new()),
+                    );
+                    let stripped = self.strip_single_block(original);
+                    if let Some(stripped) = stripped {
+                        **inner = stripped;
+                        output.push(inline);
+                    } else {
+                        **inner = Block::Paragraph(Vec::new());
+                        output.push(inline);
+                    }
+                }
+                Inline::Link { label, .. }
+                | Inline::Emphasis(label)
+                | Inline::Strong(label)
+                | Inline::Strike(label)
+                | Inline::Muted(label) => {
+                    let filtered =
+                        self.strip_self_inlines(std::mem::take(label));
+                    *label = filtered;
+                    output.push(inline);
+                }
+                Inline::Chip(chip) => {
+                    chip.content = self
+                        .strip_self_inlines(std::mem::take(&mut chip.content));
+                    output.push(inline);
+                }
+                _ => output.push(inline),
+            }
+        }
+        output
+    }
+
+    fn strip_single_block(&mut self, block: Block) -> Option<Block> {
+        match block {
+            Block::Task(task) => {
+                if self.is_self_snapshot(&task) {
+                    self.omitted_self += 1;
+                    self.account_omitted_descendants(&task.children);
+                    return None;
+                }
+                let mut task = task;
+                task.children =
+                    self.strip_self_blocks(std::mem::take(&mut task.children));
+                Some(Block::Task(task))
+            }
+            Block::Embed { source, blocks } => Some(Block::Embed {
+                source,
+                blocks: self.strip_self_blocks(blocks),
+            }),
+            Block::Paragraph(inlines) => {
+                Some(Block::Paragraph(self.strip_self_inlines(inlines)))
+            }
+            other => {
+                let stripped = self.strip_self_blocks(vec![other]);
+                stripped.into_iter().next()
+            }
+        }
+    }
+
     fn is_self_snapshot(&mut self, task: &SnapshotTask) -> bool {
         let Some(source) = task.source.as_ref() else {
             return false;
         };
-        let raw = source.raw_line.as_str();
+        let raw = source.semantic_line();
         let code = inline_code_spans(raw);
         if !has_ref_tag(raw, &code) {
             return false;
@@ -641,35 +1101,8 @@ fn is_closed_lane_heading(heading: &SnapshotHeading) -> bool {
     flatten_text(&heading.content).trim() == TITLE_CLOSED
 }
 
-fn closed_count_in(blocks: &[Block]) -> u64 {
-    let mut count = 0;
-    for block in blocks {
-        match block {
-            Block::Task(task) => {
-                if is_closed(task.status) {
-                    count += 1;
-                }
-                count += closed_count_in(&task.children);
-            }
-            Block::List { items, .. } => {
-                for item in items {
-                    count += closed_count_in(&item.children);
-                }
-            }
-            Block::Embed { blocks, .. }
-            | Block::LiveQuery { blocks }
-            | Block::Compact { blocks }
-            | Block::Callout { blocks, .. } => {
-                count += closed_count_in(blocks);
-            }
-            _ => {}
-        }
-    }
-    count
-}
-
 fn log_kind_for_item(item: &ListItem) -> Option<LogKind> {
-    let raw = item.source.as_ref()?.raw_line.as_str();
+    let raw = item.source.as_ref()?.semantic_line();
     if is_cancel_log_line(raw) {
         return Some(LogKind::Cancel);
     }
@@ -758,7 +1191,7 @@ fn split_log_inlines(
     entry: &ListItem,
 ) -> (Option<Vec<Inline>>, Vec<Inline>) {
     if let Some(raw) = entry.source.as_ref()
-        && let Some(body) = list_item_body(&raw.raw_line)
+        && let Some(body) = list_item_body(raw.semantic_line())
         && let Some((inner, _)) = parse_emphasized_entry(body)
     {
         let date =
