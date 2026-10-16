@@ -307,7 +307,7 @@ fn capture_project_note_schedule_and_priority_write_inline_date_and_log() {
         .arg("json")
         .arg("@cash^prio1+")
         .arg("Body")
-        .arg("p:4")
+        .arg("$4")
         .env("BOB_NOW", "2026-09-20 14:31:07")
         .env("TZ", "UTC0")
         .env("BOB_CONFIG_FILE", &config)

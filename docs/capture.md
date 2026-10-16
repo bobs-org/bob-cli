@@ -134,7 +134,7 @@ anything is written, and any failure rolls the whole batch back.
 | `@route+block-id!` with no other text | Toggle that task's Pomodoro Task Link: link it when unlinked (Ready and own-prerequisite Blocked rise to Next; other Blocked stay unlinked) or unlink it when linked (lane unchanged) |
 | trailing bare `#` | Plain-text note on a Pomodoro (not a routed task) |
 | `s:<N>` | `[scheduled::]` N days from today; checkbox-bearing captures start Blocked (`[?]`) |
-| `p:<N>` | Write priority level N and roll a scheduled date in that level's window |
+| `$` / `$<N>` | Write priority level N (bare `$` = 1) and roll a scheduled date in that level's window |
 | `%`, `%N`, `%header` | Capture clipboard content as child bullets |
 
 `#` is not one marker. Read it by what it is attached to:
@@ -255,7 +255,7 @@ task with a block ID.
 Leading `@route text` is accepted only on an item's first physical line. Later
 lines in the same item take trailing markers only. `@@...` has no such
 restriction: a declaration token may appear on any parent or authored child
-line. Terminal `s:<N>`, `p:<N>`, `%...`, and `@...` markers configure the whole
+line. Terminal `s:<N>`, `$<N>`, `%...`, and `@...` markers configure the whole
 item no matter which of its lines they appear on.
 
 ## `bob capture`
@@ -395,14 +395,15 @@ inside the representable calendar — for example `s:9999999999` — fails
 before any write. Human output is
 `bob capture: scheduled offset is out of range` (exit 2). With
 `--format json`, stdout is
-`{"ok": false, "error": "scheduled offset is out of range"}`. A `p:<N>`
+`{"ok": false, "error": "scheduled offset is out of range"}`. A `$<N>`
 roll that lands outside that calendar uses the same error.
 
-Append a lowercase `p:<N>` token to write a priority level, where `N` selects
-the Nth level in the bullet-property config file. Bob looks for that file at
+Append a `$` or `$<N>` token to write a priority level, where `N` selects
+the Nth level in the bullet-property config file. A bare `$` means `$1`.
+Bob looks for that file at
 `BOB_CONFIG_FILE`, then `$XDG_CONFIG_HOME/bob/config.yml`, then
 `~/.config/bob/config.yml` — the same file the Obsidian picker reads. A missing
-or unreadable file is an error; `p:<N>` has no built-in default levels. The
+or unreadable file is an error; `$<N>` has no built-in default levels. The
 currently deployed file uses four levels:
 
 | N | Label | Value    | Day window |
@@ -416,8 +417,8 @@ The token writes `[priority::<value>]` and rolls a random
 `[scheduled::YYYY-MM-DD]` date inside that level's day window. Each capture
 rolls independently, so a `--dry-run` preview differs from the real capture
 unless `BOB_PRIORITY_ROLL_SEED` is set. A task with no priority field is
-implicitly P0 (do it now, no roll), so there is no `p:0`. An explicit `s:<N>`
-wins the scheduled date; `p:<N>` still writes the priority. A rolled `p:<N>`
+implicitly P0 (do it now, no roll), so there is no `$0`. An explicit `s:<N>`
+wins the scheduled date; `$<N>` still writes the priority. A rolled `$<N>`
 date also writes a `🗓️ **SCHEDULE LOG**` child bullet with one dated `🎲 …`
 entry recording why, byte-for-byte matching what the Obsidian
 `Ctrl+Shift+P` picker writes for the same level with no reason prompt:
@@ -431,13 +432,24 @@ entry recording why, byte-for-byte matching what the Obsidian
 The bold number is the exact relative day offset selected for that scheduled
 date. The parenthesized range is the configured priority window.
 
-A `p:<N> s:<N>` capture writes no entry, since `s:<N>` wins the scheduled date
-and no roll happened. A `p:<N>` past the configured level count is a usage
+A `$<N> s:<N>` capture writes no entry, since `s:<N>` wins the scheduled date
+and no roll happened. A `$<N>` past the configured level count is a usage
 error (exit 2). The message is
-`p:<N> is not a configured priority level; use p:1 through p:<count> (<labels>)`.
+`$<N> is not a configured priority level; use $ or $1 through $<count> (<labels>)`.
 Any resolved scheduled property makes a checkbox-bearing capture start Blocked
 (`[?]`); `bob task reconcile` still reconciles tasks whose schedules are
 edited later.
+
+`$`/`$<N>` is recognized only in the terminal marker region, so a mid-line
+amount stays text: `Pay $3 to Bob`. In a shell, single-quote the token
+(`bob capture buy milk '$2'`); an unquoted or double-quoted `$2` is expanded
+by the shell.
+
+To keep a trailing dollar amount as task text, escape it the same way as
+`\&` / `\*`: `Pay Bob \$3` writes body `Pay Bob $3` with no priority, and
+`Pay Bob \$3 $2 @cash` writes body `Pay Bob $3` at level 2 routed to
+`cash`. Elsewhere `\$` stays verbatim (`cost \$3 today` keeps the
+backslash).
 
 ### Multi-item capture
 
@@ -446,7 +458,7 @@ capture items. Leading, trailing, and repeated separator runs are ignored, so
 a draft with at least one nonempty item is valid even if it starts or ends
 with blank rows. Each item uses the normal capture grammar independently:
 the first nonblank line is that item's parent, later contiguous authored
-bullet rows belong only to that item, and terminal `s:<N>`, `p:<N>`,
+bullet rows belong only to that item, and terminal `s:<N>`, `$<N>`,
 `%...`, and `@...` markers configure only that item.
 
 Bob plans the whole batch against in-memory note and daily-ledger snapshots
@@ -555,7 +567,7 @@ foo: bam! @sase:foo-bam
 
 Values are inserted once and are not scanned again. Every ordinary marker in
 the template applies independently to each row, including routes and sections,
-`s:<N>`, `p:<N>`, `&` and `*` dependencies, completion (`!note:id`), task
+`s:<N>`, `$<N>`, `&` and `*` dependencies, completion (`!note:id`), task
 links, and reference URLs. Duplicate block IDs across rows are refused by the
 normal planner. A row with an empty or incomplete picker value gets the
 existing capture error, scoped to that template row.
@@ -677,7 +689,7 @@ the capture language. Shelf and config warnings appear in `warnings`.
 Prepare the launch review
 - Confirm the rollout owner
   - Send the owner the final date
-- Attach the final checklist @work p:1
+- Attach the final checklist @work $1
   - Verify the links
 ```
 
@@ -710,11 +722,11 @@ prose is a usage error naming the physical line number. A nonempty nested
 item before any first-level authored item is an `orphaned_nested_bullet`
 error, and an item that becomes empty only because its whole body was a
 capture marker is rejected the same way. Every recognized
-terminal `s:<N>`, `p:<N>`, `%...`, and `@route`/`@route#`/`@route^block-id`/
+terminal `s:<N>`, `$<N>`, `%...`, and `@route`/`@route#`/`@route^block-id`/
 `@route:block-id`/`@route+block-id`/`@route^block-id+`
 marker is an item-wide directive no matter
 which physical line in that item it appears on -- as shown above, `@work` and
-`p:1` on the last child still route and prioritize that item -- and is
+`$1` on the last child still route and prioritize that item -- and is
 stripped from the rendered line it was typed on. A second line in the same
 item that resolves the same marker slot (two routes, two schedules, two
 priorities, or two clipboard markers) is ambiguous and fails with a usage
@@ -750,7 +762,7 @@ does not read the clipboard even in live preview's `--no-clip` mode. Use
 `URL %1` or `--clip URL` to explicitly request clipboard capture for a URL;
 non-reference `text %`, `%N`, and `%header` keep their clipboard meanings.
 
-The marker composes with `s:<N>`, `p:<N>`, ordinary routes, bullet routes,
+The marker composes with `s:<N>`, `$<N>`, ordinary routes, bullet routes,
 ID-only task routes, and Pomodoro routes in either terminal order. Invalid
 `%...` tokens and `%` tokens in the middle of the body stay literal. A counted capture requires every
 requested entry to read, normalize, classify, and plan successfully;
@@ -878,7 +890,7 @@ adds audio to existing captures: a marked duplicate, pending job, or
 library hit queues nothing and shows `no new listen job was queued · to
 attach audio run: bob ref create <URL> -P <parent> -L`.
 
-Anything more — an extra word, `#tag`, `s:`, `p:`, a clipboard marker, an operator, a child
+Anything more — an extra word, `#tag`, `s:`, `$<N>`, a clipboard marker, an operator, a child
 line, a `@@route+block-id` declaration, task/destination flags beyond `-r`
 (`-s -t -S -c`, `--task-ref`), or a second `@route` — keeps the item a task.
 `-R` also keeps it a task. Hosts without a dot (`http://go/x`, `localhost`),
@@ -971,6 +983,14 @@ tracked, and Today is read from the ledger at render time (see
 `docs/plan.md`). A trailing `#now` is now the ordinary trailing-tag error
 like any other `#tag`, and a `#now` in the body stays plain text. Existing
 vault lines that still carry `#now` keep working — the text is ignored.
+
+### `p:<N>` is retired
+
+The `p:<N>` priority marker is retired. Write `$<N>` instead (a bare `$`
+means `$1`). A typed `p:2` fails with
+`` `p:2` is retired; write `$2` for priority level 2 (a bare `$` means `$1`) ``
+and capture-parse reports `retired_priority_marker` on that token. A
+malformed `p:x` was never a marker and stays ordinary text.
 
 ### Pomodoro-linked tasks
 
@@ -1069,7 +1089,7 @@ the time; numeric overflow is a useful error rather than a wrong time.
 
 The suffix is item-local and applies only to new `:` task captures — not
 `+` ensures, project-note `+` forms, global `@@` declarations, or ordinary
-text. It cannot combine with `s:<N>` or `p:<N>`: a scheduled Blocked task
+text. It cannot combine with `s:<N>` or `$<N>`: a scheduled Blocked task
 cannot start its session, so those combinations fail before anything is
 written. Only an untimed, open placeholder is ever started. Any open timed
 Pomodoro — including one past its nominal end — stops the capture with a
@@ -1094,7 +1114,7 @@ task; its exact-name (`-e`) and entry-ref (`-P`) targets are
 `bob ref today`-only and the capture grammar is unchanged. For example, `bob capture '^sase:deep-fix='` links the existing
 `^deep-fix` task in `sase.md` and starts its session. The marker must be the
 entire capture item: no body text, no authored child bullets, no `%`/`--clip`,
-no `s:<N>`/`p:<N>`, and no forced destination flags. A token with the complete
+no `s:<N>`/`$<N>`, and no forced destination flags. A token with the complete
 `^route:block-id…` shape claims its item; anything else on the item fails with
 an `invalid_pomodoro_link` error instead of becoming task text. Partial shapes
 (`^`, `^fragment`, `^route:`, `^route:block-id#`) are incomplete editing
@@ -1360,7 +1380,7 @@ Modifiers sit at the leading or trailing marker positions of the parent
 line, interleaving with destination, schedule, priority, and clipboard
 markers in either order, or close an authored child line (a child holding
 only modifiers contributes no empty bullet). Both runs skip the same
-trailing-transparent marker shapes (`@…`, `#…`, `s:`, `p:`, schedule,
+trailing-transparent marker shapes (`@…`, `#…`, `s:`, `$`/`$<N>`, schedule,
 priority, and clip tokens), so `@cash &foo:bar Buy milk` is a dependency
 on a `cash.md` task, not literal text. An explicit `@route+task-id`
 selects the existing parent even with child-bullet text; a bare solo
@@ -1558,7 +1578,7 @@ Quote `*` on the shell, because zsh globs it:
    line's leading run or in any line's trailing run, exactly where `&`
    is allowed. A mid-line `*foo:bar` stays body text. Both runs skip
    the `is_trailing_transparent` marker shapes (`@…`, `#…`, `s:`,
-   `p:`, schedule, priority, and clip tokens).
+   `$`/`$<N>`, schedule, priority, and clip tokens).
 2. **Next byte.** The byte after `*` is neither whitespace nor `*`.
    This keeps `**bold**`, `* bullet`, and `5 * 3` literal.
 3. **Rest of the token.** The rest of the token contains no `*`, which
@@ -2033,13 +2053,13 @@ task relationships need a dependent: add task text or '@note+task-id' for the ta
 The interactive `+` picker is the route for selecting an existing owner.
 
 A relationship-only item with an existing owner edits only the Depends-On and
-BLOCKS lines. It cannot carry `p:<N>`, `s:<N>`, `%…`, or authored child
+BLOCKS lines. It cannot carry `$<N>`, `s:<N>`, `%…`, or authored child
 bullets because those need task text. Parse emits the ranged error diagnostic
 `relationship_needs_text`, and execution returns the same message. The
 offending token is named in the message; for example:
 
 ```text
-`p:2` needs task text: `@body+excercise` with no text only adds task relationships; add text to write a sub-bullet (`Note @body+excercise &foo:bar p:2`)
+`$2` needs task text: `@body+excercise` with no text only adds task relationships; add text to write a sub-bullet (`Note @body+excercise &foo:bar $2`)
 ```
 
 The same template applies to `s:3`, a clipboard token such as `%header`, and
@@ -2176,7 +2196,7 @@ and `job.md#^cleanup` is Do cleanup tasks.
 | RX6 | `@@body+excercise` then `&foo:bar`, with or without a blank line | Edge only; no empty bullet; `inherited: true` |
 | RX7 | `@foo+old *job:cleanup`, `Note @foo+old *job:cleanup`; owner `[x]` or `[-]` | Refuse with the closed-owner `*` message; vault bytes are unchanged |
 | RX8 | `+ &foo:bar`, `+ex &foo:bar`, `&foo:bar +`, `*job:cleanup +ex` | Parse needs `task_parent`, no diagnostics; submit refuses with the exact `+` message above; never create a `+…` task |
-| RX9 | `@body+excercise &foo:bar p:2`, `s:3`, or `%` | `relationship_needs_text` in parse and the identical execution error |
+| RX9 | `@body+excercise &foo:bar $2`, `s:3`, or `%` | `relationship_needs_text` in parse and the identical execution error |
 | RX10 | `@body+excercise &foo:bar` plus child `- note` | Same refusal, naming `child bullets` |
 | RX11 | `@body+excercise &foo:bar *foo:bar` | Refuse the cycle with `foo.md^bar -> body.md^excercise -> foo.md^bar` |
 | RX12 | `Waiting @body+excercise &foo:bar` plus child `- detail` | Print the sub-bullet and child, then `⛓`; `under` shows `[ ] → [?]` |
@@ -2235,7 +2255,7 @@ Single-quote the draft on shells that history-expand `!`:
 `bob capture '!sase:fix-flaky'`.
 
 A complete token must be the entire capture item: no body text, children,
-`%`, `s:`, `p:`, `#name`, `=…`, `@@`, or forced destination flags.
+`%`, `s:`, `$<N>`, `#name`, `=…`, `@@`, or forced destination flags.
 Anything extra is a teaching error, never a junk inbox task. Bulk means
 one `!` item per blank-line-separated block; every item is planned
 against the same staged snapshot, and any failure rolls the whole batch
@@ -2247,7 +2267,7 @@ back.
 | `!fix`, `!sase:`, `!"Shopping List`, `!"Shopping List"` | Query: incomplete, needs `task_complete` |
 | `!sase:fix-flaky` | Complete: mode `task_complete`; completes `^fix-flaky` in the note `sase` resolves to |
 | `!projects/foo:bar`, `!"Shopping List":milk` | Complete: nested and quoted locators, exactly as `&` decodes them |
-| `!sase:fix-flaky more`, `!sase:fix-flaky` plus a child line, `!sase:fix-flaky p:1` | Claimed and invalid: `invalid_task_complete` |
+| `!sase:fix-flaky more`, `!sase:fix-flaky` plus a child line, `!sase:fix-flaky $1` | Claimed and invalid: `invalid_task_complete` |
 | `!sase:fix-flaky=x`, `!sase:fix-flaky#bugs` | Claimed and invalid, with the hint "`!` takes no `=` or `#` suffix; to complete the running session's link while closing, use `=x!N`" |
 | `!sase:a !sase:b` | Claimed and invalid, with the hint "put each completion on its own item, separated by a blank line" |
 | `!wow this works`, `! foo`, `Wow!`, `Buy milk !sase:x` | Prose, unchanged: several tokens with an incomplete first token, a space after `!`, or a non-leading `!` |
@@ -2435,7 +2455,7 @@ omitted when the ledger is unchanged:
   "links": {"count": 8, "cap": 10, "over": false, "before": 7},
   "added_themes": ["BOB"],
   "warnings": [{"code": "plan_theme_cap_exceeded",
-    "message": "today's plan now has 4/3 themes (adds BOB); queue it with ^ or defer with p:<N>"}]}
+    "message": "today's plan now has 4/3 themes (adds BOB); queue it with ^ or defer with $<N>"}]}
 ```
 
 Warnings fire only for `plan_theme_cap_exceeded` and
@@ -2546,7 +2566,7 @@ line); `=`, blank line, `+2` starts then extends; `=`, blank line,
 `^bob:ready` starts then links a
 task into the now-running session. A `@@` declaration never applies to start
 items, and forced `--route`/`--section`/`--task`/`--task-ref`/
-`--task-section`/`--clip` fail on them; `%`, `s:<N>`, and `p:<N>` after a
+`--task-section`/`--clip` fail on them; `%`, `s:<N>`, and `$<N>` after a
 counted token are shape errors by construction.
 
 The started session reports its queued Task Links (direct-child Task Links
@@ -2953,7 +2973,7 @@ units and actual applied minutes when clamping changes the delta.
 A `@@route` declaration still routes ordinary items in the same draft but
 never turns `+5` into a task or changes its destination. Forced
 destination/task/section and clipboard options (`--route`, `--section`,
-`--task`, `--task-ref`, `--task-section`, `--clip`, `%`, `s:<N>`, `p:<N>`)
+`--task`, `--task-ref`, `--task-section`, `--clip`, `%`, `s:<N>`, `$<N>`)
 are rejected on adjustment items with a specific error. Later items observe
 earlier staged edits to the same daily file through `CaptureBatchPlanner`,
 so a `+5` after a session-start item can adjust the session created earlier
@@ -3007,7 +3027,7 @@ neighbouring entries. Only that ledger line is rewritten to Bob's canonical
 non-duration metadata, child bullets, newline style, and surrounding bytes.
 A `@@route` declaration never applies to shift items, and forced
 destination/task/section and clipboard options (`--route`, `--section`,
-`--task`, `--task-ref`, `--task-section`, `--clip`, `%`, `s:<N>`, `p:<N>`)
+`--task`, `--task-ref`, `--task-section`, `--clip`, `%`, `s:<N>`, `$<N>`)
 are rejected on shift items with a specific error. Later items observe
 earlier staged edits, dry-run computes without committing, and any failure
 rolls the whole batch back, so `--2` then `+` in one draft composes (or
@@ -3083,7 +3103,7 @@ Blocked task never rises on a history link) while the link still lands under
 the closing entry as history; the open prerequisites rise and the result
 reports `link_guard` with `drop_refused` when an own dependency reason kept
 the prerequisites. `#pomodoro` with a close fails (`` `=x` always closes the running
-Pomodoro; remove `#name` ``), as do `s:<N>`/`p:<N>`, project-note `+` forms,
+Pomodoro; remove `#name` ``), as do `s:<N>`/`$<N>`, project-note `+` forms,
 and forced flags on a whole-item close. A `@@` declaration never applies to
 close items.
 
@@ -3626,7 +3646,7 @@ fixed` names task 2), so to log text that starts with a number, number every
 bullet (`- 3 2 bugs fixed`).
 
 Entry and detail text are literal and whitespace-normalized like every
-capture line: `@route`, `@@route`, `s:<N>`, `p:<N>`, `%`, `#`, and `:query`
+capture line: `@route`, `@@route`, `s:<N>`, `$<N>`, `%`, `#`, and `:query`
 are not markers here, plain wikilinks (`[[Design notes]]`,
 `[[note#Heading]]`) are allowed, and the bullets never feed `@@`
 declarations, item-wide markers, or `capture-rewrite` absorption. Two
@@ -3834,8 +3854,8 @@ the item's normalized parent text, never truncated. It is `[ ]` normally and
 linked. `bob task reconcile` reconciles derived Blocked state later, as it
 does for every other capture.
 
-`p:<N>` writes `[priority::<value>]` inline on the `^prj` line, before
-`#hide ^prj`, and a rolled `p:<N>` date still writes its
+`$<N>` writes `[priority::<value>]` inline on the `^prj` line, before
+`#hide ^prj`, and a rolled `$<N>` date still writes its
 `🗓️ **SCHEDULE LOG**` child under `^prj`. A resolved scheduled date itself
 lands as `[scheduled:: YYYY-MM-DD]` on the `^prj` line, with the other task
 metadata, and `^prj` keeps capture's documented `s:<N>` `[?]` rule.
@@ -3868,7 +3888,7 @@ A task ID token is one whitespace-free token with a `:` or `^` sigil
 followed by at least one character, where the first character after the sigil
 is an ASCII letter or digit — so `:)`, `:-)`, and `:(` stay prose. It counts
 only as the last word of a first-level bullet's text, after that line's
-item-wide markers (`s:<N>`, `p:<N>`, `%…`, trailing `@route…`) are set aside:
+item-wide markers (`s:<N>`, `$<N>`, `%…`, trailing `@route…`) are set aside:
 `- Draft memo :draft-memo s:2` works, while `- Draft memo s:2 :draft-memo`
 leaves `s:2` as literal text. The token is stripped from the rendered body
 and appended as the last token of the rendered task, after `[created::…]`.
@@ -3937,7 +3957,7 @@ Authored children are re-routed into `## Tasks` and `##` sections, so
 clipboard children under the captured parent have no unambiguous home; this
 is a deliberate deferral a future change can lift. Forced destination flags
 (`--route`, `--section`, `--task`, `--task-ref`, `--task-section`) keep
-`@tokens` literal, so they never reach this family. `s:<N>` and `p:<N>` are
+`@tokens` literal, so they never reach this family. `s:<N>` and `$<N>` are
 allowed and behave as described above. A `=<X>` / `=x` suffix is rejected on
 project notes with a message naming `@<route>^<block-id>+`; `!` stays
 reserved for the sub-bullet toggle and is not accepted on this family; a
@@ -3960,14 +3980,14 @@ parent task. For example,
 
 When the selected task already has a direct-child Schedule Log or Work Log, the
 complete new child — including any authored children, clipboard children, or a
-`p:<N>`-generated Schedule Log nested under that child — is inserted immediately
+`$<N>`-generated Schedule Log nested under that child — is inserted immediately
 before the earliest of those managed logs. A Schedule Log is the
 `🗓️ **SCHEDULE LOG**` child that records schedule changes; a Work Log is the
 `🛠️ **WORK LOG**` child that records work summaries. Nested or lookalike log
 markers do not move the insertion point. Tasks with neither managed log still
 append at the end of the task block.
 
-The marker composes with terminal `s:<N>`, `p:<N>`, and clipboard markers in
+The marker composes with terminal `s:<N>`, `$<N>`, and clipboard markers in
 either order. Scheduled properties are still rendered for consistency even
 though Obsidian Tasks does not read them from an ordinary bullet. Existing child
 indentation is copied; otherwise capture uses the note's dominant tab-or-two-space
@@ -4088,7 +4108,7 @@ rejects forced destination flags with `task toggle capture cannot be combined
 with <flags>`, `--clip` with `task toggle capture cannot be combined with
 --clip`, `%...` with `task toggle capture cannot be combined with % clipboard
 markers`, `s:<N>` with `task toggle capture cannot be combined with s:<N>`,
-`p:<N>` with `task toggle capture cannot be combined with p:<N>`, and authored
+`$<N>` with `task toggle capture cannot be combined with $<N>`, and authored
 child bullets with `task toggle capture cannot have authored child bullets`.
 
 The marker-only `@route+block-id` and `@route+block-id#pomodoro` forms are
@@ -4220,7 +4240,7 @@ possible.
 
 The marker composes with `%...` and `--clip` in either terminal order, since
 "capture what I just copied onto this Pomodoro" is a plausible use, but it is
-rejected alongside `s:<N>`, `p:<N>`, any `@route` token, and `--route`, since
+rejected alongside `s:<N>`, `$<N>`, any `@route` token, and `--route`, since
 a plain Pomodoro bullet has no field for a schedule, priority, or routed
 destination:
 
@@ -4228,7 +4248,7 @@ destination:
 | ---------------------------------------------------------------| -------- |
 | `%`, `%<N>`, `%<header>`, `--clip[=HEADER]`                     | allowed  |
 | `s:<N>`                                                         | rejected |
-| `p:<N>`                                                         | rejected |
+| `$<N>`                                                         | rejected |
 | `@route`, `@route#Sec`, `@route:id`, `@route:id#name`, `@route^id`, `@route+id`, `@route+id#sec` | rejected |
 | `--route` / `--section` / `--task` / `--task-ref` / `--task-section` | rejected |
 
@@ -4370,16 +4390,16 @@ capture with no authored children. A project-note capture always omits
 it. Human output prints those lines directly
 beneath `task_line`, before any clipboard children and schedule log.
 
-A `p:<N>` capture additionally includes `priority` (the written value, such as
+A `$<N>` capture additionally includes `priority` (the written value, such as
 `"high"`) and `priority_label` (the configured label, such as `"P1"`); a
-capture without `p:<N>` omits both fields.
+capture without `$<N>` omits both fields.
 
-A `p:<N>` capture that actually rolled the scheduled date additionally
+A `$<N>` capture that actually rolled the scheduled date additionally
 includes a `schedule_log` object: `reason` (the `🎲 …` text) and `lines` (the
 exact rendered `🗓️ **SCHEDULE LOG**` marker and entry lines, in note order).
 The schema is unchanged; the reason text records the exact selected day count
 in bold and the configured range in parentheses. `schedule_log` is omitted
-when `p:<N>` was not given, or when `s:<N>` won the scheduled date and no roll
+when `$<N>` was not given, or when `s:<N>` won the scheduled date and no roll
 happened.
 
 Clipboard captures additionally include a `clip` object. Single captures keep
@@ -4817,7 +4837,7 @@ each supplied or prompted component, emits only the canonical colon marker,
 and retains staged values when validation or capture fails. Existing `@`,
 `@#`, and `@route#` picker flows are unchanged.
 
-Supported terminal `%`, `%N`, `%header`, `s:<N>`, and `p:<N>` markers may
+Supported terminal `%`, `%N`, `%header`, `s:<N>`, and `$<N>` markers may
 appear on either side of these interactive `@...` tokens and survive the
 target, section, block-ID, or task picker. For example, `<task> @sase# %`
 opens the section picker for `sase.md`; the panel consumes only `@sase#`, and
@@ -4945,7 +4965,7 @@ literal-template errors point to the template, an error touching one row field
 points to that whole field (including its quotes), and an error touching
 multiple fields points to the row. Repeated literal errors are deduplicated by
 code, range, and message. A placeholder that changes a token's meaning per
-row, such as `p:{0}`, is highlighted according to how the masked template
+row, such as `${0}`, is highlighted according to how the masked template
 parses it; each row's expanded parse still reports any real problem.
 `global_destination` is omitted for template drafts. Drafts without a header
 keep their existing JSON shape, except for the `template_header_missing`
@@ -5076,7 +5096,7 @@ last nests its item ranges, so they never partially overlap. Other
 `@r:id=x1!2` and `^r:id=x1` stay `pomodoro_link` (or `pomodoro_task` with body
 text) and carry the spec, `^r:id=x1,`, `^r:id=x1!`, and `^r:id=x1~` report
 `incomplete` needing `pomodoro_close_task`, while `#name=x…`,
-`s:<N>`/`p:<N>`/`%` conflicts,
+`s:<N>`/`$<N>`/`%` conflicts,
 project-note `=x`, and malformed lists report `invalid_pomodoro_close` on
 the conflicting component or the precise list range. A `@@` declaration
 never applies to close or `=`/`=<X>` items, and neither is ever rewritten.
@@ -5121,7 +5141,7 @@ JSON output is a single versioned object:
 ```
 
 `input` is the raw text as received, before whitespace normalization. `body` is
-the normalized capture body after terminal `s:<N>`, `p:<N>`, and applicable
+the normalized capture body after terminal `s:<N>`, `$<N>`, and applicable
 `%...` markers and the recognized `@...` token are removed, matching what `bob capture` would
 write for any input it accepts. `mode` is `task`, `bullet`, `pomodoro_task`,
 `pomodoro_note`, `sub_bullet`, `task_toggle`, `project_note`,
@@ -5158,7 +5178,7 @@ daily note is involved: a project note with at least one ` :` task is
 `incomplete` with `needs: ["block_id"]` and an `interactive_placeholder`
 span over the sigil, never a diagnostic. A bare trailing `#` reports `pomodoro_note` with
 `route`, `section`, and `block_id` all `null` and an empty `needs` list. Combining
-that marker with `@route`, `s:<N>`, or `p:<N>` on the same item still reports
+that marker with `@route`, `s:<N>`, or `$<N>` on the same item still reports
 mode `pomodoro_note` plus a `pomodoro_note_conflict` diagnostic; `bob capture`
 rejects the same input. A trailing `#n` or `#no` is rejected like any other
 trailing `#tag`. `route`, `section`, and `block_id` are the
@@ -5182,7 +5202,7 @@ populate `route`, `block_id`, and `section` the same way; the mode says whether
 `section` is a Pomodoro name or a task section.
 
 `relationship_needs_text` is an error diagnostic, not a picker need. It is
-ranged on the `p:<N>`, `s:<N>`, clipboard marker, or `child bullets` token
+ranged on the `$<N>`, `s:<N>`, clipboard marker, or `child bullets` token
 when a bare existing-task owner has relationships but no task text; the
 diagnostic message is identical to the `bob capture` refusal. See
 [Relating existing tasks with `&` and `*`](#relating-existing-tasks).
@@ -5313,9 +5333,9 @@ and a nullable `range` given as a two-element `[start, end]` byte array.
 Today's codes are `invalid_task_block_id_route`, `invalid_task_block_id`,
 `retired_task_block_id_marker`, `invalid_sub_bullet_route`,
 `invalid_sub_bullet_block_id`, `invalid_sub_bullet_section`,
-`invalid_pomodoro_route`, `invalid_pomodoro_block_id`, `invalid_pomodoro_name`, `invalid_pomodoro_start` (a malformed `=<X>` suffix, one on a project-note `+` form, a whole-item start near miss such as `=3 more` or `=3x`, or a whole-item named-start near miss such as `=#bugs=3`, `=#deep work`, or `=3#bugs more`, with the range on the extra text, child line, name, or token for overflow), `invalid_pomodoro_adjustment` (a zero magnitude, an overflow, or extra text/markers/child lines on an adjustment-first item), `invalid_pomodoro_shift` (a zero magnitude, an overflow, or extra text/markers/child lines on a shift-first item), `invalid_pomodoro_close` (a leading selection-shaped token with extra text/markers/child lines, a malformed task-number list, `#name=x…`, a project-note `=x`, or an `s:<N>`/`p:<N>`/`%` conflict on a close item, with the range on the extra text, child line, offending list part, `#name`, or conflicting marker), `invalid_pomodoro_link` (a near miss or conflict on a solo `@route:block-id…` / `^route:block-id…` item, such as extra text, authored children, or terminal markers on a complete shape), `invalid_project_note_marker` (a project-note shape error: a misordered `+`, a `#name` without its `+`, or an `=` suffix), `retired_project_note_marker` (a `:` project-note spelling, teaching the `^` form), `misplaced_project_task_id` (a task ID on the parent line or a nested bullet), `invalid_project_task_id` (a malformed, reserved, empty-body, or checkbox-bearing ` :` / ` ^` task ID), `duplicate_project_task_id` (two equal IDs in one item, naming both lines), `unused_project_note_pomodoro` (a `#name` with no ` :` task, ranged on the name), `unsupported_explicit_toggle`, `legacy_bullet_marker`,
+`invalid_pomodoro_route`, `invalid_pomodoro_block_id`, `invalid_pomodoro_name`, `invalid_pomodoro_start` (a malformed `=<X>` suffix, one on a project-note `+` form, a whole-item start near miss such as `=3 more` or `=3x`, or a whole-item named-start near miss such as `=#bugs=3`, `=#deep work`, or `=3#bugs more`, with the range on the extra text, child line, name, or token for overflow), `invalid_pomodoro_adjustment` (a zero magnitude, an overflow, or extra text/markers/child lines on an adjustment-first item), `invalid_pomodoro_shift` (a zero magnitude, an overflow, or extra text/markers/child lines on a shift-first item), `invalid_pomodoro_close` (a leading selection-shaped token with extra text/markers/child lines, a malformed task-number list, `#name=x…`, a project-note `=x`, or an `s:<N>`/`$<N>`/`%` conflict on a close item, with the range on the extra text, child line, offending list part, `#name`, or conflicting marker), `invalid_pomodoro_link` (a near miss or conflict on a solo `@route:block-id…` / `^route:block-id…` item, such as extra text, authored children, or terminal markers on a complete shape), `invalid_project_note_marker` (a project-note shape error: a misordered `+`, a `#name` without its `+`, or an `=` suffix), `retired_project_note_marker` (a `:` project-note spelling, teaching the `^` form), `misplaced_project_task_id` (a task ID on the parent line or a nested bullet), `invalid_project_task_id` (a malformed, reserved, empty-body, or checkbox-bearing ` :` / ` ^` task ID), `duplicate_project_task_id` (two equal IDs in one item, naming both lines), `unused_project_note_pomodoro` (a `#name` with no ` :` task, ranged on the name), `unsupported_explicit_toggle`, `legacy_bullet_marker`, `retired_priority_marker` (a typed `p:<N>` token, teaching `$<N>`),
 `pomodoro_note_conflict` (a trailing bare `#` on the same item as `@route`,
-`s:<N>`, or `p:<N>`),
+`s:<N>`, or `$<N>`),
 `invalid_child_line` (a later physical line is not blank, a column-zero
 authored bullet, or a two-space nested authored bullet),
 `orphaned_nested_bullet` (a nonempty nested item has no preceding first-level
@@ -5805,7 +5825,7 @@ trailing `^id` removed, trimmed to 160 characters; `[]` when the note is
 missing and for `project_note` intent). Intent is `project_note` when `+`
 follows the ID part; `^` is otherwise always `new`; `:` is `link` exactly when
 the whole-item parse would classify the item as `pomodoro_link` once a valid
-ID fills the part (marker-only items), else `new` (items with text, `s:`/`p:`
+ID fills the part (marker-only items), else `new` (items with text, `s:`/`$<N>`
 /`%` markers, child-line and batch positions behave the same way). The
 `project_task_block_id` object always carries intent `new` with empty
 `candidates`: `route` is the project-note stem (for example `cash_goog_exit`
@@ -6200,7 +6220,7 @@ JSON failure is `{"ok": false, "error": "..."}` and is write-free, as are
 stale, ambiguous, completed, already-named, missing-note, missing-section, and
 unreadable-note errors.
 
-A `p:<N>` capture writes `[?]` when it rolls a scheduled date; unscheduled task
+A `$<N>` capture writes `[?]` when it rolls a scheduled date; unscheduled task
 captures remain `[ ]`, and unscheduled Pomodoro-linked tasks remain `[*]`.
 Project notes and their `^prj` lifecycle tasks are covered in
 [projects.md](projects.md). The command index and environment variables live in

@@ -273,7 +273,7 @@ link items the `=x…` suffix spans the same four span kinds after the route \
 and block-ID spans: `@r:id=x1!2` and `^r:id=x1` stay 'pomodoro_link' (or \
 'pomodoro_task' with body text) and carry the spec, `^r:id=x1,` reports \
 'incomplete' needing `pomodoro_close_task`, while `#name=x…`, \
-`s:<N>`/`p:<N>`/`%` conflicts, project-note `=x`, and malformed lists \
+`s:<N>`/`$<N>`/`%` conflicts, project-note `=x`, and malformed lists \
 report `invalid_pomodoro_close` on the conflicting component or the precise \
 list range. A `@@` declaration never applies to close, `=`/`=<X>`, or \
 `=<X>#` items, and neither is ever rewritten. \
@@ -321,7 +321,7 @@ spans. Body text keeps its established mode and gains a `dependency_target` \
 (`new_task` for a task this capture would create); a bare `&note:block-id` \
 with an explicit `@note+task-id` (or the narrow bare `@note:id` / \
 `^note:id` aliases, leading or trailing) reports mode 'task_dependency' \
-with an `existing_task` target. A bare existing owner with `p:<N>`, \
+with an `existing_task` target. A bare existing owner with `$<N>`, \
 `s:<N>`, `%…`, or child bullets reports a `relationship_needs_text` \
 diagnostic. An \
 ownerless `&note:block-id` reports mode 'incomplete' needing \
@@ -348,7 +348,7 @@ The retired \
 '@route::...' spelling is a diagnostic directing users to '@route^...'; \
 it is not an incomplete Pomodoro marker. A bare trailing '#' reports mode \
 'pomodoro_note' with no route, section, or block ID and an empty 'needs' list; \
-combining it with an '@route' marker, 's:<N>', or 'p:<N>' on the same item \
+combining it with an '@route' marker, 's:<N>', or '$<N>' on the same item \
 reports a 'pomodoro_note_conflict' diagnostic instead of failing outright. \
 An invalid marker component, a malformed \
 continuation line, an orphaned nested bullet, an item emptied by marker removal, or a duplicate \
@@ -2221,7 +2221,7 @@ mod tests {
         assert_eq!(json("note @dev^focus-1")["mode"], "task");
         assert_eq!(json("note @dev^")["mode"], "incomplete");
 
-        let value = json("body p:2 s:1 % @groceries");
+        let value = json("body $2 s:1 % @groceries");
         assert_eq!(value["body"], "body");
         assert_eq!(
             value["spans"]

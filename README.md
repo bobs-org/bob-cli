@@ -145,7 +145,7 @@ bob capture-targets
 bob projects list
 ```
 
-Priority rolls (`p:<N>`), `bob task reroll`, Highlights pre-scan hooks,
+Priority rolls (`$<N>`), `bob task reroll`, Highlights pre-scan hooks,
 `bob gkeep`, `bob plan`, and `bob stats` read `~/.config/bob/config.yml`. Override
 that path with `BOB_CONFIG_FILE` or `XDG_CONFIG_HOME`; see
 [Environment](#environment).
@@ -412,7 +412,7 @@ typed on that same item. The whole batch is planned before anything is written.
 | `@route+id!` with no other text | Toggle that task's Pomodoro Task Link: link it when unlinked (Ready and own-prerequisite Blocked rise to Next; other Blocked stay unlinked) or unlink it when linked (lane unchanged) |
 | trailing `#` | Plain-text note on a Pomodoro (no `@route`) |
 | `s:<N>` | Schedule N days from today; checkbox-bearing captures start Blocked, including `s:0` |
-| `p:<N>` | Write priority level N and roll a scheduled date, so checkbox-bearing captures start Blocked |
+| `$` / `$<N>` | Write priority level N (bare `$` = 1) and roll a scheduled date, so checkbox-bearing captures start Blocked |
 | `%`, `%N`, `%header` | Attach clipboard content. When URL routing accepts `URL %` as a reference, `%` requests audio instead; `%N` and `%header` keep their clipboard meaning |
 
 `#` is not one marker. A trailing bare `#` is a Pomodoro note; `@route#…` selects
@@ -473,7 +473,7 @@ after the last completed one. `<X>` is exactly the suffix of the `se<X>` snippet
 digits, `-`, `-digits`, or `digits-` with optional digits — and the range is
 rounded to 5 minutes like the snippet. A timed open Pomodoro stops the
 capture with a "finish the current Pomodoro first" error, and `=<X>` cannot
-combine with `s:<N>` or `p:<N>`.
+combine with `s:<N>` or `$<N>`.
 
 Capture a whole item `+N` or `-N` to adjust today's current timed Pomodoro:
 `bob capture +5` extends by 25 minutes, `bob capture -- -2` shortens by 10
@@ -1298,7 +1298,7 @@ clipboard source alone.
 
 `BOB_CONFIG_FILE` sets the exact Bob config file. When unset, Bob uses
 `$XDG_CONFIG_HOME/bob/config.yml`, then `~/.config/bob/config.yml`. That
-file holds the priority windows for `p:<N>` and `bob task reroll`,
+file holds the priority windows for `$<N>` and `bob task reroll`,
 `highlights.pre_scan_hook` for `bob ref scan` and
 `bob ref doctor`, `highlights.listen_command` for
 `bob ref create --listen`,
@@ -1401,7 +1401,7 @@ to `~/projects/github/bobs-org/bob-plugins`.
 `bob plugins sync` overwrites a vault plugin file. It defaults to
 `~/.local/state/bob-cli/plugin-backups`.
 
-`BOB_PRIORITY_ROLL_SEED` pins the `p:<N>` scheduled-date roll to a decimal
+`BOB_PRIORITY_ROLL_SEED` pins the `$<N>` scheduled-date roll to a decimal
 integer seed so a `--dry-run` preview matches a real capture. Unset means each
 capture rolls independently. `bob task reroll` also reads it as the default
 base seed when `--seed` is omitted.

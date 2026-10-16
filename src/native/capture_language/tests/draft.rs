@@ -255,7 +255,7 @@ fn execution_rejects_a_child_emptied_by_marker_removal() {
 were removed"
     );
 
-    let error = execute("parent\n- p:2\n- @work").unwrap_err();
+    let error = execute("parent\n- $2\n- @work").unwrap_err();
     assert_eq!(
         error,
         "capture line 2 has no text left after its capture markers \
@@ -266,7 +266,7 @@ were removed"
 #[test]
 fn execution_composes_a_trailing_marker_from_any_child_line() {
     let parsed = execute(
-        "Prepare the launch review\n- Confirm the owner\n- Attach the checklist @work p:1 s:2",
+        "Prepare the launch review\n- Confirm the owner\n- Attach the checklist @work $1 s:2",
     )
     .expect("parse");
     assert_eq!(parsed.body, "Prepare the launch review");
@@ -293,7 +293,7 @@ fn execution_rejects_duplicate_schedule_priority_and_clip_markers_across_lines()
     assert!(execute("@work parent s:1\n- child s:2")
         .unwrap_err()
         .contains("schedule marker"));
-    assert!(execute("@work parent p:1\n- child p:2")
+    assert!(execute("@work parent $1\n- child $2")
         .unwrap_err()
         .contains("priority marker"));
     assert!(execute("@work parent %\n- child %")
@@ -304,9 +304,81 @@ fn execution_rejects_duplicate_schedule_priority_and_clip_markers_across_lines()
 #[test]
 fn execution_allows_the_same_marker_kind_once_across_the_whole_draft() {
     let parsed =
-        execute("parent s:1\n- child one\n- child two p:3").expect("parse");
+        execute("parent s:1\n- child one\n- child two $3").expect("parse");
     assert_eq!(parsed.scheduled_offset, Some(1));
     assert_eq!(parsed.priority_level, Some(3));
+}
+
+#[test]
+fn execution_treats_bare_dollar_as_priority_level_one() {
+    for raw in [
+        "foo bar baz @bob $1",
+        "foo bar baz @bob $",
+        "foo bar baz $ @bob",
+        "foo bar baz $ s:3 @bob",
+        "foo bar baz $2 % @bob",
+        "foo bar baz &dep:id $ @bob",
+    ] {
+        let parsed =
+            execute(raw).unwrap_or_else(|error| panic!("{raw}: {error}"));
+        assert_eq!(parsed.body, "foo bar baz", "{raw}");
+        assert_eq!(parsed.route.as_deref(), Some("bob"), "{raw}");
+        match raw {
+            raw if raw.contains("$2") => {
+                assert_eq!(parsed.priority_level, Some(2), "{raw}");
+            }
+            _ => assert_eq!(parsed.priority_level, Some(1), "{raw}"),
+        }
+        if raw.contains("s:3") {
+            assert_eq!(parsed.scheduled_offset, Some(3), "{raw}");
+        }
+    }
+
+    let parsed = execute("foo bar baz\n- more $").expect("parse");
+    assert_eq!(parsed.body, "foo bar baz");
+    assert_eq!(parsed.priority_level, Some(1));
+    assert_eq!(sub_bullet_bodies(&parsed.sub_bullets), vec!["more"]);
+
+    let error = execute("parent $\n- child $2").unwrap_err();
+    assert!(error.contains("priority marker ($<N>)"), "{error}");
+}
+
+#[test]
+fn execution_refuses_retired_priority_markers() {
+    let message =
+        "`p:2` is retired; write `$2` for priority level 2 (a bare `$` means `$1`)";
+    for raw in [
+        "foo p:2",
+        "foo p:2 @bob",
+        "foo @bob p:2 s:1",
+        "foo\n- child p:2",
+    ] {
+        let error = execute(raw).unwrap_err();
+        assert_eq!(error, message, "{raw}");
+    }
+    let parsed = execute("foo p:x").expect("malformed p: stays literal");
+    assert_eq!(parsed.body, "foo p:x");
+    assert!(parsed.priority_level.is_none());
+}
+
+#[test]
+fn execution_unescapes_terminal_priority_dollar_amounts() {
+    let parsed = execute("Pay Bob \\$3").expect("parse");
+    assert_eq!(parsed.body, "Pay Bob $3");
+    assert!(parsed.priority_level.is_none());
+
+    let parsed = execute("Pay Bob \\$3 $2 @cash").expect("parse");
+    assert_eq!(parsed.body, "Pay Bob $3");
+    assert_eq!(parsed.priority_level, Some(2));
+    assert_eq!(parsed.route.as_deref(), Some("cash"));
+
+    let parsed = execute("cost \\$3 today").expect("parse");
+    assert_eq!(parsed.body, "cost \\$3 today");
+    assert!(parsed.priority_level.is_none());
+
+    let parsed = execute("Pay $3 to Bob").expect("parse");
+    assert_eq!(parsed.body, "Pay $3 to Bob");
+    assert!(parsed.priority_level.is_none());
 }
 
 #[test]

@@ -386,7 +386,7 @@ fn capture_pomodoro_start_rejects_invalid_and_conflicting_syntax() {
     write_file(&vault.join("sase.md"), "# S\n## Tasks\n");
     for (marker, extra, expected) in [
         ("@sase:b1=3", "s:1", "cannot be combined with `s:<N>`"),
-        ("@sase:b1=3", "p:2", "cannot be combined with `p:<N>`"),
+        ("@sase:b1=3", "$2", "cannot be combined with `$<N>`"),
     ] {
         let output = bob_command()
             .arg("capture")

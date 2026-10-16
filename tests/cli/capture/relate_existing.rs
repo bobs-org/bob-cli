@@ -479,8 +479,8 @@ fn rx8_unresolved_plus_selector_never_creates_a_task() {
 fn rx9_relationship_needs_text_in_parse_and_execute() {
     let cases = [
         (
-            "@body+excercise &foo:bar p:2",
-            "`p:2` needs task text: `@body+excercise` with no text only adds task relationships; add text to write a sub-bullet (`Note @body+excercise &foo:bar p:2`)",
+            "@body+excercise &foo:bar $2",
+            "`$2` needs task text: `@body+excercise` with no text only adds task relationships; add text to write a sub-bullet (`Note @body+excercise &foo:bar $2`)",
         ),
         (
             "@body+excercise &foo:bar s:3",
@@ -491,8 +491,8 @@ fn rx9_relationship_needs_text_in_parse_and_execute() {
             "`%` needs task text: `@body+excercise` with no text only adds task relationships; add text to write a sub-bullet (`Note @body+excercise &foo:bar %`)",
         ),
         (
-            "@body+excercise &foo:bar p:2 s:3",
-            "`p:2` needs task text: `@body+excercise` with no text only adds task relationships; add text to write a sub-bullet (`Note @body+excercise &foo:bar p:2`)",
+            "@body+excercise &foo:bar $2 s:3",
+            "`$2` needs task text: `@body+excercise` with no text only adds task relationships; add text to write a sub-bullet (`Note @body+excercise &foo:bar $2`)",
         ),
     ];
     for (draft, expected) in cases {

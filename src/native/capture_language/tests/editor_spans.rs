@@ -88,7 +88,7 @@ fn plan_worked_example_matches_documented_offsets() {
 
 #[test]
 fn editor_reports_terminal_marker_spans() {
-    let raw = "body p:2 s:1 % @groceries";
+    let raw = "body $2 s:1 % @groceries";
     let parse = editor(raw);
     assert_eq!(parse.body, "body");
     assert_eq!(parse.mode, EditorMode::Task);
@@ -96,12 +96,51 @@ fn editor_reports_terminal_marker_spans() {
     assert_eq!(
         ranges(&parse),
         vec![
-            (5, 8, SpanKind::Priority),
-            (9, 12, SpanKind::Schedule),
-            (13, 14, SpanKind::Clipboard),
-            (15, 25, SpanKind::Route),
+            (5, 7, SpanKind::Priority),
+            (8, 11, SpanKind::Schedule),
+            (12, 13, SpanKind::Clipboard),
+            (14, 24, SpanKind::Route),
         ]
     );
+}
+
+#[test]
+fn editor_reports_bare_dollar_as_a_priority_span() {
+    let raw = "body $ @bob";
+    let parse = editor(raw);
+    assert_eq!(parse.body, "body");
+    assert_eq!(parse.route.as_deref(), Some("bob"));
+    assert_eq!(
+        ranges(&parse),
+        vec![(5, 6, SpanKind::Priority), (7, 11, SpanKind::Route)]
+    );
+    assert!(parse.diagnostics.is_empty());
+}
+
+#[test]
+fn editor_reports_retired_priority_markers() {
+    let raw = "foo p:2 @bob";
+    let parse = editor(raw);
+    assert_eq!(codes(&parse), vec!["retired_priority_marker"]);
+    assert_eq!(
+        parse.diagnostics[0].message,
+        "`p:2` is retired; write `$2` for priority level 2 (a bare `$` means `$1`)"
+    );
+    assert_eq!(parse.diagnostics[0].range, Some((4, 7)));
+    assert!(!span_kinds(&parse).contains(&SpanKind::Priority));
+}
+
+#[test]
+fn editor_unescapes_terminal_priority_dollar_amounts() {
+    let parse = editor("Pay Bob \\$3");
+    assert_eq!(parse.body, "Pay Bob $3");
+    assert!(!span_kinds(&parse).contains(&SpanKind::Priority));
+    assert!(parse.diagnostics.is_empty());
+
+    let parse = editor("Pay Bob \\$3 $2 @cash");
+    assert_eq!(parse.body, "Pay Bob $3");
+    assert_eq!(parse.route.as_deref(), Some("cash"));
+    assert!(span_kinds(&parse).contains(&SpanKind::Priority));
 }
 
 #[test]
@@ -412,8 +451,8 @@ fn editor_reports_solo_at_pomodoro_links() {
             "Pomodoro link capture cannot be combined with s:<N>",
         ),
         (
-            "@sase:deep-fix p:2",
-            "Pomodoro link capture cannot be combined with p:<N>",
+            "@sase:deep-fix $2",
+            "Pomodoro link capture cannot be combined with $<N>",
         ),
         (
             "@sase:deep-fix %",
@@ -524,8 +563,8 @@ fn editor_reports_caret_near_misses_and_conflicts() {
             "Pomodoro link capture cannot be combined with s:<N>",
         ),
         (
-            "^sase:deep-fix p:1",
-            "Pomodoro link capture cannot be combined with p:<N>",
+            "^sase:deep-fix $1",
+            "Pomodoro link capture cannot be combined with $<N>",
         ),
         (
             "^sase:deep-fix %",

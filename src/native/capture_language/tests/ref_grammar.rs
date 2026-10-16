@@ -143,7 +143,7 @@ fn claim_off_cases_stay_tasks() {
     // stays a task.
     for raw in [
         "https://example.com/post s:3",
-        "https://example.com/post p:1",
+        "https://example.com/post $1",
         "https://example.com/post %1",
         "https://example.com/post is worth reading",
         "https://example.com/post https://example.org/other",

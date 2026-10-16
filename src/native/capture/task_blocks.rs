@@ -686,7 +686,7 @@ mod tests {
                 concat!("- [/] #task Parent ^capture\n", "\t- keep\n",),
             )],
         );
-        let batch = plan(&vault, "new note @sase+capture p:1\n- child one");
+        let batch = plan(&vault, "new note @sase+capture $1\n- child one");
         assert_eq!(batch.task_blocks.len(), 1);
         let block = &batch.task_blocks[0];
         assert_eq!(block.lines[0].change, BlockLineChange::Unchanged);

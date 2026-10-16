@@ -116,7 +116,7 @@ fn capture_parse_pomodoro_adjust_protocol() {
 
     // Adjustment-first items with extra text, markers, or children are
     // invalid adjustments, never tasks.
-    for text in ["+5 foo", "+5 s:1", "+5 p:1", "+5 %", "+5 @work"] {
+    for text in ["+5 foo", "+5 s:1", "+5 $1", "+5 %", "+5 @work"] {
         let value = parse(text);
         assert_eq!(value["mode"], "pomodoro_adjust", "{text}");
         assert!(value.get("pomodoro_adjust").is_none(), "{text}: {value}");

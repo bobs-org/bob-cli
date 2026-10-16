@@ -6,9 +6,9 @@ use std::num::NonZeroUsize;
 // Grammar helpers now live in `capture_language`; these tests keep
 // exercising them through `bob capture` so the move stays behavior
 // preserving.
-use crate::native::capture_language::{
+pub(crate) use crate::native::capture_language::{
     extract_terminal_markers, normalize_task_text, parse_priority_token,
-    parse_schedule_token,
+    parse_retired_priority_token, parse_schedule_token, tokenize_with_spans,
 };
 
 const TASK: &str = "- [ ] #task new thing [created::2026-06-15]";

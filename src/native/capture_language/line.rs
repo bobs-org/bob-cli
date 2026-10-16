@@ -46,6 +46,9 @@ fn resolve_line_inner<'a>(
     let declarations = take_global_declarations(&mut tokens);
     let (markers, _) =
         extract_terminal_markers(&mut tokens, parse_clip_markers);
+    if let Some(retired) = &markers.retired_priority {
+        return Err(retired_priority_marker_error(&retired.token));
+    }
     if tokens.is_empty() {
         return Ok(LineOutcome {
             body: String::new(),
@@ -84,7 +87,7 @@ fn resolve_line_inner<'a>(
             return Err(pomodoro_note_route_conflict_error());
         }
         return Ok(LineOutcome {
-            body: join_parse_tokens(&tokens),
+            body: join_parse_tokens(&tokens, &markers.priority_escapes),
             markers,
             route: Some(LineRoute {
                 token: RouteToken {
@@ -99,7 +102,7 @@ fn resolve_line_inner<'a>(
 
     if !detect_route {
         return Ok(LineOutcome {
-            body: join_parse_tokens(&tokens),
+            body: join_parse_tokens(&tokens, &markers.priority_escapes),
             markers,
             route: None,
             declarations,
@@ -169,7 +172,7 @@ fn resolve_line_inner<'a>(
                 return Err(pomodoro_note_route_conflict_error());
             }
             return Ok(LineOutcome {
-                body: join_parse_tokens(rest),
+                body: join_parse_tokens(rest, &markers.priority_escapes),
                 markers,
                 route: Some(LineRoute {
                     token,
@@ -191,7 +194,7 @@ fn resolve_line_inner<'a>(
             return Err(pomodoro_note_route_conflict_error());
         }
         return Ok(LineOutcome {
-            body: join_parse_tokens(rest),
+            body: join_parse_tokens(rest, &markers.priority_escapes),
             markers,
             route: Some(LineRoute {
                 token,
@@ -202,17 +205,22 @@ fn resolve_line_inner<'a>(
     }
 
     Ok(LineOutcome {
-        body: join_parse_tokens(&tokens),
+        body: join_parse_tokens(&tokens, &markers.priority_escapes),
         markers,
         route: None,
         declarations,
     })
 }
 
-pub(super) fn join_parse_tokens<T: ParseToken>(tokens: &[T]) -> String {
+pub(super) fn join_parse_tokens<T: ParseToken>(
+    tokens: &[T],
+    priority_escapes: &[(usize, usize)],
+) -> String {
     tokens
         .iter()
-        .map(|token| token.text())
+        .map(|token| {
+            unescape_priority_text(token.text(), token.span(), priority_escapes)
+        })
         .collect::<Vec<_>>()
         .join(" ")
 }
@@ -248,7 +256,7 @@ impl AggregateMarkers {
         }
         if let Some(level) = markers.priority_level {
             if self.priority_level.is_some() {
-                return Err(duplicate_marker_error("priority marker (p:<N>)"));
+                return Err(duplicate_marker_error("priority marker ($<N>)"));
             }
             self.priority_level = Some(level);
         }
@@ -325,7 +333,7 @@ pub(super) fn pomodoro_note_schedule_conflict_error() -> String {
 }
 
 pub(super) fn pomodoro_note_priority_conflict_error() -> String {
-    "the '#' Pomodoro-note marker cannot be combined with 'p:<N>'".to_string()
+    "the '#' Pomodoro-note marker cannot be combined with '$<N>'".to_string()
 }
 
 pub(crate) fn normalize_task_text(raw_text: &str) -> String {

@@ -79,6 +79,8 @@ pub(crate) use self::markers::is_route_token;
 #[cfg(test)]
 pub(crate) use self::markers::parse_priority_token;
 #[cfg(test)]
+pub(crate) use self::markers::parse_retired_priority_token;
+#[cfg(test)]
 pub(crate) use self::markers::parse_schedule_token;
 pub(crate) use self::markers::unused_project_note_pomodoro_error;
 pub(crate) use self::markers::POMODORO_CLOSE_INTERNAL_BULLETS_ERROR;

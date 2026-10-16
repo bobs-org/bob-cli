@@ -1078,6 +1078,21 @@ pub(super) fn token_diagnostic(
     }
 }
 
+/// Surface a retired `p:<N>` token as a diagnostic. The rule itself is
+/// [`retired_priority_marker_error`], so the editor and `bob capture` can
+/// never disagree about which inputs are affected.
+pub(super) fn retired_priority_marker_diagnostic(
+    markers: &TerminalMarkers,
+) -> Option<Diagnostic> {
+    let retired = markers.retired_priority.as_ref()?;
+    Some(Diagnostic {
+        severity: Severity::Error,
+        code: "retired_priority_marker",
+        message: retired_priority_marker_error(&retired.token),
+        range: retired.span,
+    })
+}
+
 /// Surface the retired standalone `#...` bullet marker as a diagnostic. The
 /// rule itself is [`reject_legacy_bullet_markers`], so the editor and
 /// `bob capture` can never disagree about which inputs are affected.
@@ -1104,7 +1119,7 @@ pub(super) fn legacy_bullet_marker_diagnostic(
 /// Diagnose a same-line combination of the bare `#` Pomodoro-note marker
 /// with an `@route`-shaped marker, mirroring [`resolve_line`]'s route
 /// conflict rejection so the editor and `bob capture` never disagree.
-/// Schedule (`s:<N>`) and priority (`p:<N>`) conflicts are item-wide and
+/// Schedule (`s:<N>`) and priority (`$<N>`) conflicts are item-wide and
 /// diagnosed separately in [`parse_editor_item`] once the whole item's mode
 /// is known; a forced `--route` conflict never reaches the editor, which has
 /// no forced-route flag.

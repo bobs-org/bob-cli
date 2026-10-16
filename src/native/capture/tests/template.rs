@@ -121,7 +121,7 @@ fn planning_each_template_matches_planning_its_expansion() {
         ),
         (
             "priority marker",
-            "@@template:\nTask {0} p:1 @work\n\none\ntwo\n",
+            "@@template:\nTask {0} $1 @work\n\none\ntwo\n",
         ),
         (
             "prerequisite marker",

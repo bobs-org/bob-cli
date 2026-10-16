@@ -669,7 +669,7 @@ pub(super) fn parse_capture_item<'a>(
             }
             if aggregate.priority_level.is_some() {
                 return Err(
-                    "Pomodoro link capture cannot be combined with p:<N>"
+                    "Pomodoro link capture cannot be combined with $<N>"
                         .to_string(),
                 );
             }

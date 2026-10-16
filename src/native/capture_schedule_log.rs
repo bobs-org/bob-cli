@@ -36,7 +36,7 @@ pub(crate) const AUTO_REASON_SEPARATOR: &str = "·";
 pub(crate) const IMPLICIT_LEVEL_LABEL: &str = "P0";
 
 /// `formatPriorityRollScheduleReason` in main.js, restricted to the
-/// `source: "priority"` branch that a `p:<N>` capture always takes. The die
+/// `source: "priority"` branch that a `$<N>` capture always takes. The die
 /// emoji marks this as machine-rolled; the roll window's en dash (`U+2013`) is
 /// distinct from both the transition arrow and the entry separator's em dash.
 pub(crate) fn priority_roll_reason(

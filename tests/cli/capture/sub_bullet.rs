@@ -519,7 +519,7 @@ fn capture_sub_bullet_inserts_complete_subtree_before_parent_logs() {
         .arg(&vault)
         .arg("-f")
         .arg("json")
-        .arg("@cash+parent buy milk p:2 %\n- authored child")
+        .arg("@cash+parent buy milk $2 %\n- authored child")
         .env("BOB_NOW", "2026-07-10 13:40:00")
         .env("BOB_CONFIG_FILE", &config)
         .env("BOB_PRIORITY_ROLL_SEED", "1")

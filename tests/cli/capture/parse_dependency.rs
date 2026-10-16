@@ -219,8 +219,8 @@ fn plus_selector_beside_modifiers_needs_task_parent() {
 
 #[test]
 fn relationship_only_owner_reports_needs_text() {
-    let expected = "`p:2` needs task text: `@body+excercise` with no text only adds task relationships; add text to write a sub-bullet (`Note @body+excercise &foo:bar p:2`)";
-    let json = parse_json("@body+excercise &foo:bar p:2");
+    let expected = "`$2` needs task text: `@body+excercise` with no text only adds task relationships; add text to write a sub-bullet (`Note @body+excercise &foo:bar $2`)";
+    let json = parse_json("@body+excercise &foo:bar $2");
     let diagnostics =
         json["diagnostics"].as_array().expect("diagnostics array");
     assert_eq!(diagnostics.len(), 1);

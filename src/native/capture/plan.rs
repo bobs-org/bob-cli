@@ -1692,7 +1692,7 @@ pub(super) fn scheduled_date_string(
     Ok(date_string(scheduled))
 }
 
-/// A resolved `p:<N>` level: its field name/value/label plus the level's
+/// A resolved `$<N>` level: its field name/value/label plus the level's
 /// roll window and, when the date was actually rolled, the chosen offset.
 pub(super) struct ResolvedPriority {
     pub(super) name: String,
@@ -1703,7 +1703,7 @@ pub(super) struct ResolvedPriority {
     pub(super) rolled_offset: Option<u64>,
 }
 
-/// Resolve a `p:<N>` level. The rolled offset is only computed when no
+/// Resolve a `$<N>` level. The rolled offset is only computed when no
 /// explicit `s:<N>` offset is present, since an explicit offset always wins
 /// the scheduled date.
 pub(super) fn resolve_priority(
@@ -1720,7 +1720,7 @@ pub(super) fn resolve_priority(
         })?;
     let level = property.level(number).ok_or_else(|| {
         CaptureError::usage(format!(
-            "p:{number} is not a configured priority level; use p:1 through p:{} ({})",
+            "${number} is not a configured priority level; use $ or $1 through ${} ({})",
             property.level_count(),
             property.labels()
         ))

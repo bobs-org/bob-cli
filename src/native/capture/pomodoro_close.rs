@@ -531,7 +531,7 @@ pub(super) fn reject_pomodoro_close_conflicts(
     }
     if parsed.priority_level.is_some() {
         return Err(CaptureError::usage(
-            "Pomodoro close `=x` cannot be combined with p:<N>; capture the close alone",
+            "Pomodoro close `=x` cannot be combined with $<N>; capture the close alone",
         ));
     }
     if !parsed.sub_bullets.is_empty() {

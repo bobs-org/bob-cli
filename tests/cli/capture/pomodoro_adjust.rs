@@ -384,7 +384,7 @@ fn capture_pomodoro_adjust_rejects_bad_grammar_and_targets() {
         (output, before, after)
     };
 
-    for text in ["+0", "-0", "+5 foo", "+5 s:1", "+5 p:1", "+5 %"] {
+    for text in ["+0", "-0", "+5 foo", "+5 s:1", "+5 $1", "+5 %"] {
         let (output, before, after) = run(text, day_contents);
         assert_ne!(output.status.code(), Some(0), "{text} should fail");
         assert_eq!(before, after, "{text} must not write");

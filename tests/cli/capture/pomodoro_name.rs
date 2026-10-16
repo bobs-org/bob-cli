@@ -1130,7 +1130,7 @@ fn capture_pomodoro_link_solo_grammar_and_atomic_execution() {
     write_file(&vault.join("sase.md"), "- [ ] #task A ^a\n");
     for (item, needle) in [
         ("@sase:a s:1", "cannot be combined with s:<N>"),
-        ("@sase:a p:1", "cannot be combined with p:<N>"),
+        ("@sase:a $1", "cannot be combined with $<N>"),
         ("^sase:a extra", "must be the whole capture item"),
         ("^sase:a+", "@route^block-id+"),
         ("^sase:a!", "@route+block-id!"),

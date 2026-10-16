@@ -68,7 +68,7 @@ pub(super) fn parse_editor_line<'a>(
     let (stripped, dependencies) =
         extract_line_dependencies(tokens, line_text, line_base, leading, true);
     tokens = stripped;
-    let (_, marker_spans) = extract_terminal_markers(&mut tokens, true);
+    let (markers, marker_spans) = extract_terminal_markers(&mut tokens, true);
     let mut terminal_spans: Vec<Span> = marker_spans
         .into_iter()
         .map(|(kind, start, end)| Span { start, end, kind })
@@ -76,6 +76,9 @@ pub(super) fn parse_editor_line<'a>(
     terminal_spans.extend(dependencies.spans.iter().copied());
 
     let mut diagnostics = Vec::new();
+    if let Some(diagnostic) = retired_priority_marker_diagnostic(&markers) {
+        diagnostics.push(diagnostic);
+    }
     if let Some(diagnostic) = legacy_bullet_marker_diagnostic(&tokens) {
         diagnostics.push(diagnostic);
     }
@@ -101,14 +104,20 @@ pub(super) fn parse_editor_line<'a>(
         .filter(|(index, _)| Some(*index) != marker_index)
         .map(|(_, token)| *token)
         .collect();
-    // A consumed `\&` escape leaves its visible `&...` in task text.
+    // A consumed `\&`/`\*`/`\$` escape leaves the visible marker in task
+    // text. Priority unescaping only applies in the terminal region.
     let body = body_tokens
         .iter()
         .map(|token| {
-            unescape_dependency_text(
+            let text = unescape_dependency_text(
                 token.text,
                 token.start,
                 &dependencies.escapes,
+            );
+            unescape_priority_text(
+                &text,
+                Some((token.start, token.end)),
+                &markers.priority_escapes,
             )
         })
         .collect::<Vec<_>>()
@@ -190,7 +199,7 @@ impl SeenMarkers {
 pub(super) fn terminal_marker_label(kind: SpanKind) -> &'static str {
     match kind {
         SpanKind::Schedule => "schedule marker (s:<N>)",
-        SpanKind::Priority => "priority marker (p:<N>)",
+        SpanKind::Priority => "priority marker ($<N>)",
         SpanKind::Clipboard => "clipboard marker (%)",
         _ => "capture marker",
     }
@@ -1660,7 +1669,7 @@ pub(super) fn parse_editor_item_with<'a>(
         }
     }
 
-    // A `=x` close suffix cannot combine with `s:<N>`, `p:<N>`, or `%`:
+    // A `=x` close suffix cannot combine with `s:<N>`, `$<N>`, or `%`:
     // report `invalid_pomodoro_close` on the conflicting marker itself,
     // mirroring `bob capture`'s strict execution errors. Applies to both
     // solo links and body-bearing task captures.
@@ -2319,7 +2328,7 @@ pub(super) fn parse_editor_item_with<'a>(
                 .min_by_key(|span| span.start)
             {
                 (
-                    item.source.get(span.start..span.end).unwrap_or("p:2"),
+                    item.source.get(span.start..span.end).unwrap_or("$2"),
                     Some((span.start, span.end)),
                 )
             } else {

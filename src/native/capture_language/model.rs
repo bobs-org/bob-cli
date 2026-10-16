@@ -523,6 +523,17 @@ pub(crate) struct TerminalMarkers {
     pub(crate) clip: Option<ClipRequest>,
     pub(crate) scheduled_offset: Option<u64>,
     pub(crate) priority_level: Option<u64>,
+    /// Retired `p:<digits>` token extracted from the terminal region.
+    pub(crate) retired_priority: Option<RetiredPriority>,
+    /// Consumed `\` bytes of `\$`/`\$<N>` escapes in the terminal region.
+    pub(crate) priority_escapes: Vec<(usize, usize)>,
+}
+
+/// A typed retired `p:<N>` marker: the original token and its source span.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RetiredPriority {
+    pub(crate) token: String,
+    pub(crate) span: Option<(usize, usize)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

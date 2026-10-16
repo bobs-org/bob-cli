@@ -30,26 +30,39 @@ fn parses_schedule_tokens() {
 
 #[test]
 fn parses_priority_tokens() {
-    assert_eq!(parse_priority_token("p:1"), Some(1));
-    assert_eq!(parse_priority_token("p:4"), Some(4));
-    assert_eq!(parse_priority_token("p:12"), Some(12));
+    assert_eq!(parse_priority_token("$"), Some(1));
+    assert_eq!(parse_priority_token("$1"), Some(1));
+    assert_eq!(parse_priority_token("$4"), Some(4));
+    assert_eq!(parse_priority_token("$0"), Some(0));
+    assert_eq!(parse_priority_token("$12"), Some(12));
 
     for token in [
+        "$$",
+        "$1.5",
+        "$x",
+        "$-1",
+        "$1k",
+        "p:1",
         "p:",
-        "p:abc",
-        "p:-1",
-        "p:1.5",
-        "P:1",
-        "px:1",
-        "p:18446744073709551616",
+        "$99999999999999999999",
+        "$18446744073709551616",
     ] {
         assert_eq!(parse_priority_token(token), None, "{token}");
     }
 }
 
 #[test]
+fn parses_retired_priority_tokens() {
+    assert_eq!(parse_retired_priority_token("p:1"), Some(1));
+    assert_eq!(parse_retired_priority_token("p:12"), Some(12));
+    for token in ["p:", "p:abc", "p:-1", "p:1.5", "P:1", "px:1", "$1"] {
+        assert_eq!(parse_retired_priority_token(token), None, "{token}");
+    }
+}
+
+#[test]
 fn extracts_priority_markers_from_terminal_region() {
-    let mut tokens = vec!["buy", "milk", "p:2"];
+    let mut tokens = vec!["buy", "milk", "$2"];
     assert_eq!(
         extract_terminal_markers(&mut tokens, false)
             .0
@@ -58,7 +71,7 @@ fn extracts_priority_markers_from_terminal_region() {
     );
     assert_eq!(tokens, vec!["buy", "milk"]);
 
-    let mut tokens = vec!["buy", "milk", "p:2", "@groceries"];
+    let mut tokens = vec!["buy", "milk", "$2", "@groceries"];
     assert_eq!(
         extract_terminal_markers(&mut tokens, false)
             .0
@@ -67,7 +80,7 @@ fn extracts_priority_markers_from_terminal_region() {
     );
     assert_eq!(tokens, vec!["buy", "milk", "@groceries"]);
 
-    let mut tokens = vec!["buy", "milk", "@groceries", "p:3"];
+    let mut tokens = vec!["buy", "milk", "@groceries", "$3"];
     assert_eq!(
         extract_terminal_markers(&mut tokens, false)
             .0
@@ -76,23 +89,102 @@ fn extracts_priority_markers_from_terminal_region() {
     );
     assert_eq!(tokens, vec!["buy", "milk", "@groceries"]);
 
-    let mut tokens = vec!["set", "p:2", "priority"];
+    let mut tokens = vec!["set", "$2", "priority"];
     assert_eq!(
         extract_terminal_markers(&mut tokens, false)
             .0
             .priority_level,
         None
     );
-    assert_eq!(tokens, vec!["set", "p:2", "priority"]);
+    assert_eq!(tokens, vec!["set", "$2", "priority"]);
 
-    let mut tokens = vec!["buy", "p:1", "p:2"];
+    let mut tokens = vec!["buy", "$1", "$2"];
     assert_eq!(
         extract_terminal_markers(&mut tokens, false)
             .0
             .priority_level,
         Some(2)
     );
-    assert_eq!(tokens, vec!["buy", "p:1"]);
+    assert_eq!(tokens, vec!["buy", "$1"]);
+
+    let mut tokens = vec!["buy", "milk", "$"];
+    assert_eq!(
+        extract_terminal_markers(&mut tokens, false)
+            .0
+            .priority_level,
+        Some(1)
+    );
+    assert_eq!(tokens, vec!["buy", "milk"]);
+}
+
+#[test]
+fn extracts_retired_priority_tokens_from_the_terminal_region() {
+    let mut tokens = vec!["buy", "milk", "p:2"];
+    let markers = extract_terminal_markers(&mut tokens, false).0;
+    assert_eq!(
+        markers
+            .retired_priority
+            .as_ref()
+            .map(|retired| retired.token.as_str()),
+        Some("p:2")
+    );
+    assert!(markers.priority_level.is_none());
+    assert_eq!(tokens, vec!["buy", "milk"]);
+
+    let mut tokens = vec!["buy", "milk", "p:2", "@bob"];
+    let markers = extract_terminal_markers(&mut tokens, false).0;
+    assert_eq!(
+        markers
+            .retired_priority
+            .as_ref()
+            .map(|retired| retired.token.as_str()),
+        Some("p:2")
+    );
+    assert_eq!(tokens, vec!["buy", "milk", "@bob"]);
+
+    let mut tokens = vec!["set", "p:2", "priority"];
+    assert!(extract_terminal_markers(&mut tokens, false)
+        .0
+        .retired_priority
+        .is_none());
+    assert_eq!(tokens, vec!["set", "p:2", "priority"]);
+
+    let mut tokens = vec!["buy", "p:x"];
+    assert!(extract_terminal_markers(&mut tokens, false)
+        .0
+        .retired_priority
+        .is_none());
+    assert_eq!(tokens, vec!["buy", "p:x"]);
+}
+
+#[test]
+fn extracts_escaped_priority_tokens_from_the_terminal_region() {
+    let mut tokens = tokenize_with_spans("Pay Bob \\$3");
+    let markers = extract_terminal_markers(&mut tokens, false).0;
+    assert!(markers.priority_level.is_none());
+    assert_eq!(markers.priority_escapes, vec![(8, 9)]);
+    assert_eq!(
+        tokens.iter().map(|token| token.text).collect::<Vec<_>>(),
+        vec!["Pay", "Bob", "\\$3"]
+    );
+
+    let mut tokens = tokenize_with_spans("Pay Bob \\$3 $2 @cash");
+    let markers = extract_terminal_markers(&mut tokens, false).0;
+    assert_eq!(markers.priority_level, Some(2));
+    assert_eq!(markers.priority_escapes, vec![(8, 9)]);
+    assert_eq!(
+        tokens.iter().map(|token| token.text).collect::<Vec<_>>(),
+        vec!["Pay", "Bob", "\\$3", "@cash"]
+    );
+
+    let mut tokens = tokenize_with_spans("cost \\$3 today");
+    let markers = extract_terminal_markers(&mut tokens, false).0;
+    assert!(markers.priority_level.is_none());
+    assert!(markers.priority_escapes.is_empty());
+    assert_eq!(
+        tokens.iter().map(|token| token.text).collect::<Vec<_>>(),
+        vec!["cost", "\\$3", "today"]
+    );
 }
 
 #[test]
@@ -270,7 +362,7 @@ fn extracts_clip_and_schedule_markers_from_terminal_region() {
             None,
         ),
         (
-            "body p:2 s:1 % @groceries",
+            "body $2 s:1 % @groceries",
             "body",
             Some("groceries"),
             Some(1),
@@ -278,7 +370,7 @@ fn extracts_clip_and_schedule_markers_from_terminal_region() {
             Some(2),
         ),
         (
-            "body @groceries %log p:3 s:4",
+            "body @groceries %log $3 s:4",
             "body",
             Some("groceries"),
             Some(4),
@@ -542,7 +634,7 @@ fn parses_named_pomodoro_routes_in_terminal_positions() {
             Some(2),
             "bugs",
         ),
-        ("Do thing p:2 @Dev:Foo-Bar#bugs", "Do thing", None, "bugs"),
+        ("Do thing $2 @Dev:Foo-Bar#bugs", "Do thing", None, "bugs"),
         (
             "Do thing @!Dev:Foo-Bar#after-tui-fix",
             "Do thing",

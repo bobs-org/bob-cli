@@ -1203,10 +1203,10 @@ pub(super) const POMODORO_LINK_SCHEDULE_CONFLICT_ERROR: &str =
     "Pomodoro link capture cannot be combined with s:<N>";
 
 pub(super) const POMODORO_LINK_PRIORITY_CONFLICT_ERROR: &str =
-    "Pomodoro link capture cannot be combined with p:<N>";
+    "Pomodoro link capture cannot be combined with $<N>";
 
 /// Remaining parent tokens after relationship modifiers (and, when those
-/// were present, trailing `p:`/`s:`/`%` markers) leave. Used so a bare
+/// were present, trailing `$`/`s:`/`%` markers) leave. Used so a bare
 /// `^route:id` owner alias works in both leading and trailing position.
 fn relation_stripped_parent_tokens<'a>(
     parent_line: RawLine<'a>,
@@ -1324,7 +1324,7 @@ pub(super) fn classify_caret_item<'a>(
         return None;
     }
     let solo_parent = parent_tokens.len() == 1;
-    // Relationship extras (`p:`/`s:`/`%`/children) are not caret-link
+    // Relationship extras (`$<N>`/`s:`/`%`/children) are not caret-link
     // conflicts: ownership emits `relationship_needs_text` instead.
     let single_line = if has_relations {
         true
@@ -1462,7 +1462,7 @@ fn caret_item_conflict(
             .find_map(|extra| {
                 if parse_schedule_token(extra.text).is_some() {
                     Some(POMODORO_LINK_SCHEDULE_CONFLICT_ERROR.to_string())
-                } else if parse_priority_token(extra.text).is_some() {
+                } else if is_priority_marker_token(extra.text) {
                     Some(POMODORO_LINK_PRIORITY_CONFLICT_ERROR.to_string())
                 } else if extra.text.starts_with('%') {
                     Some(POMODORO_LINK_CLIP_CONFLICT_ERROR.to_string())
@@ -1563,9 +1563,9 @@ pub(super) fn parse_pomodoro_link_item<'a>(
                                 "Pomodoro link capture cannot be combined with s:<N>".to_string(),
                             );
                         }
-                        if parse_priority_token(extra).is_some() {
+                        if is_priority_marker_token(extra) {
                             return Err(
-                                "Pomodoro link capture cannot be combined with p:<N>".to_string(),
+                                "Pomodoro link capture cannot be combined with $<N>".to_string(),
                             );
                         }
                         if extra.starts_with('%') {
@@ -1641,9 +1641,9 @@ pub(super) fn parse_pomodoro_link_item<'a>(
                                     .to_string(),
                             );
                         }
-                        if parse_priority_token(extra).is_some() {
+                        if is_priority_marker_token(extra) {
                             return Err(
-                                "Pomodoro link capture cannot be combined with p:<N>"
+                                "Pomodoro link capture cannot be combined with $<N>"
                                     .to_string(),
                             );
                         }

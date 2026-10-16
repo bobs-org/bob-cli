@@ -776,7 +776,7 @@ fn capture_pomodoro_close_diagnostics() {
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_NOW", "2026-09-28 09:37:00")
         .output()
-        .expect("inline p:1 dry run");
+        .expect("inline $1 dry run");
     assert_success(&output);
     assert_eq!(fs::read_to_string(&day_file).expect("read"), before);
     // A bare `=` is a start, not an incomplete close: with CAPTURE

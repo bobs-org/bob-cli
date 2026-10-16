@@ -45,7 +45,7 @@ pub(super) fn reject_task_toggle_conflicts(
     }
     if parsed.priority_level.is_some() {
         return Err(CaptureError::usage(
-            "task toggle capture cannot be combined with p:<N>",
+            "task toggle capture cannot be combined with $<N>",
         ));
     }
     if !parsed.sub_bullets.is_empty() {
@@ -97,7 +97,7 @@ pub(super) fn reject_pomodoro_adjust_conflicts(
     }
     if parsed.priority_level.is_some() {
         return Err(CaptureError::usage(
-            "Pomodoro adjustment `+N`/`-N` cannot be combined with p:<N>; capture the adjustment alone",
+            "Pomodoro adjustment `+N`/`-N` cannot be combined with $<N>; capture the adjustment alone",
         ));
     }
     if !parsed.sub_bullets.is_empty() {
@@ -250,7 +250,7 @@ pub(super) fn reject_pomodoro_shift_conflicts(
     }
     if parsed.priority_level.is_some() {
         return Err(CaptureError::usage(
-            "Pomodoro shift `++N`/`--N` cannot be combined with p:<N>; capture the shift alone",
+            "Pomodoro shift `++N`/`--N` cannot be combined with $<N>; capture the shift alone",
         ));
     }
     if !parsed.sub_bullets.is_empty() {

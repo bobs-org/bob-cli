@@ -254,7 +254,7 @@ Optional config lives at `~/.config/bob/config.yml`, selected by
 `BOB_CONFIG_FILE` or `XDG_CONFIG_HOME`. [Plan](plan.md#config) documents caps;
 [Freshness](freshness.md#2-fields-overrides-and-config) documents review
 intervals. [BLOCKS lines](task-dependencies.md#1410-kill-switch) documents
-`dependencies.blocks_lines`. `p:1`–`p:4` capture and `bob task reroll` also
+`dependencies.blocks_lines`. `$1`–`$4` capture and `bob task reroll` also
 require the [priority configuration](projects.md#priority-property-and-scheduled-rolls).
 
 ## Save and read references

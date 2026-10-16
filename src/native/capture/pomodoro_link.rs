@@ -205,7 +205,7 @@ pub(super) fn reject_pomodoro_link_conflicts(
     }
     if parsed.priority_level.is_some() {
         return Err(CaptureError::usage(
-            "Pomodoro link capture cannot be combined with p:<N>",
+            "Pomodoro link capture cannot be combined with $<N>",
         ));
     }
     if !parsed.sub_bullets.is_empty() {

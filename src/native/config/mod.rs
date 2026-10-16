@@ -1519,7 +1519,8 @@ properties:
             )
         );
         assert!(
-            !error.message().contains("p:<N>"),
+            !error.message().contains("p:<N>")
+                && !error.message().contains("$<N>"),
             "message must not name a single command: {}",
             error.message()
         );

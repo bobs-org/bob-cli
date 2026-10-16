@@ -17,14 +17,67 @@ pub(crate) fn parse_schedule_token(token: &str) -> Option<u64> {
     digits.parse::<u64>().ok()
 }
 
-/// Parse one whitespace-free token as a priority level (`p:<N>`), returning the
-/// 1-based level number. Non-digit or overflowing tokens stay literal.
+/// Parse one whitespace-free token as a priority level (`$` or `$<N>`),
+/// returning the 1-based level number. A bare `$` is level 1. Non-digit or
+/// overflowing tokens stay literal.
 pub(crate) fn parse_priority_token(token: &str) -> Option<u64> {
+    let digits = token.strip_prefix('$')?;
+    if digits.is_empty() {
+        return Some(1);
+    }
+    if !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    digits.parse::<u64>().ok()
+}
+
+/// Parse the retired `p:<digits>` spelling. Malformed tokens such as `p:x`
+/// stay literal, matching the old parser.
+pub(crate) fn parse_retired_priority_token(token: &str) -> Option<u64> {
     let digits = token.strip_prefix("p:")?;
     if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
         return None;
     }
     digits.parse::<u64>().ok()
+}
+
+/// True when the token is `$`/`$<N>` or the retired `p:<digits>` spelling.
+pub(crate) fn is_priority_marker_token(token: &str) -> bool {
+    parse_priority_token(token).is_some()
+        || parse_retired_priority_token(token).is_some()
+}
+
+/// `\$` or `\$<digits>`: the escaped form of a priority marker.
+pub(crate) fn is_escaped_priority_token(token: &str) -> bool {
+    token
+        .strip_prefix('\\')
+        .is_some_and(|rest| parse_priority_token(rest).is_some())
+}
+
+/// Shared execution/editor message for a typed retired `p:<N>` token.
+pub(crate) fn retired_priority_marker_error(token: &str) -> String {
+    let number = parse_retired_priority_token(token).unwrap_or(1);
+    format!(
+        "`{token}` is retired; write `${number}` for priority level {number} (a bare `$` means `$1`)"
+    )
+}
+
+/// Drop the leading `\` of a terminal-region `\$`/`\$<N>` escape.
+pub(crate) fn unescape_priority_text(
+    text: &str,
+    span: Option<(usize, usize)>,
+    escapes: &[(usize, usize)],
+) -> String {
+    if span.is_some_and(|(start, _)| escapes.contains(&(start, start + 1))) {
+        text.strip_prefix('\\').unwrap_or(text).to_string()
+    } else {
+        text.to_string()
+    }
+}
+
+enum ExtractedTerminal {
+    Span(SpanKind),
+    Retired,
 }
 
 pub(super) fn parse_clip_token(token: &str) -> Option<ClipRequest> {
@@ -57,7 +110,7 @@ pub(crate) fn extract_terminal_markers<T: ParseToken>(
 ) -> (TerminalMarkers, Vec<(SpanKind, usize, usize)>) {
     let marker_like = |token: &str| {
         parse_schedule_token(token).is_some()
-            || parse_priority_token(token).is_some()
+            || is_priority_marker_token(token)
             || (parse_clip_markers && parse_clip_token(token).is_some())
     };
     let route_index = if tokens
@@ -92,36 +145,64 @@ pub(crate) fn extract_terminal_markers<T: ParseToken>(
             reached_route = true;
             break;
         }
-        let Some(kind) = extract_terminal_marker(
+        match extract_terminal_marker(
             tokens[index].text(),
+            tokens[index].span(),
             parse_clip_markers,
             &mut markers,
-        ) else {
-            break;
-        };
-        if let Some((start, end)) = tokens[index].span() {
-            spans.push((kind, start, end));
+        ) {
+            Some(ExtractedTerminal::Span(kind)) => {
+                if let Some((start, end)) = tokens[index].span() {
+                    spans.push((kind, start, end));
+                }
+                tokens.remove(index);
+                cursor -= 1;
+            }
+            Some(ExtractedTerminal::Retired) => {
+                tokens.remove(index);
+                cursor -= 1;
+            }
+            None => {
+                record_priority_escape(
+                    tokens[index].text(),
+                    tokens[index].span(),
+                    &mut markers,
+                );
+                break;
+            }
         }
-        tokens.remove(index);
-        cursor -= 1;
     }
 
     if reached_route && route_before_trailing_markers {
         cursor = route_index.expect("reached route");
         while cursor > 0 {
             let index = cursor - 1;
-            let Some(kind) = extract_terminal_marker(
+            match extract_terminal_marker(
                 tokens[index].text(),
+                tokens[index].span(),
                 parse_clip_markers,
                 &mut markers,
-            ) else {
-                break;
-            };
-            if let Some((start, end)) = tokens[index].span() {
-                spans.push((kind, start, end));
+            ) {
+                Some(ExtractedTerminal::Span(kind)) => {
+                    if let Some((start, end)) = tokens[index].span() {
+                        spans.push((kind, start, end));
+                    }
+                    tokens.remove(index);
+                    cursor -= 1;
+                }
+                Some(ExtractedTerminal::Retired) => {
+                    tokens.remove(index);
+                    cursor -= 1;
+                }
+                None => {
+                    record_priority_escape(
+                        tokens[index].text(),
+                        tokens[index].span(),
+                        &mut markers,
+                    );
+                    break;
+                }
             }
-            tokens.remove(index);
-            cursor -= 1;
         }
     }
 
@@ -130,33 +211,56 @@ pub(crate) fn extract_terminal_markers<T: ParseToken>(
 
 /// Consume one terminal marker token, returning the span kind it produced or
 /// `None` when the token is not a marker or repeats an already-seen kind.
-pub(super) fn extract_terminal_marker(
+fn extract_terminal_marker(
     token: &str,
+    span: Option<(usize, usize)>,
     parse_clip_markers: bool,
     markers: &mut TerminalMarkers,
-) -> Option<SpanKind> {
+) -> Option<ExtractedTerminal> {
     if let Some(offset) = parse_schedule_token(token) {
         if markers.scheduled_offset.is_some() {
             return None;
         }
         markers.scheduled_offset = Some(offset);
-        return Some(SpanKind::Schedule);
+        return Some(ExtractedTerminal::Span(SpanKind::Schedule));
     }
     if let Some(number) = parse_priority_token(token) {
         if markers.priority_level.is_some() {
             return None;
         }
         markers.priority_level = Some(number);
-        return Some(SpanKind::Priority);
+        return Some(ExtractedTerminal::Span(SpanKind::Priority));
+    }
+    if parse_retired_priority_token(token).is_some() {
+        if markers.retired_priority.is_some() {
+            return None;
+        }
+        markers.retired_priority = Some(RetiredPriority {
+            token: token.to_string(),
+            span,
+        });
+        return Some(ExtractedTerminal::Retired);
     }
     if parse_clip_markers
         && let Some(clip) = parse_clip_token(token)
         && markers.clip.is_none()
     {
         markers.clip = Some(clip);
-        return Some(SpanKind::Clipboard);
+        return Some(ExtractedTerminal::Span(SpanKind::Clipboard));
     }
     None
+}
+
+fn record_priority_escape(
+    token: &str,
+    span: Option<(usize, usize)>,
+    markers: &mut TerminalMarkers,
+) {
+    if is_escaped_priority_token(token)
+        && let Some((start, _)) = span
+    {
+        markers.priority_escapes.push((start, start + 1));
+    }
 }
 
 pub(super) fn is_route_marker(token: &str) -> bool {
@@ -351,7 +455,7 @@ pub(super) const POMODORO_START_PROJECT_NOTE_ERROR: &str = "Pomodoro start suffi
 
 pub(crate) const POMODORO_START_SCHEDULE_CONFLICT_ERROR: &str = "Pomodoro start suffix `=<X>` cannot be combined with `s:<N>`; a scheduled Blocked task cannot start its session";
 
-pub(crate) const POMODORO_START_PRIORITY_CONFLICT_ERROR: &str = "Pomodoro start suffix `=<X>` cannot be combined with `p:<N>`; a scheduled Blocked task cannot start its session";
+pub(crate) const POMODORO_START_PRIORITY_CONFLICT_ERROR: &str = "Pomodoro start suffix `=<X>` cannot be combined with `$<N>`; a scheduled Blocked task cannot start its session";
 
 pub(crate) const POMODORO_LINK_SHAPE_ERROR: &str = "`^route:block-id` must be the whole capture item; to create a new Pomodoro-linked task use `<text> @route:block-id`";
 
@@ -530,7 +634,7 @@ pub(super) const POMODORO_CLOSE_PROJECT_NOTE_ERROR: &str = "Pomodoro close suffi
 
 pub(crate) const POMODORO_CLOSE_SCHEDULE_CONFLICT_ERROR: &str = "Pomodoro close suffix `=x` cannot be combined with `s:<N>`; a scheduled task starts Blocked and cannot be worked in the closing session";
 
-pub(crate) const POMODORO_CLOSE_PRIORITY_CONFLICT_ERROR: &str = "Pomodoro close suffix `=x` cannot be combined with `p:<N>`; a scheduled task starts Blocked and cannot be worked in the closing session";
+pub(crate) const POMODORO_CLOSE_PRIORITY_CONFLICT_ERROR: &str = "Pomodoro close suffix `=x` cannot be combined with `$<N>`; a scheduled task starts Blocked and cannot be worked in the closing session";
 
 // ---------------------------------------------------------------------------
 // `=x[<N>][*<P>][!<M>][~<K>]` selection diagnostics

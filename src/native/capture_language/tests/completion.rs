@@ -303,10 +303,10 @@ fn invalid_block_id_characters_still_produce_a_field() {
 
 #[test]
 fn terminal_markers_do_not_interfere_with_route_completion() {
-    let completion = field("body p:2 s:1 % @ca", 18).expect("route field");
+    let completion = field("body $2 s:1 % @ca", 17).expect("route field");
     assert_eq!(completion.context, CompletionContext::Route);
     assert_eq!(completion.query, "ca");
-    assert_eq!(completion.replacement, (16, 18));
+    assert_eq!(completion.replacement, (15, 17));
 }
 
 #[test]

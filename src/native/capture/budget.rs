@@ -162,7 +162,7 @@ pub(super) fn append_plan_budget(
 }
 
 /// `today's plan now has 4/3 themes (adds BOB); queue it with ^ or
-/// defer with p:<N>`.
+/// defer with $<N>`.
 fn theme_warning(count: usize, cap: u32, added: &[String]) -> String {
     let adds = if added.is_empty() {
         String::new()
@@ -171,21 +171,21 @@ fn theme_warning(count: usize, cap: u32, added: &[String]) -> String {
     };
     format!(
         "today's plan now has {count}/{cap} themes{adds}; queue it with ^ \
-        or defer with p:<N>"
+        or defer with $<N>"
     )
 }
 
 /// `today's plan now has 11/10 links; queue it with ^ or defer with
-/// p:<N>`.
+/// $<N>`.
 fn link_warning(count: usize, cap: u32) -> String {
     format!(
         "today's plan now has {count}/{cap} links; queue it with ^ or defer \
-        with p:<N>"
+        with $<N>"
     )
 }
 
 /// Strict-mode refusal: names the current (pre-batch) themes and the
-/// added ones, with the same `^` / `p:<N>` hint.
+/// added ones, with the same `^` / `$<N>` hint.
 fn theme_refusal(
     current: &[String],
     count: usize,
@@ -205,7 +205,7 @@ fn theme_refusal(
     format!(
         "refusing capture: today's plan would grow to {count}/{cap} \
         themes{adds}; current themes: {current}; queue it with ^ or defer \
-        with p:<N>"
+        with $<N>"
     )
 }
 
@@ -218,7 +218,7 @@ mod tests {
         assert_eq!(
             theme_warning(4, 3, &["BOB".to_string()]),
             "today's plan now has 4/3 themes (adds BOB); queue it with ^ \
-            or defer with p:<N>"
+            or defer with $<N>"
         );
     }
 

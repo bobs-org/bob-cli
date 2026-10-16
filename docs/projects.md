@@ -494,17 +494,17 @@ shown even when they are equal.
 See [Schedule-log reason prompt](#schedule-log-reason-prompt) for the full
 deterministic-reason rules.
 
-`bob capture <text> p:<N>` writes the same `[priority:: ...]` field and rolls
+`bob capture <text> $<N>` writes the same `[priority:: ...]` field and rolls
 a date from the same configured window from the command line, reading the
 same `~/.config/bob/config.yml` levels as the picker. `N` is the P-level key
-(1-4 today), so `p:2` matches pressing `Ctrl+Shift+P` then `2` on the Task
+(1-4 today), so `$2` matches pressing `Ctrl+Shift+P` then `2` on the Task
 Card. Capture leaves the task's `[ ]` marker as written; `bob task reconcile`
 is what later marks a future-scheduled task Blocked, not capture itself. A
-rolled `p:<N>` also writes the same `🗓️ **SCHEDULE LOG**` entry the picker
+rolled `$<N>` also writes the same `🗓️ **SCHEDULE LOG**` entry the picker
 would, always as a `P0 → <to>` transition since a brand-new capture
 never has a previous priority field. Its JSON output keeps the same
 `schedule_log` shape; only the rendered reason string and rendered line text
-carry the bold exact offset. `p:<N> s:<N>` writes no entry, because the
+carry the bold exact offset. `$<N> s:<N>` writes no entry, because the
 explicit `s:<N>` wins the scheduled date and the roll never happens; see
 [Schedule-log reason prompt](#schedule-log-reason-prompt).
 
@@ -953,7 +953,7 @@ they read as machine-written months later — 🎲 for a date the software rolle
 | Pinned roll suggestion chosen in the `scheduled` stage         | `🎲 <level> roll · in **<chosen>** (<min>–<max>) days` |
 | `Ctrl+Enter` recommended decay on the `scheduled` row          | `🎲 <from> → <to> decay · in **<chosen>** (<min>–<max>) days` |
 | Reason prompt skipped on a task that already has a log         | `🤷 no reason given` |
-| `bob capture <text> p:<N>` rolls the scheduled date            | `🎲 P0 → <to> · in **<chosen>** (<min>–<max>) days` |
+| `bob capture <text> $<N>` rolls the scheduled date            | `🎲 P0 → <to> · in **<chosen>** (<min>–<max>) days` |
 | `bob task reroll` re-rolls a due task                             | `🎲 <level> randomize · in **<chosen>** (<min>–<max>) days` |
 
 `bob capture` has no interactive stage, so it never prompts for a reason and

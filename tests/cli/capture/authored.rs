@@ -603,7 +603,7 @@ fn capture_task_section_authored_children_and_composition() {
         .arg(&vault)
         .arg("-f")
         .arg("json")
-        .arg("@cash+parent#requirements buy milk p:2 %\n- authored child")
+        .arg("@cash+parent#requirements buy milk $2 %\n- authored child")
         .env("BOB_NOW", "2026-07-10 13:40:00")
         .env("BOB_CONFIG_FILE", &config)
         .env("BOB_PRIORITY_ROLL_SEED", "1")

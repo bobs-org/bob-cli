@@ -17,7 +17,8 @@ use super::draft::{classify_authored_line, AuthoredLineClass};
 use super::editor_model::{DependencyEntry, Span, SpanKind};
 use super::editor_parse::tokenize_line_with_spans;
 use super::markers::{
-    parse_clip_token, parse_priority_token, parse_schedule_token,
+    is_escaped_priority_token, is_priority_marker_token, parse_clip_token,
+    parse_schedule_token,
 };
 use super::model::{
     CaptureItem, CaptureKind, ParsedDependency, ParsedDependencyTarget,
@@ -516,9 +517,9 @@ fn is_trailing_transparent(text: &str, parse_clip: bool) -> bool {
     text.starts_with('@')
         || text == "#"
         || text == "s:"
-        || text == "p:"
         || parse_schedule_token(text).is_some()
-        || parse_priority_token(text).is_some()
+        || is_priority_marker_token(text)
+        || is_escaped_priority_token(text)
         || (parse_clip && parse_clip_token(text).is_some())
 }
 
@@ -1183,7 +1184,7 @@ pub(crate) fn invalid_relation_target_error(
     )
 }
 
-/// Shared parse/execute refusal when a bare existing owner carries `p:`,
+/// Shared parse/execute refusal when a bare existing owner carries `$<N>`,
 /// `s:`, `%…`, or child bullets. Those extras need task text.
 pub(crate) fn relationship_needs_text_error(
     offending: &str,
@@ -1221,13 +1222,14 @@ pub(crate) fn relation_modifier_raws(found: &ItemDependencySet) -> Vec<String> {
     entries.into_iter().map(|(_, raw)| raw).collect()
 }
 
-/// First `p:<N>`, `s:<N>`, or clipboard token on the parent line.
+/// First `$<N>`, retired `p:<N>`, `s:<N>`, or clipboard token on the parent
+/// line.
 pub(crate) fn first_relationship_text_token<'a>(
     tokens: &[Token<'a>],
     parse_clip: bool,
 ) -> Option<&'a str> {
     tokens.iter().find_map(|token| {
-        if parse_priority_token(token.text).is_some()
+        if is_priority_marker_token(token.text)
             || parse_schedule_token(token.text).is_some()
         {
             return Some(token.text);
@@ -1259,7 +1261,7 @@ pub(crate) fn refuse_relationship_needs_text(
     has_children: bool,
 ) -> String {
     let offending = first_relationship_text_token(parent_tokens, parse_clip)
-        .unwrap_or(if has_children { "child bullets" } else { "p:2" });
+        .unwrap_or(if has_children { "child bullets" } else { "$2" });
     relationship_needs_text_error(
         offending,
         owner,

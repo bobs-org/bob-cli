@@ -302,7 +302,7 @@ fn explicit_toggle_near_misses_have_focused_diagnostics() {
 
     for raw in [
         "@dev+id! s:1",
-        "@dev+id! p:2",
+        "@dev+id! $2",
         "@dev+id! %",
         "@dev+id!\n- child",
         "body @dev+id!",
@@ -735,7 +735,7 @@ fn lua_composes_clipboard_terminal_markers_around_every_picker_token() {
 
 #[test]
 fn lua_clipboard_composition_body_follows_bob_terminal_extraction() {
-    // Delta from Lua: Hammerspoon left `%`/`s:`/`p:` in the body for
+    // Delta from Lua: Hammerspoon left `%`/`s:`/`$<N>` in the body for
     // `bob capture` to interpret, while this module extracts them into
     // structured spans. A clipboard marker that precedes an incomplete
     // marker still stays in the body, because `is_route_marker` (shared
@@ -801,35 +801,35 @@ fn lua_preserves_crossed_clipboard_and_schedule_markers() {
             "Body",
         ),
         (
-            "Body @Notes# p:2 s:1",
+            "Body @Notes# $2 s:1",
             EditorMode::Bullet,
             Some("notes"),
             None,
             "Body",
         ),
         (
-            "Body p:2 @Notes# s:1",
+            "Body $2 @Notes# s:1",
             EditorMode::Bullet,
             Some("notes"),
             None,
             "Body",
         ),
         (
-            "Body @:focus-123 p:3 s:0",
+            "Body @:focus-123 $3 s:0",
             EditorMode::Incomplete,
             None,
             Some("focus-123"),
             "Body",
         ),
         (
-            "Body @Dev+ p:4 s:10",
+            "Body @Dev+ $4 s:10",
             EditorMode::Incomplete,
             Some("dev"),
             None,
             "Body",
         ),
         (
-            "Body @Dev^ p:4 s:10",
+            "Body @Dev^ $4 s:10",
             EditorMode::Incomplete,
             Some("dev"),
             None,
@@ -845,11 +845,11 @@ fn lua_preserves_crossed_clipboard_and_schedule_markers() {
         assert_eq!(parse.body, *body, "{raw}");
     }
 
-    // Delta from Lua: a leading `p:N` that sits before an incomplete
+    // Delta from Lua: a leading `$N` that sits before an incomplete
     // marker is not part of the terminal region for either parser, so it
     // stays in the body here just as `bob capture` would keep it.
-    let parse = editor("Body p:3 @:focus-123 s:0");
-    assert_eq!(parse.body, "Body p:3");
+    let parse = editor("Body $3 @:focus-123 s:0");
+    assert_eq!(parse.body, "Body $3");
     assert_eq!(parse.block_id.as_deref(), Some("focus-123"));
 }
 
@@ -902,7 +902,7 @@ fn lua_leaves_invalid_or_unsupported_terminal_regions_to_bob_capture() {
         "Idea @Notes# %bad.header",
         "Idea @Notes# %18446744073709551616",
         "Idea @Notes# s:18446744073709551616",
-        "Idea @Notes# p:18446744073709551616",
+        "Idea @Notes# $18446744073709551616",
     ] {
         let parse = editor(raw);
         assert_eq!(parse.mode, EditorMode::Task, "{raw}");
@@ -918,7 +918,7 @@ fn lua_leaves_invalid_or_unsupported_terminal_regions_to_bob_capture() {
         ("Idea @Notes# s:1 s:2", "Idea @Notes# s:1"),
         ("Idea @Notes# % s:1 %build_log", "Idea @Notes# %"),
         ("Idea @Notes# middle %", "Idea @Notes# middle"),
-        ("Idea @Notes# p:1 p:2", "Idea @Notes# p:1"),
+        ("Idea @Notes# $1 $2", "Idea @Notes# $1"),
     ] {
         let parse = editor(raw);
         assert_eq!(parse.mode, EditorMode::Task, "{raw}");
@@ -1243,8 +1243,8 @@ fn execution_parses_three_component_sub_bullet_markers() {
             Some(1),
             None,
         ),
-        ("note p:2 @foo+bar#Q&A", "note", "Q&A", None, Some(2)),
-        ("note @foo+bar#Q&A p:2", "note", "Q&A", None, Some(2)),
+        ("note $2 @foo+bar#Q&A", "note", "Q&A", None, Some(2)),
+        ("note @foo+bar#Q&A $2", "note", "Q&A", None, Some(2)),
         (
             "note %log @foo+bar#non-goals",
             "note",
@@ -2238,10 +2238,10 @@ fn relationship_only_owner_refuses_text_extras() {
     let owner = "@body+excercise";
     let rel = "&foo:bar";
     for (raw, token) in [
-        ("@body+excercise &foo:bar p:2", "p:2"),
+        ("@body+excercise &foo:bar $2", "$2"),
         ("@body+excercise &foo:bar s:3", "s:3"),
         ("@body+excercise &foo:bar %", "%"),
-        ("@body+excercise &foo:bar p:2 s:3", "p:2"),
+        ("@body+excercise &foo:bar $2 s:3", "$2"),
     ] {
         let expected =
             relationship_needs_text_error(token, owner, &[rel.to_string()]);
@@ -2371,7 +2371,7 @@ fn bang_claim_covers_the_contract_table() {
     // inbox task.
     for (raw, needle) in [
         ("!sase:fix-flaky more", "remove `more`"),
-        ("!sase:fix-flaky p:1", "remove `p:1`"),
+        ("!sase:fix-flaky $1", "remove `$1`"),
         ("!sase:a !sase:b", "blank line"),
         ("!sase:fix-flaky=x", "`=x!N`"),
         ("!sase:fix-flaky#bugs", "`=x!N`"),
