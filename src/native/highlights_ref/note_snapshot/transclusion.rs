@@ -11,8 +11,8 @@ use std::{
 
 use super::{
     bob::{
-        apply_bob_task_rows, take_project_outcome, BobTaskContext,
-        ProjectOutcome,
+        apply_bob_task_rows, apply_scheduled_lanes, is_snapshot_lane_title,
+        take_project_outcome, BobTaskContext, ProjectOutcome,
     },
     classify::{
         source_identity, ClassifiedNote, NoteKind, SourceLoader, SourceStore,
@@ -42,9 +42,7 @@ use crate::native::{
 };
 use crate::native::{
     projects::ProjectStatus,
-    task_status_groups::{
-        is_badge_row, TITLE_ACTIVE, TITLE_BLOCKED, TITLE_CLOSED,
-    },
+    task_status_groups::{is_badge_row, TITLE_CLOSED},
 };
 use serde_yaml::Value as YamlValue;
 
@@ -258,6 +256,11 @@ pub(crate) fn project_snapshot_from_syntax<L: SourceLoader>(
             }
             bob_outcome = project_outcome;
         }
+        apply_scheduled_lanes(
+            &mut preamble,
+            &mut sections,
+            options.snapshot_date,
+        );
         closed = outcome.closed;
         bob_omitted_closed = outcome.omitted_closed_tasks;
         bob_omitted_self = outcome.omitted_self_snapshot_tasks;
@@ -1275,13 +1278,27 @@ fn compose_bob_masthead<L: SourceLoader>(
         SnapshotTaskStatus::Done,
         SnapshotTaskStatus::Canceled,
     ];
-    masthead.stats = STATUSES
-        .into_iter()
-        .map(|status| StatusCount {
-            status,
-            count: summary.task_counts.get(&status).copied().unwrap_or(0),
-        })
-        .collect();
+    let mut stats = Vec::with_capacity(7);
+    for status in STATUSES {
+        let count = summary.task_counts.get(&status).copied().unwrap_or(0);
+        if status == SnapshotTaskStatus::Blocked {
+            stats.push(StatusCount { status, count });
+            let scheduled = summary
+                .task_counts
+                .get(&SnapshotTaskStatus::Scheduled)
+                .copied()
+                .unwrap_or(0);
+            if scheduled > 0 {
+                stats.push(StatusCount {
+                    status: SnapshotTaskStatus::Scheduled,
+                    count: scheduled,
+                });
+            }
+        } else {
+            stats.push(StatusCount { status, count });
+        }
+    }
+    masthead.stats = stats;
     masthead.omitted = Some(vec![Inline::Text(format!(
         "Omitted: {} closed · {} self-snapshot",
         summary.omitted_closed_tasks, summary.omitted_self_snapshot_tasks
@@ -1408,7 +1425,7 @@ fn finalize_bob_sections(
             }
             continue;
         }
-        if title == TITLE_ACTIVE || title == TITLE_BLOCKED {
+        if is_snapshot_lane_title(&title) {
             section.heading.class = HeadingClass::Lane;
         }
         if title == "Tasks" && !has_task(&section.blocks) {
@@ -1492,7 +1509,7 @@ fn prune_bob_blocks(blocks: &mut Vec<Block>) -> u64 {
     for block in blocks.iter_mut() {
         if let Block::Heading(heading) = block {
             let title = plain_inline_text(&heading.content);
-            if title == TITLE_ACTIVE || title == TITLE_BLOCKED {
+            if is_snapshot_lane_title(&title) {
                 heading.class = HeadingClass::Lane;
             }
         }
@@ -2721,17 +2738,27 @@ Unrelated prose after the closed lane stays visible.\n\
         let projection = project_bob(&directory, "Area.md", false, true);
         let output = markdown(&projection);
 
+        assert!(!projection
+            .view
+            .summary
+            .task_counts
+            .contains_key(&SnapshotTaskStatus::Blocked));
         assert_eq!(
             projection
                 .view
                 .summary
                 .task_counts
-                .get(&SnapshotTaskStatus::Blocked),
+                .get(&SnapshotTaskStatus::Scheduled),
             Some(&23)
         );
         assert_eq!(projection.view.summary.schedule_logs, 92);
-        assert_eq!(projection.view.summary.work_logs, 46);
+        assert_eq!(projection.view.summary.work_logs, 0);
         assert_eq!(output.matches("moved 4×").count(), 23);
+        assert!(output.contains("Scheduled"), "{output}");
+        assert!(output.contains("This week"), "{output}");
+        assert!(output.contains("{.compact}"), "{output}");
+        assert!(!output.contains("## Blocked"), "{output}");
+        assert!(!output.contains("WORKED"), "{output}");
         assert!(output.contains("Legacy Notes"), "{output}");
         assert!(output.contains("custom\\: retained"), "{output}");
         assert!(output.contains("\\$4\\,200\\.75"), "{output}");
@@ -2770,21 +2797,118 @@ Unrelated prose after the closed lane stays visible.\n\
             SnapshotTaskStatus::Open,
             SnapshotTaskStatus::Next,
             SnapshotTaskStatus::Wip,
-            SnapshotTaskStatus::Blocked,
         ] {
             assert_eq!(
                 projection.view.summary.task_counts.get(&status),
                 Some(&50)
             );
         }
+        assert!(!projection
+            .view
+            .summary
+            .task_counts
+            .contains_key(&SnapshotTaskStatus::Blocked));
+        assert_eq!(
+            projection
+                .view
+                .summary
+                .task_counts
+                .get(&SnapshotTaskStatus::Scheduled),
+            Some(&50)
+        );
         assert_eq!(projection.view.summary.omitted_closed_tasks, 100);
         assert_eq!(projection.view.summary.schedule_logs, 8);
-        assert_eq!(projection.view.summary.work_logs, 8);
+        assert_eq!(projection.view.summary.work_logs, 6);
         let first = output.find("Generated task 000").expect("first task");
         let last = output.find("Generated task 273").expect("last shown task");
         assert!(first < last);
         assert!(!output.contains("Generated task 299"));
+        assert!(output.contains("Scheduled"), "{output}");
         assert_transclusion_golden(&output, "bob-generated-300");
+    }
+
+    #[test]
+    fn prj_is_blocked_and_open_deps_stay_waiting_on() {
+        let directory = vault(&[(
+            "Project.md",
+            "---\ntype: [[project]]\n---\n# Project\n\n## Tasks\n### Blocked\n\
+- [?] Resident tickler [scheduled:: 2026-10-20] #task #prj_is_blocked ^resident\n\
+- [?] Date only [scheduled:: 2026-10-17] #task ^tickler\n\
+- [?] Waiting on a gate [scheduled:: 2026-10-20] #task ^waiter\n\
+\t- ⛓️ **DEPENDS ON:** [[Project#^tickler]]\n\
+- [?] Due today [scheduled:: 2026-10-16] #task ^today\n\
+- [?] No date #task ^mystery\n",
+        )]);
+        let projection = project_bob(&directory, "Project.md", false, true);
+        let output = markdown(&projection);
+        assert_eq!(
+            projection
+                .view
+                .summary
+                .task_counts
+                .get(&SnapshotTaskStatus::Blocked),
+            Some(&4)
+        );
+        assert_eq!(
+            projection
+                .view
+                .summary
+                .task_counts
+                .get(&SnapshotTaskStatus::Scheduled),
+            Some(&1)
+        );
+        assert!(output.contains("Waiting on"), "{output}");
+        assert!(output.contains("Resident tickler"), "{output}");
+        assert!(output.contains("Waiting on a gate"), "{output}");
+        assert!(output.contains("No date"), "{output}");
+        assert!(output.contains("Due today"), "{output}");
+        let scheduled_at = output.find("Scheduled").expect("scheduled lane");
+        let compact = &output[scheduled_at..];
+        assert!(compact.contains("Date only"), "{compact}");
+        assert!(!compact.contains("Resident tickler"), "{compact}");
+        assert!(!compact.contains("Waiting on a gate"), "{compact}");
+        assert!(!compact.contains("No date"), "{compact}");
+        assert!(!compact.contains("Due today"), "{compact}");
+        assert!(!output.contains("## Blocked"), "{output}");
+    }
+
+    #[test]
+    fn scheduled_rows_group_this_week_this_month_and_later() {
+        let directory = vault(&[(
+            "Area.md",
+            "---\ntype: [[area]]\n---\n# Area\n\n## Tasks\n### Blocked\n\
+- [?] Later year [scheduled:: 2027-01-05] [priority:: high] #task ^later-year\n\
+- [?] This week [scheduled:: 2026-10-17] #task ^week\n\
+- [?] This month [scheduled:: 2026-10-25] #task ^month\n\
+- [?] Later month [scheduled:: 2026-11-02] #task ^later-month\n\
+- [?] Week end [scheduled:: 2026-10-18] #task ^week-end\n",
+        )]);
+        let projection = project_bob(&directory, "Area.md", false, true);
+        let output = markdown(&projection);
+        assert_eq!(
+            projection
+                .view
+                .summary
+                .task_counts
+                .get(&SnapshotTaskStatus::Scheduled),
+            Some(&5)
+        );
+        let week = output.find("This week").expect("this week");
+        let month = output.find("This month").expect("this month");
+        let later = output.find("Later").expect("later");
+        assert!(week < month && month < later, "{output}");
+        let week_slice = &output[week..month];
+        assert!(week_slice.contains("This week"), "{week_slice}");
+        assert!(week_slice.contains("Week end"), "{week_slice}");
+        assert!(!week_slice.contains("This month"), "{week_slice}");
+        let month_slice = &output[month..later];
+        assert!(month_slice.contains("This month"), "{month_slice}");
+        assert!(!month_slice.contains("Later year"), "{month_slice}");
+        let later_slice = &output[later..];
+        assert!(later_slice.contains("Later year"), "{later_slice}");
+        assert!(later_slice.contains("Later month"), "{later_slice}");
+        assert!(later_slice.contains("chip-accent"), "{later_slice}");
+        assert!(output.contains("{.compact}"), "{output}");
     }
 
     #[test]

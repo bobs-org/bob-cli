@@ -38,7 +38,7 @@ This intro keeps **rich prose** and a link to [Portfolio](<obsidian://open?vault
 
 - []{.st .st-next} []{#t-next} Continue **important** work
 
-## Blocked {#blocked .lane}
+## Waiting on {#waiting-on .lane}
 
 - []{.st .st-blocked} []{#t-blocked} Waiting on a decision
 

@@ -69,9 +69,13 @@ exact identity title.
 
 By default, closed tasks are summarized as omitted and managed schedule/work
 logs are condensed. `-C/--closed` restores closed tasks in an appendix and full
-logs. `-M/--plain` uses the existing plain Markdown renderer, while keeping the
-vault-note parent, naming, title, and `source_note` provenance. `-C` and `-M`
-only accept one vault-note target and conflict with each other.
+logs. Blocked `[?]` tasks with open dependencies, a `#prj_is_blocked` project,
+or no future date stay in a Waiting on lane; tasks blocked only by a
+`scheduled` date after the snapshot day become compact Scheduled rows grouped
+This week, This month, and Later. `-M/--plain` uses the existing plain
+Markdown renderer, while keeping the vault-note parent, naming, title, and
+`source_note` provenance. `-C` and `-M` only accept one vault-note target
+and conflict with each other.
 
 Embedded PNG and JPEG images are copied into the private render scratch as-is
 when their long edge is at most 1600 pixels; larger images are downscaled with

@@ -27,12 +27,15 @@ local STATUS_MAP = {
   ["st-done"] = "Done",
   ["st-canceled"] = "Canceled",
 }
-local STATUSES = { open = true, next = true, wip = true, blocked = true }
+local STATUSES = {
+  open = true, next = true, wip = true, blocked = true, scheduled = true
+}
 local STAT_GLYPH = {
   open = "\\BobStOpen{}",
   next = "\\BobStNext{}",
   wip = "\\BobStWip{}",
   blocked = "\\BobStBlocked{}",
+  scheduled = "\\BobStBlocked{}",
 }
 local FE0F = "\239\184\143"
 local GLYPHS = { fallback = {}, serif_uncovered = {}, sans_uncovered = {}, mono_uncovered = {} }

@@ -36,6 +36,10 @@
 //! final section blocks while each occurrence still carries its own
 //! [`TaskSource`], then the logs/visibility pass condenses managed logs,
 //! omits or restores closed tasks, and filters self-snapshot `#ref` rows.
+//! [`apply_scheduled_lanes`] then splits remaining Blocked `[?]` tasks
+//! into a Waiting on lane (open dependencies, `#prj_is_blocked`, or no
+//! future date) and a compact Scheduled lane grouped This week / This
+//! month / Later.
 //!
 //! [`inline_fields`]: crate::native::task_fields::inline_fields
 //! [`parse_dependency_line`]:
@@ -43,14 +47,16 @@
 //! [`parse_blocks_line`]:
 //!   crate::native::task_dependencies::blocks::parse_blocks_line
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::ops::Range;
 
-use chrono::NaiveDate;
+use chrono::{Datelike, Duration, NaiveDate};
 
 use super::view::{
-    Block, Chip, ChipKind, Inline, ListItem, SnapshotSection, SnapshotTask,
-    SnapshotTaskStatus, SourceIdentity, TaskSource,
+    AnchorIdentity, AnchorKind, Block, Chip, ChipKind, HeadingClass,
+    HeadingLevel, Inline, ListItem, SnapshotAnchor, SnapshotHeading,
+    SnapshotSection, SnapshotTask, SnapshotTaskStatus, SourceIdentity,
+    TaskSource,
 };
 use crate::native::projects::{
     display_for_wikilink, list_item_content, wikilink_spans_in_line,
@@ -63,6 +69,16 @@ use crate::native::task_dependencies::parse::{
     parse_dependency_line, DependencyLine,
 };
 use crate::native::task_fields::{inline_fields, parse_strict_calendar_date};
+use crate::native::task_status_groups::{TITLE_ACTIVE, TITLE_BLOCKED};
+
+/// Lane title for dependency-blocked `[?]` rows after the Scheduled split.
+pub(crate) const TITLE_WAITING_ON: &str = "Waiting on";
+/// Lane title for date-only `[?]` ticklers.
+pub(crate) const TITLE_SCHEDULED: &str = "Scheduled";
+
+const GROUP_THIS_WEEK: &str = "This week";
+const GROUP_THIS_MONTH: &str = "This month";
+const GROUP_LATER: &str = "Later";
 
 /// Reader context for the Bob task-row transform.
 ///
@@ -456,14 +472,18 @@ fn format_scheduled(date: NaiveDate, snapshot_date: NaiveDate) -> String {
 /// The boundary rules mirror the Obsidian projector: the `#` must not
 /// follow an alphanumeric, `_`, or `/`, and `#references` never counts.
 pub(super) fn has_ref_tag(raw: &str, code: &[Range<usize>]) -> bool {
-    let bytes = raw.as_bytes();
+    has_exact_tag(raw, "#ref", code)
+}
+
+/// True when `raw` carries an exact lowercase tag outside code.
+fn has_exact_tag(raw: &str, tag: &str, code: &[Range<usize>]) -> bool {
     let mut index = 0;
-    while index < bytes.len() {
-        let Some(offset) = raw[index..].find("#ref") else {
+    while index < raw.len() {
+        let Some(offset) = raw[index..].find(tag) else {
             return false;
         };
         let start = index + offset;
-        let end = start + "#ref".len();
+        let end = start + tag.len();
         let prev_ok = start == 0
             || !raw[..start].chars().next_back().is_some_and(|prev| {
                 prev.is_alphanumeric() || prev == '_' || prev == '/'
@@ -645,6 +665,568 @@ pub(super) fn remove_consumed_muted(
         }
         true
     });
+}
+
+/// Split remaining Blocked `[?]` tasks into Waiting on and compact Scheduled.
+///
+/// A task is Scheduled only when it is blocked solely by a `scheduled`
+/// date after the snapshot day: open Depends-On targets, a
+/// `#prj_is_blocked` project-resident tag, nested real tasks, or no
+/// future date keep the full Waiting on row. Date semantics match
+/// [`crate::native::project_dependencies::blocking::effective_block_reasons`]
+/// (`date > today`); `#prj_is_blocked` is the project-blocking proxy
+/// other engines already use, because this pass never runs reconcile.
+pub(crate) fn apply_scheduled_lanes(
+    preamble: &mut Vec<Block>,
+    sections: &mut [SnapshotSection],
+    snapshot_date: NaiveDate,
+) {
+    let mut used_ids = BTreeSet::new();
+    collect_heading_ids(preamble, &mut used_ids);
+    for section in sections.iter() {
+        used_ids.insert(section.heading.anchor.id.clone());
+        collect_heading_ids(&section.blocks, &mut used_ids);
+    }
+
+    let mut extracted = Vec::new();
+    extract_scheduled_tasks(preamble, snapshot_date, &mut extracted);
+    for section in sections.iter_mut() {
+        extract_scheduled_tasks(
+            &mut section.blocks,
+            snapshot_date,
+            &mut extracted,
+        );
+    }
+    rename_blocked_headings(preamble, &mut used_ids);
+    for section in sections.iter_mut() {
+        rename_blocked_headings(&mut section.blocks, &mut used_ids);
+    }
+    if extracted.is_empty() {
+        return;
+    }
+    extracted.sort_by(|left, right| {
+        left.date
+            .cmp(&right.date)
+            .then(left.order.cmp(&right.order))
+    });
+    let insert = insertion_point(preamble, sections);
+    let blocks = build_scheduled_lane(
+        extracted,
+        snapshot_date,
+        &insert.source,
+        insert.level,
+        &mut used_ids,
+    );
+    match insert.location {
+        InsertLocation::Preamble => {
+            preamble.splice(insert.index..insert.index, blocks);
+        }
+        InsertLocation::Section(section_index) => {
+            if let Some(section) = sections.get_mut(section_index) {
+                section.blocks.splice(insert.index..insert.index, blocks);
+            }
+        }
+    }
+}
+
+/// True when `title` is a Bob snapshot lane heading, including the
+/// Waiting on / Scheduled split of the source Blocked lane.
+pub(crate) fn is_snapshot_lane_title(title: &str) -> bool {
+    matches!(
+        title,
+        TITLE_ACTIVE | TITLE_BLOCKED | TITLE_WAITING_ON | TITLE_SCHEDULED
+    )
+}
+
+struct ExtractedScheduled {
+    date: NaiveDate,
+    order: usize,
+    task: SnapshotTask,
+}
+
+#[derive(Clone, Copy)]
+enum InsertLocation {
+    Preamble,
+    Section(usize),
+}
+
+struct InsertionPoint {
+    location: InsertLocation,
+    index: usize,
+    level: HeadingLevel,
+    source: SourceIdentity,
+}
+
+fn extract_scheduled_tasks(
+    blocks: &mut Vec<Block>,
+    snapshot_date: NaiveDate,
+    extracted: &mut Vec<ExtractedScheduled>,
+) {
+    let mut index = 0;
+    while index < blocks.len() {
+        if matches!(
+            &blocks[index],
+            Block::Task(task) if is_scheduled_only(task, snapshot_date)
+        ) {
+            let Block::Task(mut task) = blocks.remove(index) else {
+                unreachable!("the matching block was a scheduled task");
+            };
+            let date = future_scheduled_date(&task, snapshot_date)
+                .expect("scheduled-only tasks have a future date");
+            compact_scheduled_task(&mut task);
+            extracted.push(ExtractedScheduled {
+                date,
+                order: extracted.len(),
+                task,
+            });
+            continue;
+        }
+        index += 1;
+    }
+}
+
+fn is_scheduled_only(task: &SnapshotTask, snapshot_date: NaiveDate) -> bool {
+    if task.status != SnapshotTaskStatus::Blocked {
+        return false;
+    }
+    if has_nested_task(&task.children) {
+        return false;
+    }
+    if has_open_dependencies(task) {
+        return false;
+    }
+    if has_prj_is_blocked(task) {
+        return false;
+    }
+    future_scheduled_date(task, snapshot_date).is_some()
+}
+
+fn has_nested_task(blocks: &[Block]) -> bool {
+    blocks.iter().any(|block| match block {
+        Block::Task(_) => true,
+        Block::List { items, .. } => {
+            items.iter().any(|item| has_nested_task(&item.children))
+        }
+        Block::Embed { blocks, .. }
+        | Block::LiveQuery { blocks }
+        | Block::Compact { blocks }
+        | Block::Callout { blocks, .. } => has_nested_task(blocks),
+        _ => false,
+    })
+}
+
+fn has_open_dependencies(task: &SnapshotTask) -> bool {
+    if task.children.iter().any(|child| match child {
+        Block::LabeledRow { label, .. } => {
+            flatten_label(label).eq_ignore_ascii_case("waits on")
+        }
+        _ => false,
+    }) {
+        return true;
+    }
+    let Some(source) = task.source.as_ref() else {
+        return false;
+    };
+    let raw = source.semantic_line();
+    let code = inline_code_spans(raw);
+    inline_fields(raw, "dependsOn").into_iter().any(|field| {
+        !field.value.trim().is_empty()
+            && !code
+                .iter()
+                .any(|span| field.start < span.end && field.end > span.start)
+    })
+}
+
+fn has_prj_is_blocked(task: &SnapshotTask) -> bool {
+    let Some(source) = task.source.as_ref() else {
+        return false;
+    };
+    let raw = source.semantic_line();
+    has_exact_tag(raw, "#prj_is_blocked", &inline_code_spans(raw))
+}
+
+fn future_scheduled_date(
+    task: &SnapshotTask,
+    snapshot_date: NaiveDate,
+) -> Option<NaiveDate> {
+    let raw = task.source.as_ref()?.semantic_line();
+    let code = inline_code_spans(raw);
+    let date = inline_fields(raw, "scheduled")
+        .into_iter()
+        .filter(|field| {
+            !code
+                .iter()
+                .any(|span| field.start < span.end && field.end > span.start)
+        })
+        .find_map(|field| parse_strict_calendar_date(&field.value))?;
+    (date > snapshot_date).then_some(date)
+}
+
+fn compact_scheduled_task(task: &mut SnapshotTask) {
+    task.status = SnapshotTaskStatus::Scheduled;
+    task.children.clear();
+    task.chips.retain(is_scheduled_compact_chip);
+}
+
+fn is_scheduled_compact_chip(chip: &Chip) -> bool {
+    if chip.kind == ChipKind::Accent {
+        return true;
+    }
+    chip.content.iter().any(|inline| match inline {
+        Inline::Text(text) => {
+            text.starts_with("sched ") || text.starts_with("moved ")
+        }
+        _ => false,
+    })
+}
+
+fn rename_blocked_headings(
+    blocks: &mut [Block],
+    used_ids: &mut BTreeSet<String>,
+) {
+    for block in blocks {
+        match block {
+            Block::Heading(heading)
+                if flatten_label(&heading.content) == TITLE_BLOCKED =>
+            {
+                heading.content =
+                    vec![Inline::Text(TITLE_WAITING_ON.to_string())];
+                heading.class = HeadingClass::Lane;
+                heading.anchor.identity.fragment = TITLE_WAITING_ON.to_string();
+                used_ids.remove(&heading.anchor.id);
+                heading.anchor.id = claim_heading_id(used_ids, "waiting-on");
+            }
+            Block::List { items, .. } => {
+                for item in items {
+                    rename_blocked_headings(&mut item.children, used_ids);
+                }
+            }
+            Block::Embed { blocks, .. }
+            | Block::LiveQuery { blocks }
+            | Block::Compact { blocks }
+            | Block::Callout { blocks, .. } => {
+                rename_blocked_headings(blocks, used_ids);
+            }
+            Block::Task(task) => {
+                rename_blocked_headings(&mut task.children, used_ids);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn insertion_point(
+    preamble: &[Block],
+    sections: &[SnapshotSection],
+) -> InsertionPoint {
+    let mut waiting = None;
+    let mut active = None;
+    consider_blocks(
+        preamble,
+        InsertLocation::Preamble,
+        preamble.first().and_then(block_source),
+        &mut waiting,
+        &mut active,
+    );
+    for (index, section) in sections.iter().enumerate() {
+        consider_blocks(
+            &section.blocks,
+            InsertLocation::Section(index),
+            Some(&section.source),
+            &mut waiting,
+            &mut active,
+        );
+    }
+    if let Some(point) = waiting.or(active) {
+        return point;
+    }
+    if let Some((index, section)) = sections
+        .iter()
+        .enumerate()
+        .find(|(_, section)| flatten_label(&section.heading.content) == "Tasks")
+    {
+        return InsertionPoint {
+            location: InsertLocation::Section(index),
+            index: section.blocks.len(),
+            level: HeadingLevel::H2,
+            source: section.source.clone(),
+        };
+    }
+    if let Some(section) = sections.last() {
+        return InsertionPoint {
+            location: InsertLocation::Section(sections.len() - 1),
+            index: section.blocks.len(),
+            level: HeadingLevel::H2,
+            source: section.source.clone(),
+        };
+    }
+    InsertionPoint {
+        location: InsertLocation::Preamble,
+        index: preamble.len(),
+        level: HeadingLevel::H2,
+        source: fallback_source(preamble, sections),
+    }
+}
+
+fn consider_blocks(
+    blocks: &[Block],
+    location: InsertLocation,
+    source: Option<&SourceIdentity>,
+    waiting: &mut Option<InsertionPoint>,
+    active: &mut Option<InsertionPoint>,
+) {
+    for (index, block) in blocks.iter().enumerate() {
+        let Block::Heading(heading) = block else {
+            continue;
+        };
+        let title = flatten_label(&heading.content);
+        let Some(source) = source.or_else(|| heading_source(heading)) else {
+            continue;
+        };
+        let point = InsertionPoint {
+            location,
+            index: group_end(blocks, index, heading.level),
+            level: heading.level,
+            source: source.clone(),
+        };
+        if title == TITLE_WAITING_ON || title == TITLE_BLOCKED {
+            *waiting = Some(point);
+        } else if title == TITLE_ACTIVE {
+            *active = Some(point);
+        }
+    }
+}
+
+fn group_end(blocks: &[Block], start: usize, level: HeadingLevel) -> usize {
+    let rank = heading_rank(level);
+    (start + 1..blocks.len())
+        .find(|&index| {
+            matches!(
+                &blocks[index],
+                Block::Heading(next) if heading_rank(next.level) <= rank
+            )
+        })
+        .unwrap_or(blocks.len())
+}
+
+fn heading_rank(level: HeadingLevel) -> usize {
+    match level {
+        HeadingLevel::H1 => 1,
+        HeadingLevel::H2 => 2,
+        HeadingLevel::H3 => 3,
+    }
+}
+
+fn heading_source(heading: &SnapshotHeading) -> Option<&SourceIdentity> {
+    Some(&heading.anchor.identity.source)
+}
+
+fn block_source(block: &Block) -> Option<&SourceIdentity> {
+    match block {
+        Block::Heading(heading) => heading_source(heading),
+        Block::Task(task) => task.source.as_ref().map(|source| &source.source),
+        _ => None,
+    }
+}
+
+fn fallback_source(
+    preamble: &[Block],
+    sections: &[SnapshotSection],
+) -> SourceIdentity {
+    if let Some(section) = sections.first() {
+        return section.source.clone();
+    }
+    for block in preamble {
+        if let Some(source) = block_source(block) {
+            return source.clone();
+        }
+    }
+    SourceIdentity {
+        canonical_path: std::path::PathBuf::new(),
+        vault_relative_path: String::new(),
+        route: String::new(),
+    }
+}
+
+fn build_scheduled_lane(
+    extracted: Vec<ExtractedScheduled>,
+    snapshot_date: NaiveDate,
+    source: &SourceIdentity,
+    level: HeadingLevel,
+    used_ids: &mut BTreeSet<String>,
+) -> Vec<Block> {
+    let week_end = this_week_end(snapshot_date);
+    let mut week = Vec::new();
+    let mut month = Vec::new();
+    let mut later = Vec::new();
+    for item in extracted {
+        let task = Block::Task(item.task);
+        if item.date <= week_end {
+            week.push(task);
+        } else if item.date.year() == snapshot_date.year()
+            && item.date.month() == snapshot_date.month()
+        {
+            month.push(task);
+        } else {
+            later.push(task);
+        }
+    }
+    let mut blocks = vec![Block::Heading(lane_heading(
+        source,
+        level,
+        TITLE_SCHEDULED,
+        "scheduled",
+        used_ids,
+    ))];
+    let group_level = level.deeper();
+    let use_headings = group_level != level;
+    push_schedule_group(
+        &mut blocks,
+        source,
+        group_level,
+        use_headings,
+        GROUP_THIS_WEEK,
+        "scheduled-this-week",
+        week,
+        used_ids,
+    );
+    push_schedule_group(
+        &mut blocks,
+        source,
+        group_level,
+        use_headings,
+        GROUP_THIS_MONTH,
+        "scheduled-this-month",
+        month,
+        used_ids,
+    );
+    push_schedule_group(
+        &mut blocks,
+        source,
+        group_level,
+        use_headings,
+        GROUP_LATER,
+        "scheduled-later",
+        later,
+        used_ids,
+    );
+    blocks
+}
+
+fn this_week_end(snapshot_date: NaiveDate) -> NaiveDate {
+    let from_monday = snapshot_date.weekday().num_days_from_monday() as i64;
+    snapshot_date + Duration::days(6 - from_monday)
+}
+
+fn push_schedule_group(
+    blocks: &mut Vec<Block>,
+    source: &SourceIdentity,
+    level: HeadingLevel,
+    use_headings: bool,
+    title: &str,
+    base_id: &str,
+    tasks: Vec<Block>,
+    used_ids: &mut BTreeSet<String>,
+) {
+    if tasks.is_empty() {
+        return;
+    }
+    if use_headings {
+        blocks.push(Block::Heading(group_heading(
+            source, level, title, base_id, used_ids,
+        )));
+    } else {
+        blocks.push(Block::Paragraph(vec![Inline::Muted(vec![Inline::Text(
+            title.to_string(),
+        )])]));
+    }
+    blocks.push(Block::Compact { blocks: tasks });
+}
+
+fn lane_heading(
+    source: &SourceIdentity,
+    level: HeadingLevel,
+    text: &str,
+    base_id: &str,
+    used_ids: &mut BTreeSet<String>,
+) -> SnapshotHeading {
+    SnapshotHeading {
+        level,
+        content: vec![Inline::Text(text.to_string())],
+        class: HeadingClass::Lane,
+        anchor: SnapshotAnchor {
+            identity: AnchorIdentity {
+                source: source.clone(),
+                kind: AnchorKind::Heading,
+                fragment: text.to_string(),
+            },
+            id: claim_heading_id(used_ids, base_id),
+        },
+    }
+}
+
+fn group_heading(
+    source: &SourceIdentity,
+    level: HeadingLevel,
+    text: &str,
+    base_id: &str,
+    used_ids: &mut BTreeSet<String>,
+) -> SnapshotHeading {
+    SnapshotHeading {
+        level,
+        content: vec![Inline::Text(text.to_string())],
+        class: HeadingClass::Normal,
+        anchor: SnapshotAnchor {
+            identity: AnchorIdentity {
+                source: source.clone(),
+                kind: AnchorKind::Heading,
+                fragment: text.to_string(),
+            },
+            id: claim_heading_id(used_ids, base_id),
+        },
+    }
+}
+
+fn collect_heading_ids(blocks: &[Block], used_ids: &mut BTreeSet<String>) {
+    for block in blocks {
+        match block {
+            Block::Heading(heading) => {
+                used_ids.insert(heading.anchor.id.clone());
+            }
+            Block::Task(task) => {
+                if let Some(anchor) = &task.anchor {
+                    used_ids.insert(anchor.id.clone());
+                }
+                collect_heading_ids(&task.children, used_ids);
+            }
+            Block::List { items, .. } => {
+                for item in items {
+                    collect_heading_ids(&item.children, used_ids);
+                }
+            }
+            Block::Embed { blocks, .. }
+            | Block::LiveQuery { blocks }
+            | Block::Compact { blocks }
+            | Block::Callout { blocks, .. } => {
+                collect_heading_ids(blocks, used_ids);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn claim_heading_id(used_ids: &mut BTreeSet<String>, base: &str) -> String {
+    if used_ids.insert(base.to_string()) {
+        return base.to_string();
+    }
+    let mut suffix = 2_u32;
+    loop {
+        let candidate = format!("{base}-{suffix}");
+        if used_ids.insert(candidate.clone()) {
+            return candidate;
+        }
+        suffix += 1;
+    }
 }
 
 #[cfg(test)]

@@ -371,7 +371,10 @@ fn render_task(view: &SnapshotView, task: &SnapshotTask) -> String {
 }
 
 fn task_status_class(status: SnapshotTaskStatus) -> &'static str {
-    status.as_str()
+    match status {
+        SnapshotTaskStatus::Scheduled => SnapshotTaskStatus::Blocked.as_str(),
+        other => other.as_str(),
+    }
 }
 
 fn render_list(

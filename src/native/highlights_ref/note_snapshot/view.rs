@@ -118,6 +118,14 @@ impl HeadingLevel {
             Self::H3 => "###",
         }
     }
+
+    /// One step below this heading, capped at [`Self::H3`].
+    pub(crate) const fn deeper(self) -> Self {
+        match self {
+            Self::H1 => Self::H2,
+            Self::H2 | Self::H3 => Self::H3,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -141,6 +149,10 @@ pub(crate) enum SnapshotTaskStatus {
     Next,
     Wip,
     Blocked,
+    /// Date-only `[?]` tickler, shown in the compact Scheduled lane.
+    /// The drawn glyph stays the blocked mark; the masthead counts this
+    /// separately from dependency-blocked Waiting on rows.
+    Scheduled,
     Done,
     Canceled,
 }
@@ -152,6 +164,7 @@ impl SnapshotTaskStatus {
             Self::Next => "next",
             Self::Wip => "wip",
             Self::Blocked => "blocked",
+            Self::Scheduled => "scheduled",
             Self::Done => "done",
             Self::Canceled => "canceled",
         }
