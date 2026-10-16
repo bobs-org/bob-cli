@@ -538,7 +538,7 @@ mac_capture_step() {
   fi
   if [[ "$status" == ok || "$status" == warn ]] && [[ -z "${CODESIGN_IDENTITY:-}" ]] && mac_capture_is_adhoc "$HOME/Applications/Bob Mac Capture.app"; then
     step_warning=$((step_warning + 1))
-    detail="$detail · installed ad-hoc · Accessibility grant resets each install · see bob-mac-capture README › Signing"
+    detail="$detail · installed ad-hoc · Accessibility grant resets each install · rerun from a GUI Terminal to create the signing identity"
   fi
   case "$status" in
     ok)
