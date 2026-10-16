@@ -1,6 +1,11 @@
 //! Model-contract and serializer tests using synthetic notes only.
 
-use std::{fs, path::PathBuf};
+use std::{
+    fs,
+    io::Write,
+    path::PathBuf,
+    process::{Command, Stdio},
+};
 
 use sha2::Digest;
 
@@ -18,6 +23,11 @@ fn anchor(source: &SourceIdentity, fragment: &str, id: &str) -> SnapshotAnchor {
     SnapshotAnchor {
         identity: AnchorIdentity {
             source: source.clone(),
+            kind: if id.starts_with("t-") {
+                AnchorKind::Block
+            } else {
+                AnchorKind::Heading
+            },
             fragment: fragment.to_string(),
         },
         id: id.to_string(),
@@ -557,5 +567,277 @@ fn strike_serialization_never_places_links_inside_strike_nodes() {
             !struck.contains("]("),
             "link remained inside strike: {struck}"
         );
+    }
+}
+
+#[test]
+fn serialized_internal_links_resolve_only_to_final_visible_anchors() {
+    let view = contract_view();
+    let projected =
+        serialize_projected_markdown(&view).expect("serialize contract");
+    assert_serialized_internal_targets_exist(&view, &projected);
+    assert!(!projected.contains("](<#t-omitted>)"), "{projected}");
+}
+
+#[test]
+fn pandoc_parses_the_complete_contract_as_markdown_ast_when_available() {
+    let projected = serialize_projected_markdown(&contract_view())
+        .expect("serialize complete contract");
+    let mut child = match Command::new("pandoc")
+        .args(["--from=commonmark_x-tex_math_dollars-emoji", "--to=json"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            eprintln!("skipping snapshot AST test: pandoc is required");
+            return;
+        }
+        Err(error) => panic!("start pandoc AST parser: {error}"),
+    };
+    child
+        .stdin
+        .take()
+        .expect("pandoc stdin")
+        .write_all(projected.as_bytes())
+        .expect("write projected Markdown");
+    let output = child.wait_with_output().expect("wait for pandoc");
+    assert!(
+        output.status.success(),
+        "pandoc could not parse projected Markdown: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let ast: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("pandoc JSON AST");
+    for node in ["Header", "Span", "Div", "Link", "Image", "CodeBlock"] {
+        assert!(ast_has_node(&ast, node), "missing Pandoc {node} node");
+    }
+    assert!(
+        ast_has_attr_id(&ast, "requirements"),
+        "heading anchor missing"
+    );
+    assert!(ast_has_attr_id(&ast, "t-next"), "task anchor missing");
+    assert!(
+        ast_contains_text(&ast, "println!"),
+        "preserved code missing"
+    );
+}
+
+/// Structural residue invariant for generated Markdown. It skips protected fenced
+/// and inline code, recognizes the generated `:::` fenced-div grammar as unrelated
+/// block syntax, and checks only actual bracketed `key:: value` field forms.
+pub(crate) fn assert_no_obsidian_residue(projected: &str) {
+    let mut fence: Option<(u8, usize)> = None;
+    for line in projected.lines() {
+        if let Some((delimiter, length)) = fence {
+            if is_fence_close(line, delimiter, length) {
+                fence = None;
+            }
+            continue;
+        }
+        if let Some(opening) = fence_open(line) {
+            fence = Some(opening);
+            continue;
+        }
+        let visible = without_inline_code(line);
+        assert!(!visible.contains("[["), "wikilink residue: {visible}");
+        assert!(!visible.contains("]]"), "wikilink residue: {visible}");
+        assert!(
+            !visible.contains("%%"),
+            "Obsidian comment residue: {visible}"
+        );
+        assert!(
+            !visible.contains("<!--") && !visible.contains("-->"),
+            "HTML comment residue: {visible}"
+        );
+        assert!(
+            !has_bracketed_field(&visible),
+            "bracketed inline field residue: {visible}"
+        );
+        assert!(
+            crate::native::collect_done::trailing_block_id_in_line(&visible)
+                .is_none(),
+            "trailing block ID residue: {visible}"
+        );
+    }
+}
+
+pub(crate) fn assert_serialized_internal_targets_exist(
+    view: &SnapshotView,
+    projected: &str,
+) {
+    let visible_ids = view
+        .anchors
+        .iter()
+        .map(|anchor| anchor.id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut rest = projected;
+    while let Some(start) = rest.find("](<#") {
+        rest = &rest[start + 4..];
+        let Some(end) = rest.find(">)") else {
+            panic!("malformed serialized internal link near: {rest}");
+        };
+        let target = &rest[..end];
+        assert!(
+            visible_ids.contains(target),
+            "serialized internal target #{target} has no visible anchor"
+        );
+        rest = &rest[end + 2..];
+    }
+}
+
+fn fence_open(line: &str) -> Option<(u8, usize)> {
+    let leading = line.bytes().take_while(|byte| *byte == b' ').count();
+    if leading > 3 {
+        return None;
+    }
+    let rest = &line.as_bytes()[leading..];
+    let delimiter = *rest.first()?;
+    if delimiter != b'`' && delimiter != b'~' {
+        return None;
+    }
+    let length = rest.iter().take_while(|byte| **byte == delimiter).count();
+    (length >= 3).then_some((delimiter, length))
+}
+
+fn is_fence_close(line: &str, delimiter: u8, minimum: usize) -> bool {
+    let leading = line.bytes().take_while(|byte| *byte == b' ').count();
+    if leading > 3 {
+        return false;
+    }
+    let rest = &line.as_bytes()[leading..];
+    let length = rest.iter().take_while(|byte| **byte == delimiter).count();
+    length >= minimum && rest[length..].iter().all(u8::is_ascii_whitespace)
+}
+
+fn without_inline_code(line: &str) -> String {
+    let bytes = line.as_bytes();
+    let mut output = String::with_capacity(line.len());
+    let mut cursor = 0;
+    while cursor < bytes.len() {
+        if bytes[cursor] != b'`' {
+            let next = line[cursor..]
+                .chars()
+                .next()
+                .expect("valid UTF-8")
+                .len_utf8();
+            output.push_str(&line[cursor..cursor + next]);
+            cursor += next;
+            continue;
+        }
+        let run = bytes[cursor..]
+            .iter()
+            .take_while(|byte| **byte == b'`')
+            .count();
+        if let Some(close) = matching_backtick_run(bytes, cursor + run, run) {
+            cursor = close + run;
+        } else {
+            output.push_str(&line[cursor..cursor + run]);
+            cursor += run;
+        }
+    }
+    output
+}
+
+fn matching_backtick_run(
+    bytes: &[u8],
+    mut cursor: usize,
+    length: usize,
+) -> Option<usize> {
+    while cursor < bytes.len() {
+        let Some(relative) =
+            bytes[cursor..].iter().position(|byte| *byte == b'`')
+        else {
+            return None;
+        };
+        cursor += relative;
+        let run = bytes[cursor..]
+            .iter()
+            .take_while(|byte| **byte == b'`')
+            .count();
+        if run == length {
+            return Some(cursor);
+        }
+        cursor += run;
+    }
+    None
+}
+
+fn has_bracketed_field(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    let mut cursor = 0;
+    while cursor < bytes.len() {
+        if bytes[cursor] != b'[' {
+            cursor += 1;
+            continue;
+        }
+        if bytes.get(cursor + 1) == Some(&b'[') {
+            cursor += 2;
+            continue;
+        }
+        let Some(relative_end) =
+            bytes[cursor + 1..].iter().position(|byte| *byte == b']')
+        else {
+            return false;
+        };
+        let end = cursor + 1 + relative_end;
+        if let Some((key, _)) = text[cursor + 1..end].split_once("::") {
+            let key = key.trim();
+            if !key.is_empty()
+                && key.bytes().all(|byte| {
+                    byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-')
+                })
+            {
+                return true;
+            }
+        }
+        cursor = end + 1;
+    }
+    false
+}
+
+fn ast_has_node(value: &serde_json::Value, tag: &str) -> bool {
+    match value {
+        serde_json::Value::Array(values) => {
+            values.iter().any(|value| ast_has_node(value, tag))
+        }
+        serde_json::Value::Object(values) => {
+            values.get("t").and_then(serde_json::Value::as_str) == Some(tag)
+                || values.values().any(|value| ast_has_node(value, tag))
+        }
+        _ => false,
+    }
+}
+
+fn ast_has_attr_id(value: &serde_json::Value, id: &str) -> bool {
+    match value {
+        serde_json::Value::Array(values) => {
+            let has_attr_shape = values.len() >= 3
+                && values.first().and_then(serde_json::Value::as_str)
+                    == Some(id)
+                && values.get(1).is_some_and(serde_json::Value::is_array)
+                && values.get(2).is_some_and(serde_json::Value::is_array);
+            has_attr_shape
+                || values.iter().any(|value| ast_has_attr_id(value, id))
+        }
+        serde_json::Value::Object(values) => {
+            values.values().any(|value| ast_has_attr_id(value, id))
+        }
+        _ => false,
+    }
+}
+
+fn ast_contains_text(value: &serde_json::Value, needle: &str) -> bool {
+    match value {
+        serde_json::Value::String(text) => text.contains(needle),
+        serde_json::Value::Array(values) => {
+            values.iter().any(|value| ast_contains_text(value, needle))
+        }
+        serde_json::Value::Object(values) => values
+            .values()
+            .any(|value| ast_contains_text(value, needle)),
+        _ => false,
     }
 }

@@ -82,9 +82,16 @@ impl ParsedSource {
 }
 
 /// The identity of a source-local heading or block anchor.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub(crate) enum AnchorKind {
+    Heading,
+    Block,
+}
+
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) struct AnchorIdentity {
     pub source: SourceIdentity,
+    pub kind: AnchorKind,
     pub fragment: String,
 }
 
@@ -163,6 +170,12 @@ pub(crate) enum LinkTarget {
     Url(String),
     /// A note fragment represented structurally until the visible-anchor set is final.
     Internal(AnchorIdentity),
+    /// An internal link inside one emitted transclusion occurrence. The source identity
+    /// remains stable while the presentation ID distinguishes repeated inclusions.
+    ScopedInternal {
+        identity: AnchorIdentity,
+        presentation_id: String,
+    },
     /// An Obsidian URI used when a target is outside the projected slice.
     ObsidianUri(String),
 }

@@ -654,6 +654,15 @@ fn render_target(view: &SnapshotView, target: &LinkTarget) -> Option<String> {
                 .find(|anchor| &anchor.identity == identity)?;
             format!("#{}", safe_anchor_id(&anchor.id))
         }
+        LinkTarget::ScopedInternal {
+            identity,
+            presentation_id,
+        } => {
+            let anchor = view.anchors.iter().find(|anchor| {
+                &anchor.identity == identity && &anchor.id == presentation_id
+            })?;
+            format!("#{}", safe_anchor_id(&anchor.id))
+        }
     };
     Some(format!("<{}>", escape_destination(&destination)))
 }

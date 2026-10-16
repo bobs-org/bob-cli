@@ -49,11 +49,12 @@ use super::resolve::{
     ResolvedNote, VaultNotes,
 };
 use super::view::{
-    AnchorIdentity, Block, Chip, ChipKind, HeadingClass, HeadingLevel, Inline,
-    LinkTarget, ListItem, ListKind, ParsedSource, ParsedTaskLine,
-    SnapshotAnchor, SnapshotAsset, SnapshotHeading, SnapshotTask,
-    SnapshotTaskStatus, SnapshotWarning, SnapshotWarningKind, SourceExtent,
-    SourceFrontmatter, SourceIdentity, SourceIndentation, SourceLocation,
+    AnchorIdentity, AnchorKind, Block, Chip, ChipKind, HeadingClass,
+    HeadingLevel, Inline, LinkTarget, ListItem, ListKind, ParsedSource,
+    ParsedTaskLine, SnapshotAnchor, SnapshotAsset, SnapshotHeading,
+    SnapshotTask, SnapshotTaskStatus, SnapshotWarning, SnapshotWarningKind,
+    SourceExtent, SourceFrontmatter, SourceIdentity, SourceIndentation,
+    SourceLocation,
 };
 use crate::native::collect_done::trailing_block_id_in_line;
 use crate::native::markdown::{
@@ -208,6 +209,27 @@ pub(crate) fn project_obsidian_syntax<L: SourceLoader>(
     projector.run(&bytes)
 }
 
+/// Project a selected extent from an already cached source note. The full source is
+/// still used for same-note fragment checks, while only `selected_text` becomes body
+/// content. Leading newlines preserve original diagnostic line numbers and keep a
+/// selected `---` line from being mistaken for frontmatter.
+pub(crate) fn project_obsidian_syntax_selection<L: SourceLoader>(
+    store: &mut SourceStore<L>,
+    attachments: &mut AttachmentIndex,
+    host: &SourceIdentity,
+    full_source_bytes: &[u8],
+    selected_text: &str,
+    first_line: usize,
+    settings: &TasksSettings,
+) -> Result<SyntaxProjection, String> {
+    let full_text = String::from_utf8_lossy(full_source_bytes).into_owned();
+    let mut selected = "\n".repeat(first_line.saturating_sub(1));
+    selected.push_str(selected_text);
+    let projector =
+        Projector::new(store, attachments, host, &full_text, settings);
+    projector.run(selected.as_bytes())
+}
+
 /// One preprocessed source line. `text` is comment-stripped for ordinary
 /// lines and byte-identical for fenced lines; `raw` is always the original
 /// line for task-record fidelity.
@@ -270,7 +292,7 @@ impl<'a, L: SourceLoader> Projector<'a, L> {
         store: &'a mut SourceStore<L>,
         attachments: &'a mut AttachmentIndex,
         host: &'a SourceIdentity,
-        text: &str,
+        host_index_text: &str,
         settings: &'a TasksSettings,
     ) -> Self {
         let vault_name = store.vault_name().to_string();
@@ -280,7 +302,7 @@ impl<'a, L: SourceLoader> Projector<'a, L> {
         let host_file_uri =
             obsidian_uri(&vault_name, &host.vault_relative_path);
         let vault = VaultNotes::new(vault_root.clone(), vault_name.clone());
-        let host_index = build_fragment_index(text);
+        let host_index = build_fragment_index(host_index_text);
         Self {
             store,
             attachments,
@@ -372,10 +394,16 @@ impl<'a, L: SourceLoader> Projector<'a, L> {
         }
     }
 
-    fn push_anchor(&mut self, fragment: String, id: String) -> SnapshotAnchor {
+    fn push_anchor(
+        &mut self,
+        kind: AnchorKind,
+        fragment: String,
+        id: String,
+    ) -> SnapshotAnchor {
         let anchor = SnapshotAnchor {
             identity: AnchorIdentity {
                 source: self.host.clone(),
+                kind,
                 fragment,
             },
             id,
@@ -923,10 +951,10 @@ impl<'a, L: SourceLoader> Projector<'a, L> {
         // (Inline HTML comments stay in the index key by shared-index
         // design; links to such headings warn rather than misresolve.)
         let key = normalize_heading_key_for(&strip_inline_comment_pairs(title));
-        let anchor = self.push_anchor(key, slug.clone());
+        let anchor = self.push_anchor(AnchorKind::Heading, key, slug.clone());
         if let Some(id) = block_id {
             let tid = self.claim_anchor_id(&format!("t-{id}"));
-            self.push_anchor(id, tid);
+            self.push_anchor(AnchorKind::Block, id, tid);
         }
         if level == 1 && !self.seen_title {
             self.seen_title = true;
@@ -975,7 +1003,7 @@ impl<'a, L: SourceLoader> Projector<'a, L> {
         trim_inline_edges(&mut content);
         let anchor = block_id.clone().map(|id| {
             let tid = self.claim_anchor_id(&format!("t-{id}"));
-            self.push_anchor(id, tid)
+            self.push_anchor(AnchorKind::Block, id, tid)
         });
         let byte_end = line.byte_start + line.raw.len();
         self.task_lines.push(ParsedTaskLine {
@@ -1086,7 +1114,7 @@ impl<'a, L: SourceLoader> Projector<'a, L> {
             let content = match block_id {
                 Some(id) => {
                     let tid = self.claim_anchor_id(&format!("t-{id}"));
-                    self.push_anchor(id, tid);
+                    self.push_anchor(AnchorKind::Block, id, tid);
                     content
                 }
                 None => content,
@@ -1267,7 +1295,7 @@ impl<'a, L: SourceLoader> Projector<'a, L> {
             let (visible, block_id) = strip_trailing_block_id(&line.text);
             if let Some(id) = block_id {
                 let tid = self.claim_anchor_id(&format!("t-{id}"));
-                self.push_anchor(id, tid);
+                self.push_anchor(AnchorKind::Block, id, tid);
             }
             inlines.extend(self.parse_inlines(visible, Some(line.line_no)));
             cursor += 1;
@@ -2264,6 +2292,10 @@ impl<'a, L: SourceLoader> Projector<'a, L> {
                     vec![Inline::Text(span.label)],
                     Some(LinkTarget::Internal(AnchorIdentity {
                         source: self.host.clone(),
+                        kind: match fragment {
+                            LinkFragment::Heading(_) => AnchorKind::Heading,
+                            LinkFragment::Block(_) => AnchorKind::Block,
+                        },
                         fragment: fragment_key(fragment),
                     })),
                     None,
@@ -2350,6 +2382,7 @@ impl<'a, L: SourceLoader> Projector<'a, L> {
                                 label,
                                 Some(LinkTarget::Internal(AnchorIdentity {
                                     source: self.host.clone(),
+                                    kind: AnchorKind::Block,
                                     fragment: id.clone(),
                                 })),
                                 warning,
@@ -2374,6 +2407,7 @@ impl<'a, L: SourceLoader> Projector<'a, L> {
                                 label,
                                 Some(LinkTarget::Internal(AnchorIdentity {
                                     source: self.host.clone(),
+                                    kind: AnchorKind::Heading,
                                     fragment: fragment_key(fragment),
                                 })),
                                 warning,
@@ -3436,6 +3470,13 @@ mod tests {
                             LinkTarget::Internal(identity) => {
                                 format!("int:{}", identity.fragment)
                             }
+                            LinkTarget::ScopedInternal {
+                                identity,
+                                presentation_id,
+                            } => format!(
+                                "scoped:{}=>{}",
+                                identity.fragment, presentation_id
+                            ),
                         };
                         targets.push(format!(
                             "{}=>{destination}",
@@ -3881,6 +3922,7 @@ mod tests {
         let section_anchor = SnapshotAnchor {
             identity: AnchorIdentity {
                 source: source.clone(),
+                kind: AnchorKind::Heading,
                 fragment: "syntax".to_string(),
             },
             id: "syntax".to_string(),
@@ -4002,27 +4044,6 @@ mod tests {
             .to_string_lossy()
             .into_owned();
         assert_syntax_golden("syntax-coverage", &serialized, &vault_name);
-        // Structural residue invariant over the serialized golden:
-        // no wikilink/embed delimiters, comments, bracketed fields, or
-        // trailing block ids outside protected code.
-        let mut in_code = false;
-        for line in serialized.lines() {
-            let trimmed = line.trim();
-            if trimmed.starts_with("```") {
-                in_code = !in_code;
-                continue;
-            }
-            if in_code {
-                continue;
-            }
-            assert!(!line.contains("[["), "wikilink residue: {line}");
-            assert!(!line.contains("]]"), "wikilink residue: {line}");
-            assert!(!line.contains("%%"), "comment residue: {line}");
-            assert!(!line.contains("<!--"), "comment residue: {line}");
-            assert!(
-                trailing_block_id_in_line(line).is_none(),
-                "block id residue: {line}"
-            );
-        }
+        super::super::tests::assert_no_obsidian_residue(&serialized);
     }
 }
