@@ -76,6 +76,8 @@ This week, This month, and Later. `-M/--plain` uses the existing plain
 Markdown renderer, while keeping the vault-note parent, naming, title, and
 `source_note` provenance. `-C` and `-M` only accept one vault-note target
 and conflict with each other.
+Repeat `-S/--section HEADING` to keep only named projected sections; names match
+case-insensitively, and the dry-run section summary reflects the selection.
 
 Embedded PNG and JPEG images are copied into the private render scratch as-is
 when their long edge is at most 1600 pixels; larger images are downscaled with
@@ -96,6 +98,7 @@ bob ref create harbor_cranes
 bob ref create '[[harbor_cranes]]' -d
 bob ref create zk/some_idea -N idea_261016
 bob ref create harbor_cranes -C
+bob ref create harbor_cranes -S Requirements -S Outline
 bob ref create harbor_cranes -M
 bob ref create harbor_cranes -L
 ```

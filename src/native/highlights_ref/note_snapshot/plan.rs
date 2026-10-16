@@ -68,6 +68,7 @@ pub(crate) fn plan_snapshot<L: SourceLoader>(
     snapshot_date: NaiveDate,
     title_override: Option<&str>,
     include_closed: bool,
+    section_names: &[String],
     parent: ResolvedParent,
     parent_default_reason: Option<String>,
 ) -> Result<SnapshotPlan, String> {
@@ -118,7 +119,7 @@ pub(crate) fn plan_snapshot<L: SourceLoader>(
             .as_ref()
             .map(|front| &front.metadata),
     );
-    let projection = project_snapshot_from_syntax(
+    let mut projection = project_snapshot_from_syntax(
         store,
         &note,
         settings,
@@ -131,6 +132,90 @@ pub(crate) fn plan_snapshot<L: SourceLoader>(
         attachments,
         syntax,
     )?;
+    if !section_names.is_empty() {
+        let requested = section_names
+            .iter()
+            .map(|name| name.trim().to_lowercase())
+            .collect::<std::collections::BTreeSet<_>>();
+        if requested.iter().any(String::is_empty) {
+            return Err("section names cannot be empty".to_string());
+        }
+        let mut available = projection
+            .view
+            .sections
+            .iter()
+            .map(|section| {
+                section
+                    .heading
+                    .content
+                    .iter()
+                    .filter_map(|inline| match inline {
+                        Inline::Text(text) => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>();
+        for section in &projection.view.sections {
+            available.extend(section.blocks.iter().filter_map(|block| {
+                match block {
+                    super::view::Block::Heading(heading) => Some(
+                        heading
+                            .content
+                            .iter()
+                            .filter_map(|inline| match inline {
+                                Inline::Text(text) => Some(text.as_str()),
+                                _ => None,
+                            })
+                            .collect::<String>(),
+                    ),
+                    _ => None,
+                }
+            }));
+        }
+        let matched = available
+            .iter()
+            .any(|name| requested.contains(&name.to_lowercase()));
+        if !matched {
+            return Err(format!(
+                "none of the requested sections exist: {}; available sections: {}",
+                section_names.join(", "),
+                if available.is_empty() { "none".to_string() } else { available.join(" · ") },
+            ));
+        }
+        let mut selected_nested = Vec::new();
+        for section in &projection.view.sections {
+            collect_named_heading_sections(
+                section,
+                &requested,
+                &mut selected_nested,
+            );
+        }
+        projection.view.sections.retain(|section| {
+            let name = section
+                .heading
+                .content
+                .iter()
+                .filter_map(|inline| match inline {
+                    Inline::Text(text) => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<String>();
+            requested.contains(&name.to_lowercase())
+        });
+        if !selected_nested.is_empty() {
+            projection.view.sections = selected_nested;
+        }
+        projection.view.summary.sections =
+            projection.view.sections.len() as u64;
+        projection.view.summary.task_counts.clear();
+        for section in &projection.view.sections {
+            count_section_tasks(
+                &section.blocks,
+                &mut projection.view.summary.task_counts,
+            );
+        }
+    }
     let projected_markdown = serialize_projected_markdown(&projection.view)
         .map_err(|error| format!("serialize note snapshot: {error}"))?;
     let summary = projection.view.summary.clone();
@@ -159,6 +244,78 @@ pub(crate) fn plan_snapshot<L: SourceLoader>(
         summary,
         warnings,
     })
+}
+
+fn collect_named_heading_sections(
+    section: &super::view::SnapshotSection,
+    requested: &std::collections::BTreeSet<String>,
+    output: &mut Vec<super::view::SnapshotSection>,
+) {
+    use super::view::{Block, SnapshotSection};
+    let headings = section
+        .blocks
+        .iter()
+        .enumerate()
+        .filter_map(|(index, block)| {
+            if let Block::Heading(heading) = block {
+                let name = heading
+                    .content
+                    .iter()
+                    .filter_map(|inline| match inline {
+                        Inline::Text(text) => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect::<String>();
+                Some((index, heading.clone(), name))
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+    for (position, (index, heading, name)) in headings.iter().enumerate() {
+        if !requested.contains(&name.to_lowercase()) {
+            continue;
+        }
+        let end = headings
+            .get(position + 1)
+            .map(|(next, _, _)| *next)
+            .unwrap_or(section.blocks.len());
+        output.push(SnapshotSection {
+            source: section.source.clone(),
+            heading: heading.clone(),
+            blocks: section.blocks[index + 1..end].to_vec(),
+        });
+    }
+}
+
+fn count_section_tasks(
+    blocks: &[super::view::Block],
+    counts: &mut std::collections::BTreeMap<
+        super::view::SnapshotTaskStatus,
+        u64,
+    >,
+) {
+    use super::view::Block;
+    for block in blocks {
+        match block {
+            Block::Task(task) => {
+                *counts.entry(task.status).or_default() += 1;
+                count_section_tasks(&task.children, counts);
+            }
+            Block::List { items, .. } => {
+                for item in items {
+                    count_section_tasks(&item.children, counts);
+                }
+            }
+            Block::Embed { blocks, .. }
+            | Block::LiveQuery { blocks }
+            | Block::Compact { blocks }
+            | Block::Callout { blocks, .. } => {
+                count_section_tasks(blocks, counts)
+            }
+            _ => {}
+        }
+    }
 }
 
 fn select_title(
@@ -293,6 +450,7 @@ mod tests {
             NaiveDate::from_ymd_opt(2026, 10, 16).expect("date"),
             title_override,
             false,
+            &[],
             parent.resolved,
             Some(parent.reason),
         )

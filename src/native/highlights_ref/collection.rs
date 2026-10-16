@@ -311,6 +311,7 @@ fn options_from_matches(
         parent_default_reason: None,
         resolved_parent: Some(resolved_parent),
         published,
+        sections: Vec::new(),
         ref_type,
         status: matches
             .get_one::<String>("status")

@@ -5632,6 +5632,51 @@ fn highlights_create_vault_note_dry_run_reports_image_processing() {
 }
 
 #[test]
+fn highlights_create_section_filter_and_earlier_snapshot_hint_are_dry_run_only()
+{
+    let temp = TempDir::new("bob-cli-create-snapshot-options");
+    let vault = temp.path().join("vault");
+    write_file(&vault.join("Area.md"), "---\ntype: [[area]]\n---\n# Area\n");
+    write_file(
+        &vault.join("Harbor.md"),
+        "---\nparent: [[Area]]\n---\n# Harbor\n\nIntro.\n\n## Requirements\nKeep this.\n\n## Outline\nDrop this.\n",
+    );
+    write_file(
+        &vault.join("ref/notes/harbor_cranes_261015.md"),
+        "---\ntype: [[ref]]\nsource_note: \"[[Harbor]]\"\nstatus: ready\n---\n# Earlier\n",
+    );
+    write_file(
+        &vault.join("ref/notes/harbor_cranes_261014.md"),
+        "---\ntype: [[ref]]\nsource_note: \"[[Harbor]]\"\nstatus: ready\nhighlights_count: 2\n---\n# Has highlights\n",
+    );
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg("Harbor")
+        .arg("-S")
+        .arg("Requirements")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-d")
+        .env("BOB_NOW", "2026-10-16 12:00:00")
+        .output()
+        .expect("dry-run filtered note snapshot");
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(report.contains("sections: Requirements"), "{report}");
+    assert!(
+        !report.contains("sections: Requirements · Outline"),
+        "{report}"
+    );
+    assert!(
+        report.contains("earlier snapshots: harbor_cranes_261014"),
+        "{report}"
+    );
+    assert!(report.contains("unread with no highlights"), "{report}");
+    assert!(!vault.join("xlib").exists(), "dry run must not write");
+}
+
+#[test]
 fn highlights_create_vault_note_marker_survives_scan_and_sync() {
     let temp = TempDir::new("bob-cli-create-vault-note-roundtrip");
     let vault = temp.path().join("vault");

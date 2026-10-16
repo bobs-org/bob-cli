@@ -189,6 +189,7 @@ pub(super) struct CreateOptions {
     pub(super) resolved_parent:
         Option<crate::native::parent_notes::ResolvedParent>,
     pub(super) published: Option<String>,
+    pub(super) sections: Vec<String>,
     pub(super) ref_type: Option<String>,
     pub(super) status: String,
     pub(super) title: Option<String>,
@@ -372,6 +373,16 @@ pub(crate) fn command() -> ClapCommand {
                 .help("Render a vault note as plain Markdown, without the snapshot view"),
         )
         .arg(
+            Arg::new("section")
+                .long("section")
+                .short('S')
+                .value_name("HEADING")
+                .action(ArgAction::Append)
+                .conflicts_with("plain")
+                .help_heading("Vault notes")
+                .help("Keep only this projected section; repeat to select several"),
+        )
+        .arg(
             Arg::new("published")
                 .long("published")
                 .short('p')
@@ -478,11 +489,13 @@ pub(super) fn run(matches: &ArgMatches) -> i32 {
         Err(error) => return report_create_error(error),
     };
     if !matches!(prepared, PreparedTarget::VaultNote { .. })
-        && (matches.get_flag("closed") || matches.get_flag("plain"))
+        && (matches.get_flag("closed")
+            || matches.get_flag("plain")
+            || matches.get_many::<String>("section").is_some())
     {
         return report_create_error(
             CommandError::new(
-                "--closed and --plain require a vault-note TARGET\nhint: pass a note route, such as `bob ref create harbor_cranes -d`",
+                "--closed, --plain, and --section require a vault-note TARGET\nhint: pass a note route, such as `bob ref create harbor_cranes -d`",
             )
             .with_exit_code(2),
         );
@@ -510,6 +523,10 @@ pub(super) fn run(matches: &ArgMatches) -> i32 {
         parent_default_reason,
         resolved_parent,
         published: matches.get_one::<String>("published").cloned(),
+        sections: matches
+            .get_many::<String>("section")
+            .map(|values| values.cloned().collect())
+            .unwrap_or_default(),
         ref_type,
         status: matches
             .get_one::<String>("status")
@@ -1073,6 +1090,7 @@ fn create_vault_note_route(
         snapshot_date,
         options.title.as_deref(),
         options.closed,
+        &options.sections,
         parent,
         options.parent_default_reason.clone(),
     )
@@ -1205,6 +1223,7 @@ fn create_snapshot_plan(
             );
         }
         print_snapshot_plan(
+            config,
             &plan,
             &snapshot,
             &asset_preparation,
@@ -1367,6 +1386,7 @@ fn write_render_filters(scratch: &Path) -> Result<RenderFilters> {
 }
 
 fn print_snapshot_plan(
+    config: &Config,
     plan: &CreatePlan,
     snapshot: &note_snapshot::SnapshotPlan,
     assets: &note_snapshot::assets::AssetPreparation,
@@ -1415,6 +1435,107 @@ fn print_snapshot_plan(
     println!("marker:");
     print!("{}", plan.marker);
     print_snapshot_projection_summary(snapshot, assets);
+    print_earlier_snapshot_hints(config, snapshot);
+}
+
+fn print_earlier_snapshot_hints(
+    config: &Config,
+    snapshot: &note_snapshot::SnapshotPlan,
+) {
+    let mut refs = Vec::new();
+    collect_markdown_files(&config.ref_dir, &mut refs);
+    refs.sort();
+    let mut earlier = Vec::new();
+    let mut unread_without_highlights = Vec::new();
+    for path in refs {
+        let Ok(contents) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let Some(frontmatter) =
+            crate::native::projects::parse_frontmatter(&contents)
+        else {
+            continue;
+        };
+        let Some(source_note) = crate::native::projects::frontmatter_value(
+            &frontmatter,
+            "source_note",
+        ) else {
+            continue;
+        };
+        if normalize_source_note(&source_note)
+            != snapshot.note.identity.route.to_lowercase()
+        {
+            continue;
+        }
+        let status =
+            crate::native::projects::frontmatter_value(&frontmatter, "status")
+                .unwrap_or_default();
+        let legacy_status = crate::native::projects::frontmatter_value(
+            &frontmatter,
+            "legacy_status",
+        )
+        .unwrap_or_default();
+        let title =
+            crate::native::projects::frontmatter_value(&frontmatter, "title")
+                .map(str::to_string)
+                .unwrap_or_else(|| {
+                    path.file_stem()
+                        .and_then(|stem| stem.to_str())
+                        .unwrap_or("snapshot")
+                        .to_string()
+                });
+        let label = format!(
+            "{} ({})",
+            title,
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("ref note")
+        );
+        earlier.push(label.clone());
+        let count = crate::native::projects::frontmatter_value(
+            &frontmatter,
+            "highlights_count",
+        )
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(0);
+        let is_read = status.eq_ignore_ascii_case("read")
+            || legacy_status.eq_ignore_ascii_case("read");
+        if !is_read && count == 0 {
+            unread_without_highlights.push(label);
+        }
+    }
+    if !earlier.is_empty() {
+        println!("earlier snapshots: {}", earlier.join(" · "));
+    }
+    if !unread_without_highlights.is_empty() {
+        println!("hint: {} earlier snapshot(s) are unread with no highlights; review one before making another", unread_without_highlights.len());
+    }
+}
+
+fn collect_markdown_files(root: &Path, files: &mut Vec<PathBuf>) {
+    let Ok(entries) = fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_markdown_files(&path, files);
+        } else if path.extension().is_some_and(|extension| extension == "md") {
+            files.push(path);
+        }
+    }
+}
+
+fn normalize_source_note(value: &str) -> String {
+    let value = crate::native::projects::trim_yaml_scalar(value)
+        .trim()
+        .trim_start_matches("[[")
+        .trim_end_matches("]]");
+    value
+        .split_once('|')
+        .map(|(target, _)| target)
+        .unwrap_or(value)
+        .to_lowercase()
 }
 
 fn print_snapshot_projection_summary(
@@ -3230,6 +3351,7 @@ mod tests {
             parent_default_reason: None,
             resolved_parent: None,
             published: None,
+            sections: Vec::new(),
             ref_type: None,
             status: DEFAULT_STATUS.to_string(),
             title: None,
