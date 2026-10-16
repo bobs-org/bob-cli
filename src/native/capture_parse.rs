@@ -29,6 +29,39 @@ const COMMAND_NAME: &str = "bob capture-parse";
 /// fields keep version 1.
 const SCHEMA_VERSION: u32 = 1;
 
+/// Parse data a saved-template client needs to render a ready-to-insert
+/// draft. This deliberately reuses capture-parse's template parser so the
+/// CLI and clients share one source of syntax spans and route semantics.
+pub(crate) struct TemplateProtocolParse {
+    pub(crate) route: Option<String>,
+    pub(crate) spans: Vec<CaptureParseSpan>,
+}
+
+pub(crate) fn parse_template_protocol(text: &str) -> TemplateProtocolParse {
+    let prefix = "@@template:\n";
+    let draft = format!("{prefix}{text}\n\n");
+    let text_start = prefix.len();
+    let text_end = text_start + text.len();
+    let options = EditorParseOptions {
+        url_routing: None,
+        has_global_destination: false,
+    };
+    let parsed = CaptureParseResult::new(draft, &options);
+    let route = parsed.items.first().and_then(|item| item.route.clone());
+    let spans = parsed
+        .spans
+        .into_iter()
+        .filter(|span| span.start >= text_start && span.end <= text_end)
+        .map(|span| CaptureParseSpan {
+            start: span.start - text_start,
+            end: span.end - text_start,
+            kind: span.kind,
+            field: span.field,
+        })
+        .collect();
+    TemplateProtocolParse { route, spans }
+}
+
 pub(crate) fn run(args: Vec<OsString>) -> i32 {
     let mut command = build_cli();
     let matches = match command.try_get_matches_from_mut(
@@ -600,12 +633,12 @@ struct CaptureParseItem {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-struct CaptureParseSpan {
-    start: usize,
-    end: usize,
-    kind: super::capture_language::SpanKind,
+pub(crate) struct CaptureParseSpan {
+    pub(crate) start: usize,
+    pub(crate) end: usize,
+    pub(crate) kind: super::capture_language::SpanKind,
     #[serde(skip_serializing_if = "Option::is_none")]
-    field: Option<usize>,
+    pub(crate) field: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

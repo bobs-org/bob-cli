@@ -537,7 +537,77 @@ const SUBCOMMANDS: &[Subcommand] = &[
             script_command: None,
         }),
     },
+    Subcommand {
+        name: "capture-templates",
+        about: "List, save, show, and manage saved capture templates",
+        section: Section::CaptureProtocol,
+        target: Target::Group(Group {
+            members: CAPTURE_TEMPLATES_MEMBERS,
+            default: Some("list"),
+            extra_about: Some(
+                "Bare `bob capture-templates` runs the read-only list.",
+            ),
+            after_help: CAPTURE_TEMPLATES_AFTER_HELP,
+            usage: "bob capture-templates [COMMAND]",
+        }),
+    },
 ];
+
+const CAPTURE_TEMPLATES_MEMBERS: &[Member] = &[
+    Member {
+        name: "clear",
+        about: "Clear the saved-template shelf",
+        leaf: Leaf {
+            native_command: NativeCommand::CaptureTemplatesClear,
+            script_command: None,
+        },
+    },
+    Member {
+        name: "delete",
+        about: "Delete templates by list index or content id",
+        leaf: Leaf {
+            native_command: NativeCommand::CaptureTemplatesDelete,
+            script_command: None,
+        },
+    },
+    Member {
+        name: "list",
+        about: "List saved capture templates (default)",
+        leaf: Leaf {
+            native_command: NativeCommand::CaptureTemplatesList,
+            script_command: None,
+        },
+    },
+    Member {
+        name: "save",
+        about: "Save a template definition without capturing a row",
+        leaf: Leaf {
+            native_command: NativeCommand::CaptureTemplatesSave,
+            script_command: None,
+        },
+    },
+    Member {
+        name: "show",
+        about: "Print one template as a ready-to-insert draft",
+        leaf: Leaf {
+            native_command: NativeCommand::CaptureTemplatesShow,
+            script_command: None,
+        },
+    },
+];
+
+const CAPTURE_TEMPLATES_AFTER_HELP: &str = "\
+Bare `bob capture-templates` runs the read-only list.
+
+Examples:
+  bob capture-templates list -f json
+  bob capture-templates show 1
+  bob capture-templates save '@@template:\\nApply {0}\\n\\n'
+  bob capture-templates delete 1
+  bob capture-templates clear
+
+See docs/capture.md for the saved-template protocol.
+Run 'bob capture-templates <command> --help' for more information.";
 
 #[derive(Debug, Clone)]
 pub struct RunnerError {

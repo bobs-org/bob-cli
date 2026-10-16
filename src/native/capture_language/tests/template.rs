@@ -125,6 +125,31 @@ fn missing_placeholder_is_suppressed_until_rows_exist() {
 }
 
 #[test]
+fn definition_validation_ignores_rows_but_checks_placeholders_without_rows() {
+    assert_eq!(
+        template::definition_issue("@@template:\nTask {0}\n\n")
+            .map(|issue| issue.code()),
+        None
+    );
+    assert_eq!(
+        template::definition_issue("@@template:\nA task\n\n")
+            .map(|issue| issue.code()),
+        Some("template_missing_placeholder")
+    );
+    assert_eq!(
+        template::definition_issue(
+            "@@template:\nTask {0}\n\nvalid\n\nwrong arity\n"
+        )
+        .map(|issue| issue.code()),
+        None
+    );
+    assert_eq!(
+        template::definition_issue("@@template:\n").map(|issue| issue.code()),
+        Some("template_missing_rows")
+    );
+}
+
+#[test]
 fn row_lexer_handles_quotes_escapes_and_plain_quotes() {
     let raw = "@@template:\n{0} {1} {2} {3}\n\n\"Two Sigma\" “Acme Works” \"say \\\"hi\\\"\" \"a\\\\b\"\n";
     let analysis = template::analyze(raw);

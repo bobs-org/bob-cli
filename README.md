@@ -289,7 +289,7 @@ Bob's workflow commands are:
 
 ### Capture protocol
 
-The ten `capture-*` rows form the Capture protocol section. Bob Mac Capture
+The eleven `capture-*` rows form the Capture protocol section. Bob Mac Capture
 uses these JSON endpoints as a separate integration protocol.
 
 | Command | Purpose |
@@ -304,6 +304,7 @@ uses these JSON endpoints as a separate integration protocol.
 | `capture-task-id` | Assign a user-authored block ID to an open capture task |
 | `capture-task-sections` | List the ALL-CAPS child sections of a capture task |
 | `capture-tasks` | List the open tasks in a routed note |
+| `capture-templates` | List and manage the bob-owned saved-template shelf |
 
 Use `bob <command> --help` for concise usage. The sections below summarize each
 workflow and link to the detailed command contract where one exists.

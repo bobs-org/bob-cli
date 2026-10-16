@@ -88,6 +88,60 @@ pub(crate) struct TemplateAnalysis {
     pub(crate) issues: Vec<TemplateIssue>,
 }
 
+/// Return the first issue that makes a template definition unsafe to save.
+/// Rows are deliberately ignored: the shelf stores definitions, and a user
+/// can fill in the rows after inserting one. Unlike capture-parse's ordinary
+/// idle diagnostics, saving also requires at least one placeholder even when
+/// there are no rows yet.
+pub(crate) fn definition_issue(raw: &str) -> Option<TemplateIssue> {
+    let analysis = analyze(raw);
+    let block = analysis.block.as_ref();
+    let mut issues = analysis
+        .issues
+        .iter()
+        .filter(|issue| match issue.code {
+            "template_header_misplaced" => true,
+            "template_needs_separator"
+            | "template_invalid_placeholder"
+            | "template_placeholder_gap" => block.is_some_and(|block| {
+                issue.range.start >= block.range.start
+                    && issue.range.start <= block.range.end
+            }),
+            "template_global_declaration" => block.is_some_and(|block| {
+                issue.range.start >= block.range.start
+                    && issue.range.start < block.range.end
+            }),
+            "template_missing_placeholder" => true,
+            // A missing block is a definition error. Missing rows at the end
+            // of an existing block are the normal calm state of a saved
+            // definition and are therefore ignored here.
+            "template_missing_rows" => block.is_none(),
+            _ => false,
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+
+    if let Some(block) = block
+        && analysis.placeholders.is_empty()
+        && !analysis
+            .issues
+            .iter()
+            .any(|issue| issue.code == "template_invalid_placeholder")
+    {
+        issues.push(issue(
+            "template_missing_placeholder",
+            format!(
+                "template line {}: add at least one placeholder such as {{0}}",
+                block.line_start
+            ),
+            block.range.end..block.range.end,
+        ));
+    }
+
+    issues.sort_by_key(|issue| (issue.range.start, issue.range.end));
+    issues.into_iter().next()
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TemplateInstance {
     pub(crate) row: usize,

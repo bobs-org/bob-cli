@@ -302,6 +302,9 @@ fn save_template_shelf(
         &canonical, origin, cap, &now,
     ) {
         Ok(saved) => {
+            for warning in &saved.warnings {
+                eprintln!("{COMMAND_NAME}: warning: {warning}");
+            }
             out.template_saved = Some(TemplateSavedJson {
                 id: saved.id,
                 status: saved.status.as_str(),

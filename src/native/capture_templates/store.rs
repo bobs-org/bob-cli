@@ -133,6 +133,55 @@ impl TemplateSaveStatus {
 pub(crate) struct TemplateSaveOutcome {
     pub(crate) id: String,
     pub(crate) status: TemplateSaveStatus,
+    pub(crate) warnings: Vec<String>,
+}
+
+/// Readable fields returned by the shelf without exposing its preservation
+/// metadata or mutation internals to protocol callers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TemplateShelfEntry {
+    pub(crate) id: String,
+    pub(crate) text: String,
+    pub(crate) first_saved_at: Option<String>,
+    pub(crate) last_used_at: Option<String>,
+    pub(crate) use_count: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TemplateShelfSnapshot {
+    pub(crate) entries: Vec<TemplateShelfEntry>,
+    pub(crate) warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum TemplateShelfError {
+    Busy(String),
+    NewerSchema(u64),
+    Io(String),
+}
+
+impl TemplateShelfError {
+    pub(crate) fn message(&self) -> String {
+        match self {
+            Self::Busy(reason) | Self::Io(reason) => reason.clone(),
+            Self::NewerSchema(version) => {
+                format!("shelf uses newer schema_version {version}")
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TemplateDeleteOutcome {
+    pub(crate) deleted: Vec<String>,
+    pub(crate) missing: Vec<String>,
+    pub(crate) warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TemplateClearOutcome {
+    pub(crate) cleared: usize,
+    pub(crate) warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -207,6 +256,42 @@ pub(crate) fn save_template_text_with_lock_timeout(
     now: &str,
     lock_timeout: Duration,
 ) -> Result<TemplateSaveOutcome, TemplateSaveError> {
+    save_template_text_mode_with_lock_timeout(
+        canonical,
+        origin,
+        cap,
+        now,
+        true,
+        lock_timeout,
+    )
+}
+
+/// Save a definition without recording a successful use. Explicit shelf
+/// saves keep existing usage history and give new entries a count of zero.
+pub(crate) fn save_template_definition(
+    canonical: &str,
+    origin: Option<&str>,
+    cap: u32,
+    now: &str,
+) -> Result<TemplateSaveOutcome, TemplateSaveError> {
+    save_template_text_mode_with_lock_timeout(
+        canonical,
+        origin,
+        cap,
+        now,
+        false,
+        LOCK_TIMEOUT,
+    )
+}
+
+fn save_template_text_mode_with_lock_timeout(
+    canonical: &str,
+    origin: Option<&str>,
+    cap: u32,
+    now: &str,
+    record_use: bool,
+    lock_timeout: Duration,
+) -> Result<TemplateSaveOutcome, TemplateSaveError> {
     let file = templates_file();
     let id = template_id(canonical);
     if let Some(parent) = file.parent()
@@ -245,8 +330,13 @@ pub(crate) fn save_template_text_with_lock_timeout(
     })?;
 
     let mut loaded = read_locked(&file);
+    let mut warnings = Vec::new();
     if loaded.corrupt {
         quarantine_locked(&file);
+        warnings.push(
+            "saved template shelf was unreadable and has been quarantined"
+                .into(),
+        );
     }
     if let Some(version) = loaded.newer_schema {
         return Err(TemplateSaveError::Refused(format!(
@@ -287,25 +377,47 @@ pub(crate) fn save_template_text_with_lock_timeout(
         {
             Some(index) => {
                 let mut entry = loaded.entries.remove(index);
-                entry.last_used_at = Some(now.to_string());
-                entry.use_count =
-                    Some(entry.use_count.unwrap_or(0).saturating_add(1));
+                if record_use {
+                    entry.last_used_at = Some(now.to_string());
+                    entry.use_count =
+                        Some(entry.use_count.unwrap_or(0).saturating_add(1));
+                }
                 loaded.entries.insert(0, entry);
                 TemplateSaveOutcome {
                     id,
                     status: TemplateSaveStatus::Replaced,
+                    warnings: Vec::new(),
                 }
             }
             None => {
-                let (first_saved_at, use_count, extra) = origin_entry
-                    .map_or_else(
-                        || (now.to_string(), 1u64, Default::default()),
+                let (first_saved_at, last_used_at, use_count, extra) =
+                    origin_entry.map_or_else(
+                        || {
+                            (
+                                now.to_string(),
+                                record_use.then(|| now.to_string()),
+                                u64::from(record_use),
+                                Default::default(),
+                            )
+                        },
                         |entry| {
                             (
                                 entry
                                     .first_saved_at
                                     .unwrap_or_else(|| now.to_string()),
-                                entry.use_count.unwrap_or(0).saturating_add(1),
+                                if record_use {
+                                    Some(now.to_string())
+                                } else {
+                                    entry.last_used_at
+                                },
+                                if record_use {
+                                    entry
+                                        .use_count
+                                        .unwrap_or(0)
+                                        .saturating_add(1)
+                                } else {
+                                    entry.use_count.unwrap_or(0)
+                                },
                                 entry.extra,
                             )
                         },
@@ -316,7 +428,7 @@ pub(crate) fn save_template_text_with_lock_timeout(
                         id: Some(id.clone()),
                         text: Some(canonical.to_string()),
                         first_saved_at: Some(first_saved_at),
-                        last_used_at: Some(now.to_string()),
+                        last_used_at,
                         use_count: Some(use_count),
                         extra,
                     },
@@ -324,17 +436,22 @@ pub(crate) fn save_template_text_with_lock_timeout(
                 TemplateSaveOutcome {
                     id,
                     status: TemplateSaveStatus::Replaced,
+                    warnings: Vec::new(),
                 }
             }
         }
     } else if let Some(index) = existing_index {
         let mut entry = loaded.entries.remove(index);
-        entry.last_used_at = Some(now.to_string());
-        entry.use_count = Some(entry.use_count.unwrap_or(0).saturating_add(1));
+        if record_use {
+            entry.last_used_at = Some(now.to_string());
+            entry.use_count =
+                Some(entry.use_count.unwrap_or(0).saturating_add(1));
+        }
         loaded.entries.insert(0, entry);
         TemplateSaveOutcome {
             id,
             status: TemplateSaveStatus::Updated,
+            warnings: Vec::new(),
         }
     } else {
         loaded.entries.insert(
@@ -343,20 +460,23 @@ pub(crate) fn save_template_text_with_lock_timeout(
                 id: Some(id.clone()),
                 text: Some(canonical.to_string()),
                 first_saved_at: Some(now.to_string()),
-                last_used_at: Some(now.to_string()),
-                use_count: Some(1),
+                last_used_at: record_use.then(|| now.to_string()),
+                use_count: Some(u64::from(record_use)),
                 extra: Default::default(),
             },
         );
         TemplateSaveOutcome {
             id,
             status: TemplateSaveStatus::New,
+            warnings: Vec::new(),
         }
     };
 
     let cap_usize = usize::try_from(cap).unwrap_or(usize::MAX);
     loaded.entries.truncate(cap_usize);
     write_locked(&file, &loaded.entries, &loaded.extra)?;
+    let mut outcome = outcome;
+    outcome.warnings = warnings;
     Ok(outcome)
 }
 
@@ -531,6 +651,199 @@ fn write_locked(
         let _ = dir.sync_all();
     }
     Ok(())
+}
+
+/// Read a consistent atomic-rename snapshot without taking the write lock.
+pub(crate) fn read_shelf() -> TemplateShelfSnapshot {
+    let loaded = read_locked(&templates_file());
+    let mut warnings = Vec::new();
+    if loaded.corrupt {
+        warnings.push(
+            "saved template shelf is unreadable; treating it as empty".into(),
+        );
+    }
+    if let Some(version) = loaded.newer_schema {
+        warnings.push(format!(
+            "saved template shelf uses newer schema_version {version}; writes are disabled"
+        ));
+    }
+    TemplateShelfSnapshot {
+        entries: loaded
+            .entries
+            .into_iter()
+            .filter_map(|entry| {
+                Some(TemplateShelfEntry {
+                    id: entry.id?,
+                    text: entry.text?,
+                    first_saved_at: entry.first_saved_at,
+                    last_used_at: entry.last_used_at,
+                    use_count: entry.use_count.unwrap_or(0),
+                })
+            })
+            .collect(),
+        warnings,
+    }
+}
+
+fn acquire_write_lock(
+    file: &Path,
+    timeout: Duration,
+) -> Result<fs::File, TemplateShelfError> {
+    if let Some(parent) = file.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent).map_err(|error| {
+            TemplateShelfError::Io(format!("write shelf: {error}"))
+        })?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+            let mut builder = fs::DirBuilder::new();
+            builder.mode(0o700);
+            let _ = builder.create(parent);
+            let _ =
+                fs::set_permissions(parent, fs::Permissions::from_mode(0o700));
+        }
+    }
+    let lock_path = lock_file_for(file);
+    let lock_dir = lock_path.parent().unwrap_or_else(|| Path::new("."));
+    if !lock_dir.as_os_str().is_empty() {
+        fs::create_dir_all(lock_dir).map_err(|error| {
+            TemplateShelfError::Io(format!("write shelf: {error}"))
+        })?;
+    }
+    let lock = bob_env::create_state_lock_file(
+        lock_dir,
+        lock_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("templates.json.lock"),
+    )
+    .map_err(|error| TemplateShelfError::Io(format!("write shelf: {error}")))?;
+    lock_exclusive(&lock, timeout).map_err(|error| {
+        TemplateShelfError::Busy(format!("shelf is busy: {error}"))
+    })?;
+    Ok(lock)
+}
+
+fn shelf_error_from_save(error: TemplateSaveError) -> TemplateShelfError {
+    match error {
+        TemplateSaveError::Busy(reason) => TemplateShelfError::Busy(reason),
+        TemplateSaveError::Refused(reason) => {
+            let version = reason
+                .strip_prefix("shelf uses newer schema_version ")
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(SCHEMA_VERSION + 1);
+            TemplateShelfError::NewerSchema(version)
+        }
+        TemplateSaveError::Io(reason) => TemplateShelfError::Io(reason),
+    }
+}
+
+/// Delete entries by list index or content id. Resolution happens only
+/// after the exclusive lock is held, so indexes cannot race a concurrent
+/// save or delete.
+pub(crate) fn delete_templates(
+    selectors: &[String],
+) -> Result<TemplateDeleteOutcome, TemplateShelfError> {
+    delete_templates_with_lock_timeout(selectors, LOCK_TIMEOUT)
+}
+
+fn delete_templates_with_lock_timeout(
+    selectors: &[String],
+    timeout: Duration,
+) -> Result<TemplateDeleteOutcome, TemplateShelfError> {
+    let file = templates_file();
+    let _lock = acquire_write_lock(&file, timeout)?;
+    let mut loaded = read_locked(&file);
+    if let Some(version) = loaded.newer_schema {
+        return Err(TemplateShelfError::NewerSchema(version));
+    }
+    let mut warnings = Vec::new();
+    if loaded.corrupt {
+        quarantine_locked(&file);
+        loaded.entries.clear();
+        warnings.push(
+            "saved template shelf was unreadable and has been quarantined"
+                .into(),
+        );
+    }
+
+    let original = loaded.entries.clone();
+    let mut deleted = Vec::new();
+    let mut missing = Vec::new();
+    for selector in selectors {
+        let index = if selector.len() <= 2
+            && !selector.is_empty()
+            && selector.bytes().all(|byte| byte.is_ascii_digit())
+        {
+            selector
+                .parse::<usize>()
+                .ok()
+                .and_then(|one_based| one_based.checked_sub(1))
+                .filter(|index| *index < original.len())
+        } else {
+            original
+                .iter()
+                .position(|entry| entry.id.as_deref() == Some(selector))
+        };
+        let Some(index) = index else {
+            missing.push(selector.clone());
+            continue;
+        };
+        let id = original[index]
+            .id
+            .as_deref()
+            .expect("validated shelf entry has id")
+            .to_string();
+        if !deleted.contains(&id) {
+            deleted.push(id);
+        }
+    }
+
+    if !deleted.is_empty() {
+        loaded.entries.retain(|entry| {
+            !entry.id.as_ref().is_some_and(|id| deleted.contains(id))
+        });
+        write_locked(&file, &loaded.entries, &loaded.extra)
+            .map_err(shelf_error_from_save)?;
+    }
+    Ok(TemplateDeleteOutcome {
+        deleted,
+        missing,
+        warnings,
+    })
+}
+
+/// Clear is the escape hatch for a shelf written by a newer bob. The lock
+/// file remains so other processes continue to coordinate on the same path.
+pub(crate) fn clear_templates(
+) -> Result<TemplateClearOutcome, TemplateShelfError> {
+    clear_templates_with_lock_timeout(LOCK_TIMEOUT)
+}
+
+fn clear_templates_with_lock_timeout(
+    timeout: Duration,
+) -> Result<TemplateClearOutcome, TemplateShelfError> {
+    let file = templates_file();
+    let _lock = acquire_write_lock(&file, timeout)?;
+    let loaded = read_locked(&file);
+    let cleared = loaded.entries.len();
+    for path in [&file, &quarantine_file_for(&file)] {
+        match fs::remove_file(path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(TemplateShelfError::Io(format!(
+                    "clear shelf: {error}"
+                )));
+            }
+        }
+    }
+    Ok(TemplateClearOutcome {
+        cleared,
+        warnings: Vec::new(),
+    })
 }
 
 #[cfg(test)]

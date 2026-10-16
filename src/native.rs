@@ -91,6 +91,11 @@ pub(crate) enum NativeCommand {
     CaptureTaskId,
     CaptureTaskSections,
     CaptureTasks,
+    CaptureTemplatesClear,
+    CaptureTemplatesDelete,
+    CaptureTemplatesList,
+    CaptureTemplatesSave,
+    CaptureTemplatesShow,
     Completion,
     Freshness,
     Gkeep,
@@ -137,6 +142,21 @@ pub(crate) fn run(command: NativeCommand, args: Vec<OsString>) -> i32 {
         NativeCommand::CaptureTaskId => capture_task_id::run(args),
         NativeCommand::CaptureTaskSections => capture_task_sections::run(args),
         NativeCommand::CaptureTasks => capture_tasks::run(args),
+        NativeCommand::CaptureTemplatesClear => {
+            capture_templates::command::run_clear(args)
+        }
+        NativeCommand::CaptureTemplatesDelete => {
+            capture_templates::command::run_delete(args)
+        }
+        NativeCommand::CaptureTemplatesList => {
+            capture_templates::command::run_list(args)
+        }
+        NativeCommand::CaptureTemplatesSave => {
+            capture_templates::command::run_save(args)
+        }
+        NativeCommand::CaptureTemplatesShow => {
+            capture_templates::command::run_show(args)
+        }
         NativeCommand::Completion => completion::run(args),
         NativeCommand::Freshness => freshness::cli::run(args),
         NativeCommand::Gkeep => gkeep::run(args),

@@ -31,7 +31,7 @@ Setup:
 Capture protocol (Bob Mac Capture JSON endpoints; `bob --help` lists them):
   capture-complete  capture-parse  capture-pomodoro-name  capture-pomodoros
   capture-rewrite  capture-sections  capture-targets  capture-task-id
-  capture-task-sections  capture-tasks
+  capture-task-sections  capture-tasks  capture-templates
 
 Options:
   -h, --help     Print help (see more with '--help')

@@ -117,6 +117,10 @@ failure, which yields empty output.
   `capture-rewrite` completes the marker at the end of the active word
   through the in-process `capture_complete` extraction (see below).
   Wikilinks (`[[…`) are deferred and offer nothing.
+- **Saved templates.** `capture-templates` is a nested capture-protocol
+  command group; its `clear`, `delete`, `list`, `save`, and `show` members
+  complete under the `commands` group. TEMPLATE selectors and `save` TEXT are
+  free text; no vault scan or capture-marker completion runs for them.
 - **Vault values.** These slots read the live vault through the same
   in-process scans as the commands they complete, so short clusters
   (`-rcash`), `--route=cash`, and `BOB_DIR` defaults behave exactly as
@@ -161,7 +165,7 @@ plan<TAB>Show today's plan budget, Today's tasks, and NEXT/PENDING lanes<TAB>dai
 task<TAB>Vault-wide task maintenance: reconcile, reroll, archive<TAB>tasks and projects<TAB>space
 … (tasks and projects, vault, integrations, and setup sections)
 capture-complete<TAB>Complete the capture marker at the cursor<TAB>capture protocol<TAB>space
-… (all ten capture-* endpoints, grouped last)
+… (all eleven capture-* endpoints, grouped last)
 ```
 
 ```text

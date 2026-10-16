@@ -43,6 +43,7 @@ Capture protocol:
   capture-task-id        Write a block ID onto an open capture task
   capture-task-sections  List the ALL-CAPS child sections of a capture task
   capture-tasks          List the open tasks of a capture note
+  capture-templates      List, save, show, and manage saved capture templates
 
 Options:
   -h, --help

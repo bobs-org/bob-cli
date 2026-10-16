@@ -68,7 +68,12 @@ fn empty_root_offers_commands_then_capture_protocol_without_options() {
             "missing {command}: {names:?}"
         );
     }
-    for endpoint in ["capture-complete", "capture-tasks", "capture-targets"] {
+    for endpoint in [
+        "capture-complete",
+        "capture-tasks",
+        "capture-targets",
+        "capture-templates",
+    ] {
         assert!(
             names.contains(&endpoint.to_string()),
             "missing {endpoint}: {names:?}"
@@ -98,6 +103,23 @@ fn empty_root_offers_commands_then_capture_protocol_without_options() {
     );
     assert!(!group_list.contains(&"options".to_string()));
     assert_stdout_has_no_ansi(&output);
+}
+
+#[test]
+fn saved_template_group_and_format_complete_as_commands_and_static_choices() {
+    let group = complete(&["bob", "capture-templates", ""]);
+    assert_success(&group);
+    assert_eq!(
+        values(&group),
+        vec!["clear", "delete", "list", "save", "show"]
+    );
+    assert!(groups(&group).iter().all(|group| group == "commands"));
+
+    let formats =
+        complete(&["bob", "capture-templates", "list", "--format", ""]);
+    assert_success(&formats);
+    assert_eq!(values(&formats), vec!["human", "json"]);
+    assert!(groups(&formats).iter().all(|group| group == "format"));
 }
 
 #[test]

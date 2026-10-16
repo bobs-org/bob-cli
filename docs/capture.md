@@ -55,6 +55,7 @@ workflow guide.
 - [`bob capture-parse`](#bob-capture-parse)
 - [`bob capture-rewrite`](#bob-capture-rewrite)
 - [`bob capture-complete`](#bob-capture-complete)
+- [`bob capture-templates`](#bob-capture-templates)
 - [Discovery commands](#discovery-commands)
 - [`bob capture-task-id`](#bob-capture-task-id)
 - [`bob capture-pomodoro-name`](#bob-capture-pomodoro-name)
@@ -610,6 +611,35 @@ the checked-out entry, the edited version replaces the original in the same
 locked write and keeps its history, so edits never pile up near-duplicates.
 Abandoning a checked-out draft leaves the shelf untouched, and the copy on
 disk is never deleted by picking it.
+
+Use `bob capture-templates` to manage the shelf. Bare invocation and `list`
+show the newest templates first. `show TEMPLATE` prints the ready-to-insert
+draft (`@@template:` header, definition, and an empty rows area) without
+styling, so it can be piped or copied directly. `TEMPLATE` is a 1-based list
+index of one or two digits, or the content id shown by `list`.
+
+```sh
+bob capture-templates
+bob capture-templates show 1
+bob capture-templates save -f json < template-draft.txt
+bob capture-templates delete 1 9c1f0e2a7b3d
+bob capture-templates clear
+```
+
+`save` accepts TEXT arguments joined with spaces or a complete draft on stdin.
+It checks the definition (header, separator, placeholders, and block-level
+markers) while ignoring missing rows and row errors. Saving a definition does
+not increment `use_count`. The hidden `--template-origin ID` supports the Mac
+client's checkout flow; it replaces an edited origin atomically while keeping
+its history. `delete` is idempotent and reports unresolved selectors in JSON's
+`missing` array. `clear` also removes a corrupt quarantine copy and is allowed
+when the shelf was written by a newer schema.
+
+`list -f json` returns `schema_version`, `capacity`, `saving`, the resolved
+`file`, and entries with their canonical `text`, insertion `draft`, UTF-8 byte
+`cursor`, `field_count`, `line_count`, `route`, capture-parse `spans`, and usage
+timestamps. The Mac client can render and insert those values without parsing
+the capture language. Shelf and config warnings appear in `warnings`.
 
 ### Authored sub-bullets
 
@@ -5818,6 +5848,41 @@ missing note behind a resolved route or link target is not an error; it returns
 an empty candidate list. Discovery failures never fall back to a default route
 or an empty result silently; they return the same actionable error in human and
 JSON forms as the underlying scan would.
+
+## `bob capture-templates`
+
+```text
+bob capture-templates [list] [-f|--format human|json]
+bob capture-templates show TEMPLATE [-f|--format human|json]
+bob capture-templates save [-f|--format human|json] [TEXT]...
+bob capture-templates delete TEMPLATE... [-f|--format human|json]
+bob capture-templates clear [-f|--format human|json]
+```
+
+The group is a capture-protocol sibling of `bob capture`; its verbs must stay
+under `capture-templates` because free-text `bob capture` accepts arbitrary
+text. `list` is the default and is read-only. `show` writes an unstyled draft
+to stdout. `save` reads TEXT joined with spaces, or stdin when TEXT is absent.
+`delete` resolves numeric selectors against the locked list at write time.
+All commands support `-f|--format human|json`. JSON errors use
+`{"ok":false,"error":"...","code":"..."}`.
+
+`list -f json` is the app protocol: each entry includes the insertable `draft`,
+the UTF-8 byte `cursor`, `field_count`, `line_count`, the first row's `route`,
+and `spans` computed by the same parser as `capture-parse`. Clients render and
+insert these values directly instead of parsing template syntax. Saving is
+controlled by `capture.max_saved_templates`; a newer schema blocks writes but
+still permits reads, and `clear` remains available as the explicit reset.
+
+`show -f json` returns `{"ok":true,"template":...}`. `save -f json`
+returns `saved: {id,status}` and the new entry; `status` is `new`, `updated`,
+or `replaced`. A new explicit save starts with `use_count: 0`. Delete returns
+the deleted ids and any unresolved selector strings in `missing`; clear
+returns the number of entries removed. Error JSON includes `ok: false`,
+`error`, and `code`: `saved_template_not_found` exits 1; `saved_template_not_template`,
+`saved_templates_disabled`, and existing `template_*` definition errors exit
+2; `saved_templates_newer_schema`, `saved_templates_busy`, and
+`saved_templates_io` exit 1.
 
 ## Discovery commands
 

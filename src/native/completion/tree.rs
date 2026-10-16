@@ -50,6 +50,21 @@ impl NativeCommand {
             NativeCommand::CaptureTasks => {
                 crate::native::capture_tasks::build_cli()
             }
+            NativeCommand::CaptureTemplatesClear => {
+                crate::native::capture_templates::command::build_cli_clear()
+            }
+            NativeCommand::CaptureTemplatesDelete => {
+                crate::native::capture_templates::command::build_cli_delete()
+            }
+            NativeCommand::CaptureTemplatesList => {
+                crate::native::capture_templates::command::build_cli_list()
+            }
+            NativeCommand::CaptureTemplatesSave => {
+                crate::native::capture_templates::command::build_cli_save()
+            }
+            NativeCommand::CaptureTemplatesShow => {
+                crate::native::capture_templates::command::build_cli_show()
+            }
             NativeCommand::Completion => {
                 crate::native::completion::cli::completion_command()
             }

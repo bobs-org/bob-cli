@@ -2,6 +2,7 @@
 
 mod aliases;
 mod capture;
+mod capture_templates;
 mod completion;
 mod dataview;
 mod dataview_oom;
