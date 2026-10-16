@@ -7,11 +7,13 @@ use serde::Deserialize;
 
 use super::env as bob_env;
 
+pub(crate) mod capture;
 pub(crate) mod dependencies;
 pub(crate) mod freshness;
 pub(crate) mod plan;
 pub(crate) mod stats;
 
+pub(crate) use capture::{load_capture_config, DEFAULT_MAX_SAVED_TEMPLATES};
 pub(crate) use dependencies::load_dependencies_config;
 pub(crate) use freshness::{load_freshness_config, FreshnessConfig};
 pub(crate) use plan::{load_plan_config, PlanConfig};
@@ -353,6 +355,8 @@ pub(crate) struct RawConfig {
     highlights: Option<RawHighlights>,
     #[serde(default)]
     gkeep: Option<RawGkeep>,
+    #[serde(default)]
+    pub(crate) capture: Option<serde_yaml::Value>,
     #[serde(default)]
     pub(crate) plan: Option<serde_yaml::Value>,
     #[serde(default)]

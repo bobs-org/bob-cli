@@ -1245,6 +1245,12 @@ above, then Playwright's bundled Chromium.
 available. See [Compatibility shims](#compatibility-shims) for the exact command
 coverage and cache location.
 
+`BOB_CAPTURE_TEMPLATES_FILE` overrides the exact saved-template shelf path
+written after successful `@@template:` captures. The default is
+`$XDG_STATE_HOME/bob-cli/capture/templates.json`, or
+`$HOME/.local/state/bob-cli/capture/templates.json` when `XDG_STATE_HOME` is
+unset.
+
 `BOB_CLIPBOARD_CMD` is whitespace-split into a command and arguments and takes
 priority over platform clipboard tools for `bob capture`. Without it, capture
 uses `pbpaste` on macOS; on Linux it uses `wl-paste --no-newline --type text`

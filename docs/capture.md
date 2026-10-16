@@ -554,7 +554,7 @@ problem in draft order and writes nothing:
 | Code | Example message |
 | --- | --- |
 | `template_header_misplaced` | Write `@@template:` alone on the draft's first line |
-| `template_missing_rows` | Add a blank line, then one row per capture |
+| `template_missing_rows` | Add a blank line, then one row per capture; with the blank separator present: add one row per capture (`: N values separated by spaces`, `: one value per row`, or bare) |
 | `template_needs_separator` | Add a blank line between the template and its rows |
 | `template_missing_placeholder` | Add at least one placeholder such as `{0}` |
 | `template_invalid_placeholder` | Use `{N}`; write `{{` for a literal brace |
@@ -574,6 +574,42 @@ output prints a dim row-count and source-line summary before the numbered
 items. `-E, --expand` prints the expanded text and exits before vault access
 or planning; JSON mode returns it as `expanded` with the same `template`
 summary. On drafts without the header, `-E` returns the original text.
+
+### Saved templates
+
+Every successful real `@@template:` capture saves its template block to a
+bob-owned shelf, so the next wave reuses it instead of retyping it. Only the
+block is saved, never the rows: rows carry one-off values that must not
+replay.
+
+Saving happens after the vault write succeeds, once per invocation (not once
+per row), and only for real captures: `--dry-run`, `-E`, failed or refused
+captures, drafts without a header, and forced `-r`/`-s`/`-t` destinations
+never touch the shelf. `capture-parse`, `capture-complete`, and
+`capture-rewrite` never touch it either. Saving is best-effort and never
+fails a capture: the exit code stays 0, and a shelf failure prints
+`bob capture: warning: template not saved: <reason>` on stderr with
+`template.not_saved` in JSON.
+
+The shelf lives at
+`${XDG_STATE_HOME:-~/.local/state}/bob-cli/capture/templates.json`.
+`BOB_CAPTURE_TEMPLATES_FILE` overrides the exact file path. The directory is
+`0700` and the file is `0600`. Entries are keyed by the first 12 hex digits
+of SHA-256 over the canonical block text (trailing spaces and tabs stripped,
+lines joined with `\n`), ordered most recently touched first, with
+`first_saved_at`, `last_used_at`, and a `use_count` of successful captures.
+
+`capture.max_saved_templates` in the Bob config caps the shelf from 0 to 36
+and defaults to 36. Every write trims to the cap by dropping the least
+recently used entries. `0` turns saving off: bob never writes the shelf, and
+existing entries stay listed and usable. An invalid value or a config read
+error prints one stderr warning and uses 36.
+
+A save may carry the app's checkout origin: when the used block differs from
+the checked-out entry, the edited version replaces the original in the same
+locked write and keeps its history, so edits never pile up near-duplicates.
+Abandoning a checked-out draft leaves the shelf untouched, and the copy on
+disk is never deleted by picking it.
 
 ### Authored sub-bullets
 
@@ -4225,7 +4261,13 @@ stable fields include `ok`, `dry_run`, `routed`, `route`, `route_label`,
 `placement`, and `pull_in` (`supported: true` on every success). The
 template path additionally returns `template: {line, field_count, row_count}`
 and `template_row: {row, line}` on each expanded item, including the legacy
-top-level result for row 1. `-E, --expand` prints the expanded draft in human
+top-level result for row 1. A successful real template capture also saves the
+block to the shelf (see [Saved templates](#saved-templates)): the `template`
+object then gains `saved: {id, status}` (`new`, `updated`, or `replaced`),
+or `not_saved: "<reason>"` when the best-effort save failed. Both are absent
+on `--dry-run` and when saving is off. Human output appends `· saved`
+(`· saved, replacing <id>` for `replaced`) or `· not saved` to the template
+summary line. `-E, --expand` prints the expanded draft in human
 mode; with `-f json` it returns `expanded` and the same `template` summary. On
 drafts without a header it returns the original text. The
 `kind` field is `"task"`, `"bullet"`, `"pomodoro_task"`,

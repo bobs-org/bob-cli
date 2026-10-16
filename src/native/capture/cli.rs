@@ -461,7 +461,7 @@ In expansion mode all other capture options are accepted and ignored.",
         )
         .after_help(
             "Examples:\n  bob capture buy milk @groceries\n  bob capture buy milk s:1\n  bob capture buy milk s:2 @groceries\n  bob capture buy milk @groceries s:2\n  bob capture buy milk p:2\n  bob capture research rust p:4 @dev\n  bob capture buy milk %\n  bob capture research links %3\n  bob capture investigate %log @dev:blockid\n  bob capture --clip=screenshot -- save dashboard\n  bob capture '@dev^foobar' 'Some ordinary task.'\n  bob capture '@dev:foobar' 'Some foobar task.'\n  bob capture '@dev:foobar#bugs' 'Some foobar task.'\n  bob capture '@cash^goog-exit+' 'Finish the Google exit packet!'\n  printf 'Finish the Google exit packet! @cash^goog-exit+\\n- Draft the resignation memo\\n' | bob capture
-  printf 'Finish the Google exit packet! @cash^goog-exit+#admin\\n- Draft the resignation memo :draft-memo\\n  - keep it short\\n- Collect the equity paperwork ^equity-docs\\n' | bob capture\n  bob capture '@cash+goog-exit' 'Called Morgan Stanley today.'\n  bob capture '@cash+goog-exit!'\n  bob capture +5\n  bob capture -- -2\n  bob capture +\n  bob capture ++3\n  bob capture -- --2\n  bob capture --1\n  printf '+5\\n\\nCall bank @Cash+\\n' | bob capture\n  printf -- '--2\\n\\n+\\n' | bob capture\n  bob capture '=x'\n  bob capture '=x2'\n  bob capture '=x1!2'\n  bob capture '=x!1@2'\n  bob capture '=x1~2'\n  bob capture '=x0'\n  printf '=x2,3\\n- 2 wired the lexer\\n' | bob capture\n  printf '=x =\\n- 1 wired the lexer\\n' | bob capture\n  bob capture '='\n  bob capture '=3'\n  bob capture '=~2'\n  bob capture '=3#bugs~1'\n  bob capture '=#deep-work'\n  bob capture '=3#bugs'\n  bob capture '=#bugs@3'\n  bob capture '=x =#bugs'\n  bob capture '=x =~2'\n  printf '=x\\n\\n=\\n' | bob capture\n  bob capture '+2 =x'\n  bob capture '=x ='\n  bob capture '^bob:capture-stop=x'\n  bob capture '^bob:capture-stop=x!1'\n  bob capture -p 1 -- '!sase:fix'\n  bob capture -p all -- '!sase:fix'\n  printf -- '-2\\n\\n=x\\n' | bob capture\n  bob capture 'Postgres 17 minimum @foo+bar#requirements'\n  bob capture --route foo --task bar --task-section REQUIREMENTS -- 'Postgres 17 minimum'\n  bob capture remembered to bump the timeout #\n  bob capture paste the failing output % #\n  bob capture jot idea @notes#Ideas\n  bob capture --route notes --section Ideas -- jot idea\n  bob capture @notes#Ideas jot idea\n  printf '@@foo\\nFirst task\\n\\nSecond task @bar\\n' | bob capture\n  printf '@@template:\\nApply to {0}! @job^apply-{1}\\n\\nFoobar foo\\n\"Two Sigma\" two-sigma\\n' | bob capture\n  printf '@@foo+a-id\\nFirst note\\n- authored detail\\n\\nSecond note\\n' | bob capture\n  echo 'buy milk @groceries' | bob capture\n  bob capture -f json -- @work send status\n  printf 'Prepare launch\\n- Confirm owner\\n\\nSend status @work\\n' | bob capture\n  printf 'Prepare launch\\n- Confirm owner\\n- Attach checklist\\n' | bob capture\n  bob capture https://example.com/essay\n  bob capture 'Ask Kelly *job:cleanup'\n  bob capture '*job:cleanup @body+work'\n  bob capture '&foo:bar @body+excercise'\n  bob capture '^body:excercise &foo:bar'\n\nEnvironment:\n  BOB_CLIPBOARD_CMD          whitespace-split command that prints the live clipboard; overrides platform tools\n  BOB_CLIPBOARD_HISTORY_CMD  whitespace-split history command; receives count and prints a newest-first JSON array of strings\n  BOB_CONFIG_FILE            exact bullet-property config file; defaults to $XDG_CONFIG_HOME/bob/config.yml or ~/.config/bob/config.yml\n  BOB_DAY_FILE               exact daily note used by Pomodoro-linked capture\n  BOB_DIR                    Bob vault root when --bob-dir is omitted\n  BOB_NOW                    current date/time override\n  BOB_PRIORITY_ROLL_SEED     fixed seed for p:<N> rolls; unset means random\n  XDG_CONFIG_HOME            base config directory for BOB_CONFIG_FILE's default; defaults to ~/.config\n\nClipboard source order:\n  Live: BOB_CLIPBOARD_CMD; macOS pbpaste; Linux wl-paste or xclip/xsel; tmux show-buffer\n  History: BOB_CLIPBOARD_HISTORY_CMD; otherwise read-only Clipy SQLite on macOS; no automatic provider elsewhere",
+  printf 'Finish the Google exit packet! @cash^goog-exit+#admin\\n- Draft the resignation memo :draft-memo\\n  - keep it short\\n- Collect the equity paperwork ^equity-docs\\n' | bob capture\n  bob capture '@cash+goog-exit' 'Called Morgan Stanley today.'\n  bob capture '@cash+goog-exit!'\n  bob capture +5\n  bob capture -- -2\n  bob capture +\n  bob capture ++3\n  bob capture -- --2\n  bob capture --1\n  printf '+5\\n\\nCall bank @Cash+\\n' | bob capture\n  printf -- '--2\\n\\n+\\n' | bob capture\n  bob capture '=x'\n  bob capture '=x2'\n  bob capture '=x1!2'\n  bob capture '=x!1@2'\n  bob capture '=x1~2'\n  bob capture '=x0'\n  printf '=x2,3\\n- 2 wired the lexer\\n' | bob capture\n  printf '=x =\\n- 1 wired the lexer\\n' | bob capture\n  bob capture '='\n  bob capture '=3'\n  bob capture '=~2'\n  bob capture '=3#bugs~1'\n  bob capture '=#deep-work'\n  bob capture '=3#bugs'\n  bob capture '=#bugs@3'\n  bob capture '=x =#bugs'\n  bob capture '=x =~2'\n  printf '=x\\n\\n=\\n' | bob capture\n  bob capture '+2 =x'\n  bob capture '=x ='\n  bob capture '^bob:capture-stop=x'\n  bob capture '^bob:capture-stop=x!1'\n  bob capture -p 1 -- '!sase:fix'\n  bob capture -p all -- '!sase:fix'\n  printf -- '-2\\n\\n=x\\n' | bob capture\n  bob capture 'Postgres 17 minimum @foo+bar#requirements'\n  bob capture --route foo --task bar --task-section REQUIREMENTS -- 'Postgres 17 minimum'\n  bob capture remembered to bump the timeout #\n  bob capture paste the failing output % #\n  bob capture jot idea @notes#Ideas\n  bob capture --route notes --section Ideas -- jot idea\n  bob capture @notes#Ideas jot idea\n  printf '@@foo\\nFirst task\\n\\nSecond task @bar\\n' | bob capture\n  printf '@@template:\\nApply to {0}! @job^apply-{1}\\n\\nFoobar foo\\n\"Two Sigma\" two-sigma\\n' | bob capture\n  printf '@@foo+a-id\\nFirst note\\n- authored detail\\n\\nSecond note\\n' | bob capture\n  echo 'buy milk @groceries' | bob capture\n  bob capture -f json -- @work send status\n  printf 'Prepare launch\\n- Confirm owner\\n\\nSend status @work\\n' | bob capture\n  printf 'Prepare launch\\n- Confirm owner\\n- Attach checklist\\n' | bob capture\n  bob capture https://example.com/essay\n  bob capture 'Ask Kelly *job:cleanup'\n  bob capture '*job:cleanup @body+work'\n  bob capture '&foo:bar @body+excercise'\n  bob capture '^body:excercise &foo:bar'\n\nEnvironment:\n  BOB_CAPTURE_TEMPLATES_FILE  exact saved-template shelf path; defaults to $XDG_STATE_HOME/bob-cli/capture/templates.json\n  BOB_CLIPBOARD_CMD          whitespace-split command that prints the live clipboard; overrides platform tools\n  BOB_CLIPBOARD_HISTORY_CMD  whitespace-split history command; receives count and prints a newest-first JSON array of strings\n  BOB_CONFIG_FILE            exact bullet-property config file; defaults to $XDG_CONFIG_HOME/bob/config.yml or ~/.config/bob/config.yml\n  BOB_DAY_FILE               exact daily note used by Pomodoro-linked capture\n  BOB_DIR                    Bob vault root when --bob-dir is omitted\n  BOB_NOW                    current date/time override\n  BOB_PRIORITY_ROLL_SEED     fixed seed for p:<N> rolls; unset means random\n  XDG_CONFIG_HOME            base config directory for BOB_CONFIG_FILE's default; defaults to ~/.config\n  XDG_STATE_HOME             base state directory for the saved-template shelf; defaults to ~/.local/state\n\nClipboard source order:\n  Live: BOB_CLIPBOARD_CMD; macOS pbpaste; Linux wl-paste or xclip/xsel; tmux show-buffer\n  History: BOB_CLIPBOARD_HISTORY_CMD; otherwise read-only Clipy SQLite on macOS; no automatic provider elsewhere",
         )
         .disable_help_flag(true)
         .arg(bob_dir_arg())
@@ -479,6 +479,7 @@ In expansion mode all other capture options are accepted and ignored.",
         .arg(task_arg())
         .arg(task_ref_arg())
         .arg(task_section_arg())
+        .arg(template_origin_arg())
         .arg(text_arg())
 }
 
@@ -613,6 +614,14 @@ pub(super) fn task_section_arg() -> Arg {
         .help("Nest under the exact task-section TITLE; requires --route and --task")
 }
 
+pub(super) fn template_origin_arg() -> Arg {
+    Arg::new("template-origin")
+        .long("template-origin")
+        .value_name("ID")
+        .hide(true)
+        .help("Internal saved-template checkout id")
+}
+
 pub(super) fn text_arg() -> Arg {
     Arg::new("text")
         .value_name("TEXT")
@@ -668,6 +677,7 @@ pub(super) struct CaptureRequest {
     pub(super) no_ref: bool,
     pub(super) pull_in: Option<PullInPicks>,
     pub(super) require_pull_in_choice: bool,
+    pub(super) template_origin: Option<String>,
     pub(super) raw_text: String,
     /// Resolved successor selection for this plan. Defaults to `None`
     /// (unpicked offers). `plan_with_pull_in` overwrites it before each
@@ -718,6 +728,15 @@ impl CaptureRequest {
                 "--task-section requires --task or --task-ref",
             ));
         }
+        let template_origin =
+            matches.get_one::<String>("template-origin").cloned();
+        if let Some(origin) = template_origin.as_deref()
+            && !crate::native::capture_templates::store::is_valid_origin(origin)
+        {
+            return Err(CaptureError::usage(
+                "--template-origin must be 1-64 ASCII alphanumeric characters",
+            ));
+        }
 
         Ok(Self {
             bob_dir: bob_dir_from_matches(matches),
@@ -735,6 +754,7 @@ impl CaptureRequest {
                 .map(|raw| parse_pull_in_picks(raw))
                 .transpose()?,
             require_pull_in_choice: matches.get_flag("require-pull-in-choice"),
+            template_origin,
             raw_text: raw_text_from_matches(matches)?,
             selection: crate::native::task_complete::SuccessorSelection::None,
         })

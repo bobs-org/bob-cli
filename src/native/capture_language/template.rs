@@ -71,6 +71,12 @@ pub(crate) struct TemplateBlock {
     lines: Vec<(usize, Range<usize>)>,
 }
 
+impl TemplateBlock {
+    pub(crate) fn line_ranges(&self) -> &[(usize, Range<usize>)] {
+        &self.lines
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TemplateAnalysis {
     pub(crate) header: Option<(Range<usize>, usize)>,
@@ -444,9 +450,20 @@ pub(crate) fn analyze(raw: &str) -> TemplateAnalysis {
     }
 
     if rows.is_empty() {
+        let message = if separator_index.is_some() {
+            match field_count {
+                0 => "add one row per capture".to_string(),
+                1 => "add one row per capture: one value per row".to_string(),
+                count => format!(
+                    "add one row per capture: {count} values separated by spaces"
+                ),
+            }
+        } else {
+            "add a blank line, then one row per capture".to_string()
+        };
         issues.push(issue(
             "template_missing_rows",
-            "add a blank line, then one row per capture",
+            message,
             block.range.end..block.range.end,
         ));
     }

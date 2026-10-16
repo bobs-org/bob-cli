@@ -18,6 +18,7 @@ fn template_request(vault: &Path, raw_text: &str) -> CaptureRequest {
         no_ref: false,
         pull_in: None,
         require_pull_in_choice: false,
+        template_origin: None,
         raw_text: raw_text.to_string(),
         selection: crate::native::task_complete::SuccessorSelection::None,
     }

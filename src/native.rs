@@ -39,6 +39,7 @@ mod capture_task_id;
 mod capture_task_sections;
 mod capture_task_toggle;
 mod capture_tasks;
+mod capture_templates;
 mod capture_work_log;
 mod collect_done;
 pub(crate) mod completion;

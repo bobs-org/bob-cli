@@ -29,8 +29,8 @@ use super::{
     },
     capture_pomodoro_close, capture_pomodoro_start, capture_pomodoros,
     capture_project_note, capture_schedule_log, capture_task_sections,
-    capture_task_toggle, collect_done, config, env as bob_env, markdown,
-    note_tasks,
+    capture_task_toggle, capture_templates, collect_done, config,
+    env as bob_env, markdown, note_tasks,
     note_tasks::{BlockIdLookup, RefLookup},
     plan_budget, pomodoro,
     projects::{
@@ -241,7 +241,7 @@ fn capture(mut request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
             );
         }
     }
-    Ok(CaptureResult::from_items(
+    let mut result = CaptureResult::from_items(
         batch.items.into_iter().map(|item| item.result).collect(),
         batch.global_destination,
         batch.template,
@@ -251,5 +251,66 @@ fn capture(mut request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
         batch.pomodoro_blocks,
         batch.task_blocks,
         pull_in,
-    ))
+    );
+    let has_template = result.template.is_some();
+    save_template_shelf(&request, has_template, &mut result);
+    Ok(result)
+}
+
+/// Best-effort shelf save after a successful real template capture. Never
+/// fails the capture: failures set `template.not_saved` and print one
+/// stderr warning. Dry runs, forced destinations, and saving-off leave the
+/// store untouched and the JSON/human output byte-identical.
+fn save_template_shelf(
+    request: &CaptureRequest,
+    has_template: bool,
+    out: &mut CaptureResult,
+) {
+    if !has_template || request.dry_run {
+        return;
+    }
+    if request.forced_route.is_some()
+        || request.forced_section.is_some()
+        || request.forced_sub_bullet_target.is_some()
+        || request.forced_task_section.is_some()
+        || !request.forced_destination_flags.is_empty()
+    {
+        return;
+    }
+    let cap = match config::load_capture_config(&config::config_path()) {
+        Ok(config) => config.max_saved_templates(),
+        Err(error) => {
+            let message = match error {
+                config::ConfigError::Read(message)
+                | config::ConfigError::Invalid(message) => message,
+            };
+            eprintln!("{COMMAND_NAME}: warning: {message}; using 36");
+            config::DEFAULT_MAX_SAVED_TEMPLATES
+        }
+    };
+    if cap == 0 {
+        return;
+    }
+    let Some(canonical) =
+        capture_templates::store::canonical_template_text(&request.raw_text)
+    else {
+        return;
+    };
+    let now = capture_templates::store::now_timestamp();
+    let origin = request.template_origin.as_deref();
+    match capture_templates::store::save_template_text(
+        &canonical, origin, cap, &now,
+    ) {
+        Ok(saved) => {
+            out.template_saved = Some(TemplateSavedJson {
+                id: saved.id,
+                status: saved.status.as_str(),
+            });
+        }
+        Err(error) => {
+            let reason = error.reason().to_string();
+            eprintln!("{COMMAND_NAME}: warning: template not saved: {reason}");
+            out.template_not_saved = Some(reason);
+        }
+    }
 }

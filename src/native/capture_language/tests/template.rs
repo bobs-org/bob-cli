@@ -57,7 +57,19 @@ fn missing_template_or_rows_has_a_teaching_issue() {
         first_issue("@@template:\nTask {0}\n\n").code(),
         "template_missing_rows"
     );
-    assert!(first_issue("@@template:\nTask {0}\n\n")
+    assert_eq!(
+        first_issue("@@template:\nTask {0}\n\n").message(),
+        "add one row per capture: one value per row"
+    );
+    assert_eq!(
+        first_issue("@@template:\nApply to {0} {1}\n\n").message(),
+        "add one row per capture: 2 values separated by spaces"
+    );
+    assert_eq!(
+        first_issue("@@template:\nA task\n\n").message(),
+        "add one row per capture"
+    );
+    assert!(first_issue("@@template:\nTask {0}\nvalue\n")
         .message()
         .contains("add a blank line"));
 }

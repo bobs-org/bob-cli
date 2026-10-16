@@ -243,6 +243,12 @@ fn is_zero(value: &usize) -> bool {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct TemplateSavedJson {
+    pub(super) id: String,
+    pub(super) status: &'static str,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct CaptureResult {
     #[serde(flatten)]
     pub(super) item: CaptureItemResult,
@@ -254,6 +260,10 @@ pub(super) struct CaptureResult {
     pub(super) template: Option<capture_language::template::TemplateSummary>,
     #[serde(skip)]
     pub(super) template_rows: Vec<Option<capture_language::TemplateRowSummary>>,
+    #[serde(skip)]
+    pub(super) template_saved: Option<TemplateSavedJson>,
+    #[serde(skip)]
+    pub(super) template_not_saved: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(super) warnings: Vec<String>,
     /// Before/after plan budget, present only when the batch changed
@@ -303,6 +313,8 @@ impl CaptureResult {
             global_destination,
             template,
             template_rows,
+            template_saved: None,
+            template_not_saved: None,
             warnings,
             plan_budget,
             pomodoro_blocks,
@@ -1098,7 +1110,12 @@ pub(super) fn print_human_success(result: &CaptureResult) {
         print_global_destination_summary(global);
     }
     if let Some(summary) = &result.template {
-        print_template_summary(summary, &result.template_rows);
+        print_template_summary(
+            summary,
+            &result.template_rows,
+            result.template_saved.as_ref(),
+            result.template_not_saved.as_deref(),
+        );
     }
     if result.captures.is_empty() {
         print_human_item_success(result, None);
@@ -1119,6 +1136,8 @@ pub(super) fn print_human_success(result: &CaptureResult) {
 fn print_template_summary(
     summary: &capture_language::template::TemplateSummary,
     rows: &[Option<capture_language::TemplateRowSummary>],
+    saved: Option<&TemplateSavedJson>,
+    not_saved: Option<&str>,
 ) {
     let styler = Styler::detect();
     let row_label = if summary.row_count == 1 {
@@ -1138,13 +1157,26 @@ fn print_template_summary(
         }
         _ => format!("header line {}", summary.line),
     };
-    println!(
+    let mut line = format!(
         "{}  {} {} · {}",
         styler.dim("template"),
         summary.row_count,
         row_label,
         line_range
     );
+    if let Some(saved) = saved {
+        if saved.status == "replaced" {
+            line.push_str(&format!(
+                " · saved, replacing {}",
+                styler.dim(&saved.id)
+            ));
+        } else {
+            line.push_str(" · saved");
+        }
+    } else if not_saved.is_some() {
+        line.push_str(&format!(" · {}", styler.yellow("not saved")));
+    }
+    println!("{line}");
 }
 
 fn print_pull_in_hint(result: &CaptureResult) {
@@ -3112,6 +3144,17 @@ pub(super) fn success_json(result: &CaptureResult) -> String {
     }
     let mut value =
         serde_json::to_value(result).expect("serialize capture result");
+    if let Some(template) = value
+        .get_mut("template")
+        .and_then(|value| value.as_object_mut())
+    {
+        if let Some(saved) = result.template_saved.as_ref() {
+            template.insert("saved".to_string(), json!(saved));
+        }
+        if let Some(reason) = result.template_not_saved.as_deref() {
+            template.insert("not_saved".to_string(), json!(reason));
+        }
+    }
     if let Some(row) = result.template_rows.first().and_then(Option::as_ref)
         && let serde_json::Value::Object(object) = &mut value
     {

@@ -313,6 +313,271 @@ fn template_execution_reports_first_issue_in_draft_order() {
     assert_eq!(error["code"], "template_row_arity");
 }
 
+fn shelf_path(temp: &TempDir) -> std::path::PathBuf {
+    temp.path()
+        .join("state")
+        .join("bob-cli")
+        .join("capture")
+        .join("templates.json")
+}
+
+fn read_shelf(path: &std::path::Path) -> serde_json::Value {
+    let bytes = fs::read(path).expect("read shelf");
+    serde_json::from_slice(&bytes).expect("parse shelf")
+}
+
+#[test]
+fn real_template_capture_saves_and_reports_statuses() {
+    let temp = TempDir::new("bob-cli-capture-template-shelf");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    let draft = "@@template:\nApply to {0}\n\nAcme\n";
+
+    let first = capture(&temp, &vault)
+        .args(["-f", "json"])
+        .arg(draft)
+        .output()
+        .expect("run first template capture");
+    assert_success(&first);
+    let value = json(&first);
+    assert_eq!(value["template"]["saved"]["status"], "new");
+    let id = value["template"]["saved"]["id"]
+        .as_str()
+        .expect("saved id")
+        .to_string();
+    assert_eq!(id.len(), 12);
+    let shelf = read_shelf(&shelf_path(&temp));
+    assert_eq!(shelf["schema_version"], 1);
+    assert_eq!(shelf["templates"].as_array().unwrap().len(), 1);
+    assert_eq!(shelf["templates"][0]["id"], id.as_str());
+    assert_eq!(shelf["templates"][0]["use_count"], 1);
+
+    let second = capture(&temp, &vault)
+        .args(["-f", "json"])
+        .arg(draft)
+        .output()
+        .expect("run second template capture");
+    assert_success(&second);
+    let value = json(&second);
+    assert_eq!(value["template"]["saved"]["status"], "updated");
+    assert_eq!(value["template"]["saved"]["id"], id.as_str());
+    assert_eq!(
+        read_shelf(&shelf_path(&temp))["templates"][0]["use_count"],
+        2
+    );
+
+    let edited = "@@template:\nApply to {0}!\n\nAcme\n";
+    let replaced = capture(&temp, &vault)
+        .args(["-f", "json", "--template-origin"])
+        .arg(&id)
+        .arg(edited)
+        .output()
+        .expect("run origin replace capture");
+    assert_success(&replaced);
+    let value = json(&replaced);
+    assert_eq!(value["template"]["saved"]["status"], "replaced");
+    let new_id = value["template"]["saved"]["id"]
+        .as_str()
+        .expect("replaced id")
+        .to_string();
+    assert_ne!(new_id, id);
+    let shelf = read_shelf(&shelf_path(&temp));
+    assert_eq!(shelf["templates"].as_array().unwrap().len(), 1);
+    assert_eq!(shelf["templates"][0]["id"], new_id.as_str());
+
+    let missing_origin = capture(&temp, &vault)
+        .args(["-f", "json", "--template-origin"])
+        .arg("deadbeefcafe")
+        .arg(draft)
+        .output()
+        .expect("run missing-origin capture");
+    assert_success(&missing_origin);
+    let value = json(&missing_origin);
+    assert!(
+        value["template"]["saved"]["status"] == "new"
+            || value["template"]["saved"]["status"] == "updated",
+        "{}",
+        format_output(&missing_origin)
+    );
+}
+
+#[test]
+fn template_human_output_reports_saved() {
+    let temp = TempDir::new("bob-cli-capture-template-shelf-human");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    let output = capture(&temp, &vault)
+        .arg("@@template:\nTask {0}\n\nfirst\n")
+        .output()
+        .expect("run human template capture");
+    assert_success(&output);
+    assert!(
+        stdout(&output).contains("· saved"),
+        "{}",
+        format_output(&output)
+    );
+}
+
+#[test]
+fn non_saving_runs_leave_the_shelf_absent() {
+    let temp = TempDir::new("bob-cli-capture-template-shelf-absent");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    let draft = "@@template:\nTask {0}\n\nfirst\n";
+    let shelf = shelf_path(&temp);
+
+    let dry = capture(&temp, &vault)
+        .args(["--dry-run", "-f", "json"])
+        .arg(draft)
+        .output()
+        .expect("dry run");
+    assert_success(&dry);
+    assert!(json(&dry)["template"].get("saved").is_none());
+    assert!(json(&dry)["template"].get("not_saved").is_none());
+    assert!(!shelf.exists());
+
+    let expand = capture(&temp, &vault)
+        .arg("-E")
+        .arg(draft)
+        .output()
+        .expect("expand");
+    assert_success(&expand);
+    assert!(!shelf.exists());
+
+    let failed = capture(&temp, &vault)
+        .arg("@@template:\nTask {0} {2}\n\nA B C\n")
+        .output()
+        .expect("failed capture");
+    assert_ne!(failed.status.code(), Some(0));
+    assert!(!shelf.exists());
+
+    let headerless = capture(&temp, &vault)
+        .args(["-f", "json"])
+        .arg("just a task")
+        .output()
+        .expect("headerless capture");
+    assert_success(&headerless);
+    let value = json(&headerless);
+    assert!(value.get("template").is_none());
+    assert!(!shelf.exists());
+
+    let parse = {
+        let mut command = bob_command();
+        command
+            .arg("capture-parse")
+            .arg("-b")
+            .arg(&vault)
+            .env("BOB_NOW", NOW)
+            .env("XDG_STATE_HOME", temp.path().join("state"))
+            .args(["-f", "json"])
+            .arg(draft)
+            .output()
+            .expect("capture-parse")
+    };
+    assert_success(&parse);
+    assert!(!shelf.exists());
+
+    let complete = {
+        let mut command = bob_command();
+        command
+            .arg("capture-complete")
+            .arg("-b")
+            .arg(&vault)
+            .env("BOB_NOW", NOW)
+            .env("XDG_STATE_HOME", temp.path().join("state"))
+            .args(["-f", "json"])
+            .arg(draft)
+            .output()
+            .expect("capture-complete")
+    };
+    assert!(!shelf.exists());
+    drop(complete);
+}
+
+#[test]
+fn one_row_and_many_rows_save_the_same_shelf_entry() {
+    let temp = TempDir::new("bob-cli-capture-template-shelf-rows");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    for draft in [
+        "@@template:\nApply to {0}\n\none\n",
+        "@@template:\nApply to {0}\n\none\ntwo\nthree\n",
+    ] {
+        let output = capture(&temp, &vault)
+            .args(["-f", "json"])
+            .arg(draft)
+            .output()
+            .expect("run row capture");
+        assert_success(&output);
+    }
+    let shelf = read_shelf(&shelf_path(&temp));
+    assert_eq!(shelf["templates"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn unwritable_shelf_keeps_exit_zero_with_not_saved() {
+    let temp = TempDir::new("bob-cli-capture-template-shelf-unwritable");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    let blocker = temp.path().join("blocker");
+    fs::write(&blocker, "not a dir").expect("write blocker");
+    let output = capture(&temp, &vault)
+        .env("BOB_CAPTURE_TEMPLATES_FILE", blocker.join("templates.json"))
+        .args(["-f", "json"])
+        .arg("@@template:\nTask {0}\n\nfirst\n")
+        .output()
+        .expect("run unwritable capture");
+    assert_success(&output);
+    let value = json(&output);
+    assert!(value["template"]["not_saved"].is_string());
+    assert!(value["template"].get("saved").is_none());
+    assert!(
+        stderr(&output).contains("template not saved"),
+        "{}",
+        format_output(&output)
+    );
+}
+
+#[test]
+fn bad_template_origin_is_a_usage_error() {
+    let temp = TempDir::new("bob-cli-capture-template-origin-bad");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    let output = capture(&temp, &vault)
+        .args(["--template-origin", "not an id!"])
+        .arg("@@template:\nTask {0}\n\nfirst\n")
+        .output()
+        .expect("run bad origin");
+    assert_eq!(output.status.code(), Some(2), "{}", format_output(&output));
+}
+
+#[test]
+fn plain_captures_stay_byte_identical_without_a_header() {
+    let temp = TempDir::new("bob-cli-capture-template-plain-identical");
+    let vault = temp.path().join("vault");
+    fs::create_dir_all(&vault).expect("create vault");
+    let output = capture(&temp, &vault)
+        .args(["-f", "json"])
+        .arg("buy milk @groceries")
+        .output()
+        .expect("run plain capture");
+    assert_success(&output);
+    let value = json(&output);
+    assert!(value.get("template").is_none());
+    assert!(!shelf_path(&temp).exists());
+    let human = capture(&temp, &vault)
+        .arg("buy more milk @groceries")
+        .output()
+        .expect("run plain human capture");
+    assert_success(&human);
+    assert!(
+        !stdout(&human).contains("· saved")
+            && !stdout(&human).contains("not saved"),
+        "{}",
+        format_output(&human)
+    );
+}
+
 #[test]
 fn template_url_listen_marker_is_not_clipboard_capture() {
     let temp = TempDir::new("bob-cli-capture-template-listen");

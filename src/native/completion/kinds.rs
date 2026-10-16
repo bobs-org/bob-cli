@@ -256,6 +256,13 @@ const TABLE: &[Entry] = &[
         arg: "task-section",
         kind: Kind::TaskSection,
     },
+    // Internal saved-template checkout id; free text, never completed
+    // from the vault.
+    Entry {
+        path: &["capture"],
+        arg: "template-origin",
+        kind: Kind::FreeText,
+    },
     Entry {
         path: &[],
         arg: "pomodoro-ref",
