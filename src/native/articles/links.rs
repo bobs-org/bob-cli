@@ -11,6 +11,7 @@ use super::sections::{
 use crate::native::highlights_ref::note_snapshot::{
     parse_link_target, LinkFragment,
 };
+use crate::native::vault_links::NoteIndex;
 
 #[derive(Debug, Default)]
 pub(crate) struct LinkPlan {
@@ -616,5 +617,158 @@ fn hex(byte: u8) -> Option<u8> {
         b'a'..=b'f' => Some(byte - b'a' + 10),
         b'A'..=b'F' => Some(byte - b'A' + 10),
         _ => None,
+    }
+}
+
+/// One article whose heading fragments other notes may need rewritten.
+pub(crate) struct InboundArticle<'a> {
+    pub index: usize,
+    pub path: &'a Path,
+    pub headings: &'a [PlannedHeading],
+    pub numbering: bool,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct InboundLineResult {
+    pub updated: Option<String>,
+    pub findings: Vec<(usize, Finding)>,
+    pub refreshed: usize,
+}
+
+/// Refresh heading fragments in a foreign note that resolve to `articles`.
+/// Same-note links and protected regions are left alone.
+pub(crate) fn rewrite_inbound_line(
+    content: &str,
+    region: Region,
+    current_path: &Path,
+    line: usize,
+    index: &NoteIndex,
+    articles: &[InboundArticle<'_>],
+) -> InboundLineResult {
+    let mut result = InboundLineResult::default();
+    if protects_links(region) || articles.is_empty() {
+        return result;
+    }
+    let mut updated = content.to_owned();
+    let mut line_findings = Vec::new();
+    let spans = link_spans(content);
+    for span in spans.into_iter().rev() {
+        let target = &content[span.target_start..span.target_end];
+        let target_content = if span.wikilink {
+            target.split_once('|').map_or(target, |(before, _)| before)
+        } else {
+            markdown_target(target)
+        };
+        let parsed = parse_link_target(target_content);
+        let Some(fragment) = parsed.fragment.as_ref() else {
+            continue;
+        };
+        let LinkFragment::Heading(_) = fragment else {
+            continue;
+        };
+        if parsed.note.trim().is_empty() {
+            continue;
+        }
+        let note = percent_decode(&parsed.note);
+        let Some(resolved) = index.resolve(Some(current_path), &note) else {
+            continue;
+        };
+        if resolved == current_path {
+            continue;
+        }
+        let Some(article) = articles
+            .iter()
+            .find(|article| article.path == resolved.as_path())
+        else {
+            continue;
+        };
+        let Some(fragment_span) = fragment_span(target_content, span.wikilink)
+        else {
+            continue;
+        };
+        let decoded = percent_decode(
+            &target_content[fragment_span.start..fragment_span.end],
+        );
+        let target_headings = match resolve_heading(&decoded, article.headings)
+        {
+            Ok(headings) => headings,
+            Err(failure) => {
+                let loc = source_loc(current_path, line);
+                let message = match failure {
+                    ResolveFailure::Broken => format!(
+                        "{loc} links to a heading this article no longer has"
+                    ),
+                    ResolveFailure::Ambiguous => format!(
+                        "{loc} links to a heading that matches multiple sections"
+                    ),
+                };
+                line_findings.push((
+                    span.target_start,
+                    article.index,
+                    Finding::warning(
+                        "inbound-heading-link",
+                        1,
+                        message,
+                        "Repoint the link",
+                    ),
+                ));
+                continue;
+            }
+        };
+        let raw_fragment =
+            &target_content[fragment_span.start..fragment_span.end];
+        let replacement = rewrite_fragment_path(
+            raw_fragment,
+            target_headings
+                .iter()
+                .map(|heading| {
+                    heading.number.as_deref().filter(|_| article.numbering)
+                })
+                .collect(),
+            fragment_span.markdown,
+        );
+        if replacement == raw_fragment {
+            continue;
+        }
+        let target_replacement = format!(
+            "{}{}{}",
+            &target_content[..fragment_span.start],
+            replacement,
+            &target_content[fragment_span.end..]
+        );
+        let target_replacement = if span.wikilink {
+            match target.find('|') {
+                Some(alias) => {
+                    format!("{}{}", target_replacement, &target[alias..])
+                }
+                None => target_replacement,
+            }
+        } else {
+            replace_markdown_target(target, &target_replacement)
+        };
+        updated.replace_range(
+            span.target_start..span.target_end,
+            &target_replacement,
+        );
+        result.refreshed += 1;
+    }
+    if updated != content {
+        result.updated = Some(updated);
+    }
+    line_findings.sort_by_key(|(position, _, _)| *position);
+    result.findings.extend(
+        line_findings
+            .into_iter()
+            .map(|(_, article, finding)| (article, finding)),
+    );
+    result
+}
+
+pub(crate) fn source_loc(path: &Path, line: usize) -> String {
+    let path = path.to_string_lossy().replace('\\', "/");
+    if line == 0 {
+        path
+    } else {
+        format!("{path}:{line}")
     }
 }

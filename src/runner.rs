@@ -395,7 +395,7 @@ const SUBCOMMANDS: &[Subcommand] = &[
     },
     Subcommand {
         name: "nightly",
-        about: "Run nightly maintenance: vault-sync, task archive, vault-sync",
+        about: "Run nightly maintenance: vault-sync, task archive, articles, vault-sync",
         section: Section::Vault,
         target: Target::Leaf(Leaf {
             native_command: NativeCommand::Nightly,

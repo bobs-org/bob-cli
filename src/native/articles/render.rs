@@ -1,9 +1,15 @@
 //! Human and JSON output for `bob articles`.
 
+use std::collections::BTreeSet;
+use std::fs;
+use std::path::Path;
+
 use similar::{ChangeTag, TextDiff};
 
+use super::inbound;
 use super::plan::{ArticlePlan, ArticleStatus};
 use crate::native::style::{pad_right, Styler};
+use crate::native::vault_links::NoteIndex;
 
 pub(crate) fn format_json(plans: Vec<ArticlePlan>) {
     println!("{}", json_line(&super::response(plans)));
@@ -96,18 +102,20 @@ fn source_line(source: &str, line: usize) -> &str {
 pub(crate) fn format_human(
     plans: &[ArticlePlan],
     sources: &[String],
+    root: &Path,
+    index: &NoteIndex,
     styler: &Styler,
     check: bool,
     dry_run: bool,
 ) {
-    for (index, plan) in plans.iter().enumerate() {
+    for (plan_index, plan) in plans.iter().enumerate() {
         match plan.status {
             ArticleStatus::Changed => {
                 if dry_run {
                     print_diff(
                         plan,
                         sources
-                            .get(index)
+                            .get(plan_index)
                             .map(String::as_str)
                             .unwrap_or_default(),
                         styler,
@@ -146,6 +154,9 @@ pub(crate) fn format_human(
                 );
             }
         }
+    }
+    if dry_run {
+        print_inbound_diffs(plans, root, index, styler);
     }
 }
 
@@ -314,17 +325,52 @@ fn print_findings(plan: &ArticlePlan, styler: &Styler) {
     }
 }
 
+fn print_inbound_diffs(
+    plans: &[ArticlePlan],
+    root: &Path,
+    index: &NoteIndex,
+    styler: &Styler,
+) {
+    let mut seen = BTreeSet::new();
+    for plan in plans {
+        for inbound in &plan.inbound {
+            if !seen.insert(inbound.path.clone()) {
+                continue;
+            }
+            let absolute = root.join(&inbound.path);
+            let Ok(source) = fs::read_to_string(&absolute) else {
+                continue;
+            };
+            let rewritten =
+                inbound::rewritten_file(&source, &inbound.path, plans, index);
+            if rewritten == source {
+                continue;
+            }
+            print_text_diff(&inbound.path, &source, &rewritten, styler);
+        }
+    }
+}
+
 fn print_diff(plan: &ArticlePlan, source: &str, styler: &Styler) {
     let Some(formatted) = plan.formatted.as_deref() else {
         return;
     };
+    print_text_diff(&plan.path, source, formatted, styler);
+}
+
+fn print_text_diff(
+    path: &Path,
+    source: &str,
+    formatted: &str,
+    styler: &Styler,
+) {
     println!(
         "{}",
-        styler.dim(&format!("--- a/{}", display_file_path(&plan.path)))
+        styler.dim(&format!("--- a/{}", display_file_path(path)))
     );
     println!(
         "{}",
-        styler.dim(&format!("+++ b/{}", display_file_path(&plan.path)))
+        styler.dim(&format!("+++ b/{}", display_file_path(path)))
     );
     let diff = TextDiff::from_lines(source, formatted);
     let mut unified = diff.unified_diff();

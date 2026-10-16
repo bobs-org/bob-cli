@@ -82,6 +82,10 @@ pub(crate) struct ArticlePlan {
     pub(crate) findings: Vec<super::findings::Finding>,
     pub(crate) outline: super::outline::ArticleOutline,
     pub(crate) inbound: Vec<InboundLink>,
+    #[serde(skip_serializing)]
+    pub(crate) headings: Vec<super::sections::PlannedHeading>,
+    #[serde(skip_serializing)]
+    pub(crate) numbering: bool,
 }
 
 impl ArticlePlan {
@@ -104,6 +108,8 @@ impl ArticlePlan {
             notice,
             outline: super::outline::empty_outline(path, true),
             inbound: Vec::new(),
+            headings: Vec::new(),
+            numbering: true,
         }
     }
 
@@ -128,7 +134,19 @@ impl ArticlePlan {
             notice,
             outline,
             inbound: Vec::new(),
+            headings: Vec::new(),
+            numbering: true,
         }
+    }
+
+    /// True when this run would change any heading line (numbers, promotion,
+    /// or Setext conversion). Layout-only edits do not count.
+    pub(crate) fn headings_text_changed(&self) -> bool {
+        self.changes.promoted > 0
+            || self.changes.setext > 0
+            || self.changes.renumbered > 0
+            || self.changes.unnumbered > 0
+            || self.outline.sections.iter().any(|section| section.stale)
     }
 }
 

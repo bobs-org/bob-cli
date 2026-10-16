@@ -3,7 +3,7 @@
 `bob articles` inspects and formats Markdown notes with an explicit
 `type: "[[article]]"` frontmatter value. It is the only CLI implementation of
 article formatting; the engine numbers every section as `1.` / `1.1` / `1.1.1`,
-refreshes in-note heading links, and changes layout without changing the words.
+refreshes in-note and inbound heading links, and changes layout without changing the words.
 
 A bare `bob articles` runs the read-only list view.
 
@@ -64,6 +64,30 @@ Before writing, bob rereads every changed note and checks its SHA-256 preimage a
 the plan. If a source changed, it refuses the write. Each accepted result is installed
 with a temporary file and atomic rename. Human format output is silent when nothing
 changes; warnings appear under changed-note summaries.
+
+## Inbound heading links
+
+When an article's heading text changes, `format` and `adopt --write` also rewrite
+heading links in other vault notes. `--all` and `--stdin` scan even when this run
+did not change headings, so links left stale by earlier runs are repaired too.
+
+bob prefilters notes with a case-insensitive substring match on the article stem,
+then parses wikilinks, embeds, and Markdown links (skipping code, math, and comments).
+It resolves the note with `NoteIndex` and rewrites the fragment with the same
+heading-identity rules as in-note links. Unrepairable links become
+`inbound-heading-link` findings on the article, each naming the source `path:line`.
+
+Write order: the article first, then each linking note with its own SHA-256 preimage
+check. A linking file that changed in the meantime is skipped with a reason; the
+article write still stands. `--dry-run` prints inbound diffs. `--stdin` fills each
+note's `inbound` array (`path`, `line`, `sha256`, `before`, `after`) for the plugin
+and writes nothing.
+
+## Nightly
+
+`bob nightly` runs `bob articles format --all --check` after `task archive`. It
+prints which articles need formatting and does not write. The step counts as passed
+unless bob itself fails (exit ≥ 2).
 
 ## JSON contract
 

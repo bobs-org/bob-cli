@@ -622,11 +622,13 @@ fn nightly_runs_vault_sync_move_done_tasks_vault_sync_in_order() {
 
     assert!(
         out.contains("bob nightly")
-            && out.contains("step 1/3")
-            && out.contains("step 2/3")
-            && out.contains("step 3/3")
+            && out.contains("step 1/4")
+            && out.contains("step 2/4")
+            && out.contains("step 3/4")
+            && out.contains("step 4/4")
             && out.contains("vault-sync")
             && out.contains("task archive")
+            && out.contains("articles")
             && out.contains("All steps passed"),
         "expected a structured nightly summary:\n{}",
         format_output(&output)
@@ -692,7 +694,7 @@ fn nightly_failed_step_still_runs_later_steps_and_exits_nonzero() {
         format_output(&output)
     );
     assert!(
-        out.contains("step 3/3") && out.contains("1 step failed"),
+        out.contains("step 4/4") && out.contains("1 step failed"),
         "expected the trailing vault-sync step and failure count:\n{}",
         format_output(&output)
     );
@@ -711,6 +713,51 @@ fn nightly_failed_step_still_runs_later_steps_and_exits_nonzero() {
         ])),
         "- [ ] later step still runs #task\n",
         "vault-sync should push the unrelated file"
+    );
+}
+
+#[test]
+fn nightly_articles_step_reports_without_writing_and_still_passes() {
+    let temp = TempDir::new("bob-cli-nightly-articles");
+    let (vault, _remote, _peer) = init_vault_sync_pair(&temp);
+    let home = temp.path().join("home");
+    fs::create_dir_all(&home).expect("create home");
+    let article = "---\ntype: \"[[article]]\"\n---\n\n# Draft\n";
+    write_file(&vault.join("draft.md"), article);
+
+    let output = bob_command()
+        .arg("nightly")
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", "2026-06-02")
+        .env(
+            "BOB_VAULT_SYNC_LOCK_FILE",
+            temp.path().join("bob_sync.lock"),
+        )
+        .env(
+            "BOB_VAULT_SYNC_STATE_FILE",
+            temp.path().join("vault-sync.json"),
+        )
+        .env("HOME", &home)
+        .env("HOSTNAME", "Athena Test")
+        .env("NO_COLOR", "1")
+        .env("XDG_CACHE_HOME", temp.path().join("cache"))
+        .output()
+        .expect("run bob nightly with an unformatted article");
+
+    assert_success(&output);
+    let out = stdout(&output);
+    assert!(
+        out.contains("step 3/4")
+            && out.contains("articles")
+            && out.contains("needs formatting")
+            && out.contains("All steps passed"),
+        "expected a report-only articles step:\n{}",
+        format_output(&output)
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join("draft.md")).unwrap(),
+        article,
+        "nightly must not write articles"
     );
 }
 

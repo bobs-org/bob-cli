@@ -38,15 +38,20 @@ impl std::fmt::Display for VaultError {
     }
 }
 
+/// Vault-relative Markdown paths, skipping always-excluded directories.
+pub(crate) fn list_markdown(root: &Path) -> Result<Vec<PathBuf>, VaultError> {
+    let mut paths = Vec::new();
+    walk_markdown(root, root, &mut paths)?;
+    paths.sort();
+    Ok(paths)
+}
+
 /// Discover marked article notes under the vault root. The directory
 /// exclusions match article formatting's refusal list.
 pub(crate) fn discover_articles(
     root: &Path,
 ) -> Result<Vec<ArticleFile>, VaultError> {
-    let mut paths = Vec::new();
-    walk_markdown(root, root, &mut paths)?;
-    paths.sort();
-
+    let paths = list_markdown(root)?;
     let mut articles = Vec::new();
     for path in paths {
         let text = fs::read_to_string(root.join(&path)).map_err(|source| {

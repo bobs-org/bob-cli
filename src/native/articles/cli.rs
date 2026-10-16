@@ -13,7 +13,9 @@ use clap::{
     ArgMatches, Command as ClapCommand,
 };
 
-use super::{adopt, format, render, vault, ArticleContext, ArticleStatus};
+use super::{
+    adopt, format, inbound, render, vault, ArticleContext, ArticleStatus,
+};
 use crate::native::{env as bob_env, style::Styler};
 
 const COMMAND_NAME: &str = "bob articles";
@@ -259,18 +261,30 @@ fn run_adopt(matches: &ArgMatches) -> i32 {
         }
     };
 
-    let plans = vec![adopt(&source, &ArticleContext::new(&path))];
+    let mut plans = vec![adopt(&source, &ArticleContext::new(&path))];
+    let index = match inbound::attach(&bob_dir, &mut plans, from_stdin) {
+        Ok(index) => index,
+        Err(error) => return print_vault_error(error),
+    };
     let plan_failed = plans.iter().any(|plan| {
         matches!(plan.status, ArticleStatus::Skipped | ArticleStatus::Error)
     });
 
     if !plan_failed && write && !from_stdin {
+        inbound::fold_into_formatted(
+            &mut plans,
+            std::slice::from_ref(&source),
+            &index,
+        );
         if let Err(message) = vault::write_plans(&bob_dir, &plans) {
             if output_format == OutputFormat::Json {
                 render::format_json(plans);
             }
             eprintln!("{COMMAND_NAME}: {message}");
             return 2;
+        }
+        for reason in inbound::write_others(&bob_dir, &plans, &index) {
+            eprintln!("{COMMAND_NAME}: {reason}");
         }
     }
 
@@ -364,22 +378,30 @@ fn run_format(matches: &ArgMatches) -> i32 {
         (sources, paths)
     };
 
-    let plans = sources
+    let mut plans = sources
         .iter()
         .zip(&paths)
         .map(|(source, path)| format(source, &ArticleContext::new(path)))
         .collect::<Vec<_>>();
+    let index = match inbound::attach(&bob_dir, &mut plans, all || from_stdin) {
+        Ok(index) => index,
+        Err(error) => return print_vault_error(error),
+    };
     let plan_failed = plans.iter().any(|plan| {
         matches!(plan.status, ArticleStatus::Skipped | ArticleStatus::Error)
     });
 
     if !plan_failed && !check && !dry_run && !from_stdin {
+        inbound::fold_into_formatted(&mut plans, &sources, &index);
         if let Err(message) = vault::write_plans(&bob_dir, &plans) {
             if output_format == OutputFormat::Json {
                 render::format_json(plans);
             }
             eprintln!("{COMMAND_NAME}: {message}");
             return 2;
+        }
+        for reason in inbound::write_others(&bob_dir, &plans, &index) {
+            eprintln!("{COMMAND_NAME}: {reason}");
         }
     }
 
@@ -388,6 +410,8 @@ fn run_format(matches: &ArgMatches) -> i32 {
         OutputFormat::Human => render::format_human(
             &plans,
             &sources,
+            &bob_dir,
+            &index,
             &Styler::detect(),
             check,
             dry_run,

@@ -465,3 +465,149 @@ fn adopt_note_completion_is_a_vault_note() {
     assert!(text.contains("!files-in"), "{text}");
     assert!(text.contains("*.md"), "{text}");
 }
+
+#[test]
+fn format_rewrites_inbound_links_in_two_other_notes() {
+    let fixture = fixture();
+    write_file(&fixture.vault.join("draft.md"), ARTICLE);
+    write_file(
+        &fixture.vault.join("journal.md"),
+        "See [[draft#9. First]].\n",
+    );
+    write_file(
+        &fixture.vault.join("log.md"),
+        "[First](draft.md#9.%20First)\n",
+    );
+
+    let output = article_command(&fixture)
+        .args(["format", "draft"])
+        .output()
+        .expect("format with inbound");
+    assert_success(&output);
+    assert_eq!(
+        fs::read_to_string(fixture.vault.join("draft.md")).unwrap(),
+        FORMATTED
+    );
+    assert_eq!(
+        fs::read_to_string(fixture.vault.join("journal.md")).unwrap(),
+        "See [[draft#1.1 First]].\n"
+    );
+    assert_eq!(
+        fs::read_to_string(fixture.vault.join("log.md")).unwrap(),
+        "[First](draft.md#1.1%20First)\n"
+    );
+}
+
+#[test]
+fn format_reports_unrepairable_inbound_and_resolves_duplicate_titles() {
+    let fixture = fixture();
+    write_file(
+        &fixture.vault.join("note.md"),
+        "---\ntype: \"[[article]]\"\n---\n\n## 9. Examples\n\n## 8. Examples\n",
+    );
+    write_file(&fixture.vault.join("a.md"), "[[note#9. Examples]]\n");
+    write_file(&fixture.vault.join("b.md"), "[[note#Examples]]\n");
+    write_file(&fixture.vault.join("gone.md"), "[[note#Missing]]\n");
+
+    let output = article_command(&fixture)
+        .args(["format", "note", "-f", "json"])
+        .output()
+        .expect("format duplicates");
+    assert_success(&output);
+    let value = json(&output);
+    let inbound = value["notes"][0]["inbound"].as_array().unwrap();
+    assert!(
+        inbound.iter().any(|item| {
+            item["path"] == "a.md"
+                && item["after"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains("[[note#1. Examples]]")
+        }),
+        "{value}"
+    );
+    assert_eq!(
+        fs::read_to_string(fixture.vault.join("a.md")).unwrap(),
+        "[[note#1. Examples]]\n"
+    );
+    assert_eq!(
+        fs::read_to_string(fixture.vault.join("b.md")).unwrap(),
+        "[[note#Examples]]\n"
+    );
+    let findings = value["notes"][0]["findings"].as_array().unwrap();
+    assert!(
+        findings.iter().any(|finding| {
+            finding["code"] == "inbound-heading-link"
+                && finding["message"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains("b.md:1")
+        }),
+        "{value}"
+    );
+    assert!(
+        findings.iter().any(|finding| {
+            finding["code"] == "inbound-heading-link"
+                && finding["message"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains("gone.md:1")
+        }),
+        "{value}"
+    );
+}
+
+#[test]
+fn stdin_json_fills_inbound_entries_without_writing() {
+    let fixture = fixture();
+    write_file(&fixture.vault.join("draft.md"), ARTICLE);
+    write_file(
+        &fixture.vault.join("journal.md"),
+        "See [[draft#9. First]].\n",
+    );
+
+    let output = run_with_stdin(
+        &mut article_command(&fixture)
+            .args(["format", "-s", "draft", "-f", "json"]),
+        ARTICLE,
+    );
+    assert_success(&output);
+    let value = json(&output);
+    let inbound = &value["notes"][0]["inbound"][0];
+    assert_eq!(inbound["path"], "journal.md");
+    assert_eq!(inbound["line"], 1);
+    assert!(inbound["sha256"].as_str().is_some());
+    assert_eq!(inbound["before"], "See [[draft#9. First]].");
+    assert_eq!(inbound["after"], "See [[draft#1.1 First]].");
+    assert_eq!(
+        fs::read_to_string(fixture.vault.join("journal.md")).unwrap(),
+        "See [[draft#9. First]].\n"
+    );
+    assert_eq!(
+        fs::read_to_string(fixture.vault.join("draft.md")).unwrap(),
+        ARTICLE
+    );
+}
+
+#[test]
+fn dry_run_shows_inbound_diffs_without_writing() {
+    let fixture = fixture();
+    write_file(&fixture.vault.join("draft.md"), ARTICLE);
+    write_file(
+        &fixture.vault.join("journal.md"),
+        "See [[draft#9. First]].\n",
+    );
+
+    let output = article_command(&fixture)
+        .args(["format", "-d", "draft"])
+        .output()
+        .expect("dry-run inbound");
+    assert_success(&output);
+    let text = stdout(&output);
+    assert!(text.contains("--- a/journal.md"), "{text}");
+    assert!(text.contains("+See [[draft#1.1 First]]."), "{text}");
+    assert_eq!(
+        fs::read_to_string(fixture.vault.join("journal.md")).unwrap(),
+        "See [[draft#9. First]].\n"
+    );
+}

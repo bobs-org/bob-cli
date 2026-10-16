@@ -39,6 +39,11 @@ const STEPS: &[Step] = &[
         run: run_collect_done_step,
     },
     Step {
+        name: "articles",
+        blurb: "Report articles that need formatting",
+        run: run_articles_step,
+    },
+    Step {
         name: "vault-sync",
         blurb: "Publish maintenance changes",
         run: run_vault_sync_step,
@@ -132,13 +137,14 @@ pub(crate) fn help_text() -> String {
 usage: bob nightly
 
 Run the nightly Bob maintenance path. The command acquires the shared lock,
-runs `vault-sync`, `task archive`, and `vault-sync` in order.
+runs `vault-sync`, `task archive`, `articles`, and `vault-sync` in order.
 
 workflow:
   1. acquire the shared Bob maintenance lock
   2. run vault-sync against the vault
   3. run task archive against the vault
-  4. run vault-sync against the vault
+  4. report article notes that need formatting (write nothing)
+  5. run vault-sync against the vault
 
 environment:
   BOB_DIR                        Bob vault root; defaults to ~/bob
@@ -162,6 +168,10 @@ fn print_help() {
 
 fn run_collect_done_step(child_env: &ChildEnv) -> i32 {
     collect_done::run_collection(collect_done::DEFAULT_THRESHOLD, child_env)
+}
+
+fn run_articles_step(_child_env: &ChildEnv) -> i32 {
+    super::articles::nightly_check(&bob_env::bob_dir())
 }
 
 fn run_vault_sync_step(child_env: &ChildEnv) -> i32 {

@@ -172,7 +172,8 @@ athena's cron entry runs `bob nightly` at 03:30. `bob nightly` now runs:
 
 1. `bob vault-sync`
 2. `bob task archive`
-3. `bob vault-sync`
+3. `bob articles format --all --check` (report-only; pass unless bob fails)
+4. `bob vault-sync`
 
 That ordering pulls the MacBook's latest notes before maintenance rewrites task blocks
 and pushes the maintenance commit afterwards.

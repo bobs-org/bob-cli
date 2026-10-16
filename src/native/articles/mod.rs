@@ -5,6 +5,7 @@
 
 pub(crate) mod cli;
 mod findings;
+mod inbound;
 mod layout;
 mod links;
 mod marker;
@@ -59,6 +60,8 @@ pub(crate) fn adopt(text: &str, ctx: &ArticleContext<'_>) -> ArticlePlan {
             notice: "already an article".to_string(),
             outline: outline::empty_outline(ctx.path, true),
             inbound: Vec::new(),
+            headings: Vec::new(),
+            numbering: true,
         },
         marker::AdoptDecision::Insert => {
             let insert = marker::with_article_type(text);
@@ -240,11 +243,52 @@ pub(crate) fn format(text: &str, ctx: &ArticleContext<'_>) -> ArticlePlan {
         notice,
         outline,
         inbound: Vec::new(),
+        headings: numbering.headings,
+        numbering: options.numbering,
     }
 }
 
 pub(crate) fn response(notes: Vec<ArticlePlan>) -> ArticlePlanResponse {
     ArticlePlanResponse::new(notes)
+}
+
+/// Report-only `format --all --check` used by `bob nightly`. Exit 1 from
+/// "needs formatting" is treated as success; only real failures return 2.
+pub(crate) fn nightly_check(root: &std::path::Path) -> i32 {
+    let articles = match vault::discover_articles(root) {
+        Ok(articles) => articles,
+        Err(error) => {
+            eprintln!("bob nightly: {error}");
+            return 2;
+        }
+    };
+    let sources = articles
+        .iter()
+        .map(|article| article.text.clone())
+        .collect::<Vec<_>>();
+    let plans = articles
+        .iter()
+        .map(|article| {
+            format(&article.text, &ArticleContext::new(&article.path))
+        })
+        .collect::<Vec<_>>();
+    let failed = plans.iter().any(|plan| {
+        matches!(plan.status, ArticleStatus::Skipped | ArticleStatus::Error)
+    });
+    render::format_human(
+        &plans,
+        &sources,
+        root,
+        &crate::native::vault_links::NoteIndex::default(),
+        &crate::native::style::Styler::detect(),
+        true,
+        false,
+    );
+    if failed {
+        2
+    } else {
+        0
+    }
 }
 
 fn format_once(text: &str, path: &std::path::Path, numbered: bool) -> String {

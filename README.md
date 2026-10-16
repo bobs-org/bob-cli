@@ -220,8 +220,8 @@ separate steps:
    including an inherited-blocked sub-project's `^prj`, carry
    `#prj_is_blocked`. The command also cleans up the ledger.
 5. **Nightly**, run `bob nightly` to reconcile the vault through Git, archive
-   done and canceled tasks with `bob task archive`, and reconcile the vault
-   again.
+   done and canceled tasks with `bob task archive`, report article notes that
+   need formatting, and reconcile the vault again.
 
 Read-only inspection (`bob query`, `bob stats`, `bob projects list`,
 `bob plugins list --no-pull`, `bob ref doctor`) can run at any time.
@@ -276,7 +276,7 @@ Bob's workflow commands are:
 | Command | Purpose |
 | --- | --- |
 | [`articles`](#article-notes) | Format and inspect article notes with bob-owned section numbers |
-| [`nightly`](#nightly-maintenance) | Run nightly maintenance: vault-sync, task archive, vault-sync |
+| [`nightly`](#nightly-maintenance) | Run nightly maintenance: vault-sync, task archive, articles, vault-sync |
 | [`query`](#query) | Run Dataview or Tasks queries against the vault |
 | [`ref`](#reference-library-bob-ref) | Find, list, read, rename, and plan references for today; sync Highlights PDFs into them |
 | [`vault-sync`](#vault-sync) | Reconcile the vault through Git (default: run) or show status |
@@ -1085,7 +1085,10 @@ directory, otherwise `/tmp/bob_sync.lock`), then:
 
 1. Runs `bob vault-sync` against the vault.
 2. Runs `bob task archive` against the vault.
-3. Runs `bob vault-sync` against the vault again.
+3. Runs a report-only `bob articles format --all --check` against the vault.
+   Articles that need formatting are printed; the step still passes unless
+   bob itself fails.
+4. Runs `bob vault-sync` against the vault again.
 
 A failed step is reported but does not prevent later steps from running. If
 another Bob maintenance run already holds the lock, the command exits 0 after
