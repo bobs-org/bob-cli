@@ -8,6 +8,7 @@ pub(crate) mod fonts;
 pub(crate) mod profile;
 
 mod classify;
+mod obsidian;
 mod resolve;
 mod serialize;
 mod view;
@@ -26,6 +27,11 @@ pub(crate) use classify::{
     source_identity, vault_member_relative, ClassifiedNote, ClassifyError,
     DefaultParentDeferred, FilesystemSourceLoader, NoteKind, SnapshotTarget,
     SourceLoader, SourceStore,
+};
+#[allow(unused_imports)]
+pub(crate) use obsidian::{
+    project_obsidian_syntax, status_for_symbol, PendingEmbed, SyntaxProjection,
+    TitleCandidate,
 };
 #[allow(unused_imports)]
 pub(crate) use resolve::{
