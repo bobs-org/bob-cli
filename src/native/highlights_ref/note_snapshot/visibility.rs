@@ -1108,6 +1108,7 @@ mod tests {
                 masthead: masthead(),
                 snapshot_date: snapshot_date(),
                 include_closed,
+                consumed_title_heading: None,
             },
         )
         .expect("project snapshot")
@@ -1143,12 +1144,15 @@ mod tests {
     }
 
     fn body_blocks(projection: &SnapshotProjection) -> Vec<Block> {
-        projection
-            .view
-            .sections
-            .iter()
-            .flat_map(|section| section.blocks.clone())
-            .collect()
+        let mut blocks = projection.view.preamble.clone();
+        blocks.extend(
+            projection
+                .view
+                .sections
+                .iter()
+                .flat_map(|section| section.blocks.clone()),
+        );
+        blocks
     }
 
     fn all_blocks(projection: &SnapshotProjection) -> Vec<Block> {
@@ -1635,6 +1639,7 @@ mod tests {
                 masthead: masthead(),
                 snapshot_date: snapshot_date(),
                 include_closed: false,
+                consumed_title_heading: None,
             },
         )
         .expect("project");

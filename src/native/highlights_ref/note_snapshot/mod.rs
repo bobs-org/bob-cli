@@ -54,7 +54,8 @@ pub(crate) use resolve::{
 pub(crate) use serialize::serialize_projected_markdown;
 #[allow(unused_imports)]
 pub(crate) use transclusion::{
-    project_snapshot, SnapshotProjection, SnapshotProjectionOptions,
+    project_bob_snapshot, project_snapshot, SnapshotProjection,
+    SnapshotProjectionOptions,
 };
 #[allow(unused_imports)]
 pub(crate) use view::{

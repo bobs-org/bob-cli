@@ -411,6 +411,10 @@ pub(crate) struct SnapshotSection {
 pub(crate) struct SnapshotView {
     pub source: SourceIdentity,
     pub masthead: SnapshotMasthead,
+    /// Root prose and blocks before the first retained section heading. Bob
+    /// snapshots serialize this immediately after the masthead; ordinary
+    /// Obsidian projections keep using their existing synthetic Content section.
+    pub preamble: Vec<Block>,
     pub sections: Vec<SnapshotSection>,
     pub closed: Option<SnapshotSection>,
     pub assets: Vec<SnapshotAsset>,

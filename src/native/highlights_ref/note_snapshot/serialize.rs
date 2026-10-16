@@ -85,6 +85,12 @@ pub(crate) fn serialize_projected_markdown(
     output.push_str(&yaml);
     output.push_str("---\n\n");
 
+    let preamble = render_blocks(view, &view.preamble, 0);
+    if !preamble.is_empty() {
+        output.push_str(&preamble);
+        output.push_str("\n\n");
+    }
+
     let mut sections = view.sections.iter().collect::<Vec<_>>();
     if let Some(closed) = &view.closed {
         sections.push(closed);

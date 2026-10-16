@@ -398,6 +398,7 @@ pub(super) fn contract_view() -> SnapshotView {
             glyph_table: "glyphs.lua".to_string(),
             return_links: true,
         },
+        preamble: Vec::new(),
         sections: vec![SnapshotSection {
             source: source.clone(),
             heading: SnapshotHeading {
@@ -494,6 +495,7 @@ fn generated_view() -> SnapshotView {
             glyph_table: "glyphs.lua".to_string(),
             return_links: false,
         },
+        preamble: Vec::new(),
         sections: vec![SnapshotSection {
             source,
             heading: SnapshotHeading {

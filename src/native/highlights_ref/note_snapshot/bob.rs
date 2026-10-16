@@ -49,7 +49,8 @@ use std::ops::Range;
 use chrono::NaiveDate;
 
 use super::view::{
-    Block, Chip, ChipKind, Inline, ListItem, SnapshotTask, TaskSource,
+    Block, Chip, ChipKind, Inline, ListItem, SnapshotSection, SnapshotTask,
+    SnapshotTaskStatus, SourceIdentity, TaskSource,
 };
 use crate::native::projects::{
     display_for_wikilink, list_item_content, wikilink_spans_in_line,
@@ -73,6 +74,173 @@ use crate::native::task_fields::{inline_fields, parse_strict_calendar_date};
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct BobTaskContext {
     pub snapshot_date: NaiveDate,
+}
+
+/// A root project's `^prj` task after its readable outcome and managed
+/// relationships have been promoted into the masthead. Its remaining
+/// children stay in an outcome-history section, where ordinary prose and
+/// task children remain visible.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ProjectOutcome {
+    pub status: SnapshotTaskStatus,
+    pub content: Vec<Inline>,
+    pub chips: Vec<Chip>,
+    pub created: Option<NaiveDate>,
+    pub relationships: Vec<Vec<Inline>>,
+    pub history: Vec<Block>,
+}
+
+/// Temporarily treat the root `^prj` task as open while the visibility pass
+/// converts its managed logs. The row is removed immediately afterward and
+/// its source checkbox status is retained separately for the masthead.
+pub(crate) fn prepare_project_outcome_for_visibility(
+    preamble: &mut [Block],
+    sections: &mut [SnapshotSection],
+    root: &SourceIdentity,
+) -> Option<SnapshotTaskStatus> {
+    if let Some(status) = prepare_outcome_in_blocks(preamble, root) {
+        return Some(status);
+    }
+    for section in sections {
+        if let Some(status) =
+            prepare_outcome_in_blocks(&mut section.blocks, root)
+        {
+            return Some(status);
+        }
+    }
+    None
+}
+
+fn prepare_outcome_in_blocks(
+    blocks: &mut [Block],
+    root: &SourceIdentity,
+) -> Option<SnapshotTaskStatus> {
+    let task = blocks.iter_mut().find_map(|block| {
+        let Block::Task(task) = block else {
+            return None;
+        };
+        is_root_project_outcome(task, root).then_some(task)
+    })?;
+    let status = task.status;
+    task.status = SnapshotTaskStatus::Open;
+    Some(status)
+}
+
+/// Remove the root note's direct `^prj` task and return its masthead data.
+/// Embedded project tasks are excluded by source identity, and a task with
+/// a similar label or a different block ID is left in the body.
+pub(crate) fn take_project_outcome(
+    preamble: &mut Vec<Block>,
+    sections: &mut [SnapshotSection],
+    root: &SourceIdentity,
+) -> Option<ProjectOutcome> {
+    if let Some(outcome) = take_outcome_from_blocks(preamble, root) {
+        return Some(outcome);
+    }
+    for section in sections {
+        if let Some(outcome) =
+            take_outcome_from_blocks(&mut section.blocks, root)
+        {
+            return Some(outcome);
+        }
+    }
+    None
+}
+
+fn take_outcome_from_blocks(
+    blocks: &mut Vec<Block>,
+    root: &SourceIdentity,
+) -> Option<ProjectOutcome> {
+    let index = blocks.iter().position(|block| {
+        let Block::Task(task) = block else {
+            return false;
+        };
+        is_root_project_outcome(task, root)
+    })?;
+    let Block::Task(task) = blocks.remove(index) else {
+        unreachable!("the matching block was a task")
+    };
+    let mut content = task.content;
+    let created = task.source.as_ref().and_then(|source| {
+        let field = inline_fields(&source.raw_line, "created")
+            .into_iter()
+            .find_map(|field| {
+                parse_strict_calendar_date(&field.value)
+                    .map(|date| (date, field.value))
+            })?;
+        remove_consumed_muted(&mut content, &[format!("created: {}", field.1)]);
+        Some(field.0)
+    });
+    let mut relationships = Vec::new();
+    let mut history = Vec::new();
+    for child in task.children {
+        match child {
+            Block::LabeledRow { label, items }
+                if is_masthead_relationship(&label) =>
+            {
+                relationships.push(render_relationship_line(&label, &items));
+            }
+            other => history.push(other),
+        }
+    }
+    Some(ProjectOutcome {
+        status: task.status,
+        content,
+        chips: task.chips,
+        created,
+        relationships,
+        history,
+    })
+}
+
+fn is_root_project_outcome(task: &SnapshotTask, root: &SourceIdentity) -> bool {
+    task.source.as_ref().is_some_and(|source| {
+        source.source == *root
+            && crate::native::collect_done::trailing_block_id_in_line(
+                &source.raw_line,
+            )
+            .as_deref()
+                == Some("prj")
+    })
+}
+
+fn is_masthead_relationship(label: &[Inline]) -> bool {
+    let text = flatten_label(label).to_ascii_lowercase();
+    matches!(text.as_str(), "waits on" | "blocks" | "sub-projects")
+}
+
+fn render_relationship_line(
+    label: &[Inline],
+    items: &[Vec<Inline>],
+) -> Vec<Inline> {
+    let normalized = match flatten_label(label).to_ascii_lowercase().as_str() {
+        "waits on" => "WAITS ON",
+        "blocks" => "BLOCKS",
+        _ => "Sub-projects",
+    };
+    let mut line = vec![Inline::Text(format!("{normalized}: "))];
+    for (index, item) in items.iter().enumerate() {
+        if index > 0 {
+            line.push(Inline::Text(" · ".to_string()));
+        }
+        line.extend(item.iter().cloned());
+    }
+    line
+}
+
+fn flatten_label(inlines: &[Inline]) -> String {
+    let mut output = String::new();
+    for inline in inlines {
+        match inline {
+            Inline::Text(text) | Inline::Code(text) => output.push_str(text),
+            Inline::Emphasis(items)
+            | Inline::Strong(items)
+            | Inline::Strike(items)
+            | Inline::Muted(items) => output.push_str(&flatten_label(items)),
+            _ => {}
+        }
+    }
+    output.trim().to_string()
 }
 
 /// Apply Bob task rows to already-assembled section blocks.
@@ -1027,6 +1195,7 @@ mod tests {
                 masthead: masthead(),
                 snapshot_date: snapshot_date(),
                 include_closed: false,
+                consumed_title_heading: None,
             },
         )
         .expect("project snapshot")
@@ -1035,12 +1204,15 @@ mod tests {
     fn section_blocks(
         projection: &super::super::transclusion::SnapshotProjection,
     ) -> Vec<Block> {
-        projection
-            .view
-            .sections
-            .iter()
-            .flat_map(|section| section.blocks.clone())
-            .collect()
+        let mut blocks = projection.view.preamble.clone();
+        blocks.extend(
+            projection
+                .view
+                .sections
+                .iter()
+                .flat_map(|section| section.blocks.clone()),
+        );
+        blocks
     }
 
     #[test]

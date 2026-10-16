@@ -10,7 +10,10 @@ use std::{
 };
 
 use super::{
-    bob::{apply_bob_task_rows, BobTaskContext},
+    bob::{
+        apply_bob_task_rows, prepare_project_outcome_for_visibility,
+        take_project_outcome, BobTaskContext, ProjectOutcome,
+    },
     classify::{
         source_identity, ClassifiedNote, NoteKind, SourceLoader, SourceStore,
     },
@@ -23,17 +26,27 @@ use super::{
         FragmentIndex, FragmentLookup, LinkFragment,
     },
     view::{
-        AnchorIdentity, AnchorKind, Block, HeadingClass, HeadingLevel, Inline,
-        LinkTarget, ListItem, ParsedSource, SnapshotAnchor, SnapshotAsset,
-        SnapshotHeading, SnapshotMasthead, SnapshotSection, SnapshotSummary,
-        SnapshotTaskStatus, SnapshotView, SnapshotWarning, SnapshotWarningKind,
-        SourceIdentity, SourceLocation,
+        AnchorIdentity, AnchorKind, Block, Chip, ChipKind, HeadingClass,
+        HeadingLevel, Inline, LinkTarget, ListItem, ParsedSource,
+        SnapshotAnchor, SnapshotAsset, SnapshotHeading, SnapshotMasthead,
+        SnapshotSection, SnapshotSummary, SnapshotTaskStatus, SnapshotView,
+        SnapshotWarning, SnapshotWarningKind, SourceFrontmatter,
+        SourceIdentity, SourceLocation, StatusCount,
     },
     visibility::{apply_bob_visibility, BobVisibilityContext},
 };
 use crate::native::{
-    markdown::strictly_closed_frontmatter_end, task_status_hooks::TasksSettings,
+    capture::{parse_managed_task_log_marker, ManagedTaskLogKind},
+    markdown::strictly_closed_frontmatter_end,
+    task_status_hooks::TasksSettings,
 };
+use crate::native::{
+    projects::ProjectStatus,
+    task_status_groups::{
+        is_badge_row, TITLE_ACTIVE, TITLE_BLOCKED, TITLE_CLOSED,
+    },
+};
+use serde_yaml::Value as YamlValue;
 
 const MAX_TRANSCLUSION_BYTES: usize = 64 * 1024;
 const MAX_TRANSCLUSION_LINES: usize = 1_500;
@@ -41,6 +54,9 @@ const MAX_TRANSCLUSION_LINES: usize = 1_500;
 /// Caller-owned, deterministic metadata for one snapshot projection.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct SnapshotProjectionOptions {
+    /// Caller-selected PDF identity and visible title, plus render metadata
+    /// such as the glyph table and return-link policy. Bob assembly keeps the
+    /// identity title (`masthead.title`) distinct from `display_title`.
     pub masthead: SnapshotMasthead,
     /// Caller-selected snapshot day for Bob date chips. Callers compute it
     /// with the existing `env::current_datetime()`/`BOB_NOW` path; tests
@@ -50,6 +66,9 @@ pub(crate) struct SnapshotProjectionOptions {
     /// full managed logs. Reading mode (`false`) omits those subtrees and
     /// condenses logs on the tasks that remain.
     pub include_closed: bool,
+    /// Anchor ID of the exact source H1 consumed by the caller's title
+    /// selection. Only this heading is removed from a Bob document.
+    pub consumed_title_heading: Option<String>,
 }
 
 /// The structured view plus lossless root-source data needed by the later Bob layer.
@@ -115,8 +134,22 @@ pub(crate) fn project_snapshot<L: SourceLoader>(
         true,
     );
 
-    let (mut sections, synthetic_anchor) =
-        sectionize_root(&note.identity, blocks, &expander.used_anchor_ids);
+    let is_bob = matches!(
+        note.kind,
+        NoteKind::Area | NoteKind::Project | NoteKind::TerminalProject
+    );
+    let (mut preamble, mut sections, synthetic_anchor) = if is_bob {
+        let (preamble, sections) = sectionize_bob_root(
+            &note.identity,
+            blocks,
+            options.consumed_title_heading.as_deref(),
+        );
+        (preamble, sections, None)
+    } else {
+        let (sections, synthetic_anchor) =
+            sectionize_root(&note.identity, blocks, &expander.used_anchor_ids);
+        (Vec::new(), sections, synthetic_anchor)
+    };
     // Bob content policy follows the root's area/project kind, including
     // terminal projects; ordinary notes keep the plain Obsidian projection.
     // The host policy covers transcluded tasks while each occurrence keeps
@@ -126,18 +159,42 @@ pub(crate) fn project_snapshot<L: SourceLoader>(
     let mut closed = None;
     let mut bob_omitted_closed = 0;
     let mut bob_omitted_self = 0;
-    let mut bob_schedule_logs = 0;
-    let mut bob_work_logs = 0;
-    if matches!(
-        note.kind,
-        NoteKind::Area | NoteKind::Project | NoteKind::TerminalProject
-    ) {
+    let mut bob_omitted_sections = 0;
+    let mut bob_masthead = options.masthead.clone();
+    let mut bob_outcome = None;
+    if is_bob {
         let context = BobTaskContext {
             snapshot_date: options.snapshot_date,
         };
+        apply_bob_task_rows(&mut preamble, &context);
         for section in &mut sections {
             apply_bob_task_rows(&mut section.blocks, &context);
         }
+        let project_outcome_status = if matches!(
+            note.kind,
+            NoteKind::Project | NoteKind::TerminalProject
+        ) {
+            prepare_project_outcome_for_visibility(
+                &mut preamble,
+                &mut sections,
+                &note.identity,
+            )
+        } else {
+            None
+        };
+        // Visibility treats preamble tasks by running the same pass over a
+        // temporary section, then the serializer places surviving blocks
+        // directly below the masthead without a synthetic Content heading.
+        let preamble_index = if preamble.is_empty() {
+            None
+        } else {
+            sections.push(preamble_section(
+                &note.identity,
+                std::mem::take(&mut preamble),
+                &expander.used_anchor_ids,
+            ));
+            Some(sections.len() - 1)
+        };
         let outcome = apply_bob_visibility(
             &mut sections,
             expander.store,
@@ -147,23 +204,55 @@ pub(crate) fn project_snapshot<L: SourceLoader>(
                 include_closed: options.include_closed,
             },
         );
+        if let Some(index) = preamble_index {
+            preamble = std::mem::take(&mut sections[index].blocks);
+            sections.remove(index);
+        }
+        if matches!(note.kind, NoteKind::Project | NoteKind::TerminalProject) {
+            let mut project_outcome = take_project_outcome(
+                &mut preamble,
+                &mut sections,
+                &note.identity,
+            );
+            if let Some(outcome) = &mut project_outcome {
+                if let Some(status) = project_outcome_status {
+                    outcome.status = status;
+                }
+                if !outcome.history.is_empty() {
+                    sections.push(outcome_history_section(
+                        &note.identity,
+                        std::mem::take(&mut outcome.history),
+                        &expander.used_anchor_ids,
+                    ));
+                }
+            }
+            bob_outcome = project_outcome;
+        }
         closed = outcome.closed;
         bob_omitted_closed = outcome.omitted_closed_tasks;
         bob_omitted_self = outcome.omitted_self_snapshot_tasks;
-        bob_schedule_logs = outcome.schedule_logs;
-        bob_work_logs = outcome.work_logs;
         expander.warnings.extend(outcome.warnings);
+
+        bob_omitted_sections = finalize_bob_sections(
+            &mut preamble,
+            &mut sections,
+            bob_omitted_closed,
+            options.include_closed,
+        );
     }
     if let Some(anchor) = synthetic_anchor {
         expander.used_anchor_ids.insert(anchor.id);
     }
     let mut anchors = Vec::new();
+    collect_block_anchors(&preamble, &mut anchors);
     for section in &sections {
         collect_section_anchors(section, &mut anchors);
     }
     if let Some(closed_section) = &closed {
         collect_section_anchors(closed_section, &mut anchors);
     }
+    let (bob_schedule_logs, bob_work_logs) =
+        count_visible_log_entries(&preamble, &sections, closed.as_ref());
     let mut summary = expander.summary;
     summary.sections = sections.len() as u64;
     summary.assets = unique_asset_count(&expander.assets) as u64;
@@ -178,6 +267,7 @@ pub(crate) fn project_snapshot<L: SourceLoader>(
             )
         })
         .count() as u64;
+    count_block_statuses(&preamble, &mut summary.task_counts);
     count_task_statuses(&sections, &mut summary.task_counts);
     if let Some(closed_section) = &closed {
         count_task_statuses(
@@ -187,12 +277,29 @@ pub(crate) fn project_snapshot<L: SourceLoader>(
     }
     summary.omitted_closed_tasks = bob_omitted_closed;
     summary.omitted_self_snapshot_tasks = bob_omitted_self;
+    summary.omitted_sections = summary
+        .omitted_sections
+        .saturating_add(bob_omitted_sections);
     summary.schedule_logs = bob_schedule_logs;
     summary.work_logs = bob_work_logs;
+    if is_bob {
+        compose_bob_masthead(
+            &mut bob_masthead,
+            &note.identity,
+            &note.kind,
+            parsed.frontmatter.as_ref(),
+            bob_outcome.as_ref(),
+            &summary,
+            options.snapshot_date,
+            options.include_closed,
+            expander.store,
+        );
+    }
 
     let view = SnapshotView {
         source: note.identity.clone(),
-        masthead: options.masthead,
+        masthead: bob_masthead,
+        preamble,
         sections,
         closed,
         assets: expander.assets,
@@ -205,6 +312,22 @@ pub(crate) fn project_snapshot<L: SourceLoader>(
         parsed_source: parsed,
         title_candidate,
     })
+}
+
+/// Bob-layer integration seam for create-wiring. The caller supplies the
+/// selected identity/display titles, render metadata, explicit snapshot
+/// date, closed-task mode, and (when selected) the exact H1 anchor to consume.
+/// Area/project behavior is chosen from `note.kind`; ordinary notes retain
+/// their existing Obsidian-only body projection. `view.summary` reports the
+/// shown task counts, closed/self-snapshot omissions, surviving sections,
+/// and schedule/work-log entry counts.
+pub(crate) fn project_bob_snapshot<L: SourceLoader>(
+    store: &mut SourceStore<L>,
+    note: &ClassifiedNote,
+    settings: &TasksSettings,
+    options: SnapshotProjectionOptions,
+) -> Result<SnapshotProjection, String> {
+    project_snapshot(store, note, settings, options)
 }
 
 struct Expander<'a, L: SourceLoader> {
@@ -907,6 +1030,630 @@ fn sectionize_root(
     (sections, synthetic)
 }
 
+/// Assemble Bob headings after consuming only the title heading selected by
+/// the caller. Intro blocks remain a preamble, and when a title H1 is
+/// consumed its source H2 headings become the document's section headings.
+fn sectionize_bob_root(
+    source: &SourceIdentity,
+    blocks: Vec<Block>,
+    consumed_title_heading: Option<&str>,
+) -> (Vec<Block>, Vec<SnapshotSection>) {
+    let mut preamble = Vec::new();
+    let mut sections = Vec::new();
+    let mut current: Option<SnapshotSection> = None;
+    let mut consumed_title = false;
+
+    for block in blocks {
+        if let Block::Heading(mut heading) = block {
+            let is_selected_title = heading.level == HeadingLevel::H1
+                && heading.anchor.identity.source == *source
+                && consumed_title_heading
+                    .is_some_and(|selected| heading.anchor.id == selected);
+            if is_selected_title {
+                if let Some(section) = current.take() {
+                    sections.push(section);
+                }
+                consumed_title = true;
+                continue;
+            }
+
+            let starts_section = heading.level == HeadingLevel::H1
+                || (consumed_title && heading.level == HeadingLevel::H2);
+            if starts_section {
+                if let Some(section) = current.take() {
+                    sections.push(section);
+                }
+                heading.level = HeadingLevel::H1;
+                current = Some(SnapshotSection {
+                    source: source.clone(),
+                    heading,
+                    blocks: Vec::new(),
+                });
+            } else if let Some(section) = &mut current {
+                if consumed_title && heading.level == HeadingLevel::H3 {
+                    heading.level = HeadingLevel::H2;
+                }
+                section.blocks.push(Block::Heading(heading));
+            } else {
+                if consumed_title && heading.level == HeadingLevel::H3 {
+                    heading.level = HeadingLevel::H2;
+                }
+                preamble.push(Block::Heading(heading));
+            }
+        } else if let Some(section) = &mut current {
+            section.blocks.push(block);
+        } else {
+            preamble.push(block);
+        }
+    }
+    if let Some(section) = current {
+        sections.push(section);
+    }
+    (preamble, sections)
+}
+
+fn outcome_history_section(
+    source: &SourceIdentity,
+    blocks: Vec<Block>,
+    reserved: &BTreeSet<String>,
+) -> SnapshotSection {
+    SnapshotSection {
+        source: source.clone(),
+        heading: synthetic_heading(
+            source,
+            "Outcome history",
+            "__snapshot_outcome_history",
+            "snapshot-outcome-history",
+            reserved,
+        ),
+        blocks,
+    }
+}
+
+fn preamble_section(
+    source: &SourceIdentity,
+    blocks: Vec<Block>,
+    reserved: &BTreeSet<String>,
+) -> SnapshotSection {
+    SnapshotSection {
+        source: source.clone(),
+        heading: synthetic_heading(
+            source,
+            "Preamble",
+            "__snapshot_preamble",
+            "snapshot-preamble",
+            reserved,
+        ),
+        blocks,
+    }
+}
+
+fn synthetic_heading(
+    source: &SourceIdentity,
+    label: &str,
+    fragment: &str,
+    base_id: &str,
+    reserved: &BTreeSet<String>,
+) -> SnapshotHeading {
+    let mut id = base_id.to_string();
+    let mut suffix = 2_u32;
+    while reserved.contains(&id) {
+        id = format!("{base_id}-{suffix}");
+        suffix += 1;
+    }
+    SnapshotHeading {
+        level: HeadingLevel::H1,
+        content: vec![Inline::Text(label.to_string())],
+        class: HeadingClass::Normal,
+        anchor: SnapshotAnchor {
+            identity: AnchorIdentity {
+                source: source.clone(),
+                kind: AnchorKind::Heading,
+                fragment: fragment.to_string(),
+            },
+            id,
+        },
+    }
+}
+
+fn compose_bob_masthead<L: SourceLoader>(
+    masthead: &mut SnapshotMasthead,
+    source: &SourceIdentity,
+    kind: &NoteKind,
+    frontmatter: Option<&SourceFrontmatter>,
+    outcome: Option<&ProjectOutcome>,
+    summary: &SnapshotSummary,
+    snapshot_date: chrono::NaiveDate,
+    include_closed: bool,
+    store: &mut SourceStore<L>,
+) {
+    let metadata = frontmatter.map(|front| &front.metadata);
+    let category = if *kind == NoteKind::Area {
+        "AREA"
+    } else {
+        "PROJECT"
+    };
+    let parent =
+        metadata.and_then(|metadata| parent_label(metadata, source, store));
+    masthead.kicker = vec![Inline::Text(match parent {
+        Some(parent) => format!("{category} · {parent}"),
+        None => category.to_string(),
+    })];
+
+    if let Some(outcome) = outcome {
+        if !outcome.content.is_empty() {
+            masthead.dek = Some(outcome.content.clone());
+        }
+        for chip in &outcome.chips {
+            masthead.meta.push(vec![Inline::Chip(chip.clone())]);
+        }
+        if outcome.status != SnapshotTaskStatus::Open {
+            masthead.meta.push(vec![Inline::Chip(Chip {
+                content: vec![Inline::Text(
+                    outcome.status.as_str().to_string(),
+                )],
+                kind: ChipKind::Normal,
+                target: None,
+            })]);
+        }
+        masthead.meta.extend(outcome.relationships.iter().cloned());
+    } else if let Some(description) = metadata
+        .and_then(|metadata| metadata_value(metadata, "description"))
+        .and_then(yaml_scalar_text)
+        .filter(|description| !description.trim().is_empty())
+    {
+        masthead.dek = Some(vec![Inline::Text(description)]);
+    }
+
+    let created = metadata
+        .and_then(|metadata| metadata_value(metadata, "created"))
+        .and_then(yaml_scalar_text)
+        .and_then(|value| {
+            crate::native::task_fields::parse_strict_calendar_date(&value)
+        })
+        .or_else(|| outcome.and_then(|outcome| outcome.created));
+    if let Some(created) = created {
+        masthead.meta.push(vec![Inline::Text(format!(
+            "Started {}",
+            date_label(created)
+        ))]);
+    }
+
+    if outcome.is_none() && *kind == NoteKind::TerminalProject {
+        if let Some(status) = metadata
+            .and_then(|metadata| metadata_value(metadata, "status"))
+            .and_then(yaml_scalar_text)
+        {
+            let status = ProjectStatus::parse(Some(&status));
+            if matches!(status, ProjectStatus::Done | ProjectStatus::Canceled) {
+                masthead.meta.push(vec![Inline::Chip(Chip {
+                    content: vec![Inline::Text(status.label().to_string())],
+                    kind: ChipKind::Normal,
+                    target: None,
+                })]);
+            }
+        }
+    }
+
+    const STATUSES: [SnapshotTaskStatus; 6] = [
+        SnapshotTaskStatus::Open,
+        SnapshotTaskStatus::Next,
+        SnapshotTaskStatus::Wip,
+        SnapshotTaskStatus::Blocked,
+        SnapshotTaskStatus::Done,
+        SnapshotTaskStatus::Canceled,
+    ];
+    masthead.stats = STATUSES
+        .into_iter()
+        .map(|status| StatusCount {
+            status,
+            count: summary.task_counts.get(&status).copied().unwrap_or(0),
+        })
+        .collect();
+    masthead.omitted = Some(vec![Inline::Text(format!(
+        "Omitted: {} closed · {} self-snapshot",
+        summary.omitted_closed_tasks, summary.omitted_self_snapshot_tasks
+    ))]);
+
+    let date = date_label(snapshot_date);
+    let mut snapshot_line = vec![Inline::Text("Snapshot of ".to_string())];
+    snapshot_line.extend(masthead.display_title.iter().cloned());
+    snapshot_line.push(Inline::Text(format!(" · {} · {date}", source.route)));
+    masthead.snapshot_line = snapshot_line;
+    masthead.footer = vec![Inline::Text(format!(
+        "Source: {} · {date}{}",
+        source.route,
+        if include_closed {
+            " · closed tasks included"
+        } else {
+            ""
+        }
+    ))];
+}
+
+fn date_label(date: chrono::NaiveDate) -> String {
+    date.format("%b %-d, %Y").to_string()
+}
+
+fn metadata_value<'a>(
+    metadata: &'a YamlValue,
+    key: &str,
+) -> Option<&'a YamlValue> {
+    metadata
+        .as_mapping()?
+        .get(YamlValue::String(key.to_string()))
+}
+
+fn yaml_scalar_text(value: &YamlValue) -> Option<String> {
+    match value {
+        YamlValue::String(value) => Some(value.clone()),
+        YamlValue::Sequence(items) => {
+            let item = items.first()?;
+            let inner = yaml_scalar_text(item)?;
+            if matches!(item, YamlValue::Sequence(_)) {
+                Some(format!("[[{inner}]]"))
+            } else {
+                Some(inner)
+            }
+        }
+        YamlValue::Tagged(tagged) => yaml_scalar_text(&tagged.value),
+        _ => None,
+    }
+}
+
+fn parent_label<L: SourceLoader>(
+    metadata: &YamlValue,
+    source: &SourceIdentity,
+    store: &mut SourceStore<L>,
+) -> Option<String> {
+    let raw = yaml_scalar_text(metadata_value(metadata, "parent")?)?;
+    let parsed = super::resolve::parse_link_target(&raw);
+    if let Some(alias) = parsed
+        .alias
+        .as_ref()
+        .filter(|alias| !alias.trim().is_empty())
+    {
+        return Some(alias.clone());
+    }
+    if parsed.note.is_empty() {
+        return None;
+    }
+
+    let readable = store
+        .vault_notes()
+        .resolve_note(Path::new(&source.vault_relative_path), &parsed)
+        .ok()
+        .and_then(|resolved| {
+            store.read_canonical(&resolved.canonical_path).ok()
+        })
+        .and_then(|bytes| first_source_h1(&String::from_utf8_lossy(&bytes)));
+    readable.or_else(|| {
+        parsed
+            .note
+            .rsplit('/')
+            .next()
+            .map(|name| name.trim_end_matches(".md").replace(['_', '-'], " "))
+            .filter(|name| !name.trim().is_empty())
+    })
+}
+
+fn first_source_h1(contents: &str) -> Option<String> {
+    let lines = contents.lines().collect::<Vec<_>>();
+    let body_start = strictly_closed_frontmatter_end(&lines)
+        .map_or(0, |frontmatter_end| frontmatter_end + 1);
+    let mut in_fence = false;
+    for line in lines.into_iter().skip(body_start) {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+            in_fence = !in_fence;
+            continue;
+        }
+        if in_fence {
+            continue;
+        }
+        if let Some(title) = trimmed.strip_prefix("# ") {
+            let title = title.trim().trim_end_matches('#').trim();
+            if !title.is_empty() {
+                return Some(title.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn finalize_bob_sections(
+    preamble: &mut Vec<Block>,
+    sections: &mut Vec<SnapshotSection>,
+    omitted_closed: u64,
+    include_closed: bool,
+) -> u64 {
+    let mut omitted_sections = prune_bob_blocks(preamble);
+    let mut retained: Vec<SnapshotSection> = Vec::with_capacity(sections.len());
+    for mut section in std::mem::take(sections) {
+        omitted_sections += prune_bob_blocks(&mut section.blocks);
+        let title = plain_inline_text(&section.heading.content);
+        if title == TITLE_CLOSED {
+            omitted_sections += 1;
+            if let Some(previous) = retained.last_mut() {
+                previous.blocks.append(&mut section.blocks);
+            } else {
+                preamble.append(&mut section.blocks);
+            }
+            continue;
+        }
+        if title == TITLE_ACTIVE || title == TITLE_BLOCKED {
+            section.heading.class = HeadingClass::Lane;
+        }
+        if title == "Tasks" && !has_task(&section.blocks) {
+            let mut empty = "No open tasks".to_string();
+            if !include_closed && omitted_closed > 0 {
+                empty
+                    .push_str(&format!(" · {omitted_closed} closed not shown"));
+            }
+            section
+                .blocks
+                .push(Block::EmptyState(vec![Inline::Text(empty)]));
+        }
+        if section.blocks.is_empty() && title != "Tasks" {
+            omitted_sections += 1;
+        } else {
+            retained.push(section);
+        }
+    }
+    *sections = retained;
+    omitted_sections
+}
+
+fn prune_bob_blocks(blocks: &mut Vec<Block>) -> u64 {
+    for block in blocks.iter_mut() {
+        match block {
+            Block::Task(task) => {
+                let mut children = std::mem::take(&mut task.children);
+                prune_bob_blocks(&mut children);
+                task.children = children;
+            }
+            Block::List { items, .. } => {
+                for item in items {
+                    prune_bob_blocks(&mut item.children);
+                }
+            }
+            Block::Embed { blocks, .. }
+            | Block::LiveQuery { blocks }
+            | Block::Compact { blocks }
+            | Block::Callout { blocks, .. } => {
+                prune_bob_blocks(blocks);
+            }
+            _ => {}
+        }
+    }
+
+    for block in blocks.iter_mut() {
+        if let Block::Heading(heading) = block {
+            let title = plain_inline_text(&heading.content);
+            if title == TITLE_ACTIVE || title == TITLE_BLOCKED {
+                heading.class = HeadingClass::Lane;
+            }
+        }
+    }
+
+    let mut remove = vec![false; blocks.len()];
+    let mut omitted_heading = vec![false; blocks.len()];
+    for index in 0..blocks.len() {
+        match &blocks[index] {
+            Block::Paragraph(inlines) if badge_row(inlines) => {
+                remove[index] = true;
+            }
+            Block::Heading(heading) => {
+                let title = plain_inline_text(&heading.content);
+                if title == TITLE_CLOSED {
+                    remove[index] = true;
+                    omitted_heading[index] = true;
+                    continue;
+                }
+                let next_heading = (index + 1..blocks.len()).find(|next| {
+                    matches!(
+                        &blocks[*next],
+                        Block::Heading(next_heading)
+                            if heading_rank(next_heading.level) <= heading_rank(heading.level)
+                    )
+                });
+                let end = next_heading.unwrap_or(blocks.len());
+                if !blocks[index + 1..end].iter().any(block_has_visible_content)
+                {
+                    remove[index] = true;
+                    omitted_heading[index] = true;
+                }
+            }
+            _ => {}
+        }
+    }
+    let removed =
+        omitted_heading.iter().filter(|removed| **removed).count() as u64;
+    *blocks = std::mem::take(blocks)
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, block)| (!remove[index]).then_some(block))
+        .collect();
+    removed
+}
+
+fn badge_row(inlines: &[Inline]) -> bool {
+    let mut source = String::new();
+    for inline in inlines {
+        match inline {
+            Inline::Text(text) => source.push_str(text),
+            Inline::Code(text) => {
+                source.push('`');
+                source.push_str(text);
+                source.push('`');
+            }
+            Inline::Link { label, target }
+                if matches!(
+                    target,
+                    LinkTarget::Internal(_) | LinkTarget::ScopedInternal { .. }
+                ) && matches!(label.as_slice(), [Inline::Code(_)]) =>
+            {
+                let Inline::Code(text) = &label[0] else {
+                    unreachable!()
+                };
+                source.push_str(&format!("[`{text}`](#Tasks)"));
+            }
+            _ => return false,
+        }
+    }
+    is_badge_row(&source)
+}
+
+fn plain_inline_text(inlines: &[Inline]) -> String {
+    let mut output = String::new();
+    for inline in inlines {
+        match inline {
+            Inline::Text(text) | Inline::Code(text) => output.push_str(text),
+            Inline::Link { label, .. }
+            | Inline::Emphasis(label)
+            | Inline::Strong(label)
+            | Inline::Strike(label)
+            | Inline::Muted(label) => {
+                output.push_str(&plain_inline_text(label))
+            }
+            Inline::Chip(chip) => {
+                output.push_str(&plain_inline_text(&chip.content))
+            }
+            Inline::Break => output.push(' '),
+            Inline::Anchor(_)
+            | Inline::Image { .. }
+            | Inline::EmbeddedBlock(_) => {}
+        }
+    }
+    output.trim().to_string()
+}
+
+fn heading_rank(level: HeadingLevel) -> usize {
+    match level {
+        HeadingLevel::H1 => 1,
+        HeadingLevel::H2 => 2,
+        HeadingLevel::H3 => 3,
+    }
+}
+
+fn block_has_visible_content(block: &Block) -> bool {
+    match block {
+        Block::Heading(_) => false,
+        Block::Paragraph(content) | Block::EmptyState(content) => {
+            !plain_inline_text(content).is_empty()
+        }
+        Block::List { items, .. } => items.iter().any(|item| {
+            !plain_inline_text(&item.content).is_empty()
+                || item.children.iter().any(block_has_visible_content)
+        }),
+        Block::Task(_) | Block::Code { .. } | Block::Image { .. } => true,
+        Block::LabeledRow { items, .. } => !items.is_empty(),
+        Block::LogRow { .. } | Block::MissingImage { .. } => true,
+        Block::Embed { blocks, .. }
+        | Block::LiveQuery { blocks }
+        | Block::Compact { blocks }
+        | Block::Callout { blocks, .. } => {
+            blocks.iter().any(block_has_visible_content)
+        }
+    }
+}
+
+fn has_task(blocks: &[Block]) -> bool {
+    blocks.iter().any(|block| match block {
+        Block::Task(_) => true,
+        Block::List { items, .. } => {
+            items.iter().any(|item| has_task(&item.children))
+        }
+        Block::Embed { blocks, .. }
+        | Block::LiveQuery { blocks }
+        | Block::Compact { blocks }
+        | Block::Callout { blocks, .. } => has_task(blocks),
+        _ => false,
+    })
+}
+
+fn count_block_statuses(
+    blocks: &[Block],
+    counts: &mut BTreeMap<SnapshotTaskStatus, u64>,
+) {
+    count_blocks(blocks, counts);
+}
+
+fn count_visible_log_entries(
+    preamble: &[Block],
+    sections: &[SnapshotSection],
+    closed: Option<&SnapshotSection>,
+) -> (u64, u64) {
+    let mut counts = (0, 0);
+    count_log_blocks(preamble, &mut counts);
+    for section in sections {
+        count_log_blocks(&section.blocks, &mut counts);
+    }
+    if let Some(section) = closed {
+        count_log_blocks(&section.blocks, &mut counts);
+    }
+    counts
+}
+
+fn count_log_blocks(blocks: &[Block], counts: &mut (u64, u64)) {
+    for block in blocks {
+        match block {
+            Block::Task(task) => {
+                for chip in &task.chips {
+                    if let Some(text) = chip.content.iter().find_map(|inline| {
+                        if let Inline::Text(text) = inline {
+                            Some(text.as_str())
+                        } else {
+                            None
+                        }
+                    }) && let Some(value) = text
+                        .strip_prefix("moved ")
+                        .and_then(|value| value.strip_suffix('×'))
+                        .and_then(|value| value.parse::<u64>().ok())
+                    {
+                        counts.0 += value;
+                    }
+                }
+                count_log_blocks(&task.children, counts);
+            }
+            Block::List { items, .. } => {
+                for item in items {
+                    if let Some(source) = item.source.as_ref()
+                        && let Some(kind) =
+                            parse_managed_task_log_marker(&source.raw_line)
+                    {
+                        let entries = item
+                            .children
+                            .iter()
+                            .map(|child| match child {
+                                Block::List { items, .. } => items.len() as u64,
+                                _ => 0,
+                            })
+                            .sum::<u64>();
+                        match kind {
+                            ManagedTaskLogKind::Schedule => counts.0 += entries,
+                            ManagedTaskLogKind::Work => counts.1 += entries,
+                        }
+                    }
+                    count_log_blocks(&item.children, counts);
+                }
+            }
+            Block::LogRow {
+                label, older_count, ..
+            } => match plain_inline_text(label).as_str() {
+                "MOVED" => counts.0 += 1,
+                "WORKED" => counts.1 += 1 + older_count.unwrap_or(0),
+                _ => {}
+            },
+            Block::Embed { blocks, .. }
+            | Block::LiveQuery { blocks }
+            | Block::Compact { blocks }
+            | Block::Callout { blocks, .. } => count_log_blocks(blocks, counts),
+            _ => {}
+        }
+    }
+}
+
 fn content_heading(
     source: &SourceIdentity,
     reserved_anchor_ids: &BTreeSet<String>,
@@ -1443,6 +2190,7 @@ mod tests {
         process::{Command, Stdio},
     };
 
+    use super::super::serialize_projected_markdown;
     use super::*;
     use crate::native::{
         highlights_ref::note_snapshot::{
@@ -1522,9 +2270,409 @@ mod tests {
                 masthead: masthead(),
                 snapshot_date: test_snapshot_date(),
                 include_closed: false,
+                consumed_title_heading: None,
             },
         )
         .expect("project snapshot")
+    }
+
+    fn project_bob(
+        directory: &tempfile::TempDir,
+        host: &str,
+        include_closed: bool,
+        consume_selected_title: bool,
+    ) -> SnapshotProjection {
+        let root = directory.path().canonicalize().expect("canonical vault");
+        let mut store = SourceStore::open(&root).expect("source store");
+        let display_path = root.join(host).to_string_lossy().into_owned();
+        let note = match classify_target(&mut store, &display_path)
+            .expect("classify synthetic note")
+        {
+            super::super::classify::SnapshotTarget::VaultNote(note) => note,
+            other => panic!("expected vault note, got {other:?}"),
+        };
+        let tasks_settings = settings();
+        let consumed_title_heading = if consume_selected_title {
+            let mut attachments = AttachmentIndex::new(root.clone());
+            project_obsidian_syntax(
+                &mut store,
+                &mut attachments,
+                &note.identity,
+                &tasks_settings,
+            )
+            .expect("project title candidate")
+            .title_candidate
+            .map(|candidate| candidate.anchor_id)
+        } else {
+            None
+        };
+        let mut masthead = masthead();
+        masthead.title = "Selected PDF identity".to_string();
+        masthead.display_title =
+            vec![Inline::Text("Selected display title".to_string())];
+        project_bob_snapshot(
+            &mut store,
+            &note,
+            &tasks_settings,
+            SnapshotProjectionOptions {
+                masthead,
+                snapshot_date: test_snapshot_date(),
+                include_closed,
+                consumed_title_heading,
+            },
+        )
+        .expect("project Bob snapshot")
+    }
+
+    fn markdown(projection: &SnapshotProjection) -> String {
+        let mut markdown = serialize_projected_markdown(&projection.view)
+            .expect("serialize view");
+        let mut search_from = 0;
+        while let Some(start) = markdown[search_from..].find("vault=") {
+            let value_start = search_from + start + "vault=".len();
+            let Some(value_end) = markdown[value_start..].find('&') else {
+                break;
+            };
+            let value_end = value_start + value_end;
+            markdown.replace_range(value_start..value_end, "synthetic-vault");
+            search_from = value_start + "synthetic-vault".len();
+        }
+        markdown
+    }
+
+    #[test]
+    fn bob_project_masthead_and_sections_are_composed_from_synthetic_source() {
+        let project_note = "---\n\
+type: [[project]]\n\
+parent: \"[[Portfolio|Portfolio Alpha]]\"\n\
+created: 2026-10-01\n\
+status: wip\n\
+---\n\
+# [[Portfolio]]\n\
+This intro keeps **rich prose** and a link to [[Portfolio]].\n\
+\n\
+## Tasks\n\
+`⚪ 0 open` · `🔵 1 next/wip` · `🔴 1 blocked` · `🟢 1 done/canceled`\n\
+### Next & In Progress\n\
+- [*] Continue **important** work #task ^next\n\
+### Blocked\n\
+- [?] Waiting on a decision #task ^blocked\n\
+### Done & Canceled\n\
+- [x] Finished work #task ^closed\n\
+Unrelated prose after the closed lane stays visible.\n\
+\n\
+## Outcome\n\
+- [/] Deliver **a result** with [[Portfolio]] [created:: 2026-10-02] #task ^prj\n\
+\t- ⛓️ **DEPENDS ON:** [[Project#^blocked]]\n\
+\t- 🧱 **BLOCKS:** [[Project#^next]]\n\
+\t- 🧩 **Sub-projects:** [[OpenChild]] • ~~[[DoneChild]]~~ ✅ • ~~[[CanceledChild]]~~ ❌\n\
+\t- 🛠️ **WORK LOG**\n\
+\t\t- *2026-10-15* — latest **progress**\n\
+\t- Ordinary outcome child prose remains here.\n";
+        let directory = vault(&[
+            ("Portfolio.md", "# Portfolio\n"),
+            ("OpenChild.md", "# Open child\n"),
+            ("DoneChild.md", "# Done child\n"),
+            ("CanceledChild.md", "# Canceled child\n"),
+            ("Project.md", project_note),
+        ]);
+        let projection = project_bob(&directory, "Project.md", false, true);
+        let output = markdown(&projection);
+
+        assert_eq!(projection.view.masthead.title, "Selected PDF identity");
+        assert_eq!(
+            projection.view.masthead.display_title,
+            vec![Inline::Text("Selected display title".to_string())]
+        );
+        assert_eq!(
+            projection.view.masthead.kicker[0],
+            Inline::Text("PROJECT · Portfolio Alpha".to_string())
+        );
+        assert_eq!(
+            plain_inline_text(projection.view.masthead.dek.as_deref().unwrap()),
+            "Deliver a result with Portfolio"
+        );
+        assert!(
+            output.contains("This intro keeps **rich prose**"),
+            "{output}"
+        );
+        assert!(output.contains("Started Oct 1\\, 2026"), "{output}");
+        assert!(output.contains("[wip]{.chip}"), "{output}");
+        assert!(output.contains("WAITS ON\\:"), "{output}");
+        assert!(output.contains("BLOCKS\\:"), "{output}");
+        assert!(output.contains("Sub\\-projects\\:"), "{output}");
+        assert!(output.contains("Outcome history"), "{output}");
+        assert!(
+            output.contains("Ordinary outcome child prose remains here"),
+            "{output}"
+        );
+        assert!(output.contains("[WORKED]{.label} *Oct 15*"), "{output}");
+        assert!(!output.contains("WORK LOG"), "{output}");
+        assert!(
+            output.contains(
+                "Unrelated prose after the closed lane stays visible"
+            ),
+            "{output}"
+        );
+        assert!(!output.contains("Done & Canceled"), "{output}");
+        assert!(!output.contains("⚪ 0 open"), "{output}");
+        assert!(!output.contains("#t-prj"), "{output}");
+        assert_eq!(projection.view.summary.omitted_closed_tasks, 1);
+        assert_eq!(
+            projection
+                .view
+                .summary
+                .task_counts
+                .get(&SnapshotTaskStatus::Next),
+            Some(&1)
+        );
+        assert_eq!(
+            projection
+                .view
+                .summary
+                .task_counts
+                .get(&SnapshotTaskStatus::Blocked),
+            Some(&1)
+        );
+        assert!(!projection
+            .view
+            .summary
+            .task_counts
+            .contains_key(&SnapshotTaskStatus::Wip));
+        assert_eq!(projection.view.summary.work_logs, 1);
+        assert_transclusion_golden(&output, "bob-prose-project");
+    }
+
+    #[test]
+    fn area_projection_keeps_blocked_ticklers_and_condenses_long_histories() {
+        let mut area_note = String::from(
+            "---\ntype: [[area]]\nparent: \"[[Portfolio|Portfolio Alpha]]\"\ncreated: 2026-09-30\n---\n# Area title\n\nIntro paragraph stays above sections.\n\n## Tasks\n### Blocked\n",
+        );
+        for index in 0..23 {
+            area_note.push_str(&format!(
+                "- [?] Tickler {index:02} [scheduled:: 2026-10-17] [key:: value-{index}] $1,250.00 #task ^tickler-{index:02}\n"
+            ));
+            area_note.push_str("\t- 🗓️ **SCHEDULE LOG**\n");
+            for entry in 0..4 {
+                area_note.push_str(&format!(
+                    "\t\t- *2026-10-0{} → 2026-10-1{}* — moved entry {entry}\n\t\t\t- reason detail that is not an extra log entry\n",
+                    entry + 1,
+                    entry + 2
+                ));
+            }
+            area_note.push_str(
+                "\t- 🛠️ **WORK LOG**\n\
+\t\t- *2026-10-15* — tickler review\n\
+\t\t- *2026-10-14* — earlier review\n",
+            );
+        }
+        area_note.push_str(
+            "\n## Legacy Notes\n\n- Legacy value [custom:: retained] with literal $4,200.75.\n\n`key:: literal` stays code.\n",
+        );
+        let directory = vault(&[
+            ("Portfolio.md", "# Portfolio\n"),
+            ("Area.md", &area_note),
+        ]);
+        let before = read_tree(directory.path());
+        let projection = project_bob(&directory, "Area.md", false, true);
+        let output = markdown(&projection);
+
+        assert_eq!(
+            projection
+                .view
+                .summary
+                .task_counts
+                .get(&SnapshotTaskStatus::Blocked),
+            Some(&23)
+        );
+        assert_eq!(projection.view.summary.schedule_logs, 92);
+        assert_eq!(projection.view.summary.work_logs, 46);
+        assert_eq!(output.matches("moved 4×").count(), 23);
+        assert!(output.contains("Legacy Notes"), "{output}");
+        assert!(output.contains("custom\\: retained"), "{output}");
+        assert!(output.contains("\\$4\\,200\\.75"), "{output}");
+        assert!(output.contains("`key:: literal`"), "{output}");
+        assert!(!output.contains("SCHEDULE LOG"), "{output}");
+        assert!(!output.contains("reason detail"), "{output}");
+        assert_eq!(before, read_tree(directory.path()));
+        assert_transclusion_golden(&output, "bob-area-ticklers");
+    }
+
+    #[test]
+    fn generated_three_hundred_task_projection_has_stable_counts_and_order() {
+        let symbols = [' ', '*', '/', '?', 'x', '-'];
+        let mut generated = String::from(
+            "---\ntype: [[area]]\ncreated: 2026-10-01\n---\n# Generated area\n\n## Tasks\n",
+        );
+        for index in 0..300 {
+            let symbol = symbols[index % symbols.len()];
+            generated.push_str(&format!(
+                "- [{symbol}] Generated task {index:03} [scheduled:: 2026-10-17] #task ^generated-{index:03}\n"
+            ));
+            if index % 25 == 0 {
+                generated.push_str(
+                    "\t- 🗓️ **SCHEDULE LOG**\n\
+\t\t- *2026-10-01 → 2026-10-02* — moved\n\
+\t- 🛠️ **WORK LOG**\n\
+\t\t- *2026-10-15* — generated review\n",
+                );
+            }
+        }
+        let directory = vault(&[("Generated.md", &generated)]);
+        let projection = project_bob(&directory, "Generated.md", false, true);
+        let output = markdown(&projection);
+
+        for status in [
+            SnapshotTaskStatus::Open,
+            SnapshotTaskStatus::Next,
+            SnapshotTaskStatus::Wip,
+            SnapshotTaskStatus::Blocked,
+        ] {
+            assert_eq!(
+                projection.view.summary.task_counts.get(&status),
+                Some(&50)
+            );
+        }
+        assert_eq!(projection.view.summary.omitted_closed_tasks, 100);
+        assert_eq!(projection.view.summary.schedule_logs, 8);
+        assert_eq!(projection.view.summary.work_logs, 8);
+        let first = output.find("Generated task 000").expect("first task");
+        let last = output.find("Generated task 273").expect("last shown task");
+        assert!(first < last);
+        assert!(!output.contains("Generated task 299"));
+        assert_transclusion_golden(&output, "bob-generated-300");
+    }
+
+    #[test]
+    fn terminal_project_without_prj_uses_frontmatter_and_keeps_unrelated_prose()
+    {
+        let directory = vault(&[
+            ("Portfolio.md", "# Portfolio\n"),
+            (
+                "Complete.md",
+                "---\ntype: [[project]]\nstatus: done\nparent: [[Portfolio]]\ncreated: 2025-11-07\ndescription: A finished synthetic project.\n---\n# Complete project\n\nIntro remains visible.\n\n## Notes\nNo generated status badge row was authored.\n",
+            ),
+        ]);
+        let projection = project_bob(&directory, "Complete.md", false, true);
+        let output = markdown(&projection);
+
+        assert_eq!(
+            projection.view.masthead.kicker[0],
+            Inline::Text("PROJECT · Portfolio".to_string())
+        );
+        assert_eq!(
+            plain_inline_text(projection.view.masthead.dek.as_deref().unwrap()),
+            "A finished synthetic project."
+        );
+        assert!(output.contains("[done]{.chip}"), "{output}");
+        assert!(output.contains("Started Nov 7\\, 2025"), "{output}");
+        assert!(output.contains("Intro remains visible"), "{output}");
+        assert!(
+            output.contains("No generated status badge row was authored"),
+            "{output}"
+        );
+        assert_eq!(projection.view.summary.omitted_closed_tasks, 0);
+        assert_transclusion_golden(&output, "bob-terminal-project");
+    }
+
+    #[test]
+    fn ordinary_control_and_repeated_selected_embeds_keep_their_own_policy() {
+        let directory = vault(&[
+            (
+                "Child.md",
+                "# Child\n\n## Focus\n- [ ] Embedded open #task ^open\n\
+\t- 🗓️ **SCHEDULE LOG**\n\
+\t\t- *2026-10-01 → 2026-10-02* — moved\n\
+\t- 🛠️ **WORK LOG**\n\
+\t\t- *2026-10-15* — newest\n\
+- [x] Embedded closed #task ^closed\n\
+\t- 🗓️ **SCHEDULE LOG**\n\
+\t\t- *2026-10-02 → 2026-10-03* — moved while closed\n\
+\t- 🛠️ **WORK LOG**\n\
+\t\t- *2026-10-14* — closed history\n",
+            ),
+            (
+                "Area.md",
+                "---\ntype: [[area]]\n---\n# Area\n\nA Bob host intro.\n\n## Materials\n![[Child#Focus]]\n\n![[Child#Focus]]\n",
+            ),
+            (
+                "Ordinary.md",
+                "# Plain note\n\nOrdinary control prose.\n\n## Section\nThis remains the ordinary Obsidian view.\n",
+            ),
+        ]);
+        let before = read_tree(directory.path());
+        let bob_reading = project_bob(&directory, "Area.md", false, true);
+        let bob_reading_markdown = markdown(&bob_reading);
+        let bob_closed = project_bob(&directory, "Area.md", true, true);
+        let bob_closed_markdown = markdown(&bob_closed);
+        let ordinary = project_bob(&directory, "Ordinary.md", false, true);
+        let ordinary_markdown = markdown(&ordinary);
+
+        assert_eq!(
+            bob_reading
+                .view
+                .summary
+                .task_counts
+                .get(&SnapshotTaskStatus::Open),
+            Some(&2)
+        );
+        assert_eq!(bob_reading.view.summary.omitted_closed_tasks, 2);
+        assert_eq!(bob_reading.view.summary.schedule_logs, 2);
+        assert_eq!(bob_reading.view.summary.work_logs, 2);
+        assert_eq!(bob_closed.view.summary.omitted_closed_tasks, 0);
+        assert_eq!(
+            bob_closed
+                .view
+                .summary
+                .task_counts
+                .get(&SnapshotTaskStatus::Done),
+            Some(&2)
+        );
+        assert_eq!(bob_closed.view.summary.schedule_logs, 4);
+        assert_eq!(bob_closed.view.summary.work_logs, 4);
+        assert!(
+            bob_closed_markdown.contains("Closed tasks"),
+            "{bob_closed_markdown}"
+        );
+        assert!(
+            bob_closed_markdown.contains("MOVED"),
+            "{bob_closed_markdown}"
+        );
+        assert!(
+            bob_closed_markdown.contains("WORKED"),
+            "{bob_closed_markdown}"
+        );
+        let anchor_ids = bob_closed
+            .view
+            .anchors
+            .iter()
+            .map(|anchor| anchor.id.as_str())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(anchor_ids.len(), bob_closed.view.anchors.len());
+        assert!(
+            ordinary_markdown.contains("# Plain note"),
+            "{ordinary_markdown}"
+        );
+        assert!(
+            ordinary_markdown.contains("Ordinary control prose"),
+            "{ordinary_markdown}"
+        );
+        assert!(!ordinary_markdown.contains("AREA"), "{ordinary_markdown}");
+        assert!(
+            !ordinary_markdown.contains("Omitted:"),
+            "{ordinary_markdown}"
+        );
+        assert_eq!(ordinary.view.summary.omitted_closed_tasks, 0);
+        assert_eq!(before, read_tree(directory.path()));
+        assert_transclusion_golden(
+            &bob_reading_markdown,
+            "bob-repeated-embed-reading",
+        );
+        assert_transclusion_golden(
+            &bob_closed_markdown,
+            "bob-repeated-embed-closed",
+        );
+        assert_transclusion_golden(&ordinary_markdown, "ordinary-control");
     }
 
     fn embeds(blocks: &[Block]) -> Vec<&Block> {
@@ -2268,6 +3416,7 @@ mod tests {
                 masthead: masthead(),
                 snapshot_date: test_snapshot_date(),
                 include_closed: false,
+                consumed_title_heading: None,
             },
         )
         .expect("project cached bytes");
@@ -2318,6 +3467,7 @@ mod tests {
                 masthead: masthead(),
                 snapshot_date: test_snapshot_date(),
                 include_closed: false,
+                consumed_title_heading: None,
             },
         )
         .expect("project synthetic vault");

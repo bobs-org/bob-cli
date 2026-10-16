@@ -4145,6 +4145,7 @@ mod tests {
                 glyph_table: "glyphs.lua".to_string(),
                 return_links: false,
             },
+            preamble: Vec::new(),
             sections: vec![SnapshotSection {
                 source: source.clone(),
                 heading: SnapshotHeading {
