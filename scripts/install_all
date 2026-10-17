@@ -531,6 +531,9 @@ mac_capture_step() {
       status=warn
       step_warning=$((step_warning + 1))
       detail="$pull_detail · installed; restart it via the Bob Mac Capture menu-bar icon → Restart Bob Mac Capture"
+    elif (( install_status == 77 )); then
+      status=fail
+      detail="$pull_detail · signing identity locked in this session · run security unlock-keychain or install from a GUI Terminal"
     else
       status=fail
       detail="$pull_detail · install failed (exit $install_status)"
@@ -538,7 +541,7 @@ mac_capture_step() {
   fi
   if [[ "$status" == ok || "$status" == warn ]] && [[ -z "${CODESIGN_IDENTITY:-}" ]] && mac_capture_is_adhoc "$HOME/Applications/Bob Mac Capture.app"; then
     step_warning=$((step_warning + 1))
-    detail="$detail · installed ad-hoc · Accessibility grant resets each install · rerun from a GUI Terminal to create the signing identity"
+    detail="$detail · installed ad-hoc · Accessibility grant resets each install · rerun from a GUI Terminal or unlock the login keychain to sign with the stable identity"
   fi
   case "$status" in
     ok)

@@ -78,6 +78,9 @@ from the login keychain when available and creates it from a GUI Terminal if nee
 an explicit `CODESIGN_IDENTITY` (including `-`) still wins. An ad-hoc install is
 reported as a ⚠ warning because its Accessibility grant resets each install. An
 install whose signature changed clears Bob Mac Capture's stale Accessibility grant.
+From a session whose login keychain is locked (SSH, or a tmux server started over SSH),
+the Bob Mac Capture step asks to unlock it before building; without a terminal, it fails
+before building with the unlock or GUI Terminal hint.
 When a sibling it would install is missing and the command
 runs in a terminal, it asks `[y/N]` whether to clone it over SSH from
 `git@github.com:bobs-org/<repo>.git` into that sibling path. It asks before the
