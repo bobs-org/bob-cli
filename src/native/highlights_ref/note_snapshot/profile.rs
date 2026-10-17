@@ -438,7 +438,64 @@ fn first_error_excerpt(log: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeSet;
     use std::os::unix::fs::PermissionsExt;
+
+    /// Note-profile renders need the packages used by the complete Markdown
+    /// render. Read the same declaration as `bob ref doctor`; keep this test
+    /// gate from growing a second package list.
+    fn missing_note_profile_packages(
+    ) -> std::result::Result<Vec<String>, String> {
+        let xelatex = crate::native::env::find_on_path("xelatex")
+            .ok_or_else(|| "xelatex is required".to_string())?;
+        let beside_xelatex =
+            xelatex.parent().map(|dir| dir.join("kpsewhich")).filter(
+                |candidate| crate::native::env::is_executable_file(candidate),
+            );
+        let kpsewhich = beside_xelatex
+            .or_else(|| crate::native::env::find_on_path("kpsewhich"))
+            .ok_or_else(|| {
+                "kpsewhich is required to check TeX packages".to_string()
+            })?;
+        let packages = super::super::super::render_tex::RENDER_TEX_PACKAGES;
+        let files: Vec<&str> =
+            packages.iter().map(|package| package.file).collect();
+        let output = std::process::Command::new(kpsewhich)
+            .args(&files)
+            .output()
+            .map_err(|error| format!("kpsewhich failed: {error}"))?;
+        let found: BTreeSet<String> = String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter_map(|line| {
+                std::path::Path::new(line.trim())
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .map(str::to_owned)
+            })
+            .collect();
+        Ok(packages
+            .iter()
+            .filter(|package| !found.contains(package.file))
+            .map(|package| package.file.to_string())
+            .collect())
+    }
+
+    fn skip_if_missing_note_profile_packages(test_name: &str) -> bool {
+        match missing_note_profile_packages() {
+            Ok(missing) if missing.is_empty() => false,
+            Ok(missing) => {
+                eprintln!(
+                    "skipping {test_name}: missing TeX packages: {}",
+                    missing.join(", ")
+                );
+                true
+            }
+            Err(reason) => {
+                eprintln!("skipping {test_name}: {reason}");
+                true
+            }
+        }
+    }
 
     fn write_executable(path: &Path, body: &str) {
         fs::write(path, body).expect("write fake executable");
@@ -794,6 +851,31 @@ Overfull \\hbox (20.1pt too wide) in paragraph\n";
                 "status {status}: {tex}"
             );
         }
+        let open_task_start =
+            tex.find("\\BobTask{Open}").expect("open task macro");
+        let open_task_paragraph = tex[open_task_start..]
+            .split("\n\n")
+            .next()
+            .expect("open task paragraph");
+        assert!(
+            open_task_paragraph.contains("Open task"),
+            "task text follows its status without a blank paragraph: {open_task_paragraph}"
+        );
+        let document_start =
+            tex.find("\\begin{document}").expect("document body")
+                + "\\begin{document}".len();
+        let document_tex = &tex[document_start..];
+        let image_begin =
+            document_tex.find("\\BobImageBegin{}").expect("image begin");
+        let image = document_tex.find("\\includegraphics").expect("AST image");
+        let image_end =
+            document_tex.find("\\BobImageEnd{}").expect("image end");
+        assert!(
+            image_begin < image && image < image_end,
+            "fixed frame wrappers surround the AST image"
+        );
+        assert_eq!(document_tex.matches("\\BobImageBegin{}").count(), 1);
+        assert_eq!(document_tex.matches("\\vspace{6pt}").count(), 2);
         for marker in [
             "\\begin{BobTasks}",
             "\\BobChipBegin{}",
@@ -876,6 +958,56 @@ Overfull \\hbox (20.1pt too wide) in paragraph\n";
             "$ amount survives"
         );
         assert!(tex.contains(":shortcode:"), ":shortcode: survives");
+        let image_list = scratch.join("image-list.md");
+        fs::write(
+            &image_list,
+            "---\nbob-glyph-table: glyphs.lua\n---\n\n- []{.st .st-open} Task image ![diagram](<assets/quay_crane.png>)\n",
+        )
+        .expect("write image-list fixture");
+        let image_list_tex = scratch.join("image-list.tex");
+        let image_list_output = std::process::Command::new(&pandoc)
+            .arg(&image_list)
+            .arg("-f")
+            .arg("commonmark_x-tex_math_dollars-emoji")
+            .arg("-t")
+            .arg("latex")
+            .arg("-s")
+            .arg("-o")
+            .arg(&image_list_tex)
+            .arg("--lua-filter")
+            .arg(&note_filter)
+            .arg("--metadata")
+            .arg("bob-glyph-table=glyphs.lua")
+            .current_dir(&scratch)
+            .output()
+            .expect("pandoc list image");
+        assert!(
+            image_list_output.status.success(),
+            "pandoc list image: {image_list_output:?}"
+        );
+        let image_list_tex =
+            fs::read_to_string(image_list_tex).expect("read list image TeX");
+        let image_list_document_start = image_list_tex
+            .find("\\begin{document}")
+            .expect("image-list document body")
+            + "\\begin{document}".len();
+        let image_list_document = &image_list_tex[image_list_document_start..];
+        let task_text = image_list_document
+            .find("\\BobTask{Open} Task image")
+            .expect("task row text before image");
+        let image_begin = image_list_document
+            .find("\\BobImageBegin{}")
+            .expect("task image begin");
+        let image = image_list_document
+            .find("\\includegraphics")
+            .expect("task AST image");
+        let image_end = image_list_document
+            .find("\\BobImageEnd{}")
+            .expect("task image end");
+        assert!(
+            task_text < image_begin && image_begin < image && image < image_end,
+            "image stays inside its AST wrapper on a task row: {image_list_tex}"
+        );
         // Opt-out: bob-return-links:false leaves doc unchanged but still converts.
         let opt_out = scratch.join("optout.md");
         fs::write(&opt_out, "---\nbob-return-links: false\nbob-glyph-table: glyphs.lua\n---\n\n# Hi {#hi}\n\nA [link](#hi).\n")
@@ -975,6 +1107,9 @@ Overfull \\hbox (20.1pt too wide) in paragraph\n";
             eprintln!("skipping real render: xelatex is required");
             return;
         }
+        if skip_if_missing_note_profile_packages("real render") {
+            return;
+        }
         let temp = tempfile::tempdir().expect("tempdir");
         let scratch = temp.path().join("scratch");
         fs::create_dir_all(&scratch).expect("scratch");
@@ -993,6 +1128,27 @@ Overfull \\hbox (20.1pt too wide) in paragraph\n";
             outcome.warnings.is_empty(),
             "zero missing glyphs and no >20pt overfull: {:?}",
             outcome.warnings
+        );
+        let list_image_scratch = temp.path().join("list-image");
+        fs::create_dir_all(&list_image_scratch).expect("list image scratch");
+        stage_synthetic_image(&list_image_scratch);
+        let list_image_filters = write_filters_for_render(&list_image_scratch);
+        let list_image = render_note_pdf(
+            "---\nbob-snapshot: true\nbob-kicker: NOTE\nbob-display-title: Image row\nbob-snapshot-line: Snapshot\nbob-footer: Image row\nbob-glyph-table: glyphs.lua\nbob-return-links: false\n---\n\n- []{.st .st-open} Task with ![diagram](assets/quay_crane.png)\n",
+            &list_image_scratch,
+            &list_image_filters,
+            &NoteMeta {
+                identity_title: "Image row · 2026-10-16".to_string(),
+                source_path: "image_row.md".to_string(),
+                kind: "note".to_string(),
+                listen_uri: None,
+            },
+        )
+        .expect("real render of image in task row");
+        assert!(
+            list_image.warnings.is_empty(),
+            "framed list image has no >20pt overfull: {:?}",
+            list_image.warnings
         );
         // Zero Type 3 fonts via lopdf font dictionaries.
         let document = lopdf::Document::load(&outcome.pdf).expect("load PDF");
@@ -1072,6 +1228,14 @@ Overfull \\hbox (20.1pt too wide) in paragraph\n";
         let text = String::from_utf8_lossy(&text_out.stdout).into_owned();
         assert!(text.contains("Open task"), "task words");
         assert!(text.contains("sched Oct 17"), "chip text");
+        let open_task_line = text
+            .lines()
+            .find(|line| line.contains("Open task"))
+            .expect("task text line");
+        assert!(
+            open_task_line.contains("sched Oct 17"),
+            "short task text and chip share one line: {open_task_line}"
+        );
         for symbol in ["○", "◉", "◐", "⊘", "✓", "⊗"] {
             assert!(
                 !text.contains(symbol),
@@ -1156,6 +1320,9 @@ Overfull \\hbox (20.1pt too wide) in paragraph\n";
             .is_err()
         {
             eprintln!("skipping nav test: pdftotext is required");
+            return;
+        }
+        if skip_if_missing_note_profile_packages("nav render") {
             return;
         }
         // Short doc: two H1 sections, one wrapped task with children.

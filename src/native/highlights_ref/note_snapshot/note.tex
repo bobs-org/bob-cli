@@ -16,6 +16,7 @@
 \definecolor{BobNextWip}{HTML}{3B6EA8}
 \definecolor{BobBlocked}{HTML}{B4443C}
 \definecolor{BobDone}{HTML}{2E7D4F}
+\definecolor{BobHairline}{HTML}{D0D7DE}
 \definecolor{BobChipFill}{HTML}{EEF1F4}
 \definecolor{BobChipAccentFill}{HTML}{FFF4D6}
 \definecolor{BobChipAccentInk}{HTML}{9A6700}
@@ -60,11 +61,16 @@
 \newcommand{\BobStatusGlyph}[1]{%
   \ifcsname BobSt#1\endcsname\csname BobSt#1\endcsname\else\tikz[baseline=-0.45ex]\draw[line width=0.9pt,color=BobMuted] (0,0) circle (0.42em);\fi%
 }
-% Task rows share the ordinary indent column with hanging indentation so
-% wrapped text aligns under the first word, not under the glyph.
+% Task rows share the ordinary indent column. The hanging indent accounts for
+% the label column so wrapped text aligns beneath the task text.
 \newenvironment{BobTasks}{\begin{itemize}[leftmargin=1.6em,labelsep=0.5em,itemsep=2.5pt,parsep=0pt,topsep=3pt]}{\end{itemize}}
-\newcommand{\BobTask}[1]{\item[\BobStatusGlyph{#1}]\needspace{2\baselineskip}\noindent\hangindent=0pt\hangafter=0\ignorespaces}
+\newcommand{\BobTask}[1]{\item[\BobStatusGlyph{#1}]\needspace{2\baselineskip}\noindent\hangindent=\dimexpr\leftmargin-\labelwidth\relax\hangafter=1\ignorespaces}
 \newcommand{\BobOrdinaryItem}{\item}
+% Each image stays an AST node between these fixed wrappers. The lrbox makes
+% the frame indivisible; no user path or text is interpolated into TeX.
+\newsavebox{\BobImageBox}
+\newcommand{\BobImageBegin}{\begingroup\setlength{\fboxsep}{0pt}\setlength{\fboxrule}{0.4pt}\begin{lrbox}{\BobImageBox}}
+\newcommand{\BobImageEnd}{\end{lrbox}\fcolorbox{BobHairline}{white}{\usebox{\BobImageBox}}\endgroup}
 % Chips, labels, muted, missing, and glyph fallbacks use begin/end wrappers
 % so Lua never stringifies user content into a TeX argument.
 \newcommand{\BobChipBegin}{\tikz[baseline=(chip.base)]\node[fill=BobChipFill,draw=none,rounded corners=1.5pt,inner xsep=3.2pt,inner ysep=1.6pt](chip)\bgroup\BobChipFont\fontsize{7pt}{8.5pt}\selectfont\color{BobMuted}\ignorespaces}
@@ -131,10 +137,9 @@
 \fancyfoot[R]{\sffamily\fontsize{7.5pt}{9pt}\selectfont\color{BobMuted}\thepage\ /\ \pageref*{LastPage}}
 \renewcommand{\headrulewidth}{0pt}
 \renewcommand{\footrulewidth}{0pt}
-% Images use pandoc's default \includegraphics (width preserved from the
-% projected Markdown). Standalone images are centered by the Lua filter with
-% center-environment delimiters; framing with a hairline is a follow-up
-% (requires no user paths in raw TeX arguments).
+% Images stay AST \includegraphics nodes (width from projected Markdown).
+% note.lua wraps each Image in \BobImageBegin/\BobImageEnd so the hairline
+% frame never interpolates a user path, and centers standalone images.
 \makeatother
 % Lane headings and appendix markers share the label style.
 \newcommand{\BobFooter}{\par\vspace{6pt}}

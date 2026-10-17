@@ -342,7 +342,11 @@ local function process_inlines(inlines)
       out[#out + 1] = el
     elseif el.t == "Image" then
       if el.caption then el.caption = process_inlines(el.caption) end
+      -- Keep the image itself as Pandoc AST so its source path and size stay
+      -- escaped by Pandoc; only fixed TeX wrappers surround it.
+      out[#out + 1] = raw_latex("\\BobImageBegin{}")
       out[#out + 1] = el
+      out[#out + 1] = raw_latex("\\BobImageEnd{}")
     elseif el.t == "Note" then
       el.content = process_blocks(el.content)
       out[#out + 1] = el
@@ -389,10 +393,18 @@ local function convert_task_list(items)
       if blocks[1] and (blocks[1].t == "Para" or blocks[1].t == "Plain") and #blocks[1].content == 0 then
         table.remove(blocks, 1)
       end
-      out[#out + 1] = raw_block("\\BobTask{" .. status .. "}")
+      if blocks[1] and (blocks[1].t == "Para" or blocks[1].t == "Plain") then
+        table.insert(blocks[1].content, 1, raw_latex("\\BobTask{" .. status .. "}"))
+      else
+        out[#out + 1] = raw_block("\\BobTask{" .. status .. "}\\leavevmode")
+      end
       for _, b in ipairs(blocks) do out[#out + 1] = b end
     else
-      out[#out + 1] = raw_block("\\BobOrdinaryItem{}")
+      if blocks[1] and (blocks[1].t == "Para" or blocks[1].t == "Plain") then
+        table.insert(blocks[1].content, 1, raw_latex("\\BobOrdinaryItem{}"))
+      else
+        out[#out + 1] = raw_block("\\BobOrdinaryItem{}\\leavevmode")
+      end
       for _, b in ipairs(blocks) do out[#out + 1] = b end
     end
   end
@@ -404,13 +416,16 @@ function process_blocks(blocks)
   local out = {}
   for _, blk in ipairs(blocks) do
     if blk.t == "Para" or blk.t == "Plain" then
+      local standalone_image = blk.t == "Para"
+        and #blk.content == 1
+        and blk.content[1].t == "Image"
       blk.content = process_inlines(blk.content)
       -- Center standalone images (a Para with a single Image) with
       -- environment delimiters; the Image itself stays AST.
-      if blk.t == "Para" and #blk.content == 1 and blk.content[1].t == "Image" then
-        out[#out + 1] = raw_block("\\begin{center}")
+      if standalone_image then
+        out[#out + 1] = raw_block("\\par\\vspace{6pt}\\begin{center}")
         out[#out + 1] = blk
-        out[#out + 1] = raw_block("\\end{center}")
+        out[#out + 1] = raw_block("\\end{center}\\par\\vspace{6pt}")
       else
         out[#out + 1] = blk
       end

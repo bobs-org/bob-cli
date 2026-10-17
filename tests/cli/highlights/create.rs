@@ -7,6 +7,53 @@ use std::ffi::OsString;
 use std::os::unix::ffi::OsStringExt;
 use std::process::Command;
 
+/// `bob highlights doctor` runs `kpsewhich` over the same declared package
+/// list used by the note profile and reports any files it cannot find.
+fn note_profile_package_skip(
+    vault: &std::path::Path,
+) -> Result<Option<String>, String> {
+    let output = bob_command()
+        .arg("highlights")
+        .arg("doctor")
+        .arg("--no-hooks")
+        .env("BOB_DIR", vault)
+        .output()
+        .map_err(|error| format!("run highlights doctor: {error}"))?;
+    let report = stdout(&output);
+    let Some(row) = report
+        .lines()
+        .find(|line| line.starts_with("latex_packages: "))
+    else {
+        return Err(format!("doctor omitted latex_packages row:\n{report}"));
+    };
+    if let Some(missing) = row
+        .strip_prefix("latex_packages: warn (missing ")
+        .and_then(|row| row.strip_suffix(')'))
+    {
+        return Ok(Some(missing.to_string()));
+    }
+    if row.contains("kpsewhich not found") || row.contains("kpsewhich failed") {
+        return Err(row.to_string());
+    }
+    Ok(None)
+}
+
+fn skip_if_missing_note_profile_packages(vault: &std::path::Path) -> bool {
+    match note_profile_package_skip(vault) {
+        Ok(Some(missing)) => {
+            eprintln!(
+                "skipping vault-note real-render CLI test: missing TeX packages: {missing}"
+            );
+            true
+        }
+        Ok(None) => false,
+        Err(reason) => {
+            eprintln!("skipping vault-note real-render CLI test: {reason}");
+            true
+        }
+    }
+}
+
 /// The vault holds exactly these top-level entries, in sorted order.
 /// `-P` resolution requires a parent note, so dry-run and rejection
 /// tests seed `sase.md` and then prove nothing else was written.
@@ -5663,6 +5710,57 @@ fn highlights_create_vault_note_dry_run_uses_title_parent_and_fixed_date() {
         !vault.join("xlib").exists(),
         "dry run must not create intake files"
     );
+}
+
+#[test]
+fn highlights_create_renders_vault_note_snapshot_when_available() {
+    let pandoc_available = Command::new("pandoc")
+        .arg("--version")
+        .output()
+        .is_ok_and(|output| output.status.success());
+    let xelatex_available = Command::new("xelatex")
+        .arg("--version")
+        .output()
+        .is_ok_and(|output| output.status.success());
+    if !pandoc_available || !xelatex_available {
+        eprintln!(
+            "skipping vault-note real-render CLI test: pandoc and xelatex are required"
+        );
+        return;
+    }
+
+    let temp = TempDir::new("bob-cli-create-vault-note-render");
+    let vault = temp.path().join("vault");
+    write_file(
+        &vault.join("harbor_area.md"),
+        "---\ntype: [[area]]\n---\n# Harbor Area\n\n## Tasks\n\n- [ ] #task Write a short project brief\n",
+    );
+    if skip_if_missing_note_profile_packages(&vault) {
+        return;
+    }
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg("harbor_area")
+        .arg("-b")
+        .arg(&vault)
+        .env("BOB_NOW", "2026-10-16 12:00:00")
+        .output()
+        .expect("render vault note snapshot");
+
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(report.contains("created note snapshot"), "{report}");
+    let pdf = vault.join("xlib/notes/harbor_area_261016.pdf");
+    assert!(
+        pdf.is_file(),
+        "missing real-rendered PDF: {}",
+        pdf.display()
+    );
+    let document = lopdf::Document::load(&pdf)
+        .unwrap_or_else(|error| panic!("load {}: {error}", pdf.display()));
+    assert!(!document.get_pages().is_empty(), "snapshot PDF has pages");
 }
 
 #[test]
