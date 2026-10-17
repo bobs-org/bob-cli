@@ -3,7 +3,7 @@ title: Selected PDF identity
 bob-snapshot: true
 bob-kicker: PROJECT · Portfolio
 bob-display-title: Selected display title
-bob-dek: A finished synthetic project\.
+bob-dek: A finished synthetic project about area and Bob\.
 bob-meta:
 - Started Nov 7\, 2025
 - '[done]{.chip}'

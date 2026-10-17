@@ -308,6 +308,12 @@ local function process_inlines(inlines)
         out[#out + 1] = raw_latex("\\BobMissingEnd{}")
       elseif classes["st"] then
         for _, n in ipairs(content) do out[#out + 1] = n end
+      elseif el.identifier and el.identifier ~= "" and #content == 0
+          and el.identifier:match("^[%w:._-]+$") then
+        -- The LaTeX writer places a native Span anchor after \item in a new
+        -- paragraph. Task rows need their first text on the item baseline, so
+        -- preserve the safe projected ID as a fixed inline anchor command.
+        out[#out + 1] = raw_latex("\\phantomsection\\label{" .. el.identifier .. "}")
       else
         el.content = content
         out[#out + 1] = el
@@ -435,7 +441,8 @@ function process_blocks(blocks)
       if blk.classes then
         for _, c in ipairs(blk.classes) do if c == "lane" then has_lane = true end end
       end
-      out[#out + 1] = raw_block("\\needspace{4\\baselineskip}")
+      local reserve = has_lane and blk.identifier == "scheduled" and 8 or 4
+      out[#out + 1] = raw_block("\\needspace{" .. reserve .. "\\baselineskip}")
       if has_lane then
         out[#out + 1] = pandoc.Para({ raw_latex("\\BobLaneBegin{}") })
         local para_inlines = {}

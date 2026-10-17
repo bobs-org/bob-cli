@@ -896,6 +896,44 @@ Overfull \\hbox (20.1pt too wide) in paragraph\n";
         ] {
             assert!(tex.contains(marker), "missing {marker}");
         }
+        let scheduled_source = scratch.join("scheduled.projected.md");
+        fs::write(
+            &scheduled_source,
+            "## Scheduled {#scheduled .lane}\n\n### This month {#scheduled-this-month}\n\n- []{.st .st-blocked} A compact row\n",
+        )
+        .expect("scheduled fixture");
+        let scheduled_out = scratch.join("scheduled.tex");
+        let scheduled_run = std::process::Command::new(&pandoc)
+            .arg(&scheduled_source)
+            .arg("-f")
+            .arg("commonmark_x-tex_math_dollars-emoji")
+            .arg("-t")
+            .arg("latex")
+            .arg("-s")
+            .arg("-o")
+            .arg(&scheduled_out)
+            .arg("--lua-filter")
+            .arg(&note_filter)
+            .arg("--metadata")
+            .arg("bob-glyph-table=glyphs.lua")
+            .current_dir(&scratch)
+            .output()
+            .expect("run scheduled fixture through pandoc");
+        assert!(
+            scheduled_run.status.success(),
+            "scheduled pandoc fixture: {scheduled_run:?}"
+        );
+        let scheduled_tex =
+            fs::read_to_string(&scheduled_out).expect("read scheduled TeX");
+        let scheduled_lane = scheduled_tex
+            .find("\\BobLaneBegin{}")
+            .expect("scheduled lane label");
+        assert!(
+            scheduled_tex[..scheduled_lane]
+                .rfind("\\needspace{8\\baselineskip}")
+                .is_some(),
+            "Scheduled reserves space for the first date group: {scheduled_tex}"
+        );
         // Glyph fallbacks on focused inputs (dice needs Noto, ▸ needs mono).
         for (text, marker) in [
             ("Dice 🎲 here", "\\BobFallbackBegin{}"),
@@ -961,7 +999,7 @@ Overfull \\hbox (20.1pt too wide) in paragraph\n";
         let image_list = scratch.join("image-list.md");
         fs::write(
             &image_list,
-            "---\nbob-glyph-table: glyphs.lua\n---\n\n- []{.st .st-open} Task image ![diagram](<assets/quay_crane.png>)\n",
+            "---\nbob-glyph-table: glyphs.lua\n---\n\n- []{.st .st-open} []{#task-anchor} Task image ![diagram](<assets/quay_crane.png>)\n",
         )
         .expect("write image-list fixture");
         let image_list_tex = scratch.join("image-list.tex");
@@ -992,9 +1030,18 @@ Overfull \\hbox (20.1pt too wide) in paragraph\n";
             .expect("image-list document body")
             + "\\begin{document}".len();
         let image_list_document = &image_list_tex[image_list_document_start..];
-        let task_text = image_list_document
-            .find("\\BobTask{Open} Task image")
-            .expect("task row text before image");
+        let task_start = image_list_document
+            .find("\\BobTask{Open}")
+            .expect("task row start");
+        let task_paragraph = image_list_document[task_start..]
+            .split("\n\n")
+            .next()
+            .expect("task row paragraph");
+        assert!(
+            task_paragraph.contains("\\phantomsection\\label{task-anchor}")
+                && task_paragraph.contains("Task image"),
+            "task ID anchor and text stay on the status row: {task_paragraph}"
+        );
         let image_begin = image_list_document
             .find("\\BobImageBegin{}")
             .expect("task image begin");
@@ -1005,7 +1052,7 @@ Overfull \\hbox (20.1pt too wide) in paragraph\n";
             .find("\\BobImageEnd{}")
             .expect("task image end");
         assert!(
-            task_text < image_begin && image_begin < image && image < image_end,
+            task_start < image_begin && image_begin < image && image < image_end,
             "image stays inside its AST wrapper on a task row: {image_list_tex}"
         );
         // Opt-out: bob-return-links:false leaves doc unchanged but still converts.

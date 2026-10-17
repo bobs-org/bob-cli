@@ -19,7 +19,8 @@ use super::{
     },
     obsidian::{
         project_obsidian_syntax, project_obsidian_syntax_selection,
-        PendingEmbed, SyntaxProjection, TitleCandidate,
+        replace_wikilinks_for_excerpt, PendingEmbed, SyntaxProjection,
+        TitleCandidate,
     },
     resolve::{
         build_fragment_index, obsidian_uri_with_fragment, AttachmentIndex,
@@ -1217,7 +1218,7 @@ fn compose_bob_masthead<L: SourceLoader>(
 
     if let Some(outcome) = outcome {
         if !outcome.content.is_empty() {
-            masthead.dek = Some(outcome.content.clone());
+            masthead.dek = Some(sanitize_masthead_dek(outcome.content.clone()));
         }
         for chip in &outcome.chips {
             masthead.meta.push(vec![Inline::Chip(chip.clone())]);
@@ -1237,7 +1238,8 @@ fn compose_bob_masthead<L: SourceLoader>(
         .and_then(yaml_scalar_text)
         .filter(|description| !description.trim().is_empty())
     {
-        masthead.dek = Some(vec![Inline::Text(description)]);
+        masthead.dek =
+            Some(sanitize_masthead_dek(vec![Inline::Text(description)]));
     }
 
     let created = metadata
@@ -1331,6 +1333,47 @@ fn metadata_value<'a>(
     metadata
         .as_mapping()?
         .get(YamlValue::String(key.to_string()))
+}
+
+/// Strip leftover Obsidian wikilink syntax from masthead dek inlines so
+/// generic `[[area]]` / `[[project]]` type notes never print as raw
+/// source. Already-resolved links stay links. Fragment whitespace is
+/// kept so parsed Text + Strong + Link nodes still read as one sentence.
+fn sanitize_masthead_dek(inlines: Vec<Inline>) -> Vec<Inline> {
+    inlines
+        .into_iter()
+        .flat_map(sanitize_masthead_dek_inline)
+        .collect()
+}
+
+fn sanitize_masthead_dek_inline(inline: Inline) -> Vec<Inline> {
+    match inline {
+        Inline::Text(text) => {
+            let cleaned = replace_wikilinks_for_excerpt(&text);
+            if cleaned.is_empty() {
+                Vec::new()
+            } else {
+                vec![Inline::Text(cleaned)]
+            }
+        }
+        Inline::Link { label, target } => vec![Inline::Link {
+            label: sanitize_masthead_dek(label),
+            target,
+        }],
+        Inline::Emphasis(items) => {
+            vec![Inline::Emphasis(sanitize_masthead_dek(items))]
+        }
+        Inline::Strong(items) => {
+            vec![Inline::Strong(sanitize_masthead_dek(items))]
+        }
+        Inline::Strike(items) => {
+            vec![Inline::Strike(sanitize_masthead_dek(items))]
+        }
+        Inline::Muted(items) => {
+            vec![Inline::Muted(sanitize_masthead_dek(items))]
+        }
+        other => vec![other],
+    }
 }
 
 fn yaml_scalar_text(value: &YamlValue) -> Option<String> {
@@ -2559,6 +2602,71 @@ mod tests {
         .expect("project snapshot")
     }
 
+    #[test]
+    fn same_note_block_embeds_and_transcluded_tasks_resolve_existing_files() {
+        let directory = vault(&[
+            (
+                "area.md",
+                "---\ntype: '[[area]]'\n---\n\n\
+                 - [ ] #task #ref Source row [[lib/chat/child.pdf]] [[refs.base]] \
+                 [[missing-directory/unique.pdf]] [[missing-directory/unique-note]] [[missing-directory/missing.pdf]] ^source-task\n\
+                 ![[#^source-task]]\n\n![[ref/child]]\n",
+            ),
+            (
+                "ref/child.md",
+                "- [ ] #task #ref Transcluded row [[lib/chat/child.pdf]] ^child-task\n",
+            ),
+            ("lib/chat/child.pdf", "synthetic PDF bytes"),
+            ("refs.base", "synthetic Base file"),
+            ("documents/unique.pdf", "synthetic attachment bytes"),
+            ("documents/unique-note.md", "# Synthetic unique note\n"),
+        ]);
+
+        let projection = project(&directory, "area.md");
+        let rendered = markdown(&projection);
+        let unresolved = projection
+            .view
+            .warnings
+            .iter()
+            .filter(|warning| {
+                warning.kind == SnapshotWarningKind::UnresolvedLink
+            })
+            .map(|warning| warning.message.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(
+            !unresolved.is_empty()
+                && unresolved.iter().all(|message| message
+                    .contains("no file or vault note named 'missing-directory/missing.pdf'")),
+            "only the deliberately missing slash target should warn: {unresolved:?}\nprojection: {:#?}",
+            projection.view
+        );
+        assert!(
+            rendered.contains("file=lib%2Fchat%2Fchild.pdf"),
+            "existing excluded PDF should resolve: {rendered}"
+        );
+        assert!(
+            rendered.contains("file=refs.base"),
+            "exact refs.base should resolve: {rendered}"
+        );
+        assert!(
+            rendered.contains("file=documents%2Funique.pdf"),
+            "unique basename should resolve in its visible directory: {rendered}"
+        );
+        assert!(
+            rendered.contains("file=documents%2Funique-note.md"),
+            "unique Markdown basename should resolve in its visible directory: {rendered}"
+        );
+        assert!(rendered.contains("Source row"), "{rendered}");
+        assert!(rendered.contains("Transcluded row"), "{rendered}");
+        assert!(
+            !rendered.contains("^source-task")
+                && !rendered.contains("^child-task"),
+            "raw block IDs leaked into the projection: {rendered}"
+        );
+        assert!(projection.view.summary.links.resolved >= 5);
+    }
+
     fn project_bob(
         directory: &tempfile::TempDir,
         host: &str,
@@ -2940,7 +3048,7 @@ Unrelated prose after the closed lane stays visible.\n\
             ("Portfolio.md", "# Portfolio\n"),
             (
                 "Complete.md",
-                "---\ntype: [[project]]\nstatus: done\nparent: [[Portfolio]]\ncreated: 2025-11-07\ndescription: A finished synthetic project.\n---\n# Complete project\n\nIntro remains visible.\n\n## Notes\nNo generated status badge row was authored.\n",
+                "---\ntype: [[project]]\nstatus: done\nparent: [[Portfolio]]\ncreated: 2025-11-07\ndescription: A finished synthetic project about [[area]] and [[project|Bob]].\n---\n# Complete project\n\nIntro remains visible.\n\n## Notes\nNo generated status badge row was authored.\n",
             ),
         ]);
         let projection = project_bob(&directory, "Complete.md", false, true);
@@ -2952,8 +3060,10 @@ Unrelated prose after the closed lane stays visible.\n\
         );
         assert_eq!(
             plain_inline_text(projection.view.masthead.dek.as_deref().unwrap()),
-            "A finished synthetic project."
+            "A finished synthetic project about area and Bob."
         );
+        assert!(!output.contains("[["), "{output}");
+        assert!(!output.contains("]]"), "{output}");
         assert!(output.contains("[done]{.chip}"), "{output}");
         assert!(output.contains("Started Nov 7\\, 2025"), "{output}");
         assert!(output.contains("Intro remains visible"), "{output}");
@@ -2963,6 +3073,27 @@ Unrelated prose after the closed lane stays visible.\n\
         );
         assert_eq!(projection.view.summary.omitted_closed_tasks, 0);
         assert_transclusion_golden(&output, "bob-terminal-project");
+    }
+
+    #[test]
+    fn terminal_project_prj_dek_strips_wikilink_syntax() {
+        let directory = vault(&[
+            ("Portfolio.md", "# Portfolio\n"),
+            (
+                "Complete.md",
+                "---\ntype: [[project]]\nstatus: done\nparent: [[Portfolio]]\ncreated: 2025-11-07\n---\n\
+# Complete project\n\n\
+- [x] Clean up bad links to [[area]] and [[project]]! #task #prj ^prj\n",
+            ),
+        ]);
+        let projection = project_bob(&directory, "Complete.md", false, true);
+        let output = markdown(&projection);
+        assert_eq!(
+            plain_inline_text(projection.view.masthead.dek.as_deref().unwrap()),
+            "Clean up bad links to area and project!"
+        );
+        assert!(!output.contains("[["), "{output}");
+        assert!(!output.contains("]]"), "{output}");
     }
 
     #[test]

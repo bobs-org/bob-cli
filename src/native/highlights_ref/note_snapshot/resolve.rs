@@ -1070,11 +1070,12 @@ impl AttachmentIndex {
                 return Ok(self.describe(found, parsed.width_px));
             }
         }
-        if target_path.components().count() > 1 {
+        let Some(basename) = target_path.file_name().and_then(OsStr::to_str)
+        else {
             return Err(AttachmentResolutionError::Missing { display });
-        }
+        };
         let index = self.index();
-        let needle = display.to_lowercase();
+        let needle = basename.to_lowercase();
         let candidates =
             index.by_basename.get(&needle).cloned().unwrap_or_default();
         match candidates.len() {
@@ -1688,6 +1689,7 @@ mod tests {
             ("img/shared.png", "root-image"),
             ("notes/img/shared.png", "note-image"),
             ("notes/img/note-only.png", "note-only"),
+            ("templates/zot/day_log.zot", "schedule-log"),
             ("notes/Host.md", "# Host\n"),
             ("notes/other.md", "# Other\n"),
         ]);
@@ -1713,6 +1715,17 @@ mod tests {
         assert_eq!(
             found.vault_relative_path,
             PathBuf::from("notes/img/note-only.png")
+        );
+
+        // A path miss can still resolve through a unique basename, even
+        // when the link contains directory components.
+        let parsed = parse_attachment_target("zot/day_log.zot");
+        let found = index
+            .resolve(Path::new("notes/Host.md"), &parsed)
+            .expect("unique basename after path miss");
+        assert_eq!(
+            found.vault_relative_path,
+            PathBuf::from("templates/zot/day_log.zot")
         );
 
         // A bare basename with twins is ambiguous with sorted candidates.

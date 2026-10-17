@@ -27,7 +27,7 @@ use chrono::{Datelike, NaiveDate};
 
 use super::bob::{has_ref_tag, remove_consumed_muted};
 use super::classify::{SourceLoader, SourceStore};
-use super::resolve::{parse_link_target, VaultNotes};
+use super::resolve::{is_markdown_relative, parse_link_target, VaultNotes};
 use super::view::{
     AnchorIdentity, AnchorKind, Block, Chip, ChipKind, HeadingClass,
     HeadingLevel, Inline, ListItem, SnapshotAnchor, SnapshotHeading,
@@ -419,6 +419,15 @@ impl<'a, L: SourceLoader> VisibilityPass<'a, L> {
                         let (children, nested) =
                             self.filter_blocks(item.children);
                         item.children = children;
+                        if item.children.is_empty()
+                            && !item
+                                .content
+                                .iter()
+                                .any(inline_has_visible_content)
+                        {
+                            extracted.extend(nested);
+                            continue;
+                        }
                         kept_items.push(item);
                         extracted.extend(nested);
                     }
@@ -950,7 +959,9 @@ impl<'a, L: SourceLoader> VisibilityPass<'a, L> {
             let parsed = parse_link_target(inner);
             let base = Path::new(&source.source.vault_relative_path);
             match self.notes.resolve_note(base, &parsed) {
-                Ok(resolved) => {
+                Ok(resolved)
+                    if is_markdown_relative(&resolved.vault_relative_path) =>
+                {
                     if let Some(source_note) = self.lookup_source_note(
                         &resolved.canonical_path,
                         &resolved.vault_relative_path,
@@ -961,17 +972,10 @@ impl<'a, L: SourceLoader> VisibilityPass<'a, L> {
                         break;
                     }
                 }
-                Err(error) => {
-                    let kind = match &error {
-                        super::resolve::NoteResolveError::Missing {
-                            ..
-                        } => SnapshotWarningKind::UnresolvedLink,
-                        super::resolve::NoteResolveError::Ambiguous {
-                            ..
-                        } => SnapshotWarningKind::AmbiguousLink,
-                    };
-                    self.warn(kind, Some(origin.clone()), error.to_string());
-                }
+                // This is a speculative note-metadata probe. Attachments,
+                // missing links, and ambiguous links are diagnosed by the
+                // syntax projector, which owns the user-visible link.
+                Ok(_) | Err(_) => {}
             }
         }
         confirmed
@@ -1087,6 +1091,70 @@ impl<'a, L: SourceLoader> VisibilityPass<'a, L> {
             },
             blocks: vec![Block::Compact { blocks: extracted }],
         })
+    }
+}
+
+fn inline_has_visible_content(inline: &Inline) -> bool {
+    match inline {
+        Inline::Text(text) | Inline::Code(text) => !text.trim().is_empty(),
+        Inline::Anchor(_) | Inline::Break => false,
+        Inline::Link { label, .. }
+        | Inline::Emphasis(label)
+        | Inline::Strong(label)
+        | Inline::Strike(label)
+        | Inline::Muted(label) => label.iter().any(inline_has_visible_content),
+        Inline::Image { .. } => true,
+        Inline::EmbeddedBlock(block) => block_has_visible_content(block),
+        Inline::Chip(chip) => {
+            chip.content.iter().any(inline_has_visible_content)
+        }
+    }
+}
+
+fn block_has_visible_content(block: &Block) -> bool {
+    match block {
+        Block::Paragraph(inlines) | Block::EmptyState(inlines) => {
+            inlines.iter().any(inline_has_visible_content)
+        }
+        Block::Heading(heading) => {
+            heading.content.iter().any(inline_has_visible_content)
+        }
+        Block::List { items, .. } => items.iter().any(|item| {
+            item.content.iter().any(inline_has_visible_content)
+                || item.children.iter().any(block_has_visible_content)
+        }),
+        Block::Code { text, .. } => !text.trim().is_empty(),
+        Block::Task(_) | Block::Image { .. } | Block::MissingImage { .. } => {
+            true
+        }
+        Block::LabeledRow { label, items } => {
+            label.iter().any(inline_has_visible_content)
+                || items
+                    .iter()
+                    .any(|item| item.iter().any(inline_has_visible_content))
+        }
+        Block::LogRow {
+            label,
+            date,
+            content,
+            older_count,
+        } => {
+            label.iter().any(inline_has_visible_content)
+                || date.as_ref().is_some_and(|date| {
+                    date.iter().any(inline_has_visible_content)
+                })
+                || content.iter().any(inline_has_visible_content)
+                || older_count.is_some()
+        }
+        Block::Embed { blocks, .. }
+        | Block::LiveQuery { blocks }
+        | Block::Compact { blocks } => {
+            blocks.iter().any(block_has_visible_content)
+        }
+        Block::Callout { title, blocks, .. } => {
+            title.iter().any(inline_has_visible_content)
+                || blocks.iter().any(block_has_visible_content)
+        }
     }
 }
 
@@ -1693,6 +1761,28 @@ mod tests {
             serialize_projected_markdown(&projection.view).expect("serialize");
         assert!(!md.contains("#t-done"), "{md}");
         assert!(!md.contains("#t-canceled"), "{md}");
+    }
+
+    #[test]
+    fn omitting_closed_embedded_task_drops_its_empty_list_item() {
+        let directory = vault(&[
+            (
+                "Host.md",
+                &area(
+                    "## Project Notes\n\
+                     - ![[Closed#^closed]]\n",
+                ),
+            ),
+            ("Closed.md", "- [x] Closed fixture task #task ^closed\n"),
+        ]);
+        let projection = project(&directory, "Host.md", false);
+        assert_eq!(projection.view.summary.omitted_closed_tasks, 1);
+        let md =
+            serialize_projected_markdown(&projection.view).expect("serialize");
+        assert!(
+            !md.lines().any(|line| line.trim() == "-"),
+            "omitted embed left an empty bullet:\n{md}"
+        );
     }
 
     #[test]

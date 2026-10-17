@@ -84,6 +84,21 @@ Dry run lists earlier snapshots of the same note newest-first as
 snapshot that is still `ready` with 0 highlights. Create never changes, closes,
 or abandons those notes.
 
+Status glyphs are open ○, next ◉, in progress ◐, blocked ⊘, done ✓, and
+canceled ⊗. Chips show priority, `sched`, `repeats`, `ref`, and `moved N×`
+metadata, along with `Keep` and `quote` links where available.
+
+Note snapshot and research-report Markdown PDFs use a clean text layer: ragged
+right, no hyphenation, `Ligatures=NoCommon` for serif, sans, and mono fonts,
+and no Type 3 body fonts. Snapshots render through pandoc and XeLaTeX because
+the PDFKit measurements found that Chromium/Skia with variable fonts damages
+some extracted words; see the [PDFKit and text-layer research](research:202610/area_project_note_reading_pdfs/area_project_note_reading_pdfs.md).
+
+A second snapshot of the same note on the same day refuses with `already
+queued` (use `-f` to replace it) or `already captured`. Pass `-N` for a
+deliberate second snapshot that day. Older plain-Markdown renders of a note
+stay where they are when note snapshots are created.
+
 Embedded PNG and JPEG images are copied into the private render scratch as-is
 when their long edge is at most 1600 pixels; larger images are downscaled with
 a high-quality filter. GIF embeds use the first frame, and WebP embeds are
@@ -692,17 +707,40 @@ resolved-address check. A missing `curl` hints at
 `fetching <host>…` line goes to stderr. `bob ref doctor` reports the
 `curl` row.
 
-## Verified on athena
+## Verified on athena and the Mac
 
-The note snapshot corpus gate ran on 2026-10-16:
+The extended note snapshot corpus gate ran on athena on 2026-10-17 from this
+branch (working-tree parent `2ae1251`), with pandoc 3.1.11.1 and XeTeX
+3.141592653-2.6-0.999996 (TeX Live 2025/dev/Debian):
 
-- 101 area/project notes rendered successfully; 5,054 Markdown notes dry-ran
+- 102 area/project notes rendered successfully; 5,077 Markdown notes dry-ran
   successfully.
 - 0 render failures, 0 dry-run failures, 0 missing-glyph warnings, 0 overfull
-  warnings, and 0 Type 3 fonts; the vault git status was unchanged.
-- Dry runs reported 9,580 unresolved-reference warnings and 4,346 parent
-  fallbacks through `body`. Every warning entry in the scratch summary has an
-  explanation; the summary contains no vault note contents.
+  warnings, 0 Type 3 fonts, and 0 residue findings (status-chip rows, raw
+  block-ID labels, blank lines before task text, false local-heading warnings,
+  false unresolved-file warnings). The vault git status was unchanged.
+- Dry runs reported 4,641 unresolved-reference warnings and 4,348 parent
+  fallbacks through `body` (plus 1 same-day name fallback). The gate treats an
+  unresolved target as a failure when a matching vault file exists; the
+  remaining warnings are genuine missing notes, attachments, headings, or
+  block fragments, plus cyclic or oversized embed skips. The summary contains
+  no vault note contents.
+
+The Mac verification ran on 2026-10-17 at `df4e120`, before these fixes. The
+Mac used pandoc 3.11 and BasicTeX TeX Live 2026, with user-mode `titlesec`,
+`enumitem`, and `lastpage`. The gate rendered 101 notes and dry-ran 5,062; it
+reported 0 failures, 0 missing glyphs, 0 Type 3 fonts, and 0 overfull
+warnings, and left the vault unchanged. The PDFKit probe paired 101/101 PDFs;
+all 240 unknown tokens were explained (207 “In this note” chrome, 29
+return-link tag joins, and 4 wikilink-suffix joins). The research-report probe
+found 0 hyphen splits and 0 ligatures. These fixes add no TeX packages or
+fonts.
+
+The 2026-10-17 Highlights round trip returned a highlight spanning a task row
+and its child bullet with every word byte-identical to the source; the child
+row's list-bullet dash was included in the quote. The ref note carries
+`source_note: "[[sase_blog]]"`. A live `#task`-comment follow-up and image
+highlight were not exercised; CLI annotation-task tests cover that path.
 
 Live verification ran 2026-10-06 into a scratch vault (`-b /tmp/lv-vault`):
 

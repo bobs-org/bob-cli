@@ -58,7 +58,8 @@ impl NoteIndex {
     /// Iteration follows the underlying sorted set, so diagnostics built from
     /// this list are deterministic across runs.
     pub(crate) fn basename_candidates(&self, stem: &str) -> Vec<PathBuf> {
-        let needle = strip_markdown_suffix(stem).to_lowercase();
+        let needle =
+            strip_markdown_suffix(target_basename(stem)).to_lowercase();
         self.relative_paths
             .iter()
             .filter(|path| {
@@ -133,14 +134,8 @@ impl NoteIndex {
         if self.relative_paths.contains(&candidate) {
             return LinkResolution::Found(candidate);
         }
-        if target.contains('/') || target.contains('\\') {
-            return LinkResolution::Missing;
-        }
-        let basename = target
-            .strip_suffix(".md")
-            .or_else(|| target.strip_suffix(".MD"))
-            .unwrap_or(target)
-            .to_lowercase();
+        let basename =
+            strip_markdown_suffix(target_basename(target)).to_lowercase();
         match self.basename_paths.get(&basename) {
             Some(Some(path)) => LinkResolution::Found(path.clone()),
             Some(None) => LinkResolution::Ambiguous,
@@ -199,9 +194,6 @@ impl VaultLinkResolver {
         if self.root.join(&candidate).is_file() {
             return LinkResolution::Found(candidate);
         }
-        if target.contains('/') || target.contains('\\') {
-            return LinkResolution::Missing;
-        }
         self.index
             .get_or_init(|| self.build_index())
             .resolve_detailed(Some(current_path), target)
@@ -211,16 +203,14 @@ impl VaultLinkResolver {
     /// vault-relative hit when it exists on disk, otherwise every note sharing
     /// the target's case-insensitive basename stem. Mirrors `resolve` without
     /// collapsing ambiguity, so diagnostics can list complete candidates.
-    /// Targets containing a path separator never fall back to basenames.
+    /// A missing exact path falls back to every note sharing the final path
+    /// component's case-insensitive basename stem.
     pub(crate) fn candidates(&self, target: &str) -> Vec<PathBuf> {
         let Some(candidate) = target_to_markdown_path(target) else {
             return Vec::new();
         };
         if self.root.join(&candidate).is_file() {
             return vec![candidate];
-        }
-        if target.contains('/') || target.contains('\\') {
-            return Vec::new();
         }
         self.index
             .get_or_init(|| self.build_index())
@@ -232,7 +222,8 @@ impl VaultLinkResolver {
     /// Only stems within a small distance qualify; unrelated names are
     /// omitted rather than suggested.
     pub(crate) fn near_stems(&self, target: &str, limit: usize) -> Vec<String> {
-        let needle = strip_markdown_suffix(target.trim()).to_lowercase();
+        let needle = strip_markdown_suffix(target_basename(target.trim()))
+            .to_lowercase();
         if needle.is_empty() || limit == 0 {
             return Vec::new();
         }
@@ -318,6 +309,13 @@ fn strip_markdown_suffix(name: &str) -> &str {
         .unwrap_or(name)
 }
 
+fn target_basename(target: &str) -> &str {
+    target
+        .rsplit(|character| matches!(character, '/' | '\\'))
+        .next()
+        .unwrap_or(target)
+}
+
 /// Case-sensitive Levenshtein distance over Unicode scalar values, for
 /// near-miss stem suggestions. Callers lowercase both sides first.
 fn levenshtein(first: &str, second: &str) -> usize {
@@ -381,6 +379,22 @@ mod tests {
         assert_eq!(
             resolver.resolve(day, "Projects/Alpha"),
             LinkResolution::Found(PathBuf::from("Projects/Alpha.md"))
+        );
+        assert_eq!(
+            resolver.resolve(day, "missing-directory/Solo"),
+            LinkResolution::Found(PathBuf::from("Solo.md"))
+        );
+        assert_eq!(
+            resolver.candidates("missing-directory/Solo.md"),
+            vec![PathBuf::from("Solo.md")]
+        );
+        assert_eq!(
+            resolver.resolve(day, "missing-directory/Alpha"),
+            LinkResolution::Ambiguous
+        );
+        assert_eq!(
+            resolver.resolve(day, "missing-directory/NotHere"),
+            LinkResolution::Missing
         );
         assert_eq!(resolver.resolve(day, "Alpha"), LinkResolution::Ambiguous);
         assert_eq!(

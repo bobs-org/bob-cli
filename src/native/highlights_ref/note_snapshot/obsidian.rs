@@ -40,6 +40,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use super::super::percent_decode;
 use super::classify::{relative_has_dot_directory, SourceLoader, SourceStore};
 use super::resolve::{
     build_fragment_index, has_non_markdown_extension, is_markdown_relative,
@@ -77,6 +78,15 @@ const BOOKKEEPING_FIELDS: &[&str] = &[
     "h",
     "gkeep",
 ];
+
+/// Bob task metadata belongs in task-row chips, not in the readable title
+/// shown by a block-reference link. Unknown fields still survive as muted
+/// `key: value` text.
+const TASK_METADATA_FIELDS: &[&str] = &["priority", "scheduled", "repeat"];
+
+fn hidden_excerpt_field(key: &str) -> bool {
+    BOOKKEEPING_FIELDS.contains(&key) || TASK_METADATA_FIELDS.contains(&key)
+}
 
 /// Structural tags dropped from visible text. `#hide` never suppresses a
 /// row. Every other tag is retained as muted text. Matching is exact
@@ -1972,6 +1982,25 @@ impl<'a, L: SourceLoader> Projector<'a, L> {
         if path.is_empty() {
             return Some((label, consumed));
         }
+        if path.starts_with('#') {
+            // Markdown local fragments follow the same host index as
+            // Obsidian [[#Heading]] links. Obsidian may prefix a nested
+            // heading path, so its final # component names the heading.
+            let heading = path.rsplit('#').next().unwrap_or_default();
+            let heading = percent_decode(heading);
+            let parsed = parse_link_target(&format!("#{heading}"));
+            let (_, target, warning) =
+                self.resolve_content_link(&parsed, line_no);
+            if let Some((kind, message)) = warning {
+                self.warn(kind, line_no, message);
+            }
+            if let Some(target) = target {
+                self.links_resolved += 1;
+                return Some((vec![Inline::Link { label, target }], consumed));
+            }
+            self.links_unresolved += 1;
+            return Some((label, consumed));
+        }
         if label_raw.trim() == "💡" && is_url_target(&path) {
             self.links_resolved += 1;
             return Some((
@@ -2680,10 +2709,25 @@ impl<'a, L: SourceLoader> Projector<'a, L> {
         id: &str,
         line_no: Option<usize>,
     ) -> Option<String> {
+        self.block_excerpt_inner(canonical, id, line_no, &mut BTreeSet::new())
+    }
+
+    fn block_excerpt_inner(
+        &mut self,
+        canonical: &Path,
+        id: &str,
+        line_no: Option<usize>,
+        visiting: &mut BTreeSet<(PathBuf, String)>,
+    ) -> Option<String> {
+        let key = (canonical.to_path_buf(), id.to_string());
+        if !visiting.insert(key.clone()) {
+            return None;
+        }
         let bytes = match self.store.read_canonical(canonical) {
             Ok(bytes) => bytes,
             Err(message) => {
                 self.warn(SnapshotWarningKind::ReadFailure, line_no, message);
+                visiting.remove(&key);
                 return None;
             }
         };
@@ -2704,13 +2748,76 @@ impl<'a, L: SourceLoader> Projector<'a, L> {
             if trailing_block_id_in_line(line).as_deref() != Some(id) {
                 continue;
             }
-            let cleaned = clean_readable_text(line);
+            let expanded = self.expand_same_note_block_refs(
+                line, canonical, line_no, visiting,
+            );
+            let cleaned = clean_readable_text(&expanded);
             if cleaned.is_empty() {
+                visiting.remove(&key);
                 return None;
             }
-            return Some(truncate_chars(&cleaned, EXCERPT_CHARS));
+            let excerpt = Some(truncate_chars(&cleaned, EXCERPT_CHARS));
+            visiting.remove(&key);
+            return excerpt;
         }
+        visiting.remove(&key);
         None
+    }
+
+    fn expand_same_note_block_refs(
+        &mut self,
+        text: &str,
+        canonical: &Path,
+        line_no: Option<usize>,
+        visiting: &mut BTreeSet<(PathBuf, String)>,
+    ) -> String {
+        let mut out = String::new();
+        let mut cursor = 0;
+        while cursor < text.len() {
+            let rest = &text[cursor..];
+            let found = rest
+                .find("![[")
+                .map(|position| (position, 3))
+                .or_else(|| rest.find("[[").map(|position| (position, 2)));
+            let Some((open, skip)) = found else {
+                out.push_str(rest);
+                break;
+            };
+            if rest[open..].starts_with("[[[") {
+                out.push_str(&rest[..open + 2]);
+                cursor += open + 2;
+                continue;
+            }
+            let Some(close) = rest[open + skip..].find("]]") else {
+                out.push_str(rest);
+                break;
+            };
+            out.push_str(&rest[..open]);
+            let inner = &rest[open + skip..open + skip + close];
+            let parsed = parse_link_target(inner);
+            let block_ref = matches!(
+                (
+                    &parsed.note[..],
+                    parsed.alias.as_deref(),
+                    parsed.fragment.as_ref()
+                ),
+                ("", None, Some(LinkFragment::Block(_)))
+            );
+            if block_ref {
+                if let Some(LinkFragment::Block(id)) = parsed.fragment {
+                    let label = self
+                        .block_excerpt_inner(canonical, &id, line_no, visiting)
+                        .unwrap_or_else(|| "linked block".to_string());
+                    out.push_str(&label);
+                }
+            } else {
+                out.push_str(
+                    &text[cursor + open..cursor + open + skip + close + 2],
+                );
+            }
+            cursor += open + skip + close + 2;
+        }
+        out
     }
 
     /// Resolve and register one attachment. Failures warn once here, so
@@ -2827,29 +2934,28 @@ impl<'a, L: SourceLoader> Projector<'a, L> {
         let parsed = parse_link_target(inner);
         let fallback =
             parsed.alias.clone().unwrap_or_else(|| parsed.note.clone());
-        let resolved =
-            match self.vault.resolve_note(&self.host_relative, &parsed) {
-                Ok(resolved) => resolved,
-                Err(error) => {
-                    let kind = match &error {
-                        NoteResolveError::Missing { .. } => {
-                            SnapshotWarningKind::UnresolvedLink
-                        }
-                        NoteResolveError::Ambiguous { .. } => {
-                            SnapshotWarningKind::AmbiguousLink
-                        }
-                    };
-                    self.warn(kind, Some(line_no), error.to_string());
-                    return Block::Paragraph(vec![Inline::Text(fallback)]);
-                }
-            };
-        let route = note_route(&resolved.vault_relative_path);
-        let label = match &parsed.fragment {
-            Some(fragment) => {
-                format!("{route} › {}", fragment_label(fragment))
+        let resolved = match self.resolve_content_target(&parsed) {
+            Ok(resolved) => resolved,
+            Err(error) => {
+                let kind = match &error {
+                    NoteResolveError::Missing { .. } => {
+                        SnapshotWarningKind::UnresolvedLink
+                    }
+                    NoteResolveError::Ambiguous { .. } => {
+                        SnapshotWarningKind::AmbiguousLink
+                    }
+                };
+                self.warn(kind, Some(line_no), error.to_string());
+                return Block::Paragraph(vec![Inline::Text(fallback)]);
             }
-            None => route,
         };
+        if !is_markdown_relative(&resolved.vault_relative_path) {
+            self.links_resolved += 1;
+            return Block::Paragraph(vec![
+                self.embedded_file_link(&resolved, &parsed)
+            ]);
+        }
+        let label = self.embed_label(&resolved, &parsed, Some(line_no));
         self.pending_embeds.push(PendingEmbed {
             label: label.clone(),
             canonical_path: resolved.canonical_path,
@@ -2895,30 +3001,27 @@ impl<'a, L: SourceLoader> Projector<'a, L> {
         let parsed = parse_link_target(inner);
         let fallback =
             parsed.alias.clone().unwrap_or_else(|| parsed.note.clone());
-        let resolved =
-            match self.vault.resolve_note(&self.host_relative, &parsed) {
-                Ok(resolved) => resolved,
-                Err(error) => {
-                    let kind = match &error {
-                        NoteResolveError::Missing { .. } => {
-                            SnapshotWarningKind::UnresolvedLink
-                        }
-                        NoteResolveError::Ambiguous { .. } => {
-                            SnapshotWarningKind::AmbiguousLink
-                        }
-                    };
-                    self.warn(kind, line_no, error.to_string());
-                    self.links_unresolved += 1;
-                    return vec![Inline::Text(fallback)];
-                }
-            };
-        let route = note_route(&resolved.vault_relative_path);
-        let label = match &parsed.fragment {
-            Some(fragment) => {
-                format!("{route} › {}", fragment_label(fragment))
+        let resolved = match self.resolve_content_target(&parsed) {
+            Ok(resolved) => resolved,
+            Err(error) => {
+                let kind = match &error {
+                    NoteResolveError::Missing { .. } => {
+                        SnapshotWarningKind::UnresolvedLink
+                    }
+                    NoteResolveError::Ambiguous { .. } => {
+                        SnapshotWarningKind::AmbiguousLink
+                    }
+                };
+                self.warn(kind, line_no, error.to_string());
+                self.links_unresolved += 1;
+                return vec![Inline::Text(fallback)];
             }
-            None => route,
         };
+        if !is_markdown_relative(&resolved.vault_relative_path) {
+            self.links_resolved += 1;
+            return vec![self.embedded_file_link(&resolved, &parsed)];
+        }
+        let label = self.embed_label(&resolved, &parsed, line_no);
         self.links_resolved += 1;
         self.pending_embeds.push(PendingEmbed {
             label: label.clone(),
@@ -2932,6 +3035,54 @@ impl<'a, L: SourceLoader> Projector<'a, L> {
             source: label,
             blocks: Vec::new(),
         }))]
+    }
+
+    fn embed_label(
+        &mut self,
+        resolved: &ResolvedNote,
+        parsed: &ParsedLinkTarget,
+        line_no: Option<usize>,
+    ) -> String {
+        let route = note_route(&resolved.vault_relative_path);
+        match &parsed.fragment {
+            Some(fragment) => {
+                let label = match fragment {
+                    LinkFragment::Block(id) => self
+                        .block_excerpt(&resolved.canonical_path, id, line_no)
+                        .unwrap_or_else(|| fragment_label(fragment)),
+                    LinkFragment::Heading(_) => fragment_label(fragment),
+                };
+                format!("{route} › {label}")
+            }
+            None => route,
+        }
+    }
+
+    fn embedded_file_link(
+        &self,
+        resolved: &ResolvedNote,
+        parsed: &ParsedLinkTarget,
+    ) -> Inline {
+        let label = parsed.alias.clone().unwrap_or_else(|| {
+            content_file_label(&resolved.vault_relative_path)
+        });
+        let file = relative_uri_path(&resolved.vault_relative_path);
+        let target = match &parsed.fragment {
+            Some(fragment) => {
+                LinkTarget::ObsidianUri(obsidian_uri_with_fragment(
+                    &self.vault_name,
+                    &file,
+                    Some(fragment),
+                ))
+            }
+            None => {
+                LinkTarget::ObsidianUri(obsidian_uri(&self.vault_name, &file))
+            }
+        };
+        Inline::Link {
+            label: vec![Inline::Text(label)],
+            target,
+        }
     }
 }
 
@@ -2955,7 +3106,7 @@ fn consume_paired_h_field(tail: &str) -> usize {
 /// tags, and block IDs are stripped; unknown fields survive as
 /// `key: value`; links keep their alias-or-target label. Pure: no
 /// resolution, no warnings.
-fn clean_readable_text(line: &str) -> String {
+pub(crate) fn clean_readable_text(line: &str) -> String {
     let mut text = line.trim().to_string();
     // One blockquote level, then heading markers, list markers, and the
     // checkbox symbol all read as prose in an excerpt.
@@ -2992,7 +3143,10 @@ fn clean_readable_text(line: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-fn replace_wikilinks_for_excerpt(text: &str) -> String {
+/// Replace leftover `[[wikilink]]` / `![[embed]]` syntax with the
+/// alias-or-target label. Surrounding whitespace is kept so already-parsed
+/// inline fragments can concatenate without eating spaces.
+pub(crate) fn replace_wikilinks_for_excerpt(text: &str) -> String {
     let mut out = String::new();
     let mut cursor = 0;
     while cursor < text.len() {
@@ -3136,9 +3290,7 @@ fn replace_bracket_fields_for_excerpt(text: &str) -> String {
         let rest = &text[cursor..];
         if rest.starts_with('[') || rest.starts_with('(') {
             if let Some((key, value, len)) = match_bracket_field(rest) {
-                if !BOOKKEEPING_FIELDS.contains(&key.as_str())
-                    && !value.is_empty()
-                {
+                if !hidden_excerpt_field(&key) && !value.is_empty() {
                     out.push_str(&format!("{key}: {value}"));
                 }
                 out.push(' ');
@@ -3188,7 +3340,7 @@ fn replace_bare_fields_for_excerpt(text: &str) -> String {
         let prev = text[..cursor].chars().next_back();
         if is_word_boundary(prev) {
             if let Some((key, value, len)) = match_bare_field(&text[cursor..]) {
-                if !BOOKKEEPING_FIELDS.contains(&key.as_str()) {
+                if !hidden_excerpt_field(&key) {
                     out.push_str(&format!("{key}: {value} "));
                 }
                 cursor += len;
@@ -3859,7 +4011,7 @@ mod tests {
                 ),
                 (
                     "Other.md",
-                    "# Other Note\n\n## Details\n\nBody.\n\n- [ ] Other task [custom:: kept] #task ^t1\n",
+                    "# Other Note\n\n## Details\n\nBody.\n\n- [ ] Other task [priority:: high] [scheduled:: 2026-10-20] [repeat:: every week] [custom:: kept] #task ^t1\n",
                 ),
             ],
             "Host.md",
@@ -3887,6 +4039,14 @@ mod tests {
             targets.iter().any(|target| target
                 .starts_with("Other › Other task custom: kept=>obs:")),
             "{targets:?}"
+        );
+        assert!(
+            !targets.iter().any(|target| {
+                target.contains("priority:")
+                    || target.contains("scheduled:")
+                    || target.contains("repeat:")
+            }),
+            "task metadata leaked into a block-reference label: {targets:?}"
         );
         // Same-note heading links stay internal.
         assert!(
@@ -3937,6 +4097,68 @@ mod tests {
         let flat = shapes(&projection.blocks).join("\n");
         assert!(flat.contains("^missing"), "{flat}");
         assert!(!flat.contains("^launch"), "{flat}");
+    }
+
+    #[test]
+    fn block_excerpts_expand_nested_same_note_block_refs() {
+        let (_dir, projection) = host_only(
+            "- [ ] Make appt for this [[#^doctor]] 7d after! #task ^appointment\n\
+             - **MY DOCTOR:** Union County Health Care Associates ^doctor\n\
+             See [[#^appointment]].\n",
+        );
+        let flat = shapes(&projection.blocks).join("\n");
+        assert!(
+            flat.contains("Make appt for this MY DOCTOR: Union County Health Care Associates 7d after!"),
+            "nested block refs should use the target text: {flat}"
+        );
+        assert!(!flat.contains("^doctor"), "raw block ID leaked: {flat}");
+    }
+
+    #[test]
+    fn embeds_use_block_excerpts_and_existing_files_become_links() {
+        let (_dir, projection) = project_host(
+            &[
+                (
+                    "Host.md",
+                    "- [ ] Local task #task ^local\n\
+                     ![[#^local]]\n\
+                     ![[Archive#^remote]]\n\
+                     ![[zot/day_log.zot]]\n\
+                     ![[lib/report.pdf]]\n\
+                     ![[.hidden/private.bin]]\n",
+                ),
+                ("Archive.md", "- [ ] Remote task #task ^remote\n"),
+                ("templates/zot/day_log.zot", "schedule log"),
+                ("lib/report.pdf", "pdf bytes"),
+                (".hidden/private.bin", "private"),
+            ],
+            "Host.md",
+        );
+        let flat = shapes(&projection.blocks).join("\n");
+        assert!(flat.contains("Host › Local task"), "{flat}");
+        assert!(flat.contains("Archive › Remote task"), "{flat}");
+        assert!(!flat.contains("^local"), "{flat}");
+        assert!(!flat.contains("^remote"), "{flat}");
+
+        let targets = link_targets(&projection.blocks);
+        assert!(
+            targets.iter().any(|target| {
+                target.starts_with("day_log.zot=>obs:")
+                    && target.contains("&file=templates%2Fzot%2Fday_log.zot")
+            }),
+            "{targets:?}"
+        );
+        assert!(
+            targets.iter().any(|target| {
+                target.starts_with("report.pdf=>obs:")
+                    && target.contains("&file=lib%2Freport.pdf")
+            }),
+            "{targets:?}"
+        );
+        let unresolved =
+            warnings_of(&projection, SnapshotWarningKind::UnresolvedLink);
+        assert_eq!(unresolved.len(), 1, "{unresolved:?}");
+        assert!(unresolved[0].contains(".hidden/private.bin"));
     }
 
     #[test]
@@ -4019,6 +4241,29 @@ mod tests {
     }
 
     #[test]
+    fn markdown_local_fragments_resolve_through_the_host_index() {
+        let (_dir, projection) = host_only(
+            "# Tasks\n\n[direct](#Tasks) [encoded](#Ta%73ks) \
+             [nested](#Some%20Page#Tasks) [missing](#Nope).\n",
+        );
+        let targets = link_targets(&projection.blocks);
+        for label in ["direct", "encoded", "nested"] {
+            assert!(
+                targets
+                    .iter()
+                    .any(|target| target == &format!("{label}=>int:tasks")),
+                "{targets:?}"
+            );
+        }
+        let missing =
+            warnings_of(&projection, SnapshotWarningKind::MissingFragment);
+        assert_eq!(missing.len(), 1, "{missing:?}");
+        assert!(missing[0].contains("#Nope"), "{missing:?}");
+        assert_eq!(projection.links_resolved, 3);
+        assert_eq!(projection.links_unresolved, 1);
+    }
+
+    #[test]
     fn ambiguous_notes_warn_without_choosing() {
         let (_dir, projection) = project_host(
             &[
@@ -4073,6 +4318,12 @@ mod tests {
                 "See [[Note|Alias]] and **bold** `code` #keep #task"
             ),
             "See Alias and bold code #keep"
+        );
+        assert_eq!(
+            clean_readable_text(
+                "- [?] blocked [priority:: medium] [scheduled:: 2026-10-20] [repeat:: every week] [custom:: kept] #task ^task-id"
+            ),
+            "blocked custom: kept"
         );
     }
 
@@ -4193,7 +4444,7 @@ mod tests {
         assert_eq!(projection.pending_embeds.len(), 3);
         assert_eq!(projection.pending_embeds[0].label, "Other");
         assert_eq!(projection.pending_embeds[1].label, "Other › Details");
-        assert_eq!(projection.pending_embeds[2].label, "Other › ^t1");
+        assert_eq!(projection.pending_embeds[2].label, "Other › Other task");
         assert_eq!(
             projection.pending_embeds[2].fragment,
             Some(LinkFragment::Block("t1".to_string()))
@@ -4205,7 +4456,7 @@ mod tests {
             vec![
                 "E:Other:0blocks",
                 "E:Other › Details:0blocks",
-                "E:Other › ^t1:0blocks",
+                "E:Other › Other task:0blocks",
                 "P:Gone",
             ]
         );
