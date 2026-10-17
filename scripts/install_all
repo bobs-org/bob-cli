@@ -531,6 +531,9 @@ mac_capture_step() {
       status=warn
       step_warning=$((step_warning + 1))
       detail="$pull_detail · installed; restart it via the Bob Mac Capture menu-bar icon → Restart Bob Mac Capture"
+    elif (( install_status == 78 )); then
+      status=fail
+      detail="$pull_detail · login keychain password differs from the Mac login password · run security set-keychain-password ~/Library/Keychains/login.keychain-db"
     elif (( install_status == 77 )); then
       status=fail
       detail="$pull_detail · signing identity locked in this session · run security unlock-keychain or install from a GUI Terminal"
