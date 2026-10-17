@@ -57,10 +57,11 @@ pub(super) fn build_open_notes(
     }
 
     let day_changed = batch.text_files.iter().any(|file| {
-        file.target == day_abs && file.updated_target != file.original_target
+        resolve_staged_path(bob_dir, &file.target) == day_abs
+            && file.updated_target != file.original_target
     });
     if day_changed && !seen.iter().any(|seen| seen == &day_abs) {
-        let text = file_text(&batch.text_files, &day_abs);
+        let text = file_text(bob_dir, &batch.text_files, &day_abs);
         notes.push(landed_note(
             OpenNoteJson {
                 path: day_abs.display().to_string(),
@@ -99,7 +100,7 @@ fn open_note_for_item(
     } else {
         ("note", note_label(item, &relative))
     };
-    let text = file_text(text_files, path);
+    let text = file_text(bob_dir, text_files, path);
     let line = text.as_deref().and_then(|text| {
         note_landing_line(
             item,
@@ -141,6 +142,7 @@ fn note_landing_line(
             task_blocks,
             &item.relative_target,
             TaskBlockRole::Completed,
+            item.block_id.as_deref(),
         )
         .or_else(|| line_for_block_id(text, item.block_id.as_deref(), settings))
         .or_else(|| last_exact_line(text, &item.task_line)),
@@ -148,6 +150,7 @@ fn note_landing_line(
             task_blocks,
             &item.relative_target,
             TaskBlockRole::Dependency,
+            item.block_id.as_deref(),
         )
         .or_else(|| line_for_block_id(text, item.block_id.as_deref(), settings))
         .or_else(|| last_exact_line(text, &item.task_line)),
@@ -216,7 +219,16 @@ fn task_block_line(
     blocks: &[TaskBlockJson],
     relative: &str,
     role: TaskBlockRole,
+    block_id: Option<&str>,
 ) -> Option<usize> {
+    if let Some(id) = block_id.filter(|id| !id.is_empty()) {
+        return blocks.iter().find_map(|block| {
+            (block.relative_target == relative
+                && block.roles.contains(&role)
+                && block.block_id.as_deref() == Some(id))
+            .then_some(block.line)
+        });
+    }
     blocks.iter().find_map(|block| {
         (block.relative_target == relative && block.roles.contains(&role))
             .then_some(block.line)
@@ -226,17 +238,29 @@ fn task_block_line(
 fn first_added_child_line(
     item: &CaptureItemResult,
     task_blocks: &[TaskBlockJson],
-    text: &str,
+    _text: &str,
 ) -> Option<usize> {
-    let block = task_blocks.iter().find(|block| {
-        block.relative_target == item.relative_target
-            && block.roles.contains(&TaskBlockRole::SubBullet)
-    })?;
-    let added = block
+    let block = if let Some(id) =
+        item.block_id.as_deref().filter(|id| !id.is_empty())
+    {
+        task_blocks.iter().find(|block| {
+            block.relative_target == item.relative_target
+                && block.block_id.as_deref() == Some(id)
+        })
+    } else {
+        task_blocks.iter().find(|block| {
+            block.relative_target == item.relative_target
+                && block.roles.contains(&TaskBlockRole::SubBullet)
+        })
+    }?;
+    let offset = block
         .lines
         .iter()
-        .find(|line| line.change == BlockLineChange::Added && line.depth > 0)?;
-    first_exact_line(text, &added.text)
+        .filter(|line| line.change != BlockLineChange::Removed)
+        .position(|line| {
+            line.change == BlockLineChange::Added && line.depth > 0
+        })?;
+    Some(block.line + offset)
 }
 
 fn line_for_block_id(
@@ -251,15 +275,21 @@ fn line_for_block_id(
     }
 }
 
-fn last_exact_line(text: &str, needle: &str) -> Option<usize> {
+/// 0-based last full-line match of `needle`. Shared with
+/// [`locate_new_task_ref`].
+pub(super) fn last_exact_line_index(text: &str, needle: &str) -> Option<usize> {
     if needle.is_empty() {
         return None;
     }
-    let lines: Vec<&str> = text.lines().collect();
-    lines
-        .iter()
-        .rposition(|line| *line == needle)
-        .map(|index| index + 1)
+    text.lines()
+        .enumerate()
+        .filter(|(_, line)| *line == needle)
+        .last()
+        .map(|(index, _)| index)
+}
+
+fn last_exact_line(text: &str, needle: &str) -> Option<usize> {
+    last_exact_line_index(text, needle).map(|index| index + 1)
 }
 
 fn first_exact_line(text: &str, needle: &str) -> Option<usize> {
@@ -307,12 +337,15 @@ fn resolve_path(bob_dir: &Path, path: &str) -> Option<PathBuf> {
     if path.is_empty() {
         return None;
     }
-    let parsed = PathBuf::from(path);
-    Some(if parsed.is_absolute() {
-        parsed
+    Some(resolve_staged_path(bob_dir, Path::new(path)))
+}
+
+fn resolve_staged_path(bob_dir: &Path, path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
     } else {
-        bob_dir.join(parsed)
-    })
+        bob_dir.join(path)
+    }
 }
 
 fn relative_path(bob_dir: &Path, absolute: &Path) -> String {
@@ -322,10 +355,14 @@ fn relative_path(bob_dir: &Path, absolute: &Path) -> String {
         .unwrap_or_else(|_| absolute.display().to_string())
 }
 
-fn file_text(text_files: &[StagedTextFile], path: &Path) -> Option<String> {
+fn file_text(
+    bob_dir: &Path,
+    text_files: &[StagedTextFile],
+    path: &Path,
+) -> Option<String> {
     text_files
         .iter()
-        .find(|file| file.target == path)
+        .find(|file| resolve_staged_path(bob_dir, &file.target) == path)
         .map(|file| file.updated_target.clone())
         .or_else(|| fs::read_to_string(path).ok())
 }

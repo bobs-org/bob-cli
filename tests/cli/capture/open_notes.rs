@@ -29,6 +29,16 @@ fn capture_json_once(
     args: &[&str],
     dry_run: bool,
 ) -> serde_json::Value {
+    capture_json_once_at(vault, day, NOW, args, dry_run)
+}
+
+fn capture_json_once_at(
+    vault: &Path,
+    day: &Path,
+    now: &str,
+    args: &[&str],
+    dry_run: bool,
+) -> serde_json::Value {
     let mut command = bob_command();
     command
         .arg("capture")
@@ -42,9 +52,29 @@ fn capture_json_once(
     command.arg("--").args(args);
     let output = command
         .env("BOB_DAY_FILE", day)
-        .env("BOB_NOW", NOW)
+        .env("BOB_NOW", now)
         .output()
         .expect("run capture");
+    assert_success(&output);
+    serde_json::from_str(stdout(&output).trim()).expect("capture JSON")
+}
+
+fn capture_json_relative_day(vault: &Path, args: &[&str]) -> serde_json::Value {
+    let mut command = bob_command();
+    command
+        .current_dir(vault)
+        .arg("capture")
+        .arg("-b")
+        .arg(vault)
+        .arg("-f")
+        .arg("json")
+        .arg("--")
+        .args(args);
+    let output = command
+        .env("BOB_DAY_FILE", "day.md")
+        .env("BOB_NOW", NOW)
+        .output()
+        .expect("run capture with relative day");
     assert_success(&output);
     serde_json::from_str(stdout(&output).trim()).expect("capture JSON")
 }
@@ -325,6 +355,7 @@ fn open_notes_task_complete_with_ledger() {
     assert_note(&notes[0], &vault, "sase.md", "note", "sase.md");
     assert_eq!(notes[0]["block_id"], "fix-flaky");
     assert_note(&notes[1], &vault, "day.md", "day", "Today");
+    assert_eq!(notes[1]["line"], first_live_pomodoro_line(&json));
     assert_paths_absolute_and_refs_match(&json);
 }
 
@@ -335,20 +366,19 @@ fn open_notes_project_note_with_task_links() {
     write_file(&day, "## Pomodoros\n- [ ] (1330-1400) Work\n");
     let input = "Finish the Google exit packet! @cash^goog-exit+#admin\n\
          - Draft the resignation memo :draft-memo\n";
-    let mut command = bob_command();
-    command
-        .arg("capture")
-        .arg("-b")
-        .arg(&vault)
-        .arg("-f")
-        .arg("json")
-        .env("BOB_DAY_FILE", &day)
-        .env("BOB_NOW", "2026-09-20 14:31:07")
-        .env("TZ", "UTC0");
-    let output = run_with_stdin(&mut command, input);
-    assert_success(&output);
-    let json: serde_json::Value =
-        serde_json::from_str(stdout(&output).trim()).expect("capture JSON");
+    let dry = project_note_json(&vault, &day, input, true);
+    let json = project_note_json(&vault, &day, input, false);
+    let mut masked = dry.clone();
+    masked["dry_run"] = serde_json::Value::Bool(false);
+    if let Some(serde_json::Value::Array(items)) = masked.get_mut("captures") {
+        for item in items {
+            item["dry_run"] = serde_json::Value::Bool(false);
+        }
+    }
+    assert_eq!(
+        masked, json,
+        "dry-run JSON must equal real-run JSON except for dry_run"
+    );
     assert_eq!(json["kind"], "project_note");
     let notes = open_notes(&json);
     assert_eq!(notes.len(), 2, "{json}");
@@ -362,6 +392,31 @@ fn open_notes_project_note_with_task_links() {
     assert_eq!(notes[0]["block_id"], "prj");
     assert_note(&notes[1], &vault, "day.md", "day", "Today");
     assert_paths_absolute_and_refs_match(&json);
+}
+
+fn project_note_json(
+    vault: &Path,
+    day: &Path,
+    input: &str,
+    dry_run: bool,
+) -> serde_json::Value {
+    let mut command = bob_command();
+    command
+        .arg("capture")
+        .arg("-b")
+        .arg(vault)
+        .arg("-f")
+        .arg("json");
+    if dry_run {
+        command.arg("--dry-run");
+    }
+    command
+        .env("BOB_DAY_FILE", day)
+        .env("BOB_NOW", "2026-09-20 14:31:07")
+        .env("TZ", "UTC0");
+    let output = run_with_stdin(&mut command, input);
+    assert_success(&output);
+    serde_json::from_str(stdout(&output).trim()).expect("capture JSON")
 }
 
 #[test]
@@ -461,6 +516,7 @@ fn open_notes_three_items_dedupe_and_keep_first_landing() {
         + 1;
     assert_eq!(notes[0]["line"], first_line as u64, "{json}");
     assert_note(&notes[1], &vault, "day.md", "day", "Today");
+    assert_eq!(notes[1]["line"], first_live_pomodoro_line(&json), "{json}");
     assert_paths_absolute_and_refs_match(&json);
 }
 
@@ -512,4 +568,217 @@ fn open_notes_human_output_is_unchanged() {
         !out.contains("open_notes"),
         "human output must omit open_notes: {out}"
     );
+}
+
+#[test]
+fn open_notes_relative_day_file_includes_day_and_matches_written_digest() {
+    let (_temp, vault, day) = open_vault("bob-cli-open-notes-relative-day");
+    write_toggle_task_settings(&vault);
+    write_file(
+        &vault.join("cash.md"),
+        "- [ ] #task Finish packet [dependsOn::root] ^goog-exit\n",
+    );
+    write_file(
+        &day,
+        concat!(
+            "## Pomodoros\n",
+            "- [ ] (**0900-0930**) — CURRENT\n",
+            "  - context\n",
+            "- [ ] () — LATER\n",
+            "  - [[cash#^goog-exit]]\n",
+            "    - review notes\n",
+        ),
+    );
+    let linked = capture_json_relative_day(&vault, &["@cash+goog-exit"]);
+    assert_eq!(linked["kind"], "task_toggle");
+    let notes = open_notes(&linked);
+    assert_eq!(notes.len(), 2, "{linked}");
+    assert_note(&notes[0], &vault, "cash.md", "note", "cash.md");
+    assert_eq!(notes[0]["block_id"], "goog-exit");
+    assert_note(&notes[1], &vault, "day.md", "day", "Today");
+    assert_eq!(notes[1]["line"], first_live_pomodoro_line(&linked));
+    assert_paths_absolute_and_refs_match(&linked);
+
+    let (_temp2, vault2, _day2) =
+        open_vault("bob-cli-open-notes-relative-start");
+    write_file(&vault2.join("day.md"), "## Pomodoros\n- [ ] () — WORK\n");
+    let started = capture_json_relative_day(&vault2, &["="]);
+    assert_eq!(started["kind"], "pomodoro_start");
+    let notes = open_notes(&started);
+    assert_eq!(notes.len(), 1, "{started}");
+    assert_note(&notes[0], &vault2, "day.md", "day", "Today");
+    assert_eq!(notes[0]["line"], first_live_pomodoro_line(&started));
+    assert_paths_absolute_and_refs_match(&started);
+}
+
+#[test]
+fn open_notes_task_dependency_lands_on_the_item_block_id() {
+    let (_temp, vault, day) = open_vault("bob-cli-open-notes-dep-block");
+    write_blocked_tasks_settings(&vault);
+    write_file(&vault.join("foo.md"), "- [ ] #task Buy shoes ^bar\n");
+    write_file(
+        &vault.join("job.md"),
+        concat!(
+            "- [*] #task Do cleanup tasks ^cleanup\n",
+            "- [*] #task Other work ^other\n",
+        ),
+    );
+    let json = capture_json(
+        &vault,
+        &day,
+        &["Ask Kelly *job:cleanup\n\n&foo:bar @job+other"],
+    );
+    let captures = json["captures"].as_array().expect("captures");
+    assert_eq!(captures.len(), 2, "{json}");
+    assert_eq!(captures[0]["kind"], "task");
+    assert_eq!(captures[1]["kind"], "task_dependency");
+    let notes = open_notes(&json);
+    assert_eq!(notes.len(), 2, "{json}");
+    assert_note(&notes[0], &vault, "mac_inbox.md", "note", "mac_inbox");
+    assert_note(&notes[1], &vault, "job.md", "note", "job.md");
+    assert_eq!(notes[1]["block_id"], "other", "{json}");
+    let contents = fs::read_to_string(vault.join("job.md")).expect("job");
+    let other_line = contents
+        .lines()
+        .position(|line| line.contains("^other"))
+        .expect("other task")
+        + 1;
+    assert_eq!(notes[1]["line"], other_line as u64, "{json}");
+    assert_paths_absolute_and_refs_match(&json);
+}
+
+#[test]
+fn open_notes_sub_bullet_lands_on_the_added_child_under_the_block() {
+    let (_temp, vault, day) = open_vault("bob-cli-open-notes-dup-child");
+    write_file(
+        &vault.join("cash.md"),
+        concat!(
+            "## Tasks\n",
+            "- [*] #task Alpha [created::2026-07-01] ^alpha\n",
+            "\t- follow up\n",
+            "- [*] #task Beta [created::2026-07-01] ^beta\n",
+        ),
+    );
+    let json = capture_json(&vault, &day, &["follow up @cash+beta"]);
+    assert_eq!(json["kind"], "sub_bullet");
+    let notes = open_notes(&json);
+    assert_eq!(notes.len(), 1, "{json}");
+    assert_note(&notes[0], &vault, "cash.md", "note", "cash.md");
+    let contents = fs::read_to_string(vault.join("cash.md")).expect("cash");
+    let beta_index = contents
+        .lines()
+        .position(|line| line.contains("^beta"))
+        .expect("beta task");
+    let child_line = contents
+        .lines()
+        .enumerate()
+        .filter(|(index, _)| *index > beta_index)
+        .find(|(_, line)| line.contains("follow up"))
+        .map(|(index, _)| index + 1)
+        .expect("child under beta");
+    assert_eq!(notes[0]["line"], child_line as u64, "{json}");
+    let first_follow = contents
+        .lines()
+        .position(|line| line.contains("follow up"))
+        .expect("first follow up")
+        + 1;
+    assert_ne!(
+        notes[0]["line"], first_follow as u64,
+        "must not land on Alpha's existing child: {json}"
+    );
+    assert_paths_absolute_and_refs_match(&json);
+}
+
+#[test]
+fn open_notes_pomodoro_shift() {
+    let (_temp, vault, day) = open_vault("bob-cli-open-notes-shift");
+    write_file(
+        &day,
+        concat!(
+            "# 2026-07-10\n",
+            "## Pomodoros\n",
+            "- [ ] (**0900-0925** [t:: 25m]) — FOCUS\n",
+            "  - existing context\n",
+            "## Later\n",
+        ),
+    );
+    let json = capture_json_dry_run_matches_real(
+        &vault,
+        &day,
+        "2026-07-10 09:40:00",
+        &["++3"],
+    );
+    assert_eq!(json["kind"], "pomodoro_shift");
+    let notes = open_notes(&json);
+    assert_eq!(notes.len(), 1, "{json}");
+    assert_note(&notes[0], &vault, "day.md", "day", "Today");
+    assert_eq!(notes[0]["line"], first_live_pomodoro_line(&json));
+    assert_paths_absolute_and_refs_match(&json);
+}
+
+#[test]
+fn open_notes_link_guard_lands_on_the_blocked_child() {
+    let (_temp, vault, day) = open_vault("bob-cli-open-notes-link-guard");
+    write_toggle_task_settings(&vault);
+    write_file(
+        &vault.join("job.md"),
+        "- [ ] #task Prep work [id:: job__prep] ^prep\n",
+    );
+    write_file(
+        &vault.join("parent.md"),
+        concat!(
+            "---\n",
+            "type: \"[[project]]\"\n",
+            "status: wip\n",
+            "---\n\n",
+            "- [ ] #task Parent #prj #hide [dependsOn:: job__prep] ^prj\n",
+            "\t- ⛓️ **DEPENDS ON:** [[job#^prep]]\n",
+        ),
+    );
+    write_file(
+        &vault.join("child.md"),
+        concat!(
+            "---\n",
+            "type: \"[[project]]\"\n",
+            "status: wip\n",
+            "parent: \"[[parent]]\"\n",
+            "---\n\n",
+            "- [?] #task Child #prj #hide #prj_is_blocked ^prj\n",
+            "- [?] #task Work #prj_is_blocked ^work\n",
+        ),
+    );
+    let json = capture_json_once_at(
+        &vault,
+        &day,
+        "2026-10-12 09:20:00",
+        &["@child:work"],
+        false,
+    );
+    assert_eq!(json["kind"], "link_guard", "{json}");
+    let notes = open_notes(&json);
+    assert_eq!(notes.len(), 1, "{json}");
+    assert_note(&notes[0], &vault, "child.md", "note", "child.md");
+    assert_eq!(notes[0]["block_id"], "work", "{json}");
+    assert_paths_absolute_and_refs_match(&json);
+}
+
+#[test]
+fn open_notes_pomodoro_link_lands_on_the_resident() {
+    let (_temp, vault, day) = open_vault("bob-cli-open-notes-pomo-link");
+    write_unblocked_project_with_future_resident(&vault, &day);
+    let json = capture_json_once_at(
+        &vault,
+        &day,
+        "2026-10-12 09:20:00",
+        &["@cash:resident"],
+        false,
+    );
+    assert_eq!(json["kind"], "pomodoro_link", "{json}");
+    let notes = open_notes(&json);
+    assert_eq!(notes.len(), 2, "{json}");
+    assert_note(&notes[0], &vault, "cash.md", "note", "cash.md");
+    assert_eq!(notes[0]["block_id"], "resident", "{json}");
+    assert_note(&notes[1], &vault, "day.md", "day", "Today");
+    assert_eq!(notes[1]["line"], first_live_pomodoro_line(&json));
+    assert_paths_absolute_and_refs_match(&json);
 }

@@ -3045,8 +3045,7 @@ pub(super) fn locate_new_task_ref(
 ) -> Option<TaskBlockRef> {
     let absolute = bob_dir.join(&parts.relative_target);
     let staged = planner.peek_text(&absolute)?;
-    let staged_lines: Vec<&str> = staged.lines().collect();
-    let line = staged_lines.iter().rposition(|line| *line == task_line)?;
+    let line = last_exact_line_index(&staged, task_line)?;
     Some(TaskBlockRef {
         target: absolute,
         relative_target: parts.relative_target.clone(),

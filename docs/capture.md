@@ -4802,9 +4802,10 @@ rather than re-derive paths, lines, or digests.
 
 Selection: process items in source order. For each item, open its
 `target` (skipped when empty, as for a queued link). Then open the day
-file if this batch changed it (`BatchTextFile` present with
-`current != original`; the day file is the one `pomodoro::day_file_for`
-returns). Deduplicate by path; the first item to touch a path decides
+file if this batch changed it (a staged text file whose
+`updated_target != original_target`; the day file is the one
+`pomodoro::day_file_for` returns). Deduplicate by path; the first item
+to touch a path decides
 where that note lands. Incidental writes do not open: BLOCKS mirrors,
 the closed tasks' notes on `=x`, and prerequisite notes.
 
