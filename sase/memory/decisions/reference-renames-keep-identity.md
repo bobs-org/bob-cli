@@ -1,4 +1,7 @@
 ---
+metadata:
+  status: superseded-in-part
+  superseded_by: decisions:reference-ids-follow-file-stems
 summary: Renaming eligible references moves their bundle paths and inbound links while preserving reference and reading-task identity.
 ---
 
@@ -54,3 +57,5 @@ cannot be updated by the vault rename.
 **Reopens when.** The reference or reading-task identity contract changes, or
 annotated renames gain a safe method that preserves highlight IDs and follow-up
 links.
+
+Superseded in part: the claim that a rename keeps the reference `id`, PDF marker, and PDF bytes is replaced by [[decisions:reference-ids-follow-file-stems]]; the `^ref-…` block ID, title, `source_url`, and dates still stay.

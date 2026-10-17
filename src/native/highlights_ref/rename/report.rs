@@ -42,23 +42,32 @@ pub(super) fn render_human(report: &RenameEnvelope) -> String {
             "s"
         },
     ));
-    out.push_str(&format!(
-        "  keeps: id {} · task {}{}\n",
-        report.kept.marker_id.as_deref().unwrap_or("(none)"),
-        report
-            .kept
-            .task
-            .as_ref()
-            .map(|task| task.path.as_str())
-            .unwrap_or("(none)"),
-        report
-            .kept
-            .task
-            .as_ref()
-            .and_then(|task| task.block_id.as_deref())
-            .map(|id| format!("#^{id}"))
-            .unwrap_or_default(),
-    ));
+    let task_path = report
+        .kept
+        .task
+        .as_ref()
+        .map(|task| task.path.as_str())
+        .unwrap_or("(none)");
+    let task_block = report
+        .kept
+        .task
+        .as_ref()
+        .and_then(|task| task.block_id.as_deref())
+        .map(|id| format!("#^{id}"))
+        .unwrap_or_default();
+    if report.id.changed {
+        out.push_str(&format!(
+            "  id: {} → {} (note and PDF marker)\n",
+            report.id.from.as_deref().unwrap_or("(none)"),
+            report.id.to.as_deref().unwrap_or("(none)"),
+        ));
+        out.push_str(&format!("  keeps: task {task_path}{task_block}\n"));
+    } else {
+        out.push_str(&format!(
+            "  keeps: id {} · task {task_path}{task_block}\n",
+            report.id.from.as_deref().unwrap_or("(none)"),
+        ));
+    }
     if !report.frontmatter.is_empty() {
         out.push_str(&format!(
             "  frontmatter: {}\n",
@@ -72,6 +81,8 @@ pub(super) fn render_human(report: &RenameEnvelope) -> String {
         out.push_str("  outcome: unchanged\n");
     } else if report.outcome == "already_renamed" {
         out.push_str("  outcome: already_renamed\n");
+    } else if report.outcome == "id_updated" {
+        out.push_str("  outcome: id_updated\n");
     }
     if report.mode == "write" {
         if let Some(commit) = &report.commit {

@@ -91,41 +91,45 @@ edited in place.
 14. **Ref Rename Keeps Identity** (`ref-rename-keeps-identity`)
     - _[superseded by `decisions:reference-renames-keep-identity`]_ Ref renames change
       bundle paths while preserving reference and task identity.
-15. **Reference Renames Keep Identity** (`reference-renames-keep-identity`)
-    - Renaming eligible references moves their bundle paths and inbound links while
-      preserving reference and reading-task identity.
-16. **Review Walk Is Tiered With Daily Lane Review** (`review-walk-is-tiered`)
+15. **Reference Ids Follow File Stems** (`reference-ids-follow-file-stems`)
+    - A reference id follows its note stem, with a numbered suffix only to avoid
+      duplicate ids across ref/.
+16. **Reference Renames Keep Identity** (`reference-renames-keep-identity`)
+    - _[partly superseded by `decisions:reference-ids-follow-file-stems`]_ Renaming
+      eligible references moves their bundle paths and inbound links while preserving
+      reference and reading-task identity.
+17. **Review Walk Is Tiered With Daily Lane Review** (`review-walk-is-tiered`)
     - The ]s walk visits one shared queue in explicit tiers PRE → NEW → PROJECTS →
       PENDING → NEXT → TICKLER → REFERENCES → ROTTEN → POST; #gtd #pre/#post checklist
       rows resolve only by completion; Pending and Next come due daily under
       pending_interval / next_interval (default 1, false walks that lane off); tiers
       never feed buckets or chips; upkeep outside the lanes counts the budget; stamps
       stay and the seed never re-runs.
-17. **Rotten Keeps Decay Through The Priority Ladder**
+18. **Rotten Keeps Decay Through The Priority Ladder**
     (`rotten-keeps-use-priority-decay`) - _[partly superseded by
     `decay-decisions-are-available-immediately`, `unblocked-tasks-resurface-as-ticklers`
     ]_ Repeated due-Ready keeps earn an explicit approved decision that enters the
     existing priority ladder; nothing decays silently and freshness itself still never
     changes priority or schedule.
-18. **Subprojects Inherit Project Blocking** (`subprojects-inherit-project-blocking`)
+19. **Subprojects Inherit Project Blocking** (`subprojects-inherit-project-blocking`)
     - _[partly superseded by `decisions:unblocked-tasks-are-offered`]_ A blocked project
       passes its dependency or schedule reason through its project descendants, with
       reconcile as the authority and the ^prj tag as the proxy for other engines.
-19. **Task Dependencies Are Links On One Depends-On Line**
+20. **Task Dependencies Are Links On One Depends-On Line**
     (`task-deps-are-depends-on-links`) - _[partly superseded by
     `decisions:capture-link-drops-blocking-deps`]_ A task's prerequisites live as plain
     task dependency links on one managed Depends-On first-child line; that line is the
     source of truth and the [dependsOn::] / [id::] fields are derived from it.
-20. **Today Is Read From The Ledger, Never Written To Tasks**
+21. **Today Is Read From The Ledger, Never Written To Tasks**
     (`today-is-read-from-the-ledger`) - _[partly superseded by
     `ready-is-freshness-gated`]_ Today is the open tasks with a dedicated Task Link
     under today's open Pomodoros, computed at read time by bob plan and
     bob-ledger-tools; never a tag, task-line field, or file-path filter; #now is
     retired.
-21. **Unblocked Tasks Are Offered, Never Auto-Linked** (`unblocked-tasks-are-offered`)
+22. **Unblocked Tasks Are Offered, Never Auto-Linked** (`unblocked-tasks-are-offered`)
     - Every would-be successor link from a managed Done gesture is offered for explicit
       selection; recovery remains automatic.
-22. **Unblocked Tasks Resurface As Ticklers** (`unblocked-tasks-resurface-as-ticklers`)
+23. **Unblocked Tasks Resurface As Ticklers** (`unblocked-tasks-resurface-as-ticklers`)
     - _[partly superseded by `decisions:unblocked-tasks-are-offered`]_ Every automatic
       Blocked-to-Ready recovery records [unblocked:: today] unless a WRITE skip applies,
       so the task is TICKLER in the next morning review; a keep on that row leaves the

@@ -23,7 +23,7 @@ plans copies of zorg-era `status::` reading records into legacy notes under
 | See what remains to read | `bob ref list` | Read queued and started reference notes |
 | Read annotations and your notes | `bob ref show <note-path>` | Read one exact reference; `-c` selects commented annotations |
 | Read a reference today | `bob ref today <REF> [-p NAME]` | Set its reading task Next and link it under today's Pomodoro |
-| Fix a reference's file name | `bob ref rename <REF> <NAME> -d`, then without `-d` | Move the note, PDF, and companions and update links; keeps the id and reading task |
+| Fix a reference's file name | `bob ref rename <REF> <NAME> -d`, then without `-d` | Move the note, PDF, and companions, update links, and make the reference id follow its stem while keeping the reading task |
 | Import a URL, local PDF, or Markdown file now | `bob ref create <TARGET>` | Write an intake PDF inline; see [target types](highlights-create.md) |
 | Save a bare public link quickly | `bob capture '<URL>'` | Queue a background job when the routing policy admits the URL; the note appears in `ref list` after `bob ref scan` |
 | Inspect or process background imports | `bob ref jobs`, `bob ref jobs run` | List jobs, or fetch pending links; see [ref jobs](ref-jobs.md) |
@@ -405,19 +405,27 @@ The dry-run inventories the note, PDF, sidecar, audio, and inbound links, then
 reports the frontmatter paths that would change. It does not write files, take
 locks, sync, or commit. Live mode applies the same plan as one scoped commit.
 The JSON form (`-d -f json`) uses schema version 1 and includes `from`, `to`,
-`moves`, `links`, `frontmatter`, `kept`, and the current `ref` row; `commit` is
-`null` and both sync values are `skipped` in a dry run.
+`id`, `moves`, `links`, `frontmatter`, `kept.task`, and the current `ref` row;
+`id` is `{from, to, changed}` with nullable ids. `commit` is `null` and both
+sync values are `skipped` in a dry run.
 
-V1 accepts only modern, PDF-backed, unannotated references in their current
-`ref/<type>/` directory. It refuses legacy and intake references, annotated
-references, and notes whose PDF sync plan is not clean. A rename changes the
-file stem for the note, PDF, and any same-stem sidecar or audio companions; it
-updates inbound vault links and the note's `source_pdf`, `highlights_sidecar`,
-and `audio` paths. It keeps the frontmatter `id`, `title`, `source_url`, PDF
-bytes, marker identity, and reading task block ID. Names are checked
-case-insensitively across the vault and are never auto-suffixed. Links in
-browser bookmarks and copied `obsidian://` or `highlights://` URIs are outside
-the vault and cannot be updated.
+V1 full renames accept only modern, PDF-backed, unannotated references in their
+current `ref/<type>/` directory. They refuse legacy and intake references,
+annotated references, and notes whose PDF sync plan is not clean. A rename
+changes the file stem for the note, PDF, and any same-stem sidecar or audio
+companions; it updates inbound vault links and the note's `source_pdf`,
+`highlights_sidecar`, and `audio` paths. The frontmatter id and PDF marker id
+follow the new stem. If another reference already records that id, Bob picks
+the first free `<stem>_2`, `<stem>_3`, and so on; the bare stem is checked
+against other ids, and suffixed ids are checked against other ids and stems.
+Id-less references stay id-less. An id change rewrites the PDF marker, so close
+the PDF in Highlights first. The title, `source_url`, dates, and reading task
+block ID stay. Same-stem `bob ref rename <REF> <current-stem>` repairs a
+mismatched id, including on annotated references, and reports
+`outcome: "id_updated"`; an already-correct id returns `unchanged`. After an
+id change, `bob ref find <old id>` no longer resolves. Links in browser
+bookmarks and copied `obsidian://` or `highlights://` URIs are outside the
+vault and cannot be updated.
 
 Machine-readable refusal codes are `unknown_reference`,
 `ambiguous_reference`, `legacy_reference`, `intake_reference`, `invalid_name`,
@@ -436,11 +444,14 @@ any source, destination, or rewritten path is dirty.
 
 The writer snapshots every Markdown file it will rewrite, moves the bundle with
 no-clobber semantics, and atomically writes the planned link and frontmatter
-changes. It verifies that a dry-run `bob ref sync` on the new PDF plans no
-work, and that the rebuilt index has the same reference id and reading-task
-`(path, block_id)` at the new note path, with no duplicate identity or orphaned
-task introduced. A write or verification failure moves files back and restores
-the saved Markdown before-images.
+changes. When the id changes, it then runs the sync engine's `bob ref sync -w`
+write path inside the transaction to update the PDF marker and refreshed sync
+metadata. It verifies that a dry-run `bob ref sync` on the new PDF plans no
+work, and that the rebuilt index and PDF marker both have the planned id while
+the reading-task `(path, block_id)` stays the same, with no duplicate identity
+or orphaned task introduced. A write or verification failure moves files back,
+restores the saved Markdown before-images, and atomically restores the original
+PDF bytes unless the PDF changed concurrently.
 
 On success, Bob commits only the old and new bundle paths and rewritten notes
 with subject `bob ref rename: <old> → <new>`. The JSON `commit` object contains
@@ -452,7 +463,10 @@ run `bob vault-sync`. `--offline` skips both sync cycles and commits locally.
 A rerun using the old stem or note path succeeds with
 `outcome: "already_renamed"` when the latest commit touching the new note has
 the matching rename subject. Passing the current stem as both `REF` and `NAME`
-returns `outcome: "unchanged"` without creating another commit.
+returns `outcome: "unchanged"` when the id is allocated correctly. If the id
+needs repair, the same-stem run commits the id-only update with subject
+`bob ref rename: <stem> (id <old> → <new>)` and reports no file moves or link
+rewrites.
 
 ### Renaming while the PDF is open in Highlights
 

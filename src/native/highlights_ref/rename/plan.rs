@@ -94,8 +94,14 @@ pub(super) struct KeptTask {
 
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct KeptInfo {
-    pub(super) marker_id: Option<String>,
     pub(super) task: Option<KeptTask>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct IdInfo {
+    pub(super) from: Option<String>,
+    pub(super) to: Option<String>,
+    pub(super) changed: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -115,6 +121,7 @@ pub(super) struct RenameEnvelope {
     pub(super) outcome: &'static str,
     pub(super) from: RefLocation,
     pub(super) to: RefLocation,
+    pub(super) id: IdInfo,
     pub(super) moves: Vec<MoveInfo>,
     pub(super) links: LinksInfo,
     pub(super) frontmatter: Vec<String>,
@@ -308,7 +315,7 @@ fn run_live(
 
     let old_head = git_head(&config.bob_dir, &child_env).ok();
     let prior_row = prepared.report.reference.row.clone();
-    let applied = match apply_and_verify(&config.bob_dir, &prepared, || {
+    let applied = match apply_and_verify(config, &prepared, || {
         verify_renamed(config, &prepared, &prior_row)
     }) {
         Ok(applied) => applied,
@@ -324,10 +331,19 @@ fn run_live(
         }
     };
 
-    let subject = format!(
-        "bob ref rename: {} → {}",
-        prepared.report.from.stem, prepared.report.to.stem
-    );
+    let subject = if prepared.report.outcome == "id_updated" {
+        format!(
+            "bob ref rename: {} (id {} → {})",
+            prepared.report.from.stem,
+            prepared.report.id.from.as_deref().unwrap_or("(none)"),
+            prepared.report.id.to.as_deref().unwrap_or("(none)")
+        )
+    } else {
+        format!(
+            "bob ref rename: {} → {}",
+            prepared.report.from.stem, prepared.report.to.stem
+        )
+    };
     let commit_paths =
         prepared.touched_paths.iter().cloned().collect::<Vec<_>>();
     let sha = match ob::commit_paths(
@@ -541,6 +557,11 @@ fn already_renamed_report(
             pdf: vault_path(&to_pdf),
             stem: new_stem,
         },
+        id: IdInfo {
+            from: row.marker_id.clone(),
+            to: row.marker_id.clone(),
+            changed: false,
+        },
         moves: Vec::new(),
         links: LinksInfo {
             rewritten: 0,
@@ -549,7 +570,6 @@ fn already_renamed_report(
         },
         frontmatter: Vec::new(),
         kept: KeptInfo {
-            marker_id: row.marker_id.clone(),
             task: row.task.as_ref().map(|task| KeptTask {
                 path: task.path.clone(),
                 block_id: task.block_id.clone(),
@@ -616,10 +636,12 @@ struct AppliedRename {
     moves: Vec<(PathBuf, PathBuf)>,
     before: crate::native::ref_library::migrate_tasks::BeforeImages,
     after: BTreeMap<PathBuf, Vec<u8>>,
+    pdf_before: Option<(PathBuf, Vec<u8>)>,
+    pdf_after: Option<Vec<u8>>,
 }
 
 fn apply_and_verify(
-    bob_dir: &Path,
+    config: &Config,
     prepared: &PreparedPlan,
     verify: impl FnOnce() -> std::result::Result<(), String>,
 ) -> std::result::Result<AppliedRename, String> {
@@ -630,13 +652,25 @@ fn apply_and_verify(
     if let Some((path, contents)) = &prepared.own_note_rewrite {
         rewrites.insert(path.clone(), contents.clone());
     }
-    apply_transaction(bob_dir, &prepared.report.moves, &rewrites, verify)
+    apply_transaction(
+        &config.bob_dir,
+        &prepared.report.moves,
+        &rewrites,
+        |transaction| {
+            if prepared.report.id.changed {
+                write_id_marker(config, prepared, transaction)?;
+            }
+            Ok(())
+        },
+        verify,
+    )
 }
 
 fn apply_transaction(
     bob_dir: &Path,
     moves: &[MoveInfo],
     rewrites: &BTreeMap<PathBuf, String>,
+    post_write: impl FnOnce(&mut AppliedRename) -> std::result::Result<(), String>,
     verify: impl FnOnce() -> std::result::Result<(), String>,
 ) -> std::result::Result<AppliedRename, String> {
     let mut transaction = AppliedRename::default();
@@ -708,6 +742,7 @@ fn apply_transaction(
                 .after
                 .insert(bob_dir.join(relative), contents.as_bytes().to_vec());
         }
+        post_write(&mut transaction)?;
         verify()
     })();
 
@@ -748,6 +783,34 @@ fn rollback_applied(transaction: &AppliedRename) -> String {
             ));
         }
     }
+    if let Some((path, before)) = &transaction.pdf_before {
+        match fs::read(path) {
+            Ok(current)
+                if transaction
+                    .pdf_after
+                    .as_ref()
+                    .is_some_and(|after| after == &current)
+                    || current == *before =>
+            {
+                if current != *before {
+                    if let Err(error) = atomic_write_bytes(path, before) {
+                        failures.push(format!(
+                            "could not restore PDF bytes at {}: {error}",
+                            path.display()
+                        ));
+                    }
+                }
+            }
+            Ok(_) => failures.push(format!(
+                "left concurrently changed PDF {} in place",
+                path.display()
+            )),
+            Err(error) => failures.push(format!(
+                "could not read PDF {} before restore: {error}",
+                path.display()
+            )),
+        }
+    }
     let diverged =
         crate::native::ref_library::migrate_tasks::restore_before_images(
             &transaction.before,
@@ -761,6 +824,85 @@ fn rollback_applied(transaction: &AppliedRename) -> String {
     } else {
         format!("; rollback issues: {}", failures.join("; "))
     }
+}
+
+fn atomic_write_bytes(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    let temporary =
+        parent.join(format!(".{name}.bob-rollback-{}.tmp", std::process::id()));
+    let _ = fs::remove_file(&temporary);
+    fs::write(&temporary, contents)?;
+    fs::File::open(&temporary)?.sync_all()?;
+    fs::rename(&temporary, path)?;
+    if let Ok(directory) = fs::File::open(parent) {
+        directory.sync_all()?;
+    }
+    Ok(())
+}
+
+fn write_id_marker(
+    config: &Config,
+    prepared: &PreparedPlan,
+    transaction: &mut AppliedRename,
+) -> std::result::Result<(), String> {
+    let pdf_path = config.bob_dir.join(&prepared.report.to.pdf);
+    let original_pdf = fs::read(&pdf_path).map_err(|error| {
+        format!("snapshot PDF {}: {error}", pdf_path.display())
+    })?;
+    transaction.pdf_before =
+        Some((config.bob_dir.join(&prepared.report.from.pdf), original_pdf));
+
+    let context = ScanContext::build(config);
+    let mut plan = plan_pdf_sync(
+        config,
+        &pdf_path,
+        SyncOptions {
+            dry_run: false,
+            write_pdf: true,
+            prefer: None,
+        },
+        &context,
+    )
+    .map_err(|error| {
+        format!("plan marker sync for {}: {error}", pdf_path.display())
+    })?;
+    let mut plans = [&mut plan];
+    finalize_annotation_task_plans(config, &mut plans, &context)
+        .map_err(|error| format!("finalize marker sync plan: {error}"))?;
+    reserve_preview_ids(config, &mut plans, &context);
+
+    let safe = plan.marker_write_needed
+        && plan.reading_task_plan.as_ref().is_some_and(|reading| {
+            reading.action == ReadingTaskAction::NoWrite
+        })
+        && plan.annotation_tasks_created == 0
+        && plan.routed_intents.is_empty()
+        && plan
+            .routed_task_note_writes
+            .iter()
+            .all(|write| write.action == "none")
+        && plan.image_assets.is_empty();
+    if !safe {
+        return Err(
+            "marker sync plan included an unsafe or unexpected side effect"
+                .to_string(),
+        );
+    }
+
+    let execution =
+        execute_pdf_sync(config, &plan, &mut RunWriteState::default());
+    if let Ok(bytes) = fs::read(&pdf_path) {
+        transaction.pdf_after = Some(bytes);
+    }
+    if let Ok(bytes) = fs::read(config.bob_dir.join(&prepared.report.to.path)) {
+        transaction
+            .after
+            .insert(config.bob_dir.join(&prepared.report.from.path), bytes);
+    }
+    execution
+        .map(|_| ())
+        .map_err(|error| format!("write id to PDF marker: {error}"))
 }
 
 #[cfg(target_os = "linux")]
@@ -843,18 +985,35 @@ fn verify_renamed(
         .ok_or_else(|| {
             format!("new index row is missing: {}", prepared.report.to.path)
         })?;
-    if index
-        .rows
-        .iter()
-        .any(|row| row.path == prepared.report.from.path)
+    if prepared.report.from.path != prepared.report.to.path
+        && index
+            .rows
+            .iter()
+            .any(|row| row.path == prepared.report.from.path)
     {
         return Err(format!(
             "old index row remains at {}",
             prepared.report.from.path
         ));
     }
-    if row.marker_id != prepared.report.kept.marker_id {
-        return Err("reference id changed during rename".to_string());
+    if row.marker_id != prepared.report.id.to {
+        return Err("reference id does not match the planned id".to_string());
+    }
+    let marker = read_pdf_marker(&config.bob_dir.join(&prepared.report.to.pdf))
+        .map_err(|error| format!("read renamed PDF marker: {error}"))?;
+    let marker_id = parse_marker_with_normalization(&marker.contents)
+        .map_err(|error| format!("parse renamed PDF marker: {error}"))?
+        .projection
+        .get(FIELD_ID)
+        .cloned();
+    let expected_marker_id = prepared
+        .report
+        .id
+        .to
+        .as_ref()
+        .map(|value| MarkerValue::String(value.clone()));
+    if marker_id != expected_marker_id {
+        return Err("PDF marker id does not match the planned id".to_string());
     }
     let expected_task = prepared
         .report
@@ -946,6 +1105,50 @@ fn committed_despite_error(
         .then_some((sha, subject))
 }
 
+fn allocate_row_id(rows: &[RefRow], self_index: usize, stem: &str) -> String {
+    allocate_reference_id(
+        stem,
+        rows.iter()
+            .enumerate()
+            .filter(|(index, _)| *index != self_index)
+            .map(|(_, row)| {
+                (
+                    row.marker_id.as_deref(),
+                    Path::new(&row.path)
+                        .file_stem()
+                        .and_then(|value| value.to_str()),
+                )
+            }),
+    )
+}
+
+fn allocate_reference_id<'a>(
+    stem: &str,
+    other_rows: impl IntoIterator<Item = (Option<&'a str>, Option<&'a str>)>,
+) -> String {
+    let other_rows = other_rows.into_iter().collect::<Vec<_>>();
+    let has_id = |candidate: &str| {
+        other_rows.iter().any(|(id, _)| {
+            id.is_some_and(|id| id.eq_ignore_ascii_case(candidate))
+        })
+    };
+    if !has_id(stem) {
+        return stem.to_string();
+    }
+    for suffix in 2_u64.. {
+        let candidate = format!("{stem}_{suffix}");
+        let occupied = other_rows.iter().any(|(id, other_stem)| {
+            id.is_some_and(|id| id.eq_ignore_ascii_case(&candidate))
+                || other_stem
+                    .is_some_and(|other| other.eq_ignore_ascii_case(&candidate))
+        });
+        if !occupied {
+            return candidate;
+        }
+    }
+    unreachable!("u64 reference ID suffix space exhausted")
+}
+
 fn prepare(
     config: &Config,
     query: &str,
@@ -1002,7 +1205,6 @@ fn prepare(
                 Some("v1 renames modern PDF-backed notes under ref/<type>/"),
             )
         })?;
-
     if is_legacy(row, &config.ref_dir) {
         return Err(RenameFailure::new(
             "legacy_reference",
@@ -1021,6 +1223,16 @@ fn prepare(
         ));
     }
 
+    let planned_id = row
+        .marker_id
+        .as_ref()
+        .map(|_| allocate_row_id(&index.rows, resolved.row, &name));
+    let id = IdInfo {
+        from: row.marker_id.clone(),
+        changed: row.marker_id != planned_id,
+        to: planned_id,
+    };
+
     let show_row =
         load_show_row(&index, &resolved, false, false).map_err(|message| {
             RenameFailure::new(
@@ -1032,7 +1244,12 @@ fn prepare(
 
     if name == old_stem {
         let bundle = no_op_bundle(row, old_stem, &name)?;
-        return Ok(unchanged_plan(row, show_row, bundle, dry_run));
+        if !id.changed {
+            return Ok(unchanged_plan(row, show_row, bundle, id, dry_run));
+        }
+        return id_update_plan(
+            config, row, show_row, bundle, id, dry_run, offline,
+        );
     }
 
     let bundle = build_bundle(config, row, old_stem, &name)?;
@@ -1133,18 +1350,35 @@ fn prepare(
     let note_input = linked_note
         .map(|index| link_plan.files[index].contents.as_str())
         .unwrap_or(&note_contents);
-    let (own_note_rewrite, mut frontmatter) =
-        match rewrite_own_frontmatter(note_input, &bundle.frontmatter_map) {
-            Some((contents, fields)) => {
-                if let Some(index) = linked_note {
-                    link_plan.files[index].contents = contents;
-                    (None, fields)
-                } else {
-                    (Some((bundle.note_from.clone(), contents)), fields)
-                }
-            }
-            None => (None, Vec::new()),
+    let (mut rewritten_note, mut frontmatter) =
+        rewrite_own_frontmatter(note_input, &bundle.frontmatter_map)
+            .unwrap_or_else(|| (note_input.to_string(), Vec::new()));
+    if id.changed {
+        let Some((with_id, _)) =
+            rewrite_reference_id_frontmatter(&rewritten_note, &id)
+        else {
+            return Err(RenameFailure::new(
+                "not_in_sync",
+                format!(
+                    "could not locate the reference id in {}",
+                    bundle.note_from.display()
+                ),
+                Some("run bob ref scan and retry"),
+            ));
         };
+        rewritten_note = with_id;
+        frontmatter.push("id".to_string());
+    }
+    let own_note_rewrite = if rewritten_note != note_input {
+        if let Some(index) = linked_note {
+            link_plan.files[index].contents = rewritten_note;
+            None
+        } else {
+            Some((bundle.note_from.clone(), rewritten_note))
+        }
+    } else {
+        None
+    };
     frontmatter.extend(planned_frontmatter);
     frontmatter.sort();
     frontmatter.dedup();
@@ -1205,7 +1439,6 @@ fn prepare(
             .collect(),
     };
     let kept = KeptInfo {
-        marker_id: row.marker_id.clone(),
         task: row.task.as_ref().map(|task| KeptTask {
             path: task.path.clone(),
             block_id: task.block_id.clone(),
@@ -1221,6 +1454,7 @@ fn prepare(
         outcome: "renamed",
         from,
         to,
+        id,
         moves: bundle.moves,
         links: links_info,
         frontmatter,
@@ -1241,10 +1475,118 @@ fn prepare(
     })
 }
 
+fn id_update_plan(
+    config: &Config,
+    row: &RefRow,
+    show_row: ShowRow,
+    bundle: Bundle,
+    id: IdInfo,
+    dry_run: bool,
+    offline: bool,
+) -> std::result::Result<PreparedPlan, RenameFailure> {
+    if !is_in_sync(config, &bundle.pdf_from) {
+        return Err(RenameFailure::new(
+            "not_in_sync",
+            format!(
+                "the reference note and PDF are not in sync: {}",
+                bundle.note_from.display()
+            ),
+            Some("run bob ref scan, then retry the id repair"),
+        ));
+    }
+    let note_path = config.bob_dir.join(&bundle.note_from);
+    let note_contents = fs::read_to_string(&note_path).map_err(|error| {
+        RenameFailure::new(
+            "not_in_sync",
+            format!("could not read {}: {error}", bundle.note_from.display()),
+            Some("run bob ref scan and retry"),
+        )
+    })?;
+    let (rewritten, _) = rewrite_reference_id_frontmatter(&note_contents, &id)
+        .ok_or_else(|| {
+            RenameFailure::new(
+                "not_in_sync",
+                format!(
+                    "could not locate the reference id in {}",
+                    bundle.note_from.display()
+                ),
+                Some("run bob ref scan and retry"),
+            )
+        })?;
+
+    let touched_paths =
+        BTreeSet::from([bundle.note_from.clone(), bundle.pdf_from.clone()]);
+    let dirty_paths = dirty_touched_paths(&config.bob_dir, &touched_paths)?;
+    if offline && !dirty_paths.is_empty() {
+        return Err(RenameFailure::new(
+            "dirty_paths",
+            format!("rename paths are dirty: {}", display_paths(&dirty_paths)),
+            Some("commit or restore those paths before an offline rename"),
+        ));
+    }
+    let warnings = if dirty_paths.is_empty() {
+        Vec::new()
+    } else {
+        vec![format!(
+            "dirty paths will be included by the pre-sync: {}",
+            display_paths(&dirty_paths)
+        )]
+    };
+    let from = RefLocation {
+        path: vault_path(&bundle.note_from),
+        pdf: vault_path(&bundle.pdf_from),
+        stem: bundle.old_stem.clone(),
+    };
+    let to = RefLocation {
+        path: vault_path(&bundle.note_to),
+        pdf: vault_path(&bundle.pdf_to),
+        stem: bundle.new_stem.clone(),
+    };
+    let report = RenameEnvelope {
+        ok: true,
+        schema_version: crate::native::ref_library::output::REF_SCHEMA_VERSION,
+        command: RENAME_COMMAND,
+        generated_at: crate::native::ref_library::output::generated_at(),
+        mode: if dry_run { "dry_run" } else { "write" },
+        changed: true,
+        outcome: "id_updated",
+        from,
+        to,
+        id,
+        moves: Vec::new(),
+        links: LinksInfo {
+            rewritten: 0,
+            files: Vec::new(),
+            skipped_ambiguous: Vec::new(),
+        },
+        frontmatter: vec!["id".to_string()],
+        kept: KeptInfo {
+            task: row.task.as_ref().map(|task| KeptTask {
+                path: task.path.clone(),
+                block_id: task.block_id.clone(),
+            }),
+        },
+        reference: show_row,
+        commit: None,
+        sync: SyncInfo {
+            pre: "skipped",
+            post: "skipped",
+        },
+        warnings,
+    };
+    Ok(PreparedPlan {
+        report,
+        link_rewrites: Vec::new(),
+        own_note_rewrite: Some((bundle.note_from.clone(), rewritten)),
+        touched_paths,
+    })
+}
+
 fn unchanged_plan(
     row: &RefRow,
     show_row: ShowRow,
     bundle: Bundle,
+    id: IdInfo,
     dry_run: bool,
 ) -> PreparedPlan {
     PreparedPlan {
@@ -1267,6 +1609,7 @@ fn unchanged_plan(
                 pdf: vault_path(&bundle.pdf_to),
                 stem: bundle.new_stem.clone(),
             },
+            id,
             moves: Vec::new(),
             links: LinksInfo {
                 rewritten: 0,
@@ -1275,7 +1618,6 @@ fn unchanged_plan(
             },
             frontmatter: Vec::new(),
             kept: KeptInfo {
-                marker_id: row.marker_id.clone(),
                 task: row.task.as_ref().map(|task| KeptTask {
                     path: task.path.clone(),
                     block_id: task.block_id.clone(),
@@ -1903,6 +2245,61 @@ fn rewrite_own_frontmatter(
     (!fields.is_empty()).then_some((output, fields.into_iter().collect()))
 }
 
+fn rewrite_reference_id_frontmatter(
+    contents: &str,
+    id: &IdInfo,
+) -> Option<(String, Vec<String>)> {
+    let value = id.to.as_deref()?;
+    id.from.as_ref()?;
+    let mut lines = contents.split_inclusive('\n');
+    let first = lines.next()?;
+    if !matches!(first.trim(), "---") {
+        return None;
+    }
+    let mut output = String::with_capacity(contents.len());
+    output.push_str(first);
+    let mut replaced = false;
+    let mut ended = false;
+    for line in lines.by_ref() {
+        let content = line
+            .strip_suffix('\n')
+            .unwrap_or(line)
+            .strip_suffix('\r')
+            .unwrap_or_else(|| line.strip_suffix('\n').unwrap_or(line));
+        if matches!(content.trim(), "---" | "...") {
+            output.push_str(line);
+            ended = true;
+            break;
+        }
+        let is_id = !content.chars().next().is_some_and(char::is_whitespace)
+            && content
+                .split_once(':')
+                .is_some_and(|(key, _)| key.trim() == "id");
+        if !replaced && is_id {
+            let line_ending = if line.ends_with("\r\n") {
+                "\r\n"
+            } else if line.ends_with('\n') {
+                "\n"
+            } else {
+                ""
+            };
+            output.push_str("id: ");
+            output.push_str(&super::super::render_frontmatter_string(value));
+            output.push_str(line_ending);
+            replaced = true;
+        } else {
+            output.push_str(line);
+        }
+    }
+    if !ended || !replaced {
+        return None;
+    }
+    for line in lines {
+        output.push_str(line);
+    }
+    Some((output, vec!["id".to_string()]))
+}
+
 fn dirty_touched_paths(
     vault: &Path,
     touched_paths: &BTreeSet<PathBuf>,
@@ -1996,6 +2393,49 @@ mod tests {
     use super::*;
 
     #[test]
+    fn reference_id_allocator_uses_ids_case_insensitively() {
+        assert_eq!(
+            allocate_reference_id("Target", [(Some("tArGeT"), Some("other"))]),
+            "Target_2"
+        );
+    }
+
+    #[test]
+    fn reference_id_allocator_skips_suffixed_ids_and_stems() {
+        assert_eq!(
+            allocate_reference_id(
+                "target",
+                [
+                    (Some("target"), Some("other")),
+                    (Some("occupied"), Some("target_2")),
+                    (Some("target_4"), Some("four")),
+                ],
+            ),
+            "target_3"
+        );
+    }
+
+    #[test]
+    fn same_stem_rows_allocate_the_suffix_only_for_the_repaired_duplicate() {
+        assert_eq!(
+            allocate_reference_id("foo", [(Some("other"), Some("foo"))]),
+            "foo"
+        );
+        assert_eq!(
+            allocate_reference_id("foo", [(Some("foo"), Some("foo"))]),
+            "foo_2"
+        );
+    }
+
+    #[test]
+    fn reference_id_allocator_keeps_an_already_allocated_suffix() {
+        assert_eq!(
+            allocate_reference_id("foo_2", [(Some("foo"), Some("foo"))]),
+            "foo_2"
+        );
+    }
+
+    #[test]
     fn own_frontmatter_rewrite_changes_only_managed_path_fields() {
         let input = concat!(
             "---\n",
@@ -2039,6 +2479,24 @@ mod tests {
     }
 
     #[test]
+    fn reference_id_frontmatter_rewrite_replaces_the_whole_value_and_quotes_numbers(
+    ) {
+        let input = "---\ntitle: A\nid: old-id # comment\nsource_url: https://example.test\n---\nbody\n";
+        let id = IdInfo {
+            from: Some("old-id".to_string()),
+            to: Some("2024".to_string()),
+            changed: true,
+        };
+        let (actual, fields) =
+            rewrite_reference_id_frontmatter(input, &id).expect("rewrite id");
+        assert_eq!(
+            actual,
+            "---\ntitle: A\nid: \"2024\"\nsource_url: https://example.test\n---\nbody\n"
+        );
+        assert_eq!(fields, ["id"]);
+    }
+
+    #[test]
     fn forced_verify_failure_reverses_moves_and_restores_rewrites() {
         let temp = tempfile::tempdir().expect("create scratch vault");
         let vault = temp.path();
@@ -2052,6 +2510,10 @@ mod tests {
         fs::write(&linked_note, "[[ref/blogs/old]]\n").unwrap();
 
         let mut rewrites = BTreeMap::new();
+        rewrites.insert(
+            PathBuf::from("ref/blogs/old.md"),
+            "rewritten reference\n".to_string(),
+        );
         rewrites.insert(
             PathBuf::from("sase.md"),
             "[[ref/blogs/new]]\n".to_string(),
@@ -2071,6 +2533,21 @@ mod tests {
                 },
             ],
             &rewrites,
+            |transaction| {
+                let new_pdf = vault.join("lib/blogs/new.pdf");
+                let original = fs::read(&new_pdf).unwrap();
+                transaction.pdf_before =
+                    Some((vault.join("lib/blogs/old.pdf"), original));
+                fs::write(&new_pdf, b"rewritten PDF marker").unwrap();
+                transaction.pdf_after = Some(fs::read(&new_pdf).unwrap());
+                let new_note = vault.join("ref/blogs/new.md");
+                fs::write(&new_note, b"rewritten reference\n").unwrap();
+                transaction.after.insert(
+                    vault.join("ref/blogs/old.md"),
+                    b"rewritten reference\n".to_vec(),
+                );
+                Ok(())
+            },
             || Err("forced verifier failure".to_string()),
         );
 

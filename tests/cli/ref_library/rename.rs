@@ -148,6 +148,40 @@ fn snapshot(root: &Path) -> Vec<(String, Vec<u8>)> {
     result
 }
 
+fn managed_highlights(contents: &str) -> &str {
+    let begin = "<!-- highlights:begin -->";
+    let end = "<!-- highlights:end -->";
+    let start = contents.find(begin).expect("highlights begin marker");
+    let end_at = contents.find(end).expect("highlights end marker") + end.len();
+    &contents[start..end_at]
+}
+
+fn frontmatter_value(contents: &str, key: &str) -> Option<String> {
+    let mut lines = contents.lines();
+    if lines.next()?.trim() != "---" {
+        return None;
+    }
+    for line in lines {
+        if matches!(line.trim(), "---" | "...") {
+            break;
+        }
+        let Some((field, value)) = line.split_once(':') else {
+            continue;
+        };
+        if field.trim() == key {
+            return Some(
+                value
+                    .trim()
+                    .trim_matches(|character| {
+                        character == '\'' || character == '"'
+                    })
+                    .to_string(),
+            );
+        }
+    }
+    None
+}
+
 #[test]
 fn rename_help_lists_options_alphabetically_with_short_aliases() {
     let temp = TempDir::new("bob-cli-ref-rename-help");
@@ -188,10 +222,22 @@ fn rename_help_lists_options_alphabetically_with_short_aliases() {
     ] {
         assert!(help.contains(long_option), "missing {long_option}:\n{help}");
     }
+    assert!(
+        help.contains("reference id"),
+        "missing id behavior:\n{help}"
+    );
+    assert!(
+        help.contains("follows the new stem"),
+        "missing id rule:\n{help}"
+    );
+    assert!(
+        help.contains("bob ref find <old id> stops resolving"),
+        "missing old-id behavior:\n{help}"
+    );
 }
 
 #[test]
-fn gist_dry_run_reports_moves_links_kept_identity_and_writes_nothing() {
+fn gist_dry_run_reports_moves_links_and_id_rekey_without_writing() {
     let (_temp, vault) = gist_vault("bob-cli-ref-rename-gist");
     let before = snapshot(&vault);
     let old = "442a6bf555914893e9891c11519de94f";
@@ -201,13 +247,19 @@ fn gist_dry_run_reports_moves_links_kept_identity_and_writes_nothing() {
     assert_eq!(document["schema_version"], 1);
     assert_eq!(document["mode"], "dry_run");
     assert_eq!(document["outcome"], "renamed");
+    assert_eq!(document["id"]["from"], old);
+    assert_eq!(document["id"]["to"], "karpathy_llm_wiki");
+    assert_eq!(document["id"]["changed"], true);
     assert_eq!(document["from"]["path"], format!("ref/blogs/{old}.md"));
     assert_eq!(document["to"]["path"], "ref/blogs/karpathy_llm_wiki.md");
     assert_eq!(document["moves"].as_array().unwrap().len(), 2);
     assert_eq!(document["links"]["rewritten"], 1);
     assert_eq!(document["links"]["files"][0], "sase.md");
-    assert_eq!(document["frontmatter"], serde_json::json!(["source_pdf"]));
-    assert_eq!(document["kept"]["marker_id"], old);
+    assert_eq!(
+        document["frontmatter"],
+        serde_json::json!(["id", "source_pdf"])
+    );
+    assert!(document["kept"].get("marker_id").is_none());
     assert_eq!(document["kept"]["task"]["path"], "sase.md");
     assert!(document["kept"]["task"]["block_id"].as_str().is_some());
     assert_eq!(document["ref"]["path"], format!("ref/blogs/{old}.md"));
@@ -269,7 +321,7 @@ fn bundle_dry_run_includes_companions_done_daily_and_ambiguous_bare_links() {
     assert!(skipped.iter().any(|link| link["target"] == "old.bundle"));
     assert_eq!(
         document["frontmatter"],
-        serde_json::json!(["audio", "highlights_sidecar", "source_pdf"])
+        serde_json::json!(["audio", "highlights_sidecar", "id", "source_pdf"])
     );
 }
 
@@ -457,6 +509,11 @@ fn offline_write_verifies_identity_sync_and_already_renamed_reruns() {
     let old_pdf_bytes =
         fs::read(vault.join("lib/blogs/442a6bf555914893e9891c11519de94f.pdf"))
             .unwrap();
+    let old_note = fs::read_to_string(
+        vault.join("ref/blogs/442a6bf555914893e9891c11519de94f.md"),
+    )
+    .unwrap();
+    let old_source_url = frontmatter_value(&old_note, "source_url");
     write_file(&vault.join("unrelated.md"), "stay uncommitted\n");
 
     let output = run_rename(
@@ -482,10 +539,27 @@ fn offline_write_verifies_identity_sync_and_already_renamed_reruns() {
     );
     assert_eq!(document["sync"]["pre"], "skipped");
     assert_eq!(document["sync"]["post"], "skipped");
-    assert_eq!(
+    assert_ne!(
         fs::read(vault.join("lib/blogs/karpathy_llm_wiki.pdf")).unwrap(),
-        old_pdf_bytes
+        old_pdf_bytes,
+        "the PDF marker id is rewritten"
     );
+    let renamed_note =
+        fs::read_to_string(vault.join("ref/blogs/karpathy_llm_wiki.md"))
+            .expect("read renamed reference");
+    assert!(renamed_note.contains("id: karpathy_llm_wiki\n"));
+    assert_eq!(
+        frontmatter_value(&renamed_note, "source_url"),
+        old_source_url,
+        "the URL value stays the same"
+    );
+    assert!(renamed_note.contains(&format!(
+        "^{}",
+        document["kept"]["task"]["block_id"].as_str().unwrap()
+    )));
+    let marker =
+        pdf_marker_contents(&vault.join("lib/blogs/karpathy_llm_wiki.pdf"));
+    assert!(marker.contains("- id: karpathy_llm_wiki\n"), "{marker}");
     assert!(!vault
         .join("lib/blogs/442a6bf555914893e9891c11519de94f.pdf")
         .exists());
@@ -494,12 +568,26 @@ fn offline_write_verifies_identity_sync_and_already_renamed_reruns() {
     assert!(status.contains("?? unrelated.md"), "{status}");
     let committed = stdout(&git_in(
         &vault,
-        ["show", "--name-status", "--format=%s", "HEAD"],
+        [
+            "show",
+            "--find-renames=1%",
+            "--name-status",
+            "--format=%s",
+            "HEAD",
+        ],
     ));
     assert!(committed.starts_with(
         "bob ref rename: 442a6bf555914893e9891c11519de94f → karpathy_llm_wiki\n"
     ));
-    assert!(committed.contains("R100\tlib/blogs/442a6bf555914893e9891c11519de94f.pdf\tlib/blogs/karpathy_llm_wiki.pdf"));
+    let pdf_status = committed.lines().find(|line| {
+        line.starts_with('R')
+            && line.contains("lib/blogs/442a6bf555914893e9891c11519de94f.pdf")
+            && line.contains("lib/blogs/karpathy_llm_wiki.pdf")
+    });
+    assert!(
+        pdf_status.is_some(),
+        "expected a PDF rename with any similarity score:\n{committed}"
+    );
     assert!(committed.contains("M\tsase.md"));
     assert!(!committed.contains("unrelated.md"));
 
@@ -516,6 +604,11 @@ fn offline_write_verifies_identity_sync_and_already_renamed_reruns() {
         "{}",
         format_output(&sync)
     );
+    assert!(
+        stdout(&sync).contains("pdf_marker_action: none"),
+        "{}",
+        format_output(&sync)
+    );
 
     let find = bob_command()
         .args([
@@ -528,18 +621,22 @@ fn offline_write_verifies_identity_sync_and_already_renamed_reruns() {
         .env("BOB_DIR", &vault)
         .env("BOB_NOW", FIXED_NOW)
         .output()
-        .expect("find old stable id");
+        .expect("find old id");
     assert_success(&find);
     let found: serde_json::Value =
         serde_json::from_str(&stdout(&find)).unwrap();
-    assert_eq!(
-        found["results"][0]["matches"][0]["ref"]["path"],
-        "ref/blogs/karpathy_llm_wiki.md"
-    );
-    assert_eq!(
-        found["results"][0]["matches"][0]["ref"]["task"]["block_id"],
-        document["kept"]["task"]["block_id"]
-    );
+    assert_eq!(found["results"][0]["verdict"], "not_found");
+
+    let show = bob_command()
+        .args(["ref", "show", "karpathy_llm_wiki", "-f", "json"])
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", FIXED_NOW)
+        .output()
+        .expect("show new id");
+    assert_success(&show);
+    let shown: serde_json::Value =
+        serde_json::from_str(&stdout(&show)).unwrap();
+    assert_eq!(shown["refs"][0]["marker_id"], "karpathy_llm_wiki");
 
     let rerun = run_rename(
         &vault,
@@ -568,6 +665,164 @@ fn offline_write_verifies_identity_sync_and_already_renamed_reruns() {
     assert_eq!(unchanged["outcome"], "unchanged");
     assert_eq!(unchanged["changed"], false);
     assert_eq!(unchanged["commit"], serde_json::Value::Null);
+}
+
+#[test]
+fn colliding_reference_ids_receive_the_first_available_suffix() {
+    let (_temp, vault) = synced_vault(
+        "bob-cli-ref-rename-id-collision",
+        "source",
+        "- status: wip\n- parent: sase\n- title: Source\n- id: source\n",
+        false,
+    );
+    write_file(
+        &vault.join("ref/blogs/other.md"),
+        "---\nid: target\ntitle: Other\n---\n",
+    );
+    git_commit_all(&vault);
+
+    let output = run_rename(&vault, &["source", "target", "-o", "-f", "json"]);
+    assert_success(&output);
+    let document: serde_json::Value =
+        serde_json::from_str(&stdout(&output)).unwrap();
+    assert_eq!(document["id"]["from"], "source");
+    assert_eq!(document["id"]["to"], "target_2");
+    assert_eq!(document["id"]["changed"], true);
+    let note = fs::read_to_string(vault.join("ref/blogs/target.md")).unwrap();
+    assert!(note.contains("id: target_2\n"));
+    let marker = pdf_marker_contents(&vault.join("lib/blogs/target.pdf"));
+    assert!(marker.contains("- id: target_2\n"), "{marker}");
+}
+
+#[test]
+fn same_stem_repair_updates_only_id_and_is_idempotent() {
+    let (_temp, vault) = synced_vault(
+        "bob-cli-ref-rename-same-stem-id",
+        "foo",
+        "- status: wip\n- parent: sase\n- title: Foo\n- id: stable-id\n",
+        false,
+    );
+    git_commit_all(&vault);
+
+    let output = run_rename(&vault, &["foo", "foo", "-o", "-f", "json"]);
+    assert_success(&output);
+    let document: serde_json::Value =
+        serde_json::from_str(&stdout(&output)).unwrap();
+    assert_eq!(document["outcome"], "id_updated");
+    assert_eq!(document["id"]["from"], "stable-id");
+    assert_eq!(document["id"]["to"], "foo");
+    assert_eq!(document["moves"], serde_json::json!([]));
+    assert_eq!(document["links"]["rewritten"], 0);
+    assert_eq!(
+        document["commit"]["subject"],
+        "bob ref rename: foo (id stable-id → foo)"
+    );
+    assert!(fs::read_to_string(vault.join("ref/blogs/foo.md"))
+        .unwrap()
+        .contains("id: foo\n"));
+    assert!(pdf_marker_contents(&vault.join("lib/blogs/foo.pdf"))
+        .contains("- id: foo\n"));
+
+    let sync = bob_command()
+        .args(["ref", "sync", "-d"])
+        .arg(vault.join("lib/blogs/foo.pdf"))
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", FIXED_NOW)
+        .output()
+        .expect("dry-run sync after same-stem repair");
+    assert_success(&sync);
+    assert!(stdout(&sync).contains("note_action: none"));
+    assert!(stdout(&sync).contains("pdf_marker_action: none"));
+
+    let rerun = run_rename(&vault, &["foo", "foo", "-o", "-f", "json"]);
+    assert_success(&rerun);
+    let rerun: serde_json::Value =
+        serde_json::from_str(&stdout(&rerun)).unwrap();
+    assert_eq!(rerun["outcome"], "unchanged");
+    assert_eq!(rerun["changed"], false);
+}
+
+#[test]
+fn annotated_same_stem_repair_succeeds_and_full_rename_still_refuses() {
+    let (_temp, vault) = synced_vault(
+        "bob-cli-ref-rename-annotated-same-stem",
+        "foo",
+        "- status: wip\n- parent: sase\n- title: Foo\n- id: stable-id\n",
+        true,
+    );
+    let pdf = vault.join("lib/blogs/foo.pdf");
+    write_file(
+        &vault.join("lib/blogs/foo.md"),
+        "# Foo\n\n## Page 1\n\n> A genuine highlight.\n",
+    );
+    let sync = bob_command()
+        .args(["ref", "sync"])
+        .arg(&pdf)
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", FIXED_NOW)
+        .output()
+        .expect("sync highlighted reference fixture");
+    assert_success(&sync);
+    let before = fs::read_to_string(vault.join("ref/blogs/foo.md")).unwrap();
+    let highlight_ids = before
+        .lines()
+        .filter(|line| line.starts_with("^h-"))
+        .collect::<Vec<_>>();
+    assert!(
+        !highlight_ids.is_empty(),
+        "expected a rendered highlight: {before}"
+    );
+    git_commit_all(&vault);
+
+    let output = run_rename(&vault, &["foo", "foo", "-o", "-f", "json"]);
+    assert_success(&output);
+    let document: serde_json::Value =
+        serde_json::from_str(&stdout(&output)).unwrap();
+    assert_eq!(document["outcome"], "id_updated");
+    let after = fs::read_to_string(vault.join("ref/blogs/foo.md")).unwrap();
+    assert_eq!(
+        after
+            .lines()
+            .filter(|line| line.starts_with("^h-"))
+            .collect::<Vec<_>>(),
+        highlight_ids
+    );
+    assert_eq!(managed_highlights(&after), managed_highlights(&before));
+    assert!(after.contains("id: foo\n"));
+
+    assert_eq!(
+        error_json(&vault, &["foo", "next"], true)["error"]["code"],
+        "has_highlights"
+    );
+}
+
+#[test]
+fn idless_reference_rename_keeps_idless_state_and_pdf_bytes() {
+    let (_temp, vault) = synced_vault(
+        "bob-cli-ref-rename-idless",
+        "foo",
+        "- status: wip\n- parent: sase\n- title: Foo\n",
+        false,
+    );
+    git_commit_all(&vault);
+    let original_pdf = fs::read(vault.join("lib/blogs/foo.pdf")).unwrap();
+
+    let output = run_rename(&vault, &["foo", "bar", "-o", "-f", "json"]);
+    assert_success(&output);
+    let document: serde_json::Value =
+        serde_json::from_str(&stdout(&output)).unwrap();
+    assert_eq!(
+        document["id"],
+        serde_json::json!({"from": null, "to": null, "changed": false})
+    );
+    assert_eq!(
+        fs::read(vault.join("lib/blogs/bar.pdf")).unwrap(),
+        original_pdf
+    );
+    assert!(!fs::read_to_string(vault.join("ref/blogs/bar.md"))
+        .unwrap()
+        .lines()
+        .any(|line| line.starts_with("id:")));
 }
 
 #[test]
