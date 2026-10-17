@@ -1358,6 +1358,12 @@ fn parent_label<L: SourceLoader>(
 ) -> Option<String> {
     let raw = yaml_scalar_text(metadata_value(metadata, "parent")?)?;
     let parsed = super::resolve::parse_link_target(&raw);
+    // The generic root `[[area]]` parent is never printed; match the
+    // parsed note part case-insensitively, the same way `projects`
+    // treats the root type notes.
+    if parsed.note.eq_ignore_ascii_case("area") {
+        return None;
+    }
     if let Some(alias) = parsed
         .alias
         .as_ref()
@@ -1589,20 +1595,36 @@ fn badge_row(inlines: &[Inline]) -> bool {
                 source.push('`');
             }
             Inline::Link { label, target }
-                if matches!(
-                    target,
-                    LinkTarget::Internal(_) | LinkTarget::ScopedInternal { .. }
-                ) && matches!(label.as_slice(), [Inline::Code(_)]) =>
+                if matches!(label.as_slice(), [Inline::Code(_)])
+                    && badge_chip_target(target) =>
             {
                 let Inline::Code(text) = &label[0] else {
                     unreachable!()
                 };
-                source.push_str(&format!("[`{text}`](#Tasks)"));
+                let anchor = match target {
+                    LinkTarget::Url(url) if url.starts_with('#') => {
+                        url.as_str()
+                    }
+                    _ => "#Tasks",
+                };
+                source.push_str(&format!("[`{text}`]({anchor})"));
             }
             _ => return false,
         }
     }
     is_badge_row(&source)
+}
+
+/// Generated status chips are either resolved heading links or Markdown
+/// `#…` URLs (including percent-encoded nested anchors). Reconstructing
+/// them as the generated chip grammar lets [`is_badge_row`] stay the
+/// single format authority.
+fn badge_chip_target(target: &LinkTarget) -> bool {
+    match target {
+        LinkTarget::Internal(_) | LinkTarget::ScopedInternal { .. } => true,
+        LinkTarget::Url(url) => url.starts_with('#'),
+        LinkTarget::ObsidianUri(_) => false,
+    }
 }
 
 fn plain_inline_text(inlines: &[Inline]) -> String {
@@ -4252,6 +4274,118 @@ Unrelated prose after the closed lane stays visible.\n\
                     .kicker
             ),
             "AREA · Custom"
+        );
+        // The generic root `[[area]]` parent is never printed.
+        let generic = vault(&[(
+            "Cash.md",
+            "---\ntype: [[area]]\nparent: '[[area]]'\n---\n# Cash\nPurpose.\n",
+        )]);
+        assert_eq!(
+            plain_inline_text(
+                &project_bob(&generic, "Cash.md", false, true)
+                    .view
+                    .masthead
+                    .kicker
+            ),
+            "AREA"
+        );
+        let generic_upper = vault(&[(
+            "Cash.md",
+            "---\ntype: [[area]]\nparent: '[[AREA]]'\n---\n# Cash\n",
+        )]);
+        assert_eq!(
+            plain_inline_text(
+                &project_bob(&generic_upper, "Cash.md", false, true)
+                    .view
+                    .masthead
+                    .kicker
+            ),
+            "AREA"
+        );
+    }
+
+    #[test]
+    fn generated_markdown_badge_row_is_dropped() {
+        let directory = vault(&[(
+            "Host.md",
+            "---\ntype: [[area]]\n---\n\
+# Some Title\n\
+## Tasks\n\
+[`⚪ 4 open`](#Tasks) · [`🔵 2 next/wip`](#Tasks#Next%20&%20In%20Progress) · [`🔴 1 blocked`](#Some%20Title#Tasks#Blocked) · `🟢 1 done/canceled`\n\
+### Next & In Progress\n\
+- [*] Keep this row #task ^keep\n",
+        )]);
+        let projection = project_bob(&directory, "Host.md", false, true);
+        let output = markdown(&projection);
+        for chip in ["⚪", "🔵", "🔴", "🟢"] {
+            assert!(!output.contains(chip), "{chip} survived in {output}");
+        }
+        assert!(output.contains("Keep this row"), "{output}");
+        super::super::tests::assert_no_obsidian_residue(&output);
+        super::super::tests::assert_serialized_internal_targets_exist(
+            &projection.view,
+            &output,
+        );
+        assert_transclusion_golden(&output, "bob-generated-badge-row");
+    }
+
+    #[test]
+    fn same_note_block_refs_label_excerpts_on_relationship_rows() {
+        let directory = vault(&[(
+            "Host.md",
+            "---\ntype: [[area]]\n---\n# Host\n\
+See [[#^gone]].\n\
+## Tasks\n\
+- [ ] Launch the work #task ^launch\n\
+- [ ] Open waiter #task ^waiter\n\
+\t- ⛓️ **DEPENDS ON:** [[#^launch]]\n\
+\t- 🧱 **BLOCKS:** [[#^closed]]\n\
+- [x] Finished already #task ^closed\n",
+        )]);
+        let reading = project_bob(&directory, "Host.md", false, true);
+        let reading_md = markdown(&reading);
+        assert!(reading_md.contains("Launch the work"), "{reading_md}");
+        // The closed task is omitted, but its excerpt still labels the
+        // BLOCKS row as plain text.
+        assert_eq!(reading.view.summary.omitted_closed_tasks, 1);
+        assert!(reading_md.contains("Finished already"), "{reading_md}");
+        assert!(
+            !reading_md.contains("^launch"),
+            "shown target kept a raw id: {reading_md}"
+        );
+        assert!(
+            !reading_md.contains("^closed"),
+            "omitted closed target kept a raw id: {reading_md}"
+        );
+        super::super::tests::assert_no_obsidian_residue_except(
+            &reading_md,
+            &["gone"],
+        );
+        super::super::tests::assert_serialized_internal_targets_exist(
+            &reading.view,
+            &reading_md,
+        );
+        assert_transclusion_golden(&reading_md, "bob-same-note-block-refs");
+
+        let restored = project_bob(&directory, "Host.md", true, true);
+        let restored_md = markdown(&restored);
+        assert!(restored_md.contains("Finished already"), "{restored_md}");
+        assert!(
+            restored_md.contains("](<#t-closed>)"),
+            "restored closed target should stay a link: {restored_md}"
+        );
+        assert!(
+            !restored_md.contains("^closed"),
+            "restored closed target kept a raw id: {restored_md}"
+        );
+        assert!(restored_md.contains("Launch the work"), "{restored_md}");
+        super::super::tests::assert_no_obsidian_residue_except(
+            &restored_md,
+            &["gone"],
+        );
+        super::super::tests::assert_serialized_internal_targets_exist(
+            &restored.view,
+            &restored_md,
         );
     }
 }

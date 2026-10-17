@@ -762,6 +762,17 @@ fn pandoc_parses_the_complete_contract_as_markdown_ast_when_available() {
 /// and inline code, recognizes the generated `:::` fenced-div grammar as unrelated
 /// block syntax, and checks only actual bracketed `key:: value` field forms.
 pub(crate) fn assert_no_obsidian_residue(projected: &str) {
+    assert_no_obsidian_residue_except(projected, &[]);
+}
+
+/// Like [`assert_no_obsidian_residue`], but genuinely missing fragments
+/// may keep today's `^id` label.
+pub(crate) fn assert_no_obsidian_residue_except(
+    projected: &str,
+    allowed_block_ids: &[&str],
+) {
+    let allowed: std::collections::BTreeSet<&str> =
+        allowed_block_ids.iter().copied().collect();
     let mut fence: Option<(u8, usize)> = None;
     for line in projected.lines() {
         if let Some((delimiter, length)) = fence {
@@ -794,7 +805,57 @@ pub(crate) fn assert_no_obsidian_residue(projected: &str) {
                 .is_none(),
             "trailing block ID residue: {visible}"
         );
+        for id in raw_block_id_labels(&visible) {
+            assert!(
+                allowed.contains(id.as_str()),
+                "raw block-id label residue: ^{id} in {visible}"
+            );
+        }
     }
+}
+
+fn unescape_markdown_punct(text: &str) -> String {
+    let mut out = String::new();
+    let mut chars = text.chars().peekable();
+    while let Some(character) = chars.next() {
+        if character == '\\' {
+            if chars.peek().is_some_and(|next| next.is_ascii_punctuation()) {
+                out.push(chars.next().expect("peeked punctuation"));
+                continue;
+            }
+        }
+        out.push(character);
+    }
+    out
+}
+
+fn raw_block_id_labels(visible: &str) -> Vec<String> {
+    let unescaped = unescape_markdown_punct(visible);
+    let chars: Vec<char> = unescaped.chars().collect();
+    let mut ids = Vec::new();
+    let mut index = 0;
+    while index < chars.len() {
+        if chars[index] == '^' {
+            let boundary = index == 0 || !is_block_id_char(chars[index - 1]);
+            if boundary {
+                let mut end = index + 1;
+                while end < chars.len() && is_block_id_char(chars[end]) {
+                    end += 1;
+                }
+                if end > index + 1 {
+                    ids.push(chars[index + 1..end].iter().collect());
+                    index = end;
+                    continue;
+                }
+            }
+        }
+        index += 1;
+    }
+    ids
+}
+
+fn is_block_id_char(character: char) -> bool {
+    character.is_ascii_alphanumeric() || character == '-'
 }
 
 pub(crate) fn assert_serialized_internal_targets_exist(

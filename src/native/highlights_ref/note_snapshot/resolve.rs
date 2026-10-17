@@ -2,9 +2,10 @@
 //!
 //! [`VaultNotes`] wraps [`VaultLinkResolver`](crate::native::vault_links::VaultLinkResolver):
 //! the stripped note part of a content link resolves to one member vault
-//! note, with alias and heading/block fragment retained separately. The same
-//! vault-membership exclusions as target classification apply, so library and
-//! intake directories never shadow real notes through a bare basename.
+//! note, with alias and heading/block fragment retained separately. Snapshot
+//! TARGET classification stays member-only. Content links then fall back to a
+//! unique excluded (non-dot) file so library paths resolve without shadowing
+//! real notes through a bare basename.
 //!
 //! [`FragmentIndex`] is built lazily over cached source bytes and maps one
 //! note's headings and block IDs to source extents: heading embeds select
@@ -32,7 +33,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use super::classify::vault_member_relative;
+use super::classify::{relative_has_dot_directory, vault_member_relative};
 use super::view::{AssetMediaKind, SnapshotAsset};
 use crate::native::vault_links::VaultLinkResolver;
 
@@ -293,7 +294,8 @@ impl VaultNotes {
     /// is the host note's vault-relative path (used only for error context;
     /// basename fallback is vault-wide). Targets whose only matches live in
     /// excluded directories report missing, keeping intake/library files
-    /// from shadowing real notes.
+    /// from shadowing real notes. Snapshot TARGET classification uses this
+    /// member-only view; content links use [`Self::resolve_content_target`].
     pub(crate) fn resolve_note(
         &self,
         current_relative: &Path,
@@ -334,8 +336,7 @@ impl VaultNotes {
         candidates.dedup();
         match candidates.len() {
             0 => {
-                // An excluded on-disk hit is not a vault note for content
-                // links: report it missing rather than inventing a target.
+                // An excluded on-disk hit is not a snapshot-member note.
                 Err(NoteResolveError::Missing {
                     display,
                     suggestions: self.member_suggestions(&parsed.note),
@@ -357,6 +358,75 @@ impl VaultNotes {
                     .map(|(_, relative)| relative)
                     .collect(),
             }),
+        }
+    }
+
+    /// Content-link resolution: member notes first, then a unique file
+    /// that exists in an excluded (non-dot) directory. A member always
+    /// wins over an excluded file, so library copies never shadow real
+    /// notes. Dot-directory hits stay missing. Non-Markdown attachments
+    /// are the caller's third step via [`AttachmentIndex`].
+    pub(crate) fn resolve_content_target(
+        &self,
+        current_relative: &Path,
+        parsed: &ParsedLinkTarget,
+    ) -> Result<ResolvedNote, NoteResolveError> {
+        match self.resolve_note(current_relative, parsed) {
+            Ok(resolved) => Ok(resolved),
+            Err(error @ NoteResolveError::Ambiguous { .. }) => Err(error),
+            Err(NoteResolveError::Missing {
+                display,
+                suggestions,
+            }) => {
+                let mut excluded = self
+                    .resolver
+                    .candidates(&parsed.note)
+                    .into_iter()
+                    .filter_map(|relative| {
+                        if relative_has_dot_directory(&relative) {
+                            return None;
+                        }
+                        let canonical =
+                            self.root.join(&relative).canonicalize().ok()?;
+                        if canonical == self.root
+                            || !canonical.starts_with(&self.root)
+                            || !canonical.is_file()
+                        {
+                            return None;
+                        }
+                        if vault_member_relative(&self.root, &canonical)
+                            .is_some()
+                        {
+                            return None;
+                        }
+                        Some((canonical, relative))
+                    })
+                    .collect::<Vec<_>>();
+                excluded.sort();
+                excluded.dedup();
+                match excluded.len() {
+                    0 => Err(NoteResolveError::Missing {
+                        display,
+                        suggestions,
+                    }),
+                    1 => {
+                        let (canonical_path, vault_relative_path) =
+                            excluded.into_iter().next().expect("counted one");
+                        Ok(ResolvedNote {
+                            canonical_path,
+                            vault_relative_path,
+                            same_note: false,
+                        })
+                    }
+                    _ => Err(NoteResolveError::Ambiguous {
+                        display,
+                        candidates: excluded
+                            .into_iter()
+                            .map(|(_, relative)| relative)
+                            .collect(),
+                    }),
+                }
+            }
         }
     }
 
@@ -398,6 +468,24 @@ impl VaultNotes {
             },
         )
     }
+}
+
+/// True when `note` names a file with an extension other than `.md`, so
+/// content-link resolution should consult the attachment index after
+/// member and excluded-note lookup.
+pub(crate) fn has_non_markdown_extension(note: &str) -> bool {
+    Path::new(note)
+        .extension()
+        .and_then(OsStr::to_str)
+        .is_some_and(|extension| !extension.eq_ignore_ascii_case("md"))
+}
+
+/// True when a vault-relative path is a Markdown note.
+pub(crate) fn is_markdown_relative(relative: &Path) -> bool {
+    relative
+        .extension()
+        .and_then(OsStr::to_str)
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("md"))
 }
 
 fn fragment_display(parsed: &ParsedLinkTarget) -> String {
@@ -1385,9 +1473,57 @@ mod tests {
             "{suggestions:?}"
         );
 
-        // Even an explicit excluded path is not a content-link target.
+        // Even an explicit excluded path is not a snapshot-member note.
         assert!(matches!(
             resolve(&notes, "Real.md", "xlib/Intake"),
+            Err(NoteResolveError::Missing { .. })
+        ));
+        assert!(notes
+            .existing_vault_file(&parse_link_target("xlib/Intake"))
+            .is_some());
+    }
+
+    fn resolve_content(
+        notes: &VaultNotes,
+        host: &str,
+        raw: &str,
+    ) -> Result<ResolvedNote, NoteResolveError> {
+        notes.resolve_content_target(Path::new(host), &parse_link_target(raw))
+    }
+
+    #[test]
+    fn content_targets_resolve_unique_excluded_files() {
+        let directory = synthetic_vault(&[
+            ("Real.md", "# Real\n"),
+            ("ref/x.md", "# Member\n"),
+            ("lib/x.md", "# Library\n"),
+            ("lib/chat/sidecar.md", "# Sidecar\n"),
+            ("xlib/Intake.md", "# Intake\n"),
+            (".hidden/secret.md", "# Hidden\n"),
+        ]);
+        let (_root, notes) = vault_notes(&directory);
+
+        let sidecar = resolve_content(&notes, "Real.md", "lib/chat/sidecar")
+            .expect("excluded exact path");
+        assert_eq!(
+            sidecar.vault_relative_path,
+            PathBuf::from("lib/chat/sidecar.md")
+        );
+
+        let member =
+            resolve_content(&notes, "Real.md", "x").expect("member wins");
+        assert_eq!(member.vault_relative_path, PathBuf::from("ref/x.md"));
+
+        let intake = resolve_content(&notes, "Real.md", "Intake")
+            .expect("unique excluded basename");
+        assert_eq!(intake.vault_relative_path, PathBuf::from("xlib/Intake.md"));
+
+        assert!(matches!(
+            resolve_content(&notes, "Real.md", ".hidden/secret"),
+            Err(NoteResolveError::Missing { .. })
+        ));
+        assert!(matches!(
+            resolve_content(&notes, "Real.md", "gone"),
             Err(NoteResolveError::Missing { .. })
         ));
     }

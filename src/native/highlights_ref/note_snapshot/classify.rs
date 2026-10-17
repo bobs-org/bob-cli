@@ -386,6 +386,25 @@ pub(crate) fn vault_member_relative(
     Some(relative.to_path_buf())
 }
 
+/// True when any directory component of a vault-relative path is a
+/// dot-directory. The file name itself is ignored, matching
+/// [`vault_member_relative`].
+pub(crate) fn relative_has_dot_directory(relative: &Path) -> bool {
+    let mut names = Vec::new();
+    for component in relative.components() {
+        match component {
+            Component::Normal(name) => names.push(name),
+            _ => return true,
+        }
+    }
+    let Some(directories) = names.get(..names.len().saturating_sub(1)) else {
+        return false;
+    };
+    directories
+        .iter()
+        .any(|name| name.to_str().is_some_and(|name| name.starts_with('.')))
+}
+
 fn is_within_vault(vault_root: &Path, canonical: &Path) -> bool {
     canonical.starts_with(vault_root)
 }

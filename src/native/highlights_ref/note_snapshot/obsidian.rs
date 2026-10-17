@@ -40,13 +40,14 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use super::classify::{SourceLoader, SourceStore};
+use super::classify::{relative_has_dot_directory, SourceLoader, SourceStore};
 use super::resolve::{
-    build_fragment_index, obsidian_uri, obsidian_uri_with_fragment,
-    parse_attachment_target, parse_link_target, width_hint_to_percent,
-    AttachmentIndex, AttachmentResolutionError, FragmentIndex, FragmentLookup,
-    LinkFragment, NoteResolveError, ParsedLinkTarget, ResolvedAttachment,
-    ResolvedNote, VaultNotes,
+    build_fragment_index, has_non_markdown_extension, is_markdown_relative,
+    obsidian_uri, obsidian_uri_with_fragment, parse_attachment_target,
+    parse_link_target, width_hint_to_percent, AttachmentIndex,
+    AttachmentResolutionError, FragmentIndex, FragmentLookup, LinkFragment,
+    NoteResolveError, ParsedAttachmentTarget, ParsedLinkTarget,
+    ResolvedAttachment, ResolvedNote, VaultNotes,
 };
 use super::view::{
     AnchorIdentity, AnchorKind, Block, Chip, ChipKind, HeadingClass,
@@ -2243,6 +2244,19 @@ fn note_stem(relative: &Path) -> String {
         .to_string()
 }
 
+/// Visible label for a resolved content-link file: the stem for notes,
+/// otherwise the file name (keeping a non-Markdown extension).
+fn content_file_label(relative: &Path) -> String {
+    if is_markdown_relative(relative) {
+        return note_stem(relative);
+    }
+    relative
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default()
+        .to_string()
+}
+
 /// Display route of a vault-relative path: `/`-joined, without `.md`.
 fn note_route(relative: &Path) -> String {
     let route = relative.to_string_lossy().replace('\\', "/");
@@ -2362,18 +2376,28 @@ impl<'a, L: SourceLoader> Projector<'a, L> {
                 return (vec![Inline::Text("[[#]]".to_string())], None, None);
             };
             return match self.host_index.lookup(fragment) {
-                FragmentLookup::Found(span) => (
-                    vec![Inline::Text(span.label)],
-                    Some(LinkTarget::Internal(AnchorIdentity {
-                        source: self.host.clone(),
-                        kind: match fragment {
-                            LinkFragment::Heading(_) => AnchorKind::Heading,
-                            LinkFragment::Block(_) => AnchorKind::Block,
-                        },
-                        fragment: fragment_key(fragment),
-                    })),
-                    None,
-                ),
+                FragmentLookup::Found(span) => {
+                    let label = match fragment {
+                        LinkFragment::Block(id) => {
+                            let canonical = self.host.canonical_path.clone();
+                            self.block_excerpt(&canonical, id, line_no)
+                                .unwrap_or(span.label)
+                        }
+                        LinkFragment::Heading(_) => span.label,
+                    };
+                    (
+                        vec![Inline::Text(label)],
+                        Some(LinkTarget::Internal(AnchorIdentity {
+                            source: self.host.clone(),
+                            kind: match fragment {
+                                LinkFragment::Heading(_) => AnchorKind::Heading,
+                                LinkFragment::Block(_) => AnchorKind::Block,
+                            },
+                            fragment: fragment_key(fragment),
+                        })),
+                        None,
+                    )
+                }
                 FragmentLookup::Missing => (
                     vec![Inline::Text(fragment_label(fragment))],
                     None,
@@ -2398,26 +2422,25 @@ impl<'a, L: SourceLoader> Projector<'a, L> {
                 ),
             };
         }
-        let resolved =
-            match self.vault.resolve_note(&self.host_relative, parsed) {
-                Ok(resolved) => resolved,
-                Err(error) => {
-                    let kind = match &error {
-                        NoteResolveError::Missing { .. } => {
-                            SnapshotWarningKind::UnresolvedLink
-                        }
-                        NoteResolveError::Ambiguous { .. } => {
-                            SnapshotWarningKind::AmbiguousLink
-                        }
-                    };
-                    return (
-                        vec![Inline::Text(parsed.note.clone())],
-                        None,
-                        Some((kind, error.to_string())),
-                    );
-                }
-            };
-        let stem = note_stem(&resolved.vault_relative_path);
+        let resolved = match self.resolve_content_target(parsed) {
+            Ok(resolved) => resolved,
+            Err(error) => {
+                let kind = match &error {
+                    NoteResolveError::Missing { .. } => {
+                        SnapshotWarningKind::UnresolvedLink
+                    }
+                    NoteResolveError::Ambiguous { .. } => {
+                        SnapshotWarningKind::AmbiguousLink
+                    }
+                };
+                return (
+                    vec![Inline::Text(parsed.note.clone())],
+                    None,
+                    Some((kind, error.to_string())),
+                );
+            }
+        };
+        let stem = content_file_label(&resolved.vault_relative_path);
         let is_self = resolved.canonical_path == self.host.canonical_path;
         let file = relative_uri_path(&resolved.vault_relative_path);
         match &parsed.fragment {
@@ -2505,6 +2528,57 @@ impl<'a, L: SourceLoader> Projector<'a, L> {
                         let warning =
                             self.check_external_fragment(&resolved, fragment);
                         (vec![Inline::Text(stem)], Some(uri), warning)
+                    }
+                }
+            }
+        }
+    }
+
+    /// Member notes, then unique excluded (non-dot) files, then a
+    /// non-Markdown attachment. Library files never shadow real notes.
+    fn resolve_content_target(
+        &mut self,
+        parsed: &ParsedLinkTarget,
+    ) -> Result<ResolvedNote, NoteResolveError> {
+        match self
+            .vault
+            .resolve_content_target(&self.host_relative, parsed)
+        {
+            Ok(resolved) => Ok(resolved),
+            Err(error @ NoteResolveError::Ambiguous { .. }) => Err(error),
+            Err(error @ NoteResolveError::Missing { .. }) => {
+                if !has_non_markdown_extension(&parsed.note) {
+                    return Err(error);
+                }
+                let attach = ParsedAttachmentTarget {
+                    path: parsed.note.clone(),
+                    width_px: None,
+                };
+                match self.attachments.resolve(&self.host_relative, &attach) {
+                    Ok(found) => {
+                        if relative_has_dot_directory(
+                            &found.vault_relative_path,
+                        ) {
+                            return Err(error);
+                        }
+                        Ok(ResolvedNote {
+                            canonical_path: found.canonical_source_path,
+                            vault_relative_path: found.vault_relative_path,
+                            same_note: false,
+                        })
+                    }
+                    Err(AttachmentResolutionError::Ambiguous {
+                        display,
+                        candidates,
+                    }) => Err(NoteResolveError::Ambiguous {
+                        display,
+                        candidates: candidates
+                            .into_iter()
+                            .map(PathBuf::from)
+                            .collect(),
+                    }),
+                    Err(AttachmentResolutionError::Missing { .. }) => {
+                        Err(error)
                     }
                 }
             }
@@ -3015,8 +3089,42 @@ fn strip_emphasis_markers(text: &str) -> String {
         }
     }
     let mut out = plain;
-    for marker in ["**", "__", "*", "_"] {
+    for marker in ["**", "*"] {
         out = out.replace(marker, "");
+    }
+    strip_underscore_emphasis(&out)
+}
+
+/// Unwrap `_`/`__` emphasis only at word boundaries, per CommonMark
+/// flanking rules. Intraword underscores (`sase_blog`, `snake_case_name`)
+/// stay literal.
+fn strip_underscore_emphasis(text: &str) -> String {
+    let mut out = String::new();
+    let mut cursor = 0;
+    while cursor < text.len() {
+        let rest = &text[cursor..];
+        let prev = out.chars().next_back();
+        if let Some((inner, consumed)) =
+            match_delimited_underscore(rest, 2, prev)
+        {
+            out.push_str(&inner);
+            cursor += consumed;
+            continue;
+        }
+        if let Some((inner, consumed)) =
+            match_delimited_underscore(rest, 1, prev)
+        {
+            out.push_str(&inner);
+            cursor += consumed;
+            continue;
+        }
+        let next = rest
+            .chars()
+            .next()
+            .map(|character| character.len_utf8())
+            .unwrap_or(1);
+        out.push_str(&rest[..next]);
+        cursor += next;
     }
     out
 }
@@ -3811,6 +3919,106 @@ mod tests {
     }
 
     #[test]
+    fn same_note_block_refs_use_excerpts() {
+        let (_dir, projection) = host_only(
+            "- [ ] Launch the work #task ^launch\n\
+             See [[#^launch]] and [[#^missing]].\n",
+        );
+        let targets = link_targets(&projection.blocks);
+        assert!(
+            targets
+                .iter()
+                .any(|target| target == "Launch the work=>int:launch"),
+            "{targets:?}"
+        );
+        let missing =
+            warnings_of(&projection, SnapshotWarningKind::MissingFragment);
+        assert_eq!(missing.len(), 1, "{missing:?}");
+        let flat = shapes(&projection.blocks).join("\n");
+        assert!(flat.contains("^missing"), "{flat}");
+        assert!(!flat.contains("^launch"), "{flat}");
+    }
+
+    #[test]
+    fn content_links_resolve_existing_vault_files() {
+        let (_dir, projection) = project_host(
+            &[
+                (
+                    "Host.md",
+                    "See [[lib/chat/sidecar]], [[x]], [[lib/doc.pdf]], \
+                     [[img/a.png]], [[refs.base]], [[.hidden/secret]], \
+                     and [[Missing File]].\n",
+                ),
+                ("ref/x.md", "# Member X\n"),
+                ("lib/x.md", "# Library X\n"),
+                ("lib/chat/sidecar.md", "# Sidecar\n"),
+                ("lib/doc.pdf", "pdf-bytes"),
+                ("img/a.png", "png-bytes"),
+                ("refs.base", "base-bytes"),
+                (".hidden/secret.md", "# Hidden\n"),
+            ],
+            "Host.md",
+        );
+        let targets = link_targets(&projection.blocks);
+        assert!(
+            targets.iter().any(|target| {
+                target.starts_with("sidecar=>obs:")
+                    && target.contains("&file=lib%2Fchat%2Fsidecar.md")
+            }),
+            "{targets:?}"
+        );
+        assert!(
+            targets.iter().any(|target| {
+                target.starts_with("x=>obs:")
+                    && target.contains("&file=ref%2Fx.md")
+            }),
+            "{targets:?}"
+        );
+        assert!(
+            targets.iter().any(|target| {
+                target.starts_with("doc.pdf=>obs:")
+                    && target.contains("&file=lib%2Fdoc.pdf")
+            }),
+            "{targets:?}"
+        );
+        assert!(
+            targets.iter().any(|target| {
+                target.starts_with("a.png=>obs:")
+                    && target.contains("&file=img%2Fa.png")
+            }),
+            "{targets:?}"
+        );
+        assert!(
+            targets.iter().any(|target| {
+                target.starts_with("refs.base=>obs:")
+                    && target.contains("&file=refs.base")
+            }),
+            "{targets:?}"
+        );
+        assert!(
+            !targets.iter().any(|target| target.contains("secret")),
+            "{targets:?}"
+        );
+        let missing =
+            warnings_of(&projection, SnapshotWarningKind::UnresolvedLink);
+        assert_eq!(missing.len(), 2, "{missing:?}");
+        assert!(
+            missing
+                .iter()
+                .any(|message| message.contains(".hidden/secret")),
+            "{missing:?}"
+        );
+        assert!(
+            missing
+                .iter()
+                .any(|message| message.contains("Missing File")),
+            "{missing:?}"
+        );
+        assert_eq!(projection.links_resolved, 5, "{targets:?}");
+        assert_eq!(projection.links_unresolved, 2);
+    }
+
+    #[test]
     fn ambiguous_notes_warn_without_choosing() {
         let (_dir, projection) = project_host(
             &[
@@ -3865,6 +4073,17 @@ mod tests {
                 "See [[Note|Alias]] and **bold** `code` #keep #task"
             ),
             "See Alias and bold code #keep"
+        );
+    }
+
+    #[test]
+    fn excerpt_cleaning_keeps_intraword_underscores() {
+        assert_eq!(clean_readable_text("sase_blog"), "sase_blog");
+        assert_eq!(clean_readable_text("_emph_"), "emph");
+        assert_eq!(clean_readable_text("snake_case_name"), "snake_case_name");
+        assert_eq!(
+            clean_readable_text("- [ ] Read [[sase_blog]] ^t1"),
+            "Read sase_blog"
         );
     }
 
