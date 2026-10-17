@@ -371,6 +371,7 @@ remaining item.
 | `Ctrl+R` | Regenerate recommendation and priority previews; no write |
 | `Enter` | Open the selected action; Schedule is the default |
 | `b` / Ctrl+Shift+B | Blocked by (the existing Depends on stage; the dependent is unlinked from today's open Pomodoros once it becomes Blocked; on `^prj` it also blocks, tags, and unlinks residents, per [§13.10](task-dependencies.md#1310-gestures-on-prj)). Ctrl+Shift+B is that same row in one chord. |
+| ⇧B / Ctrl+Shift+Alt+B | Blocks… (reverse Depends on; see [task-dependencies.md §15](task-dependencies.md#15-the-blocks-stage-navigation-hotkeys)); the row shows open dependents and how many become Ready if this task is removed. |
 | `f` | Review every (the existing Refresh stage) |
 | `x` | Open the cancel-reason stage; never cancel on the key alone |
 | `Alt+N` | Commit to Next or release to Ready |

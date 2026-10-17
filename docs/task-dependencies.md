@@ -22,6 +22,10 @@ vector tables it needs from this file into its tests, citing the
 section in a comment. If an implementation disagrees with a vector, fix
 this doc first in the same change.
 
+Navigation has two symmetric writers: the Depends on stage (§6) and the
+reverse Blocks stage (§15). Both write the dependent's Depends-On line;
+neither reads a BLOCKS line as input.
+
 ## 1. Vocabulary
 
 - **Task Dependency Link** (aka **task dep link**, **dep link**): a
@@ -250,11 +254,14 @@ and no R2 exception.
   T's `⛓️ **DEPENDS ON:**` line gains N, N's `🧱 **BLOCKS:**` line is
   the generated mirror, and T becomes `[?]` with the usual promotion,
   freshness, and consumption side effects. Capture `*note:block-id`
-  is the v1 writer (`docs/capture.md`); a reverse Blocks… stage in
-  Obsidian can share this meaning. A new N is capped at Next `[*]`;
-  an existing owner follows the ordinary transfer and may become
-  `[/]`. A `^prj` N is never raised. A `^prj` T whose project
-  contains N (or a descendant of that project) is refused.
+  is the CLI writer (`docs/capture.md`); the reverse Blocks stage
+  (§15) is its Obsidian twin. The stage works from an existing N. Its
+  lane follows the ordinary transfer and may become `[/]`, but N
+  is never stamped for its target-ID, lane, or BLOCKS edits. A
+  `^prj` N is never raised. Capture caps only a newly captured N at
+  Next `[*]`. A `^prj` T whose project contains N (or a
+  descendant of that project) is refused.
+
 - **Removing a dependency** recovers the dependent to its derived rank
   _immediately_ when no open prerequisite, no future `scheduled` date,
   and no remaining project reason remain. Otherwise it stays `[?]`.
@@ -269,6 +276,9 @@ and no R2 exception.
 
 | Cursor | Gesture | Edits |
 | --- | --- | --- |
+| A task line | Ctrl+Shift+P then `⇧B` on the Task Card, or Ctrl+Shift+Alt+B | this task's Blocks stage (§15) |
+| A dedicated Task Link | Ctrl+Shift+P then `⇧B`, or Ctrl+Shift+Alt+B | focuses the linked note before opening its Blocks stage on the linked task (§15) |
+| A task line, counted | `N<Ctrl+Shift+P>` then `⇧B`, or `N<Ctrl+Shift+Alt+B>` | these sources in order; each picked task gains every source as a prerequisite (§15) |
 | A `#task` line | Ctrl+Shift+P then `b` on the Task Card (Blocked by), or Ctrl+Shift+B | this task; on `^prj`, the line plus resident side effects (§13) |
 | Anywhere on a Depends-On line, including inside a link | Ctrl+Shift+P (skips the card and the property step) | the **owning** task, never the link under the cursor |
 | A dedicated Task Link | Ctrl+Shift+P then `b`, or Ctrl+Shift+B | focuses the linked note's tab (opening it if needed) before opening the stage on the **linked** task, named in the title |
@@ -481,6 +491,7 @@ last-blocker badge, and `frees N` summaries (§14.9).
 
 | Gesture | Behaviour |
 | --- | --- |
+| Ctrl+Shift+Alt+B or Task Card ⇧B | Opens the reverse Blocks stage on the source task; see §15 for entries, guards, previews, writes, and outcomes. |
 | `!` / `N!` | Only toggles transclusion. Refused on a Depends-On line, with a notice pointing to Ctrl+Shift+P. |
 | Ctrl+Enter on a link on the line | Closes or reopens the **target** only: root-only, no strike, no re-embed, no tree close. Dependents recover immediately. |
 | Cycler strike/restore when a target closes or reopens elsewhere | Skips Depends-On lines. |
@@ -576,6 +587,20 @@ app.plugins.plugins["bob-navigation-hotkeys"].api = Object.freeze({
   `{ ok: false, reason: "unavailable" }`. block-id-prompt's
   Ctrl+Shift+Enter routes through this namespace and falls back to
   today's behavior when it is absent.
+
+Additive blocks v1 namespace (api.version stays 3; consumers feature-detect
+api.blocks?.version >= 1):
+
+- blocks.openStage(ref) opens the Blocks stage for the owning task. ref is
+  { path, line }, where line is any line of the task block, its Depends-On
+  line, or its BLOCKS line.
+- blocks.removeDependent(ownerRef, target) removes dependent T through the
+  Blocks writer. target is { path, blockId }.
+- Both return Promises resolving to { ok, reason? } and never throw.
+  Refusals use invalid-ref, line-out-of-range, or note-not-open unless the
+  active view is ref.path / ownerRef.path. removeDependent returns
+  not-a-dependent when T does not list the owner; it never silently succeeds.
+- With a null plugin, both resolve { ok: false, reason: "unavailable" }.
 
 ## 10. Legacy window and rollout
 
@@ -2907,6 +2932,7 @@ reconcile.
 
 | Writer | BLOCKS behaviour |
 | --- | --- |
+| nav Blocks stage (Task Card ⇧B, Ctrl+Shift+Alt+B, palette, line entries, counted, marked batches) | Applies the same Depends-On, status, freshness, lane, Pomodoro, and project effects as the equivalent forward edits (§15.6). Same-note writes use one transaction; cross-note sources are prepared before dependent notes, then BLOCKS mirrors follow only committed dependents. |
 | nav Depends on stage (Task Card `b`, Ctrl+Shift+B, Ctrl+Shift+P on the line, counted, palette, marked batches) | **Same-note targets:** the owner's BLOCKS edit and any minted dependent id go into the dependent's one transaction, so one Ctrl+Z undoes both. **Cross-note targets:** after the commit, a best-effort follow-up per target note, for old ∪ new targets. It uses the open editor (its own undo entry), otherwise a preimage-checked `vault.process`. On failure the notice gains `· 🧱 BLOCKS not updated`; nothing rolls back. Preparation never writes a reverse entry. |
 | nav removals (chip ×, api v3 `removeDependency`, Ctrl+D on the Depends on row, counted Ctrl+D) | Remove the dependent from each removed target's line, deleting the line when it empties. |
 | nav hand-edit mirror (cursor leaves an edited Depends-On line; undo re-arms it) | Diff the burst baseline's targets against the final targets and mirror the difference. Clearing the whole line removes every old target. This keeps cross-note undo honest. |
@@ -2932,11 +2958,13 @@ JS twin and pinned by the same vectors.
 
 | Gesture | Behaviour |
 | --- | --- |
-| Hand edit (typing, deleting an entry, deleting the line) | Never an edge change. Once per burst, nav shows `🧱 BLOCKS is generated from DEPENDS ON lines · change it on the dependent (Ctrl+Shift+P)`. Reconcile restores the line. |
+| Ctrl+Shift+P on a BLOCKS line | Opens the owning task's Blocks stage directly, without the Task Card. |
+| Ctrl+Shift+Alt+B on a Depends-On or BLOCKS line | Opens the owning task's Blocks stage directly, never the link under the cursor. |
+| Hand edit (typing, deleting an entry, deleting the line) | Never an edge change. Once per burst, nav shows “🧱 BLOCKS is generated from DEPENDS ON lines · edit it with Ctrl+Shift+Alt+B”. Reconcile restores the line. |
 | `!` / `N!`, Ctrl+Shift+Enter | Refused with the same notice. |
 | Ctrl+Enter on a link | Closes or reopens the linked dependent: root-only, with no strike, no re-embed, and no tree close (as §8 for Depends-On links). |
 | Alt+] / Alt+[ on the line | Cycles the dependent under the cursor; never reformats the bullet. |
-| Ctrl+Shift+P on the line, palette Edit task dependencies | Acts on the owning task (its Task Card or Depends on stage), never on the chip under the cursor. |
+| Ctrl+Shift+P on a Depends-On line, palette Edit task dependencies | Acts on the owning task (its Task Card or Depends on stage), never on the chip under the cursor. |
 
 ### 14.9 Chips
 
@@ -2944,7 +2972,7 @@ JS twin and pinned by the same vectors.
   in-memory Tasks memo (`dependsOn` / `id`, the same source as the
   Depends-On chips).
   - It is shared infrastructure, so later features can reuse it:
-    bob-cli-3p, bob-cli-3q, review cards, and the close preview.
+    review cards and the close preview.
   - Chips render the **live** set in the stored line's order. A live
     dependent missing from the text is appended in canonical order and
     counted.
@@ -2976,8 +3004,15 @@ JS twin and pinned by the same vectors.
   | open | `🧱 blocks` | `frees N` when every live chip has 🔑, else `frees N of M` |
   | closed (frozen line) | `🧱 was blocking`, muted, no badges | `✓ freed M` |
 
-- **No × or ＋ in v1.** The row tooltip reads
-  `Generated from DEPENDS ON lines · edit on the dependent`.
+- **Editing controls (decision chips = yes).** An open owner row with
+  nav api.blocks?.version >= 1 gets a trailing ＋ with aria-label “Edit what this task
+  blocks”; it opens Blocks… at the row's 0-based line. Each live chip
+  gets a hover × with aria-label “Stop blocking <name>”; it calls
+  api.blocks.removeDependent. Dashed stale chips and frozen rows get no
+  controls. Without api.blocks, rows stay navigation-only. The tooltip
+  is “Generated from DEPENDS ON lines · ＋ / × edit through Blocks…
+  (Ctrl+Shift+Alt+B)”. Controls do not change line height; Live Preview
+  and Reading view behave the same.
 - **Toggle.** `toggle-dependency-chips` toggles Depends-On and BLOCKS
   rows together.
 - **Without the plugin**, the line still reads as plain links.
@@ -3038,9 +3073,8 @@ read-only questions.
   next reconcile on an updated bob repairs the rest. Plugin guards
   must land before writers so an old recogniser never treats a BLOCKS
   line as a Task Link.
-- **Phase 2.** Editing from the prerequisite (chip × / ＋ on BLOCKS
-  rows, a Task Card Blocks row, a Blocks… stage) is a later epic
-  (bob-cli-3p).
+- **Phase 2.** Editing from the prerequisite is the Blocks stage and
+  its BLOCKS chip controls (§15).
 
 ### 14.13 BK — parse vectors
 
@@ -3146,7 +3180,324 @@ surrounds it. `verdict` is one of `accept(n)` (a line with n entries),
 | BC9 | live D missing from the stored line | appended in canonical order; counted |
 | BC10 | closed owner | `🧱 was blocking`, muted, no 🔑, `✓ freed M` (M = stored entries); entries show their current status and are never dashed as stale; a missing target shows `⚠ ^id not found` |
 | BC11 | D carries `#hide` | muted chip |
-| BC12 | interaction | click opens D, Mod-click opens a new tab, hover previews; no × / ＋ |
+| BC12 | interaction | click opens D, Mod-click opens a new tab, hover previews; on open owners with api.blocks, ＋ opens Blocks… and × removes a live dependent; no controls on stale/frozen rows or without the API |
 | BC13 | 60-character description | cut at about 40; full text in the tooltip |
 | BC14 | `toggle-dependency-chips` | toggles Depends-On and BLOCKS rows together |
 | BC15 | malformed or not-a-line BLOCKS row | no chips |
+
+## 15. The Blocks stage (navigation-hotkeys)
+
+The Blocks stage is the reverse writer for §6's Depends on stage. Let N
+be the source task where the gesture starts, and T a task chosen in the
+stage. Arrows mean “depends on”: blocking T from N stores T → N on T's
+Depends-On line. The stage never reads a BLOCKS line as input.
+
+### 15.1 Vocabulary and parity
+
+- **Source N:** the task where the gesture starts; counted gestures have
+  sources N1, N2, … in cursor order.
+- **Picked T:** an open task that N will block, by adding N to T's
+  Depends-On line.
+- **Reverse CURRENT:** N's open direct dependents, derived by inverting
+  the stage dependency edges and merging warm Tasks-cache rows whose
+  dependsOn contains N's id. It is never read from N's BLOCKS line.
+- **Parity invariant:** for each reverse gesture, the final bytes of
+  every note equal the bytes written by the corresponding forward
+  Depends on gesture or gestures.
+
+Consequences follow the same dependency semantics (§5): T becomes
+Blocked, its live links under today's open Pomodoros are consumed, and
+its open prerequisites may promote. A project T blocks its residents
+and descendants. Existing N follows the ordinary lane transfer, may
+become In Progress, and is never stamped for its target-ID, lane, or
+BLOCKS edits. A project N is never raised. A T whose Depends-On line
+changes is stamped fresh on add and remove. The stage never auto-links
+N into T's vacated
+Pomodoro slot.
+
+### 15.2 Entry points
+
+| Cursor | Gesture | Opens |
+| --- | --- | --- |
+| A task line | Ctrl+Shift+Alt+B, or Ctrl+Shift+P then ⇧B | The source task's Blocks stage; Back and empty Backspace return to the Task Card |
+| A dedicated Task Link | Same | Focuses or opens the linked task's note, then opens its Blocks stage |
+| A task line, counted | N<Ctrl+Shift+Alt+B>, or N<Ctrl+Shift+P> then ⇧B | Counted sources: this task and the next N; each picked T gains every source |
+| A Depends-On line or a BLOCKS line | Ctrl+Shift+Alt+B | The owning task's Blocks stage directly, never the link under the cursor |
+| A BLOCKS line | Ctrl+Shift+P | The owning task's Blocks stage directly, without a Task Card |
+| An open-owner BLOCKS chip row | ＋ / hover × | Opens the stage / removes that dependent (§15.8) |
+| Anywhere | Palette command Task card: Blocks (reverse Depends on), id task-card-blocks | Same as the chord |
+
+Entry refusals close the Task Card and show a short Notice:
+
+- A non-task bullet: Blocks requires a #task checkbox.
+- A closed N: 🧱 A finished task can't block another task · reopen it first.
+- N in done/ or the previous daily note: the existing read-only refusal.
+- Fenced or blockquoted N, prose with several links, or a selection
+  spanning tasks: the existing Ctrl+Shift+P refusal.
+- N has no id and its path cannot be encoded: 🧱 This note's path can't
+  be a dependency id · add [id::] or rename the note.
+
+### 15.3 Pool and ranking
+
+The pool is the forward stage's pool (§6.2): Tasks cache, open buffers,
+then generation-guarded chunked vault fallback when the cache is cold.
+Sources are excluded. Search and navigation do no disk reads.
+
+Reverse CURRENT is read from the dependency graph and merged with warm
+Tasks-cache dependents. Today's live Task Links are read once when the
+stage opens, from the open daily-note buffer or one generation-guarded
+async read. The model records each linked task's Pomodoro entry label,
+time range, running state, and whether the link has child notes.
+
+With an empty query, rows rank as follows:
+
+1. CURRENT.
+2. RESULTS: tasks linked today first (running entry first, then entry
+   and link order), then In Progress, Next, tasks in N's note in
+   document order, then the remaining tasks in canonical order.
+3. BLOCKED last. Hidden tasks are muted and last within each group.
+
+For a typed query, match score leads and this order breaks ties. The
+stage renders about 60 rows and then a stage-more row.
+
+### 15.4 Task Card row and stage rows
+
+The Task Card has a Blocks… row after Blocked by, with keycap ⇧B.
+Its detail is “N tasks”, plus “· frees K” when K > 0; K counts open
+dependents for which N is the last remaining reason. It comes from the
+warm Tasks cache by querying open tasks whose dependsOn contains N's id.
+It is omitted when the cache is cold or N has no id. The unavailable
+reasons are “Blocks requires a #task checkbox” and “A finished task
+can't block another task · reopen it first”.
+
+The stage reuses the wide bob-cnp modal and the Depends on stage's
+CURRENT / RESULTS / BLOCKED sections:
+
+    🧱 Blocks · Ask Kelly for references
+    Blocks 1 · frees 1 · searching 412 open tasks · ⇥ to mark several
+    [ Filter tasks ]
+    CURRENT
+      [?] Do cleanup tasks!             ↗ job            🔑    −
+    RESULTS
+      [/] Send batch applications       ↗ job  🍅 running       ＋
+      [*] Draft cover letter template   ↗ job                   ＋
+      [ ] Update LinkedIn headline      Line 14                 ＋
+    BLOCKED
+      [?] Call references               ↗ job  🔒 waits on 2    ＋
+    Becomes Blocked until this is done · this task takes In Progress ·
+    ⚠ removes its link from JOB 10:10–10:35 (running)
+    ↑↓ navigate   ⇥ mark   ↵ block   esc dismiss
+
+The title is 🧱 Blocks · <N text, up to 48 characters>, or 🧱 Blocks ·
+N tasks for counted mode. Its icon is lucide brick-wall, falling back
+to link. The results label is “Tasks this could block”; empty results
+say “No matching open tasks in the vault”.
+
+At rest, the subtitle is “Blocks K · frees F · searching P open tasks ·
+⇥ to mark several”, or “Blocks nothing yet · …” when K is zero. With
+marks it is “2 to block · 1 to remove · ↵ to apply”, adding “· names
+this task first” when N needs an id. Counted badges show k/n block.
+
+CURRENT means N's open direct dependents. BLOCKED candidates remain
+valid picks. The stage uses the existing badges: ＋ / −; 🔑 when N is
+T's last remaining reason; 🍅 for a live Task Link today, labeled
+“🍅 running” for the running entry; and 🔒 waits on N / 🔒 scheduled D
+as in the forward stage. The 🔑 tooltip is “Last thing in its way ·
+removing makes it Ready again”. The 🍅 tooltip names the Pomodoro entry
+and says blocking it removes that link. Disabled reasons use
+text-warning.
+
+A fixed-height, ellipsized consequence strip sits between the list and
+footer. It describes the highlighted row, or the marked batch, and
+announces changes with aria-live="polite". The footer action is block on
+RESULTS or BLOCKED, remove on CURRENT, and apply N with marks.
+
+### 15.5 Keys, guards, ids, counted sources, and review
+
+The stage uses the forward keys: Enter toggles the highlighted row and
+closes; with marks it applies each mark. Tab marks or unmarks and moves
+down. Escape writes nothing and allocates no ids. Back and empty
+Backspace return to the Task Card.
+
+A candidate is disabled when the forward stage opened on T would
+disable N, or any counted source:
+
+- N itself is excluded from RESULTS.
+- A cycle is checked on the trial graph after the whole batch,
+  including implicit resident-to-project edges and every open resident
+  of a project T. The tooltip gives the cycle path.
+- A project T is refused when N is in that project note or a descendant.
+- A malformed or second Depends-On line on T disables it with “its
+  Depends-On line is malformed”.
+- If T or N changed after the stage opened, the commit is refused and
+  the stage reopens fresh in the Blocks direction.
+- Removing a current dependency is always allowed.
+
+When N lacks a block id, the existing block-ID stage opens once when
+applying the change. It suggests an id against N's note; a valid free
+legacy [id::] is reused. Counted sources prompt one at a time, reserving
+ids across the batch. Escape cancels the whole gesture.
+
+For counted sources, a T already blocked by every source is removed
+from all of them; otherwise missing sources are added, in cursor order.
+This matches forward's add-to-all/remove-from-all rule.
+
+For an inbox N, the inbox-route prompt runs first. After a move, T's
+links and dependsOn ids follow N to its destination. The review-walk
+origin continues only if the commit takes N out of today's walk; N is
+not stamped, so this is uncommon.
+
+### 15.6 One gesture writes and undo
+
+The reverse writer is applyBlocksEdit({ sources, add, remove, today?,
+stamper?, dateText? }) and returns { ok, reason?, notice, committed[],
+failed[], pomodoro, blocksFailed }.
+
+1. **Preflight:** read every source note, picked T note, and today's
+   daily note (open buffers win); recheck guards on the trial graph and
+   refuse the entire gesture if a task changed since stage open.
+2. **Plan:** plan each T note's edits bottom-up with
+   planDependencyEdit, threading one working copy per note. Prepare
+  each source once with its id and the strongest pre-gesture lane among
+  newly blocked Ts; for project T, include the project and resident
+  lanes. Never raise a project source. Stamp each
+   changed T once and never stamp a source. Aggregate the Pomodoro
+   cleanup for newly Blocked tasks and project residents.
+3. **Prepare sources first:** write each source note once. Open notes
+   get one editor transaction; closed notes use a preimage-checked
+   vault.process. If a source note fails, abort before any other write
+   and report changed — reopen. When source and T share a note, fold
+   both edits and same-note BLOCKS edits into one transaction, so one
+   Ctrl+Z undoes a same-note gesture.
+4. **Commit other T notes:** one write per note, with a minted T id in
+   T's own write. Collect failures without rolling back other notes.
+5. **Mirror:** plan each source's BLOCKS edit once from its post-prepare
+   content and only Ts that committed. Never list an id not on disk.
+6. **Consume:** run aggregated daily-note cleanup once, folding it into
+   an earlier write if that note was already touched. Cleanup failures
+   add “Pomodoro links not removed” and are not rolled back.
+7. **Projects:** run the existing sub-project passes for each committed
+   project T.
+8. **Finish:** show one notice (§15.7) and continue the review origin.
+
+A same-note gesture has one Ctrl+Z entry. Across notes, each open T
+note has one entry; an open source can have a prepare entry and a later
+mirror entry. Closed notes written by vault.process have no undo entry.
+The toggle from a reverse edge back to its prior state is the Blocks
+stage followed by ↵ on the CURRENT row.
+
+The forward writer and its existing tests remain byte-identical,
+besides the shared duplicate-preparation fix covered by RBW6.
+
+### 15.7 Notices and consequence-strip copy
+
+Task names in notices are cleaned and cut at about 40 characters.
+
+| Outcome | Notice |
+| --- | --- |
+| One add; T was Ready | 🧱 Now blocks “Do cleanup tasks” · Ready → Blocked |
+| One add; T was Next and N rose | 🧱 Now blocks “Do cleanup tasks” · Next → Blocked · takes Next |
+| Add consumed a link | Append · removed 1 Pomodoro link |
+| One add; T already Blocked | 🧱 Now blocks “Call references” · still Blocked (waits on 3) |
+| Project T | 🧱 Now blocks project “sase” · 4 tasks Blocked · removed 2 Pomodoro links |
+| One removal; T freed | 🧱 No longer blocks “Do cleanup tasks” · Ready again |
+| One removal; T not freed | 🧱 No longer blocks “Call references” · still Blocked |
+| Several | 🧱 Now blocks 3 tasks · 1 removed · takes In Progress |
+| Counted | 🧱 2 tasks now block “Do cleanup tasks” / 🧱 2 tasks now block 3 tasks |
+| Partial | Append · 1 task not updated (changed — reopen) |
+| Mirror failure | Append · 🧱 BLOCKS not updated |
+
+| Highlight or batch | Consequence strip |
+| --- | --- |
+| A RESULTS row | Becomes Blocked until this is done |
+| T is Next or In Progress | Append · this task takes Next / · this task takes In Progress |
+| T is linked today | Append · ⚠ removes its link from JOB 10:10–10:35 (running) |
+| The link has child notes | Append and the 2 notes under it |
+| A BLOCKED row | Also waits on this (3 open) |
+| A project T | Project becomes Blocked · 4 tasks wait · ⚠ removes 2 Pomodoro links |
+| A CURRENT row | Stops waiting on this · Ready again (🔑) / Stops waiting on this · still Blocked |
+| A disabled row | ⟲ would create a cycle: Ask Kelly → Cleanup → Ask Kelly, or the guard reason |
+| Marks | ↵ blocks 2 · removes 1 · this task takes In Progress · ⚠ removes 1 Pomodoro link |
+
+The generated-line hand-edit notice is “🧱 BLOCKS is generated from
+DEPENDS ON lines · edit it with Ctrl+Shift+Alt+B”.
+
+### 15.8 BLOCKS chip controls
+
+When the chips decision is yes and nav exposes api.blocks?.version >= 1,
+an open owner's BLOCKS row gets a
+trailing ＋ with aria-label “Edit what this task blocks”. It calls
+api.blocks.openStage({ path, line }) with the row's 0-based line. Each
+live chip gets a hover × with aria-label “Stop blocking <name>” and
+calls api.blocks.removeDependent. Dashed stale chips and frozen
+“🧱 was blocking” rows get neither control. Without api.blocks, rows
+remain navigation-only. Clicking, Mod-clicking, and hovering chips
+work as before; controls do not change line height, in Live Preview or
+Reading view.
+
+### 15.9 RB — reverse Blocks vectors
+
+Each parity vector compares final vault bytes with the corresponding
+forward gesture or gestures.
+
+**RBP — parity**
+
+| # | Situation | Outcome |
+| --- | --- | --- |
+| RBP1 | N and T share a note; T Ready; N lacks an id | N gets the prompted id and [id::]. T gains its line and field, becomes Blocked and fresh. N's BLOCKS lists T. One transaction; bytes equal forward add |
+| RBP2 | T is in another note open in a background leaf | N's note is prepared, T gets one transaction, and N's BLOCKS is a follow-up; bytes equal forward |
+| RBP3 | T is in a closed note | T is written through preimage-checked vault.process; bytes equal forward |
+| RBP4 | T [*] → N [*]; T [/] → N [/]; project N with T [*] | Ordinary transfer; project N is never raised |
+| RBP5 | T is linked under the running entry as its only child | Link is consumed and emptied entry deleted; notice says removed 1 Pomodoro link; bytes equal forward |
+| RBP6 | T is a project with residents and a sub-project | Residents become Blocked and tagged #prj_is_blocked, their links are consumed, and cascade runs; bytes equal forward |
+| RBP7 | T1 [*] in note A, T2 [/] in note B | N prepared once and ends [/]; bytes equal forward(T1+N) then forward(T2+N) |
+| RBP8 | Counted sources N1 and N2; pick T | T's line gains N1 then N2; bytes equal forward(T + N1, N2) |
+| RBP9 | dependencies.blocks_lines is false | No BLOCKS edits; N still gets an id |
+| RBP10 | ↵ on CURRENT T whose only reason is N | T becomes Ready and fresh, with no [unblocked::]. N's BLOCKS drops T and is deleted when empty; bytes equal forward removal |
+| RBP11 | N is an inbox task | Route prompt comes first; after the move, T's link and dependsOn id point to N's destination |
+
+**RBG — guards and refusals**
+
+| # | Situation | Outcome |
+| --- | --- | --- |
+| RBG1 | N itself | Excluded from RESULTS |
+| RBG2 | N already depends on T directly, transitively, through a project resident, or via a batch-induced cycle | Disabled with would create a cycle and path tooltip |
+| RBG3 | Project T; N is in its note or descendant | inside this project / inside a sub-project of this project |
+| RBG4 | T has a malformed or second Depends-On line | its Depends-On line is malformed |
+| RBG5 | T or N changed after stage open | Refused and reopened fresh in Blocks direction; nothing written |
+| RBG6 | N is closed, a plain bullet, in done/ or previous daily note, fenced, or blockquoted | Refused at entry with §15.2 copy; no card remains open |
+| RBG7 | N's path cannot be encoded and it has no [id::] | Refused at entry |
+| RBG8 | Escape from stage or block-ID prompt | Vault is byte-identical; no ids allocated |
+
+**RBW — writes and failures**
+
+| # | Situation | Outcome |
+| --- | --- | --- |
+| RBW1 | N's note changes between preflight and source write | Nothing written; changed — reopen |
+| RBW2 | One T note changes between preflight and its write | Other notes land; notice says 1 task not updated (changed — reopen); N's BLOCKS omits T |
+| RBW3 | Every pick is already present or absent | No write and no undo entry |
+| RBW4 | N is in today's daily note and T is linked today | Cleanup folds into N's note transaction |
+| RBW5 | Stage opened from review-walk landing on N | Walk advances only if commit takes N out of today's walk |
+| RBW6 | Existing forward counted gesture with two dependents in different lanes | One preparation; no target-changed |
+
+**RBU — stage and entry UI**
+
+| # | Situation | Outcome |
+| --- | --- | --- |
+| RBU1 | Empty query | Uses §15.3 order |
+| RBU2 | Today-linked rows | 🍅 / 🍅 running; strip names running entry and notes under link |
+| RBU3 | CURRENT rows | 🔑 exactly when N is the last reason |
+| RBU4 | Footer | block / remove / apply N |
+| RBU5 | Subtitle | Correct at rest, with marks, and with name-first suffix |
+| RBU6 | Task Card | Row order, ⇧B, “2 tasks · frees 1”, and unavailable reasons |
+| RBU7 | Ctrl+Shift+P and Ctrl+Shift+Alt+B on BLOCKS; Ctrl+Shift+Alt+B on Depends-On | Owner's Blocks stage directly |
+| RBU8 | Hand edit on a BLOCKS line | New generated-line notice |
+
+**RBC — chip controls (chips decision)**
+
+| # | Situation | Outcome |
+| --- | --- | --- |
+| RBC1 | Open owner with api.blocks | ＋ shown and calls openStage with 0-based line |
+| RBC2 | Hover × on a live chip | Calls removeDependent(ownerRef, { path, blockId }); notice comes from nav |
+| RBC3 | Frozen line, dashed stale chip, or no api.blocks | No ＋ / × |
+| RBC4 | Reading view | Same behavior as Live Preview |

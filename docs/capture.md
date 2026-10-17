@@ -1550,6 +1550,9 @@ field, with `role: "dependent"`). See
 
 ### Blocking existing tasks with '*'
 
+Obsidian's existing-task twin is the reverse Blocks stage, documented in
+[task-dependencies.md §15](task-dependencies.md#15-the-blocks-stage-navigation-hotkeys).
+
 `*note:block-id` is the dual of `&note:block-id`. Let N be the item's
 task (new, or an existing owner) and T the task named with `*`. Arrows
 mean "depends on":
