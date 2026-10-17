@@ -19,6 +19,7 @@ mod complete_task_link;
 mod ensure_next;
 mod freshness_stamps;
 mod link_guard;
+mod open_notes;
 mod parse;
 mod parse_blocked_task;
 mod parse_dependency;

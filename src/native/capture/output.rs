@@ -280,6 +280,9 @@ pub(super) struct CaptureResult {
     /// when the batch wrote a sub-bullet. Never per item.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(super) task_blocks: Vec<TaskBlockJson>,
+    /// Notes Control-Return should open. Always present (empty when
+    /// nothing opens). Never per item.
+    pub(super) open_notes: Vec<OpenNoteJson>,
     /// Draft-level successor-offer summary. Present on every success.
     pub(super) pull_in: PullInJson,
 }
@@ -302,6 +305,7 @@ impl CaptureResult {
         plan_budget: Option<CapturePlanBudget>,
         pomodoro_blocks: Vec<PomodoroBlockJson>,
         task_blocks: Vec<TaskBlockJson>,
+        open_notes: Vec<OpenNoteJson>,
         pull_in: PullInJson,
     ) -> Self {
         let item = items
@@ -322,6 +326,7 @@ impl CaptureResult {
             plan_budget,
             pomodoro_blocks,
             task_blocks,
+            open_notes,
             pull_in,
         }
     }

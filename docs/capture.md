@@ -4349,7 +4349,9 @@ joined with single spaces, never newlines. Editor clients such as Bob Mac Captur
 call `bob capture --format json -- <text>` and parse the JSON object, whose
 stable fields include `ok`, `dry_run`, `routed`, `route`, `route_label`,
 `relative_target`, `target`, `text`, `task_line`, `kind`, `created`,
-`placement`, and `pull_in` (`supported: true` on every success). The
+`placement`, `open_notes`, and `pull_in` (`supported: true` on every success).
+`open_notes` is a batch-level array on every success (dry-run and real run
+alike); see [Open notes](#open-notes). The
 template path additionally returns `template: {line, field_count, row_count}`
 and `template_row: {row, line}` on each expanded item, including the legacy
 top-level result for row 1. A successful real template capture also saves the
@@ -4776,6 +4778,76 @@ Field rules:
   text.
 - Dry-run JSON equals real-run JSON except for `dry_run`. Human output
   does not change. Per-item `parent_*` fields stay as they are.
+
+#### Open notes
+
+`bob capture -f json` (dry run and real run alike) always includes a
+batch-level `open_notes` array next to `task_blocks` / `pomodoro_blocks`.
+It never appears per item or inside `captures[]`. An empty array means
+nothing to open (for example a queued link). When the key is absent, the
+`bob` is older than this field. Clients should pass the entries through
+rather than re-derive paths, lines, or digests.
+
+```json
+"open_notes": [
+  {"path": "/Users/bryan/bob/mac_inbox.md", "relative_path": "mac_inbox.md",
+   "role": "note", "label": "inbox", "line": 42, "ref": "42:35a733bd"},
+  {"path": "/Users/bryan/bob/2026/20261017.md", "relative_path": "2026/20261017.md",
+   "role": "day", "label": "Today", "line": 18, "ref": "18:0c1d2e3f"}
+]
+```
+
+Selection: process items in source order. For each item, open its
+`target` (skipped when empty, as for a queued link). Then open the day
+file if this batch changed it (`BatchTextFile` present with
+`current != original`; the day file is the one `pomodoro::day_file_for`
+returns). Deduplicate by path; the first item to touch a path decides
+where that note lands. Incidental writes do not open: BLOCKS mirrors,
+the closed tasks' notes on `=x`, and prerequisite notes.
+
+Landing: prefer batch-level `task_blocks` / `pomodoro_blocks` lines
+(already in final coordinates) and the `^block_id` task line found with
+the existing task-line helpers. Otherwise fall back to the last exact
+full-line match of `task_line` in the file's final text (the helper
+behind `locate_new_task_ref`). Never use per-item line numbers; a later
+item in the same draft can shift them. "First touched Pomodoro block"
+means the first batch-level `pomodoro_blocks` entry for that file whose
+role is not `removed`, in first-touch order; its `line` is the headline.
+
+| Item kind | Where its note lands | Where the day note lands |
+| --- | --- | --- |
+| `task` (new task, any route or `^id`) | The new task line | First touched Pomodoro block |
+| `bullet` (`@route#Section`) | The new bullet line | — |
+| `sub_bullet` | The first added child line | — |
+| `task_toggle`, `link_guard`, `pomodoro_link`, `pomodoro_task` | The task line carrying `^block_id` | First touched Pomodoro block |
+| `pomodoro_start`/`_adjust`/`_shift`/`_close`/`_reset` (target is the day file) | First touched Pomodoro block | (same entry) |
+| `task_complete` (`!`) | The completed task line (`task_blocks` role `completed`) | First touched Pomodoro block |
+| `task_dependency` (`&`, `*` owner) | The owner task line (`task_blocks` role `dependency`) | — |
+| `project_note` | The `^prj` line of the new note | First touched Pomodoro block |
+| `ref` already in the library or intake | No line: open the note or PDF | — |
+| `ref` queued | Nothing opens (empty target) | — |
+
+Field rules:
+
+- `path` is always absolute. A relative `BOB_DAY_FILE` is joined onto
+  the vault directory.
+- `relative_path` is vault-relative when the file is under the vault,
+  otherwise the absolute path.
+- `role` is `"day"` when the path is the batch's day file, else
+  `"note"`. Clients must tolerate unknown roles.
+- `label` is `"Today"` for the day file. Otherwise the contributing
+  item's `route_label` when non-empty, else `relative_path` without
+  `.md`.
+- `line` is optional. A 1-based line in the file's final text (staged
+  text for touched files, on-disk text for untouched ones). Omitted
+  when bob cannot land.
+- `ref` is present exactly when `line` is: `<line>:<digest>`, with the
+  digest computed from that final line exactly as `note_tasks`
+  computes it.
+- `block_id` is optional. Present when the landed line carries
+  `^block_id`.
+- Dry-run JSON equals real-run JSON except for `dry_run`. Human output
+  does not change.
 
 #### Dependency updates and consumed links
 

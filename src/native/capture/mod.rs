@@ -61,6 +61,7 @@ mod dependency_drop;
 mod ensure_next;
 mod existing_task_link;
 mod link_guard;
+mod open_notes;
 mod output;
 mod plan;
 mod pomodoro_adjust;
@@ -92,6 +93,7 @@ use dependencies::*;
 use dependency_drop::*;
 use ensure_next::*;
 use link_guard::*;
+use open_notes::*;
 use output::*;
 use plan::*;
 use pomodoro_adjust::*;
@@ -239,6 +241,7 @@ fn capture(mut request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
     let (mut batch, pull_in) =
         plan_with_pull_in(&mut request, routing.as_ref())?;
     append_plan_budget(&request, &mut batch)?;
+    let open_notes = build_open_notes(&request.bob_dir, &batch);
     if !request.dry_run {
         commit_capture_batch(&mut batch)?;
         if !batch.staged_jobs.is_empty()
@@ -258,6 +261,7 @@ fn capture(mut request: CaptureRequest) -> Result<CaptureResult, CaptureError> {
         batch.plan_budget,
         batch.pomodoro_blocks,
         batch.task_blocks,
+        open_notes,
         pull_in,
     );
     let has_template = result.template.is_some();

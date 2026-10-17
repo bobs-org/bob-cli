@@ -112,7 +112,8 @@ fn capture_task_blocks_real_run_equals_dry_run_except_dry_run() {
         serde_json::from_str(stdout(&dry).trim()).expect("dry JSON");
     let mut real_json: serde_json::Value =
         serde_json::from_str(stdout(&real).trim()).expect("real JSON");
-    // Targets name the vault directory, so normalize before comparing.
+    // Targets and open_notes.path name the vault directory, so
+    // normalize those before comparing. relative_path still has to match.
     for value in [&mut dry_json, &mut real_json] {
         value["target"] = serde_json::Value::Null;
         value["relative_target"] = serde_json::Value::Null;
@@ -125,6 +126,11 @@ fn capture_task_blocks_real_run_equals_dry_run_except_dry_run() {
             for item in captures {
                 item["target"] = serde_json::Value::Null;
                 item["relative_target"] = serde_json::Value::Null;
+            }
+        }
+        if let Some(notes) = value["open_notes"].as_array_mut() {
+            for note in notes {
+                note["path"] = serde_json::Value::Null;
             }
         }
     }
