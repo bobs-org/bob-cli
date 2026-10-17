@@ -78,6 +78,11 @@ Markdown renderer, while keeping the vault-note parent, naming, title, and
 and conflict with each other.
 Repeat `-S/--section HEADING` to keep only named projected sections; names match
 case-insensitively, and the dry-run section summary reflects the selection.
+Dry run lists earlier snapshots of the same note newest-first as
+`earlier: <stem> (<status>, N highlights)`. Both dry run and a real create print
+`hint: earlier snapshot <stem> is still unread (0 highlights)` for each earlier
+snapshot that is still `ready` with 0 highlights. Create never changes, closes,
+or abandons those notes.
 
 Embedded PNG and JPEG images are copied into the private render scratch as-is
 when their long edge is at most 1600 pixels; larger images are downscaled with
@@ -108,7 +113,9 @@ bob ref create harbor_cranes -L
 Markdown outside the vault, local PDFs, and URLs continue to require
 `-P/--parent`: the area or project note that owns the reading task. A missing
 `-P` fails before rendering, fetching, or writing with a hint naming
-`bob capture-targets`.
+`bob capture-targets`. Markdown files render ragged-right, with hyphenation
+off and `Ligatures=NoCommon` on the DejaVu serif, sans, and mono families, so
+Highlights quotes stay free of hyphen splits and common ligatures.
 See [web article capture](highlights-clip.md) for reader-mode capture, headed
 retries, the `--html` escape hatch, and environment variables. `bob ref clip`
 is a hidden compatibility alias for `create` with the same targets and options.

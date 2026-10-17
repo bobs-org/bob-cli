@@ -3376,8 +3376,10 @@ fn highlights_create_markdown_renders_outside_xlib() {
     assert_success(&output);
     let args = std::fs::read_to_string(&logged).expect("read pandoc args");
     assert!(
-        args.contains("mainfontoptions=Ligatures=NoCommon"),
-        "Markdown render disables common main-font ligatures: {args}"
+        args.contains("mainfontoptions=Ligatures=NoCommon")
+            && args.contains("sansfontoptions=Ligatures=NoCommon")
+            && args.contains("monofontoptions=Ligatures=NoCommon"),
+        "Markdown render disables common ligatures on DejaVu families: {args}"
     );
     assert!(
         args.contains(r"\AtBeginDocument{\raggedright\hyphenpenalty=10000\exhyphenpenalty=10000}"),
@@ -3397,6 +3399,93 @@ fn highlights_create_markdown_renders_outside_xlib() {
         vault.join("xlib/chat/report.pdf").is_file(),
         "intake PDF installed"
     );
+}
+
+#[test]
+fn highlights_create_markdown_text_layer_avoids_hyphen_splits_and_ligatures() {
+    let pandoc_available = Command::new("pandoc")
+        .arg("--version")
+        .output()
+        .is_ok_and(|output| output.status.success());
+    let xelatex_available = Command::new("xelatex")
+        .arg("--version")
+        .output()
+        .is_ok_and(|output| output.status.success());
+    let pdftotext_available =
+        Command::new("pdftotext").arg("-v").output().is_ok();
+    if !pandoc_available || !xelatex_available || !pdftotext_available {
+        eprintln!(
+            "skipping markdown text-layer test: pandoc, xelatex, and pdftotext are required"
+        );
+        return;
+    }
+
+    let temp = TempDir::new("bob-cli-highlights-create-text-layer");
+    let source = temp.path().join("office_report.md");
+    let vault = temp.path().join("vault");
+    let pdf = temp.path().join("out").join("office_report.pdf");
+    write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
+    let sentence = "The office of the affluent official affiliated with the unofficial office offered efficient affliction of floral affiliation. ";
+    let mut body = String::from("# Office Report\n\n");
+    for _ in 0..40 {
+        body.push_str(sentence);
+    }
+    write_file(&source, &body);
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg("-P")
+        .arg("sase")
+        .arg(&source)
+        .arg("-b")
+        .arg(&vault)
+        .arg("-o")
+        .arg(&pdf)
+        .output()
+        .expect("render markdown text-layer PDF");
+    assert_success(&output);
+    assert!(pdf.is_file(), "missing rendered PDF: {}", pdf.display());
+
+    let text_out = Command::new("pdftotext")
+        .arg("-layout")
+        .arg(&pdf)
+        .arg("-")
+        .output()
+        .expect("pdftotext");
+    assert!(text_out.status.success(), "{text_out:?}");
+    let text = String::from_utf8_lossy(&text_out.stdout);
+    assert!(
+        !text.contains('\u{fb01}') && !text.contains('\u{fb02}'),
+        "common ligatures must be absent: {text}"
+    );
+    assert!(
+        text.contains("office") && text.contains("floral"),
+        "ligature-safe words stay in the text layer: {text}"
+    );
+    let lines: Vec<&str> = text.lines().collect();
+    for pair in lines.windows(2) {
+        let line = pair[0].trim_end();
+        let Some(without_hyphen) = line.strip_suffix('-') else {
+            continue;
+        };
+        let Some(last) = without_hyphen.chars().last() else {
+            continue;
+        };
+        if !last.is_ascii_alphabetic() {
+            continue;
+        }
+        let next = pair[1].trim_start();
+        assert!(
+            !next
+                .chars()
+                .next()
+                .is_some_and(|ch| ch.is_ascii_alphabetic()),
+            "hyphen split inside a word:\n{}\n{}",
+            pair[0],
+            pair[1]
+        );
+    }
 }
 
 #[test]
@@ -5631,9 +5720,23 @@ fn highlights_create_vault_note_dry_run_reports_image_processing() {
     );
 }
 
+fn write_harbor_earlier_snapshots(vault: &std::path::Path) {
+    write_file(
+        &vault.join("ref/notes/Harbor_261010.md"),
+        "---\ntype: [[ref]]\nsource_note: \"[[Harbor]]\"\nstatus: ready\ncreated: 2026-10-10T09:00:00-0400\n---\n# Unread\n",
+    );
+    write_file(
+        &vault.join("ref/notes/Harbor_260930.md"),
+        "---\ntype: [[ref]]\nsource_note: \"[[Harbor]]\"\nstatus: read\nhighlights_count: 7\ncreated: 2026-09-30T08:00:00-0400\n---\n# Read\n",
+    );
+    write_file(
+        &vault.join("ref/notes/Harbor_260901.md"),
+        "---\ntype: [[ref]]\nsource_note: \"[[Harbor]]\"\nstatus: abandoned\ncreated: 2026-09-01T08:00:00-0400\n---\n# Abandoned\n",
+    );
+}
+
 #[test]
-fn highlights_create_section_filter_and_earlier_snapshot_hint_are_dry_run_only()
-{
+fn highlights_create_lists_earlier_snapshots_and_hints_unread_ready() {
     let temp = TempDir::new("bob-cli-create-snapshot-options");
     let vault = temp.path().join("vault");
     write_file(&vault.join("Area.md"), "---\ntype: [[area]]\n---\n# Area\n");
@@ -5641,15 +5744,9 @@ fn highlights_create_section_filter_and_earlier_snapshot_hint_are_dry_run_only()
         &vault.join("Harbor.md"),
         "---\nparent: [[Area]]\n---\n# Harbor\n\nIntro.\n\n## Requirements\nKeep this.\n\n## Outline\nDrop this.\n",
     );
-    write_file(
-        &vault.join("ref/notes/harbor_cranes_261015.md"),
-        "---\ntype: [[ref]]\nsource_note: \"[[Harbor]]\"\nstatus: ready\n---\n# Earlier\n",
-    );
-    write_file(
-        &vault.join("ref/notes/harbor_cranes_261014.md"),
-        "---\ntype: [[ref]]\nsource_note: \"[[Harbor]]\"\nstatus: ready\nhighlights_count: 2\n---\n# Has highlights\n",
-    );
-    let output = bob_command()
+    write_harbor_earlier_snapshots(&vault);
+
+    let dry = bob_command()
         .arg("highlights")
         .arg("create")
         .arg("Harbor")
@@ -5661,19 +5758,91 @@ fn highlights_create_section_filter_and_earlier_snapshot_hint_are_dry_run_only()
         .env("BOB_NOW", "2026-10-16 12:00:00")
         .output()
         .expect("dry-run filtered note snapshot");
-    assert_success(&output);
-    let report = stdout(&output);
+    assert_success(&dry);
+    let report = stdout(&dry);
     assert!(report.contains("sections: Requirements"), "{report}");
     assert!(
         !report.contains("sections: Requirements · Outline"),
         "{report}"
     );
     assert!(
-        report.contains("earlier snapshots: harbor_cranes_261014"),
+        report.contains(
+            "earlier: Harbor_261010 (ready, 0 highlights) · Harbor_260930 (read, 7 highlights) · Harbor_260901 (abandoned, 0 highlights)"
+        ),
         "{report}"
     );
-    assert!(report.contains("unread with no highlights"), "{report}");
+    assert!(
+        report.contains(
+            "hint: earlier snapshot Harbor_261010 is still unread (0 highlights)"
+        ),
+        "{report}"
+    );
+    assert!(
+        !report.contains("earlier snapshot Harbor_261016"),
+        "the snapshot being created is not an earlier snapshot:\n{report}"
+    );
+    assert!(
+        !report.contains("Harbor_260930 is still unread"),
+        "read snapshots with highlights do not hint:\n{report}"
+    );
+    assert!(
+        !report.contains("Harbor_260901 is still unread"),
+        "abandoned snapshots do not hint:\n{report}"
+    );
     assert!(!vault.join("xlib").exists(), "dry run must not write");
+
+    let fixture = temp.path().join("rendered.pdf");
+    write_highlights_pdf_pages(&fixture, &[&[]]);
+    let pandoc = temp.path().join("fake-pandoc.sh");
+    write_executable(
+        &pandoc,
+        "#!/bin/sh\ninput=\"$1\"\nout=\"\"\nprev=\"\"\nfor arg in \"$@\"; do\n  if [ \"$prev\" = \"-o\" ]; then out=\"$arg\"; fi\n  prev=\"$arg\"\ndone\nprintf '%% synthetic TeX\\n' > \"$out\"\n",
+    );
+    let xelatex = temp.path().join("fake-xelatex.sh");
+    write_executable(
+        &xelatex,
+        "#!/bin/sh\ncp \"$BOB_TEST_FIXTURE_PDF\" note.pdf\n: > note.log\n",
+    );
+    let created = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg("Harbor")
+        .arg("-b")
+        .arg(&vault)
+        .env("BOB_NOW", "2026-10-16 12:00:00")
+        .env("BOB_PANDOC_COMMAND", &pandoc)
+        .env("BOB_XELATEX_COMMAND", &xelatex)
+        .env("BOB_TEST_FIXTURE_PDF", &fixture)
+        .output()
+        .expect("create note snapshot with earlier refs");
+    assert_success(&created);
+    let created_report = stdout(&created);
+    assert!(
+        created_report.contains("created note snapshot"),
+        "{created_report}"
+    );
+    assert!(
+        !created_report.contains("earlier: "),
+        "real create lists no earlier: line:\n{created_report}"
+    );
+    assert!(
+        created_report.contains(
+            "hint: earlier snapshot Harbor_261010 is still unread (0 highlights)"
+        ),
+        "{created_report}"
+    );
+    assert!(
+        !created_report.contains("Harbor_260930 is still unread")
+            && !created_report.contains("Harbor_260901 is still unread")
+            && !created_report.contains("earlier snapshot Harbor_261016"),
+        "only unread ready earlier snapshots hint:\n{created_report}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(vault.join("ref/notes/Harbor_261010.md"))
+            .expect("read unread snapshot"),
+        "---\ntype: [[ref]]\nsource_note: \"[[Harbor]]\"\nstatus: ready\ncreated: 2026-10-10T09:00:00-0400\n---\n# Unread\n",
+        "create must not rewrite earlier snapshot notes"
+    );
 }
 
 #[test]
