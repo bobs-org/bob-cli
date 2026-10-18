@@ -1,5 +1,5 @@
 //! Pomodoro-close successor links (`docs/task-dependencies.md` §12):
-//! recovery and successor linking inside `=x` embeds, `=x!M`, `=!`, and
+//! recovery and successor linking inside `x` embeds, `x!M`, `x!`, and
 //! `^route:id=x…` (vectors SL7, SL8, SL12, SL17, SL20, SL24, SL27).
 
 use super::pomodoro_close::{run_close_json, run_close_json_flags};
@@ -24,7 +24,7 @@ fn apollo_pair() -> String {
     .to_string()
 }
 
-// SL7: `=!` closes BOB with nothing carried and FIX following: a `- [ ]
+// SL7: `x!` closes BOB with nothing carried and FIX following: a `- [ ]
 // () — BOB` continuation holds only the successor, with `entry_created`
 // and `next_up`, and `next_pomodoro` names it.
 #[test]
@@ -36,7 +36,7 @@ fn sl7_close_all_creates_continuation_holding_only_successor() {
         "## Pomodoros\n- [ ] (**0920-0950**) \u{2014} BOB\n  - [[sase#^fix-apollo]]\n- [ ] () \u{2014} FIX\n",
     );
 
-    let json = run_close_json(&vault, &day_file, NOW, &["=!"]);
+    let json = run_close_json(&vault, &day_file, NOW, &["x!"]);
     let close = &json["pomodoro_close"];
     assert_eq!(close["unblocked_check"], "checked");
     assert_eq!(close["still_blocked"], serde_json::json!([]));
@@ -75,7 +75,7 @@ fn sl7_close_all_creates_continuation_holding_only_successor() {
     );
 }
 
-// SL8: an `=x` close with carried links and a completing embed appends
+// SL8: an `x` close with carried links and a completing embed appends
 // the successor after the carried lines in the continuation.
 #[test]
 fn sl8_embed_close_appends_successor_after_carried_links() {
@@ -89,7 +89,7 @@ fn sl8_embed_close_appends_successor_after_carried_links() {
         "## Pomodoros\n- [ ] (**0920-0950**) \u{2014} BOB\n  - [[sase#^keep]]\n  - ![[sase#^fix-apollo]]\n- [ ] () \u{2014} FIX\n",
     );
 
-    let json = run_close_json(&vault, &day_file, NOW, &["=x"]);
+    let json = run_close_json(&vault, &day_file, NOW, &["x"]);
     let close = &json["pomodoro_close"];
     let unblocked = close["unblocked"].as_array().expect("unblocked");
     assert_eq!(unblocked.len(), 1);
@@ -117,7 +117,7 @@ fn sl12_two_predecessors_link_shared_dependent_once() {
         "## Pomodoros\n- [ ] (**0920-0950**) \u{2014} BOB\n  - ![[sase#^p1]]\n  - ![[sase#^p2]]\n- [ ] () \u{2014} FIX\n",
     );
 
-    let json = run_close_json(&vault, &day_file, NOW, &["=x"]);
+    let json = run_close_json(&vault, &day_file, NOW, &["x"]);
     let unblocked = json["pomodoro_close"]["unblocked"]
         .as_array()
         .expect("unblocked");
@@ -153,7 +153,7 @@ fn sl17_unpicked_offers_link_none_of_six_successors() {
         "## Pomodoros\n- [ ] (**0920-0950**) \u{2014} BOB\n  - ![[sase#^p]]\n- [ ] () \u{2014} FIX\n",
     );
 
-    let json = run_close_json(&vault, &day_file, NOW, &["=x"]);
+    let json = run_close_json(&vault, &day_file, NOW, &["x"]);
     let close = &json["pomodoro_close"];
     let unblocked = close["unblocked"].as_array().expect("unblocked");
     assert_eq!(unblocked.len(), 6);
@@ -179,7 +179,7 @@ fn sl24_successor_reuses_later_same_name_entry() {
         "## Pomodoros\n- [ ] (**0920-0950**) \u{2014} BOB\n  - [[sase#^fix-apollo]]\n- [ ] () \u{2014} FIX\n- [ ] () \u{2014} BOB\n",
     );
 
-    let json = run_close_json(&vault, &day_file, NOW, &["=!"]);
+    let json = run_close_json(&vault, &day_file, NOW, &["x!"]);
     let close = &json["pomodoro_close"];
     let unblocked = close["unblocked"].as_array().expect("unblocked");
     assert_eq!(unblocked.len(), 1);
@@ -193,7 +193,7 @@ fn sl24_successor_reuses_later_same_name_entry() {
     assert!(!day.contains("relaunch-failed-agents"), "{day}");
 }
 
-// SL27: `=x~K` drops the dependent's link in the same close that
+// SL27: `x~K` drops the dependent's link in the same close that
 // completes its prerequisite: the drop wins, so the dependent is never
 // re-linked and recovers to Ready.
 #[test]
@@ -205,7 +205,7 @@ fn sl27_dropped_link_is_not_relinked() {
         "## Pomodoros\n- [ ] (**0920-0950**) \u{2014} BOB\n  - ![[sase#^fix-apollo]]\n  - [[sase#^relaunch-failed-agents]]\n- [ ] () \u{2014} FIX\n",
     );
 
-    let json = run_close_json(&vault, &day_file, NOW, &["=x~2"]);
+    let json = run_close_json(&vault, &day_file, NOW, &["x~2"]);
     let close = &json["pomodoro_close"];
     let unblocked = close["unblocked"].as_array().expect("unblocked");
     assert_eq!(unblocked.len(), 1);
@@ -221,7 +221,7 @@ fn sl27_dropped_link_is_not_relinked() {
     assert!(!day.contains("relaunch-failed-agents"), "{day}");
 }
 
-// Plan example (c): `^sase:fix-apollo=!` links the predecessor into BOB,
+// Plan example (c): `^sase:fix-apollo=x!` links the predecessor into BOB,
 // closes it, and creates the continuation holding only the successor.
 #[test]
 fn route_close_links_predecessor_then_closes_with_successor() {
@@ -233,7 +233,7 @@ fn route_close_links_predecessor_then_closes_with_successor() {
         "## Pomodoros\n- [ ] (**0920-0950**) \u{2014} BOB\n  - [[bob#^better]]\n- [ ] () \u{2014} FIX\n",
     );
 
-    let json = run_close_json(&vault, &day_file, NOW, &["^sase:fix-apollo=!"]);
+    let json = run_close_json(&vault, &day_file, NOW, &["^sase:fix-apollo=x!"]);
     let close = &json["pomodoro_close"];
     let unblocked = close["unblocked"].as_array().expect("unblocked");
     assert_eq!(unblocked.len(), 1);
@@ -246,7 +246,7 @@ fn route_close_links_predecessor_then_closes_with_successor() {
     assert!(!day.contains("relaunch-failed-agents"), "{day}");
 }
 
-// A two-item `=x!1 =` draft closes with the successor, then starts the
+// A two-item `x!1 =` draft closes with the successor, then starts the
 // continuation that holds it.
 #[test]
 fn close_then_start_opens_successor_continuation() {
@@ -257,7 +257,7 @@ fn close_then_start_opens_successor_continuation() {
         "## Pomodoros\n- [ ] (**0920-0950**) \u{2014} BOB\n  - [[sase#^fix-apollo]]\n- [ ] () \u{2014} FIX\n",
     );
 
-    let json = run_close_json(&vault, &day_file, NOW, &["=x!1 ="]);
+    let json = run_close_json(&vault, &day_file, NOW, &["x!1 ="]);
     let empty = Vec::new();
     let captures = json["captures"].as_array().unwrap_or(&empty);
     assert_eq!(captures.len(), 2);
@@ -336,7 +336,7 @@ fn close_successor_dry_run_matches_real() {
         (temp, vault, day_file)
     };
     let (_temp, vault, day_file) = setup("bob-cli-close-sldry");
-    capture_json_dry_run_matches_real(&vault, &day_file, NOW, &["=!"]);
+    capture_json_dry_run_matches_real(&vault, &day_file, NOW, &["x!"]);
 }
 
 // Human rows name the linked successor, its destination, and recovered
@@ -364,7 +364,7 @@ fn close_successor_human_rows_and_next_line() {
             .arg("-b")
             .arg(&vault)
             .arg("--")
-            .args(["=!"])
+            .args(["x!"])
             .env("BOB_DAY_FILE", &day_file)
             .env("BOB_NOW", NOW)
             .env("NO_COLOR", "1");
@@ -388,7 +388,7 @@ fn close_successor_human_rows_and_next_line() {
     assert!(out.contains("1 unblocked"), "{out}");
 }
 
-// An `=!` close whose successor lives in the day file: the continuation
+// An `x!` close whose successor lives in the day file: the continuation
 // carries the link while the day task flips in the same write.
 #[test]
 fn close_all_day_file_successor_composes_edits() {
@@ -402,7 +402,7 @@ fn close_all_day_file_successor_composes_edits() {
         "## Pomodoros\n- [ ] (**0920-0950**) \u{2014} BOB\n  - [[sase#^p]]\n## Tasks\n- [?] #task Day job [dependsOn:: p] ^job\n",
     );
 
-    let json = run_close_json(&vault, &day_file, NOW, &["=!"]);
+    let json = run_close_json(&vault, &day_file, NOW, &["x!"]);
     let close = &json["pomodoro_close"];
     assert_eq!(close["unblocked_check"], "checked");
     let unblocked = close["unblocked"].as_array().expect("unblocked");
@@ -427,7 +427,7 @@ fn close_all_day_file_successor_composes_edits() {
 }
 
 // An unreadable dependency note makes the close snapshot incomplete:
-// the `=!` close still succeeds with no successor work (`unavailable`).
+// the `x!` close still succeeds with no successor work (`unavailable`).
 #[test]
 fn close_with_invalid_dependency_note_reports_unavailable() {
     let (_temp, vault, day_file) = vault("bob-cli-close-slunavail");
@@ -447,7 +447,7 @@ fn close_with_invalid_dependency_note_reports_unavailable() {
         "## Pomodoros\n- [ ] (**0920-0950**) \u{2014} BOB\n  - [[sase#^p]]\n",
     );
 
-    let json = run_close_json(&vault, &day_file, NOW, &["=!"]);
+    let json = run_close_json(&vault, &day_file, NOW, &["x!"]);
     let close = &json["pomodoro_close"];
     assert_eq!(close["unblocked_check"], "unavailable");
     assert_eq!(close["unblocked"], serde_json::json!([]));
@@ -458,7 +458,7 @@ fn close_with_invalid_dependency_note_reports_unavailable() {
     );
 }
 
-// An `=x` close whose embeds carry no `[id::]` identity links nothing
+// An `x` close whose embeds carry no `[id::]` identity links nothing
 // and leaves no successor rows behind.
 #[test]
 fn close_without_identities_reports_no_successors() {
@@ -469,14 +469,14 @@ fn close_without_identities_reports_no_successors() {
         "## Pomodoros\n- [ ] (**0920-0950**) \u{2014} BOB\n  - ![[sase#^plain]]\n- [ ] () \u{2014} FIX\n",
     );
 
-    let json = run_close_json(&vault, &day_file, NOW, &["=x"]);
+    let json = run_close_json(&vault, &day_file, NOW, &["x"]);
     let close = &json["pomodoro_close"];
     assert_eq!(close["unblocked"], serde_json::json!([]));
     assert_eq!(close["still_blocked"], serde_json::json!([]));
     assert_eq!(close["unblocked_check"], "checked");
 }
 
-// PP29 (§12.11) through `=x`: closing K's embedded `^prj` pulls the
+// PP29 (§12.11) through `x`: closing K's embedded `^prj` pulls the
 // parent N's R into the closing continuation.
 #[test]
 fn pomodoro_close_pulls_in_parent_of_closed_subproject() {
@@ -495,7 +495,7 @@ fn pomodoro_close_pulls_in_parent_of_closed_subproject() {
     );
 
     let json =
-        run_close_json_flags(&vault, &day_file, NOW, &["-p", "all"], &["=x"]);
+        run_close_json_flags(&vault, &day_file, NOW, &["-p", "all"], &["x"]);
     let close = &json["pomodoro_close"];
     assert_eq!(close["still_blocked"], serde_json::json!([]));
     let unblocked = close["unblocked"].as_array().expect("unblocked");

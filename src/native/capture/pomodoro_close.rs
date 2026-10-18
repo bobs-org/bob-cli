@@ -617,7 +617,7 @@ fn name_successor_continuation(
 /// and successor bullets, and report the rows for the summary JSON.
 /// `pre_day` is the day text before this item (pre-link for link forms):
 /// the already-planned baseline. A close that completed nothing stages
-/// nothing here, so `=x` closes that complete nothing stay
+/// nothing here, so `x` closes that complete nothing stay
 /// byte-identical.
 #[allow(clippy::too_many_arguments)]
 fn plan_close_successors(
@@ -641,7 +641,7 @@ fn plan_close_successors(
     let bob_dir = &request.bob_dir;
     let settings = note_tasks::read_settings(bob_dir);
     // C: embedded roots plus closed subtasks this close moved open →
-    // Done. Plain `=x` keeps, parks, defers, and drops never land here.
+    // Done. Plain `x` keeps, parks, defers, and drops never land here.
     let mut predecessors: Vec<engine::CompletedTask> = Vec::new();
     for task in &plan.summary.tasks {
         if !matches!(task.role.as_str(), "embedded" | "subtask") {
@@ -1382,11 +1382,11 @@ pub(super) fn final_task_line_for(
     }
 }
 
-/// Convert a parsed `=x[<N>][*<P>][!<M>][~<K>]` spec into the planner's
-/// selection. Plain `=x` yields `None`, so the close runs exactly as before
+/// Convert a parsed `x[<N>][*<P>][!<M>][~<K>]` spec into the planner's
+/// selection. Plain `x` yields `None`, so the close runs exactly as before
 /// while still reporting the numbered lineup. A spec with lists or typed
 /// Work Log entries yields a selection. `in_progress` stays `None` when no
-/// `<N>` was typed, even for `=x*2`; parked numbers are never unioned into
+/// `<N>` was typed, even for `x*2`; parked numbers are never unioned into
 /// it.
 fn selection_from_spec(
     spec: &PomodoroCloseSpec,
@@ -2250,7 +2250,7 @@ pub(super) fn plan_pomodoro_close_link_item(
             priority: None,
             priority_label: None,
             // Link forms stay strictly additive: keep the non-close
-            // counterpart's placement. Only whole-item `=x` is "closed".
+            // counterpart's placement. Only whole-item `x` is "closed".
             placement: Placement::Linked,
             sub_bullets: Vec::new(),
             clip: None,
@@ -2556,7 +2556,7 @@ pub(super) fn plan_pomodoro_close_task_item(
             priority: None,
             priority_label: None,
             // Body-bearing closes keep the new-task placement, like the
-            // non-close counterpart. Only whole-item `=x` is "closed".
+            // non-close counterpart. Only whole-item `x` is "closed".
             placement,
             sub_bullets: Vec::new(),
             clip: None,

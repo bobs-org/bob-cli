@@ -535,7 +535,7 @@ fn capture_named_start_help_mentions_start_forms() {
         "bob capture '=#deep-work'",
         "bob capture '=3#bugs'",
         "bob capture '=#bugs@3'",
-        "bob capture '=x =#bugs'",
+        "bob capture 'x =#bugs'",
     ] {
         assert!(
             help.contains(needle),

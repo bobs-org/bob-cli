@@ -35,7 +35,7 @@ fn worked_example() -> String {
         "\t- 🍅 [[bob#^capture-stop]]",
         "- [ ] (**0920-0950** [t:: 30m]) — CAPTURE",
         "\t- [[bob#^capture-stop]]",
-        "\t\t- Designed the `=x` grammar",
+        "\t\t- Designed the `x` grammar",
         "\t\t\t- chose `x` for done",
         "\t\t- Wrote the plan",
         "\t- [[bob#^web-capture]]#",
@@ -290,7 +290,7 @@ fn outcome_table_covers_every_row() {
     let running = running_of(&contents);
     // Listed complete beats everything.
     let applied =
-        apply_close_selection(&contents, &running, &sel(None, vec![2], "=x!2"))
+        apply_close_selection(&contents, &running, &sel(None, vec![2], "x!2"))
             .expect("apply");
     assert_eq!(
         applied
@@ -308,7 +308,7 @@ fn outcome_table_covers_every_row() {
     let applied = apply_close_selection(
         &contents,
         &running,
-        &sel(Some(vec![2]), vec![], "=x2"),
+        &sel(Some(vec![2]), vec![], "x2"),
     )
     .expect("apply");
     assert_eq!(
@@ -326,7 +326,7 @@ fn outcome_table_covers_every_row() {
     );
     // No list: ledger outcomes and sources.
     let applied =
-        apply_close_selection(&contents, &running, &sel(None, vec![], "=x"))
+        apply_close_selection(&contents, &running, &sel(None, vec![], "x"))
             .expect("apply");
     assert_eq!(
         applied
@@ -340,11 +340,11 @@ fn outcome_table_covers_every_row() {
             (3, TaskLinkOutcome::Complete, TaskLinkSource::Ledger),
         ]
     );
-    // Empty <N> (=x0): everything unlisted.
+    // Empty <N> (x0): everything unlisted.
     let applied = apply_close_selection(
         &contents,
         &running,
-        &sel(Some(vec![]), vec![], "=x0"),
+        &sel(Some(vec![]), vec![], "x0"),
     )
     .expect("apply");
     assert_eq!(
@@ -379,7 +379,7 @@ fn wildcard_outcomes_cover_remaining_numbered_links_and_keep_exceptions() {
     ]);
     let running = running_of(&contents);
     let mut park_all =
-        sel(Some(vec![1]), vec![4], "=x1*!4~3").with_all(true, false);
+        sel(Some(vec![1]), vec![4], "x1*!4~3").with_all(true, false);
     park_all.drop.insert(3);
     let applied = apply_close_selection(&contents, &running, &park_all)
         .expect("park remaining numbered links");
@@ -419,7 +419,7 @@ fn wildcard_outcomes_cover_remaining_numbered_links_and_keep_exceptions() {
     );
 
     let complete_all =
-        sel(Some(vec![1]), Vec::new(), "=x1!").with_all(false, true);
+        sel(Some(vec![1]), Vec::new(), "x1!").with_all(false, true);
     let applied = apply_close_selection(&contents, &running, &complete_all)
         .expect("complete remainder");
     assert_eq!(
@@ -447,8 +447,8 @@ fn wildcard_accepts_an_empty_lineup_but_explicit_positive_indices_do_not() {
     ]);
     let running = running_of(&contents);
     for selection in [
-        sel(None, Vec::new(), "=*").with_all(true, false),
-        sel(None, Vec::new(), "=!").with_all(false, true),
+        sel(None, Vec::new(), "x*").with_all(true, false),
+        sel(None, Vec::new(), "x!").with_all(false, true),
     ] {
         let applied = apply_close_selection(&contents, &running, &selection)
             .expect("empty wildcard selection");
@@ -457,7 +457,7 @@ fn wildcard_accepts_an_empty_lineup_but_explicit_positive_indices_do_not() {
     let error = apply_close_selection(
         &contents,
         &running,
-        &sel(Some(vec![1]), Vec::new(), "=x1"),
+        &sel(Some(vec![1]), Vec::new(), "x1"),
     )
     .expect_err("explicit positive index is out of range");
     assert!(error.to_string().contains("has no numbered Task Links"));
@@ -476,7 +476,7 @@ fn drop_removes_from_closed_session_without_carry() {
     let applied = apply_close_selection(
         &contents,
         &running,
-        &sel_drop(None, vec![], vec![2], "=x~2"),
+        &sel_drop(None, vec![], vec![2], "x~2"),
     )
     .expect("apply");
     assert_eq!(
@@ -518,12 +518,12 @@ fn drop_removes_from_closed_session_without_carry() {
     let error = apply_close_selection(
         &contents,
         &running,
-        &sel_drop(None, vec![], vec![9], "=x~9"),
+        &sel_drop(None, vec![], vec![9], "x~9"),
     )
     .expect_err("out of range drop");
     assert_eq!(
         error.to_string(),
-        "`=x~9` names task 9, but CAPTURE has 3 numbered Task Links (1–3)"
+        "`x~9` names task 9, but CAPTURE has 3 numbered Task Links (1–3)"
     );
 }
 
@@ -543,7 +543,7 @@ fn parked_links_record_work_but_are_not_carried() {
     let applied = apply_close_selection(
         &contents,
         &running,
-        &sel_park(Some(vec![1]), vec![2, 3], vec![4, 5], "=x1*2,3!4,5"),
+        &sel_park(Some(vec![1]), vec![2, 3], vec![4, 5], "x1*2,3!4,5"),
     )
     .expect("apply five-link park");
     assert_eq!(
@@ -604,7 +604,7 @@ fn parked_links_record_work_but_are_not_carried() {
     let star_only = apply_close_selection(
         &contents,
         &running,
-        &sel_park(None, vec![2], vec![], "=x*2"),
+        &sel_park(None, vec![2], vec![], "x*2"),
     )
     .expect("star-only apply");
     assert_eq!(
@@ -635,7 +635,7 @@ fn parked_links_record_work_but_are_not_carried() {
     let err = apply_close_selection(
         &dup_contents,
         &dup_running,
-        &sel_park(Some(vec![1]), vec![3], vec![], "=x1*3"),
+        &sel_park(Some(vec![1]), vec![3], vec![], "x1*3"),
     )
     .expect_err("parked vs continuing conflict");
     match err {
@@ -652,7 +652,7 @@ fn none_is_byte_identical_to_plan_ledger_close() {
     let running = running_of(&contents);
     let ledger = plan_ledger_close(&contents, &running, at(9, 37));
     let applied =
-        apply_close_selection(&contents, &running, &sel(None, vec![], "=x"))
+        apply_close_selection(&contents, &running, &sel(None, vec![], "x"))
             .expect("apply with no lists");
     assert_eq!(applied.contents, contents);
     assert!(applied
@@ -677,7 +677,7 @@ fn rewrite_keeps_prefix_and_drops_tomato() {
     let applied = apply_close_selection(
         &contents,
         &running,
-        &sel(Some(vec![2]), vec![], "=x2"),
+        &sel(Some(vec![2]), vec![], "x2"),
     )
     .expect("apply");
     assert!(applied.contents.contains("\t- [[a#^one]]#\n"));
@@ -687,12 +687,12 @@ fn rewrite_keeps_prefix_and_drops_tomato() {
     let applied = apply_close_selection(
         &contents,
         &running,
-        &sel(Some(vec![1]), vec![], "=x1"),
+        &sel(Some(vec![1]), vec![], "x1"),
     )
     .expect("apply");
     // Line 2 was already deferred-adjacent? 1 stays plain, 2 stays
     // deferred-ledged except 1 listed keeps plain: only line 4 changes?
-    // Here =x1 equals the ledger (1 plain, 2 deferred) so nothing changes.
+    // Here x1 equals the ledger (1 plain, 2 deferred) so nothing changes.
     assert_eq!(applied.contents, contents);
 }
 
@@ -703,7 +703,7 @@ fn apply_preserves_crlf_and_missing_final_newline() {
     let applied = apply_close_selection(
         &contents,
         &running,
-        &sel(Some(vec![2]), vec![], "=x2"),
+        &sel(Some(vec![2]), vec![], "x2"),
     )
     .expect("apply");
     assert!(applied.contents.contains("\r\n"));
@@ -716,7 +716,7 @@ fn apply_preserves_crlf_and_missing_final_newline() {
     let applied = apply_close_selection(
         &no_final,
         &running,
-        &sel(Some(vec![2]), vec![], "=x2"),
+        &sel(Some(vec![2]), vec![], "x2"),
     )
     .expect("apply");
     assert!(!applied.contents.ends_with('\n'));
@@ -730,37 +730,37 @@ fn out_of_range_messages() {
     let error = apply_close_selection(
         &contents,
         &running,
-        &sel(Some(vec![4]), vec![], "=x4"),
+        &sel(Some(vec![4]), vec![], "x4"),
     )
     .expect_err("out of range");
     assert_eq!(
         error.to_string(),
-        "`=x4` names task 4, but CAPTURE has 2 numbered Task Links (1–2)"
+        "`x4` names task 4, but CAPTURE has 2 numbered Task Links (1–2)"
     );
     // Multiple bad numbers list every one.
     let error = apply_close_selection(
         &contents,
         &running,
-        &sel(Some(vec![4, 6]), vec![], "=x4,6"),
+        &sel(Some(vec![4, 6]), vec![], "x4,6"),
     )
     .expect_err("out of range");
     assert_eq!(
         error.to_string(),
-        "`=x4,6` names tasks 4 and 6, but CAPTURE has 2 numbered Task Links (1–2)"
+        "`x4,6` names tasks 4 and 6, but CAPTURE has 2 numbered Task Links (1–2)"
     );
     // Complete-list numbers validate too.
     let error =
-        apply_close_selection(&contents, &running, &sel(None, vec![3], "=x!3"))
+        apply_close_selection(&contents, &running, &sel(None, vec![3], "x!3"))
             .expect_err("out of range");
     assert_eq!(
         error.to_string(),
-        "`=x!3` names task 3, but CAPTURE has 2 numbered Task Links (1–2)"
+        "`x!3` names task 3, but CAPTURE has 2 numbered Task Links (1–2)"
     );
-    // `=x0` never ranges.
+    // `x0` never ranges.
     apply_close_selection(
         &contents,
         &running,
-        &sel(Some(vec![]), vec![], "=x0"),
+        &sel(Some(vec![]), vec![], "x0"),
     )
     .expect("zero is always in range");
 }
@@ -774,11 +774,11 @@ fn out_of_range_with_one_and_zero_links() {
     ]);
     let running = running_of(&one);
     let error =
-        apply_close_selection(&one, &running, &sel(None, vec![2], "=x!2"))
+        apply_close_selection(&one, &running, &sel(None, vec![2], "x!2"))
             .expect_err("out of range");
     assert_eq!(
         error.to_string(),
-        "`=x!2` names task 2, but SOLO has 1 numbered Task Link (1)"
+        "`x!2` names task 2, but SOLO has 1 numbered Task Link (1)"
     );
 
     let none = note(&[
@@ -788,11 +788,11 @@ fn out_of_range_with_one_and_zero_links() {
     ]);
     let running = running_of(&none);
     let error =
-        apply_close_selection(&none, &running, &sel(None, vec![1], "=x1"))
+        apply_close_selection(&none, &running, &sel(None, vec![1], "x1"))
             .expect_err("out of range");
     assert_eq!(
         error.to_string(),
-        "`=x1` names task 1, but CAPTURE has no numbered Task Links; close it with `=x`"
+        "`x1` names task 1, but CAPTURE has no numbered Task Links; close it with `x`"
     );
 
     let unnamed = note(&[
@@ -804,12 +804,12 @@ fn out_of_range_with_one_and_zero_links() {
     let error = apply_close_selection(
         &unnamed,
         &running,
-        &sel(Some(vec![2]), vec![], "=x2"),
+        &sel(Some(vec![2]), vec![], "x2"),
     )
     .expect_err("out of range");
     assert_eq!(
         error.to_string(),
-        "`=x2` names task 2, but the running Pomodoro has 1 numbered Task Link (1)"
+        "`x2` names task 2, but the running Pomodoro has 1 numbered Task Link (1)"
     );
 }
 
@@ -827,14 +827,14 @@ fn conflicting_duplicates_fail_and_same_outcome_passes() {
     apply_close_selection(
         &contents,
         &running,
-        &sel(Some(vec![1, 3]), vec![], "=x1,3"),
+        &sel(Some(vec![1, 3]), vec![], "x1,3"),
     )
     .expect("same outcome duplicates pass");
     // Different outcomes conflict.
     let error = apply_close_selection(
         &contents,
         &running,
-        &sel(Some(vec![1]), vec![], "=x1"),
+        &sel(Some(vec![1]), vec![], "x1"),
     )
     .expect_err("conflicting duplicate");
     match &error {
@@ -878,7 +878,7 @@ impl MemoryVault {
         vault.insert(
             "bob.md",
             concat!(
-                "- [*] #task Add support for `=x` syntax! [created::2026-09-26] ^capture-stop\n",
+                "- [*] #task Add support for `x` syntax! [created::2026-09-26] ^capture-stop\n",
                 "- [*] #task Add capture support for web URLs! [created::2026-09-21] ^web-capture\n",
                 "- [ ] #task Plain ready task [created::2026-09-20] ^ready\n",
             ),
@@ -977,7 +977,7 @@ fn full_close_reports_numbered_lineup_with_none() {
 #[test]
 fn ledger_post_image_for_x2() {
     let vault = MemoryVault::worked();
-    let selection = sel(Some(vec![2]), vec![], "=x2");
+    let selection = sel(Some(vec![2]), vec![], "x2");
     let plan = close_with(&vault, Some(&selection));
     assert_eq!(
         plan.summary
@@ -991,12 +991,12 @@ fn ledger_post_image_for_x2() {
         ]
     );
     // Deferred first link leaves its notes orphaned under the closed entry,
-    // exactly as the matching hand edits followed by `=x` produce.
+    // exactly as the matching hand edits followed by `x` produce.
     assert_eq!(
         closed_ledger_tail(&plan),
         note(&[
             "- [x] (**0920-0940** [t:: 20m]) — CAPTURE",
-            "\t\t- Designed the `=x` grammar",
+            "\t\t- Designed the `x` grammar",
             "\t\t\t- chose `x` for done",
             "\t\t- Wrote the plan",
             "\t- 🍅 [[bob#^web-capture]]",
@@ -1018,13 +1018,13 @@ fn ledger_post_image_for_x2() {
 #[test]
 fn ledger_post_image_for_x_complete() {
     let vault = MemoryVault::worked();
-    let plan = close_with(&vault, Some(&sel(None, vec![1], "=x!1")));
+    let plan = close_with(&vault, Some(&sel(None, vec![1], "x!1")));
     assert_eq!(
         closed_ledger_tail(&plan),
         note(&[
             "- [x] (**0920-0940** [t:: 20m]) — CAPTURE",
             "\t- ~~[[bob#^capture-stop]]~~",
-            "\t\t- Designed the `=x` grammar",
+            "\t\t- Designed the `x` grammar",
             "\t\t\t- chose `x` for done",
             "\t\t- Wrote the plan",
             "\t- ~~[[sase#^axe-restart]]~~",
@@ -1041,13 +1041,13 @@ fn ledger_post_image_for_x_complete() {
 #[test]
 fn ledger_post_image_for_x1_complete_2() {
     let vault = MemoryVault::worked();
-    let plan = close_with(&vault, Some(&sel(Some(vec![1]), vec![2], "=x1!2")));
+    let plan = close_with(&vault, Some(&sel(Some(vec![1]), vec![2], "x1!2")));
     assert_eq!(
         closed_ledger_tail(&plan),
         note(&[
             "- [x] (**0920-0940** [t:: 20m]) — CAPTURE",
             "\t- 🍅 [[bob#^capture-stop]]",
-            "\t\t- Designed the `=x` grammar",
+            "\t\t- Designed the `x` grammar",
             "\t\t\t- chose `x` for done",
             "\t\t- Wrote the plan",
             "\t- ~~[[bob#^web-capture]]~~",
@@ -1067,12 +1067,12 @@ fn ledger_post_image_for_x1_complete_2() {
 #[test]
 fn ledger_post_image_for_x0_and_x1_2() {
     let vault = MemoryVault::worked();
-    let plan = close_with(&vault, Some(&sel(Some(vec![]), vec![], "=x0")));
+    let plan = close_with(&vault, Some(&sel(Some(vec![]), vec![], "x0")));
     assert_eq!(
         closed_ledger_tail(&plan),
         note(&[
             "- [x] (**0920-0940** [t:: 20m]) — CAPTURE",
-            "\t\t- Designed the `=x` grammar",
+            "\t\t- Designed the `x` grammar",
             "\t\t\t- chose `x` for done",
             "\t\t- Wrote the plan",
             "\t- ~~[[sase#^axe-restart]]~~",
@@ -1088,8 +1088,7 @@ fn ledger_post_image_for_x0_and_x1_2() {
     let next = plan.summary.ledger.next_pomodoro.expect("next");
     assert_eq!(next.line, 12);
 
-    let plan =
-        close_with(&vault, Some(&sel(Some(vec![1, 2]), vec![], "=x1,2")));
+    let plan = close_with(&vault, Some(&sel(Some(vec![1, 2]), vec![], "x1,2")));
     assert!(plan
         .summary
         .ledger
@@ -1133,7 +1132,7 @@ fn listed_blocked_and_done_warnings() {
         &day,
         at(9, 37),
         &vault,
-        Some(&sel(Some(vec![2]), vec![1], "=x2!1")),
+        Some(&sel(Some(vec![2]), vec![1], "x2!1")),
     )
     .expect("close plan");
     assert_eq!(plan.summary.tasks.len(), 2);
@@ -1168,7 +1167,7 @@ fn log_entry_appends_after_existing_descendants() {
     let applied = apply_close_selection(
         &contents,
         &running,
-        &sel_log(None, vec![], vec![(1, "wired the lexer")], "=x"),
+        &sel_log(None, vec![], vec![(1, "wired the lexer")], "x"),
     )
     .expect("apply");
     assert_eq!(
@@ -1207,7 +1206,7 @@ fn log_entry_child_indent_follows_first_child_or_link_indent() {
     let applied = apply_close_selection(
         &contents,
         &running,
-        &sel_log(None, vec![], vec![(2, "did it")], "=x"),
+        &sel_log(None, vec![], vec![(2, "did it")], "x"),
     )
     .expect("apply");
     assert!(applied.contents.contains("  - [[a#^two]]\n    - did it\n"));
@@ -1222,7 +1221,7 @@ fn log_entry_child_indent_follows_first_child_or_link_indent() {
     let applied = apply_close_selection(
         &contents,
         &running,
-        &sel_log(None, vec![], vec![(1, "did it")], "=x"),
+        &sel_log(None, vec![], vec![(1, "did it")], "x"),
     )
     .expect("apply");
     assert!(applied.contents.contains("\t- [[a#^one]]\n\t\t- did it\n"));
@@ -1240,7 +1239,7 @@ fn log_entries_keep_typed_order_for_repeated_index() {
     let applied = apply_close_selection(
         &contents,
         &running,
-        &sel_log(None, vec![], vec![(1, "first"), (1, "second")], "=x"),
+        &sel_log(None, vec![], vec![(1, "first"), (1, "second")], "x"),
     )
     .expect("apply");
     assert_eq!(
@@ -1269,7 +1268,7 @@ fn log_entry_preserves_crlf_and_missing_final_newline() {
     let applied = apply_close_selection(
         &contents,
         &running,
-        &sel_log(None, vec![], vec![(1, "did it")], "=x"),
+        &sel_log(None, vec![], vec![(1, "did it")], "x"),
     )
     .expect("apply");
     assert!(applied.contents.contains("\t\t- did it\r\n"));
@@ -1285,7 +1284,7 @@ fn log_entry_preserves_crlf_and_missing_final_newline() {
     let applied = apply_close_selection(
         &no_final,
         &running,
-        &sel_log(None, vec![], vec![(1, "did it")], "=x"),
+        &sel_log(None, vec![], vec![(1, "did it")], "x"),
     )
     .expect("apply");
     assert!(applied.contents.ends_with("\t\t- did it"));
@@ -1299,7 +1298,7 @@ fn log_entry_errors() {
     let error = apply_close_selection(
         &contents,
         &running,
-        &sel_log(None, vec![], vec![(5, "x")], "=x"),
+        &sel_log(None, vec![], vec![(5, "x")], "x"),
     )
     .expect_err("out of range entry");
     assert_eq!(
@@ -1310,7 +1309,7 @@ fn log_entry_errors() {
     let error = apply_close_selection(
         &contents,
         &running,
-        &sel_log(None, vec![], vec![(2, "x")], "=x"),
+        &sel_log(None, vec![], vec![(2, "x")], "x"),
     )
     .expect_err("deferred entry");
     assert_eq!(
@@ -1321,7 +1320,7 @@ fn log_entry_errors() {
     let error = apply_close_selection(
         &contents,
         &running,
-        &sel_drop_log(None, vec![], vec![2], vec![(2, "x")], "=x~2"),
+        &sel_drop_log(None, vec![], vec![2], vec![(2, "x")], "x~2"),
     )
     .expect_err("dropped entry");
     assert_eq!(
@@ -1339,7 +1338,7 @@ fn log_entry_errors() {
     let error = apply_close_selection(
         &nested,
         &running,
-        &sel_log(None, vec![], vec![(2, "x")], "=x"),
+        &sel_log(None, vec![], vec![(2, "x")], "x"),
     )
     .expect_err("nested entry");
     assert_eq!(
@@ -1359,7 +1358,7 @@ fn log_entry_text_that_numbers_a_link_fails_loudly() {
     let error = apply_close_selection(
         &contents,
         &running,
-        &sel_log(None, vec![], vec![(1, "[[a#^evil]]")], "=x"),
+        &sel_log(None, vec![], vec![(1, "[[a#^evil]]")], "x"),
     )
     .expect_err("lineup guard");
     assert_eq!(
@@ -1388,7 +1387,7 @@ fn log_entry_details_nest_one_level_under_the_entry() {
                 "wired the lexer",
                 vec!["chose a hand-rolled lexer", "kept it simple"],
             )],
-            "=x",
+            "x",
         ),
     )
     .expect("apply");
@@ -1425,7 +1424,7 @@ fn log_entry_details_nest_one_level_under_the_entry() {
     let applied = apply_close_selection(
         &contents,
         &running,
-        &sel_detail_log(vec![(2, "did it", vec!["a detail"])], "=x"),
+        &sel_detail_log(vec![(2, "did it", vec!["a detail"])], "x"),
     )
     .expect("apply");
     assert!(applied
@@ -1446,7 +1445,7 @@ fn log_entry_details_nest_one_level_under_the_entry() {
     let applied = apply_close_selection(
         &contents,
         &running,
-        &sel_detail_log(vec![(1, "did it", vec!["a detail"])], "=x"),
+        &sel_detail_log(vec![(1, "did it", vec!["a detail"])], "x"),
     )
     .expect("apply");
     assert!(applied.contents.contains("        - did it\n"));
@@ -1470,7 +1469,7 @@ fn log_entry_details_keep_typed_order_for_repeated_index() {
                 (1, "first", vec!["why first"]),
                 (1, "second", vec!["why second", "and more"]),
             ],
-            "=x",
+            "x",
         ),
     )
     .expect("apply");
@@ -1504,7 +1503,7 @@ fn log_entry_details_preserve_crlf_and_missing_final_newline() {
     let applied = apply_close_selection(
         &contents,
         &running,
-        &sel_detail_log(vec![(1, "did it", vec!["a detail"])], "=x"),
+        &sel_detail_log(vec![(1, "did it", vec!["a detail"])], "x"),
     )
     .expect("apply");
     assert!(applied.contents.contains("\t\t- did it\r\n"));
@@ -1521,7 +1520,7 @@ fn log_entry_details_preserve_crlf_and_missing_final_newline() {
     let applied = apply_close_selection(
         &no_final,
         &running,
-        &sel_detail_log(vec![(1, "did it", vec!["a detail"])], "=x"),
+        &sel_detail_log(vec![(1, "did it", vec!["a detail"])], "x"),
     )
     .expect("apply");
     assert!(applied.contents.ends_with("\t\t\t- a detail"));
@@ -1562,7 +1561,7 @@ fn positional_indices(
 
 #[test]
 fn positional_entries_resolve_against_session_worked_links() {
-    // Plain `=x` on [plain, deferred, plain]: the deferred link is
+    // Plain `x` on [plain, deferred, plain]: the deferred link is
     // skipped, so the bullets land on 1 and 3.
     let contents = note(&[
         "## Pomodoros",
@@ -1575,7 +1574,7 @@ fn positional_entries_resolve_against_session_worked_links() {
     let applied = apply_close_selection(
         &contents,
         &running,
-        &sel_positional(vec!["a", "b"], "=x"),
+        &sel_positional(vec!["a", "b"], "x"),
     )
     .expect("apply");
     assert_eq!(positional_indices(&applied), vec![Some(1), Some(3)]);
@@ -1607,7 +1606,7 @@ fn positional_entries_share_a_single_worked_link() {
     let applied = apply_close_selection(
         &contents,
         &running,
-        &sel_positional(vec!["a", "b", "c"], "=x"),
+        &sel_positional(vec!["a", "b", "c"], "x"),
     )
     .expect("apply");
     assert_eq!(
@@ -1627,7 +1626,7 @@ fn positional_entries_follow_drop_and_complete_outcomes() {
     ]);
     // `~2` drops link 2, so the bullets land on 1 and 3.
     let running = running_of(&contents);
-    let mut dropped = sel_positional(vec!["a", "b"], "=x~2");
+    let mut dropped = sel_positional(vec!["a", "b"], "x~2");
     dropped.drop = [2].into_iter().collect();
     let applied =
         apply_close_selection(&contents, &running, &dropped).expect("apply");
@@ -1635,7 +1634,7 @@ fn positional_entries_follow_drop_and_complete_outcomes() {
     // `!2` completes link 2, which stays worked: the bullets land on 1
     // and 2.
     let running = running_of(&contents);
-    let mut completed = sel_positional(vec!["a", "b"], "=x!2");
+    let mut completed = sel_positional(vec!["a", "b"], "x!2");
     completed.complete = [2].into_iter().collect();
     let applied =
         apply_close_selection(&contents, &running, &completed).expect("apply");
@@ -1656,7 +1655,7 @@ fn positional_entries_skip_nested_links() {
     let applied = apply_close_selection(
         &contents,
         &running,
-        &sel_positional(vec!["a"], "=x"),
+        &sel_positional(vec!["a"], "x"),
     )
     .expect("apply");
     assert_eq!(positional_indices(&applied), vec![Some(1)]);
@@ -1673,7 +1672,7 @@ fn wildcard_positional_logs_wait_for_and_use_top_level_worked_lineup() {
         "\t- [[a#^third]]",
     ]);
     let running = running_of(&contents);
-    let selection = sel_positional(vec!["first log", "second log"], "=x*")
+    let selection = sel_positional(vec!["first log", "second log"], "x*")
         .with_all(true, false);
     let applied = apply_close_selection(&contents, &running, &selection)
         .expect("runtime wildcard positions");
@@ -1701,12 +1700,12 @@ fn positional_resolution_reports_session_failures() {
     let error = apply_close_selection(
         &contents,
         &running,
-        &sel_positional(vec!["a", "b", "c"], "=x"),
+        &sel_positional(vec!["a", "b", "c"], "x"),
     )
     .expect_err("too many");
     assert_eq!(
         error.to_string(),
-        "`=x` works 2 of CAPTURE's tasks (1 and 2) but has 3 unnumbered Work Log bullets; start each bullet with the number of the task it logs to: `- 1 a`"
+        "`x` works 2 of CAPTURE's tasks (1 and 2) but has 3 unnumbered Work Log bullets; start each bullet with the number of the task it logs to: `- 1 a`"
     );
     // No numbered links at all.
     let contents = note(&[
@@ -1718,12 +1717,12 @@ fn positional_resolution_reports_session_failures() {
     let error = apply_close_selection(
         &contents,
         &running,
-        &sel_positional(vec!["a"], "=x"),
+        &sel_positional(vec!["a"], "x"),
     )
     .expect_err("no links");
     assert_eq!(
         error.to_string(),
-        "`=x` has Work Log bullets, but CAPTURE has no numbered Task Links to log them to"
+        "`x` has Work Log bullets, but CAPTURE has no numbered Task Links to log them to"
     );
     // Links exist but none are worked at the top level.
     let contents = note(&[
@@ -1735,12 +1734,12 @@ fn positional_resolution_reports_session_failures() {
     let error = apply_close_selection(
         &contents,
         &running,
-        &sel_positional(vec!["a"], "=x"),
+        &sel_positional(vec!["a"], "x"),
     )
     .expect_err("none worked");
     assert_eq!(
         error.to_string(),
-        "`=x` works none of CAPTURE's top-level Task Links, so its Work Log bullets have none to log to; list one in `<N>` or `!<M>` to log to it"
+        "`x` works none of CAPTURE's top-level Task Links, so its Work Log bullets have none to log to; list one in `<N>` or `!<M>` to log to it"
     );
     // An unnamed session reports "the running Pomodoro".
     let contents = note(&[
@@ -1752,7 +1751,7 @@ fn positional_resolution_reports_session_failures() {
     let error = apply_close_selection(
         &contents,
         &running,
-        &sel_positional(vec!["a"], "=x"),
+        &sel_positional(vec!["a"], "x"),
     )
     .expect_err("unnamed none worked");
     assert!(
@@ -1777,7 +1776,7 @@ fn lexically_resolved_positional_entry_reports_nested_wording() {
         "\t\t- [[a#^two]]",
     ]);
     let running = running_of(&contents);
-    let mut selection = sel(Some(vec![1, 2]), Vec::new(), "=x1,2");
+    let mut selection = sel(Some(vec![1, 2]), Vec::new(), "x1,2");
     selection.log = vec![
         CloseLogEntry {
             index: Some(1),

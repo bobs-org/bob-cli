@@ -154,7 +154,7 @@ fn parse_start_drop_diagnostics_match_execution() {
 
 #[test]
 fn parse_start_drop_chain_items() {
-    let parsed = parse_items("=x =~2");
+    let parsed = parse_items("x =~2");
     let items = parsed["items"].as_array().expect("items");
     assert_eq!(items.len(), 2, "{parsed}");
     assert_eq!(items[0]["mode"], "pomodoro_close", "{parsed}");

@@ -584,7 +584,7 @@ impl<'a, V: CloseVault> ClosePlanner<'a, V> {
         Ok(())
     }
 
-    /// Close every `=x` embedded tree through the shared completion
+    /// Close every `x` embedded tree through the shared completion
     /// engine and replay its visit log to rebuild this plan's task rows.
     /// The depth cap, the target cap, the Depends-On skip, and the gate
     /// all live in `task_complete::tree` now; this method runs no
@@ -887,7 +887,7 @@ impl<'a, V: CloseVault> ClosePlanner<'a, V> {
 }
 
 /// Shared reset-versus-close decision. Validates the selection, then
-/// branches before ledger rewriting and task effects. Note-bearing `=x0`
+/// branches before ledger rewriting and task effects. Note-bearing `x0`
 /// and every explicit-modifier selection fall through to the preserved
 /// close planner unchanged.
 pub(crate) fn plan_pomodoro_close_outcome<V: CloseVault>(

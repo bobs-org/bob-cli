@@ -1,4 +1,4 @@
-//! Shared `=x` Work Log bullet lexer for Pomodoro closes.
+//! Shared `x` Work Log bullet lexer for Pomodoro closes.
 //!
 //! Both the execution parser (`bob capture`) and the editor parser
 //! (`capture-parse`, completion, rewrite) lex a close's child bullet lines
@@ -6,7 +6,7 @@
 //! message and byte range everywhere. Diagnostic text lives in [`markers`];
 //! this module only decides which diagnostic applies and where it points.
 //!
-//! A whole-item close (`=x`/`=X` plus an optional selection, alone on its
+//! A whole-item close (`x` plus an optional selection, alone on its
 //! parent line) takes Work Log bullets as its child lines, using exactly the
 //! authored-bullet line rules. A first-level bullet is numbered when its
 //! first whitespace-separated token is all ASCII digits; a leading number is
@@ -18,7 +18,7 @@
 //! and dangling bullets (`- 1`) only occur in numbered lists.
 //!
 //! Unnumbered bullets log in order to the close's worked tasks `W`: without
-//! wildcard intent, selection mode (`<N>` typed, including `=x0`, or a
+//! wildcard intent, selection mode (`<N>` typed, including `x0`, or a
 //! non-empty `*<P>`) uses the lexical `sorted(<N> ∪ *<P> ∪ !<M>)`; otherwise
 //! positions stay `None` for `bob capture` to resolve against the running
 //! session. Wildcard positions always wait for that staged lineup. The assignment rule
@@ -28,7 +28,7 @@
 //!
 //! A two-space nested bullet is a detail of the nearest preceding entry,
 //! numbered or not, and its text is entirely literal. Loggability of
-//! numbered bullets is purely lexical: with `<N>` typed (including `=x0`)
+//! numbered bullets is purely lexical: with `<N>` typed (including `x0`)
 //! or `*<P>` present only the numbers in `<N>`, `*<P>`, or `!<M>` start
 //! entries, otherwise every number `>= 1` starts one except those in
 //! `~<K>`. Every backslash is literal.
@@ -84,7 +84,7 @@ pub(crate) struct CloseLogError {
 
 /// `true` when `index` can start a Work Log entry under these lists.
 /// Without wildcard intent, selection mode is active when `<N>` was typed
-/// (including `=x0`) or a nonempty `*<P>` group is present: only `<N>`,
+/// (including `x0`) or a nonempty `*<P>` group is present: only `<N>`,
 /// `*<P>`, and `!<M>` start entries. Otherwise every number starts one
 /// except those in `~<K>`. Wildcard loggability is deferred to the lineup.
 fn is_loggable(
@@ -109,10 +109,10 @@ fn is_loggable(
 }
 
 /// The default task number for an inline Work Log entry: the first task the
-/// close works. With `<N>` typed (including `=x0`) or `*<P>` present, the
+/// close works. With `<N>` typed (including `x0`) or `*<P>` present, the
 /// smallest of `<N>` union `*<P>` union `!<M>`; otherwise the smallest `n`
 /// at or above 1 not in `~<K>`. `None` when the close works no task (for
-/// example `=x0`, `=x0~2`). Whenever task 1 can take an entry, the default
+/// example `x0`, `x0~2`). Whenever task 1 can take an entry, the default
 /// is 1; in every case where a default of 1 would always fail, the default
 /// moves to the first task that can. Wildcard-aware callers use
 /// [`default_log_index_with_all`] and wait for the staged session lineup.
@@ -157,29 +157,14 @@ pub(crate) fn default_log_index_with_all(
     }
 }
 
-/// Canonical whole-item close prefix used when suggesting a replacement
-/// selection. Legacy `=*`/`=!` aliases expand to `=x`; bare tokens retain
-/// their lowercase `x` prefix.
-fn close_suggestion_prefix(close_token: &str) -> &str {
-    if close_token.starts_with("=x") || close_token.starts_with("=X") {
-        &close_token[..2]
-    } else if close_token.starts_with('=') {
-        "=x"
-    } else {
-        "x"
-    }
-}
-
 /// Build the `list it` and `complete it` suggestions for a not-worked index.
 fn not_worked_suggestions(
-    close_token: &str,
     index: u32,
     in_progress: Option<&[u32]>,
     park: &[u32],
     complete: &[u32],
     drop: &[u32],
 ) -> (String, String) {
-    let close_prefix = close_suggestion_prefix(close_token);
     let drop_suffix = if drop.is_empty() {
         String::new()
     } else {
@@ -229,12 +214,12 @@ fn not_worked_suggestions(
             if park.is_empty() {
                 (
                     format!(
-                        "{close_prefix}{index}{}{}",
+                        "x{index}{}{}",
                         park_suffix(park),
                         complete_suffix(complete)
                     ),
                     format!(
-                        "{close_prefix}0{}{}{}",
+                        "x0{}{}{}",
                         park_suffix(park),
                         drop_suffix,
                         complete_suffix(&with_complete)
@@ -248,13 +233,13 @@ fn not_worked_suggestions(
                 }
                 (
                     format!(
-                        "{close_prefix}0{}{}{}",
+                        "x0{}{}{}",
                         park_suffix(&parked),
                         drop_suffix,
                         complete_suffix(complete)
                     ),
                     format!(
-                        "{close_prefix}0{}{}{}",
+                        "x0{}{}{}",
                         park_suffix(park),
                         drop_suffix,
                         complete_suffix(&with_complete)
@@ -280,12 +265,12 @@ fn not_worked_suggestions(
             }
             (
                 format!(
-                    "{close_prefix}{listed_text}{}{}{drop_suffix}",
+                    "x{listed_text}{}{}{drop_suffix}",
                     park_suffix(park),
                     complete_suffix(complete)
                 ),
                 format!(
-                    "{close_prefix}{listed_text}{}{}{drop_suffix}",
+                    "x{listed_text}{}{}{drop_suffix}",
                     park_suffix(park),
                     complete_suffix(&completed)
                 ),
@@ -304,21 +289,18 @@ fn not_worked_suggestions(
             }
             (
                 format!(
-                    "{close_prefix}{}{}{drop_suffix}",
+                    "x{}{}{drop_suffix}",
                     park_suffix(&parked),
                     complete_suffix(complete)
                 ),
                 format!(
-                    "{close_prefix}{}{}{drop_suffix}",
+                    "x{}{}{drop_suffix}",
                     park_suffix(park),
                     complete_suffix(&completed)
                 ),
             )
         }
-        None => (
-            format!("{close_prefix}{index}"),
-            format!("{close_prefix}!{index}"),
-        ),
+        None => (format!("x{index}"), format!("x!{index}")),
     }
 }
 
@@ -358,7 +340,7 @@ pub(crate) fn assign_log_positions(
 }
 
 /// The close's lexical worked tasks `W = sorted(<N> ∪ *<P> ∪ !<M>)` when a
-/// non-wildcard selection is active (`<N>` typed, including `=x0`, or a
+/// non-wildcard selection is active (`<N>` typed, including `x0`, or a
 /// non-empty `*<P>`); `None` otherwise, including wildcard intent, when
 /// positions resolve against the staged running session at execution.
 pub(crate) fn lexical_worked_tasks(
@@ -543,14 +525,8 @@ fn check_index_loggable(
             range: index_range,
         });
     }
-    let (listed, completed) = not_worked_suggestions(
-        close_token,
-        index,
-        in_progress,
-        park,
-        complete,
-        drop,
-    );
+    let (listed, completed) =
+        not_worked_suggestions(index, in_progress, park, complete, drop);
     Err(CloseLogError {
         message: close_log_not_worked_error(
             index,
@@ -658,7 +634,7 @@ fn inline_entry_joined(tokens: &[Token<'_>]) -> String {
 
 /// Lex one inline Work Log entry: the whitespace tokens after the close
 /// token on its line (before any trailing session-operator chain).
-/// `close_token` is the display token (`=x`, `=x1,3,4`) interpolated into
+/// `close_token` is the display token (`x`, `x1,3,4`) interpolated into
 /// diagnostics; the lists are the lexed selection. Checks run in the
 /// plan's order; the first failure wins. Loggability is checked before
 /// dangling, as for bullets.
@@ -766,7 +742,6 @@ pub(crate) fn lex_close_inline_entry_with_all(
             };
             return Err(CloseLogError {
                 message: close_inline_no_spaces_error(
-                    close_token,
                     &nospace,
                     first.text,
                     escape.as_deref(),
@@ -848,14 +823,8 @@ pub(crate) fn lex_close_inline_entry_with_all(
         complete_all,
     );
     if default.is_none() && !park_all && !complete_all {
-        let (listed, completed) = not_worked_suggestions(
-            close_token,
-            1,
-            in_progress,
-            park,
-            complete,
-            drop,
-        );
+        let (listed, completed) =
+            not_worked_suggestions(1, in_progress, park, complete, drop);
         let range = (
             first.start,
             entry_tokens
@@ -899,7 +868,7 @@ pub(crate) fn lex_close_inline_entry_with_all(
 }
 
 /// Lex a close's Work Log bullets: the close item's child `ItemLine`s.
-/// `close_token` is the display token (`=x`, `=x2`, `=x1*2!3`) interpolated
+/// `close_token` is the display token (`x`, `x2`, `x1*2!3`) interpolated
 /// into not-worked diagnostics; `in_progress`/`park`/`complete`/`drop` are
 /// the lexed selection lists.
 ///
@@ -1129,7 +1098,6 @@ pub(crate) fn lex_close_log_bullets_with_all(
             }
             Err(PositionalLogError::NoWorkedTask) => {
                 let (listed, completed) = not_worked_suggestions(
-                    close_token,
                     1,
                     in_progress,
                     park,
@@ -1290,11 +1258,11 @@ mod tests {
     #[test]
     fn lexes_entries_and_details() {
         assert_eq!(
-            valid_entries("=x", "=x\n- 1 wired the lexer"),
+            valid_entries("x", "x\n- 1 wired the lexer"),
             vec![(Some(1), "wired the lexer".to_string(), Vec::new())]
         );
         assert_eq!(
-            valid_entries("=x1,2", "=x1,2\n- 1 wired the lexer\n  - chose a hand-rolled lexer\n- 2 sketched the URL parser"),
+            valid_entries("x1,2", "x1,2\n- 1 wired the lexer\n  - chose a hand-rolled lexer\n- 2 sketched the URL parser"),
             vec![
                 (
                     Some(1),
@@ -1306,22 +1274,22 @@ mod tests {
         );
         // Only the first token is an index: later numbers stay text.
         assert_eq!(
-            valid_entries("=x1", "=x1\n- 1 fixed 3 bugs"),
+            valid_entries("x1", "x1\n- 1 fixed 3 bugs"),
             vec![(Some(1), "fixed 3 bugs".to_string(), Vec::new())]
         );
         // Markers stay literal in bullets.
         assert_eq!(
-            valid_entries("=x", "=x\n- 1 moved @@inbox s:3"),
+            valid_entries("x", "x\n- 1 moved @@inbox s:3"),
             vec![(Some(1), "moved @@inbox s:3".to_string(), Vec::new())]
         );
         // Backslashes stay literal: no escape.
         assert_eq!(
-            valid_entries("=x", "=x\n- 1 fixed \\3 bugs"),
+            valid_entries("x", "x\n- 1 fixed \\3 bugs"),
             vec![(Some(1), "fixed \\3 bugs".to_string(), Vec::new())]
         );
         // Placeholders are skipped.
         assert_eq!(
-            valid_entries("=x", "=x\n- 1 wired the lexer\n- "),
+            valid_entries("x", "x\n- 1 wired the lexer\n- "),
             vec![(Some(1), "wired the lexer".to_string(), Vec::new())]
         );
     }
@@ -1329,7 +1297,7 @@ mod tests {
     #[test]
     fn rejects_bad_bullets() {
         // A numbered list rejects a later unnumbered bullet.
-        let missing = lex_bullets("=x", "=x\n- 1 ok\n- wired the lexer")
+        let missing = lex_bullets("x", "x\n- 1 ok\n- wired the lexer")
             .expect_err("missing number");
         assert!(
             missing.message.contains("start each Work Log bullet"),
@@ -1342,35 +1310,34 @@ mod tests {
             missing.message
         );
         let not_worked =
-            lex_bullets("=x1", "=x1\n- 2 foo").expect_err("not worked");
+            lex_bullets("x1", "x1\n- 2 foo").expect_err("not worked");
         assert!(
-            not_worked.message.contains("isn't worked by `=x1`"),
+            not_worked.message.contains("isn't worked by `x1`"),
             "{}",
             not_worked.message
         );
-        let dropped =
-            lex_bullets("=x~2", "=x~2\n- 2 foo").expect_err("dropped");
+        let dropped = lex_bullets("x~2", "x~2\n- 2 foo").expect_err("dropped");
         assert!(
             dropped.message.contains("is dropped by `~2`"),
             "{}",
             dropped.message
         );
-        let zero = lex_bullets("=x", "=x\n- 0 foo").expect_err("zero");
+        let zero = lex_bullets("x", "x\n- 0 foo").expect_err("zero");
         assert!(zero.message.contains("start at 1"), "{}", zero.message);
-        let block = lex_bullets("=x", "=x\n- 1 see [[bob#^web-capture]]")
+        let block = lex_bullets("x", "x\n- 1 see [[bob#^web-capture]]")
             .expect_err("block link");
         assert!(
             block.message.contains("can't contain the block link"),
             "{}",
             block.message
         );
-        let fence = lex_bullets("=x", "=x\n- 1 ```rust").expect_err("fence");
+        let fence = lex_bullets("x", "x\n- 1 ```rust").expect_err("fence");
         assert!(
             fence.message.contains("can't start with a code fence"),
             "{}",
             fence.message
         );
-        let detail_block = lex_bullets("=x", "=x\n- 1 ok\n  - ![[bob#^x]]")
+        let detail_block = lex_bullets("x", "x\n- 1 ok\n  - ![[bob#^x]]")
             .expect_err("detail block");
         assert!(
             detail_block
@@ -1383,7 +1350,7 @@ mod tests {
 
     #[test]
     fn reports_dangling() {
-        match lex_bullets("=x", "=x\n- 1").expect("dangling") {
+        match lex_bullets("x", "x\n- 1").expect("dangling") {
             CloseLogLexed { entries, dangling } => {
                 assert!(entries.is_empty());
                 assert_eq!(dangling.len(), 1);
@@ -1432,16 +1399,16 @@ mod tests {
     #[test]
     fn default_log_index_covers_every_close_shape() {
         for (close, expected) in [
-            ("=x", Some(1)),
-            ("=x1,3,4", Some(1)),
-            ("=x2", Some(2)),
-            ("=x3,4", Some(3)),
-            ("=x*2", Some(2)),
-            ("=x0!2", Some(2)),
-            ("=x~1", Some(2)),
-            ("=x!2", Some(1)),
-            ("=x0", None),
-            ("=x0~2", None),
+            ("x", Some(1)),
+            ("x1,3,4", Some(1)),
+            ("x2", Some(2)),
+            ("x3,4", Some(3)),
+            ("x*2", Some(2)),
+            ("x0!2", Some(2)),
+            ("x~1", Some(2)),
+            ("x!2", Some(1)),
+            ("x0", None),
+            ("x0~2", None),
         ] {
             let (in_progress, park, complete, drop) = selection_lists(close);
             assert_eq!(
@@ -1456,8 +1423,7 @@ mod tests {
             );
         }
         // The bullet missing-number example now follows drops too.
-        match lex_bullets("=x~1", "=x~1\n- 2 ok\n- wired").expect_err("missing")
-        {
+        match lex_bullets("x~1", "x~1\n- 2 ok\n- wired").expect_err("missing") {
             error => assert!(
                 error.message.contains("- 2 wired"),
                 "{}",
@@ -1469,34 +1435,34 @@ mod tests {
     #[test]
     fn inline_entry_defaults_and_leading_numbers() {
         assert_eq!(
-            inline_entry("=x", "wired the lexer"),
+            inline_entry("x", "wired the lexer"),
             (1, None, "wired the lexer".to_string())
         );
         assert_eq!(
-            inline_entry("=x1,3,4", "3 boom"),
+            inline_entry("x1,3,4", "3 boom"),
             (3, Some((0, 1)), "boom".to_string())
         );
         // Only the first token is an index; later numbers stay text.
         assert_eq!(
-            inline_entry("=x", "1 3 bugs fixed"),
+            inline_entry("x", "1 3 bugs fixed"),
             (1, Some((0, 1)), "3 bugs fixed".to_string())
         );
         // Markers stay literal; wikilinks are allowed.
         assert_eq!(
-            inline_entry("=x", "moved @@inbox s:3"),
+            inline_entry("x", "moved @@inbox s:3"),
             (1, None, "moved @@inbox s:3".to_string())
         );
         assert_eq!(
-            inline_entry("=x", "see [[Design notes]]"),
+            inline_entry("x", "see [[Design notes]]"),
             (1, None, "see [[Design notes]]".to_string())
         );
         // A trailing adjust token with no start/close before it stays text.
         assert_eq!(
-            inline_entry("=x", "got a +1"),
+            inline_entry("x", "got a +1"),
             (1, None, "got a +1".to_string())
         );
         // Tabs and Unicode whitespace-normalize with exact ranges.
-        match lex_inline("=x", "wired\tthé lexer").expect("unicode") {
+        match lex_inline("x", "wired\tthé lexer").expect("unicode") {
             CloseInlineLex::Entry {
                 text, text_range, ..
             } => {
@@ -1510,49 +1476,49 @@ mod tests {
     #[test]
     fn inline_entry_reports_diagnostics_in_order() {
         // Reorder: leading operators move to the end.
-        let reorder = lex_inline("=x", "= wired").expect_err("reorder");
+        let reorder = lex_inline("x", "= wired").expect_err("reorder");
         assert!(
-            reorder.message.contains("`=x wired =`"),
+            reorder.message.contains("`x wired =`"),
             "{}",
             reorder.message
         );
         assert_eq!(reorder.range, (0, 1));
         // Stray marker.
-        let stray = lex_inline("=x", "- wired the lexer").expect_err("stray");
+        let stray = lex_inline("x", "- wired the lexer").expect_err("stray");
         assert!(
             stray.message.contains("drop the stray `-`"),
             "{}",
             stray.message
         );
         // No-spaces join with the escape.
-        let nospace = lex_inline("=x", "!2 shipped").expect_err("no-spaces");
-        assert!(nospace.message.contains("(`=x!2`)"), "{}", nospace.message);
+        let nospace = lex_inline("x", "!2 shipped").expect_err("no-spaces");
+        assert!(nospace.message.contains("(`x!2`)"), "{}", nospace.message);
         assert!(
-            nospace.message.contains("`=x 1 !2 shipped`"),
+            nospace.message.contains("`x 1 !2 shipped`"),
             "{}",
             nospace.message
         );
         // Bad numbers (the spaceless join must not lex, else the
         // no-spaces hint wins first).
-        let zero = lex_inline("=x", "00 foo").expect_err("zero");
+        let zero = lex_inline("x", "00 foo").expect_err("zero");
         assert!(zero.message.contains("start at 1"), "{}", zero.message);
         // Not worked with the escape.
-        let worked = lex_inline("=x1", "2 foo").expect_err("not worked");
+        let worked = lex_inline("x1", "2 foo").expect_err("not worked");
         assert!(
-            worked.message.contains("isn't worked by `=x1`"),
+            worked.message.contains("isn't worked by `x1`"),
             "{}",
             worked.message
         );
         assert!(
-            worked.message.contains("`=x1 1 2 foo`"),
+            worked.message.contains("`x1 1 2 foo`"),
             "{}",
             worked.message
         );
         // No default.
-        let none = lex_inline("=x0", "wired it").expect_err("no default");
+        let none = lex_inline("x0", "wired it").expect_err("no default");
         assert!(none.message.contains("works no task"), "{}", none.message);
         // Task Link ending.
-        let link = lex_inline("=x", "^bob:ready=").expect_err("link");
+        let link = lex_inline("x", "^bob:ready=").expect_err("link");
         assert!(
             link.message.contains("can't end with the Task Link"),
             "{}",
@@ -1560,13 +1526,13 @@ mod tests {
         );
         // Block link and fence say entry, not bullet.
         let block =
-            lex_inline("=x", "see [[bob#^web-capture]]").expect_err("block");
+            lex_inline("x", "see [[bob#^web-capture]]").expect_err("block");
         assert!(
             block.message.contains("a Work Log entry can't contain"),
             "{}",
             block.message
         );
-        let fence = lex_inline("=x", "```rust").expect_err("fence");
+        let fence = lex_inline("x", "```rust").expect_err("fence");
         assert!(
             fence.message.contains("a Work Log entry can't start"),
             "{}",
@@ -1576,7 +1542,7 @@ mod tests {
 
     #[test]
     fn inline_entry_reports_dangling() {
-        match lex_inline("=x", "2").expect("dangling") {
+        match lex_inline("x", "2").expect("dangling") {
             CloseInlineLex::Dangling { index, index_range } => {
                 assert_eq!(index, 2);
                 assert_eq!(index_range, (0, 1));
@@ -1584,7 +1550,7 @@ mod tests {
             CloseInlineLex::Entry { .. } => panic!("entry"),
         }
         // Loggability wins over dangling, as for bullets.
-        let bad = lex_inline("=x1", "2").expect_err("not worked");
+        let bad = lex_inline("x1", "2").expect_err("not worked");
         assert!(bad.message.contains("isn't worked by"), "{}", bad.message);
     }
 
@@ -1599,8 +1565,7 @@ mod tests {
     fn unnumbered_bullets_resolve_positionally_in_selection_mode() {
         // The user's example: identical to the numbered form, with no
         // index ranges.
-        let entries =
-            positional_entries("=x3,4", "=x3,4\n- foo bar\n- baz bam");
+        let entries = positional_entries("x3,4", "x3,4\n- foo bar\n- baz bam");
         assert_eq!(
             entries
                 .iter()
@@ -1614,7 +1579,7 @@ mod tests {
         );
         // A single worked task takes every bullet.
         assert_eq!(
-            positional_entries("=x2", "=x2\n- a\n- b")
+            positional_entries("x2", "x2\n- a\n- b")
                 .iter()
                 .map(|entry| entry.index)
                 .collect::<Vec<_>>(),
@@ -1622,14 +1587,14 @@ mod tests {
         );
         // Unions resolve in ascending order.
         assert_eq!(
-            positional_entries("=x1!3", "=x1!3\n- a\n- b")
+            positional_entries("x1!3", "x1!3\n- a\n- b")
                 .iter()
                 .map(|entry| entry.index)
                 .collect::<Vec<_>>(),
             vec![Some(1), Some(3)]
         );
         assert_eq!(
-            positional_entries("=x1*2", "=x1*2\n- a\n- b")
+            positional_entries("x1*2", "x1*2\n- a\n- b")
                 .iter()
                 .map(|entry| entry.index)
                 .collect::<Vec<_>>(),
@@ -1637,22 +1602,20 @@ mod tests {
         );
         // A single bullet logs to the first worked task.
         assert_eq!(
-            positional_entries("=x3,4", "=x3,4\n- a")
+            positional_entries("x3,4", "x3,4\n- a")
                 .iter()
                 .map(|entry| entry.index)
                 .collect::<Vec<_>>(),
             vec![Some(3)]
         );
         // Details attach to positional entries.
-        let entries = positional_entries(
-            "=x1,2",
-            "=x1,2\n- foo\n  - chose a lexer\n- bar",
-        );
+        let entries =
+            positional_entries("x1,2", "x1,2\n- foo\n  - chose a lexer\n- bar");
         assert_eq!(entries[0].index, Some(1));
         assert_eq!(entries[0].details, vec!["chose a lexer".to_string()]);
         assert_eq!(entries[1].index, Some(2));
         // A lone leading number is always a task number.
-        let entries = positional_entries("=x", "=x\n- 2 bugs fixed");
+        let entries = positional_entries("x", "x\n- 2 bugs fixed");
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].index, Some(2));
         assert_eq!(entries[0].text, "bugs fixed");
@@ -1660,8 +1623,8 @@ mod tests {
 
     #[test]
     fn unnumbered_bullets_stay_unresolved_without_a_selection() {
-        // Plain `=x`, `=x!2`, and `=x~2` leave positions for execution.
-        for close in ["=x", "=x!2", "=x~2"] {
+        // Plain `x`, `x!2`, and `x~2` leave positions for execution.
+        for close in ["x", "x!2", "x~2"] {
             let entries = positional_entries(close, &format!("{close}\n- foo"));
             assert_eq!(entries.len(), 1, "{close}");
             assert_eq!(entries[0].index, None, "{close}");
@@ -1675,35 +1638,35 @@ mod tests {
         // Too many: the message names the close, the counts, and the fix;
         // the range covers the first excess bullet's text.
         let too_many =
-            lex_bullets("=x3,4", "=x3,4\n- a\n- b\n- c").expect_err("too many");
+            lex_bullets("x3,4", "x3,4\n- a\n- b\n- c").expect_err("too many");
         assert!(
             too_many.message.contains(
-                "`=x3,4` works 2 tasks (3 and 4) but has 3 unnumbered Work Log bullets"
+                "`x3,4` works 2 tasks (3 and 4) but has 3 unnumbered Work Log bullets"
             ),
             "{}",
             too_many.message
         );
         assert!(too_many.message.contains("`- 3 c`"), "{}", too_many.message);
-        assert_eq!(too_many.range, (16, 17));
-        // None: `=x0` works no task.
-        let none = lex_bullets("=x0", "=x0\n- a").expect_err("no worked task");
+        assert_eq!(too_many.range, (15, 16));
+        // None: `x0` works no task.
+        let none = lex_bullets("x0", "x0\n- a").expect_err("no worked task");
         assert!(
             none.message.contains(
-                "`=x0` works no task, so its Work Log bullets have none to log to"
+                "`x0` works no task, so its Work Log bullets have none to log to"
             ),
             "{}",
             none.message
         );
-        assert!(none.message.contains("`=x1`"), "{}", none.message);
-        assert!(none.message.contains("`=x0!1`"), "{}", none.message);
-        assert_eq!(none.range, (6, 7));
+        assert!(none.message.contains("`x1`"), "{}", none.message);
+        assert!(none.message.contains("`x0!1`"), "{}", none.message);
+        assert_eq!(none.range, (5, 6));
     }
 
     #[test]
     fn mixed_numbering_fails_both_orders() {
         // Numbered list, later unnumbered bullet: the missing-number error
         // with the all-or-none rule.
-        let missing = lex_bullets("=x", "=x\n- 1 a\n- b").expect_err("missing");
+        let missing = lex_bullets("x", "x\n- 1 a\n- b").expect_err("missing");
         assert!(
             missing.message.contains("start each Work Log bullet"),
             "{}",
@@ -1714,10 +1677,10 @@ mod tests {
             "{}",
             missing.message
         );
-        assert_eq!(missing.range, (11, 12));
+        assert_eq!(missing.range, (10, 11));
         // Unnumbered list, later numbered bullet: the mixed-numbering
         // error on the index token, before any index or loggability check.
-        let mixed = lex_bullets("=x", "=x\n- a\n- 2 b").expect_err("mixed");
+        let mixed = lex_bullets("x", "x\n- a\n- 2 b").expect_err("mixed");
         assert!(
             mixed.message.contains("numbered all or none"),
             "{}",
@@ -1729,9 +1692,9 @@ mod tests {
             mixed.message
         );
         assert!(mixed.message.contains("`- 1 2 b`"), "{}", mixed.message);
-        assert_eq!(mixed.range, (9, 10));
+        assert_eq!(mixed.range, (8, 9));
         // The mixed check wins over a bad number on that bullet.
-        let zero = lex_bullets("=x", "=x\n- a\n- 0 b").expect_err("mixed zero");
+        let zero = lex_bullets("x", "x\n- a\n- 0 b").expect_err("mixed zero");
         assert!(
             zero.message.contains("numbered all or none"),
             "{}",
@@ -1741,8 +1704,7 @@ mod tests {
 
     #[test]
     fn positional_entries_carry_their_typed_position() {
-        let lexed =
-            lex_bullets("=x", "=x\n- foo\n- bar").expect("valid bullets");
+        let lexed = lex_bullets("x", "x\n- foo\n- bar").expect("valid bullets");
         let entries = log_entries_from_lex(&lexed.entries);
         assert_eq!(
             entries
@@ -1762,7 +1724,7 @@ mod tests {
         // Selection-mode unnumbered bullets resolve an index lexically but
         // keep the positional origin with the 1-based typed position.
         let lexed =
-            lex_bullets("=x1,2", "=x1,2\n- foo\n- bar").expect("valid bullets");
+            lex_bullets("x1,2", "x1,2\n- foo\n- bar").expect("valid bullets");
         assert_eq!(
             lexed
                 .entries
@@ -1785,7 +1747,7 @@ mod tests {
             CloseLogOrigin::PositionalBullet { position: 2 }
         );
         // Numbered entries keep the bullet origin.
-        let lexed = lex_bullets("=x1,2", "=x1,2\n- 1 foo\n- 2 bar")
+        let lexed = lex_bullets("x1,2", "x1,2\n- 1 foo\n- 2 bar")
             .expect("valid bullets");
         let entries = log_entries_from_lex(&lexed.entries);
         assert_eq!(entries[0].origin, CloseLogOrigin::Bullet);
@@ -1829,11 +1791,11 @@ mod tests {
                 })
                 .collect()
         }
-        let lines = child_lines("=x\n- \n- foo");
+        let lines = child_lines("x\n- \n- foo");
         assert!(close_first_bullet_is_unnumbered(&lines[1..]));
-        let lines = child_lines("=x\n- \n- 1 foo");
+        let lines = child_lines("x\n- \n- 1 foo");
         assert!(!close_first_bullet_is_unnumbered(&lines[1..]));
-        let lines = child_lines("=x");
+        let lines = child_lines("x");
         assert!(!close_first_bullet_is_unnumbered(&lines[1..]));
     }
 }

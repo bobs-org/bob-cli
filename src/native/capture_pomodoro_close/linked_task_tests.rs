@@ -91,7 +91,7 @@ fn worked_example_day() -> String {
         "  - 🍅 [[bob#^capture-stop]]\n",
         "- [ ] (**0920-0950** [t:: 30m]) — CAPTURE\n",
         "  - [[bob#^capture-stop]]\n",
-        "    - Designed the `=x` grammar\n",
+        "    - Designed the `x` grammar\n",
         "      - chose `x` for done\n",
         "    - Wrote the plan\n",
         "  - [[bob#^web-capture]]#\n",
@@ -110,7 +110,7 @@ fn worked_example_updates_tasks_and_writes_dated_work_logs() {
     vault.insert(
         "bob.md",
         concat!(
-            "- [*] #task Add support for `=x` syntax! [created::2026-09-26] ^capture-stop\n",
+            "- [*] #task Add support for `x` syntax! [created::2026-09-26] ^capture-stop\n",
             "- [*] #task Add capture support for web URLs! [created::2026-09-21] ^web-capture\n",
             "- [ ] #task Plain ready task [created::2026-09-20] ^ready\n",
         ),
@@ -130,9 +130,9 @@ fn worked_example_updates_tasks_and_writes_dated_work_logs() {
     assert_eq!(
         plan.changed_files.get(Path::new("bob.md")).map(String::as_str),
         Some(concat!(
-            "- [/] #task Add support for `=x` syntax! [fresh:: 2026-09-28] [created::2026-09-26] ^capture-stop\n",
+            "- [/] #task Add support for `x` syntax! [fresh:: 2026-09-28] [created::2026-09-26] ^capture-stop\n",
             "\t- 🛠️ **WORK LOG**\n",
-            "\t\t- *2026-09-28* — Designed the `=x` grammar\n",
+            "\t\t- *2026-09-28* — Designed the `x` grammar\n",
             "\t\t\t- chose `x` for done\n",
             "\t\t- *2026-09-28* — Wrote the plan\n",
             "- [*] #task Add capture support for web URLs! [created::2026-09-21] ^web-capture\n",
@@ -456,7 +456,7 @@ fn worked_vault() -> MemoryVault {
     vault.insert(
         "bob.md",
         concat!(
-            "- [*] #task Add support for `=x` syntax! [created::2026-09-26] ^capture-stop\n",
+            "- [*] #task Add support for `x` syntax! [created::2026-09-26] ^capture-stop\n",
             "- [*] #task Add capture support for web URLs! [created::2026-09-21] ^web-capture\n",
             "- [ ] #task Plain ready task [created::2026-09-20] ^ready\n",
         ),
@@ -481,14 +481,14 @@ fn selection_complete_writes_done_task_with_completion_date() {
         &vault,
         day_path,
         &worked_example_day(),
-        &selection(None, vec![1], "=x!1"),
+        &selection(None, vec![1], "x!1"),
     );
     assert_eq!(
         plan.changed_files.get(Path::new("bob.md")).map(String::as_str),
         Some(concat!(
-            "- [x] #task Add support for `=x` syntax! [created::2026-09-26]  [completion:: 2026-09-28] ^capture-stop\n",
+            "- [x] #task Add support for `x` syntax! [created::2026-09-26]  [completion:: 2026-09-28] ^capture-stop\n",
             "\t- \u{1F6E0}\u{FE0F} **WORK LOG**\n",
-            "\t\t- *2026-09-28* \u{2014} Designed the `=x` grammar\n",
+            "\t\t- *2026-09-28* \u{2014} Designed the `x` grammar\n",
             "\t\t\t- chose `x` for done\n",
             "\t\t- *2026-09-28* \u{2014} Wrote the plan\n",
             "- [*] #task Add capture support for web URLs! [created::2026-09-21] ^web-capture\n",
@@ -507,14 +507,14 @@ fn selection_in_progress_and_complete_updates_both_tasks() {
         &vault,
         day_path,
         &worked_example_day(),
-        &selection(Some(vec![1]), vec![2], "=x1!2"),
+        &selection(Some(vec![1]), vec![2], "x1!2"),
     );
     assert_eq!(
         plan.changed_files.get(Path::new("bob.md")).map(String::as_str),
         Some(concat!(
-            "- [/] #task Add support for `=x` syntax! [fresh:: 2026-09-28] [created::2026-09-26] ^capture-stop\n",
+            "- [/] #task Add support for `x` syntax! [fresh:: 2026-09-28] [created::2026-09-26] ^capture-stop\n",
             "\t- \u{1F6E0}\u{FE0F} **WORK LOG**\n",
-            "\t\t- *2026-09-28* \u{2014} Designed the `=x` grammar\n",
+            "\t\t- *2026-09-28* \u{2014} Designed the `x` grammar\n",
             "\t\t\t- chose `x` for done\n",
             "\t\t- *2026-09-28* \u{2014} Wrote the plan\n",
             "- [x] #task Add capture support for web URLs! [created::2026-09-21]  [completion:: 2026-09-28] ^web-capture\n",
@@ -538,7 +538,7 @@ fn mentioned_first_bare_link_gets_number_and_blocked_warning() {
         &vault,
         day_path,
         day,
-        &selection(Some(vec![1]), vec![], "=x1"),
+        &selection(Some(vec![1]), vec![], "x1"),
     );
     assert_eq!(plan.summary.task_links.len(), 1);
     assert_eq!(plan.summary.task_links[0].index, 1);
@@ -569,7 +569,7 @@ fn listed_duplicate_embedded_and_plain_warns_once_for_not_completed() {
         &vault,
         day_path,
         day,
-        &selection(None, vec![2], "=x!2"),
+        &selection(None, vec![2], "x!2"),
     );
     assert_eq!(plan.summary.tasks.len(), 1);
     assert_eq!(plan.summary.tasks[0].index, Some(1));
@@ -605,7 +605,7 @@ fn custom_in_progress_symbol_gets_no_listed_warning() {
         &vault,
         day_path,
         day,
-        &selection(Some(vec![1]), vec![], "=x1"),
+        &selection(Some(vec![1]), vec![], "x1"),
     );
     assert_eq!(plan.summary.tasks[0].index, Some(1));
     assert_eq!(plan.summary.tasks[0].warning, None);
@@ -627,7 +627,7 @@ fn same_task_numbered_twice_carries_lowest_number() {
         &vault,
         day_path,
         day,
-        &selection(Some(vec![1, 2]), vec![], "=x1,2"),
+        &selection(Some(vec![1, 2]), vec![], "x1,2"),
     );
     assert_eq!(plan.summary.task_links.len(), 2);
     assert_eq!(plan.summary.tasks.len(), 1);
@@ -642,14 +642,14 @@ fn typed_entry_lands_in_task_work_log_as_typed_subset() {
         &vault,
         day_path,
         &worked_example_day(),
-        &selection_log(None, vec![], vec![(1, "wired the lexer")], "=x"),
+        &selection_log(None, vec![], vec![(1, "wired the lexer")], "x"),
     );
     assert_eq!(
         plan.changed_files.get(Path::new("bob.md")).map(String::as_str),
         Some(concat!(
-            "- [/] #task Add support for `=x` syntax! [fresh:: 2026-09-28] [created::2026-09-26] ^capture-stop\n",
+            "- [/] #task Add support for `x` syntax! [fresh:: 2026-09-28] [created::2026-09-26] ^capture-stop\n",
             "\t- \u{1F6E0}\u{FE0F} **WORK LOG**\n",
-            "\t\t- *2026-09-28* — Designed the `=x` grammar\n",
+            "\t\t- *2026-09-28* — Designed the `x` grammar\n",
             "\t\t\t- chose `x` for done\n",
             "\t\t- *2026-09-28* — Wrote the plan\n",
             "\t\t- *2026-09-28* — wired the lexer\n",
@@ -687,10 +687,10 @@ fn typed_entry_on_complete_target_lands_in_completed_task() {
         &vault,
         day_path,
         &worked_example_day(),
-        &selection_log(None, vec![1], vec![(1, "shipped it")], "=x!1"),
+        &selection_log(None, vec![1], vec![(1, "shipped it")], "x!1"),
     );
     let bob = &plan.changed_files[Path::new("bob.md")];
-    assert!(bob.starts_with("- [x] #task Add support for `=x` syntax!"));
+    assert!(bob.starts_with("- [x] #task Add support for `x` syntax!"));
     assert!(bob.contains("*2026-09-28* — shipped it"));
     assert_eq!(
         plan.summary.tasks[0].typed_work_log,
@@ -711,7 +711,7 @@ fn unresolved_typed_target_warns_and_stays_in_pomodoro() {
         &vault,
         day_path,
         day,
-        &selection_log(None, vec![], vec![(1, "did it")], "=x"),
+        &selection_log(None, vec![], vec![(1, "did it")], "x"),
     );
     assert!(plan
         .warnings
@@ -742,7 +742,7 @@ fn unresolved_listed_row_warns_exactly_once() {
         &vault,
         day_path,
         day,
-        &selection(Some(vec![1, 2]), vec![], "=x1,2"),
+        &selection(Some(vec![1, 2]), vec![], "x1,2"),
     );
     assert_eq!(plan.summary.tasks.len(), 1);
     assert_eq!(plan.summary.tasks[0].index, Some(1));
@@ -767,15 +767,15 @@ fn typed_details_nest_undated_in_task_work_log() {
             None,
             vec![],
             vec![(1, "wired the lexer", vec!["chose a hand-rolled lexer"])],
-            "=x",
+            "x",
         ),
     );
     assert_eq!(
         plan.changed_files.get(Path::new("bob.md")).map(String::as_str),
         Some(concat!(
-            "- [/] #task Add support for `=x` syntax! [fresh:: 2026-09-28] [created::2026-09-26] ^capture-stop\n",
+            "- [/] #task Add support for `x` syntax! [fresh:: 2026-09-28] [created::2026-09-26] ^capture-stop\n",
             "\t- \u{1F6E0}\u{FE0F} **WORK LOG**\n",
-            "\t\t- *2026-09-28* — Designed the `=x` grammar\n",
+            "\t\t- *2026-09-28* — Designed the `x` grammar\n",
             "\t\t\t- chose `x` for done\n",
             "\t\t- *2026-09-28* — Wrote the plan\n",
             "\t\t- *2026-09-28* — wired the lexer\n",
@@ -824,7 +824,7 @@ fn typed_details_align_with_typed_entries() {
             None,
             vec![],
             vec![(1, "first", vec!["why first"]), (1, "second", Vec::new())],
-            "=x",
+            "x",
         ),
     );
     assert_eq!(plan.summary.tasks[0].typed_work_log.len(), 2);
@@ -847,11 +847,11 @@ fn typed_details_on_complete_target_land_in_completed_task() {
             None,
             vec![1],
             vec![(1, "shipped it", vec!["polished the edges"])],
-            "=x!1",
+            "x!1",
         ),
     );
     let bob = &plan.changed_files[Path::new("bob.md")];
-    assert!(bob.starts_with("- [x] #task Add support for `=x` syntax!"));
+    assert!(bob.starts_with("- [x] #task Add support for `x` syntax!"));
     assert!(bob.contains("*2026-09-28* — shipped it"));
     assert!(bob.contains("polished the edges"));
     assert_eq!(

@@ -158,7 +158,7 @@ fn named_start_grammar_errors_are_precise() {
     for (token, needle) in [
         ("=#", "is incomplete: type a Pomodoro name after `#`"),
         ("=#bugs=3", "write the duration after `@` or before the name: `=#bugs@3` or `=3#bugs`"),
-        ("=x#bugs", "`=x` always closes the running Pomodoro"),
+        ("x#bugs", "`x` always closes the running Pomodoro"),
         ("=#deep work", "must be the whole capture item"),
     ] {
         let output =
@@ -186,7 +186,7 @@ fn named_start_running_guards_and_switch_chain() {
     assert!(!output.status.success());
     assert!(
         stdout(&output).contains("is still running")
-            && stdout(&output).contains("=x =#deep-work"),
+            && stdout(&output).contains("x =#deep-work"),
         "{}",
         stdout(&output)
     );
@@ -212,7 +212,7 @@ fn named_start_running_guards_and_switch_chain() {
         .arg("-f")
         .arg("json")
         .arg("--")
-        .arg("=x =#deep-work")
+        .arg("x =#deep-work")
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_NOW", "2026-07-10 09:02:00")
         .output()

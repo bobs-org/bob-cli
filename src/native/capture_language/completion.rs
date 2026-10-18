@@ -633,7 +633,7 @@ pub(crate) fn completion_field_at(
         return Some(field);
     }
     // A whole-item `+[N]`/`-[N]` adjustment, `++[N]`/`--[N]` shift,
-    // `=x` close, or `=`/`=<X>` start is an action, never a routed
+    // `x` close, or `=`/`=<X>` start is an action, never a routed
     // capture: it requests no route or task completion candidates. The
     // `=`-family parser covers both closes and starts.
     if parse_editor_adjust_item(item).is_some()

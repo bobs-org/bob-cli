@@ -1037,41 +1037,38 @@ fn execution_parses_equals_family_starts_alongside_close() {
     .expect_err("forced");
     assert_eq!(forced, POMODORO_START_FORCED_ERROR, "{forced}");
     // Close shapes keep today's meaning.
-    let close = execute("=x").expect("close");
-    assert!(
-        matches!(close.kind, CaptureKind::PomodoroClose { .. }),
-        "=x"
-    );
-    let inline = execute("=x more").expect("inline entry");
+    let close = execute("x").expect("close");
+    assert!(matches!(close.kind, CaptureKind::PomodoroClose { .. }), "x");
+    let inline = execute("x more").expect("inline entry");
     match inline.kind {
         CaptureKind::PomodoroClose { spec } => {
-            assert_eq!(spec.raw, "=x", "=x more");
-            assert_eq!(spec.log.len(), 1, "=x more");
-            assert_eq!(spec.log[0].index, Some(1), "=x more");
-            assert_eq!(spec.log[0].text, "more", "=x more");
+            assert_eq!(spec.raw, "x", "x more");
+            assert_eq!(spec.log.len(), 1, "x more");
+            assert_eq!(spec.log[0].index, Some(1), "x more");
+            assert_eq!(spec.log[0].text, "more", "x more");
         }
-        other => panic!("=x more: expected close, got {other:?}"),
+        other => panic!("x more: expected close, got {other:?}"),
     }
-    assert_eq!(inline.body, "=x", "=x more");
+    assert_eq!(inline.body, "x", "x more");
     for raw in ["=xx", "=xa"] {
         let parsed =
             execute(raw).unwrap_or_else(|error| panic!("{raw}: {error}"));
         assert_eq!(parsed.kind, CaptureKind::Task, "{raw}");
     }
-    // A present-but-empty `!` keeps wildcard intent, so `=x!` closes all links.
-    let defaulted = execute("=x!").expect("defaulted close");
+    // A present-but-empty `!` keeps wildcard intent, so `x!` closes all links.
+    let defaulted = execute("x!").expect("defaulted close");
     match defaulted.kind {
         CaptureKind::PomodoroClose { spec } => {
-            assert!(spec.complete.is_empty(), "=x!");
-            assert!(spec.complete_all, "=x!");
+            assert!(spec.complete.is_empty(), "x!");
+            assert!(spec.complete_all, "x!");
         }
-        other => panic!("=x!: expected close, got {other:?}"),
+        other => panic!("x!: expected close, got {other:?}"),
     }
     // A dangling separator is an editing state: strict execution rejects
     // it instead of guessing.
-    let dangling = execute("=x~").expect_err("dangling close");
+    let dangling = execute("x~").expect_err("dangling close");
     assert!(
-        dangling.contains("`=x~` is incomplete: type a task number after `~`"),
+        dangling.contains("`x~` is incomplete: type a task number after `~`"),
         "{dangling}"
     );
 }
@@ -1150,19 +1147,19 @@ fn execution_parses_override_family_with_identical_claim_rules() {
         ),
         (
             "==x",
-            "`==x` is not a close: `==` restarts or swaps the running Pomodoro and never closes it; close it with `=x`",
+            "`==x` is not a close: `==` restarts or swaps the running Pomodoro and never closes it; close it with `x`",
         ),
         (
             "==X1",
-            "`==X1` is not a close: `==` restarts or swaps the running Pomodoro and never closes it; close it with `=X1`",
+            "`==X1` is not a close: `==` restarts or swaps the running Pomodoro and never closes it; close it with `x1`",
         ),
         (
             "==*",
-            "`==*` is not a close: `==` restarts or swaps the running Pomodoro and never closes it; close it with `=*`",
+            "`==*` is not a close: `==` restarts or swaps the running Pomodoro and never closes it; close it with `x*`",
         ),
         (
             "==!2",
-            "`==!2` is not a close: `==` restarts or swaps the running Pomodoro and never closes it; close it with `=!2`",
+            "`==!2` is not a close: `==` restarts or swaps the running Pomodoro and never closes it; close it with `x!2`",
         ),
         (
             "==#",
@@ -1869,11 +1866,11 @@ fn execution_rejects_a_trailing_now_tag_like_any_other_tag() {
     }
 
     // Whole-item operators and links with a trailing tag still fail, but
-    // an inline `=x #now` entry is literal text and stays valid.
+    // an inline `x #now` entry is literal text and stays valid.
     for raw in ["^sase:fix-it #now", "=3 #now", "+5 #now"] {
         execute(raw).expect_err(&format!("{raw} stays rejected"));
     }
-    execute("=x #now").expect("=x #now stays valid");
+    execute("x #now").expect("x #now stays valid");
 }
 
 #[test]
@@ -2080,13 +2077,13 @@ fn plus_parent_picker_is_incomplete_but_keeps_the_lone_adjustment() {
 
 #[test]
 fn plus_parent_picker_does_not_claim_operators_or_work_log_text() {
-    for raw in ["+2", "+0", "+2oops", "+-", "+-3", "++", "++3", "+2 =x"] {
+    for raw in ["+2", "+0", "+2oops", "+-", "+-3", "++", "++3", "+2 x"] {
         let parsed = editor(raw);
         assert_ne!(parsed.needs, vec![Need::TaskParent], "{raw}");
         assert_ne!(parsed.mode, EditorMode::Incomplete, "{raw}");
     }
 
-    let log = "=x\n- 1 worked on the task +";
+    let log = "x\n- 1 worked on the task +";
     let parsed = editor(log);
     assert_ne!(parsed.needs, vec![Need::TaskParent]);
 }
@@ -2373,8 +2370,8 @@ fn bang_claim_covers_the_contract_table() {
         ("!sase:fix-flaky more", "remove `more`"),
         ("!sase:fix-flaky $1", "remove `$1`"),
         ("!sase:a !sase:b", "blank line"),
-        ("!sase:fix-flaky=x", "`=x!N`"),
-        ("!sase:fix-flaky#bugs", "`=x!N`"),
+        ("!sase:fix-flaky=x", "`x!N`"),
+        ("!sase:fix-flaky#bugs", "`x!N`"),
     ] {
         let error = execute(raw).expect_err(&format!("{raw} is invalid"));
         assert!(error.contains(needle), "{raw}: {error}");

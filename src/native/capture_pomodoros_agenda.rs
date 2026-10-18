@@ -5,7 +5,7 @@
 //! is resolved through that cache. Link recognition reuses the close
 //! planner's numbered walk
 //! ([`number_task_links_in_range`](super::capture_pomodoro_close::number_task_links_in_range)),
-//! so the `=x` numbers below are exactly the numbers `bob capture -- =x`
+//! so the `x` numbers below are exactly the numbers `bob capture -- x`
 //! will use, and the other open entries carry the `=` lineup numbers from
 //! [`list_queued_links`](super::capture_pomodoro_start::list_queued_links).
 

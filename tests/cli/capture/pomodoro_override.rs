@@ -34,7 +34,7 @@ fn worked_vault(
         concat!(
             "## Tasks\n",
             "\n",
-            "- [*] #task Add support for `=x` syntax! [created::2026-10-01] ^capture-stop\n",
+            "- [*] #task Add support for `x` syntax! [created::2026-10-01] ^capture-stop\n",
             "- [*] #task Add capture support for web URLs! [created::2026-10-01] ^web-capture\n",
         ),
     );
@@ -267,7 +267,7 @@ fn override_restart_matches_reset_then_start_on_note_free() {
 
     let (_temp_b, vault_b, day_b) =
         worked_vault("bob-cli-override-restart-eq-b");
-    run_json(&vault_b, &day_b, &["=x0"]);
+    run_json(&vault_b, &day_b, &["x0"]);
     run_json(&vault_b, &day_b, &["=3"]);
     let reset_start_day = fs::read_to_string(&day_b).expect("read day");
     assert_eq!(restart_day, reset_start_day, "{restart_day}");
@@ -582,25 +582,25 @@ fn override_swap_named_restart_matches_plain_restart() {
 
 #[test]
 fn override_swap_matches_reset_then_start() {
-    // Fresh-timing swaps equal `=x0` then `=` on a note-free ledger.
+    // Fresh-timing swaps equal `x0` then `=` on a note-free ledger.
     let (_temp, vault, day_file) = worked_vault("bob-cli-override-swap-eq-a");
     run_json(&vault, &day_file, &["==3#bugs"]);
     let swap_day = fs::read_to_string(&day_file).expect("read day");
 
     let (_temp, vault, day_file) = worked_vault("bob-cli-override-swap-eq-b");
-    run_json(&vault, &day_file, &["=x0"]);
+    run_json(&vault, &day_file, &["x0"]);
     run_json(&vault, &day_file, &["=3#bugs"]);
     let reset_start_day = fs::read_to_string(&day_file).expect("read day");
     assert_eq!(swap_day, reset_start_day);
 
-    // A kept ledger differs from `=x0 =#bugs` only in the target ledger:
+    // A kept ledger differs from `x0 =#bugs` only in the target ledger:
     // the running clock carries over instead of the 25-minute default.
     let (_temp, vault, day_file) = worked_vault("bob-cli-override-swap-eq-c");
     run_json(&vault, &day_file, &["==#bugs"]);
     let kept_day = fs::read_to_string(&day_file).expect("read day");
 
     let (_temp, vault, day_file) = worked_vault("bob-cli-override-swap-eq-d");
-    run_json(&vault, &day_file, &["=x0"]);
+    run_json(&vault, &day_file, &["x0"]);
     run_json(&vault, &day_file, &["=#bugs"]);
     let default_day = fs::read_to_string(&day_file).expect("read day");
     assert_eq!(
@@ -974,7 +974,7 @@ fn override_swap_teaching_errors() {
         "{}",
         format_output(&output)
     );
-    // `=x#bugs` teaches the swap without closing.
+    // `x#bugs` teaches the swap without closing.
     let bad = run_with_stdin(
         bob_command()
             .arg("capture")
@@ -984,7 +984,7 @@ fn override_swap_teaching_errors() {
             .arg("json")
             .env("BOB_DAY_FILE", &day_file)
             .env("BOB_NOW", NOW),
-        "=x#bugs\n",
+        "x#bugs\n",
     );
     assert!(!bad.status.success(), "{}", format_output(&bad));
     assert!(

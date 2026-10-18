@@ -426,12 +426,12 @@ fn capture_parse_and_rewrite_share_the_text_slot() {
 fn close_shorthands_offer_nothing() {
     let fixture = fixture();
     // Action items offer nothing, exactly as in `capture-complete`:
-    // closes (`=x…`, `=*`, `=!`), starts (`=`, `=<X>`), adjustments,
-    // shifts, and Work Log text on or below the `=x` line.
+    // closes (`x…`, `x*`, `x!`), starts (`=`, `=<X>`), adjustments,
+    // shifts, and Work Log text on or below the `x` line.
     for words in [
-        vec!["bob", "capture", "=x done @"],
-        vec!["bob", "capture", "=*"],
-        vec!["bob", "capture", "=!"],
+        vec!["bob", "capture", "x done @"],
+        vec!["bob", "capture", "x*"],
+        vec!["bob", "capture", "x!"],
     ] {
         let output = complete(&fixture, &words);
         assert_success(&output);
@@ -442,9 +442,9 @@ fn close_shorthands_offer_nothing() {
 #[test]
 fn named_start_after_inline_close_keeps_prefix() {
     let fixture = fixture();
-    let output = complete(&fixture, &["bob", "capture", "=x wired it =#"]);
+    let output = complete(&fixture, &["bob", "capture", "x wired it =#"]);
     assert_success(&output);
-    assert_eq!(directives(&output), vec!["!prefix 12".to_string()]);
+    assert_eq!(directives(&output), vec!["!prefix 11".to_string()]);
     assert!(values(&output).contains(&"=#deep-work".to_string()));
     assert!(groups(&output).contains(&"open Pomodoros".to_string()));
 }

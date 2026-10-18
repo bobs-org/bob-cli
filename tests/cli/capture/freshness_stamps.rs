@@ -240,28 +240,27 @@ fn capture_link_stamping_is_idempotent_same_day() {
 #[test]
 fn capture_close_to_in_progress_stamps_but_complete_does_not() {
     let (_temp, vault, day_file) = close_worked_vault("bob-cli-fresh-close");
-    let json =
-        run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["=x"]);
+    let json = run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["x"]);
     assert_eq!(json["kind"], "pomodoro_close");
     let bob = fs::read_to_string(vault.join("bob.md")).expect("bob");
     assert!(
         bob.contains(
-            "- [/] #task Add support for `=x` syntax! [fresh:: 2026-09-28] [created::2026-09-26] ^capture-stop"
+            "- [/] #task Add support for `x` syntax! [fresh:: 2026-09-28] [created::2026-09-26] ^capture-stop"
         ),
-        "=x rows that set [/] stamp: {bob}"
+        "x rows that set [/] stamp: {bob}"
     );
     // Complete rows never stamp (checked in the selection test below).
     let (_temp, vault, day_file) =
         close_worked_vault("bob-cli-fresh-close-complete");
     let json =
-        run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["=x!2"]);
+        run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["x!2"]);
     assert_eq!(json["kind"], "pomodoro_close");
     let bob = fs::read_to_string(vault.join("bob.md")).expect("bob");
     assert!(
         !bob.contains(
             "[fresh:: 2026-09-28] [created::2026-09-21]  [completion::"
         ),
-        "=x complete must not stamp: {bob}"
+        "x complete must not stamp: {bob}"
     );
 }
 

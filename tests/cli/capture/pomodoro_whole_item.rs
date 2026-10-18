@@ -321,7 +321,7 @@ fn capture_pomodoro_whole_item_start_guards_fail_write_free() {
     let error = stdout(&output);
     assert!(
         error.contains(
-            "cannot start the next Pomodoro: CAPTURE 0920-0950 is still running at line 3; close it with `=x` first, or capture `=x`, a blank line, then `=3` to switch sessions"
+            "cannot start the next Pomodoro: CAPTURE 0920-0950 is still running at line 3; close it with `x` first, or capture `x`, a blank line, then `=3` to switch sessions"
         ),
         "{error}"
     );
@@ -636,14 +636,14 @@ fn capture_pomodoro_whole_item_start_rejects_shape_and_forced_flags() {
         assert_eq!(json["text"], text, "{args:?}");
     }
 
-    // The nothing-running errors on `=x`, `+`, and `++` point at `=` when a
+    // The nothing-running errors on `x`, `+`, and `++` point at `=` when a
     // future Pomodoro exists.
     let temp_h = TempDir::new("bob-cli-capture-start-hints");
     let vault_h = temp_h.path().join("vault");
     let day_h = vault_h.join("day.md");
     write_file(&day_h, day_contents);
     for (args, verb) in [
-        (vec!["=x"], "close"),
+        (vec!["x"], "close"),
         (vec!["+5"], "adjust"),
         (vec!["++3"], "shift"),
     ] {
@@ -698,7 +698,7 @@ fn capture_pomodoro_whole_item_start_rejects_shape_and_forced_flags() {
 
 #[test]
 fn capture_pomodoro_whole_item_start_batches_compose_and_roll_back() {
-    // `=x`, blank line, `=` switches sessions atomically: the close's
+    // `x`, blank line, `=` switches sessions atomically: the close's
     // carried placeholder starts.
     let (_temp, vault, day_file) = close_worked_vault("bob-cli-start-switch");
     let output = run_with_stdin(
@@ -710,7 +710,7 @@ fn capture_pomodoro_whole_item_start_batches_compose_and_roll_back() {
             .arg("json")
             .env("BOB_DAY_FILE", &day_file)
             .env("BOB_NOW", "2026-09-28 09:37:00"),
-        "=x\n\n=\n",
+        "x\n\n=\n",
     );
     assert_success(&output);
     let json: serde_json::Value =

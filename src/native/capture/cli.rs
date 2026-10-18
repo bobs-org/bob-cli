@@ -19,7 +19,7 @@ pub(crate) fn build_cli() -> ClapCommand {
 TEXT is split into ordered capture items by one or more blank or whitespace-only \
 physical lines; leading, trailing, and repeated separators are ignored. A \
 whitespace-separated line of only Pomodoro session operators is also split \
-into one item per operator, so `+2 =x` means `+2`, blank line, `=x`. A \
+into one item per operator, so `+2 x` means `+2`, blank line, `x`. A \
 '@@<route>' or '@@<route>+<block-id>' declaration token anywhere in the draft \
 is metadata, not a capture item: every otherwise-unrouted item inherits that \
 destination, while an item-local @route, @route+id, @route#..., @route^..., \
@@ -156,8 +156,8 @@ error so an unfinished query cannot create a junk inbox task. Accepting the \
 picked task in a picker inserts its '@<route>:<block-id>' link, which \
 captures exactly like a typed link.\n\n\
 Capture a whole item `!note:block-id` (for example `!sase:fix-flaky`) to \
-complete that existing open task without closing a Pomodoro, the way `=x!N` \
-completes a linked task: the task line closes exactly as `=x!N` writes it \
+complete that existing open task without closing a Pomodoro, the way `x!N` \
+completes a linked task: the task line closes exactly as `x!N` writes it \
 (including embedded subtasks), its Task Links retire the way `bob task \
 reconcile` retires them, and Blocked dependents recover the way Ctrl+Enter \
 recovers them. A fully unblocked dependent is offered; a successor Task Link \
@@ -221,10 +221,10 @@ The shell sees a leading `-` as a flag, so spell an earlier shift as \
 stays the end-of-options marker and carries no text.\n\n\
 Pomodoro sessions form a lifecycle: `=`/`=<X>` starts the next session, \
 `=<X>#<pomodoro>` starts that named session, `+[N]`/`-[N]` resizes the \
-running session, `++[N]`/`--[N]` shifts it, and `=x` stops the running one \
-(`=` starts the next session, `=#name` starts that one, `=x` stops the \
+running session, `++[N]`/`--[N]` shifts it, and `x` stops the running one \
+(`=` starts the next session, `=#name` starts that one, `x` stops the \
 running one). Session operators may share one line when whitespace \
-separates them: `+2 =x` means `+2`, blank line, `=x`, and `=x =` closes \
+separates them: `+2 x` means `+2`, blank line, `x`, and `x =` closes \
 then starts the next session. Quote `=` items in zsh, which expands a \
 leading `=word` to a command path.\n\n\
 Batches that change today's `## Pomodoros` section also report the plan \
@@ -252,7 +252,7 @@ name (an \"again\" start), and otherwise a new named session is created \
 and started. `<X>` goes before `#` or last after `@` (`=#bugs@3` means `=3#bugs`); `=#bugs=3` teaches `=#bugs@3` or `=3#bugs`. Write \
 a trailing `~<K>` drop list (for example `=~2`, `=3~2,4`, `=#bugs~2`, \
 `=3#bugs~1,3`) to start without those queued Task Links: `~` drops, so \
-`=~2` drops task 2 from the session you start the way `=x~2` drops task 2 \
+`=~2` drops task 2 from the session you start the way `x~2` drops task 2 \
 from the session you stop, using the numbers the start lineup shows. The \
 `~<K>` and `@<X>` parts come last, after `#name` when present, in either order (`=#bugs~2@3` means `=3#bugs~2`). \
 The item must contain only the start token (leading/trailing whitespace \
@@ -265,15 +265,15 @@ restart below, never prose). A dangling `~`/`,` (`=~`, `=~2,`) \
 is incomplete and fails. A bare `=`/`=<X>` start needs a future \
 `- [ ] ()` placeholder; a named start creates its session when no open \
 entry matches. Both forms refuse while a timed entry is running; a running \
-session names itself and teaches the `=x`-then-`=` switch idiom \
-(`=x =#name` switches sessions in one line) plus the `==` swap below. \
+session names itself and teaches the `x`-then-`=` switch idiom \
+(`x =#name` switches sessions in one line) plus the `==` swap below. \
 The started entry moves to \
 the current slot and reports its queued Task Links, numbered 1..N in \
 ledger order with a numbered human index column. A `@@` declaration \
 never applies to start items, and forced \
 destination/task/section/clipboard options are rejected on them. Later items \
 see earlier staged edits, dry-run reports without writing, and any failure \
-rolls the whole batch back, so `=x`, blank line, `=` switches sessions \
+rolls the whole batch back, so `x`, blank line, `=` switches sessions \
 atomically.\n\n\
 Capture a whole item `==`/`==<X>` (for example `==`, `==3`, `==-2`) to \
 restart today's running timed Pomodoro now with fresh `se<X>` timing, or \
@@ -285,7 +285,7 @@ timing, and the old session returns intact to first future. A trailing \
 Task Links from the session that ends up running. When nothing is \
 running, every `==` token acts exactly like its `=` twin. The item must \
 contain only the override token (quote in zsh); a bare `==` with more \
-text stays prose, and `==x` teaches the `=x` close. Naming the running \
+text stays prose, and `==x` teaches the `x` close. Naming the running \
 session refuses (`==#capture` teaches `==`/`==<X>`), unless a timing is \
 given (`==3#capture` restarts like `==3`). JSON kind stays \
 `pomodoro_start` with an additive `pomodoro_start.override` object \
@@ -293,15 +293,15 @@ given (`==3#capture` restarts like `==3`). JSON kind stays \
 `demoted` for swaps); human output prints `restarted`/`swapped` with the \
 takeover and first-future lines. See `docs/capture.md` (`Restarting or \
 swapping the running Pomodoro`).\n\n\
-Capture a whole item `=x[<N>][*<P>][!<M>][~<K>][@<N>]` (case-insensitive `=X`, with \
-`*`, `!`, `~`, and `@` in any order; `<N>` may instead be typed last as `@<N>` (for example `=x!1@2` means `=x2!1`); `=*` omits `x` before an initial `*` and `=!` omits it before `!`) to close today's running timed Pomodoro the \
+Capture a whole item `x[<N>][*<P>][!<M>][~<K>][@<N>]` (lowercase `x` only, with \
+`*`, `!`, `~`, and `@` in any order; `<N>` may instead be typed last as `@<N>` (for example `x!1@2` means `x2!1`)) to close today's running timed Pomodoro the \
 way Obsidian's Ctrl+Enter completion does, plus an auto-decrement that \
 shortens an early-stopped session to the earliest five-minute step at or \
-after now (never extended; an overrun is reported). A bare `=x` keeps \
-today's behavior; `=x<N>` keeps only the numbered Task Links in `<N>` in \
-progress and defers the rest, `=x*<P>` parks the links in `<P>` (normal In \
-Progress work without carrying them forward), `=x!<M>` completes the links in `<M>`, \
-`=x~<K>` drops the links in `<K>` (removed from the closed session, not \
+after now (never extended; an overrun is reported). A bare `x` keeps \
+today's behavior; `x<N>` keeps only the numbered Task Links in `<N>` in \
+progress and defers the rest, `x*<P>` parks the links in `<P>` (normal In \
+Progress work without carrying them forward), `x!<M>` completes the links in `<M>`, \
+`x~<K>` drops the links in `<K>` (removed from the closed session, not \
 carried and not started; a dropped task keeps its lane), and combined \
 forms do each part at \
 once; completing planned tasks also links what they unblocked into the \
@@ -309,21 +309,21 @@ closed session's continuation (docs/task-dependencies.md §12; \
 `plan.link_unblocked: false` turns linking off). `<N>`, `<P>`, `<M>`, and `<K>` are comma-separated task numbers in ledger \
 order starting at 1 (the numbers `bob capture` shows, in human output, in \
 `--dry-run`, and as JSON `task_links`); a lone `0` means no \
-task stays in progress, as in `=x0`. Plain `=x0` on a note-free session resets it to the first future placeholder (clearing the parenthesized ledger to `()` and keeping all children); the same `=x0` on a session with a stand-alone note closes, deferring every numbered link. Explicit modifiers (`=x0*2`, `=x0!2`, `=x0~2`, wildcards) always close. A present `*` or `!` group with no digits selects every numbered link left after explicit assignments (`=*` parks all, `=!` completes all, `=x1*` keeps 1 in progress and parks the rest, `=x*!2` parks the rest and completes 2). Explicit forms such as `=*1`/`=!1` select only task 1; an absent group stays absent and `~` never defaults. Two empty wildcard groups compete, so `=*!` and `=!*` need numbers on at least one group. Log one entry on the close line: \
-`=x wired the lexer` logs to the first task the close works (task 1 for a \
-plain `=x`, the first eligible worked link with wildcard intent), and \
-`=x1,3 3 fixed the flaky test` logs to task 3. A leading \
-number names the task, so only the entry's first token is an index (`=x 1 \
+task stays in progress, as in `x0`. Plain `x0` on a note-free session resets it to the first future placeholder (clearing the parenthesized ledger to `()` and keeping all children); the same `x0` on a session with a stand-alone note closes, deferring every numbered link. Explicit modifiers (`x0*2`, `x0!2`, `x0~2`, wildcards) always close. A present `*` or `!` group with no digits selects every numbered link left after explicit assignments (`x*` parks all, `x!` completes all, `x1*` keeps 1 in progress and parks the rest, `x*!2` parks the rest and completes 2). Explicit forms such as `x*1`/`x!1` select only task 1; an absent group stays absent and `~` never defaults. Two empty wildcard groups compete, so `x*!` and `x!*` need numbers on at least one group. Log one entry on the close line: \
+`x wired the lexer` logs to the first task the close works (task 1 for a \
+plain `x`, the first eligible worked link with wildcard intent), and \
+`x1,3 3 fixed the flaky test` logs to task 3. A leading \
+number names the task, so only the entry's first token is an index (`x 1 \
 3 bugs fixed` logs `3 bugs fixed` to task 1). Write the entry right after \
-the close, then any session operators (`bob capture '=x wired the lexer'`, \
-`bob capture '=x1,3 3 fixed the flaky test'`, `bob capture '=x wired the \
+the close, then any session operators (`bob capture 'x wired the lexer'`, \
+`bob capture 'x1,3 3 fixed the flaky test'`, `bob capture 'x wired the \
 lexer ='`). For several entries or details, use child bullets below the \
 close instead: `- [<n>] <text>` logs `<text>` in typed order, and a \
 two-space `  - <detail>` nests an undated detail under its entry in the \
 task's Work Log. Bullets are numbered all or none: either every first-level \
 bullet starts with its task number (`- 3 foo bar`), or none does and each \
 bullet logs in order to the close's worked tasks — one worked task takes \
-them all, otherwise bullet `i` logs to worked task `i`, so `=x3,4` plus \
+them all, otherwise bullet `i` logs to worked task `i`, so `x3,4` plus \
 `- foo bar` plus `- baz bam` writes exactly what `- 3 foo bar` plus \
 `- 4 baz bam` writes. A leading number is always a task number, so to log \
 text that starts with a number, number every bullet (`- 3 2 bugs fixed`). \
@@ -337,24 +337,25 @@ number starting at 1 takes one except `~<K>`. Only the first token is an \
 index, so `- 1 fixed 3 bugs` logs `fixed 3 bugs` and every backslash \
 stays literal. The outcome is exactly the sub-bullets the user would type \
 by hand under that Task Link, followed by the unchanged close. A close's child lines are Work \
-Log bullets; a token ending in `,` or `~` (`=x1,`, `=*1,`, `=*~`) is incomplete and \
-fails, a dangling bullet (`- 1`) or dangling inline number (`=x 1`) is incomplete and \
+Log bullets; a token ending in `,` or `~` (`x1,`, `x*1,`, `x*~`) is incomplete and \
+fails, a dangling bullet (`- 1`) or dangling inline number (`x 1`) is incomplete and \
 fails, whitespace is \
-never allowed inside the lists, and `=xx`/`=xa`/`Plan =x` stay ordinary \
-prose. A trailing `*`/`!` with no numbers is a valid wildcard group instead of a dangling state, so `=*`, `=!`, `=x*`, and `=x!` are valid. Entry text is literal (`@route`, `@@route`, `s:<N>`, `$<N>`, `%`, \
+never allowed inside the lists, and `xx`/`xa`/`Plan x`/a capitalized `X…` stay ordinary \
+prose. A trailing `*`/`!` with no numbers is a valid wildcard group instead of a dangling state, so `x*` and `x!` are valid. Entry text is literal (`@route`, `@@route`, `s:<N>`, `$<N>`, `%`, \
 `#`, and `:query` stay text; plain wikilinks are allowed), while block \
 links, embeds, and code fences are rejected. An inline entry plus child \
 bullets fails with the bullet to write. A chain line's bullets attach to \
-its `=x`, and an inline entry chains too (`=x wired the lexer =` closes \
-with the entry then starts, `-2 =x wired the lexer` shortens then closes). \
-`@route:block-id=x…`, `@route:block-id=*…`, `@route:block-id=!…` (and the `^` forms) \
+its `x`, and an inline entry chains too (`x wired the lexer =` closes \
+with the entry then starts, `-2 x wired the lexer` shortens then closes). \
+`@route:block-id=x…` (and the `^` forms; the `=` separates the suffix from the block ID, \
+and the retired `=*…`/`=!…` aliases fail with a teaching error) \
 first put that existing task into the running session then close it, and \
 `<text> @route:block-id=x…` creates the new task in the running session \
 then closes it; explicit numbers and wildcard expansion refer to the post-link lineup, and `#name` with a \
 close fails because only the running session can close. Later items see \
 earlier staged edits, dry-run reports without writing, and any failure \
 rolls the whole batch back, so \
-`printf -- '-2\\n\\n=x\\n' | bob capture` adjusts then closes atomically. \
+`printf -- '-2\\n\\nx\\n' | bob capture` adjusts then closes atomically. \
 JSON reports a distinct `pomodoro_close` kind (link and task forms keep \
 their kind with an additive `pomodoro_close` object) carrying the typed \
 `raw`, the `in_progress`/`park`/`complete`/`drop` lists, the `log` entries \
@@ -464,7 +465,7 @@ In expansion mode all other capture options are accepted and ignored.",
         )
         .after_help(
             "Examples:\n  bob capture buy milk @groceries\n  bob capture buy milk s:1\n  bob capture buy milk s:2 @groceries\n  bob capture buy milk @groceries s:2\n  bob capture buy milk '$2'\n  bob capture research rust '$4' @dev\n  bob capture buy milk %\n  bob capture research links %3\n  bob capture investigate %log @dev:blockid\n  bob capture --clip=screenshot -- save dashboard\n  bob capture '@dev^foobar' 'Some ordinary task.'\n  bob capture '@dev:foobar' 'Some foobar task.'\n  bob capture '@dev:foobar#bugs' 'Some foobar task.'\n  bob capture '@cash^goog-exit+' 'Finish the Google exit packet!'\n  printf 'Finish the Google exit packet! @cash^goog-exit+\\n- Draft the resignation memo\\n' | bob capture
-  printf 'Finish the Google exit packet! @cash^goog-exit+#admin\\n- Draft the resignation memo :draft-memo\\n  - keep it short\\n- Collect the equity paperwork ^equity-docs\\n' | bob capture\n  bob capture '@cash+goog-exit' 'Called Morgan Stanley today.'\n  bob capture '@cash+goog-exit!'\n  bob capture +5\n  bob capture -- -2\n  bob capture +\n  bob capture ++3\n  bob capture -- --2\n  bob capture --1\n  printf '+5\\n\\nCall bank @Cash+\\n' | bob capture\n  printf -- '--2\\n\\n+\\n' | bob capture\n  bob capture '=x'\n  bob capture '=x2'\n  bob capture '=x1!2'\n  bob capture '=x!1@2'\n  bob capture '=x1~2'\n  bob capture '=x0'\n  printf '=x2,3\\n- 2 wired the lexer\\n' | bob capture\n  printf '=x =\\n- 1 wired the lexer\\n' | bob capture\n  bob capture '='\n  bob capture '=3'\n  bob capture '=~2'\n  bob capture '=3#bugs~1'\n  bob capture '=#deep-work'\n  bob capture '=3#bugs'\n  bob capture '=#bugs@3'\n  bob capture '=x =#bugs'\n  bob capture '=x =~2'\n  printf '=x\\n\\n=\\n' | bob capture\n  bob capture '+2 =x'\n  bob capture '=x ='\n  bob capture '^bob:capture-stop=x'\n  bob capture '^bob:capture-stop=x!1'\n  bob capture -p 1 -- '!sase:fix'\n  bob capture -p all -- '!sase:fix'\n  printf -- '-2\\n\\n=x\\n' | bob capture\n  bob capture 'Postgres 17 minimum @foo+bar#requirements'\n  bob capture --route foo --task bar --task-section REQUIREMENTS -- 'Postgres 17 minimum'\n  bob capture remembered to bump the timeout #\n  bob capture paste the failing output % #\n  bob capture jot idea @notes#Ideas\n  bob capture --route notes --section Ideas -- jot idea\n  bob capture @notes#Ideas jot idea\n  printf '@@foo\\nFirst task\\n\\nSecond task @bar\\n' | bob capture\n  printf '@@template:\\nApply to {0}! @job^apply-{1}\\n\\nFoobar foo\\n\"Two Sigma\" two-sigma\\n' | bob capture\n  printf '@@foo+a-id\\nFirst note\\n- authored detail\\n\\nSecond note\\n' | bob capture\n  echo 'buy milk @groceries' | bob capture\n  bob capture -f json -- @work send status\n  printf 'Prepare launch\\n- Confirm owner\\n\\nSend status @work\\n' | bob capture\n  printf 'Prepare launch\\n- Confirm owner\\n- Attach checklist\\n' | bob capture\n  bob capture https://example.com/essay\n  bob capture 'Ask Kelly *job:cleanup'\n  bob capture '*job:cleanup @body+work'\n  bob capture '&foo:bar @body+excercise'\n  bob capture '^body:excercise &foo:bar'\n\nEnvironment:\n  BOB_CAPTURE_TEMPLATES_FILE  exact saved-template shelf path; defaults to $XDG_STATE_HOME/bob-cli/capture/templates.json\n  BOB_CLIPBOARD_CMD          whitespace-split command that prints the live clipboard; overrides platform tools\n  BOB_CLIPBOARD_HISTORY_CMD  whitespace-split history command; receives count and prints a newest-first JSON array of strings\n  BOB_CONFIG_FILE            exact bullet-property config file; defaults to $XDG_CONFIG_HOME/bob/config.yml or ~/.config/bob/config.yml\n  BOB_DAY_FILE               exact daily note used by Pomodoro-linked capture\n  BOB_DIR                    Bob vault root when --bob-dir is omitted\n  BOB_NOW                    current date/time override\n  BOB_PRIORITY_ROLL_SEED     fixed seed for $<N> rolls; unset means random\n  XDG_CONFIG_HOME            base config directory for BOB_CONFIG_FILE's default; defaults to ~/.config\n  XDG_STATE_HOME             base state directory for the saved-template shelf; defaults to ~/.local/state\n\nClipboard source order:\n  Live: BOB_CLIPBOARD_CMD; macOS pbpaste; Linux wl-paste or xclip/xsel; tmux show-buffer\n  History: BOB_CLIPBOARD_HISTORY_CMD; otherwise read-only Clipy SQLite on macOS; no automatic provider elsewhere",
+  printf 'Finish the Google exit packet! @cash^goog-exit+#admin\\n- Draft the resignation memo :draft-memo\\n  - keep it short\\n- Collect the equity paperwork ^equity-docs\\n' | bob capture\n  bob capture '@cash+goog-exit' 'Called Morgan Stanley today.'\n  bob capture '@cash+goog-exit!'\n  bob capture +5\n  bob capture -- -2\n  bob capture +\n  bob capture ++3\n  bob capture -- --2\n  bob capture --1\n  printf '+5\\n\\nCall bank @Cash+\\n' | bob capture\n  printf -- '--2\\n\\n+\\n' | bob capture\n  bob capture 'x'\n  bob capture 'x2'\n  bob capture 'x1!2'\n  bob capture 'x!1@2'\n  bob capture 'x1~2'\n  bob capture 'x0'\n  printf 'x2,3\\n- 2 wired the lexer\\n' | bob capture\n  printf 'x =\\n- 1 wired the lexer\\n' | bob capture\n  bob capture '='\n  bob capture '=3'\n  bob capture '=~2'\n  bob capture '=3#bugs~1'\n  bob capture '=#deep-work'\n  bob capture '=3#bugs'\n  bob capture '=#bugs@3'\n  bob capture 'x =#bugs'\n  bob capture 'x =~2'\n  printf 'x\\n\\n=\\n' | bob capture\n  bob capture '+2 x'\n  bob capture 'x ='\n  bob capture '^bob:capture-stop=x'\n  bob capture '^bob:capture-stop=x!1'\n  bob capture -p 1 -- '!sase:fix'\n  bob capture -p all -- '!sase:fix'\n  printf -- '-2\\n\\nx\\n' | bob capture\n  bob capture 'Postgres 17 minimum @foo+bar#requirements'\n  bob capture --route foo --task bar --task-section REQUIREMENTS -- 'Postgres 17 minimum'\n  bob capture remembered to bump the timeout #\n  bob capture paste the failing output % #\n  bob capture jot idea @notes#Ideas\n  bob capture --route notes --section Ideas -- jot idea\n  bob capture @notes#Ideas jot idea\n  printf '@@foo\\nFirst task\\n\\nSecond task @bar\\n' | bob capture\n  printf '@@template:\\nApply to {0}! @job^apply-{1}\\n\\nFoobar foo\\n\"Two Sigma\" two-sigma\\n' | bob capture\n  printf '@@foo+a-id\\nFirst note\\n- authored detail\\n\\nSecond note\\n' | bob capture\n  echo 'buy milk @groceries' | bob capture\n  bob capture -f json -- @work send status\n  printf 'Prepare launch\\n- Confirm owner\\n\\nSend status @work\\n' | bob capture\n  printf 'Prepare launch\\n- Confirm owner\\n- Attach checklist\\n' | bob capture\n  bob capture https://example.com/essay\n  bob capture 'Ask Kelly *job:cleanup'\n  bob capture '*job:cleanup @body+work'\n  bob capture '&foo:bar @body+excercise'\n  bob capture '^body:excercise &foo:bar'\n\nEnvironment:\n  BOB_CAPTURE_TEMPLATES_FILE  exact saved-template shelf path; defaults to $XDG_STATE_HOME/bob-cli/capture/templates.json\n  BOB_CLIPBOARD_CMD          whitespace-split command that prints the live clipboard; overrides platform tools\n  BOB_CLIPBOARD_HISTORY_CMD  whitespace-split history command; receives count and prints a newest-first JSON array of strings\n  BOB_CONFIG_FILE            exact bullet-property config file; defaults to $XDG_CONFIG_HOME/bob/config.yml or ~/.config/bob/config.yml\n  BOB_DAY_FILE               exact daily note used by Pomodoro-linked capture\n  BOB_DIR                    Bob vault root when --bob-dir is omitted\n  BOB_NOW                    current date/time override\n  BOB_PRIORITY_ROLL_SEED     fixed seed for $<N> rolls; unset means random\n  XDG_CONFIG_HOME            base config directory for BOB_CONFIG_FILE's default; defaults to ~/.config\n  XDG_STATE_HOME             base state directory for the saved-template shelf; defaults to ~/.local/state\n\nClipboard source order:\n  Live: BOB_CLIPBOARD_CMD; macOS pbpaste; Linux wl-paste or xclip/xsel; tmux show-buffer\n  History: BOB_CLIPBOARD_HISTORY_CMD; otherwise read-only Clipy SQLite on macOS; no automatic provider elsewhere",
         )
         .disable_help_flag(true)
         .arg(bob_dir_arg())

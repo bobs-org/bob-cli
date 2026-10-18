@@ -265,7 +265,7 @@ fn trailing_hash_fragments_have_no_completion() {
 
 #[test]
 fn operator_items_have_no_hash_completion() {
-    assert_eq!(field("=x #n", 5), None);
+    assert_eq!(field("x #n", 5), None);
     assert_eq!(field("@r:id #n", 8), None);
     assert_eq!(field("#n", 2), None);
     assert_eq!(field("#now", 4), None);
@@ -275,11 +275,11 @@ fn operator_items_have_no_hash_completion() {
 fn work_log_bullet_lines_request_no_marker_completion() {
     // Bullet text is literal: `@`, `@@`, and task pickers stay suppressed
     // on bullet lines, on a plain close and on a chain close alike.
-    for raw in ["=x\n- 1 @", "=x\n- 1 @@", "=x =\n- 1 @", "=x\n- @"] {
+    for raw in ["x\n- 1 @", "x\n- 1 @@", "x =\n- 1 @", "x\n- @"] {
         assert_eq!(field(raw, raw.len()), None, "{raw}");
     }
     // The parent close line itself also requests nothing.
-    assert_eq!(field("=x\n- 1 wired", 1), None);
+    assert_eq!(field("x\n- 1 wired", 1), None);
 }
 
 #[test]
@@ -703,8 +703,8 @@ fn pomodoro_start_name_completes_after_hash_on_a_named_start() {
     assert_eq!(field("=", 1), None);
     assert_eq!(field("=3", 2), None);
 
-    // `=x#bugs` is a close near miss, never a start name.
-    assert_eq!(field("=x#bugs", 7), None);
+    // `x#bugs` is a close near miss, never a start name.
+    assert_eq!(field("x#bugs", 7), None);
 }
 
 #[test]
@@ -762,18 +762,18 @@ fn pomodoro_start_override_reports_sigil_and_suffix_emptiness() {
     assert_eq!(pomodoro_start_override_at("buy milk", 4), None);
     // Chains report per token: the override name keeps the ledger while
     // the plain close token reports nothing.
-    let chain = "=x ==#de";
+    let chain = "x ==#de";
     assert_eq!(pomodoro_start_override_at(chain, chain.len()), Some(true));
     assert_eq!(pomodoro_start_override_at(chain, 1), None);
 }
 
 #[test]
 fn pomodoro_start_name_completes_per_token_inside_chains() {
-    let chain = "=x =#de";
+    let chain = "x =#de";
     let completion = field(chain, chain.len()).expect("chain name field");
     assert_eq!(completion.context, CompletionContext::PomodoroStartName);
     assert_eq!(completion.query, "de");
-    assert_eq!(completion.replacement, (5, 7));
+    assert_eq!(completion.replacement, (4, 6));
 
     // A cursor inside the close token stays an empty success.
     assert_eq!(field(chain, 1), None);
@@ -902,7 +902,7 @@ fn parent_task_plus_preserves_operator_and_protected_text_boundaries() {
         "+-3",
         "++",
         "++3",
-        "+2 =x",
+        "+2 x",
         "C++",
         "a+b",
         "\\+bank",
@@ -911,7 +911,7 @@ fn parent_task_plus_preserves_operator_and_protected_text_boundaries() {
         "@@route +",
         "[[note| +]]",
         "```\n\n+\n\n```",
-        "=x\n- 1 work +",
+        "x\n- 1 work +",
     ] {
         assert!(
             field(raw, raw.len()).is_none(),

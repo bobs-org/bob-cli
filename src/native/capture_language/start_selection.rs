@@ -320,7 +320,7 @@ mod tests {
         let bang = error("=~2!3");
         assert_eq!(
             bang.message,
-            "a start can only drop Task Links; `!` completes them when you close (`=x!3`)"
+            "a start can only drop Task Links; `!` completes them when you close (`x!3`)"
         );
 
         let hash = error("=~2#bugs");

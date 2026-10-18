@@ -27,33 +27,25 @@ fn capture_parse_pomodoro_close_protocol() {
             .expect("capture-parse JSON")
     };
 
-    // Whole-item `=x`: close mode, token span, additive spec.
-    let close = parse("=x");
+    // Whole-item `x`: close mode, token span, additive spec.
+    let close = parse("x");
     assert_eq!(close["schema_version"], 1);
     assert_eq!(close["mode"], "pomodoro_close");
-    assert_eq!(close["body"], "=x");
+    assert_eq!(close["body"], "x");
     assert!(close["route"].is_null());
     assert!(close["section"].is_null());
     assert!(close["block_id"].is_null());
     assert_eq!(close["needs"], serde_json::json!([]));
     assert_eq!(
         close["spans"],
-        serde_json::json!([{ "start": 0, "end": 2, "kind": "pomodoro_close" }])
+        serde_json::json!([{ "start": 0, "end": 1, "kind": "pomodoro_close" }])
     );
     assert_eq!(close["diagnostics"], serde_json::json!([]));
     assert_eq!(
         close["pomodoro_close"],
-        serde_json::json!({ "raw": "=x", "in_progress": null, "complete": [] })
+        serde_json::json!({ "raw": "x", "in_progress": null, "complete": [] })
     );
 
-    let bare = parse("x");
-    assert_eq!(bare["mode"], "pomodoro_close");
-    assert_eq!(bare["body"], "x");
-    assert_eq!(bare["pomodoro_close"]["raw"], "x");
-    assert_eq!(
-        bare["spans"],
-        serde_json::json!([{ "start": 0, "end": 1, "kind": "pomodoro_close" }])
-    );
     let bare_selected = parse("x2");
     assert_eq!(bare_selected["pomodoro_close"]["raw"], "x2");
     assert_eq!(
@@ -64,20 +56,19 @@ fn capture_parse_pomodoro_close_protocol() {
         ])
     );
 
-    // `=X` keeps its case in the typed raw.
-    let upper = parse("=X");
-    assert_eq!(upper["mode"], "pomodoro_close");
-    assert_eq!(
-        upper["pomodoro_close"],
-        serde_json::json!({ "raw": "=X", "in_progress": null, "complete": [] })
-    );
+    // A capitalized `X` is ordinary prose: only lowercase `x` closes.
+    for text in ["X", "X2", "X post about the launch", "X11 forwarding"] {
+        let upper = parse(text);
+        assert_eq!(upper["mode"], "task", "{text}");
+        assert!(upper.get("pomodoro_close").is_none(), "{text}");
+    }
 
     // A bare `=` is now a whole-item start, not an incomplete close.
     let start = parse("=");
     assert_eq!(start["mode"], "pomodoro_start", "{start}");
 
     // An inline entry is a valid close with its log, never a diagnostic.
-    let more = parse("=x more");
+    let more = parse("x more");
     assert_eq!(more["mode"], "pomodoro_close", "{more}");
     assert_eq!(
         more["pomodoro_close"]["log"],
@@ -85,7 +76,7 @@ fn capture_parse_pomodoro_close_protocol() {
         "{more}"
     );
     assert_eq!(more["diagnostics"], serde_json::json!([]), "{more}");
-    assert_eq!(more["body"], "=x", "{more}");
+    assert_eq!(more["body"], "x", "{more}");
 
     // Link forms keep their mode with a `pomodoro_close` suffix span and
     // the typed raw.
@@ -137,14 +128,14 @@ fn capture_parse_pomodoro_close_protocol() {
     );
 
     // Mixed drafts preview the first item and keep per-item specs.
-    let mixed = parse_stdin("+5\n\n=x\n");
+    let mixed = parse_stdin("+5\n\nx\n");
     assert_eq!(mixed["mode"], "pomodoro_adjust");
     assert_eq!(mixed["items"].as_array().expect("items").len(), 2);
     assert_eq!(mixed["items"][0]["mode"], "pomodoro_adjust");
     assert_eq!(mixed["items"][1]["mode"], "pomodoro_close");
     assert_eq!(
         mixed["items"][1]["pomodoro_close"],
-        serde_json::json!({ "raw": "=x", "in_progress": null, "complete": [] })
+        serde_json::json!({ "raw": "x", "in_progress": null, "complete": [] })
     );
 }
 
@@ -175,14 +166,14 @@ fn capture_parse_pomodoro_close_selection_protocol() {
 
     // Valid selections: additive spec plus the three span kinds.
     for (text, in_progress, complete) in [
-        ("=x1", serde_json::json!([1]), serde_json::json!([])),
-        ("=x1,3", serde_json::json!([1, 3]), serde_json::json!([])),
-        ("=x3,1", serde_json::json!([1, 3]), serde_json::json!([])),
-        ("=x!2", serde_json::json!(null), serde_json::json!([2])),
-        ("=x1,3!2", serde_json::json!([1, 3]), serde_json::json!([2])),
-        ("=X1!2", serde_json::json!([1]), serde_json::json!([2])),
-        ("=x0", serde_json::json!([]), serde_json::json!([])),
-        ("=x0!2", serde_json::json!([]), serde_json::json!([2])),
+        ("x1", serde_json::json!([1]), serde_json::json!([])),
+        ("x1,3", serde_json::json!([1, 3]), serde_json::json!([])),
+        ("x3,1", serde_json::json!([1, 3]), serde_json::json!([])),
+        ("x!2", serde_json::json!(null), serde_json::json!([2])),
+        ("x1,3!2", serde_json::json!([1, 3]), serde_json::json!([2])),
+        ("x1!2", serde_json::json!([1]), serde_json::json!([2])),
+        ("x0", serde_json::json!([]), serde_json::json!([])),
+        ("x0!2", serde_json::json!([]), serde_json::json!([2])),
     ] {
         let value = parse(text);
         assert_eq!(value["mode"], "pomodoro_close", "{text}");
@@ -194,48 +185,48 @@ fn capture_parse_pomodoro_close_selection_protocol() {
         assert_eq!(value["pomodoro_close"]["complete"], complete, "{text}");
         assert_eq!(value["diagnostics"], serde_json::json!([]), "{text}");
     }
-    let both = parse("=x1,3!2");
+    let both = parse("x1,3!2");
     assert_eq!(
         both["spans"],
         serde_json::json!([
-            { "start": 0, "end": 2, "kind": "pomodoro_close" },
-            { "start": 2, "end": 5, "kind": "pomodoro_close_in_progress" },
-            { "start": 5, "end": 7, "kind": "pomodoro_close_complete" },
+            { "start": 0, "end": 1, "kind": "pomodoro_close" },
+            { "start": 1, "end": 4, "kind": "pomodoro_close_in_progress" },
+            { "start": 4, "end": 6, "kind": "pomodoro_close_complete" },
         ])
     );
 
     // Every lexical row: precise `invalid_pomodoro_close` range, no spec.
     for (text, leading, range) in [
-        ("=x1,1", "task 1 is listed twice", [4, 5]),
+        ("x1,1", "task 1 is listed twice", [3, 4]),
         (
-            "=x1!1",
+            "x1!1",
             "task 1 cannot both stay in progress and complete",
-            [4, 5],
+            [3, 4],
         ),
         (
-            "=x1,2!2",
+            "x1,2!2",
             "task 2 cannot both stay in progress and complete",
-            [6, 7],
+            [5, 6],
         ),
-        ("=x0,2", "`0` means no task stays in progress", [2, 3]),
-        ("=x2,0", "`0` means no task stays in progress", [4, 5]),
-        ("=x0,", "`0` means no task stays in progress", [2, 3]),
-        ("=x00", "`0` means no task stays in progress", [2, 4]),
-        ("=x!0", "task numbers start at 1", [3, 4]),
-        ("=x,1", "expected a task number before", [2, 3]),
-        ("=x1,,2", "expected a task number before", [4, 5]),
-        ("=x1,,", "expected a task number before", [4, 5]),
-        ("=x1!2,,", "expected a task number before", [6, 7]),
-        ("=x1,!2", "expected a task number after", [3, 4]),
-        ("=x!,1", "expected a task number before", [3, 4]),
-        ("=x1!2!3", "use one `!` list", [5, 6]),
-        ("=x1a", "`=x1a` is not a task list", [3, 4]),
-        ("=x1;2", "`=x1;2` is not a task list", [3, 5]),
-        ("=x!2x", "`=x!2x` is not a task list", [4, 5]),
+        ("x0,2", "`0` means no task stays in progress", [1, 2]),
+        ("x2,0", "`0` means no task stays in progress", [3, 4]),
+        ("x0,", "`0` means no task stays in progress", [1, 2]),
+        ("x00", "`0` means no task stays in progress", [1, 3]),
+        ("x!0", "task numbers start at 1", [2, 3]),
+        ("x,1", "expected a task number before", [1, 2]),
+        ("x1,,2", "expected a task number before", [3, 4]),
+        ("x1,,", "expected a task number before", [3, 4]),
+        ("x1!2,,", "expected a task number before", [5, 6]),
+        ("x1,!2", "expected a task number after", [2, 3]),
+        ("x!,1", "expected a task number before", [2, 3]),
+        ("x1!2!3", "use one `!` list", [4, 5]),
+        ("x1a", "`x1a` is not a task list", [2, 3]),
+        ("x1;2", "`x1;2` is not a task list", [2, 4]),
+        ("x!2x", "`x!2x` is not a task list", [3, 4]),
         (
-            "=x99999999999",
+            "x99999999999",
             "task number 99999999999 is too large",
-            [2, 13],
+            [1, 12],
         ),
     ] {
         let value = parse(text);
@@ -261,9 +252,9 @@ fn capture_parse_pomodoro_close_selection_protocol() {
     }
 
     // Spaced lists get the no-spaces hint when the first token is not a
-    // plain number (`=x 1,3` means `=x1,3`). A lone number is the dangling
+    // plain number (`x 1,3` means `x1,3`). A lone number is the dangling
     // inline entry instead.
-    for (text, range) in [("=x 1,3", [3, 6]), ("=x1 !2", [4, 6])] {
+    for (text, range) in [("x 1,3", [2, 5]), ("x1 !2", [3, 5])] {
         let value = parse(text);
         assert_eq!(
             value["diagnostics"][0]["code"], "invalid_pomodoro_close",
@@ -284,10 +275,10 @@ fn capture_parse_pomodoro_close_selection_protocol() {
         );
     }
     for (text, start, end) in [
-        ("=x 1", 3, 4),
-        ("=x1 1", 4, 5),
-        ("=x1,3 3", 6, 7),
-        ("=x 2", 3, 4),
+        ("x 1", 2, 3),
+        ("x1 1", 3, 4),
+        ("x1,3 3", 5, 6),
+        ("x 2", 2, 3),
     ] {
         let value = parse(text);
         assert_eq!(value["mode"], "incomplete", "{text}");
@@ -310,19 +301,19 @@ fn capture_parse_pomodoro_close_selection_protocol() {
         );
     }
 
-    // A dangling close index with a space (`=x1, 3`) is an editing state for
+    // A dangling close index with a space (`x1, 3`) is an editing state for
     // the close token itself, not the no-spaces hint.
-    let spaced_incomplete = parse("=x1, 3");
-    assert_eq!(spaced_incomplete["mode"], "incomplete", "=x1, 3");
+    let spaced_incomplete = parse("x1, 3");
+    assert_eq!(spaced_incomplete["mode"], "incomplete", "x1, 3");
     assert_eq!(
         spaced_incomplete["needs"],
         serde_json::json!(["pomodoro_close_task"]),
-        "=x1, 3"
+        "x1, 3"
     );
 
     // A close with a dangling Work Log bullet is an editing state needing
     // `pomodoro_close_log_text`, with a placeholder over the number.
-    let dangling = parse("=x\n- 1");
+    let dangling = parse("x\n- 1");
     assert_eq!(dangling["mode"], "incomplete");
     assert_eq!(
         dangling["needs"],
@@ -335,15 +326,15 @@ fn capture_parse_pomodoro_close_selection_protocol() {
             .iter()
             .any(|span| {
                 span["kind"] == "interactive_placeholder"
-                    && span["start"] == 5
-                    && span["end"] == 6
+                    && span["start"] == 4
+                    && span["end"] == 5
             }),
         "{dangling}"
     );
 
     // Other extra text keeps an `invalid_pomodoro_close` diagnostic on the
     // first tail token.
-    for (text, range) in [("=x - wired", [3, 4])] {
+    for (text, range) in [("x - wired", [2, 3])] {
         let value = parse(text);
         assert_eq!(
             value["diagnostics"][0]["code"], "invalid_pomodoro_close",
@@ -396,14 +387,14 @@ fn capture_parse_pomodoro_close_selection_protocol() {
     );
 
     // An inline entry is valid with its log and index span.
-    let more = parse("=x1 more");
+    let more = parse("x1 more");
     assert_eq!(more["mode"], "pomodoro_close", "{more}");
     assert_eq!(
         more["pomodoro_close"]["log"],
         serde_json::json!([{ "index": 1, "text": "more" }]),
         "{more}"
     );
-    let echo = parse("=x2,3 2 foo bar baz");
+    let echo = parse("x2,3 2 foo bar baz");
     assert_eq!(echo["mode"], "pomodoro_close", "{echo}");
     assert_eq!(
         echo["pomodoro_close"]["log"],
@@ -411,7 +402,7 @@ fn capture_parse_pomodoro_close_selection_protocol() {
         "{echo}"
     );
     // An unnumbered bullet under a selection resolves lexically.
-    let child = parse_stdin("=x1\n- detail\n");
+    let child = parse_stdin("x1\n- detail\n");
     assert_eq!(child["mode"], "pomodoro_close", "{child}");
     assert_eq!(
         child["pomodoro_close"]["log"],
@@ -419,7 +410,7 @@ fn capture_parse_pomodoro_close_selection_protocol() {
         "{child}"
     );
     // A mixed list still reports the missing-number error.
-    let mixed = parse_stdin("=x1\n- 1 ok\n- detail\n");
+    let mixed = parse_stdin("x1\n- 1 ok\n- detail\n");
     assert_eq!(mixed["mode"], "pomodoro_close");
     assert_eq!(
         mixed["diagnostics"][0]["code"], "invalid_pomodoro_close",
@@ -437,40 +428,24 @@ fn capture_parse_pomodoro_close_selection_protocol() {
     // wildcard intent. Spans cover exactly the marker the user typed.
     for (text, close, spans) in [
         (
-            "=*",
-            serde_json::json!({ "raw": "=*", "in_progress": null, "complete": [], "park_all": true }),
+            "x*",
+            serde_json::json!({ "raw": "x*", "in_progress": null, "complete": [], "park_all": true }),
             serde_json::json!([
                 { "start": 0, "end": 1, "kind": "pomodoro_close" },
                 { "start": 1, "end": 2, "kind": "pomodoro_close_park" },
             ]),
         ),
         (
-            "=!",
-            serde_json::json!({ "raw": "=!", "in_progress": null, "complete": [], "complete_all": true }),
+            "x!",
+            serde_json::json!({ "raw": "x!", "in_progress": null, "complete": [], "complete_all": true }),
             serde_json::json!([
                 { "start": 0, "end": 1, "kind": "pomodoro_close" },
                 { "start": 1, "end": 2, "kind": "pomodoro_close_complete" },
             ]),
         ),
         (
-            "=x*",
-            serde_json::json!({ "raw": "=x*", "in_progress": null, "complete": [], "park_all": true }),
-            serde_json::json!([
-                { "start": 0, "end": 2, "kind": "pomodoro_close" },
-                { "start": 2, "end": 3, "kind": "pomodoro_close_park" },
-            ]),
-        ),
-        (
-            "=x!",
-            serde_json::json!({ "raw": "=x!", "in_progress": null, "complete": [], "complete_all": true }),
-            serde_json::json!([
-                { "start": 0, "end": 2, "kind": "pomodoro_close" },
-                { "start": 2, "end": 3, "kind": "pomodoro_close_complete" },
-            ]),
-        ),
-        (
-            "=*!2",
-            serde_json::json!({ "raw": "=*!2", "in_progress": null, "complete": [2], "park_all": true }),
+            "x*!2",
+            serde_json::json!({ "raw": "x*!2", "in_progress": null, "complete": [2], "park_all": true }),
             serde_json::json!([
                 { "start": 0, "end": 1, "kind": "pomodoro_close" },
                 { "start": 1, "end": 2, "kind": "pomodoro_close_park" },
@@ -478,17 +453,17 @@ fn capture_parse_pomodoro_close_selection_protocol() {
             ]),
         ),
         (
-            "=x1*",
-            serde_json::json!({ "raw": "=x1*", "in_progress": [1], "complete": [], "park_all": true }),
+            "x1*",
+            serde_json::json!({ "raw": "x1*", "in_progress": [1], "complete": [], "park_all": true }),
             serde_json::json!([
-                { "start": 0, "end": 2, "kind": "pomodoro_close" },
-                { "start": 2, "end": 3, "kind": "pomodoro_close_in_progress" },
-                { "start": 3, "end": 4, "kind": "pomodoro_close_park" },
+                { "start": 0, "end": 1, "kind": "pomodoro_close" },
+                { "start": 1, "end": 2, "kind": "pomodoro_close_in_progress" },
+                { "start": 2, "end": 3, "kind": "pomodoro_close_park" },
             ]),
         ),
         (
-            "=!2",
-            serde_json::json!({ "raw": "=!2", "in_progress": null, "complete": [2] }),
+            "x!2",
+            serde_json::json!({ "raw": "x!2", "in_progress": null, "complete": [2] }),
             serde_json::json!([
                 { "start": 0, "end": 1, "kind": "pomodoro_close" },
                 { "start": 1, "end": 3, "kind": "pomodoro_close_complete" },
@@ -502,7 +477,7 @@ fn capture_parse_pomodoro_close_selection_protocol() {
         assert_eq!(value["diagnostics"], serde_json::json!([]), "{text}");
     }
 
-    let competing = parse("=*!");
+    let competing = parse("x*!");
     assert_eq!(competing["mode"], "pomodoro_close");
     assert_eq!(
         competing["diagnostics"][0]["code"],
@@ -521,26 +496,26 @@ fn capture_parse_pomodoro_close_selection_protocol() {
     // are complete wildcard groups, not dangling states.
     for (text, in_progress, complete, spans) in [
         (
-            "=x1,",
+            "x1,",
             serde_json::json!([1]),
             serde_json::json!([]),
             serde_json::json!([
-                { "start": 0, "end": 2, "kind": "pomodoro_close" },
-                { "start": 2, "end": 3, "kind": "pomodoro_close_in_progress" },
-                { "start": 3, "end": 4, "kind": "interactive_placeholder" },
-            ]),
-        ),
-        (
-            "=x~",
-            serde_json::json!(null),
-            serde_json::json!([]),
-            serde_json::json!([
-                { "start": 0, "end": 2, "kind": "pomodoro_close" },
+                { "start": 0, "end": 1, "kind": "pomodoro_close" },
+                { "start": 1, "end": 2, "kind": "pomodoro_close_in_progress" },
                 { "start": 2, "end": 3, "kind": "interactive_placeholder" },
             ]),
         ),
         (
-            "=*1,",
+            "x~",
+            serde_json::json!(null),
+            serde_json::json!([]),
+            serde_json::json!([
+                { "start": 0, "end": 1, "kind": "pomodoro_close" },
+                { "start": 1, "end": 2, "kind": "interactive_placeholder" },
+            ]),
+        ),
+        (
+            "x*1,",
             serde_json::json!(null),
             serde_json::json!([]),
             serde_json::json!([
@@ -550,13 +525,13 @@ fn capture_parse_pomodoro_close_selection_protocol() {
             ]),
         ),
         (
-            "=x!2,",
+            "x!2,",
             serde_json::json!(null),
             serde_json::json!([2]),
             serde_json::json!([
-                { "start": 0, "end": 2, "kind": "pomodoro_close" },
-                { "start": 2, "end": 4, "kind": "pomodoro_close_complete" },
-                { "start": 4, "end": 5, "kind": "interactive_placeholder" },
+                { "start": 0, "end": 1, "kind": "pomodoro_close" },
+                { "start": 1, "end": 3, "kind": "pomodoro_close_complete" },
+                { "start": 3, "end": 4, "kind": "interactive_placeholder" },
             ]),
         ),
     ] {
@@ -578,7 +553,7 @@ fn capture_parse_pomodoro_close_selection_protocol() {
     }
 
     // Other `=` shapes and mid-body tokens stay ordinary prose.
-    for text in ["=xx", "=xa", "Plan =x1"] {
+    for text in ["=xx", "=xa", "Plan x1"] {
         let value = parse(text);
         assert_eq!(value["mode"], "task", "{text}");
         assert!(value.get("pomodoro_close").is_none(), "{text}: {value}");
@@ -639,16 +614,16 @@ fn capture_parse_pomodoro_close_selection_protocol() {
     );
 
     // A multi-item draft mixes an adjustment, a selection close, and a task.
-    let mixed = parse_stdin("+5\n\n=x1!2\n\nCall bank @Cash+\n");
+    let mixed = parse_stdin("+5\n\nx1!2\n\nCall bank @Cash+\n");
     assert_eq!(mixed["items"].as_array().expect("items").len(), 3);
     assert_eq!(mixed["items"][1]["mode"], "pomodoro_close");
     assert_eq!(
         mixed["items"][1]["pomodoro_close"],
-        serde_json::json!({ "raw": "=x1!2", "in_progress": [1], "complete": [2] })
+        serde_json::json!({ "raw": "x1!2", "in_progress": [1], "complete": [2] })
     );
 
     // A `@@` draft never routes a selection-bearing close.
-    let declared = parse_stdin("@@foo\nFirst\n\n=x1\n");
+    let declared = parse_stdin("@@foo\nFirst\n\nx1\n");
     assert_eq!(declared["items"][0]["route"], "foo");
     assert_eq!(declared["items"][1]["mode"], "pomodoro_close");
     assert!(declared["items"][1]["route"].is_null());
@@ -657,25 +632,23 @@ fn capture_parse_pomodoro_close_selection_protocol() {
     let human = bob_command()
         .arg("capture-parse")
         .arg("--")
-        .arg("=x1,3!2")
+        .arg("x1,3!2")
         .output()
         .expect("run capture-parse human");
     assert_success(&human);
     let out = stdout(&human);
     assert!(
-        out.contains(
-            "=x1,3!2 (in progress 1, 3 · complete 2 · defer the rest)"
-        ),
+        out.contains("x1,3!2 (in progress 1, 3 · complete 2 · defer the rest)"),
         "{out}"
     );
     let none = bob_command()
         .arg("capture-parse")
         .arg("--")
-        .arg("=x0")
+        .arg("x0")
         .output()
         .expect("run capture-parse human");
     assert_success(&none);
-    assert!(stdout(&none).contains("=x0 (in progress none"), "{none:?}");
+    assert!(stdout(&none).contains("x0 (in progress none"), "{none:?}");
 }
 
 #[test]
@@ -698,40 +671,40 @@ fn capture_parse_pomodoro_close_drop_protocol() {
     // `!`/`~` order.
     for (text, spec, spans) in [
         (
-            "=x~2",
-            serde_json::json!({ "raw": "=x~2", "in_progress": null, "complete": [], "drop": [2] }),
+            "x~2",
+            serde_json::json!({ "raw": "x~2", "in_progress": null, "complete": [], "drop": [2] }),
             serde_json::json!([
-                { "start": 0, "end": 2, "kind": "pomodoro_close" },
+                { "start": 0, "end": 1, "kind": "pomodoro_close" },
+                { "start": 1, "end": 3, "kind": "pomodoro_close_drop" },
+            ]),
+        ),
+        (
+            "x1~2",
+            serde_json::json!({ "raw": "x1~2", "in_progress": [1], "complete": [], "drop": [2] }),
+            serde_json::json!([
+                { "start": 0, "end": 1, "kind": "pomodoro_close" },
+                { "start": 1, "end": 2, "kind": "pomodoro_close_in_progress" },
                 { "start": 2, "end": 4, "kind": "pomodoro_close_drop" },
             ]),
         ),
         (
-            "=x1~2",
-            serde_json::json!({ "raw": "=x1~2", "in_progress": [1], "complete": [], "drop": [2] }),
+            "x1!2~3",
+            serde_json::json!({ "raw": "x1!2~3", "in_progress": [1], "complete": [2], "drop": [3] }),
             serde_json::json!([
-                { "start": 0, "end": 2, "kind": "pomodoro_close" },
-                { "start": 2, "end": 3, "kind": "pomodoro_close_in_progress" },
-                { "start": 3, "end": 5, "kind": "pomodoro_close_drop" },
+                { "start": 0, "end": 1, "kind": "pomodoro_close" },
+                { "start": 1, "end": 2, "kind": "pomodoro_close_in_progress" },
+                { "start": 2, "end": 4, "kind": "pomodoro_close_complete" },
+                { "start": 4, "end": 6, "kind": "pomodoro_close_drop" },
             ]),
         ),
         (
-            "=x1!2~3",
-            serde_json::json!({ "raw": "=x1!2~3", "in_progress": [1], "complete": [2], "drop": [3] }),
+            "x1~3!2",
+            serde_json::json!({ "raw": "x1~3!2", "in_progress": [1], "complete": [2], "drop": [3] }),
             serde_json::json!([
-                { "start": 0, "end": 2, "kind": "pomodoro_close" },
-                { "start": 2, "end": 3, "kind": "pomodoro_close_in_progress" },
-                { "start": 3, "end": 5, "kind": "pomodoro_close_complete" },
-                { "start": 5, "end": 7, "kind": "pomodoro_close_drop" },
-            ]),
-        ),
-        (
-            "=x1~3!2",
-            serde_json::json!({ "raw": "=x1~3!2", "in_progress": [1], "complete": [2], "drop": [3] }),
-            serde_json::json!([
-                { "start": 0, "end": 2, "kind": "pomodoro_close" },
-                { "start": 2, "end": 3, "kind": "pomodoro_close_in_progress" },
-                { "start": 3, "end": 5, "kind": "pomodoro_close_drop" },
-                { "start": 5, "end": 7, "kind": "pomodoro_close_complete" },
+                { "start": 0, "end": 1, "kind": "pomodoro_close" },
+                { "start": 1, "end": 2, "kind": "pomodoro_close_in_progress" },
+                { "start": 2, "end": 4, "kind": "pomodoro_close_drop" },
+                { "start": 4, "end": 6, "kind": "pomodoro_close_complete" },
             ]),
         ),
     ] {
@@ -743,10 +716,10 @@ fn capture_parse_pomodoro_close_drop_protocol() {
     }
 
     // A dangling `~` is an editing state needing `pomodoro_close_task`.
-    let tilde = parse("=x1~");
+    let tilde = parse("x1~");
     assert_eq!(tilde["mode"], "incomplete");
     assert_eq!(tilde["needs"], serde_json::json!(["pomodoro_close_task"]));
-    assert_eq!(tilde["pomodoro_close"]["raw"], "=x1~");
+    assert_eq!(tilde["pomodoro_close"]["raw"], "x1~");
     assert_eq!(
         tilde["pomodoro_close"]["in_progress"],
         serde_json::json!([1])
@@ -756,22 +729,22 @@ fn capture_parse_pomodoro_close_drop_protocol() {
     assert_eq!(
         tilde["spans"],
         serde_json::json!([
-            { "start": 0, "end": 2, "kind": "pomodoro_close" },
-            { "start": 2, "end": 3, "kind": "pomodoro_close_in_progress" },
-            { "start": 3, "end": 4, "kind": "interactive_placeholder" },
+            { "start": 0, "end": 1, "kind": "pomodoro_close" },
+            { "start": 1, "end": 2, "kind": "pomodoro_close_in_progress" },
+            { "start": 2, "end": 3, "kind": "interactive_placeholder" },
         ])
     );
 
     // Drop overlaps and range errors report precise ranges with no spec.
     for (text, leading, range) in [
         (
-            "=x1~1",
+            "x1~1",
             "task 1 cannot both stay in progress and drop",
-            [4, 5],
+            [3, 4],
         ),
-        ("=x!2~2", "task 2 cannot both complete and drop", [5, 6]),
-        ("=x~0", "task numbers start at 1", [3, 4]),
-        ("=x1~2~3", "use one `~` list", [5, 6]),
+        ("x!2~2", "task 2 cannot both complete and drop", [4, 5]),
+        ("x~0", "task numbers start at 1", [2, 3]),
+        ("x1~2~3", "use one `~` list", [4, 5]),
     ] {
         let value = parse(text);
         assert_eq!(value["mode"], "pomodoro_close", "{text}");
@@ -817,13 +790,13 @@ fn capture_parse_pomodoro_close_drop_protocol() {
     let human = bob_command()
         .arg("capture-parse")
         .arg("--")
-        .arg("=x1,3!2~4")
+        .arg("x1,3!2~4")
         .output()
         .expect("run capture-parse human");
     assert_success(&human);
     assert!(
         stdout(&human).contains(
-            "=x1,3!2~4 (in progress 1, 3 · complete 2 · drop 4 · defer the rest)"
+            "x1,3!2~4 (in progress 1, 3 · complete 2 · drop 4 · defer the rest)"
         ),
         "{}",
         stdout(&human)

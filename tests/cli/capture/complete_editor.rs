@@ -927,9 +927,9 @@ fn capture_complete_pomodoro_ranges_preserve_start_suffix() {
 
 #[test]
 fn capture_complete_pomodoro_close_protocol() {
-    // An empty success inside `=x`, and whenever the cursor is inside a
-    // `=x` suffix.
-    for (text, cursor) in [("=x", 1), ("=x", 2), ("^r:id=x", 6)] {
+    // An empty success on the close token, and whenever the cursor is
+    // inside a `=x` suffix.
+    for (text, cursor) in [("x", 0), ("x", 1), ("^r:id=x", 6)] {
         let output = bob_command()
             .arg("capture-complete")
             .arg("-c")
@@ -955,15 +955,15 @@ fn capture_complete_pomodoro_close_protocol() {
 
 #[test]
 fn capture_complete_pomodoro_close_selection_protocol() {
-    // A cursor anywhere inside `=x…`, including the task-number lists and
+    // A cursor anywhere inside `x…`, including the task-number lists and
     // a dangling separator, returns an empty success.
     for (text, cursor) in [
-        ("=x1,3!2", 1),
-        ("=x1,3!2", 3),
-        ("=x1,3!2", 5),
-        ("=x1,3!2", 7),
-        ("=x1,", 4),
-        ("=x!", 3),
+        ("x1,3!2", 0),
+        ("x1,3!2", 2),
+        ("x1,3!2", 4),
+        ("x1,3!2", 6),
+        ("x1,", 3),
+        ("x!", 2),
         ("^r:id=x1", 8),
         ("^r:id=x1,", 9),
         ("Text @r:id=x1!2", 14),

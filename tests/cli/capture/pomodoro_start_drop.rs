@@ -379,7 +379,7 @@ fn start_drop_lexical_errors() {
         ("=~2~3", "use one `~` list: `=~2,3`"),
         (
             "=~2!3",
-            "a start can only drop Task Links; `!` completes them when you close (`=x!3`)",
+            "a start can only drop Task Links; `!` completes them when you close (`x!3`)",
         ),
         (
             "=~2#bugs",
@@ -449,7 +449,7 @@ fn start_drop_batch_chain_and_rollback() {
     let (_temp, vault, day_file) =
         start_lineup_vault("bob-cli-start-drop-chain");
     let _started = run_start_json(&vault, &day_file, "=");
-    let chained = run_start_json(&vault, &day_file, "=x =~2");
+    let chained = run_start_json(&vault, &day_file, "x =~2");
     assert_eq!(chained["kind"], "pomodoro_close", "{chained}");
     let captures = chained["captures"].as_array().expect("captures");
     assert_eq!(captures.len(), 2, "{chained}");
@@ -460,7 +460,7 @@ fn start_drop_batch_chain_and_rollback() {
         "{chained}"
     );
 
-    // Blank-line batch: `=x`, blank line, `=~2`.
+    // Blank-line batch: `x`, blank line, `=~2`.
     let (_temp, vault, day_file) =
         start_lineup_vault("bob-cli-start-drop-batch");
     let _started = run_start_json(&vault, &day_file, "=");
@@ -470,7 +470,7 @@ fn start_drop_batch_chain_and_rollback() {
         .arg(&vault)
         .arg("-f")
         .arg("json")
-        .arg("=x\n\n=~2")
+        .arg("x\n\n=~2")
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_NOW", "2026-09-30 09:42:00")
         .output()

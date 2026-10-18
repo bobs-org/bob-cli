@@ -246,7 +246,7 @@ impl fmt::Display for CloseSelectionError {
                 if *total == 0 {
                     write!(
                         f,
-                        "`{raw}` {names}, but {owner} has no numbered Task Links; close it with `=x`"
+                        "`{raw}` {names}, but {owner} has no numbered Task Links; close it with `x`"
                     )
                 } else if *total == 1 {
                     write!(

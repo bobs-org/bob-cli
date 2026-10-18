@@ -110,7 +110,7 @@ pub(super) fn multiple_timed_error(
         return SyncError::new(PREFIX);
     }
     SyncError::new(format!(
-        "{PREFIX}: {}; close all but one with `bob capture -- =x`, or mark it `[x]`",
+        "{PREFIX}: {}; close all but one with `bob capture x`, or mark it `[x]`",
         details.join(", ")
     ))
 }

@@ -62,7 +62,7 @@ pub(crate) fn split_physical_lines(raw: &str) -> Vec<RawLine<'_>> {
 /// splitting, so it neither becomes an item nor separates adjacent body
 /// lines. Item ranges and line numbers always refer back to the complete
 /// original draft. A parent line holding a whitespace-separated
-/// session-operator chain (`+2 =x`) is split into one single-token item per
+/// session-operator chain (`+2 x`) is split into one single-token item per
 /// operator; see [`session_chain_tokens`].
 pub(crate) fn split_capture_draft(raw: &str) -> CaptureDraft<'_> {
     let lines = split_physical_lines(raw);
@@ -137,8 +137,8 @@ pub(super) fn session_chain_tokens<'a>(
     }
 }
 
-/// Whether a chain token is a whole-item `=x` close: any `=`-family close
-/// token (`=x`, `=X`, `=x<N>…`, `=x#…`).
+/// Whether a chain token is a whole-item close: a bare `x`, `x<N>…`, or
+/// `x#…`, or a retired `=x`/`=*`/`=!` spelling that teaches the rewrite.
 fn is_chain_close_token(token: &str) -> bool {
     matches!(
         super::item::session_equals_token(token),
@@ -147,7 +147,7 @@ fn is_chain_close_token(token: &str) -> bool {
 }
 
 /// Whether a token starts a new session: a whole-item start (`=`, `=<X>`,
-/// `=#name`, `=~K` with its drop part) or a whole-item close (`=x…`).
+/// `=#name`, `=~K` with its drop part) or a whole-item close (`x…`).
 /// Adjust/shift tokens (`+1`, `-`, `--`) never start a session, so they
 /// stay entry text unless a start or close precedes them in the trail.
 fn is_trail_head_token(token: &str) -> bool {
@@ -219,21 +219,21 @@ pub(crate) fn split_inline_close_tokens(
 /// chain, push one single-token item per operator instead: each synthetic
 /// item holds a single [`ItemLine`] over that token's absolute range on the
 /// physical line, with sequential `index` numbering across the draft. Child
-/// lines attach to the line's `=x` item — or to the last `=x` when the line
-/// closes twice — extending its `lines`, `end`, and `line_end`. With no `=x`
+/// lines attach to the line's `x` item — or to the last `x` when the line
+/// closes twice — extending its `lines`, `end`, and `line_end`. With no `x`
 /// on the line, children still attach to the last token's item, so the last
 /// token's family parser reports its existing shape error.
 ///
-/// A parent line with an inline Work Log entry (`=x wired the lexer`)
+/// A parent line with an inline Work Log entry (`x wired the lexer`)
 /// splits into one item per lead token before the owner, then the owner
 /// item carrying the entry, then one item per trail token. The owner item's
 /// single [`ItemLine`] is the contiguous slice from the owner token's start
 /// through the entry's last token, so the close parser sees exactly
-/// `=x… <entry>`. Child lines attach to the owner, so mixing entry and
+/// `x… <entry>`. Child lines attach to the owner, so mixing entry and
 /// bullets reports the mixing error. With no siblings the result is one
 /// item over the whole line, as today.
 ///
-/// A chain whose `=x` is not last nests its item ranges: the close item's
+/// A chain whose `x` is not last nests its item ranges: the close item's
 /// range runs from its token through its last bullet, so it contains the
 /// ranges of the later tokens on the parent line. An inline owner never
 /// nests siblings: its range ends at the entry (or its last child). Item
@@ -1024,7 +1024,7 @@ fn template_session_error(row: usize, line: usize) -> String {
     template_row_error(
         row,
         line,
-        "a template can't drive the Pomodoro session; capture `=`, `=x`, `+N`, and `++N` on their own"
+        "a template can't drive the Pomodoro session; capture `=`, `x`, `+N`, and `++N` on their own"
             .to_string(),
     )
 }

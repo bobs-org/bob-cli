@@ -338,7 +338,7 @@ fn so6_bad_picks_are_usage_and_write_free() {
 }
 
 // SO13: a later item that completes, links, re-blocks, or adds open
-// work drops the earlier offer. `=x~K` is covered with a drop of a
+// work drops the earlier offer. `x~K` is covered with a drop of a
 // picked successor link.
 #[test]
 fn so13_later_item_drops_stale_offers() {

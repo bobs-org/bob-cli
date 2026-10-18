@@ -135,8 +135,8 @@ pub(crate) enum CaptureKind {
         close: Option<PomodoroCloseSpec>,
         spelling: PomodoroLinkSpelling,
     },
-    /// A whole-item `=x` Pomodoro close, with optional Work Log bullets as
-    /// child lines (`=x` plus `- 1 wired the lexer` below it). Extra text on
+    /// A whole-item `x` Pomodoro close, with optional Work Log bullets as
+    /// child lines (`x` plus `- 1 wired the lexer` below it). Extra text on
     /// the close line is never a task.
     PomodoroClose {
         spec: PomodoroCloseSpec,
@@ -204,35 +204,37 @@ pub(crate) enum SessionOperator {
     Shift { later: bool },
 }
 
-/// Typed `@<route>:<block-id>=x` close specification. `x` is
-/// case-insensitive; `raw` preserves what was typed.
+/// Typed close specification: a whole-item `x` close or a
+/// `@<route>:<block-id>=x` link close suffix. The whole-item `x` is
+/// lowercase only and the link suffix `x` is case-insensitive; `raw` preserves
+/// what was typed.
 ///
-/// A selection (`=x[<N>][*<P>][!<M>][~<K>]`, with `*`/`!`/`~` in any order)
+/// A selection (`x[<N>][*<P>][!<M>][~<K>]`, with `*`/`!`/`~` in any order)
 /// names numbered Task Links: `in_progress` is `None` when no `<N>` list was
 /// typed (unlisted links keep their ledger outcome unless `*<P>` is present,
 /// which activates selection mode like `<N>`) and `Some` (possibly empty for
-/// `=x0`) when one was; `park` holds the `*<P>` list, `complete` the `!<M>`
+/// `x0`) when one was; `park` holds the `*<P>` list, `complete` the `!<M>`
 /// list, and `drop` the `~<K>` list, each empty when none was typed. `park_all`
 /// and `complete_all` retain a present group with no numbers; execution
 /// expands its outcome over the remaining numbered Task Links. All concrete
-/// lists are sorted ascending. Plain `=x` reports `in_progress: None` and
+/// lists are sorted ascending. Plain `x` reports `in_progress: None` and
 /// empty `park`/`complete`/`drop`, so version-tolerant readers see only
 /// additive fields.
 ///
 /// Work Log bullets (`- [<n>] <text>` child lines under
-/// `=x[<N>][*<P>][!<M>][~<K>]`) append `log` entries: each names a
+/// `x[<N>][*<P>][!<M>][~<K>]`) append `log` entries: each names a
 /// numbered Task Link plus the literal entry text and its nested details,
 /// in typed order. Bullets are numbered all or none; unnumbered bullets
 /// log in order to the close's worked tasks. The text is final; the
 /// grammar phase fills it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct PomodoroCloseSpec {
-    /// Raw close token exactly as typed: a whole-item bare token (`x1*2!3~4`)
-    /// or the still-supported `=`-prefixed token (`=x1*2!3~4`); link closes
-    /// keep their `=`-prefixed suffix.
+    /// Raw close token exactly as typed: the bare token (`x1*2!3~4`) for a
+    /// whole-item close, or the `=`-prefixed suffix (`=x1*2!3~4`) for a link
+    /// or task close.
     pub(crate) raw: String,
     /// Numbered links that stay in progress, or `None` when no `<N>` list
-    /// was typed. `Some(vec![])` is an explicit `x0`/`=x0` ('none').
+    /// was typed. `Some(vec![])` is an explicit `x0` ('none').
     pub(crate) in_progress: Option<Vec<u32>>,
     /// Numbered links to park (record work without carrying), empty when no
     /// `*<P>` list was typed. Parked links get normal In Progress work
@@ -297,8 +299,8 @@ pub(crate) enum CloseLogOrigin {
     /// typed position among the close's entries; the task number comes
     /// from positional assignment, not from the bullet.
     PositionalBullet { position: u32 },
-    /// The close line's own text (`=x wired the lexer`). `close_token` is
-    /// the typed close token (`=x`, `=x1,3,4`); `explicit` is true when the
+    /// The close line's own text (`x wired the lexer`). `close_token` is
+    /// the typed close token (`x`, `x1,3,4`); `explicit` is true when the
     /// entry typed its number; `default_index` is the lexical default used
     /// for escapes.
     Inline {
@@ -309,7 +311,7 @@ pub(crate) enum CloseLogOrigin {
 }
 
 impl PomodoroCloseSpec {
-    /// A plain `=x` spec: no selection lists.
+    /// A plain `x` spec: no selection lists.
     pub(crate) fn plain(raw: String) -> Self {
         Self {
             raw,

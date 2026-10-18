@@ -510,7 +510,7 @@ pub(super) fn bang_invalid_error(raw: &str, extra: &str) -> String {
 
 /// Hint appended when a claimed `!` token carries an `=` or `#` suffix.
 pub(super) const BANG_SUFFIX_HINT: &str =
-    "`!` takes no `=` or `#` suffix; to complete the running session's link while closing, use `=x!N`";
+    "`!` takes no `=` or `#` suffix; to complete the running session's link while closing, use `x!N`";
 
 /// Hint appended when one item holds two complete `!` tokens.
 pub(super) const BANG_BULK_HINT: &str =
@@ -556,7 +556,7 @@ pub(crate) const POMODORO_CLOSE_INTERNAL_BULLETS_ERROR: &str =
 
 pub(crate) const POMODORO_START_FORCED_ERROR: &str = "Pomodoro start `=<X>` cannot be combined with --route, --section, --task, --task-ref, --task-section, or --clip; capture the start alone";
 
-pub(super) const POMODORO_CLOSE_FORCED_ERROR: &str = "Pomodoro close `=x` cannot be combined with --route, --section, --task, --task-ref, --task-section, or --clip; capture the close alone";
+pub(super) const POMODORO_CLOSE_FORCED_ERROR: &str = "Pomodoro close `x` cannot be combined with --route, --section, --task, --task-ref, --task-section, or --clip; capture the close alone";
 
 /// Whole-item start shape error, formatted with the typed token: a counted
 /// token with extra text, markers, or child lines, or an exact token with
@@ -610,6 +610,7 @@ pub(super) fn pomodoro_named_start_nospace_error(
 
 /// `==`-prefixed close shape (`==x`, `==X1`, `==*`, `==!2`): `==`
 /// restarts or swaps the running Pomodoro and never closes it.
+/// `close_spelling` is the bare rewrite of the typed tail (`x`, `x1`, `x*`).
 pub(super) fn pomodoro_double_close_error(
     token: &str,
     close_spelling: &str,
@@ -619,13 +620,36 @@ pub(super) fn pomodoro_double_close_error(
     )
 }
 
-/// Named-start E5: `=x#…` close near miss.
+/// A retired whole-item `=`-prefixed close (`=x`, `=X2`, `=x wired`, `=*1`,
+/// `=!`, `=x#bugs`). `token` is the typed token and `rewrite` the same line
+/// spelled with the bare `x` close.
+pub(super) fn retired_whole_item_close_error(
+    token: &str,
+    rewrite: &str,
+) -> String {
+    format!(
+        "`{token}` is retired: close the running Pomodoro with a bare `x`, without the `=`; write `{rewrite}`"
+    )
+}
+
+/// A retired `=*…`/`=!…` link-suffix alias (`^bob:stop=*`, `@r:id=!2`).
+/// `token` is the typed suffix and `rewrite` its `=x…` spelling.
+pub(super) fn retired_link_close_alias_error(
+    token: &str,
+    rewrite: &str,
+) -> String {
+    format!(
+        "`{token}` is retired: a link or task close spells the `x`; write `{rewrite}`"
+    )
+}
+
+/// Named-start E5: `x#…` close near miss.
 pub(super) fn pomodoro_close_hash_error(name: &str) -> String {
     if name.is_empty() {
-        "`=x` always closes the running Pomodoro; remove `#`".to_string()
+        "`x` always closes the running Pomodoro; remove `#`".to_string()
     } else {
         format!(
-            "`=x` always closes the running Pomodoro; remove `#{name}`, or write `=x =#{name}` to close it and then start that Pomodoro; `==#{name}` swaps it in without closing the running session"
+            "`x` always closes the running Pomodoro; remove `#{name}`, or write `x =#{name}` to close it and then start that Pomodoro; `==#{name}` swaps it in without closing the running session"
         )
     }
 }
@@ -637,7 +661,7 @@ pub(crate) const POMODORO_CLOSE_SCHEDULE_CONFLICT_ERROR: &str = "Pomodoro close 
 pub(crate) const POMODORO_CLOSE_PRIORITY_CONFLICT_ERROR: &str = "Pomodoro close suffix `=x` cannot be combined with `$<N>`; a scheduled task starts Blocked and cannot be worked in the closing session";
 
 // ---------------------------------------------------------------------------
-// `=x[<N>][*<P>][!<M>][~<K>]` selection diagnostics
+// `x[<N>][*<P>][!<M>][~<K>]` selection diagnostics
 // ---------------------------------------------------------------------------
 
 /// One shared source for every selection-list diagnostic, used by both the
@@ -700,7 +724,7 @@ pub(super) fn close_selection_competing_wildcards_error(token: &str) -> String {
 }
 
 pub(super) fn close_selection_zero_alone_error() -> String {
-    "`0` means no task stays in progress; use it alone, as `=x0`, `=x0*2`, `=x0!2`, or `=x0~2`"
+    "`0` means no task stays in progress; use it alone, as `x0`, `x0*2`, `x0!2`, or `x0~2`"
         .to_string()
 }
 
@@ -717,20 +741,20 @@ pub(super) fn close_selection_expected_number_after_error() -> String {
 }
 
 pub(super) fn close_selection_one_bang_error() -> String {
-    "use one `!` list: `=x1!2,3`".to_string()
+    "use one `!` list: `x1!2,3`".to_string()
 }
 
 pub(super) fn close_selection_one_tilde_error() -> String {
-    "use one `~` list: `=x1~2,3`".to_string()
+    "use one `~` list: `x1~2,3`".to_string()
 }
 
 pub(super) fn close_selection_one_star_error() -> String {
-    "use one `*` list: `=x1*2,3`".to_string()
+    "use one `*` list: `x1*2,3`".to_string()
 }
 
 pub(super) fn close_selection_bad_list_error(token: &str) -> String {
     format!(
-        "`{token}` is not a task list: write `=x`, then comma-separated task numbers, then optionally `*` and the numbers to park, `!` and the numbers to complete, and `~` and the numbers to drop (for example `=x1*2!3~4`)"
+        "`{token}` is not a task list: write `x`, then comma-separated task numbers, then optionally `*` and the numbers to park, `!` and the numbers to complete, and `~` and the numbers to drop (for example `x1*2!3~4`)"
     )
 }
 
@@ -748,7 +772,7 @@ pub(super) fn close_selection_incomplete_error(
 }
 
 // ---------------------------------------------------------------------------
-// `=x` Work Log bullet diagnostics (shared by `bob capture` and `capture-parse`)
+// `x` Work Log bullet diagnostics (shared by `bob capture` and `capture-parse`)
 // ---------------------------------------------------------------------------
 
 /// A Work Log bullet whose first token is not a task number, in a
@@ -812,7 +836,7 @@ pub(super) fn close_log_positional_too_many_error(
     )
 }
 
-/// Unnumbered bullets on a close that works no task (`=x0`, `=x0~2`).
+/// Unnumbered bullets on a close that works no task (`x0`, `x0~2`).
 /// `close_token` is the typed close token; `listed`/`completed` are the
 /// `not_worked_suggestions(1, …)` pair.
 pub(super) fn close_log_positional_none_error(
@@ -826,8 +850,8 @@ pub(super) fn close_log_positional_none_error(
 }
 
 /// A tail index that is not worked by this close. `list_suggestion` adds the
-/// index to `<N>` (for example `=x2,3`) and `complete_suggestion` adds it to
-/// `!<M>` (for example `=x2!3`).
+/// index to `<N>` (for example `x2,3`) and `complete_suggestion` adds it to
+/// `!<M>` (for example `x2!3`).
 pub(super) fn close_log_not_worked_error(
     index: u32,
     token: &str,
@@ -877,11 +901,10 @@ pub(super) fn close_entry_fence_error() -> String {
 
 /// An inline entry whose first token is a start or close token: the entry
 /// must sit right after the close, with session operators trailing.
-/// `fixed` is the corrected line (for example `=x wired =`).
+/// `fixed` is the corrected line (for example `x wired =`).
 pub(super) fn close_inline_reorder_error(fixed: &str) -> String {
-    let close_token = fixed.split_whitespace().next().unwrap_or("=x");
     format!(
-        "write the Work Log entry right after `{close_token}`, then the session operators: `{fixed}`"
+        "write the Work Log entry right after `x`, then the session operators: `{fixed}`"
     )
 }
 
@@ -892,17 +915,16 @@ pub(super) fn close_inline_stray_error(marker: &str, fixed: &str) -> String {
 }
 
 /// The no-spaces hint for an inline entry: the spaceless join `nospace`
-/// (for example `=x!2`) lexes as a selection. `first` is the entry's first
+/// (for example `x!2`) lexes as a selection. `first` is the entry's first
 /// token text; `escape` is the `put the task number first` suggestion, or
 /// `None` when the entry holds no further text.
 pub(super) fn close_inline_no_spaces_error(
-    close_token: &str,
     nospace: &str,
     first: &str,
     escape: Option<&str>,
 ) -> String {
     let base = format!(
-        "write the task numbers right after `{close_token}`, with no spaces (`{nospace}`)"
+        "write the task numbers right after `x`, with no spaces (`{nospace}`)"
     );
     match escape {
         Some(suggestion) => format!(
@@ -912,7 +934,7 @@ pub(super) fn close_inline_no_spaces_error(
     }
 }
 
-/// An inline entry on a close that works no task (`=x0`, `=x0~2`).
+/// An inline entry on a close that works no task (`x0`, `x0~2`).
 /// `close_token` is the typed close token; `listed`/`completed` are the
 /// `not_worked_suggestions(1, …)` pair.
 pub(super) fn close_inline_no_default_error(
@@ -941,12 +963,11 @@ pub(super) fn close_inline_mixing_error(bullet: &str) -> String {
     )
 }
 
-/// A dangling inline number at execution: theclose head (for example
-/// `=x 2`) plus the task index. A plain `=x`/`=X` close appends the `=x2`
-/// spacing hint.
+/// A dangling inline number at execution: the close head (for example
+/// `x 2`) plus the task index. A plain `x` close appends the `x2` spacing
+/// hint.
 pub(super) fn close_inline_dangling_error(
     head: &str,
-    close_token: &str,
     index: u32,
     plain_close: bool,
 ) -> String {
@@ -955,7 +976,7 @@ pub(super) fn close_inline_dangling_error(
     );
     if plain_close {
         format!(
-            "{base}, or write `{close_token}{index}` (no space) to keep only task {index} in progress"
+            "{base}, or write `x{index}` (no space) to keep only task {index} in progress"
         )
     } else {
         base
@@ -980,7 +1001,7 @@ pub(super) fn start_drop_bad_list_error(token: &str) -> String {
 
 /// `!` never belongs on a start: it completes links when closing.
 pub(super) fn start_drop_bang_error() -> String {
-    "a start can only drop Task Links; `!` completes them when you close (`=x!3`)".to_string()
+    "a start can only drop Task Links; `!` completes them when you close (`x!3`)".to_string()
 }
 
 /// A `#name` typed after the drop list belongs before it. `suggestion` keeps
@@ -1000,13 +1021,13 @@ pub(super) fn start_drop_no_spaces_error() -> String {
 /// The keep list typed both ways: leading `<N>` plus `@<N>`.
 pub(super) fn close_selection_keep_twice_error(token: &str) -> String {
     format!(
-        "`{token}` lists the in-progress tasks twice; type them once, right after `=x` or after `@` (for example `=x2,3` or `=x@2,3`)"
+        "`{token}` lists the in-progress tasks twice; type them once, right after `x` or after `@` (for example `x2,3` or `x@2,3`)"
     )
 }
 
 /// A second `@` in a close selection points at the second `@`.
 pub(super) fn close_selection_one_at_error() -> String {
-    "use one `@` list: `=x!1@2,3`".to_string()
+    "use one `@` list: `x!1@2,3`".to_string()
 }
 
 /// An empty `@` group directly before another marker.

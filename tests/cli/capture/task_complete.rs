@@ -602,7 +602,7 @@ fn two_completions_plus_close_commit_as_one_batch() {
             .arg("-f")
             .arg("json")
             .arg("--")
-            .arg("!sase:one\n\n!sase:two\n\n=x")
+            .arg("!sase:one\n\n!sase:two\n\nx")
             .env("BOB_DAY_FILE", &day_file)
             .env("BOB_NOW", NOW);
         command.output().expect("run batch json")
@@ -956,7 +956,7 @@ fn hello_ignores_poisoned_note_only_discovery_would_touch() {
 
 #[test]
 fn close_completing_nothing_ignores_poisoned_note() {
-    // Same laziness for `=x`: closing a session with no embedded tasks
+    // Same laziness for `x`: closing a session with no embedded tasks
     // completes nothing and never scans note contents.
     let (_temp, vault) = vault_with_settings("bob-cli-task-complete-poison-x");
     let day_file = vault.join("20261005.md");
@@ -970,7 +970,7 @@ fn close_completing_nothing_ignores_poisoned_note() {
         b"\xff\xfe invalid \xfe\xff [dependsOn:: ghost] [id:: poison]",
     )
     .expect("write poison note");
-    let json = capture_json(&vault, &day_file, &["=x"]);
+    let json = capture_json(&vault, &day_file, &["x"]);
     assert_eq!(json["ok"], true);
     assert_eq!(json["kind"], "pomodoro_close");
     if let Some(warnings) = json.get("warnings") {

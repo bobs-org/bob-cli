@@ -161,11 +161,11 @@ fn capture_pomodoros_task_link_count_matches_dry_run_lineup() {
         .arg("-f")
         .arg("json")
         .arg("--")
-        .arg("=x")
+        .arg("x")
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_NOW", "2026-08-28 09:10:00")
         .output()
-        .expect("run bob capture dry-run =x");
+        .expect("run bob capture dry-run x");
     assert_success(&close_output);
     let close_json: serde_json::Value =
         serde_json::from_str(stdout(&close_output).trim()).expect("close json");
@@ -175,7 +175,7 @@ fn capture_pomodoros_task_link_count_matches_dry_run_lineup() {
     assert_eq!(task_link_count, task_links.len() as u64);
     assert_eq!(task_link_count, 3);
 
-    // `--tasks` numbers the current entry exactly like the `=x` lineup.
+    // `--tasks` numbers the current entry exactly like the `x` lineup.
     let tasks_output = bob_command()
         .arg("capture-pomodoros")
         .arg("-b")

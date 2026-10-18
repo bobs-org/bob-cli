@@ -1,8 +1,8 @@
-//! Note-free `=x0` reset planning: return the current Pomodoro to the
+//! Note-free `x0` reset planning: return the current Pomodoro to the
 //! front of the future queue instead of closing it.
 //!
-//! Reset applies only to the explicit empty in-progress selection (`=x0`,
-//! including `=X0` and surrounding whitespace) with no park/complete/drop
+//! Reset applies only to the explicit empty in-progress selection (`x0`,
+//! including surrounding whitespace) with no park/complete/drop
 //! group or wildcard and no typed Work Log input. Any stand-alone session
 //! note forces the existing close path unchanged.
 
@@ -25,8 +25,8 @@ use super::selection::CloseSelection;
 
 /// Shared reset eligibility from the parsed selection. Explicit empty
 /// in-progress list only; no park/complete/drop group or wildcard and no
-/// typed Work Log input. Valid modifier variants (`=x0*2`, `=x0!2`,
-/// `=x0~2`, `=x0*`, wildcards) and ordinary `=x` stay on the close path.
+/// typed Work Log input. Valid modifier variants (`x0*2`, `x0!2`,
+/// `x0~2`, `x0*`, wildcards) and ordinary `x` stay on the close path.
 pub(crate) fn is_reset_selection(selection: &CloseSelection) -> bool {
     matches!(selection.in_progress.as_ref(), Some(numbers) if numbers.is_empty())
         && selection.park.is_empty()

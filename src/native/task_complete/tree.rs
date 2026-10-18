@@ -1,8 +1,8 @@
-//! Embedded task-tree close shared by `=x` and whole-item completion.
+//! Embedded task-tree close shared by `x` and whole-item completion.
 //!
 //! This is the extracted `ClosePlanner::apply_embedded_tree` traversal from
 //! `capture_pomodoro_close::linked_tasks`, parameterized by a root policy:
-//! `CloseLink` preserves today's `=x` behavior exactly, while `Explicit`
+//! `CloseLink` preserves today's `x` behavior exactly, while `Explicit`
 //! additionally closes a Blocked root and leaves recurring lines open with
 //! a reason instead of closing them.
 
@@ -30,7 +30,7 @@ pub(crate) const MAX_TREE_TARGETS: usize = 250;
 /// Root policy for [`complete_task_tree`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RootPolicy {
-    /// Today's `=x` behavior: only ` `/`*`/`/` roots close.
+    /// Today's `x` behavior: only ` `/`*`/`/` roots close.
     CloseLink,
     /// Whole-item completion: a Blocked root closes too.
     Explicit,
@@ -98,7 +98,7 @@ pub(crate) struct CompleteTreeOutcome {
     pub(crate) warnings: Vec<String>,
 }
 
-/// One `=x` embedded-tree root: the ledger link plus the file it was
+/// One `x` embedded-tree root: the ledger link plus the file it was
 /// found in. The close replays [`EmbeddedTreeVisit`]s in order to rebuild
 /// its task rows, so the engine records link identity (not snapshots) per
 /// visit and the close re-reads pre-merge staged text exactly once.
@@ -117,7 +117,7 @@ pub(crate) enum EmbeddedVisitOutcome {
     /// which reproduces the row and its warning.
     Unresolved,
     /// Depth cap: the close warns only and registers no row, matching the
-    /// long-standing `=x` behavior.
+    /// long-standing `x` behavior.
     DepthCapped { warning: String },
     /// Target cap: the close registers the row, then warns.
     TargetCapped { warning: String },
@@ -139,7 +139,7 @@ pub(crate) struct EmbeddedTreeVisit {
 }
 
 /// Structured result of [`complete_embedded_trees`]: one shared traversal
-/// over every `=x` embedded root, replayed by the close planner.
+/// over every `x` embedded root, replayed by the close planner.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub(crate) struct EmbeddedTreesOutcome {
     /// Post-images for changed files only.
@@ -315,11 +315,11 @@ struct TreeWork<'a, V> {
     policy: RootPolicy,
     below_line: usize,
     /// When set, depth-cap warnings use this line instead of `below_line`.
-    /// The `=x` close sets it per root to the root's ledger line so its
+    /// The `x` close sets it per root to the root's ledger line so its
     /// long-standing warning text stays byte-identical.
     warn_line_override: Option<usize>,
     /// When set, root lookup failures warn instead of erroring, so the
-    /// `=x` close can replay them as unresolved rows.
+    /// `x` close can replay them as unresolved rows.
     lenient_roots: bool,
     staged: BTreeMap<PathBuf, String>,
     originals: BTreeMap<PathBuf, String>,
@@ -524,7 +524,7 @@ impl<'a, V: CloseVault> TreeWork<'a, V> {
         ) {
             // Done and Canceled lines are neither closed nor reported.
             // A done `x` line is still traversed so its open children
-            // close, exactly as `=x` always did.
+            // close, exactly as `x` always did.
             if symbol == 'x' {
                 let descendants = embedded_children(&contents, &task);
                 for descendant in descendants {
@@ -771,7 +771,7 @@ impl<'a, V: CloseVault> TreeWork<'a, V> {
 
 /// Close the embedded task tree rooted at (`root_path`, `block_id`).
 ///
-/// The root closes under `policy` (`CloseLink` keeps today's `=x` rules;
+/// The root closes under `policy` (`CloseLink` keeps today's `x` rules;
 /// `Explicit` also admits a Blocked root). Only the root may differ from
 /// the close rules: descendants always use the `CloseLink` traversal gate,
 /// so a Blocked `[?]` or `X` descendant (and everything below it) stays
@@ -779,7 +779,7 @@ impl<'a, V: CloseVault> TreeWork<'a, V> {
 /// is 250, and only ` `/`*`/`/` descendants close. Under `Explicit`,
 /// recurring lines are left open with a reason instead. Done and Canceled
 /// descendants (resolved through the Tasks status settings) are neither
-/// closed nor reported. The root line matches what `=x` writes, including
+/// closed nor reported. The root line matches what `x` writes, including
 /// the `  [completion:: YYYY-MM-DD]` field before a trailing `^id` when
 /// the line carries the global-filter tag.
 pub(crate) fn complete_task_tree<V: CloseVault>(
@@ -865,9 +865,9 @@ mod managed_dependency_tests {
     }
 }
 
-/// Close every `=x` embedded tree in one shared traversal.
+/// Close every `x` embedded tree in one shared traversal.
 ///
-/// This is the single traversal behind `=x`: the depth cap, the target
+/// This is the single traversal behind `x`: the depth cap, the target
 /// cap, the Depends-On skip, and the gate all live here, and the close
 /// planner replays [`EmbeddedTreeVisit`]s instead of recursing on its own.
 /// Each root's depth-cap warnings name its own ledger line, and root link

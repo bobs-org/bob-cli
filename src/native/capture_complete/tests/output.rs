@@ -44,8 +44,8 @@ fn trailing_hash_fragment_requests_no_completion() {
 fn close_items_and_suffixes_request_no_completion() {
     let temp = TempDir::new("bob-cli-capture-complete-close");
     let day_file = active_task_fixture(temp.path());
-    // Whole-item `=x`/`=` are actions: empty success everywhere.
-    for (raw, cursor) in [("=x", 2), ("=", 1), ("=x more", 3)] {
+    // Whole-item `x`/`=` are actions: empty success everywhere.
+    for (raw, cursor) in [("x", 1), ("=", 1), ("x more", 2)] {
         let empty =
             crate::native::env::with_var("BOB_DAY_FILE", &day_file, || {
                 result(temp.path(), raw, cursor)
@@ -75,19 +75,19 @@ fn close_bullet_lines_suppress_wikilink_block_but_keep_note() {
     let temp = TempDir::new("bob-cli-capture-complete-close-bullet");
     write_file(&temp.path().join("Design notes.md"), "line ^web-capture\n");
     // Note completion keeps working on a Work Log bullet line.
-    let note = result(temp.path(), "=x\n- 1 see [[Design", 17);
+    let note = result(temp.path(), "x\n- 1 see [[Design", 16);
     assert_eq!(note.context, Some(CompletionContext::WikilinkNote));
     assert_ne!(note.candidates.len(), 0);
     // Note completion keeps working inside an inline entry too.
-    let inline_note = result(temp.path(), "=x see [[Design", 15);
+    let inline_note = result(temp.path(), "x see [[Design", 14);
     assert_eq!(inline_note.context, Some(CompletionContext::WikilinkNote));
     assert_ne!(inline_note.candidates.len(), 0);
     // Block completion is suppressed on a Work Log bullet line, on a
     // plain close and on a chain close alike, and inside inline entries.
     for raw in [
-        "=x\n- 1 see [[Design notes#^web",
-        "=x =\n- 1 see [[Design notes#^web",
-        "=x see [[Design notes#^web",
+        "x\n- 1 see [[Design notes#^web",
+        "x =\n- 1 see [[Design notes#^web",
+        "x see [[Design notes#^web",
     ] {
         let block = result(temp.path(), raw, raw.len());
         assert_eq!(block.context, None, "{raw}");
@@ -95,12 +95,12 @@ fn close_bullet_lines_suppress_wikilink_block_but_keep_note() {
     }
     // Named-start completion on a trail token keeps working because the
     // owner's line ends at the entry.
-    let raw = "=x wired it =#bu";
+    let raw = "x wired it =#bu";
     let trail = result(temp.path(), raw, raw.len());
     assert_ne!(trail.context, None, "{raw}");
     // Marker completion (including `@@`) stays suppressed on bullet
     // lines and inline entries: entry text is literal.
-    for raw in ["=x\n- 1 @@", "=x @@"] {
+    for raw in ["x\n- 1 @@", "x @@"] {
         let markers = result(temp.path(), raw, raw.len());
         assert_eq!(markers.context, None, "{raw}");
         assert_eq!(markers.candidates.len(), 0, "{raw}");

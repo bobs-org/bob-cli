@@ -103,7 +103,7 @@ untouched with a notice explaining why; an item with more than one local \
 marker is left untouched with no notice, since 'bob capture-parse' already \
 reports that duplicate. Feeding a rewrite's own output back in is a no-op, \
 because the claiming token is no longer bare and no longer ends in a toggle \
-trigger. A whole-item `=x[<N>][!<M>]` close item is never rewritten or \
+trigger. A whole-item `x[<N>][!<M>]` close item is never rewritten or \
 absorbed, and a `@@` declaration never applies to it.\n\n\
 These assists are editor-only: 'bob capture' and 'bob capture-parse' keep \
 the literal TEXT, so '@file:id^' is not silently rewritten there. Only a \
@@ -477,15 +477,15 @@ mod tests {
 
     #[test]
     fn close_items_are_never_rewritten() {
-        for raw in ["=x", "=X", "=", "@r:id=x", "^r:id=x", "Text @r:id=x"] {
+        for raw in ["x", "x1!2", "=", "@r:id=x", "^r:id=x", "Text @r:id=x"] {
             let value = json(raw, None);
             assert_eq!(value["changed"], false, "{raw}");
             assert_eq!(value["text"], raw, "{raw}");
         }
         // A `@@` declaration leaves a close item alone with a notice.
-        let value = json("@@foo\n=x", None);
+        let value = json("@@foo\nx", None);
         assert_eq!(value["changed"], false);
-        assert_eq!(value["text"], "@@foo\n=x");
+        assert_eq!(value["text"], "@@foo\nx");
     }
 
     #[test]

@@ -222,8 +222,8 @@ fn task_status_hooks_guard_rails_leave_tasks_unchanged() {
     assert!(
         multiple_stderr.contains("First (line 3, 0900-0930)")
             && multiple_stderr.contains("Second (line 5, 0930-1000)")
-            && multiple_stderr.contains("bob capture -- =x"),
-        "multiple-timed error should name each entry and suggest =x:\n{}",
+            && multiple_stderr.contains("bob capture x"),
+        "multiple-timed error should name each entry and suggest x:\n{}",
         format_output(&multiple)
     );
     assert_eq!(

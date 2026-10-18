@@ -305,7 +305,7 @@ pub(crate) fn parse_for_editor_with(
         global_destination.as_ref().filter(|global| global.inherit)
     {
         for item in &mut items {
-            // Whole-item session operators, `=x[<N>][!<M>]` closes
+            // Whole-item session operators, `x[<N>][!<M>]` closes
             // (including dangling-separator editing states), `=`/`=<X>`
             // starts, `=<X>#` incomplete named starts (which carry
             // the partial `pomodoro_start` spec), `:` task-link queries,

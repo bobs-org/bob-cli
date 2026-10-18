@@ -63,6 +63,15 @@ fn execute(raw: &str) -> Result<ParsedCaptureText, String> {
     )
 }
 
+fn execute_draft(raw: &str) -> Result<ParsedCaptureDraft, String> {
+    parse_capture_draft_with_clip_control(
+        raw,
+        None,
+        None,
+        &CaptureParseOptions::routing_off(true),
+    )
+}
+
 fn sub_bullet_bodies(sub_bullets: &[AuthoredSubBullet]) -> Vec<&str> {
     sub_bullets.iter().map(|item| item.body.as_str()).collect()
 }
@@ -89,5 +98,6 @@ mod globals;
 mod goto;
 mod grammar;
 mod ref_grammar;
+mod retired_close;
 mod rewrite;
 mod template;

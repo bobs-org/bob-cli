@@ -396,14 +396,14 @@ fn capture_complete_and_rewrite_ignore_shifts() {
 }
 #[test]
 fn capture_rewrite_pomodoro_close_protocol() {
-    // `=x` is never rewritten, on whole items or link forms.
+    // `x` is never rewritten, on whole items or link forms.
     for text in [
-        "=x",
+        "x",
         "^r:id=x",
         "Text @r:id=x",
-        "=x1,3!2",
-        "=x0",
-        "=x1,",
+        "x1,3!2",
+        "x0",
+        "x1,",
         "^r:id=x1",
         "Text @r:id=x!1",
     ] {
@@ -476,7 +476,7 @@ fn capture_complete_and_rewrite_ignore_starts() {
     assert_eq!(json["text"], "@@foo\n=3", "{json}");
     // A bare `@@` inside a Work Log entry is literal, on bullets and inline:
     // it is never absorbed and never treated as a declaration.
-    for text in ["=x\n- 1 moved @@inbox", "=x moved @@inbox"] {
+    for text in ["x\n- 1 moved @@inbox", "x moved @@inbox"] {
         let rewrite = bob_command()
             .arg("capture-rewrite")
             .arg("-f")

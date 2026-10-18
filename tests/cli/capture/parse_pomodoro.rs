@@ -711,7 +711,7 @@ fn capture_parse_pomodoro_start_protocol() {
     // Prose lookalikes stay ordinary tasks with no diagnostics.
     for text in [
         "= foo", "=- foo", "== foo", "==foo", "===", "==xyz", "=-)", "Plan =3",
-        "Plan ==3", "a=3", "=xx", "=xa", "Plan =x", "Plan =x1",
+        "Plan ==3", "a=3", "=xx", "=xa", "Plan x", "Plan x1",
     ] {
         let value = parse(text);
         assert_eq!(value["mode"], "task", "{text}");
@@ -727,7 +727,7 @@ fn capture_parse_pomodoro_start_protocol() {
     assert!(adjust.get("pomodoro_start").is_none(), "{adjust}");
     let shift = parse("++3");
     assert!(shift.get("pomodoro_start").is_none(), "{shift}");
-    let close = parse("=x");
+    let close = parse("x");
     assert!(close.get("pomodoro_start").is_none(), "{close}");
     let pomodoro = parse("Do work @dev:id#bugs");
     assert!(pomodoro.get("pomodoro_start").is_none(), "{pomodoro}");
@@ -849,7 +849,7 @@ fn capture_parse_named_pomodoro_start_protocol() {
         serde_json::json!([7, 11])
     );
 
-    let close_hash = parse("=x#bugs");
+    let close_hash = parse("x#bugs");
     assert_eq!(close_hash["mode"], "pomodoro_close");
     assert_eq!(
         close_hash["diagnostics"][0]["code"],
@@ -857,11 +857,11 @@ fn capture_parse_named_pomodoro_start_protocol() {
     );
     assert_eq!(
         close_hash["diagnostics"][0]["range"],
-        serde_json::json!([2, 7])
+        serde_json::json!([1, 6])
     );
 
     // Chains split per token with absolute ranges.
-    let chain = parse_stdin("=x =#bugs\n");
+    let chain = parse_stdin("x =#bugs\n");
     assert_eq!(chain["items"].as_array().expect("items").len(), 2);
     assert_eq!(chain["items"][0]["mode"], "pomodoro_close");
     assert_eq!(chain["items"][1]["mode"], "pomodoro_start");
@@ -869,7 +869,7 @@ fn capture_parse_named_pomodoro_start_protocol() {
     assert_eq!(chain["items"][1]["body"], "=#bugs");
     assert_eq!(
         chain["items"][1]["range"],
-        serde_json::json!({ "start": 3, "end": 9 })
+        serde_json::json!({ "start": 2, "end": 8 })
     );
 
     // A `@@` declaration never applies to an incomplete named start.
@@ -970,7 +970,7 @@ fn capture_parse_pomodoro_start_human_and_help() {
         help.contains("pomodoro_start")
             && help.contains("'='")
             && help.contains("'=3'")
-            && help.contains("printf '=x")
+            && help.contains("printf 'x")
             && help.contains("Modes:")
             && help.contains("pomodoro_close, pomodoro_start"),
         "expected start help:\n{help}"
@@ -986,7 +986,7 @@ fn capture_parse_pomodoro_start_human_and_help() {
     assert!(
         capture.contains("bob capture '='")
             && capture.contains("bob capture '=3'")
-            && capture.contains("printf '=x")
+            && capture.contains("printf 'x")
             && capture.contains("starts the next session")
             && capture.contains("Quote `=` items in zsh"),
         "expected capture start help:\n{capture}"

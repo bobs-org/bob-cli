@@ -1,4 +1,4 @@
-//! Note-free `=x0` reset coverage: reset versus note-preserving close.
+//! Note-free `x0` reset coverage: reset versus note-preserving close.
 
 use super::pomodoro_close::{
     close_worked_vault, run_close_expect_error, run_close_json,
@@ -47,13 +47,13 @@ fn pomodoro_reset_clears_note_free_session() {
     let (_temp, vault, day_file) =
         reset_vault("bob-cli-reset-basic", &base_capture());
     let json =
-        run_close_json(&vault, &day_file, "2026-10-09 09:37:00", &["=x0"]);
+        run_close_json(&vault, &day_file, "2026-10-09 09:37:00", &["x0"]);
     assert_eq!(json["ok"], true);
     assert_eq!(json["kind"], "pomodoro_reset");
     assert_eq!(json["placement"], "updated");
     assert!(json.get("pomodoro_close").is_none());
     let reset = &json["pomodoro_reset"];
-    assert_eq!(reset["raw"], "=x0");
+    assert_eq!(reset["raw"], "x0");
     assert_eq!(reset["pomodoro_name"], "CAPTURE");
     assert_eq!(reset["previous_pomodoro_line"], 4);
     assert_eq!(reset["pomodoro_line"], 4);
@@ -78,10 +78,10 @@ fn pomodoro_reset_clears_note_free_session() {
 
 #[test]
 fn pomodoro_reset_note_fallback_stays_close() {
-    // The shared worked vault owns a direct `quick note`: `=x0` closes.
+    // The shared worked vault owns a direct `quick note`: `x0` closes.
     let (_temp, vault, day_file) = close_worked_vault("bob-cli-reset-fallback");
     let json =
-        run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["=x0"]);
+        run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["x0"]);
     assert_eq!(json["kind"], "pomodoro_close");
     assert!(json.get("pomodoro_reset").is_none());
 }
@@ -100,7 +100,7 @@ fn pomodoro_reset_moves_before_earlier_future() {
         ),
     );
     let json =
-        run_close_json(&vault, &day_file, "2026-10-09 09:37:00", &["=x0"]);
+        run_close_json(&vault, &day_file, "2026-10-09 09:37:00", &["x0"]);
     assert_eq!(json["kind"], "pomodoro_reset");
     assert_eq!(json["pomodoro_reset"]["moved"], true);
     assert_eq!(json["pomodoro_reset"]["pomodoro_line"], 3);
@@ -116,15 +116,15 @@ fn pomodoro_reset_uppercase_and_modifiers() {
     let (_temp, vault, day_file) =
         reset_vault("bob-cli-reset-upper", &base_capture());
     let upper =
-        run_close_json(&vault, &day_file, "2026-10-09 09:37:00", &["=X0"]);
+        run_close_json(&vault, &day_file, "2026-10-09 09:37:00", &["x0"]);
     assert_eq!(upper["kind"], "pomodoro_reset");
 
-    // Explicit modifiers keep close semantics: `=x0*2` parks task 2
+    // Explicit modifiers keep close semantics: `x0*2` parks task 2
     // and closes instead of resetting.
     let (_temp, vault, day_file) =
         reset_vault("bob-cli-reset-mod", &base_capture());
     let modified =
-        run_close_json(&vault, &day_file, "2026-10-09 09:37:00", &["=x0*2"]);
+        run_close_json(&vault, &day_file, "2026-10-09 09:37:00", &["x0*2"]);
     assert_eq!(modified["kind"], "pomodoro_close");
     assert!(modified.get("pomodoro_reset").is_none());
     assert_eq!(modified["pomodoro_close"]["park"], serde_json::json!([2]));
@@ -137,7 +137,7 @@ fn pomodoro_reset_uppercase_and_modifiers() {
         &vault,
         &day_file,
         "2026-10-09 09:37:00",
-        &["=x0*9"],
+        &["x0*9"],
     );
     assert!(error.contains("names task 9"), "{error}");
     let after = fs::read_to_string(&day_file).expect("read day");

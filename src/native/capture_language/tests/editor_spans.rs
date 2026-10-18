@@ -727,7 +727,7 @@ fn editor_rejects_a_now_tag_without_task_text() {
         assert_eq!(codes(&parse), vec!["legacy_bullet_marker"], "{raw}");
     }
     // Whole-item operators and links with a trailing tag report their
-    // own shape diagnostics. An inline `=x #now` entry is literal text,
+    // own shape diagnostics. An inline `x #now` entry is literal text,
     // so it stays a valid close.
     for (raw, expected) in [
         ("^sase:fix-it #now", "invalid_pomodoro_link"),
@@ -741,8 +741,8 @@ fn editor_rejects_a_now_tag_without_task_text() {
             codes(&parse)
         );
     }
-    let inline = editor("=x #now");
-    assert!(codes(&inline).is_empty(), "=x #now");
+    let inline = editor("x #now");
+    assert!(codes(&inline).is_empty(), "x #now");
 }
 
 #[test]

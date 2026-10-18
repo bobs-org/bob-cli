@@ -42,7 +42,7 @@ fn close_successor_then_consume_net() {
             .arg("json")
             .env("BOB_DAY_FILE", &day_file)
             .env("BOB_NOW", NOW),
-        "=!\n\n!sase:d\n",
+        "x!\n\n!sase:d\n",
     );
     assert_success(&output);
     let json: serde_json::Value =
@@ -125,7 +125,7 @@ fn restart_and_reset_never_complete_prerequisites() {
     );
 
     let (_temp, vault, day_file) = setup("bob-cli-successor-reset-preserve");
-    let json = run_close_json(&vault, &day_file, NOW, &["=x0"]);
+    let json = run_close_json(&vault, &day_file, NOW, &["x0"]);
     assert_eq!(json["kind"], "pomodoro_reset");
     assert!(json.get("task_complete").is_none(), "{json}");
     assert!(json.get("pomodoro_close").is_none(), "{json}");

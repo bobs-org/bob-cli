@@ -606,13 +606,24 @@ pub(super) fn classify_pomodoro_token(token: &Token<'_>) -> TokenParse {
             // dangling separator reports the partial spec as an incomplete
             // state below, and a malformed list is an
             // `invalid_pomodoro_close` diagnostic with its precise range.
-            // The `x` is omitted for `=*`/`=!` aliases, so the base moves by
-            // one instead of two.
             let display = format!("={raw}");
+            let eq_rel = token.text.find('=').unwrap_or(token.text.len());
+            // The retired `=*`/`=!` aliases are an error over the whole
+            // suffix.
+            if let Some(rewrite) = retired_link_alias_rewrite(raw) {
+                return TokenParse::Invalid(Diagnostic {
+                    severity: Severity::Error,
+                    code: "invalid_pomodoro_close",
+                    message: retired_link_close_alias_error(&display, &rewrite),
+                    range: Some((
+                        token.start + eq_rel,
+                        token.start + token.text.len(),
+                    )),
+                });
+            }
             let (after_x, x_len) = classify_link_close(raw)
                 .map(|(selection, x_len)| (selection, x_len))
                 .unwrap_or(("", 1));
-            let eq_rel = token.text.find('=').unwrap_or(token.text.len());
             let after_x_base = token.start + eq_rel + 1 + x_len;
             match lex_close_selection(after_x, after_x_base, &display) {
                 Ok(CloseSelectionOutcome::Valid(lex)) => {

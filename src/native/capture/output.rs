@@ -214,7 +214,7 @@ pub(super) struct PomodoroCloseSummaryJson {
     pub(super) project_folds: Vec<crate::native::task_complete::ProjectFold>,
 }
 
-/// One note-free `=x0` reset: the current Pomodoro returned to the
+/// One note-free `x0` reset: the current Pomodoro returned to the
 /// front of the future queue with its session ledger cleared. Reset and
 /// `pomodoro_close` are mutually exclusive; the parser still reports the
 /// syntactic close input since it cannot know the vault-dependent outcome.

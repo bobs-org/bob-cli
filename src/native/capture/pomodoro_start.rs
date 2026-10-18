@@ -78,7 +78,7 @@ pub(super) fn plan_pomodoro_start(
             && entry.time_range.is_some()
     }) {
         return Err(CaptureError::io(
-            "Bob daily note has an active timed Pomodoro; finish the current Pomodoro first (close it with `=x`)",
+            "Bob daily note has an active timed Pomodoro; finish the current Pomodoro first (close it with `x`)",
         ));
     }
     if let Some(selector) = pomodoro_name {
@@ -723,7 +723,7 @@ pub(super) fn plan_pomodoro_start_item(
         // the taught switch idiom stays copy-pasteable.
         let token = parsed.body.clone();
         return Err(CaptureError::io(format!(
-            "cannot start the next Pomodoro: {subject} is still running at line {}; close it with `=x` first, or capture `=x`, a blank line, then `{token}` to switch sessions{restart_hint}",
+            "cannot start the next Pomodoro: {subject} is still running at line {}; close it with `x` first, or capture `x`, a blank line, then `{token}` to switch sessions{restart_hint}",
             running.line,
         )));
     }
@@ -889,9 +889,9 @@ pub(super) fn plan_pomodoro_start_item(
 /// Restart the running session in place with fresh `se<X>` timing.
 ///
 /// Drops apply to R's lineup on the staged pre-image, then R's whole
-/// parenthesized session ledger (the span `=x0` clears) is spliced to the
+/// parenthesized session ledger (the span `x0` clears) is spliced to the
 /// canonical range, then R moves to the current slot exactly as any start
-/// does. Unlike `=x0`, a restart never closes a note-bearing session.
+/// does. Unlike `x0`, a restart never closes a note-bearing session.
 #[allow(clippy::too_many_arguments)]
 fn plan_override_restart_item(
     request: &CaptureRequest,
@@ -1660,7 +1660,7 @@ fn splice_session_ledger(
 }
 
 /// Read the running headline's whole parenthesized session ledger bytes
-/// verbatim (the span `=x0` clears, including `[t:: …]` and range-local
+/// verbatim (the span `x0` clears, including `[t:: …]` and range-local
 /// annotations), so a suffix-less swap can hand the clock to the incoming
 /// session untouched. Same span discovery as the restart splice, so a
 /// ledger a restart can replace is a ledger a swap can keep.
@@ -1678,7 +1678,7 @@ fn read_session_ledger_bytes(headline: &str) -> Option<String> {
 
 /// Move an already-demoted (`()` ledger) block before the earliest other
 /// open untimed placeholder, so the swapped-out session becomes first
-/// future. Same block identity and placement rule as the `=x0` reset
+/// future. Same block identity and placement rule as the `x0` reset
 /// move, spliced byte-wise so CRLF and a missing final newline survive.
 /// Caller-tracked headline indices are mapped through the move.
 fn move_demoted_block_to_first_future(
@@ -1924,7 +1924,7 @@ fn plan_named_pomodoro_start_item(
         );
         if is_found_running {
             return Err(CaptureError::io(format!(
-                "{display_name} is already running ({range} at line {}); use `+N`/`-N` to resize it, `++N`/`--N` to shift it, or `=x` to close it, or capture `==` to restart it now",
+                "{display_name} is already running ({range} at line {}); use `+N`/`-N` to resize it, `++N`/`--N` to shift it, or `x` to close it, or capture `==` to restart it now",
                 running.line,
             )));
         }
@@ -1939,7 +1939,7 @@ fn plan_named_pomodoro_start_item(
                 None => "the current session".to_string(),
             };
         return Err(CaptureError::io(format!(
-            "cannot start {display_name}: {subject} is still running at line {}; close it with `=x` first, or capture `=x {}` to switch sessions, or `=={}#{}` to swap it in and return {running_short} to first future",
+            "cannot start {display_name}: {subject} is still running at line {}; close it with `x` first, or capture `x {}` to switch sessions, or `=={}#{}` to swap it in and return {running_short} to first future",
             running.line,
             parsed.body,
             spec.raw,

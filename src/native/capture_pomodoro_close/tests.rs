@@ -29,7 +29,7 @@ fn worked_example() -> String {
         "\t- 🍅 [[bob#^capture-stop]]",
         "- [ ] (**0920-0950** [t:: 30m]) — CAPTURE",
         "\t- [[bob#^capture-stop]]",
-        "\t\t- Designed the `=x` grammar",
+        "\t\t- Designed the `x` grammar",
         "\t\t\t- chose `x` for done",
         "\t\t- Wrote the plan",
         "\t- [[bob#^web-capture]]#",
@@ -49,7 +49,7 @@ fn worked_example_closed() -> String {
         "\t- 🍅 [[bob#^capture-stop]]",
         "- [x] (**0920-0940** [t:: 20m]) — CAPTURE",
         "\t- 🍅 [[bob#^capture-stop]]",
-        "\t\t- Designed the `=x` grammar",
+        "\t\t- Designed the `x` grammar",
         "\t\t\t- chose `x` for done",
         "\t\t- Wrote the plan",
         "\t- ~~[[sase#^axe-restart]]~~",
@@ -127,7 +127,7 @@ fn worked_example_ledger_is_byte_for_byte() {
         vec![
             WorkLogNode {
                 marker: "-".to_string(),
-                body_text: "Designed the `=x` grammar".to_string(),
+                body_text: "Designed the `x` grammar".to_string(),
                 children: vec![WorkLogNode {
                     marker: "-".to_string(),
                     body_text: "chose `x` for done".to_string(),

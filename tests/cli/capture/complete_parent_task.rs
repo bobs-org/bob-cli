@@ -292,7 +292,7 @@ fn plus_picker_accepts_insert_and_preserves_operators() {
     assert_eq!(unresolved["mode"], "incomplete");
     assert_eq!(unresolved["needs"][0], "task_parent");
 
-    for operator in ["+2", "++", "++3", "+2 =x"] {
+    for operator in ["+2", "++", "++3", "+2 x"] {
         let json = complete_json(&vault, &day_file, operator.len(), operator);
         assert!(
             json["context"].is_null(),

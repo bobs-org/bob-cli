@@ -222,7 +222,7 @@ fn template_clip_flag_and_session_operators_have_stable_codes() {
     assert_eq!(forced_clip.status.code(), Some(2));
     assert_eq!(json(&forced_clip)["code"], "template_clipboard");
 
-    for session_form in ["=", "=x", "+5", "++2", "--3", "@work:task=3"] {
+    for session_form in ["=", "x", "+5", "++2", "--3", "@work:task=3"] {
         let session = capture(&temp, &vault)
             .args(["-f", "json"])
             .arg(format!("@@template:\n{{0}}\n\n{session_form}\n"))

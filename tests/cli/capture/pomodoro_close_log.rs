@@ -1,4 +1,4 @@
-//! Pomodoro close `=x` Work Log bullet integration tests.
+//! Pomodoro close `x` Work Log bullet integration tests.
 //!
 //! Work Log entries are child bullets under the close (`- [<n>] <text>`
 //! with two-space `  - <detail>` details). Unnumbered bullets log in order
@@ -25,47 +25,15 @@ fn parse_json(text: &str) -> serde_json::Value {
 }
 
 #[test]
-fn bare_x_inline_log_writes_the_same_ledger_as_legacy_close() {
-    let (_bare_temp, bare_vault, bare_day) =
-        close_worked_vault("bob-cli-bare-close-inline");
-    let (_legacy_temp, legacy_vault, legacy_day) =
-        close_worked_vault("bob-cli-legacy-close-inline");
-    let now = "2026-09-28 09:37:00";
-    let bare =
-        run_close_json(&bare_vault, &bare_day, now, &["x wired the lexer"]);
-    let legacy = run_close_json(
-        &legacy_vault,
-        &legacy_day,
-        now,
-        &["=x wired the lexer"],
-    );
-
-    assert_eq!(bare["pomodoro_close"]["raw"], "x");
-    assert_eq!(legacy["pomodoro_close"]["raw"], "=x");
-    assert_eq!(
-        bare["pomodoro_close"]["log"],
-        serde_json::json!([{ "index": 1, "text": "wired the lexer" }])
-    );
-    assert_eq!(
-        fs::read_to_string(&bare_day).expect("bare day"),
-        fs::read_to_string(&legacy_day).expect("legacy day")
-    );
-    assert_eq!(
-        fs::read_to_string(bare_vault.join("bob.md")).expect("bare tasks"),
-        fs::read_to_string(legacy_vault.join("bob.md")).expect("legacy tasks")
-    );
-}
-
-#[test]
 fn capture_pomodoro_close_log_worked_table() {
-    // `=x` plus `- 1 wired the lexer`: the entry lands under link 1, then
+    // `x` plus `- 1 wired the lexer`: the entry lands under link 1, then
     // the unchanged close writes it to task 1's Work Log.
     let (_temp, vault, day_file) = close_worked_vault("bob-cli-close-log-1");
     let json = run_close_json(
         &vault,
         &day_file,
         "2026-09-28 09:37:00",
-        &["=x\n- 1 wired the lexer"],
+        &["x\n- 1 wired the lexer"],
     );
     let close = &json["pomodoro_close"];
     assert_eq!(
@@ -93,14 +61,14 @@ fn capture_pomodoro_close_log_worked_table() {
         "{row1}"
     );
 
-    // `=x1,2` plus an entry with a nested detail plus an entry under link
+    // `x1,2` plus an entry with a nested detail plus an entry under link
     // 2: byte-exact day file and Work Log post-images.
     let (_temp, vault, day_file) = close_worked_vault("bob-cli-close-log-2");
     let json = run_close_json(
         &vault,
         &day_file,
         "2026-09-28 09:37:00",
-        &["=x1,2\n- 1 wired the lexer\n  - chose a hand-rolled lexer\n- 2 sketched the URL parser"],
+        &["x1,2\n- 1 wired the lexer\n  - chose a hand-rolled lexer\n- 2 sketched the URL parser"],
     );
     assert_eq!(
         json["pomodoro_close"]["log"],
@@ -122,7 +90,7 @@ fn capture_pomodoro_close_log_worked_table() {
             "\t- \u{1F345} [[bob#^capture-stop]]\n",
             "- [x] (**0920-0940** [t:: 20m]) — CAPTURE\n",
             "\t- \u{1F345} [[bob#^capture-stop]]\n",
-            "\t\t- Designed the `=x` grammar\n",
+            "\t\t- Designed the `x` grammar\n",
             "\t\t\t- chose `x` for done\n",
             "\t\t- Wrote the plan\n",
             "\t\t- wired the lexer\n",
@@ -171,13 +139,13 @@ fn capture_pomodoro_close_log_worked_table() {
     );
     assert!(row2.get("typed_work_log_details").is_none(), "{row2}");
 
-    // `=x` plus two entries under link 1: typed order kept.
+    // `x` plus two entries under link 1: typed order kept.
     let (_temp, vault, day_file) = close_worked_vault("bob-cli-close-log-3");
     let json = run_close_json(
         &vault,
         &day_file,
         "2026-09-28 09:37:00",
-        &["=x\n- 1 wrote docs\n- 1 opened the PR"],
+        &["x\n- 1 wrote docs\n- 1 opened the PR"],
     );
     assert_eq!(
         json["pomodoro_close"]["log"],
@@ -187,14 +155,14 @@ fn capture_pomodoro_close_log_worked_table() {
         ])
     );
 
-    // `=x1` plus `- 1 fixed 3 bugs`: only the first token is an index, so
+    // `x1` plus `- 1 fixed 3 bugs`: only the first token is an index, so
     // no escape is needed.
     let (_temp, vault, day_file) = close_worked_vault("bob-cli-close-log-4");
     let json = run_close_json(
         &vault,
         &day_file,
         "2026-09-28 09:37:00",
-        &["=x1\n- 1 fixed 3 bugs"],
+        &["x1\n- 1 fixed 3 bugs"],
     );
     assert_eq!(
         json["pomodoro_close"]["log"],
@@ -207,7 +175,7 @@ fn capture_pomodoro_close_log_worked_table() {
         &vault,
         &day_file,
         "2026-09-28 09:37:00",
-        &["=x\n- 1 fixed \\3 bugs"],
+        &["x\n- 1 fixed \\3 bugs"],
     );
     assert_eq!(
         json["pomodoro_close"]["log"],
@@ -221,7 +189,7 @@ fn capture_pomodoro_close_log_worked_table() {
         &vault,
         &day_file,
         "2026-09-28 09:37:00",
-        &["=x\n- 1 moved @@inbox s:3"],
+        &["x\n- 1 moved @@inbox s:3"],
     );
     assert_eq!(
         json["pomodoro_close"]["log"],
@@ -235,31 +203,31 @@ fn capture_pomodoro_close_log_worked_table() {
         &vault,
         &day_file,
         "2026-09-28 09:37:00",
-        &["=x\n- 1 see [[Design notes]]"],
+        &["x\n- 1 see [[Design notes]]"],
     );
     assert_eq!(
         json["pomodoro_close"]["log"],
         serde_json::json!([{ "index": 1, "text": "see [[Design notes]]" }])
     );
 
-    // A placeholder row is ignored: plain `=x`.
+    // A placeholder row is ignored: plain `x`.
     let (_temp, vault, day_file) = close_worked_vault("bob-cli-close-log-9");
     let json =
-        run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["=x\n- "]);
+        run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["x\n- "]);
     assert_eq!(json["kind"], "pomodoro_close");
     assert!(json["pomodoro_close"].get("log").is_none(), "{json}");
 }
 
 #[test]
 fn capture_pomodoro_close_log_complete_target() {
-    // `=x1!2` plus `- 2 shipped it`: 2 completes and its entry lands in the
+    // `x1!2` plus `- 2 shipped it`: 2 completes and its entry lands in the
     // completed task.
     let (_temp, vault, day_file) = close_worked_vault("bob-cli-close-log-c");
     let json = run_close_json(
         &vault,
         &day_file,
         "2026-09-28 09:37:00",
-        &["=x1!2\n- 2 shipped it"],
+        &["x1!2\n- 2 shipped it"],
     );
     assert_eq!(
         json["pomodoro_close"]["log"],
@@ -279,7 +247,7 @@ fn capture_pomodoro_close_log_execution_errors() {
         &vault,
         &day_file,
         "2026-09-28 09:37:00",
-        &["=x\n- 5 foo"],
+        &["x\n- 5 foo"],
     );
     assert!(error.contains("`- 5` logs to task 5"), "{error}");
     assert!(error.contains("2 numbered Task Links"), "{error}");
@@ -293,7 +261,7 @@ fn capture_pomodoro_close_log_execution_errors() {
         &vault,
         &day_file,
         "2026-09-28 09:37:00",
-        &["=x\n- 2 looked at it"],
+        &["x\n- 2 looked at it"],
     );
     assert!(error.contains("deferred"), "{error}");
     assert_eq!(fs::read_to_string(&day_file).expect("read"), before);
@@ -303,23 +271,23 @@ fn capture_pomodoro_close_log_execution_errors() {
     let (_temp, vault, day_file) = close_worked_vault("bob-cli-close-log-e3");
     let before = fs::read_to_string(&day_file).expect("read");
     for (args, phrase) in [
-        (vec!["=x1\n- 2 foo"], "isn't worked by `=x1`"),
-        (vec!["=x~2\n- 2 foo"], "is dropped by `~2`"),
-        (vec!["=x0\n- 0 foo"], "task numbers start at 1"),
+        (vec!["x1\n- 2 foo"], "isn't worked by `x1`"),
+        (vec!["x~2\n- 2 foo"], "is dropped by `~2`"),
+        (vec!["x0\n- 0 foo"], "task numbers start at 1"),
         (
-            vec!["=x\n- 1 ok\n- wired the lexer"],
+            vec!["x\n- 1 ok\n- wired the lexer"],
             "start each Work Log bullet",
         ),
-        (vec!["=x\n  - orphan"], "has no preceding"),
+        (vec!["x\n  - orphan"], "has no preceding"),
         (
-            vec!["=x\n- 1 see [[bob#^web-capture]]"],
+            vec!["x\n- 1 see [[bob#^web-capture]]"],
             "can't contain the block link",
         ),
         (
-            vec!["=x\n- 1 ok\n  - ![[bob#^x]]"],
+            vec!["x\n- 1 ok\n  - ![[bob#^x]]"],
             "can't contain the block link",
         ),
-        (vec!["=x\n- 1 ```rust"], "can't start with a code fence"),
+        (vec!["x\n- 1 ```rust"], "can't start with a code fence"),
     ] {
         let error = run_close_expect_error(
             &vault,
@@ -336,7 +304,7 @@ fn capture_pomodoro_close_log_execution_errors() {
         &vault,
         &day_file,
         "2026-09-28 09:37:00",
-        &["=x\n- 1"],
+        &["x\n- 1"],
     );
     assert!(
         error.contains(
@@ -351,7 +319,7 @@ fn capture_pomodoro_close_log_execution_errors() {
         &vault,
         &day_file,
         "2026-09-28 09:37:00",
-        &["=x more\n- 1 foo"],
+        &["x more\n- 1 foo"],
     );
     assert!(
         error.contains("can't be combined with Work Log bullets"),
@@ -366,7 +334,7 @@ fn capture_pomodoro_close_log_retired_tail() {
     let before = fs::read_to_string(&day_file).expect("read");
     // The retired tail is now the inline entry: a leading number names the
     // task and executes like its bullet form.
-    for args in [vec!["=x1,2 2 foo bar baz"], vec!["=x more"]] {
+    for args in [vec!["x1,2 2 foo bar baz"], vec!["x more"]] {
         let output = bob_command()
             .arg("capture")
             .arg("--dry-run")
@@ -387,7 +355,7 @@ fn capture_pomodoro_close_log_retired_tail() {
         &vault,
         &day_file,
         "2026-09-28 09:37:00",
-        &["=x - 2 foo"],
+        &["x - 2 foo"],
     );
     assert!(error.contains("drop the stray `-`"), "{error}");
     // A trailing Task Link is its own item, never entry text.
@@ -395,21 +363,21 @@ fn capture_pomodoro_close_log_retired_tail() {
         &vault,
         &day_file,
         "2026-09-28 09:37:00",
-        &["=x ^bob:ready="],
+        &["x ^bob:ready="],
     );
     assert!(error.contains("can't end with the Task Link"), "{error}");
-    // `=x 1` is now the dangling inline number with the `=x1` hint.
+    // `x 1` is now the dangling inline number with the `x1` hint.
     let error = run_close_expect_error(
         &vault,
         &day_file,
         "2026-09-28 09:37:00",
-        &["=x 1"],
+        &["x 1"],
     );
     assert!(
         error.contains("type the Work Log text after task 1"),
         "{error}"
     );
-    assert!(error.contains("`=x1`"), "{error}");
+    assert!(error.contains("`x1`"), "{error}");
     assert_eq!(fs::read_to_string(&day_file).expect("read"), before);
 }
 
@@ -421,7 +389,7 @@ fn capture_pomodoro_close_log_dry_run_and_blocks() {
         &vault,
         &day_file,
         "2026-09-28 09:37:00",
-        &["=x\n- 1 wired the lexer\n  - chose a hand-rolled lexer"],
+        &["x\n- 1 wired the lexer\n  - chose a hand-rolled lexer"],
     );
     let day_after = fs::read_to_string(&day_file).expect("read");
     assert_pomodoro_blocks_cover_changes(&before_day, &day_after, &json);
@@ -459,8 +427,8 @@ fn capture_pomodoro_close_log_batch_rollback() {
         .arg("-f")
         .arg("json")
         .arg("--")
-        .arg("=x\n- 1 wired the lexer")
-        .arg("=x1\n- 2 foo")
+        .arg("x\n- 1 wired the lexer")
+        .arg("x1\n- 2 foo")
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_NOW", "2026-09-28 09:37:00")
         .output()
@@ -471,7 +439,7 @@ fn capture_pomodoro_close_log_batch_rollback() {
 
 #[test]
 fn capture_pomodoro_close_log_chains() {
-    // `-2 =x` plus a bullet: shorten, then close with the entry.
+    // `-2 x` plus a bullet: shorten, then close with the entry.
     let (_temp, vault, day_file) = close_worked_vault("bob-cli-close-log-ch1");
     let output = bob_command()
         .arg("capture")
@@ -480,7 +448,7 @@ fn capture_pomodoro_close_log_chains() {
         .arg("-f")
         .arg("json")
         .arg("--")
-        .arg("-2 =x\n- 1 wired the lexer")
+        .arg("-2 x\n- 1 wired the lexer")
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_NOW", "2026-09-28 09:37:00")
         .output()
@@ -495,7 +463,7 @@ fn capture_pomodoro_close_log_chains() {
         serde_json::json!([{ "index": 1, "text": "wired the lexer" }])
     );
 
-    // `=x =` plus a bullet: close with the entry, then start the next
+    // `x =` plus a bullet: close with the entry, then start the next
     // Pomodoro.
     let (_temp, vault, day_file) = close_worked_vault("bob-cli-close-log-ch2");
     let output = bob_command()
@@ -505,7 +473,7 @@ fn capture_pomodoro_close_log_chains() {
         .arg("-f")
         .arg("json")
         .arg("--")
-        .arg("=x =\n- 1 wired the lexer")
+        .arg("x =\n- 1 wired the lexer")
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_NOW", "2026-09-28 09:37:00")
         .output()
@@ -531,7 +499,7 @@ fn capture_pomodoro_close_log_chains() {
             .arg("json")
             .env("BOB_DAY_FILE", &day_file)
             .env("BOB_NOW", "2026-09-28 09:37:00"),
-        "=x\n- 1 wired the lexer\n\n=\n",
+        "x\n- 1 wired the lexer\n\n=\n",
     );
     assert_success(&output);
     let json: serde_json::Value =
@@ -543,10 +511,10 @@ fn capture_pomodoro_close_log_chains() {
     );
     assert_eq!(json["captures"][1]["kind"], "pomodoro_start");
 
-    // Inline entries chain: `-2 =x 1 foo` shortens then closes with the
-    // entry, and `=x 1 wired the lexer =` closes with the entry then starts.
+    // Inline entries chain: `-2 x 1 foo` shortens then closes with the
+    // entry, and `x 1 wired the lexer =` closes with the entry then starts.
     let (_temp, vault, day_file) = close_worked_vault("bob-cli-close-log-ch4");
-    for args in ["-2 =x 1 foo", "=x 1 wired the lexer ="] {
+    for args in ["-2 x 1 foo", "x 1 wired the lexer ="] {
         let output = bob_command()
             .arg("capture")
             .arg("--dry-run")
@@ -567,7 +535,7 @@ fn capture_pomodoro_close_log_chains() {
 #[test]
 fn capture_parse_pomodoro_close_log_protocol() {
     // Valid bullets: spec plus an index span per entry number.
-    let value = parse_json("=x\n- 1 wired the lexer");
+    let value = parse_json("x\n- 1 wired the lexer");
     assert_eq!(value["mode"], "pomodoro_close");
     assert_eq!(
         value["pomodoro_close"]["log"],
@@ -580,15 +548,15 @@ fn capture_parse_pomodoro_close_log_protocol() {
             .iter()
             .any(|span| {
                 span["kind"] == "pomodoro_close_log_index"
-                    && span["start"] == 5
-                    && span["end"] == 6
+                    && span["start"] == 4
+                    && span["end"] == 5
             }),
         "{value}"
     );
 
     // Details ride the spec with no new spans.
     let detail =
-        parse_json("=x\n- 1 wired the lexer\n  - chose a hand-rolled lexer");
+        parse_json("x\n- 1 wired the lexer\n  - chose a hand-rolled lexer");
     assert_eq!(
         detail["pomodoro_close"]["log"],
         serde_json::json!([{
@@ -605,7 +573,7 @@ fn capture_parse_pomodoro_close_log_protocol() {
         .arg("-f")
         .arg("json")
         .arg("--")
-        .arg("=x =\n- 1 wired it")
+        .arg("x =\n- 1 wired it")
         .output()
         .expect("parse chain");
     assert_success(&output);
@@ -633,7 +601,7 @@ fn capture_parse_pomodoro_close_log_protocol() {
     // Dangling bullets: a final one and a mid-draft one each get a
     // placeholder instead of an index span, with the complete entries kept
     // in the spec.
-    let incomplete = parse_json("=x\n- 1");
+    let incomplete = parse_json("x\n- 1");
     assert_eq!(incomplete["mode"], "incomplete");
     assert_eq!(
         incomplete["needs"],
@@ -646,28 +614,28 @@ fn capture_parse_pomodoro_close_log_protocol() {
             .iter()
             .any(|span| {
                 span["kind"] == "interactive_placeholder"
-                    && span["start"] == 5
-                    && span["end"] == 6
+                    && span["start"] == 4
+                    && span["end"] == 5
             }),
         "{incomplete}"
     );
-    let mid = parse_json("=x\n- 2 a\n- 1");
+    let mid = parse_json("x\n- 2 a\n- 1");
     assert_eq!(mid["mode"], "incomplete");
     assert_eq!(mid["needs"], serde_json::json!(["pomodoro_close_log_text"]));
     let spans = mid["spans"].as_array().expect("spans");
     assert!(
         spans.iter().any(|span| {
             span["kind"] == "pomodoro_close_log_index"
-                && span["start"] == 5
-                && span["end"] == 6
+                && span["start"] == 4
+                && span["end"] == 5
         }),
         "{mid}"
     );
     assert!(
         spans.iter().any(|span| {
             span["kind"] == "interactive_placeholder"
-                && span["start"] == 11
-                && span["end"] == 12
+                && span["start"] == 10
+                && span["end"] == 11
         }),
         "{mid}"
     );
@@ -677,7 +645,7 @@ fn capture_parse_pomodoro_close_log_protocol() {
     );
 
     // A dangling inline number is an editing state with the log-text need.
-    let dangling_inline = parse_json("=x 1");
+    let dangling_inline = parse_json("x 1");
     assert_eq!(dangling_inline["mode"], "incomplete");
     assert_eq!(
         dangling_inline["needs"],
@@ -686,22 +654,16 @@ fn capture_parse_pomodoro_close_log_protocol() {
 
     // Invalid drafts report precise diagnostics.
     for (text, phrase) in [
-        ("=x - wired", "drop the stray `-`"),
-        ("=x = wired", "then the session operators"),
+        ("x - wired", "drop the stray `-`"),
+        ("x = wired", "then the session operators"),
+        ("x\n- 1 ok\n- wired the lexer", "start each Work Log bullet"),
+        ("x1\n- 2 foo", "isn't worked by"),
         (
-            "=x\n- 1 ok\n- wired the lexer",
-            "start each Work Log bullet",
-        ),
-        ("=x1\n- 2 foo", "isn't worked by"),
-        (
-            "=x\n- 1 see [[bob#^web-capture]]",
+            "x\n- 1 see [[bob#^web-capture]]",
             "can't contain the block link",
         ),
-        (
-            "=x\n- 1 ok\n  - ![[bob#^x]]",
-            "can't contain the block link",
-        ),
-        ("=x\n- 1 ```fence", "can't start with a code fence"),
+        ("x\n- 1 ok\n  - ![[bob#^x]]", "can't contain the block link"),
+        ("x\n- 1 ```fence", "can't start with a code fence"),
     ] {
         let value = parse_json(text);
         assert_eq!(
@@ -779,7 +741,7 @@ fn close_four_link_vault(name: &str) -> (TempDir, PathBuf, PathBuf) {
 
 #[test]
 fn capture_pomodoro_close_log_positional_acceptance() {
-    // The user's example: `=x3,4` plus unnumbered bullets writes exactly
+    // The user's example: `x3,4` plus unnumbered bullets writes exactly
     // what the numbered form writes, with the same `bob capture` JSON.
     let (_temp, vault, day_file) =
         close_four_link_vault("bob-cli-close-log-numbered");
@@ -787,7 +749,7 @@ fn capture_pomodoro_close_log_positional_acceptance() {
         &vault,
         &day_file,
         "2026-09-28 09:37:00",
-        &["=x3,4\n- 3 foo bar\n- 4 baz bam"],
+        &["x3,4\n- 3 foo bar\n- 4 baz bam"],
     );
     let (_temp, vault, day_file) =
         close_four_link_vault("bob-cli-close-log-unnumbered");
@@ -795,7 +757,7 @@ fn capture_pomodoro_close_log_positional_acceptance() {
         &vault,
         &day_file,
         "2026-09-28 09:37:00",
-        &["=x3,4\n- foo bar\n- baz bam"],
+        &["x3,4\n- foo bar\n- baz bam"],
     );
     let expected = serde_json::json!([
         { "index": 3, "text": "foo bar" },
@@ -813,7 +775,7 @@ fn capture_pomodoro_close_log_positional_acceptance() {
         &vault,
         &day_file,
         "2026-09-28 09:37:00",
-        &["=x3,4\n- 3 foo bar\n- 4 baz bam"],
+        &["x3,4\n- 3 foo bar\n- 4 baz bam"],
     );
     let numbered_day = fs::read_to_string(&day_file).expect("read day");
     let numbered_bob =
@@ -824,7 +786,7 @@ fn capture_pomodoro_close_log_positional_acceptance() {
         &vault,
         &day_file,
         "2026-09-28 09:37:00",
-        &["=x3,4\n- foo bar\n- baz bam"],
+        &["x3,4\n- foo bar\n- baz bam"],
     );
     assert_eq!(
         fs::read_to_string(&day_file).expect("read day"),
@@ -838,7 +800,7 @@ fn capture_pomodoro_close_log_positional_acceptance() {
 
 #[test]
 fn capture_pomodoro_close_log_positional_runtime() {
-    // Plain `=x` on `close_worked_vault` (link 1 plain, link 2 deferred)
+    // Plain `x` on `close_worked_vault` (link 1 plain, link 2 deferred)
     // logs the bullet to task 1 and reports the resolved index.
     let (_temp, vault, day_file) =
         close_worked_vault("bob-cli-close-log-positional");
@@ -846,7 +808,7 @@ fn capture_pomodoro_close_log_positional_runtime() {
         &vault,
         &day_file,
         "2026-09-28 09:37:00",
-        &["=x\n- wired the lexer"],
+        &["x\n- wired the lexer"],
     );
     assert_eq!(
         json["pomodoro_close"]["log"],
@@ -863,7 +825,7 @@ fn capture_pomodoro_close_log_positional_runtime() {
         .arg("-f")
         .arg("json")
         .arg("--")
-        .arg("=x\n- wired the lexer")
+        .arg("x\n- wired the lexer")
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_NOW", "2026-09-28 09:37:00")
         .output()
@@ -884,18 +846,18 @@ fn capture_pomodoro_close_log_positional_runtime() {
         &vault,
         &day_file,
         "2026-09-28 09:37:00",
-        &["=x\n- a\n- b\n- c\n- d\n- e"],
+        &["x\n- a\n- b\n- c\n- d\n- e"],
     );
     assert!(error.contains("unnumbered Work Log bullets"), "{error}");
     assert_eq!(fs::read_to_string(&day_file).expect("read"), before);
-    // `=x =` plus unnumbered bullets attaches them to the close.
+    // `x =` plus unnumbered bullets attaches them to the close.
     let (_temp, vault, day_file) =
         close_worked_vault("bob-cli-close-log-close-start");
     let json = run_close_json(
         &vault,
         &day_file,
         "2026-09-28 09:37:00",
-        &["=x =\n- wired the lexer"],
+        &["x =\n- wired the lexer"],
     );
     assert_eq!(
         json["pomodoro_close"]["log"],
@@ -922,7 +884,7 @@ fn capture_pomodoro_close_wildcard_logs_resolve_once_against_staged_lineup() {
         &vault,
         &day_file,
         "2026-09-28 09:37:00",
-        &["=* wrote it"],
+        &["x* wrote it"],
     );
     let close = &inline["pomodoro_close"];
     assert_eq!(close["park_all"], true);
@@ -959,7 +921,7 @@ fn capture_pomodoro_close_wildcard_logs_resolve_once_against_staged_lineup() {
         &vault,
         &day_file,
         "2026-09-28 09:37:00",
-        &["=*\n- first\n  - detail\n- second"],
+        &["x*\n- first\n  - detail\n- second"],
     );
     assert_eq!(
         bullets["pomodoro_close"]["log"],
@@ -968,7 +930,7 @@ fn capture_pomodoro_close_wildcard_logs_resolve_once_against_staged_lineup() {
             { "index": 2, "text": "second" },
         ])
     );
-    let parsed = parse_json("=*\n- first\n- second");
+    let parsed = parse_json("x*\n- first\n- second");
     assert_eq!(parsed["pomodoro_close"]["park_all"], true);
     assert_eq!(
         parsed["pomodoro_close"]["log"],
@@ -986,7 +948,7 @@ fn capture_pomodoro_close_wildcard_logs_resolve_once_against_staged_lineup() {
         &vault,
         &day_file,
         "2026-09-28 09:37:00",
-        &["=*\n- 3 explicit target"],
+        &["x*\n- 3 explicit target"],
     );
     assert_eq!(numbered["pomodoro_close"]["log"][0]["index"], 3);
     let (_temp, vault, day_file) =
@@ -996,7 +958,7 @@ fn capture_pomodoro_close_wildcard_logs_resolve_once_against_staged_lineup() {
         &vault,
         &day_file,
         "2026-09-28 09:37:00",
-        &["=*~2\n- 2 dropped target"],
+        &["x*~2\n- 2 dropped target"],
     );
     assert!(error.contains("is dropped by `~2`"), "{error}");
     assert_eq!(fs::read_to_string(&day_file).expect("read"), before);
@@ -1004,9 +966,9 @@ fn capture_pomodoro_close_wildcard_logs_resolve_once_against_staged_lineup() {
 
 #[test]
 fn capture_pomodoro_close_log_positional_parse() {
-    // `=x3,4` plus unnumbered bullets: indices resolve, with no
+    // `x3,4` plus unnumbered bullets: indices resolve, with no
     // `pomodoro_close_log_index` spans.
-    let value = parse_json("=x3,4\n- foo bar\n- baz bam");
+    let value = parse_json("x3,4\n- foo bar\n- baz bam");
     assert_eq!(value["mode"], "pomodoro_close");
     assert_eq!(
         value["pomodoro_close"]["log"],
@@ -1023,9 +985,9 @@ fn capture_pomodoro_close_log_positional_parse() {
             .all(|span| span["kind"] != "pomodoro_close_log_index"),
         "{value}"
     );
-    // `=x` plus an unnumbered bullet: mode `pomodoro_close` with no
+    // `x` plus an unnumbered bullet: mode `pomodoro_close` with no
     // `index` key until execution resolves it.
-    let value = parse_json("=x\n- foo");
+    let value = parse_json("x\n- foo");
     assert_eq!(value["mode"], "pomodoro_close");
     assert!(
         value["pomodoro_close"]["log"][0].get("index").is_none(),
@@ -1036,17 +998,17 @@ fn capture_pomodoro_close_log_positional_parse() {
         serde_json::json!("foo")
     );
     // Error drafts report `invalid_pomodoro_close` on precise ranges.
-    let value = parse_json("=x\n- a\n- 2 b");
+    let value = parse_json("x\n- a\n- 2 b");
     assert_eq!(
         value["diagnostics"][0]["code"], "invalid_pomodoro_close",
         "{value}"
     );
     assert_eq!(
         value["diagnostics"][0]["range"],
-        serde_json::json!([9, 10]),
+        serde_json::json!([8, 9]),
         "{value}"
     );
-    let value = parse_json("=x3,4\n- a\n- b\n- c");
+    let value = parse_json("x3,4\n- a\n- b\n- c");
     assert_eq!(
         value["diagnostics"][0]["code"], "invalid_pomodoro_close",
         "{value}"
@@ -1065,7 +1027,7 @@ fn capture_pomodoro_close_log_positional_nested_wording() {
     // The actual unnumbered selection-mode draft parses with resolved
     // indices, then fails at execution with the positional nested-task
     // wording (not the generic numbered wording).
-    let value = parse_json("=x1,2\n- a\n- b");
+    let value = parse_json("x1,2\n- a\n- b");
     assert_eq!(value["mode"], "pomodoro_close");
     assert_eq!(
         value["pomodoro_close"]["log"],
@@ -1080,7 +1042,7 @@ fn capture_pomodoro_close_log_positional_nested_wording() {
         &vault,
         &day_file,
         "2026-09-28 09:37:00",
-        &["=x1,2\n- a\n- b"],
+        &["x1,2\n- a\n- b"],
     );
     assert!(
         error.contains(
@@ -1103,7 +1065,7 @@ fn capture_pomodoro_close_log_positional_nested_wording() {
         .arg("json")
         .arg("--")
         .arg("+1")
-        .arg("=x1,2\n- a\n- b")
+        .arg("x1,2\n- a\n- b")
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_NOW", "2026-09-28 09:37:00")
         .output()

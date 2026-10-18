@@ -1,164 +1,104 @@
-//! Bare whole-item `x` close grammar and parity with the existing `=x` form.
+//! Bare whole-item `x` close grammar: what it claims, what stays prose, and
+//! how it chains.
 
 use super::super::close_selection::*;
-use super::super::draft::*;
 use super::super::editor_model::*;
 use super::super::item::*;
 use super::super::model::*;
 use super::*;
 
-fn execute_draft(raw: &str) -> Result<ParsedCaptureDraft, String> {
-    parse_capture_draft_with_clip_control(
-        raw,
-        None,
-        None,
-        &CaptureParseOptions::routing_off(true),
-    )
-}
-
-fn close_spec(kind: &CaptureKind) -> &PomodoroCloseSpec {
-    match kind {
-        CaptureKind::PomodoroClose { spec } => spec,
-        other => panic!("expected close, got {other:?}"),
-    }
-}
-
-fn normalized_close(spec: &PomodoroCloseSpec) -> PomodoroCloseSpec {
-    let mut normalized = spec.clone();
-    normalized.raw.clear();
-    for entry in &mut normalized.log {
-        if let CloseLogOrigin::Inline { close_token, .. } = &mut entry.origin {
-            close_token.clear();
-        }
-    }
-    normalized
-}
-
-fn bare_range_from_legacy(
-    range: Option<(usize, usize)>,
-) -> Option<(usize, usize)> {
-    range.map(|(start, end)| (start.saturating_sub(1), end.saturating_sub(1)))
-}
-
-fn assert_close_pair(bare: &str, legacy: &str) {
-    let bare_editor = parse_for_editor(bare);
-    let legacy_editor = parse_for_editor(legacy);
-    assert_eq!(bare_editor.items.len(), legacy_editor.items.len(), "{bare}");
-    let bare_item = &bare_editor.items[0];
-    let legacy_item = &legacy_editor.items[0];
-    assert_eq!(bare_item.mode, legacy_item.mode, "{bare}");
-    assert_eq!(bare_item.needs, legacy_item.needs, "{bare}");
-    assert_eq!(bare_item.spans.len(), legacy_item.spans.len(), "{bare}");
-    for (bare_span, legacy_span) in
-        bare_item.spans.iter().zip(&legacy_item.spans)
-    {
-        assert_eq!(bare_span.kind, legacy_span.kind, "{bare}");
-        if bare_span.kind == SpanKind::PomodoroClose {
-            assert_eq!(bare_span.start, legacy_span.start, "{bare}");
-            assert_eq!(bare_span.end, legacy_span.end - 1, "{bare}");
-        } else {
-            assert_eq!(bare_span.start + 1, legacy_span.start, "{bare}");
-            assert_eq!(bare_span.end + 1, legacy_span.end, "{bare}");
-        }
-    }
-    assert_eq!(
-        bare_item.diagnostics.len(),
-        legacy_item.diagnostics.len(),
-        "{bare}"
-    );
-    for (bare_diag, legacy_diag) in
-        bare_item.diagnostics.iter().zip(&legacy_item.diagnostics)
-    {
-        assert_eq!(bare_diag.code, legacy_diag.code, "{bare}");
-        assert_eq!(
-            bare_diag.range,
-            bare_range_from_legacy(legacy_diag.range),
-            "{bare}"
-        );
-        if bare.ends_with("#bugs") {
-            assert_eq!(bare_diag.message, legacy_diag.message, "{bare}");
-        } else {
-            assert_eq!(
-                bare_diag.message,
-                legacy_diag.message.replace("=x", "x"),
-                "{bare}"
-            );
-        }
-    }
-    match (&bare_item.pomodoro_close, &legacy_item.pomodoro_close) {
-        (Some(bare_spec), Some(legacy_spec)) => assert_eq!(
-            normalized_close(bare_spec),
-            normalized_close(legacy_spec),
-            "{bare}"
-        ),
-        (None, None) => {}
-        other => panic!("close spec mismatch for {bare}: {other:?}"),
-    }
-
-    let bare_execution = execute_draft(bare);
-    let legacy_execution = execute_draft(legacy);
-    match (bare_execution, legacy_execution) {
-        (Ok(bare_draft), Ok(legacy_draft)) => {
-            assert_eq!(
-                bare_draft.items.len(),
-                legacy_draft.items.len(),
-                "{bare}"
-            );
-            let bare_spec = close_spec(&bare_draft.items[0].parsed.kind);
-            let legacy_spec = close_spec(&legacy_draft.items[0].parsed.kind);
-            assert_eq!(
-                normalized_close(bare_spec),
-                normalized_close(legacy_spec),
-                "{bare}"
-            );
-        }
-        (Err(bare_error), Err(legacy_error)) if bare.ends_with("#bugs") => {
-            assert_eq!(bare_error, legacy_error, "{bare}");
-        }
-        (Err(bare_error), Err(legacy_error)) => {
-            assert_eq!(bare_error, legacy_error.replace("=x", "x"), "{bare}");
-        }
-        (bare_result, legacy_result) => {
-            panic!("execution result mismatch for {bare}: {bare_result:?} / {legacy_result:?}")
-        }
-    }
+fn span_ranges(parse: &EditorParse) -> Vec<(usize, usize, SpanKind)> {
+    parse
+        .items
+        .iter()
+        .flat_map(|item| item.spans.iter())
+        .map(|span| (span.start, span.end, span.kind))
+        .collect()
 }
 
 #[test]
-fn bare_close_forms_match_legacy_selection_behavior() {
-    for (bare, legacy) in [
-        ("x", "=x"),
-        ("x1,3!2", "=x1,3!2"),
-        ("x0", "=x0"),
-        ("x*", "=x*"),
-        ("x!", "=x!"),
-        ("x*!2", "=x*!2"),
-        ("x1*", "=x1*"),
-        ("x~2", "=x~2"),
-        ("x@2", "=x@2"),
-        ("x!1@2", "=x!1@2"),
-        ("x1,", "=x1,"),
-        ("x~", "=x~"),
-        ("x@", "=x@"),
-        ("x 1", "=x 1"),
-        ("x more", "=x more"),
-        ("x0 1 foo", "=x0 1 foo"),
-        ("x2,3 2 foo", "=x2,3 2 foo"),
-        ("x @2 foo", "=x @2 foo"),
-        ("x\n- 1 wired", "=x\n- 1 wired"),
-        ("x#bugs", "=x#bugs"),
+fn bare_close_spans_cover_the_one_byte_x_and_each_list() {
+    let parse = parse_for_editor("x1*2!3~4");
+    assert_eq!(parse.items[0].mode, EditorMode::PomodoroClose);
+    assert_eq!(
+        span_ranges(&parse),
+        vec![
+            (0, 1, SpanKind::PomodoroClose),
+            (1, 2, SpanKind::PomodoroCloseInProgress),
+            (2, 4, SpanKind::PomodoroClosePark),
+            (4, 6, SpanKind::PomodoroCloseComplete),
+            (6, 8, SpanKind::PomodoroCloseDrop),
+        ]
+    );
+    assert_eq!(
+        parse.items[0].pomodoro_close.as_ref().expect("close").raw,
+        "x1*2!3~4"
+    );
+    let plain = parse_for_editor("x");
+    assert_eq!(span_ranges(&plain), vec![(0, 1, SpanKind::PomodoroClose)]);
+}
+
+#[test]
+fn bare_close_selection_shapes_report_the_same_close_everywhere() {
+    for raw in [
+        "x",
+        "x1,3!2",
+        "x0",
+        "x*",
+        "x!",
+        "x*!2",
+        "x1*",
+        "x~2",
+        "x@2",
+        "x!1@2",
+        "x2,3 2 foo",
+        "x\n- 1 wired",
     ] {
-        assert_close_pair(bare, legacy);
+        let edited = parse_for_editor(raw);
+        assert_eq!(edited.items[0].mode, EditorMode::PomodoroClose, "{raw}");
+        assert!(edited.items[0].diagnostics.is_empty(), "{raw}");
+        let executed = execute_draft(raw).expect("close");
+        let spec = match &executed.items[0].parsed.kind {
+            CaptureKind::PomodoroClose { spec } => spec,
+            other => panic!("{raw}: expected close, got {other:?}"),
+        };
+        assert_eq!(
+            edited.items[0].pomodoro_close.as_ref().expect("close").raw,
+            spec.raw,
+            "{raw}"
+        );
+        assert_eq!(
+            spec.raw,
+            raw.lines().next().unwrap().split(' ').next().unwrap()
+        );
+    }
+    for raw in ["x1,", "x~", "x@"] {
+        let edited = parse_for_editor(raw);
+        assert_eq!(edited.items[0].mode, EditorMode::Incomplete, "{raw}");
+        assert!(execute_draft(raw).is_err(), "{raw}");
+    }
+    for raw in ["x 1", "x @2 foo", "x0 wired"] {
+        let edited = parse_for_editor(raw);
+        let executed = execute_draft(raw);
+        assert!(
+            executed.is_err()
+                || !edited.items[0].diagnostics.is_empty()
+                || edited.items[0].mode == EditorMode::Incomplete,
+            "{raw}"
+        );
     }
 }
 
 #[test]
 fn bare_close_classifier_claims_only_the_documented_shapes() {
     for (token, expected) in [
-        ("x", Some(("", 1))),
-        ("x1,3!2", Some(("1,3!2", 1))),
-        ("x,", Some((",", 1))),
+        ("x", Some("")),
+        ("x1,3!2", Some("1,3!2")),
+        ("x,", Some(",")),
         ("x#bugs", None),
+        ("=x", None),
+        ("=x2", None),
+        ("=*", None),
         ("X", None),
         ("X2", None),
         ("xx", None),
@@ -168,7 +108,7 @@ fn bare_close_classifier_claims_only_the_documented_shapes() {
         ("xylophone", None),
         ("Plan x", None),
     ] {
-        assert_eq!(classify_bare_whole_item_close(token), expected, "{token}");
+        assert_eq!(classify_whole_item_close(token), expected, "{token}");
     }
     for token in ["x", "x2", "x#bugs"] {
         assert!(is_session_chain_token(token), "{token}");

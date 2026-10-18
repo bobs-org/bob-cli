@@ -164,8 +164,8 @@ fn blocked_task_picker_and_markdown_guards_are_distinct() {
     assert!(trailing_escape["blocked_tasks"].is_null());
 
     for (text, mode) in [
-        ("=x*1", "pomodoro_close"),
-        ("=*", "pomodoro_close"),
+        ("x*1", "pomodoro_close"),
+        ("x*", "pomodoro_close"),
         ("==*", "pomodoro_start"),
     ] {
         let json = parse_json(text);
@@ -291,7 +291,7 @@ fn assert_star_named_rejection(draft: &str) {
 
 #[test]
 fn star_twins_of_ampersand_rejections_name_the_sigil() {
-    assert_star_named_rejection("=x *job:cleanup");
+    assert_star_named_rejection("x *job:cleanup");
     assert_star_named_rejection("++3 *job:cleanup");
     assert_star_named_rejection("+5 *job:cleanup");
     assert_star_named_rejection("-5 *job:cleanup");

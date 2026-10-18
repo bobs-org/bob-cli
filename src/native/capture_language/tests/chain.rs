@@ -51,17 +51,22 @@ fn chain_token_predicate_covers_the_documented_table() {
         "=#",
         "=#bugs=3",
         "=#b!",
-        "=x#bugs",
+        "x#bugs",
+        "x",
+        "x2",
+        "x1,3!2",
+        "x0",
+        "x!2",
+        "x1a",
+        "x1,1",
+        "x1,",
+        "x!",
         "=x",
         "=X",
-        "=x2",
-        "=x1,3!2",
-        "=x0",
-        "=x!2",
-        "=x1a",
-        "=x1,1",
-        "=x1,",
-        "=x!",
+        "=x2!1",
+        "=x#bugs",
+        "=*",
+        "=!2",
         "==",
         "==3",
         "==-2",
@@ -131,17 +136,16 @@ fn chain_token_predicate_equals_claimed_for_single_tokens() {
         "=#",
         "=#bugs=3",
         "=#b!",
-        "=x#bugs",
-        "=x",
-        "=X",
-        "=x2",
-        "=x1,3!2",
-        "=x0",
-        "=x!2",
-        "=x1a",
-        "=x1,1",
-        "=x1,",
-        "=x!",
+        "x#bugs",
+        "x",
+        "x2",
+        "x1,3!2",
+        "x0",
+        "x!2",
+        "x1a",
+        "x1,1",
+        "x1,",
+        "x!",
         "foo",
         "==",
         "=xx",
@@ -192,45 +196,41 @@ fn draft_splits_override_chains_with_absolute_ranges() {
         draft_items("==#bugs +2"),
         vec![(0, 1, "==#bugs"), (1, 1, "+2")]
     );
-    assert_eq!(draft_items("=x =="), vec![(0, 1, "=x"), (1, 1, "==")]);
+    assert_eq!(draft_items("x =="), vec![(0, 1, "x"), (1, 1, "==")]);
     assert_eq!(draft_items("== --1"), vec![(0, 1, "=="), (1, 1, "--1")]);
     assert_eq!(
         execute_draft("==#bugs +2").expect("chain").items.len(),
         2,
         "==#bugs +2"
     );
-    assert_eq!(
-        execute_draft("=x ==").expect("chain").items.len(),
-        2,
-        "=x =="
-    );
+    assert_eq!(execute_draft("x ==").expect("chain").items.len(), 2, "x ==");
 }
 
 #[test]
 fn draft_splits_a_two_token_chain_with_absolute_ranges() {
-    assert_eq!(draft_items("+2 =x"), vec![(0, 1, "+2"), (1, 1, "=x")]);
-    let raw = "+2 =x";
+    assert_eq!(draft_items("+2 x"), vec![(0, 1, "+2"), (1, 1, "x")]);
+    let raw = "+2 x";
     let draft = split_capture_draft(raw);
     assert_eq!(draft.items.len(), 2);
     assert_eq!((draft.items[0].start, draft.items[0].end), (0, 2));
-    assert_eq!((draft.items[1].start, draft.items[1].end), (3, 5));
+    assert_eq!((draft.items[1].start, draft.items[1].end), (3, 4));
     assert_eq!(&raw[draft.items[0].start..draft.items[0].end], "+2");
-    assert_eq!(&raw[draft.items[1].start..draft.items[1].end], "=x");
+    assert_eq!(&raw[draft.items[1].start..draft.items[1].end], "x");
 }
 
 #[test]
 fn draft_splits_tabs_and_runs_of_spaces() {
-    let raw = "  +2\t =x  ";
+    let raw = "  +2\t x  ";
     let draft = split_capture_draft(raw);
     assert_eq!(draft.items.len(), 2);
     assert_eq!(&raw[draft.items[0].start..draft.items[0].end], "+2");
-    assert_eq!(&raw[draft.items[1].start..draft.items[1].end], "=x");
-    assert_eq!(draft_items(raw), vec![(0, 1, "+2"), (1, 1, "=x")]);
+    assert_eq!(&raw[draft.items[1].start..draft.items[1].end], "x");
+    assert_eq!(draft_items(raw), vec![(0, 1, "+2"), (1, 1, "x")]);
 }
 
 #[test]
 fn draft_keeps_sequential_indices_across_crlf_with_a_chain() {
-    let raw = "+2 =x\r\n\r\nhello";
+    let raw = "+2 x\r\n\r\nhello";
     let draft = split_capture_draft(raw);
     assert_eq!(draft.items.len(), 3);
     assert_eq!(draft.items[0].index, 0);
@@ -240,21 +240,21 @@ fn draft_keeps_sequential_indices_across_crlf_with_a_chain() {
     assert_eq!(draft.items[1].line_start, 1);
     assert_eq!(draft.items[2].line_start, 3);
     assert_eq!(&raw[draft.items[0].start..draft.items[0].end], "+2");
-    assert_eq!(&raw[draft.items[1].start..draft.items[1].end], "=x");
+    assert_eq!(&raw[draft.items[1].start..draft.items[1].end], "x");
 }
 
 #[test]
 fn draft_chain_works_with_a_global_declaration() {
-    let draft = split_capture_draft("@@work\n+2 =x");
+    let draft = split_capture_draft("@@work\n+2 x");
     assert_eq!(draft.declarations.len(), 1);
     assert_eq!(draft.items.len(), 2);
     assert_eq!(&draft.items[0].lines[0].raw.text, &"+2");
-    assert_eq!(&draft.items[1].lines[0].raw.text, &"=x");
+    assert_eq!(&draft.items[1].lines[0].raw.text, &"x");
 }
 
 #[test]
 fn draft_attaches_chain_child_lines_to_the_close() {
-    let raw = "+2 =x\n- child";
+    let raw = "+2 x\n- child";
     let draft = split_capture_draft(raw);
     assert_eq!(draft.items.len(), 2);
     assert_eq!(draft.items[0].lines.len(), 1);
@@ -262,9 +262,9 @@ fn draft_attaches_chain_child_lines_to_the_close() {
     assert_eq!(draft.items[1].line_start, 1);
     assert_eq!(draft.items[1].line_end, 2);
     assert_eq!(draft.items[1].end, draft.items[1].lines[1].raw.end);
-    // `=x =` with children attaches them to the close (the first token),
+    // `x =` with children attaches them to the close (the first token),
     // so the close item's range contains the later start token's range.
-    let raw = "=x =\n- 1 foo";
+    let raw = "x =\n- 1 foo";
     let draft = split_capture_draft(raw);
     assert_eq!(draft.items.len(), 2);
     assert_eq!(draft.items[0].lines.len(), 2);
@@ -272,7 +272,7 @@ fn draft_attaches_chain_child_lines_to_the_close() {
     assert_eq!(draft.items[0].line_end, 2);
     assert!(draft.items[0].start < draft.items[1].start);
     assert!(draft.items[0].end > draft.items[1].end);
-    // With no `=x` on the line, children still attach to the last token.
+    // With no `x` on the line, children still attach to the last token.
     let raw = "= +2\n- child";
     let draft = split_capture_draft(raw);
     assert_eq!(draft.items.len(), 2);
@@ -282,7 +282,7 @@ fn draft_attaches_chain_child_lines_to_the_close() {
 
 #[test]
 fn execution_runs_a_chain_left_to_right() {
-    let draft = execute_draft("+2 =x").expect("chain executes");
+    let draft = execute_draft("+2 x").expect("chain executes");
     assert_eq!(draft.items.len(), 2);
     match &draft.items[0].parsed.kind {
         CaptureKind::PomodoroAdjust { spec } => {
@@ -293,7 +293,7 @@ fn execution_runs_a_chain_left_to_right() {
     }
     match &draft.items[1].parsed.kind {
         CaptureKind::PomodoroClose { spec } => {
-            assert_eq!(spec.raw, "=x");
+            assert_eq!(spec.raw, "x");
             assert_eq!(spec.in_progress, None);
             assert!(spec.complete.is_empty());
         }
@@ -303,7 +303,7 @@ fn execution_runs_a_chain_left_to_right() {
 
 #[test]
 fn execution_switches_sessions_with_close_then_start() {
-    let draft = execute_draft("=x =").expect("switch executes");
+    let draft = execute_draft("x =").expect("switch executes");
     assert_eq!(draft.items.len(), 2);
     assert!(
         matches!(
@@ -351,11 +351,11 @@ fn execution_distinguishes_spaced_start_adjust_from_offset_start() {
 
 #[test]
 fn execution_carries_a_close_selection_through_a_chain() {
-    let draft = execute_draft("=x1,3!2 +").expect("selection chain");
+    let draft = execute_draft("x1,3!2 +").expect("selection chain");
     assert_eq!(draft.items.len(), 2);
     match &draft.items[0].parsed.kind {
         CaptureKind::PomodoroClose { spec } => {
-            assert_eq!(spec.raw, "=x1,3!2");
+            assert_eq!(spec.raw, "x1,3!2");
             assert_eq!(spec.in_progress, Some(vec![1, 3]));
             assert_eq!(spec.complete, vec![2]);
         }
@@ -382,12 +382,12 @@ fn execution_reports_a_broken_second_token_on_its_own_range() {
 
 #[test]
 fn execution_attaches_chain_child_lines_to_the_close() {
-    // `+2 =x` plus a valid bullet: a close with an entry.
-    let draft = execute_draft("+2 =x\n- 1 foo").expect("close with entry");
+    // `+2 x` plus a valid bullet: a close with an entry.
+    let draft = execute_draft("+2 x\n- 1 foo").expect("close with entry");
     assert_eq!(draft.items.len(), 2);
     match &draft.items[1].parsed.kind {
         CaptureKind::PomodoroClose { spec } => {
-            assert_eq!(spec.raw, "=x");
+            assert_eq!(spec.raw, "x");
             let texts = spec
                 .log
                 .iter()
@@ -399,7 +399,7 @@ fn execution_attaches_chain_child_lines_to_the_close() {
     }
     // A mixed bullet list reports the missing-number error instead of
     // the old child-shape error.
-    for raw in ["+2 =x\n- 1 a\n- child", "+ =x\n- 1 a\n- child"] {
+    for raw in ["+2 x\n- 1 a\n- child", "+ x\n- 1 a\n- child"] {
         let error = execute_draft(raw).unwrap_err();
         assert!(
             error.contains("capture item 2 starting on line 1"),
@@ -410,8 +410,8 @@ fn execution_attaches_chain_child_lines_to_the_close() {
             "{raw}: {error}"
         );
     }
-    // `=x =` plus a bullet attaches the bullet to the close, not the start.
-    let draft = execute_draft("=x =\n- 1 foo").expect("close then start");
+    // `x =` plus a bullet attaches the bullet to the close, not the start.
+    let draft = execute_draft("x =\n- 1 foo").expect("close then start");
     assert_eq!(draft.items.len(), 2);
     match &draft.items[0].parsed.kind {
         CaptureKind::PomodoroClose { spec } => {
@@ -432,7 +432,7 @@ fn execution_attaches_chain_child_lines_to_the_close() {
     // from its token through its last bullet.
     assert!(draft.items[0].start < draft.items[1].start);
     assert!(draft.items[0].end > draft.items[1].end);
-    // With no `=x` on the line, children still fail the last token's shape
+    // With no `x` on the line, children still fail the last token's shape
     // rule.
     let error = execute_draft("= +2\n- child").unwrap_err();
     assert!(
@@ -443,7 +443,7 @@ fn execution_attaches_chain_child_lines_to_the_close() {
 
 #[test]
 fn execution_rejects_forced_destinations_on_the_first_chain_token() {
-    let error = execute_forced("+2 =x", Some("foo")).unwrap_err();
+    let error = execute_forced("+2 x", Some("foo")).unwrap_err();
     assert!(
         error.contains("capture item 1 starting on line 1"),
         "{error}"
@@ -463,11 +463,11 @@ fn execution_leaves_non_chains_unchanged() {
         error.contains("Pomodoro adjustment items must contain only"),
         "{error}"
     );
-    let error = execute_draft("=x 1,3").unwrap_err();
+    let error = execute_draft("x 1,3").unwrap_err();
     assert!(error.contains("with no spaces"), "{error}");
-    let error = execute_draft("=x ^bob:ready=").unwrap_err();
+    let error = execute_draft("x ^bob:ready=").unwrap_err();
     assert!(error.contains("can't end with the Task Link"), "{error}");
-    for raw in ["Plan +2 =x", "- foo"] {
+    for raw in ["Plan +2 x", "- foo"] {
         let draft = execute_draft(raw).expect("stays a task");
         assert_eq!(draft.items.len(), 1, "{raw}");
         assert!(
@@ -481,12 +481,12 @@ fn execution_leaves_non_chains_unchanged() {
 
 #[test]
 fn editor_reports_two_items_with_absolute_spans_for_a_chain() {
-    let parse = parse_for_editor("+2 =x");
+    let parse = parse_for_editor("+2 x");
     assert_eq!(parse.items.len(), 2);
     assert_eq!(parse.items[0].mode, EditorMode::PomodoroAdjust);
     assert_eq!(parse.items[1].mode, EditorMode::PomodoroClose);
     assert_eq!((parse.items[0].start, parse.items[0].end), (0, 2));
-    assert_eq!((parse.items[1].start, parse.items[1].end), (3, 5));
+    assert_eq!((parse.items[1].start, parse.items[1].end), (3, 4));
     assert_eq!(
         parse.items[0]
             .spans
@@ -501,7 +501,7 @@ fn editor_reports_two_items_with_absolute_spans_for_a_chain() {
             .iter()
             .map(|span| (span.start, span.end, span.kind))
             .collect::<Vec<_>>(),
-        vec![(3, 5, SpanKind::PomodoroClose)]
+        vec![(3, 4, SpanKind::PomodoroClose)]
     );
     assert_eq!(parse.mode, EditorMode::PomodoroAdjust);
     let kinds = parse
@@ -514,14 +514,14 @@ fn editor_reports_two_items_with_absolute_spans_for_a_chain() {
         "{kinds:?}"
     );
     assert!(
-        kinds.contains(&(3, 5, SpanKind::PomodoroClose)),
+        kinds.contains(&(3, 4, SpanKind::PomodoroClose)),
         "{kinds:?}"
     );
 }
 
 #[test]
 fn editor_reports_selection_spans_at_absolute_offsets_in_a_chain() {
-    let parse = parse_for_editor("+2 =x1,3!2");
+    let parse = parse_for_editor("+2 x1,3!2");
     assert_eq!(parse.items.len(), 2);
     assert_eq!(parse.items[1].mode, EditorMode::PomodoroClose);
     let spans = parse.items[1]
@@ -532,16 +532,16 @@ fn editor_reports_selection_spans_at_absolute_offsets_in_a_chain() {
     assert_eq!(
         spans,
         vec![
-            (3, 5, SpanKind::PomodoroClose),
-            (5, 8, SpanKind::PomodoroCloseInProgress),
-            (8, 10, SpanKind::PomodoroCloseComplete),
+            (3, 4, SpanKind::PomodoroClose),
+            (4, 7, SpanKind::PomodoroCloseInProgress),
+            (7, 9, SpanKind::PomodoroCloseComplete),
         ]
     );
 }
 
 #[test]
 fn editor_reports_a_dangling_close_separator_inside_a_chain() {
-    let parse = parse_for_editor("+2 =x1,");
+    let parse = parse_for_editor("+2 x1,");
     assert_eq!(parse.items.len(), 2);
     assert_eq!(parse.items[1].mode, EditorMode::Incomplete);
     assert_eq!(parse.items[1].needs, vec![Need::PomodoroCloseTask]);
@@ -551,7 +551,7 @@ fn editor_reports_a_dangling_close_separator_inside_a_chain() {
         .map(|span| (span.start, span.end, span.kind))
         .collect::<Vec<_>>();
     assert!(
-        spans.contains(&(6, 7, SpanKind::InteractivePlaceholder)),
+        spans.contains(&(5, 6, SpanKind::InteractivePlaceholder)),
         "{spans:?}"
     );
 }
@@ -571,14 +571,14 @@ fn editor_reports_a_broken_second_token_with_its_own_diagnostic() {
 
 #[test]
 fn editor_reports_a_named_start_chain_with_absolute_spans() {
-    let parse = parse_for_editor("=x =#bugs");
+    let parse = parse_for_editor("x =#bugs");
     assert_eq!(parse.items.len(), 2);
     assert_eq!(parse.items[0].mode, EditorMode::PomodoroClose);
     assert_eq!(parse.items[1].mode, EditorMode::PomodoroStart);
     assert_eq!(parse.items[1].section.as_deref(), Some("bugs"));
     assert!(parse.items[1].needs.is_empty());
-    assert_eq!((parse.items[0].start, parse.items[0].end), (0, 2));
-    assert_eq!((parse.items[1].start, parse.items[1].end), (3, 9));
+    assert_eq!((parse.items[0].start, parse.items[0].end), (0, 1));
+    assert_eq!((parse.items[1].start, parse.items[1].end), (2, 8));
     assert_eq!(
         parse.items[1]
             .spans
@@ -586,8 +586,8 @@ fn editor_reports_a_named_start_chain_with_absolute_spans() {
             .map(|span| (span.start, span.end, span.kind))
             .collect::<Vec<_>>(),
         vec![
-            (3, 4, SpanKind::PomodoroStart),
-            (5, 9, SpanKind::PomodoroName),
+            (2, 3, SpanKind::PomodoroStart),
+            (4, 8, SpanKind::PomodoroName),
         ]
     );
     assert!(parse.items[1].diagnostics.is_empty());
@@ -596,7 +596,7 @@ fn editor_reports_a_named_start_chain_with_absolute_spans() {
 
 #[test]
 fn editor_reports_an_incomplete_named_start_inside_a_chain() {
-    let parse = parse_for_editor("=x =#");
+    let parse = parse_for_editor("x =#");
     assert_eq!(parse.items.len(), 2);
     assert_eq!(parse.items[1].mode, EditorMode::Incomplete);
     assert_eq!(parse.items[1].needs, vec![Need::PomodoroName]);
@@ -607,8 +607,8 @@ fn editor_reports_an_incomplete_named_start_inside_a_chain() {
             .map(|span| (span.start, span.end, span.kind))
             .collect::<Vec<_>>(),
         vec![
-            (3, 4, SpanKind::PomodoroStart),
-            (4, 5, SpanKind::InteractivePlaceholder),
+            (2, 3, SpanKind::PomodoroStart),
+            (3, 4, SpanKind::InteractivePlaceholder),
         ]
     );
     assert!(parse.items[1].diagnostics.is_empty());
@@ -636,7 +636,7 @@ fn editor_reports_a_named_start_plus_adjustment_chain() {
 
 #[test]
 fn editor_chain_items_do_not_inherit_a_global_declaration() {
-    let parse = parse_for_editor("@@work\n+2 =x");
+    let parse = parse_for_editor("@@work\n+2 x");
     assert_eq!(parse.items.len(), 2);
     assert_eq!(parse.items[0].mode, EditorMode::PomodoroAdjust);
     assert_eq!(parse.items[1].mode, EditorMode::PomodoroClose);
@@ -648,11 +648,11 @@ fn editor_chain_items_do_not_inherit_a_global_declaration() {
 fn completion_requests_nothing_anywhere_on_a_chain() {
     for cursor in 0..=5 {
         assert!(
-            completion_field_at("+2 =x", cursor).is_none(),
+            completion_field_at("+2 x", cursor).is_none(),
             "cursor {cursor}"
         );
     }
-    let item = editor_item_at("+2 =x", 4).expect("close item");
+    let item = editor_item_at("+2 x", 4).expect("close item");
     assert_eq!(item.mode, EditorMode::PomodoroClose);
 }
 

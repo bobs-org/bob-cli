@@ -19,7 +19,7 @@ pub(crate) fn close_worked_vault(name: &str) -> (TempDir, PathBuf, PathBuf) {
             "\t- \u{1F345} [[bob#^capture-stop]]\n",
             "- [ ] (**0920-0950** [t:: 30m]) — CAPTURE\n",
             "\t- [[bob#^capture-stop]]\n",
-            "\t\t- Designed the `=x` grammar\n",
+            "\t\t- Designed the `x` grammar\n",
             "\t\t\t- chose `x` for done\n",
             "\t\t- Wrote the plan\n",
             "\t- [[bob#^web-capture]]#\n",
@@ -35,7 +35,7 @@ pub(crate) fn close_worked_vault(name: &str) -> (TempDir, PathBuf, PathBuf) {
         concat!(
             "## Tasks\n",
             "\n",
-            "- [*] #task Add support for `=x` syntax! [created::2026-09-26] ^capture-stop\n",
+            "- [*] #task Add support for `x` syntax! [created::2026-09-26] ^capture-stop\n",
             "- [*] #task Add capture support for web URLs! [created::2026-09-21] ^web-capture\n",
             "- [ ] #task Plain ready task [created::2026-09-20] ^ready\n",
         ),
@@ -116,14 +116,13 @@ pub(crate) fn run_close_expect_error(
 #[test]
 fn capture_pomodoro_close_worked_example() {
     let (_temp, vault, day_file) = close_worked_vault("bob-cli-close-worked");
-    let json =
-        run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["=x"]);
+    let json = run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["x"]);
     assert_eq!(json["ok"], true);
     assert_eq!(json["kind"], "pomodoro_close");
     assert_eq!(json["routed"], false);
     assert_eq!(json["route_label"], "");
     assert_eq!(json["relative_target"], "2026/20260928.md");
-    assert_eq!(json["text"], "=x");
+    assert_eq!(json["text"], "x");
     assert_eq!(json["placement"], "closed");
     assert_eq!(
         json["task_line"],
@@ -138,7 +137,7 @@ fn capture_pomodoro_close_worked_example() {
     assert_eq!(
         close,
         &serde_json::json!({
-            "raw": "=x",
+            "raw": "x",
             "in_progress": null,
             "complete": [],
             "task_links": [
@@ -185,7 +184,7 @@ fn capture_pomodoro_close_worked_example() {
                     "resolved": true,
                     "relative_target": "bob.md",
                     "block_id": "capture-stop",
-                    "text": "Add support for `=x` syntax!",
+                    "text": "Add support for `x` syntax!",
                     "previous_status_symbol": "*",
                     "previous_status_name": "Next",
                     "status_symbol": "/",
@@ -193,7 +192,7 @@ fn capture_pomodoro_close_worked_example() {
                     "status_changed": true,
                     "carried": true,
                     "work_log": [
-                        "*2026-09-28* — Designed the `=x` grammar",
+                        "*2026-09-28* — Designed the `x` grammar",
                         "*2026-09-28* — Wrote the plan"
                     ],
                     "work_log_created": true,
@@ -263,7 +262,7 @@ fn capture_pomodoro_close_worked_example() {
             "\t- \u{1F345} [[bob#^capture-stop]]\n",
             "- [x] (**0920-0940** [t:: 20m]) — CAPTURE\n",
             "\t- \u{1F345} [[bob#^capture-stop]]\n",
-            "\t\t- Designed the `=x` grammar\n",
+            "\t\t- Designed the `x` grammar\n",
             "\t\t\t- chose `x` for done\n",
             "\t\t- Wrote the plan\n",
             "\t- ~~[[sase#^axe-restart]]~~\n",
@@ -283,9 +282,9 @@ fn capture_pomodoro_close_worked_example() {
         concat!(
             "## Tasks\n",
             "\n",
-            "- [/] #task Add support for `=x` syntax! [fresh:: 2026-09-28] [created::2026-09-26] ^capture-stop\n",
+            "- [/] #task Add support for `x` syntax! [fresh:: 2026-09-28] [created::2026-09-26] ^capture-stop\n",
             "\t- \u{1F6E0}\u{FE0F} **WORK LOG**\n",
-            "\t\t- *2026-09-28* — Designed the `=x` grammar\n",
+            "\t\t- *2026-09-28* — Designed the `x` grammar\n",
             "\t\t\t- chose `x` for done\n",
             "\t\t- *2026-09-28* — Wrote the plan\n",
             "- [*] #task Add capture support for web URLs! [created::2026-09-21] ^web-capture\n",
@@ -309,8 +308,7 @@ fn capture_pomodoro_close_worked_example() {
     // 09:49 leaves the range untouched (less than 5 minutes remain).
     let (_temp, vault, day_file) =
         close_worked_vault("bob-cli-close-no-decrement");
-    let json =
-        run_close_json(&vault, &day_file, "2026-09-28 09:49:00", &["=x"]);
+    let json = run_close_json(&vault, &day_file, "2026-09-28 09:49:00", &["x"]);
     assert_eq!(json["pomodoro_close"]["closed"]["end"], "0950");
     assert_eq!(json["pomodoro_close"]["decremented_minutes"], 0);
     assert_eq!(
@@ -328,7 +326,7 @@ fn capture_pomodoro_close_worked_example() {
             "\t- \u{1F345} [[bob#^capture-stop]]\n",
             "- [x] (**0920-0950** [t:: 30m]) — CAPTURE\n",
             "\t- \u{1F345} [[bob#^capture-stop]]\n",
-            "\t\t- Designed the `=x` grammar\n",
+            "\t\t- Designed the `x` grammar\n",
             "\t\t\t- chose `x` for done\n",
             "\t\t- Wrote the plan\n",
             "\t- ~~[[sase#^axe-restart]]~~\n",
@@ -351,7 +349,7 @@ fn capture_pomodoro_close_worked_example() {
         .arg(&vault)
         .arg("--dry-run")
         .arg("--")
-        .arg("=x")
+        .arg("x")
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_NOW", "2026-09-28 09:37:00")
         .output()
@@ -363,7 +361,7 @@ fn capture_pomodoro_close_worked_example() {
         .arg("-b")
         .arg(&vault)
         .arg("--")
-        .arg("=x")
+        .arg("x")
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_NOW", "2026-09-28 09:37:00")
         .output()
@@ -418,7 +416,7 @@ fn capture_pomodoro_close_diagnostics() {
         &vault,
         &day_file,
         "2026-09-28 09:37:00",
-        &["=x"],
+        &["x"],
     );
     assert!(
         error.contains("today's daily note `2026/20260928.md` does not exist"),
@@ -433,7 +431,7 @@ fn capture_pomodoro_close_diagnostics() {
         &vault,
         &day_file,
         "2026-09-28 09:37:00",
-        &["=x"],
+        &["x"],
     );
     assert!(error.contains("has no Pomodoros section"), "{error}");
 
@@ -448,7 +446,7 @@ fn capture_pomodoro_close_diagnostics() {
         &vault,
         &day_file,
         "2026-09-28 09:37:00",
-        &["=x"],
+        &["x"],
     );
     assert!(error.contains("has no open timed entry"), "{error}");
     assert!(error.contains("next up is CAPTURE at line"), "{error}");
@@ -479,7 +477,7 @@ fn capture_pomodoro_close_diagnostics() {
         &vault,
         &day_file,
         "2026-09-28 09:37:00",
-        &["=x"],
+        &["x"],
     );
     assert!(error.contains("multiple open timed Pomodoros"), "{error}");
 
@@ -495,7 +493,7 @@ fn capture_pomodoro_close_diagnostics() {
         .arg("-f")
         .arg("json")
         .arg("--")
-        .arg("=x more")
+        .arg("x more")
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_NOW", "2026-09-28 09:37:00")
         .output()
@@ -511,7 +509,7 @@ fn capture_pomodoro_close_diagnostics() {
         .arg("-f")
         .arg("json")
         .arg("--")
-        .arg("=x\n- detail")
+        .arg("x\n- detail")
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_NOW", "2026-09-28 09:37:00")
         .output()
@@ -526,11 +524,11 @@ fn capture_pomodoro_close_diagnostics() {
         &vault,
         &day_file,
         "2026-09-28 09:37:00",
-        &["=x\n- 1 ok\n- detail"],
+        &["x\n- 1 ok\n- detail"],
     );
     assert!(error.contains("start each Work Log bullet"), "{error}");
     // `s:2` stays literal entry text on the close line, so a real child
-    // line (`=x` newline `s:2`) still fails as an invalid child.
+    // line (`x` newline `s:2`) still fails as an invalid child.
     let output = bob_command()
         .arg("capture")
         .arg("-b")
@@ -538,7 +536,7 @@ fn capture_pomodoro_close_diagnostics() {
         .arg("-f")
         .arg("json")
         .arg("--")
-        .arg("=x\ns:2")
+        .arg("x\ns:2")
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_NOW", "2026-09-28 09:37:00")
         .output()
@@ -567,7 +565,7 @@ fn capture_pomodoro_close_diagnostics() {
         .arg("-f")
         .arg("json")
         .arg("--")
-        .arg("=x")
+        .arg("x")
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_NOW", "2026-09-28 09:37:00")
         .output()
@@ -596,7 +594,7 @@ fn capture_pomodoro_close_diagnostics() {
             .arg("json")
             .env("BOB_DAY_FILE", &day_file)
             .env("BOB_NOW", "2026-09-28 09:37:00"),
-        "@@bob\n=x\n",
+        "@@bob\nx\n",
     );
     assert_success(&output);
     let json: serde_json::Value =
@@ -608,16 +606,26 @@ fn capture_pomodoro_close_diagnostics() {
         &vault,
         &day_file,
         "2026-09-28 09:37:00",
-        &["=x1,"],
+        &["x1,"],
     );
     assert!(
         error.contains("is incomplete: type a task number"),
         "{error}"
     );
 
-    // Prose lookalikes stay prose; =X is accepted. `=3` is a start, not
-    // a task, and is covered by the start tests below.
-    for (input, kind) in [("=xx", "task"), ("Plan =x", "task")] {
+    // Prose lookalikes stay prose, including a capitalized `X`: only the
+    // lowercase `x` closes. `=3` is a start, not a task, and is covered by
+    // the start tests below.
+    for (input, kind) in [
+        ("=xx", "task"),
+        ("Plan x", "task"),
+        ("xx", "task"),
+        ("xa", "task"),
+        ("x-ray", "task"),
+        ("X", "task"),
+        ("X2", "task"),
+        ("X post about the launch", "task"),
+    ] {
         let output = bob_command()
             .arg("capture")
             .arg("-b")
@@ -636,12 +644,6 @@ fn capture_pomodoro_close_diagnostics() {
             serde_json::from_str(stdout(&output).trim()).expect("json");
         assert_eq!(json["kind"], kind, "{input}");
     }
-    let (_temp, vault, day_file) = close_worked_vault("bob-cli-close-upper");
-    let json =
-        run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["=X"]);
-    assert_eq!(json["kind"], "pomodoro_close");
-    assert_eq!(json["pomodoro_close"]["raw"], "=X");
-
     // None running without a placeholder names no next session.
     let (_temp, vault, day_file) =
         close_worked_vault("bob-cli-close-none-at-all");
@@ -653,19 +655,19 @@ fn capture_pomodoro_close_diagnostics() {
         &vault,
         &day_file,
         "2026-09-28 09:37:00",
-        &["=x"],
+        &["x"],
     );
     assert!(error.contains("has no open timed entry"), "{error}");
     assert!(!error.contains("next up"), "{error}");
 
-    // A second `=x` names the new placeholder.
+    // A second `x` names the new placeholder.
     let (_temp, vault, day_file) = close_worked_vault("bob-cli-close-second");
-    run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["=x"]);
+    run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["x"]);
     let error = run_close_expect_error(
         &vault,
         &day_file,
         "2026-09-28 09:37:00",
-        &["=x"],
+        &["x"],
     );
     assert!(error.contains("next up is CAPTURE at line 13"), "{error}");
 
@@ -739,8 +741,7 @@ fn capture_pomodoro_close_diagnostics() {
         &day_file,
         "## Pomodoros\n\n- [ ] ( **0920-0950** [t:: 30m]) — BROKEN\n",
     );
-    let json =
-        run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["=x"]);
+    let json = run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["x"]);
     assert_eq!(json["kind"], "pomodoro_close");
     assert_eq!(json["pomodoro_close"]["decremented_minutes"], 0);
     assert_eq!(
@@ -760,7 +761,7 @@ fn capture_pomodoro_close_diagnostics() {
         json["warnings"]
     );
 
-    // `p:1` stays literal entry text, so `=x p:1` closes with the entry.
+    // `p:1` stays literal entry text, so `x p:1` closes with the entry.
     // Strict `=` still fails without writing.
     let (_temp, vault, day_file) = close_worked_vault("bob-cli-close-prio");
     let before = fs::read_to_string(&day_file).expect("read");
@@ -772,7 +773,7 @@ fn capture_pomodoro_close_diagnostics() {
         .arg("-f")
         .arg("json")
         .arg("--")
-        .arg("=x p:1")
+        .arg("x p:1")
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_NOW", "2026-09-28 09:37:00")
         .output()
@@ -791,7 +792,7 @@ fn capture_pomodoro_close_diagnostics() {
     assert!(error.contains("then `=` to switch sessions"), "{error}");
     assert_eq!(fs::read_to_string(&day_file).expect("read"), before);
 
-    // A real `=x` item with a child bullet lexes it as a Work Log entry:
+    // A real `x` item with a child bullet lexes it as a Work Log entry:
     // an unnumbered bullet logs to the first worked task.
     let (_temp, vault, day_file) =
         close_worked_vault("bob-cli-close-child-line");
@@ -804,7 +805,7 @@ fn capture_pomodoro_close_diagnostics() {
             .arg("json")
             .env("BOB_DAY_FILE", &day_file)
             .env("BOB_NOW", "2026-09-28 09:37:00"),
-        "=x\n- detail\n",
+        "x\n- detail\n",
     );
     assert_success(&output);
     let json: serde_json::Value =
@@ -827,7 +828,7 @@ fn capture_pomodoro_close_diagnostics() {
             .arg("json")
             .env("BOB_DAY_FILE", &day_file)
             .env("BOB_NOW", "2026-09-28 09:37:00"),
-        "=x\n- 1 ok\n- detail\n",
+        "x\n- 1 ok\n- detail\n",
     );
     assert!(!output.status.success());
     assert!(
@@ -856,7 +857,7 @@ fn capture_pomodoro_close_diagnostics() {
             .arg("-f")
             .arg("json")
             .arg("--")
-            .arg("=x")
+            .arg("x")
             .env("BOB_DAY_FILE", &day_file)
             .env("BOB_NOW", "2026-09-28 09:37:00")
             .output()
@@ -876,7 +877,7 @@ fn capture_pomodoro_close_diagnostics() {
         .arg("-f")
         .arg("json")
         .arg("--")
-        .arg("=x")
+        .arg("x")
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_NOW", "2026-09-28 09:37:00")
         .env("BOB_CLIPBOARD_CMD", &clipboard)
@@ -893,7 +894,7 @@ fn capture_pomodoro_close_diagnostics() {
 #[test]
 fn capture_pomodoro_close_links_batches_and_files() {
     // Solo link: `^bob:ready=x` appends after `quick note`, closes as
-    // `linked` with the non-close placement and `=x` raw, and carries
+    // `linked` with the non-close placement and `x` raw, and carries
     // second (capture-stop, ready, then web-capture).
     let (_temp, vault, day_file) = close_worked_vault("bob-cli-close-linked");
     let json = run_close_json(
@@ -926,7 +927,7 @@ fn capture_pomodoro_close_links_batches_and_files() {
             "\t- \u{1F345} [[bob#^capture-stop]]\n",
             "- [x] (**0920-0940** [t:: 20m]) — CAPTURE\n",
             "\t- \u{1F345} [[bob#^capture-stop]]\n",
-            "\t\t- Designed the `=x` grammar\n",
+            "\t\t- Designed the `x` grammar\n",
             "\t\t\t- chose `x` for done\n",
             "\t\t- Wrote the plan\n",
             "\t- ~~[[sase#^axe-restart]]~~\n",
@@ -972,7 +973,7 @@ fn capture_pomodoro_close_links_batches_and_files() {
             "\t- \u{1F345} [[bob#^capture-stop]]\n",
             "- [x] (**0920-0940** [t:: 20m]) — CAPTURE\n",
             "\t- \u{1F345} [[bob#^capture-stop]]\n",
-            "\t\t- Designed the `=x` grammar\n",
+            "\t\t- Designed the `x` grammar\n",
             "\t\t\t- chose `x` for done\n",
             "\t\t- Wrote the plan\n",
             "\t- ~~[[sase#^axe-restart]]~~\n",
@@ -991,7 +992,7 @@ fn capture_pomodoro_close_links_batches_and_files() {
         "- [/] #task Recovery panel [fresh:: 2026-09-28] [created::2026-09-25] ^recovery-panel\n"
     ));
 
-    // Already current: file post-images are byte-identical to plain `=x`.
+    // Already current: file post-images are byte-identical to plain `x`.
     let (_temp, vault, day_file) = close_worked_vault("bob-cli-close-current");
     let json = run_close_json(
         &vault,
@@ -1007,7 +1008,7 @@ fn capture_pomodoro_close_links_batches_and_files() {
     let sase_after = fs::read_to_string(vault.join("sase.md")).expect("sase");
     let (_temp, plain_vault, plain_day) =
         close_worked_vault("bob-cli-close-current-plain");
-    run_close_json(&plain_vault, &plain_day, "2026-09-28 09:37:00", &["=x"]);
+    run_close_json(&plain_vault, &plain_day, "2026-09-28 09:37:00", &["x"]);
     assert_eq!(
         day_after,
         fs::read_to_string(&plain_day).expect("plain day")
@@ -1040,9 +1041,9 @@ fn capture_pomodoro_close_links_batches_and_files() {
         concat!(
             "## Tasks\n",
             "\n",
-            "- [/] #task Add support for `=x` syntax! [fresh:: 2026-09-28] [created::2026-09-26] ^capture-stop\n",
+            "- [/] #task Add support for `x` syntax! [fresh:: 2026-09-28] [created::2026-09-26] ^capture-stop\n",
             "\t- \u{1F6E0}\u{FE0F} **WORK LOG**\n",
-            "\t\t- *2026-09-28* — Designed the `=x` grammar\n",
+            "\t\t- *2026-09-28* — Designed the `x` grammar\n",
             "\t\t\t- chose `x` for done\n",
             "\t\t- *2026-09-28* — Wrote the plan\n",
             "- [*] #task Add capture support for web URLs! [created::2026-09-21] ^web-capture\n",
@@ -1109,7 +1110,7 @@ fn capture_pomodoro_close_links_batches_and_files() {
         .arg(&vault)
         .arg("-f")
         .arg("json")
-        .arg("-2\n\n=x")
+        .arg("-2\n\nx")
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_NOW", "2026-09-28 09:37:00")
         .output()
@@ -1126,7 +1127,7 @@ fn capture_pomodoro_close_links_batches_and_files() {
         .arg(&vault)
         .arg("-f")
         .arg("json")
-        .arg("=x\n\n^sase:recovery-panel=")
+        .arg("x\n\n^sase:recovery-panel=")
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_NOW", "2026-09-28 09:37:00")
         .output()
@@ -1146,7 +1147,7 @@ fn capture_pomodoro_close_links_batches_and_files() {
         .arg(&vault)
         .arg("-f")
         .arg("json")
-        .arg("=x\n\n=x")
+        .arg("x\n\nx")
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_NOW", "2026-09-28 09:37:00")
         .output()
@@ -1168,7 +1169,7 @@ fn capture_pomodoro_close_links_batches_and_files() {
         .arg("json")
         .arg("--dry-run")
         .arg("--")
-        .arg("=x")
+        .arg("x")
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_NOW", "2026-09-28 09:37:00")
         .output()
@@ -1187,16 +1188,16 @@ fn capture_pomodoro_close_links_batches_and_files() {
         before_sase
     );
     let mut real_json =
-        run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["=x"]);
+        run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["x"]);
     dry_json["dry_run"] = serde_json::json!(false);
     real_json["dry_run"] = serde_json::json!(false);
     assert_eq!(dry_json, real_json);
 
     // A relative `-b` applies every task effect instead of skipping them
-    // with unreadable-target warnings, for both `=x` and `^bob:ready=x`
+    // with unreadable-target warnings, for both `x` and `^bob:ready=x`
     // (where the link step and the close both edit `bob.md`).
     for (name, args) in [
-        ("bob-cli-close-relative-b", "=x"),
+        ("bob-cli-close-relative-b", "x"),
         ("bob-cli-close-relative-link", "^bob:ready=x"),
     ] {
         let (_temp, vault, day_file) = close_worked_vault(name);
@@ -1230,9 +1231,9 @@ fn capture_pomodoro_close_links_batches_and_files() {
         );
         let bob_after = fs::read_to_string(vault.join("bob.md")).expect("bob");
         assert!(bob_after.contains(
-            "- [/] #task Add support for `=x` syntax! [fresh:: 2026-09-28] [created::2026-09-26] ^capture-stop"
+            "- [/] #task Add support for `x` syntax! [fresh:: 2026-09-28] [created::2026-09-26] ^capture-stop"
         ), "{args}");
-        if args != "=x" {
+        if args != "x" {
             assert!(bob_after.contains(
                 "- [/] #task Plain ready task [fresh:: 2026-09-28] [created::2026-09-20] ^ready"
             ));
@@ -1243,8 +1244,7 @@ fn capture_pomodoro_close_links_batches_and_files() {
     let (_temp, vault, day_file) = close_worked_vault("bob-cli-close-crlf");
     let contents = fs::read_to_string(&day_file).expect("read");
     fs::write(&day_file, contents.replace('\n', "\r\n")).expect("crlf");
-    let json =
-        run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["=x"]);
+    let json = run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["x"]);
     assert_eq!(json["kind"], "pomodoro_close");
     let raw = fs::read(&day_file).expect("read");
     assert!(raw.windows(2).any(|pair| pair == b"\r\n"));
@@ -1254,8 +1254,7 @@ fn capture_pomodoro_close_links_batches_and_files() {
     let contents = fs::read_to_string(&day_file).expect("read");
     let trimmed = contents.trim_end_matches('\n').to_string();
     fs::write(&day_file, &trimmed).expect("trim");
-    let json =
-        run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["=x"]);
+    let json = run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["x"]);
     assert_eq!(json["kind"], "pomodoro_close");
     let raw = fs::read(&day_file).expect("read");
     assert!(!raw.ends_with(b"\n"));
@@ -1267,13 +1266,12 @@ fn capture_pomodoro_close_links_batches_and_files() {
     let note = vault.join("bob.md");
     let contents = fs::read_to_string(&note).expect("read");
     fs::write(&note, contents.replace('\n', "\r\n")).expect("crlf");
-    let json =
-        run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["=x"]);
+    let json = run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["x"]);
     assert_eq!(json["kind"], "pomodoro_close");
     let raw = fs::read(&note).expect("read");
     assert!(raw.windows(2).any(|pair| pair == b"\r\n"));
     assert!(String::from_utf8_lossy(&raw).contains(
-        "- [/] #task Add support for `=x` syntax! [fresh:: 2026-09-28] [created::2026-09-26] ^capture-stop"
+        "- [/] #task Add support for `x` syntax! [fresh:: 2026-09-28] [created::2026-09-26] ^capture-stop"
     ));
 
     let (_temp, vault, day_file) =
@@ -1282,13 +1280,12 @@ fn capture_pomodoro_close_links_batches_and_files() {
     let contents = fs::read_to_string(&note).expect("read");
     let trimmed = contents.trim_end_matches('\n').to_string();
     fs::write(&note, &trimmed).expect("trim");
-    let json =
-        run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["=x"]);
+    let json = run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["x"]);
     assert_eq!(json["kind"], "pomodoro_close");
     let raw = fs::read(&note).expect("read");
     assert!(!raw.ends_with(b"\n"));
     assert!(String::from_utf8_lossy(&raw).contains(
-        "- [/] #task Add support for `=x` syntax! [fresh:: 2026-09-28] [created::2026-09-26] ^capture-stop"
+        "- [/] #task Add support for `x` syntax! [fresh:: 2026-09-28] [created::2026-09-26] ^capture-stop"
     ));
 }
 
@@ -1300,7 +1297,7 @@ fn capture_pomodoro_close_reports_full_blocks() {
         &vault,
         &day_file,
         "2026-09-28 09:37:00",
-        &["=x"],
+        &["x"],
     );
     let day_after = fs::read_to_string(&day_file).expect("read day after");
     assert_pomodoro_blocks_cover_changes(&day_before, &day_after, &json);
@@ -1329,7 +1326,7 @@ fn capture_pomodoro_close_reports_full_blocks() {
                         "before": "\t- [[bob#^capture-stop]]",
                     },
                     {
-                        "text": "\t\t- Designed the `=x` grammar",
+                        "text": "\t\t- Designed the `x` grammar",
                         "depth": 2,
                         "change": "unchanged",
                     },
@@ -1412,7 +1409,7 @@ fn capture_pomodoro_close_reports_unchanged_next_block() {
         &vault,
         &day_file,
         "2026-09-28 09:37:00",
-        &["=x"],
+        &["x"],
     );
     let day_after = fs::read_to_string(&day_file).expect("read day after");
     assert_pomodoro_blocks_cover_changes(day_before, &day_after, &json);
@@ -1494,7 +1491,7 @@ fn capture_pomodoro_close_tracks_blocks_past_day_file_work_log() {
         &vault,
         &day_file,
         "2026-09-28 09:37:00",
-        &["=x"],
+        &["x"],
     );
     let day_after = fs::read_to_string(&day_file).expect("read day after");
     assert_pomodoro_blocks_cover_changes(&day_before, &day_after, &json);
@@ -1809,30 +1806,4 @@ fn capture_pomodoro_close_task_reports_closed_and_next() {
     assert_eq!(blocks[1]["name"], "CAPTURE");
     assert_eq!(blocks[1]["roles"], serde_json::json!(["next"]));
     assert_eq!(blocks[1]["created"], true);
-}
-
-#[test]
-fn bare_x_close_writes_the_same_ledger_as_legacy_close() {
-    let (_bare_temp, bare_vault, bare_day) =
-        close_worked_vault("bob-cli-bare-close");
-    let (_legacy_temp, legacy_vault, legacy_day) =
-        close_worked_vault("bob-cli-legacy-close");
-    let now = "2026-09-28 09:37:00";
-    let bare = run_close_json(&bare_vault, &bare_day, now, &["x"]);
-    let legacy = run_close_json(&legacy_vault, &legacy_day, now, &["=x"]);
-
-    assert_eq!(bare["kind"], "pomodoro_close");
-    assert_eq!(bare["pomodoro_close"]["raw"], "x");
-    assert_eq!(legacy["pomodoro_close"]["raw"], "=x");
-    assert_eq!(
-        fs::read_to_string(&bare_day).expect("bare day"),
-        fs::read_to_string(&legacy_day).expect("legacy day")
-    );
-    for note in ["bob.md", "sase.md"] {
-        assert_eq!(
-            fs::read_to_string(bare_vault.join(note)).expect("bare note"),
-            fs::read_to_string(legacy_vault.join(note)).expect("legacy note"),
-            "{note}"
-        );
-    }
 }

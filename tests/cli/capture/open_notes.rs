@@ -275,7 +275,7 @@ fn open_notes_pomodoro_close_opens_only_the_day_file() {
         &vault,
         &day,
         "2026-09-28 09:37:00",
-        &["=x"],
+        &["x"],
     );
     assert_eq!(json["kind"], "pomodoro_close");
     let notes = open_notes(&json);
@@ -309,7 +309,7 @@ fn open_notes_pomodoro_reset() {
         &vault,
         &day,
         "2026-10-17 09:37:00",
-        &["=x0"],
+        &["x0"],
     );
     assert_eq!(json["kind"], "pomodoro_reset", "{json}");
     let notes = open_notes(&json);

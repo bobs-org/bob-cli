@@ -704,6 +704,9 @@ pub(super) fn parse_colon_link_tail(
                 || link_close_after_x(raw).is_some() =>
         {
             let display = format!("={raw}");
+            if let Some(rewrite) = retired_link_alias_rewrite(raw) {
+                return Err(retired_link_close_alias_error(&display, &rewrite));
+            }
             let spec = match classify_link_close(raw) {
                 None => PomodoroCloseSpec::plain(display.clone()),
                 Some((after_x, x_len)) if after_x.is_empty() => {
@@ -887,9 +890,10 @@ pub(super) fn parse_pomodoro_start_suffix(
     })
 }
 
-/// Whether a `^route:…` tail carries a close-shaped suffix (`=x…`, `=*…`,
-/// `=!…`). A trailing `!` inside such a suffix is a complete-all
-/// group (a valid close), not an explicit-toggle marker.
+/// Whether a `^route:…` tail carries a close-shaped suffix (`=x…`, or the
+/// retired `=*…`/`=!…` aliases, which report a teaching error). A trailing
+/// `!` inside such a suffix is a complete-all group (a valid close), not an
+/// explicit-toggle marker.
 fn caret_tail_has_close_suffix(tail: &str) -> bool {
     let Some((_, raw_suffix)) = tail.split_once('=') else {
         return false;
@@ -1035,11 +1039,11 @@ pub(super) fn classify_caret_token(text: &str) -> CaretTokenShape {
             POMODORO_LINK_TOGGLE_ERROR.to_string(),
         );
     }
-    // A close-shaped `=` suffix (`x`, `x` plus lists, `*`/`!` aliases)
-    // lexes through the shared selection lexer with token-relative offsets,
-    // so the editor can span the lists, report precise diagnostics, and
-    // surface the dangling separator as an incomplete state. Every other
-    // suffix keeps today's `=<X>` start handling below.
+    // A close-shaped `=` suffix (`x`, `x` plus lists, or a retired `*`/`!`
+    // alias) lexes through the shared selection lexer with token-relative
+    // offsets, so the editor can span the lists, report precise
+    // diagnostics, and surface the dangling separator as an incomplete
+    // state. Every other suffix keeps today's `=<X>` start handling below.
     if let Some((before_eq, raw_suffix)) = tail.split_once('=')
         && (raw_suffix.eq_ignore_ascii_case("x")
             || link_close_after_x(raw_suffix).is_some())
@@ -1151,11 +1155,17 @@ fn classify_caret_close_suffix(
         }
     }
     let suffix_offset = link_base + before_eq.len();
+    let display = format!("={raw_suffix}");
+    if let Some(rewrite) = retired_link_alias_rewrite(raw_suffix) {
+        return CaretTokenShape::CloseInvalid {
+            message: retired_link_close_alias_error(&display, &rewrite),
+            range: (suffix_offset, suffix_offset + display.len()),
+        };
+    }
     let (after_x, x_len) = classify_link_close(raw_suffix)
         .map(|(selection, x_len)| (selection, x_len))
         .unwrap_or(("", 1));
     let after_x_offset = suffix_offset + 1 + x_len;
-    let display = format!("={raw_suffix}");
     let link_end = link_base + block_id.len();
     match lex_close_selection(after_x, after_x_offset, &display) {
         Ok(CloseSelectionOutcome::Valid(lex)) => CaretTokenShape::Complete {
@@ -1631,7 +1641,10 @@ pub(super) fn parse_pomodoro_link_item<'a>(
             // A close-shaped suffix with an item conflict reports the
             // conflict exactly like the editor: a conflict wins over the
             // lexical close diagnostic.
-            let close_shaped = first.contains("=x") || first.contains("=X");
+            let close_shaped = first.contains("=x")
+                || first.contains("=X")
+                || first.contains("=*")
+                || first.contains("=!");
             if close_shaped && !is_solo_item {
                 if !is_solo_parent {
                     for extra in &tokens[1..] {

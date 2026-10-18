@@ -57,7 +57,7 @@ pub(crate) struct TodayResult {
 }
 
 /// Every dedicated Task Link under today's open entries, in ledger
-/// order. This is exactly the `=x` / start lineup rule
+/// order. This is exactly the `x` / start lineup rule
 /// ([`capture_pomodoro_start::list_queued_links`]): a direct child
 /// bullet at the entry's first child indentation whose body, after
 /// stripping Pomodoro markers, is exactly one plain or embedded

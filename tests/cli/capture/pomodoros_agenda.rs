@@ -501,11 +501,11 @@ fn agenda_numbers_match_operator_lineups() {
         .arg("-f")
         .arg("json")
         .arg("--")
-        .arg("=x")
+        .arg("x")
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_NOW", PINNED_NOW)
         .output()
-        .expect("run =x dry-run");
+        .expect("run x dry-run");
     assert_success(&close);
     let close_json: Value =
         serde_json::from_str(stdout(&close).trim()).expect("close json");

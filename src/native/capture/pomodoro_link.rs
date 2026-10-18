@@ -752,11 +752,11 @@ pub(super) fn plan_pomodoro_link_with_start(
                 .clone()
                 .unwrap_or_else(|| "current".to_string());
             return Err(CaptureError::io(format!(
-                "Pomodoro {name} is already running; finish the current Pomodoro first (close it with `=x`) or use `+N`/`-N` to adjust it or `++N`/`--N` to shift it"
+                "Pomodoro {name} is already running; finish the current Pomodoro first (close it with `x`) or use `+N`/`-N` to adjust it or `++N`/`--N` to shift it"
             )));
         }
         return Err(CaptureError::io(
-            "Bob daily note has an active timed Pomodoro; finish the current Pomodoro first (close it with `=x`)",
+            "Bob daily note has an active timed Pomodoro; finish the current Pomodoro first (close it with `x`)",
         ));
     }
 

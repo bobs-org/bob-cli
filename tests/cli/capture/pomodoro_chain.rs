@@ -32,7 +32,7 @@ fn chain_matches_blank_line_batch_file_by_file() {
     let (_temp_b, vault_b, day_b) = close_worked_vault("bob-cli-chain-equiv-b");
     let now = "2026-09-28 09:37:00";
 
-    let chain = run_capture_json(&vault_a, &day_a, now, &["+2 =x"]);
+    let chain = run_capture_json(&vault_a, &day_a, now, &["+2 x"]);
     let blank_output = run_with_stdin(
         bob_command()
             .arg("capture")
@@ -42,7 +42,7 @@ fn chain_matches_blank_line_batch_file_by_file() {
             .arg("json")
             .env("BOB_DAY_FILE", &day_b)
             .env("BOB_NOW", now),
-        "+2\n\n=x\n",
+        "+2\n\nx\n",
     );
     assert_success(&blank_output);
     let blank: serde_json::Value =
@@ -75,31 +75,6 @@ fn chain_matches_blank_line_batch_file_by_file() {
 }
 
 #[test]
-fn bare_x_chain_switch_matches_legacy_close_ledger() {
-    let (_bare_temp, bare_vault, bare_day) =
-        close_worked_vault("bob-cli-bare-close-chain");
-    let (_legacy_temp, legacy_vault, legacy_day) =
-        close_worked_vault("bob-cli-legacy-close-chain");
-    let now = "2026-09-28 09:37:00";
-    let bare = run_capture_json(&bare_vault, &bare_day, now, &["x ="]);
-    let legacy = run_capture_json(&legacy_vault, &legacy_day, now, &["=x ="]);
-
-    assert_eq!(bare["captures"][0]["kind"], "pomodoro_close");
-    assert_eq!(bare["captures"][0]["pomodoro_close"]["raw"], "x");
-    assert_eq!(legacy["captures"][0]["pomodoro_close"]["raw"], "=x");
-    assert_eq!(bare["captures"][1]["kind"], "pomodoro_start");
-    assert_eq!(legacy["captures"][1]["kind"], "pomodoro_start");
-    assert_eq!(
-        fs::read_to_string(&bare_day).expect("bare day"),
-        fs::read_to_string(&legacy_day).expect("legacy day")
-    );
-    assert_eq!(
-        fs::read_to_string(bare_vault.join("bob.md")).expect("bare tasks"),
-        fs::read_to_string(legacy_vault.join("bob.md")).expect("legacy tasks")
-    );
-}
-
-#[test]
 fn chain_switches_sessions_like_a_blank_line_batch() {
     let (_temp_a, vault_a, day_a) =
         close_worked_vault("bob-cli-chain-switch-a");
@@ -107,7 +82,7 @@ fn chain_switches_sessions_like_a_blank_line_batch() {
         close_worked_vault("bob-cli-chain-switch-b");
     let now = "2026-09-28 09:37:00";
 
-    let chain = run_capture_json(&vault_a, &day_a, now, &["=x ="]);
+    let chain = run_capture_json(&vault_a, &day_a, now, &["x ="]);
     assert_eq!(chain["captures"][0]["kind"], "pomodoro_close");
     assert_eq!(chain["captures"][1]["kind"], "pomodoro_start");
     let blank_output = run_with_stdin(
@@ -119,7 +94,7 @@ fn chain_switches_sessions_like_a_blank_line_batch() {
             .arg("json")
             .env("BOB_DAY_FILE", &day_b)
             .env("BOB_NOW", now),
-        "=x\n\n=\n",
+        "x\n\n=\n",
     );
     assert_success(&blank_output);
     assert_eq!(
@@ -139,7 +114,7 @@ fn chain_positional_args_form_works() {
         .arg("-f")
         .arg("json")
         .arg("+2")
-        .arg("=x")
+        .arg("x")
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_NOW", "2026-09-28 09:37:00")
         .output()
@@ -165,7 +140,7 @@ fn chain_dry_run_writes_nothing() {
         .arg("json")
         .arg("--dry-run")
         .arg("--")
-        .arg("+2 =x")
+        .arg("+2 x")
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_NOW", "2026-09-28 09:37:00")
         .output()
@@ -180,7 +155,7 @@ fn chain_dry_run_writes_nothing() {
 
 #[test]
 fn chain_failure_rolls_back_with_item_two_prefix() {
-    for args in [["+2 +0"], ["=x -2"]] {
+    for args in [["+2 +0"], ["x -2"]] {
         let (_temp, vault, day_file) =
             close_worked_vault("bob-cli-chain-rollback");
         let before = fs::read_to_string(&day_file).expect("read day");
@@ -214,7 +189,7 @@ fn chain_human_output_numbers_both_items() {
         .arg("-b")
         .arg(&vault)
         .arg("--")
-        .arg("+2 =x")
+        .arg("+2 x")
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_NOW", "2026-09-28 09:37:00")
         .output()
@@ -232,7 +207,7 @@ fn chain_capture_parse_reports_per_token_items() {
         .arg("-f")
         .arg("json")
         .arg("--")
-        .arg("+2 =x")
+        .arg("+2 x")
         .output()
         .expect("run chain capture-parse");
     assert_success(&output);
@@ -249,7 +224,7 @@ fn chain_capture_parse_reports_per_token_items() {
     );
     assert_eq!(
         items[1]["range"],
-        serde_json::json!({ "start": 3, "end": 5 })
+        serde_json::json!({ "start": 3, "end": 4 })
     );
     assert_eq!(items[0]["line_start"], 1);
     assert_eq!(items[0]["line_end"], 1);
@@ -269,7 +244,7 @@ fn chain_capture_parse_reports_per_token_items() {
         json["spans"].as_array().expect("spans").iter().any(|span| {
             span["kind"] == "pomodoro_close"
                 && span["start"] == 3
-                && span["end"] == 5
+                && span["end"] == 4
         }),
         "{json}"
     );
@@ -303,7 +278,7 @@ fn chain_adjust_then_close_reports_one_cumulative_block() {
         &vault,
         &day_file,
         "2026-09-30 07:20:00",
-        &["+2 =x"],
+        &["+2 x"],
     );
     let day_after = fs::read_to_string(&day_file).expect("read day after");
     assert_pomodoro_blocks_cover_changes(&day_before, &day_after, &json);
@@ -367,7 +342,7 @@ fn chain_close_then_start_reports_next_started_block() {
         &vault,
         &day_file,
         "2026-09-30 07:20:00",
-        &["=x ="],
+        &["x ="],
     );
     let day_after = fs::read_to_string(&day_file).expect("read day after");
     assert_pomodoro_blocks_cover_changes(&day_before, &day_after, &json);
@@ -426,7 +401,7 @@ fn chain_close_then_start_reports_next_started_block() {
 
 #[test]
 fn chain_capture_complete_returns_no_candidates() {
-    for (text, cursor) in [("+2 =x", 1), ("+2 =x", 4)] {
+    for (text, cursor) in [("+2 x", 1), ("+2 x", 4)] {
         let output = bob_command()
             .arg("capture-complete")
             .arg("-c")
@@ -458,7 +433,7 @@ fn chain_wildcard_close_matches_blank_line_batch() {
         close_worked_vault("bob-cli-chain-wildcard-b");
     let now = "2026-09-28 09:37:00";
 
-    let chain = run_capture_json(&vault_a, &day_a, now, &["=x* ="]);
+    let chain = run_capture_json(&vault_a, &day_a, now, &["x* ="]);
     let blank_output = run_with_stdin(
         bob_command()
             .arg("capture")
@@ -468,7 +443,7 @@ fn chain_wildcard_close_matches_blank_line_batch() {
             .arg("json")
             .env("BOB_DAY_FILE", &day_b)
             .env("BOB_NOW", now),
-        "=x*\n\n=\n",
+        "x*\n\n=\n",
     );
     assert_success(&blank_output);
     let blank: serde_json::Value =

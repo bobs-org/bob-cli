@@ -1,4 +1,4 @@
-//! Shared `=x[<N>][*<P>][!<M>][~<K>][@<N>]` selection lexer for Pomodoro closes.
+//! Shared `x[<N>][*<P>][!<M>][~<K>][@<N>]` selection lexer for Pomodoro closes.
 //!
 //! Both the execution parser (`bob capture`) and the editor parser
 //! (`capture-parse`, completion, rewrite) lex a close selection through
@@ -64,13 +64,13 @@ pub(crate) enum CloseSelectionOutcome {
     Incomplete(CloseSelectionIncomplete),
 }
 
-/// Classify the text after `=` for a close token: the selection body to
-/// lex plus the `x` length (1 for a long `x`/`X` close, 0 for a short
-/// `*`/`!` alias). `None` for non-close shapes. A plain long close (`x`)
-/// reports an empty selection with length 1; a selection-shaped long close
-/// reports the text after `x`; any suffix starting with `*` or `!` is a
-/// short alias (claimed even when its list is malformed, so `=*abc` reports
-/// a close diagnostic, never a task).
+/// Classify the text after `=` for a link close suffix or a retired
+/// whole-item `=` spelling: the selection body to lex plus the `x` length (1
+/// for a long `x`/`X` close, 0 for a short `*`/`!` alias). `None` for
+/// non-close shapes. A plain long close (`x`) reports an empty selection with
+/// length 1; a selection-shaped long close reports the text after `x`; any
+/// suffix starting with `*` or `!` is a short alias (claimed even when its
+/// list is malformed, so `=*abc` reports a close diagnostic, never a task).
 fn close_after_eq_parts(after_eq: &str) -> Option<(&str, usize)> {
     if after_eq.eq_ignore_ascii_case("x") {
         return Some(("", 1));
@@ -97,16 +97,17 @@ fn close_after_eq_parts(after_eq: &str) -> Option<(&str, usize)> {
     None
 }
 
-/// Classify a bare lowercase whole-item close token: the selection body to
-/// lex plus the one-byte `x` prefix. Plain `x` is a close; a following
-/// selection sigil or digit claims the token, while every other shape stays
-/// prose. `x#…` is intentionally handled by the hash-near-miss recognizer.
-pub(crate) fn classify_bare_whole_item_close(
-    token: &str,
-) -> Option<(&str, usize)> {
+/// Classify a whole-item close token: the selection body to lex after the
+/// one-byte lowercase `x`. Plain `x` is a close with an empty selection; a
+/// following selection sigil or digit claims the token, while every other
+/// shape stays prose (`xx`, `xa`, `x.`, `x-ray`, and every capitalized `X…`).
+/// `x#…` is intentionally handled by the hash-near-miss recognizer, and the
+/// retired `=x…`/`=*…`/`=!…` spellings by
+/// [`retired_whole_item_close_rewrite`].
+pub(crate) fn classify_whole_item_close(token: &str) -> Option<&str> {
     let after_x = token.strip_prefix('x')?;
     if after_x.is_empty() {
-        return Some(("", 1));
+        return Some("");
     }
     if after_x.as_bytes().first().is_some_and(|byte| {
         byte.is_ascii_digit()
@@ -116,31 +117,47 @@ pub(crate) fn classify_bare_whole_item_close(
             || *byte == b'*'
             || *byte == b'@'
     }) {
-        return Some((after_x, 1));
+        return Some(after_x);
     }
     None
 }
 
-/// Classify a whole-item close token: the selection body to lex plus the
-/// prefix length from the token start (`1` for bare `x` and aliases, `2`
-/// for `=x`/`=X`). `Some` for a plain long close and for every
-/// selection-shaped or alias token (aliases claimed even when malformed);
-/// `None` for every other `=` shape (`=xx`, `=xa`, `=x.`, `==`) and
-/// non-close tokens.
-pub(crate) fn classify_whole_item_close(token: &str) -> Option<(&str, usize)> {
-    if let Some(close) = classify_bare_whole_item_close(token) {
-        return Some(close);
-    }
+/// The bare rewrite of a retired whole-item `=`-prefixed close token, or
+/// `None` when the token is not one. Retired shapes are claimed so they fail
+/// with a teaching error instead of becoming a task: `=x`/`=X` (rewrite
+/// `x`), selection-shaped `=x…`/`=X…` (`=X2` is `x2`), the `=*…`/`=!…`
+/// shorthands (`=*1` is `x*1`, `=!` is `x!`; claimed even when malformed),
+/// and the `=x#…` hash near miss (`=x#bugs` is `x =#bugs`, closing then
+/// starting).
+/// `==`-prefixed tokens and every other `=` shape (`=xx`, `=xa`, `=3`) are
+/// not retired closes.
+pub(crate) fn retired_whole_item_close_rewrite(token: &str) -> Option<String> {
     let after_eq = token.strip_prefix('=')?;
-    let (selection, x_len) = close_after_eq_parts(after_eq)?;
-    Some((selection, 1 + x_len))
+    if let Some(name) = after_eq
+        .strip_prefix("x#")
+        .or_else(|| after_eq.strip_prefix("X#"))
+    {
+        return Some(format!("x =#{name}"));
+    }
+    let (selection, _) = close_after_eq_parts(after_eq)?;
+    Some(format!("x{selection}"))
+}
+
+/// The `=x…` rewrite of a retired link-suffix alias (the text after `=`
+/// starts with `*` or `!`), or `None` for every other suffix. `*2` is
+/// `=x*2`, `!` is `=x!`.
+pub(crate) fn retired_link_alias_rewrite(suffix: &str) -> Option<String> {
+    match close_after_eq_parts(suffix) {
+        Some((selection, 0)) => Some(format!("=x{selection}")),
+        _ => None,
+    }
 }
 
 /// Classify a link suffix (the text after `=`): the selection body to lex
 /// plus the `x` length (`1` for `x`/`X`, `0` for `*`/`!` aliases). `Some`
 /// for a selection-shaped long suffix and for every alias suffix (claimed
-/// even when malformed); `None` for a plain `x` suffix and every `=<X>`
-/// start shape.
+/// even when malformed, then reported as retired); `None` for a plain `x`
+/// suffix and every `=<X>` start shape.
 pub(crate) fn classify_link_close(suffix: &str) -> Option<(&str, usize)> {
     close_after_eq_parts(suffix)
 }
@@ -158,16 +175,11 @@ fn leading_keep_text(body: &str) -> &str {
 }
 
 /// Return the selection body when a whole-item token has a selection: bare
-/// `x` followed by a digit or selection sigil, long `=x`/`=X` with the same
-/// suffix shapes, or any `=*`/`=!` alias (claimed even when malformed).
-/// `None` for plain `x`/`=x`, every other `=` shape (`=xx`, `=xa`, `=x.`),
-/// and non-close tokens.
+/// `x` followed by a digit, `,`, `!`, `~`, `*`, or `@`. `None` for plain `x`,
+/// every other `x` shape (`xx`, `xa`, `x.`), the retired `=` spellings, and
+/// non-close tokens.
 pub(crate) fn whole_item_close_after_x(token: &str) -> Option<&str> {
-    if let Some((selection, _)) = classify_bare_whole_item_close(token) {
-        return (!selection.is_empty()).then_some(selection);
-    }
-    let after_eq = token.strip_prefix('=')?;
-    link_close_after_x(after_eq)
+    classify_whole_item_close(token).filter(|selection| !selection.is_empty())
 }
 
 /// Return the selection text when a link suffix (the text after `=`) is
@@ -182,19 +194,17 @@ pub(crate) fn link_close_after_x(suffix: &str) -> Option<&str> {
     Some(selection)
 }
 
-/// Lex the selection body after a close prefix (`after_x`), where
+/// Lex the selection body after a close's `x` (`after_x`), where
 /// `base_offset` is the absolute byte offset of `after_x`'s first byte and
-/// `token` is the display token (`=x...`, `=*...`, `=!...`) interpolated
-/// into diagnostics. For short aliases `after_x` starts with `*`/`!` (the
-/// `x` is omitted); for long closes it is the text after `x`.
+/// `token` is the display token (`x...`, or `=x...` for a link suffix)
+/// interpolated into diagnostics.
 ///
 /// An empty `after_x` is a plain close. A present `*`/`!` group with no
-/// digits records wildcard intent, so `=*`, `=!`, `=x*`, and `=x!` are
-/// valid all/remaining selections. Two empty wildcard groups compete and
-/// are a lexical error. A trailing `,`, `~`, or `@` is an
-/// [`CloseSelectionOutcome::Incomplete`] editing state, unless a lexical
-/// error elsewhere in the token wins. Anything else malformed is a
-/// [`CloseSelectionError`] with a precise range.
+/// digits records wildcard intent, so `x*` and `x!` are valid all/remaining
+/// selections. Two empty wildcard groups compete and are a lexical error. A
+/// trailing `,`, `~`, or `@` is an [`CloseSelectionOutcome::Incomplete`]
+/// editing state, unless a lexical error elsewhere in the token wins.
+/// Anything else malformed is a [`CloseSelectionError`] with a precise range.
 pub(crate) fn lex_close_selection(
     after_x: &str,
     base_offset: usize,
@@ -356,10 +366,10 @@ pub(crate) fn lex_close_selection(
                 range: separator_range,
             });
         }
-        // A dangling list separator (`=x1!,`, `=x1~2~,`, `=x*2,`) names no
+        // A dangling list separator (`x1!,`, `x1~2~,`, `x*2,`) names no
         // number after it yet: the trailing comma is the precise range.
-        // A separator directly after a prefix marker (`=x1!,`, `=x*!2,`)
-        // is a missing-number error, matching `=x1,,2`.
+        // A separator directly after a prefix marker (`x1!,`, `x*!2,`)
+        // is a missing-number error, matching `x1,,2`.
         if let Some(last) = head.rfind(['!', '~', '*', '@'])
             && head[last + 1..].is_empty()
         {
@@ -368,7 +378,7 @@ pub(crate) fn lex_close_selection(
                 range: separator_range,
             });
         }
-        // `=x0,` can never become valid: `0` must stand alone, so the
+        // `x0,` can never become valid: `0` must stand alone, so the
         // lexical `0`-alone error wins over the incomplete state.
         if head == "0" {
             return Err(CloseSelectionError {
@@ -376,8 +386,8 @@ pub(crate) fn lex_close_selection(
                 range: (base_offset, base_offset + 1),
             });
         }
-        // A double separator (`=x1,,`, `=x1!2,,`) points at the dangling
-        // (second) comma, matching `=x1,,2`.
+        // A double separator (`x1,,`, `x1!2,,`) points at the dangling
+        // (second) comma, matching `x1,,2`.
         if head.ends_with(',') || head.ends_with('*') {
             return Err(CloseSelectionError {
                 message: close_selection_expected_number_error(),
@@ -503,7 +513,7 @@ fn parse_selection_body(
         });
     }
     let has_trailing = !trailing.is_empty();
-    // `=x1,!2`: the `<N>` part ends in a single comma after a number, so the
+    // `x1,!2`: the `<N>` part ends in a single comma after a number, so the
     // empty element sits after the `,` (before the separator). Report the
     // new "after" message on that comma instead of the generic "before".
     if has_trailing
@@ -518,7 +528,7 @@ fn parse_selection_body(
             range: (comma, comma + 1),
         });
     }
-    // `=x@1,!2`: the `@` list ends in a single comma after a number.
+    // `x@1,!2`: the `@` list ends in a single comma after a number.
     if let Some(at_list) = trailing.iter().find(|list| list.separator == '@')
         && at_list.text.ends_with(',')
         && !at_list.text.ends_with(",,")
@@ -531,7 +541,7 @@ fn parse_selection_body(
             range: (comma, comma + 1),
         });
     }
-    // An empty `@` directly before another marker (`=x@!1`) is an error,
+    // An empty `@` directly before another marker (`x@!1`) is an error,
     // unlike today's lenient empty `~`.
     if let Some(at_list) = trailing.iter().find(|list| list.separator == '@')
         && at_list.text.is_empty()
@@ -714,7 +724,7 @@ fn validate_selection(
         });
     }
     // Only a literal `0` means "none": a zero-valued `<n>` with extra digits
-    // (`=x00`) gets the `0`-alone message on that number. An `@` list keeps
+    // (`x00`) gets the `0`-alone message on that number. An `@` list keeps
     // the same rule.
     for parsed in [&n_parsed, &at_parsed] {
         if let Some((_, range)) = parsed.iter().find(|(number, range)| {
@@ -975,8 +985,8 @@ pub(crate) fn close_spec_from_lex(
 }
 
 /// Build a partial [`PomodoroCloseSpec`] from an incomplete lex result: the
-/// lists typed so far (`=x1,` gives `in_progress: [1]`; `=x!` gives
-/// `in_progress: None, complete: []`; `=x*` gives `park: []`).
+/// lists typed so far (`x1,` gives `in_progress: [1]`; `x!` gives
+/// `in_progress: None, complete: []`; `x*` gives `park: []`).
 pub(crate) fn close_spec_from_incomplete(
     raw: String,
     incomplete: &CloseSelectionIncomplete,
@@ -1026,481 +1036,471 @@ mod tests {
 
     #[test]
     fn lex_reports_valid_selections() {
-        let plain = valid("=x1");
+        let plain = valid("x1");
         assert_eq!(plain.in_progress, Some(vec![1]));
         assert_eq!(plain.complete, Vec::<u32>::new());
-        assert_eq!(plain.in_progress_range, Some((2, 3)));
+        assert_eq!(plain.in_progress_range, Some((1, 2)));
         assert_eq!(plain.complete_range, None);
 
-        let both = valid("=x1,3!2");
+        let both = valid("x1,3!2");
         assert_eq!(both.in_progress, Some(vec![1, 3]));
         assert_eq!(both.complete, vec![2]);
-        assert_eq!(both.in_progress_range, Some((2, 5)));
-        assert_eq!(both.complete_range, Some((5, 7)));
+        assert_eq!(both.in_progress_range, Some((1, 4)));
+        assert_eq!(both.complete_range, Some((4, 6)));
 
         // List order does not matter; JSON reports ascending.
-        let sorted = valid("=x3,1");
+        let sorted = valid("x3,1");
         assert_eq!(sorted.in_progress, Some(vec![1, 3]));
 
-        let upper = valid("=X1!2");
-        assert_eq!(upper.in_progress, Some(vec![1]));
-        assert_eq!(upper.complete, vec![2]);
-
-        let complete_only = valid("=x!2");
+        let complete_only = valid("x!2");
         assert_eq!(complete_only.in_progress, None);
         assert_eq!(complete_only.complete, vec![2]);
         assert_eq!(complete_only.in_progress_range, None);
-        assert_eq!(complete_only.complete_range, Some((2, 4)));
+        assert_eq!(complete_only.complete_range, Some((1, 3)));
 
-        let none = valid("=x0");
+        let none = valid("x0");
         assert_eq!(none.in_progress, Some(Vec::new()));
         assert_eq!(none.complete, Vec::<u32>::new());
-        assert_eq!(none.in_progress_range, Some((2, 3)));
+        assert_eq!(none.in_progress_range, Some((1, 2)));
 
-        let none_complete = valid("=x0!2");
+        let none_complete = valid("x0!2");
         assert_eq!(none_complete.in_progress, Some(Vec::new()));
         assert_eq!(none_complete.complete, vec![2]);
 
         // Trailing `@` spellings are semantically identical to leading `<N>`.
-        let at = valid("=x@2");
+        let at = valid("x@2");
         assert_eq!(at.in_progress, Some(vec![2]));
-        assert_eq!(at.in_progress_range, Some((2, 4)));
+        assert_eq!(at.in_progress_range, Some((1, 3)));
 
-        let at_complete = valid("=x!1@2");
+        let at_complete = valid("x!1@2");
         assert_eq!(at_complete.in_progress, Some(vec![2]));
         assert_eq!(at_complete.complete, vec![1]);
-        assert_eq!(at_complete.in_progress_range, Some((4, 6)));
-        assert_eq!(at_complete.complete_range, Some((2, 4)));
+        assert_eq!(at_complete.in_progress_range, Some((3, 5)));
+        assert_eq!(at_complete.complete_range, Some((1, 3)));
 
-        let at_reordered = valid("=x@2!1~3");
+        let at_reordered = valid("x@2!1~3");
         assert_eq!(at_reordered.in_progress, Some(vec![2]));
         assert_eq!(at_reordered.complete, vec![1]);
         assert_eq!(at_reordered.drop, vec![3]);
 
-        let at_park = valid("=x*@1");
+        let at_park = valid("x*@1");
         assert_eq!(at_park.in_progress, Some(vec![1]));
         assert_eq!(at_park.park, Vec::<u32>::new());
         assert!(at_park.park_all);
 
-        let at_none = valid("=x@0");
+        let at_none = valid("x@0");
         assert_eq!(at_none.in_progress, Some(Vec::new()));
 
-        let at_none_complete = valid("=x!2@0");
+        let at_none_complete = valid("x!2@0");
         assert_eq!(at_none_complete.in_progress, Some(Vec::new()));
         assert_eq!(at_none_complete.complete, vec![2]);
 
-        let at_alias_complete = valid("=!1@2");
+        let at_alias_complete = valid("x!1@2");
         assert_eq!(at_alias_complete.in_progress, Some(vec![2]));
         assert_eq!(at_alias_complete.complete, vec![1]);
     }
 
     #[test]
     fn lex_reports_precise_diagnostics() {
-        let duplicate = error("=x1,1");
-        assert_eq!(duplicate.message, "task 1 is listed twice in `=x1,1`");
-        assert_eq!(duplicate.range, (4, 5));
+        let duplicate = error("x1,1");
+        assert_eq!(duplicate.message, "task 1 is listed twice in `x1,1`");
+        assert_eq!(duplicate.range, (3, 4));
 
-        let overlap = error("=x1!1");
+        let overlap = error("x1!1");
         assert_eq!(
             overlap.message,
-            "task 1 cannot both stay in progress and complete in `=x1!1`"
+            "task 1 cannot both stay in progress and complete in `x1!1`"
         );
-        assert_eq!(overlap.range, (4, 5));
+        assert_eq!(overlap.range, (3, 4));
 
-        let overlap_later = error("=x1,2!2");
+        let overlap_later = error("x1,2!2");
         assert_eq!(
             overlap_later.message,
-            "task 2 cannot both stay in progress and complete in `=x1,2!2`"
+            "task 2 cannot both stay in progress and complete in `x1,2!2`"
         );
-        assert_eq!(overlap_later.range, (6, 7));
+        assert_eq!(overlap_later.range, (5, 6));
 
-        let zero = error("=x0,2");
+        let zero = error("x0,2");
         assert_eq!(
             zero.message,
-            "`0` means no task stays in progress; use it alone, as `=x0`, `=x0*2`, `=x0!2`, or `=x0~2`"
+            "`0` means no task stays in progress; use it alone, as `x0`, `x0*2`, `x0!2`, or `x0~2`"
         );
-        assert_eq!(zero.range, (2, 3));
+        assert_eq!(zero.range, (1, 2));
 
-        let zero_later = error("=x2,0");
-        assert_eq!(zero_later.range, (4, 5));
+        let zero_later = error("x2,0");
+        assert_eq!(zero_later.range, (3, 4));
 
-        let starts_at_one = error("=x!0");
+        let starts_at_one = error("x!0");
         assert_eq!(starts_at_one.message, "task numbers start at 1");
-        assert_eq!(starts_at_one.range, (3, 4));
+        assert_eq!(starts_at_one.range, (2, 3));
 
-        let leading_comma = error("=x,1");
+        let leading_comma = error("x,1");
         assert_eq!(leading_comma.message, "expected a task number before `,`");
-        assert_eq!(leading_comma.range, (2, 3));
+        assert_eq!(leading_comma.range, (1, 2));
 
-        let doubled_comma = error("=x1,,2");
-        assert_eq!(doubled_comma.range, (4, 5));
+        let doubled_comma = error("x1,,2");
+        assert_eq!(doubled_comma.range, (3, 4));
 
-        let doubled_bang = error("=x1!2!3");
-        assert_eq!(doubled_bang.message, "use one `!` list: `=x1!2,3`");
-        assert_eq!(doubled_bang.range, (5, 6));
+        let doubled_bang = error("x1!2!3");
+        assert_eq!(doubled_bang.message, "use one `!` list: `x1!2,3`");
+        assert_eq!(doubled_bang.range, (4, 5));
 
-        let bad = error("=x1a");
+        let bad = error("x1a");
         assert!(
-            bad.message.starts_with("`=x1a` is not a task list:"),
+            bad.message.starts_with("`x1a` is not a task list:"),
             "{}",
             bad.message
         );
-        assert_eq!(bad.range, (3, 4));
+        assert_eq!(bad.range, (2, 3));
 
-        let bad_mid = error("=x1;2");
-        assert_eq!(bad_mid.range, (3, 5));
+        let bad_mid = error("x1;2");
+        assert_eq!(bad_mid.range, (2, 4));
 
-        let overflow = error("=x99999999999");
+        let overflow = error("x99999999999");
         assert_eq!(overflow.message, "task number 99999999999 is too large");
-        assert_eq!(overflow.range, (2, 13));
+        assert_eq!(overflow.range, (1, 12));
 
-        let double_trailing = error("=x1,,");
+        let double_trailing = error("x1,,");
         assert_eq!(
             double_trailing.message,
             "expected a task number before `,`"
         );
-        assert_eq!(double_trailing.range, (4, 5));
+        assert_eq!(double_trailing.range, (3, 4));
 
-        let double_trailing_complete = error("=x1!2,,");
-        assert_eq!(double_trailing_complete.range, (6, 7));
+        let double_trailing_complete = error("x1!2,,");
+        assert_eq!(double_trailing_complete.range, (5, 6));
 
-        let after_comma = error("=x1,!2");
+        let after_comma = error("x1,!2");
         assert_eq!(after_comma.message, "expected a task number after `,`");
-        assert_eq!(after_comma.range, (3, 4));
+        assert_eq!(after_comma.range, (2, 3));
 
-        let zero_trailing = error("=x0,");
+        let zero_trailing = error("x0,");
         assert_eq!(
             zero_trailing.message,
-            "`0` means no task stays in progress; use it alone, as `=x0`, `=x0*2`, `=x0!2`, or `=x0~2`"
+            "`0` means no task stays in progress; use it alone, as `x0`, `x0*2`, `x0!2`, or `x0~2`"
         );
-        assert_eq!(zero_trailing.range, (2, 3));
+        assert_eq!(zero_trailing.range, (1, 2));
 
-        let zero_padded = error("=x00");
+        let zero_padded = error("x00");
         assert_eq!(
             zero_padded.message,
-            "`0` means no task stays in progress; use it alone, as `=x0`, `=x0*2`, `=x0!2`, or `=x0~2`"
+            "`0` means no task stays in progress; use it alone, as `x0`, `x0*2`, `x0!2`, or `x0~2`"
         );
-        assert_eq!(zero_padded.range, (2, 4));
+        assert_eq!(zero_padded.range, (1, 3));
     }
 
     #[test]
     fn lex_reports_drop_selections() {
-        let drop_only = valid("=x~2");
+        let drop_only = valid("x~2");
         assert_eq!(drop_only.in_progress, None);
         assert_eq!(drop_only.complete, Vec::<u32>::new());
         assert_eq!(drop_only.drop, vec![2]);
         assert_eq!(drop_only.in_progress_range, None);
         assert_eq!(drop_only.complete_range, None);
-        assert_eq!(drop_only.drop_range, Some((2, 4)));
+        assert_eq!(drop_only.drop_range, Some((1, 3)));
 
-        let in_progress_drop = valid("=x1~2");
+        let in_progress_drop = valid("x1~2");
         assert_eq!(in_progress_drop.in_progress, Some(vec![1]));
         assert_eq!(in_progress_drop.drop, vec![2]);
-        assert_eq!(in_progress_drop.in_progress_range, Some((2, 3)));
-        assert_eq!(in_progress_drop.drop_range, Some((3, 5)));
+        assert_eq!(in_progress_drop.in_progress_range, Some((1, 2)));
+        assert_eq!(in_progress_drop.drop_range, Some((2, 4)));
 
         // `!` and `~` compose in either order with the same lists.
-        let complete_then_drop = valid("=x1!2~3");
+        let complete_then_drop = valid("x1!2~3");
         assert_eq!(complete_then_drop.in_progress, Some(vec![1]));
         assert_eq!(complete_then_drop.complete, vec![2]);
         assert_eq!(complete_then_drop.drop, vec![3]);
-        assert_eq!(complete_then_drop.in_progress_range, Some((2, 3)));
-        assert_eq!(complete_then_drop.complete_range, Some((3, 5)));
-        assert_eq!(complete_then_drop.drop_range, Some((5, 7)));
+        assert_eq!(complete_then_drop.in_progress_range, Some((1, 2)));
+        assert_eq!(complete_then_drop.complete_range, Some((2, 4)));
+        assert_eq!(complete_then_drop.drop_range, Some((4, 6)));
 
-        let drop_then_complete = valid("=x1~3!2");
+        let drop_then_complete = valid("x1~3!2");
         assert_eq!(drop_then_complete.in_progress, Some(vec![1]));
         assert_eq!(drop_then_complete.complete, vec![2]);
         assert_eq!(drop_then_complete.drop, vec![3]);
-        assert_eq!(drop_then_complete.in_progress_range, Some((2, 3)));
-        assert_eq!(drop_then_complete.drop_range, Some((3, 5)));
-        assert_eq!(drop_then_complete.complete_range, Some((5, 7)));
+        assert_eq!(drop_then_complete.in_progress_range, Some((1, 2)));
+        assert_eq!(drop_then_complete.drop_range, Some((2, 4)));
+        assert_eq!(drop_then_complete.complete_range, Some((4, 6)));
 
-        let omitted_both = valid("=x!2~3");
+        let omitted_both = valid("x!2~3");
         assert_eq!(omitted_both.in_progress, None);
         assert_eq!(omitted_both.complete, vec![2]);
         assert_eq!(omitted_both.drop, vec![3]);
 
-        let reversed_omitted = valid("=x~3!2");
+        let reversed_omitted = valid("x~3!2");
         assert_eq!(reversed_omitted.in_progress, None);
         assert_eq!(reversed_omitted.complete, vec![2]);
         assert_eq!(reversed_omitted.drop, vec![3]);
 
         // List order does not matter; JSON reports ascending.
-        let sorted = valid("=x~3,1");
+        let sorted = valid("x~3,1");
         assert_eq!(sorted.drop, vec![1, 3]);
 
-        let none_drop = valid("=x0~2");
+        let none_drop = valid("x0~2");
         assert_eq!(none_drop.in_progress, Some(Vec::new()));
         assert_eq!(none_drop.drop, vec![2]);
 
         // A number in two lists is a precise-range overlap error.
-        let overlap_drop = error("=x1~1");
+        let overlap_drop = error("x1~1");
         assert_eq!(
             overlap_drop.message,
-            "task 1 cannot both stay in progress and drop in `=x1~1`"
+            "task 1 cannot both stay in progress and drop in `x1~1`"
         );
-        assert_eq!(overlap_drop.range, (4, 5));
+        assert_eq!(overlap_drop.range, (3, 4));
 
-        let overlap_complete_drop = error("=x!2~2");
+        let overlap_complete_drop = error("x!2~2");
         assert_eq!(
             overlap_complete_drop.message,
-            "task 2 cannot both complete and drop in `=x!2~2`"
+            "task 2 cannot both complete and drop in `x!2~2`"
         );
-        assert_eq!(overlap_complete_drop.range, (5, 6));
+        assert_eq!(overlap_complete_drop.range, (4, 5));
 
         // `~0` names no task, like `!0`.
-        let zero_drop = error("=x~0");
+        let zero_drop = error("x~0");
         assert_eq!(zero_drop.message, "task numbers start at 1");
-        assert_eq!(zero_drop.range, (3, 4));
+        assert_eq!(zero_drop.range, (2, 3));
 
         // A second `~` points at the second tilde.
-        let doubled_tilde = error("=x1~2~3");
-        assert_eq!(doubled_tilde.message, "use one `~` list: `=x1~2,3`");
-        assert_eq!(doubled_tilde.range, (5, 6));
+        let doubled_tilde = error("x1~2~3");
+        assert_eq!(doubled_tilde.message, "use one `~` list: `x1~2,3`");
+        assert_eq!(doubled_tilde.range, (4, 5));
 
         // A dangling `~` is an editing state, like `!`.
-        let bare_tilde = incomplete("=x~");
+        let bare_tilde = incomplete("x~");
         assert_eq!(bare_tilde.in_progress, None);
         assert_eq!(bare_tilde.complete, Vec::<u32>::new());
         assert_eq!(bare_tilde.drop, Vec::<u32>::new());
-        assert_eq!(bare_tilde.separator_range, (2, 3));
+        assert_eq!(bare_tilde.separator_range, (1, 2));
         assert_eq!(bare_tilde.separator, '~');
 
-        let numbered_tilde = incomplete("=x1~");
+        let numbered_tilde = incomplete("x1~");
         assert_eq!(numbered_tilde.in_progress, Some(vec![1]));
         assert_eq!(numbered_tilde.drop, Vec::<u32>::new());
         assert_eq!(numbered_tilde.separator, '~');
 
-        let complete_tilde = incomplete("=x1!2~");
+        let complete_tilde = incomplete("x1!2~");
         assert_eq!(complete_tilde.in_progress, Some(vec![1]));
         assert_eq!(complete_tilde.complete, vec![2]);
-        assert_eq!(complete_tilde.complete_range, Some((3, 5)));
+        assert_eq!(complete_tilde.complete_range, Some((2, 4)));
         assert_eq!(complete_tilde.drop, Vec::<u32>::new());
         assert_eq!(complete_tilde.separator, '~');
 
-        let drop_comma = incomplete("=x~2,");
+        let drop_comma = incomplete("x~2,");
         assert_eq!(drop_comma.in_progress, None);
         assert_eq!(drop_comma.drop, vec![2]);
-        assert_eq!(drop_comma.drop_range, Some((2, 4)));
+        assert_eq!(drop_comma.drop_range, Some((1, 3)));
         assert_eq!(drop_comma.separator, ',');
     }
 
     #[test]
     fn lex_reports_trailing_at_selections() {
-        let at = valid("=x@2");
+        let at = valid("x@2");
         assert_eq!(at.in_progress, Some(vec![2]));
-        assert_eq!(at.in_progress_range, Some((2, 4)));
+        assert_eq!(at.in_progress_range, Some((1, 3)));
 
-        let dangling = incomplete("=x@");
+        let dangling = incomplete("x@");
         assert_eq!(dangling.separator, '@');
-        assert_eq!(dangling.separator_range, (2, 3));
+        assert_eq!(dangling.separator_range, (1, 2));
 
-        let dangling_complete = incomplete("=x!1@");
+        let dangling_complete = incomplete("x!1@");
         assert_eq!(dangling_complete.complete, vec![1]);
         assert_eq!(dangling_complete.separator, '@');
 
-        let trailing_comma = incomplete("=x@2,");
+        let trailing_comma = incomplete("x@2,");
         assert_eq!(trailing_comma.in_progress, Some(vec![2]));
         assert_eq!(trailing_comma.separator, ',');
 
-        let twice = error("=x2@3");
+        let twice = error("x2@3");
         assert_eq!(
             twice.message,
-            "`=x2@3` lists the in-progress tasks twice; type them once, right after `=x` or after `@` (for example `=x2,3` or `=x@2,3`)"
+            "`x2@3` lists the in-progress tasks twice; type them once, right after `x` or after `@` (for example `x2,3` or `x@2,3`)"
         );
-        assert_eq!(twice.range, (3, 5));
+        assert_eq!(twice.range, (2, 4));
 
-        let twice_dangling = error("=x2@");
-        assert_eq!(twice_dangling.range, (3, 4));
+        let twice_dangling = error("x2@");
+        assert_eq!(twice_dangling.range, (2, 3));
 
-        let second = error("=x@2@3");
-        assert_eq!(second.message, "use one `@` list: `=x!1@2,3`");
-        assert_eq!(second.range, (4, 5));
+        let second = error("x@2@3");
+        assert_eq!(second.message, "use one `@` list: `x!1@2,3`");
+        assert_eq!(second.range, (3, 4));
 
-        let empty = error("=x@!1");
+        let empty = error("x@!1");
         assert_eq!(empty.message, "expected a task number after `@`");
-        assert_eq!(empty.range, (2, 3));
+        assert_eq!(empty.range, (1, 2));
 
-        let comma = error("=x@,");
+        let comma = error("x@,");
         assert_eq!(comma.message, "expected a task number before `,`");
 
-        let after_comma = error("=x@1,!2");
+        let after_comma = error("x@1,!2");
         assert_eq!(after_comma.message, "expected a task number after `,`");
 
-        let overlap = error("=x!1@1");
+        let overlap = error("x!1@1");
         assert_eq!(
             overlap.message,
-            "task 1 cannot both stay in progress and complete in `=x!1@1`"
+            "task 1 cannot both stay in progress and complete in `x!1@1`"
         );
-        assert_eq!(overlap.range, (5, 6));
+        assert_eq!(overlap.range, (4, 5));
 
-        let bad = error("=x@foo");
-        assert!(bad.message.starts_with("`=x@foo` is not a task list:"));
+        let bad = error("x@foo");
+        assert!(bad.message.starts_with("`x@foo` is not a task list:"));
     }
 
     #[test]
     fn lex_reports_dangling_separators_as_incomplete() {
-        let dangling_drop_after_wildcard = incomplete("=*~");
+        let dangling_drop_after_wildcard = incomplete("x*~");
         assert!(dangling_drop_after_wildcard.park_all);
         assert_eq!(dangling_drop_after_wildcard.park, Vec::<u32>::new());
         assert_eq!(dangling_drop_after_wildcard.park_range, Some((1, 2)));
         assert_eq!(dangling_drop_after_wildcard.separator, '~');
 
-        let trailing_comma = incomplete("=x1,");
+        let trailing_comma = incomplete("x1,");
         assert_eq!(trailing_comma.in_progress, Some(vec![1]));
         assert_eq!(trailing_comma.complete, Vec::<u32>::new());
-        assert_eq!(trailing_comma.in_progress_range, Some((2, 3)));
-        assert_eq!(trailing_comma.separator_range, (3, 4));
+        assert_eq!(trailing_comma.in_progress_range, Some((1, 2)));
+        assert_eq!(trailing_comma.separator_range, (2, 3));
         assert_eq!(trailing_comma.separator, ',');
 
-        // A present-but-empty `!` preserves wildcard intent, so `=x!` is valid.
-        let bare_bang = valid("=x!");
+        // A present-but-empty `!` preserves wildcard intent, so `x!` is valid.
+        let bare_bang = valid("x!");
         assert_eq!(bare_bang.in_progress, None);
         assert_eq!(bare_bang.complete, Vec::<u32>::new());
         assert!(bare_bang.complete_all);
-        assert_eq!(bare_bang.complete_range, Some((2, 3)));
+        assert_eq!(bare_bang.complete_range, Some((1, 2)));
 
         // Explicit task 1 is an exception to the complete-all remainder.
-        let numbered_bang = valid("=x1!");
+        let numbered_bang = valid("x1!");
         assert_eq!(numbered_bang.in_progress, Some(vec![1]));
         assert!(numbered_bang.complete_all);
 
-        let complete_comma = incomplete("=x!2,");
+        let complete_comma = incomplete("x!2,");
         assert_eq!(complete_comma.in_progress, None);
         assert_eq!(complete_comma.complete, vec![2]);
-        assert_eq!(complete_comma.complete_range, Some((2, 4)));
+        assert_eq!(complete_comma.complete_range, Some((1, 3)));
         assert_eq!(complete_comma.separator, ',');
 
-        // `=x0!` completes the remaining tasks with no in-progress list.
-        let none_bang = valid("=x0!");
+        // `x0!` completes the remaining tasks with no in-progress list.
+        let none_bang = valid("x0!");
         assert_eq!(none_bang.in_progress, Some(Vec::new()));
         assert!(none_bang.complete_all);
 
         // A lexical error elsewhere wins over the incomplete state.
-        let duplicate = error("=x1,1,");
-        assert_eq!(duplicate.range, (4, 5));
-        let empty = error("=x,");
+        let duplicate = error("x1,1,");
+        assert_eq!(duplicate.range, (3, 4));
+        let empty = error("x,");
         assert_eq!(empty.message, "expected a task number before `,`");
     }
 
     #[test]
     fn lex_reports_park_selections() {
-        let star_only = valid("=x*2,3");
+        let star_only = valid("x*2,3");
         assert_eq!(star_only.in_progress, None);
         assert_eq!(star_only.park, vec![2, 3]);
         assert_eq!(star_only.complete, Vec::<u32>::new());
         assert_eq!(star_only.drop, Vec::<u32>::new());
         assert_eq!(star_only.in_progress_range, None);
-        assert_eq!(star_only.park_range, Some((2, 6)));
+        assert_eq!(star_only.park_range, Some((1, 5)));
 
-        let mixed = valid("=x1*2,3!4,5");
+        let mixed = valid("x1*2,3!4,5");
         assert_eq!(mixed.in_progress, Some(vec![1]));
         assert_eq!(mixed.park, vec![2, 3]);
         assert_eq!(mixed.complete, vec![4, 5]);
-        assert_eq!(mixed.in_progress_range, Some((2, 3)));
-        assert_eq!(mixed.park_range, Some((3, 7)));
-        assert_eq!(mixed.complete_range, Some((7, 11)));
+        assert_eq!(mixed.in_progress_range, Some((1, 2)));
+        assert_eq!(mixed.park_range, Some((2, 6)));
+        assert_eq!(mixed.complete_range, Some((6, 10)));
 
         // `*`, `!`, and `~` compose in any order with the same lists.
-        let reordered = valid("=x1!4,5*2,3");
+        let reordered = valid("x1!4,5*2,3");
         assert_eq!(reordered.in_progress, Some(vec![1]));
         assert_eq!(reordered.park, vec![2, 3]);
         assert_eq!(reordered.complete, vec![4, 5]);
 
-        let four_group = valid("=x1*2!3~4");
+        let four_group = valid("x1*2!3~4");
         assert_eq!(four_group.in_progress, Some(vec![1]));
         assert_eq!(four_group.park, vec![2]);
         assert_eq!(four_group.complete, vec![3]);
         assert_eq!(four_group.drop, vec![4]);
 
-        let none_park = valid("=x0*2");
+        let none_park = valid("x0*2");
         assert_eq!(none_park.in_progress, Some(Vec::new()));
         assert_eq!(none_park.park, vec![2]);
 
-        let upper = valid("=X*2");
-        assert_eq!(upper.park, vec![2]);
-
         // Sorted lists, raw preservation is covered by ranges.
-        let sorted = valid("=x*3,1");
+        let sorted = valid("x*3,1");
         assert_eq!(sorted.park, vec![1, 3]);
 
         // Overlaps across all four lists fail on the later list.
-        let overlap_progress_park = error("=x1*1");
+        let overlap_progress_park = error("x1*1");
         assert_eq!(
             overlap_progress_park.message,
-            "task 1 cannot both stay in progress and park in `=x1*1`"
+            "task 1 cannot both stay in progress and park in `x1*1`"
         );
-        assert_eq!(overlap_progress_park.range, (4, 5));
+        assert_eq!(overlap_progress_park.range, (3, 4));
 
-        let overlap_park_complete = error("=x*1!1");
+        let overlap_park_complete = error("x*1!1");
         assert_eq!(
             overlap_park_complete.message,
-            "task 1 cannot both park and complete in `=x*1!1`"
+            "task 1 cannot both park and complete in `x*1!1`"
         );
-        assert_eq!(overlap_park_complete.range, (5, 6));
+        assert_eq!(overlap_park_complete.range, (4, 5));
 
-        let overlap_park_drop = error("=x*1~1");
+        let overlap_park_drop = error("x*1~1");
         assert_eq!(
             overlap_park_drop.message,
-            "task 1 cannot both park and drop in `=x*1~1`"
+            "task 1 cannot both park and drop in `x*1~1`"
         );
-        assert_eq!(overlap_park_drop.range, (5, 6));
+        assert_eq!(overlap_park_drop.range, (4, 5));
 
-        let duplicate_park = error("=x*1,1");
-        assert_eq!(
-            duplicate_park.message,
-            "task 1 is listed twice in `=x*1,1`"
-        );
-        assert_eq!(duplicate_park.range, (5, 6));
+        let duplicate_park = error("x*1,1");
+        assert_eq!(duplicate_park.message, "task 1 is listed twice in `x*1,1`");
+        assert_eq!(duplicate_park.range, (4, 5));
 
-        let zero_park = error("=x*0");
+        let zero_park = error("x*0");
         assert_eq!(zero_park.message, "task numbers start at 1");
-        assert_eq!(zero_park.range, (3, 4));
+        assert_eq!(zero_park.range, (2, 3));
 
-        let doubled_star = error("=x*1*2");
-        assert_eq!(doubled_star.message, "use one `*` list: `=x1*2,3`");
-        assert_eq!(doubled_star.range, (4, 5));
+        let doubled_star = error("x*1*2");
+        assert_eq!(doubled_star.message, "use one `*` list: `x1*2,3`");
+        assert_eq!(doubled_star.range, (3, 4));
 
         // An empty `*` group selects the remainder after explicit groups.
-        let defaulted_star = valid("=x*!2");
+        let defaulted_star = valid("x*!2");
         assert_eq!(defaulted_star.in_progress, None);
         assert!(defaulted_star.park_all);
         assert_eq!(defaulted_star.park, Vec::<u32>::new());
         assert_eq!(defaulted_star.complete, vec![2]);
-        assert_eq!(defaulted_star.park_range, Some((2, 3)));
-        assert_eq!(defaulted_star.complete_range, Some((3, 5)));
+        assert_eq!(defaulted_star.park_range, Some((1, 2)));
+        assert_eq!(defaulted_star.complete_range, Some((2, 4)));
 
-        // `=x!~2` completes every link except the explicitly dropped task 2.
-        let defaulted_bang = valid("=x!~2");
+        // `x!~2` completes every link except the explicitly dropped task 2.
+        let defaulted_bang = valid("x!~2");
         assert_eq!(defaulted_bang.in_progress, None);
         assert!(defaulted_bang.complete_all);
         assert_eq!(defaulted_bang.complete, Vec::<u32>::new());
         assert_eq!(defaulted_bang.drop, vec![2]);
 
-        let double_comma_park = error("=x*1,,2");
-        assert_eq!(double_comma_park.range, (5, 6));
+        let double_comma_park = error("x*1,,2");
+        assert_eq!(double_comma_park.range, (4, 5));
 
         // A bare `*` selects all remaining links.
-        let bare_star = valid("=x*");
+        let bare_star = valid("x*");
         assert_eq!(bare_star.in_progress, None);
         assert!(bare_star.park_all);
         assert_eq!(bare_star.park, Vec::<u32>::new());
-        assert_eq!(bare_star.park_range, Some((2, 3)));
+        assert_eq!(bare_star.park_range, Some((1, 2)));
 
         // An explicit in-progress list is an exception to park-all.
-        let numbered_star = valid("=x1*");
+        let numbered_star = valid("x1*");
         assert_eq!(numbered_star.in_progress, Some(vec![1]));
         assert!(numbered_star.park_all);
 
-        let park_comma = incomplete("=x*2,");
+        let park_comma = incomplete("x*2,");
         assert_eq!(park_comma.in_progress, None);
         assert_eq!(park_comma.park, vec![2]);
-        assert_eq!(park_comma.park_range, Some((2, 4)));
+        assert_eq!(park_comma.park_range, Some((1, 3)));
         assert_eq!(park_comma.separator, ',');
 
         // The explicit complete list is excluded from park-all.
-        let trailing_star = valid("=x1!2*");
+        let trailing_star = valid("x1!2*");
         assert_eq!(trailing_star.in_progress, Some(vec![1]));
         assert_eq!(trailing_star.complete, vec![2]);
         assert!(trailing_star.park_all);
@@ -1509,38 +1509,22 @@ mod tests {
     #[test]
     fn selection_shape_detection() {
         for token in [
-            "=x1",
-            "=X1!2",
-            "=x,",
-            "=x!",
-            "=x~",
-            "=x*",
-            "=x@",
-            "=x@2",
-            "=x0",
-            "=x1~2",
-            "=x1!2~3",
-            "=x*2",
-            "=x1*2",
-            "=x1*2!3~4",
-            "=*",
-            "=!",
-            "=*1",
-            "=!2",
-            "=*2,3",
-            "=*!2",
-            "=!2*",
-            "=*abc",
-            "=!0",
+            "x1", "x1!2", "x,", "x!", "x~", "x*", "x@", "x@2", "x0", "x1~2",
+            "x1!2~3", "x*2", "x1*2", "x1*2!3~4", "x*1", "x!2", "x*2,3", "x*!2",
+            "x!2*", "x*abc", "x!0",
         ] {
             assert!(whole_item_close_after_x(token).is_some(), "{token}");
         }
         for token in [
-            "=x", "=X", "=xx", "=xa", "=x.", "=3", "Plan =x1", "Plan =*2",
-            "a=*2", "==", "=@2",
+            "x", "xx", "xa", "x.", "x-ray", "X", "X1", "=3", "Plan x1",
+            "a x*2", "==", "=@2", "=x", "=x1", "=X1", "=*", "=!2",
         ] {
             assert!(whole_item_close_after_x(token).is_none(), "{token}");
         }
+        assert_eq!(classify_whole_item_close("x"), Some(""));
+        assert_eq!(classify_whole_item_close("x1,3!2"), Some("1,3!2"));
+        assert_eq!(classify_whole_item_close("X"), None);
+        assert_eq!(classify_whole_item_close("=x"), None);
         assert_eq!(link_close_after_x("x1,3!2"), Some("1,3!2"));
         assert_eq!(link_close_after_x("x1~2"), Some("1~2"));
         assert_eq!(link_close_after_x("x*2"), Some("*2"));
@@ -1555,65 +1539,106 @@ mod tests {
     }
 
     #[test]
-    fn lex_reports_short_alias_wildcards() {
-        // `=*`/`=!` omit `x`; an omitted list preserves wildcard intent.
-        let park = valid("=*");
+    fn retired_whole_item_spellings_name_their_bare_rewrite() {
+        for (token, rewrite) in [
+            ("=x", "x"),
+            ("=X", "x"),
+            ("=x2!1", "x2!1"),
+            ("=X2", "x2"),
+            ("=x1,3!2", "x1,3!2"),
+            ("=x@2", "x@2"),
+            ("=*", "x*"),
+            ("=!", "x!"),
+            ("=*1", "x*1"),
+            ("=!2", "x!2"),
+            ("=*!2", "x*!2"),
+            ("=*abc", "x*abc"),
+            ("=x#bugs", "x =#bugs"),
+            ("=X#bugs", "x =#bugs"),
+            ("=x#", "x =#"),
+        ] {
+            assert_eq!(
+                retired_whole_item_close_rewrite(token).as_deref(),
+                Some(rewrite),
+                "{token}"
+            );
+        }
+        for token in [
+            "x", "x1", "=xx", "=xa", "=x.", "=3", "=", "==", "==x", "==*",
+            "=@2", "Plan =x", "id=x",
+        ] {
+            assert_eq!(
+                retired_whole_item_close_rewrite(token),
+                None,
+                "{token}"
+            );
+        }
+        assert_eq!(retired_link_alias_rewrite("*").as_deref(), Some("=x*"));
+        assert_eq!(retired_link_alias_rewrite("!2").as_deref(), Some("=x!2"));
+        assert_eq!(
+            retired_link_alias_rewrite("*abc").as_deref(),
+            Some("=x*abc")
+        );
+        for suffix in ["x", "x*", "x!2", "X1", "3", ""] {
+            assert_eq!(retired_link_alias_rewrite(suffix), None, "{suffix}");
+        }
+    }
+
+    #[test]
+    fn lex_reports_wildcard_groups() {
+        // An omitted list preserves wildcard intent.
+        let park = valid("x*");
         assert_eq!(park.in_progress, None);
         assert_eq!(park.park, Vec::<u32>::new());
         assert!(park.park_all);
         assert_eq!(park.complete, Vec::<u32>::new());
         assert_eq!(park.park_range, Some((1, 2)));
 
-        let complete = valid("=!");
+        let complete = valid("x!");
         assert_eq!(complete.in_progress, None);
         assert_eq!(complete.complete, Vec::<u32>::new());
         assert!(complete.complete_all);
         assert_eq!(complete.complete_range, Some((1, 2)));
 
-        let park_two = valid("=*2");
+        let park_two = valid("x*2");
         assert_eq!(park_two.park, vec![2]);
         assert_eq!(park_two.park_range, Some((1, 3)));
 
-        let complete_two = valid("=!2");
+        let complete_two = valid("x!2");
         assert_eq!(complete_two.complete, vec![2]);
 
-        let mixed_park = valid("=*!2");
+        let mixed_park = valid("x*!2");
         assert!(mixed_park.park_all);
         assert_eq!(mixed_park.park, Vec::<u32>::new());
         assert_eq!(mixed_park.complete, vec![2]);
         assert_eq!(mixed_park.park_range, Some((1, 2)));
         assert_eq!(mixed_park.complete_range, Some((2, 4)));
 
-        let mixed_complete = valid("=!2*");
+        let mixed_complete = valid("x!2*");
         assert_eq!(mixed_complete.complete, vec![2]);
         assert!(mixed_complete.park_all);
 
-        let upper_park = valid("=X*");
-        assert!(upper_park.park_all);
-        let explicit_upper = valid("=X!");
-        assert!(explicit_upper.complete_all);
-
         // An explicit drop is excluded from the park-all remainder.
-        let park_except_drop = valid("=*~1");
+        let park_except_drop = valid("x*~1");
         assert!(park_except_drop.park_all);
         assert_eq!(park_except_drop.drop, vec![1]);
 
         // Two empty outcome groups compete, independent of group order.
-        let conflict = error("=*!");
+        let conflict = error("x*!");
         assert_eq!(
             conflict.message,
-            "`=*!` has competing park-all and complete-all groups; add task numbers to at least one group"
+            "`x*!` has competing park-all and complete-all groups; add task numbers to at least one group"
         );
         assert_eq!(conflict.range, (2, 3));
-        let reversed = error("=!*");
+        let reversed = error("x!*");
         assert_eq!(reversed.range, (2, 3));
 
-        // Malformed aliases claim close syntax, never task creation.
-        let bad = error("=*abc");
-        assert!(bad.message.starts_with("`=*abc` is not a task list:"));
-        let zero = error("=!0");
+        // Malformed wildcard lists claim close syntax, never task creation.
+        let bad = error("x*abc");
+        assert!(bad.message.starts_with("`x*abc` is not a task list:"));
+        let zero = error("x!0");
         assert_eq!(zero.message, "task numbers start at 1");
-        let doubled = error("=**2");
-        assert_eq!(doubled.message, "use one `*` list: `=x1*2,3`");
+        let doubled = error("x**2");
+        assert_eq!(doubled.message, "use one `*` list: `x1*2,3`");
     }
 }

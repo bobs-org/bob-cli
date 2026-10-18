@@ -799,16 +799,15 @@ fn editor_agrees_with_execution_for_resolved_captures() {
         "paste the failing output % #",
         "paste the failing output # %",
         "Finish it @cash^goog-exit+",
-        "=x",
-        "=X",
-        "=x1",
-        "=x1,3",
-        "=x3,1",
-        "=x!2",
-        "=x1,3!2",
-        "=X1!2",
-        "=x0",
-        "=x0!2",
+        "x",
+        "x1",
+        "x1,3",
+        "x3,1",
+        "x!2",
+        "x1,3!2",
+        "x1!2",
+        "x0",
+        "x0!2",
         "@r:id=x",
         "@r:id=x1!2",
         "^r:id=x",
@@ -995,7 +994,7 @@ fn editor_agrees_with_execution_for_resolved_captures() {
 #[test]
 fn editor_reports_pomodoro_close_modes_spans_specs_and_diagnostics() {
     // Exact whole-item closes: mode, span, and additive spec.
-    for raw in ["=x", "=X", "  =x  "] {
+    for raw in ["x", "  x  "] {
         let parse = editor(raw);
         assert_eq!(parse.mode, EditorMode::PomodoroClose, "{raw}");
         assert_eq!(parse.body, raw.trim(), "{raw}");
@@ -1004,8 +1003,8 @@ fn editor_reports_pomodoro_close_modes_spans_specs_and_diagnostics() {
         assert_eq!(close.raw, raw.trim(), "{raw}");
         assert!(
             ranges(&parse).contains(&(
-                raw.find('=').expect("="),
-                raw.find('=').expect("=") + 2,
+                raw.find('x').expect("x"),
+                raw.find('x').expect("x") + 1,
                 SpanKind::PomodoroClose
             )),
             "{raw}"
@@ -1037,10 +1036,10 @@ fn editor_reports_pomodoro_close_modes_spans_specs_and_diagnostics() {
     // Selection-bearing closes report the additive spec and the list
     // spans.
     for (raw, in_progress, complete) in [
-        ("=x1", Some(vec![1u32]), Vec::new()),
-        ("=x1,3!2", Some(vec![1u32, 3]), vec![2]),
-        ("=x!2", None, vec![2]),
-        ("=x0", Some(Vec::new()), Vec::new()),
+        ("x1", Some(vec![1u32]), Vec::new()),
+        ("x1,3!2", Some(vec![1u32, 3]), vec![2]),
+        ("x!2", None, vec![2]),
+        ("x0", Some(Vec::new()), Vec::new()),
     ] {
         let parse = editor(raw);
         assert_eq!(parse.mode, EditorMode::PomodoroClose, "{raw}");
@@ -1050,24 +1049,24 @@ fn editor_reports_pomodoro_close_modes_spans_specs_and_diagnostics() {
         assert_eq!(close.complete, complete, "{raw}");
         assert!(parse.diagnostics.is_empty(), "{raw}");
     }
-    let selected = editor("=x1,3!2");
+    let selected = editor("x1,3!2");
     assert_eq!(
         ranges(&selected),
         vec![
-            (0, 2, SpanKind::PomodoroClose),
-            (2, 5, SpanKind::PomodoroCloseInProgress),
-            (5, 7, SpanKind::PomodoroCloseComplete),
+            (0, 1, SpanKind::PomodoroClose),
+            (1, 4, SpanKind::PomodoroCloseInProgress),
+            (4, 6, SpanKind::PomodoroCloseComplete),
         ],
-        "=x1,3!2"
+        "x1,3!2"
     );
     // A drop list reports its spec and a `pomodoro_close_drop` span, in
     // either `!`/`~` order.
     for (raw, in_progress, complete, drop) in [
-        ("=x~2", None, Vec::new(), vec![2u32]),
-        ("=x1~2", Some(vec![1u32]), Vec::new(), vec![2]),
-        ("=x1!2~3", Some(vec![1u32]), vec![2], vec![3]),
-        ("=x1~3!2", Some(vec![1u32]), vec![2], vec![3]),
-        ("=x!2~3", None, vec![2], vec![3]),
+        ("x~2", None, Vec::new(), vec![2u32]),
+        ("x1~2", Some(vec![1u32]), Vec::new(), vec![2]),
+        ("x1!2~3", Some(vec![1u32]), vec![2], vec![3]),
+        ("x1~3!2", Some(vec![1u32]), vec![2], vec![3]),
+        ("x!2~3", None, vec![2], vec![3]),
     ] {
         let parse = editor(raw);
         assert_eq!(parse.mode, EditorMode::PomodoroClose, "{raw}");
@@ -1078,87 +1077,87 @@ fn editor_reports_pomodoro_close_modes_spans_specs_and_diagnostics() {
         assert_eq!(close.drop, drop, "{raw}");
         assert!(parse.diagnostics.is_empty(), "{raw}");
     }
-    let dropped = editor("=x1,3!2~4");
+    let dropped = editor("x1,3!2~4");
     assert_eq!(
         ranges(&dropped),
         vec![
-            (0, 2, SpanKind::PomodoroClose),
-            (2, 5, SpanKind::PomodoroCloseInProgress),
-            (5, 7, SpanKind::PomodoroCloseComplete),
-            (7, 9, SpanKind::PomodoroCloseDrop),
+            (0, 1, SpanKind::PomodoroClose),
+            (1, 4, SpanKind::PomodoroCloseInProgress),
+            (4, 6, SpanKind::PomodoroCloseComplete),
+            (6, 8, SpanKind::PomodoroCloseDrop),
         ],
-        "=x1,3!2~4"
+        "x1,3!2~4"
     );
-    let dropped_first = editor("=x1~4!2");
+    let dropped_first = editor("x1~4!2");
     assert_eq!(
         ranges(&dropped_first),
         vec![
-            (0, 2, SpanKind::PomodoroClose),
-            (2, 3, SpanKind::PomodoroCloseInProgress),
-            (3, 5, SpanKind::PomodoroCloseDrop),
-            (5, 7, SpanKind::PomodoroCloseComplete),
+            (0, 1, SpanKind::PomodoroClose),
+            (1, 2, SpanKind::PomodoroCloseInProgress),
+            (2, 4, SpanKind::PomodoroCloseDrop),
+            (4, 6, SpanKind::PomodoroCloseComplete),
         ],
-        "=x1~4!2"
+        "x1~4!2"
     );
     // A dangling `~` is an editing state with the partial spec.
-    let pending_drop = editor("=x1~");
-    assert_eq!(pending_drop.mode, EditorMode::Incomplete, "=x1~");
-    assert_eq!(pending_drop.needs, vec![Need::PomodoroCloseTask], "=x1~");
+    let pending_drop = editor("x1~");
+    assert_eq!(pending_drop.mode, EditorMode::Incomplete, "x1~");
+    assert_eq!(pending_drop.needs, vec![Need::PomodoroCloseTask], "x1~");
     let partial_drop =
         pending_drop.pomodoro_close.as_ref().expect("partial spec");
-    assert_eq!(partial_drop.in_progress, Some(vec![1]), "=x1~");
-    assert_eq!(partial_drop.drop, Vec::<u32>::new(), "=x1~");
+    assert_eq!(partial_drop.in_progress, Some(vec![1]), "x1~");
+    assert_eq!(partial_drop.drop, Vec::<u32>::new(), "x1~");
     assert_eq!(
         ranges(&pending_drop),
         vec![
-            (0, 2, SpanKind::PomodoroClose),
-            (2, 3, SpanKind::PomodoroCloseInProgress),
-            (3, 4, SpanKind::InteractivePlaceholder),
+            (0, 1, SpanKind::PomodoroClose),
+            (1, 2, SpanKind::PomodoroCloseInProgress),
+            (2, 3, SpanKind::InteractivePlaceholder),
         ],
-        "=x1~"
+        "x1~"
     );
-    assert!(pending_drop.diagnostics.is_empty(), "=x1~");
+    assert!(pending_drop.diagnostics.is_empty(), "x1~");
     // A dangling separator is an editing state with the partial spec.
-    let pending = editor("=x1,");
-    assert_eq!(pending.mode, EditorMode::Incomplete, "=x1,");
-    assert_eq!(pending.needs, vec![Need::PomodoroCloseTask], "=x1,");
+    let pending = editor("x1,");
+    assert_eq!(pending.mode, EditorMode::Incomplete, "x1,");
+    assert_eq!(pending.needs, vec![Need::PomodoroCloseTask], "x1,");
     let partial = pending.pomodoro_close.as_ref().expect("partial spec");
-    assert_eq!(partial.in_progress, Some(vec![1]), "=x1,");
+    assert_eq!(partial.in_progress, Some(vec![1]), "x1,");
     assert_eq!(
         ranges(&pending),
         vec![
-            (0, 2, SpanKind::PomodoroClose),
-            (2, 3, SpanKind::PomodoroCloseInProgress),
-            (3, 4, SpanKind::InteractivePlaceholder),
+            (0, 1, SpanKind::PomodoroClose),
+            (1, 2, SpanKind::PomodoroCloseInProgress),
+            (2, 3, SpanKind::InteractivePlaceholder),
         ],
-        "=x1,"
+        "x1,"
     );
-    assert!(pending.diagnostics.is_empty(), "=x1,");
+    assert!(pending.diagnostics.is_empty(), "x1,");
     // A malformed selection reports `invalid_pomodoro_close` with no spec.
-    let duplicate = editor("=x1,1");
-    assert_eq!(duplicate.mode, EditorMode::PomodoroClose, "=x1,1");
-    assert_eq!(codes(&duplicate), vec!["invalid_pomodoro_close"], "=x1,1");
-    assert_eq!(duplicate.diagnostics[0].range, Some((4, 5)), "=x1,1");
-    assert!(duplicate.pomodoro_close.is_none(), "=x1,1");
+    let duplicate = editor("x1,1");
+    assert_eq!(duplicate.mode, EditorMode::PomodoroClose, "x1,1");
+    assert_eq!(codes(&duplicate), vec!["invalid_pomodoro_close"], "x1,1");
+    assert_eq!(duplicate.diagnostics[0].range, Some((3, 4)), "x1,1");
+    assert!(duplicate.pomodoro_close.is_none(), "x1,1");
     // An inline entry on the close line is a valid close with its log.
-    let shape = editor("=x more");
-    assert_eq!(shape.mode, EditorMode::PomodoroClose, "=x more");
-    assert!(shape.diagnostics.is_empty(), "=x more");
-    assert_eq!(shape.body, "=x", "=x more");
-    let spec = shape.pomodoro_close.expect("=x more spec");
-    assert_eq!(spec.raw, "=x", "=x more");
-    assert_eq!(spec.log.len(), 1, "=x more");
-    assert_eq!(spec.log[0].index, Some(1), "=x more");
-    assert_eq!(spec.log[0].text, "more", "=x more");
+    let shape = editor("x more");
+    assert_eq!(shape.mode, EditorMode::PomodoroClose, "x more");
+    assert!(shape.diagnostics.is_empty(), "x more");
+    assert_eq!(shape.body, "x", "x more");
+    let spec = shape.pomodoro_close.expect("x more spec");
+    assert_eq!(spec.raw, "x", "x more");
+    assert_eq!(spec.log.len(), 1, "x more");
+    assert_eq!(spec.log[0].index, Some(1), "x more");
+    assert_eq!(spec.log[0].text, "more", "x more");
     // An unnumbered bullet is a valid close with a positional entry: no
     // index span and no diagnostics.
-    let child = editor("=x\n- child");
-    assert_eq!(child.mode, EditorMode::PomodoroClose, "=x child");
-    assert!(child.diagnostics.is_empty(), "=x child");
-    let child_spec = child.pomodoro_close.expect("=x child spec");
-    assert_eq!(child_spec.log.len(), 1, "=x child");
-    assert_eq!(child_spec.log[0].index, None, "=x child");
-    assert_eq!(child_spec.log[0].text, "child", "=x child");
+    let child = editor("x\n- child");
+    assert_eq!(child.mode, EditorMode::PomodoroClose, "x child");
+    assert!(child.diagnostics.is_empty(), "x child");
+    let child_spec = child.pomodoro_close.expect("x child spec");
+    assert_eq!(child_spec.log.len(), 1, "x child");
+    assert_eq!(child_spec.log[0].index, None, "x child");
+    assert_eq!(child_spec.log[0].text, "child", "x child");
     let named = editor("@r:id#n=x");
     assert_eq!(codes(&named), vec!["invalid_pomodoro_close"], "@r:id#n=x");
     assert_eq!(named.diagnostics[0].range, Some((5, 7)), "@r:id#n=x");
@@ -1182,10 +1181,11 @@ fn editor_reports_pomodoro_close_modes_spans_specs_and_diagnostics() {
         "Text @r:id=x s:2"
     );
     // Prose lookalikes stay ordinary tasks with no diagnostics.
-    // `=3` is now a whole-item start, not prose, and `=x!` is a valid
+    // `=3` is now a whole-item start, not prose, and `x!` is a valid
     // wildcard close, not prose.
     for raw in [
-        "=xx", "=xa", "== foo", "==foo", "Plan =x", "= foo", "=- foo",
+        "=xx", "=xa", "== foo", "==foo", "Plan x", "= foo", "=- foo", "xx",
+        "xa", "x-ray", "X", "X2",
     ] {
         let parse = editor(raw);
         assert_eq!(parse.mode, EditorMode::Task, "{raw}");
@@ -1193,14 +1193,14 @@ fn editor_reports_pomodoro_close_modes_spans_specs_and_diagnostics() {
         assert!(parse.pomodoro_close.is_none(), "{raw}");
         assert!(parse.pomodoro_start.is_none(), "{raw}");
     }
-    let defaulted = editor("=x!");
-    assert_eq!(defaulted.mode, EditorMode::PomodoroClose, "=x!");
-    assert!(defaulted.needs.is_empty(), "=x!");
-    assert!(defaulted.diagnostics.is_empty(), "=x!");
+    let defaulted = editor("x!");
+    assert_eq!(defaulted.mode, EditorMode::PomodoroClose, "x!");
+    assert!(defaulted.needs.is_empty(), "x!");
+    assert!(defaulted.diagnostics.is_empty(), "x!");
     assert_eq!(
         defaulted.pomodoro_close.as_ref().expect("spec").complete,
         Vec::<u32>::new(),
-        "=x!"
+        "x!"
     );
     assert!(
         defaulted
@@ -1209,12 +1209,12 @@ fn editor_reports_pomodoro_close_modes_spans_specs_and_diagnostics() {
             .expect("spec")
             .complete_all
     );
-    let dangling = editor("=x~");
-    assert_eq!(dangling.mode, EditorMode::Incomplete, "=x~");
-    assert_eq!(dangling.needs, vec![Need::PomodoroCloseTask], "=x~");
-    assert!(dangling.diagnostics.is_empty(), "=x~");
+    let dangling = editor("x~");
+    assert_eq!(dangling.mode, EditorMode::Incomplete, "x~");
+    assert_eq!(dangling.needs, vec![Need::PomodoroCloseTask], "x~");
+    assert!(dangling.diagnostics.is_empty(), "x~");
     // A multi-item draft mixes an adjustment, a close, and a task.
-    let mixed = parse_for_editor("+5\n\n=x\n\nCall bank @Cash+");
+    let mixed = parse_for_editor("+5\n\nx\n\nCall bank @Cash+");
     assert_eq!(mixed.items.len(), 3, "mixed");
     assert_eq!(mixed.items[0].mode, EditorMode::PomodoroAdjust, "mixed");
     assert_eq!(mixed.items[1].mode, EditorMode::PomodoroClose, "mixed");
@@ -1518,34 +1518,30 @@ fn editor_reports_named_pomodoro_start_modes_spans_and_diagnostics() {
     );
     assert_eq!(overflow.diagnostics[0].range, Some((0, 24)), "overflow");
     assert!(overflow.pomodoro_start.is_none(), "overflow");
-    // `=x#…` is a close near miss: the `=x` span plus an
+    // `x#…` is a close near miss: the `x` span plus an
     // `invalid_pomodoro_close` diagnostic over `#name`.
-    let close_hash = editor("=x#bugs");
-    assert_eq!(close_hash.mode, EditorMode::PomodoroClose, "=x#bugs");
-    assert_eq!(
-        codes(&close_hash),
-        vec!["invalid_pomodoro_close"],
-        "=x#bugs"
-    );
+    let close_hash = editor("x#bugs");
+    assert_eq!(close_hash.mode, EditorMode::PomodoroClose, "x#bugs");
+    assert_eq!(codes(&close_hash), vec!["invalid_pomodoro_close"], "x#bugs");
     assert_eq!(
         close_hash.diagnostics[0].message,
-        "`=x` always closes the running Pomodoro; remove `#bugs`, or write `=x =#bugs` to close it and then start that Pomodoro; `==#bugs` swaps it in without closing the running session",
-        "=x#bugs"
+        "`x` always closes the running Pomodoro; remove `#bugs`, or write `x =#bugs` to close it and then start that Pomodoro; `==#bugs` swaps it in without closing the running session",
+        "x#bugs"
     );
-    assert_eq!(close_hash.diagnostics[0].range, Some((2, 7)), "=x#bugs");
+    assert_eq!(close_hash.diagnostics[0].range, Some((1, 6)), "x#bugs");
     assert_eq!(
         ranges(&close_hash),
-        vec![(0, 2, SpanKind::PomodoroClose)],
-        "=x#bugs"
+        vec![(0, 1, SpanKind::PomodoroClose)],
+        "x#bugs"
     );
-    assert!(close_hash.pomodoro_close.is_none(), "=x#bugs");
-    let bare_hash = editor("=x#");
+    assert!(close_hash.pomodoro_close.is_none(), "x#bugs");
+    let bare_hash = editor("x#");
     assert_eq!(
         bare_hash.diagnostics[0].message,
-        "`=x` always closes the running Pomodoro; remove `#`",
-        "=x#"
+        "`x` always closes the running Pomodoro; remove `#`",
+        "x#"
     );
-    assert_eq!(bare_hash.diagnostics[0].range, Some((2, 3)), "=x#");
+    assert_eq!(bare_hash.diagnostics[0].range, Some((1, 2)), "x#");
     // A `@@` declaration never applies to incomplete named starts.
     let declared = parse_for_editor("@@work\nFirst task\n\n=#\n");
     assert_eq!(declared.items[1].mode, EditorMode::Incomplete);

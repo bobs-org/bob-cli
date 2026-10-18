@@ -1,4 +1,4 @@
-//! Pomodoro close `=x<N>!<M>` selection tests on the worked example.
+//! Pomodoro close `x<N>!<M>` selection tests on the worked example.
 
 use super::pomodoro_close::{
     close_worked_vault, run_close_expect_error, run_close_json,
@@ -9,33 +9,6 @@ use std::path::PathBuf;
 
 fn close_entry_range(line: &str) -> bool {
     line.contains("(**0920-0940** [t:: 20m])")
-}
-
-#[test]
-fn bare_x_selection_writes_the_same_ledger_as_legacy_selection() {
-    let (_bare_temp, bare_vault, bare_day) =
-        close_worked_vault("bob-cli-bare-close-selection");
-    let (_legacy_temp, legacy_vault, legacy_day) =
-        close_worked_vault("bob-cli-legacy-close-selection");
-    let now = "2026-09-28 09:37:00";
-    let bare = run_close_json(&bare_vault, &bare_day, now, &["x1!2"]);
-    let legacy = run_close_json(&legacy_vault, &legacy_day, now, &["=x1!2"]);
-
-    assert_eq!(bare["pomodoro_close"]["raw"], "x1!2");
-    assert_eq!(legacy["pomodoro_close"]["raw"], "=x1!2");
-    assert_eq!(
-        bare["pomodoro_close"]["in_progress"],
-        serde_json::json!([1])
-    );
-    assert_eq!(bare["pomodoro_close"]["complete"], serde_json::json!([2]));
-    assert_eq!(
-        fs::read_to_string(&bare_day).expect("bare day"),
-        fs::read_to_string(&legacy_day).expect("legacy day")
-    );
-    assert_eq!(
-        fs::read_to_string(bare_vault.join("bob.md")).expect("bare tasks"),
-        fs::read_to_string(legacy_vault.join("bob.md")).expect("legacy tasks")
-    );
 }
 
 fn worked_prefix() -> &'static str {
@@ -54,7 +27,7 @@ fn worked_suffix() -> &'static str {
 fn plain_bob_work_log() -> &'static str {
     concat!(
         "\t- \u{1F6E0}\u{FE0F} **WORK LOG**\n",
-        "\t\t- *2026-09-28* — Designed the `=x` grammar\n",
+        "\t\t- *2026-09-28* — Designed the `x` grammar\n",
         "\t\t\t- chose `x` for done\n",
         "\t\t- *2026-09-28* — Wrote the plan\n",
     )
@@ -75,12 +48,12 @@ fn plain_sase_after() -> String {
 
 #[test]
 fn capture_pomodoro_close_selection_defer_rest() {
-    // `=x2`: task 1 deferred (unlisted), task 2 in progress (listed).
+    // `x2`: task 1 deferred (unlisted), task 2 in progress (listed).
     let (_temp, vault, day_file) = close_worked_vault("bob-cli-close-sel-2");
     let json =
-        run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["=x2"]);
+        run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["x2"]);
     let close = &json["pomodoro_close"];
-    assert_eq!(close["raw"], "=x2");
+    assert_eq!(close["raw"], "x2");
     assert_eq!(close["in_progress"], serde_json::json!([2]));
     assert_eq!(close["complete"], serde_json::json!([]));
     assert_eq!(
@@ -132,7 +105,7 @@ fn capture_pomodoro_close_selection_defer_rest() {
             concat!(
                 "{}",
                 "- [x] (**0920-0940** [t:: 20m]) — CAPTURE\n",
-                "\t\t- Designed the `=x` grammar\n",
+                "\t\t- Designed the `x` grammar\n",
                 "\t\t\t- chose `x` for done\n",
                 "\t\t- Wrote the plan\n",
                 "\t- \u{1F345} [[bob#^web-capture]]\n",
@@ -156,7 +129,7 @@ fn capture_pomodoro_close_selection_defer_rest() {
             concat!(
                 "## Tasks\n",
                 "\n",
-                "- [*] #task Add support for `=x` syntax! [created::2026-09-26] ^capture-stop\n",
+                "- [*] #task Add support for `x` syntax! [created::2026-09-26] ^capture-stop\n",
                 "{}",
                 "- [/] #task Add capture support for web URLs! [fresh:: 2026-09-28] [created::2026-09-21] ^web-capture\n",
                 "- [ ] #task Plain ready task [created::2026-09-20] ^ready\n",
@@ -172,12 +145,12 @@ fn capture_pomodoro_close_selection_defer_rest() {
 
 #[test]
 fn capture_pomodoro_close_selection_in_progress_and_complete() {
-    // `=x1!2`: task 1 in progress (listed), task 2 complete (listed).
+    // `x1!2`: task 1 in progress (listed), task 2 complete (listed).
     let (_temp, vault, day_file) = close_worked_vault("bob-cli-close-sel-12");
     let json =
-        run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["=x1!2"]);
+        run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["x1!2"]);
     let close = &json["pomodoro_close"];
-    assert_eq!(close["raw"], "=x1!2");
+    assert_eq!(close["raw"], "x1!2");
     assert_eq!(close["in_progress"], serde_json::json!([1]));
     assert_eq!(close["complete"], serde_json::json!([2]));
     assert_eq!(
@@ -229,7 +202,7 @@ fn capture_pomodoro_close_selection_in_progress_and_complete() {
                 "{}",
                 "- [x] (**0920-0940** [t:: 20m]) — CAPTURE\n",
                 "\t- \u{1F345} [[bob#^capture-stop]]\n",
-                "\t\t- Designed the `=x` grammar\n",
+                "\t\t- Designed the `x` grammar\n",
                 "\t\t\t- chose `x` for done\n",
                 "\t\t- Wrote the plan\n",
                 "\t- ~~[[bob#^web-capture]]~~\n",
@@ -251,7 +224,7 @@ fn capture_pomodoro_close_selection_in_progress_and_complete() {
             concat!(
                 "## Tasks\n",
                 "\n",
-                "- [/] #task Add support for `=x` syntax! [fresh:: 2026-09-28] [created::2026-09-26] ^capture-stop\n",
+                "- [/] #task Add support for `x` syntax! [fresh:: 2026-09-28] [created::2026-09-26] ^capture-stop\n",
                 "{}",
                 "- [x] #task Add capture support for web URLs! [created::2026-09-21]  [completion:: 2026-09-28] ^web-capture\n",
                 "- [ ] #task Plain ready task [created::2026-09-20] ^ready\n",
@@ -267,12 +240,12 @@ fn capture_pomodoro_close_selection_in_progress_and_complete() {
 
 #[test]
 fn capture_pomodoro_close_selection_complete_listed() {
-    // `=x!1`: task 1 complete (listed), task 2 deferred (ledger).
+    // `x!1`: task 1 complete (listed), task 2 deferred (ledger).
     let (_temp, vault, day_file) = close_worked_vault("bob-cli-close-sel-c1");
     let json =
-        run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["=x!1"]);
+        run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["x!1"]);
     let close = &json["pomodoro_close"];
-    assert_eq!(close["raw"], "=x!1");
+    assert_eq!(close["raw"], "x!1");
     assert!(close["in_progress"].is_null());
     assert_eq!(close["complete"], serde_json::json!([1]));
     assert_eq!(
@@ -321,7 +294,7 @@ fn capture_pomodoro_close_selection_complete_listed() {
                 "{}",
                 "- [x] (**0920-0940** [t:: 20m]) — CAPTURE\n",
                 "\t- ~~[[bob#^capture-stop]]~~\n",
-                "\t\t- Designed the `=x` grammar\n",
+                "\t\t- Designed the `x` grammar\n",
                 "\t\t\t- chose `x` for done\n",
                 "\t\t- Wrote the plan\n",
                 "\t- ~~[[sase#^axe-restart]]~~\n",
@@ -342,7 +315,7 @@ fn capture_pomodoro_close_selection_complete_listed() {
             concat!(
                 "## Tasks\n",
                 "\n",
-                "- [x] #task Add support for `=x` syntax! [created::2026-09-26]  [completion:: 2026-09-28] ^capture-stop\n",
+                "- [x] #task Add support for `x` syntax! [created::2026-09-26]  [completion:: 2026-09-28] ^capture-stop\n",
                 "{}",
                 "- [*] #task Add capture support for web URLs! [created::2026-09-21] ^web-capture\n",
                 "- [ ] #task Plain ready task [created::2026-09-20] ^ready\n",
@@ -358,12 +331,12 @@ fn capture_pomodoro_close_selection_complete_listed() {
 
 #[test]
 fn capture_pomodoro_close_selection_defer_all() {
-    // `=x0`: every numbered link deferred (unlisted).
+    // `x0`: every numbered link deferred (unlisted).
     let (_temp, vault, day_file) = close_worked_vault("bob-cli-close-sel-0");
     let json =
-        run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["=x0"]);
+        run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["x0"]);
     let close = &json["pomodoro_close"];
-    assert_eq!(close["raw"], "=x0");
+    assert_eq!(close["raw"], "x0");
     assert_eq!(close["in_progress"], serde_json::json!([]));
     assert_eq!(close["complete"], serde_json::json!([]));
     assert_eq!(
@@ -409,7 +382,7 @@ fn capture_pomodoro_close_selection_defer_all() {
             concat!(
                 "{}",
                 "- [x] (**0920-0940** [t:: 20m]) — CAPTURE\n",
-                "\t\t- Designed the `=x` grammar\n",
+                "\t\t- Designed the `x` grammar\n",
                 "\t\t\t- chose `x` for done\n",
                 "\t\t- Wrote the plan\n",
                 "\t- ~~[[sase#^axe-restart]]~~\n",
@@ -431,7 +404,7 @@ fn capture_pomodoro_close_selection_defer_all() {
             concat!(
                 "## Tasks\n",
                 "\n",
-                "- [*] #task Add support for `=x` syntax! [created::2026-09-26] ^capture-stop\n",
+                "- [*] #task Add support for `x` syntax! [created::2026-09-26] ^capture-stop\n",
                 "{}",
                 "- [*] #task Add capture support for web URLs! [created::2026-09-21] ^web-capture\n",
                 "- [ ] #task Plain ready task [created::2026-09-20] ^ready\n",
@@ -447,13 +420,12 @@ fn capture_pomodoro_close_selection_defer_all() {
 
 #[test]
 fn capture_pomodoro_close_selection_listed_matches_ledger() {
-    // `=x1` equals plain `=x` on this fixture: task 2 was already deferred.
+    // `x1` equals plain `x` on this fixture: task 2 was already deferred.
     let (_temp, vault, day_file) = close_worked_vault("bob-cli-close-sel-1");
-    let one =
-        run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["=x1"]);
+    let one = run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["x1"]);
     let (_temp, plain_vault, plain_day) =
         close_worked_vault("bob-cli-close-sel-1-plain");
-    run_close_json(&plain_vault, &plain_day, "2026-09-28 09:37:00", &["=x"]);
+    run_close_json(&plain_vault, &plain_day, "2026-09-28 09:37:00", &["x"]);
     assert_eq!(
         fs::read_to_string(&day_file).expect("read day"),
         fs::read_to_string(&plain_day).expect("plain day")
@@ -467,7 +439,7 @@ fn capture_pomodoro_close_selection_listed_matches_ledger() {
         fs::read_to_string(plain_vault.join("sase.md")).expect("plain sase")
     );
     let close = &one["pomodoro_close"];
-    assert_eq!(close["raw"], "=x1");
+    assert_eq!(close["raw"], "x1");
     assert_eq!(close["in_progress"], serde_json::json!([1]));
     assert_eq!(close["tasks"][0]["index"], 1);
     assert_eq!(close["task_links"][0]["outcome"], "in_progress");
@@ -475,12 +447,12 @@ fn capture_pomodoro_close_selection_listed_matches_ledger() {
     assert_eq!(close["task_links"][1]["outcome"], "deferred");
     assert_eq!(close["task_links"][1]["source"], "unlisted");
 
-    // `=x1,2` un-defers task 2: both links worked, both tasks started.
+    // `x1,2` un-defers task 2: both links worked, both tasks started.
     let (_temp, vault, day_file) = close_worked_vault("bob-cli-close-sel-12b");
     let json =
-        run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["=x1,2"]);
+        run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["x1,2"]);
     let close = &json["pomodoro_close"];
-    assert_eq!(close["raw"], "=x1,2");
+    assert_eq!(close["raw"], "x1,2");
     assert_eq!(close["in_progress"], serde_json::json!([1, 2]));
     assert_eq!(
         close["task_links"],
@@ -527,7 +499,7 @@ fn capture_pomodoro_close_selection_listed_matches_ledger() {
                 "{}",
                 "- [x] (**0920-0940** [t:: 20m]) — CAPTURE\n",
                 "\t- \u{1F345} [[bob#^capture-stop]]\n",
-                "\t\t- Designed the `=x` grammar\n",
+                "\t\t- Designed the `x` grammar\n",
                 "\t\t\t- chose `x` for done\n",
                 "\t\t- Wrote the plan\n",
                 "\t- \u{1F345} [[bob#^web-capture]]\n",
@@ -550,7 +522,7 @@ fn capture_pomodoro_close_selection_listed_matches_ledger() {
             concat!(
                 "## Tasks\n",
                 "\n",
-                "- [/] #task Add support for `=x` syntax! [fresh:: 2026-09-28] [created::2026-09-26] ^capture-stop\n",
+                "- [/] #task Add support for `x` syntax! [fresh:: 2026-09-28] [created::2026-09-26] ^capture-stop\n",
                 "{}",
                 "- [/] #task Add capture support for web URLs! [fresh:: 2026-09-28] [created::2026-09-21] ^web-capture\n",
                 "- [ ] #task Plain ready task [created::2026-09-20] ^ready\n",
@@ -566,12 +538,11 @@ fn capture_pomodoro_close_selection_listed_matches_ledger() {
 
 #[test]
 fn capture_pomodoro_close_plain_reports_numbered_lineup() {
-    // Plain `=x` keeps its files and reports the ledger lineup.
+    // Plain `x` keeps its files and reports the ledger lineup.
     let (_temp, vault, day_file) = close_worked_vault("bob-cli-close-sel-x");
-    let json =
-        run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["=x"]);
+    let json = run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["x"]);
     let close = &json["pomodoro_close"];
-    assert_eq!(close["raw"], "=x");
+    assert_eq!(close["raw"], "x");
     assert!(close["in_progress"].is_null());
     assert_eq!(close["complete"], serde_json::json!([]));
     assert_eq!(close["task_links"].as_array().unwrap().len(), 2);
@@ -587,7 +558,7 @@ fn capture_pomodoro_close_plain_reports_numbered_lineup() {
 
 #[test]
 fn capture_pomodoro_close_selection_human_output() {
-    // `=x1!2` human rows carry a numbered index column and the singular
+    // `x1!2` human rows carry a numbered index column and the singular
     // `carries 1 link`; dry-run prints the same rows with `would close`.
     let (_temp, vault, day_file) = close_worked_vault("bob-cli-close-sel-hu");
     let output = bob_command()
@@ -595,7 +566,7 @@ fn capture_pomodoro_close_selection_human_output() {
         .arg("-b")
         .arg(&vault)
         .arg("--")
-        .arg("=x1!2")
+        .arg("x1!2")
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_NOW", "2026-09-28 09:37:00")
         .output()
@@ -608,8 +579,8 @@ fn capture_pomodoro_close_selection_human_output() {
         lines,
         vec![
             "\u{2713} closed CAPTURE 0920-0950 \u{2192} 0920-0940 (20m, \u{2212}10m) · 2026/20260928.md line 5",
-            "  1 [*] \u{2192} [/] Add support for `=x` syntax! bob.md ^capture-stop +2 Work Log",
-            "      *2026-09-28* — Designed the `=x` grammar",
+            "  1 [*] \u{2192} [/] Add support for `x` syntax! bob.md ^capture-stop +2 Work Log",
+            "      *2026-09-28* — Designed the `x` grammar",
             "      *2026-09-28* — Wrote the plan",
             "  2 [*] \u{2192} [x] Add capture support for web URLs! bob.md ^web-capture",
             "    [x] Restart axe sase.md ^axe-restart +1 Work Log",
@@ -626,7 +597,7 @@ fn capture_pomodoro_close_selection_human_output() {
         .arg(&vault)
         .arg("--dry-run")
         .arg("--")
-        .arg("=x1!2")
+        .arg("x1!2")
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_NOW", "2026-09-28 09:37:00")
         .output()
@@ -637,7 +608,7 @@ fn capture_pomodoro_close_selection_human_output() {
     assert!(out.contains("would close CAPTURE 0920-0950"), "{out}");
     assert!(
         out.contains(
-            "  1 [*] \u{2192} [/] Add support for `=x` syntax! bob.md ^capture-stop +2 Work Log"
+            "  1 [*] \u{2192} [/] Add support for `x` syntax! bob.md ^capture-stop +2 Work Log"
         ),
         "{out}"
     );
@@ -667,7 +638,7 @@ fn capture_pomodoro_close_selection_dry_run_matches_real_run() {
         .arg("json")
         .arg("--dry-run")
         .arg("--")
-        .arg("=*!2")
+        .arg("x*!2")
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_NOW", "2026-09-28 09:37:00")
         .output()
@@ -686,7 +657,7 @@ fn capture_pomodoro_close_selection_dry_run_matches_real_run() {
         before_sase
     );
     let mut real_json =
-        run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["=*!2"]);
+        run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["x*!2"]);
     assert_eq!(real_json["pomodoro_close"]["park_all"], true);
     assert_eq!(
         real_json["pomodoro_close"]["park"],
@@ -787,7 +758,7 @@ fn capture_pomodoro_close_selection_link_forms() {
             concat!(
                 "{}",
                 "- [x] (**0920-0940** [t:: 20m]) — CAPTURE\n",
-                "\t\t- Designed the `=x` grammar\n",
+                "\t\t- Designed the `x` grammar\n",
                 "\t\t\t- chose `x` for done\n",
                 "\t\t- Wrote the plan\n",
                 "\t- ~~[[sase#^axe-restart]]~~\n",
@@ -809,7 +780,7 @@ fn capture_pomodoro_close_selection_link_forms() {
         "- [/] #task Plain ready task [fresh:: 2026-09-28] [created::2026-09-20] ^ready\n"
     ));
     assert!(bob_after.contains(
-        "- [*] #task Add support for `=x` syntax! [created::2026-09-26] ^capture-stop\n"
+        "- [*] #task Add support for `x` syntax! [created::2026-09-26] ^capture-stop\n"
     ));
     assert!(bob_after.contains(
         "- [*] #task Add capture support for web URLs! [created::2026-09-21] ^web-capture\n"
@@ -820,7 +791,7 @@ fn capture_pomodoro_close_selection_link_forms() {
     );
 
     // `^bob:capture-stop=x!1`: already current, completing it matches the
-    // `=x!1` post-images byte for byte.
+    // `x!1` post-images byte for byte.
     let (_temp, vault, day_file) = close_worked_vault("bob-cli-close-sel-lc");
     let json = run_close_json(
         &vault,
@@ -836,7 +807,7 @@ fn capture_pomodoro_close_selection_link_forms() {
     let sase_after = fs::read_to_string(vault.join("sase.md")).expect("sase");
     let (_temp, plain_vault, plain_day) =
         close_worked_vault("bob-cli-close-sel-lc-once");
-    run_close_json(&plain_vault, &plain_day, "2026-09-28 09:37:00", &["=x!1"]);
+    run_close_json(&plain_vault, &plain_day, "2026-09-28 09:37:00", &["x!1"]);
     assert_eq!(
         day_after,
         fs::read_to_string(&plain_day).expect("plain day")
@@ -896,7 +867,7 @@ fn capture_pomodoro_close_selection_link_forms() {
             concat!(
                 "{}",
                 "- [x] (**0920-0940** [t:: 20m]) — CAPTURE\n",
-                "\t\t- Designed the `=x` grammar\n",
+                "\t\t- Designed the `x` grammar\n",
                 "\t\t\t- chose `x` for done\n",
                 "\t\t- Wrote the plan\n",
                 "\t- ~~[[sase#^axe-restart]]~~\n",
@@ -918,7 +889,7 @@ fn capture_pomodoro_close_selection_link_forms() {
         "- [*] #task Draft docs [created::2026-09-28] ^draft-docs\n"
     ));
     assert!(bob_after.contains(
-        "- [*] #task Add support for `=x` syntax! [created::2026-09-26] ^capture-stop\n"
+        "- [*] #task Add support for `x` syntax! [created::2026-09-26] ^capture-stop\n"
     ));
     assert!(bob_after.contains(
         "- [*] #task Add capture support for web URLs! [created::2026-09-21] ^web-capture\n"
@@ -927,7 +898,7 @@ fn capture_pomodoro_close_selection_link_forms() {
 
 #[test]
 fn capture_pomodoro_close_selection_batches() {
-    // `-2`, blank, `=x1!2` decrements once, then closes with the selection.
+    // `-2`, blank, `x1!2` decrements once, then closes with the selection.
     let (_temp, vault, day_file) = close_worked_vault("bob-cli-close-sel-b1");
     let output = bob_command()
         .arg("capture")
@@ -935,7 +906,7 @@ fn capture_pomodoro_close_selection_batches() {
         .arg(&vault)
         .arg("-f")
         .arg("json")
-        .arg("-2\n\n=x1!2")
+        .arg("-2\n\nx1!2")
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_NOW", "2026-09-28 09:37:00")
         .output()
@@ -944,7 +915,7 @@ fn capture_pomodoro_close_selection_batches() {
     let json: serde_json::Value =
         serde_json::from_str(stdout(&output).trim()).expect("json");
     assert_eq!(json["captures"][1]["kind"], "pomodoro_close");
-    assert_eq!(json["captures"][1]["pomodoro_close"]["raw"], "=x1!2");
+    assert_eq!(json["captures"][1]["pomodoro_close"]["raw"], "x1!2");
     assert_eq!(
         json["captures"][1]["pomodoro_close"]["in_progress"],
         serde_json::json!([1])
@@ -965,7 +936,7 @@ fn capture_pomodoro_close_selection_batches() {
         "batch completes web-capture"
     );
 
-    // `=x0`, blank, `^sase:recovery-panel=` closes, then switches sessions.
+    // `x0`, blank, `^sase:recovery-panel=` closes, then switches sessions.
     let (_temp, vault, day_file) = close_worked_vault("bob-cli-close-sel-b2");
     let output = bob_command()
         .arg("capture")
@@ -973,7 +944,7 @@ fn capture_pomodoro_close_selection_batches() {
         .arg(&vault)
         .arg("-f")
         .arg("json")
-        .arg("=x0\n\n^sase:recovery-panel=")
+        .arg("x0\n\n^sase:recovery-panel=")
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_NOW", "2026-09-28 09:37:00")
         .output()
@@ -982,7 +953,7 @@ fn capture_pomodoro_close_selection_batches() {
     let json: serde_json::Value =
         serde_json::from_str(stdout(&output).trim()).expect("json");
     assert_eq!(json["captures"][0]["kind"], "pomodoro_close");
-    assert_eq!(json["captures"][0]["pomodoro_close"]["raw"], "=x0");
+    assert_eq!(json["captures"][0]["pomodoro_close"]["raw"], "x0");
     assert_eq!(json["captures"][1]["kind"], "pomodoro_link");
     let day_after = fs::read_to_string(&day_file).expect("read day");
     assert!(
@@ -996,7 +967,7 @@ fn capture_pomodoro_close_selection_batches() {
         "batch keeps bob tasks"
     );
 
-    // `-2`, blank, `=x5` fails out of range and rolls back the `-2`.
+    // `-2`, blank, `x5` fails out of range and rolls back the `-2`.
     let (_temp, vault, day_file) = close_worked_vault("bob-cli-close-sel-b3");
     let before = fs::read_to_string(&day_file).expect("read");
     let output = bob_command()
@@ -1005,7 +976,7 @@ fn capture_pomodoro_close_selection_batches() {
         .arg(&vault)
         .arg("-f")
         .arg("json")
-        .arg("-2\n\n=x5")
+        .arg("-2\n\nx5")
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_NOW", "2026-09-28 09:37:00")
         .output()
@@ -1013,7 +984,7 @@ fn capture_pomodoro_close_selection_batches() {
     assert!(!output.status.success());
     assert!(
         stdout(&output).contains(
-            "`=x5` names task 5, but CAPTURE has 2 numbered Task Links"
+            "`x5` names task 5, but CAPTURE has 2 numbered Task Links"
         ),
         "{}",
         format_output(&output)
@@ -1030,17 +1001,17 @@ fn capture_pomodoro_close_selection_diagnostics() {
         &vault,
         &day_file,
         "2026-09-28 09:37:00",
-        &["=x3"],
+        &["x3"],
     );
     assert!(
         error.contains(
-            "`=x3` names task 3, but CAPTURE has 2 numbered Task Links (1–2)"
+            "`x3` names task 3, but CAPTURE has 2 numbered Task Links (1–2)"
         ),
         "{error}"
     );
     assert_eq!(fs::read_to_string(&day_file).expect("read"), before);
 
-    // With no numbered Task Links the error teaches plain `=x`.
+    // With no numbered Task Links the error teaches plain `x`.
     let (_temp, vault, day_file) = close_worked_vault("bob-cli-close-sel-o0");
     write_file(
         &day_file,
@@ -1050,11 +1021,11 @@ fn capture_pomodoro_close_selection_diagnostics() {
         &vault,
         &day_file,
         "2026-09-28 09:37:00",
-        &["=x1"],
+        &["x1"],
     );
     assert!(
         error.contains(
-            "`=x1` names task 1, but CAPTURE has no numbered Task Links; close it with `=x`"
+            "`x1` names task 1, but CAPTURE has no numbered Task Links; close it with `x`"
         ),
         "{error}"
     );
@@ -1074,7 +1045,7 @@ fn capture_pomodoro_close_selection_diagnostics() {
         &vault,
         &day_file,
         "2026-09-28 09:37:00",
-        &["=x1!2"],
+        &["x1!2"],
     );
     assert!(
         error.contains(
@@ -1084,13 +1055,13 @@ fn capture_pomodoro_close_selection_diagnostics() {
     );
     assert_eq!(fs::read_to_string(&day_file).expect("read"), before);
     let json =
-        run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["=x1,2"]);
-    assert_eq!(json["pomodoro_close"]["raw"], "=x1,2");
+        run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["x1,2"]);
+    assert_eq!(json["pomodoro_close"]["raw"], "x1,2");
 
     // A listed Blocked task warns instead of starting or completing.
     for (args, phrase) in [
-        (vec!["=x1"], "so it was not started"),
-        (vec!["=x!1"], "so it was not completed"),
+        (vec!["x1"], "so it was not started"),
+        (vec!["x!1"], "so it was not completed"),
     ] {
         let (_temp, vault, day_file) =
             close_worked_vault("bob-cli-close-sel-blocked");
@@ -1098,8 +1069,8 @@ fn capture_pomodoro_close_selection_diagnostics() {
         write_file(
             &vault.join("bob.md"),
             &bob.replace(
-                "- [*] #task Add support for `=x` syntax! [created::2026-09-26] ^capture-stop",
-                "- [?] #task Add support for `=x` syntax! [created::2026-09-26] ^capture-stop",
+                "- [*] #task Add support for `x` syntax! [created::2026-09-26] ^capture-stop",
+                "- [?] #task Add support for `x` syntax! [created::2026-09-26] ^capture-stop",
             ),
         );
         let json =
@@ -1123,47 +1094,47 @@ fn capture_pomodoro_close_selection_diagnostics() {
     let (_temp, vault, day_file) = close_worked_vault("bob-cli-close-sel-lex");
     let before = fs::read_to_string(&day_file).expect("read");
     for (args, phrase) in [
-        (vec!["=x1,1"], "task 1 is listed twice in `=x1,1`"),
+        (vec!["x1,1"], "task 1 is listed twice in `x1,1`"),
         (
-            vec!["=x1!1"],
-            "task 1 cannot both stay in progress and complete in `=x1!1`",
+            vec!["x1!1"],
+            "task 1 cannot both stay in progress and complete in `x1!1`",
         ),
         (
-            vec!["=x0,2"],
-            "`0` means no task stays in progress; use it alone, as `=x0`, `=x0*2`, `=x0!2`, or `=x0~2`",
+            vec!["x0,2"],
+            "`0` means no task stays in progress; use it alone, as `x0`, `x0*2`, `x0!2`, or `x0~2`",
         ),
         (
-            vec!["=x0,"],
-            "`0` means no task stays in progress; use it alone, as `=x0`, `=x0*2`, `=x0!2`, or `=x0~2`",
+            vec!["x0,"],
+            "`0` means no task stays in progress; use it alone, as `x0`, `x0*2`, `x0!2`, or `x0~2`",
         ),
         (
-            vec!["=x00"],
-            "`0` means no task stays in progress; use it alone, as `=x0`, `=x0*2`, `=x0!2`, or `=x0~2`",
+            vec!["x00"],
+            "`0` means no task stays in progress; use it alone, as `x0`, `x0*2`, `x0!2`, or `x0~2`",
         ),
-        (vec!["=x!0"], "task numbers start at 1"),
-        (vec!["=x~0"], "task numbers start at 1"),
-        (vec!["=x,1"], "expected a task number before `,`"),
-        (vec!["=x1,,"], "expected a task number before `,`"),
-        (vec!["=x1!2,,"], "expected a task number before `,`"),
-        (vec!["=x1,!2"], "expected a task number after `,`"),
-        (vec!["=x1!2!3"], "use one `!` list: `=x1!2,3`"),
-        (vec!["=x1~2~3"], "use one `~` list: `=x1~2,3`"),
+        (vec!["x!0"], "task numbers start at 1"),
+        (vec!["x~0"], "task numbers start at 1"),
+        (vec!["x,1"], "expected a task number before `,`"),
+        (vec!["x1,,"], "expected a task number before `,`"),
+        (vec!["x1!2,,"], "expected a task number before `,`"),
+        (vec!["x1,!2"], "expected a task number after `,`"),
+        (vec!["x1!2!3"], "use one `!` list: `x1!2,3`"),
+        (vec!["x1~2~3"], "use one `~` list: `x1~2,3`"),
         (
-            vec!["=x1~1"],
-            "task 1 cannot both stay in progress and drop in `=x1~1`",
-        ),
-        (
-            vec!["=x!2~2"],
-            "task 2 cannot both complete and drop in `=x!2~2`",
+            vec!["x1~1"],
+            "task 1 cannot both stay in progress and drop in `x1~1`",
         ),
         (
-            vec!["=x1a"],
-            "`=x1a` is not a task list: write `=x`, then comma-separated task numbers",
+            vec!["x!2~2"],
+            "task 2 cannot both complete and drop in `x!2~2`",
         ),
-        (vec!["=x99999999999"], "task number 99999999999 is too large"),
         (
-            vec!["=x 1,3"],
-            "with no spaces (`=x1,3`)",
+            vec!["x1a"],
+            "`x1a` is not a task list: write `x`, then comma-separated task numbers",
+        ),
+        (vec!["x99999999999"], "task number 99999999999 is too large"),
+        (
+            vec!["x 1,3"],
+            "with no spaces (`x1,3`)",
         ),
     ] {
         let error = run_close_expect_error(
@@ -1181,10 +1152,10 @@ fn capture_pomodoro_close_selection_diagnostics() {
         &vault,
         &day_file,
         "2026-09-28 09:37:00",
-        &["=x1,"],
+        &["x1,"],
     );
     assert!(
-        error.contains("`=x1,` is incomplete: type a task number after `,`"),
+        error.contains("`x1,` is incomplete: type a task number after `,`"),
         "{error}"
     );
     assert_eq!(fs::read_to_string(&day_file).expect("read"), before);
@@ -1192,20 +1163,20 @@ fn capture_pomodoro_close_selection_diagnostics() {
         &vault,
         &day_file,
         "2026-09-28 09:37:00",
-        &["=x1~"],
+        &["x1~"],
     );
     assert!(
-        tilde.contains("`=x1~` is incomplete: type a task number after `~`"),
+        tilde.contains("`x1~` is incomplete: type a task number after `~`"),
         "{tilde}"
     );
     assert_eq!(fs::read_to_string(&day_file).expect("read"), before);
 
     // A lone number on the close line is the dangling inline entry, never
-    // the no-spaces hint (`=x 1` wants text, `=x1` keeps only task 1).
+    // the no-spaces hint (`x 1` wants text, `x1` keeps only task 1).
     for (args, phrase) in [
-        ("=x 2", "type the Work Log text after task 2"),
-        ("=x1 1", "type the Work Log text after task 1"),
-        ("=x1,3 3", "type the Work Log text after task 3"),
+        ("x 2", "type the Work Log text after task 2"),
+        ("x1 1", "type the Work Log text after task 1"),
+        ("x1,3 3", "type the Work Log text after task 3"),
     ] {
         let error = run_close_expect_error(
             &vault,
@@ -1219,15 +1190,15 @@ fn capture_pomodoro_close_selection_diagnostics() {
         &vault,
         &day_file,
         "2026-09-28 09:37:00",
-        &["=x 2"],
+        &["x 2"],
     );
-    assert!(dangling_plain.contains("`=x2`"), "{dangling_plain}");
+    assert!(dangling_plain.contains("`x2`"), "{dangling_plain}");
     // A dangling Work Log bullet is an incomplete editing state.
     let error = run_close_expect_error(
         &vault,
         &day_file,
         "2026-09-28 09:37:00",
-        &["=x\n- 1"],
+        &["x\n- 1"],
     );
     assert!(
         error.contains(
@@ -1288,7 +1259,7 @@ fn capture_pomodoro_close_selection_diagnostics() {
 fn capture_pomodoro_close_selection_link_and_new_task_wildcards() {
     // Existing @ and ^ links are appended to the staged session before the
     // wildcard expands; the newly linked row is therefore selected too.
-    for link in ["@bob:ready=*", "^bob:ready=*"] {
+    for link in ["@bob:ready=x*", "^bob:ready=x*"] {
         let (_temp, vault, day_file) =
             close_worked_vault("bob-cli-close-link-wildcard");
         let json =
@@ -1351,19 +1322,19 @@ fn capture_pomodoro_close_selection_land_fixes() {
     write_file(
         &vault.join("bob.md"),
         &bob.replace(
-            "- [*] #task Add support for `=x` syntax! [created::2026-09-26] ^capture-stop",
-            "- [?] #task Add support for `=x` syntax! [created::2026-09-26] ^capture-stop",
+            "- [*] #task Add support for `x` syntax! [created::2026-09-26] ^capture-stop",
+            "- [?] #task Add support for `x` syntax! [created::2026-09-26] ^capture-stop",
         ),
     );
     let json =
-        run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["=x1"]);
+        run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["x1"]);
     assert_eq!(json["pomodoro_close"]["tasks"][0]["index"], 1);
     assert_eq!(
         json["pomodoro_close"]["tasks"][0]["warning"],
         "task 1 `[[bob#^capture-stop]]` is Blocked, so it was not started"
     );
 
-    // `![[T]]` / `[[T]]` duplicate with `=x!2` on Blocked warns not completed.
+    // `![[T]]` / `[[T]]` duplicate with `x!2` on Blocked warns not completed.
     let (_temp, vault, day_file) = close_worked_vault("bob-cli-close-land-2");
     let day = concat!(
         "## Pomodoros\n",
@@ -1376,12 +1347,12 @@ fn capture_pomodoro_close_selection_land_fixes() {
     write_file(
         &vault.join("bob.md"),
         &bob.replace(
-            "- [*] #task Add support for `=x` syntax! [created::2026-09-26] ^capture-stop",
-            "- [?] #task Add support for `=x` syntax! [created::2026-09-26] ^capture-stop",
+            "- [*] #task Add support for `x` syntax! [created::2026-09-26] ^capture-stop",
+            "- [?] #task Add support for `x` syntax! [created::2026-09-26] ^capture-stop",
         ),
     );
     let json =
-        run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["=x!2"]);
+        run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["x!2"]);
     assert_eq!(json["pomodoro_close"]["tasks"][0]["index"], 1);
     assert!(
         json["pomodoro_close"]["tasks"][0]["warning"]
@@ -1392,15 +1363,14 @@ fn capture_pomodoro_close_selection_land_fixes() {
         json["pomodoro_close"]["tasks"][0]["warning"]
     );
 
-    // Plain `=x` with no numbered rows is byte-identical to pre-epic output;
+    // Plain `x` with no numbered rows is byte-identical to pre-epic output;
     // a fixture with no bare Task Links at all has an empty lineup.
     let (_temp, vault, day_file) = close_worked_vault("bob-cli-close-land-3");
     write_file(
         &day_file,
         "## Pomodoros\n\n- [ ] (**0920-0950** [t:: 30m]) — CAPTURE\n\t- quick note\n",
     );
-    let json =
-        run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["=x"]);
+    let json = run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["x"]);
     assert_eq!(json["pomodoro_close"]["task_links"], serde_json::json!([]));
     assert!(json["pomodoro_close"]["tasks"]
         .as_array()
@@ -1416,8 +1386,8 @@ fn capture_pomodoro_close_selection_crlf_day_file() {
     let contents = fs::read_to_string(&day_file).expect("read");
     write_file(&day_file, &contents.replace('\n', "\r\n"));
     let json =
-        run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["=x1!2"]);
-    assert_eq!(json["pomodoro_close"]["raw"], "=x1!2");
+        run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["x1!2"]);
+    assert_eq!(json["pomodoro_close"]["raw"], "x1!2");
     assert_eq!(json["pomodoro_close"]["tasks"][0]["status_symbol"], "/");
     assert_eq!(json["pomodoro_close"]["tasks"][1]["status_symbol"], "x");
     let day_after = fs::read_to_string(&day_file).expect("read");
@@ -1429,7 +1399,7 @@ fn capture_pomodoro_close_selection_crlf_day_file() {
 
 fn drop_worked_vault(name: &str) -> (TempDir, PathBuf, PathBuf) {
     // The worked fixture plus a third numbered link (`^ready`) so
-    // `=x1!2~3` exercises all three close forms at once.
+    // `x1!2~3` exercises all three close forms at once.
     let (temp, vault, day_file) = close_worked_vault(name);
     let day = fs::read_to_string(&day_file).expect("read day");
     write_file(
@@ -1461,14 +1431,14 @@ fn empty_close_vault(name: &str) -> (TempDir, PathBuf, PathBuf) {
 
 #[test]
 fn capture_pomodoro_close_selection_drop() {
-    // `=x1!2~3`: task 1 in progress, task 2 complete, task 3 dropped.
+    // `x1!2~3`: task 1 in progress, task 2 complete, task 3 dropped.
     // The dropped link leaves the closed session, is not carried, and its
     // Ready task is untouched (stays `[ ]`, no Work Log).
     let (_temp, vault, day_file) = drop_worked_vault("bob-cli-close-sel-drop");
     let json =
-        run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["=x1!2~3"]);
+        run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["x1!2~3"]);
     let close = &json["pomodoro_close"];
-    assert_eq!(close["raw"], "=x1!2~3");
+    assert_eq!(close["raw"], "x1!2~3");
     assert_eq!(close["in_progress"], serde_json::json!([1]));
     assert_eq!(close["complete"], serde_json::json!([2]));
     assert_eq!(close["drop"], serde_json::json!([3]));
@@ -1550,7 +1520,7 @@ fn capture_pomodoro_close_selection_drop_human_output() {
         .arg("-b")
         .arg(&vault)
         .arg("--")
-        .arg("=x1!2~3")
+        .arg("x1!2~3")
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_NOW", "2026-09-28 09:37:00")
         .output()
@@ -1568,12 +1538,12 @@ fn capture_pomodoro_close_selection_drop_human_output() {
 
 #[test]
 fn capture_pomodoro_close_selection_drop_only_forms() {
-    // `=x~2` drops with unlisted links at their ledger outcome;
-    // `=x0~2` drops while deferring everything else.
+    // `x~2` drops with unlisted links at their ledger outcome;
+    // `x0~2` drops while deferring everything else.
     let (_temp, vault, day_file) =
         drop_worked_vault("bob-cli-close-sel-drop-only");
     let json =
-        run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["=x~2"]);
+        run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["x~2"]);
     let close = &json["pomodoro_close"];
     assert!(close["in_progress"].is_null());
     assert_eq!(close["complete"], serde_json::json!([]));
@@ -1585,7 +1555,7 @@ fn capture_pomodoro_close_selection_drop_only_forms() {
     let (_temp, vault, day_file) =
         drop_worked_vault("bob-cli-close-sel-drop-none");
     let json =
-        run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["=x0~2"]);
+        run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["x0~2"]);
     let close = &json["pomodoro_close"];
     assert_eq!(close["in_progress"], serde_json::json!([]));
     assert_eq!(close["drop"], serde_json::json!([2]));
@@ -1597,7 +1567,7 @@ fn capture_pomodoro_close_selection_drop_only_forms() {
 
 #[test]
 fn capture_pomodoro_close_selection_park() {
-    // `=x1*2,3!4,5`: task 1 continues, tasks 2-3 park (worked but not
+    // `x1*2,3!4,5`: task 1 continues, tasks 2-3 park (worked but not
     // carried), tasks 4-5 complete. Only link 1 is carried.
     use crate::support::TempDir;
     let temp = TempDir::new("bob-cli-close-sel-park");
@@ -1633,10 +1603,10 @@ fn capture_pomodoro_close_selection_park() {
         &vault,
         &day_file,
         "2026-09-28 09:37:00",
-        &["=x1*2,3!4,5"],
+        &["x1*2,3!4,5"],
     );
     let close = &json["pomodoro_close"];
-    assert_eq!(close["raw"], "=x1*2,3!4,5");
+    assert_eq!(close["raw"], "x1*2,3!4,5");
     assert_eq!(close["in_progress"], serde_json::json!([1]));
     assert_eq!(close["park"], serde_json::json!([2, 3]));
     assert_eq!(close["complete"], serde_json::json!([4, 5]));
@@ -1697,7 +1667,7 @@ fn capture_pomodoro_close_selection_park() {
     let (_temp, vault, day_file) =
         drop_worked_vault("bob-cli-close-sel-park-star-only");
     let json =
-        run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["=x*2"]);
+        run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["x*2"]);
     let close = &json["pomodoro_close"];
     assert!(close["in_progress"].is_null());
     assert_eq!(close["park"], serde_json::json!([2]));
@@ -1707,42 +1677,57 @@ fn capture_pomodoro_close_selection_park() {
 }
 
 #[test]
-fn capture_pomodoro_close_short_alias_equivalence() {
-    // Short aliases omit `x` before an initial `*`/`!`; both spellings
-    // preserve the same wildcard or explicit scope against the same lineup.
-    for (alias, long_form, three_link) in [
-        ("=*", "=x*", true),
-        ("=*1", "=x*1", false),
-        ("=*!2", "=x*!2", true),
-        ("=*!2", "=x!2*", true),
-        ("=!", "=x!", true),
-        ("=!1", "=x!1", false),
-        ("=!~2", "=x!~2", true),
-        ("=*2,3", "=x*2,3", true),
-        ("=!2,3", "=x!2,3", true),
+fn capture_pomodoro_close_wildcard_forms() {
+    // A bare `*`/`!` after the `x` selects every numbered link left after
+    // explicit assignments.
+    for form in ["x*", "x!"] {
+        let (_temp, vault, day_file) = drop_worked_vault("bob-cli-close-wild");
+        let json =
+            run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &[form]);
+        assert_eq!(json["ok"], true, "{form}");
+        let close = &json["pomodoro_close"];
+        assert_eq!(close["raw"], form, "{form}");
+        let (list, flag, outcome) = if form == "x*" {
+            ("park", "park_all", "parked")
+        } else {
+            ("complete", "complete_all", "complete")
+        };
+        assert_eq!(close[list], serde_json::json!([1, 2, 3]), "{form}");
+        assert_eq!(close[flag], true, "{form}");
+        assert!(
+            close["task_links"].as_array().unwrap().iter().all(|link| {
+                link["outcome"] == outcome && link["source"] == "listed"
+            }),
+            "{form}"
+        );
+    }
+
+    // Explicit forms select only the numbers typed; list order and the
+    // `*`/`!` group order never change the outcome.
+    for (first, second, three_link) in [
+        ("x*!2", "x!2*", true),
+        ("x*2,3", "x*3,2", true),
+        ("x!2,3", "x!3,2", true),
+        ("x*1", "x*1", false),
+        ("x!1", "x!1", false),
+        ("x!~2", "x!~2", true),
     ] {
         let (_temp_a, vault_a, day_a) = if three_link {
-            drop_worked_vault("bob-cli-close-alias-a")
+            drop_worked_vault("bob-cli-close-wild-a")
         } else {
-            close_worked_vault("bob-cli-close-alias-a")
+            close_worked_vault("bob-cli-close-wild-a")
         };
         let (_temp_b, vault_b, day_b) = if three_link {
-            drop_worked_vault("bob-cli-close-alias-b")
+            drop_worked_vault("bob-cli-close-wild-b")
         } else {
-            close_worked_vault("bob-cli-close-alias-b")
+            close_worked_vault("bob-cli-close-wild-b")
         };
         let json_a =
-            run_close_json(&vault_a, &day_a, "2026-09-28 09:37:00", &[alias]);
-        let json_b = run_close_json(
-            &vault_b,
-            &day_b,
-            "2026-09-28 09:37:00",
-            &[long_form],
-        );
-        assert_eq!(json_a["ok"], true, "{alias}");
-        assert_eq!(json_b["ok"], true, "{long_form}");
-        assert_eq!(json_a["pomodoro_close"]["raw"], alias, "{alias}");
-        assert_eq!(json_b["pomodoro_close"]["raw"], long_form, "{long_form}");
+            run_close_json(&vault_a, &day_a, "2026-09-28 09:37:00", &[first]);
+        let json_b =
+            run_close_json(&vault_b, &day_b, "2026-09-28 09:37:00", &[second]);
+        assert_eq!(json_a["pomodoro_close"]["raw"], first, "{first}");
+        assert_eq!(json_b["pomodoro_close"]["raw"], second, "{second}");
         for field in [
             "in_progress",
             "park",
@@ -1755,50 +1740,26 @@ fn capture_pomodoro_close_short_alias_equivalence() {
             assert_eq!(
                 json_a["pomodoro_close"][field],
                 json_b["pomodoro_close"][field],
-                "{alias} vs {long_form}: {field}"
+                "{first} vs {second}: {field}"
             );
         }
         for field in ["park_all", "complete_all"] {
             assert_eq!(
                 json_a["pomodoro_close"][field].as_bool().unwrap_or(false),
                 json_b["pomodoro_close"][field].as_bool().unwrap_or(false),
-                "{alias} vs {long_form}: {field}"
+                "{first} vs {second}: {field}"
             );
         }
-        if alias == "=*" {
-            assert_eq!(
-                json_a["pomodoro_close"]["park"],
-                serde_json::json!([1, 2, 3])
-            );
-            assert_eq!(json_a["pomodoro_close"]["park_all"], true);
-            assert!(json_a["pomodoro_close"]["task_links"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .all(|link| link["outcome"] == "parked"
-                    && link["source"] == "listed"));
-        }
-        if alias == "=!" {
-            assert_eq!(
-                json_a["pomodoro_close"]["complete"],
-                serde_json::json!([1, 2, 3])
-            );
-            assert_eq!(json_a["pomodoro_close"]["complete_all"], true);
-            assert!(json_a["pomodoro_close"]["task_links"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .all(|link| link["outcome"] == "complete"
-                    && link["source"] == "listed"));
-        }
-        let day_a_after = fs::read_to_string(&day_a).expect("read day");
-        let day_b_after = fs::read_to_string(&day_b).expect("read day");
-        assert_eq!(day_a_after, day_b_after, "{alias} vs {long_form}: day");
+        assert_eq!(
+            fs::read_to_string(&day_a).expect("read day"),
+            fs::read_to_string(&day_b).expect("read day"),
+            "{first} vs {second}: day"
+        );
         for file in ["bob.md", "sase.md"] {
             assert_eq!(
                 fs::read_to_string(vault_a.join(file)).expect("read"),
                 fs::read_to_string(vault_b.join(file)).expect("read"),
-                "{alias} vs {long_form}: {file}"
+                "{first} vs {second}: {file}"
             );
         }
     }
@@ -1807,7 +1768,7 @@ fn capture_pomodoro_close_short_alias_equivalence() {
     let (_temp, vault, day_file) =
         drop_worked_vault("bob-cli-close-all-exceptions");
     let mixed =
-        run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["=x1*~2"]);
+        run_close_json(&vault, &day_file, "2026-09-28 09:37:00", &["x1*~2"]);
     let close = &mixed["pomodoro_close"];
     assert_eq!(close["in_progress"], serde_json::json!([1]));
     assert_eq!(close["park"], serde_json::json!([3]));
@@ -1819,7 +1780,7 @@ fn capture_pomodoro_close_short_alias_equivalence() {
 
     // Explicit overlaps still fail; two empty wildcards have their own
     // order-independent diagnostic. Neither failure writes the day note.
-    for args in ["=x1*1", "=x1!1", "=*1!1", "=x*1!1", "=x*1~1", "=x!1~1"] {
+    for args in ["x1*1", "x1!1", "x*1!1", "x*1!1", "x*1~1", "x!1~1"] {
         let (_temp, vault, day_file) =
             close_worked_vault("bob-cli-close-alias-explicit-overlap");
         let before = fs::read_to_string(&day_file).expect("read");
@@ -1832,7 +1793,7 @@ fn capture_pomodoro_close_short_alias_equivalence() {
         assert!(error.contains("cannot both"), "{args}: {error}");
         assert_eq!(fs::read_to_string(&day_file).expect("read"), before);
     }
-    for args in ["=*!", "=!*", "=x*!", "=x!*"] {
+    for args in ["x*!", "x!*", "x*!", "x!*"] {
         let (_temp, vault, day_file) =
             close_worked_vault("bob-cli-close-competing-wildcards");
         let before = fs::read_to_string(&day_file).expect("read");
@@ -1849,14 +1810,14 @@ fn capture_pomodoro_close_short_alias_equivalence() {
         assert_eq!(fs::read_to_string(&day_file).expect("read"), before);
     }
 
-    // Malformed aliases claim close syntax, never task creation.
+    // Malformed wildcard lists claim close syntax, never task creation.
     for (args, phrase) in [
-        ("=*abc", "is not a task list"),
-        ("=!0", "task numbers start at 1"),
-        ("=**2", "use one `*` list"),
-        ("=!1,,2", "expected a task number"),
-        ("=*,2", "expected a task number"),
-        ("=!,", "expected a task number"),
+        ("x*abc", "is not a task list"),
+        ("x!0", "task numbers start at 1"),
+        ("x**2", "use one `*` list"),
+        ("x!1,,2", "expected a task number"),
+        ("x*,2", "expected a task number"),
+        ("x!,", "expected a task number"),
     ] {
         let (_temp, vault, day_file) =
             close_worked_vault("bob-cli-close-alias-bad");
@@ -1872,7 +1833,7 @@ fn capture_pomodoro_close_short_alias_equivalence() {
     }
 
     // Empty comma elements never default; trailing comma/~ dangle.
-    for args in ["=*1,", "=!2,", "=*~"] {
+    for args in ["x*1,", "x!2,", "x*~"] {
         let (_temp, vault, day_file) =
             close_worked_vault("bob-cli-close-alias-dangle");
         let error = run_close_expect_error(
@@ -1886,7 +1847,7 @@ fn capture_pomodoro_close_short_alias_equivalence() {
 
     // Empty sessions accept both wildcard outcomes; a positive explicit
     // index remains out of range. Wildcard Work Log text still fails atomically.
-    for args in ["=*", "=!", "=x*", "=x!"] {
+    for args in ["x*", "x!", "x*", "x!"] {
         let (_temp, vault, day_file) =
             empty_close_vault("bob-cli-close-alias-empty");
         let json =
@@ -1908,7 +1869,7 @@ fn capture_pomodoro_close_short_alias_equivalence() {
             "{args}"
         );
     }
-    for args in ["=*1", "=!1"] {
+    for args in ["x*1", "x!1"] {
         let (_temp, vault, day_file) =
             empty_close_vault("bob-cli-close-alias-empty-explicit");
         let before = fs::read_to_string(&day_file).expect("read");
@@ -1929,7 +1890,7 @@ fn capture_pomodoro_close_short_alias_equivalence() {
         &vault,
         &day_file,
         "2026-09-28 09:37:00",
-        &["=* log it"],
+        &["x* log it"],
     );
     assert!(error.contains("no numbered Task Links"), "{error}");
     assert_eq!(fs::read_to_string(&day_file).expect("read"), before);
@@ -1944,7 +1905,7 @@ fn capture_pomodoro_close_short_alias_equivalence() {
         .arg(&vault)
         .arg("-f")
         .arg("json")
-        .arg("-2\n\n=*abc")
+        .arg("-2\n\nx*abc")
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_NOW", "2026-09-28 09:37:00")
         .output()
@@ -1966,7 +1927,7 @@ fn capture_pomodoro_close_short_alias_equivalence() {
         .arg("-f")
         .arg("json")
         .arg("--")
-        .arg("=*")
+        .arg("x*")
         .env("BOB_DAY_FILE", &day_file)
         .env("BOB_NOW", "2026-09-28 09:37:00")
         .output()

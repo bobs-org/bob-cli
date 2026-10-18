@@ -323,7 +323,7 @@ fn pomodoro_close_pulls_in_project_at_continuation() {
     );
 
     let json =
-        capture_json_flags(&vault, &day_file, &["-p", "all"], &["=x"], false);
+        capture_json_flags(&vault, &day_file, &["-p", "all"], &["x"], false);
     let close = &json["pomodoro_close"];
     let row = &close["unblocked"][0];
     assert_eq!(row["trigger"], "project_empty");

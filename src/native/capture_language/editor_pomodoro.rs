@@ -1331,20 +1331,22 @@ pub(super) fn parse_editor_start_item<'a>(
     }
 }
 
-/// Whole-item `=`-family parser for the live editor. A same-line chain has
+/// Whole-item session parser for the live editor. A same-line chain has
 /// already been split into single-token items upstream in `draft.rs`.
 /// Mirrors
 /// [`parse_pomodoro_equals_item`]'s execution grammar but never fails: an
-/// exact `=x[<N>][!<M>]` reports `pomodoro_close` with spans covering `=x`
-/// plus each typed list and an additive spec, an exact `=`/`=<X>` reports
+/// exact `x[<N>][!<M>]` reports `pomodoro_close` with spans covering `x`
+/// plus each typed list and an additive spec, a retired `=x`/`=*`/`=!`
+/// close reports `pomodoro_close` with an `invalid_pomodoro_close`
+/// diagnostic naming the bare rewrite, an exact `=`/`=<X>` reports
 /// `pomodoro_start` with its spec and one `PomodoroStart` span over the
 /// whole token, a dangling separator reports `incomplete` needing
 /// `pomodoro_close_task` with the partial spec and a placeholder span, and
 /// every near miss reports its family mode plus an `invalid_pomodoro_*`
 /// diagnostic instead of becoming a task. A bare `=` is a complete start.
 /// Purely lexical: it never guesses current ledger times. Bare tokens with
-/// prose (`= foo`, `== foo`), other close shapes (`=xx`, `=xa`), and
-/// mid-body tokens (`Plan =3`, `Plan ==3`, `a=3`, `Plan =x1`) stay ordinary
+/// prose (`= foo`, `== foo`), other `x` shapes (`xx`, `xa`, `X2`), and
+/// mid-body tokens (`Plan =3`, `Plan ==3`, `a=3`, `Plan x1`) stay ordinary
 /// prose.
 pub(super) fn parse_editor_close_item<'a>(
     item: &CaptureItem<'a>,
@@ -1396,7 +1398,8 @@ pub(super) fn parse_editor_close_item<'a>(
     // yields `Close` here for a claimed close tail, so this always reports
     // the teaching error over the token.
     if first.starts_with("==") {
-        let close_spelling = format!("={}", first.trim_start_matches('='));
+        let close_spelling =
+            retired_whole_item_close_rewrite(&first[1..]).unwrap_or_default();
         return Some(editor_start_invalid_outcome(
             item,
             parent_trimmed,
@@ -1409,26 +1412,39 @@ pub(super) fn parse_editor_close_item<'a>(
             Some((token_start, token_start + first.len())),
         ));
     }
-    // The close prefix is `=x`/`=X` (two bytes) for long closes and `=`
-    // (one byte) for `=*`/`=!` aliases; spans cover exactly what was typed.
-    let prefix_len = classify_whole_item_close(first)
-        .map(|(_, prefix)| prefix)
-        .unwrap_or_else(|| {
-            if is_close_hash_token(first) && first.starts_with('x') {
-                1
-            } else {
-                2
-            }
-        });
-    let token_end = token_start + prefix_len;
+    // A retired `=x`/`=*`/`=!` close is claimed with a teaching error over
+    // the whole typed token, whether or not the item carries extra text or
+    // child lines. It used to close, and must never become a task.
+    if let Some(rewritten) = retired_whole_item_close_rewrite(first) {
+        let rewrite = format!("{rewritten}{}", &parent_trimmed[first.len()..]);
+        return Some(editor_close_outcome(
+            item,
+            parent_trimmed,
+            EditorMode::PomodoroClose,
+            None,
+            vec![Span {
+                start: token_start,
+                end: token_start + first.len(),
+                kind: SpanKind::PomodoroClose,
+            }],
+            Vec::new(),
+            vec![Diagnostic {
+                severity: Severity::Error,
+                code: "invalid_pomodoro_close",
+                message: retired_whole_item_close_error(first, &rewrite),
+                range: Some((token_start, token_start + first.len())),
+            }],
+        ));
+    }
+    // The close token is the one-byte `x`; spans cover exactly what was
+    // typed.
     let close_span = Span {
         start: token_start,
-        end: token_end,
+        end: token_start + 1,
         kind: SpanKind::PomodoroClose,
     };
-    // `=x#…` is a claimed close near miss with a teaching error, whether
-    // or not the item carries extra text or child lines. It used to be
-    // prose.
+    // `x#…` is a claimed close near miss with a teaching error, whether or
+    // not the item carries extra text or child lines. It used to be prose.
     if is_close_hash_token(first) {
         let hash = first.find('#').expect("close hash");
         return Some(editor_close_outcome(
@@ -1442,23 +1458,17 @@ pub(super) fn parse_editor_close_item<'a>(
                 severity: Severity::Error,
                 code: "invalid_pomodoro_close",
                 message: pomodoro_close_hash_error(&first[hash + 1..]),
-                range: Some((
-                    token_start + prefix_len,
-                    token_start + first.len(),
-                )),
+                range: Some((token_start + 1, token_start + first.len())),
             }],
         ));
     }
     let selection_after_x = whole_item_close_after_x(first);
-    if selection_after_x.is_none()
-        && !classify_whole_item_close(first)
-            .is_some_and(|(selection, _)| selection.is_empty())
-    {
+    if selection_after_x.is_none() && !is_plain_whole_item_close(first) {
         return None;
     }
     let single_token_parent = parent_trimmed == first;
     if single_token_parent && item.lines.len() == 1 {
-        // An exact close: plain `=x`, a valid selection, or a dangling
+        // An exact close: plain `x`, a valid selection, or a dangling
         // separator (an editing state, never a mistake).
         let lexed = selection_after_x.map(|after_x| {
             let base = token_start + (first.len() - after_x.len());
@@ -2045,6 +2055,11 @@ pub(crate) fn cursor_in_close_log_text(raw_text: &str, cursor: usize) -> bool {
         ) {
             continue;
         }
+        if super::close_selection::retired_whole_item_close_rewrite(head)
+            .is_some()
+        {
+            continue;
+        }
         let after_x = super::close_selection::whole_item_close_after_x(head);
         let (in_progress, park, complete, drop, park_all, complete_all) =
             match after_x {
@@ -2117,7 +2132,7 @@ pub(crate) fn cursor_in_close_log_text(raw_text: &str, cursor: usize) -> bool {
 }
 
 /// Build a whole-item close outcome for the live editor: the mode, the
-/// additive spec (or none for a near miss), the `=x`/list spans, the needs,
+/// additive spec (or none for a near miss), the `x`/list spans, the needs,
 /// and at most one diagnostic.
 #[allow(clippy::too_many_arguments)]
 fn editor_close_outcome<'a>(

@@ -1013,7 +1013,7 @@ pub(super) fn staged_completed_note_texts(
 /// §12.5 SL20): after every item is planned, drop each linked row whose
 /// bullet no longer survives live in the final staged day text, or whose
 /// task is no longer open. Offer rows are also dropped when a later item
-/// completes, re-blocks, later-links, or `=x~K`-drops them, or when a
+/// completes, re-blocks, later-links, or `x~K`-drops them, or when a
 /// `project_finished` emptied-project predicate no longer holds. Runs on
 /// staged text, so dry-run and real-run JSON stay equal.
 pub(super) fn apply_successor_net_post_pass(
