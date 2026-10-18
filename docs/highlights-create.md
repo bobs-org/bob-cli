@@ -5,9 +5,9 @@ an arXiv paper URL, or a web article URL into a Highlights-ready reference.
 By default, create files the PDF in `lib/`, writes the `ref/` note and reading
 task, commits those paths together, and pushes. If intake is kept or cannot
 run safely, create leaves the PDF in `xlib/` with a queue reason for
-`bob ref scan` to drain later. Vault notes become projected reading snapshots;
-other Markdown uses pandoc, a PDF is stamped as-is, and web article URLs run
-through the web-article engine.
+`bob ref scan -i` or the host's local timer to drain later. Vault notes become
+projected reading snapshots; other Markdown uses pandoc, a PDF is stamped as
+is, and web article URLs run through the web-article engine.
 
 ```bash
 bob ref create [OPTIONS] <TARGET>...
@@ -51,7 +51,8 @@ bob ref create URL1 URL2 URL3 -N spotify_bg_agents -P sase
 ## Create-time intake
 
 Create-time intake is enabled by default. Use `-k, --keep-intake` to leave a
-new PDF in `xlib/` for a later scan. The same behavior can be selected with
+new PDF in `xlib/` for a later `bob ref scan -i` or local timer. The same
+behavior can be selected with
 `highlights.ingest_on_create: false`; `BOB_HIGHLIGHTS_INGEST_ON_CREATE` accepts
 `0`, `false`, `no`, or `off` to disable intake and `1`, `true`, `yes`, or `on`
 to enable it. A nonblank environment value overrides the config value.
@@ -513,7 +514,8 @@ collection, even if the remaining URLs are new. `--force` applies only when
 the queued collection has exactly the same URL set, in any order. A legacy
 PDF-less note is reported as a warning and the collection may proceed. The
 collection marker stores the cleaned URLs in argument order as a YAML list;
-`bob ref scan` writes that list to one ref note. A later create of an individual
+create writes that list to one ref note (or a later `bob ref scan -i` does so
+when intake is queued). A later create of an individual
 part is refused as already captured, and `bob ref find <part URL>` locates the
 collection.
 
@@ -672,8 +674,9 @@ at `xlib/<rel>.mp3`. Intake then files that episode:
   companion, the same as a normal create.
 
 `-k` (or a disabled ingest switch) keeps today's attach output, including
-`next: bob ref scan`. A failed intake prints that same next-step line so
-scan can still pair the queued files.
+`next: bob ref scan`; drain the queue with `bob ref scan -i` or its local
+timer. A failed intake prints that same next-step line so the queued files
+can still be paired.
 
 ```text
 ok attached listen episode to existing capture
@@ -747,7 +750,8 @@ Troubleshooting:
 
 Renders, downloads, stamped copies, and filter files live in a `0700`
 scratch directory (`TMPDIR` when short, else `/tmp`) until the final atomic
-installs, because `scan` and `bob_xlib_pull` read every file in `xlib/`.
+installs, because `create`, `scan`, and the per-host intake drain treat every
+file in `xlib/` as input.
 It is removed on drop, kept with `BOB_HIGHLIGHTS_KEEP_WORKDIR=1` (or the
 legacy `BOB_WEB_CLIP_KEEP_WORKDIR=1`). The note snapshot renderer keeps the
 same ownership: with the keep flag set, the scratch directory retains

@@ -259,11 +259,11 @@ require the [priority configuration](projects.md#priority-property-and-scheduled
 
 ## Save and read references
 
-Bob's reference pipeline has three stages: clip a PDF into `xlib/`, scan it
-into `lib/` and a note under `ref/`, then read that note. A bare link capture
-handles the first stage in a background job. The success line says
-`queued … → reading queue` as soon as the job is saved. `bob ref list`'s
-reading queue is the later note, after `bob ref scan`.
+Bob's reference pipeline files the PDF into `lib/`, writes its note under
+`ref/`, and creates a reading task. A bare link capture does this in a
+background job. The success line says `queued … → reading queue` as soon as
+the job is saved. If intake cannot run, the PDF remains in `xlib/` and the
+host's local intake timer or `bob ref scan -i` finishes filing it.
 
 ```bash
 bob capture --dry-run 'https://example.com/article'
@@ -274,9 +274,9 @@ bob ref find 'https://example.com/article' --include-intake
 
 The capture preview reads local state and writes nothing. The submit queues
 the job; the worker fetches the link independently of the capture process.
-`bob ref jobs` shows that job. While the PDF is still in `xlib/`,
-`find --include-intake` can locate it. After the scan moves it, plain
-`bob ref find` finds the note.
+`bob ref jobs` shows that job. While the PDF is queued in `xlib/`,
+`find --include-intake` can locate it. Once filed, plain `bob ref find`
+finds the note.
 
 An eligible URL fills the capture item, optionally with a parent route
 and a listen marker: `URL @route`, `URL %`, or `URL % @route`. Put the

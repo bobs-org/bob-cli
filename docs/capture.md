@@ -889,8 +889,9 @@ reference listen marker. A non-URL bare `@` and prefixes such as `@sa`
 remain route completion, and completing a claimed listen marker never
 replaces it (a separate ` @sa` after `URL %` still completes the parent). A marked item
 prints `queued … · Listen` with `· companion audio requested`; it needs a
-configured `highlights.listen_command` and a later `bob ref scan` to pair
-the PDF and MP3. Unlike an explicit `ref create -L`, the shorthand never
+configured `highlights.listen_command`. Inline intake files the PDF and MP3
+together, and a queued capture is paired by `bob ref scan -i` or the local
+timer. Unlike an explicit `ref create -L`, the shorthand never
 adds audio to existing captures: a marked duplicate, pending job, or
 library hit queues nothing and shows `no new listen job was queued · to
 attach audio run: bob ref create <URL> -P <parent> -L`.

@@ -830,13 +830,13 @@ properties:
   - name: priority
     values: priority
 highlights:
-  pre_scan_hook: " bob_xlib_pull "
+  pre_scan_hook: " my_custom_pre_scan "
 "#,
             Path::new("/config.yml"),
         )
         .expect("valid highlights config");
 
-        assert_eq!(config.pre_scan_hook(), Some("bob_xlib_pull"));
+        assert_eq!(config.pre_scan_hook(), Some("my_custom_pre_scan"));
     }
 
     #[test]
@@ -1035,7 +1035,7 @@ highlights:
         let error = parse_highlights_config(
             r#"
 highlights:
-  pre_scan_command: "bob_xlib_pull"
+  pre_scan_command: "my_custom_pre_scan"
 "#,
             Path::new("/config.yml"),
         )

@@ -388,7 +388,7 @@ BOB_HIGHLIGHTS_REF_DIR=ref
 ```
 
 Create-time intake is enabled by default. Use `-k, --keep-intake` to leave a
-new PDF in `xlib/` for a later scan, or set:
+new PDF in `xlib/` for a later `bob ref scan -i` or local timer, or set:
 
 ```yaml
 highlights:
@@ -404,8 +404,8 @@ Writing scans can run a pre-scan hook before xlib intake:
 ```yaml
 highlights:
   # Runs from the vault root before `bob ref scan` inspects the library.
-  # Use it to deliver PDFs that do not travel on the git sync channel.
-  pre_scan_hook: bob_xlib_pull
+  # Use it for custom work that must happen before a full scan.
+  pre_scan_hook: my_custom_pre_scan
 ```
 
 `BOB_HIGHLIGHTS_PRE_SCAN_HOOK` overrides the config file value. Set it to an
@@ -1426,8 +1426,9 @@ git -C ~/bob status --short
 
 In Highlights Pro on the MacBook:
 
-- Fresh PDFs created by `bob ref create` land under
-  `~/bob/xlib/<ref_type>/`; the next scan moves them to `~/bob/lib/<ref_type>/`.
+- By default, `bob ref create` files the PDF, ref note, and reading task
+  together. A kept or queued capture remains in `~/bob/xlib/<ref_type>/` for
+  `bob ref scan -i` or the host's local intake timer.
 - Keep existing PDFs that should sync under `~/bob/lib/<ref_type>/`, such as
   `~/bob/lib/books`.
 - Enable autosaved sidecars next to each PDF. Plain Markdown creates
@@ -1549,81 +1550,25 @@ not race the CLI.
 
 ## Scheduled Scan
 
-The intended automation is a scheduled `scan`, not a live recursive watcher.
-Start with a dry-run schedule. On the MacBook account, create this LaunchAgent:
+The MacBook's staggered cron job runs the full `bob ref scan` for annotation
+sync and also processes the Mac's own `xlib/` queue. It does not pull or read
+athena's or apollo's queue. See
+[vault-git-sync.md](vault-git-sync.md#mac-scheduled-maintenance) for the
+managed schedule; do not replace it with a LaunchAgent.
+
+On athena and apollo, chezmoi enables `bob-ref-intake.timer`, which runs
+`bob ref scan --intake-only` two minutes after boot and every ten minutes.
+Each timer drains only its host's local queue. Check or recover a queue with:
 
 ```bash
-mkdir -p ~/Library/LaunchAgents ~/Library/Logs/bob
-cat > ~/Library/LaunchAgents/com.bryan.bob-highlights-scan.plist <<'PLIST'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>com.bryan.bob-highlights-scan</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>/bin/zsh</string>
-    <string>-lc</string>
-    <string>/Users/bryan/.cargo/bin/bob highlights scan --dry-run</string>
-  </array>
-  <key>EnvironmentVariables</key>
-  <dict>
-    <key>BOB_DIR</key>
-    <string>/Users/bryan/bob</string>
-    <key>BOB_HIGHLIGHTS_LIB_DIR</key>
-    <string>lib</string>
-    <key>BOB_HIGHLIGHTS_REF_DIR</key>
-    <string>ref</string>
-    <key>BOB_HIGHLIGHTS_XLIB_DIR</key>
-    <string>xlib</string>
-  </dict>
-  <key>StartInterval</key>
-  <integer>3600</integer>
-  <key>StandardOutPath</key>
-  <string>/Users/bryan/Library/Logs/bob/highlights-scan.out</string>
-  <key>StandardErrorPath</key>
-  <string>/Users/bryan/Library/Logs/bob/highlights-scan.err</string>
-</dict>
-</plist>
-PLIST
-plutil -lint ~/Library/LaunchAgents/com.bryan.bob-highlights-scan.plist
-launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.bryan.bob-highlights-scan.plist 2>/dev/null || true
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.bryan.bob-highlights-scan.plist
-launchctl kickstart -k gui/$(id -u)/com.bryan.bob-highlights-scan
-tail -n 80 ~/Library/Logs/bob/highlights-scan.out
-tail -n 80 ~/Library/Logs/bob/highlights-scan.err
+bob ref doctor
+bob ref scan -i --dry-run
+bob ref scan -i
 ```
 
-The scheduled LaunchAgent, the cron fallback, and the `bob_xlib_pull`
-pre-scan hook intentionally keep the `bob highlights` spelling: it is a
-permanent alias of `bob ref`, so those machines keep working whatever bob
-they have installed.
-
-After several clean dry-run cycles, remove `--dry-run` from the
-`ProgramArguments` command and reload the LaunchAgent with the same
-`launchctl bootout`, `bootstrap`, and `kickstart` commands. Keep PDF marker
-write-back manual; do not schedule `sync --write-pdf` or `scan --write-pdfs`
-unless bulk PDF writes are deliberately desired and backed up.
-
-A cron fallback is also acceptable:
-
-```cron
-SHELL=/bin/zsh
-PATH=/Users/bryan/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:/bin:/usr/bin
-BOB_DIR=/Users/bryan/bob
-BOB_HIGHLIGHTS_LIB_DIR=lib
-BOB_HIGHLIGHTS_REF_DIR=ref
-BOB_HIGHLIGHTS_XLIB_DIR=xlib
-0 * * * * /Users/bryan/.cargo/bin/bob highlights scan --dry-run >> /Users/bryan/Library/Logs/bob/highlights-scan.log 2>&1
-```
-
-Disable the LaunchAgent with:
-
-```bash
-launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.bryan.bob-highlights-scan.plist
-```
+The intake-only command files queued PDFs and late audio without running the
+annotation pass or pre-scan hook. The full scan remains the Mac's annotation
+sync and can also process captures queued locally on the Mac.
 
 ## Disable One PDF
 

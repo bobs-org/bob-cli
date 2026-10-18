@@ -1,11 +1,12 @@
 # Web article capture (`bob ref create <URL> [<URL>…]`)
 
 `bob ref create <URL>` turns a web article into a readable, provenance-stamped
-PDF in the Highlights intake (`xlib/blogs/` by default), which `bob ref scan`
-turns into a `ref/` note. Two to twenty URLs create one collection PDF and one
-reference; see [Several URLs](highlights-create.md#several-urls) for naming,
-ordering, layout, and collection rules. `bob ref clip` is a permanent hidden
-alias for `create`.
+PDF, reference note, and reading task. By default it files all three together;
+if intake is kept or cannot safely run, the PDF remains in `xlib/blogs/` for
+`bob ref scan -i` or the host's local intake timer. Two to twenty URLs create
+one collection PDF and one reference; see
+[Several URLs](highlights-create.md#several-urls) for naming, ordering, layout,
+and collection rules. `bob ref clip` is a permanent hidden alias for `create`.
 
 ```bash
 bob ref create [OPTIONS] <URL>...
@@ -14,8 +15,11 @@ bob ref create [OPTIONS] <URL>...
 ## Examples
 
 ```bash
-# Capture into xlib/blogs/ (scan writes ref/blogs/<stem>.md later)
+# Capture and file the reference note and reading task in one command
 bob ref create https://example.com/posts/some-article/ -P sase
+
+# Keep a capture queued for a later local drain
+bob ref create https://example.com/posts/some-article/ -k -P sase
 
 # Preview everything without writing
 bob ref create https://example.com/posts/some-article/ -d -P sase
@@ -43,8 +47,8 @@ that owns the reading task.
 [`highlights-create.md`](highlights-create.md) for the contract) and binds
 the episode beside the PDF as `<stem>.mp3`. The command's output streams
 unchanged, and nothing is written when it fails. When the URL is already
-captured, `--listen` attaches the episode (`xlib/<rel>.mp3`) for `scan` to
-late-pair onto the existing PDF and ref note — unless the URL is recorded
+captured, `--listen` attaches the episode to the existing PDF and ref note
+inline when intake can run — unless the URL is recorded
 only by legacy notes without a Highlights PDF, which capture a fresh copy
 plus the episode instead.
 
@@ -64,14 +68,16 @@ plus the episode instead.
    `source_url`/`url` metadata in ref notes and queued intake markers.
 3. For one URL, the pinned adapter fetches the page, extracts the article in reader
    mode, and renders a Bob-owned print template to PDF.
-4. The PDF is stamped with a page-1 marker (`status`, `parent`, `title`,
-   `id`, `source_url`, plus `author`, `published`, and `captured` when
-   known) and installed into `xlib/<ref-type>/<stem>.pdf`.
-5. For a collection, each page is captured into private scratch without
+4. For a collection, each page is captured into private scratch without
    printing; the adapter composes the ordered article data into one document
    and prints it once. The collection marker records `source_url` as an ordered
-   list. `bob ref scan` later moves the PDF into `lib/` and writes one note.
-   Clip never writes `ref/` notes itself.
+   list.
+5. The PDF is stamped with a page-1 marker (`status`, `parent`, `title`, `id`,
+   `source_url`, plus `author`, `published`, and `captured` when known) and staged
+   under `xlib/<ref-type>/<stem>.pdf` for intake.
+6. Unless intake is kept or cannot safely run, `create` moves the PDF into `lib/`,
+   writes the `ref/` note and reading task, and commits those paths together. A
+   queued PDF is drained locally by `bob ref scan -i` or the host's intake timer.
 
 "Reliable" means "never silently wrong": bot challenges it cannot clear,
 login walls, thin extractions, missing browsers, and private-network URLs
@@ -132,8 +138,8 @@ A ref-note hit refuses only when the note is PDF-backed (it carries a
 `source_pdf`). A URL recorded only by legacy notes without a Highlights
 PDF warns (`already in the library as <path>, a note without a
 Highlights PDF; capturing a fresh copy`) and captures anyway; `bob ref
-find` and `bob ref list` treat the older notes as superseded once `bob
-ref scan` writes the new one. A dry run adds
+find` and `bob ref list` treat the older notes as superseded once `create`
+(or the queued intake drain) writes the new one. A dry run adds
 `legacy: <path> (superseded by this capture)` to its report.
 
 ## Failure kinds
@@ -198,10 +204,10 @@ built from this tree (`cargo build --release`) and copied to athena's
   carries `type: "[[ref]]"`, `ref_type: blogs`, `title`, `id`, `source_url`,
   `author`, `published`, `captured`, and the `^ref` task line; a second scan
   is a no-op (1 unchanged, writes: none).
-- Real capture on athena into `~/bob/xlib/blogs/`; a re-run refuses the
-  occupied target (exit 1, `--force` hint). The Mac's `bob_xlib_pull`
-  drained the queue and created the ref note; vault git sync carried it to
-  athena (and apollo) with all provenance fields intact.
+- Real capture on athena: the PDF, ref note, and reading task were committed
+  and pushed by one create; a re-run refuses the occupied target (exit 1,
+  `--force` hint). A queued capture is drained by athena's local
+  `bob-ref-intake.timer`.
 - Static-site check (`https://lilianweng.github.io/posts/2023-06-23-agent/`,
   scratch vault): headless, no headed fallback, 28 pages, images 13/13,
   fidelity ok; figures and code blocks render correctly.

@@ -2,7 +2,7 @@
 //!
 //! Renders, downloads, stamped copies, and episode audio live in a `0700`
 //! scratch directory until the final atomic installs. This is because
-//! `scan` and `bob_xlib_pull` read every file in `xlib/`, so a listen run
+//! `scan` and the local intake drain read files in `xlib/`, so a listen run
 //! lasting minutes must never stage inside the vault.
 
 use crate::native::env as bob_env;

@@ -225,55 +225,39 @@ its absence is expected until then. Do not move or delete host files to
 make a metric look complete. The journal contract lives in
 [stats.md](stats.md#review-journal).
 
-## Highlights bridge
+## Highlights intake
 
 `lit_review/` and `xlib/` are gitignored. `lit_review/` is out-of-band storage: copy it
 explicitly when a second machine needs the PDFs.
 
-`xlib/` is the Highlights intake bridge. athena and apollo each keep a gitignored
-`~/bob/xlib/` source queue, and `bob_xlib_pull` drains both into the MacBook, either as
-`bob ref scan`'s pre-scan hook or when run by hand. The managed Bob config sets:
+`xlib/` is a gitignored, host-local intake queue. Never rsync it between hosts: a
+cross-host copy can race the local drain and create two reference notes for one capture.
 
-```yaml
-highlights:
-  pre_scan_hook: PATH="$HOME/bin:$PATH" bob_xlib_pull
+By default, `bob ref create`, the ref-jobs worker, and `bob gkeep pull` file the PDF,
+reference note, and reading task together under `bob_sync.lock` then `scan.lock`, and
+commit those paths as one change. If intake is kept or cannot safely run, the PDF stays
+in that host's `xlib/`; no other host is needed to finish it.
+
+On athena and apollo, chezmoi installs and enables `bob-ref-intake.timer`. It runs
+`bob ref scan --intake-only` two minutes after boot and every ten minutes after that.
+The timer drains only that host's queue; an empty queue takes no lock and performs no
+sync. Recover or drain a queue manually with:
+
+```bash
+ssh athena 'bob ref scan -i'
+ssh apollo 'bob ref scan -i'
 ```
 
-On the MacBook, the 15-minute `~/bin/maybe_bob_highlights_sync -w` cron job runs
-`bob highlights scan`, whose pre-scan hook runs `bob_xlib_pull`. The script probes
-athena and apollo in parallel. Missing or empty queues skip rsync entirely, while
-nonempty queues are pulled one host at a time into the MacBook's `~/bob/xlib/` with
-`rsync --remove-source-files --ignore-existing`. The script reuses a private per-run SSH
-control socket for each host's probe, transfer, and best-effort empty directory cleanup.
+The MacBook's staggered 15-minute `maybe_bob_highlights_sync -w` cron job remains the
+full annotation scan. It also drains files in the Mac's own `xlib/`; it never pulls the
+Linux queues. The gate runs when `lib/` changed today or when `xlib/` contains a file,
+so Mac-local queued creates are not missed. See
+[Mac scheduled maintenance](#mac-scheduled-maintenance) for the exact crontab.
 
-After draining athena and apollo, `bob_xlib_pull` runs
-`bob highlights --no-hooks scan -w` itself on the MacBook, so a manual pull syncs the
-new PDFs immediately instead of waiting for the next cron tick. The scan runs even when
-both queues were empty or a probe or transfer failed, because `xlib/` can still hold
-files from an earlier run, and `--no-hooks` keeps it from re-entering the hook. The
-cron job and the hook intentionally keep the `bob highlights` spelling: it is a
-permanent alias of `bob ref`, so they keep working whatever bob is installed.
-It is skipped in two cases:
-
-- bob invoked `bob_xlib_pull` as the pre-scan hook. bob exports
-  `BOB_HIGHLIGHTS_IN_PRE_SCAN_HOOK=1` to the hook and is about to scan anyway.
-- The `${TMPDIR:-/tmp}/maybe_bob_highlights_sync.lock` directory is already held.
-  `bob_xlib_pull` takes the same lock as the cron job while it scans, so the two never
-  run concurrent scans against the vault.
-
-A failed scan, or a missing `bob` binary, makes `bob_xlib_pull` exit non-zero. The
-15-minute cron job stays as the periodic fallback.
-
-Destination files win collisions. If athena, apollo, or the local intake already has the
-same relative path, the later source keeps its copy instead of overwriting the
-destination; a later scan can handle the retained duplicate after the local intake
-clears. Offline hosts and empty queues are no-work successes, so the scan still proceeds
-with whatever is already local. Genuine traversal, local setup, or transfer failures are
-reported after both hosts are accounted for and make the pre-scan hook fail, which stops
-that `bob highlights scan` run before it consumes intake; a manual `bob_xlib_pull` still
-scans what is already local and then exits non-zero. Checking both hosts means a fast
-reachable source can still wait for the other host's SSH timeout when that other host is
-unavailable.
+The old `bob_xlib_pull` bridge and its `pre_scan_hook` configuration are retired. Each
+host now has exactly one intake drainer: the local timer on athena/apollo and the local
+full scan on the Mac. Keep any custom pre-scan hook independent of intake; writing scans
+already hold the maintenance and scan locks while it runs.
 
 Useful checks:
 
