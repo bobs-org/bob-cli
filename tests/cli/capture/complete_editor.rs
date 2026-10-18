@@ -1124,11 +1124,19 @@ fn capture_complete_override_name_json_carries_keeps_ledger_and_running() {
             .arg(draft)
             .env("BOB_DAY_FILE", &day_file)
             .output()
-            .expect("run override-name completion")
+            .expect("run named-start completion")
     };
 
-    // `==#` keeps the running ledger and names the running session.
-    let kept = complete("==#");
+    // A completed `=#name` field keeps the running ledger. An empty name
+    // still offers the name picker but does not yet describe a destination.
+    let empty = complete("=#");
+    assert_success(&empty);
+    let empty_json: serde_json::Value =
+        serde_json::from_str(stdout(&empty).trim()).expect("json");
+    assert_eq!(empty_json["context"], "pomodoro_start_name");
+    assert!(empty_json.get("override").is_none(), "{empty_json}");
+
+    let kept = complete("=#CAPTURE");
     assert_success(&kept);
     let kept_json: serde_json::Value =
         serde_json::from_str(stdout(&kept).trim()).expect("json");
@@ -1146,8 +1154,8 @@ fn capture_complete_override_name_json_carries_keeps_ledger_and_running() {
         "{kept_json}"
     );
 
-    // `==3#bu` re-times; the running session matches the kept shape.
-    let fresh = complete("==3#bu");
+    // `=3#bu` re-times; the running session matches the kept shape.
+    let fresh = complete("=3#bu");
     assert_success(&fresh);
     let fresh_json: serde_json::Value =
         serde_json::from_str(stdout(&fresh).trim()).expect("json");
@@ -1158,8 +1166,8 @@ fn capture_complete_override_name_json_carries_keeps_ledger_and_running() {
         "{fresh_json}"
     );
 
-    // Plain `=#` carries the same state-based override object.
-    let plain = complete("=#");
+    // A complete plain named start carries the same state-based context.
+    let plain = complete("=#bugs");
     assert_success(&plain);
     let plain_json: serde_json::Value =
         serde_json::from_str(stdout(&plain).trim()).expect("json");
@@ -1186,7 +1194,7 @@ fn capture_complete_override_name_json_carries_keeps_ledger_and_running() {
         &day_file,
         concat!("## Pomodoros\n", "- [ ] () — BUGS\n", "- [ ] () — SASE\n"),
     );
-    let idle = complete("==#");
+    let idle = complete("=#");
     assert_success(&idle);
     let idle_json: serde_json::Value =
         serde_json::from_str(stdout(&idle).trim()).expect("json");
@@ -1197,6 +1205,13 @@ fn capture_complete_override_name_json_carries_keeps_ledger_and_running() {
         serde_json::from_str(stdout(&idle_eq).trim()).expect("json");
     assert!(idle_eq_json.get("override").is_none(), "{idle_eq_json}");
 
+    let retired = complete("==#");
+    assert_success(&retired);
+    let retired_json: serde_json::Value =
+        serde_json::from_str(stdout(&retired).trim()).expect("json");
+    assert!(retired_json["context"].is_null(), "{retired_json}");
+    assert!(retired_json.get("override").is_none(), "{retired_json}");
+
     // A missing daily note behaves the same way.
     let missing_day = vault.join("2026/20261010.md");
     let gone = bob_command()
@@ -1204,11 +1219,11 @@ fn capture_complete_override_name_json_carries_keeps_ledger_and_running() {
         .arg("-b")
         .arg(&vault)
         .arg("-c")
-        .arg("6")
+        .arg("5")
         .arg("-f")
         .arg("json")
         .arg("--")
-        .arg("==3#bu")
+        .arg("=3#bu")
         .env("BOB_DAY_FILE", &missing_day)
         .output()
         .expect("run override-name completion without a day file");

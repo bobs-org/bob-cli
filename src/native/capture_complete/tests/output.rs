@@ -273,7 +273,7 @@ fn empty_json_context_is_null() {
 }
 
 #[test]
-fn override_name_completion_carries_keeps_ledger_and_running() {
+fn named_start_completion_carries_keeps_ledger_and_running() {
     let temp = TempDir::new("bob-cli-capture-complete-override");
     let day_file = temp.path().join("2026/20261009.md");
     write_file(
@@ -292,12 +292,17 @@ fn override_name_completion_carries_keeps_ledger_and_running() {
         })
     };
 
-    // `==#` keeps the running ledger and names the running session.
-    let kept = complete("==#");
+    // A completed `=#name` field keeps the running ledger. An empty name
+    // still offers the name picker but does not yet describe a destination.
+    let empty = complete("=#");
+    assert_eq!(empty.context, Some(CompletionContext::PomodoroStartName));
+    assert!(empty.r#override.is_none());
+
+    let kept = complete("=#CAPTURE");
     assert_eq!(kept.context, Some(CompletionContext::PomodoroStartName));
     let kept_override = kept.r#override.as_ref().expect("override object");
     assert!(kept_override.keeps_ledger);
-    let running = kept_override.running.as_ref().expect("running session");
+    let running = &kept_override.running;
     assert_eq!(running.pomodoro_name.as_deref(), Some("CAPTURE"));
     assert_eq!(running.line, 3);
     assert_eq!(running.time_range, "0920-0945");
@@ -314,9 +319,9 @@ fn override_name_completion_carries_keeps_ledger_and_running() {
         })
     );
 
-    // `==3#bu` re-times instead of keeping the ledger; the candidates and
+    // `=3#bu` re-times instead of keeping the ledger; the candidates and
     // the running session match the kept-ledger shape.
-    let fresh = complete("==3#bu");
+    let fresh = complete("=3#bu");
     assert_eq!(fresh.context, Some(CompletionContext::PomodoroStartName));
     let fresh_override = fresh.r#override.as_ref().expect("override object");
     assert!(!fresh_override.keeps_ledger);
@@ -324,8 +329,8 @@ fn override_name_completion_carries_keeps_ledger_and_running() {
     let fresh_json = serde_json::to_value(&fresh).expect("fresh json");
     assert_eq!(fresh_json["override"]["keeps_ledger"], false);
 
-    // Plain `=#` now carries the same state-based override object.
-    let plain = complete("=#");
+    // A complete plain named start carries the same state-based context.
+    let plain = complete("=#bugs");
     assert_eq!(plain.context, Some(CompletionContext::PomodoroStartName));
     let plain_override = plain.r#override.as_ref().expect("override object");
     assert!(plain_override.keeps_ledger);
@@ -337,7 +342,7 @@ fn override_name_completion_carries_keeps_ledger_and_running() {
 }
 
 #[test]
-fn override_name_completion_omits_running_without_a_single_runner() {
+fn named_start_completion_omits_context_without_a_single_runner() {
     let temp = TempDir::new("bob-cli-capture-complete-override-idle");
     let day_file = temp.path().join("2026/20261009.md");
     write_file(
@@ -351,7 +356,7 @@ fn override_name_completion_omits_running_without_a_single_runner() {
     };
 
     // An idle ledger omits the override object.
-    let idle = complete_at(&day_file, "==#");
+    let idle = complete_at(&day_file, "=#");
     assert!(idle.r#override.is_none());
     let idle_eq = complete_at(&day_file, "=#");
     assert!(idle_eq.r#override.is_none());
@@ -360,7 +365,7 @@ fn override_name_completion_omits_running_without_a_single_runner() {
 
     // A missing daily note behaves the same way.
     let missing = temp.path().join("2026/20261010.md");
-    let gone = complete_at(&missing, "==3#bu");
+    let gone = complete_at(&missing, "=3#bu");
     assert!(gone.r#override.is_none());
 
     // Several runners also omit the object: no single session to keep.
@@ -372,8 +377,13 @@ fn override_name_completion_omits_running_without_a_single_runner() {
             "- [ ] (**0935-1000** [t:: 25m]) — BUGS\n",
         ),
     );
-    let crowded = complete_at(&day_file, "==#");
+    let crowded = complete_at(&day_file, "=#");
     assert!(crowded.r#override.is_none());
+
+    // Retired doubled starts do not expose a name field or override data.
+    let retired = complete_at(&day_file, "==#");
+    assert!(retired.context.is_none());
+    assert!(retired.r#override.is_none());
 }
 
 #[test]

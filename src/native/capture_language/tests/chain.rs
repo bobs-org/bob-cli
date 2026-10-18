@@ -189,21 +189,27 @@ fn chain_token_predicate_equals_claimed_for_single_tokens() {
 }
 
 #[test]
-fn draft_splits_override_chains_with_absolute_ranges() {
-    // `==` tokens chain exactly like `=` tokens: a swap plus an
-    // adjustment, a close plus a bare restart, and a restart plus a shift.
+fn draft_splits_retired_double_tokens_and_reports_their_own_ranges() {
+    // Retired forms stay chain tokens so the teaching error lands on their
+    // own item instead of swallowing the rest of the line.
     assert_eq!(
         draft_items("==#bugs +2"),
         vec![(0, 1, "==#bugs"), (1, 1, "+2")]
     );
     assert_eq!(draft_items("x =="), vec![(0, 1, "x"), (1, 1, "==")]);
     assert_eq!(draft_items("== --1"), vec![(0, 1, "=="), (1, 1, "--1")]);
+    assert!(execute_draft("==#bugs +2")
+        .expect_err("retired start")
+        .contains("`==#bugs` is retired"));
+    let parse = parse_for_editor("x ==");
+    assert_eq!(parse.items.len(), 2);
+    assert_eq!(parse.items[1].mode, EditorMode::PomodoroStart);
     assert_eq!(
-        execute_draft("==#bugs +2").expect("chain").items.len(),
-        2,
-        "==#bugs +2"
+        parse.items[1].diagnostics[0].range,
+        Some((2, 4)),
+        "the retired token has its own range"
     );
-    assert_eq!(execute_draft("x ==").expect("chain").items.len(), 2, "x ==");
+    assert!(execute_draft("x ==").is_err());
 }
 
 #[test]

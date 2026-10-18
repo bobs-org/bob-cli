@@ -139,7 +139,7 @@ fn double_equals_close_lookalikes_teach_the_bare_spelling() {
         ("==x#bugs", "x =#bugs"),
     ] {
         let expected = format!(
-            "`{raw}` is not a close: `==` restarts or swaps the running Pomodoro and never closes it; close it with `{spelling}`"
+            "`{raw}` is not a close: close the running Pomodoro with `{spelling}`"
         );
         assert_eq!(execute(raw).expect_err(raw), expected, "{raw}");
         let parse = editor(raw);

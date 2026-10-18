@@ -488,7 +488,7 @@ impl Candidates {
     }
 }
 
-/// The running Pomodoro a `==` name field would override. `pomodoro_name`
+/// The running Pomodoro a named `=` start would restart or swap. `pomodoro_name`
 /// is absent for an unnamed running session; `line` is the 1-based day-file
 /// line and `time_range` the ledger span the swap keeps (`0920-0945`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -503,12 +503,11 @@ pub(super) struct OverrideRunningSession {
 /// exactly one timed session runs and no earlier item or same-line chain
 /// token is a whole-item session operator. `keeps_ledger` is true when the
 /// `<X>` suffix is empty (a swap takes over the running ledger
-/// byte-for-byte); `running` is always set when the object is present.
+/// byte-for-byte). `running` is always set when the object is present.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct OverrideCompletion {
     pub(super) keeps_ledger: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) running: Option<OverrideRunningSession>,
+    pub(super) running: OverrideRunningSession,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

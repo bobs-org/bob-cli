@@ -761,16 +761,6 @@ pub(super) fn plan_pomodoro_start_item(
     );
     let mut drop_list = spec.drop.clone();
     drop_list.sort_unstable();
-    // Idle fallback: nothing was running, so the `==` token behaved
-    // exactly like its `=` twin. The day file matches `=` byte for byte;
-    // only `text` and this additive object differ.
-    let idle_override = spec.r#override.then_some(PomodoroStartOverrideJson {
-        action: "start",
-        ledger: "fresh",
-        previous: None,
-        demoted: None,
-        close_first: None,
-    });
     let summary = PomodoroStartSummary {
         start,
         end,
@@ -783,7 +773,7 @@ pub(super) fn plan_pomodoro_start_item(
         tasks: Some(tasks),
         drop: drop_list,
         dropped,
-        r#override: idle_override,
+        r#override: None,
     };
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {
@@ -974,7 +964,7 @@ fn plan_override_restart_item(
             ledger: "fresh",
             previous: Some(previous),
             demoted: None,
-            close_first: Some(format!("x {}", parsed.body)),
+            close_first: format!("x {}", parsed.body),
         }),
     };
     Ok(PlannedCaptureItem {
@@ -1139,9 +1129,8 @@ fn plan_override_swap_item(
             } else {
                 running_range.clone()
             };
-            let sigil = if spec.r#override { "==" } else { "=" };
             return Err(CaptureError::io(format!(
-                "{subject}, which is already running ({range}, line {running_line}): restart it with `{sigil}` or `{sigil}<X>`, close it with `x`, or name another Pomodoro to swap in"
+                "{subject}, which is already running ({range}, line {running_line}): restart it with `=` or `=<X>`, close it with `x`, or name another Pomodoro to swap in"
             )));
         }
         return plan_override_restart_item(
@@ -1176,9 +1165,8 @@ fn plan_override_swap_item(
                     Some(name) => name.to_string(),
                     None => "the current session".to_string(),
                 };
-                let sigil = if spec.r#override { "==" } else { "=" };
                 return Err(CaptureError::io(format!(
-                    "cannot read {subject}'s session ledger at line {running_line}; give the new session a timing instead (`{sigil}5#{selector}`)"
+                    "cannot read {subject}'s session ledger at line {running_line}; give the new session a timing instead (`=5#{selector}`)"
                 )));
             }
         }
@@ -1362,7 +1350,6 @@ fn plan_override_swap_item(
                         capture_pomodoros::POMODORO_NAME_USAGE
                     ))
                 })?;
-            let sigil = if spec.r#override { "==" } else { "=" };
             let warning = suggestion.map(|entry| {
                 let suggestion_name = entry
                     .name
@@ -1371,7 +1358,7 @@ fn plan_override_swap_item(
                 let slug = entry.slug.clone();
                 let raw = spec.raw.clone();
                 format!(
-                    "no open Pomodoro matches `#{selector}`; created {name} (did you mean {suggestion_name}? use `{sigil}{raw}#{slug}`)"
+                    "no open Pomodoro matches `#{selector}`; created {name} (did you mean {suggestion_name}? use `={raw}#{slug}`)"
                 )
             });
             let (with_placeholder, created_line, _) =
@@ -1490,7 +1477,7 @@ fn plan_override_swap_item(
                 task_links: demoted_task_links,
                 has_notes: demoted_has_notes,
             }),
-            close_first: Some(format!("x {}", parsed.body)),
+            close_first: format!("x {}", parsed.body),
         }),
     };
     let started_ref = match start_before {
@@ -2081,7 +2068,6 @@ fn plan_named_pomodoro_start_item(
                                 capture_pomodoros::POMODORO_NAME_USAGE
                             ))
                         })?;
-                let sigil = if spec.r#override { "==" } else { "=" };
                 let warning = suggestion.map(|entry| {
                     let suggestion_name = entry
                         .name
@@ -2090,7 +2076,7 @@ fn plan_named_pomodoro_start_item(
                     let slug = entry.slug.clone();
                     let raw = spec.raw.clone();
                     format!(
-                        "no open Pomodoro matches `#{selector}`; created {name} (did you mean {suggestion_name}? use `{sigil}{raw}#{slug}`)"
+                        "no open Pomodoro matches `#{selector}`; created {name} (did you mean {suggestion_name}? use `={raw}#{slug}`)"
                     )
                 });
                 let (with_placeholder, created_line, _) =
@@ -2157,13 +2143,6 @@ fn plan_named_pomodoro_start_item(
         })?;
     let mut drop_list = spec.drop.clone();
     drop_list.sort_unstable();
-    let idle_override = spec.r#override.then_some(PomodoroStartOverrideJson {
-        action: "start",
-        ledger: "fresh",
-        previous: None,
-        demoted: None,
-        close_first: None,
-    });
     let summary = PomodoroStartSummary {
         start: start.to_string(),
         end: end.to_string(),
@@ -2176,7 +2155,7 @@ fn plan_named_pomodoro_start_item(
         tasks: Some(tasks),
         drop: drop_list,
         dropped,
-        r#override: idle_override,
+        r#override: None,
     };
     Ok(PlannedCaptureItem {
         result: CaptureItemResult {

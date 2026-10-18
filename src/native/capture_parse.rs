@@ -189,10 +189,12 @@ with a `pomodoro_start` object (`raw` excludes `=`, plus 5-minute \
 `pomodoro_start` span covering the whole token (only `=<X>` when a `~<K>` \
 drop part is present, with a `pomodoro_start_drop` span covering `~<K>` \
 including the `~`); the human `start` line reads `=3#bugs~1,3 (15m, \
-offset 0u · drop 1, 3)`. The `==` family (`==`, `==<X>`, `==[<X>]#name`, \
-`…~<K>`) parses the same way with an additive `override: true` flag on the \
-spec and the doubled sigil in the human line; a bare `==` with more text \
-stays prose (Obsidian `==highlight==` text), and `==x` is never a close (it teaches `x`). \
+offset 0u · drop 1, 3)`. Every claimed doubled start (`==`, `==3#bugs`, \
+`==#`, `==~`, `==#bugs=3`) reports mode 'pomodoro_start' with an \
+`invalid_pomodoro_start` diagnostic over the token and a message naming its \
+single-`=` rewrite. The `==x` family reports that it is not a close and \
+teaches the bare `x` rewrite. Bare `==` followed by prose stays ordinary \
+text, preserving Obsidian highlights. \
 The parse stays purely lexical and never guesses \
 current ledger times. A counted or drop-carrying token with extra text, \
 markers, or child lines (`=3 more`, `=3x`, `=~2 more`), an exact token \
@@ -213,9 +215,10 @@ bytes only (the `#` is in no span), `=<X>#` with no name reports mode \
 'incomplete' needing `pomodoro_name` with an `interactive_placeholder` \
 span over `#` and the partial `pomodoro_start` spec, and `x#name` reports \
 mode 'pomodoro_close' with an `invalid_pomodoro_close` diagnostic over \
-`#name`. Named overrides (`==#bugs`, `==3#bugs`) parse the same way with \
-the `override` flag; `==#` needs `pomodoro_name` with the partial override \
-spec, and `==#bugs=3` teaches `==#bugs@3` or `==3#bugs`. A trailing `@<X>` timing (`=#bugs@3` means `=3#bugs`, `==#bugs@3` swaps with fresh timing, `=~2@3` means `=3~2`) reports the canonical spec with a second `pomodoro_start` span over `@<X>`; a dangling `@` reports `incomplete` needing `pomodoro_start_timing` with no spec. A whole-item \
+`#name`. A trailing `@<X>` timing (`=#bugs@3` means `=3#bugs`, \
+`=~2@3` means `=3~2`) reports the canonical spec with a second \
+`pomodoro_start` span over `@<X>`; a dangling `@` reports `incomplete` \
+needing `pomodoro_start_timing` with no spec. A whole-item \
 `x[<N>][*<P>][!<M>][~<K>][@<N>]` close (lowercase `x` only, with `*`, `!`, `~`, and `@` in \
 any order; a capitalized `X…` stays prose) reports mode 'pomodoro_close' with a `pomodoro_close` object \
 (`raw` exactly as typed plus the additive `in_progress` list, null when no `<N>` was typed, \
@@ -268,7 +271,8 @@ separator. A trailing `*`/`!` is a wildcard instead of dangling, so `x*` and `x!
 with child lines attaching to the line's `x` (the last `x` when it closes \
 twice); a chain whose `x` is not last nests its item ranges, so they never \
 partially overlap. Other `x` tokens (`xx`, `xa`, `x-ray`, a capitalized `X…`), other \
-`=`-prefixed tokens (`==`, `= foo`), and mid-body `x` stay ordinary prose. The retired \
+doubled and bare starts followed by prose (`== foo`, `= foo`), and mid-body \
+`x` stay ordinary prose. The retired \
 `=x…`, `=*…`, and `=!…` whole-item spellings report 'pomodoro_close' plus an \
 `invalid_pomodoro_close` diagnostic that names the bare `x…` rewrite. On \
 link items the `=x…` suffix (the `=` separates it from the block ID) spans the same four span kinds after the route \
@@ -1870,14 +1874,14 @@ fn print_human_success_with_styler(
 }
 
 /// Render a validated whole-item start for human output: the whole
-/// typed token (`=`/`==` plus `<X>`, plus `#name` for a named start plus
+/// typed token (`=` plus `<X>`, plus `#name` for a named start plus
 /// `~<K>` for a drop list) plus its resolved 5-minute duration and offset
-/// units. An override keeps its doubled sigil.
+/// units.
 fn format_pomodoro_start(
     start: &PomodoroStartSpec,
     section: Option<&str>,
 ) -> String {
-    let sigil = if start.r#override { "==" } else { "=" };
+    let sigil = "=";
     let mut token = match section {
         Some(name) => format!("{sigil}{}#{name}", start.raw),
         None => format!("{sigil}{}", start.raw),
@@ -2601,56 +2605,41 @@ mod tests {
     }
 
     #[test]
-    fn json_reports_override_starts_with_the_doubled_sigil() {
-        // An override keeps mode `pomodoro_start` with an additive
-        // `"override": true` flag, the doubled sigil in the human line,
-        // and spans covering `==<X>`.
-        let value = json("==3#bugs");
-        assert_eq!(value["mode"], "pomodoro_start");
-        assert_eq!(value["body"], "==3#bugs");
-        assert_eq!(value["section"], "bugs");
-        assert_eq!(
-            value["pomodoro_start"],
-            serde_json::json!({
-                "raw": "3",
-                "duration_units": 3,
-                "offset_units": 0,
-                "override": true,
-            })
-        );
-        assert_eq!(
-            value["spans"],
-            serde_json::json!([
-                { "start": 0, "end": 3, "kind": "pomodoro_start" },
-                { "start": 4, "end": 8, "kind": "pomodoro_name" },
-            ])
-        );
-        assert_eq!(value["diagnostics"], serde_json::json!([]));
+    fn json_reports_retired_doubled_starts_with_token_ranges() {
+        for raw in ["==", "==3#bugs", "==#", "==~", "==#bugs=3"] {
+            let value = json(raw);
+            assert_eq!(value["mode"], "pomodoro_start", "{raw}: {value}");
+            assert_eq!(value["body"], raw, "{raw}: {value}");
+            assert!(value.get("pomodoro_start").is_none(), "{raw}: {value}");
+            assert_eq!(
+                value["diagnostics"][0]["code"], "invalid_pomodoro_start",
+                "{raw}: {value}"
+            );
+            assert_eq!(
+                value["diagnostics"][0]["range"],
+                serde_json::json!([0, raw.len()]),
+                "{raw}: {value}"
+            );
+            assert_eq!(
+                value["spans"],
+                serde_json::json!([
+                    { "start": 0, "end": raw.len(), "kind": "pomodoro_start" }
+                ]),
+                "{raw}: {value}"
+            );
+            let rewrite = raw.strip_prefix('=').expect("doubled token");
+            assert_eq!(
+                value["diagnostics"][0]["message"],
+                format!("`{raw}` is retired: `=` restarts or swaps the running Pomodoro by itself; write `{rewrite}`"),
+                "{raw}: {value}"
+            );
+        }
 
-        // A plain start omits the flag, so older clients read it unchanged.
-        let plain = json("=3#bugs");
-        assert_eq!(
-            plain["pomodoro_start"],
-            serde_json::json!({
-                "raw": "3",
-                "duration_units": 3,
-                "offset_units": 0,
-            })
-        );
-
-        // An override incomplete keeps the flag on its partial spec.
-        let incomplete = json("==#");
-        assert_eq!(incomplete["mode"], "incomplete");
-        assert_eq!(incomplete["needs"], serde_json::json!(["pomodoro_name"]));
-        assert_eq!(
-            incomplete["pomodoro_start"],
-            serde_json::json!({
-                "raw": "",
-                "duration_units": 5,
-                "offset_units": 0,
-                "override": true,
-            })
-        );
+        for raw in ["== foo", "==important== thing"] {
+            let value = json(raw);
+            assert_eq!(value["mode"], "task", "{raw}: {value}");
+            assert_eq!(value["diagnostics"], serde_json::json!([]));
+        }
     }
 
     #[test]

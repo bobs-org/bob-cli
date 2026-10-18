@@ -13,7 +13,6 @@ pub(super) fn print_human_pomodoro_start_success(
     let action = start.r#override.as_ref().map(|item| item.action);
     let is_restart = matches!(action, Some("restart"));
     let is_swap = matches!(action, Some("swap"));
-    let is_idle_start = matches!(action, Some("start"));
     let verb = if is_restart {
         if result.dry_run {
             "would restart"
@@ -134,12 +133,6 @@ pub(super) fn print_human_pomodoro_start_success(
         );
     }
     println!("  {}", styler.dim(&result.task_line));
-    if is_idle_start {
-        println!(
-            "  {}",
-            styler.dim("nothing was running, so == started it like =")
-        );
-    }
     // Queued-task lineup in the close's row style, with the unchanged
     // status marker instead of a transition. Link and task starts carry no
     // rows and print nothing here.
@@ -242,8 +235,11 @@ fn override_warning_line(
         }
     };
     let mut line = format!("⚠ {verb} {subject}");
-    if dry_run && let Some(close_first) = outcome.close_first.as_deref() {
-        line.push_str(&format!(" · capture `{close_first}` to close it first"));
+    if dry_run {
+        line.push_str(&format!(
+            " · capture `{}` to close it first",
+            outcome.close_first
+        ));
     }
     Some(line)
 }

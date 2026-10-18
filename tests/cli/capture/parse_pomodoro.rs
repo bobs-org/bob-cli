@@ -922,19 +922,22 @@ fn capture_parse_pomodoro_start_human_and_help() {
         stdout(&named)
     );
 
-    // An override keeps its doubled sigil in the human line.
-    let overridden = bob_command()
+    // The retired doubled form reports a teaching error and no start line.
+    let retired = bob_command()
         .arg("capture-parse")
         .arg("--")
         .arg("==3#bugs")
         .output()
-        .expect("run override human");
-    assert_success(&overridden);
+        .expect("run retired-form human");
+    assert_success(&retired);
     assert!(
-        stdout(&overridden).contains("==3#bugs (15m, offset 0u)"),
+        stdout(&retired).contains(
+            "`==3#bugs` is retired: `=` restarts or swaps the running Pomodoro by itself; write `=3#bugs`"
+        ),
         "{}",
-        stdout(&overridden)
+        stdout(&retired)
     );
+    assert!(!stdout(&retired).contains("==3#bugs (15m, offset 0u)"));
 
     let marked = bob_command()
         .arg("capture-parse")

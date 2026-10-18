@@ -708,60 +708,33 @@ fn pomodoro_start_name_completes_after_hash_on_a_named_start() {
 }
 
 #[test]
-fn pomodoro_override_name_completes_after_hash_with_wider_offsets() {
-    // `==#` offers an empty insertion point one byte later than `=#`.
-    let empty = field("==#", 3).expect("override name field");
-    assert_eq!(empty.context, CompletionContext::PomodoroStartName);
-    assert_eq!(empty.route, None);
-    assert_eq!(empty.block_id, None);
-    assert_eq!(empty.query, "");
-    assert_eq!(empty.replacement, (3, 3));
-
-    // A mid-name cursor reports the typed prefix but replaces the whole
-    // name part, which starts after the doubled sigil.
-    let raw = "==3#bugs";
-    let mid = field(raw, 6).expect("mid-name field");
-    assert_eq!(mid.context, CompletionContext::PomodoroStartName);
-    assert_eq!(mid.query, "bu");
-    assert_eq!(mid.replacement, (4, 8));
-
-    let end = field(raw, raw.len()).expect("end-of-name field");
-    assert_eq!(end.query, "bugs");
-    assert_eq!(end.replacement, (4, 8));
-
-    // A cursor on `==<X>` or at the `#` byte itself offers nothing.
-    assert_eq!(field("==#bugs", 0), None);
-    assert_eq!(field("==#bugs", 1), None);
-    assert_eq!(field("==#bugs", 2), None);
-    assert_eq!(field("==3#bugs", 3), None);
-    assert_eq!(field("==#", 2), None);
-
-    // Bare overrides offer nothing.
-    assert_eq!(field("==", 2), None);
-    assert_eq!(field("==3", 3), None);
+fn retired_doubled_start_has_no_name_completion_or_override_context() {
+    for raw in ["==#", "==#bugs", "==3#bugs", "==#bugs~2"] {
+        assert_eq!(field(raw, raw.len()), None, "{raw}");
+        assert_eq!(pomodoro_start_override_at(raw, raw.len()), None, "{raw}");
+    }
 }
 
 #[test]
-fn pomodoro_start_override_reports_sigil_and_suffix_emptiness() {
-    // An empty `<X>` keeps the running ledger; a fresh timing does not.
-    assert_eq!(pomodoro_start_override_at("==#", 3), Some(true));
-    assert_eq!(pomodoro_start_override_at("==#bugs", 7), Some(true));
-    assert_eq!(pomodoro_start_override_at("==3#bugs", 8), Some(false));
-    assert_eq!(pomodoro_start_override_at("==-2#bugs", 9), Some(false));
+fn pomodoro_start_name_context_reports_ledger_behavior() {
+    // A complete name field reports whether the swap keeps the running ledger.
+    assert_eq!(pomodoro_start_override_at("=#bugs", 3), Some(true));
+    assert_eq!(pomodoro_start_override_at("=3#bugs", 4), Some(false));
+    assert_eq!(pomodoro_start_override_at("=-2#bugs", 4), Some(false));
     // A drop list does not change the kept ledger.
-    assert_eq!(pomodoro_start_override_at("==#bugs~2", 7), Some(true));
-    // Plain `=` names now carry the same keeps_ledger flag.
-    assert_eq!(pomodoro_start_override_at("=#", 2), Some(true));
-    assert_eq!(pomodoro_start_override_at("=3#bugs", 7), Some(false));
-    // A cursor on the sigil, suffix, or `#` itself is not a name field.
-    assert_eq!(pomodoro_start_override_at("==#bugs", 2), None);
-    assert_eq!(pomodoro_start_override_at("==3#bugs", 3), None);
-    assert_eq!(pomodoro_start_override_at("==#", 2), None);
+    assert_eq!(pomodoro_start_override_at("=#bugs~2", 6), Some(true));
+    // An empty name, or a cursor before the name field, has no override context.
+    assert_eq!(pomodoro_start_override_at("=#", 2), None);
+    assert_eq!(pomodoro_start_override_at("=#bugs", 1), None);
+    // The cursor immediately after `#` is inside the non-empty name field.
+    assert_eq!(pomodoro_start_override_at("=#bugs", 2), Some(true));
+    assert_eq!(pomodoro_start_override_at("=3#bugs", 2), None);
+    assert_eq!(pomodoro_start_override_at("=#", 1), None);
     // Bare tokens and body text offer nothing.
-    assert_eq!(pomodoro_start_override_at("==", 2), None);
+    assert_eq!(pomodoro_start_override_at("=", 1), None);
     assert_eq!(pomodoro_start_override_at("buy milk", 4), None);
     // An earlier session operator omits override context.
-    let chain = "x ==#de";
+    let chain = "x =#de";
     assert_eq!(pomodoro_start_override_at(chain, chain.len()), None);
     assert_eq!(pomodoro_start_override_at(chain, 1), None);
     let eq_chain = "x =#";

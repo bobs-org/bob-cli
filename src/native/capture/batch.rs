@@ -355,17 +355,15 @@ pub(super) struct PomodoroStartSummary {
     /// `tasks`, so an older client's "N queued tasks" stays truthful.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(super) dropped: Vec<PomodoroStartTaskJson>,
-    /// Override outcome, present when a start restarted or swapped a
-    /// running session, or when a doubled `==` token started while idle
-    /// (`action: "start"`). Plain `=` idle starts omit it.
+    /// Override outcome, present only when a start restarted or swapped a
+    /// running session. Idle starts omit it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) r#override: Option<PomodoroStartOverrideJson>,
 }
 
-/// Override outcome for a restart or swap, or that nothing was running
-/// and a doubled `==` token behaved like its `=` twin. `demoted` is
-/// swaps only; restarts and idle starts omit it. `close_first` is the
-/// draft that closes the running session first; idle starts omit it.
+/// Override outcome for a restart or swap. `demoted` is swaps only;
+/// restarts omit it. `close_first` is the draft that closes the running
+/// session first.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(super) struct PomodoroStartOverrideJson {
     pub(super) action: &'static str,
@@ -374,8 +372,7 @@ pub(super) struct PomodoroStartOverrideJson {
     pub(super) previous: Option<PomodoroStartPreviousJson>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) demoted: Option<PomodoroStartDemotedJson>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) close_first: Option<String>,
+    pub(super) close_first: String,
 }
 
 fn overdue_is_false(value: &bool) -> bool {

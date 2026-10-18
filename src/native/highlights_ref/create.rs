@@ -4480,8 +4480,11 @@ mod tests {
     fn skip_pandoc_xelatex(test_name: &str) -> bool {
         if pandoc_command().is_none()
             || Command::new("xelatex").arg("--version").output().is_err()
+            || Command::new("pdftotext").arg("-v").output().is_err()
         {
-            eprintln!("skipping {test_name}: pandoc/xelatex is required");
+            eprintln!(
+                "skipping {test_name}: pandoc/xelatex/pdftotext are required"
+            );
             return true;
         }
         false

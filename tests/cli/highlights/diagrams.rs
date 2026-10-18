@@ -16,8 +16,12 @@ fn skip_pandoc_xelatex(test_name: &str) -> bool {
         .arg("--version")
         .output()
         .is_ok_and(|output| output.status.success());
-    if !pandoc_available || !xelatex_available {
-        eprintln!("skipping {test_name}: pandoc/xelatex is required");
+    let pdftotext_available =
+        Command::new("pdftotext").arg("-v").output().is_ok();
+    if !pandoc_available || !xelatex_available || !pdftotext_available {
+        eprintln!(
+            "skipping {test_name}: pandoc/xelatex/pdftotext are required"
+        );
         return true;
     }
     false

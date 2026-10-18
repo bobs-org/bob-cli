@@ -476,9 +476,9 @@ pub(super) fn caret_link_field(
     })
 }
 
-/// Lexed facts for the named-start (`=<X>#name` or `==<X>#name`) token
-/// whose name part holds `cursor`: the doubled-sigil flag, the raw `<X>`
-/// suffix, the name text, and the absolute name-part span. `None` when the
+/// Lexed facts for the named-start (`=<X>#name`) token whose name part holds
+/// `cursor`: the raw `<X>` suffix, the name text, and the absolute name-part
+/// span. Retired doubled starts never offer completion. `None` when the
 /// cursor is not inside such a name part: just after `#` through the end
 /// of the name part. A cursor on `=<X>` or at the `#` byte itself yields
 /// nothing, and `#` is never inside the span. The lexer decides what
@@ -487,14 +487,14 @@ pub(super) fn caret_link_field(
 fn named_start_name_at(
     item: &CaptureItem<'_>,
     cursor: usize,
-) -> Option<(bool, String, String, (usize, usize))> {
+) -> Option<(String, String, (usize, usize))> {
     let parent = item.lines.first()?;
     let text = parent.raw.text;
     let trimmed = text.trim();
     let super::item::EqualsToken::Start {
         suffix,
         name: Some(name),
-        r#override,
+        doubled: false,
         ..
     } = super::item::session_equals_token(trimmed)?
     else {
@@ -502,16 +502,13 @@ fn named_start_name_at(
     };
     let leading = text.len() - text.trim_start().len();
     let token_start = parent.raw.start + leading;
-    // The `==` sigil is one byte longer than `=`, so a `==#` name field
-    // starts one byte later.
-    let sigil_len = if trimmed.starts_with("==") { 2 } else { 1 };
-    let prefix_len = sigil_len + suffix.len();
+    let prefix_len = 1 + suffix.len();
     let name_start = token_start + prefix_len + 1;
     let name_end = name_start + name.len();
     if cursor < name_start || cursor > name_end {
         return None;
     }
-    Some((r#override, suffix, name, (name_start, name_end)))
+    Some((suffix, name, (name_start, name_end)))
 }
 
 /// Completion field for the name part of a `=<X>#name` named Pomodoro
@@ -524,8 +521,7 @@ fn pomodoro_start_name_field(
     item: &CaptureItem<'_>,
     cursor: usize,
 ) -> Option<CompletionField> {
-    let (_, _, name, (name_start, name_end)) =
-        named_start_name_at(item, cursor)?;
+    let (_, name, (name_start, name_end)) = named_start_name_at(item, cursor)?;
     let query = name.get(..cursor - name_start)?.to_string();
     Some(CompletionField {
         context: CompletionContext::PomodoroStartName,
@@ -563,7 +559,12 @@ pub(crate) fn pomodoro_start_override_at(
             return None;
         }
     }
-    let (_, suffix, _, _) = named_start_name_at(item, cursor)?;
+    let (suffix, name, _) = named_start_name_at(item, cursor)?;
+    // While the name picker may expose an empty insertion point after `#`,
+    // the override banner only applies once the draft names its destination.
+    if name.is_empty() {
+        return None;
+    }
     let parent = item.lines.first()?;
     let text = parent.raw.text;
     let leading = text.len() - text.trim_start().len();

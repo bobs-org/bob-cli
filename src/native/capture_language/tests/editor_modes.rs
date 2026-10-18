@@ -1294,79 +1294,53 @@ fn editor_reports_pomodoro_start_modes_spans_specs_and_diagnostics() {
 }
 
 #[test]
-fn editor_reports_override_family_modes_spans_specs_and_diagnostics() {
-    // Exact overrides: mode, spans over the doubled sigil, spec flag.
-    let bare = editor("==");
-    assert_eq!(bare.mode, EditorMode::PomodoroStart, "==");
-    assert!(bare.pomodoro_start.as_ref().expect("spec").r#override, "==");
-    assert!(
-        ranges(&bare).contains(&(0, 2, SpanKind::PomodoroStart)),
-        "=="
-    );
-    assert!(bare.diagnostics.is_empty(), "==");
+fn editor_reports_retired_doubled_start_forms_over_the_token() {
+    for raw in [
+        "==",
+        "==3",
+        "==#bugs",
+        "==3#bugs~2",
+        "==#bugs@3",
+        "==#",
+        "==~",
+        "==#bugs=3",
+        "==3 more",
+        "==~2,",
+    ] {
+        let parse = editor(raw);
+        let token = raw.split_whitespace().next().unwrap_or(raw);
+        let rewrite = token.strip_prefix('=').expect("doubled token");
+        assert_eq!(parse.mode, EditorMode::PomodoroStart, "{raw}");
+        assert_eq!(codes(&parse), vec!["invalid_pomodoro_start"], "{raw}");
+        assert_eq!(parse.diagnostics[0].range, Some((0, token.len())), "{raw}");
+        assert_eq!(parse.diagnostics[0].message,
+            format!("`{token}` is retired: `=` restarts or swaps the running Pomodoro by itself; write `{rewrite}`"),
+            "{raw}");
+        assert_eq!(
+            ranges(&parse),
+            vec![(0, token.len(), SpanKind::PomodoroStart)],
+            "{raw}"
+        );
+        assert!(parse.pomodoro_start.is_none(), "{raw}");
+        assert!(parse.needs.is_empty(), "{raw}");
+    }
 
-    let named = editor("==3#bugs");
-    assert_eq!(named.mode, EditorMode::PomodoroStart, "==3#bugs");
-    assert_eq!(named.section.as_deref(), Some("bugs"), "==3#bugs");
-    let spec = named.pomodoro_start.as_ref().expect("spec");
-    assert_eq!(spec.raw, "3", "==3#bugs");
-    assert!(spec.r#override, "==3#bugs");
-    assert!(
-        ranges(&named).contains(&(0, 3, SpanKind::PomodoroStart)),
-        "==3#bugs"
-    );
-    assert!(
-        ranges(&named).contains(&(4, 8, SpanKind::PomodoroName)),
-        "==3#bugs"
-    );
+    for (raw, rewrite) in
+        [("==x", "x"), ("==X1", "x1"), ("==*", "x*"), ("==!2", "x!2")]
+    {
+        let parse = editor(raw);
+        assert_eq!(parse.mode, EditorMode::PomodoroStart, "{raw}");
+        assert_eq!(codes(&parse), vec!["invalid_pomodoro_start"], "{raw}");
+        assert_eq!(parse.diagnostics[0].range, Some((0, raw.len())), "{raw}");
+        assert_eq!(
+            parse.diagnostics[0].message,
+            format!("`{raw}` is not a close: close the running Pomodoro with `{rewrite}`"),
+            "{raw}"
+        );
+    }
 
-    // `==#` needs a name with the partial spec carrying the flag, so the
-    // start picker opens for overrides exactly like starts.
-    let incomplete = editor("==#");
-    assert_eq!(incomplete.mode, EditorMode::Incomplete, "==#");
-    assert_eq!(incomplete.needs, vec![Need::PomodoroName], "==#");
-    assert!(
-        incomplete
-            .pomodoro_start
-            .as_ref()
-            .expect("partial")
-            .r#override,
-        "==#"
-    );
-
-    // `==~` needs a task number the same way.
-    let dangling = editor("==~");
-    assert_eq!(dangling.mode, EditorMode::Incomplete, "==~");
-    assert_eq!(dangling.needs, vec![Need::PomodoroStartTask], "==~");
-    assert!(
-        dangling
-            .pomodoro_start
-            .as_ref()
-            .expect("partial")
-            .r#override,
-        "==~"
-    );
-
-    // `==x` teaches the override instead of closing, over the token.
-    let mistook = editor("==x");
-    assert_eq!(mistook.mode, EditorMode::PomodoroStart, "==x");
-    assert_eq!(codes(&mistook), vec!["invalid_pomodoro_start"], "==x");
-    assert_eq!(mistook.diagnostics[0].range, Some((0, 3)), "==x");
-    assert!(
-        mistook.diagnostics[0].message.contains("never closes it"),
-        "==x"
-    );
-
-    // A claimed override with extra text reports on the extra text,
-    // one byte later than the `=` twin for the wider sigil.
-    let shape = editor("==3 more");
-    assert_eq!(shape.mode, EditorMode::PomodoroStart, "==3 more");
-    assert_eq!(codes(&shape), vec!["invalid_pomodoro_start"], "==3 more");
-    assert_eq!(shape.diagnostics[0].range, Some((4, 8)), "==3 more");
-    assert!(shape.pomodoro_start.is_none(), "==3 more");
-
-    // Bare overrides with prose stay ordinary tasks.
-    for raw in ["== foo", "==foo", "==xyz", "=== "] {
+    // Lookalikes, bare starts with prose, and highlight text stay tasks.
+    for raw in ["== foo", "==foo", "==xyz", "=== ", "==important== thing"] {
         let parse = editor(raw);
         assert_eq!(parse.mode, EditorMode::Task, "{raw}");
         assert!(parse.diagnostics.is_empty(), "{raw}");
@@ -1525,7 +1499,7 @@ fn editor_reports_named_pomodoro_start_modes_spans_and_diagnostics() {
     assert_eq!(codes(&close_hash), vec!["invalid_pomodoro_close"], "x#bugs");
     assert_eq!(
         close_hash.diagnostics[0].message,
-        "`x` always closes the running Pomodoro; remove `#bugs`, or write `x =#bugs` to close it and then start that Pomodoro; `==#bugs` swaps it in without closing the running session",
+        "`x` always closes the running Pomodoro; remove `#bugs`, or write `x =#bugs` to close it and then start that Pomodoro; `=#bugs` swaps it in without closing the running session",
         "x#bugs"
     );
     assert_eq!(close_hash.diagnostics[0].range, Some((1, 6)), "x#bugs");

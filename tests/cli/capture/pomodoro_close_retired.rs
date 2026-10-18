@@ -65,7 +65,7 @@ fn double_equals_close_teaches_the_bare_spelling() {
     unchanged_after_error(
         "bob-cli-retired-double-close",
         &["==x"],
-        "`==x` is not a close: `==` restarts or swaps the running Pomodoro and never closes it; close it with `x`",
+        "`==x` is not a close: close the running Pomodoro with `x`",
     );
 }
 

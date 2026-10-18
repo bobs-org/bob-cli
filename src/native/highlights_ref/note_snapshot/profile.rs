@@ -1008,8 +1008,13 @@ Overfull \\hbox (20.1pt too wide) in paragraph\n";
         // Strike formatting survives while lifted links stay after the strike.
         let strike = tex.find("\\st{struck").expect("strike formatting");
         let lifted_link = tex
-            .find("\\hyperref[t-next]{visible link\\BobTag{ᵇ}}")
+            .find("\\hyperlink{t-next}{visible")
+            .or_else(|| tex.find("\\hyperref[t-next]{visible link\\BobTag{ᵇ}}"))
             .expect("lifted link");
+        assert!(
+            tex[lifted_link..].contains("\\BobTag{ᵇ}"),
+            "the lifted link keeps its return tag: {tex}"
+        );
         assert!(strike < lifted_link, "{tex}");
         assert!(
             !tex[strike..lifted_link].contains("\\hyperref"),

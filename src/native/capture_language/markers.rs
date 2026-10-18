@@ -596,8 +596,7 @@ pub(super) fn pomodoro_named_start_shape_error(
 }
 
 /// Named-start E4 variant when the name is empty and extra text follows
-/// (`=# bugs`): no space after `#`. `sigil` is the typed `=`/`==` prefix
-/// so an override keeps its doubled spelling.
+/// (`=# bugs`): no space after `#`. `sigil` is the typed `=` prefix.
 pub(super) fn pomodoro_named_start_nospace_error(
     sigil: &str,
     suffix: &str,
@@ -608,15 +607,23 @@ pub(super) fn pomodoro_named_start_nospace_error(
     )
 }
 
-/// `==`-prefixed close shape (`==x`, `==X1`, `==*`, `==!2`): `==`
-/// restarts or swaps the running Pomodoro and never closes it.
+/// A claimed doubled start spelling. The single `=` rewrite is computed by
+/// removing one leading `=` from the typed token.
+pub(super) fn pomodoro_double_start_error(token: &str) -> String {
+    let rewrite = token.strip_prefix('=').unwrap_or(token);
+    format!(
+        "`{token}` is retired: `=` restarts or swaps the running Pomodoro by itself; write `{rewrite}`"
+    )
+}
+
+/// Retired `==x`-family close shape (`==x`, `==X1`, `==*`, `==!2`).
 /// `close_spelling` is the bare rewrite of the typed tail (`x`, `x1`, `x*`).
 pub(super) fn pomodoro_double_close_error(
     token: &str,
     close_spelling: &str,
 ) -> String {
     format!(
-        "`{token}` is not a close: `==` restarts or swaps the running Pomodoro and never closes it; close it with `{close_spelling}`"
+        "`{token}` is not a close: close the running Pomodoro with `{close_spelling}`"
     )
 }
 
@@ -649,7 +656,7 @@ pub(super) fn pomodoro_close_hash_error(name: &str) -> String {
         "`x` always closes the running Pomodoro; remove `#`".to_string()
     } else {
         format!(
-            "`x` always closes the running Pomodoro; remove `#{name}`, or write `x =#{name}` to close it and then start that Pomodoro; `==#{name}` swaps it in without closing the running session"
+            "`x` always closes the running Pomodoro; remove `#{name}`, or write `x =#{name}` to close it and then start that Pomodoro; `=#{name}` swaps it in without closing the running session"
         )
     }
 }

@@ -274,14 +274,11 @@ pub(super) fn parse_editor_named_start_item<'a>(
     len: usize,
     drop: Option<(usize, String)>,
     timing: Option<(usize, String)>,
-    override_token: bool,
 ) -> Option<EditorItemOutcome<'a>> {
     let parent = item.lines.first().expect("nonempty item");
     let leading = parent.raw.text.len() - parent.raw.text.trim_start().len();
     let token_start = parent.raw.start + leading;
-    // The `==` sigil is one byte longer than `=`.
-    let sigil_len: usize = if override_token { 2 } else { 1 };
-    let prefix_len = sigil_len + suffix.len();
+    let prefix_len = 1 + suffix.len();
     let hash_start = token_start + prefix_len;
     let name_start = hash_start + 1;
     let name_end = name_start + name.len();
@@ -378,10 +375,7 @@ pub(super) fn parse_editor_named_start_item<'a>(
                 item,
                 parent_trimmed,
                 spans,
-                parse_pomodoro_start_suffix(&suffix).ok().map(|mut spec| {
-                    spec.r#override = override_token;
-                    spec
-                }),
+                parse_pomodoro_start_suffix(&suffix).ok(),
             ));
         }
         if let Some((message, range)) = named_start_token_diagnostic(
@@ -409,11 +403,7 @@ pub(super) fn parse_editor_named_start_item<'a>(
         if !suffix.is_empty()
             && let Some((timing_offset, timing_after)) = timing.as_ref()
         {
-            let sigil = if token_text.starts_with("==") {
-                "=="
-            } else {
-                "="
-            };
+            let sigil = "=";
             let effective = if !timing_after.is_empty() {
                 timing_after.as_str()
             } else {
@@ -462,7 +452,6 @@ pub(super) fn parse_editor_named_start_item<'a>(
         let effective = super::item::effective_start_timing(&suffix, &timing);
         let mut spec = parse_pomodoro_start_suffix(&effective)
             .expect("named token checked before spec");
-        spec.r#override = override_token;
         // Second `pomodoro_start` span over `@<X>` including the `@`.
         if let Some((timing_offset, timing_after)) = timing.as_ref() {
             let start = token_start + timing_offset;
@@ -581,11 +570,7 @@ pub(super) fn parse_editor_named_start_item<'a>(
     if !suffix.is_empty()
         && let Some((timing_offset, timing_after)) = timing.as_ref()
     {
-        let sigil = if token_text.starts_with("==") {
-            "=="
-        } else {
-            "="
-        };
+        let sigil = "=";
         let effective = if !timing_after.is_empty() {
             timing_after.as_str()
         } else {
@@ -861,7 +846,7 @@ fn named_start_token_diagnostic(
     {
         let drop_suffix =
             drop_text.map(|text| format!("~{text}")).unwrap_or_default();
-        let sigil = if token.starts_with("==") { "==" } else { "=" };
+        let sigil = "=";
         return Some((
             format!(
                 "write the duration after `@` or before the name: `{sigil}#{before}@{after}{drop_suffix}` or `{sigil}{after}#{before}{drop_suffix}` instead of `{token}`"
@@ -974,7 +959,6 @@ pub(super) fn parse_editor_start_item<'a>(
     len: usize,
     drop: Option<(usize, String)>,
     timing: Option<(usize, String)>,
-    override_token: bool,
 ) -> Option<EditorItemOutcome<'a>> {
     let parent = item.lines.first().expect("nonempty item");
     let leading = parent.raw.text.len() - parent.raw.text.trim_start().len();
@@ -982,11 +966,9 @@ pub(super) fn parse_editor_start_item<'a>(
     let token_end = token_start + len;
     let token_text = parent_trimmed.get(..len).unwrap_or(parent_trimmed);
     // When a drop or timing part is present the `pomodoro_start` span covers
-    // only `==<X>`/`=<X>`; otherwise it is unchanged over the whole token.
-    // A second `pomodoro_start` span covers `@<X>`. The `==` sigil is one
-    // byte longer than `=`.
-    let sigil_len: usize = if override_token { 2 } else { 1 };
-    let prefix_len = sigil_len + suffix.len();
+    // only `=<X>`; otherwise it is unchanged over the whole token. A second
+    // `pomodoro_start` span covers `@<X>`.
+    let prefix_len = 1 + suffix.len();
     let base_span = Span {
         start: token_start,
         end: if drop.is_some() || timing.is_some() {
@@ -1048,11 +1030,7 @@ pub(super) fn parse_editor_start_item<'a>(
             if !suffix.is_empty()
                 && let Some((timing_offset, timing_after)) = timing.as_ref()
             {
-                let sigil = if token_text.starts_with("==") {
-                    "=="
-                } else {
-                    "="
-                };
+                let sigil = "=";
                 let drop_text =
                     drop.as_ref().map(|(_, text)| text.as_str()).unwrap_or("");
                 let effective = if !timing_after.is_empty() {
@@ -1162,11 +1140,7 @@ pub(super) fn parse_editor_start_item<'a>(
     if !suffix.is_empty()
         && let Some((timing_offset, timing_after)) = timing.as_ref()
     {
-        let sigil = if token_text.starts_with("==") {
-            "=="
-        } else {
-            "="
-        };
+        let sigil = "=";
         let drop_text =
             drop.as_ref().map(|(_, text)| text.as_str()).unwrap_or("");
         let effective = if !timing_after.is_empty() {
@@ -1208,10 +1182,7 @@ pub(super) fn parse_editor_start_item<'a>(
     // Effective `<X>` errors win over the drop list.
     let effective = super::item::effective_start_timing(&suffix, &timing);
     let base_spec = match parse_pomodoro_start_suffix(&effective) {
-        Ok(mut spec) => {
-            spec.r#override = override_token;
-            spec
-        }
+        Ok(spec) => spec,
         Err(message) => {
             return Some(editor_start_invalid_outcome(
                 item,
@@ -1363,8 +1334,34 @@ pub(super) fn parse_editor_close_item<'a>(
             name,
             drop,
             timing,
-            r#override,
+            doubled,
         } => {
+            let claimed = counted
+                || name.is_some()
+                || drop.is_some()
+                || timing.is_some()
+                || parent_trimmed.len() == len;
+            if doubled {
+                if !claimed {
+                    return None;
+                }
+                let token_text =
+                    parent_trimmed.get(..len).unwrap_or(parent_trimmed);
+                let token_start = parent_text.len()
+                    - parent_text.trim_start().len()
+                    + parent.raw.start;
+                return Some(editor_start_invalid_outcome(
+                    item,
+                    parent_trimmed,
+                    Span {
+                        start: token_start,
+                        end: token_start + len,
+                        kind: SpanKind::PomodoroStart,
+                    },
+                    pomodoro_double_start_error(token_text),
+                    Some((token_start, token_start + len)),
+                ));
+            }
             if let Some(selector) = name {
                 return parse_editor_named_start_item(
                     item,
@@ -1374,7 +1371,6 @@ pub(super) fn parse_editor_close_item<'a>(
                     len,
                     drop,
                     timing,
-                    r#override,
                 );
             }
             return parse_editor_start_item(
@@ -1385,7 +1381,6 @@ pub(super) fn parse_editor_close_item<'a>(
                 len,
                 drop,
                 timing,
-                r#override,
             );
         }
         EqualsToken::Close => {}
@@ -1393,10 +1388,8 @@ pub(super) fn parse_editor_close_item<'a>(
     let first = parent_trimmed.split_whitespace().next()?;
     let leading = parent_text.len() - parent_text.trim_start().len();
     let token_start = parent.raw.start + leading;
-    // A `==`-prefixed close shape (`==x`, `==X1`, `==*`, `==!2`) is never
-    // a close: `==` restarts or swaps the running Pomodoro. The lexer only
-    // yields `Close` here for a claimed close tail, so this always reports
-    // the teaching error over the token.
+    // A `==x`-family close shape is retired. The lexer only yields `Close`
+    // here for a claimed close tail, so it gets the close migration message.
     if first.starts_with("==") {
         let close_spelling =
             retired_whole_item_close_rewrite(&first[1..]).unwrap_or_default();

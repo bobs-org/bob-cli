@@ -386,7 +386,7 @@ fn build_result_inner(
             running_pomodoro_session(bob_dir).map(|running| {
                 OverrideCompletion {
                     keeps_ledger,
-                    running: Some(running),
+                    running,
                 }
             })
         });

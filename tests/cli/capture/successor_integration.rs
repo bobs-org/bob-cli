@@ -114,7 +114,7 @@ fn restart_and_reset_never_complete_prerequisites() {
     };
 
     let (_temp, vault, day_file) = setup("bob-cli-successor-restart-preserve");
-    let json = run_close_json(&vault, &day_file, NOW, &["=="]);
+    let json = run_close_json(&vault, &day_file, NOW, &["="]);
     assert_eq!(json["kind"], "pomodoro_start");
     assert_eq!(json["pomodoro_start"]["override"]["action"], "restart");
     assert!(json.get("task_complete").is_none(), "{json}");
