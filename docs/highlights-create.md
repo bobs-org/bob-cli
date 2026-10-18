@@ -229,6 +229,7 @@ full reference-import toolchain.
 | PDF URL or arXiv | `curl` for downloads |
 | Web article | `curl` for initial URL classification (skipped with `--html`), `uv` for the pinned Python adapter, and a browser: Google Chrome at `/opt/google/chrome/chrome`, `/usr/bin/google-chrome`, `/usr/bin/google-chrome-stable`, or the macOS Google Chrome app, then Playwright's bundled Chromium. Set `BOB_CHROME` for any other executable, including a system Chromium package. Headed retries use Xvfb on Linux and an off-screen window on macOS |
 | Markdown | `pandoc`, `xelatex`, the LaTeX packages below, and DejaVu Serif, DejaVu Sans, and DejaVu Sans Mono (`mainfont`, `sansfont`, and `monofont`) |
+| Markdown with Mermaid | `uv` and a discovered browser are optional; without them Mermaid blocks print as source with a visible note |
 | Any target with `--listen` | A configured `highlights.listen_command` (`sase listen render ...`) that writes the requested MP3. Installing Bob does not install a narration frontend: the SASE plugin (`sase plugin install listen`) provides `sase listen` |
 
 Run `bob ref doctor` to inspect the current host. Its `pandoc`, `xelatex`, and
@@ -251,6 +252,45 @@ Mono, install them for the host's font system before retrying. Note snapshots
 bundle their own fonts (`Source Serif 4`, `Inter`, `JetBrains Mono`, Noto
 Emoji) and write them to the scratch `fonts/` directory, so no system-font
 install is needed for that route.
+
+### Mermaid diagrams
+
+`bob ref create` renders explicit Mermaid code blocks as fitted vector figures
+on both Markdown routes: ordinary Markdown imports and vault-note snapshots,
+including `-M, --plain`. A block must be tagged as Mermaid: a backtick fence
+labelled `mermaid`, a tilde fence labelled `mermaid`, or a backtick fence with
+`{.mermaid}`; fences nested in lists and blockquotes
+are supported. Bob does not guess from untagged `flowchart` or `graph` source,
+so use a `text` fence when you want Mermaid code to remain visible as source.
+PDF, PDF URL, arXiv, and web-article imports are unchanged.
+
+Rendering uses the pinned, vendored Mermaid 12.2.0 bundle and DejaVu Sans
+font through one offline browser launch per document. A block-level parse or
+render failure keeps the source below an italic note and does not fail the
+import. If `uv`, the browser, or the adapter is unavailable, every Mermaid
+block remains as source with a note and Bob prints one warning. For example:
+
+```text
+diagrams: rendered 3 of 4 Mermaid diagrams
+warning: Mermaid diagram 4 of 4 not rendered: Parse error on line 2: …
+```
+
+Figures scale down to fit the page and are never rearranged or split. When a
+figure would print below 50% of its natural size, Bob warns that its labels may
+be small. The diagrams remain vector text; no raster images are used.
+
+The renderer does not backfill existing library PDFs. Recreate an individual
+reference manually when you want its existing PDF replaced. Set
+`BOB_HIGHLIGHTS_DIAGRAMS=off` to skip diagram rendering while debugging; the
+dry-run still counts the candidate fences and says rendering is disabled.
+
+To bump Mermaid, replace `scripts/web_clip/vendor/mermaid.min.js`, update its
+version and SHA-256 in `web_clip_adapter.py` and `vendor/README.md`, then run
+`just check-web-clip-adapter` and the gated live Mermaid render test. Keep the
+bundle self-contained and verify the vector-font and no-raster checks before
+updating the pin. Other diagram languages, SVG image embeds, a listen-skip
+marker, persistent caching, landscape pages, and Mermaid accessibility-title
+metadata are outside this version's scope.
 
 ### macOS BasicTeX: installing a missing package in user mode
 
@@ -295,7 +335,7 @@ What it still does depends on the target:
 | Target | During `--dry-run` |
 | --- | --- |
 | Local PDF | Reads the local file and prints the plan. No renderer runs |
-| Markdown | Returns before pandoc and XeLaTeX run |
+| Markdown | Returns before pandoc and XeLaTeX run. When Mermaid fences are present, prints their approximate count; dry-run never starts the adapter or browser |
 | PDF URL | Downloads the PDF with `curl`, then prints the plan |
 | arXiv | Downloads the API metadata and the PDF, then prints the plan |
 | Web article | Launches the browser and loads the page. Image localization and the PDF write are skipped |
@@ -681,6 +721,9 @@ legacy `BOB_WEB_CLIP_KEEP_WORKDIR=1`). The note snapshot renderer keeps the
 same ownership: with the keep flag set, the scratch directory retains
 `projected.md`, `note-profile.tex`, `note.lua`, `fonts/`, `glyphs.lua`, the
 pandoc-generated `note.tex`, `note.log`, and `note.pdf` for debugging.
+When Mermaid blocks are present, `diagrams/` holds the collect manifest,
+render results, and per-diagram PDFs until XeLaTeX finishes; the same keep flag
+retains those files for inspection.
 
 ## Environment variables
 
@@ -689,6 +732,7 @@ pandoc-generated `note.tex`, `note.log`, and `note.pdf` for debugging.
 | `BOB_HIGHLIGHTS_CURL` | Replaces `curl` (test seam, like `BOB_PANDOC_COMMAND`) |
 | `BOB_HIGHLIGHTS_RESOLVE` | Replaces DNS for the fetch address check: comma-separated `host=ip` pairs with `*` as a wildcard (test seam) |
 | `BOB_HIGHLIGHTS_KEEP_WORKDIR` | `1` keeps the scratch directory for debugging |
+| `BOB_HIGHLIGHTS_DIAGRAMS` | `off`, `0`, `false`, or `no` skips Mermaid rendering; skipped blocks print as source without a fallback note |
 | `BOB_PANDOC_COMMAND` | Overrides pandoc for the Markdown route |
 | `BOB_XELATEX_COMMAND` | Overrides xelatex for the note snapshot print profile (test seam, like `BOB_PANDOC_COMMAND`) |
 | `BOB_HIGHLIGHTS_AUDIO_LIBRARY` | sase-listen library for Markdown audio discovery |

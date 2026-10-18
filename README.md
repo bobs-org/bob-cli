@@ -1227,6 +1227,7 @@ The documented workflows use these external-tool integrations:
   fallback order)
 - `pandoc` and `xelatex` for `bob ref create` Markdown targets, plus the LaTeX packages `bob ref doctor` checks; override pandoc with
   `BOB_PANDOC_COMMAND`. Doctor prints the `tlmgr install` line for any missing packages
+- `uv` and a discovered browser are optional for Mermaid fences in Markdown imports; without them, Mermaid prints as source with a visible note
 - `curl` for `bob ref create` PDF URL and arXiv targets; override with
   `BOB_HIGHLIGHTS_CURL`
 - A narration frontend for `bob ref create --listen`, configured as

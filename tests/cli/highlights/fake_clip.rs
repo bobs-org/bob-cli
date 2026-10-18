@@ -248,7 +248,7 @@ fn write_bare_pdf(path: &std::path::Path) {
 }
 
 pub(crate) fn default_ping() -> &'static str {
-    r#"{"protocol":1,"ok":true,"op":"ping","python":"3.12.3","playwright":"1.62.0","pillow":"12.3.0","nh3":"0.3.7","defuddle":"0.19.4","browser":{"kind":"chrome","path":"/usr/bin/google-chrome","version":"154.0.0"},"headed":"xvfb","fonts":["Source Serif 4"]}"#
+    r#"{"protocol":1,"ok":true,"op":"ping","python":"3.12.3","playwright":"1.62.0","pillow":"12.3.0","nh3":"0.3.7","defuddle":"0.19.4","mermaid":"12.2.0","browser":{"kind":"chrome","path":"/usr/bin/google-chrome","version":"154.0.0"},"headed":"xvfb","fonts":["Source Serif 4"]}"#
 }
 
 pub(crate) fn default_capture() -> &'static str {

@@ -5455,7 +5455,7 @@ fn highlights_create_folded_doctor_reports_web_clip_rows() {
     let fake = FakeClip::new(&temp, "fake");
     std::fs::write(
         fake.root.join("ping.json"),
-        r#"{"protocol":1,"ok":true,"op":"ping","playwright":"1.62.0","defuddle":"0.19.4","browser":{"kind":"chrome","path":"/usr/bin/google-chrome","version":"154.0.0"},"headed":"display"}"#,
+        r#"{"protocol":1,"ok":true,"op":"ping","playwright":"1.62.0","defuddle":"0.19.4","mermaid":"12.2.0","browser":{"kind":"chrome","path":"/usr/bin/google-chrome","version":"154.0.0"},"headed":"display"}"#,
     )
     .expect("write fake ping");
 
@@ -5475,7 +5475,65 @@ fn highlights_create_folded_doctor_reports_web_clip_rows() {
             "web clip adapter: ok (playwright 1.62.0, defuddle 0.19.4)"
         ) && report.contains(
             "web clip browser: chrome 154.0.0 (/usr/bin/google-chrome)"
-        ) && report.contains("web clip headed fallback: display")
+        ) && report.contains("mermaid: ok (bundled 12.2.0 · chrome 154.0.0)")
+            && report.contains("web clip headed fallback: display")
+            && report.contains("result: ok"),
+        "{report}"
+    );
+}
+
+#[test]
+fn highlights_create_diagram_doctor_warns_without_browser_and_reports_off() {
+    let temp =
+        TempDir::new("bob-cli-highlights-create-diagram-doctor-warnings");
+    let vault = temp.path().join("vault");
+    std::fs::create_dir_all(vault.join("lib")).expect("create lib");
+    std::fs::create_dir_all(vault.join("ref")).expect("create ref");
+    std::fs::create_dir_all(vault.join("xlib")).expect("create xlib");
+    git_in(&vault, ["init", "-q"]);
+    configure_test_git_identity(&vault);
+    let fake = FakeClip::new(&temp, "fake");
+    std::fs::write(
+        fake.root.join("ping.json"),
+        r#"{"protocol":1,"ok":true,"op":"ping","playwright":"1.62.0","defuddle":"0.19.4","mermaid":"12.2.0","browser":null,"headed":"display"}"#,
+    )
+    .expect("write ping without a browser");
+
+    let warning = bob_command()
+        .arg("highlights")
+        .arg("doctor")
+        .arg("--no-hooks")
+        .env("BOB_DIR", &vault)
+        .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+        .output()
+        .expect("run doctor without Mermaid browser");
+    assert_success(&warning);
+    let report = stdout(&warning);
+    assert!(
+        report.contains("mermaid: warn (no browser; diagrams print as source)")
+            && report.contains("result: ok"),
+        "{report}"
+    );
+
+    std::fs::write(
+        fake.root.join("ping.json"),
+        r#"{"protocol":1,"ok":true,"op":"ping","playwright":"1.62.0","defuddle":"0.19.4","mermaid":"12.2.0","browser":{"kind":"chrome","path":"/fake/chrome","version":"155.0"},"headed":"display"}"#,
+    )
+    .expect("write ping for disabled diagrams");
+    let disabled = bob_command()
+        .arg("highlights")
+        .arg("doctor")
+        .arg("--no-hooks")
+        .env("BOB_DIR", &vault)
+        .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+        .env("BOB_HIGHLIGHTS_DIAGRAMS", "off")
+        .output()
+        .expect("run doctor with Mermaid disabled");
+    assert_success(&disabled);
+    let report = stdout(&disabled);
+    assert!(
+        report.contains("mermaid: off (BOB_HIGHLIGHTS_DIAGRAMS=off)")
+            && !report.contains("mermaid: ok")
             && report.contains("result: ok"),
         "{report}"
     );

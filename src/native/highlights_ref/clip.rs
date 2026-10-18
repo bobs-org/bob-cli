@@ -824,6 +824,10 @@ fn print_warnings(styler: &Styler, warnings: &[String]) {
 /// Non-fatal `doctor` rows for the web-clip chain, printed after the pandoc
 /// row. Missing pieces warn; they never fail the vault doctor.
 pub(super) fn append_web_clip_doctor_rows(warnings: &mut Vec<String>) {
+    let diagrams_enabled = super::diagrams::enabled();
+    if !diagrams_enabled {
+        println!("mermaid: off (BOB_HIGHLIGHTS_DIAGRAMS=off)");
+    }
     match crate::native::env::resolve_uv() {
         Some((path, outside_path)) => {
             let marker = if outside_path { " (outside PATH)" } else { "" };
@@ -846,6 +850,34 @@ pub(super) fn append_web_clip_doctor_rows(warnings: &mut Vec<String>) {
                 ping.playwright.as_deref().unwrap_or("unknown"),
                 ping.defuddle.as_deref().unwrap_or("unknown"),
             );
+            if diagrams_enabled {
+                match ping.browser.as_ref() {
+                    None => {
+                        println!(
+                            "mermaid: warn (no browser; diagrams print as source)"
+                        );
+                        warnings.push(
+                            "no browser available; Mermaid diagrams print as source"
+                                .to_string(),
+                        );
+                    }
+                    Some(browser) => match ping.mermaid.as_deref() {
+                        Some(version) => println!(
+                            "mermaid: ok (bundled {version} · chrome {})",
+                            browser.version.as_deref().unwrap_or("unknown"),
+                        ),
+                        None => {
+                            println!(
+                                "mermaid: warn (adapter ping failed; diagrams print as source)"
+                            );
+                            warnings.push(
+                                "adapter ping did not report Mermaid; diagrams print as source"
+                                    .to_string(),
+                            );
+                        }
+                    },
+                }
+            }
             match ping.browser {
                 Some(browser) => {
                     println!(
@@ -902,6 +934,15 @@ pub(super) fn append_web_clip_doctor_rows(warnings: &mut Vec<String>) {
                 .to_string();
             println!("web clip adapter: warn ({short})");
             warnings.push(format!("web clip adapter ping failed: {short}"));
+            if diagrams_enabled {
+                println!(
+                    "mermaid: warn (adapter ping failed; diagrams print as source)"
+                );
+                warnings.push(
+                    "Mermaid adapter ping failed; diagrams print as source"
+                        .to_string(),
+                );
+            }
             println!("web clip browser: warn (unknown: adapter ping failed)");
             println!(
                 "web clip headed fallback: warn (unknown: adapter ping failed)"

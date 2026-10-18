@@ -167,6 +167,22 @@ pub(crate) fn enabled() -> bool {
     }
 }
 
+/// Mermaid-specific dry-run summary. The plan remains browser-free: this only
+/// counts candidate fence openers in text already available to the planner.
+pub(crate) fn dry_run_line(markdown: &str) -> Option<String> {
+    let count = prescan(markdown);
+    if count == 0 {
+        return None;
+    }
+    Some(if enabled() {
+        format!("diagrams: {count} Mermaid fence(s) (rendered at create time)")
+    } else {
+        format!(
+            "diagrams: {count} Mermaid fence(s) (rendering disabled by {ENV_DIAGRAMS}=off)"
+        )
+    })
+}
+
 /// Count candidate Mermaid fence openers. May over-match (a nested
 /// example inside a `markdown` fence) and must never under-match.
 ///

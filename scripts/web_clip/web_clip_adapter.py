@@ -2338,6 +2338,13 @@ def _diagram_browser_test_failures(browser_info: dict) -> list[str]:
 
 def self_test() -> int:
     """Exercise the offline paths, plus fixtures when a browser exists."""
+    # The browser fixtures exercise Chrome launch itself, including its
+    # profile socket. Keep their workdirs short even inside SASE's deep
+    # per-agent TMPDIR; production callers pass ScratchDir-owned paths.
+    import tempfile
+    if os.path.isdir("/tmp"):
+        tempfile.tempdir = "/tmp"
+
     failures: list[str] = []
 
     def check(label: str, condition: bool) -> None:

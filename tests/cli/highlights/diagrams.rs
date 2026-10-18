@@ -2,7 +2,10 @@
 
 use super::fake_clip::FakeDiagrams;
 use crate::support::*;
-use std::process::Command;
+use std::{
+    io::Write,
+    process::{Command, Stdio},
+};
 
 fn skip_pandoc_xelatex(test_name: &str) -> bool {
     let pandoc_available = Command::new("pandoc")
@@ -464,4 +467,296 @@ fn highlights_create_mermaid_scale_warning_when_figure_is_wide() {
         ) && diagnostic.contains("% scale; labels may be small"),
         "{diagnostic}"
     );
+}
+
+#[test]
+fn highlights_create_mermaid_dry_run_counts_without_starting_tools() {
+    let temp = TempDir::new("bob-cli-diagrams-dry-run");
+    let vault = temp.path().join("vault");
+    seed_parent(&vault);
+    write_file(
+        &vault.join("diagram_area.md"),
+        "---\ntype: [[area]]\n---\n# Diagram Area\n\n```mermaid\nflowchart LR\n A --> B\n```\n",
+    );
+    let source = temp.path().join("diagram report.md");
+    write_file(&source, &mermaid_source(""));
+    let fake = FakeDiagrams::new(&temp, "fake-diagrams");
+    let missing_pandoc = temp.path().join("missing-pandoc");
+
+    let enabled = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg("--dry-run")
+        .arg("-P")
+        .arg("sase")
+        .arg(&source)
+        .arg("-b")
+        .arg(&vault)
+        .env("BOB_PANDOC_COMMAND", &missing_pandoc)
+        .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+        .output()
+        .expect("run generic Mermaid dry-run");
+    assert_success(&enabled);
+    let report = stdout(&enabled);
+    assert!(
+        report
+            .contains("diagrams: 1 Mermaid fence(s) (rendered at create time)")
+            && report.contains("writes: none"),
+        "{report}"
+    );
+    assert!(!fake.called(), "dry-run must not start the adapter");
+
+    let disabled = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg("--dry-run")
+        .arg("-P")
+        .arg("sase")
+        .arg(&source)
+        .arg("-b")
+        .arg(&vault)
+        .env("BOB_PANDOC_COMMAND", &missing_pandoc)
+        .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+        .env("BOB_HIGHLIGHTS_DIAGRAMS", "off")
+        .output()
+        .expect("run disabled Mermaid dry-run");
+    assert_success(&disabled);
+    let report = stdout(&disabled);
+    assert!(
+        report.contains(
+            "diagrams: 1 Mermaid fence(s) (rendering disabled by BOB_HIGHLIGHTS_DIAGRAMS=off)"
+        ) && report.contains("writes: none"),
+        "{report}"
+    );
+    assert!(
+        !fake.called(),
+        "disabled dry-run must not start the adapter"
+    );
+
+    let snapshot = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg("--dry-run")
+        .arg("diagram_area")
+        .arg("-b")
+        .arg(&vault)
+        .env("BOB_NOW", "2026-10-16 12:00:00")
+        .env("BOB_PANDOC_COMMAND", &missing_pandoc)
+        .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+        .output()
+        .expect("run snapshot Mermaid dry-run");
+    assert_success(&snapshot);
+    let report = stdout(&snapshot);
+    assert!(
+        report
+            .contains("diagrams: 1 Mermaid fence(s) (rendered at create time)")
+            && report.contains("writes: none"),
+        "{report}"
+    );
+    assert!(
+        !fake.called(),
+        "snapshot dry-run must not start the adapter"
+    );
+}
+
+fn tool_available(program: &str, version_flag: &str) -> bool {
+    Command::new(program)
+        .arg(version_flag)
+        .output()
+        .is_ok_and(|output| output.status.success())
+}
+
+fn adapter_discovers_browser() -> bool {
+    let adapter = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("scripts/web_clip/web_clip_adapter.py");
+    let mut child = match Command::new("uv")
+        .args(["run", "--quiet", "--script"])
+        .arg(adapter)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(_) => return false,
+    };
+    if child.stdin.take().is_none_or(|mut stdin| {
+        stdin.write_all(br#"{"protocol":1,"op":"ping"}"#).is_err()
+    }) {
+        let _ = child.kill();
+        return false;
+    }
+    child
+        .wait_with_output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| {
+            serde_json::from_slice::<serde_json::Value>(&output.stdout).ok()
+        })
+        .and_then(|value| value.get("browser").cloned())
+        .is_some_and(|browser| browser.is_object())
+}
+
+#[test]
+fn highlights_create_live_mermaid_pdf_is_highlights_safe() {
+    let required = [
+        ("uv", "--version"),
+        ("pandoc", "--version"),
+        ("xelatex", "--version"),
+        ("pdftotext", "-v"),
+        ("pdffonts", "-v"),
+        ("pdfimages", "-v"),
+    ];
+    let missing = required
+        .iter()
+        .filter_map(|(program, flag)| {
+            (!tool_available(program, flag)).then_some(*program)
+        })
+        .collect::<Vec<_>>();
+    if !missing.is_empty() {
+        eprintln!(
+            "skipping live Mermaid PDF test: missing {}",
+            missing.join(", ")
+        );
+        return;
+    }
+    if !adapter_discovers_browser() {
+        eprintln!("skipping live Mermaid PDF test: no browser discovered");
+        return;
+    }
+
+    let temp = TempDir::new("bob-cli-diagrams-live");
+    let long_tmpdir = temp
+        .path()
+        .join("long temporary directory with spaces and 日本語");
+    std::fs::create_dir_all(&long_tmpdir).expect("create long TMPDIR");
+    assert!(long_tmpdir.to_string_lossy().as_bytes().len() > 40);
+
+    let vault = temp.path().join("scratch vault");
+    seed_parent(&vault);
+    let source_dir = temp.path().join("source files 日本語 with spaces");
+    std::fs::create_dir_all(&source_dir).expect("create source directory");
+    let source = source_dir.join("merge queue report.md");
+    let markdown = concat!(
+        "# Live Mermaid acceptance\n\n",
+        "This prose remains available to read and highlight after rendering.\n\n",
+        "```mermaid\n",
+        "flowchart LR\n",
+        "    A[\"Agent finishes its work\"] --> B[\"Master Gate tests run\"]\n",
+        "    B --> C{\"Green?\"}\n",
+        "    C -- \"yes\" --> D[\"Fine, for now\"]\n",
+        "```\n\n",
+        "```mermaid\n",
+        "sequenceDiagram\n",
+        "    participant Agent\n",
+        "    participant Reviewer\n",
+        "    Agent->>Reviewer: Send the result\n",
+        "    Reviewer-->>Agent: Approve the change\n",
+        "```\n\n",
+        "- Nested diagram:\n\n",
+        "  ~~~ {.mermaid}\n",
+        "  flowchart TD\n",
+        "      L[\"List item\"] --> R[\"Rendered\"]\n",
+        "  ~~~\n\n",
+        "```mermaid\n",
+        "this is not valid mermaid {\n",
+        "```\n\n",
+        "This final paragraph also remains available after the figure pass.\n",
+    );
+    write_file(&source, markdown);
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg(&source)
+        .arg("-P")
+        .arg("sase")
+        .arg("-b")
+        .arg(&vault)
+        .arg("-l")
+        .arg(vault.join("lib"))
+        .arg("-x")
+        .arg(vault.join("xlib"))
+        .arg("-r")
+        .arg(vault.join("ref"))
+        .arg("-N")
+        .arg("mermaid_live_acceptance")
+        .env("TMPDIR", &long_tmpdir)
+        .env_remove("BOB_WEB_CLIP_ADAPTER")
+        .env_remove("BOB_HIGHLIGHTS_DIAGRAMS")
+        .env("NO_COLOR", "1")
+        .output()
+        .expect("run live Mermaid PDF render");
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report.contains("diagrams: rendered 3 of 4 Mermaid diagrams"),
+        "{report}"
+    );
+    assert!(
+        stderr(&output).contains("Mermaid diagram 4 of 4 not rendered:"),
+        "{}",
+        stderr(&output)
+    );
+
+    let pdf = vault.join("xlib/chat/mermaid_live_acceptance.pdf");
+    let extracted = Command::new("pdftotext")
+        .arg(&pdf)
+        .arg("-")
+        .output()
+        .expect("extract live Mermaid PDF text");
+    assert!(extracted.status.success());
+    let text = String::from_utf8_lossy(&extracted.stdout);
+    let normalized_text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(
+        normalized_text.contains("Agent finishes its work"),
+        "{text}"
+    );
+    assert!(normalized_text.contains("Send the result"), "{text}");
+    assert!(normalized_text.contains("List item"), "{text}");
+    assert!(
+        normalized_text.contains("This prose remains available"),
+        "{text}"
+    );
+    assert!(
+        normalized_text.contains("final paragraph also remains available"),
+        "{text}"
+    );
+    assert!(
+        !normalized_text.contains("flowchart LR"),
+        "Mermaid source leaked: {text}"
+    );
+    assert!(
+        normalized_text.contains("Mermaid diagram not rendered:"),
+        "{text}"
+    );
+    assert!(
+        normalized_text.contains("this is not valid mermaid"),
+        "{text}"
+    );
+
+    let fonts = Command::new("pdffonts")
+        .arg(&pdf)
+        .output()
+        .expect("inspect live Mermaid PDF fonts");
+    assert!(fonts.status.success());
+    let font_report = String::from_utf8_lossy(&fonts.stdout);
+    assert!(!font_report.contains("Type 3"), "{font_report}");
+
+    let images = Command::new("pdfimages")
+        .arg("-list")
+        .arg(&pdf)
+        .output()
+        .expect("inspect live Mermaid PDF images");
+    assert!(images.status.success());
+    let image_report = String::from_utf8_lossy(&images.stdout);
+    let image_rows = image_report
+        .lines()
+        .filter(|line| {
+            line.split_whitespace()
+                .next()
+                .is_some_and(|field| field.parse::<usize>().is_ok())
+        })
+        .collect::<Vec<_>>();
+    assert!(image_rows.is_empty(), "{image_report}");
 }

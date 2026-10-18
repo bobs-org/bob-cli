@@ -1234,6 +1234,11 @@ fn create_snapshot_plan(
             options,
             &Styler::detect(),
         );
+        if let Some(line) =
+            super::diagrams::dry_run_line(&snapshot.projected_markdown)
+        {
+            println!("{line}");
+        }
         emit_snapshot_warnings(&snapshot, &snapshot.projected_markdown, &[]);
         println!("writes: none");
         return Ok(());
@@ -1839,6 +1844,11 @@ fn create_markdown_plan(
             );
         }
         print_plan(&plan, options, &styler);
+        if let Some(markdown) = plan.source_markdown.as_deref()
+            && let Some(line) = super::diagrams::dry_run_line(markdown)
+        {
+            println!("{line}");
+        }
         println!("writes: none");
         return Ok(());
     }
