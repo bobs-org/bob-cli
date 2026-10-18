@@ -140,7 +140,7 @@ task-line field, or a file-path filter.
 
 The daily and dashboard TODAY badge shares the Work badge colors with
 PENDING, NEXT, and READY: it colors `budget.links.count /
-budget.links.cap` with the same grey/blue/green/yellow/orange/red bands,
+budget.links.cap` with the same grey/blue/green/yellow/orange/magenta/red bands,
 except `budget.themes.count > budget.themes.cap` forces red, including
 when links are zero. Themes exactly at cap keep the link-based color.
 Missing ledger data or a missing Pomodoros section is `TODAY –`, never a
@@ -189,15 +189,15 @@ badges show the **section count over the cap** as the primary number (for
 example `PENDING 9/10`) and share the Work badge colors with TODAY and
 READY: for an available section count `n` and cap `L`, `n === 0` is grey,
 `0 < n < 2 * L / 5` blue, `2 * L / 5 <= n < 3 * L / 5` green,
-`3 * L / 5 <= n < 4 * L / 5` yellow, `4 * L / 5 <= n <= L` orange, and
-`n > L` red, using exact comparisons. For example, NEXT section `10/15`
+`3 * L / 5 <= n < 4 * L / 5` yellow, `4 * L / 5 <= n < L` orange,
+`n === L` magenta, and `n > L` red, using exact comparisons. For example, NEXT section `10/15`
 with whole lane `17/15` and TODAY 7 is yellow, while section `15/15` with a larger whole
-lane is orange. Whole-lane pressure remains clearly labeled in the
+lane is magenta. Whole-lane pressure remains clearly labeled in the
 tooltip and accessible label (for example
 `NEXT 10/15; whole lane 17/15; 7 in TODAY; 2 over the whole-lane cap`),
-so TODAY-driven excess does not color an at-cap section red. Orange,
-from 80% through the cap, is a presentation state, not a new lint or an
-`over` condition.
+so TODAY-driven excess does not color an at-cap section red. Orange (80% up to the cap)
+and magenta (exactly at the cap) are presentation states, not lints or `over` conditions. Magenta marks a lane that is exactly full, and no other
+Bob chip uses that hue.
 Daily badges on older notes follow today's live section, while that
 note's TODAY theme/link budget keeps its own ledger. CLI warnings and
 navigation notices still check the full lane, including TODAY. Daily
@@ -453,10 +453,11 @@ over the cap. A cap exactly met raises no lint.
 The badge shows `READY n/cap` (for example `READY 87/100`) and shares
 the Work badge colors: `0` grey, `0 < n < 2 * L / 5` blue,
 `2 * L / 5 <= n < 3 * L / 5` green, `3 * L / 5 <= n < 4 * L / 5` yellow,
-`4 * L / 5 <= n <= L` orange, and `n > L` red, using exact comparisons.
-From 80% through the cap is orange as a presentation state, not a lint or
-an `over` condition; only a
-strict excess raises the `ready_cap_exceeded` lint (`READY 101/100`).
+`4 * L / 5 <= n < L` orange, `n === L` magenta, and `n > L` red, using exact
+comparisons.
+Orange from 80% up to the cap and magenta exactly at the cap are presentation
+states, not lints or `over` conditions; only a strict excess raises the
+`ready_cap_exceeded` lint (`READY 101/100`).
 This is a **soft limit**: it
 communicates backlog pressure without refusing capture, changing task
 statuses, or removing tasks. The cap now bounds only the

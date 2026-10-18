@@ -18,10 +18,10 @@ is not the freshness PROJECTS tier.
 
 ## Work badge colors
 
-TODAY, PENDING, NEXT, and READY share one count-to-limit color scheme in
-daily-note `bob-plan` blocks and the Work row on `dash.md`.
-For an available nonnegative integer count `n` and positive integer limit
-`L`, using exact comparisons (never rounded displayed percentages):
+TODAY, PENDING, NEXT, and READY use the same count-to-limit colors in daily `bob-plan`
+blocks and on `dash.md`. Counts and limits use exact integer comparisons, never rounded
+displayed percentages. For an available nonnegative integer count `n` and positive
+integer limit `L`, the colors are:
 
 | Condition | Color |
 | --- | --- |
@@ -29,43 +29,36 @@ For an available nonnegative integer count `n` and positive integer limit
 | `0 < n < 2 * L / 5` | blue |
 | `2 * L / 5 <= n < 3 * L / 5` | green |
 | `3 * L / 5 <= n < 4 * L / 5` | yellow |
-| `4 * L / 5 <= n <= L` | orange |
+| `4 * L / 5 <= n < L` | orange |
+| `n === L` | magenta |
 | `n > L` | red |
 
-Check zero and strict excess before descending through 80%, 60%, and
-40%. Small and odd caps may naturally skip bands.
+Check zero, strict excess, and exact equality before descending through 80%, 60%, and
+40%. Small caps skip bands: cap 1 goes grey → magenta → red, and cap 3 goes blue →
+yellow → magenta. Orange first appears at cap 5 (`4/5`). A NEXT section at `15/15` is
+magenta even when a larger whole lane makes it over the whole-lane cap; that condition
+remains informational and does not make the section over.
 
-PENDING and NEXT show the dashboard section counts, which exclude TODAY,
-compared with that lane's configured cap. Their color follows the same
-visible count: for example, NEXT section `10/15` with whole lane `17/15`
-and TODAY 7 is yellow, while section `15/15` with a larger whole lane is
-orange. Whole-lane pressure remains separately labeled in tooltips and
-accessibility labels, and in daily lint lines. READY uses its
-freshness-gated backlog and `max_ready`, with the whole-lane breakdown in
-its tooltip. TODAY uses `budget.links.count / budget.links.cap`, with one
-higher-priority override: `budget.themes.count > budget.themes.cap` makes
-it red, including when the link count is zero. Themes exactly at their cap
-do not affect the link-based color. Both TODAY fractions remain displayed.
-Orange, from 80% through the cap, is a presentation state, not a new lint
-or an `over` condition.
+TODAY uses `budget.links` for its count and limit. Themes over their cap still override
+TODAY to red; themes exactly at cap leave the link-based color intact. A missing ledger or
+invalid count remains unavailable (`–`). Orange (80% up to the cap) and magenta
+(exactly at the cap) are presentation states, not lints or `over` conditions. Magenta
+marks a lane that is exactly full, and no other Bob chip uses that hue.
 
-Daily `bob-plan` PENDING/NEXT/READY badges use the same live section
-counts and colors, including on older daily notes; older notes retain
-their own TODAY ledger but use current live PENDING/NEXT/READY counts.
-CLI warnings and navigation notices continue to check the whole lane,
-including TODAY. An unavailable count remains `–` with neutral styling
-and unavailable accessibility text; it is never converted into numeric
-zero. Missing ledger data or a missing Pomodoros section remains
-unavailable, rather than a synthetic `0/limit`.
+Daily `bob-plan` PENDING/NEXT/READY badges use the same live section counts and colors,
+including on older daily notes; older notes retain their own TODAY ledger but use current
+live PENDING/NEXT/READY counts. CLI warnings and navigation notices continue to check
+the whole lane, including TODAY. An unavailable count remains `–` with neutral styling
+and unavailable accessibility text; it is never converted into numeric zero. Missing
+ledger data or a missing Pomodoros section remains unavailable, rather than a synthetic
+`0/limit`.
 
-NEW, ROTTEN, and CROWDED share one Review count rule: muted grey with
-`0 ✓` when the count is zero, red for every positive count, and `–`
-when unavailable. ROTTEN follows its displayed count even below the
-escalation threshold or after the upkeep budget is met.
+NEW, ROTTEN, and CROWDED share one Review count rule: muted grey with `0 ✓` when the
+count is zero, red for every positive count, and `–` when unavailable. ROTTEN follows its
+displayed count even below the escalation threshold or after the upkeep budget is met.
 
-BLOCKED is informational and has no cap. Its count stays available for
-navigation and uses the same informational accent as PROJECTS and
-REFERENCES regardless of its size.
+BLOCKED is informational and has no cap. Its count stays available for navigation and
+uses the same informational accent as PROJECTS and REFERENCES regardless of its size.
 
 ## Child pages
 
