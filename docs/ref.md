@@ -24,7 +24,7 @@ plans copies of zorg-era `status::` reading records into legacy notes under
 | Read annotations and your notes | `bob ref show <note-path>` | Read one exact reference; `-c` selects commented annotations |
 | Read a reference today | `bob ref today <REF> [-p NAME]` | Set its reading task Next and link it under today's Pomodoro |
 | Fix a reference's file name | `bob ref rename <REF> <NAME> -d`, then without `-d` | Move the note, PDF, and companions, update links, and make the reference id follow its stem while keeping the reading task |
-| Import a URL, local PDF, or Markdown file now | `bob ref create <TARGET>` | Write an intake PDF inline; see [target types](highlights-create.md) |
+| Import a URL, local PDF, or Markdown file now | `bob ref create <TARGET> -P <parent>` | Write an intake PDF inline; see [target types](highlights-create.md) |
 | Save a bare public link quickly | `bob capture '<URL>'` | Queue a background job when the routing policy admits the URL; the note appears in `ref list` after `bob ref scan` |
 | Inspect or process background imports | `bob ref jobs`, `bob ref jobs run` | List jobs, or fetch pending links; see [ref jobs](ref-jobs.md) |
 | Turn intake PDFs into library notes | `bob ref scan --dry-run`, then `bob ref scan` | Preview, then move intake PDFs and sync notes/annotations |
@@ -72,7 +72,7 @@ residence parent (the area/project/inbox stem, or the `done/` archive's
 `parent:`) becomes the row parent. The effective `status` is decided
 per note:
 
-1. Exactly one `^ref` tracker with a known mark maps through the
+1. One selected reading task with a known mark maps through the
    checkbox marks (`[ ]` ready, `[*]` next, `[/]` wip, `[x]` read,
    `[-]` abandoned). A single `[?]` tracker defers to the frontmatter
    `status`: with an open frontmatter status the tracker agrees (source
@@ -100,8 +100,8 @@ per note:
 `conflict:…`, `none`).
 
 `blocked` is a boolean overlay on the reading lane, always present on
-every `list`, `show`, and `find` row: true when the note carries
-exactly one `^ref` tracker whose mark is Blocked `[?]`, false
+every `list`, `show`, and `find` row: true when the selected reading task
+(v2 or the in-note v1 `^ref` tracker) is Blocked `[?]`, false
 otherwise. It never changes `status` or `reading_state` — a blocked
 `next` row still reads `queued` in its lane — it only says the note is
 waiting on something else. Clients such as Bob Mac Capture's Refs panel
@@ -149,7 +149,7 @@ import and can be found with `ref find -i`.
 
 For a multi-URL `bob ref create`, the marker and scanned ref note store
 `source_url` as an ordered list in the order the URLs were supplied. The
-collection remains one PDF, one note, and one `^ref` task, and every listed URL
+collection remains one PDF, one note, and one reading task, and every listed URL
 resolves to that same reference.
 
 ## Usage

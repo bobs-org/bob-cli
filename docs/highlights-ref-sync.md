@@ -103,7 +103,7 @@ never fail the command:
 Available commands:
 
 ```bash
-bob ref create <TARGET> [-A|--author NAME] [-a|--audio PATH] [-b|--bob-dir PATH] [-C|--closed] [-d|--dry-run] [-f|--force] [-H|--html FILE] [-i|--include-id] [-l|--lib-dir PATH] [-L|--listen] [-M|--plain] [-N|--name STEM] [-n|--no-audio] [-o|--output PDF] [-P|--parent NOTE] [-p|--published DATE] [-r|--ref-dir PATH] [-s|--status STATUS] [-T|--title TITLE] [-t|--ref-type DIR] [-x|--xlib-dir PATH]
+bob ref create <TARGET>... [-A|--author NAME] [-a|--audio PATH] [-b|--bob-dir PATH] [-C|--closed] [-d|--dry-run] [-f|--force] [-H|--html FILE] [-i|--include-id] [-l|--lib-dir PATH] [-L|--listen] [-M|--plain] [-N|--name STEM] [-n|--no-audio] [-o|--output PDF] [-P|--parent NOTE] [-p|--published DATE] [-r|--ref-dir PATH] [-S|--section HEADING]... [-s|--status STATUS] [-T|--title TITLE] [-t|--ref-type DIR] [-x|--xlib-dir PATH]
 bob ref doctor [-b|--bob-dir PATH] [-l|--lib-dir PATH] [-n|--no-hooks] [-r|--ref-dir PATH] [-x|--xlib-dir PATH]
 bob ref marker <pdf> [-b|--bob-dir PATH] [-l|--lib-dir PATH] [-r|--ref-dir PATH] [-x|--xlib-dir PATH]
 bob ref scan [-b|--bob-dir PATH] [-d|--dry-run] [-f|--format human|json] [-j|--jobs N] [-l|--lib-dir PATH] [-n|--no-hooks] [-r|--ref-dir PATH] [-v|--verbose] [-w|--write-pdfs] [-x|--xlib-dir PATH]
@@ -143,7 +143,7 @@ requires `--force`, and there is no second mirrored-destination check. An exact
 path outside both managed directories does not invent or check an unrelated
 library destination.
 
-It uses the frontmatter `title`, first
+For ordinary Markdown, it uses the frontmatter `title`, first
 H1, or file stem in that order, asks pandoc/xelatex for a hyperlinked
 three-level table of contents and PDF outline bookmarks, and embeds a page-1
 `/Text` annotation containing:
@@ -155,9 +155,9 @@ three-level table of contents and PDF outline bookmarks, and embeds a page-1
 ```
 
 The marker parent is deliberately bare; generated Obsidian frontmatter turns
-it into a wikilink later. `-P, --parent` is required (no default), while
-`-s, --status` and `-t, --ref-type` override their defaults. `-d, --dry-run`
-prints the resolved paths and marker with `writes: none`.
+it into a wikilink later. Vault notes infer the nearest eligible parent;
+other targets require `-P, --parent`. `-s, --status` and `-t, --ref-type`
+override defaults. `-d, --dry-run` prints the plan with `writes: none`.
 
 An explicit `-P` resolves before any work (pandoc, the browser, the network,
 or a write) through the shared area/project/inbox resolver, and the marker
@@ -169,8 +169,8 @@ The dry run reports the resolution, for example
 `parent    bob  (project · bob.md · via alias bob-cli)`. An unknown name
 fails with near-miss and alias hints; a terminal project (`project 'x' is
 done`) and a non-area/project hub (`obsidian_ref.md is not an area or
-project note`) report themselves. A missing `-P` fails before any work with a hint
-naming `bob capture-targets`. For `--output` paths, an existing target PDF requires
+project note`) report themselves. When no parent can be inferred, a missing
+`-P` fails with a `bob capture-targets` hint. For `--output` paths, an existing target PDF requires
 `-f, --force`; a same-stem Markdown file beside the target PDF is always
 refused because Highlights would interpret it as a sidecar. Default targets
 instead suffix to `<stem>_2`, … when taken by a different reference. Dry-run and success output show a

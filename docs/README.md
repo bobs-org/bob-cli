@@ -29,15 +29,15 @@ then creates the notes that `bob ref list` shows. The
 | [freshness.md](freshness.md) | Task review queue, confirmation dates, recurring occurrences, returning tasks (ticklers), and JSON schema 14 |
 | [getting-started.md](getting-started.md) | Vault requirements, first capture/session, command effects, and troubleshooting |
 | [gkeep.md](gkeep.md) | `bob gkeep` Keep inbox drain into tasks or inline reference clips |
-| [highlights-clip.md](highlights-clip.md) | Web article capture (`bob ref create <URL>`) into Highlights intake PDFs |
-| [highlights-create.md](highlights-create.md) | `bob ref create` Markdown, PDF, and URL targets |
+| [highlights-clip.md](highlights-clip.md) | Web article and collection capture into Highlights intake PDFs |
+| [highlights-create.md](highlights-create.md) | `bob ref create` vault-note snapshots, Markdown, PDFs, and URL collections |
 | [highlights-ref-sync.md](highlights-ref-sync.md) | `bob ref` PDF intake and reference notes |
 | [obsidian-sync-exclusions.md](obsidian-sync-exclusions.md) | Historical: Obsidian Sync folder-exclusion semantics, kept for reference now that the vault syncs through git only |
 | [plan.md](plan.md) | Plan budget, Today, and lanes definition, `bob plan` JSON, lints, and conformance examples |
 | [plugins.md](plugins.md) | `bob plugins` list and vault deploy |
 | [projects.md](projects.md) | `bob projects` `^prj` lifecycle and schedules |
 | [randomize.md](randomize.md) | `bob task reroll` bulk re-roll of due prioritized tasks |
-| [ref.md](ref.md) | Reference-library lookup and views, reading state, URL routing, JSON, and `migrate-tasks`/`migrate-zorg` migration/rollback |
+| [ref.md](ref.md) | Reference lookup, reading state, Today linking, renaming, JSON, and migration/rollback |
 | [ref-jobs.md](ref-jobs.md) | `bob ref jobs` background capture progress, worker, fallback, and recovery |
 | [stats.md](stats.md) | Daily Stats metrics, `bob stats`, JSON, the v1 review journal, and the Obsidian Stats page |
 | [task-dependencies.md](task-dependencies.md) | Task dependency links: Depends-On line, BLOCKS mirror, successor offers, project-dependency contract, plus conformance vectors |

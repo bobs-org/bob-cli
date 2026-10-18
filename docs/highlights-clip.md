@@ -94,8 +94,8 @@ When a site will not yield to automation, save the page from a real
 browser (Save Page As, or SingleFile) and replay it:
 
 ```bash
-bob ref create https://example.com/walled/ -H ~/Downloads/walled.html
-cat ~/Downloads/walled.html | bob ref create https://example.com/walled/ -H -
+bob ref create https://example.com/walled/ -H ~/Downloads/walled.html -P sase
+cat ~/Downloads/walled.html | bob ref create https://example.com/walled/ -H - -P sase
 ```
 
 Subresources still load live on a best-effort basis; the challenge retry

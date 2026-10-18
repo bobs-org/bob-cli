@@ -9,7 +9,7 @@ pandoc, a PDF is stamped as-is, and web article URLs run through the
 web-article engine.
 
 ```bash
-bob ref create [OPTIONS] <TARGET>
+bob ref create [OPTIONS] <TARGET>...
 ```
 
 ## Examples
@@ -310,8 +310,8 @@ tex_home=$(/Library/TeX/texbin/kpsewhich -var-value=TEXMFHOME)
 if ! test -f "$tex_home/tlpkg/texlive.tlpdb"; then
     /Library/TeX/texbin/tlmgr init-usertree
 fi
-/Library/TeX/texbin/tlmgr --usermode install titlesec enumitem fancyhdr lastpage refcount xurl
-/Library/TeX/texbin/kpsewhich titlesec.sty enumitem.sty fancyhdr.sty lastpage.sty refcount.sty xurl.sty
+/Library/TeX/texbin/tlmgr --usermode install needspace
+/Library/TeX/texbin/kpsewhich needspace.sty
 ```
 
 The default user tree (`~/Library/texmf`) is already on kpsewhich's

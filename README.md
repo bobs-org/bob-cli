@@ -169,7 +169,7 @@ separate `bob` subcommands.
 | Block ID | The trailing `^id` on a task line, used to link or nest under that task |
 | Task link | A `[[note#^id]]` (or embed) pointing at a task. When that is the only content of a Pomodoro child bullet, it is that session's planned work |
 | Task dependency link | A plain task block link on the dependent's managed `⛓️ **DEPENDS ON:**` child line; it names a prerequisite |
-| Project / reference task | The `^prj` / `^ref` task tracking a project's outcome or progress through reference material |
+| Project / reference task | The `^prj` project completion task or `#ref` reading task tracking progress through reference material |
 | Freshness | The `[fresh:: YYYY-MM-DD]` date when a human last confirmed an open task; it drives review, separately from its status |
 | Schedule Log | A managed `🗓️ **SCHEDULE LOG**` child that records each schedule change |
 | Work Log | A managed `🛠️ **WORK LOG**` child that records work summaries |
@@ -977,7 +977,7 @@ The full command contract lives in [`docs/gkeep.md`](docs/gkeep.md).
 ## Reference library (bob ref)
 
 ```bash
-bob ref create <TARGET> [-A|--author NAME] [-a|--audio PATH] [-b|--bob-dir PATH] [-d|--dry-run] [-f|--force] [-H|--html FILE] [-i|--include-id] [-l|--lib-dir PATH] [-L|--listen] [-N|--name STEM] [-n|--no-audio] [-o|--output PDF] [-P|--parent NOTE] [-p|--published DATE] [-r|--ref-dir PATH] [-s|--status STATUS] [-T|--title TITLE] [-t|--ref-type DIR] [-x|--xlib-dir PATH]
+bob ref create <TARGET>... [-A|--author NAME] [-a|--audio PATH] [-b|--bob-dir PATH] [-C|--closed] [-d|--dry-run] [-f|--force] [-H|--html FILE] [-i|--include-id] [-l|--lib-dir PATH] [-L|--listen] [-M|--plain] [-N|--name STEM] [-n|--no-audio] [-o|--output PDF] [-P|--parent NOTE] [-p|--published DATE] [-r|--ref-dir PATH] [-S|--section HEADING]... [-s|--status STATUS] [-T|--title TITLE] [-t|--ref-type DIR] [-x|--xlib-dir PATH]
 bob ref doctor [-b|--bob-dir PATH] [-l|--lib-dir PATH] [-n|--no-hooks] [-r|--ref-dir PATH] [-x|--xlib-dir PATH]
 bob ref find <QUERY>... [-b|--bob-dir PATH] [-f|--format human|json|markdown] [-i|--include-intake] [-m|--min-score SCORE] [-r|--ref-dir PATH] [-x|--xlib-dir PATH]
 bob ref jobs [list] [-a|--all] [-f|--format human|json]
@@ -999,32 +999,25 @@ intake PDFs; `scan` produces reference notes; `list` reads those notes. An
 intake PDF or pending job does not appear in `ref list` until a scan creates
 its note. `bob ref clip` remains a hidden alias of `create`.
 
-- `create <TARGET>` captures a web article in reader mode into
-  `xlib/blogs/<stem>.pdf`, renders Markdown through pandoc and xelatex into
-  `xlib/chat/<basename>.pdf`, or stamps a local PDF, PDF URL, or arXiv paper
-  as-is into `xlib/papers/<stem>.pdf` (override the subdirectory with
-  `--ref-type`: `chat` for Markdown, `papers` for PDFs). `-o, --output`
-  writes the complete PDF path instead, including the filename, and cannot be
-  combined with `--ref-type` or `--name`. Relative output paths are resolved
-  from the current directory and a leading `~` is expanded. `-N, --name`
-  sets the output stem, `-T, --title` overrides the derived title, and
-  `--include-id` adds marker `id` (URL targets always embed it). `-L, --listen`
-  narrates any target with `highlights.listen_command` and binds the episode
-  as companion audio (conflicts with `-a` and `-n`); an already-captured
-  target gains the episode as `xlib/<rel>.mp3` for `scan` to pair. Intake
-  targets still go through `scan`; a PDF written directly into the library is
-  also found by `scan`; a PDF outside both directories needs
-  `bob ref sync <PDF>`. Web articles need `uv` and a browser: Google Chrome
-  at its usual install path, Playwright's bundled Chromium, or `BOB_CHROME`.
-  A separately installed Chromium package is used when `BOB_CHROME` points
-  at it. On Linux, Xvfb enables headed retries for bot-protected sites; on
-  macOS the retry uses an off-screen window. `-H, --html` replays a
-  saved page. A URL recorded by a PDF-backed library note refuses ordinary
-  creation even with `--force`; `--force` can replace the same intake target.
-  A URL recorded only by notes without a Highlights PDF warns and captures a
-  fresh copy. See the
-  [target contract](docs/highlights-create.md) and
-  [web-article guide](docs/highlights-clip.md).
+- `create <TARGET>...` renders a vault note into
+  `xlib/notes/<note-stem>_<YYMMDD>.pdf`, other Markdown into
+  `xlib/chat/<stem>.pdf`, or a web article into `xlib/blogs/<stem>.pdf`.
+  Local PDFs, PDF URLs, and arXiv papers are stamped into
+  `xlib/papers/<stem>.pdf`. Two to twenty web article URLs produce one
+  collection PDF. Vault notes infer an eligible area/project parent from
+  the note or its ancestors; other targets require `-P, --parent`.
+  Snapshots omit closed tasks and condense logs; `-C` includes them,
+  repeatable `-S` selects projected sections, and `-M` renders plain Markdown.
+  `-N, --name` sets the stem, `-T, --title` overrides the title, and
+  `--ref-type` overrides the intake subdirectory. `-o, --output` supplies a
+  complete PDF path and conflicts with `--ref-type` and `--name`.
+  `-L, --listen` narrates with `highlights.listen_command` and binds companion
+  audio; it conflicts with `-a` and `-n`. `-H, --html` replays a saved web
+  page. Intake and library PDFs are discovered by `scan`; PDFs outside both
+  directories need `bob ref sync <PDF>`. Existing PDF-backed URL references
+  refuse ordinary creation; `--force` can replace the same intake target.
+  See [target types, dependencies, and dedupe](docs/highlights-create.md) and
+  [web article capture](docs/highlights-clip.md).
 - `scan` runs the configured `highlights.pre_scan_hook` on writing runs, then
   moves pending PDFs from `xlib/<rel>` to `lib/<rel>` and recursively syncs
   the library. Pass `-n, --no-hooks` on `scan` or `doctor`, or before the
@@ -1047,7 +1040,7 @@ its note. `bob ref clip` remains a hidden alias of `create`.
 - `list` shows the reading queue by default and filtered library views by
   reading state, status, type, origin, parent, or date, with `--limit 50`
   in every format (`-A` lifts it) and opt-in `-g` Git dates. Every row
-  carries a `blocked` boolean overlay (true when the note's `^ref` tracker
+  carries a `blocked` boolean overlay (true when its selected reading task
   is Blocked `[?]`); it never changes `status` or `reading_state`. Bob Mac
   Capture's Bob Refs panel reads it as a display overlay only.
 - `show <REF>...` reads one reference note with its metadata, annotations,
@@ -1067,9 +1060,10 @@ its note. `bob ref clip` remains a hidden alias of `create`.
 Generated notes live under `ref/`. Nested library PDFs such as
 `lib/books/foo.pdf` write `ref/books/foo.md` with `type: "[[ref]]"` and
 `ref_type: books`. New notes also get a local `created` timestamp; later syncs
-preserve it and do not backfill older notes. The generated `^ref` task is the
-visible lifecycle control. A Blocked `[?]` `^ref` task is accepted and
-status-neutral.
+preserve it and do not backfill older notes. New references put a `#ref`
+reading task in the parent note and embed it in the reference note. Existing
+v1 notes keep their in-note `^ref` tracker until migrated. The reading task
+controls lifecycle; Blocked `[?]` is a status-neutral overlay.
 Marker `status` values are `ready`, `next`, `wip`, `read`, `abandoned`, and
 `legacy`.
 
@@ -1265,9 +1259,9 @@ by `bob vault-sync`. The default is
 `$XDG_STATE_HOME/bob-cli/vault-sync.json`, or
 `$HOME/.local/state/bob-cli/vault-sync.json` when `XDG_STATE_HOME` is unset.
 
-`BOB_CHROME` sets the browser executable the `bob ref create` web-article
-adapter launches. When it is unset, discovery tries the Google Chrome paths
-above, then Playwright's bundled Chromium.
+`BOB_CHROME` sets the browser executable for web article capture and Mermaid
+rendering. When unset, discovery tries the Google Chrome paths above, then
+Playwright's bundled Chromium.
 
 `BOB_CLI_USE_SCRIPT=1` selects an embedded shell implementation where one is
 available. See [Compatibility shims](#compatibility-shims) for the exact command
@@ -1364,6 +1358,10 @@ Pass `-n, --no-hooks` to ignore the hook from every source. The legacy
 `bob ref create` for PDF URL and arXiv targets. It is the test seam,
 like `BOB_PANDOC_COMMAND`.
 
+`BOB_HIGHLIGHTS_DIAGRAMS=off|0|false|no` skips Mermaid rendering in Markdown
+imports and vault-note snapshots. Blocks print as source without a fallback
+note; see [Mermaid diagrams](docs/highlights-create.md#mermaid-diagrams).
+
 `BOB_HIGHLIGHTS_KEEP_WORKDIR=1` keeps the `bob ref create` scratch
 directory for debugging and prints its path (the legacy
 `BOB_WEB_CLIP_KEEP_WORKDIR=1` is also honored).
@@ -1414,8 +1412,9 @@ capture rolls independently. `bob task reroll` also reads it as the default
 base seed when `--seed` is omitted.
 
 `BOB_WEB_CLIP_ADAPTER` is the path of an executable that speaks the web-clip
-adapter protocol and replaces `uv run --script …` for `bob ref create`
-web article targets and the `doctor` web-clip rows. It is the test hook, like `BOB_GKEEP_ADAPTER`.
+adapter protocol and replaces `uv run --script …` for web article capture,
+collection composition, Mermaid rendering, and the `doctor` web-clip rows.
+It is the test hook, like `BOB_GKEEP_ADAPTER`.
 
 `BOB_WEB_CLIP_KEEP_WORKDIR=1` keeps the `bob ref create` web-article scratch
 directory for debugging and prints its path.
@@ -1555,9 +1554,9 @@ blocks point at `done/..._done#^block-id`, and the vault Git commit was pushed.
 | Today's plan, sticky lanes, dashboard READY, and per-note Ready caps | [`docs/plan.md`](docs/plan.md) |
 | Daily Stats metrics, `bob stats`, JSON, the review journal, and the Obsidian Stats page | [`docs/stats.md`](docs/stats.md) |
 | Highlights PDF intake and reference notes | [`docs/highlights-ref-sync.md`](docs/highlights-ref-sync.md) |
-| `bob ref create` Markdown, PDF, and URL targets | [`docs/highlights-create.md`](docs/highlights-create.md) |
+| `bob ref create` vault-note snapshots, Markdown, PDFs, and URL collections | [`docs/highlights-create.md`](docs/highlights-create.md) |
 | Web article capture into Highlights intake PDFs | [`docs/highlights-clip.md`](docs/highlights-clip.md) |
-| Reference-library lookup, reading queue, URL routing, and legacy migration | [`docs/ref.md`](docs/ref.md) |
+| Reference lookup, reading queue, Today linking, renaming, and migration | [`docs/ref.md`](docs/ref.md) |
 | Ref job spool, background worker, and fallback | [`docs/ref-jobs.md`](docs/ref-jobs.md) |
 | Obsidian Sync folder exclusion runbook (historical) | [`docs/obsidian-sync-exclusions.md`](docs/obsidian-sync-exclusions.md) |
 | Bob vault Git sync runbook | [`docs/vault-git-sync.md`](docs/vault-git-sync.md) |

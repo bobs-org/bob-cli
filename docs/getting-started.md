@@ -305,7 +305,7 @@ capture fails, the worker writes the link as an inbox task with a warning and
 retry command. See [ref jobs](ref-jobs.md) for recovery.
 
 For a local PDF, Markdown report, or immediate URL import, use
-`bob ref create <TARGET>`; it completes the import inline and does not use
+`bob ref create <TARGET> -P <area-or-project>`; it imports inline without
 the job spool. Run `bob ref doctor` to check dependencies. Local PDFs are
 stamped as-is; Markdown needs pandoc, XeLaTeX, DejaVu fonts, and LaTeX
 packages; web articles need `uv` and a browser. `bob ref create --dry-run`
