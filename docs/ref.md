@@ -63,13 +63,13 @@ written by the last Highlights scan, not live PDF state.
 
 ## Reading state
 
-Reading state is derived, never stored. It comes from the located reading
-task: the vault-wide `#ref` locator finds every v2 task (a `#task #ref`
-line with a wikilink to the ref note), selects one per the v2/v1 order
-(one open v2 wins; ambiguity falls back to frontmatter; then the newest
-closed v2; then the in-note v1 `^ref` tracker; else frontmatter), and the
-residence parent (the area/project/inbox stem, or the `done/` archive's
-`parent:`) becomes the row parent. The effective `status` is decided
+Reading state is derived, never stored. Current-format (v2) reading tasks
+are `#task #ref` lines linking to the reference note; older (v1) trackers
+live inside that note and end in `^ref`. One open v2 task outside `done/`
+wins; several make Bob fall back to frontmatter. With none, Bob tries the
+newest closed v2 task, then in-note v1 trackers, then frontmatter. A selected
+v2 task supplies the row parent from its location: the area/project/inbox
+stem, or the `done/` archive's `parent:`. The effective `status` is decided
 per note:
 
 1. One selected reading task with a known mark maps through the
@@ -100,9 +100,9 @@ per note:
 `conflict:…`, `none`).
 
 `blocked` is a boolean overlay on the reading lane, always present on
-every `list`, `show`, and `find` row: true when the selected reading task
-(v2 or the in-note v1 `^ref` tracker) is Blocked `[?]`, false
-otherwise. It never changes `status` or `reading_state` — a blocked
+every `list`, `show`, and `find` row: true when the reading task selected
+by the rules above is Blocked `[?]`, false otherwise.
+The boolean is separate from `status` and `reading_state` — a blocked
 `next` row still reads `queued` in its lane — it only says the note is
 waiting on something else. Clients such as Bob Mac Capture's Refs panel
 read Blocked from this field and never parse `reading_state_source`.
@@ -149,8 +149,8 @@ import and can be found with `ref find -i`.
 
 For a multi-URL `bob ref create`, the marker and scanned ref note store
 `source_url` as an ordered list in the order the URLs were supplied. The
-collection remains one PDF, one note, and one reading task, and every listed URL
-resolves to that same reference.
+collection yields one PDF and, after `bob ref scan`, one note and one reading
+task. Every listed URL resolves to that same reference.
 
 ## Usage
 

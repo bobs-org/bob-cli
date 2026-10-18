@@ -169,7 +169,7 @@ separate `bob` subcommands.
 | Block ID | The trailing `^id` on a task line, used to link or nest under that task |
 | Task link | A `[[note#^id]]` (or embed) pointing at a task. When that is the only content of a Pomodoro child bullet, it is that session's planned work |
 | Task dependency link | A plain task block link on the dependent's managed `⛓️ **DEPENDS ON:**` child line; it names a prerequisite |
-| Project / reference task | The `^prj` project completion task or `#ref` reading task tracking progress through reference material |
+| Project / reference task | A project's `^prj` completion task or a reference's `#ref` reading task in its parent note; older references use an in-note `^ref` tracker |
 | Freshness | The `[fresh:: YYYY-MM-DD]` date when a human last confirmed an open task; it drives review, separately from its status |
 | Schedule Log | A managed `🗓️ **SCHEDULE LOG**` child that records each schedule change |
 | Work Log | A managed `🛠️ **WORK LOG**` child that records work summaries |
@@ -999,23 +999,26 @@ intake PDFs; `scan` produces reference notes; `list` reads those notes. An
 intake PDF or pending job does not appear in `ref list` until a scan creates
 its note. `bob ref clip` remains a hidden alias of `create`.
 
-- `create <TARGET>...` renders a vault note into
+- By default, `create <TARGET>...` renders a vault note into
   `xlib/notes/<note-stem>_<YYMMDD>.pdf`, other Markdown into
   `xlib/chat/<stem>.pdf`, or a web article into `xlib/blogs/<stem>.pdf`.
   Local PDFs, PDF URLs, and arXiv papers are stamped into
   `xlib/papers/<stem>.pdf`. Two to twenty web article URLs produce one
-  collection PDF. Vault notes infer an eligible area/project parent from
-  the note or its ancestors; other targets require `-P, --parent`.
-  Snapshots omit closed tasks and condense logs; `-C` includes them,
-  repeatable `-S` selects projected sections, and `-M` renders plain Markdown.
+  collection PDF. Vault notes infer an area/project parent from the note
+  itself or its `parent:` links. Pass `-P, --parent` if none is eligible
+  or for other targets.
+  Snapshots omit closed tasks and condense logs. For vault notes, `-C` restores
+  closed tasks in an appendix and full logs; repeatable `-S` selects snapshot
+  sections; `-M` renders the note as ordinary Markdown.
   `-N, --name` sets the stem, `-T, --title` overrides the title, and
   `--ref-type` overrides the intake subdirectory. `-o, --output` supplies a
   complete PDF path and conflicts with `--ref-type` and `--name`.
   `-L, --listen` narrates with `highlights.listen_command` and binds companion
   audio; it conflicts with `-a` and `-n`. `-H, --html` replays a saved web
   page. Intake and library PDFs are discovered by `scan`; PDFs outside both
-  directories need `bob ref sync <PDF>`. Existing PDF-backed URL references
-  refuse ordinary creation; `--force` can replace the same intake target.
+  directories need `bob ref sync <PDF>`. Creation refuses URLs already recorded
+  in PDF-backed reference notes even with `--force`; that flag can replace
+  the same queued intake target.
   See [target types, dependencies, and dedupe](docs/highlights-create.md) and
   [web article capture](docs/highlights-clip.md).
 - `scan` runs the configured `highlights.pre_scan_hook` on writing runs, then
@@ -1060,10 +1063,10 @@ its note. `bob ref clip` remains a hidden alias of `create`.
 Generated notes live under `ref/`. Nested library PDFs such as
 `lib/books/foo.pdf` write `ref/books/foo.md` with `type: "[[ref]]"` and
 `ref_type: books`. New notes also get a local `created` timestamp; later syncs
-preserve it and do not backfill older notes. New references put a `#ref`
-reading task in the parent note and embed it in the reference note. Existing
-v1 notes keep their in-note `^ref` tracker until migrated. The reading task
-controls lifecycle; Blocked `[?]` is a status-neutral overlay.
+preserve it and do not backfill older notes. On first sync, new references put
+a `#ref` reading task in the parent note and embed it in the reference note
+(v2). Older (v1) notes keep their in-note `^ref` tracker until migrated.
+The reading task tracks lifecycle; `blocked` reports `[?]` separately.
 Marker `status` values are `ready`, `next`, `wip`, `read`, `abandoned`, and
 `legacy`.
 

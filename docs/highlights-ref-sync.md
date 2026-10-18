@@ -155,13 +155,14 @@ three-level table of contents and PDF outline bookmarks, and embeds a page-1
 ```
 
 The marker parent is deliberately bare; generated Obsidian frontmatter turns
-it into a wikilink later. Vault notes infer the nearest eligible parent;
-other targets require `-P, --parent`. `-s, --status` and `-t, --ref-type`
-override defaults. `-d, --dry-run` prints the plan with `writes: none`.
+it into a wikilink later. Vault notes infer an eligible area/project parent
+from the note itself or its `parent:` links; other targets require
+`-P, --parent`. `-s, --status` and `-t, --ref-type` override defaults.
+`-d, --dry-run` prints the plan with `writes: none`.
 
-An explicit `-P` resolves before any work (pandoc, the browser, the network,
-or a write) through the shared area/project/inbox resolver, and the marker
-stores the canonical route. It accepts `sase`, `sase.md`, and `[[sase]]`
+An explicit `-P` resolves before rendering, fetching, or writing through
+the shared area/project/inbox resolver; the marker stores the canonical
+route. It accepts `sase`, `sase.md`, and `[[sase]]`
 forms (whitespace trimmed, case-insensitive); an exact stem wins, then
 `project_name_aliases` (see
 [`docs/projects.md`](projects.md) §"External names (`project_name_aliases`)").
@@ -170,8 +171,8 @@ The dry run reports the resolution, for example
 fails with near-miss and alias hints; a terminal project (`project 'x' is
 done`) and a non-area/project hub (`obsidian_ref.md is not an area or
 project note`) report themselves. When no parent can be inferred, a missing
-`-P` fails with a `bob capture-targets` hint. For `--output` paths, an existing target PDF requires
-`-f, --force`; a same-stem Markdown file beside the target PDF is always
+`-P` fails with a `bob capture-targets` hint. For `--output` paths, an existing
+target PDF requires `-f, --force`; a same-stem Markdown file beside it is always
 refused because Highlights would interpret it as a sidecar. Default targets
 instead suffix to `<stem>_2`, … when taken by a different reference. Dry-run and success output show a
 mirrored `library_destination` only for intake targets. Intake and direct

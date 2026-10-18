@@ -304,9 +304,9 @@ creates a reference note. The human and JSON job state for a finished clip is
 capture fails, the worker writes the link as an inbox task with a warning and
 retry command. See [ref jobs](ref-jobs.md) for recovery.
 
-For a local PDF, Markdown report, or immediate URL import, use
-`bob ref create <TARGET> -P <area-or-project>`; it imports inline without
-the job spool. Run `bob ref doctor` to check dependencies. Local PDFs are
+Check dependencies with `bob ref doctor`. To import a local PDF, Markdown
+report, or URL immediately, run `bob ref create <TARGET> -P <area-or-project>`.
+This writes the intake PDF; then run the scan steps above. Local PDFs are
 stamped as-is; Markdown needs pandoc, XeLaTeX, DejaVu fonts, and LaTeX
 packages; web articles need `uv` and a browser. `bob ref create --dry-run`
 skips installing the final PDF, and a web article, PDF URL, or arXiv target
