@@ -37,7 +37,7 @@ then creates the notes that `bob ref list` shows. The
 | [plugins.md](plugins.md) | `bob plugins` list and vault deploy |
 | [projects.md](projects.md) | `bob projects` `^prj` lifecycle and schedules |
 | [randomize.md](randomize.md) | `bob task reroll` bulk re-roll of due prioritized tasks |
-| [ref.md](ref.md) | Reference lookup, reading state, Today linking, renaming, JSON, and migration/rollback |
+| [ref.md](ref.md) | Reference lookup, reading state, the Obsidian Reading Board, Today linking, renaming, JSON, and migration/rollback |
 | [ref-jobs.md](ref-jobs.md) | `bob ref jobs` background capture progress, worker, fallback, and recovery |
 | [stats.md](stats.md) | Daily Stats metrics, `bob stats`, JSON, the v1 review journal, and the Obsidian Stats page |
 | [task-dependencies.md](task-dependencies.md) | Task dependency links: Depends-On line, BLOCKS mirror, successor offers, project-dependency contract, plus conformance vectors |

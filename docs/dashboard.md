@@ -68,8 +68,14 @@ Root-level notes with hierarchy from frontmatter `parent: "[[dash]]"`:
   `[[dash|← Dashboard]]`, one short active/waiting description, and
   `![[projects.base#🚀 Active & Waiting]]`.
 - `dash_references.md` (alias Dashboard References): `# References`,
-  `[[dash|← Dashboard]]`, one short reading-queue description, and
-  `![[refs.base#🔖 Reading Queue]]`.
+  `[[dash|← Dashboard]]`, one short reading-queue description, one empty
+  ` ```bob-reading-board ` fence, and `![[refs.base#🔖 Reading Queue]]`. The
+  board is a read-only kanban (Reading, Next, Ready, Snoozed) drawn from
+  `bob ref list` JSON; the table follows it. The REFERENCES badge still
+  counts the Reading Queue Base view, not the board. The board's fence,
+  lanes, and keys are in [ref.md](ref.md#reading-board-in-obsidian). The
+  **Open Reading Board** command opens this page, as **Open Stats** opens
+  `dash_stats`.
 - `dash_stats.md` (aliases Stats, Dashboard Stats): `# Stats`,
   `[[dash|← Dashboard]]`, one short derived-metrics description, and one
   empty ` ```bob-stats ` fence. The Browse row ends with a label-only

@@ -292,7 +292,88 @@ when that id is absent. Each `task` object also carries `priority`
 (a strict calendar date, past or future, else `null`), both read from
 the selected reading-task line. Bob Mac Capture's Refs panel and the
 coming Reading Board consume `blocked_by`, `task.priority`, and
-`task.scheduled`.
+`task.scheduled`. The Obsidian [Reading Board](#reading-board-in-obsidian)
+draws these rows as lanes.
+
+## Reading Board in Obsidian
+
+`dash_references` opens on a read-only kanban of the reading queue. It is a
+` ```bob-reading-board ` fence that Bob Ledger Tools draws from
+`bob ref list -s ready,next,wip -A -f json` (plus `-P` and `-t` when set), so
+the board, the terminal, and Bob Mac Capture agree on what can be read now.
+The board never writes: acting on a reference stays with `bob ref today` and
+the `^ref` task keymaps.
+
+The fence body is optional YAML:
+
+- `parent: <note>` passes `-P`, so the board shows one area or project's
+  queue (routes and `project_name_aliases` apply). The block works on any
+  note, for example a project note with `parent: sase`.
+- `type: <type or list>` passes `-t`.
+- Unknown keys and bad values become one muted lint line each, never an
+  error.
+
+**Open Reading Board** (`open-reading-board`) opens `dash_references`.
+
+### Lanes
+
+Lanes come from each row's `status` and `blocked` fields; only modern rows
+with status `wip`, `next`, or `ready` appear.
+
+| Lane       | Rows                 |
+| ---------- | -------------------- |
+| 📖 Reading | `wip`, not blocked   |
+| ⭐ Next    | `next`, not blocked  |
+| 📥 Ready   | `ready`, not blocked |
+| 💤 Snoozed | `blocked`, any status  |
+
+The header reads `N awake · M snoozed` (awake is Reading + Next + Ready), the
+data time, and a ↻ refresh button. An empty board says `Nothing queued ✓`.
+The four lanes sit in a row on wide panes, two by two at readable line width,
+and in one column below that.
+
+Awake cards show the title, a kind and topic line (kind from the `refs.base`
+category vocabulary, topic from `parent`), the added date, `♫` for audio, `✎ N`
+for annotations, and the task priority mark. A `TODAY` pill appears only when
+the reading task is linked under today's Pomodoros and the Today cache is
+ready. A dim `*` marks a pending frontmatter sync. Cards linked today sort
+first; otherwise the order is `bob ref list` order.
+
+### Snoozed reasons
+
+Snoozed rows are compact and grouped, in this order:
+
+1. **Waking**: `blocked_by` is empty; the next reconcile returns the
+   reference to its lane (`⏰ now`).
+2. **This week**, **This month**, **Later**: the only reason is a schedule,
+   sorted by wake date (the same buckets as the note snapshot's Scheduled
+   lane).
+3. **Waiting on**: everything else, with a second line `⛓ after <first
+   prerequisite>` (`+N` for more) or `🧱 in blocked project <stem>`. Hovering
+   a row outlines the prerequisite card when it is on the board.
+
+Rows whose underlying status is not `ready` show where they return
+(`→ ⭐ Next`, `→ 📖 Reading`). The lane header toggles collapse for the
+session. These are the same reasons the human `bob ref list` output prints.
+
+### Keys and states
+
+| Gesture                        | Effect                                                    |
+| ------------------------------ | --------------------------------------------------------- |
+| Click / Enter                  | Open the reference note                                   |
+| ⌘/Ctrl-click, middle-click     | Open it in a new tab                                      |
+| ⌘/Ctrl+Enter, **PDF** button   | Open the PDF in Highlights (new tab for the note without a PDF or off macOS) |
+| ⌥/Alt+Enter, **Task** button   | Go to the reading task                                    |
+| ←/→, ↑/↓ (h/l, k/j), Home/End  | Move focus across and within lanes                        |
+| ↻ or `r`                       | Refresh now                                               |
+
+The first paint shows skeleton lanes. Background revalidation is silent and
+repaints only when the rows change. If `bob ref list` fails, the last frame
+stays with a muted "Showing the board from HH:MM" line and Retry; with no
+frame the board shows an actionable error. When `bob` is not found, set
+`stats.bob_path` in `~/.config/bob/config.yml`, as for the Stats page.
+Under an older bob without `blocked_by`, blocked rows sit in Waiting on as
+`⏸ blocked` with one hint to update bob-cli. The board needs the desktop app.
 
 ## `bob ref show`
 
