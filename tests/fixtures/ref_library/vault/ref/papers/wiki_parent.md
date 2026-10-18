@@ -6,4 +6,4 @@ parent: [[sase_ref]]
 
 # Wiki Parent Note
 
-- [ ] #task #ref [[lib/papers/wiki.pdf]] #hide ^ref
+- [ ] #task #ref [[lib/papers/wiki.pdf]] [priority:: lowest] #hide ^ref

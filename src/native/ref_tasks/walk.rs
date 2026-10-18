@@ -488,6 +488,22 @@ impl RefTaskIndex {
         &self.orphans
     }
 
+    /// The indexed reference note a located reading task belongs to.
+    pub(crate) fn ref_note_for_task(
+        &self,
+        note_path: &str,
+        line_index: usize,
+    ) -> Option<&str> {
+        self.candidates.iter().find_map(|(ref_path, tasks)| {
+            tasks
+                .iter()
+                .any(|task| {
+                    task.path == note_path && task.line_index == line_index
+                })
+                .then_some(ref_path.as_str())
+        })
+    }
+
     /// Pure selection for one ref note.
     pub(crate) fn select(
         &self,

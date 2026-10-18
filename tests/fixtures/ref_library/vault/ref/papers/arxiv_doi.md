@@ -8,4 +8,4 @@ source_pdf: "[[lib/papers/attention-v2.pdf]]"
 
 # Attention DOI Twin
 
-- [ ] #task #ref [[lib/papers/attention-v2.pdf]] #hide ^ref
+- [ ] #task #ref [[lib/papers/attention-v2.pdf]] [priority:: bogus] #hide ^ref

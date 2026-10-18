@@ -5,4 +5,4 @@ title: Chat Ready Episode
 
 # Chat Ready Episode
 
-- [ ] #task #ref [[lib/chat/ep2.pdf]] #hide ^ref
+- [ ] #task #ref [[lib/chat/ep2.pdf]] [priority:: highest] #hide ^ref

@@ -637,9 +637,10 @@ pub(crate) struct CollapsedLegacy {
 }
 
 /// Render `bob ref list` in human form: a header, one group per reading
-/// state with its count, aligned rows, then the legacy-collapse,
-/// truncation, and library lines. Without `-s`, legacy-era rows collapse
-/// to one dim summary line instead of listing.
+/// state with its count, aligned rows (blocked rows carry a dim reason
+/// after the kind column), then the legacy-collapse, truncation, and
+/// library lines. Without `-s`, legacy-era rows collapse to one dim
+/// summary line instead of listing.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn render_list_human(
     selection: &ListSelection,
@@ -685,6 +686,14 @@ pub(crate) fn render_list_human(
         .map(|row| display_width(&list_kind(row)))
         .max()
         .unwrap_or(0);
+    let reason_width = returned
+        .iter()
+        .filter_map(|row| {
+            super::blocked_by::human_reason_suffix(row)
+                .map(|reason| display_width(&reason))
+        })
+        .max()
+        .unwrap_or(0);
     let mut pending_sync = false;
     for state in LIST_STATE_ORDER {
         let group: Vec<&RefRow> = returned
@@ -716,6 +725,7 @@ pub(crate) fn render_list_human(
                 chip_width,
                 title_width,
                 type_width,
+                reason_width,
                 styler,
                 width,
             ));
@@ -833,13 +843,15 @@ fn list_kind(row: &RefRow) -> String {
 }
 
 /// One aligned list row: status chip, row date (or `—` padded to 10
-/// columns), title, padded type, and a dim path. The path drops first
-/// on narrow terminals, then titles truncate.
+/// columns), title, padded type, optional dim blocked reason, and a dim
+/// path. The path drops first on narrow terminals, then the reason,
+/// then titles truncate.
 fn list_row_line(
     row: &RefRow,
     chip_width: usize,
     title_width: usize,
     type_width: usize,
+    reason_width: usize,
     styler: Styler,
     width: usize,
 ) -> String {
@@ -854,18 +866,36 @@ fn list_row_line(
     let date = pad_right(row_date(row).unwrap_or("—"), 10);
     let kind = pad_right(&list_kind(row), type_width);
     let title = pad_right(&row.title, title_width);
+    let reason_plain =
+        super::blocked_by::human_reason_suffix(row).unwrap_or_default();
+    let reason_col = if reason_width == 0 {
+        String::new()
+    } else {
+        let padded = pad_right(&reason_plain, reason_width);
+        let painted = if reason_plain.is_empty() {
+            padded
+        } else {
+            padded.replacen(&reason_plain, &styler.dim(&reason_plain), 1)
+        };
+        format!("  {painted}")
+    };
     let full = format!(
-        "    {}  {date}  {title}  {kind}  {}",
+        "    {}  {date}  {title}  {kind}{reason_col}  {}",
         strip_ansi(&chip),
         row.path
     );
-    if display_width(&full) <= width {
-        let head = format!("    {chip}  {date}  {title}  {kind}  ");
+    if display_width(&strip_ansi(&full)) <= width {
+        let head = format!("    {chip}  {date}  {title}  {kind}{reason_col}  ");
         return format!("{head}{}", styler.dim(&row.path));
     }
-    let without_path = format!("    {chip}  {date}  {title}  {kind}");
+    let without_path =
+        format!("    {chip}  {date}  {title}  {kind}{reason_col}");
     if display_width(&strip_ansi(&without_path)) <= width {
         return without_path;
+    }
+    let without_reason = format!("    {chip}  {date}  {title}  {kind}");
+    if display_width(&strip_ansi(&without_reason)) <= width {
+        return without_reason;
     }
     let fixed = format!("    {chip}  {date}  ");
     let tail = format!("  {kind}");
@@ -988,6 +1018,7 @@ mod tests {
             frontmatter_status: None,
             legacy_status: None,
             blocked: false,
+            blocked_by: Vec::new(),
             reading_state: reading_state.to_string(),
             reading_state_source: "ref_task:[ ]".to_string(),
             parent: None,
@@ -1019,6 +1050,7 @@ mod tests {
             source_id: None,
             source_blocks: Vec::new(),
             v2: false,
+            task_line: None,
         }
     }
 
@@ -1101,6 +1133,96 @@ mod tests {
         assert!(
             plain.contains("ref/papers/queued_note.md"),
             "wide terminals keep the dim path:\n{plain}"
+        );
+    }
+
+    #[test]
+    fn list_human_blocked_reason_is_dim_and_drops_before_the_title() {
+        let mut row = list_test_row(
+            "ref/papers/snoozed.md",
+            "Snoozed Note",
+            Some("ready"),
+            "queued",
+        );
+        row.blocked = true;
+        row.blocked_by =
+            vec![super::super::row::BlockedReason::LocalSchedule {
+                date: "2026-10-23".to_string(),
+            }];
+        let coverage = Coverage {
+            ref_dir: "ref".to_string(),
+            notes: 1,
+            skipped: 0,
+            intake: "not_checked".to_string(),
+            scope: Coverage::scope_text(),
+            annotations: Coverage::annotations_text(),
+            git_dates: None,
+        };
+        let library = LibraryCounts {
+            notes: 1,
+            queued: 1,
+            ..LibraryCounts::default()
+        };
+        let selection = super::super::select(
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(50),
+        );
+        let colored = render_list_human(
+            &selection,
+            &coverage,
+            &library,
+            1,
+            &[row.clone()],
+            &[("queued", 1)],
+            0,
+            &[],
+            Styler::colored(),
+            120,
+        );
+        assert!(colored.contains("💤 until 2026-10-23"), "{colored}");
+        assert!(
+            colored.contains("\u{1b}[2m💤 until 2026-10-23\u{1b}[0m"),
+            "reason is dim:\n{colored}"
+        );
+        let plain = render_list_human(
+            &selection,
+            &coverage,
+            &library,
+            1,
+            &[row.clone()],
+            &[("queued", 1)],
+            0,
+            &[],
+            Styler::plain(),
+            120,
+        );
+        assert!(plain.contains("💤 until 2026-10-23"), "{plain}");
+        assert!(!plain.contains('\u{1b}'), "{plain}");
+        let narrow = render_list_human(
+            &selection,
+            &coverage,
+            &library,
+            1,
+            &[row],
+            &[("queued", 1)],
+            0,
+            &[],
+            Styler::plain(),
+            36,
+        );
+        assert!(
+            !narrow.contains("ref/papers/snoozed.md"),
+            "path drops first:\n{narrow}"
+        );
+        assert!(
+            !narrow.contains("💤 until 2026-10-23"),
+            "reason drops after the path:\n{narrow}"
         );
     }
 }

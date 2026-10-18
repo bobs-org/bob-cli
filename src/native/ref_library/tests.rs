@@ -3,10 +3,13 @@
 //! classification and scoring tables, supersession, determinism, and a
 //! side-effect check.
 use std::collections::BTreeSet;
+use std::ffi::OsStr;
 use std::path::PathBuf;
 
 use super::resolve::title_score;
+use super::row::BlockedReason;
 use super::*;
+use crate::native::env::TestEnvGuard;
 
 fn vault_dir() -> PathBuf {
     PathBuf::from("tests/fixtures/ref_library/vault")
@@ -18,6 +21,10 @@ fn fixture_config() -> LibraryConfig {
 }
 
 fn fixture_index() -> RefIndex {
+    let _now = TestEnvGuard::set(&[(
+        "BOB_NOW",
+        Some(OsStr::new("2026-10-06 12:00:00")),
+    )]);
     build_index(&fixture_config()).expect("build fixture index")
 }
 
@@ -37,8 +44,8 @@ fn codes(row: &RefRow) -> BTreeSet<&str> {
 #[test]
 fn index_membership_and_coverage() {
     let index = fixture_index();
-    assert_eq!(index.rows.len(), 34);
-    assert_eq!(index.coverage.notes, 34);
+    assert_eq!(index.rows.len(), 46);
+    assert_eq!(index.coverage.notes, 46);
     assert_eq!(index.coverage.skipped, 3);
     assert_eq!(index.coverage.ref_dir, "ref");
     assert_eq!(index.coverage.intake, "not_checked");
@@ -157,7 +164,7 @@ fn legacy_unread_is_superseded_by_the_pdf_capture() {
     assert_eq!(row.added.as_deref(), Some("2026-01-01"));
     assert_eq!(row.added_source.as_deref(), Some("zorg_block"));
     // Library counts exclude superseded rows.
-    assert_eq!(index.counts.notes, 33);
+    assert_eq!(index.counts.notes, 45);
 }
 
 #[test]
@@ -615,6 +622,152 @@ fn building_the_index_writes_nothing() {
     let before = fixture_bytes();
     let _ = fixture_index();
     assert_eq!(fixture_bytes(), before);
+}
+
+#[test]
+fn task_priority_and_scheduled_and_blocked_by_cover_the_contract() {
+    let index = fixture_index();
+
+    let priorities = [
+        ("ref/chat/chat_ready.md", Some("highest")),
+        ("ref/chat/chat_next.md", Some("high")),
+        ("ref/blogs/go_link.md", Some("medium")),
+        ("ref/papers/created_note.md", Some("low")),
+        ("ref/papers/wiki_parent.md", Some("lowest")),
+        ("ref/papers/arxiv_doi.md", None),
+        ("ref/papers/inline_code.md", None),
+        ("ref/papers/prereq_open.md", Some("high")),
+        ("ref/papers/sched_future.md", Some("highest")),
+    ];
+    for (path, expected) in priorities {
+        let task = row(&index, path).task.as_ref().expect(path);
+        assert_eq!(task.priority.as_deref(), expected, "{path}");
+    }
+
+    let future = row(&index, "ref/papers/sched_future.md");
+    assert!(future.blocked);
+    assert_eq!(
+        future.task.as_ref().expect("task").scheduled.as_deref(),
+        Some("2026-10-23")
+    );
+    assert_eq!(
+        future.blocked_by,
+        vec![BlockedReason::LocalSchedule {
+            date: "2026-10-23".to_string()
+        }]
+    );
+
+    let today = row(&index, "ref/papers/sched_today.md");
+    assert!(today.blocked);
+    assert_eq!(
+        today.task.as_ref().expect("task").scheduled.as_deref(),
+        Some("2026-10-06")
+    );
+    assert!(today.blocked_by.is_empty(), "{:?}", today.blocked_by);
+
+    let dep_ref = row(&index, "ref/papers/dep_open_ref.md");
+    match &dep_ref.blocked_by[..] {
+        [BlockedReason::LocalDependency { prerequisites }] => {
+            assert_eq!(prerequisites.len(), 1);
+            assert_eq!(prerequisites[0].id, "sase__ref-prereq-open");
+            assert_eq!(prerequisites[0].title, "Open Prerequisite Paper");
+            assert_eq!(prerequisites[0].path, "sase.md");
+            assert_eq!(
+                prerequisites[0].block_id.as_deref(),
+                Some("ref-prereq-open")
+            );
+            assert_eq!(prerequisites[0].mark, '*');
+            assert_eq!(
+                prerequisites[0].ref_path.as_deref(),
+                Some("ref/papers/prereq_open.md")
+            );
+        }
+        other => panic!("expected open-ref dependency: {other:?}"),
+    }
+
+    let dep_plain = row(&index, "ref/papers/dep_open_plain.md");
+    match &dep_plain.blocked_by[..] {
+        [BlockedReason::LocalDependency { prerequisites }] => {
+            assert_eq!(prerequisites[0].id, "sase__plain-open");
+            assert_eq!(prerequisites[0].title, "Open non-ref work");
+            assert_eq!(prerequisites[0].ref_path, None);
+        }
+        other => panic!("expected plain dependency: {other:?}"),
+    }
+
+    for path in [
+        "ref/papers/dep_closed.md",
+        "ref/papers/dep_done.md",
+        "ref/papers/dep_unresolved.md",
+        "ref/papers/inline_code.md",
+        "ref/papers/blocked_mark.md",
+    ] {
+        let blocked = row(&index, path);
+        assert!(blocked.blocked, "{path}");
+        assert!(
+            blocked.blocked_by.is_empty(),
+            "{path}: {:?}",
+            blocked.blocked_by
+        );
+    }
+
+    let project = row(&index, "ref/papers/prj_blocked.md");
+    assert_eq!(
+        project.blocked_by,
+        vec![BlockedReason::Project {
+            project: "sase_post_blog.md".to_string(),
+            link: "[[sase_post_blog]]".to_string(),
+        }]
+    );
+
+    let combo = row(&index, "ref/papers/combo_blocked.md");
+    assert_eq!(combo.blocked_by.len(), 3, "{:?}", combo.blocked_by);
+    assert!(matches!(
+        combo.blocked_by[0],
+        BlockedReason::LocalDependency { .. }
+    ));
+    assert_eq!(
+        combo.blocked_by[1],
+        BlockedReason::LocalSchedule {
+            date: "2026-11-01".to_string()
+        }
+    );
+    assert!(matches!(combo.blocked_by[2], BlockedReason::Project { .. }));
+
+    let v1 = row(&index, "ref/papers/v1_scheduled.md");
+    assert_eq!(
+        v1.task.as_ref().expect("v1 task").scheduled.as_deref(),
+        Some("2026-10-23")
+    );
+    assert_eq!(
+        v1.blocked_by,
+        vec![BlockedReason::LocalSchedule {
+            date: "2026-10-23".to_string()
+        }]
+    );
+
+    let synced = row(&index, "ref/papers/synced_paper.md");
+    assert!(!synced.blocked);
+    assert!(synced.blocked_by.is_empty());
+}
+
+#[test]
+fn extra_pass_and_additive_id_resolution_agree_on_the_fixture() {
+    let index = fixture_index();
+    let wanted = index
+        .rows
+        .iter()
+        .filter(|row| row.blocked)
+        .filter_map(|row| row.task_line.as_deref())
+        .flat_map(super::blocked_by::depends_on_ids_for_test)
+        .collect::<BTreeSet<_>>();
+    let (extra_time, additive_time, extra_n, additive_n) =
+        super::blocked_by::measure_id_resolution(&index.bob_dir, &wanted);
+    assert!(extra_n <= additive_n, "{extra_n} vs {additive_n}");
+    assert!(
+        extra_time <= additive_time * 20,
+        "extra {extra_time:?} additive {additive_time:?}"
+    );
 }
 
 #[test]

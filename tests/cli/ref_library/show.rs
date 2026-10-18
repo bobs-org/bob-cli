@@ -88,8 +88,13 @@ fn show_rows_carry_blocked() {
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0]["path"], "ref/papers/blocked_mark.md");
     assert_eq!(rows[0]["blocked"], true);
+    assert!(rows[0]["blocked_by"].is_array());
+    assert!(rows[0]["task"].is_object());
+    assert!(rows[0]["task"].get("priority").is_some());
+    assert!(rows[0]["task"].get("scheduled").is_some());
     assert_eq!(rows[1]["path"], "ref/papers/synced_paper.md");
     assert_eq!(rows[1]["blocked"], false);
+    assert_eq!(rows[1]["blocked_by"], serde_json::json!([]));
 }
 
 #[test]

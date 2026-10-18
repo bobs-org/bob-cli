@@ -10,6 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
+mod blocked_by;
 pub(crate) mod cli;
 mod coverage;
 mod find;
@@ -174,6 +175,7 @@ pub(crate) fn build_index(
         }
     }
     apply_supersession(&mut rows);
+    blocked_by::apply_blocked_by(&config.bob_dir, &ref_tasks, &mut rows);
     for row in &mut rows {
         row.diagnostics
             .sort_by(|a, b| (&a.code, &a.detail).cmp(&(&b.code, &b.detail)));
@@ -427,6 +429,11 @@ fn build_row(
     // Task view: v2 selections carry the residence file and block link;
     // v1 carries the ref note with block `ref`; ambiguity and no-task
     // both give null.
+    let task_line = selection
+        .status_hits
+        .first()
+        .map(|hit| hit.line.clone())
+        .or_else(|| outcome.tracker.as_ref().map(|hit| hit.line.clone()));
     let task = match &selection.task {
         Some(crate::native::ref_tasks::Selected::V2(located)) => {
             let stem = located
@@ -444,6 +451,8 @@ fn build_row(
                 link,
                 mark: located.mark,
                 archived: located.archived,
+                priority: None,
+                scheduled: None,
             })
         }
         None => {
@@ -459,6 +468,8 @@ fn build_row(
                     ),
                     mark: hit.mark,
                     archived: false,
+                    priority: None,
+                    scheduled: None,
                 })
             } else {
                 None
@@ -495,6 +506,7 @@ fn build_row(
             .filter(|s| !s.is_empty())
             .map(str::to_string),
         blocked: outcome.blocked,
+        blocked_by: Vec::new(),
         reading_state: outcome.reading_state.to_string(),
         reading_state_source: outcome.reading_state_source.clone(),
         parent,
@@ -541,6 +553,7 @@ fn build_row(
             .filter(|block| !block.is_empty() && block != "^")
             .collect(),
         v2: selection.v2,
+        task_line,
     }
 }
 

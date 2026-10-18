@@ -99,7 +99,7 @@ fn list_default_view_is_the_queue_in_every_format() {
     assert_success(&human);
     let text = stdout(&human);
     assert!(
-        text.contains("reading queue") && text.contains("14 open"),
+        text.contains("reading queue") && text.contains("26 open"),
         "default header:\n{text}"
     );
     assert!(
@@ -112,8 +112,8 @@ fn list_default_view_is_the_queue_in_every_format() {
     );
 
     let document = run_list_json(&vault, &[]);
-    assert_eq!(document["matched"], 15);
-    assert_eq!(document["returned"], 15);
+    assert_eq!(document["matched"], 27);
+    assert_eq!(document["returned"], 27);
     assert_eq!(document["truncated"], false);
     assert_eq!(document["hidden"]["superseded"], 1);
     assert_eq!(
@@ -149,7 +149,7 @@ fn list_default_view_is_the_queue_in_every_format() {
     );
     assert!(
         body.contains(
-            "\n\n15 of 15 matching notes shown · coverage: ref/ only\n"
+            "\n\n27 of 27 matching notes shown · coverage: ref/ only\n"
         ),
         "blank line before the markdown summary:\n{body}"
     );
@@ -249,7 +249,7 @@ fn list_filters_or_within_and_across_options() {
 
     // `-R all` is every state, with no defaulting.
     let document = run_list_json(&vault, &["-R", "all"]);
-    assert_eq!(document["matched"], 33);
+    assert_eq!(document["matched"], 45);
     assert_eq!(document["filters"]["reading_state_defaulted"], false);
 }
 
@@ -309,6 +309,168 @@ fn list_rows_carry_always_present_blocked() {
         .find(|row| row["path"] == "ref/papers/two_trackers_blocked.md")
         .expect("two-tracker blocked row");
     assert_eq!(pair["blocked"], false);
+}
+
+fn json_keys(value: &serde_json::Value) -> Vec<String> {
+    value.as_object().expect("object").keys().cloned().collect()
+}
+
+fn json_key_order(raw: &str, keys: &[&str]) {
+    let mut last = 0;
+    for key in keys {
+        let needle = format!("\"{key}\":");
+        let found = raw[last..].find(&needle).unwrap_or_else(|| {
+            panic!("missing {needle} after {last} in {raw}")
+        });
+        last += found + needle.len();
+    }
+}
+
+#[test]
+fn list_rows_carry_task_facts_blocked_by_and_human_reason() {
+    let (_temp, vault) = fixture_vault("bob-cli-ref-list-blocked-by");
+    let output = run_list(&vault, &["-R", "all", "-A", "-f", "json"]);
+    assert_success(&output);
+    let raw = stdout(&output);
+    json_key_order(&raw, &["blocked", "blocked_by"]);
+    json_key_order(&raw, &["archived", "priority", "scheduled"]);
+    let document: serde_json::Value =
+        serde_json::from_str(&raw).expect("parse list JSON");
+    let rows = document["refs"].as_array().expect("refs array");
+    for row in rows {
+        assert!(row["blocked_by"].is_array(), "{}", row["path"]);
+        if !row["blocked"].as_bool().expect("blocked bool") {
+            assert_eq!(
+                row["blocked_by"],
+                serde_json::json!([]),
+                "{}",
+                row["path"]
+            );
+        }
+        if row["task"].is_object() {
+            assert!(row["task"].get("priority").is_some(), "{}", row["path"]);
+            assert!(row["task"].get("scheduled").is_some(), "{}", row["path"]);
+        }
+    }
+
+    let future = rows
+        .iter()
+        .find(|row| row["path"] == "ref/papers/sched_future.md")
+        .expect("future");
+    assert_eq!(future["task"]["priority"], "highest");
+    assert_eq!(future["task"]["scheduled"], "2026-10-23");
+    assert_eq!(
+        future["blocked_by"],
+        serde_json::json!([{ "kind": "local_schedule", "date": "2026-10-23" }])
+    );
+
+    let dep_ref = rows
+        .iter()
+        .find(|row| row["path"] == "ref/papers/dep_open_ref.md")
+        .expect("dep ref");
+    assert_eq!(dep_ref["blocked_by"][0]["kind"], "local_dependency");
+    assert_eq!(
+        dep_ref["blocked_by"][0]["prerequisites"][0]["title"],
+        "Open Prerequisite Paper"
+    );
+    assert_eq!(
+        dep_ref["blocked_by"][0]["prerequisites"][0]["ref_path"],
+        "ref/papers/prereq_open.md"
+    );
+    assert_eq!(
+        json_keys(&dep_ref["blocked_by"][0]),
+        vec!["kind", "prerequisites"]
+    );
+    let prereq = &dep_ref["blocked_by"][0]["prerequisites"][0];
+    for key in [
+        "id", "title", "path", "block_id", "link", "mark", "ref_path",
+    ] {
+        assert!(prereq.get(key).is_some(), "missing {key}: {prereq}");
+    }
+
+    let combo = rows
+        .iter()
+        .find(|row| row["path"] == "ref/papers/combo_blocked.md")
+        .expect("combo");
+    assert_eq!(combo["blocked_by"][0]["kind"], "local_dependency");
+    assert_eq!(combo["blocked_by"][1]["kind"], "local_schedule");
+    assert_eq!(combo["blocked_by"][2]["kind"], "project");
+    assert_eq!(combo["blocked_by"][2]["project"], "sase_post_blog.md");
+    assert_eq!(combo["blocked_by"][2]["link"], "[[sase_post_blog]]");
+
+    let human = bob_command()
+        .arg("ref")
+        .arg("list")
+        .args(["-s", "ready", "-A"])
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", FIXED_NOW)
+        .env("COLUMNS", "300")
+        .output()
+        .expect("wide list");
+    assert_success(&human);
+    let text = stdout(&human);
+    assert!(
+        text.contains("💤 until 2026-10-23"),
+        "schedule reason:\n{text}"
+    );
+    assert!(
+        text.contains("⛓ after Open Prerequisite Paper"),
+        "dependency reason:\n{text}"
+    );
+    assert!(
+        text.contains("🧱 sase_post_blog blocked"),
+        "project reason:\n{text}"
+    );
+    assert!(text.contains("⏸ blocked"), "no-reason suffix:\n{text}");
+    assert!(
+        !text.contains('\u{1b}'),
+        "non-tty human output is plain:\n{text}"
+    );
+
+    let no_color = bob_command()
+        .arg("ref")
+        .arg("list")
+        .args(["-s", "ready", "-A"])
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", FIXED_NOW)
+        .env("COLUMNS", "300")
+        .env("NO_COLOR", "1")
+        .output()
+        .expect("no-color list");
+    assert_success(&no_color);
+    let plain = stdout(&no_color);
+    assert!(plain.contains("💤 until 2026-10-23"), "{plain}");
+    assert!(!plain.contains('\u{1b}'), "{plain}");
+
+    let narrow = bob_command()
+        .arg("ref")
+        .arg("list")
+        .args(["-s", "ready", "-A"])
+        .env("BOB_DIR", &vault)
+        .env("BOB_NOW", FIXED_NOW)
+        .env("COLUMNS", "40")
+        .output()
+        .expect("narrow list");
+    assert_success(&narrow);
+    let short = stdout(&narrow);
+    assert!(
+        !short.contains("ref/papers/combo_blocked.md"),
+        "path drops first:\n{short}"
+    );
+
+    let markdown = run_list(&vault, &["-s", "ready", "-A", "-f", "markdown"]);
+    assert_success(&markdown);
+    let body = stdout(&markdown);
+    assert!(
+        body.starts_with(
+            "| State | Status | Date | Title | Type | Note |\n| --- | --- | --- | --- | --- | --- |\n"
+        ),
+        "{body}"
+    );
+    assert!(
+        !body.contains("💤"),
+        "markdown keeps the six-cell contract:\n{body}"
+    );
 }
 
 #[test]
@@ -396,20 +558,20 @@ fn list_limit_all_and_truncation() {
     let capped = run_list(&vault, &["-n", "2"]);
     assert_success(&capped);
     assert!(
-        stdout(&capped).contains("… 12 more · -n N or -A to show more"),
+        stdout(&capped).contains("… 24 more · -n N or -A to show more"),
         "truncation line:\n{}",
         stdout(&capped)
     );
 
     let document = run_list_json(&vault, &["-n", "2"]);
-    assert_eq!(document["matched"], 15);
+    assert_eq!(document["matched"], 27);
     assert_eq!(document["returned"], 2);
     assert_eq!(document["truncated"], true);
     assert_eq!(list_paths(&document).len(), 2);
 
     let document = run_list_json(&vault, &["-A"]);
-    assert_eq!(document["matched"], 15);
-    assert_eq!(document["returned"], 15);
+    assert_eq!(document["matched"], 27);
+    assert_eq!(document["returned"], 27);
     assert_eq!(document["truncated"], false);
     assert_eq!(document["filters"]["limit"], serde_json::Value::Null);
 

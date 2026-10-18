@@ -6,4 +6,4 @@ url: go/capture-thing
 
 # Go Link Note
 
-- [ ] #task #ref [[lib/blogs/go.pdf]] #hide ^ref
+- [ ] #task #ref [[lib/blogs/go.pdf]] [priority:: medium] #hide ^ref

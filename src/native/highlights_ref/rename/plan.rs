@@ -2582,6 +2582,7 @@ mod tests {
             reading_state: String::new(),
             reading_state_source: String::new(),
             blocked: false,
+            blocked_by: Vec::new(),
             parent: None,
             task: None,
             urls: Vec::new(),
@@ -2611,6 +2612,7 @@ mod tests {
             source_id: None,
             source_blocks: Vec::new(),
             v2: false,
+            task_line: None,
         };
         assert!(is_legacy(&row, Path::new("/vault/ref")));
     }

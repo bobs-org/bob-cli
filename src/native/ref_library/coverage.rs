@@ -471,6 +471,7 @@ mod tests {
             frontmatter_status: None,
             legacy_status: Some("read".to_string()),
             blocked: false,
+            blocked_by: Vec::new(),
             reading_state: "finished".to_string(),
             reading_state_source: "legacy_status:read".to_string(),
             parent: None,
@@ -505,6 +506,7 @@ mod tests {
                 .map(|block| block.to_string())
                 .collect(),
             v2: false,
+            task_line: None,
         }
     }
 

@@ -27,6 +27,10 @@ pub(crate) struct RefRow {
     /// True when the note's single `^ref` tracker is Blocked `[?]`:
     /// an overlay on the reading lane, always present in JSON.
     pub blocked: bool,
+    /// Typed reasons the selected reading task is blocked. Always
+    /// present; `[]` when `blocked` is false or no reason remains on
+    /// the line.
+    pub blocked_by: Vec<BlockedReason>,
     pub parent: Option<String>,
     pub task: Option<RefTaskView>,
     pub urls: Vec<String>,
@@ -71,6 +75,9 @@ pub(crate) struct RefRow {
     /// the managed embed); kept out of JSON, only `-g` reads it.
     #[serde(skip_serializing)]
     pub v2: bool,
+    /// The selected reading-task line, used to fill `blocked_by`.
+    #[serde(skip_serializing)]
+    pub task_line: Option<String>,
 }
 
 /// One located reading task, serialized right after `parent` and always
@@ -83,6 +90,36 @@ pub(crate) struct RefTaskView {
     pub link: String,
     pub mark: char,
     pub archived: bool,
+    /// One of `highest | high | medium | low | lowest`, else `null`.
+    pub priority: Option<String>,
+    /// Strict `[scheduled::]` calendar date, past or future, else `null`.
+    pub scheduled: Option<String>,
+}
+
+/// Why a reading task is blocked, in `effective_block_reasons` order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind")]
+pub(crate) enum BlockedReason {
+    #[serde(rename = "local_dependency")]
+    LocalDependency {
+        prerequisites: Vec<BlockedPrerequisite>,
+    },
+    #[serde(rename = "local_schedule")]
+    LocalSchedule { date: String },
+    #[serde(rename = "project")]
+    Project { project: String, link: String },
+}
+
+/// One open prerequisite named by `[dependsOn::]`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct BlockedPrerequisite {
+    pub id: String,
+    pub title: String,
+    pub path: String,
+    pub block_id: Option<String>,
+    pub link: String,
+    pub mark: char,
+    pub ref_path: Option<String>,
 }
 
 /// Stored identity keys for one row.

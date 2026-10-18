@@ -105,7 +105,50 @@ by the rules above is Blocked `[?]`, false otherwise.
 The boolean is separate from `status` and `reading_state` — a blocked
 `next` row still reads `queued` in its lane — it only says the note is
 waiting on something else. Clients such as Bob Mac Capture's Refs panel
-read Blocked from this field and never parse `reading_state_source`.
+and the coming Reading Board read Blocked from this field and never parse
+`reading_state_source`.
+
+`blocked_by` follows `blocked` on every row. It is always present, and
+it is `[]` when `blocked` is false or no reason remains on the selected
+reading-task line (for example a `[scheduled::]` date that is today).
+Reasons are read from that line only and never run reconcile. They
+appear in `effective_block_reasons` order:
+
+- `local_dependency` lists, in `[dependsOn::]` order, every id outside
+  inline code that names an open task. Open means some task outside
+  `done/` carries `[id:: <id>]` and has an open Tasks status type.
+  Closed, archived-only, and unresolved ids are omitted, and the entry
+  itself is omitted when none qualify. Each prerequisite carries `id`,
+  `title`, `path`, `block_id`, `link`, `mark`, and `ref_path` (the
+  indexed reference path when the prerequisite is itself a reading
+  task, else `null`).
+- `local_schedule` appears when `scheduled` is strictly after today
+  (`env::current_datetime()`, so `BOB_NOW` pins it).
+- `project` appears when the line carries the exact `#prj_is_blocked`
+  tag outside inline code. `project` is the reading task's residence
+  note path; `link` is that note's wikilink.
+
+```json
+"blocked": true,
+"blocked_by": [
+  {
+    "kind": "local_dependency",
+    "prerequisites": [
+      {
+        "id": "sase__ref-prereq-open",
+        "title": "Open Prerequisite Paper",
+        "path": "sase.md",
+        "block_id": "ref-prereq-open",
+        "link": "[[sase#^ref-prereq-open]]",
+        "mark": "*",
+        "ref_path": "ref/papers/prereq_open.md"
+      }
+    ]
+  },
+  { "kind": "local_schedule", "date": "2026-10-23" },
+  { "kind": "project", "project": "sase_post_blog.md", "link": "[[sase_post_blog]]" }
+]
+```
 
 A legacy note whose `legacy_status` is `book` and that carries a
 non-empty `legacy_chapter_statuses` list derives its reading state
@@ -216,16 +259,23 @@ this is never fatal.
 
 Human output groups rows under one heading per reading state with its
 count (pre-cap totals), with the status chip, row date (or `—`), title,
-`♫` when audio is bound, type, and a dim path; the path drops first on
-narrow terminals, then titles truncate. A pending-sync `*` (dimmed) gets
-a footnote. Without `-s`, legacy-era rows collapse to one dim summary line,
+`♫` when audio is bound, type, an optional dim blocked reason, and a dim
+path. The path drops first on a narrow terminal, then the reason, then
+titles truncate. A blocked row's reason is one of `💤 until YYYY-MM-DD`,
+`⛓ after <title>` (or `+N` more), `🧱 <project stem> blocked`, or
+`⏸ blocked` when no reason remains; several reasons join with ` · `.
+A pending-sync `*` (dimmed) gets a footnote. Without `-s`, legacy-era
+rows collapse to one dim summary line,
 `+ N zorg-era legacy notes hidden (…) · show them with -s legacy`, instead
 of listing. Any `-s` value turns that collapse off and also filters to the
 named statuses, so `-s legacy` is the view that lists those notes. JSON and
 Markdown include the matching rows either way. The cap applies to the rows
 that are listed;
 truncation prints `… N more · -n N or -A to show more`. An empty default
-view prints `Nothing queued ✓`.
+view prints `Nothing queued ✓`. After `just install` on apollo,
+`bob ref list -s ready,next,wip -A -f json` measured 0.32 s warm on the
+live vault (five runs 0.30–0.35 s with the vault cache warm; 0.78 s
+cold).
 
 Markdown output is a table with the columns State | Status | Date |
 Title | Type | Note (six header cells with a six-cell separator row),
@@ -235,7 +285,12 @@ The JSON envelope carries `filters` (the effective `reading_state` plus
 `undated_excluded`), `matched`, `returned`, `truncated`, and
 `hidden.superseded` alongside the shared `coverage` and `library`
 counts. Every row includes `marker_id`, the frontmatter `id`, or `null`
-when that id is absent.
+when that id is absent. Each `task` object also carries `priority`
+(`highest | high | medium | low | lowest`, else `null`) and `scheduled`
+(a strict calendar date, past or future, else `null`), both read from
+the selected reading-task line. Bob Mac Capture's Refs panel and the
+coming Reading Board consume `blocked_by`, `task.priority`, and
+`task.scheduled`.
 
 ## `bob ref show`
 
@@ -693,16 +748,17 @@ intake directory). `library` counts exclude superseded notes.
 Each `ref` object is the full index row: path, link, title, origin,
 `marker_id` (the frontmatter `id`, or `null` when absent), ref_type, era,
 status, status_sync, legacy_status,
-reading_state and its source, `blocked`, parent, `task`, urls, identity
+reading_state and its source, `blocked`, `blocked_by`, parent, `task`, urls, identity
 keys, author/published/captured, added/finished dates and sources,
 source_pdf, audio, annotation and comment counts, snapshot,
 research_ref, superseded_by, and diagnostics. `task` is always present
 (`null` when there is no task): v2 carries `path` (the residence file),
-`block_id`, `link` (`[[path#^id]]` or `[[path]]`), `mark`, and
-`archived`; v1 carries the ref note path, `block_id: "ref"`,
-`link: [[ref/…#^ref]]`, and `archived: false`. One `(path, block_id)`
-join works for both eras. `blocked`, `task`, and `marker_id` are additive under
-`schema_version` 1.
+`block_id`, `link` (`[[path#^id]]` or `[[path]]`), `mark`,
+`archived`, `priority`, and `scheduled`; v1 carries the ref note path,
+`block_id: "ref"`, `link: [[ref/…#^ref]]`, `archived: false`, and the
+same `priority`/`scheduled` fields from the tracker line. One
+`(path, block_id)` join works for both eras. `blocked`, `blocked_by`,
+`task`, and `marker_id` are additive under `schema_version` 1.
 
 Diagnostics: `multiple_open_ref_tasks` (several open v2 claim the ref;
 detail lists `path:line`), `open_ref_task_in_done` (open task under
