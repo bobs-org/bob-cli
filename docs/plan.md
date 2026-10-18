@@ -120,7 +120,7 @@ task-line field, or a file-path filter.
    `![[target#^id]]` block link, not struck through and not fenced.
    Deeper descendants and mixed-text bullets do not count. This is
    exactly `list_queued_links` in
-   `src/native/capture_pomodoro_start.rs` (the `=x` / start lineup
+   `src/native/capture_pomodoro_start.rs` (the `x` / start lineup
    rule).
 4. **Resolution:** an empty target is the daily note itself;
    otherwise the hooks' rules apply (exact vault-relative path with
@@ -245,7 +245,7 @@ Hovering the mark shows a two-line tooltip: `In Progress` /
   mistake (churn, races, staleness) and break every
   dedicated-Task-Link parser, which accepts only `🍅 ` and `!`
   prefixes. A written `◐ ` prefix would drop links out of Today,
-  `=x` numbering, and Work Log routing, and make reconcile write
+  `x` numbering, and Work Log routing, and make reconcile write
   `◐ 🍅 [[…]]`. The text-marker alternative was rejected for this
   reason. Without the plugin the vault looks exactly as before.
 - **One marker slot, two tenses.** The mark sits immediately before

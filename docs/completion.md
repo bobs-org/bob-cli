@@ -420,9 +420,9 @@ another thin client of that service (see `docs/capture.md`
   suggestions instead (for example `@dev:fix`, grouped `new task ID`)
   and never an ID `capture-complete` lists as used.
 - **Action items offer nothing**, exactly as in `capture-complete`:
-  closes (`=x…`, `=*`, `=!`), starts (`=`, `=<X>`), numeric `+N` / `-N`
+  closes (`x…`, `x*`, `x!`), starts (`=`, `=<X>`), numeric `+N` / `-N`
   adjustments and `++N` / `--N` shifts, and Work Log text on or below
-  the `=x` line. The exact lone `+` remains an action; capture completion
+  the `x` line. The exact lone `+` remains an action; capture completion
   separately opens the parent-task picker, while shell completion offers
   only identified `@route+block-id` values in the `parent tasks` group.
 - **Whole-item `!` completes open tasks.** A leading `!` token opens the

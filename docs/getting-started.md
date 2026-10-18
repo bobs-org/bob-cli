@@ -135,20 +135,20 @@ outcome. Units are five minutes, and bare `=` means 25 minutes.
 Quote session tokens in Zsh. Linking and starting can also
 be one transaction: `bob capture '@mac_inbox:outline=3'`.
 
-When finished, preview `bob capture --dry-run '=x'` to see the session's
+When finished, preview `bob capture --dry-run 'x'` to see the session's
 numbered Task Links and proposed outcomes, then submit one close command:
 
 | Command | Outcome |
 | --- | --- |
-| `bob capture '=x'` | Close; ordinary plain links count as worked, eligible tasks become Pending, and their links carry to the next session |
-| `bob capture '=*'` | Close; park all numbered links, eligible tasks become Pending, and none of those links carry to the next session |
-| `bob capture '=!'` | Close and complete every numbered Task Link |
-| `bob capture '=x1!2'` | Keep task 1 in progress, complete task 2, and defer the remaining links |
+| `bob capture 'x'` | Close; ordinary plain links count as worked, eligible tasks become Pending, and their links carry to the next session |
+| `bob capture 'x*'` | Close; park all numbered links, eligible tasks become Pending, and none of those links carry to the next session |
+| `bob capture 'x!'` | Close and complete every numbered Task Link |
+| `bob capture 'x1!2'` | Keep task 1 in progress, complete task 2, and defer the remaining links |
 
-For this one-task example, use `=!` if the outline is done, or `=*` if it
-still needs work but should leave today's queue. The numbered `=x1!2`
+For this one-task example, use `x!` if the outline is done, or `x*` if it
+still needs work but should leave today's queue. The numbered `x1!2`
 example requires at least two links. "Deferred" means carry the link to the
-next session without changing the task's lane or scheduled date. Plain `=x`
+next session without changing the task's lane or scheduled date. Plain `x`
 also respects existing link markers: a trailing `#` defers a link, while an
 embed (`![[note#^id]]`) requests completion. Unresolved or ineligible targets
 can be skipped with warnings; check the capture report. See
@@ -356,7 +356,7 @@ Follow the [Git sync runbook](vault-git-sync.md) before enabling maintenance.
 | Freshness or Ready reports reject the task format | Tasks must use `taskFormat: "dataview"`; missing settings fall back to emoji |
 | Ready rejects invalid freshness config | `bob ready` shares the freshness scan; fix `freshness:` as well as `plan:` config |
 | Linking fails | Daily note, Pomodoros heading, open entry, and a unique task block ID |
-| Start says to finish the current Pomodoro | Close the running timed entry first; `bob capture '=x =3'` closes and starts atomically |
+| Start says to finish the current Pomodoro | Close the running timed entry first; `bob capture 'x =3'` closes and starts atomically |
 | Hooks refuse a Blocked transition | The Tasks registry's `?` status must match the required definition |
 | A native query using plugin-dependent dashboard filters omits tasks | Native queries do not load desktop Bob plugins; use `bob freshness` for the headless review queue |
 | A captured link is absent from `ref list` | Inspect `bob ref jobs`; a clipped intake PDF needs `bob ref scan` before it has a note |

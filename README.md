@@ -204,7 +204,7 @@ separate steps:
    task with `@route+id!`, complete finished work with
    `bob capture '!sase:fix-flaky'`, or add a task link under a Pomodoro in Obsidian.
    Start the queued session with `bob capture '='`, then close it with an
-   outcome such as `bob capture '=x'` or `bob capture '=!'` (see
+   outcome such as `bob capture 'x'` or `bob capture 'x!'` (see
    [Capture](#capture)). Starting the timer leaves task statuses unchanged;
    closing records worked tasks as In Progress and completed tasks as Done.
    When a close completes planned work, it recovers newly unblocked
@@ -400,11 +400,11 @@ typed on that same item. The whole batch is planned before anything is written.
 | `==` / `==<X>` | Restart today's running timed Pomodoro now with fresh `se<X>` timing (`==` is 25 minutes); when nothing is running, acts exactly like the `=` twin (quote in zsh) |
 | `==[<X>]#pomodoro` | Swap the named Pomodoro in as the running session: an empty `<X>` takes over the running ledger (`==#bugs`), otherwise fresh `se<X>` timing (`==3#bugs`); the old session returns intact to first future (quote in zsh) |
 | `==[<X>][#<name>]~<K>` | Restart or swap without the queued Task Links in `<K>` (`==~2`, `==#bugs~2`); `~` drops from the session that ends up running (quote in zsh) |
-| `=x[<N>][*<P>][!<M>][~<K>][@<N>]` | Close today's running timed Pomodoro (case-insensitive `=X`, `*`/`!`/`~`/`@` in any order; `<N>` may instead be typed last as `@<N>`, so `=x!1@2` means `=x2!1`); `<N>` keeps links in progress, `*<P>` parks them without carrying forward, `!<M>` completes them, `~<K>` drops them while keeping their lane; a lone `0` in `<N>` means none; one Work Log entry may sit on the close line, several use child bullets (quote in zsh) |
-| `=*` / `=!` (also `=x*` / `=x!`) | Close parking/completing every numbered Task Link; an empty `*` or `!` selects the remainder after explicit assignments (`=*!2` parks all except task 2 and completes task 2) |
-| `=x [<n>] <entry>` | One Work Log entry on the close line (`=x wired the lexer` logs to task 1, `=x1,3 3 fixed the flake` logs to task 3) |
-| `+2 =x`, `=x =`, `=x =#bugs`, `=x =~2`, `=x wired the lexer =` | Same-line session-operator chain: whitespace-separated session tokens on one line run left to right like blank-line items (`=x =~2` closes then starts without link 2; `=x wired the lexer =` closes with the entry then starts) |
-| `@route:id=x…` / `^route:id=x…` with no other text | Put that existing task into the running session, then close it (own-prerequisite Blocked targets drop those links first); numbers refer to the post-link lineup |
+| `x[<N>][*<P>][!<M>][~<K>][@<N>]` | Close today's running timed Pomodoro (lowercase `x` only, `*`/`!`/`~`/`@` in any order; `<N>` may instead be typed last as `@<N>`, so `x!1@2` means `x2!1`); `<N>` keeps links in progress, `*<P>` parks them without carrying forward, `!<M>` completes them, `~<K>` drops them while keeping their lane; a lone `0` in `<N>` means none; one Work Log entry may sit on the close line, several use child bullets. Quote `!`, `*`, and `~`. |
+| `x*` / `x!` | Close parking/completing every numbered Task Link; an empty `*` or `!` selects the remainder after explicit assignments (`x*!2` parks all except task 2 and completes task 2) |
+| `x [<n>] <entry>` | One Work Log entry on the close line (`x wired the lexer` logs to task 1, `x1,3 3 fixed the flake` logs to task 3) |
+| `+2 x`, `x =`, `x =#bugs`, `x =~2`, `x wired the lexer =` | Same-line session-operator chain: whitespace-separated session tokens on one line run left to right like blank-line items (`x =~2` closes then starts without link 2; `x wired the lexer =` closes with the entry then starts) |
+| `@route:id=x…` / `^route:id=x…` with no other text | Put that existing task into the running session, then close it (own-prerequisite Blocked targets drop those links first); the `=` is the suffix separator; numbers refer to the post-link lineup |
 | `<text> @route:id=x…` | Create the new task in the running session, then close it |
 | `@route^id+` | New project note `<route>_<id>.md`; the daily note and the parent note are left unchanged |
 | `@route^id+#pomodoro` | Same, picking the Pomodoro that ` :<task-id>` Task Links go under (named open Pomodoro or new named future Pomodoro) |
@@ -485,7 +485,7 @@ Capture a whole item `+N` or `-N` to adjust today's current timed Pomodoro:
 `bob capture +5` extends by 25 minutes, `bob capture -- -2` shortens by 10
 minutes, and `printf '+5\n\nCall bank @Cash+\n' | bob capture` mixes an
 adjustment with an ordinary item across blank lines. Session operators may
-share one line (`bob capture '+2 =x'` extends then closes; `bob capture '=x ='`
+share one line (`bob capture '+2 x'` extends then closes; `bob capture 'x ='`
 closes then starts). The item must contain
 only the signed count; `Plan +5` stays prose, and forced route/task/clipboard
 options are rejected on adjustments.
@@ -495,24 +495,25 @@ Capture a whole item `=`/`=<X>` to start today's next future Pomodoro
 quote in zsh, which expands a leading `=word`). A trailing `~<K>` drop list
 (`bob capture '=~2'`, `bob capture '=3#bugs~1'`) starts without those queued
 Task Links: `~` drops, so `=~2` drops task 2 from the session you start the
-way `=x~2` drops task 2 from the session you stop.
+way `x~2` drops task 2 from the session you stop.
 
-Capture a whole item `=x[<N>][*<P>][!<M>][~<K>][@<N>]` to close today's running timed
+Capture a whole item `x[<N>][*<P>][!<M>][~<K>][@<N>]` (lowercase `x` only) to close today's running timed
 Pomodoro the way Obsidian's Ctrl+Enter completion does, plus an
 auto-decrement that shortens an early-stopped session to the earliest
-five-minute step at or after now: `bob capture '=x'` closes the session,
-`bob capture '=x wired the lexer'` logs one entry to task 1,
-`bob capture '=x2'` keeps only task 2 in progress, `bob capture '=x1!2'`
-keeps task 1 in progress and completes task 2, `bob capture '=x0'` resets a note-free session to first future (or closes, deferring everything, when it owns a stand-alone note),
-`bob capture '=*'` parks every numbered Task Link without carrying it forward,
-`bob capture '=!'` completes every numbered Task Link,
-`bob capture '=x1~2'` keeps task 1 in progress and drops task 2,
+five-minute step at or after now: `bob capture 'x'` closes the session,
+`bob capture 'x wired the lexer'` logs one entry to task 1,
+`bob capture 'x2'` keeps only task 2 in progress, `bob capture 'x1!2'`
+keeps task 1 in progress and completes task 2, `bob capture 'x0'` resets a note-free session to first future (or closes, deferring everything, when it owns a stand-alone note),
+`bob capture 'x*'` parks every numbered Task Link without carrying it forward,
+`bob capture 'x!'` completes every numbered Task Link,
+`bob capture 'x1~2'` keeps task 1 in progress and drops task 2,
 `bob capture '^bob:capture-stop=x'` puts that task into the running session
-then closes it, and `printf -- '-2\n\n=x\n' | bob capture` adjusts then
-closes atomically (or `bob capture '-2 =x'` on one line). Numbers count the session's Task Links in ledger order
-from 1; on link forms they refer to the post-link lineup. See
-`docs/capture.md` for the numbering, outcomes, classification, carry, Work
-Log, link-form, diagnostic, JSON, and batch rules.
+then closes it, and `printf -- '-2\n\nx\n' | bob capture` adjusts then
+closes atomically (or `bob capture '-2 x'` on one line). Numbers count the session's Task Links in ledger order
+from 1; on link forms they refer to the post-link lineup. Whole-item `=x`,
+`=*`, and `=!` fail with a teaching error that names the `x…` rewrite.
+See `docs/capture.md` for the numbering, outcomes, classification, carry, Work
+Log, link-form, diagnostic, JSON, retired forms, and batch rules.
 
 In an editor, `+query` or a trailing `+` after prose opens the parent-task
 picker. A lone `+` opens that picker too; dismissing it leaves a valid
@@ -553,7 +554,7 @@ bob capture +5
 bob capture -- -2
 bob capture '='
 bob capture '=3'
-bob capture '=x'
+bob capture 'x'
 bob capture '^bob:capture-stop=x'
 bob capture '@cash+goog-exit' 'Called Morgan Stanley today.'
 bob capture '@cash+goog-exit'

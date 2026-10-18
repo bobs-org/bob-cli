@@ -113,7 +113,7 @@ target.
 | `🧱 **BLOCKS:**` | any open `#task` that other open tasks depend on (§14) | reconcile (authority); nav Depends-On writers; capture `&` / `*` and §13.5.1 drops | after the Depends-On subtree, else the Depends-On slot | same as Depends-On, plus the Depends-On parser (BK20) |
 | `🧩 **Sub-projects:**` | an active project's `^prj` | `bob projects sync` | after the Depends-On and BLOCKS subtrees | Task Link and Pomodoro scanners; section titles; Depends-On, BLOCKS, Schedule Log, Work Log, and Cancel Log parsers |
 | `🗓️ **SCHEDULE LOG**` | any `#task` with a schedule history | nav Task Card / Schedule, capture `$<N>` / `s:`, `bob task reroll` | after the managed-dependency lines (and Sub-projects on `^prj`) | Task Link and Pomodoro scanners; section titles; Depends-On, BLOCKS, Sub-projects, Cancel Log, and Work Log parsers |
-| `🛠️ **WORK LOG**` and its dated entries | any `#task` with work history | capture `=x`, Alt+N, Ctrl+Shift+Enter unlink | after the managed-dependency lines (and Sub-projects on `^prj`) | Task Link and Pomodoro scanners; section titles; Depends-On, BLOCKS, Sub-projects, Cancel Log, and Schedule Log parsers |
+| `🛠️ **WORK LOG**` and its dated entries | any `#task` with work history | capture `x`, Alt+N, Ctrl+Shift+Enter unlink | after the managed-dependency lines (and Sub-projects on `^prj`) | Task Link and Pomodoro scanners; section titles; Depends-On, BLOCKS, Sub-projects, Cancel Log, and Schedule Log parsers |
 
 ## 3. Identity and link form
 
@@ -237,7 +237,7 @@ and no R2 exception.
   successor offers, fields, or authored edges. Chips on it show what
   finishing the task would free.
 - **Closing.** Closing a dependent **never** closes its prerequisites.
-  Embedded-tree closes in capture `=x` and the cycler ignore
+  Embedded-tree closes in capture `x` and the cycler ignore
   Depends-On lines.
 - **History.** Closed prerequisites stay on the line as history and
   show as muted chips. Prerequisites never prevent closing a dependent
@@ -804,8 +804,8 @@ pure helpers. New offer-only cases live in the SO table (§12.12).
 | SL4 | D's only remaining blocker is a future `scheduled` | no offer; `still_blocked{scheduled}`; schedule untouched |
 | SL5 | D already has a live link under another open entry | no offer (`already_planned`); `[?]`→`[*]`; existing link not moved |
 | SL6 | D's only links today are struck or under closed entries | offered as in SL1 |
-| SL7 | `=!` closes BOB; nothing carried; FIX follows | when picked, `- [ ] () — BOB` created right after BOB holding only D; `entry_created`, `next_up`; `next_pomodoro` names it |
-| SL8 | `=x` close with carried links; an embed P completes | when picked, D appended after the carried lines in the continuation |
+| SL7 | `x!` closes BOB; nothing carried; FIX follows | when picked, `- [ ] () — BOB` created right after BOB holding only D; `entry_created`, `next_up`; `next_pomodoro` names it |
+| SL8 | `x` close with carried links; an embed P completes | when picked, D appended after the carried lines in the continuation |
 | SL9 | P has no live link today | offered at the implicit destination (today's single open timed entry, else the first open entry). Two open timed entries, no day file, no `## Pomodoros`, or no open entry → recover, `no_destination`, no offer |
 | SL10 | D has no `^block-id` | when picked, ` ^<mint>` appended (SB rule); `block_id_created: true`; `block_id` is the mint. Unpicked rows never mint |
 | SL11 | D is `^prj` / carries `#hide` | recover only; `project_task` / `hidden` (except §12.10) |
@@ -818,13 +818,13 @@ pure helpers. New offer-only cases live in the SO table (§12.12).
 | SL18 | `plan.link_unblocked: false` | recovery to derived rank; no offers, links, or mints; `disabled` |
 | SL19 | The same close re-applied (already Done) / a double press | no writes, no rows |
 | SL20 | Draft `!P` then `!D` | the first item's offer for D is dropped (net) |
-| SL21 | Cancel, reopen, raw checkbox, hooks run, `=*` park | never offer, never link |
+| SL21 | Cancel, reopen, raw checkbox, hooks run, `x*` park | never offer, never link |
 | SL22 | Ctrl+Enter on a Depends-On line | unchanged (nothing) |
 | SL23 | P closes as a subtask of an embedded root R planned today | P anchors at R's link (`inherit`) |
 | SL24 | Close creates no continuation; a later open entry named BOB exists | when picked, D appended to that BOB entry; `entry_created: false` |
 | SL25 | D already `[*]` and already planned | nothing written, no row |
 | SL26 | D lives in an inbox file | offered; when picked, linked; `inbox: true` |
-| SL27 | `=x~K` drops D's link in the same close that completes P | D's offer is removed (`already_planned`); recovers to `[ ]` |
+| SL27 | `x~K` drops D's link in the same close that completes P | D's offer is removed (`already_planned`); recovers to `[ ]` |
 | SL28 | D lives in today's day file | when picked, the link names the note (`[[20261009#^id]]`), never `[[#^id]]` |
 
 ### 11.7 SB — successor block-ID vectors
@@ -864,7 +864,7 @@ tests.
 | --- | --- | --- |
 | MC1 | a task nested under an open Pomodoro entry has a BLOCKS line | no Task Link: no promotion, consumption, successor anchor, plan-budget link, completable sighting, or close / cleanup target (Rust and JS) |
 | MC2 | the same with a Depends-On line | same (fixes the latent miscount) |
-| MC3 | `🧱 **BLOCKS:** ![[#^d]]` under T; T closes by capture `=x` or Ctrl+Enter | D is never closed (tree close skips both lines) |
+| MC3 | `🧱 **BLOCKS:** ![[#^d]]` under T; T closes by capture `x` or Ctrl+Enter | D is never closed (tree close skips both lines) |
 | MC4 | T closes or reopens elsewhere | cycler strike/restore never touches a BLOCKS line |
 | MC5 | `!`, Ctrl+Shift+Enter on a BLOCKS line | refused with the generated-line notice |
 | MC6 | R8 legacy-child recogniser on a BLOCKS line | not a legacy child |
@@ -934,7 +934,7 @@ offers.
 | Ctrl+Enter on a Pomodoro line (its closed embeds) | task-status-cycler |
 | nav's PRE/POST walk Ctrl+Enter (`completeTaskAtCursor`) | task-status-cycler + nav |
 | `bob capture '!note:id'` | bob-cli |
-| `bob capture` closes that complete links: `=x` with embeds, `=x!M`, `=!`, `^route:id=x…` | bob-cli |
+| `bob capture` closes that complete links: `x` with embeds, `x!M`, `x!`, `^route:id=x…` | bob-cli |
 | Alt+] / Alt+[ status cycling into Done | task-status-cycler |
 
 The same complete gestures produce project offers and project-finished
@@ -946,7 +946,7 @@ It **never** prompts, offers, or links on any of the following:
 - reopen;
 - raw checkbox clicks;
 - `bob task reconcile` / hooks;
-- `=*` parks;
+- `x*` parks;
 - Ctrl+Enter on a Depends-On line.
 
 Cancels still recover dependents exactly as today. Cancel never offers
@@ -1030,7 +1030,7 @@ PROJECT OFFERS: when a `^prj` R recovers (step 4) and R has no own or
 DEDUP    : one row per task identity; causes are merged. A resident
            that is also a direct dependent appears once, in hand_off.
            In a multi-item capture draft, a later item that links,
-           completes, re-blocks, or explicitly drops (`=x~K`) a task
+           completes, re-blocks, or explicitly drops (`x~K`) a task
            removes its offer; a later item that adds open work to N
            removes N's project_finished offer.
 BREAKER  : deleted. No replacement cap. SL17, PP15, and the breaker
@@ -1077,7 +1077,7 @@ PICK     : '?' or ' ' → '*'; '*' and '/' are unchanged. Mint a missing ^block-
   gesture. Three consequences:
   - A dependent whose link this same close carries forward stays planned
     and is not offered.
-  - A dependent whose link this same close **drops** (`=x~K`) is never
+  - A dependent whose link this same close **drops** (`x~K`) is never
     re-offered. The drop wins, and the dependent recovers to Ready.
   - The recovered rank is derived from the **post**-gesture text,
     because that is what the hooks will see.
@@ -1502,7 +1502,7 @@ cards under group headers, with the hint `↩ choose what to pull in`.
   - **Still blocked.** `lock.fill` in tertiary colour, `text`, and a
     caption reading `stays Blocked · waits on 1 more` /
     `· until Oct 13`.
-- **`=x` close card.** Gains an **Unblocked** section under its task
+- **`x` close card.** Gains an **Unblocked** section under its task
   rows, with the same row views.
 - **Block diff.** An added line with `reason == "unblocked"` gets a small
   trailing `lock.open.fill` badge with `.help("Unblocked successor")`,
@@ -1565,7 +1565,7 @@ plan 3/3 themes · 10/10 links
 | Layer | What | Effect |
 | --- | --- | --- |
 | 0. `[id::]` gate | Before any lookup, check the **staged** post-close lines of C for an `[id::]` field. | Zero extra I/O for about 96% of closes, in Rust and JS. It also speeds up today's Ctrl+Enter recovery. |
-| 1. Lazy context | `DependencyContext` builds `discover` only for items that need the dependency pool. `!` resolves notes from a walk-only index. | `hello` / `=x` previews go from about 270 ms to about 40 ms on apollo. |
+| 1. Lazy context | `DependencyContext` builds `discover` only for items that need the dependency pool. `!` resolves notes from a walk-only index. | `hello` / `x` previews go from about 270 ms to about 40 ms on apollo. |
 | 2. Prefiltered parallel snapshot | One batch-scoped dependents snapshot. Byte reads run in parallel, and a prefilter keeps only notes containing `dependsOn` or `id::`. Staged files always overlay disk. Shared by every `!` and close item in the batch, never cloned per item. | About 30 ms per batch, paid only when the gate passes. |
 | 3. Obsidian Tasks cache | When Tasks reports Warm, build a reverse index `id → dependents` from `getTasks()`. Open editor buffers override the cache. Read only the candidate notes and today's daily note. A cold cache falls back to the full scan. | The notice lands about 50 ms after the keypress. |
 | 4. Project offers | Enumerate residents from N's already-staged text plus the dependents snapshot the gate already allows. No extra vault walk for descendant notes. | The `^bar` → `sase_foo` case costs one staged-note read. |
@@ -1574,8 +1574,8 @@ plan 3/3 themes · 10/10 links
 **Targets.** Measured on apollo with a release build, against a temporary
 **copy** of `~/bob` (never the live vault):
 
-- `hello` and `=x` dry runs take ≤ 40 ms;
-- a `!` or `=x!` that closes a real prerequisite takes ≤ 70 ms;
+- `hello` and `x` dry runs take ≤ 40 ms;
+- a `!` or `x!` that closes a real prerequisite takes ≤ 70 ms;
 - `capture-parse` does no new work;
 - no extra spawn is needed to report results.
 
@@ -1879,7 +1879,7 @@ implement into tests, citing this section in a comment.
 | PP13 | R is `[*]`, visible and already linked | no write, no row |
 | PP14 | A has no `[id::]` | the gate does not suppress the pull-in, and the dependents snapshot is not built |
 | PP15 | a dependency successor D and R in one gesture | **retired.** The breaker is deleted. D is a `hand_off` offer and R is a `project_finished` offer; both offered, linked when picked (SO) |
-| PP16 | `=x` completes embedded A | R joins the closing target (continuation, same-name entry, or created placeholder) |
+| PP16 | `x` completes embedded A | R joins the closing target (continuation, same-name entry, or created placeholder) |
 | PP17 | R depends on A through a legacy internal Depends-On line | one row, and the pull-in wins over `project_task` |
 | PP18 | cycler cancel of A | no link; `#hide` removed; `cancelled` |
 | PP19 | same-day reopen of A (Obsidian) | R's link taken back and R's line restored byte-for-byte |
@@ -1921,7 +1921,7 @@ selection unless a row names another.
 | SO9 | resident still has an open prerequisite or future date | muted unselectable row in `still_blocked[]` with `project`; `#prj_is_blocked` stripped (PDC3) |
 | SO10 | resident carries `#hide` | recover only; folded into the project group's hidden count |
 | SO11 | resident already live-linked today | recover to derived rank; folded into the already-planned count |
-| SO12 | `=x~K` drops D's link in the same close that completes P | D's offer removed (`already_planned`); recovers to `[ ]` |
+| SO12 | `x~K` drops D's link in the same close that completes P | D's offer removed (`already_planned`); recovers to `[ ]` |
 | SO13 | later item in a draft completes, links, re-blocks, or drops an offered task | that offer is dropped (net). Later item adds open work to N → N's `project_finished` offer is dropped |
 | SO14 | unplanned predecessor; one open timed entry (else first open entry) | offered at the implicit destination; `entry_role: implicit`, `fallback: true` |
 | SO15 | unplanned predecessor; no day file, no `## Pomodoros`, or no open entry | recover, `no_destination`, no offer |
@@ -2618,7 +2618,7 @@ Only today's open Pomodoros. `promoted[]` is the consumption seed.
 | PDG16 | a new task captured into K while K's `^prj` is tagged | lands `[?]`, `#prj_is_blocked`, unlinked, `not_linked` with the project reason |
 | PDG17 | Alt+] / Alt+[ on K's tagged `[?]` `^prj` | refused, as for a tagged resident: `Project blocked by parent project · <parent(K)>` |
 | PDG18 | capture `@route:id` (also `^route:id`, `#name`, `=<X>`) on a target whose only reason is `local_dependency` | open prerequisite links dropped from the line and field; `[?]` → `[*]`; linked (and started for `=<X>`); `dropped_dependencies` listed; prerequisite notes byte-identical |
-| PDG19 | the same target through `@route+id!`, `@route+id` / `@route+id#name` Ensure Next, and `@route:id=x…` | dropped, then linked, relocated, or linked-and-closed exactly like an unblocked target (`=x1` leaves it `[/]`, `=x!1` completes it) |
+| PDG19 | the same target through `@route+id!`, `@route+id` / `@route+id#name` Ensure Next, and `@route:id=x…` | dropped, then linked, relocated, or linked-and-closed exactly like an unblocked target (`x1` leaves it `[/]`, `x!1` completes it) |
 | PDG20 | the dropped links were the line's only links | line deleted; `[dependsOn::]` removed |
 | PDG21 | own open prerequisites plus a single own future `scheduled` | both retired in one write (PDG2 pull-forward plus the drop); linked |
 | PDG22 | the line also holds a Done prerequisite and an unresolved link | the Done and unresolved links are kept verbatim in order; their field ids are kept |
@@ -2960,7 +2960,7 @@ reconcile.
 | capture `*` (and Bob Mac Capture through bob) | Stage N's BLOCKS entry on T in the same batch when T gains N as a prerequisite. N is reported as a `dependency_target` task block; T is reported as a `dependency` task block. A minted N id is `minted_blocker_block_id`, not `minted_dependent_block_id`. |
 | capture dependency drop (§13.5.1) | Stage the dependent's removal from each dropped prerequisite's line. Prerequisite task lines are still never edited. |
 | Ctrl+Shift+M, `bob task archive`, project conversion | The moved owner's line moves with it; generic link rebasing applies. Conversion never copies a BLOCKS line as a user child. Links into a moved or converted dependent are left to reconcile. |
-| Closes, cancels, reopens (capture `=x` / `!`, Ctrl+Enter, Alt+], Mac Capture, hand edits) | **None.** The owner's line freezes; a closed dependent drops off at the next reconcile. Chips hide the lag. |
+| Closes, cancels, reopens (capture `x` / `!`, Ctrl+Enter, Alt+], Mac Capture, hand edits) | **None.** The owner's line freezes; a closed dependent drops off at the next reconcile. Chips hide the lag. |
 
 All writers share one planner, implemented as a Rust function with a
 JS twin and pinned by the same vectors.

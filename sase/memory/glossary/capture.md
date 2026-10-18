@@ -10,7 +10,7 @@ and each item's markers decide what it does. That is far more than GTD inbox cap
 item may create a task (default `mac_inbox.md`, an [[inbox-file]]), bullet, sub-bullet,
 or project note; queue a bare public URL as a background reference job, never touching
 the network; link, start, complete, or relate existing tasks (`@route:id`, `!note:id`,
-`&`, `*`); or start, adjust, shift, or close today's Pomodoro (`=`, `+N`, `++N`, `=x`).
+`&`, `*`); or start, adjust, shift, or close today's Pomodoro (`=`, `+N`, `++N`, `x`).
 bob plans every edit against in-memory snapshots of the target notes and today's daily
 note, then writes all or nothing: a note changed on disk since planning, or any failed
 item, aborts the run and rolls back anything already written. `--dry-run` runs the same

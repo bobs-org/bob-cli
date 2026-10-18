@@ -10,7 +10,7 @@ Blocked markers consistent with today's ledger.
 In practice it:
 
 - Owns vault-wide Blocked recovery and completed-reference retirement,
-  including after a `bob capture =x` close, which deliberately leaves both
+  including after a `bob capture x` close, which deliberately leaves both
   to this command
 - Promotes tasks linked under today's open Pomodoros to Next (`[*]`), leaving
   In Progress (`[/]`) alone
@@ -801,7 +801,7 @@ is missing, has no `## Pomodoros` section, or contains multiple non-empty open
 timed Pomodoros. The multiple-open-timed error names each conflicting entry
 with its one-based line and time range, for example
 ``Bob daily note has multiple open timed Pomodoros: First (line 3, 0900-0930),
-Second (line 5, 0930-1000); close all but one with `bob capture -- =x`, or
+Second (line 5, 0930-1000); close all but one with `bob capture x`, or
 mark it `[x]` ``. Empty timed entries are pruned instead of making the current
 Pomodoro ambiguous. A valid but empty current section is a valid source of
 truth: it clears every daily-note `[*]` task without recent-activity grace
