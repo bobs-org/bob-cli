@@ -73,6 +73,15 @@ fn mermaid_source(extra: &str) -> String {
     format!("# Diagrams\n\n```mermaid\nflowchart LR\n  A --> B\n```\n{extra}")
 }
 
+fn definition_list_mermaid_source() -> &'static str {
+    "# Definition diagram\n\n\
+     Term\n\
+     : ```mermaid\n\
+       flowchart LR\n\
+         A --> B\n\
+       ```\n"
+}
+
 fn seed_parent(vault: &std::path::Path) {
     write_file(&vault.join("sase.md"), "---\ntype: [[area]]\n---\n");
 }
@@ -134,7 +143,20 @@ fn highlights_create_mermaid_partial_failure_keeps_note_and_exits_0() {
     let source = temp.path().join("diagrams.md");
     write_file(
         &source,
-        &mermaid_source("\n```mermaid\nthis is not valid mermaid\n```\n"),
+        "# Interleaved diagrams\n\n\
+         ```mermaid\n\
+         flowchart LR\n\
+           A --> B\n\
+         ```\n\
+         \n\
+         ```mermaid\n\
+         this is not valid mermaid\n\
+         ```\n\
+         \n\
+         ```mermaid\n\
+         flowchart LR\n\
+           A --> B\n\
+         ```\n",
     );
     let fake = FakeDiagrams::new(&temp, "fake-diagrams");
 
@@ -154,15 +176,27 @@ fn highlights_create_mermaid_partial_failure_keeps_note_and_exits_0() {
     assert_success(&output);
     let report = stdout(&output);
     assert!(
-        report.contains("diagrams: rendered 1 of 2 Mermaid diagrams"),
+        report.contains("diagrams: rendered 2 of 3 Mermaid diagrams"),
         "{report}"
     );
     let diagnostic = stderr(&output);
     assert!(
         diagnostic.contains(
-            "warning: Mermaid diagram 2 of 2 not rendered: Parse error on line 1: bad"
+            "warning: Mermaid diagram 2 of 3 not rendered: Parse error on line 1: bad"
         ),
         "{diagnostic}"
+    );
+    assert_eq!(
+        diagnostic.matches("Mermaid diagram").count(),
+        1,
+        "only the rejected unique source warns: {diagnostic}"
+    );
+    let request: serde_json::Value =
+        serde_json::from_str(&fake.request()).expect("parse adapter request");
+    assert_eq!(
+        request["items"].as_array().map(Vec::len),
+        Some(2),
+        "A/B/A sends two unique diagrams: {request}"
     );
     let text = pdf_haystack(&vault.join("xlib/chat/diagrams.pdf"));
     assert!(
@@ -442,7 +476,24 @@ fn highlights_create_mermaid_scale_warning_when_figure_is_wide() {
     let vault = temp.path().join("vault");
     seed_parent(&vault);
     let source = temp.path().join("diagrams.md");
-    write_file(&source, &mermaid_source(""));
+    write_file(
+        &source,
+        "# Interleaved diagrams\n\n\
+         ```mermaid\n\
+         flowchart LR\n\
+           A --> B\n\
+         ```\n\
+         \n\
+         ```mermaid\n\
+         sequenceDiagram\n\
+           Alice->>Bob: hi\n\
+         ```\n\
+         \n\
+         ```mermaid\n\
+         flowchart LR\n\
+           A --> B\n\
+         ```\n",
+    );
     let fake = FakeDiagrams::new(&temp, "fake-diagrams");
 
     let output = bob_command()
@@ -463,10 +514,132 @@ fn highlights_create_mermaid_scale_warning_when_figure_is_wide() {
     let diagnostic = stderr(&output);
     assert!(
         diagnostic.contains(
-            "warning: Mermaid diagram 1 of 1 (flowchart LR) prints at"
-        ) && diagnostic.contains("% scale; labels may be small"),
+            "warning: Mermaid diagram 1 of 3 (flowchart LR) prints at"
+        ) && diagnostic.contains(
+            "warning: Mermaid diagram 2 of 3 (sequenceDiagram) prints at"
+        ) && diagnostic.matches("prints at").count() == 2,
         "{diagnostic}"
     );
+}
+
+#[test]
+fn highlights_create_recognizes_definition_list_mermaid_fences() {
+    if skip_pandoc_xelatex("definition-list Mermaid") {
+        return;
+    }
+    let markdown = definition_list_mermaid_source();
+
+    let success_temp = TempDir::new("bob-cli-diagrams-definition-success");
+    let success_vault = success_temp.path().join("vault");
+    seed_parent(&success_vault);
+    let success_source = success_temp.path().join("definition.md");
+    write_file(&success_source, markdown);
+    let success_fake = FakeDiagrams::new(&success_temp, "fake-diagrams");
+    let success = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg("-P")
+        .arg("sase")
+        .arg(&success_source)
+        .arg("-b")
+        .arg(&success_vault)
+        .env("BOB_WEB_CLIP_ADAPTER", &success_fake.path)
+        .output()
+        .expect("create definition-list Mermaid");
+    assert_success(&success);
+    let report = stdout(&success);
+    assert!(
+        report.contains("diagrams: rendered 1 of 1 Mermaid diagrams"),
+        "{report}"
+    );
+    let request: serde_json::Value =
+        serde_json::from_str(&success_fake.request())
+            .expect("parse definition-list adapter request");
+    assert_eq!(request["items"].as_array().map(Vec::len), Some(1));
+    let rendered =
+        pdf_haystack(&success_vault.join("xlib/chat/definition.pdf"));
+    assert!(
+        !rendered.contains("flowchart LR"),
+        "source replaced: {rendered}"
+    );
+
+    let unavailable_temp =
+        TempDir::new("bob-cli-diagrams-definition-unavailable");
+    let unavailable_vault = unavailable_temp.path().join("vault");
+    seed_parent(&unavailable_vault);
+    let unavailable_source = unavailable_temp.path().join("definition.md");
+    write_file(&unavailable_source, markdown);
+    let missing_adapter = unavailable_temp.path().join("missing-adapter");
+    let unavailable = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg("-P")
+        .arg("sase")
+        .arg(&unavailable_source)
+        .arg("-b")
+        .arg(&unavailable_vault)
+        .env("BOB_WEB_CLIP_ADAPTER", &missing_adapter)
+        .output()
+        .expect("create definition-list Mermaid without adapter");
+    assert_success(&unavailable);
+    let diagnostic = stderr(&unavailable);
+    assert!(
+        diagnostic.contains("Mermaid diagrams printed as source:"),
+        "{diagnostic}"
+    );
+    assert_eq!(
+        diagnostic
+            .lines()
+            .filter(|line| line.contains("warning:"))
+            .count(),
+        1,
+        "one unavailable-renderer warning: {diagnostic}"
+    );
+    let fallback =
+        pdf_haystack(&unavailable_vault.join("xlib/chat/definition.pdf"));
+    assert!(
+        fallback.contains("Mermaid diagram not rendered:"),
+        "{fallback}"
+    );
+    assert!(
+        fallback.contains("flowchart LR"),
+        "source retained: {fallback}"
+    );
+}
+
+#[test]
+fn highlights_create_definition_list_dry_run_stays_browser_free() {
+    let temp = TempDir::new("bob-cli-diagrams-definition-dry-run");
+    let vault = temp.path().join("vault");
+    seed_parent(&vault);
+    let source = temp.path().join("definition.md");
+    write_file(&source, definition_list_mermaid_source());
+    let fake = FakeDiagrams::new(&temp, "fake-diagrams");
+    let missing_pandoc = temp.path().join("missing-pandoc");
+
+    let output = bob_command()
+        .arg("highlights")
+        .arg("create")
+        .arg("--dry-run")
+        .arg("-P")
+        .arg("sase")
+        .arg(&source)
+        .arg("-b")
+        .arg(&vault)
+        .env("BOB_PANDOC_COMMAND", &missing_pandoc)
+        .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+        .output()
+        .expect("run definition-list Mermaid dry-run");
+
+    assert_success(&output);
+    let report = stdout(&output);
+    assert!(
+        report
+            .contains("diagrams: 1 Mermaid fence(s) (rendered at create time)")
+            && report.contains("writes: none"),
+        "{report}"
+    );
+    assert!(!fake.called(), "dry-run must not start adapter or browser");
 }
 
 #[test]

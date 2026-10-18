@@ -81,6 +81,8 @@ pub(crate) enum DiagramReader {
 pub(crate) struct CollectedDiagram {
     pub(crate) id: String,
     pub(crate) text: String,
+    /// One-based position of this source's first block in the document.
+    pub(crate) first_occurrence: usize,
     pub(crate) occurrences: usize,
 }
 
@@ -187,8 +189,9 @@ pub(crate) fn dry_run_line(markdown: &str) -> Option<String> {
 /// example inside a `markdown` fence) and must never under-match.
 ///
 /// Strips leading whitespace, `>` quote markers, and list markers, then
-/// looks for three or more backticks or tildes whose remaining line
-/// contains `mermaid`.
+/// looks for Mermaid fence openers. It also recognizes `:` and `~`
+/// definition-list markers before the fence; Pandoc collection decides
+/// whether each candidate is an actual Mermaid code block.
 pub(crate) fn prescan(markdown: &str) -> usize {
     markdown
         .lines()
@@ -198,10 +201,33 @@ pub(crate) fn prescan(markdown: &str) -> usize {
 
 fn is_mermaid_fence_opener(line: &str) -> bool {
     let rest = strip_quote_and_list_prefix(line);
-    let Some(info) = fence_info(rest) else {
-        return false;
-    };
-    info.to_ascii_lowercase().contains("mermaid")
+    is_mermaid_fence(rest) || is_definition_list_mermaid_fence(rest)
+}
+
+fn is_mermaid_fence(rest: &str) -> bool {
+    fence_info(rest)
+        .is_some_and(|info| info.to_ascii_lowercase().contains("mermaid"))
+}
+
+/// Recognize definition-list lines whose definition begins with a Mermaid
+/// fence. This is intentionally a cheap candidate scan; Pandoc collection
+/// remains authoritative and filters out prose that only resembles a list.
+fn is_definition_list_mermaid_fence(rest: &str) -> bool {
+    if let Some(after_marker) = rest.strip_prefix('~')
+        && after_marker.chars().next().is_some_and(char::is_whitespace)
+        && is_mermaid_fence(after_marker.trim_start())
+    {
+        return true;
+    }
+
+    rest.char_indices().any(|(index, character)| {
+        if character != ':' {
+            return false;
+        }
+        let after_marker = &rest[index + character.len_utf8()..];
+        after_marker.chars().next().is_some_and(char::is_whitespace)
+            && is_mermaid_fence(after_marker.trim_start())
+    })
 }
 
 fn strip_quote_and_list_prefix(line: &str) -> &str {
@@ -354,7 +380,7 @@ fn parse_manifest(raw: &str) -> Result<Vec<CollectedDiagram>> {
     };
     let mut ordered: Vec<CollectedDiagram> = Vec::new();
     let mut index: BTreeMap<String, usize> = BTreeMap::new();
-    for entry in entries {
+    for (position, entry) in entries.into_iter().enumerate() {
         if let Some(&i) = index.get(&entry.id) {
             ordered[i].occurrences += 1;
             continue;
@@ -363,6 +389,7 @@ fn parse_manifest(raw: &str) -> Result<Vec<CollectedDiagram>> {
         ordered.push(CollectedDiagram {
             id: entry.id,
             text: entry.text,
+            first_occurrence: position + 1,
             occurrences: 1,
         });
     }
@@ -612,7 +639,6 @@ fn map_adapter_results(
     let mut fail_warnings = Vec::new();
     let mut scale_warnings = Vec::new();
     for (index, block) in blocks.iter().enumerate() {
-        let first = first_occurrence(&blocks, index);
         if index >= MAX_DIAGRAM_ITEMS {
             diagrams.insert(
                 block.id.clone(),
@@ -620,7 +646,11 @@ fn map_adapter_results(
                     error: LIMIT_ERROR.to_string(),
                 },
             );
-            fail_warnings.push(not_rendered_warning(first, total, LIMIT_ERROR));
+            fail_warnings.push(not_rendered_warning(
+                block.first_occurrence,
+                total,
+                LIMIT_ERROR,
+            ));
             continue;
         }
         match by_id.get(&block.id) {
@@ -637,8 +667,11 @@ fn map_adapter_results(
                             error: error.clone(),
                         },
                     );
-                    fail_warnings
-                        .push(not_rendered_warning(first, total, &error));
+                    fail_warnings.push(not_rendered_warning(
+                        block.first_occurrence,
+                        total,
+                        &error,
+                    ));
                     continue;
                 };
                 diagrams.insert(
@@ -659,7 +692,7 @@ fn map_adapter_results(
                     && scale < SCALE_WARN_BELOW
                 {
                     scale_warnings.push(scale_warning(
-                        first,
+                        block.first_occurrence,
                         total,
                         diagram_label(&block.text),
                         scale,
@@ -679,7 +712,11 @@ fn map_adapter_results(
                         error: error.clone(),
                     },
                 );
-                fail_warnings.push(not_rendered_warning(first, total, &error));
+                fail_warnings.push(not_rendered_warning(
+                    block.first_occurrence,
+                    total,
+                    &error,
+                ));
             }
             None => {
                 let error = "no result from renderer";
@@ -689,7 +726,11 @@ fn map_adapter_results(
                         error: error.to_string(),
                     },
                 );
-                fail_warnings.push(not_rendered_warning(first, total, error));
+                fail_warnings.push(not_rendered_warning(
+                    block.first_occurrence,
+                    total,
+                    error,
+                ));
             }
         }
     }
@@ -743,13 +784,6 @@ fn diagram_label(source: &str) -> &str {
         .map(str::trim)
         .find(|line| !line.is_empty())
         .unwrap_or("diagram")
-}
-
-fn first_occurrence(blocks: &[CollectedDiagram], index: usize) -> usize {
-    1 + blocks[..index]
-        .iter()
-        .map(|block| block.occurrences)
-        .sum::<usize>()
 }
 
 fn total_occurrences(blocks: &[CollectedDiagram]) -> usize {
@@ -909,11 +943,60 @@ mod tests {
 ````markdown\n```mermaid\nflowchart LR\n```\n````\n\
 ```text\nflowchart LR\n```\n\
 ```\nflowchart LR\n```\n\
-plain flowchart LR in a paragraph\n";
+plain flowchart LR in a paragraph\n\
+~~~\nuntagged tilde fence\n~~~\n";
         // 3 explicit + 1 quote + 1 list + 1 ordered + 1 indented + 1
-        // nested-in-markdown over-match = 8. text/untagged/prose = 0.
-        assert_eq!(prescan(markdown), 8);
+        // nested-in-markdown + 3 definition-list openers = 11.
+        // text/untagged/prose and ordinary tilde fences = 0.
+        let markdown = format!(
+            "{markdown}\
+             Term\n\
+             : ```mermaid\n\
+               flowchart LR\n\
+               ```\n\
+             Term two\n\
+             ~   ~~~mermaid\n\
+             flowchart TD\n\
+             ~~~\n\
+             > - Nested term\n\
+             >   : ~~~mermaid\n\
+             >     flowchart TB\n\
+             >     ~~~\n\
+             ~~~text\n\
+             not a definition fence\n"
+        );
+        assert_eq!(prescan(&markdown), 11);
         assert_eq!(prescan("# No diagrams\n\nHello.\n"), 0);
+    }
+
+    #[test]
+    fn collect_finds_mermaid_fences_in_definition_lists() {
+        let Some(pandoc) = skip_pandoc("definition-list collect") else {
+            return;
+        };
+        let temp = TempDir::new("definition-list-collect");
+        let source = temp.path.join("definitions.md");
+        fs::write(
+            &source,
+            "# Definition diagrams\n\n\
+             Term\n\
+             : ```mermaid\n\
+               flowchart LR\n\
+                 A --> B\n\
+               ```\n",
+        )
+        .expect("write definition-list source");
+
+        let blocks = collect(
+            &pandoc,
+            &source,
+            DiagramReader::Inferred,
+            &temp.path.join("collect"),
+        )
+        .expect("collect definition-list Mermaid fence");
+        assert_eq!(blocks.len(), 1, "{blocks:?}");
+        assert_eq!(blocks[0].first_occurrence, 1);
+        assert!(blocks[0].text.contains("flowchart LR"), "{blocks:?}");
     }
 
     #[test]
@@ -1034,7 +1117,7 @@ plain flowchart LR in a paragraph\n";
     }
 
     #[test]
-    fn scale_and_occurrence_helpers_match_the_a8_contract() {
+    fn scale_helpers_match_the_a8_contract() {
         assert_eq!(effective_scale(200.0, 100.0, 489.6, 669.6), Some(1.0));
         let scale =
             effective_scale(1200.0, 100.0, 489.6, 669.6).expect("wide diagram");
@@ -1048,25 +1131,55 @@ plain flowchart LR in a paragraph\n";
             diagram_label("\nflowchart LR\n  A --> B\n"),
             "flowchart LR"
         );
-        let blocks = [
-            CollectedDiagram {
-                id: "a".into(),
-                text: "flowchart LR".into(),
-                occurrences: 2,
-            },
-            CollectedDiagram {
-                id: "b".into(),
-                text: "bad".into(),
-                occurrences: 1,
-            },
-        ];
-        assert_eq!(first_occurrence(&blocks, 0), 1);
-        assert_eq!(first_occurrence(&blocks, 1), 3);
-        assert_eq!(total_occurrences(&blocks), 3);
         assert_eq!(
             not_rendered_warning(4, 12, "Parse error on line 4: …"),
             "Mermaid diagram 4 of 12 not rendered: Parse error on line 4: …"
         );
+    }
+
+    #[test]
+    fn parse_manifest_keeps_true_first_positions_across_interleaved_duplicates()
+    {
+        let manifest = |ids: &[&str]| {
+            serde_json::to_string(
+                &ids.iter()
+                    .map(|id| serde_json::json!({ "id": id, "text": id }))
+                    .collect::<Vec<_>>(),
+            )
+            .expect("serialize manifest")
+        };
+
+        let short = parse_manifest(&manifest(&["A", "B", "A"]))
+            .expect("parse A/B/A manifest");
+        assert_eq!(short.len(), 2);
+        assert_eq!(short[0].first_occurrence, 1);
+        assert_eq!(short[0].occurrences, 2);
+        assert_eq!(short[1].first_occurrence, 2);
+        assert_eq!(short[1].occurrences, 1);
+        assert_eq!(total_occurrences(&short), 3);
+        assert_eq!(
+            not_rendered_warning(
+                short[1].first_occurrence,
+                total_occurrences(&short),
+                "Parse error"
+            ),
+            "Mermaid diagram 2 of 3 not rendered: Parse error"
+        );
+
+        let longer = parse_manifest(&manifest(&["A", "B", "A", "C", "B", "A"]))
+            .expect("parse interleaved manifest");
+        assert_eq!(
+            longer
+                .iter()
+                .map(|block| (
+                    block.id.as_str(),
+                    block.first_occurrence,
+                    block.occurrences
+                ))
+                .collect::<Vec<_>>(),
+            [("A", 1, 3), ("B", 2, 2), ("C", 4, 1)]
+        );
+        assert_eq!(total_occurrences(&longer), 6);
     }
 
     #[test]
