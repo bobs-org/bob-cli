@@ -742,9 +742,23 @@ labels and values use Obsidian text colors.
 
 The context panel follows the focused metric family:
 
-- Pomodoro metrics show the supplied theme breakdown and period total.
+- Pomodoro metrics open on **Where the time went**, grouped by the report's area and
+  project parts. The area bar follows the configured hue-slot order, with unfiled and
+  unlinked buckets last in gray. Rows group projects under their top-level area; area
+  tasks use the catalog's `project_label`, rolled-up projects report their descendant
+  count, and bucket rows include fix-it guidance. Multi-home minutes use a lighter tint
+  for the apportioned share. The footer explains that attribution follows today's note
+  tree and comes from Task Links.
+- **Themes** remains one click away and shows the supplied theme breakdown. Reports
+  without area/project parts default to Themes and show an update-bob hint. Reports
+  without the additive `sessions` list omit session drill-down controls.
+- Area/project rows open their home note; Ctrl/Cmd opens a new leaf. Pomodoro rows can
+  expand contributing sessions (newest first, 20 initially) with date, time range,
+  duration, authored name, and home shares; selecting a session opens its daily note at
+  the ledger line. Pinning a day or bucket switches the table and title to that supplied
+  span. Count metrics use the same groups without color tint.
 - Task metrics show the Created, Done, Dropped, and Net flow series when those metrics
-  are present.
+  are present, followed by the focused task metric's area/project counts.
 - Review metrics show supplied answers by tier and outcome; Keep rate also shows its
   90% reference line and the review-time context.
 - Checklist metrics show a daily state calendar and, when supplied, the full chore
