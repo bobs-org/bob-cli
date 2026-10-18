@@ -160,8 +160,9 @@ pub(super) enum IntakeOutcome {
 }
 
 struct IntakeSession {
-    _maintenance_lock: fs::File,
+    // Field order is the release order: scan.lock, then bob_sync.lock.
     _scan_lock: fs::File,
+    _maintenance_lock: fs::File,
     child_env: ob::ChildEnv,
 }
 
@@ -204,20 +205,24 @@ pub(super) fn finish_intake(
     request: IntakeRequest<'_>,
 ) -> IntakeOutcome {
     let producer = request.producer;
+    let progress = request.progress;
     let outcome = file_unit(config, unit, request);
-    match &outcome {
+    let warning = match &outcome {
         IntakeOutcome::Ingested { .. } => {
-            intake_status::record_success(producer, 1);
+            intake_status::record_success(producer, 1)
         }
         IntakeOutcome::Queued { reason, detail, .. } => {
-            intake_status::record_failure(producer, reason.as_str(), detail);
+            intake_status::record_failure(producer, reason.as_str(), detail)
         }
         IntakeOutcome::Incomplete { error } => {
-            intake_status::record_failure(producer, "incomplete", error);
+            intake_status::record_failure(producer, "incomplete", error)
         }
         IntakeOutcome::Kept { .. }
         | IntakeOutcome::WouldKeep { .. }
-        | IntakeOutcome::WouldIngest { .. } => {}
+        | IntakeOutcome::WouldIngest { .. } => None,
+    };
+    if let (Some(warning), Some(callback)) = (warning, progress) {
+        callback(&warning);
     }
     outcome
 }
@@ -283,6 +288,9 @@ fn file_unit(
     match session.ingest(config, &unit, request.producer) {
         Ok(mut ingested) => {
             ingested.sync_status = session.post_sync();
+            for path in &ingested.ignored_paths {
+                progress(&ignored_path_warning(path));
+            }
             IntakeOutcome::Ingested {
                 pdf: ingested.pdf,
                 note: ingested.note,
@@ -339,8 +347,8 @@ impl IntakeSession {
             QueueFailure::new(QueueReason::ScanBusy, error.to_string())
         })?;
         Ok(Self {
-            _maintenance_lock: maintenance,
             _scan_lock: scan,
+            _maintenance_lock: maintenance,
             child_env,
         })
     }
@@ -408,18 +416,30 @@ impl IntakeSession {
         ) {
             Ok(plan) => plan,
             Err(error) => {
-                let reason = if error.message.contains("requires --write-pdf") {
-                    QueueReason::NeedsWritePdfs
-                } else {
-                    QueueReason::Refused
-                };
                 return rollback_or_queue(
                     &mut moves,
-                    QueueFailure::new(reason, error.to_string()),
+                    QueueFailure::new(
+                        queue_reason_for_plan_error(&error),
+                        error.to_string(),
+                    ),
                 );
             }
         };
-        let write = match write_single_pdf_sync(config, &plan) {
+        if let Err(error) = ensure_safe_to_write(config, iter::once(&plan)) {
+            return rollback_or_queue(
+                &mut moves,
+                QueueFailure::new(QueueReason::Refused, error.to_string()),
+            );
+        }
+        // Capture before `execute_pdf_sync`: routed intents drop out of
+        // `scoped_write_path_set` once their destination already contains
+        // the candidate identity.
+        let mut path_set = scoped_write_path_set(config, &plan).write_paths;
+        let write = match execute_pdf_sync(
+            config,
+            &plan,
+            &mut RunWriteState::default(),
+        ) {
             Ok(report) => report,
             Err(error) => {
                 if git_changes_only_moved_files(config, &self.child_env, &moves)
@@ -439,18 +459,11 @@ impl IntakeSession {
         };
 
         let note = plan.note_path.clone();
-        let mut path_set = scoped_write_path_set(config, &plan).write_paths;
         for moved in &moves {
             path_set.insert(moved.to.clone());
         }
         let (paths, ignored) =
             filter_ignored_paths(&config.bob_dir, &self.child_env, path_set);
-        for path in ignored {
-            eprintln!(
-                "warning: skipped ignored intake write path {}",
-                path.display()
-            );
-        }
         let subject = intake_commit_subject(producer, unit, config);
         let (commit_sha, commit_warning) = match ob::commit_paths(
             &config.bob_dir,
@@ -482,6 +495,7 @@ impl IntakeSession {
                 .map(|moved| (moved.from.clone(), moved.to.clone()))
                 .collect(),
             write,
+            ignored_paths: ignored,
         })
     }
 }
@@ -500,11 +514,27 @@ pub(super) struct Ingested {
     pub(super) ref_type: Option<String>,
     pub(super) source_pdf: String,
     pub(super) moved: Vec<(PathBuf, PathBuf)>,
+    ignored_paths: Vec<PathBuf>,
 }
 
 enum IngestFailure {
     Queued(QueueFailure),
     Incomplete(String),
+}
+
+fn queue_reason_for_plan_error(error: &CommandError) -> QueueReason {
+    if error.code == Some("needs_write_pdfs") {
+        QueueReason::NeedsWritePdfs
+    } else {
+        QueueReason::Refused
+    }
+}
+
+fn ignored_path_warning(path: &Path) -> String {
+    format!(
+        "warning: skipped ignored intake write path {}",
+        path.display()
+    )
 }
 
 struct MovedFile {
@@ -1065,14 +1095,22 @@ pub(super) fn run_intake_only(
 fn record_drain_status(run: &Result<IntakeOnlyRun>) {
     const COMMAND: &str = "bob ref scan -i";
     match run {
-        Err(error) => intake_status::record_failure(
-            COMMAND,
-            error.code.unwrap_or("scan_failed"),
-            &error.message,
-        ),
+        Err(error) => {
+            if let Some(warning) = intake_status::record_failure(
+                COMMAND,
+                error.code.unwrap_or("scan_failed"),
+                &error.message,
+            ) {
+                eprintln!("{warning}");
+            }
+        }
         Ok(IntakeOnlyRun::Drained(report)) => {
             if report.filed_count() > 0 {
-                intake_status::record_success(COMMAND, report.filed_count());
+                if let Some(warning) =
+                    intake_status::record_success(COMMAND, report.filed_count())
+                {
+                    eprintln!("{warning}");
+                }
             }
             let stuck = report.items.iter().find_map(|item| match item {
                 DrainItem::Filed { .. } => None,
@@ -1084,7 +1122,11 @@ fn record_drain_status(run: &Result<IntakeOnlyRun>) {
                 }
             });
             if let Some((reason, detail)) = stuck {
-                intake_status::record_failure(COMMAND, reason, detail);
+                if let Some(warning) =
+                    intake_status::record_failure(COMMAND, reason, detail)
+                {
+                    eprintln!("{warning}");
+                }
             }
         }
         Ok(IntakeOnlyRun::Empty | IntakeOnlyRun::Preview(_)) => {}
@@ -1124,10 +1166,15 @@ fn drain_queue(
             }
         } else {
             match session.ingest(config, &unit, DRAIN_PRODUCER) {
-                Ok(ingested) => DrainItem::Filed {
-                    unit,
-                    ingested: Box::new(ingested),
-                },
+                Ok(ingested) => {
+                    for path in &ingested.ignored_paths {
+                        progress(&ignored_path_warning(path));
+                    }
+                    DrainItem::Filed {
+                        unit,
+                        ingested: Box::new(ingested),
+                    }
+                }
                 Err(IngestFailure::Queued(failure)) => DrainItem::Queued {
                     unit,
                     reason: failure.reason,
@@ -1263,7 +1310,7 @@ fn ingested_line_with_label(
 fn print_commit_line(ingested: &Ingested) {
     if let Some(warning) = &ingested.commit_warning {
         println!(
-            "sync: committed with warning ({warning}); background vault-sync will commit it"
+            "sync: commit failed ({warning}); background vault-sync will commit it"
         );
     } else if let Some(sha) = &ingested.commit_sha {
         println!("sync: committed {}", &sha[..sha.len().min(7)]);
@@ -1392,7 +1439,7 @@ pub(super) fn print_intake_result(
             println!("{line}");
             if let Some(warning) = commit_warning {
                 println!(
-                    "sync: committed with warning ({warning}); background vault-sync will commit it"
+                    "sync: commit failed ({warning}); background vault-sync will commit it · {sync_status}"
                 );
             } else if let Some(sha) = commit_sha {
                 println!(
@@ -1544,5 +1591,24 @@ mod tests {
         }])
         .expect_err("file at the vault-sync limit must queue");
         assert_eq!(failure.reason, QueueReason::TooLarge);
+    }
+
+    #[test]
+    fn plan_error_with_needs_write_pdfs_code_queues_that_reason() {
+        let coded = CommandError::new(
+            "reference note changed but --write-pdf was not supplied; refusing to update the PDF marker",
+        )
+        .with_code("needs_write_pdfs");
+        assert_eq!(
+            queue_reason_for_plan_error(&coded),
+            QueueReason::NeedsWritePdfs
+        );
+        let other = CommandError::new("planning refused");
+        assert_eq!(queue_reason_for_plan_error(&other), QueueReason::Refused);
+        let mismatched_text = CommandError::new("requires --write-pdf");
+        assert_eq!(
+            queue_reason_for_plan_error(&mismatched_text),
+            QueueReason::Refused
+        );
     }
 }

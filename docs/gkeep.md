@@ -226,7 +226,8 @@ trailing route and listen marker never become part of the clip target.
 parent (the compatible alias form is `URL @ @route`). The listen marker
 must immediately follow the URL.
 Pull messages name the selected parent (`would clip →
-sase`, `filed → <pdf> → <note> → sase`, `queued → <pdf> (<reason>) → sase`);
+sase`, `filed → <pdf> → <note> → sase`, `queued → <pdf> (<reason>) → sase`,
+`incomplete → <pdf> (stopped after moving into lib/; bob ref scan finishes it: …) → sase`);
 that means the link was accepted for import. A marked clip shows `· Listen`
 with `· companion audio requested`,
 and an already-known marked link shows

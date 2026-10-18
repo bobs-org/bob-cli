@@ -755,6 +755,7 @@ fn highlights_create_help_lists_options_alphabetically() {
             "-f, --force",
             "-H, --html",
             "-i, --include-id",
+            "-k, --keep-intake",
             "-L, --listen",
             "-l, --lib-dir",
             "-N, --name",

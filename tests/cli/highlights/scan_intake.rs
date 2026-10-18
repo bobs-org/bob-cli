@@ -405,6 +405,30 @@ fn intake_only_dry_run_previews_without_locks_or_writes() {
 }
 
 #[test]
+fn intake_only_json_dry_run_lists_would_queue_items_with_ok_true() {
+    let temp = TempDir::new("bob-cli-scan-intake-dry-queue");
+    let (vault, _peer) = seed_synced_vault(&temp);
+    let (fixture, pandoc) = create_fixture(&temp);
+    queue_pdf(&temp, &vault, &fixture, &pandoc, "taken");
+    write_file(&vault.join("lib/chat/taken.pdf"), "occupied");
+
+    let json = scan_command(&temp, &vault, &["-i", "-d", "-f", "json"])
+        .output()
+        .expect("run scan --intake-only --dry-run json");
+    assert_success(&json);
+    let document: serde_json::Value =
+        serde_json::from_str(stdout(&json).trim()).expect("parse JSON");
+    assert_eq!(document["mode"], "dry_run");
+    assert_eq!(document["ok"], true);
+    assert_eq!(document["intake_only"], true);
+    let queued = document["queued"].as_array().expect("queued array");
+    assert_eq!(queued.len(), 1, "{queued:?}");
+    assert_eq!(queued[0]["pdf"], "xlib/chat/taken.pdf");
+    assert_eq!(queued[0]["reason"], "collision");
+    assert!(vault.join("xlib/chat/taken.pdf").is_file());
+}
+
+#[test]
 fn intake_only_json_reports_filed_notes_and_queued_items() {
     let temp = TempDir::new("bob-cli-scan-intake-json");
     let (vault, peer) = seed_synced_vault(&temp);
@@ -518,6 +542,45 @@ fn intake_only_attaches_late_audio_to_a_library_pdf() {
         ["bob ref scan: attach audio chat/report"]
     );
     assert!(git_in(&vault, ["status", "--porcelain"]).stdout.is_empty());
+}
+
+#[test]
+fn intake_only_queues_late_audio_when_the_marker_needs_a_pdf_write() {
+    let temp = TempDir::new("bob-cli-scan-intake-needs-write-pdfs");
+    let (vault, _peer) = seed_synced_vault(&temp);
+    let (fixture, pandoc) = create_fixture(&temp);
+    let source = temp.path().join("report.md");
+    write_file(&source, "# Report\n");
+    let created = create_command(&temp, &vault, &source, &fixture, &pandoc)
+        .output()
+        .expect("create and ingest report");
+    assert_success(&created);
+    let note_path = vault.join("ref/chat/report.md");
+    let note = fs::read_to_string(&note_path).expect("read note");
+    let edited = note.replacen("status: ready", "status: next", 1);
+    assert_ne!(edited, note, "note must contain status: ready to edit");
+    write_file(&note_path, &edited);
+    git_in(&vault, ["add", "ref/chat/report.md"]);
+    git_in(&vault, ["commit", "-q", "-m", "edit status"]);
+    git_in(&vault, ["push", "-q", "origin", "master"]);
+    write_file(&vault.join("xlib/chat/report.mp3"), "late audio");
+    let before = head(&vault);
+
+    let output = scan_command(&temp, &vault, &["-i", "-f", "json"])
+        .output()
+        .expect("run scan --intake-only json");
+    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+    let document: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("parse JSON");
+    assert_eq!(document["ok"], false);
+    let queued = document["queued"].as_array().expect("queued array");
+    assert_eq!(queued.len(), 1, "{queued:?}");
+    assert_eq!(queued[0]["pdf"], "xlib/chat/report.mp3");
+    assert_eq!(queued[0]["reason"], "needs_write_pdfs");
+    assert!(vault.join("xlib/chat/report.mp3").is_file());
+    assert!(!vault.join("lib/chat/report.mp3").exists());
+    assert!(git_in(&vault, ["status", "--porcelain"]).stdout.is_empty());
+    assert_eq!(head(&vault), before);
 }
 
 #[test]

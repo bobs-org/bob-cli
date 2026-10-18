@@ -24,12 +24,20 @@ retrying. A successful clip files the PDF, ref note, and reading task
 inline when intake can run (`ingested` / human `filed`). When intake
 cannot run, the PDF stays in `xlib/` (`clipped` / queued with a reason)
 and a later `bob ref scan -i` files it; the `bob-ref-intake` timer
-drains that queue on athena and apollo. Capture and its worker do not
-run that scan. Human `bob ref jobs` prints the drain footer only when
-queued (`clipped`) rows are visible:
+drains that queue on athena and apollo. An incomplete ingest leaves the
+PDF in `lib/` without its note (`clipped` with reason `incomplete`); a
+full `bob ref scan` finishes it. Capture and its worker do not run that
+scan. Human `bob ref jobs` prints the drain footer only when ordinary
+queued (`clipped` in `xlib/`) rows are visible:
 
 ```text
 next: bob ref scan -i files queued PDFs (the bob-ref-intake timer drains them on athena and apollo)
+```
+
+and names `bob ref scan` when an incomplete row exists:
+
+```text
+next: bob ref scan finishes PDFs that stopped after moving into lib/
 ```
 
 Use `bob ref jobs` to inspect work before a queued PDF appears in
@@ -132,10 +140,12 @@ exits 0. It then:
 
 A clip success appends `created`, `already_in_library`, or
 `already_queued` to `done.jsonl`. A `created` record that ingested
-carries `intake: ingested` and `note`; one that stayed in `xlib/`
-carries `intake: queued`. Human `run` prints `✓ filed <display> →
-ref/…md` or `✓ clipped <display> → xlib/… (queued: <reason>)`. JSON
-`state` is `ingested` or `clipped`. A clip failure writes the
+carries `intake: ingested` and `note`; one that stayed in `xlib/` or
+stopped after moving into `lib/` carries `intake: queued` (`incomplete`
+for the latter). Human `run` prints `✓ filed <display> → ref/…md`,
+`✓ clipped <display> → xlib/… (queued: <reason>)`, or
+`✓ clipped <display> → lib/… (incomplete: stopped after moving into lib/; bob ref scan finishes it: <detail>)`.
+JSON `state` is `ingested` or `clipped`. A clip failure writes the
 fallback task and appends `fell_back`; when the fallback write
 itself fails, the job parks in `stuck/` with both errors and the
 run exits 1. After releasing the lock the worker re-checks
@@ -195,7 +205,8 @@ JSON `summary` adds `ingested` next to `clipped`.
 the oldest pending age. It warns when a pending job is older than 1
 hour or any job is stuck (hint: `bob ref jobs run`). Clipped (queued)
 jobs are already terminal in the spool; they wait on `bob ref scan -i`
-rather than another worker pass.
+rather than another worker pass. Incomplete clips wait on a full
+`bob ref scan`.
 
 ## Troubleshooting
 

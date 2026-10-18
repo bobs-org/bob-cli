@@ -159,6 +159,18 @@ fn create_ingests_pdf_audio_note_and_parent_as_one_scoped_pushed_commit() {
     ] {
         assert!(peer.join(path).is_file(), "peer is missing {path}");
     }
+    let peer_parent =
+        fs::read_to_string(peer.join("sase.md")).expect("read peer parent");
+    assert!(
+        peer_parent.contains("[[ref/chat/report|Report]]"),
+        "peer parent is missing the reading-task link: {peer_parent}"
+    );
+    let origin_head = git_in(&vault, ["rev-parse", "origin/master"]);
+    assert_eq!(
+        String::from_utf8_lossy(&origin_head.stdout).trim(),
+        head,
+        "origin HEAD must match the vault after the intake push"
+    );
     let scan = bob_command()
         .arg("ref")
         .arg("scan")
@@ -169,10 +181,11 @@ fn create_ingests_pdf_audio_note_and_parent_as_one_scoped_pushed_commit() {
         .output()
         .expect("run follow-up dry scan");
     assert_success(&scan);
+    let scan_report = stdout(&scan);
     assert!(
-        !stdout(&scan).contains("note_action: would-create"),
-        "follow-up scan must not plan a second note: {}",
-        stdout(&scan)
+        !scan_report.contains("would create")
+            && !scan_report.contains("note_action: create"),
+        "follow-up scan must not plan a second note: {scan_report}"
     );
 }
 
@@ -190,6 +203,9 @@ fn create_queues_when_locks_or_pre_sync_prevent_inline_intake() {
         .open(&sync_lock)
         .expect("open shared lock");
     held_sync.lock_exclusive().expect("hold shared lock");
+    let head_before =
+        String::from_utf8(git_in(&vault, ["rev-parse", "HEAD"]).stdout)
+            .expect("head is utf8");
     let sync_source = temp.path().join("sync-busy.md");
     write_file(&sync_source, "# Sync Busy\n");
     let sync_output =
@@ -206,6 +222,14 @@ fn create_queues_when_locks_or_pre_sync_prevent_inline_intake() {
         stdout(&sync_output)
     );
     assert!(vault.join("xlib/chat/sync_busy.pdf").is_file());
+    let head_after =
+        String::from_utf8(git_in(&vault, ["rev-parse", "HEAD"]).stdout)
+            .expect("head is utf8");
+    assert_eq!(
+        head_after.trim(),
+        head_before.trim(),
+        "lock-busy queue must not commit"
+    );
     drop(held_sync);
 
     let scan_lock_path = temp.path().join("state/bob-cli/ref/scan.lock");
@@ -365,6 +389,31 @@ fn create_keeps_intake_for_flag_config_env_and_dry_run() {
         head_before,
         "keep modes and dry-run must not commit"
     );
+}
+
+#[test]
+fn create_rejects_an_invalid_ingest_on_create_env_before_any_write() {
+    let temp = TempDir::new("bob-cli-create-ingest-invalid-env");
+    let (vault, _peer) = seed_synced_vault(&temp);
+    let (fixture, pandoc) = create_fixture(&temp);
+    let source = temp.path().join("maybe.md");
+    write_file(&source, "# Maybe\n");
+
+    let output = create_command(&temp, &vault, &source, &fixture, &pandoc)
+        .env("BOB_HIGHLIGHTS_INGEST_ON_CREATE", "maybe")
+        .output()
+        .expect("run create with invalid ingest env");
+    assert_eq!(output.status.code(), Some(1), "{}", format_output(&output));
+    let err = stderr(&output);
+    assert!(
+        err.contains("BOB_HIGHLIGHTS_INGEST_ON_CREATE")
+            && err.contains("maybe")
+            && err.contains("0, false, no, off, 1, true, yes, on"),
+        "{err}"
+    );
+    assert!(!vault.join("xlib/chat/maybe.pdf").exists());
+    assert!(!vault.join("lib/chat/maybe.pdf").exists());
+    assert!(!vault.join("ref/chat/maybe.md").exists());
 }
 
 #[test]

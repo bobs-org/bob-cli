@@ -237,7 +237,10 @@ pub(super) fn note_write_planned(plan: &PdfSyncPlan) -> bool {
 
 /// True when an insertion intention may still write: at least one planned
 /// line's identity is absent from the destination's current bytes.
-fn intent_write_planned(path: &Path, intent: &RoutedInsertionIntent) -> bool {
+pub(super) fn intent_write_planned(
+    path: &Path,
+    intent: &RoutedInsertionIntent,
+) -> bool {
     let Ok(contents) = fs::read_to_string(path) else {
         return true;
     };
@@ -526,4 +529,51 @@ pub(super) fn command_output(output: &Output) -> String {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     format!("stdout:\n{stdout}\nstderr:\n{stderr}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    fn routed_intent(path: PathBuf) -> RoutedInsertionIntent {
+        RoutedInsertionIntent {
+            path,
+            lines: vec!["- [ ] follow up ^ann-1".to_string()],
+            candidates: vec![AnnotationTaskCandidate {
+                identity: "^ann-1".to_string(),
+                task_text: "follow up".to_string(),
+                source_block_id: "src".to_string(),
+                target: AnnotationTaskTarget::RoutedNote(PathBuf::from(
+                    "sase.md",
+                )),
+                source_ref_note_path: PathBuf::from("ref/papers/src.md"),
+                processed_id: "ann-1".to_string(),
+            }],
+            owner: PathBuf::from("lib/papers/src.pdf"),
+            is_v2_default: false,
+        }
+    }
+
+    #[test]
+    fn intent_write_planned_is_true_until_the_destination_contains_identity() {
+        let temp = tempfile::tempdir().expect("create temp dir");
+        let dest = temp.path().join("sase.md");
+        let intent = routed_intent(dest.clone());
+        assert!(
+            intent_write_planned(&dest, &intent),
+            "a missing destination still needs a write"
+        );
+        fs::write(&dest, "# SASE\n\n## Tasks\n").expect("write dest");
+        assert!(
+            intent_write_planned(&dest, &intent),
+            "a dest without the identity is still planned"
+        );
+        fs::write(&dest, "# SASE\n\n- [ ] follow up ^ann-1\n")
+            .expect("write dest with identity");
+        assert!(
+            !intent_write_planned(&dest, &intent),
+            "once the dest contains the identity the path drops from the commit set"
+        );
+    }
 }

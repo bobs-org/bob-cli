@@ -891,6 +891,10 @@ fn ref_jobs_run_ingests_into_a_synced_vault() {
     let curl = write_article_curl(temp.path(), 0);
     seed_pending(&temp, &vault, "20261007T143012-aaaaaa", FIXED_CREATED_AT);
     let lock = temp.path().join("bob_sync.lock");
+    let before =
+        String::from_utf8(git_in(&vault, ["rev-parse", "HEAD"]).stdout)
+            .expect("head is utf8");
+    let before = before.trim().to_string();
 
     let output = jobs_command(&temp, &vault, &["run"])
         .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
@@ -933,6 +937,80 @@ fn ref_jobs_run_ingests_into_a_synced_vault() {
         !listed.contains("bob-ref-intake timer"),
         "filed rows must not show the queued drain footer: {listed}"
     );
+    let head = String::from_utf8(git_in(&vault, ["rev-parse", "HEAD"]).stdout)
+        .expect("head is utf8");
+    let head = head.trim();
+    let count = git_in(
+        &vault,
+        ["rev-list", "--count", &format!("{before}..{head}")],
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&count.stdout).trim(),
+        "1",
+        "jobs run must land exactly one ingest commit"
+    );
+    let subject = git_in(&vault, ["log", "-1", "--format=%s"]);
+    assert_eq!(
+        String::from_utf8_lossy(&subject.stdout).trim(),
+        "bob ref jobs run: ingest blogs/symphony_spec"
+    );
+    let changed = git_in(
+        &vault,
+        ["diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"],
+    );
+    let mut changed = String::from_utf8_lossy(&changed.stdout)
+        .lines()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    changed.sort();
+    assert_eq!(
+        changed,
+        [
+            "lib/blogs/symphony_spec.pdf",
+            "mac_inbox.md",
+            "ref/blogs/symphony_spec.md",
+        ]
+    );
+}
+
+#[test]
+fn ref_jobs_run_rejects_an_invalid_ingest_on_create_env_before_xlib_write() {
+    let temp = TempDir::new("bob-cli-ref-jobs-invalid-env");
+    let vault = seed_jobs_git_vault(&temp);
+    let fake = FakeClip::new(&temp, "fake");
+    let curl = write_article_curl(temp.path(), 0);
+    seed_pending(&temp, &vault, "20261007T143012-aaaaaa", FIXED_CREATED_AT);
+
+    let output = jobs_command(&temp, &vault, &["run"])
+        .env("BOB_WEB_CLIP_ADAPTER", &fake.path)
+        .env("BOB_HIGHLIGHTS_CURL", &curl)
+        .env("BOB_HIGHLIGHTS_INGEST_ON_CREATE", "maybe")
+        .env(
+            "BOB_VAULT_SYNC_LOCK_FILE",
+            temp.path().join("bob_sync.lock"),
+        )
+        .env(
+            "BOB_VAULT_SYNC_STATE_FILE",
+            temp.path().join("vault-sync.json"),
+        )
+        .output()
+        .expect("run bob ref jobs run with invalid ingest env");
+    assert!(
+        output.status.success() || output.status.code() == Some(1),
+        "{}",
+        format_output(&output)
+    );
+    let combined = format!("{}{}", stdout(&output), stderr(&output));
+    assert!(
+        combined.contains("BOB_HIGHLIGHTS_INGEST_ON_CREATE")
+            || combined.contains("maybe"),
+        "invalid kill switch must surface: {combined}"
+    );
+    assert!(
+        !vault.join("xlib/blogs/symphony_spec.pdf").exists(),
+        "invalid env must not write to xlib/"
+    );
+    assert!(!vault.join("lib/blogs/symphony_spec.pdf").exists());
 }
 
 #[test]

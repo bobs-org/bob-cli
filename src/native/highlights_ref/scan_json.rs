@@ -855,9 +855,10 @@ fn scan_error_parts(
 /// and return the exit code. The envelope is the normal scan envelope with
 /// `hook.status: "skipped"`, `intake` listing completed PDF moves, `notes`
 /// listing filed notes, and `queued` listing every item still waiting in
-/// `xlib/` (or, on a dry run, every item that would stay queued). `ok` is
-/// false, and the exit code 1, while anything stays queued or stopped
-/// mid-ingest.
+/// `xlib/` (or, on a dry run, every item that would stay queued). On a
+/// writing drain, `ok` is false (exit 1) while anything stays queued or
+/// stopped mid-ingest. A dry run ignores `queued` for `ok`, matching
+/// human mode.
 pub(super) fn scan_intake_only_json(config: &Config, dry_run: bool) -> i32 {
     let mode = if dry_run { "dry_run" } else { "write" };
     let options = SyncOptions {
@@ -976,7 +977,7 @@ pub(super) fn scan_intake_only_json(config: &Config, dry_run: bool) -> i32 {
     }
 
     let counts = ScanCounts::from_reports(&reports);
-    let ok = failures.is_empty() && queued.is_empty();
+    let ok = failures.is_empty() && (dry_run || queued.is_empty());
     emit_scan_report_envelope(&ScanReportEnvelope {
         ok,
         schema_version: REF_SCHEMA_VERSION,

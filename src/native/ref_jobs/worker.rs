@@ -104,6 +104,10 @@ enum OutcomeLine {
         pdf: String,
         reason: String,
     },
+    Incomplete {
+        pdf: String,
+        detail: String,
+    },
     AlreadyInLibrary {
         note: String,
     },
@@ -306,6 +310,7 @@ impl<'a> WorkerPass<'a> {
                     });
                 }
                 CreatedIntake::Queued { reason, detail } => {
+                    let incomplete = reason == "incomplete";
                     let queued = if detail.is_empty() {
                         reason.clone()
                     } else {
@@ -323,9 +328,13 @@ impl<'a> WorkerPass<'a> {
                     let _ = fs::remove_file(running);
                     self.outcomes.push(RunOutcome {
                         display: job.display.clone(),
-                        line: OutcomeLine::Clipped {
-                            pdf,
-                            reason: queued,
+                        line: if incomplete {
+                            OutcomeLine::Incomplete { pdf, detail }
+                        } else {
+                            OutcomeLine::Clipped {
+                                pdf,
+                                reason: queued,
+                            }
                         },
                     });
                 }
@@ -583,6 +592,7 @@ fn print_run_report(outcomes: &[RunOutcome], quiet: bool) {
         let key = match &outcome.line {
             OutcomeLine::Filed { .. } => "filed",
             OutcomeLine::Clipped { .. } => "clipped",
+            OutcomeLine::Incomplete { .. } => "clipped",
             OutcomeLine::AlreadyInLibrary { .. } => "already in library",
             OutcomeLine::AlreadyQueued { .. } => "already queued",
             OutcomeLine::FellBack { .. } => "fell back",
@@ -613,6 +623,13 @@ fn render_outcome_line(
         OutcomeLine::Clipped { pdf, reason } => {
             format!(
                 "{} clipped {display} → {} (queued: {reason})",
+                styler.green("✓"),
+                styler.cyan(pdf)
+            )
+        }
+        OutcomeLine::Incomplete { pdf, detail } => {
+            format!(
+                "{} clipped {display} → {} (incomplete: stopped after moving into lib/; bob ref scan finishes it: {detail})",
                 styler.green("✓"),
                 styler.cyan(pdf)
             )

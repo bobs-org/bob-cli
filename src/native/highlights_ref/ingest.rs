@@ -610,6 +610,11 @@ fn lock_ingest_at(
 pub(crate) fn ingest_url(
     request: &IngestRequest,
 ) -> Result<IngestOutcome, IngestError> {
+    let keep_reason = match super::intake::ingest_on_create() {
+        Ok((true, _)) => None,
+        Ok((false, why)) => Some(why),
+        Err(error) => return Err(ingest_error(error.to_string(), None)),
+    };
     let config = Config::for_vault(request.bob_dir);
     let (url, arxiv) = super::target::resolve_url_syntactic(request.url)
         .map_err(command_error)?;
@@ -705,7 +710,7 @@ pub(crate) fn ingest_url(
             }
         }
     };
-    apply_intake(request, &config, outcome)
+    apply_intake(request, &config, outcome, keep_reason)
 }
 
 /// Map a refusing dedupe hit to its typed outcome.
@@ -756,6 +761,7 @@ fn apply_intake(
     request: &IngestRequest,
     config: &Config,
     outcome: IngestOutcome,
+    keep_reason: Option<&'static str>,
 ) -> Result<IngestOutcome, IngestError> {
     let IngestOutcome::Created {
         pdf,
@@ -767,11 +773,6 @@ fn apply_intake(
     } = outcome
     else {
         return Ok(outcome);
-    };
-    let keep_reason = match super::intake::ingest_on_create() {
-        Ok((true, _)) => None,
-        Ok((false, why)) => Some(why),
-        Err(error) => return Err(ingest_error(error.to_string(), None)),
     };
     let source = config.bob_dir.join(&pdf);
     let unit =
@@ -861,7 +862,7 @@ fn map_created_intake(
             (
                 vault_relative_path_value(config, &lib_pdf),
                 CreatedIntake::Queued {
-                    reason: "refused".to_string(),
+                    reason: "incomplete".to_string(),
                     detail: error,
                 },
             )

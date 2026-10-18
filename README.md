@@ -191,8 +191,9 @@ separate steps:
    token sends them to another note; scheduled checkbox-bearing captures start
    Blocked (`[?]`). An eligible bare public link queues a background clip
    (`-R` keeps it a task). Append a standalone `%` to request companion audio
-   (`https://example.com/article %`). The confirmation says reading queue;
-   `bob ref list` shows the note after `bob ref scan`.
+   (`https://example.com/article %`). The confirmation says reading queue.
+   The background job files the note when it runs; a queued clip appears in
+   `bob ref list` after the host's intake drain (`bob ref scan -i`).
 2. **Review and choose work** with the read-only reports `bob plan`,
    `bob freshness`, `bob ready`, and `bob stats`; confirm or revise ordinary
    tasks in Obsidian, and complete due recurring or checklist rows. After
@@ -247,8 +248,8 @@ Paths below are relative to `BOB_DIR` (`~/bob` by default):
 | `img/`, `file/` | Images and saved clipboard snippets written by `bob capture` |
 | `_conflicts/` | Local copies of vault files `bob vault-sync` could not merge |
 | `.obsidian/plugins/` | Installed community plugins, including Bob's custom plugins |
-| `xlib/` | Highlights intake PDFs from `bob ref create` (web article targets) |
-| `lib/` | Highlights library PDFs after `bob ref scan` |
+| `xlib/` | Host-local intake queue: PDFs kept with `-k` or queued when inline intake could not run |
+| `lib/` | Library PDFs, filed by `bob ref create` and its producers, or by `bob ref scan` for queued items |
 | `old_lib/` | Archival predecessor of `lib/`; tracked in the vault Git repo, which is now the vault's only sync channel |
 | `ref/` | Generated Highlights reference notes |
 
@@ -342,8 +343,9 @@ bob capture [OPTIONS] [--] [TEXT]...
 Captures tasks, ordinary Markdown bullets, task sub-bullets, or bare public
 links without opening desktop Obsidian. Tasks default to `mac_inbox.md`.
 An eligible bare public URL queues a background reference job. The
-confirmation says the link is queued for the reading queue; the note appears
-in `bob ref list` after `bob ref scan`. Use `-R, --no-ref` to keep a link as
+confirmation says the link is queued for the reading queue. The background
+job files the note when it runs; a queued clip appears in `bob ref list`
+after the host's intake drain (`bob ref scan -i`). Use `-R, --no-ref` to keep a link as
 an inbox task. Extra prose or an explicit destination also keeps it a task.
 Hosts without a dot (`http://go/x`, `localhost`), IP literals, and the
 default excluded hosts (`google.com`, `googleplex.com`, `youtube.com`,
@@ -980,7 +982,7 @@ The full command contract lives in [`docs/gkeep.md`](docs/gkeep.md).
 ## Reference library (bob ref)
 
 ```bash
-bob ref create <TARGET>... [-A|--author NAME] [-a|--audio PATH] [-b|--bob-dir PATH] [-C|--closed] [-d|--dry-run] [-f|--force] [-H|--html FILE] [-i|--include-id] [-l|--lib-dir PATH] [-L|--listen] [-M|--plain] [-N|--name STEM] [-n|--no-audio] [-o|--output PDF] [-P|--parent NOTE] [-p|--published DATE] [-r|--ref-dir PATH] [-S|--section HEADING]... [-s|--status STATUS] [-T|--title TITLE] [-t|--ref-type DIR] [-x|--xlib-dir PATH]
+bob ref create <TARGET>... [-A|--author NAME] [-a|--audio PATH] [-b|--bob-dir PATH] [-C|--closed] [-d|--dry-run] [-f|--force] [-H|--html FILE] [-i|--include-id] [-k|--keep-intake] [-l|--lib-dir PATH] [-L|--listen] [-M|--plain] [-N|--name STEM] [-n|--no-audio] [-o|--output PDF] [-P|--parent NOTE] [-p|--published DATE] [-r|--ref-dir PATH] [-S|--section HEADING]... [-s|--status STATUS] [-T|--title TITLE] [-t|--ref-type DIR] [-x|--xlib-dir PATH]
 bob ref doctor [-b|--bob-dir PATH] [-l|--lib-dir PATH] [-n|--no-hooks] [-r|--ref-dir PATH] [-x|--xlib-dir PATH]
 bob ref find <QUERY>... [-b|--bob-dir PATH] [-f|--format human|json|markdown] [-i|--include-intake] [-m|--min-score SCORE] [-r|--ref-dir PATH] [-x|--xlib-dir PATH]
 bob ref jobs [list] [-a|--all] [-f|--format human|json]
@@ -990,23 +992,24 @@ bob ref migrate-tasks [-b|--bob-dir DIR] [-f|--format human|json|tsv] [-m|--map 
 bob ref migrate-zorg [-b|--bob-dir PATH] [-f|--format human|json] [-o|--offline] [-r|--ref-dir PATH] [-w|--write]
 bob ref marker <pdf> [-b|--bob-dir PATH] [-l|--lib-dir PATH] [-r|--ref-dir PATH] [-x|--xlib-dir PATH]
 bob ref rename <REF> <NAME> [-b|--bob-dir PATH] [-d|--dry-run] [-f|--format human|json] [-l|--lib-dir PATH] [-o|--offline] [-r|--ref-dir PATH] [-x|--xlib-dir PATH]
-bob ref scan [-b|--bob-dir PATH] [-d|--dry-run] [-f|--format human|json] [-j|--jobs N] [-l|--lib-dir PATH] [-n|--no-hooks] [-r|--ref-dir PATH] [-v|--verbose] [-w|--write-pdfs] [-x|--xlib-dir PATH]
+bob ref scan [-b|--bob-dir PATH] [-d|--dry-run] [-f|--format human|json] [-i|--intake-only] [-j|--jobs N] [-l|--lib-dir PATH] [-n|--no-hooks] [-r|--ref-dir PATH] [-v|--verbose] [-w|--write-pdfs] [-x|--xlib-dir PATH]
 bob ref show <REF>... [-b|--bob-dir PATH] [-c|--comments-only] [-f|--format human|json|markdown] [-N|--no-annotations] [-r|--ref-dir PATH]
 bob ref sync <pdf> [-b|--bob-dir PATH] [-d|--dry-run] [-l|--lib-dir PATH] [-p|--prefer marker|frontmatter] [-r|--ref-dir PATH] [-w|--write-pdf] [-x|--xlib-dir PATH]
 bob ref today <REF> [-b|--bob-dir PATH] [-d|--dry-run] [-e|--exact] [-f|--format human|json] [-p|--pomodoro NAME] [-P|--pomodoro-ref LINE:DIGEST] [-r|--ref-dir PATH]
 ```
 
 Looks up and reads the reference library, imports material as Highlights-ready
-PDFs, and syncs annotations into Obsidian reference notes. `create` writes
-intake PDFs; `scan` produces reference notes; `list` reads those notes. An
-intake PDF or pending job does not appear in `ref list` until a scan creates
-its note. `bob ref clip` remains a hidden alias of `create`.
+PDFs, and syncs annotations into Obsidian reference notes. `create` files the
+PDF, reference note, and reading task; `scan` drains the `xlib/` queue and
+syncs annotations; `list` reads those notes. A queued or kept PDF appears in
+`ref list` after the host's intake drain (`bob ref scan -i`). `bob ref clip`
+remains a hidden alias of `create`.
 
-- By default, `create <TARGET>...` renders a vault note into
-  `xlib/notes/<note-stem>_<YYMMDD>.pdf`, other Markdown into
-  `xlib/chat/<stem>.pdf`, or a web article into `xlib/blogs/<stem>.pdf`.
+- By default, `create <TARGET>...` files a vault note into
+  `lib/notes/<note-stem>_<YYMMDD>.pdf`, other Markdown into
+  `lib/chat/<stem>.pdf`, or a web article into `lib/blogs/<stem>.pdf`.
   Local PDFs, PDF URLs, and arXiv papers are stamped into
-  `xlib/papers/<stem>.pdf`. Two to twenty web article URLs produce one
+  `lib/papers/<stem>.pdf`. Two to twenty web article URLs produce one
   collection PDF. Vault notes infer an area/project parent from the note
   itself or its `parent:` links. Pass `-P, --parent` if none is eligible
   or for other targets.
@@ -1018,8 +1021,9 @@ its note. `bob ref clip` remains a hidden alias of `create`.
   complete PDF path and conflicts with `--ref-type` and `--name`.
   `-L, --listen` narrates with `highlights.listen_command` and binds companion
   audio; it conflicts with `-a` and `-n`. `-H, --html` replays a saved web
-  page. Intake and library PDFs are discovered by `scan`; PDFs outside both
-  directories need `bob ref sync <PDF>`. Creation refuses URLs already recorded
+  page. Create files managed intake and library PDFs inline; `scan` drains
+  queued PDFs and repairs notes or annotations. PDFs outside both directories
+  need `bob ref sync <PDF>`. Creation refuses URLs already recorded
   in PDF-backed reference notes even with `--force`; that flag can replace
   the same queued intake target.
   See [target types, dependencies, and dedupe](docs/highlights-create.md) and

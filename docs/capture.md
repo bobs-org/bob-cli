@@ -2,8 +2,9 @@
 
 `bob capture` writes tasks and bullets, queues bare public links as background
 reference jobs, and manages Pomodoro sessions without opening desktop
-Obsidian. The job confirmation says reading queue; `bob ref list` shows the
-note after `bob ref scan`. Companion commands
+Obsidian. The job confirmation says reading queue. The background job files
+the note when it runs; a queued clip appears in `bob ref list` after the
+host's intake drain (`bob ref scan -i`). Companion commands
 parse in-progress drafts, complete markers and wikilinks, list routes and
 tasks, assign block IDs, and name Pomodoros.
 Bob Mac Capture is the macOS menu-bar frontend: it owns the hotkey and panel,
@@ -867,8 +868,9 @@ parent source is `explicit`, `global`, or `default`. A new link prints
 `queued example.com/essay → sase` with the detail
 `new to your library · reading task lands in sase.md` (or `→ mac_inbox` with
 `file it later` for the default inbox). That line means the job was saved.
-The reading queue in `bob ref list` is the reference note, and it appears
-after `bob ref scan`. Quote the URL when the shell would treat `#` as a
+The reading queue in `bob ref list` is the reference note. The background job
+files it when it runs; a queued clip appears after the host's intake drain
+(`bob ref scan -i`). Quote the URL when the shell would treat `#` as a
 comment.
 
 Append a standalone `%` immediately after the URL (the next

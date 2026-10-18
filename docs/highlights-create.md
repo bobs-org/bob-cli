@@ -161,7 +161,7 @@ is a hidden compatibility alias for `create` with the same targets and options.
 
 Two to twenty web-article URLs passed to one `create` invocation become one
 reference and one PDF. The URLs stay in argument order. The collection has one
-reading task after `bob ref scan`, one annotation space, and one optional listen
+reading task when `create` files it, one annotation space, and one optional listen
 episode. Use it for material you'll read as one unit; capture an ongoing series
 part by part under the same `-P`. A collection is a snapshot: `create` does not
 add parts to an existing collection.

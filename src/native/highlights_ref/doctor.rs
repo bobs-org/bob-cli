@@ -68,7 +68,7 @@ fn intake_last_summary() -> String {
                 "failure {} ago ({}: {})",
                 age(&fail.at),
                 fail.reason,
-                fail.message
+                one_line_message(&fail.message)
             ),
         ));
     }
@@ -81,6 +81,24 @@ fn intake_last_summary() -> String {
         .map(|(_, text)| text)
         .collect::<Vec<_>>()
         .join(" · ")
+}
+
+/// First non-empty line of a recorded failure, trimmed and capped so the
+/// doctor row stays on one line.
+fn one_line_message(message: &str) -> String {
+    let line = message
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("");
+    const MAX: usize = 120;
+    let mut chars = line.chars();
+    let truncated: String = chars.by_ref().take(MAX).collect();
+    if chars.next().is_some() {
+        format!("{truncated}…")
+    } else {
+        truncated
+    }
 }
 
 pub(super) fn doctor_vault(config: &Config, no_hooks: bool) -> Result<()> {

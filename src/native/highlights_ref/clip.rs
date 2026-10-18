@@ -2,7 +2,8 @@
 //!
 //! It captures reader-mode HTML through the pinned web-clip adapter
 //! (protocol v1), stamps the rendered PDF with provenance, and installs
-//! it into the Highlights intake. `scan` writes the ref note.
+//! it into the Highlights intake. Create-time intake writes the ref
+//! note unless the PDF is kept or queued.
 
 use std::{
     ffi::OsString,

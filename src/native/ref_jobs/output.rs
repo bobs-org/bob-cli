@@ -149,10 +149,22 @@ fn print_list_human(view: &JobsView, all: bool) {
         );
         println!("  {glyph} {state}  {display}  {detail}");
     }
-    if view.jobs.iter().any(|job| job.state == JobState::Clipped) {
+    let ordinary_queued = view
+        .jobs
+        .iter()
+        .any(|job| job.state == JobState::Clipped && !clip_stopped_in_lib(job));
+    let incomplete = view.jobs.iter().any(clip_stopped_in_lib);
+    if ordinary_queued || incomplete {
         println!();
+    }
+    if ordinary_queued {
         println!(
             "next: bob ref scan -i files queued PDFs (the bob-ref-intake timer drains them on athena and apollo)"
+        );
+    }
+    if incomplete {
+        println!(
+            "next: bob ref scan finishes PDFs that stopped after moving into lib/"
         );
     }
 }
@@ -181,6 +193,15 @@ fn extra_paint_width(state: JobState, styler: &Styler) -> usize {
     } else {
         0
     }
+}
+
+/// Incomplete intake leaves the PDF in `lib/` while `intake` stays `queued`.
+fn clip_stopped_in_lib(job: &ListedJob) -> bool {
+    job.state == JobState::Clipped
+        && job
+            .pdf
+            .as_deref()
+            .is_some_and(|pdf| pdf.starts_with("lib/"))
 }
 
 fn row_detail(job: &ListedJob, styler: &Styler) -> String {

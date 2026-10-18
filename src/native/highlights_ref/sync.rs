@@ -362,7 +362,8 @@ pub(super) fn plan_pdf_sync(
     if marker_write_needed && !options.write_pdf && !options.dry_run {
         return Err(CommandError::new(
             "reference note changed but --write-pdf was not supplied; refusing to update the PDF marker",
-        ));
+        )
+        .with_code("needs_write_pdfs"));
     }
 
     let sidecar = read_sidecar_for_pdf(pdf)?;
@@ -677,7 +678,8 @@ fn plan_pdf_sync_v2(
     if semantic_needed && !options.write_pdf && !options.dry_run {
         return Err(CommandError::new(
             "reference note changed but --write-pdf was not supplied; refusing to update the PDF marker",
-        ));
+        )
+        .with_code("needs_write_pdfs"));
     }
     let (rendered_marker, marker_write_needed) = match residence.as_deref() {
         Some(route) => {

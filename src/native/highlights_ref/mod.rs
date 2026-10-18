@@ -406,9 +406,19 @@ fn record_scan_status(
     const COMMAND: &str = "bob ref scan";
     let Some(queued) = queued else { return };
     match failure {
-        None => intake_status::record_success(COMMAND, queued),
+        None => {
+            if let Some(warning) =
+                intake_status::record_success(COMMAND, queued)
+            {
+                eprintln!("{warning}");
+            }
+        }
         Some((reason, message)) => {
-            intake_status::record_failure(COMMAND, reason, &message);
+            if let Some(warning) =
+                intake_status::record_failure(COMMAND, reason, &message)
+            {
+                eprintln!("{warning}");
+            }
         }
     }
 }

@@ -3029,15 +3029,27 @@ fn print_human_ref_row(
                     );
                 }
                 CreatedIntake::Queued { reason, detail } => {
-                    let queued = if detail.is_empty() {
-                        reason.clone()
+                    if reason == "incomplete" {
+                        let detail = if detail.is_empty() {
+                            "stopped after moving into lib/".to_string()
+                        } else {
+                            detail.clone()
+                        };
+                        println!(
+                            "  {} {display}{listen_suffix}  incomplete → {pdf} (stopped after moving into lib/; bob ref scan finishes it: {detail}) → {parent}{audio_suffix}{suffix}",
+                            styler.green("✓"),
+                        );
                     } else {
-                        format!("{reason}: {detail}")
-                    };
-                    println!(
-                        "  {} {display}{listen_suffix}  queued → {pdf} ({queued}) → {parent}{audio_suffix}{suffix}",
-                        styler.green("✓"),
-                    );
+                        let queued = if detail.is_empty() {
+                            reason.clone()
+                        } else {
+                            format!("{reason}: {detail}")
+                        };
+                        println!(
+                            "  {} {display}{listen_suffix}  queued → {pdf} ({queued}) → {parent}{audio_suffix}{suffix}",
+                            styler.green("✓"),
+                        );
+                    }
                 }
             }
         }

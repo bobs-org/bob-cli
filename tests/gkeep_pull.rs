@@ -1329,6 +1329,58 @@ fn url_only_pdf_note_clips_and_archives_without_task() {
 }
 
 #[test]
+fn url_only_pdf_note_files_into_a_synced_vault() {
+    let (env, fake, state, _token) = setup("bob-cli-gkeep-pull-ref-filed");
+    env.init_synced_origin();
+    let (curl, root, log) = write_clip_curl(state.path());
+    let n1 = note("")
+        .id("note-1")
+        .text("https://example.com/paper.pdf")
+        .build();
+    fake.respond("snapshot", &snapshot_ok("bryanbugyi34@gmail.com", vec![n1]));
+    fake.respond("archive", &archive_ok(vec![("note-1", "archived")]));
+    let extra = curl_env(&curl, &root, &log);
+
+    let out = run_pull(&env, &fake, &state, &[], &extra);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let body = stdout(&out);
+    assert!(
+        body.contains(
+            "filed → lib/papers/paper.pdf → ref/papers/paper.md → gkeep_inbox"
+        ),
+        "filed row:\n{body}"
+    );
+    assert!(env.vault().join("lib/papers/paper.pdf").is_file());
+    assert!(env.vault().join("ref/papers/paper.md").is_file());
+    assert!(!env.vault().join("xlib/papers/paper.pdf").exists());
+    let events = ref_events(&state);
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0]["path"], "lib/papers/paper.pdf");
+
+    let (env, fake, state, _token) = setup("bob-cli-gkeep-pull-ref-filed-json");
+    env.init_synced_origin();
+    let (curl, root, log) = write_clip_curl(state.path());
+    let n1 = note("")
+        .id("note-1")
+        .text("https://example.com/paper.pdf")
+        .build();
+    fake.respond("snapshot", &snapshot_ok("bryanbugyi34@gmail.com", vec![n1]));
+    fake.respond("archive", &archive_ok(vec![("note-1", "archived")]));
+    let extra = curl_env(&curl, &root, &log);
+    let out = run_pull(&env, &fake, &state, &["-f", "json"], &extra);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let doc: serde_json::Value =
+        serde_json::from_str(&stdout(&out)).expect("json parses");
+    assert_eq!(doc["notes"][0]["clip"]["outcome"], "created");
+    assert_eq!(doc["notes"][0]["clip"]["intake"], "ingested");
+    assert_eq!(doc["notes"][0]["clip"]["pdf"], "lib/papers/paper.pdf");
+    assert_eq!(doc["notes"][0]["clip"]["note"], "ref/papers/paper.md");
+    let events = ref_events(&state);
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0]["path"], "lib/papers/paper.pdf");
+}
+
+#[test]
 fn second_note_with_same_url_reports_already_queued() {
     let (env, fake, state, _token) = setup("bob-cli-gkeep-pull-ref-queued");
     let (curl, root, log) = write_clip_curl(state.path());

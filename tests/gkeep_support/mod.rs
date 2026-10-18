@@ -116,6 +116,11 @@ impl GkeepEnv {
                 "BOB_VAULT_SYNC_LOCK_FILE",
                 self.dir.path().join("bob_sync.lock"),
             )
+            .env(
+                "BOB_VAULT_SYNC_STATE_FILE",
+                self.dir.path().join("vault-sync.json"),
+            )
+            .env("BOB_REF_INTAKE_LOCK_WAIT_SECONDS", "0")
             .env("XDG_STATE_HOME", self.dir.path().join("state"))
             .env("HOME", self.dir.path().join("home"))
             .env("GIT_CONFIG_NOSYSTEM", "1")
@@ -128,6 +133,49 @@ impl GkeepEnv {
             )
             .env("BOB_HIGHLIGHTS_CURL", "/bin/false");
         command
+    }
+
+    /// Initialize this vault as a Git worktree with a bare origin so
+    /// create-time intake can pull, commit, and push.
+    pub(crate) fn init_synced_origin(&self) {
+        let remote = self.dir.path().join("remote.git");
+        let output = isolate_git(&mut Command::new("git"))
+            .args(["init", "-q", "--bare"])
+            .arg(&remote)
+            .output()
+            .expect("git init --bare");
+        assert!(
+            output.status.success(),
+            "git init --bare failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let output = isolate_git(&mut Command::new("git"))
+            .arg("--git-dir")
+            .arg(&remote)
+            .args(["symbolic-ref", "HEAD", "refs/heads/master"])
+            .output()
+            .expect("set bare HEAD");
+        assert!(
+            output.status.success(),
+            "set bare HEAD failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        init_git(&self.vault);
+        git(&self.vault, &["symbolic-ref", "HEAD", "refs/heads/master"]);
+        git(
+            &self.vault,
+            &[
+                "remote",
+                "add",
+                "origin",
+                remote.to_str().expect("remote path is utf8"),
+            ],
+        );
+        fs::write(self.vault.join(".gitignore"), "/xlib/\n")
+            .expect("write xlib gitignore");
+        git(&self.vault, &["add", "-A"]);
+        git(&self.vault, &["commit", "-q", "-m", "seed vault"]);
+        git(&self.vault, &["push", "-q", "-u", "origin", "master"]);
     }
 
     /// Write the fake adapter and return its path; the caller opts in

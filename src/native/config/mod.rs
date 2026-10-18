@@ -854,6 +854,17 @@ highlights:
 
         assert_eq!(enabled.ingest_on_create(), Some(true));
         assert_eq!(disabled.ingest_on_create(), Some(false));
+
+        let absent = parse_highlights_config(
+            "highlights:\n  pre_scan_hook: none\n",
+            Path::new("/config.yml"),
+        )
+        .expect("valid config without ingest_on_create");
+        assert_eq!(
+            absent.ingest_on_create(),
+            None,
+            "omitting ingest_on_create leaves the default (on)"
+        );
     }
 
     #[test]

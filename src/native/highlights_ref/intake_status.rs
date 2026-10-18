@@ -64,18 +64,24 @@ pub(super) fn age_secs(at: &str) -> Option<i64> {
 }
 
 /// Record an intake that finished without leaving anything queued.
-pub(super) fn record_success(command: &str, filed: usize) {
+/// Returns a warning when the status file could not be written.
+pub(super) fn record_success(command: &str, filed: usize) -> Option<String> {
     update(|status| {
         status.last_success = Some(LastSuccess {
             at: now(),
             command: command.to_string(),
             filed,
         });
-    });
+    })
 }
 
 /// Record an intake that queued an item, stopped, or could not start.
-pub(super) fn record_failure(command: &str, reason: &str, message: &str) {
+/// Returns a warning when the status file could not be written.
+pub(super) fn record_failure(
+    command: &str,
+    reason: &str,
+    message: &str,
+) -> Option<String> {
     update(|status| {
         status.last_failure = Some(LastFailure {
             at: now(),
@@ -83,15 +89,18 @@ pub(super) fn record_failure(command: &str, reason: &str, message: &str) {
             reason: reason.to_string(),
             message: message.to_string(),
         });
-    });
+    })
 }
 
-fn update(change: impl FnOnce(&mut IntakeStatus)) {
+fn update(change: impl FnOnce(&mut IntakeStatus)) -> Option<String> {
     let mut status = read().unwrap_or_default();
     status.schema_version = SCHEMA_VERSION;
     change(&mut status);
-    if let Err(error) = write(&status) {
-        eprintln!("warning: could not record intake status: {error}");
+    match write(&status) {
+        Ok(()) => None,
+        Err(error) => {
+            Some(format!("warning: could not record intake status: {error}"))
+        }
     }
 }
 

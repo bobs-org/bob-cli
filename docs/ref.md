@@ -25,7 +25,7 @@ plans copies of zorg-era `status::` reading records into legacy notes under
 | Read a reference today | `bob ref today <REF> [-p NAME]` | Set its reading task Next and link it under today's Pomodoro |
 | Fix a reference's file name | `bob ref rename <REF> <NAME> -d`, then without `-d` | Move the note, PDF, and companions, update links, and make the reference id follow its stem while keeping the reading task |
 | Import a URL, local PDF, or Markdown file now | `bob ref create <TARGET> -P <parent>` | File the PDF, note, and reading task inline; use `-k` to queue it in `xlib/` |
-| Save a bare public link quickly | `bob capture '<URL>'` | Queue a background job when the routing policy admits the URL; the note appears in `ref list` after `bob ref scan` |
+| Save a bare public link quickly | `bob capture '<URL>'` | Queue a background job when the routing policy admits the URL; the job files the note when it runs, and a queued clip appears in `ref list` after the host's intake drain (`bob ref scan -i`) |
 | Inspect or process background imports | `bob ref jobs`, `bob ref jobs run` | List jobs, or fetch pending links; see [ref jobs](ref-jobs.md) |
 | Drain queued PDFs | `bob ref scan -i` (`--intake-only`) | File only the PDFs and late audio queued in `xlib/` (pull, note, reading task, one commit each, push); exits 1 while anything stays queued |
 | Repair references or sync annotations | `bob ref scan --dry-run`, then `bob ref scan` | Preview, then process queued PDFs and sync notes/annotations |

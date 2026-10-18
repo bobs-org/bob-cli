@@ -1823,9 +1823,10 @@ fn listen_attach_files_audio_for_a_library_capture() {
     assert!(!vault.join("xlib/papers/ea_graph.mp3").exists());
     let note = std::fs::read_to_string(vault.join("ref/papers/ea_graph.md"))
         .expect("note");
+    assert!(note.contains("audio:"), "missing audio frontmatter: {note}");
     assert!(
-        note.contains("audio:") || note.contains("lib/papers/ea_graph.mp3"),
-        "{note}"
+        note.contains("![[lib/papers/ea_graph.mp3]]"),
+        "missing player embed: {note}"
     );
     let log =
         String::from_utf8(git_in(&vault, ["log", "-1", "--format=%s"]).stdout)
@@ -1833,6 +1834,16 @@ fn listen_attach_files_audio_for_a_library_capture() {
     assert!(
         log.contains("bob ref create: attach audio papers/ea_graph"),
         "{log}"
+    );
+    let changed = git_in(
+        &vault,
+        ["diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"],
+    );
+    let changed = String::from_utf8_lossy(&changed.stdout);
+    assert!(
+        changed.contains("lib/papers/ea_graph.mp3")
+            && changed.contains("ref/papers/ea_graph.md"),
+        "attach commit must name the mp3 and the note:\n{changed}"
     );
 }
 

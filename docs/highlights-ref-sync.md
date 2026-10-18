@@ -808,7 +808,7 @@ fixed: `ok`, `schema_version`, `command`, `generated_at`, `mode`,
 
 | Field | Meaning |
 | --- | --- |
-| `ok` | `true` exactly when `failures` is empty and there is no `error` |
+| `ok` | `true` exactly when `failures` is empty and there is no `error`. With `--intake-only`, a writing drain is also `false` when `queued` is nonempty; a dry run ignores `queued` |
 | `schema_version` | `1`; clients reject any other version |
 | `command` | `"ref scan"` |
 | `generated_at` | Local-time stamp, pinned by `BOB_NOW` in tests |
@@ -884,11 +884,11 @@ the shorter create-time waits (60 s and 30 s, overridable with
 
 The pre-scan hook runs under `bob_sync.lock`. A hook that itself runs
 `bob vault-sync` is a silent no-op: vault-sync skips when that lock is
-already held. The hook also runs with
-`BOB_HIGHLIGHTS_IN_PRE_SCAN_HOOK=1`, so a hook that shells back into
-`bob ref scan` never deadlocks on the scan lock. Human mode is otherwise
-byte-identical, except for the lock-wait lines on stderr and the
-`lock_busy` / `scan_busy` failures.
+already held. Bob exports `BOB_HIGHLIGHTS_IN_PRE_SCAN_HOOK=1` so a hook
+can detect it and avoid shelling back into `bob ref scan`. A nested
+writing scan would wait on the held locks and fail with `lock_busy`.
+Human mode is otherwise byte-identical, except for the lock-wait lines
+on stderr and the `lock_busy` / `scan_busy` failures.
 
 ## Generated Body Contract
 

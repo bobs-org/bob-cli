@@ -345,3 +345,45 @@ fn doctor_intake_last_row_reads_the_recorded_status() {
         "{report}"
     );
 }
+
+#[test]
+fn doctor_intake_last_row_keeps_a_multiline_message_on_one_line() {
+    let temp = TempDir::new("bob-cli-doctor-intake-last-multiline");
+    let vault = base_vault(&temp);
+    write_queued_note(&vault, "tracked");
+    commit_vault(&vault);
+    let state = temp.path().join("state");
+    let ago = (chrono::Local::now() - chrono::Duration::seconds(180))
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, false);
+    let long = "x".repeat(130);
+    write_file(
+        &state.join("bob-cli/ref/intake-status.json"),
+        &format!(
+            "{{\"schema_version\":1,\"last_success\":null,\"last_failure\":{{\"at\":\"{ago}\",\"command\":\"bob ref scan -i\",\"reason\":\"pre_sync_failed\",\"message\":\"\\n  {long}\\nremote: origin refused\\n\"}}}}"
+        ),
+    );
+
+    let output = bob_command()
+        .args(["ref", "doctor", "--no-hooks"])
+        .env("BOB_DIR", &vault)
+        .env("XDG_STATE_HOME", &state)
+        .output()
+        .expect("run bob ref doctor");
+    let report = stdout(&output);
+    let row = report
+        .lines()
+        .find(|line| line.starts_with("intake_last:"))
+        .unwrap_or_else(|| panic!("missing intake_last row:\n{report}"));
+    assert!(
+        !row.contains('\n') && row.contains('…'),
+        "intake_last must stay one truncated line: {row:?}\n{report}"
+    );
+    assert!(
+        row.contains("pre_sync_failed:") && row.contains(&"x".repeat(120)),
+        "{row}"
+    );
+    assert!(
+        !row.contains("remote: origin refused"),
+        "later lines must not spill: {row}"
+    );
+}
