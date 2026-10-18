@@ -3,6 +3,7 @@ status: ready
 parent: reading_list
 title: Synced Paper on Reference Indexing
 source_pdf: "[[lib/papers/synced_paper.pdf]]"
+audio: "[[lib/papers/synced_paper.mp3]]"
 source_pdf_sha256: abc123def456
 highlights_sidecar: "[[lib/papers/synced_paper.textbundle]]"
 highlights_count: 3

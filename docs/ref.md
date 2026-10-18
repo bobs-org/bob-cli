@@ -106,9 +106,10 @@ every `list`, `show`, and `find` row: true when the reading task selected
 by the rules above is Blocked `[?]`, false otherwise.
 The boolean is separate from `status` and `reading_state` — a blocked
 `next` row still reads `queued` in its lane — it only says the note is
-waiting on something else. Clients such as Bob Mac Capture's Refs panel
-and the coming Reading Board read Blocked from this field and never parse
-`reading_state_source`.
+waiting on something else. The Obsidian Reading Board reads Blocked from
+this field and never parses `reading_state_source`. Bob Mac Capture's Refs
+panel reads the row state, but its current inspector does not yet show the
+blocked reasons or task priority/schedule fields.
 
 `blocked_by` follows `blocked` on every row. It is always present, and
 it is `[]` when `blocked` is false or no reason remains on the selected
@@ -300,10 +301,10 @@ counts. Every row includes `marker_id`, the frontmatter `id`, or `null`
 when that id is absent. Each `task` object also carries `priority`
 (`highest | high | medium | low | lowest`, else `null`) and `scheduled`
 (a strict calendar date, past or future, else `null`), both read from
-the selected reading-task line. Bob Mac Capture's Refs panel and the
-coming Reading Board consume `blocked_by`, `task.priority`, and
-`task.scheduled`. The Obsidian [Reading Board](#reading-board-in-obsidian)
-draws these rows as lanes.
+the selected reading-task line. The Obsidian [Reading Board](#reading-board-in-obsidian)
+consumes `blocked_by`, `task.priority`, and `task.scheduled` to draw these
+rows as lanes. Bob Mac Capture's Refs panel currently ignores those keys;
+inspector support is tracked separately in `bob-cli-9f`.
 
 ## Reading Board in Obsidian
 
