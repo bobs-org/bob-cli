@@ -34,3 +34,4 @@ Examples:
   bob ref today <REF> -p reading                  Pull a reference into today's Pomodoro
   bob ref create <URL|PDF|MD> -L                  Capture a reference and narrate it
   bob ref scan                                    Sync Highlights PDFs into reference notes
+  bob ref scan -i                                 File queued xlib/ PDFs into the library

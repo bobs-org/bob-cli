@@ -45,6 +45,11 @@ sidecar when one is present. Top-level library PDFs and explicit out-of-library
 syncs keep the legacy `ref/<pdf-basename>.md` target. `marker <pdf>` inspects
 the same marker without writing.
 
+`scan --intake-only` (`-i`) is the drain for the `xlib/` queue: it files only
+the queued PDFs and late audio and leaves the annotation pass, and the
+pre-scan hook, to the full scan; see [Intake-only
+scan](#intake-only-scan).
+
 `scan` runs the configured pre-scan hook on writing runs, then moves pending
 PDFs from the configured intake directory into the mirrored library path
 together with same-stem companion audio (`.mp3`, `.m4a`, `.ogg`, `.opus`),
@@ -709,6 +714,61 @@ before and after its maintenance commands. Every sync rewrites the
 one-off sync self-heals to the library-relative path on the next scan after
 intake.
 
+### Intake-only scan
+
+`bob ref scan -i` (`--intake-only`) drains the local `xlib/` queue. A create
+that kept intake (`-k`, the config switch, or the environment switch) or could
+not run it (lock busy, no pull, collision, and the other queue reasons) leaves
+its PDF there; `scan -i` files it later with the same session `create` uses.
+It is meant for a per-host timer: each host drains its own `xlib/`, and the
+full `bob ref scan` stays the annotation sync and repair pass.
+
+```bash
+bob ref scan -i            # file everything queued on this host
+bob ref scan -i -d         # preview: what would be filed or stay queued
+bob ref scan -i -f json    # the same drain as one JSON line
+```
+
+What it does, in order:
+
+1. Validates the library layout.
+2. Lists the queue without taking any lock: every `xlib/` PDF (with its
+   same-stem Markdown, TextBundle, and audio companions), then every `xlib/`
+   audio file whose library PDF already exists. Audio with no PDF anywhere is
+   not drainable and is ignored. An empty queue prints `intake: nothing
+   queued`, takes no lock, runs no sync, and exits 0, so an idle timer costs
+   nothing.
+3. With `--dry-run`, prints `would ingest: xlib/… → lib/… → ref/…` (or `would
+   attach audio:`) per item and `would queue:` for items the local checks
+   already refuse, then exits 0. It takes no lock and does not pull, so a
+   collision that only the pulled tree reveals still appears at drain time.
+4. Otherwise opens one session (`bob_sync.lock`, then `scan.lock`) and pulls
+   once. Failing to take a lock, to find a Git worktree, to match `BOB_DIR`,
+   or to pull is a hard error: exit 1, nothing moved.
+5. Files each item in sorted order with its own commit, subject
+   `bob ref scan: ingest <type>/<stem>` (or `bob ref scan: attach audio
+   <type>/<stem>` for late audio). Planning or write refusals roll the move
+   back. An item that cannot be filed prints `queued: <xlib path> (<reason>:
+   <detail>)`, stays in `xlib/`, and the drain continues. An item that stops
+   after writing (`incomplete:`) ends the drain without a push, because the
+   uncommitted writes are not safe to publish; background vault-sync
+   publishes the commits already made.
+6. Pushes once at the end (`sync: pushed`, or `sync: push pending (…)`), then
+   prints `intake: filed N · queued M`.
+
+The exit code is 0 when everything was filed and 1 while any item stays queued
+or stopped, so a stuck item fails its timer run visibly. A library PDF that has
+no note is never touched; only a full scan repairs that.
+
+`--intake-only` ignores `highlights.ingest_on_create` and its environment
+switch, because running the drain is an explicit request. It skips the
+pre-scan hook, so JSON reports `hook.status: "skipped"`. It conflicts with
+`-w/--write-pdfs` (usage error, exit 2): new references never write PDF bytes.
+
+Typical order: `bob ref create` files the reference itself; `bob ref scan -i`
+drains whatever `create` had to queue; the full `bob ref scan` is the
+annotation sync (and repair) pass for PDFs that already live in `lib/`.
+
 ### JSON output
 
 `bob ref scan -f json` (equivalently `--format json`) prints the same scan as
@@ -723,11 +783,14 @@ nothing else: no intake lines, no per-PDF lines, no summary line, and no ANSI
 escapes. The `pre_scan_hook: run …` status line goes to stderr, and the hook
 child's stdout is redirected to bob's stderr, so a chatty hook cannot corrupt
 the report. `--format json` with `-v/--verbose` is a usage error (exit 2).
-JSON mode works with `--dry-run` too.
+JSON mode works with `--dry-run` too and with `--intake-only`, which reports
+filed notes in `notes`, completed PDF moves in `intake`, and anything still
+queued in `queued`.
 
 A successful or partially failed scan prints this envelope (field order is
 fixed: `ok`, `schema_version`, `command`, `generated_at`, `mode`,
-`write_pdfs`, `hook`, `intake`, `summary`, `notes`, `failures`):
+`write_pdfs`, `hook`, `intake`, `summary`, `notes`, `failures`,
+`intake_only`, `queued`):
 
 | Field | Meaning |
 | --- | --- |
@@ -748,10 +811,13 @@ fixed: `ok`, `schema_version`, `command`, `generated_at`, `mode`,
 | `notes[].ref_type`, `notes[].source_pdf` | Stable plan metadata; `source_pdf` is vault-relative |
 | `notes[].marker` | Whether this PDF's marker was (or would be) written back |
 | `failures` | One entry per per-PDF failure: `pdf` (vault-relative), `stage` (`"plan"` or `"write"`), and `message` (the same text the human report prints) |
+| `intake_only` | `true` for `scan --intake-only`, otherwise `false` |
+| `queued` | `scan --intake-only` items still waiting in `xlib/` (on a dry run, items that would stay queued) as `{pdf, reason, message}`; `reason` is a stable slug (`lock_busy`, `scan_busy`, `other_vault`, `outside_vault`, `not_a_worktree`, `pre_sync_failed`, `collision`, `too_large`, `refused`, `needs_write_pdfs`). Always `[]` for a normal scan |
 
 A hard failure prints the error envelope instead (`ok`, `schema_version`,
-`command`, `generated_at`, `mode`, `write_pdfs`, `intake`, `error`), where
-`intake` lists any moves that already happened before the failure.
+`command`, `generated_at`, `mode`, `write_pdfs`, `intake`, `error`,
+`intake_only`, `queued`), where `intake` lists any moves that already happened
+before the failure. `queued` is always `[]` there.
 `error.hint` is a string or `null`; `error.paths` is always an array of
 vault-relative paths. Exit codes: 0 means `ok: true`; 1 means per-PDF
 failures (the full envelope above, `ok: false`) or a hard failure (the error
@@ -762,6 +828,8 @@ no JSON on stdout.
 | --- | --- |
 | `lock_busy` | The vault-maintenance lock stayed held past the wait (see below) |
 | `scan_busy` | The writer lock stayed held past the wait (see below) |
+| `pre_sync_failed` | `scan --intake-only` could not pull from the remote, or the pull left conflicts |
+| `not_a_worktree`, `other_vault`, `outside_vault` | `scan --intake-only` refused the vault: it is not a Git worktree, differs from `BOB_DIR`, or has a configured directory outside it |
 | `hook_failed` | The pre-scan hook failed to spawn or exited non-zero |
 | `intake_collision` | An intake destination already exists (`paths`: the colliding destinations) |
 | `output_collision` | Two PDFs map to one note or asset path (`paths`: the colliding targets) |
@@ -796,6 +864,9 @@ scan lock, a scan prints `waiting for another bob ref scan to finish…`
 once to stderr and retries the same way, then fails with `scan_busy`.
 Both waits are overridable with the internal
 `BOB_REF_SCAN_LOCK_WAIT_SECONDS` environment variable, for tests.
+`scan --intake-only` takes the same two locks in the same order, but with
+the shorter create-time waits (60 s and 30 s, overridable with
+`BOB_REF_INTAKE_LOCK_WAIT_SECONDS`) and holds them for the whole drain.
 
 The pre-scan hook runs under `bob_sync.lock`. A hook that itself runs
 `bob vault-sync` is a silent no-op: vault-sync skips when that lock is

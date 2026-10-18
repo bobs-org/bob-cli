@@ -4,7 +4,9 @@ use crate::support::*;
 use fs2::FileExt;
 use std::{fs, path::Path, process::Command};
 
-fn create_fixture(temp: &TempDir) -> (std::path::PathBuf, std::path::PathBuf) {
+pub(super) fn create_fixture(
+    temp: &TempDir,
+) -> (std::path::PathBuf, std::path::PathBuf) {
     let pdf = temp.path().join("rendered.pdf");
     write_highlights_pdf_pages(&pdf, &[&[]]);
     let pandoc = temp.path().join("pandoc");
@@ -15,7 +17,7 @@ fn create_fixture(temp: &TempDir) -> (std::path::PathBuf, std::path::PathBuf) {
     (pdf, pandoc)
 }
 
-fn seed_parent(vault: &Path) {
+pub(super) fn seed_parent(vault: &Path) {
     write_file(
         &vault.join("sase.md"),
         "---\ntype: \"[[area]]\"\n---\n\n# SASE\n",
@@ -23,7 +25,7 @@ fn seed_parent(vault: &Path) {
     write_file(&vault.join(".gitignore"), "/xlib/\n");
 }
 
-fn create_command(
+pub(super) fn create_command(
     temp: &TempDir,
     vault: &Path,
     source: &Path,
@@ -56,7 +58,7 @@ fn create_command(
     command
 }
 
-fn seed_synced_vault(
+pub(super) fn seed_synced_vault(
     temp: &TempDir,
 ) -> (std::path::PathBuf, std::path::PathBuf) {
     let (vault, _remote, peer) = init_vault_sync_pair(temp);

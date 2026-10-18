@@ -1561,9 +1561,13 @@ fn ref_scan_json_success_envelope_names_created_and_updated_notes() {
             "summary",
             "notes",
             "failures",
+            "intake_only",
+            "queued",
         ],
     );
     assert_eq!(document["ok"], true);
+    assert_eq!(document["intake_only"], false);
+    assert_eq!(document["queued"], serde_json::json!([]));
     assert_eq!(document["schema_version"], 1);
     assert_eq!(document["command"], "ref scan");
     assert_eq!(document["generated_at"], "2026-10-06T12:00:00");
@@ -1843,11 +1847,15 @@ fn ref_scan_json_dirty_targets_error_envelope() {
             "write_pdfs",
             "intake",
             "error",
+            "intake_only",
+            "queued",
         ],
     );
     assert_eq!(document["ok"], false);
     assert_eq!(document["mode"], "write");
     assert_eq!(document["intake"], serde_json::json!([]));
+    assert_eq!(document["intake_only"], false);
+    assert_eq!(document["queued"], serde_json::json!([]));
     let error = &document["error"];
     assert_scan_json_key_order(
         &output,

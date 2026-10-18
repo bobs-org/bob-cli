@@ -339,6 +339,14 @@ fn run_scan(matches: &ArgMatches, no_hooks: bool) -> i32 {
         return 2;
     }
     let config = Config::from_matches(matches);
+    if matches.get_flag("intake-only") {
+        let dry_run = matches.get_flag("dry-run");
+        return if json {
+            scan_intake_only_json(&config, dry_run)
+        } else {
+            intake::scan_intake_only(&config, dry_run)
+        };
+    }
     let options = SyncOptions {
         dry_run: matches.get_flag("dry-run"),
         write_pdf: matches.get_flag("write-pdfs"),

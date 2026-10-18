@@ -68,6 +68,16 @@ struct ScanJsonFailure {
     message: String,
 }
 
+/// One `--intake-only` item that is still queued in `xlib/` (or would be
+/// on a dry run): vault-relative PDF or audio path, a stable
+/// [`QueueReason`] slug, and the human detail.
+#[derive(Debug, Clone, Serialize)]
+struct ScanJsonQueued {
+    pdf: String,
+    reason: &'static str,
+    message: String,
+}
+
 /// Success and partial-failure envelope. Field order is the contract.
 #[derive(Debug, Clone, Serialize)]
 struct ScanReportEnvelope {
@@ -82,6 +92,8 @@ struct ScanReportEnvelope {
     summary: ScanJsonSummary,
     notes: Vec<ScanJsonNote>,
     failures: Vec<ScanJsonFailure>,
+    intake_only: bool,
+    queued: Vec<ScanJsonQueued>,
 }
 
 /// The `error` body inside the hard-failure envelope.
@@ -104,6 +116,8 @@ struct ScanErrorEnvelope {
     write_pdfs: bool,
     intake: Vec<ScanJsonIntakeMove>,
     error: ScanErrorBody,
+    intake_only: bool,
+    queued: Vec<ScanJsonQueued>,
 }
 
 /// Vault-relative forward-slash path, the same way `ref_library` strips
@@ -669,16 +683,19 @@ fn print_scan_report_envelope(
         },
         notes,
         failures,
+        intake_only: false,
+        queued: Vec::new(),
     };
+    emit_scan_report_envelope(&envelope)
+}
+
+/// Print one report envelope line; the exit code is 0 exactly when `ok`.
+fn emit_scan_report_envelope(envelope: &ScanReportEnvelope) -> i32 {
     println!(
         "{}",
-        serde_json::to_string(&envelope).expect("scan envelope serializes")
+        serde_json::to_string(envelope).expect("scan envelope serializes")
     );
-    if ok {
-        0
-    } else {
-        1
-    }
+    i32::from(!envelope.ok)
 }
 
 /// Print the hard-failure envelope as one compact JSON line (exit 1),
@@ -691,6 +708,24 @@ fn print_scan_error_envelope(
     completed_intake: usize,
     error: &CommandError,
 ) -> i32 {
+    emit_scan_error_envelope(
+        config,
+        options,
+        mode,
+        intake_moves(config, &intake[..completed_intake.min(intake.len())]),
+        error,
+        false,
+    )
+}
+
+fn emit_scan_error_envelope(
+    config: &Config,
+    options: SyncOptions,
+    mode: &'static str,
+    intake: Vec<ScanJsonIntakeMove>,
+    error: &CommandError,
+    intake_only: bool,
+) -> i32 {
     let (code, message, hint, paths) = scan_error_parts(config, error);
     let envelope = ScanErrorEnvelope {
         ok: false,
@@ -699,16 +734,15 @@ fn print_scan_error_envelope(
         generated_at: generated_at(),
         mode,
         write_pdfs: options.write_pdf,
-        intake: intake_moves(
-            config,
-            &intake[..completed_intake.min(intake.len())],
-        ),
+        intake,
         error: ScanErrorBody {
             code,
             message,
             hint,
             paths,
         },
+        intake_only,
+        queued: Vec::new(),
     };
     println!(
         "{}",
@@ -757,6 +791,13 @@ fn scan_error_parts(
             "another bob ref scan is still running".to_string(),
             Some("wait for it to finish, then scan again".to_string()),
         ),
+        "pre_sync_failed" => (
+            error.message.clone(),
+            Some(
+                "the vault could not pull from or push to its remote; fix the sync problem (see bob vault-sync), then rerun"
+                    .to_string(),
+            ),
+        ),
         "dirty_targets" => (
             "refusing to modify dirty vault files".to_string(),
             Some(
@@ -774,4 +815,181 @@ fn scan_error_parts(
         _ => (error.message.clone(), None),
     };
     (code, message, hint, paths)
+}
+
+/// Run `scan --intake-only --format json`: print exactly one envelope line
+/// and return the exit code. The envelope is the normal scan envelope with
+/// `hook.status: "skipped"`, `intake` listing completed PDF moves, `notes`
+/// listing filed notes, and `queued` listing every item still waiting in
+/// `xlib/` (or, on a dry run, every item that would stay queued). `ok` is
+/// false, and the exit code 1, while anything stays queued or stopped
+/// mid-ingest.
+pub(super) fn scan_intake_only_json(config: &Config, dry_run: bool) -> i32 {
+    let mode = if dry_run { "dry_run" } else { "write" };
+    let options = SyncOptions {
+        dry_run,
+        write_pdf: false,
+        prefer: None,
+    };
+    let mut progress = |line: &str| eprintln!("{line}");
+    let run =
+        intake::run_intake_only(config, dry_run, &mut progress, &mut |_| {});
+    let run = match run {
+        Ok(run) => run,
+        Err(error) => {
+            return emit_scan_error_envelope(
+                config,
+                options,
+                mode,
+                Vec::new(),
+                &error,
+                true,
+            );
+        }
+    };
+
+    let mut intake = Vec::new();
+    let mut notes = Vec::new();
+    let mut failures = Vec::new();
+    let mut queued = Vec::new();
+    let mut reports = Vec::new();
+    let mut pdfs = 0usize;
+    match run {
+        intake::IntakeOnlyRun::Empty => {}
+        intake::IntakeOnlyRun::Preview(previews) => {
+            pdfs = previews.len();
+            for preview in previews {
+                match preview {
+                    intake::QueuePreview::Would { unit, .. } => {
+                        if let Some(entry) = pdf_move_entry(config, &unit) {
+                            intake.push(entry);
+                        }
+                    }
+                    intake::QueuePreview::WouldQueue {
+                        unit,
+                        reason,
+                        detail,
+                    } => {
+                        queued.push(queued_entry(config, &unit, reason, detail))
+                    }
+                }
+            }
+        }
+        intake::IntakeOnlyRun::Drained(report) => {
+            pdfs = report.items.len();
+            for item in report.items {
+                match item {
+                    intake::DrainItem::Filed { ingested, .. } => {
+                        intake.extend(
+                            ingested
+                                .moved
+                                .iter()
+                                .filter(|(_, to)| is_pdf_path(to))
+                                .map(|(from, to)| ScanJsonIntakeMove {
+                                    from: scan_vault_relative(config, from),
+                                    to: scan_vault_relative(config, to),
+                                }),
+                        );
+                        if ingested.write.note_action != "none" {
+                            notes.push(ScanJsonNote {
+                                action: ingested.write.note_action,
+                                path: scan_vault_relative(
+                                    config,
+                                    &ingested.note,
+                                ),
+                                title: ingested.title.clone(),
+                                ref_type: ingested.ref_type.clone(),
+                                source_pdf: ingested.source_pdf.clone(),
+                                marker: ingested.write.marker_action != "none",
+                            });
+                        }
+                        reports.push(ingested.write.clone());
+                    }
+                    intake::DrainItem::Queued {
+                        unit,
+                        reason,
+                        detail,
+                    } => {
+                        queued.push(queued_entry(config, &unit, reason, detail))
+                    }
+                    intake::DrainItem::Incomplete { unit, error } => {
+                        // The PDF already moved into lib/ before the stop.
+                        if let Some(entry) = pdf_move_entry(config, &unit) {
+                            intake.push(entry);
+                        }
+                        failures.push(ScanJsonFailure {
+                            pdf: scan_vault_relative(
+                                config,
+                                unit.library_pdf(),
+                            ),
+                            stage: "write",
+                            message: error,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    let counts = ScanCounts::from_reports(&reports);
+    let ok = failures.is_empty() && queued.is_empty();
+    emit_scan_report_envelope(&ScanReportEnvelope {
+        ok,
+        schema_version: REF_SCHEMA_VERSION,
+        command: SCAN_COMMAND,
+        generated_at: generated_at(),
+        mode,
+        write_pdfs: false,
+        hook: ScanJsonHook {
+            status: "skipped",
+            command: None,
+        },
+        intake,
+        summary: ScanJsonSummary {
+            pdfs,
+            created: counts.creates,
+            updated: counts.updates,
+            unchanged: counts.unchanged,
+            markers: counts.marker_updates,
+            tasks: counts.annotation_tasks_created,
+            failures: failures.len(),
+        },
+        notes,
+        failures,
+        intake_only: true,
+        queued,
+    })
+}
+
+/// The xlib→lib move of a PDF unit; audio units move no PDF.
+fn pdf_move_entry(
+    config: &Config,
+    unit: &intake::IntakeUnit,
+) -> Option<ScanJsonIntakeMove> {
+    match unit {
+        intake::IntakeUnit::Pdf {
+            source,
+            destination,
+        } => Some(ScanJsonIntakeMove {
+            from: scan_vault_relative(config, source),
+            to: scan_vault_relative(config, destination),
+        }),
+        _ => None,
+    }
+}
+
+fn queued_entry(
+    config: &Config,
+    unit: &intake::IntakeUnit,
+    reason: intake::QueueReason,
+    detail: String,
+) -> ScanJsonQueued {
+    ScanJsonQueued {
+        pdf: unit
+            .display_path(config)
+            .to_string_lossy()
+            .replace('\\', "/"),
+        reason: reason.as_str(),
+        message: detail,
+    }
 }

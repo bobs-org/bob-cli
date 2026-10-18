@@ -25,7 +25,6 @@ pub(super) enum IntakeUnit {
     LibraryPdf {
         pdf: PathBuf,
     },
-    #[allow(dead_code)]
     Audio {
         source: PathBuf,
         destination: PathBuf,
@@ -34,7 +33,7 @@ pub(super) enum IntakeUnit {
 }
 
 impl IntakeUnit {
-    fn display_path(&self, config: &Config) -> PathBuf {
+    pub(super) fn display_path(&self, config: &Config) -> PathBuf {
         let path = match self {
             Self::Pdf { source, .. } | Self::Audio { source, .. } => {
                 source.clone()
@@ -46,7 +45,7 @@ impl IntakeUnit {
             .to_path_buf()
     }
 
-    fn library_pdf(&self) -> &Path {
+    pub(super) fn library_pdf(&self) -> &Path {
         match self {
             Self::Pdf { destination, .. }
             | Self::LibraryPdf { pdf: destination } => destination,
@@ -74,7 +73,6 @@ pub(super) enum QueueReason {
 }
 
 impl QueueReason {
-    #[allow(dead_code)]
     pub(super) fn as_str(self) -> &'static str {
         match self {
             Self::LockBusy => "lock_busy",
@@ -90,7 +88,7 @@ impl QueueReason {
         }
     }
 
-    fn label(self) -> &'static str {
+    pub(super) fn label(self) -> &'static str {
         match self {
             Self::LockBusy => "lock busy",
             Self::ScanBusy => "scan busy",
@@ -451,19 +449,32 @@ impl IntakeSession {
             commit_sha,
             commit_warning,
             sync_status: String::new(),
+            title: note_title(&plan.pdf, &plan.synced_projection),
+            ref_type: plan.stable_metadata.ref_type.clone(),
+            source_pdf: plan.stable_metadata.source_pdf.clone(),
+            moved: moves
+                .iter()
+                .map(|moved| (moved.from.clone(), moved.to.clone()))
+                .collect(),
+            write,
         })
     }
 }
 
-struct Ingested {
+pub(super) struct Ingested {
     pdf: PathBuf,
-    note: PathBuf,
+    pub(super) note: PathBuf,
     task_destination: Option<PathBuf>,
     task_block_id: Option<String>,
     adopted: bool,
     commit_sha: Option<String>,
     commit_warning: Option<String>,
     sync_status: String,
+    pub(super) write: SyncWriteReport,
+    pub(super) title: String,
+    pub(super) ref_type: Option<String>,
+    pub(super) source_pdf: String,
+    pub(super) moved: Vec<(PathBuf, PathBuf)>,
 }
 
 enum IngestFailure {
@@ -844,6 +855,400 @@ fn intake_commit_subject(
     }
 }
 
+/// Producer name in the commit subject of every queue drain.
+const DRAIN_PRODUCER: &str = "bob ref scan";
+
+/// One queued intake item and what the drain did with it.
+pub(super) enum DrainItem {
+    Filed {
+        unit: IntakeUnit,
+        ingested: Box<Ingested>,
+    },
+    Queued {
+        unit: IntakeUnit,
+        reason: QueueReason,
+        detail: String,
+    },
+    Incomplete {
+        unit: IntakeUnit,
+        error: String,
+    },
+}
+
+/// Everything one drain did, in queue order.
+pub(super) struct DrainReport {
+    pub(super) items: Vec<DrainItem>,
+    /// The single closing sync: `pushed`, `push pending (…)`, or conflicts.
+    /// `None` when nothing was filed.
+    pub(super) sync_status: Option<String>,
+}
+
+impl DrainReport {
+    pub(super) fn filed(
+        &self,
+    ) -> impl Iterator<Item = (&IntakeUnit, &Ingested)> {
+        self.items.iter().filter_map(|item| match item {
+            DrainItem::Filed { unit, ingested } => {
+                Some((unit, ingested.as_ref()))
+            }
+            _ => None,
+        })
+    }
+
+    pub(super) fn filed_count(&self) -> usize {
+        self.filed().count()
+    }
+
+    /// Items still waiting in `xlib/`: queued by a reason, or stopped
+    /// mid-ingest.
+    pub(super) fn stuck_count(&self) -> usize {
+        self.items.len() - self.filed_count()
+    }
+}
+
+/// What a dry run reports for one queued item.
+pub(super) enum QueuePreview {
+    Would {
+        unit: IntakeUnit,
+        note: PathBuf,
+    },
+    WouldQueue {
+        unit: IntakeUnit,
+        reason: QueueReason,
+        detail: String,
+    },
+}
+
+pub(super) enum IntakeOnlyRun {
+    /// `xlib/` holds nothing to file; no lock was taken and nothing synced.
+    Empty,
+    Preview(Vec<QueuePreview>),
+    Drained(DrainReport),
+}
+
+fn xlib_relative(config: &Config, path: &Path) -> Result<PathBuf> {
+    path.strip_prefix(&config.xlib_dir)
+        .map(Path::to_path_buf)
+        .map_err(|error| {
+            CommandError::new(format!(
+                "derive xlib-relative path for {}: {error}",
+                path.display()
+            ))
+        })
+}
+
+/// Every queued item, sorted: each xlib PDF as one unit (its companions and
+/// same-stem audio ride along), then each xlib audio file whose library PDF
+/// already exists. Audio without any PDF is not drainable and is skipped.
+/// Takes no locks.
+pub(super) fn enumerate_queue(config: &Config) -> Result<Vec<IntakeUnit>> {
+    if !config.xlib_dir.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut pdfs = Vec::new();
+    collect_pdf_paths_from_dir(&config.xlib_dir, &mut pdfs)?;
+    pdfs.sort();
+    let mut queued_stems = BTreeSet::new();
+    let mut units = Vec::new();
+    for source in pdfs {
+        let relative = xlib_relative(config, &source)?;
+        queued_stems.insert(relative.with_extension(""));
+        units.push(IntakeUnit::Pdf {
+            destination: config.lib_dir.join(&relative),
+            source,
+        });
+    }
+    let mut audio_files = Vec::new();
+    collect_audio_paths_from_dir(&config.xlib_dir, &mut audio_files)?;
+    audio_files.sort();
+    for source in audio_files {
+        let relative = xlib_relative(config, &source)?;
+        if queued_stems.contains(&relative.with_extension("")) {
+            continue;
+        }
+        let Some(pdf) = library_pdf_for_xlib_audio(config, &source) else {
+            continue;
+        };
+        units.push(IntakeUnit::Audio {
+            destination: config.lib_dir.join(&relative),
+            source,
+            pdf,
+        });
+    }
+    Ok(units)
+}
+
+/// Local, lock-free checks a drain would also make: collisions, sizes, and
+/// the note path. The pulled tree can still add a collision later.
+fn preflight_unit(
+    config: &Config,
+    unit: &IntakeUnit,
+) -> std::result::Result<PathBuf, QueueFailure> {
+    let moves = unit_moves(config, unit)?;
+    validate_unit_collisions(config, unit, &moves)?;
+    validate_move_sizes(&moves)?;
+    ref_note_path(config, unit.library_pdf()).map_err(|error| {
+        QueueFailure::new(QueueReason::Refused, error.to_string())
+    })
+}
+
+pub(super) fn preview_queue(
+    config: &Config,
+    units: Vec<IntakeUnit>,
+) -> Vec<QueuePreview> {
+    units
+        .into_iter()
+        .map(|unit| match preflight_unit(config, &unit) {
+            Ok(note) => QueuePreview::Would { unit, note },
+            Err(failure) => QueuePreview::WouldQueue {
+                unit,
+                reason: failure.reason,
+                detail: failure.detail,
+            },
+        })
+        .collect()
+}
+
+fn session_error(failure: QueueFailure) -> CommandError {
+    CommandError::new(format!("{}: {}", failure.reason.label(), failure.detail))
+        .with_code(failure.reason.as_str())
+}
+
+/// Drain the local `xlib/` queue for `bob ref scan --intake-only`.
+///
+/// Validates the layout and looks for work without locks; an empty queue
+/// costs nothing. Otherwise it opens one session (`bob_sync.lock`, then
+/// `scan.lock`), pulls once, files every unit with its own commit, and
+/// pushes once. A unit that cannot be filed stays queued and the drain
+/// moves on; a unit that stops mid-ingest ends the drain. `on_item` sees
+/// each result as it happens.
+pub(super) fn run_intake_only(
+    config: &Config,
+    dry_run: bool,
+    progress: &mut dyn FnMut(&str),
+    on_item: &mut dyn FnMut(&DrainItem),
+) -> Result<IntakeOnlyRun> {
+    validate_library_layout(config)?;
+    let units = enumerate_queue(config)?;
+    if units.is_empty() {
+        return Ok(IntakeOnlyRun::Empty);
+    }
+    if dry_run {
+        return Ok(IntakeOnlyRun::Preview(preview_queue(config, units)));
+    }
+
+    let session =
+        IntakeSession::open(config, progress).map_err(session_error)?;
+    session.pre_sync().map_err(session_error)?;
+    // The pull cannot add to the gitignored queue, but another drain may have
+    // emptied it while this one waited for the locks.
+    let units = enumerate_queue(config)?;
+    let mut items = Vec::new();
+    let mut stopped = false;
+    for unit in units {
+        let item = if stopped {
+            DrainItem::Queued {
+                unit,
+                reason: QueueReason::Refused,
+                detail: "not attempted: an earlier item stopped mid-ingest"
+                    .to_string(),
+            }
+        } else {
+            match session.ingest(config, &unit, DRAIN_PRODUCER) {
+                Ok(ingested) => DrainItem::Filed {
+                    unit,
+                    ingested: Box::new(ingested),
+                },
+                Err(IngestFailure::Queued(failure)) => DrainItem::Queued {
+                    unit,
+                    reason: failure.reason,
+                    detail: failure.detail,
+                },
+                Err(IngestFailure::Incomplete(error)) => {
+                    stopped = true;
+                    DrainItem::Incomplete { unit, error }
+                }
+            }
+        };
+        on_item(&item);
+        items.push(item);
+    }
+    let filed = items
+        .iter()
+        .any(|item| matches!(item, DrainItem::Filed { .. }));
+    // An incomplete ingest leaves uncommitted writes behind; syncing now
+    // would commit them. Background vault-sync publishes the filed commits.
+    let sync_status = match (filed, stopped) {
+        (false, _) => None,
+        (true, false) => Some(session.post_sync()),
+        (true, true) => Some(
+            "push pending (an item stopped mid-ingest); background vault-sync will publish it"
+                .to_string(),
+        ),
+    };
+    Ok(IntakeOnlyRun::Drained(DrainReport { items, sync_status }))
+}
+
+/// Human `bob ref scan --intake-only`. Returns the process exit code: 0 when
+/// the queue is empty or fully filed (or on `--dry-run`), 1 when an item is
+/// stuck or the drain could not start.
+pub(super) fn scan_intake_only(config: &Config, dry_run: bool) -> i32 {
+    let styler = Styler::detect();
+    let mut progress = |line: &str| eprintln!("{line}");
+    let mut on_item =
+        |item: &DrainItem| print_drain_item(config, &styler, item);
+    match run_intake_only(config, dry_run, &mut progress, &mut on_item) {
+        Err(error) => {
+            eprintln!("{COMMAND_NAME}: {error}");
+            1
+        }
+        Ok(IntakeOnlyRun::Empty) => {
+            println!("intake: nothing queued");
+            0
+        }
+        Ok(IntakeOnlyRun::Preview(previews)) => {
+            print_queue_preview(config, &styler, &previews);
+            0
+        }
+        Ok(IntakeOnlyRun::Drained(report)) => {
+            if let Some(status) = &report.sync_status {
+                println!("sync: {status}");
+            }
+            println!(
+                "intake: filed {} · queued {}",
+                report.filed_count(),
+                report.stuck_count()
+            );
+            i32::from(report.stuck_count() > 0)
+        }
+    }
+}
+
+fn print_drain_item(config: &Config, styler: &Styler, item: &DrainItem) {
+    match item {
+        DrainItem::Filed { unit, ingested } => {
+            println!("{}", filed_line(config, styler, unit, ingested));
+            print_commit_line(ingested);
+        }
+        DrainItem::Queued {
+            unit,
+            reason,
+            detail,
+        } => println!(
+            "{} {} ({}: {})",
+            styler.yellow("queued:"),
+            unit.display_path(config).display(),
+            reason.label(),
+            detail
+        ),
+        DrainItem::Incomplete { unit, error } => println!(
+            "{} {} ({})",
+            styler.red("incomplete:"),
+            unit.display_path(config).display(),
+            error
+        ),
+    }
+}
+
+fn filed_line(
+    config: &Config,
+    styler: &Styler,
+    unit: &IntakeUnit,
+    ingested: &Ingested,
+) -> String {
+    if let IntakeUnit::Audio { destination, .. } = unit {
+        return format!(
+            "{} {} → {}",
+            styler.green("attached audio:"),
+            report_path(config, destination),
+            report_path(config, &ingested.note)
+        );
+    }
+    ingested_line_with_label(config, &styler.green("ingested:"), ingested)
+}
+
+fn ingested_line_with_label(
+    config: &Config,
+    label: &str,
+    ingested: &Ingested,
+) -> String {
+    let mut line = format!(
+        "{label} {} → {}",
+        report_path(config, &ingested.pdf),
+        report_path(config, &ingested.note)
+    );
+    if let (Some(destination), Some(block_id)) =
+        (&ingested.task_destination, &ingested.task_block_id)
+    {
+        line.push_str(&format!(
+            " · task → {} ^{block_id}",
+            report_path(config, destination)
+        ));
+    }
+    if ingested.adopted {
+        line.push_str(" (adopted)");
+    }
+    line
+}
+
+fn print_commit_line(ingested: &Ingested) {
+    if let Some(warning) = &ingested.commit_warning {
+        println!(
+            "sync: committed with warning ({warning}); background vault-sync will commit it"
+        );
+    } else if let Some(sha) = &ingested.commit_sha {
+        println!("sync: committed {}", &sha[..sha.len().min(7)]);
+    } else {
+        println!("sync: already committed");
+    }
+}
+
+fn print_queue_preview(
+    config: &Config,
+    styler: &Styler,
+    previews: &[QueuePreview],
+) {
+    let mut would = 0usize;
+    let mut queued = 0usize;
+    for preview in previews {
+        match preview {
+            QueuePreview::Would { unit, note } => {
+                would += 1;
+                match unit {
+                    IntakeUnit::Audio { destination, .. } => println!(
+                        "{} {} → {}",
+                        styler.green("would attach audio:"),
+                        unit.display_path(config).display(),
+                        report_path(config, destination)
+                    ),
+                    _ => println!(
+                        "{} {} → {} → {}",
+                        styler.green("would ingest:"),
+                        unit.display_path(config).display(),
+                        report_path(config, unit.library_pdf()),
+                        report_path(config, note)
+                    ),
+                }
+            }
+            QueuePreview::WouldQueue {
+                unit,
+                reason,
+                detail,
+            } => {
+                queued += 1;
+                println!(
+                    "{} {} ({}: {})",
+                    styler.yellow("would queue:"),
+                    unit.display_path(config).display(),
+                    reason.label(),
+                    detail
+                );
+            }
+        }
+    }
+    println!("intake: would file {would} · would queue {queued}");
+}
+
 pub(super) fn print_preview(
     config: &Config,
     unit: &IntakeUnit,
@@ -996,6 +1401,50 @@ mod tests {
                 .expect_err("occupied destination must queue");
             assert_eq!(failure.reason.as_str(), expected, "{relative}");
         }
+    }
+
+    #[test]
+    fn queue_enumeration_lists_pdfs_then_late_audio_and_skips_the_rest() {
+        let temp = tempfile::tempdir().expect("create temp vault");
+        let config = config(temp.path());
+        for relative in [
+            "xlib/chat/b.pdf",
+            "xlib/chat/b.mp3",
+            "xlib/chat/a.pdf",
+            "xlib/paper/late.mp3",
+            "xlib/paper/orphan.mp3",
+            "lib/paper/late.pdf",
+        ] {
+            let path = temp.path().join(relative);
+            fs::create_dir_all(path.parent().expect("parent"))
+                .expect("create parent");
+            fs::write(path, b"x").expect("write fixture");
+        }
+
+        let units = enumerate_queue(&config).expect("enumerate queue");
+        let shapes = units
+            .iter()
+            .map(|unit| match unit {
+                IntakeUnit::Pdf { source, .. } => format!(
+                    "pdf {}",
+                    source.strip_prefix(temp.path()).unwrap().display()
+                ),
+                IntakeUnit::Audio { source, .. } => format!(
+                    "audio {}",
+                    source.strip_prefix(temp.path()).unwrap().display()
+                ),
+                IntakeUnit::LibraryPdf { .. } => unreachable!(),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            shapes,
+            [
+                "pdf xlib/chat/a.pdf",
+                "pdf xlib/chat/b.pdf",
+                "audio xlib/paper/late.mp3",
+            ],
+            "audio beside a queued PDF rides with it; audio with no PDF is skipped"
+        );
     }
 
     #[test]

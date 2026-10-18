@@ -44,6 +44,7 @@ Examples:
   bob ref today <REF> -p reading                  Pull a reference into today's Pomodoro
   bob ref create <URL|PDF|MD> -L                  Capture a reference and narrate it
   bob ref scan                                    Sync Highlights PDFs into reference notes
+  bob ref scan -i                                 File queued xlib/ PDFs into the library
 ";
 
 pub(super) fn print_config_report(operation: &str, config: &Config) {
@@ -133,7 +134,7 @@ fn scan_command() -> ClapCommand {
             .about("Scan the configured Highlights library"),
     )
     .after_help(
-        "Examples:\n  bob ref scan --dry-run\n  bob ref scan -w -f json\n\nScans PDFs recursively, preflights collisions and dirty targets, then syncs each PDF.",
+        "Examples:\n  bob ref scan --dry-run\n  bob ref scan -w -f json\n  bob ref scan --intake-only\n\nScans PDFs recursively, preflights collisions and dirty targets, then syncs each PDF.\n\nWith --intake-only, scan files only the PDFs (and late audio) queued in xlib/: it pulls the vault, writes each reference note and reading task, makes one commit per reference, and pushes once. It exits 1 while anything stays queued, so a timer run surfaces stuck items.",
     )
 }
 
@@ -232,6 +233,7 @@ pub(super) fn with_scan_args(command: ClapCommand) -> ClapCommand {
         .arg(bob_dir_arg())
         .arg(dry_run_arg())
         .arg(format_arg())
+        .arg(intake_only_arg())
         .arg(jobs_arg())
         .arg(lib_dir_arg())
         .arg(no_hooks_arg())
@@ -326,6 +328,17 @@ pub(super) fn format_arg() -> Arg {
         .default_value("human")
         .help(
             "Output format: human (default) or json, a one-line machine-readable report",
+        )
+}
+
+pub(super) fn intake_only_arg() -> Arg {
+    Arg::new("intake-only")
+        .long("intake-only")
+        .short('i')
+        .action(ArgAction::SetTrue)
+        .conflicts_with("write-pdfs")
+        .help(
+            "File queued intake PDFs and audio from xlib/ into the library (pull, ref note, reading task, commit, push); skips the annotation pass and the pre-scan hook",
         )
 }
 
