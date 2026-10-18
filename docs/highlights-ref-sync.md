@@ -79,6 +79,19 @@ that provides them. It never writes files. Pass
 `-n, --no-hooks` on `doctor`, or before the subcommand as
 `bob ref --no-hooks doctor`, to skip the pre-scan hook check.
 
+The `xlib_pending: N` row gains ` · oldest <age>` (from file mtimes) while
+anything is queued, and `doctor` warns once the oldest queued PDF is over an
+hour old (`xlib intake: N queued, oldest <age> — run bob ref scan -i …`).
+`xlib_pending: 0` is unchanged. The `intake_last:` row reads the per-host
+intake status record at `bob_cli_state_dir()/ref/intake-status.json`
+(`schema_version`, `last_success {at, command, filed}`, and
+`last_failure {at, command, reason, message}`) and prints
+`ok <age> ago (<command>, <n> filed)` and `failure <age> ago (<reason>:
+<message>)`, newest first, or `none recorded`. `bob ref create` (and the
+producers that call it), `bob ref scan -i`, and every writing full `bob ref
+scan` update it; a queue reason counts as a failure, a dry run or an empty
+queue records nothing, and a failure to write the record only warns.
+
 After the sync-prerequisite rows, `doctor` appends warning-level library
 health and coverage rows read through the read-only reference index. They
 never fail the command:

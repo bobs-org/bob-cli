@@ -18,6 +18,7 @@ mod worker;
 pub(crate) use cli::{command, run};
 pub(crate) use doctor::append_ref_jobs_doctor_row;
 pub(crate) use kick::kick;
+pub(crate) use output::age_short_secs;
 pub(crate) use spool::{
     enqueue, jobs_dir, pending_keys, remove_created, JobFallback, NewJob,
 };

@@ -249,3 +249,99 @@ fn doctor_coverage_warn_counts_unmirrored_zorg_records() {
     );
     assert!(report.contains("result: ok"), "{report}");
 }
+
+fn queue_xlib_pdf(vault: &std::path::Path, name: &str, age_secs: u64) {
+    let path = vault.join(format!("xlib/chat/{name}.pdf"));
+    write_file(&path, "%PDF-1.4 queued\n");
+    let modified =
+        std::time::SystemTime::now() - std::time::Duration::from_secs(age_secs);
+    fs::File::options()
+        .write(true)
+        .open(&path)
+        .and_then(|file| file.set_modified(modified))
+        .expect("set queued PDF mtime");
+}
+
+#[test]
+fn doctor_xlib_rows_stay_plain_when_nothing_is_queued() {
+    let temp = TempDir::new("bob-cli-doctor-xlib-empty");
+    let vault = base_vault(&temp);
+    write_queued_note(&vault, "tracked");
+    commit_vault(&vault);
+
+    let report = stdout(&run_doctor(&vault));
+    assert!(report.contains("xlib_pending: 0\n"), "{report}");
+    assert!(report.contains("intake_last: none recorded\n"), "{report}");
+    assert!(!report.contains("xlib intake:"), "{report}");
+}
+
+#[test]
+fn doctor_xlib_row_shows_the_oldest_age_without_warning_when_fresh() {
+    let temp = TempDir::new("bob-cli-doctor-xlib-fresh");
+    let vault = base_vault(&temp);
+    queue_xlib_pdf(&vault, "fresh", 120);
+    commit_vault(&vault);
+
+    let report = stdout(&run_doctor(&vault));
+    assert!(
+        report.contains("xlib_pending: 1 · oldest 2 min\n"),
+        "{report}"
+    );
+    assert!(!report.contains("xlib intake:"), "{report}");
+}
+
+#[test]
+fn doctor_warns_when_a_queued_pdf_is_over_an_hour_old() {
+    let temp = TempDir::new("bob-cli-doctor-xlib-stale");
+    let vault = base_vault(&temp);
+    queue_xlib_pdf(&vault, "fresh", 120);
+    queue_xlib_pdf(&vault, "stale", 5 * 3600);
+    commit_vault(&vault);
+
+    let report = stdout(&run_doctor(&vault));
+    assert!(
+        report.contains("xlib_pending: 2 · oldest 5 h\n"),
+        "{report}"
+    );
+    assert!(
+        report.contains(
+            "xlib intake: 2 queued, oldest 5 h — run bob ref scan -i (the bob-ref-intake timer drains it on athena and apollo)"
+        ),
+        "{report}"
+    );
+}
+
+#[test]
+fn doctor_intake_last_row_reads_the_recorded_status() {
+    let temp = TempDir::new("bob-cli-doctor-intake-last");
+    let vault = base_vault(&temp);
+    write_queued_note(&vault, "tracked");
+    commit_vault(&vault);
+    let state = temp.path().join("state");
+    let ago = |secs: i64| {
+        (chrono::Local::now() - chrono::Duration::seconds(secs))
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, false)
+    };
+    write_file(
+        &state.join("bob-cli/ref/intake-status.json"),
+        &format!(
+            "{{\"schema_version\":1,\"last_success\":{{\"at\":\"{}\",\"command\":\"bob ref create\",\"filed\":1}},\"last_failure\":{{\"at\":\"{}\",\"command\":\"bob ref scan -i\",\"reason\":\"scan_busy\",\"message\":\"another scan\"}}}}",
+            ago(7200),
+            ago(180)
+        ),
+    );
+
+    let output = bob_command()
+        .args(["ref", "doctor", "--no-hooks"])
+        .env("BOB_DIR", &vault)
+        .env("XDG_STATE_HOME", &state)
+        .output()
+        .expect("run bob ref doctor");
+    let report = stdout(&output);
+    assert!(
+        report.contains(
+            "intake_last: failure 3 min ago (scan_busy: another scan) · ok 2 h ago (bob ref create, 1 filed)\n"
+        ),
+        "{report}"
+    );
+}

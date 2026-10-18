@@ -1,6 +1,7 @@
 //! Locked, one-reference intake used by `bob ref create` and later
 //! reference producers.
 
+use super::intake_status;
 use super::*;
 use crate::native::vault_sync;
 use std::{
@@ -198,6 +199,30 @@ pub(super) fn ingest_on_create() -> Result<(bool, &'static str)> {
 }
 
 pub(super) fn finish_intake(
+    config: &Config,
+    unit: IntakeUnit,
+    request: IntakeRequest<'_>,
+) -> IntakeOutcome {
+    let producer = request.producer;
+    let outcome = file_unit(config, unit, request);
+    match &outcome {
+        IntakeOutcome::Ingested { .. } => {
+            intake_status::record_success(producer, 1);
+        }
+        IntakeOutcome::Queued { reason, detail, .. } => {
+            intake_status::record_failure(producer, reason.as_str(), detail);
+        }
+        IntakeOutcome::Incomplete { error } => {
+            intake_status::record_failure(producer, "incomplete", error);
+        }
+        IntakeOutcome::Kept { .. }
+        | IntakeOutcome::WouldKeep { .. }
+        | IntakeOutcome::WouldIngest { .. } => {}
+    }
+    outcome
+}
+
+fn file_unit(
     config: &Config,
     unit: IntakeUnit,
     request: IntakeRequest<'_>,
@@ -1023,6 +1048,50 @@ fn session_error(failure: QueueFailure) -> CommandError {
 /// moves on; a unit that stops mid-ingest ends the drain. `on_item` sees
 /// each result as it happens.
 pub(super) fn run_intake_only(
+    config: &Config,
+    dry_run: bool,
+    progress: &mut dyn FnMut(&str),
+    on_item: &mut dyn FnMut(&DrainItem),
+) -> Result<IntakeOnlyRun> {
+    let run = drain_queue(config, dry_run, progress, on_item);
+    if !dry_run {
+        record_drain_status(&run);
+    }
+    run
+}
+
+/// Update the per-host intake status record for one real drain. An empty
+/// queue leaves the record alone.
+fn record_drain_status(run: &Result<IntakeOnlyRun>) {
+    const COMMAND: &str = "bob ref scan -i";
+    match run {
+        Err(error) => intake_status::record_failure(
+            COMMAND,
+            error.code.unwrap_or("scan_failed"),
+            &error.message,
+        ),
+        Ok(IntakeOnlyRun::Drained(report)) => {
+            if report.filed_count() > 0 {
+                intake_status::record_success(COMMAND, report.filed_count());
+            }
+            let stuck = report.items.iter().find_map(|item| match item {
+                DrainItem::Filed { .. } => None,
+                DrainItem::Queued { reason, detail, .. } => {
+                    Some((reason.as_str(), detail.as_str()))
+                }
+                DrainItem::Incomplete { error, .. } => {
+                    Some(("incomplete", error.as_str()))
+                }
+            });
+            if let Some((reason, detail)) = stuck {
+                intake_status::record_failure(COMMAND, reason, detail);
+            }
+        }
+        Ok(IntakeOnlyRun::Empty | IntakeOnlyRun::Preview(_)) => {}
+    }
+}
+
+fn drain_queue(
     config: &Config,
     dry_run: bool,
     progress: &mut dyn FnMut(&str),

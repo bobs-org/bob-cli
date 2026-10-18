@@ -48,6 +48,7 @@ mod fetch;
 mod frontmatter;
 mod guard;
 mod hooks;
+mod intake_status;
 mod io;
 mod listen;
 mod marker;
@@ -352,21 +353,62 @@ fn run_scan(matches: &ArgMatches, no_hooks: bool) -> i32 {
         write_pdf: matches.get_flag("write-pdfs"),
         prefer: None,
     };
+    let queued = (!options.dry_run).then(|| queued_xlib_count(&config));
     if json {
-        return scan_library_json(
+        let code = scan_library_json(
             &config,
             options,
             jobs_from_matches(matches),
             no_hooks,
         );
+        let failure = (code != 0).then(|| {
+            format!("bob ref scan --format json exited with code {code}")
+        });
+        record_scan_status(
+            queued,
+            failure.map(|message| ("scan_failed", message)),
+        );
+        return code;
     }
-    report_result(scan_library(
+    let result = scan_library(
         &config,
         options,
         jobs_from_matches(matches),
         matches.get_flag("verbose"),
         no_hooks,
-    ))
+    );
+    let failure = result.as_ref().err().map(|error| {
+        (error.code.unwrap_or("scan_failed"), error.message.clone())
+    });
+    record_scan_status(queued, failure);
+    report_result(result)
+}
+
+/// `xlib/` PDFs waiting before a writing full scan, which files them.
+fn queued_xlib_count(config: &Config) -> usize {
+    let mut pending = Vec::new();
+    if config.xlib_dir.is_dir()
+        && collect_pdf_paths_from_dir(&config.xlib_dir, &mut pending).is_err()
+    {
+        return 0;
+    }
+    pending.len()
+}
+
+/// Record a writing full scan in the per-host intake status; `queued` is
+/// `None` for a dry run, which records nothing.
+fn record_scan_status(
+    queued: Option<usize>,
+    failure: Option<(&'static str, String)>,
+) {
+    const COMMAND: &str = "bob ref scan";
+    let Some(queued) = queued else { return };
+    match failure {
+        None => intake_status::record_success(COMMAND, queued),
+        Some((reason, message)) => {
+            intake_status::record_failure(COMMAND, reason, &message);
+        }
+    }
 }
 
 /// Resolve the requested degree of cross-PDF parallelism for `scan`.

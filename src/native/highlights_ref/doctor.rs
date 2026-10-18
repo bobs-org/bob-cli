@@ -1,6 +1,8 @@
 //! Vault doctor checks and xlib intake.
+use super::intake_status;
 use super::*;
-use crate::native::env as bob_env;
+use crate::native::{env as bob_env, ref_jobs::age_short_secs};
+use std::time::SystemTime;
 
 pub(super) fn show_marker(config: &Config, pdf: &Path) -> Result<()> {
     let marker = read_pdf_marker(pdf)?;
@@ -24,6 +26,61 @@ pub(super) fn show_marker(config: &Config, pdf: &Path) -> Result<()> {
     print!("{}", render_marker(&marker_input.projection)?);
     println!("writes: none");
     Ok(())
+}
+
+/// A queued `xlib/` PDF older than this makes `doctor` warn.
+const XLIB_STALE_SECS: i64 = 3600;
+
+/// Age of the oldest file by modification time; `None` when no mtime reads.
+fn oldest_age_secs(paths: &[PathBuf]) -> Option<i64> {
+    let now = SystemTime::now();
+    paths
+        .iter()
+        .filter_map(|path| fs::metadata(path).ok()?.modified().ok())
+        .filter_map(|modified| now.duration_since(modified).ok())
+        .map(|age| age.as_secs() as i64)
+        .max()
+}
+
+/// The `intake_last:` row: the recorded success and failure, newest first.
+fn intake_last_summary() -> String {
+    let status = intake_status::read().unwrap_or_default();
+    let age = |at: &str| {
+        intake_status::age_secs(at)
+            .map_or_else(|| "time unknown".to_string(), age_short_secs)
+    };
+    let mut parts = Vec::new();
+    if let Some(ok) = &status.last_success {
+        parts.push((
+            ok.at.clone(),
+            format!(
+                "ok {} ago ({}, {} filed)",
+                age(&ok.at),
+                ok.command,
+                ok.filed
+            ),
+        ));
+    }
+    if let Some(fail) = &status.last_failure {
+        parts.push((
+            fail.at.clone(),
+            format!(
+                "failure {} ago ({}: {})",
+                age(&fail.at),
+                fail.reason,
+                fail.message
+            ),
+        ));
+    }
+    if parts.is_empty() {
+        return "none recorded".to_string();
+    }
+    parts.sort_by(|a, b| b.0.cmp(&a.0));
+    parts
+        .into_iter()
+        .map(|(_, text)| text)
+        .collect::<Vec<_>>()
+        .join(" · ")
 }
 
 pub(super) fn doctor_vault(config: &Config, no_hooks: bool) -> Result<()> {
@@ -82,10 +139,14 @@ pub(super) fn doctor_vault(config: &Config, no_hooks: bool) -> Result<()> {
             config.xlib_dir.display()
         ));
     }
+    let mut xlib_oldest_secs = None;
     let xlib_pending = if layout_valid && config.xlib_dir.is_dir() {
         let mut pending = Vec::new();
         match collect_pdf_paths_from_dir(&config.xlib_dir, &mut pending) {
-            Ok(()) => pending.len(),
+            Ok(()) => {
+                xlib_oldest_secs = oldest_age_secs(&pending);
+                pending.len()
+            }
             Err(error) => {
                 failures.push(error.to_string());
                 0
@@ -94,7 +155,22 @@ pub(super) fn doctor_vault(config: &Config, no_hooks: bool) -> Result<()> {
     } else {
         0
     };
-    println!("xlib_pending: {xlib_pending}");
+    match xlib_oldest_secs {
+        Some(secs) if xlib_pending > 0 => {
+            println!(
+                "xlib_pending: {xlib_pending} · oldest {}",
+                age_short_secs(secs)
+            );
+            if secs >= XLIB_STALE_SECS {
+                warnings.push(format!(
+                    "xlib intake: {xlib_pending} queued, oldest {} — run bob ref scan -i (the bob-ref-intake timer drains it on athena and apollo)",
+                    age_short_secs(secs)
+                ));
+            }
+        }
+        _ => println!("xlib_pending: {xlib_pending}"),
+    }
+    println!("intake_last: {}", intake_last_summary());
     let orphan_audio = if layout_valid && config.xlib_dir.is_dir() {
         match collect_orphan_audio(config) {
             Ok(paths) => paths,

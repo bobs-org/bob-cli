@@ -10,7 +10,11 @@ use std::{
 };
 
 /// `bob ref scan <args>` against `vault`, isolated like `create_command`.
-fn scan_command(temp: &TempDir, vault: &Path, args: &[&str]) -> Command {
+pub(super) fn scan_command(
+    temp: &TempDir,
+    vault: &Path,
+    args: &[&str],
+) -> Command {
     let mut command = bob_command();
     command
         .arg("ref")
@@ -47,7 +51,7 @@ fn subjects_since(vault: &Path, base: &str) -> Vec<String> {
         .collect()
 }
 
-fn queue_pdf(
+pub(super) fn queue_pdf(
     temp: &TempDir,
     vault: &Path,
     fixture: &Path,
@@ -533,4 +537,153 @@ fn intake_only_leaves_a_library_pdf_without_a_note_alone() {
     assert_eq!(stdout(&output), "intake: nothing queued\n");
     assert!(!vault.join("ref/chat/orphan.md").exists());
     assert_eq!(head(&vault), before);
+}
+
+/// The per-host intake status record under the test's `XDG_STATE_HOME`.
+fn intake_status(temp: &TempDir) -> serde_json::Value {
+    let path = temp.path().join("state/bob-cli/ref/intake-status.json");
+    let text = fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+    serde_json::from_str(&text).expect("parse intake status")
+}
+
+fn doctor_report(temp: &TempDir, vault: &Path) -> String {
+    let output = bob_command()
+        .args(["ref", "doctor", "--no-hooks"])
+        .env("BOB_DIR", vault)
+        .env("XDG_STATE_HOME", temp.path().join("state"))
+        .output()
+        .expect("run bob ref doctor");
+    stdout(&output)
+}
+
+#[test]
+fn intake_status_records_drain_success_and_doctor_shows_it() {
+    let temp = TempDir::new("bob-cli-scan-intake-status-ok");
+    let (vault, _peer) = seed_synced_vault(&temp);
+    let (fixture, pandoc) = create_fixture(&temp);
+    let before = doctor_report(&temp, &vault);
+    assert!(before.contains("intake_last: none recorded\n"), "{before}");
+    queue_pdf(&temp, &vault, &fixture, &pandoc, "status_ok");
+
+    let output = scan_command(&temp, &vault, &["-i"])
+        .output()
+        .expect("run scan --intake-only");
+    assert_success(&output);
+
+    let status = intake_status(&temp);
+    assert_eq!(status["schema_version"], 1);
+    assert_eq!(status["last_success"]["command"], "bob ref scan -i");
+    assert_eq!(status["last_success"]["filed"], 1);
+    assert!(status.get("last_failure").is_none(), "{status}");
+    let report = doctor_report(&temp, &vault);
+    assert!(report.contains("xlib_pending: 0\n"), "{report}");
+    assert!(report.contains("intake_last: ok "), "{report}");
+    assert!(report.contains("(bob ref scan -i, 1 filed)"), "{report}");
+}
+
+#[test]
+fn intake_status_records_a_queued_drain_as_a_failure() {
+    let temp = TempDir::new("bob-cli-scan-intake-status-fail");
+    let (vault, _peer) = seed_synced_vault(&temp);
+    let (fixture, pandoc) = create_fixture(&temp);
+    queue_pdf(&temp, &vault, &fixture, &pandoc, "status_busy");
+    let held = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(temp.path().join("bob_sync.lock"))
+        .expect("open shared lock");
+    held.lock_exclusive().expect("hold shared lock");
+
+    let output = scan_command(&temp, &vault, &["-i"])
+        .output()
+        .expect("run scan --intake-only");
+    assert_eq!(output.status.code(), Some(1));
+
+    let status = intake_status(&temp);
+    assert_eq!(status["last_failure"]["command"], "bob ref scan -i");
+    assert_eq!(status["last_failure"]["reason"], "lock_busy");
+    assert!(status.get("last_success").is_none(), "{status}");
+    let report = doctor_report(&temp, &vault);
+    assert!(report.contains("xlib_pending: 1 · oldest "), "{report}");
+    assert!(report.contains("intake_last: failure "), "{report}");
+    assert!(report.contains("(lock_busy: "), "{report}");
+}
+
+#[test]
+fn intake_status_records_create_outcomes_and_keeps_the_other_field() {
+    let temp = TempDir::new("bob-cli-scan-intake-status-create");
+    let (vault, _peer) = seed_synced_vault(&temp);
+    let (fixture, pandoc) = create_fixture(&temp);
+
+    let busy_source = temp.path().join("busy.md");
+    write_file(&busy_source, "# busy\n\nBody.\n");
+    let held = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(temp.path().join("bob_sync.lock"))
+        .expect("open shared lock");
+    held.lock_exclusive().expect("hold shared lock");
+    let output = create_command(&temp, &vault, &busy_source, &fixture, &pandoc)
+        .arg("-N")
+        .arg("busy")
+        .output()
+        .expect("run create while locked");
+    drop(held);
+    assert!(
+        vault.join("xlib/chat/busy.pdf").is_file(),
+        "{}",
+        format_output(&output)
+    );
+    let status = intake_status(&temp);
+    assert_eq!(status["last_failure"]["command"], "bob ref create");
+    assert_eq!(status["last_failure"]["reason"], "lock_busy");
+
+    let ok_source = temp.path().join("fine.md");
+    write_file(&ok_source, "# fine\n\nBody.\n");
+    let output = create_command(&temp, &vault, &ok_source, &fixture, &pandoc)
+        .arg("-N")
+        .arg("fine")
+        .output()
+        .expect("run create");
+    assert_success(&output);
+    let status = intake_status(&temp);
+    assert_eq!(status["last_success"]["command"], "bob ref create");
+    assert_eq!(status["last_success"]["filed"], 1);
+    assert_eq!(
+        status["last_failure"]["reason"], "lock_busy",
+        "a success must not erase the recorded failure"
+    );
+}
+
+#[test]
+fn intake_status_records_a_writing_full_scan_but_not_a_dry_run() {
+    let temp = TempDir::new("bob-cli-scan-intake-status-full");
+    let (vault, _peer) = seed_synced_vault(&temp);
+    let (fixture, pandoc) = create_fixture(&temp);
+    queue_pdf(&temp, &vault, &fixture, &pandoc, "full_scan");
+
+    let dry = scan_command(&temp, &vault, &["--dry-run", "--no-hooks"])
+        .output()
+        .expect("run dry-run scan");
+    assert_success(&dry);
+    assert!(
+        !temp
+            .path()
+            .join("state/bob-cli/ref/intake-status.json")
+            .exists(),
+        "a dry run must record nothing"
+    );
+
+    let output = scan_command(&temp, &vault, &["--no-hooks"])
+        .output()
+        .expect("run full scan");
+    assert_success(&output);
+    let status = intake_status(&temp);
+    assert_eq!(status["last_success"]["command"], "bob ref scan");
+    assert_eq!(status["last_success"]["filed"], 1);
 }
