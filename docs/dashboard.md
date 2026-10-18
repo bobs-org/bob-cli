@@ -26,19 +26,19 @@ For an available nonnegative integer count `n` and positive integer limit
 | Condition | Color |
 | --- | --- |
 | `n === 0` | grey |
-| `0 < n < L / 2` | blue |
-| `L / 2 <= n < 3 * L / 4` | green |
-| `3 * L / 4 <= n < L` | yellow |
-| `n === L` | orange |
+| `0 < n < 2 * L / 5` | blue |
+| `2 * L / 5 <= n < 3 * L / 5` | green |
+| `3 * L / 5 <= n < 4 * L / 5` | yellow |
+| `4 * L / 5 <= n <= L` | orange |
 | `n > L` | red |
 
-Check zero, strict excess, and equality before descending through 75%
-and 50%. Small and odd caps may naturally skip bands.
+Check zero and strict excess before descending through 80%, 60%, and
+40%. Small and odd caps may naturally skip bands.
 
 PENDING and NEXT show the dashboard section counts, which exclude TODAY,
 compared with that lane's configured cap. Their color follows the same
 visible count: for example, NEXT section `10/15` with whole lane `17/15`
-and TODAY 7 is green, while section `15/15` with a larger whole lane is
+and TODAY 7 is yellow, while section `15/15` with a larger whole lane is
 orange. Whole-lane pressure remains separately labeled in tooltips and
 accessibility labels, and in daily lint lines. READY uses its
 freshness-gated backlog and `max_ready`, with the whole-lane breakdown in
@@ -46,8 +46,8 @@ its tooltip. TODAY uses `budget.links.count / budget.links.cap`, with one
 higher-priority override: `budget.themes.count > budget.themes.cap` makes
 it red, including when the link count is zero. Themes exactly at their cap
 do not affect the link-based color. Both TODAY fractions remain displayed.
-Exact-cap orange is a presentation state, not a new lint or an `over`
-condition.
+Orange, from 80% through the cap, is a presentation state, not a new lint
+or an `over` condition.
 
 Daily `bob-plan` PENDING/NEXT/READY badges use the same live section
 counts and colors, including on older daily notes; older notes retain
