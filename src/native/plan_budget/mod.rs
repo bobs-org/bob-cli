@@ -20,7 +20,7 @@ use serde::Serialize;
 
 use super::{
     capture_block_ids, capture_pomodoros, config::PlanConfig, dataview,
-    markdown, pomodoro, task_dependencies,
+    markdown, pomodoro, pomodoro_homes, task_dependencies,
 };
 
 /// Lint codes emitted by [`compute`]. They appear verbatim in human
@@ -93,6 +93,8 @@ pub(crate) struct PlanEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) time_range: Option<String>,
     pub(crate) links: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) homes: Option<pomodoro_homes::Homes>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -202,6 +204,44 @@ pub(crate) fn assemble_report(
         entries: ledger.entries.clone(),
         warnings,
     }
+}
+
+/// Fill the additive R9 `homes` object on each open ledger entry. The
+/// pure budget engine leaves `homes` unset so it never touches the vault.
+pub(crate) fn with_entry_homes(
+    mut report: PlanReport,
+    bob_dir: &Path,
+    daily_path: &Path,
+    contents: &str,
+    config: &PlanConfig,
+) -> PlanReport {
+    if report.entries.is_empty() {
+        return report;
+    }
+    let scan = capture_pomodoros::scan(contents);
+    let mut resolver = pomodoro_homes::HomeResolver::new(
+        pomodoro_homes::DiskHomeSource::new(bob_dir),
+    );
+    for entry in &mut report.entries {
+        let name = scan
+            .entries
+            .iter()
+            .find(|found| found.line == entry.line)
+            .and_then(|found| found.name.as_deref());
+        entry.homes = Some(
+            pomodoro_homes::attribute_ledger_entry(
+                contents,
+                entry.line,
+                name,
+                None,
+                config.exempt(),
+                daily_path,
+                &mut resolver,
+            )
+            .homes,
+        );
+    }
+    report
 }
 
 /// Case-insensitive component key: collapsed whitespace, lowercased.
@@ -407,6 +447,7 @@ pub(crate) fn compute_for_daily(
             highlight: false,
             time_range: entry.time_range.clone(),
             links: distinct_links.len(),
+            homes: None,
         });
     }
 

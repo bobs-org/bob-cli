@@ -21,7 +21,7 @@ use super::{
     },
     capture_language, capture_pomodoro_close, capture_pomodoros_agenda,
     capture_task_sections, config, env as bob_env, markdown, note_tasks,
-    plan_budget, pomodoro,
+    plan_budget, pomodoro, pomodoro_homes,
     style::{display_width, pad_right, Styler},
 };
 
@@ -76,10 +76,12 @@ link counts, and the current entry's numbered Task Link count for picker callers
 --all to include completed entries. A missing daily note or missing \
 Pomodoros section returns a successful empty list with a warning.\n\n\
 With --tasks, each listed entry also carries its agenda payload: the entry \
-role, naive start/end datetimes, the retired-link count, session notes, and \
-the resolved Task Link lineup with operator numbers, clean titles, statuses, \
-task-block lines, and ledger notes. Its optional plan_budget is computed from \
-the saved daily note and the configured plan limits.",
+role, naive start/end datetimes, the retired-link count, session notes, the \
+resolved Task Link lineup with operator numbers, clean titles, statuses, \
+task-block lines, and ledger notes, and a derived homes object from those \
+Task Links. Human output appends a dim home chip with its forecast or \
+attributed dot after each entry name. Its optional plan_budget is computed \
+from the saved daily note and the configured plan limits.",
         )
         .after_help(
             "Examples:\n  bob capture-pomodoros --format json\n  bob capture-pomodoros\n  bob capture-pomodoros --all\n  bob capture-pomodoros -f json\n  bob capture-pomodoros -b ~/bob -a -f json\n  bob capture-pomodoros -t -f json\n\nEnvironment:\n  BOB_DAY_FILE              Daily note override; otherwise <bob-dir>/YYYY/YYYYMMDD.md\n  BOB_DIR                   Bob vault root when --bob-dir is omitted\n  BOB_NOW                   Local datetime override for default daily-note selection",
@@ -226,6 +228,8 @@ struct CapturePomodorosOutputEntry {
     notes: Option<Vec<capture_pomodoros_agenda::AgendaLine>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     items: Option<Vec<capture_pomodoros_agenda::AgendaItem>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    homes: Option<pomodoro_homes::Homes>,
 }
 
 fn list_capture_pomodoros(
@@ -279,25 +283,9 @@ fn list_capture_pomodoros(
         )));
     }
     warnings.extend(scan.warnings.iter().cloned());
-    let plan_budget = if request.include_tasks && scan.has_section {
+    let plan_config = if request.include_tasks {
         match config::load_plan_config(&config::config_path()) {
-            Ok(config) => {
-                let daily_key = day_file
-                    .strip_prefix(&request.bob_dir)
-                    .map(|path| path.display().to_string())
-                    .ok()
-                    .or_else(|| plan_budget::daily_key_from_path(&day_file));
-                let budget = plan_budget::compute_for_daily(
-                    &contents,
-                    &config,
-                    daily_key.as_deref(),
-                );
-                Some(CapturePomodorosPlanBudget {
-                    status: budget.status,
-                    themes: budget.themes,
-                    links: budget.links,
-                })
-            }
+            Ok(config) => Some(config),
             Err(error) => {
                 let message = match error {
                     config::ConfigError::Read(message)
@@ -309,6 +297,27 @@ fn list_capture_pomodoros(
                 None
             }
         }
+    } else {
+        None
+    };
+    let plan_budget = if request.include_tasks && scan.has_section {
+        plan_config.as_ref().map(|config| {
+            let daily_key = day_file
+                .strip_prefix(&request.bob_dir)
+                .map(|path| path.display().to_string())
+                .ok()
+                .or_else(|| plan_budget::daily_key_from_path(&day_file));
+            let budget = plan_budget::compute_for_daily(
+                &contents,
+                config,
+                daily_key.as_deref(),
+            );
+            CapturePomodorosPlanBudget {
+                status: budget.status,
+                themes: budget.themes,
+                links: budget.links,
+            }
+        })
     } else {
         None
     };
@@ -342,6 +351,16 @@ fn list_capture_pomodoros(
     let completed_summary = request
         .include_tasks
         .then(|| completed_summary_for(&scan.entries, &contents));
+    let daily_path = PathBuf::from(&relative_day_file);
+    let exempt = plan_config
+        .as_ref()
+        .map(|config| config.exempt().to_vec())
+        .unwrap_or_else(|| config::PlanConfig::default().exempt().to_vec());
+    let mut homes_resolver = request.include_tasks.then(|| {
+        pomodoro_homes::HomeResolver::new(pomodoro_homes::DiskHomeSource::new(
+            &request.bob_dir,
+        ))
+    });
     let mut pomodoros = Vec::with_capacity(listed.len());
     for (position, entry) in listed.into_iter().enumerate() {
         let task_link_count = if entry.is_current {
@@ -351,6 +370,18 @@ fn list_capture_pomodoros(
         };
         let agenda_entry =
             agenda.as_ref().and_then(|entries| entries.get(position));
+        let homes = homes_resolver.as_mut().map(|resolver| {
+            pomodoro_homes::attribute_ledger_entry(
+                &contents,
+                entry.line,
+                entry.name.as_deref(),
+                attributed_minutes(&entry, &contents),
+                &exempt,
+                &daily_path,
+                resolver,
+            )
+            .homes
+        });
         pomodoros.push(CapturePomodorosOutputEntry {
             entry,
             task_link_count,
@@ -361,6 +392,7 @@ fn list_capture_pomodoros(
                 .map(|agenda| agenda.retired_link_count),
             notes: agenda_entry.map(|agenda| agenda.notes.clone()),
             items: agenda_entry.map(|agenda| agenda.items.clone()),
+            homes,
         });
     }
 
@@ -376,6 +408,24 @@ fn list_capture_pomodoros(
         completed_summary,
         plan_budget,
     })
+}
+
+fn attributed_minutes(entry: &PomodoroEntry, contents: &str) -> Option<u32> {
+    if entry.state != PomodoroState::Completed {
+        return None;
+    }
+    let raw_line = entry
+        .line
+        .checked_sub(1)
+        .and_then(|index| contents.lines().nth(index))
+        .unwrap_or("");
+    let minutes = duration_from_range_text(raw_line).or_else(|| {
+        entry
+            .time_range
+            .as_deref()
+            .and_then(capture_pomodoros_agenda::range_minutes)
+    })?;
+    u32::try_from(minutes).ok()
 }
 
 pub(crate) fn completed_summary_for(
@@ -1066,14 +1116,15 @@ fn human_agenda_entry(
     let entry = &item.entry;
     let name = entry.name.as_deref().unwrap_or("unnamed");
     let time = agenda_time_label(entry.time_range.as_deref());
+    let chip = homes_chip_suffix(item.homes.as_ref(), styler);
     let mut output = match item.role {
         Some(AgendaRole::Current) => format!(
-            "  {} {name} {time} {}\n",
+            "  {} {name}{chip} {time} {}\n",
             styler.green("▶"),
             styler.dim("now"),
         ),
         Some(AgendaRole::Next) => format!(
-            "  {} {name} {} {}\n",
+            "  {} {name}{chip} {} {}\n",
             styler.cyan("◌"),
             styler.dim("next"),
             styler.dim("= starts it"),
@@ -1085,18 +1136,18 @@ fn human_agenda_entry(
                 String::new()
             };
             format!(
-                "  {} {name} {}{trail}\n",
+                "  {} {name}{chip} {}{trail}\n",
                 styler.dim("◌"),
                 styler.dim("later"),
             )
         }
         Some(AgendaRole::Open) => format!(
-            "  {} {name} {time} {}\n",
+            "  {} {name}{chip} {time} {}\n",
             styler.yellow("◆"),
             styler.dim("open"),
         ),
         Some(AgendaRole::Completed) | None => {
-            format!("  {} {time}\n", styler.dim(name),)
+            format!("  {}{chip} {time}\n", styler.dim(name),)
         }
     };
     if let Some(notes) = item.notes.as_deref() {
@@ -1214,6 +1265,27 @@ fn agenda_item_summary(item: &capture_pomodoros_agenda::AgendaItem) -> String {
         parts.push(format!("schedule log {schedule}"));
     }
     parts.join(" · ")
+}
+
+fn homes_chip_suffix(
+    homes: Option<&pomodoro_homes::Homes>,
+    styler: &Styler,
+) -> String {
+    let Some(homes) = homes else {
+        return String::new();
+    };
+    let Some(chip) = homes.chip.as_deref() else {
+        return String::new();
+    };
+    let dot = match homes.state {
+        pomodoro_homes::SessionState::Attributed => "●",
+        pomodoro_homes::SessionState::Forecast => "○",
+    };
+    let painted_dot = match homes.hue {
+        Some(hue) => styler.xterm256(hue.xterm(), dot),
+        None => styler.dim(dot),
+    };
+    format!(" {painted_dot} {}", styler.dim(chip))
 }
 
 fn slug_label(entry: &PomodoroEntry) -> &str {
@@ -1599,6 +1671,7 @@ mod tests {
                 retired_link_count: None,
                 notes: None,
                 items: None,
+                homes: None,
             }],
             warnings: Vec::new(),
             date: None,
@@ -1632,6 +1705,7 @@ mod tests {
             "retired_link_count",
             "notes",
             "items",
+            "homes",
         ] {
             assert!(
                 value["pomodoros"][0].get(key).is_none(),
@@ -1706,6 +1780,7 @@ mod tests {
                     retired_link_count: None,
                     notes: None,
                     items: None,
+                    homes: None,
                 },
                 CapturePomodorosOutputEntry {
                     entry: PomodoroEntry {
@@ -1731,6 +1806,7 @@ mod tests {
                     retired_link_count: None,
                     notes: None,
                     items: None,
+                    homes: None,
                 },
             ],
             warnings: vec!["watch out".to_string()],
@@ -1983,12 +2059,91 @@ mod tests {
             .expect("tasks human success");
         let human = human_success(&result, &Styler::plain());
         assert!(human.contains("- Fri 2026-08-28 - 1 done (30m)"), "{human}");
-        assert!(human.contains("▶ FIX 08:00-08:30 now"), "{human}");
+        assert!(human.contains("▶ FIX ○ unfiled 08:00-08:30 now"), "{human}");
         assert!(human.contains("[ ] Alpha"), "{human}");
         assert!(human.contains("! [[missing#^nope]]"), "{human}");
         assert!(!human.contains("[[missing#^nope]] [[missing#^nope]]"));
         assert!(human.contains("✓ 1 done"), "{human}");
         assert!(!human.contains('\u{1b}'));
+    }
+
+    #[test]
+    fn tasks_json_includes_derived_homes() {
+        let temp = TempDir::new("bob-cli-capture-pomodoros-homes");
+        write_file(
+            &temp.path().join("gtd.md"),
+            concat!("---\n", "type: [[area]]\n", "color: orange\n", "---\n"),
+        );
+        write_file(
+            &temp.path().join("sase.md"),
+            concat!(
+                "---\n",
+                "type: [[project]]\n",
+                "parent: [[gtd]]\n",
+                "---\n",
+                "- [ ] #task Alpha ^alpha\n",
+            ),
+        );
+        let day_path = temp.path().join("2026/20260828.md");
+        write_file(
+            &day_path,
+            concat!(
+                "## Pomodoros\n",
+                "- [x] (0700-0730) — EARLY\n",
+                "\t- [[sase#^alpha]]\n",
+                "- [ ] (**08:00 - 08:30** [t:: 30m]) — FIX\n",
+                "\t- [[sase#^alpha]]\n",
+                "- [ ] ()\n",
+                "\t- [[sase#^alpha]]\n",
+            ),
+        );
+        let result =
+            crate::native::env::with_var("BOB_DAY_FILE", &day_path, || {
+                list_capture_pomodoros(&CapturePomodorosRequest {
+                    bob_dir: temp.path().to_path_buf(),
+                    include_all: true,
+                    include_tasks: true,
+                })
+            })
+            .expect("homes success");
+        let early = result
+            .pomodoros
+            .iter()
+            .find(|item| item.entry.name.as_deref() == Some("EARLY"))
+            .expect("early entry");
+        let early_homes = early.homes.as_ref().expect("early homes");
+        assert_eq!(early_homes.state, pomodoro_homes::SessionState::Attributed);
+        assert_eq!(early_homes.kind, pomodoro_homes::SessionKind::Work);
+        assert_eq!(early_homes.label, "sase");
+        assert_eq!(early_homes.chip.as_deref(), Some("sase"));
+        assert_eq!(early_homes.hue, Some(pomodoro_homes::Hue::Orange));
+        assert_eq!(early_homes.parts[0].minutes, Some(30));
+        let named = result
+            .pomodoros
+            .iter()
+            .find(|item| item.entry.name.as_deref() == Some("FIX"))
+            .expect("named entry");
+        let named_homes = named.homes.as_ref().expect("named homes");
+        assert_eq!(named_homes.state, pomodoro_homes::SessionState::Forecast);
+        assert_eq!(named_homes.chip.as_deref(), Some("sase"));
+        assert!(named_homes.parts[0].minutes.is_none());
+        let unnamed = result
+            .pomodoros
+            .iter()
+            .find(|item| item.entry.name.is_none())
+            .expect("unnamed entry");
+        assert_eq!(
+            unnamed
+                .homes
+                .as_ref()
+                .expect("unnamed homes")
+                .chip
+                .as_deref(),
+            Some("sase")
+        );
+        let human = human_success(&result, &Styler::plain());
+        assert!(human.contains("▶ FIX ○ sase"), "{human}");
+        assert!(human.contains("EARLY ● sase"), "{human}");
     }
 
     fn write_file(path: &Path, contents: &str) {

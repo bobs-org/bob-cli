@@ -372,6 +372,130 @@ fn pomodoro_worked_reports_closed_ledger_total_only_when_status_is_empty() {
     assert!(stderr(&output).contains("Unexpected argument: --worked"));
 }
 
+#[test]
+fn pomodoro_prints_derived_chip_for_unnamed_linked_session() {
+    let temp = TempDir::new("bob-cli-pomodoro-homes-unnamed");
+    let vault = temp.path().join("vault");
+    write_homes_vault(
+        &vault,
+        concat!(
+            "# Daily\n\n",
+            "## Pomodoros\n\n",
+            "- [ ] (0950-1015)\n",
+            "  - [[sase#^one]]\n",
+        ),
+    );
+
+    let output = bob_command()
+        .arg("pomodoro")
+        .env("BOB_DIR", &vault)
+        .env("BOB_DAY_FILE", vault.join("2026/20260601.md"))
+        .env("BOB_NOW", "2026-06-01 09:52:01")
+        .env("XDG_CACHE_HOME", temp.path().join("cache"))
+        .output()
+        .expect("run bob pomodoro unnamed homes");
+
+    assert_success(&output);
+    assert_eq!(stdout(&output), "[<23m] 0950-1015 sase\n");
+}
+
+#[test]
+fn tmux_pomodoro_prints_derived_chip_for_unnamed_linked_session() {
+    let temp = TempDir::new("bob-cli-tmux-homes-unnamed");
+    let vault = temp.path().join("vault");
+    write_homes_vault(
+        &vault,
+        concat!(
+            "# Daily\n\n",
+            "## Pomodoros\n\n",
+            "- [ ] (0950-1015)\n",
+            "  - [[sase#^one]]\n",
+        ),
+    );
+
+    let output = bob_command()
+        .args(["pomodoro", "tmux"])
+        .env("BOB_DIR", &vault)
+        .env("BOB_DAY_FILE", vault.join("2026/20260601.md"))
+        .env("BOB_NOW", "2026-06-01 09:52:01")
+        .env("XDG_CACHE_HOME", temp.path().join("cache"))
+        .output()
+        .expect("run bob pomodoro tmux unnamed homes");
+
+    assert_success(&output);
+    assert_eq!(
+        stdout(&output),
+        "[<23m] 0950-1015 sase · plan 1/3 · 1/10 | "
+    );
+}
+
+#[test]
+fn pomodoro_named_session_skips_home_resolution() {
+    let temp = TempDir::new("bob-cli-pomodoro-homes-named");
+    let vault = temp.path().join("vault");
+    write_homes_vault(
+        &vault,
+        concat!(
+            "# Daily\n\n",
+            "## Pomodoros\n\n",
+            "- [ ] (0950-1015) — HACK\n",
+            "  - [[sase#^one]]\n",
+        ),
+    );
+
+    let output = bob_command()
+        .arg("pomodoro")
+        .env("BOB_DIR", &vault)
+        .env("BOB_DAY_FILE", vault.join("2026/20260601.md"))
+        .env("BOB_NOW", "2026-06-01 09:52:01")
+        .env("XDG_CACHE_HOME", temp.path().join("cache"))
+        .output()
+        .expect("run bob pomodoro named homes");
+
+    assert_success(&output);
+    assert_eq!(stdout(&output), "[<23m] 0950-1015 — HACK\n");
+}
+
+#[test]
+fn pomodoro_unnamed_unlinked_session_prints_range_only() {
+    let temp = TempDir::new("bob-cli-pomodoro-homes-unlinked");
+    let vault = temp.path().join("vault");
+    write_homes_vault(
+        &vault,
+        concat!("# Daily\n\n", "## Pomodoros\n\n", "- [ ] (0950-1015)\n"),
+    );
+
+    let output = bob_command()
+        .arg("pomodoro")
+        .env("BOB_DIR", &vault)
+        .env("BOB_DAY_FILE", vault.join("2026/20260601.md"))
+        .env("BOB_NOW", "2026-06-01 09:52:01")
+        .env("XDG_CACHE_HOME", temp.path().join("cache"))
+        .output()
+        .expect("run bob pomodoro unlinked unnamed");
+
+    assert_success(&output);
+    assert_eq!(stdout(&output), "[<23m] 0950-1015\n");
+}
+
+fn write_homes_vault(vault: &std::path::Path, daily: &str) {
+    write_file(
+        &vault.join("gtd.md"),
+        "---\ntype: [[area]]\ncolor: orange\n---\n",
+    );
+    write_file(
+        &vault.join("sase.md"),
+        concat!(
+            "---\n",
+            "type: [[project]]\n",
+            "parent: [[gtd]]\n",
+            "---\n",
+            "- [ ] #task One ^one\n",
+        ),
+    );
+    write_file(&vault.join("2026/20260601.md"), daily);
+}
+
 fn run_pomodoro_fixture(
     args: &[&str],
     fixture_relative: &str,

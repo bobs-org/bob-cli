@@ -145,6 +145,11 @@ pub(crate) fn sparkline(counts: &[usize]) -> (String, usize, usize) {
 }
 
 impl Styler {
+    /// Paint `text` with a 256-color xterm index.
+    pub(crate) fn xterm256(self, code: u8, text: &str) -> String {
+        self.paint(&format!("38;5;{code}"), text)
+    }
+
     /// Paint `text` in a stats palette slot (256-color hues).
     pub(crate) fn metric_hue(self, color: &str, text: &str) -> String {
         let code = match color {

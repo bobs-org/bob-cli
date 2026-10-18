@@ -24,5 +24,6 @@ pub(crate) use resolve::{
     IndexedHomeSource, ResolverHealth,
 };
 pub(crate) use session::{
-    attribute_session, session_links, split_minutes, SessionHomes, SessionLink,
+    attribute_ledger_entry, attribute_session, session_links, split_minutes,
+    SessionHomes, SessionLink,
 };

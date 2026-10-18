@@ -56,6 +56,19 @@ struct ResolvedLink {
     block_id: String,
 }
 
+pub(crate) fn attribute_ledger_entry<S: HomeSource>(
+    contents: &str,
+    entry_line: usize,
+    name: Option<&str>,
+    minutes: Option<u32>,
+    exempt: &[String],
+    daily_path: &Path,
+    resolver: &mut HomeResolver<S>,
+) -> SessionHomes {
+    let links = session_links(contents, entry_line.saturating_sub(1));
+    attribute_session(name, &links, minutes, exempt, daily_path, resolver)
+}
+
 pub(crate) fn attribute_session<S: HomeSource>(
     name: Option<&str>,
     links: &[SessionLink],

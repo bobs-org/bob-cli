@@ -10,8 +10,9 @@ current Pomodoro at a glance. It is a read-only consumer of
 polls every 60 seconds (15 seconds without the file watcher), on wake and unlock, from
 its Refresh menu item, and once when the countdown crosses zero; it ticks the countdown
 locally in between and never writes the vault. A running session reads
-`THEME (50m) · 🍅 12:34`, where THEME is the Pomodoro's ` — NAME` (`UNTITLED` when
-unnamed). Once overdue, a `→ HH:MM` stop time joins the title and the `+MM:SS` count
+`THEME (50m) · 🍅 12:34`, where THEME is the Pomodoro's ` — NAME`. An unnamed
+session with linked tasks shows its derived home label (`sase (50m) · 🍅 12:34`);
+`UNTITLED` only appears when there is nothing to derive. Once overdue, a `→ HH:MM` stop time joins the title and the `+MM:SS` count
 turns red; from ten minutes overdue the count becomes an `OVERDUE` badge flashing red
 at 1 Hz, and `--show-stale` holds it there rather than letting it read as idle. Without
 a session it shows today's worked total `<H>h<M>m` (bob's `[WORKED <minutes>m]`, closed

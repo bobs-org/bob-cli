@@ -24,6 +24,25 @@
     {
       "child_count": 3,
       "ends_at": "2026-08-28T08:30",
+      "homes": {
+        "chip": "unfiled",
+        "hue": null,
+        "kind": "work",
+        "label": "unfiled",
+        "parts": [
+          {
+            "area": "@unfiled",
+            "area_label": "unfiled",
+            "hue": null,
+            "key": "@unfiled",
+            "kind": "bucket",
+            "label": "unfiled",
+            "share": 100,
+            "tasks": 3
+          }
+        ],
+        "state": "forecast"
+      },
       "is_current": true,
       "items": [
         {
@@ -126,6 +145,25 @@
     {
       "child_count": 3,
       "ends_at": null,
+      "homes": {
+        "chip": "unfiled",
+        "hue": null,
+        "kind": "work",
+        "label": "unfiled",
+        "parts": [
+          {
+            "area": "@unfiled",
+            "area_label": "unfiled",
+            "hue": null,
+            "key": "@unfiled",
+            "kind": "bucket",
+            "label": "unfiled",
+            "share": 100,
+            "tasks": 3
+          }
+        ],
+        "state": "forecast"
+      },
       "is_current": false,
       "items": [
         {
@@ -228,6 +266,25 @@
     {
       "child_count": 3,
       "ends_at": null,
+      "homes": {
+        "chip": "unfiled",
+        "hue": null,
+        "kind": "work",
+        "label": "unfiled",
+        "parts": [
+          {
+            "area": "@unfiled",
+            "area_label": "unfiled",
+            "hue": null,
+            "key": "@unfiled",
+            "kind": "bucket",
+            "label": "unfiled",
+            "share": 100,
+            "tasks": 3
+          }
+        ],
+        "state": "forecast"
+      },
       "is_current": false,
       "items": [
         {
@@ -330,6 +387,25 @@
     {
       "child_count": 3,
       "ends_at": null,
+      "homes": {
+        "chip": "unfiled",
+        "hue": null,
+        "kind": "work",
+        "label": "unfiled",
+        "parts": [
+          {
+            "area": "@unfiled",
+            "area_label": "unfiled",
+            "hue": null,
+            "key": "@unfiled",
+            "kind": "bucket",
+            "label": "unfiled",
+            "share": 100,
+            "tasks": 3
+          }
+        ],
+        "state": "forecast"
+      },
       "is_current": false,
       "items": [
         {
@@ -432,6 +508,25 @@
     {
       "child_count": 3,
       "ends_at": null,
+      "homes": {
+        "chip": "unfiled",
+        "hue": null,
+        "kind": "work",
+        "label": "unfiled",
+        "parts": [
+          {
+            "area": "@unfiled",
+            "area_label": "unfiled",
+            "hue": null,
+            "key": "@unfiled",
+            "kind": "bucket",
+            "label": "unfiled",
+            "share": 100,
+            "tasks": 3
+          }
+        ],
+        "state": "forecast"
+      },
       "is_current": false,
       "items": [
         {
@@ -534,6 +629,25 @@
     {
       "child_count": 3,
       "ends_at": null,
+      "homes": {
+        "chip": "unfiled",
+        "hue": null,
+        "kind": "work",
+        "label": "unfiled",
+        "parts": [
+          {
+            "area": "@unfiled",
+            "area_label": "unfiled",
+            "hue": null,
+            "key": "@unfiled",
+            "kind": "bucket",
+            "label": "unfiled",
+            "share": 100,
+            "tasks": 3
+          }
+        ],
+        "state": "forecast"
+      },
       "is_current": false,
       "items": [
         {
@@ -636,6 +750,25 @@
     {
       "child_count": 3,
       "ends_at": null,
+      "homes": {
+        "chip": "unfiled",
+        "hue": null,
+        "kind": "work",
+        "label": "unfiled",
+        "parts": [
+          {
+            "area": "@unfiled",
+            "area_label": "unfiled",
+            "hue": null,
+            "key": "@unfiled",
+            "kind": "bucket",
+            "label": "unfiled",
+            "share": 100,
+            "tasks": 3
+          }
+        ],
+        "state": "forecast"
+      },
       "is_current": false,
       "items": [
         {
@@ -738,6 +871,25 @@
     {
       "child_count": 3,
       "ends_at": null,
+      "homes": {
+        "chip": "unfiled",
+        "hue": null,
+        "kind": "work",
+        "label": "unfiled",
+        "parts": [
+          {
+            "area": "@unfiled",
+            "area_label": "unfiled",
+            "hue": null,
+            "key": "@unfiled",
+            "kind": "bucket",
+            "label": "unfiled",
+            "share": 100,
+            "tasks": 3
+          }
+        ],
+        "state": "forecast"
+      },
       "is_current": false,
       "items": [
         {
@@ -840,6 +992,25 @@
     {
       "child_count": 3,
       "ends_at": null,
+      "homes": {
+        "chip": "unfiled",
+        "hue": null,
+        "kind": "work",
+        "label": "unfiled",
+        "parts": [
+          {
+            "area": "@unfiled",
+            "area_label": "unfiled",
+            "hue": null,
+            "key": "@unfiled",
+            "kind": "bucket",
+            "label": "unfiled",
+            "share": 100,
+            "tasks": 3
+          }
+        ],
+        "state": "forecast"
+      },
       "is_current": false,
       "items": [
         {
@@ -942,6 +1113,25 @@
     {
       "child_count": 3,
       "ends_at": null,
+      "homes": {
+        "chip": "unfiled",
+        "hue": null,
+        "kind": "work",
+        "label": "unfiled",
+        "parts": [
+          {
+            "area": "@unfiled",
+            "area_label": "unfiled",
+            "hue": null,
+            "key": "@unfiled",
+            "kind": "bucket",
+            "label": "unfiled",
+            "share": 100,
+            "tasks": 3
+          }
+        ],
+        "state": "forecast"
+      },
       "is_current": false,
       "items": [
         {
@@ -1044,6 +1234,25 @@
     {
       "child_count": 3,
       "ends_at": null,
+      "homes": {
+        "chip": "unfiled",
+        "hue": null,
+        "kind": "work",
+        "label": "unfiled",
+        "parts": [
+          {
+            "area": "@unfiled",
+            "area_label": "unfiled",
+            "hue": null,
+            "key": "@unfiled",
+            "kind": "bucket",
+            "label": "unfiled",
+            "share": 100,
+            "tasks": 3
+          }
+        ],
+        "state": "forecast"
+      },
       "is_current": false,
       "items": [
         {
@@ -1146,6 +1355,25 @@
     {
       "child_count": 3,
       "ends_at": null,
+      "homes": {
+        "chip": "unfiled",
+        "hue": null,
+        "kind": "work",
+        "label": "unfiled",
+        "parts": [
+          {
+            "area": "@unfiled",
+            "area_label": "unfiled",
+            "hue": null,
+            "key": "@unfiled",
+            "kind": "bucket",
+            "label": "unfiled",
+            "share": 100,
+            "tasks": 3
+          }
+        ],
+        "state": "forecast"
+      },
       "is_current": false,
       "items": [
         {
@@ -1248,6 +1476,25 @@
     {
       "child_count": 3,
       "ends_at": null,
+      "homes": {
+        "chip": "unfiled",
+        "hue": null,
+        "kind": "work",
+        "label": "unfiled",
+        "parts": [
+          {
+            "area": "@unfiled",
+            "area_label": "unfiled",
+            "hue": null,
+            "key": "@unfiled",
+            "kind": "bucket",
+            "label": "unfiled",
+            "share": 100,
+            "tasks": 3
+          }
+        ],
+        "state": "forecast"
+      },
       "is_current": false,
       "items": [
         {
@@ -1350,6 +1597,25 @@
     {
       "child_count": 3,
       "ends_at": null,
+      "homes": {
+        "chip": "unfiled",
+        "hue": null,
+        "kind": "work",
+        "label": "unfiled",
+        "parts": [
+          {
+            "area": "@unfiled",
+            "area_label": "unfiled",
+            "hue": null,
+            "key": "@unfiled",
+            "kind": "bucket",
+            "label": "unfiled",
+            "share": 100,
+            "tasks": 3
+          }
+        ],
+        "state": "forecast"
+      },
       "is_current": false,
       "items": [
         {
@@ -1452,6 +1718,25 @@
     {
       "child_count": 3,
       "ends_at": null,
+      "homes": {
+        "chip": "unfiled",
+        "hue": null,
+        "kind": "work",
+        "label": "unfiled",
+        "parts": [
+          {
+            "area": "@unfiled",
+            "area_label": "unfiled",
+            "hue": null,
+            "key": "@unfiled",
+            "kind": "bucket",
+            "label": "unfiled",
+            "share": 100,
+            "tasks": 3
+          }
+        ],
+        "state": "forecast"
+      },
       "is_current": false,
       "items": [
         {
@@ -1554,6 +1839,25 @@
     {
       "child_count": 3,
       "ends_at": null,
+      "homes": {
+        "chip": "unfiled",
+        "hue": null,
+        "kind": "work",
+        "label": "unfiled",
+        "parts": [
+          {
+            "area": "@unfiled",
+            "area_label": "unfiled",
+            "hue": null,
+            "key": "@unfiled",
+            "kind": "bucket",
+            "label": "unfiled",
+            "share": 100,
+            "tasks": 3
+          }
+        ],
+        "state": "forecast"
+      },
       "is_current": false,
       "items": [
         {
@@ -1656,6 +1960,25 @@
     {
       "child_count": 3,
       "ends_at": null,
+      "homes": {
+        "chip": "unfiled",
+        "hue": null,
+        "kind": "work",
+        "label": "unfiled",
+        "parts": [
+          {
+            "area": "@unfiled",
+            "area_label": "unfiled",
+            "hue": null,
+            "key": "@unfiled",
+            "kind": "bucket",
+            "label": "unfiled",
+            "share": 100,
+            "tasks": 3
+          }
+        ],
+        "state": "forecast"
+      },
       "is_current": false,
       "items": [
         {
@@ -1758,6 +2081,25 @@
     {
       "child_count": 3,
       "ends_at": null,
+      "homes": {
+        "chip": "unfiled",
+        "hue": null,
+        "kind": "work",
+        "label": "unfiled",
+        "parts": [
+          {
+            "area": "@unfiled",
+            "area_label": "unfiled",
+            "hue": null,
+            "key": "@unfiled",
+            "kind": "bucket",
+            "label": "unfiled",
+            "share": 100,
+            "tasks": 3
+          }
+        ],
+        "state": "forecast"
+      },
       "is_current": false,
       "items": [
         {
@@ -1860,6 +2202,25 @@
     {
       "child_count": 3,
       "ends_at": null,
+      "homes": {
+        "chip": "unfiled",
+        "hue": null,
+        "kind": "work",
+        "label": "unfiled",
+        "parts": [
+          {
+            "area": "@unfiled",
+            "area_label": "unfiled",
+            "hue": null,
+            "key": "@unfiled",
+            "kind": "bucket",
+            "label": "unfiled",
+            "share": 100,
+            "tasks": 3
+          }
+        ],
+        "state": "forecast"
+      },
       "is_current": false,
       "items": [
         {
@@ -1962,6 +2323,25 @@
     {
       "child_count": 3,
       "ends_at": null,
+      "homes": {
+        "chip": "unfiled",
+        "hue": null,
+        "kind": "work",
+        "label": "unfiled",
+        "parts": [
+          {
+            "area": "@unfiled",
+            "area_label": "unfiled",
+            "hue": null,
+            "key": "@unfiled",
+            "kind": "bucket",
+            "label": "unfiled",
+            "share": 100,
+            "tasks": 3
+          }
+        ],
+        "state": "forecast"
+      },
       "is_current": false,
       "items": [
         {
@@ -2064,6 +2444,25 @@
     {
       "child_count": 3,
       "ends_at": null,
+      "homes": {
+        "chip": "unfiled",
+        "hue": null,
+        "kind": "work",
+        "label": "unfiled",
+        "parts": [
+          {
+            "area": "@unfiled",
+            "area_label": "unfiled",
+            "hue": null,
+            "key": "@unfiled",
+            "kind": "bucket",
+            "label": "unfiled",
+            "share": 100,
+            "tasks": 3
+          }
+        ],
+        "state": "forecast"
+      },
       "is_current": false,
       "items": [
         {
@@ -2166,6 +2565,25 @@
     {
       "child_count": 3,
       "ends_at": null,
+      "homes": {
+        "chip": "unfiled",
+        "hue": null,
+        "kind": "work",
+        "label": "unfiled",
+        "parts": [
+          {
+            "area": "@unfiled",
+            "area_label": "unfiled",
+            "hue": null,
+            "key": "@unfiled",
+            "kind": "bucket",
+            "label": "unfiled",
+            "share": 100,
+            "tasks": 3
+          }
+        ],
+        "state": "forecast"
+      },
       "is_current": false,
       "items": [
         {
@@ -2268,6 +2686,25 @@
     {
       "child_count": 3,
       "ends_at": null,
+      "homes": {
+        "chip": "unfiled",
+        "hue": null,
+        "kind": "work",
+        "label": "unfiled",
+        "parts": [
+          {
+            "area": "@unfiled",
+            "area_label": "unfiled",
+            "hue": null,
+            "key": "@unfiled",
+            "kind": "bucket",
+            "label": "unfiled",
+            "share": 100,
+            "tasks": 3
+          }
+        ],
+        "state": "forecast"
+      },
       "is_current": false,
       "items": [
         {
@@ -2370,6 +2807,25 @@
     {
       "child_count": 3,
       "ends_at": null,
+      "homes": {
+        "chip": "unfiled",
+        "hue": null,
+        "kind": "work",
+        "label": "unfiled",
+        "parts": [
+          {
+            "area": "@unfiled",
+            "area_label": "unfiled",
+            "hue": null,
+            "key": "@unfiled",
+            "kind": "bucket",
+            "label": "unfiled",
+            "share": 100,
+            "tasks": 3
+          }
+        ],
+        "state": "forecast"
+      },
       "is_current": false,
       "items": [
         {
@@ -2472,6 +2928,25 @@
     {
       "child_count": 6,
       "ends_at": null,
+      "homes": {
+        "chip": "unfiled",
+        "hue": null,
+        "kind": "work",
+        "label": "unfiled",
+        "parts": [
+          {
+            "area": "@unfiled",
+            "area_label": "unfiled",
+            "hue": null,
+            "key": "@unfiled",
+            "kind": "bucket",
+            "label": "unfiled",
+            "share": 100,
+            "tasks": 6
+          }
+        ],
+        "state": "forecast"
+      },
       "is_current": false,
       "items": [
         {

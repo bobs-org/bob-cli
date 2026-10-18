@@ -22,7 +22,7 @@ use super::{
     },
     assemble_report, compute_for_daily, count_lanes,
     today::{today_tasks, TodayResult},
-    Lanes, LedgerBudget, PlanReport, PlanStatus,
+    with_entry_homes, Lanes, LedgerBudget, PlanReport, PlanStatus,
 };
 
 const COMMAND_NAME: &str = "bob plan";
@@ -212,15 +212,27 @@ fn show_plan(request: &PlanRequest) -> Result<PlanSuccess, PlanError> {
             warnings: Vec::new(),
         }
     };
-    Ok(PlanSuccess {
-        report: assemble_report(
-            today,
-            &relative_day_file,
+    let report = assemble_report(
+        today,
+        &relative_day_file,
+        &config,
+        &ledger,
+        &lanes,
+        &today_result,
+    );
+    let report = if has_section {
+        with_entry_homes(
+            report,
+            &request.bob_dir,
+            Path::new(&relative_day_file),
+            &contents,
             &config,
-            &ledger,
-            &lanes,
-            &today_result,
-        ),
+        )
+    } else {
+        report
+    };
+    Ok(PlanSuccess {
+        report,
         no_daily_note: false,
         has_section,
     })

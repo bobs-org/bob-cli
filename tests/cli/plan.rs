@@ -165,6 +165,12 @@ fn plan_reports_full_budget_as_json() {
     assert_eq!(entries[0]["links"], Value::from(3));
     assert_eq!(entries[3]["name"], Value::from("GTD"));
     assert_eq!(entries[3]["exempt"], Value::Bool(true));
+    assert_eq!(entries[0]["homes"]["state"], Value::from("forecast"));
+    assert_eq!(entries[0]["homes"]["kind"], Value::from("work"));
+    assert!(entries[0]["homes"]["parts"].as_array().is_some());
+    assert_eq!(entries[3]["homes"]["kind"], Value::from("review"));
+    assert_eq!(entries[3]["homes"]["label"], Value::from("GTD review"));
+    assert_eq!(entries[3]["homes"]["chip"], Value::Null);
 
     let codes: Vec<&str> = value["warnings"]
         .as_array()
@@ -173,6 +179,49 @@ fn plan_reports_full_budget_as_json() {
         .map(|warning| warning["code"].as_str().expect("lint code"))
         .collect();
     assert_eq!(codes, vec!["today_link_unresolved"]);
+}
+
+#[test]
+fn plan_json_entries_include_derived_project_homes() {
+    let temp = TempDir::new("bob-cli-plan-homes");
+    let vault = vault_dir(&temp);
+    write_blocked_tasks_settings(&vault);
+    write_file(
+        &vault.join("gtd.md"),
+        "---\ntype: [[area]]\ncolor: orange\n---\n",
+    );
+    write_file(
+        &vault.join("sase.md"),
+        concat!(
+            "---\n",
+            "type: [[project]]\n",
+            "parent: [[gtd]]\n",
+            "---\n",
+            "- [*] #task Fix it ^fix-it\n",
+        ),
+    );
+    write_file(
+        &vault.join("2026/20260930.md"),
+        concat!(
+            "# 2026-09-30\n\n",
+            "## Pomodoros\n\n",
+            "- [ ] (0945-1015) — GOALS\n",
+            "    - [[sase#^fix-it]]\n",
+            "- [ ] (1020-1050)\n",
+            "    - [[sase#^fix-it]]\n",
+        ),
+    );
+
+    let (_output, value) = plan_json(&temp);
+    let entries = value["entries"].as_array().expect("entries");
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0]["homes"]["label"], Value::from("sase"));
+    assert_eq!(entries[0]["homes"]["chip"], Value::from("sase"));
+    assert_eq!(entries[0]["homes"]["hue"], Value::from("orange"));
+    assert_eq!(entries[0]["homes"]["state"], Value::from("forecast"));
+    assert_eq!(entries[1]["name"], Value::from("(unnamed)"));
+    assert_eq!(entries[1]["homes"]["chip"], Value::from("sase"));
+    assert_eq!(entries[1]["homes"]["kind"], Value::from("work"));
 }
 
 #[test]

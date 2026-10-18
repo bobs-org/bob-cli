@@ -1147,7 +1147,10 @@ time remaining or recent overdue status. It defaults to
 unset, unless `BOB_DAY_FILE` is set.
 Ledger entries may use bold Markdown ranges such as
 `(**0945-1015** [t:: 30m])`; command output remains plain, for example
-`0945-1015 Review crate skeleton`.
+`0945-1015 Review crate skeleton`. A named session prints that authored
+name. An unnamed running session with linked tasks prints the derived
+home chip after the range (`[<13m] 0950-1015 sase`); an unnamed session
+without links prints the range alone.
 
 The command exits successfully with no output when the daily note is missing,
 has no open Pomodoro, or the open Pomodoro is more than nine minutes overdue.

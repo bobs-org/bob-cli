@@ -8,7 +8,9 @@ use std::{
 use chrono::{NaiveDate, NaiveDateTime, Timelike};
 use clap::{Arg, ArgAction, Command as ClapCommand};
 
-use super::{capture_pomodoros, config, env as bob_env, plan_budget};
+use super::{
+    capture_pomodoros, config, env as bob_env, plan_budget, pomodoro_homes,
+};
 
 #[derive(Debug)]
 pub(crate) struct Error {
@@ -38,6 +40,7 @@ struct LedgerPomodoro {
     end: String,
     range: String,
     task: String,
+    line: usize,
 }
 
 pub(crate) fn run(args: Vec<OsString>) -> i32 {
@@ -179,18 +182,17 @@ fn status(verbose: bool, show_stale: bool) -> Result<Option<String>, Error> {
         return Ok(None);
     }
 
-    let ledger_pomodoro =
-        latest_ledger_pomodoro(&day_file).map_err(|error| {
-            Error::new(
-                1,
-                format!(
-                    "failed to read Bob day file {}: {error}",
-                    day_file.display()
-                ),
-            )
-        })?;
+    let contents = fs::read_to_string(&day_file).map_err(|error| {
+        Error::new(
+            1,
+            format!(
+                "failed to read Bob day file {}: {error}",
+                day_file.display()
+            ),
+        )
+    })?;
 
-    let Some(ledger_pomodoro) = ledger_pomodoro else {
+    let Some(ledger_pomodoro) = latest_ledger_pomodoro(&contents) else {
         debug(
             verbose,
             format_args!(
@@ -215,7 +217,7 @@ fn status(verbose: bool, show_stale: bool) -> Result<Option<String>, Error> {
     let end_datetime = NaiveDateTime::new(day_date, end_time);
     let now = bob_env::current_datetime();
     let now_minus_end = now.signed_duration_since(end_datetime).num_seconds();
-    let output = format_pomodoro(&ledger_pomodoro.range, &ledger_pomodoro.task);
+    let output = format_status_task(&day_file, &contents, &ledger_pomodoro);
 
     if now_minus_end > 0 {
         if show_stale || now_minus_end < 600 {
@@ -321,14 +323,9 @@ pub(crate) fn parse_day_file_date(file_name: &str) -> Option<NaiveDate> {
     NaiveDate::from_ymd_opt(year, month, day)
 }
 
-fn latest_ledger_pomodoro(
-    day_file: &Path,
-) -> io::Result<Option<LedgerPomodoro>> {
-    let contents = fs::read_to_string(day_file)?;
+fn latest_ledger_pomodoro(contents: &str) -> Option<LedgerPomodoro> {
     let lines = contents.lines().collect::<Vec<_>>();
-    let Some(section) = pomodoros_section_range(&lines) else {
-        return Ok(None);
-    };
+    let section = pomodoros_section_range(&lines)?;
     let mut last = None;
     let fenced = super::markdown::fenced_lines(&lines, section.clone());
 
@@ -351,11 +348,58 @@ fn latest_ledger_pomodoro(
                 end,
                 range,
                 task: cleaned_task,
+                line: index + 1,
             });
         }
     }
 
-    Ok(last)
+    last
+}
+
+fn format_status_task(
+    day_file: &Path,
+    contents: &str,
+    ledger: &LedgerPomodoro,
+) -> String {
+    if let Some(chip) = unnamed_home_chip(day_file, contents, ledger) {
+        return format_pomodoro(&ledger.range, &chip);
+    }
+    format_pomodoro(&ledger.range, &ledger.task)
+}
+
+fn unnamed_home_chip(
+    day_file: &Path,
+    contents: &str,
+    ledger: &LedgerPomodoro,
+) -> Option<String> {
+    let scan = capture_pomodoros::scan(contents);
+    let entry = scan
+        .entries
+        .iter()
+        .find(|entry| entry.line == ledger.line)?;
+    if entry.name.is_some() {
+        return None;
+    }
+    let bob_dir = bob_env::bob_dir();
+    let daily_path = day_file.strip_prefix(&bob_dir).unwrap_or(day_file);
+    let exempt = config::load_plan_config(&config::config_path())
+        .unwrap_or_default()
+        .exempt()
+        .to_vec();
+    let mut resolver = pomodoro_homes::HomeResolver::new(
+        pomodoro_homes::DiskHomeSource::new(bob_dir),
+    );
+    pomodoro_homes::attribute_ledger_entry(
+        contents,
+        entry.line,
+        None,
+        None,
+        &exempt,
+        daily_path,
+        &mut resolver,
+    )
+    .homes
+    .chip
 }
 
 pub(crate) fn pomodoros_section_range(lines: &[&str]) -> Option<Range<usize>> {

@@ -24,6 +24,25 @@
     {
       "child_count": 1,
       "ends_at": null,
+      "homes": {
+        "chip": "unfiled",
+        "hue": null,
+        "kind": "work",
+        "label": "unfiled",
+        "parts": [
+          {
+            "area": "@unfiled",
+            "area_label": "unfiled",
+            "hue": null,
+            "key": "@unfiled",
+            "kind": "bucket",
+            "label": "unfiled",
+            "share": 100,
+            "tasks": 1
+          }
+        ],
+        "state": "forecast"
+      },
       "is_current": false,
       "items": [
         {
@@ -86,6 +105,14 @@
     {
       "child_count": 0,
       "ends_at": null,
+      "homes": {
+        "chip": null,
+        "hue": null,
+        "kind": "unlinked",
+        "label": "",
+        "parts": [],
+        "state": "forecast"
+      },
       "is_current": false,
       "items": [],
       "line": 5,

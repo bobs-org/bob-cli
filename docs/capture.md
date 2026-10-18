@@ -6127,7 +6127,13 @@ With `-t/--tasks`, `capture-pomodoros` resolves each listed entry's Task Links
 into agenda views. The top level adds `date` (`YYYY-MM-DD`, from the day file's
 name or today) and `completed_summary` (`count` of completed ledger entries and
 their summed `minutes`: each entry's recorded `[t:: Nm]` or stopwatch duration
-when present, else its time-range span). Each entry adds `role` (`current`, `next`,
+when present, else its time-range span). Each entry adds a derived `homes`
+object (the shared R9 shape from [Pomodoro homes](pomodoro-homes.md): `state`,
+`kind`, `label`, nullable `chip` and `hue`, and `parts`). Open entries are a
+forecast; completed entries are an attribution with `minutes` on each part.
+Human output appends a dim chip with its forecast `○` or attributed `●` dot
+after the entry name when `chip` is set. The schema stays version `1`. Calls
+without `--tasks` omit `homes`. Each entry also adds `role` (`current`, `next`,
 `later`, `open`, or `completed`), naive `starts_at`/`ends_at` datetimes
 (`"YYYY-MM-DDTHH:MM"` for timed entries, `null` otherwise; both keys are always
 present with `--tasks`, and an end before the start rolls to the next day),

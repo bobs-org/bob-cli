@@ -37,7 +37,8 @@ cancelled entries are history.
 An entry's name is the text after `—` (em dash) that follows the
 leading `()` placeholder or time range. A merged name (`BOB + DECKS`)
 splits on `+` into **components**. Components compare
-case-insensitively after collapsing whitespace.
+case-insensitively after collapsing whitespace. Names are optional; an
+unnamed entry still shows its derived homes.
 
 ## Exempt entries
 
@@ -666,7 +667,26 @@ shows all report fields for one open theme and one exempt entry:
       "running": true,
       "highlight": true,
       "time_range": "0945-1015",
-      "links": 3
+      "links": 3,
+      "homes": {
+        "state": "forecast",
+        "kind": "work",
+        "label": "sase",
+        "chip": "sase",
+        "hue": "orange",
+        "parts": [
+          {
+            "key": "sase.md",
+            "label": "sase",
+            "kind": "project",
+            "area": "gtd.md",
+            "area_label": "gtd",
+            "hue": "orange",
+            "tasks": 1,
+            "share": 100
+          }
+        ]
+      }
     },
     {
       "line": 30,
@@ -675,7 +695,26 @@ shows all report fields for one open theme and one exempt entry:
       "exempt": true,
       "running": false,
       "highlight": false,
-      "links": 0
+      "links": 0,
+      "homes": {
+        "state": "forecast",
+        "kind": "review",
+        "label": "GTD review",
+        "chip": null,
+        "hue": "orange",
+        "parts": [
+          {
+            "key": "@review:GTD",
+            "label": "GTD review",
+            "kind": "bucket",
+            "area": "gtd.md",
+            "area_label": "gtd",
+            "hue": "orange",
+            "tasks": 0,
+            "share": 100
+          }
+        ]
+      }
     }
   ],
   "warnings": [],
@@ -686,8 +725,10 @@ shows all report fields for one open theme and one exempt entry:
 
 `theme_names` lists the ordered theme names alongside `entries`.
 Lint objects omit `line` when none applies; entries omit
-`time_range` when untimed. `today_tasks` is in ledger order of
-first occurrence; `today.count` is its length.
+`time_range` when untimed. Each `entries[]` object also carries the
+additive `homes` object from [Pomodoro homes](pomodoro-homes.md)
+(schema 2 is unchanged). Open entries are forecasts. `today_tasks` is
+in ledger order of first occurrence; `today.count` is its length.
 
 Human output:
 
