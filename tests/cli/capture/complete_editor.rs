@@ -22,7 +22,7 @@ fn capture_complete_pomodoro_name_json_lists_named_and_nameable_rows() {
         ),
     );
 
-    let draft = "x @dev:some-id#";
+    let draft = "a @dev:some-id#";
     let output = bob_command()
         .arg("capture-complete")
         .arg("-b")
@@ -116,7 +116,7 @@ fn capture_complete_pomodoro_name_json_offers_a_create_row() {
             .expect("run Pomodoro-name completion")
     };
 
-    let novel = complete("x @dev:some-id#future");
+    let novel = complete("a @dev:some-id#future");
     assert_success(&novel);
     let novel_json: serde_json::Value =
         serde_json::from_str(stdout(&novel).trim()).expect("json");
@@ -135,7 +135,7 @@ fn capture_complete_pomodoro_name_json_offers_a_create_row() {
         "{novel_json}"
     );
 
-    let completed_only = complete("x @dev:some-id#bugs");
+    let completed_only = complete("a @dev:some-id#bugs");
     assert_success(&completed_only);
     let completed_json: serde_json::Value =
         serde_json::from_str(stdout(&completed_only).trim()).expect("json");
@@ -143,7 +143,7 @@ fn capture_complete_pomodoro_name_json_offers_a_create_row() {
     assert_eq!(completed_json["candidates"][0]["replacement"], "bugs");
     assert_eq!(completed_json["candidates"][0]["name"], "BUGS");
 
-    let substring = complete("x @dev:some-id#work");
+    let substring = complete("a @dev:some-id#work");
     assert_success(&substring);
     let substring_json: serde_json::Value =
         serde_json::from_str(stdout(&substring).trim()).expect("json");
@@ -156,7 +156,7 @@ fn capture_complete_pomodoro_name_json_offers_a_create_row() {
     assert_eq!(substring_json["candidates"][2]["requires_name"], true);
 
     for query in ["memory", "mem"] {
-        let draft = format!("x @dev:some-id#{query}");
+        let draft = format!("a @dev:some-id#{query}");
         let matched = complete(&draft);
         assert_success(&matched);
         let matched_json: serde_json::Value =
@@ -172,7 +172,7 @@ fn capture_complete_pomodoro_name_json_offers_a_create_row() {
         );
     }
 
-    let empty = complete("x @dev:some-id#");
+    let empty = complete("a @dev:some-id#");
     assert_success(&empty);
     let empty_json: serde_json::Value =
         serde_json::from_str(stdout(&empty).trim()).expect("json");
@@ -185,7 +185,7 @@ fn capture_complete_pomodoro_name_json_offers_a_create_row() {
         "{empty_json}"
     );
 
-    let invalid = complete("x @dev:some-id#bad_id");
+    let invalid = complete("a @dev:some-id#bad_id");
     assert_success(&invalid);
     let invalid_json: serde_json::Value =
         serde_json::from_str(stdout(&invalid).trim()).expect("json");
@@ -221,7 +221,7 @@ fn capture_complete_pomodoro_name_json_skips_create_when_ledger_cannot_place_it(
     let temp = TempDir::new("bob-cli-capture-complete-pomodoro-create-blocked");
     let vault = temp.path().join("vault");
     write_file(&vault.join("dev.md"), "---\ntype: [[area]]\n---\n");
-    let draft = "x @dev:some-id#future";
+    let draft = "a @dev:some-id#future";
 
     let missing_day = vault.join("2026/20260828.md");
     let missing = bob_command()

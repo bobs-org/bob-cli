@@ -75,6 +75,31 @@ fn chain_matches_blank_line_batch_file_by_file() {
 }
 
 #[test]
+fn bare_x_chain_switch_matches_legacy_close_ledger() {
+    let (_bare_temp, bare_vault, bare_day) =
+        close_worked_vault("bob-cli-bare-close-chain");
+    let (_legacy_temp, legacy_vault, legacy_day) =
+        close_worked_vault("bob-cli-legacy-close-chain");
+    let now = "2026-09-28 09:37:00";
+    let bare = run_capture_json(&bare_vault, &bare_day, now, &["x ="]);
+    let legacy = run_capture_json(&legacy_vault, &legacy_day, now, &["=x ="]);
+
+    assert_eq!(bare["captures"][0]["kind"], "pomodoro_close");
+    assert_eq!(bare["captures"][0]["pomodoro_close"]["raw"], "x");
+    assert_eq!(legacy["captures"][0]["pomodoro_close"]["raw"], "=x");
+    assert_eq!(bare["captures"][1]["kind"], "pomodoro_start");
+    assert_eq!(legacy["captures"][1]["kind"], "pomodoro_start");
+    assert_eq!(
+        fs::read_to_string(&bare_day).expect("bare day"),
+        fs::read_to_string(&legacy_day).expect("legacy day")
+    );
+    assert_eq!(
+        fs::read_to_string(bare_vault.join("bob.md")).expect("bare tasks"),
+        fs::read_to_string(legacy_vault.join("bob.md")).expect("legacy tasks")
+    );
+}
+
+#[test]
 fn chain_switches_sessions_like_a_blank_line_batch() {
     let (_temp_a, vault_a, day_a) =
         close_worked_vault("bob-cli-chain-switch-a");

@@ -1810,3 +1810,29 @@ fn capture_pomodoro_close_task_reports_closed_and_next() {
     assert_eq!(blocks[1]["roles"], serde_json::json!(["next"]));
     assert_eq!(blocks[1]["created"], true);
 }
+
+#[test]
+fn bare_x_close_writes_the_same_ledger_as_legacy_close() {
+    let (_bare_temp, bare_vault, bare_day) =
+        close_worked_vault("bob-cli-bare-close");
+    let (_legacy_temp, legacy_vault, legacy_day) =
+        close_worked_vault("bob-cli-legacy-close");
+    let now = "2026-09-28 09:37:00";
+    let bare = run_close_json(&bare_vault, &bare_day, now, &["x"]);
+    let legacy = run_close_json(&legacy_vault, &legacy_day, now, &["=x"]);
+
+    assert_eq!(bare["kind"], "pomodoro_close");
+    assert_eq!(bare["pomodoro_close"]["raw"], "x");
+    assert_eq!(legacy["pomodoro_close"]["raw"], "=x");
+    assert_eq!(
+        fs::read_to_string(&bare_day).expect("bare day"),
+        fs::read_to_string(&legacy_day).expect("legacy day")
+    );
+    for note in ["bob.md", "sase.md"] {
+        assert_eq!(
+            fs::read_to_string(bare_vault.join(note)).expect("bare note"),
+            fs::read_to_string(legacy_vault.join(note)).expect("legacy note"),
+            "{note}"
+        );
+    }
+}

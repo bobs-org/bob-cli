@@ -69,7 +69,7 @@ fn block_id_link_new_and_project_note_intents() {
         "A-Z, a-z, 0-9 or '-'"
     );
 
-    let new_text = complete_json(&vault, "x @sase:", 8, None);
+    let new_text = complete_json(&vault, "a @sase:", 8, None);
     assert_eq!(new_text["block_id"]["intent"], "new");
     assert_eq!(new_text["block_id"]["allowed_character"], "[A-Za-z0-9-]");
     assert_eq!(

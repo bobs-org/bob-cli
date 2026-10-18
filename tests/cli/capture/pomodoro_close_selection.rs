@@ -11,6 +11,33 @@ fn close_entry_range(line: &str) -> bool {
     line.contains("(**0920-0940** [t:: 20m])")
 }
 
+#[test]
+fn bare_x_selection_writes_the_same_ledger_as_legacy_selection() {
+    let (_bare_temp, bare_vault, bare_day) =
+        close_worked_vault("bob-cli-bare-close-selection");
+    let (_legacy_temp, legacy_vault, legacy_day) =
+        close_worked_vault("bob-cli-legacy-close-selection");
+    let now = "2026-09-28 09:37:00";
+    let bare = run_close_json(&bare_vault, &bare_day, now, &["x1!2"]);
+    let legacy = run_close_json(&legacy_vault, &legacy_day, now, &["=x1!2"]);
+
+    assert_eq!(bare["pomodoro_close"]["raw"], "x1!2");
+    assert_eq!(legacy["pomodoro_close"]["raw"], "=x1!2");
+    assert_eq!(
+        bare["pomodoro_close"]["in_progress"],
+        serde_json::json!([1])
+    );
+    assert_eq!(bare["pomodoro_close"]["complete"], serde_json::json!([2]));
+    assert_eq!(
+        fs::read_to_string(&bare_day).expect("bare day"),
+        fs::read_to_string(&legacy_day).expect("legacy day")
+    );
+    assert_eq!(
+        fs::read_to_string(bare_vault.join("bob.md")).expect("bare tasks"),
+        fs::read_to_string(legacy_vault.join("bob.md")).expect("legacy tasks")
+    );
+}
+
 fn worked_prefix() -> &'static str {
     concat!(
         "## Pomodoros\n",

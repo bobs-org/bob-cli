@@ -1940,19 +1940,15 @@ fn unit_noun(units: u64) -> &'static str {
     }
 }
 
-/// Render a validated `=x[<N>][*<P>][!<M>][~<K>]` close for human output: the
-/// typed token plus the outcome summary. Plain `=x` prints alone; a typed
+/// Render a validated `x`/`=x` close for human output: the typed token
+/// exactly as entered plus the outcome summary. A plain close prints alone; a typed
 /// `<N>` list without a wildcard ends with `defer the rest`, and `=x0` reads
 /// `in progress none`. Typed Work Log entries render as
 /// `log 2 "wired the lexer"`, one per entry in typed order, each followed
 /// by `(+N detail)`/`(+N details)` when it carries details. Entries whose
 /// index resolves at execution render as `log "text"`, with no number.
 fn format_pomodoro_close(close: &PomodoroCloseSpec) -> String {
-    let base = if close.raw.starts_with('=') {
-        close.raw.clone()
-    } else {
-        format!("={}", close.raw)
-    };
+    let base = close.raw.clone();
     let log_part = if close.log.is_empty() {
         None
     } else {

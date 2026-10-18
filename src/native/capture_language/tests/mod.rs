@@ -79,6 +79,7 @@ fn draft_items(raw: &str) -> Vec<(usize, usize, &str)> {
         .collect()
 }
 
+mod bare_close;
 mod chain;
 mod completion;
 mod draft;

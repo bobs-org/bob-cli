@@ -1413,7 +1413,13 @@ pub(super) fn parse_editor_close_item<'a>(
     // (one byte) for `=*`/`=!` aliases; spans cover exactly what was typed.
     let prefix_len = classify_whole_item_close(first)
         .map(|(_, prefix)| prefix)
-        .unwrap_or(2);
+        .unwrap_or_else(|| {
+            if is_close_hash_token(first) && first.starts_with('x') {
+                1
+            } else {
+                2
+            }
+        });
     let token_end = token_start + prefix_len;
     let close_span = Span {
         start: token_start,
@@ -1436,12 +1442,18 @@ pub(super) fn parse_editor_close_item<'a>(
                 severity: Severity::Error,
                 code: "invalid_pomodoro_close",
                 message: pomodoro_close_hash_error(&first[hash + 1..]),
-                range: Some((token_start + 2, token_start + first.len())),
+                range: Some((
+                    token_start + prefix_len,
+                    token_start + first.len(),
+                )),
             }],
         ));
     }
     let selection_after_x = whole_item_close_after_x(first);
-    if selection_after_x.is_none() && !first.eq_ignore_ascii_case("=x") {
+    if selection_after_x.is_none()
+        && !classify_whole_item_close(first)
+            .is_some_and(|(selection, _)| selection.is_empty())
+    {
         return None;
     }
     let single_token_parent = parent_trimmed == first;

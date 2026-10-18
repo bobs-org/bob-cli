@@ -25,6 +25,38 @@ fn parse_json(text: &str) -> serde_json::Value {
 }
 
 #[test]
+fn bare_x_inline_log_writes_the_same_ledger_as_legacy_close() {
+    let (_bare_temp, bare_vault, bare_day) =
+        close_worked_vault("bob-cli-bare-close-inline");
+    let (_legacy_temp, legacy_vault, legacy_day) =
+        close_worked_vault("bob-cli-legacy-close-inline");
+    let now = "2026-09-28 09:37:00";
+    let bare =
+        run_close_json(&bare_vault, &bare_day, now, &["x wired the lexer"]);
+    let legacy = run_close_json(
+        &legacy_vault,
+        &legacy_day,
+        now,
+        &["=x wired the lexer"],
+    );
+
+    assert_eq!(bare["pomodoro_close"]["raw"], "x");
+    assert_eq!(legacy["pomodoro_close"]["raw"], "=x");
+    assert_eq!(
+        bare["pomodoro_close"]["log"],
+        serde_json::json!([{ "index": 1, "text": "wired the lexer" }])
+    );
+    assert_eq!(
+        fs::read_to_string(&bare_day).expect("bare day"),
+        fs::read_to_string(&legacy_day).expect("legacy day")
+    );
+    assert_eq!(
+        fs::read_to_string(bare_vault.join("bob.md")).expect("bare tasks"),
+        fs::read_to_string(legacy_vault.join("bob.md")).expect("legacy tasks")
+    );
+}
+
+#[test]
 fn capture_pomodoro_close_log_worked_table() {
     // `=x` plus `- 1 wired the lexer`: the entry lands under link 1, then
     // the unchanged close writes it to task 1's Work Log.

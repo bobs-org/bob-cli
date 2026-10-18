@@ -96,7 +96,7 @@ fn pomodoro_name_completes_after_hash_even_without_a_block_id() {
     assert_eq!(empty_field.query, "");
     assert_eq!(empty_field.replacement, (empty_hash + 1, empty_hash + 1));
 
-    let no_id = "x @dev:#bu";
+    let no_id = "a @dev:#bu";
     let no_id_hash = no_id.find('#').expect("hash");
     let no_id_field = field(no_id, no_id.len()).expect("name without id");
     assert_eq!(no_id_field.context, CompletionContext::PomodoroName);
@@ -782,7 +782,7 @@ fn pomodoro_start_name_completes_per_token_inside_chains() {
 #[test]
 fn pomodoro_start_name_leaves_link_form_names_alone() {
     // `@route:id#name` still completes the link-form Pomodoro name.
-    let raw = "x @dev:some-id#bu";
+    let raw = "a @dev:some-id#bu";
     let completion = field(raw, raw.len()).expect("link name field");
     assert_eq!(completion.context, CompletionContext::PomodoroName);
     assert_eq!(completion.route.as_deref(), Some("dev"));

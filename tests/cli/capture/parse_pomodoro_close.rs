@@ -46,6 +46,24 @@ fn capture_parse_pomodoro_close_protocol() {
         serde_json::json!({ "raw": "=x", "in_progress": null, "complete": [] })
     );
 
+    let bare = parse("x");
+    assert_eq!(bare["mode"], "pomodoro_close");
+    assert_eq!(bare["body"], "x");
+    assert_eq!(bare["pomodoro_close"]["raw"], "x");
+    assert_eq!(
+        bare["spans"],
+        serde_json::json!([{ "start": 0, "end": 1, "kind": "pomodoro_close" }])
+    );
+    let bare_selected = parse("x2");
+    assert_eq!(bare_selected["pomodoro_close"]["raw"], "x2");
+    assert_eq!(
+        bare_selected["spans"],
+        serde_json::json!([
+            { "start": 0, "end": 1, "kind": "pomodoro_close" },
+            { "start": 1, "end": 2, "kind": "pomodoro_close_in_progress" },
+        ])
+    );
+
     // `=X` keeps its case in the typed raw.
     let upper = parse("=X");
     assert_eq!(upper["mode"], "pomodoro_close");
@@ -810,4 +828,13 @@ fn capture_parse_pomodoro_close_drop_protocol() {
         "{}",
         stdout(&human)
     );
+
+    let bare_human = bob_command()
+        .arg("capture-parse")
+        .arg("--")
+        .arg("x2")
+        .output()
+        .expect("run bare capture-parse human");
+    assert_success(&bare_human);
+    assert!(stdout(&bare_human).contains("x2 (in progress 2 · defer the rest)"));
 }

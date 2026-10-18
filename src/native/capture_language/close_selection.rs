@@ -97,13 +97,40 @@ fn close_after_eq_parts(after_eq: &str) -> Option<(&str, usize)> {
     None
 }
 
-/// Classify a whole-item `=`-prefixed close token: the selection body to
-/// lex plus the prefix length from the token start (`2` for `=x`/`=X`,
-/// `1` for `=*`/`=!` aliases). `Some` for a plain long close and for every
+/// Classify a bare lowercase whole-item close token: the selection body to
+/// lex plus the one-byte `x` prefix. Plain `x` is a close; a following
+/// selection sigil or digit claims the token, while every other shape stays
+/// prose. `x#…` is intentionally handled by the hash-near-miss recognizer.
+pub(crate) fn classify_bare_whole_item_close(
+    token: &str,
+) -> Option<(&str, usize)> {
+    let after_x = token.strip_prefix('x')?;
+    if after_x.is_empty() {
+        return Some(("", 1));
+    }
+    if after_x.as_bytes().first().is_some_and(|byte| {
+        byte.is_ascii_digit()
+            || *byte == b','
+            || *byte == b'!'
+            || *byte == b'~'
+            || *byte == b'*'
+            || *byte == b'@'
+    }) {
+        return Some((after_x, 1));
+    }
+    None
+}
+
+/// Classify a whole-item close token: the selection body to lex plus the
+/// prefix length from the token start (`1` for bare `x` and aliases, `2`
+/// for `=x`/`=X`). `Some` for a plain long close and for every
 /// selection-shaped or alias token (aliases claimed even when malformed);
 /// `None` for every other `=` shape (`=xx`, `=xa`, `=x.`, `==`) and
 /// non-close tokens.
 pub(crate) fn classify_whole_item_close(token: &str) -> Option<(&str, usize)> {
+    if let Some(close) = classify_bare_whole_item_close(token) {
+        return Some(close);
+    }
     let after_eq = token.strip_prefix('=')?;
     let (selection, x_len) = close_after_eq_parts(after_eq)?;
     Some((selection, 1 + x_len))
@@ -130,12 +157,15 @@ fn leading_keep_text(body: &str) -> &str {
     &body[..end]
 }
 
-/// Return the text after the `x` (or the alias sigil) when a whole-item
-/// token is selection-shaped: a long `=x`/`=X` close followed by a digit,
-/// `,`, `!`, `~`, `*`, or `@`, or any `=*`/`=!` alias (claimed even when its
-/// list is malformed). `None` for plain `=x`, every other `=` shape
-/// (`=xx`, `=xa`, `=x.`), and non-close tokens.
+/// Return the selection body when a whole-item token has a selection: bare
+/// `x` followed by a digit or selection sigil, long `=x`/`=X` with the same
+/// suffix shapes, or any `=*`/`=!` alias (claimed even when malformed).
+/// `None` for plain `x`/`=x`, every other `=` shape (`=xx`, `=xa`, `=x.`),
+/// and non-close tokens.
 pub(crate) fn whole_item_close_after_x(token: &str) -> Option<&str> {
+    if let Some((selection, _)) = classify_bare_whole_item_close(token) {
+        return (!selection.is_empty()).then_some(selection);
+    }
     let after_eq = token.strip_prefix('=')?;
     link_close_after_x(after_eq)
 }

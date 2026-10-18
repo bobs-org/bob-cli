@@ -879,8 +879,9 @@ pub(super) fn close_entry_fence_error() -> String {
 /// must sit right after the close, with session operators trailing.
 /// `fixed` is the corrected line (for example `=x wired =`).
 pub(super) fn close_inline_reorder_error(fixed: &str) -> String {
+    let close_token = fixed.split_whitespace().next().unwrap_or("=x");
     format!(
-        "write the Work Log entry right after `=x`, then the session operators: `{fixed}`"
+        "write the Work Log entry right after `{close_token}`, then the session operators: `{fixed}`"
     )
 }
 
@@ -895,12 +896,13 @@ pub(super) fn close_inline_stray_error(marker: &str, fixed: &str) -> String {
 /// token text; `escape` is the `put the task number first` suggestion, or
 /// `None` when the entry holds no further text.
 pub(super) fn close_inline_no_spaces_error(
+    close_token: &str,
     nospace: &str,
     first: &str,
     escape: Option<&str>,
 ) -> String {
     let base = format!(
-        "write the task numbers right after `=x`, with no spaces (`{nospace}`)"
+        "write the task numbers right after `{close_token}`, with no spaces (`{nospace}`)"
     );
     match escape {
         Some(suggestion) => format!(
@@ -944,6 +946,7 @@ pub(super) fn close_inline_mixing_error(bullet: &str) -> String {
 /// spacing hint.
 pub(super) fn close_inline_dangling_error(
     head: &str,
+    close_token: &str,
     index: u32,
     plain_close: bool,
 ) -> String {
@@ -952,7 +955,7 @@ pub(super) fn close_inline_dangling_error(
     );
     if plain_close {
         format!(
-            "{base}, or write `=x{index}` (no space) to keep only task {index} in progress"
+            "{base}, or write `{close_token}{index}` (no space) to keep only task {index} in progress"
         )
     } else {
         base

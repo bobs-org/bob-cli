@@ -157,14 +157,29 @@ pub(crate) fn default_log_index_with_all(
     }
 }
 
+/// Canonical whole-item close prefix used when suggesting a replacement
+/// selection. Legacy `=*`/`=!` aliases expand to `=x`; bare tokens retain
+/// their lowercase `x` prefix.
+fn close_suggestion_prefix(close_token: &str) -> &str {
+    if close_token.starts_with("=x") || close_token.starts_with("=X") {
+        &close_token[..2]
+    } else if close_token.starts_with('=') {
+        "=x"
+    } else {
+        "x"
+    }
+}
+
 /// Build the `list it` and `complete it` suggestions for a not-worked index.
 fn not_worked_suggestions(
+    close_token: &str,
     index: u32,
     in_progress: Option<&[u32]>,
     park: &[u32],
     complete: &[u32],
     drop: &[u32],
 ) -> (String, String) {
+    let close_prefix = close_suggestion_prefix(close_token);
     let drop_suffix = if drop.is_empty() {
         String::new()
     } else {
@@ -209,17 +224,17 @@ fn not_worked_suggestions(
                 with_complete.push(index);
                 with_complete.sort_unstable();
             }
-            // With `=x0`, "list it" parks when a park selection exists,
+            // With a zero-selection close, "list it" parks when a park selection exists,
             // otherwise it continues as `<N>`.
             if park.is_empty() {
                 (
                     format!(
-                        "=x{index}{}{}",
+                        "{close_prefix}{index}{}{}",
                         park_suffix(park),
                         complete_suffix(complete)
                     ),
                     format!(
-                        "=x0{}{}{}",
+                        "{close_prefix}0{}{}{}",
                         park_suffix(park),
                         drop_suffix,
                         complete_suffix(&with_complete)
@@ -233,13 +248,13 @@ fn not_worked_suggestions(
                 }
                 (
                     format!(
-                        "=x0{}{}{}",
+                        "{close_prefix}0{}{}{}",
                         park_suffix(&parked),
                         drop_suffix,
                         complete_suffix(complete)
                     ),
                     format!(
-                        "=x0{}{}{}",
+                        "{close_prefix}0{}{}{}",
                         park_suffix(park),
                         drop_suffix,
                         complete_suffix(&with_complete)
@@ -265,12 +280,12 @@ fn not_worked_suggestions(
             }
             (
                 format!(
-                    "=x{listed_text}{}{}{drop_suffix}",
+                    "{close_prefix}{listed_text}{}{}{drop_suffix}",
                     park_suffix(park),
                     complete_suffix(complete)
                 ),
                 format!(
-                    "=x{listed_text}{}{}{drop_suffix}",
+                    "{close_prefix}{listed_text}{}{}{drop_suffix}",
                     park_suffix(park),
                     complete_suffix(&completed)
                 ),
@@ -289,18 +304,21 @@ fn not_worked_suggestions(
             }
             (
                 format!(
-                    "=x{}{}{drop_suffix}",
+                    "{close_prefix}{}{}{drop_suffix}",
                     park_suffix(&parked),
                     complete_suffix(complete)
                 ),
                 format!(
-                    "=x{}{}{drop_suffix}",
+                    "{close_prefix}{}{}{drop_suffix}",
                     park_suffix(park),
                     complete_suffix(&completed)
                 ),
             )
         }
-        None => (format!("=x{index}"), format!("=x!{index}")),
+        None => (
+            format!("{close_prefix}{index}"),
+            format!("{close_prefix}!{index}"),
+        ),
     }
 }
 
@@ -525,8 +543,14 @@ fn check_index_loggable(
             range: index_range,
         });
     }
-    let (listed, completed) =
-        not_worked_suggestions(index, in_progress, park, complete, drop);
+    let (listed, completed) = not_worked_suggestions(
+        close_token,
+        index,
+        in_progress,
+        park,
+        complete,
+        drop,
+    );
     Err(CloseLogError {
         message: close_log_not_worked_error(
             index,
@@ -742,6 +766,7 @@ pub(crate) fn lex_close_inline_entry_with_all(
             };
             return Err(CloseLogError {
                 message: close_inline_no_spaces_error(
+                    close_token,
                     &nospace,
                     first.text,
                     escape.as_deref(),
@@ -823,8 +848,14 @@ pub(crate) fn lex_close_inline_entry_with_all(
         complete_all,
     );
     if default.is_none() && !park_all && !complete_all {
-        let (listed, completed) =
-            not_worked_suggestions(1, in_progress, park, complete, drop);
+        let (listed, completed) = not_worked_suggestions(
+            close_token,
+            1,
+            in_progress,
+            park,
+            complete,
+            drop,
+        );
         let range = (
             first.start,
             entry_tokens
@@ -1098,6 +1129,7 @@ pub(crate) fn lex_close_log_bullets_with_all(
             }
             Err(PositionalLogError::NoWorkedTask) => {
                 let (listed, completed) = not_worked_suggestions(
+                    close_token,
                     1,
                     in_progress,
                     park,

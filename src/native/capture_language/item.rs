@@ -1160,13 +1160,12 @@ pub(crate) fn session_operator_token(
     None
 }
 
-/// A whole-item `=`-family token: either a close (`=x`) or a start
-/// (`=` plus an `se<X>`-shaped suffix, plus an optional `#name` part).
+/// A whole-item session token: either a bare or legacy close (`x`/`=x`) or
+/// a start (`=` plus an `<X>`-shaped suffix and optional `#name` part).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum EqualsToken {
-    /// A leading `=x`/`=X`. The caller keeps today's close recognition
-    /// (exact token, first-token near miss, otherwise prose) because `x`
-    /// is never a start-suffix character. `=x#…` still lexes as `Close`.
+    /// A leading bare lowercase `x`, legacy `=x`/`=X`, or one of their
+    /// claimed selection/hash near misses.
     Close,
     /// `=` plus the longest `[0-9]*(-[0-9]*)?` run, plus an optional
     /// `#name` part, plus optional `@<X>` timing and `~<K>` drop parts in
@@ -1211,9 +1210,10 @@ fn double_close_tail_is_claimed(after_first: &str) -> bool {
         || first.starts_with("=!")
 }
 
-/// Lex the `=`-family token at the start of trimmed item text, mirroring
-/// [`session_operator_token`]. Returns `None` when the text does not start
-/// with `=`, so ordinary parsing continues. A bare token (`=`, `=-`) has
+/// Claim a bare lowercase close at the first whitespace-delimited token, or
+/// lex the `=`-family token at the start of trimmed item text, mirroring
+/// [`session_operator_token`]. Returns `None` for ordinary prose. A bare
+/// start token (`=`, `=-`) has
 /// an empty or digit-free suffix; a counted token (`=3`, `=-2`, `=3-`,
 /// `=2-1`, `=0`) carries at least one digit. An optional `#name` part
 /// immediately after the suffix ends at the first ASCII whitespace, `~`, or
@@ -1226,6 +1226,15 @@ fn double_close_tail_is_claimed(after_first: &str) -> bool {
 /// at whitespace or at the other part's sigil; the second runs to
 /// whitespace. `len` covers every part.
 pub(crate) fn session_equals_token(text: &str) -> Option<EqualsToken> {
+    // Bare `x` closes only at the start of a whole-item token. Keep this
+    // strict classifier ahead of the `=`-family lexer so starts and all
+    // existing `=` spellings retain their current tokenization.
+    let first = text.split_whitespace().next().unwrap_or(text);
+    if super::close_selection::classify_bare_whole_item_close(first).is_some()
+        || first.starts_with("x#")
+    {
+        return Some(EqualsToken::Close);
+    }
     let rest = text.strip_prefix('=')?;
     // The doubled `==` sigil is the override twin of every whole-item `=`
     // start: when the text after the first `=` is itself a claimed close
@@ -1405,7 +1414,7 @@ pub(super) fn is_session_chain_token(token: &str) -> bool {
             // a claimed teaching near miss, so it chains like any other
             // claimed token and reports its own diagnostic per item.
             token.starts_with("==")
-                || token.eq_ignore_ascii_case("=x")
+                || is_plain_whole_item_close(token)
                 || whole_item_close_after_x(token).is_some()
                 || is_close_hash_token(token)
         }
@@ -1413,14 +1422,23 @@ pub(super) fn is_session_chain_token(token: &str) -> bool {
     }
 }
 
-/// Whether a whitespace-free token is a `=x#…` close near miss: `=x`/`=X`
-/// immediately followed by `#`.
+/// Whether a whitespace-free token is a close-hash near miss: bare lowercase
+/// `x#…`, or legacy `=x#…`/`=X#…`.
 pub(super) fn is_close_hash_token(token: &str) -> bool {
     let bytes = token.as_bytes();
-    bytes.len() >= 3
-        && bytes[0] == b'='
-        && bytes[1].eq_ignore_ascii_case(&b'x')
-        && bytes[2] == b'#'
+    token.starts_with("x#")
+        || (bytes.len() >= 3
+            && bytes[0] == b'='
+            && bytes[1].eq_ignore_ascii_case(&b'x')
+            && bytes[2] == b'#')
+}
+
+/// Whether a close token is the plain whole-item spelling, with no
+/// selection body. Both bare `x` and the still-supported `=x`/`=X` form
+/// have an empty selection.
+fn is_plain_whole_item_close(token: &str) -> bool {
+    classify_whole_item_close(token)
+        .is_some_and(|(selection, _)| selection.is_empty())
 }
 
 /// Whole-item session-operator grammar: one sign resizes, two signs shift.
@@ -1745,7 +1763,7 @@ pub(super) fn named_nospace_error(
 }
 
 /// Absolute byte offset of a whole-item close token's `after_x` text (the
-/// lists after `=x`/`=X`), so selection diagnostics point at the original
+/// lists after `x` or `=x`/`=X`), so selection diagnostics point at the original
 /// input. `first` is the parent line's first whitespace-delimited token.
 fn close_after_x_offset(
     parent_line: &ItemLine<'_>,
@@ -1818,7 +1836,7 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                 return Err(pomodoro_close_hash_error(&name));
             }
             let selection_after_x = whole_item_close_after_x(first);
-            if selection_after_x.is_none() && !first.eq_ignore_ascii_case("=x")
+            if selection_after_x.is_none() && !is_plain_whole_item_close(first)
             {
                 return Ok(None);
             }
@@ -2038,9 +2056,9 @@ pub(super) fn parse_pomodoro_equals_item<'a>(
                         return Err(close_inline_mixing_error(&bullet));
                     }
                     let head = format!("{first} {index}");
-                    let plain = first.eq_ignore_ascii_case("=x");
+                    let plain = is_plain_whole_item_close(first);
                     return Err(close_inline_dangling_error(
-                        &head, index, plain,
+                        &head, first, index, plain,
                     ));
                 }
                 Ok(entry @ CloseInlineLex::Entry { .. }) => {

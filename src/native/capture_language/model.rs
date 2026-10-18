@@ -227,12 +227,12 @@ pub(crate) enum SessionOperator {
 /// grammar phase fills it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct PomodoroCloseSpec {
-    /// Raw close token exactly as typed: the `=`-prefixed token
-    /// (`=x1*2!3~4`) for a whole-item close, or the `=`-prefixed suffix for
-    /// a link close.
+    /// Raw close token exactly as typed: a whole-item bare token (`x1*2!3~4`)
+    /// or the still-supported `=`-prefixed token (`=x1*2!3~4`); link closes
+    /// keep their `=`-prefixed suffix.
     pub(crate) raw: String,
     /// Numbered links that stay in progress, or `None` when no `<N>` list
-    /// was typed. `Some(vec![])` is an explicit `=x0` ("none").
+    /// was typed. `Some(vec![])` is an explicit `x0`/`=x0` ('none').
     pub(crate) in_progress: Option<Vec<u32>>,
     /// Numbered links to park (record work without carrying), empty when no
     /// `*<P>` list was typed. Parked links get normal In Progress work
