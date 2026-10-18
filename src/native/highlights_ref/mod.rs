@@ -41,6 +41,8 @@ mod clip_url;
 mod collection;
 mod collection_name;
 mod companion;
+#[allow(dead_code)]
+pub(crate) mod diagrams;
 mod doctor;
 mod fetch;
 mod frontmatter;

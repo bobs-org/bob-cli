@@ -230,15 +230,18 @@ struct CreatePlan {
 }
 
 /// Pandoc inputs for the Markdown render: the code-break/listen filter, the
-/// return-link filter that runs after it, and the JSON report path the
-/// return-link filter writes for bob.
+/// return-link filter that runs after it, the JSON report path the
+/// return-link filter writes for bob, and an optional first-position
+/// diagrams swap filter.
 ///
-/// Shared with the note-snapshot print profile, which reuses the same two
-/// filters plus its own contract filter.
+/// Shared with the note-snapshot print profile, which reuses the same
+/// filters plus its own contract filter. Production callers pass
+/// `diagrams: None` until the wire phase turns this hook on.
 pub(crate) struct RenderFilters {
     pub(crate) code_break: PathBuf,
     pub(crate) return_links: PathBuf,
     pub(crate) report: PathBuf,
+    pub(crate) diagrams: Option<super::diagrams::DiagramFilter>,
 }
 
 impl CreatePlan {
@@ -1384,6 +1387,7 @@ fn write_render_filters(scratch: &Path) -> Result<RenderFilters> {
         code_break,
         return_links,
         report: scratch.join("return-links.json"),
+        diagrams: None,
     })
 }
 
@@ -1842,27 +1846,7 @@ fn create_markdown_plan(
         Some((.., path)) => path.clone(),
         None => scratch.path().join("render.pdf"),
     };
-    let filter_path = scratch.path().join("filter.lua");
-    fs::write(&filter_path, PANDOC_CODE_BREAK_FILTER).map_err(|error| {
-        CommandError::new(format!(
-            "write pandoc filter {}: {error}",
-            filter_path.display()
-        ))
-    })?;
-    let return_filter_path = scratch.path().join("return-links.lua");
-    fs::write(&return_filter_path, super::return_links::FILTER).map_err(
-        |error| {
-            CommandError::new(format!(
-                "write pandoc filter {}: {error}",
-                return_filter_path.display()
-            ))
-        },
-    )?;
-    let filters = RenderFilters {
-        code_break: filter_path,
-        return_links: return_filter_path,
-        report: scratch.path().join("return-links.json"),
-    };
+    let filters = write_render_filters(scratch.path())?;
     let (_audio_created, page_count, link_outcome) = match &listen_setup {
         Some((command, flow, _)) => {
             let link_outcome = render_temp_pdf(
@@ -3230,8 +3214,8 @@ fn render_temp_pdf(
 ) -> Result<super::return_links::ReportOutcome> {
     let source_path = Path::new(&plan.source);
     let resource_path = source_path.parent().unwrap_or_else(|| Path::new("."));
-    let output = Command::new(pandoc)
-        .arg(&plan.source)
+    let mut cmd = Command::new(pandoc);
+    cmd.arg(&plan.source)
         .arg("-o")
         .arg(render_path)
         .arg("--standalone")
@@ -3240,7 +3224,15 @@ fn render_temp_pdf(
         .arg("--number-sections")
         .arg("--pdf-engine=xelatex")
         .arg(format!("--resource-path={}", resource_path.display()))
-        .arg("--highlight-style=tango")
+        .arg("--highlight-style=tango");
+    if let Some(diagrams) = &filters.diagrams {
+        super::diagrams::apply_swap_filter_args(
+            &mut cmd,
+            &diagrams.filter,
+            &diagrams.results,
+        );
+    }
+    let output = cmd
         .arg("--lua-filter")
         .arg(&filters.code_break)
         .arg("--lua-filter")
@@ -3804,6 +3796,7 @@ mod tests {
             code_break: filter_path,
             return_links: return_filter_path,
             report: temp.path.join("return-links.json"),
+            diagrams: None,
         };
         let pandoc = pandoc_command().expect("pandoc checked above");
         render_temp_pdf(
@@ -4198,6 +4191,7 @@ mod tests {
             code_break: code_break_path,
             return_links: return_filter_path,
             report: temp.path.join("return-links.json"),
+            diagrams: None,
         };
         let pandoc = pandoc_command().expect("pandoc checked above");
         let outcome =
@@ -4301,6 +4295,299 @@ mod tests {
         assert_eq!(
             heading_page, cell_page,
             "near-bottom heading stays with its table"
+        );
+    }
+
+    fn skip_pandoc_xelatex(test_name: &str) -> bool {
+        if pandoc_command().is_none()
+            || Command::new("xelatex").arg("--version").output().is_err()
+        {
+            eprintln!("skipping {test_name}: pandoc/xelatex is required");
+            return true;
+        }
+        false
+    }
+
+    const MERMAID_FLOW: &str = "flowchart LR\n  A --> B\n";
+
+    fn mermaid_markdown() -> String {
+        format!("# Diagrams\n\n``` {{#fig-flow .mermaid}}\n{MERMAID_FLOW}```\n")
+    }
+
+    fn mermaid_plan(temp: &TempDir, source: &Path) -> CreatePlan {
+        let target = temp.path.join("xlib/chat/diagrams.pdf");
+        fs::create_dir_all(target.parent().expect("target parent"))
+            .expect("create output directory");
+        CreatePlan {
+            source: source.display().to_string(),
+            source_kind: "markdown",
+            target: target.clone(),
+            sidecar: target.with_extension("md"),
+            workflow: TargetWorkflow::Intake {
+                library_destination: temp.path.join("lib/chat/diagrams.pdf"),
+            },
+            stem: "diagrams".to_string(),
+            renamed_from: None,
+            title: "Diagrams".to_string(),
+            title_source: "markdown",
+            author: None,
+            published: None,
+            source_url: None,
+            source_note: None,
+            source_markdown: Some(mermaid_markdown()),
+            captured: None,
+            id: None,
+            marker: compose_marker(
+                "ready",
+                "obsidian_ref",
+                "Diagrams",
+                None,
+                &[],
+            )
+            .expect("compose marker"),
+            audio: None,
+            page_count_hint: None,
+        }
+    }
+
+    fn filters_with_optional_diagrams(
+        dir: &Path,
+        diagrams: Option<super::super::diagrams::DiagramFilter>,
+    ) -> RenderFilters {
+        let code_break = dir.join("filter.lua");
+        fs::write(&code_break, PANDOC_CODE_BREAK_FILTER).expect("write filter");
+        let return_links = dir.join("return-links.lua");
+        fs::write(&return_links, super::super::return_links::FILTER)
+            .expect("write return-link filter");
+        RenderFilters {
+            code_break,
+            return_links,
+            report: dir.join("return-links.json"),
+            diagrams,
+        }
+    }
+
+    fn pdf_haystack(path: &Path) -> String {
+        if Command::new("pdftotext").arg("-v").output().is_ok() {
+            let output = Command::new("pdftotext")
+                .arg("-layout")
+                .arg(path)
+                .arg("-")
+                .output()
+                .expect("pdftotext");
+            if output.status.success() {
+                return String::from_utf8_lossy(&output.stdout).into_owned();
+            }
+        }
+        String::from_utf8_lossy(&fs::read(path).expect("read pdf")).into_owned()
+    }
+
+    fn collected_flow_id(
+        pandoc: &OsStr,
+        source: &Path,
+        workdir: &Path,
+    ) -> String {
+        let blocks = super::super::diagrams::collect(
+            pandoc,
+            source,
+            super::super::diagrams::DiagramReader::Inferred,
+            workdir,
+        )
+        .expect("collect");
+        assert_eq!(blocks.len(), 1, "{blocks:?}");
+        blocks[0].id.clone()
+    }
+
+    #[test]
+    fn diagrams_swap_pdf_replaces_source_without_figure_caption() {
+        if skip_pandoc_xelatex("diagrams swap pdf") {
+            return;
+        }
+        let temp = TempDir::new("diagrams-swap-pdf");
+        let source = temp.path.join("doc.md");
+        fs::write(&source, mermaid_markdown()).expect("write source");
+        let pandoc = pandoc_command().expect("pandoc checked above");
+        let id =
+            collected_flow_id(&pandoc, &source, &temp.path.join("collect"));
+        let pdf = temp.path.join("fig.pdf");
+        super::super::diagrams::write_one_page_pdf(&pdf);
+        let results_path = temp.path.join("results.json");
+        let mut diagrams = std::collections::BTreeMap::new();
+        diagrams.insert(
+            id,
+            super::super::diagrams::DiagramOutcome::Pdf {
+                pdf: pdf.display().to_string(),
+            },
+        );
+        super::super::diagrams::write_results(
+            &results_path,
+            &super::super::diagrams::DiagramResults {
+                diagrams,
+                fallback_error: None,
+            },
+        )
+        .expect("write results");
+        let swap = temp.path.join("diagrams.lua");
+        fs::write(&swap, super::super::diagrams::SWAP_FILTER)
+            .expect("write swap");
+        let plan = mermaid_plan(&temp, &source);
+        let render_path = render_temp_path(&plan.target).expect("render path");
+        let filters = filters_with_optional_diagrams(
+            &temp.path,
+            Some(super::super::diagrams::DiagramFilter {
+                filter: swap,
+                results: results_path,
+            }),
+        );
+        render_temp_pdf(&pandoc, &plan, &render_path, &filters, None)
+            .expect("render swapped PDF");
+        let text = pdf_haystack(&render_path);
+        assert!(!text.contains("flowchart LR"), "source gone: {text}");
+        assert!(!text.contains("Figure 1"), "no implicit caption: {text}");
+    }
+
+    #[test]
+    fn diagrams_swap_pdf_error_keeps_note_and_source() {
+        if skip_pandoc_xelatex("diagrams swap error pdf") {
+            return;
+        }
+        let temp = TempDir::new("diagrams-swap-error-pdf");
+        let source = temp.path.join("doc.md");
+        fs::write(&source, mermaid_markdown()).expect("write source");
+        let pandoc = pandoc_command().expect("pandoc checked above");
+        let id =
+            collected_flow_id(&pandoc, &source, &temp.path.join("collect"));
+        let results_path = temp.path.join("results.json");
+        let mut diagrams = std::collections::BTreeMap::new();
+        diagrams.insert(
+            id,
+            super::super::diagrams::DiagramOutcome::Error {
+                error: "Parse error on line 4: bad".to_string(),
+            },
+        );
+        super::super::diagrams::write_results(
+            &results_path,
+            &super::super::diagrams::DiagramResults {
+                diagrams,
+                fallback_error: None,
+            },
+        )
+        .expect("write results");
+        let swap = temp.path.join("diagrams.lua");
+        fs::write(&swap, super::super::diagrams::SWAP_FILTER)
+            .expect("write swap");
+        let plan = mermaid_plan(&temp, &source);
+        let render_path = render_temp_path(&plan.target).expect("render path");
+        let filters = filters_with_optional_diagrams(
+            &temp.path,
+            Some(super::super::diagrams::DiagramFilter {
+                filter: swap,
+                results: results_path,
+            }),
+        );
+        render_temp_pdf(&pandoc, &plan, &render_path, &filters, None)
+            .expect("render fallback PDF");
+        let text = pdf_haystack(&render_path);
+        assert!(
+            text.contains(
+                "Mermaid diagram not rendered: Parse error on line 4"
+            ),
+            "{text}"
+        );
+        assert!(text.contains("flowchart LR"), "source kept: {text}");
+    }
+
+    #[test]
+    fn diagrams_absent_results_match_unhooked_pdf() {
+        if skip_pandoc_xelatex("diagrams corrupt pdf") {
+            return;
+        }
+        let temp = TempDir::new("diagrams-corrupt-pdf");
+        let source = temp.path.join("doc.md");
+        fs::write(&source, mermaid_markdown()).expect("write source");
+        let pandoc = pandoc_command().expect("pandoc checked above");
+        let plan = mermaid_plan(&temp, &source);
+        let baseline_path = temp.path.join("baseline.pdf");
+        let hooked_path = temp.path.join("hooked.pdf");
+        let swap = temp.path.join("diagrams.lua");
+        fs::write(&swap, super::super::diagrams::SWAP_FILTER)
+            .expect("write swap");
+        render_temp_pdf(
+            &pandoc,
+            &plan,
+            &baseline_path,
+            &filters_with_optional_diagrams(&temp.path, None),
+            None,
+        )
+        .expect("baseline");
+        render_temp_pdf(
+            &pandoc,
+            &plan,
+            &hooked_path,
+            &filters_with_optional_diagrams(
+                &temp.path,
+                Some(super::super::diagrams::DiagramFilter {
+                    filter: swap,
+                    results: temp.path.join("missing.json"),
+                }),
+            ),
+            None,
+        )
+        .expect("hooked missing results");
+        assert_eq!(pdf_haystack(&baseline_path), pdf_haystack(&hooked_path));
+    }
+
+    fn write_executable(path: &Path, body: &str) {
+        use std::os::unix::fs::PermissionsExt;
+        fs::write(path, body).expect("write fake executable");
+        let mut perms = fs::metadata(path).expect("stat fake").permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(path, perms).expect("chmod fake");
+    }
+
+    #[test]
+    fn diagrams_filter_runs_first_on_generic_route() {
+        let temp = TempDir::new("diagrams-generic-first");
+        let calls = temp.path.join("calls.log");
+        let fake_pandoc = temp.path.join("fake-pandoc");
+        write_executable(
+            &fake_pandoc,
+            &format!(
+                "#!/bin/sh\nfor a in \"$@\"; do echo \"PANDOC-ARG:$a\" >> \"{}\"; done\nout=\"\"\nprev=\"\"\nfor a in \"$@\"; do if [ \"$prev\" = \"-o\" ]; then out=\"$a\"; fi; prev=\"$a\"; done\nprintf '%%PDF-1.4\\n%%EOF\\n' > \"$out\"\nexit 0\n",
+                calls.display()
+            ),
+        );
+        let source = temp.path.join("doc.md");
+        fs::write(&source, mermaid_markdown()).expect("write source");
+        let plan = mermaid_plan(&temp, &source);
+        let render_path = temp.path.join("render.pdf");
+        let swap = temp.path.join("diagrams.lua");
+        fs::write(&swap, "-- swap").expect("write swap");
+        let results = temp.path.join("results.json");
+        fs::write(&results, "{}").expect("write results");
+        let filters = filters_with_optional_diagrams(
+            &temp.path,
+            Some(super::super::diagrams::DiagramFilter {
+                filter: swap,
+                results,
+            }),
+        );
+        render_temp_pdf(
+            fake_pandoc.as_os_str(),
+            &plan,
+            &render_path,
+            &filters,
+            None,
+        )
+        .expect("fake render");
+        let log = fs::read_to_string(&calls).expect("calls log");
+        let diagrams = log.find("diagrams.lua").expect("diagrams filter");
+        let cb = log.find("filter.lua").expect("code-break");
+        let rl = log.find("return-links.lua").expect("return-links");
+        assert!(diagrams < cb && cb < rl, "diagrams filter first: {log}");
+        assert!(
+            log.contains("bob-diagrams-results="),
+            "results metadata: {log}"
         );
     }
 }

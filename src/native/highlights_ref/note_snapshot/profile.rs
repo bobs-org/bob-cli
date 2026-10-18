@@ -26,6 +26,10 @@ pub(crate) const NOTE_HEADER: &str = include_str!("note.tex");
 /// Embedded Lua contract filter (written as `note.lua` in scratch).
 pub(crate) const NOTE_FILTER: &str = include_str!("note.lua");
 
+/// Snapshot-route pandoc reader. Shared with the diagrams collect pass
+/// so those two invocations cannot drift.
+pub(crate) const SNAPSHOT_PANDOC_READER: &str =
+    "commonmark_x-tex_math_dollars-emoji";
 const ENV_XELATEX_COMMAND: &str = "BOB_XELATEX_COMMAND";
 const GENERATED_TEX: &str = "note.tex";
 const GENERATED_PDF: &str = "note.pdf";
@@ -150,12 +154,20 @@ pub(crate) fn render_note_pdf(
     pandoc_cmd
         .arg(&projected_path)
         .arg("-f")
-        .arg("commonmark_x-tex_math_dollars-emoji")
+        .arg(SNAPSHOT_PANDOC_READER)
         .arg("-t")
         .arg("latex")
         .arg("-s")
         .arg("-o")
-        .arg(&tex_path)
+        .arg(&tex_path);
+    if let Some(diagrams) = &filters.diagrams {
+        super::super::diagrams::apply_swap_filter_args(
+            &mut pandoc_cmd,
+            &resolve_path_for_cwd(&diagrams.filter),
+            &resolve_path_for_cwd(&diagrams.results),
+        );
+    }
+    pandoc_cmd
         .arg("--lua-filter")
         .arg(&code_break)
         .arg("--lua-filter")
@@ -522,6 +534,7 @@ mod tests {
             code_break,
             return_links,
             report: dir.join("return-links.json"),
+            diagrams: None,
         }
     }
 
@@ -761,6 +774,7 @@ Overfull \\hbox (20.1pt too wide) in paragraph\n";
             code_break,
             return_links,
             report: dir.join("return-links.json"),
+            diagrams: None,
         }
     }
 
@@ -819,7 +833,7 @@ Overfull \\hbox (20.1pt too wide) in paragraph\n";
         let output = std::process::Command::new(&pandoc)
             .arg(&source)
             .arg("-f")
-            .arg("commonmark_x-tex_math_dollars-emoji")
+            .arg(SNAPSHOT_PANDOC_READER)
             .arg("-t")
             .arg("latex")
             .arg("-s")
@@ -949,7 +963,7 @@ Overfull \\hbox (20.1pt too wide) in paragraph\n";
             let mini_out = std::process::Command::new(&pandoc)
                 .arg(&mini)
                 .arg("-f")
-                .arg("commonmark_x-tex_math_dollars-emoji")
+                .arg(SNAPSHOT_PANDOC_READER)
                 .arg("-t")
                 .arg("latex")
                 .arg("-o")
@@ -1006,7 +1020,7 @@ Overfull \\hbox (20.1pt too wide) in paragraph\n";
         let image_list_output = std::process::Command::new(&pandoc)
             .arg(&image_list)
             .arg("-f")
-            .arg("commonmark_x-tex_math_dollars-emoji")
+            .arg(SNAPSHOT_PANDOC_READER)
             .arg("-t")
             .arg("latex")
             .arg("-s")
@@ -1063,7 +1077,7 @@ Overfull \\hbox (20.1pt too wide) in paragraph\n";
         let opt_out = std::process::Command::new(&pandoc)
             .arg(&opt_out)
             .arg("-f")
-            .arg("commonmark_x-tex_math_dollars-emoji")
+            .arg(SNAPSHOT_PANDOC_READER)
             .arg("-t")
             .arg("latex")
             .arg("-s")
@@ -1114,7 +1128,7 @@ Overfull \\hbox (20.1pt too wide) in paragraph\n";
         let output = std::process::Command::new(&pandoc)
             .arg(&source)
             .arg("-f")
-            .arg("commonmark_x-tex_math_dollars-emoji")
+            .arg(SNAPSHOT_PANDOC_READER)
             .arg("-t")
             .arg("latex")
             .arg("-s")
@@ -1449,5 +1463,226 @@ Overfull \\hbox (20.1pt too wide) in paragraph\n";
                 assert!(full.contains("child one"), "task child ({name})");
             }
         }
+    }
+
+    const MERMAID_FLOW: &str = "flowchart LR\n  A --> B\n";
+
+    fn mermaid_projected() -> String {
+        format!(
+            "---\n\
+             bob-snapshot: true\n\
+             bob-kicker: NOTE\n\
+             bob-display-title: Diagrams\n\
+             bob-snapshot-line: Snapshot\n\
+             bob-footer: Diagrams\n\
+             bob-glyph-table: glyphs.lua\n\
+             bob-return-links: false\n\
+             ---\n\n\
+             ``` {{#fig-flow .mermaid}}\n{MERMAID_FLOW}```\n"
+        )
+    }
+
+    fn pdf_haystack(path: &Path) -> String {
+        if std::process::Command::new("pdftotext")
+            .arg("-v")
+            .output()
+            .is_ok()
+        {
+            let output = std::process::Command::new("pdftotext")
+                .arg("-layout")
+                .arg(path)
+                .arg("-")
+                .output()
+                .expect("pdftotext");
+            if output.status.success() {
+                return String::from_utf8_lossy(&output.stdout).into_owned();
+            }
+        }
+        String::from_utf8_lossy(&fs::read(path).expect("read pdf")).into_owned()
+    }
+
+    fn skip_real_diagram_render(test_name: &str) -> bool {
+        if super::super::super::create::pandoc_command().is_none() {
+            eprintln!("skipping {test_name}: pandoc/xelatex is required");
+            return true;
+        }
+        if std::process::Command::new("xelatex")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            eprintln!("skipping {test_name}: pandoc/xelatex is required");
+            return true;
+        }
+        skip_if_missing_note_profile_packages(test_name)
+    }
+
+    fn filters_with_diagrams(
+        dir: &Path,
+        results: &Path,
+    ) -> super::super::super::create::RenderFilters {
+        let mut filters = write_filters_for_render(dir);
+        let swap = dir.join("diagrams.lua");
+        fs::write(&swap, super::super::super::diagrams::SWAP_FILTER)
+            .expect("write swap");
+        filters.diagrams = Some(super::super::super::diagrams::DiagramFilter {
+            filter: swap,
+            results: results.to_path_buf(),
+        });
+        filters
+    }
+
+    fn collected_snapshot_id(source: &Path, workdir: &Path) -> String {
+        let pandoc = super::super::super::create::pandoc_command()
+            .expect("pandoc checked above");
+        let blocks = super::super::super::diagrams::collect(
+            &pandoc,
+            source,
+            super::super::super::diagrams::DiagramReader::Snapshot,
+            workdir,
+        )
+        .expect("collect");
+        assert_eq!(blocks.len(), 1, "{blocks:?}");
+        blocks[0].id.clone()
+    }
+
+    #[test]
+    fn diagrams_swap_snapshot_centers_image_and_drops_source() {
+        if skip_real_diagram_render("diagrams snapshot swap") {
+            return;
+        }
+        let temp = tempfile::tempdir().expect("tempdir");
+        let scratch = temp.path().join("scratch");
+        fs::create_dir_all(&scratch).expect("scratch");
+        let source = temp.path().join("doc.md");
+        fs::write(&source, mermaid_projected()).expect("write source");
+        let id = collected_snapshot_id(&source, &temp.path().join("collect"));
+        let pdf = scratch.join("fig.pdf");
+        super::super::super::diagrams::write_one_page_pdf(&pdf);
+        let results_path = scratch.join("results.json");
+        let mut diagrams = std::collections::BTreeMap::new();
+        diagrams.insert(
+            id,
+            super::super::super::diagrams::DiagramOutcome::Pdf {
+                pdf: pdf.display().to_string(),
+            },
+        );
+        super::super::super::diagrams::write_results(
+            &results_path,
+            &super::super::super::diagrams::DiagramResults {
+                diagrams,
+                fallback_error: None,
+            },
+        )
+        .expect("write results");
+        let filters = filters_with_diagrams(&scratch, &results_path);
+        let outcome = render_note_pdf(
+            &mermaid_projected(),
+            &scratch,
+            &filters,
+            &test_meta(),
+        )
+        .expect("snapshot swap render");
+        let text = pdf_haystack(&outcome.pdf);
+        assert!(!text.contains("flowchart LR"), "source gone: {text}");
+        assert!(!text.contains("Figure 1"), "no implicit caption: {text}");
+        let tex = fs::read_to_string(scratch.join("note.tex"))
+            .expect("read generated TeX");
+        assert!(
+            tex.contains("\\begin{center}"),
+            "snapshot image is centered: {tex}"
+        );
+    }
+
+    #[test]
+    fn diagrams_swap_snapshot_error_keeps_note_and_source() {
+        if skip_real_diagram_render("diagrams snapshot error") {
+            return;
+        }
+        let temp = tempfile::tempdir().expect("tempdir");
+        let scratch = temp.path().join("scratch");
+        fs::create_dir_all(&scratch).expect("scratch");
+        let source = temp.path().join("doc.md");
+        fs::write(&source, mermaid_projected()).expect("write source");
+        let id = collected_snapshot_id(&source, &temp.path().join("collect"));
+        let results_path = scratch.join("results.json");
+        let mut diagrams = std::collections::BTreeMap::new();
+        diagrams.insert(
+            id,
+            super::super::super::diagrams::DiagramOutcome::Error {
+                error: "Parse error on line 4: bad".to_string(),
+            },
+        );
+        super::super::super::diagrams::write_results(
+            &results_path,
+            &super::super::super::diagrams::DiagramResults {
+                diagrams,
+                fallback_error: None,
+            },
+        )
+        .expect("write results");
+        let filters = filters_with_diagrams(&scratch, &results_path);
+        let outcome = render_note_pdf(
+            &mermaid_projected(),
+            &scratch,
+            &filters,
+            &test_meta(),
+        )
+        .expect("snapshot error render");
+        let text = pdf_haystack(&outcome.pdf);
+        assert!(
+            text.contains(
+                "Mermaid diagram not rendered: Parse error on line 4"
+            ),
+            "{text}"
+        );
+        assert!(text.contains("flowchart LR"), "source kept: {text}");
+    }
+
+    #[test]
+    fn diagrams_filter_runs_first_on_snapshot_route() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let scratch = temp.path().join("scratch");
+        fs::create_dir_all(&scratch).expect("scratch");
+        let bin = temp.path().join("bin");
+        fs::create_dir_all(&bin).expect("bin");
+        let calls = temp.path().join("calls.log");
+        let fake_pandoc = bin.join("fake-pandoc");
+        write_executable(
+            &fake_pandoc,
+            &format!(
+                "#!/bin/sh\nfor a in \"$@\"; do echo \"PANDOC-ARG:$a\" >> \"{}\"; done\nout=\"\"\nprev=\"\"\nfor a in \"$@\"; do if [ \"$prev\" = \"-o\" ]; then out=\"$a\"; fi; prev=\"$a\"; done\nprintf '\\\\documentclass{{article}}\\\\begin{{document}}Hi\\\\end{{document}}\\n' > \"$out\"\nexit 0\n",
+                calls.display()
+            ),
+        );
+        let fake_xelatex = bin.join("fake-xelatex");
+        write_executable(
+            &fake_xelatex,
+            "#!/bin/sh\nprintf 'fake log\\n' > note.log\nprintf 'fake pdf' > note.pdf\nexit 0\n",
+        );
+        let mut filters = test_filters(temp.path());
+        let swap = temp.path().join("diagrams.lua");
+        fs::write(&swap, "-- swap").expect("write swap");
+        let results = temp.path().join("results.json");
+        fs::write(&results, "{}").expect("write results");
+        filters.diagrams = Some(super::super::super::diagrams::DiagramFilter {
+            filter: swap,
+            results,
+        });
+        let _guard = crate::native::env::TestEnvGuard::set(&[
+            ("BOB_PANDOC_COMMAND", Some(fake_pandoc.as_os_str())),
+            ("BOB_XELATEX_COMMAND", Some(fake_xelatex.as_os_str())),
+        ]);
+        render_note_pdf("# Hi\n", &scratch, &filters, &test_meta())
+            .expect("fake render");
+        let log = fs::read_to_string(&calls).expect("calls log");
+        let diagrams = log.find("diagrams.lua").expect("diagrams filter");
+        let cb = log.find("code-break.lua").expect("code-break");
+        let rl = log.find("return-links.lua").expect("return-links");
+        assert!(diagrams < cb && cb < rl, "diagrams filter first: {log}");
+        assert!(
+            log.contains("bob-diagrams-results="),
+            "results metadata: {log}"
+        );
     }
 }
