@@ -87,6 +87,12 @@ pub const SUPPORT_ASSETS: &[EmbeddedAsset] = &[
         executable: false,
     },
     EmbeddedAsset {
+        source_path: "scripts/web_clip/diagram_render.py",
+        install_path: "web_clip/diagram_render.py",
+        contents: include_bytes!("../scripts/web_clip/diagram_render.py"),
+        executable: false,
+    },
+    EmbeddedAsset {
         source_path: "scripts/web_clip/vendor/defuddle.full.js",
         install_path: "web_clip/vendor/defuddle.full.js",
         contents: include_bytes!("../scripts/web_clip/vendor/defuddle.full.js"),
@@ -96,6 +102,18 @@ pub const SUPPORT_ASSETS: &[EmbeddedAsset] = &[
         source_path: "scripts/web_clip/vendor/DEFUDDLE_LICENSE",
         install_path: "web_clip/vendor/DEFUDDLE_LICENSE",
         contents: include_bytes!("../scripts/web_clip/vendor/DEFUDDLE_LICENSE"),
+        executable: false,
+    },
+    EmbeddedAsset {
+        source_path: "scripts/web_clip/vendor/mermaid.min.js",
+        install_path: "web_clip/vendor/mermaid.min.js",
+        contents: include_bytes!("../scripts/web_clip/vendor/mermaid.min.js"),
+        executable: false,
+    },
+    EmbeddedAsset {
+        source_path: "scripts/web_clip/vendor/MERMAID_LICENSE",
+        install_path: "web_clip/vendor/MERMAID_LICENSE",
+        contents: include_bytes!("../scripts/web_clip/vendor/MERMAID_LICENSE"),
         executable: false,
     },
     EmbeddedAsset {
@@ -168,6 +186,18 @@ pub const SUPPORT_ASSETS: &[EmbeddedAsset] = &[
         source_path: "scripts/web_clip/fonts/OFL.txt",
         install_path: "web_clip/fonts/OFL.txt",
         contents: include_bytes!("../scripts/web_clip/fonts/OFL.txt"),
+        executable: false,
+    },
+    EmbeddedAsset {
+        source_path: "scripts/web_clip/fonts/DejaVuSans.ttf",
+        install_path: "web_clip/fonts/DejaVuSans.ttf",
+        contents: include_bytes!("../scripts/web_clip/fonts/DejaVuSans.ttf"),
+        executable: false,
+    },
+    EmbeddedAsset {
+        source_path: "scripts/web_clip/fonts/DEJAVU_LICENSE.txt",
+        install_path: "web_clip/fonts/DEJAVU_LICENSE.txt",
+        contents: include_bytes!("../scripts/web_clip/fonts/DEJAVU_LICENSE.txt"),
         executable: false,
     },
     EmbeddedAsset {

@@ -49,7 +49,7 @@ check-adapter:
 # browser-backed fixture checks run only when a browser is discovered
 # (otherwise they print "skipped: no browser" and still pass).
 check-web-clip-adapter:
-    python3 -m py_compile scripts/web_clip/web_clip_adapter.py scripts/web_clip/web_clip_render.py && uv run --quiet --script scripts/web_clip/web_clip_adapter.py --self-test
+    python3 -m py_compile scripts/web_clip/web_clip_adapter.py scripts/web_clip/web_clip_render.py scripts/web_clip/diagram_render.py && uv run --quiet --script scripts/web_clip/web_clip_adapter.py --self-test
 
 package-list:
     cargo package --list

@@ -25,3 +25,14 @@ License: OFL-1.1 for all three families (`OFL.txt`).
 | `inter-latin-ext-wght-normal.woff2` | `34b9c504cab7a73e37b746343a449132e56cf7b5481af2cb81dc74dcff25c956` |
 | `inter-latin-ext-wght-italic.woff2` | `71254244ccb1ec21e14db3480fef6f6826d1136dc4aca1c7d3ca7ce31294fcce` |
 | `jetbrains-mono-latin-wght-normal.woff2` | `18be452724bfdc236c074ca94a249a7f41a86752c7d04ab258ce9ed5651f6a7e` |
+
+## Mermaid diagram font
+
+`DejaVuSans.ttf` is the static DejaVu Sans Book face used by Mermaid diagrams.
+It is embedded as a data URL so Chrome produces selectable TrueType text in the
+diagram PDFs. Its separate Bitstream Vera / DejaVu license is in
+`DEJAVU_LICENSE.txt`.
+
+| File | SHA-256 |
+| ---- | ------- |
+| `DejaVuSans.ttf` | `57f73e11f51999432bf7ab22ce55b6f945d5eca1bf824404cfa9ec2e3718c84e` |

@@ -19,13 +19,17 @@ Ops:
   printing (``pdf_bytes`` is null; the response adds ``article_json``).
 - ``compose``: typeset ordered ``article.json`` parts into one collection
   PDF (opening page, linked contents, a fresh page and bookmark per part).
+- ``diagrams``: render up to 200 Mermaid sources in one offline Chrome page
+  as fitted vector PDFs with per-diagram error isolation.
 
 Siblings loaded at runtime (same directory, on ``sys.path``):
 
 - ``snapshot.js``: in-page probe and snapshot code (``window.__bobClip``).
 - ``web_clip_render.py``: reader renderer (Pillow image normalization,
   ``template/reader.css`` print template, bundled ``fonts/``).
+- ``diagram_render.py``: offline Mermaid renderer (vendored bundle and static TTF).
 - ``vendor/defuddle.full.js``: pinned Defuddle UMD bundle.
+- ``vendor/mermaid.min.js``: pinned Mermaid IIFE bundle.
 
 Run ``python3 -m py_compile`` plus ``--self-test`` via
 ``just check-web-clip-adapter``.
@@ -42,6 +46,7 @@ from __future__ import annotations
 
 import base64
 import datetime
+import hashlib
 import html as html_module
 import ipaddress
 import json
@@ -59,10 +64,13 @@ from urllib.parse import urlsplit
 
 PROTOCOL_VERSION = 1
 DEFUDDLE_VERSION = "0.19.4"
+MERMAID_VERSION = "12.2.0"
+MERMAID_SHA256 = "a8a6a6f805b074a8261a2825c86f99c8054acb3b35f50bb7e24a4f9f2c3c3b9f"
 
 WEB_CLIP_DIR = os.path.dirname(os.path.abspath(__file__))
 SNAPSHOT_JS_PATH = os.path.join(WEB_CLIP_DIR, "snapshot.js")
 DEFUDDLE_JS_PATH = os.path.join(WEB_CLIP_DIR, "vendor", "defuddle.full.js")
+MERMAID_JS_PATH = os.path.join(WEB_CLIP_DIR, "vendor", "mermaid.min.js")
 
 OVERALL_TIMEOUT_SECS = 150
 GOTO_TIMEOUT_MS = 45000
@@ -635,6 +643,7 @@ def op_ping(request: dict) -> dict:
         "pillow": _package_version("pillow"),
         "nh3": _package_version("nh3"),
         "defuddle": DEFUDDLE_VERSION,
+        "mermaid": MERMAID_VERSION,
         "browser": (
             None
             if browser is None
@@ -1863,10 +1872,60 @@ def op_compose(request: dict) -> dict:
     }
 
 
+def op_diagrams(request: dict) -> dict:
+    """Render a bounded diagram batch in one offline Chrome page."""
+    if WEB_CLIP_DIR not in sys.path:
+        sys.path.insert(0, WEB_CLIP_DIR)
+    import diagram_render
+    from playwright.sync_api import sync_playwright
+
+    try:
+        diagram_render.validate_request(request)
+    except diagram_render.DiagramRequestError as exc:
+        raise AdapterFail("invalid_request", str(exc)) from exc
+
+    workdir = request["workdir"]
+    os.makedirs(workdir, mode=0o700, exist_ok=True)
+    os.chmod(workdir, 0o700)
+    os.environ["TMPDIR"] = workdir
+
+    browser_info = discover_browser()
+    if browser_info is None:
+        raise AdapterFail("browser", "no usable browser found", BROWSER_HINT)
+
+    try:
+        with sync_playwright() as pw:
+            try:
+                browser = _launch_with_fallback(
+                    pw, browser_info["launch"], headless=True, warnings=[]
+                )
+            except Exception as exc:  # noqa: BLE001 - public adapter error
+                raise AdapterFail(
+                    "browser", f"browser launch failed: {exc}", BROWSER_HINT
+                ) from exc
+            try:
+                response, _attempted_requests = diagram_render.render(
+                    request, browser, browser_info
+                )
+                return response
+            except diagram_render.DiagramRenderError as exc:
+                raise AdapterFail("render", str(exc), BROWSER_HINT) from exc
+            finally:
+                try:
+                    browser.close()
+                except Exception:  # noqa: BLE001 - best effort
+                    pass
+    except AdapterFail:
+        raise
+    except Exception as exc:  # noqa: BLE001 - protect the JSON protocol
+        raise AdapterFail("render", f"diagram rendering failed: {exc}", BROWSER_HINT) from exc
+
+
 OPS = {
     "ping": op_ping,
     "capture": op_capture,
     "compose": op_compose,
+    "diagrams": op_diagrams,
 }
 
 
@@ -2148,6 +2207,135 @@ def _compose_error_kind_checks(
     )
 
 
+def _diagram_browser_test_failures(browser_info: dict) -> list[str]:
+    """Run the Mermaid bundle, font, error-isolation, and PDF checks."""
+    import tempfile
+
+    import diagram_render
+    from playwright.sync_api import sync_playwright
+
+    failures: list[str] = []
+
+    def check(label: str, condition: bool) -> None:
+        if not condition:
+            failures.append(label)
+
+    flowchart = (
+        "flowchart LR\n"
+        '    A["Agent finishes its work"] --> B["git push<br/>straight to master"]\n'
+        '    B --> C["Master Gate tests run<br/>AFTER the push"]\n'
+        '    C --> D{"Green?"}\n'
+        '    D -- "yes (8 of 98 recent runs)" --> E["Fine, for now"]\n'
+        '    D -- "no" --> F["master is already broken<br/>for every other agent"]'
+    )
+    sequence = (
+        "sequenceDiagram\n"
+        "    participant Alice\n"
+        "    participant Bob\n"
+        "    Alice->>Bob: Hello Bob, how are you?\n"
+        "    Bob-->>Alice: Great!"
+    )
+    # Mermaid 12.2 accepts a dangling arrow as an incomplete edge, so use a
+    # token sequence it rejects to exercise per-item parse-error isolation.
+    malformed = "flowchart LR\n    A @@@ B"
+    sources = [flowchart, sequence, malformed]
+    items = [
+        {"id": hashlib.sha1(source.encode("utf-8")).hexdigest(), "source": source}
+        for source in sources
+    ]
+    with tempfile.TemporaryDirectory(prefix="bob-diagrams-test-") as root:
+        workdir = os.path.join(root, "render")
+        request = {
+            "protocol": 1,
+            "op": "diagrams",
+            "workdir": workdir,
+            "items": items,
+            "item_timeout_s": 10,
+        }
+        try:
+            with sync_playwright() as pw:
+                browser = _launch_with_fallback(
+                    pw, browser_info["launch"], headless=True, warnings=[]
+                )
+                try:
+                    response, attempted_requests = diagram_render.render(
+                        request, browser, browser_info
+                    )
+                finally:
+                    browser.close()
+        except Exception as exc:  # noqa: BLE001 - reported as one test failure
+            return [f"Mermaid browser fixture ({exc})"]
+
+        results = response.get("results", [])
+        check("Mermaid batch response", response.get("ok") is True
+              and response.get("mermaid") == MERMAID_VERSION
+              and len(results) == 3)
+        check("Mermaid flowchart and sequence render",
+              len(results) == 3 and all(row.get("ok") for row in results[:2]))
+        check("Mermaid parse error is isolated",
+              len(results) == 3 and not results[2].get("ok")
+              and "Parse error" in results[2].get("error", ""))
+        check("Mermaid renderer makes no requests", attempted_requests == [])
+
+        pdffonts = shutil.which("pdffonts")
+        pdfimages = shutil.which("pdfimages")
+        pdftotext = shutil.which("pdftotext")
+        for index, _item in enumerate(items[:2]):
+            if len(results) <= index or not results[index].get("ok"):
+                continue
+            pdf_path = results[index].get("pdf", "")
+            try:
+                with open(pdf_path, "rb") as handle:
+                    pdf = handle.read()
+            except OSError:
+                check(f"Mermaid PDF {index + 1} readable", False)
+                continue
+            check(f"Mermaid PDF {index + 1} is one page",
+                  diagram_render.pdf_page_count(pdf_path) == 1)
+            check(f"Mermaid PDF {index + 1} embeds TrueType without Type 3",
+                  b"/Type3" not in pdf and b"/FontFile2" in pdf)
+            if pdffonts:
+                try:
+                    proc = subprocess.run(
+                        [pdffonts, pdf_path], capture_output=True,
+                        text=True, timeout=10,
+                    )
+                    check(f"Mermaid pdffonts {index + 1} succeeds",
+                          proc.returncode == 0 and "Type 3" not in proc.stdout
+                          and re.search(r"\byes\b", proc.stdout) is not None)
+                except (OSError, subprocess.SubprocessError):
+                    check(f"Mermaid pdffonts {index + 1} succeeds", False)
+            if pdfimages:
+                try:
+                    proc = subprocess.run(
+                        [pdfimages, "-list", pdf_path], capture_output=True,
+                        text=True, timeout=10,
+                    )
+                    image_rows = [
+                        line for line in proc.stdout.splitlines()
+                        if re.match(r"^\s*\d+\s+\d+\s+\w+\s+\d+\s+\d+", line)
+                    ]
+                    check(f"Mermaid PDF {index + 1} has no raster images",
+                          proc.returncode == 0 and not image_rows)
+                except (OSError, subprocess.SubprocessError):
+                    check(f"Mermaid PDF {index + 1} has no raster images", False)
+            elif re.search(rb"/Subtype\s*/Image\b", pdf):
+                check(f"Mermaid PDF {index + 1} has no raster images", False)
+            if index == 0 and pdftotext:
+                try:
+                    proc = subprocess.run(
+                        [pdftotext, pdf_path, "-"], capture_output=True,
+                        text=True, timeout=10,
+                    )
+                    extracted = re.sub(r"\s+", " ", proc.stdout)
+                    check("Mermaid flowchart text extraction",
+                          proc.returncode == 0
+                          and "Agent finishes its work" in extracted)
+                except (OSError, subprocess.SubprocessError):
+                    check("Mermaid flowchart text extraction", False)
+    return failures
+
+
 def self_test() -> int:
     """Exercise the offline paths, plus fixtures when a browser exists."""
     failures: list[str] = []
@@ -2299,10 +2487,65 @@ def self_test() -> int:
     check("defuddle pinned",
           DEFUDDLE_VERSION == "0.19.4"
           and os.path.isfile(DEFUDDLE_JS_PATH))
+    check("mermaid pinned",
+          MERMAID_VERSION == "12.2.0"
+          and os.path.isfile(MERMAID_JS_PATH))
+    try:
+        with open(MERMAID_JS_PATH, "rb") as handle:
+            mermaid_bytes = handle.read()
+        check("Mermaid bundle sha256",
+              hashlib.sha256(mermaid_bytes).hexdigest() == MERMAID_SHA256)
+        check("Mermaid bundle has no dynamic imports",
+              b"import(" not in mermaid_bytes)
+    except OSError:
+        check("Mermaid bundle is readable", False)
     check("snapshot.js present",
           os.path.isfile(SNAPSHOT_JS_PATH))
     check("vendor readme present",
           os.path.isfile(os.path.join(WEB_CLIP_DIR, "vendor", "README.md")))
+
+    # -- Mermaid request validation, entirely offline ---------------------
+    if WEB_CLIP_DIR not in sys.path:
+        sys.path.insert(0, WEB_CLIP_DIR)
+    import diagram_render as _diagram_render
+
+    diagram_item = {"id": "a" * 40, "source": "flowchart LR\nA-->B"}
+    diagram_request = {
+        "protocol": 1,
+        "op": "diagrams",
+        "workdir": os.path.abspath(os.path.join(os.sep, "tmp", "bob-diagrams")),
+        "items": [diagram_item],
+        "item_timeout_s": 10,
+    }
+    try:
+        _diagram_render.validate_request(diagram_request)
+        check("diagrams valid request", True)
+    except _diagram_render.DiagramRequestError:
+        check("diagrams valid request", False)
+
+    invalid_diagram_requests = [
+        ("bad id", {**diagram_request,
+                     "items": [{"id": "not-a-sha1", "source": "x"}]}),
+        ("relative workdir", {**diagram_request, "workdir": "relative"}),
+        ("item cap", {**diagram_request,
+                       "items": [diagram_item] * 201}),
+        ("unknown request field", {**diagram_request, "unexpected": True}),
+        ("unknown item field", {**diagram_request,
+                                "items": [{**diagram_item, "unexpected": True}]}),
+        ("non-positive timeout", {**diagram_request, "item_timeout_s": 0}),
+    ]
+    for label, invalid in invalid_diagram_requests:
+        try:
+            _diagram_render.validate_request(invalid)
+            check(f"diagrams reject {label}", False)
+        except _diagram_render.DiagramRequestError:
+            check(f"diagrams reject {label}", True)
+    check("diagram font present",
+          os.path.isfile(os.path.join(WEB_CLIP_DIR, "fonts", "DejaVuSans.ttf")))
+    check("diagram font license present",
+          os.path.isfile(os.path.join(WEB_CLIP_DIR, "fonts", "DEJAVU_LICENSE.txt")))
+    check("Mermaid license present",
+          os.path.isfile(os.path.join(WEB_CLIP_DIR, "vendor", "MERMAID_LICENSE")))
 
     # -- Reader renderer: fonts, template, and pure assembly ----------------
     if WEB_CLIP_DIR not in sys.path:
@@ -2606,9 +2849,13 @@ def self_test() -> int:
         log(f"browser discovery raised: {exc}")
         browser = None
     if browser is None:
+        print("skipped: no browser")
         print("self-test: skipped browser checks (no browser)")
     else:
         import tempfile
+
+        for diagram_failure in _diagram_browser_test_failures(browser):
+            check(diagram_failure, False)
 
         hook = _fixture_hook_factory(fixtures_dir)
 
