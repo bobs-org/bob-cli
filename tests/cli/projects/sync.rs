@@ -10,7 +10,7 @@ fn projects_sync_updates_status_prj_hide_tag_warns_and_is_idempotent() {
 
     write_file(
         &vault.join("DoneFlip.md"),
-        "---\ntype: [[project]]\nstatus: wip\n---\n- [x] #task Ship done #hide ^prj\n",
+        "---\ntype: [[project]]\nstatus: wip\nrollup: subprojects\n---\n- [x] #task Ship done #hide ^prj\n",
     );
     write_file(
         &vault.join("CancelFlip.md"),
@@ -122,7 +122,7 @@ fn projects_sync_updates_status_prj_hide_tag_warns_and_is_idempotent() {
 
     assert_eq!(
         fs::read_to_string(vault.join("DoneFlip.md")).expect("read done"),
-        "---\ntype: [[project]]\nstatus: done\n---\n- [x] #task Ship done #hide ^prj\n"
+        "---\ntype: [[project]]\nstatus: done\nrollup: subprojects\n---\n- [x] #task Ship done #hide ^prj\n"
     );
     assert_eq!(
         fs::read_to_string(vault.join("CancelFlip.md")).expect("read cancel"),

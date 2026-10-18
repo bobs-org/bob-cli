@@ -118,7 +118,7 @@ impl NoteIndex {
             .map(Path::to_path_buf)
     }
 
-    fn resolve_detailed(
+    pub(crate) fn resolve_detailed(
         &self,
         current_path: Option<&Path>,
         target: &str,

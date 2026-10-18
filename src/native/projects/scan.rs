@@ -104,6 +104,15 @@ pub(super) fn parse_project(
 
     let status =
         ProjectStatus::parse(frontmatter_value(&frontmatter, "status"));
+    let (rollup, rollup_invalid) =
+        match frontmatter_value(&frontmatter, "rollup")
+            .map(rollup_value)
+            .unwrap_or(Rollup::Off)
+        {
+            Rollup::Off => (false, None),
+            Rollup::Subprojects => (true, None),
+            Rollup::Invalid(raw) => (false, Some(raw)),
+        };
     let parent_target =
         frontmatter_value(&frontmatter, "parent").and_then(wikilink_target);
     let scheduled = parse_project_schedule(relative_path, &frontmatter, issues);
@@ -197,6 +206,8 @@ pub(super) fn parse_project(
         link_name: project_link_name(relative_path),
         link_stem: project_link_stem(relative_path),
         parent_target,
+        rollup,
+        rollup_invalid,
         scheduled,
         status,
         open_task_count,

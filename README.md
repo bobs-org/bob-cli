@@ -887,7 +887,9 @@ bob projects sync [-b|--bob-dir DIR] [-d|--dry-run]
 ```
 
 Scans notes whose frontmatter declares `type: "[[project]]"`. `list` prints
-frontmatter status, open `#task` counts, and the `^prj` lifecycle task. `sync`
+frontmatter status, open `#task` counts, the `^prj` lifecycle task, and a dim
+`rollup` marker for `rollup: subprojects`; invalid rollup values are warned
+about without changing the exit status. `sync`
 reconciles `status` from that task (`done`, `canceled`, or reopen to `wip`),
 manages `#hide` so `^prj` surfaces on `dash.md` only when nothing else is open,
 maintains the machine-owned Sub-projects ledger after Depends-On, hoists leftover
@@ -1558,6 +1560,7 @@ blocks point at `done/..._done#^block-id`, and the vault Git commit was pushed.
 | Task tag marks for the #task tag | [`docs/task-tag-marks.md`](docs/task-tag-marks.md) |
 | Today's plan, sticky lanes, dashboard READY, and per-note Ready caps | [`docs/plan.md`](docs/plan.md) |
 | Daily Stats metrics, `bob stats`, JSON, the review journal, and the Obsidian Stats page | [`docs/stats.md`](docs/stats.md) |
+| Derived Pomodoro homes, rollup, labels, chips, hues, and JSON contract | [`docs/pomodoro-homes.md`](docs/pomodoro-homes.md) |
 | Highlights PDF intake and reference notes | [`docs/highlights-ref-sync.md`](docs/highlights-ref-sync.md) |
 | `bob ref create` vault-note snapshots, Markdown, PDFs, and URL collections | [`docs/highlights-create.md`](docs/highlights-create.md) |
 | Web article capture into Highlights intake PDFs | [`docs/highlights-clip.md`](docs/highlights-clip.md) |

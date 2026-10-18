@@ -238,3 +238,54 @@ fn projects_list_reports_invalid_and_duplicate_inline_prj_scheduled() {
         "expected inline ^prj scheduled errors:\n{err}"
     );
 }
+
+#[test]
+fn projects_list_marks_reporting_rollup_and_warns_without_failure() {
+    let temp = TempDir::new("bob-cli-projects-rollup");
+    let vault = temp.path().join("vault");
+    write_file(
+        &vault.join("Opted.md"),
+        "---\ntype: [[project]]\nrollup: subprojects\n---\n- [ ] #task #prj Finish opted #hide ^prj\n",
+    );
+    write_file(
+        &vault.join("Invalid.md"),
+        "---\ntype: [[project]]\nrollup: yes please\n---\n- [ ] #task #prj Finish invalid #hide ^prj\n",
+    );
+    write_file(
+        &vault.join("Off.md"),
+        "---\ntype: [[project]]\nrollup: off\n---\n- [ ] #task #prj Finish off #hide ^prj\n",
+    );
+
+    let output = bob_command()
+        .args(["projects", "list", "-b"])
+        .arg(&vault)
+        .output()
+        .expect("run bob projects list with rollup config");
+
+    assert_success(&output);
+    assert_stdout_has_no_ansi(&output);
+    let out = stdout(&output);
+    assert!(
+        out.contains("Opted   rollup"),
+        "missing rollup marker:\n{out}"
+    );
+    assert!(
+        !out.contains("Off  rollup"),
+        "off value was rendered:\n{out}"
+    );
+    assert!(
+        !out.contains("Invalid  rollup"),
+        "invalid value was rendered:\n{out}"
+    );
+    let err = stderr(&output);
+    assert_eq!(
+        err.lines().count(),
+        1,
+        "expected one rollup warning:\n{err}"
+    );
+    assert!(
+        err.contains("Invalid.md: rollup_invalid")
+            && err.contains("yes please"),
+        "missing invalid-value warning:\n{err}"
+    );
+}

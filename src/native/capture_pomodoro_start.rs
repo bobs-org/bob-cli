@@ -68,6 +68,25 @@ pub(crate) fn list_queued_links(
     contents: &str,
     entry_index: usize,
 ) -> Vec<StartLink> {
+    list_session_links(contents, entry_index, false)
+}
+
+/// List the same direct-child Task Links as [`list_queued_links`], including
+/// a link wrapped in one Markdown strikethrough pair. Pomodoro attribution
+/// uses struck links as historical evidence; start selection intentionally
+/// continues to exclude them.
+pub(crate) fn session_links(
+    contents: &str,
+    entry_index: usize,
+) -> Vec<StartLink> {
+    list_session_links(contents, entry_index, true)
+}
+
+fn list_session_links(
+    contents: &str,
+    entry_index: usize,
+    include_struck: bool,
+) -> Vec<StartLink> {
     let spans = line_spans(contents);
     let line_text: Vec<&str> = spans.iter().map(|span| span.text).collect();
     if line_text.get(entry_index).is_none() {
@@ -94,16 +113,41 @@ pub(crate) fn list_queued_links(
             continue;
         }
         let token = &tokens[0];
-        let bare = if token.embedded {
-            bare_embedded_link(&stripped)
-        } else {
-            bare_plain_link(&stripped)
-        };
-        if bare.is_none() {
+        let strike_spans = strikethrough_inner_spans(&stripped);
+        let is_struck = range_is_struck(token.start, token.end, &strike_spans);
+        if is_struck && !include_struck {
             continue;
         }
-        let strike_spans = strikethrough_inner_spans(&stripped);
-        if range_is_struck(token.start, token.end, &strike_spans) {
+        let bare_line = if is_struck {
+            let Some(span) = strike_spans.iter().find(|span| {
+                span.start == token.start && span.end == token.end
+            }) else {
+                continue;
+            };
+            let Some(open_start) = span.start.checked_sub(2) else {
+                continue;
+            };
+            let Some(close_end) = span.end.checked_add(2) else {
+                continue;
+            };
+            if stripped.get(open_start..span.start) != Some("~~")
+                || stripped.get(span.end..close_end) != Some("~~")
+            {
+                continue;
+            }
+            let mut clean = stripped.clone();
+            clean.replace_range(span.end..close_end, "");
+            clean.replace_range(open_start..span.start, "");
+            clean
+        } else {
+            stripped.clone()
+        };
+        let bare = if token.embedded {
+            bare_embedded_link(&bare_line)
+        } else {
+            bare_plain_link(&bare_line)
+        };
+        if bare.is_none() {
             continue;
         }
         links.push(StartLink {

@@ -1,0 +1,219 @@
+# Pomodoro homes
+
+Pomodoro homes label work from the notes of the tasks linked under each ledger
+entry. The label is derived when Bob reads the ledger; Bob never writes a
+session name, home, or label back to a daily note. Open entries show a forecast.
+Closed entries show the attribution Stats counts.
+
+This is the shared contract for Rust, the Obsidian ledger mirror, and clients
+that render Bob's JSON. Rust owns the meaning. Consumers may ignore new JSON
+fields; this contract does not require a schema-version change.
+
+## R1 — Task homes
+
+Resolve a dedicated Task Link relative to its daily note using Bob's link rules:
+an exact vault path with or without `.md`, then a unique case-insensitive
+basename. A missing or ambiguous link is `@unfiled` and increments
+`unresolved_links` or `ambiguous_links`.
+
+The link target's note determines home; its block id only distinguishes tasks.
+Walk scalar `parent:` wikilinks from the linked note toward its ancestors.
+Aliases, `.md`, and headings are removed. List-form, missing, self, and
+unresolvable parents end the walk. Stop after 16 notes or when a path repeats.
+Archive (`done/*_done.md`, `type: [[done]]`) and reference (`type: [[ref]]`)
+notes have no home of their own and are walked through.
+
+The first `type: [[area]]` or `type: [[project]]` on the chain, starting at the
+linked note, is the home. Closed and canceled projects remain valid homes. A
+note without either type is `@unfiled`.
+
+A link to a canonical daily note's `^gtd` block (case-insensitive) is the
+`@review:<first exempt name>` home. An empty target resolves to the current
+daily note. The top-level area is the outermost area on the chain. A subarea is
+the nearest area below that top-level area. A home without an area uses
+`@unfiled` for its area dimension.
+
+## R2 — Project rollup
+
+`rollup: subprojects` on a project maps every descendant project to that
+project for reporting, at any depth and regardless of descendant status.
+Absent and `off` values disable rollup. Invalid values, and any `rollup` key on
+a non-project note, produce one `rollup_invalid` lint per note and act as off.
+When several projects on a chain opt in, the outermost project wins. There is
+no child-side opt-out in this version.
+
+Keep the original note chain before rollup. Later filters use that chain to
+measure a child project on its own even when its reports are grouped under a
+parent. Rollup does not change blocking or `#prj_is_blocked` inheritance, Ready
+caps, Sub-projects lines, review tiers, capture routing, or the plan budget.
+See [Project Task Sync](projects.md#rollup-reporting-only).
+
+## R3 — Links that count
+
+Count dedicated Task Links: direct child bullets at the Pomodoro's first child
+indentation whose body is exactly one block link after removing 🍅 markers and
+one enclosing `~~…~~` strike. Plain links, embeds, and struck links count.
+Mixed prose, fenced code, deferred `[[note]]#` bodies, deeper descendants,
+Depends-On lines, Work Log lines, and Schedule Log lines do not count. The
+capture start picker keeps its existing rule and continues to omit struck
+links.
+
+De-duplicate resolved links by `(note path, block id)`. If resolution fails,
+de-duplicate by the raw `(target, block id)` pair. Open and closed entries use
+the same link rule. Open homes are forecasts and never count as worked time.
+
+## R4 — Review sessions
+
+A named session is a review session when every `+`-separated name component is
+in `plan.exempt` (default `[GTD]`). Its minutes go to one `@review:<NAME>` part
+per exempt component; composite names split their minutes evenly, with any
+remainder going to the first component. Its task links do not attribute.
+
+An unnamed session is also a review session when one of its dedicated links is
+that day's `^gtd` row. This historical bridge uses the first configured exempt
+name and is disabled when `plan.exempt` is empty. The link still maps to that
+review home in a work session. A named composite such as `GTD + BOB` is a work
+session unless every component is exempt.
+
+The review bucket's area is the top-level area of the note resolved from the
+lowercase review name (`GTD` → `gtd.md`). If that note has no area or project,
+the bucket itself is the area key. Review parts inherit that area's hue.
+
+## R5 — Splitting and lead home
+
+For a closed session, divide its counted minutes evenly among distinct linked
+tasks. Each task receives the floor of the split; leftover minutes go to the
+first task links in ledger order. Sum those shares by home. In an open session,
+parts instead use the number of distinct task links.
+
+Count-mode Stats assigns the whole session to its lead home: the home with the
+most distinct tasks, with ties decided by the first task in ledger order.
+Shares are whole percentages of the session and sum to 100 when there is a
+non-empty attribution. The percentage rounding gives remaining points to the
+largest fractional remainders, with ties in ledger order. No composite home
+names are generated. Each dimension's parts sum to its metric total.
+
+An `apportioned` amount is the minutes in a part that came from sessions with
+two or more distinct homes in that dimension. A session can be apportioned in
+`project` but not `area` when multiple projects share one area.
+
+## R6 — Unattributed buckets
+
+`@unlinked` is a closed, non-review session with no dedicated Task Links.
+`@unfiled` is a linked task whose note has no area or project, or whose link is
+ambiguous or unresolved. Both buckets remain visible outside any `other` group.
+They are never guessed from the session name. Their repair hints are “link the
+task to attribute it” and “file the task in an area or project”. An open entry
+with no links has no parts and an empty label.
+
+## R7 — Labels, chips, and dots
+
+Use a lowercase note stem for project and area labels. Use `GTD review`,
+`unlinked`, and `unfiled` for reserved buckets. Sort labels by share, descending;
+show up to two joined by ` · `, then append ` +N` for additional homes. A
+session with no homes has an empty label.
+
+The chip is the label unless suppressed for an unlinked session, a named review
+session, or a name whose case-insensitive component set equals the set of home
+labels. An unnamed review bridge chip says `GTD review`. An unfiled-only chip
+says `unfiled`.
+
+Use a filled `●` for an attributed session and a hollow `○` for a forecast.
+The dot takes the lead home's area hue. A chip never routes a capture, changes
+status, reorders a session, or feeds the plan budget. Homes are not capture
+`#name` targets; separate sessions remain separate.
+
+## R8 — Area hues
+
+The palette uses these fixed categorical slots. An area's own `color:` selects
+one slot only when the area is top-level. Invalid top-level values produce one
+`area_color_invalid` lint and use the local FNV-1a fallback. A subarea, project,
+and review bucket inherit the top-level area's hue. `color:` elsewhere is
+ignored. `bob stats` reports `area_hue_collision` when top-level areas share a
+slot and suggests setting `color:` on one of them.
+
+| Slot | Hue | Light | Dark | xterm-256 |
+| ---: | --- | --- | --- | ---: |
+| 1 | `blue` | `#2a78d6` | `#3987e5` | 33 |
+| 2 | `orange` | `#eb6834` | `#d95926` | 208 |
+| 3 | `aqua` | `#1baf7a` | `#199e70` | 36 |
+| 4 | `yellow` | `#eda100` | `#c98500` | 214 |
+| 5 | `magenta` | `#e87ba4` | `#d55181` | 211 |
+| 6 | `green` | `#008300` | `#008300` | 28 |
+| 7 | `violet` | `#6250d6` | `#9085e9` | 62 |
+| 8 | `red` | `#e34948` | `#e66767` | 167 |
+| — | `gray` (buckets) | `text-muted` | `text-muted` | dim |
+
+Without an explicit slot, assign the hue by
+`palette[fnv1a32(lowercase_area_stem) % 8]`. The algorithm is local and
+deterministic; consumers do not need a global area catalog to resolve a hue.
+Stats bars order area segments by slot so adjacent colors keep the validated
+palette ordering.
+
+Bryan's current top-level area assignments are `dev: blue`, `gtd: orange`,
+`job: aqua`, `love: yellow`, `cash: magenta`, and `body: green`. These are vault
+configuration, not application constants.
+
+## R9 — JSON object
+
+Every emitting surface uses this additive shape:
+
+```json
+{
+  "homes": {
+    "state": "attributed",
+    "kind": "work",
+    "label": "bob · dev +1",
+    "chip": "bob · dev +1",
+    "hue": "orange",
+    "parts": [
+      {
+        "key": "bob.md",
+        "label": "bob",
+        "kind": "project",
+        "area": "gtd.md",
+        "area_label": "gtd",
+        "hue": "orange",
+        "tasks": 1,
+        "share": 34,
+        "minutes": 17
+      }
+    ]
+  }
+}
+```
+
+`state` is `attributed` or `forecast`; `kind` is `work`, `review`, or
+`unlinked`. `chip` and `hue` are nullable. Each part's kind is `project`,
+`area`, or `bucket`. `share` is a whole percentage: minute-based for attributed
+sessions and task-based for forecasts. `minutes` is present only for
+attributed sessions. An unlinked forecast has an empty `parts` array.
+
+## R10 — Current note tree
+
+Resolve homes from the current vault tree each time. Moving a task, changing a
+project parent, or toggling rollup can regroup past minutes, but cannot change
+the total time. Stats surfaces say “Grouped by today's note tree · from Task
+Links”. V1 does not store snapshots.
+
+## Shared conformance vectors
+
+[`tests/fixtures/pomodoro_homes/vectors.json`](../tests/fixtures/pomodoro_homes/vectors.json)
+contains a raw mini-vault and hand-calculated ledger expectations. The Rust
+tests run every case against both indexed and disk sources. It covers nested
+rollup and its pre-rollup chain, exact and ambiguous resolution, archived and
+reference notes, area and closed-project homes, parent cycles and aliases,
+review bridges and composites, struck and embedded links, de-duplication,
+minute and lead-home splits, chip suppression, forecast entries, explicit and
+fallback hues, and lints. `rust_only` marks ambiguity cases that the JavaScript
+mirror cannot reproduce with Obsidian's resolver.
+
+## Limits and rejected alternatives
+
+- Parent walks stop after 16 notes and at missing, invalid, self, or repeated
+  parent links.
+- Homes are based on note residence and dedicated Pomodoro Task Links. Work
+  notes, prose, and schedule/dependency logs do not attribute time.
+- Session names are never rewritten from derived homes; history is not frozen
+  at close; there is no composite `Mixed` bucket; names are never used to guess
+  a home; and children cannot opt out of a parent's rollup in v1.

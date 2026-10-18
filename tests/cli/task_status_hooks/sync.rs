@@ -138,10 +138,13 @@ fn task_status_hooks_syncs_fixture_and_is_idempotent() {
         &daily,
         include_str!("../../fixtures/task_status_hooks/2026/20260710.md"),
     );
-    write_file(
-        &dev,
-        include_str!("../../fixtures/task_status_hooks/dev.md"),
-    );
+    let dev_fixture = include_str!("../../fixtures/task_status_hooks/dev.md")
+        .replacen(
+            "# Development",
+            "---\ntype: [[area]]\ncolor: blue\n---\n# Development",
+            1,
+        );
+    write_file(&dev, &dev_fixture);
     write_file(
         &alpha,
         include_str!("../../fixtures/task_status_hooks/Projects/Alpha.md"),
@@ -273,7 +276,7 @@ fn task_status_hooks_syncs_fixture_and_is_idempotent() {
     assert!(json["unresolved_references"][0]["reason"]
         .as_str()
         .unwrap()
-        .contains("dependency from dev.md:3"));
+        .contains("dependency from dev.md:7"));
     let marked = json["marked_next"].as_array().unwrap();
     assert!(marked.iter().any(|item| {
         item["path"] == "Projects/Alpha.md"
@@ -303,6 +306,10 @@ fn task_status_hooks_syncs_fixture_and_is_idempotent() {
         format_output(&applied)
     );
     let dev_contents = fs::read_to_string(&dev).expect("read updated dev");
+    assert!(
+        dev_contents.contains("type: [[area]]\ncolor: blue"),
+        "task reconciliation changed area frontmatter:\n{dev_contents}"
+    );
     assert!(dev_contents.contains(
         "- [?] #task Promote me [dependsOn:: dev__dep-one, dev__done-dep] ^promote"
     ));

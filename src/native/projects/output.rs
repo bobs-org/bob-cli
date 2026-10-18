@@ -25,11 +25,17 @@ pub(super) fn print_project_list(projects: &[Project], styler: &Styler) {
     for project in projects {
         let project_name =
             styler.cyan(&pad_right(&project.name, project_width));
+        let rollup = if project.rollup {
+            format!(" {}", styler.dim("rollup"))
+        } else {
+            String::new()
+        };
         let status = styler
             .status(&pad_right(project.status.label(), 8), &project.status);
         println!(
-            "  {}  {}  {:>4}  {:>5}  {}",
+            "  {}{}  {}  {:>4}  {:>5}  {}",
             project_name,
+            rollup,
             status,
             project.open_task_count,
             project.dash_visible_count,
