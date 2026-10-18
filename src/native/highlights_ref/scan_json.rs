@@ -58,6 +58,21 @@ struct ScanJsonNote {
     ref_type: Option<String>,
     source_pdf: String,
     marker: bool,
+    #[serde(skip_serializing_if = "is_zero_usize")]
+    image_notes: usize,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    image_notes_unresolved: Vec<ScanJsonUnresolvedImageNote>,
+}
+
+/// One unresolved image note on a scanned reference.
+#[derive(Debug, Clone, Serialize)]
+struct ScanJsonUnresolvedImageNote {
+    source: String,
+    state: UnresolvedImageNoteState,
+}
+
+fn is_zero_usize(value: &usize) -> bool {
+    *value == 0
 }
 
 /// One per-PDF failure: the same text the human report prints.
@@ -620,6 +635,23 @@ fn scan_note_entry(
     action: &'static str,
     marker: bool,
 ) -> ScanJsonNote {
+    let (image_notes, image_notes_unresolved) = plan
+        .rendered_highlights
+        .as_ref()
+        .map(|rendered| {
+            (
+                rendered.image_note_count,
+                rendered
+                    .image_notes_unresolved
+                    .iter()
+                    .map(|note| ScanJsonUnresolvedImageNote {
+                        source: note.source_text.clone(),
+                        state: note.state,
+                    })
+                    .collect(),
+            )
+        })
+        .unwrap_or((0, Vec::new()));
     ScanJsonNote {
         action,
         path: scan_vault_relative(config, &plan.note_path),
@@ -627,6 +659,8 @@ fn scan_note_entry(
         ref_type: plan.stable_metadata.ref_type.clone(),
         source_pdf: plan.stable_metadata.source_pdf.clone(),
         marker,
+        image_notes,
+        image_notes_unresolved,
     }
 }
 
@@ -901,6 +935,16 @@ pub(super) fn scan_intake_only_json(config: &Config, dry_run: bool) -> i32 {
                                 ref_type: ingested.ref_type.clone(),
                                 source_pdf: ingested.source_pdf.clone(),
                                 marker: ingested.write.marker_action != "none",
+                                image_notes: ingested.write.image_note_count,
+                                image_notes_unresolved: ingested
+                                    .write
+                                    .image_notes_unresolved
+                                    .iter()
+                                    .map(|note| ScanJsonUnresolvedImageNote {
+                                        source: note.source_text.clone(),
+                                        state: note.state,
+                                    })
+                                    .collect(),
                             });
                         }
                         reports.push(ingested.write.clone());

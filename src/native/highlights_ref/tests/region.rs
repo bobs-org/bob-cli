@@ -311,3 +311,82 @@ fn note_anatomy_broken_markers_yield_no_region() {
     assert_eq!(parts.region, None);
     assert_eq!(parts.h1.as_deref(), Some("Title"));
 }
+
+#[test]
+fn region_round_trip_image_notes() {
+    let bob_dir = temp_bob_dir("region-image-notes");
+    let source = bob_dir.join("shot.png");
+    write_test_bytes(&source, b"png-bytes");
+    let missing = bob_dir.join("missing.png");
+    let config = test_config_for_bob_dir(bob_dir.clone());
+    let pdf = bob_dir.join("lib/papers/region.pdf");
+    let ref_note = bob_dir.join("ref/papers/region.md");
+    let sidecar = SidecarInput {
+        path: bob_dir.join("lib/papers/region.md"),
+        annotations: vec![
+            highlight_annotation(
+                0,
+                Some("Page 1"),
+                "Latency is not throughput.",
+                Some(source.to_str().expect("utf8")),
+            ),
+            highlight_annotation(
+                1,
+                Some("Page 1"),
+                "A missing shot.",
+                Some(missing.to_str().expect("utf8")),
+            ),
+            SidecarAnnotation {
+                kind: SidecarAnnotationKind::StandaloneNote,
+                page_label: Some("Page 1".to_string()),
+                linked_page_style: false,
+                text: source.to_str().expect("utf8").to_string(),
+                comment: None,
+                task_source: None,
+                image: None,
+                order: 2,
+                ordinal_on_page: 2,
+            },
+        ],
+    };
+    let rendered = super::render_sidecar_highlights(
+        &config,
+        &pdf,
+        &ref_note,
+        &ParsedNote::empty(),
+        &sidecar,
+        false,
+    )
+    .expect("render image-note region");
+    let parsed = super::parse_managed_region(&rendered.content);
+    assert!(parsed.unparsed.is_empty(), "{:?}", parsed.unparsed);
+    assert_eq!(parsed.blocks.len(), 3);
+    assert_eq!(parsed.blocks[0].kind, super::RegionBlockKind::Highlight);
+    assert_eq!(parsed.blocks[0].images.len(), 1);
+    assert!(parsed.blocks[0].unresolved_images.is_empty());
+    assert_eq!(parsed.blocks[0].comment, None);
+    assert_eq!(parsed.blocks[1].unresolved_images.len(), 1);
+    assert_eq!(
+        parsed.blocks[1].unresolved_image_states,
+        vec![super::UnresolvedImageNoteState::NotFound]
+    );
+    assert_eq!(parsed.blocks[2].kind, super::RegionBlockKind::Note);
+    assert_eq!(parsed.blocks[2].images.len(), 1);
+}
+
+#[test]
+fn region_existing_fixtures_have_no_image_notes() {
+    let note = ParsedNote::empty();
+    let (_bob_dir, rendered) = render_annotations(
+        vec![highlight_annotation(
+            0,
+            Some("Page 2"),
+            "The first line\nThe second line",
+            Some("My first note\nMy second note"),
+        )],
+        &note,
+    );
+    let parsed = super::parse_managed_region(&rendered.content);
+    assert!(parsed.blocks[0].images.is_empty());
+    assert!(parsed.blocks[0].unresolved_images.is_empty());
+}

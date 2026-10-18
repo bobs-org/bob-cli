@@ -373,8 +373,42 @@ pub(super) struct RenderedHighlights {
     pub(super) content: String,
     pub(super) count: usize,
     pub(super) image_count: usize,
+    pub(super) image_note_count: usize,
+    pub(super) image_notes_unresolved: Vec<UnresolvedImageNote>,
     pub(super) image_assets: Vec<ImageAssetWrite>,
     pub(super) block_ids_by_annotation_order: BTreeMap<usize, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct UnresolvedImageNote {
+    pub(super) source_text: String,
+    pub(super) state: UnresolvedImageNoteState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum UnresolvedImageNoteState {
+    NotFound,
+    Unreadable,
+    Unsupported,
+}
+
+impl UnresolvedImageNoteState {
+    pub(super) fn as_str(self) -> &'static str {
+        match self {
+            UnresolvedImageNoteState::NotFound => "not_found",
+            UnresolvedImageNoteState::Unreadable => "unreadable",
+            UnresolvedImageNoteState::Unsupported => "unsupported",
+        }
+    }
+
+    pub(super) fn warning_title(self) -> &'static str {
+        match self {
+            UnresolvedImageNoteState::NotFound => "Image not found",
+            UnresolvedImageNoteState::Unreadable => "Image unreadable",
+            UnresolvedImageNoteState::Unsupported => "Image type not supported",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -522,6 +556,8 @@ pub(super) struct SyncWriteReport {
     pub(super) note_action: &'static str,
     pub(super) marker_action: &'static str,
     pub(super) image_count: usize,
+    pub(super) image_note_count: usize,
+    pub(super) image_notes_unresolved: Vec<UnresolvedImageNote>,
     pub(super) image_assets_written: usize,
     pub(super) image_assets_skipped: usize,
     pub(super) routed_note_actions: usize,

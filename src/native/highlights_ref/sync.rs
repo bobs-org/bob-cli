@@ -1371,6 +1371,16 @@ fn execute_pdf_sync_v1(
             .as_ref()
             .map(|rendered| rendered.image_count)
             .unwrap_or(0),
+        image_note_count: plan
+            .rendered_highlights
+            .as_ref()
+            .map(|rendered| rendered.image_note_count)
+            .unwrap_or(0),
+        image_notes_unresolved: plan
+            .rendered_highlights
+            .as_ref()
+            .map(|rendered| rendered.image_notes_unresolved.clone())
+            .unwrap_or_default(),
         image_assets_written,
         image_assets_skipped,
         routed_note_actions,
@@ -1702,6 +1712,16 @@ fn execute_pdf_sync_v2(
             .as_ref()
             .map(|rendered| rendered.image_count)
             .unwrap_or(0),
+        image_note_count: plan
+            .rendered_highlights
+            .as_ref()
+            .map(|rendered| rendered.image_note_count)
+            .unwrap_or(0),
+        image_notes_unresolved: plan
+            .rendered_highlights
+            .as_ref()
+            .map(|rendered| rendered.image_notes_unresolved.clone())
+            .unwrap_or_default(),
         image_assets_written,
         image_assets_skipped,
         routed_note_actions: intent_outcome.note_actions,

@@ -19,6 +19,8 @@ pub(super) fn render_sidecar_highlights(
     let mut rendered = String::new();
     let mut current_page = None;
     let mut image_count = 0usize;
+    let mut image_note_count = 0usize;
+    let mut image_notes_unresolved = Vec::new();
     let silently_dropped_ids = silently_dropped_block_ids(note);
 
     for image_asset in image_assets_by_order.values() {
@@ -53,6 +55,54 @@ pub(super) fn render_sidecar_highlights(
             image_count += 1;
         }
 
+        let image_note_source = match annotation.kind {
+            SidecarAnnotationKind::Highlight | SidecarAnnotationKind::Image => {
+                annotation
+                    .task_source
+                    .as_deref()
+                    .or(annotation.comment.as_deref())
+                    .unwrap_or("")
+            }
+            SidecarAnnotationKind::StandaloneNote => annotation.text.as_str(),
+        };
+        let (image_note_refs, remaining_text) =
+            split_image_note_lines(image_note_source);
+        let mut image_note_renders = Vec::new();
+        for image_note in &image_note_refs {
+            image_note_count += 1;
+            match resolve_image_note(
+                config,
+                ref_note_path,
+                image_note,
+                annotation.order,
+                &block_id,
+            )? {
+                ImageNoteResolution::Embedded {
+                    vault_path,
+                    width,
+                    write,
+                } => {
+                    if let Some(write) = write {
+                        image_asset_writes_by_dest
+                            .entry(write.dest_path.clone())
+                            .or_insert(write);
+                    }
+                    image_note_renders
+                        .push(ImageNoteRender::Embedded { vault_path, width });
+                }
+                ImageNoteResolution::Unresolved { state } => {
+                    image_notes_unresolved.push(UnresolvedImageNote {
+                        source_text: image_note.source_text.clone(),
+                        state,
+                    });
+                    image_note_renders.push(ImageNoteRender::Unresolved {
+                        source_text: image_note.source_text.clone(),
+                        state,
+                    });
+                }
+            }
+        }
+
         if annotation.page_label != current_page {
             if let Some(page_label) = &annotation.page_label {
                 if !rendered.is_empty() {
@@ -71,6 +121,8 @@ pub(super) fn render_sidecar_highlights(
             annotation,
             &block_id,
             image_asset,
+            &image_note_renders,
+            &remaining_text,
             strip_return_links,
         ));
     }
@@ -107,6 +159,8 @@ pub(super) fn render_sidecar_highlights(
         content: rendered,
         count: current_ids.len(),
         image_count,
+        image_note_count,
+        image_notes_unresolved,
         image_assets: image_asset_writes_by_dest.into_values().collect(),
         block_ids_by_annotation_order,
     })
@@ -153,6 +207,8 @@ pub(super) fn render_annotation_block(
     annotation: &SidecarAnnotation,
     block_id: &str,
     image_asset: Option<&ImageAssetWrite>,
+    image_notes: &[ImageNoteRender],
+    remaining_text: &str,
     strip_return_links: bool,
 ) -> String {
     let mut rendered = String::new();
@@ -170,7 +226,8 @@ pub(super) fn render_annotation_block(
             };
             let text = beautify_annotation_text(raw);
             push_callout_block(&mut rendered, 1, "[!quote]", &text);
-            push_annotation_comment_callout(&mut rendered, annotation);
+            push_image_note_renders(&mut rendered, image_notes);
+            push_remaining_comment_callout(&mut rendered, remaining_text);
         }
         SidecarAnnotationKind::Image => {
             let embed_path = image_asset
@@ -180,11 +237,13 @@ pub(super) fn render_annotation_block(
                 });
             let embed = format!("![[{embed_path}]]");
             push_callout_block(&mut rendered, 1, "[!quote] Image", &embed);
-            push_annotation_comment_callout(&mut rendered, annotation);
+            push_image_note_renders(&mut rendered, image_notes);
+            push_remaining_comment_callout(&mut rendered, remaining_text);
         }
         SidecarAnnotationKind::StandaloneNote => {
-            let text = beautify_annotation_text(&annotation.text);
+            let text = beautify_annotation_text(remaining_text);
             push_callout_block(&mut rendered, 1, "[!note]", &text);
+            push_image_note_renders(&mut rendered, image_notes);
         }
     }
     rendered.push('\n');
@@ -194,17 +253,50 @@ pub(super) fn render_annotation_block(
     rendered
 }
 
-pub(super) fn push_annotation_comment_callout(
+pub(super) fn push_remaining_comment_callout(
     rendered: &mut String,
-    annotation: &SidecarAnnotation,
+    remaining_text: &str,
 ) {
-    if let Some(comment) = &annotation.comment {
-        let comment_source =
-            annotation.task_source.as_deref().unwrap_or(comment);
-        let comment =
-            strip_comment_label(&beautify_annotation_text(comment_source));
+    let comment =
+        strip_comment_label(&beautify_annotation_text(remaining_text));
+    if comment.trim().is_empty() {
+        return;
+    }
+    rendered.push_str(">\n");
+    push_callout_block(rendered, 2, "[!note] Comment", &comment);
+}
+
+pub(super) fn push_image_note_renders(
+    rendered: &mut String,
+    image_notes: &[ImageNoteRender],
+) {
+    for image_note in image_notes {
         rendered.push_str(">\n");
-        push_callout_block(rendered, 2, "[!note] Comment", &comment);
+        match image_note {
+            ImageNoteRender::Embedded { vault_path, width } => {
+                rendered.push_str("> ");
+                rendered
+                    .push_str(&image_note_embed_markdown(vault_path, *width));
+                rendered.push('\n');
+            }
+            ImageNoteRender::Unresolved { source_text, state } => {
+                let body = match state {
+                    UnresolvedImageNoteState::Unsupported => format!(
+                        "\n`{source_text}` — use PNG, JPEG, GIF, WebP, or SVG"
+                    ),
+                    UnresolvedImageNoteState::NotFound
+                    | UnresolvedImageNoteState::Unreadable => {
+                        format!("\n`{source_text}`")
+                    }
+                };
+                push_callout_block(
+                    rendered,
+                    2,
+                    &format!("[!warning] {}", state.warning_title()),
+                    &body,
+                );
+            }
+        }
     }
 }
 

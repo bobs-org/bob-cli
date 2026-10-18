@@ -22,6 +22,7 @@ Code lives in this `bob-cli` repository. On the MacBook, use a checkout at
 - [Synced properties](#synced-properties)
 - [Scan, safety, and Git/ob behavior](#scan-safety-and-gitob-behavior)
 - [Generated body contract](#generated-body-contract)
+  - [Image notes](#image-notes)
 - [Reading tasks in parent notes (v2)](#reading-tasks-in-parent-notes-v2)
 - [MacBook setup guide](#macbook-setup-guide)
 - [Scheduled scan](#scheduled-scan)
@@ -34,7 +35,7 @@ Code lives in this `bob-cli` repository. On the MacBook, use a checkout at
 
 `bob ref` implements marker/frontmatter synchronization, Markdown/TextBundle
 sidecar parsing, generated note rendering, TextBundle image selection asset
-copying, recursive library scan with `xlib` intake, prerequisite checks, output
+copying, image notes (a screenshot path pasted into a highlight comment), recursive library scan with `xlib` intake, prerequisite checks, output
 collision detection, dirty-target refusal, and atomic note writes.
 
 `sync <pdf>` loads one PDF with native Rust code, treats the first standalone
@@ -1063,7 +1064,9 @@ Generated annotations render as Obsidian callouts. Highlight text uses a
 `[!quote]` callout; a highlight or image comment is nested inside that quote as
 a `[!note] Comment` callout so the annotation's trailing `^h-...` block ID still
 covers the quote/image and the comment together. Image selections use
-`[!quote] Image` with a vault-relative Obsidian embed. Standalone non-marker
+`[!quote] Image` with a vault-relative Obsidian embed. Image notes (a local
+image path on its own line in the annotation's note) render as embeds inside
+the same callout, directly below the highlighted text. Standalone non-marker
 notes render as `[!note]` callouts. Removed annotation tombstones render under
 `### Removed highlights` as `[!warning] Removed highlight` callouts.
 
@@ -1106,6 +1109,90 @@ write failure instead of an overwrite. When an image selection is removed from
 the sidecar, the generated block is tombstoned like other removed annotations,
 but the copied asset file is left in place. Asset garbage collection is future
 work.
+
+### Image notes
+
+An **image note** is a line of an annotation's note whose entire content is one
+local image path. Put the path on its own line in a highlight comment, a
+comment on a TextBundle image selection, or a standalone note.
+
+Accepted forms, after trimming, stripping one list marker (`- `, `* `, `+ `),
+stripping a leading `Comment:`/`Note:` label, stripping one wrapper
+(backticks, angle brackets, straight or smart quotes), and stripping a trailing
+`.`, `,`, or `;`:
+
+```text
+~/tmp/screenshots/20261018_104022.png
+/tmp/screenshots/20261018_104022.png
+file:///tmp/Screenshot%202026-10-18.png
+```
+
+Spaces in the path are fine when the whole line is the path. Several
+whitespace-separated paths on one line become several images. A path in the
+middle of a sentence, or a relative path, stays ordinary comment text.
+
+Supported extensions are `png`, `jpg`, `jpeg`, `gif`, `webp`, and `svg` (the
+formats Obsidian renders and the vault gitignore tracks). `heic`, `heif`,
+`tif`, `tiff`, `bmp`, and `avif` render an "Image type not supported" notice
+instead of staying silent text.
+
+The copy lives beside TextBundle assets in `ref/<type>/<stem>.assets/`, named
+`<safe-stem>-<hash8>.<ext>`. `hash8` is the first 8 hex digits of SHA-256 over
+the canonical source text (`~/tmp/screenshots/20261018_104022.png` is never
+host-expanded, so every host uses the same filename). Example:
+
+```text
+ref/papers/foo.assets/20261018_104022-07154fc6.png
+```
+
+The same path on several annotations shares one copy. Images render directly
+below the highlighted text, inside the `[!quote]` callout, each preceded by a
+bare `>` spacer; remaining comment text follows as the usual nested Comment
+callout:
+
+```md
+> [!quote] Latency is not throughput.
+>
+> ![[ref/books/example.assets/20261018_104022-07154fc6.png|420]]
+>
+> > [!note] Comment Compare with the p99 chart.
+
+^h-2b91f0a4c7de
+```
+
+| State       | Condition                                                         | Rendered at the image's position |
+| ----------- | ----------------------------------------------------------------- | -------------------------------- |
+| Embedded    | vault copy exists, or source readable (copy planned)              | `> ![[<vault path>]]` or with `\|<width>` |
+| Not found   | no vault copy and source missing on this host                     | `> > [!warning] Image not found` |
+| Unreadable  | no vault copy and source read failed (permission, is a directory) | `> > [!warning] Image unreadable` |
+| Unsupported | recognized but unsupported extension                              | `> > [!warning] Image type not supported` |
+
+These states are self-healing: the next scan that can read the file copies it
+and replaces the warning with the image. They never fail the PDF or change the
+exit status.
+
+Retina screenshots (PNG `pHYs` denser than about 90 dpi) emit a `|<logical>`
+width hint when the logical CSS-pixel width is below the pixel width and at
+most 600, so a 840× region capture at 144 dpi renders at `|420`. A full-screen
+2880 px capture gets no hint and fits the callout. Non-PNG and malformed files
+get no hint.
+
+**Snapshot semantics:** the vault copy is written once and never overwritten.
+If the destination exists, later edits to the file at the pasted path are
+ignored. To refresh an image, delete its file under `<stem>.assets/` or paste a
+new screenshot path; the next scan re-imports it. Once the source is gone, the
+vault copy remains.
+
+The Mac scan resolves macscrot paths (`~/tmp/screenshots/YYYYMMDD_HHMMSS.png`)
+locally. athena and apollo hold the same uploads, so a scan there can copy a
+screenshot that has already been synced across hosts.
+
+Troubleshooting:
+
+- `bob ref sync <pdf> --dry-run` shows `image_notes:` and
+  `image_note_unresolved:` on the verbose plan.
+- `bob ref doctor` lists `unresolved_image_note` under library diagnostics
+  with example paths.
 
 Annotation text is beautified only while rendering the generated region:
 
@@ -1490,6 +1577,11 @@ MacBook validation checklist:
 - For a TextBundle image selection, the first real write also creates
   `~/bob/ref/books/example.assets/h-<id>.<ext>` and embeds it from the generated
   callout with a vault-relative wikilink.
+- For an image note (a screenshot path on its own line in a highlight comment),
+  the first real write copies it into
+  `~/bob/ref/<type>/<stem>.assets/<safe-stem>-<hash8>.<ext>` and embeds it
+  under the quote. `bob ref sync <pdf> --dry-run` reports `image_notes:` /
+  `image_note_unresolved:`; `bob ref doctor` lists `unresolved_image_note`.
 - A second run with unchanged inputs reports `writes: none`.
 - If frontmatter edits or a generated lifecycle-task change require PDF marker
   write-back, a dry run reports `pdf_marker_action: would-update` before any

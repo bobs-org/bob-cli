@@ -48,6 +48,7 @@ mod fetch;
 mod frontmatter;
 mod guard;
 mod hooks;
+mod image_notes;
 mod intake_status;
 mod io;
 mod listen;
@@ -91,6 +92,7 @@ use doctor::*;
 use frontmatter::*;
 use guard::*;
 use hooks::*;
+use image_notes::*;
 use io::*;
 use listen::*;
 use marker::*;
@@ -161,7 +163,7 @@ pub(crate) use marker::{
     is_known_ref_task_mark, normalize_deprecated_status_str,
     ref_task_mark_status, ref_task_mark_target_status,
 };
-pub(crate) use model::Config;
+pub(crate) use model::{Config, UnresolvedImageNoteState};
 pub(crate) use note::configured_path;
 pub(crate) use reading_plan::apply_v2_migration_note;
 pub(crate) use region::{

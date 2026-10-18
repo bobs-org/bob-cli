@@ -597,6 +597,7 @@ fn annotation_counts(region: Option<&str>) -> (usize, usize, Vec<Diagnostic>) {
     let mut comments = 0usize;
     let mut mirrors = Vec::new();
     let mut preambles = 0usize;
+    let mut unresolved_sources = Vec::new();
     for block in &parsed.blocks {
         if block.mirror {
             mirrors.push(block.block_id.clone());
@@ -607,19 +608,39 @@ fn annotation_counts(region: Option<&str>) -> (usize, usize, Vec<Diagnostic>) {
             continue;
         }
         annotations += 1;
+        let has_image_note =
+            !block.images.is_empty() || !block.unresolved_images.is_empty();
         match block.kind {
             RegionBlockKind::Highlight => {
-                if block.comment.as_deref().is_some_and(|c| !c.is_empty()) {
+                if block.comment.as_deref().is_some_and(|c| !c.is_empty())
+                    || has_image_note
+                {
                     comments += 1;
                 }
             }
             RegionBlockKind::Note => comments += 1,
             RegionBlockKind::Image => {
-                if block.comment.as_deref().is_some_and(|c| !c.is_empty()) {
+                if block.comment.as_deref().is_some_and(|c| !c.is_empty())
+                    || has_image_note
+                {
                     comments += 1;
                 }
             }
         }
+        unresolved_sources.extend(block.unresolved_images.iter().cloned());
+    }
+    if !unresolved_sources.is_empty() {
+        let n = unresolved_sources.len();
+        let first = &unresolved_sources[0];
+        let detail = if n == 1 {
+            format!("1 image note(s) not in the vault yet: {first}")
+        } else {
+            format!(
+                "{n} image note(s) not in the vault yet: {first} (+{} more)",
+                n - 1
+            )
+        };
+        diagnostics.push(Diagnostic::new("unresolved_image_note", detail));
     }
     if !mirrors.is_empty() {
         mirrors.sort();

@@ -418,8 +418,13 @@ it is absent.
   legacy notes), or `unparsed` (with `raw_region`).
 - `annotations`: one entry per live block — `page_label`, `kind`
   (`highlight`, `note`, or `image`), `quote`, `comment`, `asset`,
-  `block_id`, and `link` (`[[ref/x#^h-…]]`). Quote and comment stay in
-  separate fields; standalone notes carry their text as `comment`.
+  `images`, `unresolved_images`, `block_id`, and `link`
+  (`[[ref/x#^h-…]]`). Quote and comment stay in separate fields;
+  standalone notes carry their text as `comment`. `images` is the list of
+  vault-relative image-note paths (without any `|width` hint);
+  `unresolved_images` is the list of source texts from warning callouts.
+  Both arrays are always present. A note with unresolved image notes
+  carries the row diagnostic `unresolved_image_note`.
 - `excluded`: counts of `marker_mirrors`, `preamble`, and `removed`
   (tombstoned) blocks. Tombstones carry no text, so they are counted
   instead of shown.
@@ -429,15 +434,18 @@ it is absent.
   `block_id`, plus `path` only on follow-ups found elsewhere).
 - `also`: superseded companion paths.
 
-`-c/--comments-only` keeps only annotations with a comment and
-standalone notes, with their quotes. `-N/--no-annotations` keeps
+`-c/--comments-only` keeps only annotations with a comment, standalone
+notes, or image notes (embedded or unresolved), with their quotes.
+`-N/--no-annotations` keeps
 metadata and notes only. The `annotations` array honors the flags; the
 status, counts, and `excluded` facts always describe the whole region.
 
 Human output prints the title, a reading-state header (chip, date,
 type, origin, path), the reading-task line, the metadata rows that have
 a value, then the annotations grouped by page with wrapped quotes
-(`“…”`) and cyan `↳` comments, the exclusion parenthetical, and the
+(`“…”`), `[image: <vault path>]` lines for image notes,
+yellow `[image not found: <source>]` (or `unreadable` / `unsupported`)
+lines, and cyan `↳` comments, the exclusion parenthetical, and the
 `NOTES` and `TASKS` sections. The reading-task line is `📖 Reading task
 <residence> · <lane> → <link>` for open v2, `📖 Read/Dropped · <date> ·
 <residence> [(archived)]` for closed v2, `📖 Reading task in this note
@@ -453,8 +461,9 @@ task:** …` bullet with the same text as the human line, source URL and
 arXiv/DOI, origin and type, annotation counts and snapshot date (plus
 `Research report: research:…` when set, and `Also: …` companions), then
 `### Annotations` (one `**Page N**` label per page, quotes as `>`
-blockquotes, comments as `Comment: …` lines, standalone notes as
-`Note: …`), `### Notes`, and `### Tasks` (keeping each task's real
+blockquotes, image notes as `Image: <vault path>` or
+`Image not found: <source>` lines, comments as `Comment: …` lines,
+standalone notes as `Note: …`), `### Notes`, and `### Tasks` (keeping each task's real
 mark, so a `[-]` task stays `[-]`).
 
 Agent usage: resolve candidates with `bob ref find` first, then read

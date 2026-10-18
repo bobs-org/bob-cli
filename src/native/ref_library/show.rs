@@ -21,6 +21,7 @@ use super::{
 };
 use crate::native::highlights_ref::{
     parse_managed_region, split_frontmatter, split_note_body, RegionBlockKind,
+    UnresolvedImageNoteState,
 };
 use crate::native::style::{
     display_width, pad_right, terminal_width, truncate, Styler,
@@ -35,6 +36,10 @@ pub(crate) struct ShowAnnotation {
     pub quote: Option<String>,
     pub comment: Option<String>,
     pub asset: Option<String>,
+    pub images: Vec<String>,
+    pub unresolved_images: Vec<String>,
+    #[serde(skip)]
+    pub unresolved_image_states: Vec<UnresolvedImageNoteState>,
     pub block_id: String,
     pub link: String,
 }
@@ -254,6 +259,11 @@ pub(crate) fn load_show_row(
                     quote,
                     comment,
                     asset,
+                    images: block.images.clone(),
+                    unresolved_images: block.unresolved_images.clone(),
+                    unresolved_image_states: block
+                        .unresolved_image_states
+                        .clone(),
                     block_id: block.block_id.clone(),
                     link: format!("[[{stem}#^{}]]", block.block_id),
                 });
@@ -275,6 +285,8 @@ pub(crate) fn load_show_row(
                     .comment
                     .as_deref()
                     .is_some_and(|comment| !comment.is_empty())
+                || !annotation.images.is_empty()
+                || !annotation.unresolved_images.is_empty()
         });
     }
     let mut tasks: Vec<ShowTask> = parts
@@ -467,6 +479,8 @@ fn annotation_summary(shown: &[ShowAnnotation]) -> String {
             .comment
             .as_deref()
             .is_some_and(|comment| !comment.is_empty())
+            || !annotation.images.is_empty()
+            || !annotation.unresolved_images.is_empty()
         {
             comments += 1;
         }
@@ -628,6 +642,31 @@ fn quote_lines(quote: &str, width: usize) -> Vec<String> {
     out
 }
 
+fn image_note_lines(
+    annotation: &ShowAnnotation,
+    styler: Styler,
+    width: usize,
+) -> Vec<String> {
+    let mut out = Vec::new();
+    for path in &annotation.images {
+        out.push(styler.dim(&truncate(&format!("    [image: {path}]"), width)));
+    }
+    for (index, source) in annotation.unresolved_images.iter().enumerate() {
+        let label = match annotation.unresolved_image_states.get(index) {
+            Some(UnresolvedImageNoteState::Unreadable) => "image unreadable",
+            Some(UnresolvedImageNoteState::Unsupported) => "image unsupported",
+            Some(UnresolvedImageNoteState::NotFound) | None => {
+                "image not found"
+            }
+        };
+        out.push(
+            styler
+                .yellow(&truncate(&format!("    [{label}: {source}]"), width)),
+        );
+    }
+    out
+}
+
 /// Render one comment: a cyan `↳` leader with a hanging indent.
 fn comment_lines(comment: &str, styler: Styler, width: usize) -> Vec<String> {
     wrap_text(comment, width.saturating_sub(8).max(1))
@@ -659,6 +698,7 @@ fn annotation_lines(
             {
                 out.extend(quote_lines(quote, width));
             }
+            out.extend(image_note_lines(annotation, styler, width));
             if let Some(comment) = annotation.comment.as_deref()
                 && !comment.is_empty()
             {
@@ -673,6 +713,7 @@ fn annotation_lines(
                     out.push(format!("    {line}"));
                 }
             }
+            out.extend(image_note_lines(annotation, styler, width));
         }
         ShowAnnotationKind::Image => {
             if let Some(asset) = annotation.asset.as_deref() {
@@ -683,6 +724,7 @@ fn annotation_lines(
                     )),
                 );
             }
+            out.extend(image_note_lines(annotation, styler, width));
             if let Some(comment) = annotation.comment.as_deref()
                 && !comment.is_empty()
             {
@@ -1011,6 +1053,7 @@ fn render_one_markdown(row: &ShowRow, no_annotations: bool) -> String {
                             out.push_str(&format!("> {line}\n"));
                         }
                     }
+                    push_markdown_image_notes(&mut out, annotation);
                     if let Some(comment) = annotation.comment.as_deref()
                         && !comment.is_empty()
                     {
@@ -1037,11 +1080,13 @@ fn render_one_markdown(row: &ShowRow, no_annotations: bool) -> String {
                             out.push_str(&format!("{line}\n"));
                         }
                     }
+                    push_markdown_image_notes(&mut out, annotation);
                 }
                 ShowAnnotationKind::Image => {
                     if let Some(asset) = annotation.asset.as_deref() {
                         out.push_str(&format!("\nImage: {asset}\n"));
                     }
+                    push_markdown_image_notes(&mut out, annotation);
                     if let Some(comment) = annotation.comment.as_deref()
                         && !comment.is_empty()
                     {
@@ -1061,6 +1106,22 @@ fn render_one_markdown(row: &ShowRow, no_annotations: bool) -> String {
         }
     }
     out
+}
+
+fn push_markdown_image_notes(out: &mut String, annotation: &ShowAnnotation) {
+    for path in &annotation.images {
+        out.push_str(&format!("\nImage: {path}\n"));
+    }
+    for (index, source) in annotation.unresolved_images.iter().enumerate() {
+        let label = match annotation.unresolved_image_states.get(index) {
+            Some(UnresolvedImageNoteState::Unreadable) => "Image unreadable",
+            Some(UnresolvedImageNoteState::Unsupported) => "Image unsupported",
+            Some(UnresolvedImageNoteState::NotFound) | None => {
+                "Image not found"
+            }
+        };
+        out.push_str(&format!("\n{label}: {source}\n"));
+    }
 }
 
 /// Render shown rows as Markdown digests, separated by a rule.
@@ -1149,6 +1210,9 @@ mod tests {
                     quote: Some("A determinism contract.".to_string()),
                     comment: Some("Support replay?".to_string()),
                     asset: None,
+                    images: Vec::new(),
+                    unresolved_images: Vec::new(),
+                    unresolved_image_states: Vec::new(),
                     block_id: "h-aaaaaaaaaaaaaaaa".to_string(),
                     link: "[[ref/papers/ea_graph#^h-aaaaaaaaaaaaaaaa]]"
                         .to_string(),
@@ -1159,6 +1223,9 @@ mod tests {
                     quote: None,
                     comment: Some("A standalone note.".to_string()),
                     asset: None,
+                    images: Vec::new(),
+                    unresolved_images: Vec::new(),
+                    unresolved_image_states: Vec::new(),
                     block_id: "h-bbbbbbbbbbbbbbbb".to_string(),
                     link: "[[ref/papers/ea_graph#^h-bbbbbbbbbbbbbbbb]]"
                         .to_string(),

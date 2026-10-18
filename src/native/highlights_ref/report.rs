@@ -53,6 +53,18 @@ pub(super) fn print_pdf_sync_report(
         println!("images: {}", rendered.image_count);
         println!("image_assets: {}", planned_image_asset_write_count(plan));
     }
+    for line in image_note_report_lines(
+        plan.rendered_highlights
+            .as_ref()
+            .map(|rendered| rendered.image_note_count)
+            .unwrap_or(0),
+        plan.rendered_highlights
+            .as_ref()
+            .map(|rendered| rendered.image_notes_unresolved.as_slice())
+            .unwrap_or(&[]),
+    ) {
+        println!("{line}");
+    }
     println!("annotation_tasks_create: {}", plan.annotation_tasks_created);
     println!("annotation_tasks_skip: {}", plan.annotation_tasks_skipped);
     println!(
@@ -74,6 +86,12 @@ pub(super) fn print_sync_write_report(report: &SyncWriteReport) {
         println!("images: {}", report.image_count);
         println!("image_assets_written: {}", report.image_assets_written);
         println!("image_assets_skipped: {}", report.image_assets_skipped);
+    }
+    for line in image_note_report_lines(
+        report.image_note_count,
+        &report.image_notes_unresolved,
+    ) {
+        println!("{line}");
     }
     println!(
         "annotation_tasks_created: {}",
@@ -718,7 +736,18 @@ impl ScanLine {
                 if !details.is_empty() {
                     let separator = format!(" {} ", styler.separator());
                     rendered.push_str("  ");
-                    rendered.push_str(&styler.dim(&details.join(&separator)));
+                    let styled = details
+                        .iter()
+                        .map(|detail| {
+                            if detail.ends_with(" unresolved") {
+                                styler.yellow(detail)
+                            } else {
+                                styler.dim(detail)
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join(&separator);
+                    rendered.push_str(&styled);
                 }
                 rendered
             }
@@ -807,6 +836,22 @@ pub(super) fn scan_details(
     {
         details.push(count_phrase(rendered.image_count, "image", "images"));
     }
+    if let Some(rendered) = &plan.rendered_highlights
+        && rendered.image_note_count > 0
+    {
+        details.push(count_phrase(
+            rendered.image_note_count,
+            "image note",
+            "image notes",
+        ));
+        if !rendered.image_notes_unresolved.is_empty() {
+            details.push(count_phrase(
+                rendered.image_notes_unresolved.len(),
+                "unresolved",
+                "unresolved",
+            ));
+        }
+    }
     if annotation_tasks_created > 0 {
         details.push(format!(
             "+{}",
@@ -817,6 +862,24 @@ pub(super) fn scan_details(
         details.push(format!("auto-merge ({})", plan.decision.reason));
     }
     details
+}
+
+pub(super) fn image_note_report_lines(
+    count: usize,
+    unresolved: &[UnresolvedImageNote],
+) -> Vec<String> {
+    if count == 0 {
+        return Vec::new();
+    }
+    let mut lines = vec![format!("image_notes: {count}")];
+    for note in unresolved {
+        lines.push(format!(
+            "image_note_unresolved: {} ({})",
+            note.source_text,
+            note.state.as_str()
+        ));
+    }
+    lines
 }
 
 pub(super) fn scan_display_name(path: &Path) -> String {
@@ -1044,6 +1107,18 @@ pub(super) fn print_scan_plan_entry(plan: &PdfSyncPlan) {
     {
         println!("  images: {}", rendered.image_count);
         println!("  image_assets: {}", planned_image_asset_write_count(plan));
+    }
+    for line in image_note_report_lines(
+        plan.rendered_highlights
+            .as_ref()
+            .map(|rendered| rendered.image_note_count)
+            .unwrap_or(0),
+        plan.rendered_highlights
+            .as_ref()
+            .map(|rendered| rendered.image_notes_unresolved.as_slice())
+            .unwrap_or(&[]),
+    ) {
+        println!("  {line}");
     }
     println!(
         "  annotation_tasks_create: {}",

@@ -26,6 +26,9 @@ pub(crate) struct RegionBlock {
     pub(crate) quote: Option<String>,
     pub(crate) comment: Option<String>,
     pub(crate) asset: Option<String>,
+    pub(crate) images: Vec<String>,
+    pub(crate) unresolved_images: Vec<String>,
+    pub(crate) unresolved_image_states: Vec<UnresolvedImageNoteState>,
     pub(crate) block_id: String,
     pub(crate) mirror: bool,
     pub(crate) in_preamble: bool,
@@ -330,46 +333,58 @@ fn classify_region_block(
     {
         let asset =
             image_embed_target(&rest[5..]).ok_or_else(|| raw.clone())?;
-        let (text_lines, comment_lines) = split_body_lines(remaining, &raw)?;
-        if text_lines.len() > 1 {
+        let body = parse_callout_body(remaining, &raw)?;
+        if body
+            .text_lines
+            .iter()
+            .filter(|line| !line.is_empty())
+            .count()
+            > 1
+        {
             return Err(raw);
         }
-        let comment = comment_text(comment_lines, &raw)?;
         return Ok(RegionBlock {
             page_label,
             kind: RegionBlockKind::Image,
             quote: None,
-            comment,
+            comment: body.comment,
             asset: Some(asset),
+            images: body.images,
+            unresolved_images: body.unresolved_images,
+            unresolved_image_states: body.unresolved_image_states,
             block_id,
             mirror: false,
             in_preamble,
         });
     }
     if callout.eq_ignore_ascii_case("quote") {
-        let (text_lines, comment_lines) = split_body_lines(remaining, &raw)?;
-        let mut quote_lines = vec![rest];
-        quote_lines.extend(text_lines);
-        let comment = comment_text(comment_lines, &raw)?;
+        let body = parse_callout_body(remaining, &raw)?;
+        let mut quote_lines = vec![rest.to_string()];
+        quote_lines.extend(body.text_lines);
+        let quote = trim_blank_ends(&quote_lines.join("\n"));
         let mirror =
-            is_marker_mirror_text(comment.as_deref().unwrap_or_default());
+            is_marker_mirror_text(body.comment.as_deref().unwrap_or_default());
         return Ok(RegionBlock {
             page_label,
             kind: RegionBlockKind::Highlight,
-            quote: Some(trim_blank_ends(&quote_lines.join("\n"))),
-            comment,
+            quote: Some(quote),
+            comment: body.comment,
             asset: None,
+            images: body.images,
+            unresolved_images: body.unresolved_images,
+            unresolved_image_states: body.unresolved_image_states,
             block_id,
             mirror,
             in_preamble,
         });
     }
     if callout.eq_ignore_ascii_case("note") {
-        if remaining.iter().any(|(depth, _)| *depth != 1) {
+        let body = parse_callout_body(remaining, &raw)?;
+        if body.comment.is_some() {
             return Err(raw);
         }
-        let mut text_lines = vec![rest];
-        text_lines.extend(remaining.iter().map(|(_, content)| *content));
+        let mut text_lines = vec![rest.to_string()];
+        text_lines.extend(body.text_lines);
         let text = trim_blank_ends(&text_lines.join("\n"));
         return Ok(RegionBlock {
             page_label,
@@ -377,6 +392,9 @@ fn classify_region_block(
             quote: None,
             comment: Some(text.clone()),
             asset: None,
+            images: body.images,
+            unresolved_images: body.unresolved_images,
+            unresolved_image_states: body.unresolved_image_states,
             block_id,
             mirror: is_marker_mirror_text(&text),
             in_preamble,
@@ -404,52 +422,115 @@ fn image_embed_target(rest: &str) -> Option<String> {
     (!target.is_empty()).then_some(target)
 }
 
-/// Split the lines after a quote or image header into depth-1 quote
-/// continuation lines and the optional comment callout lines (starting with
-/// the `> > [!note] Comment …` header line). The comment starts at the first
-/// bare `>` separator whose next line is depth-2; a bare `>` followed by a
-/// depth-1 line is a blank quote line, not a separator.
-fn split_body_lines<'a>(
-    remaining: &[(usize, &'a str)],
+struct ParsedCalloutBody {
+    text_lines: Vec<String>,
+    images: Vec<String>,
+    unresolved_images: Vec<String>,
+    unresolved_image_states: Vec<UnresolvedImageNoteState>,
+    comment: Option<String>,
+}
+
+/// Split the lines after a quote, image, or note header into depth-1 text,
+/// image-note embeds, depth-2 warning groups, and an optional trailing
+/// Comment callout. Each depth-2 group starts after a bare `>` spacer.
+fn parse_callout_body(
+    remaining: &[(usize, &str)],
     raw: &str,
-) -> RegionResult<(Vec<&'a str>, Option<Vec<&'a str>>)> {
-    let separator =
-        remaining
-            .iter()
-            .enumerate()
-            .position(|(index, (depth, content))| {
-                *depth == 1
-                    && content.is_empty()
-                    && remaining
-                        .get(index + 1)
-                        .is_some_and(|(next, _)| *next == 2)
-            });
-    let Some(start) = separator else {
-        if remaining.iter().any(|(depth, _)| *depth != 1) {
+) -> RegionResult<ParsedCalloutBody> {
+    let mut body = ParsedCalloutBody {
+        text_lines: Vec::new(),
+        images: Vec::new(),
+        unresolved_images: Vec::new(),
+        unresolved_image_states: Vec::new(),
+        comment: None,
+    };
+    let mut index = 0usize;
+    while index < remaining.len() {
+        if body.comment.is_some() {
             return Err(raw.to_string());
         }
-        return Ok((
-            remaining.iter().map(|(_, content)| *content).collect(),
-            None,
-        ));
-    };
-    if remaining[..start].iter().any(|(depth, _)| *depth != 1)
-        || remaining[start + 1..].iter().any(|(depth, _)| *depth != 2)
-    {
-        return Err(raw.to_string());
+        let (depth, content) = remaining[index];
+        if depth == 1
+            && content.is_empty()
+            && remaining.get(index + 1).is_some_and(|(next, _)| *next == 2)
+        {
+            let group_start = index + 1;
+            let mut group_end = group_start + 1;
+            while group_end < remaining.len() && remaining[group_end].0 == 2 {
+                group_end += 1;
+            }
+            parse_depth2_group(
+                &remaining[group_start..group_end],
+                raw,
+                &mut body,
+            )?;
+            index = group_end;
+            continue;
+        }
+        if depth != 1 {
+            return Err(raw.to_string());
+        }
+        if let Some(target) = image_note_embed_target(content) {
+            body.images.push(target);
+        } else {
+            body.text_lines.push(content.to_string());
+        }
+        index += 1;
     }
-    Ok((
-        remaining[..start]
+    Ok(body)
+}
+
+fn parse_depth2_group(
+    group: &[(usize, &str)],
+    raw: &str,
+    body: &mut ParsedCalloutBody,
+) -> RegionResult<()> {
+    let Some((_, header)) = group.first() else {
+        return Err(raw.to_string());
+    };
+    let (callout, label) =
+        split_callout_header(header).ok_or_else(|| raw.to_string())?;
+    if callout.eq_ignore_ascii_case("warning") {
+        let state =
+            warning_image_state(label).ok_or_else(|| raw.to_string())?;
+        let rest = group[1..]
             .iter()
             .map(|(_, content)| *content)
-            .collect(),
-        Some(
-            remaining[start + 1..]
-                .iter()
-                .map(|(_, content)| *content)
-                .collect(),
-        ),
-    ))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let source = backticked_source(&rest).ok_or_else(|| raw.to_string())?;
+        body.unresolved_images.push(source);
+        body.unresolved_image_states.push(state);
+        return Ok(());
+    }
+    if callout.eq_ignore_ascii_case("note") {
+        body.comment = comment_text(
+            Some(group.iter().map(|(_, content)| *content).collect()),
+            raw,
+        )?;
+        return Ok(());
+    }
+    Err(raw.to_string())
+}
+
+fn warning_image_state(label: &str) -> Option<UnresolvedImageNoteState> {
+    if label.eq_ignore_ascii_case("Image not found") {
+        Some(UnresolvedImageNoteState::NotFound)
+    } else if label.eq_ignore_ascii_case("Image unreadable") {
+        Some(UnresolvedImageNoteState::Unreadable)
+    } else if label.eq_ignore_ascii_case("Image type not supported") {
+        Some(UnresolvedImageNoteState::Unsupported)
+    } else {
+        None
+    }
+}
+
+fn backticked_source(text: &str) -> Option<String> {
+    let start = text.find('`')?;
+    let rest = &text[start + 1..];
+    let end = rest.find('`')?;
+    let source = &rest[..end];
+    (!source.is_empty()).then(|| source.to_string())
 }
 
 /// The text of a `> > [!note] Comment …` callout: the header with its label
