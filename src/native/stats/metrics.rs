@@ -11,18 +11,20 @@ use chrono::NaiveDate;
 use regex::Regex;
 
 use super::{
-    homes::{default_exempt, HomesEngine},
+    homes::{default_exempt, split_from_homes, split_from_kept, HomesEngine},
     index::{
         canonical_daily_date, DailyNoteInputs, DateDiagnostic, DatedValue,
         IndexedTask, StatsIndex, TaskKindPart,
     },
     registry::{
         ChecklistMeasure, FieldSource, MetricDef, MetricSpec, MetricUnit,
-        PomodoroMeasure, RecurringFilter, TaskEvent, TaskKindFilter,
+        PomodoroMeasure, RecurringFilter, ReviewFilter, TaskEvent,
+        TaskKindFilter,
     },
     report::StatsWarning,
     value::{ChecklistState, DailyValue, DataQuality},
 };
+use crate::native::pomodoro_homes::{split_minutes, Home, SessionKind};
 
 /// Evaluated daily facts for a single non-journal, non-formula metric.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -59,32 +61,49 @@ pub(crate) fn evaluate_with_homes(
     let (inferred_since, evaluate, warnings) = match &metric.spec {
         MetricSpec::Pomodoro { .. } => {
             let since = pomodoro_since(index);
-            let values = evaluate_pomodoros(metric, index, dates, today, homes);
+            let values = if dates.is_empty() {
+                Vec::new()
+            } else {
+                evaluate_pomodoros(metric, index, dates, today, homes)
+            };
             (since, values, Vec::new())
         }
         MetricSpec::Tasks { .. } => {
             let since = task_since(metric, index);
             let effective_since = effective_since(metric, since, global_since);
-            let values = evaluate_tasks(
-                metric,
-                index,
-                dates,
-                today,
-                effective_since,
-                homes,
-            );
+            let values = if dates.is_empty() {
+                Vec::new()
+            } else {
+                evaluate_tasks(
+                    metric,
+                    index,
+                    dates,
+                    today,
+                    effective_since,
+                    homes,
+                )
+            };
             (since, values, Vec::new())
         }
         MetricSpec::Checklist { .. } => {
             let inferred = checklist_since(metric, index, today);
             let since = effective_since(metric, inferred, global_since);
-            let result = evaluate_checklist(metric, index, dates, today, since);
-            (inferred, result.values, result.warnings)
+            if dates.is_empty() {
+                (inferred, Vec::new(), Vec::new())
+            } else {
+                let result =
+                    evaluate_checklist(metric, index, dates, today, since);
+                (inferred, result.values, result.warnings)
+            }
         }
         MetricSpec::Field { .. } => {
             let inferred = field_since(metric, index);
             let since = effective_since(metric, inferred, global_since);
-            let values = evaluate_fields(metric, index, dates, today, since);
+            let values = if dates.is_empty() {
+                Vec::new()
+            } else {
+                evaluate_fields(metric, index, dates, today, since)
+            };
             (inferred, values, Vec::new())
         }
         MetricSpec::Formula { .. } | MetricSpec::Journal { .. } => {
@@ -177,13 +196,17 @@ fn evaluate_pomodoros(
         measure,
         themes,
         exclude_themes,
+        in_notes,
+        exclude_in,
+        review,
     } = &metric.spec
     else {
         return Vec::new();
     };
     let mut per_day = BTreeMap::<NaiveDate, PomodoroDay>::new();
+    let wanted: BTreeSet<NaiveDate> = dates.iter().copied().collect();
     for (date, note) in &index.daily_notes {
-        if !note.has_pomodoros_heading {
+        if !wanted.contains(date) || !note.has_pomodoros_heading {
             continue;
         }
         let daily_path = Path::new(&note.path);
@@ -200,21 +223,8 @@ fn evaluate_pomodoros(
                 continue;
             }
 
-            let day = per_day.entry(*date).or_default();
-            match measure {
-                PomodoroMeasure::Count => {
-                    day.sessions = day.sessions.saturating_add(1);
-                    // A session belongs to one part in count mode, so part
-                    // totals continue to add up to the metric total.
-                    add_part(&mut day.theme_parts, selected[0].clone(), 1);
-                    let split = homes.split_session(session, daily_path, None);
-                    if let Some(project) = split.lead_project {
-                        add_part(&mut day.project_parts, project, 1);
-                    }
-                    if let Some(area) = split.lead_area {
-                        add_part(&mut day.area_parts, area, 1);
-                    }
-                }
+            let counted = match measure {
+                PomodoroMeasure::Count => None,
                 PomodoroMeasure::Minutes => {
                     let (minutes, fallback) = match session.recorded_minutes {
                         Some(minutes) => (Some(i64::from(minutes)), false),
@@ -224,35 +234,119 @@ fn evaluate_pomodoros(
                         ),
                     };
                     let Some(minutes) = minutes else {
-                        day.missing_duration = true;
+                        per_day.entry(*date).or_default().missing_duration =
+                            true;
                         continue;
+                    };
+                    let theme_parts = theme_minute_parts(
+                        &components,
+                        minutes,
+                        themes,
+                        exclude_themes,
+                    );
+                    let counted =
+                        theme_parts.iter().map(|(_, share)| *share).sum();
+                    Some((counted, fallback, theme_parts))
+                }
+            };
+            let counted_u32 = counted
+                .as_ref()
+                .map(|(minutes, _, _)| u32::try_from(*minutes).unwrap_or(0));
+            let attributed = homes.attribute(session, daily_path, counted_u32);
+            if !review_kept(attributed.homes.kind, *review) {
+                continue;
+            }
+            let bucket = matches!(
+                attributed.homes.kind,
+                SessionKind::Review | SessionKind::Unlinked
+            );
+            let kept = if bucket {
+                if !in_notes.is_empty() {
+                    continue;
+                }
+                None
+            } else {
+                let kept = kept_task_indices(
+                    &attributed.task_homes,
+                    in_notes,
+                    exclude_in,
+                    index,
+                );
+                if kept.is_empty() {
+                    continue;
+                }
+                Some(kept)
+            };
+
+            let day = per_day.entry(*date).or_default();
+            match measure {
+                PomodoroMeasure::Count => {
+                    day.sessions = day.sessions.saturating_add(1);
+                    add_part(&mut day.theme_parts, selected[0].clone(), 1);
+                    let split = match &kept {
+                        Some(kept) => {
+                            let pairs = kept
+                                .iter()
+                                .map(|&index| {
+                                    (attributed.task_homes[index].clone(), 0)
+                                })
+                                .collect::<Vec<_>>();
+                            split_from_kept(&pairs, false)
+                        }
+                        None => split_from_homes(&attributed, false),
+                    };
+                    if let Some(project) = split.lead_project {
+                        add_part(&mut day.project_parts, project, 1);
+                    }
+                    if let Some(area) = split.lead_area {
+                        add_part(&mut day.area_parts, area, 1);
+                    }
+                }
+                PomodoroMeasure::Minutes => {
+                    let Some((counted, fallback, original_theme_parts)) =
+                        counted
+                    else {
+                        continue;
+                    };
+                    let (contrib, theme_parts, split) = match &kept {
+                        Some(kept) => {
+                            let shares = split_minutes(
+                                counted_u32.unwrap_or(0),
+                                attributed.task_homes.len(),
+                            );
+                            let pairs = kept
+                                .iter()
+                                .map(|&index| {
+                                    (
+                                        attributed.task_homes[index].clone(),
+                                        shares.get(index).copied().unwrap_or(0),
+                                    )
+                                })
+                                .collect::<Vec<_>>();
+                            let contrib = i64::from(
+                                pairs
+                                    .iter()
+                                    .map(|(_, minutes)| *minutes)
+                                    .sum::<u32>(),
+                            );
+                            (
+                                contrib,
+                                resplit_theme_minutes(&selected, contrib),
+                                split_from_kept(&pairs, true),
+                            )
+                        }
+                        None => (
+                            counted,
+                            original_theme_parts,
+                            split_from_homes(&attributed, true),
+                        ),
                     };
                     day.sessions = day.sessions.saturating_add(1);
                     day.used_fallback |= fallback;
-                    let count =
-                        i64::try_from(components.len()).unwrap_or(1).max(1);
-                    let each = minutes / count;
-                    let remainder = minutes % count;
-                    let mut counted = 0_i64;
-                    for (position, component) in components.iter().enumerate() {
-                        if !theme_matches(component, themes, exclude_themes) {
-                            continue;
-                        }
-                        let share = each + i64::from(position == 0) * remainder;
-                        counted = counted.saturating_add(share);
-                        add_part(
-                            &mut day.theme_parts,
-                            component.clone(),
-                            share,
-                        );
+                    day.total = day.total.saturating_add(contrib);
+                    for (component, share) in theme_parts {
+                        add_part(&mut day.theme_parts, component, share);
                     }
-                    day.total = day.total.saturating_add(counted);
-                    let counted_u32 = u32::try_from(counted).unwrap_or(0);
-                    let split = homes.split_session(
-                        session,
-                        daily_path,
-                        Some(counted_u32),
-                    );
                     for (key, value) in split.project {
                         add_part(&mut day.project_parts, key, value);
                     }
@@ -408,6 +502,89 @@ fn theme_matches(
         component.eq_ignore_ascii_case(theme.trim().trim_start_matches('#'))
     });
     has_included && !excluded
+}
+
+fn review_kept(kind: SessionKind, review: ReviewFilter) -> bool {
+    match review {
+        ReviewFilter::Include => true,
+        ReviewFilter::Only => kind == SessionKind::Review,
+        ReviewFilter::Exclude => kind != SessionKind::Review,
+    }
+}
+
+fn kept_task_indices(
+    task_homes: &[Home],
+    in_notes: &[String],
+    exclude_in: &[String],
+    index: &StatsIndex,
+) -> Vec<usize> {
+    task_homes
+        .iter()
+        .enumerate()
+        .filter(|(_, home)| {
+            let included = in_notes.is_empty()
+                || home_chain_matches(home, in_notes, index);
+            let excluded = !exclude_in.is_empty()
+                && home_chain_matches(home, exclude_in, index);
+            included && !excluded
+        })
+        .map(|(index, _)| index)
+        .collect()
+}
+
+fn home_chain_matches(
+    home: &Home,
+    notes: &[String],
+    index: &StatsIndex,
+) -> bool {
+    notes.iter().any(|target| {
+        home.pre_rollup_chain
+            .iter()
+            .any(|path| note_target_matches(index, target, path))
+            || note_target_matches(index, target, &home.key)
+    })
+}
+
+fn theme_minute_parts(
+    components: &[String],
+    minutes: i64,
+    themes: &[String],
+    exclude_themes: &[String],
+) -> Vec<(String, i64)> {
+    let count = i64::try_from(components.len()).unwrap_or(1).max(1);
+    let each = minutes / count;
+    let remainder = minutes % count;
+    components
+        .iter()
+        .enumerate()
+        .filter(|(_, component)| {
+            theme_matches(component, themes, exclude_themes)
+        })
+        .map(|(position, component)| {
+            let share = each + i64::from(position == 0) * remainder;
+            (component.clone(), share)
+        })
+        .collect()
+}
+
+fn resplit_theme_minutes(
+    selected: &[String],
+    minutes: i64,
+) -> Vec<(String, i64)> {
+    if selected.is_empty() {
+        return Vec::new();
+    }
+    let count = i64::try_from(selected.len()).unwrap_or(1).max(1);
+    let each = minutes / count;
+    let remainder = minutes % count;
+    selected
+        .iter()
+        .enumerate()
+        .map(|(position, component)| {
+            let share = each + i64::from(position == 0) * remainder;
+            (component.clone(), share)
+        })
+        .collect()
 }
 
 fn task_since(metric: &MetricDef, index: &StatsIndex) -> Option<NaiveDate> {
@@ -1228,6 +1405,7 @@ mod tests {
                         name: Some("SASE + GTD".to_string()),
                         recorded_minutes: Some(7),
                         range_minutes: Some(30),
+                        time_range: Some("0900-0907".to_string()),
                         line: 2,
                         links: Vec::new(),
                     },
@@ -1235,6 +1413,7 @@ mod tests {
                         name: Some("GTD".to_string()),
                         recorded_minutes: None,
                         range_minutes: Some(25),
+                        time_range: Some("0800-0825".to_string()),
                         line: 3,
                         links: Vec::new(),
                     },
@@ -1259,6 +1438,43 @@ mod tests {
     }
 
     #[test]
+    fn review_time_predicate_drops_composite_theme_sessions() {
+        let mut index = StatsIndex::default();
+        index.daily_notes.insert(
+            date(10),
+            DailyNoteInputs {
+                path: "2026/20261010.md".to_string(),
+                has_pomodoros_heading: true,
+                closed_pomodoros: vec![
+                    super::super::index::PomodoroSession {
+                        name: Some("GTD".to_string()),
+                        recorded_minutes: Some(25),
+                        range_minutes: Some(25),
+                        time_range: Some("0800-0825".to_string()),
+                        line: 2,
+                        links: Vec::new(),
+                    },
+                    super::super::index::PomodoroSession {
+                        name: Some("GTD + SASE".to_string()),
+                        recorded_minutes: Some(7),
+                        range_minutes: Some(7),
+                        time_range: Some("0900-0907".to_string()),
+                        line: 3,
+                        links: Vec::new(),
+                    },
+                ],
+                ..DailyNoteInputs::default()
+            },
+        );
+        let metric = builtin("review_time");
+        let result =
+            evaluate_metric(&metric, &index, &[date(10)], date(11), None)
+                .unwrap();
+        assert_eq!(result.values[0].value, Some(25));
+        assert_eq!(result.values[0].parts["theme"]["GTD"], 25);
+    }
+
+    #[test]
     fn pomodoro_missing_section_empty_section_and_unreadable_time_are_distinct()
     {
         let mut index = StatsIndex::default();
@@ -1280,6 +1496,7 @@ mod tests {
                     name: Some("GTD".to_string()),
                     recorded_minutes: None,
                     range_minutes: None,
+                    time_range: None,
                     line: 2,
                     links: Vec::new(),
                 }],
@@ -1628,6 +1845,7 @@ mod tests {
                     name: Some("GTD".to_string()),
                     recorded_minutes: None,
                     range_minutes: Some(180),
+                    time_range: Some("2200-0100".to_string()),
                     line: 2,
                     links: Vec::new(),
                 }],

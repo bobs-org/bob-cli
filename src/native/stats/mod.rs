@@ -16,6 +16,7 @@ mod render;
 pub(crate) mod report;
 pub(crate) mod request;
 pub(crate) mod series;
+mod session_facts;
 pub(crate) mod value;
 
 #[allow(unused_imports)]
@@ -88,6 +89,7 @@ mod tests {
             health: report::HealthReport::default(),
             warnings: Vec::new(),
             homes: Default::default(),
+            sessions: Vec::new(),
         };
         let _value = DailyValue {
             date: today,

@@ -2,7 +2,7 @@
 
 use std::{
     cell::RefCell,
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, HashMap},
     path::Path,
 };
 
@@ -12,8 +12,9 @@ use super::{
     index::{PomodoroSession, StatsIndex},
     report::{
         HomeCatalogEntry, HomeLintReport, HomesHealthReport,
-        HueCollisionReport, StatsWarning,
+        HueCollisionReport, SessionFact, StatsWarning,
     },
+    session_facts::session_fact,
 };
 use crate::native::pomodoro_homes::{
     attribute_session, path_string, unfiled_home, unlinked_home, Home,
@@ -62,12 +63,12 @@ impl<'a> HomesEngine<'a> {
         home
     }
 
-    pub(crate) fn split_session(
+    pub(crate) fn attribute(
         &self,
         session: &PomodoroSession,
         daily_path: &Path,
         counted_minutes: Option<u32>,
-    ) -> SessionSplit {
+    ) -> SessionHomes {
         let attributed = attribute_session(
             session.name.as_deref(),
             &session.links,
@@ -77,7 +78,7 @@ impl<'a> HomesEngine<'a> {
             &mut self.resolver.borrow_mut(),
         );
         self.record_session(&attributed);
-        split_from_homes(&attributed, counted_minutes.is_some())
+        attributed
     }
 
     pub(crate) fn finish(
@@ -85,67 +86,77 @@ impl<'a> HomesEngine<'a> {
         index: &StatsIndex,
         start: NaiveDate,
         end: NaiveDate,
+        collect_sessions: bool,
     ) -> (
         BTreeMap<String, HomeCatalogEntry>,
         HomesHealthReport,
         Vec<StatsWarning>,
+        Vec<SessionFact>,
     ) {
-        let mut resolver = self.resolver.borrow_mut();
         let mut rolled_up = BTreeMap::<String, u32>::new();
         let mut top_areas: BTreeMap<Hue, Vec<(String, String)>> =
             BTreeMap::new();
-        for (path, contents) in &index.buffers {
-            if !needs_global_inspect(contents) {
-                continue;
-            }
-            let path = Path::new(path);
-            let Some(facts) = resolver.facts(path) else {
-                continue;
-            };
-            match facts.kind {
-                NoteKind::Project => {
-                    let home = resolver.resolve_note(path);
-                    self.remember(&home);
-                    let path_key = path_string(path);
-                    if home.key != path_key && home.kind == HomeKind::Project {
-                        *rolled_up.entry(home.key.clone()).or_default() += 1;
-                    }
+        {
+            let mut resolver = self.resolver.borrow_mut();
+            for (path, contents) in &index.buffers {
+                if !needs_global_inspect(contents) {
+                    continue;
                 }
-                NoteKind::Area => {
-                    let home = resolver.resolve_note(path);
-                    self.remember(&home);
-                    let path_key = path_string(path);
-                    if home.area == path_key {
-                        if let Some(hue) = home.hue {
-                            top_areas
-                                .entry(hue)
-                                .or_default()
-                                .push((home.label.clone(), path_key));
+                let path = Path::new(path);
+                let Some(facts) = resolver.facts(path) else {
+                    continue;
+                };
+                match facts.kind {
+                    NoteKind::Project => {
+                        let home = resolver.resolve_note(path);
+                        self.remember(&home);
+                        let path_key = path_string(path);
+                        if home.key != path_key
+                            && home.kind == HomeKind::Project
+                        {
+                            *rolled_up.entry(home.key.clone()).or_default() +=
+                                1;
                         }
                     }
+                    NoteKind::Area => {
+                        let home = resolver.resolve_note(path);
+                        self.remember(&home);
+                        let path_key = path_string(path);
+                        if home.area == path_key {
+                            if let Some(hue) = home.hue {
+                                top_areas
+                                    .entry(hue)
+                                    .or_default()
+                                    .push((home.label.clone(), path_key));
+                            }
+                        }
+                    }
+                    NoteKind::Other => {}
                 }
-                NoteKind::Other => {}
             }
         }
 
         let mut health = HomesHealthReport::default();
-        let resolver_health: ResolverHealth = resolver.health().clone();
-        health.rollup_invalid = resolver_health
-            .rollup_invalid
-            .iter()
-            .map(|lint| HomeLintReport {
-                path: lint.path.clone(),
-                raw: lint.raw.clone(),
-            })
-            .collect();
-        health.area_color_invalid = resolver_health
-            .area_color_invalid
-            .iter()
-            .map(|lint| HomeLintReport {
-                path: lint.path.clone(),
-                raw: lint.raw.clone(),
-            })
-            .collect();
+        {
+            let resolver = self.resolver.borrow();
+            let resolver_health: ResolverHealth = resolver.health().clone();
+            health.rollup_invalid = resolver_health
+                .rollup_invalid
+                .iter()
+                .map(|lint| HomeLintReport {
+                    path: lint.path.clone(),
+                    raw: lint.raw.clone(),
+                })
+                .collect();
+            health.area_color_invalid = resolver_health
+                .area_color_invalid
+                .iter()
+                .map(|lint| HomeLintReport {
+                    path: lint.path.clone(),
+                    raw: lint.raw.clone(),
+                })
+                .collect();
+        }
 
         let mut collisions = Vec::new();
         for (hue, mut areas) in top_areas {
@@ -160,6 +171,7 @@ impl<'a> HomesEngine<'a> {
         }
         health.hue_collisions = collisions;
 
+        let mut sessions = Vec::new();
         for (date, note) in &index.daily_notes {
             if *date < start || *date > end {
                 continue;
@@ -168,15 +180,15 @@ impl<'a> HomesEngine<'a> {
             for session in &note.closed_pomodoros {
                 let minutes =
                     session.recorded_minutes.or(session.range_minutes);
-                let attributed = attribute_session(
-                    session.name.as_deref(),
-                    &session.links,
-                    minutes,
-                    &self.exempt,
-                    daily_path,
-                    &mut resolver,
-                );
-                self.record_session(&attributed);
+                let attributed = self.attribute(session, daily_path, minutes);
+                if collect_sessions {
+                    sessions.push(session_fact(
+                        *date,
+                        &note.path,
+                        session,
+                        &attributed,
+                    ));
+                }
                 match attributed.homes.kind {
                     SessionKind::Unlinked => {
                         health.unlinked_sessions =
@@ -187,8 +199,10 @@ impl<'a> HomesEngine<'a> {
                         }
                     }
                     SessionKind::Work => {
-                        let (unfiled, ambiguous, unresolved) =
-                            link_health(session, daily_path, &mut resolver);
+                        let (unfiled, ambiguous, unresolved) = {
+                            let mut resolver = self.resolver.borrow_mut();
+                            link_health(session, daily_path, &mut resolver)
+                        };
                         health.unfiled_links =
                             health.unfiled_links.saturating_add(unfiled);
                         health.ambiguous_links =
@@ -210,12 +224,15 @@ impl<'a> HomesEngine<'a> {
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect();
-        for area in needed_areas {
-            if self.seen.borrow().contains_key(&area) {
-                continue;
+        {
+            let mut resolver = self.resolver.borrow_mut();
+            for area in needed_areas {
+                if self.seen.borrow().contains_key(&area) {
+                    continue;
+                }
+                let home = resolver.resolve_note(Path::new(&area));
+                self.remember(&home);
             }
-            let home = resolver.resolve_note(Path::new(&area));
-            self.remember(&home);
         }
 
         let mut catalog = BTreeMap::new();
@@ -227,7 +244,7 @@ impl<'a> HomesEngine<'a> {
         }
 
         let warnings = homes_warnings(&health);
-        (catalog, health, warnings)
+        (catalog, health, warnings, sessions)
     }
 
     fn record_session(&self, attributed: &SessionHomes) {
@@ -323,7 +340,83 @@ fn catalog_entry(home: &Home, rolled_up: Option<u32>) -> HomeCatalogEntry {
     }
 }
 
-fn split_from_homes(
+pub(crate) fn split_from_kept(
+    kept: &[(Home, u32)],
+    minutes_mode: bool,
+) -> SessionSplit {
+    let mut grouped = Vec::<KeptGroup>::new();
+    let mut indices = HashMap::<String, usize>::new();
+    for (index, (home, minutes)) in kept.iter().enumerate() {
+        let group_index = if let Some(group_index) = indices.get(&home.key) {
+            *group_index
+        } else {
+            let group_index = grouped.len();
+            indices.insert(home.key.clone(), group_index);
+            grouped.push(KeptGroup {
+                home: home.clone(),
+                tasks: 0,
+                minutes: 0,
+                first: index,
+            });
+            group_index
+        };
+        let group = &mut grouped[group_index];
+        group.tasks += 1;
+        group.minutes = group.minutes.saturating_add(*minutes);
+    }
+    let mut project = Vec::new();
+    let mut area = Vec::new();
+    if minutes_mode {
+        for group in &grouped {
+            project.push((group.home.key.clone(), i64::from(group.minutes)));
+            add_named(&mut area, &group.home.area, i64::from(group.minutes));
+        }
+    }
+    let project_keys = project
+        .iter()
+        .map(|(key, _)| key.as_str())
+        .collect::<BTreeSet<_>>();
+    let area_keys = area
+        .iter()
+        .map(|(key, _)| key.as_str())
+        .collect::<BTreeSet<_>>();
+    let project_apportioned = if project_keys.len() >= 2 {
+        project.clone()
+    } else {
+        Vec::new()
+    };
+    let area_apportioned = if area_keys.len() >= 2 {
+        area.clone()
+    } else {
+        Vec::new()
+    };
+    let lead = grouped
+        .iter()
+        .max_by(|left, right| {
+            left.tasks
+                .cmp(&right.tasks)
+                .then_with(|| right.first.cmp(&left.first))
+        })
+        .map(|group| group.home.clone());
+    SessionSplit {
+        kind: SessionKind::Work,
+        project,
+        area,
+        project_apportioned,
+        area_apportioned,
+        lead_project: lead.as_ref().map(|home| home.key.clone()),
+        lead_area: lead.as_ref().map(|home| home.area.clone()),
+    }
+}
+
+struct KeptGroup {
+    home: Home,
+    tasks: u32,
+    minutes: u32,
+    first: usize,
+}
+
+pub(crate) fn split_from_homes(
     attributed: &SessionHomes,
     minutes_mode: bool,
 ) -> SessionSplit {
@@ -523,6 +616,7 @@ mod tests {
     use chrono::NaiveDate;
     use tempfile::TempDir;
 
+    use crate::native::pomodoro_homes::SessionKind;
     use crate::native::stats::compute::compute;
     use crate::native::stats::request::{
         Grouping, MetricSelection, StatsRequest,
@@ -547,6 +641,26 @@ mod tests {
                 "      kind: pomodoro",
                 "      measure: minutes",
                 "      themes: [SASE]",
+                "    sase_in:",
+                "      label: SASE in",
+                "      kind: pomodoro",
+                "      measure: minutes",
+                "      in: [sase]",
+                "    sase_blog_in:",
+                "      label: SASE blog in",
+                "      kind: pomodoro",
+                "      measure: minutes",
+                "      in: [sase_blog]",
+                "    exclude_sase:",
+                "      label: Exclude sase",
+                "      kind: pomodoro",
+                "      measure: minutes",
+                "      exclude_in: [sase]",
+                "    review_only:",
+                "      label: Review only",
+                "      kind: pomodoro",
+                "      measure: minutes",
+                "      review: only",
                 "",
             ]
             .join("\n"),
@@ -562,10 +676,19 @@ mod tests {
             .unwrap();
         let mut request = StatsRequest::at(vault, config, today);
         request.selection = MetricSelection::Explicit(
-            ["worked", "sessions", "done", "sase_time"]
-                .into_iter()
-                .map(str::to_string)
-                .collect(),
+            [
+                "worked",
+                "sessions",
+                "done",
+                "sase_time",
+                "sase_in",
+                "sase_blog_in",
+                "exclude_sase",
+                "review_only",
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
         );
         request.range = Some("2026-10-15..2026-10-18".to_string());
         request.grouping = Grouping::Day;
@@ -675,6 +798,55 @@ mod tests {
         assert_eq!(dimension_total(sase_time, "project"), 10);
         assert_eq!(part_value(sase_time, "project", "sase.md"), 10);
         assert_eq!(part_value(sase_time, "theme", "SASE"), 10);
+
+        // H9 in:[sase] keeps pre-rollup matches, including rolled-up blog
+        // and the sase share of HACK; review/unlinked never match.
+        let sase_in = metric(&report, "sase_in");
+        assert_eq!(sase_in.summary.total.as_ref().unwrap().value, Some(80));
+        assert_eq!(dimension_total(sase_in, "area"), 80);
+        assert_eq!(dimension_total(sase_in, "project"), 80);
+        assert_eq!(part_value(sase_in, "project", "sase.md"), 80);
+
+        // H10 in:[sase_blog] still measures blog time under rollup.
+        let sase_blog_in = metric(&report, "sase_blog_in");
+        assert_eq!(
+            sase_blog_in.summary.total.as_ref().unwrap().value,
+            Some(50)
+        );
+        assert_eq!(part_value(sase_blog_in, "project", "sase.md"), 50);
+
+        // H11 exclude_in:[sase] never drops review/unlinked; work tasks
+        // whose chain matches sase are removed (HACK keeps bob+dev = 20).
+        let exclude_sase = metric(&report, "exclude_sase");
+        assert_eq!(
+            exclude_sase.summary.total.as_ref().unwrap().value,
+            Some(87)
+        );
+        assert_eq!(dimension_total(exclude_sase, "project"), 87);
+        assert_eq!(part_value(exclude_sase, "project", "@review:GTD"), 35);
+        assert_eq!(part_value(exclude_sase, "project", "@unlinked"), 10);
+
+        // H12 review: only is the GTD review row (named + unnamed bridge).
+        let review_only = metric(&report, "review_only");
+        assert_eq!(review_only.summary.total.as_ref().unwrap().value, Some(35));
+        assert_eq!(part_value(review_only, "project", "@review:GTD"), 35);
+
+        // H13 sessions list: facts for every closed row, today included.
+        assert_eq!(report.sessions.len(), 9);
+        assert_eq!(report.sessions[0].name.as_deref(), Some("GTD"));
+        assert_eq!(report.sessions[0].minutes, Some(25));
+        assert_eq!(report.sessions[0].homes.kind, SessionKind::Review);
+        assert_eq!(report.sessions[1].name.as_deref(), Some("HACK"));
+        assert_eq!(report.sessions[1].homes.kind, SessionKind::Unlinked);
+        assert_eq!(report.sessions[2].name.as_deref(), Some("BLOG"));
+        assert_eq!(report.sessions[7].name, None);
+        assert_eq!(report.sessions[7].homes.kind, SessionKind::Review);
+        assert_eq!(report.sessions[8].name.as_deref(), Some("BLOG"));
+        assert_eq!(report.sessions[8].minutes, Some(15));
+        assert_eq!(
+            report.sessions[8].date,
+            NaiveDate::from_ymd_opt(2026, 10, 18).unwrap()
+        );
 
         assert_eq!(report.homes["sase.md"].rolled_up, Some(1));
         assert_eq!(report.health.homes.unlinked_sessions, 1);

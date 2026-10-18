@@ -83,6 +83,7 @@ pub(crate) struct PomodoroSession {
     pub(crate) name: Option<String>,
     pub(crate) recorded_minutes: Option<u32>,
     pub(crate) range_minutes: Option<u32>,
+    pub(crate) time_range: Option<String>,
     pub(crate) line: u32,
     pub(crate) links: Vec<pomodoro_homes::SessionLink>,
 }
@@ -513,6 +514,7 @@ fn parse_daily_note(relative: &str, contents: &str) -> DailyNoteInputs {
                 name: entry.name.clone(),
                 recorded_minutes: recorded,
                 range_minutes: range,
+                time_range: entry.time_range.clone(),
                 line: u32::try_from(entry.line).unwrap_or(u32::MAX),
                 links: pomodoro_homes::session_links(
                     contents,
@@ -1019,6 +1021,7 @@ mod tests {
                 name: Some("GTD".to_string()),
                 recorded_minutes: Some(25),
                 range_minutes: Some(30),
+                time_range: Some("0800-0825".to_string()),
                 line: 12,
                 links: Vec::new(),
             }],

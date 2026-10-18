@@ -129,7 +129,15 @@ Six configurable kinds share the common `label`, `unit`, `direction`, `color`,
   matching rows. `themes` / `exclude_themes` filter uppercase composite
   components (`GTD + SASE` splits its minutes across both parts, remainder to
   the first); unnamed rows are `(unnamed)`. Count mode attributes each row to
-  its first matching component so parts add up to the total.
+  its first matching component so parts add up to the total. `in:` /
+  `exclude_in:` match a linked task's pre-rollup home chain with the same
+  path, basename, and parent-ancestry rules as task `in:`. Minutes mode
+  keeps those tasks' even shares and re-splits theme parts over that
+  contribution; count mode keeps the session when any task matches and
+  picks the lead home among kept tasks. Review and unlinked sessions never
+  match `in:` and are never removed by `exclude_in`. `review: include`
+  (default), `only`, or `exclude` selects by the review-session predicate.
+  Home and review filters AND with `themes` / `exclude_themes`.
 - `tasks`: `event: created` (any status on its created date), `done`
   (status type `DONE` with a completion date), or `dropped` (status type
   `CANCELLED` with a cancelled date). `recurring: exclude` (default), `only`,
@@ -182,7 +190,7 @@ count in `done`, `created`, and `dropped` and appear as the `ref` kind part.
 | `dropped` | tasks, dropped, recurring exclude | count / gray / neutral | Non-recurring CANCELLED tasks cancelled on D, same exclusions as Done. |
 | `habits` | checklist, tags gtd+pre, ratio | ratio / green / up | `#gtd #pre` chores met on D over chores due on D. |
 | `keep_rate` | journal, keep_rate, pending+next | ratio / violet / neutral | Keep share of PENDING/NEXT answers on D. |
-| `review_time` | pomodoro, minutes, themes GTD | minutes / orange / neutral | Worked minutes in GTD-themed sessions. |
+| `review_time` | pomodoro, minutes, review only | minutes / orange / neutral | Worked minutes in GTD review sessions. |
 | `sessions` | pomodoro, count | count / orange / neutral | Closed Pomodoro rows on D. |
 
 ## `stats:` config
@@ -199,7 +207,12 @@ stats:
       label: SASE time
       kind: pomodoro
       measure: minutes
-      themes: [SASE]
+      in: [sase]
+    sase_blog_time:   # still measures blog time when sase_blog rolls up
+      label: SASE blog time
+      kind: pomodoro
+      measure: minutes
+      in: [sase_blog]
     ref_done:         # tasks — note task_kind, not kind
       label: Ref done
       kind: tasks
@@ -397,10 +410,18 @@ yesterday, zero days) and still includes today as provisional.
 
 Reports serialize with `ok: true`, `schema_version: 1`, ISO dates, the range
 (with prior metadata), per-metric definitions/summaries/chart/points/parts/
-warnings, health, global warnings, and a top-level `homes` catalog keyed by
+warnings, health, global warnings, a top-level `homes` catalog keyed by
 every home used in the report (`label`, `kind` project|area|bucket, `area`,
 `subarea`, `path`, `hue`; `project_label` on area-kind entries;
-`rolled_up` on rollup homes). The catalog is omitted when empty. Ratio points
+`rolled_up` on rollup homes), and a top-level `sessions` array when the
+report includes at least one pomodoro metric. The catalog and `sessions`
+are omitted when empty. `sessions` lists every closed Pomodoro in the
+display window (today included) in chronological order. Each element is
+`{date, path, line, time_range, minutes, minutes_display, quality, name,
+homes}`: facts, not metric values, so themes and filters do not change
+them. `homes` is the shared R9 object; its keys are in the catalog. On
+the 2026-10-18 live vault, `bob stats -f json -r all` is 1,945,299 bytes
+(1.90 MiB) with 1,093 session facts. Ratio points
 add `num`/`den`, grouped points add `partial`, and empty maps (`parts`,
 `parts_summary`, `parts_display`, `apportioned`) and empty lists
 (`daily_points`, `chores`) are omitted. `PartSummary` rows for `area` and
@@ -412,7 +433,7 @@ add `num`/`den`, grouped points add `partial`, and empty maps (`parts`,
 when present: `since`, `reason`, `prior`, `delta`, `suffix`, `stat`,
 `journal.since`, `missing_created`, `checklist_state`, `daily_points`,
 `chores`, `parts_display`, `apportioned`, `label`, `project_label`,
-`rolled_up`, and `health.homes` lint lists.
+`rolled_up`, `health.homes` lint lists, and `sessions`.
 
 Older schema-1 reports remain renderable: use `summary` quartiles only for
 day grouping; omit an unavailable grouped band or calendar with a short
@@ -544,7 +565,7 @@ field in `src/native/stats/compute.rs`. Legend: plain numbers are `ok`;
 | M7 | dropped | U | U | 2 | 0·prov | `[!]` and `[-]` CANCELLED rows with cancelled dates |
 | M8 | habits | U | 0/2 missed | 1/2 met | 0/2·prov | Skipped Journal, late Meditate, deferred Stretch; ratios pool 25% |
 | M9 | keep_rate | M, no denom | G | 1/2 → 50% | 1/1·prov | Keep share with pooled basis points |
-| M10 | review_time | U | 29 | 0 | 0·prov | GTD-only filter; SASE-only today scores zero, not missing |
+| M10 | review_time | U | 25 | 0 | 0·prov | `review: only`; Oct 9 `GTD + SASE` no longer counts; SASE-only today is zero |
 | M11 | sessions | U | 2 | 0 | 1·prov | Count mode counts rows once; parts still attribute GTD |
 | M12 | sase_time (custom pomodoro) | U | 3 | 0 | 10·prov | Custom theme metric through the same path |
 | M13 | ref_done (custom tasks) | U | 1 | 0 | 0·prov | `task_kind: ref` spelling with the `ref` part |
@@ -597,12 +618,18 @@ metric total.
 | H6 | done | 7 completions; 2 on sase, 1 @unfiled; job area tasks use `job · area tasks` |
 | H7 | sase_time | themes:[SASE] counted C is 10m, then split onto sase/dev |
 | H8 | health | 1 unlinked session / 10m, 1 unfiled link, rollup_invalid on invalid.md, hue collision gtd+body orange |
+| H9 | sase_in | `in: [sase]` is 80m (blog 50 + HACK sase share 10 + GTD+SASE 20); review/unlinked never match |
+| H10 | sase_blog_in | `in: [sase_blog]` is 50m on rolled-up sase — blog time still measures under rollup |
+| H11 | exclude_sase | `exclude_in: [sase]` is 87m (167 − 80); review 35m and unlinked 10m stay |
+| H12 | review_only | `review: only` is 35m on `@review:GTD` (named 25 + unnamed bridge 10) |
+| H13 | sessions | 9 closed rows in the window including today; facts ignore metric filters |
 
 Oct 15: named GTD review 25m plus unlinked HACK 10m. Oct 16: BLOG 50m on
 sase_blog (rolls to sase), HACK 30m split bob/sase/dev, JOB 7m split 4/3,
 MISC 15m on an article (@unfiled), GTD+SASE 20m all on sase (theme remainder
 gives SASE 10m), unnamed 10m review via `[[#^gtd]]`. Oct 17 is an empty
-Pomodoros section (real zero). Repeated `compute` calls return byte-identical
+Pomodoros section (real zero). Oct 18 (today) BLOG 15m is in `sessions` and
+provisional on metrics. Repeated `compute` calls return byte-identical
 JSON.
 
 ## Limitations
@@ -682,10 +709,12 @@ Homes-parts measurement (athena, live `~/bob`, this checkout,
 | Path | Time |
 | --- | --- |
 | Before (4w JSON baseline) | 174 ms (plan); 168 ms median on this host |
-| After (median / min / max) | 200 ms / 193 ms / 209 ms |
+| Homes-parts after (median / min / max) | 200 ms / 193 ms / 209 ms |
+| Stats-drilldown after (median / min / max) | 199 ms / 194 ms / 217 ms |
 
-The after median stays within 15% of the 174 ms baseline (budget
-200 ms).
+The stats-drilldown median stays within 15% of the 174 ms baseline
+(budget 200 ms). The same clock's `-r all` JSON is 1,945,299 bytes
+(1.90 MiB; 1,093 closed sessions).
 
 ## Obsidian Stats block
 

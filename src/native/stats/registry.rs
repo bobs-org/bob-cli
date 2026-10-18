@@ -39,6 +39,9 @@ pub(crate) enum MetricSpec {
         measure: PomodoroMeasure,
         themes: Vec<String>,
         exclude_themes: Vec<String>,
+        in_notes: Vec<String>,
+        exclude_in: Vec<String>,
+        review: ReviewFilter,
     },
     Tasks {
         event: TaskEvent,
@@ -93,6 +96,13 @@ pub(crate) enum RecurringFilter {
     Exclude,
     Only,
     Include,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReviewFilter {
+    Include,
+    Only,
+    Exclude,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -257,6 +267,8 @@ impl MetricDef {
             measure: None,
             themes: Vec::new(),
             exclude_themes: Vec::new(),
+            exclude_in: Vec::new(),
+            review: None,
             event: None,
             tags_any: Vec::new(),
             tags_all: Vec::new(),
@@ -277,6 +289,9 @@ impl MetricDef {
                 measure,
                 themes,
                 exclude_themes,
+                in_notes,
+                exclude_in,
+                review,
             } => {
                 parameters.measure = Some(match measure {
                     PomodoroMeasure::Minutes => "minutes".to_string(),
@@ -284,6 +299,13 @@ impl MetricDef {
                 });
                 parameters.themes = themes.clone();
                 parameters.exclude_themes = exclude_themes.clone();
+                parameters.in_notes = in_notes.clone();
+                parameters.exclude_in = exclude_in.clone();
+                parameters.review = Some(match review {
+                    ReviewFilter::Include => "include".to_string(),
+                    ReviewFilter::Only => "only".to_string(),
+                    ReviewFilter::Exclude => "exclude".to_string(),
+                });
             }
             MetricSpec::Tasks {
                 event,
@@ -598,11 +620,11 @@ limits:
 label: Review time
 kind: pomodoro
 measure: minutes
-themes: [GTD]
+review: only
 unit: minutes
 direction: neutral
 color: orange
-description: "Worked restricted to sessions themed GTD."
+description: "Worked minutes in GTD review sessions."
 limits:
   - Attributed from Task Links.
   - Grouped by today's note tree.
@@ -1020,6 +1042,21 @@ fn parse_pomodoro(
         "minutes or count",
     )
     .unwrap_or(PomodoroMeasure::Minutes);
+    let review = optional_enum(
+        mapping,
+        "review",
+        id,
+        path,
+        errors,
+        |text| match text {
+            "include" => Some(ReviewFilter::Include),
+            "only" => Some(ReviewFilter::Only),
+            "exclude" => Some(ReviewFilter::Exclude),
+            _ => None,
+        },
+        "include, only, or exclude",
+    )
+    .unwrap_or(ReviewFilter::Include);
     MetricSpec::Pomodoro {
         measure,
         themes: optional_string_list(mapping, "themes", id, path, errors)
@@ -1032,6 +1069,17 @@ fn parse_pomodoro(
             errors,
         )
         .unwrap_or_default(),
+        in_notes: optional_string_list(mapping, "in", id, path, errors)
+            .unwrap_or_default(),
+        exclude_in: optional_string_list(
+            mapping,
+            "exclude_in",
+            id,
+            path,
+            errors,
+        )
+        .unwrap_or_default(),
+        review,
     }
 }
 
@@ -1747,10 +1795,23 @@ mod tests {
             MetricSpec::Pomodoro {
                 measure: PomodoroMeasure::Minutes,
                 themes,
+                review: ReviewFilter::Include,
                 ..
             } => assert!(themes.is_empty()),
             other => panic!("worked spec {other:?}"),
         }
+
+        let review_time = registry.get("review_time").unwrap();
+        match &review_time.spec {
+            MetricSpec::Pomodoro {
+                measure: PomodoroMeasure::Minutes,
+                themes,
+                review: ReviewFilter::Only,
+                ..
+            } => assert!(themes.is_empty()),
+            other => panic!("review_time spec {other:?}"),
+        }
+        assert_eq!(review_time.parameters().review.as_deref(), Some("only"));
 
         let net = registry.get("net").unwrap();
         assert_eq!(net.unit, MetricUnit::Signed);
@@ -1881,6 +1942,59 @@ stats:
             .warnings
             .iter()
             .any(|warning| { warning.message.contains("stats.metrics.also") }));
+    }
+
+    #[test]
+    fn pomodoro_in_and_review_filters_parse() {
+        let registry = registry(
+            "
+stats:
+  metrics:
+    sase_in:
+      label: SASE in
+      kind: pomodoro
+      measure: minutes
+      in: [sase]
+      exclude_in: [sase_blog]
+      review: exclude
+",
+        );
+        let def = registry.get("sase_in").unwrap();
+        match &def.spec {
+            MetricSpec::Pomodoro {
+                in_notes,
+                exclude_in,
+                review: ReviewFilter::Exclude,
+                ..
+            } => {
+                assert_eq!(in_notes, &["sase"]);
+                assert_eq!(exclude_in, &["sase_blog"]);
+            }
+            other => panic!("{other:?}"),
+        }
+        let json = serde_json::to_value(def.parameters()).unwrap();
+        assert_eq!(json["in"], serde_json::json!(["sase"]));
+        assert_eq!(json["exclude_in"], serde_json::json!(["sase_blog"]));
+        assert_eq!(json["review"], "exclude");
+    }
+
+    #[test]
+    fn invalid_pomodoro_review_is_a_local_warning() {
+        let registry = registry(
+            "
+stats:
+  metrics:
+    bad_review:
+      label: Bad review
+      kind: pomodoro
+      review: maybe
+",
+        );
+        assert!(registry.get("bad_review").is_none());
+        assert!(registry.warnings.iter().any(|warning| {
+            warning.message.contains("stats.metrics.bad_review.review")
+        }));
+        assert!(registry.get("worked").is_some());
     }
 
     #[test]

@@ -4,7 +4,7 @@ use chrono::NaiveDate;
 use serde::Serialize;
 
 use super::value::{ChecklistState, DataQuality};
-use crate::native::pomodoro_homes::{HomeKind, Hue};
+use crate::native::pomodoro_homes::{HomeKind, Homes, Hue};
 
 pub(crate) const SCHEMA_VERSION: u32 = 1;
 
@@ -22,6 +22,10 @@ pub(crate) struct StatsReport {
     /// Catalog of every home key used in the report. Omitted when empty.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub(crate) homes: BTreeMap<String, HomeCatalogEntry>,
+    /// Closed sessions in the display window. Omitted when empty; present
+    /// when the report includes at least one pomodoro metric.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) sessions: Vec<SessionFact>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -114,6 +118,10 @@ pub(crate) struct MetricParameters {
     pub(crate) themes: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(crate) exclude_themes: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) exclude_in: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) review: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) event: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -235,6 +243,23 @@ pub(crate) struct PartSummary {
     pub(crate) apportioned: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) apportioned_display: Option<String>,
+}
+
+/// One closed Pomodoro in the display window. Facts, not metric values.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct SessionFact {
+    #[serde(serialize_with = "iso_date")]
+    pub(crate) date: NaiveDate,
+    pub(crate) path: String,
+    pub(crate) line: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) time_range: Option<String>,
+    pub(crate) minutes: Option<u32>,
+    pub(crate) minutes_display: String,
+    pub(crate) quality: DataQuality,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) name: Option<String>,
+    pub(crate) homes: Homes,
 }
 
 /// One derived home used anywhere in the report.
@@ -425,6 +450,8 @@ mod tests {
                     tags_any: Vec::new(),
                     tags_all: Vec::new(),
                     in_notes: Vec::new(),
+                    exclude_in: Vec::new(),
+                    review: None,
                     task_kind: None,
                     recurring: None,
                     tags: Vec::new(),
@@ -545,6 +572,7 @@ mod tests {
                     .to_string(),
             }],
             homes: BTreeMap::new(),
+            sessions: Vec::new(),
         };
 
         let json = serde_json::to_value(&report).unwrap();

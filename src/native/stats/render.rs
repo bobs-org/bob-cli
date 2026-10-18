@@ -1094,6 +1094,7 @@ mod tests {
             },
             warnings: Vec::new(),
             homes: BTreeMap::new(),
+            sessions: Vec::new(),
         }
     }
 

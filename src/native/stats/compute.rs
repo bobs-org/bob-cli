@@ -120,8 +120,15 @@ pub(crate) fn compute(
     } else {
         resolved.report.end
     };
-    let (catalog, homes_health, homes_warnings) =
-        homes.finish(&index, resolved.report.start, health_end);
+    let collect_sessions = selected
+        .iter()
+        .any(|def| matches!(def.spec, MetricSpec::Pomodoro { .. }));
+    let (catalog, homes_health, homes_warnings, sessions) = homes.finish(
+        &index,
+        resolved.report.start,
+        health_end,
+        collect_sessions,
+    );
 
     let mut metrics = Vec::with_capacity(selected.len());
     for def in &selected {
@@ -186,6 +193,7 @@ pub(crate) fn compute(
         ),
         metrics,
         homes: catalog,
+        sessions,
     })
 }
 
@@ -998,10 +1006,22 @@ mod tests {
         assert_eq!(keep.warnings.len(), 1);
         assert_eq!(keep.warnings[0].code, "journal_gap");
 
-        // M10 review_time: GTD components only; the SASE-only today scores
-        // a provisional zero rather than missing.
+        // M10 review_time: review sessions only. The Oct 9 GTD + SASE
+        // composite is not a review session, so it no longer counts;
+        // SASE-only today is a provisional zero rather than missing.
         let review_time = metric(&report, "review_time");
         assert_eq!(review_time.since, Some(day(9)));
+        assert_eq!(
+            review_time
+                .parameters
+                .as_ref()
+                .and_then(|p| p.review.as_deref()),
+            Some("only")
+        );
+        assert!(review_time
+            .parameters
+            .as_ref()
+            .is_some_and(|p| p.themes.is_empty()));
         expect_point(
             &review_time.points[0],
             day(8),
@@ -1012,7 +1032,7 @@ mod tests {
         expect_point(
             &review_time.points[1],
             day(9),
-            Some(29),
+            Some(25),
             DataQuality::Ok,
             false,
         );
@@ -1030,11 +1050,21 @@ mod tests {
             DataQuality::Ok,
             true,
         );
-        assert_eq!(review_time.summary.headline.value, Some(15));
-        assert_eq!(review_time.summary.total.as_ref().unwrap().value, Some(29));
-        assert_eq!(review_time.summary.mean, Some(15));
-        assert_eq!(review_time.summary.p25, Some(7));
-        assert_eq!(review_time.summary.p75, Some(22));
+        assert_eq!(review_time.summary.headline.value, Some(13));
+        assert_eq!(review_time.summary.total.as_ref().unwrap().value, Some(25));
+        assert_eq!(review_time.summary.mean, Some(13));
+        assert_eq!(review_time.summary.p25, Some(6));
+        assert_eq!(review_time.summary.p75, Some(19));
+
+        assert_eq!(report.sessions.len(), 3);
+        assert_eq!(report.sessions[0].name.as_deref(), Some("GTD"));
+        assert_eq!(report.sessions[0].minutes, Some(25));
+        assert_eq!(report.sessions[0].quality, DataQuality::Ok);
+        assert_eq!(report.sessions[1].name.as_deref(), Some("GTD + SASE"));
+        assert_eq!(report.sessions[1].minutes, Some(7));
+        assert_eq!(report.sessions[2].name.as_deref(), Some("SASE"));
+        assert_eq!(report.sessions[2].minutes, Some(10));
+        assert_eq!(report.sessions[2].date, day(11));
 
         // M11 sessions: count mode counts each closed row once even when it
         // carries two themes; parts still attribute the row to GTD.

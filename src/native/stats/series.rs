@@ -1256,7 +1256,7 @@ fn format_value(value: Option<i64>, unit: MetricUnit) -> String {
     }
 }
 
-fn format_minutes(value: i64) -> String {
+pub(crate) fn format_minutes(value: i64) -> String {
     let sign = if value < 0 { "−" } else { "" };
     let minutes = value.unsigned_abs();
     if minutes < 60 {
