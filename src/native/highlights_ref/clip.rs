@@ -14,9 +14,8 @@ use std::{
 use super::{clip_adapter::*, clip_url::*, pdf_meta::*, sources::*};
 use super::{
     compose_marker, current_local_date, plan_default_target, plan_exact_output,
-    print_next_step, stamp_and_install, CommandError, Config,
-    DefaultTargetIdentity, MarkerValue, PdfInfo, ScratchDir, TargetPlan,
-    TargetWorkflow,
+    stamp_and_install, CommandError, Config, DefaultTargetIdentity,
+    MarkerValue, PdfInfo, ScratchDir, TargetPlan, TargetWorkflow,
 };
 use crate::native::style::Styler;
 
@@ -87,6 +86,7 @@ pub(super) struct ClipOptions {
     pub(super) force: bool,
     pub(super) author: Option<String>,
     pub(super) html: Option<OsString>,
+    pub(super) keep_intake_reason: Option<String>,
     pub(super) name: Option<String>,
     pub(super) output: Option<PathBuf>,
     pub(super) parent: String,
@@ -479,6 +479,7 @@ pub(super) fn capture_article(
             );
         }
         print_dry_run(
+            config,
             &styler,
             &web_url,
             &plan,
@@ -634,7 +635,12 @@ pub(super) fn capture_article(
         format_bytes(installed_bytes),
         response.fidelity.status.as_deref().unwrap_or("unknown"),
     );
-    print_next_step(&plan);
+    super::create::finish_create_intake(
+        config,
+        &plan,
+        options.keep_intake_reason.as_deref(),
+    )
+    .map_err(ClipError::from)?;
     print_warnings(&styler, &response.warnings);
     Ok(())
 }
@@ -721,6 +727,7 @@ fn field_source(
 
 #[allow(clippy::too_many_arguments)]
 fn print_dry_run(
+    config: &Config,
     styler: &Styler,
     web_url: &WebUrl,
     plan: &TargetPlan,
@@ -812,6 +819,11 @@ fn print_dry_run(
         Ok(marker) => print!("{marker}"),
         Err(error) => println!("(unavailable: {error})"),
     }
+    super::create::print_create_intake_preview(
+        config,
+        plan,
+        options.keep_intake_reason.as_deref(),
+    );
     println!("writes: none");
 }
 

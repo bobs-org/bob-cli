@@ -71,8 +71,9 @@ pub(super) fn run(
     matches: &ArgMatches,
     config: &Config,
     targets: &[OsString],
+    keep_intake_reason: Option<String>,
 ) -> i32 {
-    match run_collection(matches, config, targets) {
+    match run_collection(matches, config, targets, keep_intake_reason) {
         Ok(()) => 0,
         Err(error) => report_error(error),
     }
@@ -82,6 +83,7 @@ fn run_collection(
     matches: &ArgMatches,
     config: &Config,
     targets: &[OsString],
+    keep_intake_reason: Option<String>,
 ) -> Result<(), CommandError> {
     let listen = if matches.get_flag("listen") {
         Some(
@@ -91,7 +93,7 @@ fn run_collection(
     } else {
         None
     };
-    let prepared = run_preflight(matches, config, targets)?;
+    let prepared = run_preflight(matches, config, targets, keep_intake_reason)?;
     if let (Some(command), OverlapCheck::Attach(hit)) =
         (listen.as_ref(), &prepared.overlap)
     {
@@ -120,9 +122,10 @@ fn run_preflight(
     matches: &ArgMatches,
     config: &Config,
     targets: &[OsString],
+    keep_intake_reason: Option<String>,
 ) -> Result<PreparedCollection, CommandError> {
     let urls = validate_targets(matches, targets)?;
-    let options = options_from_matches(matches, config)?;
+    let options = options_from_matches(matches, config, keep_intake_reason)?;
     let output_stem = options
         .output
         .as_deref()
@@ -268,6 +271,7 @@ fn validate_targets(
 fn options_from_matches(
     matches: &ArgMatches,
     config: &Config,
+    keep_intake_reason: Option<String>,
 ) -> Result<CreateOptions, CommandError> {
     if let Some(name) = matches.get_one::<String>("name") {
         clip_url::validate_name(name)?;
@@ -302,6 +306,7 @@ fn options_from_matches(
         force: matches.get_flag("force"),
         html: matches.get_one::<OsString>("html").cloned(),
         include_id: matches.get_flag("include-id"),
+        keep_intake_reason,
         listen: matches.get_flag("listen"),
         name: matches.get_one::<String>("name").cloned(),
         no_audio: matches.get_flag("no-audio"),
@@ -607,6 +612,7 @@ fn capture_and_install(
         &styler,
         &urls,
         &parts,
+        config,
         &plan,
         &options,
         &resolved_name,
@@ -616,7 +622,7 @@ fn capture_and_install(
         &captured,
         page_count,
         listen_flow.as_ref(),
-    );
+    )?;
     Ok(())
 }
 
@@ -921,6 +927,7 @@ fn print_success(
     styler: &Styler,
     urls: &[WebUrl],
     parts: &[CapturedPart],
+    config: &Config,
     plan: &TargetPlan,
     options: &CreateOptions,
     resolved_name: &collection_name::ResolvedName,
@@ -930,7 +937,7 @@ fn print_success(
     captured: &str,
     page_count: usize,
     listen_flow: Option<&super::listen::ListenFlow>,
-) {
+) -> Result<(), CommandError> {
     let installed_bytes = fs::metadata(&plan.target)
         .map(|metadata| metadata.len())
         .unwrap_or(0);
@@ -971,9 +978,14 @@ fn print_success(
         compose.images.total,
         format_bytes(installed_bytes),
     );
-    super::print_next_step(plan);
+    super::create::finish_create_intake(
+        config,
+        plan,
+        options.keep_intake_reason.as_deref(),
+    )?;
     print_part_warnings(styler, parts);
     print_warnings(styler, &compose.warnings);
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1039,6 +1051,11 @@ fn print_dry_run(
     let marker = collection_marker(options, plan, urls, derived, &captured)?;
     println!("marker:");
     print!("{marker}");
+    super::create::print_create_intake_preview(
+        config,
+        plan,
+        options.keep_intake_reason.as_deref(),
+    );
     println!("writes: none");
     print_part_warnings(styler, parts);
     Ok(())

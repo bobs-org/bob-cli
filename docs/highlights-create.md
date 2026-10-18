@@ -1,12 +1,13 @@
 # `bob ref create` — vault notes, Markdown, PDF, and URL targets
 
 `bob ref create <TARGET>` turns a vault note, Markdown, a local PDF, a PDF URL,
-an arXiv paper URL, or a web article URL into a Highlights-ready PDF in
-the intake (`xlib/<ref-type>/<stem>.pdf` by default), which
-`bob ref scan` later moves into `lib/` and turns into a `ref/`
-note. Vault notes become projected reading snapshots; other Markdown uses
-pandoc, a PDF is stamped as-is, and web article URLs run through the
-web-article engine.
+an arXiv paper URL, or a web article URL into a Highlights-ready reference.
+By default, create files the PDF in `lib/`, writes the `ref/` note and reading
+task, commits those paths together, and pushes. If intake is kept or cannot
+run safely, create leaves the PDF in `xlib/` with a queue reason for
+`bob ref scan` to drain later. Vault notes become projected reading snapshots;
+other Markdown uses pandoc, a PDF is stamped as-is, and web article URLs run
+through the web-article engine.
 
 ```bash
 bob ref create [OPTIONS] <TARGET>...
@@ -34,6 +35,9 @@ bob ref create https://example.com/article/hello -P sase
 bob ref create paper.pdf -T "The Real Title" -N my_paper -t docs -P sase
 bob ref create report.md --audio episode.mp3 --include-id -P sase
 
+# Keep the PDF queued for a later bob ref scan
+bob ref create report.md -k -P sase
+
 # Web article with saved page and metadata overrides
 bob ref create https://example.com/essay -H saved.html -P sase
 bob ref create https://example.com/essay -A "Jane Doe" -p 2026-01-02 -d -P sase
@@ -43,6 +47,23 @@ bob ref create https://example.com/2024/01/tokio-internals-part-1 \
   https://example.com/2024/02/tokio-internals-part-2 -L -P sase
 bob ref create URL1 URL2 URL3 -N spotify_bg_agents -P sase
 ```
+
+## Create-time intake
+
+Create-time intake is enabled by default. Use `-k, --keep-intake` to leave a
+new PDF in `xlib/` for a later scan. The same behavior can be selected with
+`highlights.ingest_on_create: false`; `BOB_HIGHLIGHTS_INGEST_ON_CREATE` accepts
+`0`, `false`, `no`, or `off` to disable intake and `1`, `true`, `yes`, or `on`
+to enable it. A nonblank environment value overrides the config value.
+
+When enabled, create takes `bob_sync.lock` and then `scan.lock`, pulls the
+vault, rechecks the library destinations, moves the PDF and its companions,
+writes the reference note and reading task, commits only those paths, and
+pushes. It skips the pull for a PDF created directly in `lib/`. If the vault
+is unreachable, a lock is busy, or a collision or planning refusal occurs,
+create exits successfully and reports `queued: ... (<reason>) · next: bob ref
+scan`; the PDF stays in `xlib/`. `--dry-run` prints the intended intake line
+without taking locks or syncing.
 
 ## Vault note targets
 
@@ -613,7 +634,8 @@ status: ready
 parent: sase
 id: attention_is_all_you_need
 pages: 15 · size: 2.2 MB
-next: bob ref scan
+ingested: lib/papers/attention_is_all_you_need.pdf → ref/papers/attention_is_all_you_need.md · task → sase.md ^ref-attention-is-all-you-need
+sync: committed <sha7> · pushed
 ```
 
 A failed listen command writes nothing (`nothing was written to the vault;

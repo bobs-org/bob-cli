@@ -3,10 +3,11 @@
 `bob ref` creates Highlights-ready PDFs from Markdown and turns
 Highlights app PDF annotations into Obsidian reference notes in the Bob vault.
 
-Typical order on a new PDF: `create` writes into `xlib/`, `scan --dry-run`
-previews the intake move and note plan, then `scan` (without `--write-pdfs`)
-moves the PDF into `lib/` and writes the reference note. Marker write-back to
-the PDF is a separate opt-in (`sync --write-pdf` or `scan --write-pdfs`).
+By default, `create` files a new PDF into `lib/`, writes its reference note and
+reading task, and commits and pushes those paths together. `xlib/` is the
+fallback queue when intake is kept or cannot safely run; `scan` drains that
+queue and repairs notes or annotations. Marker write-back to a PDF is a
+separate opt-in (`sync --write-pdf` or `scan --write-pdfs`).
 
 Code lives in this `bob-cli` repository. On the MacBook, use a checkout at
 `~/projects/bob-cli`; do not install from ad hoc scripts outside that checkout.
@@ -103,7 +104,7 @@ never fail the command:
 Available commands:
 
 ```bash
-bob ref create <TARGET>... [-A|--author NAME] [-a|--audio PATH] [-b|--bob-dir PATH] [-C|--closed] [-d|--dry-run] [-f|--force] [-H|--html FILE] [-i|--include-id] [-l|--lib-dir PATH] [-L|--listen] [-M|--plain] [-N|--name STEM] [-n|--no-audio] [-o|--output PDF] [-P|--parent NOTE] [-p|--published DATE] [-r|--ref-dir PATH] [-S|--section HEADING]... [-s|--status STATUS] [-T|--title TITLE] [-t|--ref-type DIR] [-x|--xlib-dir PATH]
+bob ref create <TARGET>... [-A|--author NAME] [-a|--audio PATH] [-b|--bob-dir PATH] [-C|--closed] [-d|--dry-run] [-f|--force] [-H|--html FILE] [-i|--include-id] [-k|--keep-intake] [-l|--lib-dir PATH] [-L|--listen] [-M|--plain] [-N|--name STEM] [-n|--no-audio] [-o|--output PDF] [-P|--parent NOTE] [-p|--published DATE] [-r|--ref-dir PATH] [-S|--section HEADING]... [-s|--status STATUS] [-T|--title TITLE] [-t|--ref-type DIR] [-x|--xlib-dir PATH]
 bob ref doctor [-b|--bob-dir PATH] [-l|--lib-dir PATH] [-n|--no-hooks] [-r|--ref-dir PATH] [-x|--xlib-dir PATH]
 bob ref marker <pdf> [-b|--bob-dir PATH] [-l|--lib-dir PATH] [-r|--ref-dir PATH] [-x|--xlib-dir PATH]
 bob ref scan [-b|--bob-dir PATH] [-d|--dry-run] [-f|--format human|json] [-j|--jobs N] [-l|--lib-dir PATH] [-n|--no-hooks] [-r|--ref-dir PATH] [-v|--verbose] [-w|--write-pdfs] [-x|--xlib-dir PATH]
@@ -116,7 +117,8 @@ provenance fields (`source_url`, `author`, `published`, `captured`); the
 full contract lives in [`highlights-clip.md`](highlights-clip.md).
 
 `create` accepts a vault note, a Markdown file, a local PDF, a PDF URL, an arXiv
-paper URL, or a web article URL and writes `<xlib-dir>/<ref-type>/<stem>.pdf` (by default
+paper URL, or a web article URL and stages `<xlib-dir>/<ref-type>/<stem>.pdf` before
+inline intake files it to `lib/` (by default
 `~/bob/xlib/notes/<note-stem>_<YYMMDD>.pdf` for vault notes,
 `~/bob/xlib/chat/<basename>.pdf` for other Markdown, and
 `~/bob/xlib/papers/<stem>.pdf` for PDFs) unless `-o, --output <PDF>`
@@ -366,6 +368,18 @@ Reference notes are written under:
 ```text
 BOB_HIGHLIGHTS_REF_DIR=ref
 ```
+
+Create-time intake is enabled by default. Use `-k, --keep-intake` to leave a
+new PDF in `xlib/` for a later scan, or set:
+
+```yaml
+highlights:
+  ingest_on_create: false
+```
+
+`BOB_HIGHLIGHTS_INGEST_ON_CREATE` overrides that setting. `0`, `false`, `no`,
+and `off` disable inline intake; `1`, `true`, `yes`, and `on` enable it.
+Blank means unset. The environment value is case-insensitive.
 
 Writing scans can run a pre-scan hook before xlib intake:
 
@@ -629,6 +643,16 @@ writes so the apps do not race the CLI.
 
 ## Scan, Safety, and Git/ob Behavior
 
+Create-time intake holds `bob_sync.lock` before `scan.lock`, matching the
+reference writer lock order. It pulls first, rechecks the target against the
+fresh tree, moves one PDF and its same-stem companions, writes the note and
+reading task, commits only the paths for that reference, and pushes before
+releasing the locks. A PDF created directly in `lib/` skips the pull so a
+pre-sync cannot commit that PDF without its note. When the lock, worktree,
+remote, destination, or write guard prevents intake, create keeps the PDF in
+`xlib/` and reports a queue reason; the command still succeeds so a later
+`scan` can drain it.
+
 `scan --dry-run` reports every discovered PDF, including PDFs that are still
 pending under `xlib`. If a pre-scan hook is configured, the dry run reports that
 it would run and the exact hook command, but does not execute it. The default
@@ -675,13 +699,14 @@ Reference note writes and image asset copies are atomic temporary-file renames
 and are skipped when the rendered note or content-addressed asset is
 byte-identical to the existing file.
 
-`bob ref` does not reconcile the vault before or after writes. Writing
-scans hold the vault-maintenance lock (`bob_sync.lock`) through intake and
-note writes so a concurrent vault-sync cannot commit a library PDF without
-its note, but they never sync. `bob nightly` runs `vault-sync` before and
-after the maintenance commands. The `source_pdf` field is rewritten on
-every sync, so a direct `bob ref sync ~/bob/xlib/...` dry run or one-off
-sync self-heals to the library-relative path on the next scan after
+For PDFs under `xlib`, `bob ref create` runs vault-sync before intake and
+again after its scoped commit while holding `bob_sync.lock`. A PDF created
+directly under `lib/` skips the pull so vault-sync cannot commit it without
+its note. Writing scans hold the same maintenance lock through intake and
+note writes, but do not sync themselves. `bob nightly` runs vault-sync
+before and after its maintenance commands. Every sync rewrites the
+`source_pdf` field, so a direct `bob ref sync ~/bob/xlib/...` dry run or
+one-off sync self-heals to the library-relative path on the next scan after
 intake.
 
 ### JSON output

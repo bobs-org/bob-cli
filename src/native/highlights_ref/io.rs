@@ -1,6 +1,71 @@
 //! Path metadata, hashing, and atomic writes.
 use super::*;
 
+/// Rename without replacing an existing destination on the supported
+/// platforms. Shared by reference rename and the create-time intake session.
+pub(super) fn rename_no_replace(from: &Path, to: &Path) -> std::io::Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        use std::{ffi::CString, os::unix::ffi::OsStrExt};
+        let from =
+            CString::new(from.as_os_str().as_bytes()).map_err(|error| {
+                std::io::Error::new(std::io::ErrorKind::InvalidInput, error)
+            })?;
+        let to = CString::new(to.as_os_str().as_bytes()).map_err(|error| {
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, error)
+        })?;
+        let status = unsafe {
+            libc::renameat2(
+                libc::AT_FDCWD,
+                from.as_ptr(),
+                libc::AT_FDCWD,
+                to.as_ptr(),
+                libc::RENAME_NOREPLACE,
+            )
+        };
+        return if status == 0 {
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error())
+        };
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    {
+        use std::{ffi::CString, os::unix::ffi::OsStrExt};
+        let from =
+            CString::new(from.as_os_str().as_bytes()).map_err(|error| {
+                std::io::Error::new(std::io::ErrorKind::InvalidInput, error)
+            })?;
+        let to = CString::new(to.as_os_str().as_bytes()).map_err(|error| {
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, error)
+        })?;
+        let status = unsafe {
+            libc::renamex_np(from.as_ptr(), to.as_ptr(), libc::RENAME_EXCL)
+        };
+        return if status == 0 {
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error())
+        };
+    }
+
+    #[cfg(not(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "ios"
+    )))]
+    {
+        if to.exists() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                format!("destination already exists: {}", to.display()),
+            ));
+        }
+        fs::rename(from, to)
+    }
+}
+
 pub(super) fn ref_note_path(config: &Config, pdf: &Path) -> Result<PathBuf> {
     Ok(config
         .ref_dir

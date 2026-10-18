@@ -1458,7 +1458,9 @@ fn highlights_create_output_dry_run_reports_direct_library_target() {
     let report = stdout(&output);
     assert!(
         report.contains(&output_pdf.display().to_string())
-            && report.contains("next: bob ref scan")
+            && report.contains(
+                "intake: would ingest into lib/chat/direct.pdf → ref/chat/direct.md"
+            )
             && !report.contains("library_destination:")
             && report.contains("writes: none"),
         "{report}"

@@ -82,6 +82,7 @@ pub(crate) struct HighlightsConfig {
     url_routing_capture: Option<bool>,
     url_routing_gkeep: Option<bool>,
     url_routing_exclude_hosts: Option<Vec<String>>,
+    ingest_on_create: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -200,6 +201,10 @@ impl HighlightsConfig {
 
     pub(crate) fn url_routing_exclude_hosts(&self) -> Option<&[String]> {
         self.url_routing_exclude_hosts.as_deref()
+    }
+
+    pub(crate) fn ingest_on_create(&self) -> Option<bool> {
+        self.ingest_on_create
     }
 }
 
@@ -404,6 +409,8 @@ struct RawHighlights {
     audio_library: Option<String>,
     #[serde(default)]
     listen_command: Option<String>,
+    #[serde(default)]
+    ingest_on_create: Option<bool>,
     #[serde(default)]
     url_routing: Option<RawUrlRouting>,
 }
@@ -615,6 +622,10 @@ pub(crate) fn parse_highlights_config(
         url_routing_capture,
         url_routing_gkeep,
         url_routing_exclude_hosts,
+        ingest_on_create: config
+            .highlights
+            .as_ref()
+            .and_then(|highlights| highlights.ingest_on_create),
     })
 }
 
@@ -826,6 +837,23 @@ highlights:
         .expect("valid highlights config");
 
         assert_eq!(config.pre_scan_hook(), Some("bob_xlib_pull"));
+    }
+
+    #[test]
+    fn parses_highlights_ingest_on_create_switch() {
+        let enabled = parse_highlights_config(
+            "highlights:\n  ingest_on_create: true\n",
+            Path::new("/config.yml"),
+        )
+        .expect("valid enabled config");
+        let disabled = parse_highlights_config(
+            "highlights:\n  ingest_on_create: false\n",
+            Path::new("/config.yml"),
+        )
+        .expect("valid disabled config");
+
+        assert_eq!(enabled.ingest_on_create(), Some(true));
+        assert_eq!(disabled.ingest_on_create(), Some(false));
     }
 
     #[test]

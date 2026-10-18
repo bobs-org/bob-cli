@@ -5,6 +5,7 @@ mod create;
 mod diagrams;
 mod doctor_library;
 pub(crate) mod fake_clip;
+mod ingest;
 mod jobs;
 mod listen;
 mod marker;

@@ -180,6 +180,7 @@ pub(super) struct CreateOptions {
     pub(super) force: bool,
     pub(super) html: Option<OsString>,
     pub(super) include_id: bool,
+    pub(super) keep_intake_reason: Option<String>,
     pub(super) listen: bool,
     pub(super) name: Option<String>,
     pub(super) no_audio: bool,
@@ -262,6 +263,63 @@ fn print_renamed_if_needed(plan: &TargetPlan) {
     }
 }
 
+pub(super) fn print_create_intake_preview(
+    config: &Config,
+    plan: &TargetPlan,
+    keep_reason: Option<&str>,
+) {
+    let unit = match &plan.workflow {
+        TargetWorkflow::Intake {
+            library_destination,
+        } => super::intake::IntakeUnit::Pdf {
+            source: plan.target.clone(),
+            destination: library_destination.clone(),
+        },
+        TargetWorkflow::Library => super::intake::IntakeUnit::LibraryPdf {
+            pdf: plan.target.clone(),
+        },
+        TargetWorkflow::External => {
+            print_next_step(plan);
+            return;
+        }
+    };
+    super::intake::print_preview(config, &unit, keep_reason);
+}
+
+pub(super) fn finish_create_intake(
+    config: &Config,
+    plan: &TargetPlan,
+    keep_reason: Option<&str>,
+) -> Result<()> {
+    let unit = match &plan.workflow {
+        TargetWorkflow::Intake {
+            library_destination,
+        } => super::intake::IntakeUnit::Pdf {
+            source: plan.target.clone(),
+            destination: library_destination.clone(),
+        },
+        TargetWorkflow::Library => super::intake::IntakeUnit::LibraryPdf {
+            pdf: plan.target.clone(),
+        },
+        TargetWorkflow::External => {
+            print_next_step(plan);
+            return Ok(());
+        }
+    };
+    let progress = |line: &str| eprintln!("{line}");
+    let outcome = super::intake::finish_intake(
+        config,
+        unit,
+        super::intake::IntakeRequest {
+            producer: "bob ref create",
+            keep_reason,
+            dry_run: false,
+            progress: Some(&progress),
+        },
+    );
+    super::intake::print_outcome(config, plan, outcome)
+}
+
 pub(crate) fn command() -> ClapCommand {
     ClapCommand::new("create")
         .about("Create a Highlights-ready PDF from a vault note, Markdown, a PDF, or a URL")
@@ -326,6 +384,13 @@ pub(crate) fn command() -> ClapCommand {
                 .help("Embed the output filename stem as the marker id (URL targets always embed it)"),
         )
         .arg(
+            Arg::new("keep-intake")
+                .long("keep-intake")
+                .short('k')
+                .action(ArgAction::SetTrue)
+                .help("Leave the new PDF queued in xlib/ for a later bob ref scan instead of filing it into the library now"),
+        )
+        .arg(
             Arg::new("listen")
                 .long("listen")
                 .short('L')
@@ -340,7 +405,7 @@ pub(crate) fn command() -> ClapCommand {
                 .long("name")
                 .short('N')
                 .value_name("NAME")
-                .help("Reference name: the PDF filename and the ref note bob ref scan writes [default: dated note stem for vault notes; otherwise derived from TARGET; for several URLs, the words their slugs share]"),
+                .help("Reference name: the PDF filename and the reference note written during intake [default: dated note stem for vault notes; otherwise derived from TARGET; for several URLs, the words their slugs share]"),
         )
         .arg(
             Arg::new("no-audio")
@@ -427,12 +492,24 @@ pub(crate) fn command() -> ClapCommand {
         )
         .arg(xlib_dir_arg())
         .after_help(
-            "Targets:\n  Vault note route, wikilink, or in-vault Markdown path -> projected reading snapshot (default ref type notes)\n  Other Markdown file (.md) -> rendered with pandoc (default ref type chat)\n  Local PDF file (.pdf or %PDF- magic) -> stamped as-is (default ref type papers)\n  PDF URL (Content-Type PDF or sniffed %PDF-) -> downloaded, stamped as-is (default ref type papers)\n  arXiv paper URL (abs/html/pdf) -> PDF fetched from arxiv.org/pdf/<id>, metadata from the API (default ref type papers)\n  Web article URL (HTML 2xx or 403/429/503) -> captured with the web-article engine into a Highlights-ready PDF (default ref type blogs)\n\nVault notes:\n  `TARGET` resolves like an Obsidian note link: exact vault-relative path, then a unique case-insensitive basename; `[[route|alias]]` is accepted. Existing filesystem paths keep precedence. Dot-directories, `_conflicts/`, `xlib/`, `lib/`, `lit_review/`, and shared excluded note directories are not snapshot notes. The default parent is the note itself when it is an eligible area/project, otherwise the nearest eligible area/project in its `parent:` chain (up to eight links); if none exists, pass `-P`. Names default to `<note-stem>_<YYMMDD>` using `BOB_NOW` when set. Titles use `-T`, frontmatter `title`, the first H1 outside fences/comments, then a humanized stem; the first H1 is removed only when it supplies the title. Closed tasks are counted and omitted, and schedule/work logs are condensed; `-C` restores closed tasks and full logs. Date-only `[?]` ticklers become a compact Scheduled lane (This week / This month / Later); other blocked tasks stay under Waiting on. `-M` keeps today's plain Markdown renderer while retaining the vault-note parent, dated name, and `source_note` provenance. `-C` and `-M` require one vault-note TARGET and conflict with each other. `-S` keeps only named projected sections (repeatable; an unknown name exits 2). Dry run lists earlier snapshots of this note newest-first as `earlier: <stem> (<status>, N highlights)`; both dry run and a real create print `hint: earlier snapshot <stem> is still unread (0 highlights)` for each earlier snapshot that is still `ready` with 0 highlights, and never change those notes. Dry run (`-d`) shows the selected identity, parent, target, projection summary, and warnings without running pandoc, xelatex, or listen; it ends with `writes: none`. Set BOB_HIGHLIGHTS_KEEP_WORKDIR=1 to retain projected Markdown, TeX, logs, fonts, and staged assets for debugging.\n  Examples: `bob ref create harbor_cranes`; `bob ref create '[[harbor_cranes]]' -d`; `bob ref create zk/some_idea -N idea_261016`; `bob ref create harbor_cranes -S Requirements`; `bob ref create harbor_cranes -C`; `bob ref create harbor_cranes -M`; `bob ref create harbor_cranes -L`; `bob ref create harbor_cranes -o ~/Desktop/harbor_cranes.pdf`\n\nSeveral URLs:\n  With several URLs and no -N, bob names the reference after the words every URL's slug starts with, or failing that the folder they all share, ignoring dates, ids, part numbers, and filler. It needs two meaningful words (or one when the pages differ only by a part or page number); otherwise pass -N or -T. Several URLs must all be web article URLs. Collection capture is all-or-nothing and follows argument order; one reference takes at most 20 URLs. Merge material you'll read as one unit; capture an ongoing series part by part under the same -P.\n\nWeb articles:\n  Captures the article in reader mode and re-typesets it with a Bob-owned print template; it never prints the live page. `bob ref scan` later moves the intake PDF into the library and writes the reference note. A site that blocks headless browsers is retried headed automatically: on Linux under a private Xvfb display or in an off-screen window on macOS; hosts with no browser fail closed with a hint. `-H, --html FILE` replays a page saved from a real browser instead of fetching (`-` reads stdin) and forces the web-article route. `-A, --author` and `-p, --published` override the derived author/publish date on every route. Environment: BOB_WEB_CLIP_ADAPTER replaces the adapter invocation; BOB_CHROME selects the browser executable; BOB_WEB_CLIP_TIMEOUT_SECS sets the adapter timeout in seconds (default 300); BOB_WEB_CLIP_KEEP_WORKDIR=1 keeps the scratch directory for debugging.\n\nListen:\n  `-L, --listen` narrates TARGET with `highlights.listen_command` (`BOB_HIGHLIGHTS_LISTEN_COMMAND` overrides), which must be `sase listen render ...` and write MP3 audio to `{audio}`; bob passes `{target}`, `{pdf}`, `{audio}`, and `{title}` as single arguments to `sase` itself — do not quote them — and streams the command output unchanged. A direct `sase-listen render ...` setting migrates automatically; wrappers, shell programs, chains, pipelines, redirections, and expansions need conversion to plain SASE render arguments. Preflights run first, the PDF is produced in private scratch, then the episode is bound beside the PDF; if the listen command fails nothing is written, and a failure after the episode exists keeps the scratch audio with a `kept:` line. If TARGET is already captured, `--listen` attaches the new episode (`xlib/<rel>.mp3`) for `bob ref scan` to pair, and the PDF and ref note stay untouched. Vault-note `-L` passes the rendered `projected.md` as `{target}` and the rendered snapshot PDF as `{pdf}`; `-M` narrates the original Markdown.\n\nAudio:\n  Create discovers audio as `--audio PATH`, then frontmatter `audio.episode_id` in the sase-listen library (Markdown only), then a sibling `<stem>_narration.md` hash matched against library manifests (`BOB_HIGHLIGHTS_AUDIO_LIBRARY`, then `highlights.audio_library`, then `$XDG_DATA_HOME/sase-listen/library`, then `~/.local/share/sase-listen/library`); `--no-audio` skips discovery. The copy lands beside the PDF with the source extension lowercased before the PDF is installed, reuses identical bytes, refuses different bytes without `--force`, and refuses when the mirrored library audio already exists. Only a companion already at the target's `<stem>.<ext>` counts as reused; audio beside the source is copied through the same rules.\n\nOutput:\n  Default target `<xlib-dir>/<ref-type>/<stem>.pdf`, becoming `<stem>_2`, `<stem>_3`, … when the name is taken by a different reference; the same reference refuses (`already captured` / `already queued`), and `-o, --output` keeps the exact path. `-o, --output` selects the complete path instead, including the filename (`.pdf` required, `~` expanded, cwd-relative). `--output` cannot be combined with `--ref-type` or `--name` because those only participate in default target derivation. For vault notes `-N` overrides the dated stem and `-i` follows the final collision-resolved stem; `-T` sets the exact identity title. Pandoc renders TOC/bookmarks for the legacy Markdown route and embeds the page-1 scan marker. Scan moves intake PDFs to the library before writing notes; library PDFs scan directly, other paths need `bob ref sync`. A `<div class=\"listen\">` card becomes a callout with a Play link when audio is bound. Same-document `#` links get a raised letter tag and a matching `↩ p. N` return pill under their target, dead ones render as plain text with a warning, and frontmatter `bob-return-links: false` turns this off.\n\nExamples:\n  bob ref create report.md -P sase\n  bob ref create harbor_cranes\n  bob ref create harbor_cranes -d\n  bob ref create zk/some_idea -M\n  bob ref create paper.pdf -t papers -P sase\n  bob ref create https://example.com/paper.pdf -N my_paper -P sase\n  bob ref create https://arxiv.org/abs/1706.03762 -d -P bob\n  bob ref create https://arxiv.org/abs/1706.03762 -L -P bob\n  bob ref create https://example.com/essay -H saved.html -P sase\n  bob ref create https://example.com/essay -A \"Jane Doe\" -p 2026-01-02 -d -P sase\n  bob ref create https://example.com/2024/01/tokio-internals-part-1 https://example.com/2024/02/tokio-internals-part-2 -L -P sase\n  bob ref create URL1 URL2 URL3 -N spotify_bg_agents -P sase",
+            "Targets:\n  Vault note route, wikilink, or in-vault Markdown path -> projected reading snapshot (default ref type notes)\n  Other Markdown file (.md) -> rendered with pandoc (default ref type chat)\n  Local PDF file (.pdf or %PDF- magic) -> stamped as-is (default ref type papers)\n  PDF URL (Content-Type PDF or sniffed %PDF-) -> downloaded, stamped as-is (default ref type papers)\n  arXiv paper URL (abs/html/pdf) -> PDF fetched from arxiv.org/pdf/<id>, metadata from the API (default ref type papers)\n  Web article URL (HTML 2xx or 403/429/503) -> captured with the web-article engine into a Highlights-ready PDF (default ref type blogs)\n\nVault notes:\n  `TARGET` resolves like an Obsidian note link: exact vault-relative path, then a unique case-insensitive basename; `[[route|alias]]` is accepted. Existing filesystem paths keep precedence. Dot-directories, `_conflicts/`, `xlib/`, `lib/`, `lit_review/`, and shared excluded note directories are not snapshot notes. The default parent is the note itself when it is an eligible area/project, otherwise the nearest eligible area/project in its `parent:` chain (up to eight links); if none exists, pass `-P`. Names default to `<note-stem>_<YYMMDD>` using `BOB_NOW` when set. Titles use `-T`, frontmatter `title`, the first H1 outside fences/comments, then a humanized stem; the first H1 is removed only when it supplies the title. Closed tasks are counted and omitted, and schedule/work logs are condensed; `-C` restores closed tasks and full logs. Date-only `[?]` ticklers become a compact Scheduled lane (This week / This month / Later); other blocked tasks stay under Waiting on. `-M` keeps today's plain Markdown renderer while retaining the vault-note parent, dated name, and `source_note` provenance. `-C` and `-M` require one vault-note TARGET and conflict with each other. `-S` keeps only named projected sections (repeatable; an unknown name exits 2). Dry run lists earlier snapshots of this note newest-first as `earlier: <stem> (<status>, N highlights)`; both dry run and a real create print `hint: earlier snapshot <stem> is still unread (0 highlights)` for each earlier snapshot that is still `ready` with 0 highlights, and never change those notes. Dry run (`-d`) shows the selected identity, parent, target, projection summary, and warnings without running pandoc, xelatex, or listen; it ends with `writes: none`. Set BOB_HIGHLIGHTS_KEEP_WORKDIR=1 to retain projected Markdown, TeX, logs, fonts, and staged assets for debugging.\n  Examples: `bob ref create harbor_cranes`; `bob ref create '[[harbor_cranes]]' -d`; `bob ref create zk/some_idea -N idea_261016`; `bob ref create harbor_cranes -S Requirements`; `bob ref create harbor_cranes -C`; `bob ref create harbor_cranes -M`; `bob ref create harbor_cranes -L`; `bob ref create harbor_cranes -o ~/Desktop/harbor_cranes.pdf`\n\nSeveral URLs:\n  With several URLs and no -N, bob names the reference after the words every URL's slug starts with, or failing that the folder they all share, ignoring dates, ids, part numbers, and filler. It needs two meaningful words (or one when the pages differ only by a part or page number); otherwise pass -N or -T. Several URLs must all be web article URLs. Collection capture is all-or-nothing and follows argument order; one reference takes at most 20 URLs. Merge material you'll read as one unit; capture an ongoing series part by part under the same -P.\n\nWeb articles:\n  Captures the article in reader mode and re-typesets it with a Bob-owned print template; it never prints the live page. A successful create files the PDF, reference note, and reading task now. If intake is kept or cannot run, `bob ref scan` can file the queued PDF later. A site that blocks headless browsers is retried headed automatically: on Linux under a private Xvfb display or in an off-screen window on macOS; hosts with no browser fail closed with a hint. `-H, --html FILE` replays a page saved from a real browser instead of fetching (`-` reads stdin) and forces the web-article route. `-A, --author` and `-p, --published` override the derived author/publish date on every route. Environment: BOB_WEB_CLIP_ADAPTER replaces the adapter invocation; BOB_CHROME selects the browser executable; BOB_WEB_CLIP_TIMEOUT_SECS sets the adapter timeout in seconds (default 300); BOB_WEB_CLIP_KEEP_WORKDIR=1 keeps the scratch directory for debugging.\n\nListen:\n  `-L, --listen` narrates TARGET with `highlights.listen_command` (`BOB_HIGHLIGHTS_LISTEN_COMMAND` overrides), which must be `sase listen render ...` and write MP3 audio to `{audio}`; bob passes `{target}`, `{pdf}`, `{audio}`, and `{title}` as single arguments to `sase` itself — do not quote them — and streams the command output unchanged. A direct `sase-listen render ...` setting migrates automatically; wrappers, shell programs, chains, pipelines, redirections, and expansions need conversion to plain SASE render arguments. Preflights run first, the PDF is produced in private scratch, then the episode is bound beside the PDF; if the listen command fails nothing is written, and a failure after the episode exists keeps the scratch audio with a `kept:` line. If TARGET is already captured, `--listen` attaches the new episode (`xlib/<rel>.mp3`) for `bob ref scan` to pair, and the PDF and ref note stay untouched. Vault-note `-L` passes the rendered `projected.md` as `{target}` and the rendered snapshot PDF as `{pdf}`; `-M` narrates the original Markdown.\n\nAudio:\n  Create discovers audio as `--audio PATH`, then frontmatter `audio.episode_id` in the sase-listen library (Markdown only), then a sibling `<stem>_narration.md` hash matched against library manifests (`BOB_HIGHLIGHTS_AUDIO_LIBRARY`, then `highlights.audio_library`, then `$XDG_DATA_HOME/sase-listen/library`, then `~/.local/share/sase-listen/library`); `--no-audio` skips discovery. The copy lands beside the PDF with the source extension lowercased before the PDF is installed, reuses identical bytes, refuses different bytes without `--force`, and refuses when the mirrored library audio already exists. Only a companion already at the target's `<stem>.<ext>` counts as reused; audio beside the source is copied through the same rules.\n\nOutput:\n  Default target `<xlib-dir>/<ref-type>/<stem>.pdf`, becoming `<stem>_2`, `<stem>_3`, … when the name is taken by a different reference; the same reference refuses (`already captured` / `already queued`), and `-o, --output` keeps the exact path. `-o, --output` selects the complete path instead, including the filename (`.pdf` required, `~` expanded, cwd-relative). `--output` cannot be combined with `--ref-type` or `--name` because those only participate in default target derivation. For vault notes `-N` overrides the dated stem and `-i` follows the final collision-resolved stem; `-T` sets the exact identity title. Pandoc renders TOC/bookmarks for the legacy Markdown route and embeds the page-1 scan marker. Create files managed intake and library PDFs inline; `bob ref scan` drains queued PDFs and repairs notes or annotations. Other paths need `bob ref sync`. A `<div class=\"listen\">` card becomes a callout with a Play link when audio is bound. Same-document `#` links get a raised letter tag and a matching `↩ p. N` return pill under their target, dead ones render as plain text with a warning, and frontmatter `bob-return-links: false` turns this off.\n\nExamples:\n  bob ref create report.md -P sase\n  bob ref create harbor_cranes\n  bob ref create harbor_cranes -d\n  bob ref create zk/some_idea -M\n  bob ref create paper.pdf -t papers -P sase\n  bob ref create https://example.com/paper.pdf -N my_paper -P sase\n  bob ref create https://arxiv.org/abs/1706.03762 -d -P bob\n  bob ref create https://arxiv.org/abs/1706.03762 -L -P bob\n  bob ref create https://example.com/essay -H saved.html -P sase\n  bob ref create https://example.com/essay -A \"Jane Doe\" -p 2026-01-02 -d -P sase\n  bob ref create https://example.com/2024/01/tokio-internals-part-1 https://example.com/2024/02/tokio-internals-part-2 -L -P sase\n  bob ref create URL1 URL2 URL3 -N spotify_bg_agents -P sase",
         )
 }
 
 pub(super) fn run(matches: &ArgMatches) -> i32 {
     let config = Config::from_matches(matches);
+    let (ingest_enabled, disabled_reason) =
+        match super::intake::ingest_on_create() {
+            Ok(setting) => setting,
+            Err(error) => return report_create_error(error),
+        };
+    let keep_intake_reason = if matches.get_flag("keep-intake") {
+        Some("requested with -k".to_string())
+    } else if !ingest_enabled {
+        Some(disabled_reason.to_string())
+    } else {
+        None
+    };
     let targets: Vec<OsString> = matches
         .get_many::<OsString>("target")
         .expect("required by clap")
@@ -447,7 +524,12 @@ pub(super) fn run(matches: &ArgMatches) -> i32 {
                 .with_exit_code(2),
             );
         }
-        return super::collection::run(matches, &config, &targets);
+        return super::collection::run(
+            matches,
+            &config,
+            &targets,
+            keep_intake_reason,
+        );
     }
     let target_os = targets.into_iter().next().expect("required by clap");
     // Validate -N early for a clean error even though the planner
@@ -518,6 +600,7 @@ pub(super) fn run(matches: &ArgMatches) -> i32 {
         force: matches.get_flag("force"),
         html: matches.get_one::<OsString>("html").cloned(),
         include_id: matches.get_flag("include-id"),
+        keep_intake_reason,
         listen: matches.get_flag("listen"),
         name: matches.get_one::<String>("name").cloned(),
         no_audio: matches.get_flag("no-audio"),
@@ -982,6 +1065,7 @@ fn create_article_route(
         force: options.force,
         author: options.author.clone(),
         html: options.html.clone(),
+        keep_intake_reason: options.keep_intake_reason.clone(),
         name: validated_name,
         output: options.output.clone(),
         parent: options.parent.clone(),
@@ -1354,7 +1438,11 @@ fn create_snapshot_plan(
     );
     super::return_links::emit_outcome(&link_outcome, &styler);
     diagram_pass.emit(&styler);
-    print_next_step(&plan.target_plan());
+    finish_create_intake(
+        config,
+        &plan.target_plan(),
+        options.keep_intake_reason.as_deref(),
+    )?;
     print_earlier_snapshots(config, &snapshot, &plan.stem, false);
     Ok(())
 }
@@ -1461,6 +1549,11 @@ fn print_snapshot_plan(
     print!("{}", plan.marker);
     print_snapshot_projection_summary(snapshot, assets);
     print_earlier_snapshots(config, snapshot, &plan.stem, true);
+    print_create_intake_preview(
+        config,
+        &plan.target_plan(),
+        options.keep_intake_reason.as_deref(),
+    );
 }
 
 /// One earlier Highlights snapshot of the same source note.
@@ -1843,7 +1936,7 @@ fn create_markdown_plan(
                 )
             );
         }
-        print_plan(&plan, options, &styler);
+        print_plan(config, &plan, options, &styler);
         if let Some(markdown) = plan.source_markdown.as_deref()
             && let Some(line) = super::diagrams::dry_run_line(markdown)
         {
@@ -2009,7 +2102,11 @@ fn create_markdown_plan(
     println!("pages: {page_count}");
     super::return_links::emit_outcome(&link_outcome, &styler);
     diagram_pass.emit(&styler);
-    print_next_step(&plan.target_plan());
+    finish_create_intake(
+        config,
+        &plan.target_plan(),
+        options.keep_intake_reason.as_deref(),
+    )?;
     Ok(())
 }
 
@@ -2210,7 +2307,11 @@ fn create_local_pdf_route(
         "pages: {installed} · size: {}",
         super::clip::format_bytes(bytes)
     );
-    print_next_step(&target_plan);
+    finish_create_intake(
+        config,
+        &target_plan,
+        options.keep_intake_reason.as_deref(),
+    )?;
     Ok(())
 }
 
@@ -2407,7 +2508,11 @@ fn create_pdf_url_route(
         "pages: {installed} · size: {}",
         super::clip::format_bytes(bytes)
     );
-    print_next_step(&target_plan);
+    finish_create_intake(
+        config,
+        &target_plan,
+        options.keep_intake_reason.as_deref(),
+    )?;
     Ok(())
 }
 
@@ -2663,7 +2768,11 @@ fn create_arxiv_route(
         "pages: {installed} · size: {}",
         super::clip::format_bytes(bytes)
     );
-    print_next_step(&target_plan);
+    finish_create_intake(
+        config,
+        &target_plan,
+        options.keep_intake_reason.as_deref(),
+    )?;
     Ok(())
 }
 
@@ -2768,6 +2877,11 @@ fn print_pdf_dry_run(
     if !marker.ends_with('\n') {
         println!();
     }
+    print_create_intake_preview(
+        config,
+        target_plan,
+        options.keep_intake_reason.as_deref(),
+    );
     println!("writes: none");
 }
 
@@ -3379,7 +3493,12 @@ fn print_parent_line(options: &CreateOptions) {
     }
 }
 
-fn print_plan(plan: &CreatePlan, options: &CreateOptions, styler: &Styler) {
+fn print_plan(
+    config: &Config,
+    plan: &CreatePlan,
+    options: &CreateOptions,
+    styler: &Styler,
+) {
     println!(
         "{} would create Highlights-ready PDF",
         styler.success_prefix(true)
@@ -3413,9 +3532,11 @@ fn print_plan(plan: &CreatePlan, options: &CreateOptions, styler: &Styler) {
     }
     println!("marker:");
     print!("{}", plan.marker);
-    if !matches!(plan.workflow, TargetWorkflow::Intake { .. }) {
-        print_next_step(&plan.target_plan());
-    }
+    print_create_intake_preview(
+        config,
+        &plan.target_plan(),
+        options.keep_intake_reason.as_deref(),
+    );
 }
 
 #[cfg(test)]
@@ -3456,6 +3577,7 @@ mod tests {
             force: false,
             html: None,
             include_id: false,
+            keep_intake_reason: None,
             listen: false,
             name: None,
             no_audio: false,

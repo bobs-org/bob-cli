@@ -29,6 +29,7 @@ use super::{
 
 pub(crate) mod create;
 pub(crate) mod ingest;
+pub(crate) mod intake;
 
 mod annotation_tasks;
 mod arxiv;

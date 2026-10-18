@@ -195,6 +195,15 @@ pub(super) fn acquire_scan_writer_lock(
 pub(super) fn acquire_scan_writer_lock_with_timeout(
     timeout: std::time::Duration,
 ) -> Result<fs::File> {
+    acquire_scan_writer_lock_with_timeout_and_wait(timeout, || {
+        eprintln!("waiting for another bob ref scan to finish…");
+    })
+}
+
+pub(super) fn acquire_scan_writer_lock_with_timeout_and_wait(
+    timeout: std::time::Duration,
+    on_first_wait: impl FnOnce(),
+) -> Result<fs::File> {
     let dir = bob_env::bob_cli_state_dir().join("ref");
     let path = dir.join("scan.lock");
     let file = bob_env::create_state_lock_file(&dir, "scan.lock").map_err(
@@ -211,7 +220,7 @@ pub(super) fn acquire_scan_writer_lock_with_timeout(
             return Ok(file);
         }
     }
-    eprintln!("waiting for another bob ref scan to finish…");
+    on_first_wait();
     let started = std::time::Instant::now();
     loop {
         if started.elapsed() >= timeout {

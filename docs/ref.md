@@ -24,10 +24,10 @@ plans copies of zorg-era `status::` reading records into legacy notes under
 | Read annotations and your notes | `bob ref show <note-path>` | Read one exact reference; `-c` selects commented annotations |
 | Read a reference today | `bob ref today <REF> [-p NAME]` | Set its reading task Next and link it under today's Pomodoro |
 | Fix a reference's file name | `bob ref rename <REF> <NAME> -d`, then without `-d` | Move the note, PDF, and companions, update links, and make the reference id follow its stem while keeping the reading task |
-| Import a URL, local PDF, or Markdown file now | `bob ref create <TARGET> -P <parent>` | Write an intake PDF inline; see [target types](highlights-create.md) |
+| Import a URL, local PDF, or Markdown file now | `bob ref create <TARGET> -P <parent>` | File the PDF, note, and reading task inline; use `-k` to queue it in `xlib/` |
 | Save a bare public link quickly | `bob capture '<URL>'` | Queue a background job when the routing policy admits the URL; the note appears in `ref list` after `bob ref scan` |
 | Inspect or process background imports | `bob ref jobs`, `bob ref jobs run` | List jobs, or fetch pending links; see [ref jobs](ref-jobs.md) |
-| Turn intake PDFs into library notes | `bob ref scan --dry-run`, then `bob ref scan` | Preview, then move intake PDFs and sync notes/annotations |
+| Drain queued PDFs or repair references | `bob ref scan --dry-run`, then `bob ref scan` | Preview, then process queued PDFs and sync notes/annotations |
 | Diagnose prerequisites and library health | `bob ref doctor` | Check paths, tools, routing policy, jobs, and index diagnostics |
 | Bring old reading records into the index | `bob ref migrate-zorg`, then `--write` | Preview, then create and commit legacy notes; see [migration](#migrating-zorg-era-records-bob-ref-migrate-zorg) |
 
@@ -40,7 +40,8 @@ write. For an offline link preview, use `bob capture --dry-run '<URL>'`.
 
 The reading queue is derived from notes under `ref/`. A pending capture job or
 an intake PDF under `xlib/` does not appear in `ref list` until a scan creates
-its note. `bob ref scan -f json` reports the same scan as a versioned JSON
+its note; successful `bob ref create` calls file the note inline by default.
+`bob ref scan -f json` reports the same scan as a versioned JSON
 envelope (see [JSON output](highlights-ref-sync.md#json-output)); its client
 is the Refs panel in Bob Mac Capture, which runs it when Bryan presses ⌘S.
 In Obsidian, `Cmd+Enter` on a reading task (or a Task Link or managed embed pointing at one) opens its `source_pdf` in Highlights through bob-navigation-hotkeys, without writing the vault.
@@ -190,10 +191,10 @@ list-valued `source_url` and `url` metadata. This applies to ref notes and
 queued intake markers, so any URL in a collection can prevent a duplicate
 import and can be found with `ref find -i`.
 
-For a multi-URL `bob ref create`, the marker and scanned ref note store
+For a multi-URL `bob ref create`, the marker and ref note store
 `source_url` as an ordered list in the order the URLs were supplied. The
-collection yields one PDF and, after `bob ref scan`, one note and one reading
-task. Every listed URL resolves to that same reference.
+collection yields one PDF, one note, and one reading task inline by default.
+Every listed URL resolves to that same reference.
 
 ## Usage
 

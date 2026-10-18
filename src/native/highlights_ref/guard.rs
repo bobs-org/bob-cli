@@ -104,56 +104,16 @@ where
     I: IntoIterator<Item = &'a PdfSyncPlan>,
 {
     let plans = plans.into_iter().collect::<Vec<_>>();
-    // V2 default follow-ups share reading-task destinations and must accept
-    // unrelated authored changes there. A destination used only by v2
-    // default insertions is exempt from the dirty-target veto; any explicit
-    // route (or legacy v1 write) to the same path retains the legacy policy.
-    let mut explicit_paths: BTreeSet<PathBuf> = BTreeSet::new();
-    for plan in &plans {
-        for write in &plan.routed_task_note_writes {
-            if write.action != "none" {
-                explicit_paths.insert(write.path.clone());
-            }
-        }
-        for intent in &plan.routed_intents {
-            if !intent.is_v2_default {
-                explicit_paths.insert(intent.path.clone());
-            }
-        }
-    }
     let mut touched_paths = BTreeSet::new();
     for plan in &plans {
-        if note_write_planned(plan) {
-            touched_paths.insert(plan.note_path.clone());
-        }
-        for write in &plan.routed_task_note_writes {
-            if write.action != "none" {
-                touched_paths.insert(write.path.clone());
-            }
-        }
-        // Insertion intentions rebase at execution, but a dirty explicit
-        // destination still refuses: the guard runs before execution knows
-        // which lines are already present. V2-default-only destinations are
-        // exempt so shared reading-task notes accept unrelated edits.
-        // (Reading-task destinations carry no veto.)
-        for intent in &plan.routed_intents {
-            if intent.is_v2_default && !explicit_paths.contains(&intent.path) {
-                continue;
-            }
-            if !intent.lines.is_empty()
-                && intent_write_planned(&intent.path, intent)
-            {
-                touched_paths.insert(intent.path.clone());
-            }
-        }
-        for write in &plan.image_assets {
-            touched_paths.insert(write.dest_path.clone());
-        }
-        if plan.marker_write_needed {
-            touched_paths.insert(plan.pdf.clone());
-        }
+        let path_set = scoped_write_path_set(config, plan);
+        touched_paths.extend(
+            path_set
+                .write_paths
+                .difference(&path_set.veto_exempt_paths)
+                .cloned(),
+        );
     }
-
     let touched_paths = touched_paths
         .into_iter()
         .filter(|path| path.exists())
@@ -185,6 +145,89 @@ where
             }
         }
         _ => Ok(()),
+    }
+}
+
+/// Complete path set for a one-PDF write. The exempt set contains the
+/// reading-task and v2-default destinations intentionally excluded from the
+/// dirty-target veto; they remain part of a scoped intake commit.
+pub(super) struct ScopedWritePathSet {
+    pub(super) write_paths: BTreeSet<PathBuf>,
+    pub(super) veto_exempt_paths: BTreeSet<PathBuf>,
+}
+
+pub(super) fn scoped_write_path_set(
+    config: &Config,
+    plan: &PdfSyncPlan,
+) -> ScopedWritePathSet {
+    // V2 default follow-ups share reading-task destinations and must accept
+    // unrelated authored changes there. A destination used only by v2
+    // default insertions is exempt from the dirty-target veto; any explicit
+    // route (or legacy v1 write) to the same path retains the legacy policy.
+    let mut explicit_paths: BTreeSet<PathBuf> = BTreeSet::new();
+    for write in &plan.routed_task_note_writes {
+        if write.action != "none" {
+            explicit_paths.insert(write.path.clone());
+        }
+    }
+    for intent in &plan.routed_intents {
+        if !intent.is_v2_default {
+            explicit_paths.insert(intent.path.clone());
+        }
+    }
+    let mut write_paths = BTreeSet::new();
+    let mut veto_exempt_paths = BTreeSet::new();
+    if note_write_planned(plan) {
+        write_paths.insert(plan.note_path.clone());
+    }
+    for write in &plan.routed_task_note_writes {
+        if write.action != "none" {
+            write_paths.insert(write.path.clone());
+        }
+    }
+    for intent in &plan.routed_intents {
+        if intent_write_planned(&intent.path, intent) {
+            write_paths.insert(intent.path.clone());
+        }
+    }
+    for write in &plan.image_assets {
+        write_paths.insert(write.dest_path.clone());
+    }
+    if plan.marker_write_needed {
+        write_paths.insert(plan.pdf.clone());
+    }
+
+    let reading_destination =
+        plan.reading_task_plan.as_ref().and_then(|reading| {
+            match &reading.action {
+                ReadingTaskAction::Insert {
+                    destination_route, ..
+                } => {
+                    Some(config.bob_dir.join(format!("{destination_route}.md")))
+                }
+                ReadingTaskAction::LineEdit { .. } => plan
+                    .reading_located
+                    .as_ref()
+                    .map(|located| config.bob_dir.join(&located.path)),
+                ReadingTaskAction::NoWrite => None,
+            }
+        });
+    if let Some(path) = reading_destination {
+        write_paths.insert(path.clone());
+        if path != plan.note_path && !explicit_paths.contains(&path) {
+            veto_exempt_paths.insert(path);
+        }
+    }
+
+    for intent in &plan.routed_intents {
+        if intent.is_v2_default && !explicit_paths.contains(&intent.path) {
+            veto_exempt_paths.insert(intent.path.clone());
+        }
+    }
+
+    ScopedWritePathSet {
+        write_paths,
+        veto_exempt_paths,
     }
 }
 

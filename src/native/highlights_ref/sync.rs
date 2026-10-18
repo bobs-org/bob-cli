@@ -8,11 +8,7 @@ pub(super) fn sync_pdf(
     pdf: &Path,
     options: SyncOptions,
 ) -> Result<()> {
-    let ctx = ScanContext::build(config);
-    let mut plan = plan_pdf_sync(config, pdf, options, &ctx)?;
-    let mut plans_to_finalize = [&mut plan];
-    finalize_annotation_task_plans(config, &mut plans_to_finalize, &ctx)?;
-    reserve_preview_ids(config, &mut plans_to_finalize, &ctx);
+    let plan = plan_single_pdf_sync(config, pdf, options)?;
     print_pdf_sync_report("sync", config, &plan, options);
 
     if options.dry_run {
@@ -29,11 +25,33 @@ pub(super) fn sync_pdf(
         return Ok(());
     }
 
-    ensure_safe_to_write(config, iter::once(&plan))?;
-    let mut run_state = RunWriteState::default();
-    let report = execute_pdf_sync(config, &plan, &mut run_state)?;
+    let report = write_single_pdf_sync(config, &plan)?;
     print_sync_write_report(&report);
     Ok(())
+}
+
+/// Build the finalized plan for one PDF without printing. Create-time
+/// ingestion and the `sync` command share the same planning sequence.
+pub(super) fn plan_single_pdf_sync(
+    config: &Config,
+    pdf: &Path,
+    options: SyncOptions,
+) -> Result<PdfSyncPlan> {
+    let ctx = ScanContext::build(config);
+    let mut plan = plan_pdf_sync(config, pdf, options, &ctx)?;
+    let mut plans_to_finalize = [&mut plan];
+    finalize_annotation_task_plans(config, &mut plans_to_finalize, &ctx)?;
+    reserve_preview_ids(config, &mut plans_to_finalize, &ctx);
+    Ok(plan)
+}
+
+/// Apply one finalized PDF plan with the same write guard as scan/sync.
+pub(super) fn write_single_pdf_sync(
+    config: &Config,
+    plan: &PdfSyncPlan,
+) -> Result<SyncWriteReport> {
+    ensure_safe_to_write(config, iter::once(plan))?;
+    execute_pdf_sync(config, plan, &mut RunWriteState::default())
 }
 
 pub(super) fn scan_library(

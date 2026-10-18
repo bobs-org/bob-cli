@@ -708,15 +708,10 @@ fn apply_transaction(
                     parent.display()
                 ));
             }
-            rename_no_replace(&from_absolute, &to_absolute).map_err(
-                |error| {
-                    format!(
-                        "move {} to {}: {error}",
-                        from.display(),
-                        to.display()
-                    )
-                },
-            )?;
+            super::super::io::rename_no_replace(&from_absolute, &to_absolute)
+                .map_err(|error| {
+                format!("move {} to {}: {error}", from.display(), to.display())
+            })?;
             transaction.moves.push((from_absolute, to_absolute));
         }
 
@@ -775,7 +770,7 @@ fn rollback_applied(transaction: &AppliedRename) -> String {
             ));
             continue;
         }
-        if let Err(error) = rename_no_replace(to, from) {
+        if let Err(error) = super::super::io::rename_no_replace(to, from) {
             failures.push(format!(
                 "could not move {} back to {}: {error}",
                 to.display(),
@@ -903,61 +898,6 @@ fn write_id_marker(
     execution
         .map(|_| ())
         .map_err(|error| format!("write id to PDF marker: {error}"))
-}
-
-#[cfg(target_os = "linux")]
-fn rename_no_replace(from: &Path, to: &Path) -> std::io::Result<()> {
-    use std::{ffi::CString, os::unix::ffi::OsStrExt};
-    let from = CString::new(from.as_os_str().as_bytes()).map_err(|error| {
-        std::io::Error::new(std::io::ErrorKind::InvalidInput, error)
-    })?;
-    let to = CString::new(to.as_os_str().as_bytes()).map_err(|error| {
-        std::io::Error::new(std::io::ErrorKind::InvalidInput, error)
-    })?;
-    let status = unsafe {
-        libc::renameat2(
-            libc::AT_FDCWD,
-            from.as_ptr(),
-            libc::AT_FDCWD,
-            to.as_ptr(),
-            libc::RENAME_NOREPLACE,
-        )
-    };
-    if status == 0 {
-        Ok(())
-    } else {
-        Err(std::io::Error::last_os_error())
-    }
-}
-
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-fn rename_no_replace(from: &Path, to: &Path) -> std::io::Result<()> {
-    use std::{ffi::CString, os::unix::ffi::OsStrExt};
-    let from = CString::new(from.as_os_str().as_bytes()).map_err(|error| {
-        std::io::Error::new(std::io::ErrorKind::InvalidInput, error)
-    })?;
-    let to = CString::new(to.as_os_str().as_bytes()).map_err(|error| {
-        std::io::Error::new(std::io::ErrorKind::InvalidInput, error)
-    })?;
-    let status = unsafe {
-        libc::renamex_np(from.as_ptr(), to.as_ptr(), libc::RENAME_EXCL)
-    };
-    if status == 0 {
-        Ok(())
-    } else {
-        Err(std::io::Error::last_os_error())
-    }
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "ios")))]
-fn rename_no_replace(from: &Path, to: &Path) -> std::io::Result<()> {
-    if to.exists() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::AlreadyExists,
-            format!("destination already exists: {}", to.display()),
-        ));
-    }
-    fs::rename(from, to)
 }
 
 fn verify_renamed(

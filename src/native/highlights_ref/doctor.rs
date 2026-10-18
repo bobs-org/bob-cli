@@ -695,23 +695,23 @@ pub(super) fn plan_xlib_intake(config: &Config) -> Result<Vec<IntakeMove>> {
     let mut conflicts = Vec::new();
     let mut pdf_stems = BTreeSet::new();
     for source in pdfs {
-        let relative =
-            source.strip_prefix(&config.xlib_dir).map_err(|error| {
-                CommandError::new(format!(
-                    "derive xlib-relative path for {}: {error}",
-                    source.display()
-                ))
-            })?;
-        let destination = config.lib_dir.join(relative);
-        let companions = intake_companion_moves(&source, &destination)?;
-        let mut stem = relative.to_path_buf();
+        let intake_move = plan_single_xlib_pdf_intake(config, &source)?;
+        let mut stem = intake_move
+            .source
+            .strip_prefix(&config.xlib_dir)
+            .expect("single-source planner returns an xlib path")
+            .to_path_buf();
         stem.set_extension("");
         pdf_stems.insert(stem);
 
-        if destination.exists() {
-            conflicts.push((source.clone(), destination.clone()));
+        if intake_move.destination.exists() {
+            conflicts.push((
+                intake_move.source.clone(),
+                intake_move.destination.clone(),
+            ));
         }
-        for (companion_source, companion_destination) in &companions {
+        for (companion_source, companion_destination) in &intake_move.companions
+        {
             if companion_destination.exists() {
                 conflicts.push((
                     companion_source.clone(),
@@ -720,11 +720,7 @@ pub(super) fn plan_xlib_intake(config: &Config) -> Result<Vec<IntakeMove>> {
             }
         }
 
-        moves.push(IntakeMove {
-            source,
-            destination,
-            companions,
-        });
+        moves.push(intake_move);
     }
 
     let mut audio_files = Vec::new();
@@ -778,6 +774,28 @@ pub(super) fn plan_xlib_intake(config: &Config) -> Result<Vec<IntakeMove>> {
     }
 
     Ok(moves)
+}
+
+/// Plan one xlib PDF and only its same-stem companions. Shared with the
+/// create-time intake session so an unrelated queued item cannot block a
+/// successful `bob ref create`.
+pub(super) fn plan_single_xlib_pdf_intake(
+    config: &Config,
+    source: &Path,
+) -> Result<IntakeMove> {
+    let relative = source.strip_prefix(&config.xlib_dir).map_err(|error| {
+        CommandError::new(format!(
+            "derive xlib-relative path for {}: {error}",
+            source.display()
+        ))
+    })?;
+    let destination = config.lib_dir.join(relative);
+    let companions = intake_companion_moves(source, &destination)?;
+    Ok(IntakeMove {
+        source: source.to_path_buf(),
+        destination,
+        companions,
+    })
 }
 
 pub(super) fn intake_companion_moves(
